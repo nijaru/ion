@@ -856,11 +856,19 @@ impl App {
 
     fn handle_model_picker_mode(&mut self, key: KeyEvent) {
         use crate::tui::model_picker::PickerStage;
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
         match key.code {
-            // Navigation: Arrow keys primary, j/k as alternatives
-            KeyCode::Up | KeyCode::Char('k') => self.model_picker.move_up(1),
-            KeyCode::Down | KeyCode::Char('j') => self.model_picker.move_down(1),
+            // Ctrl+C: Quit (always works, even during setup)
+            KeyCode::Char('c') if ctrl => {
+                self.should_quit = true;
+            }
+
+            // Navigation: Arrow keys primary, j/k as alternatives (only without ctrl)
+            KeyCode::Up => self.model_picker.move_up(1),
+            KeyCode::Down => self.model_picker.move_down(1),
+            KeyCode::Char('k') if !ctrl => self.model_picker.move_up(1),
+            KeyCode::Char('j') if !ctrl => self.model_picker.move_down(1),
 
             // Page navigation
             KeyCode::PageUp => self.model_picker.move_up(10),
@@ -908,8 +916,8 @@ impl App {
                 }
             }
 
-            // Type to filter
-            KeyCode::Char(c) => {
+            // Type to filter (only regular chars without ctrl modifier)
+            KeyCode::Char(c) if !ctrl => {
                 self.model_picker.push_char(c);
             }
 
@@ -985,7 +993,14 @@ impl App {
 
     /// Handle API provider picker mode
     fn handle_provider_picker_mode(&mut self, key: KeyEvent) {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
         match key.code {
+            // Ctrl+C: Quit (always works, even during setup)
+            KeyCode::Char('c') if ctrl => {
+                self.should_quit = true;
+            }
+
             // Navigation
             KeyCode::Up => self.provider_picker.move_up(1),
             KeyCode::Down => self.provider_picker.move_down(1),
@@ -1016,11 +1031,11 @@ impl App {
                 }
             }
 
-            // Type to filter
-            KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            // Type to filter (only without ctrl, except Ctrl+W for delete word)
+            KeyCode::Char('w') if ctrl => {
                 self.provider_picker.delete_word();
             }
-            KeyCode::Char(c) => {
+            KeyCode::Char(c) if !ctrl => {
                 self.provider_picker.push_char(c);
             }
             KeyCode::Backspace => {
@@ -1440,32 +1455,11 @@ impl App {
 
         // Render modals on top if active
         match self.mode {
-            Mode::ModelPicker => {
-                if self.needs_setup {
-                    self.render_setup_banner(frame, "Select a model");
-                }
-                self.model_picker.render(frame);
-            }
-            Mode::ProviderPicker => {
-                if self.needs_setup {
-                    self.render_setup_banner(frame, "Select a provider");
-                }
-                self.provider_picker.render(frame);
-            }
+            Mode::ModelPicker => self.model_picker.render(frame),
+            Mode::ProviderPicker => self.provider_picker.render(frame),
             Mode::HelpOverlay => self.render_help_overlay(frame),
             _ => {}
         }
-    }
-
-    /// Render a setup banner at the top of the screen
-    fn render_setup_banner(&self, frame: &mut Frame, step: &str) {
-        let area = frame.area();
-        let banner_area = Rect::new(0, 0, area.width, 1);
-        let text = format!(" Welcome to ion! {} to continue. ", step);
-        let banner = Paragraph::new(text)
-            .style(Style::default().fg(Color::Black).bg(Color::Cyan))
-            .alignment(ratatui::layout::Alignment::Center);
-        frame.render_widget(banner, banner_area);
     }
 
     fn render_help_overlay(&self, frame: &mut Frame) {
