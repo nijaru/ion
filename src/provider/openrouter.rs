@@ -1,6 +1,6 @@
 use super::{
-    ChatRequest, ContentBlock, Message, ModelInfo, Provider, ProviderError, ProviderPrefs, Role,
-    StreamEvent, ToolCallEvent, Usage,
+    ChatRequest, ContentBlock, Message, ModelInfo, ModelPricing, Provider, ProviderError,
+    ProviderPrefs, Role, StreamEvent, ToolCallEvent, Usage,
 };
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -127,6 +127,30 @@ struct OpenRouterApiModel {
     id: String,
     name: String,
     context_length: u32,
+    #[serde(default)]
+    pricing: OpenRouterPricing,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct OpenRouterPricing {
+    #[serde(default, deserialize_with = "parse_price_string")]
+    prompt: f64,
+    #[serde(default, deserialize_with = "parse_price_string")]
+    completion: f64,
+}
+
+fn parse_price_string<'de, D>(deserializer: D) -> Result<f64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error;
+    let value: serde_json::Value = serde::Deserialize::deserialize(deserializer)?;
+    match value {
+        serde_json::Value::String(s) => s.parse().map_err(D::Error::custom),
+        serde_json::Value::Number(n) => n.as_f64().ok_or_else(|| D::Error::custom("invalid number")),
+        serde_json::Value::Null => Ok(0.0),
+        _ => Err(D::Error::custom("expected string or number")),
+    }
 }
 
 #[derive(Debug, Default)]
@@ -282,16 +306,23 @@ impl Provider for OpenRouterProvider {
             .map(|m| {
                 // Extract actual model provider from ID (e.g., "anthropic/claude-sonnet-4" -> "anthropic")
                 let provider = m.id.split('/').next().unwrap_or("unknown").to_string();
+                // Convert per-token to per-million-token pricing
+                let pricing = ModelPricing {
+                    input: m.pricing.prompt * 1_000_000.0,
+                    output: m.pricing.completion * 1_000_000.0,
+                    cache_read: None,
+                    cache_write: None,
+                };
                 ModelInfo {
                     id: m.id,
                     name: m.name,
                     provider,
                     context_window: m.context_length,
-                    supports_tools: true, // Simplified
+                    supports_tools: true,
                     supports_vision: false,
                     supports_thinking: false,
                     supports_cache: false,
-                    pricing: Default::default(),
+                    pricing,
                 }
             })
             .collect())

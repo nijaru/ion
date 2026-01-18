@@ -97,16 +97,6 @@ pub struct ApprovalRequest {
     pub response_tx: oneshot::Sender<ApprovalResponse>,
 }
 
-/// How the model picker was opened (affects behavior after models load)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum PickerIntent {
-    /// Ctrl+P: Start at provider selection
-    #[default]
-    ProviderFirst,
-    /// Ctrl+M: Jump directly to model selection for current provider
-    ModelOnly,
-}
-
 pub struct App {
     pub mode: Mode,
     pub should_quit: bool,
@@ -119,8 +109,6 @@ pub struct App {
     pub history_index: usize,
     /// Current tool permission mode (Read/Write/Agi)
     pub tool_mode: ToolMode,
-    /// How the model picker was opened (for handling async model fetch)
-    pub picker_intent: PickerIntent,
     /// Currently selected API provider
     pub api_provider: ApiProvider,
     /// API provider picker state
@@ -363,7 +351,6 @@ impl App {
             input_history: Vec::new(),
             history_index: 0,
             tool_mode: ToolMode::Write,
-            picker_intent: PickerIntent::ProviderFirst,
             api_provider,
             provider_picker: ProviderPicker::new(),
             message_list: MessageList::new(),
@@ -447,19 +434,8 @@ impl App {
                     debug!("Received ModelsFetched event with {} models", models.len());
                     self.model_picker.set_models(models.clone());
                     self.last_error = None; // Clear error on success
-                    // Configure picker based on how it was opened
-                    match self.picker_intent {
-                        PickerIntent::ModelOnly => {
-                            // Use API provider name (lowercase) for filtering
-                            // During setup, session.model is empty so current_provider() won't work
-                            let provider = self.api_provider.name().to_lowercase();
-                            debug!("Filtering models for provider: {}", provider);
-                            self.model_picker.start_model_only(&provider);
-                        }
-                        PickerIntent::ProviderFirst => {
-                            self.model_picker.reset();
-                        }
-                    }
+                    // Show all models directly (user can type to filter/search)
+                    self.model_picker.start_all_models();
                 }
                 AgentEvent::ModelFetchError(err) => {
                     debug!("Received ModelFetchError: {}", err);
@@ -953,21 +929,6 @@ impl App {
         }
     }
 
-    /// Extract provider name from model ID (e.g., "anthropic/claude-sonnet-4" → "Anthropic")
-    fn current_provider(&self) -> String {
-        self.session
-            .model
-            .split('/')
-            .next()
-            .unwrap_or("unknown")
-            .to_string()
-            // Capitalize first letter for display
-            .chars()
-            .enumerate()
-            .map(|(i, c): (usize, char)| if i == 0 { c.to_ascii_uppercase() } else { c })
-            .collect()
-    }
-
     /// Switch the active API provider and re-create the agent.
     fn switch_provider(&mut self, api_provider: ApiProvider) {
         if let Some(api_key) = api_provider.api_key() {
@@ -1001,24 +962,9 @@ impl App {
         self.mode = Mode::ModelPicker;
         self.model_picker.error = None;
 
-        // During setup or with aggregator like OpenRouter: show all providers
-        // During normal use: jump to models for current provider
-        if self.needs_setup || self.api_provider == ApiProvider::OpenRouter {
-            self.picker_intent = PickerIntent::ProviderFirst;
-        } else {
-            self.picker_intent = PickerIntent::ModelOnly;
-        }
-
         if self.model_picker.has_models() {
-            match self.picker_intent {
-                PickerIntent::ModelOnly => {
-                    let provider = self.current_provider();
-                    self.model_picker.start_model_only(&provider);
-                }
-                PickerIntent::ProviderFirst => {
-                    self.model_picker.reset();
-                }
-            }
+            // Show all models directly (user can type to filter)
+            self.model_picker.start_all_models();
         } else {
             // Need to fetch models first - update() will configure picker when they arrive
             self.model_picker.is_loading = true;
