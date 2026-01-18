@@ -151,6 +151,8 @@ pub struct App {
     pub input_tokens: usize,
     /// Output tokens received from model (current task)
     pub output_tokens: usize,
+    /// Currently executing tool name (for interrupt handling)
+    pub current_tool: Option<String>,
 }
 
 struct TuiApprovalHandler {
@@ -340,6 +342,7 @@ impl App {
             task_start_time: None,
             input_tokens: 0,
             output_tokens: 0,
+            current_tool: None,
         };
 
         // Initialize setup flow if needed
@@ -394,6 +397,7 @@ impl App {
                     self.cancel_pending = None;
                     self.message_queue = None;
                     self.task_start_time = None;
+                    self.current_tool = None;
                     self.message_list.push_event(event);
                 }
                 AgentEvent::ModelsFetched(models) => {
@@ -417,6 +421,14 @@ impl App {
                 AgentEvent::OutputTokensDelta(count) => {
                     self.output_tokens += count;
                 }
+                AgentEvent::ToolCallStart(_, name) => {
+                    self.current_tool = Some(name.clone());
+                    self.message_list.push_event(event);
+                }
+                AgentEvent::ToolCallResult(..) => {
+                    self.current_tool = None;
+                    self.message_list.push_event(event);
+                }
                 _ => {
                     self.message_list.push_event(event);
                 }
@@ -430,6 +442,7 @@ impl App {
             self.cancel_pending = None;
             self.message_queue = None;
             self.task_start_time = None;
+            self.current_tool = None;
 
             // Auto-save to persistent storage
             if let Err(e) = self.store.save(&updated_session) {
@@ -473,25 +486,27 @@ impl App {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
         match key.code {
-            // Ctrl+C: Clear input / quit if empty / interrupt if running
+            // Ctrl+C: Cancel running task / clear input / quit
             KeyCode::Char('c') if ctrl => {
                 if self.is_running {
-                    // Interrupt running task
+                    // Immediately cancel running task - no double-tap needed
+                    self.session.abort_token.cancel();
+                    self.cancel_pending = None;
+                } else if !self.input.is_empty() {
+                    // Clear input if not empty
+                    self.input.clear();
+                    self.cursor_pos = 0;
+                } else {
+                    // Empty input, not running - double-tap to quit
                     if let Some(when) = self.cancel_pending {
                         if when.elapsed() <= CANCEL_WINDOW {
-                            self.session.abort_token.cancel();
-                            self.cancel_pending = None;
+                            self.quit();
                         } else {
                             self.cancel_pending = Some(Instant::now());
                         }
                     } else {
                         self.cancel_pending = Some(Instant::now());
                     }
-                } else if self.input.is_empty() {
-                    self.quit();
-                } else {
-                    self.input.clear();
-                    self.cursor_pos = 0;
                 }
             }
 
@@ -1362,9 +1377,16 @@ impl App {
             let spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
             let symbol = spinner[(self.frame_count % spinner.len() as u64) as usize];
 
+            // Show "Cancelling..." if abort was triggered
+            let (label, color) = if self.session.abort_token.is_cancelled() {
+                ("Cancelling...", Color::Red)
+            } else {
+                ("Ionizing...", Color::Yellow)
+            };
+
             let mut progress_spans = vec![
-                Span::styled(format!(" {} ", symbol), Style::default().fg(Color::Yellow)),
-                Span::styled("Ionizing...", Style::default().fg(Color::Yellow)),
+                Span::styled(format!(" {} ", symbol), Style::default().fg(color)),
+                Span::styled(label, Style::default().fg(color)),
             ];
 
             // Build stats in parens: (elapsed · ↑input · ↓output)
