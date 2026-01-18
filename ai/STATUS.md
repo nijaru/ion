@@ -28,20 +28,19 @@
 
 ## Session Accomplishments
 
-**Model Picker Improvements:**
+**CLI One-Shot Mode Design (Revised):**
 
-- Fixed pricing parsing (OpenRouter returns string prices like "0.000003")
-- Filter out special routing models (bodybuilder, auto) via negative pricing check
-- Sort by org first, then newest models (using `created` timestamp)
-- Column headers: Model | Org | Context | Input | Output
-- Show both input and output pricing
-- Free models show "free" in green
+- Reviewed and refactored design
+- Simplified to subcommand-only (`ion run`), dropped dual `-p` flag
+- Added essential automation flags: `-y`/`--yes`, `--max-turns`
+- Clarified stdin semantics: `-` = prompt, pipe = context
+- Defined exit codes: 0=success, 1=error, 2=interrupted, 3=max-turns
+- See `ai/DECISIONS.md` and `ai/research/cli-oneshot-patterns-2026.md`
+
+**Model Picker (Previous Session):**
+
+- Fixed pricing parsing, sorting, column headers
 - Tab navigation between provider and model pickers
-
-**Provider Picker:**
-
-- Compact modal, column layout
-- Tab switches to model picker (if models loaded)
 
 ## Priority: TUI Bugs & Polish
 
@@ -62,6 +61,7 @@
 
 **P2 - Features:**
 
+- [ ] tk-9n1n: CLI one-shot mode (`ion run`) - design complete
 - [ ] Terminal title: `ion <cwd>`
 - [ ] Slash command autocomplete (fuzzy)
 - [ ] Session retention (30 days)
