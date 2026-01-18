@@ -28,17 +28,27 @@
 
 ## Session Accomplishments
 
-**TUI Overhaul:**
+**Config Persistence:**
 
-- Progress line between chat and input: `⠼ Ionizing... (14s · ↑ 4.1k · ↓ 2.1k)`
-- Token counting with tiktoken (input/output tracked separately)
-- Message indicators: ↑ You, ↓ model-name, ⏺ tool
-- Multiple queued messages (shown in chat with > prefix)
-- Status line: `model · 56% (112k/200k) · [branch] · cwd`
-- Spinner stuck bug fixed (is_running cleared on session complete)
+- Config::save() method to persist settings to disk
+- Model selection persisted (no more repeated setup on each run)
+- Renamed `default_model` to `model` in Config (cleaner naming)
+
+**Message Queue Improvements:**
+
+- Up arrow recalls queued messages back to input for editing
+- Changed from channel-based to shared Mutex<Vec> queue
+- Messages can be canceled before agent receives them
+
+**ANSI Color Support:**
+
+- Added ansi-to-tui crate for parsing ANSI escape sequences
+- Tool output preserves colors (git diff, ls, etc.)
+- Bash tool forces color output via CLICOLOR_FORCE, FORCE_COLOR env vars
 
 **Previous Session:**
 
+- TUI overhaul (progress line, token counts, indicators)
 - Input always visible during agent execution
 - Message queueing for mid-task steering
 - CLI one-shot mode (`ion run`)
@@ -51,7 +61,6 @@
 
 **UX:**
 
-- [ ] tk-rre9: Up arrow recalls queued messages
 - [ ] tk-otmx: Ctrl+G opens input in external editor
 - [ ] tk-whde: Git diff stats in status line
 - [ ] tk-arh6: Tool execution not visually obvious
@@ -62,9 +71,13 @@
 - [ ] tk-iegz: OpenRouter provider routing modal
 - [ ] tui-textarea for better input editing
 - [ ] tree-sitter for syntax highlighting
+- [ ] Diff highlighting for edits (like Claude Code)
 
 ## Completed
 
+- [x] Config persistence (model selection saved)
+- [x] Up arrow recalls queued messages (tk-rre9)
+- [x] ANSI color support for tool output
 - [x] Input always visible
 - [x] Message queueing (multiple messages)
 - [x] Progress line with elapsed + token counts
