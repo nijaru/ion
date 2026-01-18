@@ -63,11 +63,7 @@ pub struct RunArgs {
     #[arg(long)]
     pub cwd: Option<PathBuf>,
 
-    /// Don't persist session
-    #[arg(long)]
-    pub no_session: bool,
-
-    /// Disable tools (pure chat mode)
+    /// Disable all tools (pure chat mode)
     #[arg(long)]
     pub no_tools: bool,
 
@@ -84,13 +80,17 @@ pub enum OutputFormat {
     StreamJson,
 }
 
-/// Auto-approve handler for CLI mode with --yes flag
-struct AutoApproveHandler;
+/// Deny handler for CLI mode without --yes flag (restricted tools will fail with clear message)
+struct DenyApprovalHandler;
 
 #[async_trait]
-impl ApprovalHandler for AutoApproveHandler {
-    async fn ask_approval(&self, _tool_name: &str, _args: &serde_json::Value) -> ApprovalResponse {
-        ApprovalResponse::Yes
+impl ApprovalHandler for DenyApprovalHandler {
+    async fn ask_approval(&self, tool_name: &str, _args: &serde_json::Value) -> ApprovalResponse {
+        eprintln!(
+            "Tool '{}' requires approval. Use --yes flag to auto-approve.",
+            tool_name
+        );
+        ApprovalResponse::No
     }
 }
 
@@ -187,35 +187,32 @@ async fn run_inner(args: RunArgs) -> Result<ExitCode> {
     let provider = create_provider(api_provider, api_key, config.provider_prefs.clone());
 
     // Create orchestrator
-    let tool_mode = if args.no_tools {
-        ToolMode::Read // No tools, but still safe
+    let orchestrator = if args.no_tools {
+        // Truly disable all tools - empty orchestrator
+        Arc::new(ToolOrchestrator::new(ToolMode::Read))
     } else if args.yes {
-        ToolMode::Agi // Full autonomy
+        // Full autonomy with auto-approve
+        Arc::new(ToolOrchestrator::with_builtins(ToolMode::Agi))
     } else {
-        ToolMode::Write // Will prompt for approval (not ideal for CLI)
+        // Write mode with deny handler (restricted tools fail with clear message)
+        let mut orch = ToolOrchestrator::with_builtins(ToolMode::Write);
+        orch.set_approval_handler(Arc::new(DenyApprovalHandler));
+        Arc::new(orch)
     };
-
-    let mut orchestrator = ToolOrchestrator::with_builtins(tool_mode);
-
-    // Set auto-approve handler if --yes
-    if args.yes {
-        orchestrator.set_approval_handler(Arc::new(AutoApproveHandler));
-    }
-
-    let orchestrator = Arc::new(orchestrator);
 
     // Create agent
     let agent = Arc::new(Agent::new(provider, orchestrator));
 
     // Create session
     let session = Session::new(working_dir, model);
+    let abort_token = session.abort_token.clone();
 
     // Create event channel
     let (tx, mut rx) = mpsc::channel::<AgentEvent>(100);
 
     // Run agent in background
     let agent_clone = agent.clone();
-    let session_clone = session.clone();
+    let session_clone = session;
     let prompt_clone = prompt.clone();
     let max_turns = args.max_turns;
 
@@ -273,6 +270,7 @@ async fn run_inner(args: RunArgs) -> Result<ExitCode> {
                 if let Some(max) = max_turns {
                     if turn_count >= max {
                         eprintln!("\nMax turns ({}) reached", max);
+                        abort_token.cancel(); // Signal agent to stop
                         interrupted = true;
                         break;
                     }
@@ -297,8 +295,10 @@ async fn run_inner(args: RunArgs) -> Result<ExitCode> {
                 if verbose {
                     match output_format {
                         OutputFormat::Text => {
-                            let preview = if content.len() > 200 {
-                                format!("{}...", &content[..200])
+                            // Use char-safe truncation to avoid UTF-8 panic
+                            let preview = if content.chars().count() > 200 {
+                                let truncated: String = content.chars().take(200).collect();
+                                format!("{}...", truncated)
                             } else {
                                 content.clone()
                             };
@@ -351,9 +351,7 @@ async fn run_inner(args: RunArgs) -> Result<ExitCode> {
             println!("{}", json);
         }
         OutputFormat::StreamJson => {
-            let json = serde_json::to_string(&JsonEvent::Done {
-                response: response.clone(),
-            })?;
+            let json = serde_json::to_string(&JsonEvent::Done { response })?;
             println!("{}", json);
         }
     }
@@ -361,9 +359,13 @@ async fn run_inner(args: RunArgs) -> Result<ExitCode> {
     // Return appropriate exit code
     if interrupted {
         Ok(ExitCode::from(3)) // Max turns reached
-    } else if result.is_err() {
-        Ok(ExitCode::from(1)) // Error
     } else {
-        Ok(ExitCode::from(0)) // Success
+        match result {
+            Ok(_) => Ok(ExitCode::from(0)), // Success
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                Ok(ExitCode::from(1)) // Error
+            }
+        }
     }
 }

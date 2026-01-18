@@ -8,6 +8,7 @@ use reqwest_eventsource::{Event, EventSource};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use tracing::warn;
 
 pub struct OpenRouterProvider {
     client: reqwest::Client,
@@ -145,9 +146,18 @@ impl OpenRouterPricing {
     /// Parse price value (can be string like "0.000003" or number or "-1" for special models)
     fn parse_price(value: &serde_json::Value) -> f64 {
         match value {
-            serde_json::Value::String(s) => s.parse().unwrap_or(0.0),
-            serde_json::Value::Number(n) => n.as_f64().unwrap_or(0.0),
-            _ => 0.0,
+            serde_json::Value::String(s) => s.parse().unwrap_or_else(|_| {
+                warn!("Failed to parse price string: {:?}", s);
+                0.0
+            }),
+            serde_json::Value::Number(n) => n.as_f64().unwrap_or_else(|| {
+                warn!("Failed to convert price number: {:?}", n);
+                0.0
+            }),
+            _ => {
+                warn!("Unexpected price format: {:?}", value);
+                0.0
+            }
         }
     }
 
