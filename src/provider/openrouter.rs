@@ -280,10 +280,12 @@ impl Provider for OpenRouterProvider {
             .data
             .into_iter()
             .map(|m| {
+                // Extract actual model provider from ID (e.g., "anthropic/claude-sonnet-4" -> "anthropic")
+                let provider = m.id.split('/').next().unwrap_or("unknown").to_string();
                 ModelInfo {
                     id: m.id,
                     name: m.name,
-                    provider: "openrouter".to_string(), // Simplified
+                    provider,
                     context_window: m.context_length,
                     supports_tools: true, // Simplified
                     supports_vision: false,
