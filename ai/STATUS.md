@@ -5,7 +5,7 @@
 | Metric    | Value           | Updated    |
 | --------- | --------------- | ---------- |
 | Phase     | 5 - Polish & UX | 2026-01-18 |
-| Focus     | TUI Polish      | 2026-01-18 |
+| Focus     | Config System   | 2026-01-18 |
 | Status    | Runnable        | 2026-01-18 |
 | Toolchain | stable          | 2026-01-18 |
 | Tests     | 49 passing      | 2026-01-18 |
@@ -19,37 +19,40 @@
 - Built-in tools (read, write, edit, bash, glob, grep)
 - MCP client
 - Session management (rusqlite)
-- Claude Code-compatible hook system
+
+**Config** (designed, not yet implemented):
+
+- `~/.ion/` for ion-specific config
+- `~/.agents/` proposed universal standard for AI agent files
+- AGENTS.md + CLAUDE.md instruction file support
 
 **Memory** (archived to nijaru/ion-archive):
 
 - Will re-implement after TUI agent is fully working
-- OmenDB + native Rust embeddings
 
 ## Session Accomplishments
 
-**Memory Removal / Stable Switch:**
+**Config System Design:**
 
-- Archived memory code to nijaru/ion-archive
-- Removed src/memory/ module and all references
-- Switched rust-toolchain.toml from nightly to stable
-- Removed omendb dependency (required nightly for portable_simd)
-- Updated all docs to reflect current state
+- Researched CLI agent config best practices (Claude Code, Cursor, aider, goose, OpenCode)
+- Designed 3-tier config hierarchy (user → project → local)
+- Proposed `~/.agents/` as universal standard for AI agent files
+- TOML format, AGENTS.md primary with CLAUDE.md fallback
+- Created `ai/design/config-system.md`
+- Updated README with new config structure
 
-**Dependency Upgrades (completed):**
+**Key Decisions:**
 
-- grep tool now uses `ignore` crate (respects .gitignore)
-- glob tool now uses `globset` (via ignore)
-- Replaced `tiktoken-rs` with `bpe-openai` (4x faster)
-- Removed unused deps: walkdir, serde_yaml, glob
-
-**Documentation:**
-
-- Updated GitHub repo description
-- Cleaned README (added WIP note, removed nightly requirement)
-- Updated AGENTS.md/CLAUDE.md
+- `~/.ion/` for ion config (matches cargo, claude, cursor convention)
+- `~/.agents/` for universal shared files (proposed standard)
+- First-found wins for instruction files (no concatenation at same level)
+- Auto-gitignore `.ion/*.local.toml`
 
 ## Open Tasks
+
+**Config (HIGH):**
+
+- [ ] tk-e96r: Implement config system redesign
 
 **Bugs:**
 
@@ -65,32 +68,22 @@
 **Ideas:**
 
 - [ ] tk-iegz: OpenRouter provider routing modal
-- [ ] tk-smqs: Diff highlighting for edits (like Claude Code)
-- [ ] tui-textarea for better input editing
-- [ ] tree-sitter for syntax highlighting
+- [ ] tk-smqs: Diff highlighting for edits
 
 ## Completed
 
+- [x] Config system design
 - [x] Dependency upgrades (grep, glob, tokenizer)
 - [x] Memory removal / stable Rust switch
 - [x] Config persistence (model selection saved)
-- [x] Up arrow recalls queued messages
-- [x] ANSI color support for tool output
-- [x] Input always visible
-- [x] Message queueing (multiple messages)
 - [x] Progress line with elapsed + token counts
-- [x] Message indicators (↑/↓/⏺)
-- [x] Model name in messages (not "ion")
-- [x] Status line with token counts
-- [x] Spinner stuck fix
-- [x] Approval dialog wording
 - [x] CLI one-shot mode
 
 ## Design Documents
 
+- `ai/design/config-system.md` - Config hierarchy, ~/.agents/ proposal
 - `ai/design/tui.md` - TUI interface spec
 - `ai/design/diff-highlighting.md` - Diff rendering plan
 - `ai/design/interrupt-handling.md` - Ctrl+C behavior spec
-- `ai/design/dependency-upgrades.md` - Lib replacements (done)
-- `ai/design/plugin-architecture.md` - Hook system, plugin format
+- `ai/research/cli-agent-config-best-practices.md` - Config research
 - `ai/DECISIONS.md` - All architecture decisions
