@@ -3,7 +3,7 @@
   "ref": "x3vt",
   "title": "Evaluate removing nightly requirement (omendb not in core)",
   "description": null,
-  "status": "open",
+  "status": "done",
   "priority": 3,
   "labels": [],
   "assignees": [],
@@ -15,10 +15,14 @@
     {
       "ts": "2026-01-18T20:40:06.803Z",
       "msg": "rust-toolchain.toml sets nightly for portable_simd (omendb). Since memory/omendb is a separate plugin not in core, we may not need nightly. Check if any src/ code requires nightly features. If not, switch to stable."
+    },
+    {
+      "ts": "2026-01-18T20:49:48.730Z",
+      "msg": "Evaluated: nightly still required. omendb is used in src/memory/mod.rs, not a plugin."
     }
   ],
   "created_at": "2026-01-18T20:39:56.165Z",
-  "updated_at": "2026-01-18T20:40:06.803Z",
-  "completed_at": null,
+  "updated_at": "2026-01-18T20:49:48.730Z",
+  "completed_at": "2026-01-18T20:49:48.707Z",
   "external": {}
 }

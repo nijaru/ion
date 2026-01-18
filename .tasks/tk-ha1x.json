@@ -3,7 +3,7 @@
   "ref": "ha1x",
   "title": "Remove unused deps: walkdir, serde_yaml, glob",
   "description": null,
-  "status": "open",
+  "status": "done",
   "priority": 3,
   "labels": [],
   "assignees": [],
@@ -18,7 +18,7 @@
     }
   ],
   "created_at": "2026-01-18T20:34:34.916Z",
-  "updated_at": "2026-01-18T20:34:46.451Z",
-  "completed_at": null,
+  "updated_at": "2026-01-18T20:52:39.475Z",
+  "completed_at": "2026-01-18T20:52:39.475Z",
   "external": {}
 }

@@ -1,5 +1,7 @@
 use crate::tool::{DangerLevel, Tool, ToolContext, ToolError, ToolResult};
 use async_trait::async_trait;
+use globset::Glob;
+use ignore::WalkBuilder;
 use serde_json::json;
 
 pub struct GlobTool;
@@ -41,23 +43,40 @@ impl Tool for GlobTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidArgs("pattern is required".to_string()))?;
 
-        // Construct absolute pattern from working_dir (no global state mutation)
-        let full_pattern = ctx.working_dir.join(pattern);
-        let full_pattern_str = full_pattern
-            .to_str()
-            .ok_or_else(|| ToolError::ExecutionFailed("Invalid UTF-8 in path".to_string()))?;
+        // Compile glob pattern
+        let glob = Glob::new(pattern)
+            .map_err(|e| ToolError::InvalidArgs(format!("Invalid glob pattern: {}", e)))?;
+        let matcher = glob.compile_matcher();
 
-        let paths: Vec<String> = glob::glob(full_pattern_str)
-            .map_err(|e| ToolError::ExecutionFailed(format!("Invalid glob pattern: {}", e)))?
-            .filter_map(Result::ok)
-            .map(|p| {
-                // Return paths relative to working_dir
-                p.strip_prefix(&ctx.working_dir)
-                    .unwrap_or(&p)
-                    .to_string_lossy()
-                    .into_owned()
-            })
-            .collect();
+        let working_dir = ctx.working_dir.clone();
+
+        // Use ignore crate for walking, globset for matching
+        let paths = tokio::task::spawn_blocking(move || {
+            let walker = WalkBuilder::new(&working_dir)
+                .hidden(true)
+                .git_ignore(true)
+                .git_global(true)
+                .git_exclude(true)
+                .build();
+
+            let mut paths = Vec::new();
+            for entry in walker.flatten() {
+                let path = entry.path();
+                if !path.is_file() {
+                    continue;
+                }
+
+                // Match against relative path
+                if let Ok(rel_path) = path.strip_prefix(&working_dir) {
+                    if matcher.is_match(rel_path) {
+                        paths.push(rel_path.to_string_lossy().into_owned());
+                    }
+                }
+            }
+            paths
+        })
+        .await
+        .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
 
         Ok(ToolResult {
             content: if paths.is_empty() {

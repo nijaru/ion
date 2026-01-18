@@ -1,9 +1,9 @@
 use crate::tool::builtin::validate_path_within_working_dir;
 use crate::tool::{DangerLevel, Tool, ToolContext, ToolError, ToolResult};
 use async_trait::async_trait;
+use ignore::WalkBuilder;
 use regex::Regex;
 use serde_json::json;
-use std::path::Path;
 
 pub struct GrepTool;
 
@@ -54,13 +54,45 @@ impl Tool for GrepTool {
             .map_err(|e| ToolError::InvalidArgs(format!("Invalid regex: {}", e)))?;
 
         let search_path = ctx.working_dir.join(search_path_str);
-
-        // Validate path is within working directory (prevents path traversal via ../)
         let validated_path = validate_path_within_working_dir(&search_path, &ctx.working_dir)?;
+        let working_dir = ctx.working_dir.clone();
 
-        let mut results = Vec::new();
-        self.search_recursive(&validated_path, &regex, &mut results, &ctx.working_dir)
-            .await?;
+        // Use ignore crate for walking - respects .gitignore, skips hidden files and binaries
+        let results = tokio::task::spawn_blocking(move || {
+            let mut results = Vec::new();
+
+            let walker = WalkBuilder::new(&validated_path)
+                .hidden(true)
+                .git_ignore(true)
+                .git_global(true)
+                .git_exclude(true)
+                .build();
+
+            for entry in walker.flatten() {
+                let path = entry.path();
+                if !path.is_file() {
+                    continue;
+                }
+
+                // Read file and search
+                if let Ok(content) = std::fs::read_to_string(path) {
+                    let display_path = path.strip_prefix(&working_dir).unwrap_or(path);
+                    for (i, line) in content.lines().enumerate() {
+                        if regex.is_match(line) {
+                            results.push(format!(
+                                "{}:{}: {}",
+                                display_path.display(),
+                                i + 1,
+                                line.trim()
+                            ));
+                        }
+                    }
+                }
+            }
+            results
+        })
+        .await
+        .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
 
         Ok(ToolResult {
             content: if results.is_empty() {
@@ -71,53 +103,5 @@ impl Tool for GrepTool {
             is_error: false,
             metadata: Some(json!({ "match_count": results.len() })),
         })
-    }
-}
-
-impl GrepTool {
-    #[async_recursion::async_recursion]
-    async fn search_recursive(
-        &self,
-        path: &Path,
-        regex: &Regex,
-        results: &mut Vec<String>,
-        working_dir: &Path,
-    ) -> Result<(), ToolError> {
-        if path.is_file() {
-            let content = tokio::fs::read_to_string(path).await.ok();
-            if let Some(content) = content {
-                // Show paths relative to working_dir for cleaner output
-                let display_path = path.strip_prefix(working_dir).unwrap_or(path);
-                for (i, line) in content.lines().enumerate() {
-                    if regex.is_match(line) {
-                        results.push(format!(
-                            "{}:{}: {}",
-                            display_path.display(),
-                            i + 1,
-                            line.trim()
-                        ));
-                    }
-                }
-            }
-        } else if path.is_dir() {
-            let mut entries = tokio::fs::read_dir(path)
-                .await
-                .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
-
-            while let Some(entry) = entries.next_entry().await.ok().flatten() {
-                let entry_path = entry.path();
-                // Skip hidden directories and common noise
-                if let Some(name) = entry_path.file_name().and_then(|n| n.to_str()) {
-                    let is_ignored =
-                        name.starts_with('.') || name == "target" || name == "node_modules";
-                    if is_ignored {
-                        continue;
-                    }
-                }
-                self.search_recursive(&entry_path, regex, results, working_dir)
-                    .await?;
-            }
-        }
-        Ok(())
     }
 }

@@ -3,7 +3,7 @@
   "ref": "cfmz",
   "title": "Upgrade glob tool to use globset (via ignore)",
   "description": null,
-  "status": "open",
+  "status": "done",
   "priority": 3,
   "labels": [],
   "assignees": [],
@@ -18,7 +18,7 @@
     }
   ],
   "created_at": "2026-01-18T20:34:34.894Z",
-  "updated_at": "2026-01-18T20:34:45.360Z",
-  "completed_at": null,
+  "updated_at": "2026-01-18T20:52:39.453Z",
+  "completed_at": "2026-01-18T20:52:39.453Z",
   "external": {}
 }
