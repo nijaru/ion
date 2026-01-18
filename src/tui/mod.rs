@@ -151,6 +151,8 @@ pub struct App {
     pub message_queue_tx: Option<mpsc::Sender<String>>,
     /// Queued message waiting to be sent to agent
     pub queued_message: Option<String>,
+    /// When the current task started (for elapsed time display)
+    pub task_start_time: Option<Instant>,
 }
 
 struct TuiApprovalHandler {
@@ -381,6 +383,7 @@ impl App {
             last_error: None,
             message_queue_tx: None,
             queued_message: None,
+            task_start_time: None,
         };
 
         // Initialize setup flow if needed
@@ -435,6 +438,7 @@ impl App {
                     self.cancel_pending = None;
                     self.message_queue_tx = None;
                     self.queued_message = None;
+                    self.task_start_time = None;
                     self.message_list.push_event(event);
                 }
                 AgentEvent::ModelsFetched(models) => {
@@ -463,6 +467,13 @@ impl App {
 
         // Poll session updates (preserves conversation history)
         if let Ok(updated_session) = self.session_rx.try_recv() {
+            // Agent task completed successfully
+            self.is_running = false;
+            self.cancel_pending = None;
+            self.message_queue_tx = None;
+            self.queued_message = None;
+            self.task_start_time = None;
+
             // Auto-save to persistent storage
             if let Err(e) = self.store.save(&updated_session) {
                 tracing::warn!("Failed to save session: {}", e);
@@ -1101,6 +1112,7 @@ impl App {
 
     fn run_agent_task(&mut self, input: String) {
         self.is_running = true;
+        self.task_start_time = Some(Instant::now());
 
         // Reset cancellation token for new task (tokens are single-use)
         self.session.abort_token = CancellationToken::new();
@@ -1390,12 +1402,28 @@ impl App {
                 Span::styled("Ionizing...", Style::default().fg(Color::Yellow)),
             ];
 
-            // Show token usage if available
-            if let Some((used, max)) = self.token_usage {
-                let pct = if max > 0 { (used * 100) / max } else { 0 };
+            // Build stats in parens: (elapsed · ↑input · ↓output)
+            let mut stats = Vec::new();
+
+            // Elapsed time
+            if let Some(start) = self.task_start_time {
+                let elapsed = start.elapsed();
+                let secs = elapsed.as_secs();
+                if secs >= 60 {
+                    stats.push(format!("{}m {}s", secs / 60, secs % 60));
+                } else {
+                    stats.push(format!("{}s", secs));
+                }
+            }
+
+            // TODO: Add streaming token counts when implemented
+            // stats.push(format!("↑ {}", format_tokens(input_tokens)));
+            // stats.push(format!("↓ {}", format_tokens(output_tokens)));
+
+            if !stats.is_empty() {
                 progress_spans.push(Span::styled(
-                    format!(" {}% ctx", pct),
-                    Style::default().fg(Color::Cyan).dim(),
+                    format!(" ({})", stats.join(" · ")),
+                    Style::default().dim(),
                 ));
             }
 
@@ -1493,14 +1521,22 @@ impl App {
             format!("[{}] · ", branch)
         };
 
-        // Context % display
+        // Context % display with token counts: 56% (112k/200k)
         let context_part = if let Some((used, max)) = self.token_usage {
             let pct = if max > 0 {
                 (used * 100) / max
             } else {
                 0
             };
-            format!("{}% · ", pct)
+            // Format tokens as k (thousands)
+            let format_k = |n: usize| -> String {
+                if n >= 1000 {
+                    format!("{}k", n / 1000)
+                } else {
+                    n.to_string()
+                }
+            };
+            format!("{}% ({}/{}) · ", pct, format_k(used), format_k(max))
         } else {
             String::new()
         };
