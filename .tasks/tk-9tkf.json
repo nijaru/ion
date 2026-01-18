@@ -1,0 +1,24 @@
+{
+  "project": "tk",
+  "ref": "9tkf",
+  "title": "Replace tiktoken-rs with GitHub bpe crate",
+  "description": null,
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [
+    {
+      "ts": "2026-01-18T20:34:46.982Z",
+      "msg": "MEDIUM PRIORITY. Replace tiktoken-rs with GitHub rust-gems bpe crate. 4x faster, same cl100k/o200k support. Needs API research - verify drop-in compatibility. See github.blog/ai-and-ml/llms/so-many-tokens-so-little-time"
+    }
+  ],
+  "created_at": "2026-01-18T20:34:34.938Z",
+  "updated_at": "2026-01-18T20:34:46.982Z",
+  "completed_at": null,
+  "external": {}
+}
