@@ -180,7 +180,7 @@ async fn run_inner(args: RunArgs) -> Result<ExitCode> {
     // Determine model
     let model = args
         .model
-        .or(config.default_model.clone())
+        .or(config.model.clone())
         .unwrap_or_else(|| "anthropic/claude-sonnet-4".to_string());
 
     // Create provider

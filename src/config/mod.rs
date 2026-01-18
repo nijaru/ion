@@ -10,7 +10,8 @@ pub struct Config {
     pub openrouter_api_key: Option<String>,
     pub anthropic_api_key: Option<String>,
     /// User's selected model. None until first setup.
-    pub default_model: Option<String>,
+    #[serde(alias = "default_model")]
+    pub model: Option<String>,
     pub data_dir: PathBuf,
 
     /// Provider preferences for model filtering and routing.
@@ -32,7 +33,7 @@ impl Default for Config {
         Self {
             openrouter_api_key: None,
             anthropic_api_key: None,
-            default_model: None,
+            model: None,
             data_dir,
             provider_prefs: ProviderPrefs::default(),
             model_cache_ttl_secs: 3600,
@@ -42,6 +43,13 @@ impl Default for Config {
 }
 
 impl Config {
+    /// Path to the config file.
+    fn config_path() -> PathBuf {
+        directories::ProjectDirs::from("com", "nijaru", "ion")
+            .map(|d| d.config_dir().join("config.toml"))
+            .unwrap_or_else(|| PathBuf::from(".ion/config.toml"))
+    }
+
     /// Path to the sessions SQLite database.
     pub fn sessions_db_path(&self) -> PathBuf {
         self.data_dir.join("sessions.db")
@@ -50,7 +58,7 @@ impl Config {
     /// Check if first-time setup is needed (no API key or no model selected).
     pub fn needs_setup(&self) -> bool {
         let has_api_key = self.openrouter_api_key.is_some() || self.anthropic_api_key.is_some();
-        !has_api_key || self.default_model.is_none()
+        !has_api_key || self.model.is_none()
     }
 
     /// Check if any API provider is configured.
@@ -59,9 +67,7 @@ impl Config {
     }
 
     pub fn load() -> anyhow::Result<Self> {
-        let config_path = directories::ProjectDirs::from("com", "nijaru", "ion")
-            .map(|d| d.config_dir().join("config.toml"))
-            .unwrap_or_else(|| PathBuf::from(".ion/config.toml"));
+        let config_path = Self::config_path();
 
         if config_path.exists() {
             let content = std::fs::read_to_string(&config_path)?;
@@ -70,5 +76,19 @@ impl Config {
         } else {
             Ok(Config::default())
         }
+    }
+
+    /// Save configuration to disk.
+    pub fn save(&self) -> anyhow::Result<()> {
+        let config_path = Self::config_path();
+
+        if let Some(parent) = config_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let content = toml::to_string_pretty(self)?;
+        std::fs::write(&config_path, content)?;
+
+        Ok(())
     }
 }

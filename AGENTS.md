@@ -34,6 +34,8 @@ ion = Rust TUI Agent (ratatui)
 - ai/research/competitive/ - Agent analysis
 - ai/research/memory-architectures-comparison.md - Memory system research
 
+**Competitive research**: OpenCode, pi-mono, Goose, Charm (not Aider)
+
 ## Technology Stack
 
 | Component | Choice              | Why                      |

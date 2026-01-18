@@ -179,7 +179,7 @@ impl Agent {
         mut session: Session,
         user_msg: String,
         tx: mpsc::Sender<AgentEvent>,
-        mut message_queue: Option<mpsc::Receiver<String>>,
+        message_queue: Option<Arc<std::sync::Mutex<Vec<String>>>>,
         thinking: Option<ThinkingConfig>,
     ) -> Result<Session> {
         session.messages.push(Message {
@@ -224,14 +224,15 @@ impl Agent {
 
         loop {
             // Check for queued user messages between turns (for mid-task steering)
-            if let Some(ref mut queue) = message_queue {
-                if let Ok(queued_msg) = queue.try_recv() {
-                    // Inject queued message as new user turn
-                    session.messages.push(Message {
-                        role: Role::User,
-                        content: Arc::new(vec![ContentBlock::Text { text: queued_msg }]),
-                    });
-                    // Continue to next turn with the injected message
+            if let Some(ref queue) = message_queue {
+                if let Ok(mut queue) = queue.lock() {
+                    // Drain all queued messages and inject as user turns
+                    for queued_msg in queue.drain(..) {
+                        session.messages.push(Message {
+                            role: Role::User,
+                            content: Arc::new(vec![ContentBlock::Text { text: queued_msg }]),
+                        });
+                    }
                 }
             }
 

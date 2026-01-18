@@ -147,10 +147,8 @@ pub struct App {
     pub token_usage: Option<(usize, usize)>,
     /// Last error message for status line display
     pub last_error: Option<String>,
-    /// Message queue sender for injecting messages during agent execution
-    pub message_queue_tx: Option<mpsc::Sender<String>>,
-    /// Queued messages waiting to be sent to agent
-    pub queued_messages: Vec<String>,
+    /// Shared message queue for mid-task steering (TUI pushes, agent drains)
+    pub message_queue: Option<Arc<std::sync::Mutex<Vec<String>>>>,
     /// When the current task started (for elapsed time display)
     pub task_start_time: Option<Instant>,
     /// Input tokens sent to model (current task)
@@ -331,7 +329,7 @@ impl App {
 
         // Create new session with current directory
         let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let model = config.default_model.clone().unwrap_or_default();
+        let model = config.model.clone().unwrap_or_default();
         let session = Session::new(working_dir, model);
 
         let (agent_tx, agent_rx) = mpsc::channel(100);
@@ -385,8 +383,7 @@ impl App {
             thinking_level: ThinkingLevel::Off,
             token_usage: None,
             last_error: None,
-            message_queue_tx: None,
-            queued_messages: Vec::new(),
+            message_queue: None,
             task_start_time: None,
             input_tokens: 0,
             output_tokens: 0,
@@ -442,8 +439,7 @@ impl App {
                 AgentEvent::Finished(_) | AgentEvent::Error(_) => {
                     self.is_running = false;
                     self.cancel_pending = None;
-                    self.message_queue_tx = None;
-                    self.queued_messages.clear();
+                    self.message_queue = None;
                     self.task_start_time = None;
                     self.message_list.push_event(event);
                 }
@@ -482,8 +478,7 @@ impl App {
             // Agent task completed successfully
             self.is_running = false;
             self.cancel_pending = None;
-            self.message_queue_tx = None;
-            self.queued_messages.clear();
+            self.message_queue = None;
             self.task_start_time = None;
 
             // Auto-save to persistent storage
@@ -612,14 +607,12 @@ impl App {
                 if !self.input.is_empty() {
                     if self.is_running {
                         // Queue message for injection at next turn
-                        if let Some(ref tx) = self.message_queue_tx {
+                        if let Some(ref queue) = self.message_queue {
                             let msg = std::mem::take(&mut self.input);
                             self.cursor_pos = 0;
-                            self.queued_messages.push(msg.clone());
-                            let tx = tx.clone();
-                            tokio::spawn(async move {
-                                let _ = tx.send(msg).await;
-                            });
+                            if let Ok(mut q) = queue.lock() {
+                                q.push(msg);
+                            }
                         }
                     } else {
                         // Check for slash commands
@@ -704,13 +697,25 @@ impl App {
             KeyCode::PageUp => self.message_list.scroll_up(10),
             KeyCode::PageDown => self.message_list.scroll_down(10),
 
-            // Arrow Up: Move cursor up, or recall history if at top
+            // Arrow Up: Move cursor up, recall queued messages, or recall history
             KeyCode::Up => {
                 // Check if cursor is at start of input (or no newlines above)
                 let at_top = self.cursor_pos == 0 || !self.input[..self.cursor_pos].contains('\n');
-                if at_top && !self.input_history.is_empty() {
-                    // Recall previous history
-                    if self.history_index > 0 {
+                if at_top {
+                    // If running and queue has messages, pop from queue first
+                    if self.is_running && self.input.is_empty() {
+                        if let Some(ref queue) = self.message_queue {
+                            if let Ok(mut q) = queue.lock() {
+                                if let Some(msg) = q.pop() {
+                                    self.input = msg;
+                                    self.cursor_pos = self.input.len();
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                    // Fall back to input history
+                    if !self.input_history.is_empty() && self.history_index > 0 {
                         self.history_index -= 1;
                         self.input = self.input_history[self.history_index].clone();
                         self.cursor_pos = self.input.len();
@@ -926,6 +931,11 @@ impl App {
                 PickerStage::Model => {
                     if let Some(model) = self.model_picker.selected_model() {
                         self.session.model = model.id.clone();
+                        // Persist selection to config
+                        self.config.model = Some(model.id.clone());
+                        if let Err(e) = self.config.save() {
+                            tracing::warn!("Failed to save config: {}", e);
+                        }
                         self.model_picker.reset();
                         // Complete setup if this was the setup flow
                         if self.needs_setup {
@@ -1125,10 +1135,9 @@ impl App {
         // Reset cancellation token for new task (tokens are single-use)
         self.session.abort_token = CancellationToken::new();
 
-        // Create message queue for mid-task steering
-        let (queue_tx, queue_rx) = mpsc::channel::<String>(10);
-        self.message_queue_tx = Some(queue_tx);
-        self.queued_messages.clear();
+        // Create shared message queue for mid-task steering
+        let queue = Arc::new(std::sync::Mutex::new(Vec::new()));
+        self.message_queue = Some(queue.clone());
 
         let agent = self.agent.clone();
         let session = self.session.clone();
@@ -1145,7 +1154,7 @@ impl App {
 
         tokio::spawn(async move {
             match agent
-                .run_task(session, input, event_tx.clone(), Some(queue_rx), thinking)
+                .run_task(session, input, event_tx.clone(), Some(queue), thinking)
                 .await
             {
                 Ok(updated_session) => {
@@ -1396,12 +1405,16 @@ impl App {
         }
 
         // Show queued messages at bottom of chat (dimmed, pending)
-        for queued in &self.queued_messages {
-            chat_lines.push(Line::from(vec![
-                Span::styled(" > ", Style::default().fg(Color::Yellow).dim()),
-                Span::styled(queued.as_str(), Style::default().dim().italic()),
-            ]));
-            chat_lines.push(Line::from(""));
+        if let Some(ref queue) = self.message_queue {
+            if let Ok(q) = queue.lock() {
+                for queued in q.iter() {
+                    chat_lines.push(Line::from(vec![
+                        Span::styled(" > ", Style::default().fg(Color::Yellow).dim()),
+                        Span::styled(queued.clone(), Style::default().dim().italic()),
+                    ]));
+                    chat_lines.push(Line::from(""));
+                }
+            }
         }
 
         let chat_para = Paragraph::new(chat_lines)
