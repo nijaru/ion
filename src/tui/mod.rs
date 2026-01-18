@@ -1387,6 +1387,15 @@ impl App {
             chat_lines.push(Line::from(""));
         }
 
+        // Show queued message at bottom of chat (dimmed, pending)
+        if let Some(ref queued) = self.queued_message {
+            chat_lines.push(Line::from(vec![
+                Span::styled(" > ", Style::default().fg(Color::Yellow).dim()),
+                Span::styled(queued.as_str(), Style::default().dim().italic()),
+            ]));
+            chat_lines.push(Line::from(""));
+        }
+
         let chat_para = Paragraph::new(chat_lines)
             .block(chat_block)
             .wrap(Wrap { trim: true });
@@ -1424,14 +1433,6 @@ impl App {
                 progress_spans.push(Span::styled(
                     format!(" ({})", stats.join(" · ")),
                     Style::default().dim(),
-                ));
-            }
-
-            // Show queued indicator
-            if self.queued_message.is_some() {
-                progress_spans.push(Span::styled(
-                    " [Queued]",
-                    Style::default().fg(Color::Green),
                 ));
             }
 
