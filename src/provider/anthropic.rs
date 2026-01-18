@@ -299,6 +299,7 @@ impl Provider for AnthropicProvider {
                         supports_thinking: false,
                         supports_cache: false,
                         pricing: Default::default(),
+                        created: 0,
                     });
                 }
             }

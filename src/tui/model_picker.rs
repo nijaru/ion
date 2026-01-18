@@ -228,25 +228,14 @@ impl ModelPicker {
             .cloned()
             .collect();
 
-        // Sort: cache-supporting first if preferred, then by price
-        if self.prefs.prefer_cache {
-            self.filtered_models
-                .sort_by(|a, b| match b.supports_cache.cmp(&a.supports_cache) {
-                    std::cmp::Ordering::Equal => a
-                        .pricing
-                        .input
-                        .partial_cmp(&b.pricing.input)
-                        .unwrap_or(std::cmp::Ordering::Equal),
-                    other => other,
-                });
-        } else {
-            self.filtered_models.sort_by(|a, b| {
-                a.pricing
-                    .input
-                    .partial_cmp(&b.pricing.input)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-        }
+        // Sort: org first, then newest first (by created timestamp descending)
+        self.filtered_models.sort_by(|a, b| {
+            // Primary: org name
+            a.provider.cmp(&b.provider).then_with(|| {
+                // Secondary: newest first (higher created = newer)
+                b.created.cmp(&a.created)
+            })
+        });
 
         if !self.filtered_models.is_empty() {
             self.model_state.select(Some(0));
@@ -393,8 +382,8 @@ impl ModelPicker {
     pub fn render(&mut self, frame: &mut Frame) {
         let area = frame.area();
 
-        // Larger modal for model names + provider + context + price columns
-        let content_width = 85u16;
+        // Modal width for columns: name(36) + provider(20) + context(7) + price(9) + borders/spacing
+        let content_width = 80u16;
         let list_len = match self.stage {
             PickerStage::Provider => self.filtered_providers.len(),
             PickerStage::Model => self.filtered_models.len(),
@@ -464,8 +453,36 @@ impl ModelPicker {
 
         match self.stage {
             PickerStage::Provider => self.render_provider_list(frame, chunks[1]),
-            PickerStage::Model => self.render_model_list(frame, chunks[1]),
+            PickerStage::Model => {
+                // Split area for header + list
+                let model_chunks = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([Constraint::Length(1), Constraint::Min(0)])
+                    .split(chunks[1]);
+                self.render_model_header(frame, model_chunks[0]);
+                self.render_model_list(frame, model_chunks[1]);
+            }
         }
+    }
+
+    fn render_model_header(&self, frame: &mut Frame, area: Rect) {
+        // Column widths (must match render_model_list)
+        let name_width = 30usize;
+        let provider_width = 16usize;
+        let context_width = 7usize;
+        let input_width = 7usize;
+        let output_width = 7usize;
+
+        let header_line = Line::from(vec![
+            Span::raw("  "), // Space for highlight symbol
+            Span::styled(format!("{:width$}", "Model", width = name_width), Style::default().fg(Color::Cyan).bold()),
+            Span::styled(format!("{:width$}", "Org", width = provider_width), Style::default().fg(Color::Cyan).bold()),
+            Span::styled(format!("{:>width$}", "Context", width = context_width), Style::default().fg(Color::Cyan).bold()),
+            Span::styled(format!("{:>width$}", "Input", width = input_width), Style::default().fg(Color::Cyan).bold()),
+            Span::styled(format!("{:>width$}", "Output", width = output_width), Style::default().fg(Color::Cyan).bold()),
+        ]);
+
+        frame.render_widget(Paragraph::new(header_line), area);
     }
 
     fn render_provider_list(&mut self, frame: &mut Frame, area: Rect) {
@@ -523,48 +540,61 @@ impl ModelPicker {
     }
 
     fn render_model_list(&mut self, frame: &mut Frame, area: Rect) {
-        // Column widths (total ~75 chars inner width)
-        let name_width = 38usize;
-        let provider_width = 18usize;
-        let context_width = 8usize;
-        let price_width = 10usize;
+        // Column widths (must match render_model_header)
+        let name_width = 30usize;
+        let provider_width = 16usize;
+        let context_width = 7usize;
+        let input_width = 7usize;
+        let output_width = 7usize;
 
-        let items: Vec<ListItem> = self
-            .filtered_models
-            .iter()
-            .map(|m| {
-                // Extract model name (after provider/)
-                let model_name = m.id.split('/').nth(1).unwrap_or(&m.id);
-                let provider = m.id.split('/').next().unwrap_or("");
+        let items: Vec<ListItem> = self.filtered_models.iter().map(|m| {
+            // Extract model name (after provider/)
+            let model_name = m.id.split('/').nth(1).unwrap_or(&m.id);
+            let provider = &m.provider;
 
-                // Truncate if needed
-                let name_display: String = if model_name.len() > name_width {
-                    format!("{}…", &model_name[..name_width - 1])
-                } else {
-                    model_name.to_string()
-                };
-                let provider_display: String = if provider.len() > provider_width {
-                    format!("{}…", &provider[..provider_width - 1])
-                } else {
-                    provider.to_string()
-                };
+            // Truncate if needed (accounting for ellipsis)
+            let name_display: String = if model_name.chars().count() > name_width {
+                let truncated: String = model_name.chars().take(name_width - 1).collect();
+                format!("{}…", truncated)
+            } else {
+                model_name.to_string()
+            };
+            let provider_display: String = if provider.chars().count() > provider_width {
+                let truncated: String = provider.chars().take(provider_width - 1).collect();
+                format!("{}…", truncated)
+            } else {
+                provider.to_string()
+            };
 
-                // Format columns with padding
-                let name_col = format!("{:width$}", name_display, width = name_width);
-                let provider_col = format!("{:width$}", provider_display, width = provider_width);
-                let context_col = format!("{:>width$}", format!("{}k", m.context_window / 1000), width = context_width);
-                let price_col = format!("{:>width$}", format!("${:.2}", m.pricing.input), width = price_width);
+            // Format columns with padding
+            let name_col = format!("{:width$}", name_display, width = name_width);
+            let provider_col = format!("{:width$}", provider_display, width = provider_width);
+            let context_col = format!("{:>width$}", format!("{}k", m.context_window / 1000), width = context_width);
 
-                let line = Line::from(vec![
-                    Span::styled(name_col, Style::default().fg(Color::White)),
-                    Span::styled(provider_col, Style::default().dim()),
-                    Span::styled(context_col, Style::default().fg(Color::Blue).dim()),
-                    Span::styled(price_col, Style::default().fg(Color::Yellow).dim()),
-                ]);
+            // Format prices - free models show "free", others show price
+            let (input_str, input_style) = if m.pricing.input == 0.0 {
+                ("free".to_string(), Style::default().fg(Color::Green))
+            } else {
+                (format!("${:.2}", m.pricing.input), Style::default().fg(Color::Yellow))
+            };
+            let (output_str, output_style) = if m.pricing.output == 0.0 {
+                ("free".to_string(), Style::default().fg(Color::Green))
+            } else {
+                (format!("${:.2}", m.pricing.output), Style::default().fg(Color::Yellow))
+            };
+            let input_col = format!("{:>width$}", input_str, width = input_width);
+            let output_col = format!("{:>width$}", output_str, width = output_width);
 
-                ListItem::new(line)
-            })
-            .collect();
+            let line = Line::from(vec![
+                Span::styled(name_col, Style::default().fg(Color::White)),
+                Span::styled(provider_col, Style::default().dim()),
+                Span::styled(context_col, Style::default().fg(Color::Blue)),
+                Span::styled(input_col, input_style),
+                Span::styled(output_col, output_style),
+            ]);
+
+            ListItem::new(line)
+        }).collect();
 
         let count = self.filtered_models.len();
         let total = self.provider_models.len();

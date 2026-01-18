@@ -87,6 +87,7 @@ pub async fn fetch_models_dev() -> Result<Vec<ModelInfo>> {
                 supports_thinking: false,
                 supports_cache: false,
                 pricing,
+                created: 0,
             });
         }
     }
