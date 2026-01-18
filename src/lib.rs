@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod cli;
 pub mod compaction;
 pub mod config;
 pub mod error;

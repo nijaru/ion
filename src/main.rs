@@ -1,13 +1,38 @@
-use ion::tui::App;
-use crossterm::{
-    event, execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
-};
-use ratatui::prelude::*;
-use std::{error::Error, io};
+use clap::Parser;
+use ion::cli::{Cli, Commands};
+use std::process::ExitCode;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn main() -> ExitCode {
+    let cli = Cli::parse();
+
+    match cli.command {
+        Some(Commands::Run(args)) => {
+            // One-shot CLI mode
+            ion::cli::run(args).await
+        }
+        None => {
+            // Interactive TUI mode
+            match run_tui().await {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    ExitCode::FAILURE
+                }
+            }
+        }
+    }
+}
+
+async fn run_tui() -> Result<(), Box<dyn std::error::Error>> {
+    use crossterm::{
+        event, execute,
+        terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+    };
+    use ion::tui::App;
+    use ratatui::prelude::*;
+    use std::io;
+
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
