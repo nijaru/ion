@@ -459,3 +459,98 @@ No reason to go through MCP when we can use the Rust crate directly.
 | **Invalidation** | Cache is updated only when the active plan, task status, or skill changes. |
 
 **Outcome**: Reduced local CPU overhead and ensured bit-for-bit stability of the system prompt prefix for provider-side prompt caching.
+
+---
+
+## 2026-01-18: Status Line Architecture
+
+**Context**: Designing a flexible status line system that balances simplicity with customization (like Claude Code).
+
+**Decision**: Layered configuration with custom script override.
+
+| Setting         | Default | Notes                           |
+| --------------- | ------- | ------------------------------- |
+| `show_model`    | `true`  | Model name, simplified          |
+| `show_provider` | `true`  | Dim, in brackets                |
+| `show_context`  | `true`  | `26% (52k/200k)` format         |
+| `show_branch`   | `true`  | Git branch in `[brackets]`      |
+| `show_cwd`      | `false` | Optional, since terminal title  |
+| `show_git_diff` | `false` | Like Claude: `+3 -1` indicators |
+| `custom_script` | `None`  | Overrides all above when set    |
+
+**Terminal Title**: Always set to `ion <cwd>` regardless of status line settings.
+
+**Custom Script Behavior**: When `custom_script` is set, all `show_*` settings are ignored. The script receives environment variables (`ION_MODEL`, `ION_PROVIDER`, `ION_BRANCH`, etc.) and returns a string.
+
+---
+
+## 2026-01-18: Slash Command System
+
+**Context**: Need autocomplete for slash commands with fuzzy matching, similar to Claude Code. Also want commands triggerable mid-prompt.
+
+**Decision**: Fuzzy slash command autocomplete with inline trigger support.
+
+| Feature           | Implementation                                  |
+| ----------------- | ----------------------------------------------- |
+| **Autocomplete**  | Fuzzy match on `/` prefix, dropdown above input |
+| **Mid-Prompt**    | Detect `/command` anywhere, extract and execute |
+| **Extensibility** | Commands registered via trait, easy to add new  |
+
+**Commands (Initial)**:
+
+- `/model` - Model picker
+- `/provider` - Provider picker
+- `/clear` - Clear conversation
+- `/index [path]` - Index codebase
+- `/quit` - Exit
+- `/help` - Help modal
+- `/settings` - Settings (future)
+- `/compact` - Trigger compaction (future)
+- `/resume` - Resume session (future)
+
+---
+
+## 2026-01-18: Session Retention Policy
+
+**Context**: Need to decide how long to keep conversation history.
+
+**Decision**: 30-day default retention, configurable.
+
+| Setting          | Default | Range   |
+| ---------------- | ------- | ------- |
+| `retention_days` | `30`    | `1-365` |
+
+**Implementation**: Background cleanup on startup, delete sessions where `updated_at < now - retention_days`.
+
+---
+
+## 2026-01-18: First-Time Setup Flow
+
+**Context**: No default provider/model - users must explicitly choose.
+
+**Decision**: On first launch (no config), force provider → model selection before chat.
+
+| State           | Behavior                                   |
+| --------------- | ------------------------------------------ |
+| No provider set | Open provider picker, block until selected |
+| No model set    | Open model picker, block until selected    |
+| Config exists   | Load saved provider/model                  |
+
+**Rationale**: Avoids assumptions about user's API keys and preferred models. Explicit is better than implicit.
+
+---
+
+## 2026-01-18: Memory System Deferral
+
+**Context**: Memory (OmenDB) is the key differentiator, but TUI agent needs to be fully functional first.
+
+**Decision**: Defer memory integration until core TUI is stable.
+
+**Priority Order**:
+
+1. TUI agent fully working (current focus)
+2. Session management (continue/resume)
+3. Context tracking & cost display
+4. Memory integration (Phase 6)
+
+**Rationale**: Ship a working agent first, then add the differentiating features. Memory adds complexity (embeddings, indexing, retrieval) that shouldn't block MVP.
