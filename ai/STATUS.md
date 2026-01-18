@@ -28,32 +28,26 @@
 
 ## Session Accomplishments
 
-**Documentation:**
+**Dependency Audit:**
 
-- Added descriptions to all 7 open tk tasks
-- Created `ai/design/diff-highlighting.md` - full implementation spec
-- Created `ai/design/interrupt-handling.md` - Ctrl+C behavior spec
-- Updated `ai/design/tui.md` with current state and planned features
+- Full audit of Cargo.toml for SOTA replacements
+- Created `ai/design/dependency-upgrades.md` with research and plan
+- Added 4 tasks for dependency work (tk-ykpu, tk-cfmz, tk-ha1x, tk-9tkf)
 
-**Config Persistence:**
+**Key Findings:**
 
-- Config::save() method to persist settings to disk
-- Model selection persisted (no more repeated setup on each run)
-- Renamed `default_model` to `model` in Config (cleaner naming)
-
-**Message Queue Improvements:**
-
-- Up arrow recalls queued messages back to input for editing
-- Changed from channel-based to shared Mutex<Vec> queue
-- Messages can be canceled before agent receives them
-
-**ANSI Color Support:**
-
-- Added ansi-to-tui crate for parsing ANSI escape sequences
-- Tool output preserves colors (git diff, ls, etc.)
-- Bash tool forces color output via CLICOLOR_FORCE, FORCE_COLOR env vars
+- `ignore` crate already in deps but unused - grep/glob should use it
+- `tiktoken-rs` can be replaced with GitHub's `bpe` (4x faster)
+- `walkdir`, `serde_yaml`, `glob` can be removed (unused/deprecated/redundant)
 
 ## Open Tasks
+
+**Dependencies (HIGH):**
+
+- [ ] tk-ykpu: Upgrade grep tool to use ignore crate
+- [ ] tk-cfmz: Upgrade glob tool to use globset
+- [ ] tk-ha1x: Remove unused deps (walkdir, serde_yaml, glob)
+- [ ] tk-9tkf: Replace tiktoken-rs with GitHub bpe crate
 
 **Bugs:**
 
@@ -69,9 +63,9 @@
 **Ideas:**
 
 - [ ] tk-iegz: OpenRouter provider routing modal
+- [ ] tk-smqs: Diff highlighting for edits (like Claude Code)
 - [ ] tui-textarea for better input editing
 - [ ] tree-sitter for syntax highlighting
-- [ ] Diff highlighting for edits (like Claude Code)
 
 ## Completed
 
@@ -93,5 +87,6 @@
 - `ai/design/tui.md` - TUI interface spec (keybindings, layout, features)
 - `ai/design/diff-highlighting.md` - Diff rendering implementation plan
 - `ai/design/interrupt-handling.md` - Ctrl+C behavior spec
+- `ai/design/dependency-upgrades.md` - SOTA lib replacements (grep, glob, tokenizer)
 - `ai/design/plugin-architecture.md` - Hook system, plugin format
 - `ai/DECISIONS.md` - All architecture decisions

@@ -1,0 +1,24 @@
+{
+  "project": "tk",
+  "ref": "ykpu",
+  "title": "Upgrade grep tool to use ignore crate (ripgrep libs)",
+  "description": null,
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [
+    {
+      "ts": "2026-01-18T20:34:44.809Z",
+      "msg": "HIGH PRIORITY. Current grep tool uses regex crate with manual async recursion, hardcoded ignore list (.git, target, node_modules). Replace with ignore crate which is already in Cargo.toml but unused. Benefits: automatic .gitignore support, parallel walking, binary detection, much faster. See ai/design/dependency-upgrades.md"
+    }
+  ],
+  "created_at": "2026-01-18T20:34:34.873Z",
+  "updated_at": "2026-01-18T20:34:44.809Z",
+  "completed_at": null,
+  "external": {}
+}
