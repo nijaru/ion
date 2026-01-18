@@ -1,25 +1,29 @@
 # ion
 
-TUI coding agent.
+A TUI coding agent that runs in your terminal.
 
-Features:
+## Features
 
 - Multi-provider LLM support (OpenRouter, Anthropic, Ollama)
-- Built-in tools: read, write, edit, grep, glob, bash
+- Built-in tools for file operations, search, and shell commands
 - MCP server support
 
 ## Installation
 
-Requires Rust nightly.
+```
+cargo install --git https://github.com/nijaru/ion
+```
 
-```
-cargo install --path .
-```
+Requires Rust nightly.
 
 ## Usage
 
 ```
 ion
 ```
+
+Run `ion --help` for options.
+
+## License
 
 [MIT](LICENSE)
