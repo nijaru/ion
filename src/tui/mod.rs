@@ -14,7 +14,6 @@ use crate::tool::{ApprovalHandler, ApprovalResponse, ToolMode, ToolOrchestrator}
 use crate::tui::message_list::{MessageList, Sender};
 use crate::tui::model_picker::ModelPicker;
 use crate::tui::provider_picker::ProviderPicker;
-use crate::tui::widgets::LoadingIndicator;
 use async_trait::async_trait;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::prelude::*;
@@ -148,6 +147,10 @@ pub struct App {
     pub token_usage: Option<(usize, usize)>,
     /// Last error message for status line display
     pub last_error: Option<String>,
+    /// Message queue sender for injecting messages during agent execution
+    pub message_queue_tx: Option<mpsc::Sender<String>>,
+    /// Queued message waiting to be sent to agent
+    pub queued_message: Option<String>,
 }
 
 struct TuiApprovalHandler {
@@ -376,6 +379,8 @@ impl App {
             thinking_level: ThinkingLevel::Off,
             token_usage: None,
             last_error: None,
+            message_queue_tx: None,
+            queued_message: None,
         };
 
         // Initialize setup flow if needed
@@ -428,6 +433,8 @@ impl App {
                 AgentEvent::Finished(_) | AgentEvent::Error(_) => {
                     self.is_running = false;
                     self.cancel_pending = None;
+                    self.message_queue_tx = None;
+                    self.queued_message = None;
                     self.message_list.push_event(event);
                 }
                 AgentEvent::ModelsFetched(models) => {
@@ -577,83 +584,102 @@ impl App {
                 self.cursor_pos += 1;
             }
 
-            // Enter: Send message
+            // Enter: Send message or queue for mid-task steering
             KeyCode::Enter => {
-                if !self.input.is_empty() && !self.is_running {
-                    // Check for slash commands
-                    if self.input.starts_with('/') {
-                        let cmd = self.input.trim().to_lowercase();
-                        match cmd.as_str() {
-                            "/model" | "/models" => {
-                                self.input.clear();
-                                self.cursor_pos = 0;
-                                self.open_model_picker();
-                                return;
-                            }
-                            "/provider" | "/providers" => {
-                                self.input.clear();
-                                self.cursor_pos = 0;
-                                self.open_provider_picker();
-                                return;
-                            }
-                            "/quit" | "/exit" | "/q" => {
-                                self.input.clear();
-                                self.quit();
-                                return;
-                            }
-                            "/clear" => {
-                                self.input.clear();
-                                self.cursor_pos = 0;
-                                self.message_list.clear();
-                                self.session.messages.clear();
-                                return;
-                            }
-                            "/help" | "/?" => {
-                                self.input.clear();
-                                self.cursor_pos = 0;
-                                self.mode = Mode::HelpOverlay;
-                                return;
-                            }
-                            "/index" => {
-                                let parts: Vec<&str> = self.input.split_whitespace().collect();
-
-                                let path = if parts.len() > 1 {
-                                    Some(parts[1].to_string())
-                                } else {
-                                    None
-                                };
-
-                                self.input.clear();
-                                self.cursor_pos = 0;
-                                self.message_list.push_entry(
-                                    crate::tui::message_list::MessageEntry::new(
-                                        crate::tui::Sender::System,
-                                        format!(
-                                            "Indexing {}...",
-                                            path.as_deref().unwrap_or("working directory")
-                                        ),
-                                    ),
-                                );
-                                let agent = self.agent.clone();
-                                tokio::spawn(async move {
-                                    let path_buf = path.map(PathBuf::from);
-                                    if let Err(e) = agent.reindex(path_buf.as_deref()).await {
-                                        error!("Indexing failed: {}", e);
-                                    }
-                                });
-                                return;
-                            }
-                            _ => {} // Fall through to normal message if unknown command
+                if !self.input.is_empty() {
+                    if self.is_running {
+                        // Queue message for injection at next turn
+                        if let Some(ref tx) = self.message_queue_tx {
+                            let msg = std::mem::take(&mut self.input);
+                            self.cursor_pos = 0;
+                            self.queued_message = Some(msg.clone());
+                            self.message_list.push_entry(
+                                crate::tui::message_list::MessageEntry::new(
+                                    crate::tui::Sender::System,
+                                    format!("[Queued] {}", msg),
+                                ),
+                            );
+                            let tx = tx.clone();
+                            tokio::spawn(async move {
+                                let _ = tx.send(msg).await;
+                            });
                         }
-                    }
+                    } else {
+                        // Check for slash commands
+                        if self.input.starts_with('/') {
+                            let cmd = self.input.trim().to_lowercase();
+                            match cmd.as_str() {
+                                "/model" | "/models" => {
+                                    self.input.clear();
+                                    self.cursor_pos = 0;
+                                    self.open_model_picker();
+                                    return;
+                                }
+                                "/provider" | "/providers" => {
+                                    self.input.clear();
+                                    self.cursor_pos = 0;
+                                    self.open_provider_picker();
+                                    return;
+                                }
+                                "/quit" | "/exit" | "/q" => {
+                                    self.input.clear();
+                                    self.quit();
+                                    return;
+                                }
+                                "/clear" => {
+                                    self.input.clear();
+                                    self.cursor_pos = 0;
+                                    self.message_list.clear();
+                                    self.session.messages.clear();
+                                    return;
+                                }
+                                "/help" | "/?" => {
+                                    self.input.clear();
+                                    self.cursor_pos = 0;
+                                    self.mode = Mode::HelpOverlay;
+                                    return;
+                                }
+                                "/index" => {
+                                    let parts: Vec<&str> = self.input.split_whitespace().collect();
 
-                    // Enter: Send message
-                    let input = std::mem::take(&mut self.input);
-                    self.input_history.push(input.clone());
-                    self.history_index = self.input_history.len();
-                    self.cursor_pos = 0;
-                    self.message_list.push_user_message(input.clone());
-                    self.run_agent_task(input);
+                                    let path = if parts.len() > 1 {
+                                        Some(parts[1].to_string())
+                                    } else {
+                                        None
+                                    };
+
+                                    self.input.clear();
+                                    self.cursor_pos = 0;
+                                    self.message_list.push_entry(
+                                        crate::tui::message_list::MessageEntry::new(
+                                            crate::tui::Sender::System,
+                                            format!(
+                                                "Indexing {}...",
+                                                path.as_deref().unwrap_or("working directory")
+                                            ),
+                                        ),
+                                    );
+                                    let agent = self.agent.clone();
+                                    tokio::spawn(async move {
+                                        let path_buf = path.map(PathBuf::from);
+                                        if let Err(e) = agent.reindex(path_buf.as_deref()).await {
+                                            error!("Indexing failed: {}", e);
+                                        }
+                                    });
+                                    return;
+                                }
+                                _ => {} // Fall through to normal message if unknown command
+                            }
+                        }
+
+                        // Send message
+                        let input = std::mem::take(&mut self.input);
+                        self.input_history.push(input.clone());
+                        self.history_index = self.input_history.len();
+                        self.cursor_pos = 0;
+                        self.message_list.push_user_message(input.clone());
+                        self.run_agent_task(input);
+                    }
                 }
             }
 
@@ -1079,6 +1105,11 @@ impl App {
         // Reset cancellation token for new task (tokens are single-use)
         self.session.abort_token = CancellationToken::new();
 
+        // Create message queue for mid-task steering
+        let (queue_tx, queue_rx) = mpsc::channel::<String>(10);
+        self.message_queue_tx = Some(queue_tx);
+        self.queued_message = None;
+
         let agent = self.agent.clone();
         let session = self.session.clone();
         let event_tx = self.agent_tx.clone();
@@ -1093,7 +1124,10 @@ impl App {
         });
 
         tokio::spawn(async move {
-            match agent.run_task(session, input, event_tx.clone(), thinking).await {
+            match agent
+                .run_task(session, input, event_tx.clone(), Some(queue_rx), thinking)
+                .await
+            {
                 Ok(updated_session) => {
                     // Send updated session back to preserve conversation history
                     let _ = session_tx.send(updated_session).await;
@@ -1334,27 +1368,22 @@ impl App {
             .wrap(Wrap { trim: true });
         frame.render_widget(chat_para, chunks[0]);
 
-        // Input or Approval Prompt
+        // Input or Approval Prompt (input always visible except during approval)
         if self.mode == Mode::Approval {
             if let Some(req) = &self.pending_approval {
                 let prompt = format!(
-                    " [APPROVAL] Allow {}? (y)es / (n)o / (a)lways / (A)lways permanent ",
+                    " [Approval] Allow {}? (y)es / (n)o / (a)lways / (A)lways permanent ",
                     req.tool_name
                 );
                 let approval_block = Block::default()
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(Color::Red).bold())
-                    .title(" ACTION REQUIRED ");
+                    .title(" Action Required ");
                 let approval_para = Paragraph::new(prompt).block(approval_block);
                 frame.render_widget(approval_para, chunks[1]);
             }
-        } else if self.is_running {
-            let loading = LoadingIndicator {
-                label: "Ionizing...".to_string(),
-                frame_count: self.frame_count,
-            };
-            frame.render_widget(loading, chunks[1]);
         } else {
+            // Input box always visible (even while running)
             let mode_label = match self.tool_mode {
                 ToolMode::Read => "READ",
                 ToolMode::Write => "WRITE",
@@ -1365,21 +1394,49 @@ impl App {
                 ToolMode::Write => Color::Yellow,
                 ToolMode::Agi => Color::Red,
             };
+
+            // Border color: yellow when running, mode color otherwise
+            let border_color = if self.is_running {
+                Color::Yellow
+            } else {
+                mode_color
+            };
+
             let mut input_block = Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(mode_color))
+                .border_style(Style::default().fg(border_color))
                 .title(format!(" [{}] ", mode_label));
 
-            // Show thinking level on right side of input box
+            // Build right-side status indicator
+            let mut right_spans = Vec::new();
+
+            // Show running/queued status
+            if self.is_running {
+                let spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+                let symbol = spinner[(self.frame_count % spinner.len() as u64) as usize];
+                right_spans.push(Span::styled(
+                    format!(" {} ", symbol),
+                    Style::default().fg(Color::Yellow),
+                ));
+                if self.queued_message.is_some() {
+                    right_spans.push(Span::styled(
+                        "Queued ",
+                        Style::default().fg(Color::Green),
+                    ));
+                }
+            }
+
+            // Show thinking level
             let thinking_label = self.thinking_level.label();
             if !thinking_label.is_empty() {
-                input_block = input_block.title(
-                    Line::from(Span::styled(
-                        format!(" {} ", thinking_label),
-                        Style::default().fg(Color::Magenta),
-                    ))
-                    .right_aligned(),
-                );
+                right_spans.push(Span::styled(
+                    format!(" {} ", thinking_label),
+                    Style::default().fg(Color::Magenta),
+                ));
+            }
+
+            if !right_spans.is_empty() {
+                input_block = input_block.title(Line::from(right_spans).right_aligned());
             }
 
             // Build input text with cursor (1-space left padding)

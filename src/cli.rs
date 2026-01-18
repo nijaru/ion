@@ -218,7 +218,7 @@ async fn run_inner(args: RunArgs) -> Result<ExitCode> {
 
     let agent_handle = tokio::spawn(async move {
         agent_clone
-            .run_task(session_clone, prompt_clone, tx, None)
+            .run_task(session_clone, prompt_clone, tx, None, None)
             .await
     });
 
