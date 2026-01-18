@@ -28,6 +28,13 @@
 
 ## Session Accomplishments
 
+**Documentation:**
+
+- Added descriptions to all 7 open tk tasks
+- Created `ai/design/diff-highlighting.md` - full implementation spec
+- Created `ai/design/interrupt-handling.md` - Ctrl+C behavior spec
+- Updated `ai/design/tui.md` with current state and planned features
+
 **Config Persistence:**
 
 - Config::save() method to persist settings to disk
@@ -45,13 +52,6 @@
 - Added ansi-to-tui crate for parsing ANSI escape sequences
 - Tool output preserves colors (git diff, ls, etc.)
 - Bash tool forces color output via CLICOLOR_FORCE, FORCE_COLOR env vars
-
-**Previous Session:**
-
-- TUI overhaul (progress line, token counts, indicators)
-- Input always visible during agent execution
-- Message queueing for mid-task steering
-- CLI one-shot mode (`ion run`)
 
 ## Open Tasks
 
@@ -90,5 +90,8 @@
 
 ## Design Documents
 
+- `ai/design/tui.md` - TUI interface spec (keybindings, layout, features)
+- `ai/design/diff-highlighting.md` - Diff rendering implementation plan
+- `ai/design/interrupt-handling.md` - Ctrl+C behavior spec
 - `ai/design/plugin-architecture.md` - Hook system, plugin format
 - `ai/DECISIONS.md` - All architecture decisions
