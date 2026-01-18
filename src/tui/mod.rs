@@ -1221,78 +1221,50 @@ impl App {
 
     fn render_help_overlay(&self, frame: &mut Frame) {
         let area = frame.area();
-        // Fixed size modal, centered
-        let width = 42.min(area.width.saturating_sub(4));
-        let height = 22.min(area.height.saturating_sub(4));
+        // Fixed size modal, centered (40 inner width for clean columns)
+        let width = 44.min(area.width.saturating_sub(4));
+        let height = 20.min(area.height.saturating_sub(4));
         let x = (area.width.saturating_sub(width)) / 2;
         let y = (area.height.saturating_sub(height)) / 2;
         let help_area = Rect::new(x, y, width, height);
 
         frame.render_widget(ratatui::widgets::Clear, help_area);
 
+        // Helper to create a row: key (col 1-18), description (col 19+)
+        let row = |key: &str, desc: &str| {
+            Line::from(vec![
+                Span::styled(format!(" {:<17}", key), Style::default().fg(Color::Cyan)),
+                Span::raw(desc.to_string()),
+            ])
+        };
+
         let help_text = vec![
             Line::from(Span::styled(
-                " Keybindings",
+                "Keybindings",
                 Style::default().fg(Color::Yellow).bold(),
-            )),
-            Line::from(vec![
-                Span::styled("  Enter        ", Style::default().fg(Color::Cyan)),
-                Span::raw("Send message"),
-            ]),
-            Line::from(vec![
-                Span::styled("  Shift+Enter  ", Style::default().fg(Color::Cyan)),
-                Span::raw("Insert newline"),
-            ]),
-            Line::from(vec![
-                Span::styled("  Tab          ", Style::default().fg(Color::Cyan)),
-                Span::raw("Cycle mode"),
-            ]),
-            Line::from(vec![
-                Span::styled("  ^M           ", Style::default().fg(Color::Cyan)),
-                Span::raw("Model picker"),
-            ]),
-            Line::from(vec![
-                Span::styled("  ^P           ", Style::default().fg(Color::Cyan)),
-                Span::raw("Provider picker"),
-            ]),
-            Line::from(vec![
-                Span::styled("  ^C           ", Style::default().fg(Color::Cyan)),
-                Span::raw("Clear input / Quit"),
-            ]),
-            Line::from(vec![
-                Span::styled("  PgUp/PgDn    ", Style::default().fg(Color::Cyan)),
-                Span::raw("Scroll chat"),
-            ]),
+            ))
+            .alignment(ratatui::layout::Alignment::Center),
+            row("Enter", "Send message"),
+            row("Shift+Enter", "Insert newline"),
+            row("Tab", "Cycle mode"),
+            row("^M", "Model picker"),
+            row("^P", "Provider picker"),
+            row("^C", "Clear input / Quit"),
+            row("PgUp/PgDn", "Scroll chat"),
             Line::from(""),
             Line::from(Span::styled(
-                " Commands",
+                "Commands",
                 Style::default().fg(Color::Yellow).bold(),
-            )),
-            Line::from(vec![
-                Span::styled("  /model       ", Style::default().fg(Color::Cyan)),
-                Span::raw("Select model"),
-            ]),
-            Line::from(vec![
-                Span::styled("  /provider    ", Style::default().fg(Color::Cyan)),
-                Span::raw("Select provider"),
-            ]),
-            Line::from(vec![
-                Span::styled("  /clear       ", Style::default().fg(Color::Cyan)),
-                Span::raw("Clear chat"),
-            ]),
-            Line::from(vec![
-                Span::styled("  /index       ", Style::default().fg(Color::Cyan)),
-                Span::raw("Index codebase"),
-            ]),
-            Line::from(vec![
-                Span::styled("  /quit        ", Style::default().fg(Color::Cyan)),
-                Span::raw("Exit"),
-            ]),
+            ))
+            .alignment(ratatui::layout::Alignment::Center),
+            row("/model", "Select model"),
+            row("/provider", "Select provider"),
+            row("/clear", "Clear chat"),
+            row("/index", "Index codebase"),
+            row("/quit", "Exit"),
             Line::from(""),
-            Line::from(Span::styled(
-                " Press any key to close",
-                Style::default().dim().italic(),
-            )),
+            Line::from(Span::styled("Press any key to close", Style::default().dim()))
+                .alignment(ratatui::layout::Alignment::Center),
         ];
 
         let help_para = Paragraph::new(help_text)
