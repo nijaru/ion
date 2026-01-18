@@ -928,9 +928,14 @@ impl App {
                 self.model_picker.pop_char();
             }
 
-            // Cancel - blocked during setup
+            // Cancel / Back
             KeyCode::Esc => {
-                if !self.needs_setup {
+                if self.needs_setup {
+                    // During setup, Esc goes back to provider picker
+                    self.model_picker.reset();
+                    self.mode = Mode::ProviderPicker;
+                    self.provider_picker.refresh();
+                } else {
                     self.model_picker.reset();
                     self.mode = Mode::Input;
                 }
