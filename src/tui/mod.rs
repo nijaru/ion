@@ -156,6 +156,8 @@ pub struct App {
     setup_fetch_started: bool,
     /// Current thinking budget level (Ctrl+T to cycle)
     pub thinking_level: ThinkingLevel,
+    /// Current token usage (used, max) for context % display
+    pub token_usage: Option<(usize, usize)>,
 }
 
 struct TuiApprovalHandler {
@@ -370,6 +372,7 @@ impl App {
             needs_setup,
             setup_fetch_started: false,
             thinking_level: ThinkingLevel::Off,
+            token_usage: None,
         };
 
         // Initialize setup flow if needed
@@ -442,6 +445,9 @@ impl App {
                 }
                 AgentEvent::MemoryRetrieval { results_count, .. } => {
                     self.last_memory_count = Some(*results_count);
+                }
+                AgentEvent::TokenUsage { used, max } => {
+                    self.token_usage = Some((*used, *max));
                 }
                 _ => {
                     self.message_list.push_event(event);
@@ -1378,7 +1384,7 @@ impl App {
             }
         }
 
-        // Left side: model · [branch] · cwd
+        // Status line: model · context% · [branch] · cwd
         let cwd = self
             .session
             .working_dir
@@ -1393,6 +1399,18 @@ impl App {
             format!("[{}] · ", branch)
         };
 
+        // Context % display
+        let context_part = if let Some((used, max)) = self.token_usage {
+            let pct = if max > 0 {
+                (used * 100) / max
+            } else {
+                0
+            };
+            format!("{}% · ", pct)
+        } else {
+            String::new()
+        };
+
         // Simplify model name (remove provider prefix if present)
         let model_name = self
             .session
@@ -1401,7 +1419,7 @@ impl App {
             .last()
             .unwrap_or(&self.session.model);
 
-        let left = format!(" {} · {}{}", model_name, branch_part, cwd);
+        let left = format!(" {} · {}{}{}", model_name, context_part, branch_part, cwd);
 
         // Right side: minimal hints
         let right = "? help ";

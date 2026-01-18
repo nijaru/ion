@@ -305,6 +305,15 @@ impl Agent {
             content: Arc::new(tool_results),
         });
 
+        // Count current tokens and send usage event
+        let token_count = self.token_counter.count_messages(&session.messages);
+        let _ = tx
+            .send(AgentEvent::TokenUsage {
+                used: token_count.total,
+                max: self.compaction_config.context_window,
+            })
+            .await;
+
         // Check for compaction
         if check_compaction_needed(
             &session.messages,
@@ -570,6 +579,8 @@ pub enum AgentEvent {
     PlanGenerated(crate::agent::designer::Plan),
     CompactionStatus { threshold: usize, pruned: bool },
     MemoryRetrieval { query: String, results_count: usize },
+    /// Current token usage for context tracking
+    TokenUsage { used: usize, max: usize },
     Finished(String),
     Error(String),
     // Model picker events
