@@ -31,6 +31,7 @@
 - First-time setup flow (blocks until provider/model selected)
 - Shift+Tab for mode toggle (safer than Tab)
 - Help modal: "Ctrl" instead of "^"
+- Ctrl+T thinking toggle (off/low/med/high, displays [level] in input box)
 
 ## Priority: TUI Agent MVP
 
@@ -39,7 +40,7 @@
 - [x] First-time setup flow (no default provider/model)
 - [x] Shift+Tab for mode toggle (safer)
 - [x] Help modal: "Ctrl" instead of "^"
-- [ ] Ctrl+T thinking toggle (off/low/med/high)
+- [x] Ctrl+T thinking toggle (off/low/med/high)
 - [ ] Growing text entry box
 
 **P1 - Polish:**
