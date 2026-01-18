@@ -1,0 +1,24 @@
+{
+  "project": "tk",
+  "ref": "btof",
+  "title": "Update README: remove redundant 'rust-based', 'high-performance' mentions",
+  "description": null,
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [
+    {
+      "ts": "2026-01-18T20:40:05.049Z",
+      "msg": "README says 'rust-based' and 'high-performance' multiple times, mentions built in Rust repeatedly. Let it speak for itself - remove marketing language, keep it factual."
+    }
+  ],
+  "created_at": "2026-01-18T20:39:56.123Z",
+  "updated_at": "2026-01-18T20:40:05.049Z",
+  "completed_at": null,
+  "external": {}
+}

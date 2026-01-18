@@ -1,90 +1,127 @@
-# Session Context (2026-01-16)
+# Session Context
 
-## Just Completed
+## Immediate Priority
 
-### Architecture Design - Sub-Agents vs Skills
+### 1. Cleanup Tasks (do first)
 
-Finalized architecture based on research (Pi-Mono, Claude Code, Cognition, UBC papers):
+| ID      | Task                                             |
+| ------- | ------------------------------------------------ |
+| tk-vpj4 | Update GitHub repo description via `gh` CLI      |
+| tk-btof | Clean up README (remove redundant Rust mentions) |
+| tk-x3vt | Evaluate removing nightly (omendb not in core)   |
 
-| Component    | Type      | Model | Purpose                              |
-| ------------ | --------- | ----- | ------------------------------------ |
-| `explorer`   | Sub-agent | Fast  | File search, pattern matching        |
-| `researcher` | Sub-agent | Full  | Web search, doc synthesis            |
-| `reviewer`   | Sub-agent | Full  | Build, test, code analysis           |
-| `developer`  | Skill     | -     | Code implementation (same context)   |
-| `designer`   | Skill     | -     | Architecture planning (same context) |
-| `refactor`   | Skill     | -     | Code restructuring (same context)    |
+**GitHub repo description** is outdated - mentions LangGraph which was removed.
 
-**Key principle**: Sub-agents for context isolation (large → small), skills for behavior modification (same context).
+**README** says "rust-based", "high-performance", "built in Rust" multiple times. Let it speak for itself.
 
-### Session Persistence (tk-ay6c) - Complete
+**Nightly** was for omendb's `portable_simd`. Since memory is a plugin, core may not need nightly.
 
-SQLite-backed with TUI integration:
+### 2. Dependency Upgrades (main work)
 
-**SessionStore API:**
+| ID      | Priority | Task                                           |
+| ------- | -------- | ---------------------------------------------- |
+| tk-ykpu | HIGH     | Upgrade grep tool to use ignore crate          |
+| tk-cfmz | HIGH     | Upgrade glob tool to use globset               |
+| tk-ha1x | CLEANUP  | Remove unused deps (walkdir, serde_yaml, glob) |
+| tk-9tkf | MEDIUM   | Replace tiktoken-rs with GitHub bpe crate      |
+
+**Design doc:** `ai/design/dependency-upgrades.md`
+
+Key insight: `ignore` crate is ALREADY in Cargo.toml but unused. Grep/glob tools use inferior alternatives.
+
+## Key Files
+
+| File                        | Purpose                        |
+| --------------------------- | ------------------------------ |
+| `src/tool/builtin/grep.rs`  | Grep tool - upgrade to ignore  |
+| `src/tool/builtin/glob.rs`  | Glob tool - upgrade to globset |
+| `src/compaction/counter.rs` | Token counting - swap tiktoken |
+| `Cargo.toml`                | Dependencies to modify         |
+| `rust-toolchain.toml`       | Nightly config - maybe remove  |
+| `README.md`                 | Clean up language              |
+
+## Cargo.toml Changes Needed
+
+```toml
+# ALREADY HAVE (use it!)
+ignore = "0.4.25"
+
+# REMOVE
+walkdir = "2.5.0"       # Redundant with ignore
+serde_yaml = "0.9.34"   # Deprecated, unused in src/
+glob = "0.3.3"          # Replace with globset
+
+# REPLACE
+tiktoken-rs = "0.9.1"   # → bpe (github/rust-gems, 4x faster)
+```
+
+## Implementation Notes
+
+### Grep Tool (ignore crate)
 
 ```rust
-SessionStore::open(path) -> Result<Self>
-SessionStore::save(&session) -> Result<()>      // Incremental append
-SessionStore::load(id) -> Result<Session>
-SessionStore::list_recent(limit) -> Result<Vec<SessionSummary>>
-SessionStore::delete(id) -> Result<()>
+// Current: manual recursion with hardcoded ignores
+if name.starts_with('.') || name == "target" || name == "node_modules" {
+    continue;
+}
+
+// New: ignore crate handles .gitignore, hidden files, binaries
+use ignore::WalkBuilder;
+let walker = WalkBuilder::new(path)
+    .hidden(true)
+    .git_ignore(true)
+    .build();
 ```
 
-### Scroll Support (tk-uagv) - Complete
+### Glob Tool (globset)
 
-Vim-style scrolling: j/k, Ctrl+d/u, g/G
+```rust
+// Current: glob crate (~400ns)
+use glob::glob;
 
-## Current State
-
-- **Phase 4 (TUI Polish)**: In progress
-- **Tests**: 16 passing
-- **Clippy**: Clean
-
-## Next Tasks
-
-### Critical (Core Architecture)
-
-```
-- Context compaction (prevents overflow)
-- Memory querying (differentiator, currently unused)
-- Skills loader (SKILL.md parsing)
+// New: globset (~103ns pre-compiled)
+use globset::{Glob, GlobSetBuilder};
 ```
 
-### TUI Polish
+## Other Open Tasks
 
+| ID      | Category | Task                                           |
+| ------- | -------- | ---------------------------------------------- |
+| tk-3jba | BUG      | Ctrl+C not interruptible during tool execution |
+| tk-smqs | IDEA     | Diff highlighting for edits                    |
+| tk-otmx | UX       | Ctrl+G opens input in external editor          |
+| tk-whde | UX       | Git diff stats in status line                  |
+| tk-arh6 | UX       | Tool execution not visually obvious            |
+| tk-o4uo | UX       | Modal escape handling                          |
+
+## Project State
+
+- Phase: 5 - Polish & UX
+- Status: Runnable
+- Tests: 51 passing
+- Branch: main
+
+## Commands
+
+```bash
+cargo build              # Debug build
+cargo test               # Run tests
+tk ls                    # See all tasks
+tk start <id>            # Start a task
+tk done <id>             # Complete a task
+gh repo edit -d "desc"   # Update repo description
 ```
-tk-7j11  - Implement TUI markdown rendering
-tk-atdh  - Implement TUI diff view
+
+## Start Sequence
+
+```bash
+# 1. Quick cleanup first
+gh repo edit -d "TUI coding agent with multi-provider LLM support"
+tk done tk-vpj4
+
+# 2. Check if nightly needed
+grep -r "portable_simd\|#!\[feature" src/
+
+# 3. Then dependency upgrades
+tk start tk-ykpu
 ```
-
-**Priority**: Context compaction and memory querying are critical gaps.
-
-## Key Architecture Notes
-
-**Sub-agents vs Skills:**
-
-- Sub-agents isolate context for expansion tasks (explorer, researcher, reviewer)
-- Skills modify behavior in main context (developer, designer, refactor)
-- Binary model selection: Fast (explorer) or Full (inherit)
-
-**Memory system (unused differentiator):**
-
-- Stores to OmenDB + SQLite, but never queries
-- Needs: `search()`, `recall()`, `compact()` for context management
-
-**Session flow:**
-
-```
-User input -> Agent::run_task() -> StreamEvents -> session_rx -> App
-                                                              -> SessionStore::save()
-```
-
-## Files to Read
-
-If resuming work:
-
-1. `ai/STATUS.md` - Current project status
-2. `ai/design/sub-agents.md` - Sub-agents vs skills architecture
-3. `ai/DECISIONS.md` - Recent architecture decisions
-4. `src/memory/mod.rs` - Memory system (needs querying)
