@@ -53,7 +53,7 @@
 
 **Bugs:**
 
-- [ ] tk-3jba: Ctrl+C not interruptible during tool execution
+(none)
 
 **UX:**
 

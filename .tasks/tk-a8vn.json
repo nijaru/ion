@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "a8vn",
+  "title": "[SECURITY] CWD boundary enforcement and --trust flag",
+  "description": null,
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-18T22:06:54.016Z",
+  "updated_at": "2026-01-18T22:06:54.016Z",
+  "completed_at": null,
+  "external": {}
+}
