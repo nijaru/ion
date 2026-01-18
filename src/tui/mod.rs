@@ -429,8 +429,8 @@ impl App {
                 }
             }
 
-            // Tab: Cycle tool mode (Read → Write → Agi)
-            KeyCode::Tab => {
+            // Shift+Tab: Cycle tool mode (Read → Write → Agi)
+            KeyCode::BackTab => {
                 self.tool_mode = match self.tool_mode {
                     ToolMode::Read => ToolMode::Write,
                     ToolMode::Write => ToolMode::Agi,
@@ -1246,10 +1246,10 @@ impl App {
             .alignment(ratatui::layout::Alignment::Center),
             row("Enter", "Send message"),
             row("Shift+Enter", "Insert newline"),
-            row("Tab", "Cycle mode"),
-            row("^M", "Model picker"),
-            row("^P", "Provider picker"),
-            row("^C", "Clear input / Quit"),
+            row("Shift+Tab", "Cycle mode"),
+            row("Ctrl+M", "Model picker"),
+            row("Ctrl+P", "Provider picker"),
+            row("Ctrl+C", "Clear / Quit"),
             row("PgUp/PgDn", "Scroll chat"),
             Line::from(""),
             Line::from(Span::styled(
