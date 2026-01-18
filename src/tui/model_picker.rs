@@ -104,6 +104,15 @@ impl ModelPicker {
         self.apply_model_filter();
     }
 
+    /// Start picker showing all models (no provider filter).
+    pub fn start_all_models(&mut self) {
+        self.selected_provider = None;
+        self.provider_models = self.all_models.clone();
+        self.stage = PickerStage::Model;
+        self.filter.clear();
+        self.apply_model_filter();
+    }
+
     /// Check if we have models loaded.
     pub fn has_models(&self) -> bool {
         !self.all_models.is_empty()
@@ -380,13 +389,13 @@ impl ModelPicker {
     pub fn render(&mut self, frame: &mut Frame) {
         let area = frame.area();
 
-        // Size to content: enough for model names, context, prices
-        let content_width = 70u16;
+        // Larger modal for model names + provider + context + price columns
+        let content_width = 85u16;
         let list_len = match self.stage {
             PickerStage::Provider => self.filtered_providers.len(),
             PickerStage::Model => self.filtered_models.len(),
         };
-        let list_height = (list_len as u16 + 2).clamp(5, 20); // +2 for borders, min 5, max 20
+        let list_height = (list_len as u16 + 2).clamp(5, 30); // +2 for borders, min 5, max 30
         let total_height = 3 + list_height; // search bar + list
 
         let modal_width = content_width.min(area.width.saturating_sub(4));
@@ -510,42 +519,43 @@ impl ModelPicker {
     }
 
     fn render_model_list(&mut self, frame: &mut Frame, area: Rect) {
+        // Column widths for alignment (total ~75 chars inner)
+        let name_width = 40usize;
+        let provider_width = 15usize;
+        let context_width = 10usize;
+        let price_width = 10usize;
+
         let items: Vec<ListItem> = self
             .filtered_models
             .iter()
             .map(|m| {
-                let cache_indicator = if m.supports_cache { "◆" } else { "○" };
-                let price = format!("${:.2}/M", m.pricing.input);
-                let context = format!("{}k ctx", m.context_window / 1000);
-
-                // Show just the model name part after provider/
+                // Extract model name (after provider/)
                 let model_name = m.id.split('/').nth(1).unwrap_or(&m.id);
+                let provider = m.id.split('/').next().unwrap_or("");
+
+                // Format columns with padding
+                let name_col = format!("{:width$}", model_name, width = name_width);
+                let provider_col = format!("{:width$}", provider, width = provider_width);
+                let context_col = format!("{:>width$}", format!("{}k", m.context_window / 1000), width = context_width);
+                let price_col = format!("{:>width$}", format!("${:.2}", m.pricing.input), width = price_width);
 
                 let line = Line::from(vec![
-                    Span::styled(
-                        cache_indicator,
-                        if m.supports_cache {
-                            Style::default().fg(Color::Green)
-                        } else {
-                            Style::default().dim()
-                        },
-                    ),
-                    Span::raw(" "),
-                    Span::styled(model_name, Style::default().fg(Color::White)),
-                    Span::raw(" "),
-                    Span::styled(context, Style::default().fg(Color::Blue).dim()),
-                    Span::raw(" "),
-                    Span::styled(price, Style::default().fg(Color::Yellow).dim()),
+                    Span::styled(name_col, Style::default().fg(Color::White)),
+                    Span::styled(provider_col, Style::default().dim()),
+                    Span::styled(context_col, Style::default().fg(Color::Blue).dim()),
+                    Span::styled(price_col, Style::default().fg(Color::Yellow).dim()),
                 ]);
 
                 ListItem::new(line)
             })
             .collect();
 
-        let provider = self.selected_provider.as_deref().unwrap_or("Unknown");
         let count = self.filtered_models.len();
         let total = self.provider_models.len();
-        let title = format!(" {} ({}/{}) ", provider, count, total);
+        let title = match &self.selected_provider {
+            Some(p) => format!(" {} ({}/{}) ", p, count, total),
+            None => format!(" Models ({}/{}) ", count, total),
+        };
 
         let list = List::new(items)
             .block(
