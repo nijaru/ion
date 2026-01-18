@@ -29,6 +29,52 @@ use tokio_util::sync::CancellationToken;
 
 const CANCEL_WINDOW: Duration = Duration::from_millis(1500);
 
+/// Thinking budget level for extended reasoning.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ThinkingLevel {
+    /// No thinking (default)
+    #[default]
+    Off,
+    /// Low budget (~1k tokens)
+    Low,
+    /// Medium budget (~4k tokens)
+    Med,
+    /// High budget (~16k tokens)
+    High,
+}
+
+impl ThinkingLevel {
+    /// Cycle to the next level
+    pub fn next(self) -> Self {
+        match self {
+            Self::Off => Self::Low,
+            Self::Low => Self::Med,
+            Self::Med => Self::High,
+            Self::High => Self::Off,
+        }
+    }
+
+    /// Get the token budget for this level, None if Off
+    pub fn budget_tokens(self) -> Option<u32> {
+        match self {
+            Self::Off => None,
+            Self::Low => Some(1024),
+            Self::Med => Some(4096),
+            Self::High => Some(16384),
+        }
+    }
+
+    /// Display label for the status line (empty string when off)
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Off => "",
+            Self::Low => "[low]",
+            Self::Med => "[med]",
+            Self::High => "[high]",
+        }
+    }
+}
+
 /// Modal states for the TUI. The default is Input (no mode switching required).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Mode {
@@ -108,6 +154,8 @@ pub struct App {
     pub needs_setup: bool,
     /// Whether we've started fetching models for setup (prevents duplicate fetches)
     setup_fetch_started: bool,
+    /// Current thinking budget level (Ctrl+T to cycle)
+    pub thinking_level: ThinkingLevel,
 }
 
 struct TuiApprovalHandler {
@@ -321,6 +369,7 @@ impl App {
             frame_count: 0,
             needs_setup,
             setup_fetch_started: false,
+            thinking_level: ThinkingLevel::Off,
         };
 
         // Initialize setup flow if needed
@@ -505,6 +554,11 @@ impl App {
             // Ctrl+H: Open help overlay
             KeyCode::Char('h') if ctrl => {
                 self.mode = Mode::HelpOverlay;
+            }
+
+            // Ctrl+T: Cycle thinking level (off → low → med → high → off)
+            KeyCode::Char('t') if ctrl => {
+                self.thinking_level = self.thinking_level.next();
             }
 
             // Ctrl+S: Take UI snapshot (Debug/Agent only)
@@ -1003,8 +1057,16 @@ impl App {
         let event_tx = self.agent_tx.clone();
         let session_tx = self.session_tx.clone();
 
+        // Build thinking config from current level
+        let thinking = self.thinking_level.budget_tokens().map(|budget| {
+            crate::provider::ThinkingConfig {
+                enabled: true,
+                budget_tokens: Some(budget),
+            }
+        });
+
         tokio::spawn(async move {
-            match agent.run_task(session, input, event_tx.clone()).await {
+            match agent.run_task(session, input, event_tx.clone(), thinking).await {
                 Ok(updated_session) => {
                     // Send updated session back to preserve conversation history
                     let _ = session_tx.send(updated_session).await;
@@ -1210,10 +1272,22 @@ impl App {
                 ToolMode::Write => Color::Yellow,
                 ToolMode::Agi => Color::Red,
             };
-            let input_block = Block::default()
+            let mut input_block = Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(mode_color))
                 .title(format!(" [{}] ", mode_label));
+
+            // Show thinking level on right side of input box
+            let thinking_label = self.thinking_level.label();
+            if !thinking_label.is_empty() {
+                input_block = input_block.title(
+                    Line::from(Span::styled(
+                        format!(" {} ", thinking_label),
+                        Style::default().fg(Color::Magenta),
+                    ))
+                    .right_aligned(),
+                );
+            }
 
             // Build input text with cursor (1-space left padding)
             let input_text = format!(" {}", self.input);
@@ -1330,6 +1404,7 @@ impl App {
             row("Shift+Tab", "Cycle mode"),
             row("Ctrl+M", "Model picker"),
             row("Ctrl+P", "Provider picker"),
+            row("Ctrl+T", "Thinking toggle"),
             row("Ctrl+C", "Clear / Quit"),
             row("PgUp/PgDn", "Scroll chat"),
             Line::from(""),

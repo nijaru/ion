@@ -28,23 +28,22 @@
 
 ## Session Accomplishments
 
-- Project renamed agnt → ion
-- TUI polish (arrows, status line, help modal)
-- Plugin architecture designed (Claude Code compatible)
-- Thinking mode toggle designed (Ctrl+T cycle)
+- First-time setup flow (blocks until provider/model selected)
+- Shift+Tab for mode toggle (safer than Tab)
+- Help modal: "Ctrl" instead of "^"
 
 ## Priority: TUI Agent MVP
 
 **P0 - Critical Path:**
 
-- [ ] First-time setup flow (no default provider/model)
-- [ ] Shift+Tab for mode toggle (safer)
+- [x] First-time setup flow (no default provider/model)
+- [x] Shift+Tab for mode toggle (safer)
+- [x] Help modal: "Ctrl" instead of "^"
 - [ ] Ctrl+T thinking toggle (off/low/med/high)
 - [ ] Growing text entry box
 
 **P1 - Polish:**
 
-- [ ] Help modal: "Ctrl" instead of "^"
 - [ ] Status line: `model [provider dim] · % · [branch]`
 - [ ] Terminal title: `ion <cwd>`
 - [ ] Thinking display: `[low]` / `[med]` / `[high]` right side of input

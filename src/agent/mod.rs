@@ -11,7 +11,8 @@ use crate::compaction::{
 use crate::memory::embedding::EmbeddingProvider;
 use crate::memory::{MemorySystem, MemoryType};
 use crate::provider::{
-    ChatRequest, ContentBlock, Message, Provider, Role, StreamEvent, ToolCallEvent, ToolDefinition,
+    ChatRequest, ContentBlock, Message, Provider, Role, StreamEvent, ThinkingConfig, ToolCallEvent,
+    ToolDefinition,
 };
 use crate::session::Session;
 use crate::skill::SkillRegistry;
@@ -178,6 +179,7 @@ impl Agent {
         mut session: Session,
         user_msg: String,
         tx: mpsc::Sender<AgentEvent>,
+        thinking: Option<ThinkingConfig>,
     ) -> Result<Session> {
         session.messages.push(Message {
             role: Role::User,
@@ -221,7 +223,7 @@ impl Agent {
 
         loop {
             if !self
-                .execute_turn(&mut session, &tx, memory_context.as_deref())
+                .execute_turn(&mut session, &tx, memory_context.as_deref(), thinking.clone())
                 .await?
             {
                 break;
@@ -248,9 +250,10 @@ impl Agent {
         session: &mut Session,
         tx: &mpsc::Sender<AgentEvent>,
         memory_context: Option<&str>,
+        thinking: Option<ThinkingConfig>,
     ) -> Result<bool> {
         let (assistant_blocks, tool_calls) =
-            self.stream_response(session, tx, memory_context).await?;
+            self.stream_response(session, tx, memory_context, thinking).await?;
 
         // Index assistant turn (text blocks)
         let assistant_text: String = assistant_blocks
@@ -383,6 +386,7 @@ impl Agent {
         session: &Session,
         tx: &mpsc::Sender<AgentEvent>,
         memory_context: Option<&str>,
+        thinking: Option<ThinkingConfig>,
     ) -> Result<(Vec<ContentBlock>, Vec<ToolCallEvent>)> {
         let tool_defs: Vec<ToolDefinition> = self
             .orchestrator
@@ -408,7 +412,7 @@ impl Agent {
             tools: Arc::new(assembly.tools),
             max_tokens: None,
             temperature: None,
-            thinking: None,
+            thinking,
         };
 
         let (stream_tx, mut stream_rx) = mpsc::channel(100);
