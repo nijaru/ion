@@ -46,16 +46,16 @@
 - [x] Growing text entry box
 - [x] Status line with context %
 
-**P1 - Polish:** ✓ COMPLETE
+**P1 - Polish:**
 
 - [x] Status line: `model · %% · [branch] · cwd`
+- [x] Thinking display: `[low]` / `[med]` / `[high]` right side of input
 - [ ] Terminal title: `ion <cwd>`
-- [ ] Thinking display: `[low]` / `[med]` / `[high]` right side of input
 
 **P2 - Features:**
 
 - [ ] Slash command autocomplete (fuzzy)
-- [ ] Context tracking (tokens used/max)
+- [x] Context tracking (tokens used/max) - shows % in status line
 - [ ] Session retention (30 days)
 
 **P3 - Plugin System:**
