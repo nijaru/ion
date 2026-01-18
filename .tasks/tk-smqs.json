@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "smqs",
+  "title": "[IDEA] Diff highlighting for edits (like Claude Code)",
+  "description": null,
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-18T20:14:38.843Z",
+  "updated_at": "2026-01-18T20:14:38.843Z",
+  "completed_at": null,
+  "external": {}
+}
