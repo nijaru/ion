@@ -60,7 +60,10 @@
 - [ ] tk-otmx: Ctrl+G opens input in external editor
 - [ ] tk-whde: Git diff stats in status line
 - [ ] tk-arh6: Tool execution not visually obvious
-- [ ] tk-o4uo: Modal escape handling
+
+**Security:**
+
+- [ ] tk-a8vn: CWD boundary enforcement and --trust flag
 
 **Ideas:**
 
