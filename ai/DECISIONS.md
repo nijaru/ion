@@ -659,26 +659,46 @@ No reason to go through MCP when we can use the Rust crate directly.
 
 ---
 
-## 2026-01-18: CLI One-Shot Mode Design
+## 2026-01-18: CLI One-Shot Mode Design (Revised)
 
 **Context**: Need non-interactive mode for scripting, testing, and automation. Researched Claude Code, Gemini CLI, Codex, aider, goose patterns.
 
-**Decision**: Support both subcommand and flag styles.
+**Decision**: Subcommand style only (`ion run`). Dropped dual `-p` flag to reduce complexity.
 
-| Pattern    | Syntax                                    | Notes                         |
-| ---------- | ----------------------------------------- | ----------------------------- |
-| Subcommand | `ion run "prompt"`                        | Explicit, used by Codex/goose |
-| Flag       | `ion -p "prompt"`                         | Claude Code compatible        |
-| Stdin      | `ion run -` or `cat \| ion run -`         | POSIX convention              |
-| Model      | `-m provider/model`                       | Matches OpenRouter format     |
-| Output     | `--output-format text\|json\|stream-json` | Emerging standard             |
+| Pattern | Syntax                               | Notes                                  |
+| ------- | ------------------------------------ | -------------------------------------- |
+| Basic   | `ion run "prompt"`                   | Explicit, matches Codex/goose/OpenCode |
+| Stdin   | `ion run -`                          | Prompt from stdin                      |
+| Context | `cat file \| ion run "analyze"`      | Piped content as context               |
+| File    | `ion run -f context.txt "prompt"`    | File as context                        |
+| Model   | `ion run -m provider/model "prompt"` | Flags after subcommand                 |
+| Output  | `ion run -o json "prompt"`           | Short: `-o`, long: `--output-format`   |
 
-**Key conventions**:
+**Essential flags**:
 
-- `-p` / `--print` for Claude Code compatibility
-- `run` subcommand for explicit non-interactive mode
-- `-` for stdin (POSIX standard)
-- `--output-format` with `text|json|stream-json`
-- `-q` / `--quiet` for minimal output
+| Flag                     | Purpose                                 |
+| ------------------------ | --------------------------------------- |
+| `-m` / `--model`         | Model selection (provider/model format) |
+| `-o` / `--output-format` | `text` (default), `json`, `stream-json` |
+| `-q` / `--quiet`         | Response only, no progress              |
+| `-y` / `--yes`           | Auto-approve all tool calls             |
+| `--max-turns N`          | Limit agentic turns (prevent runaway)   |
+| `-c` / `--continue`      | Continue last session                   |
+| `--no-session`           | Don't persist session                   |
+| `-v` / `--verbose`       | Detailed output                         |
+| `--no-tools`             | Disable tools (pure chat)               |
+| `-f` / `--file`          | Include file as context                 |
+| `--cwd`                  | Working directory                       |
+
+**Exit codes**:
+
+| Code | Meaning                   |
+| ---- | ------------------------- |
+| 0    | Success                   |
+| 1    | Error (API, tool failure) |
+| 2    | Interrupted (Ctrl+C)      |
+| 3    | Max turns reached         |
+
+**Why subcommand only**: Dual entry points (`run` + `-p`) add complexity for minimal benefit. Since ion uses OpenRouter's provider/model format (like OpenCode), subcommand style is more consistent.
 
 **Research**: See `ai/research/cli-oneshot-patterns-2026.md`
