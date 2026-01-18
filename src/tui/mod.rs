@@ -158,6 +158,8 @@ pub struct App {
     pub thinking_level: ThinkingLevel,
     /// Current token usage (used, max) for context % display
     pub token_usage: Option<(usize, usize)>,
+    /// Last error message for status line display
+    pub last_error: Option<String>,
 }
 
 struct TuiApprovalHandler {
@@ -373,6 +375,7 @@ impl App {
             setup_fetch_started: false,
             thinking_level: ThinkingLevel::Off,
             token_usage: None,
+            last_error: None,
         };
 
         // Initialize setup flow if needed
@@ -430,6 +433,7 @@ impl App {
                 AgentEvent::ModelsFetched(models) => {
                     debug!("Received ModelsFetched event with {} models", models.len());
                     self.model_picker.set_models(models.clone());
+                    self.last_error = None; // Clear error on success
                     // Configure picker based on how it was opened
                     match self.picker_intent {
                         PickerIntent::ModelOnly => {
@@ -442,7 +446,9 @@ impl App {
                     }
                 }
                 AgentEvent::ModelFetchError(err) => {
+                    debug!("Received ModelFetchError: {}", err);
                     self.model_picker.set_error(err.clone());
+                    self.last_error = Some(err.clone());
                 }
                 AgentEvent::MemoryRetrieval { results_count, .. } => {
                     self.last_memory_count = Some(*results_count);
@@ -1441,8 +1447,19 @@ impl App {
 
         let left = format!(" {} · {}{}{}", model_name, context_part, branch_part, cwd);
 
-        // Right side: minimal hints
-        let right = "? help ";
+        // Right side: error or help hint
+        let (right, right_style) = if let Some(ref err) = self.last_error {
+            // Truncate error for status line
+            let max_err_len = 40;
+            let err_display = if err.len() > max_err_len {
+                format!("{}...", &err[..max_err_len])
+            } else {
+                err.clone()
+            };
+            (format!("ERR: {} ", err_display), Style::default().fg(Color::Red))
+        } else {
+            ("? help ".to_string(), Style::default().dim())
+        };
 
         // Calculate padding for right alignment
         let width = chunks[2].width as usize;
@@ -1453,7 +1470,7 @@ impl App {
         let status_line = Line::from(vec![
             Span::styled(left, Style::default()),
             Span::raw(" ".repeat(padding)),
-            Span::styled(right, Style::default().dim()),
+            Span::styled(right, right_style),
         ]);
 
         frame.render_widget(Paragraph::new(status_line), chunks[2]);
