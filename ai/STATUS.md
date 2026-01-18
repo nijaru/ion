@@ -20,11 +20,12 @@
 - MCP client
 - Session management (rusqlite)
 
-**Config** (designed, not yet implemented):
+**Config** (implemented):
 
 - `~/.ion/` for ion-specific config
 - `~/.agents/` proposed universal standard for AI agent files
 - AGENTS.md + CLAUDE.md instruction file support
+- 3-tier layered loading (user → project → local)
 
 **Memory** (archived to nijaru/ion-archive):
 
@@ -50,10 +51,6 @@
 
 ## Open Tasks
 
-**Config (HIGH):**
-
-- [ ] tk-e96r: Implement config system redesign
-
 **Bugs:**
 
 - [ ] tk-3jba: Ctrl+C not interruptible during tool execution
@@ -72,7 +69,7 @@
 
 ## Completed
 
-- [x] Config system design
+- [x] Config system implementation
 - [x] Dependency upgrades (grep, glob, tokenizer)
 - [x] Memory removal / stable Rust switch
 - [x] Config persistence (model selection saved)
