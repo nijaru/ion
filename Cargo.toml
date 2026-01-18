@@ -23,7 +23,7 @@ mcp-sdk-rs = "0.3.4"
 minijinja = "2.14.0"
 ndarray = "0.17.2"
 omendb = "0.0.23"
-ort = { version = "2.0.0-rc.9", features = ["load-dynamic", "coreml", "cuda", "rocm", "directml"] }
+ort = { version = "2.0.0-rc.9", features = ["coreml", "cuda", "rocm", "directml"] }
 ratatui = "0.30.0"
 regex = "1.12.2"
 reqwest = { version = "0.12.28", features = ["json", "stream"] }
