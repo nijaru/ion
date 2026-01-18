@@ -3,7 +3,7 @@
   "ref": "arh6",
   "title": "[UX] Tool execution not visually obvious - unclear when tools running",
   "description": null,
-  "status": "open",
+  "status": "active",
   "priority": 3,
   "labels": [],
   "assignees": [],
@@ -18,7 +18,7 @@
     }
   ],
   "created_at": "2026-01-18T18:24:08.946Z",
-  "updated_at": "2026-01-18T20:19:07.203Z",
+  "updated_at": "2026-01-18T22:08:31.488Z",
   "completed_at": null,
   "external": {}
 }

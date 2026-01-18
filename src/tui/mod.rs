@@ -1381,11 +1381,13 @@ impl App {
             let spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
             let symbol = spinner[(self.frame_count % spinner.len() as u64) as usize];
 
-            // Show "Cancelling..." if abort was triggered
+            // Show status: cancelling > running tool > ionizing
             let (label, color) = if self.session.abort_token.is_cancelled() {
-                ("Cancelling...", Color::Red)
+                ("Cancelling...".to_string(), Color::Red)
+            } else if let Some(tool) = &self.current_tool {
+                (format!("Running {}...", tool), Color::Cyan)
             } else {
-                ("Ionizing...", Color::Yellow)
+                ("Ionizing...".to_string(), Color::Yellow)
             };
 
             let mut progress_spans = vec![
