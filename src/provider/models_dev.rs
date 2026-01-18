@@ -5,6 +5,7 @@ use std::collections::HashMap;
 
 #[derive(Debug, Deserialize)]
 pub struct ModelsDevProvider {
+    #[allow(dead_code)]
     pub name: String,
     pub models: HashMap<String, ModelsDevEntry>,
 }
