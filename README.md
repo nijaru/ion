@@ -5,8 +5,8 @@ Fast, lightweight, open-source coding agent.
 ## Features
 
 - Multi-provider LLM support (OpenRouter, Anthropic, Ollama)
-- Built-in tools for file operations, search, and shell commands
-- MCP server support
+- Built-in tools: read, write, edit, grep, glob, bash
+- Extensible via MCP servers
 
 ## Installation
 
@@ -18,12 +18,25 @@ Requires Rust nightly.
 
 ## Usage
 
+Interactive mode:
+
 ```
 ion
 ```
 
-Run `ion --help` for options.
+One-shot mode:
 
-## License
+```
+ion run "explain this codebase"
+```
+
+## Configuration
+
+Config file: `~/.config/ion/config.toml`
+
+```toml
+openrouter_api_key = "sk-or-..."
+model = "anthropic/claude-sonnet-4"
+```
 
 [MIT](LICENSE)

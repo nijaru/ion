@@ -15,7 +15,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-/// ion - Local-first TUI coding agent
+/// Fast, lightweight, open-source coding agent
 #[derive(Parser, Debug)]
 #[command(name = "ion", version, about)]
 pub struct Cli {
