@@ -5,17 +5,24 @@
 
 ## Overview
 
-ion uses a 3-tier configuration hierarchy with TOML format, following CLI tool conventions (`~/.ion/`) rather than XDG.
+ion uses a 3-tier configuration hierarchy with TOML format. Universal AI agent files go in `~/.agents/` (proposed standard), ion-specific config goes in `~/.ion/`.
 
 ## Directory Structure
 
 ```
-# User-level (global)
-~/.ion/
-├── config.toml          # User preferences
-├── AGENTS.md            # User instructions
-├── skills/              # User skills
+# Universal (proposed standard - preferred for shared files)
+~/.agents/
+├── AGENTS.md            # Global instructions (works with any AI tool)
+├── skills/              # Shared skills
 │   └── *.md
+└── subagents/           # Subagent definitions
+    └── *.md
+
+# ion-specific
+~/.ion/
+├── config.toml          # ion preferences
+├── AGENTS.md            # Fallback (prefer ~/.agents/AGENTS.md)
+├── skills/              # Fallback (prefer ~/.agents/skills/)
 └── data/
     └── sessions.db      # Session history
 
@@ -111,9 +118,10 @@ retention_days = 30
 
 1. `./AGENTS.md` (project root, primary standard)
 2. `./CLAUDE.md` (project root, fallback for Claude Code compat)
-3. `~/.ion/AGENTS.md` (user global)
+3. `~/.agents/AGENTS.md` (user global, preferred)
+4. `~/.ion/AGENTS.md` (user global, fallback)
 
-First found at project level wins (not concatenated). User global is always appended.
+At each level, first found wins. Final result is project file + user file (max 2 files).
 
 **Not supported** (users can rename to AGENTS.md):
 
@@ -137,8 +145,11 @@ src/AGENTS.md              # Then here
 ### Loading Order
 
 1. `.ion/skills/*.md` (project skills)
-2. `~/.ion/skills/*.md` (user skills)
-3. Built-in skills
+2. `~/.agents/skills/*.md` (user skills, preferred)
+3. `~/.ion/skills/*.md` (user skills, fallback)
+4. Built-in skills
+
+Skills from all locations are merged (not overwritten). Project skills can override user skills by name.
 
 ### Format
 
@@ -347,6 +358,33 @@ pub fn load_instructions(working_dir: &Path) -> String {
 - [ ] Add auto-gitignore for local config
 - [ ] Add migration from old config location
 - [ ] Update README with new config location
+
+## ~/.agents/ Standard Proposal
+
+ion proposes `~/.agents/` as a universal user-level location for AI agent files:
+
+```
+~/.agents/
+├── AGENTS.md            # Global instructions
+├── skills/              # Shared skills (markdown)
+└── subagents/           # Subagent definitions
+```
+
+**Rationale**:
+
+- `AGENTS.md` is becoming the project-level standard (60k+ repos)
+- No user-level standard currently exists
+- `~/.agents/` is the logical user-level counterpart
+- Tool-agnostic: works with any AI coding tool
+
+**Adoption path**:
+
+1. ion supports it natively
+2. Document the convention
+3. Encourage other tools to adopt
+4. Users benefit from single source of truth
+
+Other tools currently use tool-specific paths (`~/.claude/`, `~/.cursor/`). A universal location would reduce duplication and let users maintain one set of instructions.
 
 ## References
 
