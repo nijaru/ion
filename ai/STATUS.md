@@ -28,29 +28,23 @@
 
 ## Session Accomplishments
 
-- First-time setup flow (blocks until provider/model selected)
-- Shift+Tab for mode toggle (safer than Tab)
-- Help modal: "Ctrl" instead of "^"
-- Ctrl+T thinking toggle (off/low/med/high, displays [level] in input box)
-- Growing text entry box (3-10 lines)
-- Status line with context % display
+- Provider picker: compact modal, column layout, Ctrl+C quits
+- Model picker: flat list of all models, sorted by provider/name
+- Model picker: column layout (name, provider dim, context, price)
+- First-time setup: Esc goes back to provider picker
+- Error display in status line
+- Debug logging with ION_LOG=1 env var
 
 ## Priority: TUI Agent MVP
 
-**P0 - Critical Path:** ✓ COMPLETE
-
-- [x] First-time setup flow (no default provider/model)
-- [x] Shift+Tab for mode toggle (safer)
-- [x] Help modal: "Ctrl" instead of "^"
-- [x] Ctrl+T thinking toggle (off/low/med/high)
-- [x] Growing text entry box
-- [x] Status line with context %
+**P0 - Critical Path:** COMPLETE
 
 **P1 - Polish:**
 
 - [x] Status line: `model · %% · [branch] · cwd`
 - [x] Thinking display: `[low]` / `[med]` / `[high]` right side of input
 - [ ] Terminal title: `ion <cwd>`
+- [ ] Model picker: fix pricing display (all show $0.00)
 
 **P2 - Features:**
 
@@ -77,6 +71,8 @@
 - [x] Plugin architecture design (`ai/design/plugin-architecture.md`)
 - [x] Hardened Errors: Type-safe error hierarchy
 - [x] Context Caching: minijinja render cache
+- [x] First-time setup flow
+- [x] Provider/Model picker UX overhaul
 
 ## Design Documents
 
@@ -85,4 +81,6 @@
 
 ## Blockers
 
-None.
+- Model picker pricing: OpenRouter API returns prices but parsing shows $0.00
+  - Need to investigate API response format (string vs number)
+  - Special models (auto, bodybuilder) filtered but may be others
