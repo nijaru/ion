@@ -87,6 +87,18 @@ impl ProviderPicker {
         self.apply_filter();
     }
 
+    /// Delete last word from filter (Ctrl+W).
+    pub fn delete_word(&mut self) {
+        // Trim trailing whitespace first
+        let trimmed = self.filter.trim_end();
+        if let Some(last_space) = trimmed.rfind(' ') {
+            self.filter.truncate(last_space + 1);
+        } else {
+            self.filter.clear();
+        }
+        self.apply_filter();
+    }
+
     /// Move selection up.
     pub fn move_up(&mut self, count: usize) {
         if self.filtered.is_empty() {
@@ -156,9 +168,9 @@ impl ProviderPicker {
             .title(" Filter providers (type to search) ");
 
         let search_text = if self.filter.is_empty() {
-            "Start typing to filter...".to_string()
+            " Start typing to filter...".to_string()
         } else {
-            format!("Filter: {}_", self.filter)
+            format!(" Filter: {}_", self.filter)
         };
 
         let search_style = if self.filter.is_empty() {
@@ -172,49 +184,46 @@ impl ProviderPicker {
             .block(search_block);
         frame.render_widget(search_para, chunks[0]);
 
-        // Provider list
-        let items: Vec<ListItem> = self
-            .filtered
-            .iter()
-            .map(|status| {
-                // Simple: green = authenticated, gray = not authenticated
-                let (icon, icon_style, name_style, desc_style) = if status.authenticated {
-                    (
-                        "●",
-                        Style::default().fg(Color::Green),
-                        Style::default().fg(Color::White).bold(),
-                        Style::default().fg(Color::Blue).dim(),
-                    )
-                } else {
-                    (
-                        "○",
-                        Style::default().dim(),
-                        Style::default().dim(),
-                        Style::default().dim(),
-                    )
-                };
+        // Provider list with empty line at top for spacing
+        let mut items: Vec<ListItem> = vec![ListItem::new(Line::from(""))];
+        items.extend(self.filtered.iter().map(|status| {
+            // Simple: green = authenticated, gray = not authenticated
+            let (icon, icon_style, name_style, desc_style) = if status.authenticated {
+                (
+                    "●",
+                    Style::default().fg(Color::Green),
+                    Style::default().fg(Color::White).bold(),
+                    Style::default().fg(Color::Blue).dim(),
+                )
+            } else {
+                (
+                    "○",
+                    Style::default().dim(),
+                    Style::default().dim(),
+                    Style::default().dim(),
+                )
+            };
 
-                let auth_hint = if !status.authenticated {
-                    format!(
-                        " [set {}]",
-                        status.provider.env_vars().first().unwrap_or(&"API key")
-                    )
-                } else {
-                    String::new()
-                };
+            let auth_hint = if !status.authenticated {
+                format!(
+                    " [set {}]",
+                    status.provider.env_vars().first().unwrap_or(&"API key")
+                )
+            } else {
+                String::new()
+            };
 
-                let line = Line::from(vec![
-                    Span::styled(icon, icon_style),
-                    Span::raw(" "),
-                    Span::styled(status.provider.name(), name_style),
-                    Span::raw(" "),
-                    Span::styled(status.provider.description(), desc_style),
-                    Span::styled(auth_hint, Style::default().dim()),
-                ]);
+            let line = Line::from(vec![
+                Span::styled(icon, icon_style),
+                Span::raw(" "),
+                Span::styled(status.provider.name(), name_style),
+                Span::raw(" "),
+                Span::styled(status.provider.description(), desc_style),
+                Span::styled(auth_hint, Style::default().dim()),
+            ]);
 
-                ListItem::new(line)
-            })
-            .collect();
+            ListItem::new(line)
+        }));
 
         let count = self.filtered.len();
         let total = self.providers.len();

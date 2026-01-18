@@ -893,6 +893,9 @@ impl App {
             }
 
             // Type to filter
+            KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.provider_picker.delete_word();
+            }
             KeyCode::Char(c) => {
                 self.provider_picker.push_char(c);
             }
@@ -1085,23 +1088,31 @@ impl App {
             match entry.sender {
                 Sender::User => {
                     chat_lines.push(Line::from(vec![
-                        Span::styled(" 󰭹 ", Style::default().fg(Color::Cyan)),
+                        Span::styled("  󰭹 ", Style::default().fg(Color::Cyan)),
                         Span::styled("User", Style::default().fg(Color::Cyan).bold()),
                     ]));
                     let md = tui_markdown::from_str(content);
-                    chat_lines.extend(md.lines.clone());
+                    for line in &md.lines {
+                        let mut padded = vec![Span::raw(" ")];
+                        padded.extend(line.spans.clone());
+                        chat_lines.push(Line::from(padded));
+                    }
                 }
                 Sender::Agent => {
                     chat_lines.push(Line::from(vec![
-                        Span::styled(" 󱚣 ", Style::default().fg(Color::Green)),
+                        Span::styled("  󱚣 ", Style::default().fg(Color::Green)),
                         Span::styled("Agent", Style::default().fg(Color::Green).bold()),
                     ]));
                     let md = tui_markdown::from_str(content);
-                    chat_lines.extend(md.lines.clone());
+                    for line in &md.lines {
+                        let mut padded = vec![Span::raw(" ")];
+                        padded.extend(line.spans.clone());
+                        chat_lines.push(Line::from(padded));
+                    }
                 }
                 Sender::Tool => {
                     chat_lines.push(Line::from(vec![
-                        Span::styled(" 󰓆 ", Style::default().fg(Color::Magenta).dim()),
+                        Span::styled("  󰓆 ", Style::default().fg(Color::Magenta).dim()),
                         Span::styled("Tool", Style::default().fg(Color::Magenta).dim().bold()),
                     ]));
                     let md = tui_markdown::from_str(content);
@@ -1111,12 +1122,14 @@ impl App {
                             span.style =
                                 span.style.patch(Style::default().fg(Color::Magenta).dim());
                         }
-                        chat_lines.push(styled_line);
+                        let mut padded = vec![Span::raw(" ")];
+                        padded.extend(styled_line.spans);
+                        chat_lines.push(Line::from(padded));
                     }
                 }
                 Sender::System => {
                     chat_lines.push(Line::from(vec![
-                        Span::styled(" 󰋼 ", Style::default().fg(Color::Yellow).dim()),
+                        Span::styled("  󰋼 ", Style::default().fg(Color::Yellow).dim()),
                         Span::styled(*content, Style::default().fg(Color::Yellow).dim().italic()),
                     ]));
                 }
@@ -1165,12 +1178,13 @@ impl App {
                 .border_style(Style::default().fg(mode_color))
                 .title(format!(" [{}] ", mode_label));
 
-            // Build input text with cursor
-            let input_para = Paragraph::new(self.input.as_str()).block(input_block);
+            // Build input text with cursor (1-space left padding)
+            let input_text = format!(" {}", self.input);
+            let input_para = Paragraph::new(input_text).block(input_block);
             frame.render_widget(input_para, chunks[1]);
 
-            // Set cursor position
-            let cursor_x = chunks[1].x + 1 + self.cursor_pos as u16;
+            // Set cursor position (account for 1-space padding)
+            let cursor_x = chunks[1].x + 2 + self.cursor_pos as u16;
             let cursor_y = chunks[1].y + 1;
             if cursor_x < chunks[1].x + chunks[1].width - 1 {
                 frame.set_cursor_position((cursor_x, cursor_y));
@@ -1211,54 +1225,48 @@ impl App {
         frame.render_widget(ratatui::widgets::Clear, help_area);
 
         let help_text = vec![
-            Line::from(vec![Span::styled(
-                " ion - Keybindings ",
-                Style::default().fg(Color::Yellow).bold(),
-            )]),
             Line::from(""),
             Line::from(vec![
-                Span::styled(" Enter      ", Style::default().fg(Color::Cyan)),
-                Span::raw(" Send message"),
+                Span::styled("  Enter        ", Style::default().fg(Color::Cyan)),
+                Span::raw("Send message"),
             ]),
             Line::from(vec![
-                Span::styled(" Shift+Enter", Style::default().fg(Color::Cyan)),
-                Span::raw(" Newline"),
+                Span::styled("  Shift+Enter  ", Style::default().fg(Color::Cyan)),
+                Span::raw("Newline"),
             ]),
             Line::from(vec![
-                Span::styled(" Tab        ", Style::default().fg(Color::Cyan)),
-                Span::raw(" Cycle Mode (Read/Write/Agi)"),
+                Span::styled("  Tab          ", Style::default().fg(Color::Cyan)),
+                Span::raw("Cycle Mode (Read/Write/Agi)"),
             ]),
             Line::from(vec![
-                Span::styled(" Ctrl+M     ", Style::default().fg(Color::Cyan)),
-                Span::raw(" Model Picker"),
+                Span::styled("  Ctrl+M       ", Style::default().fg(Color::Cyan)),
+                Span::raw("Model Picker"),
             ]),
             Line::from(vec![
-                Span::styled(" Ctrl+P     ", Style::default().fg(Color::Cyan)),
-                Span::raw(" Provider Picker"),
+                Span::styled("  Ctrl+P       ", Style::default().fg(Color::Cyan)),
+                Span::raw("Provider Picker"),
             ]),
             Line::from(vec![
-                Span::styled(" Ctrl+H     ", Style::default().fg(Color::Cyan)),
-                Span::raw(" Help Overlay"),
+                Span::styled("  Ctrl+H       ", Style::default().fg(Color::Cyan)),
+                Span::raw("Help Overlay"),
             ]),
             Line::from(vec![
-                Span::styled(" Ctrl+C     ", Style::default().fg(Color::Cyan)),
-                Span::raw(" Clear Input / Quit"),
+                Span::styled("  Ctrl+C       ", Style::default().fg(Color::Cyan)),
+                Span::raw("Clear Input / Quit"),
             ]),
             Line::from(vec![
-                Span::styled(" PageUp/Dn  ", Style::default().fg(Color::Cyan)),
-                Span::raw(" Scroll Chat"),
+                Span::styled("  PageUp/Dn    ", Style::default().fg(Color::Cyan)),
+                Span::raw("Scroll Chat"),
             ]),
             Line::from(""),
             Line::from(vec![Span::styled(
-                " Press any key to close ",
+                "  Press any key to close",
                 Style::default().dim().italic(),
             )]),
         ];
 
         let help_para = Paragraph::new(help_text)
-            .block(Block::default().borders(Borders::ALL).title(" Help "))
-            .wrap(Wrap { trim: true })
-            .alignment(Alignment::Center);
+            .block(Block::default().borders(Borders::ALL).title(" Help "));
 
         frame.render_widget(help_para, help_area);
     }
