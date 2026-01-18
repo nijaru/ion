@@ -2,13 +2,13 @@
 
 ## Current State
 
-| Metric    | Value           | Updated    |
-| --------- | --------------- | ---------- |
-| Phase     | 5 - Polish & UX | 2026-01-18 |
-| Focus     | Config System   | 2026-01-18 |
-| Status    | Runnable        | 2026-01-18 |
-| Toolchain | stable          | 2026-01-18 |
-| Tests     | 49 passing      | 2026-01-18 |
+| Metric    | Value             | Updated    |
+| --------- | ----------------- | ---------- |
+| Phase     | 5 - Polish & UX   | 2026-01-18 |
+| Focus     | Permission System | 2026-01-18 |
+| Status    | Runnable          | 2026-01-18 |
+| Toolchain | stable            | 2026-01-18 |
+| Tests     | 54 passing        | 2026-01-18 |
 
 ## Architecture
 
@@ -27,60 +27,67 @@
 - AGENTS.md + CLAUDE.md instruction file support
 - 3-tier layered loading (user → project → local)
 
+**Permissions** (designed, not yet implemented):
+
+- Read/Write/AGI modes
+- CWD sandbox by default
+- Per-command bash approval
+
 **Memory** (archived to nijaru/ion-archive):
 
 - Will re-implement after TUI agent is fully working
 
 ## Session Accomplishments
 
-**Config System Design:**
+**Config System Implementation:**
 
-- Researched CLI agent config best practices (Claude Code, Cursor, aider, goose, OpenCode)
-- Designed 3-tier config hierarchy (user → project → local)
-- Proposed `~/.agents/` as universal standard for AI agent files
-- TOML format, AGENTS.md primary with CLAUDE.md fallback
-- Created `ai/design/config-system.md`
-- Updated README with new config structure
+- Replaced `directories` crate with `dirs`
+- Changed config path from `~/.config/ion/` to `~/.ion/`
+- Added 3-tier layered config loading
+- Added AGENTS.md + CLAUDE.md instruction loading
+- Added migration from old config location
 
-**Key Decisions:**
+**Permission System Design:**
 
-- `~/.ion/` for ion config (matches cargo, claude, cursor convention)
-- `~/.agents/` for universal shared files (proposed standard)
-- First-found wins for instruction files (no concatenation at same level)
-- Auto-gitignore `.ion/*.local.toml`
+- Designed Read/Write/AGI mode system
+- CLI flags: `-r`, `-w`, `-y`, `--no-sandbox`, `--agi`
+- CWD sandbox by default (84% prompt reduction like Claude Code)
+- Per-command bash approval storage
+- Created `ai/design/permission-system.md`
+
+**UX Fixes:**
+
+- Ctrl+C immediately cancels running task (no double-tap)
+- Modal escape always works (re-opens if setup needed)
+- Progress line shows tool name when executing
 
 ## Open Tasks
 
-**Bugs:**
+**Security:**
 
-(none)
+- [ ] tk-a8vn: Permission system implementation (design complete)
 
 **UX:**
 
 - [ ] tk-otmx: Ctrl+G opens input in external editor
 - [ ] tk-whde: Git diff stats in status line
-- [ ] tk-arh6: Tool execution not visually obvious
-
-**Security:**
-
-- [ ] tk-a8vn: CWD boundary enforcement and --trust flag
 
 **Ideas:**
 
 - [ ] tk-iegz: OpenRouter provider routing modal
 - [ ] tk-smqs: Diff highlighting for edits
 
-## Completed
+## Completed This Session
 
-- [x] Config system implementation
-- [x] Dependency upgrades (grep, glob, tokenizer)
-- [x] Memory removal / stable Rust switch
-- [x] Config persistence (model selection saved)
-- [x] Progress line with elapsed + token counts
-- [x] CLI one-shot mode
+- [x] Config system implementation (tk-e96r)
+- [x] Ctrl+C interrupt fix (tk-3jba)
+- [x] Modal escape handling (tk-o4uo)
+- [x] Tool execution visibility (tk-arh6)
+- [x] Permission system design
 
 ## Design Documents
 
+- `ai/design/permission-system.md` - CLI flags, modes, sandbox, approval
 - `ai/design/config-system.md` - Config hierarchy, ~/.agents/ proposal
 - `ai/design/tui.md` - TUI interface spec
 - `ai/design/diff-highlighting.md` - Diff rendering plan
