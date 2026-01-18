@@ -215,14 +215,6 @@ impl MessageList {
             AgentEvent::CompactionStatus { .. } => {
                 // Handled by TUI main loop for status bar
             }
-            AgentEvent::MemoryRetrieval { results_count, .. } => {
-                if results_count > 0 {
-                    self.push_entry(MessageEntry::new(
-                        Sender::System,
-                        format!("Recalled {} relevant memories", results_count),
-                    ));
-                }
-            }
             AgentEvent::Finished(msg) => {
                 self.push_entry(MessageEntry::new(Sender::System, msg));
             }

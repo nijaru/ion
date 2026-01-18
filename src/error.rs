@@ -11,9 +11,6 @@ pub enum Error {
     #[error("Tool error: {0}")]
     Tool(#[from] crate::tool::ToolError),
 
-    #[error("Memory error: {0}")]
-    Memory(#[from] crate::memory::MemoryError),
-
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 

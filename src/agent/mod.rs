@@ -4,12 +4,9 @@ pub mod explorer;
 
 use crate::agent::context::ContextManager;
 use crate::agent::designer::{Designer, Plan};
-use crate::agent::explorer::Explorer;
 use crate::compaction::{
     CompactionConfig, PruningTier, TokenCounter, check_compaction_needed, prune_messages,
 };
-use crate::memory::embedding::EmbeddingProvider;
-use crate::memory::{MemorySystem, MemoryType};
 use crate::provider::{
     ChatRequest, ContentBlock, Message, Provider, Role, StreamEvent, ThinkingConfig, ToolCallEvent,
     ToolDefinition,
@@ -19,9 +16,6 @@ use crate::skill::SkillRegistry;
 use crate::tool::{ToolContext, ToolOrchestrator};
 use anyhow::Result;
 use std::borrow::Cow;
-use std::future::Future;
-use std::path::{Path, PathBuf};
-use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
 use tokio::task::JoinSet;
@@ -31,11 +25,7 @@ use tracing::error;
 pub struct Agent {
     provider: Arc<dyn Provider>,
     orchestrator: Arc<ToolOrchestrator>,
-    memory: Option<Arc<Mutex<MemorySystem>>>,
-    embedding: Option<Arc<dyn EmbeddingProvider>>,
-    explorer: Option<Arc<Explorer>>,
     designer: Option<Arc<Designer>>,
-    indexing_worker: Option<Arc<crate::memory::IndexingWorker>>,
     compaction_config: CompactionConfig,
     token_counter: TokenCounter,
     skills: SkillRegistry,
@@ -46,41 +36,17 @@ pub struct Agent {
 impl Agent {
     pub fn new(provider: Arc<dyn Provider>, orchestrator: Arc<ToolOrchestrator>) -> Self {
         let designer = Arc::new(Designer::new(provider.clone()));
-        let system_prompt = "You are ion, a high-performance Rust terminal agent. Be concise, professional, and efficient. Use tools whenever necessary to fulfill the user request.".to_string();
+        let system_prompt = "You are ion, a fast terminal coding agent. Be concise and efficient. Use tools to fulfill user requests.".to_string();
         Self {
             provider,
             orchestrator,
-            memory: None,
-            embedding: None,
-            explorer: None,
             designer: Some(designer),
-            indexing_worker: None,
             compaction_config: CompactionConfig::default(),
             token_counter: TokenCounter::new(),
             skills: SkillRegistry::new(),
             context_manager: Arc::new(ContextManager::new(system_prompt)),
             active_plan: Arc::new(Mutex::new(None)),
         }
-    }
-
-    pub fn with_memory(
-        mut self,
-        memory: Arc<Mutex<MemorySystem>>,
-        embedding: Arc<dyn EmbeddingProvider>,
-    ) -> Self {
-        let worker = Arc::new(crate::memory::IndexingWorker::new(
-            memory.clone(),
-            embedding.clone(),
-        ));
-        self.memory = Some(memory);
-        self.embedding = Some(embedding);
-        self.indexing_worker = Some(worker);
-        self
-    }
-
-    pub fn with_explorer(mut self, explorer: Arc<Explorer>) -> Self {
-        self.explorer = Some(explorer);
-        self
     }
 
     pub fn with_compaction_config(mut self, config: CompactionConfig) -> Self {
@@ -112,54 +78,6 @@ impl Agent {
         self.provider.clone()
     }
 
-    pub fn indexing_worker(&self) -> Option<Arc<crate::memory::IndexingWorker>> {
-        self.indexing_worker.clone()
-    }
-
-    /// Re-index a specific path using the Explorer.
-    pub async fn reindex(&self, path: Option<&Path>) -> Result<()> {
-        if let Some(explorer) = &self.explorer {
-            if let Some(p) = path {
-                explorer.index_path(p).await?;
-            } else {
-                // If no path, we could default to working dir, but let's keep it targeted
-                explorer.index_path(&std::env::current_dir()?).await?;
-            }
-        }
-        Ok(())
-    }
-
-    /// Index a single file lazily.
-    pub async fn index_file(&self, path: &Path) -> Result<()> {
-        if let Some(explorer) = &self.explorer {
-            explorer.index_file(path).await?;
-        }
-        Ok(())
-    }
-
-    /// Run a discovery pass to find relevant symbols or files.
-    pub async fn discover(&self, query: &str) -> Result<Vec<(String, f32)>> {
-        let (Some(memory), Some(embedding)) = (&self.memory, &self.embedding) else {
-            return Ok(Vec::new());
-        };
-
-        let vector = embedding.embed(query).await?;
-        let memory = memory.clone();
-        let query_owned = query.to_string();
-
-        let results = tokio::task::spawn_blocking(move || {
-            let mut ms = memory.blocking_lock();
-            ms.hybrid_search(vector, &query_owned, 10)
-        })
-        .await??;
-
-        Ok(results
-            .into_iter()
-            .map(|(entry, score)| (entry.text, score))
-            .collect())
-    }
-
-    /// Generate a plan for a complex task.
     pub async fn plan(
         &self,
         user_msg: &str,
@@ -189,23 +107,7 @@ impl Agent {
             }]),
         });
 
-        // Index user message
-        if let Err(e) = self.index_message(&user_msg, MemoryType::Working).await {
-            error!("Failed to index user message: {}", e);
-        }
-
-        // Prune old memories once per session
-        if session.messages.len() <= 2 {
-            if let Some(memory) = &self.memory {
-                let memory = memory.clone();
-                tokio::task::spawn_blocking(move || {
-                    let mut ms = memory.blocking_lock();
-                    let _ = ms.prune();
-                });
-            }
-        }
-
-        // Optional: Run designer for complex requests (e.g. first message, long prompt)
+        // Optional: Run designer for complex requests
         if session.messages.len() <= 2 && user_msg.len() > 100 {
             if let Ok(plan) = self.plan(&user_msg, &session).await {
                 {
@@ -216,17 +118,10 @@ impl Agent {
             }
         }
 
-        // Fetch memory context once for this task
-        let memory_context = self
-            .retrieve_context(&user_msg, 5, &tx)
-            .await
-            .unwrap_or(None);
-
         loop {
-            // Check for queued user messages between turns (for mid-task steering)
+            // Check for queued user messages between turns
             if let Some(ref queue) = message_queue {
                 if let Ok(mut queue) = queue.lock() {
-                    // Drain all queued messages and inject as user turns
                     for queued_msg in queue.drain(..) {
                         session.messages.push(Message {
                             role: Role::User,
@@ -237,7 +132,7 @@ impl Agent {
             }
 
             if !self
-                .execute_turn(&mut session, &tx, memory_context.as_deref(), thinking.clone())
+                .execute_turn(&mut session, &tx, thinking.clone())
                 .await?
             {
                 break;
@@ -247,51 +142,15 @@ impl Agent {
         Ok(session)
     }
 
-    /// Index a message turn into memory.
-    async fn index_message(&self, text: &str, r#type: MemoryType) -> Result<()> {
-        if let Some(worker) = &self.indexing_worker {
-            let metadata = serde_json::json!({
-                "source": "conversation",
-                "indexed_at": chrono::Utc::now().to_rfc3339()
-            });
-            worker.index(text.to_string(), r#type, metadata).await?;
-        }
-        Ok(())
-    }
-
     async fn execute_turn(
         &self,
         session: &mut Session,
         tx: &mpsc::Sender<AgentEvent>,
-        memory_context: Option<&str>,
         thinking: Option<ThinkingConfig>,
     ) -> Result<bool> {
         let (assistant_blocks, tool_calls) =
-            self.stream_response(session, tx, memory_context, thinking).await?;
+            self.stream_response(session, tx, thinking).await?;
 
-        // Index assistant turn (text blocks)
-        let assistant_text: String = assistant_blocks
-            .iter()
-            .filter_map(|b| {
-                if let ContentBlock::Text { text } = b {
-                    Some(text.as_str())
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n"); // Corrected: Changed join separator to "\n"
-
-        if !assistant_text.is_empty() {
-            if let Err(e) = self
-                .index_message(&assistant_text, MemoryType::Working)
-                .await
-            {
-                error!("Failed to index assistant response: {}", e);
-            }
-        }
-
-        // Save assistant turn
         session.messages.push(Message {
             role: Role::Assistant,
             content: Arc::new(assistant_blocks),
@@ -301,25 +160,14 @@ impl Agent {
             return Ok(false);
         }
 
-        // Execute tools (in parallel)
         let tool_results = self.execute_tools_parallel(session, tool_calls, tx).await?;
-
-        // Index tool results
-        for result in &tool_results {
-            if let ContentBlock::ToolResult { content, .. } = result {
-                // Working memory for tool results (short-lived but useful for immediate context)
-                if let Err(e) = self.index_message(content, MemoryType::Working).await {
-                    error!("Failed to index tool result: {}", e);
-                }
-            }
-        }
 
         session.messages.push(Message {
             role: Role::ToolResult,
             content: Arc::new(tool_results),
         });
 
-        // Count current tokens and send usage event
+        // Token usage tracking
         let token_count = self.token_counter.count_messages(&session.messages);
         let _ = tx
             .send(AgentEvent::TokenUsage {
@@ -361,54 +209,10 @@ impl Agent {
         Ok(true)
     }
 
-    /// Retrieve relevant context from memory based on query text.
-    async fn retrieve_context(
-        &self,
-        query_text: &str,
-        limit: usize,
-        tx: &mpsc::Sender<AgentEvent>,
-    ) -> Result<Option<String>> {
-        let (Some(memory), Some(embedding)) = (&self.memory, &self.embedding) else {
-            return Ok(None);
-        };
-
-        let vector = embedding.embed(query_text).await?;
-        let memory = memory.clone();
-        let query_text_owned = query_text.to_string();
-
-        let results = tokio::task::spawn_blocking(move || {
-            let mut ms = memory.blocking_lock();
-            ms.hybrid_search(vector, &query_text_owned, limit)
-        })
-        .await??;
-
-        let _ = tx
-            .send(AgentEvent::MemoryRetrieval {
-                query: query_text.to_string(),
-                results_count: results.len(),
-            })
-            .await;
-
-        if results.is_empty() {
-            return Ok(None);
-        }
-
-        let mut context = String::from("\nRelevant Context from Memory:\n");
-        for (entry, score) in results {
-            context.push_str(&format!(
-                "--- [{:?}, Score: {:.2}] ---\n{}\n",
-                entry.r#type, score, entry.text
-            ));
-        }
-
-        Ok(Some(context))
-    }
-
     async fn stream_response(
         &self,
         session: &Session,
         tx: &mpsc::Sender<AgentEvent>,
-        memory_context: Option<&str>,
         thinking: Option<ThinkingConfig>,
     ) -> Result<(Vec<ContentBlock>, Vec<ToolCallEvent>)> {
         let tool_defs: Vec<ToolDefinition> = self
@@ -425,7 +229,7 @@ impl Agent {
         let plan = self.active_plan.lock().await;
         let assembly = self
             .context_manager
-            .assemble(&session.messages, memory_context, tool_defs, plan.as_ref())
+            .assemble(&session.messages, None, tool_defs, plan.as_ref())
             .await;
 
         let request = ChatRequest {
@@ -438,7 +242,6 @@ impl Agent {
             thinking,
         };
 
-        // Count and report input tokens
         let input_tokens = self.token_counter.count_str(&assembly.system_prompt)
             + assembly
                 .messages
@@ -448,7 +251,6 @@ impl Agent {
         let _ = tx.send(AgentEvent::InputTokens(input_tokens)).await;
 
         let (stream_tx, mut stream_rx) = mpsc::channel(100);
-
         let provider = self.provider.clone();
 
         tokio::spawn(async move {
@@ -463,7 +265,6 @@ impl Agent {
         while let Some(event) = stream_rx.recv().await {
             match event {
                 StreamEvent::TextDelta(delta) => {
-                    // Count output tokens
                     let delta_tokens = self.token_counter.count_str(&delta);
                     let _ = tx.send(AgentEvent::OutputTokensDelta(delta_tokens)).await;
                     let _ = tx.send(AgentEvent::TextDelta(delta.clone())).await;
@@ -496,7 +297,7 @@ impl Agent {
                     });
                 }
                 StreamEvent::Error(e) => return Err(anyhow::anyhow!(e)),
-                _ => {} // Corrected: Added missing underscore for unused match arm
+                _ => {}
             }
         }
 
@@ -512,38 +313,14 @@ impl Agent {
         let mut set = JoinSet::new();
         let num_tools = tool_calls.len();
 
-        let agent_ref = self.clone();
-        let index_callback: Option<Arc<dyn Fn(PathBuf) + Send + Sync>> =
-            Some(Arc::new(move |path| {
-                let agent = agent_ref.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = agent.index_file(&path).await {
-                        error!("Lazy indexing failed for {:?}: {}", path, e);
-                    }
-                });
-            }));
-
-        let agent_ref_disc = self.clone();
-        let discovery_callback = Some(Arc::new(move |query: String| {
-            let agent = agent_ref_disc.clone();
-            Box::pin(async move { agent.discover(&query).await })
-                as Pin<Box<dyn Future<Output = Result<Vec<(String, f32)>>> + Send>>
-        })
-            as Arc<
-                dyn Fn(String) -> Pin<Box<dyn Future<Output = Result<Vec<(String, f32)>>> + Send>>
-                    + Send
-                    + Sync,
-            >);
-
         let ctx = ToolContext {
             working_dir: session.working_dir.clone(),
             session_id: session.id.clone(),
             abort_signal: session.abort_token.clone(),
-            index_callback,
-            discovery_callback,
+            index_callback: None,
+            discovery_callback: None,
         };
 
-        // Track original order via index
         for (index, call) in tool_calls.into_iter().enumerate() {
             let orchestrator = self.orchestrator.clone();
             let tx = tx.clone();
@@ -604,16 +381,11 @@ pub enum AgentEvent {
     ToolCallResult(String, String, bool),
     PlanGenerated(crate::agent::designer::Plan),
     CompactionStatus { threshold: usize, pruned: bool },
-    MemoryRetrieval { query: String, results_count: usize },
-    /// Current token usage for context tracking
     TokenUsage { used: usize, max: usize },
-    /// Input tokens sent to model (prompt tokens)
     InputTokens(usize),
-    /// Output tokens received delta (completion tokens, incremental)
     OutputTokensDelta(usize),
     Finished(String),
     Error(String),
-    // Model picker events
     ModelsFetched(Vec<crate::provider::ModelInfo>),
     ModelFetchError(String),
 }
