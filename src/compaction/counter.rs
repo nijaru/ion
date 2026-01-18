@@ -1,18 +1,10 @@
 use crate::provider::{ContentBlock, Message, Role};
-use tiktoken_rs::cl100k_base;
-
-/// Token counter using tiktoken for accurate counting.
+use bpe_openai::cl100k_base;
 use std::fmt;
 
-pub struct TokenCounter {
-    bpe: tiktoken_rs::CoreBPE,
-}
-
-impl Clone for TokenCounter {
-    fn clone(&self) -> Self {
-        Self::new()
-    }
-}
+/// Token counter using bpe-openai for accurate counting.
+#[derive(Clone, Copy)]
+pub struct TokenCounter;
 
 impl fmt::Debug for TokenCounter {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -28,14 +20,12 @@ impl Default for TokenCounter {
 
 impl TokenCounter {
     pub fn new() -> Self {
-        Self {
-            bpe: cl100k_base().expect("Failed to load cl100k_base tokenizer"),
-        }
+        Self
     }
 
     /// Count tokens in a string.
     pub fn count_str(&self, text: &str) -> usize {
-        self.bpe.encode_with_special_tokens(text).len()
+        cl100k_base().count(text)
     }
 
     /// Fast estimate without tokenization (~4 chars per token).
