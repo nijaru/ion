@@ -1,11 +1,10 @@
 # ion
 
-Local-first TUI coding agent with persistent memory.
+TUI coding agent.
 
 Features:
 
 - Multi-provider LLM support (OpenRouter, Anthropic, Ollama)
-- Vector-based memory that persists across sessions
 - Built-in tools: read, write, edit, grep, glob, bash
 - MCP server support
 
