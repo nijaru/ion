@@ -28,34 +28,37 @@
 
 ## Session Accomplishments
 
-**CLI One-Shot Mode Implemented:**
+**Input & Message Queueing Implemented:**
+
+- Input always visible (even while agent is running)
+- Yellow border + spinner indicates running state
+- Enter while running queues message for next turn
+- "Queued" badge shows pending message
+- Agent checks queue between turns for mid-task steering
+- Approval dialog wording improved (less shouty)
+
+**CLI One-Shot Mode (Previous):**
 
 - `ion run "prompt"` with full flag support
 - Flags: `-m`, `-o`, `-q`, `-y`, `-f`, `-v`, `--max-turns`, `--no-tools`, `--cwd`
 - Output formats: text, json, stream-json
 - Exit codes: 0=success, 1=error, 2=interrupted, 3=max-turns
-- Code reviewed and all findings fixed (UTF-8 safety, error handling, abort token)
-
-**Model Picker (Previous Session):**
-
-- Fixed pricing parsing, sorting, column headers
-- Tab navigation between provider and model pickers
 
 ## Priority: TUI Bugs & Polish
 
 **P0 - Critical Bugs:**
 
-- [ ] tk-ltfn: Spinner/Ionizing persists after agent completion
-- [ ] tk-pm5r: Text input box disappears during agent response
+- [x] tk-ltfn: Spinner/Ionizing persists after agent completion - DONE
+- [x] tk-pm5r: Text input box disappears during agent response - DONE
+- [x] tk-7cpv: Message queueing (type while agent runs, steer mid-task) - DONE
 - [ ] tk-3jba: Ctrl+C not interruptible during tool execution
-- [ ] tk-7cpv: Message queueing (type while agent runs, steer mid-task)
 
 **P1 - UX Issues:**
 
 - [ ] tk-arh6: Tool execution not visually obvious
 - [ ] tk-yx6s: Message headers show 'ion' instead of model name
 - [ ] tk-3ffy: Tool indicator '~ tool' not intuitive
-- [ ] tk-4xe8: Approval dialog wording (APPROVAL → Approval)
+- [x] tk-4xe8: Approval dialog wording (APPROVAL → Approval) - DONE
 - [ ] tk-32ou: Status/progress text positioning
 - [ ] tk-o4uo: Modal escape handling consistency
 
@@ -72,62 +75,23 @@
 - [ ] Hook runner (subprocess, JSON stdin/stdout)
 - [ ] Plugin discovery
 
-## TUI Issues Detail
+## Remaining TUI Issues
 
 ### Bugs
 
-1. **Spinner persists** - "Ionizing..." and spinner remain after agent completes
-2. **Input disappears** - Text box vanishes during response, should always be visible
-3. **Can't interrupt** - Ctrl+C doesn't work during tool execution, can't exit app
+1. **Can't interrupt** - Ctrl+C doesn't work during tool execution, requires tools to check abort token
 
 ### UX Problems
 
-4. **Tool calls unclear** - Not obvious when tools are running vs spinner for no reason
+2. **Tool calls unclear** - Not obvious when tools are running
    - Claude Code shows: `⏺ Bash(command)` with collapsible output
    - We show: `~ tool` / `Executing bash...` which is vague
 
-5. **Message headers** - Shows "ion" instead of actual model (e.g., "claude-sonnet-4")
-   - User may switch models mid-conversation
-   - Important for debugging which model responded
+3. **Message headers** - Shows "ion" instead of actual model (e.g., "claude-sonnet-4")
 
-6. **Tool indicator** - `~` is not intuitive, consider `⏺` or `>`
+4. **Tool indicator** - `~` is not intuitive, consider `⏺` or `>`
 
-7. **Approval dialog**:
-   - "APPROVAL" is shouty → "Approval"
-   - "(A)lways permanent" wording unclear
-   - May accept wrong keys (needs investigation)
-
-8. **Layout during execution**:
-   - Input should always be visible
-   - Progress/status on line below input, above status line
-   - Empty line buffer at bottom
-
-9. **Modal escape**:
-   - Provider picker: Escape blocked during setup (should close)
-   - Model picker: Tab for switching, Escape for closing
-
-## Message Queueing Design
-
-Key insight: Input visibility and message queueing are separate concerns.
-
-**Implementation:**
-
-1. Input always visible - decouple from `is_running` state
-2. Message queue - `VecDeque<String>` holds pending messages
-3. Check between turns - after each tool result, before next LLM call
-4. Inject if queued - add as user message, continue loop
-
-```
-Agent loop:
-  while has_tool_calls:
-    execute_tools()
-    if queue.has_message():        # <-- check here
-      inject_user_message(queue.pop())
-      continue                      # new turn with user steering
-    call_llm()
-```
-
-Visual: "Queued" badge when message waiting.
+5. **Modal escape** - Provider/model picker escape handling
 
 ## Reference: Claude Code Style
 
@@ -161,6 +125,9 @@ Key patterns:
 - [x] Model picker pricing (fixed)
 - [x] Model sorting (org → newest)
 - [x] CLI one-shot mode (`ion run`)
+- [x] Input always visible
+- [x] Message queueing for mid-task steering
+- [x] Approval dialog wording
 
 ## Design Documents
 
