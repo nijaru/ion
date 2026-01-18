@@ -1105,6 +1105,69 @@ impl App {
         let _ = std::fs::write(path, snapshot);
     }
 
+    /// Calculate cursor row and column for multi-line input.
+    /// Returns (row, col) where row is 0-indexed from top of input area.
+    fn calculate_cursor_position(&self, text_width: usize) -> (usize, usize) {
+        if text_width == 0 {
+            return (0, 0);
+        }
+
+        let text_before_cursor = &self.input[..self.cursor_pos];
+        let mut row = 0;
+        let mut col = 0;
+
+        for ch in text_before_cursor.chars() {
+            if ch == '\n' {
+                row += 1;
+                col = 0;
+            } else {
+                col += 1;
+                // Handle line wrapping
+                if col >= text_width {
+                    row += 1;
+                    col = 0;
+                }
+            }
+        }
+
+        (row, col)
+    }
+
+    /// Calculate the height needed for the input box based on content.
+    /// Returns height including borders (min 3, max 10).
+    fn calculate_input_height(&self, terminal_width: u16) -> u16 {
+        const MIN_HEIGHT: u16 = 3;
+        const MAX_HEIGHT: u16 = 10;
+        const BORDER_OVERHEAD: u16 = 2; // Top and bottom borders
+        const PADDING: u16 = 3; // Left padding + margins
+
+        if self.input.is_empty() {
+            return MIN_HEIGHT;
+        }
+
+        // Available width for text (subtract borders and padding)
+        let text_width = terminal_width.saturating_sub(BORDER_OVERHEAD + PADDING) as usize;
+        if text_width == 0 {
+            return MIN_HEIGHT;
+        }
+
+        // Count lines: explicit newlines + wrapped lines
+        let mut line_count: u16 = 0;
+        for line in self.input.split('\n') {
+            // Each line takes at least 1 row, plus wrapping
+            let line_len = line.chars().count();
+            let wrapped_lines = if line_len == 0 {
+                1
+            } else {
+                ((line_len + text_width - 1) / text_width) as u16
+            };
+            line_count += wrapped_lines;
+        }
+
+        // Add border overhead and clamp to bounds
+        (line_count + BORDER_OVERHEAD).clamp(MIN_HEIGHT, MAX_HEIGHT)
+    }
+
     fn quit(&mut self) {
         self.should_quit = true;
 
@@ -1127,11 +1190,14 @@ impl App {
     }
 
     pub fn draw(&mut self, frame: &mut Frame) {
+        // Calculate input box height based on content
+        let input_height = self.calculate_input_height(frame.area().width);
+
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Min(0),
-                Constraint::Length(3),
+                Constraint::Length(input_height),
                 Constraint::Length(1),
             ])
             .split(frame.area());
@@ -1291,13 +1357,23 @@ impl App {
 
             // Build input text with cursor (1-space left padding)
             let input_text = format!(" {}", self.input);
-            let input_para = Paragraph::new(input_text).block(input_block);
+            let input_para = Paragraph::new(input_text)
+                .block(input_block)
+                .wrap(Wrap { trim: false });
             frame.render_widget(input_para, chunks[1]);
 
-            // Set cursor position (account for 1-space padding)
-            let cursor_x = chunks[1].x + 2 + self.cursor_pos as u16;
-            let cursor_y = chunks[1].y + 1;
-            if cursor_x < chunks[1].x + chunks[1].width - 1 {
+            // Calculate cursor position for multi-line input
+            let inner_width = chunks[1].width.saturating_sub(3) as usize; // borders + padding
+            let (cursor_row, cursor_col) =
+                self.calculate_cursor_position(inner_width);
+
+            let cursor_x = chunks[1].x + 2 + cursor_col as u16;
+            let cursor_y = chunks[1].y + 1 + cursor_row as u16;
+
+            // Only show cursor if within bounds
+            if cursor_x < chunks[1].x + chunks[1].width - 1
+                && cursor_y < chunks[1].y + chunks[1].height - 1
+            {
                 frame.set_cursor_position((cursor_x, cursor_y));
             }
         }
