@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "pm5r",
+  "title": "[BUG] Text input box disappears during agent response",
+  "description": null,
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-18T18:24:08.906Z",
+  "updated_at": "2026-01-18T18:24:08.906Z",
+  "completed_at": null,
+  "external": {}
+}
