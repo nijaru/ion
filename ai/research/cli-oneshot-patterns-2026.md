@@ -283,47 +283,52 @@ goose run -t "query" -q                       # Quiet mode (response only)
 - Used by: Claude, Gemini, goose
 - Codex uses: `--json` boolean flag
 
-### Recommendations for ion
+### Final Design for ion
 
-Based on industry patterns, recommend:
+Based on review, simplified to subcommand-only:
 
 ```bash
-# Primary one-shot (subcommand style - more explicit)
-ion run "prompt"
-ion run -t "prompt"           # Explicit text flag
+# Primary syntax
+ion run "prompt"              # Basic
+ion run -                     # Prompt from stdin
 
-# Alternative flag style (familiar to Claude users)
-ion -p "prompt"
+# Context input
+cat file | ion run "analyze"  # Piped content as context
+ion run -f context.txt "prompt"  # File as context
 
-# Stdin
-ion run -                     # Read from stdin
-cat file | ion run -          # Pipe content
-ion run -f file.txt           # File input
+# Model selection (flags after subcommand)
+ion run -m deepseek/deepseek-v4 "prompt"
+ion run --model anthropic/claude-sonnet-4 "prompt"
 
-# Model selection
-ion --model deepseek/deepseek-v4 run "prompt"
-ion -m anthropic/claude-sonnet-4 run "prompt"
+# Output format
+ion run -o text "prompt"      # Default (short flag)
+ion run -o json "prompt"      # Final JSON
+ion run -o stream-json "prompt"  # JSONL events
+ion run -q "prompt"           # Quiet (response only)
 
-# Output format (follow emerging standard)
-ion run --output-format text "prompt"       # Default
-ion run --output-format json "prompt"       # Final JSON
-ion run --output-format stream-json "prompt" # JSONL events
-ion run -q "prompt"                         # Quiet (response only)
+# Automation flags
+ion run -y "prompt"           # Auto-approve tools
+ion run --max-turns 5 "prompt"  # Limit turns
 
-# Other useful flags
-ion run --max-turns 5 "prompt"
-ion run --no-session "prompt"
-ion run --verbose "prompt"
+# Session control
+ion run --no-session "prompt" # Don't persist
+ion run -c "follow up"        # Continue last
+
+# Other
+ion run -v "prompt"           # Verbose
+ion run --no-tools "prompt"   # Pure chat
+ion run --cwd /path "prompt"  # Working directory
 ```
 
-**Key conventions to follow:**
+**Key conventions:**
 
-1. `-p` / `--print` for Claude Code compatibility
-2. `run` subcommand for explicit non-interactive mode
-3. `-` for stdin (POSIX convention)
-4. `--output-format` with `text|json|stream-json` options
-5. `-q` / `--quiet` for minimal output
-6. `--model` in `provider/model` format
+1. `run` subcommand only (no dual `-p` flag)
+2. `-` for stdin prompt (POSIX)
+3. Piped content = context, not prompt
+4. `-o` / `--output-format` with `text|json|stream-json`
+5. `-y` / `--yes` for automation
+6. `--max-turns` to prevent runaway
+7. Exit codes: 0=success, 1=error, 2=interrupted, 3=max-turns
 
 ## Sources
 
