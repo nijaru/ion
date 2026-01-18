@@ -32,12 +32,30 @@ ion run "explain this codebase"
 
 ## Configuration
 
-Config file: `~/.config/ion/config.toml`
+ion config: `~/.ion/config.toml`
 
 ```toml
-openrouter_api_key = "sk-or-..."
+[provider]
+default = "openrouter"
 model = "anthropic/claude-sonnet-4"
+
+[provider.openrouter]
+api_key_env = "OPENROUTER_API_KEY"
 ```
+
+Project config: `.ion/config.toml` (committed), `.ion/config.local.toml` (gitignored)
+
+## Agent Instructions
+
+ion reads `AGENTS.md` (or `CLAUDE.md` as fallback) from project root and user home:
+
+| Location              | Purpose                 |
+| --------------------- | ----------------------- |
+| `./AGENTS.md`         | Project instructions    |
+| `~/.agents/AGENTS.md` | User global (preferred) |
+| `~/.ion/AGENTS.md`    | User global (fallback)  |
+
+ion proposes `~/.agents/` as a universal location for AI agent files (instructions, skills, subagents) that works across tools.
 
 ## License
 
