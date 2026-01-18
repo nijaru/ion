@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "e96r",
+  "title": "Implement config system redesign (~/.ion/, ~/.agents/, AGENTS.md loading)",
+  "description": null,
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-18T21:45:33.797Z",
+  "updated_at": "2026-01-18T21:45:33.797Z",
+  "completed_at": null,
+  "external": {}
+}
