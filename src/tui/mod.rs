@@ -469,8 +469,11 @@ impl App {
                 self.take_snapshot();
             }
 
-            // Alt+Enter: Insert newline (Shift+Enter unreliable across terminals)
-            KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => {
+            // Shift+Enter or Alt+Enter: Insert newline
+            KeyCode::Enter
+                if key.modifiers.contains(KeyModifiers::SHIFT)
+                    || key.modifiers.contains(KeyModifiers::ALT) =>
+            {
                 self.input.insert(self.cursor_pos, '\n');
                 self.cursor_pos += 1;
             }
@@ -970,7 +973,7 @@ impl App {
    Ctrl+H      - Help Overlay
    Ctrl+S      - UI Snapshot
    Tab         - Cycle Tool Mode (Read/Write/Agi)
-   Alt+Enter   - Insert Newline
+   Shift+Enter - Insert Newline
    PageUp/Down - Scroll History
    Ctrl+C      - Clear Input / Quit
          "#;
@@ -1090,24 +1093,24 @@ impl App {
             match entry.sender {
                 Sender::User => {
                     chat_lines.push(Line::from(vec![
-                        Span::styled(" > ", Style::default().fg(Color::Cyan)),
+                        Span::styled(" < ", Style::default().fg(Color::Cyan)),
                         Span::styled("You", Style::default().fg(Color::Cyan).bold()),
                     ]));
                     let md = tui_markdown::from_str(content);
                     for line in &md.lines {
-                        let mut padded = vec![Span::raw("   ")];
+                        let mut padded = vec![Span::raw(" ")];
                         padded.extend(line.spans.clone());
                         chat_lines.push(Line::from(padded));
                     }
                 }
                 Sender::Agent => {
                     chat_lines.push(Line::from(vec![
-                        Span::styled(" < ", Style::default().fg(Color::Green)),
+                        Span::styled(" > ", Style::default().fg(Color::Green)),
                         Span::styled("ion", Style::default().fg(Color::Green).bold()),
                     ]));
                     let md = tui_markdown::from_str(content);
                     for line in &md.lines {
-                        let mut padded = vec![Span::raw("   ")];
+                        let mut padded = vec![Span::raw(" ")];
                         padded.extend(line.spans.clone());
                         chat_lines.push(Line::from(padded));
                     }
@@ -1124,7 +1127,7 @@ impl App {
                             span.style =
                                 span.style.patch(Style::default().fg(Color::Magenta).dim());
                         }
-                        let mut padded = vec![Span::raw("   ")];
+                        let mut padded = vec![Span::raw(" ")];
                         padded.extend(styled_line.spans);
                         chat_lines.push(Line::from(padded));
                     }
@@ -1160,7 +1163,7 @@ impl App {
             }
         } else if self.is_running {
             let loading = LoadingIndicator {
-                label: "Agent is thinking...".to_string(),
+                label: "Running...".to_string(),
                 frame_count: self.frame_count,
             };
             frame.render_widget(loading, chunks[1]);
@@ -1193,18 +1196,47 @@ impl App {
             }
         }
 
-        let memory_indicator = if let Some(count) = self.last_memory_count {
-            format!(" | M:{} ", count)
-        } else {
+        // Left side: model · [branch] · cwd
+        let cwd = self
+            .session
+            .working_dir
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "~".to_string());
+
+        let branch = get_git_branch(&self.session.working_dir).unwrap_or_default();
+        let branch_part = if branch.is_empty() {
             String::new()
+        } else {
+            format!("[{}] · ", branch)
         };
 
-        let status = format!(
-            " {} | Tab: mode | ^M: model | ^P: provider | ^H: help | ^C: clear/quit{}",
-            self.session.model, memory_indicator,
-        );
-        let status_para = Paragraph::new(status).style(Style::default().dim());
-        frame.render_widget(status_para, chunks[2]);
+        // Simplify model name (remove provider prefix if present)
+        let model_name = self
+            .session
+            .model
+            .split('/')
+            .last()
+            .unwrap_or(&self.session.model);
+
+        let left = format!(" {} · {}{}", model_name, branch_part, cwd);
+
+        // Right side: keybindings
+        let right = "^M model · ^P provider · ^H help ";
+
+        // Calculate padding for right alignment
+        let width = chunks[2].width as usize;
+        let left_len = left.chars().count();
+        let right_len = right.chars().count();
+        let padding = width.saturating_sub(left_len + right_len);
+
+        let status_line = Line::from(vec![
+            Span::styled(left, Style::default()),
+            Span::raw(" ".repeat(padding)),
+            Span::styled(right, Style::default().dim()),
+        ]);
+
+        frame.render_widget(Paragraph::new(status_line), chunks[2]);
 
         // Render modals on top if active
         match self.mode {
@@ -1233,7 +1265,7 @@ impl App {
                 Span::raw("Send message"),
             ]),
             Line::from(vec![
-                Span::styled("  Alt+Enter    ", Style::default().fg(Color::Cyan)),
+                Span::styled("  Shift+Enter  ", Style::default().fg(Color::Cyan)),
                 Span::raw("Newline"),
             ]),
             Line::from(vec![
@@ -1272,4 +1304,20 @@ impl App {
 
         frame.render_widget(help_para, help_area);
     }
+}
+
+/// Get the current git branch name, if in a git repository.
+fn get_git_branch(working_dir: &std::path::Path) -> Option<String> {
+    let head_path = working_dir.join(".git/HEAD");
+    if let Ok(content) = std::fs::read_to_string(head_path) {
+        let content = content.trim();
+        if let Some(branch) = content.strip_prefix("ref: refs/heads/") {
+            return Some(branch.to_string());
+        }
+        // Detached HEAD - show short hash
+        if content.len() >= 7 {
+            return Some(content[..7].to_string());
+        }
+    }
+    None
 }
