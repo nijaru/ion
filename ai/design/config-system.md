@@ -109,12 +109,17 @@ retention_days = 30
 
 ### Loading Order
 
-1. `./AGENTS.md` (project root, primary)
-2. `./CLAUDE.md` (project root, fallback)
-3. `./.ion/AGENTS.md` (project config dir)
-4. `~/.ion/AGENTS.md` (user global)
+1. `./AGENTS.md` (project root, primary standard)
+2. `./CLAUDE.md` (project root, fallback for Claude Code compat)
+3. `~/.ion/AGENTS.md` (user global)
 
-All found files are concatenated with headers.
+First found at project level wins (not concatenated). User global is always appended.
+
+**Not supported** (users can rename to AGENTS.md):
+
+- `.cursorrules` - deprecated by Cursor
+- `.cursor/rules/*.mdc` - complex format, low ROI
+- `.goosehints`, `.clinerules` - minimal adoption
 
 ### Subdirectory Discovery
 
