@@ -413,6 +413,23 @@ No reason to go through MCP when we can use the Rust crate directly.
 
 ---
 
+## 2026-01-18: TUI Design Direction (Claude Code Style)
+
+**Context**: Initial TUI used Nerd Font icons and heavy visual elements. User feedback preferred minimal, clean design like Claude Code / pi-mono.
+
+**Decision**: Adopt Claude Code's minimal aesthetic.
+
+| Element       | Before                 | After                                         |
+| ------------- | ---------------------- | --------------------------------------------- |
+| Chat headers  | Nerd Font icons        | Simple arrows (`< You`, `> ion`)              |
+| Status line   | Verbose keybindings    | `model · [branch] · cwd` left, `? help` right |
+| Loading       | "Agent is thinking..." | "Ionizing..."                                 |
+| Provider list | Name + description     | Name + auth hint only                         |
+
+**Rationale**: Minimal UI reduces cognitive load. Power users discover features via help modal. Aligns with terminal tool conventions.
+
+---
+
 ## 2026-01-18: Git Integration & Undo Strategy
 
 **Context**: Evaluated the need for automated git commits and a hidden "undo" checkpoint system for agent-driven file edits.
