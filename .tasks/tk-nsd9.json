@@ -3,7 +3,7 @@
   "ref": "nsd9",
   "title": "First-time setup flow (no default provider/model)",
   "description": null,
-  "status": "open",
+  "status": "done",
   "priority": 3,
   "labels": [],
   "assignees": [],
@@ -13,7 +13,7 @@
   "due_date": null,
   "logs": [],
   "created_at": "2026-01-18T16:53:54.740Z",
-  "updated_at": "2026-01-18T16:53:54.740Z",
-  "completed_at": null,
+  "updated_at": "2026-01-18T17:19:59.756Z",
+  "completed_at": "2026-01-18T17:19:59.756Z",
   "external": {}
 }
