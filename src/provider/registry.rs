@@ -131,10 +131,12 @@ impl ModelRegistry {
     /// 1. Query the active provider for availability.
     /// 2. Hydrate metadata (pricing, context) from models.dev.
     pub async fn fetch_hybrid(&self, provider: Arc<dyn Provider>) -> Result<Vec<ModelInfo>> {
+        tracing::debug!("fetch_hybrid: calling provider.list_models()");
         let mut available_models = provider
             .list_models()
             .await
             .map_err(|e| anyhow::anyhow!("Provider list error: {}", e))?;
+        tracing::debug!("fetch_hybrid: provider returned {} models", available_models.len());
 
         // Fetch metadata from models.dev (cached)
         let metadata_list = if !self.cache_valid() {

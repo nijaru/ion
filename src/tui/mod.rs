@@ -210,10 +210,23 @@ impl App {
     pub async fn new() -> Self {
         let config = Config::load().expect("Failed to load config");
 
-        // Initialize logging
-        let _ = tracing_subscriber::fmt()
-            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-            .try_init();
+        // Initialize logging - write to file if ION_LOG is set
+        if std::env::var("ION_LOG").is_ok() {
+            use std::fs::File;
+            use tracing_subscriber::prelude::*;
+            let file = File::create("ion.log").expect("Failed to create log file");
+            let file_layer = tracing_subscriber::fmt::layer()
+                .with_writer(file)
+                .with_ansi(false);
+            let filter = tracing_subscriber::EnvFilter::new("ion=debug");
+            let _ = tracing_subscriber::registry()
+                .with(file_layer.with_filter(filter))
+                .try_init();
+        } else {
+            let _ = tracing_subscriber::fmt()
+                .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+                .try_init();
+        }
 
         // Determine active provider and key
         let (api_provider, api_key) = if let Some(key) = config.openrouter_api_key.clone() {
