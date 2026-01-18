@@ -182,7 +182,7 @@ impl ApprovalHandler for TuiApprovalHandler {
     }
 }
 
-use tracing::error;
+use tracing::{debug, error};
 
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -428,6 +428,7 @@ impl App {
                     self.message_list.push_event(event);
                 }
                 AgentEvent::ModelsFetched(models) => {
+                    debug!("Received ModelsFetched event with {} models", models.len());
                     self.model_picker.set_models(models.clone());
                     // Configure picker based on how it was opened
                     match self.picker_intent {
@@ -1048,17 +1049,21 @@ impl App {
 
     /// Fetch models asynchronously
     fn fetch_models(&self) {
+        debug!("Starting model fetch");
         let registry = self.model_registry.clone();
         let provider = self.agent.provider();
         let prefs = self.config.provider_prefs.clone();
         let agent_tx = self.agent_tx.clone();
 
         tokio::spawn(async move {
+            debug!("Model fetch task started");
             match model_picker::fetch_models_for_picker(&registry, provider, &prefs).await {
                 Ok(models) => {
+                    debug!("Fetched {} models", models.len());
                     let _ = agent_tx.send(AgentEvent::ModelsFetched(models)).await;
                 }
                 Err(e) => {
+                    debug!("Model fetch error: {}", e);
                     let _ = agent_tx
                         .send(AgentEvent::ModelFetchError(e.to_string()))
                         .await;
