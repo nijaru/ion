@@ -637,3 +637,48 @@ No reason to go through MCP when we can use the Rust crate directly.
 | ^T     | Ctrl+T |
 
 **Rationale**: "Ctrl" is more readable for newcomers. Worth the extra characters.
+
+---
+
+## 2026-01-18: Model Picker Improvements
+
+**Context**: Model picker showing $0.00 for all prices, unsorted list, unclear column headers.
+
+**Decision**: Comprehensive model picker overhaul.
+
+| Aspect          | Implementation                                                                 |
+| --------------- | ------------------------------------------------------------------------------ |
+| **Pricing**     | Parse string prices from OpenRouter API (e.g., "0.000003" per token → $3.00/M) |
+| **Filtering**   | Filter models with negative pricing (-1 = variable/routing models)             |
+| **Sorting**     | Sort by org first, then newest (using `created` timestamp from API)            |
+| **Headers**     | Model \| Org \| Context \| Input \| Output                                     |
+| **Free models** | Show "free" in green instead of "$0.00"                                        |
+| **Tab nav**     | Tab switches between provider and model pickers                                |
+
+**Rationale**: Users need accurate pricing info and logical grouping to find models quickly.
+
+---
+
+## 2026-01-18: CLI One-Shot Mode Design
+
+**Context**: Need non-interactive mode for scripting, testing, and automation. Researched Claude Code, Gemini CLI, Codex, aider, goose patterns.
+
+**Decision**: Support both subcommand and flag styles.
+
+| Pattern    | Syntax                                    | Notes                         |
+| ---------- | ----------------------------------------- | ----------------------------- |
+| Subcommand | `ion run "prompt"`                        | Explicit, used by Codex/goose |
+| Flag       | `ion -p "prompt"`                         | Claude Code compatible        |
+| Stdin      | `ion run -` or `cat \| ion run -`         | POSIX convention              |
+| Model      | `-m provider/model`                       | Matches OpenRouter format     |
+| Output     | `--output-format text\|json\|stream-json` | Emerging standard             |
+
+**Key conventions**:
+
+- `-p` / `--print` for Claude Code compatibility
+- `run` subcommand for explicit non-interactive mode
+- `-` for stdin (POSIX standard)
+- `--output-format` with `text|json|stream-json`
+- `-q` / `--quiet` for minimal output
+
+**Research**: See `ai/research/cli-oneshot-patterns-2026.md`

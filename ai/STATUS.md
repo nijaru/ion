@@ -5,7 +5,7 @@
 | Metric | Value           | Updated    |
 | ------ | --------------- | ---------- |
 | Phase  | 5 - Polish & UX | 2026-01-18 |
-| Focus  | TUI Agent MVP   | 2026-01-18 |
+| Focus  | TUI Polish      | 2026-01-18 |
 | Status | Runnable        | 2026-01-18 |
 | Tests  | 51 passing      | 2026-01-18 |
 
@@ -18,7 +18,7 @@
 - Built-in tools (read, write, edit, bash, glob, grep)
 - MCP client
 - Session management
-- **Claude Code-compatible hook system**
+- Claude Code-compatible hook system
 
 **Memory Plugin** (ion-memory, separate):
 
@@ -28,59 +28,117 @@
 
 ## Session Accomplishments
 
-- Provider picker: compact modal, column layout, Ctrl+C quits
-- Model picker: flat list of all models, sorted by provider/name
-- Model picker: column layout (name, provider dim, context, price)
-- First-time setup: Esc goes back to provider picker
-- Error display in status line
-- Debug logging with ION_LOG=1 env var
+**Model Picker Improvements:**
 
-## Priority: TUI Agent MVP
+- Fixed pricing parsing (OpenRouter returns string prices like "0.000003")
+- Filter out special routing models (bodybuilder, auto) via negative pricing check
+- Sort by org first, then newest models (using `created` timestamp)
+- Column headers: Model | Org | Context | Input | Output
+- Show both input and output pricing
+- Free models show "free" in green
+- Tab navigation between provider and model pickers
 
-**P0 - Critical Path:** COMPLETE
+**Provider Picker:**
 
-**P1 - Polish:**
+- Compact modal, column layout
+- Tab switches to model picker (if models loaded)
 
-- [x] Status line: `model · %% · [branch] · cwd`
-- [x] Thinking display: `[low]` / `[med]` / `[high]` right side of input
-- [ ] Terminal title: `ion <cwd>`
-- [ ] Model picker: fix pricing display (all show $0.00)
+## Priority: TUI Bugs & Polish
+
+**P0 - Critical Bugs:**
+
+- [ ] tk-ltfn: Spinner/Ionizing persists after agent completion
+- [ ] tk-pm5r: Text input box disappears during agent response
+- [ ] tk-3jba: Ctrl+C not interruptible during tool execution
+
+**P1 - UX Issues:**
+
+- [ ] tk-arh6: Tool execution not visually obvious
+- [ ] tk-yx6s: Message headers show 'ion' instead of model name
+- [ ] tk-3ffy: Tool indicator '~ tool' not intuitive
+- [ ] tk-4xe8: Approval dialog wording (APPROVAL → Approval)
+- [ ] tk-32ou: Status/progress text positioning
+- [ ] tk-o4uo: Modal escape handling consistency
 
 **P2 - Features:**
 
+- [ ] Terminal title: `ion <cwd>`
 - [ ] Slash command autocomplete (fuzzy)
-- [x] Context tracking (tokens used/max) - shows % in status line
 - [ ] Session retention (30 days)
 
 **P3 - Plugin System:**
 
 - [ ] Hook event enum
 - [ ] Hook runner (subprocess, JSON stdin/stdout)
-- [ ] Plugin discovery (.ion/plugins/, ~/.config/ion/plugins/)
-- [ ] MCP server loading from plugins
+- [ ] Plugin discovery
 
-**P4 - Memory Plugin:**
+## TUI Issues Detail
 
-- [ ] Port OmenDB memory hooks
-- [ ] Or use existing TypeScript plugin via Bun
+### Bugs
+
+1. **Spinner persists** - "Ionizing..." and spinner remain after agent completes
+2. **Input disappears** - Text box vanishes during response, should always be visible
+3. **Can't interrupt** - Ctrl+C doesn't work during tool execution, can't exit app
+
+### UX Problems
+
+4. **Tool calls unclear** - Not obvious when tools are running vs spinner for no reason
+   - Claude Code shows: `⏺ Bash(command)` with collapsible output
+   - We show: `~ tool` / `Executing bash...` which is vague
+
+5. **Message headers** - Shows "ion" instead of actual model (e.g., "claude-sonnet-4")
+   - User may switch models mid-conversation
+   - Important for debugging which model responded
+
+6. **Tool indicator** - `~` is not intuitive, consider `⏺` or `>`
+
+7. **Approval dialog**:
+   - "APPROVAL" is shouty → "Approval"
+   - "(A)lways permanent" wording unclear
+   - May accept wrong keys (needs investigation)
+
+8. **Layout during execution**:
+   - Input should always be visible
+   - Progress/status on line below input, above status line
+   - Empty line buffer at bottom
+
+9. **Modal escape**:
+   - Provider picker: Escape blocked during setup (should close)
+   - Model picker: Tab for switching, Escape for closing
+
+## Reference: Claude Code Style
+
+```
+⏺ Bash(echo "hello")
+  ⎿  hello
+
+⏺ Write(path/to/file.rs)
+  ⎿  Wrote 158 lines to path/to/file.rs
+     ... (ctrl+o to expand)
+
+⏺ Done. Summary here.
+```
+
+Key patterns:
+
+- `⏺` prefix for tool calls
+- Tool name with args in parens
+- Collapsible output with line counts
+- Clear "Done." marker
 
 ## Completed
 
 - [x] TUI Modernization: Minimal Claude Code style
 - [x] Help modal: One keybinding per line, centered headers
-- [x] Plugin architecture design (`ai/design/plugin-architecture.md`)
+- [x] Plugin architecture design
 - [x] Hardened Errors: Type-safe error hierarchy
 - [x] Context Caching: minijinja render cache
 - [x] First-time setup flow
 - [x] Provider/Model picker UX overhaul
+- [x] Model picker pricing (fixed)
+- [x] Model sorting (org → newest)
 
 ## Design Documents
 
 - `ai/design/plugin-architecture.md` - Hook system, plugin format
 - `ai/DECISIONS.md` - All architecture decisions
-
-## Blockers
-
-- Model picker pricing: OpenRouter API returns prices but parsing shows $0.00
-  - Need to investigate API response format (string vs number)
-  - Special models (auto, bodybuilder) filtered but may be others

@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "3jba",
+  "title": "[BUG] Ctrl+C not interruptible during tool execution",
+  "description": null,
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-18T18:24:08.927Z",
+  "updated_at": "2026-01-18T18:24:08.927Z",
+  "completed_at": null,
+  "external": {}
+}
