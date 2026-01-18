@@ -578,9 +578,8 @@ pub async fn fetch_models_for_picker(
     prefs: &ProviderPrefs,
 ) -> Result<Vec<ModelInfo>, anyhow::Error> {
     let models = registry.fetch_hybrid(provider).await?;
-    let filter = ModelFilter {
-        require_tools: true, // Agent needs tool support
-        ..Default::default()
-    };
+    // Don't filter by tool support - OpenRouter models generally support tools
+    // and the metadata from models.dev may be incomplete
+    let filter = ModelFilter::default();
     Ok(registry.list_models_from_vec(models, &filter, prefs))
 }
