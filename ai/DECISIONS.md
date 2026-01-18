@@ -554,3 +554,86 @@ No reason to go through MCP when we can use the Rust crate directly.
 4. Memory integration (Phase 6)
 
 **Rationale**: Ship a working agent first, then add the differentiating features. Memory adds complexity (embeddings, indexing, retrieval) that shouldn't block MVP.
+
+---
+
+## 2026-01-18: Plugin Architecture (Claude Code Compatible)
+
+**Context**: Need plugin system for memory integration. Evaluated Claude Code, OpenCode, and pi-mono plugin ecosystems.
+
+**Decision**: Implement Claude Code-compatible hook system.
+
+| Aspect            | Decision                         | Rationale          |
+| ----------------- | -------------------------------- | ------------------ |
+| **Format**        | Claude Code compatible           | Largest ecosystem  |
+| **Hook Types**    | `command` only (shell/binary)    | Simplest, portable |
+| **Memory Plugin** | Separate crate, loaded via hooks | Clean separation   |
+| **MCP Support**   | Keep existing                    | Already working    |
+
+**Hook Events** (matching Claude Code):
+
+- `SessionStart`, `SessionEnd`
+- `UserPromptSubmit` (memory injection)
+- `PreToolUse`, `PostToolUse`, `PostToolUseFailure`
+- `PreCompact` (memory save)
+- `Stop`, `Notification`
+
+**Memory Plugin Compatibility**: OmenDB memory plugin requires UserPromptSubmit, PostToolUse, SessionStart, PreCompact - all supported.
+
+**Design Doc**: `ai/design/plugin-architecture.md`
+
+---
+
+## 2026-01-18: Thinking Mode Toggle
+
+**Context**: Need thinking mode toggle for reasoning models.
+
+**Decision**: Ctrl+T cycles through levels, display in input box.
+
+| Setting                 | Value                                                       |
+| ----------------------- | ----------------------------------------------------------- |
+| **Keybinding**          | Ctrl+T                                                      |
+| **Levels**              | off → low → med → high → off                                |
+| **Display**             | `[low]` / `[med]` / `[high]` in input box title, right side |
+| **When off**            | No display                                                  |
+| **Persistence**         | Global, persists across models                              |
+| **Non-thinking models** | Auto-disable, no indicator                                  |
+
+**Display Format**:
+
+```
+┌ [WRITE] ─────────────────────────── [med] ┐
+│ > input                                    │
+└────────────────────────────────────────────┘
+```
+
+---
+
+## 2026-01-18: Mode Toggle Keybinding
+
+**Context**: Tab for mode toggle is too easy to hit accidentally.
+
+**Decision**: Change mode toggle from Tab to Shift+Tab.
+
+| Before | After     |
+| ------ | --------- |
+| Tab    | Shift+Tab |
+
+**Rationale**: Shift+Tab is harder to hit accidentally, matches Claude Code convention.
+
+---
+
+## 2026-01-18: Help Modal Key Display
+
+**Context**: Deciding between "^" and "Ctrl" notation.
+
+**Decision**: Use "Ctrl" for readability.
+
+| Before | After  |
+| ------ | ------ |
+| ^M     | Ctrl+M |
+| ^P     | Ctrl+P |
+| ^C     | Ctrl+C |
+| ^T     | Ctrl+T |
+
+**Rationale**: "Ctrl" is more readable for newcomers. Worth the extra characters.

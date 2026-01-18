@@ -9,85 +9,77 @@
 | Status | Runnable        | 2026-01-18 |
 | Tests  | 51 passing      | 2026-01-18 |
 
-### Session Accomplishments
+## Architecture
 
-- **Project Renamed**: agnt → ion (crate, repo, all docs, GitHub)
-- **ONNX Runtime Fix**: Removed `load-dynamic` to bundle at build time
-- **TUI Polish**:
-  - Chat: Simple arrows (`< You`, `> ion`)
-  - Status line: Claude Code format
-  - Git branch detection
-  - Loading: "Ionizing..."
-  - Help modal: Centered headers, aligned columns
-  - Slash commands with aliases
-  - Provider/model pickers simplified
-  - Fixed all compiler warnings
+**Core Agent** (ion binary):
 
-### Priority: TUI Agent MVP
+- TUI + Agent loop
+- Built-in providers (OpenRouter, Anthropic, Ollama)
+- Built-in tools (read, write, edit, bash, glob, grep)
+- MCP client
+- Session management
+- **Claude Code-compatible hook system**
 
-Memory system deferred until core TUI is stable.
+**Memory Plugin** (ion-memory, separate):
+
+- OmenDB integration
+- Loaded via hook system
+- Can be skipped for minimal agent
+
+## Session Accomplishments
+
+- Project renamed agnt → ion
+- TUI polish (arrows, status line, help modal)
+- Plugin architecture designed (Claude Code compatible)
+- Thinking mode toggle designed (Ctrl+T cycle)
+
+## Priority: TUI Agent MVP
 
 **P0 - Critical Path:**
 
 - [ ] First-time setup flow (no default provider/model)
-- [ ] Slash command autocomplete (fuzzy)
+- [ ] Shift+Tab for mode toggle (safer)
+- [ ] Ctrl+T thinking toggle (off/low/med/high)
 - [ ] Growing text entry box
 
-**P1 - Status Line:**
+**P1 - Polish:**
 
-- [ ] Format: `model [provider dim] · % (used/max) · [branch]`
+- [ ] Help modal: "Ctrl" instead of "^"
+- [ ] Status line: `model [provider dim] · % · [branch]`
 - [ ] Terminal title: `ion <cwd>`
-- [ ] Config: `show_model`, `show_provider`, `show_context`, `show_branch`, `show_cwd`
-- [ ] Git diff indicators: `+3 -1` (optional)
-- [ ] Custom script support (long-term)
+- [ ] Thinking display: `[low]` / `[med]` / `[high]` right side of input
 
-**P2 - Context Tracking:**
+**P2 - Features:**
 
-- [ ] Token count per message (tiktoken-rs)
-- [ ] Context max from model metadata
-- [ ] Display `26% (52k/200k)` format
-- [ ] Update after compaction
+- [ ] Slash command autocomplete (fuzzy)
+- [ ] Context tracking (tokens used/max)
+- [ ] Session retention (30 days)
 
-**P3 - Session Management:**
+**P3 - Plugin System:**
 
-- [ ] 30-day retention (configurable)
-- [ ] `/resume` command
-- [ ] Session browser/picker
+- [ ] Hook event enum
+- [ ] Hook runner (subprocess, JSON stdin/stdout)
+- [ ] Plugin discovery (.ion/plugins/, ~/.config/ion/plugins/)
+- [ ] MCP server loading from plugins
 
-**Completed:**
+**P4 - Memory Plugin:**
+
+- [ ] Port OmenDB memory hooks
+- [ ] Or use existing TypeScript plugin via Bun
+
+## Completed
 
 - [x] TUI Modernization: Minimal Claude Code style
 - [x] Help modal: One keybinding per line, centered headers
+- [x] Plugin architecture design (`ai/design/plugin-architecture.md`)
 - [x] Hardened Errors: Type-safe error hierarchy
 - [x] Context Caching: minijinja render cache
 
-### Architecture Notes
+## Design Documents
 
-**Text Entry** (`src/tui/mod.rs`):
-
-- Currently fixed `Constraint::Length(3)` (1 line content)
-- Need: Dynamic height up to 50% screen
-
-**Session Store** (`src/session/store.rs`):
-
-- SQLite persistence working
-- No retention cleanup yet
-
-**Slash Commands** (`src/tui/mod.rs`):
-
-- Current: Exact match on Enter
-- Need: Fuzzy autocomplete dropdown, mid-prompt triggers
+- `ai/design/plugin-architecture.md` - Hook system, plugin format
+- `ai/DECISIONS.md` - All architecture decisions
 
 ## Blockers
 
 None.
-
-## Design Decisions
-
-See `ai/DECISIONS.md` for:
-
-- Status Line Architecture
-- Slash Command System
-- Session Retention Policy
-- First-Time Setup Flow
-- Memory System Deferral
