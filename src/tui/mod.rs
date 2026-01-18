@@ -104,6 +104,10 @@ pub struct App {
     pub config: Config,
     /// TUI frame counter for animations
     pub frame_count: u64,
+    /// First-time setup in progress (blocks normal input until complete)
+    pub needs_setup: bool,
+    /// Whether we've started fetching models for setup (prevents duplicate fetches)
+    setup_fetch_started: bool,
 }
 
 struct TuiApprovalHandler {
@@ -265,7 +269,8 @@ impl App {
 
         // Create new session with current directory
         let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let session = Session::new(working_dir, config.default_model.clone());
+        let model = config.default_model.clone().unwrap_or_default();
+        let session = Session::new(working_dir, model);
 
         let (agent_tx, agent_rx) = mpsc::channel(100);
         let (session_tx, session_rx) = mpsc::channel(1);
@@ -273,8 +278,20 @@ impl App {
         // Model registry for picker
         let model_registry = Arc::new(ModelRegistry::new(api_key, config.model_cache_ttl_secs));
 
-        Self {
-            mode: Mode::Input,
+        // Detect if first-time setup is needed
+        let needs_setup = config.needs_setup();
+        let initial_mode = if needs_setup {
+            if !config.has_api_key() {
+                Mode::ProviderPicker
+            } else {
+                Mode::ModelPicker
+            }
+        } else {
+            Mode::Input
+        };
+
+        let mut this = Self {
+            mode: initial_mode,
             should_quit: false,
             input: String::new(),
             cursor_pos: 0,
@@ -302,7 +319,21 @@ impl App {
             model_registry,
             config,
             frame_count: 0,
+            needs_setup,
+            setup_fetch_started: false,
+        };
+
+        // Initialize setup flow if needed
+        if this.needs_setup {
+            if this.mode == Mode::ProviderPicker {
+                this.provider_picker.refresh();
+            } else if this.mode == Mode::ModelPicker {
+                this.model_picker.is_loading = true;
+                // Models will be fetched when run loop starts
+            }
         }
+
+        this
     }
 
     /// Resume an existing session by ID.
@@ -323,6 +354,19 @@ impl App {
 
     pub fn update(&mut self) {
         self.frame_count = self.frame_count.wrapping_add(1);
+
+        // Start fetching models if in setup mode and model picker needs them
+        if self.needs_setup
+            && self.mode == Mode::ModelPicker
+            && !self.model_picker.has_models()
+            && !self.setup_fetch_started
+            && self.model_picker.error.is_none()
+        {
+            self.setup_fetch_started = true;
+            self.model_picker.is_loading = true;
+            self.fetch_models();
+        }
+
         // Poll agent events
         while let Ok(event) = self.agent_rx.try_recv() {
             match &event {
@@ -773,6 +817,10 @@ impl App {
                     if let Some(model) = self.model_picker.selected_model() {
                         self.session.model = model.id.clone();
                         self.model_picker.reset();
+                        // Complete setup if this was the setup flow
+                        if self.needs_setup {
+                            self.needs_setup = false;
+                        }
                         self.mode = Mode::Input;
                     }
                 }
@@ -781,17 +829,23 @@ impl App {
             // Back navigation
             KeyCode::Backspace if self.model_picker.filter.is_empty() => {
                 if self.model_picker.stage == PickerStage::Model {
-                    self.model_picker.back_to_providers();
+                    // During setup, don't allow going back to provider stage from model picker
+                    // (they already selected provider in previous step)
+                    if !self.needs_setup {
+                        self.model_picker.back_to_providers();
+                    }
                 }
             }
             KeyCode::Backspace => {
                 self.model_picker.pop_char();
             }
 
-            // Cancel
+            // Cancel - blocked during setup
             KeyCode::Esc => {
-                self.model_picker.reset();
-                self.mode = Mode::Input;
+                if !self.needs_setup {
+                    self.model_picker.reset();
+                    self.mode = Mode::Input;
+                }
             }
 
             // Type to filter
@@ -886,14 +940,20 @@ impl App {
                     if status.authenticated && status.implemented {
                         let provider = status.provider;
                         self.switch_provider(provider);
+                        // During setup, chain to model picker
+                        if self.needs_setup {
+                            self.open_model_picker();
+                        }
                     }
                     // If not authenticated/implemented, do nothing (can't select)
                 }
             }
 
-            // Cancel
+            // Cancel - blocked during setup
             KeyCode::Esc => {
-                self.mode = Mode::Input;
+                if !self.needs_setup {
+                    self.mode = Mode::Input;
+                }
             }
 
             // Type to filter
@@ -1212,11 +1272,32 @@ impl App {
 
         // Render modals on top if active
         match self.mode {
-            Mode::ModelPicker => self.model_picker.render(frame),
-            Mode::ProviderPicker => self.provider_picker.render(frame),
+            Mode::ModelPicker => {
+                if self.needs_setup {
+                    self.render_setup_banner(frame, "Select a model");
+                }
+                self.model_picker.render(frame);
+            }
+            Mode::ProviderPicker => {
+                if self.needs_setup {
+                    self.render_setup_banner(frame, "Select a provider");
+                }
+                self.provider_picker.render(frame);
+            }
             Mode::HelpOverlay => self.render_help_overlay(frame),
             _ => {}
         }
+    }
+
+    /// Render a setup banner at the top of the screen
+    fn render_setup_banner(&self, frame: &mut Frame, step: &str) {
+        let area = frame.area();
+        let banner_area = Rect::new(0, 0, area.width, 1);
+        let text = format!(" Welcome to ion! {} to continue. ", step);
+        let banner = Paragraph::new(text)
+            .style(Style::default().fg(Color::Black).bg(Color::Cyan))
+            .alignment(ratatui::layout::Alignment::Center);
+        frame.render_widget(banner, banner_area);
     }
 
     fn render_help_overlay(&self, frame: &mut Frame) {

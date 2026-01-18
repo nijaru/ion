@@ -9,7 +9,8 @@ use std::path::PathBuf;
 pub struct Config {
     pub openrouter_api_key: Option<String>,
     pub anthropic_api_key: Option<String>,
-    pub default_model: String,
+    /// User's selected model. None until first setup.
+    pub default_model: Option<String>,
     pub data_dir: PathBuf,
 
     /// Provider preferences for model filtering and routing.
@@ -31,7 +32,7 @@ impl Default for Config {
         Self {
             openrouter_api_key: None,
             anthropic_api_key: None,
-            default_model: "deepseek/deepseek-chat".to_string(),
+            default_model: None,
             data_dir,
             provider_prefs: ProviderPrefs::default(),
             model_cache_ttl_secs: 3600,
@@ -44,6 +45,17 @@ impl Config {
     /// Path to the sessions SQLite database.
     pub fn sessions_db_path(&self) -> PathBuf {
         self.data_dir.join("sessions.db")
+    }
+
+    /// Check if first-time setup is needed (no API key or no model selected).
+    pub fn needs_setup(&self) -> bool {
+        let has_api_key = self.openrouter_api_key.is_some() || self.anthropic_api_key.is_some();
+        !has_api_key || self.default_model.is_none()
+    }
+
+    /// Check if any API provider is configured.
+    pub fn has_api_key(&self) -> bool {
+        self.openrouter_api_key.is_some() || self.anthropic_api_key.is_some()
     }
 
     pub fn load() -> anyhow::Result<Self> {
