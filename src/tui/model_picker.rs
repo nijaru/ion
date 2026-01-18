@@ -108,6 +108,10 @@ impl ModelPicker {
     pub fn start_all_models(&mut self) {
         self.selected_provider = None;
         self.provider_models = self.all_models.clone();
+        // Sort by provider, then by model name
+        self.provider_models.sort_by(|a, b| {
+            a.provider.cmp(&b.provider).then_with(|| a.name.cmp(&b.name))
+        });
         self.stage = PickerStage::Model;
         self.filter.clear();
         self.apply_model_filter();
@@ -519,10 +523,10 @@ impl ModelPicker {
     }
 
     fn render_model_list(&mut self, frame: &mut Frame, area: Rect) {
-        // Column widths for alignment (total ~75 chars inner)
-        let name_width = 40usize;
-        let provider_width = 15usize;
-        let context_width = 10usize;
+        // Column widths (total ~75 chars inner width)
+        let name_width = 38usize;
+        let provider_width = 18usize;
+        let context_width = 8usize;
         let price_width = 10usize;
 
         let items: Vec<ListItem> = self
@@ -533,9 +537,21 @@ impl ModelPicker {
                 let model_name = m.id.split('/').nth(1).unwrap_or(&m.id);
                 let provider = m.id.split('/').next().unwrap_or("");
 
+                // Truncate if needed
+                let name_display: String = if model_name.len() > name_width {
+                    format!("{}…", &model_name[..name_width - 1])
+                } else {
+                    model_name.to_string()
+                };
+                let provider_display: String = if provider.len() > provider_width {
+                    format!("{}…", &provider[..provider_width - 1])
+                } else {
+                    provider.to_string()
+                };
+
                 // Format columns with padding
-                let name_col = format!("{:width$}", model_name, width = name_width);
-                let provider_col = format!("{:width$}", provider, width = provider_width);
+                let name_col = format!("{:width$}", name_display, width = name_width);
+                let provider_col = format!("{:width$}", provider_display, width = provider_width);
                 let context_col = format!("{:>width$}", format!("{}k", m.context_window / 1000), width = context_width);
                 let price_col = format!("{:>width$}", format!("${:.2}", m.pricing.input), width = price_width);
 

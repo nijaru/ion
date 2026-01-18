@@ -303,13 +303,19 @@ impl Provider for OpenRouterProvider {
         Ok(data
             .data
             .into_iter()
+            .filter(|m| {
+                // Filter out special routing models
+                !matches!(m.id.as_str(), "openrouter/auto" | "openrouter/bodybuilder")
+            })
             .map(|m| {
                 // Extract actual model provider from ID (e.g., "anthropic/claude-sonnet-4" -> "anthropic")
                 let provider = m.id.split('/').next().unwrap_or("unknown").to_string();
-                // Convert per-token to per-million-token pricing
+                // Convert per-token to per-million-token pricing (ensure non-negative)
+                let input_price = (m.pricing.prompt * 1_000_000.0).max(0.0);
+                let output_price = (m.pricing.completion * 1_000_000.0).max(0.0);
                 let pricing = ModelPricing {
-                    input: m.pricing.prompt * 1_000_000.0,
-                    output: m.pricing.completion * 1_000_000.0,
+                    input: input_price,
+                    output: output_price,
                     cache_read: None,
                     cache_write: None,
                 };
