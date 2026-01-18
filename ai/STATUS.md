@@ -32,20 +32,23 @@
 - Shift+Tab for mode toggle (safer than Tab)
 - Help modal: "Ctrl" instead of "^"
 - Ctrl+T thinking toggle (off/low/med/high, displays [level] in input box)
+- Growing text entry box (3-10 lines)
+- Status line with context % display
 
 ## Priority: TUI Agent MVP
 
-**P0 - Critical Path:**
+**P0 - Critical Path:** ✓ COMPLETE
 
 - [x] First-time setup flow (no default provider/model)
 - [x] Shift+Tab for mode toggle (safer)
 - [x] Help modal: "Ctrl" instead of "^"
 - [x] Ctrl+T thinking toggle (off/low/med/high)
-- [ ] Growing text entry box
+- [x] Growing text entry box
+- [x] Status line with context %
 
-**P1 - Polish:**
+**P1 - Polish:** ✓ COMPLETE
 
-- [ ] Status line: `model [provider dim] · % · [branch]`
+- [x] Status line: `model · %% · [branch] · cwd`
 - [ ] Terminal title: `ion <cwd>`
 - [ ] Thinking display: `[low]` / `[med]` / `[high]` right side of input
 
