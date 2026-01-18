@@ -1,6 +1,6 @@
 # ion
 
-A TUI coding agent that runs in your terminal.
+Fast, lightweight, open-source coding agent.
 
 ## Features
 
