@@ -2,12 +2,13 @@
 
 ## Current State
 
-| Metric | Value           | Updated    |
-| ------ | --------------- | ---------- |
-| Phase  | 5 - Polish & UX | 2026-01-18 |
-| Focus  | TUI Polish      | 2026-01-18 |
-| Status | Runnable        | 2026-01-18 |
-| Tests  | 51 passing      | 2026-01-18 |
+| Metric    | Value           | Updated    |
+| --------- | --------------- | ---------- |
+| Phase     | 5 - Polish & UX | 2026-01-18 |
+| Focus     | TUI Polish      | 2026-01-18 |
+| Status    | Runnable        | 2026-01-18 |
+| Toolchain | stable          | 2026-01-18 |
+| Tests     | 49 passing      | 2026-01-18 |
 
 ## Architecture
 
@@ -17,37 +18,38 @@
 - Built-in providers (OpenRouter, Anthropic, Ollama)
 - Built-in tools (read, write, edit, bash, glob, grep)
 - MCP client
-- Session management
+- Session management (rusqlite)
 - Claude Code-compatible hook system
 
-**Memory Plugin** (ion-memory, separate):
+**Memory** (archived to nijaru/ion-archive):
 
-- OmenDB integration
-- Loaded via hook system
-- Can be skipped for minimal agent
+- Will re-implement after TUI agent is fully working
+- OmenDB + native Rust embeddings
 
 ## Session Accomplishments
 
-**Dependency Audit:**
+**Memory Removal / Stable Switch:**
 
-- Full audit of Cargo.toml for SOTA replacements
-- Created `ai/design/dependency-upgrades.md` with research and plan
-- Added 4 tasks for dependency work (tk-ykpu, tk-cfmz, tk-ha1x, tk-9tkf)
+- Archived memory code to nijaru/ion-archive
+- Removed src/memory/ module and all references
+- Switched rust-toolchain.toml from nightly to stable
+- Removed omendb dependency (required nightly for portable_simd)
+- Updated all docs to reflect current state
 
-**Key Findings:**
+**Dependency Upgrades (completed):**
 
-- `ignore` crate already in deps but unused - grep/glob should use it
-- `tiktoken-rs` can be replaced with GitHub's `bpe` (4x faster)
-- `walkdir`, `serde_yaml`, `glob` can be removed (unused/deprecated/redundant)
+- grep tool now uses `ignore` crate (respects .gitignore)
+- glob tool now uses `globset` (via ignore)
+- Replaced `tiktoken-rs` with `bpe-openai` (4x faster)
+- Removed unused deps: walkdir, serde_yaml, glob
+
+**Documentation:**
+
+- Updated GitHub repo description
+- Cleaned README (added WIP note, removed nightly requirement)
+- Updated AGENTS.md/CLAUDE.md
 
 ## Open Tasks
-
-**Dependencies (HIGH):**
-
-- [ ] tk-ykpu: Upgrade grep tool to use ignore crate
-- [ ] tk-cfmz: Upgrade glob tool to use globset
-- [ ] tk-ha1x: Remove unused deps (walkdir, serde_yaml, glob)
-- [ ] tk-9tkf: Replace tiktoken-rs with GitHub bpe crate
 
 **Bugs:**
 
@@ -69,8 +71,10 @@
 
 ## Completed
 
+- [x] Dependency upgrades (grep, glob, tokenizer)
+- [x] Memory removal / stable Rust switch
 - [x] Config persistence (model selection saved)
-- [x] Up arrow recalls queued messages (tk-rre9)
+- [x] Up arrow recalls queued messages
 - [x] ANSI color support for tool output
 - [x] Input always visible
 - [x] Message queueing (multiple messages)
@@ -84,9 +88,9 @@
 
 ## Design Documents
 
-- `ai/design/tui.md` - TUI interface spec (keybindings, layout, features)
-- `ai/design/diff-highlighting.md` - Diff rendering implementation plan
+- `ai/design/tui.md` - TUI interface spec
+- `ai/design/diff-highlighting.md` - Diff rendering plan
 - `ai/design/interrupt-handling.md` - Ctrl+C behavior spec
-- `ai/design/dependency-upgrades.md` - SOTA lib replacements (grep, glob, tokenizer)
+- `ai/design/dependency-upgrades.md` - Lib replacements (done)
 - `ai/design/plugin-architecture.md` - Hook system, plugin format
 - `ai/DECISIONS.md` - All architecture decisions

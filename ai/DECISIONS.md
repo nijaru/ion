@@ -702,3 +702,20 @@ No reason to go through MCP when we can use the Rust crate directly.
 **Why subcommand only**: Dual entry points (`run` + `-p`) add complexity for minimal benefit. Since ion uses OpenRouter's provider/model format (like OpenCode), subcommand style is more consistent.
 
 **Research**: See `ai/research/cli-oneshot-patterns-2026.md`
+
+---
+
+## 2026-01-18: Remove Memory System, Switch to Stable Rust
+
+**Context**: OmenDB requires nightly Rust for `portable_simd`. Memory system is the key differentiator but TUI agent should be fully functional first.
+
+**Decision**: Archive memory code, switch to stable Rust.
+
+| Action                | Implementation                    |
+| --------------------- | --------------------------------- |
+| **Archive**           | Pushed to nijaru/ion-archive repo |
+| **Removal**           | Deleted src/memory/, all refs     |
+| **Toolchain**         | rust-toolchain.toml → stable      |
+| **Re-implementation** | After TUI agent is fully working  |
+
+**Rationale**: Ship a working, stable agent first. Memory adds complexity that shouldn't block core functionality. Stable Rust is more accessible for contributors
