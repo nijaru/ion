@@ -28,14 +28,13 @@
 
 ## Session Accomplishments
 
-**CLI One-Shot Mode Design (Revised):**
+**CLI One-Shot Mode Implemented:**
 
-- Reviewed and refactored design
-- Simplified to subcommand-only (`ion run`), dropped dual `-p` flag
-- Added essential automation flags: `-y`/`--yes`, `--max-turns`
-- Clarified stdin semantics: `-` = prompt, pipe = context
-- Defined exit codes: 0=success, 1=error, 2=interrupted, 3=max-turns
-- See `ai/DECISIONS.md` and `ai/research/cli-oneshot-patterns-2026.md`
+- `ion run "prompt"` with full flag support
+- Flags: `-m`, `-o`, `-q`, `-y`, `-f`, `-v`, `--max-turns`, `--no-tools`, `--cwd`
+- Output formats: text, json, stream-json
+- Exit codes: 0=success, 1=error, 2=interrupted, 3=max-turns
+- Code reviewed and all findings fixed (UTF-8 safety, error handling, abort token)
 
 **Model Picker (Previous Session):**
 
@@ -61,7 +60,7 @@
 
 **P2 - Features:**
 
-- [ ] tk-9n1n: CLI one-shot mode (`ion run`) - design complete
+- [x] tk-9n1n: CLI one-shot mode (`ion run`) - DONE
 - [ ] Terminal title: `ion <cwd>`
 - [ ] Slash command autocomplete (fuzzy)
 - [ ] Session retention (30 days)
@@ -137,6 +136,7 @@ Key patterns:
 - [x] Provider/Model picker UX overhaul
 - [x] Model picker pricing (fixed)
 - [x] Model sorting (org → newest)
+- [x] CLI one-shot mode (`ion run`)
 
 ## Design Documents
 
