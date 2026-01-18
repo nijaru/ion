@@ -270,6 +270,7 @@ impl ModelRegistry {
                         cache_read: m.pricing.cache_read.map(|p| p * 1_000_000.0),
                         cache_write: m.pricing.cache_write.map(|p| p * 1_000_000.0),
                     },
+                    created: 0,
                 }
             })
             .collect();

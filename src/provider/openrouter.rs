@@ -129,27 +129,39 @@ struct OpenRouterApiModel {
     context_length: u32,
     #[serde(default)]
     pricing: OpenRouterPricing,
+    #[serde(default)]
+    created: u64,
 }
 
 #[derive(Debug, Deserialize, Default)]
 struct OpenRouterPricing {
-    #[serde(default, deserialize_with = "parse_price_string")]
-    prompt: f64,
-    #[serde(default, deserialize_with = "parse_price_string")]
-    completion: f64,
+    #[serde(default)]
+    prompt: serde_json::Value,
+    #[serde(default)]
+    completion: serde_json::Value,
 }
 
-fn parse_price_string<'de, D>(deserializer: D) -> Result<f64, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    use serde::de::Error;
-    let value: serde_json::Value = serde::Deserialize::deserialize(deserializer)?;
-    match value {
-        serde_json::Value::String(s) => s.parse().map_err(D::Error::custom),
-        serde_json::Value::Number(n) => n.as_f64().ok_or_else(|| D::Error::custom("invalid number")),
-        serde_json::Value::Null => Ok(0.0),
-        _ => Err(D::Error::custom("expected string or number")),
+impl OpenRouterPricing {
+    /// Parse price value (can be string like "0.000003" or number or "-1" for special models)
+    fn parse_price(value: &serde_json::Value) -> f64 {
+        match value {
+            serde_json::Value::String(s) => s.parse().unwrap_or(0.0),
+            serde_json::Value::Number(n) => n.as_f64().unwrap_or(0.0),
+            _ => 0.0,
+        }
+    }
+
+    fn prompt_price(&self) -> f64 {
+        Self::parse_price(&self.prompt)
+    }
+
+    fn completion_price(&self) -> f64 {
+        Self::parse_price(&self.completion)
+    }
+
+    /// Check if this is a special routing model with variable pricing
+    fn is_variable(&self) -> bool {
+        self.prompt_price() < 0.0 || self.completion_price() < 0.0
     }
 }
 
@@ -304,15 +316,15 @@ impl Provider for OpenRouterProvider {
             .data
             .into_iter()
             .filter(|m| {
-                // Filter out special routing models
-                !matches!(m.id.as_str(), "openrouter/auto" | "openrouter/bodybuilder")
+                // Filter out special routing models with variable pricing (-1)
+                !m.pricing.is_variable()
             })
             .map(|m| {
                 // Extract actual model provider from ID (e.g., "anthropic/claude-sonnet-4" -> "anthropic")
                 let provider = m.id.split('/').next().unwrap_or("unknown").to_string();
-                // Convert per-token to per-million-token pricing (ensure non-negative)
-                let input_price = (m.pricing.prompt * 1_000_000.0).max(0.0);
-                let output_price = (m.pricing.completion * 1_000_000.0).max(0.0);
+                // Convert per-token to per-million-token pricing
+                let input_price = m.pricing.prompt_price() * 1_000_000.0;
+                let output_price = m.pricing.completion_price() * 1_000_000.0;
                 let pricing = ModelPricing {
                     input: input_price,
                     output: output_price,
@@ -329,6 +341,7 @@ impl Provider for OpenRouterProvider {
                     supports_thinking: false,
                     supports_cache: false,
                     pricing,
+                    created: m.created,
                 }
             })
             .collect())

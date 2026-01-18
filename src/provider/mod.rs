@@ -117,6 +117,8 @@ pub struct ModelInfo {
     pub supports_thinking: bool,
     pub supports_cache: bool,
     pub pricing: ModelPricing,
+    /// Unix timestamp when model was added (for sorting newest first)
+    pub created: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

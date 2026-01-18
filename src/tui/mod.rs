@@ -920,6 +920,13 @@ impl App {
                 }
             }
 
+            // Tab: Switch to provider picker
+            KeyCode::Tab => {
+                self.model_picker.reset();
+                self.mode = Mode::ProviderPicker;
+                self.provider_picker.refresh();
+            }
+
             // Type to filter (only regular chars without ctrl modifier)
             KeyCode::Char(c) if !ctrl => {
                 self.model_picker.push_char(c);
@@ -1015,6 +1022,14 @@ impl App {
             KeyCode::Esc => {
                 if !self.needs_setup {
                     self.mode = Mode::Input;
+                }
+            }
+
+            // Tab: Switch to model picker (only if models are loaded)
+            KeyCode::Tab => {
+                if self.model_picker.has_models() {
+                    self.model_picker.start_all_models();
+                    self.mode = Mode::ModelPicker;
                 }
             }
 
