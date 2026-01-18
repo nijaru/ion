@@ -249,6 +249,7 @@ impl Provider for OpenRouterProvider {
     }
 
     async fn list_models(&self) -> Result<Vec<ModelInfo>, ProviderError> {
+        tracing::debug!("OpenRouter::list_models - fetching from {}/models", self.base_url);
         let response = self
             .client
             .get(format!("{}/models", self.base_url))
@@ -256,9 +257,12 @@ impl Provider for OpenRouterProvider {
             .send()
             .await?;
 
+        tracing::debug!("OpenRouter::list_models - response status: {}", response.status());
+
         if !response.status().is_success() {
             let status = response.status();
             let text = response.text().await.unwrap_or_default();
+            tracing::debug!("OpenRouter::list_models - error: {}", text);
             return Err(ProviderError::Api {
                 code: status.to_string(),
                 message: text,
@@ -269,6 +273,8 @@ impl Provider for OpenRouterProvider {
             .json()
             .await
             .map_err(|e| ProviderError::Stream(format!("Failed to parse models: {}", e)))?;
+
+        tracing::debug!("OpenRouter::list_models - parsed {} models", data.data.len());
 
         Ok(data
             .data
