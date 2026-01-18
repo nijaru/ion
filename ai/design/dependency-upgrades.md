@@ -1,6 +1,6 @@
 # Design: Dependency Upgrades
 
-**Status:** Planned
+**Status:** Complete
 **Priority:** High (grep/glob), Medium (tokenizer), Low (cleanup)
 
 ## Overview
