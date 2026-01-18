@@ -377,6 +377,12 @@ impl App {
     pub fn update(&mut self) {
         self.frame_count = self.frame_count.wrapping_add(1);
 
+        // Re-trigger setup flow if needed (e.g., user pressed Esc)
+        if self.needs_setup && self.mode == Mode::Input {
+            self.mode = Mode::ProviderPicker;
+            self.provider_picker.refresh();
+        }
+
         // Start fetching models if in setup mode and model picker needs them
         if self.needs_setup
             && self.mode == Mode::ModelPicker
@@ -1007,11 +1013,9 @@ impl App {
                 }
             }
 
-            // Cancel - blocked during setup
+            // Cancel - always allow, update() will re-trigger setup if needed
             KeyCode::Esc => {
-                if !self.needs_setup {
-                    self.mode = Mode::Input;
-                }
+                self.mode = Mode::Input;
             }
 
             // Tab: Switch to model picker (only if models are loaded)
