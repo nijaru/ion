@@ -469,13 +469,15 @@ impl App {
                 self.take_snapshot();
             }
 
-            // Enter: Send message (or newline with Shift)
+            // Alt+Enter: Insert newline (Shift+Enter unreliable across terminals)
+            KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => {
+                self.input.insert(self.cursor_pos, '\n');
+                self.cursor_pos += 1;
+            }
+
+            // Enter: Send message
             KeyCode::Enter => {
-                if shift {
-                    // Shift+Enter: Insert newline
-                    self.input.insert(self.cursor_pos, '\n');
-                    self.cursor_pos += 1;
-                } else if !self.input.is_empty() && !self.is_running {
+                if !self.input.is_empty() && !self.is_running {
                     // Check for slash commands
                     if self.input.starts_with('/') {
                         let cmd = self.input.trim().to_lowercase();
@@ -968,7 +970,7 @@ impl App {
    Ctrl+H      - Help Overlay
    Ctrl+S      - UI Snapshot
    Tab         - Cycle Tool Mode (Read/Write/Agi)
-   Shift+Enter - Insert Newline
+   Alt+Enter   - Insert Newline
    PageUp/Down - Scroll History
    Ctrl+C      - Clear Input / Quit
          "#;
@@ -1088,32 +1090,32 @@ impl App {
             match entry.sender {
                 Sender::User => {
                     chat_lines.push(Line::from(vec![
-                        Span::styled("  󰭹 ", Style::default().fg(Color::Cyan)),
-                        Span::styled("User", Style::default().fg(Color::Cyan).bold()),
+                        Span::styled(" > ", Style::default().fg(Color::Cyan)),
+                        Span::styled("You", Style::default().fg(Color::Cyan).bold()),
                     ]));
                     let md = tui_markdown::from_str(content);
                     for line in &md.lines {
-                        let mut padded = vec![Span::raw(" ")];
+                        let mut padded = vec![Span::raw("   ")];
                         padded.extend(line.spans.clone());
                         chat_lines.push(Line::from(padded));
                     }
                 }
                 Sender::Agent => {
                     chat_lines.push(Line::from(vec![
-                        Span::styled("  󱚣 ", Style::default().fg(Color::Green)),
-                        Span::styled("Agent", Style::default().fg(Color::Green).bold()),
+                        Span::styled(" < ", Style::default().fg(Color::Green)),
+                        Span::styled("ion", Style::default().fg(Color::Green).bold()),
                     ]));
                     let md = tui_markdown::from_str(content);
                     for line in &md.lines {
-                        let mut padded = vec![Span::raw(" ")];
+                        let mut padded = vec![Span::raw("   ")];
                         padded.extend(line.spans.clone());
                         chat_lines.push(Line::from(padded));
                     }
                 }
                 Sender::Tool => {
                     chat_lines.push(Line::from(vec![
-                        Span::styled("  󰓆 ", Style::default().fg(Color::Magenta).dim()),
-                        Span::styled("Tool", Style::default().fg(Color::Magenta).dim().bold()),
+                        Span::styled(" ~ ", Style::default().fg(Color::Magenta).dim()),
+                        Span::styled("tool", Style::default().fg(Color::Magenta).dim()),
                     ]));
                     let md = tui_markdown::from_str(content);
                     for line in &md.lines {
@@ -1122,14 +1124,14 @@ impl App {
                             span.style =
                                 span.style.patch(Style::default().fg(Color::Magenta).dim());
                         }
-                        let mut padded = vec![Span::raw(" ")];
+                        let mut padded = vec![Span::raw("   ")];
                         padded.extend(styled_line.spans);
                         chat_lines.push(Line::from(padded));
                     }
                 }
                 Sender::System => {
                     chat_lines.push(Line::from(vec![
-                        Span::styled("  󰋼 ", Style::default().fg(Color::Yellow).dim()),
+                        Span::styled(" ! ", Style::default().fg(Color::Yellow).dim()),
                         Span::styled(*content, Style::default().fg(Color::Yellow).dim().italic()),
                     ]));
                 }
@@ -1231,7 +1233,7 @@ impl App {
                 Span::raw("Send message"),
             ]),
             Line::from(vec![
-                Span::styled("  Shift+Enter  ", Style::default().fg(Color::Cyan)),
+                Span::styled("  Alt+Enter    ", Style::default().fg(Color::Cyan)),
                 Span::raw("Newline"),
             ]),
             Line::from(vec![
