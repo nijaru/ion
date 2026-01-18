@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "otmx",
+  "title": "[UX] Ctrl+G opens input in external editor",
+  "description": null,
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-18T19:56:36.105Z",
+  "updated_at": "2026-01-18T19:56:36.105Z",
+  "completed_at": null,
+  "external": {}
+}

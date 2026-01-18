@@ -429,13 +429,22 @@ impl Agent {
 
         let request = ChatRequest {
             model: session.model.clone(),
-            messages: Arc::new(assembly.messages),
-            system: Some(Cow::Owned(assembly.system_prompt)),
+            messages: Arc::new(assembly.messages.clone()),
+            system: Some(Cow::Owned(assembly.system_prompt.clone())),
             tools: Arc::new(assembly.tools),
             max_tokens: None,
             temperature: None,
             thinking,
         };
+
+        // Count and report input tokens
+        let input_tokens = self.token_counter.count_str(&assembly.system_prompt)
+            + assembly
+                .messages
+                .iter()
+                .map(|m| self.token_counter.count_message(m).total)
+                .sum::<usize>();
+        let _ = tx.send(AgentEvent::InputTokens(input_tokens)).await;
 
         let (stream_tx, mut stream_rx) = mpsc::channel(100);
 
@@ -453,6 +462,9 @@ impl Agent {
         while let Some(event) = stream_rx.recv().await {
             match event {
                 StreamEvent::TextDelta(delta) => {
+                    // Count output tokens
+                    let delta_tokens = self.token_counter.count_str(&delta);
+                    let _ = tx.send(AgentEvent::OutputTokensDelta(delta_tokens)).await;
                     let _ = tx.send(AgentEvent::TextDelta(delta.clone())).await;
                     if let Some(ContentBlock::Text { text }) = assistant_blocks.last_mut() {
                         text.push_str(&delta);
@@ -594,6 +606,10 @@ pub enum AgentEvent {
     MemoryRetrieval { query: String, results_count: usize },
     /// Current token usage for context tracking
     TokenUsage { used: usize, max: usize },
+    /// Input tokens sent to model (prompt tokens)
+    InputTokens(usize),
+    /// Output tokens received delta (completion tokens, incremental)
+    OutputTokensDelta(usize),
     Finished(String),
     Error(String),
     // Model picker events

@@ -149,10 +149,14 @@ pub struct App {
     pub last_error: Option<String>,
     /// Message queue sender for injecting messages during agent execution
     pub message_queue_tx: Option<mpsc::Sender<String>>,
-    /// Queued message waiting to be sent to agent
-    pub queued_message: Option<String>,
+    /// Queued messages waiting to be sent to agent
+    pub queued_messages: Vec<String>,
     /// When the current task started (for elapsed time display)
     pub task_start_time: Option<Instant>,
+    /// Input tokens sent to model (current task)
+    pub input_tokens: usize,
+    /// Output tokens received from model (current task)
+    pub output_tokens: usize,
 }
 
 struct TuiApprovalHandler {
@@ -382,8 +386,10 @@ impl App {
             token_usage: None,
             last_error: None,
             message_queue_tx: None,
-            queued_message: None,
+            queued_messages: Vec::new(),
             task_start_time: None,
+            input_tokens: 0,
+            output_tokens: 0,
         };
 
         // Initialize setup flow if needed
@@ -437,7 +443,7 @@ impl App {
                     self.is_running = false;
                     self.cancel_pending = None;
                     self.message_queue_tx = None;
-                    self.queued_message = None;
+                    self.queued_messages.clear();
                     self.task_start_time = None;
                     self.message_list.push_event(event);
                 }
@@ -459,6 +465,12 @@ impl App {
                 AgentEvent::TokenUsage { used, max } => {
                     self.token_usage = Some((*used, *max));
                 }
+                AgentEvent::InputTokens(count) => {
+                    self.input_tokens = *count;
+                }
+                AgentEvent::OutputTokensDelta(count) => {
+                    self.output_tokens += count;
+                }
                 _ => {
                     self.message_list.push_event(event);
                 }
@@ -471,7 +483,7 @@ impl App {
             self.is_running = false;
             self.cancel_pending = None;
             self.message_queue_tx = None;
-            self.queued_message = None;
+            self.queued_messages.clear();
             self.task_start_time = None;
 
             // Auto-save to persistent storage
@@ -603,13 +615,7 @@ impl App {
                         if let Some(ref tx) = self.message_queue_tx {
                             let msg = std::mem::take(&mut self.input);
                             self.cursor_pos = 0;
-                            self.queued_message = Some(msg.clone());
-                            self.message_list.push_entry(
-                                crate::tui::message_list::MessageEntry::new(
-                                    crate::tui::Sender::System,
-                                    format!("[Queued] {}", msg),
-                                ),
-                            );
+                            self.queued_messages.push(msg.clone());
                             let tx = tx.clone();
                             tokio::spawn(async move {
                                 let _ = tx.send(msg).await;
@@ -1113,6 +1119,8 @@ impl App {
     fn run_agent_task(&mut self, input: String) {
         self.is_running = true;
         self.task_start_time = Some(Instant::now());
+        self.input_tokens = 0;
+        self.output_tokens = 0;
 
         // Reset cancellation token for new task (tokens are single-use)
         self.session.abort_token = CancellationToken::new();
@@ -1120,7 +1128,7 @@ impl App {
         // Create message queue for mid-task steering
         let (queue_tx, queue_rx) = mpsc::channel::<String>(10);
         self.message_queue_tx = Some(queue_tx);
-        self.queued_message = None;
+        self.queued_messages.clear();
 
         let agent = self.agent.clone();
         let session = self.session.clone();
@@ -1387,8 +1395,8 @@ impl App {
             chat_lines.push(Line::from(""));
         }
 
-        // Show queued message at bottom of chat (dimmed, pending)
-        if let Some(ref queued) = self.queued_message {
+        // Show queued messages at bottom of chat (dimmed, pending)
+        for queued in &self.queued_messages {
             chat_lines.push(Line::from(vec![
                 Span::styled(" > ", Style::default().fg(Color::Yellow).dim()),
                 Span::styled(queued.as_str(), Style::default().dim().italic()),
@@ -1425,9 +1433,21 @@ impl App {
                 }
             }
 
-            // TODO: Add streaming token counts when implemented
-            // stats.push(format!("↑ {}", format_tokens(input_tokens)));
-            // stats.push(format!("↓ {}", format_tokens(output_tokens)));
+            // Token counts (format as k for thousands)
+            let format_tokens = |n: usize| -> String {
+                if n >= 1000 {
+                    format!("{:.1}k", n as f64 / 1000.0)
+                } else {
+                    n.to_string()
+                }
+            };
+
+            if self.input_tokens > 0 {
+                stats.push(format!("↑ {}", format_tokens(self.input_tokens)));
+            }
+            if self.output_tokens > 0 {
+                stats.push(format!("↓ {}", format_tokens(self.output_tokens)));
+            }
 
             if !stats.is_empty() {
                 progress_spans.push(Span::styled(
