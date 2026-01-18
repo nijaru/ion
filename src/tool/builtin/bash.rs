@@ -43,10 +43,14 @@ impl Tool for BashTool {
             .ok_or_else(|| ToolError::InvalidArgs("command is required".to_string()))?;
 
         // Spawn child process with kill_on_drop for cancellation safety
+        // Set environment variables to force color output in non-TTY context
         let child = Command::new("bash")
             .arg("-c")
             .arg(command_str)
             .current_dir(&ctx.working_dir)
+            .env("CLICOLOR_FORCE", "1")
+            .env("FORCE_COLOR", "1")
+            .env("TERM", "xterm-256color")
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .kill_on_drop(true)
