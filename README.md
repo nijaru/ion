@@ -12,6 +12,4 @@ cd ion
 cargo run
 ```
 
-## License
-
-MIT
+[MIT](LICENSE)
