@@ -213,13 +213,13 @@ impl ProviderPicker {
                 String::new()
             };
 
+            // Simple format: icon + name + auth hint (no description - it's obvious)
             let line = Line::from(vec![
+                Span::raw("  "),
                 Span::styled(icon, icon_style),
                 Span::raw(" "),
                 Span::styled(status.provider.name(), name_style),
-                Span::raw(" "),
-                Span::styled(status.provider.description(), desc_style),
-                Span::styled(auth_hint, Style::default().dim()),
+                Span::styled(auth_hint, Style::default().fg(Color::Red).dim()),
             ]);
 
             ListItem::new(line)
