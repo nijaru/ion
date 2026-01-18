@@ -482,36 +482,34 @@ impl App {
                     if self.input.starts_with('/') {
                         let cmd = self.input.trim().to_lowercase();
                         match cmd.as_str() {
-                            "/models" => {
+                            "/model" | "/models" => {
                                 self.input.clear();
                                 self.cursor_pos = 0;
                                 self.open_model_picker();
                                 return;
                             }
-                            "/providers" => {
+                            "/provider" | "/providers" => {
                                 self.input.clear();
                                 self.cursor_pos = 0;
                                 self.open_provider_picker();
                                 return;
                             }
-                            "/snapshot" => {
+                            "/quit" | "/exit" | "/q" => {
                                 self.input.clear();
-                                self.cursor_pos = 0;
-                                self.take_snapshot();
+                                self.quit();
                                 return;
                             }
                             "/clear" => {
                                 self.input.clear();
                                 self.cursor_pos = 0;
                                 self.message_list.clear();
-                                // Reset session messages but keep config
                                 self.session.messages.clear();
                                 return;
                             }
-                            "/help" => {
+                            "/help" | "/?" => {
                                 self.input.clear();
                                 self.cursor_pos = 0;
-                                self.show_help();
+                                self.mode = Mode::HelpOverlay;
                                 return;
                             }
                             "/index" => {
@@ -643,6 +641,11 @@ impl App {
                 if self.cursor_pos < self.input.len() {
                     self.input.remove(self.cursor_pos);
                 }
+            }
+
+            // ? shows help when input is empty
+            KeyCode::Char('?') if self.input.is_empty() => {
+                self.mode = Mode::HelpOverlay;
             }
 
             // Character input
@@ -1218,8 +1221,8 @@ impl App {
 
         let left = format!(" {} · {}{}", model_name, branch_part, cwd);
 
-        // Right side: keybindings
-        let right = "^M model · ^P provider · ^H help ";
+        // Right side: minimal hints
+        let right = "? help ";
 
         // Calculate padding for right alignment
         let width = chunks[2].width as usize;
@@ -1246,58 +1249,78 @@ impl App {
 
     fn render_help_overlay(&self, frame: &mut Frame) {
         let area = frame.area();
-        let help_area = Rect::new(
-            area.x + area.width / 4,
-            area.y + area.height / 4,
-            area.width / 2,
-            area.height / 2,
-        );
+        // Fixed size modal, centered
+        let width = 50.min(area.width.saturating_sub(4));
+        let height = 18.min(area.height.saturating_sub(4));
+        let x = (area.width.saturating_sub(width)) / 2;
+        let y = (area.height.saturating_sub(height)) / 2;
+        let help_area = Rect::new(x, y, width, height);
 
         frame.render_widget(ratatui::widgets::Clear, help_area);
 
         let help_text = vec![
-            Line::from(""),
+            Line::from(Span::styled(
+                " Keybindings",
+                Style::default().fg(Color::Yellow).bold(),
+            )),
             Line::from(vec![
-                Span::styled("  Enter        ", Style::default().fg(Color::Cyan)),
-                Span::raw("Send message"),
-            ]),
-            Line::from(vec![
-                Span::styled("  Shift+Enter  ", Style::default().fg(Color::Cyan)),
+                Span::styled("  Enter       ", Style::default().fg(Color::Cyan)),
+                Span::raw("Send · "),
+                Span::styled("Shift+Enter ", Style::default().fg(Color::Cyan)),
                 Span::raw("Newline"),
             ]),
             Line::from(vec![
-                Span::styled("  Tab          ", Style::default().fg(Color::Cyan)),
-                Span::raw("Cycle Mode (Read/Write/Agi)"),
+                Span::styled("  Tab         ", Style::default().fg(Color::Cyan)),
+                Span::raw("Cycle mode (Read/Write/Agi)"),
             ]),
             Line::from(vec![
-                Span::styled("  Ctrl+M       ", Style::default().fg(Color::Cyan)),
-                Span::raw("Model Picker"),
+                Span::styled("  ^M          ", Style::default().fg(Color::Cyan)),
+                Span::raw("Models · "),
+                Span::styled("^P ", Style::default().fg(Color::Cyan)),
+                Span::raw("Providers · "),
+                Span::styled("^H ", Style::default().fg(Color::Cyan)),
+                Span::raw("Help"),
             ]),
             Line::from(vec![
-                Span::styled("  Ctrl+P       ", Style::default().fg(Color::Cyan)),
-                Span::raw("Provider Picker"),
-            ]),
-            Line::from(vec![
-                Span::styled("  Ctrl+H       ", Style::default().fg(Color::Cyan)),
-                Span::raw("Help Overlay"),
-            ]),
-            Line::from(vec![
-                Span::styled("  Ctrl+C       ", Style::default().fg(Color::Cyan)),
-                Span::raw("Clear Input / Quit"),
-            ]),
-            Line::from(vec![
-                Span::styled("  PageUp/Dn    ", Style::default().fg(Color::Cyan)),
-                Span::raw("Scroll Chat"),
+                Span::styled("  ^C          ", Style::default().fg(Color::Cyan)),
+                Span::raw("Clear/Quit · "),
+                Span::styled("PgUp/Dn ", Style::default().fg(Color::Cyan)),
+                Span::raw("Scroll"),
             ]),
             Line::from(""),
-            Line::from(vec![Span::styled(
-                "  Press any key to close",
+            Line::from(Span::styled(
+                " Commands",
+                Style::default().fg(Color::Yellow).bold(),
+            )),
+            Line::from(vec![
+                Span::styled("  /model      ", Style::default().fg(Color::Cyan)),
+                Span::raw("Select model"),
+            ]),
+            Line::from(vec![
+                Span::styled("  /provider   ", Style::default().fg(Color::Cyan)),
+                Span::raw("Select provider"),
+            ]),
+            Line::from(vec![
+                Span::styled("  /clear      ", Style::default().fg(Color::Cyan)),
+                Span::raw("Clear conversation"),
+            ]),
+            Line::from(vec![
+                Span::styled("  /index      ", Style::default().fg(Color::Cyan)),
+                Span::raw("Index codebase"),
+            ]),
+            Line::from(vec![
+                Span::styled("  /quit       ", Style::default().fg(Color::Cyan)),
+                Span::raw("Exit"),
+            ]),
+            Line::from(""),
+            Line::from(Span::styled(
+                " Press any key to close",
                 Style::default().dim().italic(),
-            )]),
+            )),
         ];
 
         let help_para = Paragraph::new(help_text)
-            .block(Block::default().borders(Borders::ALL).title(" Help "));
+            .block(Block::default().borders(Borders::ALL).title(" ? Help "));
 
         frame.render_widget(help_para, help_area);
     }
