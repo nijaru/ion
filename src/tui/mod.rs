@@ -469,11 +469,8 @@ impl App {
                 self.take_snapshot();
             }
 
-            // Shift+Enter or Alt+Enter: Insert newline
-            KeyCode::Enter
-                if key.modifiers.contains(KeyModifiers::SHIFT)
-                    || key.modifiers.contains(KeyModifiers::ALT) =>
-            {
+            // Shift+Enter: Insert newline
+            KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => {
                 self.input.insert(self.cursor_pos, '\n');
                 self.cursor_pos += 1;
             }
@@ -1163,7 +1160,7 @@ impl App {
             }
         } else if self.is_running {
             let loading = LoadingIndicator {
-                label: "Running...".to_string(),
+                label: "Ionizing...".to_string(),
                 frame_count: self.frame_count,
             };
             frame.render_widget(loading, chunks[1]);
