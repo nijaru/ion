@@ -1254,12 +1254,16 @@ impl App {
         // Calculate input box height based on content
         let input_height = self.calculate_input_height(frame.area().width);
 
+        // Progress line only takes space when running
+        let progress_height = if self.is_running { 1 } else { 0 };
+
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Min(0),
-                Constraint::Length(input_height),
-                Constraint::Length(1),
+                Constraint::Min(0),        // Chat
+                Constraint::Length(progress_height), // Progress line (Ionizing...)
+                Constraint::Length(input_height),    // Input
+                Constraint::Length(1),     // Status line
             ])
             .split(frame.area());
 
@@ -1309,12 +1313,20 @@ impl App {
                 .map(|e| (e, e.content_as_markdown()))
                 .collect();
 
+        // Simplified model name for display
+        let display_model = self
+            .session
+            .model
+            .split('/')
+            .last()
+            .unwrap_or(&self.session.model);
+
         let mut chat_lines = Vec::new();
         for (entry, content) in &entries_with_content {
             match entry.sender {
                 Sender::User => {
                     chat_lines.push(Line::from(vec![
-                        Span::styled(" < ", Style::default().fg(Color::Cyan)),
+                        Span::styled(" ↑ ", Style::default().fg(Color::Cyan)),
                         Span::styled("You", Style::default().fg(Color::Cyan).bold()),
                     ]));
                     let md = tui_markdown::from_str(content);
@@ -1326,8 +1338,8 @@ impl App {
                 }
                 Sender::Agent => {
                     chat_lines.push(Line::from(vec![
-                        Span::styled(" > ", Style::default().fg(Color::Green)),
-                        Span::styled("ion", Style::default().fg(Color::Green).bold()),
+                        Span::styled(" ↓ ", Style::default().fg(Color::Green)),
+                        Span::styled(display_model, Style::default().fg(Color::Green).bold()),
                     ]));
                     let md = tui_markdown::from_str(content);
                     for line in &md.lines {
@@ -1338,7 +1350,7 @@ impl App {
                 }
                 Sender::Tool => {
                     chat_lines.push(Line::from(vec![
-                        Span::styled(" ~ ", Style::default().fg(Color::Magenta).dim()),
+                        Span::styled(" ⏺ ", Style::default().fg(Color::Magenta).dim()),
                         Span::styled("tool", Style::default().fg(Color::Magenta).dim()),
                     ]));
                     let md = tui_markdown::from_str(content);
@@ -1368,6 +1380,37 @@ impl App {
             .wrap(Wrap { trim: true });
         frame.render_widget(chat_para, chunks[0]);
 
+        // Progress line (only when running)
+        if self.is_running {
+            let spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+            let symbol = spinner[(self.frame_count % spinner.len() as u64) as usize];
+
+            let mut progress_spans = vec![
+                Span::styled(format!(" {} ", symbol), Style::default().fg(Color::Yellow)),
+                Span::styled("Ionizing...", Style::default().fg(Color::Yellow)),
+            ];
+
+            // Show token usage if available
+            if let Some((used, max)) = self.token_usage {
+                let pct = if max > 0 { (used * 100) / max } else { 0 };
+                progress_spans.push(Span::styled(
+                    format!(" {}% ctx", pct),
+                    Style::default().fg(Color::Cyan).dim(),
+                ));
+            }
+
+            // Show queued indicator
+            if self.queued_message.is_some() {
+                progress_spans.push(Span::styled(
+                    " [Queued]",
+                    Style::default().fg(Color::Green),
+                ));
+            }
+
+            let progress_line = Line::from(progress_spans);
+            frame.render_widget(Paragraph::new(progress_line), chunks[1]);
+        }
+
         // Input or Approval Prompt (input always visible except during approval)
         if self.mode == Mode::Approval {
             if let Some(req) = &self.pending_approval {
@@ -1380,10 +1423,10 @@ impl App {
                     .border_style(Style::default().fg(Color::Red).bold())
                     .title(" Action Required ");
                 let approval_para = Paragraph::new(prompt).block(approval_block);
-                frame.render_widget(approval_para, chunks[1]);
+                frame.render_widget(approval_para, chunks[2]);
             }
         } else {
-            // Input box always visible (even while running)
+            // Input box always visible
             let mode_label = match self.tool_mode {
                 ToolMode::Read => "READ",
                 ToolMode::Write => "WRITE",
@@ -1395,48 +1438,21 @@ impl App {
                 ToolMode::Agi => Color::Red,
             };
 
-            // Border color: yellow when running, mode color otherwise
-            let border_color = if self.is_running {
-                Color::Yellow
-            } else {
-                mode_color
-            };
-
             let mut input_block = Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(border_color))
+                .border_style(Style::default().fg(mode_color))
                 .title(format!(" [{}] ", mode_label));
 
-            // Build right-side status indicator
-            let mut right_spans = Vec::new();
-
-            // Show running/queued status
-            if self.is_running {
-                let spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-                let symbol = spinner[(self.frame_count % spinner.len() as u64) as usize];
-                right_spans.push(Span::styled(
-                    format!(" {} ", symbol),
-                    Style::default().fg(Color::Yellow),
-                ));
-                if self.queued_message.is_some() {
-                    right_spans.push(Span::styled(
-                        "Queued ",
-                        Style::default().fg(Color::Green),
-                    ));
-                }
-            }
-
-            // Show thinking level
+            // Show thinking level on right side
             let thinking_label = self.thinking_level.label();
             if !thinking_label.is_empty() {
-                right_spans.push(Span::styled(
-                    format!(" {} ", thinking_label),
-                    Style::default().fg(Color::Magenta),
-                ));
-            }
-
-            if !right_spans.is_empty() {
-                input_block = input_block.title(Line::from(right_spans).right_aligned());
+                input_block = input_block.title(
+                    Line::from(Span::styled(
+                        format!(" {} ", thinking_label),
+                        Style::default().fg(Color::Magenta),
+                    ))
+                    .right_aligned(),
+                );
             }
 
             // Build input text with cursor (1-space left padding)
@@ -1444,19 +1460,19 @@ impl App {
             let input_para = Paragraph::new(input_text)
                 .block(input_block)
                 .wrap(Wrap { trim: false });
-            frame.render_widget(input_para, chunks[1]);
+            frame.render_widget(input_para, chunks[2]);
 
             // Calculate cursor position for multi-line input
-            let inner_width = chunks[1].width.saturating_sub(3) as usize; // borders + padding
+            let inner_width = chunks[2].width.saturating_sub(3) as usize; // borders + padding
             let (cursor_row, cursor_col) =
                 self.calculate_cursor_position(inner_width);
 
-            let cursor_x = chunks[1].x + 2 + cursor_col as u16;
-            let cursor_y = chunks[1].y + 1 + cursor_row as u16;
+            let cursor_x = chunks[2].x + 2 + cursor_col as u16;
+            let cursor_y = chunks[2].y + 1 + cursor_row as u16;
 
             // Only show cursor if within bounds
-            if cursor_x < chunks[1].x + chunks[1].width - 1
-                && cursor_y < chunks[1].y + chunks[1].height - 1
+            if cursor_x < chunks[2].x + chunks[2].width - 1
+                && cursor_y < chunks[2].y + chunks[2].height - 1
             {
                 frame.set_cursor_position((cursor_x, cursor_y));
             }
@@ -1514,7 +1530,7 @@ impl App {
         };
 
         // Calculate padding for right alignment
-        let width = chunks[2].width as usize;
+        let width = chunks[3].width as usize;
         let left_len = left.chars().count();
         let right_len = right.chars().count();
         let padding = width.saturating_sub(left_len + right_len);
@@ -1525,7 +1541,7 @@ impl App {
             Span::styled(right, right_style),
         ]);
 
-        frame.render_widget(Paragraph::new(status_line), chunks[2]);
+        frame.render_widget(Paragraph::new(status_line), chunks[3]);
 
         // Render modals on top if active
         match self.mode {
