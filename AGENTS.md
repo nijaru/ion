@@ -46,7 +46,7 @@ ion = Rust TUI Agent (ratatui)
 | HTTP      | reqwest             | Production-grade         |
 | Database  | rusqlite            | Embedded, zero deps      |
 | Vectors   | omendb              | Native Rust, HNSW+ACORN  |
-| Tokens    | tiktoken-rs         | OpenAI-compatible        |
+| Tokens    | bpe-openai          | Fast OpenAI-compatible   |
 
 ## Commands
 
