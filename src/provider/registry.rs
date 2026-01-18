@@ -468,6 +468,7 @@ mod tests {
                 cache_read: if has_cache { Some(price * 0.1) } else { None },
                 cache_write: if has_cache { Some(price * 1.25) } else { None },
             },
+            created: 0,
         }
     }
 
