@@ -5,8 +5,6 @@ pub mod widgets;
 
 use crate::agent::{Agent, AgentEvent};
 use crate::config::Config;
-use crate::memory::MemorySystem;
-use crate::memory::embedding::{OpenAIConfig, OpenAIProvider};
 use crate::provider::{ApiProvider, ModelRegistry};
 use crate::session::Session;
 use crate::session::SessionStore;
@@ -23,7 +21,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{Mutex, mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 const CANCEL_WINDOW: Duration = Duration::from_millis(1500);
@@ -127,8 +125,6 @@ pub struct App {
     pub cancel_pending: Option<Instant>,
     /// Session persistence store
     pub store: SessionStore,
-    /// Last memory retrieval count for status display
-    pub last_memory_count: Option<usize>,
     /// Model picker state
     pub model_picker: ModelPicker,
     /// Model registry for fetching available models
@@ -279,49 +275,7 @@ impl App {
 
         let orchestrator = Arc::new(orchestrator);
 
-        // Initialize embedding provider (Prioritize Local)
-        let model_dir = config
-            .data_dir
-            .join("models")
-            .join("snowflake-arctic-embed-s");
-        let embedding: Option<Arc<dyn crate::memory::embedding::EmbeddingProvider>> =
-            match crate::memory::embedding::SnowflakeArcticProvider::load(model_dir).await {
-                Ok(local) => Some(Arc::new(local)),
-                Err(e) => {
-                    error!(
-                        "Failed to load local embeddings: {}. Falling back to OpenAI if available.",
-                        e
-                    );
-                    std::env::var("OPENAI_API_KEY").ok().map(|key| {
-                        Arc::new(OpenAIProvider::new(OpenAIConfig {
-                            api_key: key,
-                            model: "text-embedding-3-small".to_string(),
-                            dimension: 1536,
-                        }))
-                            as Arc<dyn crate::memory::embedding::EmbeddingProvider>
-                    })
-                }
-            };
-
-        // Initialize memory system
-        let memory_path = config.data_dir.join("memory");
-        let dimension = embedding.as_ref().map(|e| e.dimension()).unwrap_or(384);
-        let memory = MemorySystem::new(&memory_path, dimension)
-            .ok()
-            .map(|ms| Arc::new(Mutex::new(ms)));
-
-        let mut agent = Agent::new(provider_impl, orchestrator.clone());
-        if let (Some(m), Some(e)) = (&memory, &embedding) {
-            agent = agent.with_memory(m.clone(), e.clone());
-            let worker = agent
-                .indexing_worker()
-                .expect("Worker should be present after with_memory");
-            let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-            let explorer = Arc::new(crate::agent::explorer::Explorer::new(worker, working_dir));
-
-            agent = agent.with_explorer(explorer);
-        }
-        let agent = Arc::new(agent);
+        let agent = Arc::new(Agent::new(provider_impl, orchestrator.clone()));
 
         // Open session store
         let store =
@@ -373,7 +327,6 @@ impl App {
             is_running: false,
             cancel_pending: None,
             store,
-            last_memory_count: None,
             model_picker: ModelPicker::new(config.provider_prefs.clone()),
             model_registry,
             config,
@@ -454,9 +407,6 @@ impl App {
                     debug!("Received ModelFetchError: {}", err);
                     self.model_picker.set_error(err.clone());
                     self.last_error = Some(err.clone());
-                }
-                AgentEvent::MemoryRetrieval { results_count, .. } => {
-                    self.last_memory_count = Some(*results_count);
                 }
                 AgentEvent::TokenUsage { used, max } => {
                     self.token_usage = Some((*used, *max));
@@ -647,35 +597,6 @@ impl App {
                                     self.input.clear();
                                     self.cursor_pos = 0;
                                     self.mode = Mode::HelpOverlay;
-                                    return;
-                                }
-                                "/index" => {
-                                    let parts: Vec<&str> = self.input.split_whitespace().collect();
-
-                                    let path = if parts.len() > 1 {
-                                        Some(parts[1].to_string())
-                                    } else {
-                                        None
-                                    };
-
-                                    self.input.clear();
-                                    self.cursor_pos = 0;
-                                    self.message_list.push_entry(
-                                        crate::tui::message_list::MessageEntry::new(
-                                            crate::tui::Sender::System,
-                                            format!(
-                                                "Indexing {}...",
-                                                path.as_deref().unwrap_or("working directory")
-                                            ),
-                                        ),
-                                    );
-                                    let agent = self.agent.clone();
-                                    tokio::spawn(async move {
-                                        let path_buf = path.map(PathBuf::from);
-                                        if let Err(e) = agent.reindex(path_buf.as_deref()).await {
-                                            error!("Indexing failed: {}", e);
-                                        }
-                                    });
                                     return;
                                 }
                                 _ => {} // Fall through to normal message if unknown command
@@ -1317,12 +1238,6 @@ impl App {
                 Style::default().fg(Color::Yellow).bold(),
             ));
         }
-        if let Some(count) = self.last_memory_count {
-            title_spans.push(Span::styled(
-                format!(" M:{} ", count),
-                Style::default().fg(Color::Cyan).dim(),
-            ));
-        }
         if !at_bottom {
             title_spans.push(Span::styled(
                 format!(" [+{}] ", self.message_list.scroll_offset),
@@ -1684,7 +1599,6 @@ impl App {
             row("/model", "Select model"),
             row("/provider", "Select provider"),
             row("/clear", "Clear chat"),
-            row("/index", "Index codebase"),
             row("/quit", "Exit"),
             Line::from(""),
             Line::from(Span::styled("Press any key to close", Style::default().dim()))

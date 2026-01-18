@@ -1,17 +1,15 @@
-# ion - Local-First TUI Coding Agent
+# ion
 
-**Rust TUI coding agent with native OmenDB memory integration.**
+**Fast, lightweight, open-source coding agent.**
 
 ## Vision
 
 ```
 ion = Rust TUI Agent (ratatui)
-     + Native Memory (OmenDB + rusqlite)
-     + Skills System (SKILL.md)
      + Multi-Provider LLM (OpenRouter primary)
+     + Skills System (SKILL.md)
+     + Session Persistence (rusqlite)
 ```
-
-**Differentiation**: Budget-aware memory context assembly vs Goose (full injection) / Claude Code (no memory)
 
 ## Project Structure
 
@@ -45,7 +43,6 @@ ion = Rust TUI Agent (ratatui)
 | Async     | tokio               | Standard, well-supported |
 | HTTP      | reqwest             | Production-grade         |
 | Database  | rusqlite            | Embedded, zero deps      |
-| Vectors   | omendb              | Native Rust, HNSW+ACORN  |
 | Tokens    | bpe-openai          | Fast OpenAI-compatible   |
 
 ## Commands
@@ -74,18 +71,11 @@ cargo fmt                # Format
 
 **Core Modules**:
 
-- **memory/** - Native OmenDB + rusqlite, budget-aware context assembly
 - **provider/** - Multi-provider LLM abstraction
 - **tool/** - Built-in tools (read, write, edit, bash, glob, grep) + MCP client
 - **skill/** - SKILL.md loader (Claude Code compatible)
 - **agent/** - Multi-turn loop, session management
 - **tui/** - ratatui chat interface
-
-**Key Innovation**: Budget-aware memory context assembly
-
-- Fills context up to token budget with highest-relevance memories
-- ACE scoring (+17% accuracy) + RRF fusion (+6% accuracy)
-- Query classification skips memory for transactional queries
 
 ## MVP Features
 
@@ -95,7 +85,6 @@ cargo fmt                # Format
 | TUI            | Pending | ratatui chat interface              |
 | Built-in tools | Pending | Read, Write, Edit, Bash, Glob, Grep |
 | Agent loop     | Pending | Multi-turn until complete           |
-| Memory         | Pending | Native OmenDB integration           |
 | Skills         | Pending | SKILL.md loader                     |
 
 ## Workflow
@@ -115,7 +104,7 @@ cargo fmt                # Format
 
 | Aspect     | Standard                                   |
 | ---------- | ------------------------------------------ |
-| Toolchain  | nightly (omendb requires portable_simd)    |
+| Toolchain  | stable                                     |
 | Edition    | Rust 2024                                  |
 | Errors     | anyhow (app), thiserror (lib)              |
 | Async      | tokio (network), rayon (CPU), sync (files) |
