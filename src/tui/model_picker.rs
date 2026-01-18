@@ -108,10 +108,7 @@ impl ModelPicker {
     pub fn start_all_models(&mut self) {
         self.selected_provider = None;
         self.provider_models = self.all_models.clone();
-        // Sort by provider, then by model name
-        self.provider_models.sort_by(|a, b| {
-            a.provider.cmp(&b.provider).then_with(|| a.name.cmp(&b.name))
-        });
+        // Sorting handled by apply_model_filter()
         self.stage = PickerStage::Model;
         self.filter.clear();
         self.apply_model_filter();
