@@ -188,20 +188,14 @@ impl ProviderPicker {
         let mut items: Vec<ListItem> = vec![ListItem::new(Line::from(""))];
         items.extend(self.filtered.iter().map(|status| {
             // Simple: green = authenticated, gray = not authenticated
-            let (icon, icon_style, name_style, desc_style) = if status.authenticated {
+            let (icon, icon_style, name_style) = if status.authenticated {
                 (
                     "●",
                     Style::default().fg(Color::Green),
                     Style::default().fg(Color::White).bold(),
-                    Style::default().fg(Color::Blue).dim(),
                 )
             } else {
-                (
-                    "○",
-                    Style::default().dim(),
-                    Style::default().dim(),
-                    Style::default().dim(),
-                )
+                ("○", Style::default().dim(), Style::default().dim())
             };
 
             let auth_hint = if !status.authenticated {

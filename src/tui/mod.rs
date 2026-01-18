@@ -398,7 +398,6 @@ impl App {
     /// Main input handler - always active unless a modal is open
     fn handle_input_mode(&mut self, key: KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
 
         match key.code {
             // Ctrl+C: Clear input / quit if empty / interrupt if running
@@ -957,33 +956,6 @@ impl App {
         });
     }
 
-    /// Show help information in the chat history.
-    fn show_help(&mut self) {
-        let help_text = r#"
- [Commands]
-   /models     - Select AI model
-   /providers  - Select API provider
-   /clear      - Clear chat history
-   /index      - Re-index codebase
-   /help       - Show this help
- 
- [Keybindings]
-   Ctrl+M      - Model Picker
-   Ctrl+P      - Provider Picker
-   Ctrl+H      - Help Overlay
-   Ctrl+S      - UI Snapshot
-   Tab         - Cycle Tool Mode (Read/Write/Agi)
-   Shift+Enter - Insert Newline
-   PageUp/Down - Scroll History
-   Ctrl+C      - Clear Input / Quit
-         "#;
-        self.message_list
-            .push_entry(crate::tui::message_list::MessageEntry::new(
-                crate::tui::Sender::System,
-                help_text.trim().to_string(),
-            ));
-    }
-
     /// Take a snapshot of the current TUI state for debugging.
 
     pub fn take_snapshot(&mut self) {
@@ -1250,8 +1222,8 @@ impl App {
     fn render_help_overlay(&self, frame: &mut Frame) {
         let area = frame.area();
         // Fixed size modal, centered
-        let width = 50.min(area.width.saturating_sub(4));
-        let height = 18.min(area.height.saturating_sub(4));
+        let width = 42.min(area.width.saturating_sub(4));
+        let height = 22.min(area.height.saturating_sub(4));
         let x = (area.width.saturating_sub(width)) / 2;
         let y = (area.height.saturating_sub(height)) / 2;
         let help_area = Rect::new(x, y, width, height);
@@ -1264,28 +1236,32 @@ impl App {
                 Style::default().fg(Color::Yellow).bold(),
             )),
             Line::from(vec![
-                Span::styled("  Enter       ", Style::default().fg(Color::Cyan)),
-                Span::raw("Send · "),
-                Span::styled("Shift+Enter ", Style::default().fg(Color::Cyan)),
-                Span::raw("Newline"),
+                Span::styled("  Enter        ", Style::default().fg(Color::Cyan)),
+                Span::raw("Send message"),
             ]),
             Line::from(vec![
-                Span::styled("  Tab         ", Style::default().fg(Color::Cyan)),
-                Span::raw("Cycle mode (Read/Write/Agi)"),
+                Span::styled("  Shift+Enter  ", Style::default().fg(Color::Cyan)),
+                Span::raw("Insert newline"),
             ]),
             Line::from(vec![
-                Span::styled("  ^M          ", Style::default().fg(Color::Cyan)),
-                Span::raw("Models · "),
-                Span::styled("^P ", Style::default().fg(Color::Cyan)),
-                Span::raw("Providers · "),
-                Span::styled("^H ", Style::default().fg(Color::Cyan)),
-                Span::raw("Help"),
+                Span::styled("  Tab          ", Style::default().fg(Color::Cyan)),
+                Span::raw("Cycle mode"),
             ]),
             Line::from(vec![
-                Span::styled("  ^C          ", Style::default().fg(Color::Cyan)),
-                Span::raw("Clear/Quit · "),
-                Span::styled("PgUp/Dn ", Style::default().fg(Color::Cyan)),
-                Span::raw("Scroll"),
+                Span::styled("  ^M           ", Style::default().fg(Color::Cyan)),
+                Span::raw("Model picker"),
+            ]),
+            Line::from(vec![
+                Span::styled("  ^P           ", Style::default().fg(Color::Cyan)),
+                Span::raw("Provider picker"),
+            ]),
+            Line::from(vec![
+                Span::styled("  ^C           ", Style::default().fg(Color::Cyan)),
+                Span::raw("Clear input / Quit"),
+            ]),
+            Line::from(vec![
+                Span::styled("  PgUp/PgDn    ", Style::default().fg(Color::Cyan)),
+                Span::raw("Scroll chat"),
             ]),
             Line::from(""),
             Line::from(Span::styled(
@@ -1293,23 +1269,23 @@ impl App {
                 Style::default().fg(Color::Yellow).bold(),
             )),
             Line::from(vec![
-                Span::styled("  /model      ", Style::default().fg(Color::Cyan)),
+                Span::styled("  /model       ", Style::default().fg(Color::Cyan)),
                 Span::raw("Select model"),
             ]),
             Line::from(vec![
-                Span::styled("  /provider   ", Style::default().fg(Color::Cyan)),
+                Span::styled("  /provider    ", Style::default().fg(Color::Cyan)),
                 Span::raw("Select provider"),
             ]),
             Line::from(vec![
-                Span::styled("  /clear      ", Style::default().fg(Color::Cyan)),
-                Span::raw("Clear conversation"),
+                Span::styled("  /clear       ", Style::default().fg(Color::Cyan)),
+                Span::raw("Clear chat"),
             ]),
             Line::from(vec![
-                Span::styled("  /index      ", Style::default().fg(Color::Cyan)),
+                Span::styled("  /index       ", Style::default().fg(Color::Cyan)),
                 Span::raw("Index codebase"),
             ]),
             Line::from(vec![
-                Span::styled("  /quit       ", Style::default().fg(Color::Cyan)),
+                Span::styled("  /quit        ", Style::default().fg(Color::Cyan)),
                 Span::raw("Exit"),
             ]),
             Line::from(""),
