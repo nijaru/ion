@@ -450,7 +450,10 @@ impl App {
                     // Configure picker based on how it was opened
                     match self.picker_intent {
                         PickerIntent::ModelOnly => {
-                            let provider = self.current_provider();
+                            // Use API provider name (lowercase) for filtering
+                            // During setup, session.model is empty so current_provider() won't work
+                            let provider = self.api_provider.name().to_lowercase();
+                            debug!("Filtering models for provider: {}", provider);
                             self.model_picker.start_model_only(&provider);
                         }
                         PickerIntent::ProviderFirst => {
@@ -993,16 +996,29 @@ impl App {
         }
     }
 
-    /// Open model picker for current provider only (Ctrl+M)
+    /// Open model picker (Ctrl+M or during setup)
     fn open_model_picker(&mut self) {
         self.mode = Mode::ModelPicker;
         self.model_picker.error = None;
-        self.picker_intent = PickerIntent::ModelOnly;
+
+        // During setup or with aggregator like OpenRouter: show all providers
+        // During normal use: jump to models for current provider
+        if self.needs_setup || self.api_provider == ApiProvider::OpenRouter {
+            self.picker_intent = PickerIntent::ProviderFirst;
+        } else {
+            self.picker_intent = PickerIntent::ModelOnly;
+        }
 
         if self.model_picker.has_models() {
-            // Models already loaded, jump directly to model selection
-            let provider = self.current_provider();
-            self.model_picker.start_model_only(&provider);
+            match self.picker_intent {
+                PickerIntent::ModelOnly => {
+                    let provider = self.current_provider();
+                    self.model_picker.start_model_only(&provider);
+                }
+                PickerIntent::ProviderFirst => {
+                    self.model_picker.reset();
+                }
+            }
         } else {
             // Need to fetch models first - update() will configure picker when they arrive
             self.model_picker.is_loading = true;
