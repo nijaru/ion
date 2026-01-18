@@ -48,6 +48,7 @@
 - [ ] tk-ltfn: Spinner/Ionizing persists after agent completion
 - [ ] tk-pm5r: Text input box disappears during agent response
 - [ ] tk-3jba: Ctrl+C not interruptible during tool execution
+- [ ] tk-7cpv: Message queueing (type while agent runs, steer mid-task)
 
 **P1 - UX Issues:**
 
@@ -104,6 +105,29 @@
 9. **Modal escape**:
    - Provider picker: Escape blocked during setup (should close)
    - Model picker: Tab for switching, Escape for closing
+
+## Message Queueing Design
+
+Key insight: Input visibility and message queueing are separate concerns.
+
+**Implementation:**
+
+1. Input always visible - decouple from `is_running` state
+2. Message queue - `VecDeque<String>` holds pending messages
+3. Check between turns - after each tool result, before next LLM call
+4. Inject if queued - add as user message, continue loop
+
+```
+Agent loop:
+  while has_tool_calls:
+    execute_tools()
+    if queue.has_message():        # <-- check here
+      inject_user_message(queue.pop())
+      continue                      # new turn with user steering
+    call_llm()
+```
+
+Visual: "Queued" badge when message waiting.
 
 ## Reference: Claude Code Style
 
