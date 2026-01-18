@@ -380,9 +380,17 @@ impl ModelPicker {
     pub fn render(&mut self, frame: &mut Frame) {
         let area = frame.area();
 
-        // Center the modal (80% width, 80% height)
-        let modal_width = (area.width as f32 * 0.8) as u16;
-        let modal_height = (area.height as f32 * 0.8) as u16;
+        // Size to content: enough for model names, context, prices
+        let content_width = 70u16;
+        let list_len = match self.stage {
+            PickerStage::Provider => self.filtered_providers.len(),
+            PickerStage::Model => self.filtered_models.len(),
+        };
+        let list_height = (list_len as u16 + 2).clamp(5, 20); // +2 for borders, min 5, max 20
+        let total_height = 3 + list_height; // search bar + list
+
+        let modal_width = content_width.min(area.width.saturating_sub(4));
+        let modal_height = total_height.min(area.height.saturating_sub(4));
         let x = (area.width - modal_width) / 2;
         let y = (area.height - modal_height) / 2;
         let modal_area = Rect::new(x, y, modal_width, modal_height);
@@ -396,10 +404,10 @@ impl ModelPicker {
             .constraints([Constraint::Length(3), Constraint::Min(0)])
             .split(modal_area);
 
-        // Search input with clear instructions
+        // Search input
         let search_title = match self.stage {
-            PickerStage::Provider => " Filter providers (type to search) ",
-            PickerStage::Model => " Filter models (type to search) ",
+            PickerStage::Provider => " Filter (type to search) ",
+            PickerStage::Model => " Filter (type to search) ",
         };
 
         let search_block = Block::default()
@@ -408,13 +416,9 @@ impl ModelPicker {
             .title(search_title);
 
         let search_text = if self.filter.is_empty() {
-            match self.stage {
-                PickerStage::Provider => "Start typing to filter providers...",
-                PickerStage::Model => "Start typing to filter models...",
-            }
-            .to_string()
+            " ...".to_string()
         } else {
-            format!("Filter: {}_", self.filter)
+            format!(" {}_", self.filter)
         };
 
         let search_style = if self.filter.is_empty() {
@@ -485,10 +489,7 @@ impl ModelPicker {
 
         let count = self.filtered_providers.len();
         let total = self.providers.len();
-        let title = format!(
-            " Providers ({}/{}) │ ↑↓ PgUp/PgDn navigate │ Enter select │ Esc cancel ",
-            count, total
-        );
+        let title = format!(" Providers ({}/{}) ", count, total);
 
         let list = List::new(items)
             .block(
@@ -544,10 +545,7 @@ impl ModelPicker {
         let provider = self.selected_provider.as_deref().unwrap_or("Unknown");
         let count = self.filtered_models.len();
         let total = self.provider_models.len();
-        let title = format!(
-            " {} ({}/{}) │ ↑↓ PgUp/PgDn navigate │ Enter select │ Backspace back │ Esc cancel ",
-            provider, count, total
-        );
+        let title = format!(" {} ({}/{}) ", provider, count, total);
 
         let list = List::new(items)
             .block(

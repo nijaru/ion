@@ -145,9 +145,13 @@ impl ProviderPicker {
     pub fn render(&mut self, frame: &mut Frame) {
         let area = frame.area();
 
-        // Center the modal (60% width, 60% height)
-        let modal_width = (area.width as f32 * 0.6) as u16;
-        let modal_height = (area.height as f32 * 0.6) as u16;
+        // Size to content: width for longest name + hint, height for items
+        let content_width = 50u16; // Enough for name + auth hint columns
+        let list_height = (self.filtered.len() as u16 + 2).max(5); // +2 for borders, min 5
+        let total_height = 3 + list_height; // search bar + list
+
+        let modal_width = content_width.min(area.width.saturating_sub(4));
+        let modal_height = total_height.min(area.height.saturating_sub(4));
         let x = (area.width - modal_width) / 2;
         let y = (area.height - modal_height) / 2;
         let modal_area = Rect::new(x, y, modal_width, modal_height);
@@ -165,12 +169,12 @@ impl ProviderPicker {
         let search_block = Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Cyan))
-            .title(" Filter providers (type to search) ");
+            .title(" Filter (type to search) ");
 
         let search_text = if self.filter.is_empty() {
-            " Start typing to filter...".to_string()
+            " ...".to_string()
         } else {
-            format!(" Filter: {}_", self.filter)
+            format!(" {}_", self.filter)
         };
 
         let search_style = if self.filter.is_empty() {
@@ -184,47 +188,50 @@ impl ProviderPicker {
             .block(search_block);
         frame.render_widget(search_para, chunks[0]);
 
-        // Provider list with empty line at top for spacing
-        let mut items: Vec<ListItem> = vec![ListItem::new(Line::from(""))];
-        items.extend(self.filtered.iter().map(|status| {
-            // Simple: green = authenticated, gray = not authenticated
-            let (icon, icon_style, name_style) = if status.authenticated {
-                (
-                    "●",
-                    Style::default().fg(Color::Green),
-                    Style::default().fg(Color::White).bold(),
-                )
-            } else {
-                ("○", Style::default().dim(), Style::default().dim())
-            };
+        // Column width for provider name
+        let name_col_width = 20usize;
 
-            let auth_hint = if !status.authenticated {
-                format!(
-                    " [set {}]",
-                    status.provider.env_vars().first().unwrap_or(&"API key")
-                )
-            } else {
-                String::new()
-            };
+        // Provider list
+        let items: Vec<ListItem> = self
+            .filtered
+            .iter()
+            .map(|status| {
+                let (icon, icon_style, name_style) = if status.authenticated {
+                    (
+                        "●",
+                        Style::default().fg(Color::Green),
+                        Style::default().fg(Color::White).bold(),
+                    )
+                } else {
+                    ("○", Style::default().dim(), Style::default().dim())
+                };
 
-            // Simple format: icon + name + auth hint (no description - it's obvious)
-            let line = Line::from(vec![
-                Span::raw("  "),
-                Span::styled(icon, icon_style),
-                Span::raw(" "),
-                Span::styled(status.provider.name(), name_style),
-                Span::styled(auth_hint, Style::default().fg(Color::Red).dim()),
-            ]);
+                let name = status.provider.name();
+                let name_padded = format!("{:width$}", name, width = name_col_width);
 
-            ListItem::new(line)
-        }));
+                let auth_hint = if !status.authenticated {
+                    format!(
+                        "set {}",
+                        status.provider.env_vars().first().unwrap_or(&"API_KEY")
+                    )
+                } else {
+                    String::new()
+                };
+
+                let line = Line::from(vec![
+                    Span::styled(icon, icon_style),
+                    Span::raw(" "),
+                    Span::styled(name_padded, name_style),
+                    Span::styled(auth_hint, Style::default().fg(Color::Red).dim()),
+                ]);
+
+                ListItem::new(line)
+            })
+            .collect();
 
         let count = self.filtered.len();
         let total = self.providers.len();
-        let title = format!(
-            " API Providers ({}/{}) │ ↑↓ navigate │ Enter select │ Esc cancel ",
-            count, total
-        );
+        let title = format!(" Providers ({}/{}) ", count, total);
 
         let list = List::new(items)
             .block(
