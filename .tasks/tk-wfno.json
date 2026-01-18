@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "wfno",
+  "title": "[UX] Streaming token counts in progress line (↑input ↓output, live)",
+  "description": null,
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-18T19:34:32.917Z",
+  "updated_at": "2026-01-18T19:34:32.917Z",
+  "completed_at": null,
+  "external": {}
+}
