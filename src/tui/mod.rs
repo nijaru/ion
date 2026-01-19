@@ -28,6 +28,15 @@ use tokio_util::sync::CancellationToken;
 const CANCEL_WINDOW: Duration = Duration::from_millis(1500);
 const SUMMARY_DISPLAY: Duration = Duration::from_secs(5);
 
+/// Format token count as human-readable (e.g., 1500 -> "1.5k")
+fn format_tokens(n: usize) -> String {
+    if n >= 1000 {
+        format!("{:.1}k", n as f64 / 1000.0)
+    } else {
+        n.to_string()
+    }
+}
+
 /// Thinking budget level for extended reasoning.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ThinkingLevel {
@@ -420,15 +429,7 @@ impl App {
         while let Ok(event) = self.agent_rx.try_recv() {
             match &event {
                 AgentEvent::Finished(_) | AgentEvent::Error(_) => {
-                    // Save task summary before clearing
-                    if let Some(start) = self.task_start_time {
-                        self.last_task_summary = Some(TaskSummary {
-                            elapsed: start.elapsed(),
-                            input_tokens: self.input_tokens,
-                            output_tokens: self.output_tokens,
-                            completed_at: Instant::now(),
-                        });
-                    }
+                    self.save_task_summary();
                     self.is_running = false;
                     self.cancel_pending = None;
                     self.message_queue = None;
@@ -473,16 +474,7 @@ impl App {
 
         // Poll session updates (preserves conversation history)
         if let Ok(updated_session) = self.session_rx.try_recv() {
-            // Save task summary before clearing
-            if let Some(start) = self.task_start_time {
-                self.last_task_summary = Some(TaskSummary {
-                    elapsed: start.elapsed(),
-                    input_tokens: self.input_tokens,
-                    output_tokens: self.output_tokens,
-                    completed_at: Instant::now(),
-                });
-            }
-            // Agent task completed successfully
+            self.save_task_summary();
             self.is_running = false;
             self.cancel_pending = None;
             self.message_queue = None;
@@ -1115,6 +1107,18 @@ impl App {
         });
     }
 
+    /// Save task summary before clearing task state
+    fn save_task_summary(&mut self) {
+        if let Some(start) = self.task_start_time {
+            self.last_task_summary = Some(TaskSummary {
+                elapsed: start.elapsed(),
+                input_tokens: self.input_tokens,
+                output_tokens: self.output_tokens,
+                completed_at: Instant::now(),
+            });
+        }
+    }
+
     fn run_agent_task(&mut self, input: String) {
         self.is_running = true;
         self.task_start_time = Some(Instant::now());
@@ -1463,15 +1467,6 @@ impl App {
                 }
             }
 
-            // Token counts (format as k for thousands)
-            let format_tokens = |n: usize| -> String {
-                if n >= 1000 {
-                    format!("{:.1}k", n as f64 / 1000.0)
-                } else {
-                    n.to_string()
-                }
-            };
-
             if self.input_tokens > 0 {
                 stats.push(format!("↑ {}", format_tokens(self.input_tokens)));
             }
@@ -1491,14 +1486,6 @@ impl App {
         } else if let Some(summary) = &self.last_task_summary {
             // Show completion summary briefly
             if summary.completed_at.elapsed() < SUMMARY_DISPLAY {
-                let format_tokens = |n: usize| -> String {
-                    if n >= 1000 {
-                        format!("{:.1}k", n as f64 / 1000.0)
-                    } else {
-                        n.to_string()
-                    }
-                };
-
                 let secs = summary.elapsed.as_secs();
                 let elapsed_str = if secs >= 60 {
                     format!("{}m {}s", secs / 60, secs % 60)
