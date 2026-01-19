@@ -49,6 +49,8 @@ pub struct ModelPicker {
     pub is_loading: bool,
     /// Error message if fetch failed.
     pub error: Option<String>,
+    /// Current API provider name (e.g., "OpenRouter", "Ollama").
+    pub api_provider_name: Option<String>,
 }
 
 impl Default for ModelPicker {
@@ -67,6 +69,7 @@ impl Default for ModelPicker {
             prefs: ProviderPrefs::default(),
             is_loading: false,
             error: None,
+            api_provider_name: None,
         }
     }
 }
@@ -117,6 +120,11 @@ impl ModelPicker {
     /// Check if we have models loaded.
     pub fn has_models(&self) -> bool {
         !self.all_models.is_empty()
+    }
+
+    /// Set the API provider name (e.g., "OpenRouter", "Ollama").
+    pub fn set_api_provider(&mut self, name: impl Into<String>) {
+        self.api_provider_name = Some(name.into());
     }
 
     /// Set models from registry and build provider list.
@@ -403,10 +411,16 @@ impl ModelPicker {
             .constraints([Constraint::Length(3), Constraint::Min(0)])
             .split(modal_area);
 
-        // Search input
+        // Search input with API provider name
         let search_title = match self.stage {
-            PickerStage::Provider => " Filter (type to search) ",
-            PickerStage::Model => " Filter (type to search) ",
+            PickerStage::Provider => " Filter (type to search) ".to_string(),
+            PickerStage::Model => {
+                if let Some(ref name) = self.api_provider_name {
+                    format!(" {} - Filter (type to search) ", name)
+                } else {
+                    " Filter (type to search) ".to_string()
+                }
+            }
         };
 
         let search_block = Block::default()
@@ -433,7 +447,8 @@ impl ModelPicker {
 
         // Loading/Error state
         if self.is_loading {
-            let loading = Paragraph::new("Loading models from OpenRouter...")
+            let provider_name = self.api_provider_name.as_deref().unwrap_or("provider");
+            let loading = Paragraph::new(format!("Loading models from {}...", provider_name))
                 .style(Style::default().fg(Color::Yellow))
                 .block(Block::default().borders(Borders::ALL).title(" Loading "));
             frame.render_widget(loading, chunks[1]);

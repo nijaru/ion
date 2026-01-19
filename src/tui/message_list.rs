@@ -177,25 +177,24 @@ impl MessageList {
                 }
                 self.push_entry(MessageEntry::new_thinking(Sender::Agent, delta));
             }
-            AgentEvent::ToolCallStart(_, name) => {
-                self.push_entry(MessageEntry::new(
-                    Sender::Tool,
-                    format!("Executing {}...", name),
-                ));
+            AgentEvent::ToolCallStart(id, name) => {
+                // Show tool call with a distinct format
+                let display = format!("**{}** `{}`", name, id);
+                self.push_entry(MessageEntry::new(Sender::Tool, display));
             }
-            AgentEvent::ToolCallResult(_, result, is_error) => {
+            AgentEvent::ToolCallResult(id, result, is_error) => {
                 let content = if is_error {
-                    format!("Error: {}", result)
+                    format!("**Error** `{}`\n```\n{}\n```", id, result)
                 } else {
-                    // Use char-based truncation to avoid UTF-8 boundary panics
+                    // Show result with code block formatting for readability
                     let truncated = if result.chars().count() > TOOL_RESULT_PREVIEW_LEN {
                         let preview: String =
                             result.chars().take(TOOL_RESULT_PREVIEW_LEN).collect();
-                        format!("{}... (truncated)", preview)
+                        format!("{}...", preview)
                     } else {
                         result
                     };
-                    format!("Result: {}", truncated)
+                    format!("```\n{}\n```", truncated)
                 };
                 self.push_entry(MessageEntry::new(Sender::Tool, content));
             }
@@ -270,11 +269,36 @@ impl MessageList {
                             ContentBlock::Thinking { thinking } => {
                                 parts.push(MessagePart::Thinking(thinking.clone()))
                             }
-                            ContentBlock::ToolCall { name, .. } => {
-                                self.entries.push(MessageEntry::new(
-                                    Sender::Tool,
-                                    format!("Called: {}", name),
-                                ));
+                            ContentBlock::ToolCall { id, name, arguments } => {
+                                // Show tool name and key arguments
+                                let args_preview = if let Some(obj) = arguments.as_object() {
+                                    // Show first couple key args
+                                    obj.iter()
+                                        .take(2)
+                                        .map(|(k, v)| {
+                                            let val = match v {
+                                                serde_json::Value::String(s) => {
+                                                    if s.len() > 30 {
+                                                        format!("{}...", &s[..27])
+                                                    } else {
+                                                        s.clone()
+                                                    }
+                                                }
+                                                other => other.to_string(),
+                                            };
+                                            format!("{}={}", k, val)
+                                        })
+                                        .collect::<Vec<_>>()
+                                        .join(", ")
+                                } else {
+                                    String::new()
+                                };
+                                let display = if args_preview.is_empty() {
+                                    format!("**{}** `{}`", name, id)
+                                } else {
+                                    format!("**{}** `{}`\n`{}`", name, id, args_preview)
+                                };
+                                self.entries.push(MessageEntry::new(Sender::Tool, display));
                             }
                             _ => {}
                         }
@@ -292,21 +316,23 @@ impl MessageList {
                 Role::ToolResult => {
                     for block in msg.content.iter() {
                         if let ContentBlock::ToolResult {
-                            content, is_error, ..
+                            tool_call_id,
+                            content,
+                            is_error,
                         } = block
                         {
                             let display = if *is_error {
-                                format!("Error: {}", content)
+                                format!("**Error** `{}`\n```\n{}\n```", tool_call_id, content)
                             } else {
                                 let truncated = if content.chars().count() > TOOL_RESULT_PREVIEW_LEN
                                 {
                                     let preview: String =
                                         content.chars().take(TOOL_RESULT_PREVIEW_LEN).collect();
-                                    format!("{}... (truncated)", preview)
+                                    format!("{}...", preview)
                                 } else {
                                     content.clone()
                                 };
-                                format!("Result: {}", truncated)
+                                format!("```\n{}\n```", truncated)
                             };
                             self.entries.push(MessageEntry::new(Sender::Tool, display));
                         }
