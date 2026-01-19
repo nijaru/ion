@@ -2,6 +2,59 @@
 
 > Decision records for ion development. Historical Python-era decisions archived in DECISIONS-archive.md.
 
+## 2026-01-19: Config Priority - Explicit Config > Env Vars
+
+**Context**: Deciding whether API keys from config file or environment variables should take priority.
+
+**Decision**: Config file takes priority over environment variables.
+
+| Source      | Priority | Rationale                                   |
+| ----------- | -------- | ------------------------------------------- |
+| Config file | 1st      | Explicit user configuration for this tool   |
+| Env var     | 2nd      | System-wide default, may not reflect intent |
+
+**Rationale**: If a user explicitly puts a key in `~/.ion/config.toml`, that's an intentional choice. Environment variables are often set system-wide in shell configs and shared across many tools.
+
+---
+
+## 2026-01-19: Provider-Specific Model IDs
+
+**Context**: Model IDs differ between OpenRouter (aggregator) and direct provider APIs.
+
+**Decision**: Store model IDs as each provider expects them. No normalization.
+
+| Provider           | Model ID Format   | Example                   |
+| ------------------ | ----------------- | ------------------------- |
+| OpenRouter         | `org/model`       | `anthropic/claude-3-opus` |
+| Direct (Google)    | Native model name | `gemini-3-flash-preview`  |
+| Direct (Anthropic) | Native model name | `claude-3-opus-20240229`  |
+
+**Implications**:
+
+- Switching providers requires re-selecting model (different APIs, different model names)
+- Config stores `provider` and `model` as separate fields
+- No prefix stripping needed for OpenRouter; strip for direct providers in client.rs
+
+**Rationale**: OpenRouter IS a provider that happens to expose other providers' models. Its API expects `org/model` format. Trying to normalize creates complexity with little benefit.
+
+---
+
+## 2026-01-19: Unify Backend and ApiProvider (Planned)
+
+**Context**: Found duplicate enum types that are nearly identical.
+
+**Problem**: `Backend` (backend.rs) and `ApiProvider` (api_provider.rs) have:
+
+- Same 6 variants
+- Same `id()`, `name()`, `env_vars()` methods
+- 1:1 mapping via `ApiProvider::to_backend()`
+
+**Decision**: Unify into single `Provider` enum. (tk-gpdy)
+
+**Deferred**: Document first, refactor later. Current code works.
+
+---
+
 ## 2026-01-18: Rig Framework Evaluation (Removed)
 
 **Context**: Evaluated **Rig** framework (rig.rs) for ecosystem compatibility. Built prototype `RigToolWrapper` bridge.
