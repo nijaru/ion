@@ -442,6 +442,8 @@ impl App {
                     self.message_queue = None;
                     self.task_start_time = None;
                     self.current_tool = None;
+                    // Auto-scroll to bottom so user sees completion
+                    self.message_list.scroll_to_bottom();
                     self.message_list.push_event(event);
                 }
                 AgentEvent::Error(msg) => {
@@ -453,6 +455,8 @@ impl App {
                     self.message_queue = None;
                     self.task_start_time = None;
                     self.current_tool = None;
+                    // Auto-scroll to bottom so user sees error
+                    self.message_list.scroll_to_bottom();
                     self.message_list.push_event(event);
                 }
                 AgentEvent::ModelsFetched(models) => {
@@ -1507,15 +1511,15 @@ impl App {
                 Sender::System => {
                     // Check if it's a completion message vs error/warning
                     let (prefix, style) = if content.contains("completed") {
-                        (" ✓ ", Style::default().fg(Color::Green).dim())
+                        (" ✓ ", Style::default().fg(Color::Green))
                     } else if content.contains("Error") {
-                        (" ✗ ", Style::default().fg(Color::Red).dim())
+                        (" ✗ ", Style::default().fg(Color::Red))
                     } else {
                         (" • ", Style::default().dim())
                     };
                     chat_lines.push(Line::from(vec![
                         Span::styled(prefix, style),
-                        Span::styled(*content, style.italic()),
+                        Span::styled(*content, style),
                     ]));
                 }
             }
