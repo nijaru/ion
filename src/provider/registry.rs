@@ -2,7 +2,7 @@
 //!
 //! Fetches model metadata from various backends and caches locally.
 
-use super::{Backend, ModelInfo, ModelPricing, ProviderPrefs};
+use super::{Provider, ModelInfo, ModelPricing, ProviderPrefs};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::sync::RwLock;
@@ -127,21 +127,21 @@ impl ModelRegistry {
             .unwrap_or(false)
     }
 
-    /// Fetch models for the given backend.
+    /// Fetch models for the given provider.
     ///
-    /// This is the primary entry point for model discovery. Each backend has its own
+    /// This is the primary entry point for model discovery. Each provider has its own
     /// fetching strategy:
     /// - OpenRouter: Direct API call
     /// - Ollama: Local server API call
     /// - Others: models.dev metadata fallback
-    pub async fn fetch_models_for_backend(&self, backend: Backend) -> Result<Vec<ModelInfo>> {
-        tracing::debug!("fetch_models_for_backend: {:?}", backend);
+    pub async fn fetch_models_for_provider(&self, provider: Provider) -> Result<Vec<ModelInfo>> {
+        tracing::debug!("fetch_models_for_provider: {:?}", provider);
 
-        match backend {
-            Backend::OpenRouter => self.fetch_openrouter_models().await,
-            Backend::Ollama => self.fetch_ollama_models().await,
+        match provider {
+            Provider::OpenRouter => self.fetch_openrouter_models().await,
+            Provider::Ollama => self.fetch_ollama_models().await,
             // Cloud providers: use models.dev metadata
-            _ => self.fetch_from_models_dev(backend).await,
+            _ => self.fetch_from_models_dev(provider).await,
         }
     }
 
@@ -235,14 +235,14 @@ impl ModelRegistry {
         }
     }
 
-    /// Fetch models from models.dev, filtered by backend/provider.
-    async fn fetch_from_models_dev(&self, backend: Backend) -> Result<Vec<ModelInfo>> {
+    /// Fetch models from models.dev, filtered by provider.
+    async fn fetch_from_models_dev(&self, provider: Provider) -> Result<Vec<ModelInfo>> {
         let all_models = super::models_dev::fetch_models_dev()
             .await
             .unwrap_or_default();
 
-        // Filter by provider name matching the backend
-        let provider_name = backend.id();
+        // Filter by provider name matching the provider
+        let provider_name = provider.id();
         let filtered: Vec<ModelInfo> = all_models
             .into_iter()
             .filter(|m| m.provider.to_lowercase() == provider_name)
@@ -660,9 +660,9 @@ mod tests {
 
         let registry = ModelRegistry::new("".into(), 3600);
         let models = registry
-            .fetch_models_for_backend(super::Backend::Ollama)
+            .fetch_models_for_provider(Provider::Ollama)
             .await;
-        assert!(models.is_ok(), "fetch_models_for_backend should succeed");
+        assert!(models.is_ok(), "fetch_models_for_provider should succeed");
         let models = models.unwrap();
         assert!(!models.is_empty(), "Ollama should have at least one model");
         for model in &models {

@@ -640,15 +640,15 @@ impl ModelPicker {
     }
 }
 
-use crate::provider::Backend;
+use crate::provider::Provider;
 
-/// Fetch models from registry for the given backend.
+/// Fetch models from registry for the given provider.
 pub async fn fetch_models_for_picker(
     registry: &ModelRegistry,
-    backend: Backend,
+    provider: Provider,
     prefs: &ProviderPrefs,
 ) -> Result<Vec<ModelInfo>, anyhow::Error> {
-    let models = registry.fetch_models_for_backend(backend).await?;
+    let models = registry.fetch_models_for_provider(provider).await?;
     let filter = ModelFilter::default();
     Ok(registry.list_models_from_vec(models, &filter, prefs))
 }

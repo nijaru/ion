@@ -1,6 +1,6 @@
 //! LLM client implementation using the llm crate.
 
-use super::backend::Backend;
+use super::api_provider::Provider;
 use super::error::Error;
 use super::types::{
     ChatRequest, ContentBlock, Message, Role, StreamEvent, ToolCallEvent, ToolDefinition,
@@ -14,32 +14,32 @@ use tokio::sync::mpsc;
 
 /// LLM client for making API calls.
 pub struct Client {
-    backend: Backend,
+    provider: Provider,
     api_key: String,
     base_url: Option<String>,
 }
 
 impl Client {
-    /// Create a new client for the given backend.
-    pub fn new(backend: Backend, api_key: impl Into<String>) -> Self {
+    /// Create a new client for the given provider.
+    pub fn new(provider: Provider, api_key: impl Into<String>) -> Self {
         Self {
-            backend,
+            provider,
             api_key: api_key.into(),
             base_url: None,
         }
     }
 
-    /// Create client from backend, auto-detecting API key.
-    pub fn from_backend(backend: Backend) -> Result<Self, Error> {
-        let api_key = backend.api_key().ok_or_else(|| Error::MissingApiKey {
-            backend: backend.name().to_string(),
-            env_vars: backend
+    /// Create client from provider, auto-detecting API key.
+    pub fn from_provider(provider: Provider) -> Result<Self, Error> {
+        let api_key = provider.api_key().ok_or_else(|| Error::MissingApiKey {
+            backend: provider.name().to_string(),
+            env_vars: provider
                 .env_vars()
                 .iter()
                 .map(|s| s.to_string())
                 .collect(),
         })?;
-        Ok(Self::new(backend, api_key))
+        Ok(Self::new(provider, api_key))
     }
 
     /// Set custom base URL (for proxies or local servers).
@@ -48,16 +48,16 @@ impl Client {
         self
     }
 
-    /// Get the backend type.
-    pub fn backend(&self) -> Backend {
-        self.backend
+    /// Get the provider type.
+    pub fn provider(&self) -> Provider {
+        self.provider
     }
 
     /// Build llm crate instance for a request.
     fn build_llm(&self, model: &str, tools: &[ToolDefinition]) -> Result<Box<dyn llm::LLMProvider>, Error> {
         // OpenRouter expects full model ID (e.g., "anthropic/claude-3-opus")
         // Other providers expect just the model name
-        let model_name = if self.backend == Backend::OpenRouter {
+        let model_name = if self.provider == Provider::OpenRouter {
             model
         } else {
             // Strip provider prefix if present (e.g., "google/gemini-3-flash" -> "gemini-3-flash")
@@ -65,7 +65,7 @@ impl Client {
         };
 
         let mut builder = LLMBuilder::new()
-            .backend(self.backend.to_llm())
+            .backend(self.provider.to_llm())
             .model(model_name);
 
         if !self.api_key.is_empty() {
@@ -206,7 +206,7 @@ impl Client {
 /// is handled by `ModelRegistry` instead.
 #[async_trait]
 pub trait LlmApi: Send + Sync {
-    /// Get the backend identifier.
+    /// Get the provider identifier.
     fn id(&self) -> &str;
     /// Stream a chat completion.
     async fn stream(&self, request: ChatRequest, tx: mpsc::Sender<StreamEvent>) -> Result<(), Error>;
@@ -217,7 +217,7 @@ pub trait LlmApi: Send + Sync {
 #[async_trait]
 impl LlmApi for Client {
     fn id(&self) -> &str {
-        self.backend.id()
+        self.provider.id()
     }
 
     async fn stream(&self, request: ChatRequest, tx: mpsc::Sender<StreamEvent>) -> Result<(), Error> {
@@ -322,21 +322,21 @@ mod tests {
 
     #[test]
     fn test_client_creation() {
-        let client = Client::new(Backend::OpenAI, "test-key");
+        let client = Client::new(Provider::OpenAI, "test-key");
         assert_eq!(client.id(), "openai");
-        assert_eq!(client.backend(), Backend::OpenAI);
+        assert_eq!(client.provider(), Provider::OpenAI);
     }
 
     #[test]
     fn test_client_with_base_url() {
-        let client = Client::new(Backend::Ollama, "").with_base_url("http://localhost:11434");
-        assert_eq!(client.backend(), Backend::Ollama);
+        let client = Client::new(Provider::Ollama, "").with_base_url("http://localhost:11434");
+        assert_eq!(client.provider(), Provider::Ollama);
     }
 
     #[test]
-    fn test_from_backend_ollama() {
+    fn test_from_provider_ollama() {
         // Ollama should always work (no key needed)
-        let client = Client::from_backend(Backend::Ollama);
+        let client = Client::from_provider(Provider::Ollama);
         assert!(client.is_ok());
     }
 }

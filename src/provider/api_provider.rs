@@ -1,13 +1,12 @@
-//! API Provider detection and management.
+//! Unified LLM provider enum.
 //!
-//! Handles detection of available API providers based on environment variables
-//! and future OAuth tokens.
+//! Single source of truth for provider detection, configuration, and LLM backend mapping.
 
 use std::env;
 
-/// Supported API providers (backends, not model providers within OpenRouter).
+/// Supported LLM providers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ApiProvider {
+pub enum Provider {
     /// OpenRouter aggregator - access to many providers
     OpenRouter,
     /// Direct Anthropic API
@@ -22,93 +21,80 @@ pub enum ApiProvider {
     Groq,
 }
 
-impl ApiProvider {
-    /// All implemented API providers.
-    pub const ALL: &'static [ApiProvider] = &[
-        ApiProvider::OpenRouter,
-        ApiProvider::Anthropic,
-        ApiProvider::OpenAI,
-        ApiProvider::Google,
-        ApiProvider::Ollama,
-        ApiProvider::Groq,
+impl Provider {
+    /// All implemented providers.
+    pub const ALL: &'static [Provider] = &[
+        Provider::OpenRouter,
+        Provider::Anthropic,
+        Provider::OpenAI,
+        Provider::Google,
+        Provider::Ollama,
+        Provider::Groq,
     ];
 
-    /// Lowercase ID for config storage and model string prefixes.
-    pub fn id(&self) -> &'static str {
+    /// Lowercase ID for config storage.
+    pub fn id(self) -> &'static str {
         match self {
-            ApiProvider::OpenRouter => "openrouter",
-            ApiProvider::Anthropic => "anthropic",
-            ApiProvider::OpenAI => "openai",
-            ApiProvider::Google => "google",
-            ApiProvider::Ollama => "ollama",
-            ApiProvider::Groq => "groq",
+            Provider::OpenRouter => "openrouter",
+            Provider::Anthropic => "anthropic",
+            Provider::OpenAI => "openai",
+            Provider::Google => "google",
+            Provider::Ollama => "ollama",
+            Provider::Groq => "groq",
         }
     }
 
     /// Parse provider from ID string.
     pub fn from_id(id: &str) -> Option<Self> {
         match id.to_lowercase().as_str() {
-            "openrouter" => Some(ApiProvider::OpenRouter),
-            "anthropic" => Some(ApiProvider::Anthropic),
-            "openai" => Some(ApiProvider::OpenAI),
-            "google" => Some(ApiProvider::Google),
-            "ollama" => Some(ApiProvider::Ollama),
-            "groq" => Some(ApiProvider::Groq),
+            "openrouter" => Some(Provider::OpenRouter),
+            "anthropic" => Some(Provider::Anthropic),
+            "openai" => Some(Provider::OpenAI),
+            "google" => Some(Provider::Google),
+            "ollama" => Some(Provider::Ollama),
+            "groq" => Some(Provider::Groq),
             _ => None,
         }
     }
 
     /// Display name for the provider.
-    pub fn name(&self) -> &'static str {
+    pub fn name(self) -> &'static str {
         match self {
-            ApiProvider::OpenRouter => "OpenRouter",
-            ApiProvider::Anthropic => "Anthropic",
-            ApiProvider::OpenAI => "OpenAI",
-            ApiProvider::Google => "Google AI",
-            ApiProvider::Ollama => "Ollama",
-            ApiProvider::Groq => "Groq",
+            Provider::OpenRouter => "OpenRouter",
+            Provider::Anthropic => "Anthropic",
+            Provider::OpenAI => "OpenAI",
+            Provider::Google => "Google AI",
+            Provider::Ollama => "Ollama",
+            Provider::Groq => "Groq",
         }
     }
 
     /// Short description of the provider.
-    pub fn description(&self) -> &'static str {
+    pub fn description(self) -> &'static str {
         match self {
-            ApiProvider::OpenRouter => "Aggregator with 200+ models",
-            ApiProvider::Anthropic => "Claude models directly",
-            ApiProvider::OpenAI => "GPT models directly",
-            ApiProvider::Google => "Gemini via AI Studio",
-            ApiProvider::Ollama => "Local models",
-            ApiProvider::Groq => "Fast inference",
+            Provider::OpenRouter => "Aggregator with 200+ models",
+            Provider::Anthropic => "Claude models directly",
+            Provider::OpenAI => "GPT models directly",
+            Provider::Google => "Gemini via AI Studio",
+            Provider::Ollama => "Local models",
+            Provider::Groq => "Fast inference",
         }
     }
 
-    /// Environment variable(s) that indicate authentication.
-    pub fn env_vars(&self) -> &'static [&'static str] {
+    /// Environment variable(s) for API key.
+    pub fn env_vars(self) -> &'static [&'static str] {
         match self {
-            ApiProvider::OpenRouter => &["OPENROUTER_API_KEY"],
-            ApiProvider::Anthropic => &["ANTHROPIC_API_KEY"],
-            ApiProvider::OpenAI => &["OPENAI_API_KEY"],
-            ApiProvider::Google => &["GOOGLE_API_KEY", "GEMINI_API_KEY"],
-            ApiProvider::Ollama => &["OLLAMA_HOST"], // Ollama doesn't need auth, but host can be configured
-            ApiProvider::Groq => &["GROQ_API_KEY"],
+            Provider::OpenRouter => &["OPENROUTER_API_KEY"],
+            Provider::Anthropic => &["ANTHROPIC_API_KEY"],
+            Provider::OpenAI => &["OPENAI_API_KEY"],
+            Provider::Google => &["GOOGLE_API_KEY", "GEMINI_API_KEY"],
+            Provider::Ollama => &[], // No key needed
+            Provider::Groq => &["GROQ_API_KEY"],
         }
     }
 
-    /// Check if the provider is authenticated (has required env vars).
-    pub fn is_authenticated(&self) -> bool {
-        // Ollama is special - it's "authenticated" if reachable (no key needed)
-        if *self == ApiProvider::Ollama {
-            // For now, assume Ollama is available if OLLAMA_HOST is set or default localhost
-            return env::var("OLLAMA_HOST").is_ok() || Self::ollama_default_available();
-        }
-
-        self.env_vars()
-            .iter()
-            .any(|var| env::var(var).map(|v| !v.is_empty()).unwrap_or(false))
-    }
-
-    /// Get the API key if authenticated.
-    pub fn api_key(&self) -> Option<String> {
+    /// Get API key from environment.
+    pub fn api_key(self) -> Option<String> {
         for var in self.env_vars() {
             if let Ok(key) = env::var(var) {
                 if !key.is_empty() {
@@ -116,59 +102,56 @@ impl ApiProvider {
                 }
             }
         }
+        // Ollama doesn't need a key
+        if self == Provider::Ollama {
+            return Some(String::new());
+        }
         None
     }
 
-    /// Check if default Ollama is likely available (localhost:11434).
-    fn ollama_default_available() -> bool {
-        // Quick check - just see if the env suggests local dev environment
-        // Real check would need async HTTP call
-        cfg!(debug_assertions) // Assume available in debug builds
+    /// Check if this provider is available (has credentials or doesn't need them).
+    pub fn is_available(self) -> bool {
+        self.api_key().is_some()
     }
 
-    /// Whether this provider requires OAuth (vs just API key).
-    pub fn requires_oauth(&self) -> bool {
-        // Future: some providers may support OAuth for subscription access
-        false
-    }
-
-    /// Convert to Backend enum for LLM operations.
-    pub fn to_backend(self) -> super::Backend {
+    /// Convert to llm crate backend.
+    pub(crate) fn to_llm(self) -> llm::builder::LLMBackend {
         match self {
-            ApiProvider::OpenRouter => super::Backend::OpenRouter,
-            ApiProvider::Anthropic => super::Backend::Anthropic,
-            ApiProvider::OpenAI => super::Backend::OpenAI,
-            ApiProvider::Ollama => super::Backend::Ollama,
-            ApiProvider::Groq => super::Backend::Groq,
-            ApiProvider::Google => super::Backend::Google,
+            Provider::OpenRouter => llm::builder::LLMBackend::OpenRouter,
+            Provider::Anthropic => llm::builder::LLMBackend::Anthropic,
+            Provider::OpenAI => llm::builder::LLMBackend::OpenAI,
+            Provider::Ollama => llm::builder::LLMBackend::Ollama,
+            Provider::Groq => llm::builder::LLMBackend::Groq,
+            Provider::Google => llm::builder::LLMBackend::Google,
         }
     }
 }
 
-/// Information about detected API providers.
+/// Provider with availability status.
 #[derive(Debug, Clone)]
 pub struct ProviderStatus {
-    pub provider: ApiProvider,
+    pub provider: Provider,
     pub authenticated: bool,
 }
 
 impl ProviderStatus {
-    /// Get status for all providers.
+    /// Detect all providers and their availability.
     pub fn detect_all() -> Vec<ProviderStatus> {
-        ApiProvider::ALL
+        Provider::ALL
             .iter()
             .map(|&provider| ProviderStatus {
                 provider,
-                authenticated: provider.is_authenticated(),
+                authenticated: provider.is_available(),
             })
             .collect()
     }
 
-    /// Get only authenticated providers.
-    pub fn available() -> Vec<ProviderStatus> {
-        Self::detect_all()
-            .into_iter()
-            .filter(|s| s.authenticated)
+    /// Get only available providers.
+    pub fn available() -> Vec<Provider> {
+        Provider::ALL
+            .iter()
+            .copied()
+            .filter(|p| p.is_available())
             .collect()
     }
 
@@ -193,48 +176,55 @@ mod tests {
 
     #[test]
     fn test_all_providers_have_names() {
-        for provider in ApiProvider::ALL {
+        for provider in Provider::ALL {
             assert!(!provider.name().is_empty());
+            assert!(!provider.id().is_empty());
             assert!(!provider.description().is_empty());
         }
     }
 
     #[test]
-    fn test_env_vars_not_empty() {
-        for provider in ApiProvider::ALL {
-            // Ollama is special case, others need at least one env var
-            if *provider != ApiProvider::Ollama {
-                assert!(!provider.env_vars().is_empty());
-            }
+    fn test_ollama_always_available() {
+        // Ollama doesn't need an API key
+        assert!(Provider::Ollama.api_key().is_some());
+        assert!(Provider::Ollama.is_available());
+    }
+
+    #[test]
+    fn test_from_id_roundtrip() {
+        for provider in Provider::ALL {
+            let id = provider.id();
+            let parsed = Provider::from_id(id);
+            assert_eq!(parsed, Some(*provider));
         }
     }
 
     #[test]
     fn test_detect_all_returns_all_providers() {
         let statuses = ProviderStatus::detect_all();
-        assert_eq!(statuses.len(), ApiProvider::ALL.len());
+        assert_eq!(statuses.len(), Provider::ALL.len());
     }
 
     #[test]
     fn test_sorting_prioritizes_authenticated() {
         let statuses = vec![
             ProviderStatus {
-                provider: ApiProvider::Groq,
+                provider: Provider::Groq,
                 authenticated: false,
             },
             ProviderStatus {
-                provider: ApiProvider::OpenRouter,
+                provider: Provider::OpenRouter,
                 authenticated: true,
             },
             ProviderStatus {
-                provider: ApiProvider::Anthropic,
+                provider: Provider::Anthropic,
                 authenticated: false,
             },
         ];
 
         let sorted = ProviderStatus::sorted(statuses);
-        assert_eq!(sorted[0].provider, ApiProvider::OpenRouter); // Authenticated first
-        assert!(!sorted[1].authenticated); // Then not authenticated
+        assert_eq!(sorted[0].provider, Provider::OpenRouter); // Authenticated first
+        assert!(!sorted[1].authenticated);
         assert!(!sorted[2].authenticated);
     }
 }

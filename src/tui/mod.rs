@@ -6,7 +6,7 @@ pub mod widgets;
 use crate::agent::{Agent, AgentEvent};
 use crate::cli::PermissionSettings;
 use crate::config::Config;
-use crate::provider::{ApiProvider, Client, LlmApi, ModelRegistry};
+use crate::provider::{Provider, Client, LlmApi, ModelRegistry};
 use crate::session::Session;
 use crate::session::SessionStore;
 use crate::tool::{ApprovalHandler, ApprovalResponse, ToolMode, ToolOrchestrator};
@@ -112,7 +112,7 @@ pub struct App {
     /// Current tool permission mode (Read/Write/Agi)
     pub tool_mode: ToolMode,
     /// Currently selected API provider
-    pub api_provider: ApiProvider,
+    pub api_provider: Provider,
     /// API provider picker state
     pub provider_picker: ProviderPicker,
     pub message_list: MessageList,
@@ -253,17 +253,15 @@ impl App {
         let api_provider = config
             .provider
             .as_deref()
-            .and_then(ApiProvider::from_id)
-            .unwrap_or(ApiProvider::OpenRouter);
-
-        let backend = api_provider.to_backend();
+            .and_then(Provider::from_id)
+            .unwrap_or(Provider::OpenRouter);
 
         // Get API key (env var first, then config)
         let api_key = config
             .api_key_for(api_provider.id())
             .unwrap_or_default();
 
-        let provider_impl: Arc<dyn LlmApi> = Arc::new(Client::new(backend, api_key.clone()));
+        let provider_impl: Arc<dyn LlmApi> = Arc::new(Client::new(api_provider, api_key.clone()));
 
         let (approval_tx, approval_rx) = mpsc::channel(100);
         let mut orchestrator = ToolOrchestrator::with_builtins(permissions.mode);
@@ -1035,16 +1033,14 @@ impl App {
     }
 
     /// Set the active API provider and re-create the agent.
-    fn set_provider(&mut self, api_provider: ApiProvider) {
-        let backend = api_provider.to_backend();
-
+    fn set_provider(&mut self, api_provider: Provider) {
         // Get API key (env var first, then config)
         let api_key = self
             .config
             .api_key_for(api_provider.id())
             .unwrap_or_default();
 
-        let provider: Arc<dyn LlmApi> = Arc::new(Client::new(backend, api_key.clone()));
+        let provider: Arc<dyn LlmApi> = Arc::new(Client::new(api_provider, api_key.clone()));
 
         self.api_provider = api_provider;
 
@@ -1058,7 +1054,7 @@ impl App {
         self.agent = Arc::new(Agent::new(provider, self.orchestrator.clone()));
 
         // Update model registry with new key/base if it's OpenRouter
-        if api_provider == ApiProvider::OpenRouter {
+        if api_provider == Provider::OpenRouter {
             self.model_registry = Arc::new(ModelRegistry::new(
                 api_key,
                 self.config.model_cache_ttl_secs,
@@ -1163,13 +1159,13 @@ impl App {
     fn fetch_models(&self) {
         debug!("Starting model fetch");
         let registry = self.model_registry.clone();
-        let backend = self.api_provider.to_backend();
+        let provider = self.api_provider;
         let prefs = self.config.provider_prefs.clone();
         let agent_tx = self.agent_tx.clone();
 
         tokio::spawn(async move {
-            debug!("Model fetch task started for {:?}", backend);
-            match model_picker::fetch_models_for_picker(&registry, backend, &prefs).await {
+            debug!("Model fetch task started for {:?}", provider);
+            match model_picker::fetch_models_for_picker(&registry, provider, &prefs).await {
                 Ok(models) => {
                     debug!("Fetched {} models", models.len());
                     let _ = agent_tx.send(AgentEvent::ModelsFetched(models)).await;

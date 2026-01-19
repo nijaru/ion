@@ -2,7 +2,7 @@
 
 use crate::agent::{Agent, AgentEvent};
 use crate::config::Config;
-use crate::provider::{Backend, Client, LlmApi};
+use crate::provider::{Provider, Client, LlmApi};
 use crate::session::Session;
 use crate::tool::{ApprovalHandler, ApprovalResponse, ToolMode, ToolOrchestrator};
 use anyhow::Result;
@@ -313,14 +313,7 @@ async fn run_inner(args: RunArgs, auto_approve: bool) -> Result<ExitCode> {
 
     // Determine provider from config (or default to openrouter)
     let provider_id = config.provider.as_deref().unwrap_or("openrouter");
-    let backend = match provider_id {
-        "anthropic" => Backend::Anthropic,
-        "openai" => Backend::OpenAI,
-        "google" => Backend::Google,
-        "groq" => Backend::Groq,
-        "ollama" => Backend::Ollama,
-        _ => Backend::OpenRouter,
-    };
+    let provider = Provider::from_id(provider_id).unwrap_or(Provider::OpenRouter);
 
     // Get API key (env var first, then config)
     let api_key = match config.api_key_for(provider_id) {
@@ -346,8 +339,8 @@ async fn run_inner(args: RunArgs, auto_approve: bool) -> Result<ExitCode> {
         .or(config.model.clone())
         .unwrap_or_else(|| "anthropic/claude-sonnet-4".to_string());
 
-    // Create provider
-    let provider: Arc<dyn LlmApi> = Arc::new(Client::new(backend, api_key));
+    // Create LLM client
+    let llm_client: Arc<dyn LlmApi> = Arc::new(Client::new(provider, api_key));
 
     // Create orchestrator
     // Note: --yes grants Write mode with auto-approve (no approval handler)
@@ -366,7 +359,7 @@ async fn run_inner(args: RunArgs, auto_approve: bool) -> Result<ExitCode> {
     };
 
     // Create agent
-    let agent = Arc::new(Agent::new(provider, orchestrator));
+    let agent = Arc::new(Agent::new(llm_client, orchestrator));
 
     // Create session
     let session = Session::new(working_dir, model);
