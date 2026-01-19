@@ -119,6 +119,7 @@ impl ToolOrchestrator {
         let mut orch = Self::new(mode);
         orch.register_tool(Box::new(builtin::ReadTool));
         orch.register_tool(Box::new(builtin::WriteTool));
+        orch.register_tool(Box::new(builtin::EditTool));
         orch.register_tool(Box::new(builtin::GlobTool));
         orch.register_tool(Box::new(builtin::GrepTool));
         orch.register_tool(Box::new(builtin::BashTool));
