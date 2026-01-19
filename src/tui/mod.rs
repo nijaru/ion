@@ -6,7 +6,7 @@ pub mod widgets;
 use crate::agent::{Agent, AgentEvent};
 use crate::cli::PermissionSettings;
 use crate::config::Config;
-use crate::provider::{ApiProvider, Backend, Client, LlmApi, ModelRegistry};
+use crate::provider::{ApiProvider, Client, LlmApi, ModelRegistry};
 use crate::session::Session;
 use crate::session::SessionStore;
 use crate::tool::{ApprovalHandler, ApprovalResponse, ToolMode, ToolOrchestrator};
@@ -249,15 +249,29 @@ impl App {
                 .try_init();
         }
 
-        // Determine active provider and key
-        let (api_provider, backend, api_key) = if let Some(key) = config.openrouter_api_key.clone()
-        {
-            (ApiProvider::OpenRouter, Backend::OpenRouter, key)
-        } else if let Some(key) = config.anthropic_api_key.clone() {
-            (ApiProvider::Anthropic, Backend::Anthropic, key)
-        } else {
-            (ApiProvider::OpenRouter, Backend::OpenRouter, "".to_string())
-        };
+        // Determine active provider from config (saved provider > model prefix > first available)
+        let api_provider = config
+            .provider
+            .as_deref()
+            .and_then(ApiProvider::from_id)
+            .or_else(|| {
+                // Fallback: parse provider from model string (e.g., "google/gemini-3-flash")
+                config
+                    .model
+                    .as_deref()
+                    .and_then(|m| m.split('/').next())
+                    .and_then(ApiProvider::from_id)
+            })
+            .unwrap_or(ApiProvider::OpenRouter);
+
+        let backend = api_provider.to_backend();
+
+        // Get API key: config first, then env var
+        let api_key = config
+            .api_key_for(api_provider.id())
+            .map(String::from)
+            .or_else(|| api_provider.api_key())
+            .unwrap_or_default();
 
         let provider_impl: Arc<dyn LlmApi> = Arc::new(Client::new(backend, api_key.clone()));
 
@@ -1034,17 +1048,26 @@ impl App {
     fn switch_provider(&mut self, api_provider: ApiProvider) {
         let backend = api_provider.to_backend();
 
-        // Ollama doesn't need an API key
+        // Get API key: config first, then env var (Ollama doesn't need one)
         let api_key = if api_provider == ApiProvider::Ollama {
             Some(String::new())
         } else {
-            api_provider.api_key()
+            self.config
+                .api_key_for(api_provider.id())
+                .map(String::from)
+                .or_else(|| api_provider.api_key())
         };
 
         if let Some(api_key) = api_key {
             let provider: Arc<dyn LlmApi> = Arc::new(Client::new(backend, api_key.clone()));
 
             self.api_provider = api_provider;
+
+            // Save provider to config
+            self.config.provider = Some(api_provider.id().to_string());
+            if let Err(e) = self.config.save() {
+                tracing::warn!("Failed to save config: {}", e);
+            }
 
             // Re-create agent with new provider but same orchestrator
             self.agent = Arc::new(Agent::new(provider, self.orchestrator.clone()));

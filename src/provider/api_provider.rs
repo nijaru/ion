@@ -33,6 +33,31 @@ impl ApiProvider {
         ApiProvider::Groq,
     ];
 
+    /// Lowercase ID for config storage and model string prefixes.
+    pub fn id(&self) -> &'static str {
+        match self {
+            ApiProvider::OpenRouter => "openrouter",
+            ApiProvider::Anthropic => "anthropic",
+            ApiProvider::OpenAI => "openai",
+            ApiProvider::Google => "google",
+            ApiProvider::Ollama => "ollama",
+            ApiProvider::Groq => "groq",
+        }
+    }
+
+    /// Parse provider from ID string.
+    pub fn from_id(id: &str) -> Option<Self> {
+        match id.to_lowercase().as_str() {
+            "openrouter" => Some(ApiProvider::OpenRouter),
+            "anthropic" => Some(ApiProvider::Anthropic),
+            "openai" => Some(ApiProvider::OpenAI),
+            "google" => Some(ApiProvider::Google),
+            "ollama" => Some(ApiProvider::Ollama),
+            "groq" => Some(ApiProvider::Groq),
+            _ => None,
+        }
+    }
+
     /// Display name for the provider.
     pub fn name(&self) -> &'static str {
         match self {

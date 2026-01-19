@@ -267,12 +267,8 @@ impl ModelRegistry {
             // Avoid duplicates by checking IDs
             for m in md_models {
                 // If we already have this model from OpenRouter, keep OpenRouter's (likely more up to date for OR users)
-                // OpenRouter IDs are "provider/model", Models.dev are "provider:model"
-                // We should probably normalize or check name match too
-                let normalized_id = m.id.replace(':', "/");
-                if !all_models
-                    .iter()
-                    .any(|existing| existing.id == normalized_id || existing.id == m.id)
+                // Both use "provider/model" format now
+                if !all_models.iter().any(|existing| existing.id == m.id)
                 {
                     all_models.push(m);
                 }
