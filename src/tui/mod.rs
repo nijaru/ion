@@ -26,6 +26,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 const CANCEL_WINDOW: Duration = Duration::from_millis(1500);
+const SUMMARY_DISPLAY: Duration = Duration::from_secs(5);
 
 /// Thinking budget level for extended reasoning.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -156,6 +157,17 @@ pub struct App {
     pub current_tool: Option<String>,
     /// Permission settings from CLI flags
     pub permissions: PermissionSettings,
+    /// Last completed task summary (for brief display after completion)
+    pub last_task_summary: Option<TaskSummary>,
+}
+
+/// Summary of a completed task for brief post-completion display
+#[derive(Clone)]
+pub struct TaskSummary {
+    pub elapsed: std::time::Duration,
+    pub input_tokens: usize,
+    pub output_tokens: usize,
+    pub completed_at: Instant,
 }
 
 struct TuiApprovalHandler {
@@ -356,6 +368,7 @@ impl App {
             output_tokens: 0,
             current_tool: None,
             permissions,
+            last_task_summary: None,
         };
 
         // Initialize setup flow if needed
@@ -412,6 +425,15 @@ impl App {
         while let Ok(event) = self.agent_rx.try_recv() {
             match &event {
                 AgentEvent::Finished(_) | AgentEvent::Error(_) => {
+                    // Save task summary before clearing
+                    if let Some(start) = self.task_start_time {
+                        self.last_task_summary = Some(TaskSummary {
+                            elapsed: start.elapsed(),
+                            input_tokens: self.input_tokens,
+                            output_tokens: self.output_tokens,
+                            completed_at: Instant::now(),
+                        });
+                    }
                     self.is_running = false;
                     self.cancel_pending = None;
                     self.message_queue = None;
@@ -456,6 +478,15 @@ impl App {
 
         // Poll session updates (preserves conversation history)
         if let Ok(updated_session) = self.session_rx.try_recv() {
+            // Save task summary before clearing
+            if let Some(start) = self.task_start_time {
+                self.last_task_summary = Some(TaskSummary {
+                    elapsed: start.elapsed(),
+                    input_tokens: self.input_tokens,
+                    output_tokens: self.output_tokens,
+                    completed_at: Instant::now(),
+                });
+            }
             // Agent task completed successfully
             self.is_running = false;
             self.cancel_pending = None;
@@ -1100,6 +1131,7 @@ impl App {
         self.task_start_time = Some(Instant::now());
         self.input_tokens = 0;
         self.output_tokens = 0;
+        self.last_task_summary = None;
 
         // Reset cancellation token for new task (tokens are single-use)
         self.session.abort_token = CancellationToken::new();
@@ -1252,8 +1284,12 @@ impl App {
         // Calculate input box height based on content
         let input_height = self.calculate_input_height(frame.area().width);
 
-        // Progress line only takes space when running
-        let progress_height = if self.is_running { 1 } else { 0 };
+        // Progress line: running, or showing completion summary
+        let show_summary = self
+            .last_task_summary
+            .as_ref()
+            .is_some_and(|s| s.completed_at.elapsed() < SUMMARY_DISPLAY);
+        let progress_height = if self.is_running || show_summary { 1 } else { 0 };
 
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -1463,6 +1499,42 @@ impl App {
 
             let progress_line = Line::from(progress_spans);
             frame.render_widget(Paragraph::new(progress_line), chunks[1]);
+        } else if let Some(summary) = &self.last_task_summary {
+            // Show completion summary briefly
+            if summary.completed_at.elapsed() < SUMMARY_DISPLAY {
+                let format_tokens = |n: usize| -> String {
+                    if n >= 1000 {
+                        format!("{:.1}k", n as f64 / 1000.0)
+                    } else {
+                        n.to_string()
+                    }
+                };
+
+                let secs = summary.elapsed.as_secs();
+                let elapsed_str = if secs >= 60 {
+                    format!("{}m {}s", secs / 60, secs % 60)
+                } else {
+                    format!("{}s", secs)
+                };
+
+                let mut stats = vec![elapsed_str];
+                if summary.input_tokens > 0 {
+                    stats.push(format!("↑ {}", format_tokens(summary.input_tokens)));
+                }
+                if summary.output_tokens > 0 {
+                    stats.push(format!("↓ {}", format_tokens(summary.output_tokens)));
+                }
+
+                let summary_line = Line::from(vec![
+                    Span::styled(" ✓ ", Style::default().fg(Color::Green)),
+                    Span::styled("Done", Style::default().fg(Color::Green)),
+                    Span::styled(
+                        format!(" ({})", stats.join(" · ")),
+                        Style::default().dim(),
+                    ),
+                ]);
+                frame.render_widget(Paragraph::new(summary_line), chunks[1]);
+            }
         }
 
         // Input or Approval Prompt (input always visible except during approval)
