@@ -149,10 +149,6 @@ pub struct RunArgs {
     #[arg(short, long)]
     pub quiet: bool,
 
-    /// Auto-approve all tool calls
-    #[arg(short = 'y', long)]
-    pub yes: bool,
-
     /// Maximum agentic turns before stopping
     #[arg(long)]
     pub max_turns: Option<usize>,
@@ -219,8 +215,8 @@ enum JsonEvent {
 }
 
 /// Run the CLI one-shot mode
-pub async fn run(args: RunArgs) -> ExitCode {
-    match run_inner(args).await {
+pub async fn run(args: RunArgs, auto_approve: bool) -> ExitCode {
+    match run_inner(args, auto_approve).await {
         Ok(code) => code,
         Err(e) => {
             eprintln!("Error: {}", e);
@@ -229,7 +225,15 @@ pub async fn run(args: RunArgs) -> ExitCode {
     }
 }
 
-async fn run_inner(args: RunArgs) -> Result<ExitCode> {
+async fn run_inner(args: RunArgs, auto_approve: bool) -> Result<ExitCode> {
+    // Initialize tracing for CLI mode
+    if args.verbose || std::env::var("ION_LOG").is_ok() {
+        let _ = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .with_writer(std::io::stderr)
+            .try_init();
+    }
+
     // Load config
     let config = Config::load()?;
 
@@ -292,7 +296,7 @@ async fn run_inner(args: RunArgs) -> Result<ExitCode> {
     let orchestrator = if args.no_tools {
         // Truly disable all tools - empty orchestrator
         Arc::new(ToolOrchestrator::new(ToolMode::Read))
-    } else if args.yes {
+    } else if auto_approve {
         // Full autonomy with auto-approve
         Arc::new(ToolOrchestrator::with_builtins(ToolMode::Agi))
     } else {
