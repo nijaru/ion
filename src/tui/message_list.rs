@@ -177,16 +177,16 @@ impl MessageList {
                 }
                 self.push_entry(MessageEntry::new_thinking(Sender::Agent, delta));
             }
-            AgentEvent::ToolCallStart(id, name) => {
-                // Show tool call with a distinct format
-                let display = format!("**{}** `{}`", name, id);
+            AgentEvent::ToolCallStart(_id, name) => {
+                // Clean tool name display
+                let display = format!("**{}**", name);
                 self.push_entry(MessageEntry::new(Sender::Tool, display));
             }
-            AgentEvent::ToolCallResult(id, result, is_error) => {
+            AgentEvent::ToolCallResult(_id, result, is_error) => {
                 let content = if is_error {
-                    format!("**Error** `{}`\n```\n{}\n```", id, result)
+                    format!("**Error:** {}", result)
                 } else {
-                    // Show result with code block formatting for readability
+                    // Brief preview of result
                     let truncated = if result.chars().count() > TOOL_RESULT_PREVIEW_LEN {
                         let preview: String =
                             result.chars().take(TOOL_RESULT_PREVIEW_LEN).collect();
@@ -194,7 +194,7 @@ impl MessageList {
                     } else {
                         result
                     };
-                    format!("```\n{}\n```", truncated)
+                    truncated
                 };
                 self.push_entry(MessageEntry::new(Sender::Tool, content));
             }
@@ -269,36 +269,31 @@ impl MessageList {
                             ContentBlock::Thinking { thinking } => {
                                 parts.push(MessagePart::Thinking(thinking.clone()))
                             }
-                            ContentBlock::ToolCall { id, name, arguments } => {
-                                // Show tool name and key arguments
+                            ContentBlock::ToolCall { id: _, name, arguments } => {
+                                // Show tool name and key argument preview
                                 let args_preview = if let Some(obj) = arguments.as_object() {
-                                    // Show first couple key args
                                     obj.iter()
-                                        .take(2)
-                                        .map(|(k, v)| {
-                                            let val = match v {
-                                                serde_json::Value::String(s) => {
-                                                    if s.chars().count() > 30 {
-                                                        let truncated: String =
-                                                            s.chars().take(27).collect();
-                                                        format!("{}...", truncated)
-                                                    } else {
-                                                        s.clone()
-                                                    }
-                                                }
-                                                other => other.to_string(),
-                                            };
-                                            format!("{}={}", k, val)
+                                        .take(1)
+                                        .filter_map(|(k, v)| {
+                                            if let serde_json::Value::String(s) = v {
+                                                let preview = if s.chars().count() > 40 {
+                                                    let truncated: String = s.chars().take(37).collect();
+                                                    format!("{}...", truncated)
+                                                } else {
+                                                    s.clone()
+                                                };
+                                                Some(format!("{}: {}", k, preview))
+                                            } else {
+                                                None
+                                            }
                                         })
-                                        .collect::<Vec<_>>()
-                                        .join(", ")
+                                        .next()
                                 } else {
-                                    String::new()
+                                    None
                                 };
-                                let display = if args_preview.is_empty() {
-                                    format!("**{}** `{}`", name, id)
-                                } else {
-                                    format!("**{}** `{}`\n`{}`", name, id, args_preview)
+                                let display = match args_preview {
+                                    Some(preview) => format!("**{}** `{}`", name, preview),
+                                    None => format!("**{}**", name),
                                 };
                                 self.entries.push(MessageEntry::new(Sender::Tool, display));
                             }
@@ -318,13 +313,13 @@ impl MessageList {
                 Role::ToolResult => {
                     for block in msg.content.iter() {
                         if let ContentBlock::ToolResult {
-                            tool_call_id,
+                            tool_call_id: _,
                             content,
                             is_error,
                         } = block
                         {
                             let display = if *is_error {
-                                format!("**Error** `{}`\n```\n{}\n```", tool_call_id, content)
+                                format!("**Error:** {}", content)
                             } else {
                                 let truncated = if content.chars().count() > TOOL_RESULT_PREVIEW_LEN
                                 {
@@ -334,7 +329,7 @@ impl MessageList {
                                 } else {
                                     content.clone()
                                 };
-                                format!("```\n{}\n```", truncated)
+                                truncated
                             };
                             self.entries.push(MessageEntry::new(Sender::Tool, display));
                         }
