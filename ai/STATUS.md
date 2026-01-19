@@ -79,7 +79,6 @@ Run `tk ls` for current task list. **21 open tasks** as of 2026-01-19.
 | tk-eesg | Ctrl+P not working in model modal             |
 | tk-a9rd | Ctrl+M not working in provider modal          |
 | tk-x0z0 | Missing final agent message after completion  |
-| tk-1mll | README says MIT but LICENSE is AGPL           |
 
 **UX Polish:**
 

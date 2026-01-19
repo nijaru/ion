@@ -4,7 +4,7 @@
 
 `ion` is a high-performance Rust-based terminal agent designed for deep codebase understanding and autonomous task execution. It distinguishes itself through a "budget-aware memory context assembly" system, using native Rust vector search (OmenDB) to build highly relevant context windows.
 
-**Runtime**: Rust (Nightly)
+**Runtime**: Rust (Stable)
 **Distribution**: Single static binary
 
 ```
@@ -25,11 +25,14 @@ Professional terminal interface with high-readability colors (Catppuccin Mocha).
 
 ### 2. Provider Layer
 
-Multi-provider abstraction supporting:
+Multi-provider abstraction via `llm` crate supporting:
 
-- **OpenRouter**: Primary gateway for DeepSeek, Claude, etc.
-- **Anthropic**: Direct API integration.
-- **Ollama**: Local model support.
+- **Anthropic**: Direct Claude API
+- **Google**: Gemini via AI Studio
+- **Groq**: Fast inference
+- **Ollama**: Local models
+- **OpenAI**: Direct GPT API
+- **OpenRouter**: 200+ models aggregator
 
 ### 3. Agent Layer
 
