@@ -1,6 +1,7 @@
 mod anthropic;
 mod api_provider;
 mod models_dev;
+mod ollama;
 mod openai;
 mod openrouter;
 mod prefs;
@@ -8,12 +9,16 @@ mod registry;
 
 pub use anthropic::AnthropicProvider;
 pub use api_provider::{ApiProvider, ProviderStatus};
+pub use ollama::OllamaProvider;
 pub use openai::OpenAIProvider;
 pub use openrouter::OpenRouterProvider;
 pub use prefs::ProviderPrefs;
 pub use registry::{ModelFilter, ModelRegistry};
 
 /// Create a provider instance based on the ApiProvider enum.
+///
+/// # Panics
+/// Panics if the provider is not implemented.
 pub fn create_provider(
     api_provider: ApiProvider,
     api_key: String,
@@ -23,10 +28,8 @@ pub fn create_provider(
         ApiProvider::OpenRouter => Arc::new(OpenRouterProvider::with_prefs(api_key, prefs)),
         ApiProvider::Anthropic => Arc::new(AnthropicProvider::new(api_key)),
         ApiProvider::OpenAI => Arc::new(OpenAIProvider::new(api_key)),
-        _ => {
-            // Fallback to OpenRouter or panic if not implemented but marked as such
-            Arc::new(OpenRouterProvider::with_prefs(api_key, prefs))
-        }
+        ApiProvider::Ollama => Arc::new(OllamaProvider::new()),
+        _ => panic!("Provider {:?} is not implemented", api_provider),
     }
 }
 
@@ -62,6 +65,16 @@ mod tests {
             ProviderPrefs::default(),
         );
         assert_eq!(provider.id(), "openai");
+    }
+
+    #[test]
+    fn test_create_provider_ollama() {
+        let provider = create_provider(
+            ApiProvider::Ollama,
+            String::new(), // Ollama doesn't need an API key
+            ProviderPrefs::default(),
+        );
+        assert_eq!(provider.id(), "ollama");
     }
 }
 

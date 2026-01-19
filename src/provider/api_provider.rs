@@ -123,9 +123,11 @@ impl ApiProvider {
     pub fn is_implemented(&self) -> bool {
         matches!(
             self,
-            ApiProvider::OpenRouter | ApiProvider::Anthropic | ApiProvider::OpenAI
+            ApiProvider::OpenRouter
+                | ApiProvider::Anthropic
+                | ApiProvider::OpenAI
+                | ApiProvider::Ollama
         )
-        // TODO: Add others as they're implemented
     }
 }
 
