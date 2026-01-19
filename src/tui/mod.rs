@@ -262,7 +262,8 @@ impl App {
             api_provider,
             api_key.clone(),
             config.provider_prefs.clone(),
-        );
+        )
+        .expect("Failed to create provider - this should not happen as only implemented providers are selectable");
 
         let (approval_tx, approval_rx) = mpsc::channel(100);
         let mut orchestrator = ToolOrchestrator::with_builtins(permissions.mode);
@@ -1030,14 +1031,27 @@ impl App {
 
     /// Switch the active API provider and re-create the agent.
     fn switch_provider(&mut self, api_provider: ApiProvider) {
-        if let Some(api_key) = api_provider.api_key() {
-            self.api_provider = api_provider;
+        // Ollama doesn't need an API key
+        let api_key = if api_provider == ApiProvider::Ollama {
+            Some(String::new())
+        } else {
+            api_provider.api_key()
+        };
 
-            let provider = crate::provider::create_provider(
+        if let Some(api_key) = api_key {
+            let provider = match crate::provider::create_provider(
                 api_provider,
                 api_key.clone(),
                 self.config.provider_prefs.clone(),
-            );
+            ) {
+                Ok(p) => p,
+                Err(e) => {
+                    self.last_error = Some(format!("Failed to create provider: {}", e));
+                    return;
+                }
+            };
+
+            self.api_provider = api_provider;
 
             // Re-create agent with new provider but same orchestrator
             self.agent = Arc::new(Agent::new(provider, self.orchestrator.clone()));

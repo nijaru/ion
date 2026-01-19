@@ -286,7 +286,13 @@ async fn run_inner(args: RunArgs) -> Result<ExitCode> {
         .unwrap_or_else(|| "anthropic/claude-sonnet-4".to_string());
 
     // Create provider
-    let provider = create_provider(api_provider, api_key, config.provider_prefs.clone());
+    let provider = match create_provider(api_provider, api_key, config.provider_prefs.clone()) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("Error creating provider: {}", e);
+            return Ok(ExitCode::FAILURE);
+        }
+    };
 
     // Create orchestrator
     let orchestrator = if args.no_tools {
