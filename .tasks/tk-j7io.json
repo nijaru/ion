@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "j7io",
+  "title": "[UX] Progress bar: smoother completion, show totals after",
+  "description": null,
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-19T09:00:03.071Z",
+  "updated_at": "2026-01-19T09:00:03.071Z",
+  "completed_at": null,
+  "external": {}
+}

@@ -590,8 +590,14 @@ impl App {
                 self.take_snapshot();
             }
 
-            // Shift+Enter: Insert newline
+            // Shift+Enter or Ctrl+J: Insert newline
+            // Note: Many terminals don't distinguish Shift+Enter from Enter,
+            // so Ctrl+J is the reliable alternative (ASCII newline)
             KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                self.input.insert(self.cursor_pos, '\n');
+                self.cursor_pos += 1;
+            }
+            KeyCode::Char('j') if ctrl => {
                 self.input.insert(self.cursor_pos, '\n');
                 self.cursor_pos += 1;
             }
@@ -1634,7 +1640,7 @@ impl App {
             ))
             .alignment(ratatui::layout::Alignment::Center),
             row("Enter", "Send message"),
-            row("Shift+Enter", "Insert newline"),
+            row("Ctrl+J", "Insert newline"),
             row("Shift+Tab", "Cycle mode"),
             row("Ctrl+M", "Model picker"),
             row("Ctrl+P", "Provider picker"),

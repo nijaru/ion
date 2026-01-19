@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "av8a",
+  "title": "[UX] Status line: show context % or token count",
+  "description": null,
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-19T09:00:01.795Z",
+  "updated_at": "2026-01-19T09:00:01.795Z",
+  "completed_at": null,
+  "external": {}
+}
