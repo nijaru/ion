@@ -3,7 +3,7 @@
   "ref": "qxvq",
   "title": "[CONFIG] Add Google/Groq/other API keys to config",
   "description": null,
-  "status": "open",
+  "status": "done",
   "priority": 3,
   "labels": [],
   "assignees": [],
@@ -13,7 +13,7 @@
   "due_date": null,
   "logs": [],
   "created_at": "2026-01-19T13:28:56.145Z",
-  "updated_at": "2026-01-19T13:28:56.145Z",
-  "completed_at": null,
+  "updated_at": "2026-01-19T14:41:16.497Z",
+  "completed_at": "2026-01-19T14:41:16.497Z",
   "external": {}
 }
