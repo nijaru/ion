@@ -719,3 +719,32 @@ No reason to go through MCP when we can use the Rust crate directly.
 | **Re-implementation** | After TUI agent is fully working  |
 
 **Rationale**: Ship a working, stable agent first. Memory adds complexity that shouldn't block core functionality. Stable Rust is more accessible for contributors
+
+---
+
+## 2026-01-19: Migrate to llm Crate for Provider Support
+
+**Context**: Custom provider implementations (anthropic.rs, openai.rs, openrouter.rs, ollama.rs) totaled 2,500+ lines with duplicated streaming, error handling, and tool calling logic. User feedback: "We should probably be using tested libs as much as possible to reduce our maintenance and testing required."
+
+**Decision**: Replace custom providers with `llm` crate.
+
+| Aspect           | Implementation                                                |
+| ---------------- | ------------------------------------------------------------- |
+| **Crate**        | `llm = "1.3"` with selective features                         |
+| **Features**     | `openai`, `anthropic`, `ollama`, `groq`, `google`             |
+| **Architecture** | `Backend` enum + `Client` struct + `LlmApi` trait             |
+| **Providers**    | OpenRouter, Anthropic, OpenAI, Ollama, Groq, Google (6 total) |
+
+**New Architecture**:
+
+| File              | Purpose                                   |
+| ----------------- | ----------------------------------------- |
+| `backend.rs`      | Backend enum with metadata methods        |
+| `client.rs`       | Client implementing LlmApi via llm crate  |
+| `error.rs`        | Clean error types                         |
+| `types.rs`        | Shared types (StreamEvent, Message, etc.) |
+| `api_provider.rs` | TUI-only ApiProvider for provider picker  |
+
+**Removed**: anthropic.rs, openai.rs, openrouter.rs, ollama.rs, llm_provider.rs (2,500+ lines)
+
+**Rationale**: Battle-tested library with streaming, tool calling, and multi-provider support. Reduces maintenance burden significantly. Only 10 small dependencies added with selective features.

@@ -3,7 +3,7 @@
   "ref": "clxs",
   "title": "[PROVIDER] Complete llm crate migration - fix compile errors, test",
   "description": null,
-  "status": "open",
+  "status": "done",
   "priority": 3,
   "labels": [],
   "assignees": [],
@@ -13,7 +13,7 @@
   "due_date": null,
   "logs": [],
   "created_at": "2026-01-19T10:16:30.036Z",
-  "updated_at": "2026-01-19T10:16:30.036Z",
-  "completed_at": null,
+  "updated_at": "2026-01-19T10:24:04.221Z",
+  "completed_at": "2026-01-19T10:24:04.221Z",
   "external": {}
 }
