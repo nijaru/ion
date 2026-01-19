@@ -67,15 +67,15 @@ Run `tk ready` for current task list.
 **High Priority:**
 
 1. **Provider persistence bug** (tk-rrue) - Blocks Google/Groq usage
-2. **Add edit tool** (tk-b4hd) - Critical for efficient editing
-3. **Add list tool** (tk-miou) - fd-like, uses ignore crate
+2. **Streaming+tools support** (tk-e1ji) - llm crate doesn't support for Google, need custom or better crate
+3. **Add edit tool** (tk-b4hd) - Critical for efficient editing
+4. **Add list tool** (tk-miou) - fd-like, uses ignore crate
 
 **Medium Priority:**
 
-4. Model sorting: org → newest → alphabetical (tk-r9c7)
-5. Diff highlighting for edits (tk-er0v)
-6. System prompt comparison (tk-gsiw)
-7. Custom LLM provider vs llm crate evaluation (tk-e1ji)
+5. Model sorting: org → newest → alphabetical (tk-r9c7)
+6. Diff highlighting for edits (tk-er0v)
+7. System prompt comparison (tk-gsiw)
 
 **Low Priority / Ideas:**
 
@@ -112,12 +112,16 @@ Run `tk ready` for current task list.
 
 ## Design Decisions Pending
 
-**llm crate vs custom:**
+**llm crate vs custom (PRIORITY):**
 
-- Current: Using llm crate with workarounds for quirks
-- Issues: streaming+tools fallback, system message handling
-- Alternative: Custom provider code (500-1000 LOC/provider)
-- Decision: Evaluate after more edge cases or keep llm crate
+- Tools are ALWAYS present for coding agent - streaming+tools is primary use case
+- llm crate: Google doesn't support streaming+tools, falls back to non-streaming (degraded UX)
+- Non-streaming = no incremental text output, user sees nothing until complete
+- Options:
+  1. Find crate that supports streaming+tools for all providers
+  2. Build custom (500-1000 LOC/provider, full control)
+  3. Contribute fix to llm crate
+- This is a **blocker** for good Google/other provider support
 
 **Permission model:**
 
