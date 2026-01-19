@@ -1730,35 +1730,6 @@ impl App {
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| "~".to_string());
 
-        let branch = get_git_branch(&self.session.working_dir).unwrap_or_default();
-        let branch_part = if branch.is_empty() {
-            String::new()
-        } else {
-            let diff_part = match self.git_diff_stats {
-                Some((ins, del)) if ins > 0 && del > 0 => format!(" +{} -{}", ins, del),
-                Some((ins, 0)) if ins > 0 => format!(" +{}", ins),
-                Some((0, del)) if del > 0 => format!(" -{}", del),
-                _ => String::new(),
-            };
-            format!("[{}{}] · ", branch, diff_part)
-        };
-
-        // Context % display with token counts: 56% (112k/200k)
-        let context_part = if let Some((used, max)) = self.token_usage {
-            let pct = if max > 0 { (used * 100) / max } else { 0 };
-            // Format tokens as k (thousands)
-            let format_k = |n: usize| -> String {
-                if n >= 1000 {
-                    format!("{}k", n / 1000)
-                } else {
-                    n.to_string()
-                }
-            };
-            format!("{}% ({}/{}) · ", pct, format_k(used), format_k(max))
-        } else {
-            String::new()
-        };
-
         // Simplify model name (remove provider prefix if present)
         let model_name = self
             .session
@@ -1767,7 +1738,46 @@ impl App {
             .next_back()
             .unwrap_or(&self.session.model);
 
-        let left = format!(" {} · {}{}{}", model_name, context_part, branch_part, cwd);
+        // Build status line left side with spans for colored diff stats
+        let mut left_spans: Vec<Span> = vec![
+            Span::raw(" "),
+            Span::raw(model_name),
+            Span::raw(" · "),
+        ];
+
+        // Context % display with token counts: 56% (112k/200k)
+        if let Some((used, max)) = self.token_usage {
+            let pct = if max > 0 { (used * 100) / max } else { 0 };
+            let format_k = |n: usize| -> String {
+                if n >= 1000 {
+                    format!("{}k", n / 1000)
+                } else {
+                    n.to_string()
+                }
+            };
+            left_spans.push(Span::raw(format!("{}% ({}/{}) · ", pct, format_k(used), format_k(max))));
+        }
+
+        // Git branch with colored diff stats
+        let branch = get_git_branch(&self.session.working_dir).unwrap_or_default();
+        if !branch.is_empty() {
+            left_spans.push(Span::raw("["));
+            left_spans.push(Span::raw(branch));
+            if let Some((ins, del)) = self.git_diff_stats {
+                if ins > 0 {
+                    left_spans.push(Span::styled(format!(" +{}", ins), Style::default().fg(Color::Green)));
+                }
+                if del > 0 {
+                    left_spans.push(Span::styled(format!(" -{}", del), Style::default().fg(Color::Red)));
+                }
+            }
+            left_spans.push(Span::raw("] · "));
+        }
+
+        left_spans.push(Span::raw(cwd));
+
+        // Calculate left side length for padding
+        let left_len: usize = left_spans.iter().map(|s| s.content.chars().count()).sum();
 
         // Right side: error or help hint
         let (right, right_style) = if let Some(ref err) = self.last_error {
@@ -1788,15 +1798,14 @@ impl App {
 
         // Calculate padding for right alignment
         let width = chunks[3].width as usize;
-        let left_len = left.chars().count();
         let right_len = right.chars().count();
         let padding = width.saturating_sub(left_len + right_len);
 
-        let status_line = Line::from(vec![
-            Span::styled(left, Style::default()),
-            Span::raw(" ".repeat(padding)),
-            Span::styled(right, right_style),
-        ]);
+        // Build final status line: left spans + padding + right
+        let mut status_spans = left_spans;
+        status_spans.push(Span::raw(" ".repeat(padding)));
+        status_spans.push(Span::styled(right, right_style));
+        let status_line = Line::from(status_spans);
 
         frame.render_widget(Paragraph::new(status_line), chunks[3]);
 
