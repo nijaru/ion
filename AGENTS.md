@@ -32,7 +32,7 @@ ion = Rust TUI Agent (ratatui)
 - ai/research/competitive/ - Agent analysis
 - ai/research/memory-architectures-comparison.md - Memory system research
 
-**Competitive research**: OpenCode, pi-mono, Goose, Charm (not Aider)
+**Competitive reference** (TUI agents): Claude Code, Gemini CLI, Codex CLI, pi-mono, amp, opencode, goose, droid, letta
 
 ## Technology Stack
 
@@ -55,17 +55,16 @@ cargo clippy             # Lint
 cargo fmt                # Format
 ```
 
-## Supported Models
+## Supported Providers
 
-**PRIMARY** (via OpenRouter):
-
-- `deepseek/deepseek-v4` - Main model (when available)
-- `anthropic/claude-sonnet-4` - Fallback
-
-**DIRECT**:
-
-- Anthropic API (Claude)
-- Ollama (local models)
+| Provider   | Notes                  |
+| ---------- | ---------------------- |
+| Anthropic  | Claude direct          |
+| Google     | Gemini via AI Studio   |
+| Groq       | Fast inference         |
+| Ollama     | Local models           |
+| OpenAI     | GPT direct             |
+| OpenRouter | 200+ models aggregator |
 
 ## Architecture
 
