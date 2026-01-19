@@ -258,7 +258,9 @@ impl App {
         // Get API key (env var first, then config)
         let api_key = config.api_key_for(api_provider.id()).unwrap_or_default();
 
-        let provider_impl: Arc<dyn LlmApi> = Arc::new(Client::new(api_provider, api_key.clone()));
+        let provider_impl: Arc<dyn LlmApi> = Arc::new(
+            Client::new(api_provider, api_key.clone()).expect("Failed to create LLM client"),
+        );
 
         let (approval_tx, approval_rx) = mpsc::channel(100);
         let mut orchestrator = ToolOrchestrator::with_builtins(permissions.mode);
@@ -1046,7 +1048,9 @@ impl App {
             .api_key_for(api_provider.id())
             .unwrap_or_default();
 
-        let provider: Arc<dyn LlmApi> = Arc::new(Client::new(api_provider, api_key.clone()));
+        let provider: Arc<dyn LlmApi> = Arc::new(
+            Client::new(api_provider, api_key.clone()).expect("Failed to create LLM client"),
+        );
 
         self.api_provider = api_provider;
 
@@ -1441,7 +1445,7 @@ impl App {
                     ]));
                     let md = tui_markdown::from_str(content);
                     for line in &md.lines {
-                        let mut padded = vec![Span::raw(" ")];
+                        let mut padded = vec![Span::raw("  ")];
                         padded.extend(line.spans.clone());
                         chat_lines.push(Line::from(padded));
                     }
@@ -1453,7 +1457,7 @@ impl App {
                     ]));
                     let md = tui_markdown::from_str(content);
                     for line in &md.lines {
-                        let mut padded = vec![Span::raw(" ")];
+                        let mut padded = vec![Span::raw("  ")];
                         padded.extend(line.spans.clone());
                         chat_lines.push(Line::from(padded));
                     }
@@ -1462,50 +1466,61 @@ impl App {
                     // Tool messages: first line is call, rest are results
                     let mut lines = content.lines();
 
-                    // First line: > **tool_name** (args)
+                    // First line: **tool_name**(args)
                     if let Some(first_line) = lines.next() {
                         // Parse tool_name(args) format
                         if let Some(paren_pos) = first_line.find('(') {
                             let tool_name = &first_line[..paren_pos];
                             let args = &first_line[paren_pos..];
                             chat_lines.push(Line::from(vec![
-                                Span::raw(" > "),
+                                Span::raw("  "),
                                 Span::styled(tool_name, Style::default().bold()),
-                                Span::raw(" "),
-                                Span::raw(args.to_string()),
+                                Span::styled(args.to_string(), Style::default().dim()),
                             ]));
                         } else {
                             // No args, just tool name
                             chat_lines.push(Line::from(vec![
-                                Span::raw(" > "),
+                                Span::raw("  "),
                                 Span::styled(first_line, Style::default().bold()),
                             ]));
                         }
                     }
 
-                    // Remaining lines: results with indent
+                    // Remaining lines: results with styling
+                    // Remaining lines: results with styling
                     for line in lines {
-                        // Check for ANSI escape sequences
-                        if line.contains("\x1b[") {
+                        let (indent, styled_line) = if line.starts_with("⎿ Error:")
+                            || line.starts_with("  Error:")
+                        {
+                            // Error lines in red
+                            (
+                                Span::raw("  "),
+                                Span::styled(line.to_string(), Style::default().fg(Color::Red)),
+                            )
+                        } else if line.starts_with("  … +") || line.starts_with("⎿ … +") {
+                            // Overflow indicator dimmed
+                            (
+                                Span::raw("  "),
+                                Span::styled(line.to_string(), Style::default().dim()),
+                            )
+                        } else if line.contains("\x1b[") {
+                            // ANSI escape sequences
                             use ansi_to_tui::IntoText;
                             if let Ok(ansi_text) = line.as_bytes().into_text() {
                                 for ansi_line in ansi_text.lines {
-                                    let mut padded = vec![Span::raw("   ")];
+                                    let mut padded = vec![Span::raw("  ")];
                                     padded.extend(ansi_line.spans.clone());
                                     chat_lines.push(Line::from(padded));
                                 }
+                                continue;
                             } else {
-                                chat_lines.push(Line::from(vec![
-                                    Span::raw("   "),
-                                    Span::raw(strip_ansi(line)),
-                                ]));
+                                (Span::raw("  "), Span::raw(strip_ansi(line)))
                             }
                         } else {
-                            chat_lines.push(Line::from(vec![
-                                Span::raw("   "),
-                                Span::raw(line.to_string()),
-                            ]));
-                        }
+                            // Normal result lines
+                            (Span::raw("  "), Span::raw(line.to_string()))
+                        };
+                        chat_lines.push(Line::from(vec![indent, styled_line]));
                     }
                 }
                 Sender::System => {

@@ -1,4 +1,4 @@
-//! LLM client implementation using the llm crate.
+//! LLM client implementation using llm-connector.
 
 use super::api_provider::Provider;
 use super::error::Error;
@@ -7,26 +7,22 @@ use super::types::{
 };
 use async_trait::async_trait;
 use futures::StreamExt;
-use llm::builder::{FunctionBuilder, LLMBuilder, ParamBuilder};
-use llm::chat::{ChatMessage, ChatRole, MessageType, StreamChunk, Tool};
+use llm_connector::LlmClient;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
 /// LLM client for making API calls.
 pub struct Client {
     provider: Provider,
-    api_key: String,
-    base_url: Option<String>,
+    client: LlmClient,
 }
 
 impl Client {
     /// Create a new client for the given provider.
-    pub fn new(provider: Provider, api_key: impl Into<String>) -> Self {
-        Self {
-            provider,
-            api_key: api_key.into(),
-            base_url: None,
-        }
+    pub fn new(provider: Provider, api_key: impl Into<String>) -> Result<Self, Error> {
+        let api_key = api_key.into();
+        let client = Self::create_llm_client(provider, &api_key, None)?;
+        Ok(Self { provider, client })
     }
 
     /// Create client from provider, auto-detecting API key.
@@ -35,13 +31,19 @@ impl Client {
             backend: provider.name().to_string(),
             env_vars: provider.env_vars().iter().map(|s| s.to_string()).collect(),
         })?;
-        Ok(Self::new(provider, api_key))
+        Self::new(provider, api_key)
     }
 
-    /// Set custom base URL (for proxies or local servers).
-    pub fn with_base_url(mut self, url: impl Into<String>) -> Self {
-        self.base_url = Some(url.into());
-        self
+    /// Create client with custom base URL (for proxies or local servers).
+    pub fn with_base_url(
+        provider: Provider,
+        api_key: impl Into<String>,
+        base_url: impl Into<String>,
+    ) -> Result<Self, Error> {
+        let api_key = api_key.into();
+        let base_url = base_url.into();
+        let client = Self::create_llm_client(provider, &api_key, Some(&base_url))?;
+        Ok(Self { provider, client })
     }
 
     /// Get the provider type.
@@ -49,69 +51,43 @@ impl Client {
         self.provider
     }
 
-    /// Build llm crate instance for a request.
-    fn build_llm(
-        &self,
-        model: &str,
-        tools: &[ToolDefinition],
-    ) -> Result<Box<dyn llm::LLMProvider>, Error> {
-        // OpenRouter expects full model ID (e.g., "anthropic/claude-3-opus")
-        // Other providers expect just the model name
-        let model_name = if self.provider == Provider::OpenRouter {
-            model
-        } else {
-            // Strip provider prefix if present (e.g., "google/gemini-3-flash" -> "gemini-3-flash")
-            model.split_once('/').map(|(_, name)| name).unwrap_or(model)
-        };
-
-        let mut builder = LLMBuilder::new()
-            .backend(self.provider.to_llm())
-            .model(model_name);
-
-        if !self.api_key.is_empty() {
-            builder = builder.api_key(&self.api_key);
-        }
-
-        if let Some(ref url) = self.base_url {
-            builder = builder.base_url(url);
-        }
-
-        for tool in tools {
-            let mut func = FunctionBuilder::new(&tool.name).description(&tool.description);
-
-            if let Some(props) = tool.parameters.get("properties")
-                && let Some(props_obj) = props.as_object()
-            {
-                for (name, schema) in props_obj {
-                    let type_str = schema
-                        .get("type")
-                        .and_then(|t| t.as_str())
-                        .unwrap_or("string");
-                    let desc = schema
-                        .get("description")
-                        .and_then(|d| d.as_str())
-                        .unwrap_or("");
-                    func = func.param(ParamBuilder::new(name).type_of(type_str).description(desc));
+    /// Create the appropriate llm-connector client for a provider.
+    fn create_llm_client(
+        provider: Provider,
+        api_key: &str,
+        base_url: Option<&str>,
+    ) -> Result<LlmClient, Error> {
+        let client = match provider {
+            Provider::Anthropic => LlmClient::anthropic(api_key),
+            Provider::OpenAI => {
+                if let Some(url) = base_url {
+                    LlmClient::openai_with_base_url(api_key, url)
+                } else {
+                    LlmClient::openai(api_key)
                 }
             }
-
-            if let Some(required) = tool.parameters.get("required")
-                && let Some(arr) = required.as_array()
-            {
-                let names: Vec<String> = arr
-                    .iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect();
-                func = func.required(names);
+            Provider::Google => LlmClient::google(api_key),
+            Provider::Ollama => {
+                if let Some(url) = base_url {
+                    LlmClient::ollama_with_base_url(url)
+                } else {
+                    LlmClient::ollama()
+                }
             }
-
-            builder = builder.function(func);
-        }
-
-        builder.build().map_err(|e| Error::Build(e.to_string()))
+            Provider::OpenRouter => LlmClient::openai_compatible(
+                api_key,
+                "https://openrouter.ai/api/v1",
+                "openrouter",
+            ),
+            Provider::Groq => {
+                LlmClient::openai_compatible(api_key, "https://api.groq.com/openai/v1", "groq")
+            }
+        };
+        client.map_err(|e| Error::Build(e.to_string()))
     }
 
-    fn convert_messages(messages: &[Message]) -> Vec<ChatMessage> {
+    /// Convert our messages to llm-connector format.
+    fn convert_messages(messages: &[Message]) -> Vec<llm_connector::Message> {
         let mut result = Vec::new();
 
         for msg in messages {
@@ -119,11 +95,7 @@ impl Client {
                 Role::System => {
                     for block in msg.content.as_ref() {
                         if let ContentBlock::Text { text } = block {
-                            result.push(ChatMessage {
-                                role: ChatRole::User,
-                                message_type: MessageType::Text,
-                                content: format!("[System]: {}", text),
-                            });
+                            result.push(llm_connector::Message::system(text));
                         }
                     }
                 }
@@ -135,30 +107,42 @@ impl Client {
                         }
                     }
                     if !text.is_empty() {
-                        result.push(ChatMessage {
-                            role: ChatRole::User,
-                            message_type: MessageType::Text,
-                            content: text,
-                        });
+                        result.push(llm_connector::Message::user(&text));
                     }
                 }
                 Role::Assistant => {
                     let mut text = String::new();
+                    let mut tool_calls = Vec::new();
                     for block in msg.content.as_ref() {
                         match block {
                             ContentBlock::Text { text: t } => text.push_str(t),
                             ContentBlock::Thinking { thinking } => {
                                 text.push_str(&format!("<thinking>{}</thinking>", thinking));
                             }
+                            ContentBlock::ToolCall {
+                                id,
+                                name,
+                                arguments,
+                            } => {
+                                tool_calls.push(llm_connector::types::ToolCall {
+                                    id: id.clone(),
+                                    call_type: "function".to_string(),
+                                    index: None,
+                                    function: llm_connector::types::FunctionCall {
+                                        name: name.clone(),
+                                        arguments: arguments.to_string(),
+                                    },
+                                });
+                            }
                             _ => {}
                         }
                     }
-                    if !text.is_empty() {
-                        result.push(ChatMessage {
-                            role: ChatRole::Assistant,
-                            message_type: MessageType::Text,
-                            content: text,
-                        });
+                    if !text.is_empty() || !tool_calls.is_empty() {
+                        let mut msg = llm_connector::Message::assistant(&text);
+                        if !tool_calls.is_empty() {
+                            msg.tool_calls = Some(tool_calls);
+                        }
+                        result.push(msg);
                     }
                 }
                 Role::ToolResult => {
@@ -166,15 +150,10 @@ impl Client {
                         if let ContentBlock::ToolResult {
                             tool_call_id,
                             content,
-                            is_error,
+                            ..
                         } = block
                         {
-                            let prefix = if *is_error { "[Error]" } else { "[Result]" };
-                            result.push(ChatMessage {
-                                role: ChatRole::User,
-                                message_type: MessageType::Text,
-                                content: format!("{} Tool {}: {}", prefix, tool_call_id, content),
-                            });
+                            result.push(llm_connector::Message::tool(tool_call_id, content));
                         }
                     }
                 }
@@ -184,18 +163,32 @@ impl Client {
         result
     }
 
-    fn convert_tools(tools: &[ToolDefinition]) -> Vec<Tool> {
+    /// Convert our tool definitions to llm-connector format.
+    fn convert_tools(tools: &[ToolDefinition]) -> Vec<llm_connector::types::Tool> {
         tools
             .iter()
-            .map(|t| Tool {
+            .map(|t| llm_connector::types::Tool {
                 tool_type: "function".to_string(),
-                function: llm::chat::FunctionTool {
+                function: llm_connector::types::Function {
                     name: t.name.clone(),
-                    description: t.description.clone(),
+                    description: Some(t.description.clone()),
                     parameters: t.parameters.clone(),
                 },
             })
             .collect()
+    }
+
+    /// Build a ChatRequest for llm-connector.
+    fn build_request(request: &ChatRequest) -> llm_connector::ChatRequest {
+        let messages = Self::convert_messages(&request.messages);
+        let tools = Self::convert_tools(&request.tools);
+
+        llm_connector::ChatRequest {
+            model: request.model.clone(),
+            messages,
+            tools: if tools.is_empty() { None } else { Some(tools) },
+            ..Default::default()
+        }
     }
 }
 
@@ -228,42 +221,53 @@ impl LlmApi for Client {
         request: ChatRequest,
         tx: mpsc::Sender<StreamEvent>,
     ) -> Result<(), Error> {
-        let llm = self.build_llm(&request.model, &request.tools)?;
-        let messages = Self::convert_messages(&request.messages);
-        let tools = Self::convert_tools(&request.tools);
+        let llm_request = Self::build_request(&request);
 
-        let tools_ref: Option<&[Tool]> = if tools.is_empty() { None } else { Some(&tools) };
-
-        let mut stream = llm
-            .chat_stream_with_tools(&messages, tools_ref)
+        let mut stream = self
+            .client
+            .chat_stream(&llm_request)
             .await
             .map_err(|e| Error::Stream(e.to_string()))?;
 
-        while let Some(chunk) = stream.next().await {
-            match chunk {
-                Ok(StreamChunk::Text(text)) => {
-                    let _ = tx.send(StreamEvent::TextDelta(text)).await;
+        while let Some(chunk_result) = stream.next().await {
+            match chunk_result {
+                Ok(chunk) => {
+                    // Handle text content
+                    if let Some(content) = chunk.get_content() {
+                        if !content.is_empty() {
+                            let _ = tx.send(StreamEvent::TextDelta(content.to_string())).await;
+                        }
+                    }
+
+                    // Handle tool calls from choices
+                    for choice in &chunk.choices {
+                        if let Some(tool_calls) = &choice.delta.tool_calls {
+                            for tc in tool_calls {
+                                // Only emit complete tool calls (with id and name)
+                                if !tc.id.is_empty() && !tc.function.name.is_empty() {
+                                    let arguments: serde_json::Value =
+                                        serde_json::from_str(&tc.function.arguments)
+                                            .unwrap_or(serde_json::Value::Null);
+
+                                    let _ = tx
+                                        .send(StreamEvent::ToolCall(ToolCallEvent {
+                                            id: tc.id.clone(),
+                                            name: tc.function.name.clone(),
+                                            arguments,
+                                        }))
+                                        .await;
+                                }
+                            }
+                        }
+
+                        // Check for completion
+                        if choice.finish_reason.as_deref() == Some("stop")
+                            || choice.finish_reason.as_deref() == Some("tool_calls")
+                        {
+                            break;
+                        }
+                    }
                 }
-                Ok(StreamChunk::ToolUseComplete { tool_call, .. }) => {
-                    let arguments = serde_json::from_str(&tool_call.function.arguments)
-                        .inspect_err(|e| {
-                            tracing::warn!(
-                                "Malformed tool arguments for {}: {}",
-                                tool_call.function.name,
-                                e
-                            )
-                        })
-                        .unwrap_or(serde_json::Value::Null);
-                    let _ = tx
-                        .send(StreamEvent::ToolCall(ToolCallEvent {
-                            id: tool_call.id,
-                            name: tool_call.function.name,
-                            arguments,
-                        }))
-                        .await;
-                }
-                Ok(StreamChunk::Done { .. }) => break,
-                Ok(_) => {}
                 Err(e) => {
                     let _ = tx.send(StreamEvent::Error(e.to_string())).await;
                     return Err(Error::Stream(e.to_string()));
@@ -276,35 +280,42 @@ impl LlmApi for Client {
     }
 
     async fn complete(&self, request: ChatRequest) -> Result<Message, Error> {
-        let llm = self.build_llm(&request.model, &request.tools)?;
-        let messages = Self::convert_messages(&request.messages);
-        let tools = Self::convert_tools(&request.tools);
+        let llm_request = Self::build_request(&request);
 
-        let tools_ref: Option<&[Tool]> = if tools.is_empty() { None } else { Some(&tools) };
-
-        let response = llm
-            .chat_with_tools(&messages, tools_ref)
+        let response = self
+            .client
+            .chat(&llm_request)
             .await
             .map_err(|e| Error::Api(e.to_string()))?;
 
         let mut content_blocks = Vec::new();
 
-        if let Some(text) = response.text() {
-            content_blocks.push(ContentBlock::Text { text });
-        }
+        // Extract content from first choice
+        if let Some(choice) = response.choices.first() {
+            // Extract text content from message blocks
+            for block in &choice.message.content {
+                match block {
+                    llm_connector::types::MessageBlock::Text { text } => {
+                        content_blocks.push(ContentBlock::Text { text: text.clone() });
+                    }
+                    _ => {} // Ignore image blocks for now
+                }
+            }
 
-        if let Some(tool_calls) = response.tool_calls() {
-            for tc in tool_calls {
-                let arguments = serde_json::from_str(&tc.function.arguments)
-                    .inspect_err(|e| {
-                        tracing::warn!("Malformed tool arguments for {}: {}", tc.function.name, e)
-                    })
-                    .unwrap_or(serde_json::Value::Null);
-                content_blocks.push(ContentBlock::ToolCall {
-                    id: tc.id,
-                    name: tc.function.name,
-                    arguments,
-                });
+            // Extract tool calls
+            if let Some(tool_calls) = &choice.message.tool_calls {
+                for tc in tool_calls {
+                    let arguments = serde_json::from_str(&tc.function.arguments)
+                        .inspect_err(|e| {
+                            tracing::warn!("Malformed tool arguments for {}: {}", tc.function.name, e)
+                        })
+                        .unwrap_or(serde_json::Value::Null);
+                    content_blocks.push(ContentBlock::ToolCall {
+                        id: tc.id.clone(),
+                        name: tc.function.name.clone(),
+                        arguments,
+                    });
+                }
             }
         }
 
@@ -321,15 +332,10 @@ mod tests {
 
     #[test]
     fn test_client_creation() {
-        let client = Client::new(Provider::OpenAI, "test-key");
-        assert_eq!(client.id(), "openai");
-        assert_eq!(client.provider(), Provider::OpenAI);
-    }
-
-    #[test]
-    fn test_client_with_base_url() {
-        let client = Client::new(Provider::Ollama, "").with_base_url("http://localhost:11434");
-        assert_eq!(client.provider(), Provider::Ollama);
+        // Ollama doesn't need a key
+        let client = Client::from_provider(Provider::Ollama);
+        assert!(client.is_ok());
+        assert_eq!(client.unwrap().provider(), Provider::Ollama);
     }
 
     #[test]

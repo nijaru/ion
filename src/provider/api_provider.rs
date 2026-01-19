@@ -114,17 +114,6 @@ impl Provider {
         self.api_key().is_some()
     }
 
-    /// Convert to llm crate backend.
-    pub(crate) fn to_llm(self) -> llm::builder::LLMBackend {
-        match self {
-            Provider::OpenRouter => llm::builder::LLMBackend::OpenRouter,
-            Provider::Anthropic => llm::builder::LLMBackend::Anthropic,
-            Provider::OpenAI => llm::builder::LLMBackend::OpenAI,
-            Provider::Ollama => llm::builder::LLMBackend::Ollama,
-            Provider::Groq => llm::builder::LLMBackend::Groq,
-            Provider::Google => llm::builder::LLMBackend::Google,
-        }
-    }
 }
 
 /// Provider with availability status.

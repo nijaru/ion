@@ -9,17 +9,10 @@ pub enum Sender {
     System,
 }
 
-const TOOL_RESULT_PREVIEW_LEN: usize = 80;
-
-/// Truncate a string to max chars with ellipsis.
-fn truncate_str(s: &str, max: usize) -> String {
-    if s.chars().count() > max {
-        let preview: String = s.chars().take(max - 3).collect();
-        format!("{}...", preview)
-    } else {
-        s.to_string()
-    }
-}
+/// Max lines to show in tool output (tail).
+const TOOL_RESULT_MAX_LINES: usize = 5;
+/// Max chars per line in tool output.
+const TOOL_RESULT_LINE_MAX: usize = 120;
 
 /// Extract the key argument from a tool call for display.
 fn extract_key_arg(tool_name: &str, args: &serde_json::Value) -> String {
@@ -64,23 +57,44 @@ fn truncate_for_display(s: &str, max: usize) -> String {
     }
 }
 
-/// Summarize a tool result for compact display.
-fn summarize_tool_result(result: &str) -> String {
+/// Format tool result showing tail of content with overflow indicator at top.
+fn format_tool_result(result: &str) -> String {
     let result = result.trim();
 
-    // Count lines in the result
-    let line_count = result.lines().count();
-
-    // For multi-line results, show line count
-    if line_count > 3 {
-        return format!("{} lines", line_count);
+    if result.is_empty() {
+        return "OK".to_string();
     }
 
-    // For short results, show the content (truncated if needed)
-    if result.is_empty() {
-        "OK".to_string()
+    let lines: Vec<&str> = result.lines().collect();
+    let total = lines.len();
+
+    if total <= TOOL_RESULT_MAX_LINES {
+        // Show all lines, truncating long ones
+        lines
+            .iter()
+            .map(|line| truncate_line(line, TOOL_RESULT_LINE_MAX))
+            .collect::<Vec<_>>()
+            .join("\n")
     } else {
-        truncate_str(result, TOOL_RESULT_PREVIEW_LEN)
+        // Show overflow indicator at top, then last N lines (tail)
+        let hidden = total - TOOL_RESULT_MAX_LINES;
+        let mut output = vec![format!("… +{} lines", hidden)];
+        output.extend(
+            lines
+                .iter()
+                .skip(hidden)
+                .map(|line| truncate_line(line, TOOL_RESULT_LINE_MAX)),
+        );
+        output.join("\n")
+    }
+}
+
+/// Truncate a line to max chars.
+fn truncate_line(s: &str, max: usize) -> String {
+    if s.len() > max {
+        format!("{}…", &s[..max - 1])
+    } else {
+        s.to_string()
     }
 }
 
@@ -228,14 +242,27 @@ impl MessageList {
                 }
                 self.push_entry(MessageEntry::new(Sender::Agent, delta));
             }
-            AgentEvent::ThinkingDelta(delta) => {
+            AgentEvent::ThinkingDelta(_delta) => {
+                // Don't show thinking content, just indicate reasoning is happening
+                // Only add indicator once per thinking block
+                if let Some(last) = self.entries.last_mut()
+                    && last.sender == Sender::Agent
+                    && last.content_as_markdown().contains("[Reasoning...]")
+                {
+                    // Already showing indicator, don't duplicate
+                    return;
+                }
+                // Add or update with reasoning indicator
                 if let Some(last) = self.entries.last_mut()
                     && last.sender == Sender::Agent
                 {
-                    last.append_thinking(&delta);
-                    return;
+                    // Append indicator to existing agent message
+                    if !last.content_as_markdown().contains("[Reasoning...]") {
+                        last.append_text("\n\n*[Reasoning...]*");
+                    }
+                } else {
+                    self.push_entry(MessageEntry::new(Sender::Agent, "*[Reasoning...]*".to_string()));
                 }
-                self.push_entry(MessageEntry::new_thinking(Sender::Agent, delta));
             }
             AgentEvent::ToolCallStart(_id, name, args) => {
                 // Format: tool_name(key_arg)
@@ -248,22 +275,54 @@ impl MessageList {
                 self.push_entry(MessageEntry::new(Sender::Tool, display));
             }
             AgentEvent::ToolCallResult(_id, result, is_error) => {
-                let result_line = if is_error {
-                    // Clean up error message
+                // Check if this is a context-gathering tool (collapse output)
+                let is_collapsed_tool = self
+                    .entries
+                    .last()
+                    .map(|e| {
+                        e.sender == Sender::Tool
+                            && (e.content_as_markdown().starts_with("read(")
+                                || e.content_as_markdown().starts_with("glob(")
+                                || e.content_as_markdown().starts_with("grep("))
+                    })
+                    .unwrap_or(false);
+
+                let result_content = if is_error {
+                    // Clean up error message - keep it concise
                     let msg = result.strip_prefix("Error: ").unwrap_or(&result).trim();
-                    format!("└ Error: {}", truncate_str(msg, TOOL_RESULT_PREVIEW_LEN))
+                    format!("⎿ Error: {}", truncate_line(msg, TOOL_RESULT_LINE_MAX))
+                } else if is_collapsed_tool {
+                    // Collapsed tools: just show line count or OK
+                    let line_count = result.lines().count();
+                    if line_count > 1 {
+                        format!("⎿ {} lines", line_count)
+                    } else if result.trim().is_empty() {
+                        "⎿ OK".to_string()
+                    } else {
+                        format!("⎿ {}", truncate_line(result.trim(), 60))
+                    }
                 } else {
-                    // Summarize result with indent connector
-                    format!("└ {}", summarize_tool_result(&result))
+                    // Full output: format with tail display
+                    let formatted = format_tool_result(&result);
+                    // Prefix first line with ⎿, indent rest
+                    let mut lines = formatted.lines();
+                    let mut output = String::new();
+                    if let Some(first) = lines.next() {
+                        output.push_str(&format!("⎿ {}", first));
+                    }
+                    for line in lines {
+                        output.push_str(&format!("\n  {}", line));
+                    }
+                    output
                 };
 
                 // Append result to last tool entry if it exists
                 if let Some(last) = self.entries.last_mut()
                     && last.sender == Sender::Tool
                 {
-                    last.append_text(&format!("\n{}", result_line));
+                    last.append_text(&format!("\n{}", result_content));
                 } else {
-                    self.push_entry(MessageEntry::new(Sender::Tool, result_line));
+                    self.push_entry(MessageEntry::new(Sender::Tool, result_content));
                 }
             }
             AgentEvent::PlanGenerated(plan) => {
@@ -330,15 +389,15 @@ impl MessageList {
                     }
                 }
                 Role::Assistant => {
-                    // Collect all text/thinking into one entry
+                    // Collect text into entry (skip thinking blocks in history)
                     let mut parts = Vec::new();
                     for block in msg.content.iter() {
                         match block {
                             ContentBlock::Text { text } => {
                                 parts.push(MessagePart::Text(text.clone()))
                             }
-                            ContentBlock::Thinking { thinking } => {
-                                parts.push(MessagePart::Thinking(thinking.clone()))
+                            ContentBlock::Thinking { .. } => {
+                                // Don't display thinking content in history
                             }
                             ContentBlock::ToolCall {
                                 id: _,
@@ -376,12 +435,19 @@ impl MessageList {
                         } = block
                         {
                             let display = if *is_error {
-                                format!(
-                                    "└ Error: {}",
-                                    truncate_str(content, TOOL_RESULT_PREVIEW_LEN)
-                                )
+                                format!("⎿ Error: {}", truncate_line(content, TOOL_RESULT_LINE_MAX))
                             } else {
-                                format!("└ {}", summarize_tool_result(content))
+                                // Format result with actual content
+                                let formatted = format_tool_result(content);
+                                let mut lines = formatted.lines();
+                                let mut output = String::new();
+                                if let Some(first) = lines.next() {
+                                    output.push_str(&format!("⎿ {}", first));
+                                }
+                                for line in lines {
+                                    output.push_str(&format!("\n  {}", line));
+                                }
+                                output
                             };
                             self.entries.push(MessageEntry::new(Sender::Tool, display));
                         }
