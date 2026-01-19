@@ -2,29 +2,32 @@ name: CI
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
-  test:
+  check:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Install Bun
-      uses: oven-sh/setup-bun@v1
-      with:
-        bun-version: latest
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
-    - name: Install dependencies
-      run: bun install
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
 
-    - name: Lint and Format
-      run: bun run lint
+      - name: Format check
+        run: cargo fmt --check
 
-    - name: Type check
-      run: bun run typecheck
+      - name: Clippy
+        run: cargo clippy -- -D warnings
 
-    - name: Run tests
-      run: bun test
+      - name: Test
+        run: cargo test
