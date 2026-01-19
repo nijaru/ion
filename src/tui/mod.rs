@@ -176,6 +176,7 @@ pub struct TaskSummary {
     pub elapsed: std::time::Duration,
     pub input_tokens: usize,
     pub output_tokens: usize,
+    pub was_cancelled: bool,
 }
 
 struct TuiApprovalHandler {
@@ -435,8 +436,19 @@ impl App {
         // Poll agent events
         while let Ok(event) = self.agent_rx.try_recv() {
             match &event {
-                AgentEvent::Finished(_) | AgentEvent::Error(_) => {
-                    self.save_task_summary();
+                AgentEvent::Finished(_) => {
+                    self.save_task_summary(false);
+                    self.is_running = false;
+                    self.cancel_pending = None;
+                    self.message_queue = None;
+                    self.task_start_time = None;
+                    self.current_tool = None;
+                    self.message_list.push_event(event);
+                }
+                AgentEvent::Error(msg) => {
+                    // Check if this was a cancellation
+                    let was_cancelled = msg.contains("Cancelled");
+                    self.save_task_summary(was_cancelled);
                     self.is_running = false;
                     self.cancel_pending = None;
                     self.message_queue = None;
@@ -481,7 +493,7 @@ impl App {
 
         // Poll session updates (preserves conversation history)
         if let Ok(updated_session) = self.session_rx.try_recv() {
-            self.save_task_summary();
+            self.save_task_summary(false);
             self.is_running = false;
             self.cancel_pending = None;
             self.message_queue = None;
@@ -1152,12 +1164,13 @@ impl App {
     }
 
     /// Save task summary before clearing task state
-    fn save_task_summary(&mut self) {
+    fn save_task_summary(&mut self, was_cancelled: bool) {
         if let Some(start) = self.task_start_time {
             self.last_task_summary = Some(TaskSummary {
                 elapsed: start.elapsed(),
                 input_tokens: self.input_tokens,
                 output_tokens: self.output_tokens,
+                was_cancelled,
             });
         }
     }
@@ -1527,7 +1540,7 @@ impl App {
             let progress_line = Line::from(progress_spans);
             frame.render_widget(Paragraph::new(progress_line), chunks[1]);
         } else if let Some(summary) = &self.last_task_summary {
-            // Show completion summary until next task starts
+            // Show completion/cancellation summary until next task starts
             let secs = summary.elapsed.as_secs();
             let elapsed_str = if secs >= 60 {
                 format!("{}m {}s", secs / 60, secs % 60)
@@ -1543,9 +1556,15 @@ impl App {
                 stats.push(format!("↓ {}", format_tokens(summary.output_tokens)));
             }
 
+            let (symbol, label, color) = if summary.was_cancelled {
+                (" ✗ ", "Cancelled", Color::Red)
+            } else {
+                (" ✓ ", "Completed", Color::Green)
+            };
+
             let summary_line = Line::from(vec![
-                Span::styled(" ✓ ", Style::default().fg(Color::Green)),
-                Span::styled("Complete", Style::default().fg(Color::Green)),
+                Span::styled(symbol, Style::default().fg(color)),
+                Span::styled(label, Style::default().fg(color)),
                 Span::styled(
                     format!(" ({})", stats.join(" · ")),
                     Style::default().dim(),
