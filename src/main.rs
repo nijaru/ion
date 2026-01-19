@@ -39,8 +39,15 @@ async fn main() -> ExitCode {
 
 async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::error::Error>> {
     use crossterm::{
-        event, execute,
-        terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+        event::{
+            self, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
+            PushKeyboardEnhancementFlags,
+        },
+        execute,
+        terminal::{
+            EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+            supports_keyboard_enhancement,
+        },
     };
     use ion::tui::App;
     use ratatui::prelude::*;
@@ -49,6 +56,16 @@ async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::err
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
+
+    // Enable keyboard enhancement for Shift+Enter detection (Kitty protocol)
+    let supports_enhancement = supports_keyboard_enhancement().unwrap_or(false);
+    if supports_enhancement {
+        execute!(
+            stdout,
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+        )?;
+    }
+
     execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
@@ -74,6 +91,9 @@ async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::err
     }
 
     // Restore terminal
+    if supports_enhancement {
+        execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags)?;
+    }
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
