@@ -1,9 +1,9 @@
 {
   "project": "tk",
-  "ref": "eesg",
-  "title": "[BUG] Ctrl+P not working in model modal - should switch to provider",
+  "ref": "hw04",
+  "title": "[INFRA] Remove AI attribution from commit history (backup first)",
   "description": null,
-  "status": "active",
+  "status": "open",
   "priority": 3,
   "labels": [],
   "assignees": [],
@@ -12,8 +12,8 @@
   "estimate": null,
   "due_date": null,
   "logs": [],
-  "created_at": "2026-01-19T15:17:15.373Z",
-  "updated_at": "2026-01-19T16:29:25.584Z",
+  "created_at": "2026-01-19T16:26:52.718Z",
+  "updated_at": "2026-01-19T16:26:52.718Z",
   "completed_at": null,
   "external": {}
 }

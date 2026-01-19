@@ -1011,8 +1011,14 @@ impl App {
                 }
             }
 
-            // Tab: Switch to provider picker
+            // Tab or Ctrl+P: Switch to provider picker
             KeyCode::Tab => {
+                self.model_picker.reset();
+                self.mode = Mode::ProviderPicker;
+                self.provider_picker.refresh();
+                self.provider_picker.select_provider(self.api_provider);
+            }
+            KeyCode::Char('p') if ctrl => {
                 self.model_picker.reset();
                 self.mode = Mode::ProviderPicker;
                 self.provider_picker.refresh();
@@ -1128,8 +1134,14 @@ impl App {
                 self.mode = Mode::Input;
             }
 
-            // Tab: Switch to model picker (only if models are loaded)
+            // Tab or Ctrl+M: Switch to model picker (only if models are loaded)
             KeyCode::Tab => {
+                if self.model_picker.has_models() {
+                    self.model_picker.start_all_models();
+                    self.mode = Mode::ModelPicker;
+                }
+            }
+            KeyCode::Char('m') if ctrl => {
                 if self.model_picker.has_models() {
                     self.model_picker.start_all_models();
                     self.mode = Mode::ModelPicker;
