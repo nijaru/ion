@@ -51,8 +51,7 @@ Run `tk ready` for current task list.
 
 **Priority (Refactor):**
 
-1. Model listing refactor - move to registry (see ai/design/model-listing-refactor.md)
-2. OpenAI-compatible endpoint config (vLLM, mlx-lm)
+1. OpenAI-compatible endpoint config (vLLM, mlx-lm)
 
 **Lower Priority (Polish):**
 
@@ -64,12 +63,16 @@ Run `tk ready` for current task list.
 
 ## Recent Session Work
 
+- **Completed model listing refactor** (tk-go12)
+  - Moved model listing from Client to Registry
+  - Client now only does LLM calls (stream, complete)
+  - Registry handles all model discovery
+  - Cleaned up LlmApi trait (removed list_models, model_info, models)
+  - Added to_backend() to ApiProvider
 - Fixed OpenRouter feature not enabled in llm crate
 - Implemented model listing for Ollama and OpenRouter
 - Improved tool call display in chat history
-- Added provider name to model picker title
 - Code review: fixed UTF-8 panic, CLI permission consistency
-- Designed model listing refactor (ai/design/model-listing-refactor.md)
 
 ## Known Limitations
 
