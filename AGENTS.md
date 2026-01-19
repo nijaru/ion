@@ -1,114 +1,80 @@
 # ion
 
-**Fast, lightweight, open-source coding agent.**
-
-## Vision
-
-```
-ion = Rust TUI Agent (ratatui)
-     + Multi-Provider LLM (OpenRouter primary)
-     + Skills System (SKILL.md)
-     + Session Persistence (rusqlite)
-```
+Fast, lightweight, open-source coding agent.
 
 ## Project Structure
 
-| Directory | Purpose                 |
-| --------- | ----------------------- |
-| src/      | Rust source             |
-| legacy/   | Archived TS/Python code |
-| ai/       | **AI session context**  |
+| Directory | Purpose            |
+| --------- | ------------------ |
+| src/      | Rust source        |
+| ai/       | AI session context |
+| .tasks/   | Task tracking (tk) |
 
-### AI Context
+## Session Workflow
 
-**Session files** (read every session):
+**Start:**
 
-- ai/STATUS.md - Current state (read FIRST)
-- ai/DECISIONS.md - Architecture decisions
-- ai/design/rust-architecture.md - Implementation guide
+1. Read `ai/STATUS.md` for current state and open tasks
+2. Run `tk ls` to see task list
 
-**Reference files**:
+**End:**
 
-- ai/research/competitive/ - Agent analysis
-- ai/research/memory-architectures-comparison.md - Memory system research
+- Update `ai/STATUS.md`
+- `tk done <id>` for completed work
+- Commit changes
 
-**Competitive reference** (TUI agents): Claude Code, Gemini CLI, Codex CLI, pi-mono, amp, opencode, goose, droid, letta
+## Architecture
 
-## Technology Stack
+| Module    | Purpose                             |
+| --------- | ----------------------------------- |
+| provider/ | Multi-provider LLM via `llm` crate  |
+| tool/     | Built-in tools + MCP client         |
+| skill/    | SKILL.md loader                     |
+| agent/    | Multi-turn loop, session management |
+| tui/      | ratatui + crossterm chat interface  |
 
-| Component | Choice              | Why                      |
-| --------- | ------------------- | ------------------------ |
-| Language  | Rust                | Single binary, fast      |
-| TUI       | ratatui + crossterm | Mature, async-friendly   |
-| Async     | tokio               | Standard, well-supported |
-| HTTP      | reqwest             | Production-grade         |
-| Database  | rusqlite            | Embedded, zero deps      |
-| Tokens    | bpe-openai          | Fast OpenAI-compatible   |
+**Built-in tools:** read, write, edit, bash, glob, grep
+
+**Providers:** Anthropic, Google, Groq, Ollama, OpenAI, OpenRouter (alphabetical, no default)
+
+## Tech Stack
+
+| Component | Choice            |
+| --------- | ----------------- |
+| TUI       | ratatui/crossterm |
+| Async     | tokio             |
+| HTTP      | reqwest           |
+| Database  | rusqlite          |
+| Tokens    | bpe-openai        |
+
+## Code Standards
+
+| Aspect    | Standard                      |
+| --------- | ----------------------------- |
+| Toolchain | stable                        |
+| Edition   | Rust 2024                     |
+| Errors    | anyhow (app), thiserror (lib) |
+| Async     | tokio (network), sync (files) |
+
+**Patterns:**
+
+- `&str` over `String`, `&[T]` over `Vec<T>` where possible
+- `crate::` over `super::`
+- No `pub use` re-exports unless for downstream API
+- Use `cargo add` for dependencies, never edit Cargo.toml versions directly
 
 ## Commands
 
 ```bash
-cargo build              # Debug build
-cargo build --release    # Release build
-cargo test               # Run tests
+cargo build              # Debug
+cargo build --release    # Release
+cargo test               # Test
 cargo clippy             # Lint
 cargo fmt                # Format
+tk ls                    # List tasks
+tk add "title"           # Add task
+tk done <id>             # Complete task
 ```
-
-## Supported Providers
-
-| Provider   | Notes                  |
-| ---------- | ---------------------- |
-| Anthropic  | Claude direct          |
-| Google     | Gemini via AI Studio   |
-| Groq       | Fast inference         |
-| Ollama     | Local models           |
-| OpenAI     | GPT direct             |
-| OpenRouter | 200+ models aggregator |
-
-## Architecture
-
-**Core Modules**:
-
-- **provider/** - Multi-provider LLM abstraction
-- **tool/** - Built-in tools (read, write, edit, bash, glob, grep) + MCP client
-- **skill/** - SKILL.md loader (Claude Code compatible)
-- **agent/** - Multi-turn loop, session management
-- **tui/** - ratatui chat interface
-
-## MVP Features
-
-| Feature        | Status  | Notes                               |
-| -------------- | ------- | ----------------------------------- |
-| Provider       | Pending | OpenRouter primary                  |
-| TUI            | Pending | ratatui chat interface              |
-| Built-in tools | Pending | Read, Write, Edit, Bash, Glob, Grep |
-| Agent loop     | Pending | Multi-turn until complete           |
-| Skills         | Pending | SKILL.md loader                     |
-
-## Workflow
-
-**Session Start**:
-
-1. Read ai/STATUS.md
-2. Run `tk ready` for available work
-3. Reference ai/design/rust-architecture.md
-
-**Session End**:
-
-- Update ai/STATUS.md
-- `tk done <id>` completed work
-
-## Code Standards
-
-| Aspect     | Standard                                   |
-| ---------- | ------------------------------------------ |
-| Toolchain  | stable                                     |
-| Edition    | Rust 2024                                  |
-| Errors     | anyhow (app), thiserror (lib)              |
-| Async      | tokio (network), rayon (CPU), sync (files) |
-| Formatting | rustfmt                                    |
-| Linting    | clippy                                     |
 
 ## Rules
 
@@ -116,5 +82,16 @@ cargo fmt                # Format
 - **Ask before**: PRs, publishing, force ops
 - **Commit frequently**, push regularly
 - **Never force push** to main/master
-- **Task tracking**: Use `tk`
-- **Issue tracking**: When user reports bugs, UX issues, errors, or improvement ideas, **immediately create a `tk` task**. Do not lose track of issues raised in conversation.
+- **Task tracking**: Use `tk` for all work
+- **Issue tracking**: When user reports bugs/issues, **immediately create a `tk` task**
+
+## Reference
+
+| File              | Purpose                |
+| ----------------- | ---------------------- |
+| ai/STATUS.md      | Current state, tasks   |
+| ai/DECISIONS.md   | Architecture decisions |
+| ai/design/\*.md   | Design documents       |
+| ai/research/\*.md | Research notes         |
+
+**Competitive reference:** Claude Code, Gemini CLI, opencode, pi-mono, amp

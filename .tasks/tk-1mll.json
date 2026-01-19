@@ -3,7 +3,7 @@
   "ref": "1mll",
   "title": "[BUG] README says MIT but LICENSE is AGPL - fix mismatch",
   "description": null,
-  "status": "open",
+  "status": "done",
   "priority": 3,
   "labels": [],
   "assignees": [],
@@ -11,9 +11,14 @@
   "blocked_by": [],
   "estimate": null,
   "due_date": null,
-  "logs": [],
+  "logs": [
+    {
+      "ts": "2026-01-19T15:47:55.655Z",
+      "msg": "Fixed in README.md - now says AGPL-3.0"
+    }
+  ],
   "created_at": "2026-01-19T15:43:34.382Z",
-  "updated_at": "2026-01-19T15:43:34.382Z",
-  "completed_at": null,
+  "updated_at": "2026-01-19T15:47:55.655Z",
+  "completed_at": "2026-01-19T15:47:55.634Z",
   "external": {}
 }

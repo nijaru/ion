@@ -3,8 +3,6 @@ target/
 Cargo.lock
 
 # Local data
-.aircher/
-notes/
 .DS_Store
 *.log
 
