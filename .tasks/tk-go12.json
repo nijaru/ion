@@ -3,7 +3,7 @@
   "ref": "go12",
   "title": "[REFACTOR] Model listing architecture - move to registry",
   "description": null,
-  "status": "open",
+  "status": "done",
   "priority": 3,
   "labels": [],
   "assignees": [],
@@ -13,7 +13,7 @@
   "due_date": null,
   "logs": [],
   "created_at": "2026-01-19T10:58:08.040Z",
-  "updated_at": "2026-01-19T10:58:08.040Z",
-  "completed_at": null,
+  "updated_at": "2026-01-19T11:07:04.500Z",
+  "completed_at": "2026-01-19T11:07:04.500Z",
   "external": {}
 }

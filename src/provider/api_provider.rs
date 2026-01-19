@@ -16,27 +16,21 @@ pub enum ApiProvider {
     OpenAI,
     /// Google AI Studio (Gemini)
     Google,
-    /// Google Cloud Vertex AI
-    Vertex,
     /// Local Ollama instance
     Ollama,
     /// Groq cloud inference
     Groq,
-    /// Together AI
-    Together,
 }
 
 impl ApiProvider {
-    /// All known API providers.
+    /// All implemented API providers.
     pub const ALL: &'static [ApiProvider] = &[
         ApiProvider::OpenRouter,
         ApiProvider::Anthropic,
         ApiProvider::OpenAI,
         ApiProvider::Google,
-        ApiProvider::Vertex,
         ApiProvider::Ollama,
         ApiProvider::Groq,
-        ApiProvider::Together,
     ];
 
     /// Display name for the provider.
@@ -46,10 +40,8 @@ impl ApiProvider {
             ApiProvider::Anthropic => "Anthropic",
             ApiProvider::OpenAI => "OpenAI",
             ApiProvider::Google => "Google AI",
-            ApiProvider::Vertex => "Vertex AI",
             ApiProvider::Ollama => "Ollama",
             ApiProvider::Groq => "Groq",
-            ApiProvider::Together => "Together",
         }
     }
 
@@ -60,10 +52,8 @@ impl ApiProvider {
             ApiProvider::Anthropic => "Claude models directly",
             ApiProvider::OpenAI => "GPT models directly",
             ApiProvider::Google => "Gemini via AI Studio",
-            ApiProvider::Vertex => "Google Cloud AI",
             ApiProvider::Ollama => "Local models",
             ApiProvider::Groq => "Fast inference",
-            ApiProvider::Together => "Open source models",
         }
     }
 
@@ -74,10 +64,8 @@ impl ApiProvider {
             ApiProvider::Anthropic => &["ANTHROPIC_API_KEY"],
             ApiProvider::OpenAI => &["OPENAI_API_KEY"],
             ApiProvider::Google => &["GOOGLE_API_KEY", "GEMINI_API_KEY"],
-            ApiProvider::Vertex => &["GOOGLE_APPLICATION_CREDENTIALS", "VERTEX_API_KEY"],
             ApiProvider::Ollama => &["OLLAMA_HOST"], // Ollama doesn't need auth, but host can be configured
             ApiProvider::Groq => &["GROQ_API_KEY"],
-            ApiProvider::Together => &["TOGETHER_API_KEY"],
         }
     }
 
@@ -119,19 +107,6 @@ impl ApiProvider {
         false
     }
 
-    /// Whether this provider is implemented in the codebase.
-    pub fn is_implemented(&self) -> bool {
-        matches!(
-            self,
-            ApiProvider::OpenRouter
-                | ApiProvider::Anthropic
-                | ApiProvider::OpenAI
-                | ApiProvider::Ollama
-                | ApiProvider::Groq
-                | ApiProvider::Google
-        )
-    }
-
     /// Convert to Backend enum for LLM operations.
     pub fn to_backend(self) -> super::Backend {
         match self {
@@ -141,8 +116,19 @@ impl ApiProvider {
             ApiProvider::Ollama => super::Backend::Ollama,
             ApiProvider::Groq => super::Backend::Groq,
             ApiProvider::Google => super::Backend::Google,
-            // Fallback for unimplemented providers
-            ApiProvider::Vertex | ApiProvider::Together => super::Backend::OpenRouter,
+        }
+    }
+
+    /// Priority for sorting (lower = shown first).
+    /// Prioritizes aggregators and popular direct providers.
+    fn sort_priority(self) -> u8 {
+        match self {
+            ApiProvider::OpenRouter => 0, // Aggregator with 200+ models
+            ApiProvider::Ollama => 1,     // Local, always available
+            ApiProvider::Anthropic => 2,  // Claude direct
+            ApiProvider::OpenAI => 3,     // GPT direct
+            ApiProvider::Google => 4,     // Gemini direct
+            ApiProvider::Groq => 5,       // Fast inference
         }
     }
 }
@@ -152,33 +138,36 @@ impl ApiProvider {
 pub struct ProviderStatus {
     pub provider: ApiProvider,
     pub authenticated: bool,
-    pub implemented: bool,
 }
 
 impl ProviderStatus {
-    /// Get status for all known providers.
+    /// Get status for all providers.
     pub fn detect_all() -> Vec<ProviderStatus> {
         ApiProvider::ALL
             .iter()
             .map(|&provider| ProviderStatus {
                 provider,
                 authenticated: provider.is_authenticated(),
-                implemented: provider.is_implemented(),
             })
             .collect()
     }
 
-    /// Get only authenticated and implemented providers.
+    /// Get only authenticated providers.
     pub fn available() -> Vec<ProviderStatus> {
         Self::detect_all()
             .into_iter()
-            .filter(|s| s.authenticated && s.implemented)
+            .filter(|s| s.authenticated)
             .collect()
     }
 
-    /// Sort providers: authenticated first, then not authenticated.
+    /// Sort providers: authenticated first (by priority), then not authenticated (by priority).
     pub fn sorted(mut statuses: Vec<ProviderStatus>) -> Vec<ProviderStatus> {
-        statuses.sort_by_key(|s| if s.authenticated { 0 } else { 1 });
+        statuses.sort_by_key(|s| {
+            // Primary: authenticated first (0), then unauthenticated (1)
+            // Secondary: provider priority within each group
+            let auth_group = if s.authenticated { 0u16 } else { 100u16 };
+            auth_group + s.provider.sort_priority() as u16
+        });
         statuses
     }
 }
@@ -217,17 +206,14 @@ mod tests {
             ProviderStatus {
                 provider: ApiProvider::Groq,
                 authenticated: false,
-                implemented: true,
             },
             ProviderStatus {
                 provider: ApiProvider::OpenRouter,
                 authenticated: true,
-                implemented: true,
             },
             ProviderStatus {
                 provider: ApiProvider::Anthropic,
                 authenticated: false,
-                implemented: true,
             },
         ];
 

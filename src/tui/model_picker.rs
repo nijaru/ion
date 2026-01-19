@@ -560,8 +560,11 @@ impl ModelPicker {
         let output_width = 7usize;
 
         let items: Vec<ListItem> = self.filtered_models.iter().map(|m| {
-            // Extract model name (after provider/)
-            let model_name = m.id.split('/').nth(1).unwrap_or(&m.id);
+            // Extract model name (strip provider prefix: "provider/model" or "provider:model")
+            let model_name = m.id
+                .split(['/', ':'])
+                .nth(1)
+                .unwrap_or(&m.id);
             let provider = &m.provider;
 
             // Truncate if needed (accounting for ellipsis)
