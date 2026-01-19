@@ -1,3 +1,4 @@
+mod highlight;
 pub mod message_list;
 pub mod model_picker;
 pub mod provider_picker;
@@ -1475,11 +1476,26 @@ impl App {
                     let mut lines = content.lines();
 
                     // First line: **tool_name**(args) - Claude Code style
+                    // Also extract tool name and file path for syntax highlighting
+                    let mut syntax_name: Option<&str> = None;
+
                     if let Some(first_line) = lines.next() {
                         // Parse tool_name(args) format
                         if let Some(paren_pos) = first_line.find('(') {
                             let tool_name = &first_line[..paren_pos];
                             let args = &first_line[paren_pos..];
+
+                            // For read/grep, try to detect syntax from file path
+                            if tool_name == "read" || tool_name == "grep" {
+                                // Extract path from args: (path) or (path, ...)
+                                let path = args
+                                    .trim_start_matches('(')
+                                    .split(&[',', ')'][..])
+                                    .next()
+                                    .unwrap_or("");
+                                syntax_name = highlight::detect_syntax(path);
+                            }
+
                             chat_lines.push(Line::from(vec![
                                 Span::raw("  "),
                                 Span::styled(tool_name, Style::default().bold()),
@@ -1496,20 +1512,18 @@ impl App {
 
                     // Remaining lines: results with styling
                     for line in lines {
-                        let (indent, styled_line) = if line.starts_with("⎿ Error:")
-                            || line.starts_with("  Error:")
-                        {
+                        if line.starts_with("⎿ Error:") || line.starts_with("  Error:") {
                             // Error lines in red
-                            (
+                            chat_lines.push(Line::from(vec![
                                 Span::raw("  "),
                                 Span::styled(line.to_string(), Style::default().fg(Color::Red)),
-                            )
+                            ]));
                         } else if line.starts_with("⎿") || line.starts_with("  … +") {
-                            // Success results and overflow indicators dimmed
-                            (
+                            // Success marker and overflow indicators dimmed
+                            chat_lines.push(Line::from(vec![
                                 Span::raw("  "),
                                 Span::styled(line.to_string(), Style::default().dim()),
-                            )
+                            ]));
                         } else if line.contains("\x1b[") {
                             // ANSI escape sequences
                             use ansi_to_tui::IntoText;
@@ -1519,18 +1533,26 @@ impl App {
                                     padded.extend(ansi_line.spans.clone());
                                     chat_lines.push(Line::from(padded));
                                 }
-                                continue;
                             } else {
-                                (Span::raw("  "), Span::raw(strip_ansi(line)))
+                                chat_lines.push(Line::from(vec![
+                                    Span::raw("  "),
+                                    Span::raw(strip_ansi(line)),
+                                ]));
                             }
+                        } else if let Some(syntax) = syntax_name {
+                            // Apply syntax highlighting for code content
+                            let code_line = line.strip_prefix("  ").unwrap_or(line);
+                            let mut highlighted = highlight::highlight_line(code_line, syntax);
+                            // Prepend indent
+                            highlighted.spans.insert(0, Span::raw("    "));
+                            chat_lines.push(highlighted);
                         } else {
-                            // Continuation lines (indented) also dimmed
-                            (
+                            // Continuation lines dimmed
+                            chat_lines.push(Line::from(vec![
                                 Span::raw("  "),
                                 Span::styled(line.to_string(), Style::default().dim()),
-                            )
-                        };
-                        chat_lines.push(Line::from(vec![indent, styled_line]));
+                            ]));
+                        }
                     }
                 }
                 Sender::System => {
