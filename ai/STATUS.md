@@ -7,7 +7,7 @@
 | Phase     | 5 - Polish & UX | 2026-01-19 |
 | Status    | Runnable        | 2026-01-19 |
 | Toolchain | stable          | 2026-01-19 |
-| Tests     | 57 passing      | 2026-01-19 |
+| Tests     | 56 passing      | 2026-01-19 |
 
 ## Architecture
 
