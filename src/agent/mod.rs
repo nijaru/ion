@@ -117,26 +117,27 @@ impl Agent {
             .await;
 
         // Optional: Run designer for complex requests
-        if session.messages.len() <= 2 && user_msg.len() > 100 {
-            if let Ok(plan) = self.plan(&user_msg, &session).await {
-                {
-                    let mut active_plan = self.active_plan.lock().await;
-                    *active_plan = Some(plan.clone());
-                }
-                let _ = tx.send(AgentEvent::PlanGenerated(plan)).await;
+        if session.messages.len() <= 2
+            && user_msg.len() > 100
+            && let Ok(plan) = self.plan(&user_msg, &session).await
+        {
+            {
+                let mut active_plan = self.active_plan.lock().await;
+                *active_plan = Some(plan.clone());
             }
+            let _ = tx.send(AgentEvent::PlanGenerated(plan)).await;
         }
 
         loop {
             // Check for queued user messages between turns
-            if let Some(ref queue) = message_queue {
-                if let Ok(mut queue) = queue.lock() {
-                    for queued_msg in queue.drain(..) {
-                        session.messages.push(Message {
-                            role: Role::User,
-                            content: Arc::new(vec![ContentBlock::Text { text: queued_msg }]),
-                        });
-                    }
+            if let Some(ref queue) = message_queue
+                && let Ok(mut queue) = queue.lock()
+            {
+                for queued_msg in queue.drain(..) {
+                    session.messages.push(Message {
+                        role: Role::User,
+                        content: Arc::new(vec![ContentBlock::Text { text: queued_msg }]),
+                    });
                 }
             }
 
@@ -157,9 +158,9 @@ impl Agent {
         tx: &mpsc::Sender<AgentEvent>,
         thinking: Option<ThinkingConfig>,
     ) -> Result<bool> {
-        let (assistant_blocks, tool_calls) =
-            self.stream_response(session, tx, thinking, session.abort_token.clone())
-                .await?;
+        let (assistant_blocks, tool_calls) = self
+            .stream_response(session, tx, thinking, session.abort_token.clone())
+            .await?;
 
         session.messages.push(Message {
             role: Role::Assistant,
@@ -271,7 +272,7 @@ impl Agent {
         let _ = tx.send(AgentEvent::InputTokens(input_tokens)).await;
 
         // Ollama doesn't support streaming with tools - use non-streaming fallback
-        let use_streaming = !(self.provider.id() == "ollama" && !request.tools.is_empty());
+        let use_streaming = self.provider.id() != "ollama" || request.tools.is_empty();
 
         let mut assistant_blocks = Vec::new();
         let mut tool_calls = Vec::new();
@@ -287,9 +288,8 @@ impl Agent {
                 let request_clone = request.clone();
 
                 // Spawn stream task that sends errors through the channel
-                let handle = tokio::spawn(async move {
-                    provider.stream(request_clone, stream_tx).await
-                });
+                let handle =
+                    tokio::spawn(async move { provider.stream(request_clone, stream_tx).await });
 
                 let mut stream_error: Option<String> = None;
 
@@ -341,10 +341,8 @@ impl Agent {
                                 Some(_) => {}
                                 None => {
                                     // Channel closed - check if the task errored
-                                    if let Ok(result) = handle.await {
-                                        if let Err(e) = result {
-                                            stream_error = Some(e.to_string());
-                                        }
+                                    if let Ok(Err(e)) = handle.await {
+                                        stream_error = Some(e.to_string());
                                     }
                                     break;
                                 }
@@ -356,14 +354,24 @@ impl Agent {
                 // Handle any error from the stream
                 if let Some(ref err) = stream_error {
                     let is_rate_limit = err.contains("429") || err.to_lowercase().contains("rate");
-                    let is_tools_not_supported = err.to_lowercase().contains("streaming with tools not supported")
+                    let is_tools_not_supported = err
+                        .to_lowercase()
+                        .contains("streaming with tools not supported")
                         || err.to_lowercase().contains("tools not supported");
 
                     if is_rate_limit && retry_count < MAX_RETRIES {
                         retry_count += 1;
                         let delay = 1u64 << retry_count; // 2, 4, 8 seconds
-                        warn!("Rate limited, retrying in {}s (attempt {}/{})", delay, retry_count, MAX_RETRIES);
-                        let _ = tx.send(AgentEvent::TextDelta(format!("\n*Rate limited, retrying in {}s...*\n", delay))).await;
+                        warn!(
+                            "Rate limited, retrying in {}s (attempt {}/{})",
+                            delay, retry_count, MAX_RETRIES
+                        );
+                        let _ = tx
+                            .send(AgentEvent::TextDelta(format!(
+                                "\n*Rate limited, retrying in {}s...*\n",
+                                delay
+                            )))
+                            .await;
 
                         // Clear any partial response
                         assistant_blocks.clear();
@@ -373,7 +381,9 @@ impl Agent {
                         continue 'retry;
                     } else if is_tools_not_supported {
                         // Fall back to non-streaming for this provider
-                        warn!("Provider doesn't support streaming with tools, falling back to non-streaming");
+                        warn!(
+                            "Provider doesn't support streaming with tools, falling back to non-streaming"
+                        );
                         assistant_blocks.clear();
                         tool_calls.clear();
                         break; // Exit retry loop, will use non-streaming below
@@ -392,8 +402,14 @@ impl Agent {
         // Non-streaming fallback (Ollama, Google with tools, or streaming failure)
         if !streaming_succeeded {
             // Non-streaming fallback (e.g., Ollama with tools)
-            debug!("Using non-streaming completion (provider: {})", self.provider.id());
-            let response = self.provider.complete(request).await
+            debug!(
+                "Using non-streaming completion (provider: {})",
+                self.provider.id()
+            );
+            let response = self
+                .provider
+                .complete(request)
+                .await
                 .map_err(|e| anyhow::anyhow!("Completion error: {}", e))?;
 
             // Emit events for the complete response
@@ -409,8 +425,18 @@ impl Agent {
                         let _ = tx.send(AgentEvent::ThinkingDelta(thinking.clone())).await;
                         assistant_blocks.push(block.clone());
                     }
-                    ContentBlock::ToolCall { id, name, arguments } => {
-                        let _ = tx.send(AgentEvent::ToolCallStart(id.clone(), name.clone(), arguments.clone())).await;
+                    ContentBlock::ToolCall {
+                        id,
+                        name,
+                        arguments,
+                    } => {
+                        let _ = tx
+                            .send(AgentEvent::ToolCallStart(
+                                id.clone(),
+                                name.clone(),
+                                arguments.clone(),
+                            ))
+                            .await;
                         tool_calls.push(ToolCallEvent {
                             id: id.clone(),
                             name: name.clone(),
@@ -504,8 +530,14 @@ pub enum AgentEvent {
     ToolCallStart(String, String, serde_json::Value),
     ToolCallResult(String, String, bool),
     PlanGenerated(crate::agent::designer::Plan),
-    CompactionStatus { threshold: usize, pruned: bool },
-    TokenUsage { used: usize, max: usize },
+    CompactionStatus {
+        threshold: usize,
+        pruned: bool,
+    },
+    TokenUsage {
+        used: usize,
+        max: usize,
+    },
     InputTokens(usize),
     OutputTokensDelta(usize),
     Finished(String),

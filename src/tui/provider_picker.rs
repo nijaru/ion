@@ -8,6 +8,7 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 
 /// State for the API provider picker modal.
+#[derive(Default)]
 pub struct ProviderPicker {
     /// All provider statuses (detected on open).
     pub providers: Vec<ProviderStatus>,
@@ -17,17 +18,6 @@ pub struct ProviderPicker {
     pub filter: String,
     /// Filtered providers based on search.
     pub filtered: Vec<ProviderStatus>,
-}
-
-impl Default for ProviderPicker {
-    fn default() -> Self {
-        Self {
-            providers: Vec::new(),
-            list_state: ListState::default(),
-            filter: String::new(),
-            filtered: Vec::new(),
-        }
-    }
 }
 
 impl ProviderPicker {

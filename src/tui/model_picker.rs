@@ -251,19 +251,19 @@ impl ModelPicker {
 
     /// Select current provider and move to model stage.
     pub fn select_provider(&mut self) {
-        if let Some(idx) = self.provider_state.selected() {
-            if let Some(provider) = self.filtered_providers.get(idx) {
-                self.selected_provider = Some(provider.name.clone());
-                self.provider_models = self
-                    .all_models
-                    .iter()
-                    .filter(|m| m.provider == provider.name)
-                    .cloned()
-                    .collect();
-                self.stage = PickerStage::Model;
-                self.filter.clear();
-                self.apply_model_filter();
-            }
+        if let Some(idx) = self.provider_state.selected()
+            && let Some(provider) = self.filtered_providers.get(idx)
+        {
+            self.selected_provider = Some(provider.name.clone());
+            self.provider_models = self
+                .all_models
+                .iter()
+                .filter(|m| m.provider == provider.name)
+                .cloned()
+                .collect();
+            self.stage = PickerStage::Model;
+            self.filter.clear();
+            self.apply_model_filter();
         }
     }
 
@@ -487,11 +487,26 @@ impl ModelPicker {
 
         let header_line = Line::from(vec![
             Span::raw("  "), // Space for highlight symbol
-            Span::styled(format!("{:width$}", "Model", width = name_width), Style::default().fg(Color::Cyan).bold()),
-            Span::styled(format!("{:width$}", "Org", width = provider_width), Style::default().fg(Color::Cyan).bold()),
-            Span::styled(format!("{:>width$}", "Context", width = context_width), Style::default().fg(Color::Cyan).bold()),
-            Span::styled(format!("{:>width$}", "Input", width = input_width), Style::default().fg(Color::Cyan).bold()),
-            Span::styled(format!("{:>width$}", "Output", width = output_width), Style::default().fg(Color::Cyan).bold()),
+            Span::styled(
+                format!("{:width$}", "Model", width = name_width),
+                Style::default().fg(Color::Cyan).bold(),
+            ),
+            Span::styled(
+                format!("{:width$}", "Org", width = provider_width),
+                Style::default().fg(Color::Cyan).bold(),
+            ),
+            Span::styled(
+                format!("{:>width$}", "Context", width = context_width),
+                Style::default().fg(Color::Cyan).bold(),
+            ),
+            Span::styled(
+                format!("{:>width$}", "Input", width = input_width),
+                Style::default().fg(Color::Cyan).bold(),
+            ),
+            Span::styled(
+                format!("{:>width$}", "Output", width = output_width),
+                Style::default().fg(Color::Cyan).bold(),
+            ),
         ]);
 
         frame.render_widget(Paragraph::new(header_line), area);
@@ -559,60 +574,74 @@ impl ModelPicker {
         let input_width = 7usize;
         let output_width = 7usize;
 
-        let items: Vec<ListItem> = self.filtered_models.iter().map(|m| {
-            // Extract display name based on provider format
-            let model_name = if m.provider == "ollama" {
-                // Ollama: strip ":latest" suffix (it's the default)
-                m.id.strip_suffix(":latest").unwrap_or(&m.id)
-            } else {
-                // Others: strip "provider/" prefix
-                m.id.split('/').nth(1).unwrap_or(&m.id)
-            };
-            let provider = &m.provider;
+        let items: Vec<ListItem> = self
+            .filtered_models
+            .iter()
+            .map(|m| {
+                // Extract display name based on provider format
+                let model_name = if m.provider == "ollama" {
+                    // Ollama: strip ":latest" suffix (it's the default)
+                    m.id.strip_suffix(":latest").unwrap_or(&m.id)
+                } else {
+                    // Others: strip "provider/" prefix
+                    m.id.split('/').nth(1).unwrap_or(&m.id)
+                };
+                let provider = &m.provider;
 
-            // Truncate if needed (accounting for ellipsis)
-            let name_display: String = if model_name.chars().count() > name_width {
-                let truncated: String = model_name.chars().take(name_width - 1).collect();
-                format!("{}…", truncated)
-            } else {
-                model_name.to_string()
-            };
-            let provider_display: String = if provider.chars().count() > provider_width {
-                let truncated: String = provider.chars().take(provider_width - 1).collect();
-                format!("{}…", truncated)
-            } else {
-                provider.to_string()
-            };
+                // Truncate if needed (accounting for ellipsis)
+                let name_display: String = if model_name.chars().count() > name_width {
+                    let truncated: String = model_name.chars().take(name_width - 1).collect();
+                    format!("{}…", truncated)
+                } else {
+                    model_name.to_string()
+                };
+                let provider_display: String = if provider.chars().count() > provider_width {
+                    let truncated: String = provider.chars().take(provider_width - 1).collect();
+                    format!("{}…", truncated)
+                } else {
+                    provider.to_string()
+                };
 
-            // Format columns with padding
-            let name_col = format!("{:width$}", name_display, width = name_width);
-            let provider_col = format!("{:width$}", provider_display, width = provider_width);
-            let context_col = format!("{:>width$}", format!("{}k", m.context_window / 1000), width = context_width);
+                // Format columns with padding
+                let name_col = format!("{:width$}", name_display, width = name_width);
+                let provider_col = format!("{:width$}", provider_display, width = provider_width);
+                let context_col = format!(
+                    "{:>width$}",
+                    format!("{}k", m.context_window / 1000),
+                    width = context_width
+                );
 
-            // Format prices - free models show "free", others show price
-            let (input_str, input_style) = if m.pricing.input == 0.0 {
-                ("free".to_string(), Style::default().fg(Color::Green))
-            } else {
-                (format!("${:.2}", m.pricing.input), Style::default().fg(Color::Yellow))
-            };
-            let (output_str, output_style) = if m.pricing.output == 0.0 {
-                ("free".to_string(), Style::default().fg(Color::Green))
-            } else {
-                (format!("${:.2}", m.pricing.output), Style::default().fg(Color::Yellow))
-            };
-            let input_col = format!("{:>width$}", input_str, width = input_width);
-            let output_col = format!("{:>width$}", output_str, width = output_width);
+                // Format prices - free models show "free", others show price
+                let (input_str, input_style) = if m.pricing.input == 0.0 {
+                    ("free".to_string(), Style::default().fg(Color::Green))
+                } else {
+                    (
+                        format!("${:.2}", m.pricing.input),
+                        Style::default().fg(Color::Yellow),
+                    )
+                };
+                let (output_str, output_style) = if m.pricing.output == 0.0 {
+                    ("free".to_string(), Style::default().fg(Color::Green))
+                } else {
+                    (
+                        format!("${:.2}", m.pricing.output),
+                        Style::default().fg(Color::Yellow),
+                    )
+                };
+                let input_col = format!("{:>width$}", input_str, width = input_width);
+                let output_col = format!("{:>width$}", output_str, width = output_width);
 
-            let line = Line::from(vec![
-                Span::styled(name_col, Style::default().fg(Color::White)),
-                Span::styled(provider_col, Style::default().dim()),
-                Span::styled(context_col, Style::default().fg(Color::Blue)),
-                Span::styled(input_col, input_style),
-                Span::styled(output_col, output_style),
-            ]);
+                let line = Line::from(vec![
+                    Span::styled(name_col, Style::default().fg(Color::White)),
+                    Span::styled(provider_col, Style::default().dim()),
+                    Span::styled(context_col, Style::default().fg(Color::Blue)),
+                    Span::styled(input_col, input_style),
+                    Span::styled(output_col, output_style),
+                ]);
 
-            ListItem::new(line)
-        }).collect();
+                ListItem::new(line)
+            })
+            .collect();
 
         let count = self.filtered_models.len();
         let total = self.provider_models.len();

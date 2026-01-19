@@ -263,10 +263,7 @@ impl MessageList {
             AgentEvent::ToolCallResult(_id, result, is_error) => {
                 let result_line = if is_error {
                     // Clean up error message
-                    let msg = result
-                        .strip_prefix("Error: ")
-                        .unwrap_or(&result)
-                        .trim();
+                    let msg = result.strip_prefix("Error: ").unwrap_or(&result).trim();
                     format!("└ Error: {}", truncate_str(msg, TOOL_RESULT_PREVIEW_LEN))
                 } else {
                     // Summarize result with indent connector
@@ -353,7 +350,11 @@ impl MessageList {
                             ContentBlock::Thinking { thinking } => {
                                 parts.push(MessagePart::Thinking(thinking.clone()))
                             }
-                            ContentBlock::ToolCall { id: _, name, arguments } => {
+                            ContentBlock::ToolCall {
+                                id: _,
+                                name,
+                                arguments,
+                            } => {
                                 // Format: tool_name(key_arg)
                                 let key_arg = extract_key_arg(name, arguments);
                                 let display = if key_arg.is_empty() {
@@ -385,7 +386,10 @@ impl MessageList {
                         } = block
                         {
                             let display = if *is_error {
-                                format!("└ Error: {}", truncate_str(content, TOOL_RESULT_PREVIEW_LEN))
+                                format!(
+                                    "└ Error: {}",
+                                    truncate_str(content, TOOL_RESULT_PREVIEW_LEN)
+                                )
                             } else {
                                 format!("└ {}", summarize_tool_result(content))
                             };

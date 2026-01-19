@@ -132,15 +132,15 @@ impl SkillLoader {
                     if !models.is_empty() {
                         skill.models = Some(models);
                     }
-                } else if trimmed.starts_with("<prompt>") {
+                } else if let Some(rest) = trimmed.strip_prefix("<prompt>") {
                     in_prompt = true;
-                    if trimmed.len() > 8 {
-                        skill.prompt.push_str(&trimmed[8..]);
+                    if !rest.is_empty() {
+                        skill.prompt.push_str(rest);
                         skill.prompt.push('\n');
                     }
-                } else if trimmed.ends_with("</prompt>") {
-                    if trimmed.len() > 9 {
-                        skill.prompt.push_str(&trimmed[..trimmed.len() - 9]);
+                } else if let Some(rest) = trimmed.strip_suffix("</prompt>") {
+                    if !rest.is_empty() {
+                        skill.prompt.push_str(rest);
                     }
                     in_prompt = false;
                 } else if in_prompt {

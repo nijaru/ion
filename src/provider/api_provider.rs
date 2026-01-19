@@ -96,10 +96,10 @@ impl Provider {
     /// Get API key from environment.
     pub fn api_key(self) -> Option<String> {
         for var in self.env_vars() {
-            if let Ok(key) = env::var(var) {
-                if !key.is_empty() {
-                    return Some(key);
-                }
+            if let Ok(key) = env::var(var)
+                && !key.is_empty()
+            {
+                return Some(key);
             }
         }
         // Ollama doesn't need a key

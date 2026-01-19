@@ -9,6 +9,13 @@ use std::sync::Arc;
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
+/// Callback type for semantic discovery/search operations.
+pub type DiscoveryCallback = Arc<
+    dyn Fn(String) -> Pin<Box<dyn Future<Output = Result<Vec<(String, f32)>>> + Send>>
+        + Send
+        + Sync,
+>;
+
 #[derive(Clone)]
 pub struct ToolContext {
     pub working_dir: PathBuf,
@@ -19,13 +26,7 @@ pub struct ToolContext {
     /// Callback to index a file lazily
     pub index_callback: Option<Arc<dyn Fn(PathBuf) + Send + Sync>>,
     /// Callback for semantic discovery/search
-    pub discovery_callback: Option<
-        Arc<
-            dyn Fn(String) -> Pin<Box<dyn Future<Output = Result<Vec<(String, f32)>>> + Send>>
-                + Send
-                + Sync,
-        >,
-    >,
+    pub discovery_callback: Option<DiscoveryCallback>,
 }
 
 impl ToolContext {
@@ -50,14 +51,21 @@ impl ToolContext {
             .or_else(|_| {
                 // Path might not exist yet (for writes), check parent
                 if let Some(parent) = resolved.parent() {
-                    parent.canonicalize().map(|p| p.join(resolved.file_name().unwrap_or_default()))
+                    parent
+                        .canonicalize()
+                        .map(|p| p.join(resolved.file_name().unwrap_or_default()))
                 } else {
-                    Err(std::io::Error::new(std::io::ErrorKind::NotFound, "Invalid path"))
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "Invalid path",
+                    ))
                 }
             })
             .map_err(|e| format!("Failed to resolve path: {}", e))?;
 
-        let cwd_canonical = self.working_dir.canonicalize()
+        let cwd_canonical = self
+            .working_dir
+            .canonicalize()
             .map_err(|e| format!("Failed to resolve working directory: {}", e))?;
 
         // Check if path is within CWD

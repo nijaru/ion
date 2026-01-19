@@ -2,7 +2,7 @@
 //!
 //! Fetches model metadata from various backends and caches locally.
 
-use super::{Provider, ModelInfo, ModelPricing, ProviderPrefs};
+use super::{ModelInfo, ModelPricing, Provider, ProviderPrefs};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::sync::RwLock;
@@ -20,18 +20,10 @@ pub struct ModelFilter {
 }
 
 /// Cached model list with TTL.
+#[derive(Default)]
 struct ModelCache {
     models: Vec<ModelInfo>,
     fetched_at: Option<Instant>,
-}
-
-impl Default for ModelCache {
-    fn default() -> Self {
-        Self {
-            models: Vec::new(),
-            fetched_at: None,
-        }
-    }
 }
 
 /// Registry for fetching and filtering models.
@@ -212,14 +204,10 @@ impl ModelRegistry {
                     .and_then(|r| r.model_info)
                     .and_then(|info| {
                         // Get architecture name (e.g., "qwen3next", "mistral3", "llama")
-                        let arch = info
-                            .get("general.architecture")
-                            .and_then(|v| v.as_str())?;
+                        let arch = info.get("general.architecture").and_then(|v| v.as_str())?;
                         // Context length is at {architecture}.context_length
                         let key = format!("{}.context_length", arch);
-                        info.get(&key)
-                            .and_then(|v| v.as_u64())
-                            .map(|v| v as u32)
+                        info.get(&key).and_then(|v| v.as_u64()).map(|v| v as u32)
                     })
                     .unwrap_or(8192) // Default for older models
             }
@@ -261,10 +249,10 @@ impl ModelRegistry {
         let mut all_models = Vec::new();
 
         // 1. Try fetching from OpenRouter if API key is present
-        if !self.api_key.is_empty() {
-            if let Ok(or_models) = self.fetch_openrouter_models().await {
-                all_models.extend(or_models);
-            }
+        if !self.api_key.is_empty()
+            && let Ok(or_models) = self.fetch_openrouter_models().await
+        {
+            all_models.extend(or_models);
         }
 
         // 2. Fetch from Models.dev (universal source for direct provider access)
@@ -365,10 +353,10 @@ impl ModelRegistry {
             .into_iter()
             .filter(|m| {
                 // Min context check
-                if let Some(min) = filter.min_context {
-                    if m.context_window < min {
-                        return false;
-                    }
+                if let Some(min) = filter.min_context
+                    && m.context_window < min
+                {
+                    return false;
                 }
 
                 // Tool support check
@@ -382,17 +370,17 @@ impl ModelRegistry {
                 }
 
                 // Max input price check
-                if let Some(max) = filter.max_input_price {
-                    if m.pricing.input > max {
-                        return false;
-                    }
+                if let Some(max) = filter.max_input_price
+                    && m.pricing.input > max
+                {
+                    return false;
                 }
 
                 // ID prefix check
-                if let Some(ref prefix) = filter.id_prefix {
-                    if !m.id.to_lowercase().contains(&prefix.to_lowercase()) {
-                        return false;
-                    }
+                if let Some(ref prefix) = filter.id_prefix
+                    && !m.id.to_lowercase().contains(&prefix.to_lowercase())
+                {
+                    return false;
                 }
 
                 true
@@ -413,10 +401,10 @@ impl ModelRegistry {
             .iter()
             .filter(|m| {
                 // Min context check
-                if let Some(min) = filter.min_context {
-                    if m.context_window < min {
-                        return false;
-                    }
+                if let Some(min) = filter.min_context
+                    && m.context_window < min
+                {
+                    return false;
                 }
 
                 // Tool support check
@@ -430,31 +418,31 @@ impl ModelRegistry {
                 }
 
                 // Max input price check
-                if let Some(max) = filter.max_input_price {
-                    if m.pricing.input > max {
-                        return false;
-                    }
+                if let Some(max) = filter.max_input_price
+                    && m.pricing.input > max
+                {
+                    return false;
                 }
 
                 // ID prefix check
-                if let Some(ref prefix) = filter.id_prefix {
-                    if !m.id.to_lowercase().contains(&prefix.to_lowercase()) {
-                        return false;
-                    }
+                if let Some(ref prefix) = filter.id_prefix
+                    && !m.id.to_lowercase().contains(&prefix.to_lowercase())
+                {
+                    return false;
                 }
 
                 // Provider ignore list
-                if let Some(ref ignore) = prefs.ignore {
-                    if ignore.iter().any(|p| p.eq_ignore_ascii_case(&m.provider)) {
-                        return false;
-                    }
+                if let Some(ref ignore) = prefs.ignore
+                    && ignore.iter().any(|p| p.eq_ignore_ascii_case(&m.provider))
+                {
+                    return false;
                 }
 
                 // Provider only list
-                if let Some(ref only) = prefs.only {
-                    if !only.iter().any(|p| p.eq_ignore_ascii_case(&m.provider)) {
-                        return false;
-                    }
+                if let Some(ref only) = prefs.only
+                    && !only.iter().any(|p| p.eq_ignore_ascii_case(&m.provider))
+                {
+                    return false;
                 }
 
                 true
@@ -481,10 +469,8 @@ impl ModelRegistry {
             }
 
             // Cache-supporting models first if preferred
-            if filter.prefer_cache || prefs.prefer_cache {
-                if a.supports_cache != b.supports_cache {
-                    return b.supports_cache.cmp(&a.supports_cache);
-                }
+            if (filter.prefer_cache || prefs.prefer_cache) && a.supports_cache != b.supports_cache {
+                return b.supports_cache.cmp(&a.supports_cache);
             }
 
             // Sort by strategy
@@ -664,9 +650,7 @@ mod tests {
         }
 
         let registry = ModelRegistry::new("".into(), 3600);
-        let models = registry
-            .fetch_models_for_provider(Provider::Ollama)
-            .await;
+        let models = registry.fetch_models_for_provider(Provider::Ollama).await;
         assert!(models.is_ok(), "fetch_models_for_provider should succeed");
         let models = models.unwrap();
         assert!(!models.is_empty(), "Ollama should have at least one model");

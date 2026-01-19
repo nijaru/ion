@@ -198,15 +198,14 @@ impl Tool for McpTool {
     }
 }
 
+#[derive(Default)]
 pub struct McpManager {
     clients: Vec<Arc<McpClient>>,
 }
 
 impl McpManager {
     pub fn new() -> Self {
-        Self {
-            clients: Vec::new(),
-        }
+        Self::default()
     }
 
     pub async fn add_server(

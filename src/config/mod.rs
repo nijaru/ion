@@ -154,10 +154,10 @@ impl Config {
         };
 
         for var in env_vars {
-            if let Ok(key) = std::env::var(var) {
-                if !key.is_empty() {
-                    return Some(key);
-                }
+            if let Ok(key) = std::env::var(var)
+                && !key.is_empty()
+            {
+                return Some(key);
             }
         }
 
@@ -393,11 +393,11 @@ pub fn load_instructions(working_dir: &Path) -> String {
             instructions.push_str(&content);
             instructions.push_str("\n\n");
         }
-    } else if project_claude.exists() {
-        if let Ok(content) = std::fs::read_to_string(&project_claude) {
-            instructions.push_str(&content);
-            instructions.push_str("\n\n");
-        }
+    } else if project_claude.exists()
+        && let Ok(content) = std::fs::read_to_string(&project_claude)
+    {
+        instructions.push_str(&content);
+        instructions.push_str("\n\n");
     }
 
     // User level: ~/.agents/AGENTS.md preferred, ~/.ion/AGENTS.md fallback
@@ -411,13 +411,13 @@ pub fn load_instructions(working_dir: &Path) -> String {
             }
             instructions.push_str(&content);
         }
-    } else if user_ion_agents.exists() {
-        if let Ok(content) = std::fs::read_to_string(&user_ion_agents) {
-            if !instructions.is_empty() {
-                instructions.push_str("---\n\n");
-            }
-            instructions.push_str(&content);
+    } else if user_ion_agents.exists()
+        && let Ok(content) = std::fs::read_to_string(&user_ion_agents)
+    {
+        if !instructions.is_empty() {
+            instructions.push_str("---\n\n");
         }
+        instructions.push_str(&content);
     }
 
     instructions
