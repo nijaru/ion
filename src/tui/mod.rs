@@ -1166,13 +1166,13 @@ impl App {
     fn fetch_models(&self) {
         debug!("Starting model fetch");
         let registry = self.model_registry.clone();
-        let provider = self.agent.provider();
+        let backend = self.api_provider.to_backend();
         let prefs = self.config.provider_prefs.clone();
         let agent_tx = self.agent_tx.clone();
 
         tokio::spawn(async move {
-            debug!("Model fetch task started");
-            match model_picker::fetch_models_for_picker(&registry, provider, &prefs).await {
+            debug!("Model fetch task started for {:?}", backend);
+            match model_picker::fetch_models_for_picker(&registry, backend, &prefs).await {
                 Ok(models) => {
                     debug!("Fetched {} models", models.len());
                     let _ = agent_tx.send(AgentEvent::ModelsFetched(models)).await;
