@@ -634,18 +634,15 @@ impl ModelPicker {
     }
 }
 
-use crate::provider::LlmApi;
-use std::sync::Arc;
+use crate::provider::Backend;
 
-/// Fetch models from registry using hybrid discovery.
+/// Fetch models from registry for the given backend.
 pub async fn fetch_models_for_picker(
     registry: &ModelRegistry,
-    provider: Arc<dyn LlmApi>,
+    backend: Backend,
     prefs: &ProviderPrefs,
 ) -> Result<Vec<ModelInfo>, anyhow::Error> {
-    let models = registry.fetch_hybrid(provider).await?;
-    // Don't filter by tool support - OpenRouter models generally support tools
-    // and the metadata from models.dev may be incomplete
+    let models = registry.fetch_models_for_backend(backend).await?;
     let filter = ModelFilter::default();
     Ok(registry.list_models_from_vec(models, &filter, prefs))
 }

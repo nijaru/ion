@@ -127,7 +127,23 @@ impl ApiProvider {
                 | ApiProvider::Anthropic
                 | ApiProvider::OpenAI
                 | ApiProvider::Ollama
+                | ApiProvider::Groq
+                | ApiProvider::Google
         )
+    }
+
+    /// Convert to Backend enum for LLM operations.
+    pub fn to_backend(self) -> super::Backend {
+        match self {
+            ApiProvider::OpenRouter => super::Backend::OpenRouter,
+            ApiProvider::Anthropic => super::Backend::Anthropic,
+            ApiProvider::OpenAI => super::Backend::OpenAI,
+            ApiProvider::Ollama => super::Backend::Ollama,
+            ApiProvider::Groq => super::Backend::Groq,
+            ApiProvider::Google => super::Backend::Google,
+            // Fallback for unimplemented providers
+            ApiProvider::Vertex | ApiProvider::Together => super::Backend::OpenRouter,
+        }
     }
 }
 

@@ -1,11 +1,11 @@
 //! Model registry with caching and filtering.
 //!
-//! Fetches model metadata from OpenRouter API and caches locally.
+//! Fetches model metadata from various backends and caches locally.
 
-use super::{LlmApi, ModelInfo, ModelPricing, ProviderPrefs};
+use super::{Backend, ModelInfo, ModelPricing, ProviderPrefs};
 use anyhow::{Context, Result};
 use serde::Deserialize;
-use std::sync::{Arc, RwLock};
+use std::sync::RwLock;
 use std::time::{Duration, Instant};
 
 /// Filter criteria for model queries.
@@ -127,59 +127,88 @@ impl ModelRegistry {
             .unwrap_or(false)
     }
 
-    /// Fetch models using a hybrid approach:
-    /// 1. Query the active provider for availability.
-    /// 2. Hydrate metadata (pricing, context) from models.dev.
-    pub async fn fetch_hybrid(&self, provider: Arc<dyn LlmApi>) -> Result<Vec<ModelInfo>> {
-        tracing::debug!("fetch_hybrid: calling provider.list_models()");
-        let mut available_models = provider
-            .list_models()
+    /// Fetch models for the given backend.
+    ///
+    /// This is the primary entry point for model discovery. Each backend has its own
+    /// fetching strategy:
+    /// - OpenRouter: Direct API call
+    /// - Ollama: Local server API call
+    /// - Others: models.dev metadata fallback
+    pub async fn fetch_models_for_backend(&self, backend: Backend) -> Result<Vec<ModelInfo>> {
+        tracing::debug!("fetch_models_for_backend: {:?}", backend);
+
+        match backend {
+            Backend::OpenRouter => self.fetch_openrouter_models().await,
+            Backend::Ollama => self.fetch_ollama_models().await,
+            // Cloud providers: use models.dev metadata
+            _ => self.fetch_from_models_dev(backend).await,
+        }
+    }
+
+    /// Fetch models from Ollama local server.
+    async fn fetch_ollama_models(&self) -> Result<Vec<ModelInfo>> {
+        let base_url = "http://localhost:11434";
+
+        let response = self
+            .client
+            .get(format!("{}/api/tags", base_url))
+            .send()
             .await
-            .map_err(|e| anyhow::anyhow!("Provider list error: {}", e))?;
-        tracing::debug!("fetch_hybrid: provider returned {} models", available_models.len());
+            .context("Failed to connect to Ollama - is it running?")?;
 
-        // Fetch metadata from models.dev (cached)
-        let metadata_list = if !self.cache_valid() {
-            super::models_dev::fetch_models_dev()
-                .await
-                .unwrap_or_default()
-        } else {
-            self.cache.read().unwrap().models.clone()
-        };
-
-        // Hydrate available models with metadata
-        for model in &mut available_models {
-            // Find match in models.dev
-            // Match criteria: ID match (normalized) or name match
-            let found = metadata_list.iter().find(|m| {
-                m.id == model.id
-                    || m.id.replace(':', "/") == model.id
-                    || m.id.split(':').last() == Some(&model.id)
-            });
-
-            if let Some(meta) = found {
-                model.name = meta.name.clone();
-                model.context_window = meta.context_window;
-                model.supports_tools = meta.supports_tools;
-                model.supports_vision = meta.supports_vision;
-                model.pricing = meta.pricing.clone();
-                model.supports_cache = meta.supports_cache;
-            } else {
-                // Fallback for new models: use generic defaults if context is 0
-                if model.context_window == 0 {
-                    model.context_window = 128_000;
-                }
-            }
+        if !response.status().is_success() {
+            anyhow::bail!("Ollama returned status {}", response.status());
         }
 
-        // Cache the metadata list for future lookups
-        if !metadata_list.is_empty() {
-            let mut cache = self.cache.write().unwrap();
-            cache.models = metadata_list;
-            cache.fetched_at = Some(Instant::now());
+        #[derive(Deserialize)]
+        struct OllamaTagsResponse {
+            models: Vec<OllamaModel>,
         }
 
-        Ok(available_models)
+        #[derive(Deserialize)]
+        struct OllamaModel {
+            name: String,
+        }
+
+        let data: OllamaTagsResponse = response
+            .json()
+            .await
+            .context("Failed to parse Ollama response")?;
+
+        let models = data
+            .models
+            .into_iter()
+            .map(|m| ModelInfo {
+                id: m.name.clone(),
+                name: m.name,
+                provider: "ollama".to_string(),
+                context_window: 128_000, // Default, Ollama doesn't report this
+                supports_tools: true,    // Most modern models support tools
+                supports_vision: false,
+                supports_thinking: false,
+                supports_cache: false,
+                pricing: ModelPricing::default(),
+                created: 0,
+            })
+            .collect();
+
+        Ok(models)
+    }
+
+    /// Fetch models from models.dev, filtered by backend/provider.
+    async fn fetch_from_models_dev(&self, backend: Backend) -> Result<Vec<ModelInfo>> {
+        let all_models = super::models_dev::fetch_models_dev()
+            .await
+            .unwrap_or_default();
+
+        // Filter by provider name matching the backend
+        let provider_name = backend.id();
+        let filtered: Vec<ModelInfo> = all_models
+            .into_iter()
+            .filter(|m| m.provider.to_lowercase() == provider_name)
+            .collect();
+
+        Ok(filtered)
     }
 
     /// Fetch models from OpenRouter API and Models.dev.
@@ -572,5 +601,32 @@ mod tests {
         assert_eq!(models[0].id, "cheap");
         assert_eq!(models[1].id, "medium");
         assert_eq!(models[2].id, "expensive");
+    }
+
+    #[tokio::test]
+    async fn test_fetch_ollama_models() {
+        // Skip if Ollama isn't running
+        let client = reqwest::Client::new();
+        if client
+            .get("http://localhost:11434/api/tags")
+            .send()
+            .await
+            .is_err()
+        {
+            eprintln!("Skipping test: Ollama not running");
+            return;
+        }
+
+        let registry = ModelRegistry::new("".into(), 3600);
+        let models = registry
+            .fetch_models_for_backend(super::Backend::Ollama)
+            .await;
+        assert!(models.is_ok(), "fetch_models_for_backend should succeed");
+        let models = models.unwrap();
+        assert!(!models.is_empty(), "Ollama should have at least one model");
+        for model in &models {
+            assert!(!model.id.is_empty());
+            assert_eq!(model.provider, "ollama");
+        }
     }
 }
