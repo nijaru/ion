@@ -14,6 +14,8 @@ pub struct ToolContext {
     pub working_dir: PathBuf,
     pub session_id: String,
     pub abort_signal: CancellationToken,
+    /// Allow operations outside CWD (sandbox disabled)
+    pub no_sandbox: bool,
     /// Callback to index a file lazily
     pub index_callback: Option<Arc<dyn Fn(PathBuf) + Send + Sync>>,
     /// Callback for semantic discovery/search
@@ -26,12 +28,58 @@ pub struct ToolContext {
     >,
 }
 
+impl ToolContext {
+    /// Check if a path is within the sandbox (CWD).
+    /// Returns Ok(canonical_path) if allowed, Err with message if blocked.
+    pub fn check_sandbox(&self, path: &std::path::Path) -> Result<PathBuf, String> {
+        // If sandbox disabled, allow anything
+        if self.no_sandbox {
+            return Ok(path.to_path_buf());
+        }
+
+        // Resolve the path (handle relative paths)
+        let resolved = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            self.working_dir.join(path)
+        };
+
+        // Canonicalize both paths for comparison
+        let canonical = resolved
+            .canonicalize()
+            .or_else(|_| {
+                // Path might not exist yet (for writes), check parent
+                if let Some(parent) = resolved.parent() {
+                    parent.canonicalize().map(|p| p.join(resolved.file_name().unwrap_or_default()))
+                } else {
+                    Err(std::io::Error::new(std::io::ErrorKind::NotFound, "Invalid path"))
+                }
+            })
+            .map_err(|e| format!("Failed to resolve path: {}", e))?;
+
+        let cwd_canonical = self.working_dir.canonicalize()
+            .map_err(|e| format!("Failed to resolve working directory: {}", e))?;
+
+        // Check if path is within CWD
+        if canonical.starts_with(&cwd_canonical) {
+            Ok(canonical)
+        } else {
+            Err(format!(
+                "Path '{}' is outside the sandbox ({}). Use --no-sandbox to allow.",
+                path.display(),
+                self.working_dir.display()
+            ))
+        }
+    }
+}
+
 impl fmt::Debug for ToolContext {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ToolContext")
             .field("working_dir", &self.working_dir)
             .field("session_id", &self.session_id)
             .field("abort_signal", &self.abort_signal)
+            .field("no_sandbox", &self.no_sandbox)
             .field(
                 "index_callback",
                 &self.index_callback.as_ref().map(|_| "Fn(PathBuf)"),

@@ -1,9 +1,33 @@
 use crate::mcp::McpServerConfig;
 use crate::provider::ProviderPrefs;
+use crate::tool::ToolMode;
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+
+/// Permission configuration (loaded from config file).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct PermissionConfig {
+    /// Default mode (read, write, agi). Default: write.
+    pub default_mode: Option<String>,
+    /// Auto-approve all tool calls (--yes behavior). Default: false.
+    pub auto_approve: Option<bool>,
+    /// Allow operations outside CWD (--no-sandbox behavior). Default: false.
+    pub allow_outside_cwd: Option<bool>,
+}
+
+impl PermissionConfig {
+    /// Get the tool mode from config, defaulting to Write if not specified.
+    pub fn mode(&self) -> ToolMode {
+        match self.default_mode.as_deref() {
+            Some("read") => ToolMode::Read,
+            Some("agi") => ToolMode::Agi,
+            _ => ToolMode::Write,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -23,6 +47,9 @@ pub struct Config {
 
     /// MCP server configurations.
     pub mcp_servers: HashMap<String, McpServerConfig>,
+
+    /// Permission settings.
+    pub permissions: PermissionConfig,
 }
 
 impl Default for Config {
@@ -35,6 +62,7 @@ impl Default for Config {
             provider_prefs: ProviderPrefs::default(),
             model_cache_ttl_secs: 3600,
             mcp_servers: HashMap::new(),
+            permissions: PermissionConfig::default(),
         }
     }
 }
@@ -144,6 +172,16 @@ impl Config {
         }
         if other.provider_prefs.order.is_some() {
             self.provider_prefs.order = other.provider_prefs.order;
+        }
+        // Merge permissions if any fields are set
+        if other.permissions.default_mode.is_some() {
+            self.permissions.default_mode = other.permissions.default_mode;
+        }
+        if other.permissions.auto_approve.is_some() {
+            self.permissions.auto_approve = other.permissions.auto_approve;
+        }
+        if other.permissions.allow_outside_cwd.is_some() {
+            self.permissions.allow_outside_cwd = other.permissions.allow_outside_cwd;
         }
     }
 

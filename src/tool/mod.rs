@@ -44,16 +44,23 @@ impl ToolOrchestrator {
             .get(name)
             .ok_or_else(|| ToolError::ExecutionFailed(format!("Tool not found: {}", name)))?;
 
-        let status = {
+        // For bash, use per-command permission checking
+        let (status, bash_command) = if name == "bash" {
+            let command = args
+                .get("command")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             let perms = self.permissions.read().await;
-            perms.check_permission(tool.as_ref())
+            (perms.check_command_permission(command), Some(command.to_string()))
+        } else {
+            let perms = self.permissions.read().await;
+            (perms.check_permission(tool.as_ref()), None)
         };
 
         match status {
             PermissionStatus::Allowed => tool.execute(args, ctx).await,
             PermissionStatus::NeedsApproval => {
                 if let Some(handler) = &self.approval_handler {
-                    // Release of lock happens implicitly because the block above ended.
                     let response = handler.ask_approval(name, &args).await;
                     match response {
                         ApprovalResponse::Yes => tool.execute(args, ctx).await,
@@ -63,14 +70,24 @@ impl ToolOrchestrator {
                         ApprovalResponse::AlwaysSession => {
                             {
                                 let mut perms = self.permissions.write().await;
-                                perms.allow_session(name);
+                                if let Some(ref cmd) = bash_command {
+                                    // For bash, allow the specific command
+                                    perms.allow_command_session(cmd);
+                                } else {
+                                    perms.allow_session(name);
+                                }
                             }
                             tool.execute(args, ctx).await
                         }
                         ApprovalResponse::AlwaysPermanent => {
                             {
                                 let mut perms = self.permissions.write().await;
-                                perms.allow_permanently(name);
+                                if let Some(ref cmd) = bash_command {
+                                    // For bash, allow the specific command
+                                    perms.allow_command_permanently(cmd);
+                                } else {
+                                    perms.allow_permanently(name);
+                                }
                             }
                             // TODO: Persist to config
                             tool.execute(args, ctx).await

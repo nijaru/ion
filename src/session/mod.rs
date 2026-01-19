@@ -13,6 +13,8 @@ pub struct Session {
     pub model: String,
     pub messages: Vec<Message>,
     pub abort_token: CancellationToken,
+    /// Allow operations outside CWD (sandbox disabled)
+    pub no_sandbox: bool,
 }
 
 impl Session {
@@ -23,6 +25,13 @@ impl Session {
             model,
             messages: Vec::new(),
             abort_token: CancellationToken::new(),
+            no_sandbox: false,
         }
+    }
+
+    /// Create a new session with sandbox disabled.
+    pub fn with_no_sandbox(mut self) -> Self {
+        self.no_sandbox = true;
+        self
     }
 }

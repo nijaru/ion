@@ -7,6 +7,10 @@ pub struct PermissionMatrix {
     mode: ToolMode,
     session_allowed_tools: HashSet<String>,
     permanent_allowed_tools: HashSet<String>,
+    /// Per-command bash approvals (session)
+    session_allowed_commands: HashSet<String>,
+    /// Per-command bash approvals (permanent)
+    permanent_allowed_commands: HashSet<String>,
 }
 
 impl PermissionMatrix {
@@ -15,6 +19,8 @@ impl PermissionMatrix {
             mode,
             session_allowed_tools: HashSet::new(),
             permanent_allowed_tools: HashSet::new(),
+            session_allowed_commands: HashSet::new(),
+            permanent_allowed_commands: HashSet::new(),
         }
     }
 
@@ -32,6 +38,35 @@ impl PermissionMatrix {
 
     pub fn allow_permanently(&mut self, tool_name: &str) {
         self.permanent_allowed_tools.insert(tool_name.to_string());
+    }
+
+    /// Allow a specific bash command for this session.
+    pub fn allow_command_session(&mut self, command: &str) {
+        self.session_allowed_commands.insert(command.to_string());
+    }
+
+    /// Allow a specific bash command permanently.
+    pub fn allow_command_permanently(&mut self, command: &str) {
+        self.permanent_allowed_commands.insert(command.to_string());
+    }
+
+    /// Check if a bash command is allowed.
+    pub fn check_command_permission(&self, command: &str) -> PermissionStatus {
+        match self.mode {
+            ToolMode::Agi => PermissionStatus::Allowed,
+            ToolMode::Read => {
+                PermissionStatus::Denied("Bash commands are blocked in Read mode".to_string())
+            }
+            ToolMode::Write => {
+                if self.session_allowed_commands.contains(command)
+                    || self.permanent_allowed_commands.contains(command)
+                {
+                    PermissionStatus::Allowed
+                } else {
+                    PermissionStatus::NeedsApproval
+                }
+            }
+        }
     }
 
     pub fn check_permission(&self, tool: &dyn Tool) -> PermissionStatus {

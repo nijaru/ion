@@ -317,6 +317,7 @@ impl Agent {
             working_dir: session.working_dir.clone(),
             session_id: session.id.clone(),
             abort_signal: session.abort_token.clone(),
+            no_sandbox: session.no_sandbox,
             index_callback: None,
             discovery_callback: None,
         };

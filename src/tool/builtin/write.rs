@@ -1,4 +1,3 @@
-use crate::tool::builtin::validate_path_within_working_dir;
 use crate::tool::{DangerLevel, Tool, ToolContext, ToolError, ToolResult};
 use async_trait::async_trait;
 use serde_json::json;
@@ -53,7 +52,9 @@ impl Tool for WriteTool {
             .ok_or_else(|| ToolError::InvalidArgs("content is required".to_string()))?;
 
         let file_path = Path::new(file_path_str);
-        let validated_path = validate_path_within_working_dir(file_path, &ctx.working_dir)?;
+        let validated_path = ctx
+            .check_sandbox(file_path)
+            .map_err(ToolError::PermissionDenied)?;
 
         // Read old content if exists for diffing
         let old_content = if validated_path.exists() {

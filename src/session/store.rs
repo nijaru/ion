@@ -203,6 +203,7 @@ impl SessionStore {
             model,
             messages: messages?,
             abort_token: CancellationToken::new(),
+            no_sandbox: false, // Default to sandboxed for restored sessions
         })
     }
 
