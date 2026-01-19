@@ -183,6 +183,12 @@ impl Client {
         let messages = Self::convert_messages(&request.messages);
         let tools = Self::convert_tools(&request.tools);
 
+        tracing::debug!(
+            "Building request: input_tools={}, converted_tools={}",
+            request.tools.len(),
+            tools.len()
+        );
+
         llm_connector::ChatRequest {
             model: request.model.clone(),
             messages,
@@ -281,6 +287,19 @@ impl LlmApi for Client {
 
     async fn complete(&self, request: ChatRequest) -> Result<Message, Error> {
         let llm_request = Self::build_request(&request);
+
+        tracing::debug!(
+            "LLM request: provider={}, model={}, tools={}, messages={}",
+            self.provider.id(),
+            llm_request.model,
+            llm_request.tools.as_ref().map(|t| t.len()).unwrap_or(0),
+            llm_request.messages.len()
+        );
+        if let Some(tools) = &llm_request.tools {
+            for tool in tools {
+                tracing::trace!("  Tool: {}", tool.function.name);
+            }
+        }
 
         let response = self
             .client
