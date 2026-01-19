@@ -40,8 +40,8 @@ async fn main() -> ExitCode {
 async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::error::Error>> {
     use crossterm::{
         event::{
-            self, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
-            PushKeyboardEnhancementFlags,
+            self, DisableMouseCapture, EnableMouseCapture, KeyboardEnhancementFlags,
+            MouseEventKind, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
         },
         execute,
         terminal::{
@@ -66,7 +66,7 @@ async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::err
         )?;
     }
 
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -77,10 +77,21 @@ async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::err
     loop {
         terminal.draw(|f| app.draw(f))?;
 
-        if event::poll(std::time::Duration::from_millis(50))?
-            && let event::Event::Key(key) = event::read()?
-        {
-            app.handle_event(event::Event::Key(key));
+        if event::poll(std::time::Duration::from_millis(50))? {
+            match event::read()? {
+                event::Event::Key(key) => {
+                    app.handle_event(event::Event::Key(key));
+                }
+                event::Event::Mouse(mouse) => {
+                    // Handle mouse scroll for chat history
+                    match mouse.kind {
+                        MouseEventKind::ScrollUp => app.message_list.scroll_up(3),
+                        MouseEventKind::ScrollDown => app.message_list.scroll_down(3),
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
         }
 
         app.update();
@@ -98,7 +109,11 @@ async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::err
                 execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags)?;
             }
             disable_raw_mode()?;
-            execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+            execute!(
+                terminal.backend_mut(),
+                LeaveAlternateScreen,
+                DisableMouseCapture
+            )?;
             terminal.show_cursor()?;
 
             // Open editor and get result
@@ -117,7 +132,11 @@ async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::err
                     )
                 )?;
             }
-            execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+            execute!(
+                terminal.backend_mut(),
+                EnterAlternateScreen,
+                EnableMouseCapture
+            )?;
             terminal.hide_cursor()?;
         }
     }
@@ -127,7 +146,11 @@ async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::err
         execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags)?;
     }
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
     terminal.show_cursor()?;
 
     Ok(())

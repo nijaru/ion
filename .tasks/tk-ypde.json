@@ -3,7 +3,7 @@
   "ref": "ypde",
   "title": "[TUI] Add tui-textarea crate for proper text entry - multiline, scroll, selection",
   "description": null,
-  "status": "active",
+  "status": "done",
   "priority": 3,
   "labels": [],
   "assignees": [],
@@ -27,10 +27,18 @@
     {
       "ts": "2026-01-19T18:19:42.526Z",
       "msg": "Added rat-text dependency. Full migration deferred - current implementation functional."
+    },
+    {
+      "ts": "2026-01-19T20:12:44.783Z",
+      "msg": "Evaluated all options: tui-textarea (incompatible), tui-prompts (no undo/redo/selection), rat-text (15+ deps, heavy). Current impl works and is ~200 LOC. Missing: undo/redo, selection. Options: 1) Keep current impl, 2) Add undo/redo ourselves (~50 LOC), 3) Use rat-text for full features."
+    },
+    {
+      "ts": "2026-01-19T20:38:53.111Z",
+      "msg": "Decision: Keep current implementation. External editor (Ctrl+G) covers complex editing needs. Undo/redo can be added later if requested."
     }
   ],
   "created_at": "2026-01-19T15:32:35.219Z",
-  "updated_at": "2026-01-19T18:19:42.526Z",
-  "completed_at": null,
+  "updated_at": "2026-01-19T20:38:53.132Z",
+  "completed_at": "2026-01-19T20:38:53.132Z",
   "external": {}
 }

@@ -1487,7 +1487,6 @@ impl App {
                     }
 
                     // Remaining lines: results with styling
-                    // Remaining lines: results with styling
                     for line in lines {
                         let (indent, styled_line) = if line.starts_with("⎿ Error:")
                             || line.starts_with("  Error:")
@@ -1497,8 +1496,8 @@ impl App {
                                 Span::raw("  "),
                                 Span::styled(line.to_string(), Style::default().fg(Color::Red)),
                             )
-                        } else if line.starts_with("  … +") || line.starts_with("⎿ … +") {
-                            // Overflow indicator dimmed
+                        } else if line.starts_with("⎿") || line.starts_with("  … +") {
+                            // Success results and overflow indicators dimmed
                             (
                                 Span::raw("  "),
                                 Span::styled(line.to_string(), Style::default().dim()),
@@ -1517,8 +1516,11 @@ impl App {
                                 (Span::raw("  "), Span::raw(strip_ansi(line)))
                             }
                         } else {
-                            // Normal result lines
-                            (Span::raw("  "), Span::raw(line.to_string()))
+                            // Continuation lines (indented) also dimmed
+                            (
+                                Span::raw("  "),
+                                Span::styled(line.to_string(), Style::default().dim()),
+                            )
                         };
                         chat_lines.push(Line::from(vec![indent, styled_line]));
                     }
