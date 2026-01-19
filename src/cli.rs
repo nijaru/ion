@@ -293,12 +293,14 @@ async fn run_inner(args: RunArgs, auto_approve: bool) -> Result<ExitCode> {
     let provider: Arc<dyn LlmApi> = Arc::new(Client::new(backend, api_key));
 
     // Create orchestrator
+    // Note: --yes grants Write mode with auto-approve (no approval handler)
+    // Use --agi for full autonomy (AGI mode + no sandbox)
     let orchestrator = if args.no_tools {
         // Truly disable all tools - empty orchestrator
         Arc::new(ToolOrchestrator::new(ToolMode::Read))
     } else if auto_approve {
-        // Full autonomy with auto-approve
-        Arc::new(ToolOrchestrator::with_builtins(ToolMode::Agi))
+        // Write mode with auto-approve (no approval handler = auto-approve)
+        Arc::new(ToolOrchestrator::with_builtins(ToolMode::Write))
     } else {
         // Write mode with deny handler (restricted tools fail with clear message)
         let mut orch = ToolOrchestrator::with_builtins(ToolMode::Write);

@@ -424,12 +424,20 @@ impl LlmApi for Client {
                     let _ = tx.send(StreamEvent::TextDelta(text)).await;
                 }
                 Ok(StreamChunk::ToolUseComplete { tool_call, .. }) => {
+                    let arguments = serde_json::from_str(&tool_call.function.arguments)
+                        .inspect_err(|e| {
+                            tracing::warn!(
+                                "Malformed tool arguments for {}: {}",
+                                tool_call.function.name,
+                                e
+                            )
+                        })
+                        .unwrap_or(serde_json::Value::Null);
                     let _ = tx
                         .send(StreamEvent::ToolCall(ToolCallEvent {
                             id: tool_call.id,
                             name: tool_call.function.name,
-                            arguments: serde_json::from_str(&tool_call.function.arguments)
-                                .unwrap_or(serde_json::Value::Null),
+                            arguments,
                         }))
                         .await;
                 }
@@ -470,11 +478,15 @@ impl LlmApi for Client {
 
         if let Some(tool_calls) = response.tool_calls() {
             for tc in tool_calls {
+                let arguments = serde_json::from_str(&tc.function.arguments)
+                    .inspect_err(|e| {
+                        tracing::warn!("Malformed tool arguments for {}: {}", tc.function.name, e)
+                    })
+                    .unwrap_or(serde_json::Value::Null);
                 content_blocks.push(ContentBlock::ToolCall {
                     id: tc.id,
                     name: tc.function.name,
-                    arguments: serde_json::from_str(&tc.function.arguments)
-                        .unwrap_or(serde_json::Value::Null),
+                    arguments,
                 });
             }
         }
