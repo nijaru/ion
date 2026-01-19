@@ -29,22 +29,66 @@ impl PermissionConfig {
     }
 }
 
+/// Optional API keys (fallback when env vars not set).
+/// Users with env vars don't need this section.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct ApiKeys {
+    pub openrouter: Option<String>,
+    pub anthropic: Option<String>,
+    pub openai: Option<String>,
+    pub google: Option<String>,
+    pub groq: Option<String>,
+}
+
+impl ApiKeys {
+    /// Get API key for a provider (returns None if not configured).
+    pub fn get(&self, provider: &str) -> Option<&str> {
+        match provider {
+            "openrouter" => self.openrouter.as_deref(),
+            "anthropic" => self.anthropic.as_deref(),
+            "openai" => self.openai.as_deref(),
+            "google" => self.google.as_deref(),
+            "groq" => self.groq.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// Set API key for a provider.
+    pub fn set(&mut self, provider: &str, key: String) {
+        match provider {
+            "openrouter" => self.openrouter = Some(key),
+            "anthropic" => self.anthropic = Some(key),
+            "openai" => self.openai = Some(key),
+            "google" => self.google = Some(key),
+            "groq" => self.groq = Some(key),
+            _ => {}
+        }
+    }
+
+    /// Check if any key is configured.
+    pub fn has_any(&self) -> bool {
+        self.openrouter.is_some()
+            || self.anthropic.is_some()
+            || self.openai.is_some()
+            || self.google.is_some()
+            || self.groq.is_some()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
-    /// Active provider name (e.g., "openrouter", "anthropic", "google").
+    /// Active provider (e.g., "openrouter", "anthropic", "google").
     pub provider: Option<String>,
 
-    // API keys for all supported providers
-    pub openrouter_api_key: Option<String>,
-    pub anthropic_api_key: Option<String>,
-    pub openai_api_key: Option<String>,
-    pub google_api_key: Option<String>,
-    pub groq_api_key: Option<String>,
-
-    /// User's selected model. None until first setup.
+    /// Selected model name (as the provider calls it, no prefix).
     #[serde(alias = "default_model")]
     pub model: Option<String>,
+
+    /// Optional API keys (fallback when env vars not set).
+    pub api_keys: ApiKeys,
+
     pub data_dir: PathBuf,
 
     /// Provider preferences for model filtering and routing.
@@ -64,12 +108,8 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             provider: None,
-            openrouter_api_key: None,
-            anthropic_api_key: None,
-            openai_api_key: None,
-            google_api_key: None,
-            groq_api_key: None,
             model: None,
+            api_keys: ApiKeys::default(),
             data_dir: ion_data_dir(),
             provider_prefs: ProviderPrefs::default(),
             model_cache_ttl_secs: 3600,
@@ -85,44 +125,42 @@ impl Config {
         self.data_dir.join("sessions.db")
     }
 
-    /// Check if first-time setup is needed (no model selected).
-    /// Note: API key is not required for Ollama, so we only check for model.
+    /// Check if first-time setup is needed (no provider or model selected).
     pub fn needs_setup(&self) -> bool {
-        self.model.is_none()
+        self.provider.is_none() || self.model.is_none()
     }
 
-    /// Check if any API provider is configured.
-    pub fn has_api_key(&self) -> bool {
-        self.openrouter_api_key.is_some()
-            || self.anthropic_api_key.is_some()
-            || self.openai_api_key.is_some()
-            || self.google_api_key.is_some()
-            || self.groq_api_key.is_some()
-    }
+    /// Get API key for a provider.
+    /// Priority: env var > config file.
+    pub fn api_key_for(&self, provider: &str) -> Option<String> {
+        // 1. Check env var first
+        let env_var = match provider {
+            "openrouter" => "OPENROUTER_API_KEY",
+            "anthropic" => "ANTHROPIC_API_KEY",
+            "openai" => "OPENAI_API_KEY",
+            "google" => "GOOGLE_API_KEY",
+            "groq" => "GROQ_API_KEY",
+            "ollama" => return Some(String::new()), // Ollama doesn't need a key
+            _ => return None,
+        };
 
-    /// Get API key for a specific provider.
-    pub fn api_key_for(&self, provider: &str) -> Option<&str> {
-        match provider {
-            "openrouter" => self.openrouter_api_key.as_deref(),
-            "anthropic" => self.anthropic_api_key.as_deref(),
-            "openai" => self.openai_api_key.as_deref(),
-            "google" => self.google_api_key.as_deref(),
-            "groq" => self.groq_api_key.as_deref(),
-            "ollama" => Some(""), // Ollama doesn't need a key
-            _ => None,
+        if let Ok(key) = std::env::var(env_var) {
+            if !key.is_empty() {
+                return Some(key);
+            }
         }
-    }
 
-    /// Set API key for a specific provider.
-    pub fn set_api_key(&mut self, provider: &str, key: String) {
-        match provider {
-            "openrouter" => self.openrouter_api_key = Some(key),
-            "anthropic" => self.anthropic_api_key = Some(key),
-            "openai" => self.openai_api_key = Some(key),
-            "google" => self.google_api_key = Some(key),
-            "groq" => self.groq_api_key = Some(key),
-            _ => {}
+        // Also check GEMINI_API_KEY for google
+        if provider == "google" {
+            if let Ok(key) = std::env::var("GEMINI_API_KEY") {
+                if !key.is_empty() {
+                    return Some(key);
+                }
+            }
         }
+
+        // 2. Fall back to config file
+        self.api_keys.get(provider).map(String::from)
     }
 
     /// Load configuration with layered precedence.
@@ -177,23 +215,24 @@ impl Config {
         if other.provider.is_some() {
             self.provider = other.provider;
         }
-        if other.openrouter_api_key.is_some() {
-            self.openrouter_api_key = other.openrouter_api_key;
-        }
-        if other.anthropic_api_key.is_some() {
-            self.anthropic_api_key = other.anthropic_api_key;
-        }
-        if other.openai_api_key.is_some() {
-            self.openai_api_key = other.openai_api_key;
-        }
-        if other.google_api_key.is_some() {
-            self.google_api_key = other.google_api_key;
-        }
-        if other.groq_api_key.is_some() {
-            self.groq_api_key = other.groq_api_key;
-        }
         if other.model.is_some() {
             self.model = other.model;
+        }
+        // Merge API keys
+        if other.api_keys.openrouter.is_some() {
+            self.api_keys.openrouter = other.api_keys.openrouter;
+        }
+        if other.api_keys.anthropic.is_some() {
+            self.api_keys.anthropic = other.api_keys.anthropic;
+        }
+        if other.api_keys.openai.is_some() {
+            self.api_keys.openai = other.api_keys.openai;
+        }
+        if other.api_keys.google.is_some() {
+            self.api_keys.google = other.api_keys.google;
+        }
+        if other.api_keys.groq.is_some() {
+            self.api_keys.groq = other.api_keys.groq;
         }
         if other.data_dir != ion_data_dir() {
             self.data_dir = other.data_dir;
@@ -415,7 +454,7 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = Config::default();
-        assert!(config.openrouter_api_key.is_none());
+        assert!(config.provider.is_none());
         assert!(config.model.is_none());
         assert!(config.needs_setup());
     }
@@ -423,15 +462,19 @@ mod tests {
     #[test]
     fn test_merge_configs() {
         let mut base = Config::default();
+        let mut api_keys = ApiKeys::default();
+        api_keys.openrouter = Some("test-key".to_string());
         let other = Config {
-            openrouter_api_key: Some("test-key".to_string()),
+            provider: Some("openrouter".to_string()),
             model: Some("test-model".to_string()),
+            api_keys,
             ..Default::default()
         };
 
         base.merge(other);
-        assert_eq!(base.openrouter_api_key, Some("test-key".to_string()));
+        assert_eq!(base.provider, Some("openrouter".to_string()));
         assert_eq!(base.model, Some("test-model".to_string()));
+        assert_eq!(base.api_keys.openrouter, Some("test-key".to_string()));
     }
 
     #[test]

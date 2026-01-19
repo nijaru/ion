@@ -249,28 +249,18 @@ impl App {
                 .try_init();
         }
 
-        // Determine active provider from config (saved provider > model prefix > first available)
+        // Determine active provider from config
         let api_provider = config
             .provider
             .as_deref()
             .and_then(ApiProvider::from_id)
-            .or_else(|| {
-                // Fallback: parse provider from model string (e.g., "google/gemini-3-flash")
-                config
-                    .model
-                    .as_deref()
-                    .and_then(|m| m.split('/').next())
-                    .and_then(ApiProvider::from_id)
-            })
             .unwrap_or(ApiProvider::OpenRouter);
 
         let backend = api_provider.to_backend();
 
-        // Get API key: config first, then env var
+        // Get API key (env var first, then config)
         let api_key = config
             .api_key_for(api_provider.id())
-            .map(String::from)
-            .or_else(|| api_provider.api_key())
             .unwrap_or_default();
 
         let provider_impl: Arc<dyn LlmApi> = Arc::new(Client::new(backend, api_key.clone()));
@@ -341,7 +331,7 @@ impl App {
         // Detect if first-time setup is needed
         let needs_setup = config.needs_setup();
         let initial_mode = if needs_setup {
-            if !config.has_api_key() {
+            if config.provider.is_none() {
                 Mode::ProviderPicker
             } else {
                 Mode::ModelPicker
@@ -1044,53 +1034,46 @@ impl App {
         }
     }
 
-    /// Switch the active API provider and re-create the agent.
-    fn switch_provider(&mut self, api_provider: ApiProvider) {
+    /// Set the active API provider and re-create the agent.
+    fn set_provider(&mut self, api_provider: ApiProvider) {
         let backend = api_provider.to_backend();
 
-        // Get API key: config first, then env var (Ollama doesn't need one)
-        let api_key = if api_provider == ApiProvider::Ollama {
-            Some(String::new())
-        } else {
-            self.config
-                .api_key_for(api_provider.id())
-                .map(String::from)
-                .or_else(|| api_provider.api_key())
-        };
+        // Get API key (env var first, then config)
+        let api_key = self
+            .config
+            .api_key_for(api_provider.id())
+            .unwrap_or_default();
 
-        if let Some(api_key) = api_key {
-            let provider: Arc<dyn LlmApi> = Arc::new(Client::new(backend, api_key.clone()));
+        let provider: Arc<dyn LlmApi> = Arc::new(Client::new(backend, api_key.clone()));
 
-            self.api_provider = api_provider;
+        self.api_provider = api_provider;
 
-            // Save provider to config
-            self.config.provider = Some(api_provider.id().to_string());
-            if let Err(e) = self.config.save() {
-                tracing::warn!("Failed to save config: {}", e);
-            }
-
-            // Re-create agent with new provider but same orchestrator
-            self.agent = Arc::new(Agent::new(provider, self.orchestrator.clone()));
-
-            // Update model registry with new key/base if it's OpenRouter
-            // Future: Support direct model fetching for other providers
-            if api_provider == ApiProvider::OpenRouter {
-                self.model_registry = Arc::new(ModelRegistry::new(
-                    api_key,
-                    self.config.model_cache_ttl_secs,
-                ));
-            }
-
-            // Set API provider name on model picker
-            self.model_picker.set_api_provider(api_provider.name());
-
-            // Clear old models when switching providers
-            self.model_picker.set_models(vec![]);
-            self.model_picker.is_loading = true;
-
-            self.mode = Mode::Input;
-            self.open_model_picker();
+        // Save provider to config
+        self.config.provider = Some(api_provider.id().to_string());
+        if let Err(e) = self.config.save() {
+            tracing::warn!("Failed to save config: {}", e);
         }
+
+        // Re-create agent with new provider but same orchestrator
+        self.agent = Arc::new(Agent::new(provider, self.orchestrator.clone()));
+
+        // Update model registry with new key/base if it's OpenRouter
+        if api_provider == ApiProvider::OpenRouter {
+            self.model_registry = Arc::new(ModelRegistry::new(
+                api_key,
+                self.config.model_cache_ttl_secs,
+            ));
+        }
+
+        // Set API provider name on model picker
+        self.model_picker.set_api_provider(api_provider.name());
+
+        // Clear old models when switching providers
+        self.model_picker.set_models(vec![]);
+        self.model_picker.is_loading = true;
+
+        self.mode = Mode::Input;
+        self.open_model_picker();
     }
 
     /// Open model picker (Ctrl+M or during setup)
@@ -1138,7 +1121,7 @@ impl App {
                 if let Some(status) = self.provider_picker.selected() {
                     if status.authenticated {
                         let provider = status.provider;
-                        self.switch_provider(provider);
+                        self.set_provider(provider);
                         // During setup, chain to model picker
                         if self.needs_setup {
                             self.open_model_picker();

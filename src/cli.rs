@@ -311,18 +311,33 @@ async fn run_inner(args: RunArgs, auto_approve: bool) -> Result<ExitCode> {
         return Ok(ExitCode::from(1));
     }
 
-    // Determine provider (config file, then env vars)
-    let (backend, api_key) = if let Some(key) = config.openrouter_api_key.clone() {
-        (Backend::OpenRouter, key)
-    } else if let Some(key) = config.anthropic_api_key.clone() {
-        (Backend::Anthropic, key)
-    } else if let Ok(key) = std::env::var("OPENROUTER_API_KEY") {
-        (Backend::OpenRouter, key)
-    } else if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
-        (Backend::Anthropic, key)
-    } else {
-        eprintln!("Error: No API key configured. Set OPENROUTER_API_KEY or ANTHROPIC_API_KEY, or run `ion` to set up.");
-        return Ok(ExitCode::from(1));
+    // Determine provider from config (or default to openrouter)
+    let provider_id = config.provider.as_deref().unwrap_or("openrouter");
+    let backend = match provider_id {
+        "anthropic" => Backend::Anthropic,
+        "openai" => Backend::OpenAI,
+        "google" => Backend::Google,
+        "groq" => Backend::Groq,
+        "ollama" => Backend::Ollama,
+        _ => Backend::OpenRouter,
+    };
+
+    // Get API key (env var first, then config)
+    let api_key = match config.api_key_for(provider_id) {
+        Some(key) => key,
+        None => {
+            eprintln!("Error: No API key for {}. Set {} or configure in ~/.ion/config.toml, or run `ion` to set up.",
+                provider_id,
+                match provider_id {
+                    "anthropic" => "ANTHROPIC_API_KEY",
+                    "openai" => "OPENAI_API_KEY",
+                    "google" => "GOOGLE_API_KEY",
+                    "groq" => "GROQ_API_KEY",
+                    _ => "OPENROUTER_API_KEY",
+                }
+            );
+            return Ok(ExitCode::from(1));
+        }
     };
 
     // Determine model

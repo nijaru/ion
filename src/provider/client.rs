@@ -55,11 +55,14 @@ impl Client {
 
     /// Build llm crate instance for a request.
     fn build_llm(&self, model: &str, tools: &[ToolDefinition]) -> Result<Box<dyn llm::LLMProvider>, Error> {
-        // Strip provider prefix if present (e.g., "google/gemini-3-flash" -> "gemini-3-flash")
-        let model_name = model
-            .split_once('/')
-            .map(|(_, name)| name)
-            .unwrap_or(model);
+        // OpenRouter expects full model ID (e.g., "anthropic/claude-3-opus")
+        // Other providers expect just the model name
+        let model_name = if self.backend == Backend::OpenRouter {
+            model
+        } else {
+            // Strip provider prefix if present (e.g., "google/gemini-3-flash" -> "gemini-3-flash")
+            model.split_once('/').map(|(_, name)| name).unwrap_or(model)
+        };
 
         let mut builder = LLMBuilder::new()
             .backend(self.backend.to_llm())
