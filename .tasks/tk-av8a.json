@@ -3,7 +3,7 @@
   "ref": "av8a",
   "title": "[UX] Status line: show context % or token count",
   "description": null,
-  "status": "open",
+  "status": "active",
   "priority": 3,
   "labels": [],
   "assignees": [],
@@ -13,7 +13,7 @@
   "due_date": null,
   "logs": [],
   "created_at": "2026-01-19T09:00:01.795Z",
-  "updated_at": "2026-01-19T09:00:01.795Z",
+  "updated_at": "2026-01-19T09:04:49.043Z",
   "completed_at": null,
   "external": {}
 }

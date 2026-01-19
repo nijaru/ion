@@ -107,6 +107,15 @@ impl Agent {
             }]),
         });
 
+        // Send initial token usage
+        let token_count = self.token_counter.count_messages(&session.messages);
+        let _ = tx
+            .send(AgentEvent::TokenUsage {
+                used: token_count.total,
+                max: self.compaction_config.context_window,
+            })
+            .await;
+
         // Optional: Run designer for complex requests
         if session.messages.len() <= 2 && user_msg.len() > 100 {
             if let Ok(plan) = self.plan(&user_msg, &session).await {
@@ -155,6 +164,15 @@ impl Agent {
             role: Role::Assistant,
             content: Arc::new(assistant_blocks),
         });
+
+        // Update token usage after assistant response
+        let token_count = self.token_counter.count_messages(&session.messages);
+        let _ = tx
+            .send(AgentEvent::TokenUsage {
+                used: token_count.total,
+                max: self.compaction_config.context_window,
+            })
+            .await;
 
         if tool_calls.is_empty() {
             return Ok(false);
