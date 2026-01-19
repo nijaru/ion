@@ -619,13 +619,13 @@ impl ModelPicker {
     }
 }
 
-use crate::provider::Provider;
+use crate::provider::LlmApi;
 use std::sync::Arc;
 
 /// Fetch models from registry using hybrid discovery.
 pub async fn fetch_models_for_picker(
     registry: &ModelRegistry,
-    provider: Arc<dyn Provider>,
+    provider: Arc<dyn LlmApi>,
     prefs: &ProviderPrefs,
 ) -> Result<Vec<ModelInfo>, anyhow::Error> {
     let models = registry.fetch_hybrid(provider).await?;

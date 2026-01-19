@@ -2,7 +2,7 @@
 //!
 //! Fetches model metadata from OpenRouter API and caches locally.
 
-use super::{ModelInfo, ModelPricing, Provider, ProviderPrefs};
+use super::{LlmApi, ModelInfo, ModelPricing, ProviderPrefs};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::sync::{Arc, RwLock};
@@ -130,7 +130,7 @@ impl ModelRegistry {
     /// Fetch models using a hybrid approach:
     /// 1. Query the active provider for availability.
     /// 2. Hydrate metadata (pricing, context) from models.dev.
-    pub async fn fetch_hybrid(&self, provider: Arc<dyn Provider>) -> Result<Vec<ModelInfo>> {
+    pub async fn fetch_hybrid(&self, provider: Arc<dyn LlmApi>) -> Result<Vec<ModelInfo>> {
         tracing::debug!("fetch_hybrid: calling provider.list_models()");
         let mut available_models = provider
             .list_models()

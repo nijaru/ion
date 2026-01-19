@@ -8,7 +8,7 @@ use crate::compaction::{
     CompactionConfig, PruningTier, TokenCounter, check_compaction_needed, prune_messages,
 };
 use crate::provider::{
-    ChatRequest, ContentBlock, Message, Provider, Role, StreamEvent, ThinkingConfig, ToolCallEvent,
+    ChatRequest, ContentBlock, LlmApi, Message, Role, StreamEvent, ThinkingConfig, ToolCallEvent,
     ToolDefinition,
 };
 use crate::session::Session;
@@ -23,7 +23,7 @@ use tracing::error;
 
 #[derive(Clone)]
 pub struct Agent {
-    provider: Arc<dyn Provider>,
+    provider: Arc<dyn LlmApi>,
     orchestrator: Arc<ToolOrchestrator>,
     designer: Option<Arc<Designer>>,
     compaction_config: CompactionConfig,
@@ -34,7 +34,7 @@ pub struct Agent {
 }
 
 impl Agent {
-    pub fn new(provider: Arc<dyn Provider>, orchestrator: Arc<ToolOrchestrator>) -> Self {
+    pub fn new(provider: Arc<dyn LlmApi>, orchestrator: Arc<ToolOrchestrator>) -> Self {
         let designer = Arc::new(Designer::new(provider.clone()));
         let system_prompt = "You are ion, a fast terminal coding agent. Be concise and efficient. Use tools to fulfill user requests.".to_string();
         Self {
@@ -74,7 +74,7 @@ impl Agent {
         Ok(())
     }
 
-    pub fn provider(&self) -> Arc<dyn Provider> {
+    pub fn provider(&self) -> Arc<dyn LlmApi> {
         self.provider.clone()
     }
 

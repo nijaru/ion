@@ -1,4 +1,4 @@
-use crate::provider::{ChatRequest, ContentBlock, Message, Provider, Role};
+use crate::provider::{ChatRequest, ContentBlock, LlmApi, Message, Role};
 use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
@@ -43,7 +43,7 @@ impl Plan {
 }
 
 pub struct Designer {
-    provider: Arc<dyn Provider>,
+    provider: Arc<dyn LlmApi>,
 }
 
 const DESIGNER_SYSTEM: &str = r#"You are the ion Designer. Your goal is to break down complex user requests into a clear, actionable plan.
@@ -71,7 +71,7 @@ Guidelines:
 Only output the JSON object. Do not include any other text."#;
 
 impl Designer {
-    pub fn new(provider: Arc<dyn Provider>) -> Self {
+    pub fn new(provider: Arc<dyn LlmApi>) -> Self {
         Self { provider }
     }
 
