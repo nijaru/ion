@@ -1006,6 +1006,7 @@ impl App {
                     self.model_picker.reset();
                     self.mode = Mode::ProviderPicker;
                     self.provider_picker.refresh();
+                    self.provider_picker.select_provider(self.api_provider);
                 } else {
                     self.model_picker.reset();
                     self.mode = Mode::Input;
@@ -1017,6 +1018,7 @@ impl App {
                 self.model_picker.reset();
                 self.mode = Mode::ProviderPicker;
                 self.provider_picker.refresh();
+                self.provider_picker.select_provider(self.api_provider);
             }
 
             // Type to filter (only regular chars without ctrl modifier)
@@ -1030,19 +1032,7 @@ impl App {
 
     /// Switch the active API provider and re-create the agent.
     fn switch_provider(&mut self, api_provider: ApiProvider) {
-        // Convert ApiProvider to Backend
-        let backend = match api_provider {
-            ApiProvider::OpenRouter => Backend::OpenRouter,
-            ApiProvider::Anthropic => Backend::Anthropic,
-            ApiProvider::OpenAI => Backend::OpenAI,
-            ApiProvider::Ollama => Backend::Ollama,
-            ApiProvider::Groq => Backend::Groq,
-            ApiProvider::Google => Backend::Google,
-            _ => {
-                self.last_error = Some(format!("{} not yet supported", api_provider.name()));
-                return;
-            }
-        };
+        let backend = api_provider.to_backend();
 
         // Ollama doesn't need an API key
         let api_key = if api_provider == ApiProvider::Ollama {
@@ -1099,6 +1089,7 @@ impl App {
     fn open_provider_picker(&mut self) {
         self.mode = Mode::ProviderPicker;
         self.provider_picker.refresh();
+        self.provider_picker.select_provider(self.api_provider);
     }
 
     /// Handle API provider picker mode
@@ -1122,7 +1113,7 @@ impl App {
             // Selection
             KeyCode::Enter => {
                 if let Some(status) = self.provider_picker.selected() {
-                    if status.authenticated && status.implemented {
+                    if status.authenticated {
                         let provider = status.provider;
                         self.switch_provider(provider);
                         // During setup, chain to model picker
@@ -1130,7 +1121,7 @@ impl App {
                             self.open_model_picker();
                         }
                     }
-                    // If not authenticated/implemented, do nothing (can't select)
+                    // If not authenticated, do nothing (can't select)
                 }
             }
 

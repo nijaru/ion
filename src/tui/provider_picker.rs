@@ -36,14 +36,8 @@ impl ProviderPicker {
     }
 
     /// Refresh provider detection and reset selection.
-    /// Only shows implemented providers.
     pub fn refresh(&mut self) {
-        self.providers = ProviderStatus::sorted(
-            ProviderStatus::detect_all()
-                .into_iter()
-                .filter(|s| s.implemented)
-                .collect(),
-        );
+        self.providers = ProviderStatus::sorted(ProviderStatus::detect_all());
         self.filter.clear();
         self.apply_filter();
     }
@@ -139,6 +133,13 @@ impl ProviderPicker {
         self.list_state
             .selected()
             .and_then(|i| self.filtered.get(i))
+    }
+
+    /// Select a specific provider by enum value.
+    pub fn select_provider(&mut self, provider: crate::provider::ApiProvider) {
+        if let Some(idx) = self.filtered.iter().position(|s| s.provider == provider) {
+            self.list_state.select(Some(idx));
+        }
     }
 
     /// Render the picker modal.
