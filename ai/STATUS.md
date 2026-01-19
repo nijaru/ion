@@ -7,7 +7,7 @@
 | Phase     | 5 - Polish & UX | 2026-01-19 |
 | Status    | Runnable        | 2026-01-19 |
 | Toolchain | stable          | 2026-01-19 |
-| Tests     | 56 passing      | 2026-01-19 |
+| Tests     | 64 passing      | 2026-01-19 |
 
 ## Architecture
 
@@ -29,7 +29,7 @@
 | glob  | Done     | Safe, pattern matching via ignore crate    |
 | grep  | Done     | Safe, content search                       |
 | bash  | Done     | Restricted, shell commands                 |
-| edit  | **TODO** | String replacement (old_string/new_string) |
+| edit  | Done     | String replacement (old_string/new_string) |
 | list  | **TODO** | fd-like directory listing                  |
 
 **Providers** (via `llm` crate):
