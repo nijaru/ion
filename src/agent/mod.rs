@@ -158,7 +158,8 @@ impl Agent {
         thinking: Option<ThinkingConfig>,
     ) -> Result<bool> {
         let (assistant_blocks, tool_calls) =
-            self.stream_response(session, tx, thinking).await?;
+            self.stream_response(session, tx, thinking, session.abort_token.clone())
+                .await?;
 
         session.messages.push(Message {
             role: Role::Assistant,
@@ -232,6 +233,7 @@ impl Agent {
         session: &Session,
         tx: &mpsc::Sender<AgentEvent>,
         thinking: Option<ThinkingConfig>,
+        abort_token: tokio_util::sync::CancellationToken,
     ) -> Result<(Vec<ContentBlock>, Vec<ToolCallEvent>)> {
         let tool_defs: Vec<ToolDefinition> = self
             .orchestrator
@@ -280,42 +282,51 @@ impl Agent {
         let mut assistant_blocks = Vec::new();
         let mut tool_calls = Vec::new();
 
-        while let Some(event) = stream_rx.recv().await {
-            match event {
-                StreamEvent::TextDelta(delta) => {
-                    let delta_tokens = self.token_counter.count_str(&delta);
-                    let _ = tx.send(AgentEvent::OutputTokensDelta(delta_tokens)).await;
-                    let _ = tx.send(AgentEvent::TextDelta(delta.clone())).await;
-                    if let Some(ContentBlock::Text { text }) = assistant_blocks.last_mut() {
-                        text.push_str(&delta);
-                    } else {
-                        assistant_blocks.push(ContentBlock::Text { text: delta });
+        loop {
+            tokio::select! {
+                _ = abort_token.cancelled() => {
+                    // Cancelled by user
+                    return Err(anyhow::anyhow!("Cancelled"));
+                }
+                event = stream_rx.recv() => {
+                    match event {
+                        Some(StreamEvent::TextDelta(delta)) => {
+                            let delta_tokens = self.token_counter.count_str(&delta);
+                            let _ = tx.send(AgentEvent::OutputTokensDelta(delta_tokens)).await;
+                            let _ = tx.send(AgentEvent::TextDelta(delta.clone())).await;
+                            if let Some(ContentBlock::Text { text }) = assistant_blocks.last_mut() {
+                                text.push_str(&delta);
+                            } else {
+                                assistant_blocks.push(ContentBlock::Text { text: delta });
+                            }
+                        }
+                        Some(StreamEvent::ThinkingDelta(delta)) => {
+                            let _ = tx.send(AgentEvent::ThinkingDelta(delta.clone())).await;
+                            if let Some(ContentBlock::Thinking { thinking }) = assistant_blocks.last_mut() {
+                                thinking.push_str(&delta);
+                            } else {
+                                assistant_blocks.push(ContentBlock::Thinking { thinking: delta });
+                            }
+                        }
+                        Some(StreamEvent::ToolCall(call)) => {
+                            let _ = tx
+                                .send(AgentEvent::ToolCallStart(
+                                    call.id.clone(),
+                                    call.name.clone(),
+                                ))
+                                .await;
+                            tool_calls.push(call.clone());
+                            assistant_blocks.push(ContentBlock::ToolCall {
+                                id: call.id,
+                                name: call.name,
+                                arguments: call.arguments,
+                            });
+                        }
+                        Some(StreamEvent::Error(e)) => return Err(anyhow::anyhow!(e)),
+                        Some(_) => {}
+                        None => break, // Stream ended
                     }
                 }
-                StreamEvent::ThinkingDelta(delta) => {
-                    let _ = tx.send(AgentEvent::ThinkingDelta(delta.clone())).await;
-                    if let Some(ContentBlock::Thinking { thinking }) = assistant_blocks.last_mut() {
-                        thinking.push_str(&delta);
-                    } else {
-                        assistant_blocks.push(ContentBlock::Thinking { thinking: delta });
-                    }
-                }
-                StreamEvent::ToolCall(call) => {
-                    let _ = tx
-                        .send(AgentEvent::ToolCallStart(
-                            call.id.clone(),
-                            call.name.clone(),
-                        ))
-                        .await;
-                    tool_calls.push(call.clone());
-                    assistant_blocks.push(ContentBlock::ToolCall {
-                        id: call.id,
-                        name: call.name,
-                        arguments: call.arguments,
-                    });
-                }
-                StreamEvent::Error(e) => return Err(anyhow::anyhow!(e)),
-                _ => {}
             }
         }
 
