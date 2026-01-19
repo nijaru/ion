@@ -19,7 +19,7 @@ use std::borrow::Cow;
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
 use tokio::task::JoinSet;
-use tracing::error;
+use tracing::{debug, error};
 
 #[derive(Clone)]
 pub struct Agent {
@@ -270,62 +270,97 @@ impl Agent {
                 .sum::<usize>();
         let _ = tx.send(AgentEvent::InputTokens(input_tokens)).await;
 
-        let (stream_tx, mut stream_rx) = mpsc::channel(100);
-        let provider = self.provider.clone();
-
-        tokio::spawn(async move {
-            if let Err(e) = provider.stream(request, stream_tx).await {
-                error!("Provider stream error: {}", e);
-            }
-        });
+        // Ollama doesn't support streaming with tools - use non-streaming fallback
+        let use_streaming = !(self.provider.id() == "ollama" && !request.tools.is_empty());
 
         let mut assistant_blocks = Vec::new();
         let mut tool_calls = Vec::new();
 
-        loop {
-            tokio::select! {
-                _ = abort_token.cancelled() => {
-                    // Cancelled by user
-                    return Err(anyhow::anyhow!("Cancelled"));
+        if use_streaming {
+            let (stream_tx, mut stream_rx) = mpsc::channel(100);
+            let provider = self.provider.clone();
+
+            tokio::spawn(async move {
+                if let Err(e) = provider.stream(request, stream_tx).await {
+                    error!("Provider stream error: {}", e);
                 }
-                event = stream_rx.recv() => {
-                    match event {
-                        Some(StreamEvent::TextDelta(delta)) => {
-                            let delta_tokens = self.token_counter.count_str(&delta);
-                            let _ = tx.send(AgentEvent::OutputTokensDelta(delta_tokens)).await;
-                            let _ = tx.send(AgentEvent::TextDelta(delta.clone())).await;
-                            if let Some(ContentBlock::Text { text }) = assistant_blocks.last_mut() {
-                                text.push_str(&delta);
-                            } else {
-                                assistant_blocks.push(ContentBlock::Text { text: delta });
-                            }
-                        }
-                        Some(StreamEvent::ThinkingDelta(delta)) => {
-                            let _ = tx.send(AgentEvent::ThinkingDelta(delta.clone())).await;
-                            if let Some(ContentBlock::Thinking { thinking }) = assistant_blocks.last_mut() {
-                                thinking.push_str(&delta);
-                            } else {
-                                assistant_blocks.push(ContentBlock::Thinking { thinking: delta });
-                            }
-                        }
-                        Some(StreamEvent::ToolCall(call)) => {
-                            let _ = tx
-                                .send(AgentEvent::ToolCallStart(
-                                    call.id.clone(),
-                                    call.name.clone(),
-                                ))
-                                .await;
-                            tool_calls.push(call.clone());
-                            assistant_blocks.push(ContentBlock::ToolCall {
-                                id: call.id,
-                                name: call.name,
-                                arguments: call.arguments,
-                            });
-                        }
-                        Some(StreamEvent::Error(e)) => return Err(anyhow::anyhow!(e)),
-                        Some(_) => {}
-                        None => break, // Stream ended
+            });
+
+            loop {
+                tokio::select! {
+                    _ = abort_token.cancelled() => {
+                        return Err(anyhow::anyhow!("Cancelled"));
                     }
+                    event = stream_rx.recv() => {
+                        match event {
+                            Some(StreamEvent::TextDelta(delta)) => {
+                                let delta_tokens = self.token_counter.count_str(&delta);
+                                let _ = tx.send(AgentEvent::OutputTokensDelta(delta_tokens)).await;
+                                let _ = tx.send(AgentEvent::TextDelta(delta.clone())).await;
+                                if let Some(ContentBlock::Text { text }) = assistant_blocks.last_mut() {
+                                    text.push_str(&delta);
+                                } else {
+                                    assistant_blocks.push(ContentBlock::Text { text: delta });
+                                }
+                            }
+                            Some(StreamEvent::ThinkingDelta(delta)) => {
+                                let _ = tx.send(AgentEvent::ThinkingDelta(delta.clone())).await;
+                                if let Some(ContentBlock::Thinking { thinking }) = assistant_blocks.last_mut() {
+                                    thinking.push_str(&delta);
+                                } else {
+                                    assistant_blocks.push(ContentBlock::Thinking { thinking: delta });
+                                }
+                            }
+                            Some(StreamEvent::ToolCall(call)) => {
+                                let _ = tx
+                                    .send(AgentEvent::ToolCallStart(
+                                        call.id.clone(),
+                                        call.name.clone(),
+                                    ))
+                                    .await;
+                                tool_calls.push(call.clone());
+                                assistant_blocks.push(ContentBlock::ToolCall {
+                                    id: call.id,
+                                    name: call.name,
+                                    arguments: call.arguments,
+                                });
+                            }
+                            Some(StreamEvent::Error(e)) => return Err(anyhow::anyhow!(e)),
+                            Some(_) => {}
+                            None => break,
+                        }
+                    }
+                }
+            }
+        } else {
+            // Non-streaming fallback (e.g., Ollama with tools)
+            debug!("Using non-streaming completion (provider: {})", self.provider.id());
+            let response = self.provider.complete(request).await
+                .map_err(|e| anyhow::anyhow!("Completion error: {}", e))?;
+
+            // Emit events for the complete response
+            for block in response.content.iter() {
+                match block {
+                    ContentBlock::Text { text } => {
+                        let tokens = self.token_counter.count_str(text);
+                        let _ = tx.send(AgentEvent::OutputTokensDelta(tokens)).await;
+                        let _ = tx.send(AgentEvent::TextDelta(text.clone())).await;
+                        assistant_blocks.push(block.clone());
+                    }
+                    ContentBlock::Thinking { thinking } => {
+                        let _ = tx.send(AgentEvent::ThinkingDelta(thinking.clone())).await;
+                        assistant_blocks.push(block.clone());
+                    }
+                    ContentBlock::ToolCall { id, name, arguments } => {
+                        let _ = tx.send(AgentEvent::ToolCallStart(id.clone(), name.clone())).await;
+                        tool_calls.push(ToolCallEvent {
+                            id: id.clone(),
+                            name: name.clone(),
+                            arguments: arguments.clone(),
+                        });
+                        assistant_blocks.push(block.clone());
+                    }
+                    _ => {}
                 }
             }
         }
