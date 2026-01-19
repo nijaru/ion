@@ -49,30 +49,34 @@
 
 Run `tk ready` for current task list.
 
-**Priority (Refactor):**
+**Priority:**
 
-1. OpenAI-compatible endpoint config (vLLM, mlx-lm)
-
-**Lower Priority (Polish):**
-
-- Diff highlighting for edits
+1. Model sorting: org → newest → alphabetical (tk-r9c7)
+   - OpenRouter API may have `created` field
+   - models.dev returns `created: 0`
+2. Diff highlighting for edits (tk-er0v)
 
 **Ideas:**
 
+- OpenRouter provider routing modal (tk-iegz)
 - Interactive shell support (ai/ideas/interactive-shell.md)
 
 ## Recent Session Work
 
-- **Completed model listing refactor** (tk-go12)
-  - Moved model listing from Client to Registry
-  - Client now only does LLM calls (stream, complete)
-  - Registry handles all model discovery
-  - Cleaned up LlmApi trait (removed list_models, model_info, models)
-  - Added to_backend() to ApiProvider
-- Fixed OpenRouter feature not enabled in llm crate
-- Implemented model listing for Ollama and OpenRouter
-- Improved tool call display in chat history
-- Code review: fixed UTF-8 panic, CLI permission consistency
+**2026-01-19 (TUI polish):**
+
+- Rate limit (429) retry with exponential backoff (2s, 4s, 8s)
+- Ollama context lengths fetched from `/api/show` endpoint
+- Tool display: `read(path)` + `└ result` (combined, normal text)
+- Fixed provider modal showing on startup when model already set
+- Research: competitor TUI patterns (ai/research/tool-display-patterns-2026.md)
+
+**Prior:**
+
+- Model listing refactor (Client → Registry)
+- llm crate integration for all providers
+- Tool call display improvements
+- UTF-8 panic fix, CLI permission consistency
 
 ## Known Limitations
 

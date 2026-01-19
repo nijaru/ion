@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "r9c7",
+  "title": "[UX] Model sorting - org → newest → alphabetical (needs OpenRouter created field)",
+  "description": null,
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-19T12:16:34.802Z",
+  "updated_at": "2026-01-19T12:16:34.802Z",
+  "completed_at": null,
+  "external": {}
+}
