@@ -262,14 +262,12 @@ impl ModelRegistry {
             }
         }
 
-        // 2. Fetch from Models.dev (universal source)
+        // 2. Fetch from Models.dev (universal source for direct provider access)
         if let Ok(md_models) = super::models_dev::fetch_models_dev().await {
-            // Avoid duplicates by checking IDs
+            // Add models not already present (OpenRouter uses "provider/model" IDs,
+            // models.dev uses native model names - they won't conflict)
             for m in md_models {
-                // If we already have this model from OpenRouter, keep OpenRouter's (likely more up to date for OR users)
-                // Both use "provider/model" format now
-                if !all_models.iter().any(|existing| existing.id == m.id)
-                {
+                if !all_models.iter().any(|existing| existing.id == m.id) {
                     all_models.push(m);
                 }
             }
