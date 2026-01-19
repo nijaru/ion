@@ -565,8 +565,8 @@ impl ModelPicker {
                 // Ollama: strip ":latest" suffix (it's the default)
                 m.id.strip_suffix(":latest").unwrap_or(&m.id)
             } else {
-                // Others: strip "provider/" or "provider:" prefix
-                m.id.split(['/', ':']).nth(1).unwrap_or(&m.id)
+                // Others: strip "provider/" prefix
+                m.id.split('/').nth(1).unwrap_or(&m.id)
             };
             let provider = &m.provider;
 

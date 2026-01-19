@@ -55,9 +55,9 @@ impl Client {
 
     /// Build llm crate instance for a request.
     fn build_llm(&self, model: &str, tools: &[ToolDefinition]) -> Result<Box<dyn llm::LLMProvider>, Error> {
-        // Strip provider prefix if present (e.g., "google:gemini-3-flash" -> "gemini-3-flash")
+        // Strip provider prefix if present (e.g., "google/gemini-3-flash" -> "gemini-3-flash")
         let model_name = model
-            .split_once(':')
+            .split_once('/')
             .map(|(_, name)| name)
             .unwrap_or(model);
 

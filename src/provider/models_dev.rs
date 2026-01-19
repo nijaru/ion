@@ -78,7 +78,7 @@ pub async fn fetch_models_dev() -> Result<Vec<ModelInfo>> {
             };
 
             all_models.push(ModelInfo {
-                id: format!("{}:{}", provider_id, model_id),
+                id: format!("{}/{}", provider_id, model_id),
                 name: m.name,
                 provider: provider_id.clone(),
                 context_window: m.limit.map(|l| l.context).unwrap_or(0),
@@ -104,8 +104,8 @@ mod tests {
         let models = fetch_models_dev().await.unwrap();
         assert!(!models.is_empty());
 
-        let has_claude = models.iter().any(|m| m.id.contains("anthropic:claude"));
-        let has_gpt = models.iter().any(|m| m.id.contains("openai:gpt"));
+        let has_claude = models.iter().any(|m| m.id.contains("anthropic/claude"));
+        let has_gpt = models.iter().any(|m| m.id.contains("openai/gpt"));
 
         assert!(has_claude || has_gpt, "Should contain some major models");
     }
