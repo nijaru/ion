@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "iq98",
+  "title": "[FEATURE] Syntax highlighting for code blocks in chat",
+  "description": null,
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-19T15:42:54.066Z",
+  "updated_at": "2026-01-19T15:42:54.066Z",
+  "completed_at": null,
+  "external": {}
+}

@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "f564",
+  "title": "[FEATURE] OAuth support for providers (Google, etc)",
+  "description": null,
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-19T15:36:19.862Z",
+  "updated_at": "2026-01-19T15:36:19.862Z",
+  "completed_at": null,
+  "external": {}
+}

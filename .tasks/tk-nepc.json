@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "nepc",
+  "title": "[UX] Token counter not updating during non-streaming processing",
+  "description": null,
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-19T15:17:15.278Z",
+  "updated_at": "2026-01-19T15:17:15.278Z",
+  "completed_at": null,
+  "external": {}
+}

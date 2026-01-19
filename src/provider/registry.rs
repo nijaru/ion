@@ -190,6 +190,7 @@ impl ModelRegistry {
         let base_url = "http://localhost:11434";
 
         // Try to get model details from /api/show
+        // Context length is stored at {architecture}.context_length, not general.context_length
         let context_window = match self
             .client
             .post(format!("{}/api/show", base_url))
@@ -201,13 +202,7 @@ impl ModelRegistry {
                 #[derive(Deserialize)]
                 struct OllamaShowResponse {
                     #[serde(default)]
-                    model_info: Option<OllamaModelInfo>,
-                }
-
-                #[derive(Deserialize)]
-                struct OllamaModelInfo {
-                    #[serde(rename = "general.context_length")]
-                    context_length: Option<u32>,
+                    model_info: Option<std::collections::HashMap<String, serde_json::Value>>,
                 }
 
                 response
@@ -215,7 +210,17 @@ impl ModelRegistry {
                     .await
                     .ok()
                     .and_then(|r| r.model_info)
-                    .and_then(|i| i.context_length)
+                    .and_then(|info| {
+                        // Get architecture name (e.g., "qwen3next", "mistral3", "llama")
+                        let arch = info
+                            .get("general.architecture")
+                            .and_then(|v| v.as_str())?;
+                        // Context length is at {architecture}.context_length
+                        let key = format!("{}.context_length", arch);
+                        info.get(&key)
+                            .and_then(|v| v.as_u64())
+                            .map(|v| v as u32)
+                    })
                     .unwrap_or(8192) // Default for older models
             }
             _ => 8192, // Default fallback

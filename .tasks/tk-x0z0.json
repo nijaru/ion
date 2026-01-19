@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "x0z0",
+  "title": "[BUG] Missing final agent message after completion",
+  "description": null,
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-19T15:17:15.354Z",
+  "updated_at": "2026-01-19T15:17:15.354Z",
+  "completed_at": null,
+  "external": {}
+}

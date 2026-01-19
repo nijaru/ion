@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "eesg",
+  "title": "[BUG] Ctrl+P not working in model modal - should switch to provider",
+  "description": null,
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-19T15:17:15.373Z",
+  "updated_at": "2026-01-19T15:17:15.373Z",
+  "completed_at": null,
+  "external": {}
+}

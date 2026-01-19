@@ -68,25 +68,51 @@
 
 ## Open Tasks
 
-Run `tk ready` for current task list.
+Run `tk ls` for current task list. **21 open tasks** as of 2026-01-19.
 
-**High Priority:**
+**Critical - Core Bugs:**
 
-1. **Add list tool** (tk-miou) - fd-like, uses ignore crate
-2. **Streaming+tools fix** (tk-g1fy, tk-e1ji) - llm crate falls back to non-streaming
+| Task    | Issue                                         |
+| ------- | --------------------------------------------- |
+| tk-z7r2 | Scrolling broken - PageUp/PageDown shows [+N] |
+| tk-oohm | Scroll affects text entry instead of chat     |
+| tk-eesg | Ctrl+P not working in model modal             |
+| tk-a9rd | Ctrl+M not working in provider modal          |
+| tk-x0z0 | Missing final agent message after completion  |
+| tk-1mll | README says MIT but LICENSE is AGPL           |
 
-**Medium Priority:**
+**UX Polish:**
 
-- Model sorting: org → newest → alphabetical (tk-r9c7)
-- Diff highlighting for edits (tk-er0v)
-- System prompt comparison (tk-gsiw)
+| Task    | Issue                                         |
+| ------- | --------------------------------------------- |
+| tk-u2iu | Git diff format: `[main] +28 -11` with colors |
+| tk-abvt | Remove dir name from statusline               |
+| tk-6u8c | Status line context % and token display       |
+| tk-9n78 | Claude Code tool format - bold, spacing       |
+| tk-gf23 | Tool output gap between header and result     |
+| tk-bboa | Model picker column width/overflow            |
+| tk-sm2h | Color error lines dim red                     |
+| tk-kzgo | Dim successful tool result lines              |
 
-**Low Priority / Ideas:**
+**Infrastructure:**
 
-- OAuth system for providers (tk-t0ea)
-- Permission system audit (tk-5h0j)
-- OpenRouter provider routing modal (tk-iegz)
-- Model display format (tk-x3zf)
+| Task    | Issue                                        |
+| ------- | -------------------------------------------- |
+| tk-ypde | Add tui-textarea crate for proper text entry |
+| tk-jiu7 | Verify CI migrated from Bun to Rust          |
+| tk-g1fy | Streaming+tools - llm crate limitation       |
+| tk-pj4e | Clean up repo and make public                |
+
+**Features (defer until core is solid):**
+
+| Task    | Issue                                      |
+| ------- | ------------------------------------------ |
+| tk-vzkd | Input history persistence across restarts  |
+| tk-kf3r | Interactive prompts - y/n, editor, browser |
+| tk-f564 | OAuth support for providers                |
+| tk-vsdp | Theme support - customizable colors        |
+| tk-iq98 | Syntax highlighting for code blocks        |
+| tk-miou | List tool - fd-like directory listing      |
 
 ## Session Work 2026-01-19
 
@@ -102,12 +128,16 @@ Run `tk ready` for current task list.
 - Task completed styling: dim green checkmark
 - **Unified Provider types** (tk-gpdy): Merged `Backend` and `ApiProvider` into single `Provider` enum
 - **Edit tool** (tk-b4hd): String replacement with old_string/new_string, uniqueness validation, diff output
+- **Ollama context length fix** (tk-xe2c): Context is at `{architecture}.context_length`, not `general.context_length`
+- **Task tracking audit**: Reviewed session history, found 21 issues to track
 
 **Design notes:**
 
 - Discover tool: Keep as-is, compiler optimizes out dead code
 - Memory system: Use hooks (not MCP) for prompt injection and lifecycle events
 - List tool (tk-miou): Show ignored files separately, respect gitignore by default
+- Statusline: Remove dir name, format git as `[main] +28 -11` with colors
+- Tool colors: Mostly white, dim for secondary info, dim red for errors (not alarming)
 
 ## Design Decisions
 
