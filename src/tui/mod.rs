@@ -26,7 +26,6 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 const CANCEL_WINDOW: Duration = Duration::from_millis(1500);
-const SUMMARY_DISPLAY: Duration = Duration::from_secs(5);
 
 /// Format token count as human-readable (e.g., 1500 -> "1.5k")
 fn format_tokens(n: usize) -> String {
@@ -171,13 +170,12 @@ pub struct App {
     git_diff_updated: Option<Instant>,
 }
 
-/// Summary of a completed task for brief post-completion display
+/// Summary of a completed task for post-completion display
 #[derive(Clone)]
 pub struct TaskSummary {
     pub elapsed: std::time::Duration,
     pub input_tokens: usize,
     pub output_tokens: usize,
-    pub completed_at: Instant,
 }
 
 struct TuiApprovalHandler {
@@ -1160,7 +1158,6 @@ impl App {
                 elapsed: start.elapsed(),
                 input_tokens: self.input_tokens,
                 output_tokens: self.output_tokens,
-                completed_at: Instant::now(),
             });
         }
     }
@@ -1323,12 +1320,12 @@ impl App {
         // Calculate input box height based on content
         let input_height = self.calculate_input_height(frame.area().width);
 
-        // Progress line: running, or showing completion summary
-        let show_summary = self
-            .last_task_summary
-            .as_ref()
-            .is_some_and(|s| s.completed_at.elapsed() < SUMMARY_DISPLAY);
-        let progress_height = if self.is_running || show_summary { 1 } else { 0 };
+        // Progress line: running, or showing completion summary (until next task)
+        let progress_height = if self.is_running || self.last_task_summary.is_some() {
+            1
+        } else {
+            0
+        };
 
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -1530,33 +1527,31 @@ impl App {
             let progress_line = Line::from(progress_spans);
             frame.render_widget(Paragraph::new(progress_line), chunks[1]);
         } else if let Some(summary) = &self.last_task_summary {
-            // Show completion summary briefly
-            if summary.completed_at.elapsed() < SUMMARY_DISPLAY {
-                let secs = summary.elapsed.as_secs();
-                let elapsed_str = if secs >= 60 {
-                    format!("{}m {}s", secs / 60, secs % 60)
-                } else {
-                    format!("{}s", secs)
-                };
+            // Show completion summary until next task starts
+            let secs = summary.elapsed.as_secs();
+            let elapsed_str = if secs >= 60 {
+                format!("{}m {}s", secs / 60, secs % 60)
+            } else {
+                format!("{}s", secs)
+            };
 
-                let mut stats = vec![elapsed_str];
-                if summary.input_tokens > 0 {
-                    stats.push(format!("↑ {}", format_tokens(summary.input_tokens)));
-                }
-                if summary.output_tokens > 0 {
-                    stats.push(format!("↓ {}", format_tokens(summary.output_tokens)));
-                }
-
-                let summary_line = Line::from(vec![
-                    Span::styled(" ✓ ", Style::default().fg(Color::Green)),
-                    Span::styled("Done", Style::default().fg(Color::Green)),
-                    Span::styled(
-                        format!(" ({})", stats.join(" · ")),
-                        Style::default().dim(),
-                    ),
-                ]);
-                frame.render_widget(Paragraph::new(summary_line), chunks[1]);
+            let mut stats = vec![elapsed_str];
+            if summary.input_tokens > 0 {
+                stats.push(format!("↑ {}", format_tokens(summary.input_tokens)));
             }
+            if summary.output_tokens > 0 {
+                stats.push(format!("↓ {}", format_tokens(summary.output_tokens)));
+            }
+
+            let summary_line = Line::from(vec![
+                Span::styled(" ✓ ", Style::default().fg(Color::Green)),
+                Span::styled("Complete", Style::default().fg(Color::Green)),
+                Span::styled(
+                    format!(" ({})", stats.join(" · ")),
+                    Style::default().dim(),
+                ),
+            ]);
+            frame.render_widget(Paragraph::new(summary_line), chunks[1]);
         }
 
         // Input or Approval Prompt (input always visible except during approval)
