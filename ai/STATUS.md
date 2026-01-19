@@ -58,23 +58,13 @@
 - OpenRouter: `anthropic/claude-3-opus` (their API expects this)
 - Direct providers: `gemini-3-flash` (native model names)
 
-## Code Smell: Duplicate Provider Types
+## Provider System
 
-**Problem:** `Backend` and `ApiProvider` are nearly identical:
+**Unified `Provider` enum** in `src/provider/api_provider.rs`:
 
-- Same 6 variants (OpenRouter, Anthropic, OpenAI, Google, Ollama, Groq)
-- Same `id()`, `name()`, `env_vars()` methods
-- `ApiProvider::to_backend()` just maps 1:1
-
-**Solution:** Unify into single `Provider` type (tk-gpdy)
-
-**Files affected:**
-
-- `src/provider/backend.rs` - Backend enum
-- `src/provider/api_provider.rs` - ApiProvider enum
-- `src/provider/client.rs` - Uses Backend
-- `src/tui/mod.rs` - Uses ApiProvider
-- `src/tui/provider_picker.rs` - Uses ApiProvider
+- 6 variants: OpenRouter, Anthropic, OpenAI, Google, Ollama, Groq
+- Methods: `id()`, `name()`, `description()`, `env_vars()`, `api_key()`, `is_available()`, `to_llm()`
+- `ProviderStatus` for TUI picker with authentication status
 
 ## Open Tasks
 
@@ -82,10 +72,9 @@ Run `tk ready` for current task list.
 
 **High Priority:**
 
-1. **Unify Provider types** (tk-gpdy) - Remove duplication
-2. **Add edit tool** (tk-b4hd) - Critical for efficient editing
-3. **Add list tool** (tk-miou) - fd-like, uses ignore crate
-4. **Modular streaming interface** (tk-g1fy) - Research needed
+1. **Add edit tool** (tk-b4hd) - Critical for efficient editing
+2. **Add list tool** (tk-miou) - fd-like, uses ignore crate
+3. **Modular streaming interface** (tk-g1fy) - Research needed
 
 **Medium Priority:**
 
@@ -113,11 +102,7 @@ Run `tk ready` for current task list.
 - Tool display: `> **tool_name** (args)` format
 - Task completed styling: dim green checkmark
 - Removed discover tool (no backend)
-
-**Identified for refactor:**
-
-- Backend + ApiProvider duplication → unify to Provider
-- Model registry fetches from OpenRouter + models.dev (could be cleaner)
+- **Unified Provider types** (tk-gpdy): Merged `Backend` and `ApiProvider` into single `Provider` enum
 
 ## Design Decisions
 

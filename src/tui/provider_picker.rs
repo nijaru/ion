@@ -136,7 +136,7 @@ impl ProviderPicker {
     }
 
     /// Select a specific provider by enum value.
-    pub fn select_provider(&mut self, provider: crate::provider::ApiProvider) {
+    pub fn select_provider(&mut self, provider: crate::provider::Provider) {
         if let Some(idx) = self.filtered.iter().position(|s| s.provider == provider) {
             self.list_state.select(Some(idx));
         }

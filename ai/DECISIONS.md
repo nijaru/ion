@@ -39,19 +39,30 @@
 
 ---
 
-## 2026-01-19: Unify Backend and ApiProvider (Planned)
+## 2026-01-19: Unified Provider Enum (Completed)
 
-**Context**: Found duplicate enum types that are nearly identical.
+**Context**: Found duplicate enum types that were nearly identical.
 
-**Problem**: `Backend` (backend.rs) and `ApiProvider` (api_provider.rs) have:
+**Problem**: `Backend` (backend.rs) and `ApiProvider` (api_provider.rs) had:
 
 - Same 6 variants
 - Same `id()`, `name()`, `env_vars()` methods
 - 1:1 mapping via `ApiProvider::to_backend()`
 
-**Decision**: Unify into single `Provider` enum. (tk-gpdy)
+**Decision**: Unified into single `Provider` enum in `api_provider.rs`.
 
-**Deferred**: Document first, refactor later. Current code works.
+| Old Type    | New Type  | Changes                   |
+| ----------- | --------- | ------------------------- |
+| Backend     | (removed) | Deleted backend.rs        |
+| ApiProvider | Provider  | Renamed, added `to_llm()` |
+
+**Implementation**:
+
+- Renamed `ApiProvider` to `Provider`
+- Added `to_llm()` method for llm crate integration
+- Removed `to_backend()` (no longer needed)
+- Deleted `backend.rs`
+- Updated all callers (client.rs, registry.rs, cli.rs, tui/mod.rs, model_picker.rs, provider_picker.rs)
 
 ---
 
@@ -788,17 +799,17 @@ No reason to go through MCP when we can use the Rust crate directly.
 | **Architecture** | `Backend` enum + `Client` struct + `LlmApi` trait             |
 | **Providers**    | OpenRouter, Anthropic, OpenAI, Ollama, Groq, Google (6 total) |
 
-**New Architecture**:
+**Current Architecture** (after tk-gpdy unification):
 
 | File              | Purpose                                   |
 | ----------------- | ----------------------------------------- |
-| `backend.rs`      | Backend enum with metadata methods        |
+| `api_provider.rs` | Unified `Provider` enum with all metadata |
 | `client.rs`       | Client implementing LlmApi via llm crate  |
 | `error.rs`        | Clean error types                         |
 | `types.rs`        | Shared types (StreamEvent, Message, etc.) |
-| `api_provider.rs` | TUI-only ApiProvider for provider picker  |
+| `registry.rs`     | Model discovery and caching               |
 
-**Removed**: anthropic.rs, openai.rs, openrouter.rs, ollama.rs, llm_provider.rs (2,500+ lines)
+**Removed**: anthropic.rs, openai.rs, openrouter.rs, ollama.rs, llm_provider.rs, backend.rs
 
 **Rationale**: Battle-tested library with streaming, tool calling, and multi-provider support. Reduces maintenance burden significantly. Only 10 small dependencies added with selective features.
 
