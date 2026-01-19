@@ -67,9 +67,10 @@ Run `tk ready` for current task list.
 **High Priority:**
 
 1. **Provider persistence bug** (tk-rrue) - Blocks Google/Groq usage
-2. **Streaming+tools support** (tk-e1ji) - llm crate doesn't support for Google, need custom or better crate
-3. **Add edit tool** (tk-b4hd) - Critical for efficient editing
-4. **Add list tool** (tk-miou) - fd-like, uses ignore crate
+2. **Design modular streaming interface** (tk-g1fy) - Research provider API patterns, all terminal agents stream
+3. **Streaming+tools support** (tk-e1ji) - llm crate doesn't support for Google, need custom or better crate
+4. **Add edit tool** (tk-b4hd) - Critical for efficient editing
+5. **Add list tool** (tk-miou) - fd-like, uses ignore crate
 
 **Medium Priority:**
 
