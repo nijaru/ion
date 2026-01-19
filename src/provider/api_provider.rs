@@ -118,19 +118,6 @@ impl ApiProvider {
             ApiProvider::Google => super::Backend::Google,
         }
     }
-
-    /// Priority for sorting (lower = shown first).
-    /// Prioritizes aggregators and popular direct providers.
-    fn sort_priority(self) -> u8 {
-        match self {
-            ApiProvider::OpenRouter => 0, // Aggregator with 200+ models
-            ApiProvider::Ollama => 1,     // Local, always available
-            ApiProvider::Anthropic => 2,  // Claude direct
-            ApiProvider::OpenAI => 3,     // GPT direct
-            ApiProvider::Google => 4,     // Gemini direct
-            ApiProvider::Groq => 5,       // Fast inference
-        }
-    }
 }
 
 /// Information about detected API providers.
@@ -160,13 +147,16 @@ impl ProviderStatus {
             .collect()
     }
 
-    /// Sort providers: authenticated first (by priority), then not authenticated (by priority).
+    /// Sort providers: authenticated first, then alphabetically within each group.
     pub fn sorted(mut statuses: Vec<ProviderStatus>) -> Vec<ProviderStatus> {
-        statuses.sort_by_key(|s| {
-            // Primary: authenticated first (0), then unauthenticated (1)
-            // Secondary: provider priority within each group
-            let auth_group = if s.authenticated { 0u16 } else { 100u16 };
-            auth_group + s.provider.sort_priority() as u16
+        statuses.sort_by(|a, b| {
+            // Primary: authenticated first
+            match (a.authenticated, b.authenticated) {
+                (true, false) => std::cmp::Ordering::Less,
+                (false, true) => std::cmp::Ordering::Greater,
+                // Secondary: alphabetical by name
+                _ => a.provider.name().cmp(b.provider.name()),
+            }
         });
         statuses
     }
