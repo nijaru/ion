@@ -131,36 +131,37 @@ impl Config {
     }
 
     /// Get API key for a provider.
-    /// Priority: env var > config file.
+    /// Priority: config file > env var (explicit config is more intentional).
     pub fn api_key_for(&self, provider: &str) -> Option<String> {
-        // 1. Check env var first
-        let env_var = match provider {
-            "openrouter" => "OPENROUTER_API_KEY",
-            "anthropic" => "ANTHROPIC_API_KEY",
-            "openai" => "OPENAI_API_KEY",
-            "google" => "GOOGLE_API_KEY",
-            "groq" => "GROQ_API_KEY",
-            "ollama" => return Some(String::new()), // Ollama doesn't need a key
+        // Ollama doesn't need a key
+        if provider == "ollama" {
+            return Some(String::new());
+        }
+
+        // 1. Check config file first (explicit user configuration)
+        if let Some(key) = self.api_keys.get(provider) {
+            return Some(key.to_string());
+        }
+
+        // 2. Fall back to env var
+        let env_vars: &[&str] = match provider {
+            "openrouter" => &["OPENROUTER_API_KEY"],
+            "anthropic" => &["ANTHROPIC_API_KEY"],
+            "openai" => &["OPENAI_API_KEY"],
+            "google" => &["GOOGLE_API_KEY", "GEMINI_API_KEY"],
+            "groq" => &["GROQ_API_KEY"],
             _ => return None,
         };
 
-        if let Ok(key) = std::env::var(env_var) {
-            if !key.is_empty() {
-                return Some(key);
-            }
-        }
-
-        // Also check GEMINI_API_KEY for google
-        if provider == "google" {
-            if let Ok(key) = std::env::var("GEMINI_API_KEY") {
+        for var in env_vars {
+            if let Ok(key) = std::env::var(var) {
                 if !key.is_empty() {
                     return Some(key);
                 }
             }
         }
 
-        // 2. Fall back to config file
-        self.api_keys.get(provider).map(String::from)
+        None
     }
 
     /// Load configuration with layered precedence.
