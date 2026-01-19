@@ -784,6 +784,29 @@ impl App {
                     .unwrap_or(self.input.len());
             }
 
+            // Ctrl+W: Delete word before cursor
+            KeyCode::Char('w') if ctrl => {
+                if self.cursor_pos > 0 {
+                    // Find start of previous word (skip trailing spaces, then word chars)
+                    let chars: Vec<char> = self.input.chars().collect();
+                    let mut pos = self.cursor_pos;
+                    // Skip spaces
+                    while pos > 0 && chars[pos - 1].is_whitespace() {
+                        pos -= 1;
+                    }
+                    // Skip word chars
+                    while pos > 0 && !chars[pos - 1].is_whitespace() {
+                        pos -= 1;
+                    }
+                    // Remove from pos to cursor_pos
+                    self.input = chars[..pos]
+                        .iter()
+                        .chain(chars[self.cursor_pos..].iter())
+                        .collect();
+                    self.cursor_pos = pos;
+                }
+            }
+
             // Backspace: Delete char before cursor
             KeyCode::Backspace => {
                 if self.cursor_pos > 0 {
