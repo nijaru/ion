@@ -450,6 +450,13 @@ impl ModelRegistry {
 
             // Sort by strategy
             match prefs.sort.unwrap_or_default() {
+                super::prefs::SortStrategy::Alphabetical => {
+                    // Sort by org, then by model name
+                    match a.provider.cmp(&b.provider) {
+                        std::cmp::Ordering::Equal => a.id.cmp(&b.id),
+                        other => other,
+                    }
+                }
                 super::prefs::SortStrategy::Price => {
                     a.pricing.input.partial_cmp(&b.pricing.input).unwrap()
                 }

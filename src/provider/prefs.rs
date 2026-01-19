@@ -66,9 +66,14 @@ fn quantizations_for_min_bits(min_bits: u8) -> Vec<String> {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SortStrategy {
+    /// Alphabetical by org, then by model name
     #[default]
+    Alphabetical,
+    /// Cheapest input price first
     Price,
+    /// Highest context/throughput first
     Throughput,
+    /// Lowest latency (smaller models) first
     Latency,
 }
 
@@ -213,13 +218,17 @@ impl ProviderPrefs {
         }
 
         if let Some(sort) = self.sort {
+            // Alphabetical is local-only, not sent to OpenRouter
             let sort_str = match sort {
-                SortStrategy::Price => "price",
-                SortStrategy::Throughput => "throughput",
-                SortStrategy::Latency => "latency",
+                SortStrategy::Alphabetical => None,
+                SortStrategy::Price => Some("price"),
+                SortStrategy::Throughput => Some("throughput"),
+                SortStrategy::Latency => Some("latency"),
             };
-            provider.insert("sort".to_string(), serde_json::json!(sort_str));
-            has_content = true;
+            if let Some(s) = sort_str {
+                provider.insert("sort".to_string(), serde_json::json!(s));
+                has_content = true;
+            }
         }
 
         if has_content {
