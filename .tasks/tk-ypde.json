@@ -19,10 +19,14 @@
     {
       "ts": "2026-01-19T16:41:16.353Z",
       "msg": "Blocked: tui-textarea v0.7.0 depends on ratatui 0.29.0, ion uses 0.30.0. Wait for upstream update."
+    },
+    {
+      "ts": "2026-01-19T16:56:42.257Z",
+      "msg": "Alternative found: rat-text v3.0.3 is compatible with ratatui 0.30. Actively maintained (rat-salsa project). Consider using instead of waiting for tui-textarea PR."
     }
   ],
   "created_at": "2026-01-19T15:32:35.219Z",
-  "updated_at": "2026-01-19T16:41:16.353Z",
+  "updated_at": "2026-01-19T16:56:42.257Z",
   "completed_at": null,
   "external": {}
 }

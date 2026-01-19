@@ -39,7 +39,7 @@ mod tests {
 
     #[test]
     fn test_create_client() {
-        let client = Client::new(Provider::OpenAI, "test-key");
+        let client = Client::new(Provider::OpenAI, "test-key").expect("failed to create client");
         assert_eq!(client.provider(), Provider::OpenAI);
     }
 

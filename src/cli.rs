@@ -220,6 +220,16 @@ pub enum OutputFormat {
     StreamJson,
 }
 
+/// Auto-approve handler for CLI mode with --yes flag
+struct AutoApproveHandler;
+
+#[async_trait]
+impl ApprovalHandler for AutoApproveHandler {
+    async fn ask_approval(&self, _tool_name: &str, _args: &serde_json::Value) -> ApprovalResponse {
+        ApprovalResponse::Yes
+    }
+}
+
 /// Deny handler for CLI mode without --yes flag (restricted tools will fail with clear message)
 struct DenyApprovalHandler;
 
@@ -341,7 +351,7 @@ async fn run_inner(args: RunArgs, auto_approve: bool) -> Result<ExitCode> {
         .unwrap_or_else(|| "anthropic/claude-sonnet-4".to_string());
 
     // Create LLM client
-    let llm_client: Arc<dyn LlmApi> = Arc::new(Client::new(provider, api_key));
+    let llm_client: Arc<dyn LlmApi> = Arc::new(Client::new(provider, api_key)?);
 
     // Create orchestrator
     // Note: --yes grants Write mode with auto-approve (no approval handler)
@@ -350,8 +360,10 @@ async fn run_inner(args: RunArgs, auto_approve: bool) -> Result<ExitCode> {
         // Truly disable all tools - empty orchestrator
         Arc::new(ToolOrchestrator::new(ToolMode::Read))
     } else if auto_approve {
-        // Write mode with auto-approve (no approval handler = auto-approve)
-        Arc::new(ToolOrchestrator::with_builtins(ToolMode::Write))
+        // Write mode with auto-approve handler
+        let mut orch = ToolOrchestrator::with_builtins(ToolMode::Write);
+        orch.set_approval_handler(Arc::new(AutoApproveHandler));
+        Arc::new(orch)
     } else {
         // Write mode with deny handler (restricted tools fail with clear message)
         let mut orch = ToolOrchestrator::with_builtins(ToolMode::Write);

@@ -271,8 +271,11 @@ impl Agent {
                 .sum::<usize>();
         let _ = tx.send(AgentEvent::InputTokens(input_tokens)).await;
 
-        // Ollama doesn't support streaming with tools - use non-streaming fallback
-        let use_streaming = self.provider.id() != "ollama" || request.tools.is_empty();
+        // Ollama and OpenRouter don't support streaming with tools reliably
+        // llm-connector has parse issues with OpenRouter's streaming tool calls
+        let provider_id = self.provider.id();
+        let use_streaming =
+            (provider_id != "ollama" && provider_id != "openrouter") || request.tools.is_empty();
 
         let mut assistant_blocks = Vec::new();
         let mut tool_calls = Vec::new();
@@ -354,10 +357,11 @@ impl Agent {
                 // Handle any error from the stream
                 if let Some(ref err) = stream_error {
                     let is_rate_limit = err.contains("429") || err.to_lowercase().contains("rate");
-                    let is_tools_not_supported = err
-                        .to_lowercase()
-                        .contains("streaming with tools not supported")
-                        || err.to_lowercase().contains("tools not supported");
+                    let err_lower = err.to_lowercase();
+                    let is_tools_not_supported = err_lower.contains("streaming with tools not supported")
+                        || err_lower.contains("tools not supported")
+                        // llm-connector parse errors with tools - fall back to non-streaming
+                        || (err_lower.contains("parse") && !request.tools.is_empty());
 
                     if is_rate_limit && retry_count < MAX_RETRIES {
                         retry_count += 1;
