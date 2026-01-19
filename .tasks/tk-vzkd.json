@@ -3,7 +3,7 @@
   "ref": "vzkd",
   "title": "[TUI] Input history persistence across restarts - up arrow should recall old messages",
   "description": null,
-  "status": "open",
+  "status": "done",
   "priority": 3,
   "labels": [],
   "assignees": [],
@@ -13,7 +13,7 @@
   "due_date": null,
   "logs": [],
   "created_at": "2026-01-19T15:33:30.133Z",
-  "updated_at": "2026-01-19T15:33:30.133Z",
-  "completed_at": null,
+  "updated_at": "2026-01-19T22:49:36.823Z",
+  "completed_at": "2026-01-19T22:49:36.823Z",
   "external": {}
 }

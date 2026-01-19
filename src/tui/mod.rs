@@ -384,6 +384,12 @@ impl App {
         // Set initial API provider name on model picker
         this.model_picker.set_api_provider(api_provider.name());
 
+        // Load persisted input history
+        if let Ok(history) = this.store.load_input_history() {
+            this.input_history = history;
+            this.history_index = this.input_history.len();
+        }
+
         // Initialize setup flow if needed
         if this.needs_setup {
             if this.mode == Mode::ProviderPicker {
@@ -708,6 +714,8 @@ impl App {
                         self.input_history.push(input.clone());
                         self.history_index = self.input_history.len();
                         self.cursor_pos = 0;
+                        // Persist to database
+                        let _ = self.store.add_input_history(&input);
                         self.message_list.push_user_message(input.clone());
                         self.run_agent_task(input);
                     }
@@ -1466,7 +1474,7 @@ impl App {
                     // Tool messages: first line is call, rest are results
                     let mut lines = content.lines();
 
-                    // First line: **tool_name**(args)
+                    // First line: **tool_name**(args) - Claude Code style
                     if let Some(first_line) = lines.next() {
                         // Parse tool_name(args) format
                         if let Some(paren_pos) = first_line.find('(') {
@@ -1475,7 +1483,7 @@ impl App {
                             chat_lines.push(Line::from(vec![
                                 Span::raw("  "),
                                 Span::styled(tool_name, Style::default().bold()),
-                                Span::styled(args.to_string(), Style::default().dim()),
+                                Span::raw(args),
                             ]));
                         } else {
                             // No args, just tool name
