@@ -184,7 +184,8 @@ impl Client {
         let tools = Self::convert_tools(&request.tools);
 
         tracing::debug!(
-            "Building request: input_tools={}, converted_tools={}",
+            "Building request: model='{}', input_tools={}, converted_tools={}",
+            request.model,
             request.tools.len(),
             tools.len()
         );
@@ -233,7 +234,10 @@ impl LlmApi for Client {
             .client
             .chat_stream(&llm_request)
             .await
-            .map_err(|e| Error::Stream(e.to_string()))?;
+            .map_err(|e| {
+                tracing::error!("Stream error from {}: {:?}", self.provider.id(), e);
+                Error::Stream(format!("{} ({})", e, self.provider.id()))
+            })?;
 
         while let Some(chunk_result) = stream.next().await {
             match chunk_result {
@@ -305,7 +309,22 @@ impl LlmApi for Client {
             .client
             .chat(&llm_request)
             .await
-            .map_err(|e| Error::Api(e.to_string()))?;
+            .map_err(|e| {
+                // Log full error details for debugging
+                tracing::error!(
+                    "API error: provider={}, model={}, error={:?}",
+                    self.provider.id(),
+                    llm_request.model,
+                    e
+                );
+                // Format error with helpful context
+                Error::Api(format!(
+                    "{}\n  Provider: {}\n  Model: {}",
+                    e,
+                    self.provider.id(),
+                    llm_request.model
+                ))
+            })?;
 
         let mut content_blocks = Vec::new();
 
