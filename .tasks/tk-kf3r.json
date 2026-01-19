@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "kf3r",
+  "title": "[FEATURE] Interactive prompts support - y/n prompts, editor, browser in bash",
+  "description": null,
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-19T15:33:30.152Z",
+  "updated_at": "2026-01-19T15:33:30.152Z",
+  "completed_at": null,
+  "external": {}
+}

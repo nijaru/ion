@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "ypde",
+  "title": "[TUI] Add tui-textarea crate for proper text entry - multiline, scroll, selection",
+  "description": null,
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-19T15:32:35.219Z",
+  "updated_at": "2026-01-19T15:32:35.219Z",
+  "completed_at": null,
+  "external": {}
+}

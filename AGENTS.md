@@ -117,3 +117,4 @@ cargo fmt                # Format
 - **Commit frequently**, push regularly
 - **Never force push** to main/master
 - **Task tracking**: Use `tk`
+- **Issue tracking**: When user reports bugs, UX issues, errors, or improvement ideas, **immediately create a `tk` task**. Do not lose track of issues raised in conversation.

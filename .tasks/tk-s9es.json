@@ -1,0 +1,24 @@
+{
+  "project": "tk",
+  "ref": "s9es",
+  "title": "[UX] CWD display in statusline - unclear what 'ion' means",
+  "description": null,
+  "status": "done",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [
+    {
+      "ts": "2026-01-19T15:43:05.999Z",
+      "msg": "Merged with tk-abvt - both about dir in statusline"
+    }
+  ],
+  "created_at": "2026-01-19T15:36:19.925Z",
+  "updated_at": "2026-01-19T15:43:05.999Z",
+  "completed_at": "2026-01-19T15:43:05.976Z",
+  "external": {}
+}

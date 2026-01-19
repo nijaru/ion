@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "sm2h",
+  "title": "[UX] Color error lines in tool output (red)",
+  "description": null,
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-19T15:17:15.297Z",
+  "updated_at": "2026-01-19T15:17:15.297Z",
+  "completed_at": null,
+  "external": {}
+}

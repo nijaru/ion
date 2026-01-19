@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "oohm",
+  "title": "[BUG] Scroll affects text entry box instead of chat history",
+  "description": null,
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-19T15:26:06.436Z",
+  "updated_at": "2026-01-19T15:26:06.436Z",
+  "completed_at": null,
+  "external": {}
+}

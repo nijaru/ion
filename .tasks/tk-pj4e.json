@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "pj4e",
+  "title": "[RELEASE] Clean up repo and make public - open source prep",
+  "description": null,
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-19T15:43:34.361Z",
+  "updated_at": "2026-01-19T15:43:34.361Z",
+  "completed_at": null,
+  "external": {}
+}
