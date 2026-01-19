@@ -165,6 +165,10 @@ pub struct App {
     pub last_task_summary: Option<TaskSummary>,
     /// Request to open input in external editor (Ctrl+G)
     pub editor_requested: bool,
+    /// Cached git diff stats (+insertions, -deletions)
+    git_diff_stats: Option<(usize, usize)>,
+    /// When git diff stats were last refreshed
+    git_diff_updated: Option<Instant>,
 }
 
 /// Summary of a completed task for brief post-completion display
@@ -376,6 +380,8 @@ impl App {
             permissions,
             last_task_summary: None,
             editor_requested: false,
+            git_diff_stats: None,
+            git_diff_updated: None,
         };
 
         // Initialize setup flow if needed
@@ -504,6 +510,15 @@ impl App {
         {
             self.pending_approval = Some(request);
             self.mode = Mode::Approval;
+        }
+
+        // Refresh git diff stats every 5 seconds
+        let should_refresh = self
+            .git_diff_updated
+            .is_none_or(|t| t.elapsed() > Duration::from_secs(5));
+        if should_refresh {
+            self.git_diff_stats = get_git_diff_stats(&self.session.working_dir);
+            self.git_diff_updated = Some(Instant::now());
         }
     }
 
@@ -1600,7 +1615,13 @@ impl App {
         let branch_part = if branch.is_empty() {
             String::new()
         } else {
-            format!("[{}] · ", branch)
+            let diff_part = match self.git_diff_stats {
+                Some((ins, del)) if ins > 0 && del > 0 => format!(" +{} -{}", ins, del),
+                Some((ins, 0)) if ins > 0 => format!(" +{}", ins),
+                Some((0, del)) if del > 0 => format!(" -{}", del),
+                _ => String::new(),
+            };
+            format!("[{}{}] · ", branch, diff_part)
         };
 
         // Context % display with token counts: 56% (112k/200k)
@@ -1723,6 +1744,41 @@ impl App {
             .block(Block::default().borders(Borders::ALL).title(" ? Help "));
 
         frame.render_widget(help_para, help_area);
+    }
+}
+
+/// Get git diff stats (insertions, deletions) for the working directory.
+fn get_git_diff_stats(working_dir: &std::path::Path) -> Option<(usize, usize)> {
+    use std::process::Command;
+
+    let output = Command::new("git")
+        .args(["diff", "--shortstat"])
+        .current_dir(working_dir)
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Format: " 3 files changed, 45 insertions(+), 12 deletions(-)"
+    let mut insertions = 0;
+    let mut deletions = 0;
+
+    for part in stdout.split(',') {
+        let part = part.trim();
+        if part.contains("insertion") {
+            insertions = part.split_whitespace().next()?.parse().ok()?;
+        } else if part.contains("deletion") {
+            deletions = part.split_whitespace().next()?.parse().ok()?;
+        }
+    }
+
+    if insertions > 0 || deletions > 0 {
+        Some((insertions, deletions))
+    } else {
+        None
     }
 }
 
