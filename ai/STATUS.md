@@ -5,57 +5,54 @@
 | Metric    | Value           | Updated    |
 | --------- | --------------- | ---------- |
 | Phase     | 5 - Polish & UX | 2026-01-19 |
-| Focus     | UX Polish       | 2026-01-19 |
 | Status    | Runnable        | 2026-01-19 |
 | Toolchain | stable          | 2026-01-19 |
-| Tests     | 54 passing      | 2026-01-19 |
+| Tests     | 57 passing      | 2026-01-19 |
 
 ## Architecture
 
 **Core Agent** (ion binary):
 
 - TUI + Agent loop
-- Built-in providers (OpenRouter, Anthropic, Ollama)
+- Built-in providers (OpenRouter, Anthropic, OpenAI)
 - Built-in tools (read, write, edit, bash, glob, grep)
 - MCP client
 - Session management (rusqlite)
+- Skill system with model configuration
+
+**Providers** (status):
+
+| Provider   | Status | Notes                |
+| ---------- | ------ | -------------------- |
+| OpenRouter | Full   | Primary, 200+ models |
+| Anthropic  | Full   | Direct Claude access |
+| OpenAI     | Full   | Has base_url field   |
+| Ollama     | Stub   | Needs implementation |
+| vLLM       | None   | OpenAI-compatible    |
+| mlx-lm     | None   | OpenAI-compatible    |
 
 **Config** (implemented):
 
 - `~/.ion/` for ion-specific config
-- `~/.agents/` proposed universal standard for AI agent files
 - AGENTS.md + CLAUDE.md instruction file support
-- 3-tier layered loading (user → project → local)
+- 3-tier layered loading (user -> project -> local)
 
 **Permissions** (implemented):
 
 - Read/Write/AGI modes via CLI flags (-r, -w, --agi)
 - CWD sandbox by default (--no-sandbox to disable)
-- Auto-approve via -y/--yes
 - Per-command bash approval storage
-- Config file support for defaults
-
-**Memory** (archived to nijaru/ion-archive):
-
-- Will re-implement after TUI agent is fully working
 
 ## Open Tasks
 
-Run `tk ready` for current task list. Key items:
+Run `tk ready` for current task list.
 
-| ID      | Category | Description                       |
-| ------- | -------- | --------------------------------- |
-| tk-kj66 | UX       | Shift+Enter multiline input       |
-| tk-av8a | UX       | Status line token/context display |
-| tk-j7io | UX       | Progress bar completion behavior  |
-| tk-otmx | UX       | Ctrl+G external editor            |
-| tk-whde | UX       | Git diff stats in status line     |
-| tk-6zlg | Config   | Thinking budget levels            |
-| tk-usd5 | Infra    | CI migration (Bun → Rust)         |
-| tk-smqs | Idea     | Diff highlighting                 |
-| tk-iegz | Idea     | OpenRouter routing modal          |
+**Priority:**
 
-**Untracked ideas:**
+- OpenAI-compatible provider (Ollama, vLLM, mlx-lm support)
+- Diff highlighting for edits
+
+**Ideas:**
 
 - Interactive shell support (ai/ideas/interactive-shell.md)
 
@@ -64,15 +61,18 @@ Run `tk ready` for current task list. Key items:
 **Sandbox:**
 
 - `check_sandbox()` is path validation, not true sandboxing
-- Bash commands can still access outside CWD (run with `current_dir` set but can `cd` or use absolute paths)
+- Bash commands can still access outside CWD
 - True sandboxing (containers/chroot) is post-MVP
+
+**Providers:**
+
+- Ollama defined but not implemented (falls back to OpenRouter)
+- No custom endpoint support yet
 
 ## Design Documents
 
-- `ai/design/permission-system.md` - CLI flags, modes, sandbox, approval
-- `ai/design/config-system.md` - Config hierarchy, ~/.agents/ proposal
+- `ai/design/permission-system.md` - CLI flags, modes, sandbox
+- `ai/design/config-system.md` - Config hierarchy
 - `ai/design/tui.md` - TUI interface spec
-- `ai/design/diff-highlighting.md` - Diff rendering plan
-- `ai/design/interrupt-handling.md` - Ctrl+C behavior spec
-- `ai/research/cli-agent-config-best-practices.md` - Config research
+- `ai/design/plugin-architecture.md` - Plugin/MCP design
 - `ai/DECISIONS.md` - All architecture decisions
