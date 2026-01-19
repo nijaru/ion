@@ -56,12 +56,29 @@
 
 - [ ] tk-otmx: Ctrl+G opens input in external editor
 - [ ] tk-whde: Git diff stats in status line
+- [ ] Shift+Enter doesn't work in text entry (multiline input)
+- [ ] Status line: show context % used and/or raw token count
+- [ ] Status line: rethink layout (cwd before branch? branch at end? +/- changes?)
+- [ ] Progress bar: don't disappear abruptly, show total time and tokens after completion
+- [ ] Thinking: defaults and level configuration (4k/10k/16k/32k?)
+
+**Infra:**
+
+- [ ] Fix CI (still configured for Bun, needs Rust)
 
 **Ideas:**
 
 - [ ] tk-iegz: OpenRouter provider routing modal
 - [ ] tk-smqs: Diff highlighting for edits
 - [ ] Interactive shell support (ai/ideas/interactive-shell.md)
+
+## Known Limitations
+
+**Sandbox:**
+
+- `check_sandbox()` is path validation, not true sandboxing
+- Bash commands can still access outside CWD (run with `current_dir` set but can `cd` or use absolute paths)
+- True sandboxing (containers/chroot) is post-MVP
 
 ## Completed This Session
 
