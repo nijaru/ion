@@ -8,8 +8,32 @@ pub struct Skill {
     pub name: String,
     pub description: String,
     pub allowed_tools: Option<Vec<String>>,
-    pub model_override: Option<String>,
+    /// Model configuration for this skill:
+    /// - None/empty: inherit from main agent
+    /// - Single model: use that model
+    /// - Multiple models: first is default, others are allowed alternatives
+    pub models: Option<Vec<String>>,
     pub prompt: String,
+}
+
+impl Skill {
+    /// Get the model to use, falling back to the provided default
+    pub fn resolve_model<'a>(&'a self, default: &'a str) -> &'a str {
+        self.models
+            .as_ref()
+            .and_then(|m| m.first())
+            .map(|s| s.as_str())
+            .unwrap_or(default)
+    }
+
+    /// Check if a model is allowed for this skill
+    pub fn is_model_allowed(&self, model: &str) -> bool {
+        match &self.models {
+            None => true, // No restriction, any model allowed
+            Some(models) if models.is_empty() => true,
+            Some(models) => models.iter().any(|m| m == model),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -74,7 +98,7 @@ impl SkillLoader {
                     name: String::new(),
                     description: String::new(),
                     allowed_tools: None,
-                    model_override: None,
+                    models: None,
                     prompt: String::new(),
                 });
                 in_prompt = false;
@@ -93,6 +117,21 @@ impl SkillLoader {
                     && trimmed.ends_with("</description>")
                 {
                     skill.description = trimmed[13..trimmed.len() - 14].to_string();
+                } else if trimmed.starts_with("<model>") && trimmed.ends_with("</model>") {
+                    // Single model: <model>claude-sonnet-4</model>
+                    let model = trimmed[7..trimmed.len() - 8].trim().to_string();
+                    skill.models = Some(vec![model]);
+                } else if trimmed.starts_with("<models>") && trimmed.ends_with("</models>") {
+                    // Multiple models: <models>claude-sonnet-4, deepseek-v4</models>
+                    let models_str = trimmed[8..trimmed.len() - 9].trim();
+                    let models: Vec<String> = models_str
+                        .split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                    if !models.is_empty() {
+                        skill.models = Some(models);
+                    }
                 } else if trimmed.starts_with("<prompt>") {
                     in_prompt = true;
                     if trimmed.len() > 8 {
@@ -140,5 +179,65 @@ mod tests {
         assert_eq!(skills[0].name, "test-skill");
         assert_eq!(skills[0].description, "A test skill");
         assert!(skills[0].prompt.contains("You are a test agent."));
+    }
+
+    #[test]
+    fn test_skill_single_model() {
+        let content = r#"
+<skill>
+    <name>fast-skill</name>
+    <description>Uses a specific model</description>
+    <model>claude-sonnet-4</model>
+    <prompt>Do fast things.</prompt>
+</skill>
+"#;
+        let skills = SkillLoader::parse_skill_md(content).unwrap();
+        assert_eq!(skills[0].models, Some(vec!["claude-sonnet-4".to_string()]));
+        assert_eq!(skills[0].resolve_model("default"), "claude-sonnet-4");
+        assert!(skills[0].is_model_allowed("claude-sonnet-4"));
+        assert!(!skills[0].is_model_allowed("other-model"));
+    }
+
+    #[test]
+    fn test_skill_multiple_models() {
+        let content = r#"
+<skill>
+    <name>flexible-skill</name>
+    <description>Allows multiple models</description>
+    <models>claude-sonnet-4, deepseek-v4, gpt-4o</models>
+    <prompt>Do flexible things.</prompt>
+</skill>
+"#;
+        let skills = SkillLoader::parse_skill_md(content).unwrap();
+        assert_eq!(
+            skills[0].models,
+            Some(vec![
+                "claude-sonnet-4".to_string(),
+                "deepseek-v4".to_string(),
+                "gpt-4o".to_string()
+            ])
+        );
+        // First model is default
+        assert_eq!(skills[0].resolve_model("default"), "claude-sonnet-4");
+        // All listed models are allowed
+        assert!(skills[0].is_model_allowed("claude-sonnet-4"));
+        assert!(skills[0].is_model_allowed("deepseek-v4"));
+        assert!(skills[0].is_model_allowed("gpt-4o"));
+        assert!(!skills[0].is_model_allowed("other-model"));
+    }
+
+    #[test]
+    fn test_skill_inherit_model() {
+        let content = r#"
+<skill>
+    <name>inherit-skill</name>
+    <description>Inherits main model</description>
+    <prompt>Do inherited things.</prompt>
+</skill>
+"#;
+        let skills = SkillLoader::parse_skill_md(content).unwrap();
+        assert_eq!(skills[0].models, None);
+        assert_eq!(skills[0].resolve_model("main-model"), "main-model");
+        assert!(skills[0].is_model_allowed("any-model"));
     }
 }
