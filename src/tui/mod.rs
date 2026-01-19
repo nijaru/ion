@@ -1223,6 +1223,10 @@ impl App {
                 .await
             {
                 Ok(updated_session) => {
+                    // Send completion event
+                    let _ = event_tx
+                        .send(AgentEvent::Finished("Task completed".to_string()))
+                        .await;
                     // Send updated session back to preserve conversation history
                     let _ = session_tx.send(updated_session).await;
                 }
