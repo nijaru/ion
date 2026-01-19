@@ -17,19 +17,21 @@ pub use registry::{ModelFilter, ModelRegistry};
 
 /// Create a provider instance based on the ApiProvider enum.
 ///
-/// # Panics
-/// Panics if the provider is not implemented.
+/// Returns an error if the provider is not implemented.
 pub fn create_provider(
     api_provider: ApiProvider,
     api_key: String,
     prefs: ProviderPrefs,
-) -> Arc<dyn Provider> {
+) -> Result<Arc<dyn Provider>, ProviderError> {
     match api_provider {
-        ApiProvider::OpenRouter => Arc::new(OpenRouterProvider::with_prefs(api_key, prefs)),
-        ApiProvider::Anthropic => Arc::new(AnthropicProvider::new(api_key)),
-        ApiProvider::OpenAI => Arc::new(OpenAIProvider::new(api_key)),
-        ApiProvider::Ollama => Arc::new(OllamaProvider::new()),
-        _ => panic!("Provider {:?} is not implemented", api_provider),
+        ApiProvider::OpenRouter => Ok(Arc::new(OpenRouterProvider::with_prefs(api_key, prefs))),
+        ApiProvider::Anthropic => Ok(Arc::new(AnthropicProvider::new(api_key))),
+        ApiProvider::OpenAI => Ok(Arc::new(OpenAIProvider::new(api_key))),
+        ApiProvider::Ollama => Ok(Arc::new(OllamaProvider::new())),
+        _ => Err(ProviderError::Api {
+            code: "NOT_IMPLEMENTED".to_string(),
+            message: format!("Provider {:?} is not implemented", api_provider),
+        }),
     }
 }
 
@@ -43,7 +45,8 @@ mod tests {
             ApiProvider::OpenRouter,
             "test_key".into(),
             ProviderPrefs::default(),
-        );
+        )
+        .unwrap();
         assert_eq!(provider.id(), "openrouter");
     }
 
@@ -53,7 +56,8 @@ mod tests {
             ApiProvider::Anthropic,
             "test_key".into(),
             ProviderPrefs::default(),
-        );
+        )
+        .unwrap();
         assert_eq!(provider.id(), "anthropic");
     }
 
@@ -63,7 +67,8 @@ mod tests {
             ApiProvider::OpenAI,
             "test_key".into(),
             ProviderPrefs::default(),
-        );
+        )
+        .unwrap();
         assert_eq!(provider.id(), "openai");
     }
 
@@ -73,8 +78,19 @@ mod tests {
             ApiProvider::Ollama,
             String::new(), // Ollama doesn't need an API key
             ProviderPrefs::default(),
-        );
+        )
+        .unwrap();
         assert_eq!(provider.id(), "ollama");
+    }
+
+    #[test]
+    fn test_create_provider_unimplemented() {
+        let result = create_provider(
+            ApiProvider::Google,
+            "test_key".into(),
+            ProviderPrefs::default(),
+        );
+        assert!(result.is_err());
     }
 }
 
