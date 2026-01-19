@@ -72,9 +72,8 @@ Run `tk ready` for current task list.
 
 **High Priority:**
 
-1. **Add edit tool** (tk-b4hd) - Critical for efficient editing
-2. **Add list tool** (tk-miou) - fd-like, uses ignore crate
-3. **Modular streaming interface** (tk-g1fy) - Research needed
+1. **Add list tool** (tk-miou) - fd-like, uses ignore crate
+2. **Streaming+tools fix** (tk-g1fy, tk-e1ji) - llm crate falls back to non-streaming
 
 **Medium Priority:**
 
@@ -101,8 +100,14 @@ Run `tk ready` for current task list.
 - Rate limit (429) retry with exponential backoff
 - Tool display: `> **tool_name** (args)` format
 - Task completed styling: dim green checkmark
-- Removed discover tool (no backend)
 - **Unified Provider types** (tk-gpdy): Merged `Backend` and `ApiProvider` into single `Provider` enum
+- **Edit tool** (tk-b4hd): String replacement with old_string/new_string, uniqueness validation, diff output
+
+**Design notes:**
+
+- Discover tool: Keep as-is, compiler optimizes out dead code
+- Memory system: Use hooks (not MCP) for prompt injection and lifecycle events
+- List tool (tk-miou): Show ignored files separately, respect gitignore by default
 
 ## Design Decisions
 

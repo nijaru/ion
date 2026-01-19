@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "iso7",
+  "title": "[FEATURE] Hook system - Claude Code compatible lifecycle hooks for plugins",
+  "description": null,
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-19T15:05:01.382Z",
+  "updated_at": "2026-01-19T15:05:01.382Z",
+  "completed_at": null,
+  "external": {}
+}
