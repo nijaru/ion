@@ -16,22 +16,22 @@
 
 - TUI + Agent loop
 - Unified provider via `llm-connector` crate (OpenRouter, Anthropic, OpenAI, Ollama, Groq, Google)
-- Built-in tools (read, write, glob, grep, bash, edit)
+- Built-in tools (read, write, glob, grep, bash, edit, list)
 - MCP client
 - Session management (rusqlite)
 - Skill system with model configuration
 
 **Tools Status:**
 
-| Tool  | Status   | Notes                                      |
-| ----- | -------- | ------------------------------------------ |
-| read  | Done     | Safe, file reading                         |
-| write | Done     | Restricted, full file write with diff      |
-| glob  | Done     | Safe, pattern matching via ignore crate    |
-| grep  | Done     | Safe, content search                       |
-| bash  | Done     | Restricted, shell commands                 |
-| edit  | Done     | String replacement (old_string/new_string) |
-| list  | **TODO** | fd-like directory listing                  |
+| Tool  | Status | Notes                                      |
+| ----- | ------ | ------------------------------------------ |
+| read  | Done   | Safe, file reading                         |
+| write | Done   | Restricted, full file write with diff      |
+| glob  | Done   | Safe, pattern matching via ignore crate    |
+| grep  | Done   | Safe, content search                       |
+| bash  | Done   | Restricted, shell commands                 |
+| edit  | Done   | String replacement (old_string/new_string) |
+| list  | Done   | Safe, fd-like directory listing            |
 
 **Providers** (via `llm-connector` crate):
 
@@ -46,43 +46,31 @@
 
 ## Open Tasks
 
-Run `tk ls` for current task list. **20 open tasks** as of 2026-01-19.
-
-**Blockers:**
-
-| Task    | Issue                                                           |
-| ------- | --------------------------------------------------------------- |
-| tk-ypde | rat-text added; full migration deferred (current input works)   |
-| tk-oohm | Scroll affects text entry instead of chat (needs investigation) |
+Run `tk ls` for current task list. **18 open tasks** as of 2026-01-19.
 
 **UX Polish:**
 
-| Task    | Issue                                         |
-| ------- | --------------------------------------------- |
-| tk-u2iu | Git diff format: `[main] +28 -11` with colors |
-| tk-abvt | Remove dir name from statusline               |
-| tk-6u8c | Status line context % and token display       |
-| tk-9n78 | Claude Code tool format - bold, spacing       |
-| tk-gf23 | Tool output gap between header and result     |
-| tk-bboa | Model picker column width/overflow            |
-| tk-kzgo | Dim successful tool result lines              |
-| tk-0kxp | Tool output symbol mismatch                   |
-| tk-hgl2 | Tool output syntax highlighting               |
-| tk-nepc | Token counter not updating (non-streaming)    |
+| Task    | Issue                           |
+| ------- | ------------------------------- |
+| tk-hgl2 | Tool output syntax highlighting |
+| tk-er0v | Diff highlighting for edits     |
 
-**Features (defer until core is solid):**
+**Features:**
 
 | Task    | Issue                                      |
 | ------- | ------------------------------------------ |
-| tk-vzkd | Input history persistence across restarts  |
 | tk-kf3r | Interactive prompts - y/n, editor, browser |
 | tk-f564 | OAuth support for providers                |
 | tk-vsdp | Theme support - customizable colors        |
 | tk-iq98 | Syntax highlighting for code blocks        |
 | tk-8qwn | Compare system prompts with other agents   |
-| tk-hw04 | Remove AI attribution from commit history  |
 
 ## Session Work 2026-01-19
+
+**Session 3 - List Tool & Cleanup:**
+
+- **List tool** (tk-miou): Added `list` tool - fd-like directory listing with depth, type filter, hidden file options
+- **Cleanup**: Pruned completed tasks from STATUS.md
 
 **Session 2 - LLM Migration:**
 
