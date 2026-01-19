@@ -2,13 +2,13 @@
 
 ## Current State
 
-| Metric    | Value             | Updated    |
-| --------- | ----------------- | ---------- |
-| Phase     | 5 - Polish & UX   | 2026-01-18 |
-| Focus     | Permission System | 2026-01-18 |
-| Status    | Runnable          | 2026-01-18 |
-| Toolchain | stable            | 2026-01-18 |
-| Tests     | 54 passing        | 2026-01-18 |
+| Metric    | Value           | Updated    |
+| --------- | --------------- | ---------- |
+| Phase     | 5 - Polish & UX | 2026-01-19 |
+| Focus     | UX Polish       | 2026-01-19 |
+| Status    | Runnable        | 2026-01-19 |
+| Toolchain | stable          | 2026-01-19 |
+| Tests     | 54 passing      | 2026-01-19 |
 
 ## Architecture
 
@@ -27,11 +27,13 @@
 - AGENTS.md + CLAUDE.md instruction file support
 - 3-tier layered loading (user → project → local)
 
-**Permissions** (designed, not yet implemented):
+**Permissions** (implemented):
 
-- Read/Write/AGI modes
-- CWD sandbox by default
-- Per-command bash approval
+- Read/Write/AGI modes via CLI flags (-r, -w, --agi)
+- CWD sandbox by default (--no-sandbox to disable)
+- Auto-approve via -y/--yes
+- Per-command bash approval storage
+- Config file support for defaults
 
 **Memory** (archived to nijaru/ion-archive):
 
@@ -39,33 +41,16 @@
 
 ## Session Accomplishments
 
-**Config System Implementation:**
+**Permission System Implementation (tk-a8vn):**
 
-- Replaced `directories` crate with `dirs`
-- Changed config path from `~/.config/ion/` to `~/.ion/`
-- Added 3-tier layered config loading
-- Added AGENTS.md + CLAUDE.md instruction loading
-- Added migration from old config location
-
-**Permission System Design:**
-
-- Designed Read/Write/AGI mode system
-- CLI flags: `-r`, `-w`, `-y`, `--no-sandbox`, `--agi`
-- CWD sandbox by default (84% prompt reduction like Claude Code)
-- Per-command bash approval storage
-- Created `ai/design/permission-system.md`
-
-**UX Fixes:**
-
-- Ctrl+C immediately cancels running task (no double-tap)
-- Modal escape always works (re-opens if setup needed)
-- Progress line shows tool name when executing
+- CLI flags: `-r`/`--read`, `-w`/`--write`, `-y`/`--yes`, `--no-sandbox`, `--agi`
+- CWD boundary checking via `ToolContext.check_sandbox()`
+- Per-command bash approval (not just per-tool)
+- TUI mode cycling respects --agi flag (Read ↔ Write unless --agi)
+- Config file support: `[permissions]` section
+- Flag warnings for invalid combinations (-r -y)
 
 ## Open Tasks
-
-**Security:**
-
-- [ ] tk-a8vn: Permission system implementation (design complete)
 
 **UX:**
 
@@ -76,14 +61,11 @@
 
 - [ ] tk-iegz: OpenRouter provider routing modal
 - [ ] tk-smqs: Diff highlighting for edits
+- [ ] Interactive shell support (ai/ideas/interactive-shell.md)
 
 ## Completed This Session
 
-- [x] Config system implementation (tk-e96r)
-- [x] Ctrl+C interrupt fix (tk-3jba)
-- [x] Modal escape handling (tk-o4uo)
-- [x] Tool execution visibility (tk-arh6)
-- [x] Permission system design
+- [x] Permission system implementation (tk-a8vn)
 
 ## Design Documents
 

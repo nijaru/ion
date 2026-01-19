@@ -1,4 +1,3 @@
-use crate::tool::builtin::validate_path_within_working_dir;
 use crate::tool::{DangerLevel, Tool, ToolContext, ToolError, ToolResult};
 use async_trait::async_trait;
 use serde_json::json;
@@ -53,8 +52,10 @@ impl Tool for ReadTool {
 
         let file_path = Path::new(file_path_str);
 
-        // Validate path is within working directory (prevents path traversal)
-        let validated_path = validate_path_within_working_dir(file_path, &ctx.working_dir)?;
+        // Check sandbox restrictions
+        let validated_path = ctx
+            .check_sandbox(file_path)
+            .map_err(ToolError::PermissionDenied)?;
 
         let content = tokio::fs::read_to_string(&validated_path)
             .await

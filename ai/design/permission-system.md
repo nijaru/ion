@@ -113,12 +113,29 @@ CLI flags override config.
 
 ## Implementation Tasks
 
-- [ ] Add -r/--read, -w/--write flags to CLI
-- [ ] Add -y/--yes flag (update existing)
-- [ ] Add --no-sandbox flag
-- [ ] Add --agi flag
-- [ ] Implement CWD boundary checking for tools
-- [ ] Add per-command bash approval storage
-- [ ] Update TUI mode cycling (AGI only with flag)
-- [ ] Add config support for permissions
-- [ ] Add warnings for useless flag combinations (-r -y)
+- [x] Add -r/--read, -w/--write flags to CLI
+- [x] Add -y/--yes flag (update existing)
+- [x] Add --no-sandbox flag
+- [x] Add --agi flag
+- [x] Implement CWD boundary checking for tools
+- [x] Add per-command bash approval storage
+- [x] Update TUI mode cycling (AGI only with flag)
+- [x] Add config support for permissions
+- [x] Add warnings for useless flag combinations (-r -y)
+
+## Implementation Notes
+
+**Completed 2026-01-19**
+
+Files modified:
+
+- `src/cli.rs` - Global CLI flags, PermissionSettings struct
+- `src/config/mod.rs` - PermissionConfig for config file support
+- `src/main.rs` - Pass config to resolve_permissions
+- `src/tui/mod.rs` - TUI mode cycling respects agi_enabled
+- `src/tool/types.rs` - ToolContext.check_sandbox() method
+- `src/tool/permissions.rs` - Per-command bash approval
+- `src/tool/mod.rs` - Bash command-specific permission checking
+- `src/session/mod.rs` - no_sandbox field on Session
+- `src/agent/mod.rs` - Pass no_sandbox to ToolContext
+- `src/tool/builtin/read.rs`, `write.rs`, `grep.rs` - Use ctx.check_sandbox()

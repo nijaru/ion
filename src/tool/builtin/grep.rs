@@ -1,4 +1,3 @@
-use crate::tool::builtin::validate_path_within_working_dir;
 use crate::tool::{DangerLevel, Tool, ToolContext, ToolError, ToolResult};
 use async_trait::async_trait;
 use ignore::WalkBuilder;
@@ -54,7 +53,9 @@ impl Tool for GrepTool {
             .map_err(|e| ToolError::InvalidArgs(format!("Invalid regex: {}", e)))?;
 
         let search_path = ctx.working_dir.join(search_path_str);
-        let validated_path = validate_path_within_working_dir(&search_path, &ctx.working_dir)?;
+        let validated_path = ctx
+            .check_sandbox(&search_path)
+            .map_err(ToolError::PermissionDenied)?;
         let working_dir = ctx.working_dir.clone();
 
         // Use ignore crate for walking - respects .gitignore, skips hidden files and binaries

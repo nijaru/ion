@@ -1,5 +1,6 @@
 use clap::Parser;
-use ion::cli::{Cli, Commands};
+use ion::cli::{Cli, Commands, PermissionSettings};
+use ion::config::Config;
 use std::process::ExitCode;
 
 #[tokio::main]
@@ -12,8 +13,20 @@ async fn main() -> ExitCode {
             ion::cli::run(args).await
         }
         None => {
+            // Load config for permission defaults
+            let config = match Config::load() {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("Error loading config: {}", e);
+                    return ExitCode::FAILURE;
+                }
+            };
+
+            // Resolve permission settings from CLI flags and config
+            let permissions = cli.resolve_permissions(&config);
+
             // Interactive TUI mode
-            match run_tui().await {
+            match run_tui(permissions).await {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(e) => {
                     eprintln!("Error: {}", e);
@@ -24,7 +37,7 @@ async fn main() -> ExitCode {
     }
 }
 
-async fn run_tui() -> Result<(), Box<dyn std::error::Error>> {
+async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::error::Error>> {
     use crossterm::{
         event, execute,
         terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
@@ -40,8 +53,8 @@ async fn run_tui() -> Result<(), Box<dyn std::error::Error>> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    // Create app
-    let mut app = App::new().await;
+    // Create app with permission settings
+    let mut app = App::with_permissions(permissions).await;
 
     // Main loop
     loop {

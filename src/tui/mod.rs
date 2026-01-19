@@ -4,6 +4,7 @@ pub mod provider_picker;
 pub mod widgets;
 
 use crate::agent::{Agent, AgentEvent};
+use crate::cli::PermissionSettings;
 use crate::config::Config;
 use crate::provider::{ApiProvider, ModelRegistry};
 use crate::session::Session;
@@ -153,6 +154,8 @@ pub struct App {
     pub output_tokens: usize,
     /// Currently executing tool name (for interrupt handling)
     pub current_tool: Option<String>,
+    /// Permission settings from CLI flags
+    pub permissions: PermissionSettings,
 }
 
 struct TuiApprovalHandler {
@@ -201,6 +204,10 @@ impl App {
         self.cursor_pos = new_pos;
     }
     pub async fn new() -> Self {
+        Self::with_permissions(PermissionSettings::default()).await
+    }
+
+    pub async fn with_permissions(permissions: PermissionSettings) -> Self {
         let config = Config::load().expect("Failed to load config");
 
         // Initialize logging - write to file if ION_LOG is set
@@ -237,10 +244,14 @@ impl App {
         );
 
         let (approval_tx, approval_rx) = mpsc::channel(100);
-        let mut orchestrator = ToolOrchestrator::with_builtins(ToolMode::Write);
-        orchestrator.set_approval_handler(Arc::new(TuiApprovalHandler {
-            request_tx: approval_tx,
-        }));
+        let mut orchestrator = ToolOrchestrator::with_builtins(permissions.mode);
+
+        // Only set approval handler if not auto-approving
+        if !permissions.auto_approve {
+            orchestrator.set_approval_handler(Arc::new(TuiApprovalHandler {
+                request_tx: approval_tx,
+            }));
+        }
 
         // Initialize MCP servers
         let mut mcp_manager = crate::mcp::McpManager::new();
@@ -286,7 +297,8 @@ impl App {
         // Create new session with current directory
         let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let model = config.model.clone().unwrap_or_default();
-        let session = Session::new(working_dir, model);
+        let mut session = Session::new(working_dir, model);
+        session.no_sandbox = permissions.no_sandbox;
 
         let (agent_tx, agent_rx) = mpsc::channel(100);
         let (session_tx, session_rx) = mpsc::channel(1);
@@ -313,7 +325,7 @@ impl App {
             cursor_pos: 0,
             input_history: Vec::new(),
             history_index: 0,
-            tool_mode: ToolMode::Write,
+            tool_mode: permissions.mode,
             api_provider,
             provider_picker: ProviderPicker::new(),
             message_list: MessageList::new(),
@@ -343,6 +355,7 @@ impl App {
             input_tokens: 0,
             output_tokens: 0,
             current_tool: None,
+            permissions,
         };
 
         // Initialize setup flow if needed
@@ -523,12 +536,22 @@ impl App {
                 }
             }
 
-            // Shift+Tab: Cycle tool mode (Read → Write → Agi)
+            // Shift+Tab: Cycle tool mode (Read ↔ Write, or Read → Write → Agi if --agi)
             KeyCode::BackTab => {
-                self.tool_mode = match self.tool_mode {
-                    ToolMode::Read => ToolMode::Write,
-                    ToolMode::Write => ToolMode::Agi,
-                    ToolMode::Agi => ToolMode::Read,
+                self.tool_mode = if self.permissions.agi_enabled {
+                    // AGI mode available: Read → Write → Agi → Read
+                    match self.tool_mode {
+                        ToolMode::Read => ToolMode::Write,
+                        ToolMode::Write => ToolMode::Agi,
+                        ToolMode::Agi => ToolMode::Read,
+                    }
+                } else {
+                    // Normal mode: Read ↔ Write only
+                    match self.tool_mode {
+                        ToolMode::Read => ToolMode::Write,
+                        ToolMode::Write => ToolMode::Read,
+                        ToolMode::Agi => ToolMode::Read, // Shouldn't happen, but handle it
+                    }
                 };
                 // Update the orchestrator
                 let orchestrator = self.orchestrator.clone();

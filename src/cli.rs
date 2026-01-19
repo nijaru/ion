@@ -8,12 +8,93 @@ use crate::tool::{ApprovalHandler, ApprovalResponse, ToolMode, ToolOrchestrator}
 use anyhow::Result;
 use async_trait::async_trait;
 use clap::{Parser, Subcommand, ValueEnum};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+
+/// Permission settings resolved from CLI flags and config.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PermissionSettings {
+    /// The effective tool mode (Read, Write, AGI)
+    pub mode: ToolMode,
+    /// Auto-approve all tool calls without prompting
+    pub auto_approve: bool,
+    /// Allow operations outside CWD (sandbox disabled)
+    pub no_sandbox: bool,
+    /// AGI mode was explicitly enabled (allows TUI mode cycling to AGI)
+    pub agi_enabled: bool,
+}
+
+impl Default for PermissionSettings {
+    fn default() -> Self {
+        Self {
+            mode: ToolMode::Write,
+            auto_approve: false,
+            no_sandbox: false,
+            agi_enabled: false,
+        }
+    }
+}
+
+impl Cli {
+    /// Resolve effective permission settings from CLI flags and config.
+    ///
+    /// Precedence (highest to lowest):
+    /// 1. CLI flags (--agi, --yes, --no-sandbox, -r, -w)
+    /// 2. Config file settings
+    /// 3. Built-in defaults (write mode, sandboxed, approval required)
+    pub fn resolve_permissions(&self, config: &Config) -> PermissionSettings {
+        // Start with config defaults
+        let mut settings = PermissionSettings {
+            mode: config.permissions.mode(),
+            auto_approve: config.permissions.auto_approve.unwrap_or(false),
+            no_sandbox: config.permissions.allow_outside_cwd.unwrap_or(false),
+            agi_enabled: config.permissions.mode() == ToolMode::Agi,
+        };
+
+        // --agi is the ultimate override
+        if self.agi_mode {
+            settings.mode = ToolMode::Agi;
+            settings.auto_approve = true;
+            settings.no_sandbox = true;
+            settings.agi_enabled = true;
+            return settings;
+        }
+
+        // CLI flags override config
+        if self.no_sandbox {
+            settings.no_sandbox = true;
+        }
+
+        // --yes implies write mode and auto-approve
+        if self.auto_approve {
+            settings.auto_approve = true;
+            settings.mode = ToolMode::Write;
+        }
+
+        // Explicit mode flags (last specified wins, but we can only check presence)
+        // -r takes precedence for safety if both specified
+        if self.read_mode {
+            settings.mode = ToolMode::Read;
+            if self.auto_approve || settings.auto_approve {
+                eprintln!("Warning: --yes / auto_approve is ignored in read mode");
+                settings.auto_approve = false;
+            }
+        } else if self.write_mode {
+            settings.mode = ToolMode::Write;
+        }
+
+        // Check for --yes --no-sandbox without --agi (same effect, enable AGI in TUI)
+        if settings.auto_approve && settings.no_sandbox && !self.agi_mode {
+            settings.agi_enabled = true;
+        }
+
+        settings
+    }
+}
 
 /// Fast, lightweight, open-source coding agent
 #[derive(Parser, Debug)]
@@ -21,6 +102,27 @@ use tokio::sync::mpsc;
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Commands>,
+
+    // Global permission flags (apply to TUI mode)
+    /// Read-only mode (no writes, no bash)
+    #[arg(short = 'r', long = "read", global = true)]
+    pub read_mode: bool,
+
+    /// Write mode (explicit, default)
+    #[arg(short = 'w', long = "write", global = true)]
+    pub write_mode: bool,
+
+    /// Auto-approve all tool calls (implies write mode)
+    #[arg(short = 'y', long = "yes", global = true)]
+    pub auto_approve: bool,
+
+    /// Allow operations outside current directory
+    #[arg(long = "no-sandbox", global = true)]
+    pub no_sandbox: bool,
+
+    /// Full autonomy mode (--yes + --no-sandbox)
+    #[arg(long = "agi", global = true)]
+    pub agi_mode: bool,
 }
 
 #[derive(Subcommand, Debug)]
