@@ -380,6 +380,9 @@ impl App {
             git_diff_updated: None,
         };
 
+        // Set initial API provider name on model picker
+        this.model_picker.set_api_provider(api_provider.name());
+
         // Initialize setup flow if needed
         if this.needs_setup {
             if this.mode == Mode::ProviderPicker {
@@ -1064,6 +1067,13 @@ impl App {
                     self.config.model_cache_ttl_secs,
                 ));
             }
+
+            // Set API provider name on model picker
+            self.model_picker.set_api_provider(api_provider.name());
+
+            // Clear old models when switching providers
+            self.model_picker.set_models(vec![]);
+            self.model_picker.is_loading = true;
 
             self.mode = Mode::Input;
             self.open_model_picker();

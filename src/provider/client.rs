@@ -3,13 +3,14 @@
 use super::backend::Backend;
 use super::error::Error;
 use super::types::{
-    ChatRequest, ContentBlock, Message, ModelInfo, Role, StreamEvent, ToolCallEvent,
+    ChatRequest, ContentBlock, Message, ModelInfo, ModelPricing, Role, StreamEvent, ToolCallEvent,
     ToolDefinition,
 };
 use async_trait::async_trait;
 use futures::StreamExt;
 use llm::builder::{FunctionBuilder, LLMBuilder, ParamBuilder};
 use llm::chat::{ChatMessage, ChatRole, MessageType, StreamChunk, Tool};
+use serde::Deserialize;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -189,6 +190,181 @@ impl Client {
             })
             .collect()
     }
+
+    /// Fetch models from OpenRouter API.
+    async fn list_openrouter_models(&self) -> Result<Vec<ModelInfo>, Error> {
+        let base_url = self
+            .base_url
+            .as_deref()
+            .unwrap_or("https://openrouter.ai/api/v1");
+
+        let client = reqwest::Client::new();
+        let response = client
+            .get(format!("{}/models", base_url))
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .send()
+            .await
+            .map_err(|e| Error::Api(format!("OpenRouter API error: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Err(Error::Api(format!(
+                "OpenRouter returned status {}",
+                response.status()
+            )));
+        }
+
+        let data: OpenRouterModelsResponse = response
+            .json()
+            .await
+            .map_err(|e| Error::Api(format!("Failed to parse OpenRouter response: {}", e)))?;
+
+        Ok(data
+            .data
+            .into_iter()
+            .map(|m| {
+                let supports_cache = m.pricing.cache_read.is_some_and(|p| p > 0.0);
+                let supports_vision = m
+                    .architecture
+                    .as_ref()
+                    .and_then(|a| a.modality.as_ref())
+                    .is_some_and(|modality| modality.contains("image"));
+                let provider = m.id.split('/').next().unwrap_or("unknown").to_string();
+                let supports_tools = m
+                    .architecture
+                    .as_ref()
+                    .and_then(|a| a.instruct_type.as_ref())
+                    .is_some();
+
+                ModelInfo {
+                    id: m.id,
+                    name: m.name,
+                    provider,
+                    context_window: m.context_length,
+                    supports_tools,
+                    supports_vision,
+                    supports_thinking: false,
+                    supports_cache,
+                    pricing: ModelPricing {
+                        input: m.pricing.prompt * 1_000_000.0,
+                        output: m.pricing.completion * 1_000_000.0,
+                        cache_read: m.pricing.cache_read.map(|p| p * 1_000_000.0),
+                        cache_write: m.pricing.cache_write.map(|p| p * 1_000_000.0),
+                    },
+                    created: 0,
+                }
+            })
+            .collect())
+    }
+
+    /// Fetch models from Ollama API.
+    async fn list_ollama_models(&self) -> Result<Vec<ModelInfo>, Error> {
+        let base_url = self
+            .base_url
+            .as_deref()
+            .unwrap_or("http://localhost:11434");
+
+        let client = reqwest::Client::new();
+        let response = client
+            .get(format!("{}/api/tags", base_url))
+            .send()
+            .await
+            .map_err(|e| Error::Api(format!("Ollama API error: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Err(Error::Api(format!(
+                "Ollama returned status {}",
+                response.status()
+            )));
+        }
+
+        let data: OllamaTagsResponse = response
+            .json()
+            .await
+            .map_err(|e| Error::Api(format!("Failed to parse Ollama response: {}", e)))?;
+
+        Ok(data
+            .models
+            .into_iter()
+            .map(|m| ModelInfo {
+                id: m.name.clone(),
+                name: m.name,
+                provider: "ollama".to_string(),
+                context_window: 128_000, // Default, Ollama doesn't report this
+                supports_tools: true,    // Most modern models support tools
+                supports_vision: false,
+                supports_thinking: false,
+                supports_cache: false,
+                pricing: ModelPricing::default(),
+                created: 0,
+            })
+            .collect())
+    }
+}
+
+/// Ollama API response for /api/tags.
+#[derive(Debug, Deserialize)]
+struct OllamaTagsResponse {
+    models: Vec<OllamaModel>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OllamaModel {
+    name: String,
+    #[allow(dead_code)]
+    model: String,
+    #[allow(dead_code)]
+    size: u64,
+}
+
+/// OpenRouter API response for /models.
+#[derive(Debug, Deserialize)]
+struct OpenRouterModelsResponse {
+    data: Vec<OpenRouterModel>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenRouterModel {
+    id: String,
+    name: String,
+    context_length: u32,
+    pricing: OpenRouterPricing,
+    #[serde(default)]
+    architecture: Option<OpenRouterArchitecture>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenRouterPricing {
+    #[serde(default, deserialize_with = "parse_price")]
+    prompt: f64,
+    #[serde(default, deserialize_with = "parse_price")]
+    completion: f64,
+    #[serde(default, deserialize_with = "parse_optional_price")]
+    cache_read: Option<f64>,
+    #[serde(default, deserialize_with = "parse_optional_price")]
+    cache_write: Option<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenRouterArchitecture {
+    modality: Option<String>,
+    #[serde(default)]
+    instruct_type: Option<String>,
+}
+
+fn parse_price<'de, D>(deserializer: D) -> Result<f64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s: String = Deserialize::deserialize(deserializer)?;
+    Ok(s.parse().unwrap_or(0.0))
+}
+
+fn parse_optional_price<'de, D>(deserializer: D) -> Result<Option<f64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let opt: Option<String> = Deserialize::deserialize(deserializer)?;
+    Ok(opt.and_then(|s| s.parse().ok()))
 }
 
 /// Trait for LLM operations.
@@ -217,7 +393,13 @@ impl LlmApi for Client {
     }
 
     async fn list_models(&self) -> Result<Vec<ModelInfo>, Error> {
-        Ok(vec![])
+        match self.backend {
+            Backend::OpenRouter => self.list_openrouter_models().await,
+            Backend::Ollama => self.list_ollama_models().await,
+            // Other backends don't have dynamic model listing via API
+            // They use static lists or registry fetching
+            _ => Ok(vec![]),
+        }
     }
 
     async fn stream(&self, request: ChatRequest, tx: mpsc::Sender<StreamEvent>) -> Result<(), Error> {
@@ -327,5 +509,33 @@ mod tests {
         // Ollama should always work (no key needed)
         let client = Client::from_backend(Backend::Ollama);
         assert!(client.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_ollama_list_models() {
+        // Skip if Ollama isn't running
+        let client = reqwest::Client::new();
+        if client
+            .get("http://localhost:11434/api/tags")
+            .send()
+            .await
+            .is_err()
+        {
+            eprintln!("Skipping test: Ollama not running");
+            return;
+        }
+
+        let ollama = Client::new(Backend::Ollama, "");
+        let models = ollama.list_models().await;
+        assert!(models.is_ok(), "list_models should succeed");
+        let models = models.unwrap();
+        // Ollama should return at least one model if running
+        assert!(!models.is_empty(), "Ollama should have at least one model");
+        // Each model should have basic fields
+        for model in &models {
+            assert!(!model.id.is_empty());
+            assert!(!model.name.is_empty());
+            assert_eq!(model.provider, "ollama");
+        }
     }
 }
