@@ -2,12 +2,13 @@
 
 ## Current State
 
-| Metric    | Value           | Updated    |
-| --------- | --------------- | ---------- |
-| Phase     | 5 - Polish & UX | 2026-01-19 |
-| Status    | Runnable        | 2026-01-19 |
-| Toolchain | stable          | 2026-01-19 |
-| Tests     | 64 passing      | 2026-01-19 |
+| Metric     | Value           | Updated    |
+| ---------- | --------------- | ---------- |
+| Phase      | 5 - Polish & UX | 2026-01-19 |
+| Status     | Runnable        | 2026-01-19 |
+| Toolchain  | stable          | 2026-01-19 |
+| Tests      | 64 passing      | 2026-01-19 |
+| Visibility | **PUBLIC**      | 2026-01-19 |
 
 ## Architecture
 
@@ -34,14 +35,14 @@
 
 **Providers** (via `llm` crate):
 
-| Provider   | Status | Notes                               |
-| ---------- | ------ | ----------------------------------- |
-| OpenRouter | Full   | Primary, 200+ models                |
-| Anthropic  | Full   | Direct Claude access                |
-| OpenAI     | Full   | Has base_url field                  |
-| Ollama     | Full   | Auto-discovers at localhost:11434   |
-| Groq       | Full   | Fast inference                      |
-| Google     | Full   | Falls back to non-streaming w/tools |
+| Provider   | Status | Notes                             |
+| ---------- | ------ | --------------------------------- |
+| Anthropic  | Full   | Direct Claude access              |
+| Google     | Full   | Falls back to non-streaming/tools |
+| Groq       | Full   | Fast inference                    |
+| Ollama     | Full   | Auto-discovers at localhost:11434 |
+| OpenAI     | Full   | Has base_url field                |
+| OpenRouter | Full   | 200+ models aggregator            |
 
 ## Config System
 
@@ -129,6 +130,8 @@ Run `tk ls` for current task list. **21 open tasks** as of 2026-01-19.
 - **Edit tool** (tk-b4hd): String replacement with old_string/new_string, uniqueness validation, diff output
 - **Ollama context length fix** (tk-xe2c): Context is at `{architecture}.context_length`, not `general.context_length`
 - **Task tracking audit**: Reviewed session history, found 21 issues to track
+- **Open source prep** (tk-pj4e): Cleaned AGENTS.md, README.md, fixed license, removed beads refs
+- **Repo now PUBLIC**: Description "Fast, lightweight TUI coding agent"
 
 **Design notes:**
 
