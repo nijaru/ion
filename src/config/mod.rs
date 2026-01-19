@@ -73,10 +73,10 @@ impl Config {
         self.data_dir.join("sessions.db")
     }
 
-    /// Check if first-time setup is needed (no API key or no model selected).
+    /// Check if first-time setup is needed (no model selected).
+    /// Note: API key is not required for Ollama, so we only check for model.
     pub fn needs_setup(&self) -> bool {
-        let has_api_key = self.openrouter_api_key.is_some() || self.anthropic_api_key.is_some();
-        !has_api_key || self.model.is_none()
+        self.model.is_none()
     }
 
     /// Check if any API provider is configured.

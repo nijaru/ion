@@ -477,7 +477,7 @@ impl App {
                 AgentEvent::OutputTokensDelta(count) => {
                     self.output_tokens += count;
                 }
-                AgentEvent::ToolCallStart(_, name) => {
+                AgentEvent::ToolCallStart(_, name, _) => {
                     self.current_tool = Some(name.clone());
                     self.message_list.push_event(event);
                 }
@@ -1445,17 +1445,14 @@ impl App {
                     }
                 }
                 Sender::Tool => {
-                    chat_lines.push(Line::from(vec![
-                        Span::styled(" ⏺ ", Style::default().fg(Color::Magenta).dim()),
-                        Span::styled("tool", Style::default().fg(Color::Magenta).dim()),
-                    ]));
+                    // Tool messages render with normal text style
                     // Check for ANSI escape sequences (ESC[)
                     if content.contains("\x1b[") {
                         // Parse ANSI codes to ratatui styles
                         use ansi_to_tui::IntoText;
                         if let Ok(ansi_text) = content.as_bytes().into_text() {
                             for line in ansi_text.lines {
-                                let mut padded = vec![Span::raw(" ")];
+                                let mut padded = vec![Span::raw("  ")];
                                 padded.extend(line.spans.clone());
                                 chat_lines.push(Line::from(padded));
                             }
@@ -1463,21 +1460,17 @@ impl App {
                             // Fallback: strip ANSI and render plain
                             let stripped = strip_ansi(content);
                             chat_lines.push(Line::from(vec![
-                                Span::raw(" "),
-                                Span::styled(stripped, Style::default().fg(Color::Magenta).dim()),
+                                Span::raw("  "),
+                                Span::raw(stripped),
                             ]));
                         }
                     } else {
-                        let md = tui_markdown::from_str(content);
-                        for line in &md.lines {
-                            let mut styled_line = line.clone();
-                            for span in styled_line.spans.iter_mut() {
-                                span.style =
-                                    span.style.patch(Style::default().fg(Color::Magenta).dim());
-                            }
-                            let mut padded = vec![Span::raw(" ")];
-                            padded.extend(styled_line.spans);
-                            chat_lines.push(Line::from(padded));
+                        // Render tool content with normal text
+                        for line in content.lines() {
+                            chat_lines.push(Line::from(vec![
+                                Span::raw("  "),
+                                Span::raw(line.to_string()),
+                            ]));
                         }
                     }
                 }
