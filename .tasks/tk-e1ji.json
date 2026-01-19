@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "e1ji",
+  "title": "[RESEARCH] Custom LLM provider vs llm crate - streaming+tools issues",
+  "description": null,
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-19T13:28:56.084Z",
+  "updated_at": "2026-01-19T13:28:56.084Z",
+  "completed_at": null,
+  "external": {}
+}

@@ -275,6 +275,7 @@ impl Agent {
 
         let mut assistant_blocks = Vec::new();
         let mut tool_calls = Vec::new();
+        let mut streaming_succeeded = false;
 
         if use_streaming {
             const MAX_RETRIES: u32 = 3;
@@ -355,6 +356,8 @@ impl Agent {
                 // Handle any error from the stream
                 if let Some(ref err) = stream_error {
                     let is_rate_limit = err.contains("429") || err.to_lowercase().contains("rate");
+                    let is_tools_not_supported = err.to_lowercase().contains("streaming with tools not supported")
+                        || err.to_lowercase().contains("tools not supported");
 
                     if is_rate_limit && retry_count < MAX_RETRIES {
                         retry_count += 1;
@@ -368,16 +371,26 @@ impl Agent {
 
                         tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
                         continue 'retry;
+                    } else if is_tools_not_supported {
+                        // Fall back to non-streaming for this provider
+                        warn!("Provider doesn't support streaming with tools, falling back to non-streaming");
+                        assistant_blocks.clear();
+                        tool_calls.clear();
+                        break; // Exit retry loop, will use non-streaming below
                     } else {
                         error!("Stream error: {}", err);
                         return Err(anyhow::anyhow!("{}", err));
                     }
+                } else {
+                    // Success - exit retry loop (streaming_succeeded will be true)
+                    streaming_succeeded = true;
+                    break;
                 }
-
-                // Success - exit retry loop
-                break;
             }
-        } else {
+        }
+
+        // Non-streaming fallback (Ollama, Google with tools, or streaming failure)
+        if !streaming_succeeded {
             // Non-streaming fallback (e.g., Ollama with tools)
             debug!("Using non-streaming completion (provider: {})", self.provider.id());
             let response = self.provider.complete(request).await

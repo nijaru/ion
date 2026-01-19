@@ -1445,39 +1445,67 @@ impl App {
                     }
                 }
                 Sender::Tool => {
-                    // Tool messages render with normal text style
-                    // Check for ANSI escape sequences (ESC[)
-                    if content.contains("\x1b[") {
-                        // Parse ANSI codes to ratatui styles
-                        use ansi_to_tui::IntoText;
-                        if let Ok(ansi_text) = content.as_bytes().into_text() {
-                            for line in ansi_text.lines {
-                                let mut padded = vec![Span::raw("  ")];
-                                padded.extend(line.spans.clone());
-                                chat_lines.push(Line::from(padded));
-                            }
-                        } else {
-                            // Fallback: strip ANSI and render plain
-                            let stripped = strip_ansi(content);
+                    // Tool messages: first line is call, rest are results
+                    let mut lines = content.lines();
+
+                    // First line: > **tool_name** (args)
+                    if let Some(first_line) = lines.next() {
+                        // Parse tool_name(args) format
+                        if let Some(paren_pos) = first_line.find('(') {
+                            let tool_name = &first_line[..paren_pos];
+                            let args = &first_line[paren_pos..];
                             chat_lines.push(Line::from(vec![
-                                Span::raw("  "),
-                                Span::raw(stripped),
+                                Span::raw(" > "),
+                                Span::styled(tool_name, Style::default().bold()),
+                                Span::raw(" "),
+                                Span::raw(args.to_string()),
+                            ]));
+                        } else {
+                            // No args, just tool name
+                            chat_lines.push(Line::from(vec![
+                                Span::raw(" > "),
+                                Span::styled(first_line, Style::default().bold()),
                             ]));
                         }
-                    } else {
-                        // Render tool content with normal text
-                        for line in content.lines() {
+                    }
+
+                    // Remaining lines: results with indent
+                    for line in lines {
+                        // Check for ANSI escape sequences
+                        if line.contains("\x1b[") {
+                            use ansi_to_tui::IntoText;
+                            if let Ok(ansi_text) = line.as_bytes().into_text() {
+                                for ansi_line in ansi_text.lines {
+                                    let mut padded = vec![Span::raw("   ")];
+                                    padded.extend(ansi_line.spans.clone());
+                                    chat_lines.push(Line::from(padded));
+                                }
+                            } else {
+                                chat_lines.push(Line::from(vec![
+                                    Span::raw("   "),
+                                    Span::raw(strip_ansi(line)),
+                                ]));
+                            }
+                        } else {
                             chat_lines.push(Line::from(vec![
-                                Span::raw("  "),
+                                Span::raw("   "),
                                 Span::raw(line.to_string()),
                             ]));
                         }
                     }
                 }
                 Sender::System => {
+                    // Check if it's a completion message vs error/warning
+                    let (prefix, style) = if content.contains("completed") {
+                        (" ✓ ", Style::default().fg(Color::Green).dim())
+                    } else if content.contains("Error") {
+                        (" ✗ ", Style::default().fg(Color::Red).dim())
+                    } else {
+                        (" • ", Style::default().dim())
+                    };
                     chat_lines.push(Line::from(vec![
-                        Span::styled(" ! ", Style::default().fg(Color::Yellow).dim()),
-                        Span::styled(*content, Style::default().fg(Color::Yellow).dim().italic()),
+                        Span::styled(prefix, style),
+                        Span::styled(*content, style.italic()),
                     ]));
                 }
             }
