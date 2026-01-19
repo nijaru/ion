@@ -278,8 +278,10 @@ impl MessageList {
                                         .map(|(k, v)| {
                                             let val = match v {
                                                 serde_json::Value::String(s) => {
-                                                    if s.len() > 30 {
-                                                        format!("{}...", &s[..27])
+                                                    if s.chars().count() > 30 {
+                                                        let truncated: String =
+                                                            s.chars().take(27).collect();
+                                                        format!("{}...", truncated)
                                                     } else {
                                                         s.clone()
                                                     }
