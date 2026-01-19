@@ -49,10 +49,14 @@
 
 Run `tk ready` for current task list.
 
-**Priority:**
+**Priority (Core):**
+
+1. Test agent with real API call (streaming, tool calling)
+2. OpenAI-compatible endpoint config (vLLM, mlx-lm)
+
+**Lower Priority (Polish):**
 
 - Diff highlighting for edits
-- OpenAI-compatible endpoint config (vLLM, mlx-lm)
 
 **Ideas:**
 

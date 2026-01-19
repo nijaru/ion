@@ -10,7 +10,7 @@ async fn main() -> ExitCode {
     match cli.command {
         Some(Commands::Run(args)) => {
             // One-shot CLI mode
-            ion::cli::run(args).await
+            ion::cli::run(args, cli.auto_approve).await
         }
         None => {
             // Load config for permission defaults
