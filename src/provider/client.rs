@@ -33,11 +33,7 @@ impl Client {
     pub fn from_provider(provider: Provider) -> Result<Self, Error> {
         let api_key = provider.api_key().ok_or_else(|| Error::MissingApiKey {
             backend: provider.name().to_string(),
-            env_vars: provider
-                .env_vars()
-                .iter()
-                .map(|s| s.to_string())
-                .collect(),
+            env_vars: provider.env_vars().iter().map(|s| s.to_string()).collect(),
         })?;
         Ok(Self::new(provider, api_key))
     }
@@ -54,7 +50,11 @@ impl Client {
     }
 
     /// Build llm crate instance for a request.
-    fn build_llm(&self, model: &str, tools: &[ToolDefinition]) -> Result<Box<dyn llm::LLMProvider>, Error> {
+    fn build_llm(
+        &self,
+        model: &str,
+        tools: &[ToolDefinition],
+    ) -> Result<Box<dyn llm::LLMProvider>, Error> {
         // OpenRouter expects full model ID (e.g., "anthropic/claude-3-opus")
         // Other providers expect just the model name
         let model_name = if self.provider == Provider::OpenRouter {
@@ -79,30 +79,30 @@ impl Client {
         for tool in tools {
             let mut func = FunctionBuilder::new(&tool.name).description(&tool.description);
 
-            if let Some(props) = tool.parameters.get("properties") {
-                if let Some(props_obj) = props.as_object() {
-                    for (name, schema) in props_obj {
-                        let type_str = schema
-                            .get("type")
-                            .and_then(|t| t.as_str())
-                            .unwrap_or("string");
-                        let desc = schema
-                            .get("description")
-                            .and_then(|d| d.as_str())
-                            .unwrap_or("");
-                        func = func.param(ParamBuilder::new(name).type_of(type_str).description(desc));
-                    }
+            if let Some(props) = tool.parameters.get("properties")
+                && let Some(props_obj) = props.as_object()
+            {
+                for (name, schema) in props_obj {
+                    let type_str = schema
+                        .get("type")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or("string");
+                    let desc = schema
+                        .get("description")
+                        .and_then(|d| d.as_str())
+                        .unwrap_or("");
+                    func = func.param(ParamBuilder::new(name).type_of(type_str).description(desc));
                 }
             }
 
-            if let Some(required) = tool.parameters.get("required") {
-                if let Some(arr) = required.as_array() {
-                    let names: Vec<String> = arr
-                        .iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect();
-                    func = func.required(names);
-                }
+            if let Some(required) = tool.parameters.get("required")
+                && let Some(arr) = required.as_array()
+            {
+                let names: Vec<String> = arr
+                    .iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect();
+                func = func.required(names);
             }
 
             builder = builder.function(func);
@@ -197,7 +197,6 @@ impl Client {
             })
             .collect()
     }
-
 }
 
 /// Trait for LLM operations.
@@ -209,7 +208,11 @@ pub trait LlmApi: Send + Sync {
     /// Get the provider identifier.
     fn id(&self) -> &str;
     /// Stream a chat completion.
-    async fn stream(&self, request: ChatRequest, tx: mpsc::Sender<StreamEvent>) -> Result<(), Error>;
+    async fn stream(
+        &self,
+        request: ChatRequest,
+        tx: mpsc::Sender<StreamEvent>,
+    ) -> Result<(), Error>;
     /// Get a non-streaming chat completion.
     async fn complete(&self, request: ChatRequest) -> Result<Message, Error>;
 }
@@ -220,16 +223,16 @@ impl LlmApi for Client {
         self.provider.id()
     }
 
-    async fn stream(&self, request: ChatRequest, tx: mpsc::Sender<StreamEvent>) -> Result<(), Error> {
+    async fn stream(
+        &self,
+        request: ChatRequest,
+        tx: mpsc::Sender<StreamEvent>,
+    ) -> Result<(), Error> {
         let llm = self.build_llm(&request.model, &request.tools)?;
         let messages = Self::convert_messages(&request.messages);
         let tools = Self::convert_tools(&request.tools);
 
-        let tools_ref: Option<&[Tool]> = if tools.is_empty() {
-            None
-        } else {
-            Some(&tools)
-        };
+        let tools_ref: Option<&[Tool]> = if tools.is_empty() { None } else { Some(&tools) };
 
         let mut stream = llm
             .chat_stream_with_tools(&messages, tools_ref)
@@ -277,11 +280,7 @@ impl LlmApi for Client {
         let messages = Self::convert_messages(&request.messages);
         let tools = Self::convert_tools(&request.tools);
 
-        let tools_ref: Option<&[Tool]> = if tools.is_empty() {
-            None
-        } else {
-            Some(&tools)
-        };
+        let tools_ref: Option<&[Tool]> = if tools.is_empty() { None } else { Some(&tools) };
 
         let response = llm
             .chat_with_tools(&messages, tools_ref)

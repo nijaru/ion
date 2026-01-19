@@ -46,12 +46,12 @@ impl ToolOrchestrator {
 
         // For bash, use per-command permission checking
         let (status, bash_command) = if name == "bash" {
-            let command = args
-                .get("command")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let command = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
             let perms = self.permissions.read().await;
-            (perms.check_command_permission(command), Some(command.to_string()))
+            (
+                perms.check_command_permission(command),
+                Some(command.to_string()),
+            )
         } else {
             let perms = self.permissions.read().await;
             (perms.check_permission(tool.as_ref()), None)

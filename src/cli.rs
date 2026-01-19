@@ -2,7 +2,7 @@
 
 use crate::agent::{Agent, AgentEvent};
 use crate::config::Config;
-use crate::provider::{Provider, Client, LlmApi};
+use crate::provider::{Client, LlmApi, Provider};
 use crate::session::Session;
 use crate::tool::{ApprovalHandler, ApprovalResponse, ToolMode, ToolOrchestrator};
 use anyhow::Result;
@@ -319,7 +319,8 @@ async fn run_inner(args: RunArgs, auto_approve: bool) -> Result<ExitCode> {
     let api_key = match config.api_key_for(provider_id) {
         Some(key) => key,
         None => {
-            eprintln!("Error: No API key for {}. Set {} or configure in ~/.ion/config.toml, or run `ion` to set up.",
+            eprintln!(
+                "Error: No API key for {}. Set {} or configure in ~/.ion/config.toml, or run `ion` to set up.",
                 provider_id,
                 match provider_id {
                     "anthropic" => "ANTHROPIC_API_KEY",
@@ -399,9 +400,8 @@ async fn run_inner(args: RunArgs, auto_approve: bool) -> Result<ExitCode> {
                         io::stdout().flush()?;
                     }
                     OutputFormat::StreamJson => {
-                        let json = serde_json::to_string(&JsonEvent::TextDelta {
-                            text: text.clone(),
-                        })?;
+                        let json =
+                            serde_json::to_string(&JsonEvent::TextDelta { text: text.clone() })?;
                         println!("{}", json);
                     }
                     _ => {}
@@ -425,17 +425,17 @@ async fn run_inner(args: RunArgs, auto_approve: bool) -> Result<ExitCode> {
             }
             AgentEvent::ToolCallStart(id, name, args) => {
                 turn_count += 1;
-                if let Some(max) = max_turns {
-                    if turn_count >= max {
-                        eprintln!("\nMax turns ({}) reached", max);
-                        abort_token.cancel(); // Signal agent to stop
-                        interrupted = true;
-                        break;
-                    }
+                if let Some(max) = max_turns
+                    && turn_count >= max
+                {
+                    eprintln!("\nMax turns ({}) reached", max);
+                    abort_token.cancel(); // Signal agent to stop
+                    interrupted = true;
+                    break;
                 }
                 if !quiet {
                     // Extract key argument for display
-                    let key_arg = extract_key_arg(&name, &args);
+                    let key_arg = extract_key_arg(name, args);
                     match output_format {
                         OutputFormat::Text => {
                             eprintln!("\n> {}({})", name, key_arg);
@@ -480,9 +480,7 @@ async fn run_inner(args: RunArgs, auto_approve: bool) -> Result<ExitCode> {
                 match output_format {
                     OutputFormat::Text => eprintln!("Error: {}", e),
                     OutputFormat::StreamJson | OutputFormat::Json => {
-                        let json = serde_json::to_string(&JsonEvent::Error {
-                            message: e.clone(),
-                        })?;
+                        let json = serde_json::to_string(&JsonEvent::Error { message: e.clone() })?;
                         println!("{}", json);
                     }
                 }

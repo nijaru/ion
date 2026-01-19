@@ -112,7 +112,9 @@ async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::err
             if supports_enhancement {
                 execute!(
                     terminal.backend_mut(),
-                    PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+                    PushKeyboardEnhancementFlags(
+                        KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                    )
                 )?;
             }
             execute!(terminal.backend_mut(), EnterAlternateScreen)?;

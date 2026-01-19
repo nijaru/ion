@@ -67,10 +67,10 @@ impl Tool for GlobTool {
                 }
 
                 // Match against relative path
-                if let Ok(rel_path) = path.strip_prefix(&working_dir) {
-                    if matcher.is_match(rel_path) {
-                        paths.push(rel_path.to_string_lossy().into_owned());
-                    }
+                if let Ok(rel_path) = path.strip_prefix(&working_dir)
+                    && matcher.is_match(rel_path)
+                {
+                    paths.push(rel_path.to_string_lossy().into_owned());
                 }
             }
             paths

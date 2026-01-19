@@ -106,8 +106,12 @@ mod tests {
         assert!(!models.is_empty());
 
         // Check for known models (IDs are native model names, not prefixed)
-        let has_claude = models.iter().any(|m| m.provider == "anthropic" && m.id.contains("claude"));
-        let has_gpt = models.iter().any(|m| m.provider == "openai" && m.id.contains("gpt"));
+        let has_claude = models
+            .iter()
+            .any(|m| m.provider == "anthropic" && m.id.contains("claude"));
+        let has_gpt = models
+            .iter()
+            .any(|m| m.provider == "openai" && m.id.contains("gpt"));
 
         assert!(has_claude || has_gpt, "Should contain some major models");
     }

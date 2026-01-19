@@ -6,7 +6,7 @@ pub mod widgets;
 use crate::agent::{Agent, AgentEvent};
 use crate::cli::PermissionSettings;
 use crate::config::Config;
-use crate::provider::{Provider, Client, LlmApi, ModelRegistry};
+use crate::provider::{Client, LlmApi, ModelRegistry, Provider};
 use crate::session::Session;
 use crate::session::SessionStore;
 use crate::tool::{ApprovalHandler, ApprovalResponse, ToolMode, ToolOrchestrator};
@@ -209,8 +209,7 @@ impl App {
     fn move_cursor_left(&mut self) {
         let new_pos = self.input[..self.cursor_pos]
             .grapheme_indices(true)
-            .rev()
-            .next()
+            .next_back()
             .map(|(i, _)| i)
             .unwrap_or(0);
         self.cursor_pos = new_pos;
@@ -257,9 +256,7 @@ impl App {
             .unwrap_or(Provider::OpenRouter);
 
         // Get API key (env var first, then config)
-        let api_key = config
-            .api_key_for(api_provider.id())
-            .unwrap_or_default();
+        let api_key = config.api_key_for(api_provider.id()).unwrap_or_default();
 
         let provider_impl: Arc<dyn LlmApi> = Arc::new(Client::new(api_provider, api_key.clone()));
 
@@ -281,17 +278,17 @@ impl App {
         let local_mcp_path = std::env::current_dir()
             .unwrap_or_default()
             .join(".mcp.json");
-        if local_mcp_path.exists() {
-            if let Ok(content) = std::fs::read_to_string(&local_mcp_path) {
-                #[derive(Deserialize)]
-                struct LocalMcpConfig {
-                    #[serde(rename = "mcpServers")]
-                    mcp_servers: HashMap<String, crate::mcp::McpServerConfig>,
-                }
-                if let Ok(local_config) = serde_json::from_str::<LocalMcpConfig>(&content) {
-                    for (name, srv_config) in local_config.mcp_servers {
-                        all_mcp_servers.insert(name, srv_config);
-                    }
+        if local_mcp_path.exists()
+            && let Ok(content) = std::fs::read_to_string(&local_mcp_path)
+        {
+            #[derive(Deserialize)]
+            struct LocalMcpConfig {
+                #[serde(rename = "mcpServers")]
+                mcp_servers: HashMap<String, crate::mcp::McpServerConfig>,
+            }
+            if let Ok(local_config) = serde_json::from_str::<LocalMcpConfig>(&content) {
+                for (name, srv_config) in local_config.mcp_servers {
+                    all_mcp_servers.insert(name, srv_config);
                 }
             }
         }
@@ -721,16 +718,15 @@ impl App {
                 let at_top = self.cursor_pos == 0 || !self.input[..self.cursor_pos].contains('\n');
                 if at_top {
                     // If running and queue has messages, pop from queue first
-                    if self.is_running && self.input.is_empty() {
-                        if let Some(ref queue) = self.message_queue {
-                            if let Ok(mut q) = queue.lock() {
-                                if let Some(msg) = q.pop() {
-                                    self.input = msg;
-                                    self.cursor_pos = self.input.len();
-                                    return;
-                                }
-                            }
-                        }
+                    if self.is_running
+                        && self.input.is_empty()
+                        && let Some(ref queue) = self.message_queue
+                        && let Ok(mut q) = queue.lock()
+                        && let Some(msg) = q.pop()
+                    {
+                        self.input = msg;
+                        self.cursor_pos = self.input.len();
+                        return;
                     }
                     // Fall back to input history
                     if !self.input_history.is_empty() && self.history_index > 0 {
@@ -1114,17 +1110,17 @@ impl App {
 
             // Selection
             KeyCode::Enter => {
-                if let Some(status) = self.provider_picker.selected() {
-                    if status.authenticated {
-                        let provider = status.provider;
-                        self.set_provider(provider);
-                        // During setup, chain to model picker
-                        if self.needs_setup {
-                            self.open_model_picker();
-                        }
+                if let Some(status) = self.provider_picker.selected()
+                    && status.authenticated
+                {
+                    let provider = status.provider;
+                    self.set_provider(provider);
+                    // During setup, chain to model picker
+                    if self.needs_setup {
+                        self.open_model_picker();
                     }
-                    // If not authenticated, do nothing (can't select)
                 }
+                // If not authenticated, do nothing (can't select)
             }
 
             // Cancel - always allow, update() will re-trigger setup if needed
@@ -1212,12 +1208,13 @@ impl App {
         let session_tx = self.session_tx.clone();
 
         // Build thinking config from current level
-        let thinking = self.thinking_level.budget_tokens().map(|budget| {
-            crate::provider::ThinkingConfig {
-                enabled: true,
-                budget_tokens: Some(budget),
-            }
-        });
+        let thinking =
+            self.thinking_level
+                .budget_tokens()
+                .map(|budget| crate::provider::ThinkingConfig {
+                    enabled: true,
+                    budget_tokens: Some(budget),
+                });
 
         tokio::spawn(async move {
             match agent
@@ -1240,7 +1237,6 @@ impl App {
     }
 
     /// Take a snapshot of the current TUI state for debugging.
-
     pub fn take_snapshot(&mut self) {
         let area = Rect::new(0, 0, 120, 40); // Standard "debug" terminal size
         let backend = ratatui::backend::TestBackend::new(area.width, area.height);
@@ -1254,7 +1250,7 @@ impl App {
         for y in 0..area.height {
             for x in 0..area.width {
                 let cell = &buffer[(x, y)];
-                snapshot.push_str(&cell.symbol());
+                snapshot.push_str(cell.symbol());
             }
             snapshot.push('\n');
         }
@@ -1320,7 +1316,7 @@ impl App {
             let wrapped_lines = if line_len == 0 {
                 1
             } else {
-                ((line_len + text_width - 1) / text_width) as u16
+                line_len.div_ceil(text_width) as u16
             };
             line_count += wrapped_lines;
         }
@@ -1364,10 +1360,10 @@ impl App {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Min(0),        // Chat
+                Constraint::Min(0),                  // Chat
                 Constraint::Length(progress_height), // Progress line (Ionizing...)
                 Constraint::Length(input_height),    // Input
-                Constraint::Length(1),     // Status line
+                Constraint::Length(1),               // Status line
             ])
             .split(frame.area());
 
@@ -1416,7 +1412,7 @@ impl App {
             .session
             .model
             .split('/')
-            .last()
+            .next_back()
             .unwrap_or(&self.session.model);
 
         let mut chat_lines = Vec::new();
@@ -1515,15 +1511,15 @@ impl App {
         }
 
         // Show queued messages at bottom of chat (dimmed, pending)
-        if let Some(ref queue) = self.message_queue {
-            if let Ok(q) = queue.lock() {
-                for queued in q.iter() {
-                    chat_lines.push(Line::from(vec![
-                        Span::styled(" > ", Style::default().fg(Color::Yellow).dim()),
-                        Span::styled(queued.clone(), Style::default().dim().italic()),
-                    ]));
-                    chat_lines.push(Line::from(""));
-                }
+        if let Some(ref queue) = self.message_queue
+            && let Ok(q) = queue.lock()
+        {
+            for queued in q.iter() {
+                chat_lines.push(Line::from(vec![
+                    Span::styled(" > ", Style::default().fg(Color::Yellow).dim()),
+                    Span::styled(queued.clone(), Style::default().dim().italic()),
+                ]));
+                chat_lines.push(Line::from(""));
             }
         }
 
@@ -1607,10 +1603,7 @@ impl App {
             let summary_line = Line::from(vec![
                 Span::styled(symbol, Style::default().fg(color)),
                 Span::styled(label, Style::default().fg(color)),
-                Span::styled(
-                    format!(" ({})", stats.join(" · ")),
-                    Style::default().dim(),
-                ),
+                Span::styled(format!(" ({})", stats.join(" · ")), Style::default().dim()),
             ]);
             frame.render_widget(Paragraph::new(summary_line), chunks[1]);
         }
@@ -1668,8 +1661,7 @@ impl App {
 
             // Calculate cursor position for multi-line input
             let inner_width = chunks[2].width.saturating_sub(3) as usize; // borders + padding
-            let (cursor_row, cursor_col) =
-                self.calculate_cursor_position(inner_width);
+            let (cursor_row, cursor_col) = self.calculate_cursor_position(inner_width);
 
             let cursor_x = chunks[2].x + 2 + cursor_col as u16;
             let cursor_y = chunks[2].y + 1 + cursor_row as u16;
@@ -1705,11 +1697,7 @@ impl App {
 
         // Context % display with token counts: 56% (112k/200k)
         let context_part = if let Some((used, max)) = self.token_usage {
-            let pct = if max > 0 {
-                (used * 100) / max
-            } else {
-                0
-            };
+            let pct = if max > 0 { (used * 100) / max } else { 0 };
             // Format tokens as k (thousands)
             let format_k = |n: usize| -> String {
                 if n >= 1000 {
@@ -1728,7 +1716,7 @@ impl App {
             .session
             .model
             .split('/')
-            .last()
+            .next_back()
             .unwrap_or(&self.session.model);
 
         let left = format!(" {} · {}{}{}", model_name, context_part, branch_part, cwd);
@@ -1742,7 +1730,10 @@ impl App {
             } else {
                 err.clone()
             };
-            (format!("ERR: {} ", err_display), Style::default().fg(Color::Red))
+            (
+                format!("ERR: {} ", err_display),
+                Style::default().fg(Color::Red),
+            )
         } else {
             ("? help ".to_string(), Style::default().dim())
         };
@@ -1815,8 +1806,11 @@ impl App {
             row("/clear", "Clear chat"),
             row("/quit", "Exit"),
             Line::from(""),
-            Line::from(Span::styled("Press any key to close", Style::default().dim()))
-                .alignment(ratatui::layout::Alignment::Center),
+            Line::from(Span::styled(
+                "Press any key to close",
+                Style::default().dim(),
+            ))
+            .alignment(ratatui::layout::Alignment::Center),
         ];
 
         let help_para = Paragraph::new(help_text)
@@ -1884,12 +1878,10 @@ fn strip_ansi(s: &str) -> String {
     let mut chars = s.chars().peekable();
 
     while let Some(c) = chars.next() {
-        if c == '\x1b' {
-            if chars.peek() == Some(&'[') {
-                in_escape = true;
-                chars.next(); // consume '['
-                continue;
-            }
+        if c == '\x1b' && chars.peek() == Some(&'[') {
+            in_escape = true;
+            chars.next(); // consume '['
+            continue;
         }
         if in_escape {
             // End of escape sequence on 'm' or other command char
