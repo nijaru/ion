@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "usd5",
+  "title": "[INFRA] Fix CI - migrate from Bun to Rust",
+  "description": null,
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-19T09:00:04.305Z",
+  "updated_at": "2026-01-19T09:00:04.305Z",
+  "completed_at": null,
+  "external": {}
+}
