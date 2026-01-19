@@ -6,7 +6,9 @@ use std::sync::Arc;
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
-const SCHEMA_VERSION: i32 = 1;
+const SCHEMA_VERSION: i32 = 2;
+/// Max input history entries to keep
+const INPUT_HISTORY_LIMIT: usize = 100;
 
 #[derive(Debug, Error)]
 pub enum SessionStoreError {
@@ -62,7 +64,8 @@ impl SessionStore {
             .db
             .query_row("PRAGMA user_version", [], |row| row.get(0))?;
 
-        if version < SCHEMA_VERSION {
+        // Migration v0 -> v1: Initial schema
+        if version < 1 {
             self.db.execute_batch(
                 r#"
                 CREATE TABLE IF NOT EXISTS sessions (
@@ -90,6 +93,24 @@ impl SessionStore {
                     ON sessions(updated_at DESC);
 
                 PRAGMA user_version = 1;
+                "#,
+            )?;
+        }
+
+        // Migration v1 -> v2: Add input history table
+        if version < 2 {
+            self.db.execute_batch(
+                r#"
+                CREATE TABLE IF NOT EXISTS input_history (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    content     TEXT NOT NULL,
+                    created_at  INTEGER NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_input_history_created
+                    ON input_history(created_at DESC);
+
+                PRAGMA user_version = 2;
                 "#,
             )?;
         }
@@ -265,6 +286,45 @@ impl SessionStore {
         }
 
         Ok(())
+    }
+
+    /// Add an input to history.
+    pub fn add_input_history(&self, content: &str) -> Result<(), SessionStoreError> {
+        let now = chrono::Utc::now().timestamp();
+
+        // Insert new entry
+        self.db.execute(
+            "INSERT INTO input_history (content, created_at) VALUES (?1, ?2)",
+            params![content, now],
+        )?;
+
+        // Prune old entries beyond limit
+        self.db.execute(
+            r#"
+            DELETE FROM input_history
+            WHERE id NOT IN (
+                SELECT id FROM input_history
+                ORDER BY created_at DESC
+                LIMIT ?1
+            )
+            "#,
+            params![INPUT_HISTORY_LIMIT as i64],
+        )?;
+
+        Ok(())
+    }
+
+    /// Load input history (most recent last).
+    pub fn load_input_history(&self) -> Result<Vec<String>, SessionStoreError> {
+        let mut stmt = self.db.prepare(
+            "SELECT content FROM input_history ORDER BY created_at ASC",
+        )?;
+
+        let history: Result<Vec<String>, _> = stmt
+            .query_map([], |row| row.get(0))?
+            .collect();
+
+        Ok(history?)
     }
 }
 
