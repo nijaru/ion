@@ -87,11 +87,27 @@ tk done <id>             # Complete task
 
 ## Reference
 
-| File              | Purpose                |
-| ----------------- | ---------------------- |
-| ai/STATUS.md      | Current state, tasks   |
-| ai/DECISIONS.md   | Architecture decisions |
-| ai/design/\*.md   | Design documents       |
-| ai/research/\*.md | Research notes         |
+**ai/ directory contents:**
+
+| File/Dir        | Purpose                                           |
+| --------------- | ------------------------------------------------- |
+| ai/STATUS.md    | Current state, open tasks, session notes          |
+| ai/DECISIONS.md | Architecture decisions with context and rationale |
+| ai/DESIGN.md    | High-level system design                          |
+| ai/design/      | Detailed designs (TUI, config, permissions, etc)  |
+| ai/research/    | Research notes (agents, patterns, crates)         |
+| ai/ideas/       | Future feature ideas                              |
+
+**Key design docs:**
+
+- `ai/design/tui.md` - TUI interface spec
+- `ai/design/config-system.md` - Config hierarchy
+- `ai/design/permission-system.md` - CLI flags, modes, sandbox
+
+**Key research:**
+
+- `ai/research/tool-display-patterns-2026.md` - Tool output UX
+- `ai/research/tui-agents-comparison-2026.md` - Competitive analysis
+- `ai/research/edit-tool-patterns-2026.md` - Edit tool design
 
 **Competitive reference:** Claude Code, Gemini CLI, opencode, pi-mono, amp
