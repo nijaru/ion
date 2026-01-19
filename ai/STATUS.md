@@ -52,7 +52,7 @@ Run `tk ls` for current task list. **20 open tasks** as of 2026-01-19.
 
 | Task    | Issue                                                           |
 | ------- | --------------------------------------------------------------- |
-| tk-ypde | tui-textarea blocked on ratatui 0.30 compatibility (uses 0.29)  |
+| tk-ypde | rat-text added; full migration deferred (current input works)   |
 | tk-oohm | Scroll affects text entry instead of chat (needs investigation) |
 
 **UX Polish:**
@@ -65,7 +65,6 @@ Run `tk ls` for current task list. **20 open tasks** as of 2026-01-19.
 | tk-9n78 | Claude Code tool format - bold, spacing       |
 | tk-gf23 | Tool output gap between header and result     |
 | tk-bboa | Model picker column width/overflow            |
-| tk-sm2h | Color error lines dim red                     |
 | tk-kzgo | Dim successful tool result lines              |
 | tk-0kxp | Tool output symbol mismatch                   |
 | tk-hgl2 | Tool output syntax highlighting               |
