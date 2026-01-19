@@ -1,5 +1,6 @@
 mod anthropic;
 mod api_provider;
+mod llm_provider;
 mod models_dev;
 mod ollama;
 mod openai;
@@ -9,6 +10,7 @@ mod registry;
 
 pub use anthropic::AnthropicProvider;
 pub use api_provider::{ApiProvider, ProviderStatus};
+pub use llm_provider::{UnifiedBackend, UnifiedProvider};
 pub use ollama::OllamaProvider;
 pub use openai::OpenAIProvider;
 pub use openrouter::OpenRouterProvider;
@@ -91,6 +93,25 @@ mod tests {
             ProviderPrefs::default(),
         );
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_unified_provider_backends() {
+        // Test that UnifiedProvider can be created for each backend
+        let openai = UnifiedProvider::new(UnifiedBackend::OpenAI, "test".into());
+        assert_eq!(openai.id(), "openai");
+
+        let anthropic = UnifiedProvider::new(UnifiedBackend::Anthropic, "test".into());
+        assert_eq!(anthropic.id(), "anthropic");
+
+        let ollama = UnifiedProvider::new(UnifiedBackend::Ollama, String::new());
+        assert_eq!(ollama.id(), "ollama");
+
+        let groq = UnifiedProvider::new(UnifiedBackend::Groq, "test".into());
+        assert_eq!(groq.id(), "groq");
+
+        let google = UnifiedProvider::new(UnifiedBackend::Google, "test".into());
+        assert_eq!(google.id(), "google");
     }
 }
 
