@@ -31,25 +31,22 @@ const SUMMARY_DISPLAY: Duration = Duration::from_secs(5);
 /// Thinking budget level for extended reasoning.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ThinkingLevel {
-    /// No thinking (default)
+    /// No extended thinking (default)
     #[default]
     Off,
-    /// Low budget (~1k tokens)
-    Low,
-    /// Medium budget (~4k tokens)
-    Med,
-    /// High budget (~16k tokens)
-    High,
+    /// Standard budget (4k tokens)
+    Standard,
+    /// Extended budget (16k tokens)
+    Extended,
 }
 
 impl ThinkingLevel {
     /// Cycle to the next level
     pub fn next(self) -> Self {
         match self {
-            Self::Off => Self::Low,
-            Self::Low => Self::Med,
-            Self::Med => Self::High,
-            Self::High => Self::Off,
+            Self::Off => Self::Standard,
+            Self::Standard => Self::Extended,
+            Self::Extended => Self::Off,
         }
     }
 
@@ -57,9 +54,8 @@ impl ThinkingLevel {
     pub fn budget_tokens(self) -> Option<u32> {
         match self {
             Self::Off => None,
-            Self::Low => Some(1024),
-            Self::Med => Some(4096),
-            Self::High => Some(16384),
+            Self::Standard => Some(4096),
+            Self::Extended => Some(16384),
         }
     }
 
@@ -67,9 +63,8 @@ impl ThinkingLevel {
     pub fn label(self) -> &'static str {
         match self {
             Self::Off => "",
-            Self::Low => "[low]",
-            Self::Med => "[med]",
-            Self::High => "[high]",
+            Self::Standard => "[think:4k]",
+            Self::Extended => "[think:16k]",
         }
     }
 }
@@ -611,7 +606,7 @@ impl App {
                 self.mode = Mode::HelpOverlay;
             }
 
-            // Ctrl+T: Cycle thinking level (off → low → med → high → off)
+            // Ctrl+T: Cycle thinking level (off → standard → extended → off)
             KeyCode::Char('t') if ctrl => {
                 self.thinking_level = self.thinking_level.next();
             }
