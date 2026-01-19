@@ -55,9 +55,15 @@ impl Client {
 
     /// Build llm crate instance for a request.
     fn build_llm(&self, model: &str, tools: &[ToolDefinition]) -> Result<Box<dyn llm::LLMProvider>, Error> {
+        // Strip provider prefix if present (e.g., "google:gemini-3-flash" -> "gemini-3-flash")
+        let model_name = model
+            .split_once(':')
+            .map(|(_, name)| name)
+            .unwrap_or(model);
+
         let mut builder = LLMBuilder::new()
             .backend(self.backend.to_llm())
-            .model(model);
+            .model(model_name);
 
         if !self.api_key.is_empty() {
             builder = builder.api_key(&self.api_key);
