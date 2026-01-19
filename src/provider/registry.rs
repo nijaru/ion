@@ -175,24 +175,64 @@ impl ModelRegistry {
             .await
             .context("Failed to parse Ollama response")?;
 
-        let models = data
-            .models
-            .into_iter()
-            .map(|m| ModelInfo {
-                id: m.name.clone(),
-                name: m.name,
-                provider: "ollama".to_string(),
-                context_window: 128_000, // Default, Ollama doesn't report this
-                supports_tools: true,    // Most modern models support tools
-                supports_vision: false,
-                supports_thinking: false,
-                supports_cache: false,
-                pricing: ModelPricing::default(),
-                created: 0,
-            })
-            .collect();
+        // Fetch details for each model in parallel
+        let mut models = Vec::new();
+        for m in data.models {
+            let info = self.fetch_ollama_model_info(&m.name).await;
+            models.push(info);
+        }
 
         Ok(models)
+    }
+
+    /// Fetch detailed info for a single Ollama model.
+    async fn fetch_ollama_model_info(&self, name: &str) -> ModelInfo {
+        let base_url = "http://localhost:11434";
+
+        // Try to get model details from /api/show
+        let context_window = match self
+            .client
+            .post(format!("{}/api/show", base_url))
+            .json(&serde_json::json!({ "name": name }))
+            .send()
+            .await
+        {
+            Ok(response) if response.status().is_success() => {
+                #[derive(Deserialize)]
+                struct OllamaShowResponse {
+                    #[serde(default)]
+                    model_info: Option<OllamaModelInfo>,
+                }
+
+                #[derive(Deserialize)]
+                struct OllamaModelInfo {
+                    #[serde(rename = "general.context_length")]
+                    context_length: Option<u32>,
+                }
+
+                response
+                    .json::<OllamaShowResponse>()
+                    .await
+                    .ok()
+                    .and_then(|r| r.model_info)
+                    .and_then(|i| i.context_length)
+                    .unwrap_or(8192) // Default for older models
+            }
+            _ => 8192, // Default fallback
+        };
+
+        ModelInfo {
+            id: name.to_string(),
+            name: name.to_string(),
+            provider: "ollama".to_string(),
+            context_window,
+            supports_tools: true,
+            supports_vision: false,
+            supports_thinking: false,
+            supports_cache: false,
+            pricing: ModelPricing::default(),
+            created: 0,
+        }
     }
 
     /// Fetch models from models.dev, filtered by backend/provider.

@@ -9,7 +9,80 @@ pub enum Sender {
     System,
 }
 
-const TOOL_RESULT_PREVIEW_LEN: usize = 100;
+const TOOL_RESULT_PREVIEW_LEN: usize = 80;
+
+/// Truncate a string to max chars with ellipsis.
+fn truncate_str(s: &str, max: usize) -> String {
+    if s.chars().count() > max {
+        let preview: String = s.chars().take(max - 3).collect();
+        format!("{}...", preview)
+    } else {
+        s.to_string()
+    }
+}
+
+/// Extract the key argument from a tool call for display.
+fn extract_key_arg(tool_name: &str, args: &serde_json::Value) -> String {
+    let obj = match args.as_object() {
+        Some(o) => o,
+        None => return String::new(),
+    };
+
+    // Tool-specific key arguments
+    let key = match tool_name {
+        "read" | "write" | "edit" => "file_path",
+        "bash" => "command",
+        "glob" => "pattern",
+        "grep" => "pattern",
+        _ => {
+            // Fall back to first string argument
+            return obj
+                .values()
+                .find_map(|v| v.as_str())
+                .map(|s| truncate_for_display(s, 50))
+                .unwrap_or_default();
+        }
+    };
+
+    obj.get(key)
+        .and_then(|v| v.as_str())
+        .map(|s| truncate_for_display(s, 50))
+        .unwrap_or_default()
+}
+
+/// Truncate a string for display, showing the end for paths.
+fn truncate_for_display(s: &str, max: usize) -> String {
+    let s = s.lines().next().unwrap_or(s); // First line only
+    if s.len() <= max {
+        s.to_string()
+    } else if s.contains('/') {
+        // For paths, show the end
+        format!("...{}", &s[s.len().saturating_sub(max - 3)..])
+    } else {
+        // For other strings, show the beginning
+        format!("{}...", &s[..max - 3])
+    }
+}
+
+/// Summarize a tool result for compact display.
+fn summarize_tool_result(result: &str) -> String {
+    let result = result.trim();
+
+    // Count lines in the result
+    let line_count = result.lines().count();
+
+    // For multi-line results, show line count
+    if line_count > 3 {
+        return format!("{} lines", line_count);
+    }
+
+    // For short results, show the content (truncated if needed)
+    if result.is_empty() {
+        "OK".to_string()
+    } else {
+        truncate_str(result, TOOL_RESULT_PREVIEW_LEN)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum MessagePart {
@@ -177,26 +250,37 @@ impl MessageList {
                 }
                 self.push_entry(MessageEntry::new_thinking(Sender::Agent, delta));
             }
-            AgentEvent::ToolCallStart(_id, name) => {
-                // Clean tool name display
-                let display = format!("**{}**", name);
+            AgentEvent::ToolCallStart(_id, name, args) => {
+                // Format: tool_name(key_arg)
+                let key_arg = extract_key_arg(&name, &args);
+                let display = if key_arg.is_empty() {
+                    name
+                } else {
+                    format!("{}({})", name, key_arg)
+                };
                 self.push_entry(MessageEntry::new(Sender::Tool, display));
             }
             AgentEvent::ToolCallResult(_id, result, is_error) => {
-                let content = if is_error {
-                    format!("**Error:** {}", result)
+                let result_line = if is_error {
+                    // Clean up error message
+                    let msg = result
+                        .strip_prefix("Error: ")
+                        .unwrap_or(&result)
+                        .trim();
+                    format!("└ Error: {}", truncate_str(msg, TOOL_RESULT_PREVIEW_LEN))
                 } else {
-                    // Brief preview of result
-                    let truncated = if result.chars().count() > TOOL_RESULT_PREVIEW_LEN {
-                        let preview: String =
-                            result.chars().take(TOOL_RESULT_PREVIEW_LEN).collect();
-                        format!("{}...", preview)
-                    } else {
-                        result
-                    };
-                    truncated
+                    // Summarize result with indent connector
+                    format!("└ {}", summarize_tool_result(&result))
                 };
-                self.push_entry(MessageEntry::new(Sender::Tool, content));
+
+                // Append result to last tool entry if it exists
+                if let Some(last) = self.entries.last_mut()
+                    && last.sender == Sender::Tool
+                {
+                    last.append_text(&format!("\n{}", result_line));
+                } else {
+                    self.push_entry(MessageEntry::new(Sender::Tool, result_line));
+                }
             }
             AgentEvent::PlanGenerated(plan) => {
                 let mut content = String::from("### 📋 Proposed Plan\n\n");
@@ -270,30 +354,12 @@ impl MessageList {
                                 parts.push(MessagePart::Thinking(thinking.clone()))
                             }
                             ContentBlock::ToolCall { id: _, name, arguments } => {
-                                // Show tool name and key argument preview
-                                let args_preview = if let Some(obj) = arguments.as_object() {
-                                    obj.iter()
-                                        .take(1)
-                                        .filter_map(|(k, v)| {
-                                            if let serde_json::Value::String(s) = v {
-                                                let preview = if s.chars().count() > 40 {
-                                                    let truncated: String = s.chars().take(37).collect();
-                                                    format!("{}...", truncated)
-                                                } else {
-                                                    s.clone()
-                                                };
-                                                Some(format!("{}: {}", k, preview))
-                                            } else {
-                                                None
-                                            }
-                                        })
-                                        .next()
+                                // Format: tool_name(key_arg)
+                                let key_arg = extract_key_arg(name, arguments);
+                                let display = if key_arg.is_empty() {
+                                    name.clone()
                                 } else {
-                                    None
-                                };
-                                let display = match args_preview {
-                                    Some(preview) => format!("**{}** `{}`", name, preview),
-                                    None => format!("**{}**", name),
+                                    format!("{}({})", name, key_arg)
                                 };
                                 self.entries.push(MessageEntry::new(Sender::Tool, display));
                             }
@@ -319,17 +385,9 @@ impl MessageList {
                         } = block
                         {
                             let display = if *is_error {
-                                format!("**Error:** {}", content)
+                                format!("└ Error: {}", truncate_str(content, TOOL_RESULT_PREVIEW_LEN))
                             } else {
-                                let truncated = if content.chars().count() > TOOL_RESULT_PREVIEW_LEN
-                                {
-                                    let preview: String =
-                                        content.chars().take(TOOL_RESULT_PREVIEW_LEN).collect();
-                                    format!("{}...", preview)
-                                } else {
-                                    content.clone()
-                                };
-                                truncated
+                                format!("└ {}", summarize_tool_result(content))
                             };
                             self.entries.push(MessageEntry::new(Sender::Tool, display));
                         }

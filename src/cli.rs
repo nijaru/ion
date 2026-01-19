@@ -15,6 +15,48 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
+/// Extract the most relevant argument from a tool call for display.
+fn extract_key_arg(tool_name: &str, args: &serde_json::Value) -> String {
+    let obj = match args.as_object() {
+        Some(o) => o,
+        None => return String::new(),
+    };
+
+    // Tool-specific key arguments
+    let key = match tool_name {
+        "read" | "write" | "edit" => "file_path",
+        "bash" => "command",
+        "glob" => "pattern",
+        "grep" => "pattern",
+        _ => {
+            // Fall back to first string argument
+            return obj
+                .values()
+                .find_map(|v| v.as_str())
+                .map(|s| truncate_arg(s, 50))
+                .unwrap_or_default();
+        }
+    };
+
+    obj.get(key)
+        .and_then(|v| v.as_str())
+        .map(|s| truncate_arg(s, 60))
+        .unwrap_or_default()
+}
+
+/// Truncate a string for display, showing the end for paths.
+fn truncate_arg(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        s.to_string()
+    } else if s.contains('/') {
+        // For paths, show the end
+        format!("...{}", &s[s.len().saturating_sub(max - 3)..])
+    } else {
+        // For other strings, show the beginning
+        format!("{}...", &s[..max - 3])
+    }
+}
+
 /// Permission settings resolved from CLI flags and config.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionSettings {
@@ -373,7 +415,7 @@ async fn run_inner(args: RunArgs, auto_approve: bool) -> Result<ExitCode> {
                     }
                 }
             }
-            AgentEvent::ToolCallStart(id, name) => {
+            AgentEvent::ToolCallStart(id, name, args) => {
                 turn_count += 1;
                 if let Some(max) = max_turns {
                     if turn_count >= max {
@@ -384,9 +426,11 @@ async fn run_inner(args: RunArgs, auto_approve: bool) -> Result<ExitCode> {
                     }
                 }
                 if !quiet {
+                    // Extract key argument for display
+                    let key_arg = extract_key_arg(&name, &args);
                     match output_format {
                         OutputFormat::Text => {
-                            eprintln!("\n> {}({})", name, id);
+                            eprintln!("\n> {}({})", name, key_arg);
                         }
                         OutputFormat::StreamJson => {
                             let json = serde_json::to_string(&JsonEvent::ToolCallStart {
