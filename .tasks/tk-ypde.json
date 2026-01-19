@@ -15,10 +15,14 @@
     {
       "ts": "2026-01-19T16:29:15.408Z",
       "msg": "Blocked: tui-textarea v0.7.0 not compatible with ratatui v0.30.0 - defer until upstream updates"
+    },
+    {
+      "ts": "2026-01-19T16:41:16.353Z",
+      "msg": "Blocked: tui-textarea v0.7.0 depends on ratatui 0.29.0, ion uses 0.30.0. Wait for upstream update."
     }
   ],
   "created_at": "2026-01-19T15:32:35.219Z",
-  "updated_at": "2026-01-19T16:29:15.408Z",
+  "updated_at": "2026-01-19T16:41:16.353Z",
   "completed_at": null,
   "external": {}
 }
