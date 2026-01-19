@@ -7,14 +7,14 @@
 | Phase     | 5 - Polish & UX | 2026-01-19 |
 | Status    | Runnable        | 2026-01-19 |
 | Toolchain | stable          | 2026-01-19 |
-| Tests     | 57 passing      | 2026-01-19 |
+| Tests     | 59 passing      | 2026-01-19 |
 
 ## Architecture
 
 **Core Agent** (ion binary):
 
 - TUI + Agent loop
-- Built-in providers (OpenRouter, Anthropic, OpenAI)
+- Built-in providers (OpenRouter, Anthropic, OpenAI, Ollama)
 - Built-in tools (read, write, edit, bash, glob, grep)
 - MCP client
 - Session management (rusqlite)
@@ -22,14 +22,14 @@
 
 **Providers** (status):
 
-| Provider   | Status | Notes                |
-| ---------- | ------ | -------------------- |
-| OpenRouter | Full   | Primary, 200+ models |
-| Anthropic  | Full   | Direct Claude access |
-| OpenAI     | Full   | Has base_url field   |
-| Ollama     | Stub   | Needs implementation |
-| vLLM       | None   | OpenAI-compatible    |
-| mlx-lm     | None   | OpenAI-compatible    |
+| Provider   | Status | Notes                              |
+| ---------- | ------ | ---------------------------------- |
+| OpenRouter | Full   | Primary, 200+ models               |
+| Anthropic  | Full   | Direct Claude access               |
+| OpenAI     | Full   | Has base_url field                 |
+| Ollama     | Full   | Auto-discovers at localhost:11434  |
+| vLLM       | None   | Config: OpenAI-compatible endpoint |
+| mlx-lm     | None   | Config: OpenAI-compatible endpoint |
 
 **Config** (implemented):
 
@@ -49,8 +49,8 @@ Run `tk ready` for current task list.
 
 **Priority:**
 
-- OpenAI-compatible provider (Ollama, vLLM, mlx-lm support)
 - Diff highlighting for edits
+- OpenAI-compatible endpoint config (vLLM, mlx-lm)
 
 **Ideas:**
 
@@ -66,8 +66,8 @@ Run `tk ready` for current task list.
 
 **Providers:**
 
-- Ollama defined but not implemented (falls back to OpenRouter)
-- No custom endpoint support yet
+- vLLM/mlx-lm need config file for custom endpoints
+- OAuth not supported (Google, Vertex)
 
 ## Design Documents
 
