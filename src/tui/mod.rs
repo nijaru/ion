@@ -163,6 +163,8 @@ pub struct App {
     pub permissions: PermissionSettings,
     /// Last completed task summary (for brief display after completion)
     pub last_task_summary: Option<TaskSummary>,
+    /// Request to open input in external editor (Ctrl+G)
+    pub editor_requested: bool,
 }
 
 /// Summary of a completed task for brief post-completion display
@@ -373,6 +375,7 @@ impl App {
             current_tool: None,
             permissions,
             last_task_summary: None,
+            editor_requested: false,
         };
 
         // Initialize setup flow if needed
@@ -606,6 +609,11 @@ impl App {
             // Ctrl+S: Take UI snapshot (Debug/Agent only)
             KeyCode::Char('s') if ctrl => {
                 self.take_snapshot();
+            }
+
+            // Ctrl+G: Open input in external editor
+            KeyCode::Char('g') if ctrl => {
+                self.editor_requested = true;
             }
 
             // Shift+Enter: Insert newline (requires Kitty keyboard protocol)
@@ -1690,6 +1698,7 @@ impl App {
             row("Enter", "Send message"),
             row("Shift+Enter", "Insert newline"),
             row("Shift+Tab", "Cycle mode"),
+            row("Ctrl+G", "External editor"),
             row("Ctrl+M", "Model picker"),
             row("Ctrl+P", "Provider picker"),
             row("Ctrl+T", "Thinking toggle"),

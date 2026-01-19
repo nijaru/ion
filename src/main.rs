@@ -88,6 +88,36 @@ async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::err
         if app.should_quit {
             break;
         }
+
+        // Handle external editor request (Ctrl+G)
+        if app.editor_requested {
+            app.editor_requested = false;
+
+            // Temporarily restore terminal for editor
+            if supports_enhancement {
+                execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags)?;
+            }
+            disable_raw_mode()?;
+            execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+            terminal.show_cursor()?;
+
+            // Open editor and get result
+            if let Some(new_input) = open_editor(&app.input)? {
+                app.input = new_input;
+                app.cursor_pos = app.input.len();
+            }
+
+            // Re-enter TUI mode
+            enable_raw_mode()?;
+            if supports_enhancement {
+                execute!(
+                    terminal.backend_mut(),
+                    PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+                )?;
+            }
+            execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+            terminal.hide_cursor()?;
+        }
     }
 
     // Restore terminal
@@ -99,4 +129,37 @@ async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::err
     terminal.show_cursor()?;
 
     Ok(())
+}
+
+/// Open text in external editor, returns edited content or None if unchanged/cancelled
+fn open_editor(initial: &str) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    use std::io::Write;
+    use std::process::Command;
+
+    // Get editor from environment
+    let editor = std::env::var("VISUAL")
+        .or_else(|_| std::env::var("EDITOR"))
+        .unwrap_or_else(|_| "vi".to_string());
+
+    // Create temp file with initial content
+    let mut temp = tempfile::NamedTempFile::with_suffix(".md")?;
+    temp.write_all(initial.as_bytes())?;
+    temp.flush()?;
+
+    // Open editor
+    let status = Command::new(&editor).arg(temp.path()).status()?;
+
+    if !status.success() {
+        return Ok(None);
+    }
+
+    // Read back edited content
+    let edited = std::fs::read_to_string(temp.path())?;
+
+    // Return None if unchanged
+    if edited == initial {
+        Ok(None)
+    } else {
+        Ok(Some(edited))
+    }
 }
