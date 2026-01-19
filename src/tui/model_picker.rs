@@ -479,8 +479,8 @@ impl ModelPicker {
 
     fn render_model_header(&self, frame: &mut Frame, area: Rect) {
         // Column widths (must match render_model_list)
-        let name_width = 30usize;
-        let provider_width = 16usize;
+        let name_width = 38usize;
+        let provider_width = 12usize;
         let context_width = 7usize;
         let input_width = 7usize;
         let output_width = 7usize;
@@ -553,18 +553,21 @@ impl ModelPicker {
 
     fn render_model_list(&mut self, frame: &mut Frame, area: Rect) {
         // Column widths (must match render_model_header)
-        let name_width = 30usize;
-        let provider_width = 16usize;
+        let name_width = 38usize;
+        let provider_width = 12usize;
         let context_width = 7usize;
         let input_width = 7usize;
         let output_width = 7usize;
 
         let items: Vec<ListItem> = self.filtered_models.iter().map(|m| {
-            // Extract model name (strip provider prefix: "provider/model" or "provider:model")
-            let model_name = m.id
-                .split(['/', ':'])
-                .nth(1)
-                .unwrap_or(&m.id);
+            // Extract display name based on provider format
+            let model_name = if m.provider == "ollama" {
+                // Ollama: strip ":latest" suffix (it's the default)
+                m.id.strip_suffix(":latest").unwrap_or(&m.id)
+            } else {
+                // Others: strip "provider/" or "provider:" prefix
+                m.id.split(['/', ':']).nth(1).unwrap_or(&m.id)
+            };
             let provider = &m.provider;
 
             // Truncate if needed (accounting for ellipsis)
