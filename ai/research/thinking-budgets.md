@@ -4,7 +4,7 @@
 
 ## Current Implementation
 
-ion has 4 levels: Off, Low (1k), Med (4k), High (16k)
+ion has 3 levels: Off, Standard (4k), Extended (16k)
 
 ## Claude Defaults
 
