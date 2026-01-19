@@ -7,7 +7,7 @@
 | Phase     | 5 - Polish & UX | 2026-01-19 |
 | Status    | Runnable        | 2026-01-19 |
 | Toolchain | stable          | 2026-01-19 |
-| Tests     | 56 passing      | 2026-01-19 |
+| Tests     | 57 passing      | 2026-01-19 |
 
 ## Architecture
 
@@ -49,9 +49,9 @@
 
 Run `tk ready` for current task list.
 
-**Priority (Core):**
+**Priority (Refactor):**
 
-1. Test agent with real API call (streaming, tool calling)
+1. Model listing refactor - move to registry (see ai/design/model-listing-refactor.md)
 2. OpenAI-compatible endpoint config (vLLM, mlx-lm)
 
 **Lower Priority (Polish):**
@@ -61,6 +61,15 @@ Run `tk ready` for current task list.
 **Ideas:**
 
 - Interactive shell support (ai/ideas/interactive-shell.md)
+
+## Recent Session Work
+
+- Fixed OpenRouter feature not enabled in llm crate
+- Implemented model listing for Ollama and OpenRouter
+- Improved tool call display in chat history
+- Added provider name to model picker title
+- Code review: fixed UTF-8 panic, CLI permission consistency
+- Designed model listing refactor (ai/design/model-listing-refactor.md)
 
 ## Known Limitations
 
@@ -82,4 +91,5 @@ Run `tk ready` for current task list.
 - `ai/design/config-system.md` - Config hierarchy
 - `ai/design/tui.md` - TUI interface spec
 - `ai/design/plugin-architecture.md` - Plugin/MCP design
+- `ai/design/model-listing-refactor.md` - Model listing cleanup
 - `ai/DECISIONS.md` - All architecture decisions
