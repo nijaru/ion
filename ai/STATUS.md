@@ -39,38 +39,25 @@
 
 - Will re-implement after TUI agent is fully working
 
-## Session Accomplishments
-
-**Permission System Implementation (tk-a8vn):**
-
-- CLI flags: `-r`/`--read`, `-w`/`--write`, `-y`/`--yes`, `--no-sandbox`, `--agi`
-- CWD boundary checking via `ToolContext.check_sandbox()`
-- Per-command bash approval (not just per-tool)
-- TUI mode cycling respects --agi flag (Read ↔ Write unless --agi)
-- Config file support: `[permissions]` section
-- Flag warnings for invalid combinations (-r -y)
-
 ## Open Tasks
 
-**UX:**
+Run `tk ready` for current task list. Key items:
 
-- [ ] tk-otmx: Ctrl+G opens input in external editor
-- [ ] tk-whde: Git diff stats in status line
-- [ ] Shift+Enter doesn't work in text entry (multiline input)
-- [ ] Status line: show context % used and/or raw token count
-- [ ] Status line: rethink layout (cwd before branch? branch at end? +/- changes?)
-- [ ] Progress bar: don't disappear abruptly, show total time and tokens after completion
-- [ ] Thinking: defaults and level configuration (4k/10k/16k/32k?)
+| ID      | Category | Description                       |
+| ------- | -------- | --------------------------------- |
+| tk-kj66 | UX       | Shift+Enter multiline input       |
+| tk-av8a | UX       | Status line token/context display |
+| tk-j7io | UX       | Progress bar completion behavior  |
+| tk-otmx | UX       | Ctrl+G external editor            |
+| tk-whde | UX       | Git diff stats in status line     |
+| tk-6zlg | Config   | Thinking budget levels            |
+| tk-usd5 | Infra    | CI migration (Bun → Rust)         |
+| tk-smqs | Idea     | Diff highlighting                 |
+| tk-iegz | Idea     | OpenRouter routing modal          |
 
-**Infra:**
+**Untracked ideas:**
 
-- [ ] Fix CI (still configured for Bun, needs Rust)
-
-**Ideas:**
-
-- [ ] tk-iegz: OpenRouter provider routing modal
-- [ ] tk-smqs: Diff highlighting for edits
-- [ ] Interactive shell support (ai/ideas/interactive-shell.md)
+- Interactive shell support (ai/ideas/interactive-shell.md)
 
 ## Known Limitations
 
@@ -79,10 +66,6 @@
 - `check_sandbox()` is path validation, not true sandboxing
 - Bash commands can still access outside CWD (run with `current_dir` set but can `cd` or use absolute paths)
 - True sandboxing (containers/chroot) is post-MVP
-
-## Completed This Session
-
-- [x] Permission system implementation (tk-a8vn)
 
 ## Design Documents
 
