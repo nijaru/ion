@@ -46,14 +46,13 @@
 
 ## Open Tasks
 
-Run `tk ls` for current task list. **18 open tasks** as of 2026-01-19.
+Run `tk ls` for current task list. **17 open tasks** as of 2026-01-19.
 
 **UX Polish:**
 
-| Task    | Issue                           |
-| ------- | ------------------------------- |
-| tk-hgl2 | Tool output syntax highlighting |
-| tk-er0v | Diff highlighting for edits     |
+| Task    | Issue                       |
+| ------- | --------------------------- |
+| tk-er0v | Diff highlighting for edits |
 
 **Features:**
 
@@ -67,9 +66,10 @@ Run `tk ls` for current task list. **18 open tasks** as of 2026-01-19.
 
 ## Session Work 2026-01-19
 
-**Session 3 - List Tool & Cleanup:**
+**Session 3 - Tools & Highlighting:**
 
 - **List tool** (tk-miou): Added `list` tool - fd-like directory listing with depth, type filter, hidden file options
+- **Syntax highlighting** (tk-hgl2): Added syntect for code highlighting in read/grep tool output (20+ languages)
 - **Cleanup**: Pruned completed tasks from STATUS.md
 
 **Session 2 - LLM Migration:**
