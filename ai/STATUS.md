@@ -15,68 +15,122 @@
 
 - TUI + Agent loop
 - Unified provider via `llm` crate (OpenRouter, Anthropic, OpenAI, Ollama, Groq, Google)
-- Built-in tools (read, write, edit, bash, glob, grep)
+- Built-in tools (read, write, glob, grep, bash)
 - MCP client
 - Session management (rusqlite)
 - Skill system with model configuration
 
+**Tools Status:**
+
+| Tool     | Status   | Notes                                      |
+| -------- | -------- | ------------------------------------------ |
+| read     | Done     | Safe, file reading                         |
+| write    | Done     | Restricted, full file write with diff      |
+| glob     | Done     | Safe, pattern matching via ignore crate    |
+| grep     | Done     | Safe, content search                       |
+| bash     | Done     | Restricted, shell commands                 |
+| edit     | **TODO** | String replacement (old_string/new_string) |
+| list     | **TODO** | fd-like directory listing                  |
+| discover | Remove   | Placeholder with no backend                |
+
 **Providers** (via `llm` crate):
 
-| Provider   | Status | Notes                             |
-| ---------- | ------ | --------------------------------- |
-| OpenRouter | Full   | Primary, 200+ models              |
-| Anthropic  | Full   | Direct Claude access              |
-| OpenAI     | Full   | Has base_url field                |
-| Ollama     | Full   | Auto-discovers at localhost:11434 |
-| Groq       | Full   | Fast inference                    |
-| Google     | Full   | Gemini via AI Studio              |
-| vLLM       | None   | Config: OpenAI-compatible         |
-| mlx-lm     | None   | Config: OpenAI-compatible         |
+| Provider   | Status  | Notes                             |
+| ---------- | ------- | --------------------------------- |
+| OpenRouter | Full    | Primary, 200+ models              |
+| Anthropic  | Full    | Direct Claude access              |
+| OpenAI     | Full    | Has base_url field                |
+| Ollama     | Full    | Auto-discovers at localhost:11434 |
+| Groq       | Full    | Fast inference                    |
+| Google     | Partial | **BUG: API key not persisted**    |
 
-**Config** (implemented):
+## Active Bugs
 
-- `~/.ion/` for ion-specific config
-- AGENTS.md + CLAUDE.md instruction file support
-- 3-tier layered loading (user -> project -> local)
+**Provider persistence (tk-rrue):**
 
-**Permissions** (implemented):
+- Config only stores `openrouter_api_key` and `anthropic_api_key`
+- No Google/Groq/etc API key storage
+- On restart, provider derived from stored keys, not from model string
+- Model `google:gemini-3-flash-preview` loses provider on restart
+- **Fix**: Parse provider from model string, or add all API keys to config
 
-- Read/Write/AGI modes via CLI flags (-r, -w, --agi)
-- CWD sandbox by default (--no-sandbox to disable)
-- Per-command bash approval storage
+**Streaming with tools (FIXED this session):**
+
+- Google provider errors with "streaming with tools not supported"
+- Added fallback: catch error, retry with non-streaming
+- Works for any provider that lacks streaming+tools support
 
 ## Open Tasks
 
 Run `tk ready` for current task list.
 
-**Priority:**
+**High Priority:**
 
-1. Model sorting: org → newest → alphabetical (tk-r9c7)
-   - OpenRouter API may have `created` field
-   - models.dev returns `created: 0`
-2. Diff highlighting for edits (tk-er0v)
+1. **Provider persistence bug** (tk-rrue) - Blocks Google/Groq usage
+2. **Add edit tool** (tk-b4hd) - Critical for efficient editing
+3. **Add list tool** (tk-miou) - fd-like, uses ignore crate
 
-**Ideas:**
+**Medium Priority:**
 
+4. Model sorting: org → newest → alphabetical (tk-r9c7)
+5. Diff highlighting for edits (tk-er0v)
+6. System prompt comparison (tk-gsiw)
+7. Custom LLM provider vs llm crate evaluation (tk-e1ji)
+
+**Low Priority / Ideas:**
+
+- OAuth system for providers (tk-t0ea)
+- Permission system audit (tk-5h0j)
 - OpenRouter provider routing modal (tk-iegz)
-- Interactive shell support (ai/ideas/interactive-shell.md)
+- Model display format - just model name vs provider:model (tk-x3zf)
 
-## Recent Session Work
+## Session Work 2026-01-19
 
-**2026-01-19 (TUI polish):**
+**Completed:**
 
 - Rate limit (429) retry with exponential backoff (2s, 4s, 8s)
 - Ollama context lengths fetched from `/api/show` endpoint
-- Tool display: `read(path)` + `└ result` (combined, normal text)
-- Fixed provider modal showing on startup when model already set
-- Research: competitor TUI patterns (ai/research/tool-display-patterns-2026.md)
+- Streaming+tools fallback for providers that don't support it
+- Tool display: `> **tool_name** (args)` + `└ result` format
+- Task completed styling: dim green `✓` instead of yellow `!`
+- Bold tool names, `>` prefix, proper spacing
+- Removed discover tool from registration (no backend)
 
-**Prior:**
+**Identified Issues:**
 
-- Model listing refactor (Client → Registry)
-- llm crate integration for all providers
-- Tool call display improvements
-- UTF-8 panic fix, CLI permission consistency
+- Provider resets to OpenRouter on restart
+- Config missing API keys for Google, Groq, etc.
+- No edit tool (only write which rewrites entire file)
+- No list/find tool (glob is pattern-only)
+- llm crate quirks: streaming+tools, system messages as user
+
+**Research Completed:**
+
+- `ai/research/edit-tool-patterns-2026.md` - All agents use string replacement
+- `ai/research/rust-file-finder-crates.md` - Use ignore crate (fd's backend)
+- `ai/research/rust-llm-crates-2026.md` - llm crate vs alternatives
+
+## Design Decisions Pending
+
+**llm crate vs custom:**
+
+- Current: Using llm crate with workarounds for quirks
+- Issues: streaming+tools fallback, system message handling
+- Alternative: Custom provider code (500-1000 LOC/provider)
+- Decision: Evaluate after more edge cases or keep llm crate
+
+**Permission model:**
+
+- Current: 3 modes (Read/Write/AGI) with approval handler
+- Pi-Mono uses YOLO (no approvals) - "security theater"
+- Keep current model, audit for issues
+
+**Tool display colors:**
+
+- While running: dim text
+- Completed: normal white
+- Success: dim green checkmark
+- Error: red
 
 ## Known Limitations
 
@@ -88,8 +142,9 @@ Run `tk ready` for current task list.
 
 **Providers:**
 
-- Uses `llm` crate for unified backend (streaming, tool calling)
-- vLLM/mlx-lm need config file for custom OpenAI-compatible endpoints
+- Uses `llm` crate for unified backend
+- Some providers need streaming fallback when tools present
+- vLLM/mlx-lm need config file for custom endpoints
 - Vertex AI not yet supported (Google AI Studio works)
 
 ## Design Documents

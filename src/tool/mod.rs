@@ -122,7 +122,7 @@ impl ToolOrchestrator {
         orch.register_tool(Box::new(builtin::GlobTool));
         orch.register_tool(Box::new(builtin::GrepTool));
         orch.register_tool(Box::new(builtin::BashTool));
-        orch.register_tool(Box::new(builtin::DiscoverTool));
+        // Note: DiscoverTool requires semantic search backend (not yet implemented)
         orch
     }
 }

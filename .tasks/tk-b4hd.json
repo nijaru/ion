@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "b4hd",
+  "title": "[TOOL] Add edit tool - string replacement with old_string/new_string",
+  "description": null,
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-19T13:28:56.003Z",
+  "updated_at": "2026-01-19T13:28:56.003Z",
+  "completed_at": null,
+  "external": {}
+}
