@@ -2,10 +2,10 @@
 name = "ion"
 version = "0.0.0"
 edition = "2024"
-description = "Local-first TUI coding agent with persistent memory"
+description = "Fast TUI coding agent"
 license = "MIT"
 repository = "https://github.com/nijaru/ion"
-keywords = ["ai", "agent", "tui", "coding", "memory"]
+keywords = ["ai", "agent", "tui", "coding", "llm"]
 categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
