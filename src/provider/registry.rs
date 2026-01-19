@@ -451,9 +451,9 @@ impl ModelRegistry {
             // Sort by strategy
             match prefs.sort.unwrap_or_default() {
                 super::prefs::SortStrategy::Alphabetical => {
-                    // Sort by org, then by model name
+                    // Sort by org, then by newest first (created descending)
                     match a.provider.cmp(&b.provider) {
-                        std::cmp::Ordering::Equal => a.id.cmp(&b.id),
+                        std::cmp::Ordering::Equal => b.created.cmp(&a.created),
                         other => other,
                     }
                 }
