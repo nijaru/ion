@@ -7,29 +7,31 @@
 | Phase     | 5 - Polish & UX | 2026-01-19 |
 | Status    | Runnable        | 2026-01-19 |
 | Toolchain | stable          | 2026-01-19 |
-| Tests     | 59 passing      | 2026-01-19 |
+| Tests     | 56 passing      | 2026-01-19 |
 
 ## Architecture
 
 **Core Agent** (ion binary):
 
 - TUI + Agent loop
-- Built-in providers (OpenRouter, Anthropic, OpenAI, Ollama)
+- Unified provider via `llm` crate (OpenRouter, Anthropic, OpenAI, Ollama, Groq, Google)
 - Built-in tools (read, write, edit, bash, glob, grep)
 - MCP client
 - Session management (rusqlite)
 - Skill system with model configuration
 
-**Providers** (status):
+**Providers** (via `llm` crate):
 
-| Provider   | Status | Notes                              |
-| ---------- | ------ | ---------------------------------- |
-| OpenRouter | Full   | Primary, 200+ models               |
-| Anthropic  | Full   | Direct Claude access               |
-| OpenAI     | Full   | Has base_url field                 |
-| Ollama     | Full   | Auto-discovers at localhost:11434  |
-| vLLM       | None   | Config: OpenAI-compatible endpoint |
-| mlx-lm     | None   | Config: OpenAI-compatible endpoint |
+| Provider   | Status | Notes                             |
+| ---------- | ------ | --------------------------------- |
+| OpenRouter | Full   | Primary, 200+ models              |
+| Anthropic  | Full   | Direct Claude access              |
+| OpenAI     | Full   | Has base_url field                |
+| Ollama     | Full   | Auto-discovers at localhost:11434 |
+| Groq       | Full   | Fast inference                    |
+| Google     | Full   | Gemini via AI Studio              |
+| vLLM       | None   | Config: OpenAI-compatible         |
+| mlx-lm     | None   | Config: OpenAI-compatible         |
 
 **Config** (implemented):
 
@@ -66,8 +68,9 @@ Run `tk ready` for current task list.
 
 **Providers:**
 
-- vLLM/mlx-lm need config file for custom endpoints
-- OAuth not supported (Google, Vertex)
+- Uses `llm` crate for unified backend (streaming, tool calling)
+- vLLM/mlx-lm need config file for custom OpenAI-compatible endpoints
+- Vertex AI not yet supported (Google AI Studio works)
 
 ## Design Documents
 

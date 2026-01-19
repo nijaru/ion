@@ -1,97 +1,76 @@
-//! Unified LLM provider wrapper using the `llm` crate.
-//!
-//! This wraps multiple providers (OpenAI, Anthropic, Ollama, Groq, Google)
-//! behind our Provider trait using battle-tested library code.
+//! LLM client implementation using the llm crate.
 
-use super::{
-    ChatRequest, ContentBlock, Message, ModelInfo, Provider, ProviderError, Role, StreamEvent,
-    ToolCallEvent, ToolDefinition,
+use super::backend::Backend;
+use super::error::Error;
+use super::types::{
+    ChatRequest, ContentBlock, Message, ModelInfo, Role, StreamEvent, ToolCallEvent,
+    ToolDefinition,
 };
 use async_trait::async_trait;
 use futures::StreamExt;
-use llm::builder::{FunctionBuilder, LLMBackend, LLMBuilder, ParamBuilder};
+use llm::builder::{FunctionBuilder, LLMBuilder, ParamBuilder};
 use llm::chat::{ChatMessage, ChatRole, MessageType, StreamChunk, Tool};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-/// Backend type for the unified provider.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UnifiedBackend {
-    OpenAI,
-    Anthropic,
-    Ollama,
-    Groq,
-    Google,
-}
-
-impl UnifiedBackend {
-    fn to_llm_backend(self) -> LLMBackend {
-        match self {
-            UnifiedBackend::OpenAI => LLMBackend::OpenAI,
-            UnifiedBackend::Anthropic => LLMBackend::Anthropic,
-            UnifiedBackend::Ollama => LLMBackend::Ollama,
-            UnifiedBackend::Groq => LLMBackend::Groq,
-            UnifiedBackend::Google => LLMBackend::Google,
-        }
-    }
-
-    pub fn id(&self) -> &'static str {
-        match self {
-            UnifiedBackend::OpenAI => "openai",
-            UnifiedBackend::Anthropic => "anthropic",
-            UnifiedBackend::Ollama => "ollama",
-            UnifiedBackend::Groq => "groq",
-            UnifiedBackend::Google => "google",
-        }
-    }
-}
-
-/// Unified provider that wraps the llm crate.
-pub struct UnifiedProvider {
-    backend: UnifiedBackend,
+/// LLM client for making API calls.
+pub struct Client {
+    backend: Backend,
     api_key: String,
     base_url: Option<String>,
 }
 
-impl UnifiedProvider {
-    pub fn new(backend: UnifiedBackend, api_key: String) -> Self {
+impl Client {
+    /// Create a new client for the given backend.
+    pub fn new(backend: Backend, api_key: impl Into<String>) -> Self {
         Self {
             backend,
-            api_key,
+            api_key: api_key.into(),
             base_url: None,
         }
     }
 
-    pub fn with_base_url(mut self, url: String) -> Self {
-        self.base_url = Some(url);
+    /// Create client from backend, auto-detecting API key.
+    pub fn from_backend(backend: Backend) -> Result<Self, Error> {
+        let api_key = backend.api_key().ok_or_else(|| Error::MissingApiKey {
+            backend: backend.name().to_string(),
+            env_vars: backend
+                .env_vars()
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+        })?;
+        Ok(Self::new(backend, api_key))
+    }
+
+    /// Set custom base URL (for proxies or local servers).
+    pub fn with_base_url(mut self, url: impl Into<String>) -> Self {
+        self.base_url = Some(url.into());
         self
     }
 
-    /// Build an LLM instance for a specific model with tools.
-    fn build_llm(
-        &self,
-        model: &str,
-        tools: &[ToolDefinition],
-    ) -> Result<Box<dyn llm::LLMProvider>, ProviderError> {
+    /// Get the backend type.
+    pub fn backend(&self) -> Backend {
+        self.backend
+    }
+
+    /// Build llm crate instance for a request.
+    fn build_llm(&self, model: &str, tools: &[ToolDefinition]) -> Result<Box<dyn llm::LLMProvider>, Error> {
         let mut builder = LLMBuilder::new()
-            .backend(self.backend.to_llm_backend())
+            .backend(self.backend.to_llm())
             .model(model);
 
-        // Set API key (Ollama doesn't need one)
-        if self.backend != UnifiedBackend::Ollama && !self.api_key.is_empty() {
+        if !self.api_key.is_empty() {
             builder = builder.api_key(&self.api_key);
         }
 
-        // Set base URL if provided
         if let Some(ref url) = self.base_url {
             builder = builder.base_url(url);
         }
 
-        // Add tools
         for tool in tools {
             let mut func = FunctionBuilder::new(&tool.name).description(&tool.description);
 
-            // Parse parameters from JSON schema
             if let Some(props) = tool.parameters.get("properties") {
                 if let Some(props_obj) = props.as_object() {
                     for (name, schema) in props_obj {
@@ -103,39 +82,33 @@ impl UnifiedProvider {
                             .get("description")
                             .and_then(|d| d.as_str())
                             .unwrap_or("");
-
                         func = func.param(ParamBuilder::new(name).type_of(type_str).description(desc));
                     }
                 }
             }
 
-            // Set required parameters
             if let Some(required) = tool.parameters.get("required") {
-                if let Some(required_arr) = required.as_array() {
-                    let required_names: Vec<String> = required_arr
+                if let Some(arr) = required.as_array() {
+                    let names: Vec<String> = arr
                         .iter()
                         .filter_map(|v| v.as_str().map(String::from))
                         .collect();
-                    func = func.required(required_names);
+                    func = func.required(names);
                 }
             }
 
             builder = builder.function(func);
         }
 
-        builder
-            .build()
-            .map_err(|e| ProviderError::Stream(format!("Failed to build LLM: {}", e)))
+        builder.build().map_err(|e| Error::Build(e.to_string()))
     }
 
-    /// Convert our messages to llm crate format.
     fn convert_messages(messages: &[Message]) -> Vec<ChatMessage> {
         let mut result = Vec::new();
 
         for msg in messages {
             match msg.role {
                 Role::System => {
-                    // llm crate handles system prompt via builder, but we can include as user context
                     for block in msg.content.as_ref() {
                         if let ContentBlock::Text { text } = block {
                             result.push(ChatMessage {
@@ -181,7 +154,6 @@ impl UnifiedProvider {
                     }
                 }
                 Role::ToolResult => {
-                    // Tool results are added as user messages with context
                     for block in msg.content.as_ref() {
                         if let ContentBlock::ToolResult {
                             tool_call_id,
@@ -204,7 +176,6 @@ impl UnifiedProvider {
         result
     }
 
-    /// Convert llm tools to our format.
     fn convert_tools(tools: &[ToolDefinition]) -> Vec<Tool> {
         tools
             .iter()
@@ -220,8 +191,19 @@ impl UnifiedProvider {
     }
 }
 
+/// Trait for LLM operations.
 #[async_trait]
-impl Provider for UnifiedProvider {
+pub trait LlmApi: Send + Sync {
+    fn id(&self) -> &str;
+    fn model_info(&self, model_id: &str) -> Option<ModelInfo>;
+    fn models(&self) -> Vec<ModelInfo>;
+    async fn list_models(&self) -> Result<Vec<ModelInfo>, Error>;
+    async fn stream(&self, request: ChatRequest, tx: mpsc::Sender<StreamEvent>) -> Result<(), Error>;
+    async fn complete(&self, request: ChatRequest) -> Result<Message, Error>;
+}
+
+#[async_trait]
+impl LlmApi for Client {
     fn id(&self) -> &str {
         self.backend.id()
     }
@@ -234,17 +216,11 @@ impl Provider for UnifiedProvider {
         vec![]
     }
 
-    async fn list_models(&self) -> Result<Vec<ModelInfo>, ProviderError> {
-        // Use the llm crate's model listing if available
-        // For now, return empty - we get models from registry
+    async fn list_models(&self) -> Result<Vec<ModelInfo>, Error> {
         Ok(vec![])
     }
 
-    async fn stream(
-        &self,
-        request: ChatRequest,
-        tx: mpsc::Sender<StreamEvent>,
-    ) -> Result<(), ProviderError> {
+    async fn stream(&self, request: ChatRequest, tx: mpsc::Sender<StreamEvent>) -> Result<(), Error> {
         let llm = self.build_llm(&request.model, &request.tools)?;
         let messages = Self::convert_messages(&request.messages);
         let tools = Self::convert_tools(&request.tools);
@@ -258,7 +234,7 @@ impl Provider for UnifiedProvider {
         let mut stream = llm
             .chat_stream_with_tools(&messages, tools_ref)
             .await
-            .map_err(|e| ProviderError::Stream(e.to_string()))?;
+            .map_err(|e| Error::Stream(e.to_string()))?;
 
         while let Some(chunk) = stream.next().await {
             match chunk {
@@ -275,15 +251,11 @@ impl Provider for UnifiedProvider {
                         }))
                         .await;
                 }
-                Ok(StreamChunk::Done { .. }) => {
-                    break;
-                }
-                Ok(_) => {
-                    // ToolUseStart, ToolUseInputDelta - we wait for complete
-                }
+                Ok(StreamChunk::Done { .. }) => break,
+                Ok(_) => {}
                 Err(e) => {
                     let _ = tx.send(StreamEvent::Error(e.to_string())).await;
-                    return Err(ProviderError::Stream(e.to_string()));
+                    return Err(Error::Stream(e.to_string()));
                 }
             }
         }
@@ -292,7 +264,7 @@ impl Provider for UnifiedProvider {
         Ok(())
     }
 
-    async fn complete(&self, request: ChatRequest) -> Result<Message, ProviderError> {
+    async fn complete(&self, request: ChatRequest) -> Result<Message, Error> {
         let llm = self.build_llm(&request.model, &request.tools)?;
         let messages = Self::convert_messages(&request.messages);
         let tools = Self::convert_tools(&request.tools);
@@ -306,7 +278,7 @@ impl Provider for UnifiedProvider {
         let response = llm
             .chat_with_tools(&messages, tools_ref)
             .await
-            .map_err(|e| ProviderError::Stream(e.to_string()))?;
+            .map_err(|e| Error::Api(e.to_string()))?;
 
         let mut content_blocks = Vec::new();
 
@@ -329,5 +301,31 @@ impl Provider for UnifiedProvider {
             role: Role::Assistant,
             content: Arc::new(content_blocks),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_client_creation() {
+        let client = Client::new(Backend::OpenAI, "test-key");
+        assert_eq!(client.id(), "openai");
+        assert_eq!(client.backend(), Backend::OpenAI);
+    }
+
+    #[test]
+    fn test_client_with_base_url() {
+        let client = Client::new(Backend::Ollama, "")
+            .with_base_url("http://localhost:11434");
+        assert_eq!(client.backend(), Backend::Ollama);
+    }
+
+    #[test]
+    fn test_from_backend_ollama() {
+        // Ollama should always work (no key needed)
+        let client = Client::from_backend(Backend::Ollama);
+        assert!(client.is_ok());
     }
 }

@@ -6,7 +6,7 @@ pub mod widgets;
 use crate::agent::{Agent, AgentEvent};
 use crate::cli::PermissionSettings;
 use crate::config::Config;
-use crate::provider::{ApiProvider, ModelRegistry};
+use crate::provider::{ApiProvider, Backend, Client, LlmApi, ModelRegistry};
 use crate::session::Session;
 use crate::session::SessionStore;
 use crate::tool::{ApprovalHandler, ApprovalResponse, ToolMode, ToolOrchestrator};
@@ -250,20 +250,16 @@ impl App {
         }
 
         // Determine active provider and key
-        let (api_provider, api_key) = if let Some(key) = config.openrouter_api_key.clone() {
-            (ApiProvider::OpenRouter, key)
+        let (api_provider, backend, api_key) = if let Some(key) = config.openrouter_api_key.clone()
+        {
+            (ApiProvider::OpenRouter, Backend::OpenRouter, key)
         } else if let Some(key) = config.anthropic_api_key.clone() {
-            (ApiProvider::Anthropic, key)
+            (ApiProvider::Anthropic, Backend::Anthropic, key)
         } else {
-            (ApiProvider::OpenRouter, "".to_string())
+            (ApiProvider::OpenRouter, Backend::OpenRouter, "".to_string())
         };
 
-        let provider_impl = crate::provider::create_provider(
-            api_provider,
-            api_key.clone(),
-            config.provider_prefs.clone(),
-        )
-        .expect("Failed to create provider - this should not happen as only implemented providers are selectable");
+        let provider_impl: Arc<dyn LlmApi> = Arc::new(Client::new(backend, api_key.clone()));
 
         let (approval_tx, approval_rx) = mpsc::channel(100);
         let mut orchestrator = ToolOrchestrator::with_builtins(permissions.mode);
@@ -1031,6 +1027,20 @@ impl App {
 
     /// Switch the active API provider and re-create the agent.
     fn switch_provider(&mut self, api_provider: ApiProvider) {
+        // Convert ApiProvider to Backend
+        let backend = match api_provider {
+            ApiProvider::OpenRouter => Backend::OpenRouter,
+            ApiProvider::Anthropic => Backend::Anthropic,
+            ApiProvider::OpenAI => Backend::OpenAI,
+            ApiProvider::Ollama => Backend::Ollama,
+            ApiProvider::Groq => Backend::Groq,
+            ApiProvider::Google => Backend::Google,
+            _ => {
+                self.last_error = Some(format!("{} not yet supported", api_provider.name()));
+                return;
+            }
+        };
+
         // Ollama doesn't need an API key
         let api_key = if api_provider == ApiProvider::Ollama {
             Some(String::new())
@@ -1039,17 +1049,7 @@ impl App {
         };
 
         if let Some(api_key) = api_key {
-            let provider = match crate::provider::create_provider(
-                api_provider,
-                api_key.clone(),
-                self.config.provider_prefs.clone(),
-            ) {
-                Ok(p) => p,
-                Err(e) => {
-                    self.last_error = Some(format!("Failed to create provider: {}", e));
-                    return;
-                }
-            };
+            let provider: Arc<dyn LlmApi> = Arc::new(Client::new(backend, api_key.clone()));
 
             self.api_provider = api_provider;
 

@@ -2,7 +2,7 @@
 
 use crate::agent::{Agent, AgentEvent};
 use crate::config::Config;
-use crate::provider::{ApiProvider, create_provider};
+use crate::provider::{Backend, Client, LlmApi};
 use crate::session::Session;
 use crate::tool::{ApprovalHandler, ApprovalResponse, ToolMode, ToolOrchestrator};
 use anyhow::Result;
@@ -265,15 +265,15 @@ async fn run_inner(args: RunArgs) -> Result<ExitCode> {
         return Ok(ExitCode::from(1));
     }
 
-    // Determine provider and API key (config file, then env vars)
-    let (api_provider, api_key) = if let Some(key) = config.openrouter_api_key.clone() {
-        (ApiProvider::OpenRouter, key)
+    // Determine provider (config file, then env vars)
+    let (backend, api_key) = if let Some(key) = config.openrouter_api_key.clone() {
+        (Backend::OpenRouter, key)
     } else if let Some(key) = config.anthropic_api_key.clone() {
-        (ApiProvider::Anthropic, key)
+        (Backend::Anthropic, key)
     } else if let Ok(key) = std::env::var("OPENROUTER_API_KEY") {
-        (ApiProvider::OpenRouter, key)
+        (Backend::OpenRouter, key)
     } else if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
-        (ApiProvider::Anthropic, key)
+        (Backend::Anthropic, key)
     } else {
         eprintln!("Error: No API key configured. Set OPENROUTER_API_KEY or ANTHROPIC_API_KEY, or run `ion` to set up.");
         return Ok(ExitCode::from(1));
@@ -286,13 +286,7 @@ async fn run_inner(args: RunArgs) -> Result<ExitCode> {
         .unwrap_or_else(|| "anthropic/claude-sonnet-4".to_string());
 
     // Create provider
-    let provider = match create_provider(api_provider, api_key, config.provider_prefs.clone()) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("Error creating provider: {}", e);
-            return Ok(ExitCode::FAILURE);
-        }
-    };
+    let provider: Arc<dyn LlmApi> = Arc::new(Client::new(backend, api_key));
 
     // Create orchestrator
     let orchestrator = if args.no_tools {

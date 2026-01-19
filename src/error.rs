@@ -6,7 +6,7 @@ pub enum Error {
     Config(String),
 
     #[error("Provider error: {0}")]
-    Provider(#[from] crate::provider::ProviderError),
+    Provider(#[from] crate::provider::Error),
 
     #[error("Tool error: {0}")]
     Tool(#[from] crate::tool::ToolError),
