@@ -1,6 +1,6 @@
 # ion
 
-Fast, lightweight, open-source coding agent.
+Fast, lightweight TUI coding agent.
 
 > **Note:** ion is in early development. Expect bugs, incomplete features, and breaking changes.
 
