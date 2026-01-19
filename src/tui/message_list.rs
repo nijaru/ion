@@ -185,8 +185,9 @@ impl MessageList {
 
     /// Scroll up by n lines (towards older messages)
     pub fn scroll_up(&mut self, n: usize) {
-        let max_offset = self.entries.len().saturating_sub(1);
-        self.scroll_offset = (self.scroll_offset + n).min(max_offset);
+        // Cap at a reasonable maximum to prevent overflow
+        // Actual content length is handled during render
+        self.scroll_offset = (self.scroll_offset + n).min(10000);
         self.auto_scroll = false;
     }
 
@@ -200,7 +201,8 @@ impl MessageList {
 
     /// Jump to top (oldest messages)
     pub fn scroll_to_top(&mut self) {
-        self.scroll_offset = self.entries.len().saturating_sub(1);
+        // Set to max - render will clamp to actual content
+        self.scroll_offset = 10000;
         self.auto_scroll = false;
     }
 
@@ -213,21 +215,6 @@ impl MessageList {
     /// Returns true if currently at bottom
     pub fn is_at_bottom(&self) -> bool {
         self.scroll_offset == 0
-    }
-
-    /// Get the visible slice of entries for the given viewport height.
-    /// Returns (start_index, end_index) into entries.
-    pub fn visible_range(&self, viewport_height: usize) -> (usize, usize) {
-        let total = self.entries.len();
-        if total == 0 {
-            return (0, 0);
-        }
-
-        // End is total - scroll_offset (where we're "looking" from the bottom)
-        let end = total.saturating_sub(self.scroll_offset);
-        let start = end.saturating_sub(viewport_height);
-
-        (start, end)
     }
 
     pub fn push_event(&mut self, event: AgentEvent) {
@@ -307,9 +294,12 @@ impl MessageList {
 
     /// Push an entry, maintaining scroll position if user scrolled up.
     pub fn push_entry(&mut self, entry: MessageEntry) {
-        // If user has scrolled up, keep their position stable
+        // If user has scrolled up, keep their position stable by adding
+        // estimated line count for this entry (header + content + blank)
         if !self.auto_scroll {
-            self.scroll_offset += 1;
+            let content_lines = entry.content_as_markdown().lines().count();
+            // +2 for header line and trailing blank line
+            self.scroll_offset += content_lines + 2;
         }
         self.entries.push(entry);
     }

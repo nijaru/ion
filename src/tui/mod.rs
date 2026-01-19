@@ -1409,12 +1409,12 @@ impl App {
 
         let chat_block = chat_block.title(Line::from(title_spans));
 
-        let height = (chunks[0].height as usize).saturating_sub(2);
-        let (start, end) = self.message_list.visible_range(height);
+        let viewport_height = (chunks[0].height as usize).saturating_sub(2);
 
-        // Borrow cached markdown content to ensure it lives long enough for the Paragraph
+        // Borrow cached markdown content for all entries
         let entries_with_content: Vec<(&crate::tui::message_list::MessageEntry, &str)> =
-            self.message_list.entries[start..end]
+            self.message_list
+                .entries
                 .iter()
                 .map(|e| (e, e.content_as_markdown()))
                 .collect();
@@ -1535,9 +1535,16 @@ impl App {
             }
         }
 
+        // Calculate scroll position
+        // scroll_offset is lines from bottom (0 = at bottom)
+        let total_lines = chat_lines.len();
+        let max_scroll = total_lines.saturating_sub(viewport_height);
+        let scroll_y = max_scroll.saturating_sub(self.message_list.scroll_offset);
+
         let chat_para = Paragraph::new(chat_lines)
             .block(chat_block)
-            .wrap(Wrap { trim: true });
+            .wrap(Wrap { trim: true })
+            .scroll((scroll_y as u16, 0));
         frame.render_widget(chat_para, chunks[0]);
 
         // Progress line (only when running)
