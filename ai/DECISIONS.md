@@ -748,3 +748,24 @@ No reason to go through MCP when we can use the Rust crate directly.
 **Removed**: anthropic.rs, openai.rs, openrouter.rs, ollama.rs, llm_provider.rs (2,500+ lines)
 
 **Rationale**: Battle-tested library with streaming, tool calling, and multi-provider support. Reduces maintenance burden significantly. Only 10 small dependencies added with selective features.
+
+## 2026-01-19: Streaming+Tools is Core Requirement, Not Edge Case
+
+**Context**: Google provider fails with "streaming with tools not supported" when using llm crate. Added fallback to non-streaming, but this is degraded UX (no incremental text output). User pointed out: tools are ALWAYS present for a coding agent, so streaming+tools is the primary use case.
+
+**Decision**: Research and potentially build custom modular streaming interface.
+
+**Options Considered**:
+
+1. Keep llm crate with non-streaming fallback - degraded UX for some providers
+2. Find alternative crate that supports streaming+tools for all providers
+3. Build custom provider layer with unified StreamEvent interface
+4. Contribute streaming+tools fix to llm crate upstream
+
+**Next Steps** (tk-g1fy, tk-e1ji):
+
+- Research each provider's streaming API format (OpenAI SSE, Anthropic SSE, Google, Ollama)
+- Design unified `StreamEvent` enum that normalizes all formats
+- Evaluate build vs buy decision based on research
+
+**Rationale**: All major terminal agents (Claude Code, Pi, Codex) stream text. Non-streaming feels frozen. For good UX across all providers, we need streaming+tools to work everywhere.
