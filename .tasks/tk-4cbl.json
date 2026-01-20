@@ -3,7 +3,7 @@
   "ref": "4cbl",
   "title": "Add fuzzy search to selector shell (choose crate + integrate)",
   "description": null,
-  "status": "open",
+  "status": "active",
   "priority": 3,
   "labels": [],
   "assignees": [],
@@ -13,7 +13,7 @@
   "due_date": null,
   "logs": [],
   "created_at": "2026-01-20T10:05:18.589Z",
-  "updated_at": "2026-01-20T10:05:18.589Z",
+  "updated_at": "2026-01-20T12:19:39.507Z",
   "completed_at": null,
   "external": {}
 }
