@@ -32,6 +32,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 const CANCEL_WINDOW: Duration = Duration::from_millis(1500);
+const QUEUED_PREVIEW_LINES: usize = 3;
 
 /// Format token count as human-readable (e.g., 1500 -> "1.5k")
 fn format_tokens(n: usize) -> String {
@@ -1487,11 +1488,24 @@ impl App {
         if let Some(ref queue) = self.message_queue
             && let Ok(q) = queue.lock()
         {
+            let prefix_style = Style::default().fg(Color::Yellow).dim();
+            let queued_style = Style::default().dim().italic();
             for queued in q.iter() {
-                chat_lines.push(Line::from(vec![
-                    Span::styled(" > ", Style::default().fg(Color::Yellow).dim()),
-                    Span::styled(queued.clone(), Style::default().dim().italic()),
-                ]));
+                let lines: Vec<&str> = queued.lines().collect();
+                let shown = lines.len().min(QUEUED_PREVIEW_LINES);
+                for (idx, line) in lines.iter().take(shown).enumerate() {
+                    let prefix = if idx == 0 { " > " } else { "   " };
+                    chat_lines.push(Line::from(vec![
+                        Span::styled(prefix, prefix_style),
+                        Span::styled((*line).to_string(), queued_style),
+                    ]));
+                }
+                if lines.len() > shown {
+                    chat_lines.push(Line::from(vec![
+                        Span::styled("   ", prefix_style),
+                        Span::styled("…", queued_style),
+                    ]));
+                }
                 chat_lines.push(Line::from(""));
             }
         }
