@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "a9cv",
+  "title": "[PROVIDER] Retry/backoff for OpenRouter timeouts (log retry in chat)",
+  "description": null,
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-20T21:03:08.771Z",
+  "updated_at": "2026-01-20T21:03:08.771Z",
+  "completed_at": null,
+  "external": {}
+}

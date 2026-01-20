@@ -1881,9 +1881,10 @@ impl App {
                         n.to_string()
                     }
                 };
-                if let Some(max) = self.model_context_window {
-                    let pct = if max > 0 { (used * 100) / max } else { 0 };
-                    left_spans.push(Span::raw(" · "));
+                let max = self.model_context_window.unwrap_or(0);
+                left_spans.push(Span::raw(" · "));
+                if max > 0 {
+                    let pct = (used * 100) / max;
                     left_spans.push(Span::raw(format!(
                         "{}% ({}/{})",
                         pct,
@@ -1891,8 +1892,7 @@ impl App {
                         format_k(max)
                     )));
                 } else {
-                    left_spans.push(Span::raw(" · "));
-                    left_spans.push(Span::raw(format_k(used)));
+                    left_spans.push(Span::raw(format!("{}/0k", format_k(used))));
                 }
             }
 
