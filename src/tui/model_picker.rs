@@ -1,8 +1,10 @@
 //! Two-stage model picker: Provider → Model selection.
 
 use crate::provider::{ModelFilter, ModelInfo, ModelRegistry, ProviderPrefs};
-use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
+use fuzzy_matcher::skim::SkimMatcherV2;
+use rat_text::HasScreenCursor;
+use rat_text::text_input::{TextInput, TextInputState};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 use std::collections::BTreeMap;
@@ -37,8 +39,8 @@ pub struct ModelPicker {
     pub provider_models: Vec<ModelInfo>,
     /// Filtered models based on search.
     pub filtered_models: Vec<ModelInfo>,
-    /// Current filter text.
-    pub filter: String,
+    /// Filter input state.
+    pub filter_input: TextInputState,
     /// Provider list state.
     pub provider_state: ListState,
     /// Model list state.
@@ -64,7 +66,7 @@ impl Default for ModelPicker {
             filtered_providers: Vec::new(),
             provider_models: Vec::new(),
             filtered_models: Vec::new(),
-            filter: String::new(),
+            filter_input: TextInputState::default(),
             provider_state: ListState::default(),
             model_state: ListState::default(),
             selected_provider: None,
@@ -87,7 +89,7 @@ impl ModelPicker {
     /// Reset picker to provider stage (for Ctrl+P: Provider → Model flow).
     pub fn reset(&mut self) {
         self.stage = PickerStage::Provider;
-        self.filter.clear();
+        self.filter_input.clear();
         self.selected_provider = None;
         self.provider_models.clear();
         self.filtered_models.clear();
@@ -105,7 +107,7 @@ impl ModelPicker {
             .cloned()
             .collect();
         self.stage = PickerStage::Model;
-        self.filter.clear();
+        self.filter_input.clear();
         self.apply_model_filter();
     }
 
@@ -115,7 +117,7 @@ impl ModelPicker {
         self.provider_models = self.all_models.clone();
         // Sorting handled by apply_model_filter()
         self.stage = PickerStage::Model;
-        self.filter.clear();
+        self.filter_input.clear();
         self.apply_model_filter();
     }
 
@@ -198,13 +200,11 @@ impl ModelPicker {
     /// Apply filter to provider list (fuzzy match).
     fn apply_provider_filter(&mut self) {
         let matcher = SkimMatcherV2::default().ignore_case();
+        let filter = self.filter_input.text();
         self.filtered_providers = self
             .providers
             .iter()
-            .filter(|p| {
-                self.filter.is_empty()
-                    || matcher.fuzzy_match(&p.name, &self.filter).is_some()
-            })
+            .filter(|p| filter.is_empty() || matcher.fuzzy_match(&p.name, filter).is_some())
             .cloned()
             .collect();
 
@@ -218,13 +218,14 @@ impl ModelPicker {
     /// Apply filter to model list (fuzzy match on id and name).
     fn apply_model_filter(&mut self) {
         let matcher = SkimMatcherV2::default().ignore_case();
+        let filter = self.filter_input.text();
         self.filtered_models = self
             .provider_models
             .iter()
             .filter(|m| {
-                self.filter.is_empty()
-                    || matcher.fuzzy_match(&m.id, &self.filter).is_some()
-                    || matcher.fuzzy_match(&m.name, &self.filter).is_some()
+                filter.is_empty()
+                    || matcher.fuzzy_match(&m.id, filter).is_some()
+                    || matcher.fuzzy_match(&m.name, filter).is_some()
             })
             .cloned()
             .collect();
@@ -245,6 +246,13 @@ impl ModelPicker {
         }
     }
 
+    pub fn apply_filter(&mut self) {
+        match self.stage {
+            PickerStage::Provider => self.apply_provider_filter(),
+            PickerStage::Model => self.apply_model_filter(),
+        }
+    }
+
     /// Select current provider and move to model stage.
     pub fn select_provider(&mut self) {
         if let Some(idx) = self.provider_state.selected()
@@ -258,7 +266,7 @@ impl ModelPicker {
                 .cloned()
                 .collect();
             self.stage = PickerStage::Model;
-            self.filter.clear();
+            self.filter_input.clear();
             self.apply_model_filter();
         }
     }
@@ -266,27 +274,9 @@ impl ModelPicker {
     /// Go back to provider stage.
     pub fn back_to_providers(&mut self) {
         self.stage = PickerStage::Provider;
-        self.filter.clear();
+        self.filter_input.clear();
         self.selected_provider = None;
         self.apply_provider_filter();
-    }
-
-    /// Add character to filter.
-    pub fn push_char(&mut self, c: char) {
-        self.filter.push(c);
-        match self.stage {
-            PickerStage::Provider => self.apply_provider_filter(),
-            PickerStage::Model => self.apply_model_filter(),
-        }
-    }
-
-    /// Remove last character from filter.
-    pub fn pop_char(&mut self) {
-        self.filter.pop();
-        match self.stage {
-            PickerStage::Provider => self.apply_provider_filter(),
-            PickerStage::Model => self.apply_model_filter(),
-        }
     }
 
     /// Move selection up.
@@ -424,22 +414,11 @@ impl ModelPicker {
             .border_style(Style::default().fg(Color::Cyan))
             .title(search_title);
 
-        let search_text = if self.filter.is_empty() {
-            " ...".to_string()
-        } else {
-            format!(" {}_", self.filter)
-        };
-
-        let search_style = if self.filter.is_empty() {
-            Style::default().dim()
-        } else {
-            Style::default().fg(Color::Yellow)
-        };
-
-        let search_para = Paragraph::new(search_text)
-            .style(search_style)
-            .block(search_block);
-        frame.render_widget(search_para, chunks[0]);
+        let search_input = TextInput::new().block(search_block);
+        frame.render_stateful_widget(search_input, chunks[0], &mut self.filter_input);
+        if let Some(cursor) = self.filter_input.screen_cursor() {
+            frame.set_cursor_position(cursor);
+        }
 
         // Loading/Error state
         if self.is_loading {

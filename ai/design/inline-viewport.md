@@ -185,7 +185,7 @@ fn draw_viewport(&mut self, frame: &mut Frame) {
 ## Input Handling
 
 - **Goal**: Avoid custom cursor/selection edge cases (graphemes, emojis, multi-line).
-- **Plan**: Evaluate `rat-text` for multi-line input and selector search; if insufficient, use `tui-input` for selector search and keep custom multi-line input with stricter grapheme handling.
+- **Plan**: Use `rat-text::TextArea` for the main multi-line input and selector search fields to minimize future rewrites. Keep custom input history and queue-edit behavior at the app layer.
 
 ## Message Queue Behavior
 

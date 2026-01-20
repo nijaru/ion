@@ -4,10 +4,12 @@
 //! with visual indication of authentication status.
 
 use crate::provider::ProviderStatus;
-use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
+use fuzzy_matcher::skim::SkimMatcherV2;
+use rat_text::HasScreenCursor;
+use rat_text::text_input::{TextInput, TextInputState};
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState};
 
 /// State for the API provider picker modal.
 #[derive(Default)]
@@ -16,8 +18,8 @@ pub struct ProviderPicker {
     pub providers: Vec<ProviderStatus>,
     /// List selection state.
     pub list_state: ListState,
-    /// Filter text for type-to-filter.
-    pub filter: String,
+    /// Filter input state for type-to-filter.
+    pub filter_input: TextInputState,
     /// Filtered providers based on search.
     pub filtered: Vec<ProviderStatus>,
 }
@@ -30,26 +32,25 @@ impl ProviderPicker {
     /// Refresh provider detection and reset selection.
     pub fn refresh(&mut self) {
         self.providers = ProviderStatus::sorted(ProviderStatus::detect_all());
-        self.filter.clear();
+        self.filter_input.clear();
         self.apply_filter();
     }
 
     /// Apply filter to provider list.
-    fn apply_filter(&mut self) {
+    pub fn apply_filter(&mut self) {
         let matcher = SkimMatcherV2::default().ignore_case();
+        let filter = self.filter_input.text();
 
         self.filtered = self
             .providers
             .iter()
             .filter(|p| {
-                if self.filter.is_empty() {
+                if filter.is_empty() {
                     return true;
                 }
-                matcher
-                    .fuzzy_match(p.provider.name(), &self.filter)
-                    .is_some()
+                matcher.fuzzy_match(p.provider.name(), filter).is_some()
                     || matcher
-                        .fuzzy_match(p.provider.description(), &self.filter)
+                        .fuzzy_match(p.provider.description(), filter)
                         .is_some()
             })
             .cloned()
@@ -60,30 +61,6 @@ impl ProviderPicker {
         } else {
             self.list_state.select(None);
         }
-    }
-
-    /// Add character to filter.
-    pub fn push_char(&mut self, c: char) {
-        self.filter.push(c);
-        self.apply_filter();
-    }
-
-    /// Remove last character from filter.
-    pub fn pop_char(&mut self) {
-        self.filter.pop();
-        self.apply_filter();
-    }
-
-    /// Delete last word from filter (Ctrl+W).
-    pub fn delete_word(&mut self) {
-        // Trim trailing whitespace first
-        let trimmed = self.filter.trim_end();
-        if let Some(last_space) = trimmed.rfind(' ') {
-            self.filter.truncate(last_space + 1);
-        } else {
-            self.filter.clear();
-        }
-        self.apply_filter();
     }
 
     /// Move selection up.
@@ -165,22 +142,11 @@ impl ProviderPicker {
             .border_style(Style::default().fg(Color::Cyan))
             .title(" Filter (type to search) ");
 
-        let search_text = if self.filter.is_empty() {
-            " ...".to_string()
-        } else {
-            format!(" {}_", self.filter)
-        };
-
-        let search_style = if self.filter.is_empty() {
-            Style::default().dim()
-        } else {
-            Style::default().fg(Color::Yellow)
-        };
-
-        let search_para = Paragraph::new(search_text)
-            .style(search_style)
-            .block(search_block);
-        frame.render_widget(search_para, chunks[0]);
+        let search_input = TextInput::new().block(search_block);
+        frame.render_stateful_widget(search_input, chunks[0], &mut self.filter_input);
+        if let Some(cursor) = self.filter_input.screen_cursor() {
+            frame.set_cursor_position(cursor);
+        }
 
         // Column width for provider name
         let name_col_width = 20usize;

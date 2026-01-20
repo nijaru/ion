@@ -47,7 +47,7 @@ async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::err
         terminal::{disable_raw_mode, enable_raw_mode, supports_keyboard_enhancement},
     };
     use ion::tui::App;
-    use ratatui::{prelude::*, TerminalOptions, Viewport};
+    use ratatui::{TerminalOptions, Viewport, prelude::*};
     use std::io;
 
     // Setup terminal
@@ -117,9 +117,8 @@ async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::err
             terminal.show_cursor()?;
 
             // Open editor and get result
-            if let Some(new_input) = open_editor(&app.input)? {
-                app.input = new_input;
-                app.cursor_pos = app.input.len();
+            if let Some(new_input) = open_editor(&app.input_state.text())? {
+                app.set_input_text(&new_input);
             }
 
             // Re-enter TUI mode

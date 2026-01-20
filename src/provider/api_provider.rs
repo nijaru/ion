@@ -113,7 +113,6 @@ impl Provider {
     pub fn is_available(self) -> bool {
         self.api_key().is_some()
     }
-
 }
 
 /// Provider with availability status.

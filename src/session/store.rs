@@ -316,13 +316,11 @@ impl SessionStore {
 
     /// Load input history (most recent last).
     pub fn load_input_history(&self) -> Result<Vec<String>, SessionStoreError> {
-        let mut stmt = self.db.prepare(
-            "SELECT content FROM input_history ORDER BY created_at ASC",
-        )?;
+        let mut stmt = self
+            .db
+            .prepare("SELECT content FROM input_history ORDER BY created_at ASC")?;
 
-        let history: Result<Vec<String>, _> = stmt
-            .query_map([], |row| row.get(0))?
-            .collect();
+        let history: Result<Vec<String>, _> = stmt.query_map([], |row| row.get(0))?.collect();
 
         Ok(history?)
     }

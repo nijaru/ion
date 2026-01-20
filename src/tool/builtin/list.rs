@@ -50,10 +50,7 @@ impl Tool for ListTool {
         args: serde_json::Value,
         ctx: &ToolContext,
     ) -> Result<ToolResult, ToolError> {
-        let path = args
-            .get("path")
-            .and_then(|v| v.as_str())
-            .unwrap_or(".");
+        let path = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
 
         let depth = args
             .get("depth")

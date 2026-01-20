@@ -46,7 +46,7 @@
 
 ## Open Tasks
 
-Run `tk ls` for the live task list. **17 open tasks** as of 2026-01-20.
+Run `tk ls` for the live task list. **20 open tasks** as of 2026-01-20.
 
 **Active:**
 
@@ -58,7 +58,6 @@ Run `tk ls` for the live task list. **17 open tasks** as of 2026-01-20.
 
 | Task    | Issue                                                   |
 | ------- | ------------------------------------------------------- |
-| tk-p23w | Dependency audit/prune after inline refactor            |
 | tk-pcnt | Research: compare Codex, pi, opencode, Claude Code      |
 | tk-imza | ast-grep integration                                    |
 | tk-su1n | Large file handling - chunked reads                     |
@@ -74,7 +73,11 @@ Run `tk ls` for the live task list. **17 open tasks** as of 2026-01-20.
 | tk-iso7 | Hook system - Claude Code compatible lifecycle          |
 | tk-g1fy | Design modular streaming interface for providers        |
 | tk-x3zf | Model display format - provider:model vs just model     |
-| tk-xp0l | rat-text input integration (multi-line + selector)      |
+| tk-s2gj | BUG: Inline viewport resize handling + regression       |
+| tk-5h0j | AUDIT: Permission system review                         |
+| tk-t0ea | FEATURE: OAuth system design for providers              |
+| tk-e1ji | RESEARCH: Custom LLM provider vs llm crate              |
+| tk-gsiw | RESEARCH: System prompt comparison - Claude Code        |
 
 ## Session Work 2026-01-20
 
