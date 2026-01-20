@@ -55,6 +55,14 @@
 - Fuzzy matching for selector filters and slash command suggestions.
 - License updated to PolyForm Shield.
 
+**Recent fixes (in progress):**
+
+- History navigation + draft restore (Up/Down behavior).
+- Input box separators + prompt gutter; status line shows `[MODE]` in brackets.
+- Chat spacing tightened with a single spacer line above progress.
+- Approval prompt rendering fixed after input box refactor.
+- Write-mode approvals updated: write/edit no longer require approval.
+
 **Research (complete):**
 
 - Codex CLI uses custom `TextArea` and custom `fuzzy_match` (not a crate).
@@ -100,8 +108,8 @@
 
 **UX:**
 
-- Status line uses default context window rather than model-specific max (fix pending).
-- Provider API errors surface in chat but need cleaner handling.
+- Status line shows `used/0k` when max unknown; model max needs wiring from model registry.
+- OpenRouter timeouts are frequent; retry/backoff and chat logging pending.
 
 ## Design Documents
 
