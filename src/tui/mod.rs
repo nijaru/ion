@@ -1236,14 +1236,14 @@ impl App {
         const MIN_HEIGHT: u16 = 3;
         const MAX_HEIGHT: u16 = 10;
         const BORDER_OVERHEAD: u16 = 2; // Top and bottom borders
-        const PADDING: u16 = 0; // No inner padding for TextArea
+        const GUTTER_WIDTH: u16 = 3; // " > " prompt gutter
 
         if self.input_state.is_empty() {
             return MIN_HEIGHT;
         }
 
-        // Available width for text (subtract borders and padding)
-        let text_width = terminal_width.saturating_sub(BORDER_OVERHEAD + PADDING) as usize;
+        // Available width for text (subtract prompt gutter)
+        let text_width = terminal_width.saturating_sub(GUTTER_WIDTH) as usize;
         if text_width == 0 {
             return MIN_HEIGHT;
         }
@@ -1631,27 +1631,61 @@ impl App {
                     ToolMode::Agi => Color::Red,
                 };
 
-                let mut input_block = Block::default()
-                    .borders(Borders::ALL)
+                let input_block = Block::default()
+                    .borders(Borders::TOP | Borders::BOTTOM)
                     .border_style(Style::default().fg(mode_color))
                     .title(format!(" [{}] ", mode_label));
 
                 // Show thinking level on right side
                 let thinking_label = self.thinking_level.label();
-                if !thinking_label.is_empty() {
-                    input_block = input_block.title(
+                let input_block = if !thinking_label.is_empty() {
+                    input_block.title(
                         Line::from(Span::styled(
                             format!(" {} ", thinking_label),
                             Style::default().fg(Color::Magenta),
                         ))
                         .right_aligned(),
-                    );
-                }
+                    )
+                } else {
+                    input_block
+                };
 
-                let input = TextArea::new()
-                    .block(input_block)
-                    .text_wrap(TextWrap::Word(1));
-                frame.render_stateful_widget(input, chunks[2], &mut self.input_state);
+                frame.render_widget(input_block.clone(), chunks[2]);
+                let inner = input_block.inner(chunks[2]);
+                if inner.width > 0 && inner.height > 0 {
+                    let gutter_width = inner.width.min(3);
+                    if gutter_width > 0 {
+                        let prompt_area = Rect {
+                            x: inner.x,
+                            y: inner.y,
+                            width: gutter_width,
+                            height: inner.height,
+                        };
+                        let prompt = match gutter_width {
+                            1 => ">".to_string(),
+                            2 => "> ".to_string(),
+                            _ => " > ".to_string(),
+                        };
+                        let blank = " ".repeat(gutter_width as usize);
+                        let prompt_lines: Vec<Line> = (0..inner.height)
+                            .map(|row| {
+                                let symbol = if row == 0 { &prompt } else { &blank };
+                                Line::from(Span::styled(symbol.clone(), Style::default().dim()))
+                            })
+                            .collect();
+                        frame.render_widget(Paragraph::new(prompt_lines), prompt_area);
+                    }
+
+                    let text_area = Rect {
+                        x: inner.x + gutter_width,
+                        y: inner.y,
+                        width: inner.width.saturating_sub(gutter_width),
+                        height: inner.height,
+                    };
+
+                    let input = TextArea::new().text_wrap(TextWrap::Word(1));
+                    frame.render_stateful_widget(input, text_area, &mut self.input_state);
+                }
 
                 if let Some(cursor) = self.input_state.screen_cursor() {
                     frame.set_cursor_position(cursor);
