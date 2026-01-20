@@ -24,6 +24,7 @@ ignore = "0.4.25"
 llm-connector = { version = "0.5.13", features = ["streaming"] }
 mcp-sdk-rs = "0.3.4"
 minijinja = "2.14.0"
+rat-text = "3.0.3"
 ratatui = "0.30"
 regex = "1.12.2"
 reqwest = { version = "0.12.28", features = ["json", "stream"] }

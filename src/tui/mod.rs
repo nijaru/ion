@@ -17,6 +17,10 @@ use crate::tui::model_picker::ModelPicker;
 use crate::tui::provider_picker::ProviderPicker;
 use async_trait::async_trait;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+use rat_text::event::TextOutcome;
+use rat_text::text_area::{self, TextArea, TextAreaState, TextWrap};
+use rat_text::text_input::{self, TextInput};
+use rat_text::{HasScreenCursor, TextPosition};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 use serde::Deserialize;
@@ -109,9 +113,7 @@ pub struct App {
     pub mode: Mode,
     pub selector_page: SelectorPage,
     pub should_quit: bool,
-    pub input: String,
-    /// Cursor position within the input string
-    pub cursor_pos: usize,
+    pub input_state: TextAreaState,
     /// Input history for arrow-up recall
     pub input_history: Vec<String>,
     /// Current position in history (input_history.len() = current input)
@@ -206,25 +208,96 @@ impl ApprovalHandler for TuiApprovalHandler {
 
 use tracing::{debug, error};
 
-use unicode_segmentation::UnicodeSegmentation;
-
 impl App {
-    fn move_cursor_left(&mut self) {
-        let new_pos = self.input[..self.cursor_pos]
-            .grapheme_indices(true)
-            .next_back()
-            .map(|(i, _)| i)
-            .unwrap_or(0);
-        self.cursor_pos = new_pos;
+    fn input_text(&self) -> String {
+        self.input_state.text()
     }
 
-    fn move_cursor_right(&mut self) {
-        let new_pos = self.input[self.cursor_pos..]
-            .grapheme_indices(true)
-            .next()
-            .map(|(_, g)| self.cursor_pos + g.len())
-            .unwrap_or(self.input.len());
-        self.cursor_pos = new_pos;
+    fn clear_input(&mut self) {
+        self.input_state.clear();
+    }
+
+    pub fn set_input_text(&mut self, text: &str) {
+        self.input_state.set_text(text);
+        self.move_input_cursor_to_end();
+    }
+
+    fn move_input_cursor_to_end(&mut self) {
+        let lines = self.input_state.value.len_lines();
+        if lines == 0 {
+            return;
+        }
+        let last_line = lines.saturating_sub(1);
+        let last_col = self.input_state.value.line_width(last_line).unwrap_or(0);
+        let pos = TextPosition::new(last_col, last_line);
+        let _ = self.input_state.value.set_cursor(pos, false);
+        self.input_state.scroll_cursor_to_visible();
+    }
+
+    fn input_cursor_line(&self) -> u32 {
+        self.input_state.value.cursor().y
+    }
+
+    fn input_last_line(&self) -> u32 {
+        self.input_state.value.len_lines().saturating_sub(1)
+    }
+
+    fn handle_input_event(&mut self, key: KeyEvent) -> TextOutcome {
+        let event = Event::Key(key);
+        text_area::handle_events(&mut self.input_state, true, &event)
+    }
+
+    fn handle_input_up(&mut self) -> bool {
+        if self.input_cursor_line() != 0 {
+            return false;
+        }
+
+        if self.is_running && self.input_state.is_empty() {
+            let queued = self.message_queue.as_ref().and_then(|queue| {
+                if let Ok(mut q) = queue.lock() {
+                    if q.is_empty() {
+                        None
+                    } else {
+                        Some(q.drain(..).collect::<Vec<_>>())
+                    }
+                } else {
+                    None
+                }
+            });
+
+            if let Some(queued) = queued {
+                self.set_input_text(&queued.join("\n\n"));
+                return true;
+            }
+        }
+
+        if !self.input_history.is_empty() && self.history_index > 0 {
+            self.history_index -= 1;
+            let entry = self.input_history[self.history_index].clone();
+            self.set_input_text(&entry);
+            return true;
+        }
+
+        false
+    }
+
+    fn handle_input_down(&mut self) -> bool {
+        if self.input_cursor_line() < self.input_last_line() {
+            return false;
+        }
+
+        if self.history_index < self.input_history.len() {
+            self.history_index += 1;
+            if self.history_index == self.input_history.len() {
+                self.clear_input();
+            } else {
+                let entry = self.input_history[self.history_index].clone();
+                self.set_input_text(&entry);
+            }
+            return true;
+        }
+
+        false
     }
     pub async fn new() -> Self {
         Self::with_permissions(PermissionSettings::default()).await
@@ -340,12 +413,16 @@ impl App {
             (Mode::Input, SelectorPage::Provider)
         };
 
+        let mut input_state = TextAreaState::default();
+        input_state.set_text_wrap(TextWrap::Word(1));
+        input_state.set_auto_indent(false);
+        input_state.set_auto_quote(false);
+
         let mut this = Self {
             mode: initial_mode,
             selector_page,
             should_quit: false,
-            input: String::new(),
-            cursor_pos: 0,
+            input_state,
             input_history: Vec::new(),
             history_index: 0,
             tool_mode: permissions.mode,
@@ -541,7 +618,6 @@ impl App {
             self.pending_approval = Some(request);
             self.mode = Mode::Approval;
         }
-
     }
 
     pub fn handle_event(&mut self, event: Event) {
@@ -560,6 +636,7 @@ impl App {
     /// Main input handler - always active unless a modal is open
     fn handle_input_mode(&mut self, key: KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
 
         match key.code {
             // Ctrl+C: Cancel running task / clear input / quit
@@ -568,10 +645,9 @@ impl App {
                     // Immediately cancel running task - no double-tap needed
                     self.session.abort_token.cancel();
                     self.cancel_pending = None;
-                } else if !self.input.is_empty() {
+                } else if !self.input_state.is_empty() {
                     // Clear input if not empty
-                    self.input.clear();
-                    self.cursor_pos = 0;
+                    self.clear_input();
                 } else {
                     // Empty input, not running - double-tap to quit
                     if let Some(when) = self.cancel_pending {
@@ -588,7 +664,7 @@ impl App {
 
             // Ctrl+D: Quit if input empty
             KeyCode::Char('d') if ctrl => {
-                if self.input.is_empty() {
+                if self.input_state.is_empty() {
                     self.quit();
                 }
             }
@@ -653,58 +729,53 @@ impl App {
             }
 
             // Shift+Enter: Insert newline (requires Kitty keyboard protocol)
-            KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => {
-                self.input.insert(self.cursor_pos, '\n');
-                self.cursor_pos += 1;
+            KeyCode::Enter if shift => {
+                self.input_state.insert_newline();
             }
 
             // Enter: Send message or queue for mid-task steering
             KeyCode::Enter => {
-                if !self.input.is_empty() {
+                if !self.input_state.is_empty() {
+                    let input = self.input_text();
                     if self.is_running {
                         // Queue message for injection at next turn
-                        if let Some(ref queue) = self.message_queue {
-                            let msg = std::mem::take(&mut self.input);
-                            self.cursor_pos = 0;
+                        if let Some(queue) = self.message_queue.as_ref() {
                             if let Ok(mut q) = queue.lock() {
-                                q.push(msg);
+                                q.push(input);
                             }
                         }
+                        self.clear_input();
                     } else {
                         // Check for slash commands
-                        if self.input.starts_with('/') {
+                        if input.starts_with('/') {
                             const COMMANDS: [&str; 5] =
                                 ["/model", "/provider", "/clear", "/quit", "/help"];
-                            let cmd_line = self.input.trim().to_lowercase();
+                            let cmd_line = input.trim().to_lowercase();
                             let cmd_name = cmd_line.split_whitespace().next().unwrap_or("");
                             match cmd_name {
                                 "/model" | "/models" => {
-                                    self.input.clear();
-                                    self.cursor_pos = 0;
+                                    self.clear_input();
                                     self.open_model_selector();
                                     return;
                                 }
                                 "/provider" | "/providers" => {
-                                    self.input.clear();
-                                    self.cursor_pos = 0;
+                                    self.clear_input();
                                     self.open_provider_selector();
                                     return;
                                 }
                                 "/quit" | "/exit" | "/q" => {
-                                    self.input.clear();
+                                    self.clear_input();
                                     self.quit();
                                     return;
                                 }
                                 "/clear" => {
-                                    self.input.clear();
-                                    self.cursor_pos = 0;
+                                    self.clear_input();
                                     self.message_list.clear();
                                     self.session.messages.clear();
                                     return;
                                 }
                                 "/help" | "/?" => {
-                                    self.input.clear();
-                                    self.cursor_pos = 0;
+                                    self.clear_input();
                                     self.mode = Mode::HelpOverlay;
                                     return;
                                 }
@@ -731,18 +802,16 @@ impl App {
                                             ),
                                         );
                                     }
-                                    self.input.clear();
-                                    self.cursor_pos = 0;
+                                    self.clear_input();
                                     return;
                                 }
                             }
                         }
 
                         // Send message
-                        let input = std::mem::take(&mut self.input);
                         self.input_history.push(input.clone());
                         self.history_index = self.input_history.len();
-                        self.cursor_pos = 0;
+                        self.clear_input();
                         // Persist to database
                         let _ = self.store.add_input_history(&input);
                         self.message_list.push_user_message(input.clone());
@@ -757,210 +826,27 @@ impl App {
 
             // Arrow Up: Move cursor up, recall queued messages, or recall history
             KeyCode::Up => {
-                // Check if cursor is at start of input (or no newlines above)
-                let at_top = self.cursor_pos == 0 || !self.input[..self.cursor_pos].contains('\n');
-                if at_top {
-                    // If running and queue has messages, pull all queued messages for editing
-                    if self.is_running
-                        && self.input.is_empty()
-                        && let Some(ref queue) = self.message_queue
-                        && let Ok(mut q) = queue.lock()
-                    {
-                        if !q.is_empty() {
-                            let queued = q.drain(..).collect::<Vec<_>>();
-                            self.input = queued.join("\n\n");
-                            self.cursor_pos = self.input.len();
-                            return;
-                        }
-                    }
-                    // Fall back to input history
-                    if !self.input_history.is_empty() && self.history_index > 0 {
-                        self.history_index -= 1;
-                        self.input = self.input_history[self.history_index].clone();
-                        self.cursor_pos = self.input.len();
-                    }
-                } else {
-                    // Move cursor up one line
-                    self.move_cursor_vertically(-1);
+                if !self.handle_input_up() {
+                    self.handle_input_event(key);
                 }
             }
 
             // Arrow Down: Move cursor down, or restore newer history
             KeyCode::Down => {
-                let at_bottom = self.cursor_pos == self.input.len()
-                    || !self.input[self.cursor_pos..].contains('\n');
-                if at_bottom {
-                    if self.history_index < self.input_history.len() {
-                        self.history_index += 1;
-                        if self.history_index == self.input_history.len() {
-                            self.input.clear();
-                        } else {
-                            self.input = self.input_history[self.history_index].clone();
-                        }
-                        self.cursor_pos = self.input.len();
-                    }
-                } else {
-                    self.move_cursor_vertically(1);
-                }
-            }
-
-            // Arrow Left/Right: Move cursor
-            KeyCode::Left => {
-                if ctrl {
-                    // Word-by-word movement
-                    self.cursor_pos = self.find_word_boundary_left();
-                } else {
-                    self.move_cursor_left();
-                }
-            }
-            KeyCode::Right => {
-                if ctrl {
-                    self.cursor_pos = self.find_word_boundary_right();
-                } else {
-                    self.move_cursor_right();
-                }
-            }
-
-            // Home/End: Line start/end
-            KeyCode::Home => {
-                // Find start of current line
-                self.cursor_pos = self.input[..self.cursor_pos]
-                    .rfind('\n')
-                    .map(|i| i + 1)
-                    .unwrap_or(0);
-            }
-            KeyCode::End => {
-                // Find end of current line
-                self.cursor_pos = self.input[self.cursor_pos..]
-                    .find('\n')
-                    .map(|i| self.cursor_pos + i)
-                    .unwrap_or(self.input.len());
-            }
-
-            // Ctrl+W: Delete word before cursor
-            KeyCode::Char('w') if ctrl => {
-                if self.cursor_pos > 0 {
-                    // Find start of previous word (skip trailing spaces, then word chars)
-                    let chars: Vec<char> = self.input.chars().collect();
-                    let mut pos = self.cursor_pos;
-                    // Skip spaces
-                    while pos > 0 && chars[pos - 1].is_whitespace() {
-                        pos -= 1;
-                    }
-                    // Skip word chars
-                    while pos > 0 && !chars[pos - 1].is_whitespace() {
-                        pos -= 1;
-                    }
-                    // Remove from pos to cursor_pos
-                    self.input = chars[..pos]
-                        .iter()
-                        .chain(chars[self.cursor_pos..].iter())
-                        .collect();
-                    self.cursor_pos = pos;
-                }
-            }
-
-            // Backspace: Delete char before cursor
-            KeyCode::Backspace => {
-                if self.cursor_pos > 0 {
-                    self.move_cursor_left();
-                    self.input.remove(self.cursor_pos);
-                }
-            }
-
-            // Delete: Delete char at cursor
-            KeyCode::Delete => {
-                if self.cursor_pos < self.input.len() {
-                    self.input.remove(self.cursor_pos);
+                if !self.handle_input_down() {
+                    self.handle_input_event(key);
                 }
             }
 
             // ? shows help when input is empty
-            KeyCode::Char('?') if self.input.is_empty() => {
+            KeyCode::Char('?') if self.input_state.is_empty() => {
                 self.mode = Mode::HelpOverlay;
             }
 
-            // Character input
-            KeyCode::Char(c) => {
-                if !ctrl {
-                    self.input.insert(self.cursor_pos, c);
-                    self.cursor_pos += c.len_utf8();
-                }
+            _ => {
+                self.handle_input_event(key);
             }
-
-            _ => {}
         }
-    }
-
-    /// Move cursor vertically by n lines (negative = up)
-    fn move_cursor_vertically(&mut self, delta: i32) {
-        if delta == 0 || self.input.is_empty() {
-            return;
-        }
-
-        let lines: Vec<&str> = self.input.split('\n').collect();
-        let mut pos = 0;
-        let mut current_line = 0;
-        let mut col = 0;
-
-        // Find current line and column
-        for (i, line) in lines.iter().enumerate() {
-            if pos + line.len() >= self.cursor_pos {
-                current_line = i;
-                col = self.cursor_pos - pos;
-                break;
-            }
-            pos += line.len() + 1; // +1 for newline
-        }
-
-        // Calculate target line
-        let target_line = (current_line as i32 + delta).clamp(0, lines.len() as i32 - 1) as usize;
-
-        // Calculate new position
-        let mut new_pos = 0;
-        for line in &lines[..target_line] {
-            new_pos += line.len() + 1;
-        }
-        new_pos += col.min(lines[target_line].len());
-
-        self.cursor_pos = new_pos;
-    }
-
-    fn find_word_boundary_left(&self) -> usize {
-        if self.cursor_pos == 0 {
-            return 0;
-        }
-        let bytes = self.input.as_bytes();
-        let mut pos = self.cursor_pos - 1;
-
-        // Skip whitespace
-        while pos > 0 && bytes[pos].is_ascii_whitespace() {
-            pos -= 1;
-        }
-        // Skip word chars
-        while pos > 0 && !bytes[pos - 1].is_ascii_whitespace() {
-            pos -= 1;
-        }
-        pos
-    }
-
-    fn find_word_boundary_right(&self) -> usize {
-        let len = self.input.len();
-        if self.cursor_pos >= len {
-            return len;
-        }
-        let bytes = self.input.as_bytes();
-        let mut pos = self.cursor_pos;
-
-        // Skip current word
-        while pos < len && !bytes[pos].is_ascii_whitespace() {
-            pos += 1;
-        }
-        // Skip whitespace
-        while pos < len && bytes[pos].is_ascii_whitespace() {
-            pos += 1;
-        }
-        pos
     }
 
     fn handle_approval_mode(&mut self, key: KeyEvent) {
@@ -1051,6 +937,7 @@ impl App {
     fn handle_selector_mode(&mut self, key: KeyEvent) {
         use crate::tui::model_picker::PickerStage;
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let mut handled = true;
 
         match key.code {
             // Ctrl+C: Quit (always works, even during setup)
@@ -1118,21 +1005,17 @@ impl App {
                 },
             },
 
-            // Back navigation
+            // Backspace: when empty on model stage, go back to providers (if allowed)
             KeyCode::Backspace if self.selector_page == SelectorPage::Model => {
-                if self.model_picker.filter.is_empty()
+                if self.model_picker.filter_input.text().is_empty()
                     && self.model_picker.stage == PickerStage::Model
                     && !self.needs_setup
                 {
                     self.model_picker.back_to_providers();
                 } else {
-                    self.model_picker.pop_char();
+                    handled = false;
                 }
             }
-            KeyCode::Backspace => match self.selector_page {
-                SelectorPage::Provider => self.provider_picker.pop_char(),
-                SelectorPage::Model => self.model_picker.pop_char(),
-            },
 
             // Cancel / Back
             KeyCode::Esc => {
@@ -1159,17 +1042,28 @@ impl App {
                 self.open_model_selector();
             }
 
-            // Type to filter (only without ctrl, except Ctrl+W for delete word)
-            KeyCode::Char('w') if ctrl => match self.selector_page {
-                SelectorPage::Provider => self.provider_picker.delete_word(),
-                SelectorPage::Model => {}
-            },
-            KeyCode::Char(c) if !ctrl => match self.selector_page {
-                SelectorPage::Provider => self.provider_picker.push_char(c),
-                SelectorPage::Model => self.model_picker.push_char(c),
-            },
+            _ => {
+                handled = false;
+            }
+        }
 
-            _ => {}
+        if !handled {
+            let event = Event::Key(key);
+            let outcome = match self.selector_page {
+                SelectorPage::Provider => {
+                    text_input::handle_events(&mut self.provider_picker.filter_input, true, &event)
+                }
+                SelectorPage::Model => {
+                    text_input::handle_events(&mut self.model_picker.filter_input, true, &event)
+                }
+            };
+
+            if matches!(outcome, TextOutcome::TextChanged) {
+                match self.selector_page {
+                    SelectorPage::Provider => self.provider_picker.apply_filter(),
+                    SelectorPage::Model => self.model_picker.apply_filter(),
+                }
+            }
         }
     }
 
@@ -1284,43 +1178,15 @@ impl App {
         let _ = std::fs::write(path, snapshot);
     }
 
-    /// Calculate cursor row and column for multi-line input.
-    /// Returns (row, col) where row is 0-indexed from top of input area.
-    fn calculate_cursor_position(&self, text_width: usize) -> (usize, usize) {
-        if text_width == 0 {
-            return (0, 0);
-        }
-
-        let text_before_cursor = &self.input[..self.cursor_pos];
-        let mut row = 0;
-        let mut col = 0;
-
-        for ch in text_before_cursor.chars() {
-            if ch == '\n' {
-                row += 1;
-                col = 0;
-            } else {
-                col += 1;
-                // Handle line wrapping
-                if col >= text_width {
-                    row += 1;
-                    col = 0;
-                }
-            }
-        }
-
-        (row, col)
-    }
-
     /// Calculate the height needed for the input box based on content.
     /// Returns height including borders (min 3, max 10).
     fn calculate_input_height(&self, terminal_width: u16) -> u16 {
         const MIN_HEIGHT: u16 = 3;
         const MAX_HEIGHT: u16 = 10;
         const BORDER_OVERHEAD: u16 = 2; // Top and bottom borders
-        const PADDING: u16 = 3; // Left padding + margins
+        const PADDING: u16 = 0; // No inner padding for TextArea
 
-        if self.input.is_empty() {
+        if self.input_state.is_empty() {
             return MIN_HEIGHT;
         }
 
@@ -1331,8 +1197,9 @@ impl App {
         }
 
         // Count lines: explicit newlines + wrapped lines
+        let input = self.input_state.text();
         let mut line_count: u16 = 0;
-        for line in self.input.split('\n') {
+        for line in input.split('\n') {
             // Each line takes at least 1 row, plus wrapping
             let line_len = line.chars().count();
             let wrapped_lines = if line_len == 0 {
@@ -1434,7 +1301,11 @@ impl App {
                     let md = tui_markdown::from_str(&combined);
                     for line in &md.lines {
                         let mut padded = vec![Span::styled("> ", Style::default().fg(Color::Cyan))];
-                        padded.extend(line.spans.clone());
+                        padded.extend(
+                            line.spans
+                                .iter()
+                                .map(|span| Span::styled(span.content.to_string(), span.style)),
+                        );
                         chat_lines.push(Line::from(padded));
                     }
                 }
@@ -1443,7 +1314,8 @@ impl App {
                         match part {
                             crate::tui::message_list::MessagePart::Text(text) => {
                                 // Use custom markdown renderer with syntax highlighting for code blocks
-                                let highlighted_lines = highlight::highlight_markdown_with_code(text);
+                                let highlighted_lines =
+                                    highlight::highlight_markdown_with_code(text);
                                 for line in highlighted_lines {
                                     let mut padded = vec![Span::raw(" ")];
                                     padded.extend(line.spans);
@@ -1565,10 +1437,8 @@ impl App {
                     let content = entry.content_as_markdown();
                     if content.lines().count() <= 1 {
                         let text = format!("[{}]", content.trim());
-                        chat_lines.push(Line::from(vec![Span::styled(
-                            text,
-                            Style::default().dim(),
-                        )]));
+                        chat_lines
+                            .push(Line::from(vec![Span::styled(text, Style::default().dim())]));
                     } else {
                         let md = tui_markdown::from_str(content);
                         for line in &md.lines {
@@ -1734,25 +1604,13 @@ impl App {
                     );
                 }
 
-                // Build input text with cursor (1-space left padding)
-                let input_text = format!(" {}", self.input);
-                let input_para = Paragraph::new(input_text)
+                let input = TextArea::new()
                     .block(input_block)
-                    .wrap(Wrap { trim: false });
-                frame.render_widget(input_para, chunks[2]);
+                    .text_wrap(TextWrap::Word(1));
+                frame.render_stateful_widget(input, chunks[2], &mut self.input_state);
 
-                // Calculate cursor position for multi-line input
-                let inner_width = chunks[2].width.saturating_sub(3) as usize; // borders + padding
-                let (cursor_row, cursor_col) = self.calculate_cursor_position(inner_width);
-
-                let cursor_x = chunks[2].x + 2 + cursor_col as u16;
-                let cursor_y = chunks[2].y + 1 + cursor_row as u16;
-
-                // Only show cursor if within bounds
-                if cursor_x < chunks[2].x + chunks[2].width - 1
-                    && cursor_y < chunks[2].y + chunks[2].height - 1
-                {
-                    frame.set_cursor_position((cursor_x, cursor_y));
+                if let Some(cursor) = self.input_state.screen_cursor() {
+                    frame.set_cursor_position(cursor);
                 }
             }
 
@@ -1831,17 +1689,15 @@ impl App {
     fn render_selector_shell(&mut self, frame: &mut Frame) {
         let area = frame.area();
 
-        let (title, description, filter, list_len) = match self.selector_page {
+        let (title, description, list_len) = match self.selector_page {
             SelectorPage::Provider => (
                 "Providers",
                 "Select a provider",
-                self.provider_picker.filter.clone(),
                 self.provider_picker.filtered.len(),
             ),
             SelectorPage::Model => (
                 "Models",
                 "Select a model",
-                self.model_picker.filter.clone(),
                 self.model_picker.filtered_models.len(),
             ),
         };
@@ -1896,22 +1752,29 @@ impl App {
             .border_style(Style::default().fg(Color::Cyan))
             .title(format!(" {} ", title));
 
-        let search_text = if filter.is_empty() {
-            " Search...".to_string()
-        } else {
-            format!(" {}_", filter)
-        };
-
-        let search_style = if filter.is_empty() {
-            Style::default().dim()
-        } else {
-            Style::default().fg(Color::Yellow)
-        };
-
-        let search_para = Paragraph::new(search_text)
-            .style(search_style)
-            .block(search_block);
-        frame.render_widget(search_para, chunks[2]);
+        let search_input = TextInput::new().block(search_block);
+        match self.selector_page {
+            SelectorPage::Provider => {
+                frame.render_stateful_widget(
+                    search_input,
+                    chunks[2],
+                    &mut self.provider_picker.filter_input,
+                );
+                if let Some(cursor) = self.provider_picker.filter_input.screen_cursor() {
+                    frame.set_cursor_position(cursor);
+                }
+            }
+            SelectorPage::Model => {
+                frame.render_stateful_widget(
+                    search_input,
+                    chunks[2],
+                    &mut self.model_picker.filter_input,
+                );
+                if let Some(cursor) = self.model_picker.filter_input.screen_cursor() {
+                    frame.set_cursor_position(cursor);
+                }
+            }
+        }
 
         match self.selector_page {
             SelectorPage::Provider => {
@@ -1968,10 +1831,15 @@ impl App {
             }
             SelectorPage::Model => {
                 if self.model_picker.is_loading {
-                    let provider_name = self.model_picker.api_provider_name.as_deref().unwrap_or("provider");
-                    let loading = Paragraph::new(format!("Loading models from {}...", provider_name))
-                        .style(Style::default().fg(Color::Yellow))
-                        .block(Block::default().borders(Borders::ALL).title(" Loading "));
+                    let provider_name = self
+                        .model_picker
+                        .api_provider_name
+                        .as_deref()
+                        .unwrap_or("provider");
+                    let loading =
+                        Paragraph::new(format!("Loading models from {}...", provider_name))
+                            .style(Style::default().fg(Color::Yellow))
+                            .block(Block::default().borders(Borders::ALL).title(" Loading "));
                     frame.render_widget(loading, chunks[3]);
                 } else if let Some(ref err) = self.model_picker.error {
                     let error = Paragraph::new(format!("Error: {}", err))
@@ -2011,7 +1879,11 @@ impl App {
                         )
                         .highlight_symbol("▸ ");
 
-                    frame.render_stateful_widget(list, chunks[3], &mut self.model_picker.model_state);
+                    frame.render_stateful_widget(
+                        list,
+                        chunks[3],
+                        &mut self.model_picker.model_state,
+                    );
                 }
             }
         }

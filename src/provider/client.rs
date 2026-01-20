@@ -74,11 +74,9 @@ impl Client {
                     LlmClient::ollama()
                 }
             }
-            Provider::OpenRouter => LlmClient::openai_compatible(
-                api_key,
-                "https://openrouter.ai/api/v1",
-                "openrouter",
-            ),
+            Provider::OpenRouter => {
+                LlmClient::openai_compatible(api_key, "https://openrouter.ai/api/v1", "openrouter")
+            }
             Provider::Groq => {
                 LlmClient::openai_compatible(api_key, "https://api.groq.com/openai/v1", "groq")
             }
@@ -153,7 +151,11 @@ impl Client {
                             ..
                         } = block
                         {
-                            tracing::debug!("Tool result: id={}, content_len={}", tool_call_id, content.len());
+                            tracing::debug!(
+                                "Tool result: id={}, content_len={}",
+                                tool_call_id,
+                                content.len()
+                            );
                             // Note: llm-connector expects (content, tool_call_id) order
                             result.push(llm_connector::Message::tool(content, tool_call_id));
                         }
@@ -232,14 +234,10 @@ impl LlmApi for Client {
     ) -> Result<(), Error> {
         let llm_request = Self::build_request(&request);
 
-        let mut stream = self
-            .client
-            .chat_stream(&llm_request)
-            .await
-            .map_err(|e| {
-                tracing::error!("Stream error from {}: {:?}", self.provider.id(), e);
-                Error::Stream(format!("{} ({})", e, self.provider.id()))
-            })?;
+        let mut stream = self.client.chat_stream(&llm_request).await.map_err(|e| {
+            tracing::error!("Stream error from {}: {:?}", self.provider.id(), e);
+            Error::Stream(format!("{} ({})", e, self.provider.id()))
+        })?;
 
         while let Some(chunk_result) = stream.next().await {
             match chunk_result {
@@ -307,26 +305,22 @@ impl LlmApi for Client {
             }
         }
 
-        let response = self
-            .client
-            .chat(&llm_request)
-            .await
-            .map_err(|e| {
-                // Log full error details for debugging
-                tracing::error!(
-                    "API error: provider={}, model={}, error={:?}",
-                    self.provider.id(),
-                    llm_request.model,
-                    e
-                );
-                // Format error with helpful context
-                Error::Api(format!(
-                    "{}\n  Provider: {}\n  Model: {}",
-                    e,
-                    self.provider.id(),
-                    llm_request.model
-                ))
-            })?;
+        let response = self.client.chat(&llm_request).await.map_err(|e| {
+            // Log full error details for debugging
+            tracing::error!(
+                "API error: provider={}, model={}, error={:?}",
+                self.provider.id(),
+                llm_request.model,
+                e
+            );
+            // Format error with helpful context
+            Error::Api(format!(
+                "{}\n  Provider: {}\n  Model: {}",
+                e,
+                self.provider.id(),
+                llm_request.model
+            ))
+        })?;
 
         let mut content_blocks = Vec::new();
 
@@ -347,7 +341,11 @@ impl LlmApi for Client {
                 for tc in tool_calls {
                     let arguments = serde_json::from_str(&tc.function.arguments)
                         .inspect_err(|e| {
-                            tracing::warn!("Malformed tool arguments for {}: {}", tc.function.name, e)
+                            tracing::warn!(
+                                "Malformed tool arguments for {}: {}",
+                                tc.function.name,
+                                e
+                            )
                         })
                         .unwrap_or(serde_json::Value::Null);
                     content_blocks.push(ContentBlock::ToolCall {
