@@ -538,7 +538,6 @@ impl App {
                     self.current_tool = None;
                     // Auto-scroll to bottom so user sees completion
                     self.message_list.scroll_to_bottom();
-                    self.message_list.push_event(event);
                 }
                 AgentEvent::Error(msg) => {
                     // Check if this was a cancellation
