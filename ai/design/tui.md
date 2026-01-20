@@ -29,6 +29,7 @@ A professional, high-readability terminal interface built with `ratatui`, design
 | `Ctrl+H`      | Help overlay                                  |
 | `PageUp/Down` | Terminal scrollback (native)                  |
 | `Up/Down`     | History recall / cursor movement              |
+| `Up` (running, input empty) | Pull queued messages into editor |
 
 ### 3.2 Slash Commands
 

@@ -180,12 +180,18 @@ fn draw_viewport(&mut self, frame: &mut Frame) {
   - On startup: if no provider configured, open Provider page. If provider set but no model, open Model page.
 - **State**: query string, filtered results, selection index, scroll offset.
 - **Input**: type-to-filter, arrows for navigation, Enter to apply, Esc to exit.
-- **Search**: Fuzzy match preferred for provider/model lists; fallback to substring if no matches.
+- **Search**: Fuzzy match for provider/model, filename `@` inclusion, and slash commands.
 
 ## Input Handling
 
 - **Goal**: Avoid custom cursor/selection edge cases (graphemes, emojis, multi-line).
 - **Plan**: Evaluate `rat-text` for multi-line input and selector search; if insufficient, use `tui-input` for selector search and keep custom multi-line input with stricter grapheme handling.
+
+## Message Queue Behavior
+
+- **Queueing**: While a task is running, Enter enqueues messages (FIFO).
+- **Submission**: All queued messages are inserted into the session on the next turn and submitted together.
+- **Editing**: Pressing Up when input is empty pulls all queued messages back into the input editor for batch editing.
 
 ## Message Formatting
 
