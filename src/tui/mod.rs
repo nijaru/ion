@@ -1316,6 +1316,14 @@ impl App {
                 }
                 Sender::Tool => {
                     let content = entry.content_as_markdown();
+                    let has_error = content
+                        .lines()
+                        .any(|line| line.starts_with("⎿ Error:") || line.starts_with("  Error:"));
+                    let tool_prefix = if has_error {
+                        Span::styled("• ", Style::default().fg(Color::Red))
+                    } else {
+                        Span::raw("• ")
+                    };
                     // Tool messages: first line is call, rest are results
                     let mut lines = content.lines();
 
@@ -1344,14 +1352,14 @@ impl App {
                             }
 
                             chat_lines.push(Line::from(vec![
-                                Span::raw("  "),
+                                tool_prefix.clone(),
                                 Span::styled(tool_name, Style::default().bold()),
                                 Span::raw(args),
                             ]));
                         } else {
                             // No args, just tool name
                             chat_lines.push(Line::from(vec![
-                                Span::raw("  "),
+                                tool_prefix.clone(),
                                 Span::styled(first_line, Style::default().bold()),
                             ]));
                         }
