@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "3lzf",
+  "title": "Review fuzzy search match ordering (substring first, fuzzy fallback)",
+  "description": null,
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-20T21:09:31.871Z",
+  "updated_at": "2026-01-20T21:09:31.871Z",
+  "completed_at": null,
+  "external": {}
+}

@@ -61,7 +61,8 @@
 - Input box separators + prompt gutter; status line shows `[MODE]` in brackets.
 - Chat spacing tightened with a single spacer line above progress.
 - Approval prompt rendering fixed after input box refactor.
-- Write-mode approvals updated: write/edit no longer require approval.
+- Write-mode approvals correction pending (remove non-bash auto-allow).
+- Refactor plan: split `App::draw`, extract chat renderer, and centralize token usage emission.
 
 **Research (complete):**
 

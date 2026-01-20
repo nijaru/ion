@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "gep6",
+  "title": "Extract token usage emit helper in agent",
+  "description": null,
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-20T21:42:37.792Z",
+  "updated_at": "2026-01-20T21:42:37.792Z",
+  "completed_at": null,
+  "external": {}
+}

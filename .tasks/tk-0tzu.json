@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "0tzu",
+  "title": "Extract chat renderer module from tui draw",
+  "description": null,
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-20T21:42:33.454Z",
+  "updated_at": "2026-01-20T21:42:33.454Z",
+  "completed_at": null,
+  "external": {}
+}

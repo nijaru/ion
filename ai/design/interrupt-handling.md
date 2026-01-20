@@ -40,6 +40,18 @@ User presses Ctrl+C
 
 ## Implementation
 
+## Progress Line States
+
+The ionizing/progress line reflects run state only (no duplication in the status line):
+
+- **Running**: spinner + “Ionizing...” (normal color)
+- **Cancelling**: spinner + “Cancelling...” (yellow)
+- **Cancelled**: “! Cancelled” (yellow)
+- **Error**: “✗ Error” (red)
+- **Completed**: “✓ Completed” (green)
+
+Future: consider a “Retrying...” state on the progress line when provider retries are added.
+
 ### 1. Track Tool Execution State
 
 ```rust
