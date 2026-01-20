@@ -31,6 +31,13 @@ User presses Ctrl+C
   → If input is empty and idle: double-tap to quit
 ```
 
+When a selector is open:
+```
+User presses Ctrl+C
+  → First press closes selector (Model → Provider during setup)
+  → Second press within CANCEL_WINDOW quits
+```
+
 ## Implementation
 
 ### 1. Track Tool Execution State

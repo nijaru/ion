@@ -981,11 +981,9 @@ impl App {
                     self.cancel_pending = None;
                 } else {
                     self.cancel_pending = Some(Instant::now());
-                    if self.needs_setup {
-                        if self.selector_page == SelectorPage::Model {
-                            self.model_picker.reset();
-                            self.open_provider_selector();
-                        }
+                    if self.needs_setup && self.selector_page == SelectorPage::Model {
+                        self.model_picker.reset();
+                        self.open_provider_selector();
                     } else {
                         self.model_picker.reset();
                         self.mode = Mode::Input;

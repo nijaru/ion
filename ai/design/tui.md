@@ -82,7 +82,7 @@ fn open_in_editor(&mut self) {
 
 ## 6. Selector Handling
 
-Escape closes the selector and returns to input. If onboarding requires a selection, re-open the selector on next input.
+Escape closes the selector and returns to input. If onboarding requires a selection, Esc returns from Model → Provider during setup.
 When no selector is open, Escape cancels a running task but never quits.
 
 ## 7. Debugging & Testing
