@@ -23,15 +23,15 @@
 
 **Tools Status:**
 
-| Tool  | Status | Notes                                      |
-| ----- | ------ | ------------------------------------------ |
-| read  | Done   | Safe, file reading                         |
-| write | Done   | Restricted, full file write with diff      |
-| glob  | Done   | Safe, pattern matching via ignore crate    |
-| grep  | Done   | Safe, content search                       |
-| bash  | Done   | Restricted, shell commands                 |
-| edit  | Done   | String replacement (old_string/new_string) |
-| list  | Done   | Safe, fd-like directory listing            |
+| Tool  | Status     | Notes                                           |
+| ----- | ---------- | ----------------------------------------------- |
+| read  | Incomplete | Has offset/limit params but unused, needs chunk |
+| write | Done       | Restricted, shows diff or line count            |
+| glob  | Done       | Safe, pattern matching via ignore crate         |
+| grep  | Done       | Safe, content search                            |
+| bash  | Done       | Restricted, shell commands                      |
+| edit  | Done       | String replacement (old_string/new_string)      |
+| list  | Done       | Safe, fd-like directory listing                 |
 
 **Providers** (via `llm-connector` crate):
 
@@ -46,25 +46,38 @@
 
 ## Open Tasks
 
-Run `tk ls` for current task list. **17 open tasks** as of 2026-01-19.
+Run `tk ls` for current task list. **21 open tasks** as of 2026-01-19.
 
-**UX Polish:**
+**New this session:**
 
-| Task    | Issue                       |
-| ------- | --------------------------- |
-| tk-er0v | Diff highlighting for edits |
+| Task    | Issue                                   |
+| ------- | --------------------------------------- |
+| tk-hwn1 | BUG: Scroll bounds - past top of chat   |
+| tk-g063 | @ file inclusion syntax                 |
+| tk-1y3g | Web search tool                         |
+| tk-1rfr | Web fetch tool                          |
+| tk-su1n | Large file handling - chunked reads     |
+| tk-imza | ast-grep integration                    |
+| tk-pcnt | Research: codex, pi, opencode, CC tools |
 
-**Features:**
+**Existing:**
 
 | Task    | Issue                                      |
 | ------- | ------------------------------------------ |
 | tk-kf3r | Interactive prompts - y/n, editor, browser |
 | tk-f564 | OAuth support for providers                |
 | tk-vsdp | Theme support - customizable colors        |
-| tk-iq98 | Syntax highlighting for code blocks        |
-| tk-8qwn | Compare system prompts with other agents   |
 
 ## Session Work 2026-01-19
+
+**Session 4 - Bug Fixes & UX:**
+
+- **Tool argument order bug** (tk-k0p6): Fixed critical bug - `llm_connector::Message::tool()` args were swapped, causing "Invalid request" errors after any tool use
+- **Model picker UX**: Removed j/k nav (conflicted with typing), added fuzzy search for model names
+- **Tool output cleanup**: Removed markdown fences from write/edit output, TUI now detects diff lines by content pattern
+- **Write tool**: New files show "Created (N lines)" instead of dumping full content
+- **Mouse capture**: Investigated scroll vs selection tradeoff - needs terminal protocol research (Shift+click for selection)
+- **Read tool gap identified**: Has offset/limit params defined but unused - needs chunked read implementation
 
 **Session 3 - Tools & Highlighting:**
 
