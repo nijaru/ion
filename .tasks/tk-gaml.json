@@ -3,7 +3,7 @@
   "ref": "gaml",
   "title": "[UX] Limit queued message preview lines",
   "description": null,
-  "status": "active",
+  "status": "done",
   "priority": 2,
   "labels": [],
   "assignees": [],
@@ -13,7 +13,7 @@
   "due_date": null,
   "logs": [],
   "created_at": "2026-01-20T15:47:49.795Z",
-  "updated_at": "2026-01-20T17:45:44.764Z",
-  "completed_at": null,
+  "updated_at": "2026-01-20T17:46:47.931Z",
+  "completed_at": "2026-01-20T17:46:47.931Z",
   "external": {}
 }

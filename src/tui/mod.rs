@@ -32,7 +32,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 const CANCEL_WINDOW: Duration = Duration::from_millis(1500);
-const QUEUED_PREVIEW_LINES: usize = 3;
+const QUEUED_PREVIEW_LINES: usize = 5;
 
 /// Format token count as human-readable (e.g., 1500 -> "1.5k")
 fn format_tokens(n: usize) -> String {
@@ -1293,12 +1293,38 @@ impl App {
         // Calculate input box height based on content
         let input_height = self.calculate_input_height(frame.area().width);
 
+        let mut queued_preview_lines = Vec::new();
+        if let Some(queue) = self.message_queue.as_ref() {
+            if let Ok(q) = queue.lock() {
+                let prefix_style = Style::default().dim();
+                let queued_style = Style::default().dim().italic();
+                for queued in q.iter() {
+                    let lines: Vec<&str> = queued.lines().collect();
+                    let shown = lines.len().min(QUEUED_PREVIEW_LINES);
+                    for (idx, line) in lines.iter().take(shown).enumerate() {
+                        let prefix = if idx == 0 { " > " } else { "   " };
+                        queued_preview_lines.push(Line::from(vec![
+                            Span::styled(prefix, prefix_style),
+                            Span::styled((*line).to_string(), queued_style),
+                        ]));
+                    }
+                    if lines.len() > shown {
+                        queued_preview_lines.push(Line::from(vec![
+                            Span::styled("   ", prefix_style),
+                            Span::styled("…", queued_style),
+                        ]));
+                    }
+                }
+            }
+        }
+
         // Progress line: running, or showing completion summary (until next task)
-        let progress_height = if self.is_running || self.last_task_summary.is_some() {
-            1
-        } else {
-            0
-        };
+        let progress_height = queued_preview_lines.len() as u16
+            + if self.is_running || self.last_task_summary.is_some() {
+                1
+            } else {
+                0
+            };
 
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -1484,32 +1510,6 @@ impl App {
             chat_lines.push(Line::from(""));
         }
 
-        // Show queued messages at bottom of chat (dimmed, pending)
-        if let Some(ref queue) = self.message_queue
-            && let Ok(q) = queue.lock()
-        {
-            let prefix_style = Style::default().fg(Color::Yellow).dim();
-            let queued_style = Style::default().dim().italic();
-            for queued in q.iter() {
-                let lines: Vec<&str> = queued.lines().collect();
-                let shown = lines.len().min(QUEUED_PREVIEW_LINES);
-                for (idx, line) in lines.iter().take(shown).enumerate() {
-                    let prefix = if idx == 0 { " > " } else { "   " };
-                    chat_lines.push(Line::from(vec![
-                        Span::styled(prefix, prefix_style),
-                        Span::styled((*line).to_string(), queued_style),
-                    ]));
-                }
-                if lines.len() > shown {
-                    chat_lines.push(Line::from(vec![
-                        Span::styled("   ", prefix_style),
-                        Span::styled("…", queued_style),
-                    ]));
-                }
-                chat_lines.push(Line::from(""));
-            }
-        }
-
         // Calculate scroll position
         // scroll_offset is lines from bottom (0 = at bottom)
         let total_lines = chat_lines.len();
@@ -1524,7 +1524,7 @@ impl App {
             .scroll((scroll_y as u16, 0));
         frame.render_widget(chat_para, chunks[0]);
 
-        // Progress line (only when running)
+        let mut progress_lines = queued_preview_lines;
         if self.is_running {
             let spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
             let symbol = spinner[(self.frame_count % spinner.len() as u64) as usize];
@@ -1571,8 +1571,7 @@ impl App {
                 ));
             }
 
-            let progress_line = Line::from(progress_spans);
-            frame.render_widget(Paragraph::new(progress_line), chunks[1]);
+            progress_lines.push(Line::from(progress_spans));
         } else if let Some(summary) = &self.last_task_summary {
             // Show completion/cancellation summary until next task starts
             let secs = summary.elapsed.as_secs();
@@ -1601,7 +1600,11 @@ impl App {
                 Span::styled(label, Style::default().fg(color)),
                 Span::styled(format!(" ({})", stats.join(" · ")), Style::default().dim()),
             ]);
-            frame.render_widget(Paragraph::new(summary_line), chunks[1]);
+            progress_lines.push(summary_line);
+        }
+
+        if !progress_lines.is_empty() {
+            frame.render_widget(Paragraph::new(progress_lines), chunks[1]);
         }
 
         if self.mode == Mode::Selector {
