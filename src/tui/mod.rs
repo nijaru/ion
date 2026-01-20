@@ -750,10 +750,10 @@ impl App {
                     let input = self.input_text();
                     if self.is_running {
                         // Queue message for injection at next turn
-                        if let Some(queue) = self.message_queue.as_ref() {
-                            if let Ok(mut q) = queue.lock() {
-                                q.push(input);
-                            }
+                        if let Some(queue) = self.message_queue.as_ref()
+                            && let Ok(mut q) = queue.lock()
+                        {
+                            q.push(input);
                         }
                         self.clear_input();
                     } else {

@@ -243,10 +243,10 @@ impl LlmApi for Client {
             match chunk_result {
                 Ok(chunk) => {
                     // Handle text content
-                    if let Some(content) = chunk.get_content() {
-                        if !content.is_empty() {
-                            let _ = tx.send(StreamEvent::TextDelta(content.to_string())).await;
-                        }
+                    if let Some(content) = chunk.get_content()
+                        && !content.is_empty()
+                    {
+                        let _ = tx.send(StreamEvent::TextDelta(content.to_string())).await;
                     }
 
                     // Handle tool calls from choices
@@ -328,11 +328,8 @@ impl LlmApi for Client {
         if let Some(choice) = response.choices.first() {
             // Extract text content from message blocks
             for block in &choice.message.content {
-                match block {
-                    llm_connector::types::MessageBlock::Text { text } => {
-                        content_blocks.push(ContentBlock::Text { text: text.clone() });
-                    }
-                    _ => {} // Ignore image blocks for now
+                if let llm_connector::types::MessageBlock::Text { text } = block {
+                    content_blocks.push(ContentBlock::Text { text: text.clone() });
                 }
             }
 

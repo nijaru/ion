@@ -98,7 +98,7 @@ impl SessionStore {
         }
 
         // Migration v1 -> v2: Add input history table
-        if version < 2 {
+        if version < SCHEMA_VERSION {
             self.db.execute_batch(
                 r#"
                 CREATE TABLE IF NOT EXISTS input_history (
