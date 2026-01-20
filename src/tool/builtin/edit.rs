@@ -157,10 +157,8 @@ impl Tool for EditTool {
             String::new()
         };
 
-        let result_msg = format!(
-            "Successfully edited {}{}:\n\n```diff\n{}```",
-            file_path_str, occurrences, diff_output
-        );
+        // Return diff without markdown fences - TUI handles highlighting
+        let result_msg = format!("Edited {}{}:\n{}", file_path_str, occurrences, diff_output);
 
         Ok(ToolResult {
             content: result_msg,
@@ -209,7 +207,7 @@ mod tests {
             .unwrap();
 
         assert!(!result.is_error);
-        assert!(result.content.contains("Successfully edited"));
+        assert!(result.content.contains("Edited"));
 
         let content = std::fs::read_to_string(&file_path).unwrap();
         assert_eq!(content, "Hello Rust");

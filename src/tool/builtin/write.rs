@@ -79,6 +79,7 @@ impl Tool for WriteTool {
             callback(validated_path.clone());
         }
 
+        let line_count = content.lines().count();
         let result_msg = if let Some(old) = old_content {
             let diff = similar::TextDiff::from_lines(old.as_str(), content);
             let mut diff_output = String::new();
@@ -91,18 +92,14 @@ impl Tool for WriteTool {
             }
 
             if diff_output.is_empty() {
-                format!("Successfully wrote to {} (no changes)", file_path_str)
+                format!("Wrote {} (no changes)", file_path_str)
             } else {
-                format!(
-                    "Successfully wrote to {}:\n\n```diff\n{}```",
-                    file_path_str, diff_output
-                )
+                // Return diff without markdown fences - TUI handles highlighting
+                format!("Wrote {}:\n{}", file_path_str, diff_output)
             }
         } else {
-            format!(
-                "Successfully created new file {}:\n\n```\n{}```",
-                file_path_str, content
-            )
+            // New file: just show line count, not full content
+            format!("Created {} ({} lines)", file_path_str, line_count)
         };
 
         Ok(ToolResult {
