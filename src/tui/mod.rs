@@ -259,6 +259,25 @@ impl App {
         self.input_state.value.len_lines().saturating_sub(1)
     }
 
+    fn has_queued_messages(&self) -> bool {
+        self.message_queue.as_ref().is_some_and(|queue| {
+            if let Ok(q) = queue.lock() {
+                !q.is_empty()
+            } else {
+                false
+            }
+        })
+    }
+
+    fn startup_header_lines(&self) -> Vec<Line<'static>> {
+        let version = format!("v{}", env!("CARGO_PKG_VERSION"));
+        vec![
+            Line::from(Span::styled("ION", Style::default().bold())),
+            Line::from(Span::styled(version, Style::default().dim())),
+            Line::from(""),
+        ]
+    }
+
     fn handle_input_event(&mut self, key: KeyEvent) -> TextOutcome {
         let event = Event::Key(key);
         text_area::handle_events(&mut self.input_state, true, &event)
@@ -1271,22 +1290,12 @@ impl App {
             return String::new();
         }
         let line_char = '─';
-        let mode_label = match self.tool_mode {
-            ToolMode::Read => "READ",
-            ToolMode::Write => "WRITE",
-            ToolMode::Agi => "AGI",
-        };
-        let left_label = format!(" [{}] ", mode_label);
-        let right_label = self.thinking_level.label();
-        let right_label = if right_label.is_empty() {
-            String::new()
-        } else {
-            format!(" {} ", right_label)
-        };
+        let left_label = String::new();
+        let right_label = String::new();
 
         let mut chars = vec![line_char; width as usize];
 
-        if width as usize >= left_label.len() + 2 {
+        if !left_label.is_empty() && width as usize >= left_label.len() + 2 {
             let start = 1;
             for (idx, ch) in left_label.chars().enumerate() {
                 if start + idx < chars.len() {
@@ -1332,6 +1341,17 @@ impl App {
     }
 
     pub fn draw(&mut self, frame: &mut Frame) {
+        let show_header = self.message_list.entries.is_empty()
+            && !self.is_running
+            && self.last_task_summary.is_none()
+            && !self.has_queued_messages();
+        let header_lines = if show_header {
+            self.startup_header_lines()
+        } else {
+            Vec::new()
+        };
+        let header_height = header_lines.len() as u16;
+
         // Calculate input box height based on content
         let input_height = self.calculate_input_height(frame.area().width);
 
@@ -1342,17 +1362,44 @@ impl App {
             0
         };
 
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Min(0),                  // Chat
-                Constraint::Length(progress_height), // Progress line (Ionizing...)
-                Constraint::Length(input_height),    // Input
-                Constraint::Length(1),               // Status line
-            ])
-            .split(frame.area());
+        let has_chat = !self.message_list.entries.is_empty() || self.has_queued_messages();
 
-        let viewport_height = chunks[0].height as usize;
+        let chunks = if has_chat || self.is_running || self.last_task_summary.is_some() {
+            Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(header_height),
+                    Constraint::Min(0),                  // Chat
+                    Constraint::Length(progress_height), // Progress line (Ionizing...)
+                    Constraint::Length(input_height),    // Input
+                    Constraint::Length(1),               // Status line
+                ])
+                .split(frame.area())
+        } else {
+            Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(header_height),
+                    Constraint::Length(input_height), // Input
+                    Constraint::Length(1),            // Status line
+                    Constraint::Min(0),               // Spacer
+                ])
+                .split(frame.area())
+        };
+
+        let header_area = chunks[0];
+        let (chat_area, progress_area, input_area, status_area) =
+            if has_chat || self.is_running || self.last_task_summary.is_some() {
+                (chunks[1], chunks[2], chunks[3], chunks[4])
+            } else {
+                (Rect::default(), Rect::default(), chunks[1], chunks[2])
+            };
+
+        if !header_lines.is_empty() {
+            frame.render_widget(Paragraph::new(header_lines), header_area);
+        }
+
+        let viewport_height = chat_area.height as usize;
 
         let mut chat_lines = Vec::new();
         for entry in &self.message_list.entries {
@@ -1564,7 +1611,9 @@ impl App {
         let chat_para = Paragraph::new(chat_lines)
             .wrap(Wrap { trim: true })
             .scroll((scroll_y as u16, 0));
-        frame.render_widget(chat_para, chunks[0]);
+        if chat_area.height > 0 {
+            frame.render_widget(chat_para, chat_area);
+        }
 
         if self.is_running {
             let spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -1613,7 +1662,7 @@ impl App {
             }
 
             let progress_line = Line::from(progress_spans);
-            frame.render_widget(Paragraph::new(progress_line), chunks[1]);
+            frame.render_widget(Paragraph::new(progress_line), progress_area);
         } else if let Some(summary) = &self.last_task_summary {
             // Show completion/cancellation summary until next task starts
             let secs = summary.elapsed.as_secs();
@@ -1642,7 +1691,7 @@ impl App {
                 Span::styled(label, Style::default().fg(color)),
                 Span::styled(format!(" ({})", stats.join(" · ")), Style::default().dim()),
             ]);
-            frame.render_widget(Paragraph::new(summary_line), chunks[1]);
+            frame.render_widget(Paragraph::new(summary_line), progress_area);
         }
 
         if self.mode == Mode::Selector {
@@ -1675,7 +1724,7 @@ impl App {
                     ToolMode::Agi => Color::Red,
                 };
 
-                let input_area = chunks[2];
+                let input_area = input_area;
                 if input_area.width > 0 && input_area.height > 1 {
                     let top_area = Rect {
                         x: input_area.x,
@@ -1697,16 +1746,14 @@ impl App {
                     };
 
                     let header = self.input_header_line(input_area.width);
+                    let bar_style = Style::default().fg(Color::Green);
                     frame.render_widget(
-                        Paragraph::new(Line::from(Span::styled(
-                            header,
-                            Style::default().fg(mode_color),
-                        ))),
+                        Paragraph::new(Line::from(Span::styled(header, bar_style))),
                         top_area,
                     );
                     frame.render_widget(
                         Paragraph::new("─".repeat(input_area.width as usize))
-                            .style(Style::default().fg(mode_color)),
+                            .style(bar_style),
                         bottom_area,
                     );
 
@@ -1762,8 +1809,23 @@ impl App {
                 .unwrap_or(&self.session.model);
 
             // Build status line left side
-            let mut left_spans: Vec<Span> =
-                vec![Span::raw(" "), Span::raw(model_name), Span::raw(" · ")];
+            let mode_label = match self.tool_mode {
+                ToolMode::Read => "READ",
+                ToolMode::Write => "WRITE",
+                ToolMode::Agi => "AGI",
+            };
+            let mode_color = match self.tool_mode {
+                ToolMode::Read => Color::Cyan,
+                ToolMode::Write => Color::Yellow,
+                ToolMode::Agi => Color::Red,
+            };
+
+            let mut left_spans: Vec<Span> = vec![
+                Span::raw(" "),
+                Span::styled(mode_label, Style::default().fg(mode_color)),
+                Span::raw(" · "),
+                Span::raw(model_name),
+            ];
 
             // Context % display with token counts: 56% (112k/200k)
             if let Some((used, max)) = self.token_usage {
@@ -1776,8 +1838,9 @@ impl App {
                         n.to_string()
                     }
                 };
+                left_spans.push(Span::raw(" · "));
                 left_spans.push(Span::raw(format!(
-                    "{}% ({}/{}) · ",
+                    "{}% ({}/{})",
                     pct,
                     format_k(used),
                     format_k(max)
@@ -1805,7 +1868,7 @@ impl App {
             };
 
             // Calculate padding for right alignment
-            let width = chunks[3].width as usize;
+            let width = status_area.width as usize;
             let right_len = right.chars().count();
             let padding = width.saturating_sub(left_len + right_len);
 
@@ -1815,7 +1878,7 @@ impl App {
             status_spans.push(Span::styled(right, right_style));
             let status_line = Line::from(status_spans);
 
-            frame.render_widget(Paragraph::new(status_line), chunks[3]);
+            frame.render_widget(Paragraph::new(status_line), status_area);
         }
 
         // Render overlays on top if active
