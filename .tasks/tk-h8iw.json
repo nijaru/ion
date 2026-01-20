@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "h8iw",
+  "title": "[REFACTOR] Migrate TUI from alternate screen to inline viewport",
+  "description": null,
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-20T08:37:10.152Z",
+  "updated_at": "2026-01-20T08:37:10.152Z",
+  "completed_at": null,
+  "external": {}
+}
