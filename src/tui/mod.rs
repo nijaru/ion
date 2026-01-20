@@ -1478,7 +1478,6 @@ impl App {
                     // Also extract tool name and file path for syntax highlighting
                     let mut syntax_name: Option<&str> = None;
                     let mut is_edit_tool = false;
-                    let mut in_diff_block = false;
 
                     if let Some(first_line) = lines.next() {
                         // Parse tool_name(args) format
@@ -1495,7 +1494,7 @@ impl App {
                                     .next()
                                     .unwrap_or("");
                                 syntax_name = highlight::detect_syntax(path);
-                            } else if tool_name == "edit" {
+                            } else if tool_name == "edit" || tool_name == "write" {
                                 is_edit_tool = true;
                             }
 
@@ -1515,16 +1514,12 @@ impl App {
 
                     // Remaining lines: results with styling
                     for line in lines {
-                        // Track diff block boundaries for edit tool
-                        if is_edit_tool {
-                            if line.trim() == "```diff" {
-                                in_diff_block = true;
-                                continue; // Skip the fence line
-                            } else if line.trim() == "```" && in_diff_block {
-                                in_diff_block = false;
-                                continue; // Skip the closing fence
-                            }
-                        }
+                        // For edit/write tools, detect diff lines by content
+                        let is_diff_line = is_edit_tool
+                            && (line.starts_with('+')
+                                || line.starts_with('-')
+                                || line.starts_with('@')
+                                || line.starts_with(' '));
 
                         if line.starts_with("⎿ Error:") || line.starts_with("  Error:") {
                             // Error lines in red
@@ -1538,8 +1533,8 @@ impl App {
                                 Span::raw("  "),
                                 Span::styled(line.to_string(), Style::default().dim()),
                             ]));
-                        } else if in_diff_block {
-                            // Apply diff highlighting
+                        } else if is_diff_line {
+                            // Apply diff highlighting for edit/write tool output
                             let mut highlighted = highlight::highlight_diff_line(line);
                             highlighted.spans.insert(0, Span::raw("    "));
                             chat_lines.push(highlighted);
