@@ -248,11 +248,12 @@ impl App {
     }
 
     fn handle_input_up(&mut self) -> bool {
-        if self.input_cursor_line() != 0 {
+        let input_empty = self.input_state.is_empty();
+        if !input_empty && self.input_cursor_line() != 0 {
             return false;
         }
 
-        if self.is_running && self.input_state.is_empty() {
+        if self.is_running && input_empty {
             let queued = self.message_queue.as_ref().and_then(|queue| {
                 if let Ok(mut q) = queue.lock() {
                     if q.is_empty() {
