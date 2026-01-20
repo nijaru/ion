@@ -52,7 +52,7 @@ Run `tk ls` for current task list. **18 open tasks** as of 2026-01-20.
 
 | Task    | Issue                                        |
 | ------- | -------------------------------------------- |
-| tk-g82p | Inline refactor: remove alternate screen     |
+| tk-dd4f | Message formatting: user prefix, system notices, thinking |
 
 **Open:**
 
@@ -95,6 +95,10 @@ Run `tk ls` for current task list. **18 open tasks** as of 2026-01-20.
 **Session - Inline Refactor (in progress):**
 
 - Dropped alternate screen setup and switched TUI to inline viewport in `src/main.rs`
+
+**Session - Selector Shell:**
+
+- Replaced provider/model modals with a bottom-anchored selector shell
 
 ## Config System
 

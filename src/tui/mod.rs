@@ -17,7 +17,7 @@ use crate::tui::provider_picker::ProviderPicker;
 use async_trait::async_trait;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -86,12 +86,16 @@ pub enum Mode {
     Input,
     /// Tool approval prompt
     Approval,
-    /// Model selection modal (Ctrl+M)
-    ModelPicker,
-    /// API provider selection modal (Ctrl+P)
-    ProviderPicker,
+    /// Bottom-anchored selector shell (provider/model)
+    Selector,
     /// Keybinding help overlay (Ctrl+H)
     HelpOverlay,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectorPage {
+    Provider,
+    Model,
 }
 
 pub struct ApprovalRequest {
@@ -102,6 +106,7 @@ pub struct ApprovalRequest {
 
 pub struct App {
     pub mode: Mode,
+    pub selector_page: SelectorPage,
     pub should_quit: bool,
     pub input: String,
     /// Cursor position within the input string
@@ -324,18 +329,19 @@ impl App {
 
         // Detect if first-time setup is needed
         let needs_setup = config.needs_setup();
-        let initial_mode = if needs_setup {
+        let (initial_mode, selector_page) = if needs_setup {
             if config.provider.is_none() {
-                Mode::ProviderPicker
+                (Mode::Selector, SelectorPage::Provider)
             } else {
-                Mode::ModelPicker
+                (Mode::Selector, SelectorPage::Model)
             }
         } else {
-            Mode::Input
+            (Mode::Input, SelectorPage::Provider)
         };
 
         let mut this = Self {
             mode: initial_mode,
+            selector_page,
             should_quit: false,
             input: String::new(),
             cursor_pos: 0,
@@ -387,11 +393,14 @@ impl App {
 
         // Initialize setup flow if needed
         if this.needs_setup {
-            if this.mode == Mode::ProviderPicker {
-                this.provider_picker.refresh();
-            } else if this.mode == Mode::ModelPicker {
-                this.model_picker.is_loading = true;
-                // Models will be fetched when run loop starts
+            match this.selector_page {
+                SelectorPage::Provider => {
+                    this.provider_picker.refresh();
+                }
+                SelectorPage::Model => {
+                    this.model_picker.is_loading = true;
+                    // Models will be fetched when run loop starts
+                }
             }
         }
 
@@ -419,13 +428,17 @@ impl App {
 
         // Re-trigger setup flow if needed (e.g., user pressed Esc)
         if self.needs_setup && self.mode == Mode::Input {
-            self.mode = Mode::ProviderPicker;
-            self.provider_picker.refresh();
+            if self.config.provider.is_none() {
+                self.open_provider_selector();
+            } else {
+                self.open_model_selector();
+            }
         }
 
-        // Start fetching models if in setup mode and model picker needs them
+        // Start fetching models if in setup mode and model selector needs them
         if self.needs_setup
-            && self.mode == Mode::ModelPicker
+            && self.mode == Mode::Selector
+            && self.selector_page == SelectorPage::Model
             && !self.model_picker.has_models()
             && !self.setup_fetch_started
             && self.model_picker.error.is_none()
@@ -535,8 +548,7 @@ impl App {
             match self.mode {
                 Mode::Input => self.handle_input_mode(key),
                 Mode::Approval => self.handle_approval_mode(key),
-                Mode::ModelPicker => self.handle_model_picker_mode(key),
-                Mode::ProviderPicker => self.handle_provider_picker_mode(key),
+                Mode::Selector => self.handle_selector_mode(key),
                 Mode::HelpOverlay => {
                     self.mode = Mode::Input;
                 }
@@ -608,14 +620,14 @@ impl App {
             // Ctrl+M: Open model picker (current provider only)
             KeyCode::Char('m') if ctrl => {
                 if !self.is_running {
-                    self.open_model_picker();
+                    self.open_model_selector();
                 }
             }
 
             // Ctrl+P: Provider → Model picker (two-stage)
             KeyCode::Char('p') if ctrl => {
                 if !self.is_running {
-                    self.open_provider_picker();
+                    self.open_provider_selector();
                 }
             }
 
@@ -665,13 +677,13 @@ impl App {
                                 "/model" | "/models" => {
                                     self.input.clear();
                                     self.cursor_pos = 0;
-                                    self.open_model_picker();
+                                    self.open_model_selector();
                                     return;
                                 }
                                 "/provider" | "/providers" => {
                                     self.input.clear();
                                     self.cursor_pos = 0;
-                                    self.open_provider_picker();
+                                    self.open_provider_selector();
                                     return;
                                 }
                                 "/quit" | "/exit" | "/q" => {
@@ -939,100 +951,6 @@ impl App {
         }
     }
 
-    fn handle_model_picker_mode(&mut self, key: KeyEvent) {
-        use crate::tui::model_picker::PickerStage;
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-
-        match key.code {
-            // Ctrl+C: Quit (always works, even during setup)
-            KeyCode::Char('c') if ctrl => {
-                self.should_quit = true;
-            }
-
-            // Navigation: Arrow keys only (j/k reserved for typing)
-            KeyCode::Up => self.model_picker.move_up(1),
-            KeyCode::Down => self.model_picker.move_down(1),
-
-            // Page navigation
-            KeyCode::PageUp => self.model_picker.move_up(10),
-            KeyCode::PageDown => self.model_picker.move_down(10),
-            KeyCode::Home => self.model_picker.jump_to_top(),
-            KeyCode::End => self.model_picker.jump_to_bottom(),
-
-            // Selection
-            KeyCode::Enter => match self.model_picker.stage {
-                PickerStage::Provider => {
-                    self.model_picker.select_provider();
-                }
-                PickerStage::Model => {
-                    if let Some(model) = self.model_picker.selected_model() {
-                        self.session.model = model.id.clone();
-                        // Persist selection to config
-                        self.config.model = Some(model.id.clone());
-                        if let Err(e) = self.config.save() {
-                            tracing::warn!("Failed to save config: {}", e);
-                        }
-                        self.model_picker.reset();
-                        // Complete setup if this was the setup flow
-                        if self.needs_setup {
-                            self.needs_setup = false;
-                        }
-                        self.mode = Mode::Input;
-                    }
-                }
-            },
-
-            // Back navigation
-            KeyCode::Backspace if self.model_picker.filter.is_empty() => {
-                if self.model_picker.stage == PickerStage::Model {
-                    // During setup, don't allow going back to provider stage from model picker
-                    // (they already selected provider in previous step)
-                    if !self.needs_setup {
-                        self.model_picker.back_to_providers();
-                    }
-                }
-            }
-            KeyCode::Backspace => {
-                self.model_picker.pop_char();
-            }
-
-            // Cancel / Back
-            KeyCode::Esc => {
-                if self.needs_setup {
-                    // During setup, Esc goes back to provider picker
-                    self.model_picker.reset();
-                    self.mode = Mode::ProviderPicker;
-                    self.provider_picker.refresh();
-                    self.provider_picker.select_provider(self.api_provider);
-                } else {
-                    self.model_picker.reset();
-                    self.mode = Mode::Input;
-                }
-            }
-
-            // Tab or Ctrl+P: Switch to provider picker
-            KeyCode::Tab => {
-                self.model_picker.reset();
-                self.mode = Mode::ProviderPicker;
-                self.provider_picker.refresh();
-                self.provider_picker.select_provider(self.api_provider);
-            }
-            KeyCode::Char('p') if ctrl => {
-                self.model_picker.reset();
-                self.mode = Mode::ProviderPicker;
-                self.provider_picker.refresh();
-                self.provider_picker.select_provider(self.api_provider);
-            }
-
-            // Type to filter (only regular chars without ctrl modifier)
-            KeyCode::Char(c) if !ctrl => {
-                self.model_picker.push_char(c);
-            }
-
-            _ => {}
-        }
-    }
-
     /// Set the active API provider and re-create the agent.
     fn set_provider(&mut self, api_provider: Provider) {
         // Get API key (env var first, then config)
@@ -1070,14 +988,13 @@ impl App {
         // Clear old models when switching providers
         self.model_picker.set_models(vec![]);
         self.model_picker.is_loading = true;
-
-        self.mode = Mode::Input;
-        self.open_model_picker();
+        self.setup_fetch_started = false;
     }
 
-    /// Open model picker (Ctrl+M or during setup)
-    fn open_model_picker(&mut self) {
-        self.mode = Mode::ModelPicker;
+    /// Open model selector (Ctrl+M or during setup)
+    fn open_model_selector(&mut self) {
+        self.mode = Mode::Selector;
+        self.selector_page = SelectorPage::Model;
         self.model_picker.error = None;
 
         if self.model_picker.has_models() {
@@ -1086,19 +1003,21 @@ impl App {
         } else {
             // Need to fetch models first - update() will configure picker when they arrive
             self.model_picker.is_loading = true;
+            self.setup_fetch_started = true;
             self.fetch_models();
         }
     }
 
-    /// Open API provider picker (Ctrl+P)
-    fn open_provider_picker(&mut self) {
-        self.mode = Mode::ProviderPicker;
+    /// Open API provider selector (Ctrl+P)
+    fn open_provider_selector(&mut self) {
+        self.mode = Mode::Selector;
+        self.selector_page = SelectorPage::Provider;
         self.provider_picker.refresh();
         self.provider_picker.select_provider(self.api_provider);
     }
 
-    /// Handle API provider picker mode
-    fn handle_provider_picker_mode(&mut self, key: KeyEvent) {
+    fn handle_selector_mode(&mut self, key: KeyEvent) {
+        use crate::tui::model_picker::PickerStage;
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
         match key.code {
@@ -1108,57 +1027,115 @@ impl App {
             }
 
             // Navigation
-            KeyCode::Up => self.provider_picker.move_up(1),
-            KeyCode::Down => self.provider_picker.move_down(1),
-            KeyCode::PageUp => self.provider_picker.move_up(10),
-            KeyCode::PageDown => self.provider_picker.move_down(10),
-            KeyCode::Home => self.provider_picker.jump_to_top(),
-            KeyCode::End => self.provider_picker.jump_to_bottom(),
+            KeyCode::Up => match self.selector_page {
+                SelectorPage::Provider => self.provider_picker.move_up(1),
+                SelectorPage::Model => self.model_picker.move_up(1),
+            },
+            KeyCode::Down => match self.selector_page {
+                SelectorPage::Provider => self.provider_picker.move_down(1),
+                SelectorPage::Model => self.model_picker.move_down(1),
+            },
+            KeyCode::PageUp => match self.selector_page {
+                SelectorPage::Provider => self.provider_picker.move_up(10),
+                SelectorPage::Model => self.model_picker.move_up(10),
+            },
+            KeyCode::PageDown => match self.selector_page {
+                SelectorPage::Provider => self.provider_picker.move_down(10),
+                SelectorPage::Model => self.model_picker.move_down(10),
+            },
+            KeyCode::Home => match self.selector_page {
+                SelectorPage::Provider => self.provider_picker.jump_to_top(),
+                SelectorPage::Model => self.model_picker.jump_to_top(),
+            },
+            KeyCode::End => match self.selector_page {
+                SelectorPage::Provider => self.provider_picker.jump_to_bottom(),
+                SelectorPage::Model => self.model_picker.jump_to_bottom(),
+            },
 
             // Selection
-            KeyCode::Enter => {
-                if let Some(status) = self.provider_picker.selected()
-                    && status.authenticated
-                {
-                    let provider = status.provider;
-                    self.set_provider(provider);
-                    // During setup, chain to model picker
-                    if self.needs_setup {
-                        self.open_model_picker();
+            KeyCode::Enter => match self.selector_page {
+                SelectorPage::Provider => {
+                    if let Some(status) = self.provider_picker.selected()
+                        && status.authenticated
+                    {
+                        let provider = status.provider;
+                        self.set_provider(provider);
+                        self.open_model_selector();
                     }
                 }
-                // If not authenticated, do nothing (can't select)
-            }
+                SelectorPage::Model => match self.model_picker.stage {
+                    PickerStage::Provider => {
+                        self.model_picker.select_provider();
+                    }
+                    PickerStage::Model => {
+                        if let Some(model) = self.model_picker.selected_model() {
+                            self.session.model = model.id.clone();
+                            // Persist selection to config
+                            self.config.model = Some(model.id.clone());
+                            if let Err(e) = self.config.save() {
+                                tracing::warn!("Failed to save config: {}", e);
+                            }
+                            self.model_picker.reset();
+                            // Complete setup if this was the setup flow
+                            if self.needs_setup {
+                                self.needs_setup = false;
+                            }
+                            self.mode = Mode::Input;
+                        }
+                    }
+                },
+            },
 
-            // Cancel - always allow, update() will re-trigger setup if needed
-            KeyCode::Esc => {
-                self.mode = Mode::Input;
-            }
-
-            // Tab or Ctrl+M: Switch to model picker (only if models are loaded)
-            KeyCode::Tab => {
-                if self.model_picker.has_models() {
-                    self.model_picker.start_all_models();
-                    self.mode = Mode::ModelPicker;
+            // Back navigation
+            KeyCode::Backspace if self.selector_page == SelectorPage::Model => {
+                if self.model_picker.filter.is_empty()
+                    && self.model_picker.stage == PickerStage::Model
+                    && !self.needs_setup
+                {
+                    self.model_picker.back_to_providers();
+                } else {
+                    self.model_picker.pop_char();
                 }
+            }
+            KeyCode::Backspace => match self.selector_page {
+                SelectorPage::Provider => self.provider_picker.pop_char(),
+                SelectorPage::Model => self.model_picker.pop_char(),
+            },
+
+            // Cancel / Back
+            KeyCode::Esc => {
+                if self.needs_setup {
+                    if self.selector_page == SelectorPage::Model {
+                        self.model_picker.reset();
+                        self.open_provider_selector();
+                    }
+                } else {
+                    self.model_picker.reset();
+                    self.mode = Mode::Input;
+                }
+            }
+
+            // Tab: switch pages
+            KeyCode::Tab => match self.selector_page {
+                SelectorPage::Provider => self.open_model_selector(),
+                SelectorPage::Model => self.open_provider_selector(),
+            },
+            KeyCode::Char('p') if ctrl => {
+                self.open_provider_selector();
             }
             KeyCode::Char('m') if ctrl => {
-                if self.model_picker.has_models() {
-                    self.model_picker.start_all_models();
-                    self.mode = Mode::ModelPicker;
-                }
+                self.open_model_selector();
             }
 
             // Type to filter (only without ctrl, except Ctrl+W for delete word)
-            KeyCode::Char('w') if ctrl => {
-                self.provider_picker.delete_word();
-            }
-            KeyCode::Char(c) if !ctrl => {
-                self.provider_picker.push_char(c);
-            }
-            KeyCode::Backspace => {
-                self.provider_picker.pop_char();
-            }
+            KeyCode::Char('w') if ctrl => match self.selector_page {
+                SelectorPage::Provider => self.provider_picker.delete_word(),
+                SelectorPage::Model => {}
+            },
+            KeyCode::Char(c) if !ctrl => match self.selector_page {
+                SelectorPage::Provider => self.provider_picker.push_char(c),
+                SelectorPage::Model => self.model_picker.push_char(c),
+            },
 
             _ => {}
         }
@@ -1678,138 +1655,338 @@ impl App {
             frame.render_widget(Paragraph::new(summary_line), chunks[1]);
         }
 
-        // Input or Approval Prompt (input always visible except during approval)
-        if self.mode == Mode::Approval {
-            if let Some(req) = &self.pending_approval {
-                let prompt = format!(
-                    " [Approval] Allow {}? (y)es / (n)o / (a)lways / (A)lways permanent ",
-                    req.tool_name
-                );
-                let approval_block = Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Red).bold())
-                    .title(" Action Required ");
-                let approval_para = Paragraph::new(prompt).block(approval_block);
-                frame.render_widget(approval_para, chunks[2]);
-            }
+        if self.mode == Mode::Selector {
+            self.render_selector_shell(frame);
         } else {
-            // Input box always visible
-            let mode_label = match self.tool_mode {
-                ToolMode::Read => "READ",
-                ToolMode::Write => "WRITE",
-                ToolMode::Agi => "AGI",
-            };
-            let mode_color = match self.tool_mode {
-                ToolMode::Read => Color::Cyan,
-                ToolMode::Write => Color::Yellow,
-                ToolMode::Agi => Color::Red,
-            };
-
-            let mut input_block = Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(mode_color))
-                .title(format!(" [{}] ", mode_label));
-
-            // Show thinking level on right side
-            let thinking_label = self.thinking_level.label();
-            if !thinking_label.is_empty() {
-                input_block = input_block.title(
-                    Line::from(Span::styled(
-                        format!(" {} ", thinking_label),
-                        Style::default().fg(Color::Magenta),
-                    ))
-                    .right_aligned(),
-                );
-            }
-
-            // Build input text with cursor (1-space left padding)
-            let input_text = format!(" {}", self.input);
-            let input_para = Paragraph::new(input_text)
-                .block(input_block)
-                .wrap(Wrap { trim: false });
-            frame.render_widget(input_para, chunks[2]);
-
-            // Calculate cursor position for multi-line input
-            let inner_width = chunks[2].width.saturating_sub(3) as usize; // borders + padding
-            let (cursor_row, cursor_col) = self.calculate_cursor_position(inner_width);
-
-            let cursor_x = chunks[2].x + 2 + cursor_col as u16;
-            let cursor_y = chunks[2].y + 1 + cursor_row as u16;
-
-            // Only show cursor if within bounds
-            if cursor_x < chunks[2].x + chunks[2].width - 1
-                && cursor_y < chunks[2].y + chunks[2].height - 1
-            {
-                frame.set_cursor_position((cursor_x, cursor_y));
-            }
-        }
-
-        // Status line: model · context%
-
-        // Simplify model name (remove provider prefix if present)
-        let model_name = self
-            .session
-            .model
-            .split('/')
-            .next_back()
-            .unwrap_or(&self.session.model);
-
-        // Build status line left side
-        let mut left_spans: Vec<Span> = vec![Span::raw(" "), Span::raw(model_name), Span::raw(" · ")];
-
-        // Context % display with token counts: 56% (112k/200k)
-        if let Some((used, max)) = self.token_usage {
-            let pct = if max > 0 { (used * 100) / max } else { 0 };
-            let format_k = |n: usize| -> String {
-                if n >= 1000 {
-                    format!("{}k", n / 1000)
-                } else {
-                    n.to_string()
+            // Input or Approval Prompt (input always visible except during approval)
+            if self.mode == Mode::Approval {
+                if let Some(req) = &self.pending_approval {
+                    let prompt = format!(
+                        " [Approval] Allow {}? (y)es / (n)o / (a)lways / (A)lways permanent ",
+                        req.tool_name
+                    );
+                    let approval_block = Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(Color::Red).bold())
+                        .title(" Action Required ");
+                    let approval_para = Paragraph::new(prompt).block(approval_block);
+                    frame.render_widget(approval_para, chunks[2]);
                 }
+            } else {
+                // Input box always visible
+                let mode_label = match self.tool_mode {
+                    ToolMode::Read => "READ",
+                    ToolMode::Write => "WRITE",
+                    ToolMode::Agi => "AGI",
+                };
+                let mode_color = match self.tool_mode {
+                    ToolMode::Read => Color::Cyan,
+                    ToolMode::Write => Color::Yellow,
+                    ToolMode::Agi => Color::Red,
+                };
+
+                let mut input_block = Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(mode_color))
+                    .title(format!(" [{}] ", mode_label));
+
+                // Show thinking level on right side
+                let thinking_label = self.thinking_level.label();
+                if !thinking_label.is_empty() {
+                    input_block = input_block.title(
+                        Line::from(Span::styled(
+                            format!(" {} ", thinking_label),
+                            Style::default().fg(Color::Magenta),
+                        ))
+                        .right_aligned(),
+                    );
+                }
+
+                // Build input text with cursor (1-space left padding)
+                let input_text = format!(" {}", self.input);
+                let input_para = Paragraph::new(input_text)
+                    .block(input_block)
+                    .wrap(Wrap { trim: false });
+                frame.render_widget(input_para, chunks[2]);
+
+                // Calculate cursor position for multi-line input
+                let inner_width = chunks[2].width.saturating_sub(3) as usize; // borders + padding
+                let (cursor_row, cursor_col) = self.calculate_cursor_position(inner_width);
+
+                let cursor_x = chunks[2].x + 2 + cursor_col as u16;
+                let cursor_y = chunks[2].y + 1 + cursor_row as u16;
+
+                // Only show cursor if within bounds
+                if cursor_x < chunks[2].x + chunks[2].width - 1
+                    && cursor_y < chunks[2].y + chunks[2].height - 1
+                {
+                    frame.set_cursor_position((cursor_x, cursor_y));
+                }
+            }
+
+            // Status line: model · context%
+
+            // Simplify model name (remove provider prefix if present)
+            let model_name = self
+                .session
+                .model
+                .split('/')
+                .next_back()
+                .unwrap_or(&self.session.model);
+
+            // Build status line left side
+            let mut left_spans: Vec<Span> =
+                vec![Span::raw(" "), Span::raw(model_name), Span::raw(" · ")];
+
+            // Context % display with token counts: 56% (112k/200k)
+            if let Some((used, max)) = self.token_usage {
+                let pct = if max > 0 { (used * 100) / max } else { 0 };
+                let format_k = |n: usize| -> String {
+                    if n >= 1000 {
+                        format!("{}k", n / 1000)
+                    } else {
+                        n.to_string()
+                    }
+                };
+                left_spans.push(Span::raw(format!(
+                    "{}% ({}/{}) · ",
+                    pct,
+                    format_k(used),
+                    format_k(max)
+                )));
+            }
+
+            // Calculate left side length for padding
+            let left_len: usize = left_spans.iter().map(|s| s.content.chars().count()).sum();
+
+            // Right side: error or help hint
+            let (right, right_style) = if let Some(ref err) = self.last_error {
+                // Truncate error for status line
+                let max_err_len = 40;
+                let err_display = if err.len() > max_err_len {
+                    format!("{}...", &err[..max_err_len])
+                } else {
+                    err.clone()
+                };
+                (
+                    format!("ERR: {} ", err_display),
+                    Style::default().fg(Color::Red),
+                )
+            } else {
+                ("? help ".to_string(), Style::default().dim())
             };
-            left_spans.push(Span::raw(format!("{}% ({}/{}) · ", pct, format_k(used), format_k(max))));
+
+            // Calculate padding for right alignment
+            let width = chunks[3].width as usize;
+            let right_len = right.chars().count();
+            let padding = width.saturating_sub(left_len + right_len);
+
+            // Build final status line: left spans + padding + right
+            let mut status_spans = left_spans;
+            status_spans.push(Span::raw(" ".repeat(padding)));
+            status_spans.push(Span::styled(right, right_style));
+            let status_line = Line::from(status_spans);
+
+            frame.render_widget(Paragraph::new(status_line), chunks[3]);
         }
 
-        // Calculate left side length for padding
-        let left_len: usize = left_spans.iter().map(|s| s.content.chars().count()).sum();
+        // Render overlays on top if active
+        if self.mode == Mode::HelpOverlay {
+            self.render_help_overlay(frame);
+        }
+    }
 
-        // Right side: error or help hint
-        let (right, right_style) = if let Some(ref err) = self.last_error {
-            // Truncate error for status line
-            let max_err_len = 40;
-            let err_display = if err.len() > max_err_len {
-                format!("{}...", &err[..max_err_len])
-            } else {
-                err.clone()
-            };
-            (
-                format!("ERR: {} ", err_display),
-                Style::default().fg(Color::Red),
-            )
-        } else {
-            ("? help ".to_string(), Style::default().dim())
+    fn render_selector_shell(&mut self, frame: &mut Frame) {
+        let area = frame.area();
+
+        let (title, description, filter, list_len) = match self.selector_page {
+            SelectorPage::Provider => (
+                "Providers",
+                "Select a provider",
+                self.provider_picker.filter.clone(),
+                self.provider_picker.filtered.len(),
+            ),
+            SelectorPage::Model => (
+                "Models",
+                "Select a model",
+                self.model_picker.filter.clone(),
+                self.model_picker.filtered_models.len(),
+            ),
         };
 
-        // Calculate padding for right alignment
-        let width = chunks[3].width as usize;
-        let right_len = right.chars().count();
-        let padding = width.saturating_sub(left_len + right_len);
+        let reserved_height = 1 + 1 + 3 + 1;
+        let max_list_height = area.height.saturating_sub(reserved_height);
+        let list_height = (list_len as u16).clamp(3, max_list_height.max(3));
+        let total_height = reserved_height + list_height;
 
-        // Build final status line: left spans + padding + right
-        let mut status_spans = left_spans;
-        status_spans.push(Span::raw(" ".repeat(padding)));
-        status_spans.push(Span::styled(right, right_style));
-        let status_line = Line::from(status_spans);
+        let y = area.height.saturating_sub(total_height);
+        let shell_area = Rect::new(0, y, area.width, total_height);
 
-        frame.render_widget(Paragraph::new(status_line), chunks[3]);
+        frame.render_widget(Clear, shell_area);
 
-        // Render modals on top if active
-        match self.mode {
-            Mode::ModelPicker => self.model_picker.render(frame),
-            Mode::ProviderPicker => self.provider_picker.render(frame),
-            Mode::HelpOverlay => self.render_help_overlay(frame),
-            _ => {}
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1), // Tabs
+                Constraint::Length(1), // Description
+                Constraint::Length(3), // Search
+                Constraint::Length(list_height),
+                Constraint::Length(1), // Hint
+            ])
+            .split(shell_area);
+
+        let (provider_style, model_style) = match self.selector_page {
+            SelectorPage::Provider => (
+                Style::default().fg(Color::Yellow).bold(),
+                Style::default().dim(),
+            ),
+            SelectorPage::Model => (
+                Style::default().dim(),
+                Style::default().fg(Color::Yellow).bold(),
+            ),
+        };
+
+        let tabs = Line::from(vec![
+            Span::raw(" "),
+            Span::styled("Providers", provider_style),
+            Span::raw("  "),
+            Span::styled("Models", model_style),
+        ]);
+        frame.render_widget(Paragraph::new(tabs), chunks[0]);
+
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![Span::raw(" "), Span::raw(description)])),
+            chunks[1],
+        );
+
+        let search_block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan))
+            .title(format!(" {} ", title));
+
+        let search_text = if filter.is_empty() {
+            " Search...".to_string()
+        } else {
+            format!(" {}_", filter)
+        };
+
+        let search_style = if filter.is_empty() {
+            Style::default().dim()
+        } else {
+            Style::default().fg(Color::Yellow)
+        };
+
+        let search_para = Paragraph::new(search_text)
+            .style(search_style)
+            .block(search_block);
+        frame.render_widget(search_para, chunks[2]);
+
+        match self.selector_page {
+            SelectorPage::Provider => {
+                let items: Vec<ListItem> = self
+                    .provider_picker
+                    .filtered
+                    .iter()
+                    .map(|status| {
+                        let (icon, icon_style, name_style) = if status.authenticated {
+                            (
+                                "●",
+                                Style::default().fg(Color::Green),
+                                Style::default().fg(Color::White).bold(),
+                            )
+                        } else {
+                            ("○", Style::default().dim(), Style::default().dim())
+                        };
+
+                        let auth_hint = if !status.authenticated {
+                            format!(
+                                " set {}",
+                                status.provider.env_vars().first().unwrap_or(&"API_KEY")
+                            )
+                        } else {
+                            String::new()
+                        };
+
+                        ListItem::new(Line::from(vec![
+                            Span::styled(icon, icon_style),
+                            Span::raw(" "),
+                            Span::styled(status.provider.name(), name_style),
+                            Span::styled(auth_hint, Style::default().fg(Color::Red).dim()),
+                        ]))
+                    })
+                    .collect();
+
+                let count = self.provider_picker.filtered.len();
+                let total = self.provider_picker.providers.len();
+                let list = List::new(items)
+                    .block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .title(format!(" Providers ({}/{}) ", count, total)),
+                    )
+                    .highlight_style(
+                        Style::default()
+                            .bg(Color::DarkGray)
+                            .fg(Color::White)
+                            .add_modifier(Modifier::BOLD),
+                    )
+                    .highlight_symbol("▸ ");
+
+                frame.render_stateful_widget(list, chunks[3], &mut self.provider_picker.list_state);
+            }
+            SelectorPage::Model => {
+                if self.model_picker.is_loading {
+                    let provider_name = self.model_picker.api_provider_name.as_deref().unwrap_or("provider");
+                    let loading = Paragraph::new(format!("Loading models from {}...", provider_name))
+                        .style(Style::default().fg(Color::Yellow))
+                        .block(Block::default().borders(Borders::ALL).title(" Loading "));
+                    frame.render_widget(loading, chunks[3]);
+                } else if let Some(ref err) = self.model_picker.error {
+                    let error = Paragraph::new(format!("Error: {}", err))
+                        .style(Style::default().fg(Color::Red))
+                        .block(Block::default().borders(Borders::ALL).title(" Error "));
+                    frame.render_widget(error, chunks[3]);
+                } else {
+                    let items: Vec<ListItem> = self
+                        .model_picker
+                        .filtered_models
+                        .iter()
+                        .map(|model| {
+                            let context_k = model.context_window / 1000;
+                            ListItem::new(Line::from(vec![
+                                Span::styled(model.id.clone(), Style::default().fg(Color::White)),
+                                Span::styled(
+                                    format!("  {}k ctx", context_k),
+                                    Style::default().dim(),
+                                ),
+                            ]))
+                        })
+                        .collect();
+
+                    let count = self.model_picker.filtered_models.len();
+                    let total = self.model_picker.all_models.len();
+                    let list = List::new(items)
+                        .block(
+                            Block::default()
+                                .borders(Borders::ALL)
+                                .title(format!(" Models ({}/{}) ", count, total)),
+                        )
+                        .highlight_style(
+                            Style::default()
+                                .bg(Color::DarkGray)
+                                .fg(Color::White)
+                                .add_modifier(Modifier::BOLD),
+                        )
+                        .highlight_symbol("▸ ");
+
+                    frame.render_stateful_widget(list, chunks[3], &mut self.model_picker.model_state);
+                }
+            }
         }
+
+        let hint = Paragraph::new(" Type to filter · Enter to select · Esc to close ")
+            .style(Style::default().dim());
+        frame.render_widget(hint, chunks[4]);
     }
 
     fn render_help_overlay(&self, frame: &mut Frame) {
@@ -1841,8 +2018,8 @@ impl App {
             row("Shift+Enter", "Insert newline"),
             row("Shift+Tab", "Cycle mode"),
             row("Ctrl+G", "External editor"),
-            row("Ctrl+M", "Model picker"),
-            row("Ctrl+P", "Provider picker"),
+            row("Ctrl+M", "Model selector"),
+            row("Ctrl+P", "Provider selector"),
             row("Ctrl+T", "Thinking toggle"),
             row("Ctrl+C", "Clear / Quit"),
             row("PgUp/PgDn", "Scroll chat"),
