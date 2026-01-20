@@ -3,7 +3,7 @@
   "ref": "ebqs",
   "title": "[BUG] Status line context max should use model context window",
   "description": null,
-  "status": "open",
+  "status": "done",
   "priority": 1,
   "labels": [],
   "assignees": [],
@@ -13,7 +13,7 @@
   "due_date": null,
   "logs": [],
   "created_at": "2026-01-20T15:47:41.276Z",
-  "updated_at": "2026-01-20T15:47:41.276Z",
-  "completed_at": null,
+  "updated_at": "2026-01-20T16:43:14.039Z",
+  "completed_at": "2026-01-20T16:43:14.039Z",
   "external": {}
 }
