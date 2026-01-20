@@ -242,26 +242,13 @@ impl MessageList {
                 }
                 self.push_entry(MessageEntry::new(Sender::Agent, delta));
             }
-            AgentEvent::ThinkingDelta(_delta) => {
-                // Don't show thinking content, just indicate reasoning is happening
-                // Only add indicator once per thinking block
-                if let Some(last) = self.entries.last_mut()
-                    && last.sender == Sender::Agent
-                    && last.content_as_markdown().contains("[Reasoning...]")
-                {
-                    // Already showing indicator, don't duplicate
-                    return;
-                }
-                // Add or update with reasoning indicator
+            AgentEvent::ThinkingDelta(delta) => {
                 if let Some(last) = self.entries.last_mut()
                     && last.sender == Sender::Agent
                 {
-                    // Append indicator to existing agent message
-                    if !last.content_as_markdown().contains("[Reasoning...]") {
-                        last.append_text("\n\n*[Reasoning...]*");
-                    }
+                    last.append_thinking(&delta);
                 } else {
-                    self.push_entry(MessageEntry::new(Sender::Agent, "*[Reasoning...]*".to_string()));
+                    self.push_entry(MessageEntry::new_thinking(Sender::Agent, delta));
                 }
             }
             AgentEvent::ToolCallStart(_id, name, args) => {

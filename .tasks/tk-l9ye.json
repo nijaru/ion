@@ -3,7 +3,7 @@
   "ref": "l9ye",
   "title": "Queue edit behavior: pull all queued messages into input",
   "description": null,
-  "status": "open",
+  "status": "active",
   "priority": 3,
   "labels": [],
   "assignees": [],
@@ -13,7 +13,7 @@
   "due_date": null,
   "logs": [],
   "created_at": "2026-01-20T10:31:48.327Z",
-  "updated_at": "2026-01-20T10:31:48.327Z",
+  "updated_at": "2026-01-20T12:18:17.485Z",
   "completed_at": null,
   "external": {}
 }
