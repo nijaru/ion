@@ -6,32 +6,29 @@
 
 ## Problem
 
-When a tool (especially bash) is executing, Ctrl+C triggers the double-tap quit flow instead of interrupting the running tool. Users expect Ctrl+C to cancel the current operation, not quit the app.
+When a tool (especially bash) is executing, Ctrl+C behavior must remain predictable. The desired UX is clear-first, then double-tap cancel/quit when input is empty.
 
 ## Current Behavior
 
 ```
-User presses Ctrl+C during tool execution
-  → TUI checks cancel_pending timestamp
-  → If within CANCEL_WINDOW, cancels abort_token
-  → If not, sets cancel_pending = Some(Instant::now())
-  → Shows yellow border as "pending cancel" indicator
+User presses Ctrl+C with empty input while a tool is executing
+  → First press sets cancel_pending
+  → Second press within CANCEL_WINDOW cancels abort_token
 ```
 
 The abort_token.cancel() does propagate to bash via `kill_on_drop`, but:
 
-1. First Ctrl+C just sets pending state
-2. Second Ctrl+C actually cancels
-3. UX is confusing - user doesn't know first press did anything useful
+1. First Ctrl+C sets pending state
+2. Second Ctrl+C cancels running task
+3. UX must be consistent with idle double-tap quit
 
 ## Desired Behavior
 
 ```
-User presses Ctrl+C during agent execution
-  → If tool is running: immediately cancel the tool
-  → If LLM is streaming: immediately stop stream
+User presses Ctrl+C
   → If input is not empty: clear input
-  → If input is empty and not running: quit (or double-tap to quit)
+  → If input is empty and running: double-tap to cancel
+  → If input is empty and idle: double-tap to quit
 ```
 
 ## Implementation
@@ -65,20 +62,22 @@ AgentEvent::ToolCallResult(..) => {
 ```rust
 KeyCode::Char('c') if ctrl => {
     if self.is_running {
-        // Immediately cancel - no double-tap needed during execution
-        self.session.abort_token.cancel();
-        self.cancel_pending = None;
-
-        // Show feedback
-        if let Some(tool) = &self.current_tool {
-            // Could add a system message: "Cancelled {tool}"
+        if let Some(when) = self.cancel_pending {
+            if when.elapsed() <= CANCEL_WINDOW {
+                self.session.abort_token.cancel();
+                self.cancel_pending = None;
+            } else {
+                self.cancel_pending = Some(Instant::now());
+            }
+        } else {
+            self.cancel_pending = Some(Instant::now());
         }
     } else if !self.input.is_empty() {
         // Clear input
         self.input.clear();
         self.cursor_pos = 0;
     } else {
-        // Empty input, not running - quit or double-tap quit
+        // Empty input, not running - double-tap quit
         if let Some(when) = self.cancel_pending {
             if when.elapsed() <= CANCEL_WINDOW {
                 self.quit();

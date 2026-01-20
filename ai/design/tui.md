@@ -25,7 +25,7 @@ A professional, high-readability terminal interface built with `ratatui`, design
 | `Ctrl+P`      | Provider Selector (page)                      |
 | `Ctrl+T`      | Cycle thinking level (off → low → med → high) |
 | `Ctrl+G`      | Open input in external editor (tk-otmx)       |
-| `Ctrl+C`      | Cancel running task / Clear input / Quit      |
+| `Ctrl+C`      | Clear input; double-tap cancel/quit when empty |
 | `Ctrl+H`      | Help overlay                                  |
 | `PageUp/Down` | Terminal scrollback (native)                  |
 | `Up/Down`     | History recall / cursor movement              |
@@ -83,6 +83,7 @@ fn open_in_editor(&mut self) {
 ## 6. Selector Handling
 
 Escape closes the selector and returns to input. If onboarding requires a selection, re-open the selector on next input.
+When no selector is open, Escape cancels a running task but never quits.
 
 ## 7. Debugging & Testing
 
