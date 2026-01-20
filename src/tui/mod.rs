@@ -639,6 +639,13 @@ impl App {
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
 
         match key.code {
+            // Esc: Cancel running task
+            KeyCode::Esc => {
+                if self.is_running && !self.session.abort_token.is_cancelled() {
+                    self.session.abort_token.cancel();
+                    self.cancel_pending = None;
+                }
+            }
             // Ctrl+C: Cancel running task / clear input / quit
             KeyCode::Char('c') if ctrl => {
                 if self.is_running {
