@@ -58,4 +58,4 @@ ion reads `AGENTS.md` (or `CLAUDE.md` as fallback) from project root and user di
 
 ## License
 
-[AGPL-3.0](LICENSE)
+[PolyForm Shield 1.0.0](LICENSE)
