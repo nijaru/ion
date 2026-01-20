@@ -11,8 +11,9 @@ We need a long-term, multi-line text editor that handles graphemes correctly and
 - Crate: `rat-text` (ratatui text input widgets)
 - Docs: https://docs.rs/rat-text/3.0.3
 - Repo: https://github.com/thscharler/rat-salsa
-- Keywords visible in docs: textarea, cursor, selection, editor, input
-- Likely supports multi-line editing and selection (textarea focus)
+- Evidence (source): `rat-text/src/text_area.rs`
+- Supports: multi-line text area, selection, word/line navigation, undo/redo, clipboard hooks
+- Event handling: `handle_events`/`handle_readonly_events` using `rat_event` + `crossterm::Event`
 
 ### tui-input
 
@@ -36,3 +37,4 @@ We need a long-term, multi-line text editor that handles graphemes correctly and
 
 - docs.rs: rat-text 3.0.3 https://docs.rs/rat-text/3.0.3
 - docs.rs: tui-input 0.15.0 https://docs.rs/tui-input/0.15.0
+- rat-text source: https://github.com/thscharler/rat-salsa/blob/master/rat-text/src/text_area.rs
