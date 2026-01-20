@@ -83,7 +83,6 @@ impl PermissionMatrix {
                 if tool.danger_level() == DangerLevel::Safe
                     || self.session_allowed_tools.contains(tool.name())
                     || self.permanent_allowed_tools.contains(tool.name())
-                    || tool.name() != "bash"
                 {
                     PermissionStatus::Allowed
                 } else {
