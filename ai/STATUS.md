@@ -50,9 +50,9 @@ Run `tk ls` for current task list. **18 open tasks** as of 2026-01-20.
 
 **Active:**
 
-| Task    | Issue                                   |
-| ------- | --------------------------------------- |
-| tk-h8iw | [REFACTOR] Inline viewport migration    |
+| Task    | Issue                                        |
+| ------- | -------------------------------------------- |
+| tk-g82p | Inline refactor: remove alternate screen     |
 
 **Open:**
 
@@ -91,6 +91,10 @@ Run `tk ls` for current task list. **18 open tasks** as of 2026-01-20.
 - Inline viewport is primary; alternate screen removal planned
 - Status line is minimal: model + context left, `? help` right
 - User messages use `>` prefix; system notices dim + bracketed
+
+**Session - Inline Refactor (in progress):**
+
+- Dropped alternate screen setup and switched TUI to inline viewport in `src/main.rs`
 
 ## Config System
 

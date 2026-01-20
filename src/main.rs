@@ -44,13 +44,10 @@ async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::err
             MouseEventKind, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
         },
         execute,
-        terminal::{
-            EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
-            supports_keyboard_enhancement,
-        },
+        terminal::{disable_raw_mode, enable_raw_mode, supports_keyboard_enhancement},
     };
     use ion::tui::App;
-    use ratatui::prelude::*;
+    use ratatui::{prelude::*, TerminalOptions, Viewport};
     use std::io;
 
     // Setup terminal
@@ -67,9 +64,15 @@ async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::err
     }
 
     // Enable mouse capture for scroll - use Shift+click for text selection
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(stdout, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
+    let (_, height) = crossterm::terminal::size()?;
+    let mut terminal = Terminal::with_options(
+        backend,
+        TerminalOptions {
+            viewport: Viewport::Inline(height),
+        },
+    )?;
 
     // Create app with permission settings
     let mut app = App::with_permissions(permissions).await;
@@ -110,11 +113,7 @@ async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::err
                 execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags)?;
             }
             disable_raw_mode()?;
-            execute!(
-                terminal.backend_mut(),
-                LeaveAlternateScreen,
-                DisableMouseCapture
-            )?;
+            execute!(terminal.backend_mut(), DisableMouseCapture)?;
             terminal.show_cursor()?;
 
             // Open editor and get result
@@ -133,12 +132,7 @@ async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::err
                     )
                 )?;
             }
-            execute!(
-                terminal.backend_mut(),
-                EnterAlternateScreen,
-                EnableMouseCapture
-            )?;
-            terminal.hide_cursor()?;
+            execute!(terminal.backend_mut(), EnableMouseCapture)?;
         }
     }
 
@@ -147,11 +141,7 @@ async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::err
         execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags)?;
     }
     disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
+    execute!(terminal.backend_mut(), DisableMouseCapture)?;
     terminal.show_cursor()?;
 
     Ok(())
