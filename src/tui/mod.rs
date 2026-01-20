@@ -165,10 +165,6 @@ pub struct App {
     pub last_task_summary: Option<TaskSummary>,
     /// Request to open input in external editor (Ctrl+G)
     pub editor_requested: bool,
-    /// Cached git diff stats (+insertions, -deletions)
-    git_diff_stats: Option<(usize, usize)>,
-    /// When git diff stats were last refreshed
-    git_diff_updated: Option<Instant>,
 }
 
 /// Summary of a completed task for post-completion display
@@ -378,8 +374,6 @@ impl App {
             permissions,
             last_task_summary: None,
             editor_requested: false,
-            git_diff_stats: None,
-            git_diff_updated: None,
         };
 
         // Set initial API provider name on model picker
@@ -534,14 +528,6 @@ impl App {
             self.mode = Mode::Approval;
         }
 
-        // Refresh git diff stats every 5 seconds
-        let should_refresh = self
-            .git_diff_updated
-            .is_none_or(|t| t.elapsed() > Duration::from_secs(5));
-        if should_refresh {
-            self.git_diff_stats = get_git_diff_stats(&self.session.working_dir);
-            self.git_diff_updated = Some(Instant::now());
-        }
     }
 
     pub fn handle_event(&mut self, event: Event) {
@@ -1758,13 +1744,7 @@ impl App {
             }
         }
 
-        // Status line: model · context% · [branch] · cwd
-        let cwd = self
-            .session
-            .working_dir
-            .file_name()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| "~".to_string());
+        // Status line: model · context%
 
         // Simplify model name (remove provider prefix if present)
         let model_name = self
@@ -1774,12 +1754,8 @@ impl App {
             .next_back()
             .unwrap_or(&self.session.model);
 
-        // Build status line left side with spans for colored diff stats
-        let mut left_spans: Vec<Span> = vec![
-            Span::raw(" "),
-            Span::raw(model_name),
-            Span::raw(" · "),
-        ];
+        // Build status line left side
+        let mut left_spans: Vec<Span> = vec![Span::raw(" "), Span::raw(model_name), Span::raw(" · ")];
 
         // Context % display with token counts: 56% (112k/200k)
         if let Some((used, max)) = self.token_usage {
@@ -1793,24 +1769,6 @@ impl App {
             };
             left_spans.push(Span::raw(format!("{}% ({}/{}) · ", pct, format_k(used), format_k(max))));
         }
-
-        // Git branch with colored diff stats
-        let branch = get_git_branch(&self.session.working_dir).unwrap_or_default();
-        if !branch.is_empty() {
-            left_spans.push(Span::raw("["));
-            left_spans.push(Span::raw(branch));
-            if let Some((ins, del)) = self.git_diff_stats {
-                if ins > 0 {
-                    left_spans.push(Span::styled(format!(" +{}", ins), Style::default().fg(Color::Green)));
-                }
-                if del > 0 {
-                    left_spans.push(Span::styled(format!(" -{}", del), Style::default().fg(Color::Red)));
-                }
-            }
-            left_spans.push(Span::raw("] · "));
-        }
-
-        left_spans.push(Span::raw(cwd));
 
         // Calculate left side length for padding
         let left_len: usize = left_spans.iter().map(|s| s.content.chars().count()).sum();
@@ -1911,57 +1869,6 @@ impl App {
 
         frame.render_widget(help_para, help_area);
     }
-}
-
-/// Get git diff stats (insertions, deletions) for the working directory.
-fn get_git_diff_stats(working_dir: &std::path::Path) -> Option<(usize, usize)> {
-    use std::process::Command;
-
-    let output = Command::new("git")
-        .args(["diff", "--shortstat"])
-        .current_dir(working_dir)
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    // Format: " 3 files changed, 45 insertions(+), 12 deletions(-)"
-    let mut insertions = 0;
-    let mut deletions = 0;
-
-    for part in stdout.split(',') {
-        let part = part.trim();
-        if part.contains("insertion") {
-            insertions = part.split_whitespace().next()?.parse().ok()?;
-        } else if part.contains("deletion") {
-            deletions = part.split_whitespace().next()?.parse().ok()?;
-        }
-    }
-
-    if insertions > 0 || deletions > 0 {
-        Some((insertions, deletions))
-    } else {
-        None
-    }
-}
-
-/// Get the current git branch name, if in a git repository.
-fn get_git_branch(working_dir: &std::path::Path) -> Option<String> {
-    let head_path = working_dir.join(".git/HEAD");
-    if let Ok(content) = std::fs::read_to_string(head_path) {
-        let content = content.trim();
-        if let Some(branch) = content.strip_prefix("ref: refs/heads/") {
-            return Some(branch.to_string());
-        }
-        // Detached HEAD - show short hash
-        if content.len() >= 7 {
-            return Some(content[..7].to_string());
-        }
-    }
-    None
 }
 
 /// Strip ANSI escape sequences from a string.
