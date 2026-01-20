@@ -11,9 +11,14 @@
   "blocked_by": [],
   "estimate": null,
   "due_date": null,
-  "logs": [],
+  "logs": [
+    {
+      "ts": "2026-01-20T20:16:22.425Z",
+      "msg": "User requested security/permission system review (priority TBD)"
+    }
+  ],
   "created_at": "2026-01-19T13:28:56.187Z",
-  "updated_at": "2026-01-19T13:28:56.187Z",
+  "updated_at": "2026-01-20T20:16:22.425Z",
   "completed_at": null,
   "external": {}
 }
