@@ -1450,6 +1450,9 @@ impl App {
         // scroll_offset is lines from bottom (0 = at bottom)
         let total_lines = chat_lines.len();
         let max_scroll = total_lines.saturating_sub(viewport_height);
+        if self.message_list.scroll_offset > max_scroll {
+            self.message_list.scroll_offset = max_scroll;
+        }
         let scroll_y = max_scroll.saturating_sub(self.message_list.scroll_offset);
 
         let chat_para = Paragraph::new(chat_lines)
