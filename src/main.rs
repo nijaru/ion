@@ -40,8 +40,8 @@ async fn main() -> ExitCode {
 async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::error::Error>> {
     use crossterm::{
         event::{
-            self, KeyboardEnhancementFlags, MouseEventKind, PopKeyboardEnhancementFlags,
-            PushKeyboardEnhancementFlags,
+            self, DisableMouseCapture, EnableMouseCapture, KeyboardEnhancementFlags,
+            MouseEventKind, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
         },
         execute,
         terminal::{
@@ -66,7 +66,8 @@ async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::err
         )?;
     }
 
-    execute!(stdout, EnterAlternateScreen)?;
+    // Enable mouse capture for scroll - use Shift+click for text selection
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -109,7 +110,11 @@ async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::err
                 execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags)?;
             }
             disable_raw_mode()?;
-            execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+            execute!(
+                terminal.backend_mut(),
+                LeaveAlternateScreen,
+                DisableMouseCapture
+            )?;
             terminal.show_cursor()?;
 
             // Open editor and get result
@@ -128,7 +133,11 @@ async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::err
                     )
                 )?;
             }
-            execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+            execute!(
+                terminal.backend_mut(),
+                EnterAlternateScreen,
+                EnableMouseCapture
+            )?;
             terminal.hide_cursor()?;
         }
     }
@@ -138,7 +147,11 @@ async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::err
         execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags)?;
     }
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
     terminal.show_cursor()?;
 
     Ok(())
