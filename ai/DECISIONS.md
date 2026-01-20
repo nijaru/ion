@@ -2,6 +2,39 @@
 
 > Decision records for ion development. Historical Python-era decisions archived in DECISIONS-archive.md.
 
+## 2026-01-20: Text Input Engine - rat-text
+
+**Context**: We need a long-term, multi-line editor with grapheme-safe cursor movement, selection, and consistent key handling. Custom input code risks edge cases and future refactors.
+
+**Decision**: Adopt `rat-text` as the unified text input engine for the main input and selector search.
+
+| Requirement            | Coverage                      |
+| ---------------------- | ----------------------------- |
+| Multi-line editing     | `TextArea`                    |
+| Selection              | built-in selection support    |
+| Word/line navigation   | word/line helpers in API      |
+| Undo/redo + clipboard  | supported in `TextArea`       |
+| Event handling         | `handle_events` (crossterm)   |
+
+**Rationale**: rat-text provides a full textarea with selection, navigation, and editing primitives. Using it avoids a bespoke editor and keeps future changes localized.
+
+---
+
+## 2026-01-20: Fuzzy Matching Library - fuzzy-matcher
+
+**Context**: We need fuzzy search for provider/model selection now and for `@` file inclusion and slash commands later. We want low complexity and permissive licensing.
+
+**Decision**: Use `fuzzy-matcher` for all fuzzy matching in the UI.
+
+| Option         | Pros                            | Cons                  |
+| -------------- | ------------------------------- | --------------------- |
+| fuzzy-matcher  | Simple, MIT, easy integration   | Less advanced scoring |
+| nucleo         | Very strong scoring/perf        | Heavier, MPL-2.0      |
+
+**Rationale**: fuzzy-matcher is sufficient for current list sizes and features while keeping dependency surface small.
+
+---
+
 ## 2026-01-19: Config Priority - Explicit Config > Env Vars
 
 **Context**: Deciding whether API keys from config file or environment variables should take priority.
