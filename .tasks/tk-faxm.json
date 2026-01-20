@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "faxm",
+  "title": "[UX] /resume slash command with selector UI to pick sessions",
+  "description": null,
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-20T21:05:36.232Z",
+  "updated_at": "2026-01-20T21:05:36.232Z",
+  "completed_at": null,
+  "external": {}
+}
