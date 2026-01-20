@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "19ah",
+  "title": "[ERROR] Fix agent loop hanging on provider stream errors",
+  "description": null,
+  "status": "done",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-15T13:19:07.127Z",
+  "updated_at": "2026-01-15T18:24:58.329Z",
+  "completed_at": "2026-01-15T18:24:58.329Z",
+  "external": {}
+}

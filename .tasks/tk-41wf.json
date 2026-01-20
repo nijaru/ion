@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "41wf",
+  "title": "Set up Rust project structure for TUI agent",
+  "description": null,
+  "status": "done",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-12T16:09:47.292Z",
+  "updated_at": "2026-01-13T07:13:43.740Z",
+  "completed_at": "2026-01-13T07:13:43.740Z",
+  "external": {}
+}

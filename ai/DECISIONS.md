@@ -1,0 +1,444 @@
+# ion Decisions
+
+> Decision records for ion development. Historical Python-era decisions archived in DECISIONS-archive.md.
+
+## 2026-01-18: Rig Framework Evaluation (Removed)
+
+**Context**: Evaluated **Rig** framework (rig.rs) for ecosystem compatibility. Built prototype `RigToolWrapper` bridge.
+
+**Decision**: Remove Rig entirely. Not actively used; no concrete benefit over current architecture.
+
+| Component  | Verdict | Rationale                         |
+| ---------- | ------- | --------------------------------- |
+| Agent Loop | Custom  | Plan-Act-Verify + OmenDB is key   |
+| Providers  | Custom  | Working implementations exist     |
+| Tools      | Custom  | MCP handles ecosystem interop     |
+| MCP        | Custom  | `mcp-sdk-rs` integration complete |
+
+**Outcome**: Removed `rig-core` dependency and `src/rig_compat/` module. If Rig ecosystem tools become relevant later, can add a thin adapter.
+
+---
+
+## 2026-01-18: ContextManager & minijinja Integration
+
+**Context**: System prompt assembly was becoming monolithic and hard to maintain as we added Plans, Skills, and Memory context. Manual string concatenation broke provider caching.
+
+**Decision**: Decouple assembly into a `ContextManager` using `minijinja` templates.
+
+| Aspect         | Implementation                                                 |
+| -------------- | -------------------------------------------------------------- |
+| **Storage**    | `src/agent/context.rs`                                         |
+| **Templating** | `minijinja` (Jinja2 compatible)                                |
+| **Caching**    | Stabilized system prompt; injected memory as a `User` message. |
+
+**Rationale**: Decoupling instructions from Rust code improves DX and allows for faster prompt iteration without recompiling.
+
+---
+
+## 2026-01-18: Plan-Act-Verify Loop
+
+**Context**: Agents often suffer from "hallucination of success," assuming a tool call worked based on exit codes rather than actual output verification.
+
+**Decision**: Implement a stateful task-tracking loop.
+
+| Phase      | Implementation                                                                   |
+| ---------- | -------------------------------------------------------------------------------- |
+| **Plan**   | Designer sub-agent generates a JSON task graph with `TaskStatus`.                |
+| **Act**    | Main agent focuses on the `Pending/InProgress` task.                             |
+| **Verify** | ContextManager injects explicit verification instructions for every tool result. |
+
+---
+
+## 2026-01-16: Sub-Agents vs Skills Architecture
+
+**Context**: Research on Pi-Mono (minimal) vs Claude Code (rich features), multi-agent effectiveness studies, and model routing patterns.
+
+**Decision**: Sub-agents for context isolation only; skills for behavior modification.
+
+### Skills (Same Context)
+
+| Skill       | Purpose               |
+| ----------- | --------------------- |
+| `developer` | Code implementation   |
+| `designer`  | Architecture planning |
+| `refactor`  | Code restructuring    |
+
+Skills inject prompts into the main context. Full conversation history preserved.
+
+### Sub-Agents (Isolated Context)
+
+| Sub-Agent    | Model | Purpose                     |
+| ------------ | ----- | --------------------------- |
+| `explorer`   | Fast  | Find files, search patterns |
+| `researcher` | Full  | Web search, doc synthesis   |
+| `reviewer`   | Full  | Build, test, analyze        |
+
+Sub-agents spawn with isolated context, return summaries.
+
+**Key insight** (Cognition research): Sub-agents making independent decisions produce incompatible outputs. "Actions carry implicit decisions." Skills preserve context; sub-agents isolate expansion.
+
+### Model Selection
+
+**Decision**: Binary choice (fast/full) for simplicity.
+
+| Model | Use Case                               |
+| ----- | -------------------------------------- |
+| Fast  | Explorer only (Haiku-class, iterative) |
+| Full  | Everything else (inherit from main)    |
+
+**Rationale**: Complex routing adds failure modes. Explorer is iterative (5-10 searches), benefits from speed. Researcher/reviewer need reasoning quality.
+
+**References**: `ai/design/sub-agents.md`, `ai/research/agent-comparison-2026.md`, `ai/research/model-routing-for-subagents.md`
+
+---
+
+## 2026-01-14: Rebrand to ion
+
+**Context**: Need for a punchier, 4-letter CLI command that flows better and avoids the ambiguity of "Aircher."
+
+**Decision**: Rename project to **ion**.
+
+| Aspect    | Implementation                             |
+| --------- | ------------------------------------------ |
+| Binary    | `ion`                                      |
+| CLI Style | 4-letter disemvoweled (classic Unix style) |
+| Branding  | Neural/Agent identity                      |
+
+## 2026-01-13: Architecture Refinements
+
+**Context**: Research on RLM patterns, conversational subagents, and provider caching.
+
+### No Hardcoded Models
+
+**Decision**: All models/providers are user-configured, never hardcoded.
+
+| Aspect    | Implementation                |
+| --------- | ----------------------------- |
+| Config    | TOML file, CLI args, env vars |
+| Default   | User sets in config           |
+| Switching | Runtime provider registry     |
+
+### RLM is TUI Orchestration
+
+**Decision**: RLM patterns are implemented in the TUI agent, not the model.
+
+| RLM Component      | Who Implements           |
+| ------------------ | ------------------------ |
+| REPL environment   | TUI (context storage)    |
+| Strategy selection | Model (via prompting)    |
+| Sub-LM calls       | TUI (parallel API calls) |
+| Result aggregation | Model (via prompting)    |
+
+**Rationale**: The RLM paper's REPL is just an execution environment. The TUI implements the orchestration; any instruction-following model works.
+
+### Conversational Subagents
+
+**Decision**: Support multi-turn dialogue between main agent and subagents.
+
+| Mode           | Use Case                 |
+| -------------- | ------------------------ |
+| SpawnAndWait   | Simple tasks (default)   |
+| Conversational | Review loops, refinement |
+
+**Research**: AutoGen Nested Chats, CAMEL role-playing patterns.
+
+### Language: Rust (Confirmed)
+
+**Decision**: Rust for the TUI agent.
+
+| Factor         | Rust              | TypeScript/Bun            |
+| -------------- | ----------------- | ------------------------- |
+| Performance    | Excellent         | Good enough               |
+| Distribution   | ~10MB single file | ~50MB+ with runtime       |
+| Reference impl | Codex CLI (MIT)   | Claude Code (proprietary) |
+
+**Why Rust works now**:
+
+1. Codex CLI exists as MIT-licensed reference
+2. ratatui has mature async patterns
+3. OmenDB is Rust-native (no FFI)
+
+### Configuration Architecture
+
+**Decision**: Three-tier config with favorites support.
+
+```
+~/.config/ion/
+├── config.toml          # Global settings
+├── models.toml          # Model definitions + favorites
+└── keys.toml            # API keys (separate for security)
+
+./.ion/
+├── config.toml          # Project overrides
+```
+
+---
+
+## 2026-01-12: Full Rust with Native OmenDB
+
+**Context**: After comprehensive research (Goose, Pi, memory architectures, TUI frameworks), deciding on final architecture.
+
+**Decision**: Full Rust TUI agent with native OmenDB integration.
+
+### Memory Integration
+
+**Decision**: Use OmenDB Rust crate directly (`omendb = "0.0.23"`)
+
+OmenDB is Rust-native with:
+
+- HNSW + ACORN-1 filtered search
+- Full-text search (tantivy)
+- Same core as npm/Python packages
+
+No reason to go through MCP when we can use the Rust crate directly.
+
+### TUI Framework
+
+**Decision**: ratatui
+
+| Framework | Stars | Verdict                                        |
+| --------- | ----- | ---------------------------------------------- |
+| ratatui   | 10k+  | **Winner** - mature, async-friendly, good docs |
+
+## 2026-01-14: Async TUI-Agent Communication
+
+**Context**: Need to keep the TUI responsive (60fps) while the agent performs long-running tasks like LLM calls or tool execution.
+
+**Decision**: Use `tokio::sync::mpsc` channels for communication.
+
+| Component      | Responsibility                                                                                         |
+| -------------- | ------------------------------------------------------------------------------------------------------ |
+| **Agent Task** | Spawns in background; sends `AgentEvent` (deltas, tool starts, results) to channel.                    |
+| **TUI App**    | Polls `event_rx` in every TUI update loop; updates local state (messages, running status) accordingly. |
+
+**Rationale**: Avoids locking the UI thread and provides a clean separation of concerns. `mpsc` is the standard tool for this in the `tokio` ecosystem.
+
+## 2026-01-14: Performance-First Architecture
+
+**Context**: Initial benchmarks showed slow indexing (20ms/entry) and sequential tool execution bottlenecks.
+
+**Decision**: Implement batching, parallel execution, and `Arc`-based history.
+
+| Area         | Decision                                        | Rationale                                                                                                            |
+| ------------ | ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| **Memory**   | Batch SQLite queries + Lazy OmenDB flush.       | Essential for real-time codebase indexing. Batching fixes the N+1 overhead of metadata retrieval.                    |
+| **Agent**    | Parallel `execute_tools` + `Arc<Vec<Message>>`. | Allows fast multi-file reads. `Arc` prevents O(N^2) memory overhead in long sessions where N is the number of turns. |
+| **Provider** | Use `Cow<'static, str>` for system prompts.     | Avoids unnecessary allocations for constant strings sent with every request.                                         |
+
+**Rationale**: `ion` aims to be "Local-First", meaning local processing must be near-instant to compete with cloud-based agents.
+
+## 2026-01-14: Agent Loop Decomposition
+
+**Context**: The monolithic `run_task` loop is difficult to test and prone to hanging when sub-tasks (like provider streams) fail silently.
+
+**Decision**: Decompose the loop into `stream_response` and `execute_turn_tools`.
+
+**Rationale**:
+
+1.  **Observability**: Easier to track exactly where a failure occurs (provider vs tool).
+2.  **Safety**: Ensures error events are always propagated back to the TUI.
+3.  **Testability**: Allows mocking tools without mocking the provider and vice versa.
+
+## 2026-01-14: Post-Review Architecture Hardening
+
+**Context**: Comprehensive review identified critical reliability and safety issues in the core Agent loop and Tool permission system.
+
+**Decision**: Prioritize fix for "Lock-Across-Await" and "Silent Error Hiding".
+
+| Component            | Decision                                                                                   | Rationale                                                                                                                       |
+| -------------------- | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| **Tool Permissions** | Drop `RwLock` read-guard _before_ calling `ask_approval`.                                  | Prevents deadlocks if the UI thread or a config update tries to acquire a write lock while the agent is waiting for user input. |
+| **Agent Loop**       | Wrap provider stream in a robust error-handling block that always signals `tx` on failure. | Prevents the TUI from being stuck in "RUNNING" state when the backend stream crashes or errors out.                             |
+| **Bash Tool**        | Use `kill_on_drop(true)` with user-cancellation support.                                   | Allows user to cancel long-running commands; process is killed on cancellation.                                                 |
+
+**Rationale**: These are fundamental "correctness" and "safety" fixes that must precede Phase 3 feature completion (RAG/Compaction).
+
+## 2026-01-15: Double-ESC Cancellation UX
+
+**Context**: Need a way to cancel running commands/tasks without accidental triggers. Ctrl+C conflicts with text box clearing.
+
+**Decision**: Double-press ESC within 1.5s window to cancel.
+
+| Aspect   | Implementation                                            |
+| -------- | --------------------------------------------------------- |
+| Trigger  | ESC pressed twice within 1500ms                           |
+| Feedback | Title bar turns yellow, shows "Press ESC again to cancel" |
+| Scope    | Only active when agent is running                         |
+
+**Rationale**: Single-key cancellation risks accidental triggers. Double-press is quick for intentional cancels but prevents accidents. ESC avoids Ctrl+C conflict with text clearing.
+
+## 2026-01-17: Tree-sitter for Precise Symbol Mapping
+
+**Context**: Regex-based symbol extraction is brittle for complex Rust (macros, nested modules) and TypeScript (nested classes, decorators).
+
+**Decision**: Integrate `tree-sitter` for all codebase symbol extraction.
+
+| Aspect          | Implementation                                                                       |
+| --------------- | ------------------------------------------------------------------------------------ |
+| **Parsing**     | Use `tree-sitter-rust`, `tree-sitter-typescript`, and `tree-sitter-python` grammars. |
+| **Strategy**    | Query-based extraction for functions, structs, classes, and methods.                 |
+| **Performance** | Tree-sitter is fast enough for lazy indexing during file interaction.                |
+
+**Rationale**: Precise symbol mapping is critical for the `Explorer` sub-agent to navigate large codebases without getting lost in regex false positives.
+
+## 2026-01-17: Strategist Sub-agent for Task Decomposition
+
+**Context**: Complex user requests (>100 chars) often lead to "one-shot" failures where the agent tries to do too much at once or misses dependencies.
+
+**Decision**: Implement a "Strategist" sub-agent that decomposes complex requests into a task graph.
+
+| Aspect        | Implementation                                               |
+| ------------- | ------------------------------------------------------------ |
+| **Trigger**   | Automatically triggered for messages >100 characters.        |
+| **Output**    | Structured JSON plan (task list with dependencies).          |
+| **Execution** | The main agent follows the plan, updating status in the TUI. |
+
+**Rationale**: Planning improves reliability for multi-step features. Decomposing the problem into smaller, verifiable chunks reduces the chance of catastrophic failure mid-task.
+
+## 2026-01-17: Hybrid Model Discovery & Metadata
+
+**Context**: Provider APIs (Anthropic, OpenAI) return model IDs but lack metadata like context window and pricing. OpenRouter is great but we want direct provider support without dependency.
+
+**Decision**: Hybrid Discovery (Availability via Provider API + Metadata via models.dev).
+
+| Phase         | Implementation                                 |
+| ------------- | ---------------------------------------------- |
+| **Discovery** | `GET /v1/models` from direct provider API.     |
+| **Hydration** | Lookup ID in `models.dev` for pricing/context. |
+| **Fallback**  | Use `models.dev` as primary for Anthropic.     |
+
+**Rationale**: Separation of concerns. The provider tells us what is _available_ for the user's key; `models.dev` tells us _how_ to use it.
+
+## 2026-01-17: Slash Commands & Discoverability
+
+**Context**: Keybindings like `Ctrl+M` and `Ctrl+P` are efficient but not discoverable. Terminal users expect slash commands.
+
+**Decision**: Support slash commands in the main chat input.
+
+| Command      | Action                               |
+| ------------ | ------------------------------------ |
+| `/models`    | Open Model Picker (`Ctrl+M`)         |
+| `/providers` | Open Provider Picker (`Ctrl+P`)      |
+| `/clear`     | Reset session and wipe history       |
+| `/snapshot`  | Trigger debug UI snapshot (`Ctrl+S`) |
+
+**Rationale**: Increases discoverability and aligns with "Chat" mental model.
+
+## 2026-01-17: Hybrid Embedding & ColBERT Strategy
+
+**Context**: Evaluating embedding models for `hygrep` (Snowflake + MLX) and the upcoming OmenDB major database changes.
+
+**Decision**: Implement a trait-based embedding engine and simulated multi-vector retrieval.
+
+| Aspect           | Implementation                                                                         |
+| ---------------- | -------------------------------------------------------------------------------------- |
+| **Embedding**    | `EmbeddingProvider` trait to support local (Snowflake/ONNX) and cloud (OpenAI) models. |
+| **Multi-Vector** | Simulated MaxSim retrieval (`Σ max(q_i · d_j)`) using document ID linking in OmenDB.   |
+| **Scoring**      | Hybrid RRF (Vector + BM25) + ACE Counters + Time Decay.                                |
+
+**Rationale**: Alignment with `hygrep` ensures consistency across the ecosystem. Simulated multi-vector support allows using SOTA ColBERT models before native OmenDB support is finalized.
+
+## 2026-01-17: TUI Markdown Caching & Performance
+
+**Context**: TUI rendering at 20-60 FPS was re-calculating markdown strings for every visible message, leading to excessive allocations and jitter.
+
+**Decision**: Cache formatted markdown in `MessageEntry`.
+
+| Aspect           | Implementation                                                             |
+| ---------------- | -------------------------------------------------------------------------- |
+| **Storage**      | `Option<String>` cache in `MessageEntry` struct.                           |
+| **Invalidation** | Cache is updated only when new deltas are appended or during session load. |
+| **Rendering**    | `draw` loop borrows `&str` directly from cache.                            |
+
+**Rationale**: Fixes the hot-path allocation bug. Chat history is largely static once a turn is finished; re-parsing markdown on every frame is unnecessary.
+
+## 2026-01-17: Optimized Local Batch Inference
+
+**Context**: Sequential embedding of message batches (e.g. during session load) was underutilizing the CPU/GPU.
+
+**Decision**: Implement manual tensor padding and true batching in ` SnowflakeArcticProvider`.
+
+| Aspect         | Implementation                                                                      |
+| -------------- | ----------------------------------------------------------------------------------- |
+| **Batching**   | Use `Tokenizer::encode_batch` and construct a 2D `ndarray` with max-length padding. |
+| **Pooling**    | Manual mean pooling using the attention mask to ignore padding tokens.              |
+| **Validation** | Explicit check of model output dimension against provider config.                   |
+
+**Rationale**: Significant performance boost for codebase indexing and session resumption.
+
+---
+
+## 2026-01-17: Strategist -> Designer Rename
+
+**Context**: The term "Strategist" felt too abstract. "Designer" better reflects the role of architecting a solution before implementation.
+
+**Decision**: Rename `Strategist` sub-agent to `Designer`.
+
+---
+
+## 2026-01-17: Context Caching Optimization (Stable System Prompt)
+
+**Context**: Constantly changing the system prompt by injecting memory context breaks provider-side caching (Anthropic/DeepSeek).
+
+**Decision**: Stabilize the `system_prompt` and inject memory context as a separate `User` message at the start of the current turn's history. This allows the system prompt to be cached and provides a stable prefix for conversation history.
+
+---
+
+## 2026-01-17: Production Hardening (Crate Selection)
+
+**Context**: Preparing for Phase 6 (Production Scale).
+
+**Decision**: Adopt the following libraries for core architecture:
+
+- **minijinja**: For template-based prompt management (decoupling prompts from code).
+- **thiserror**: For domain-specific, actionable error types in library modules.
+- **figment**: For layered configuration (global + local + env).
+
+## 2026-01-17: MCP Implementation Strategy (mcp-sdk-rs)
+
+**Context**: Need for Model Context Protocol (MCP) client support for ecosystem compatibility. Evaluated multiple Rust SDKs (`mcp-sdk-rs`, `rust-mcp-sdk`, `rmcp`).
+
+**Decision**: Use `mcp-sdk-rs` with manual `stdio` process bridging and `Session::Local`.
+
+| Aspect                 | Choice                    | Rationale                                                           |
+| ---------------------- | ------------------------- | ------------------------------------------------------------------- |
+| **Crate**              | `mcp-sdk-rs` (v0.3.4)     | Mature JSON-RPC implementation, aligns with project references.     |
+| **Transport**          | `Stdio`                   | Primary transport for local coding tools (Claude Desktop standard). |
+| **Process Management** | `tokio::process::Command` | Full control over stdin/stdout piping before handoff to transport.  |
+| **Configuration**      | `.mcp.json` support       | Compatibility with existing tool ecosystems (Cursor, Claude Code).  |
+
+**Rationale**: `mcp-sdk-rs` provides a solid session-based model. By using `Session::Local`, we offload the complexity of process management to a proven pattern while maintaining a clean `Tool` trait abstraction for the Agent.
+
+**Impact**: Enables the agent to use thousands of external tools with minimal context overhead (lazy tool loading).
+
+---
+
+## 2026-01-18: Git Integration & Undo Strategy
+
+**Context**: Evaluated the need for automated git commits and a hidden "undo" checkpoint system for agent-driven file edits.
+
+**Decision**: Rejection of automated background commits. Support for manual session checkpointing only.
+
+| Component          | Decision   | Rationale                                                                                         |
+| :----------------- | :--------- | :------------------------------------------------------------------------------------------------ |
+| **Git Automation** | **No**     | Avoids polluting user history with "noisy" agent commits. Aligns with mandates.                   |
+| **Undo/Rollback**  | **Manual** | User-managed via standard git tools (`git checkout`, `git reset`). Simple and reliable.           |
+| **Checkpointing**  | **Manual** | Checkpoint session state to `ai/` and `.tasks/` only when explicitly requested or at session end. |
+
+**Rationale**: The complexity of getting an "undo" system right across all OS platforms outweighs the benefit when the user already has professional version control tools.
+
+---
+
+## 2026-01-18: Rendered Context Caching (tk-tly3)
+
+**Context**: Context assembly rendered the entire system prompt template on every turn, even if the plan and skill remained identical.
+
+**Decision**: Implement a `RenderCache` in `ContextManager`.
+
+| Aspect           | Implementation                                                             |
+| :--------------- | :------------------------------------------------------------------------- |
+| **Trigger**      | Comparison of `Plan` (PartialEq) and `Skill` (PartialEq).                  |
+| **Storage**      | `Mutex<Option<RenderCache>>` within `ContextManager`.                      |
+| **Invalidation** | Cache is updated only when the active plan, task status, or skill changes. |
+
+**Outcome**: Reduced local CPU overhead and ensured bit-for-bit stability of the system prompt prefix for provider-side prompt caching.

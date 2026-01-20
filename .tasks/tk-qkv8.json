@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "qkv8",
+  "title": "Design Rust architecture",
+  "description": null,
+  "status": "done",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-12T16:16:10.603Z",
+  "updated_at": "2026-01-12T16:16:10.646Z",
+  "completed_at": "2026-01-12T16:16:10.646Z",
+  "external": {}
+}

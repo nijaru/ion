@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "r1xx",
+  "title": "[FEAT] Planning Sub-agent (Strategist) for task decomposition",
+  "description": null,
+  "status": "done",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-17T16:41:01.059Z",
+  "updated_at": "2026-01-18T04:50:47.170Z",
+  "completed_at": "2026-01-18T04:50:47.170Z",
+  "external": {}
+}

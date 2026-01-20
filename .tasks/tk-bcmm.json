@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "bcmm",
+  "title": "Refactor TUI: remove vim modes, implement standard keybindings (Tab=mode, Ctrl+M/P=modals)",
+  "description": null,
+  "status": "done",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-16T12:52:49.490Z",
+  "updated_at": "2026-01-16T12:57:58.587Z",
+  "completed_at": "2026-01-16T12:57:58.587Z",
+  "external": {}
+}

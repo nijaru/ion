@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "sv4z",
+  "title": "[FEAT] Implement MCP (Model Context Protocol) client support",
+  "description": null,
+  "status": "done",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-18T05:26:54.683Z",
+  "updated_at": "2026-01-18T07:27:46.729Z",
+  "completed_at": "2026-01-18T07:27:46.729Z",
+  "external": {}
+}
