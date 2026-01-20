@@ -2,30 +2,28 @@
 
 ## Overview
 
-`ion` is a high-performance Rust-based terminal agent designed for deep codebase understanding and autonomous task execution. It distinguishes itself through a "budget-aware memory context assembly" system, using native Rust vector search (OmenDB) to build highly relevant context windows.
+`ion` is a high-performance Rust-based terminal agent designed for reliable task execution and clean terminal UX. The focus is a solid core agent loop, responsive TUI, and predictable tool behavior. Advanced memory systems are intentionally out of scope until the core experience is stable.
 
 **Runtime**: Rust (Stable)
 **Distribution**: Single static binary
 
 ```
-User Request → ion CLI → Agent Core → OmenDB Memory → Tool Execution → Response
-                                   ↓
-                            Learn from outcome
+User Request → ion CLI → Agent Core → Tool Execution → Response
 ```
 
 ## Architecture Layers
 
 ### 1. TUI Layer (`ratatui`)
 
-Professional terminal interface with high-readability colors (Catppuccin Mocha).
+Inline viewport TUI with native terminal scrollback, minimal chrome, and bottom-anchored selectors.
 
-- **Chat Buffer**: Scrollable history with thin-line delimiters.
-- **Diff View**: Inline unified diffs using the `similar` crate.
-- **Statusline**: Customizable `{Model} · {Context}% | {Branch} · {Cwd}`.
+- **History**: Terminal scrollback (not app-managed).
+- **Statusline**: `{Model} · {Context}%` on the left, `? help` on the right.
+- **Input**: Multi-line editor with history recall and word navigation.
 
 ### 2. Provider Layer
 
-Multi-provider abstraction via `llm` crate supporting:
+Multi-provider abstraction via `llm-connector` supporting:
 
 - **Anthropic**: Direct Claude API
 - **Google**: Gemini via AI Studio
@@ -38,36 +36,13 @@ Multi-provider abstraction via `llm` crate supporting:
 
 The core multi-turn loop is designed for high performance and observability:
 
-- **Designer Sub-agent**: For complex tasks, a specialized planning sub-agent decomposes the request into a structured JSON task graph. This ensures the main agent follows a logical sequence with clear dependencies.
+- **Decomposed Phases**: Turn logic is split into response streaming and tool execution phases.
+- **Tool Execution**: Tool calls are executed sequentially or concurrently as needed.
+- **Shared State**: Core state is wrapped in `Arc` where needed to avoid expensive cloning.
 
-- **Decomposed Phases**: Turn logic is split into `stream_response` and `execute_tools` phases.
+## Memory and Extensions
 
-- **Parallel Execution**: Multiple tool calls in a single turn are executed concurrently using `tokio::task::JoinSet`.
-
-- **Zero-Copy Context**: Message history and tool definitions are wrapped in `Arc` to avoid expensive cloning during context assembly and provider requests.
-
-## Memory Layer (The OmenDB Advantage)
-
-Native Rust integration with OmenDB for:
-
-- **Tree-sitter Integration**: Precise symbol mapping (functions, classes, structs) using language-aware grammars instead of regex. This enables high-fidelity codebase navigation.
-
-- **Agentic Filesystem Memory**: Inspired by Letta/MemGPT research, `ion` treats the local filesystem as a primary memory tool.
-
-Agents are encouraged to use `grep` and `glob` iteratively, leveraging the fact that LLMs are heavily trained on filesystem-style information retrieval.
-
-- **Lazy Indexing**: Symbols (functions, classes) and file metadata are only indexed when the agent interacts with a file (Read/Write). This prevents O(N) startup bottlenecks in large repositories.
-- **Background Indexing Worker**: A dedicated `IndexingWorker` manages a queue of embedding/storage requests, preventing UI lag during ingestion.
-- **Hybrid Retrieval (RAG)**: Combines Vector similarity and BM25 full-text search using **Reciprocal Rank Fusion (RRF)** for unstructured context.
-- **Advanced Scoring (ACE)**: Boosts "helpful" memories and penalizes "harmful" ones based on agent self-correction patterns.
-- **Time Decay**: Type-specific half-lives (Semantic=7d, Episodic=24h, Working=1h) ensure relevant history is prioritized.
-- **Batch Retrieval**: SQLite lookups are batched (`IN` clause) after vector search to avoid N+1 queries.
-- **Lazy Persistence**: Disk flushing is decoupled from indexing for high-throughput background ingestion.
-- **Multi-Vector Support**: Simulated ColBERT MaxSim retrieval (`Σ max(q_i · d_j)`) for token-level semantic granularity.
-- **Hardware Optimized Inference**: Local embeddings use `ort` (ONNX) with platform-specific acceleration:
-  - **macOS**: CoreML (Apple Silicon Neural Engine)
-  - **Linux**: CUDA (NVIDIA) or ROCm (AMD)
-  - **Windows**: DirectML (Universal GPU acceleration)
+Memory systems are planned as optional integrations via hooks or plugins, not core dependencies.
 
 ## TUI Layer (High-Performance Interaction)
 
@@ -80,8 +55,7 @@ Agents are encouraged to use `grep` and `glob` iteratively, leveraging the fact 
 ```
 ~/.config/ion/
 ├── config.toml          # Global settings
-├── models.toml          # Model preferences
-└── keys.toml            # Encrypted or separate keys
+└── keys.toml            # Optional provider keys
 
 ~/.local/share/ion/
 ├── sessions/            # Persisted message history (SQLite)
@@ -90,7 +64,7 @@ Agents are encouraged to use `grep` and `glob` iteratively, leveraging the fact 
 
 ## Tool Framework
 
-- **Built-in**: `read`, `write`, `grep`, `glob`, `bash`.
+- **Built-in**: `read`, `write`, `grep`, `glob`, `bash`, `list`, `edit`.
 - **Formatting**: Tool execution is logged minimally; file edits show standard git-style diffs.
 - **Safety**: 3-mode permission matrix (Read, Write, AGI) with interactive `y/n/a/A/s` prompts in Write mode.
 
@@ -98,24 +72,18 @@ Agents are encouraged to use `grep` and `glob` iteratively, leveraging the fact 
 
 To improve reliability and fix "silent hang" bugs, the Agent loop is being refactored into discrete phases:
 
-1.  **Response Phase (`stream_response`)**: Handles provider streaming, collects deltas, and extracts tool calls.
-2.  **Tool Phase (`execute_turn_tools`)**: Sequentially (or concurrently where safe) executes turn-based tool calls.
-3.  **State Phase (`update_session`)**: Commits assistant and tool turns to history.
+1. **Response Phase**: Handles provider streaming, collects deltas, and extracts tool calls.
+2. **Tool Phase**: Executes tool calls and returns results.
+3. **State Phase**: Commits assistant and tool turns to history.
 
 This separation allows for robust error handling at each boundary and enables unit testing of tool execution without requiring a live LLM.
 
-## TUI: MessageList Component
+## TUI: Message Rendering
 
-The TUI state is being decoupled by extracting message history into a `MessageList` struct.
-
-- **Responsibilities**:
-  - Accumulating text and thinking deltas.
-  - Formatting tool execution status and results.
-  - Handling future scrollback, search, and markdown rendering.
-- **Interface**: `MessageList::push_event(AgentEvent)`
+Message history is rendered into terminal scrollback via inline viewport inserts. The TUI maintains only the active viewport content and ephemeral selector UI state.
 
 ## Design Philosophy
 
 - **Minimalist**: Focus on the code and the chat; avoid UI clutter.
 - **Native**: Leverage Rust's speed for instant tool feedback and search.
-- **Invisible Intelligence**: Memory works in the background to improve answers without requiring user management.
+- **Extensible**: Hooks and plugins enable optional memory systems later without bloating core UX.

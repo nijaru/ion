@@ -8,6 +8,14 @@
 
 Migrate ion TUI from alternate screen mode to inline viewport mode using ratatui's `Viewport::Inline`.
 
+## Decision Summary
+
+- **Primary mode**: Inline viewport is the default and the only fully supported UI mode.
+- **Alternate screen**: Prefer removal to avoid dual rendering paths and duplicated QA.
+- **Selectors**: Use a single bottom-anchored selector UI for help/config/provider/model/plugin.
+- **Status line**: Model + context usage on left, help hotkey on right. No cwd/path, no git by default.
+- **Messages**: User messages use a `>` prefix; no model header for agent messages. Model changes are logged inline when they occur.
+
 ## Current vs Target
 
 | Aspect        | Current (Alternate Screen) | Target (Inline Viewport) |
@@ -19,25 +27,31 @@ Migrate ion TUI from alternate screen mode to inline viewport mode using ratatui
 | Mouse capture | Required for scroll        | Not needed               |
 | Exit behavior | Returns to previous        | Output persists          |
 
+## Alternate Screen Compatibility
+
+- The bottom-anchored selector UI can be implemented in alternate screen mode, but it adds a second rendering path and doubles QA surface.
+- Maintaining both modes increases risk: duplicated layout logic, higher bug count, and more edge cases in resize/scroll.
+- Recommendation: focus on inline as primary. If alternate is retained, treat it as best-effort and explicitly document gaps.
+
 ## Target UI Layout
 
 ```
 [terminal scrollback - handled by terminal]
 ... previous messages scroll up naturally ...
 
+  Ionizing line / task state                 |
+─ [Write] ───────────────────────────────────
+> [input area - single or multi-line]        |
 ─────────────────────────────────────────────
-> [input area - single or multi-line]        |  viewport
-─────────────────────────────────────────────|  (fixed
-  Model · tokens/limit  |  [branch] · path   |  height)
-  permission mode indicator                  |
-─────────────────────────────────────────────
+  Model · tokens/limit               ? help  |
 ```
 
 Viewport height: ~4-6 lines (configurable)
 
 - Input area: 1-3 lines (expandable)
-- Status bar: 1 line
-- Separator/padding: 1-2 lines
+- Status bar: 1 line (model/tokens left, help hotkey right)
+- Ionizing line: 1 line (also indicates completion)
+- Separators: 2 lines (mode header, input bottom)
 
 ## Architecture Changes
 
@@ -96,18 +110,21 @@ Stays in viewport, similar to current but simpler:
 fn draw_viewport(&mut self, frame: &mut Frame) {
     let area = frame.area();
 
-    // Split: input + status
-    let [input_area, status_area] = Layout::vertical([
+    // Split: ionizing line + input + status
+    let [ionizing_area, input_area, status_area] = Layout::vertical([
+        Constraint::Length(1), // Ionizing/task state
         Constraint::Min(1),    // Input expands
-        Constraint::Length(2), // Status fixed
-    ]).areas(area);
+        Constraint::Length(1), // Model/tokens + help hotkey
+    ])
+    .areas(area);
 
     // Render input
     let input = Paragraph::new(&self.input)
-        .block(Block::bordered());
+        .block(Block::new().borders(Borders::TOP | Borders::BOTTOM));
     frame.render_widget(input, input_area);
 
-    // Render status bar
+    // Render ionizing line + status
+    self.render_ionizing(frame, ionizing_area);
     self.render_status(frame, status_area);
 }
 ```
@@ -127,6 +144,55 @@ fn draw_viewport(&mut self, frame: &mut Frame) {
 - **Mouse scroll handling** - not needed
 - **Chat history rendering** - replaced by insert_before
 - **Auto-scroll logic** - not needed
+- **Chat history box label** - remove (ionizing line covers task state)
+
+## Modal and Picker Behavior
+
+- **Inline default**: Use a single bottom-anchored takeover UI for all selectors and config screens.
+- **Scope**: Help and provider/model selection share the same selector shell (search box, list, hint line).
+- **Settings**: No settings viewport for MVP; use config file edits for now. Add settings view once there are multiple settings worth editing in-app.
+- **Behavior**: Replaces the viewport (input + status) while open, leaving terminal scrollback untouched.
+- **Exit**: Escape returns to the normal viewport.
+
+## Selector Shell (Shared UI)
+
+```
+─────────────────────────────────────────────
+  Settings:  Status   Config   Usage
+
+  Configure ion preferences
+
+  ╭────────────────────────────────────────╮
+  │ ⌕ Search settings...                   │
+  ╰────────────────────────────────────────╯
+
+  ❯ Auto-compact                            true
+    Show tips                               true
+    ...
+
+  Type to filter · Enter/↓ to select · Esc to close
+```
+
+- **Layout**: Title line, optional tabs, description, search input, list, hint line.
+- **Pages**: Provider/Model share one selector with two pages (tabs).
+  - `provider` command opens Provider page.
+  - `model` command opens Model page.
+  - On startup: if no provider configured, open Provider page. If provider set but no model, open Model page.
+- **State**: query string, filtered results, selection index, scroll offset.
+- **Input**: type-to-filter, arrows for navigation, Enter to apply, Esc to exit.
+- **Search**: Fuzzy match preferred for provider/model lists; fallback to substring if no matches.
+
+## Input Handling
+
+- **Goal**: Avoid custom cursor/selection edge cases (graphemes, emojis, multi-line).
+- **Plan**: Evaluate `rat-text` for multi-line input and selector search; if insufficient, use `tui-input` for selector search and keep custom multi-line input with stricter grapheme handling.
+
+## Message Formatting
+
+- **User**: `>` prefix; optional background tint for readability.
+- **Agent**: No header by default; messages render inline with normal styling.
+- **Thinking**: Dimmed text.
+- **System notices**: Dimmed and bracketed (e.g., `[Model: claude-haiku-4.5]`).
 
 ## Migration Steps
 
@@ -139,7 +205,7 @@ fn draw_viewport(&mut self, frame: &mut Frame) {
    - Handle multi-line messages properly
 
 3. **Simplify draw()**
-   - Only render input area + status in viewport
+   - Render ionizing line + input + status in viewport
    - Remove message list rendering
 
 4. **Handle streaming**
@@ -160,6 +226,8 @@ fn draw_viewport(&mut self, frame: &mut Frame) {
 2. **Streaming display**: In viewport or temporary lines above?
 3. **Tool output**: Collapsed in scrollback or full output?
 4. **Resize handling**: How to handle terminal resize?
+5. **Selector scope**: Confirm help uses the same bottom-anchored selector UI
+6. **Alternate mode**: Confirm removal vs legacy fallback flag
 
 ## Risks
 

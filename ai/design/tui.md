@@ -6,11 +6,11 @@ A professional, high-readability terminal interface built with `ratatui`, design
 
 ## 2. Layout & Components
 
-- **Message List**: Scrollable history with color-coded senders (Cyan: User, Green: Agent, Magenta: Tool).
-- **Progress Line**: Shows during execution: `⠼ Ionizing... (14s · ↑ 4.1k · ↓ 2.1k)`
+- **History**: Terminal scrollback (inline viewport; no app-managed chat box).
+- **Ionizing Line**: Shows during execution: `⠼ Ionizing... (14s · ↑ 4.1k · ↓ 2.1k)`
 - **Input Area**: Multi-line editor with history recall and word-level navigation.
-- **Status Line**: `model · 56% (112k/200k) · [branch] · cwd`
-- **Modals**: Full-screen or centered overlays for Provider and Model selection.
+- **Status Line**: `model · 56% (112k/200k)` on the left, `? help` on the right.
+- **Selector UI**: Bottom-anchored takeover for provider/model selection (shared shell).
 
 ## 3. Interaction
 
@@ -21,13 +21,13 @@ A professional, high-readability terminal interface built with `ratatui`, design
 | `Enter`       | Send message / Select                         |
 | `Shift+Enter` | Newline                                       |
 | `Shift+Tab`   | Cycle Tool Mode (Read → Write → Agi)          |
-| `Ctrl+M`      | Model Picker                                  |
-| `Ctrl+P`      | Provider Picker                               |
+| `Ctrl+M`      | Model Selector (page)                         |
+| `Ctrl+P`      | Provider Selector (page)                      |
 | `Ctrl+T`      | Cycle thinking level (off → low → med → high) |
 | `Ctrl+G`      | Open input in external editor (tk-otmx)       |
 | `Ctrl+C`      | Cancel running task / Clear input / Quit      |
 | `Ctrl+H`      | Help overlay                                  |
-| `PageUp/Down` | Scroll chat history                           |
+| `PageUp/Down` | Terminal scrollback (native)                  |
 | `Up/Down`     | History recall / cursor movement              |
 
 ### 3.2 Slash Commands
@@ -45,7 +45,7 @@ A professional, high-readability terminal interface built with `ratatui`, design
 
 - **ANSI Colors**: Tool output preserves terminal colors (git, ls, etc.)
 - **Markdown**: Code blocks, lists, bold text via tui-markdown
-- **Message Indicators**: ↑ You, ↓ model-name, ⏺ tool
+- **Message Indicators**: `>` prefix for user messages, dimmed bracketed system notices
 
 ### 4.2 Planned
 
@@ -54,8 +54,6 @@ A professional, high-readability terminal interface built with `ratatui`, design
   - Word-level highlighting for specific changes
 
 - **Syntax Highlighting**: tree-sitter for code blocks
-
-- **Git Stats in Status Line** (tk-whde): `+12 -5 3 files`
 
 ### 4.3 Tool Execution Visibility (tk-arh6)
 
@@ -81,9 +79,9 @@ fn open_in_editor(&mut self) {
 }
 ```
 
-## 6. Modal Handling (tk-o4uo)
+## 6. Selector Handling
 
-Escape should always close modals, even during setup. If selection required, re-open after Esc.
+Escape closes the selector and returns to input. If onboarding requires a selection, re-open the selector on next input.
 
 ## 7. Debugging & Testing
 
