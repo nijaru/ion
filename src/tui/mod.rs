@@ -155,6 +155,8 @@ pub struct App {
     pub thinking_level: ThinkingLevel,
     /// Current token usage (used, max) for context % display
     pub token_usage: Option<(usize, usize)>,
+    /// Model context window (for status display when known)
+    pub model_context_window: Option<usize>,
     /// Last error message for status line display
     pub last_error: Option<String>,
     /// Shared message queue for mid-task steering (TUI pushes, agent drains)
@@ -450,6 +452,7 @@ impl App {
             setup_fetch_started: false,
             thinking_level: ThinkingLevel::Off,
             token_usage: None,
+            model_context_window: None,
             last_error: None,
             message_queue: None,
             task_start_time: None,
@@ -556,6 +559,11 @@ impl App {
                 AgentEvent::ModelsFetched(models) => {
                     debug!("Received ModelsFetched event with {} models", models.len());
                     self.model_picker.set_models(models.clone());
+                    if let Some(model) = models.iter().find(|m| m.id == self.session.model) {
+                        if model.context_window > 0 {
+                            self.model_context_window = Some(model.context_window as usize);
+                        }
+                    }
                     self.last_error = None; // Clear error on success
                     // Show all models directly (user can type to filter/search)
                     self.model_picker.start_all_models();
@@ -1000,6 +1008,11 @@ impl App {
                     PickerStage::Model => {
                         if let Some(model) = self.model_picker.selected_model() {
                             self.session.model = model.id.clone();
+                            if model.context_window > 0 {
+                                self.model_context_window = Some(model.context_window as usize);
+                            } else {
+                                self.model_context_window = None;
+                            }
                             // Persist selection to config
                             self.config.model = Some(model.id.clone());
                             if let Err(e) = self.config.save() {
@@ -1621,6 +1634,7 @@ impl App {
 
             // Context % display with token counts: 56% (112k/200k)
             if let Some((used, max)) = self.token_usage {
+                let max = self.model_context_window.unwrap_or(max);
                 let pct = if max > 0 { (used * 100) / max } else { 0 };
                 let format_k = |n: usize| -> String {
                     if n >= 1000 {
