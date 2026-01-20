@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "tly3",
+  "title": "[PERF] Cache assembled context in Agent loop",
+  "description": null,
+  "status": "done",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-15T18:42:28.770Z",
+  "updated_at": "2026-01-18T12:52:41.303Z",
+  "completed_at": "2026-01-18T12:52:41.303Z",
+  "external": {}
+}

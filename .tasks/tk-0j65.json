@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "0j65",
+  "title": "[REFACTOR] Extract TUI message history and formatting into MessageList",
+  "description": null,
+  "status": "done",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-15T15:47:24.144Z",
+  "updated_at": "2026-01-15T18:31:24.954Z",
+  "completed_at": "2026-01-15T18:31:24.954Z",
+  "external": {}
+}

@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "kk0h",
+  "title": "Integrate ToolOrchestrator into Agent loop",
+  "description": null,
+  "status": "done",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-15T11:35:54.550Z",
+  "updated_at": "2026-01-15T12:53:32.787Z",
+  "completed_at": "2026-01-15T12:53:32.787Z",
+  "external": {}
+}

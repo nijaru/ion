@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "v7g3",
+  "title": "[WARN] Handle RwLock poisoning in ToolOrchestrator",
+  "description": null,
+  "status": "done",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-15T13:19:07.240Z",
+  "updated_at": "2026-01-15T18:25:01.418Z",
+  "completed_at": "2026-01-15T18:25:01.418Z",
+  "external": {}
+}

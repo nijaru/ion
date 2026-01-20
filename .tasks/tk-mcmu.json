@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "mcmu",
+  "title": "[PERF] Memory Pruning with Time Decay (Semantic/Episodic)",
+  "description": null,
+  "status": "done",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-17T16:41:01.079Z",
+  "updated_at": "2026-01-18T04:50:47.144Z",
+  "completed_at": "2026-01-18T04:50:47.144Z",
+  "external": {}
+}

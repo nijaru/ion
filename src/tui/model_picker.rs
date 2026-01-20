@@ -1,0 +1,586 @@
+//! Two-stage model picker: Provider → Model selection.
+
+use crate::provider::{ModelFilter, ModelInfo, ModelRegistry, ProviderPrefs};
+use ratatui::prelude::*;
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
+use std::collections::BTreeMap;
+
+/// Selection stage for the picker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PickerStage {
+    Provider,
+    Model,
+}
+
+/// Provider with aggregated stats.
+#[derive(Debug, Clone)]
+pub struct ProviderEntry {
+    pub name: String,
+    pub model_count: usize,
+    pub min_price: f64,
+    pub has_cache: bool,
+}
+
+/// State for the two-stage model picker modal.
+pub struct ModelPicker {
+    /// Current selection stage.
+    pub stage: PickerStage,
+    /// All available models (fetched from registry).
+    pub all_models: Vec<ModelInfo>,
+    /// Models grouped by provider.
+    pub providers: Vec<ProviderEntry>,
+    /// Filtered providers based on search.
+    pub filtered_providers: Vec<ProviderEntry>,
+    /// Models for selected provider.
+    pub provider_models: Vec<ModelInfo>,
+    /// Filtered models based on search.
+    pub filtered_models: Vec<ModelInfo>,
+    /// Current filter text.
+    pub filter: String,
+    /// Provider list state.
+    pub provider_state: ListState,
+    /// Model list state.
+    pub model_state: ListState,
+    /// Selected provider name.
+    pub selected_provider: Option<String>,
+    /// Provider preferences for filtering.
+    pub prefs: ProviderPrefs,
+    /// Loading state.
+    pub is_loading: bool,
+    /// Error message if fetch failed.
+    pub error: Option<String>,
+}
+
+impl Default for ModelPicker {
+    fn default() -> Self {
+        Self {
+            stage: PickerStage::Provider,
+            all_models: Vec::new(),
+            providers: Vec::new(),
+            filtered_providers: Vec::new(),
+            provider_models: Vec::new(),
+            filtered_models: Vec::new(),
+            filter: String::new(),
+            provider_state: ListState::default(),
+            model_state: ListState::default(),
+            selected_provider: None,
+            prefs: ProviderPrefs::default(),
+            is_loading: false,
+            error: None,
+        }
+    }
+}
+
+impl ModelPicker {
+    pub fn new(prefs: ProviderPrefs) -> Self {
+        Self {
+            prefs,
+            ..Default::default()
+        }
+    }
+
+    /// Reset picker to provider stage (for Ctrl+P: Provider → Model flow).
+    pub fn reset(&mut self) {
+        self.stage = PickerStage::Provider;
+        self.filter.clear();
+        self.selected_provider = None;
+        self.provider_models.clear();
+        self.filtered_models.clear();
+        self.model_state.select(None);
+        self.apply_provider_filter();
+    }
+
+    /// Start picker directly at model stage for a specific provider (for Ctrl+M: Model only).
+    pub fn start_model_only(&mut self, provider: &str) {
+        self.selected_provider = Some(provider.to_string());
+        self.provider_models = self
+            .all_models
+            .iter()
+            .filter(|m| m.provider == provider)
+            .cloned()
+            .collect();
+        self.stage = PickerStage::Model;
+        self.filter.clear();
+        self.apply_model_filter();
+    }
+
+    /// Check if we have models loaded.
+    pub fn has_models(&self) -> bool {
+        !self.all_models.is_empty()
+    }
+
+    /// Set models from registry and build provider list.
+    pub fn set_models(&mut self, models: Vec<ModelInfo>) {
+        self.all_models = models;
+        self.build_provider_list();
+        self.apply_provider_filter();
+        self.is_loading = false;
+    }
+
+    /// Set error state.
+    pub fn set_error(&mut self, err: String) {
+        self.error = Some(err);
+        self.is_loading = false;
+    }
+
+    /// Build aggregated provider list from models.
+    fn build_provider_list(&mut self) {
+        let mut by_provider: BTreeMap<String, Vec<&ModelInfo>> = BTreeMap::new();
+
+        for model in &self.all_models {
+            by_provider
+                .entry(model.provider.clone())
+                .or_default()
+                .push(model);
+        }
+
+        self.providers = by_provider
+            .into_iter()
+            .map(|(name, models)| {
+                let min_price = models
+                    .iter()
+                    .map(|m| m.pricing.input)
+                    .fold(f64::INFINITY, f64::min);
+                let has_cache = models.iter().any(|m| m.supports_cache);
+
+                ProviderEntry {
+                    name,
+                    model_count: models.len(),
+                    min_price: if min_price.is_infinite() {
+                        0.0
+                    } else {
+                        min_price
+                    },
+                    has_cache,
+                }
+            })
+            .collect();
+
+        // Sort: cache-supporting first if preferred, then by min price
+        if self.prefs.prefer_cache {
+            self.providers
+                .sort_by(|a, b| match b.has_cache.cmp(&a.has_cache) {
+                    std::cmp::Ordering::Equal => a
+                        .min_price
+                        .partial_cmp(&b.min_price)
+                        .unwrap_or(std::cmp::Ordering::Equal),
+                    other => other,
+                });
+        } else {
+            self.providers.sort_by(|a, b| {
+                a.min_price
+                    .partial_cmp(&b.min_price)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        }
+    }
+
+    /// Apply filter to provider list.
+    fn apply_provider_filter(&mut self) {
+        let filter_lower = self.filter.to_lowercase();
+
+        self.filtered_providers = self
+            .providers
+            .iter()
+            .filter(|p| {
+                if filter_lower.is_empty() {
+                    return true;
+                }
+                p.name.to_lowercase().contains(&filter_lower)
+            })
+            .cloned()
+            .collect();
+
+        if !self.filtered_providers.is_empty() {
+            self.provider_state.select(Some(0));
+        } else {
+            self.provider_state.select(None);
+        }
+    }
+
+    /// Apply filter to model list.
+    fn apply_model_filter(&mut self) {
+        let filter_lower = self.filter.to_lowercase();
+
+        self.filtered_models = self
+            .provider_models
+            .iter()
+            .filter(|m| {
+                if filter_lower.is_empty() {
+                    return true;
+                }
+                m.id.to_lowercase().contains(&filter_lower)
+                    || m.name.to_lowercase().contains(&filter_lower)
+            })
+            .cloned()
+            .collect();
+
+        // Sort: cache-supporting first if preferred, then by price
+        if self.prefs.prefer_cache {
+            self.filtered_models
+                .sort_by(|a, b| match b.supports_cache.cmp(&a.supports_cache) {
+                    std::cmp::Ordering::Equal => a
+                        .pricing
+                        .input
+                        .partial_cmp(&b.pricing.input)
+                        .unwrap_or(std::cmp::Ordering::Equal),
+                    other => other,
+                });
+        } else {
+            self.filtered_models.sort_by(|a, b| {
+                a.pricing
+                    .input
+                    .partial_cmp(&b.pricing.input)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        }
+
+        if !self.filtered_models.is_empty() {
+            self.model_state.select(Some(0));
+        } else {
+            self.model_state.select(None);
+        }
+    }
+
+    /// Select current provider and move to model stage.
+    pub fn select_provider(&mut self) {
+        if let Some(idx) = self.provider_state.selected() {
+            if let Some(provider) = self.filtered_providers.get(idx) {
+                self.selected_provider = Some(provider.name.clone());
+                self.provider_models = self
+                    .all_models
+                    .iter()
+                    .filter(|m| m.provider == provider.name)
+                    .cloned()
+                    .collect();
+                self.stage = PickerStage::Model;
+                self.filter.clear();
+                self.apply_model_filter();
+            }
+        }
+    }
+
+    /// Go back to provider stage.
+    pub fn back_to_providers(&mut self) {
+        self.stage = PickerStage::Provider;
+        self.filter.clear();
+        self.selected_provider = None;
+        self.apply_provider_filter();
+    }
+
+    /// Add character to filter.
+    pub fn push_char(&mut self, c: char) {
+        self.filter.push(c);
+        match self.stage {
+            PickerStage::Provider => self.apply_provider_filter(),
+            PickerStage::Model => self.apply_model_filter(),
+        }
+    }
+
+    /// Remove last character from filter.
+    pub fn pop_char(&mut self) {
+        self.filter.pop();
+        match self.stage {
+            PickerStage::Provider => self.apply_provider_filter(),
+            PickerStage::Model => self.apply_model_filter(),
+        }
+    }
+
+    /// Move selection up.
+    pub fn move_up(&mut self, count: usize) {
+        match self.stage {
+            PickerStage::Provider => {
+                if self.filtered_providers.is_empty() {
+                    return;
+                }
+                let i = self.provider_state.selected().unwrap_or(0);
+                let new_i = i.saturating_sub(count);
+                self.provider_state.select(Some(new_i));
+            }
+            PickerStage::Model => {
+                if self.filtered_models.is_empty() {
+                    return;
+                }
+                let i = self.model_state.selected().unwrap_or(0);
+                let new_i = i.saturating_sub(count);
+                self.model_state.select(Some(new_i));
+            }
+        }
+    }
+
+    /// Move selection down.
+    pub fn move_down(&mut self, count: usize) {
+        match self.stage {
+            PickerStage::Provider => {
+                if self.filtered_providers.is_empty() {
+                    return;
+                }
+                let len = self.filtered_providers.len();
+                let i = self.provider_state.selected().unwrap_or(0);
+                let new_i = (i + count).min(len - 1);
+                self.provider_state.select(Some(new_i));
+            }
+            PickerStage::Model => {
+                if self.filtered_models.is_empty() {
+                    return;
+                }
+                let len = self.filtered_models.len();
+                let i = self.model_state.selected().unwrap_or(0);
+                let new_i = (i + count).min(len - 1);
+                self.model_state.select(Some(new_i));
+            }
+        }
+    }
+
+    /// Jump to top.
+    pub fn jump_to_top(&mut self) {
+        match self.stage {
+            PickerStage::Provider => {
+                if !self.filtered_providers.is_empty() {
+                    self.provider_state.select(Some(0));
+                }
+            }
+            PickerStage::Model => {
+                if !self.filtered_models.is_empty() {
+                    self.model_state.select(Some(0));
+                }
+            }
+        }
+    }
+
+    /// Jump to bottom.
+    pub fn jump_to_bottom(&mut self) {
+        match self.stage {
+            PickerStage::Provider => {
+                if !self.filtered_providers.is_empty() {
+                    self.provider_state
+                        .select(Some(self.filtered_providers.len() - 1));
+                }
+            }
+            PickerStage::Model => {
+                if !self.filtered_models.is_empty() {
+                    self.model_state
+                        .select(Some(self.filtered_models.len() - 1));
+                }
+            }
+        }
+    }
+
+    /// Get currently selected model (only valid in Model stage).
+    pub fn selected_model(&self) -> Option<&ModelInfo> {
+        if self.stage != PickerStage::Model {
+            return None;
+        }
+        self.model_state
+            .selected()
+            .and_then(|i| self.filtered_models.get(i))
+    }
+
+    /// Render the picker modal.
+    pub fn render(&mut self, frame: &mut Frame) {
+        let area = frame.area();
+
+        // Center the modal (80% width, 80% height)
+        let modal_width = (area.width as f32 * 0.8) as u16;
+        let modal_height = (area.height as f32 * 0.8) as u16;
+        let x = (area.width - modal_width) / 2;
+        let y = (area.height - modal_height) / 2;
+        let modal_area = Rect::new(x, y, modal_width, modal_height);
+
+        // Clear the background
+        frame.render_widget(Clear, modal_area);
+
+        // Split into search bar + list
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(3), Constraint::Min(0)])
+            .split(modal_area);
+
+        // Search input with clear instructions
+        let search_title = match self.stage {
+            PickerStage::Provider => " Filter providers (type to search) ",
+            PickerStage::Model => " Filter models (type to search) ",
+        };
+
+        let search_block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan))
+            .title(search_title);
+
+        let search_text = if self.filter.is_empty() {
+            match self.stage {
+                PickerStage::Provider => "Start typing to filter providers...",
+                PickerStage::Model => "Start typing to filter models...",
+            }
+            .to_string()
+        } else {
+            format!("Filter: {}_", self.filter)
+        };
+
+        let search_style = if self.filter.is_empty() {
+            Style::default().dim()
+        } else {
+            Style::default().fg(Color::Yellow)
+        };
+
+        let search_para = Paragraph::new(search_text)
+            .style(search_style)
+            .block(search_block);
+        frame.render_widget(search_para, chunks[0]);
+
+        // Loading/Error state
+        if self.is_loading {
+            let loading = Paragraph::new("Loading models from OpenRouter...")
+                .style(Style::default().fg(Color::Yellow))
+                .block(Block::default().borders(Borders::ALL).title(" Loading "));
+            frame.render_widget(loading, chunks[1]);
+            return;
+        }
+
+        if let Some(ref err) = self.error {
+            let error = Paragraph::new(format!("Error: {}", err))
+                .style(Style::default().fg(Color::Red))
+                .block(Block::default().borders(Borders::ALL).title(" Error "));
+            frame.render_widget(error, chunks[1]);
+            return;
+        }
+
+        match self.stage {
+            PickerStage::Provider => self.render_provider_list(frame, chunks[1]),
+            PickerStage::Model => self.render_model_list(frame, chunks[1]),
+        }
+    }
+
+    fn render_provider_list(&mut self, frame: &mut Frame, area: Rect) {
+        let items: Vec<ListItem> = self
+            .filtered_providers
+            .iter()
+            .map(|p| {
+                let cache_indicator = if p.has_cache { "◆" } else { "○" };
+                let price = format!("from ${:.2}/M", p.min_price);
+
+                let line = Line::from(vec![
+                    Span::styled(
+                        cache_indicator,
+                        if p.has_cache {
+                            Style::default().fg(Color::Green)
+                        } else {
+                            Style::default().dim()
+                        },
+                    ),
+                    Span::raw(" "),
+                    Span::styled(&p.name, Style::default().fg(Color::White).bold()),
+                    Span::raw(" "),
+                    Span::styled(
+                        format!("({} models)", p.model_count),
+                        Style::default().fg(Color::Blue).dim(),
+                    ),
+                    Span::raw(" "),
+                    Span::styled(price, Style::default().fg(Color::Yellow).dim()),
+                ]);
+
+                ListItem::new(line)
+            })
+            .collect();
+
+        let count = self.filtered_providers.len();
+        let total = self.providers.len();
+        let title = format!(
+            " Providers ({}/{}) │ ↑↓ PgUp/PgDn navigate │ Enter select │ Esc cancel ",
+            count, total
+        );
+
+        let list = List::new(items)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Cyan))
+                    .title(title),
+            )
+            .highlight_style(
+                Style::default()
+                    .bg(Color::DarkGray)
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol("▸ ");
+
+        frame.render_stateful_widget(list, area, &mut self.provider_state);
+    }
+
+    fn render_model_list(&mut self, frame: &mut Frame, area: Rect) {
+        let items: Vec<ListItem> = self
+            .filtered_models
+            .iter()
+            .map(|m| {
+                let cache_indicator = if m.supports_cache { "◆" } else { "○" };
+                let price = format!("${:.2}/M", m.pricing.input);
+                let context = format!("{}k ctx", m.context_window / 1000);
+
+                // Show just the model name part after provider/
+                let model_name = m.id.split('/').nth(1).unwrap_or(&m.id);
+
+                let line = Line::from(vec![
+                    Span::styled(
+                        cache_indicator,
+                        if m.supports_cache {
+                            Style::default().fg(Color::Green)
+                        } else {
+                            Style::default().dim()
+                        },
+                    ),
+                    Span::raw(" "),
+                    Span::styled(model_name, Style::default().fg(Color::White)),
+                    Span::raw(" "),
+                    Span::styled(context, Style::default().fg(Color::Blue).dim()),
+                    Span::raw(" "),
+                    Span::styled(price, Style::default().fg(Color::Yellow).dim()),
+                ]);
+
+                ListItem::new(line)
+            })
+            .collect();
+
+        let provider = self.selected_provider.as_deref().unwrap_or("Unknown");
+        let count = self.filtered_models.len();
+        let total = self.provider_models.len();
+        let title = format!(
+            " {} ({}/{}) │ ↑↓ PgUp/PgDn navigate │ Enter select │ Backspace back │ Esc cancel ",
+            provider, count, total
+        );
+
+        let list = List::new(items)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Cyan))
+                    .title(title),
+            )
+            .highlight_style(
+                Style::default()
+                    .bg(Color::DarkGray)
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol("▸ ");
+
+        frame.render_stateful_widget(list, area, &mut self.model_state);
+    }
+}
+
+use crate::provider::Provider;
+use std::sync::Arc;
+
+/// Fetch models from registry using hybrid discovery.
+pub async fn fetch_models_for_picker(
+    registry: &ModelRegistry,
+    provider: Arc<dyn Provider>,
+    prefs: &ProviderPrefs,
+) -> Result<Vec<ModelInfo>, anyhow::Error> {
+    let models = registry.fetch_hybrid(provider).await?;
+    let filter = ModelFilter {
+        require_tools: true, // Agent needs tool support
+        ..Default::default()
+    };
+    Ok(registry.list_models_from_vec(models, &filter, prefs))
+}
