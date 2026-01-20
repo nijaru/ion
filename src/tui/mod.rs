@@ -1,3 +1,4 @@
+mod fuzzy;
 mod highlight;
 pub mod message_list;
 pub mod model_picker;
@@ -672,8 +673,11 @@ impl App {
                     } else {
                         // Check for slash commands
                         if self.input.starts_with('/') {
-                            let cmd = self.input.trim().to_lowercase();
-                            match cmd.as_str() {
+                            const COMMANDS: [&str; 5] =
+                                ["/model", "/provider", "/clear", "/quit", "/help"];
+                            let cmd_line = self.input.trim().to_lowercase();
+                            let cmd_name = cmd_line.split_whitespace().next().unwrap_or("");
+                            match cmd_name {
                                 "/model" | "/models" => {
                                     self.input.clear();
                                     self.cursor_pos = 0;
@@ -704,7 +708,33 @@ impl App {
                                     self.mode = Mode::HelpOverlay;
                                     return;
                                 }
-                                _ => {} // Fall through to normal message if unknown command
+                                _ => {
+                                    if !cmd_name.is_empty() {
+                                        let suggestions = fuzzy::top_matches(
+                                            cmd_name,
+                                            COMMANDS.iter().copied(),
+                                            3,
+                                        );
+                                        let message = if suggestions.is_empty() {
+                                            format!("Unknown command {}", cmd_name)
+                                        } else {
+                                            format!(
+                                                "Unknown command {}. Did you mean {}?",
+                                                cmd_name,
+                                                suggestions.join(", ")
+                                            )
+                                        };
+                                        self.message_list.push_entry(
+                                            crate::tui::message_list::MessageEntry::new(
+                                                Sender::System,
+                                                message,
+                                            ),
+                                        );
+                                    }
+                                    self.input.clear();
+                                    self.cursor_pos = 0;
+                                    return;
+                                }
                             }
                         }
 

@@ -52,7 +52,7 @@ Run `tk ls` for current task list. **18 open tasks** as of 2026-01-20.
 
 | Task    | Issue                                        |
 | ------- | -------------------------------------------- |
-| tk-w6id | Fuzzy search for @ file inclusion and slash commands |
+| (none)  | —                                            |
 
 **Open:**
 
@@ -111,6 +111,10 @@ Run `tk ls` for current task list. **18 open tasks** as of 2026-01-20.
 **Session - Selector Fuzzy Search:**
 
 - Integrating fuzzy matching into provider and model filters
+
+**Session - Command/File Fuzzy:**
+
+- Added fuzzy suggestions for slash commands and shared path matcher for @ inclusion
 
 ## Config System
 
