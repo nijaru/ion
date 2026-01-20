@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "oaze",
+  "title": "[UX] Input box padding and minimal separators (top/bottom line, prompt symbol)",
+  "description": null,
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-20T16:50:01.180Z",
+  "updated_at": "2026-01-20T16:50:01.180Z",
+  "completed_at": null,
+  "external": {}
+}
