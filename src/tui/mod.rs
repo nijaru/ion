@@ -650,11 +650,9 @@ impl App {
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
 
         match key.code {
-            // Esc: Clear input or cancel running task
+            // Esc: Cancel running task
             KeyCode::Esc => {
-                if !self.input_state.is_empty() {
-                    self.clear_input();
-                } else if self.is_running && !self.session.abort_token.is_cancelled() {
+                if self.is_running && !self.session.abort_token.is_cancelled() {
                     self.session.abort_token.cancel();
                 }
             }
@@ -1921,7 +1919,7 @@ impl App {
             row("Ctrl+M", "Model selector"),
             row("Ctrl+P", "Provider selector"),
             row("Ctrl+T", "Thinking toggle"),
-            row("Ctrl+C/Esc", "Clear input / Cancel / Quit"),
+            row("Ctrl+C", "Clear / Cancel / Quit"),
             row("PgUp/PgDn", "Scroll chat"),
             Line::from(""),
             Line::from(Span::styled(
