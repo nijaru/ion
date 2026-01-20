@@ -153,6 +153,7 @@ impl Client {
                             ..
                         } = block
                         {
+                            tracing::debug!("Tool result: id={}, content_len={}", tool_call_id, content.len());
                             result.push(llm_connector::Message::tool(tool_call_id, content));
                         }
                     }

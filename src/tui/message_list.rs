@@ -283,7 +283,8 @@ impl MessageList {
                         e.sender == Sender::Tool
                             && (e.content_as_markdown().starts_with("read(")
                                 || e.content_as_markdown().starts_with("glob(")
-                                || e.content_as_markdown().starts_with("grep("))
+                                || e.content_as_markdown().starts_with("grep(")
+                                || e.content_as_markdown().starts_with("list("))
                     })
                     .unwrap_or(false);
 
