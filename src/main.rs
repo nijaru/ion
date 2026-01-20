@@ -66,11 +66,11 @@ async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::err
     // Enable mouse capture for scroll - use Shift+click for text selection
     execute!(stdout, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
-    let (_, height) = crossterm::terminal::size()?;
+    let (_, mut inline_height) = crossterm::terminal::size()?;
     let mut terminal = Terminal::with_options(
         backend,
         TerminalOptions {
-            viewport: Viewport::Inline(height),
+            viewport: Viewport::Inline(inline_height),
         },
     )?;
 
@@ -92,6 +92,19 @@ async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::err
                         MouseEventKind::ScrollUp => app.message_list.scroll_up(3),
                         MouseEventKind::ScrollDown => app.message_list.scroll_down(3),
                         _ => {}
+                    }
+                }
+                event::Event::Resize(width, height) => {
+                    if height != inline_height {
+                        inline_height = height;
+                        terminal = Terminal::with_options(
+                            CrosstermBackend::new(io::stdout()),
+                            TerminalOptions {
+                                viewport: Viewport::Inline(inline_height),
+                            },
+                        )?;
+                    } else {
+                        terminal.resize(Rect::new(0, 0, width, inline_height))?;
                     }
                 }
                 _ => {}
