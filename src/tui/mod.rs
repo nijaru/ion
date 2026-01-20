@@ -42,6 +42,20 @@ fn format_tokens(n: usize) -> String {
     }
 }
 
+/// Normalize errors for status line display.
+fn format_status_error(msg: &str) -> String {
+    let mut out = msg.trim().to_string();
+    for prefix in ["Completion error: ", "Stream error: ", "API error: "] {
+        if let Some(rest) = out.strip_prefix(prefix) {
+            out = rest.to_string();
+        }
+    }
+    if out.to_lowercase().contains("operation timed out") {
+        return "Network timeout".to_string();
+    }
+    out
+}
+
 /// Thinking budget level for extended reasoning.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ThinkingLevel {
@@ -321,7 +335,7 @@ impl App {
             let _ = tracing_subscriber::registry()
                 .with(file_layer.with_filter(filter))
                 .try_init();
-        } else {
+        } else if std::env::var("RUST_LOG").is_ok() {
             let _ = tracing_subscriber::fmt()
                 .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
                 .try_init();
@@ -536,6 +550,7 @@ impl App {
                 AgentEvent::Finished(_) => {
                     self.save_task_summary(false);
                     self.is_running = false;
+                    self.last_error = None;
                     self.cancel_pending = None;
                     self.message_queue = None;
                     self.task_start_time = None;
@@ -552,9 +567,12 @@ impl App {
                     self.message_queue = None;
                     self.task_start_time = None;
                     self.current_tool = None;
-                    // Auto-scroll to bottom so user sees error
-                    self.message_list.scroll_to_bottom();
-                    self.message_list.push_event(event);
+                    if !was_cancelled {
+                        self.last_error = Some(format_status_error(msg));
+                        // Auto-scroll to bottom so user sees error
+                        self.message_list.scroll_to_bottom();
+                        self.message_list.push_event(event);
+                    }
                 }
                 AgentEvent::ModelsFetched(models) => {
                     debug!("Received ModelsFetched event with {} models", models.len());
@@ -1134,6 +1152,7 @@ impl App {
         self.input_tokens = 0;
         self.output_tokens = 0;
         self.last_task_summary = None;
+        self.last_error = None;
 
         // Reset cancellation token for new task (tokens are single-use)
         self.session.abort_token = CancellationToken::new();
