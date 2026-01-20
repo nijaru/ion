@@ -98,6 +98,11 @@
 - OpenRouter and Ollama fall back to non-streaming when tools are present
 - Non-streaming works correctly for tool use
 
+**UX:**
+
+- Status line uses default context window rather than model-specific max (fix pending).
+- Provider API errors surface in chat but need cleaner handling.
+
 ## Design Documents
 
 - `ai/design/permission-system.md` - CLI flags, modes, sandbox

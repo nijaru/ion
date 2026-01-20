@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "9bry",
+  "title": "[BUG] Improve API error handling in TUI",
+  "description": null,
+  "status": "open",
+  "priority": 1,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-20T15:47:46.964Z",
+  "updated_at": "2026-01-20T15:47:46.964Z",
+  "completed_at": null,
+  "external": {}
+}

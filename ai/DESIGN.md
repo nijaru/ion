@@ -42,7 +42,7 @@ The core multi-turn loop is designed for high performance and observability:
 
 ## Memory and Extensions
 
-Memory systems are planned as optional integrations via hooks or plugins, not core dependencies.
+Long-term goals include RLM integration, richer agent context management, and a memory system. These remain optional integrations via hooks or plugins, not core dependencies.
 
 ## TUI Layer (High-Performance Interaction)
 
