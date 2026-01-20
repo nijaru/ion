@@ -52,7 +52,7 @@ Run `tk ls` for current task list. **18 open tasks** as of 2026-01-20.
 
 | Task    | Issue                                        |
 | ------- | -------------------------------------------- |
-| tk-l9ye | Queue edit behavior: pull all queued messages into input |
+| tk-4cbl | Add fuzzy search to selector shell (choose crate + integrate) |
 
 **Open:**
 
@@ -103,6 +103,10 @@ Run `tk ls` for current task list. **18 open tasks** as of 2026-01-20.
 **Session - Message Formatting:**
 
 - Switching chat rendering to user `>` prefixes, agent no-header, dimmed thinking/system notices
+
+**Session - Queue Editing:**
+
+- Pull all queued messages back into the input on Up arrow while running
 
 ## Config System
 

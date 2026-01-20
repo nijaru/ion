@@ -730,16 +730,18 @@ impl App {
                 // Check if cursor is at start of input (or no newlines above)
                 let at_top = self.cursor_pos == 0 || !self.input[..self.cursor_pos].contains('\n');
                 if at_top {
-                    // If running and queue has messages, pop from queue first
+                    // If running and queue has messages, pull all queued messages for editing
                     if self.is_running
                         && self.input.is_empty()
                         && let Some(ref queue) = self.message_queue
                         && let Ok(mut q) = queue.lock()
-                        && let Some(msg) = q.pop()
                     {
-                        self.input = msg;
-                        self.cursor_pos = self.input.len();
-                        return;
+                        if !q.is_empty() {
+                            let queued = q.drain(..).collect::<Vec<_>>();
+                            self.input = queued.join("\n\n");
+                            self.cursor_pos = self.input.len();
+                            return;
+                        }
                     }
                     // Fall back to input history
                     if !self.input_history.is_empty() && self.history_index > 0 {
