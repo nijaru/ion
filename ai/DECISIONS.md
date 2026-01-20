@@ -35,6 +35,16 @@
 
 ---
 
+## 2026-01-20: License - PolyForm Shield
+
+**Context**: The project is primarily a personal tool with optional future commercialization. We want permissive individual use while preventing competitors from building a competing product without a commercial agreement.
+
+**Decision**: License the project under PolyForm Shield 1.0.0.
+
+**Rationale**: Shield keeps the code public for individual and OSS use while reserving commercial competitive use for paid licensing later.
+
+---
+
 ## 2026-01-19: Config Priority - Explicit Config > Env Vars
 
 **Context**: Deciding whether API keys from config file or environment variables should take priority.
