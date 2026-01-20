@@ -27,9 +27,11 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
+
+const CANCEL_WINDOW: Duration = Duration::from_millis(1500);
 
 /// Format token count as human-readable (e.g., 1500 -> "1.5k")
 fn format_tokens(n: usize) -> String {
@@ -179,6 +181,8 @@ pub struct App {
     pub output_tokens: usize,
     /// Currently executing tool name (for interrupt handling)
     pub current_tool: Option<String>,
+    /// Timestamp of first Ctrl+C press for double-tap quit/cancel
+    pub cancel_pending: Option<Instant>,
     /// Permission settings from CLI flags
     pub permissions: PermissionSettings,
     /// Last completed task summary (for brief display after completion)
@@ -468,6 +472,7 @@ impl App {
             input_tokens: 0,
             output_tokens: 0,
             current_tool: None,
+            cancel_pending: None,
             permissions,
             last_task_summary: None,
             editor_requested: false,
@@ -545,6 +550,7 @@ impl App {
                 AgentEvent::Finished(_) => {
                     self.save_task_summary(false);
                     self.is_running = false;
+                    self.cancel_pending = None;
                     self.last_error = None;
                     self.message_queue = None;
                     self.task_start_time = None;
@@ -557,6 +563,7 @@ impl App {
                     let was_cancelled = msg.contains("Cancelled");
                     self.save_task_summary(was_cancelled);
                     self.is_running = false;
+                    self.cancel_pending = None;
                     self.message_queue = None;
                     self.task_start_time = None;
                     self.current_tool = None;
@@ -611,6 +618,7 @@ impl App {
         if let Ok(updated_session) = self.session_rx.try_recv() {
             self.save_task_summary(false);
             self.is_running = false;
+            self.cancel_pending = None;
             self.message_queue = None;
             self.task_start_time = None;
             self.current_tool = None;
@@ -620,6 +628,13 @@ impl App {
                 tracing::warn!("Failed to save session: {}", e);
             }
             self.session = updated_session;
+        }
+
+        // Clear expired cancel prompt
+        if let Some(when) = self.cancel_pending
+            && when.elapsed() > CANCEL_WINDOW
+        {
+            self.cancel_pending = None;
         }
 
         // Poll approval requests
@@ -654,18 +669,27 @@ impl App {
             KeyCode::Esc => {
                 if self.is_running && !self.session.abort_token.is_cancelled() {
                     self.session.abort_token.cancel();
+                    self.cancel_pending = None;
                 }
             }
             // Ctrl+C: Clear input, cancel running task, or quit
             KeyCode::Char('c') if ctrl => {
                 if !self.input_state.is_empty() {
                     self.clear_input();
-                } else if self.is_running {
-                    if !self.session.abort_token.is_cancelled() {
-                        self.session.abort_token.cancel();
+                    self.cancel_pending = None;
+                } else if let Some(when) = self.cancel_pending
+                    && when.elapsed() <= CANCEL_WINDOW
+                {
+                    if self.is_running {
+                        if !self.session.abort_token.is_cancelled() {
+                            self.session.abort_token.cancel();
+                        }
+                    } else {
+                        self.quit();
                     }
+                    self.cancel_pending = None;
                 } else {
-                    self.quit();
+                    self.cancel_pending = Some(Instant::now());
                 }
             }
 
@@ -947,9 +971,25 @@ impl App {
         let mut handled = true;
 
         match key.code {
-            // Ctrl+C: Quit (always works, even during setup)
+            // Ctrl+C: Close selector, double-tap to quit
             KeyCode::Char('c') if ctrl => {
-                self.should_quit = true;
+                if let Some(when) = self.cancel_pending
+                    && when.elapsed() <= CANCEL_WINDOW
+                {
+                    self.should_quit = true;
+                    self.cancel_pending = None;
+                } else {
+                    self.cancel_pending = Some(Instant::now());
+                    if self.needs_setup {
+                        if self.selector_page == SelectorPage::Model {
+                            self.model_picker.reset();
+                            self.open_provider_selector();
+                        }
+                    } else {
+                        self.model_picker.reset();
+                        self.mode = Mode::Input;
+                    }
+                }
             }
 
             // Navigation
@@ -1919,7 +1959,7 @@ impl App {
             row("Ctrl+M", "Model selector"),
             row("Ctrl+P", "Provider selector"),
             row("Ctrl+T", "Thinking toggle"),
-            row("Ctrl+C", "Clear / Cancel / Quit"),
+            row("Ctrl+C", "Clear (double-tap cancel/quit)"),
             row("PgUp/PgDn", "Scroll chat"),
             Line::from(""),
             Line::from(Span::styled(
