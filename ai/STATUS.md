@@ -44,41 +44,6 @@
 | OpenAI     | Full   | Has base_url field                   |
 | OpenRouter | Full   | Non-streaming when tools are present |
 
-## Open Tasks
-
-Run `tk ls` for the live task list. **19 open tasks** as of 2026-01-20.
-
-**Active:**
-
-| Task    | Issue |
-| ------- | ----- |
-| (none)  | —     |
-
-**Open:**
-
-| Task    | Issue                                                   |
-| ------- | ------------------------------------------------------- |
-| tk-9x2a | BUG: Esc should cancel running agent loop               |
-| tk-63kr | BUG: Up arrow needs two presses to load last sent input  |
-| tk-oy2x | UX: Remove redundant '[Task completed]' line            |
-| tk-j1tc | UX: Remove chat history box in inline mode              |
-| tk-hwn1 | BUG: Scroll bounds - can scroll past top of chat        |
-| tk-tbce | BUG: Fuzzy search ranks exact substring after fuzzy     |
-| tk-04sf | UX: Tool output bullet turns red on error               |
-| tk-pcnt | Research: compare Codex, pi, opencode, Claude Code      |
-| tk-imza | ast-grep integration                                    |
-| tk-su1n | Large file handling - chunked reads                     |
-| tk-1rfr | Web fetch tool                                          |
-| tk-1y3g | Web search tool                                         |
-| tk-g063 | @ file inclusion syntax                                 |
-| tk-vsdp | Theme support                                           |
-| tk-8qwn | Research: system prompts comparison                     |
-| tk-f564 | OAuth support for providers                             |
-| tk-kf3r | Interactive prompts (y/n)                               |
-| tk-8jtm | True sandboxing for bash commands                       |
-| tk-iso7 | Hook system - Claude Code compatible lifecycle          |
-| tk-g1fy | Design modular streaming interface for providers        |
-
 ## Session Work 2026-01-20
 
 **Inline Viewport Migration (complete):**
