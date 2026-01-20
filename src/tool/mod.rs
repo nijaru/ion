@@ -211,6 +211,26 @@ mod tests {
     }
 
     #[test]
+    fn test_permission_matrix_write_write_tool_allowed() {
+        let matrix = PermissionMatrix::new(ToolMode::Write);
+        let tool = MockTool {
+            name: "write".into(),
+            danger: DangerLevel::Restricted,
+        };
+        assert_eq!(matrix.check_permission(&tool), PermissionStatus::Allowed);
+    }
+
+    #[test]
+    fn test_permission_matrix_write_edit_tool_allowed() {
+        let matrix = PermissionMatrix::new(ToolMode::Write);
+        let tool = MockTool {
+            name: "edit".into(),
+            danger: DangerLevel::Restricted,
+        };
+        assert_eq!(matrix.check_permission(&tool), PermissionStatus::Allowed);
+    }
+
+    #[test]
     fn test_permission_matrix_write_restricted_needs_approval() {
         let matrix = PermissionMatrix::new(ToolMode::Write);
         let tool = MockTool {
