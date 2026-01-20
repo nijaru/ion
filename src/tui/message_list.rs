@@ -46,14 +46,17 @@ fn extract_key_arg(tool_name: &str, args: &serde_json::Value) -> String {
 /// Truncate a string for display, showing the end for paths.
 fn truncate_for_display(s: &str, max: usize) -> String {
     let s = s.lines().next().unwrap_or(s); // First line only
-    if s.len() <= max {
+    let len = s.chars().count();
+    if len <= max {
         s.to_string()
+    } else if max <= 3 {
+        take_head(s, max)
     } else if s.contains('/') {
         // For paths, show the end
-        format!("...{}", &s[s.len().saturating_sub(max - 3)..])
+        format!("...{}", take_tail(s, max - 3))
     } else {
         // For other strings, show the beginning
-        format!("{}...", &s[..max - 3])
+        format!("{}...", take_head(s, max - 3))
     }
 }
 
@@ -91,11 +94,31 @@ fn format_tool_result(result: &str) -> String {
 
 /// Truncate a line to max chars.
 fn truncate_line(s: &str, max: usize) -> String {
-    if s.len() > max {
-        format!("{}…", &s[..max - 1])
-    } else {
-        s.to_string()
+    let len = s.chars().count();
+    if len <= max {
+        return s.to_string();
     }
+    if max == 0 {
+        return String::new();
+    }
+    if max == 1 {
+        return "…".to_string();
+    }
+    format!("{}…", take_head(s, max - 1))
+}
+
+fn take_head(s: &str, max: usize) -> String {
+    s.chars().take(max).collect()
+}
+
+fn take_tail(s: &str, max: usize) -> String {
+    s.chars()
+        .rev()
+        .take(max)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect()
 }
 
 #[derive(Debug, Clone, PartialEq)]
