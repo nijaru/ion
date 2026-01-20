@@ -81,6 +81,8 @@ impl PermissionMatrix {
             }
             ToolMode::Write => {
                 if tool.danger_level() == DangerLevel::Safe
+                    || tool.name() == "write"
+                    || tool.name() == "edit"
                     || self.session_allowed_tools.contains(tool.name())
                     || self.permanent_allowed_tools.contains(tool.name())
                 {

@@ -13,7 +13,7 @@ ion uses a sandboxed permission model with three modes and composable CLI flags.
 | Mode      | Description                                             |
 | --------- | ------------------------------------------------------- |
 | **Read**  | Read-only tools (read, glob, grep)                      |
-| **Write** | File ops need approval, bash needs per-command approval |
+| **Write** | Write/edit auto-allowed, bash needs per-command approval |
 | **AGI**   | Full autonomy, no prompts                               |
 
 ## CLI Flags
@@ -33,8 +33,8 @@ ion uses a sandboxed permission model with three modes and composable CLI flags.
 | read  | auto    | auto               | auto       | auto |
 | glob  | auto    | auto               | auto       | auto |
 | grep  | auto    | auto               | auto       | auto |
-| write | blocked | approval           | auto       | auto |
-| edit  | blocked | approval           | auto       | auto |
+| write | blocked | auto               | auto       | auto |
+| edit  | blocked | auto               | auto       | auto |
 | bash  | blocked | approval (per-cmd) | auto       | auto |
 
 ## CWD Sandbox
@@ -51,7 +51,7 @@ By default, all operations are restricted to the current working directory.
 ## Examples
 
 ```bash
-# Default: write mode, approval required, CWD only
+# Default: write mode, CWD only (bash requires approval)
 ion
 
 # Read-only mode
