@@ -483,7 +483,10 @@ impl ModelRegistry {
                     }
                 }
                 super::prefs::SortStrategy::Price => {
-                    a.pricing.input.partial_cmp(&b.pricing.input).unwrap()
+                    match a.pricing.input.partial_cmp(&b.pricing.input) {
+                        Some(ordering) => ordering,
+                        None => std::cmp::Ordering::Equal,
+                    }
                 }
                 super::prefs::SortStrategy::Throughput => {
                     // Higher throughput is better, use context as proxy
