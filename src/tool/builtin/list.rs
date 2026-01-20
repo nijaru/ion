@@ -78,7 +78,7 @@ impl Tool for ListTool {
 
         // Check sandbox
         ctx.check_sandbox(&target_path)
-            .map_err(|e| ToolError::PermissionDenied(e))?;
+            .map_err(ToolError::PermissionDenied)?;
 
         if !target_path.exists() {
             return Err(ToolError::InvalidArgs(format!(
