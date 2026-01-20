@@ -1,7 +1,7 @@
 {
   "project": "tk",
-  "ref": "hwn1",
-  "title": "[BUG] Scroll bounds - can scroll past top of chat history",
+  "ref": "63kr",
+  "title": "[BUG] Up arrow needs two presses to load last sent input",
   "description": null,
   "status": "open",
   "priority": 2,
@@ -12,8 +12,8 @@
   "estimate": null,
   "due_date": null,
   "logs": [],
-  "created_at": "2026-01-20T00:37:45.054Z",
-  "updated_at": "2026-01-20T00:37:45.054Z",
+  "created_at": "2026-01-20T15:04:08.788Z",
+  "updated_at": "2026-01-20T15:04:08.788Z",
   "completed_at": null,
   "external": {}
 }

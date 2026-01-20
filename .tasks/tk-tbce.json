@@ -1,10 +1,10 @@
 {
   "project": "tk",
-  "ref": "hwn1",
-  "title": "[BUG] Scroll bounds - can scroll past top of chat history",
+  "ref": "tbce",
+  "title": "[BUG] Fuzzy search ranks exact substring after fuzzy",
   "description": null,
   "status": "open",
-  "priority": 2,
+  "priority": 3,
   "labels": [],
   "assignees": [],
   "parent": null,
@@ -12,8 +12,8 @@
   "estimate": null,
   "due_date": null,
   "logs": [],
-  "created_at": "2026-01-20T00:37:45.054Z",
-  "updated_at": "2026-01-20T00:37:45.054Z",
+  "created_at": "2026-01-20T15:04:09.446Z",
+  "updated_at": "2026-01-20T15:04:09.446Z",
   "completed_at": null,
   "external": {}
 }
