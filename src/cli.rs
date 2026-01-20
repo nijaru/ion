@@ -46,15 +46,32 @@ fn extract_key_arg(tool_name: &str, args: &serde_json::Value) -> String {
 
 /// Truncate a string for display, showing the end for paths.
 fn truncate_arg(s: &str, max: usize) -> String {
-    if s.len() <= max {
+    let len = s.chars().count();
+    if len <= max {
         s.to_string()
+    } else if max <= 3 {
+        take_head(s, max)
     } else if s.contains('/') {
         // For paths, show the end
-        format!("...{}", &s[s.len().saturating_sub(max - 3)..])
+        format!("...{}", take_tail(s, max - 3))
     } else {
         // For other strings, show the beginning
-        format!("{}...", &s[..max - 3])
+        format!("{}...", take_head(s, max - 3))
     }
+}
+
+fn take_head(s: &str, max: usize) -> String {
+    s.chars().take(max).collect()
+}
+
+fn take_tail(s: &str, max: usize) -> String {
+    s.chars()
+        .rev()
+        .take(max)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect()
 }
 
 /// Permission settings resolved from CLI flags and config.
