@@ -19,6 +19,7 @@ use std::borrow::Cow;
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
 use tokio::task::JoinSet;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, warn};
 
 #[derive(Clone)]
@@ -129,6 +130,10 @@ impl Agent {
         }
 
         loop {
+            if session.abort_token.is_cancelled() {
+                return Err(anyhow::anyhow!("Cancelled"));
+            }
+
             // Check for queued user messages between turns
             if let Some(ref queue) = message_queue
                 && let Ok(mut queue) = queue.lock()
@@ -180,7 +185,9 @@ impl Agent {
             return Ok(false);
         }
 
-        let tool_results = self.execute_tools_parallel(session, tool_calls, tx).await?;
+        let tool_results = self
+            .execute_tools_parallel(session, tool_calls, tx, session.abort_token.clone())
+            .await?;
 
         session.messages.push(Message {
             role: Role::ToolResult,
@@ -410,11 +417,14 @@ impl Agent {
                 "Using non-streaming completion (provider: {})",
                 self.provider.id()
             );
-            let response = self
-                .provider
-                .complete(request)
-                .await
-                .map_err(|e| anyhow::anyhow!("Completion error: {}", e))?;
+            let response = tokio::select! {
+                _ = abort_token.cancelled() => {
+                    return Err(anyhow::anyhow!("Cancelled"));
+                }
+                result = self.provider.complete(request) => {
+                    result.map_err(|e| anyhow::anyhow!("Completion error: {}", e))?
+                }
+            };
 
             // Emit events for the complete response
             for block in response.content.iter() {
@@ -461,9 +471,14 @@ impl Agent {
         session: &Session,
         tool_calls: Vec<ToolCallEvent>,
         tx: &mpsc::Sender<AgentEvent>,
+        abort_token: CancellationToken,
     ) -> Result<Vec<ContentBlock>> {
         let mut set = JoinSet::new();
         let num_tools = tool_calls.len();
+
+        if abort_token.is_cancelled() {
+            return Err(anyhow::anyhow!("Cancelled"));
+        }
 
         let ctx = ToolContext {
             working_dir: session.working_dir.clone(),
@@ -518,9 +533,22 @@ impl Agent {
         }
 
         let mut results = vec![None; num_tools];
-        while let Some(res) = set.join_next().await {
-            let (index, block) = res?;
-            results[index] = Some(block);
+        loop {
+            tokio::select! {
+                _ = abort_token.cancelled() => {
+                    set.abort_all();
+                    return Err(anyhow::anyhow!("Cancelled"));
+                }
+                res = set.join_next() => {
+                    match res {
+                        Some(res) => {
+                            let (index, block) = res?;
+                            results[index] = Some(block);
+                        }
+                        None => break,
+                    }
+                }
+            }
         }
 
         Ok(results.into_iter().map(|o| o.unwrap()).collect())

@@ -642,9 +642,13 @@ impl App {
             // Ctrl+C: Cancel running task / clear input / quit
             KeyCode::Char('c') if ctrl => {
                 if self.is_running {
-                    // Immediately cancel running task - no double-tap needed
-                    self.session.abort_token.cancel();
-                    self.cancel_pending = None;
+                    if self.session.abort_token.is_cancelled() {
+                        self.quit();
+                    } else {
+                        // Immediately cancel running task - no double-tap needed
+                        self.session.abort_token.cancel();
+                        self.cancel_pending = None;
+                    }
                 } else if !self.input_state.is_empty() {
                     // Clear input if not empty
                     self.clear_input();
