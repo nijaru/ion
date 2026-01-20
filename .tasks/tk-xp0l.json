@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "xp0l",
+  "title": "[FEATURE] rat-text input integration (multi-line editor + selector search)",
+  "description": null,
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-20T13:55:15.185Z",
+  "updated_at": "2026-01-20T13:55:15.185Z",
+  "completed_at": null,
+  "external": {}
+}

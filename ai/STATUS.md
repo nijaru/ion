@@ -46,75 +46,60 @@
 
 ## Open Tasks
 
-Run `tk ls` for current task list. **18 open tasks** as of 2026-01-20.
+Run `tk ls` for the live task list. **17 open tasks** as of 2026-01-20.
 
 **Active:**
 
-| Task    | Issue                                        |
-| ------- | -------------------------------------------- |
-| (none)  | —                                            |
+| Task    | Issue |
+| ------- | ----- |
+| (none)  | —     |
 
 **Open:**
 
-| Task    | Issue                                      |
-| ------- | ------------------------------------------ |
-| tk-w6id | Fuzzy search for @ and slash commands      |
-| tk-l9ye | Queue edit behavior (pull all queued)      |
-| tk-p23w | Dependency audit after inline refactor     |
-| tk-4cbl | Fuzzy search in selector shell             |
-| tk-wsia | Onboarding selector routing                |
-| tk-xhkj | Provider/model selector command routing    |
-| tk-dd4f | Message formatting update                  |
-| tk-d2hx | Selector shell UI                          |
-| tk-g82p | Inline refactor: remove alternate screen   |
-| tk-pcnt | Research: codex/pi/opencode/CC tools       |
-| tk-imza | ast-grep integration                       |
-| tk-su1n | Large file handling - chunked reads        |
-| tk-1rfr | Web fetch tool                             |
-| tk-1y3g | Web search tool                            |
-| tk-g063 | @ file inclusion syntax                    |
-| tk-hwn1 | BUG: Scroll bounds - past top of chat      |
-| tk-hw04 | Remove AI attribution from commit history  |
+| Task    | Issue                                                   |
+| ------- | ------------------------------------------------------- |
+| tk-p23w | Dependency audit/prune after inline refactor            |
+| tk-pcnt | Research: compare Codex, pi, opencode, Claude Code      |
+| tk-imza | ast-grep integration                                    |
+| tk-su1n | Large file handling - chunked reads                     |
+| tk-1rfr | Web fetch tool                                          |
+| tk-1y3g | Web search tool                                         |
+| tk-g063 | @ file inclusion syntax                                 |
+| tk-hwn1 | BUG: Scroll bounds - can scroll past top of chat        |
+| tk-vsdp | Theme support                                           |
+| tk-8qwn | Research: system prompts comparison                     |
+| tk-f564 | OAuth support for providers                             |
+| tk-kf3r | Interactive prompts (y/n)                               |
+| tk-8jtm | True sandboxing for bash commands                       |
+| tk-iso7 | Hook system - Claude Code compatible lifecycle          |
+| tk-g1fy | Design modular streaming interface for providers        |
+| tk-x3zf | Model display format - provider:model vs just model     |
+| tk-xp0l | rat-text input integration (multi-line + selector)      |
 
 ## Session Work 2026-01-20
 
-**Session - Planning & Design Consolidation:**
+**Inline Viewport Migration (complete):**
 
-- **Docs alignment**: Updated `ai/DESIGN.md` and `ai/design/tui.md` to inline viewport direction
-- **Inline UI design**: Consolidated selector shell, onboarding, message formatting in `ai/design/inline-viewport.md`
-- **Input/fuzzy research**: Chose rat-text and fuzzy-matcher; added research notes
-- **Status line**: Removed git info code paths from TUI
-- **Tasks**: Added atomic tasks for selector shell, onboarding, queue edits, fuzzy matching
+- Removed alternate screen mode; use `Viewport::Inline` only.
+- Bottom-anchored selector shell for provider/model.
+- Message formatting: user `>` prefix, no agent header, thinking/system dimmed.
+- Queue editing: Up arrow pulls queued messages back into input.
+- Fuzzy matching for selector filters and slash command suggestions.
+- License updated to PolyForm Shield.
 
-**Design notes:**
+**Research (complete):**
 
-- Inline viewport is primary; alternate screen removal planned
-- Status line is minimal: model + context left, `? help` right
-- User messages use `>` prefix; system notices dim + bracketed
+- Codex CLI uses custom `TextArea` and custom `fuzzy_match` (not a crate).
+- rat-text provides multi-line `TextArea` with selection, undo/redo, ropey backend.
+- tui-input is a small single-line input helper; not sufficient for editor UX.
+- fuzzy-matcher is acceptable for list sizes; nucleo is heavier (MPL-2.0).
 
-**Session - Inline Refactor (in progress):**
+**Decisions:**
 
-- Dropped alternate screen setup and switched TUI to inline viewport in `src/main.rs`
-
-**Session - Selector Shell:**
-
-- Replaced provider/model modals with a bottom-anchored selector shell
-
-**Session - Message Formatting:**
-
-- Switching chat rendering to user `>` prefixes, agent no-header, dimmed thinking/system notices
-
-**Session - Queue Editing:**
-
-- Pull all queued messages back into the input on Up arrow while running
-
-**Session - Selector Fuzzy Search:**
-
-- Integrating fuzzy matching into provider and model filters
-
-**Session - Command/File Fuzzy:**
-
-- Added fuzzy suggestions for slash commands and shared path matcher for @ inclusion
+- Inline viewport is the only supported UI mode.
+- Status line is minimal (model + context left, `? help` right). No git/cwd.
+- Settings UI deferred; config file only for MVP.
+- Provider/model selection uses shared bottom selector with tabs.
 
 ## Config System
 
@@ -148,3 +133,4 @@ Run `tk ls` for current task list. **18 open tasks** as of 2026-01-20.
 - `ai/design/inline-viewport.md` - Inline viewport layout and migration
 - `ai/DECISIONS.md` - Architecture decisions
 - `ai/research/edit-tool-patterns-2026.md` - Edit tool research
+- `ai/research/input-and-fuzzy-2026.md` - Input + fuzzy matching research

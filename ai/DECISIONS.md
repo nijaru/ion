@@ -528,8 +528,8 @@ No reason to go through MCP when we can use the Rust crate directly.
 
 | Element       | Before                 | After                                         |
 | ------------- | ---------------------- | --------------------------------------------- |
-| Chat headers  | Nerd Font icons        | Simple arrows (`< You`, `> ion`)              |
-| Status line   | Verbose keybindings    | `model · [branch] · cwd` left, `? help` right |
+| Chat headers  | Nerd Font icons        | User `>` prefix; no agent header              |
+| Status line   | Verbose keybindings    | `model · context%` left, `? help` right       |
 | Loading       | "Agent is thinking..." | "Ionizing..."                                 |
 | Provider list | Name + description     | Name + auth hint only                         |
 
@@ -566,28 +566,6 @@ No reason to go through MCP when we can use the Rust crate directly.
 | **Invalidation** | Cache is updated only when the active plan, task status, or skill changes. |
 
 **Outcome**: Reduced local CPU overhead and ensured bit-for-bit stability of the system prompt prefix for provider-side prompt caching.
-
----
-
-## 2026-01-18: Status Line Architecture
-
-**Context**: Designing a flexible status line system that balances simplicity with customization (like Claude Code).
-
-**Decision**: Layered configuration with custom script override.
-
-| Setting         | Default | Notes                           |
-| --------------- | ------- | ------------------------------- |
-| `show_model`    | `true`  | Model name, simplified          |
-| `show_provider` | `true`  | Dim, in brackets                |
-| `show_context`  | `true`  | `26% (52k/200k)` format         |
-| `show_branch`   | `true`  | Git branch in `[brackets]`      |
-| `show_cwd`      | `false` | Optional, since terminal title  |
-| `show_git_diff` | `false` | Like Claude: `+3 -1` indicators |
-| `custom_script` | `None`  | Overrides all above when set    |
-
-**Terminal Title**: Always set to `ion <cwd>` regardless of status line settings.
-
-**Custom Script Behavior**: When `custom_script` is set, all `show_*` settings are ignored. The script receives environment variables (`ION_MODEL`, `ION_PROVIDER`, `ION_BRANCH`, etc.) and returns a string.
 
 ---
 

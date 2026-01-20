@@ -18,7 +18,7 @@ User Request → ion CLI → Agent Core → Tool Execution → Response
 Inline viewport TUI with native terminal scrollback, minimal chrome, and bottom-anchored selectors.
 
 - **History**: Terminal scrollback (not app-managed).
-- **Statusline**: `{Model} · {Context}%` on the left, `? help` on the right.
+- **Statusline**: `{Model} · {Context}%` left, `? help` right (no git/cwd).
 - **Input**: Multi-line editor with history recall and word navigation.
 
 ### 2. Provider Layer
@@ -59,8 +59,9 @@ Memory systems are planned as optional integrations via hooks or plugins, not co
 
 ~/.local/share/ion/
 ├── sessions/            # Persisted message history (SQLite)
-└── memory/              # OmenDB vector indices
 ```
+
+Memory is deferred and expected to arrive via hooks/plugins later, not as a core on-disk store.
 
 ## Tool Framework
 
