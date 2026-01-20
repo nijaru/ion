@@ -27,11 +27,9 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
-
-const CANCEL_WINDOW: Duration = Duration::from_millis(1500);
 
 /// Format token count as human-readable (e.g., 1500 -> "1.5k")
 fn format_tokens(n: usize) -> String {
@@ -149,8 +147,6 @@ pub struct App {
     pub session_tx: mpsc::Sender<Session>,
     pub pending_approval: Option<ApprovalRequest>,
     pub is_running: bool,
-    /// Timestamp of first Ctrl+C press for double-Ctrl+C quit
-    pub cancel_pending: Option<Instant>,
     /// Session persistence store
     pub store: SessionStore,
     /// Model picker state
@@ -456,7 +452,6 @@ impl App {
             session_tx,
             pending_approval: None,
             is_running: false,
-            cancel_pending: None,
             store,
             model_picker: ModelPicker::new(config.provider_prefs.clone()),
             model_registry,
@@ -551,7 +546,6 @@ impl App {
                     self.save_task_summary(false);
                     self.is_running = false;
                     self.last_error = None;
-                    self.cancel_pending = None;
                     self.message_queue = None;
                     self.task_start_time = None;
                     self.current_tool = None;
@@ -563,7 +557,6 @@ impl App {
                     let was_cancelled = msg.contains("Cancelled");
                     self.save_task_summary(was_cancelled);
                     self.is_running = false;
-                    self.cancel_pending = None;
                     self.message_queue = None;
                     self.task_start_time = None;
                     self.current_tool = None;
@@ -618,7 +611,6 @@ impl App {
         if let Ok(updated_session) = self.session_rx.try_recv() {
             self.save_task_summary(false);
             self.is_running = false;
-            self.cancel_pending = None;
             self.message_queue = None;
             self.task_start_time = None;
             self.current_tool = None;
@@ -628,13 +620,6 @@ impl App {
                 tracing::warn!("Failed to save session: {}", e);
             }
             self.session = updated_session;
-        }
-
-        // Clear expired cancel prompt
-        if let Some(when) = self.cancel_pending
-            && when.elapsed() > CANCEL_WINDOW
-        {
-            self.cancel_pending = None;
         }
 
         // Poll approval requests
@@ -665,37 +650,24 @@ impl App {
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
 
         match key.code {
-            // Esc: Cancel running task
+            // Esc: Clear input or cancel running task
             KeyCode::Esc => {
-                if self.is_running && !self.session.abort_token.is_cancelled() {
+                if !self.input_state.is_empty() {
+                    self.clear_input();
+                } else if self.is_running && !self.session.abort_token.is_cancelled() {
                     self.session.abort_token.cancel();
-                    self.cancel_pending = None;
                 }
             }
-            // Ctrl+C: Cancel running task / clear input / quit
+            // Ctrl+C: Clear input, cancel running task, or quit
             KeyCode::Char('c') if ctrl => {
-                if self.is_running {
-                    if self.session.abort_token.is_cancelled() {
-                        self.quit();
-                    } else {
-                        // Immediately cancel running task - no double-tap needed
-                        self.session.abort_token.cancel();
-                        self.cancel_pending = None;
-                    }
-                } else if !self.input_state.is_empty() {
-                    // Clear input if not empty
+                if !self.input_state.is_empty() {
                     self.clear_input();
-                } else {
-                    // Empty input, not running - double-tap to quit
-                    if let Some(when) = self.cancel_pending {
-                        if when.elapsed() <= CANCEL_WINDOW {
-                            self.quit();
-                        } else {
-                            self.cancel_pending = Some(Instant::now());
-                        }
-                    } else {
-                        self.cancel_pending = Some(Instant::now());
+                } else if self.is_running {
+                    if !self.session.abort_token.is_cancelled() {
+                        self.session.abort_token.cancel();
                     }
+                } else {
+                    self.quit();
                 }
             }
 
@@ -1949,7 +1921,7 @@ impl App {
             row("Ctrl+M", "Model selector"),
             row("Ctrl+P", "Provider selector"),
             row("Ctrl+T", "Thinking toggle"),
-            row("Ctrl+C", "Clear / Quit"),
+            row("Ctrl+C/Esc", "Clear input / Cancel / Quit"),
             row("PgUp/PgDn", "Scroll chat"),
             Line::from(""),
             Line::from(Span::styled(
