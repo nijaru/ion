@@ -133,6 +133,8 @@ pub struct App {
     pub input_history: Vec<String>,
     /// Current position in history (input_history.len() = current input)
     pub history_index: usize,
+    /// Draft input before entering history navigation
+    pub history_draft: Option<String>,
     /// Current tool permission mode (Read/Write/Agi)
     pub tool_mode: ToolMode,
     /// Currently selected API provider
@@ -239,6 +241,15 @@ impl App {
         self.move_input_cursor_to_end();
     }
 
+    fn handle_input_event_with_history(&mut self, key: KeyEvent) -> TextOutcome {
+        let outcome = self.handle_input_event(key);
+        if matches!(outcome, TextOutcome::TextChanged) {
+            self.history_index = self.input_history.len();
+            self.history_draft = None;
+        }
+        outcome
+    }
+
     fn move_input_cursor_to_end(&mut self) {
         let lines = self.input_state.value.len_lines();
         if lines == 0 {
@@ -285,7 +296,7 @@ impl App {
 
     fn handle_input_up(&mut self) -> bool {
         let input_empty = self.input_state.is_empty();
-        if !input_empty && self.input_cursor_line() != 0 {
+        if self.input_cursor_line() != 0 {
             return false;
         }
 
@@ -308,6 +319,10 @@ impl App {
             }
         }
 
+        if self.history_index == self.input_history.len() && self.history_draft.is_none() {
+            self.history_draft = Some(self.input_text());
+        }
+
         if !self.input_history.is_empty() && self.history_index > 0 {
             self.history_index -= 1;
             let entry = self.input_history[self.history_index].clone();
@@ -315,7 +330,7 @@ impl App {
             return true;
         }
 
-        false
+        input_empty
     }
 
     fn handle_input_down(&mut self) -> bool {
@@ -326,7 +341,11 @@ impl App {
         if self.history_index < self.input_history.len() {
             self.history_index += 1;
             if self.history_index == self.input_history.len() {
-                self.clear_input();
+                if let Some(draft) = self.history_draft.take() {
+                    self.set_input_text(&draft);
+                } else {
+                    self.clear_input();
+                }
             } else {
                 let entry = self.input_history[self.history_index].clone();
                 self.set_input_text(&entry);
@@ -334,7 +353,7 @@ impl App {
             return true;
         }
 
-        false
+        !self.input_state.is_empty()
     }
     pub async fn new() -> Self {
         Self::with_permissions(PermissionSettings::default()).await
@@ -462,6 +481,7 @@ impl App {
             input_state,
             input_history: Vec::new(),
             history_index: 0,
+            history_draft: None,
             tool_mode: permissions.mode,
             api_provider,
             provider_picker: ProviderPicker::new(),
@@ -862,6 +882,7 @@ impl App {
                         // Send message
                         self.input_history.push(input.clone());
                         self.history_index = self.input_history.len();
+                        self.history_draft = None;
                         self.clear_input();
                         // Persist to database
                         let _ = self.store.add_input_history(&input);
@@ -878,14 +899,14 @@ impl App {
             // Arrow Up: Move cursor up, recall queued messages, or recall history
             KeyCode::Up => {
                 if !self.handle_input_up() {
-                    self.handle_input_event(key);
+                    self.handle_input_event_with_history(key);
                 }
             }
 
             // Arrow Down: Move cursor down, or restore newer history
             KeyCode::Down => {
                 if !self.handle_input_down() {
-                    self.handle_input_event(key);
+                    self.handle_input_event_with_history(key);
                 }
             }
 
@@ -895,7 +916,7 @@ impl App {
             }
 
             _ => {
-                self.handle_input_event(key);
+                self.handle_input_event_with_history(key);
             }
         }
     }
@@ -1289,34 +1310,7 @@ impl App {
         if width == 0 {
             return String::new();
         }
-        let line_char = '─';
-        let left_label = String::new();
-        let right_label = String::new();
-
-        let mut chars = vec![line_char; width as usize];
-
-        if !left_label.is_empty() && width as usize >= left_label.len() + 2 {
-            let start = 1;
-            for (idx, ch) in left_label.chars().enumerate() {
-                if start + idx < chars.len() {
-                    chars[start + idx] = ch;
-                }
-            }
-        }
-
-        if !right_label.is_empty() && width as usize >= right_label.len() + 2 {
-            let start = width as usize - right_label.len() - 1;
-            let overlap = start <= left_label.len() + 1;
-            if !overlap {
-                for (idx, ch) in right_label.chars().enumerate() {
-                    if start + idx < chars.len() {
-                        chars[start + idx] = ch;
-                    }
-                }
-            }
-        }
-
-        chars.into_iter().collect()
+        "─".repeat(width as usize)
     }
 
     fn quit(&mut self) {
@@ -1557,9 +1551,19 @@ impl App {
                 Sender::System => {
                     let content = entry.content_as_markdown();
                     if content.lines().count() <= 1 {
-                        let text = format!("[{}]", content.trim());
-                        chat_lines
-                            .push(Line::from(vec![Span::styled(text, Style::default().dim())]));
+                        let trimmed = content.trim();
+                        if trimmed.starts_with("Error:") {
+                            chat_lines.push(Line::from(vec![Span::styled(
+                                trimmed.to_string(),
+                                Style::default().fg(Color::Red),
+                            )]));
+                        } else {
+                            let text = format!("[{}]", trimmed);
+                            chat_lines.push(Line::from(vec![Span::styled(
+                                text,
+                                Style::default().dim(),
+                            )]));
+                        }
                     } else {
                         let md = tui_markdown::from_str(content);
                         for line in &md.lines {
@@ -1625,7 +1629,7 @@ impl App {
             } else if let Some(tool) = &self.current_tool {
                 (format!("Running {}...", tool), Color::Cyan)
             } else {
-                ("Ionizing...".to_string(), Color::Yellow)
+                ("Ionizing...".to_string(), Color::Cyan)
             };
 
             let mut progress_spans = vec![
@@ -1680,7 +1684,9 @@ impl App {
                 stats.push(format!("↓ {}", format_tokens(summary.output_tokens)));
             }
 
-            let (symbol, label, color) = if summary.was_cancelled {
+            let (symbol, label, color) = if self.last_error.is_some() {
+                (" ✗ ", "Error", Color::Red)
+            } else if summary.was_cancelled {
                 (" ✗ ", "Cancelled", Color::Red)
             } else {
                 (" ✓ ", "Completed", Color::Green)
@@ -1746,7 +1752,7 @@ impl App {
                     };
 
                     let header = self.input_header_line(input_area.width);
-                    let bar_style = Style::default().fg(Color::Green);
+                    let bar_style = Style::default().fg(Color::Cyan);
                     frame.render_widget(
                         Paragraph::new(Line::from(Span::styled(header, bar_style))),
                         top_area,
@@ -1822,15 +1828,15 @@ impl App {
 
             let mut left_spans: Vec<Span> = vec![
                 Span::raw(" "),
+                Span::raw("["),
                 Span::styled(mode_label, Style::default().fg(mode_color)),
+                Span::raw("]"),
                 Span::raw(" · "),
                 Span::raw(model_name),
             ];
 
-            // Context % display with token counts: 56% (112k/200k)
-            if let Some((used, max)) = self.token_usage {
-                let max = self.model_context_window.unwrap_or(max);
-                let pct = if max > 0 { (used * 100) / max } else { 0 };
+            // Context usage display with token counts
+            if let Some((used, _max)) = self.token_usage {
                 let format_k = |n: usize| -> String {
                     if n >= 1000 {
                         format!("{}k", n / 1000)
@@ -1838,34 +1844,26 @@ impl App {
                         n.to_string()
                     }
                 };
-                left_spans.push(Span::raw(" · "));
-                left_spans.push(Span::raw(format!(
-                    "{}% ({}/{})",
-                    pct,
-                    format_k(used),
-                    format_k(max)
-                )));
+                if let Some(max) = self.model_context_window {
+                    let pct = if max > 0 { (used * 100) / max } else { 0 };
+                    left_spans.push(Span::raw(" · "));
+                    left_spans.push(Span::raw(format!(
+                        "{}% ({}/{})",
+                        pct,
+                        format_k(used),
+                        format_k(max)
+                    )));
+                } else {
+                    left_spans.push(Span::raw(" · "));
+                    left_spans.push(Span::raw(format_k(used)));
+                }
             }
 
             // Calculate left side length for padding
             let left_len: usize = left_spans.iter().map(|s| s.content.chars().count()).sum();
 
-            // Right side: error or help hint
-            let (right, right_style) = if let Some(ref err) = self.last_error {
-                // Truncate error for status line
-                let max_err_len = 40;
-                let err_display = if err.len() > max_err_len {
-                    format!("{}...", &err[..max_err_len])
-                } else {
-                    err.clone()
-                };
-                (
-                    format!("ERR: {} ", err_display),
-                    Style::default().fg(Color::Red),
-                )
-            } else {
-                ("? help ".to_string(), Style::default().dim())
-            };
+            // Right side: help hint
+            let (right, right_style) = ("? help ".to_string(), Style::default().dim());
 
             // Calculate padding for right alignment
             let width = status_area.width as usize;
