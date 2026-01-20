@@ -246,6 +246,16 @@ impl App {
         if matches!(outcome, TextOutcome::TextChanged) {
             self.history_index = self.input_history.len();
             self.history_draft = None;
+            let cursor = self.input_state.value.cursor();
+            if cursor.y > 0 && self.input_state.value.line_width(cursor.y).unwrap_or(0) == 0 {
+                let prev = cursor.y.saturating_sub(1);
+                let prev_col = self.input_state.value.line_width(prev).unwrap_or(0);
+                let _ = self
+                    .input_state
+                    .value
+                    .set_cursor(TextPosition::new(prev_col, prev), false);
+                self.input_state.scroll_cursor_to_visible();
+            }
         }
         outcome
     }
@@ -267,7 +277,15 @@ impl App {
     }
 
     fn input_last_line(&self) -> u32 {
-        self.input_state.value.len_lines().saturating_sub(1)
+        let lines = self.input_state.value.len_lines();
+        if lines <= 1 {
+            return 0;
+        }
+        let last = lines.saturating_sub(1);
+        if self.input_state.value.line_width(last).unwrap_or(0) == 0 {
+            return last.saturating_sub(1);
+        }
+        last
     }
 
     fn has_queued_messages(&self) -> bool {
@@ -1290,8 +1308,12 @@ impl App {
 
         // Count lines: explicit newlines + wrapped lines
         let input = self.input_state.text();
+        let mut lines: Vec<&str> = input.split('\n').collect();
+        if lines.len() > 1 && lines.last().is_some_and(|line| line.is_empty()) {
+            lines.pop();
+        }
         let mut line_count: u16 = 0;
-        for line in input.split('\n') {
+        for line in lines {
             // Each line takes at least 1 row, plus wrapping
             let line_len = line.chars().count();
             let wrapped_lines = if line_len == 0 {
@@ -1393,7 +1415,14 @@ impl App {
             frame.render_widget(Paragraph::new(header_lines), header_area);
         }
 
-        let viewport_height = chat_area.height as usize;
+        let viewport_height = if self.message_list.scroll_offset == 0
+            && !chat_lines.is_empty()
+            && chat_lines.len() < chat_area.height as usize
+        {
+            chat_lines.len()
+        } else {
+            chat_area.height as usize
+        };
 
         let mut chat_lines = Vec::new();
         for entry in &self.message_list.entries {
@@ -1603,16 +1632,14 @@ impl App {
             }
         }
 
+        // Add a spacer line above the progress line
+        if !chat_lines.is_empty() {
+            chat_lines.push(Line::from(""));
+        }
+
         // Calculate scroll position
         // scroll_offset is lines from bottom (0 = at bottom)
-        let mut total_lines = chat_lines.len();
-        if self.message_list.scroll_offset == 0 && total_lines < viewport_height {
-            let pad = viewport_height.saturating_sub(total_lines);
-            for _ in 0..pad {
-                chat_lines.insert(0, Line::from(""));
-            }
-            total_lines = chat_lines.len();
-        }
+        let total_lines = chat_lines.len();
         let max_scroll = total_lines.saturating_sub(viewport_height);
         if self.message_list.scroll_offset > max_scroll {
             self.message_list.scroll_offset = max_scroll;
@@ -1623,7 +1650,21 @@ impl App {
             .wrap(Wrap { trim: true })
             .scroll((scroll_y as u16, 0));
         if chat_area.height > 0 {
-            frame.render_widget(chat_para, chat_area);
+            let mut chat_render_area = Rect {
+                x: chat_area.x.saturating_add(1),
+                y: chat_area.y,
+                width: chat_area.width.saturating_sub(2),
+                height: chat_area.height,
+            };
+            if self.message_list.scroll_offset == 0 {
+                let content_height = (total_lines.min(chat_render_area.height as usize)) as u16;
+                if content_height > 0 && content_height < chat_render_area.height {
+                    chat_render_area.y =
+                        chat_render_area.y + (chat_render_area.height - content_height);
+                    chat_render_area.height = content_height;
+                }
+            }
+            frame.render_widget(chat_para, chat_render_area);
         }
 
         if self.is_running {
@@ -1722,21 +1763,10 @@ impl App {
                         .border_style(Style::default().fg(Color::Red).bold())
                         .title(" Action Required ");
                     let approval_para = Paragraph::new(prompt).block(approval_block);
-                    frame.render_widget(approval_para, chunks[2]);
+                    frame.render_widget(approval_para, input_area);
                 }
             } else {
                 // Input box always visible
-                let mode_label = match self.tool_mode {
-                    ToolMode::Read => "READ",
-                    ToolMode::Write => "WRITE",
-                    ToolMode::Agi => "AGI",
-                };
-                let mode_color = match self.tool_mode {
-                    ToolMode::Read => Color::Cyan,
-                    ToolMode::Write => Color::Yellow,
-                    ToolMode::Agi => Color::Red,
-                };
-
                 let input_area = input_area;
                 if input_area.width > 0 && input_area.height > 1 {
                     let top_area = Rect {
