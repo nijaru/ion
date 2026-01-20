@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "1y3g",
+  "title": "[TOOL] Web search tool",
+  "description": null,
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-20T00:37:45.095Z",
+  "updated_at": "2026-01-20T00:37:45.095Z",
+  "completed_at": null,
+  "external": {}
+}
