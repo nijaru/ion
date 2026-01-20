@@ -1,9 +1,9 @@
 {
   "project": "tk",
-  "ref": "p23w",
-  "title": "Dependency audit/prune after inline refactor",
+  "ref": "s2gj",
+  "title": "[BUG] Inline viewport resize handling + regression coverage",
   "description": null,
-  "status": "active",
+  "status": "open",
   "priority": 3,
   "labels": [],
   "assignees": [],
@@ -12,8 +12,8 @@
   "estimate": null,
   "due_date": null,
   "logs": [],
-  "created_at": "2026-01-20T10:05:23.092Z",
-  "updated_at": "2026-01-20T14:05:51.405Z",
+  "created_at": "2026-01-20T13:59:08.491Z",
+  "updated_at": "2026-01-20T13:59:08.491Z",
   "completed_at": null,
   "external": {}
 }
