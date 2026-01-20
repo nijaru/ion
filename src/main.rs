@@ -39,10 +39,7 @@ async fn main() -> ExitCode {
 
 async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::error::Error>> {
     use crossterm::{
-        event::{
-            self, DisableMouseCapture, EnableMouseCapture, KeyboardEnhancementFlags,
-            MouseEventKind, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
-        },
+        event::{self, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags},
         execute,
         terminal::{disable_raw_mode, enable_raw_mode, supports_keyboard_enhancement},
     };
@@ -63,8 +60,6 @@ async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::err
         )?;
     }
 
-    // Enable mouse capture for scroll - use Shift+click for text selection
-    execute!(stdout, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let (_, mut inline_height) = crossterm::terminal::size()?;
     let mut terminal = Terminal::with_options(
@@ -85,14 +80,6 @@ async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::err
             match event::read()? {
                 event::Event::Key(key) => {
                     app.handle_event(event::Event::Key(key));
-                }
-                event::Event::Mouse(mouse) => {
-                    // Handle mouse scroll for chat history
-                    match mouse.kind {
-                        MouseEventKind::ScrollUp => app.message_list.scroll_up(3),
-                        MouseEventKind::ScrollDown => app.message_list.scroll_down(3),
-                        _ => {}
-                    }
                 }
                 event::Event::Resize(width, height) => {
                     if height != inline_height {
@@ -126,7 +113,6 @@ async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::err
                 execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags)?;
             }
             disable_raw_mode()?;
-            execute!(terminal.backend_mut(), DisableMouseCapture)?;
             terminal.show_cursor()?;
 
             // Open editor and get result
@@ -144,7 +130,6 @@ async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::err
                     )
                 )?;
             }
-            execute!(terminal.backend_mut(), EnableMouseCapture)?;
         }
     }
 
@@ -153,7 +138,6 @@ async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::err
         execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags)?;
     }
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), DisableMouseCapture)?;
     terminal.show_cursor()?;
 
     Ok(())

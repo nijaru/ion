@@ -1266,6 +1266,50 @@ impl App {
         (line_count + BORDER_OVERHEAD).clamp(MIN_HEIGHT, MAX_HEIGHT)
     }
 
+    fn input_header_line(&self, width: u16) -> String {
+        if width == 0 {
+            return String::new();
+        }
+        let line_char = '─';
+        let mode_label = match self.tool_mode {
+            ToolMode::Read => "READ",
+            ToolMode::Write => "WRITE",
+            ToolMode::Agi => "AGI",
+        };
+        let left_label = format!(" [{}] ", mode_label);
+        let right_label = self.thinking_level.label();
+        let right_label = if right_label.is_empty() {
+            String::new()
+        } else {
+            format!(" {} ", right_label)
+        };
+
+        let mut chars = vec![line_char; width as usize];
+
+        if width as usize >= left_label.len() + 2 {
+            let start = 1;
+            for (idx, ch) in left_label.chars().enumerate() {
+                if start + idx < chars.len() {
+                    chars[start + idx] = ch;
+                }
+            }
+        }
+
+        if !right_label.is_empty() && width as usize >= right_label.len() + 2 {
+            let start = width as usize - right_label.len() - 1;
+            let overlap = start <= left_label.len() + 1;
+            if !overlap {
+                for (idx, ch) in right_label.chars().enumerate() {
+                    if start + idx < chars.len() {
+                        chars[start + idx] = ch;
+                    }
+                }
+            }
+        }
+
+        chars.into_iter().collect()
+    }
+
     fn quit(&mut self) {
         self.should_quit = true;
 
@@ -1631,60 +1675,75 @@ impl App {
                     ToolMode::Agi => Color::Red,
                 };
 
-                let input_block = Block::default()
-                    .borders(Borders::TOP | Borders::BOTTOM)
-                    .border_style(Style::default().fg(mode_color))
-                    .title(format!(" [{}] ", mode_label));
-
-                // Show thinking level on right side
-                let thinking_label = self.thinking_level.label();
-                let input_block = if !thinking_label.is_empty() {
-                    input_block.title(
-                        Line::from(Span::styled(
-                            format!(" {} ", thinking_label),
-                            Style::default().fg(Color::Magenta),
-                        ))
-                        .right_aligned(),
-                    )
-                } else {
-                    input_block
-                };
-
-                frame.render_widget(input_block.clone(), chunks[2]);
-                let inner = input_block.inner(chunks[2]);
-                if inner.width > 0 && inner.height > 0 {
-                    let gutter_width = inner.width.min(3);
-                    if gutter_width > 0 {
-                        let prompt_area = Rect {
-                            x: inner.x,
-                            y: inner.y,
-                            width: gutter_width,
-                            height: inner.height,
-                        };
-                        let prompt = match gutter_width {
-                            1 => ">".to_string(),
-                            2 => "> ".to_string(),
-                            _ => " > ".to_string(),
-                        };
-                        let blank = " ".repeat(gutter_width as usize);
-                        let prompt_lines: Vec<Line> = (0..inner.height)
-                            .map(|row| {
-                                let symbol = if row == 0 { &prompt } else { &blank };
-                                Line::from(Span::styled(symbol.clone(), Style::default().dim()))
-                            })
-                            .collect();
-                        frame.render_widget(Paragraph::new(prompt_lines), prompt_area);
-                    }
-
+                let input_area = chunks[2];
+                if input_area.width > 0 && input_area.height > 1 {
+                    let top_area = Rect {
+                        x: input_area.x,
+                        y: input_area.y,
+                        width: input_area.width,
+                        height: 1,
+                    };
+                    let bottom_area = Rect {
+                        x: input_area.x,
+                        y: input_area.y + input_area.height - 1,
+                        width: input_area.width,
+                        height: 1,
+                    };
                     let text_area = Rect {
-                        x: inner.x + gutter_width,
-                        y: inner.y,
-                        width: inner.width.saturating_sub(gutter_width),
-                        height: inner.height,
+                        x: input_area.x,
+                        y: input_area.y + 1,
+                        width: input_area.width,
+                        height: input_area.height.saturating_sub(2),
                     };
 
-                    let input = TextArea::new().text_wrap(TextWrap::Word(1));
-                    frame.render_stateful_widget(input, text_area, &mut self.input_state);
+                    let header = self.input_header_line(input_area.width);
+                    frame.render_widget(
+                        Paragraph::new(Line::from(Span::styled(
+                            header,
+                            Style::default().fg(mode_color),
+                        ))),
+                        top_area,
+                    );
+                    frame.render_widget(
+                        Paragraph::new("─".repeat(input_area.width as usize))
+                            .style(Style::default().fg(mode_color)),
+                        bottom_area,
+                    );
+
+                    if text_area.width > 0 && text_area.height > 0 {
+                        let gutter_width = text_area.width.min(3);
+                        if gutter_width > 0 {
+                            let prompt_area = Rect {
+                                x: text_area.x,
+                                y: text_area.y,
+                                width: gutter_width,
+                                height: text_area.height,
+                            };
+                            let prompt = match gutter_width {
+                                1 => ">".to_string(),
+                                2 => "> ".to_string(),
+                                _ => " > ".to_string(),
+                            };
+                            let blank = " ".repeat(gutter_width as usize);
+                            let prompt_lines: Vec<Line> = (0..text_area.height)
+                                .map(|row| {
+                                    let symbol = if row == 0 { &prompt } else { &blank };
+                                    Line::from(Span::styled(symbol.clone(), Style::default().dim()))
+                                })
+                                .collect();
+                            frame.render_widget(Paragraph::new(prompt_lines), prompt_area);
+                        }
+
+                        let entry_area = Rect {
+                            x: text_area.x + gutter_width,
+                            y: text_area.y,
+                            width: text_area.width.saturating_sub(gutter_width),
+                            height: text_area.height,
+                        };
+
+                        let input = TextArea::new().text_wrap(TextWrap::Word(1));
+                        frame.render_stateful_widget(input, entry_area, &mut self.input_state);
+                    }
                 }
 
                 if let Some(cursor) = self.input_state.screen_cursor() {
