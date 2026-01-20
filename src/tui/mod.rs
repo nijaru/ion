@@ -1267,37 +1267,7 @@ impl App {
             ])
             .split(frame.area());
 
-        let at_bottom = self.message_list.is_at_bottom();
-
-        let chat_block =
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(if self.cancel_pending.is_some() {
-                    Style::default().fg(Color::Yellow)
-                } else if !at_bottom {
-                    Style::default().fg(Color::Blue)
-                } else {
-                    Style::default()
-                });
-
-        // Title with modern indicators
-        let mut title_spans = vec![Span::raw(" ion ")];
-        if self.is_running {
-            title_spans.push(Span::styled(
-                " RUNNING ",
-                Style::default().fg(Color::Yellow).bold(),
-            ));
-        }
-        if !at_bottom {
-            title_spans.push(Span::styled(
-                format!(" [+{}] ", self.message_list.scroll_offset),
-                Style::default().fg(Color::Blue),
-            ));
-        }
-
-        let chat_block = chat_block.title(Line::from(title_spans));
-
-        let viewport_height = (chunks[0].height as usize).saturating_sub(2);
+        let viewport_height = chunks[0].height as usize;
 
         let mut chat_lines = Vec::new();
         for entry in &self.message_list.entries {
@@ -1483,7 +1453,6 @@ impl App {
         let scroll_y = max_scroll.saturating_sub(self.message_list.scroll_offset);
 
         let chat_para = Paragraph::new(chat_lines)
-            .block(chat_block)
             .wrap(Wrap { trim: true })
             .scroll((scroll_y as u16, 0));
         frame.render_widget(chat_para, chunks[0]);
