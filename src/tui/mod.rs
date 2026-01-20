@@ -1389,51 +1389,48 @@ impl App {
 
         let viewport_height = (chunks[0].height as usize).saturating_sub(2);
 
-        // Borrow cached markdown content for all entries
-        let entries_with_content: Vec<(&crate::tui::message_list::MessageEntry, &str)> =
-            self.message_list
-                .entries
-                .iter()
-                .map(|e| (e, e.content_as_markdown()))
-                .collect();
-
-        // Simplified model name for display
-        let display_model = self
-            .session
-            .model
-            .split('/')
-            .next_back()
-            .unwrap_or(&self.session.model);
-
         let mut chat_lines = Vec::new();
-        for (entry, content) in &entries_with_content {
+        for entry in &self.message_list.entries {
             match entry.sender {
                 Sender::User => {
-                    chat_lines.push(Line::from(vec![
-                        Span::styled(" ↑ ", Style::default().fg(Color::Cyan)),
-                        Span::styled("You", Style::default().fg(Color::Cyan).bold()),
-                    ]));
-                    let md = tui_markdown::from_str(content);
+                    let mut combined = String::new();
+                    for part in &entry.parts {
+                        if let crate::tui::message_list::MessagePart::Text(text) = part {
+                            combined.push_str(text);
+                        }
+                    }
+                    let md = tui_markdown::from_str(&combined);
                     for line in &md.lines {
-                        let mut padded = vec![Span::raw("  ")];
+                        let mut padded = vec![Span::styled("> ", Style::default().fg(Color::Cyan))];
                         padded.extend(line.spans.clone());
                         chat_lines.push(Line::from(padded));
                     }
                 }
                 Sender::Agent => {
-                    chat_lines.push(Line::from(vec![
-                        Span::styled(" ↓ ", Style::default().fg(Color::Green)),
-                        Span::styled(display_model, Style::default().fg(Color::Green).bold()),
-                    ]));
-                    // Use custom markdown renderer with syntax highlighting for code blocks
-                    let highlighted_lines = highlight::highlight_markdown_with_code(content);
-                    for line in highlighted_lines {
-                        let mut padded = vec![Span::raw("  ")];
-                        padded.extend(line.spans);
-                        chat_lines.push(Line::from(padded));
+                    for part in &entry.parts {
+                        match part {
+                            crate::tui::message_list::MessagePart::Text(text) => {
+                                // Use custom markdown renderer with syntax highlighting for code blocks
+                                let highlighted_lines = highlight::highlight_markdown_with_code(text);
+                                for line in highlighted_lines {
+                                    let mut padded = vec![Span::raw(" ")];
+                                    padded.extend(line.spans);
+                                    chat_lines.push(Line::from(padded));
+                                }
+                            }
+                            crate::tui::message_list::MessagePart::Thinking(thinking) => {
+                                for line in thinking.lines() {
+                                    chat_lines.push(Line::from(vec![
+                                        Span::raw(" "),
+                                        Span::styled(line.to_string(), Style::default().dim()),
+                                    ]));
+                                }
+                            }
+                        }
                     }
                 }
                 Sender::Tool => {
+                    let content = entry.content_as_markdown();
                     // Tool messages: first line is call, rest are results
                     let mut lines = content.lines();
 
@@ -1533,18 +1530,21 @@ impl App {
                     }
                 }
                 Sender::System => {
-                    // Check if it's a completion message vs error/warning
-                    let (prefix, style) = if content.contains("completed") {
-                        (" ✓ ", Style::default().fg(Color::Green))
-                    } else if content.contains("Error") {
-                        (" ✗ ", Style::default().fg(Color::Red))
+                    let content = entry.content_as_markdown();
+                    if content.lines().count() <= 1 {
+                        let text = format!("[{}]", content.trim());
+                        chat_lines.push(Line::from(vec![Span::styled(
+                            text,
+                            Style::default().dim(),
+                        )]));
                     } else {
-                        (" • ", Style::default().dim())
-                    };
-                    chat_lines.push(Line::from(vec![
-                        Span::styled(prefix, style),
-                        Span::styled(*content, style),
-                    ]));
+                        let md = tui_markdown::from_str(content);
+                        for line in &md.lines {
+                            let mut padded = vec![Span::raw(" ")];
+                            padded.extend(line.spans.clone());
+                            chat_lines.push(Line::from(padded));
+                        }
+                    }
                 }
             }
             chat_lines.push(Line::from(""));

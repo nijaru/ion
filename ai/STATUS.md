@@ -52,7 +52,7 @@ Run `tk ls` for current task list. **18 open tasks** as of 2026-01-20.
 
 | Task    | Issue                                        |
 | ------- | -------------------------------------------- |
-| tk-dd4f | Message formatting: user prefix, system notices, thinking |
+| tk-l9ye | Queue edit behavior: pull all queued messages into input |
 
 **Open:**
 
@@ -99,6 +99,10 @@ Run `tk ls` for current task list. **18 open tasks** as of 2026-01-20.
 **Session - Selector Shell:**
 
 - Replaced provider/model modals with a bottom-anchored selector shell
+
+**Session - Message Formatting:**
+
+- Switching chat rendering to user `>` prefixes, agent no-header, dimmed thinking/system notices
 
 ## Config System
 
