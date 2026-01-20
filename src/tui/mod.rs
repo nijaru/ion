@@ -1415,15 +1415,6 @@ impl App {
             frame.render_widget(Paragraph::new(header_lines), header_area);
         }
 
-        let viewport_height = if self.message_list.scroll_offset == 0
-            && !chat_lines.is_empty()
-            && chat_lines.len() < chat_area.height as usize
-        {
-            chat_lines.len()
-        } else {
-            chat_area.height as usize
-        };
-
         let mut chat_lines = Vec::new();
         for entry in &self.message_list.entries {
             match entry.sender {
@@ -1636,6 +1627,15 @@ impl App {
         if !chat_lines.is_empty() {
             chat_lines.push(Line::from(""));
         }
+
+        let viewport_height = if self.message_list.scroll_offset == 0
+            && !chat_lines.is_empty()
+            && chat_lines.len() < chat_area.height as usize
+        {
+            chat_lines.len()
+        } else {
+            chat_area.height as usize
+        };
 
         // Calculate scroll position
         // scroll_offset is lines from bottom (0 = at bottom)
