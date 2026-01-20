@@ -963,11 +963,9 @@ impl App {
                 self.should_quit = true;
             }
 
-            // Navigation: Arrow keys primary, j/k as alternatives (only without ctrl)
+            // Navigation: Arrow keys only (j/k reserved for typing)
             KeyCode::Up => self.model_picker.move_up(1),
             KeyCode::Down => self.model_picker.move_down(1),
-            KeyCode::Char('k') if !ctrl => self.model_picker.move_up(1),
-            KeyCode::Char('j') if !ctrl => self.model_picker.move_down(1),
 
             // Page navigation
             KeyCode::PageUp => self.model_picker.move_up(10),

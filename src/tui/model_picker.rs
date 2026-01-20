@@ -5,6 +5,26 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 use std::collections::BTreeMap;
 
+/// Fuzzy match: check if all chars in `query` appear in order in `target`.
+/// Case-insensitive. Returns true if query is empty.
+fn fuzzy_match(query: &str, target: &str) -> bool {
+    if query.is_empty() {
+        return true;
+    }
+    let target_lower = target.to_lowercase();
+    let mut target_chars = target_lower.chars();
+    for query_char in query.to_lowercase().chars() {
+        loop {
+            match target_chars.next() {
+                Some(c) if c == query_char => break,
+                Some(_) => continue,
+                None => return false,
+            }
+        }
+    }
+    true
+}
+
 /// Selection stage for the picker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PickerStage {
@@ -193,19 +213,12 @@ impl ModelPicker {
         }
     }
 
-    /// Apply filter to provider list.
+    /// Apply filter to provider list (fuzzy match).
     fn apply_provider_filter(&mut self) {
-        let filter_lower = self.filter.to_lowercase();
-
         self.filtered_providers = self
             .providers
             .iter()
-            .filter(|p| {
-                if filter_lower.is_empty() {
-                    return true;
-                }
-                p.name.to_lowercase().contains(&filter_lower)
-            })
+            .filter(|p| fuzzy_match(&self.filter, &p.name))
             .cloned()
             .collect();
 
@@ -216,20 +229,12 @@ impl ModelPicker {
         }
     }
 
-    /// Apply filter to model list.
+    /// Apply filter to model list (fuzzy match on id and name).
     fn apply_model_filter(&mut self) {
-        let filter_lower = self.filter.to_lowercase();
-
         self.filtered_models = self
             .provider_models
             .iter()
-            .filter(|m| {
-                if filter_lower.is_empty() {
-                    return true;
-                }
-                m.id.to_lowercase().contains(&filter_lower)
-                    || m.name.to_lowercase().contains(&filter_lower)
-            })
+            .filter(|m| fuzzy_match(&self.filter, &m.id) || fuzzy_match(&self.filter, &m.name))
             .cloned()
             .collect();
 
