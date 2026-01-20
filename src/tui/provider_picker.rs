@@ -4,6 +4,8 @@
 //! with visual indication of authentication status.
 
 use crate::provider::ProviderStatus;
+use fuzzy_matcher::skim::SkimMatcherV2;
+use fuzzy_matcher::FuzzyMatcher;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 
@@ -34,20 +36,21 @@ impl ProviderPicker {
 
     /// Apply filter to provider list.
     fn apply_filter(&mut self) {
-        let filter_lower = self.filter.to_lowercase();
+        let matcher = SkimMatcherV2::default().ignore_case();
 
         self.filtered = self
             .providers
             .iter()
             .filter(|p| {
-                if filter_lower.is_empty() {
+                if self.filter.is_empty() {
                     return true;
                 }
-                p.provider.name().to_lowercase().contains(&filter_lower)
-                    || p.provider
-                        .description()
-                        .to_lowercase()
-                        .contains(&filter_lower)
+                matcher
+                    .fuzzy_match(p.provider.name(), &self.filter)
+                    .is_some()
+                    || matcher
+                        .fuzzy_match(p.provider.description(), &self.filter)
+                        .is_some()
             })
             .cloned()
             .collect();

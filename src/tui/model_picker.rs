@@ -1,29 +1,11 @@
 //! Two-stage model picker: Provider → Model selection.
 
 use crate::provider::{ModelFilter, ModelInfo, ModelRegistry, ProviderPrefs};
+use fuzzy_matcher::skim::SkimMatcherV2;
+use fuzzy_matcher::FuzzyMatcher;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 use std::collections::BTreeMap;
-
-/// Fuzzy match: check if all chars in `query` appear in order in `target`.
-/// Case-insensitive. Returns true if query is empty.
-fn fuzzy_match(query: &str, target: &str) -> bool {
-    if query.is_empty() {
-        return true;
-    }
-    let target_lower = target.to_lowercase();
-    let mut target_chars = target_lower.chars();
-    for query_char in query.to_lowercase().chars() {
-        loop {
-            match target_chars.next() {
-                Some(c) if c == query_char => break,
-                Some(_) => continue,
-                None => return false,
-            }
-        }
-    }
-    true
-}
 
 /// Selection stage for the picker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -215,10 +197,14 @@ impl ModelPicker {
 
     /// Apply filter to provider list (fuzzy match).
     fn apply_provider_filter(&mut self) {
+        let matcher = SkimMatcherV2::default().ignore_case();
         self.filtered_providers = self
             .providers
             .iter()
-            .filter(|p| fuzzy_match(&self.filter, &p.name))
+            .filter(|p| {
+                self.filter.is_empty()
+                    || matcher.fuzzy_match(&p.name, &self.filter).is_some()
+            })
             .cloned()
             .collect();
 
@@ -231,10 +217,15 @@ impl ModelPicker {
 
     /// Apply filter to model list (fuzzy match on id and name).
     fn apply_model_filter(&mut self) {
+        let matcher = SkimMatcherV2::default().ignore_case();
         self.filtered_models = self
             .provider_models
             .iter()
-            .filter(|m| fuzzy_match(&self.filter, &m.id) || fuzzy_match(&self.filter, &m.name))
+            .filter(|m| {
+                self.filter.is_empty()
+                    || matcher.fuzzy_match(&m.id, &self.filter).is_some()
+                    || matcher.fuzzy_match(&m.name, &self.filter).is_some()
+            })
             .cloned()
             .collect();
 

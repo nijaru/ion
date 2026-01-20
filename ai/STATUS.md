@@ -52,7 +52,7 @@ Run `tk ls` for current task list. **18 open tasks** as of 2026-01-20.
 
 | Task    | Issue                                        |
 | ------- | -------------------------------------------- |
-| tk-4cbl | Add fuzzy search to selector shell (choose crate + integrate) |
+| tk-w6id | Fuzzy search for @ file inclusion and slash commands |
 
 **Open:**
 
@@ -107,6 +107,10 @@ Run `tk ls` for current task list. **18 open tasks** as of 2026-01-20.
 **Session - Queue Editing:**
 
 - Pull all queued messages back into the input on Up arrow while running
+
+**Session - Selector Fuzzy Search:**
+
+- Integrating fuzzy matching into provider and model filters
 
 ## Config System
 
