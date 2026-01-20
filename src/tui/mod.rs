@@ -1605,7 +1605,14 @@ impl App {
 
         // Calculate scroll position
         // scroll_offset is lines from bottom (0 = at bottom)
-        let total_lines = chat_lines.len();
+        let mut total_lines = chat_lines.len();
+        if self.message_list.scroll_offset == 0 && total_lines < viewport_height {
+            let pad = viewport_height.saturating_sub(total_lines);
+            for _ in 0..pad {
+                chat_lines.insert(0, Line::from(""));
+            }
+            total_lines = chat_lines.len();
+        }
         let max_scroll = total_lines.saturating_sub(viewport_height);
         if self.message_list.scroll_offset > max_scroll {
             self.message_list.scroll_offset = max_scroll;
