@@ -247,7 +247,8 @@ impl App {
     }
 
     fn clear_input(&mut self) {
-        self.input_state.clear();
+        self.input_state.set_text("");
+        self.move_input_cursor_to_end();
     }
 
     pub fn set_input_text(&mut self, text: &str) {
