@@ -15,6 +15,7 @@ use crate::tool::{ApprovalHandler, ApprovalResponse, ToolMode, ToolOrchestrator}
 use crate::tui::message_list::{MessageList, Sender};
 use crate::tui::model_picker::ModelPicker;
 use crate::tui::provider_picker::ProviderPicker;
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use rat_text::event::TextOutcome;
@@ -373,25 +374,31 @@ impl App {
 
         !self.input_state.is_empty()
     }
-    pub async fn new() -> Self {
+    pub async fn new() -> Result<Self> {
         Self::with_permissions(PermissionSettings::default()).await
     }
 
-    pub async fn with_permissions(permissions: PermissionSettings) -> Self {
-        let config = Config::load().expect("Failed to load config");
+    pub async fn with_permissions(permissions: PermissionSettings) -> Result<Self> {
+        let config = Config::load().context("Failed to load config")?;
 
         // Initialize logging - write to file if ION_LOG is set
         if std::env::var("ION_LOG").is_ok() {
             use std::fs::File;
             use tracing_subscriber::prelude::*;
-            let file = File::create("ion.log").expect("Failed to create log file");
-            let file_layer = tracing_subscriber::fmt::layer()
-                .with_writer(file)
-                .with_ansi(false);
-            let filter = tracing_subscriber::EnvFilter::new("ion=debug");
-            let _ = tracing_subscriber::registry()
-                .with(file_layer.with_filter(filter))
-                .try_init();
+            match File::create("ion.log") {
+                Ok(file) => {
+                    let file_layer = tracing_subscriber::fmt::layer()
+                        .with_writer(file)
+                        .with_ansi(false);
+                    let filter = tracing_subscriber::EnvFilter::new("ion=debug");
+                    let _ = tracing_subscriber::registry()
+                        .with(file_layer.with_filter(filter))
+                        .try_init();
+                }
+                Err(err) => {
+                    eprintln!("Failed to create log file: {}", err);
+                }
+            }
         } else if std::env::var("RUST_LOG").is_ok() {
             let _ = tracing_subscriber::fmt()
                 .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
@@ -409,7 +416,8 @@ impl App {
         let api_key = config.api_key_for(api_provider.id()).unwrap_or_default();
 
         let provider_impl: Arc<dyn LlmApi> = Arc::new(
-            Client::new(api_provider, api_key.clone()).expect("Failed to create LLM client"),
+            Client::new(api_provider, api_key.clone())
+                .context("Failed to create LLM client")?,
         );
 
         let (approval_tx, approval_rx) = mpsc::channel(100);
@@ -460,8 +468,8 @@ impl App {
         let agent = Arc::new(Agent::new(provider_impl, orchestrator.clone()));
 
         // Open session store
-        let store =
-            SessionStore::open(&config.sessions_db_path()).expect("Failed to open session store");
+        let store = SessionStore::open(&config.sessions_db_path())
+            .context("Failed to open session store")?;
 
         // Create new session with current directory
         let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -558,7 +566,7 @@ impl App {
             }
         }
 
-        this
+        Ok(this)
     }
 
     /// Resume an existing session by ID.
@@ -960,7 +968,7 @@ impl App {
     }
 
     /// Set the active API provider and re-create the agent.
-    fn set_provider(&mut self, api_provider: Provider) {
+    fn set_provider(&mut self, api_provider: Provider) -> Result<()> {
         // Get API key (env var first, then config)
         let api_key = self
             .config
@@ -968,7 +976,8 @@ impl App {
             .unwrap_or_default();
 
         let provider: Arc<dyn LlmApi> = Arc::new(
-            Client::new(api_provider, api_key.clone()).expect("Failed to create LLM client"),
+            Client::new(api_provider, api_key.clone())
+                .context("Failed to create LLM client")?,
         );
 
         self.api_provider = api_provider;
@@ -997,6 +1006,7 @@ impl App {
         self.model_picker.set_models(vec![]);
         self.model_picker.is_loading = true;
         self.setup_fetch_started = false;
+        Ok(())
     }
 
     /// Open model selector (Ctrl+M or during setup)
@@ -1082,8 +1092,11 @@ impl App {
                         && status.authenticated
                     {
                         let provider = status.provider;
-                        self.set_provider(provider);
-                        self.open_model_selector();
+                        if let Err(err) = self.set_provider(provider) {
+                            self.last_error = Some(err.to_string());
+                        } else {
+                            self.open_model_selector();
+                        }
                     }
                 }
                 SelectorPage::Model => match self.model_picker.stage {
@@ -1266,9 +1279,13 @@ impl App {
     pub fn take_snapshot(&mut self) {
         let area = Rect::new(0, 0, 120, 40); // Standard "debug" terminal size
         let backend = ratatui::backend::TestBackend::new(area.width, area.height);
-        let mut terminal = Terminal::new(backend).unwrap();
-
-        terminal.draw(|f| self.draw(f)).unwrap();
+        let mut terminal = match Terminal::new(backend) {
+            Ok(term) => term,
+            Err(err) => match err {},
+        };
+        if terminal.draw(|f| self.draw(f)).is_err() {
+            return;
+        }
 
         let buffer = terminal.backend().buffer();
         let mut snapshot = String::new();
