@@ -121,6 +121,14 @@ pub enum SelectorPage {
     Model,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InputFrameStyle {
+    Bars,
+    Box,
+}
+
+const INPUT_FRAME_STYLE: InputFrameStyle = InputFrameStyle::Box;
+
 struct LayoutAreas {
     header: Rect,
     chat: Rect,
@@ -1485,6 +1493,10 @@ impl App {
     }
 
     fn render_progress(&self, frame: &mut Frame, progress_area: Rect) {
+        if progress_area.height == 0 {
+            return;
+        }
+
         if self.is_running {
             let spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
             let symbol = spinner[(self.frame_count % spinner.len() as u64) as usize];
@@ -1528,7 +1540,12 @@ impl App {
             }
 
             let progress_line = Line::from(progress_spans);
-            frame.render_widget(Paragraph::new(progress_line), progress_area);
+            let lines = if progress_area.height > 1 {
+                vec![Line::from(""), progress_line]
+            } else {
+                vec![progress_line]
+            };
+            frame.render_widget(Paragraph::new(lines), progress_area);
         } else if let Some(summary) = &self.last_task_summary {
             let secs = summary.elapsed.as_secs();
             let elapsed_str = if secs >= 60 {
@@ -1558,7 +1575,12 @@ impl App {
                 Span::styled(label, Style::default().fg(color)),
                 Span::styled(format!(" ({})", stats.join(" · ")), Style::default().dim()),
             ]);
-            frame.render_widget(Paragraph::new(summary_line), progress_area);
+            let lines = if progress_area.height > 1 {
+                vec![Line::from(""), summary_line]
+            } else {
+                vec![summary_line]
+            };
+            frame.render_widget(Paragraph::new(lines), progress_area);
         }
     }
 
@@ -1580,75 +1602,93 @@ impl App {
         }
 
         if input_area.width > 0 && input_area.height > 1 {
-            let top_area = Rect {
-                x: input_area.x,
-                y: input_area.y,
-                width: input_area.width,
-                height: 1,
-            };
-            let bottom_area = Rect {
-                x: input_area.x,
-                y: input_area.y + input_area.height - 1,
-                width: input_area.width,
-                height: 1,
-            };
-            let text_area = Rect {
-                x: input_area.x,
-                y: input_area.y + 1,
-                width: input_area.width,
-                height: input_area.height.saturating_sub(2),
-            };
-
-            let header = self.input_header_line(input_area.width);
-            let bar_style = Style::default().fg(Color::Cyan);
-            frame.render_widget(
-                Paragraph::new(Line::from(Span::styled(header, bar_style))),
-                top_area,
-            );
-            frame.render_widget(
-                Paragraph::new("─".repeat(input_area.width as usize)).style(bar_style),
-                bottom_area,
-            );
-
-            if text_area.width > 0 && text_area.height > 0 {
-                let gutter_width = text_area.width.min(3);
-                if gutter_width > 0 {
-                    let prompt_area = Rect {
-                        x: text_area.x,
-                        y: text_area.y,
-                        width: gutter_width,
-                        height: text_area.height,
+            match INPUT_FRAME_STYLE {
+                InputFrameStyle::Bars => {
+                    let top_area = Rect {
+                        x: input_area.x,
+                        y: input_area.y,
+                        width: input_area.width,
+                        height: 1,
                     };
-                    let prompt = match gutter_width {
-                        1 => ">".to_string(),
-                        2 => "> ".to_string(),
-                        _ => " > ".to_string(),
+                    let bottom_area = Rect {
+                        x: input_area.x,
+                        y: input_area.y + input_area.height - 1,
+                        width: input_area.width,
+                        height: 1,
                     };
-                    let blank = " ".repeat(gutter_width as usize);
-                    let prompt_lines: Vec<Line> = (0..text_area.height)
-                        .map(|row| {
-                            let symbol = if row == 0 { &prompt } else { &blank };
-                            Line::from(Span::styled(symbol.clone(), Style::default().dim()))
-                        })
-                        .collect();
-                    frame.render_widget(Paragraph::new(prompt_lines), prompt_area);
+                    let text_area = Rect {
+                        x: input_area.x,
+                        y: input_area.y + 1,
+                        width: input_area.width,
+                        height: input_area.height.saturating_sub(2),
+                    };
+
+                    let header = self.input_header_line(input_area.width);
+                    let bar_style = Style::default().fg(Color::Cyan);
+                    frame.render_widget(
+                        Paragraph::new(Line::from(Span::styled(header, bar_style))),
+                        top_area,
+                    );
+                    frame.render_widget(
+                        Paragraph::new("─".repeat(input_area.width as usize)).style(bar_style),
+                        bottom_area,
+                    );
+
+                    self.render_input_text(frame, text_area);
                 }
-
-                let entry_area = Rect {
-                    x: text_area.x + gutter_width,
-                    y: text_area.y,
-                    width: text_area.width.saturating_sub(gutter_width),
-                    height: text_area.height,
-                };
-
-                let input = TextArea::new().text_wrap(TextWrap::Word(1));
-                frame.render_stateful_widget(input, entry_area, &mut self.input_state);
+                InputFrameStyle::Box => {
+                    let block = Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(Color::Cyan));
+                    frame.render_widget(&block, input_area);
+                    let text_area = block.inner(input_area);
+                    self.render_input_text(frame, text_area);
+                }
             }
         }
 
         if let Some(cursor) = self.input_state.screen_cursor() {
             frame.set_cursor_position(cursor);
         }
+    }
+
+    fn render_input_text(&mut self, frame: &mut Frame, text_area: Rect) {
+        if text_area.width == 0 || text_area.height == 0 {
+            return;
+        }
+
+        let gutter_width = text_area.width.min(3);
+        if gutter_width > 0 {
+            let prompt_area = Rect {
+                x: text_area.x,
+                y: text_area.y,
+                width: gutter_width,
+                height: text_area.height,
+            };
+            let prompt = match gutter_width {
+                1 => ">".to_string(),
+                2 => "> ".to_string(),
+                _ => " > ".to_string(),
+            };
+            let blank = " ".repeat(gutter_width as usize);
+            let prompt_lines: Vec<Line> = (0..text_area.height)
+                .map(|row| {
+                    let symbol = if row == 0 { &prompt } else { &blank };
+                    Line::from(Span::styled(symbol.clone(), Style::default().dim()))
+                })
+                .collect();
+            frame.render_widget(Paragraph::new(prompt_lines), prompt_area);
+        }
+
+        let entry_area = Rect {
+            x: text_area.x + gutter_width,
+            y: text_area.y,
+            width: text_area.width.saturating_sub(gutter_width),
+            height: text_area.height,
+        };
+
+        let input = TextArea::new().text_wrap(TextWrap::Word(1));
+        frame.render_stateful_widget(input, entry_area, &mut self.input_state);
     }
 
     fn render_status_line(&self, frame: &mut Frame, status_area: Rect) {
@@ -1698,7 +1738,7 @@ impl App {
                     format_k(max)
                 )));
             } else {
-                left_spans.push(Span::raw(format!("{}/0k", format_k(used))));
+                left_spans.push(Span::raw(format!("({}/0k)", format_k(used))));
             }
         }
 
@@ -1723,7 +1763,7 @@ impl App {
         let input_height = self.calculate_input_height(frame.area().width);
 
         let progress_height = if self.is_running || self.last_task_summary.is_some() {
-            1
+            2
         } else {
             0
         };
