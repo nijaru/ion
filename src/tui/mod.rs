@@ -1734,7 +1734,9 @@ impl App {
             .message_queue
             .as_ref()
             .and_then(|queue| queue.lock().ok().map(|q| q.clone()));
-        let chat_lines = ChatRenderer::build_lines(&self.message_list.entries, queued.as_ref());
+        let chat_width = areas.chat.width.saturating_sub(2) as usize;
+        let chat_lines =
+            ChatRenderer::build_lines(&self.message_list.entries, queued.as_ref(), chat_width);
         self.render_chat(frame, areas.chat, chat_lines);
         self.render_progress(frame, areas.progress);
 

@@ -1,7 +1,8 @@
 use crate::tui::highlight;
 use crate::tui::message_list::{MessagePart, Sender};
-use crate::tui::{strip_ansi, own_line, QUEUED_PREVIEW_LINES};
+use crate::tui::{own_line, strip_ansi, QUEUED_PREVIEW_LINES};
 use ratatui::prelude::*;
+use ratatui::style::Modifier;
 
 pub struct ChatRenderer;
 
@@ -9,6 +10,7 @@ impl ChatRenderer {
     pub fn build_lines(
         entries: &[crate::tui::message_list::MessageEntry],
         queued: Option<&Vec<String>>,
+        wrap_width: usize,
     ) -> Vec<Line<'static>> {
         let mut chat_lines = Vec::new();
 
@@ -21,16 +23,23 @@ impl ChatRenderer {
                             combined.push_str(text);
                         }
                     }
-                    let md = tui_markdown::from_str(&combined);
-                    for line in &md.lines {
-                        let mut padded = vec![Span::styled("> ", Style::default().fg(Color::Cyan))];
-                        padded.extend(line.spans.iter().map(|span| {
-                            Span::styled(
-                                span.content.to_string(),
-                                span.style.add_modifier(Modifier::DIM),
-                            )
-                        }));
-                        chat_lines.push(Line::from(padded));
+                    let prefix = "> ";
+                    let prefix_len = prefix.chars().count();
+                    let available_width = wrap_width.saturating_sub(prefix_len).max(1);
+                    let prefix_style = Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::DIM);
+                    let text_style = Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::DIM);
+
+                    for line in combined.lines() {
+                        for chunk in wrap_line(line, available_width) {
+                            chat_lines.push(Line::from(vec![
+                                Span::styled(prefix, prefix_style),
+                                Span::styled(chunk, text_style),
+                            ]));
+                        }
                     }
                 }
                 Sender::Agent => {
@@ -46,11 +55,17 @@ impl ChatRenderer {
                                 }
                             }
                             MessagePart::Thinking(thinking) => {
-                                for line in thinking.lines() {
-                                    chat_lines.push(Line::from(vec![
-                                        Span::raw(" "),
-                                        Span::styled(line.to_string(), Style::default().dim()),
-                                    ]));
+                                let highlighted_lines =
+                                    highlight::highlight_markdown_with_code(thinking);
+                                for line in highlighted_lines {
+                                    let mut padded = vec![Span::raw(" ")];
+                                    padded.extend(line.spans.iter().map(|span| {
+                                        Span::styled(
+                                            span.content.to_string(),
+                                            span.style.add_modifier(Modifier::DIM),
+                                        )
+                                    }));
+                                    chat_lines.push(Line::from(padded));
                                 }
                             }
                         }
@@ -210,4 +225,33 @@ impl ChatRenderer {
 
         chat_lines
     }
+}
+
+fn wrap_line(line: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return vec![String::new()];
+    }
+    if line.is_empty() {
+        return vec![String::new()];
+    }
+
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+    let mut current_len = 0usize;
+
+    for ch in line.chars() {
+        current.push(ch);
+        current_len += 1;
+        if current_len >= width {
+            chunks.push(current);
+            current = String::new();
+            current_len = 0;
+        }
+    }
+
+    if !current.is_empty() || chunks.is_empty() {
+        chunks.push(current);
+    }
+
+    chunks
 }
