@@ -79,6 +79,16 @@ impl Agent {
         self.provider.clone()
     }
 
+    async fn emit_token_usage(&self, messages: &[Message], tx: &mpsc::Sender<AgentEvent>) {
+        let token_count = self.token_counter.count_messages(messages);
+        let _ = tx
+            .send(AgentEvent::TokenUsage {
+                used: token_count.total,
+                max: self.compaction_config.context_window,
+            })
+            .await;
+    }
+
     pub async fn plan(
         &self,
         user_msg: &str,
@@ -109,13 +119,7 @@ impl Agent {
         });
 
         // Send initial token usage
-        let token_count = self.token_counter.count_messages(&session.messages);
-        let _ = tx
-            .send(AgentEvent::TokenUsage {
-                used: token_count.total,
-                max: self.compaction_config.context_window,
-            })
-            .await;
+        self.emit_token_usage(&session.messages, &tx).await;
 
         // Optional: Run designer for complex requests
         if session.messages.len() <= 2
@@ -173,13 +177,7 @@ impl Agent {
         });
 
         // Update token usage after assistant response
-        let token_count = self.token_counter.count_messages(&session.messages);
-        let _ = tx
-            .send(AgentEvent::TokenUsage {
-                used: token_count.total,
-                max: self.compaction_config.context_window,
-            })
-            .await;
+        self.emit_token_usage(&session.messages, tx).await;
 
         if tool_calls.is_empty() {
             return Ok(false);
@@ -195,13 +193,7 @@ impl Agent {
         });
 
         // Token usage tracking
-        let token_count = self.token_counter.count_messages(&session.messages);
-        let _ = tx
-            .send(AgentEvent::TokenUsage {
-                used: token_count.total,
-                max: self.compaction_config.context_window,
-            })
-            .await;
+        self.emit_token_usage(&session.messages, tx).await;
 
         // Check for compaction
         if check_compaction_needed(
