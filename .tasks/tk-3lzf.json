@@ -3,7 +3,7 @@
   "ref": "3lzf",
   "title": "Review fuzzy search match ordering (substring first, fuzzy fallback)",
   "description": null,
-  "status": "open",
+  "status": "done",
   "priority": 3,
   "labels": [],
   "assignees": [],
@@ -13,7 +13,7 @@
   "due_date": null,
   "logs": [],
   "created_at": "2026-01-20T21:09:31.871Z",
-  "updated_at": "2026-01-20T21:09:31.871Z",
-  "completed_at": null,
+  "updated_at": "2026-01-21T10:57:17.412Z",
+  "completed_at": "2026-01-21T10:57:17.412Z",
   "external": {}
 }

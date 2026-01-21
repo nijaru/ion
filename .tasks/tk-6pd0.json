@@ -3,7 +3,7 @@
   "ref": "6pd0",
   "title": "Replace tui init unwrap/expect with graceful error handling",
   "description": null,
-  "status": "open",
+  "status": "done",
   "priority": 3,
   "labels": [],
   "assignees": [],
@@ -13,7 +13,7 @@
   "due_date": null,
   "logs": [],
   "created_at": "2026-01-20T21:31:57.648Z",
-  "updated_at": "2026-01-20T21:31:57.648Z",
-  "completed_at": null,
+  "updated_at": "2026-01-21T10:55:41.646Z",
+  "completed_at": "2026-01-21T10:55:41.646Z",
   "external": {}
 }
