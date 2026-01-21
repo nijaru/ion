@@ -172,6 +172,9 @@ fn draw_viewport(&mut self, frame: &mut Frame) {
 - **Scope**: Help and provider/model selection share the same selector shell (search box, list, hint line).
 - **Settings**: No settings viewport for MVP; use config file edits for now. Add settings view once there are multiple settings worth editing in-app.
 - **Behavior**: Replaces the viewport (input + status) while open, leaving terminal scrollback untouched.
+- **Rendering mode**: Inline only (no alternate screen). Full-screen model selector uses a temporarily expanded inline viewport height.
+- **Insert buffering**: While selector is open, buffer `insert_before` chat output and flush on close to avoid interleaving into the selector.
+- **Optional guard**: Consider blocking selector open while a task is running to reduce edge cases.
 - **Exit**: Escape returns to the normal viewport.
 
 ## Selector Shell (Shared UI)
