@@ -25,7 +25,7 @@ use rat_text::text_area::{self, TextArea, TextAreaState, TextWrap};
 use rat_text::text_input::{self, TextInput};
 use rat_text::{HasScreenCursor, TextPosition};
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
+use ratatui::widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragraph};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -1586,6 +1586,7 @@ impl App {
         if input_area.width > 0 && input_area.height > 1 {
             let block = Block::default()
                 .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(Color::Cyan));
             frame.render_widget(&block, input_area);
             let text_area = block.inner(input_area);
