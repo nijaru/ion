@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "4r7r",
+  "title": "[BUG] Chat history scrollback is cut off; scrolling up doesn't show full conversation",
+  "description": null,
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-21T12:10:48.214Z",
+  "updated_at": "2026-01-21T12:10:48.214Z",
+  "completed_at": null,
+  "external": {}
+}

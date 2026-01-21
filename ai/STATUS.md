@@ -61,7 +61,6 @@
 - Input box separators + prompt gutter; status line shows `[MODE]` in brackets.
 - Chat spacing tightened with a single spacer line above progress.
 - Approval prompt rendering fixed after input box refactor.
-- Refactor plan: split `App::draw`, extract chat renderer, and centralize token usage emission.
 
 **Recent fixes (complete):**
 
@@ -70,7 +69,7 @@
 - UTF-8 safe truncation in CLI/TUI display paths.
 - NaN-safe pricing sort in model registry.
 - OpenRouter `created` timestamps wired for optional newest sorting.
-- Refactor plan: split `App::draw`, extract chat renderer, and centralize token usage emission.
+- Refactor `App::draw` into helpers; chat renderer extracted; token usage emission centralized.
 
 **Research (complete):**
 

@@ -3,7 +3,7 @@
   "ref": "p621",
   "title": "Refactor App::draw into focused render helpers",
   "description": null,
-  "status": "open",
+  "status": "done",
   "priority": 3,
   "labels": [],
   "assignees": [],
@@ -13,7 +13,7 @@
   "due_date": null,
   "logs": [],
   "created_at": "2026-01-20T21:42:29.587Z",
-  "updated_at": "2026-01-20T21:42:29.587Z",
-  "completed_at": null,
+  "updated_at": "2026-01-21T11:11:44.865Z",
+  "completed_at": "2026-01-21T11:11:44.865Z",
   "external": {}
 }

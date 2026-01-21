@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "9h6q",
+  "title": "[BUG] Status line context usage should be wrapped in parentheses",
+  "description": null,
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-21T12:11:05.243Z",
+  "updated_at": "2026-01-21T12:11:05.243Z",
+  "completed_at": null,
+  "external": {}
+}
