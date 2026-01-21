@@ -3,7 +3,7 @@
   "ref": "h8ec",
   "title": "User message prefix only first line; dim cyan user text",
   "description": null,
-  "status": "open",
+  "status": "done",
   "priority": 3,
   "labels": [],
   "assignees": [],
@@ -13,7 +13,7 @@
   "due_date": null,
   "logs": [],
   "created_at": "2026-01-21T13:14:01.760Z",
-  "updated_at": "2026-01-21T13:14:01.760Z",
-  "completed_at": null,
+  "updated_at": "2026-01-21T14:19:53.182Z",
+  "completed_at": "2026-01-21T14:19:53.182Z",
   "external": {}
 }
