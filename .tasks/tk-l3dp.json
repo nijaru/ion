@@ -3,7 +3,7 @@
   "ref": "l3dp",
   "title": "[BUG] Input history has blank entries; Up requires two presses and Down resets to blank",
   "description": null,
-  "status": "open",
+  "status": "done",
   "priority": 3,
   "labels": [],
   "assignees": [],
@@ -13,7 +13,7 @@
   "due_date": null,
   "logs": [],
   "created_at": "2026-01-21T12:09:19.320Z",
-  "updated_at": "2026-01-21T12:09:19.320Z",
-  "completed_at": null,
+  "updated_at": "2026-01-21T16:47:49.323Z",
+  "completed_at": "2026-01-21T16:47:49.323Z",
   "external": {}
 }
