@@ -4,11 +4,11 @@
 
 | Metric     | Value           | Updated    |
 | ---------- | --------------- | ---------- |
-| Phase      | 5 - Polish & UX | 2026-01-20 |
-| Status     | Runnable        | 2026-01-20 |
-| Toolchain  | stable          | 2026-01-20 |
-| Tests      | cargo check     | 2026-01-20 |
-| Visibility | **PUBLIC**      | 2026-01-20 |
+| Phase      | 5 - Polish & UX | 2026-01-21 |
+| Status     | Runnable        | 2026-01-21 |
+| Toolchain  | stable          | 2026-01-21 |
+| Tests      | cargo check     | 2026-01-21 |
+| Visibility | **PUBLIC**      | 2026-01-21 |
 
 ## Architecture
 
@@ -64,6 +64,8 @@
 
 **Recent fixes (complete):**
 
+- Chat output is append-only via `Terminal::insert_before`; viewport redraws progress/input/status only.
+- User message prefix shown only on the first line; user text dimmed cyan.
 - Write/edit allowed in write mode; restricted tools require approval unless whitelisted.
 - `chat_lines` order fixed in draw; cargo check passes.
 - UTF-8 safe truncation in CLI/TUI display paths.
@@ -118,11 +120,10 @@
 
 **UX:**
 
-- Inline scrollback still truncated (chat rendered in viewport); needs append-only `insert_before`.
 - Startup/layout still jumps (input anchored at top until first message).
-- User prefix should apply only on first line; keep user text dim cyan.
 - Status line shows `(used/0k)` when max unknown; model max needs wiring from model registry.
 - OpenRouter timeouts are frequent; retry/backoff and chat logging pending.
+- Verify append-only scrollback with selector buffering + agent streaming behavior in a real terminal.
 
 ## Design Documents
 

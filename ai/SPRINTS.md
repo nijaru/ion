@@ -43,6 +43,42 @@ Tighten viewport layout so chat content sits immediately above the viewport with
 
 ---
 
+## Task: Append chat via insert-before scrollback
+
+**Sprint:** 1
+**Depends on:** none
+
+### Description
+Move chat rendering out of the viewport and append new chat lines directly into terminal scrollback using `Terminal::insert_before`.
+
+### Acceptance Criteria
+- [x] Chat output is appended to scrollback; viewport redraws only progress/input/status
+- [x] Selector mode buffers new chat lines and flushes on close
+- [ ] Verified in a real terminal with scrolling and selection
+
+### Technical Notes
+- Use `Terminal::insert_before` with `Paragraph::line_count` for height
+- Keep viewport layout constant (header/progress/input/status only)
+
+---
+
+## Task: User prefix only on first line
+
+**Sprint:** 1
+**Depends on:** none
+
+### Description
+Render user messages with a `> ` prefix only on the first line; subsequent lines are unprefixed. User text is dim cyan.
+
+### Acceptance Criteria
+- [x] `> ` prefix appears only on the first line
+- [x] Wrapped lines do not include the prefix
+
+### Technical Notes
+- Apply prefix only to the first wrapped line in `ChatRenderer`
+
+---
+
 ## Task: Refactor draw into render helpers
 
 **Sprint:** 1
