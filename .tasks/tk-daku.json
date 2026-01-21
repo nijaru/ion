@@ -3,7 +3,7 @@
   "ref": "daku",
   "title": "Handle NaN pricing sort in provider registry (avoid unwrap panic)",
   "description": null,
-  "status": "open",
+  "status": "done",
   "priority": 3,
   "labels": [],
   "assignees": [],
@@ -13,7 +13,7 @@
   "due_date": null,
   "logs": [],
   "created_at": "2026-01-20T21:31:55.112Z",
-  "updated_at": "2026-01-20T21:31:55.112Z",
-  "completed_at": null,
+  "updated_at": "2026-01-20T23:58:08.262Z",
+  "completed_at": "2026-01-20T23:58:08.262Z",
   "external": {}
 }

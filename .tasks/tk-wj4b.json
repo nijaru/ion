@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "wj4b",
+  "title": "[PROVIDER] Add newest sort option using OpenRouter created timestamps",
+  "description": null,
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-21T10:40:18.394Z",
+  "updated_at": "2026-01-21T10:40:18.394Z",
+  "completed_at": null,
+  "external": {}
+}

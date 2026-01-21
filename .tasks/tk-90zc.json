@@ -3,7 +3,7 @@
   "ref": "90zc",
   "title": "Fix chat_lines use-before-define in tui draw (viewport height)",
   "description": null,
-  "status": "open",
+  "status": "done",
   "priority": 3,
   "labels": [],
   "assignees": [],
@@ -13,7 +13,7 @@
   "due_date": null,
   "logs": [],
   "created_at": "2026-01-20T21:31:45.962Z",
-  "updated_at": "2026-01-20T21:31:45.962Z",
-  "completed_at": null,
+  "updated_at": "2026-01-20T22:24:36.264Z",
+  "completed_at": "2026-01-20T22:24:36.264Z",
   "external": {}
 }

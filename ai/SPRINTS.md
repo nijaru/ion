@@ -88,8 +88,8 @@ Move chat message formatting (user/agent/tool/system) into a dedicated renderer 
 Ensure chat line collection happens before any logic that uses its length, so viewport height calculations are correct and the draw method compiles.
 
 ### Acceptance Criteria
-- [ ] `chat_lines` is built before any size/height calculations
-- [ ] draw() compiles without use-before-define errors
+- [x] `chat_lines` is built before any size/height calculations
+- [x] draw() compiles without use-before-define errors
 
 ### Technical Notes
 - Move chat line assembly above viewport height calculation
@@ -105,8 +105,8 @@ Ensure chat line collection happens before any logic that uses its length, so vi
 Write mode should only auto-allow safe tools and explicitly approved restricted tools. It should not auto-allow all non-bash tools.
 
 ### Acceptance Criteria
-- [ ] Restricted tools still require approval unless whitelisted
-- [ ] No blanket allow for non-bash tools
+- [x] Restricted tools still require approval unless whitelisted
+- [x] No blanket allow for non-bash tools
 
 ### Technical Notes
 - Remove `tool.name() != "bash"` bypass
@@ -122,8 +122,8 @@ Write mode should only auto-allow safe tools and explicitly approved restricted 
 Avoid panics when truncating non-ASCII text in CLI and TUI displays.
 
 ### Acceptance Criteria
-- [ ] No byte-slicing in truncation helpers
-- [ ] Truncation handles Unicode safely
+- [x] No byte-slicing in truncation helpers
+- [x] Truncation handles Unicode safely
 
 ### Technical Notes
 - Replace `s[..]` truncation with char-safe logic
@@ -234,8 +234,8 @@ Consolidate repeated token usage emission in agent loop into a single helper.
 Avoid panics when sorting by price if a model has NaN pricing data.
 
 ### Acceptance Criteria
-- [ ] Sorting never panics on NaN pricing
-- [ ] Sorting remains stable for invalid price data
+- [x] Sorting never panics on NaN pricing
+- [x] Sorting remains stable for invalid price data
 
 ### Technical Notes
 - Use `total_cmp` or sanitize inputs before compare

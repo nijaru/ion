@@ -61,7 +61,15 @@
 - Input box separators + prompt gutter; status line shows `[MODE]` in brackets.
 - Chat spacing tightened with a single spacer line above progress.
 - Approval prompt rendering fixed after input box refactor.
-- Write-mode approvals correction pending (remove non-bash auto-allow).
+- Refactor plan: split `App::draw`, extract chat renderer, and centralize token usage emission.
+
+**Recent fixes (complete):**
+
+- Write/edit allowed in write mode; restricted tools require approval unless whitelisted.
+- `chat_lines` order fixed in draw; cargo check passes.
+- UTF-8 safe truncation in CLI/TUI display paths.
+- NaN-safe pricing sort in model registry.
+- OpenRouter `created` timestamps wired for optional newest sorting.
 - Refactor plan: split `App::draw`, extract chat renderer, and centralize token usage emission.
 
 **Research (complete):**
