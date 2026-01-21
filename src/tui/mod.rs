@@ -119,6 +119,14 @@ pub enum SelectorPage {
     Model,
 }
 
+struct LayoutAreas {
+    header: Rect,
+    chat: Rect,
+    progress: Rect,
+    input: Rect,
+    status: Rect,
+}
+
 pub struct ApprovalRequest {
     pub tool_name: String,
     pub args: serde_json::Value,
@@ -1373,65 +1381,69 @@ impl App {
             ));
     }
 
-    pub fn draw(&mut self, frame: &mut Frame) {
+    fn active_header_lines(&self) -> Vec<Line<'static>> {
         let show_header = self.message_list.entries.is_empty()
             && !self.is_running
             && self.last_task_summary.is_none()
             && !self.has_queued_messages();
-        let header_lines = if show_header {
+        if show_header {
             self.startup_header_lines()
         } else {
             Vec::new()
-        };
-        let header_height = header_lines.len() as u16;
+        }
+    }
 
-        // Calculate input box height based on content
-        let input_height = self.calculate_input_height(frame.area().width);
-
-        // Progress line: running, or showing completion summary (until next task)
-        let progress_height = if self.is_running || self.last_task_summary.is_some() {
-            1
-        } else {
-            0
-        };
-
-        let has_chat = !self.message_list.entries.is_empty() || self.has_queued_messages();
-
+    fn layout_areas(
+        &self,
+        area: Rect,
+        header_height: u16,
+        input_height: u16,
+        progress_height: u16,
+        has_chat: bool,
+    ) -> LayoutAreas {
         let chunks = if has_chat || self.is_running || self.last_task_summary.is_some() {
             Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
                     Constraint::Length(header_height),
-                    Constraint::Min(0),                  // Chat
-                    Constraint::Length(progress_height), // Progress line (Ionizing...)
-                    Constraint::Length(input_height),    // Input
-                    Constraint::Length(1),               // Status line
+                    Constraint::Min(0),
+                    Constraint::Length(progress_height),
+                    Constraint::Length(input_height),
+                    Constraint::Length(1),
                 ])
-                .split(frame.area())
+                .split(area)
         } else {
             Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
                     Constraint::Length(header_height),
-                    Constraint::Length(input_height), // Input
-                    Constraint::Length(1),            // Status line
-                    Constraint::Min(0),               // Spacer
+                    Constraint::Length(input_height),
+                    Constraint::Length(1),
+                    Constraint::Min(0),
                 ])
-                .split(frame.area())
+                .split(area)
         };
 
-        let header_area = chunks[0];
-        let (chat_area, progress_area, input_area, status_area) =
-            if has_chat || self.is_running || self.last_task_summary.is_some() {
-                (chunks[1], chunks[2], chunks[3], chunks[4])
-            } else {
-                (Rect::default(), Rect::default(), chunks[1], chunks[2])
-            };
-
-        if !header_lines.is_empty() {
-            frame.render_widget(Paragraph::new(header_lines), header_area);
+        if has_chat || self.is_running || self.last_task_summary.is_some() {
+            LayoutAreas {
+                header: chunks[0],
+                chat: chunks[1],
+                progress: chunks[2],
+                input: chunks[3],
+                status: chunks[4],
+            }
+        } else {
+            LayoutAreas {
+                header: chunks[0],
+                chat: Rect::default(),
+                progress: Rect::default(),
+                input: chunks[1],
+                status: chunks[2],
+            }
         }
+    }
 
+    fn build_chat_lines(&self) -> Vec<Line<'static>> {
         let mut chat_lines = Vec::new();
         for entry in &self.message_list.entries {
             match entry.sender {
@@ -1457,7 +1469,6 @@ impl App {
                     for part in &entry.parts {
                         match part {
                             crate::tui::message_list::MessagePart::Text(text) => {
-                                // Use custom markdown renderer with syntax highlighting for code blocks
                                 let highlighted_lines =
                                     highlight::highlight_markdown_with_code(text);
                                 for line in highlighted_lines {
@@ -1487,23 +1498,17 @@ impl App {
                     } else {
                         Span::raw("• ")
                     };
-                    // Tool messages: first line is call, rest are results
                     let mut lines = content.lines();
 
-                    // First line: **tool_name**(args) - Claude Code style
-                    // Also extract tool name and file path for syntax highlighting
                     let mut syntax_name: Option<&str> = None;
                     let mut is_edit_tool = false;
 
                     if let Some(first_line) = lines.next() {
-                        // Parse tool_name(args) format
                         if let Some(paren_pos) = first_line.find('(') {
                             let tool_name = &first_line[..paren_pos];
                             let args = &first_line[paren_pos..];
 
-                            // For read/grep, try to detect syntax from file path
                             if tool_name == "read" || tool_name == "grep" {
-                                // Extract path from args: (path) or (path, ...)
                                 let path = args
                                     .trim_start_matches('(')
                                     .split(&[',', ')'][..])
@@ -1516,21 +1521,18 @@ impl App {
 
                             chat_lines.push(Line::from(vec![
                                 tool_prefix.clone(),
-                                Span::styled(tool_name, Style::default().bold()),
-                                Span::raw(args),
+                                Span::styled(tool_name.to_string(), Style::default().bold()),
+                                Span::raw(args.to_string()),
                             ]));
                         } else {
-                            // No args, just tool name
                             chat_lines.push(Line::from(vec![
                                 tool_prefix.clone(),
-                                Span::styled(first_line, Style::default().bold()),
+                                Span::styled(first_line.to_string(), Style::default().bold()),
                             ]));
                         }
                     }
 
-                    // Remaining lines: results with styling
                     for line in lines {
-                        // For edit/write tools, detect diff lines by content
                         let is_diff_line = is_edit_tool
                             && (line.starts_with('+')
                                 || line.starts_with('-')
@@ -1538,29 +1540,27 @@ impl App {
                                 || line.starts_with(' '));
 
                         if line.starts_with("⎿ Error:") || line.starts_with("  Error:") {
-                            // Error lines in red
                             chat_lines.push(Line::from(vec![
                                 Span::raw("  "),
                                 Span::styled(line.to_string(), Style::default().fg(Color::Red)),
                             ]));
                         } else if line.starts_with("⎿") || line.starts_with("  … +") {
-                            // Success marker and overflow indicators dimmed
                             chat_lines.push(Line::from(vec![
                                 Span::raw("  "),
                                 Span::styled(line.to_string(), Style::default().dim()),
                             ]));
                         } else if is_diff_line {
-                            // Apply diff highlighting for edit/write tool output
                             let mut highlighted = highlight::highlight_diff_line(line);
                             highlighted.spans.insert(0, Span::raw("    "));
                             chat_lines.push(highlighted);
                         } else if line.contains("\x1b[") {
-                            // ANSI escape sequences
                             use ansi_to_tui::IntoText;
                             if let Ok(ansi_text) = line.as_bytes().into_text() {
                                 for ansi_line in ansi_text.lines {
                                     let mut padded = vec![Span::raw("  ")];
-                                    padded.extend(ansi_line.spans.clone());
+                                    padded.extend(ansi_line.spans.iter().map(|span| {
+                                        Span::styled(span.content.to_string(), span.style)
+                                    }));
                                     chat_lines.push(Line::from(padded));
                                 }
                             } else {
@@ -1570,14 +1570,11 @@ impl App {
                                 ]));
                             }
                         } else if let Some(syntax) = syntax_name {
-                            // Apply syntax highlighting for code content
                             let code_line = line.strip_prefix("  ").unwrap_or(line);
                             let mut highlighted = highlight::highlight_line(code_line, syntax);
-                            // Prepend indent
                             highlighted.spans.insert(0, Span::raw("    "));
-                            chat_lines.push(highlighted);
+                            chat_lines.push(own_line(highlighted));
                         } else {
-                            // Continuation lines dimmed
                             chat_lines.push(Line::from(vec![
                                 Span::raw("  "),
                                 Span::styled(line.to_string(), Style::default().dim()),
@@ -1605,7 +1602,9 @@ impl App {
                         let md = tui_markdown::from_str(content);
                         for line in &md.lines {
                             let mut padded = vec![Span::raw(" ")];
-                            padded.extend(line.spans.clone());
+                            padded.extend(line.spans.iter().map(|span| {
+                                Span::styled(span.content.to_string(), span.style)
+                            }));
                             chat_lines.push(Line::from(padded));
                         }
                     }
@@ -1614,7 +1613,6 @@ impl App {
             chat_lines.push(Line::from(""));
         }
 
-        // Show queued messages at bottom of chat (dimmed, pending)
         if let Some(ref queue) = self.message_queue
             && let Ok(q) = queue.lock()
         {
@@ -1640,11 +1638,14 @@ impl App {
             }
         }
 
-        // Add a spacer line above the progress line
         if !chat_lines.is_empty() {
             chat_lines.push(Line::from(""));
         }
 
+        chat_lines
+    }
+
+    fn render_chat(&mut self, frame: &mut Frame, chat_area: Rect, chat_lines: Vec<Line<'static>>) {
         let viewport_height = if self.message_list.scroll_offset == 0
             && !chat_lines.is_empty()
             && chat_lines.len() < chat_area.height as usize
@@ -1654,8 +1655,6 @@ impl App {
             chat_area.height as usize
         };
 
-        // Calculate scroll position
-        // scroll_offset is lines from bottom (0 = at bottom)
         let total_lines = chat_lines.len();
         let max_scroll = total_lines.saturating_sub(viewport_height);
         if self.message_list.scroll_offset > max_scroll {
@@ -1683,12 +1682,13 @@ impl App {
             }
             frame.render_widget(chat_para, chat_render_area);
         }
+    }
 
+    fn render_progress(&self, frame: &mut Frame, progress_area: Rect) {
         if self.is_running {
             let spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
             let symbol = spinner[(self.frame_count % spinner.len() as u64) as usize];
 
-            // Show status: cancelling > running tool > ionizing
             let (label, color) = if self.session.abort_token.is_cancelled() {
                 ("Cancelling...".to_string(), Color::Red)
             } else if let Some(tool) = &self.current_tool {
@@ -1702,10 +1702,7 @@ impl App {
                 Span::styled(label, Style::default().fg(color)),
             ];
 
-            // Build stats in parens: (elapsed · ↑input · ↓output)
             let mut stats = Vec::new();
-
-            // Elapsed time
             if let Some(start) = self.task_start_time {
                 let elapsed = start.elapsed();
                 let secs = elapsed.as_secs();
@@ -1733,7 +1730,6 @@ impl App {
             let progress_line = Line::from(progress_spans);
             frame.render_widget(Paragraph::new(progress_line), progress_area);
         } else if let Some(summary) = &self.last_task_summary {
-            // Show completion/cancellation summary until next task starts
             let secs = summary.elapsed.as_secs();
             let elapsed_str = if secs >= 60 {
                 format!("{}m {}s", secs / 60, secs % 60)
@@ -1764,173 +1760,197 @@ impl App {
             ]);
             frame.render_widget(Paragraph::new(summary_line), progress_area);
         }
+    }
+
+    fn render_input_or_approval(&mut self, frame: &mut Frame, input_area: Rect) {
+        if self.mode == Mode::Approval {
+            if let Some(req) = &self.pending_approval {
+                let prompt = format!(
+                    " [Approval] Allow {}? (y)es / (n)o / (a)lways / (A)lways permanent ",
+                    req.tool_name
+                );
+                let approval_block = Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Red).bold())
+                    .title(" Action Required ");
+                let approval_para = Paragraph::new(prompt).block(approval_block);
+                frame.render_widget(approval_para, input_area);
+            }
+            return;
+        }
+
+        if input_area.width > 0 && input_area.height > 1 {
+            let top_area = Rect {
+                x: input_area.x,
+                y: input_area.y,
+                width: input_area.width,
+                height: 1,
+            };
+            let bottom_area = Rect {
+                x: input_area.x,
+                y: input_area.y + input_area.height - 1,
+                width: input_area.width,
+                height: 1,
+            };
+            let text_area = Rect {
+                x: input_area.x,
+                y: input_area.y + 1,
+                width: input_area.width,
+                height: input_area.height.saturating_sub(2),
+            };
+
+            let header = self.input_header_line(input_area.width);
+            let bar_style = Style::default().fg(Color::Cyan);
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(header, bar_style))),
+                top_area,
+            );
+            frame.render_widget(
+                Paragraph::new("─".repeat(input_area.width as usize)).style(bar_style),
+                bottom_area,
+            );
+
+            if text_area.width > 0 && text_area.height > 0 {
+                let gutter_width = text_area.width.min(3);
+                if gutter_width > 0 {
+                    let prompt_area = Rect {
+                        x: text_area.x,
+                        y: text_area.y,
+                        width: gutter_width,
+                        height: text_area.height,
+                    };
+                    let prompt = match gutter_width {
+                        1 => ">".to_string(),
+                        2 => "> ".to_string(),
+                        _ => " > ".to_string(),
+                    };
+                    let blank = " ".repeat(gutter_width as usize);
+                    let prompt_lines: Vec<Line> = (0..text_area.height)
+                        .map(|row| {
+                            let symbol = if row == 0 { &prompt } else { &blank };
+                            Line::from(Span::styled(symbol.clone(), Style::default().dim()))
+                        })
+                        .collect();
+                    frame.render_widget(Paragraph::new(prompt_lines), prompt_area);
+                }
+
+                let entry_area = Rect {
+                    x: text_area.x + gutter_width,
+                    y: text_area.y,
+                    width: text_area.width.saturating_sub(gutter_width),
+                    height: text_area.height,
+                };
+
+                let input = TextArea::new().text_wrap(TextWrap::Word(1));
+                frame.render_stateful_widget(input, entry_area, &mut self.input_state);
+            }
+        }
+
+        if let Some(cursor) = self.input_state.screen_cursor() {
+            frame.set_cursor_position(cursor);
+        }
+    }
+
+    fn render_status_line(&self, frame: &mut Frame, status_area: Rect) {
+        let model_name = self
+            .session
+            .model
+            .split('/')
+            .next_back()
+            .unwrap_or(&self.session.model);
+
+        let mode_label = match self.tool_mode {
+            ToolMode::Read => "READ",
+            ToolMode::Write => "WRITE",
+            ToolMode::Agi => "AGI",
+        };
+        let mode_color = match self.tool_mode {
+            ToolMode::Read => Color::Cyan,
+            ToolMode::Write => Color::Yellow,
+            ToolMode::Agi => Color::Red,
+        };
+
+        let mut left_spans: Vec<Span> = vec![
+            Span::raw(" "),
+            Span::raw("["),
+            Span::styled(mode_label, Style::default().fg(mode_color)),
+            Span::raw("]"),
+            Span::raw(" · "),
+            Span::raw(model_name),
+        ];
+
+        if let Some((used, _max)) = self.token_usage {
+            let format_k = |n: usize| -> String {
+                if n >= 1000 {
+                    format!("{}k", n / 1000)
+                } else {
+                    n.to_string()
+                }
+            };
+            let max = self.model_context_window.unwrap_or(0);
+            left_spans.push(Span::raw(" · "));
+            if max > 0 {
+                let pct = (used * 100) / max;
+                left_spans.push(Span::raw(format!(
+                    "{}% ({}/{})",
+                    pct,
+                    format_k(used),
+                    format_k(max)
+                )));
+            } else {
+                left_spans.push(Span::raw(format!("{}/0k", format_k(used))));
+            }
+        }
+
+        let left_len: usize = left_spans.iter().map(|s| s.content.chars().count()).sum();
+        let (right, right_style) = ("? help ".to_string(), Style::default().dim());
+        let width = status_area.width as usize;
+        let right_len = right.chars().count();
+        let padding = width.saturating_sub(left_len + right_len);
+
+        let mut status_spans = left_spans;
+        status_spans.push(Span::raw(" ".repeat(padding)));
+        status_spans.push(Span::styled(right, right_style));
+        let status_line = Line::from(status_spans);
+
+        frame.render_widget(Paragraph::new(status_line), status_area);
+    }
+
+    pub fn draw(&mut self, frame: &mut Frame) {
+        let header_lines = self.active_header_lines();
+        let header_height = header_lines.len() as u16;
+
+        let input_height = self.calculate_input_height(frame.area().width);
+
+        let progress_height = if self.is_running || self.last_task_summary.is_some() {
+            1
+        } else {
+            0
+        };
+
+        let has_chat = !self.message_list.entries.is_empty() || self.has_queued_messages();
+
+        let areas = self.layout_areas(
+            frame.area(),
+            header_height,
+            input_height,
+            progress_height,
+            has_chat,
+        );
+
+        if !header_lines.is_empty() {
+            frame.render_widget(Paragraph::new(header_lines), areas.header);
+        }
+
+        let chat_lines = self.build_chat_lines();
+        self.render_chat(frame, areas.chat, chat_lines);
+        self.render_progress(frame, areas.progress);
 
         if self.mode == Mode::Selector {
             self.render_selector_shell(frame);
         } else {
-            // Input or Approval Prompt (input always visible except during approval)
-            if self.mode == Mode::Approval {
-                if let Some(req) = &self.pending_approval {
-                    let prompt = format!(
-                        " [Approval] Allow {}? (y)es / (n)o / (a)lways / (A)lways permanent ",
-                        req.tool_name
-                    );
-                    let approval_block = Block::default()
-                        .borders(Borders::ALL)
-                        .border_style(Style::default().fg(Color::Red).bold())
-                        .title(" Action Required ");
-                    let approval_para = Paragraph::new(prompt).block(approval_block);
-                    frame.render_widget(approval_para, input_area);
-                }
-            } else {
-                // Input box always visible
-                let input_area = input_area;
-                if input_area.width > 0 && input_area.height > 1 {
-                    let top_area = Rect {
-                        x: input_area.x,
-                        y: input_area.y,
-                        width: input_area.width,
-                        height: 1,
-                    };
-                    let bottom_area = Rect {
-                        x: input_area.x,
-                        y: input_area.y + input_area.height - 1,
-                        width: input_area.width,
-                        height: 1,
-                    };
-                    let text_area = Rect {
-                        x: input_area.x,
-                        y: input_area.y + 1,
-                        width: input_area.width,
-                        height: input_area.height.saturating_sub(2),
-                    };
-
-                    let header = self.input_header_line(input_area.width);
-                    let bar_style = Style::default().fg(Color::Cyan);
-                    frame.render_widget(
-                        Paragraph::new(Line::from(Span::styled(header, bar_style))),
-                        top_area,
-                    );
-                    frame.render_widget(
-                        Paragraph::new("─".repeat(input_area.width as usize))
-                            .style(bar_style),
-                        bottom_area,
-                    );
-
-                    if text_area.width > 0 && text_area.height > 0 {
-                        let gutter_width = text_area.width.min(3);
-                        if gutter_width > 0 {
-                            let prompt_area = Rect {
-                                x: text_area.x,
-                                y: text_area.y,
-                                width: gutter_width,
-                                height: text_area.height,
-                            };
-                            let prompt = match gutter_width {
-                                1 => ">".to_string(),
-                                2 => "> ".to_string(),
-                                _ => " > ".to_string(),
-                            };
-                            let blank = " ".repeat(gutter_width as usize);
-                            let prompt_lines: Vec<Line> = (0..text_area.height)
-                                .map(|row| {
-                                    let symbol = if row == 0 { &prompt } else { &blank };
-                                    Line::from(Span::styled(symbol.clone(), Style::default().dim()))
-                                })
-                                .collect();
-                            frame.render_widget(Paragraph::new(prompt_lines), prompt_area);
-                        }
-
-                        let entry_area = Rect {
-                            x: text_area.x + gutter_width,
-                            y: text_area.y,
-                            width: text_area.width.saturating_sub(gutter_width),
-                            height: text_area.height,
-                        };
-
-                        let input = TextArea::new().text_wrap(TextWrap::Word(1));
-                        frame.render_stateful_widget(input, entry_area, &mut self.input_state);
-                    }
-                }
-
-                if let Some(cursor) = self.input_state.screen_cursor() {
-                    frame.set_cursor_position(cursor);
-                }
-            }
-
-            // Status line: model · context%
-
-            // Simplify model name (remove provider prefix if present)
-            let model_name = self
-                .session
-                .model
-                .split('/')
-                .next_back()
-                .unwrap_or(&self.session.model);
-
-            // Build status line left side
-            let mode_label = match self.tool_mode {
-                ToolMode::Read => "READ",
-                ToolMode::Write => "WRITE",
-                ToolMode::Agi => "AGI",
-            };
-            let mode_color = match self.tool_mode {
-                ToolMode::Read => Color::Cyan,
-                ToolMode::Write => Color::Yellow,
-                ToolMode::Agi => Color::Red,
-            };
-
-            let mut left_spans: Vec<Span> = vec![
-                Span::raw(" "),
-                Span::raw("["),
-                Span::styled(mode_label, Style::default().fg(mode_color)),
-                Span::raw("]"),
-                Span::raw(" · "),
-                Span::raw(model_name),
-            ];
-
-            // Context usage display with token counts
-            if let Some((used, _max)) = self.token_usage {
-                let format_k = |n: usize| -> String {
-                    if n >= 1000 {
-                        format!("{}k", n / 1000)
-                    } else {
-                        n.to_string()
-                    }
-                };
-                let max = self.model_context_window.unwrap_or(0);
-                left_spans.push(Span::raw(" · "));
-                if max > 0 {
-                    let pct = (used * 100) / max;
-                    left_spans.push(Span::raw(format!(
-                        "{}% ({}/{})",
-                        pct,
-                        format_k(used),
-                        format_k(max)
-                    )));
-                } else {
-                    left_spans.push(Span::raw(format!("{}/0k", format_k(used))));
-                }
-            }
-
-            // Calculate left side length for padding
-            let left_len: usize = left_spans.iter().map(|s| s.content.chars().count()).sum();
-
-            // Right side: help hint
-            let (right, right_style) = ("? help ".to_string(), Style::default().dim());
-
-            // Calculate padding for right alignment
-            let width = status_area.width as usize;
-            let right_len = right.chars().count();
-            let padding = width.saturating_sub(left_len + right_len);
-
-            // Build final status line: left spans + padding + right
-            let mut status_spans = left_spans;
-            status_spans.push(Span::raw(" ".repeat(padding)));
-            status_spans.push(Span::styled(right, right_style));
-            let status_line = Line::from(status_spans);
-
-            frame.render_widget(Paragraph::new(status_line), status_area);
+            self.render_input_or_approval(frame, areas.input);
+            self.render_status_line(frame, areas.status);
         }
 
         // Render overlays on top if active
@@ -2227,4 +2247,13 @@ fn strip_ansi(s: &str) -> String {
         result.push(c);
     }
     result
+}
+
+fn own_line(line: Line<'_>) -> Line<'static> {
+    Line::from(
+        line.spans
+            .into_iter()
+            .map(|span| Span::styled(span.content.to_string(), span.style))
+            .collect::<Vec<_>>(),
+    )
 }
