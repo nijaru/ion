@@ -75,6 +75,8 @@ pub enum SortStrategy {
     Throughput,
     /// Lowest latency (smaller models) first
     Latency,
+    /// Newest models first (uses created timestamp when available)
+    Newest,
 }
 
 /// Provider preferences for filtering and routing.
@@ -224,6 +226,7 @@ impl ProviderPrefs {
                 SortStrategy::Price => Some("price"),
                 SortStrategy::Throughput => Some("throughput"),
                 SortStrategy::Latency => Some("latency"),
+                SortStrategy::Newest => None,
             };
             if let Some(s) = sort_str {
                 provider.insert("sort".to_string(), serde_json::json!(s));

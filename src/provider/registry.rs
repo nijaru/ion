@@ -46,6 +46,8 @@ struct ApiModel {
     id: String,
     name: String,
     context_length: u32,
+    #[serde(default)]
+    created: u64,
     pricing: ApiPricing,
     #[serde(default)]
     architecture: Option<ApiArchitecture>,
@@ -326,7 +328,7 @@ impl ModelRegistry {
                         cache_read: m.pricing.cache_read.map(|p| p * 1_000_000.0),
                         cache_write: m.pricing.cache_write.map(|p| p * 1_000_000.0),
                     },
-                    created: 0,
+                    created: m.created,
                 }
             })
             .collect();
@@ -495,6 +497,15 @@ impl ModelRegistry {
                 super::prefs::SortStrategy::Latency => {
                     // Smaller models generally have lower latency
                     a.context_window.cmp(&b.context_window)
+                }
+                super::prefs::SortStrategy::Newest => {
+                    match b.created.cmp(&a.created) {
+                        std::cmp::Ordering::Equal => match a.provider.cmp(&b.provider) {
+                            std::cmp::Ordering::Equal => a.name.cmp(&b.name),
+                            other => other,
+                        },
+                        other => other,
+                    }
                 }
             }
         });
