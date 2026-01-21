@@ -289,10 +289,13 @@ impl App {
 
     fn input_last_line(&self) -> u32 {
         let lines = self.input_state.value.len_lines();
-        if lines <= 1 {
+        if lines == 0 {
             return 0;
         }
         let last = lines.saturating_sub(1);
+        if self.input_state.text().ends_with('\n') {
+            return last;
+        }
         if self.input_state.value.line_width(last).unwrap_or(0) == 0 {
             return last.saturating_sub(1);
         }
