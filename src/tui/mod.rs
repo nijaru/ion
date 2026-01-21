@@ -329,8 +329,11 @@ impl App {
 
     fn handle_input_up(&mut self) -> bool {
         let input_empty = self.input_state.is_empty();
-        if self.input_cursor_line() != 0 {
+        if !input_empty && self.input_cursor_line() != 0 {
             return false;
+        }
+        if input_empty && self.input_cursor_line() != 0 {
+            self.move_input_cursor_to_end();
         }
 
         if self.is_running && input_empty {
