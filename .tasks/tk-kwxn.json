@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "kwxn",
+  "title": "[UX] Defer provider change until model selection (unless provider unset)",
+  "description": null,
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-21T12:16:46.389Z",
+  "updated_at": "2026-01-21T12:16:46.389Z",
+  "completed_at": null,
+  "external": {}
+}

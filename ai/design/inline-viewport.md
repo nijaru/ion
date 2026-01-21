@@ -202,10 +202,40 @@ fn draw_viewport(&mut self, frame: &mut Frame) {
 - **Input**: type-to-filter, arrows for navigation, Enter to apply, Esc to exit.
 - **Search**: Fuzzy match for provider/model, filename `@` inclusion, and slash commands.
 
+## Provider Selection Commit Semantics
+
+**Goal:** Avoid changing the active provider until a model from that provider is actually selected.
+
+**Rules**
+
+- If a provider is already configured, selecting a provider in the selector does **not** persist or switch providers yet.
+- The provider is committed only when a model is chosen from that provider.
+- If no provider is set (first-time setup), selecting a provider sets it immediately to allow model discovery.
+
+**Rationale**
+
+- Prevents partial state (provider changed without a valid model).
+- Reduces edge cases in model loading and API key flow.
+
 ## Input Handling
 
 - **Goal**: Avoid custom cursor/selection edge cases (graphemes, emojis, multi-line).
 - **Plan**: Use `rat-text::TextArea` for the main multi-line input and selector search fields to minimize future rewrites. Keep custom input history and queue-edit behavior at the app layer.
+
+## Input UI Variants
+
+**Current**
+
+- Custom top/bottom bars with a prompt gutter and no side borders.
+
+**Alternative**
+
+- Use a standard `Block` with `Borders::ALL` around the input area.
+
+**Plan**
+
+- Keep both implementations available (bars vs block).
+- Refactor input rendering into helper functions (header/border, prompt gutter, textarea) to reduce layout duplication.
 
 ## Message Queue Behavior
 

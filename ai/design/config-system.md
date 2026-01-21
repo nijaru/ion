@@ -112,6 +112,34 @@ auto_save = true
 retention_days = 30
 ```
 
+## Provider + Model Identity
+
+**Current implementation (code):**
+
+- Top-level `provider` and `model` fields (no `[provider]` table).
+- `provider` is the active backend (openrouter, anthropic, google, etc.).
+- `model` is provider-specific (OpenRouter expects `provider/model`; direct providers expect model name only).
+
+**Issues observed**
+
+- Persisting provider before selecting a model can leave a mismatched provider/model pair.
+- Model strings are ambiguous if stored as a single combined identifier (e.g., `anthropic/claude` could mean OpenRouter or direct Anthropic).
+- "Newest" sorting is only reliable for OpenRouter (has `created`); other sources lack timestamps.
+
+**Proposed semantics**
+
+- Keep `provider` and `model` separate in config.
+- Only persist provider changes after a model is selected for that provider.
+- If `provider` is unset (first-time setup), selecting a provider sets it immediately to allow model discovery.
+- Consider optional normalization rules when loading config:
+  - If `provider` is unset and `model` has a known provider prefix, infer provider.
+  - Avoid storing combined identifiers like `openrouter/google/...` unless we also define a normalization layer.
+
+**UI expectations**
+
+- Provider selector shows a pretty name and the config id (dim).
+- Model selector sorts by provider + name by default; "newest" only uses `created` where available.
+
 ## Instruction Files
 
 ### Loading Order
