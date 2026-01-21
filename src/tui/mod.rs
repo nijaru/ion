@@ -121,14 +121,6 @@ pub enum SelectorPage {
     Model,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum InputFrameStyle {
-    Bars,
-    Box,
-}
-
-const INPUT_FRAME_STYLE: InputFrameStyle = InputFrameStyle::Box;
-
 struct LayoutAreas {
     header: Rect,
     chat: Rect,
@@ -1363,13 +1355,6 @@ impl App {
         (line_count + BORDER_OVERHEAD).clamp(MIN_HEIGHT, MAX_HEIGHT)
     }
 
-    fn input_header_line(&self, width: u16) -> String {
-        if width == 0 {
-            return String::new();
-        }
-        "─".repeat(width as usize)
-    }
-
     fn quit(&mut self) {
         self.should_quit = true;
 
@@ -1602,49 +1587,12 @@ impl App {
         }
 
         if input_area.width > 0 && input_area.height > 1 {
-            match INPUT_FRAME_STYLE {
-                InputFrameStyle::Bars => {
-                    let top_area = Rect {
-                        x: input_area.x,
-                        y: input_area.y,
-                        width: input_area.width,
-                        height: 1,
-                    };
-                    let bottom_area = Rect {
-                        x: input_area.x,
-                        y: input_area.y + input_area.height - 1,
-                        width: input_area.width,
-                        height: 1,
-                    };
-                    let text_area = Rect {
-                        x: input_area.x,
-                        y: input_area.y + 1,
-                        width: input_area.width,
-                        height: input_area.height.saturating_sub(2),
-                    };
-
-                    let header = self.input_header_line(input_area.width);
-                    let bar_style = Style::default().fg(Color::Cyan);
-                    frame.render_widget(
-                        Paragraph::new(Line::from(Span::styled(header, bar_style))),
-                        top_area,
-                    );
-                    frame.render_widget(
-                        Paragraph::new("─".repeat(input_area.width as usize)).style(bar_style),
-                        bottom_area,
-                    );
-
-                    self.render_input_text(frame, text_area);
-                }
-                InputFrameStyle::Box => {
-                    let block = Block::default()
-                        .borders(Borders::ALL)
-                        .border_style(Style::default().fg(Color::Cyan));
-                    frame.render_widget(&block, input_area);
-                    let text_area = block.inner(input_area);
-                    self.render_input_text(frame, text_area);
-                }
-            }
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan));
+            frame.render_widget(&block, input_area);
+            let text_area = block.inner(input_area);
+            self.render_input_text(frame, text_area);
         }
 
         if let Some(cursor) = self.input_state.screen_cursor() {

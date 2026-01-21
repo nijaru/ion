@@ -24,11 +24,12 @@ impl ChatRenderer {
                     let md = tui_markdown::from_str(&combined);
                     for line in &md.lines {
                         let mut padded = vec![Span::styled("> ", Style::default().fg(Color::Cyan))];
-                        padded.extend(
-                            line.spans
-                                .iter()
-                                .map(|span| Span::styled(span.content.to_string(), span.style)),
-                        );
+                        padded.extend(line.spans.iter().map(|span| {
+                            Span::styled(
+                                span.content.to_string(),
+                                span.style.fg(Color::Cyan),
+                            )
+                        }));
                         chat_lines.push(Line::from(padded));
                     }
                 }
