@@ -49,7 +49,7 @@ A professional, high-readability terminal interface built with `ratatui`, design
 
 - **ANSI Colors**: Tool output preserves terminal colors (git, ls, etc.)
 - **Markdown**: Code blocks, lists, bold text via tui-markdown
-- **Message Indicators**: `>` prefix for user messages, dimmed bracketed system notices
+- **Message Indicators**: `>` prefix on first line of user messages; user text dim cyan; dimmed bracketed system notices
 
 ### 4.2 Planned
 

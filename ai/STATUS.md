@@ -44,9 +44,9 @@
 | OpenAI     | Full   | Has base_url field                   |
 | OpenRouter | Full   | Non-streaming when tools are present |
 
-## Session Work 2026-01-20
+## Session Work 2026-01-21
 
-**Inline Viewport Migration (complete):**
+**Inline Viewport Migration (in progress):**
 
 - Removed alternate screen mode; use `Viewport::Inline` only.
 - Bottom-anchored selector shell for provider/model.
@@ -58,8 +58,8 @@
 **Recent fixes (in progress):**
 
 - History navigation + draft restore (Up/Down behavior).
-- Input box separators + prompt gutter; status line shows `[MODE]` in brackets.
-- Chat spacing tightened with a single spacer line above progress.
+- Boxed input only (bars removed); prompt gutter retained.
+- Progress line now includes a blank spacer line above it.
 - Approval prompt rendering fixed after input box refactor.
 
 **Recent fixes (complete):**
@@ -70,6 +70,8 @@
 - NaN-safe pricing sort in model registry.
 - OpenRouter `created` timestamps wired for optional newest sorting.
 - Refactor `App::draw` into helpers; chat renderer extracted; token usage emission centralized.
+- User messages dimmed; thinking rendered like agent text with dim styling.
+- Status line unknown max uses parentheses.
 
 **Research (complete):**
 
@@ -116,7 +118,10 @@
 
 **UX:**
 
-- Status line shows `used/0k` when max unknown; model max needs wiring from model registry.
+- Inline scrollback still truncated (chat rendered in viewport); needs append-only `insert_before`.
+- Startup/layout still jumps (input anchored at top until first message).
+- User prefix should apply only on first line; keep user text dim cyan.
+- Status line shows `(used/0k)` when max unknown; model max needs wiring from model registry.
 - OpenRouter timeouts are frequent; retry/backoff and chat logging pending.
 
 ## Design Documents

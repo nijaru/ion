@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "so98",
+  "title": "Chat spacing: single blank line between entries (remove extra blank lines)",
+  "description": null,
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-21T13:08:09.214Z",
+  "updated_at": "2026-01-21T13:08:09.214Z",
+  "completed_at": null,
+  "external": {}
+}

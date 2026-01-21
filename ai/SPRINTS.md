@@ -319,7 +319,7 @@ Prioritize exact substring matches before fuzzy matches in selectors and command
 **Depends on:** Sprint 1
 
 ### Description
-Render a minimal startup header without pushing the viewport down or clearing scrollback.
+Render a minimal startup header without pushing the viewport down or clearing scrollback. Mimic Claude Code: header stays above the viewport and message inserts push the viewport down naturally.
 
 ### Acceptance Criteria
 - [ ] Header visible at startup

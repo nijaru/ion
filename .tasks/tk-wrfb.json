@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "wrfb",
+  "title": "Inline viewport: stop clearing screen; keep input/progress/status anchored (no jump on startup/selector)",
+  "description": null,
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-21T13:08:01.348Z",
+  "updated_at": "2026-01-21T13:08:01.348Z",
+  "completed_at": null,
+  "external": {}
+}
