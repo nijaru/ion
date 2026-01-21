@@ -33,12 +33,27 @@ impl ChatRenderer {
                         .fg(Color::Cyan)
                         .add_modifier(Modifier::DIM);
 
+                    let mut first_line = true;
                     for line in combined.lines() {
-                        for chunk in wrap_line(line, available_width) {
-                            chat_lines.push(Line::from(vec![
-                                Span::styled(prefix, prefix_style),
-                                Span::styled(chunk, text_style),
-                            ]));
+                        let line_width = if first_line {
+                            available_width
+                        } else {
+                            wrap_width.max(1)
+                        };
+                        let chunks = wrap_line(line, line_width);
+                        for (idx, chunk) in chunks.into_iter().enumerate() {
+                            if first_line && idx == 0 {
+                                chat_lines.push(Line::from(vec![
+                                    Span::styled(prefix, prefix_style),
+                                    Span::styled(chunk, text_style),
+                                ]));
+                            } else {
+                                chat_lines.push(Line::from(vec![Span::styled(
+                                    chunk,
+                                    text_style,
+                                )]));
+                            }
+                            first_line = false;
                         }
                     }
                 }
@@ -217,10 +232,6 @@ impl ChatRenderer {
                 }
                 chat_lines.push(Line::from(""));
             }
-        }
-
-        if !chat_lines.is_empty() {
-            chat_lines.push(Line::from(""));
         }
 
         chat_lines
