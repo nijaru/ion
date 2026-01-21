@@ -248,7 +248,7 @@ fn draw_viewport(&mut self, frame: &mut Frame) {
 
 ## Message Formatting
 
-- **User**: `>` prefix; optional background tint for readability.
+- **User**: `>` prefix on first line only; user text dim cyan.
 - **Agent**: No header by default; messages render inline with normal styling.
 - **Thinking**: Dimmed text.
 - **System notices**: Dimmed and bracketed (e.g., `[Model: claude-haiku-4.5]`).
