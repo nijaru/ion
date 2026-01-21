@@ -322,8 +322,36 @@ impl App {
     }
 
     fn handle_input_event(&mut self, key: KeyEvent) -> TextOutcome {
+        let key = self.normalize_input_key(key);
         let event = Event::Key(key);
         text_area::handle_events(&mut self.input_state, true, &event)
+    }
+
+    fn normalize_input_key(&self, key: KeyEvent) -> KeyEvent {
+        if !key.modifiers.contains(KeyModifiers::SHIFT) {
+            return key;
+        }
+
+        let strip_shift = matches!(
+            key.code,
+            KeyCode::Left
+                | KeyCode::Right
+                | KeyCode::Up
+                | KeyCode::Down
+                | KeyCode::Home
+                | KeyCode::End
+                | KeyCode::PageUp
+                | KeyCode::PageDown
+        );
+
+        if strip_shift {
+            KeyEvent {
+                modifiers: key.modifiers - KeyModifiers::SHIFT,
+                ..key
+            }
+        } else {
+            key
+        }
     }
 
     fn handle_input_up(&mut self) -> bool {
