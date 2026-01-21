@@ -27,6 +27,26 @@ Migrate ion TUI from alternate screen mode to inline viewport mode using ratatui
 | Mouse capture | Required for scroll        | Not needed               |
 | Exit behavior | Returns to previous        | Output persists          |
 
+## Inline Scrollback Issues (Current)
+
+**Symptoms**
+
+- Scrolling up stops early; older conversation is cut off.
+- Up/Down history navigation feels misaligned due to extra blank lines between messages.
+- Terminal native scrollback is not fully usable because the app still renders a chat viewport.
+
+**Root Cause**
+
+- Chat history is still rendered inside the TUI viewport with app-managed scroll state.
+- The viewport is effectively a self-managed scroll region, preventing terminal-native scrollback.
+
+**Plan**
+
+- Remove chat history rendering from the viewport entirely.
+- Use ratatui `insert_before` to append completed messages into terminal scrollback.
+- Keep only the input + progress + status lines in the viewport.
+- Remove app-managed scroll controls and any internal scroll clamping.
+
 ## Alternate Screen Compatibility
 
 - The bottom-anchored selector UI can be implemented in alternate screen mode, but it adds a second rendering path and doubles QA surface.
