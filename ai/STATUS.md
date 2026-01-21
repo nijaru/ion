@@ -57,7 +57,6 @@
 
 **Recent fixes (in progress):**
 
-- History navigation + draft restore (Up/Down behavior).
 - Boxed input only (bars removed); prompt gutter retained.
 - Progress line now includes a blank spacer line above it.
 - Approval prompt rendering fixed after input box refactor.
@@ -66,6 +65,7 @@
 
 - Chat output is append-only via `Terminal::insert_before`; viewport redraws progress/input/status only.
 - User message prefix shown only on the first line; user text dimmed cyan.
+- History navigation now skips phantom blank entries; up/down recall works on first press.
 - Write/edit allowed in write mode; restricted tools require approval unless whitelisted.
 - `chat_lines` order fixed in draw; cargo check passes.
 - UTF-8 safe truncation in CLI/TUI display paths.
