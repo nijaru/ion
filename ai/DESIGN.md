@@ -53,15 +53,35 @@ Long-term goals include RLM integration, richer agent context management, and a 
 ## Data Persistence
 
 ```
-~/.config/ion/
+~/.ion/
 ├── config.toml          # Global settings
-└── keys.toml            # Optional provider keys
-
-~/.local/share/ion/
-├── sessions/            # Persisted message history (SQLite)
+└── data/
+    └── sessions.db      # Persisted message history (SQLite)
 ```
 
 Memory is deferred and expected to arrive via hooks/plugins later, not as a core on-disk store.
+
+### Schema Notes (Current + Future)
+
+**Current tables (SQLite):**
+
+- `sessions`: session metadata (id, working_dir, model, timestamps).
+- `messages`: per-session transcript (`role`, JSON `content`, `position`).
+- `input_history`: global input recall (UI only).
+
+**Compatibility goals:**
+
+- Treat `messages` as immutable transcript of record.
+- Avoid in-place edits for memory/RLM features; use overlays instead.
+- Use `messages.id` or `position` as stable references (if we need stronger IDs later, add an explicit `message_id` column rather than rewriting history).
+
+**Planned add-on tables (optional):**
+
+- `session_context`: curated context blocks with revision history.
+- `memory_items`: embeddings + metadata, scoped by project/user.
+- `session_settings`: RLM/policy state per session.
+
+These should remain optional and isolated from the core transcript to keep the core agent predictable and to support a “memory off” mode.
 
 ## Tool Framework
 
