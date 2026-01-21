@@ -27,7 +27,7 @@ impl ChatRenderer {
                         padded.extend(line.spans.iter().map(|span| {
                             Span::styled(
                                 span.content.to_string(),
-                                span.style.fg(Color::Cyan),
+                                span.style.add_modifier(Modifier::DIM),
                             )
                         }));
                         chat_lines.push(Line::from(padded));

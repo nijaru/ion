@@ -33,6 +33,9 @@ A professional, high-readability terminal interface built with `ratatui`, design
 
 ### 3.2 Slash Commands
 
+- System commands use a single `/` (reserved).
+- Custom skills use `//` so users can name skills freely without colliding with system commands.
+- Custom commands are standardized on agent skills (no bespoke command handlers).
 - `/model`, `/models`: Open model selector
 - `/provider`, `/providers`: Open provider selector
 - `/clear`: Reset history and session state
