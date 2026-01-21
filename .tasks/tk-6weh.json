@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "6weh",
+  "title": "Chat scrollback: append-only via Terminal::insert_before; remove viewport chat rendering",
+  "description": null,
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-21T13:08:05.783Z",
+  "updated_at": "2026-01-21T13:08:05.783Z",
+  "completed_at": null,
+  "external": {}
+}

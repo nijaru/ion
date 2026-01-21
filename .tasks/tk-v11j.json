@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "v11j",
+  "title": "Tweak markdown styling: reduce inline code/file highlight intensity",
+  "description": null,
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-21T13:08:14.197Z",
+  "updated_at": "2026-01-21T13:08:14.197Z",
+  "completed_at": null,
+  "external": {}
+}
