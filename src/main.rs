@@ -70,7 +70,7 @@ async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::err
     )?;
 
     // Create app with permission settings
-    let mut app = App::with_permissions(permissions).await;
+    let mut app = App::with_permissions(permissions).await?;
 
     // Main loop
     loop {
