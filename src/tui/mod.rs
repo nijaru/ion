@@ -276,11 +276,7 @@ impl App {
     }
 
     fn move_input_cursor_to_end(&mut self) {
-        let lines = self.input_state.value.len_lines();
-        if lines == 0 {
-            return;
-        }
-        let last_line = lines.saturating_sub(1);
+        let last_line = self.input_last_line();
         let last_col = self.input_state.value.line_width(last_line).unwrap_or(0);
         let pos = TextPosition::new(last_col, last_line);
         let _ = self.input_state.value.set_cursor(pos, false);
