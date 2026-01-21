@@ -45,6 +45,7 @@ async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::err
     };
     use ion::tui::App;
     use ratatui::{TerminalOptions, Viewport, prelude::*};
+    use ratatui::widgets::{Paragraph, Wrap};
     use std::io;
 
     // Setup terminal
@@ -74,8 +75,6 @@ async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::err
 
     // Main loop
     loop {
-        terminal.draw(|f| app.draw(f))?;
-
         if event::poll(std::time::Duration::from_millis(50))? {
             match event::read()? {
                 event::Event::Key(key) => {
@@ -99,6 +98,25 @@ async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::err
         }
 
         app.update();
+
+        let width = terminal.size()?.width;
+        let chat_lines = app.take_chat_inserts(width);
+        if !chat_lines.is_empty() {
+            let wrap_width = width.saturating_sub(2);
+            if wrap_width > 0 {
+                let paragraph = Paragraph::new(chat_lines).wrap(Wrap { trim: true });
+                let height = paragraph.line_count(wrap_width);
+                if height > 0 {
+                    let height = u16::try_from(height).unwrap_or(u16::MAX);
+                    terminal.insert_before(height, |buf| {
+                        let area = Rect::new(1, 0, wrap_width, height);
+                        paragraph.render(area, buf);
+                    })?;
+                }
+            }
+        }
+
+        terminal.draw(|f| app.draw(f))?;
 
         if app.should_quit {
             break;

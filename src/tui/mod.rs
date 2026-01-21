@@ -25,7 +25,7 @@ use rat_text::text_area::{self, TextArea, TextAreaState, TextWrap};
 use rat_text::text_input::{self, TextInput};
 use rat_text::{HasScreenCursor, TextPosition};
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -123,7 +123,6 @@ pub enum SelectorPage {
 
 struct LayoutAreas {
     header: Rect,
-    chat: Rect,
     progress: Rect,
     input: Rect,
     status: Rect,
@@ -153,6 +152,10 @@ pub struct App {
     /// API provider picker state
     pub provider_picker: ProviderPicker,
     pub message_list: MessageList,
+    /// Number of chat entries already inserted into scrollback
+    pub rendered_entries: usize,
+    /// Buffered chat lines while selector is open
+    pub buffered_chat_lines: Vec<Line<'static>>,
     pub agent: Arc<Agent>,
     pub session: Session,
     pub orchestrator: Arc<ToolOrchestrator>,
@@ -522,6 +525,8 @@ impl App {
             api_provider,
             provider_picker: ProviderPicker::new(),
             message_list: MessageList::new(),
+            rendered_entries: 0,
+            buffered_chat_lines: Vec::new(),
             agent,
             session,
             orchestrator,
@@ -586,6 +591,8 @@ impl App {
     ) -> Result<(), crate::session::SessionStoreError> {
         let loaded = self.store.load(session_id)?;
         self.message_list.load_from_messages(&loaded.messages);
+        self.rendered_entries = 0;
+        self.buffered_chat_lines.clear();
         self.session = loaded;
         Ok(())
     }
@@ -879,6 +886,8 @@ impl App {
                                     self.clear_input();
                                     self.message_list.clear();
                                     self.session.messages.clear();
+                                    self.rendered_entries = 0;
+                                    self.buffered_chat_lines.clear();
                                     return;
                                 }
                                 "/help" | "/?" => {
@@ -1388,92 +1397,77 @@ impl App {
         }
     }
 
+    pub fn take_chat_inserts(&mut self, width: u16) -> Vec<Line<'static>> {
+        let wrap_width = width.saturating_sub(2);
+        if wrap_width == 0 {
+            return Vec::new();
+        }
+
+        let entry_count = self.message_list.entries.len();
+        if self.rendered_entries > entry_count {
+            self.rendered_entries = 0;
+            self.buffered_chat_lines.clear();
+        }
+
+        let mut new_lines = Vec::new();
+        let mut index = self.rendered_entries;
+        while index < entry_count {
+            let entry = &self.message_list.entries[index];
+            if entry.sender == Sender::Agent && self.is_running {
+                break;
+            }
+            let mut entry_lines = ChatRenderer::build_lines(
+                &self.message_list.entries[index..index + 1],
+                None,
+                wrap_width as usize,
+            );
+            new_lines.append(&mut entry_lines);
+            index += 1;
+        }
+        self.rendered_entries = index;
+
+        if self.mode == Mode::Selector {
+            if !new_lines.is_empty() {
+                self.buffered_chat_lines.extend(new_lines);
+            }
+            return Vec::new();
+        }
+
+        if new_lines.is_empty() && self.buffered_chat_lines.is_empty() {
+            return Vec::new();
+        }
+
+        let mut out = Vec::new();
+        if !self.buffered_chat_lines.is_empty() {
+            out.append(&mut self.buffered_chat_lines);
+        }
+        out.extend(new_lines);
+        out
+    }
+
     fn layout_areas(
         &self,
         area: Rect,
         header_height: u16,
         input_height: u16,
         progress_height: u16,
-        has_chat: bool,
     ) -> LayoutAreas {
-        let chunks = if has_chat || self.is_running || self.last_task_summary.is_some() {
-            Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Length(header_height),
-                    Constraint::Min(0),
-                    Constraint::Length(progress_height),
-                    Constraint::Length(input_height),
-                    Constraint::Length(1),
-                ])
-                .split(area)
-        } else {
-            Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Length(header_height),
-                    Constraint::Length(input_height),
-                    Constraint::Length(1),
-                    Constraint::Min(0),
-                ])
-                .split(area)
-        };
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(header_height),
+                Constraint::Min(0),
+                Constraint::Length(progress_height),
+                Constraint::Length(input_height),
+                Constraint::Length(1),
+            ])
+            .split(area);
 
-        if has_chat || self.is_running || self.last_task_summary.is_some() {
-            LayoutAreas {
-                header: chunks[0],
-                chat: chunks[1],
-                progress: chunks[2],
-                input: chunks[3],
-                status: chunks[4],
-            }
-        } else {
-            LayoutAreas {
-                header: chunks[0],
-                chat: Rect::default(),
-                progress: Rect::default(),
-                input: chunks[1],
-                status: chunks[2],
-            }
-        }
-    }
-
-    fn render_chat(&mut self, frame: &mut Frame, chat_area: Rect, chat_lines: Vec<Line<'static>>) {
-        let viewport_height = if self.message_list.scroll_offset == 0
-            && !chat_lines.is_empty()
-            && chat_lines.len() < chat_area.height as usize
-        {
-            chat_lines.len()
-        } else {
-            chat_area.height as usize
-        };
-
-        let total_lines = chat_lines.len();
-        let max_scroll = total_lines.saturating_sub(viewport_height);
-        if self.message_list.scroll_offset > max_scroll {
-            self.message_list.scroll_offset = max_scroll;
-        }
-        let scroll_y = max_scroll.saturating_sub(self.message_list.scroll_offset);
-
-        let chat_para = Paragraph::new(chat_lines)
-            .wrap(Wrap { trim: true })
-            .scroll((scroll_y as u16, 0));
-        if chat_area.height > 0 {
-            let mut chat_render_area = Rect {
-                x: chat_area.x.saturating_add(1),
-                y: chat_area.y,
-                width: chat_area.width.saturating_sub(2),
-                height: chat_area.height,
-            };
-            if self.message_list.scroll_offset == 0 {
-                let content_height = (total_lines.min(chat_render_area.height as usize)) as u16;
-                if content_height > 0 && content_height < chat_render_area.height {
-                    chat_render_area.y =
-                        chat_render_area.y + (chat_render_area.height - content_height);
-                    chat_render_area.height = content_height;
-                }
-            }
-            frame.render_widget(chat_para, chat_render_area);
+        LayoutAreas {
+            header: chunks[0],
+            progress: chunks[2],
+            input: chunks[3],
+            status: chunks[4],
         }
     }
 
@@ -1716,28 +1710,12 @@ impl App {
             0
         };
 
-        let has_chat = !self.message_list.entries.is_empty() || self.has_queued_messages();
-
-        let areas = self.layout_areas(
-            frame.area(),
-            header_height,
-            input_height,
-            progress_height,
-            has_chat,
-        );
+        let areas = self.layout_areas(frame.area(), header_height, input_height, progress_height);
 
         if !header_lines.is_empty() {
             frame.render_widget(Paragraph::new(header_lines), areas.header);
         }
 
-        let queued = self
-            .message_queue
-            .as_ref()
-            .and_then(|queue| queue.lock().ok().map(|q| q.clone()));
-        let chat_width = areas.chat.width.saturating_sub(2) as usize;
-        let chat_lines =
-            ChatRenderer::build_lines(&self.message_list.entries, queued.as_ref(), chat_width);
-        self.render_chat(frame, areas.chat, chat_lines);
         self.render_progress(frame, areas.progress);
 
         if self.mode == Mode::Selector {
