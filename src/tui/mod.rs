@@ -6,6 +6,7 @@ mod highlight;
 pub mod message_list;
 pub mod model_picker;
 pub mod provider_picker;
+pub mod session_picker;
 pub mod widgets;
 
 use crate::agent::{Agent, AgentEvent};
@@ -19,6 +20,7 @@ use crate::tui::chat_renderer::ChatRenderer;
 use crate::tui::message_list::{MessageList, Sender};
 use crate::tui::model_picker::ModelPicker;
 use crate::tui::provider_picker::ProviderPicker;
+use crate::tui::session_picker::SessionPicker;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
@@ -43,6 +45,28 @@ fn format_tokens(n: usize) -> String {
         format!("{:.1}k", n as f64 / 1000.0)
     } else {
         n.to_string()
+    }
+}
+
+/// Format a Unix timestamp as a relative time string.
+fn format_relative_time(timestamp: i64) -> String {
+    let now = chrono::Utc::now().timestamp();
+    let diff = now - timestamp;
+
+    if diff < 60 {
+        "just now".to_string()
+    } else if diff < 3600 {
+        let mins = diff / 60;
+        format!("{}m ago", mins)
+    } else if diff < 86400 {
+        let hours = diff / 3600;
+        format!("{}h ago", hours)
+    } else if diff < 604800 {
+        let days = diff / 86400;
+        format!("{}d ago", days)
+    } else {
+        let weeks = diff / 604800;
+        format!("{}w ago", weeks)
     }
 }
 
@@ -154,6 +178,7 @@ pub enum Mode {
 pub enum SelectorPage {
     Provider,
     Model,
+    Session,
 }
 
 struct LayoutAreas {
@@ -205,6 +230,8 @@ pub struct App {
     pub store: SessionStore,
     /// Model picker state
     pub model_picker: ModelPicker,
+    /// Session picker state
+    pub session_picker: SessionPicker,
     /// Model registry for fetching available models
     pub model_registry: Arc<ModelRegistry>,
     /// Config for accessing preferences
@@ -625,6 +652,7 @@ impl App {
             is_running: false,
             store,
             model_picker: ModelPicker::new(config.provider_prefs.clone()),
+            session_picker: SessionPicker::new(),
             model_registry,
             config,
             frame_count: 0,
@@ -665,6 +693,9 @@ impl App {
                 SelectorPage::Model => {
                     this.model_picker.is_loading = true;
                     // Models will be fetched when run loop starts
+                }
+                SelectorPage::Session => {
+                    // Session picker not used in setup flow
                 }
             }
         }
@@ -968,8 +999,8 @@ impl App {
                     } else {
                         // Check for slash commands
                         if input.starts_with('/') {
-                            const COMMANDS: [&str; 5] =
-                                ["/model", "/provider", "/clear", "/quit", "/help"];
+                            const COMMANDS: [&str; 6] =
+                                ["/model", "/provider", "/clear", "/quit", "/help", "/resume"];
                             let cmd_line = input.trim().to_lowercase();
                             let cmd_name = cmd_line.split_whitespace().next().unwrap_or("");
                             match cmd_name {
@@ -981,6 +1012,11 @@ impl App {
                                 "/provider" | "/providers" => {
                                     self.clear_input();
                                     self.open_provider_selector();
+                                    return;
+                                }
+                                "/resume" | "/sessions" => {
+                                    self.clear_input();
+                                    self.open_session_selector();
                                     return;
                                 }
                                 "/quit" | "/exit" | "/q" => {
@@ -1159,6 +1195,62 @@ impl App {
         self.provider_picker.select_provider(self.api_provider);
     }
 
+    /// Open session selector (/resume)
+    fn open_session_selector(&mut self) {
+        self.mode = Mode::Selector;
+        self.selector_page = SelectorPage::Session;
+        self.session_picker.load_sessions(&self.store, 50);
+    }
+
+    /// Load a session by ID and restore its state.
+    pub fn load_session(&mut self, session_id: &str) -> Result<()> {
+        let loaded = self.store.load(session_id)?;
+
+        // Restore session state
+        self.session = Session {
+            id: loaded.id,
+            working_dir: loaded.working_dir,
+            model: loaded.model.clone(),
+            messages: loaded.messages,
+            abort_token: CancellationToken::new(),
+            no_sandbox: self.permissions.no_sandbox,
+        };
+
+        // Update model display
+        self.config.model = Some(loaded.model);
+
+        // Rebuild message list from session messages
+        self.message_list.clear();
+        self.rendered_entries = 0;
+        for msg in &self.session.messages {
+            use crate::provider::{ContentBlock, Role};
+            match msg.role {
+                Role::User => {
+                    for block in msg.content.iter() {
+                        if let ContentBlock::Text { text } = block {
+                            self.message_list.push_user_message(text.clone());
+                        }
+                    }
+                }
+                Role::Assistant => {
+                    for block in msg.content.iter() {
+                        if let ContentBlock::Text { text } = block {
+                            self.message_list.push_entry(
+                                crate::tui::message_list::MessageEntry::new(
+                                    Sender::Agent,
+                                    text.clone(),
+                                ),
+                            );
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        Ok(())
+    }
+
     fn handle_selector_mode(&mut self, key: KeyEvent) {
         use crate::tui::model_picker::PickerStage;
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
@@ -1188,26 +1280,32 @@ impl App {
             KeyCode::Up => match self.selector_page {
                 SelectorPage::Provider => self.provider_picker.move_up(1),
                 SelectorPage::Model => self.model_picker.move_up(1),
+                SelectorPage::Session => self.session_picker.move_up(1),
             },
             KeyCode::Down => match self.selector_page {
                 SelectorPage::Provider => self.provider_picker.move_down(1),
                 SelectorPage::Model => self.model_picker.move_down(1),
+                SelectorPage::Session => self.session_picker.move_down(1),
             },
             KeyCode::PageUp => match self.selector_page {
                 SelectorPage::Provider => self.provider_picker.move_up(10),
                 SelectorPage::Model => self.model_picker.move_up(10),
+                SelectorPage::Session => self.session_picker.move_up(10),
             },
             KeyCode::PageDown => match self.selector_page {
                 SelectorPage::Provider => self.provider_picker.move_down(10),
                 SelectorPage::Model => self.model_picker.move_down(10),
+                SelectorPage::Session => self.session_picker.move_down(10),
             },
             KeyCode::Home => match self.selector_page {
                 SelectorPage::Provider => self.provider_picker.jump_to_top(),
                 SelectorPage::Model => self.model_picker.jump_to_top(),
+                SelectorPage::Session => self.session_picker.jump_to_top(),
             },
             KeyCode::End => match self.selector_page {
                 SelectorPage::Provider => self.provider_picker.jump_to_bottom(),
                 SelectorPage::Model => self.model_picker.jump_to_bottom(),
+                SelectorPage::Session => self.session_picker.jump_to_bottom(),
             },
 
             // Selection
@@ -1250,6 +1348,16 @@ impl App {
                         }
                     }
                 },
+                SelectorPage::Session => {
+                    if let Some(summary) = self.session_picker.selected_session() {
+                        let session_id = summary.id.clone();
+                        if let Err(e) = self.load_session(&session_id) {
+                            self.last_error = Some(format!("Failed to load session: {}", e));
+                        }
+                        self.session_picker.reset();
+                        self.mode = Mode::Input;
+                    }
+                }
             },
 
             // Backspace: when empty on model stage, go back to providers (if allowed)
@@ -1273,14 +1381,16 @@ impl App {
                     }
                 } else {
                     self.model_picker.reset();
+                    self.session_picker.reset();
                     self.mode = Mode::Input;
                 }
             }
 
-            // Tab: switch pages
+            // Tab: switch pages (only for provider/model)
             KeyCode::Tab => match self.selector_page {
                 SelectorPage::Provider => self.open_model_selector(),
                 SelectorPage::Model => self.open_provider_selector(),
+                SelectorPage::Session => {} // No tab switching for session picker
             },
             KeyCode::Char('p') if ctrl => {
                 self.open_provider_selector();
@@ -1303,12 +1413,16 @@ impl App {
                 SelectorPage::Model => {
                     handle_filter_input_event(&mut self.model_picker.filter_input, key)
                 }
+                SelectorPage::Session => {
+                    handle_filter_input_event(&mut self.session_picker.filter_input, key)
+                }
             };
 
             if text_changed {
                 match self.selector_page {
                     SelectorPage::Provider => self.provider_picker.apply_filter(),
                     SelectorPage::Model => self.model_picker.apply_filter(),
+                    SelectorPage::Session => self.session_picker.apply_filter(),
                 }
             }
         }
@@ -1826,6 +1940,11 @@ impl App {
                 "Select a model",
                 self.model_picker.filtered_models.len(),
             ),
+            SelectorPage::Session => (
+                "Sessions",
+                "Select a session to resume",
+                self.session_picker.filtered_sessions.len(),
+            ),
         };
 
         let reserved_height = 1 + 1 + 3 + 1;
@@ -1849,24 +1968,33 @@ impl App {
             ])
             .split(shell_area);
 
-        let (provider_style, model_style) = match self.selector_page {
-            SelectorPage::Provider => (
-                Style::default().fg(Color::Yellow).bold(),
-                Style::default().dim(),
-            ),
-            SelectorPage::Model => (
-                Style::default().dim(),
-                Style::default().fg(Color::Yellow).bold(),
-            ),
-        };
+        // Session picker has its own header, Provider/Model share a tab bar
+        if self.selector_page == SelectorPage::Session {
+            let tabs = Line::from(vec![
+                Span::raw(" "),
+                Span::styled("Sessions", Style::default().fg(Color::Yellow).bold()),
+            ]);
+            frame.render_widget(Paragraph::new(tabs), chunks[0]);
+        } else {
+            let (provider_style, model_style) = match self.selector_page {
+                SelectorPage::Provider => (
+                    Style::default().fg(Color::Yellow).bold(),
+                    Style::default().dim(),
+                ),
+                SelectorPage::Model | SelectorPage::Session => (
+                    Style::default().dim(),
+                    Style::default().fg(Color::Yellow).bold(),
+                ),
+            };
 
-        let tabs = Line::from(vec![
-            Span::raw(" "),
-            Span::styled("Providers", provider_style),
-            Span::raw("  "),
-            Span::styled("Models", model_style),
-        ]);
-        frame.render_widget(Paragraph::new(tabs), chunks[0]);
+            let tabs = Line::from(vec![
+                Span::raw(" "),
+                Span::styled("Providers", provider_style),
+                Span::raw("  "),
+                Span::styled("Models", model_style),
+            ]);
+            frame.render_widget(Paragraph::new(tabs), chunks[0]);
+        }
 
         frame.render_widget(
             Paragraph::new(Line::from(vec![Span::raw(" "), Span::raw(description)])),
@@ -1897,6 +2025,16 @@ impl App {
                     &mut self.model_picker.filter_input,
                 );
                 if let Some(cursor) = self.model_picker.filter_input.screen_cursor() {
+                    frame.set_cursor_position(cursor);
+                }
+            }
+            SelectorPage::Session => {
+                frame.render_stateful_widget(
+                    search_input,
+                    chunks[2],
+                    &mut self.session_picker.filter_input,
+                );
+                if let Some(cursor) = self.session_picker.filter_input.screen_cursor() {
                     frame.set_cursor_position(cursor);
                 }
             }
@@ -2012,6 +2150,82 @@ impl App {
                     );
                 }
             }
+            SelectorPage::Session => {
+                if self.session_picker.is_loading {
+                    let loading = Paragraph::new("Loading sessions...")
+                        .style(Style::default().fg(Color::Yellow))
+                        .block(Block::default().borders(Borders::ALL).title(" Loading "));
+                    frame.render_widget(loading, chunks[3]);
+                } else if let Some(ref err) = self.session_picker.error {
+                    let error = Paragraph::new(format!("Error: {}", err))
+                        .style(Style::default().fg(Color::Red))
+                        .block(Block::default().borders(Borders::ALL).title(" Error "));
+                    frame.render_widget(error, chunks[3]);
+                } else if self.session_picker.sessions.is_empty() {
+                    let empty = Paragraph::new("No sessions found")
+                        .style(Style::default().fg(Color::DarkGray))
+                        .block(Block::default().borders(Borders::ALL).title(" Sessions "));
+                    frame.render_widget(empty, chunks[3]);
+                } else {
+                    let items: Vec<ListItem> = self
+                        .session_picker
+                        .filtered_sessions
+                        .iter()
+                        .map(|s| {
+                            // Format relative time
+                            let time_str = format_relative_time(s.updated_at);
+                            // Short preview
+                            let preview = s
+                                .first_user_message
+                                .as_ref()
+                                .map(|m| {
+                                    let truncated: String = m.chars().take(40).collect();
+                                    if m.chars().count() > 40 {
+                                        format!("{}...", truncated)
+                                    } else {
+                                        truncated
+                                    }
+                                })
+                                .unwrap_or_else(|| "(no messages)".to_string());
+                            // Short ID
+                            let short_id: String = s.id.chars().take(8).collect();
+
+                            ListItem::new(Line::from(vec![
+                                Span::styled(
+                                    format!("{:>8}", time_str),
+                                    Style::default().fg(Color::Blue),
+                                ),
+                                Span::raw("  "),
+                                Span::styled(short_id, Style::default().fg(Color::DarkGray)),
+                                Span::raw("  "),
+                                Span::styled(preview, Style::default().fg(Color::White)),
+                            ]))
+                        })
+                        .collect();
+
+                    let count = self.session_picker.filtered_sessions.len();
+                    let total = self.session_picker.sessions.len();
+                    let list = List::new(items)
+                        .block(
+                            Block::default()
+                                .borders(Borders::ALL)
+                                .title(format!(" Sessions ({}/{}) ", count, total)),
+                        )
+                        .highlight_style(
+                            Style::default()
+                                .bg(Color::DarkGray)
+                                .fg(Color::White)
+                                .add_modifier(Modifier::BOLD),
+                        )
+                        .highlight_symbol("> ");
+
+                    frame.render_stateful_widget(
+                        list,
+                        chunks[3],
+                        &mut self.session_picker.list_state,
+                    );
+                }
+            }
         }
 
         let hint = Paragraph::new(" Type to filter · Enter to select · Esc to close ")
@@ -2061,6 +2275,7 @@ impl App {
             .alignment(ratatui::layout::Alignment::Center),
             row("/model", "Select model"),
             row("/provider", "Select provider"),
+            row("/resume", "Resume session"),
             row("/clear", "Clear chat"),
             row("/quit", "Exit"),
             Line::from(""),

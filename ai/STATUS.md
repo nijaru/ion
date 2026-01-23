@@ -12,15 +12,15 @@
 
 ## Active Work
 
-**Sprint 2 Complete** - Run State UX & Error Handling
+**Sprint 3 Complete** - Selector & Resume UX
 
 Completed this session:
 
-1. **Progress line states** - Yellow canceling with ⚠ indicator, proper state colors
-2. **Provider retry/backoff** - Exponential backoff for timeouts, network errors, rate limits
-3. **Status line context** - Already implemented correctly
+1. **/resume command** - Session picker with filter, loads selected session
+2. **CLI flags** - `--resume` for latest, `--continue <id>` for specific session
+3. **Fuzzy search ordering** - Already implemented (substring matches prioritized)
 
-Next: Sprint 3 (Selector & Resume UX)
+Next: Sprint 4 (Visual Polish & Advanced Features)
 
 ## Architecture
 

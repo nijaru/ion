@@ -11,7 +11,7 @@ Updated: 2026-01-23
 | 0      | TUI Architecture                  | COMPLETE |
 | 1      | Inline Viewport Stabilization     | COMPLETE |
 | 2      | Run State UX & Error Handling     | COMPLETE |
-| 3      | Selector & Resume UX              | PLANNED  |
+| 3      | Selector & Resume UX              | COMPLETE |
 | 4      | Visual Polish & Advanced Features | PLANNED  |
 | 5      | Session Storage Redesign          | PLANNED  |
 
@@ -461,9 +461,9 @@ Add a /resume command that opens the shared selector UI for prior sessions. Reus
 
 ### Acceptance Criteria
 
-- [ ] /resume opens selector with recent sessions
-- [ ] Selecting a session loads it
-- [ ] Escape closes selector without changes
+- [x] /resume opens selector with recent sessions
+- [x] Selecting a session loads it
+- [x] Escape closes selector without changes
 
 ---
 
@@ -478,9 +478,9 @@ Add CLI flags to resume the latest or a specific session by ID. Ensure flags int
 
 ### Acceptance Criteria
 
-- [ ] --resume reopens latest session
-- [ ] --continue <id> reopens specified session
-- [ ] Invalid IDs print a clear error and exit
+- [x] --resume reopens latest session
+- [x] --continue <id> reopens specified session
+- [x] Invalid IDs print a clear error and exit
 
 ---
 
@@ -495,8 +495,8 @@ Prioritize exact substring matches before fuzzy matches in selectors and command
 
 ### Acceptance Criteria
 
-- [ ] Substring matches appear before fuzzy matches
-- [ ] Fuzzy matches appear only when no substring matches exist
+- [x] Substring matches appear before fuzzy matches
+- [x] Fuzzy matches appear only when no substring matches exist
 
 ## Sprint 4: Visual Polish & Advanced Features
 
