@@ -22,6 +22,86 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, warn};
 
+/// Check if an error is retryable (transient network/server issues)
+fn is_retryable_error(err: &str) -> bool {
+    let err_lower = err.to_lowercase();
+
+    // Rate limits
+    if err.contains("429") || err_lower.contains("rate limit") {
+        return true;
+    }
+
+    // Timeouts
+    if err_lower.contains("timeout")
+        || err_lower.contains("timed out")
+        || err_lower.contains("deadline exceeded")
+    {
+        return true;
+    }
+
+    // Network errors
+    if err_lower.contains("connection")
+        || err_lower.contains("network")
+        || err_lower.contains("dns")
+        || err_lower.contains("resolve")
+    {
+        return true;
+    }
+
+    // Server errors (5xx)
+    if err.contains("500")
+        || err.contains("502")
+        || err.contains("503")
+        || err.contains("504")
+        || err_lower.contains("server error")
+        || err_lower.contains("internal error")
+        || err_lower.contains("service unavailable")
+        || err_lower.contains("bad gateway")
+    {
+        return true;
+    }
+
+    false
+}
+
+/// Get a human-readable category for a retryable error
+fn categorize_error(err: &str) -> &'static str {
+    let err_lower = err.to_lowercase();
+
+    if err.contains("429") || err_lower.contains("rate limit") {
+        return "Rate limited";
+    }
+
+    if err_lower.contains("timeout")
+        || err_lower.contains("timed out")
+        || err_lower.contains("deadline exceeded")
+    {
+        return "Request timed out";
+    }
+
+    if err_lower.contains("connection")
+        || err_lower.contains("network")
+        || err_lower.contains("dns")
+        || err_lower.contains("resolve")
+    {
+        return "Network error";
+    }
+
+    if err.contains("500")
+        || err.contains("502")
+        || err.contains("503")
+        || err.contains("504")
+        || err_lower.contains("server error")
+        || err_lower.contains("internal error")
+        || err_lower.contains("service unavailable")
+        || err_lower.contains("bad gateway")
+    {
+        return "Server error";
+    }
+
+    "Transient error"
+}
+
 #[derive(Clone)]
 pub struct Agent {
     provider: Arc<dyn LlmApi>,
@@ -355,24 +435,32 @@ impl Agent {
 
                 // Handle any error from the stream
                 if let Some(ref err) = stream_error {
-                    let is_rate_limit = err.contains("429") || err.to_lowercase().contains("rate");
                     let err_lower = err.to_lowercase();
                     let is_tools_not_supported = err_lower.contains("streaming with tools not supported")
                         || err_lower.contains("tools not supported")
                         // llm-connector parse errors with tools - fall back to non-streaming
                         || (err_lower.contains("parse") && !request.tools.is_empty());
 
-                    if is_rate_limit && retry_count < MAX_RETRIES {
+                    if is_tools_not_supported {
+                        // Fall back to non-streaming for this provider
+                        warn!(
+                            "Provider doesn't support streaming with tools, falling back to non-streaming"
+                        );
+                        assistant_blocks.clear();
+                        tool_calls.clear();
+                        break; // Exit retry loop, will use non-streaming below
+                    } else if is_retryable_error(err) && retry_count < MAX_RETRIES {
                         retry_count += 1;
                         let delay = 1u64 << retry_count; // 2, 4, 8 seconds
+                        let reason = categorize_error(err);
                         warn!(
-                            "Rate limited, retrying in {}s (attempt {}/{})",
-                            delay, retry_count, MAX_RETRIES
+                            "{}, retrying in {}s (attempt {}/{})",
+                            reason, delay, retry_count, MAX_RETRIES
                         );
                         let _ = tx
                             .send(AgentEvent::TextDelta(format!(
-                                "\n*Rate limited, retrying in {}s...*\n",
-                                delay
+                                "\n*{}, retrying in {}s...*\n",
+                                reason, delay
                             )))
                             .await;
 
@@ -382,14 +470,6 @@ impl Agent {
 
                         tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
                         continue 'retry;
-                    } else if is_tools_not_supported {
-                        // Fall back to non-streaming for this provider
-                        warn!(
-                            "Provider doesn't support streaming with tools, falling back to non-streaming"
-                        );
-                        assistant_blocks.clear();
-                        tool_calls.clear();
-                        break; // Exit retry loop, will use non-streaming below
                     } else {
                         error!("Stream error: {}", err);
                         return Err(anyhow::anyhow!("{}", err));
@@ -404,17 +484,45 @@ impl Agent {
 
         // Non-streaming fallback (Ollama, Google with tools, or streaming failure)
         if !streaming_succeeded {
-            // Non-streaming fallback (e.g., Ollama with tools)
-            debug!(
-                "Using non-streaming completion (provider: {})",
-                self.provider.id()
-            );
-            let response = tokio::select! {
-                _ = abort_token.cancelled() => {
-                    return Err(anyhow::anyhow!("Cancelled"));
-                }
-                result = self.provider.complete(request) => {
-                    result.map_err(|e| anyhow::anyhow!("Completion error: {}", e))?
+            const MAX_RETRIES: u32 = 3;
+            let mut retry_count = 0u32;
+
+            let response = loop {
+                debug!(
+                    "Using non-streaming completion (provider: {})",
+                    self.provider.id()
+                );
+                let result = tokio::select! {
+                    _ = abort_token.cancelled() => {
+                        return Err(anyhow::anyhow!("Cancelled"));
+                    }
+                    result = self.provider.complete(request.clone()) => result
+                };
+
+                match result {
+                    Ok(response) => break response,
+                    Err(e) => {
+                        let err = e.to_string();
+                        if is_retryable_error(&err) && retry_count < MAX_RETRIES {
+                            retry_count += 1;
+                            let delay = 1u64 << retry_count; // 2, 4, 8 seconds
+                            let reason = categorize_error(&err);
+                            warn!(
+                                "{}, retrying in {}s (attempt {}/{})",
+                                reason, delay, retry_count, MAX_RETRIES
+                            );
+                            let _ = tx
+                                .send(AgentEvent::TextDelta(format!(
+                                    "\n*{}, retrying in {}s...*\n",
+                                    reason, delay
+                                )))
+                                .await;
+                            tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+                            continue;
+                        } else {
+                            return Err(anyhow::anyhow!("Completion error: {}", e));
+                        }
+                    }
                 }
             };
 
