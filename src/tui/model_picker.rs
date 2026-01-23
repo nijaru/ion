@@ -1,10 +1,9 @@
 //! Two-stage model picker: Provider → Model selection.
 
 use crate::provider::{ModelFilter, ModelInfo, ModelRegistry, ProviderPrefs};
+use crate::tui::filter_input::{FilterInput, FilterInputState};
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
-use rat_text::HasScreenCursor;
-use rat_text::text_input::{TextInput, TextInputState};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 use std::collections::BTreeMap;
@@ -40,7 +39,7 @@ pub struct ModelPicker {
     /// Filtered models based on search.
     pub filtered_models: Vec<ModelInfo>,
     /// Filter input state.
-    pub filter_input: TextInputState,
+    pub filter_input: FilterInputState,
     /// Provider list state.
     pub provider_state: ListState,
     /// Model list state.
@@ -66,7 +65,7 @@ impl Default for ModelPicker {
             filtered_providers: Vec::new(),
             provider_models: Vec::new(),
             filtered_models: Vec::new(),
-            filter_input: TextInputState::default(),
+            filter_input: FilterInputState::default(),
             provider_state: ListState::default(),
             model_state: ListState::default(),
             selected_provider: None,
@@ -414,7 +413,7 @@ impl ModelPicker {
             .border_style(Style::default().fg(Color::Cyan))
             .title(search_title);
 
-        let search_input = TextInput::new().block(search_block);
+        let search_input = FilterInput::new().block(search_block);
         frame.render_stateful_widget(search_input, chunks[0], &mut self.filter_input);
         if let Some(cursor) = self.filter_input.screen_cursor() {
             frame.set_cursor_position(cursor);

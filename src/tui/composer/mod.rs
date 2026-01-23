@@ -1,0 +1,615 @@
+pub mod buffer;
+
+pub use buffer::ComposerBuffer;
+
+use ratatui::prelude::*;
+use ratatui::widgets::{Block, Paragraph, Widget, Wrap};
+use unicode_segmentation::UnicodeSegmentation;
+
+/// Ephemeral UI state for the Composer widget.
+#[derive(Debug, Clone, Default)]
+pub struct ComposerState {
+    /// Absolute character index in the buffer.
+    cursor_char_idx: usize,
+    /// Vertical scroll offset (in visual lines) for internal scrolling.
+    scroll_offset: usize,
+    /// Stashed draft (Ctrl+S style) - includes both text and blobs.
+    stash: Option<(String, Vec<String>)>,
+    /// Calculated cursor position (x, y) relative to the widget area.
+    pub cursor_pos: (u16, u16),
+    /// Last known render width (for scroll calculations).
+    last_width: usize,
+}
+
+impl ComposerState {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn cursor_char_idx(&self) -> usize {
+        self.cursor_char_idx
+    }
+
+    pub fn set_cursor(&mut self, idx: usize, max_len: usize) {
+        self.cursor_char_idx = idx.min(max_len);
+    }
+
+    /// Move cursor to the start of the buffer.
+    pub fn move_to_start(&mut self) {
+        self.cursor_char_idx = 0;
+    }
+
+    /// Move cursor to the end of the buffer.
+    pub fn move_to_end(&mut self, buffer: &ComposerBuffer) {
+        self.cursor_char_idx = buffer.len_chars();
+    }
+
+    /// Move cursor to the start of the current line.
+    pub fn move_to_line_start(&mut self, buffer: &ComposerBuffer) {
+        if self.cursor_char_idx == 0 {
+            return;
+        }
+        let line_idx = buffer.char_to_line(self.cursor_char_idx);
+        self.cursor_char_idx = buffer.line_to_char(line_idx);
+    }
+
+    /// Move cursor to the end of the current line.
+    pub fn move_to_line_end(&mut self, buffer: &ComposerBuffer) {
+        let len = buffer.len_chars();
+        if self.cursor_char_idx >= len {
+            return;
+        }
+        let line_idx = buffer.char_to_line(self.cursor_char_idx);
+        let next_line_start = if line_idx + 1 < buffer.len_lines() {
+            buffer.line_to_char(line_idx + 1)
+        } else {
+            len
+        };
+        // Position before newline if there is one
+        let content = buffer.get_content();
+        if next_line_start > 0 && content.chars().nth(next_line_start - 1) == Some('\n') {
+            self.cursor_char_idx = next_line_start - 1;
+        } else {
+            self.cursor_char_idx = next_line_start;
+        }
+    }
+
+    /// Move cursor one grapheme cluster to the left.
+    pub fn move_left(&mut self, buffer: &ComposerBuffer) {
+        if self.cursor_char_idx == 0 {
+            return;
+        }
+
+        let rope = buffer.rope();
+        let window_size = 10;
+        let start = self.cursor_char_idx.saturating_sub(window_size);
+        let prefix = rope.slice(start..self.cursor_char_idx);
+        let prefix_str = prefix.to_string();
+
+        if let Some((offset, _)) = prefix_str.grapheme_indices(true).last() {
+            let chars_to_move = prefix_str[offset..].chars().count();
+            self.cursor_char_idx -= chars_to_move;
+        } else {
+            self.cursor_char_idx = self.cursor_char_idx.saturating_sub(1);
+        }
+    }
+
+    /// Move cursor one grapheme cluster to the right.
+    pub fn move_right(&mut self, buffer: &ComposerBuffer) {
+        let len = buffer.len_chars();
+        if self.cursor_char_idx >= len {
+            return;
+        }
+
+        let rope = buffer.rope();
+        let window_size = 10;
+        let end = (self.cursor_char_idx + window_size).min(len);
+        let suffix = rope.slice(self.cursor_char_idx..end);
+        let suffix_str = suffix.to_string();
+
+        if let Some((_, grapheme)) = suffix_str.grapheme_indices(true).next() {
+            let chars_to_move = grapheme.chars().count();
+            self.cursor_char_idx = (self.cursor_char_idx + chars_to_move).min(len);
+        } else {
+            self.cursor_char_idx = (self.cursor_char_idx + 1).min(len);
+        }
+    }
+
+    /// Move cursor up one line (preserving column where possible).
+    pub fn move_up(&mut self, buffer: &ComposerBuffer) -> bool {
+        let line_idx = buffer.char_to_line(self.cursor_char_idx);
+        if line_idx == 0 {
+            return false; // At first line, can't go up
+        }
+
+        let line_start = buffer.line_to_char(line_idx);
+        let col = self.cursor_char_idx - line_start;
+
+        let prev_line_start = buffer.line_to_char(line_idx - 1);
+        let prev_line_len = line_start - prev_line_start - 1; // -1 for newline
+
+        self.cursor_char_idx = prev_line_start + col.min(prev_line_len);
+        true
+    }
+
+    /// Move cursor down one line (preserving column where possible).
+    pub fn move_down(&mut self, buffer: &ComposerBuffer) -> bool {
+        let line_idx = buffer.char_to_line(self.cursor_char_idx);
+        if line_idx >= buffer.len_lines().saturating_sub(1) {
+            return false; // At last line, can't go down
+        }
+
+        let line_start = buffer.line_to_char(line_idx);
+        let col = self.cursor_char_idx - line_start;
+
+        let next_line_start = buffer.line_to_char(line_idx + 1);
+        let next_next_start = if line_idx + 2 < buffer.len_lines() {
+            buffer.line_to_char(line_idx + 2)
+        } else {
+            buffer.len_chars()
+        };
+        let next_line_len = next_next_start - next_line_start;
+        let next_line_len = if next_line_len > 0
+            && buffer.get_content().chars().nth(next_next_start - 1) == Some('\n')
+        {
+            next_line_len - 1
+        } else {
+            next_line_len
+        };
+
+        self.cursor_char_idx = next_line_start + col.min(next_line_len);
+        true
+    }
+
+    /// Move cursor one word to the left.
+    pub fn move_word_left(&mut self, buffer: &ComposerBuffer) {
+        if self.cursor_char_idx == 0 {
+            return;
+        }
+
+        let rope = buffer.rope();
+        let prefix = rope.slice(..self.cursor_char_idx);
+        let prefix_str = prefix.to_string();
+
+        // Skip whitespace, then find word boundary
+        let trimmed = prefix_str.trim_end();
+        if trimmed.is_empty() {
+            self.cursor_char_idx = 0;
+            return;
+        }
+
+        if let Some((offset, _)) = trimmed.unicode_word_indices().last() {
+            self.cursor_char_idx = offset;
+        } else {
+            self.cursor_char_idx = 0;
+        }
+    }
+
+    /// Move cursor one word to the right.
+    pub fn move_word_right(&mut self, buffer: &ComposerBuffer) {
+        let len = buffer.len_chars();
+        if self.cursor_char_idx >= len {
+            return;
+        }
+
+        let rope = buffer.rope();
+        let suffix = rope.slice(self.cursor_char_idx..);
+        let suffix_str = suffix.to_string();
+
+        // Find next word boundary
+        let mut iter = suffix_str.unicode_word_indices();
+        if let Some((offset, word)) = iter.next() {
+            if offset == 0 {
+                // Cursor is at start of word, jump to end
+                self.cursor_char_idx = (self.cursor_char_idx + word.chars().count()).min(len);
+            } else {
+                // Cursor is before word, jump to start
+                self.cursor_char_idx = (self.cursor_char_idx + offset).min(len);
+            }
+        } else {
+            self.cursor_char_idx = len;
+        }
+    }
+
+    /// Delete the grapheme before the cursor (backspace).
+    pub fn delete_char_before(&mut self, buffer: &mut ComposerBuffer) {
+        if self.cursor_char_idx == 0 {
+            return;
+        }
+
+        let old_idx = self.cursor_char_idx;
+        self.move_left(buffer);
+        buffer.remove_range(self.cursor_char_idx..old_idx);
+    }
+
+    /// Delete the grapheme after the cursor (delete key).
+    pub fn delete_char_after(&mut self, buffer: &mut ComposerBuffer) {
+        if self.cursor_char_idx >= buffer.len_chars() {
+            return;
+        }
+
+        let old_idx = self.cursor_char_idx;
+        // Temporarily move right to find grapheme boundary
+        let len = buffer.len_chars();
+        let rope = buffer.rope();
+        let window_size = 10;
+        let end = (self.cursor_char_idx + window_size).min(len);
+        let suffix = rope.slice(self.cursor_char_idx..end);
+        let suffix_str = suffix.to_string();
+
+        let chars_to_delete = if let Some((_, grapheme)) = suffix_str.grapheme_indices(true).next()
+        {
+            grapheme.chars().count()
+        } else {
+            1
+        };
+
+        buffer.remove_range(old_idx..old_idx + chars_to_delete);
+    }
+
+    /// Delete the word before the cursor (Ctrl+W / Opt+Backspace).
+    pub fn delete_word(&mut self, buffer: &mut ComposerBuffer) {
+        if self.cursor_char_idx == 0 {
+            return;
+        }
+
+        let old_idx = self.cursor_char_idx;
+        self.move_word_left(buffer);
+        buffer.remove_range(self.cursor_char_idx..old_idx);
+    }
+
+    /// Delete everything to the left of the cursor on the current line (Ctrl+U).
+    pub fn delete_line_left(&mut self, buffer: &mut ComposerBuffer) {
+        if self.cursor_char_idx == 0 {
+            return;
+        }
+
+        let line_idx = buffer.char_to_line(self.cursor_char_idx);
+        let line_start = buffer.line_to_char(line_idx);
+
+        if self.cursor_char_idx > line_start {
+            buffer.remove_range(line_start..self.cursor_char_idx);
+            self.cursor_char_idx = line_start;
+        } else if line_idx > 0 {
+            // At start of line, delete the newline to join with previous
+            buffer.remove_range(self.cursor_char_idx.saturating_sub(1)..self.cursor_char_idx);
+            self.cursor_char_idx = self.cursor_char_idx.saturating_sub(1);
+        }
+    }
+
+    /// Delete from cursor to end of line (Ctrl+K).
+    pub fn delete_line_right(&mut self, buffer: &mut ComposerBuffer) {
+        let len = buffer.len_chars();
+        if self.cursor_char_idx >= len {
+            return;
+        }
+
+        let line_idx = buffer.char_to_line(self.cursor_char_idx);
+        let next_line_start = if line_idx + 1 < buffer.len_lines() {
+            buffer.line_to_char(line_idx + 1)
+        } else {
+            len
+        };
+
+        // Don't delete the newline, just content up to it
+        let content = buffer.get_content();
+        let end = if next_line_start > 0 && content.chars().nth(next_line_start - 1) == Some('\n') {
+            next_line_start - 1
+        } else {
+            next_line_start
+        };
+
+        if end > self.cursor_char_idx {
+            buffer.remove_range(self.cursor_char_idx..end);
+        } else if self.cursor_char_idx < len {
+            // At end of line, delete the newline
+            buffer.remove_char(self.cursor_char_idx);
+        }
+    }
+
+    /// Insert a character at the cursor position.
+    pub fn insert_char(&mut self, buffer: &mut ComposerBuffer, ch: char) {
+        buffer.insert_char(self.cursor_char_idx, ch);
+        self.cursor_char_idx += 1;
+    }
+
+    /// Insert a string at the cursor position.
+    pub fn insert_str(&mut self, buffer: &mut ComposerBuffer, text: &str) {
+        buffer.insert_str(self.cursor_char_idx, text);
+        self.cursor_char_idx += text.chars().count();
+    }
+
+    /// Insert a newline at the cursor position.
+    pub fn insert_newline(&mut self, buffer: &mut ComposerBuffer) {
+        self.insert_char(buffer, '\n');
+    }
+
+    /// Clear the buffer and reset cursor.
+    pub fn clear(&mut self, buffer: &mut ComposerBuffer) {
+        buffer.clear();
+        self.cursor_char_idx = 0;
+        self.scroll_offset = 0;
+    }
+
+    /// Stash the current buffer content.
+    pub fn stash_buffer(&mut self, buffer: &mut ComposerBuffer) {
+        self.stash = Some((buffer.get_content(), buffer.blobs.clone()));
+        buffer.clear();
+        self.cursor_char_idx = 0;
+    }
+
+    /// Restore the stashed buffer content.
+    pub fn restore_stash(&mut self, buffer: &mut ComposerBuffer) {
+        if let Some((content, blobs)) = self.stash.take() {
+            buffer.set_content(&content);
+            buffer.blobs = blobs;
+            self.cursor_char_idx = buffer.len_chars();
+        }
+    }
+
+    pub fn has_stash(&self) -> bool {
+        self.stash.is_some()
+    }
+
+    /// Get the current scroll offset.
+    pub fn scroll_offset(&self) -> usize {
+        self.scroll_offset
+    }
+
+    /// Adjust scroll to keep cursor visible within the given height.
+    pub fn scroll_to_cursor(&mut self, visible_height: usize) {
+        let cursor_line = self.cursor_pos.1 as usize;
+
+        // Cursor above viewport
+        if cursor_line < self.scroll_offset {
+            self.scroll_offset = cursor_line;
+        }
+        // Cursor below viewport
+        else if cursor_line >= self.scroll_offset + visible_height {
+            self.scroll_offset = cursor_line + 1 - visible_height;
+        }
+    }
+
+    /// Calculate cursor visual position and update scroll.
+    /// Returns (cursor_x, cursor_y) relative to text area origin.
+    pub fn calculate_cursor_pos(&mut self, buffer: &ComposerBuffer, width: usize) -> (u16, u16) {
+        self.last_width = width;
+        let content = buffer.get_content();
+        let cursor_idx = self.cursor_char_idx;
+
+        let mut x = 0usize;
+        let mut y = 0usize;
+
+        for (i, c) in content.chars().enumerate() {
+            if i >= cursor_idx {
+                break;
+            }
+
+            if c == '\n' {
+                x = 0;
+                y += 1;
+            } else {
+                let char_width = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
+                if width > 0 && x + char_width > width {
+                    x = char_width;
+                    y += 1;
+                } else {
+                    x += char_width;
+                }
+            }
+        }
+
+        self.cursor_pos = (x as u16, y as u16);
+        self.cursor_pos
+    }
+
+    /// Get the number of visual lines the content occupies at the given width.
+    pub fn visual_line_count(&self, buffer: &ComposerBuffer, width: usize) -> usize {
+        if width == 0 || buffer.is_empty() {
+            return 1;
+        }
+
+        let content = buffer.get_content();
+        let mut lines = 1usize;
+        let mut col = 0usize;
+
+        for c in content.chars() {
+            if c == '\n' {
+                lines += 1;
+                col = 0;
+            } else {
+                let char_width = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
+                if col + char_width > width {
+                    lines += 1;
+                    col = char_width;
+                } else {
+                    col += char_width;
+                }
+            }
+        }
+
+        lines
+    }
+}
+
+/// The Composer widget for Ratatui.
+pub struct ComposerWidget<'a> {
+    buffer: &'a ComposerBuffer,
+    state: &'a mut ComposerState,
+    block: Option<Block<'a>>,
+    placeholder: Option<&'a str>,
+    style: Style,
+    show_gutter: bool,
+}
+
+impl<'a> ComposerWidget<'a> {
+    pub fn new(buffer: &'a ComposerBuffer, state: &'a mut ComposerState) -> Self {
+        Self {
+            buffer,
+            state,
+            block: None,
+            placeholder: None,
+            style: Style::default(),
+            show_gutter: true,
+        }
+    }
+
+    pub fn block(mut self, block: Block<'a>) -> Self {
+        self.block = Some(block);
+        self
+    }
+
+    pub fn placeholder(mut self, placeholder: &'a str) -> Self {
+        self.placeholder = Some(placeholder);
+        self
+    }
+
+    pub fn style(mut self, style: Style) -> Self {
+        self.style = style;
+        self
+    }
+
+    pub fn show_gutter(mut self, show: bool) -> Self {
+        self.show_gutter = show;
+        self
+    }
+}
+
+impl Widget for ComposerWidget<'_> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let text_area = if let Some(block) = self.block {
+            let inner = block.inner(area);
+            block.render(area, buf);
+            inner
+        } else {
+            area
+        };
+
+        if text_area.width < 3 || text_area.height < 1 {
+            return;
+        }
+
+        // Render gutter " > "
+        let (_gutter_width, input_area) = if self.show_gutter {
+            buf.set_string(
+                text_area.x,
+                text_area.y,
+                " > ",
+                Style::default().fg(Color::DarkGray),
+            );
+            (
+                3u16,
+                Rect {
+                    x: text_area.x + 3,
+                    y: text_area.y,
+                    width: text_area.width.saturating_sub(3),
+                    height: text_area.height,
+                },
+            )
+        } else {
+            (0u16, text_area)
+        };
+
+        let content_width = input_area.width as usize;
+
+        if self.buffer.is_empty() {
+            if let Some(placeholder) = self.placeholder {
+                Paragraph::new(placeholder)
+                    .style(Style::default().fg(Color::DarkGray).italic())
+                    .render(input_area, buf);
+            }
+            self.state.cursor_pos = (input_area.x, input_area.y);
+        } else {
+            let content = self.buffer.get_content();
+
+            // Calculate cursor position before rendering
+            self.state.calculate_cursor_pos(self.buffer, content_width);
+
+            // Adjust scroll to keep cursor visible
+            self.state.scroll_to_cursor(input_area.height as usize);
+
+            // Render content with wrapping
+            Paragraph::new(content)
+                .style(self.style)
+                .wrap(Wrap { trim: false })
+                .scroll((self.state.scroll_offset as u16, 0))
+                .render(input_area, buf);
+
+            // Adjust cursor position for scroll and gutter
+            let visual_cursor_y = self
+                .state
+                .cursor_pos
+                .1
+                .saturating_sub(self.state.scroll_offset as u16);
+            self.state.cursor_pos = (
+                input_area.x + self.state.cursor_pos.0,
+                input_area.y + visual_cursor_y,
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cursor_movement() {
+        let mut buf = ComposerBuffer::new();
+        let mut state = ComposerState::new();
+
+        buf.insert_str(0, "hello world");
+        state.set_cursor(0, buf.len_chars());
+
+        // Move right
+        state.move_right(&buf);
+        assert_eq!(state.cursor_char_idx(), 1);
+
+        // Move to end
+        state.move_to_end(&buf);
+        assert_eq!(state.cursor_char_idx(), 11);
+
+        // Move left
+        state.move_left(&buf);
+        assert_eq!(state.cursor_char_idx(), 10);
+
+        // Move word left
+        state.move_word_left(&buf);
+        assert_eq!(state.cursor_char_idx(), 6); // "hello "
+    }
+
+    #[test]
+    fn test_line_navigation() {
+        let mut buf = ComposerBuffer::new();
+        let mut state = ComposerState::new();
+
+        buf.insert_str(0, "line1\nline2\nline3");
+        state.set_cursor(8, buf.len_chars()); // Middle of "line2"
+
+        // Move up
+        assert!(state.move_up(&buf));
+        assert_eq!(state.cursor_char_idx(), 2); // Same column in "line1"
+
+        // Move down twice
+        assert!(state.move_down(&buf));
+        assert!(state.move_down(&buf));
+        assert_eq!(buf.char_to_line(state.cursor_char_idx()), 2); // On line3
+    }
+
+    #[test]
+    fn test_delete_operations() {
+        let mut buf = ComposerBuffer::new();
+        let mut state = ComposerState::new();
+
+        buf.insert_str(0, "hello world");
+        state.set_cursor(11, buf.len_chars());
+
+        // Delete word (Ctrl+W)
+        state.delete_word(&mut buf);
+        assert_eq!(buf.get_content(), "hello ");
+
+        // Delete to line start (Ctrl+U)
+        state.delete_line_left(&mut buf);
+        assert_eq!(buf.get_content(), "");
+    }
+}

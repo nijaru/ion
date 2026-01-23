@@ -4,10 +4,9 @@
 //! with visual indication of authentication status.
 
 use crate::provider::ProviderStatus;
-use fuzzy_matcher::FuzzyMatcher;
+use crate::tui::filter_input::{FilterInput, FilterInputState};
 use fuzzy_matcher::skim::SkimMatcherV2;
-use rat_text::HasScreenCursor;
-use rat_text::text_input::{TextInput, TextInputState};
+use fuzzy_matcher::FuzzyMatcher;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState};
 
@@ -19,7 +18,7 @@ pub struct ProviderPicker {
     /// List selection state.
     pub list_state: ListState,
     /// Filter input state for type-to-filter.
-    pub filter_input: TextInputState,
+    pub filter_input: FilterInputState,
     /// Filtered providers based on search.
     pub filtered: Vec<ProviderStatus>,
 }
@@ -142,7 +141,7 @@ impl ProviderPicker {
             .border_style(Style::default().fg(Color::Cyan))
             .title(" Filter (type to search) ");
 
-        let search_input = TextInput::new().block(search_block);
+        let search_input = FilterInput::new().block(search_block);
         frame.render_stateful_widget(search_input, chunks[0], &mut self.filter_input);
         if let Some(cursor) = self.filter_input.screen_cursor() {
             frame.set_cursor_position(cursor);
