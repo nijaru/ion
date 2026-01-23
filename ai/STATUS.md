@@ -7,23 +7,22 @@
 | Phase      | 5 - Polish & UX | 2026-01-23 |
 | Status     | Runnable        | 2026-01-23 |
 | Toolchain  | stable          | 2026-01-22 |
-| Tests      | cargo check     | 2026-01-22 |
+| Tests      | cargo check     | 2026-01-23 |
 | Visibility | **PUBLIC**      | 2026-01-22 |
 
 ## Active Work
 
-**TUI Overhaul** - Custom text entry + viewport fix
+**Sprint 0 Complete** - TUI Architecture overhaul done
 
-Plan: `/Users/nick/.claude/plans/merry-knitting-crab.md`
+Completed this session:
 
-Key decisions made this session:
+1. **Custom Composer** - Ported from ion-copy (ropey + unicode-segmentation)
+2. **Platform keybindings** - macOS Option, Win/Linux Ctrl for word ops
+3. **Dynamic input height** - Grows to term_height - 6
+4. **Full-height viewport** - Never recreate except on terminal resize
+5. **Removed rat-text** - Fully replaced with custom Composer + FilterInput
 
-1. **Keep ratatui** - `insert_before()` for native scrollback is critical
-2. **Custom Composer** - Port from ion-copy (ropey + unicode-segmentation), not reedline
-3. **Full-height viewport** - Never recreate except on terminal resize
-4. **Dynamic input height** - Grows to terminal height minus reserved (6 lines)
-
-Source code to port: `../ion-copy/src/tui/widgets/composer/`
+Next: Sprint 1 (Inline Viewport Stabilization) or verify scrollback (tk-4r7r)
 
 ## Architecture
 
@@ -36,14 +35,19 @@ Source code to port: `../ion-copy/src/tui/widgets/composer/`
 - Session management (rusqlite)
 - Skill system with model configuration
 
+**TUI Stack:**
+
+- ratatui + crossterm (kept for insert_before scrollback)
+- Custom Composer (src/tui/composer/) - ropey-backed text buffer
+- FilterInput (src/tui/filter_input.rs) - simple single-line for pickers
+- Full-height inline viewport with UI at bottom
+
 ## Known Issues
 
-| Issue                    | Status  | Notes                                  |
-| ------------------------ | ------- | -------------------------------------- |
-| Viewport content leaking | Planned | Full-height viewport fix (tk-qo7b)     |
-| rat-text incompatible    | Planned | Replace with custom Composer (tk-l6yf) |
-| Shift+Enter not working  | Open    | Check Kitty protocol (tk-etpd)         |
-| Scrollback cut off       | Open    | Related to viewport issues (tk-4r7r)   |
+| Issue              | Status | Notes                                |
+| ------------------ | ------ | ------------------------------------ |
+| Scrollback cut off | Open   | Related to viewport issues (tk-4r7r) |
+| Shift+Enter issues | Closed | Part of keybindings (tk-etpd)        |
 
 ## Config System
 

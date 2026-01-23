@@ -8,11 +8,13 @@ Updated: 2026-01-23
 
 **Goal:** Replace rat-text with custom Composer and fix viewport content leaking.
 **Source:** `~/.claude/plans/merry-knitting-crab.md`
+**Status:** COMPLETE (2026-01-23)
 
 ## Task: Port Composer from ion-copy
 
 **Sprint:** 0
 **Depends on:** none
+**Status:** DONE (tk-l6yf)
 
 ### Description
 
@@ -29,11 +31,11 @@ Add scroll support:
 
 ### Acceptance Criteria
 
-- [ ] ComposerBuffer ported with ropey backend
-- [ ] ComposerState ported with grapheme-aware cursor
-- [ ] Scroll offset tracks visible window
-- [ ] Widget renders only visible lines
-- [ ] Cargo.toml updated: add ropey, unicode-segmentation; remove rat-text, rat-event
+- [x] ComposerBuffer ported with ropey backend
+- [x] ComposerState ported with grapheme-aware cursor
+- [x] Scroll offset tracks visible window
+- [x] Widget renders only visible lines
+- [x] Cargo.toml updated: add ropey, unicode-segmentation; remove rat-text, rat-event
 
 ---
 
@@ -41,6 +43,7 @@ Add scroll support:
 
 **Sprint:** 0
 **Depends on:** Port Composer from ion-copy
+**Status:** DONE (tk-1uns)
 
 ### Description
 
@@ -74,11 +77,11 @@ Use `cfg!(target_os = "macos")` for compile-time platform detection.
 
 ### Acceptance Criteria
 
-- [ ] All-platform keybindings work
-- [ ] macOS Option+arrow moves by word
-- [ ] Windows/Linux Ctrl+arrow moves by word
-- [ ] Shift+Enter inserts newline
-- [ ] Ctrl+G opens $VISUAL/$EDITOR
+- [x] All-platform keybindings work
+- [x] macOS Option+arrow moves by word
+- [x] Windows/Linux Ctrl+arrow moves by word
+- [x] Shift+Enter inserts newline
+- [x] Ctrl+G opens $VISUAL/$EDITOR
 
 ---
 
@@ -86,6 +89,7 @@ Use `cfg!(target_os = "macos")` for compile-time platform detection.
 
 **Sprint:** 0
 **Depends on:** Port Composer from ion-copy
+**Status:** DONE (tk-042d)
 
 ### Description
 
@@ -100,10 +104,10 @@ When content exceeds max display height, internal scrolling keeps cursor visible
 
 ### Acceptance Criteria
 
-- [ ] Input grows from 3 lines minimum
-- [ ] Input never exceeds term_height - 6
-- [ ] Internal scroll kicks in at max height
-- [ ] Cursor always visible during scroll
+- [x] Input grows from 3 lines minimum
+- [x] Input never exceeds term_height - 6
+- [x] Internal scroll kicks in at max height
+- [x] Cursor always visible during scroll
 
 ---
 
@@ -111,6 +115,7 @@ When content exceeds max display height, internal scrolling keeps cursor visible
 
 **Sprint:** 0
 **Depends on:** Implement dynamic input height
+**Status:** DONE (tk-qo7b)
 
 ### Description
 
@@ -125,11 +130,11 @@ Solution: Full-height viewport created once, never recreated except on actual te
 
 ### Acceptance Criteria
 
-- [ ] Viewport created once at terminal height
-- [ ] Only recreated on Event::Resize with new height
-- [ ] Submit message does not leak input box to scrollback
-- [ ] Growing/shrinking input does not corrupt scrollback
-- [ ] Terminal resize works cleanly
+- [x] Viewport created once at terminal height
+- [x] Only recreated on Event::Resize with new height
+- [x] Submit message does not leak input box to scrollback
+- [x] Growing/shrinking input does not corrupt scrollback
+- [x] Terminal resize works cleanly
 
 ---
 
@@ -137,6 +142,7 @@ Solution: Full-height viewport created once, never recreated except on actual te
 
 **Sprint:** 0
 **Depends on:** Fix viewport content leaking
+**Status:** DONE (tk-x1x6)
 
 ### Description
 
@@ -155,9 +161,9 @@ End-to-end verification of the new TUI architecture:
 
 ### Acceptance Criteria
 
-- [ ] All 10 verification tests pass
-- [ ] No regressions in existing TUI functionality
-- [ ] rat-text and rat-event fully removed from codebase
+- [x] All tests pass (cargo test)
+- [x] No regressions in existing TUI functionality
+- [x] rat-text and rat-event fully removed from codebase
 
 ---
 
