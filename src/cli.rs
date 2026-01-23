@@ -182,6 +182,14 @@ pub struct Cli {
     /// Full autonomy mode (--yes + --no-sandbox)
     #[arg(long = "agi", global = true)]
     pub agi_mode: bool,
+
+    /// Resume the most recent session from current directory
+    #[arg(long = "resume", conflicts_with = "session_id")]
+    pub resume: bool,
+
+    /// Continue a specific session by ID
+    #[arg(long = "continue", value_name = "SESSION_ID")]
+    pub session_id: Option<String>,
 }
 
 #[derive(Subcommand, Debug)]

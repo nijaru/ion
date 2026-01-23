@@ -3,6 +3,14 @@ use ion::cli::{Cli, Commands, PermissionSettings};
 use ion::config::Config;
 use std::process::ExitCode;
 
+/// Resume option for TUI mode.
+#[derive(Debug, Clone)]
+enum ResumeOption {
+    None,
+    Latest,
+    ById(String),
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
@@ -25,8 +33,17 @@ async fn main() -> ExitCode {
             // Resolve permission settings from CLI flags and config
             let permissions = cli.resolve_permissions(&config);
 
+            // Determine resume option from CLI flags
+            let resume_option = if let Some(ref id) = cli.session_id {
+                ResumeOption::ById(id.clone())
+            } else if cli.resume {
+                ResumeOption::Latest
+            } else {
+                ResumeOption::None
+            };
+
             // Interactive TUI mode
-            match run_tui(permissions).await {
+            match run_tui(permissions, resume_option).await {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(e) => {
                     eprintln!("Error: {}", e);
@@ -37,7 +54,10 @@ async fn main() -> ExitCode {
     }
 }
 
-async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::error::Error>> {
+async fn run_tui(
+    permissions: PermissionSettings,
+    resume_option: ResumeOption,
+) -> Result<(), Box<dyn std::error::Error>> {
     use crossterm::{
         event::{self, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags},
         execute,
@@ -66,6 +86,29 @@ async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::err
 
     // Create app with permission settings
     let mut app = App::with_permissions(permissions).await?;
+
+    // Handle resume option
+    match resume_option {
+        ResumeOption::None => {}
+        ResumeOption::Latest => {
+            // Load most recent session
+            if let Ok(sessions) = app.store.list_recent(1) {
+                if let Some(session) = sessions.first() {
+                    if let Err(e) = app.load_session(&session.id) {
+                        eprintln!("Warning: Failed to load session: {}", e);
+                    }
+                }
+            }
+        }
+        ResumeOption::ById(id) => {
+            if let Err(e) = app.load_session(&id) {
+                // Restore terminal before printing error
+                let _ = disable_raw_mode();
+                eprintln!("Error: Session '{}' not found: {}", id, e);
+                return Err(e.into());
+            }
+        }
+    }
 
     // Full-height viewport - created once, never recreated to preserve scrollback.
     // Inline viewports auto-resize during draw().
