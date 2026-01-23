@@ -6,14 +6,14 @@ Updated: 2026-01-23
 
 ## Status
 
-| Sprint | Goal                              | Status      |
-| ------ | --------------------------------- | ----------- |
-| 0      | TUI Architecture                  | COMPLETE    |
-| 1      | Inline Viewport Stabilization     | COMPLETE    |
-| 2      | Run State UX & Error Handling     | IN PROGRESS |
-| 3      | Selector & Resume UX              | PLANNED     |
-| 4      | Visual Polish & Advanced Features | PLANNED     |
-| 5      | Session Storage Redesign          | PLANNED     |
+| Sprint | Goal                              | Status   |
+| ------ | --------------------------------- | -------- |
+| 0      | TUI Architecture                  | COMPLETE |
+| 1      | Inline Viewport Stabilization     | COMPLETE |
+| 2      | Run State UX & Error Handling     | COMPLETE |
+| 3      | Selector & Resume UX              | PLANNED  |
+| 4      | Visual Polish & Advanced Features | PLANNED  |
+| 5      | Session Storage Redesign          | PLANNED  |
 
 ## Sprint 0: TUI Architecture - Custom Text Entry + Viewport Fix
 
@@ -361,10 +361,10 @@ Define and render clear run states on the ionizing/progress line: running, cance
 
 ### Acceptance Criteria
 
-- [ ] Running shows normal ionizing text
-- [ ] Cancelling shows yellow "Canceling..." with warning indicator
-- [ ] Error shows red "Error" with red indicator
-- [ ] Completed shows normal completion state
+- [x] Running shows normal ionizing text
+- [x] Cancelling shows yellow "Canceling..." with warning indicator
+- [x] Error shows red "Error" with red indicator
+- [x] Completed shows normal completion state
 
 ---
 
@@ -379,9 +379,9 @@ Add retry/backoff for transient provider errors (OpenRouter timeouts) and log "R
 
 ### Acceptance Criteria
 
-- [ ] Retries occur on timeout/network errors
-- [ ] Chat shows a retry notice before retry attempt
-- [ ] Final error appears in chat in red if retries exhausted
+- [x] Retries occur on timeout/network errors
+- [x] Chat shows a retry notice before retry attempt
+- [x] Final error appears in chat in red if retries exhausted
 
 ---
 
@@ -396,9 +396,9 @@ Populate max context length from model registry on model selection. If unknown, 
 
 ### Acceptance Criteria
 
-- [ ] Status line shows used/max when max known
-- [ ] Percent only shown when max known
-- [ ] Unknown max shows used/0k with no percent
+- [x] Status line shows used/max when max known
+- [x] Percent only shown when max known
+- [x] Unknown max shows used/0k with no percent
 
 ---
 
@@ -413,8 +413,8 @@ Replace `unwrap/expect` in TUI init paths with user-visible errors and clean exi
 
 ### Acceptance Criteria
 
-- [ ] Config/session/client/terminal init failures surface clearly
-- [ ] App exits without panic
+- [x] Config/session/client/terminal init failures surface clearly
+- [x] App exits without panic
 
 ## Task: Extract token usage emit helper
 
@@ -427,8 +427,8 @@ Consolidate repeated token usage emission in agent loop into a single helper.
 
 ### Acceptance Criteria
 
-- [ ] No duplicated token usage emission code in agent loop
-- [ ] Behavior unchanged
+- [x] No duplicated token usage emission code in agent loop
+- [x] Behavior unchanged
 
 ---
 

@@ -12,14 +12,15 @@
 
 ## Active Work
 
-**Sprint 1 Complete** - Inline Viewport Stabilization done
+**Sprint 2 Complete** - Run State UX & Error Handling
 
 Completed this session:
 
-1. **Chat spacing fix** - Trim trailing whitespace, single blank line between entries
-2. **Session storage design** - JSONL-based architecture mapped out (ai/design/session-storage.md)
+1. **Progress line states** - Yellow canceling with ⚠ indicator, proper state colors
+2. **Provider retry/backoff** - Exponential backoff for timeouts, network errors, rate limits
+3. **Status line context** - Already implemented correctly
 
-Next: Sprint 2 (Run State UX & Error Handling)
+Next: Sprint 3 (Selector & Resume UX)
 
 ## Architecture
 

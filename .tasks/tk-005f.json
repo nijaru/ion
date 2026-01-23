@@ -3,7 +3,7 @@
   "ref": "005f",
   "title": "[UX] Progress line state mapping (running/cancelling/error)",
   "description": null,
-  "status": "open",
+  "status": "done",
   "priority": 3,
   "labels": [],
   "assignees": [],
@@ -13,7 +13,7 @@
   "due_date": null,
   "logs": [],
   "created_at": "2026-01-23T01:12:40.394Z",
-  "updated_at": "2026-01-23T01:12:40.394Z",
-  "completed_at": null,
+  "updated_at": "2026-01-23T19:32:37.012Z",
+  "completed_at": "2026-01-23T19:32:37.012Z",
   "external": {}
 }
