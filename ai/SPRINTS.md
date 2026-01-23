@@ -1,8 +1,19 @@
 # Sprint Plan: ion Stabilization & UX
 
-Source: ai/DESIGN.md, ai/STATUS.md, ai/design/inline-viewport.md, ai/design/diff-highlighting.md
+Source: ai/DESIGN.md, ai/STATUS.md, ai/design/inline-viewport.md, ai/design/session-storage.md
 Generated: 2026-01-22
 Updated: 2026-01-23
+
+## Status
+
+| Sprint | Goal                              | Status      |
+| ------ | --------------------------------- | ----------- |
+| 0      | TUI Architecture                  | COMPLETE    |
+| 1      | Inline Viewport Stabilization     | COMPLETE    |
+| 2      | Run State UX & Error Handling     | IN PROGRESS |
+| 3      | Selector & Resume UX              | PLANNED     |
+| 4      | Visual Polish & Advanced Features | PLANNED     |
+| 5      | Session Storage Redesign          | PLANNED     |
 
 ## Sprint 0: TUI Architecture - Custom Text Entry + Viewport Fix
 
@@ -573,3 +584,91 @@ Swap `tiktoken-rs` for the faster `bpe-openai` crate.
 - [ ] Token counting uses `bpe-openai`
 - [ ] Performance improved for large messages
 - [ ] `tiktoken-rs` dependency removed
+
+## Sprint 5: Session Storage Redesign
+
+**Goal:** Portable JSONL-based sessions with per-directory organization.
+**Design:** ai/design/session-storage.md
+
+## Task: Implement JSONL session format
+
+**Sprint:** 5
+**Depends on:** none
+
+### Description
+
+Replace SQLite session storage with JSONL files. Each session is a single file with typed events (meta, user, assistant, tool_use, tool_result).
+
+### Acceptance Criteria
+
+- [ ] SessionFile struct reads/writes JSONL format
+- [ ] Append-only writes for crash safety
+- [ ] All message types serialized correctly
+
+---
+
+## Task: Per-directory session organization
+
+**Sprint:** 5
+**Depends on:** Implement JSONL session format
+
+### Description
+
+Organize sessions by encoded working directory path. Create `~/.ion/sessions/{encoded-path}/` structure.
+
+### Acceptance Criteria
+
+- [ ] Path encoding (slashes → dashes) implemented
+- [ ] Sessions stored in correct directory
+- [ ] Old sessions migrated on first run
+
+---
+
+## Task: Per-directory index and input history
+
+**Sprint:** 5
+**Depends on:** Per-directory session organization
+
+### Description
+
+Add per-directory index.db for fast picker queries and input.db for input history.
+
+### Acceptance Criteria
+
+- [ ] index.db tracks: id, updated_at, message_count, last_preview, branch
+- [ ] input.db stores per-directory input history
+- [ ] Index updated on session save
+
+---
+
+## Task: Resume picker UI
+
+**Sprint:** 5
+**Depends on:** Per-directory index and input history
+
+### Description
+
+Implement /resume command with session picker showing time, message count, and preview.
+
+### Acceptance Criteria
+
+- [ ] /resume opens selector with sessions from current directory
+- [ ] Display: relative time, message count, last preview
+- [ ] Selected session loads correctly
+
+---
+
+## Task: CLI resume flags
+
+**Sprint:** 5
+**Depends on:** Resume picker UI
+
+### Description
+
+Add --continue (latest from cwd) and --resume (picker or specific ID) CLI flags.
+
+### Acceptance Criteria
+
+- [ ] --continue loads most recent session from current directory
+- [ ] --resume opens picker
+- [ ] --resume <id> loads specific session

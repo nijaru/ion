@@ -16,9 +16,8 @@
 
 Completed this session:
 
-1. **Sprint 1 verification** - All acceptance criteria met
-2. **Scrollback fix** - Removed terminal recreation on resize (cfc3425)
-3. **Unicode width fix** - count_wrapped_lines uses display width
+1. **Chat spacing fix** - Trim trailing whitespace, single blank line between entries
+2. **Session storage design** - JSONL-based architecture mapped out (ai/design/session-storage.md)
 
 Next: Sprint 2 (Run State UX & Error Handling)
 
