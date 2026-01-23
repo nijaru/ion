@@ -62,19 +62,20 @@ async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::err
     }
 
     let backend = CrosstermBackend::new(stdout);
-    let (mut terminal_width, mut terminal_height) = crossterm::terminal::size()?;
+    let (_, mut terminal_height) = crossterm::terminal::size()?;
 
     // Create app with permission settings
     let mut app = App::with_permissions(permissions).await?;
 
-    // Initial viewport sized to UI needs
-    let mut viewport_height = app.viewport_height(terminal_width, terminal_height);
+    // Full-height viewport - created once, only recreated on actual terminal resize.
+    // UI is rendered at the bottom of the viewport; empty space above absorbs size changes.
     let mut terminal = Terminal::with_options(
         backend,
         TerminalOptions {
-            viewport: Viewport::Inline(viewport_height),
+            viewport: Viewport::Inline(terminal_height),
         },
     )?;
+    let mut last_terminal_height = terminal_height;
 
     // Main loop
     loop {
@@ -83,10 +84,8 @@ async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::err
                 event::Event::Key(key) => {
                     app.handle_event(event::Event::Key(key));
                 }
-                event::Event::Resize(width, height) => {
-                    terminal_width = width;
+                event::Event::Resize(_, height) => {
                     terminal_height = height;
-                    // Viewport height recalculated below
                 }
                 _ => {}
             }
@@ -94,27 +93,19 @@ async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::err
 
         app.update();
 
-        // Recalculate viewport height if it changed (input grew, progress appeared, etc.)
-        let new_height = app.viewport_height(terminal_width, terminal_height);
-        if new_height != viewport_height {
-            // When viewport shrinks, the top lines become scrollback. Draw blank content
-            // to those lines first so they don't show old input box borders.
-            if new_height < viewport_height {
-                terminal.draw(|frame| {
-                    // Draw empty content - the frame area will be cleared
-                    frame.render_widget(
-                        ratatui::widgets::Clear,
-                        frame.area(),
-                    );
-                })?;
-            }
-            viewport_height = new_height;
+        // Only recreate terminal on ACTUAL terminal resize (not UI size changes)
+        if terminal_height != last_terminal_height {
+            // Clear before recreating to avoid artifacts
+            terminal.draw(|frame| {
+                frame.render_widget(ratatui::widgets::Clear, frame.area());
+            })?;
             terminal = Terminal::with_options(
                 CrosstermBackend::new(io::stdout()),
                 TerminalOptions {
-                    viewport: Viewport::Inline(viewport_height),
+                    viewport: Viewport::Inline(terminal_height),
                 },
             )?;
+            last_terminal_height = terminal_height;
         }
 
         let width = terminal.size()?.width;
