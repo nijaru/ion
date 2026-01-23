@@ -2,19 +2,42 @@
 
 > Decision records for ion development. Historical Python-era decisions archived in DECISIONS-archive.md.
 
-## 2026-01-20: Text Input Engine - rat-text
+## 2026-01-23: Custom Text Entry with Ropey (Supersedes rat-text)
+
+**Context**: rat-text proved problematic in practice - it didn't fit our use cases well and fighting the crate's assumptions was more work than building custom. Similar experience with other text input crates. We need full control over input handling for a terminal coding agent.
+
+**Decision**: Build custom text entry using ropey as the text buffer backend.
+
+| Requirement        | Implementation                                     |
+| ------------------ | -------------------------------------------------- |
+| Text buffer        | `ropey` crate (rope data structure)                |
+| Grapheme handling  | `unicode-segmentation` for cursor/selection        |
+| Multi-line editing | Custom with Shift+Enter for newlines               |
+| OS movement keys   | Ctrl+Backspace, Option+Backspace, Cmd+arrows, etc. |
+| Selection          | Custom selection state                             |
+| Event handling     | Direct crossterm events                            |
+
+**Rationale**: External text input crates (rat-text, tui-textarea, tui-input) were either over-engineered for our needs or missing critical features. Custom implementation with ropey gives us full control and avoids fighting upstream assumptions. Codex CLI takes this same approach.
+
+**Also evaluating**: Whether ratatui adds value or if pure crossterm is simpler for our needs.
+
+---
+
+## 2026-01-20: Text Input Engine - rat-text (SUPERSEDED)
+
+**Status**: SUPERSEDED by 2026-01-23 decision above.
 
 **Context**: We need a long-term, multi-line editor with grapheme-safe cursor movement, selection, and consistent key handling. Custom input code risks edge cases and future refactors.
 
-**Decision**: Adopt `rat-text` as the unified text input engine for the main input and selector search.
+**Decision**: ~~Adopt `rat-text` as the unified text input engine for the main input and selector search.~~
 
-| Requirement            | Coverage                      |
-| ---------------------- | ----------------------------- |
-| Multi-line editing     | `TextArea`                    |
-| Selection              | built-in selection support    |
-| Word/line navigation   | word/line helpers in API      |
-| Undo/redo + clipboard  | supported in `TextArea`       |
-| Event handling         | `handle_events` (crossterm)   |
+| Requirement           | Coverage                    |
+| --------------------- | --------------------------- |
+| Multi-line editing    | `TextArea`                  |
+| Selection             | built-in selection support  |
+| Word/line navigation  | word/line helpers in API    |
+| Undo/redo + clipboard | supported in `TextArea`     |
+| Event handling        | `handle_events` (crossterm) |
 
 **Rationale**: rat-text provides a full textarea with selection, navigation, and editing primitives. Using it avoids a bespoke editor and keeps future changes localized.
 
@@ -26,10 +49,10 @@
 
 **Decision**: Use `fuzzy-matcher` for all fuzzy matching in the UI.
 
-| Option         | Pros                            | Cons                  |
-| -------------- | ------------------------------- | --------------------- |
-| fuzzy-matcher  | Simple, MIT, easy integration   | Less advanced scoring |
-| nucleo         | Very strong scoring/perf        | Heavier, MPL-2.0      |
+| Option        | Pros                          | Cons                  |
+| ------------- | ----------------------------- | --------------------- |
+| fuzzy-matcher | Simple, MIT, easy integration | Less advanced scoring |
+| nucleo        | Very strong scoring/perf      | Heavier, MPL-2.0      |
 
 **Rationale**: fuzzy-matcher is sufficient for current list sizes and features while keeping dependency surface small.
 
@@ -526,12 +549,12 @@ No reason to go through MCP when we can use the Rust crate directly.
 
 **Decision**: Adopt Claude Code's minimal aesthetic.
 
-| Element       | Before                 | After                                         |
-| ------------- | ---------------------- | --------------------------------------------- |
-| Chat headers  | Nerd Font icons        | User `>` prefix; no agent header              |
-| Status line   | Verbose keybindings    | `model · context%` left, `? help` right       |
-| Loading       | "Agent is thinking..." | "Ionizing..."                                 |
-| Provider list | Name + description     | Name + auth hint only                         |
+| Element       | Before                 | After                                   |
+| ------------- | ---------------------- | --------------------------------------- |
+| Chat headers  | Nerd Font icons        | User `>` prefix; no agent header        |
+| Status line   | Verbose keybindings    | `model · context%` left, `? help` right |
+| Loading       | "Agent is thinking..." | "Ionizing..."                           |
+| Provider list | Name + description     | Name + auth hint only                   |
 
 **Rationale**: Minimal UI reduces cognitive load. Power users discover features via help modal. Aligns with terminal tool conventions.
 

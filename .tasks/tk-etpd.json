@@ -1,10 +1,10 @@
 {
   "project": "tk",
-  "ref": "4r7r",
-  "title": "[BUG] Chat history scrollback is cut off; scrolling up doesn't show full conversation",
+  "ref": "etpd",
+  "title": "[TUI] Shift+Enter not working - check Kitty protocol detection",
   "description": null,
   "status": "open",
-  "priority": 1,
+  "priority": 3,
   "labels": [],
   "assignees": [],
   "parent": null,
@@ -12,8 +12,8 @@
   "estimate": null,
   "due_date": null,
   "logs": [],
-  "created_at": "2026-01-21T12:10:48.214Z",
-  "updated_at": "2026-01-23T15:24:45.164Z",
+  "created_at": "2026-01-23T15:18:17.359Z",
+  "updated_at": "2026-01-23T15:24:47.260Z",
   "completed_at": null,
   "external": {}
 }
