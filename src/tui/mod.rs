@@ -235,6 +235,8 @@ pub struct App {
     pub current_tool: Option<String>,
     /// Timestamp of first Ctrl+C press for double-tap quit/cancel
     pub cancel_pending: Option<Instant>,
+    /// Timestamp of first Esc press for double-tap clear input
+    esc_pending: Option<Instant>,
     /// Permission settings from CLI flags
     pub permissions: PermissionSettings,
     /// Last completed task summary (for brief display after completion)
@@ -638,6 +640,7 @@ impl App {
             output_tokens: 0,
             current_tool: None,
             cancel_pending: None,
+            esc_pending: None,
             permissions,
             last_task_summary: None,
             editor_requested: false,
@@ -833,11 +836,22 @@ impl App {
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
 
         match key.code {
-            // Esc: Cancel running task
+            // Esc: Cancel running task, or double-Esc to clear input
             KeyCode::Esc => {
                 if self.is_running && !self.session.abort_token.is_cancelled() {
                     self.session.abort_token.cancel();
                     self.cancel_pending = None;
+                    self.esc_pending = None;
+                } else if !self.input_is_empty() {
+                    // Double-Esc to clear input
+                    if let Some(when) = self.esc_pending
+                        && when.elapsed() <= CANCEL_WINDOW
+                    {
+                        self.clear_input();
+                        self.esc_pending = None;
+                    } else {
+                        self.esc_pending = Some(Instant::now());
+                    }
                 }
             }
             // Ctrl+C: Clear input, cancel running task, or quit
