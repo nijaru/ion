@@ -12,19 +12,18 @@
 
 ## Active Work
 
-**Sprint 4 Nearly Complete** - Visual Polish & Advanced Features
+**Sprint 3 & 4 Complete** - Selector & Resume UX, Visual Polish
 
-Completed this session:
+Session accomplishments:
 
-1. **Sprint 3 complete** - /resume command, --resume/--continue CLI flags
-2. **Startup header** - Already implemented (ION + version via insert_before)
-3. **Token counter** - Already using bpe-openai
-4. **Grep/Glob upgrade** - Already using ignore crate
-5. **Diff highlighting** - Already implemented (highlight_diff_line function)
+- **Session resume** - /resume command, --resume/--continue CLI flags, session picker UI
+- Verified pre-implemented: startup header, bpe-openai, ignore crate, diff highlighting
 
-Remaining Sprint 4:
+Remaining Sprint 4 (deferred):
 
-- Decompose Agent loop into discrete phases (larger refactor)
+- Agent loop decomposition (tk-mmpr) - larger refactor for future session
+
+Next: Sprint 5 (Session Storage Redesign) or backlog items
 
 ## Architecture
 
