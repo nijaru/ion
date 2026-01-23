@@ -96,6 +96,13 @@ async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::err
         // Recalculate viewport height if it changed (input grew, progress appeared, etc.)
         let new_height = app.viewport_height(terminal_width);
         if new_height != viewport_height {
+            // Clear the old viewport area before recreating to prevent content leaking
+            // into scrollback. Move cursor to top of viewport and clear to end of screen.
+            execute!(
+                terminal.backend_mut(),
+                crossterm::cursor::MoveUp(viewport_height),
+                crossterm::terminal::Clear(crossterm::terminal::ClearType::FromCursorDown)
+            )?;
             viewport_height = new_height;
             terminal = Terminal::with_options(
                 CrosstermBackend::new(io::stdout()),
