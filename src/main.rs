@@ -62,20 +62,20 @@ async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::err
     }
 
     let backend = CrosstermBackend::new(stdout);
-    let (_, mut terminal_height) = crossterm::terminal::size()?;
+    let (_, terminal_height) = crossterm::terminal::size()?;
 
     // Create app with permission settings
     let mut app = App::with_permissions(permissions).await?;
 
-    // Full-height viewport - created once, only recreated on actual terminal resize.
-    // UI is rendered at the bottom of the viewport; empty space above absorbs size changes.
+    // Full-height viewport - created once, never recreated to preserve scrollback.
+    // Inline viewports auto-resize during draw().
+    // UI is rendered at the bottom; empty space above absorbs size changes.
     let mut terminal = Terminal::with_options(
         backend,
         TerminalOptions {
             viewport: Viewport::Inline(terminal_height),
         },
     )?;
-    let mut last_terminal_height = terminal_height;
 
     // Main loop
     loop {
@@ -84,29 +84,15 @@ async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::err
                 event::Event::Key(key) => {
                     app.handle_event(event::Event::Key(key));
                 }
-                event::Event::Resize(_, height) => {
-                    terminal_height = height;
+                event::Event::Resize(_, _) => {
+                    // Inline viewports auto-resize during draw(), no action needed.
+                    // Recreating the terminal would break scrollback preservation.
                 }
                 _ => {}
             }
         }
 
         app.update();
-
-        // Only recreate terminal on ACTUAL terminal resize (not UI size changes)
-        if terminal_height != last_terminal_height {
-            // Clear before recreating to avoid artifacts
-            terminal.draw(|frame| {
-                frame.render_widget(ratatui::widgets::Clear, frame.area());
-            })?;
-            terminal = Terminal::with_options(
-                CrosstermBackend::new(io::stdout()),
-                TerminalOptions {
-                    viewport: Viewport::Inline(terminal_height),
-                },
-            )?;
-            last_terminal_height = terminal_height;
-        }
 
         let width = terminal.size()?.width;
         let chat_lines = app.take_chat_inserts(width);
@@ -178,13 +164,15 @@ async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::err
 
 /// Count the number of lines after wrapping text to a given width.
 fn count_wrapped_lines(lines: &[ratatui::prelude::Line], width: usize) -> usize {
+    use unicode_width::UnicodeWidthStr;
+
     if width == 0 {
         return lines.len();
     }
 
     let mut count = 0;
     for line in lines {
-        let line_width: usize = line.spans.iter().map(|s| s.content.chars().count()).sum();
+        let line_width: usize = line.spans.iter().map(|s| s.content.width()).sum();
         if line_width == 0 {
             count += 1;
         } else {
