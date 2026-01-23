@@ -12,15 +12,19 @@
 
 ## Active Work
 
-**Sprint 3 Complete** - Selector & Resume UX
+**Sprint 4 Nearly Complete** - Visual Polish & Advanced Features
 
 Completed this session:
 
-1. **/resume command** - Session picker with filter, loads selected session
-2. **CLI flags** - `--resume` for latest, `--continue <id>` for specific session
-3. **Fuzzy search ordering** - Already implemented (substring matches prioritized)
+1. **Sprint 3 complete** - /resume command, --resume/--continue CLI flags
+2. **Startup header** - Already implemented (ION + version via insert_before)
+3. **Token counter** - Already using bpe-openai
+4. **Grep/Glob upgrade** - Already using ignore crate
+5. **Diff highlighting** - Already implemented (highlight_diff_line function)
 
-Next: Sprint 4 (Visual Polish & Advanced Features)
+Remaining Sprint 4:
+
+- Decompose Agent loop into discrete phases (larger refactor)
 
 ## Architecture
 

@@ -513,9 +513,9 @@ Implement syntax-highlighted diffs for the `edit` tool results. Show additions i
 
 ### Acceptance Criteria
 
-- [ ] ToolResult enhanced with DiffInfo
-- [ ] Edit tool populates DiffInfo on success
-- [ ] TUI renders styled diff lines in chat
+- [x] ToolResult enhanced with DiffInfo (diff included in content, TUI detects edit tool)
+- [x] Edit tool populates DiffInfo on success (generates unified diff via similar crate)
+- [x] TUI renders styled diff lines in chat (highlight_diff_line function)
 
 ---
 
