@@ -82,7 +82,6 @@ async fn run_tui(
     }
 
     let backend = CrosstermBackend::new(stdout);
-    let (_, terminal_height) = crossterm::terminal::size()?;
 
     // Create app with permission settings
     let mut app = App::with_permissions(permissions).await?;
@@ -110,13 +109,14 @@ async fn run_tui(
         }
     }
 
-    // Full-height viewport - created once, never recreated to preserve scrollback.
-    // Inline viewports auto-resize during draw().
-    // UI is rendered at the bottom; empty space above absorbs size changes.
+    // Fixed-size viewport for UI only. Chat content appears above via insert_before.
+    // Using a fixed size (not full terminal height) ensures inserted content is visible.
+    // Never recreated to preserve scrollback.
+    const UI_VIEWPORT_HEIGHT: u16 = 10;
     let mut terminal = Terminal::with_options(
         backend,
         TerminalOptions {
-            viewport: Viewport::Inline(terminal_height),
+            viewport: Viewport::Inline(UI_VIEWPORT_HEIGHT),
         },
     )?;
 
