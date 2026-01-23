@@ -3,7 +3,7 @@
   "ref": "vkai",
   "title": "[UX] Retry indicator and error handling in chat history (show 'Retrying...', error styling, summary status)",
   "description": null,
-  "status": "open",
+  "status": "done",
   "priority": 3,
   "labels": [],
   "assignees": [],
@@ -13,7 +13,7 @@
   "due_date": null,
   "logs": [],
   "created_at": "2026-01-20T20:45:40.933Z",
-  "updated_at": "2026-01-20T20:45:40.933Z",
-  "completed_at": null,
+  "updated_at": "2026-01-23T19:36:02.544Z",
+  "completed_at": "2026-01-23T19:36:02.544Z",
   "external": {}
 }
