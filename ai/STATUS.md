@@ -14,16 +14,13 @@
 
 **Sprint 1 Complete** - Inline Viewport Stabilization done
 
-Verified this session:
+Completed this session:
 
-1. **No alternate-screen behavior** - Inline viewport preserves native scrollback
-2. **Viewport spacing** - Chat in scrollback, UI at bottom, no gaps
-3. **Message margins** - 1-column left margin on chat messages
-4. **Render helpers** - draw() split into layout_areas, render_progress, etc.
-5. **Chat renderer module** - ChatRenderer::build_lines in separate module
-6. **History navigation** - Up/Down work correctly at line boundaries
+1. **Sprint 1 verification** - All acceptance criteria met
+2. **Scrollback fix** - Removed terminal recreation on resize (cfc3425)
+3. **Unicode width fix** - count_wrapped_lines uses display width
 
-Next: Sprint 2 (Run State UX & Error Handling) or investigate tk-4r7r (scrollback bug)
+Next: Sprint 2 (Run State UX & Error Handling)
 
 ## Architecture
 
