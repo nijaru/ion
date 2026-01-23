@@ -1483,6 +1483,18 @@ impl App {
         out
     }
 
+    /// Calculate the viewport height needed for the UI (header + progress + input + status).
+    pub fn viewport_height(&self, terminal_width: u16) -> u16 {
+        let header_height = self.active_header_lines().len() as u16;
+        let input_height = self.calculate_input_height(terminal_width);
+        let progress_height = if self.is_running || self.last_task_summary.is_some() {
+            2
+        } else {
+            0
+        };
+        header_height + progress_height + input_height + 1 // +1 for status line
+    }
+
     fn layout_areas(
         &self,
         area: Rect,
@@ -1494,7 +1506,6 @@ impl App {
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(header_height),
-                Constraint::Min(0),
                 Constraint::Length(progress_height),
                 Constraint::Length(input_height),
                 Constraint::Length(1),
@@ -1503,9 +1514,9 @@ impl App {
 
         LayoutAreas {
             header: chunks[0],
-            progress: chunks[2],
-            input: chunks[3],
-            status: chunks[4],
+            progress: chunks[1],
+            input: chunks[2],
+            status: chunks[3],
         }
     }
 

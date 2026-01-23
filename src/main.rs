@@ -62,16 +62,19 @@ async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::err
     }
 
     let backend = CrosstermBackend::new(stdout);
-    let (_, mut inline_height) = crossterm::terminal::size()?;
-    let mut terminal = Terminal::with_options(
-        backend,
-        TerminalOptions {
-            viewport: Viewport::Inline(inline_height),
-        },
-    )?;
+    let (mut terminal_width, _) = crossterm::terminal::size()?;
 
     // Create app with permission settings
     let mut app = App::with_permissions(permissions).await?;
+
+    // Initial viewport sized to UI needs
+    let mut viewport_height = app.viewport_height(terminal_width);
+    let mut terminal = Terminal::with_options(
+        backend,
+        TerminalOptions {
+            viewport: Viewport::Inline(viewport_height),
+        },
+    )?;
 
     // Main loop
     loop {
@@ -80,24 +83,27 @@ async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::err
                 event::Event::Key(key) => {
                     app.handle_event(event::Event::Key(key));
                 }
-                event::Event::Resize(width, height) => {
-                    if height != inline_height {
-                        inline_height = height;
-                        terminal = Terminal::with_options(
-                            CrosstermBackend::new(io::stdout()),
-                            TerminalOptions {
-                                viewport: Viewport::Inline(inline_height),
-                            },
-                        )?;
-                    } else {
-                        terminal.resize(Rect::new(0, 0, width, inline_height))?;
-                    }
+                event::Event::Resize(width, _) => {
+                    terminal_width = width;
+                    // Viewport height recalculated below
                 }
                 _ => {}
             }
         }
 
         app.update();
+
+        // Recalculate viewport height if it changed (input grew, progress appeared, etc.)
+        let new_height = app.viewport_height(terminal_width);
+        if new_height != viewport_height {
+            viewport_height = new_height;
+            terminal = Terminal::with_options(
+                CrosstermBackend::new(io::stdout()),
+                TerminalOptions {
+                    viewport: Viewport::Inline(viewport_height),
+                },
+            )?;
+        }
 
         let width = terminal.size()?.width;
         let chat_lines = app.take_chat_inserts(width);
