@@ -1579,14 +1579,17 @@ impl App {
 
         if self.is_running {
             let spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-            let symbol = spinner[(self.frame_count % spinner.len() as u64) as usize];
 
-            let (label, color) = if self.session.abort_token.is_cancelled() {
-                ("Cancelling...".to_string(), Color::Red)
-            } else if let Some(tool) = &self.current_tool {
-                (format!("Running {}...", tool), Color::Cyan)
+            let (symbol, label, color) = if self.session.abort_token.is_cancelled() {
+                ("⚠", "Canceling...".to_string(), Color::Yellow)
             } else {
-                ("Ionizing...".to_string(), Color::Cyan)
+                let s = spinner[(self.frame_count % spinner.len() as u64) as usize];
+                let label = if let Some(tool) = &self.current_tool {
+                    format!("Running {}...", tool)
+                } else {
+                    "Ionizing...".to_string()
+                };
+                (s, label, Color::Cyan)
             };
 
             let mut progress_spans = vec![
@@ -1645,7 +1648,7 @@ impl App {
             let (symbol, label, color) = if self.last_error.is_some() {
                 (" ✗ ", "Error", Color::Red)
             } else if summary.was_cancelled {
-                (" ✗ ", "Cancelled", Color::Red)
+                (" ⚠ ", "Canceled", Color::Yellow)
             } else {
                 (" ✓ ", "Completed", Color::Green)
             };
