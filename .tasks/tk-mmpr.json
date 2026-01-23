@@ -3,7 +3,7 @@
   "ref": "mmpr",
   "title": "[REFACTOR] Decompose Agent loop into discrete phases",
   "description": null,
-  "status": "open",
+  "status": "active",
   "priority": 3,
   "labels": [],
   "assignees": [],
@@ -13,7 +13,7 @@
   "due_date": null,
   "logs": [],
   "created_at": "2026-01-23T01:12:40.413Z",
-  "updated_at": "2026-01-23T01:12:40.413Z",
+  "updated_at": "2026-01-23T19:50:44.381Z",
   "completed_at": null,
   "external": {}
 }
