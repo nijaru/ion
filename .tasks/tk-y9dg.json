@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "y9dg",
+  "title": "[Polish] Fix viewport spacing and message margins",
+  "description": null,
+  "status": "open",
+  "priority": 2,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-23T01:12:40.352Z",
+  "updated_at": "2026-01-23T01:12:40.352Z",
+  "completed_at": null,
+  "external": {}
+}
