@@ -1,31 +1,26 @@
-# Sprint Plan: ion Inline TUI Stabilization
+# Sprint Plan: ion Stabilization & UX
 
-Source: ai/design/inline-viewport.md, ai/design/tui.md, ai/design/interrupt-handling.md
-Generated: 2026-01-20
+Source: ai/DESIGN.md, ai/STATUS.md, ai/design/inline-viewport.md, ai/design/diff-highlighting.md
+Generated: 2026-01-22
 
-## Sprint 1: Inline Viewport Parity (Native Scrollback + Selection)
+## Sprint 1: Inline Viewport Stabilization
+**Goal:** Finalize the inline viewport migration and ensure native terminal behavior.
 
 ## Task: Remove residual alternate-screen behavior
-
 **Sprint:** 1
 **Depends on:** none
 
 ### Description
-Ensure the TUI never clears or emulates alternate-screen behavior. Inline viewport should preserve native scrollback, selection, and mouse wheel scrolling.
+Ensure the TUI never clears or emulates alternate-screen behavior. Inline viewport should preserve native scrollback, selection, and mouse wheel scrolling. Audit terminal init for EnterAlternateScreen/EnableMouseCapture and remove any full-screen clear/reset calls.
 
 ### Acceptance Criteria
 - [ ] No alternate screen or mouse capture in terminal init/shutdown
 - [ ] Click/drag selection and mouse wheel scrolling work natively
 - [ ] Sending a message does not clear the full terminal buffer
 
-### Technical Notes
-- Audit terminal init for EnterAlternateScreen/EnableMouseCapture
-- Remove any full-screen clear/reset calls
-
 ---
 
 ## Task: Fix viewport spacing and message margins
-
 **Sprint:** 1
 **Depends on:** none
 
@@ -37,14 +32,9 @@ Tighten viewport layout so chat content sits immediately above the viewport with
 - [ ] Messages render with left/right margin (1 column)
 - [ ] Input top/bottom separators extend full width
 
-### Technical Notes
-- Re-check Viewport::Inline height calculations
-- Avoid padding-based bottom-align that inserts blank lines
-
 ---
 
 ## Task: Append chat via insert-before scrollback
-
 **Sprint:** 1
 **Depends on:** none
 
@@ -56,14 +46,9 @@ Move chat rendering out of the viewport and append new chat lines directly into 
 - [x] Selector mode buffers new chat lines and flushes on close
 - [ ] Verified in a real terminal with scrolling and selection
 
-### Technical Notes
-- Use `Terminal::insert_before` with `Paragraph::line_count` for height
-- Keep viewport layout constant (header/progress/input/status only)
-
 ---
 
 ## Task: User prefix only on first line
-
 **Sprint:** 1
 **Depends on:** none
 
@@ -74,83 +59,63 @@ Render user messages with a `> ` prefix only on the first line; subsequent lines
 - [x] `> ` prefix appears only on the first line
 - [x] Wrapped lines do not include the prefix
 
-### Technical Notes
-- Apply prefix only to the first wrapped line in `ChatRenderer`
-
 ---
 
 ## Task: Refactor draw into render helpers
-
 **Sprint:** 1
 **Depends on:** none
 
 ### Description
-Split `App::draw` into focused layout/data/render helpers to reduce complexity and isolate regressions.
+Split `App::draw` into focused layout/data/render helpers to reduce complexity and isolate regressions. Layout computation should be separate from rendering.
 
 ### Acceptance Criteria
 - [ ] Layout computation is separate from rendering
 - [ ] Chat, progress, input, and status rendering are in dedicated helpers
 - [ ] Behavior matches current UI
 
-### Technical Notes
-- Keep helper signatures minimal and pass precomputed data
-
 ---
 
 ## Task: Extract chat renderer module
-
 **Sprint:** 1
 **Depends on:** Refactor draw into render helpers
 
 ### Description
-Move chat message formatting (user/agent/tool/system) into a dedicated renderer module.
+Move chat message formatting (user/agent/tool/system) into a dedicated renderer module. Consider a `ChatRenderer` type with a `build_lines()` method.
 
 ### Acceptance Criteria
 - [ ] Chat rendering is isolated from `tui::mod` draw logic
 - [ ] Output matches current formatting
 - [ ] No behavioral regressions in tool/diff rendering
 
-### Technical Notes
-- Consider a `ChatRenderer` type with `build_lines()` method
-
 ---
 
 ## Task: Fix chat_lines order in draw layout
-
 **Sprint:** 1
 **Depends on:** none
 
 ### Description
-Ensure chat line collection happens before any logic that uses its length, so viewport height calculations are correct and the draw method compiles.
+Ensure chat line collection happens before any logic that uses its length, so viewport height calculations are correct.
 
 ### Acceptance Criteria
 - [x] `chat_lines` is built before any size/height calculations
 - [x] draw() compiles without use-before-define errors
 
-### Technical Notes
-- Move chat line assembly above viewport height calculation
-
 ---
 
 ## Task: Restore write-mode tool approvals
-
 **Sprint:** 1
 **Depends on:** none
 
 ### Description
-Write mode should only auto-allow safe tools and explicitly approved restricted tools. It should not auto-allow all non-bash tools.
+Write mode should only auto-allow safe tools and explicitly approved restricted tools.
 
 ### Acceptance Criteria
 - [x] Restricted tools still require approval unless whitelisted
 - [x] No blanket allow for non-bash tools
 
-### Technical Notes
-- Remove `tool.name() != "bash"` bypass
-
 ---
 
 ## Task: Make truncation UTF-8 safe
-
 **Sprint:** 1
 **Depends on:** none
 
@@ -161,32 +126,24 @@ Avoid panics when truncating non-ASCII text in CLI and TUI displays.
 - [x] No byte-slicing in truncation helpers
 - [x] Truncation handles Unicode safely
 
-### Technical Notes
-- Replace `s[..]` truncation with char-safe logic
-
 ---
 
 ## Task: Fix input editor phantom line + history navigation
-
 **Sprint:** 1
 **Depends on:** none
 
 ### Description
-Ensure the input editor does not show a phantom blank line when typing. Up/Down history should work on first press and restore draft text correctly.
+Ensure the input editor does not show a phantom blank line when typing. Up/Down history should work on first press at top/bottom line and restore draft text correctly.
 
 ### Acceptance Criteria
 - [ ] No extra blank line appears when typing
 - [ ] Up retrieves last sent message on first press at top line
 - [ ] Down restores newer history and draft without clearing input
 
-### Technical Notes
-- Validate TextArea line counting and cursor placement
-- Ensure history navigation respects cursor line positions
+## Sprint 2: Run State UX & Error Handling
+**Goal:** Provide clear feedback during task execution and handle failures gracefully.
 
-## Sprint 2: Run State UX + Error Handling
-
-## Task: Progress line state mapping (running/cancelling/cancelled/error)
-
+## Task: Progress line state mapping
 **Sprint:** 2
 **Depends on:** Sprint 1
 
@@ -196,18 +153,12 @@ Define and render clear run states on the ionizing/progress line: running, cance
 ### Acceptance Criteria
 - [ ] Running shows normal ionizing text
 - [ ] Cancelling shows yellow "Canceling..." with warning indicator
-- [ ] Cancelled shows yellow "Cancelled" state
 - [ ] Error shows red "Error" with red indicator
-- [ ] Completed shows normal completion state (no error coloring)
-
-### Technical Notes
-- Ensure cancel vs error are distinct
-- Avoid duplication in status line
+- [ ] Completed shows normal completion state
 
 ---
 
 ## Task: Provider retry/backoff + chat log entries
-
 **Sprint:** 2
 **Depends on:** Sprint 1
 
@@ -219,14 +170,9 @@ Add retry/backoff for transient provider errors (OpenRouter timeouts) and log "R
 - [ ] Chat shows a retry notice before retry attempt
 - [ ] Final error appears in chat in red if retries exhausted
 
-### Technical Notes
-- Keep retry count small (2-3) with exponential backoff
-- Ensure abort/cancel stops retries
-
 ---
 
 ## Task: Status line accuracy for context usage
-
 **Sprint:** 2
 **Depends on:** Sprint 1
 
@@ -238,14 +184,20 @@ Populate max context length from model registry on model selection. If unknown, 
 - [ ] Percent only shown when max known
 - [ ] Unknown max shows used/0k with no percent
 
-### Technical Notes
-- Source model metadata at selection time
-- Cache max context alongside active model
-
 ---
 
-## Task: Extract token usage emit helper
+## Task: Graceful TUI init error handling
+**Sprint:** 2
+**Depends on:** Sprint 1
 
+### Description
+Replace `unwrap/expect` in TUI init paths with user-visible errors and clean exits. Config/session/client/terminal init failures should surface clearly.
+
+### Acceptance Criteria
+- [ ] Config/session/client/terminal init failures surface clearly
+- [ ] App exits without panic
+
+## Task: Extract token usage emit helper
 **Sprint:** 2
 **Depends on:** none
 
@@ -256,15 +208,11 @@ Consolidate repeated token usage emission in agent loop into a single helper.
 - [ ] No duplicated token usage emission code in agent loop
 - [ ] Behavior unchanged
 
-### Technical Notes
-- Helper should accept `Session` and `Sender` to avoid extra state
-
 ---
 
 ## Task: Handle NaN pricing sort in registry
-
 **Sprint:** 2
-**Depends on:** Sprint 1
+**Depends on:** none
 
 ### Description
 Avoid panics when sorting by price if a model has NaN pricing data.
@@ -273,67 +221,38 @@ Avoid panics when sorting by price if a model has NaN pricing data.
 - [x] Sorting never panics on NaN pricing
 - [x] Sorting remains stable for invalid price data
 
-### Technical Notes
-- Use `total_cmp` or sanitize inputs before compare
-
----
-
-## Task: Graceful TUI init error handling
-
-**Sprint:** 2
-**Depends on:** Sprint 1
-
-### Description
-Replace `unwrap/expect` in TUI init paths with user-visible errors and clean exits.
-
-### Acceptance Criteria
-- [ ] Config/session/client/terminal init failures surface clearly
-- [ ] App exits without panic
-
-### Technical Notes
-- Return errors up the call stack and render a fatal message
-
-## Sprint 3: Selector + Resume UX
+## Sprint 3: Selector & Resume UX
+**Goal:** Enhance session management and navigation within the TUI.
 
 ## Task: /resume selector UI for past sessions
-
 **Sprint:** 3
 **Depends on:** none
 
 ### Description
-Add a /resume command that opens the shared selector UI for prior sessions.
+Add a /resume command that opens the shared selector UI for prior sessions. Reuse selector shell list + filter infrastructure.
 
 ### Acceptance Criteria
 - [ ] /resume opens selector with recent sessions
 - [ ] Selecting a session loads it
 - [ ] Escape closes selector without changes
 
-### Technical Notes
-- Reuse selector shell list + filter infrastructure
-- Source sessions from session store
-
 ---
 
 ## Task: --resume/--continue CLI flags
-
 **Sprint:** 3
 **Depends on:** none
 
 ### Description
-Add CLI flags to resume the latest or a specific session by ID.
+Add CLI flags to resume the latest or a specific session by ID. Ensure flags integrate with existing config loading.
 
 ### Acceptance Criteria
 - [ ] --resume reopens latest session
 - [ ] --continue <id> reopens specified session
 - [ ] Invalid IDs print a clear error and exit
 
-### Technical Notes
-- Ensure flags integrate with existing config loading
-
 ---
 
 ## Task: Fuzzy search ordering (substring first)
-
 **Sprint:** 3
 **Depends on:** none
 
@@ -344,23 +263,73 @@ Prioritize exact substring matches before fuzzy matches in selectors and command
 - [ ] Substring matches appear before fuzzy matches
 - [ ] Fuzzy matches appear only when no substring matches exist
 
-### Technical Notes
-- Keep scoring stable across providers/models and commands
+## Sprint 4: Visual Polish & Advanced Features
+**Goal:** Refine the aesthetic and core architecture.
 
-## Sprint 4: Visual Polish
-
-## Task: Startup header line (ION + version)
-
+## Task: Diff highlighting for file edits
 **Sprint:** 4
 **Depends on:** Sprint 1
 
 ### Description
-Render a minimal startup header without pushing the viewport down or clearing scrollback. Mimic Claude Code: header stays above the viewport and message inserts push the viewport down naturally.
+Implement syntax-highlighted diffs for the `edit` tool results. Show additions in green, deletions in red, with word-level highlighting for changed parts of lines.
+
+### Acceptance Criteria
+- [ ] ToolResult enhanced with DiffInfo
+- [ ] Edit tool populates DiffInfo on success
+- [ ] TUI renders styled diff lines in chat
+
+---
+
+## Task: Startup header line
+**Sprint:** 4
+**Depends on:** Sprint 1
+
+### Description
+Render a minimal startup header (ION + version) without pushing the viewport down or clearing scrollback. Mimic Claude Code: header stays above the viewport.
 
 ### Acceptance Criteria
 - [ ] Header visible at startup
 - [ ] No excessive blank lines before viewport
 - [ ] Header does not clear scrollback
 
-### Technical Notes
-- Use inline insert to avoid clearing
+---
+
+## Task: Decompose Agent loop into discrete phases
+**Sprint:** 4
+**Depends on:** none
+
+### Description
+Refactor the core multi-turn loop into Response, Tool, and State phases to improve reliability and enable better unit testing of tool execution.
+
+### Acceptance Criteria
+- [ ] Phases are clearly separated in code
+- [ ] Error handling is robust at phase boundaries
+- [ ] Unit tests verify tool execution without live LLM
+
+---
+
+## Task: Grep/Glob tool upgrade (ignore crate)
+**Sprint:** 4
+**Depends on:** none
+
+### Description
+Replace the current manual recursion and `glob` crate with the `ignore` crate for the grep and glob tools. This adds support for `.gitignore` and improves performance.
+
+### Acceptance Criteria
+- [ ] Grep tool respects `.gitignore`
+- [ ] Glob tool uses `globset` via the `ignore` crate
+- [ ] `walkdir` and `glob` dependencies removed
+
+---
+
+## Task: Token counter swap (bpe-openai)
+**Sprint:** 4
+**Depends on:** none
+
+### Description
+Swap `tiktoken-rs` for the faster `bpe-openai` crate.
+
+### Acceptance Criteria
+- [ ] Token counting uses `bpe-openai`
+- [ ] Performance improved for large messages
+- [ ] `tiktoken-rs` dependency removed
