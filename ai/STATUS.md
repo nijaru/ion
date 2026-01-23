@@ -17,6 +17,7 @@
 Session accomplishments:
 
 - **Session resume** - /resume command, --resume/--continue CLI flags, session picker UI
+- **Viewport fix** - Fixed 10-line UI viewport (308b50d) to make chat visible
 - Verified pre-implemented: startup header, bpe-openai, ignore crate, diff highlighting
 
 Remaining Sprint 4 (deferred):
