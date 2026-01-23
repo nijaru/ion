@@ -12,17 +12,18 @@
 
 ## Active Work
 
-**Sprint 0 Complete** - TUI Architecture overhaul done
+**Sprint 1 Complete** - Inline Viewport Stabilization done
 
-Completed this session:
+Verified this session:
 
-1. **Custom Composer** - Ported from ion-copy (ropey + unicode-segmentation)
-2. **Platform keybindings** - macOS Option, Win/Linux Ctrl for word ops
-3. **Dynamic input height** - Grows to term_height - 6
-4. **Full-height viewport** - Never recreate except on terminal resize
-5. **Removed rat-text** - Fully replaced with custom Composer + FilterInput
+1. **No alternate-screen behavior** - Inline viewport preserves native scrollback
+2. **Viewport spacing** - Chat in scrollback, UI at bottom, no gaps
+3. **Message margins** - 1-column left margin on chat messages
+4. **Render helpers** - draw() split into layout_areas, render_progress, etc.
+5. **Chat renderer module** - ChatRenderer::build_lines in separate module
+6. **History navigation** - Up/Down work correctly at line boundaries
 
-Next: Sprint 1 (Inline Viewport Stabilization) or verify scrollback (tk-4r7r)
+Next: Sprint 2 (Run State UX & Error Handling) or investigate tk-4r7r (scrollback bug)
 
 ## Architecture
 

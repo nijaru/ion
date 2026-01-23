@@ -182,9 +182,9 @@ Ensure the TUI never clears or emulates alternate-screen behavior. Inline viewpo
 
 ### Acceptance Criteria
 
-- [ ] No alternate screen or mouse capture in terminal init/shutdown
-- [ ] Click/drag selection and mouse wheel scrolling work natively
-- [ ] Sending a message does not clear the full terminal buffer
+- [x] No alternate screen or mouse capture in terminal init/shutdown
+- [x] Click/drag selection and mouse wheel scrolling work natively
+- [x] Sending a message does not clear the full terminal buffer
 
 ---
 
@@ -199,9 +199,9 @@ Tighten viewport layout so chat content sits immediately above the viewport with
 
 ### Acceptance Criteria
 
-- [ ] No large empty block between last message and viewport
-- [ ] Messages render with left/right margin (1 column)
-- [ ] Input top/bottom separators extend full width
+- [x] No large empty block between last message and viewport
+- [x] Messages render with left/right margin (1 column)
+- [x] Input top/bottom separators extend full width
 
 ---
 
@@ -249,9 +249,9 @@ Split `App::draw` into focused layout/data/render helpers to reduce complexity a
 
 ### Acceptance Criteria
 
-- [ ] Layout computation is separate from rendering
-- [ ] Chat, progress, input, and status rendering are in dedicated helpers
-- [ ] Behavior matches current UI
+- [x] Layout computation is separate from rendering
+- [x] Chat, progress, input, and status rendering are in dedicated helpers
+- [x] Behavior matches current UI
 
 ---
 
@@ -266,9 +266,9 @@ Move chat message formatting (user/agent/tool/system) into a dedicated renderer 
 
 ### Acceptance Criteria
 
-- [ ] Chat rendering is isolated from `tui::mod` draw logic
-- [ ] Output matches current formatting
-- [ ] No behavioral regressions in tool/diff rendering
+- [x] Chat rendering is isolated from `tui::mod` draw logic
+- [x] Output matches current formatting
+- [x] No behavioral regressions in tool/diff rendering
 
 ---
 
@@ -331,9 +331,9 @@ Ensure the input editor does not show a phantom blank line when typing. Up/Down 
 
 ### Acceptance Criteria
 
-- [ ] No extra blank line appears when typing
-- [ ] Up retrieves last sent message on first press at top line
-- [ ] Down restores newer history and draft without clearing input
+- [x] No extra blank line appears when typing (trailing newlines show new line - expected behavior)
+- [x] Up retrieves last sent message on first press at top line
+- [x] Down restores newer history and draft without clearing input
 
 ## Sprint 2: Run State UX & Error Handling
 
