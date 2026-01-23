@@ -26,12 +26,8 @@ impl ChatRenderer {
                     let prefix = "> ";
                     let prefix_len = prefix.chars().count();
                     let available_width = wrap_width.saturating_sub(prefix_len).max(1);
-                    let prefix_style = Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::DIM);
-                    let text_style = Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::DIM);
+                    let prefix_style = Style::default().fg(Color::Cyan).add_modifier(Modifier::DIM);
+                    let text_style = Style::default().fg(Color::Cyan).add_modifier(Modifier::DIM);
 
                     let mut first_line = true;
                     for line in combined.lines() {
@@ -48,10 +44,7 @@ impl ChatRenderer {
                                     Span::styled(chunk, text_style),
                                 ]));
                             } else {
-                                chat_lines.push(Line::from(vec![Span::styled(
-                                    chunk,
-                                    text_style,
-                                )]));
+                                chat_lines.push(Line::from(vec![Span::styled(chunk, text_style)]));
                             }
                             first_line = false;
                         }
@@ -62,7 +55,7 @@ impl ChatRenderer {
                         match part {
                             MessagePart::Text(text) => {
                                 let highlighted_lines =
-                                    highlight::highlight_markdown_with_code(text);
+                                    highlight::highlight_markdown_with_code(text.trim_end());
                                 for line in highlighted_lines {
                                     let mut padded = vec![Span::raw(" ")];
                                     padded.extend(line.spans);
@@ -71,7 +64,7 @@ impl ChatRenderer {
                             }
                             MessagePart::Thinking(thinking) => {
                                 let highlighted_lines =
-                                    highlight::highlight_markdown_with_code(thinking);
+                                    highlight::highlight_markdown_with_code(thinking.trim_end());
                                 for line in highlighted_lines {
                                     let mut padded = vec![Span::raw(" ")];
                                     padded.extend(line.spans.iter().map(|span| {
@@ -181,28 +174,27 @@ impl ChatRenderer {
                     }
                 }
                 Sender::System => {
-                    let content = entry.content_as_markdown();
+                    let content = entry.content_as_markdown().trim();
                     if content.lines().count() <= 1 {
-                        let trimmed = content.trim();
-                        if trimmed.starts_with("Error:") {
+                        if content.starts_with("Error:") {
                             chat_lines.push(Line::from(vec![Span::styled(
-                                trimmed.to_string(),
+                                content.to_string(),
                                 Style::default().fg(Color::Red),
                             )]));
                         } else {
-                            let text = format!("[{}]", trimmed);
-                            chat_lines.push(Line::from(vec![Span::styled(
-                                text,
-                                Style::default().dim(),
-                            )]));
+                            let text = format!("[{}]", content);
+                            chat_lines
+                                .push(Line::from(vec![Span::styled(text, Style::default().dim())]));
                         }
                     } else {
                         let md = tui_markdown::from_str(content);
                         for line in &md.lines {
                             let mut padded = vec![Span::raw(" ")];
-                            padded.extend(line.spans.iter().map(|span| {
-                                Span::styled(span.content.to_string(), span.style)
-                            }));
+                            padded.extend(
+                                line.spans
+                                    .iter()
+                                    .map(|span| Span::styled(span.content.to_string(), span.style)),
+                            );
                             chat_lines.push(Line::from(padded));
                         }
                     }
