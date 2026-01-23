@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "042d",
+  "title": "[TUI] Dynamic input height (grows to term_height - 6)",
+  "description": null,
+  "status": "open",
+  "priority": 1,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-23T17:30:06.223Z",
+  "updated_at": "2026-01-23T17:30:06.223Z",
+  "completed_at": null,
+  "external": {}
+}
