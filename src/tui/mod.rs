@@ -1431,12 +1431,17 @@ impl App {
     }
 
     /// Calculate the height needed for the input box based on content.
-    /// Returns height including borders (min 3, max 10).
-    fn calculate_input_height(&self, terminal_width: u16) -> u16 {
+    /// Returns height including borders.
+    /// Min: 3 lines (1 content + 2 borders)
+    /// Max: terminal_height - 6 (reserved for empty line, progress, status)
+    fn calculate_input_height(&self, terminal_width: u16, terminal_height: u16) -> u16 {
         const MIN_HEIGHT: u16 = 3;
-        const MAX_HEIGHT: u16 = 10;
+        const MIN_RESERVED: u16 = 6; // Empty line (1) + progress (2) + status (1) + breathing room (2)
         const BORDER_OVERHEAD: u16 = 2; // Top and bottom borders
         const GUTTER_WIDTH: u16 = 3; // " > " prompt gutter
+
+        // Dynamic max based on terminal height
+        let max_height = terminal_height.saturating_sub(MIN_RESERVED).max(MIN_HEIGHT);
 
         if self.input_is_empty() {
             return MIN_HEIGHT;
@@ -1454,7 +1459,7 @@ impl App {
         let line_count = self.input_state.visual_line_count(&self.input_buffer, text_width) as u16;
 
         // Add border overhead and clamp to bounds
-        (line_count + BORDER_OVERHEAD).clamp(MIN_HEIGHT, MAX_HEIGHT)
+        (line_count + BORDER_OVERHEAD).clamp(MIN_HEIGHT, max_height)
     }
 
     fn quit(&mut self) {
@@ -1537,8 +1542,8 @@ impl App {
 
     /// Calculate the viewport height needed for the UI (progress + input + status).
     /// Header is inserted into scrollback, not rendered in viewport.
-    pub fn viewport_height(&self, terminal_width: u16) -> u16 {
-        let input_height = self.calculate_input_height(terminal_width);
+    pub fn viewport_height(&self, terminal_width: u16, terminal_height: u16) -> u16 {
+        let input_height = self.calculate_input_height(terminal_width, terminal_height);
         let progress_height = if self.is_running || self.last_task_summary.is_some() {
             2
         } else {
@@ -1764,7 +1769,7 @@ impl App {
     }
 
     pub fn draw(&mut self, frame: &mut Frame) {
-        let input_height = self.calculate_input_height(frame.area().width);
+        let input_height = self.calculate_input_height(frame.area().width, frame.area().height);
 
         let progress_height = if self.is_running || self.last_task_summary.is_some() {
             2

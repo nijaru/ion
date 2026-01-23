@@ -62,13 +62,13 @@ async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::err
     }
 
     let backend = CrosstermBackend::new(stdout);
-    let (mut terminal_width, _) = crossterm::terminal::size()?;
+    let (mut terminal_width, mut terminal_height) = crossterm::terminal::size()?;
 
     // Create app with permission settings
     let mut app = App::with_permissions(permissions).await?;
 
     // Initial viewport sized to UI needs
-    let mut viewport_height = app.viewport_height(terminal_width);
+    let mut viewport_height = app.viewport_height(terminal_width, terminal_height);
     let mut terminal = Terminal::with_options(
         backend,
         TerminalOptions {
@@ -83,8 +83,9 @@ async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::err
                 event::Event::Key(key) => {
                     app.handle_event(event::Event::Key(key));
                 }
-                event::Event::Resize(width, _) => {
+                event::Event::Resize(width, height) => {
                     terminal_width = width;
+                    terminal_height = height;
                     // Viewport height recalculated below
                 }
                 _ => {}
@@ -94,7 +95,7 @@ async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::err
         app.update();
 
         // Recalculate viewport height if it changed (input grew, progress appeared, etc.)
-        let new_height = app.viewport_height(terminal_width);
+        let new_height = app.viewport_height(terminal_width, terminal_height);
         if new_height != viewport_height {
             // When viewport shrinks, the top lines become scrollback. Draw blank content
             // to those lines first so they don't show old input box borders.
