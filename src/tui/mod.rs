@@ -807,10 +807,17 @@ impl App {
                 }
             }
 
-            // Ctrl+D: Quit if input empty
+            // Ctrl+D: Quit if input empty (double-tap required, like Ctrl+C)
             KeyCode::Char('d') if ctrl => {
                 if self.input_state.is_empty() {
-                    self.quit();
+                    if let Some(when) = self.cancel_pending
+                        && when.elapsed() <= CANCEL_WINDOW
+                    {
+                        self.quit();
+                        self.cancel_pending = None;
+                    } else {
+                        self.cancel_pending = Some(Instant::now());
+                    }
                 }
             }
 
