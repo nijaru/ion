@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "1uns",
+  "title": "[TUI] Wire up platform-specific keybindings",
+  "description": null,
+  "status": "open",
+  "priority": 1,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-23T17:30:04.848Z",
+  "updated_at": "2026-01-23T17:30:04.848Z",
+  "completed_at": null,
+  "external": {}
+}
