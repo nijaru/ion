@@ -121,8 +121,9 @@ async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::err
         if !chat_lines.is_empty() {
             let wrap_width = width.saturating_sub(2);
             if wrap_width > 0 {
-                let paragraph = Paragraph::new(chat_lines).wrap(Wrap { trim: true });
-                let height = paragraph.line_count(wrap_width);
+                let paragraph = Paragraph::new(chat_lines.clone()).wrap(Wrap { trim: true });
+                // Calculate height by counting wrapped lines
+                let height = count_wrapped_lines(&chat_lines, wrap_width as usize);
                 if height > 0 {
                     let height = u16::try_from(height).unwrap_or(u16::MAX);
                     terminal.insert_before(height, |buf| {
@@ -151,7 +152,7 @@ async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::err
             terminal.show_cursor()?;
 
             // Open editor and get result
-            if let Some(new_input) = open_editor(&app.input_state.text())? {
+            if let Some(new_input) = open_editor(&app.input_buffer.get_content())? {
                 app.set_input_text(&new_input);
             }
 
@@ -181,6 +182,24 @@ async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::err
     terminal.show_cursor()?;
 
     Ok(())
+}
+
+/// Count the number of lines after wrapping text to a given width.
+fn count_wrapped_lines(lines: &[ratatui::prelude::Line], width: usize) -> usize {
+    if width == 0 {
+        return lines.len();
+    }
+
+    let mut count = 0;
+    for line in lines {
+        let line_width: usize = line.spans.iter().map(|s| s.content.chars().count()).sum();
+        if line_width == 0 {
+            count += 1;
+        } else {
+            count += line_width.div_ceil(width);
+        }
+    }
+    count
 }
 
 /// Open text in external editor, returns edited content or None if unchanged/cancelled

@@ -1,4 +1,6 @@
 mod chat_renderer;
+pub mod composer;
+mod filter_input;
 mod fuzzy;
 mod highlight;
 pub mod message_list;
@@ -20,10 +22,8 @@ use crate::tui::provider_picker::ProviderPicker;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
-use rat_text::event::TextOutcome;
-use rat_text::text_area::{self, TextArea, TextAreaState, TextWrap};
-use rat_text::text_input::{self, TextInput};
-use rat_text::{HasScreenCursor, TextPosition};
+use crate::tui::composer::{ComposerBuffer, ComposerState, ComposerWidget};
+use crate::tui::filter_input::FilterInput;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragraph};
 use serde::Deserialize;
@@ -58,6 +58,41 @@ fn format_status_error(msg: &str) -> String {
         return "Network timeout".to_string();
     }
     out
+}
+
+/// Handle key event for filter input. Returns true if text changed.
+fn handle_filter_input_event(state: &mut filter_input::FilterInputState, key: KeyEvent) -> bool {
+    match key.code {
+        KeyCode::Char(c) => {
+            state.insert_char(c);
+            true
+        }
+        KeyCode::Backspace => {
+            state.delete_char_before();
+            true
+        }
+        KeyCode::Delete => {
+            state.delete_char_after();
+            true
+        }
+        KeyCode::Left => {
+            state.move_left();
+            false
+        }
+        KeyCode::Right => {
+            state.move_right();
+            false
+        }
+        KeyCode::Home => {
+            state.move_to_start();
+            false
+        }
+        KeyCode::End => {
+            state.move_to_end();
+            false
+        }
+        _ => false,
+    }
 }
 
 /// Thinking budget level for extended reasoning.
@@ -137,7 +172,8 @@ pub struct App {
     pub mode: Mode,
     pub selector_page: SelectorPage,
     pub should_quit: bool,
-    pub input_state: TextAreaState,
+    pub input_buffer: ComposerBuffer,
+    pub input_state: ComposerState,
     /// Input history for arrow-up recall
     pub input_history: Vec<String>,
     /// Current position in history (input_history.len() = current input)
@@ -244,63 +280,43 @@ use tracing::{debug, error};
 
 impl App {
     fn input_text(&self) -> String {
-        self.input_state.text()
+        self.input_buffer.get_content()
+    }
+
+    fn input_is_empty(&self) -> bool {
+        self.input_buffer.is_empty()
     }
 
     fn clear_input(&mut self) {
-        self.input_state.set_text("");
-        self.move_input_cursor_to_end();
+        self.input_state.clear(&mut self.input_buffer);
     }
 
     pub fn set_input_text(&mut self, text: &str) {
-        self.input_state.set_text(text);
-        self.move_input_cursor_to_end();
+        self.input_buffer.set_content(text);
+        self.input_state.move_to_end(&self.input_buffer);
     }
 
-    fn handle_input_event_with_history(&mut self, key: KeyEvent) -> TextOutcome {
-        let outcome = self.handle_input_event(key);
-        if matches!(outcome, TextOutcome::TextChanged) {
+    /// Handle input key event and update history tracking.
+    /// Returns true if the event was handled and text changed.
+    fn handle_input_event_with_history(&mut self, key: KeyEvent) -> bool {
+        let changed = self.handle_input_event(key);
+        if changed {
             self.history_index = self.input_history.len();
             self.history_draft = None;
-            let cursor = self.input_state.value.cursor();
-            if cursor.y > 0 && self.input_state.value.line_width(cursor.y).unwrap_or(0) == 0 {
-                let prev = cursor.y.saturating_sub(1);
-                let prev_col = self.input_state.value.line_width(prev).unwrap_or(0);
-                let _ = self
-                    .input_state
-                    .value
-                    .set_cursor(TextPosition::new(prev_col, prev), false);
-                self.input_state.scroll_cursor_to_visible();
-            }
         }
-        outcome
+        changed
     }
 
-    fn move_input_cursor_to_end(&mut self) {
-        let last_line = self.input_last_line();
-        let last_col = self.input_state.value.line_width(last_line).unwrap_or(0);
-        let pos = TextPosition::new(last_col, last_line);
-        let _ = self.input_state.value.set_cursor(pos, false);
-        self.input_state.scroll_cursor_to_visible();
+    fn input_cursor_line(&self) -> usize {
+        self.input_buffer.char_to_line(self.input_state.cursor_char_idx())
     }
 
-    fn input_cursor_line(&self) -> u32 {
-        self.input_state.value.cursor().y
-    }
-
-    fn input_last_line(&self) -> u32 {
-        let lines = self.input_state.value.len_lines();
+    fn input_last_line(&self) -> usize {
+        let lines = self.input_buffer.len_lines();
         if lines == 0 {
             return 0;
         }
-        let last = lines.saturating_sub(1);
-        if self.input_state.text().ends_with('\n') {
-            return last;
-        }
-        if self.input_state.value.line_width(last).unwrap_or(0) == 0 {
-            return last.saturating_sub(1);
-        }
-        last
+        lines.saturating_sub(1)
     }
 
     fn startup_header_lines(&self) -> Vec<Line<'static>> {
@@ -312,46 +328,92 @@ impl App {
         ]
     }
 
-    fn handle_input_event(&mut self, key: KeyEvent) -> TextOutcome {
-        let key = self.normalize_input_key(key);
-        let event = Event::Key(key);
-        text_area::handle_events(&mut self.input_state, true, &event)
-    }
+    /// Handle a key event for the input composer.
+    /// Returns true if the event caused a text change.
+    fn handle_input_event(&mut self, key: KeyEvent) -> bool {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
 
-    fn normalize_input_key(&self, key: KeyEvent) -> KeyEvent {
-        if !key.modifiers.contains(KeyModifiers::SHIFT) {
-            return key;
-        }
-
-        let strip_shift = matches!(
-            key.code,
-            KeyCode::Left
-                | KeyCode::Right
-                | KeyCode::Up
-                | KeyCode::Down
-                | KeyCode::Home
-                | KeyCode::End
-                | KeyCode::PageUp
-                | KeyCode::PageDown
-        );
-
-        if strip_shift {
-            KeyEvent {
-                modifiers: key.modifiers - KeyModifiers::SHIFT,
-                ..key
+        match key.code {
+            // Character input
+            KeyCode::Char(c) if !ctrl && !alt => {
+                self.input_state.insert_char(&mut self.input_buffer, c);
+                true
             }
-        } else {
-            key
+
+            // Navigation
+            KeyCode::Left if ctrl || (cfg!(target_os = "macos") && alt) => {
+                self.input_state.move_word_left(&self.input_buffer);
+                false
+            }
+            KeyCode::Right if ctrl || (cfg!(target_os = "macos") && alt) => {
+                self.input_state.move_word_right(&self.input_buffer);
+                false
+            }
+            KeyCode::Left => {
+                self.input_state.move_left(&self.input_buffer);
+                false
+            }
+            KeyCode::Right => {
+                self.input_state.move_right(&self.input_buffer);
+                false
+            }
+            KeyCode::Home => {
+                self.input_state.move_to_line_start(&self.input_buffer);
+                false
+            }
+            KeyCode::End => {
+                self.input_state.move_to_line_end(&self.input_buffer);
+                false
+            }
+
+            // Emacs-style navigation
+            KeyCode::Char('a') if ctrl => {
+                self.input_state.move_to_line_start(&self.input_buffer);
+                false
+            }
+            KeyCode::Char('e') if ctrl => {
+                self.input_state.move_to_line_end(&self.input_buffer);
+                false
+            }
+
+            // Deletion
+            KeyCode::Backspace if ctrl || (cfg!(target_os = "macos") && alt) => {
+                self.input_state.delete_word(&mut self.input_buffer);
+                true
+            }
+            KeyCode::Backspace => {
+                self.input_state.delete_char_before(&mut self.input_buffer);
+                true
+            }
+            KeyCode::Delete => {
+                self.input_state.delete_char_after(&mut self.input_buffer);
+                true
+            }
+
+            // Line editing
+            KeyCode::Char('w') if ctrl => {
+                self.input_state.delete_word(&mut self.input_buffer);
+                true
+            }
+            KeyCode::Char('u') if ctrl => {
+                self.input_state.delete_line_left(&mut self.input_buffer);
+                true
+            }
+            KeyCode::Char('k') if ctrl => {
+                self.input_state.delete_line_right(&mut self.input_buffer);
+                true
+            }
+
+            _ => false,
         }
     }
 
     fn handle_input_up(&mut self) -> bool {
-        let input_empty = self.input_state.is_empty();
+        let input_empty = self.input_is_empty();
         if !input_empty && self.input_cursor_line() != 0 {
-            return false;
-        }
-        if input_empty && self.input_cursor_line() != 0 {
-            self.move_input_cursor_to_end();
+            // Try to move cursor up within the input
+            return self.input_state.move_up(&self.input_buffer);
         }
 
         if self.is_running && input_empty {
@@ -388,8 +450,9 @@ impl App {
     }
 
     fn handle_input_down(&mut self) -> bool {
+        // Try to move cursor down within the input first
         if self.input_cursor_line() < self.input_last_line() {
-            return false;
+            return self.input_state.move_down(&self.input_buffer);
         }
 
         if self.history_index < self.input_history.len() {
@@ -407,7 +470,7 @@ impl App {
             return true;
         }
 
-        !self.input_state.is_empty()
+        !self.input_is_empty()
     }
     pub async fn new() -> Result<Self> {
         Self::with_permissions(PermissionSettings::default()).await
@@ -530,15 +593,14 @@ impl App {
             (Mode::Input, SelectorPage::Provider)
         };
 
-        let mut input_state = TextAreaState::default();
-        input_state.set_text_wrap(TextWrap::Word(1));
-        input_state.set_auto_indent(false);
-        input_state.set_auto_quote(false);
+        let input_buffer = ComposerBuffer::new();
+        let input_state = ComposerState::new();
 
         let mut this = Self {
             mode: initial_mode,
             selector_page,
             should_quit: false,
+            input_buffer,
             input_state,
             input_history: Vec::new(),
             history_index: 0,
@@ -780,7 +842,7 @@ impl App {
             }
             // Ctrl+C: Clear input, cancel running task, or quit
             KeyCode::Char('c') if ctrl => {
-                if !self.input_state.is_empty() {
+                if !self.input_is_empty() {
                     self.clear_input();
                     self.cancel_pending = None;
                 } else if let Some(when) = self.cancel_pending
@@ -801,7 +863,7 @@ impl App {
 
             // Ctrl+D: Quit if input empty (double-tap required, like Ctrl+C)
             KeyCode::Char('d') if ctrl => {
-                if self.input_state.is_empty() {
+                if self.input_is_empty() {
                     if let Some(when) = self.cancel_pending
                         && when.elapsed() <= CANCEL_WINDOW
                     {
@@ -874,12 +936,12 @@ impl App {
 
             // Shift+Enter: Insert newline (requires Kitty keyboard protocol)
             KeyCode::Enter if shift => {
-                self.input_state.insert_newline();
+                self.input_state.insert_newline(&mut self.input_buffer);
             }
 
             // Enter: Send message or queue for mid-task steering
             KeyCode::Enter => {
-                if !self.input_state.is_empty() {
+                if !self.input_is_empty() {
                     let input = self.input_text();
                     if self.is_running {
                         // Queue message for injection at next turn
@@ -986,7 +1048,7 @@ impl App {
             }
 
             // ? shows help when input is empty
-            KeyCode::Char('?') if self.input_state.is_empty() => {
+            KeyCode::Char('?') if self.input_is_empty() => {
                 self.mode = Mode::HelpOverlay;
             }
 
@@ -1219,17 +1281,17 @@ impl App {
         }
 
         if !handled {
-            let event = Event::Key(key);
-            let outcome = match self.selector_page {
+            // Handle filter input key events
+            let text_changed = match self.selector_page {
                 SelectorPage::Provider => {
-                    text_input::handle_events(&mut self.provider_picker.filter_input, true, &event)
+                    handle_filter_input_event(&mut self.provider_picker.filter_input, key)
                 }
                 SelectorPage::Model => {
-                    text_input::handle_events(&mut self.model_picker.filter_input, true, &event)
+                    handle_filter_input_event(&mut self.model_picker.filter_input, key)
                 }
             };
 
-            if matches!(outcome, TextOutcome::TextChanged) {
+            if text_changed {
                 match self.selector_page {
                     SelectorPage::Provider => self.provider_picker.apply_filter(),
                     SelectorPage::Model => self.model_picker.apply_filter(),
@@ -1362,33 +1424,20 @@ impl App {
         const BORDER_OVERHEAD: u16 = 2; // Top and bottom borders
         const GUTTER_WIDTH: u16 = 3; // " > " prompt gutter
 
-        if self.input_state.is_empty() {
+        if self.input_is_empty() {
             return MIN_HEIGHT;
         }
 
-        // Available width for text (subtract prompt gutter)
-        let text_width = terminal_width.saturating_sub(GUTTER_WIDTH) as usize;
+        // Available width for text (subtract borders and gutter)
+        let text_width = terminal_width
+            .saturating_sub(BORDER_OVERHEAD)
+            .saturating_sub(GUTTER_WIDTH) as usize;
         if text_width == 0 {
             return MIN_HEIGHT;
         }
 
-        // Count lines: explicit newlines + wrapped lines
-        let input = self.input_state.text();
-        let mut lines: Vec<&str> = input.split('\n').collect();
-        if lines.len() > 1 && lines.last().is_some_and(|line| line.is_empty()) {
-            lines.pop();
-        }
-        let mut line_count: u16 = 0;
-        for line in lines {
-            // Each line takes at least 1 row, plus wrapping
-            let line_len = line.chars().count();
-            let wrapped_lines = if line_len == 0 {
-                1
-            } else {
-                line_len.div_ceil(text_width) as u16
-            };
-            line_count += wrapped_lines;
-        }
+        // Use ComposerState's visual line count
+        let line_count = self.input_state.visual_line_count(&self.input_buffer, text_width) as u16;
 
         // Add border overhead and clamp to bounds
         (line_count + BORDER_OVERHEAD).clamp(MIN_HEIGHT, MAX_HEIGHT)
@@ -1620,9 +1669,8 @@ impl App {
             self.render_input_text(frame, text_area);
         }
 
-        if let Some(cursor) = self.input_state.screen_cursor() {
-            frame.set_cursor_position(cursor);
-        }
+        // Set cursor position from ComposerState
+        frame.set_cursor_position(self.input_state.cursor_pos);
     }
 
     fn render_input_text(&mut self, frame: &mut Frame, text_area: Rect) {
@@ -1630,38 +1678,10 @@ impl App {
             return;
         }
 
-        let gutter_width = text_area.width.min(3);
-        if gutter_width > 0 {
-            let prompt_area = Rect {
-                x: text_area.x,
-                y: text_area.y,
-                width: gutter_width,
-                height: text_area.height,
-            };
-            let prompt = match gutter_width {
-                1 => ">".to_string(),
-                2 => "> ".to_string(),
-                _ => " > ".to_string(),
-            };
-            let blank = " ".repeat(gutter_width as usize);
-            let prompt_lines: Vec<Line> = (0..text_area.height)
-                .map(|row| {
-                    let symbol = if row == 0 { &prompt } else { &blank };
-                    Line::from(Span::styled(symbol.clone(), Style::default().dim()))
-                })
-                .collect();
-            frame.render_widget(Paragraph::new(prompt_lines), prompt_area);
-        }
-
-        let entry_area = Rect {
-            x: text_area.x + gutter_width,
-            y: text_area.y,
-            width: text_area.width.saturating_sub(gutter_width),
-            height: text_area.height,
-        };
-
-        let input = TextArea::new().text_wrap(TextWrap::Word(1));
-        frame.render_stateful_widget(input, entry_area, &mut self.input_state);
+        // ComposerWidget handles gutter rendering internally
+        let composer = ComposerWidget::new(&self.input_buffer, &mut self.input_state)
+            .show_gutter(true);
+        frame.render_widget(composer, text_area);
     }
 
     fn render_status_line(&self, frame: &mut Frame, status_area: Rect) {
@@ -1821,7 +1841,7 @@ impl App {
             .border_style(Style::default().fg(Color::Cyan))
             .title(format!(" {} ", title));
 
-        let search_input = TextInput::new().block(search_block);
+        let search_input = FilterInput::new().block(search_block);
         match self.selector_page {
             SelectorPage::Provider => {
                 frame.render_stateful_widget(
