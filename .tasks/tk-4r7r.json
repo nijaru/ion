@@ -3,7 +3,7 @@
   "ref": "4r7r",
   "title": "[BUG] Chat history scrollback is cut off; scrolling up doesn't show full conversation",
   "description": null,
-  "status": "open",
+  "status": "done",
   "priority": 1,
   "labels": [],
   "assignees": [],
@@ -13,7 +13,7 @@
   "due_date": null,
   "logs": [],
   "created_at": "2026-01-21T12:10:48.214Z",
-  "updated_at": "2026-01-23T15:24:45.164Z",
-  "completed_at": null,
+  "updated_at": "2026-01-23T18:01:23.963Z",
+  "completed_at": "2026-01-23T18:01:23.963Z",
   "external": {}
 }

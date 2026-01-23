@@ -45,10 +45,10 @@ Next: Sprint 2 (Run State UX & Error Handling) or investigate tk-4r7r (scrollbac
 
 ## Known Issues
 
-| Issue              | Status | Notes                                |
-| ------------------ | ------ | ------------------------------------ |
-| Scrollback cut off | Open   | Related to viewport issues (tk-4r7r) |
-| Shift+Enter issues | Closed | Part of keybindings (tk-etpd)        |
+| Issue              | Status | Notes                                           |
+| ------------------ | ------ | ----------------------------------------------- |
+| Scrollback cut off | Closed | Fixed by removing terminal recreation (cfc3425) |
+| Shift+Enter issues | Closed | Part of keybindings (tk-etpd)                   |
 
 ## Config System
 
