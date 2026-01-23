@@ -1542,6 +1542,9 @@ impl App {
 
     /// Calculate the viewport height needed for the UI (progress + input + status).
     /// Header is inserted into scrollback, not rendered in viewport.
+    /// Note: With full-height viewport, this is no longer used for viewport sizing,
+    /// but may be useful for debugging or future use.
+    #[allow(dead_code)]
     pub fn viewport_height(&self, terminal_width: u16, terminal_height: u16) -> u16 {
         let input_height = self.calculate_input_height(terminal_width, terminal_height);
         let progress_height = if self.is_running || self.last_task_summary.is_some() {
@@ -1769,7 +1772,12 @@ impl App {
     }
 
     pub fn draw(&mut self, frame: &mut Frame) {
-        let input_height = self.calculate_input_height(frame.area().width, frame.area().height);
+        let area = frame.area();
+
+        // Clear the entire viewport first
+        frame.render_widget(Clear, area);
+
+        let input_height = self.calculate_input_height(area.width, area.height);
 
         let progress_height = if self.is_running || self.last_task_summary.is_some() {
             2
@@ -1777,7 +1785,14 @@ impl App {
             0
         };
 
-        let areas = self.layout_areas(frame.area(), input_height, progress_height);
+        // Calculate total UI height
+        let ui_height = progress_height + input_height + 1; // +1 for status line
+
+        // Position UI at the bottom of the viewport
+        let ui_top = area.height.saturating_sub(ui_height);
+        let ui_area = Rect::new(area.x, ui_top, area.width, ui_height);
+
+        let areas = self.layout_areas(ui_area, input_height, progress_height);
 
         self.render_progress(frame, areas.progress);
 
