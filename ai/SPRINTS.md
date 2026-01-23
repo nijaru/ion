@@ -530,9 +530,9 @@ Render a minimal startup header (ION + version) without pushing the viewport dow
 
 ### Acceptance Criteria
 
-- [ ] Header visible at startup
-- [ ] No excessive blank lines before viewport
-- [ ] Header does not clear scrollback
+- [x] Header visible at startup
+- [x] No excessive blank lines before viewport
+- [x] Header does not clear scrollback
 
 ---
 
@@ -564,9 +564,9 @@ Replace the current manual recursion and `glob` crate with the `ignore` crate fo
 
 ### Acceptance Criteria
 
-- [ ] Grep tool respects `.gitignore`
-- [ ] Glob tool uses `globset` via the `ignore` crate
-- [ ] `walkdir` and `glob` dependencies removed
+- [x] Grep tool respects `.gitignore`
+- [x] Glob tool uses `globset` via the `ignore` crate
+- [x] `walkdir` and `glob` dependencies removed
 
 ---
 
@@ -581,9 +581,9 @@ Swap `tiktoken-rs` for the faster `bpe-openai` crate.
 
 ### Acceptance Criteria
 
-- [ ] Token counting uses `bpe-openai`
-- [ ] Performance improved for large messages
-- [ ] `tiktoken-rs` dependency removed
+- [x] Token counting uses `bpe-openai`
+- [x] Performance improved for large messages
+- [x] `tiktoken-rs` dependency removed
 
 ## Sprint 5: Session Storage Redesign
 

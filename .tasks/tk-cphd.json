@@ -3,7 +3,7 @@
   "ref": "cphd",
   "title": "[UX] Top header line with ION branding + version",
   "description": null,
-  "status": "open",
+  "status": "done",
   "priority": 3,
   "labels": [],
   "assignees": [],
@@ -13,7 +13,7 @@
   "due_date": null,
   "logs": [],
   "created_at": "2026-01-20T16:52:02.931Z",
-  "updated_at": "2026-01-20T16:52:02.931Z",
-  "completed_at": null,
+  "updated_at": "2026-01-23T19:49:11.824Z",
+  "completed_at": "2026-01-23T19:49:11.824Z",
   "external": {}
 }

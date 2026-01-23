@@ -3,7 +3,7 @@
   "ref": "ximn",
   "title": "[REFACTOR] Upgrade grep/glob tools to use ignore/globset",
   "description": null,
-  "status": "open",
+  "status": "done",
   "priority": 3,
   "labels": [],
   "assignees": [],
@@ -13,7 +13,7 @@
   "due_date": null,
   "logs": [],
   "created_at": "2026-01-23T01:12:40.431Z",
-  "updated_at": "2026-01-23T01:12:40.431Z",
-  "completed_at": null,
+  "updated_at": "2026-01-23T19:49:53.873Z",
+  "completed_at": "2026-01-23T19:49:53.873Z",
   "external": {}
 }
