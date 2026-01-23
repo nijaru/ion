@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "7hev",
+  "title": "[TUI] Fix input editor phantom line + history navigation",
+  "description": null,
+  "status": "open",
+  "priority": 2,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-23T01:12:40.374Z",
+  "updated_at": "2026-01-23T01:12:40.374Z",
+  "completed_at": null,
+  "external": {}
+}
