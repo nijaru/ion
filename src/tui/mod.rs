@@ -122,7 +122,6 @@ pub enum SelectorPage {
 }
 
 struct LayoutAreas {
-    header: Rect,
     progress: Rect,
     input: Rect,
     status: Rect,
@@ -206,6 +205,8 @@ pub struct App {
     pub last_task_summary: Option<TaskSummary>,
     /// Request to open input in external editor (Ctrl+G)
     pub editor_requested: bool,
+    /// Whether the startup header has been inserted into scrollback
+    header_inserted: bool,
 }
 
 /// Summary of a completed task for post-completion display
@@ -300,16 +301,6 @@ impl App {
             return last.saturating_sub(1);
         }
         last
-    }
-
-    fn has_queued_messages(&self) -> bool {
-        self.message_queue.as_ref().is_some_and(|queue| {
-            if let Ok(q) = queue.lock() {
-                !q.is_empty()
-            } else {
-                false
-            }
-        })
     }
 
     fn startup_header_lines(&self) -> Vec<Line<'static>> {
@@ -588,6 +579,7 @@ impl App {
             permissions,
             last_task_summary: None,
             editor_requested: false,
+            header_inserted: false,
         };
 
         // Set initial API provider name on model picker
@@ -1423,23 +1415,19 @@ impl App {
             ));
     }
 
-    fn active_header_lines(&self) -> Vec<Line<'static>> {
-        let show_header = self.message_list.entries.is_empty()
-            && !self.is_running
-            && self.last_task_summary.is_none()
-            && !self.has_queued_messages();
-        if show_header {
-            self.startup_header_lines()
-        } else {
-            Vec::new()
-        }
-    }
-
     pub fn take_chat_inserts(&mut self, width: u16) -> Vec<Line<'static>> {
         let wrap_width = width.saturating_sub(2);
         if wrap_width == 0 {
             return Vec::new();
         }
+
+        // Insert header once at startup (into scrollback, not viewport)
+        let header_lines = if !self.header_inserted {
+            self.header_inserted = true;
+            self.startup_header_lines()
+        } else {
+            Vec::new()
+        };
 
         let entry_count = self.message_list.entries.len();
         if self.rendered_entries > entry_count {
@@ -1468,14 +1456,15 @@ impl App {
             if !new_lines.is_empty() {
                 self.buffered_chat_lines.extend(new_lines);
             }
+            // Still return header if it needs to be inserted
+            return header_lines;
+        }
+
+        if new_lines.is_empty() && self.buffered_chat_lines.is_empty() && header_lines.is_empty() {
             return Vec::new();
         }
 
-        if new_lines.is_empty() && self.buffered_chat_lines.is_empty() {
-            return Vec::new();
-        }
-
-        let mut out = Vec::new();
+        let mut out = header_lines;
         if !self.buffered_chat_lines.is_empty() {
             out.append(&mut self.buffered_chat_lines);
         }
@@ -1483,29 +1472,22 @@ impl App {
         out
     }
 
-    /// Calculate the viewport height needed for the UI (header + progress + input + status).
+    /// Calculate the viewport height needed for the UI (progress + input + status).
+    /// Header is inserted into scrollback, not rendered in viewport.
     pub fn viewport_height(&self, terminal_width: u16) -> u16 {
-        let header_height = self.active_header_lines().len() as u16;
         let input_height = self.calculate_input_height(terminal_width);
         let progress_height = if self.is_running || self.last_task_summary.is_some() {
             2
         } else {
             0
         };
-        header_height + progress_height + input_height + 1 // +1 for status line
+        progress_height + input_height + 1 // +1 for status line
     }
 
-    fn layout_areas(
-        &self,
-        area: Rect,
-        header_height: u16,
-        input_height: u16,
-        progress_height: u16,
-    ) -> LayoutAreas {
+    fn layout_areas(&self, area: Rect, input_height: u16, progress_height: u16) -> LayoutAreas {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(header_height),
                 Constraint::Length(progress_height),
                 Constraint::Length(input_height),
                 Constraint::Length(1),
@@ -1513,10 +1495,9 @@ impl App {
             .split(area);
 
         LayoutAreas {
-            header: chunks[0],
-            progress: chunks[1],
-            input: chunks[2],
-            status: chunks[3],
+            progress: chunks[0],
+            input: chunks[1],
+            status: chunks[2],
         }
     }
 
@@ -1749,9 +1730,6 @@ impl App {
     }
 
     pub fn draw(&mut self, frame: &mut Frame) {
-        let header_lines = self.active_header_lines();
-        let header_height = header_lines.len() as u16;
-
         let input_height = self.calculate_input_height(frame.area().width);
 
         let progress_height = if self.is_running || self.last_task_summary.is_some() {
@@ -1760,11 +1738,7 @@ impl App {
             0
         };
 
-        let areas = self.layout_areas(frame.area(), header_height, input_height, progress_height);
-
-        if !header_lines.is_empty() {
-            frame.render_widget(Paragraph::new(header_lines), areas.header);
-        }
+        let areas = self.layout_areas(frame.area(), input_height, progress_height);
 
         self.render_progress(frame, areas.progress);
 
