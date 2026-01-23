@@ -96,13 +96,17 @@ async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::err
         // Recalculate viewport height if it changed (input grew, progress appeared, etc.)
         let new_height = app.viewport_height(terminal_width);
         if new_height != viewport_height {
-            // Clear the old viewport area before recreating to prevent content leaking
-            // into scrollback. Move cursor to top of viewport and clear to end of screen.
-            execute!(
-                terminal.backend_mut(),
-                crossterm::cursor::MoveUp(viewport_height),
-                crossterm::terminal::Clear(crossterm::terminal::ClearType::FromCursorDown)
-            )?;
+            // When viewport shrinks, the top lines become scrollback. Draw blank content
+            // to those lines first so they don't show old input box borders.
+            if new_height < viewport_height {
+                terminal.draw(|frame| {
+                    // Draw empty content - the frame area will be cleared
+                    frame.render_widget(
+                        ratatui::widgets::Clear,
+                        frame.area(),
+                    );
+                })?;
+            }
             viewport_height = new_height;
             terminal = Terminal::with_options(
                 CrosstermBackend::new(io::stdout()),
@@ -163,6 +167,11 @@ async fn run_tui(permissions: PermissionSettings) -> Result<(), Box<dyn std::err
             }
         }
     }
+
+    // Clear viewport before exit to prevent input box from being left in scrollback
+    terminal.draw(|frame| {
+        frame.render_widget(ratatui::widgets::Clear, frame.area());
+    })?;
 
     // Restore terminal
     if supports_enhancement {
