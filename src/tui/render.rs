@@ -344,7 +344,7 @@ impl App {
             Span::raw(model_name),
         ];
 
-        if let Some((used, _max)) = self.token_usage {
+        if let Some((used, max)) = self.token_usage {
             let format_k = |n: usize| -> String {
                 if n >= 1000 {
                     format!("{}k", n / 1000)
@@ -352,18 +352,23 @@ impl App {
                     n.to_string()
                 }
             };
-            let max = self.model_context_window.unwrap_or(0);
+            // Prefer model metadata (most accurate), fall back to compaction config
+            let context_max = match self.model_context_window {
+                Some(m) if m > 0 => m,
+                _ => max,
+            };
             left_spans.push(Span::raw(" · "));
-            if max > 0 {
-                let pct = (used * 100) / max;
+            if context_max > 0 {
+                let pct = (used * 100) / context_max;
                 left_spans.push(Span::raw(format!(
                     "{}% ({}/{})",
                     pct,
                     format_k(used),
-                    format_k(max)
+                    format_k(context_max)
                 )));
             } else {
-                left_spans.push(Span::raw(format!("({}/0k)", format_k(used))));
+                // Unknown max - show just the used count
+                left_spans.push(Span::raw(format!("({}/?)", format_k(used))));
             }
         }
 
