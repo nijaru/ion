@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "prsa",
+  "title": "Fix token counting: accurate context % and cumulative task tokens",
+  "description": "## Problem\n\nTwo token display issues:\n\n### 1. Status Line Context % (INACCURATE)\n\nThe status line shows context window usage but only counts **messages**, not the full request. Missing:\n- System prompt (~2-4k tokens)\n- Tool definitions\n- Any other request overhead\n\nThis underreports actual context usage by thousands of tokens.\n\n### 2. Progress Line ↑ (OVERWRITES INSTEAD OF ACCUMULATES)\n\nThe progress line shows `↑ input_tokens` but overwrites on each API call instead of accumulating within a task.\n\n## Expected Behavior\n\n### Status Line\nShow **exact** context size that would be sent with next request:\n- System prompt + messages + tool definitions = total\n- `X% (used/max)` where used = complete request size\n- Updates after compaction to show new size\n\n### Progress Line (Claude Code style)\nWithin a single task (Enter to Completed):\n1. User message → API sends 10k → ↑ 10k\n2. Tool results → API sends 12k → ↑ 22k (cumulative)\n3. More calls → API sends 15k → ↑ 37k (cumulative)\n4. Completed → Summary shows ↑ 37k total\n5. New task → Reset to 0\n\n## Current Code\n\n### Status Line\n```rust\n// agent/mod.rs:162-169\nasync fn emit_token_usage(&self, messages: &[Message], tx: &mpsc::Sender<AgentEvent>) {\n    let token_count = self.token_counter.count_messages(messages);  // MISSING system prompt!\n    // ...\n}\n```\n\n### Progress Line\n```rust\n// session.rs:329-330\nAgentEvent::InputTokens(count) => {\n    self.input_tokens = *count;  // OVERWRITES, should accumulate\n}\n```\n\n## Fix\n\n### Status Line Fix\n\nOption A: Pass system prompt to emit_token_usage\n```rust\nasync fn emit_token_usage(&self, system_prompt: &str, messages: &[Message], tx: ...) {\n    let system_tokens = self.token_counter.count_str(system_prompt);\n    let message_tokens = self.token_counter.count_messages(messages);\n    let total = system_tokens + message_tokens.total;\n    // Send total\n}\n```\n\nOption B: Store system prompt size once, add to message count\n```rust\n// In Agent struct\nsystem_prompt_tokens: usize,  // Set once during init\n\n// In emit_token_usage\nlet total = self.system_prompt_tokens + message_tokens.total;\n```\n\n### Progress Line Fix\n```rust\nAgentEvent::InputTokens(count) => {\n    self.input_tokens += count;  // Accumulate\n}\n```\n\n## Files to Modify\n\n- `src/agent/mod.rs` - Include system prompt in TokenUsage calculation\n- `src/tui/session.rs` - Change `=` to `+=` for InputTokens\n\n## Verification\n\n1. Check status line includes system prompt (~3-4k higher than before)\n2. Status line matches what InputTokens reports on first API call\n3. Progress ↑ accumulates across multiple API calls\n4. Progress resets to 0 on new task after Completed\n5. Compaction updates status line to new (smaller) context size",
+  "status": "done",
+  "priority": 2,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-24T17:48:26.124Z",
+  "updated_at": "2026-01-24T17:59:00.678Z",
+  "completed_at": "2026-01-24T17:59:00.678Z",
+  "external": {}
+}

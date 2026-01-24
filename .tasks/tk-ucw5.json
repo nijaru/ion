@@ -3,7 +3,7 @@
   "ref": "ucw5",
   "title": "Token counter should reset per turn not cumulative",
   "description": null,
-  "status": "open",
+  "status": "done",
   "priority": 3,
   "labels": [],
   "assignees": [],
@@ -11,9 +11,14 @@
   "blocked_by": [],
   "estimate": null,
   "due_date": null,
-  "logs": [],
+  "logs": [
+    {
+      "ts": "2026-01-24T17:49:13.625Z",
+      "msg": "Superseded by tk-prsa with detailed fix plan"
+    }
+  ],
   "created_at": "2026-01-24T06:40:40.030Z",
-  "updated_at": "2026-01-24T06:40:40.030Z",
-  "completed_at": null,
+  "updated_at": "2026-01-24T17:49:20.889Z",
+  "completed_at": "2026-01-24T17:49:20.889Z",
   "external": {}
 }
