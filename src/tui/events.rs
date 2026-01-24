@@ -143,8 +143,15 @@ impl App {
                 self.editor_requested = true;
             }
 
-            // Shift+Enter: Insert newline (requires Kitty keyboard protocol)
-            KeyCode::Enter if shift => {
+            // Ctrl+J: Insert newline (Unix standard: LF)
+            KeyCode::Char('j') if ctrl => {
+                self.input_state.insert_newline(&mut self.input_buffer);
+            }
+
+            // Shift+Enter or Alt+Enter: Insert newline
+            // Note: Shift+Enter requires Kitty keyboard protocol (most terminals don't support)
+            // Alt+Enter works universally as a fallback
+            KeyCode::Enter if shift || key.modifiers.contains(KeyModifiers::ALT) => {
                 self.input_state.insert_newline(&mut self.input_buffer);
             }
 
