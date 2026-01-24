@@ -52,7 +52,8 @@ impl App {
         const MIN_HEIGHT: u16 = 3;
         const MIN_RESERVED: u16 = 3; // status (1) + optional progress (up to 2)
         const BORDER_OVERHEAD: u16 = 2; // Top and bottom borders
-        const GUTTER_WIDTH: u16 = 3; // " > " prompt gutter
+        const LEFT_MARGIN: u16 = 3; // " > " prompt gutter
+        const RIGHT_MARGIN: u16 = 1; // Right margin for symmetry
 
         // Dynamic max based on viewport height
         let max_height = viewport_height.saturating_sub(MIN_RESERVED).max(MIN_HEIGHT);
@@ -61,10 +62,10 @@ impl App {
             return MIN_HEIGHT;
         }
 
-        // Available width for text (subtract borders and gutter)
+        // Available width for text (subtract borders, gutter, and right margin)
         let text_width = viewport_width
             .saturating_sub(BORDER_OVERHEAD)
-            .saturating_sub(GUTTER_WIDTH) as usize;
+            .saturating_sub(LEFT_MARGIN + RIGHT_MARGIN) as usize;
         if text_width == 0 {
             return MIN_HEIGHT;
         }
