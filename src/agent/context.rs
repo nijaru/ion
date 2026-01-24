@@ -65,6 +65,27 @@ impl ContextManager {
         *active = skill;
     }
 
+    /// Get just the system prompt (cached), without assembling messages.
+    pub async fn get_system_prompt(&self, plan: Option<&Plan>) -> String {
+        let active_skill = self.active_skill.lock().await;
+        let skill = active_skill.clone();
+
+        let mut cache = self.render_cache.lock().await;
+        if let Some(ref c) = *cache {
+            if c.plan.as_ref() == plan && c.skill == skill {
+                return c.rendered.clone();
+            }
+        }
+
+        let rendered = self.render_system_prompt(plan, skill.as_ref());
+        *cache = Some(RenderCache {
+            rendered: rendered.clone(),
+            plan: plan.cloned(),
+            skill,
+        });
+        rendered
+    }
+
     pub async fn assemble(
         &self,
         history: &[Message],
