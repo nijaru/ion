@@ -169,11 +169,7 @@ impl Agent {
 
         // Count system prompt + all messages (matches what stream_response sends)
         let system_tokens = self.token_counter.count_str(&assembly.system_prompt);
-        let message_tokens: usize = assembly
-            .messages
-            .iter()
-            .map(|m| self.token_counter.count_message(m).total)
-            .sum();
+        let message_tokens = self.token_counter.count_messages(&assembly.messages).total;
         let total = system_tokens + message_tokens;
 
         let _ = tx
