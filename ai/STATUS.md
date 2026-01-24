@@ -23,6 +23,9 @@ Fixed both issues:
 
 1. Status line now includes system prompt in context % calculation
 2. Progress line accumulates input tokens across API calls within task
+3. Added `get_system_prompt()` to avoid message cloning overhead (1ba1ec8)
+
+**Next Priority: Shift+Enter (tk-9y0p) - P1**
 
 ## Architecture
 
