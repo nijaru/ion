@@ -14,19 +14,15 @@
 
 **Sprint 6: TUI Module Refactor - COMPLETE**
 
-Split tui/mod.rs (2325 lines) into 6 focused modules:
+Split tui/mod.rs into 6 focused modules (types, util, input, events, render, session).
+Fixed: Double blank line after chat messages.
 
-| Module       | Lines | Purpose                        |
-| ------------ | ----- | ------------------------------ |
-| `types.rs`   | 122   | Enums, structs, constants      |
-| `util.rs`    | 122   | Standalone utility functions   |
-| `input.rs`   | 211   | Input/composer handling        |
-| `events.rs`  | 468   | Event dispatch, mode handlers  |
-| `render.rs`  | 787   | All rendering/drawing          |
-| `session.rs` | 603   | Session, provider, agent, init |
-| `mod.rs`     | 125   | Module wiring, re-exports      |
+**Token Counting (tk-prsa) - COMPLETE**
 
-Also fixed: Double blank line after chat messages (skip empty TextDelta/ThinkingDelta).
+Fixed both issues:
+
+1. Status line now includes system prompt in context % calculation
+2. Progress line accumulates input tokens across API calls within task
 
 ## Architecture
 
@@ -53,10 +49,10 @@ Also fixed: Double blank line after chat messages (skip empty TextDelta/Thinking
 | Shift+Enter        | Open   | tk-9y0p - newline doesn't insert (P1)           |
 | Cursor off by 2    | Open   | tk-lx9z - multiline input cursor position       |
 | Wrapped navigation | Open   | tk-gg9m - up/down should follow visual lines    |
-| Token counter      | Open   | tk-ucw5 - resets cumulative, should be per-turn |
 | Scrollback cut off | Closed | Fixed by removing terminal recreation (cfc3425) |
 | Viewport gap       | Closed | Fixed by removing ui_top, render from area.y    |
 | Double blank line  | Closed | Fixed by skipping empty TextDelta (2406b91)     |
+| Token counting     | Closed | Fixed: context % + cumulative ↑ (9c83a42)       |
 
 ## Config System
 
