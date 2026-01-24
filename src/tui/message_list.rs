@@ -263,14 +263,18 @@ impl MessageList {
                     last.append_text(&delta);
                     return;
                 }
-                self.push_entry(MessageEntry::new(Sender::Agent, delta));
+                // Skip empty/whitespace deltas when creating new entries
+                if !delta.trim().is_empty() {
+                    self.push_entry(MessageEntry::new(Sender::Agent, delta));
+                }
             }
             AgentEvent::ThinkingDelta(delta) => {
                 if let Some(last) = self.entries.last_mut()
                     && last.sender == Sender::Agent
                 {
                     last.append_thinking(&delta);
-                } else {
+                } else if !delta.trim().is_empty() {
+                    // Skip empty/whitespace deltas when creating new entries
                     self.push_entry(MessageEntry::new_thinking(Sender::Agent, delta));
                 }
             }
