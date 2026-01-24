@@ -399,6 +399,14 @@ impl ComposerState {
             }
         }
 
+        // If cursor is at a position that would overflow the line,
+        // wrap to the next line. This happens when the cursor is at
+        // the end of a full line (before a character that will wrap).
+        if width > 0 && x >= width {
+            x = 0;
+            y += 1;
+        }
+
         self.cursor_pos = (x as u16, y as u16);
         self.cursor_pos
     }
@@ -611,5 +619,135 @@ mod tests {
         // Delete to line start (Ctrl+U)
         state.delete_line_left(&mut buf);
         assert_eq!(buf.get_content(), "");
+    }
+
+    #[test]
+    fn test_cursor_position_calculation() {
+        let mut buf = ComposerBuffer::new();
+        let mut state = ComposerState::new();
+
+        // Test 1: Simple single line
+        buf.insert_str(0, "hello");
+        state.set_cursor(5, buf.len_chars());
+        let pos = state.calculate_cursor_pos(&buf, 20);
+        assert_eq!(pos, (5, 0), "cursor at end of 'hello' should be at (5, 0)");
+
+        // Test 2: With explicit newline
+        buf.clear();
+        buf.insert_str(0, "abc\ndef");
+        state.set_cursor(5, buf.len_chars()); // at 'e' in "def"
+        let pos = state.calculate_cursor_pos(&buf, 20);
+        assert_eq!(
+            pos,
+            (1, 1),
+            "cursor at 'e' in second line should be at (1, 1)"
+        );
+
+        // Test 3: Wrapped line (width 10, content wraps)
+        buf.clear();
+        buf.insert_str(0, "0123456789ab"); // 12 chars
+        state.set_cursor(12, buf.len_chars()); // at end
+        let pos = state.calculate_cursor_pos(&buf, 10);
+        // 0-9 on line 0 (10 chars), "ab" on line 1
+        // cursor after "ab" should be at column 2, line 1
+        assert_eq!(
+            pos,
+            (2, 1),
+            "cursor after '0123456789ab' with width 10 should be at (2, 1)"
+        );
+
+        // Test 4: Cursor in middle of wrapped content
+        buf.clear();
+        buf.insert_str(0, "0123456789ab");
+        state.set_cursor(11, buf.len_chars()); // at 'b'
+        let pos = state.calculate_cursor_pos(&buf, 10);
+        assert_eq!(pos, (1, 1), "cursor at 'b' should be at (1, 1)");
+
+        // Test 5: Cursor at wrap point
+        buf.clear();
+        buf.insert_str(0, "0123456789ab");
+        state.set_cursor(10, buf.len_chars()); // at 'a'
+        let pos = state.calculate_cursor_pos(&buf, 10);
+        assert_eq!(
+            pos,
+            (0, 1),
+            "cursor at 'a' (first char of wrapped line) should be at (0, 1)"
+        );
+
+        // Test 6: Cursor at exact width boundary (no overflow yet)
+        buf.clear();
+        buf.insert_str(0, "0123456789"); // exactly 10 chars
+        state.set_cursor(10, buf.len_chars()); // at end
+        let pos = state.calculate_cursor_pos(&buf, 10);
+        // Cursor after last char on a full line wraps to next line
+        assert_eq!(
+            pos,
+            (0, 1),
+            "cursor after exactly 10 chars with width 10 should wrap to (0, 1)"
+        );
+
+        // Test 7: Cursor just before width boundary
+        buf.clear();
+        buf.insert_str(0, "0123456789");
+        state.set_cursor(9, buf.len_chars()); // at '9'
+        let pos = state.calculate_cursor_pos(&buf, 10);
+        assert_eq!(pos, (9, 0), "cursor at '9' should be at (9, 0)");
+
+        // Test 8: Multiple wrapped lines
+        buf.clear();
+        buf.insert_str(0, "0123456789abcdefghij"); // 20 chars
+        state.set_cursor(20, buf.len_chars()); // at end
+        let pos = state.calculate_cursor_pos(&buf, 10);
+        // Line 0: 0123456789 (10 chars)
+        // Line 1: abcdefghij (10 chars)
+        // Cursor after 'j' should wrap to line 2
+        assert_eq!(
+            pos,
+            (0, 2),
+            "cursor after 20 chars with width 10 should be at (0, 2)"
+        );
+
+        // Test 9: Cursor in middle of second wrapped line
+        buf.clear();
+        buf.insert_str(0, "0123456789abcdef");
+        state.set_cursor(15, buf.len_chars()); // at 'f'
+        let pos = state.calculate_cursor_pos(&buf, 10);
+        assert_eq!(pos, (5, 1), "cursor at 'f' should be at (5, 1)");
+
+        // Test 10: Multiline with explicit newlines - cursor on second line
+        buf.clear();
+        buf.insert_str(0, "abc\ndefghi");
+        state.set_cursor(6, buf.len_chars()); // at 'f' (abc\nde|fghi)
+        let pos = state.calculate_cursor_pos(&buf, 20);
+        // 'abc' + newline = 4 chars, then 'de' = 2 more, so char 6 is 'f'
+        // Visual: line 0 = "abc", line 1 = "defghi"
+        // Cursor at 'f' should be at column 2 on line 1
+        assert_eq!(
+            pos,
+            (2, 1),
+            "cursor at 'f' after newline should be at (2, 1)"
+        );
+
+        // Test 11: Multiline - cursor right after newline
+        buf.clear();
+        buf.insert_str(0, "abc\ndef");
+        state.set_cursor(4, buf.len_chars()); // at 'd' right after newline
+        let pos = state.calculate_cursor_pos(&buf, 20);
+        assert_eq!(
+            pos,
+            (0, 1),
+            "cursor at 'd' right after newline should be at (0, 1)"
+        );
+
+        // Test 12: Multiple newlines
+        buf.clear();
+        buf.insert_str(0, "a\nb\nc");
+        state.set_cursor(4, buf.len_chars()); // at 'c'
+        let pos = state.calculate_cursor_pos(&buf, 20);
+        assert_eq!(
+            pos,
+            (0, 2),
+            "cursor at 'c' on third line should be at (0, 2)"
+        );
     }
 }
