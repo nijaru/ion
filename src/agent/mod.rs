@@ -160,16 +160,16 @@ impl Agent {
     }
 
     async fn emit_token_usage(&self, messages: &[Message], tx: &mpsc::Sender<AgentEvent>) {
-        // Get the full context including system prompt for accurate token count
+        // Get system prompt (cached) without cloning messages
         let plan = self.active_plan.lock().await;
-        let assembly = self
+        let system_prompt = self
             .context_manager
-            .assemble(messages, None, vec![], plan.as_ref())
+            .get_system_prompt(plan.as_ref())
             .await;
 
-        // Count system prompt + all messages (matches what stream_response sends)
-        let system_tokens = self.token_counter.count_str(&assembly.system_prompt);
-        let message_tokens = self.token_counter.count_messages(&assembly.messages).total;
+        // Count system prompt + all messages
+        let system_tokens = self.token_counter.count_str(&system_prompt);
+        let message_tokens = self.token_counter.count_messages(messages).total;
         let total = system_tokens + message_tokens;
 
         let _ = tx
