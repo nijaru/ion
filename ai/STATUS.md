@@ -27,8 +27,16 @@ Fixed both issues:
 
 **Newline Input (tk-9y0p) - COMPLETE**
 
-Added Alt+Enter and Ctrl+J as universal fallbacks for inserting newlines.
-Shift+Enter only works with Kitty keyboard protocol (most terminals lack support).
+Added Alt+Enter as universal fallback for inserting newlines.
+Shift+Enter works with Kitty keyboard protocol (Ghostty, Kitty, WezTerm, iTerm2).
+
+**Cursor Position (tk-lx9z) - COMPLETE**
+
+Fixed cursor position calculation at line boundaries:
+
+1. Cursor now wraps to next line when at width boundary (438f1fd)
+2. Added 1-char right margin for symmetry with left gutter (5ab8c6b)
+3. Input layout: 3-char left gutter " > ", 1-char right margin
 
 ## Architecture
 
@@ -52,9 +60,9 @@ Shift+Enter only works with Kitty keyboard protocol (most terminals lack support
 
 | Issue              | Status | Notes                                           |
 | ------------------ | ------ | ----------------------------------------------- |
-| Cursor off by 2    | Open   | tk-lx9z - multiline input cursor position       |
 | Wrapped navigation | Open   | tk-gg9m - up/down should follow visual lines    |
-| Newline input      | Closed | Alt+Enter/Ctrl+J fallbacks added (d8c97a7)      |
+| Cursor off by 2    | Closed | Fixed wrap + margins (438f1fd, 5ab8c6b)         |
+| Newline input      | Closed | Alt+Enter + Shift+Enter (6812e21)               |
 | Scrollback cut off | Closed | Fixed by removing terminal recreation (cfc3425) |
 | Viewport gap       | Closed | Fixed by removing ui_top, render from area.y    |
 | Double blank line  | Closed | Fixed by skipping empty TextDelta (2406b91)     |
