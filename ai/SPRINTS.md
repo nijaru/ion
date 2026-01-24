@@ -14,6 +14,7 @@ Updated: 2026-01-23
 | 3      | Selector & Resume UX              | COMPLETE |
 | 4      | Visual Polish & Advanced Features | PLANNED  |
 | 5      | Session Storage Redesign          | PLANNED  |
+| 6      | TUI Module Refactor               | PLANNED  |
 
 ## Sprint 0: TUI Architecture - Custom Text Entry + Viewport Fix
 
@@ -672,3 +673,224 @@ Add --continue (latest from cwd) and --resume (picker or specific ID) CLI flags.
 - [ ] --continue loads most recent session from current directory
 - [ ] --resume opens picker
 - [ ] --resume <id> loads specific session
+
+## Sprint 6: TUI Module Refactor
+
+**Goal:** Split tui/mod.rs (2325 lines) into 6 focused modules for maintainability.
+**Source:** Refactoring analysis from session 2026-01-23
+
+| New Module   | Lines | Purpose                                  |
+| ------------ | ----- | ---------------------------------------- |
+| `types.rs`   | ~160  | Shared enums, structs, constants         |
+| `util.rs`    | ~100  | Standalone utility functions             |
+| `input.rs`   | ~250  | Input handling methods                   |
+| `events.rs`  | ~350  | Event dispatch and mode handlers         |
+| `render.rs`  | ~550  | All rendering/drawing                    |
+| `session.rs` | ~200  | Session, provider, agent task management |
+| `mod.rs`     | ~350  | App struct, constructors, module wiring  |
+
+---
+
+## Task: Extract types.rs
+
+**Sprint:** 6
+**Depends on:** none
+
+### Description
+
+Create `src/tui/types.rs` with shared types used across TUI modules.
+
+Move from mod.rs:
+
+- Constants: `CANCEL_WINDOW`, `QUEUED_PREVIEW_LINES` (lines 39-40)
+- `ThinkingLevel` enum + impl (lines 122-161)
+- `Mode` enum (lines 163-175)
+- `SelectorPage` enum (lines 177-182)
+- `LayoutAreas` struct (lines 184-188)
+- `ApprovalRequest` struct (lines 190-194)
+- `TaskSummary` struct (lines 277-284)
+- `TuiApprovalHandler` struct + impl (lines 286-306)
+
+### Acceptance Criteria
+
+- [ ] types.rs compiles standalone
+- [ ] All types have appropriate visibility (pub, pub(super), pub(crate))
+- [ ] mod.rs imports and re-exports as needed
+- [ ] cargo build succeeds
+
+---
+
+## Task: Extract util.rs
+
+**Sprint:** 6
+**Depends on:** Extract types.rs
+
+### Description
+
+Create `src/tui/util.rs` with standalone utility functions.
+
+Move from mod.rs:
+
+- `format_tokens()` (lines 42-49)
+- `format_relative_time()` (lines 51-71)
+- `format_status_error()` (lines 73-85)
+- `handle_filter_input_event()` (lines 87-120)
+- `strip_ansi()` (lines 2294-2316)
+- `own_line()` (lines 2318-2325)
+
+### Acceptance Criteria
+
+- [ ] All functions are `pub(super)`
+- [ ] No dependencies on App struct
+- [ ] cargo build succeeds
+
+---
+
+## Task: Extract input.rs
+
+**Sprint:** 6
+**Depends on:** Extract util.rs
+
+### Description
+
+Create `src/tui/input.rs` with input handling methods as `impl App` block.
+
+Move from mod.rs:
+
+- `input_text()` (lines 311-313)
+- `input_is_empty()` (lines 315-317)
+- `clear_input()` (lines 319-321)
+- `set_input_text()` (lines 323-326)
+- `handle_input_event_with_history()` (lines 328-337)
+- `input_cursor_line()` (lines 339-341)
+- `input_last_line()` (lines 343-349)
+- `handle_input_event()` (lines 360-439)
+- `handle_input_up()` (lines 441-479)
+- `handle_input_down()` (lines 481-503)
+
+### Acceptance Criteria
+
+- [ ] Methods work with App fields via self
+- [ ] Import dependencies from parent module
+- [ ] cargo build succeeds
+
+---
+
+## Task: Extract events.rs
+
+**Sprint:** 6
+**Depends on:** Extract input.rs
+
+### Description
+
+Create `src/tui/events.rs` with event handling methods as `impl App` block.
+
+Move from mod.rs:
+
+- `update()` (lines 724-849)
+- `handle_event()` (lines 851-862)
+- `handle_input_mode()` (lines 864-1109)
+- `handle_approval_mode()` (lines 1111-1129)
+- `handle_selector_mode()` (lines 1254-1428)
+
+### Acceptance Criteria
+
+- [ ] All event handlers work correctly
+- [ ] Mode transitions preserved
+- [ ] cargo build succeeds
+
+---
+
+## Task: Extract render.rs
+
+**Sprint:** 6
+**Depends on:** Extract events.rs
+
+### Description
+
+Create `src/tui/render.rs` with all rendering methods as `impl App` block.
+
+Move from mod.rs:
+
+- `startup_header_lines()` (lines 351-358)
+- `calculate_input_height()` (lines 1547-1577)
+- `layout_areas()` (lines 1672-1687)
+- `render_progress()` (lines 1689-1781)
+- `render_input_or_approval()` (lines 1784-1813)
+- `render_input_text()` (lines 1815-1824)
+- `render_status_line()` (lines 1826-1889)
+- `draw()` (lines 1891-1925)
+- `render_selector_shell()` (lines 1927-2232)
+- `render_help_overlay()` (lines 2234-2291)
+- `take_chat_inserts()` (lines 1600-1655)
+- `viewport_height()` (lines 1657-1670)
+
+### Acceptance Criteria
+
+- [ ] All render methods work correctly
+- [ ] Layout calculations preserved
+- [ ] cargo build succeeds
+- [ ] TUI renders identically to before
+
+---
+
+## Task: Extract session.rs
+
+**Sprint:** 6
+**Depends on:** Extract render.rs
+
+### Description
+
+Create `src/tui/session.rs` with session/provider management as `impl App` block.
+
+Move from mod.rs:
+
+- `set_provider()` (lines 1131-1171)
+- `open_model_selector()` (lines 1173-1188)
+- `open_provider_selector()` (lines 1190-1196)
+- `open_session_selector()` (lines 1198-1203)
+- `load_session()` (lines 1205-1252)
+- `resume_session()` (lines 707-717)
+- `list_recent_sessions()` (lines 719-722)
+- `fetch_models()` (lines 1431-1454)
+- `run_agent_task()` (lines 1468-1515)
+- `save_task_summary()` (lines 1456-1466)
+- `take_snapshot()` (lines 1517-1545)
+- `quit()` (lines 1579-1598)
+
+### Acceptance Criteria
+
+- [ ] Session management works correctly
+- [ ] Provider switching works
+- [ ] Agent task execution works
+- [ ] cargo build succeeds
+
+---
+
+## Task: Finalize mod.rs and verify
+
+**Sprint:** 6
+**Depends on:** Extract session.rs
+
+### Description
+
+Update mod.rs to:
+
+1. Declare all new modules
+2. Re-export public types
+3. Keep only App struct and constructors
+4. Remove dead code warning on filter_input methods
+
+Verify end-to-end:
+
+1. cargo build --release
+2. cargo test
+3. Manual TUI testing
+
+### Acceptance Criteria
+
+- [ ] mod.rs is ~350 lines
+- [ ] All modules properly wired
+- [ ] No dead code warnings
+- [ ] cargo test passes
+- [ ] TUI works identically to before refactor
