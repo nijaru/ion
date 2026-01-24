@@ -112,7 +112,8 @@ async fn run_tui(
     // Fixed-size viewport for UI only. Chat content appears above via insert_before.
     // Using a fixed size (not full terminal height) ensures inserted content is visible.
     // Never recreated to preserve scrollback.
-    const UI_VIEWPORT_HEIGHT: u16 = 10;
+    // 15 lines allows: progress (2) + input (up to 12) + status (1)
+    const UI_VIEWPORT_HEIGHT: u16 = 15;
     let mut terminal = Terminal::with_options(
         backend,
         TerminalOptions {
@@ -172,9 +173,14 @@ async fn run_tui(
             disable_raw_mode()?;
             terminal.show_cursor()?;
 
-            // Open editor and get result
-            if let Some(new_input) = open_editor(&app.input_buffer.get_content())? {
-                app.set_input_text(&new_input);
+            // Open editor and get result (handle errors gracefully)
+            match open_editor(&app.input_buffer.get_content()) {
+                Ok(Some(new_input)) => app.set_input_text(&new_input),
+                Ok(None) => {} // No changes or editor cancelled
+                Err(e) => {
+                    // Log error but don't crash - user can still use the TUI
+                    eprintln!("Editor error: {}", e);
+                }
             }
 
             // Re-enter TUI mode

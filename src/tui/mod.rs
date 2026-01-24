@@ -1547,22 +1547,22 @@ impl App {
     /// Calculate the height needed for the input box based on content.
     /// Returns height including borders.
     /// Min: 3 lines (1 content + 2 borders)
-    /// Max: terminal_height - 6 (reserved for empty line, progress, status)
-    fn calculate_input_height(&self, terminal_width: u16, terminal_height: u16) -> u16 {
+    /// Max: viewport_height - 3 (reserved for progress + status)
+    fn calculate_input_height(&self, viewport_width: u16, viewport_height: u16) -> u16 {
         const MIN_HEIGHT: u16 = 3;
-        const MIN_RESERVED: u16 = 6; // Empty line (1) + progress (2) + status (1) + breathing room (2)
+        const MIN_RESERVED: u16 = 3; // progress (2) + status (1) - no extra padding needed
         const BORDER_OVERHEAD: u16 = 2; // Top and bottom borders
         const GUTTER_WIDTH: u16 = 3; // " > " prompt gutter
 
-        // Dynamic max based on terminal height
-        let max_height = terminal_height.saturating_sub(MIN_RESERVED).max(MIN_HEIGHT);
+        // Dynamic max based on viewport height
+        let max_height = viewport_height.saturating_sub(MIN_RESERVED).max(MIN_HEIGHT);
 
         if self.input_is_empty() {
             return MIN_HEIGHT;
         }
 
         // Available width for text (subtract borders and gutter)
-        let text_width = terminal_width
+        let text_width = viewport_width
             .saturating_sub(BORDER_OVERHEAD)
             .saturating_sub(GUTTER_WIDTH) as usize;
         if text_width == 0 {
@@ -1902,12 +1902,10 @@ impl App {
             0
         };
 
-        // Calculate total UI height
-        let ui_height = progress_height + input_height + 1; // +1 for status line
-
-        // Position UI at the bottom of the viewport
-        let ui_top = area.height.saturating_sub(ui_height);
-        let ui_area = Rect::new(area.x, ui_top, area.width, ui_height);
+        // UI fills the entire viewport (chat content is above via insert_before)
+        // Clamp UI height to available viewport space
+        let ui_height = (progress_height + input_height + 1).min(area.height); // +1 for status line
+        let ui_area = Rect::new(area.x, area.y, area.width, ui_height);
 
         let areas = self.layout_areas(ui_area, input_height, progress_height);
 
@@ -1953,7 +1951,7 @@ impl App {
         let total_height = reserved_height + list_height;
 
         let y = area.height.saturating_sub(total_height);
-        let shell_area = Rect::new(0, y, area.width, total_height);
+        let shell_area = Rect::new(area.x, area.y + y, area.width, total_height);
 
         frame.render_widget(Clear, shell_area);
 
@@ -2240,7 +2238,7 @@ impl App {
         let height = 20.min(area.height.saturating_sub(4));
         let x = (area.width.saturating_sub(width)) / 2;
         let y = (area.height.saturating_sub(height)) / 2;
-        let help_area = Rect::new(x, y, width, height);
+        let help_area = Rect::new(area.x + x, area.y + y, width, height);
 
         frame.render_widget(ratatui::widgets::Clear, help_area);
 
