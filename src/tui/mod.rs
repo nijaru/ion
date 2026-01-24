@@ -1550,7 +1550,7 @@ impl App {
     /// Max: viewport_height - 3 (reserved for progress + status)
     fn calculate_input_height(&self, viewport_width: u16, viewport_height: u16) -> u16 {
         const MIN_HEIGHT: u16 = 3;
-        const MIN_RESERVED: u16 = 3; // progress (2) + status (1) - no extra padding needed
+        const MIN_RESERVED: u16 = 3; // status (1) + optional progress (up to 2)
         const BORDER_OVERHEAD: u16 = 2; // Top and bottom borders
         const GUTTER_WIDTH: u16 = 3; // " > " prompt gutter
 

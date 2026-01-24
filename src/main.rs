@@ -178,8 +178,13 @@ async fn run_tui(
                 Ok(Some(new_input)) => app.set_input_text(&new_input),
                 Ok(None) => {} // No changes or editor cancelled
                 Err(e) => {
-                    // Log error but don't crash - user can still use the TUI
-                    eprintln!("Editor error: {}", e);
+                    // Show error in TUI chat instead of stderr (which may be hidden in raw mode)
+                    app.message_list.push_entry(
+                        ion::tui::message_list::MessageEntry::new(
+                            ion::tui::message_list::Sender::System,
+                            format!("Editor error: {}", e),
+                        ),
+                    );
                 }
             }
 
