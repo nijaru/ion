@@ -4,29 +4,29 @@
 
 | Metric     | Value           | Updated    |
 | ---------- | --------------- | ---------- |
-| Phase      | 5 - Polish & UX | 2026-01-23 |
-| Status     | Runnable        | 2026-01-23 |
+| Phase      | 5 - Polish & UX | 2026-01-24 |
+| Status     | Runnable        | 2026-01-24 |
 | Toolchain  | stable          | 2026-01-22 |
-| Tests      | cargo check     | 2026-01-23 |
+| Tests      | cargo check     | 2026-01-24 |
 | Visibility | **PUBLIC**      | 2026-01-22 |
 
 ## Active Work
 
-**Viewport fixes in progress** - Several rounds of debugging inline viewport behavior.
+**Sprint 6: TUI Module Refactor - COMPLETE**
 
-Session accomplishments:
+Split tui/mod.rs (2325 lines) into 6 focused modules:
 
-- **Gap fix** - UI now renders from top of viewport, not bottom (removed ui_top calculation)
-- **Ctrl+G crash fix** - Editor errors handled gracefully, won't exit app
-- **Viewport 15 lines** - Increased from 10 to allow more input growth
-- **MIN_RESERVED 3** - Reduced from 6, allows ~10 content lines in input
-- **Codex research** - Analyzed their viewport patterns for reference
+| Module       | Lines | Purpose                        |
+| ------------ | ----- | ------------------------------ |
+| `types.rs`   | 122   | Enums, structs, constants      |
+| `util.rs`    | 122   | Standalone utility functions   |
+| `input.rs`   | 211   | Input/composer handling        |
+| `events.rs`  | 468   | Event dispatch, mode handlers  |
+| `render.rs`  | 787   | All rendering/drawing          |
+| `session.rs` | 603   | Session, provider, agent, init |
+| `mod.rs`     | 125   | Module wiring, re-exports      |
 
-Remaining issues (new tasks created):
-
-- tk-lx9z: Cursor position off by 2 chars in multiline
-- tk-gg9m: Up/down should navigate wrapped visual lines
-- tk-ucw5: Token counter should reset per turn
+Also fixed: Double blank line after chat messages (skip empty TextDelta/ThinkingDelta).
 
 ## Architecture
 
@@ -50,26 +50,13 @@ Remaining issues (new tasks created):
 
 | Issue              | Status | Notes                                           |
 | ------------------ | ------ | ----------------------------------------------- |
+| Shift+Enter        | Open   | tk-9y0p - newline doesn't insert (P1)           |
 | Cursor off by 2    | Open   | tk-lx9z - multiline input cursor position       |
 | Wrapped navigation | Open   | tk-gg9m - up/down should follow visual lines    |
 | Token counter      | Open   | tk-ucw5 - resets cumulative, should be per-turn |
 | Scrollback cut off | Closed | Fixed by removing terminal recreation (cfc3425) |
 | Viewport gap       | Closed | Fixed by removing ui_top, render from area.y    |
-
-## Codex CLI Patterns (Reference)
-
-From `/Users/nick/github/openai/codex`:
-
-- **No insert_before** - Uses flex layout for everything in one viewport
-- **desired_height(width)** - Each widget calculates wrapped height
-- **Wrapped line cache** - Caches wrapped lines per width using textwrap
-- **preferred_col** - Maintains horizontal position when moving up/down
-- **Grapheme width** - Uses unicode_width for cursor column calculation
-
-Key files:
-
-- `codex-rs/tui/src/bottom_pane/textarea.rs` - Input with wrapping
-- `codex-rs/tui/src/render/renderable.rs` - Layout composition
+| Double blank line  | Closed | Fixed by skipping empty TextDelta (2406b91)     |
 
 ## Config System
 
