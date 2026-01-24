@@ -493,30 +493,37 @@ impl Widget for ComposerWidget<'_> {
             area
         };
 
-        if text_area.width < 3 || text_area.height < 1 {
-            return;
-        }
+        // Render gutter " > " (left margin)
+        // Right margin is 1 char for symmetry
+        const LEFT_MARGIN: u16 = 3; // " > "
+        const RIGHT_MARGIN: u16 = 1;
 
-        // Render gutter " > "
-        let (_gutter_width, input_area) = if self.show_gutter {
+        let input_area = if self.show_gutter {
             buf.set_string(
                 text_area.x,
                 text_area.y,
                 " > ",
                 Style::default().fg(Color::DarkGray),
             );
-            (
-                3u16,
-                Rect {
-                    x: text_area.x + 3,
-                    y: text_area.y,
-                    width: text_area.width.saturating_sub(3),
-                    height: text_area.height,
-                },
-            )
+            Rect {
+                x: text_area.x + LEFT_MARGIN,
+                y: text_area.y,
+                width: text_area.width.saturating_sub(LEFT_MARGIN + RIGHT_MARGIN),
+                height: text_area.height,
+            }
         } else {
-            (0u16, text_area)
+            Rect {
+                x: text_area.x,
+                y: text_area.y,
+                width: text_area.width.saturating_sub(RIGHT_MARGIN),
+                height: text_area.height,
+            }
         };
+
+        // Need at least 1 char of content width
+        if input_area.width == 0 || input_area.height == 0 {
+            return;
+        }
 
         let content_width = input_area.width as usize;
 
