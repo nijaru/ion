@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "76ua",
+  "title": "Compaction config context_window should be set from model metadata, not hardcoded 200k",
+  "description": null,
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-24T22:41:04.692Z",
+  "updated_at": "2026-01-24T22:41:04.692Z",
+  "completed_at": null,
+  "external": {}
+}

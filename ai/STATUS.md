@@ -7,85 +7,64 @@
 | Phase      | 5 - Polish & UX | 2026-01-24 |
 | Status     | Runnable        | 2026-01-24 |
 | Toolchain  | stable          | 2026-01-22 |
-| Tests      | cargo check     | 2026-01-24 |
+| Tests      | 75 passing      | 2026-01-24 |
 | Visibility | **PUBLIC**      | 2026-01-22 |
 
 ## Active Work
 
-**Sprint 6: TUI Module Refactor - COMPLETE**
+**AGENTS.md Support (tk-ncfd) - IN PROGRESS**
 
-Split tui/mod.rs into 6 focused modules (types, util, input, events, render, session).
-Fixed: Double blank line after chat messages.
+Designing context/system prompt architecture:
 
-**Token Counting (tk-prsa) - COMPLETE**
+- Design doc: `ai/design/context-system.md`
+- Layered approach: ion-local → global standard → project
+- Cross-agent standard: `~/.config/agents/` (see github.com/nijaru/global-agents-config)
 
-Fixed both issues:
+**Context % Display - COMPLETE**
 
-1. Status line now includes system prompt in context % calculation
-2. Progress line accumulates input tokens across API calls within task
-3. Added `get_system_prompt()` to avoid message cloning overhead (1ba1ec8)
+Fixed status line showing 0k for max context:
 
-**Newline Input (tk-9y0p) - COMPLETE**
-
-Added Alt+Enter as universal fallback for inserting newlines.
-Shift+Enter works with Kitty keyboard protocol (Ghostty, Kitty, WezTerm, iTerm2).
+- Now uses model metadata when available, falls back to compaction config (200k)
+- Shows percentage when max is known (6ee2bf1)
 
 **Cursor Position (tk-lx9z) - COMPLETE**
 
-Fixed cursor position calculation at line boundaries:
-
-1. Cursor now wraps to next line when at width boundary (438f1fd)
-2. Added 1-char right margin for symmetry with left gutter (5ab8c6b)
-3. Input layout: 3-char left gutter " > ", 1-char right margin
+Fixed cursor wrapping + added margins (438f1fd, 5ab8c6b)
 
 ## Architecture
 
-**Core Agent** (ion binary):
+**Core Agent:**
 
 - TUI + Agent loop
-- Unified provider via `llm-connector` crate (OpenRouter, Anthropic, OpenAI, Ollama, Groq, Google)
+- Multi-provider via llm-connector
 - Built-in tools (read, write, glob, grep, bash, edit, list)
-- MCP client
-- Session management (rusqlite)
-- Skill system with model configuration
+- MCP client, Session management (rusqlite)
+- Skill system
 
 **TUI Stack:**
 
-- ratatui + crossterm with insert_before for scrollback
-- Fixed 15-line inline viewport (UI_VIEWPORT_HEIGHT constant)
-- Custom Composer (src/tui/composer/) - ropey-backed text buffer
-- FilterInput (src/tui/filter_input.rs) - simple single-line for pickers
+- ratatui + crossterm, inline viewport with insert_before
+- Custom Composer (ropey-backed buffer)
+- Input layout: 3-char left gutter " > ", 1-char right margin
 
 ## Known Issues
 
 | Issue              | Status | Notes                                           |
 | ------------------ | ------ | ----------------------------------------------- |
+| No AGENTS.md       | Active | tk-ncfd - design complete, implementation next  |
 | Wrapped navigation | Open   | tk-gg9m - up/down should follow visual lines    |
-| Cursor off by 2    | Closed | Fixed wrap + margins (438f1fd, 5ab8c6b)         |
-| Newline input      | Closed | Alt+Enter + Shift+Enter (6812e21)               |
-| Scrollback cut off | Closed | Fixed by removing terminal recreation (cfc3425) |
-| Viewport gap       | Closed | Fixed by removing ui_top, render from area.y    |
-| Double blank line  | Closed | Fixed by skipping empty TextDelta (2406b91)     |
-| Token counting     | Closed | Fixed: context % + cumulative ↑ (9c83a42)       |
+| Context window     | Open   | tk-76ua - compaction should use model's context |
 
-## Config System
+## Config Locations (Proposed)
 
-**Config fields:**
+```
+~/.config/agents/           # Cross-agent standard
+├── AGENTS.md               # Global instructions
+├── skills/                 # SKILL.md files
+└── subagents/              # Subagent definitions
 
-- `provider` - Selected provider ID (openrouter, google, etc.)
-- `model` - Model name as the API expects it
-- `api_keys` - Optional section for users without env vars
-
-**API key priority:** Config file > Environment variable
-
-## Known Limitations
-
-**Sandbox:**
-
-- `check_sandbox()` is path validation, not true sandboxing.
-- True sandboxing is post-MVP.
-
-**Streaming:**
-
-- llm-connector has parse issues with streaming tool calls on some providers.
-- OpenRouter and Ollama fall back to non-streaming when tools are present.
+~/.ion/                     # Ion state only
+├── config.toml
+├── sessions.db
+└── cache/
+```

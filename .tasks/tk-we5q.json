@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "we5q",
+  "title": "Add CLAUDE.md support for compatibility with Claude Code projects",
+  "description": null,
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-24T22:36:22.181Z",
+  "updated_at": "2026-01-24T22:36:22.181Z",
+  "completed_at": null,
+  "external": {}
+}
