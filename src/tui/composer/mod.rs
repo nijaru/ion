@@ -509,7 +509,8 @@ impl ComposerState {
         self.last_width = width;
         let content = buffer.get_content();
         // Clamp cursor to buffer bounds (safety for external buffer changes)
-        let cursor_idx = self.cursor_char_idx.min(buffer.len_chars());
+        self.cursor_char_idx = self.cursor_char_idx.min(buffer.len_chars());
+        let cursor_idx = self.cursor_char_idx;
 
         let mut x = 0usize;
         let mut y = 0usize;
