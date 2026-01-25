@@ -4,6 +4,9 @@ use globset::Glob;
 use ignore::WalkBuilder;
 use serde_json::json;
 
+/// Maximum number of results to return.
+const MAX_RESULTS: usize = 1000;
+
 pub struct GlobTool;
 
 #[async_trait]
@@ -51,7 +54,7 @@ impl Tool for GlobTool {
         let working_dir = ctx.working_dir.clone();
 
         // Use ignore crate for walking, globset for matching
-        let paths = tokio::task::spawn_blocking(move || {
+        let (paths, truncated) = tokio::task::spawn_blocking(move || {
             let walker = WalkBuilder::new(&working_dir)
                 .hidden(true)
                 .git_ignore(true)
@@ -60,6 +63,7 @@ impl Tool for GlobTool {
                 .build();
 
             let mut paths = Vec::new();
+            let mut truncated = false;
             for entry in walker.flatten() {
                 let path = entry.path();
                 if !path.is_file() {
@@ -70,22 +74,32 @@ impl Tool for GlobTool {
                 if let Ok(rel_path) = path.strip_prefix(&working_dir)
                     && matcher.is_match(rel_path)
                 {
+                    if paths.len() >= MAX_RESULTS {
+                        truncated = true;
+                        break;
+                    }
                     paths.push(rel_path.to_string_lossy().into_owned());
                 }
             }
-            paths
+            (paths, truncated)
         })
         .await
         .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
 
+        let mut content = if paths.is_empty() {
+            "No files found matching the pattern.".to_string()
+        } else {
+            paths.join("\n")
+        };
+
+        if truncated {
+            content.push_str(&format!("\n\n[Truncated: showing first {} results]", MAX_RESULTS));
+        }
+
         Ok(ToolResult {
-            content: if paths.is_empty() {
-                "No files found matching the pattern.".to_string()
-            } else {
-                paths.join("\n")
-            },
+            content,
             is_error: false,
-            metadata: Some(json!({ "count": paths.len() })),
+            metadata: Some(json!({ "count": paths.len(), "truncated": truncated })),
         })
     }
 }

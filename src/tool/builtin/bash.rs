@@ -3,6 +3,9 @@ use async_trait::async_trait;
 use serde_json::json;
 use tokio::process::Command;
 
+/// Maximum output size in bytes (100KB).
+const MAX_OUTPUT_SIZE: usize = 100_000;
+
 pub struct BashTool;
 
 #[async_trait]
@@ -71,7 +74,6 @@ impl Tool for BashTool {
         };
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
         let mut content = stdout;
@@ -83,11 +85,25 @@ impl Tool for BashTool {
             content.push_str(&stderr);
         }
 
+        // Truncate large output to prevent context overflow
+        let truncated = content.len() > MAX_OUTPUT_SIZE;
+        if truncated {
+            let truncate_at = content
+                .char_indices()
+                .take_while(|(i, _)| *i < MAX_OUTPUT_SIZE)
+                .last()
+                .map(|(i, c)| i + c.len_utf8())
+                .unwrap_or(MAX_OUTPUT_SIZE);
+            content.truncate(truncate_at);
+            content.push_str("\n\n[Output truncated]");
+        }
+
         Ok(ToolResult {
             content,
             is_error: !output.status.success(),
             metadata: Some(json!({
                 "exit_code": output.status.code(),
+                "truncated": truncated,
             })),
         })
     }
