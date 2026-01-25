@@ -1,6 +1,7 @@
 use crate::tool::{DangerLevel, Tool, ToolContext, ToolError, ToolResult};
 use async_trait::async_trait;
 use serde_json::json;
+use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 /// Maximum file size to read in bytes (1MB).
@@ -80,17 +81,35 @@ impl Tool for ReadTool {
 
         let file_size = metadata.len();
 
-        // If offset/limit specified, use line-based reading
+        // If offset/limit specified, use streaming line-based reading
         if offset.is_some() || limit.is_some() {
-            let content = tokio::fs::read_to_string(&validated_path)
-                .await
-                .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read file: {}", e)))?;
-
             let start = offset.unwrap_or(0);
             let count = limit.unwrap_or(DEFAULT_LIMIT);
 
-            let lines: Vec<&str> = content.lines().skip(start).take(count).collect();
-            let total_lines = content.lines().count();
+            let path_clone = validated_path.clone();
+            let (lines, total_lines) = tokio::task::spawn_blocking(move || {
+                let file = std::fs::File::open(&path_clone)?;
+                let reader = BufReader::new(file);
+
+                let mut lines = Vec::with_capacity(count.min(1000));
+                let mut total = 0usize;
+                let mut current = 0usize;
+
+                for line_result in reader.lines() {
+                    let line = line_result?;
+                    if current >= start && lines.len() < count {
+                        lines.push(line);
+                    }
+                    current += 1;
+                    total += 1;
+                }
+
+                Ok::<_, std::io::Error>((lines, total))
+            })
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("Task join error: {}", e)))?
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read file: {}", e)))?;
+
             let shown_end = (start + lines.len()).min(total_lines);
 
             // Lazy indexing

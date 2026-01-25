@@ -122,18 +122,22 @@ impl Tool for WebFetchTool {
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read response: {}", e)))?;
 
-        let truncated = bytes.len() > max_length;
-        let body_bytes = if truncated {
-            &bytes[..max_length]
-        } else {
-            &bytes[..]
-        };
-
-        // Try to convert to string, fallback to showing byte count for binary
-        let content = match String::from_utf8(body_bytes.to_vec()) {
+        // Try to convert to string first, then truncate at char boundary
+        let content = match String::from_utf8(bytes.to_vec()) {
             Ok(text) => {
-                if truncated {
-                    format!("{}\n\n[Truncated: {} bytes total]", text, bytes.len())
+                if text.len() > max_length {
+                    // Find char boundary for clean truncation
+                    let truncate_at = text
+                        .char_indices()
+                        .take_while(|(i, _)| *i < max_length)
+                        .last()
+                        .map(|(i, c)| i + c.len_utf8())
+                        .unwrap_or(max_length);
+                    format!(
+                        "{}\n\n[Truncated: {} bytes total]",
+                        &text[..truncate_at],
+                        text.len()
+                    )
                 } else {
                     text
                 }
@@ -146,6 +150,7 @@ impl Tool for WebFetchTool {
                 )
             }
         };
+        let truncated = bytes.len() > max_length;
 
         Ok(ToolResult {
             content,

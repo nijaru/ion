@@ -118,6 +118,22 @@ pub struct Agent {
     active_plan: Arc<Mutex<Option<Plan>>>,
 }
 
+/// Create instruction loader from current directory.
+fn create_instruction_loader() -> Option<Arc<InstructionLoader>> {
+    std::env::current_dir()
+        .ok()
+        .map(|cwd| Arc::new(InstructionLoader::new(cwd)))
+}
+
+/// Create context manager with optional instruction loader.
+fn create_context_manager(system_prompt: String) -> ContextManager {
+    if let Some(loader) = create_instruction_loader() {
+        ContextManager::new(system_prompt).with_instruction_loader(loader)
+    } else {
+        ContextManager::new(system_prompt)
+    }
+}
+
 impl Agent {
     pub fn new(provider: Arc<dyn LlmApi>, orchestrator: Arc<ToolOrchestrator>) -> Self {
         let designer = Arc::new(Designer::new(provider.clone()));
@@ -127,16 +143,7 @@ impl Agent {
             compaction_config.context_window,
         ));
 
-        // Load instructions from AGENTS.md files
-        let instruction_loader = std::env::current_dir()
-            .ok()
-            .map(|cwd| Arc::new(InstructionLoader::new(cwd)));
-
-        let context_manager = if let Some(loader) = instruction_loader {
-            ContextManager::new(system_prompt).with_instruction_loader(loader)
-        } else {
-            ContextManager::new(system_prompt)
-        };
+        let context_manager = create_context_manager(system_prompt);
 
         Self {
             provider,
@@ -179,18 +186,8 @@ impl Agent {
 
     /// Set a custom system prompt (overrides default).
     pub fn with_system_prompt(self, prompt: String) -> Self {
-        let instruction_loader = std::env::current_dir()
-            .ok()
-            .map(|cwd| Arc::new(InstructionLoader::new(cwd)));
-
-        let context_manager = if let Some(loader) = instruction_loader {
-            ContextManager::new(prompt).with_instruction_loader(loader)
-        } else {
-            ContextManager::new(prompt)
-        };
-
         Self {
-            context_manager: Arc::new(context_manager),
+            context_manager: Arc::new(create_context_manager(prompt)),
             ..self
         }
     }
