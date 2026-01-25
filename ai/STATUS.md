@@ -8,22 +8,24 @@
 | Status     | Runnable        | 2026-01-25 |
 | Toolchain  | stable          | 2026-01-22 |
 | Tests      | 89 passing      | 2026-01-25 |
-| Clippy     | 13 warnings     | 2026-01-25 |
+| Clippy     | 0 warnings      | 2026-01-25 |
 | Visibility | **PUBLIC**      | 2026-01-22 |
 
 ## Active Sprint
 
 **Sprint 7: Codebase Review & Refactor** - see ai/SPRINTS.md
 
-| Task | Description             | Status         |
-| ---- | ----------------------- | -------------- |
-| S7-1 | Fix clippy warnings     | PENDING (next) |
-| S7-2 | Review tui/ module      | PENDING        |
-| S7-3 | Review agent/ module    | PENDING        |
-| S7-4 | Review provider/ module | PENDING        |
-| S7-5 | Review misc modules     | PENDING        |
-| S7-6 | Performance profiling   | PENDING        |
-| S7-7 | Consolidate & plan      | PENDING        |
+| Task | Description             | Status |
+| ---- | ----------------------- | ------ |
+| S7-1 | Fix clippy warnings     | DONE   |
+| S7-2 | Review tui/ module      | DONE   |
+| S7-3 | Review agent/ module    | DONE   |
+| S7-4 | Review provider/ module | DONE   |
+| S7-5 | Review misc modules     | DONE   |
+| S7-6 | Performance profiling   | DONE   |
+| S7-7 | Consolidate & plan      | DONE   |
+
+**Next:** Fix critical issues - see ai/review/SUMMARY.md
 
 ## Recent Completions
 
