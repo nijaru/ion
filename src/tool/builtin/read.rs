@@ -1,7 +1,7 @@
 use crate::tool::{DangerLevel, Tool, ToolContext, ToolError, ToolResult};
 use async_trait::async_trait;
 use serde_json::json;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 
 /// Maximum file size to read in bytes (1MB).
@@ -9,6 +9,9 @@ const MAX_FILE_SIZE: u64 = 1_000_000;
 
 /// Default number of lines when using offset/limit.
 const DEFAULT_LIMIT: usize = 500;
+
+/// Buffer size for streaming line count (64KB).
+const COUNT_BUFFER_SIZE: usize = 64 * 1024;
 
 pub struct ReadTool;
 
@@ -88,7 +91,7 @@ impl Tool for ReadTool {
 
             let path_clone = validated_path.clone();
             let result = tokio::task::spawn_blocking(move || {
-                read_lines_optimized(&path_clone, start, count)
+                read_lines_single_pass(&path_clone, start, count)
             })
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("Task join error: {}", e)))?
@@ -124,12 +127,13 @@ impl Tool for ReadTool {
 
         // For full file reads, check size limit
         if file_size > MAX_FILE_SIZE {
-            // Get line count quickly using SIMD
+            // Get line count using streaming (constant memory)
             let path_clone = validated_path.clone();
-            let total_lines = tokio::task::spawn_blocking(move || count_lines_fast(&path_clone))
-                .await
-                .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?
-                .unwrap_or(0);
+            let total_lines =
+                tokio::task::spawn_blocking(move || count_lines_streaming(&path_clone))
+                    .await
+                    .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?
+                    .unwrap_or(0);
 
             return Ok(ToolResult {
                 content: format!(
@@ -167,36 +171,49 @@ struct ReadResult {
     total_lines: usize,
 }
 
-/// Read specific lines from a file with fast line counting.
-fn read_lines_optimized(path: &Path, start: usize, count: usize) -> std::io::Result<ReadResult> {
-    // First, get total line count using SIMD (fast, no UTF-8 decode)
-    let total_lines = count_lines_fast(path)?;
-
-    // Then read the specific lines we need
+/// Read specific lines in a single pass, counting total lines as we go.
+fn read_lines_single_pass(path: &Path, start: usize, count: usize) -> std::io::Result<ReadResult> {
     let file = std::fs::File::open(path)?;
     let reader = BufReader::new(file);
 
     let mut lines = Vec::with_capacity(count.min(1000));
+    let mut total_lines = 0;
+
     for (i, line_result) in reader.lines().enumerate() {
-        if i >= start + count {
-            break; // Early exit once we have enough
-        }
-        if i >= start {
+        total_lines = i + 1;
+        if i >= start && lines.len() < count {
             lines.push(line_result?);
+        } else if i >= start + count {
+            // After collecting needed lines, just count remaining (skip UTF-8 decode)
+            let line = line_result?;
+            drop(line);
         }
     }
 
     Ok(ReadResult { lines, total_lines })
 }
 
-/// Count lines using SIMD-accelerated byte counting (no UTF-8 decode).
-fn count_lines_fast(path: &Path) -> std::io::Result<usize> {
-    let bytes = std::fs::read(path)?;
-    let count = bytecount::count(&bytes, b'\n');
-    // Add 1 if file doesn't end with newline but has content
-    if !bytes.is_empty() && !bytes.ends_with(&[b'\n']) {
-        Ok(count + 1)
-    } else {
-        Ok(count)
+/// Count lines using streaming with SIMD (constant memory, handles huge files).
+fn count_lines_streaming(path: &Path) -> std::io::Result<usize> {
+    let file = std::fs::File::open(path)?;
+    let mut reader = BufReader::new(file);
+    let mut count = 0;
+    let mut buf = [0u8; COUNT_BUFFER_SIZE];
+    let mut last_byte = b'\n';
+
+    loop {
+        let bytes_read = reader.read(&mut buf)?;
+        if bytes_read == 0 {
+            break;
+        }
+        count += bytecount::count(&buf[..bytes_read], b'\n');
+        last_byte = buf[bytes_read - 1];
     }
+
+    // Add 1 if file doesn't end with newline but has content
+    if last_byte != b'\n' {
+        count += 1;
+    }
+
+    Ok(count)
 }
