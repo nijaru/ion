@@ -3,6 +3,12 @@ use async_trait::async_trait;
 use serde_json::json;
 use std::path::Path;
 
+/// Maximum old file size to read for diffing (1MB).
+const MAX_DIFF_SOURCE_SIZE: u64 = 1_000_000;
+
+/// Maximum diff output size (50KB).
+const MAX_DIFF_SIZE: usize = 50_000;
+
 pub struct WriteTool;
 
 #[async_trait]
@@ -56,9 +62,14 @@ impl Tool for WriteTool {
             .check_sandbox(file_path)
             .map_err(ToolError::PermissionDenied)?;
 
-        // Read old content if exists for diffing
+        // Read old content if exists for diffing (skip if too large)
         let old_content = if validated_path.exists() {
-            tokio::fs::read_to_string(&validated_path).await.ok()
+            let metadata = tokio::fs::metadata(&validated_path).await.ok();
+            if metadata.is_some_and(|m| m.len() <= MAX_DIFF_SOURCE_SIZE) {
+                tokio::fs::read_to_string(&validated_path).await.ok()
+            } else {
+                None // Skip diff for large files
+            }
         } else {
             None
         };
@@ -94,7 +105,11 @@ impl Tool for WriteTool {
             if diff_output.is_empty() {
                 format!("Wrote {} (no changes)", file_path_str)
             } else {
-                // Return diff without markdown fences - TUI handles highlighting
+                // Truncate large diffs
+                if diff_output.len() > MAX_DIFF_SIZE {
+                    diff_output.truncate(MAX_DIFF_SIZE);
+                    diff_output.push_str("\n\n[Diff truncated]");
+                }
                 format!("Wrote {}:\n{}", file_path_str, diff_output)
             }
         } else {

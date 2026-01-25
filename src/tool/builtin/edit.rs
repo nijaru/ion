@@ -3,6 +3,12 @@ use async_trait::async_trait;
 use serde_json::json;
 use std::path::Path;
 
+/// Maximum file size for editing (5MB).
+const MAX_FILE_SIZE: u64 = 5_000_000;
+
+/// Maximum diff output size (50KB).
+const MAX_DIFF_SIZE: usize = 50_000;
+
 pub struct EditTool;
 
 #[async_trait]
@@ -96,6 +102,19 @@ impl Tool for EditTool {
             )));
         }
 
+        // Check file size
+        let metadata = tokio::fs::metadata(&validated_path)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read file: {}", e)))?;
+
+        if metadata.len() > MAX_FILE_SIZE {
+            return Err(ToolError::InvalidArgs(format!(
+                "File too large ({} bytes, max {} bytes). Use smaller edits or the write tool.",
+                metadata.len(),
+                MAX_FILE_SIZE
+            )));
+        }
+
         // Read current content
         let content = tokio::fs::read_to_string(&validated_path)
             .await
@@ -149,6 +168,13 @@ impl Tool for EditTool {
             .iter_hunks()
         {
             diff_output.push_str(&format!("{}", change));
+        }
+
+        // Truncate large diffs
+        let diff_truncated = diff_output.len() > MAX_DIFF_SIZE;
+        if diff_truncated {
+            diff_output.truncate(MAX_DIFF_SIZE);
+            diff_output.push_str("\n\n[Diff truncated]");
         }
 
         let occurrences = if replace_all && count > 1 {
