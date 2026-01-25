@@ -161,7 +161,8 @@ impl App {
         }
 
         if self.history_index == self.input_history.len() && self.history_draft.is_none() {
-            self.history_draft = Some(self.input_text());
+            // Save resolved content (with blobs expanded) so it survives history navigation
+            self.history_draft = Some(self.resolved_input_text());
         }
 
         if !self.input_history.is_empty() && self.history_index > 0 {
