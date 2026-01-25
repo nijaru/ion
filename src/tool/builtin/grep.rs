@@ -3,6 +3,13 @@ use async_trait::async_trait;
 use ignore::WalkBuilder;
 use regex::Regex;
 use serde_json::json;
+use std::io::{BufRead, BufReader};
+
+/// Maximum number of matches to return.
+const MAX_RESULTS: usize = 500;
+
+/// Maximum file size to search (skip larger files).
+const MAX_FILE_SIZE: u64 = 1_000_000;
 
 pub struct GrepTool;
 
@@ -59,8 +66,9 @@ impl Tool for GrepTool {
         let working_dir = ctx.working_dir.clone();
 
         // Use ignore crate for walking - respects .gitignore, skips hidden files and binaries
-        let results = tokio::task::spawn_blocking(move || {
+        let (results, truncated) = tokio::task::spawn_blocking(move || {
             let mut results = Vec::new();
+            let mut truncated = false;
 
             let walker = WalkBuilder::new(&validated_path)
                 .hidden(true)
@@ -69,40 +77,66 @@ impl Tool for GrepTool {
                 .git_exclude(true)
                 .build();
 
-            for entry in walker.flatten() {
+            'outer: for entry in walker.flatten() {
                 let path = entry.path();
                 if !path.is_file() {
                     continue;
                 }
 
-                // Read file and search
-                if let Ok(content) = std::fs::read_to_string(path) {
-                    let display_path = path.strip_prefix(&working_dir).unwrap_or(path);
-                    for (i, line) in content.lines().enumerate() {
-                        if regex.is_match(line) {
-                            results.push(format!(
-                                "{}:{}: {}",
-                                display_path.display(),
-                                i + 1,
-                                line.trim()
-                            ));
+                // Skip files that are too large
+                if let Ok(meta) = path.metadata() {
+                    if meta.len() > MAX_FILE_SIZE {
+                        continue;
+                    }
+                }
+
+                // Use BufReader for memory-efficient line reading
+                let file = match std::fs::File::open(path) {
+                    Ok(f) => f,
+                    Err(_) => continue,
+                };
+                let reader = BufReader::new(file);
+                let display_path = path.strip_prefix(&working_dir).unwrap_or(path);
+
+                for (i, line_result) in reader.lines().enumerate() {
+                    let line = match line_result {
+                        Ok(l) => l,
+                        Err(_) => continue, // Skip binary/invalid UTF-8 lines
+                    };
+
+                    if regex.is_match(&line) {
+                        if results.len() >= MAX_RESULTS {
+                            truncated = true;
+                            break 'outer;
                         }
+                        results.push(format!(
+                            "{}:{}: {}",
+                            display_path.display(),
+                            i + 1,
+                            line.trim()
+                        ));
                     }
                 }
             }
-            results
+            (results, truncated)
         })
         .await
         .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
 
+        let mut content = if results.is_empty() {
+            "No matches found.".to_string()
+        } else {
+            results.join("\n")
+        };
+
+        if truncated {
+            content.push_str(&format!("\n\n[Truncated: showing first {} matches]", MAX_RESULTS));
+        }
+
         Ok(ToolResult {
-            content: if results.is_empty() {
-                "No matches found.".to_string()
-            } else {
-                results.join("\n")
-            },
+            content,
             is_error: false,
-            metadata: Some(json!({ "match_count": results.len() })),
+            metadata: Some(json!({ "match_count": results.len(), "truncated": truncated })),
         })
     }
 }
