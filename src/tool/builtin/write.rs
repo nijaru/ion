@@ -105,9 +105,15 @@ impl Tool for WriteTool {
             if diff_output.is_empty() {
                 format!("Wrote {} (no changes)", file_path_str)
             } else {
-                // Truncate large diffs
+                // Truncate large diffs at char boundary
                 if diff_output.len() > MAX_DIFF_SIZE {
-                    diff_output.truncate(MAX_DIFF_SIZE);
+                    let truncate_at = diff_output
+                        .char_indices()
+                        .take_while(|(i, _)| *i < MAX_DIFF_SIZE)
+                        .last()
+                        .map(|(i, c)| i + c.len_utf8())
+                        .unwrap_or(MAX_DIFF_SIZE);
+                    diff_output.truncate(truncate_at);
                     diff_output.push_str("\n\n[Diff truncated]");
                 }
                 format!("Wrote {}:\n{}", file_path_str, diff_output)

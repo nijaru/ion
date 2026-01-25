@@ -4,6 +4,63 @@ use reqwest::Client;
 use serde_json::json;
 use std::time::Duration;
 
+/// Check if URL points to private/internal addresses (SSRF protection).
+fn is_private_or_internal(url: &reqwest::Url) -> bool {
+    match url.host_str() {
+        Some(host) => {
+            // Check domain names
+            if host == "localhost"
+                || host.ends_with(".local")
+                || host.ends_with(".internal")
+                || host == "metadata.google.internal"
+            {
+                return true;
+            }
+
+            // Try to parse as IP address
+            if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+                return match ip {
+                    std::net::IpAddr::V4(ipv4) => {
+                        ipv4.is_loopback()       // 127.0.0.0/8
+                            || ipv4.is_private() // 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
+                            || ipv4.is_link_local() // 169.254.0.0/16 (AWS/cloud metadata)
+                            || ipv4.is_broadcast()
+                            || ipv4.is_unspecified()
+                    }
+                    std::net::IpAddr::V6(ipv6) => {
+                        ipv6.is_loopback() || ipv6.is_unspecified() || is_ipv6_private(&ipv6)
+                    }
+                };
+            }
+
+            false
+        }
+        None => true, // Block if no host
+    }
+}
+
+/// Check if IPv6 address is private/internal.
+fn is_ipv6_private(ip: &std::net::Ipv6Addr) -> bool {
+    // Convert to check if it's an IPv4-mapped address
+    if let Some(ipv4) = ip.to_ipv4_mapped() {
+        return ipv4.is_loopback() || ipv4.is_private() || ipv4.is_link_local();
+    }
+
+    let segments = ip.segments();
+
+    // Unique local (fc00::/7)
+    if (segments[0] & 0xfe00) == 0xfc00 {
+        return true;
+    }
+
+    // Link-local (fe80::/10)
+    if (segments[0] & 0xffc0) == 0xfe80 {
+        return true;
+    }
+
+    false
+}
+
 pub struct WebFetchTool {
     client: Client,
 }
@@ -87,6 +144,13 @@ impl Tool for WebFetchTool {
                     scheme
                 )));
             }
+        }
+
+        // Block private/internal IPs (SSRF protection)
+        if is_private_or_internal(&parsed_url) {
+            return Err(ToolError::InvalidArgs(
+                "Cannot fetch private/internal URLs (localhost, private IPs, link-local)".to_string(),
+            ));
         }
 
         // Make the request

@@ -1,10 +1,14 @@
 use crate::tool::{DangerLevel, Tool, ToolContext, ToolError, ToolResult};
 use async_trait::async_trait;
 use serde_json::json;
+use std::time::Duration;
 use tokio::process::Command;
 
 /// Maximum output size in bytes (100KB).
 const MAX_OUTPUT_SIZE: usize = 100_000;
+
+/// Default command timeout (2 minutes).
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
 
 pub struct BashTool;
 
@@ -60,12 +64,16 @@ impl Tool for BashTool {
             .spawn()
             .map_err(|e| ToolError::ExecutionFailed(format!("Failed to spawn command: {}", e)))?;
 
-        // Wait for completion or user cancellation
+        // Wait for completion with timeout or user cancellation
         let output = tokio::select! {
-            res = child.wait_with_output() => {
+            res = tokio::time::timeout(DEFAULT_TIMEOUT, child.wait_with_output()) => {
                 match res {
-                    Ok(out) => out,
-                    Err(e) => return Err(ToolError::ExecutionFailed(format!("Failed to read command output: {}", e))),
+                    Ok(Ok(out)) => out,
+                    Ok(Err(e)) => return Err(ToolError::ExecutionFailed(format!("Failed to read command output: {}", e))),
+                    Err(_) => return Err(ToolError::ExecutionFailed(format!(
+                        "Command timed out after {} seconds",
+                        DEFAULT_TIMEOUT.as_secs()
+                    ))),
                 }
             }
             _ = ctx.abort_signal.cancelled() => {
