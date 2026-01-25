@@ -370,7 +370,10 @@ impl App {
                         if let Some(model) = self.model_picker.selected_model() {
                             self.session.model = model.id.clone();
                             if model.context_window > 0 {
-                                self.model_context_window = Some(model.context_window as usize);
+                                let ctx_window = model.context_window as usize;
+                                self.model_context_window = Some(ctx_window);
+                                // Update agent's compaction config
+                                self.agent.set_context_window(ctx_window);
                             } else {
                                 self.model_context_window = None;
                             }

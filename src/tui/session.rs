@@ -311,7 +311,10 @@ impl App {
                     self.model_picker.set_models(models.clone());
                     if let Some(model) = models.iter().find(|m| m.id == self.session.model) {
                         if model.context_window > 0 {
-                            self.model_context_window = Some(model.context_window as usize);
+                            let ctx_window = model.context_window as usize;
+                            self.model_context_window = Some(ctx_window);
+                            // Update agent's compaction config
+                            self.agent.set_context_window(ctx_window);
                         }
                     }
                     self.last_error = None; // Clear error on success
