@@ -118,7 +118,11 @@ impl App {
 
         let orchestrator = Arc::new(orchestrator);
 
-        let agent = Arc::new(Agent::new(provider_impl, orchestrator.clone()));
+        let mut agent = Agent::new(provider_impl, orchestrator.clone());
+        if let Some(ref prompt) = config.system_prompt {
+            agent = agent.with_system_prompt(prompt.clone());
+        }
+        let agent = Arc::new(agent);
 
         // Open session store
         let store = SessionStore::open(&config.sessions_db_path())
@@ -402,7 +406,11 @@ impl App {
         }
 
         // Re-create agent with new provider but same orchestrator
-        self.agent = Arc::new(Agent::new(provider, self.orchestrator.clone()));
+        let mut agent = Agent::new(provider, self.orchestrator.clone());
+        if let Some(ref prompt) = self.config.system_prompt {
+            agent = agent.with_system_prompt(prompt.clone());
+        }
+        self.agent = Arc::new(agent);
 
         // Update model registry with new key/base if it's OpenRouter
         if api_provider == Provider::OpenRouter {
