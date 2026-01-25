@@ -108,6 +108,8 @@ pub struct Agent {
     orchestrator: Arc<ToolOrchestrator>,
     designer: Option<Arc<Designer>>,
     compaction_config: CompactionConfig,
+    /// Dynamic context window size (updated when model changes)
+    context_window: Arc<std::sync::atomic::AtomicUsize>,
     token_counter: TokenCounter,
     skills: SkillRegistry,
     context_manager: Arc<ContextManager>,
@@ -118,11 +120,16 @@ impl Agent {
     pub fn new(provider: Arc<dyn LlmApi>, orchestrator: Arc<ToolOrchestrator>) -> Self {
         let designer = Arc::new(Designer::new(provider.clone()));
         let system_prompt = "You are ion, a fast terminal coding agent. Be concise and efficient. Use tools to fulfill user requests.".to_string();
+        let compaction_config = CompactionConfig::default();
+        let context_window = Arc::new(std::sync::atomic::AtomicUsize::new(
+            compaction_config.context_window,
+        ));
         Self {
             provider,
             orchestrator,
             designer: Some(designer),
-            compaction_config: CompactionConfig::default(),
+            compaction_config,
+            context_window,
             token_counter: TokenCounter::new(),
             skills: SkillRegistry::new(),
             context_manager: Arc::new(ContextManager::new(system_prompt)),
@@ -131,8 +138,24 @@ impl Agent {
     }
 
     pub fn with_compaction_config(mut self, config: CompactionConfig) -> Self {
+        self.context_window.store(
+            config.context_window,
+            std::sync::atomic::Ordering::Relaxed,
+        );
         self.compaction_config = config;
         self
+    }
+
+    /// Update the context window size (call when model changes).
+    pub fn set_context_window(&self, window: usize) {
+        self.context_window
+            .store(window, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Get the current context window size.
+    pub fn context_window(&self) -> usize {
+        self.context_window
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub fn with_skills(mut self, skills: SkillRegistry) -> Self {
@@ -175,7 +198,7 @@ impl Agent {
         let _ = tx
             .send(AgentEvent::TokenUsage {
                 used: total,
-                max: self.compaction_config.context_window,
+                max: self.context_window(),
             })
             .await;
     }
@@ -286,24 +309,17 @@ impl Agent {
         // Token usage tracking
         self.emit_token_usage(&session.messages, tx).await;
 
-        // Check for compaction
-        if check_compaction_needed(
-            &session.messages,
-            &self.compaction_config,
-            &self.token_counter,
-        )
-        .needs_compaction
+        // Check for compaction using dynamic context window
+        let mut config = self.compaction_config.clone();
+        config.context_window = self.context_window();
+
+        if check_compaction_needed(&session.messages, &config, &self.token_counter).needs_compaction
         {
-            let threshold = self.compaction_config.trigger_threshold as usize;
-            let target_tokens = self.compaction_config.target_threshold as usize;
+            let threshold = config.trigger_threshold as usize;
+            let target_tokens = config.target_threshold as usize;
 
             let mut messages = (*session.messages).to_vec();
-            let result = prune_messages(
-                &mut messages,
-                &self.compaction_config,
-                &self.token_counter,
-                target_tokens,
-            );
+            let result = prune_messages(&mut messages, &config, &self.token_counter, target_tokens);
 
             if result.tier_reached != PruningTier::None {
                 session.messages = messages;
