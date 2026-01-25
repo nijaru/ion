@@ -102,6 +102,9 @@ pub struct Config {
 
     /// Permission settings.
     pub permissions: PermissionConfig,
+
+    /// Custom system prompt (overrides default).
+    pub system_prompt: Option<String>,
 }
 
 impl Default for Config {
@@ -115,6 +118,7 @@ impl Default for Config {
             model_cache_ttl_secs: 3600,
             mcp_servers: HashMap::new(),
             permissions: PermissionConfig::default(),
+            system_prompt: None,
         }
     }
 }
@@ -275,6 +279,9 @@ impl Config {
         }
         if other.permissions.allow_outside_cwd.is_some() {
             self.permissions.allow_outside_cwd = other.permissions.allow_outside_cwd;
+        }
+        if other.system_prompt.is_some() {
+            self.system_prompt = other.system_prompt;
         }
     }
 
@@ -507,5 +514,19 @@ mod tests {
         let instructions = load_instructions(temp_dir.path());
         assert!(instructions.contains("# Agents"));
         assert!(!instructions.contains("# Claude"));
+    }
+
+    #[test]
+    fn test_system_prompt_merge() {
+        let mut base = Config::default();
+        assert!(base.system_prompt.is_none());
+
+        let other = Config {
+            system_prompt: Some("Custom prompt".to_string()),
+            ..Default::default()
+        };
+
+        base.merge(other);
+        assert_eq!(base.system_prompt, Some("Custom prompt".to_string()));
     }
 }

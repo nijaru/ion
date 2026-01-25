@@ -177,6 +177,24 @@ impl Agent {
         self
     }
 
+    /// Set a custom system prompt (overrides default).
+    pub fn with_system_prompt(self, prompt: String) -> Self {
+        let instruction_loader = std::env::current_dir()
+            .ok()
+            .map(|cwd| Arc::new(InstructionLoader::new(cwd)));
+
+        let context_manager = if let Some(loader) = instruction_loader {
+            ContextManager::new(prompt).with_instruction_loader(loader)
+        } else {
+            ContextManager::new(prompt)
+        };
+
+        Self {
+            context_manager: Arc::new(context_manager),
+            ..self
+        }
+    }
+
     pub async fn activate_skill(&self, name: Option<String>) -> Result<()> {
         let skill = if let Some(ref n) = name {
             Some(

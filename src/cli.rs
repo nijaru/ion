@@ -397,7 +397,11 @@ async fn run_inner(args: RunArgs, auto_approve: bool) -> Result<ExitCode> {
     };
 
     // Create agent
-    let agent = Arc::new(Agent::new(llm_client, orchestrator));
+    let mut agent = Agent::new(llm_client, orchestrator);
+    if let Some(ref prompt) = config.system_prompt {
+        agent = agent.with_system_prompt(prompt.clone());
+    }
+    let agent = Arc::new(agent);
 
     // Create session
     let session = Session::new(working_dir, model);
