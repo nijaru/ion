@@ -10,19 +10,49 @@ use crate::tui::App;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use std::time::Instant;
 
+/// Threshold for storing paste as blob: >5 lines or >500 chars
+const PASTE_BLOB_LINE_THRESHOLD: usize = 5;
+const PASTE_BLOB_CHAR_THRESHOLD: usize = 500;
+
 impl App {
     /// Main event dispatcher.
     pub fn handle_event(&mut self, event: Event) {
-        if let Event::Key(key) = event {
-            match self.mode {
+        match event {
+            Event::Key(key) => match self.mode {
                 Mode::Input => self.handle_input_mode(key),
                 Mode::Approval => self.handle_approval_mode(key),
                 Mode::Selector => self.handle_selector_mode(key),
                 Mode::HelpOverlay => {
                     self.mode = Mode::Input;
                 }
+            },
+            Event::Paste(text) => {
+                if self.mode == Mode::Input {
+                    self.handle_paste(text);
+                }
             }
+            _ => {}
         }
+    }
+
+    /// Handle pasted text - large pastes get stored as blobs with placeholders.
+    fn handle_paste(&mut self, text: String) {
+        let line_count = text.lines().count();
+        let char_count = text.chars().count();
+
+        if line_count > PASTE_BLOB_LINE_THRESHOLD || char_count > PASTE_BLOB_CHAR_THRESHOLD {
+            // Store as blob and insert placeholder
+            let blob_idx = self.input_buffer.push_blob(text);
+            let placeholder = format!("[Pasted text #{}]", blob_idx);
+            self.input_state.insert_str(&mut self.input_buffer, &placeholder);
+        } else {
+            // Small paste - insert directly
+            self.input_state.insert_str(&mut self.input_buffer, &text);
+        }
+
+        // Reset history tracking since input changed
+        self.history_index = self.input_history.len();
+        self.history_draft = None;
     }
 
     /// Main input handler - always active unless a modal is open.
@@ -153,11 +183,12 @@ impl App {
                 if !self.input_is_empty() {
                     let input = self.input_text();
                     if self.is_running {
-                        // Queue message for injection at next turn
+                        // Queue message for injection at next turn (resolve blobs)
+                        let resolved = self.resolved_input_text();
                         if let Some(queue) = self.message_queue.as_ref()
                             && let Ok(mut q) = queue.lock()
                         {
-                            q.push(input);
+                            q.push(resolved);
                         }
                         self.clear_input();
                     } else {
@@ -226,15 +257,18 @@ impl App {
                             }
                         }
 
-                        // Send message
+                        // Send message - resolve blobs for agent, keep display version for UI
+                        let resolved_input = self.resolved_input_text();
                         self.input_history.push(input.clone());
                         self.history_index = self.input_history.len();
                         self.history_draft = None;
                         self.clear_input();
-                        // Persist to database
+                        // Persist to database (with placeholders, for shorter storage)
                         let _ = self.store.add_input_history(&input);
+                        // Display shows placeholder (user can see what they typed)
                         self.message_list.push_user_message(input.clone());
-                        self.run_agent_task(input);
+                        // Agent gets full resolved content
+                        self.run_agent_task(resolved_input);
                     }
                 }
             }

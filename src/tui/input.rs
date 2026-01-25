@@ -5,9 +5,14 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::prelude::*;
 
 impl App {
-    /// Get the current input text.
+    /// Get the current input text (with placeholders for large pastes).
     pub(super) fn input_text(&self) -> String {
         self.input_buffer.get_content()
+    }
+
+    /// Get the full input text with paste blobs resolved.
+    pub(super) fn resolved_input_text(&self) -> String {
+        self.input_buffer.resolve_content()
     }
 
     /// Check if the input buffer is empty.
