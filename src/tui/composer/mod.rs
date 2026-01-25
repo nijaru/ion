@@ -473,6 +473,12 @@ impl ComposerState {
     /// Adjust scroll to keep cursor visible within the given height.
     /// Also clamps scroll_offset when content has shrunk.
     pub fn scroll_to_cursor(&mut self, visible_height: usize, total_lines: usize) {
+        // Guard against zero height (very small terminal)
+        if visible_height == 0 {
+            self.scroll_offset = 0;
+            return;
+        }
+
         // Clamp scroll_offset so we don't show empty space below content
         // If content fits in viewport, no scrolling needed
         // Otherwise max_scroll positions last line at bottom of viewport
@@ -502,7 +508,8 @@ impl ComposerState {
     pub fn calculate_cursor_pos(&mut self, buffer: &ComposerBuffer, width: usize) -> (u16, u16) {
         self.last_width = width;
         let content = buffer.get_content();
-        let cursor_idx = self.cursor_char_idx;
+        // Clamp cursor to buffer bounds (safety for external buffer changes)
+        let cursor_idx = self.cursor_char_idx.min(buffer.len_chars());
 
         let mut x = 0usize;
         let mut y = 0usize;

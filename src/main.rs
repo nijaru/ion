@@ -252,11 +252,9 @@ fn open_editor(initial: &str) -> Result<Option<String>, Box<dyn std::error::Erro
     use std::process::Command;
 
     // Get editor from environment (VISUAL for full-screen, EDITOR as fallback)
-    // Then try common editors that might be installed
     let editor = std::env::var("VISUAL")
         .or_else(|_| std::env::var("EDITOR"))
-        .or_else(|_| find_editor())
-        .map_err(|_| "No editor found. Set VISUAL or EDITOR environment variable.")?;
+        .map_err(|_| "No editor configured. Set VISUAL or EDITOR environment variable.\nExample: export VISUAL=nano")?;
 
     // Create temp file with initial content
     let mut temp = tempfile::NamedTempFile::with_suffix(".md")?;
@@ -279,22 +277,4 @@ fn open_editor(initial: &str) -> Result<Option<String>, Box<dyn std::error::Erro
     } else {
         Ok(Some(edited))
     }
-}
-
-/// Find a common editor that exists on the system
-fn find_editor() -> Result<String, std::env::VarError> {
-    use std::process::Command;
-
-    // Try common editors in preference order
-    for editor in ["vim", "nvim", "nano", "vi", "emacs"] {
-        if Command::new("which")
-            .arg(editor)
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-        {
-            return Ok(editor.to_string());
-        }
-    }
-    Err(std::env::VarError::NotPresent)
 }
