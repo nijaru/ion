@@ -81,74 +81,65 @@ impl Tool for ReadTool {
 
         let file_size = metadata.len();
 
-        // If offset/limit specified, use streaming line-based reading
+        // If offset/limit specified, use optimized line-based reading
         if offset.is_some() || limit.is_some() {
             let start = offset.unwrap_or(0);
             let count = limit.unwrap_or(DEFAULT_LIMIT);
 
             let path_clone = validated_path.clone();
-            let (lines, total_lines) = tokio::task::spawn_blocking(move || {
-                let file = std::fs::File::open(&path_clone)?;
-                let reader = BufReader::new(file);
-
-                let mut lines = Vec::with_capacity(count.min(1000));
-                let mut total = 0usize;
-                let mut current = 0usize;
-
-                for line_result in reader.lines() {
-                    let line = line_result?;
-                    if current >= start && lines.len() < count {
-                        lines.push(line);
-                    }
-                    current += 1;
-                    total += 1;
-                }
-
-                Ok::<_, std::io::Error>((lines, total))
+            let result = tokio::task::spawn_blocking(move || {
+                read_lines_optimized(&path_clone, start, count)
             })
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("Task join error: {}", e)))?
             .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read file: {}", e)))?;
-
-            let shown_end = (start + lines.len()).min(total_lines);
 
             // Lazy indexing
             if let Some(callback) = &ctx.index_callback {
                 callback(validated_path.clone());
             }
 
-            let mut result = lines.join("\n");
-            if shown_end < total_lines {
-                result.push_str(&format!(
+            let mut content = result.lines.join("\n");
+            let shown_end = (start + result.lines.len()).min(result.total_lines);
+            if shown_end < result.total_lines {
+                content.push_str(&format!(
                     "\n\n[Showing lines {}-{} of {}. Use offset/limit for more.]",
                     start + 1,
                     shown_end,
-                    total_lines
+                    result.total_lines
                 ));
             }
 
             return Ok(ToolResult {
-                content: result,
+                content,
                 is_error: false,
                 metadata: Some(json!({
-                    "total_lines": total_lines,
+                    "total_lines": result.total_lines,
                     "offset": start,
                     "limit": count,
-                    "shown": lines.len()
+                    "shown": result.lines.len()
                 })),
             });
         }
 
         // For full file reads, check size limit
         if file_size > MAX_FILE_SIZE {
+            // Get line count quickly using SIMD
+            let path_clone = validated_path.clone();
+            let total_lines = tokio::task::spawn_blocking(move || count_lines_fast(&path_clone))
+                .await
+                .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?
+                .unwrap_or(0);
+
             return Ok(ToolResult {
                 content: format!(
-                    "File is too large ({} bytes, max {} bytes). Use offset and limit to read specific line ranges.",
-                    file_size, MAX_FILE_SIZE
+                    "File is too large ({} bytes, {} lines). Use offset and limit to read specific line ranges.",
+                    file_size, total_lines
                 ),
                 is_error: true,
                 metadata: Some(json!({
                     "file_size": file_size,
+                    "total_lines": total_lines,
                     "max_size": MAX_FILE_SIZE
                 })),
             });
@@ -168,5 +159,44 @@ impl Tool for ReadTool {
             is_error: false,
             metadata: Some(json!({ "file_size": file_size })),
         })
+    }
+}
+
+struct ReadResult {
+    lines: Vec<String>,
+    total_lines: usize,
+}
+
+/// Read specific lines from a file with fast line counting.
+fn read_lines_optimized(path: &Path, start: usize, count: usize) -> std::io::Result<ReadResult> {
+    // First, get total line count using SIMD (fast, no UTF-8 decode)
+    let total_lines = count_lines_fast(path)?;
+
+    // Then read the specific lines we need
+    let file = std::fs::File::open(path)?;
+    let reader = BufReader::new(file);
+
+    let mut lines = Vec::with_capacity(count.min(1000));
+    for (i, line_result) in reader.lines().enumerate() {
+        if i >= start + count {
+            break; // Early exit once we have enough
+        }
+        if i >= start {
+            lines.push(line_result?);
+        }
+    }
+
+    Ok(ReadResult { lines, total_lines })
+}
+
+/// Count lines using SIMD-accelerated byte counting (no UTF-8 decode).
+fn count_lines_fast(path: &Path) -> std::io::Result<usize> {
+    let bytes = std::fs::read(path)?;
+    let count = bytecount::count(&bytes, b'\n');
+    // Add 1 if file doesn't end with newline but has content
+    if !bytes.is_empty() && !bytes.ends_with(&[b'\n']) {
+        Ok(count + 1)
+    } else {
+        Ok(count)
     }
 }
