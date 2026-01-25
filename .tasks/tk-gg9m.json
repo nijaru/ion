@@ -3,7 +3,7 @@
   "ref": "gg9m",
   "title": "TUI up/down should navigate wrapped visual lines (Codex pattern)",
   "description": null,
-  "status": "open",
+  "status": "active",
   "priority": 2,
   "labels": [],
   "assignees": [],
@@ -13,7 +13,7 @@
   "due_date": null,
   "logs": [],
   "created_at": "2026-01-24T06:40:38.961Z",
-  "updated_at": "2026-01-24T06:40:38.961Z",
+  "updated_at": "2026-01-25T00:03:16.801Z",
   "completed_at": null,
   "external": {}
 }
