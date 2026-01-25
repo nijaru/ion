@@ -547,6 +547,7 @@ impl ComposerState {
     }
 
     /// Get the number of visual lines the content occupies at the given width.
+    /// Includes the line where cursor would appear if at end of content.
     pub fn visual_line_count(&self, buffer: &ComposerBuffer, width: usize) -> usize {
         if width == 0 || buffer.is_empty() {
             return 1;
@@ -569,6 +570,11 @@ impl ComposerState {
                     col += char_width;
                 }
             }
+        }
+
+        // If last line is exactly full, cursor at end appears on next line
+        if col > 0 && col >= width {
+            lines += 1;
         }
 
         lines
@@ -1027,5 +1033,54 @@ mod tests {
             !state.move_down(&buf),
             "should not move down in empty buffer"
         );
+    }
+
+    #[test]
+    fn test_visual_line_count_full_line() {
+        let mut buf = ComposerBuffer::new();
+        let mut state = ComposerState::new();
+
+        // Exactly filling width - cursor at end should be on "next" line
+        buf.insert_str(0, "0123456789"); // 10 chars
+        state.set_cursor(10, buf.len_chars()); // at end
+
+        let cursor_pos = state.calculate_cursor_pos(&buf, 10);
+        let line_count = state.visual_line_count(&buf, 10);
+
+        // Cursor wraps to next line
+        assert_eq!(
+            cursor_pos,
+            (0, 1),
+            "cursor at end of full line wraps to (0, 1)"
+        );
+        // Line count must include the cursor's line
+        assert_eq!(
+            line_count, 2,
+            "visual_line_count must account for cursor-at-end"
+        );
+        // Cursor line must be < total lines (required for scroll logic)
+        assert!(
+            (cursor_pos.1 as usize) < line_count,
+            "cursor line {} must be < total lines {}",
+            cursor_pos.1,
+            line_count
+        );
+    }
+
+    #[test]
+    fn test_visual_line_count_not_full() {
+        let mut buf = ComposerBuffer::new();
+        let state = ComposerState::new();
+
+        // Not filling width - no extra line needed
+        buf.insert_str(0, "012345678"); // 9 chars at width 10
+        let line_count = state.visual_line_count(&buf, 10);
+        assert_eq!(line_count, 1, "partial line should be 1");
+
+        // With trailing newline
+        buf.clear();
+        buf.insert_str(0, "abc\n");
+        let line_count = state.visual_line_count(&buf, 10);
+        assert_eq!(line_count, 2, "line with newline should be 2");
     }
 }
