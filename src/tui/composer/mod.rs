@@ -115,28 +115,146 @@ impl ComposerState {
         }
     }
 
-    /// Move cursor up one line (preserving column where possible).
+    /// Move cursor up one visual line (including wrapped lines).
+    /// Uses last_width from previous render; falls back to logical line if width unknown.
     pub fn move_up(&mut self, buffer: &ComposerBuffer) -> bool {
+        if self.last_width == 0 {
+            return self.move_up_logical(buffer);
+        }
+        self.move_up_visual(buffer, self.last_width)
+    }
+
+    /// Move cursor down one visual line (including wrapped lines).
+    /// Uses last_width from previous render; falls back to logical line if width unknown.
+    pub fn move_down(&mut self, buffer: &ComposerBuffer) -> bool {
+        if self.last_width == 0 {
+            return self.move_down_logical(buffer);
+        }
+        self.move_down_visual(buffer, self.last_width)
+    }
+
+    /// Move cursor up one visual line at the given width.
+    fn move_up_visual(&mut self, buffer: &ComposerBuffer, width: usize) -> bool {
+        let content = buffer.get_content();
+        if content.is_empty() {
+            return false;
+        }
+
+        // Build visual line map: Vec<(start_char_idx, end_char_idx)>
+        let lines = self.build_visual_lines(&content, width);
+
+        // Find which visual line the cursor is on
+        let (cur_line, col_in_line) = self.find_visual_line_and_col(&lines, self.cursor_char_idx);
+
+        if cur_line == 0 {
+            return false; // Already on first visual line
+        }
+
+        // Move to same column on previous visual line
+        let prev_line = &lines[cur_line - 1];
+        let prev_line_len = prev_line.1 - prev_line.0;
+        let target_col = col_in_line.min(prev_line_len.saturating_sub(1).max(0));
+        self.cursor_char_idx = prev_line.0 + target_col;
+        true
+    }
+
+    /// Move cursor down one visual line at the given width.
+    fn move_down_visual(&mut self, buffer: &ComposerBuffer, width: usize) -> bool {
+        let content = buffer.get_content();
+        if content.is_empty() {
+            return false;
+        }
+
+        // Build visual line map
+        let lines = self.build_visual_lines(&content, width);
+
+        // Find which visual line the cursor is on
+        let (cur_line, col_in_line) = self.find_visual_line_and_col(&lines, self.cursor_char_idx);
+
+        if cur_line >= lines.len() - 1 {
+            return false; // Already on last visual line
+        }
+
+        // Move to same column on next visual line
+        let next_line = &lines[cur_line + 1];
+        let next_line_len = next_line.1 - next_line.0;
+        let target_col = col_in_line.min(next_line_len.saturating_sub(1).max(0));
+        self.cursor_char_idx = next_line.0 + target_col;
+        true
+    }
+
+    /// Build a list of visual lines as (start_char_idx, end_char_idx) pairs.
+    /// end_char_idx is exclusive.
+    fn build_visual_lines(&self, content: &str, width: usize) -> Vec<(usize, usize)> {
+        let mut lines = Vec::new();
+        let mut line_start = 0;
+        let mut col = 0;
+
+        for (i, c) in content.chars().enumerate() {
+            if c == '\n' {
+                lines.push((line_start, i + 1)); // Include newline in range
+                line_start = i + 1;
+                col = 0;
+            } else {
+                let char_width = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
+                if width > 0 && col + char_width > width {
+                    // Wrap before this character
+                    lines.push((line_start, i));
+                    line_start = i;
+                    col = char_width;
+                } else {
+                    col += char_width;
+                }
+            }
+        }
+
+        // Final line (may be empty if content ends with newline)
+        lines.push((line_start, content.chars().count()));
+        lines
+    }
+
+    /// Find which visual line contains the given char index and the column within that line.
+    fn find_visual_line_and_col(
+        &self,
+        lines: &[(usize, usize)],
+        char_idx: usize,
+    ) -> (usize, usize) {
+        for (i, (start, end)) in lines.iter().enumerate() {
+            if char_idx >= *start && char_idx < *end {
+                return (i, char_idx - start);
+            }
+            // Handle cursor at end of line (at the boundary)
+            if char_idx == *end && i == lines.len() - 1 {
+                return (i, char_idx - start);
+            }
+        }
+        // Cursor at very end
+        let last = lines.len().saturating_sub(1);
+        (last, char_idx.saturating_sub(lines[last].0))
+    }
+
+    /// Move cursor up one logical line (newline-separated).
+    fn move_up_logical(&mut self, buffer: &ComposerBuffer) -> bool {
         let line_idx = buffer.char_to_line(self.cursor_char_idx);
         if line_idx == 0 {
-            return false; // At first line, can't go up
+            return false;
         }
 
         let line_start = buffer.line_to_char(line_idx);
         let col = self.cursor_char_idx - line_start;
 
         let prev_line_start = buffer.line_to_char(line_idx - 1);
-        let prev_line_len = line_start - prev_line_start - 1; // -1 for newline
+        let prev_line_len = line_start - prev_line_start - 1;
 
         self.cursor_char_idx = prev_line_start + col.min(prev_line_len);
         true
     }
 
-    /// Move cursor down one line (preserving column where possible).
-    pub fn move_down(&mut self, buffer: &ComposerBuffer) -> bool {
+    /// Move cursor down one logical line (newline-separated).
+    fn move_down_logical(&mut self, buffer: &ComposerBuffer) -> bool {
         let line_idx = buffer.char_to_line(self.cursor_char_idx);
         if line_idx >= buffer.len_lines().saturating_sub(1) {
-            return false; // At last line, can't go down
+            return false;
         }
 
         let line_start = buffer.line_to_char(line_idx);
@@ -755,6 +873,140 @@ mod tests {
             pos,
             (0, 2),
             "cursor at 'c' on third line should be at (0, 2)"
+        );
+    }
+
+    #[test]
+    fn test_visual_line_navigation_wrapped() {
+        let mut buf = ComposerBuffer::new();
+        let mut state = ComposerState::new();
+
+        // "0123456789abcdef" at width 10 = two visual lines:
+        // Line 0: "0123456789" (chars 0-9)
+        // Line 1: "abcdef" (chars 10-15)
+        buf.insert_str(0, "0123456789abcdef");
+
+        // Initialize last_width by calculating cursor pos
+        state.set_cursor(5, buf.len_chars()); // at '5' on line 0
+        state.calculate_cursor_pos(&buf, 10);
+
+        // Move down should go to line 1, column 5 -> 'f' (char 15)
+        assert!(state.move_down(&buf));
+        assert_eq!(
+            state.cursor_char_idx(),
+            15,
+            "down from col 5 on line 0 should go to col 5 on line 1 (char 15)"
+        );
+
+        // Move up should go back to line 0, column 5 -> '5' (char 5)
+        assert!(state.move_up(&buf));
+        assert_eq!(
+            state.cursor_char_idx(),
+            5,
+            "up from col 5 on line 1 should go back to col 5 on line 0 (char 5)"
+        );
+    }
+
+    #[test]
+    fn test_visual_line_navigation_shorter_line() {
+        let mut buf = ComposerBuffer::new();
+        let mut state = ComposerState::new();
+
+        // "0123456789abc" at width 10:
+        // Line 0: "0123456789" (chars 0-9)
+        // Line 1: "abc" (chars 10-12)
+        buf.insert_str(0, "0123456789abc");
+
+        // Start at column 8 on line 0
+        state.set_cursor(8, buf.len_chars());
+        state.calculate_cursor_pos(&buf, 10);
+
+        // Move down - line 1 only has 3 chars, so cursor should go to end (col 2)
+        assert!(state.move_down(&buf));
+        assert_eq!(
+            state.cursor_char_idx(),
+            12,
+            "down from col 8 should clamp to end of shorter line 1 (char 12)"
+        );
+
+        // Move up should preserve the clamped column
+        assert!(state.move_up(&buf));
+        assert_eq!(
+            state.cursor_char_idx(),
+            2,
+            "up from col 2 should go to col 2 on line 0 (char 2)"
+        );
+    }
+
+    #[test]
+    fn test_visual_line_navigation_with_newlines() {
+        let mut buf = ComposerBuffer::new();
+        let mut state = ComposerState::new();
+
+        // "abc\n0123456789def" at width 10:
+        // Line 0: "abc\n" (chars 0-3)
+        // Line 1: "0123456789" (chars 4-13)
+        // Line 2: "def" (chars 14-16)
+        buf.insert_str(0, "abc\n0123456789def");
+
+        // Start at 'b' (char 1) on line 0
+        state.set_cursor(1, buf.len_chars());
+        state.calculate_cursor_pos(&buf, 10);
+
+        // Move down to line 1, col 1 -> '1' (char 5)
+        assert!(state.move_down(&buf));
+        assert_eq!(
+            state.cursor_char_idx(),
+            5,
+            "down from 'b' should go to '1' (char 5)"
+        );
+
+        // Move down again to line 2, col 1 -> 'e' (char 15)
+        assert!(state.move_down(&buf));
+        assert_eq!(
+            state.cursor_char_idx(),
+            15,
+            "down from '1' should go to 'e' (char 15)"
+        );
+
+        // Can't move down further
+        assert!(
+            !state.move_down(&buf),
+            "should not be able to move down from last line"
+        );
+    }
+
+    #[test]
+    fn test_visual_line_navigation_boundaries() {
+        let mut buf = ComposerBuffer::new();
+        let mut state = ComposerState::new();
+
+        // Single visual line - can't move up or down
+        buf.insert_str(0, "hello");
+        state.set_cursor(2, buf.len_chars());
+        state.calculate_cursor_pos(&buf, 20);
+
+        assert!(
+            !state.move_up(&buf),
+            "should not move up from first/only line"
+        );
+        assert!(
+            !state.move_down(&buf),
+            "should not move down from last/only line"
+        );
+    }
+
+    #[test]
+    fn test_visual_line_navigation_empty() {
+        let buf = ComposerBuffer::new();
+        let mut state = ComposerState::new();
+
+        state.calculate_cursor_pos(&buf, 10);
+
+        assert!(!state.move_up(&buf), "should not move up in empty buffer");
+        assert!(
+            !state.move_down(&buf),
+            "should not move down in empty buffer"
         );
     }
 }
