@@ -44,3 +44,7 @@ tui-markdown = "0.3.7"
 unicode-segmentation = "1.12.0"
 uuid = { version = "1.19.0", features = ["v4"] }
 unicode-width = "0.2.2"
+bytecount = { version = "0.6.9", features = ["runtime-dispatch-simd"] }
+grep-searcher = "0.1.16"
+grep-matcher = "0.1.8"
+grep-regex = "0.1.14"

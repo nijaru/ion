@@ -1,15 +1,14 @@
 use crate::tool::{DangerLevel, Tool, ToolContext, ToolError, ToolResult};
 use async_trait::async_trait;
+use grep_regex::RegexMatcher;
+use grep_searcher::sinks::UTF8;
+use grep_searcher::Searcher;
 use ignore::WalkBuilder;
-use regex::Regex;
 use serde_json::json;
-use std::io::{BufRead, BufReader};
+use std::sync::Mutex;
 
 /// Maximum number of matches to return.
 const MAX_RESULTS: usize = 500;
-
-/// Maximum file size to search (skip larger files).
-const MAX_FILE_SIZE: u64 = 1_000_000;
 
 pub struct GrepTool;
 
@@ -20,7 +19,7 @@ impl Tool for GrepTool {
     }
 
     fn description(&self) -> &str {
-        "Search for a pattern in files (regex supported)"
+        "Search for a pattern in files (regex supported). Uses ripgrep's optimized search engine."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -56,7 +55,7 @@ impl Tool for GrepTool {
 
         let search_path_str = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
 
-        let regex = Regex::new(pattern_str)
+        let matcher = RegexMatcher::new(pattern_str)
             .map_err(|e| ToolError::InvalidArgs(format!("Invalid regex: {}", e)))?;
 
         let search_path = ctx.working_dir.join(search_path_str);
@@ -65,60 +64,9 @@ impl Tool for GrepTool {
             .map_err(ToolError::PermissionDenied)?;
         let working_dir = ctx.working_dir.clone();
 
-        // Use ignore crate for walking - respects .gitignore, skips hidden files and binaries
+        // Use grep-searcher with ignore crate for walking
         let (results, truncated) = tokio::task::spawn_blocking(move || {
-            let mut results = Vec::new();
-            let mut truncated = false;
-
-            let walker = WalkBuilder::new(&validated_path)
-                .hidden(true)
-                .git_ignore(true)
-                .git_global(true)
-                .git_exclude(true)
-                .build();
-
-            'outer: for entry in walker.flatten() {
-                let path = entry.path();
-                if !path.is_file() {
-                    continue;
-                }
-
-                // Skip files that are too large
-                if let Ok(meta) = path.metadata() {
-                    if meta.len() > MAX_FILE_SIZE {
-                        continue;
-                    }
-                }
-
-                // Use BufReader for memory-efficient line reading
-                let file = match std::fs::File::open(path) {
-                    Ok(f) => f,
-                    Err(_) => continue,
-                };
-                let reader = BufReader::new(file);
-                let display_path = path.strip_prefix(&working_dir).unwrap_or(path);
-
-                for (i, line_result) in reader.lines().enumerate() {
-                    let line = match line_result {
-                        Ok(l) => l,
-                        Err(_) => continue, // Skip binary/invalid UTF-8 lines
-                    };
-
-                    if regex.is_match(&line) {
-                        if results.len() >= MAX_RESULTS {
-                            truncated = true;
-                            break 'outer;
-                        }
-                        results.push(format!(
-                            "{}:{}: {}",
-                            display_path.display(),
-                            i + 1,
-                            line.trim()
-                        ));
-                    }
-                }
-            }
-            (results, truncated)
+            search_with_grep(&matcher, &validated_path, &working_dir)
         })
         .await
         .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
@@ -130,7 +78,10 @@ impl Tool for GrepTool {
         };
 
         if truncated {
-            content.push_str(&format!("\n\n[Truncated: showing first {} matches]", MAX_RESULTS));
+            content.push_str(&format!(
+                "\n\n[Truncated: showing first {} matches]",
+                MAX_RESULTS
+            ));
         }
 
         Ok(ToolResult {
@@ -139,4 +90,58 @@ impl Tool for GrepTool {
             metadata: Some(json!({ "match_count": results.len(), "truncated": truncated })),
         })
     }
+}
+
+/// Search using grep-searcher (ripgrep's library).
+fn search_with_grep(
+    matcher: &RegexMatcher,
+    search_path: &std::path::Path,
+    working_dir: &std::path::Path,
+) -> (Vec<String>, bool) {
+    let results = Mutex::new(Vec::new());
+    let truncated = Mutex::new(false);
+
+    let walker = WalkBuilder::new(search_path)
+        .hidden(true)
+        .git_ignore(true)
+        .git_global(true)
+        .git_exclude(true)
+        .build();
+
+    let mut searcher = Searcher::new();
+
+    for entry in walker.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+
+        // Check if we've hit the limit
+        if results.lock().unwrap().len() >= MAX_RESULTS {
+            *truncated.lock().unwrap() = true;
+            break;
+        }
+
+        let display_path = path.strip_prefix(working_dir).unwrap_or(path);
+        let display_path_str = display_path.display().to_string();
+
+        // Search this file
+        let _ = searcher.search_path(
+            matcher,
+            path,
+            UTF8(|line_num, line| {
+                let mut res = results.lock().unwrap();
+                if res.len() >= MAX_RESULTS {
+                    *truncated.lock().unwrap() = true;
+                    return Ok(false); // Stop searching this file
+                }
+                res.push(format!("{}:{}: {}", display_path_str, line_num, line.trim()));
+                Ok(true)
+            }),
+        );
+    }
+
+    let results = results.into_inner().unwrap();
+    let truncated = *truncated.lock().unwrap();
+    (results, truncated)
 }
