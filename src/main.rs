@@ -59,7 +59,10 @@ async fn run_tui(
     resume_option: ResumeOption,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use crossterm::{
-        event::{self, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags},
+        event::{
+            self, DisableBracketedPaste, EnableBracketedPaste, KeyboardEnhancementFlags,
+            PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+        },
         execute,
         terminal::{disable_raw_mode, enable_raw_mode, supports_keyboard_enhancement},
     };
@@ -71,6 +74,9 @@ async fn run_tui(
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
+
+    // Enable bracketed paste mode (prevents terminal from treating paste as commands)
+    execute!(stdout, EnableBracketedPaste)?;
 
     // Enable keyboard enhancement for Shift+Enter detection (Kitty protocol)
     let supports_enhancement = supports_keyboard_enhancement().unwrap_or(false);
@@ -102,6 +108,7 @@ async fn run_tui(
         ResumeOption::ById(id) => {
             if let Err(e) = app.load_session(&id) {
                 // Restore terminal before printing error
+                let _ = execute!(io::stdout(), DisableBracketedPaste);
                 let _ = disable_raw_mode();
                 eprintln!("Error: Session '{}' not found: {}", id, e);
                 return Err(e.into());
@@ -167,6 +174,7 @@ async fn run_tui(
             app.editor_requested = false;
 
             // Temporarily restore terminal for editor
+            execute!(terminal.backend_mut(), DisableBracketedPaste)?;
             if supports_enhancement {
                 execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags)?;
             }
@@ -190,6 +198,7 @@ async fn run_tui(
 
             // Re-enter TUI mode
             enable_raw_mode()?;
+            execute!(terminal.backend_mut(), EnableBracketedPaste)?;
             if supports_enhancement {
                 execute!(
                     terminal.backend_mut(),
@@ -207,6 +216,7 @@ async fn run_tui(
     })?;
 
     // Restore terminal
+    execute!(terminal.backend_mut(), DisableBracketedPaste)?;
     if supports_enhancement {
         execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags)?;
     }
