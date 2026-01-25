@@ -97,13 +97,11 @@ async fn run_tui(
         ResumeOption::None => {}
         ResumeOption::Latest => {
             // Load most recent session
-            if let Ok(sessions) = app.store.list_recent(1) {
-                if let Some(session) = sessions.first() {
-                    if let Err(e) = app.load_session(&session.id) {
+            if let Ok(sessions) = app.store.list_recent(1)
+                && let Some(session) = sessions.first()
+                    && let Err(e) = app.load_session(&session.id) {
                         eprintln!("Warning: Failed to load session: {}", e);
                     }
-                }
-            }
         }
         ResumeOption::ById(id) => {
             if let Err(e) = app.load_session(&id) {

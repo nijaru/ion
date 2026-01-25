@@ -84,11 +84,10 @@ impl ContextManager {
         let skill = active_skill.clone();
 
         let mut cache = self.render_cache.lock().await;
-        if let Some(ref c) = *cache {
-            if c.plan.as_ref() == plan && c.skill == skill {
+        if let Some(ref c) = *cache
+            && c.plan.as_ref() == plan && c.skill == skill {
                 return c.rendered.clone();
             }
-        }
 
         let rendered = self.render_system_prompt(plan, skill.as_ref());
         *cache = Some(RenderCache {

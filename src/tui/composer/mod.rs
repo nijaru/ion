@@ -132,7 +132,7 @@ impl ComposerState {
         let prefix = rope.slice(start..self.cursor_char_idx);
         let prefix_str = prefix.to_string();
 
-        if let Some((offset, _)) = prefix_str.grapheme_indices(true).last() {
+        if let Some((offset, _)) = prefix_str.grapheme_indices(true).next_back() {
             let chars_to_move = prefix_str[offset..].chars().count();
             self.cursor_char_idx -= chars_to_move;
         } else {
@@ -292,7 +292,7 @@ impl ComposerState {
             return;
         }
 
-        if let Some((offset, _)) = trimmed.unicode_word_indices().last() {
+        if let Some((offset, _)) = trimmed.unicode_word_indices().next_back() {
             self.cursor_char_idx = offset;
         } else {
             self.cursor_char_idx = 0;
@@ -482,11 +482,7 @@ impl ComposerState {
         // Clamp scroll_offset so we don't show empty space below content
         // If content fits in viewport, no scrolling needed
         // Otherwise max_scroll positions last line at bottom of viewport
-        let max_scroll = if total_lines <= visible_height {
-            0
-        } else {
-            total_lines - visible_height
-        };
+        let max_scroll = total_lines.saturating_sub(visible_height);
         if self.scroll_offset > max_scroll {
             self.scroll_offset = max_scroll;
         }
