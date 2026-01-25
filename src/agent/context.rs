@@ -1,4 +1,5 @@
 use crate::agent::designer::Plan;
+use crate::agent::instructions::InstructionLoader;
 use crate::provider::{Message, ToolDefinition};
 use crate::skill::Skill;
 use minijinja::{Environment, context};
@@ -8,6 +9,7 @@ use tokio::sync::Mutex;
 pub struct ContextManager {
     env: Environment<'static>,
     system_prompt_base: String,
+    instruction_loader: Option<Arc<InstructionLoader>>,
     active_skill: Arc<Mutex<Option<Skill>>>,
     render_cache: Mutex<Option<RenderCache>>,
 }
@@ -27,6 +29,10 @@ pub struct ContextAssembly {
 
 const DEFAULT_SYSTEM_TEMPLATE: &str = r#"
 {{ base_instructions }}
+
+{% if instructions %}
+{{ instructions }}
+{% endif %}
 
 {% if plan %}
 --- CURRENT PLAN ---
@@ -55,9 +61,16 @@ impl ContextManager {
         Self {
             env,
             system_prompt_base,
+            instruction_loader: None,
             active_skill: Arc::new(Mutex::new(None)),
             render_cache: Mutex::new(None),
         }
+    }
+
+    /// Set the instruction loader for AGENTS.md support.
+    pub fn with_instruction_loader(mut self, loader: Arc<InstructionLoader>) -> Self {
+        self.instruction_loader = Some(loader);
+        self
     }
 
     pub async fn set_active_skill(&self, skill: Option<Skill>) {
@@ -138,9 +151,16 @@ impl ContextManager {
         let template = self.env.get_template("system").unwrap();
         let current_task = plan.and_then(|p| p.current_task());
 
+        // Load instructions from AGENTS.md files
+        let instructions = self
+            .instruction_loader
+            .as_ref()
+            .and_then(|loader| loader.load_all());
+
         template
             .render(context! {
                 base_instructions => self.system_prompt_base,
+                instructions => instructions,
                 plan => plan,
                 current_task => current_task,
                 skill => skill,
