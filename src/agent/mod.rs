@@ -1,9 +1,11 @@
 pub mod context;
 pub mod designer;
 pub mod explorer;
+pub mod instructions;
 
 use crate::agent::context::ContextManager;
 use crate::agent::designer::{Designer, Plan};
+use crate::agent::instructions::InstructionLoader;
 use crate::compaction::{
     CompactionConfig, PruningTier, TokenCounter, check_compaction_needed, prune_messages,
 };
@@ -124,6 +126,18 @@ impl Agent {
         let context_window = Arc::new(std::sync::atomic::AtomicUsize::new(
             compaction_config.context_window,
         ));
+
+        // Load instructions from AGENTS.md files
+        let instruction_loader = std::env::current_dir()
+            .ok()
+            .map(|cwd| Arc::new(InstructionLoader::new(cwd)));
+
+        let context_manager = if let Some(loader) = instruction_loader {
+            ContextManager::new(system_prompt).with_instruction_loader(loader)
+        } else {
+            ContextManager::new(system_prompt)
+        };
+
         Self {
             provider,
             orchestrator,
@@ -132,7 +146,7 @@ impl Agent {
             context_window,
             token_counter: TokenCounter::new(),
             skills: SkillRegistry::new(),
-            context_manager: Arc::new(ContextManager::new(system_prompt)),
+            context_manager: Arc::new(context_manager),
             active_plan: Arc::new(Mutex::new(None)),
         }
     }
