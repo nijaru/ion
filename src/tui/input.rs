@@ -42,21 +42,6 @@ impl App {
         changed
     }
 
-    /// Get the line number the cursor is currently on.
-    pub(super) fn input_cursor_line(&self) -> usize {
-        self.input_buffer
-            .char_to_line(self.input_state.cursor_char_idx())
-    }
-
-    /// Get the last line index in the input buffer.
-    pub(super) fn input_last_line(&self) -> usize {
-        let lines = self.input_buffer.len_lines();
-        if lines == 0 {
-            return 0;
-        }
-        lines.saturating_sub(1)
-    }
-
     /// Generate the startup header lines for the TUI.
     pub(super) fn startup_header_lines(&self) -> Vec<Line<'static>> {
         let version = format!("v{}", env!("CARGO_PKG_VERSION"));
@@ -151,9 +136,9 @@ impl App {
     /// Handle Up arrow key: cursor movement, queued message recall, or history.
     pub(super) fn handle_input_up(&mut self) -> bool {
         let input_empty = self.input_is_empty();
-        if !input_empty && self.input_cursor_line() != 0 {
-            // Try to move cursor up within the input
-            return self.input_state.move_up(&self.input_buffer);
+        // Try visual line movement first (handles both wrapped and newline-separated)
+        if !input_empty && self.input_state.move_up(&self.input_buffer) {
+            return true;
         }
 
         if self.is_running && input_empty {
@@ -191,9 +176,9 @@ impl App {
 
     /// Handle Down arrow key: cursor movement or history navigation.
     pub(super) fn handle_input_down(&mut self) -> bool {
-        // Try to move cursor down within the input first
-        if self.input_cursor_line() < self.input_last_line() {
-            return self.input_state.move_down(&self.input_buffer);
+        // Try visual line movement first (handles both wrapped and newline-separated)
+        if self.input_state.move_down(&self.input_buffer) {
+            return true;
         }
 
         if self.history_index < self.input_history.len() {
