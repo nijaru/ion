@@ -12,35 +12,26 @@
 
 ## Recent Completions
 
+**UX & Input Handling - COMPLETE** (68c13ab, cd228bf)
+
+- **Cancel/Quit UX**: Esc cancels agent (deliberate), Ctrl+C clears input / double-tap quits
+- **Progress hint**: Shows "(tokens · Esc to cancel)" during agent runs
+- **Session IDs**: Switched from UUID to `YYYYMMDD-HHMMSS-xxxx` (timestamp + 4-char random)
+- **Bracketed paste**: Enabled for proper multiline paste handling
+- **Paste blobs**: Large pastes (>5 lines or >500 chars) stored as `[Pasted text #N]`
+- **Editor fallback**: Tries vim, nvim, nano, vi, emacs if VISUAL/EDITOR not set
+- **Scroll fix**: scroll_offset now clamps when content shrinks (prevents empty space)
+- **Help modal**: Height increased to 24 lines
+
 **Tool Security & Performance Review - COMPLETE** (579fa57, 0f5559e)
 
-Security fixes:
-
-- **bash**: 2-minute timeout prevents infinite hangs
+- **bash**: User-controlled timeout (no hardcoded limit)
 - **web_fetch**: SSRF protection (blocks private IPs, localhost, link-local)
 - **glob/grep**: Disable symlink following (prevents sandbox escape)
 - **edit/write**: UTF-8 safe diff truncation (prevents panic)
-
-Performance fixes:
-
-- **read**: Single-pass line reading, streaming line count (constant memory)
+- **read**: Single-pass line reading, streaming line count
 - **grep**: Batch results per-file with atomics (reduced lock contention)
-- **web_fetch**: Stream response with size limit (no full load into memory)
-
-**Core Tools SOTA Upgrades (tk-q77r) - COMPLETE** (925a520, f87d705, 4d49c1d)
-
-- **read**: SIMD line counting via `bytecount`, 1MB limit, offset/limit pagination
-- **grep**: Rewrote with `grep-searcher` (ripgrep library), 500 match limit
-- **glob**: Parallel walking via `ignore::WalkParallel`, 1000 result limit
-- **bash**: 100KB output truncation
-- **edit**: 5MB file size limit, 50KB diff output cap
-- **write**: Skip diff for files >1MB, 50KB diff cap
-
-**Earlier this session:**
-
-- tk-su1n: Large file protection (67f6768)
-- tk-1rfr: Web fetch tool (4034606)
-- tk-bdsv: Custom system prompt (93760f4)
+- **web_fetch**: Stream response with size limit
 
 ## Architecture
 
@@ -56,17 +47,18 @@ Performance fixes:
 **TUI Stack:**
 
 - ratatui + crossterm, inline viewport with insert_before
-- Custom Composer (ropey-backed buffer)
+- Custom Composer (ropey-backed buffer) with blob storage
 - Input layout: 3-char left gutter " > ", 1-char right margin
 - Visual line navigation for wrapped text
+- Bracketed paste mode for multiline input
 
-## Remaining Issues
+## Open Work
 
-Minor items for future work:
-
-1. **grep.rs**: Results in arbitrary order (parallel) - may want sorted option
-2. **No tests**: New SOTA implementations lack unit tests
-3. **web_fetch**: Timeout hardcoded at 30s - could expose as parameter
+| Task     | Priority | Description                                        |
+| -------- | -------- | -------------------------------------------------- |
+| tk-o8qs  | P2       | Test viewport multiline input edge cases           |
+| tk-mmpr  | P3       | Decompose Agent loop into discrete phases          |
+| Sprint 6 | Deferred | TUI module refactor (2325 lines → 6 focused files) |
 
 ## Config Locations
 
