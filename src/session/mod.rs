@@ -3,6 +3,7 @@ mod store;
 pub use store::{SessionStore, SessionStoreError, SessionSummary};
 
 use crate::provider::Message;
+use chrono::Local;
 use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
 
@@ -17,10 +18,18 @@ pub struct Session {
     pub no_sandbox: bool,
 }
 
+/// Generate a session ID: YYYYMMDD-HHMMSS-xxxx (timestamp + 4-char random suffix)
+fn generate_session_id() -> String {
+    let timestamp = Local::now().format("%Y%m%d-%H%M%S");
+    // Use first 4 chars of UUID for random suffix (avoids adding rand dependency)
+    let suffix = &uuid::Uuid::new_v4().to_string()[..4];
+    format!("{}-{}", timestamp, suffix)
+}
+
 impl Session {
     pub fn new(working_dir: PathBuf, model: String) -> Self {
         Self {
-            id: uuid::Uuid::new_v4().to_string(),
+            id: generate_session_id(),
             working_dir,
             model,
             messages: Vec::new(),
