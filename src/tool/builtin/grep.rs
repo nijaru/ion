@@ -101,11 +101,13 @@ fn search_with_grep(
     let results = Mutex::new(Vec::new());
     let truncated = Mutex::new(false);
 
+    // follow_links=false prevents symlink escape from sandbox
     let walker = WalkBuilder::new(search_path)
         .hidden(true)
         .git_ignore(true)
         .git_global(true)
         .git_exclude(true)
+        .follow_links(false)
         .build();
 
     let mut searcher = Searcher::new();

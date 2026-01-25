@@ -59,12 +59,13 @@ impl Tool for GlobTool {
             let paths = Mutex::new(Vec::new());
             let truncated = Mutex::new(false);
 
-            // Build parallel walker
+            // Build parallel walker (follow_links=false prevents symlink escape)
             let walker = WalkBuilder::new(&working_dir)
                 .hidden(true)
                 .git_ignore(true)
                 .git_global(true)
                 .git_exclude(true)
+                .follow_links(false)
                 .build_parallel();
 
             walker.run(|| {

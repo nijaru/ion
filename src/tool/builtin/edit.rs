@@ -170,10 +170,16 @@ impl Tool for EditTool {
             diff_output.push_str(&format!("{}", change));
         }
 
-        // Truncate large diffs
+        // Truncate large diffs at char boundary
         let diff_truncated = diff_output.len() > MAX_DIFF_SIZE;
         if diff_truncated {
-            diff_output.truncate(MAX_DIFF_SIZE);
+            let truncate_at = diff_output
+                .char_indices()
+                .take_while(|(i, _)| *i < MAX_DIFF_SIZE)
+                .last()
+                .map(|(i, c)| i + c.len_utf8())
+                .unwrap_or(MAX_DIFF_SIZE);
+            diff_output.truncate(truncate_at);
             diff_output.push_str("\n\n[Diff truncated]");
         }
 
