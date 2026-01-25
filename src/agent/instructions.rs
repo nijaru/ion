@@ -95,11 +95,10 @@ impl InstructionLoader {
         let mut cache = self.cache.lock().ok()?;
 
         // Check if cached and still fresh
-        if let Some(cached) = cache.get(path) {
-            if cached.mtime == mtime {
+        if let Some(cached) = cache.get(path)
+            && cached.mtime == mtime {
                 return Some(cached.content.clone());
             }
-        }
 
         // Read and cache
         let content = fs::read_to_string(path).ok()?;

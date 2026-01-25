@@ -313,14 +313,13 @@ impl App {
                 AgentEvent::ModelsFetched(models) => {
                     debug!("Received ModelsFetched event with {} models", models.len());
                     self.model_picker.set_models(models.clone());
-                    if let Some(model) = models.iter().find(|m| m.id == self.session.model) {
-                        if model.context_window > 0 {
+                    if let Some(model) = models.iter().find(|m| m.id == self.session.model)
+                        && model.context_window > 0 {
                             let ctx_window = model.context_window as usize;
                             self.model_context_window = Some(ctx_window);
                             // Update agent's compaction config
                             self.agent.set_context_window(ctx_window);
                         }
-                    }
                     self.last_error = None; // Clear error on success
                     // Show all models directly (user can type to filter/search)
                     self.model_picker.start_all_models();

@@ -7,6 +7,7 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 
 /// State for the session picker modal.
+#[derive(Default)]
 pub struct SessionPicker {
     /// All available sessions.
     pub sessions: Vec<SessionSummary>,
@@ -22,18 +23,6 @@ pub struct SessionPicker {
     pub error: Option<String>,
 }
 
-impl Default for SessionPicker {
-    fn default() -> Self {
-        Self {
-            sessions: Vec::new(),
-            filtered_sessions: Vec::new(),
-            filter_input: FilterInputState::default(),
-            list_state: ListState::default(),
-            is_loading: false,
-            error: None,
-        }
-    }
-}
 
 impl SessionPicker {
     pub fn new() -> Self {

@@ -122,16 +122,6 @@ impl<'a> FilterInput<'a> {
         self.block = Some(block);
         self
     }
-
-    pub fn style(mut self, style: Style) -> Self {
-        self.style = style;
-        self
-    }
-
-    pub fn placeholder(mut self, placeholder: &'a str) -> Self {
-        self.placeholder = Some(placeholder);
-        self
-    }
 }
 
 impl Default for FilterInput<'_> {
