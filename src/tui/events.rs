@@ -49,24 +49,22 @@ impl App {
                     }
                 }
             }
-            // Ctrl+C: Clear input, cancel running task, or quit
+            // Ctrl+C: Clear input (single), quit (double when idle)
+            // Note: Esc cancels agent, Ctrl+C does not
             KeyCode::Char('c') if ctrl => {
                 if !self.input_is_empty() {
                     self.clear_input();
                     self.cancel_pending = None;
-                } else if let Some(when) = self.cancel_pending
-                    && when.elapsed() <= CANCEL_WINDOW
-                {
-                    if self.is_running {
-                        if !self.session.abort_token.is_cancelled() {
-                            self.session.abort_token.cancel();
-                        }
-                    } else {
+                } else if !self.is_running {
+                    // Only quit when idle (double-tap)
+                    if let Some(when) = self.cancel_pending
+                        && when.elapsed() <= CANCEL_WINDOW
+                    {
                         self.quit();
+                        self.cancel_pending = None;
+                    } else {
+                        self.cancel_pending = Some(Instant::now());
                     }
-                    self.cancel_pending = None;
-                } else {
-                    self.cancel_pending = Some(Instant::now());
                 }
             }
 
