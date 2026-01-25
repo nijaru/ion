@@ -6,6 +6,52 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Block, Paragraph, Widget, Wrap};
 use unicode_segmentation::UnicodeSegmentation;
 
+/// Build a list of visual lines as (start_char_idx, end_char_idx) pairs.
+/// end_char_idx is exclusive.
+fn build_visual_lines(content: &str, width: usize) -> Vec<(usize, usize)> {
+    let mut lines = Vec::new();
+    let mut line_start = 0;
+    let mut col = 0;
+
+    for (i, c) in content.chars().enumerate() {
+        if c == '\n' {
+            lines.push((line_start, i + 1)); // Include newline in range
+            line_start = i + 1;
+            col = 0;
+        } else {
+            let char_width = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
+            if width > 0 && col + char_width > width {
+                // Wrap before this character
+                lines.push((line_start, i));
+                line_start = i;
+                col = char_width;
+            } else {
+                col += char_width;
+            }
+        }
+    }
+
+    // Final line (may be empty if content ends with newline)
+    lines.push((line_start, content.chars().count()));
+    lines
+}
+
+/// Find which visual line contains the given char index and the column within that line.
+fn find_visual_line_and_col(lines: &[(usize, usize)], char_idx: usize) -> (usize, usize) {
+    for (i, (start, end)) in lines.iter().enumerate() {
+        if char_idx >= *start && char_idx < *end {
+            return (i, char_idx - start);
+        }
+        // Handle cursor at end of line (at the boundary)
+        if char_idx == *end && i == lines.len() - 1 {
+            return (i, char_idx - start);
+        }
+    }
+    // Cursor at very end
+    let last = lines.len().saturating_sub(1);
+    (last, char_idx.saturating_sub(lines[last].0))
+}
+
 /// Ephemeral UI state for the Composer widget.
 #[derive(Debug, Clone, Default)]
 pub struct ComposerState {
@@ -141,10 +187,10 @@ impl ComposerState {
         }
 
         // Build visual line map: Vec<(start_char_idx, end_char_idx)>
-        let lines = self.build_visual_lines(&content, width);
+        let lines = build_visual_lines(&content, width);
 
         // Find which visual line the cursor is on
-        let (cur_line, col_in_line) = self.find_visual_line_and_col(&lines, self.cursor_char_idx);
+        let (cur_line, col_in_line) = find_visual_line_and_col(&lines, self.cursor_char_idx);
 
         if cur_line == 0 {
             return false; // Already on first visual line
@@ -153,7 +199,7 @@ impl ComposerState {
         // Move to same column on previous visual line
         let prev_line = &lines[cur_line - 1];
         let prev_line_len = prev_line.1 - prev_line.0;
-        let target_col = col_in_line.min(prev_line_len.saturating_sub(1).max(0));
+        let target_col = col_in_line.min(prev_line_len.saturating_sub(1));
         self.cursor_char_idx = prev_line.0 + target_col;
         true
     }
@@ -166,10 +212,10 @@ impl ComposerState {
         }
 
         // Build visual line map
-        let lines = self.build_visual_lines(&content, width);
+        let lines = build_visual_lines(&content, width);
 
         // Find which visual line the cursor is on
-        let (cur_line, col_in_line) = self.find_visual_line_and_col(&lines, self.cursor_char_idx);
+        let (cur_line, col_in_line) = find_visual_line_and_col(&lines, self.cursor_char_idx);
 
         if cur_line >= lines.len() - 1 {
             return false; // Already on last visual line
@@ -178,59 +224,9 @@ impl ComposerState {
         // Move to same column on next visual line
         let next_line = &lines[cur_line + 1];
         let next_line_len = next_line.1 - next_line.0;
-        let target_col = col_in_line.min(next_line_len.saturating_sub(1).max(0));
+        let target_col = col_in_line.min(next_line_len.saturating_sub(1));
         self.cursor_char_idx = next_line.0 + target_col;
         true
-    }
-
-    /// Build a list of visual lines as (start_char_idx, end_char_idx) pairs.
-    /// end_char_idx is exclusive.
-    fn build_visual_lines(&self, content: &str, width: usize) -> Vec<(usize, usize)> {
-        let mut lines = Vec::new();
-        let mut line_start = 0;
-        let mut col = 0;
-
-        for (i, c) in content.chars().enumerate() {
-            if c == '\n' {
-                lines.push((line_start, i + 1)); // Include newline in range
-                line_start = i + 1;
-                col = 0;
-            } else {
-                let char_width = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
-                if width > 0 && col + char_width > width {
-                    // Wrap before this character
-                    lines.push((line_start, i));
-                    line_start = i;
-                    col = char_width;
-                } else {
-                    col += char_width;
-                }
-            }
-        }
-
-        // Final line (may be empty if content ends with newline)
-        lines.push((line_start, content.chars().count()));
-        lines
-    }
-
-    /// Find which visual line contains the given char index and the column within that line.
-    fn find_visual_line_and_col(
-        &self,
-        lines: &[(usize, usize)],
-        char_idx: usize,
-    ) -> (usize, usize) {
-        for (i, (start, end)) in lines.iter().enumerate() {
-            if char_idx >= *start && char_idx < *end {
-                return (i, char_idx - start);
-            }
-            // Handle cursor at end of line (at the boundary)
-            if char_idx == *end && i == lines.len() - 1 {
-                return (i, char_idx - start);
-            }
-        }
-        // Cursor at very end
-        let last = lines.len().saturating_sub(1);
-        (last, char_idx.saturating_sub(lines[last].0))
     }
 
     /// Move cursor up one logical line (newline-separated).

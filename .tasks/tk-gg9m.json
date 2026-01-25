@@ -3,7 +3,7 @@
   "ref": "gg9m",
   "title": "TUI up/down should navigate wrapped visual lines (Codex pattern)",
   "description": null,
-  "status": "active",
+  "status": "done",
   "priority": 2,
   "labels": [],
   "assignees": [],
@@ -11,9 +11,14 @@
   "blocked_by": [],
   "estimate": null,
   "due_date": null,
-  "logs": [],
+  "logs": [
+    {
+      "ts": "2026-01-25T00:04:55.323Z",
+      "msg": "Implemented visual line navigation. Up/down now follows wrapped lines, not just logical newlines. Added 5 test cases."
+    }
+  ],
   "created_at": "2026-01-24T06:40:38.961Z",
-  "updated_at": "2026-01-25T00:03:16.801Z",
-  "completed_at": null,
+  "updated_at": "2026-01-25T00:04:55.323Z",
+  "completed_at": "2026-01-25T00:04:55.302Z",
   "external": {}
 }
