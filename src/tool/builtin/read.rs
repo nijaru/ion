@@ -3,6 +3,12 @@ use async_trait::async_trait;
 use serde_json::json;
 use std::path::Path;
 
+/// Maximum file size to read in bytes (1MB).
+const MAX_FILE_SIZE: u64 = 1_000_000;
+
+/// Default number of lines when using offset/limit.
+const DEFAULT_LIMIT: usize = 500;
+
 pub struct ReadTool;
 
 #[async_trait]
@@ -12,7 +18,7 @@ impl Tool for ReadTool {
     }
 
     fn description(&self) -> &str {
-        "Read a file from the filesystem"
+        "Read a file from the filesystem. For large files, use offset and limit to read specific line ranges."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -25,11 +31,11 @@ impl Tool for ReadTool {
                 },
                 "offset": {
                     "type": "integer",
-                    "description": "Line number to start reading from"
+                    "description": "Line number to start reading from (0-indexed)"
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "Number of lines to read"
+                    "description": "Maximum number of lines to read (default: 500)"
                 }
             },
             "required": ["file_path"]
@@ -50,12 +56,84 @@ impl Tool for ReadTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidArgs("file_path is required".to_string()))?;
 
+        let offset = args
+            .get("offset")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize);
+
+        let limit = args
+            .get("limit")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize);
+
         let file_path = Path::new(file_path_str);
 
         // Check sandbox restrictions
         let validated_path = ctx
             .check_sandbox(file_path)
             .map_err(ToolError::PermissionDenied)?;
+
+        // Check file size first
+        let metadata = tokio::fs::metadata(&validated_path)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read file: {}", e)))?;
+
+        let file_size = metadata.len();
+
+        // If offset/limit specified, use line-based reading
+        if offset.is_some() || limit.is_some() {
+            let content = tokio::fs::read_to_string(&validated_path)
+                .await
+                .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read file: {}", e)))?;
+
+            let start = offset.unwrap_or(0);
+            let count = limit.unwrap_or(DEFAULT_LIMIT);
+
+            let lines: Vec<&str> = content.lines().skip(start).take(count).collect();
+            let total_lines = content.lines().count();
+            let shown_end = (start + lines.len()).min(total_lines);
+
+            // Lazy indexing
+            if let Some(callback) = &ctx.index_callback {
+                callback(validated_path.clone());
+            }
+
+            let mut result = lines.join("\n");
+            if shown_end < total_lines {
+                result.push_str(&format!(
+                    "\n\n[Showing lines {}-{} of {}. Use offset/limit for more.]",
+                    start + 1,
+                    shown_end,
+                    total_lines
+                ));
+            }
+
+            return Ok(ToolResult {
+                content: result,
+                is_error: false,
+                metadata: Some(json!({
+                    "total_lines": total_lines,
+                    "offset": start,
+                    "limit": count,
+                    "shown": lines.len()
+                })),
+            });
+        }
+
+        // For full file reads, check size limit
+        if file_size > MAX_FILE_SIZE {
+            return Ok(ToolResult {
+                content: format!(
+                    "File is too large ({} bytes, max {} bytes). Use offset and limit to read specific line ranges.",
+                    file_size, MAX_FILE_SIZE
+                ),
+                is_error: true,
+                metadata: Some(json!({
+                    "file_size": file_size,
+                    "max_size": MAX_FILE_SIZE
+                })),
+            });
+        }
 
         let content = tokio::fs::read_to_string(&validated_path)
             .await
@@ -69,7 +147,7 @@ impl Tool for ReadTool {
         Ok(ToolResult {
             content,
             is_error: false,
-            metadata: None,
+            metadata: Some(json!({ "file_size": file_size })),
         })
     }
 }
