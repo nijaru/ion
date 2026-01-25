@@ -162,12 +162,13 @@ impl Tool for EditTool {
         // Generate diff for output
         let diff = similar::TextDiff::from_lines(&content, &new_content);
         let mut diff_output = String::new();
+        use std::fmt::Write;
         for change in diff
             .unified_diff()
             .header(file_path_str, file_path_str)
             .iter_hunks()
         {
-            diff_output.push_str(&format!("{}", change));
+            let _ = write!(diff_output, "{}", change);
         }
 
         // Truncate large diffs at char boundary

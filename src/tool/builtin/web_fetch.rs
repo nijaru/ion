@@ -180,41 +180,64 @@ impl Tool for WebFetchTool {
             });
         }
 
-        // Read body with limit
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read response: {}", e)))?;
+        // Check Content-Length to reject obviously huge responses early
+        let content_length = response
+            .headers()
+            .get("content-length")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<usize>().ok());
 
-        // Try to convert to string first, then truncate at char boundary
-        let content = match String::from_utf8(bytes.to_vec()) {
-            Ok(text) => {
-                if text.len() > max_length {
-                    // Find char boundary for clean truncation
+        // Stream body with size limit (don't load entire response into memory)
+        let read_limit = max_length + 1; // Read 1 extra byte to detect truncation
+        let mut bytes = Vec::with_capacity(read_limit.min(content_length.unwrap_or(read_limit)));
+        let mut stream = response.bytes_stream();
+
+        use futures::StreamExt;
+        while let Some(chunk) = stream.next().await {
+            let chunk =
+                chunk.map_err(|e| ToolError::ExecutionFailed(format!("Failed to read response: {}", e)))?;
+            let remaining = read_limit.saturating_sub(bytes.len());
+            if remaining == 0 {
+                break;
+            }
+            let take = chunk.len().min(remaining);
+            bytes.extend_from_slice(&chunk[..take]);
+        }
+
+        let was_truncated = bytes.len() > max_length;
+        if was_truncated {
+            bytes.truncate(max_length);
+        }
+
+        // Try to convert to string, truncate at char boundary if needed
+        let (content, truncated) = match String::from_utf8(bytes.clone()) {
+            Ok(mut text) => {
+                if was_truncated {
+                    // Find last valid char boundary
                     let truncate_at = text
                         .char_indices()
                         .take_while(|(i, _)| *i < max_length)
                         .last()
                         .map(|(i, c)| i + c.len_utf8())
-                        .unwrap_or(max_length);
-                    format!(
-                        "{}\n\n[Truncated: {} bytes total]",
-                        &text[..truncate_at],
-                        text.len()
-                    )
+                        .unwrap_or(text.len());
+                    text.truncate(truncate_at);
+                    let total = content_length.map_or("unknown".to_string(), |l| l.to_string());
+                    (format!("{}\n\n[Truncated: {} bytes total]", text, total), true)
                 } else {
-                    text
+                    (text, false)
                 }
             }
             Err(_) => {
-                format!(
-                    "[Binary content: {} bytes, content-type: {}]",
-                    bytes.len(),
-                    content_type
+                let total = content_length.unwrap_or(bytes.len());
+                (
+                    format!(
+                        "[Binary content: {} bytes, content-type: {}]",
+                        total, content_type
+                    ),
+                    false,
                 )
             }
         };
-        let truncated = bytes.len() > max_length;
 
         Ok(ToolResult {
             content,

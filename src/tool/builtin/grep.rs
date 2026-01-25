@@ -5,6 +5,7 @@ use grep_searcher::sinks::UTF8;
 use grep_searcher::Searcher;
 use ignore::WalkBuilder;
 use serde_json::json;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 /// Maximum number of matches to return.
@@ -93,13 +94,15 @@ impl Tool for GrepTool {
 }
 
 /// Search using grep-searcher (ripgrep's library).
+/// Batches results per-file to minimize lock contention.
 fn search_with_grep(
     matcher: &RegexMatcher,
     search_path: &std::path::Path,
     working_dir: &std::path::Path,
 ) -> (Vec<String>, bool) {
     let results = Mutex::new(Vec::new());
-    let truncated = Mutex::new(false);
+    let result_count = AtomicUsize::new(0);
+    let truncated = AtomicBool::new(false);
 
     // follow_links=false prevents symlink escape from sandbox
     let walker = WalkBuilder::new(search_path)
@@ -118,32 +121,51 @@ fn search_with_grep(
             continue;
         }
 
-        // Check if we've hit the limit
-        if results.lock().unwrap().len() >= MAX_RESULTS {
-            *truncated.lock().unwrap() = true;
+        // Check if we've hit the limit (atomic, no lock needed)
+        if result_count.load(Ordering::Relaxed) >= MAX_RESULTS {
+            truncated.store(true, Ordering::Relaxed);
             break;
         }
 
         let display_path = path.strip_prefix(working_dir).unwrap_or(path);
         let display_path_str = display_path.display().to_string();
 
-        // Search this file
+        // Collect matches for this file locally, then batch-add to results
+        let mut file_matches = Vec::new();
+        let file_truncated = &truncated;
+        let file_count = &result_count;
+
+        // Search this file, collecting results locally
         let _ = searcher.search_path(
             matcher,
             path,
             UTF8(|line_num, line| {
-                let mut res = results.lock().unwrap();
-                if res.len() >= MAX_RESULTS {
-                    *truncated.lock().unwrap() = true;
-                    return Ok(false); // Stop searching this file
+                // Check limit with atomic (cheaper than lock)
+                if file_count.load(Ordering::Relaxed) >= MAX_RESULTS {
+                    file_truncated.store(true, Ordering::Relaxed);
+                    return Ok(false);
                 }
-                res.push(format!("{}:{}: {}", display_path_str, line_num, line.trim()));
+                file_matches.push(format!(
+                    "{}:{}: {}",
+                    display_path_str,
+                    line_num,
+                    line.trim()
+                ));
+                file_count.fetch_add(1, Ordering::Relaxed);
                 Ok(true)
             }),
         );
+        // Note: search errors (binary files, permission issues) are intentionally
+        // ignored - we continue searching other files rather than failing entirely
+
+        // Batch-add all matches from this file (single lock acquisition)
+        if !file_matches.is_empty() {
+            let mut res = results.lock().unwrap();
+            res.extend(file_matches);
+        }
     }
 
     let results = results.into_inner().unwrap();
-    let truncated = *truncated.lock().unwrap();
+    let truncated = truncated.load(Ordering::Relaxed);
     (results, truncated)
 }

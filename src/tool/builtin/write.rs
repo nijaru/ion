@@ -94,12 +94,13 @@ impl Tool for WriteTool {
         let result_msg = if let Some(old) = old_content {
             let diff = similar::TextDiff::from_lines(old.as_str(), content);
             let mut diff_output = String::new();
+            use std::fmt::Write;
             for change in diff
                 .unified_diff()
                 .header(file_path_str, file_path_str)
                 .iter_hunks()
             {
-                diff_output.push_str(&format!("{}", change));
+                let _ = write!(diff_output, "{}", change);
             }
 
             if diff_output.is_empty() {
