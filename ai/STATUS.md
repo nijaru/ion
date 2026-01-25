@@ -12,28 +12,35 @@
 
 ## Recent Completions
 
-**Core Tools Review (tk-q77r) - COMPLETE** (925a520, f87d705, 4d49c1d)
+**Tool Security & Performance Review - COMPLETE** (579fa57, 0f5559e)
 
-Comprehensive review and SOTA upgrades to all built-in tools:
+Security fixes:
+
+- **bash**: 2-minute timeout prevents infinite hangs
+- **web_fetch**: SSRF protection (blocks private IPs, localhost, link-local)
+- **glob/grep**: Disable symlink following (prevents sandbox escape)
+- **edit/write**: UTF-8 safe diff truncation (prevents panic)
+
+Performance fixes:
+
+- **read**: Single-pass line reading, streaming line count (constant memory)
+- **grep**: Batch results per-file with atomics (reduced lock contention)
+- **web_fetch**: Stream response with size limit (no full load into memory)
+
+**Core Tools SOTA Upgrades (tk-q77r) - COMPLETE** (925a520, f87d705, 4d49c1d)
 
 - **read**: SIMD line counting via `bytecount`, 1MB limit, offset/limit pagination
 - **grep**: Rewrote with `grep-searcher` (ripgrep library), 500 match limit
 - **glob**: Parallel walking via `ignore::WalkParallel`, 1000 result limit
-- **bash**: 100KB output truncation (stdout+stderr combined)
+- **bash**: 100KB output truncation
 - **edit**: 5MB file size limit, 50KB diff output cap
 - **write**: Skip diff for files >1MB, 50KB diff cap
 
-**Large File Protection (tk-su1n) - COMPLETE** (67f6768)
+**Earlier this session:**
 
-Read tool now has 1MB size limit and offset/limit for line-based reading.
-
-**Web Fetch Tool (tk-1rfr) - COMPLETE** (4034606)
-
-New `web_fetch` tool for HTTP GET requests with URL validation and response truncation.
-
-**Custom System Prompt (tk-bdsv) - COMPLETE** (93760f4)
-
-Users can now set `system_prompt` in config.toml to override default agent prompt.
+- tk-su1n: Large file protection (67f6768)
+- tk-1rfr: Web fetch tool (4034606)
+- tk-bdsv: Custom system prompt (93760f4)
 
 ## Architecture
 
@@ -53,14 +60,13 @@ Users can now set `system_prompt` in config.toml to override default agent promp
 - Input layout: 3-char left gutter " > ", 1-char right margin
 - Visual line navigation for wrapped text
 
-## Remaining Tool Issues
+## Remaining Issues
 
-Issues noted during review to address later:
+Minor items for future work:
 
-1. **read.rs**: `count_lines_fast` reads entire file to count lines - could use memmap for truly huge files
-2. **grep.rs**: Results come in arbitrary order (parallel) - may want sorted option
-3. **No tests**: New SOTA implementations lack unit tests
-4. **web_fetch**: Timeout hardcoded at 30s - should expose as parameter
+1. **grep.rs**: Results in arbitrary order (parallel) - may want sorted option
+2. **No tests**: New SOTA implementations lack unit tests
+3. **web_fetch**: Timeout hardcoded at 30s - could expose as parameter
 
 ## Config Locations
 
