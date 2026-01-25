@@ -471,7 +471,20 @@ impl ComposerState {
     }
 
     /// Adjust scroll to keep cursor visible within the given height.
-    pub fn scroll_to_cursor(&mut self, visible_height: usize) {
+    /// Also clamps scroll_offset when content has shrunk.
+    pub fn scroll_to_cursor(&mut self, visible_height: usize, total_lines: usize) {
+        // Clamp scroll_offset so we don't show empty space below content
+        // If content fits in viewport, no scrolling needed
+        // Otherwise max_scroll positions last line at bottom of viewport
+        let max_scroll = if total_lines <= visible_height {
+            0
+        } else {
+            total_lines - visible_height
+        };
+        if self.scroll_offset > max_scroll {
+            self.scroll_offset = max_scroll;
+        }
+
         let cursor_line = self.cursor_pos.1 as usize;
 
         // Cursor above viewport
@@ -651,11 +664,13 @@ impl Widget for ComposerWidget<'_> {
         } else {
             let content = self.buffer.get_content();
 
-            // Calculate cursor position before rendering
+            // Calculate cursor position and total visual lines before rendering
             self.state.calculate_cursor_pos(self.buffer, content_width);
+            let total_lines = self.state.visual_line_count(self.buffer, content_width);
 
-            // Adjust scroll to keep cursor visible
-            self.state.scroll_to_cursor(input_area.height as usize);
+            // Adjust scroll to keep cursor visible (also clamps when content shrinks)
+            self.state
+                .scroll_to_cursor(input_area.height as usize, total_lines);
 
             // Render content with wrapping
             Paragraph::new(content)
