@@ -221,9 +221,15 @@ impl App {
 
             if !stats.is_empty() {
                 progress_spans.push(Span::styled(
-                    format!(" ({})", stats.join(" · ")),
+                    format!(" ({} · ", stats.join(" · ")),
                     Style::default().dim(),
                 ));
+                progress_spans.push(Span::styled("Esc", Style::default().dim().italic()));
+                progress_spans.push(Span::styled(" to cancel)", Style::default().dim()));
+            } else {
+                progress_spans.push(Span::styled(" (", Style::default().dim()));
+                progress_spans.push(Span::styled("Esc", Style::default().dim().italic()));
+                progress_spans.push(Span::styled(" to cancel)", Style::default().dim()));
             }
 
             let progress_line = Line::from(progress_spans);
@@ -736,7 +742,7 @@ impl App {
         let area = frame.area();
         // Fixed size modal, centered (40 inner width for clean columns)
         let width = 44.min(area.width.saturating_sub(4));
-        let height = 20.min(area.height.saturating_sub(4));
+        let height = 24.min(area.height.saturating_sub(4));
         let x = (area.width.saturating_sub(width)) / 2;
         let y = (area.height.saturating_sub(height)) / 2;
         let help_area = Rect::new(area.x + x, area.y + y, width, height);
@@ -764,7 +770,8 @@ impl App {
             row("Ctrl+M", "Model selector"),
             row("Ctrl+P", "Provider selector"),
             row("Ctrl+T", "Thinking toggle"),
-            row("Ctrl+C", "Clear (double-tap cancel/quit)"),
+            row("Esc", "Cancel agent"),
+            row("Ctrl+C", "Clear (double-tap quit)"),
             row("PgUp/PgDn", "Scroll chat"),
             Line::from(""),
             Line::from(Span::styled(
