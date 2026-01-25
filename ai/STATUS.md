@@ -7,10 +7,22 @@
 | Phase      | 5 - Polish & UX | 2026-01-24 |
 | Status     | Runnable        | 2026-01-24 |
 | Toolchain  | stable          | 2026-01-22 |
-| Tests      | 86 passing      | 2026-01-24 |
+| Tests      | 87 passing      | 2026-01-25 |
 | Visibility | **PUBLIC**      | 2026-01-22 |
 
 ## Recent Completions
+
+**Large File Protection (tk-su1n) - COMPLETE** (67f6768)
+
+Read tool now has 1MB size limit and offset/limit for line-based reading.
+
+**Web Fetch Tool (tk-1rfr) - COMPLETE** (4034606)
+
+New `web_fetch` tool for HTTP GET requests with URL validation and response truncation.
+
+**Custom System Prompt (tk-bdsv) - COMPLETE** (93760f4)
+
+Users can now set `system_prompt` in config.toml to override default agent prompt.
 
 **AGENTS.md Support (tk-ncfd) - COMPLETE** (c0fd614)
 
@@ -35,7 +47,7 @@ Compaction now uses model's actual context window from metadata.
 
 - TUI + Agent loop
 - Multi-provider via llm-connector
-- Built-in tools (read, write, glob, grep, bash, edit, list)
+- Built-in tools (read, write, glob, grep, bash, edit, list, web_fetch)
 - MCP client, Session management (rusqlite)
 - Skill system
 - AGENTS.md instruction loading
