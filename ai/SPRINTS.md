@@ -6,15 +6,16 @@ Updated: 2026-01-23
 
 ## Status
 
-| Sprint | Goal                              | Status   |
-| ------ | --------------------------------- | -------- |
-| 0      | TUI Architecture                  | COMPLETE |
-| 1      | Inline Viewport Stabilization     | COMPLETE |
-| 2      | Run State UX & Error Handling     | COMPLETE |
-| 3      | Selector & Resume UX              | COMPLETE |
-| 4      | Visual Polish & Advanced Features | PLANNED  |
-| 5      | Session Storage Redesign          | PLANNED  |
-| 6      | TUI Module Refactor               | COMPLETE |
+| Sprint | Goal                              | Status     |
+| ------ | --------------------------------- | ---------- |
+| 0      | TUI Architecture                  | COMPLETE   |
+| 1      | Inline Viewport Stabilization     | COMPLETE   |
+| 2      | Run State UX & Error Handling     | COMPLETE   |
+| 3      | Selector & Resume UX              | COMPLETE   |
+| 4      | Visual Polish & Advanced Features | PLANNED    |
+| 5      | Session Storage Redesign          | PLANNED    |
+| 6      | TUI Module Refactor               | COMPLETE   |
+| 7      | Codebase Review & Refactor        | **ACTIVE** |
 
 ## Sprint 0: TUI Architecture - Custom Text Entry + Viewport Fix
 
@@ -714,3 +715,214 @@ Split tui/mod.rs into focused modules. All tasks completed in single session.
 - [x] cargo build succeeds
 - [x] cargo test passes
 - [x] All re-exports working
+
+## Sprint 7: Codebase Review & Refactor
+
+**Goal:** Zero clippy warnings, all critical bugs fixed, performance baselined
+**Source:** Codebase analysis 2026-01-25
+**Status:** ACTIVE
+
+### Demoable Outcomes
+
+- [ ] `cargo clippy` produces 0 warnings (currently 13)
+- [ ] All tests pass (89 currently)
+- [ ] No critical bugs in code review
+- [ ] Startup time baselined
+- [ ] Refactor plan documented
+
+### Module Priority
+
+| Module        | Lines | Risk | Review Focus                              |
+| ------------- | ----- | ---- | ----------------------------------------- |
+| tui/          | ~4k   | High | render.rs 800L, composer 1086L, events.rs |
+| agent/        | 735   | High | Main loop, state transitions              |
+| provider/     | ~1.5k | Med  | API errors, retries, registry 676L        |
+| tool/builtin/ | ~3k   | Med  | Recently reviewed - quick scan            |
+| session/      | 565   | Low  | Persistence correctness                   |
+| compaction/   | ~500  | Low  | Pruning edge cases                        |
+| config/       | 532   | Low  | Validation                                |
+| mcp/          | ~300  | Low  | Resource cleanup                          |
+| skill/        | ~200  | Low  | Loading edge cases                        |
+
+### Issue Severity Rubric
+
+| Severity  | Criteria                       | Action          |
+| --------- | ------------------------------ | --------------- |
+| CRITICAL  | Crashes, data loss, security   | Fix immediately |
+| IMPORTANT | Incorrect behavior, poor UX    | Fix this sprint |
+| MINOR     | Style, minor inefficiency      | Log for later   |
+| WONTFIX   | Intentional, tradeoff accepted | Document why    |
+
+### Review Checklist (per module)
+
+- **Correctness**: logic errors, off-by-one, boundary conditions, panic paths
+- **Safety**: unwraps without guard, unchecked bounds, resource leaks
+- **State**: inconsistent state after errors, race conditions
+- **Errors**: swallowed errors, unclear messages, missing recovery
+
+---
+
+## Task: S7-1 Fix clippy warnings and format
+
+**Sprint:** 7
+**Depends on:** none
+**Status:** PENDING
+
+### Description
+
+Clean baseline - zero warnings, consistent formatting.
+
+### Acceptance Criteria
+
+- [ ] `cargo clippy --fix --lib --bin ion` applied
+- [ ] Remaining 13 warnings fixed manually
+- [ ] `cargo clippy` produces 0 warnings
+- [ ] `cargo fmt --check` passes
+- [ ] All tests still pass
+
+---
+
+## Task: S7-2 Review tui/ module
+
+**Sprint:** 7
+**Depends on:** S7-1
+**Status:** PENDING
+
+### Description
+
+Review TUI module using checklist. Priority files: render.rs (800L), composer/mod.rs (1086L), events.rs (505L).
+
+### Files to Review
+
+- [ ] render.rs - rendering logic
+- [ ] composer/mod.rs - text input state
+- [ ] events.rs - event handling
+- [ ] session.rs - session management in TUI
+- [ ] model_picker.rs, provider_picker.rs - selectors
+
+### Acceptance Criteria
+
+- [ ] Checklist applied to all priority files
+- [ ] CRITICAL issues fixed inline
+- [ ] IMPORTANT/MINOR logged in ai/review/tui.md
+- [ ] Tests added for any fixed bugs
+
+---
+
+## Task: S7-3 Review agent/ module
+
+**Sprint:** 7
+**Depends on:** S7-1
+**Status:** PENDING
+
+### Description
+
+Review core agent loop. Focus on state management and error recovery.
+
+### Files to Review
+
+- [ ] mod.rs (735L) - main loop, message handling
+- [ ] instructions.rs - AGENTS.md loading
+
+### Acceptance Criteria
+
+- [ ] State transitions documented
+- [ ] Error recovery paths verified
+- [ ] CRITICAL issues fixed inline
+- [ ] Logged in ai/review/agent.md
+
+---
+
+## Task: S7-4 Review provider/ module
+
+**Sprint:** 7
+**Depends on:** S7-1
+**Status:** PENDING
+
+### Description
+
+Review provider abstraction. Focus on error handling and registry.
+
+### Files to Review
+
+- [ ] client.rs (382L) - API client
+- [ ] registry.rs (676L) - model registry
+- [ ] prefs.rs (403L) - preferences
+
+### Acceptance Criteria
+
+- [ ] API error handling verified
+- [ ] Retry logic reviewed
+- [ ] Registry edge cases checked
+- [ ] Logged in ai/review/provider.md
+
+---
+
+## Task: S7-5 Review remaining modules
+
+**Sprint:** 7
+**Depends on:** S7-1
+**Status:** PENDING
+
+### Description
+
+Quick review of lower-risk modules using checklist.
+
+### Modules
+
+- [ ] session/store.rs (565L) - persistence
+- [ ] config/mod.rs (532L) - config loading
+- [ ] compaction/\*.rs (~500L) - pruning
+- [ ] mcp/\*.rs (~300L) - MCP client
+- [ ] skill/\*.rs (~200L) - skill loading
+
+### Acceptance Criteria
+
+- [ ] Checklist spot-checks on each
+- [ ] CRITICAL issues fixed
+- [ ] Logged in ai/review/misc.md
+
+---
+
+## Task: S7-6 Performance profiling
+
+**Sprint:** 7
+**Depends on:** S7-1 (can run parallel with S7-2 through S7-5)
+**Status:** PENDING
+
+### Description
+
+Profile key performance metrics. Run parallel with code reviews.
+
+### Measurements
+
+- [ ] Startup time: `hyperfine './target/release/ion --help'`
+- [ ] First response latency (subjective)
+- [ ] Large chat history scrolling
+- [ ] Memory baseline with `cargo instruments` or heaptrack
+
+### Acceptance Criteria
+
+- [ ] Metrics baselined in ai/review/performance.md
+- [ ] Bottlenecks identified (if any)
+- [ ] Obvious optimizations noted
+
+---
+
+## Task: S7-7 Consolidate and plan
+
+**Sprint:** 7
+**Depends on:** S7-2, S7-3, S7-4, S7-5, S7-6
+**Status:** PENDING
+
+### Description
+
+Aggregate all findings, create action plan.
+
+### Acceptance Criteria
+
+- [ ] ai/review/summary.md with all findings by severity
+- [ ] `tk add` for each IMPORTANT/CRITICAL not yet fixed
+- [ ] Refactor recommendations documented
+- [ ] Sprint 8 scope defined if needed
+- [ ] Tests added for discovered edge cases
