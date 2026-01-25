@@ -7,29 +7,27 @@
 | Phase      | 5 - Polish & UX | 2026-01-24 |
 | Status     | Runnable        | 2026-01-24 |
 | Toolchain  | stable          | 2026-01-22 |
-| Tests      | 75 passing      | 2026-01-24 |
+| Tests      | 86 passing      | 2026-01-24 |
 | Visibility | **PUBLIC**      | 2026-01-22 |
 
-## Active Work
+## Recent Completions
 
-**AGENTS.md Support (tk-ncfd) - IN PROGRESS**
+**AGENTS.md Support (tk-ncfd) - COMPLETE** (c0fd614)
 
-Designing context/system prompt architecture:
+Implemented instruction loading from multiple locations:
 
-- Design doc: `ai/design/context-system.md`
-- Layered approach: ion-local → global standard → project
-- Cross-agent standard: `~/.config/agents/` (see github.com/nijaru/global-agents-config)
+- `~/.ion/AGENTS.md` (ion-specific)
+- `~/.config/agents/AGENTS.md` (cross-agent standard)
+- `./AGENTS.md` or `./CLAUDE.md` (project-level)
+- Mtime-based caching, combined into system prompt
 
-**Context % Display - COMPLETE**
+**Visual Line Navigation (tk-gg9m) - COMPLETE** (2b629fd)
 
-Fixed status line showing 0k for max context:
+Up/down keys now follow visual lines including wraps.
 
-- Now uses model metadata when available, falls back to compaction config (200k)
-- Shows percentage when max is known (6ee2bf1)
+**Context Window (tk-76ua) - COMPLETE** (53757ee)
 
-**Cursor Position (tk-lx9z) - COMPLETE**
-
-Fixed cursor wrapping + added margins (438f1fd, 5ab8c6b)
+Compaction now uses model's actual context window from metadata.
 
 ## Architecture
 
@@ -40,22 +38,16 @@ Fixed cursor wrapping + added margins (438f1fd, 5ab8c6b)
 - Built-in tools (read, write, glob, grep, bash, edit, list)
 - MCP client, Session management (rusqlite)
 - Skill system
+- AGENTS.md instruction loading
 
 **TUI Stack:**
 
 - ratatui + crossterm, inline viewport with insert_before
 - Custom Composer (ropey-backed buffer)
 - Input layout: 3-char left gutter " > ", 1-char right margin
+- Visual line navigation for wrapped text
 
-## Known Issues
-
-| Issue              | Status | Notes                                           |
-| ------------------ | ------ | ----------------------------------------------- |
-| No AGENTS.md       | Active | tk-ncfd - design complete, implementation next  |
-| Wrapped navigation | Open   | tk-gg9m - up/down should follow visual lines    |
-| Context window     | Open   | tk-76ua - compaction should use model's context |
-
-## Config Locations (Proposed)
+## Config Locations
 
 ```
 ~/.config/agents/           # Cross-agent standard
