@@ -104,7 +104,10 @@ impl App {
         let mut index = self.rendered_entries;
         while index < entry_count {
             let entry = &self.message_list.entries[index];
-            if entry.sender == Sender::Agent && self.is_running {
+            // Only skip the last entry if it's an Agent entry being actively streamed
+            // This allows Tool entries and completed Agent responses to render mid-run
+            let is_last = index == entry_count - 1;
+            if entry.sender == Sender::Agent && self.is_running && is_last {
                 break;
             }
             let mut entry_lines = ChatRenderer::build_lines(
@@ -145,7 +148,7 @@ impl App {
     pub fn viewport_height(&self, terminal_width: u16, terminal_height: u16) -> u16 {
         let input_height = self.calculate_input_height(terminal_width, terminal_height);
         let progress_height = if self.is_running || self.last_task_summary.is_some() {
-            2
+            1
         } else {
             0
         };
@@ -227,6 +230,14 @@ impl App {
                 stats.push(format!("thought for {}s", secs));
             }
 
+            // Queued message indicator
+            if let Some(ref queue) = self.message_queue
+                && let Ok(guard) = queue.lock()
+                && !guard.is_empty()
+            {
+                stats.push(format!("+{} queued", guard.len()));
+            }
+
             if !stats.is_empty() {
                 progress_spans.push(Span::styled(
                     format!(" ({} · ", stats.join(" · ")),
@@ -241,12 +252,7 @@ impl App {
             }
 
             let progress_line = Line::from(progress_spans);
-            let lines = if progress_area.height > 1 {
-                vec![Line::from(""), progress_line]
-            } else {
-                vec![progress_line]
-            };
-            frame.render_widget(Paragraph::new(lines), progress_area);
+            frame.render_widget(Paragraph::new(vec![progress_line]), progress_area);
         } else if let Some(summary) = &self.last_task_summary {
             let secs = summary.elapsed.as_secs();
             let elapsed_str = if secs >= 60 {
@@ -276,12 +282,7 @@ impl App {
                 Span::styled(label, Style::default().fg(color)),
                 Span::styled(format!(" ({})", stats.join(" · ")), Style::default().dim()),
             ]);
-            let lines = if progress_area.height > 1 {
-                vec![Line::from(""), summary_line]
-            } else {
-                vec![summary_line]
-            };
-            frame.render_widget(Paragraph::new(lines), progress_area);
+            frame.render_widget(Paragraph::new(vec![summary_line]), progress_area);
         }
     }
 
@@ -410,7 +411,7 @@ impl App {
         let input_height = self.calculate_input_height(area.width, area.height);
 
         let progress_height = if self.is_running || self.last_task_summary.is_some() {
-            2
+            1
         } else {
             0
         };
