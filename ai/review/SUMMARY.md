@@ -1,101 +1,88 @@
-# Sprint 7 Review Summary
+# Codebase Review Summary
 
-**Date:** 2026-01-25
-**Status:** COMPLETE - All critical/important issues fixed (a916d76)
+**Last Updated:** 2026-01-25
+**Status:** Sprint 8 fixes applied
 
 ## Overall Health
 
-| Module    | Health | Critical | Important | Notes                     |
-| --------- | ------ | -------- | --------- | ------------------------- |
-| tui/      | GOOD   | 0        | 2         | Well-structured, minor UX |
-| agent/    | GOOD   | 3        | 2         | Needs unwrap fixes        |
-| provider/ | GOOD   | 2        | 2         | RwLock + timeout issues   |
-| misc/     | GOOD   | 0        | 4         | MCP process lifecycle     |
+| Module    | Health | Notes                          |
+| --------- | ------ | ------------------------------ |
+| tui/      | GOOD   | Well-structured, 6 submodules  |
+| agent/    | GOOD   | Clean turn loop, plan support  |
+| provider/ | GOOD   | Multi-provider abstraction     |
+| tool/     | GOOD   | Orchestrator + approval system |
+| session/  | GOOD   | SQLite persistence             |
+| mcp/      | OK     | Needs tests, cleanup deferred  |
 
-## Critical Issues (Fix Immediately)
+## Sprint 8 Fixes Applied
 
-### Agent Module
+1. **Greedy JSON regex** - `designer.rs:10` - Changed `\{.*\}` to `\{.*?\}` (non-greedy)
+2. **Message queue silent drop** - `events.rs:188-192` - Now recovers from poisoned lock with warning
+3. **Session reload incomplete** - `session.rs:484-530` - Now shows tool calls and results
+4. **Plan never cleared** - Added `Agent::clear_plan()`, called on `/clear`
 
-1. **`execute_tools_parallel` unwrap panic** - `src/agent/mod.rs:710`
-2. **Template unwraps** - `src/agent/context.rs:59, 150`
-3. **Regex compiled per-call** - `src/agent/designer.rs:113`
+## Deferred (Low Priority)
 
-### Provider Module
+- MCP process cleanup (requires significant refactor)
+- Extract duplicated filter logic in registry.rs (refactor, not bug)
+- Config merge edge case
 
-4. **RwLock poison not handled** - `src/provider/registry.rs` (6 locations)
-5. **HTTP client no timeouts** - `src/provider/registry.rs:107`, `models_dev.rs:45`
+## Architecture
 
-## Important Issues (Fix Soon)
+**Layers:**
 
-### TUI
+```
+CLI (main.rs)
+  ↓
+TUI (tui/)
+  ├── events.rs   - Event dispatch
+  ├── session.rs  - State management
+  ├── render.rs   - Drawing
+  ├── input.rs    - Composer integration
+  ├── types.rs    - Enums, constants
+  └── util.rs     - Helpers
+  ↓
+Agent (agent/)
+  ├── mod.rs      - Turn loop, tool execution
+  ├── context.rs  - System prompt assembly
+  ├── designer.rs - Plan generation
+  └── instructions.rs - AGENTS.md loader
+  ↓
+Provider (provider/)
+  ├── client.rs   - LLM API trait
+  ├── registry.rs - Model fetching/caching
+  └── types.rs    - Message/ContentBlock types
+  ↓
+Tool (tool/)
+  ├── orchestrator.rs - Tool dispatch, approval
+  └── builtins/       - read, write, edit, bash, glob, grep
+```
 
-1. Token percentage overflow risk - `src/tui/render.rs:368`
-2. Slash command history index not reset - `src/tui/events.rs:196-258`
+**Data Flow:**
 
-### Agent
+1. User input → TUI events → Agent::run_task
+2. Agent loop: stream_response → execute_tools_parallel → repeat until no tools
+3. Tool results → TUI message_list → render
 
-3. Message queue poisoning ignored - `src/agent/mod.rs:285-294`
-4. Compaction validation missing - `src/agent/mod.rs:345-362`
+**Key Patterns:**
 
-### Provider
+- Arc<dyn Trait> for provider abstraction
+- mpsc channels for async events (agent → TUI)
+- CancellationToken for abort handling
+- Mutex/RwLock for shared state (with poison recovery)
 
-5. Duplicated filter logic - `src/provider/registry.rs:348-459`
-6. Ollama context window fallback too low (8192) - `src/provider/registry.rs:214`
+## Code Organization Assessment
 
-### Misc
+**Current structure is appropriate.** No major reorganization needed.
 
-7. MCP process cleanup not guaranteed - `src/mcp/mod.rs:49-108`
-8. Session store error context lost - `src/session/store.rs:49-51`
-9. Config merge hides explicit defaults - `src/config/mod.rs:242-246`
-10. Input history race condition - `src/session/store.rs:292-314`
+**Strengths:**
 
-## Performance
+- Clear module boundaries
+- Single responsibility per file
+- Consistent error handling (anyhow/thiserror)
+- Good separation: TUI ↔ Agent ↔ Provider
 
-| Metric          | Value  | Status     |
-| --------------- | ------ | ---------- |
-| Startup time    | 4.3 ms | Excellent  |
-| Binary size     | 32 MB  | Acceptable |
-| Test time       | 0.28s  | Excellent  |
-| Memory patterns | Clean  | No leaks   |
+**Minor improvements (optional):**
 
-**Quick win:** Add `strip = true` to `[profile.release]` (saves 3 MB)
-
-## Testing Gaps
-
-- MCP module has no tests
-- No panic tests for tool execution
-- No mutex/RwLock poisoning tests
-- No compaction edge case tests
-
-## Refactor Recommendations
-
-None required. All modules are well-structured. Issues are localized fixes.
-
-## Fixes Applied (a916d76)
-
-**All Critical:**
-
-- [x] Fix unwrap in execute_tools_parallel
-- [x] Fix RwLock poison handling in registry (6 locations)
-- [x] Add HTTP client timeouts (30s/10s)
-- [x] Fix template unwraps (use expect with message)
-- [x] Make regex static in designer.rs
-
-**All Important:**
-
-- [x] Handle message queue poisoning
-- [x] Token percentage saturating_mul
-- [x] Reset history_index after slash commands
-- [x] Session store error context
-- [x] Input history transaction
-- [x] Ollama context fallback 32768
-
-**Performance:**
-
-- [x] Add strip=true to release profile
-
-**Deferred (low priority):**
-
-- [ ] MCP process cleanup (requires significant refactor)
-- [ ] Extract duplicated filter logic (refactor, not bug)
-- [ ] Config merge logic (edge case)
+- `tui/` could group pickers into `tui/pickers/` (model, provider, session)
+- `tool/builtins/` could have integration tests

@@ -13,42 +13,45 @@
 
 ## Active Sprint
 
-**Sprint 7: Codebase Review & Refactor** - see ai/SPRINTS.md
+**Sprint 8: Core Loop & TUI Deep Review** - COMPLETE
 
-| Task | Description             | Status |
-| ---- | ----------------------- | ------ |
-| S7-1 | Fix clippy warnings     | DONE   |
-| S7-2 | Review tui/ module      | DONE   |
-| S7-3 | Review agent/ module    | DONE   |
-| S7-4 | Review provider/ module | DONE   |
-| S7-5 | Review misc modules     | DONE   |
-| S7-6 | Performance profiling   | DONE   |
-| S7-7 | Consolidate & plan      | DONE   |
+Fixes applied:
 
-**Next:** Fix critical issues - see ai/review/SUMMARY.md
-
-## Recent Completions
-
-**Composer Bug Fixes** (856f37b, 333cce4, 5167084, 0ae7cba)
-
-- Visual line navigation, scroll clamping, cursor-at-end line count
-- Cursor state consistency, history draft blobs, zero height guard
-- Editor error message (no fallback)
-
-**UX & Input Handling** (68c13ab, cd228bf)
-
-- Cancel/Quit UX, progress hint, session IDs, bracketed paste, paste blobs
-
-**Tool Security & Performance** (579fa57, 0f5559e)
-
-- SSRF protection, symlink following disabled, UTF-8 safe truncation
-- Single-pass reading, batch grep results
+- Greedy JSON regex in designer.rs (non-greedy match)
+- Message queue poison recovery (events.rs)
+- Session reload now shows tool calls/results
+- Plan cleared on /clear command
 
 ## Architecture
 
-**Core:** TUI + Agent loop, multi-provider, built-in tools, MCP client, sessions, skills
+**Current structure is appropriate.** No major reorganization needed.
 
-**TUI:** ratatui + crossterm, inline viewport, custom Composer with blob storage
+| Module    | Health | Notes                          |
+| --------- | ------ | ------------------------------ |
+| tui/      | GOOD   | Well-structured, 6 submodules  |
+| agent/    | GOOD   | Clean turn loop, plan support  |
+| provider/ | GOOD   | Multi-provider abstraction     |
+| tool/     | GOOD   | Orchestrator + approval system |
+| session/  | GOOD   | SQLite persistence             |
+| mcp/      | OK     | Needs tests, cleanup deferred  |
+
+See ai/review/SUMMARY.md for architecture diagram and details.
+
+## Recent Completions
+
+**Sprint 8 Fixes** (pending commit)
+
+- JSON regex non-greedy, message queue poison recovery
+- Session reload shows tools, plan cleared on /clear
+
+**Sprint 7 Fixes** (a916d76)
+
+- RwLock poison handling, HTTP timeouts, template expects
+- Token overflow, history reset, Ollama context fallback
+
+**Composer Bug Fixes** (856f37b, 333cce4, 5167084, 0ae7cba)
+
+- Visual line navigation, scroll clamping, cursor state consistency
 
 ## Config
 
