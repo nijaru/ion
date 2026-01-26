@@ -113,7 +113,7 @@ pub struct Agent {
     /// Dynamic context window size (updated when model changes)
     context_window: Arc<std::sync::atomic::AtomicUsize>,
     token_counter: TokenCounter,
-    skills: SkillRegistry,
+    skills: Arc<tokio::sync::RwLock<SkillRegistry>>,
     context_manager: Arc<ContextManager>,
     active_plan: Arc<Mutex<Option<Plan>>>,
 }
@@ -152,7 +152,7 @@ impl Agent {
             compaction_config,
             context_window,
             token_counter: TokenCounter::new(),
-            skills: SkillRegistry::new(),
+            skills: Arc::new(tokio::sync::RwLock::new(SkillRegistry::new())),
             context_manager: Arc::new(context_manager),
             active_plan: Arc::new(Mutex::new(None)),
         }
@@ -180,7 +180,7 @@ impl Agent {
     }
 
     pub fn with_skills(mut self, skills: SkillRegistry) -> Self {
-        self.skills = skills;
+        self.skills = Arc::new(tokio::sync::RwLock::new(skills));
         self
     }
 
@@ -194,8 +194,9 @@ impl Agent {
 
     pub async fn activate_skill(&self, name: Option<String>) -> Result<()> {
         let skill = if let Some(ref n) = name {
+            let mut skills = self.skills.write().await;
             Some(
-                self.skills
+                skills
                     .get(n)
                     .cloned()
                     .ok_or_else(|| anyhow::anyhow!("Skill not found: {}", n))?,

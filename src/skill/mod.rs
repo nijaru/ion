@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// YAML frontmatter structure per agentskills.io spec.
 #[derive(Debug, Clone, Deserialize)]
@@ -56,9 +56,17 @@ pub struct SkillSummary {
     pub description: String,
 }
 
+/// Entry in the skill registry - supports progressive loading.
+#[derive(Debug, Clone)]
+struct SkillEntry {
+    summary: SkillSummary,
+    source_path: Option<PathBuf>,
+    full: Option<Skill>,
+}
+
 #[derive(Default, Clone)]
 pub struct SkillRegistry {
-    skills: HashMap<String, Skill>,
+    entries: HashMap<String, SkillEntry>,
 }
 
 impl SkillRegistry {
@@ -66,22 +74,87 @@ impl SkillRegistry {
         Self::default()
     }
 
+    /// Register a fully loaded skill (backwards compatible).
     pub fn register(&mut self, skill: Skill) {
-        self.skills.insert(skill.name.clone(), skill);
+        let entry = SkillEntry {
+            summary: SkillSummary {
+                name: skill.name.clone(),
+                description: skill.description.clone(),
+            },
+            source_path: None,
+            full: Some(skill.clone()),
+        };
+        self.entries.insert(skill.name.clone(), entry);
     }
 
-    pub fn get(&self, name: &str) -> Option<&Skill> {
-        self.skills.get(name)
+    /// Register a skill summary for lazy loading.
+    pub fn register_summary(&mut self, summary: SkillSummary, source_path: PathBuf) {
+        let name = summary.name.clone();
+        let entry = SkillEntry {
+            summary,
+            source_path: Some(source_path),
+            full: None,
+        };
+        self.entries.insert(name, entry);
     }
 
+    /// Get a skill, loading it if necessary.
+    pub fn get(&mut self, name: &str) -> Option<&Skill> {
+        // Check if we need to load
+        if let Some(entry) = self.entries.get(name)
+            && entry.full.is_none() && entry.source_path.is_some() {
+                // Need to load - clone path to avoid borrow issues
+                let path = entry.source_path.clone().unwrap();
+                if let Ok(skills) = SkillLoader::load_from_file(&path)
+                    && let Some(skill) = skills.into_iter().find(|s| s.name == name)
+                        && let Some(entry) = self.entries.get_mut(name) {
+                            entry.full = Some(skill);
+                        }
+            }
+
+        self.entries.get(name).and_then(|e| e.full.as_ref())
+    }
+
+    /// Get skill summary without loading full content.
+    pub fn get_summary(&self, name: &str) -> Option<&SkillSummary> {
+        self.entries.get(name).map(|e| &e.summary)
+    }
+
+    /// List all skill summaries (no loading required).
     pub fn list(&self) -> Vec<SkillSummary> {
-        self.skills
-            .values()
-            .map(|s| SkillSummary {
-                name: s.name.clone(),
-                description: s.description.clone(),
-            })
-            .collect()
+        self.entries.values().map(|e| e.summary.clone()).collect()
+    }
+
+    /// Scan a directory for skills, loading only frontmatter.
+    pub fn scan_directory(&mut self, dir: &Path) -> Result<usize> {
+        let mut count = 0;
+
+        if !dir.exists() {
+            return Ok(0);
+        }
+
+        // Look for SKILL.md files in subdirectories (skill-name/SKILL.md)
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    let skill_file = path.join("SKILL.md");
+                    if skill_file.exists()
+                        && let Ok(summary) = SkillLoader::load_summary(&skill_file) {
+                            self.register_summary(summary, skill_file);
+                            count += 1;
+                        }
+                } else if path.extension().is_some_and(|e| e == "md") {
+                    // Also check for standalone SKILL.md files
+                    if let Ok(summary) = SkillLoader::load_summary(&path) {
+                        self.register_summary(summary, path);
+                        count += 1;
+                    }
+                }
+            }
+        }
+
+        Ok(count)
     }
 }
 
@@ -93,6 +166,64 @@ impl SkillLoader {
             .with_context(|| format!("Failed to read SKILL.md at {:?}", path.as_ref()))?;
 
         Self::parse_skill_md(&content)
+    }
+
+    /// Load only the skill summary (name + description) for progressive disclosure.
+    /// This is efficient for startup - avoids loading full prompt content.
+    pub fn load_summary<P: AsRef<Path>>(path: P) -> Result<SkillSummary> {
+        let content = std::fs::read_to_string(path.as_ref())
+            .with_context(|| format!("Failed to read SKILL.md at {:?}", path.as_ref()))?;
+
+        Self::parse_summary(&content)
+    }
+
+    /// Parse only the summary (frontmatter) without loading full prompt.
+    pub fn parse_summary(content: &str) -> Result<SkillSummary> {
+        let trimmed = content.trim_start();
+
+        if trimmed.starts_with("---") {
+            // YAML frontmatter - parse just the header
+            let after_first = trimmed
+                .strip_prefix("---")
+                .context("Missing frontmatter start")?;
+            let end_idx = after_first
+                .find("\n---")
+                .context("Missing frontmatter end delimiter")?;
+
+            let yaml_content = &after_first[..end_idx];
+            let frontmatter: SkillFrontmatter = serde_yaml::from_str(yaml_content)
+                .context("Failed to parse skill YAML frontmatter")?;
+
+            Ok(SkillSummary {
+                name: frontmatter.name,
+                description: frontmatter.description,
+            })
+        } else {
+            // Legacy XML - need to parse name and description tags
+            let mut name = String::new();
+            let mut description = String::new();
+
+            for line in content.lines() {
+                let trimmed_line = line.trim();
+                if trimmed_line.starts_with("<name>") && trimmed_line.ends_with("</name>") {
+                    name = trimmed_line[6..trimmed_line.len() - 7].to_string();
+                } else if trimmed_line.starts_with("<description>")
+                    && trimmed_line.ends_with("</description>")
+                {
+                    description = trimmed_line[13..trimmed_line.len() - 14].to_string();
+                }
+                // Stop once we have both
+                if !name.is_empty() && !description.is_empty() {
+                    break;
+                }
+            }
+
+            if name.is_empty() {
+                anyhow::bail!("Skill missing name");
+            }
+
+            Ok(SkillSummary { name, description })
+        }
     }
 
     /// Parse a SKILL.md file. Supports both YAML frontmatter and legacy XML format.
@@ -388,5 +519,59 @@ Flexible model skill."#;
             skills[0].models,
             Some(vec!["claude-sonnet-4".to_string(), "gpt-4o".to_string()])
         );
+    }
+
+    #[test]
+    fn test_parse_summary_yaml() {
+        let content = r#"---
+name: summary-test
+description: Test parsing just the summary
+allowed-tools:
+  - Read
+---
+This is a very long prompt that we don't want to load at startup.
+It contains many lines of instructions.
+We only want the name and description initially."#;
+
+        let summary = SkillLoader::parse_summary(content).unwrap();
+        assert_eq!(summary.name, "summary-test");
+        assert_eq!(summary.description, "Test parsing just the summary");
+    }
+
+    #[test]
+    fn test_parse_summary_xml() {
+        let content = r#"
+<skill>
+    <name>xml-summary</name>
+    <description>XML format summary test</description>
+    <prompt>
+    Long prompt content here...
+    </prompt>
+</skill>
+"#;
+        let summary = SkillLoader::parse_summary(content).unwrap();
+        assert_eq!(summary.name, "xml-summary");
+        assert_eq!(summary.description, "XML format summary test");
+    }
+
+    #[test]
+    fn test_registry_lazy_loading() {
+        let mut registry = SkillRegistry::new();
+
+        // Register a summary without full content
+        let summary = SkillSummary {
+            name: "lazy-skill".to_string(),
+            description: "A lazily loaded skill".to_string(),
+        };
+        registry.register_summary(summary, PathBuf::from("/nonexistent/path.md"));
+
+        // Should have the summary
+        let found = registry.get_summary("lazy-skill");
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().name, "lazy-skill");
+
+        // List should include it
+        let list = registry.list();
+        assert!(list.iter().any(|s| s.name == "lazy-skill"));
     }
 }
