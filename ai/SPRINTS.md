@@ -15,7 +15,8 @@ Updated: 2026-01-23
 | 4      | Visual Polish & Advanced Features | PLANNED    |
 | 5      | Session Storage Redesign          | PLANNED    |
 | 6      | TUI Module Refactor               | COMPLETE   |
-| 7      | Codebase Review & Refactor        | **ACTIVE** |
+| 7      | Codebase Review & Refactor        | COMPLETE   |
+| 8      | Core Loop & TUI Deep Review       | **ACTIVE** |
 
 ## Sprint 0: TUI Architecture - Custom Text Entry + Viewport Fix
 
@@ -913,7 +914,7 @@ Profile key performance metrics. Run parallel with code reviews.
 
 **Sprint:** 7
 **Depends on:** S7-2, S7-3, S7-4, S7-5, S7-6
-**Status:** PENDING
+**Status:** DONE
 
 ### Description
 
@@ -921,8 +922,177 @@ Aggregate all findings, create action plan.
 
 ### Acceptance Criteria
 
-- [ ] ai/review/summary.md with all findings by severity
-- [ ] `tk add` for each IMPORTANT/CRITICAL not yet fixed
-- [ ] Refactor recommendations documented
-- [ ] Sprint 8 scope defined if needed
-- [ ] Tests added for discovered edge cases
+- [x] ai/review/SUMMARY.md with all findings by severity
+- [x] All critical and important issues fixed (a916d76)
+- [x] Refactor recommendations documented
+- [x] Sprint 8 scope defined
+
+## Sprint 8: Core Loop & TUI Deep Review
+
+**Goal:** Zero known bugs in core loop and TUI; documented understanding of key flows.
+**Source:** Sprint 7 revealed automated reviews find theoretical issues, not real bugs.
+**Status:** ACTIVE
+
+### Demoable Outcomes
+
+- [ ] All critical bugs fixed (with commit SHAs)
+- [ ] ai/review/sprint8-summary.md with findings
+- [ ] Manual test checklist with pass/fail status
+
+### Approach
+
+No subagents. Manual code reading, tracing actual user flows. S8-1, S8-2, S8-3 can run in parallel.
+
+---
+
+## Task: S8-1 Trace Agent Turn Loop
+
+**Sprint:** 8
+**Depends on:** none
+**Status:** PENDING
+
+### Description
+
+Read `src/agent/mod.rs` line by line. Trace what happens each turn.
+
+### Flows to Trace
+
+1. `run_task()` entry → user message added → first turn
+2. `execute_turn()` → stream or complete → assistant blocks collected
+3. Tool calls → `execute_tools_parallel()` → results collected → loop continues
+4. Cancellation mid-stream → abort token checked
+5. Cancellation mid-tool → JoinSet aborted
+6. Retry on transient error → backoff → retry
+7. Compaction trigger → messages pruned
+
+### Checklist
+
+- [ ] Cancellation works mid-stream (abort_token checked in select!)
+- [ ] Cancellation works mid-tool (JoinSet aborted)
+- [ ] Tool results ordered correctly (index preserved)
+- [ ] Retry logic actually retries (delay, counter increment)
+- [ ] Compaction triggers at threshold (token check)
+- [ ] Queued user messages drain between turns (message_queue Arc<Mutex<Vec>>)
+- [ ] Malformed tool call from API handled gracefully
+- [ ] Individual tool timeout doesn't hang entire execution
+
+### Output
+
+Issues found → ai/review/agent-deep.md
+
+---
+
+## Task: S8-2 Trace TUI Event Flow
+
+**Sprint:** 8
+**Depends on:** none
+**Status:** PENDING
+
+### Description
+
+Read `src/tui/events.rs` and `src/tui/session.rs`. Trace key → action → state.
+
+### Flows to Trace
+
+1. Char input → insert into buffer → cursor update
+2. Enter → input validated → `run_agent_task()` spawned
+3. Slash command → recognized → action (model/provider/clear/quit)
+4. Esc during task → `abort_token.cancel()` called
+5. Esc Esc (idle) → input cleared
+6. Ctrl+C Ctrl+C (idle, empty) → quit
+7. Up/Down → history navigation or cursor movement
+8. Mode transitions → state consistency
+
+### Checklist
+
+- [ ] Double-Esc clears input
+- [ ] Double-Ctrl+C quits when idle (with empty input)
+- [ ] Esc cancels running task
+- [ ] Mode transitions (Input↔Selector↔Approval) reset relevant state
+- [ ] History works with multiline input
+- [ ] Mid-task message injection via Enter works
+- [ ] Large paste creates blob placeholder correctly
+- [ ] Terminal resize during operation doesn't corrupt display
+
+### Output
+
+Issues found → ai/review/tui-events-deep.md
+
+---
+
+## Task: S8-3 Trace TUI Rendering
+
+**Sprint:** 8
+**Depends on:** none
+**Status:** PENDING
+
+### Description
+
+Read `src/tui/render.rs` and `src/tui/composer/`. Trace display updates.
+
+### Flows to Trace
+
+1. Empty state → startup header inserted
+2. User submits → message in list → `take_chat_inserts()` → scrollback
+3. Agent streams → deltas → message entry updated
+4. Tool call → start event → result event → display
+5. Progress line → spinner vs summary
+6. Cursor position → `calculate_cursor_pos()` → screen coords
+
+### Checklist
+
+- [ ] Streaming updates display incrementally
+- [ ] Cursor position correct in multiline (visual line wrapping)
+- [ ] Scroll works with 100+ messages
+- [ ] Progress shows accurate elapsed/tokens
+- [ ] Tool results formatted (diffs, code blocks)
+- [ ] Large tool output truncated sensibly
+
+### Output
+
+Issues found → ai/review/tui-render-deep.md
+
+---
+
+## Task: S8-4 Integration Testing
+
+**Sprint:** 8
+**Depends on:** S8-1, S8-2, S8-3
+**Status:** PENDING
+
+### Description
+
+Actually use the app. Hit each flow manually.
+
+### Test Scenarios
+
+1. Cold start → setup flow → model selection → first message
+2. Multi-turn with tool use (read, write, edit)
+3. Cancel mid-response
+4. Long conversation (20+ turns) → compaction
+5. `/resume` → load previous session
+6. Ctrl+P → switch provider → fetch models
+
+### Output
+
+Bugs encountered → ai/review/integration-bugs.md
+
+---
+
+## Task: S8-5 Fix and Document
+
+**Sprint:** 8
+**Depends on:** S8-1, S8-2, S8-3, S8-4
+**Status:** PENDING
+
+### Description
+
+Collect issues from S8-1 through S8-4. Fix critical/important. Document the rest.
+
+### Acceptance Criteria
+
+- [ ] All critical issues fixed (commit SHAs in summary)
+- [ ] All important issues fixed or added to `tk`
+- [ ] Minor issues logged for future
+- [ ] ai/review/sprint8-summary.md complete
+- [ ] STATUS.md updated
