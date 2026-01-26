@@ -16,7 +16,8 @@ Updated: 2026-01-23
 | 5      | Session Storage Redesign          | PLANNED    |
 | 6      | TUI Module Refactor               | COMPLETE   |
 | 7      | Codebase Review & Refactor        | COMPLETE   |
-| 8      | Core Loop & TUI Deep Review       | **ACTIVE** |
+| 8      | Core Loop & TUI Deep Review       | COMPLETE   |
+| 9      | Feature Parity & Extensibility    | **ACTIVE** |
 
 ## Sprint 0: TUI Architecture - Custom Text Entry + Viewport Fix
 
@@ -1096,3 +1097,385 @@ Collect issues from S8-1 through S8-4. Fix critical/important. Document the rest
 - [ ] Minor issues logged for future
 - [ ] ai/review/sprint8-summary.md complete
 - [ ] STATUS.md updated
+
+## Sprint 9: Feature Parity & Extensibility
+
+**Goal:** Web fetch, skills spec compliance, subagents, API caching
+**Target:** Pi + Claude Code feature blend
+**Source:** Competitive analysis 2026-01-25
+**Status:** ACTIVE
+
+### Demoable Outcomes
+
+- [ ] `web_fetch` tool works (fetch URL, extract content)
+- [ ] Skills load with YAML frontmatter (agentskills.io spec)
+- [ ] Progressive disclosure: summaries at startup, full on activation
+- [ ] Subagent spawning with tool restrictions
+- [ ] Anthropic cache_control in requests
+
+### Priority Order
+
+| Priority | Task                       | Rationale                              |
+| -------- | -------------------------- | -------------------------------------- |
+| 1        | Web fetch tool             | Core utility, all competitors have it  |
+| 2        | Skills YAML frontmatter    | agentskills.io spec compliance         |
+| 3        | Skills progressive load    | Context efficiency, spec compliance    |
+| 4        | Subagents                  | Task delegation, matches Claude Code   |
+| 5        | Anthropic caching          | Cost savings, better context           |
+| 6        | Image attachment           | Model detection exists, just needs UI  |
+| 7        | Skill/command autocomplete | Fuzzy search on / and // prefix        |
+| 8        | File path autocomplete     | @ syntax with path picker              |
+| 9        | More providers             | OpenRouter covers most, lower priority |
+
+---
+
+## Task: S9-1 Web Fetch Tool
+
+**Sprint:** 9
+**Depends on:** none
+**Status:** PENDING
+
+### Description
+
+Add `web_fetch` builtin tool. Design first, then implement.
+
+### Design Considerations
+
+1. **Fetch method**: reqwest with timeout (30s connect, 60s total)
+2. **Content extraction**: html2text or similar, not raw HTML
+3. **Content mode**: Option to summarize via fast model (like Claude Code's Haiku approach)
+4. **Security**: No dynamic URL construction, only user-provided or from search results
+5. **Size limit**: Cap response at ~100KB, truncate with notice
+
+### Interface
+
+```rust
+struct WebFetchArgs {
+    url: String,
+    query: Option<String>,  // Question to answer about the page
+    raw: Option<bool>,      // Return raw text vs summarized
+}
+```
+
+### Acceptance Criteria
+
+- [ ] Tool registered in orchestrator
+- [ ] Fetches URL with proper timeout/error handling
+- [ ] Extracts readable text from HTML
+- [ ] Optional query-focused summarization
+- [ ] Size limit enforced
+- [ ] Tests for common sites (GitHub, docs)
+
+---
+
+## Task: S9-2 Skills YAML Frontmatter
+
+**Sprint:** 9
+**Depends on:** none
+**Status:** PENDING
+
+### Description
+
+Update skill loader to parse YAML frontmatter per agentskills.io spec.
+
+### Current Format (XML)
+
+```xml
+<skill>
+    <name>skill-name</name>
+    <description>...</description>
+    <prompt>...</prompt>
+</skill>
+```
+
+### Target Format (YAML)
+
+```yaml
+---
+name: skill-name
+description: What it does and when to use it
+allowed-tools: Bash(git:*) Read Write
+---
+# Skill instructions in Markdown body
+```
+
+### Fields to Support
+
+| Field           | Required | Notes                             |
+| --------------- | -------- | --------------------------------- |
+| `name`          | Yes      | Max 64 chars, lowercase + hyphens |
+| `description`   | Yes      | Max 1024 chars                    |
+| `allowed-tools` | No       | Space-delimited tool patterns     |
+| `license`       | No       | For attribution                   |
+| `compatibility` | No       | Environment requirements          |
+| `metadata`      | No       | Arbitrary key-value               |
+
+### Acceptance Criteria
+
+- [ ] YAML frontmatter parsed correctly
+- [ ] Markdown body extracted as prompt
+- [ ] Old XML format still works (migration period)
+- [ ] All fields accessible in Skill struct
+- [ ] Tests for valid/invalid frontmatter
+
+---
+
+## Task: S9-3 Skills Progressive Disclosure
+
+**Sprint:** 9
+**Depends on:** S9-2
+**Status:** PENDING
+
+### Description
+
+Load only name+description at startup (~100 tokens per skill). Full body loaded on activation.
+
+### Current Behavior
+
+All skills loaded fully at startup, all prompts in memory.
+
+### Target Behavior
+
+1. **Startup**: Load frontmatter only (name, description)
+2. **Context**: Include skill summaries in system prompt
+3. **Activation**: Load full SKILL.md body on demand
+4. **Cache**: Keep loaded skills in memory for session
+
+### Implementation
+
+```rust
+struct SkillSummary {
+    name: String,
+    description: String,
+    path: PathBuf,  // For lazy loading
+}
+
+struct SkillRegistry {
+    summaries: Vec<SkillSummary>,     // Always loaded
+    loaded: HashMap<String, Skill>,   // On-demand
+}
+
+impl SkillRegistry {
+    fn get_or_load(&mut self, name: &str) -> Result<&Skill>;
+}
+```
+
+### Acceptance Criteria
+
+- [ ] Only frontmatter parsed at startup
+- [ ] System prompt includes skill summaries
+- [ ] Full skill loaded when activated
+- [ ] Memory usage lower with many skills
+- [ ] Benchmark: 10 skills vs current
+
+---
+
+## Task: S9-4 Subagent Support
+
+**Sprint:** 9
+**Depends on:** none
+**Status:** PENDING
+
+### Description
+
+Enable spawning isolated agent instances with restricted tools/model.
+
+### Design Considerations
+
+1. **Isolation**: Separate message history, own abort token
+2. **Tool restriction**: Subagent only gets specified tools
+3. **Model override**: Can use different/cheaper model
+4. **Result aggregation**: Parent receives subagent output as tool result
+5. **No nesting**: Subagents cannot spawn subagents (prevent runaway)
+
+### Interface
+
+```rust
+struct SubagentConfig {
+    name: String,
+    tools: Vec<String>,           // Tool whitelist
+    model: Option<String>,        // Override model
+    system_prompt: Option<String>, // Additional context
+    max_turns: usize,             // Iteration limit (default 10)
+}
+
+// Called as tool:
+struct SpawnSubagentArgs {
+    config: String,  // Config name from subagents/
+    task: String,    // Task description
+}
+```
+
+### Acceptance Criteria
+
+- [ ] Subagent spawns with isolated state
+- [ ] Tools restricted to whitelist
+- [ ] Model override works
+- [ ] Max turns enforced
+- [ ] Result returned to parent
+- [ ] No recursive spawning
+
+---
+
+## Task: S9-5 Anthropic Cache Control
+
+**Sprint:** 9
+**Depends on:** none
+**Status:** PENDING
+
+### Description
+
+Pass cache_control to Anthropic API for system prompt caching.
+
+### Current State
+
+- `supports_cache` field on models (from registry)
+- `prefer_cache` in filter preferences
+- **No cache_control in requests**
+
+### Target
+
+```rust
+// In message conversion for Anthropic
+if provider == Anthropic && model.supports_cache {
+    system_message.cache_control = Some(CacheControl::Ephemeral);
+}
+```
+
+### Verification
+
+- Check llm-connector supports cache_control
+- If not, extend or use raw reqwest for Anthropic
+
+### Acceptance Criteria
+
+- [ ] cache_control passed for Anthropic requests
+- [ ] System prompt cached on multi-turn
+- [ ] Cache tokens reported in usage
+- [ ] No regression for other providers
+
+---
+
+## Task: S9-6 Image Attachment
+
+**Sprint:** 9
+**Depends on:** none
+**Status:** PENDING
+
+### Description
+
+Allow attaching images to messages for vision-capable models.
+
+### Current State
+
+- `supports_vision` field on models
+- `ContentBlock::Image` variant exists
+- **No UI for attachment**
+
+### Design
+
+1. **Attachment syntax**: `@image:path/to/file.png` in input
+2. **Validation**: Check model supports vision before sending
+3. **Encoding**: Base64 encode image data
+4. **Size limit**: Warn if >20MB
+
+### Acceptance Criteria
+
+- [ ] @image syntax recognized in input
+- [ ] Image encoded as ContentBlock::Image
+- [ ] Model vision capability checked
+- [ ] Error if model doesn't support vision
+- [ ] Size limit enforced
+
+---
+
+## Task: S9-7 Skill/Command Autocomplete
+
+**Sprint:** 9
+**Depends on:** S9-2
+**Status:** PENDING
+
+### Description
+
+Show autocomplete popup when user types `/` (builtins) or `//` (custom skills).
+
+### Behavior
+
+1. **Single slash `/`**: Show built-in commands (/model, /provider, /clear, /quit, /help, /resume)
+2. **Double slash `//`**: Show custom skills from registry
+3. **Fuzzy match**: Filter as user types (e.g., `/mo` shows `/model`)
+4. **Selection**: Up/Down to navigate, Enter to complete, Esc to dismiss
+
+### UI
+
+- Popup above input area
+- Shows name + short description
+- Highlights matching chars
+- Max 5-7 visible items, scrollable
+
+### Acceptance Criteria
+
+- [ ] Popup appears on / or //
+- [ ] Fuzzy filtering works
+- [ ] Tab/Enter completes selection
+- [ ] Esc dismisses without completing
+- [ ] Works with multiline input (popup at cursor line)
+
+---
+
+## Task: S9-8 File Path Autocomplete
+
+**Sprint:** 9
+**Depends on:** none
+**Status:** PENDING
+
+### Description
+
+Show file path picker when user types `@` in input.
+
+### Behavior
+
+1. **@ trigger**: Show file picker popup
+2. **@path**: Filter to files matching path prefix
+3. **Directory nav**: Enter on dir descends, Backspace ascends
+4. **Completion**: Enter on file inserts `@path/to/file`
+
+### Design
+
+- Use ignore crate for .gitignore-aware listing
+- Cache directory listings for performance
+- Show file type indicators (dir, file, symlink)
+
+### Acceptance Criteria
+
+- [ ] @ triggers file picker
+- [ ] Typing filters files
+- [ ] Enter completes with full path
+- [ ] Directories navigable
+- [ ] .gitignore respected
+
+---
+
+## Task: S9-9 Review and Document
+
+**Sprint:** 9
+**Depends on:** S9-1 through S9-8
+**Status:** PENDING
+
+### Description
+
+After implementing features, compare to competitors and document gaps.
+
+### Comparison Points
+
+- [ ] Web fetch vs Claude Code/Codex
+- [ ] Skills vs agentskills.io reference impl
+- [ ] Subagents vs Claude Code Task agent
+- [ ] Caching effectiveness (token savings)
+
+### Acceptance Criteria
+
+- [ ] ai/review/sprint9-summary.md with results
+- [ ] Feature comparison table updated
+- [ ] Known gaps documented
+- [ ] Next priorities identified
