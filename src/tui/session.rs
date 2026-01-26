@@ -391,6 +391,10 @@ impl App {
                     }
                     self.message_list.push_event(event);
                 }
+                AgentEvent::Retry(reason, delay) => {
+                    // Show retry status in progress line (not in chat)
+                    self.current_tool = Some(format!("{}, retrying in {}s", reason, delay));
+                }
                 _ => {
                     self.message_list.push_event(event);
                 }
