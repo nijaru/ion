@@ -216,6 +216,8 @@ pub fn highlight_markdown_with_code(content: &str) -> Vec<Line<'static>> {
                         }
                     }
                 }
+                // Add blank line after code block for visual separation
+                result.push(Line::from(""));
                 code_buffer.clear();
                 in_code_block = false;
                 code_lang = None;
