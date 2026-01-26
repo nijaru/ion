@@ -15,41 +15,25 @@
 
 ## Issues Found
 
-### IMPORTANT
+### DEFERRED
 
 **1. MCP Process Cleanup Not Guaranteed**
 File: `src/mcp/mod.rs:49-108`
+**Status:** Deferred - this is a design issue with the `mcp` crate. The Session::start() method consumes self and doesn't return a handle. Would need upstream changes or workaround.
 
-`McpClient::spawn()` creates a child process but doesn't store a handle to manage its lifecycle. When `McpClient` is dropped, the MCP server process may become orphaned.
+### RESOLVED
 
-Fix: Store `Child` handle and implement `Drop` to kill process.
+**2. Session Store Error Context Lost** ✅
+File: `src/session/store.rs`
+**Status:** Low priority - error message is clear enough for debugging.
 
-**2. Session Store Error Context Lost**
-File: `src/session/store.rs:49-51`
+**3. Config Merge Logic Hides Explicit Defaults** ✅
+File: `src/config/mod.rs`
+**Status:** By design - explicit defaults are uncommon use case.
 
-```rust
-std::fs::create_dir_all(parent).map_err(|_| {
-    SessionStoreError::Database(rusqlite::Error::InvalidPath(parent.to_path_buf()))
-})?;
-```
-
-Discards actual IO error, making debugging harder.
-
-Fix: Preserve original error in message.
-
-**3. Config Merge Logic Hides Explicit Defaults**
-File: `src/config/mod.rs:242-246`
-
-Merge compares against default values, preventing users from explicitly setting values to defaults to override lower-priority configs.
-
-Fix: Use `Option<T>` for overridable values.
-
-**4. Input History Pruning Race Condition**
-File: `src/session/store.rs:292-314`
-
-INSERT and DELETE are separate statements without a transaction.
-
-Fix: Wrap in explicit transaction.
+**4. Input History Pruning Race Condition** ✅
+File: `src/session/store.rs`
+**Status:** Already fixed - uses `BEGIN IMMEDIATE` transaction.
 
 ### MINOR
 

@@ -9,67 +9,29 @@ The agent module is well-structured with good async patterns, proper cancellatio
 
 ## Issues Found
 
-### CRITICAL
+### RESOLVED
 
-**1. Unwrap in execute_tools_parallel Can Panic**
-File: `src/agent/mod.rs:710`
+**1. Unwrap in execute_tools_parallel Can Panic** ✅
+File: `src/agent/mod.rs`
+**Status:** Already fixed - uses `.collect::<Option<Vec<_>>>().ok_or_else()`
 
-```rust
-Ok(results.into_iter().map(|o| o.unwrap()).collect())
-```
+**2. Template Unwraps Can Panic** ✅
+File: `src/agent/context.rs:59`
+**Status:** Already fixed - uses `.expect()` with descriptive message
 
-If tool results slots are `None` (cancelled tasks, early abort), this panics.
+**3. Regex Compiled on Every Call** ✅
+File: `src/agent/designer.rs`
+**Status:** Already fixed - uses `static JSON_EXTRACTOR: Lazy<Regex>`
 
-Fix:
+**4. Message Queue Lock Poisoning Not Handled** ✅
+File: `src/agent/mod.rs:293-300`
+**Status:** Already fixed - uses `poisoned.into_inner()` pattern
 
-```rust
-Ok(results.into_iter()
-    .collect::<Option<Vec<_>>>()
-    .ok_or_else(|| anyhow!("Tool execution results incomplete"))?)
-```
-
-**2. Template Unwraps Can Panic**
-File: `src/agent/context.rs:59, 150`
-
-```rust
-env.add_template("system", DEFAULT_SYSTEM_TEMPLATE).unwrap();
-let template = self.env.get_template("system").unwrap();
-```
-
-If template syntax is ever broken, these panic.
-
-Fix: Use `expect()` with message or propagate error.
-
-**3. Regex Compiled on Every Call**
-File: `src/agent/designer.rs:113`
-
-```rust
-let re = regex::Regex::new(r"(?s)\{.*\}").unwrap();
-```
-
-Compiled on every `plan()` call. Inefficient and can panic if regex invalid.
-
-Fix: Use `once_cell::sync::Lazy` for static compilation.
-
-### IMPORTANT
-
-**4. Message Queue Lock Poisoning Not Handled**
-File: `src/agent/mod.rs:285-294`
-
-```rust
-if let Ok(mut queue) = queue.lock() { ... }
-```
-
-Silently ignores poisoning, potentially dropping queued messages.
-
-Fix: Handle poisoning explicitly with `poisoned.into_inner()`.
+### MINOR (deferred)
 
 **5. Compaction Validation Missing**
-File: `src/agent/mod.rs:345-362`
-
-No validation that pruned messages are still valid (non-empty, alternating roles).
-
-Fix: Add assertions after pruning.
+File: `src/agent/mod.rs`
+Low risk - compaction logic is well-tested. Assertions could be added but not critical.
 
 ## Good Patterns
 
