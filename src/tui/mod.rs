@@ -122,4 +122,8 @@ pub struct App {
     pub editor_requested: bool,
     /// Whether the startup header has been inserted into scrollback
     pub(crate) header_inserted: bool,
+    /// When thinking started (for progress display)
+    pub thinking_start: Option<Instant>,
+    /// Duration of last completed thinking (for "thought for Xs" display)
+    pub last_thinking_duration: Option<std::time::Duration>,
 }

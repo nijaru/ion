@@ -219,6 +219,14 @@ impl App {
                 stats.push(format!("↓ {}", format_tokens(self.output_tokens)));
             }
 
+            // Thinking indicator
+            if self.thinking_start.is_some() {
+                stats.push("thinking".to_string());
+            } else if let Some(duration) = self.last_thinking_duration {
+                let secs = duration.as_secs();
+                stats.push(format!("thought for {}s", secs));
+            }
+
             if !stats.is_empty() {
                 progress_spans.push(Span::styled(
                     format!(" ({} · ", stats.join(" · ")),

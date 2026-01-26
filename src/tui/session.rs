@@ -222,6 +222,8 @@ impl App {
             last_task_summary: None,
             editor_requested: false,
             header_inserted: false,
+            thinking_start: None,
+            last_thinking_duration: None,
         };
 
         // Set initial API provider name on model picker
@@ -310,6 +312,10 @@ impl App {
                     self.message_queue = None;
                     self.task_start_time = None;
                     self.current_tool = None;
+                    // End thinking tracking
+                    if let Some(start) = self.thinking_start.take() {
+                        self.last_thinking_duration = Some(start.elapsed());
+                    }
                     // Auto-scroll to bottom so user sees completion
                     self.message_list.scroll_to_bottom();
                 }
@@ -322,6 +328,8 @@ impl App {
                     self.message_queue = None;
                     self.task_start_time = None;
                     self.current_tool = None;
+                    self.thinking_start = None;
+                    self.last_thinking_duration = None;
                     if !was_cancelled {
                         self.last_error = Some(format_status_error(msg));
                         // Auto-scroll to bottom so user sees error
@@ -359,10 +367,28 @@ impl App {
                 }
                 AgentEvent::ToolCallStart(_, name, _) => {
                     self.current_tool = Some(name.clone());
+                    // End thinking if in progress
+                    if let Some(start) = self.thinking_start.take() {
+                        self.last_thinking_duration = Some(start.elapsed());
+                    }
                     self.message_list.push_event(event);
                 }
                 AgentEvent::ToolCallResult(..) => {
                     self.current_tool = None;
+                    self.message_list.push_event(event);
+                }
+                AgentEvent::ThinkingDelta(_) => {
+                    // Start tracking thinking time if not already
+                    if self.thinking_start.is_none() {
+                        self.thinking_start = Some(Instant::now());
+                    }
+                    // Don't push to message_list - we don't render thinking content
+                }
+                AgentEvent::TextDelta(_) => {
+                    // End thinking if in progress (text output started)
+                    if let Some(start) = self.thinking_start.take() {
+                        self.last_thinking_duration = Some(start.elapsed());
+                    }
                     self.message_list.push_event(event);
                 }
                 _ => {
@@ -601,6 +627,8 @@ impl App {
         self.output_tokens = 0;
         self.last_task_summary = None;
         self.last_error = None;
+        self.thinking_start = None;
+        self.last_thinking_duration = None;
 
         // Reset cancellation token for new task (tokens are single-use)
         self.session.abort_token = CancellationToken::new();
