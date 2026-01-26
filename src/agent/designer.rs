@@ -1,8 +1,14 @@
 use crate::provider::{ChatRequest, ContentBlock, LlmApi, Message, Role};
 use anyhow::{Result, anyhow};
+use once_cell::sync::Lazy;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::sync::Arc;
+
+/// Regex for extracting JSON objects from model responses.
+static JSON_EXTRACTOR: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?s)\{.*\}").expect("JSON extractor regex must be valid"));
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub enum TaskStatus {
@@ -110,8 +116,7 @@ impl Designer {
             .join("");
 
         // Robust JSON extraction using regex to handle model chatter or multiple blocks
-        let re = regex::Regex::new(r"(?s)\{.*\}").unwrap();
-        let json_str = re
+        let json_str = JSON_EXTRACTOR
             .find(&text)
             .ok_or_else(|| anyhow!("No JSON object found in designer response"))?
             .as_str();

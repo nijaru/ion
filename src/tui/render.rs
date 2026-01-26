@@ -365,7 +365,7 @@ impl App {
             };
             left_spans.push(Span::raw(" · "));
             if context_max > 0 {
-                let pct = (used * 100) / context_max;
+                let pct = used.saturating_mul(100) / context_max;
                 left_spans.push(Span::raw(format!(
                     "{}% ({}/{})",
                     pct,

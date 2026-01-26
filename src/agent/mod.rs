@@ -282,10 +282,16 @@ impl Agent {
             }
 
             // Check for queued user messages between turns
-            if let Some(ref queue) = message_queue
-                && let Ok(mut queue) = queue.lock()
-            {
-                for queued_msg in queue.drain(..) {
+            if let Some(ref queue) = message_queue {
+                // Handle poisoned lock by recovering inner data
+                let mut guard = match queue.lock() {
+                    Ok(g) => g,
+                    Err(poisoned) => {
+                        warn!("Message queue lock was poisoned, recovering");
+                        poisoned.into_inner()
+                    }
+                };
+                for queued_msg in guard.drain(..) {
                     session.messages.push(Message {
                         role: Role::User,
                         content: Arc::new(vec![ContentBlock::Text { text: queued_msg }]),
@@ -707,7 +713,11 @@ impl Agent {
             }
         }
 
-        Ok(results.into_iter().map(|o| o.unwrap()).collect())
+        // Collect results, returning error if any slot is missing
+        results
+            .into_iter()
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| anyhow::anyhow!("Tool execution incomplete - some results missing"))
     }
 }
 
