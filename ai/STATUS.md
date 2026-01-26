@@ -49,6 +49,14 @@ Next up:
 
 ## Recent Completions
 
+**Codebase Review & Refactor (2026-01-26)**
+
+- Reviewed all modules (tui, agent, provider, session, mcp, skill)
+- Found 13 issues, most already fixed in prior work
+- Fixed: Provider filter duplication + bug (missing ignore/only in list_models_from_vec)
+- Extracted: create_http_client() helper, model_matches_filter() function
+- Deferred: MCP process cleanup (mcp crate design issue)
+
 **Flow Audit Sprint (2026-01-26)**
 
 - Audited all 6 core flows
