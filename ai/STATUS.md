@@ -50,11 +50,12 @@
 - Documentation updated in ai/review/SUMMARY.md
 - No major refactoring needed - files are cohesive
 
-**Sprint 9 Progress** (4800afb)
+**Sprint 9 Progress** (4ba121b)
 
 - Web fetch: HTML to text conversion via html2text
 - Skills: YAML frontmatter parsing (agentskills.io spec)
 - Skills: Progressive loading (load prompt on demand)
+- Subagent: Infrastructure (config, registry, run_subagent) - needs tool
 
 **Sprint 8 Fixes** (2b00458)
 
