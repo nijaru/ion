@@ -7,7 +7,7 @@
 | Phase      | 5 - Polish & UX | 2026-01-26 |
 | Status     | Runnable        | 2026-01-26 |
 | Toolchain  | stable          | 2026-01-22 |
-| Tests      | 98 passing      | 2026-01-26 |
+| Tests      | 100 passing     | 2026-01-26 |
 | Clippy     | 0 warnings      | 2026-01-26 |
 | Visibility | **PUBLIC**      | 2026-01-22 |
 
@@ -55,6 +55,8 @@ Next up:
 - Added visual gap between chat history and progress line (Option B)
 - Queued messages now show on dedicated line above spinner: " ↳ N messages queued"
 - Empty line for gap when no messages queued
+- Retry messages now show in progress line instead of inline in chat
+- Added list tool tests for src/ directory
 
 **Codebase Review & Refactor (2026-01-26)**
 
