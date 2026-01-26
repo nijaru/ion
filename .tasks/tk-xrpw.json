@@ -3,7 +3,7 @@
   "ref": "xrpw",
   "title": "[AUDIT] Cancel/interrupt - Esc, Ctrl+C consistency",
   "description": null,
-  "status": "open",
+  "status": "done",
   "priority": 1,
   "labels": [],
   "assignees": [],
@@ -11,9 +11,14 @@
   "blocked_by": [],
   "estimate": null,
   "due_date": null,
-  "logs": [],
+  "logs": [
+    {
+      "ts": "2026-01-26T19:06:44.623Z",
+      "msg": "Cancel/interrupt audit:\n\n**Esc Behavior (Input Mode):**\n- While running + not cancelled: Cancel agent via abort_token\n- Not running + has input: Double-tap clears input (with 1.5s window)\n- Agent cancellation is immediate and non-recoverable\n\n**Ctrl+C Behavior (Input Mode):**\n- Has input: Single clears input\n- Empty + idle: Double-tap quits\n- Empty + running: **Does nothing** (intentional per comment, but could confuse users)\n\n**Ctrl+D Behavior:**\n- Empty input: Double-tap quits (shared cancel_pending with Ctrl+C)\n\n**Selector Mode:**\n- Ctrl+C single: Closes selector (goes to Input, or provider during setup)\n- Ctrl+C double: Quits\n- Esc: Goes to Input (or provider during setup)\n\n**Potential Issues:**\n\n1. **Ctrl+C silent when running with empty input** - Users expecting Ctrl+C to cancel agent (like most terminals) get no feedback. Consider either: (a) having Ctrl+C also cancel agent, or (b) showing a hint 'Press Esc to cancel'.\n\n2. **Inconsistent single Ctrl+C behavior** - In Input mode, single clears input. In Selector mode, single closes selector. Slightly different mental model.\n\nOverall the design is coherent, just different from typical terminal conventions."
+    }
+  ],
   "created_at": "2026-01-26T18:59:20.020Z",
-  "updated_at": "2026-01-26T18:59:20.020Z",
-  "completed_at": null,
+  "updated_at": "2026-01-26T19:06:48.191Z",
+  "completed_at": "2026-01-26T19:06:48.191Z",
   "external": {}
 }
