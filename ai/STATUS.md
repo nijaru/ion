@@ -11,26 +11,22 @@
 | Clippy     | 0 warnings      | 2026-01-26 |
 | Visibility | **PUBLIC**      | 2026-01-22 |
 
-## Priority 1: Flow Audit (BEFORE FEATURES)
+## Flow Audit Results
 
-**Goal:** Find and fix UX/logic bugs in core flows before adding features or optimizing.
+All 6 P1 audit tasks complete. Findings:
 
-**Audit tasks:**
-
-| Flow               | Task ID | Description                             |
-| ------------------ | ------- | --------------------------------------- |
-| Input → Response   | tk-nead | Message handling, streaming, completion |
-| Tool execution     | tk-tnms | Approval, parallel execution, errors    |
-| Session management | tk-4il8 | Save, resume, clear, history            |
-| Mode transitions   | tk-phf5 | Input ↔ Selector ↔ Approval states      |
-| Cancel/interrupt   | tk-xrpw | Esc, Ctrl+C consistency                 |
-| Provider switching | tk-h5kw | Model selection, API keys               |
-
-**Approach:** Trace each flow manually, identify bugs, fix before proceeding.
+| Flow               | Status | Bugs Fixed                         | Notes                                          |
+| ------------------ | ------ | ---------------------------------- | ---------------------------------------------- |
+| Input → Response   | ✅     | Dead ThinkingDelta handler removed | Flow is sound, no critical bugs                |
+| Tool execution     | ✅     | None                               | Parallel exec + sequential approval works      |
+| Session management | ✅     | /clear now starts new session      | Was leaving stale DB messages                  |
+| Mode transitions   | ✅     | None                               | Approval interrupts any mode (by design)       |
+| Cancel/interrupt   | ✅     | None                               | Ctrl+C silent when running is intentional      |
+| Provider switching | ✅     | None                               | Edge cases cause clear errors, not silent bugs |
 
 ## Priority 2: Feature Completeness
 
-After audit is clean:
+Next up:
 
 - Image attachment (tk-80az)
 - Autocomplete (tk-ik05, tk-hk6p)
@@ -52,6 +48,12 @@ After audit is clean:
 | mcp/      | OK     | Needs tests, cleanup deferred   |
 
 ## Recent Completions
+
+**Flow Audit Sprint (2026-01-26)**
+
+- Audited all 6 core flows
+- Fixed /clear to properly start new session
+- Removed dead ThinkingDelta handler code
 
 **Sprint 9 (2026-01-26)**
 
