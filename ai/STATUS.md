@@ -11,26 +11,45 @@
 | Clippy     | 0 warnings      | 2026-01-26 |
 | Visibility | **PUBLIC**      | 2026-01-22 |
 
+## Priority 1: Anthropic Caching (CRITICAL)
+
+**Task:** tk-268g
+
+**Why critical:** Cache ENTIRE conversation prefix, not just system prompt.
+
+- Turn N: everything from turns 1 to N-1 cached at 90% discount
+- Long session (100k+ history): pay full price only for new delta (~2k)
+- **50-100x cost savings**, not 10x
+
+**Current blocker:** llm-connector doesn't expose cache_control
+
+**Solution:** Direct Anthropic client with reqwest
+
+- Full control over cache_control on all content blocks
+- Can cache system prompt, AGENTS.md, conversation history
+- Matches what Claude Code does
+
+**Implementation:**
+
+1. Create `src/provider/anthropic.rs` - direct API client
+2. Implement streaming with cache_control support
+3. Mark system + history content blocks with `cache_control: ephemeral`
+4. Keep llm-connector for other providers
+
 ## Active Sprint
 
-**Sprint 9: Feature Parity & Extensibility** - see ai/SPRINTS.md
+**Sprint 9: Feature Parity & Extensibility**
 
-| Priority | Task                       | Status  |
-| -------- | -------------------------- | ------- |
-| 1        | Web fetch tool             | DONE    |
-| 2        | Skills YAML frontmatter    | DONE    |
-| 3        | Skills progressive load    | DONE    |
-| 4        | Subagents                  | DONE    |
-| 5        | Anthropic caching          | BLOCKED |
-| 6        | Image attachment           | -       |
-| 7        | Skill/command autocomplete | -       |
-| 8        | File path autocomplete     | -       |
-
-**Target:** Pi + Claude Code feature blend
-
-## Blockers
-
-- **Anthropic caching (tk-268g)**: llm-connector crate doesn't expose cache_control field
+| Priority | Task                       | Status |
+| -------- | -------------------------- | ------ |
+| 1        | Web fetch tool             | DONE   |
+| 2        | Skills YAML frontmatter    | DONE   |
+| 3        | Skills progressive load    | DONE   |
+| 4        | Subagents                  | DONE   |
+| 5        | **Anthropic caching**      | **P1** |
+| 6        | Image attachment           | -      |
+| 7        | Skill/command autocomplete | -      |
+| 8        | File path autocomplete     | -      |
 
 ## Architecture
 
@@ -61,13 +80,8 @@
 
 ## Key Gaps vs Competitors
 
-| Gap                     | Priority   | Notes                        |
-| ----------------------- | ---------- | ---------------------------- |
-| ~~Web fetch~~           | ~~HIGH~~   | DONE                         |
-| ~~Skills spec~~         | ~~HIGH~~   | DONE - YAML frontmatter      |
-| ~~Progressive load~~    | ~~HIGH~~   | DONE                         |
-| ~~Subagents~~           | ~~MEDIUM~~ | DONE - spawn_subagent tool   |
-| ~~Thinking display~~    | ~~LOW~~    | DONE - "thought for Xs"      |
-| Anthropic caching       | MEDIUM     | BLOCKED - llm-connector      |
-| Autocomplete (/, //, @) | MEDIUM     | UX polish - next focus       |
-| Image attachment        | MEDIUM     | @image:path syntax (tk-80az) |
+| Gap                   | Priority     | Notes                                  |
+| --------------------- | ------------ | -------------------------------------- |
+| **Anthropic caching** | **CRITICAL** | 50-100x cost savings, needs direct API |
+| Image attachment      | MEDIUM       | @image:path syntax (tk-80az)           |
+| Autocomplete          | LOW          | UX polish, not blocking                |
