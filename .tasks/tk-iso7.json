@@ -1,10 +1,10 @@
 {
   "project": "tk",
   "ref": "iso7",
-  "title": "[FEATURE] Hook system - Claude Code compatible lifecycle hooks for plugins",
+  "title": "[P5] Hook system - lifecycle events",
   "description": null,
   "status": "open",
-  "priority": 3,
+  "priority": 4,
   "labels": [],
   "assignees": [],
   "parent": null,
@@ -13,7 +13,7 @@
   "due_date": null,
   "logs": [],
   "created_at": "2026-01-19T15:05:01.382Z",
-  "updated_at": "2026-01-19T15:05:01.382Z",
+  "updated_at": "2026-01-26T18:07:37.279Z",
   "completed_at": null,
   "external": {}
 }

@@ -1,10 +1,10 @@
 {
   "project": "tk",
   "ref": "8jtm",
-  "title": "[FEATURE] True sandboxing for bash commands",
+  "title": "[P5] True sandboxing for bash",
   "description": null,
   "status": "open",
-  "priority": 3,
+  "priority": 4,
   "labels": [],
   "assignees": [],
   "parent": null,
@@ -13,7 +13,7 @@
   "due_date": null,
   "logs": [],
   "created_at": "2026-01-19T15:05:02.626Z",
-  "updated_at": "2026-01-19T15:05:02.626Z",
+  "updated_at": "2026-01-26T18:07:37.320Z",
   "completed_at": null,
   "external": {}
 }

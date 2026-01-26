@@ -1,10 +1,10 @@
 {
   "project": "tk",
   "ref": "hk6p",
-  "title": "Slash command prefixing: // for skills, / for system; route commands to skills",
+  "title": "[P2] Command autocomplete - / and // prefixes",
   "description": null,
   "status": "open",
-  "priority": 3,
+  "priority": 2,
   "labels": [],
   "assignees": [],
   "parent": null,
@@ -13,7 +13,7 @@
   "due_date": null,
   "logs": [],
   "created_at": "2026-01-21T13:00:38.074Z",
-  "updated_at": "2026-01-21T13:00:38.074Z",
+  "updated_at": "2026-01-26T18:07:37.238Z",
   "completed_at": null,
   "external": {}
 }
