@@ -1,10 +1,12 @@
 //! Session management, provider setup, and agent task execution.
 
+use crate::agent::subagent::SubagentRegistry;
 use crate::agent::{Agent, AgentEvent};
 use crate::cli::PermissionSettings;
-use crate::config::Config;
+use crate::config::{subagents_dir, Config};
 use crate::provider::{Client, ContentBlock, LlmApi, ModelRegistry, Provider, Role};
 use crate::session::{Session, SessionStore};
+use crate::tool::builtin::SpawnSubagentTool;
 use crate::tool::ToolOrchestrator;
 use crate::tui::composer::{ComposerBuffer, ComposerState};
 use crate::tui::message_list::{MessageEntry, MessageList, Sender};
@@ -115,6 +117,23 @@ impl App {
         for tool in mcp_tools {
             orchestrator.register_tool(tool);
         }
+
+        // Load subagent configurations
+        let mut subagent_registry = SubagentRegistry::new();
+        let subagents_path = subagents_dir();
+        if subagents_path.exists()
+            && let Ok(count) = subagent_registry.load_directory(&subagents_path)
+            && count > 0
+        {
+            debug!("Loaded {} subagent configurations", count);
+        }
+        let subagent_registry = Arc::new(tokio::sync::RwLock::new(subagent_registry));
+
+        // Register spawn_subagent tool
+        orchestrator.register_tool(Box::new(SpawnSubagentTool::new(
+            subagent_registry,
+            provider_impl.clone(),
+        )));
 
         let orchestrator = Arc::new(orchestrator);
 

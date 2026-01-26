@@ -5,6 +5,7 @@ mod glob;
 mod grep;
 mod list;
 mod read;
+mod spawn_subagent;
 mod web_fetch;
 mod write;
 
@@ -15,5 +16,6 @@ pub use glob::GlobTool;
 pub use grep::GrepTool;
 pub use list::ListTool;
 pub use read::ReadTool;
+pub use spawn_subagent::SpawnSubagentTool;
 pub use web_fetch::WebFetchTool;
 pub use write::WriteTool;

@@ -15,16 +15,16 @@
 
 **Sprint 9: Feature Parity & Extensibility** - see ai/SPRINTS.md
 
-| Priority | Task                       | Status      |
-| -------- | -------------------------- | ----------- |
-| 1        | Web fetch tool             | DONE        |
-| 2        | Skills YAML frontmatter    | DONE        |
-| 3        | Skills progressive load    | DONE        |
-| 4        | Subagents                  | IN PROGRESS |
-| 5        | Anthropic caching          | -           |
-| 6        | Image attachment           | -           |
-| 7        | Skill/command autocomplete | -           |
-| 8        | File path autocomplete     | -           |
+| Priority | Task                       | Status |
+| -------- | -------------------------- | ------ |
+| 1        | Web fetch tool             | DONE   |
+| 2        | Skills YAML frontmatter    | DONE   |
+| 3        | Skills progressive load    | DONE   |
+| 4        | Subagents                  | DONE   |
+| 5        | Anthropic caching          | -      |
+| 6        | Image attachment           | -      |
+| 7        | Skill/command autocomplete | -      |
+| 8        | File path autocomplete     | -      |
 
 **Target:** Pi + Claude Code feature blend
 
@@ -50,12 +50,12 @@
 - Documentation updated in ai/review/SUMMARY.md
 - No major refactoring needed - files are cohesive
 
-**Sprint 9 Progress** (4ba121b)
+**Sprint 9 Progress**
 
 - Web fetch: HTML to text conversion via html2text
 - Skills: YAML frontmatter parsing (agentskills.io spec)
 - Skills: Progressive loading (load prompt on demand)
-- Subagent: Infrastructure (config, registry, run_subagent) - needs tool
+- Subagents: Config registry, run_subagent, spawn_subagent tool
 
 **Sprint 8 Fixes** (2b00458)
 
@@ -65,19 +65,19 @@
 ## Config
 
 ```
-~/.config/agents/    # AGENTS.md, skills/, subagents/
+~/.agents/           # AGENTS.md, skills/, subagents/
 ~/.ion/              # config.toml, sessions.db, cache/
 ```
 
 ## Key Gaps vs Competitors
 
-| Gap                     | Priority | Notes                       |
-| ----------------------- | -------- | --------------------------- |
-| ~~Web fetch~~           | ~~HIGH~~ | DONE - html2text conversion |
-| ~~Skills spec~~         | ~~HIGH~~ | DONE - YAML frontmatter     |
-| ~~Progressive load~~    | ~~HIGH~~ | DONE - lazy skill loading   |
-| Subagents               | MEDIUM   | Claude Code, OpenCode have  |
-| Anthropic caching       | MEDIUM   | Cost savings                |
-| Autocomplete (/, //, @) | MEDIUM   | UX polish                   |
-| Timer in progress bar   | LOW      | Show elapsed time           |
-| Thinking display        | LOW      | "thought for Xs" indicator  |
+| Gap                     | Priority   | Notes                       |
+| ----------------------- | ---------- | --------------------------- |
+| ~~Web fetch~~           | ~~HIGH~~   | DONE - html2text conversion |
+| ~~Skills spec~~         | ~~HIGH~~   | DONE - YAML frontmatter     |
+| ~~Progressive load~~    | ~~HIGH~~   | DONE - lazy skill loading   |
+| ~~Subagents~~           | ~~MEDIUM~~ | DONE - spawn_subagent tool  |
+| Anthropic caching       | MEDIUM     | Cost savings                |
+| Autocomplete (/, //, @) | MEDIUM     | UX polish                   |
+| Timer in progress bar   | LOW        | Show elapsed time           |
+| Thinking display        | LOW        | "thought for Xs" indicator  |
