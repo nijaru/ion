@@ -11,45 +11,33 @@
 | Clippy     | 0 warnings      | 2026-01-26 |
 | Visibility | **PUBLIC**      | 2026-01-22 |
 
-## Priority 1: Anthropic Caching (CRITICAL)
+## Priority 1: Flow Audit (BEFORE FEATURES)
 
-**Task:** tk-268g
+**Goal:** Find and fix UX/logic bugs in core flows before adding features or optimizing.
 
-**Why critical:** Cache ENTIRE conversation prefix, not just system prompt.
+**Audit tasks:**
 
-- Turn N: everything from turns 1 to N-1 cached at 90% discount
-- Long session (100k+ history): pay full price only for new delta (~2k)
-- **50-100x cost savings**, not 10x
+| Flow               | Task ID | Description                             |
+| ------------------ | ------- | --------------------------------------- |
+| Input → Response   | tk-nead | Message handling, streaming, completion |
+| Tool execution     | tk-tnms | Approval, parallel execution, errors    |
+| Session management | tk-4il8 | Save, resume, clear, history            |
+| Mode transitions   | tk-phf5 | Input ↔ Selector ↔ Approval states      |
+| Cancel/interrupt   | tk-xrpw | Esc, Ctrl+C consistency                 |
+| Provider switching | tk-h5kw | Model selection, API keys               |
 
-**Current blocker:** llm-connector doesn't expose cache_control
+**Approach:** Trace each flow manually, identify bugs, fix before proceeding.
 
-**Solution:** Direct Anthropic client with reqwest
+## Priority 2: Feature Completeness
 
-- Full control over cache_control on all content blocks
-- Can cache system prompt, AGENTS.md, conversation history
-- Matches what Claude Code does
+After audit is clean:
 
-**Implementation:**
+- Image attachment (tk-80az)
+- Autocomplete (tk-ik05, tk-hk6p)
 
-1. Create `src/provider/anthropic.rs` - direct API client
-2. Implement streaming with cache_control support
-3. Mark system + history content blocks with `cache_control: ephemeral`
-4. Keep llm-connector for other providers
+## Priority 3: Cost Optimization (Release)
 
-## Active Sprint
-
-**Sprint 9: Feature Parity & Extensibility**
-
-| Priority | Task                       | Status |
-| -------- | -------------------------- | ------ |
-| 1        | Web fetch tool             | DONE   |
-| 2        | Skills YAML frontmatter    | DONE   |
-| 3        | Skills progressive load    | DONE   |
-| 4        | Subagents                  | DONE   |
-| 5        | **Anthropic caching**      | **P1** |
-| 6        | Image attachment           | -      |
-| 7        | Skill/command autocomplete | -      |
-| 8        | File path autocomplete     | -      |
+- Anthropic caching (tk-268g) - 50-100x savings
 
 ## Architecture
 
@@ -69,7 +57,7 @@
 
 - Subagents: spawn_subagent tool, registry from ~/.agents/subagents/
 - Thinking display: "thinking" → "thought for Xs", content hidden from chat
-- (Earlier) Web fetch, YAML frontmatter, progressive skill loading
+- Web fetch, YAML frontmatter, progressive skill loading
 
 ## Config
 
@@ -77,11 +65,3 @@
 ~/.agents/           # AGENTS.md, skills/, subagents/
 ~/.ion/              # config.toml, sessions.db, cache/
 ```
-
-## Key Gaps vs Competitors
-
-| Gap                   | Priority     | Notes                                  |
-| --------------------- | ------------ | -------------------------------------- |
-| **Anthropic caching** | **CRITICAL** | 50-100x cost savings, needs direct API |
-| Image attachment      | MEDIUM       | @image:path syntax (tk-80az)           |
-| Autocomplete          | LOW          | UX polish, not blocking                |

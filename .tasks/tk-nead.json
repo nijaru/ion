@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "nead",
+  "title": "[AUDIT] Input → Agent → Response flow",
+  "description": null,
+  "status": "open",
+  "priority": 1,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-26T18:59:15.535Z",
+  "updated_at": "2026-01-26T18:59:15.535Z",
+  "completed_at": null,
+  "external": {}
+}
