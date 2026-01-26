@@ -201,16 +201,19 @@ impl App {
                             match cmd_name {
                                 "/model" | "/models" => {
                                     self.clear_input();
+                                    self.history_index = self.input_history.len();
                                     self.open_model_selector();
                                     return;
                                 }
                                 "/provider" | "/providers" => {
                                     self.clear_input();
+                                    self.history_index = self.input_history.len();
                                     self.open_provider_selector();
                                     return;
                                 }
                                 "/resume" | "/sessions" => {
                                     self.clear_input();
+                                    self.history_index = self.input_history.len();
                                     self.open_session_selector();
                                     return;
                                 }
@@ -221,6 +224,7 @@ impl App {
                                 }
                                 "/clear" => {
                                     self.clear_input();
+                                    self.history_index = self.input_history.len();
                                     self.message_list.clear();
                                     self.session.messages.clear();
                                     self.rendered_entries = 0;
@@ -229,6 +233,7 @@ impl App {
                                 }
                                 "/help" | "/?" => {
                                     self.clear_input();
+                                    self.history_index = self.input_history.len();
                                     self.mode = Mode::HelpOverlay;
                                     return;
                                 }

@@ -46,8 +46,12 @@ impl SessionStore {
         if let Some(parent) = path.parent()
             && !parent.exists()
         {
-            std::fs::create_dir_all(parent).map_err(|_| {
-                SessionStoreError::Database(rusqlite::Error::InvalidPath(parent.to_path_buf()))
+            std::fs::create_dir_all(parent).map_err(|e| {
+                SessionStoreError::InvalidData(format!(
+                    "Failed to create session directory {}: {}",
+                    parent.display(),
+                    e
+                ))
             })?;
         }
 
@@ -292,26 +296,42 @@ impl SessionStore {
     pub fn add_input_history(&self, content: &str) -> Result<(), SessionStoreError> {
         let now = chrono::Utc::now().timestamp();
 
-        // Insert new entry
-        self.db.execute(
-            "INSERT INTO input_history (content, created_at) VALUES (?1, ?2)",
-            params![content, now],
-        )?;
+        // Use transaction for atomicity
+        self.db.execute("BEGIN IMMEDIATE", [])?;
 
-        // Prune old entries beyond limit
-        self.db.execute(
-            r#"
-            DELETE FROM input_history
-            WHERE id NOT IN (
-                SELECT id FROM input_history
-                ORDER BY created_at DESC
-                LIMIT ?1
-            )
-            "#,
-            params![INPUT_HISTORY_LIMIT as i64],
-        )?;
+        let result = (|| {
+            // Insert new entry
+            self.db.execute(
+                "INSERT INTO input_history (content, created_at) VALUES (?1, ?2)",
+                params![content, now],
+            )?;
 
-        Ok(())
+            // Prune old entries beyond limit
+            self.db.execute(
+                r#"
+                DELETE FROM input_history
+                WHERE id NOT IN (
+                    SELECT id FROM input_history
+                    ORDER BY created_at DESC
+                    LIMIT ?1
+                )
+                "#,
+                params![INPUT_HISTORY_LIMIT as i64],
+            )?;
+
+            Ok::<(), SessionStoreError>(())
+        })();
+
+        match result {
+            Ok(()) => {
+                self.db.execute("COMMIT", [])?;
+                Ok(())
+            }
+            Err(e) => {
+                let _ = self.db.execute("ROLLBACK", []);
+                Err(e)
+            }
+        }
     }
 
     /// Load input history (most recent last).

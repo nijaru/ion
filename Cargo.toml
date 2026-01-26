@@ -48,3 +48,7 @@ bytecount = { version = "0.6.9", features = ["runtime-dispatch-simd"] }
 grep-searcher = "0.1.16"
 grep-matcher = "0.1.8"
 grep-regex = "0.1.14"
+once_cell = "1.21"
+
+[profile.release]
+strip = true

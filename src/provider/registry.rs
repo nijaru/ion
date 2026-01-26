@@ -8,6 +8,10 @@ use serde::Deserialize;
 use std::sync::RwLock;
 use std::time::{Duration, Instant};
 
+/// Default timeout for HTTP requests.
+const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
+const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Filter criteria for model queries.
 #[derive(Debug, Clone, Default)]
 pub struct ModelFilter {
@@ -103,8 +107,14 @@ impl<T> Pipe for T {}
 
 impl ModelRegistry {
     pub fn new(api_key: String, ttl_secs: u64) -> Self {
+        let client = reqwest::Client::builder()
+            .timeout(HTTP_TIMEOUT)
+            .connect_timeout(HTTP_CONNECT_TIMEOUT)
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+
         Self {
-            client: reqwest::Client::new(),
+            client,
             api_key,
             base_url: "https://openrouter.ai/api/v1".to_string(),
             cache: RwLock::new(ModelCache::default()),
@@ -114,7 +124,7 @@ impl ModelRegistry {
 
     /// Check if cache is valid.
     fn cache_valid(&self) -> bool {
-        let cache = self.cache.read().unwrap();
+        let cache = self.cache.read().unwrap_or_else(|e| e.into_inner());
         cache
             .fetched_at
             .map(|t| t.elapsed() < self.ttl)
@@ -211,9 +221,9 @@ impl ModelRegistry {
                         let key = format!("{}.context_length", arch);
                         info.get(&key).and_then(|v| v.as_u64()).map(|v| v as u32)
                     })
-                    .unwrap_or(8192) // Default for older models
+                    .unwrap_or(32768) // Conservative default for modern models
             }
-            _ => 8192, // Default fallback
+            _ => 32768, // Conservative default for modern models
         };
 
         ModelInfo {
@@ -268,7 +278,7 @@ impl ModelRegistry {
             }
         }
 
-        let mut cache = self.cache.write().unwrap();
+        let mut cache = self.cache.write().unwrap_or_else(|e| e.into_inner());
         cache.models = all_models;
         cache.fetched_at = Some(Instant::now());
 
@@ -341,7 +351,12 @@ impl ModelRegistry {
         if !self.cache_valid() {
             self.fetch_models().await?;
         }
-        Ok(self.cache.read().unwrap().models.clone())
+        Ok(self
+            .cache
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .models
+            .clone())
     }
 
     /// List models matching filter criteria from a provided list.
@@ -397,7 +412,7 @@ impl ModelRegistry {
 
     /// List models matching filter criteria.
     pub fn list_models(&self, filter: &ModelFilter, prefs: &ProviderPrefs) -> Vec<ModelInfo> {
-        let cache = self.cache.read().unwrap();
+        let cache = self.cache.read().unwrap_or_else(|e| e.into_inner());
         let mut models: Vec<ModelInfo> = cache
             .models
             .iter()
@@ -513,13 +528,17 @@ impl ModelRegistry {
 
     /// Get a specific model by ID.
     pub fn get_model(&self, id: &str) -> Option<ModelInfo> {
-        let cache = self.cache.read().unwrap();
+        let cache = self.cache.read().unwrap_or_else(|e| e.into_inner());
         cache.models.iter().find(|m| m.id == id).cloned()
     }
 
     /// Get cached model count.
     pub fn model_count(&self) -> usize {
-        self.cache.read().unwrap().models.len()
+        self.cache
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .models
+            .len()
     }
 }
 

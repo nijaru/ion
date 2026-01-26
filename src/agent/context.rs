@@ -56,7 +56,8 @@ Instructions:
 impl ContextManager {
     pub fn new(system_prompt_base: String) -> Self {
         let mut env = Environment::new();
-        env.add_template("system", DEFAULT_SYSTEM_TEMPLATE).unwrap();
+        env.add_template("system", DEFAULT_SYSTEM_TEMPLATE)
+            .expect("DEFAULT_SYSTEM_TEMPLATE must be valid minijinja syntax");
 
         Self {
             env,
@@ -147,7 +148,10 @@ impl ContextManager {
     }
 
     fn render_system_prompt(&self, plan: Option<&Plan>, skill: Option<&Skill>) -> String {
-        let template = self.env.get_template("system").unwrap();
+        let template = self
+            .env
+            .get_template("system")
+            .expect("system template must exist - added in constructor");
         let current_task = plan.and_then(|p| p.current_task());
 
         // Load instructions from AGENTS.md files
