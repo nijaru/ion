@@ -3,7 +3,7 @@
   "ref": "t0ea",
   "title": "[FEATURE] OAuth system design for providers (Google AI Studio, etc)",
   "description": null,
-  "status": "open",
+  "status": "done",
   "priority": 3,
   "labels": [],
   "assignees": [],
@@ -11,9 +11,14 @@
   "blocked_by": [],
   "estimate": null,
   "due_date": null,
-  "logs": [],
+  "logs": [
+    {
+      "ts": "2026-01-26T18:07:00.370Z",
+      "msg": "Duplicate of tk-f564"
+    }
+  ],
   "created_at": "2026-01-19T13:28:56.166Z",
-  "updated_at": "2026-01-19T13:28:56.166Z",
-  "completed_at": null,
+  "updated_at": "2026-01-26T18:07:00.370Z",
+  "completed_at": "2026-01-26T18:07:00.336Z",
   "external": {}
 }
