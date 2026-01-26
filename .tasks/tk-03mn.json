@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "03mn",
+  "title": "[AGENT] Subagent support with tool restrictions",
+  "description": null,
+  "status": "open",
+  "priority": 2,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-26T01:50:12.467Z",
+  "updated_at": "2026-01-26T01:50:12.467Z",
+  "completed_at": null,
+  "external": {}
+}
