@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "4il8",
+  "title": "[AUDIT] Session management - save, resume, clear, history",
+  "description": null,
+  "status": "open",
+  "priority": 1,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-26T18:59:17.724Z",
+  "updated_at": "2026-01-26T18:59:17.724Z",
+  "completed_at": null,
+  "external": {}
+}

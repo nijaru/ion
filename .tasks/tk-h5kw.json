@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "h5kw",
+  "title": "[AUDIT] Provider switching - model selection, API keys",
+  "description": null,
+  "status": "open",
+  "priority": 1,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-26T18:59:21.184Z",
+  "updated_at": "2026-01-26T18:59:21.184Z",
+  "completed_at": null,
+  "external": {}
+}

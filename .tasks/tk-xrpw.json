@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "xrpw",
+  "title": "[AUDIT] Cancel/interrupt - Esc, Ctrl+C consistency",
+  "description": null,
+  "status": "open",
+  "priority": 1,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-26T18:59:20.020Z",
+  "updated_at": "2026-01-26T18:59:20.020Z",
+  "completed_at": null,
+  "external": {}
+}
