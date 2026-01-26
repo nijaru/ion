@@ -1,6 +1,7 @@
 # Sprint 7 Review Summary
 
 **Date:** 2026-01-25
+**Status:** COMPLETE - All critical/important issues fixed (a916d76)
 
 ## Overall Health
 
@@ -70,14 +71,31 @@
 
 None required. All modules are well-structured. Issues are localized fixes.
 
-## Action Plan
+## Fixes Applied (a916d76)
 
-**Priority 1 (Critical):**
+**All Critical:**
 
-1. Fix unwrap in execute_tools_parallel
-2. Fix RwLock poison handling in registry
-3. Add HTTP client timeouts
+- [x] Fix unwrap in execute_tools_parallel
+- [x] Fix RwLock poison handling in registry (6 locations)
+- [x] Add HTTP client timeouts (30s/10s)
+- [x] Fix template unwraps (use expect with message)
+- [x] Make regex static in designer.rs
 
-**Priority 2 (Important):** 4. Fix template unwraps (use expect with message) 5. Make regex static in designer.rs 6. Handle message queue poisoning 7. Extract filter logic in registry
+**All Important:**
 
-**Priority 3 (Nice to have):** 8. Add MCP process cleanup 9. Fix Ollama context fallback 10. Add strip=true to release profile
+- [x] Handle message queue poisoning
+- [x] Token percentage saturating_mul
+- [x] Reset history_index after slash commands
+- [x] Session store error context
+- [x] Input history transaction
+- [x] Ollama context fallback 32768
+
+**Performance:**
+
+- [x] Add strip=true to release profile
+
+**Deferred (low priority):**
+
+- [ ] MCP process cleanup (requires significant refactor)
+- [ ] Extract duplicated filter logic (refactor, not bug)
+- [ ] Config merge logic (edge case)
