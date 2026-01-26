@@ -50,6 +50,7 @@ grep-matcher = "0.1.8"
 grep-regex = "0.1.14"
 once_cell = "1.21"
 html2text = "0.16.6"
+serde_yaml = "0.9.34"
 
 [profile.release]
 strip = true

@@ -3,6 +3,20 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 
+/// YAML frontmatter structure per agentskills.io spec.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+struct SkillFrontmatter {
+    name: String,
+    description: String,
+    #[serde(default)]
+    allowed_tools: Option<Vec<String>>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    models: Option<Vec<String>>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Skill {
     pub name: String,
@@ -81,7 +95,73 @@ impl SkillLoader {
         Self::parse_skill_md(&content)
     }
 
+    /// Parse a SKILL.md file. Supports both YAML frontmatter and legacy XML format.
     pub fn parse_skill_md(content: &str) -> Result<Vec<Skill>> {
+        let trimmed = content.trim_start();
+
+        // YAML frontmatter format (agentskills.io spec)
+        if trimmed.starts_with("---") {
+            return Self::parse_yaml_format(content);
+        }
+
+        // Legacy XML format
+        Self::parse_xml_format(content)
+    }
+
+    /// Parse YAML frontmatter format per agentskills.io spec.
+    /// Format:
+    /// ```text
+    /// ---
+    /// name: skill-name
+    /// description: A description
+    /// allowed-tools:
+    ///   - Bash(git:*)
+    ///   - Read
+    /// ---
+    /// Prompt content here...
+    /// ```
+    fn parse_yaml_format(content: &str) -> Result<Vec<Skill>> {
+        let trimmed = content.trim_start();
+
+        // Find the frontmatter boundaries
+        let after_first = trimmed
+            .strip_prefix("---")
+            .context("Missing frontmatter start")?;
+        let end_idx = after_first
+            .find("\n---")
+            .context("Missing frontmatter end delimiter")?;
+
+        let yaml_content = &after_first[..end_idx];
+        let prompt_content = after_first[end_idx + 4..].trim();
+
+        // Parse YAML frontmatter
+        let frontmatter: SkillFrontmatter =
+            serde_yaml::from_str(yaml_content).context("Failed to parse skill YAML frontmatter")?;
+
+        // Merge model/models fields
+        let models = match (frontmatter.model, frontmatter.models) {
+            (Some(m), None) => Some(vec![m]),
+            (None, Some(ms)) => Some(ms),
+            (Some(m), Some(mut ms)) => {
+                ms.insert(0, m);
+                Some(ms)
+            }
+            (None, None) => None,
+        };
+
+        let skill = Skill {
+            name: frontmatter.name,
+            description: frontmatter.description,
+            allowed_tools: frontmatter.allowed_tools,
+            models,
+            prompt: prompt_content.to_string(),
+        };
+
+        Ok(vec![skill])
+    }
+
+    /// Parse legacy XML format for backwards compatibility.
+    fn parse_xml_format(content: &str) -> Result<Vec<Skill>> {
         let mut skills = Vec::new();
         let mut current_skill: Option<Skill> = None;
         let mut in_prompt = false;
@@ -239,5 +319,74 @@ mod tests {
         assert_eq!(skills[0].models, None);
         assert_eq!(skills[0].resolve_model("main-model"), "main-model");
         assert!(skills[0].is_model_allowed("any-model"));
+    }
+
+    #[test]
+    fn test_yaml_frontmatter_basic() {
+        let content = r#"---
+name: yaml-skill
+description: A YAML formatted skill
+---
+You are an agent using YAML format.
+Do YAML things."#;
+        let skills = SkillLoader::parse_skill_md(content).unwrap();
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].name, "yaml-skill");
+        assert_eq!(skills[0].description, "A YAML formatted skill");
+        assert!(skills[0]
+            .prompt
+            .contains("You are an agent using YAML format."));
+    }
+
+    #[test]
+    fn test_yaml_frontmatter_with_allowed_tools() {
+        let content = r#"---
+name: restricted-skill
+description: Has tool restrictions
+allowed-tools:
+  - Bash(git:*)
+  - Read
+  - Glob
+---
+You can only use git commands and read files."#;
+        let skills = SkillLoader::parse_skill_md(content).unwrap();
+        assert_eq!(skills[0].name, "restricted-skill");
+        assert_eq!(
+            skills[0].allowed_tools,
+            Some(vec![
+                "Bash(git:*)".to_string(),
+                "Read".to_string(),
+                "Glob".to_string()
+            ])
+        );
+    }
+
+    #[test]
+    fn test_yaml_frontmatter_with_model() {
+        let content = r#"---
+name: fast-yaml-skill
+description: Uses a specific model
+model: claude-haiku-3
+---
+Do fast things."#;
+        let skills = SkillLoader::parse_skill_md(content).unwrap();
+        assert_eq!(skills[0].models, Some(vec!["claude-haiku-3".to_string()]));
+    }
+
+    #[test]
+    fn test_yaml_frontmatter_with_models_list() {
+        let content = r#"---
+name: multi-model-skill
+description: Allows multiple models
+models:
+  - claude-sonnet-4
+  - gpt-4o
+---
+Flexible model skill."#;
+        let skills = SkillLoader::parse_skill_md(content).unwrap();
+        assert_eq!(
+            skills[0].models,
+            Some(vec!["claude-sonnet-4".to_string(), "gpt-4o".to_string()])
+        );
     }
 }
