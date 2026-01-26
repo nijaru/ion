@@ -97,3 +97,17 @@ When no selector is open, Escape cancels a running task but never quits.
 
 - [diff-highlighting.md](diff-highlighting.md) - Detailed diff rendering design
 - [interrupt-handling.md](interrupt-handling.md) - Ctrl+C behavior spec
+
+## Progress Bar Enhancements (ref: Claude Code)
+
+**Current:** `Ionizing... ↑1.2k ↓3.4k tokens (Esc to cancel)`
+
+**Target:**
+- Add elapsed timer: `· Ionizing… (Esc to interrupt · 6m 57s · ↑1.2k ↓3.4k tokens)`
+- Add thinking indicator: `· thinking` appears during thinking blocks
+- After thinking: `thought for 5s`
+
+**Thinking blocks:**
+- Don't render thinking content in chat
+- Show placeholder: "thinking" (active) or "thought for Xs" (done)
+- Keep thinking content internal only

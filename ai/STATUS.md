@@ -44,6 +44,12 @@
 
 ## Recent Completions
 
+**Codebase Review Verified** (2026-01-25)
+
+- All CRITICAL/IMPORTANT issues from Sprint 7 review confirmed fixed
+- Documentation updated in ai/review/SUMMARY.md
+- No major refactoring needed - files are cohesive
+
 **Sprint 9 Progress** (4800afb)
 
 - Web fetch: HTML to text conversion via html2text
@@ -72,3 +78,5 @@
 | Subagents               | MEDIUM   | Claude Code, OpenCode have  |
 | Anthropic caching       | MEDIUM   | Cost savings                |
 | Autocomplete (/, //, @) | MEDIUM   | UX polish                   |
+| Timer in progress bar   | LOW      | Show elapsed time           |
+| Thinking display        | LOW      | "thought for Xs" indicator  |

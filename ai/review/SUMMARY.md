@@ -1,7 +1,7 @@
 # Codebase Review Summary
 
 **Last Updated:** 2026-01-25
-**Status:** Sprint 8 fixes applied
+**Status:** All critical/important issues fixed
 
 ## Overall Health
 
@@ -12,19 +12,29 @@
 | provider/ | GOOD   | Multi-provider abstraction     |
 | tool/     | GOOD   | Orchestrator + approval system |
 | session/  | GOOD   | SQLite persistence             |
+| skill/    | GOOD   | YAML frontmatter, lazy loading |
 | mcp/      | OK     | Needs tests, cleanup deferred  |
 
-## Sprint 8 Fixes Applied
+## Issues - All Resolved
 
-1. **Greedy JSON regex** - `designer.rs:10` - Changed `\{.*\}` to `\{.*?\}` (non-greedy)
-2. **Message queue silent drop** - `events.rs:188-192` - Now recovers from poisoned lock with warning
-3. **Session reload incomplete** - `session.rs:484-530` - Now shows tool calls and results
-4. **Plan never cleared** - Added `Agent::clear_plan()`, called on `/clear`
+### Agent Module
 
-## Deferred (Low Priority)
+- [x] **execute_tools_parallel unwrap** - Fixed: proper `Option::collect` with error
+- [x] **Template unwraps** - Fixed: using `expect()` with descriptive messages
+- [x] **Greedy JSON regex** - Fixed: non-greedy `\{.*?\}`
+- [x] **Message queue poisoning** - Fixed: `poisoned.into_inner()` recovery
+- [x] **Plan never cleared** - Fixed: `Agent::clear_plan()` on `/clear`
+
+### TUI Module
+
+- [x] **Token overflow risk** - Fixed: `saturating_mul(100)`
+- [x] **History index not reset** - Fixed: reset in all slash command branches
+
+## Deferred (Low Priority - Not Bugs)
 
 - MCP process cleanup (requires significant refactor)
-- Extract duplicated filter logic in registry.rs (refactor, not bug)
+- Extract retry logic to helper (code duplication, not bug)
+- Compaction post-validation (pruning logic is correct)
 - Config merge edge case
 
 ## Architecture
@@ -55,34 +65,23 @@ Provider (provider/)
   ↓
 Tool (tool/)
   ├── orchestrator.rs - Tool dispatch, approval
-  └── builtins/       - read, write, edit, bash, glob, grep
+  └── builtins/       - read, write, edit, bash, glob, grep, web_fetch
 ```
 
-**Data Flow:**
+## Code Quality
 
-1. User input → TUI events → Agent::run_task
-2. Agent loop: stream_response → execute_tools_parallel → repeat until no tools
-3. Tool results → TUI message_list → render
+**File sizes (largest):**
+| File | Lines | Status |
+|------|-------|--------|
+| composer/mod.rs | 1082 | OK - cohesive component |
+| render.rs | 800 | OK - single concern |
+| agent/mod.rs | 752 | OK - main loop |
+| registry.rs | 695 | OK - model registry |
 
-**Key Patterns:**
+**No splitting recommended** - files are large but cohesive with single responsibilities.
 
-- Arc<dyn Trait> for provider abstraction
-- mpsc channels for async events (agent → TUI)
-- CancellationToken for abort handling
-- Mutex/RwLock for shared state (with poison recovery)
+## Future Refactoring Opportunities
 
-## Code Organization Assessment
-
-**Current structure is appropriate.** No major reorganization needed.
-
-**Strengths:**
-
-- Clear module boundaries
-- Single responsibility per file
-- Consistent error handling (anyhow/thiserror)
-- Good separation: TUI ↔ Agent ↔ Provider
-
-**Minor improvements (optional):**
-
-- `tui/` could group pickers into `tui/pickers/` (model, provider, session)
-- `tool/builtins/` could have integration tests
+1. Extract retry logic to helper (reduces ~50 lines duplication)
+2. Group pickers into `tui/pickers/` subdirectory
+3. Add integration tests for tool builtins
