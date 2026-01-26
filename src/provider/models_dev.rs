@@ -42,11 +42,7 @@ pub struct ModelsDevLimit {
 }
 
 pub async fn fetch_models_dev() -> Result<Vec<ModelInfo>> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .connect_timeout(std::time::Duration::from_secs(10))
-        .build()
-        .unwrap_or_else(|_| reqwest::Client::new());
+    let client = crate::provider::create_http_client();
     let response = client
         .get("https://models.dev/api.json")
         .send()

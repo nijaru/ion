@@ -20,6 +20,8 @@ mod prefs;
 mod registry;
 mod types;
 
+use std::time::Duration;
+
 // Re-export the clean public API
 pub use api_provider::{Provider, ProviderStatus};
 pub use client::{Client, LlmApi};
@@ -27,6 +29,20 @@ pub use error::Error;
 pub use prefs::ProviderPrefs;
 pub use registry::{ModelFilter, ModelRegistry};
 pub use types::*;
+
+/// Default timeout for HTTP requests.
+pub const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
+/// Default connect timeout for HTTP requests.
+pub const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Create an HTTP client with standard timeouts.
+pub fn create_http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(HTTP_TIMEOUT)
+        .connect_timeout(HTTP_CONNECT_TIMEOUT)
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
+}
 
 /// Create a client for the given provider, auto-detecting API key from environment.
 pub fn create(provider: Provider) -> Result<Client, Error> {

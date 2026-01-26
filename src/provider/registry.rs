@@ -8,10 +8,6 @@ use serde::Deserialize;
 use std::sync::RwLock;
 use std::time::{Duration, Instant};
 
-/// Default timeout for HTTP requests.
-const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
-const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-
 /// Filter criteria for model queries.
 #[derive(Debug, Clone, Default)]
 pub struct ModelFilter {
@@ -107,14 +103,8 @@ impl<T> Pipe for T {}
 
 impl ModelRegistry {
     pub fn new(api_key: String, ttl_secs: u64) -> Self {
-        let client = reqwest::Client::builder()
-            .timeout(HTTP_TIMEOUT)
-            .connect_timeout(HTTP_CONNECT_TIMEOUT)
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
-
         Self {
-            client,
+            client: crate::provider::create_http_client(),
             api_key,
             base_url: "https://openrouter.ai/api/v1".to_string(),
             cache: RwLock::new(ModelCache::default()),
@@ -368,45 +358,10 @@ impl ModelRegistry {
     ) -> Vec<ModelInfo> {
         let mut filtered: Vec<ModelInfo> = models
             .into_iter()
-            .filter(|m| {
-                // Min context check
-                if let Some(min) = filter.min_context
-                    && m.context_window < min
-                {
-                    return false;
-                }
-
-                // Tool support check
-                if filter.require_tools && !m.supports_tools {
-                    return false;
-                }
-
-                // Vision support check
-                if filter.require_vision && !m.supports_vision {
-                    return false;
-                }
-
-                // Max input price check
-                if let Some(max) = filter.max_input_price
-                    && m.pricing.input > max
-                {
-                    return false;
-                }
-
-                // ID prefix check
-                if let Some(ref prefix) = filter.id_prefix
-                    && !m.id.to_lowercase().contains(&prefix.to_lowercase())
-                {
-                    return false;
-                }
-
-                true
-            })
+            .filter(|m| Self::model_matches_filter(m, filter, prefs))
             .collect();
 
-        // Sort by preferences
         self.sort_models(&mut filtered, filter, prefs);
-
         filtered
     }
 
@@ -416,60 +371,11 @@ impl ModelRegistry {
         let mut models: Vec<ModelInfo> = cache
             .models
             .iter()
-            .filter(|m| {
-                // Min context check
-                if let Some(min) = filter.min_context
-                    && m.context_window < min
-                {
-                    return false;
-                }
-
-                // Tool support check
-                if filter.require_tools && !m.supports_tools {
-                    return false;
-                }
-
-                // Vision support check
-                if filter.require_vision && !m.supports_vision {
-                    return false;
-                }
-
-                // Max input price check
-                if let Some(max) = filter.max_input_price
-                    && m.pricing.input > max
-                {
-                    return false;
-                }
-
-                // ID prefix check
-                if let Some(ref prefix) = filter.id_prefix
-                    && !m.id.to_lowercase().contains(&prefix.to_lowercase())
-                {
-                    return false;
-                }
-
-                // Provider ignore list
-                if let Some(ref ignore) = prefs.ignore
-                    && ignore.iter().any(|p| p.eq_ignore_ascii_case(&m.provider))
-                {
-                    return false;
-                }
-
-                // Provider only list
-                if let Some(ref only) = prefs.only
-                    && !only.iter().any(|p| p.eq_ignore_ascii_case(&m.provider))
-                {
-                    return false;
-                }
-
-                true
-            })
+            .filter(|m| Self::model_matches_filter(m, filter, prefs))
             .cloned()
             .collect();
 
-        // Sort by preferences
         self.sort_models(&mut models, filter, prefs);
-
         models
     }
 
@@ -524,6 +430,64 @@ impl ModelRegistry {
                 }
             }
         });
+    }
+
+    /// Check if a model passes the filter criteria.
+    fn model_matches_filter(
+        model: &ModelInfo,
+        filter: &ModelFilter,
+        prefs: &ProviderPrefs,
+    ) -> bool {
+        // Min context check
+        if let Some(min) = filter.min_context
+            && model.context_window < min
+        {
+            return false;
+        }
+
+        // Tool support check
+        if filter.require_tools && !model.supports_tools {
+            return false;
+        }
+
+        // Vision support check
+        if filter.require_vision && !model.supports_vision {
+            return false;
+        }
+
+        // Max input price check
+        if let Some(max) = filter.max_input_price
+            && model.pricing.input > max
+        {
+            return false;
+        }
+
+        // ID prefix check
+        if let Some(ref prefix) = filter.id_prefix
+            && !model.id.to_lowercase().contains(&prefix.to_lowercase())
+        {
+            return false;
+        }
+
+        // Provider ignore list
+        if let Some(ref ignore) = prefs.ignore
+            && ignore
+                .iter()
+                .any(|p| p.eq_ignore_ascii_case(&model.provider))
+        {
+            return false;
+        }
+
+        // Provider only list
+        if let Some(ref only) = prefs.only
+            && !only
+                .iter()
+                .any(|p| p.eq_ignore_ascii_case(&model.provider))
+        {
+            return false;
+        }
+
+        true
     }
 
     /// Get a specific model by ID.
