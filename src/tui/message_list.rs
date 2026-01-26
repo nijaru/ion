@@ -268,15 +268,9 @@ impl MessageList {
                     self.push_entry(MessageEntry::new(Sender::Agent, delta));
                 }
             }
-            AgentEvent::ThinkingDelta(delta) => {
-                if let Some(last) = self.entries.last_mut()
-                    && last.sender == Sender::Agent
-                {
-                    last.append_thinking(&delta);
-                } else if !delta.trim().is_empty() {
-                    // Skip empty/whitespace deltas when creating new entries
-                    self.push_entry(MessageEntry::new_thinking(Sender::Agent, delta));
-                }
+            AgentEvent::ThinkingDelta(_) => {
+                // Thinking events are tracked in session.rs for progress display
+                // but not rendered in the chat (per design)
             }
             AgentEvent::ToolCallStart(_id, name, args) => {
                 // Format: tool_name(key_arg)

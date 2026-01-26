@@ -1,5 +1,6 @@
 //! Event handling for the TUI.
 
+use crate::session::Session;
 use crate::tool::{ApprovalResponse, ToolMode};
 use crate::tui::fuzzy;
 use crate::tui::message_list::{MessageEntry, Sender};
@@ -230,10 +231,24 @@ impl App {
                                 "/clear" => {
                                     self.clear_input();
                                     self.history_index = self.input_history.len();
+
+                                    // Save current session before starting fresh
+                                    if !self.session.messages.is_empty() {
+                                        let _ = self.store.save(&self.session);
+                                    }
+
+                                    // Start a new session (keeps old session in history)
+                                    let working_dir = self.session.working_dir.clone();
+                                    let model = self.session.model.clone();
+                                    let no_sandbox = self.session.no_sandbox;
+                                    self.session = Session::new(working_dir, model);
+                                    self.session.no_sandbox = no_sandbox;
+
+                                    // Clear display state
                                     self.message_list.clear();
-                                    self.session.messages.clear();
                                     self.rendered_entries = 0;
                                     self.buffered_chat_lines.clear();
+
                                     // Clear active plan so it doesn't pollute new conversations
                                     let agent = self.agent.clone();
                                     tokio::spawn(async move {
