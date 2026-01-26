@@ -160,3 +160,63 @@ impl Tool for ListTool {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tool::ToolContext;
+    use std::path::PathBuf;
+    use tokio_util::sync::CancellationToken;
+
+    fn test_context() -> ToolContext {
+        ToolContext {
+            working_dir: PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+            session_id: "test".to_string(),
+            abort_signal: CancellationToken::new(),
+            no_sandbox: true,
+            index_callback: None,
+            discovery_callback: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_list_src_directory() {
+        let tool = ListTool;
+        let ctx = test_context();
+        let result = tool
+            .execute(serde_json::json!({"path": "src"}), &ctx)
+            .await
+            .unwrap();
+
+        assert!(!result.is_error);
+        assert!(
+            !result.content.contains("Directory is empty"),
+            "src/ should not be empty: {}",
+            result.content
+        );
+
+        // Should contain known files/dirs
+        assert!(
+            result.content.contains("main.rs") || result.content.contains("lib.rs"),
+            "src/ should contain main.rs or lib.rs: {}",
+            result.content
+        );
+    }
+
+    #[tokio::test]
+    async fn test_list_src_tui_directory() {
+        let tool = ListTool;
+        let ctx = test_context();
+        let result = tool
+            .execute(serde_json::json!({"path": "src/tui"}), &ctx)
+            .await
+            .unwrap();
+
+        assert!(!result.is_error);
+        assert!(
+            !result.content.contains("Directory is empty"),
+            "src/tui/ should not be empty: {}",
+            result.content
+        );
+    }
+}

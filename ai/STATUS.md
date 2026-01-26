@@ -49,6 +49,13 @@ Next up:
 
 ## Recent Completions
 
+**TUI Rendering Fixes (2026-01-26)**
+
+- Fixed tool output not showing during agent run (only skip last Agent entry)
+- Added visual gap between chat history and progress line (Option B)
+- Queued messages now show on dedicated line above spinner: " ↳ N messages queued"
+- Empty line for gap when no messages queued
+
 **Codebase Review & Refactor (2026-01-26)**
 
 - Reviewed all modules (tui, agent, provider, session, mcp, skill)

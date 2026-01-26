@@ -527,12 +527,7 @@ impl Agent {
                             "{}, retrying in {}s (attempt {}/{})",
                             reason, delay, retry_count, MAX_RETRIES
                         );
-                        let _ = tx
-                            .send(AgentEvent::TextDelta(format!(
-                                "\n*{}, retrying in {}s...*\n",
-                                reason, delay
-                            )))
-                            .await;
+                        let _ = tx.send(AgentEvent::Retry(reason.to_string(), delay)).await;
 
                         // Clear any partial response
                         assistant_blocks.clear();
@@ -581,12 +576,7 @@ impl Agent {
                                 "{}, retrying in {}s (attempt {}/{})",
                                 reason, delay, retry_count, MAX_RETRIES
                             );
-                            let _ = tx
-                                .send(AgentEvent::TextDelta(format!(
-                                    "\n*{}, retrying in {}s...*\n",
-                                    reason, delay
-                                )))
-                                .await;
+                            let _ = tx.send(AgentEvent::Retry(reason.to_string(), delay)).await;
                             tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
                             continue;
                         } else {
@@ -746,6 +736,8 @@ pub enum AgentEvent {
     },
     InputTokens(usize),
     OutputTokensDelta(usize),
+    /// Retry in progress: (reason, delay_seconds)
+    Retry(String, u64),
     Finished(String),
     Error(String),
     ModelsFetched(Vec<crate::provider::ModelInfo>),
