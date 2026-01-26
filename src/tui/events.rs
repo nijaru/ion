@@ -185,10 +185,15 @@ impl App {
                     if self.is_running {
                         // Queue message for injection at next turn (resolve blobs)
                         let resolved = self.resolved_input_text();
-                        if let Some(queue) = self.message_queue.as_ref()
-                            && let Ok(mut q) = queue.lock()
-                        {
-                            q.push(resolved);
+                        if let Some(queue) = self.message_queue.as_ref() {
+                            match queue.lock() {
+                                Ok(mut q) => q.push(resolved),
+                                Err(poisoned) => {
+                                    // Lock poisoned - recover and push anyway
+                                    tracing::warn!("Message queue lock poisoned, recovering");
+                                    poisoned.into_inner().push(resolved);
+                                }
+                            }
                         }
                         self.clear_input();
                     } else {
@@ -229,6 +234,11 @@ impl App {
                                     self.session.messages.clear();
                                     self.rendered_entries = 0;
                                     self.buffered_chat_lines.clear();
+                                    // Clear active plan so it doesn't pollute new conversations
+                                    let agent = self.agent.clone();
+                                    tokio::spawn(async move {
+                                        agent.clear_plan().await;
+                                    });
                                     return;
                                 }
                                 "/help" | "/?" => {

@@ -211,6 +211,12 @@ impl Agent {
         self.provider.clone()
     }
 
+    /// Clear the active plan (e.g., when starting fresh with /clear).
+    pub async fn clear_plan(&self) {
+        let mut plan = self.active_plan.lock().await;
+        *plan = None;
+    }
+
     async fn emit_token_usage(&self, messages: &[Message], tx: &mpsc::Sender<AgentEvent>) {
         // Get system prompt (cached) without cloning messages
         let plan = self.active_plan.lock().await;

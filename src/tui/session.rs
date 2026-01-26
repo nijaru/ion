@@ -492,9 +492,41 @@ impl App {
                 }
                 Role::Assistant => {
                     for block in msg.content.iter() {
-                        if let ContentBlock::Text { text } = block {
+                        match block {
+                            ContentBlock::Text { text } => {
+                                self.message_list
+                                    .push_entry(MessageEntry::new(Sender::Agent, text.clone()));
+                            }
+                            ContentBlock::ToolCall { name, .. } => {
+                                self.message_list
+                                    .push_entry(MessageEntry::new(Sender::Tool, name.clone()));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                Role::ToolResult => {
+                    for block in msg.content.iter() {
+                        if let ContentBlock::ToolResult { content, is_error, .. } = block {
+                            let display = if *is_error {
+                                format!("⎿ Error: {}", content.lines().next().unwrap_or(""))
+                            } else {
+                                let line_count = content.lines().count();
+                                if line_count > 1 {
+                                    format!("⎿ {} lines", line_count)
+                                } else {
+                                    format!("⎿ {}", content.chars().take(60).collect::<String>())
+                                }
+                            };
+                            // Append to previous tool entry if exists
+                            if let Some(last) = self.message_list.entries.last_mut()
+                                && last.sender == Sender::Tool
+                            {
+                                last.append_text(&format!("\n{}", display));
+                                continue;
+                            }
                             self.message_list
-                                .push_entry(MessageEntry::new(Sender::Agent, text.clone()));
+                                .push_entry(MessageEntry::new(Sender::Tool, display));
                         }
                     }
                 }
