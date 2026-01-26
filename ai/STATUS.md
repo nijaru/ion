@@ -7,7 +7,7 @@
 | Phase      | 5 - Polish & UX | 2026-01-25 |
 | Status     | Runnable        | 2026-01-25 |
 | Toolchain  | stable          | 2026-01-22 |
-| Tests      | 96 passing      | 2026-01-25 |
+| Tests      | 98 passing      | 2026-01-25 |
 | Clippy     | 0 warnings      | 2026-01-25 |
 | Visibility | **PUBLIC**      | 2026-01-22 |
 
@@ -15,16 +15,16 @@
 
 **Sprint 9: Feature Parity & Extensibility** - see ai/SPRINTS.md
 
-| Priority | Task                       | Status |
-| -------- | -------------------------- | ------ |
-| 1        | Web fetch tool             | DONE   |
-| 2        | Skills YAML frontmatter    | DONE   |
-| 3        | Skills progressive load    | DONE   |
-| 4        | Subagents                  | NEXT   |
-| 5        | Anthropic caching          | -      |
-| 6        | Image attachment           | -      |
-| 7        | Skill/command autocomplete | -      |
-| 8        | File path autocomplete     | -      |
+| Priority | Task                       | Status      |
+| -------- | -------------------------- | ----------- |
+| 1        | Web fetch tool             | DONE        |
+| 2        | Skills YAML frontmatter    | DONE        |
+| 3        | Skills progressive load    | DONE        |
+| 4        | Subagents                  | IN PROGRESS |
+| 5        | Anthropic caching          | -           |
+| 6        | Image attachment           | -           |
+| 7        | Skill/command autocomplete | -           |
+| 8        | File path autocomplete     | -           |
 
 **Target:** Pi + Claude Code feature blend
 
