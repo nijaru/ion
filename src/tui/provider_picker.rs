@@ -188,9 +188,9 @@ impl ProviderPicker {
             })
             .collect();
 
-        let count = self.filtered.len();
-        let total = self.providers.len();
-        let title = format!(" Providers ({}/{}) ", count, total);
+        let filtered_count = self.filtered.len();
+        let selected_idx = self.list_state.selected().unwrap_or(0) + 1;
+        let title = format!(" Providers ({}/{}) ", selected_idx, filtered_count);
 
         let list = List::new(items)
             .block(

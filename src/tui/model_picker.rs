@@ -518,9 +518,9 @@ impl ModelPicker {
             })
             .collect();
 
-        let count = self.filtered_providers.len();
-        let total = self.providers.len();
-        let title = format!(" Providers ({}/{}) ", count, total);
+        let filtered_count = self.filtered_providers.len();
+        let selected_idx = self.provider_state.selected().unwrap_or(0) + 1;
+        let title = format!(" Providers ({}/{}) ", selected_idx, filtered_count);
 
         let list = List::new(items)
             .block(
@@ -617,11 +617,11 @@ impl ModelPicker {
             })
             .collect();
 
-        let count = self.filtered_models.len();
-        let total = self.provider_models.len();
+        let filtered_count = self.filtered_models.len();
+        let selected_idx = self.model_state.selected().unwrap_or(0) + 1;
         let title = match &self.selected_provider {
-            Some(p) => format!(" {} ({}/{}) ", p, count, total),
-            None => format!(" Models ({}/{}) ", count, total),
+            Some(p) => format!(" {} ({}/{}) ", p, selected_idx, filtered_count),
+            None => format!(" Models ({}/{}) ", selected_idx, filtered_count),
         };
 
         let list = List::new(items)

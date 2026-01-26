@@ -23,7 +23,6 @@ pub struct SessionPicker {
     pub error: Option<String>,
 }
 
-
 impl SessionPicker {
     pub fn new() -> Self {
         Self::default()
@@ -246,9 +245,9 @@ impl SessionPicker {
             })
             .collect();
 
-        let count = self.filtered_sessions.len();
-        let total = self.sessions.len();
-        let title = format!(" Sessions ({}/{}) ", count, total);
+        let filtered_count = self.filtered_sessions.len();
+        let selected_idx = self.list_state.selected().unwrap_or(0) + 1;
+        let title = format!(" Sessions ({}/{}) ", selected_idx, filtered_count);
 
         let list = List::new(items)
             .block(
