@@ -2,6 +2,7 @@ pub mod context;
 pub mod designer;
 pub mod explorer;
 pub mod instructions;
+pub mod subagent;
 
 use crate::agent::context::ContextManager;
 use crate::agent::designer::{Designer, Plan};
