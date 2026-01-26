@@ -147,7 +147,9 @@ impl App {
     #[allow(dead_code)]
     pub fn viewport_height(&self, terminal_width: u16, terminal_height: u16) -> u16 {
         let input_height = self.calculate_input_height(terminal_width, terminal_height);
-        let progress_height = if self.is_running || self.last_task_summary.is_some() {
+        let progress_height = if self.is_running {
+            2 // Line 1: gap or queued indicator, Line 2: spinner
+        } else if self.last_task_summary.is_some() {
             1
         } else {
             0
@@ -230,14 +232,6 @@ impl App {
                 stats.push(format!("thought for {}s", secs));
             }
 
-            // Queued message indicator
-            if let Some(ref queue) = self.message_queue
-                && let Ok(guard) = queue.lock()
-                && !guard.is_empty()
-            {
-                stats.push(format!("+{} queued", guard.len()));
-            }
-
             if !stats.is_empty() {
                 progress_spans.push(Span::styled(
                     format!(" ({} · ", stats.join(" · ")),
@@ -252,7 +246,38 @@ impl App {
             }
 
             let progress_line = Line::from(progress_spans);
-            frame.render_widget(Paragraph::new(vec![progress_line]), progress_area);
+
+            // If we have extra height, show queued messages on first line
+            if progress_area.height > 1 {
+                let queued_count = self
+                    .message_queue
+                    .as_ref()
+                    .and_then(|q| q.lock().ok())
+                    .map(|g| g.len())
+                    .unwrap_or(0);
+
+                let queued_line = if queued_count > 0 {
+                    Line::from(vec![
+                        Span::styled(" ↳ ", Style::default().fg(Color::Yellow)),
+                        Span::styled(
+                            format!(
+                                "{} message{} queued",
+                                queued_count,
+                                if queued_count == 1 { "" } else { "s" }
+                            ),
+                            Style::default().fg(Color::Yellow).dim(),
+                        ),
+                    ])
+                } else {
+                    Line::from("") // Empty line for visual separation
+                };
+                frame.render_widget(
+                    Paragraph::new(vec![queued_line, progress_line]),
+                    progress_area,
+                );
+            } else {
+                frame.render_widget(Paragraph::new(vec![progress_line]), progress_area);
+            }
         } else if let Some(summary) = &self.last_task_summary {
             let secs = summary.elapsed.as_secs();
             let elapsed_str = if secs >= 60 {
@@ -410,7 +435,9 @@ impl App {
 
         let input_height = self.calculate_input_height(area.width, area.height);
 
-        let progress_height = if self.is_running || self.last_task_summary.is_some() {
+        let progress_height = if self.is_running {
+            2 // Line 1: gap or queued indicator, Line 2: spinner
+        } else if self.last_task_summary.is_some() {
             1
         } else {
             0
