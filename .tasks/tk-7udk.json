@@ -3,7 +3,7 @@
   "ref": "7udk",
   "title": "[SKILL] Progressive disclosure - load full skill on demand",
   "description": null,
-  "status": "open",
+  "status": "done",
   "priority": 2,
   "labels": [],
   "assignees": [],
@@ -13,7 +13,7 @@
   "due_date": null,
   "logs": [],
   "created_at": "2026-01-26T01:50:07.532Z",
-  "updated_at": "2026-01-26T01:50:07.532Z",
-  "completed_at": null,
+  "updated_at": "2026-01-26T03:01:15.374Z",
+  "completed_at": "2026-01-26T03:01:15.374Z",
   "external": {}
 }
