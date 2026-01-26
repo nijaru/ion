@@ -1,10 +1,10 @@
 {
   "project": "tk",
   "ref": "268g",
-  "title": "[PROVIDER] Anthropic cache_control support",
+  "title": "[CRITICAL] Anthropic caching - 50-100x cost savings",
   "description": null,
   "status": "open",
-  "priority": 2,
+  "priority": 1,
   "labels": [],
   "assignees": [],
   "parent": null,
@@ -15,10 +15,18 @@
     {
       "ts": "2026-01-26T17:38:07.161Z",
       "msg": "Blocked: llm-connector crate doesn't expose cache_control field"
+    },
+    {
+      "ts": "2026-01-26T18:04:09.529Z",
+      "msg": "Real impact: Cache ENTIRE conversation prefix, not just system prompt. On long sessions (100k+ context), pay full price only for new delta each turn. 50-100x savings, not 10x."
+    },
+    {
+      "ts": "2026-01-26T18:04:11.048Z",
+      "msg": "Solution: Bypass llm-connector, implement direct Anthropic client with reqwest. Full control over cache_control on all content blocks."
     }
   ],
   "created_at": "2026-01-26T01:50:17.422Z",
-  "updated_at": "2026-01-26T17:38:07.161Z",
+  "updated_at": "2026-01-26T18:04:11.048Z",
   "completed_at": null,
   "external": {}
 }
