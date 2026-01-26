@@ -1,5 +1,6 @@
 use crate::tool::{DangerLevel, Tool, ToolContext, ToolError, ToolResult};
 use async_trait::async_trait;
+use html2text::from_read;
 use reqwest::Client;
 use serde_json::json;
 use std::time::Duration;
@@ -90,7 +91,7 @@ impl Tool for WebFetchTool {
     }
 
     fn description(&self) -> &str {
-        "Fetch content from a URL. Returns the response body as text."
+        "Fetch content from a URL. HTML is converted to readable text. Returns plain text suitable for analysis."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -103,7 +104,11 @@ impl Tool for WebFetchTool {
                 },
                 "max_length": {
                     "type": "integer",
-                    "description": "Maximum response length in bytes (default: 100000)"
+                    "description": "Maximum response length in characters (default: 50000)"
+                },
+                "raw": {
+                    "type": "boolean",
+                    "description": "Return raw HTML without conversion (default: false)"
                 }
             },
             "required": ["url"]
@@ -129,7 +134,12 @@ impl Tool for WebFetchTool {
             .get("max_length")
             .and_then(|v| v.as_u64())
             .map(|v| v as usize)
-            .unwrap_or(100_000);
+            .unwrap_or(50_000);
+
+        let raw_mode = args
+            .get("raw")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         // Validate URL
         let parsed_url = reqwest::Url::parse(url)
@@ -209,44 +219,72 @@ impl Tool for WebFetchTool {
             bytes.truncate(max_length);
         }
 
-        // Try to convert to string, truncate at char boundary if needed
-        let (content, truncated) = match String::from_utf8(bytes.clone()) {
-            Ok(mut text) => {
-                if was_truncated {
-                    // Find last valid char boundary
-                    let truncate_at = text
-                        .char_indices()
-                        .take_while(|(i, _)| *i < max_length)
-                        .last()
-                        .map(|(i, c)| i + c.len_utf8())
-                        .unwrap_or(text.len());
-                    text.truncate(truncate_at);
-                    let total = content_length.map_or("unknown".to_string(), |l| l.to_string());
-                    (format!("{}\n\n[Truncated: {} bytes total]", text, total), true)
-                } else {
-                    (text, false)
-                }
-            }
+        // Check if content is HTML
+        let is_html = content_type.contains("text/html") || content_type.contains("application/xhtml");
+
+        // Try to convert to string
+        let raw_text = match String::from_utf8(bytes.clone()) {
+            Ok(text) => text,
             Err(_) => {
                 let total = content_length.unwrap_or(bytes.len());
-                (
-                    format!(
+                return Ok(ToolResult {
+                    content: format!(
                         "[Binary content: {} bytes, content-type: {}]",
                         total, content_type
                     ),
-                    false,
-                )
+                    is_error: false,
+                    metadata: Some(json!({
+                        "status": status.as_u16(),
+                        "content_type": content_type,
+                        "length": bytes.len(),
+                        "binary": true
+                    })),
+                });
             }
         };
 
+        // Convert HTML to readable text unless raw mode requested
+        let processed_text = if is_html && !raw_mode {
+            // Use 80 char width for readable formatting
+            from_read(raw_text.as_bytes(), 80).unwrap_or(raw_text)
+        } else {
+            raw_text
+        };
+
+        // Truncate if needed
+        let (content, truncated) = if processed_text.len() > max_length {
+            // Find last valid char boundary
+            let truncate_at = processed_text
+                .char_indices()
+                .take_while(|(i, _)| *i < max_length)
+                .last()
+                .map(|(i, c)| i + c.len_utf8())
+                .unwrap_or(processed_text.len());
+            let truncated_text: String = processed_text.chars().take(truncate_at).collect();
+            (
+                format!(
+                    "{}\n\n[Truncated: showing {} of {} chars]",
+                    truncated_text,
+                    truncate_at,
+                    processed_text.len()
+                ),
+                true,
+            )
+        } else {
+            (processed_text, false)
+        };
+
+        let content_len = content.len();
         Ok(ToolResult {
             content,
             is_error: false,
             metadata: Some(json!({
                 "status": status.as_u16(),
                 "content_type": content_type,
-                "length": bytes.len(),
-                "truncated": truncated
+                "original_length": bytes.len(),
+                "processed_length": content_len,
+                "truncated": truncated,
+                "html_converted": is_html && !raw_mode
             })),
         })
     }
