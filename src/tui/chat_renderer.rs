@@ -62,19 +62,9 @@ impl ChatRenderer {
                                     chat_lines.push(Line::from(padded));
                                 }
                             }
-                            MessagePart::Thinking(thinking) => {
-                                let highlighted_lines =
-                                    highlight::highlight_markdown_with_code(thinking.trim_end());
-                                for line in highlighted_lines {
-                                    let mut padded = vec![Span::raw(" ")];
-                                    padded.extend(line.spans.iter().map(|span| {
-                                        Span::styled(
-                                            span.content.to_string(),
-                                            span.style.add_modifier(Modifier::DIM),
-                                        )
-                                    }));
-                                    chat_lines.push(Line::from(padded));
-                                }
+                            MessagePart::Thinking(_) => {
+                                // Don't render thinking content in chat
+                                // Progress bar shows "thinking" or "thought for Xs" instead
                             }
                         }
                     }
