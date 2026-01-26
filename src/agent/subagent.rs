@@ -103,7 +103,6 @@ pub async fn run_subagent(
     config: &SubagentConfig,
     task: &str,
     provider: Arc<dyn LlmApi>,
-    parent_orchestrator: &ToolOrchestrator,
 ) -> Result<SubagentResult> {
     use crate::agent::Agent;
     use crate::session::Session;
@@ -111,8 +110,7 @@ pub async fn run_subagent(
     use tokio::sync::mpsc;
 
     // Create tool orchestrator with standard builtins
-    // Tool filtering by whitelist is handled at call time via orchestrator permissions
-    let _ = parent_orchestrator; // Will be used for tool filtering in future
+    // TODO: Filter tools based on config.tools whitelist
     let orchestrator = Arc::new(ToolOrchestrator::with_builtins(ToolMode::Write));
 
     // Build system prompt

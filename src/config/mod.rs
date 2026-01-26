@@ -319,6 +319,11 @@ pub fn agents_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(".agents"))
 }
 
+/// Subagents directory: ~/.agents/subagents/
+pub fn subagents_dir() -> PathBuf {
+    agents_dir().join("subagents")
+}
+
 /// Migrate config from old location (~/.config/ion/) to new (~/.ion/).
 fn migrate_old_config() -> anyhow::Result<()> {
     let Some(home) = dirs::home_dir() else {
