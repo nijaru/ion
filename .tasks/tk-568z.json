@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "568z",
+  "title": "[TOOL] Web fetch tool - fetch URL, extract content, optional summarize",
+  "description": null,
+  "status": "open",
+  "priority": 2,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-26T01:49:58.969Z",
+  "updated_at": "2026-01-26T01:49:58.969Z",
+  "completed_at": null,
+  "external": {}
+}
