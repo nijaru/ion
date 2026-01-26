@@ -216,6 +216,7 @@ impl App {
             input_tokens: 0,
             output_tokens: 0,
             current_tool: None,
+            retry_status: None,
             cancel_pending: None,
             esc_pending: None,
             permissions,
@@ -389,11 +390,13 @@ impl App {
                     if let Some(start) = self.thinking_start.take() {
                         self.last_thinking_duration = Some(start.elapsed());
                     }
+                    // Clear retry status (retry succeeded)
+                    self.retry_status = None;
                     self.message_list.push_event(event);
                 }
                 AgentEvent::Retry(reason, delay) => {
                     // Show retry status in progress line (not in chat)
-                    self.current_tool = Some(format!("{}, retrying in {}s", reason, delay));
+                    self.retry_status = Some((reason.clone(), *delay));
                 }
                 _ => {
                     self.message_list.push_event(event);

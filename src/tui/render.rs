@@ -189,8 +189,17 @@ impl App {
         if self.is_running {
             let spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
-            let (symbol, label, color) = if self.session.abort_token.is_cancelled() {
-                ("⚠", "Canceling...".to_string(), Color::Yellow)
+            let (symbol, label, color, dim) = if self.session.abort_token.is_cancelled() {
+                ("⚠", "Canceling...".to_string(), Color::Yellow, false)
+            } else if let Some((reason, delay)) = &self.retry_status {
+                // Retry in progress - show with dim yellow
+                let s = spinner[(self.frame_count % spinner.len() as u64) as usize];
+                (
+                    s,
+                    format!("{}, retrying in {}s...", reason, delay),
+                    Color::Yellow,
+                    true,
+                )
             } else {
                 let s = spinner[(self.frame_count % spinner.len() as u64) as usize];
                 let label = if let Some(tool) = &self.current_tool {
@@ -198,12 +207,17 @@ impl App {
                 } else {
                     "Ionizing...".to_string()
                 };
-                (s, label, Color::Cyan)
+                (s, label, Color::Cyan, false)
             };
 
+            let style = if dim {
+                Style::default().fg(color).dim()
+            } else {
+                Style::default().fg(color)
+            };
             let mut progress_spans = vec![
-                Span::styled(format!(" {} ", symbol), Style::default().fg(color)),
-                Span::styled(label, Style::default().fg(color)),
+                Span::styled(format!(" {} ", symbol), style),
+                Span::styled(label, style),
             ];
 
             let mut stats = Vec::new();

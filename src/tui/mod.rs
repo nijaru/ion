@@ -110,6 +110,8 @@ pub struct App {
     pub output_tokens: usize,
     /// Currently executing tool name (for interrupt handling)
     pub current_tool: Option<String>,
+    /// Retry status (reason, delay_seconds) - shown in progress line
+    pub retry_status: Option<(String, u64)>,
     /// Timestamp of first Ctrl+C press for double-tap quit/cancel
     pub cancel_pending: Option<Instant>,
     /// Timestamp of first Esc press for double-tap clear input
