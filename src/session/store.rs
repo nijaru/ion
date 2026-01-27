@@ -57,6 +57,9 @@ impl SessionStore {
 
         let db = Connection::open(path)?;
 
+        // Enable WAL mode for better concurrent access and performance
+        db.execute_batch("PRAGMA journal_mode=WAL;")?;
+
         let store = Self { db };
         store.init_schema()?;
 
