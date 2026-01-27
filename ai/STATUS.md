@@ -4,90 +4,85 @@
 
 | Metric     | Value           | Updated    |
 | ---------- | --------------- | ---------- |
-| Phase      | 5 - Polish & UX | 2026-01-26 |
-| Status     | Runnable        | 2026-01-26 |
+| Phase      | 5 - Polish & UX | 2026-01-27 |
+| Status     | Runnable        | 2026-01-27 |
 | Toolchain  | stable          | 2026-01-22 |
-| Tests      | 104 passing     | 2026-01-26 |
-| Clippy     | 0 warnings      | 2026-01-26 |
+| Tests      | 104 passing     | 2026-01-27 |
+| Clippy     | 0 warnings      | 2026-01-27 |
 | Visibility | **PUBLIC**      | 2026-01-22 |
 
 ## Active Work
 
-**TUI Flicker Prevention** - Implemented scrolling-regions and synchronized output.
+**BLOCKER: Cursor position bug on wrapped lines (tk-fbbf)**
 
-### Completed
+- Cursor is ON just-typed char, not AFTER it
+- Cannot delete last character on wrapped lines
+- Blocks basic editing - HIGH PRIORITY
 
-Research (tk-xp90) concluded: keep ratatui with `scrolling-regions` feature, use synchronized output.
+**TUI Architecture** - User intent clarified:
 
-**Implementation done:**
+- Chat history: `println!()` to stdout, terminal handles scrollback natively
+- Bottom UI (progress, input, status): We manage, stays at bottom
+- Don't care if Viewport::Inline or raw crossterm, as long as it works
+- If current approach can be fixed, fine. If needs replacement, do that.
 
-- Enabled `scrolling-regions` feature in Cargo.toml
-- Added `BeginSynchronizedUpdate`/`EndSynchronizedUpdate` around render loop
-- `insert_before` now uses scroll regions for flicker-free history insertion
+### Pending Fixes
 
-### Remaining Tasks
+| ID      | Task                                | Priority | Status  |
+| ------- | ----------------------------------- | -------- | ------- |
+| tk-fbbf | Cursor off-by-one on wrapped lines  | P1       | BLOCKER |
+| tk-trb2 | Input borders to TOP\|BOTTOM only   | P2       | Open    |
+| tk-268g | Anthropic cache_control in requests | P2       | Open    |
+| tk-1lso | Kimi k2.5 API error investigation   | P2       | Open    |
 
-| ID      | Task                                | Priority | Status |
-| ------- | ----------------------------------- | -------- | ------ |
-| tk-i5s8 | TUI: Custom bottom area management  | P2       | Open   |
-| tk-trb2 | Change input borders to TOP\|BOTTOM | P3       | Open   |
+## Session Fixes (2026-01-27)
 
-### Research Documents
+**Fixed:**
 
-- `ai/design/tui-architecture.md` - Full design doc (updated with research findings)
-- `ai/research/tui-rendering-research.md` - Diffing vs redraw, flicker SOTA
-- `ai/research/input-lib-evaluation.md` - Library spike findings
+- Paste not working (Event::Paste was swallowed in main.rs)
+- Editor not opening with args ("code --wait" now works)
+- Selector count display (now shows "1/125" not "125/346")
+- Enabled scrolling-regions + synchronized output
+
+**Not Fixed:**
+
+- Cursor position on wrapped lines (blocking)
+- Input borders still ALL instead of TOP|BOTTOM
+- cache_control not sent in API requests
 
 ## Priority Queue
 
-**P2 - TUI Redesign:**
+**P1 - Blocking:**
 
-- ~~tk-xp90: Research rendering (DONE)~~
-- tk-i5s8: TUI implementation (supersedes tk-dxo5)
+- tk-fbbf: Cursor bug (can't edit on wrapped lines)
 
-**P2 - Bugs & UX:**
+**P2 - TUI:**
 
-- tk-bmd0: Option+Arrow word navigation on Ghostty
-- tk-c73y: Token display mismatch
-- tk-wtfi: Filter input improvements
+- tk-trb2: Input borders to TOP|BOTTOM
+- tk-i5s8: TUI architecture (if current approach unfixable)
 
 **P2 - Features:**
 
+- tk-268g: Anthropic cache_control
 - tk-80az: Image attachment
 - tk-ik05, tk-hk6p: Autocomplete
 
 **P3 - Polish:**
 
-- tk-trb2: Input borders to TOP|BOTTOM
-- tk-4gm9: Settings selector UI
-- tk-9zri: Auto-backticks around pastes config
-- tk-6ydy: Tool output format review
-- tk-jqe6: Group parallel tool calls
-- tk-le7i: Retry countdown timer
+- tk-g3dt: Ctrl+R history search
+- tk-fsto: Pretty markdown tables
 
 ## Architecture
 
-| Module    | Health   | Notes                           |
-| --------- | -------- | ------------------------------- |
-| tui/      | IMPROVED | scroll-regions + sync output    |
-| agent/    | GOOD     | Clean turn loop, subagent added |
-| provider/ | GOOD     | Multi-provider abstraction      |
-| tool/     | GOOD     | Orchestrator + spawn_subagent   |
-| session/  | GOOD     | SQLite persistence + WAL mode   |
-| skill/    | GOOD     | YAML frontmatter, lazy loading  |
-| mcp/      | OK       | Needs tests, cleanup deferred   |
-
-## Recent Session (2026-01-27)
-
-- Enabled `scrolling-regions` feature for ratatui (flicker-free `insert_before`)
-- Added synchronized output (CSI 2026) to render loop
-- Research concluded: keep ratatui, trust cell diffing, use scroll regions
-
-## Previous Session (2026-01-26)
-
-- Deep research: pi-mono, Codex CLI, OpenTUI, reedline, rustyline-async
-- Created 6 research docs in ai/research/
-- Created ai/design/tui-architecture.md with research findings
+| Module    | Health | Notes                         |
+| --------- | ------ | ----------------------------- |
+| tui/      | BUGGY  | Cursor bug on wrapped lines   |
+| agent/    | GOOD   | Clean turn loop               |
+| provider/ | GOOD   | Multi-provider abstraction    |
+| tool/     | GOOD   | Orchestrator + spawn_subagent |
+| session/  | GOOD   | SQLite persistence + WAL      |
+| skill/    | GOOD   | YAML frontmatter              |
+| mcp/      | OK     | Needs tests                   |
 
 ## Config
 
