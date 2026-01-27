@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "le7i",
+  "title": "[UX] Retry countdown timer - show seconds counting down",
+  "description": null,
+  "status": "open",
+  "priority": 4,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-27T04:46:20.594Z",
+  "updated_at": "2026-01-27T04:46:20.594Z",
+  "completed_at": null,
+  "external": {}
+}

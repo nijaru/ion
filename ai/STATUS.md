@@ -11,94 +11,76 @@
 | Clippy     | 0 warnings      | 2026-01-26 |
 | Visibility | **PUBLIC**      | 2026-01-22 |
 
-## Flow Audit Results
-
-All 6 P1 audit tasks complete. Findings:
-
-| Flow               | Status | Bugs Fixed                         | Notes                                          |
-| ------------------ | ------ | ---------------------------------- | ---------------------------------------------- |
-| Input → Response   | ✅     | Dead ThinkingDelta handler removed | Flow is sound, no critical bugs                |
-| Tool execution     | ✅     | None                               | Parallel exec + sequential approval works      |
-| Session management | ✅     | /clear now starts new session      | Was leaving stale DB messages                  |
-| Mode transitions   | ✅     | None                               | Approval interrupts any mode (by design)       |
-| Cancel/interrupt   | ✅     | None                               | Ctrl+C silent when running is intentional      |
-| Provider switching | ✅     | None                               | Edge cases cause clear errors, not silent bugs |
-
 ## Active Work
 
-None. Sprint 10 complete. Ready for next priority.
+**Viewport Architecture Investigation** - Researching proper inline viewport handling.
 
-## Priority 2: Feature Completeness (after Sprint 10)
+### Key Findings
 
-- Image attachment (tk-80az)
-- Autocomplete (tk-ik05, tk-hk6p)
+1. Current 15-line fixed viewport causes gaps (startup, after completion, after sending message)
+2. Ratatui PR #1964 adds `set_viewport_height()` but not merged, has issues with `scrolling-regions`
+3. Codex CLI went through same journey: legacy inline TUI → TUI2 (alt screen) → back to "terminal-native"
+4. Their finding: "cooperating with terminal scrollback leads to terminal-dependent behavior, resize failures, content loss"
 
-## Priority 3: Cost Optimization (Release)
+### Options Under Consideration
 
-- Anthropic caching (tk-268g) - 50-100x savings
-- Destructive command guard (tk-qy6g)
+| Option                                  | Scrollback | Complexity | Notes                       |
+| --------------------------------------- | ---------- | ---------- | --------------------------- |
+| A: Fullscreen (like Codex default)      | No         | Low        | Loses native search         |
+| B: Inline + PR #1964                    | Yes        | Medium     | Needs fork or wait          |
+| C: Raw crossterm                        | Yes        | High       | Full control                |
+| D: Ratatui widgets + manual positioning | Yes        | Medium     | Keep widgets, skip viewport |
+
+### Blockers
+
+- No perfect solution for scrollback + dynamic viewport
+- Need to decide: accept tradeoffs or implement custom solution
+
+### Design Doc
+
+See `ai/design/viewport-requirements.md` for full requirements.
+
+## Priority Queue
+
+**P2 - Bugs & UX:**
+
+- tk-dxo5: Viewport gaps (root cause of multiple bugs)
+- tk-bmd0: Option+Arrow word navigation on Ghostty
+- tk-c73y: Token display mismatch
+- tk-wtfi: Filter input improvements
+
+**P2 - Features:**
+
+- tk-80az: Image attachment
+- tk-ik05, tk-hk6p: Autocomplete
+
+**P3 - Polish:**
+
+- tk-4gm9: Settings selector UI
+- tk-9zri: Auto-backticks around pastes config
+- tk-6ydy: Tool output format review
+- tk-jqe6: Group parallel tool calls
+- tk-le7i: Retry countdown timer
 
 ## Architecture
 
-| Module    | Health | Notes                           |
-| --------- | ------ | ------------------------------- |
-| tui/      | GOOD   | Well-structured, 6 submodules   |
-| agent/    | GOOD   | Clean turn loop, subagent added |
-| provider/ | GOOD   | Multi-provider abstraction      |
-| tool/     | GOOD   | Orchestrator + spawn_subagent   |
-| session/  | GOOD   | SQLite persistence              |
-| skill/    | GOOD   | YAML frontmatter, lazy loading  |
-| mcp/      | OK     | Needs tests, cleanup deferred   |
+| Module    | Health     | Notes                           |
+| --------- | ---------- | ------------------------------- |
+| tui/      | NEEDS WORK | Viewport issues, see above      |
+| agent/    | GOOD       | Clean turn loop, subagent added |
+| provider/ | GOOD       | Multi-provider abstraction      |
+| tool/     | GOOD       | Orchestrator + spawn_subagent   |
+| session/  | GOOD       | SQLite persistence + WAL mode   |
+| skill/    | GOOD       | YAML frontmatter, lazy loading  |
+| mcp/      | OK         | Needs tests, cleanup deferred   |
 
-## Recent Completions
+## Recent Session (2026-01-26)
 
-**Sprint 10 - Stabilization & Refactor (2026-01-26)**
-
-- Extracted `format_elapsed` helper to reduce duplication in render.rs
-- Split `render_selector_shell` into 3 focused helpers (provider/model/session list)
-- Decomposed `stream_response` into `stream_with_retry` and `complete_with_retry`
-- Fixed: Queued messages now update token display immediately
-- Fixed: JoinSet panic error now gives clear message
-- Fixed: Blob placeholder collision protection using invisible delimiters
-- Fixed: Session loading now shows tool arguments (same as live display)
-- Added: SQLite WAL mode for better concurrent access
-
-**TUI Polish & Formatting (2026-01-26)**
-
-- Fixed code indentation stripped by `Wrap { trim: true }` → changed to `trim: false`
-- Added `sanitize_for_display()` for robust text handling (tabs→4 spaces, strip \r, control chars)
-- Trim message start/end while preserving internal formatting
-- Retry messages: dim yellow in progress line (not inline chat)
-- Code blocks: blank line after for visual separation
-- Fixed retry_status not cleared on Finished/Error events
-- 103 tests passing, reviewed via 3 parallel subagents
-
-**TUI Rendering Fixes (2026-01-26)**
-
-- Fixed tool output not showing during agent run (only skip last Agent entry)
-- Added visual gap between chat history and progress line (Option B)
-- Queued messages now show on dedicated line above spinner: " ↳ N messages queued"
-- Empty line for gap when no messages queued
-
-**Codebase Review & Refactor (2026-01-26)**
-
-- Reviewed all modules (tui, agent, provider, session, mcp, skill)
-- Found 13 issues, most already fixed in prior work
-- Fixed: Provider filter duplication + bug (missing ignore/only in list_models_from_vec)
-- Extracted: create_http_client() helper, model_matches_filter() function
-- Deferred: MCP process cleanup (mcp crate design issue)
-
-**Flow Audit Sprint (2026-01-26)**
-
-- Audited all 6 core flows
-- Fixed /clear to properly start new session
-- Removed dead ThinkingDelta handler code
-
-**Sprint 9 (2026-01-26)**
-
-- Subagents: spawn_subagent tool, registry from ~/.agents/subagents/
-- Thinking display: "thinking" → "thought for Xs", content hidden from chat
-- Web fetch, YAML frontmatter, progressive skill loading
+- Fixed double empty lines above progress (render at bottom of viewport)
+- Fixed large gap below completed response (position UI at viewport bottom)
+- Created viewport-requirements.md design doc
+- Researched ratatui, crossterm, Codex CLI, pi-mono, OpenTUI approaches
+- Added 6 new tasks for discovered issues
 
 ## Config
 
