@@ -13,49 +13,36 @@
 
 ## Active Work
 
-**TUI Architecture Redesign** - Custom bottom area management, native scrollback.
+**TUI Flicker Prevention** - Implemented scrolling-regions and synchronized output.
 
-### Direction
+### Completed
 
-Replace `Viewport::Inline` with custom terminal management:
+Research (tk-xp90) concluded: keep ratatui with `scrolling-regions` feature, use synchronized output.
 
-```
-Native scrollback (println!)     ← Terminal handles this
-├── Chat history, tool output
-│
-Managed bottom area (crossterm)  ← We control this
-├── Selector UI (when open)
-├── Progress line
-├── Input area (TOP|BOTTOM borders)
-└── Status line
-```
+**Implementation done:**
 
-**Key principles:**
+- Enabled `scrolling-regions` feature in Cargo.toml
+- Added `BeginSynchronizedUpdate`/`EndSynchronizedUpdate` around render loop
+- `insert_before` now uses scroll regions for flicker-free history insertion
 
-- Native scrollback is native - just print, terminal handles it
-- No Viewport abstractions - manage cursor position directly
-- Synchronized output (CSI 2026) for flicker prevention
+### Remaining Tasks
 
-### Tasks
-
-| ID      | Task                                                 | Priority |
-| ------- | ---------------------------------------------------- | -------- |
-| tk-xp90 | Research rendering (diffing vs redraw, flicker SOTA) | P2       |
-| tk-i5s8 | TUI: Custom bottom area management                   | P2       |
-| tk-trb2 | Change input borders to TOP\|BOTTOM                  | P3       |
+| ID      | Task                                | Priority | Status |
+| ------- | ----------------------------------- | -------- | ------ |
+| tk-i5s8 | TUI: Custom bottom area management  | P2       | Open   |
+| tk-trb2 | Change input borders to TOP\|BOTTOM | P3       | Open   |
 
 ### Research Documents
 
-- `ai/design/tui-architecture.md` - Full design doc
-- `ai/research/inline-tui-patterns-2026.md` - Pattern research
+- `ai/design/tui-architecture.md` - Full design doc (updated with research findings)
+- `ai/research/tui-rendering-research.md` - Diffing vs redraw, flicker SOTA
 - `ai/research/input-lib-evaluation.md` - Library spike findings
-- `ai/research/tui-state-of-art-2026.md` - SOTA survey
 
 ## Priority Queue
 
 **P2 - TUI Redesign:**
 
-- tk-xp90: Research rendering (diffing vs redraw, flicker SOTA)
+- ~~tk-xp90: Research rendering (DONE)~~
 - tk-i5s8: TUI implementation (supersedes tk-dxo5)
 
 **P2 - Bugs & UX:**
@@ -80,24 +67,27 @@ Managed bottom area (crossterm)  ← We control this
 
 ## Architecture
 
-| Module    | Health     | Notes                           |
-| --------- | ---------- | ------------------------------- |
-| tui/      | NEEDS WORK | Viewport issues, see above      |
-| agent/    | GOOD       | Clean turn loop, subagent added |
-| provider/ | GOOD       | Multi-provider abstraction      |
-| tool/     | GOOD       | Orchestrator + spawn_subagent   |
-| session/  | GOOD       | SQLite persistence + WAL mode   |
-| skill/    | GOOD       | YAML frontmatter, lazy loading  |
-| mcp/      | OK         | Needs tests, cleanup deferred   |
+| Module    | Health   | Notes                           |
+| --------- | -------- | ------------------------------- |
+| tui/      | IMPROVED | scroll-regions + sync output    |
+| agent/    | GOOD     | Clean turn loop, subagent added |
+| provider/ | GOOD     | Multi-provider abstraction      |
+| tool/     | GOOD     | Orchestrator + spawn_subagent   |
+| session/  | GOOD     | SQLite persistence + WAL mode   |
+| skill/    | GOOD     | YAML frontmatter, lazy loading  |
+| mcp/      | OK       | Needs tests, cleanup deferred   |
 
-## Recent Session (2026-01-26)
+## Recent Session (2026-01-27)
+
+- Enabled `scrolling-regions` feature for ratatui (flicker-free `insert_before`)
+- Added synchronized output (CSI 2026) to render loop
+- Research concluded: keep ratatui, trust cell diffing, use scroll regions
+
+## Previous Session (2026-01-26)
 
 - Deep research: pi-mono, Codex CLI, OpenTUI, reedline, rustyline-async
 - Created 6 research docs in ai/research/
-- Evaluated input libraries: rustyline-async (single-line only), reedline (viable but loses our UI)
-- Decided on new architecture: native scrollback + managed bottom area
-- Created ai/design/tui-v2-architecture.md
-- Added tasks: tk-xp90 (rendering research), tk-i5s8 (implementation), tk-trb2 (borders)
+- Created ai/design/tui-architecture.md with research findings
 
 ## Config
 

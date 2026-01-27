@@ -119,27 +119,48 @@ fn render_with_height_change(&mut self) -> Result<()> {
 
 ## Flicker Prevention
 
-### Primary: Synchronized Output (CSI 2026)
+### Research Complete (tk-xp90)
+
+See `ai/research/tui-rendering-research.md` for full analysis.
+
+**Key findings:**
+
+1. **Use ratatui with `scrolling-regions` feature** - don't abandon it
+2. **Synchronized output works everywhere** - unsupported terminals ignore it
+3. **Trust ratatui's cell diffing** - only ~2% overhead, I/O is 98%
+4. **Use stdout not stderr** - 2x faster due to buffering
+
+### Implementation
 
 ```rust
-write!(stdout, "\x1b[?2026h")?;  // Begin - terminal buffers
-// ... all drawing ...
-write!(stdout, "\x1b[?2026l")?;  // End - terminal displays atomically
+use crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
+
+fn render_frame(&mut self, terminal: &mut Terminal<impl Backend>) -> Result<()> {
+    execute!(stdout(), BeginSynchronizedUpdate)?;
+
+    // Flush pending history to scrollback (scrolling-regions makes this flicker-free)
+    if !self.pending_history.is_empty() {
+        terminal.insert_before(self.pending_history.len(), |buf| {
+            // Render completed messages
+        })?;
+        self.pending_history.clear();
+    }
+
+    // Draw managed bottom area (ratatui handles cell diffing)
+    terminal.draw(|frame| {
+        self.render_bottom_area(frame);
+    })?;
+
+    execute!(stdout(), EndSynchronizedUpdate)?;
+    Ok(())
+}
 ```
 
-**Supported by:** Ghostty, Kitty, iTerm2, Windows Terminal, WezTerm, Warp
+### Cargo.toml
 
-### Research Needed: Diffing vs Redraw
-
-For 5-15 line bottom area, options:
-
-| Approach                  | Pros                      | Cons                                     |
-| ------------------------- | ------------------------- | ---------------------------------------- |
-| Full redraw + sync output | Simple, no state          | May have issues on unsupported terminals |
-| Line-level diffing        | Only update changed lines | More complex, track previous state       |
-| Cell-level diffing        | Minimal updates           | Most complex, ratatui does this          |
-
-**TODO:** Research and benchmark. See `ai/research/tui-rendering-research.md`
+```toml
+ratatui = { version = "0.30", features = ["scrolling-regions"] }
+```
 
 ## Components
 
@@ -218,12 +239,16 @@ Must handle terminal-specific escape sequences:
 5. **Phase 5:** Add autocomplete
 6. **Phase 6:** Remove ratatui dependency (optional)
 
+## Decisions (from research)
+
+1. **Keep ratatui** - cell diffing is efficient, scrolling-regions solves our problems
+2. **Synchronized output** - use unconditionally, no detection needed
+3. **Use insert_before** - with scrolling-regions it's flicker-free for history
+
 ## Open Questions
 
-1. Diffing vs redraw for bottom area? (see tk-xp90 research)
-2. What's the minimum terminal support we need? (sync output fallback?)
-3. How do we handle terminal resize during selector?
-4. Keep ratatui for widgets or go pure crossterm? (decide after research)
+1. How do we handle terminal resize during selector?
+2. Exact implementation of dynamic viewport height
 
 ## References
 
