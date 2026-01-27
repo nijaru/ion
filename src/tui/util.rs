@@ -13,6 +13,15 @@ pub(super) fn format_tokens(n: usize) -> String {
     }
 }
 
+/// Format seconds as human-readable duration (e.g., "1m 30s" or "45s")
+pub(super) fn format_elapsed(secs: u64) -> String {
+    if secs >= 60 {
+        format!("{}m {}s", secs / 60, secs % 60)
+    } else {
+        format!("{}s", secs)
+    }
+}
+
 /// Format a Unix timestamp as a relative time string.
 pub(super) fn format_relative_time(timestamp: i64) -> String {
     let now = chrono::Utc::now().timestamp();

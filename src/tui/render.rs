@@ -6,7 +6,7 @@ use crate::tui::composer::ComposerWidget;
 use crate::tui::filter_input::FilterInput;
 use crate::tui::message_list::Sender;
 use crate::tui::types::{LayoutAreas, Mode, SelectorPage};
-use crate::tui::util::{format_relative_time, format_tokens};
+use crate::tui::util::{format_elapsed, format_relative_time, format_tokens};
 use crate::tui::App;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragraph};
@@ -222,13 +222,7 @@ impl App {
 
             let mut stats = Vec::new();
             if let Some(start) = self.task_start_time {
-                let elapsed = start.elapsed();
-                let secs = elapsed.as_secs();
-                if secs >= 60 {
-                    stats.push(format!("{}m {}s", secs / 60, secs % 60));
-                } else {
-                    stats.push(format!("{}s", secs));
-                }
+                stats.push(format_elapsed(start.elapsed().as_secs()));
             }
 
             if self.input_tokens > 0 {
@@ -293,14 +287,7 @@ impl App {
                 frame.render_widget(Paragraph::new(vec![progress_line]), progress_area);
             }
         } else if let Some(summary) = &self.last_task_summary {
-            let secs = summary.elapsed.as_secs();
-            let elapsed_str = if secs >= 60 {
-                format!("{}m {}s", secs / 60, secs % 60)
-            } else {
-                format!("{}s", secs)
-            };
-
-            let mut stats = vec![elapsed_str];
+            let mut stats = vec![format_elapsed(summary.elapsed.as_secs())];
             if summary.input_tokens > 0 {
                 stats.push(format!("↑ {}", format_tokens(summary.input_tokens)));
             }
