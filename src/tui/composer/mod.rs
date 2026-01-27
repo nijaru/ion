@@ -734,6 +734,9 @@ impl Widget for ComposerWidget<'_> {
 
         let content_width = input_area.width as usize;
 
+        // Always set last_width so visual line navigation works even after first keypress
+        self.state.last_width = content_width;
+
         if self.buffer.is_empty() {
             if let Some(placeholder) = self.placeholder {
                 Paragraph::new(placeholder)
