@@ -86,6 +86,15 @@ impl App {
                 self.input_state.move_word_right(&self.input_buffer);
                 false
             }
+            // Alt+b / Alt+f: Emacs-style word navigation (sent by many terminals for Option+Arrow)
+            KeyCode::Char('b') if alt => {
+                self.input_state.move_word_left(&self.input_buffer);
+                false
+            }
+            KeyCode::Char('f') if alt => {
+                self.input_state.move_word_right(&self.input_buffer);
+                false
+            }
             KeyCode::Left => {
                 self.input_state.move_left(&self.input_buffer);
                 false
