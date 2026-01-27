@@ -136,6 +136,9 @@ async fn run_tui(
                 event::Event::Key(key) => {
                     app.handle_event(event::Event::Key(key));
                 }
+                event::Event::Paste(text) => {
+                    app.handle_event(event::Event::Paste(text));
+                }
                 event::Event::Resize(_, _) => {
                     // Inline viewports auto-resize during draw(), no action needed.
                     // Recreating the terminal would break scrollback preservation.
