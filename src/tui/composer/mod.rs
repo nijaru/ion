@@ -3,81 +3,65 @@ pub mod buffer;
 pub use buffer::ComposerBuffer;
 
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Paragraph, Widget};
+use ratatui::widgets::{Block, Paragraph, Widget, Wrap};
 use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::UnicodeWidthChar;
 
-/// Render text with character-based wrapping (no word-wrap).
-/// This must match the algorithm in `ComposerState::calculate_cursor_pos` exactly.
-fn render_char_wrapped(
-    content: &str,
-    area: Rect,
-    scroll_offset: usize,
-    style: Style,
-    buf: &mut Buffer,
-) {
-    let width = area.width as usize;
-    if width == 0 || area.height == 0 {
-        return;
-    }
-
-    let mut x = 0usize;
-    let mut y = 0usize;
-
-    for c in content.chars() {
-        if c == '\n' {
-            x = 0;
-            y += 1;
-        } else {
-            let char_width = UnicodeWidthChar::width(c).unwrap_or(0);
-
-            // Wrap if this character would overflow
-            if x + char_width > width {
-                x = 0;
-                y += 1;
-            }
-
-            // Only render if within visible area (accounting for scroll)
-            if y >= scroll_offset {
-                let visible_y = y - scroll_offset;
-                if visible_y < area.height as usize {
-                    let cell = &mut buf[(area.x + x as u16, area.y + visible_y as u16)];
-                    cell.set_char(c).set_style(style);
-                }
-            }
-
-            x += char_width;
-        }
-    }
-}
-
-/// Build a list of visual lines as (start_char_idx, end_char_idx) pairs.
+/// Build a list of visual lines as (start_char_idx, end_char_idx) pairs using word-wrap.
+/// This matches Ratatui's Paragraph::wrap(Wrap { trim: false }) behavior.
 /// end_char_idx is exclusive.
 fn build_visual_lines(content: &str, width: usize) -> Vec<(usize, usize)> {
+    use unicode_width::UnicodeWidthChar;
+
     let mut lines = Vec::new();
+    if width == 0 {
+        lines.push((0, content.chars().count()));
+        return lines;
+    }
+
+    let chars: Vec<char> = content.chars().collect();
     let mut line_start = 0;
     let mut col = 0;
+    let mut last_space_idx = None::<usize>; // char index AFTER the space
 
-    for (i, c) in content.chars().enumerate() {
+    for (i, &c) in chars.iter().enumerate() {
         if c == '\n' {
             lines.push((line_start, i + 1)); // Include newline in range
             line_start = i + 1;
             col = 0;
+            last_space_idx = None;
         } else {
-            let char_width = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
-            if width > 0 && col + char_width > width {
-                // Wrap before this character
-                lines.push((line_start, i));
-                line_start = i;
-                col = char_width;
-            } else {
-                col += char_width;
+            let char_width = UnicodeWidthChar::width(c).unwrap_or(0);
+
+            if col + char_width > width {
+                // Need to wrap
+                if let Some(space_idx) = last_space_idx {
+                    // Wrap at the last space
+                    lines.push((line_start, space_idx));
+                    line_start = space_idx;
+                    // Recalculate col from space_idx to i
+                    col = 0;
+                    for j in space_idx..i {
+                        col += UnicodeWidthChar::width(chars[j]).unwrap_or(0);
+                    }
+                    last_space_idx = None;
+                } else {
+                    // No space - wrap at character boundary
+                    lines.push((line_start, i));
+                    line_start = i;
+                    col = 0;
+                }
             }
+
+            if c == ' ' {
+                last_space_idx = Some(i + 1);
+            }
+
+            col += char_width;
         }
     }
 
-    // Final line (may be empty if content ends with newline)
-    lines.push((line_start, content.chars().count()));
+    // Final line
+    lines.push((line_start, chars.len()));
     lines
 }
 
@@ -590,81 +574,76 @@ impl ComposerState {
         }
     }
 
-    /// Calculate cursor visual position and update scroll.
+    /// Calculate cursor visual position using word-wrap logic that matches Ratatui's Paragraph.
     /// Returns (cursor_x, cursor_y) relative to text area origin.
     pub fn calculate_cursor_pos(&mut self, buffer: &ComposerBuffer, width: usize) -> (u16, u16) {
+        use unicode_width::UnicodeWidthChar;
+
         self.last_width = width;
         let content = buffer.get_content();
         // Clamp cursor to buffer bounds (safety for external buffer changes)
         self.cursor_char_idx = self.cursor_char_idx.min(buffer.len_chars());
         let cursor_idx = self.cursor_char_idx;
 
-        let mut x = 0usize;
-        let mut y = 0usize;
-
-        for (i, c) in content.chars().enumerate() {
-            if i >= cursor_idx {
-                break;
-            }
-
-            if c == '\n' {
-                x = 0;
-                y += 1;
-            } else {
-                let char_width = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
-                if width > 0 && x + char_width > width {
-                    x = char_width;
-                    y += 1;
-                } else {
-                    x += char_width;
-                }
-            }
+        if width == 0 || content.is_empty() {
+            self.cursor_pos = (0, 0);
+            return self.cursor_pos;
         }
 
-        // If cursor is at a position that would overflow the line,
-        // wrap to the next line. This happens when the cursor is at
-        // the end of a full line (before a character that will wrap).
-        if width > 0 && x >= width {
-            x = 0;
-            y += 1;
-        }
+        // Build visual line map using word-wrap
+        let lines = build_visual_lines(&content, width);
+        let (line_idx, col_in_line) = find_visual_line_and_col(&lines, cursor_idx);
+
+        // Convert column (char offset) to x position (display width)
+        let line_start = lines[line_idx].0;
+        let x: usize = content
+            .chars()
+            .skip(line_start)
+            .take(col_in_line)
+            .map(|c| UnicodeWidthChar::width(c).unwrap_or(0))
+            .sum();
+
+        // Handle cursor at exact end of full line
+        let y = if cursor_idx == buffer.len_chars() && x >= width {
+            line_idx + 1
+        } else {
+            line_idx
+        };
+        let x = if cursor_idx == buffer.len_chars() && x >= width {
+            0
+        } else {
+            x
+        };
 
         self.cursor_pos = (x as u16, y as u16);
         self.cursor_pos
     }
 
     /// Get the number of visual lines the content occupies at the given width.
-    /// Includes the line where cursor would appear if at end of content.
+    /// Uses word-wrap to match Ratatui's Paragraph behavior.
     pub fn visual_line_count(&self, buffer: &ComposerBuffer, width: usize) -> usize {
-        if width == 0 || buffer.is_empty() {
+        if buffer.is_empty() {
             return 1;
         }
 
         let content = buffer.get_content();
-        let mut lines = 1usize;
-        let mut col = 0usize;
+        let lines = build_visual_lines(&content, width);
 
-        for c in content.chars() {
-            if c == '\n' {
-                lines += 1;
-                col = 0;
-            } else {
-                let char_width = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
-                if col + char_width > width {
-                    lines += 1;
-                    col = char_width;
-                } else {
-                    col += char_width;
-                }
-            }
+        // Check if cursor at end would be on a new line
+        let last_line = lines.last().unwrap();
+        let last_line_width: usize = content
+            .chars()
+            .skip(last_line.0)
+            .take(last_line.1 - last_line.0)
+            .filter(|&c| c != '\n')
+            .map(|c| unicode_width::UnicodeWidthChar::width(c).unwrap_or(0))
+            .sum();
+
+        if width > 0 && last_line_width >= width {
+            lines.len() + 1
+        } else {
+            lines.len()
         }
-
-        // If last line is exactly full, cursor at end appears on next line
-        if col > 0 && col >= width {
-            lines += 1;
-        }
-
-        lines
     }
 }
 
@@ -773,15 +752,12 @@ impl Widget for ComposerWidget<'_> {
             self.state
                 .scroll_to_cursor(input_area.height as usize, total_lines);
 
-            // Render content with character-based wrapping (matches cursor calculation)
-            // We can't use Paragraph::wrap because it uses word-wrap which differs from our cursor calc
-            render_char_wrapped(
-                &content,
-                input_area,
-                self.state.scroll_offset,
-                self.style,
-                buf,
-            );
+            // Render content with Ratatui's word-wrap
+            Paragraph::new(content)
+                .style(self.style)
+                .wrap(Wrap { trim: false })
+                .scroll((self.state.scroll_offset as u16, 0))
+                .render(input_area, buf);
 
             // Adjust cursor position for scroll and gutter
             let visual_cursor_y = self
