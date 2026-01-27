@@ -340,6 +340,139 @@ Like Codex's TUI2 but dumping to scrollback.
 | `src/tui/mod.rs`                     | App struct, state management                 |
 | `ai/design/viewport-requirements.md` | Full requirements doc                        |
 
+## Deep Dive Results (2026-01-26)
+
+### Comparison Table
+
+| Aspect                  | Pi-mono              | Codex CLI         | OpenTUI              | Ion (current)       |
+| ----------------------- | -------------------- | ----------------- | -------------------- | ------------------- |
+| Language                | TypeScript + Zig FFI | Rust + ratatui    | TypeScript + Zig FFI | Rust + ratatui      |
+| Rendering mode          | Inline (native)      | Inline + hybrid   | Alternate (primary)  | Inline              |
+| Uses ratatui Viewport:: | N/A                  | **NO** - custom   | N/A                  | Yes - Inline(15)    |
+| Dynamic viewport        | Yes - content-based  | Yes - custom mgmt | Yes - Yoga layout    | No - fixed 15 lines |
+| Scrollback mechanism    | Natural terminal     | Scroll regions    | N/A (alternate)      | insert_before()     |
+| scrolling-regions feat  | N/A                  | **YES**           | N/A                  | Not enabled         |
+| Synchronized output     | CSI 2026             | crossterm sync    | Batched              | No                  |
+| Frame diffing           | Line-based           | Buffer-based      | Cell-based (Zig)     | Buffer-based        |
+
+### Key Finding: Codex Doesn't Use Viewport::Inline
+
+**Critical discovery**: Codex CLI uses ratatui but does NOT use `Viewport::Inline`. Instead, they implemented `custom_terminal.rs` with:
+
+1. Manual viewport area management via `set_viewport_area()`
+2. Custom scroll region commands (DECSTBM) for history insertion
+3. Cursor position tracking for resize handling
+
+This bypasses the limitation we've been fighting - they never ask ratatui to manage a fixed-size inline viewport.
+
+### Codex's Scroll Region Approach
+
+```rust
+// Codex: Insert history lines using scroll regions
+pub fn insert_history_lines<B>(terminal: &mut Terminal<B>, lines: Vec<Line>) -> io::Result<()> {
+    // Set scroll region ABOVE the viewport
+    queue!(writer, SetScrollRegion(1..area.top()))?;
+    queue!(writer, MoveTo(0, cursor_top))?;
+
+    // Write lines - terminal scrolls within region
+    for line in wrapped {
+        queue!(writer, Print("\r\n"))?;
+        write_spans(writer, merged_spans.iter())?;
+    }
+
+    queue!(writer, ResetScrollRegion)?;  // DECSTBM reset
+}
+```
+
+### Pi-mono's Natural Scrollback
+
+Pi-mono takes a different approach - no viewport concept at all:
+
+- Components return line arrays
+- TUI concatenates and outputs
+- Terminal manages scrollback naturally
+- Content determines height
+
+This is clean but incompatible with ratatui's model.
+
+### OpenTUI: Not Relevant
+
+OpenTUI focuses on alternate screen mode. Their inline mode:
+
+- Has serious O(n) performance bugs during streaming
+- Doesn't solve scrollback coordination
+- Not production-ready for inline use cases
+
+### Recommendation: Adopt Codex's Approach
+
+The path forward is clear: **follow Codex's custom terminal approach**.
+
+**Phase 1: Enable scrolling-regions**
+
+```toml
+# Cargo.toml
+ratatui = { version = "0.30", features = ["scrolling-regions"] }
+```
+
+**Phase 2: Custom terminal wrapper**
+
+- Replace `Viewport::Inline(15)` with custom viewport management
+- Track viewport area manually with `set_viewport_area()`
+- Use scroll regions for `insert_before()` equivalent
+
+**Phase 3: Dynamic height calculation**
+
+```rust
+fn calculate_viewport_height(&self) -> u16 {
+    let progress_height = self.progress_lines();
+    let input_height = self.input_box_height();
+    let status_height = 1;
+    progress_height + input_height + status_height
+}
+```
+
+**Phase 4: Synchronized updates**
+
+```rust
+stdout().sync_update(|_| {
+    // All terminal operations here
+})?;
+```
+
+### What This Gives Us
+
+| Requirement           | Solution                           |
+| --------------------- | ---------------------------------- |
+| R1: No gaps           | Dynamic viewport = exact UI height |
+| R2: Dynamic resize    | Recalculate on each frame          |
+| R3: Native scrollback | Scroll regions preserve history    |
+| R4: Multi-line input  | Input height drives viewport size  |
+| R5: Clean startup     | Start with minimal viewport        |
+| R6: Terminal resize   | Cursor tracking + area adjustment  |
+| R7: Native features   | Scrollback in terminal buffer      |
+
+### Implementation Effort
+
+| Task                        | Effort  | Risk   |
+| --------------------------- | ------- | ------ |
+| Enable scrolling-regions    | Trivial | Low    |
+| Custom terminal wrapper     | Medium  | Medium |
+| Replace insert_before logic | Medium  | Medium |
+| Dynamic height calculation  | Easy    | Low    |
+| Testing across terminals    | Medium  | High   |
+
+**Estimate**: Medium effort, lower risk than alternatives.
+
+### Why Not Other Options
+
+| Option                | Why Not                                              |
+| --------------------- | ---------------------------------------------------- |
+| PR #1964              | Not merged, issues with scrolling-regions            |
+| Fullscreen            | Loses scrollback - users complained when Codex tried |
+| Raw crossterm         | Loses widget abstractions                            |
+| Pi-mono style         | Architecture incompatible with ratatui               |
+| Accept fixed viewport | Gaps remain, not a real solution                     |
+
 ## References
 
 - Ratatui inline viewport: https://ratatui.rs/examples/apps/inline/
@@ -349,3 +482,9 @@ Like Codex's TUI2 but dumping to scrollback.
 - Pi-mono TUI: https://github.com/badlogic/pi-mono/tree/main/packages/tui
 - OpenTUI: https://deepwiki.com/sst/opentui
 - Claude Code architecture: https://newsletter.pragmaticengineer.com/p/how-claude-code-is-built
+
+## Detailed Analysis Documents
+
+- `ai/research/pi-mono-tui-analysis.md` - Full pi-mono TUI analysis
+- `ai/research/codex-tui-analysis.md` - Full Codex CLI TUI analysis
+- `ai/research/opentui-analysis.md` - Full OpenTUI analysis

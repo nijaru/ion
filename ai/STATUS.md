@@ -13,32 +13,34 @@
 
 ## Active Work
 
-**Viewport Architecture Investigation** - Researching proper inline viewport handling.
+**Viewport Architecture** - Research complete, clear path forward identified.
 
-### Key Findings
+### Key Finding
 
-1. Current 15-line fixed viewport causes gaps (startup, after completion, after sending message)
-2. Ratatui PR #1964 adds `set_viewport_height()` but not merged, has issues with `scrolling-regions`
-3. Codex CLI went through same journey: legacy inline TUI → TUI2 (alt screen) → back to "terminal-native"
-4. Their finding: "cooperating with terminal scrollback leads to terminal-dependent behavior, resize failures, content loss"
+**Codex CLI doesn't use `Viewport::Inline`** - they implemented custom terminal management with:
 
-### Options Under Consideration
+1. Manual viewport area via `set_viewport_area()`
+2. Scroll regions (DECSTBM) for history insertion
+3. `scrolling-regions` ratatui feature for flicker-free updates
 
-| Option                                  | Scrollback | Complexity | Notes                       |
-| --------------------------------------- | ---------- | ---------- | --------------------------- |
-| A: Fullscreen (like Codex default)      | No         | Low        | Loses native search         |
-| B: Inline + PR #1964                    | Yes        | Medium     | Needs fork or wait          |
-| C: Raw crossterm                        | Yes        | High       | Full control                |
-| D: Ratatui widgets + manual positioning | Yes        | Medium     | Keep widgets, skip viewport |
+This bypasses the fixed viewport limitation entirely.
 
-### Blockers
+### Recommended Approach
 
-- No perfect solution for scrollback + dynamic viewport
-- Need to decide: accept tradeoffs or implement custom solution
+| Phase | Task                       | Effort  |
+| ----- | -------------------------- | ------- |
+| 1     | Enable scrolling-regions   | Trivial |
+| 2     | Custom terminal wrapper    | Medium  |
+| 3     | Dynamic height calculation | Easy    |
+| 4     | Synchronized updates       | Easy    |
 
-### Design Doc
+### Research Documents
 
-See `ai/design/viewport-requirements.md` for full requirements.
+- `ai/research/viewport-investigation-2026-01.md` - Full investigation
+- `ai/research/codex-tui-analysis.md` - Codex approach (recommended)
+- `ai/research/pi-mono-tui-analysis.md` - Pi-mono analysis
+- `ai/research/opentui-analysis.md` - OpenTUI analysis
+- `ai/design/viewport-requirements.md` - Requirements doc
 
 ## Priority Queue
 
