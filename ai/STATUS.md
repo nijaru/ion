@@ -7,7 +7,7 @@
 | Phase      | 5 - Polish & UX | 2026-01-26 |
 | Status     | Runnable        | 2026-01-26 |
 | Toolchain  | stable          | 2026-01-22 |
-| Tests      | 103 passing     | 2026-01-26 |
+| Tests      | 104 passing     | 2026-01-26 |
 | Clippy     | 0 warnings      | 2026-01-26 |
 | Visibility | **PUBLIC**      | 2026-01-22 |
 
@@ -24,30 +24,9 @@ All 6 P1 audit tasks complete. Findings:
 | Cancel/interrupt   | ✅     | None                               | Ctrl+C silent when running is intentional      |
 | Provider switching | ✅     | None                               | Edge cases cause clear errors, not silent bugs |
 
-## Active: Sprint 10 - Stabilization & Refactor
+## Active Work
 
-Code review findings + refactoring. See ai/SPRINTS.md for full details.
-
-| Task  | Description                 | Status  |
-| ----- | --------------------------- | ------- |
-| S10-1 | Extract formatting helpers  | PENDING |
-| S10-2 | Split render_selector_shell | PENDING |
-| S10-3 | Decompose stream_response   | PENDING |
-| S10-4 | Agent review issues         | PENDING |
-| S10-5 | Input/session issues        | PENDING |
-| S10-6 | SQLite WAL mode             | PENDING |
-
-### Review Issues Found
-
-| Area        | Issue                                        | Severity |
-| ----------- | -------------------------------------------- | -------- |
-| Agent       | Queued messages don't update token display   | Low      |
-| Agent       | JoinSet panic error unclear                  | Low      |
-| Input       | Blob placeholder collision                   | Low      |
-| Input       | History loses blobs on reload                | Low      |
-| Session     | Model registry only recreated for OpenRouter | Low      |
-| Session     | Load session loses tool details              | Low      |
-| Persistence | No WAL mode                                  | Low      |
+None. Sprint 10 complete. Ready for next priority.
 
 ## Priority 2: Feature Completeness (after Sprint 10)
 
@@ -72,6 +51,17 @@ Code review findings + refactoring. See ai/SPRINTS.md for full details.
 | mcp/      | OK     | Needs tests, cleanup deferred   |
 
 ## Recent Completions
+
+**Sprint 10 - Stabilization & Refactor (2026-01-26)**
+
+- Extracted `format_elapsed` helper to reduce duplication in render.rs
+- Split `render_selector_shell` into 3 focused helpers (provider/model/session list)
+- Decomposed `stream_response` into `stream_with_retry` and `complete_with_retry`
+- Fixed: Queued messages now update token display immediately
+- Fixed: JoinSet panic error now gives clear message
+- Fixed: Blob placeholder collision protection using invisible delimiters
+- Fixed: Session loading now shows tool arguments (same as live display)
+- Added: SQLite WAL mode for better concurrent access
 
 **TUI Polish & Formatting (2026-01-26)**
 

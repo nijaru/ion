@@ -434,15 +434,14 @@ impl Agent {
         let use_streaming =
             (provider_id != "ollama" && provider_id != "openrouter") || request.tools.is_empty();
 
-        if use_streaming {
-            if let Some(result) = self
+        if use_streaming
+            && let Some(result) = self
                 .stream_with_retry(&request, tx, &abort_token)
                 .await?
-            {
-                return Ok(result);
-            }
-            // Fallback to non-streaming if stream_with_retry returns None
+        {
+            return Ok(result);
         }
+        // Fallback to non-streaming if streaming not supported or returns None
 
         self.complete_with_retry(&request, tx, &abort_token).await
     }
