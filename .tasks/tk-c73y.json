@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "c73y",
+  "title": "[BUG] Token display mismatch: progress vs status line",
+  "description": null,
+  "status": "open",
+  "priority": 2,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-27T04:36:52.579Z",
+  "updated_at": "2026-01-27T04:36:52.579Z",
+  "completed_at": null,
+  "external": {}
+}

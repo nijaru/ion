@@ -264,8 +264,8 @@ impl App {
                     .map(|g| g.len())
                     .unwrap_or(0);
 
-                let queued_line = if queued_count > 0 {
-                    Line::from(vec![
+                if queued_count > 0 {
+                    let queued_line = Line::from(vec![
                         Span::styled(" ↳ ", Style::default().fg(Color::Yellow)),
                         Span::styled(
                             format!(
@@ -275,14 +275,21 @@ impl App {
                             ),
                             Style::default().fg(Color::Yellow).dim(),
                         ),
-                    ])
+                    ]);
+                    frame.render_widget(
+                        Paragraph::new(vec![queued_line, progress_line]),
+                        progress_area,
+                    );
                 } else {
-                    Line::from("") // Empty line for visual separation
-                };
-                frame.render_widget(
-                    Paragraph::new(vec![queued_line, progress_line]),
-                    progress_area,
-                );
+                    // Render spinner at bottom of progress area only
+                    // Chat trailing blank line provides visual separation
+                    let spinner_area = Rect {
+                        y: progress_area.y + progress_area.height - 1,
+                        height: 1,
+                        ..progress_area
+                    };
+                    frame.render_widget(Paragraph::new(vec![progress_line]), spinner_area);
+                }
             } else {
                 frame.render_widget(Paragraph::new(vec![progress_line]), progress_area);
             }
