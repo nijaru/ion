@@ -13,36 +13,38 @@
 
 ## Active Work
 
-**Viewport Architecture** - Research complete, evaluating rustyline-async.
+**Viewport Architecture** - Spike complete, reedline recommended.
 
-### Recommended: rustyline-async
+### Spike Results
 
-Use `rustyline-async` crate instead of custom viewport management:
+| Library         | Multi-line | Concurrent Output | Verdict         |
+| --------------- | ---------- | ----------------- | --------------- |
+| rustyline-async | **NO**     | SharedWriter      | Not viable      |
+| reedline        | YES        | ExternalPrinter   | **Recommended** |
 
-| Feature                         | Status                |
-| ------------------------------- | --------------------- |
-| Concurrent output while editing | `SharedWriter` (prod) |
-| Multi-line input                | Supported             |
-| Async/tokio                     | Native                |
-| Thread-safe                     | `Send + Sync + Clone` |
+rustyline-async is single-line only - doesn't work for multi-line prompts.
 
-**Why not alternatives:**
+### Architecture Options
 
-- reedline's `external_printer` is experimental ("future improvement")
-- Custom Codex-style is more work and bug-prone
-- rustyline-async solves our exact "output while typing" problem
+| Option | Approach                           | Complexity |
+| ------ | ---------------------------------- | ---------- |
+| A      | Prompt-based status (try first)    | Low        |
+| B      | Hybrid reedline + raw crossterm    | Medium     |
+| C      | Hybrid reedline + ratatui overlays | Medium     |
+| D      | Custom ratatui (Codex-style)       | High       |
 
 ### Next Steps
 
-1. Spike: Evaluate rustyline-async integration with ratatui widgets
-2. If viable, refactor TUI input handling
-3. Fallback: Codex-style custom terminal wrapper
+1. Test reedline spike: `cargo run --example reedline_spike`
+2. Evaluate prompt customization for status display
+3. Prototype text-based selector UI
+4. If viable, plan migration from current ratatui TUI
 
 ### Research Documents
 
+- `ai/research/input-lib-evaluation.md` - Spike findings
 - `ai/research/inline-tui-patterns-2026.md` - Comprehensive patterns
 - `ai/research/tui-state-of-art-2026.md` - State of the art
-- `ai/research/viewport-investigation-2026-01.md` - Initial investigation
 - `ai/research/codex-tui-analysis.md` - Codex approach (fallback)
 
 ## Priority Queue
