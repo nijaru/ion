@@ -6,19 +6,19 @@ Updated: 2026-01-23
 
 ## Status
 
-| Sprint | Goal                              | Status     |
-| ------ | --------------------------------- | ---------- |
-| 0      | TUI Architecture                  | COMPLETE   |
-| 1      | Inline Viewport Stabilization     | COMPLETE   |
-| 2      | Run State UX & Error Handling     | COMPLETE   |
-| 3      | Selector & Resume UX              | COMPLETE   |
-| 4      | Visual Polish & Advanced Features | PLANNED    |
-| 5      | Session Storage Redesign          | PLANNED    |
-| 6      | TUI Module Refactor               | COMPLETE   |
-| 7      | Codebase Review & Refactor        | COMPLETE   |
-| 8      | Core Loop & TUI Deep Review       | COMPLETE   |
-| 9      | Feature Parity & Extensibility    | COMPLETE   |
-| 10     | Stabilization & Refactor          | **ACTIVE** |
+| Sprint | Goal                              | Status   |
+| ------ | --------------------------------- | -------- |
+| 0      | TUI Architecture                  | COMPLETE |
+| 1      | Inline Viewport Stabilization     | COMPLETE |
+| 2      | Run State UX & Error Handling     | COMPLETE |
+| 3      | Selector & Resume UX              | COMPLETE |
+| 4      | Visual Polish & Advanced Features | PLANNED  |
+| 5      | Session Storage Redesign          | PLANNED  |
+| 6      | TUI Module Refactor               | COMPLETE |
+| 7      | Codebase Review & Refactor        | COMPLETE |
+| 8      | Core Loop & TUI Deep Review       | COMPLETE |
+| 9      | Feature Parity & Extensibility    | COMPLETE |
+| 10     | Stabilization & Refactor          | COMPLETE |
 
 ## Sprint 0: TUI Architecture - Custom Text Entry + Viewport Fix
 
@@ -1485,15 +1485,15 @@ After implementing features, compare to competitors and document gaps.
 
 **Goal:** Fix known issues from code review, refactor large functions, improve code quality
 **Source:** Code review 2026-01-26
-**Status:** ACTIVE
+**Status:** COMPLETE (2026-01-26)
 
 ### Demoable Outcomes
 
-- [ ] All review issues fixed or documented
-- [ ] `render_selector_shell` split into 3 functions (308 → ~100 lines each)
-- [ ] `stream_response` decomposed (248 → ~80 lines each)
-- [ ] Formatting helpers extracted to util.rs
-- [ ] All tests pass, 0 clippy warnings
+- [x] All review issues fixed or documented
+- [x] `render_selector_shell` split into 3 functions (308 → ~100 lines each)
+- [x] `stream_response` decomposed (248 → ~80 lines each)
+- [x] Formatting helpers extracted to util.rs
+- [x] All tests pass (104), 0 clippy warnings
 
 ### Issue Summary
 
