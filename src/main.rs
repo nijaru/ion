@@ -64,7 +64,10 @@ async fn run_tui(
             PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
         },
         execute,
-        terminal::{disable_raw_mode, enable_raw_mode, supports_keyboard_enhancement},
+        terminal::{
+            disable_raw_mode, enable_raw_mode, supports_keyboard_enhancement,
+            BeginSynchronizedUpdate, EndSynchronizedUpdate,
+        },
     };
     use ion::tui::App;
     use ratatui::{TerminalOptions, Viewport, prelude::*};
@@ -143,6 +146,9 @@ async fn run_tui(
 
         app.update();
 
+        // Begin synchronized output (prevents flicker, ignored by unsupported terminals)
+        execute!(terminal.backend_mut(), BeginSynchronizedUpdate)?;
+
         let width = terminal.size()?.width;
         let chat_lines = app.take_chat_inserts(width);
         if !chat_lines.is_empty() {
@@ -153,6 +159,8 @@ async fn run_tui(
                 let height = count_wrapped_lines(&chat_lines, wrap_width as usize);
                 if height > 0 {
                     let height = u16::try_from(height).unwrap_or(u16::MAX);
+                    // With scrolling-regions feature, insert_before uses scroll regions
+                    // to avoid flicker when pushing content into scrollback
                     terminal.insert_before(height, |buf| {
                         let area = Rect::new(1, 0, wrap_width, height);
                         paragraph.render(area, buf);
@@ -162,6 +170,9 @@ async fn run_tui(
         }
 
         terminal.draw(|f| app.draw(f))?;
+
+        // End synchronized output
+        execute!(terminal.backend_mut(), EndSynchronizedUpdate)?;
 
         if app.should_quit {
             break;
