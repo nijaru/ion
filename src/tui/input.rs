@@ -66,13 +66,14 @@ impl App {
                 true
             }
 
-            // Navigation: Cmd+Left/Right (macOS) or Home/End for line start/end
+            // Navigation: Cmd+Left/Right (macOS) for visual line start/end (wrapped lines)
             KeyCode::Left if super_key => {
-                self.input_state.move_to_line_start(&self.input_buffer);
+                self.input_state
+                    .move_to_visual_line_start(&self.input_buffer);
                 false
             }
             KeyCode::Right if super_key => {
-                self.input_state.move_to_line_end(&self.input_buffer);
+                self.input_state.move_to_visual_line_end(&self.input_buffer);
                 false
             }
 

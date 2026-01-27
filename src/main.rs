@@ -129,10 +129,20 @@ async fn run_tui(
         },
     )?;
 
+    // Check for debug mode via environment variable
+    let debug_events = std::env::var("ION_DEBUG_EVENTS").is_ok();
+
     // Main loop
     loop {
         if event::poll(std::time::Duration::from_millis(50))? {
-            match event::read()? {
+            let evt = event::read()?;
+
+            // Debug: log raw events when ION_DEBUG_EVENTS is set
+            if debug_events {
+                tracing::info!("Event: {:?}", evt);
+            }
+
+            match evt {
                 event::Event::Key(key) => {
                     app.handle_event(event::Event::Key(key));
                 }
