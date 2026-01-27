@@ -13,7 +13,7 @@
 
 ## Active Work
 
-**TUI v2 Architecture** - Custom bottom area management, native scrollback.
+**TUI Architecture Redesign** - Custom bottom area management, native scrollback.
 
 ### Direction
 
@@ -41,7 +41,7 @@ Managed bottom area (crossterm)  ← We control this
 | ID      | Task                                                 | Priority |
 | ------- | ---------------------------------------------------- | -------- |
 | tk-xp90 | Research rendering (diffing vs redraw, flicker SOTA) | P2       |
-| tk-i5s8 | TUI v2: Custom bottom area management                | P2       |
+| tk-i5s8 | TUI: Custom bottom area management                   | P2       |
 | tk-trb2 | Change input borders to TOP\|BOTTOM                  | P3       |
 
 ### Research Documents
@@ -53,11 +53,10 @@ Managed bottom area (crossterm)  ← We control this
 
 ## Priority Queue
 
-**P2 - TUI v2:**
+**P2 - TUI Redesign:**
 
 - tk-xp90: Research rendering (diffing vs redraw, flicker SOTA)
-- tk-i5s8: TUI v2 implementation
-- tk-dxo5: Viewport gaps (will be fixed by TUI v2)
+- tk-i5s8: TUI implementation (supersedes tk-dxo5)
 
 **P2 - Bugs & UX:**
 
@@ -93,11 +92,12 @@ Managed bottom area (crossterm)  ← We control this
 
 ## Recent Session (2026-01-26)
 
-- Fixed double empty lines above progress (render at bottom of viewport)
-- Fixed large gap below completed response (position UI at viewport bottom)
-- Created viewport-requirements.md design doc
-- Researched ratatui, crossterm, Codex CLI, pi-mono, OpenTUI approaches
-- Added 6 new tasks for discovered issues
+- Deep research: pi-mono, Codex CLI, OpenTUI, reedline, rustyline-async
+- Created 6 research docs in ai/research/
+- Evaluated input libraries: rustyline-async (single-line only), reedline (viable but loses our UI)
+- Decided on new architecture: native scrollback + managed bottom area
+- Created ai/design/tui-v2-architecture.md
+- Added tasks: tk-xp90 (rendering research), tk-i5s8 (implementation), tk-trb2 (borders)
 
 ## Config
 
