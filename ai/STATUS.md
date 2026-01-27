@@ -49,14 +49,22 @@ Next up:
 
 ## Recent Completions
 
+**TUI Polish & Formatting (2026-01-26)**
+
+- Fixed code indentation stripped by `Wrap { trim: true }` → changed to `trim: false`
+- Added `sanitize_for_display()` for robust text handling (tabs→4 spaces, strip \r, control chars)
+- Trim message start/end while preserving internal formatting
+- Retry messages: dim yellow in progress line (not inline chat)
+- Code blocks: blank line after for visual separation
+- Fixed retry_status not cleared on Finished/Error events
+- 103 tests passing, reviewed via 3 parallel subagents
+
 **TUI Rendering Fixes (2026-01-26)**
 
 - Fixed tool output not showing during agent run (only skip last Agent entry)
 - Added visual gap between chat history and progress line (Option B)
 - Queued messages now show on dedicated line above spinner: " ↳ N messages queued"
 - Empty line for gap when no messages queued
-- Retry messages now show in progress line instead of inline in chat
-- Added list tool tests for src/ directory
 
 **Codebase Review & Refactor (2026-01-26)**
 
