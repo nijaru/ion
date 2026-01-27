@@ -9,7 +9,7 @@ use crate::tui::types::{LayoutAreas, Mode, SelectorPage};
 use crate::tui::util::{format_elapsed, format_relative_time, format_tokens};
 use crate::tui::App;
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
 use ratatui::Terminal;
 use std::path::PathBuf;
 
@@ -338,9 +338,9 @@ impl App {
         }
 
         if input_area.width > 0 && input_area.height > 1 {
+            // TOP|BOTTOM borders only for better copy-paste UX (no side borders to select)
             let block = Block::default()
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
+                .borders(Borders::TOP | Borders::BOTTOM)
                 .border_style(Style::default().fg(Color::Cyan));
             frame.render_widget(&block, input_area);
             let text_area = block.inner(input_area);
