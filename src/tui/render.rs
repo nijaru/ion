@@ -582,196 +582,198 @@ impl App {
         }
 
         match self.selector_page {
-            SelectorPage::Provider => {
-                let items: Vec<ListItem> = self
-                    .provider_picker
-                    .filtered
-                    .iter()
-                    .map(|status| {
-                        let (icon, icon_style, name_style) = if status.authenticated {
-                            (
-                                "●",
-                                Style::default().fg(Color::Green),
-                                Style::default().fg(Color::White).bold(),
-                            )
-                        } else {
-                            ("○", Style::default().dim(), Style::default().dim())
-                        };
-
-                        let auth_hint = if !status.authenticated {
-                            format!(
-                                " set {}",
-                                status.provider.env_vars().first().unwrap_or(&"API_KEY")
-                            )
-                        } else {
-                            String::new()
-                        };
-
-                        ListItem::new(Line::from(vec![
-                            Span::styled(icon, icon_style),
-                            Span::raw(" "),
-                            Span::styled(status.provider.name(), name_style),
-                            Span::styled(auth_hint, Style::default().fg(Color::Red).dim()),
-                        ]))
-                    })
-                    .collect();
-
-                let count = self.provider_picker.filtered.len();
-                let total = self.provider_picker.providers.len();
-                let list = List::new(items)
-                    .block(
-                        Block::default()
-                            .borders(Borders::ALL)
-                            .title(format!(" Providers ({}/{}) ", count, total)),
-                    )
-                    .highlight_style(
-                        Style::default()
-                            .bg(Color::DarkGray)
-                            .fg(Color::White)
-                            .add_modifier(Modifier::BOLD),
-                    )
-                    .highlight_symbol("▸ ");
-
-                frame.render_stateful_widget(list, chunks[3], &mut self.provider_picker.list_state);
-            }
-            SelectorPage::Model => {
-                if self.model_picker.is_loading {
-                    let provider_name = self
-                        .model_picker
-                        .api_provider_name
-                        .as_deref()
-                        .unwrap_or("provider");
-                    let loading =
-                        Paragraph::new(format!("Loading models from {}...", provider_name))
-                            .style(Style::default().fg(Color::Yellow))
-                            .block(Block::default().borders(Borders::ALL).title(" Loading "));
-                    frame.render_widget(loading, chunks[3]);
-                } else if let Some(ref err) = self.model_picker.error {
-                    let error = Paragraph::new(format!("Error: {}", err))
-                        .style(Style::default().fg(Color::Red))
-                        .block(Block::default().borders(Borders::ALL).title(" Error "));
-                    frame.render_widget(error, chunks[3]);
-                } else {
-                    let items: Vec<ListItem> = self
-                        .model_picker
-                        .filtered_models
-                        .iter()
-                        .map(|model| {
-                            let context_k = model.context_window / 1000;
-                            ListItem::new(Line::from(vec![
-                                Span::styled(model.id.clone(), Style::default().fg(Color::White)),
-                                Span::styled(
-                                    format!("  {}k ctx", context_k),
-                                    Style::default().dim(),
-                                ),
-                            ]))
-                        })
-                        .collect();
-
-                    let count = self.model_picker.filtered_models.len();
-                    let total = self.model_picker.all_models.len();
-                    let list = List::new(items)
-                        .block(
-                            Block::default()
-                                .borders(Borders::ALL)
-                                .title(format!(" Models ({}/{}) ", count, total)),
-                        )
-                        .highlight_style(
-                            Style::default()
-                                .bg(Color::DarkGray)
-                                .fg(Color::White)
-                                .add_modifier(Modifier::BOLD),
-                        )
-                        .highlight_symbol("▸ ");
-
-                    frame.render_stateful_widget(
-                        list,
-                        chunks[3],
-                        &mut self.model_picker.model_state,
-                    );
-                }
-            }
-            SelectorPage::Session => {
-                if self.session_picker.is_loading {
-                    let loading = Paragraph::new("Loading sessions...")
-                        .style(Style::default().fg(Color::Yellow))
-                        .block(Block::default().borders(Borders::ALL).title(" Loading "));
-                    frame.render_widget(loading, chunks[3]);
-                } else if let Some(ref err) = self.session_picker.error {
-                    let error = Paragraph::new(format!("Error: {}", err))
-                        .style(Style::default().fg(Color::Red))
-                        .block(Block::default().borders(Borders::ALL).title(" Error "));
-                    frame.render_widget(error, chunks[3]);
-                } else if self.session_picker.sessions.is_empty() {
-                    let empty = Paragraph::new("No sessions found")
-                        .style(Style::default().fg(Color::DarkGray))
-                        .block(Block::default().borders(Borders::ALL).title(" Sessions "));
-                    frame.render_widget(empty, chunks[3]);
-                } else {
-                    let items: Vec<ListItem> = self
-                        .session_picker
-                        .filtered_sessions
-                        .iter()
-                        .map(|s| {
-                            // Format relative time
-                            let time_str = format_relative_time(s.updated_at);
-                            // Short preview
-                            let preview = s
-                                .first_user_message
-                                .as_ref()
-                                .map(|m| {
-                                    let truncated: String = m.chars().take(40).collect();
-                                    if m.chars().count() > 40 {
-                                        format!("{}...", truncated)
-                                    } else {
-                                        truncated
-                                    }
-                                })
-                                .unwrap_or_else(|| "(no messages)".to_string());
-                            // Short ID
-                            let short_id: String = s.id.chars().take(8).collect();
-
-                            ListItem::new(Line::from(vec![
-                                Span::styled(
-                                    format!("{:>8}", time_str),
-                                    Style::default().fg(Color::Blue),
-                                ),
-                                Span::raw("  "),
-                                Span::styled(short_id, Style::default().fg(Color::DarkGray)),
-                                Span::raw("  "),
-                                Span::styled(preview, Style::default().fg(Color::White)),
-                            ]))
-                        })
-                        .collect();
-
-                    let count = self.session_picker.filtered_sessions.len();
-                    let total = self.session_picker.sessions.len();
-                    let list = List::new(items)
-                        .block(
-                            Block::default()
-                                .borders(Borders::ALL)
-                                .title(format!(" Sessions ({}/{}) ", count, total)),
-                        )
-                        .highlight_style(
-                            Style::default()
-                                .bg(Color::DarkGray)
-                                .fg(Color::White)
-                                .add_modifier(Modifier::BOLD),
-                        )
-                        .highlight_symbol("> ");
-
-                    frame.render_stateful_widget(
-                        list,
-                        chunks[3],
-                        &mut self.session_picker.list_state,
-                    );
-                }
-            }
+            SelectorPage::Provider => self.render_provider_list(frame, chunks[3]),
+            SelectorPage::Model => self.render_model_list(frame, chunks[3]),
+            SelectorPage::Session => self.render_session_list(frame, chunks[3]),
         }
 
         let hint = Paragraph::new(" Type to filter · Enter to select · Esc to close ")
             .style(Style::default().dim());
         frame.render_widget(hint, chunks[4]);
+    }
+
+    /// Render the provider list for the selector.
+    fn render_provider_list(&mut self, frame: &mut Frame, area: Rect) {
+        let items: Vec<ListItem> = self
+            .provider_picker
+            .filtered
+            .iter()
+            .map(|status| {
+                let (icon, icon_style, name_style) = if status.authenticated {
+                    (
+                        "●",
+                        Style::default().fg(Color::Green),
+                        Style::default().fg(Color::White).bold(),
+                    )
+                } else {
+                    ("○", Style::default().dim(), Style::default().dim())
+                };
+
+                let auth_hint = if !status.authenticated {
+                    format!(
+                        " set {}",
+                        status.provider.env_vars().first().unwrap_or(&"API_KEY")
+                    )
+                } else {
+                    String::new()
+                };
+
+                ListItem::new(Line::from(vec![
+                    Span::styled(icon, icon_style),
+                    Span::raw(" "),
+                    Span::styled(status.provider.name(), name_style),
+                    Span::styled(auth_hint, Style::default().fg(Color::Red).dim()),
+                ]))
+            })
+            .collect();
+
+        let count = self.provider_picker.filtered.len();
+        let total = self.provider_picker.providers.len();
+        let list = List::new(items)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(format!(" Providers ({}/{}) ", count, total)),
+            )
+            .highlight_style(
+                Style::default()
+                    .bg(Color::DarkGray)
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol("▸ ");
+
+        frame.render_stateful_widget(list, area, &mut self.provider_picker.list_state);
+    }
+
+    /// Render the model list for the selector.
+    fn render_model_list(&mut self, frame: &mut Frame, area: Rect) {
+        if self.model_picker.is_loading {
+            let provider_name = self
+                .model_picker
+                .api_provider_name
+                .as_deref()
+                .unwrap_or("provider");
+            let loading = Paragraph::new(format!("Loading models from {}...", provider_name))
+                .style(Style::default().fg(Color::Yellow))
+                .block(Block::default().borders(Borders::ALL).title(" Loading "));
+            frame.render_widget(loading, area);
+            return;
+        }
+
+        if let Some(ref err) = self.model_picker.error {
+            let error = Paragraph::new(format!("Error: {}", err))
+                .style(Style::default().fg(Color::Red))
+                .block(Block::default().borders(Borders::ALL).title(" Error "));
+            frame.render_widget(error, area);
+            return;
+        }
+
+        let items: Vec<ListItem> = self
+            .model_picker
+            .filtered_models
+            .iter()
+            .map(|model| {
+                let context_k = model.context_window / 1000;
+                ListItem::new(Line::from(vec![
+                    Span::styled(model.id.clone(), Style::default().fg(Color::White)),
+                    Span::styled(format!("  {}k ctx", context_k), Style::default().dim()),
+                ]))
+            })
+            .collect();
+
+        let count = self.model_picker.filtered_models.len();
+        let total = self.model_picker.all_models.len();
+        let list = List::new(items)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(format!(" Models ({}/{}) ", count, total)),
+            )
+            .highlight_style(
+                Style::default()
+                    .bg(Color::DarkGray)
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol("▸ ");
+
+        frame.render_stateful_widget(list, area, &mut self.model_picker.model_state);
+    }
+
+    /// Render the session list for the selector.
+    fn render_session_list(&mut self, frame: &mut Frame, area: Rect) {
+        if self.session_picker.is_loading {
+            let loading = Paragraph::new("Loading sessions...")
+                .style(Style::default().fg(Color::Yellow))
+                .block(Block::default().borders(Borders::ALL).title(" Loading "));
+            frame.render_widget(loading, area);
+            return;
+        }
+
+        if let Some(ref err) = self.session_picker.error {
+            let error = Paragraph::new(format!("Error: {}", err))
+                .style(Style::default().fg(Color::Red))
+                .block(Block::default().borders(Borders::ALL).title(" Error "));
+            frame.render_widget(error, area);
+            return;
+        }
+
+        if self.session_picker.sessions.is_empty() {
+            let empty = Paragraph::new("No sessions found")
+                .style(Style::default().fg(Color::DarkGray))
+                .block(Block::default().borders(Borders::ALL).title(" Sessions "));
+            frame.render_widget(empty, area);
+            return;
+        }
+
+        let items: Vec<ListItem> = self
+            .session_picker
+            .filtered_sessions
+            .iter()
+            .map(|s| {
+                let time_str = format_relative_time(s.updated_at);
+                let preview = s
+                    .first_user_message
+                    .as_ref()
+                    .map(|m| {
+                        let truncated: String = m.chars().take(40).collect();
+                        if m.chars().count() > 40 {
+                            format!("{}...", truncated)
+                        } else {
+                            truncated
+                        }
+                    })
+                    .unwrap_or_else(|| "(no messages)".to_string());
+                let short_id: String = s.id.chars().take(8).collect();
+
+                ListItem::new(Line::from(vec![
+                    Span::styled(format!("{:>8}", time_str), Style::default().fg(Color::Blue)),
+                    Span::raw("  "),
+                    Span::styled(short_id, Style::default().fg(Color::DarkGray)),
+                    Span::raw("  "),
+                    Span::styled(preview, Style::default().fg(Color::White)),
+                ]))
+            })
+            .collect();
+
+        let count = self.session_picker.filtered_sessions.len();
+        let total = self.session_picker.sessions.len();
+        let list = List::new(items)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(format!(" Sessions ({}/{}) ", count, total)),
+            )
+            .highlight_style(
+                Style::default()
+                    .bg(Color::DarkGray)
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol("> ");
+
+        frame.render_stateful_widget(list, area, &mut self.session_picker.list_state);
     }
 
     /// Render the help overlay.
