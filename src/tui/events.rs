@@ -33,6 +33,10 @@ impl App {
                     self.handle_paste(text);
                 }
             }
+            Event::Resize(_, _) => {
+                // Invalidate cached width so cursor position is recalculated
+                self.input_state.invalidate_width();
+            }
             _ => {}
         }
     }
@@ -184,8 +188,9 @@ impl App {
 
             // Enter: Send message or queue for mid-task steering
             KeyCode::Enter => {
-                if !self.input_is_empty() {
-                    let input = self.input_text();
+                // Reject empty or whitespace-only input
+                let input = self.input_text();
+                if !input.trim().is_empty() {
                     if self.is_running {
                         // Queue message for injection at next turn (resolve blobs)
                         let resolved = self.resolved_input_text();

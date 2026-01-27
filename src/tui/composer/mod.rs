@@ -540,6 +540,12 @@ impl ComposerState {
         self.stash.is_some()
     }
 
+    /// Invalidate cached width (call on terminal resize).
+    /// Forces cursor position recalculation on next render.
+    pub fn invalidate_width(&mut self) {
+        self.last_width = 0;
+    }
+
     /// Get the current scroll offset.
     pub fn scroll_offset(&self) -> usize {
         self.scroll_offset

@@ -13,7 +13,40 @@
 
 ## Active Work
 
-TUI input completely fixed. All P1 blockers resolved.
+TUI input bugs and viewport architecture.
+
+## P1 Bugs
+
+| Bug                         | Status  | Notes                                  |
+| --------------------------- | ------- | -------------------------------------- |
+| Cursor broken after resize  | **NEW** | `last_width` stale on resize           |
+| Whitespace-only msg allowed | **NEW** | Should reject empty/whitespace content |
+
+## Priority Queue
+
+**P1 - Architecture:**
+
+| Issue               | Notes                                    |
+| ------------------- | ---------------------------------------- |
+| Viewport/scrollback | Native terminal scroll vs managed        |
+| Resize handling     | Width changes break cursor, need refresh |
+
+**P2 - Important:**
+
+| Issue                 | Notes                   |
+| --------------------- | ----------------------- |
+| Pretty markdown       | Tables like Claude Code |
+| Anthropic cache       | 50-100x cost savings    |
+| Kimi k2.5 API error   | OpenRouter, investigate |
+| Image attachment      | @image:path syntax      |
+| File/cmd autocomplete | @ and / triggers        |
+
+**P3 - Polish:**
+
+| Issue             | Notes                    |
+| ----------------- | ------------------------ |
+| Ctrl+R history    | Fuzzy search like shells |
+| Settings selector | UI for config            |
 
 ## Session Fixes (2026-01-27)
 
@@ -27,26 +60,16 @@ TUI input completely fixed. All P1 blockers resolved.
 
 **Key insight:** Terminals send Alt+b/f for Option+Arrow, not Arrow+ALT modifier.
 
-## Priority Queue
-
-**P2 - Important:**
-
-| Issue                 | Notes                   |
-| --------------------- | ----------------------- |
-| Anthropic cache       | 50-100x cost savings    |
-| Kimi k2.5 API error   | OpenRouter, investigate |
-| Image attachment      | @image:path syntax      |
-| File/cmd autocomplete | @ and / triggers        |
-
-**P3 - Polish:**
-
-| Issue             | Notes                    |
-| ----------------- | ------------------------ |
-| Ctrl+R history    | Fuzzy search like shells |
-| Pretty markdown   | Tables like Claude Code  |
-| Settings selector | UI for config            |
-
 ## TUI Architecture
+
+**Current approach:** Viewport::Inline with `insert_before` for history.
+
+**Key decisions from research:**
+
+1. Keep native terminal scrollback (don't manage own)
+2. Use ratatui's `scrolling-regions` feature for flicker-free insert
+3. Use synchronized output unconditionally
+4. Trust ratatui cell diffing (~2% overhead, 98% is I/O)
 
 **Rendering:**
 
@@ -65,7 +88,7 @@ TUI input completely fixed. All P1 blockers resolved.
 
 | Module    | Health | Notes                      |
 | --------- | ------ | -------------------------- |
-| tui/      | GOOD   | Input bugs fixed           |
+| tui/      | OK     | Resize bugs, viewport work |
 | agent/    | GOOD   | Clean turn loop            |
 | provider/ | GOOD   | Multi-provider abstraction |
 | tool/     | GOOD   | Orchestrator + spawn       |
