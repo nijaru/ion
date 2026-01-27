@@ -23,6 +23,7 @@ impl ChatRenderer {
                             combined.push_str(text);
                         }
                     }
+                    let combined = combined.trim(); // Trim overall but preserve internal formatting
                     let prefix = "> ";
                     let prefix_len = prefix.chars().count();
                     let available_width = wrap_width.saturating_sub(prefix_len).max(1);
@@ -54,8 +55,9 @@ impl ChatRenderer {
                     for part in &entry.parts {
                         match part {
                             MessagePart::Text(text) => {
+                                // Trim overall message but preserve internal formatting
                                 let highlighted_lines =
-                                    highlight::highlight_markdown_with_code(text.trim_end());
+                                    highlight::highlight_markdown_with_code(text.trim());
                                 for line in highlighted_lines {
                                     let mut padded = vec![Span::raw(" ")];
                                     padded.extend(line.spans);
