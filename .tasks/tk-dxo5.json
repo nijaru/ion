@@ -23,10 +23,14 @@
     {
       "ts": "2026-01-27T05:50:13.840Z",
       "msg": "Recommendation updated: use rustyline-async crate. Its SharedWriter provides production-ready concurrent output while editing. reedline's external_printer is experimental. Next: spike to evaluate integration with ratatui widgets."
+    },
+    {
+      "ts": "2026-01-27T06:43:34.155Z",
+      "msg": "Superseded by tk-i5s8 (TUI v2). Will be resolved by new architecture."
     }
   ],
   "created_at": "2026-01-27T04:43:04.035Z",
-  "updated_at": "2026-01-27T05:50:13.840Z",
+  "updated_at": "2026-01-27T06:43:34.155Z",
   "completed_at": null,
   "external": {}
 }
