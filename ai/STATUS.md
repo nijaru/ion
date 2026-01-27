@@ -7,63 +7,59 @@
 | Phase      | 5 - Polish & UX | 2026-01-27 |
 | Status     | Runnable        | 2026-01-27 |
 | Toolchain  | stable          | 2026-01-22 |
-| Tests      | 104 passing     | 2026-01-27 |
+| Tests      | 105 passing     | 2026-01-27 |
 | Clippy     | 0 warnings      | 2026-01-27 |
 | Visibility | **PUBLIC**      | 2026-01-22 |
 
 ## Active Work
 
-TUI input fixes complete. Next: P2 features (cache_control, etc.)
+TUI input completely fixed. All P1 blockers resolved.
+
+## Session Fixes (2026-01-27)
+
+**Fixed:**
+
+- Cursor position on wrapped lines (word-wrap algorithm now matches Ratatui)
+- Option+Arrow word navigation (handles Alt+b/f sent by terminals)
+- Cmd+Arrow visual line navigation (SUPER modifier + visual line methods)
+- Input borders changed to TOP|BOTTOM only
+- Event debug logging (ION_DEBUG_EVENTS=1)
+
+**Key insight:** Terminals send Alt+b/f for Option+Arrow, not Arrow+ALT modifier.
 
 ## Priority Queue
 
 **P2 - Important:**
 
-| Issue                   | Notes                    |
-| ----------------------- | ------------------------ |
-| Anthropic cache_control | Not sent in API requests |
-| Kimi k2.5 API error     | OpenRouter, low priority |
+| Issue                 | Notes                   |
+| --------------------- | ----------------------- |
+| Anthropic cache       | 50-100x cost savings    |
+| Kimi k2.5 API error   | OpenRouter, investigate |
+| Image attachment      | @image:path syntax      |
+| File/cmd autocomplete | @ and / triggers        |
 
 **P3 - Polish:**
 
-| Issue           | Notes                    |
-| --------------- | ------------------------ |
-| Ctrl+R history  | Fuzzy search like shells |
-| Pretty markdown | Tables like Claude Code  |
+| Issue             | Notes                    |
+| ----------------- | ------------------------ |
+| Ctrl+R history    | Fuzzy search like shells |
+| Pretty markdown   | Tables like Claude Code  |
+| Settings selector | UI for config            |
 
-## Session Fixes (2026-01-27)
-
-**Fixed (this session):**
-
-- Cursor position on wrapped lines (was using Ratatui word-wrap, now char-wrap)
-- macOS Cmd+Arrow for line start/end (SUPER modifier)
-- macOS Option+Arrow for word navigation (ALT modifier)
-- Input borders changed to TOP|BOTTOM only
-
-**Fixed (earlier):**
-
-- Paste not working (Event::Paste was swallowed in main.rs)
-- Editor not opening with args ("code --wait" now works)
-- Selector count display (now shows "1/125" not "125/346")
-- Enabled scrolling-regions + synchronized output
-
-**Not Fixed:**
-
-- cache_control not sent in API requests
-
-## TUI Architecture Notes
-
-User intent clarified:
-
-- Chat history: `println!()` to stdout, terminal handles scrollback natively
-- Bottom UI (progress, input, status): We manage, stays at bottom
-- Don't care if Viewport::Inline or raw crossterm, as long as it works
-- If current approach can be fixed, fine. If needs replacement, do that.
+## TUI Architecture
 
 **Rendering:**
 
-- ComposerWidget uses custom `render_char_wrapped()` for text (not Ratatui's word-wrap)
-- This ensures cursor calculation matches rendering exactly
+- Uses Ratatui's `Paragraph::wrap(Wrap { trim: false })` for word-wrap
+- `build_visual_lines()` computes line boundaries with same algorithm
+- `calculate_cursor_pos()` uses `build_visual_lines()` for consistency
+- Input box: TOP|BOTTOM borders only
+
+**Keyboard handling:**
+
+- Alt+b/f → word left/right (Option+Arrow on macOS)
+- SUPER+Arrow → visual line start/end (Cmd+Arrow on macOS)
+- Ctrl+a/e → line start/end (Emacs)
 
 ## Architecture
 
