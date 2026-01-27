@@ -357,6 +357,20 @@ pub fn convert_lines(lines: &[ratatui::text::Line]) -> Vec<StyledLine> {
     lines.iter().map(convert_line).collect()
 }
 
+/// Print ratatui Lines directly to stdout (for v2 scrollback rendering).
+/// This bypasses ratatui's Terminal/Frame and writes directly.
+pub fn print_lines_to_scrollback(lines: &[ratatui::text::Line]) -> io::Result<()> {
+    let mut stdout = io::stdout();
+    for line in lines {
+        for span in &line.spans {
+            let styled = convert_span(span);
+            styled.write_to(&mut stdout)?;
+        }
+        writeln!(stdout)?;
+    }
+    stdout.flush()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
