@@ -148,7 +148,7 @@ async fn run_tui(
         if !chat_lines.is_empty() {
             let wrap_width = width.saturating_sub(2);
             if wrap_width > 0 {
-                let paragraph = Paragraph::new(chat_lines.clone()).wrap(Wrap { trim: true });
+                let paragraph = Paragraph::new(chat_lines.clone()).wrap(Wrap { trim: false });
                 // Calculate height by counting wrapped lines
                 let height = count_wrapped_lines(&chat_lines, wrap_width as usize);
                 if height > 0 {
