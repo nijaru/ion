@@ -46,7 +46,7 @@ Managed bottom area (crossterm)  ← We control this
 
 ### Research Documents
 
-- `ai/design/tui-v2-architecture.md` - Full design doc
+- `ai/design/tui-architecture.md` - Full design doc
 - `ai/research/inline-tui-patterns-2026.md` - Pattern research
 - `ai/research/input-lib-evaluation.md` - Library spike findings
 - `ai/research/tui-state-of-art-2026.md` - SOTA survey

@@ -1,11 +1,11 @@
-# TUI v2 Architecture
+# TUI Architecture Redesign
 
 **Date:** 2026-01-26
 **Status:** Planning
 
 ## Overview
 
-Replace ratatui's `Viewport::Inline` with custom terminal management for proper native scrollback support.
+Replace ratatui's `Viewport::Inline` with custom terminal management for proper native scrollback support. This is not a "v2" - just fixing the architecture to work correctly.
 
 ## Architecture
 
@@ -220,9 +220,10 @@ Must handle terminal-specific escape sequences:
 
 ## Open Questions
 
-1. Should we keep ratatui for widgets (Block, Paragraph) or go pure crossterm?
+1. Diffing vs redraw for bottom area? (see tk-xp90 research)
 2. What's the minimum terminal support we need? (sync output fallback?)
 3. How do we handle terminal resize during selector?
+4. Keep ratatui for widgets or go pure crossterm? (decide after research)
 
 ## References
 
