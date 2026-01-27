@@ -13,27 +13,37 @@
 
 ## Active Work
 
-**BLOCKER: Cursor position bug on wrapped lines (tk-fbbf)**
+**BLOCKER: Cursor position bug on wrapped lines**
 
-- Cursor is ON just-typed char, not AFTER it
-- Cannot delete last character on wrapped lines
-- Blocks basic editing - HIGH PRIORITY
+- Cursor visual position is wrong on wrapped lines
+- Gets worse with more wraps (3rd line = multiple chars off)
+- User CAN delete but visual feedback is confusing
+- Likely mismatch between `calculate_cursor_pos` and Ratatui's `Paragraph::wrap`
 
-**TUI Architecture** - User intent clarified:
+## Priority Queue
 
-- Chat history: `println!()` to stdout, terminal handles scrollback natively
-- Bottom UI (progress, input, status): We manage, stays at bottom
-- Don't care if Viewport::Inline or raw crossterm, as long as it works
-- If current approach can be fixed, fine. If needs replacement, do that.
+**P1 - Blocking (must fix for basic usability):**
 
-### Pending Fixes
+| Issue                           | Notes                                              |
+| ------------------------------- | -------------------------------------------------- |
+| Cursor off-by-one on wrapped    | BLOCKER - visual position wrong, worse on 3rd line |
+| Cmd+Left/Right (macOS line nav) | Goes to buffer start/end instead of line start/end |
+| Option+Left/Right (macOS word)  | Does not work - escape sequence issue              |
 
-| ID      | Task                                | Priority | Status  |
-| ------- | ----------------------------------- | -------- | ------- |
-| tk-fbbf | Cursor off-by-one on wrapped lines  | P1       | BLOCKER |
-| tk-trb2 | Input borders to TOP\|BOTTOM only   | P2       | Open    |
-| tk-268g | Anthropic cache_control in requests | P2       | Open    |
-| tk-1lso | Kimi k2.5 API error investigation   | P2       | Open    |
+**P2 - Important:**
+
+| Issue                     | Notes                            |
+| ------------------------- | -------------------------------- |
+| Input borders TOP\|BOTTOM | User requests, better copy-paste |
+| Anthropic cache_control   | Not sent in API requests         |
+| Kimi k2.5 API error       | OpenRouter, low priority         |
+
+**P3 - Polish:**
+
+| Issue           | Notes                    |
+| --------------- | ------------------------ |
+| Ctrl+R history  | Fuzzy search like shells |
+| Pretty markdown | Tables like Claude Code  |
 
 ## Session Fixes (2026-01-27)
 
@@ -47,42 +57,30 @@
 **Not Fixed:**
 
 - Cursor position on wrapped lines (blocking)
+- macOS Cmd+Arrow and Option+Arrow keys
 - Input borders still ALL instead of TOP|BOTTOM
 - cache_control not sent in API requests
 
-## Priority Queue
+## TUI Architecture Notes
 
-**P1 - Blocking:**
+User intent clarified:
 
-- tk-fbbf: Cursor bug (can't edit on wrapped lines)
-
-**P2 - TUI:**
-
-- tk-trb2: Input borders to TOP|BOTTOM
-- tk-i5s8: TUI architecture (if current approach unfixable)
-
-**P2 - Features:**
-
-- tk-268g: Anthropic cache_control
-- tk-80az: Image attachment
-- tk-ik05, tk-hk6p: Autocomplete
-
-**P3 - Polish:**
-
-- tk-g3dt: Ctrl+R history search
-- tk-fsto: Pretty markdown tables
+- Chat history: `println!()` to stdout, terminal handles scrollback natively
+- Bottom UI (progress, input, status): We manage, stays at bottom
+- Don't care if Viewport::Inline or raw crossterm, as long as it works
+- If current approach can be fixed, fine. If needs replacement, do that.
 
 ## Architecture
 
-| Module    | Health | Notes                         |
-| --------- | ------ | ----------------------------- |
-| tui/      | BUGGY  | Cursor bug on wrapped lines   |
-| agent/    | GOOD   | Clean turn loop               |
-| provider/ | GOOD   | Multi-provider abstraction    |
-| tool/     | GOOD   | Orchestrator + spawn_subagent |
-| session/  | GOOD   | SQLite persistence + WAL      |
-| skill/    | GOOD   | YAML frontmatter              |
-| mcp/      | OK     | Needs tests                   |
+| Module    | Health | Notes                      |
+| --------- | ------ | -------------------------- |
+| tui/      | BUGGY  | Cursor + keyboard issues   |
+| agent/    | GOOD   | Clean turn loop            |
+| provider/ | GOOD   | Multi-provider abstraction |
+| tool/     | GOOD   | Orchestrator + spawn       |
+| session/  | GOOD   | SQLite persistence + WAL   |
+| skill/    | GOOD   | YAML frontmatter           |
+| mcp/      | OK     | Needs tests                |
 
 ## Config
 

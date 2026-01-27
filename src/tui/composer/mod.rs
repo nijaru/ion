@@ -3,8 +3,53 @@ pub mod buffer;
 pub use buffer::ComposerBuffer;
 
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Paragraph, Widget, Wrap};
+use ratatui::widgets::{Block, Paragraph, Widget};
 use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthChar;
+
+/// Render text with character-based wrapping (no word-wrap).
+/// This must match the algorithm in `ComposerState::calculate_cursor_pos` exactly.
+fn render_char_wrapped(
+    content: &str,
+    area: Rect,
+    scroll_offset: usize,
+    style: Style,
+    buf: &mut Buffer,
+) {
+    let width = area.width as usize;
+    if width == 0 || area.height == 0 {
+        return;
+    }
+
+    let mut x = 0usize;
+    let mut y = 0usize;
+
+    for c in content.chars() {
+        if c == '\n' {
+            x = 0;
+            y += 1;
+        } else {
+            let char_width = UnicodeWidthChar::width(c).unwrap_or(0);
+
+            // Wrap if this character would overflow
+            if x + char_width > width {
+                x = 0;
+                y += 1;
+            }
+
+            // Only render if within visible area (accounting for scroll)
+            if y >= scroll_offset {
+                let visible_y = y - scroll_offset;
+                if visible_y < area.height as usize {
+                    let cell = &mut buf[(area.x + x as u16, area.y + visible_y as u16)];
+                    cell.set_char(c).set_style(style);
+                }
+            }
+
+            x += char_width;
+        }
+    }
+}
 
 /// Build a list of visual lines as (start_char_idx, end_char_idx) pairs.
 /// end_char_idx is exclusive.
@@ -682,12 +727,15 @@ impl Widget for ComposerWidget<'_> {
             self.state
                 .scroll_to_cursor(input_area.height as usize, total_lines);
 
-            // Render content with wrapping
-            Paragraph::new(content)
-                .style(self.style)
-                .wrap(Wrap { trim: false })
-                .scroll((self.state.scroll_offset as u16, 0))
-                .render(input_area, buf);
+            // Render content with character-based wrapping (matches cursor calculation)
+            // We can't use Paragraph::wrap because it uses word-wrap which differs from our cursor calc
+            render_char_wrapped(
+                &content,
+                input_area,
+                self.state.scroll_offset,
+                self.style,
+                buf,
+            );
 
             // Adjust cursor position for scroll and gutter
             let visual_cursor_y = self
