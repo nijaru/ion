@@ -57,20 +57,31 @@ impl App {
     pub(super) fn handle_input_event(&mut self, key: KeyEvent) -> bool {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
+        let super_key = key.modifiers.contains(KeyModifiers::SUPER);
 
         match key.code {
             // Character input
-            KeyCode::Char(c) if !ctrl && !alt => {
+            KeyCode::Char(c) if !ctrl && !alt && !super_key => {
                 self.input_state.insert_char(&mut self.input_buffer, c);
                 true
             }
 
-            // Navigation
-            KeyCode::Left if ctrl || (cfg!(target_os = "macos") && alt) => {
+            // Navigation: Cmd+Left/Right (macOS) or Home/End for line start/end
+            KeyCode::Left if super_key => {
+                self.input_state.move_to_line_start(&self.input_buffer);
+                false
+            }
+            KeyCode::Right if super_key => {
+                self.input_state.move_to_line_end(&self.input_buffer);
+                false
+            }
+
+            // Navigation: Ctrl+Left/Right or Option+Left/Right (macOS) for word movement
+            KeyCode::Left if ctrl || alt => {
                 self.input_state.move_word_left(&self.input_buffer);
                 false
             }
-            KeyCode::Right if ctrl || (cfg!(target_os = "macos") && alt) => {
+            KeyCode::Right if ctrl || alt => {
                 self.input_state.move_word_right(&self.input_buffer);
                 false
             }
@@ -101,8 +112,13 @@ impl App {
                 false
             }
 
-            // Deletion
-            KeyCode::Backspace if ctrl || (cfg!(target_os = "macos") && alt) => {
+            // Deletion: Cmd+Backspace (macOS) or Ctrl+U for delete to line start
+            KeyCode::Backspace if super_key => {
+                self.input_state.delete_line_left(&mut self.input_buffer);
+                true
+            }
+            // Deletion: Ctrl+Backspace or Option+Backspace (macOS) for delete word
+            KeyCode::Backspace if ctrl || alt => {
                 self.input_state.delete_word(&mut self.input_buffer);
                 true
             }
