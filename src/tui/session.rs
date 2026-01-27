@@ -551,9 +551,19 @@ impl App {
                                 self.message_list
                                     .push_entry(MessageEntry::new(Sender::Agent, text.clone()));
                             }
-                            ContentBlock::ToolCall { name, .. } => {
+                            ContentBlock::ToolCall {
+                                name, arguments, ..
+                            } => {
+                                // Format tool call with key argument, same as live display
+                                let key_arg =
+                                    crate::tui::message_list::extract_key_arg(name, arguments);
+                                let display = if key_arg.is_empty() {
+                                    name.clone()
+                                } else {
+                                    format!("{}({})", name, key_arg)
+                                };
                                 self.message_list
-                                    .push_entry(MessageEntry::new(Sender::Tool, name.clone()));
+                                    .push_entry(MessageEntry::new(Sender::Tool, display));
                             }
                             _ => {}
                         }

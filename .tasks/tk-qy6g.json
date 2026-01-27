@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "qy6g",
+  "title": "Destructive command guard - pattern match dangerous commands (rm -rf, git reset --hard, DROP TABLE), detect heredoc scripts, block/warn based on mode",
+  "description": null,
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-27T03:50:28.228Z",
+  "updated_at": "2026-01-27T03:50:28.228Z",
+  "completed_at": null,
+  "external": {}
+}

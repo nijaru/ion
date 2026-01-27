@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "ag0r",
+  "title": "S10-6: Add WAL mode to SQLite session store",
+  "description": null,
+  "status": "open",
+  "priority": 4,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-27T04:07:30.608Z",
+  "updated_at": "2026-01-27T04:07:30.608Z",
+  "completed_at": null,
+  "external": {}
+}

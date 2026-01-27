@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "6tc3",
+  "title": "S10-2: Split render_selector_shell into 3 focused functions",
+  "description": null,
+  "status": "done",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-27T04:07:30.530Z",
+  "updated_at": "2026-01-27T04:11:51.400Z",
+  "completed_at": "2026-01-27T04:11:51.400Z",
+  "external": {}
+}
