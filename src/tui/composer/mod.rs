@@ -165,6 +165,52 @@ impl ComposerState {
         }
     }
 
+    /// Move cursor to the start of the current VISUAL line (wrapped line).
+    /// Uses last_width from previous render; falls back to logical line start if width unknown.
+    pub fn move_to_visual_line_start(&mut self, buffer: &ComposerBuffer) {
+        if self.last_width == 0 || self.cursor_char_idx == 0 {
+            self.move_to_line_start(buffer);
+            return;
+        }
+
+        let content = buffer.get_content();
+        let lines = build_visual_lines(&content, self.last_width);
+        let (cur_line, _) = find_visual_line_and_col(&lines, self.cursor_char_idx);
+
+        if cur_line < lines.len() {
+            self.cursor_char_idx = lines[cur_line].0;
+        }
+    }
+
+    /// Move cursor to the end of the current VISUAL line (wrapped line).
+    /// Uses last_width from previous render; falls back to logical line end if width unknown.
+    pub fn move_to_visual_line_end(&mut self, buffer: &ComposerBuffer) {
+        if self.last_width == 0 {
+            self.move_to_line_end(buffer);
+            return;
+        }
+
+        let content = buffer.get_content();
+        let len = buffer.len_chars();
+        if self.cursor_char_idx >= len {
+            return;
+        }
+
+        let lines = build_visual_lines(&content, self.last_width);
+        let (cur_line, _) = find_visual_line_and_col(&lines, self.cursor_char_idx);
+
+        if cur_line < lines.len() {
+            let line_end = lines[cur_line].1;
+            // If line ends with newline, position before it
+            if line_end > 0 && content.chars().nth(line_end - 1) == Some('\n') {
+                self.cursor_char_idx = line_end - 1;
+            } else {
+                // For wrapped lines (not ending in newline), go to end
+                self.cursor_char_idx = line_end;
+            }
+        }
+    }
+
     /// Move cursor one grapheme cluster to the left.
     pub fn move_left(&mut self, buffer: &ComposerBuffer) {
         if self.cursor_char_idx == 0 {
@@ -1126,5 +1172,69 @@ mod tests {
         buf.insert_str(0, "abc\n");
         let line_count = state.visual_line_count(&buf, 10);
         assert_eq!(line_count, 2, "line with newline should be 2");
+    }
+
+    /// Helper to compute where each character would be rendered (matching render_char_wrapped logic)
+    fn compute_char_positions(content: &str, width: usize) -> Vec<(usize, usize)> {
+        let mut positions = Vec::new();
+        let mut x = 0usize;
+        let mut y = 0usize;
+
+        for c in content.chars() {
+            if c == '\n' {
+                positions.push((x, y)); // newline is "at" end of line
+                x = 0;
+                y += 1;
+            } else {
+                let char_width = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
+                if x + char_width > width {
+                    x = 0;
+                    y += 1;
+                }
+                positions.push((x, y));
+                x += char_width;
+            }
+        }
+        positions
+    }
+
+    #[test]
+    fn test_render_cursor_alignment() {
+        let mut buf = ComposerBuffer::new();
+        let mut state = ComposerState::new();
+        let width = 10;
+
+        // Test wrapped content
+        buf.insert_str(0, "0123456789abcdef"); // 16 chars, wraps at 10
+        let char_positions = compute_char_positions(&buf.get_content(), width);
+
+        // Verify cursor position for each character index
+        for (i, &(char_x, char_y)) in char_positions.iter().enumerate() {
+            state.set_cursor(i, buf.len_chars());
+            let (cursor_x, cursor_y) = state.calculate_cursor_pos(&buf, width);
+
+            assert_eq!(
+                (cursor_x as usize, cursor_y as usize),
+                (char_x, char_y),
+                "Cursor at char {} should be at ({}, {}), but got ({}, {})",
+                i,
+                char_x,
+                char_y,
+                cursor_x,
+                cursor_y
+            );
+        }
+
+        // Also verify cursor AFTER last char
+        let last_char = char_positions.last().unwrap();
+        state.set_cursor(buf.len_chars(), buf.len_chars());
+        let (cursor_x, cursor_y) = state.calculate_cursor_pos(&buf, width);
+
+        // After 'f' at (5, 1), cursor should be at (6, 1)
+        assert_eq!(
+            (cursor_x as usize, cursor_y as usize),
+            (last_char.0 + 1, last_char.1),
+            "Cursor after last char should be one position after it"
+        );
     }
 }
