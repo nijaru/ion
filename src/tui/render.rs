@@ -451,10 +451,12 @@ impl App {
             0
         };
 
-        // UI fills the entire viewport (chat content is above via insert_before)
+        // UI fills bottom of viewport (chat content is above via insert_before)
         // Clamp UI height to available viewport space
         let ui_height = (progress_height + input_height + 1).min(area.height); // +1 for status line
-        let ui_area = Rect::new(area.x, area.y, area.width, ui_height);
+                                                                               // Position UI at bottom of viewport to avoid gap
+        let ui_y = area.y + area.height.saturating_sub(ui_height);
+        let ui_area = Rect::new(area.x, ui_y, area.width, ui_height);
 
         let areas = self.layout_areas(ui_area, input_height, progress_height);
 
