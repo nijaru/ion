@@ -13,45 +13,54 @@
 
 ## Active Work
 
-**Viewport Architecture** - Spike complete, reedline recommended.
+**TUI v2 Architecture** - Custom bottom area management, native scrollback.
 
-### Spike Results
+### Direction
 
-| Library         | Multi-line | Concurrent Output | Verdict         |
-| --------------- | ---------- | ----------------- | --------------- |
-| rustyline-async | **NO**     | SharedWriter      | Not viable      |
-| reedline        | YES        | ExternalPrinter   | **Recommended** |
+Replace `Viewport::Inline` with custom terminal management:
 
-rustyline-async is single-line only - doesn't work for multi-line prompts.
+```
+Native scrollback (println!)     ← Terminal handles this
+├── Chat history, tool output
+│
+Managed bottom area (crossterm)  ← We control this
+├── Selector UI (when open)
+├── Progress line
+├── Input area (TOP|BOTTOM borders)
+└── Status line
+```
 
-### Architecture Options
+**Key principles:**
 
-| Option | Approach                           | Complexity |
-| ------ | ---------------------------------- | ---------- |
-| A      | Prompt-based status (try first)    | Low        |
-| B      | Hybrid reedline + raw crossterm    | Medium     |
-| C      | Hybrid reedline + ratatui overlays | Medium     |
-| D      | Custom ratatui (Codex-style)       | High       |
+- Native scrollback is native - just print, terminal handles it
+- No Viewport abstractions - manage cursor position directly
+- Synchronized output (CSI 2026) for flicker prevention
 
-### Next Steps
+### Tasks
 
-1. Test reedline spike: `cargo run --example reedline_spike`
-2. Evaluate prompt customization for status display
-3. Prototype text-based selector UI
-4. If viable, plan migration from current ratatui TUI
+| ID      | Task                                                 | Priority |
+| ------- | ---------------------------------------------------- | -------- |
+| tk-xp90 | Research rendering (diffing vs redraw, flicker SOTA) | P2       |
+| tk-i5s8 | TUI v2: Custom bottom area management                | P2       |
+| tk-trb2 | Change input borders to TOP\|BOTTOM                  | P3       |
 
 ### Research Documents
 
-- `ai/research/input-lib-evaluation.md` - Spike findings
-- `ai/research/inline-tui-patterns-2026.md` - Comprehensive patterns
-- `ai/research/tui-state-of-art-2026.md` - State of the art
-- `ai/research/codex-tui-analysis.md` - Codex approach (fallback)
+- `ai/design/tui-v2-architecture.md` - Full design doc
+- `ai/research/inline-tui-patterns-2026.md` - Pattern research
+- `ai/research/input-lib-evaluation.md` - Library spike findings
+- `ai/research/tui-state-of-art-2026.md` - SOTA survey
 
 ## Priority Queue
 
+**P2 - TUI v2:**
+
+- tk-xp90: Research rendering (diffing vs redraw, flicker SOTA)
+- tk-i5s8: TUI v2 implementation
+- tk-dxo5: Viewport gaps (will be fixed by TUI v2)
+
 **P2 - Bugs & UX:**
 
-- tk-dxo5: Viewport gaps (root cause of multiple bugs)
 - tk-bmd0: Option+Arrow word navigation on Ghostty
 - tk-c73y: Token display mismatch
 - tk-wtfi: Filter input improvements
@@ -63,6 +72,7 @@ rustyline-async is single-line only - doesn't work for multi-line prompts.
 
 **P3 - Polish:**
 
+- tk-trb2: Input borders to TOP|BOTTOM
 - tk-4gm9: Settings selector UI
 - tk-9zri: Auto-backticks around pastes config
 - tk-6ydy: Tool output format review
