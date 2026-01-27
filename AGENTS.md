@@ -33,6 +33,16 @@ Fast, lightweight TUI coding agent.
 | agent/    | Multi-turn loop, session management |
 | tui/      | ratatui + crossterm chat interface  |
 
+### TUI Architecture
+
+- **Chat history**: Printed to stdout via `insert_before`, terminal handles scrollback natively
+- **Bottom UI**: We manage (progress, input, status) - stays at bottom via `Viewport::Inline`
+- **Input composer**: Custom `ComposerWidget` with own cursor/wrap calculation
+  - `ComposerBuffer` - ropey-backed text buffer with blob storage for large pastes
+  - `ComposerState` - cursor position, scroll state, stash
+  - **Known bug**: Cursor position off-by-one on wrapped lines (accumulates)
+- **Rendering**: Uses ratatui's `Paragraph` with `Wrap` for display, but cursor calculation is custom
+
 **Built-in tools:** read, write, edit, bash, glob, grep
 
 **Providers:** Anthropic, Google, Groq, Ollama, OpenAI, OpenRouter (alphabetical, no default)
