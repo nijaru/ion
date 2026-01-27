@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "13dv",
+  "title": "[BUG] Allow sending whitespace-only messages - should reject",
+  "description": null,
+  "status": "open",
+  "priority": 1,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-27T20:33:46.780Z",
+  "updated_at": "2026-01-27T20:33:46.780Z",
+  "completed_at": null,
+  "external": {}
+}
