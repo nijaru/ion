@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "wtfi",
+  "title": "[UX] Filter input: substring matching + Ctrl-W/U shortcuts",
+  "description": null,
+  "status": "open",
+  "priority": 2,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-27T04:36:52.536Z",
+  "updated_at": "2026-01-27T04:36:52.536Z",
+  "completed_at": null,
+  "external": {}
+}
