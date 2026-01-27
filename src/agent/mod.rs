@@ -421,205 +421,217 @@ impl Agent {
         let _ = tx.send(AgentEvent::InputTokens(input_tokens)).await;
 
         // Ollama and OpenRouter don't support streaming with tools reliably
-        // llm-connector has parse issues with OpenRouter's streaming tool calls
         let provider_id = self.provider.id();
         let use_streaming =
             (provider_id != "ollama" && provider_id != "openrouter") || request.tools.is_empty();
 
+        if use_streaming {
+            if let Some(result) = self
+                .stream_with_retry(&request, tx, &abort_token)
+                .await?
+            {
+                return Ok(result);
+            }
+            // Fallback to non-streaming if stream_with_retry returns None
+        }
+
+        self.complete_with_retry(&request, tx, &abort_token).await
+    }
+
+    /// Attempt streaming completion with retry logic.
+    /// Returns Some((blocks, calls)) on success, None if fallback to non-streaming is needed.
+    async fn stream_with_retry(
+        &self,
+        request: &ChatRequest,
+        tx: &mpsc::Sender<AgentEvent>,
+        abort_token: &CancellationToken,
+    ) -> Result<Option<(Vec<ContentBlock>, Vec<ToolCallEvent>)>> {
+        const MAX_RETRIES: u32 = 3;
+        let mut retry_count = 0;
         let mut assistant_blocks = Vec::new();
         let mut tool_calls = Vec::new();
-        let mut streaming_succeeded = false;
 
-        if use_streaming {
-            const MAX_RETRIES: u32 = 3;
-            let mut retry_count = 0;
+        'retry: loop {
+            let (stream_tx, mut stream_rx) = mpsc::channel(100);
+            let provider = self.provider.clone();
+            let request_clone = request.clone();
 
-            'retry: loop {
-                let (stream_tx, mut stream_rx) = mpsc::channel(100);
-                let provider = self.provider.clone();
-                let request_clone = request.clone();
+            let handle =
+                tokio::spawn(async move { provider.stream(request_clone, stream_tx).await });
 
-                // Spawn stream task that sends errors through the channel
-                let handle =
-                    tokio::spawn(async move { provider.stream(request_clone, stream_tx).await });
+            let mut stream_error: Option<String> = None;
 
-                let mut stream_error: Option<String> = None;
-
-                loop {
-                    tokio::select! {
-                        _ = abort_token.cancelled() => {
-                            handle.abort();
-                            return Err(anyhow::anyhow!("Cancelled"));
-                        }
-                        event = stream_rx.recv() => {
-                            match event {
-                                Some(StreamEvent::TextDelta(delta)) => {
-                                    let delta_tokens = self.token_counter.count_str(&delta);
-                                    let _ = tx.send(AgentEvent::OutputTokensDelta(delta_tokens)).await;
-                                    let _ = tx.send(AgentEvent::TextDelta(delta.clone())).await;
-                                    if let Some(ContentBlock::Text { text }) = assistant_blocks.last_mut() {
-                                        text.push_str(&delta);
-                                    } else {
-                                        assistant_blocks.push(ContentBlock::Text { text: delta });
-                                    }
+            loop {
+                tokio::select! {
+                    _ = abort_token.cancelled() => {
+                        handle.abort();
+                        return Err(anyhow::anyhow!("Cancelled"));
+                    }
+                    event = stream_rx.recv() => {
+                        match event {
+                            Some(StreamEvent::TextDelta(delta)) => {
+                                let delta_tokens = self.token_counter.count_str(&delta);
+                                let _ = tx.send(AgentEvent::OutputTokensDelta(delta_tokens)).await;
+                                let _ = tx.send(AgentEvent::TextDelta(delta.clone())).await;
+                                if let Some(ContentBlock::Text { text }) = assistant_blocks.last_mut() {
+                                    text.push_str(&delta);
+                                } else {
+                                    assistant_blocks.push(ContentBlock::Text { text: delta });
                                 }
-                                Some(StreamEvent::ThinkingDelta(delta)) => {
-                                    let _ = tx.send(AgentEvent::ThinkingDelta(delta.clone())).await;
-                                    if let Some(ContentBlock::Thinking { thinking }) = assistant_blocks.last_mut() {
-                                        thinking.push_str(&delta);
-                                    } else {
-                                        assistant_blocks.push(ContentBlock::Thinking { thinking: delta });
-                                    }
+                            }
+                            Some(StreamEvent::ThinkingDelta(delta)) => {
+                                let _ = tx.send(AgentEvent::ThinkingDelta(delta.clone())).await;
+                                if let Some(ContentBlock::Thinking { thinking }) = assistant_blocks.last_mut() {
+                                    thinking.push_str(&delta);
+                                } else {
+                                    assistant_blocks.push(ContentBlock::Thinking { thinking: delta });
                                 }
-                                Some(StreamEvent::ToolCall(call)) => {
-                                    let _ = tx
-                                        .send(AgentEvent::ToolCallStart(
-                                            call.id.clone(),
-                                            call.name.clone(),
-                                            call.arguments.clone(),
-                                        ))
-                                        .await;
-                                    tool_calls.push(call.clone());
-                                    assistant_blocks.push(ContentBlock::ToolCall {
-                                        id: call.id,
-                                        name: call.name,
-                                        arguments: call.arguments,
-                                    });
+                            }
+                            Some(StreamEvent::ToolCall(call)) => {
+                                let _ = tx
+                                    .send(AgentEvent::ToolCallStart(
+                                        call.id.clone(),
+                                        call.name.clone(),
+                                        call.arguments.clone(),
+                                    ))
+                                    .await;
+                                tool_calls.push(call.clone());
+                                assistant_blocks.push(ContentBlock::ToolCall {
+                                    id: call.id,
+                                    name: call.name,
+                                    arguments: call.arguments,
+                                });
+                            }
+                            Some(StreamEvent::Error(e)) => {
+                                stream_error = Some(e);
+                                break;
+                            }
+                            Some(_) => {}
+                            None => {
+                                if let Ok(Err(e)) = handle.await {
+                                    stream_error = Some(e.to_string());
                                 }
-                                Some(StreamEvent::Error(e)) => {
-                                    stream_error = Some(e);
-                                    break;
-                                }
-                                Some(_) => {}
-                                None => {
-                                    // Channel closed - check if the task errored
-                                    if let Ok(Err(e)) = handle.await {
-                                        stream_error = Some(e.to_string());
-                                    }
-                                    break;
-                                }
+                                break;
                             }
                         }
                     }
                 }
+            }
 
-                // Handle any error from the stream
-                if let Some(ref err) = stream_error {
-                    let err_lower = err.to_lowercase();
-                    let is_tools_not_supported = err_lower.contains("streaming with tools not supported")
-                        || err_lower.contains("tools not supported")
-                        // llm-connector parse errors with tools - fall back to non-streaming
-                        || (err_lower.contains("parse") && !request.tools.is_empty());
+            if let Some(ref err) = stream_error {
+                let err_lower = err.to_lowercase();
+                let is_tools_not_supported = err_lower
+                    .contains("streaming with tools not supported")
+                    || err_lower.contains("tools not supported")
+                    || (err_lower.contains("parse") && !request.tools.is_empty());
 
-                    if is_tools_not_supported {
-                        // Fall back to non-streaming for this provider
-                        warn!(
-                            "Provider doesn't support streaming with tools, falling back to non-streaming"
-                        );
-                        assistant_blocks.clear();
-                        tool_calls.clear();
-                        break; // Exit retry loop, will use non-streaming below
-                    } else if is_retryable_error(err) && retry_count < MAX_RETRIES {
+                if is_tools_not_supported {
+                    warn!(
+                        "Provider doesn't support streaming with tools, falling back to non-streaming"
+                    );
+                    return Ok(None); // Signal fallback needed
+                } else if is_retryable_error(err) && retry_count < MAX_RETRIES {
+                    retry_count += 1;
+                    let delay = 1u64 << retry_count;
+                    let reason = categorize_error(err);
+                    warn!(
+                        "{}, retrying in {}s (attempt {}/{})",
+                        reason, delay, retry_count, MAX_RETRIES
+                    );
+                    let _ = tx.send(AgentEvent::Retry(reason.to_string(), delay)).await;
+                    assistant_blocks.clear();
+                    tool_calls.clear();
+                    tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+                    continue 'retry;
+                } else {
+                    error!("Stream error: {}", err);
+                    return Err(anyhow::anyhow!("{}", err));
+                }
+            } else {
+                return Ok(Some((assistant_blocks, tool_calls)));
+            }
+        }
+    }
+
+    /// Non-streaming completion with retry logic.
+    async fn complete_with_retry(
+        &self,
+        request: &ChatRequest,
+        tx: &mpsc::Sender<AgentEvent>,
+        abort_token: &CancellationToken,
+    ) -> Result<(Vec<ContentBlock>, Vec<ToolCallEvent>)> {
+        const MAX_RETRIES: u32 = 3;
+        let mut retry_count = 0u32;
+
+        let response = loop {
+            debug!(
+                "Using non-streaming completion (provider: {})",
+                self.provider.id()
+            );
+            let result = tokio::select! {
+                _ = abort_token.cancelled() => {
+                    return Err(anyhow::anyhow!("Cancelled"));
+                }
+                result = self.provider.complete(request.clone()) => result
+            };
+
+            match result {
+                Ok(response) => break response,
+                Err(e) => {
+                    let err = e.to_string();
+                    if is_retryable_error(&err) && retry_count < MAX_RETRIES {
                         retry_count += 1;
-                        let delay = 1u64 << retry_count; // 2, 4, 8 seconds
-                        let reason = categorize_error(err);
+                        let delay = 1u64 << retry_count;
+                        let reason = categorize_error(&err);
                         warn!(
                             "{}, retrying in {}s (attempt {}/{})",
                             reason, delay, retry_count, MAX_RETRIES
                         );
                         let _ = tx.send(AgentEvent::Retry(reason.to_string(), delay)).await;
-
-                        // Clear any partial response
-                        assistant_blocks.clear();
-                        tool_calls.clear();
-
                         tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
-                        continue 'retry;
+                        continue;
                     } else {
-                        error!("Stream error: {}", err);
-                        return Err(anyhow::anyhow!("{}", err));
+                        return Err(anyhow::anyhow!("Completion error: {}", e));
                     }
-                } else {
-                    // Success - exit retry loop (streaming_succeeded will be true)
-                    streaming_succeeded = true;
-                    break;
                 }
             }
-        }
+        };
 
-        // Non-streaming fallback (Ollama, Google with tools, or streaming failure)
-        if !streaming_succeeded {
-            const MAX_RETRIES: u32 = 3;
-            let mut retry_count = 0u32;
+        let mut assistant_blocks = Vec::new();
+        let mut tool_calls = Vec::new();
 
-            let response = loop {
-                debug!(
-                    "Using non-streaming completion (provider: {})",
-                    self.provider.id()
-                );
-                let result = tokio::select! {
-                    _ = abort_token.cancelled() => {
-                        return Err(anyhow::anyhow!("Cancelled"));
-                    }
-                    result = self.provider.complete(request.clone()) => result
-                };
-
-                match result {
-                    Ok(response) => break response,
-                    Err(e) => {
-                        let err = e.to_string();
-                        if is_retryable_error(&err) && retry_count < MAX_RETRIES {
-                            retry_count += 1;
-                            let delay = 1u64 << retry_count; // 2, 4, 8 seconds
-                            let reason = categorize_error(&err);
-                            warn!(
-                                "{}, retrying in {}s (attempt {}/{})",
-                                reason, delay, retry_count, MAX_RETRIES
-                            );
-                            let _ = tx.send(AgentEvent::Retry(reason.to_string(), delay)).await;
-                            tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
-                            continue;
-                        } else {
-                            return Err(anyhow::anyhow!("Completion error: {}", e));
-                        }
-                    }
+        for block in response.content.iter() {
+            match block {
+                ContentBlock::Text { text } => {
+                    let tokens = self.token_counter.count_str(text);
+                    let _ = tx.send(AgentEvent::OutputTokensDelta(tokens)).await;
+                    let _ = tx.send(AgentEvent::TextDelta(text.clone())).await;
+                    assistant_blocks.push(block.clone());
                 }
-            };
-
-            // Emit events for the complete response
-            for block in response.content.iter() {
-                match block {
-                    ContentBlock::Text { text } => {
-                        let tokens = self.token_counter.count_str(text);
-                        let _ = tx.send(AgentEvent::OutputTokensDelta(tokens)).await;
-                        let _ = tx.send(AgentEvent::TextDelta(text.clone())).await;
-                        assistant_blocks.push(block.clone());
-                    }
-                    ContentBlock::Thinking { thinking } => {
-                        let _ = tx.send(AgentEvent::ThinkingDelta(thinking.clone())).await;
-                        assistant_blocks.push(block.clone());
-                    }
-                    ContentBlock::ToolCall {
-                        id,
-                        name,
-                        arguments,
-                    } => {
-                        let _ = tx
-                            .send(AgentEvent::ToolCallStart(
-                                id.clone(),
-                                name.clone(),
-                                arguments.clone(),
-                            ))
-                            .await;
-                        tool_calls.push(ToolCallEvent {
-                            id: id.clone(),
-                            name: name.clone(),
-                            arguments: arguments.clone(),
-                        });
-                        assistant_blocks.push(block.clone());
-                    }
-                    _ => {}
+                ContentBlock::Thinking { thinking } => {
+                    let _ = tx.send(AgentEvent::ThinkingDelta(thinking.clone())).await;
+                    assistant_blocks.push(block.clone());
                 }
+                ContentBlock::ToolCall {
+                    id,
+                    name,
+                    arguments,
+                } => {
+                    let _ = tx
+                        .send(AgentEvent::ToolCallStart(
+                            id.clone(),
+                            name.clone(),
+                            arguments.clone(),
+                        ))
+                        .await;
+                    tool_calls.push(ToolCallEvent {
+                        id: id.clone(),
+                        name: name.clone(),
+                        arguments: arguments.clone(),
+                    });
+                    assistant_blocks.push(block.clone());
+                }
+                _ => {}
             }
         }
 
