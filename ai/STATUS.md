@@ -24,9 +24,32 @@ All 6 P1 audit tasks complete. Findings:
 | Cancel/interrupt   | ✅     | None                               | Ctrl+C silent when running is intentional      |
 | Provider switching | ✅     | None                               | Edge cases cause clear errors, not silent bugs |
 
-## Priority 2: Feature Completeness
+## Active: Sprint 10 - Stabilization & Refactor
 
-Next up:
+Code review findings + refactoring. See ai/SPRINTS.md for full details.
+
+| Task  | Description                 | Status  |
+| ----- | --------------------------- | ------- |
+| S10-1 | Extract formatting helpers  | PENDING |
+| S10-2 | Split render_selector_shell | PENDING |
+| S10-3 | Decompose stream_response   | PENDING |
+| S10-4 | Agent review issues         | PENDING |
+| S10-5 | Input/session issues        | PENDING |
+| S10-6 | SQLite WAL mode             | PENDING |
+
+### Review Issues Found
+
+| Area        | Issue                                        | Severity |
+| ----------- | -------------------------------------------- | -------- |
+| Agent       | Queued messages don't update token display   | Low      |
+| Agent       | JoinSet panic error unclear                  | Low      |
+| Input       | Blob placeholder collision                   | Low      |
+| Input       | History loses blobs on reload                | Low      |
+| Session     | Model registry only recreated for OpenRouter | Low      |
+| Session     | Load session loses tool details              | Low      |
+| Persistence | No WAL mode                                  | Low      |
+
+## Priority 2: Feature Completeness (after Sprint 10)
 
 - Image attachment (tk-80az)
 - Autocomplete (tk-ik05, tk-hk6p)
@@ -34,6 +57,7 @@ Next up:
 ## Priority 3: Cost Optimization (Release)
 
 - Anthropic caching (tk-268g) - 50-100x savings
+- Destructive command guard (tk-qy6g)
 
 ## Architecture
 

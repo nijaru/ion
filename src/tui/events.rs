@@ -2,6 +2,7 @@
 
 use crate::session::Session;
 use crate::tool::{ApprovalResponse, ToolMode};
+use crate::tui::composer::ComposerBuffer;
 use crate::tui::fuzzy;
 use crate::tui::message_list::{MessageEntry, Sender};
 use crate::tui::model_picker::PickerStage;
@@ -42,10 +43,12 @@ impl App {
         let char_count = text.chars().count();
 
         if line_count > PASTE_BLOB_LINE_THRESHOLD || char_count > PASTE_BLOB_CHAR_THRESHOLD {
-            // Store as blob and insert placeholder
+            // Store as blob and insert placeholder with invisible delimiters
+            // to prevent collision with user-typed text that looks like a placeholder
             let blob_idx = self.input_buffer.push_blob(text);
-            let placeholder = format!("[Pasted text #{}]", blob_idx);
-            self.input_state.insert_str(&mut self.input_buffer, &placeholder);
+            let placeholder = ComposerBuffer::internal_placeholder(blob_idx);
+            self.input_state
+                .insert_str(&mut self.input_buffer, &placeholder);
         } else {
             // Small paste - insert directly
             self.input_state.insert_str(&mut self.input_buffer, &text);

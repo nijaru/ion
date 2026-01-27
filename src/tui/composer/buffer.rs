@@ -105,11 +105,20 @@ impl ComposerBuffer {
         let mut final_content = self.get_content();
 
         for (i, blob) in self.blobs.iter().enumerate() {
-            let placeholder = format!("[Pasted text #{}]", i + 1);
+            // Use unique delimiter (\x1f = Unit Separator) that can't be accidentally typed
+            // but still allows the visible text to be human-readable
+            let placeholder = Self::internal_placeholder(i + 1);
             final_content = final_content.replace(&placeholder, blob);
         }
 
         final_content
+    }
+
+    /// Get the internal placeholder for a blob index (1-indexed).
+    /// Uses Unit Separator (\x1f) as invisible delimiter to prevent collision
+    /// with user-typed text. The visible portion is "[Pasted text #N]".
+    pub fn internal_placeholder(blob_idx: usize) -> String {
+        format!("\x1f[Pasted text #{}]\x1f", blob_idx)
     }
 }
 
@@ -135,9 +144,26 @@ mod tests {
     fn test_blobs() {
         let mut buf = ComposerBuffer::new();
         let blob_idx = buf.push_blob("Large content".to_string());
-        buf.insert_str(0, &format!("Context: [Pasted text #{}]", blob_idx));
+        // Insert using internal placeholder (what the system stores)
+        let placeholder = ComposerBuffer::internal_placeholder(blob_idx);
+        buf.insert_str(0, &format!("Context: {}", placeholder));
 
         assert_eq!(buf.resolve_content(), "Context: Large content");
+    }
+
+    #[test]
+    fn test_blob_placeholder_collision_protection() {
+        let mut buf = ComposerBuffer::new();
+        buf.push_blob("Actual blob content".to_string());
+        // User types what looks like a placeholder - should NOT be replaced
+        // because we use invisible delimiters (\x1f) in the internal format
+        buf.insert_str(0, "User typed: [Pasted text #1] literally");
+
+        // The user-typed text should remain unchanged
+        assert_eq!(
+            buf.resolve_content(),
+            "User typed: [Pasted text #1] literally"
+        );
     }
 
     #[test]

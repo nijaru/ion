@@ -15,7 +15,7 @@ const TOOL_RESULT_MAX_LINES: usize = 5;
 const TOOL_RESULT_LINE_MAX: usize = 120;
 
 /// Extract the key argument from a tool call for display.
-fn extract_key_arg(tool_name: &str, args: &serde_json::Value) -> String {
+pub(crate) fn extract_key_arg(tool_name: &str, args: &serde_json::Value) -> String {
     let obj = match args.as_object() {
         Some(o) => o,
         None => return String::new(),

@@ -17,7 +17,8 @@ Updated: 2026-01-23
 | 6      | TUI Module Refactor               | COMPLETE   |
 | 7      | Codebase Review & Refactor        | COMPLETE   |
 | 8      | Core Loop & TUI Deep Review       | COMPLETE   |
-| 9      | Feature Parity & Extensibility    | **ACTIVE** |
+| 9      | Feature Parity & Extensibility    | COMPLETE   |
+| 10     | Stabilization & Refactor          | **ACTIVE** |
 
 ## Sprint 0: TUI Architecture - Custom Text Entry + Viewport Fix
 
@@ -1479,3 +1480,330 @@ After implementing features, compare to competitors and document gaps.
 - [ ] Feature comparison table updated
 - [ ] Known gaps documented
 - [ ] Next priorities identified
+
+## Sprint 10: Stabilization & Refactor
+
+**Goal:** Fix known issues from code review, refactor large functions, improve code quality
+**Source:** Code review 2026-01-26
+**Status:** ACTIVE
+
+### Demoable Outcomes
+
+- [ ] All review issues fixed or documented
+- [ ] `render_selector_shell` split into 3 functions (308 → ~100 lines each)
+- [ ] `stream_response` decomposed (248 → ~80 lines each)
+- [ ] Formatting helpers extracted to util.rs
+- [ ] All tests pass, 0 clippy warnings
+
+### Issue Summary
+
+| Category    | Count | Severity |
+| ----------- | ----- | -------- |
+| Agent       | 2     | Low      |
+| Input       | 2     | Low      |
+| Session     | 2     | Low      |
+| Persistence | 1     | Low      |
+
+### Refactoring Summary
+
+| Target                  | Current   | After         | Effort |
+| ----------------------- | --------- | ------------- | ------ |
+| `render_selector_shell` | 308 lines | ~3×100        | Medium |
+| `stream_response`       | 248 lines | ~3×80         | Medium |
+| `render_progress`       | 145 lines | ~80 + helpers | Low    |
+| Format duplication      | 2 places  | 1 helper      | Quick  |
+
+---
+
+## Task: S10-1 Extract formatting helpers
+
+**Sprint:** 10
+**Depends on:** none
+**Status:** PENDING
+**Effort:** Quick win (15 min)
+
+### Description
+
+Extract duplicated elapsed time and token formatting to util.rs.
+
+### Duplications Found
+
+1. **Elapsed time** (render.rs:226-230, 296-300):
+
+   ```rust
+   let secs = elapsed.as_secs();
+   if secs >= 60 {
+       format!("{}m {}s", secs / 60, secs % 60)
+   } else {
+       format!("{}s", secs)
+   }
+   ```
+
+2. **Token stats** (render.rs:234-239, 304-309):
+   ```rust
+   stats.push(format!("↑ {}", format_tokens(self.input_tokens)));
+   stats.push(format!("↓ {}", format_tokens(self.output_tokens)));
+   ```
+
+### Implementation
+
+Add to `src/tui/util.rs`:
+
+```rust
+/// Format seconds as human-readable duration (e.g., "1m 30s" or "45s")
+pub(super) fn format_elapsed(secs: u64) -> String {
+    if secs >= 60 {
+        format!("{}m {}s", secs / 60, secs % 60)
+    } else {
+        format!("{}s", secs)
+    }
+}
+
+/// Format token stats as "↑ Xk · ↓ Yk" string
+pub(super) fn format_token_stats(input: usize, output: usize) -> String {
+    let mut parts = Vec::new();
+    if input > 0 {
+        parts.push(format!("↑ {}", format_tokens(input)));
+    }
+    if output > 0 {
+        parts.push(format!("↓ {}", format_tokens(output)));
+    }
+    parts.join(" · ")
+}
+```
+
+### Acceptance Criteria
+
+- [ ] `format_elapsed()` in util.rs
+- [ ] `format_token_stats()` in util.rs
+- [ ] render.rs uses helpers (no duplication)
+- [ ] Tests for edge cases (0s, 59s, 60s, 3600s)
+
+---
+
+## Task: S10-2 Split render_selector_shell
+
+**Sprint:** 10
+**Depends on:** S10-1
+**Status:** PENDING
+**Effort:** Medium (45 min)
+
+### Description
+
+Split 308-line `render_selector_shell` into focused functions.
+
+### Current Structure
+
+```rust
+fn render_selector_shell(&mut self, frame: &mut Frame) {
+    // ~50 lines: layout calculation
+    // ~80 lines: provider selector rendering
+    // ~100 lines: model selector rendering
+    // ~80 lines: session selector rendering
+}
+```
+
+### Target Structure
+
+```rust
+fn render_selector_shell(&mut self, frame: &mut Frame) {
+    let layout = self.selector_layout(frame.area());
+    match self.selector_page {
+        SelectorPage::Provider => self.render_provider_selector(frame, layout),
+        SelectorPage::Model => self.render_model_selector(frame, layout),
+        SelectorPage::Session => self.render_session_selector(frame, layout),
+    }
+}
+
+fn selector_layout(&self, area: Rect) -> SelectorLayout { ... }
+fn render_provider_selector(&mut self, frame: &mut Frame, layout: SelectorLayout) { ... }
+fn render_model_selector(&mut self, frame: &mut Frame, layout: SelectorLayout) { ... }
+fn render_session_selector(&mut self, frame: &mut Frame, layout: SelectorLayout) { ... }
+```
+
+### Acceptance Criteria
+
+- [ ] `SelectorLayout` struct holds computed areas
+- [ ] Each selector type in own function (~80-100 lines)
+- [ ] Dispatcher function <30 lines
+- [ ] Visual behavior unchanged
+- [ ] Manual test: all three selectors work
+
+---
+
+## Task: S10-3 Decompose stream_response
+
+**Sprint:** 10
+**Depends on:** none
+**Status:** PENDING
+**Effort:** Medium (45 min)
+
+### Description
+
+Split 248-line `stream_response` into focused functions (relates to tk-mmpr).
+
+### Current Structure
+
+```rust
+async fn stream_response(...) -> Result<(Vec<ContentBlock>, Vec<ToolCallEvent>)> {
+    // ~30 lines: setup, tool defs
+    // ~120 lines: streaming path with retry
+    // ~80 lines: non-streaming fallback with retry
+    // ~20 lines: result assembly
+}
+```
+
+### Target Structure
+
+```rust
+async fn stream_response(...) -> Result<(Vec<ContentBlock>, Vec<ToolCallEvent>)> {
+    let request = self.build_chat_request(session, thinking).await;
+    let use_streaming = self.should_use_streaming(&request);
+
+    if use_streaming {
+        self.stream_with_retry(request, tx, abort_token).await
+    } else {
+        self.complete_with_retry(request, tx, abort_token).await
+    }
+}
+
+async fn build_chat_request(...) -> ChatRequest { ... }
+fn should_use_streaming(&self, request: &ChatRequest) -> bool { ... }
+async fn stream_with_retry(...) -> Result<...> { ... }
+async fn complete_with_retry(...) -> Result<...> { ... }
+```
+
+### Acceptance Criteria
+
+- [ ] Request building extracted
+- [ ] Streaming/non-streaming decision extracted
+- [ ] Each retry loop in own function
+- [ ] Retry logic unchanged
+- [ ] Tests pass
+
+---
+
+## Task: S10-4 Fix review issues (Agent)
+
+**Sprint:** 10
+**Depends on:** none
+**Status:** PENDING
+**Effort:** Low (20 min)
+
+### Description
+
+Fix agent-related issues found in code review.
+
+### Issues
+
+1. **Queued messages don't update token display** (Low)
+   - Location: `agent/mod.rs:302-307`
+   - Problem: Messages from queue don't emit TokenUsage until assistant responds
+   - Fix: Call `emit_token_usage()` after draining queue
+
+2. **JoinSet panic error unclear** (Low)
+   - Location: `agent/mod.rs:705`
+   - Problem: If tool task panics, `res?` returns confusing JoinError
+   - Fix: Wrap with context: `.map_err(|e| anyhow!("Tool execution panicked: {}", e))?`
+
+### Acceptance Criteria
+
+- [ ] Token usage updates immediately when queue drained
+- [ ] Panic error message is clear
+- [ ] Tests pass
+
+---
+
+## Task: S10-5 Fix review issues (Input/Session)
+
+**Sprint:** 10
+**Depends on:** none
+**Status:** PENDING
+**Effort:** Low (30 min)
+
+### Description
+
+Fix input and session issues found in code review.
+
+### Issues
+
+1. **Blob placeholder collision** (Low)
+   - Location: `composer/buffer.rs:109`
+   - Problem: `replace()` would match user-typed `[Pasted text #1]`
+   - Fix: Use unique delimiter unlikely to be typed: `⟦paste:1⟧`
+
+2. **History loses blobs** (Low)
+   - Location: `events.rs:297`
+   - Problem: Placeholders stored, blobs lost on history reload
+   - Fix: Store resolved content in history (larger but complete)
+
+3. **Model registry only recreated for OpenRouter** (Low)
+   - Location: `session.rs:469-474`
+   - Problem: Other providers keep old registry with wrong API key
+   - Fix: Always recreate registry on provider switch
+
+4. **Load session loses tool details** (Low)
+   - Location: `session.rs:554-558`
+   - Problem: ToolCall only saves name, not args/output
+   - Decision: Document as known limitation (full history in session file)
+
+### Acceptance Criteria
+
+- [ ] Blob placeholder uses unique delimiter
+- [ ] History stores full resolved content
+- [ ] Registry recreated on any provider switch
+- [ ] Tool detail limitation documented in code comment
+
+---
+
+## Task: S10-6 Add WAL mode to SQLite
+
+**Sprint:** 10
+**Depends on:** none
+**Status:** PENDING
+**Effort:** Quick (5 min)
+
+### Description
+
+Enable WAL mode for better concurrent access to session database.
+
+### Implementation
+
+Add to `session/store.rs` in `init_schema()`:
+
+```rust
+self.db.execute("PRAGMA journal_mode=WAL", [])?;
+```
+
+### Acceptance Criteria
+
+- [ ] WAL mode enabled on database open
+- [ ] Existing sessions still readable
+- [ ] No performance regression
+
+---
+
+## Task: S10-7 Verification and cleanup
+
+**Sprint:** 10
+**Depends on:** S10-1, S10-2, S10-3, S10-4, S10-5, S10-6
+**Status:** PENDING
+
+### Description
+
+Final verification of all changes.
+
+### Checklist
+
+- [ ] `cargo build --release` succeeds
+- [ ] `cargo test` all pass
+- [ ] `cargo clippy` 0 warnings
+- [ ] Manual test: start → model select → chat → tool use → cancel → resume
+- [ ] STATUS.md updated
+- [ ] Commit with descriptive message
+
+### Acceptance Criteria
+
+- [ ] All S10 tasks complete
+- [ ] No regressions
+- [ ] ai/STATUS.md reflects current state
