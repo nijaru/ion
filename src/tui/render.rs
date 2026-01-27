@@ -691,13 +691,13 @@ impl App {
             })
             .collect();
 
-        let count = self.model_picker.filtered_models.len();
-        let total = self.model_picker.all_models.len();
+        let filtered_count = self.model_picker.filtered_models.len();
+        let selected_idx = self.model_picker.model_state.selected().unwrap_or(0) + 1;
         let list = List::new(items)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title(format!(" Models ({}/{}) ", count, total)),
+                    .title(format!(" Models ({}/{}) ", selected_idx, filtered_count)),
             )
             .highlight_style(
                 Style::default()
@@ -766,13 +766,13 @@ impl App {
             })
             .collect();
 
-        let count = self.session_picker.filtered_sessions.len();
-        let total = self.session_picker.sessions.len();
+        let filtered_count = self.session_picker.filtered_sessions.len();
+        let selected_idx = self.session_picker.list_state.selected().unwrap_or(0) + 1;
         let list = List::new(items)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title(format!(" Sessions ({}/{}) ", count, total)),
+                    .title(format!(" Sessions ({}/{}) ", selected_idx, filtered_count)),
             )
             .highlight_style(
                 Style::default()

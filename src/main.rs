@@ -273,8 +273,13 @@ fn open_editor(initial: &str) -> Result<Option<String>, Box<dyn std::error::Erro
     temp.write_all(initial.as_bytes())?;
     temp.flush()?;
 
-    // Open editor
-    let status = Command::new(&editor).arg(temp.path()).status()?;
+    // Open editor - split command and args (handles "code --wait", "nvim -u NONE", etc.)
+    let parts: Vec<&str> = editor.split_whitespace().collect();
+    let (cmd, args) = parts.split_first().ok_or("Empty editor command")?;
+    let status = Command::new(cmd)
+        .args(args.iter())
+        .arg(temp.path())
+        .status()?;
 
     if !status.success() {
         return Ok(None);
