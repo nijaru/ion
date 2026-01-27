@@ -473,6 +473,71 @@ stdout().sync_update(|_| {
 | Pi-mono style         | Architecture incompatible with ratatui               |
 | Accept fixed viewport | Gaps remain, not a real solution                     |
 
+## Updated Recommendation (2026-01-26)
+
+After broader research into TUI patterns beyond AI agents, a better solution emerged:
+
+### Use rustyline-async
+
+The `rustyline-async` crate (v0.4.7) provides exactly what we need:
+
+| Feature            | rustyline-async               | reedline                       | Custom (Codex-style)  |
+| ------------------ | ----------------------------- | ------------------------------ | --------------------- |
+| Concurrent output  | **SharedWriter** (production) | ExternalPrinter (experimental) | Manual scroll regions |
+| Multi-line input   | Yes                           | Yes (Validator)                | Custom                |
+| Async/tokio        | Native                        | Limited                        | Manual                |
+| Integration effort | Low                           | Medium                         | High                  |
+| Bug risk           | Low (proven)                  | Medium                         | High                  |
+
+**Why rustyline-async wins:**
+
+1. `SharedWriter` is production-ready - "sending data to the terminal without messing up the readline"
+2. Data written appears above the input line automatically
+3. Implements `Write`, `AsyncWrite`, `Clone`, `Send`, `Sync`
+4. Much simpler than custom terminal management
+
+**Why not reedline:**
+
+reedline's `external_printer` feature is explicitly marked as experimental:
+
+> "Support for a concurrent output stream from background tasks... listed as future improvement rather than current capability"
+
+### Integration Approach
+
+```rust
+// Create readline with SharedWriter
+let (mut readline, shared_writer) = Readline::new()?;
+
+// Clone SharedWriter for async tasks (agent responses, tool output)
+let writer = shared_writer.clone();
+tokio::spawn(async move {
+    writeln!(writer, "Agent: {}", response)?;
+});
+
+// Main input loop
+loop {
+    match readline.readline().await {
+        Ok(line) => process_input(line),
+        Err(ReadlineError::Eof) => break,
+        _ => {}
+    }
+}
+```
+
+### Open Questions for Spike
+
+1. Can ratatui widgets render alongside rustyline-async for status/progress?
+2. How does multi-line input behave (Enter vs Ctrl+Enter)?
+3. Any performance impact from SharedWriter synchronization?
+4. How to handle our selector UI (model picker, etc.)?
+
+### Fallback
+
+If rustyline-async doesn't integrate well with our widget needs, fall back to:
+
+- Codex-style custom terminal wrapper with scroll regions
+- See `ai/research/codex-tui-analysis.md` for details
+
 ## References
 
 - Ratatui inline viewport: https://ratatui.rs/examples/apps/inline/

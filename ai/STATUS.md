@@ -13,34 +13,37 @@
 
 ## Active Work
 
-**Viewport Architecture** - Research complete, clear path forward identified.
+**Viewport Architecture** - Research complete, evaluating rustyline-async.
 
-### Key Finding
+### Recommended: rustyline-async
 
-**Codex CLI doesn't use `Viewport::Inline`** - they implemented custom terminal management with:
+Use `rustyline-async` crate instead of custom viewport management:
 
-1. Manual viewport area via `set_viewport_area()`
-2. Scroll regions (DECSTBM) for history insertion
-3. `scrolling-regions` ratatui feature for flicker-free updates
+| Feature                         | Status                |
+| ------------------------------- | --------------------- |
+| Concurrent output while editing | `SharedWriter` (prod) |
+| Multi-line input                | Supported             |
+| Async/tokio                     | Native                |
+| Thread-safe                     | `Send + Sync + Clone` |
 
-This bypasses the fixed viewport limitation entirely.
+**Why not alternatives:**
 
-### Recommended Approach
+- reedline's `external_printer` is experimental ("future improvement")
+- Custom Codex-style is more work and bug-prone
+- rustyline-async solves our exact "output while typing" problem
 
-| Phase | Task                       | Effort  |
-| ----- | -------------------------- | ------- |
-| 1     | Enable scrolling-regions   | Trivial |
-| 2     | Custom terminal wrapper    | Medium  |
-| 3     | Dynamic height calculation | Easy    |
-| 4     | Synchronized updates       | Easy    |
+### Next Steps
+
+1. Spike: Evaluate rustyline-async integration with ratatui widgets
+2. If viable, refactor TUI input handling
+3. Fallback: Codex-style custom terminal wrapper
 
 ### Research Documents
 
-- `ai/research/viewport-investigation-2026-01.md` - Full investigation
-- `ai/research/codex-tui-analysis.md` - Codex approach (recommended)
-- `ai/research/pi-mono-tui-analysis.md` - Pi-mono analysis
-- `ai/research/opentui-analysis.md` - OpenTUI analysis
-- `ai/design/viewport-requirements.md` - Requirements doc
+- `ai/research/inline-tui-patterns-2026.md` - Comprehensive patterns
+- `ai/research/tui-state-of-art-2026.md` - State of the art
+- `ai/research/viewport-investigation-2026-01.md` - Initial investigation
+- `ai/research/codex-tui-analysis.md` - Codex approach (fallback)
 
 ## Priority Queue
 
