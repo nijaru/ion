@@ -7,62 +7,65 @@
 | Phase      | 5 - Polish & UX | 2026-01-27 |
 | Status     | Runnable        | 2026-01-27 |
 | Toolchain  | stable          | 2026-01-22 |
-| Tests      | 105 passing     | 2026-01-27 |
-| Clippy     | 0 warnings      | 2026-01-27 |
+| Tests      | 107 passing     | 2026-01-27 |
+| Clippy     | 1 warning       | 2026-01-27 |
 | Visibility | **PUBLIC**      | 2026-01-22 |
 
 ## Active Work
 
-**TUI v2 Design** - Drop ratatui, use crossterm directly. See `ai/design/tui-v2.md`.
+**TUI v2 Implementation** - Drop ratatui, use crossterm directly. See `ai/design/tui-v2.md`.
 
-## Key Decision
+**Phase 1 Progress:**
 
-`Viewport::Inline(15)` is the root cause of viewport bugs (gaps, fixed height). Solution: remove ratatui entirely, use crossterm for direct terminal I/O.
+- [x] Research Q1-Q6 (see ai/research/tui-\*.md)
+- [x] Create terminal.rs wrapper
+- [ ] Migrate chat_renderer to StyledLine
+- [ ] Create v2 render path in main.rs
+- [ ] Remove ratatui dependency
 
-**Architecture:**
+## Research Decisions (2026-01-27)
 
-```
-Native scrollback (stdout)     Managed bottom area (crossterm)
-├── Header (ion, version)      ├── Progress (1 line)
-├── Chat history               ├── Input (dynamic height)
-├── Tool output                └── Status (1 line)
-└── Blank line after each
-```
+| Question        | Decision                                                       |
+| --------------- | -------------------------------------------------------------- |
+| Q1-Q2: Diffing  | No diffing for bottom UI (5-15 lines). Sync output sufficient. |
+| Q3: Resize      | Width = full redraw, Height = position adjust only             |
+| Q4: Streaming   | Buffer in managed area, commit to scrollback on complete       |
+| Q5: Selectors   | Replace bottom UI temporarily (no alternate screen)            |
+| Q6: HTTP Client | Replace llm-connector with custom client (phases)              |
 
-## Open Questions (Need Research)
+## Key Files
 
-| #   | Question      | Summary                                                        |
-| --- | ------------- | -------------------------------------------------------------- |
-| Q1  | Diffing       | Is cell/line diffing needed, or is synchronized output enough? |
-| Q2  | Sync output   | Does CSI 2026 alone prevent flicker?                           |
-| Q3  | Resize        | How to handle terminal resize cleanly?                         |
-| Q4  | Streaming     | How to render streaming responses before complete?             |
-| Q5  | Selectors     | How to handle modal UI without Viewport?                       |
-| Q6  | llm-connector | Replace with own client for Kimi reasoning field, etc?         |
+| File                                           | Purpose                                        |
+| ---------------------------------------------- | ---------------------------------------------- |
+| `ai/design/tui-v2.md`                          | Architecture and implementation plan           |
+| `ai/research/tui-diffing-research.md`          | Q1-Q2 research                                 |
+| `ai/research/tui-resize-streaming-research.md` | Q3-Q4 research                                 |
+| `ai/research/tui-selectors-http-research.md`   | Q5-Q6 research                                 |
+| `src/tui/terminal.rs`                          | New crossterm wrapper (StyledSpan, StyledLine) |
 
-## Session Fixes (2026-01-27)
+## Migration Scope
 
-- Cursor position on wrapped lines
-- Option+Arrow word navigation (Alt+b/f)
-- Cmd+Arrow visual line navigation
-- Input borders TOP|BOTTOM only
-- Whitespace-only message rejection
-- Cursor invalidation on resize
+14 files use ratatui. Key files by size:
+
+- render.rs (787 lines) - all UI rendering
+- chat_renderer.rs - message formatting
+- composer/mod.rs (1086 lines) - input handling
+- main.rs - terminal setup and loop
 
 ## Module Health
 
-| Module    | Health | Notes                          |
-| --------- | ------ | ------------------------------ |
-| tui/      | REWORK | Dropping ratatui for crossterm |
-| agent/    | GOOD   | Clean turn loop                |
-| provider/ | OK     | llm-connector limitations      |
-| tool/     | GOOD   | Orchestrator + spawn           |
-| session/  | GOOD   | SQLite persistence + WAL       |
-| skill/    | GOOD   | YAML frontmatter               |
-| mcp/      | OK     | Needs tests                    |
+| Module    | Health | Notes                     |
+| --------- | ------ | ------------------------- |
+| tui/      | REWORK | TUI v2 in progress        |
+| agent/    | GOOD   | Clean turn loop           |
+| provider/ | OK     | llm-connector limitations |
+| tool/     | GOOD   | Orchestrator + spawn      |
+| session/  | GOOD   | SQLite persistence + WAL  |
+| skill/    | GOOD   | YAML frontmatter          |
+| mcp/      | OK     | Needs tests               |
 
 ## Next Session
 
-1. Research open questions Q1-Q6
-2. Prototype TUI v2 Phase 1
-3. Test streaming response rendering
+1. Create StyledLine adapter in chat_renderer.rs
+2. Add ION_TUI_V2=1 toggle for v2 render path
+3. Test basic flow with new rendering

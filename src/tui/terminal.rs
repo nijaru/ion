@@ -274,6 +274,89 @@ impl Default for LineBuilder {
     }
 }
 
+/// Convert a ratatui Style to crossterm ContentStyle.
+pub fn convert_style(style: &ratatui::style::Style) -> ContentStyle {
+    let mut cs = ContentStyle::default();
+
+    // Convert foreground color
+    if let Some(fg) = style.fg {
+        cs.foreground_color = Some(convert_color(fg));
+    }
+
+    // Convert background color
+    if let Some(bg) = style.bg {
+        cs.background_color = Some(convert_color(bg));
+    }
+
+    // Convert modifiers to attributes
+    let mods = style.add_modifier;
+    if mods.contains(ratatui::style::Modifier::BOLD) {
+        cs.attributes.set(Attribute::Bold);
+    }
+    if mods.contains(ratatui::style::Modifier::DIM) {
+        cs.attributes.set(Attribute::Dim);
+    }
+    if mods.contains(ratatui::style::Modifier::ITALIC) {
+        cs.attributes.set(Attribute::Italic);
+    }
+    if mods.contains(ratatui::style::Modifier::UNDERLINED) {
+        cs.attributes.set(Attribute::Underlined);
+    }
+    if mods.contains(ratatui::style::Modifier::REVERSED) {
+        cs.attributes.set(Attribute::Reverse);
+    }
+    if mods.contains(ratatui::style::Modifier::CROSSED_OUT) {
+        cs.attributes.set(Attribute::CrossedOut);
+    }
+
+    cs
+}
+
+/// Convert a ratatui Color to crossterm Color.
+fn convert_color(color: ratatui::style::Color) -> Color {
+    match color {
+        ratatui::style::Color::Reset => Color::Reset,
+        ratatui::style::Color::Black => Color::Black,
+        ratatui::style::Color::Red => Color::DarkRed,
+        ratatui::style::Color::Green => Color::DarkGreen,
+        ratatui::style::Color::Yellow => Color::DarkYellow,
+        ratatui::style::Color::Blue => Color::DarkBlue,
+        ratatui::style::Color::Magenta => Color::DarkMagenta,
+        ratatui::style::Color::Cyan => Color::DarkCyan,
+        ratatui::style::Color::Gray => Color::Grey,
+        ratatui::style::Color::DarkGray => Color::DarkGrey,
+        ratatui::style::Color::LightRed => Color::Red,
+        ratatui::style::Color::LightGreen => Color::Green,
+        ratatui::style::Color::LightYellow => Color::Yellow,
+        ratatui::style::Color::LightBlue => Color::Blue,
+        ratatui::style::Color::LightMagenta => Color::Magenta,
+        ratatui::style::Color::LightCyan => Color::Cyan,
+        ratatui::style::Color::White => Color::White,
+        ratatui::style::Color::Rgb(r, g, b) => Color::Rgb { r, g, b },
+        ratatui::style::Color::Indexed(i) => Color::AnsiValue(i),
+    }
+}
+
+/// Convert a ratatui Span to StyledSpan.
+pub fn convert_span(span: &ratatui::text::Span) -> StyledSpan {
+    StyledSpan {
+        content: span.content.to_string(),
+        style: convert_style(&span.style),
+    }
+}
+
+/// Convert a ratatui Line to StyledLine.
+pub fn convert_line(line: &ratatui::text::Line) -> StyledLine {
+    StyledLine {
+        spans: line.spans.iter().map(convert_span).collect(),
+    }
+}
+
+/// Convert a Vec of ratatui Lines to Vec of StyledLines.
+pub fn convert_lines(lines: &[ratatui::text::Line]) -> Vec<StyledLine> {
+    lines.iter().map(convert_line).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -292,5 +375,26 @@ mod tests {
             .dim(" (dim)")
             .build();
         assert_eq!(line.spans.len(), 3);
+    }
+
+    #[test]
+    fn test_convert_ratatui_line() {
+        use ratatui::style::{Color as RColor, Modifier, Style};
+        use ratatui::text::{Line, Span};
+
+        let ratatui_line = Line::from(vec![
+            Span::raw("hello "),
+            Span::styled(
+                "world",
+                Style::default()
+                    .fg(RColor::Red)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]);
+
+        let styled_line = convert_line(&ratatui_line);
+        assert_eq!(styled_line.spans.len(), 2);
+        assert_eq!(styled_line.spans[0].content, "hello ");
+        assert_eq!(styled_line.spans[1].content, "world");
     }
 }
