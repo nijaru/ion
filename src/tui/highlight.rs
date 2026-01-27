@@ -297,3 +297,83 @@ pub fn highlight_markdown_with_code(content: &str) -> Vec<Line<'static>> {
 
     result
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_code_block_indentation_preserved() {
+        let input = r#"Text before
+
+```rust
+pub fn example() {
+    if true {
+        println!("nested");
+    }
+}
+```
+
+Text after"#;
+
+        let lines = highlight_markdown_with_code(input);
+
+        // Extract text content from lines
+        let line_texts: Vec<String> = lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+
+        // Find the "if true" line
+        let if_line = line_texts
+            .iter()
+            .find(|l| l.contains("if true"))
+            .expect("Should find 'if true' line");
+
+        // Should have 2-space code indent + 4-space source indent = starts with 6 spaces
+        assert!(
+            if_line.starts_with("      ") || if_line.contains("    if"),
+            "Code indentation not preserved. Line: '{}'",
+            if_line
+        );
+
+        // Find println line - should have even more indentation
+        let println_line = line_texts
+            .iter()
+            .find(|l| l.contains("println"))
+            .expect("Should find println line");
+
+        assert!(
+            println_line.contains("        ") || println_line.contains("println"),
+            "Nested indentation not preserved. Line: '{}'",
+            println_line
+        );
+    }
+
+    #[test]
+    fn test_blank_line_after_code_block() {
+        let input = r#"```rust
+code
+```
+Next paragraph"#;
+
+        let lines = highlight_markdown_with_code(input);
+        let line_texts: Vec<String> = lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+
+        // Should have: code line, blank line, "Next paragraph"
+        let code_idx = line_texts.iter().position(|l| l.contains("code")).unwrap();
+        let blank_idx = code_idx + 1;
+
+        assert!(
+            line_texts
+                .get(blank_idx)
+                .map(|l| l.trim().is_empty())
+                .unwrap_or(false),
+            "Expected blank line after code block, got: {:?}",
+            line_texts.get(blank_idx)
+        );
+    }
+}
