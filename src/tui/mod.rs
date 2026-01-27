@@ -23,7 +23,7 @@ pub use types::{ApprovalRequest, Mode, SelectorPage, TaskSummary, ThinkingLevel}
 
 // Re-export internal utilities for sibling modules
 pub(crate) use types::QUEUED_PREVIEW_LINES;
-pub(crate) use util::{own_line, strip_ansi};
+pub(crate) use util::{own_line, sanitize_for_display, strip_ansi};
 
 use crate::agent::Agent;
 use crate::cli::PermissionSettings;
