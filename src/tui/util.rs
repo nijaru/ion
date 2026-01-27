@@ -111,6 +111,24 @@ pub(crate) fn strip_ansi(s: &str) -> String {
     result
 }
 
+/// Sanitize text for terminal display.
+/// - Converts tabs to 4 spaces (consistent width)
+/// - Strips carriage returns (prevents text overwrite)
+/// - Strips other control characters except newlines
+pub(crate) fn sanitize_for_display(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\t' => result.push_str("    "), // Tab to 4 spaces
+            '\r' => {}                       // Strip carriage returns
+            '\n' => result.push(c),          // Keep newlines
+            c if c.is_control() => {}        // Strip other control chars
+            c => result.push(c),
+        }
+    }
+    result
+}
+
 /// Convert a borrowed Line to an owned Line<'static>.
 pub(crate) fn own_line(line: Line<'_>) -> Line<'static> {
     Line::from(
@@ -119,4 +137,35 @@ pub(crate) fn own_line(line: Line<'_>) -> Line<'static> {
             .map(|span| Span::styled(span.content.to_string(), span.style))
             .collect::<Vec<_>>(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sanitize_for_display() {
+        // Tabs converted to 4 spaces
+        assert_eq!(sanitize_for_display("a\tb"), "a    b");
+
+        // Carriage returns stripped
+        assert_eq!(sanitize_for_display("a\r\nb"), "a\nb");
+        assert_eq!(sanitize_for_display("a\rb"), "ab");
+
+        // Newlines preserved
+        assert_eq!(sanitize_for_display("a\nb"), "a\nb");
+
+        // Control characters stripped
+        assert_eq!(sanitize_for_display("a\x00b"), "ab");
+        assert_eq!(sanitize_for_display("a\x1fb"), "ab");
+
+        // Normal text unchanged
+        assert_eq!(sanitize_for_display("hello world"), "hello world");
+
+        // Mixed content
+        assert_eq!(
+            sanitize_for_display("line1\r\n\tindented\nline3"),
+            "line1\n    indented\nline3"
+        );
+    }
 }

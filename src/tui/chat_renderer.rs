@@ -1,6 +1,6 @@
 use crate::tui::highlight;
 use crate::tui::message_list::{MessagePart, Sender};
-use crate::tui::{own_line, strip_ansi, QUEUED_PREVIEW_LINES};
+use crate::tui::{own_line, sanitize_for_display, strip_ansi, QUEUED_PREVIEW_LINES};
 use ratatui::prelude::*;
 use ratatui::style::Modifier;
 
@@ -23,7 +23,8 @@ impl ChatRenderer {
                             combined.push_str(text);
                         }
                     }
-                    let combined = combined.trim(); // Trim overall but preserve internal formatting
+                    // Sanitize (tabs, control chars) and trim
+                    let combined = sanitize_for_display(combined.trim());
                     let prefix = "> ";
                     let prefix_len = prefix.chars().count();
                     let available_width = wrap_width.saturating_sub(prefix_len).max(1);
@@ -55,9 +56,10 @@ impl ChatRenderer {
                     for part in &entry.parts {
                         match part {
                             MessagePart::Text(text) => {
-                                // Trim overall message but preserve internal formatting
+                                // Sanitize (tabs, control chars) and trim
+                                let sanitized = sanitize_for_display(text.trim());
                                 let highlighted_lines =
-                                    highlight::highlight_markdown_with_code(text.trim());
+                                    highlight::highlight_markdown_with_code(&sanitized);
                                 for line in highlighted_lines {
                                     let mut padded = vec![Span::raw(" ")];
                                     padded.extend(line.spans);
