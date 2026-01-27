@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "1lso",
+  "title": "[BUG] Kimi k2.5 API error on OpenRouter - investigate model compatibility",
+  "description": null,
+  "status": "open",
+  "priority": 2,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-27T19:12:44.381Z",
+  "updated_at": "2026-01-27T19:12:44.381Z",
+  "completed_at": null,
+  "external": {}
+}

@@ -23,10 +23,14 @@
     {
       "ts": "2026-01-26T18:04:11.048Z",
       "msg": "Solution: Bypass llm-connector, implement direct Anthropic client with reqwest. Full control over cache_control on all content blocks."
+    },
+    {
+      "ts": "2026-01-27T19:12:59.150Z",
+      "msg": "Duplicate of tk-fuig, consolidating here. Need to send cache_control: ephemeral in Anthropic API requests."
     }
   ],
   "created_at": "2026-01-26T01:50:17.422Z",
-  "updated_at": "2026-01-26T18:59:47.618Z",
+  "updated_at": "2026-01-27T19:12:59.150Z",
   "completed_at": null,
   "external": {}
 }

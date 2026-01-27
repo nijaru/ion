@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "fsto",
+  "title": "[UX] Pretty markdown table rendering in chat output",
+  "description": null,
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-27T19:12:47.143Z",
+  "updated_at": "2026-01-27T19:12:47.143Z",
+  "completed_at": null,
+  "external": {}
+}
