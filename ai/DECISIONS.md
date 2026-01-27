@@ -877,3 +877,42 @@ No reason to go through MCP when we can use the Rust crate directly.
 - Evaluate build vs buy decision based on research
 
 **Rationale**: All major terminal agents (Claude Code, Pi, Codex) stream text. Non-streaming feels frozen. For good UX across all providers, we need streaming+tools to work everywhere.
+
+---
+
+## 2026-01-27: TUI v2 - Drop ratatui, Use crossterm Directly
+
+**Context**: `Viewport::Inline(15)` creates a fixed 15-line viewport at the bottom of the terminal. Our UI needs dynamic height (input box grows/shrinks with content). This mismatch causes gaps and visual bugs. Research showed Codex CLI doesn't use `Viewport::Inline` either - they use custom terminal management.
+
+**Decision**: Remove ratatui entirely, use crossterm for direct terminal I/O.
+
+| Component    | Before (ratatui)                | After (crossterm)                   |
+| ------------ | ------------------------------- | ----------------------------------- |
+| Chat history | `insert_before()` to scrollback | `println!()` to stdout              |
+| Bottom UI    | Fixed `Viewport::Inline(15)`    | Cursor positioning, dynamic height  |
+| Widgets      | Paragraph, Block, etc.          | Direct ANSI/box-drawing characters  |
+| Diffing      | Automatic cell diffing          | TBD (may not need with sync output) |
+
+**Architecture**:
+
+```
+Native scrollback (stdout)     Managed bottom area (crossterm)
+├── Header (ion, version)      ├── Progress (1 line)
+├── Chat history               ├── Input (dynamic height)
+├── Tool output                └── Status (1 line)
+└── Blank line after each
+```
+
+**What we keep**: Word wrap algorithm, cursor positioning logic, syntax highlighting - all already implemented in composer/mod.rs and highlight.rs.
+
+**Open questions** (need research):
+
+1. Is cell/line diffing needed, or is synchronized output (CSI 2026) enough?
+2. How to handle terminal resize cleanly?
+3. How to render streaming responses before complete?
+4. How to handle modal UI (selectors) without Viewport?
+5. Should we replace llm-connector for model quirks (Kimi reasoning field)?
+
+**Rationale**: ratatui's Viewport::Inline doesn't support dynamic height. Fighting the framework is worse than not using it. Our actual needs (styled text, borders, cursor positioning) are simple enough that crossterm alone suffices.
+
+**Design doc**: `ai/design/tui-v2.md`

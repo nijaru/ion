@@ -19,10 +19,14 @@
     {
       "ts": "2026-01-27T06:51:26.956Z",
       "msg": "Research complete (tk-xp90). Key findings: (1) Keep ratatui with scrolling-regions feature, (2) Use synchronized output unconditionally, (3) Trust ratatui cell diffing, (4) Don't abandon Viewport - use it with insert_before for history. See ai/research/tui-rendering-research.md"
+    },
+    {
+      "ts": "2026-01-27T21:50:11.550Z",
+      "msg": "Design complete: ai/design/tui-v2.md. Decision: drop ratatui, use crossterm directly. 6 open questions documented for research."
     }
   ],
   "created_at": "2026-01-27T06:40:15.218Z",
-  "updated_at": "2026-01-27T06:51:26.956Z",
+  "updated_at": "2026-01-27T21:50:11.550Z",
   "completed_at": null,
   "external": {}
 }

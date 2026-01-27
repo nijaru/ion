@@ -106,96 +106,111 @@ fn calculate_ui_height(&self) -> u16 {
 | `UI_VIEWPORT_HEIGHT` constant | No fixed viewport                      |
 | `insert_before()`             | Replace with println!()                |
 
-## Open Questions (Need Research)
+## Research Decisions (Completed 2026-01-27)
 
-### Q1: Double Buffering / Cell Diffing
+### Q1-Q2: Diffing & Synchronized Output
 
-**Question:** Is cell diffing worth implementing ourselves?
+**Decision:** No custom diffing needed for bottom UI. Use synchronized output + clear/redraw.
 
-**Context:** ratatui provides automatic cell diffing (only send changed cells to terminal). Research said this is ~2% overhead, 98% is I/O.
+**Rationale:**
 
-**Options:**
+- Bottom UI is 5-15 lines - clear + redraw is fast enough
+- ~98% of render time is I/O syscalls, diffing only saves ~2%
+- Streaming responses need line-level diffing (buffer in managed area)
+- Claude Code's lesson: full redraw per streaming chunk caused 4,000-6,700 scroll events/sec
 
-- A: No diffing - just redraw bottom UI each frame (simpler)
-- B: Implement simple line-based diffing (medium)
-- C: Full cell diffing like ratatui (complex)
+**Pattern:**
 
-**To research:** What does Pi-mono do? What does Codex do? Is the flicker noticeable without diffing if we use synchronized output?
-
-### Q2: Synchronized Output
-
-**Question:** Is CSI 2026 (synchronized output) sufficient to prevent flicker without diffing?
-
-**Context:** We already use `BeginSynchronizedUpdate` / `EndSynchronizedUpdate`. If this prevents flicker, we may not need diffing at all.
-
-**To research:** Test with synchronized output only, no diffing. Does it flicker?
+```rust
+fn render_bottom_ui(&self) -> io::Result<()> {
+    execute!(stdout(), BeginSynchronizedUpdate)?;
+    execute!(stdout(), MoveTo(0, height - ui_height))?;
+    execute!(stdout(), Clear(ClearType::FromCursorDown))?;
+    self.render_progress()?;
+    self.render_input()?;
+    self.render_status()?;
+    execute!(stdout(), EndSynchronizedUpdate)?;
+    Ok(())
+}
+```
 
 ### Q3: Terminal Resize Handling
 
-**Question:** How to handle terminal resize cleanly?
+**Decision:** Width change = full redraw, Height change = position adjust only.
 
-**Context:** When terminal resizes:
+**Rationale:**
 
-- Width change: text reflows in scrollback (terminal handles), our word wrap needs recalculation
-- Height change: our bottom UI position changes
+- Width change: terminal reflows scrollback automatically, we must recalculate word wrap
+- Height change: only bottom UI position changes, quick adjust
+- Always wrap in synchronized output
 
-**Options:**
+**Pattern (pi-mono style):**
 
-- A: Redraw everything on SIGWINCH
-- B: Only recalculate bottom UI position
-- C: Something smarter?
-
-**To research:** What do other tools do? Is there terminal-dependent behavior?
+```
+Width change:  \x1b[3J\x1b[2J\x1b[H + full redraw
+Height change: Recalculate ui_height, reposition, redraw bottom
+```
 
 ### Q4: Streaming Response Rendering
 
-**Question:** How to render streaming responses that aren't yet in scrollback?
+**Decision:** Buffer in managed area, differential render, commit to scrollback on complete.
 
-**Context:** While agent is responding:
+**Rationale:**
 
-- Response streams in token by token
-- Can't println!() each token (would flood scrollback with partial lines)
-- Need to show progress somewhere
+- Can't println() each token (floods scrollback)
+- Codex pattern: AgentMessageDelta updates in-place, AgentMessageComplete pushes to history
+- Line-level diffing for streaming: find first changed line, clear to end, render from there
+- Hide input area during streaming, show progress
 
-**Options:**
+**Pattern:**
 
-- A: Buffer in progress area until complete, then println!()
-- B: Show streaming in a "preview" area above progress
-- C: Show in input area (like Claude Code's thinking display)
+```rust
+match event {
+    AgentMessageDelta(delta) => {
+        self.active_response.push_str(&delta.text);
+        self.render_streaming_area()?;  // differential
+    }
+    AgentMessageComplete => {
+        println!("{}", self.format_response(&self.active_response));
+        println!();  // blank line separator
+        self.active_response.clear();
+    }
+}
+```
 
-**To research:** What does Claude Code do? What does Codex do?
+### Q5: Selector UI
 
-### Q5: Selector UI (Model Picker, etc.)
+**Decision:** Replace bottom UI temporarily with selector (Option A).
 
-**Question:** How to handle modal selectors without Viewport?
+**Rationale:**
 
-**Context:** Currently selectors render in the viewport. Without viewport:
+- No alternate screen complexity
+- Selector never pollutes scrollback history
+- Reuses existing bottom-area rendering infrastructure
+- Filter input + navigable list in the space normally used for input
 
-- Could overlay on bottom area
-- Could use alternate screen temporarily
-- Could be inline expanding list
+### Q6: LLM Client
 
-**Options:**
+**Decision:** Replace llm-connector with custom HTTP client (gradual migration).
 
-- A: Replace bottom UI temporarily with selector
-- B: Push selector to scrollback, use bottom area for filter input
-- C: Something else
+**Rationale:**
 
-**To research:** Prototype and see what feels right.
+- llm-connector blocks cache_control for Anthropic (90% cost reduction)
+- Cannot extract reasoning_content from Kimi K2/DeepSeek R1
+- ~1000 LOC investment, justified by cost savings
 
-### Q6: LLM Client (llm-connector)
+**Phases:**
 
-**Question:** Should we replace llm-connector with our own HTTP client?
+1. Anthropic client with cache_control
+2. Reasoning model support (Kimi K2, DeepSeek R1)
+3. Migrate remaining providers
+4. Remove llm-connector
 
-**Context:** Kimi K2.5 returns responses in `reasoning` field, not `content`. llm-connector doesn't handle this. Other models may have quirks too.
+**Research files:**
 
-**Options:**
-
-- A: Keep llm-connector, post-process responses
-- B: Fork llm-connector, add features we need
-- C: Write our own thin client (it's just HTTP + JSON)
-
-**To research:** How many edge cases exist? Is llm-connector actively maintained?
+- `ai/research/tui-diffing-research.md`
+- `ai/research/tui-resize-streaming-research.md`
+- `ai/research/tui-selectors-http-research.md`
 
 ## Implementation Plan
 
@@ -243,5 +258,5 @@ fn calculate_ui_height(&self) -> u16 {
 
 ## Status
 
-**Phase:** Design complete, ready for research on open questions
-**Next:** Research Q1-Q6, then implement Phase 1
+**Phase:** Research complete, implementing Phase 1
+**Updated:** 2026-01-27
