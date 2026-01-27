@@ -313,6 +313,7 @@ impl App {
                     self.message_queue = None;
                     self.task_start_time = None;
                     self.current_tool = None;
+                    self.retry_status = None;
                     // End thinking tracking
                     if let Some(start) = self.thinking_start.take() {
                         self.last_thinking_duration = Some(start.elapsed());
@@ -329,6 +330,7 @@ impl App {
                     self.message_queue = None;
                     self.task_start_time = None;
                     self.current_tool = None;
+                    self.retry_status = None;
                     self.thinking_start = None;
                     self.last_thinking_duration = None;
                     if !was_cancelled {
