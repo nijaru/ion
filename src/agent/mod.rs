@@ -290,7 +290,7 @@ impl Agent {
             }
 
             // Check for queued user messages between turns
-            if let Some(ref queue) = message_queue {
+            let had_queued = if let Some(ref queue) = message_queue {
                 // Handle poisoned lock by recovering inner data
                 let mut guard = match queue.lock() {
                     Ok(g) => g,
@@ -299,12 +299,21 @@ impl Agent {
                         poisoned.into_inner()
                     }
                 };
+                let had_queued = !guard.is_empty();
                 for queued_msg in guard.drain(..) {
                     session.messages.push(Message {
                         role: Role::User,
                         content: Arc::new(vec![ContentBlock::Text { text: queued_msg }]),
                     });
                 }
+                had_queued
+                // guard dropped here before await
+            } else {
+                false
+            };
+            // Update token count if we added queued messages
+            if had_queued {
+                self.emit_token_usage(&session.messages, &tx).await;
             }
 
             if !self
@@ -713,9 +722,17 @@ impl Agent {
                 }
                 res = set.join_next() => {
                     match res {
-                        Some(res) => {
-                            let (index, block) = res?;
+                        Some(Ok(result)) => {
+                            let (index, block) = result;
                             results[index] = Some(block);
+                        }
+                        Some(Err(e)) => {
+                            // JoinError: task panicked or was cancelled
+                            if e.is_panic() {
+                                return Err(anyhow::anyhow!("Tool task panicked unexpectedly"));
+                            } else {
+                                return Err(anyhow::anyhow!("Tool task cancelled"));
+                            }
                         }
                         None => break,
                     }
