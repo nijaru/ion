@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "6ydy",
+  "title": "[UX] Tool output format review - consider Claude Code style for multi-param calls",
+  "description": null,
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-27T04:43:04.016Z",
+  "updated_at": "2026-01-27T04:43:04.016Z",
+  "completed_at": null,
+  "external": {}
+}
