@@ -306,7 +306,7 @@ impl MessageList {
 
                 let result_content = if is_error {
                     // Clean up error message - keep it concise
-                    let msg = strip_error_prefixes(&result);
+                    let msg = strip_error_prefixes(&result).trim();
                     format!("⎿ Error: {}", truncate_line(msg, TOOL_RESULT_LINE_MAX))
                 } else if is_collapsed_tool {
                     // Collapsed tools: just show line count or OK
@@ -452,7 +452,7 @@ impl MessageList {
                         } = block
                         {
                             let display = if *is_error {
-                                let msg = strip_error_prefixes(content);
+                                let msg = strip_error_prefixes(content).trim();
                                 format!("⎿ Error: {}", truncate_line(msg, TOOL_RESULT_LINE_MAX))
                             } else {
                                 // Format result with actual content
