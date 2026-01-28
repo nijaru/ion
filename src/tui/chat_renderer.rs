@@ -120,8 +120,6 @@ impl ChatRenderer {
                     }
 
                     for line in lines {
-                        let normalized = normalize_tool_error_line(line);
-                        let line = normalized.as_ref();
                         let is_diff_line = is_edit_tool
                             && (line.starts_with('+')
                                 || line.starts_with('-')
@@ -210,6 +208,8 @@ impl ChatRenderer {
                 chat_lines.push(StyledLine::empty());
             }
         }
+
+        collapse_blank_runs(&mut chat_lines);
 
         if wrap_width == 0 {
             return chat_lines;
@@ -377,23 +377,18 @@ fn line_is_blank(line: &StyledLine) -> bool {
         .all(|span| span.content.chars().all(char::is_whitespace))
 }
 
-fn normalize_tool_error_line(line: &str) -> std::borrow::Cow<'_, str> {
-    const PREFIXES: [&str; 2] = ["⎿ Error:", "  Error:"];
-    let prefix = PREFIXES.iter().copied().find(|p| line.starts_with(p));
-    let Some(prefix) = prefix else {
-        return std::borrow::Cow::Borrowed(line);
-    };
-
-    let mut msg = line[prefix.len()..].trim_start();
-    while let Some(stripped) = msg.strip_prefix("Error:") {
-        msg = stripped.trim_start();
+fn collapse_blank_runs(lines: &mut Vec<StyledLine>) {
+    let mut out = Vec::with_capacity(lines.len());
+    let mut prev_blank = false;
+    for line in lines.iter() {
+        let blank = line_is_blank(line);
+        if blank && prev_blank {
+            continue;
+        }
+        out.push(line.clone());
+        prev_blank = blank;
     }
-
-    if msg.is_empty() {
-        return std::borrow::Cow::Borrowed(line);
-    }
-
-    std::borrow::Cow::Owned(format!("{prefix} {msg}"))
+    *lines = out;
 }
 
 fn styled_line_text(line: &StyledLine) -> String {
