@@ -180,9 +180,11 @@ async fn run_tui(
             execute!(stdout, crossterm::terminal::ScrollUp(line_count))?;
 
             // Print at the newly created space (just above where UI will be)
-            execute!(stdout, MoveTo(0, ui_start.saturating_sub(line_count)))?;
+            let mut row = ui_start.saturating_sub(line_count);
             for line in &chat_lines {
+                execute!(stdout, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
                 line.println()?;
+                row = row.saturating_add(1);
             }
         }
 
