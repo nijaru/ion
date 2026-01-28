@@ -16,15 +16,14 @@ mod session;
 pub mod terminal;
 mod types;
 mod util;
-pub mod widgets;
 
 // Re-export public types
 pub use message_list::Sender;
-pub use types::{ApprovalRequest, Mode, SelectorPage, TaskSummary, ThinkingLevel};
+pub use types::{ApprovalRequest, Mode, SelectionState, SelectorPage, TaskSummary, ThinkingLevel};
 
 // Re-export internal utilities for sibling modules
 pub(crate) use types::QUEUED_PREVIEW_LINES;
-pub(crate) use util::{own_line, sanitize_for_display, strip_ansi};
+pub(crate) use util::sanitize_for_display;
 
 use crate::agent::Agent;
 use crate::cli::PermissionSettings;
@@ -37,8 +36,8 @@ use crate::tui::message_list::MessageList;
 use crate::tui::model_picker::ModelPicker;
 use crate::tui::provider_picker::ProviderPicker;
 use crate::tui::session_picker::SessionPicker;
+use crate::tui::terminal::StyledLine;
 use crate::tui::types::ApprovalRequest as ApprovalRequestInternal;
-use ratatui::prelude::*;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::mpsc;
@@ -66,7 +65,7 @@ pub struct App {
     /// Number of chat entries already inserted into scrollback
     pub rendered_entries: usize,
     /// Buffered chat lines while selector is open
-    pub buffered_chat_lines: Vec<Line<'static>>,
+    pub buffered_chat_lines: Vec<StyledLine>,
     pub agent: Arc<Agent>,
     pub session: Session,
     pub orchestrator: Arc<ToolOrchestrator>,

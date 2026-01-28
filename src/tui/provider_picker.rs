@@ -4,11 +4,10 @@
 //! with visual indication of authentication status.
 
 use crate::provider::ProviderStatus;
-use crate::tui::filter_input::{FilterInput, FilterInputState};
+use crate::tui::filter_input::FilterInputState;
+use crate::tui::types::SelectionState;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
-use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState};
 
 /// State for the API provider picker modal.
 #[derive(Default)]
@@ -16,7 +15,7 @@ pub struct ProviderPicker {
     /// All provider statuses (detected on open).
     pub providers: Vec<ProviderStatus>,
     /// List selection state.
-    pub list_state: ListState,
+    pub list_state: SelectionState,
     /// Filter input state for type-to-filter.
     pub filter_input: FilterInputState,
     /// Filtered providers based on search.
@@ -109,104 +108,5 @@ impl ProviderPicker {
         if let Some(idx) = self.filtered.iter().position(|s| s.provider == provider) {
             self.list_state.select(Some(idx));
         }
-    }
-
-    /// Render the picker modal.
-    pub fn render(&mut self, frame: &mut Frame) {
-        let area = frame.area();
-
-        // Size to content: width for longest name + hint, height for items
-        let content_width = 50u16; // Enough for name + auth hint columns
-        let list_height = (self.filtered.len() as u16 + 2).max(5); // +2 for borders, min 5
-        let total_height = 3 + list_height; // search bar + list
-
-        let modal_width = content_width.min(area.width.saturating_sub(4));
-        let modal_height = total_height.min(area.height.saturating_sub(4));
-        let x = (area.width - modal_width) / 2;
-        let y = (area.height - modal_height) / 2;
-        let modal_area = Rect::new(x, y, modal_width, modal_height);
-
-        // Clear the background
-        frame.render_widget(Clear, modal_area);
-
-        // Split into search bar + list
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(3), Constraint::Min(0)])
-            .split(modal_area);
-
-        // Search input
-        let search_block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan))
-            .title(" Filter (type to search) ");
-
-        let search_input = FilterInput::new().block(search_block);
-        frame.render_stateful_widget(search_input, chunks[0], &mut self.filter_input);
-        if let Some(cursor) = self.filter_input.screen_cursor() {
-            frame.set_cursor_position(cursor);
-        }
-
-        // Column width for provider name
-        let name_col_width = 20usize;
-
-        // Provider list
-        let items: Vec<ListItem> = self
-            .filtered
-            .iter()
-            .map(|status| {
-                let (icon, icon_style, name_style) = if status.authenticated {
-                    (
-                        "●",
-                        Style::default().fg(Color::Green),
-                        Style::default().fg(Color::White).bold(),
-                    )
-                } else {
-                    ("○", Style::default().dim(), Style::default().dim())
-                };
-
-                let name = status.provider.name();
-                let name_padded = format!("{:width$}", name, width = name_col_width);
-
-                let auth_hint = if !status.authenticated {
-                    format!(
-                        "set {}",
-                        status.provider.env_vars().first().unwrap_or(&"API_KEY")
-                    )
-                } else {
-                    String::new()
-                };
-
-                let line = Line::from(vec![
-                    Span::styled(icon, icon_style),
-                    Span::raw(" "),
-                    Span::styled(name_padded, name_style),
-                    Span::styled(auth_hint, Style::default().fg(Color::Red).dim()),
-                ]);
-
-                ListItem::new(line)
-            })
-            .collect();
-
-        let filtered_count = self.filtered.len();
-        let selected_idx = self.list_state.selected().unwrap_or(0) + 1;
-        let title = format!(" Providers ({}/{}) ", selected_idx, filtered_count);
-
-        let list = List::new(items)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Cyan))
-                    .title(title),
-            )
-            .highlight_style(
-                Style::default()
-                    .bg(Color::DarkGray)
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
-            )
-            .highlight_symbol("▸ ");
-
-        frame.render_stateful_widget(list, chunks[1], &mut self.list_state);
     }
 }

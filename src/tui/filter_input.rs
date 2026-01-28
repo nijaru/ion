@@ -1,9 +1,6 @@
 //! Simple single-line text input for filter/search fields.
 //!
-//! Minimal implementation to replace rat-text::TextInput for pickers.
-
-use ratatui::prelude::*;
-use ratatui::widgets::{Block, Paragraph, Widget};
+//! Minimal state-only implementation for pickers.
 
 /// Simple single-line input state.
 #[derive(Debug, Clone, Default)]
@@ -98,79 +95,6 @@ impl FilterInputState {
             .nth(char_idx)
             .map(|(i, _)| i)
             .unwrap_or(self.content.len())
-    }
-}
-
-/// Simple single-line input widget.
-#[allow(dead_code)]
-pub struct FilterInput<'a> {
-    block: Option<Block<'a>>,
-    style: Style,
-    placeholder: Option<&'a str>,
-}
-
-impl<'a> FilterInput<'a> {
-    pub fn new() -> Self {
-        Self {
-            block: None,
-            style: Style::default(),
-            placeholder: None,
-        }
-    }
-
-    pub fn block(mut self, block: Block<'a>) -> Self {
-        self.block = Some(block);
-        self
-    }
-}
-
-impl Default for FilterInput<'_> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl StatefulWidget for FilterInput<'_> {
-    type State = FilterInputState;
-
-    fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
-        let inner = if let Some(block) = self.block {
-            let inner = block.inner(area);
-            block.render(area, buf);
-            inner
-        } else {
-            area
-        };
-
-        if inner.width == 0 || inner.height == 0 {
-            state.screen_cursor = None;
-            return;
-        }
-
-        // Render content or placeholder
-        let display_text = if state.content.is_empty() {
-            self.placeholder.unwrap_or("").to_string()
-        } else {
-            state.content.clone()
-        };
-
-        let style = if state.content.is_empty() && self.placeholder.is_some() {
-            Style::default().fg(Color::DarkGray).italic()
-        } else {
-            self.style
-        };
-
-        Paragraph::new(display_text).style(style).render(inner, buf);
-
-        // Calculate cursor screen position
-        let cursor_x = state
-            .content
-            .chars()
-            .take(state.cursor)
-            .map(|c| unicode_width::UnicodeWidthChar::width(c).unwrap_or(0) as u16)
-            .sum::<u16>();
-
-        state.screen_cursor = Some((inner.x + cursor_x, inner.y));
     }
 }
 

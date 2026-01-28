@@ -141,6 +141,10 @@ async fn run_tui(
                     term_width = w;
                     term_height = h;
                     app.handle_event(event::Event::Resize(w, h));
+                    // Clear scrollback + screen + home cursor for full redraw
+                    // \x1b[3J = clear scrollback, \x1b[2J = clear screen, \x1b[H = home cursor
+                    print!("\x1b[3J\x1b[2J\x1b[H");
+                    let _ = std::io::stdout().flush();
                 }
                 _ => {}
             }
@@ -169,7 +173,7 @@ async fn run_tui(
             )?;
 
             // Print the chat lines
-            ion::tui::terminal::print_lines_to_scrollback(&chat_lines)?;
+            ion::tui::terminal::print_styled_lines_to_scrollback(&chat_lines)?;
 
             execute!(stdout, crossterm::cursor::RestorePosition)?;
         }

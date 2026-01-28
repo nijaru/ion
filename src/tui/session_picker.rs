@@ -3,8 +3,7 @@
 use crate::session::{SessionStore, SessionSummary};
 use crate::tui::filter_input::FilterInputState;
 use crate::tui::fuzzy;
-use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
+use crate::tui::types::SelectionState;
 
 /// State for the session picker modal.
 #[derive(Default)]
@@ -16,7 +15,7 @@ pub struct SessionPicker {
     /// Filter input state.
     pub filter_input: FilterInputState,
     /// List state.
-    pub list_state: ListState,
+    pub list_state: SelectionState,
     /// Loading state.
     pub is_loading: bool,
     /// Error message if load failed.
@@ -140,152 +139,5 @@ impl SessionPicker {
         self.list_state
             .selected()
             .and_then(|i| self.filtered_sessions.get(i))
-    }
-
-    /// Render the picker modal.
-    pub fn render(&mut self, frame: &mut Frame) {
-        let area = frame.area();
-
-        // Modal dimensions
-        let content_width = 80u16;
-        let list_len = self.filtered_sessions.len();
-        let list_height = (list_len as u16 + 2).clamp(5, 20);
-        let total_height = 3 + list_height; // search bar + list
-
-        let modal_width = content_width.min(area.width.saturating_sub(4));
-        let modal_height = total_height.min(area.height.saturating_sub(4));
-        let x = (area.width - modal_width) / 2;
-        let y = (area.height - modal_height) / 2;
-        let modal_area = Rect::new(x, y, modal_width, modal_height);
-
-        // Clear the background
-        frame.render_widget(Clear, modal_area);
-
-        // Split into search bar + list
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(3), Constraint::Min(0)])
-            .split(modal_area);
-
-        // Search input
-        use crate::tui::filter_input::FilterInput;
-        let search_block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan))
-            .title(" Filter (type to search) ");
-
-        let search_input = FilterInput::new().block(search_block);
-        frame.render_stateful_widget(search_input, chunks[0], &mut self.filter_input);
-        if let Some(cursor) = self.filter_input.screen_cursor() {
-            frame.set_cursor_position(cursor);
-        }
-
-        // Loading/Error state
-        if self.is_loading {
-            let loading = Paragraph::new("Loading sessions...")
-                .style(Style::default().fg(Color::Yellow))
-                .block(Block::default().borders(Borders::ALL).title(" Loading "));
-            frame.render_widget(loading, chunks[1]);
-            return;
-        }
-
-        if let Some(ref err) = self.error {
-            let error = Paragraph::new(format!("Error: {}", err))
-                .style(Style::default().fg(Color::Red))
-                .block(Block::default().borders(Borders::ALL).title(" Error "));
-            frame.render_widget(error, chunks[1]);
-            return;
-        }
-
-        if self.sessions.is_empty() {
-            let empty = Paragraph::new("No sessions found")
-                .style(Style::default().fg(Color::DarkGray))
-                .block(Block::default().borders(Borders::ALL).title(" Sessions "));
-            frame.render_widget(empty, chunks[1]);
-            return;
-        }
-
-        self.render_session_list(frame, chunks[1]);
-    }
-
-    fn render_session_list(&mut self, frame: &mut Frame, area: Rect) {
-        let items: Vec<ListItem> = self
-            .filtered_sessions
-            .iter()
-            .map(|s| {
-                // Format relative time
-                let time_str = format_relative_time(s.updated_at);
-
-                // Truncate preview
-                let preview = s
-                    .first_user_message
-                    .as_ref()
-                    .map(|m| {
-                        let truncated: String = m.chars().take(40).collect();
-                        if m.chars().count() > 40 {
-                            format!("{}...", truncated)
-                        } else {
-                            truncated
-                        }
-                    })
-                    .unwrap_or_else(|| "(no messages)".to_string());
-
-                // Short ID (first 8 chars)
-                let short_id: String = s.id.chars().take(8).collect();
-
-                let line = Line::from(vec![
-                    Span::styled(format!("{:>8}", time_str), Style::default().fg(Color::Blue)),
-                    Span::raw("  "),
-                    Span::styled(short_id, Style::default().fg(Color::DarkGray)),
-                    Span::raw("  "),
-                    Span::styled(preview, Style::default().fg(Color::White)),
-                ]);
-
-                ListItem::new(line)
-            })
-            .collect();
-
-        let filtered_count = self.filtered_sessions.len();
-        let selected_idx = self.list_state.selected().unwrap_or(0) + 1;
-        let title = format!(" Sessions ({}/{}) ", selected_idx, filtered_count);
-
-        let list = List::new(items)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Cyan))
-                    .title(title),
-            )
-            .highlight_style(
-                Style::default()
-                    .bg(Color::DarkGray)
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
-            )
-            .highlight_symbol("> ");
-
-        frame.render_stateful_widget(list, area, &mut self.list_state);
-    }
-}
-
-/// Format a Unix timestamp as a relative time string.
-fn format_relative_time(timestamp: i64) -> String {
-    let now = chrono::Utc::now().timestamp();
-    let diff = now - timestamp;
-
-    if diff < 60 {
-        "just now".to_string()
-    } else if diff < 3600 {
-        let mins = diff / 60;
-        format!("{}m ago", mins)
-    } else if diff < 86400 {
-        let hours = diff / 3600;
-        format!("{}h ago", hours)
-    } else if diff < 604800 {
-        let days = diff / 86400;
-        format!("{}d ago", days)
-    } else {
-        let weeks = diff / 604800;
-        format!("{}w ago", weeks)
     }
 }

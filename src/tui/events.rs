@@ -36,6 +36,8 @@ impl App {
             Event::Resize(_, _) => {
                 // Invalidate cached width so cursor position is recalculated
                 self.input_state.invalidate_width();
+                // Reset render state to force reprint of all chat
+                self.handle_resize();
             }
             _ => {}
         }
@@ -167,11 +169,6 @@ impl App {
             // Ctrl+T: Cycle thinking level (off → standard → extended → off)
             KeyCode::Char('t') if ctrl => {
                 self.thinking_level = self.thinking_level.next();
-            }
-
-            // Ctrl+S: Take UI snapshot (Debug/Agent only)
-            KeyCode::Char('s') if ctrl => {
-                self.take_snapshot();
             }
 
             // Ctrl+G: Open input in external editor
@@ -539,5 +536,16 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Handle terminal resize: reset state to force reprint of all chat.
+    fn handle_resize(&mut self) {
+        // Reset rendered entries so all chat gets reprinted at new width
+        self.rendered_entries = 0;
+        self.header_inserted = false;
+        self.buffered_chat_lines.clear();
+        // Clear cached render state
+        self.last_render_width = None;
+        self.last_ui_start = None;
     }
 }
