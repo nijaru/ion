@@ -225,6 +225,7 @@ impl App {
             header_inserted: false,
             thinking_start: None,
             last_thinking_duration: None,
+            last_ui_start: None,
         };
 
         // Set initial API provider name on model picker

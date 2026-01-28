@@ -2,7 +2,7 @@
 
 use crate::tool::ToolMode;
 use crate::tui::chat_renderer::ChatRenderer;
-use crate::tui::composer::ComposerWidget;
+use crate::tui::composer::{build_visual_lines, ComposerWidget};
 use crate::tui::filter_input::FilterInput;
 use crate::tui::message_list::Sender;
 use crate::tui::types::{LayoutAreas, Mode, SelectorPage};
@@ -13,6 +13,15 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
 use ratatui::Terminal;
 use std::path::PathBuf;
+
+/// Input prompt prefix " > "
+const PROMPT: &str = " > ";
+/// Continuation line prefix "   "
+const CONTINUATION: &str = "   ";
+/// Width of prompt/continuation prefix
+const PROMPT_WIDTH: u16 = 3;
+/// Total input margin (prompt + right padding)
+const INPUT_MARGIN: u16 = 4;
 
 impl App {
     /// Take a snapshot of the current TUI state for debugging.
@@ -867,17 +876,21 @@ impl App {
         use crossterm::{
             cursor::MoveTo,
             execute,
-            style::{
-                Color as CColor, Print, ResetColor, SetForegroundColor,
-            },
             terminal::{Clear, ClearType},
         };
 
         let ui_height = self.calculate_ui_height(width, height);
         let ui_start = height.saturating_sub(ui_height);
 
-        // Move to start of UI area and clear it
-        execute!(w, MoveTo(0, ui_start), Clear(ClearType::FromCursorDown))?;
+        // Clear from the earlier of old or new UI start (handles resize)
+        let clear_from = match self.last_ui_start {
+            Some(old_start) => old_start.min(ui_start),
+            None => ui_start,
+        };
+        self.last_ui_start = Some(ui_start);
+
+        // Move to start of clear area and clear everything below
+        execute!(w, MoveTo(0, clear_from), Clear(ClearType::FromCursorDown))?;
 
         // Progress line
         execute!(w, MoveTo(0, ui_start))?;
@@ -888,13 +901,7 @@ impl App {
         let input_height = self.calculate_input_height(width, height).saturating_sub(2); // Minus borders
 
         // Top border
-        execute!(w, MoveTo(0, input_start))?;
-        execute!(
-            w,
-            SetForegroundColor(CColor::Cyan),
-            Print("─".repeat(width as usize)),
-            ResetColor
-        )?;
+        draw_horizontal_border(w, input_start, width)?;
 
         // Input content
         let content_start = input_start + 1;
@@ -902,13 +909,7 @@ impl App {
 
         // Bottom border
         let border_row = content_start + input_height;
-        execute!(w, MoveTo(0, border_row))?;
-        execute!(
-            w,
-            SetForegroundColor(CColor::Cyan),
-            Print("─".repeat(width as usize)),
-            ResetColor
-        )?;
+        draw_horizontal_border(w, border_row, width)?;
 
         // Status line
         let status_row = border_row + 1;
@@ -916,15 +917,9 @@ impl App {
         self.render_status_direct(w, width)?;
 
         // Position cursor in input area
-        let (cursor_x, cursor_y) = self.input_state.cursor_pos.into();
-        // Adjust cursor position relative to input area
-        execute!(
-            w,
-            MoveTo(
-                cursor_x,
-                content_start + cursor_y.saturating_sub(input_start)
-            )
-        )?;
+        // cursor_pos is relative (x within content, y is visual line 0-indexed)
+        let (cursor_x, cursor_y) = self.input_state.cursor_pos;
+        execute!(w, MoveTo(cursor_x + PROMPT_WIDTH, content_start + cursor_y))?;
 
         Ok(())
     }
@@ -1011,45 +1006,42 @@ impl App {
         use crossterm::cursor::MoveTo;
 
         let content = self.input_buffer.get_content();
-        let content_width = width.saturating_sub(4) as usize; // " > " prefix + margin
+        let content_width = width.saturating_sub(INPUT_MARGIN) as usize;
 
-        // Simple word wrap for display
-        let mut row = 0u16;
-        let mut first_line = true;
+        // Recalculate cursor position for current width
+        if content_width > 0 {
+            self.input_state
+                .calculate_cursor_pos(&self.input_buffer, content_width);
+        }
 
-        for logical_line in content.lines() {
-            let chars: Vec<char> = logical_line.chars().collect();
-            let mut start = 0;
+        // Use same word-wrap algorithm as cursor calculation
+        let visual_lines = build_visual_lines(&content, content_width);
 
-            loop {
-                if row >= height {
-                    break;
-                }
+        for (row, (start, end)) in visual_lines.iter().enumerate() {
+            if row as u16 >= height {
+                break;
+            }
 
-                let end = (start + content_width).min(chars.len());
-                let chunk: String = chars[start..end].iter().collect();
+            // Extract chunk for this visual line (exclude trailing newline if present)
+            let chunk: String = content
+                .chars()
+                .skip(*start)
+                .take(end.saturating_sub(*start))
+                .filter(|&c| c != '\n')
+                .collect();
 
-                execute!(w, MoveTo(0, start_row + row))?;
-                if first_line {
-                    write!(w, " > {}", chunk)?;
-                    first_line = false;
-                } else {
-                    write!(w, "   {}", chunk)?;
-                }
-
-                row += 1;
-                start = end;
-
-                if start >= chars.len() {
-                    break;
-                }
+            execute!(w, MoveTo(0, start_row + row as u16))?;
+            if row == 0 {
+                write!(w, "{}{}", PROMPT, chunk)?;
+            } else {
+                write!(w, "{}{}", CONTINUATION, chunk)?;
             }
         }
 
-        // If empty, just show the gutter
-        if content.is_empty() && row < height {
+        // If empty, just show the prompt
+        if content.is_empty() {
             execute!(w, MoveTo(0, start_row))?;
-            write!(w, " > ")?;
+            write!(w, "{}", PROMPT)?;
         }
 
         Ok(())
@@ -1108,4 +1100,23 @@ impl App {
 
         Ok(())
     }
+}
+
+/// Draw a horizontal border line at the given row.
+fn draw_horizontal_border<W: std::io::Write>(
+    w: &mut W,
+    row: u16,
+    width: u16,
+) -> std::io::Result<()> {
+    use crossterm::{
+        cursor::MoveTo,
+        style::{Color, Print, ResetColor, SetForegroundColor},
+    };
+    execute!(
+        w,
+        MoveTo(0, row),
+        SetForegroundColor(Color::Cyan),
+        Print("─".repeat(width as usize)),
+        ResetColor
+    )
 }
