@@ -882,15 +882,21 @@ impl App {
         let ui_height = self.calculate_ui_height(width, height);
         let ui_start = height.saturating_sub(ui_height);
 
-        // Clear from the earlier of old or new UI start (handles resize)
-        let clear_from = match self.last_ui_start {
-            Some(old_start) => old_start.min(ui_start),
-            None => ui_start,
-        };
+        // Detect width decrease - terminal rewraps old content, pushing it up
+        let width_decreased = self.last_render_width.map_or(false, |old| width < old);
+        self.last_render_width = Some(width);
+
+        // Clear from min of old/new ui_start to handle UI height changes
+        let clear_from = self.last_ui_start.map_or(ui_start, |old| old.min(ui_start));
         self.last_ui_start = Some(ui_start);
 
-        // Move to start of clear area and clear everything below
-        execute!(w, MoveTo(0, clear_from), Clear(ClearType::FromCursorDown))?;
+        if width_decreased {
+            // Full clear needed: old wider borders got wrapped into multiple lines
+            execute!(w, Clear(ClearType::All), MoveTo(0, ui_start))?;
+        } else {
+            // Clear from earliest UI position to handle shrinking input
+            execute!(w, MoveTo(0, clear_from), Clear(ClearType::FromCursorDown))?;
+        }
 
         // Progress line
         execute!(w, MoveTo(0, ui_start))?;

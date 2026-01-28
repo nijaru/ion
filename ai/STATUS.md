@@ -2,104 +2,77 @@
 
 ## Current State
 
-| Metric     | Value            | Updated    |
-| ---------- | ---------------- | ---------- |
-| Phase      | TUI v2 Migration | 2026-01-27 |
-| Status     | WIP - compiles   | 2026-01-27 |
-| Toolchain  | stable           | 2026-01-22 |
-| Tests      | 107 passing      | 2026-01-27 |
-| Visibility | **PUBLIC**       | 2026-01-22 |
+| Metric     | Value             | Updated    |
+| ---------- | ----------------- | ---------- |
+| Phase      | TUI v3 Design     | 2026-01-27 |
+| Status     | Research complete | 2026-01-27 |
+| Toolchain  | stable            | 2026-01-22 |
+| Tests      | 108 passing       | 2026-01-27 |
+| Visibility | **PUBLIC**        | 2026-01-22 |
 
-## Active Work: TUI v2 Migration
+## TUI Architecture Evolution
 
-**Goal:** Drop `Viewport::Inline(15)` which causes gaps/fixed height bugs. Use direct crossterm rendering.
+### v1: Viewport::Inline(15) - ABANDONED
 
-**Completed:**
+- Fixed 15-line viewport caused gaps and cursor bugs
+- Dynamic input height didn't fit fixed viewport
 
-- [x] Research Q1-Q6 (see ai/research/tui-\*.md)
-- [x] Create terminal.rs with StyledSpan/StyledLine types
-- [x] Add ratatui→crossterm conversion functions
-- [x] Remove ratatui Terminal/Viewport from main.rs
-- [x] Add draw_direct() method in render.rs
-- [x] Add calculate_ui_height() method
+### v2: Direct crossterm, native scrollback - ISSUES FOUND
 
-**In Progress:**
+- Chat printed to native scrollback via println
+- Bottom UI managed with cursor positioning
+- **Problems discovered:**
+  - Can't re-render scrollback content (terminal owns it)
+  - Resize causes terminal rewrap we can't control
+  - Scroll/print/clear logic conflicts
+  - Header not showing, visual artifacts
 
-- [ ] Test basic rendering flow
-- [ ] Fix cursor positioning
-- [ ] Port selector UI (model/provider/session pickers)
-- [ ] Port help overlay
-- [ ] Remove remaining ratatui usage
+### v3: Managed history with exit dump - DESIGNED
 
-## Key Files Changed
+- Manage ALL rendering ourselves (chat + UI)
+- Keep chat history in memory, render visible portion
+- Re-render on resize at new width (like Claude Code)
+- Page Up/Down for scrolling during session
+- On exit: dump formatted history to native scrollback
+- See: `ai/design/tui-v3.md`
 
-| File                  | Changes                                               |
-| --------------------- | ----------------------------------------------------- |
-| `src/main.rs`         | Removed ratatui Terminal/Viewport, uses direct stdout |
-| `src/tui/terminal.rs` | StyledSpan, StyledLine, conversion functions          |
-| `src/tui/render.rs`   | Added draw*direct(), render*\*\_direct() methods      |
-| `src/tui/mod.rs`      | Made terminal module public                           |
+## What Claude Code Does (Observed)
 
-## Architecture (TUI v2)
+1. **During session**: Renders chat from memory (not native scrollback)
+2. **On resize**: ~1s debounce, re-renders at new width
+3. **On exit**: Dumps history to native scrollback, cleans up UI
+4. Result: Terminal prompt appears cleanly, history searchable
 
-```
-Native scrollback (stdout)     Managed bottom area (crossterm)
-├── Header (ion, version)      ├── Progress (1 line)
-├── Chat history               ├── Input (dynamic height)
-├── Tool output                └── Status (1 line)
-└── Blank line after each
-```
+## Next Steps (TUI v3 Implementation)
 
-**Rendering flow in main.rs:**
+1. **Add chat_scroll_offset** to App for virtual scrolling
+2. **Implement render_chat_area()** - format + render visible portion
+3. **Handle Page Up/Down** for scrolling
+4. **Debounce resize** with full re-render
+5. **Exit cleanup** - clear screen, dump history
 
-1. `app.take_chat_inserts()` - get new chat lines (ratatui Lines)
-2. `print_lines_to_scrollback()` - convert and print to stdout
-3. `app.draw_direct()` - render bottom UI with crossterm
+## Known Working (from v2 work)
 
-## Known Issues
-
-1. **Cursor positioning** - cursor_pos calculation may need adjustment
-2. **Selector UI** - not ported, uses ratatui Frame
-3. **Help overlay** - not ported, uses ratatui Frame
-4. **Untested** - needs manual testing
-
-## Research Decisions
-
-| Question        | Decision                                                 |
-| --------------- | -------------------------------------------------------- |
-| Q1-Q2: Diffing  | No diffing for bottom UI. Sync output sufficient.        |
-| Q3: Resize      | Width = full redraw, Height = position adjust only       |
-| Q4: Streaming   | Buffer in managed area, commit to scrollback on complete |
-| Q5: Selectors   | Replace bottom UI temporarily (no alternate screen)      |
-| Q6: HTTP Client | Replace llm-connector with custom client (later phase)   |
-
-## Next Steps
-
-1. **Test the current build** - `cargo run` and verify basic rendering
-2. **Fix cursor** - ensure cursor is positioned correctly in input
-3. **Port selectors** - model/provider/session pickers need crossterm rendering
-4. **Port help overlay** - or simplify to inline text
-5. **Remove ratatui** - once all rendering is crossterm-based
-
-## Files Still Using ratatui
-
-```
-src/tui/render.rs - draw() still exists (old path), draw_direct() is new
-src/tui/chat_renderer.rs - returns Vec<Line> (ratatui type)
-src/tui/highlight.rs - uses ratatui styling
-src/tui/composer/mod.rs - ComposerWidget uses ratatui
-src/tui/filter_input.rs - uses ratatui
-src/tui/model_picker.rs, provider_picker.rs, session_picker.rs - use ratatui
-```
+- [x] Cursor positioning after " > " prompt
+- [x] Display-width word wrap (unicode_width)
+- [x] Word wrap matches cursor calculation (build_visual_lines)
+- [x] Width decrease detection (ClearType::All)
+- [x] UI height change detection (last_ui_start)
 
 ## Module Health
 
 | Module    | Health | Notes                     |
 | --------- | ------ | ------------------------- |
-| tui/      | WIP    | v2 migration in progress  |
+| tui/      | WIP    | v3 design ready           |
 | agent/    | GOOD   | Clean turn loop           |
 | provider/ | OK     | llm-connector limitations |
 | tool/     | GOOD   | Orchestrator + spawn      |
 | session/  | GOOD   | SQLite persistence + WAL  |
 | skill/    | GOOD   | YAML frontmatter          |
 | mcp/      | OK     | Needs tests               |
+
+## Key Design Docs
+
+- `ai/design/tui-v3.md` - Managed history architecture
+- `ai/design/tui-v2.md` - Previous attempt (reference)
+- `ai/research/inline-viewport-scrollback-2026.md` - Research on approaches
