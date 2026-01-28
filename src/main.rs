@@ -120,11 +120,6 @@ async fn run_tui(
     // Track terminal size
     let (mut term_width, mut term_height) = terminal::size()?;
 
-    // Clear screen for TUI startup (preserves scrollback)
-    // \x1b[2J = clear visible screen, \x1b[H = home cursor
-    print!("\x1b[2J\x1b[H");
-    stdout.flush()?;
-
     // Main loop
     loop {
         if event::poll(std::time::Duration::from_millis(50))? {
@@ -160,40 +155,24 @@ async fn run_tui(
         // Begin synchronized output (prevents flicker)
         execute!(stdout, BeginSynchronizedUpdate)?;
 
-        // Print any new chat content to native scrollback
+        // Print any new chat content using insert_before pattern
         let chat_lines = app.take_chat_inserts(term_width);
         if !chat_lines.is_empty() {
             let ui_height = app.calculate_ui_height(term_width, term_height);
-            let chat_area_height = term_height.saturating_sub(ui_height);
             let line_count = chat_lines.len() as u16;
 
-            // Only scroll if we've already filled the chat area
-            if app.scrollback_lines >= chat_area_height {
-                // Set scroll region to chat area only (excludes bottom UI)
-                // DECSTBM: \x1b[<top>;<bottom>r (1-indexed)
-                write!(stdout, "\x1b[1;{}r", chat_area_height)?;
+            // Move to where UI starts, scroll up to make room, then print
+            let ui_start = term_height.saturating_sub(ui_height);
+            execute!(stdout, MoveTo(0, ui_start))?;
 
-                // Scroll up within region
-                execute!(stdout, crossterm::terminal::ScrollUp(line_count))?;
+            // Insert lines by scrolling up (pushes existing content into scrollback)
+            execute!(stdout, crossterm::terminal::ScrollUp(line_count))?;
 
-                // Position at bottom of scroll region and print
-                let print_start = chat_area_height.saturating_sub(line_count);
-                execute!(stdout, MoveTo(0, print_start))?;
-                for line in &chat_lines {
-                    line.println()?;
-                }
-
-                // Reset scroll region
-                write!(stdout, "\x1b[r")?;
-            } else {
-                // Chat area not full yet - just print at current position
-                execute!(stdout, MoveTo(0, app.scrollback_lines))?;
-                for line in &chat_lines {
-                    line.println()?;
-                }
+            // Print at the newly created space (just above where UI will be)
+            execute!(stdout, MoveTo(0, ui_start.saturating_sub(line_count)))?;
+            for line in &chat_lines {
+                line.println()?;
             }
-
-            app.scrollback_lines += line_count;
         }
 
         // Render the bottom UI area
