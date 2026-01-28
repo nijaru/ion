@@ -150,6 +150,17 @@ async fn run_tui(
             }
         }
 
+        // Some terminals don't emit Resize on tab switches; re-check size each frame.
+        if let Ok((w, h)) = terminal::size() {
+            if w != term_width || h != term_height {
+                term_width = w;
+                term_height = h;
+                app.handle_event(event::Event::Resize(w, h));
+                print!("\x1b[3J\x1b[2J\x1b[H");
+                let _ = std::io::stdout().flush();
+            }
+        }
+
         app.update();
 
         // Begin synchronized output (prevents flicker)

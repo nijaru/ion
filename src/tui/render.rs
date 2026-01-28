@@ -175,7 +175,7 @@ impl App {
         }
 
         // Progress line
-        execute!(w, MoveTo(0, ui_start))?;
+        execute!(w, MoveTo(0, ui_start), Clear(ClearType::CurrentLine))?;
         self.render_progress_direct(w, width)?;
 
         // Input area (with borders)
@@ -195,7 +195,7 @@ impl App {
 
         // Status line
         let status_row = border_row + 1;
-        execute!(w, MoveTo(0, status_row))?;
+        execute!(w, MoveTo(0, status_row), Clear(ClearType::CurrentLine))?;
 
         // In selector mode, render selector instead of normal input/status
         if self.mode == Mode::Selector {
