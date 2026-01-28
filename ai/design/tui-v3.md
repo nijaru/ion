@@ -270,11 +270,76 @@ User perception: Instant
 2. Optimize with line caching
 3. Handle edge cases (empty history, very long messages)
 
+## Markdown and Table Rendering
+
+### Current State
+
+We use `tui-markdown` crate for basic markdown rendering. It has limited table support but no responsive/adaptive rendering.
+
+**Note:** Even Claude Code has [table rendering issues](https://github.com/anthropics/claude-code/issues/14641) - this is a hard problem.
+
+### Desired Behavior
+
+**Wide terminal (table fits):**
+
+```
+| Name    | Status  | Duration |
+|---------|---------|----------|
+| Build   | Success | 2.3s     |
+| Test    | Failed  | 45.1s    |
+```
+
+**Narrow terminal (table doesn't fit) - stack columns:**
+
+```
+┌ Row 1 ─────────────
+│ Name:     Build
+│ Status:   Success
+│ Duration: 2.3s
+├ Row 2 ─────────────
+│ Name:     Test
+│ Status:   Failed
+│ Duration: 45.1s
+└────────────────────
+```
+
+### Implementation Approach
+
+1. **Detect markdown tables** during formatting (pulldown-cmark events)
+2. **Measure column widths** based on content
+3. **Check if table fits** in terminal width
+4. **Render appropriately:**
+   - Wide enough → traditional table with proportional columns
+   - Too narrow → stacked key:value format per row
+
+```rust
+fn render_table(table: &Table, width: usize) -> Vec<FormattedLine> {
+    let col_widths = measure_columns(table);
+    let table_width: usize = col_widths.iter().sum() + separators;
+
+    if table_width <= width {
+        render_table_horizontal(table, &col_widths)
+    } else {
+        render_table_stacked(table)
+    }
+}
+```
+
+### Priority
+
+**Phase 5 (post-MVP)** - Current `tui-markdown` is functional for most content. Responsive tables are a polish item.
+
+### Alternatives Considered
+
+- [Termimad](https://lib.rs/crates/termimad) - Has "table balancing" but requires different markdown parser
+- Custom pulldown-cmark handler - More control but more work
+
 ## Open Questions
 
 - [ ] How does Claude Code handle mouse scroll? (Might need mouse event handling)
 - [ ] Should we show a scroll indicator? (e.g., "↑ 50 more lines")
 - [ ] Debounce duration for resize? (Claude Code appears to use ~1s)
+- [ ] Should we switch to Termimad for better table support?
 
 ## References
 
