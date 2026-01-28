@@ -8,6 +8,7 @@ use crate::tui::message_list::Sender;
 use crate::tui::types::{LayoutAreas, Mode, SelectorPage};
 use crate::tui::util::{format_elapsed, format_relative_time, format_tokens};
 use crate::tui::App;
+use crossterm::execute;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
 use ratatui::Terminal;
@@ -77,6 +78,15 @@ impl App {
 
         // Add border overhead and clamp to bounds
         (line_count + BORDER_OVERHEAD).clamp(MIN_HEIGHT, max_height)
+    }
+
+    /// Calculate the total height of the bottom UI area.
+    /// Returns: progress (1) + input (with borders) + status (1)
+    pub fn calculate_ui_height(&self, width: u16, height: u16) -> u16 {
+        let progress_height = 1u16;
+        let input_height = self.calculate_input_height(width, height);
+        let status_height = 1u16;
+        progress_height + input_height + status_height
     }
 
     /// Take new chat entries and render them as lines for insertion.
@@ -844,5 +854,258 @@ impl App {
             .block(Block::default().borders(Borders::ALL).title(" ? Help "));
 
         frame.render_widget(help_para, help_area);
+    }
+
+    /// Direct crossterm rendering (TUI v2 - no ratatui Terminal/Frame).
+    /// Renders the bottom UI area: progress, input, status.
+    pub fn draw_direct<W: std::io::Write>(
+        &mut self,
+        w: &mut W,
+        width: u16,
+        height: u16,
+    ) -> std::io::Result<()> {
+        use crossterm::{
+            cursor::MoveTo,
+            execute,
+            style::{
+                Color as CColor, Print, ResetColor, SetForegroundColor,
+            },
+            terminal::{Clear, ClearType},
+        };
+
+        let ui_height = self.calculate_ui_height(width, height);
+        let ui_start = height.saturating_sub(ui_height);
+
+        // Move to start of UI area and clear it
+        execute!(w, MoveTo(0, ui_start), Clear(ClearType::FromCursorDown))?;
+
+        // Progress line
+        execute!(w, MoveTo(0, ui_start))?;
+        self.render_progress_direct(w, width)?;
+
+        // Input area (with borders)
+        let input_start = ui_start + 1; // After progress line
+        let input_height = self.calculate_input_height(width, height).saturating_sub(2); // Minus borders
+
+        // Top border
+        execute!(w, MoveTo(0, input_start))?;
+        execute!(
+            w,
+            SetForegroundColor(CColor::Cyan),
+            Print("─".repeat(width as usize)),
+            ResetColor
+        )?;
+
+        // Input content
+        let content_start = input_start + 1;
+        self.render_input_direct(w, content_start, width, input_height)?;
+
+        // Bottom border
+        let border_row = content_start + input_height;
+        execute!(w, MoveTo(0, border_row))?;
+        execute!(
+            w,
+            SetForegroundColor(CColor::Cyan),
+            Print("─".repeat(width as usize)),
+            ResetColor
+        )?;
+
+        // Status line
+        let status_row = border_row + 1;
+        execute!(w, MoveTo(0, status_row))?;
+        self.render_status_direct(w, width)?;
+
+        // Position cursor in input area
+        let (cursor_x, cursor_y) = self.input_state.cursor_pos.into();
+        // Adjust cursor position relative to input area
+        execute!(
+            w,
+            MoveTo(
+                cursor_x,
+                content_start + cursor_y.saturating_sub(input_start)
+            )
+        )?;
+
+        Ok(())
+    }
+
+    /// Render progress line directly with crossterm.
+    fn render_progress_direct<W: std::io::Write>(
+        &self,
+        w: &mut W,
+        _width: u16,
+    ) -> std::io::Result<()> {
+        use crossterm::style::{
+            Attribute, Color as CColor, Print, ResetColor, SetAttribute, SetForegroundColor,
+        };
+
+        if !self.is_running {
+            // Show last task summary if available
+            if let Some(ref summary) = self.last_task_summary {
+                let elapsed = format_elapsed(summary.elapsed.as_secs());
+                let mut stats = vec![elapsed];
+                if summary.input_tokens > 0 {
+                    stats.push(format!("↑ {}", format_tokens(summary.input_tokens)));
+                }
+                if summary.output_tokens > 0 {
+                    stats.push(format!("↓ {}", format_tokens(summary.output_tokens)));
+                }
+
+                let (symbol, label, color) = if self.last_error.is_some() {
+                    ("✗ ", "Error", CColor::Red)
+                } else if summary.was_cancelled {
+                    ("⚠ ", "Canceled", CColor::Yellow)
+                } else {
+                    ("✓ ", "Completed", CColor::Green)
+                };
+
+                write!(w, " ")?;
+                execute!(
+                    w,
+                    SetForegroundColor(color),
+                    Print(symbol),
+                    Print(label),
+                    ResetColor
+                )?;
+                execute!(
+                    w,
+                    SetAttribute(Attribute::Dim),
+                    Print(format!(" ({})", stats.join(" · "))),
+                    SetAttribute(Attribute::Reset)
+                )?;
+            }
+            return Ok(());
+        }
+
+        // Running state - show spinner and stats
+        let spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+        let frame = (self.frame_count % spinner.len() as u64) as usize;
+
+        write!(w, " {}", spinner[frame])?;
+
+        // "Ionizing..." or tool name
+        if let Some(ref tool) = self.current_tool {
+            write!(w, " {}", tool)?;
+        } else {
+            write!(w, " Ionizing...")?;
+        }
+
+        // Elapsed time
+        if let Some(start) = self.task_start_time {
+            let elapsed = start.elapsed().as_secs();
+            write!(w, " ({}s", elapsed)?;
+            write!(w, " · Esc to cancel)")?;
+        }
+
+        Ok(())
+    }
+
+    /// Render input content directly with crossterm.
+    fn render_input_direct<W: std::io::Write>(
+        &mut self,
+        w: &mut W,
+        start_row: u16,
+        width: u16,
+        height: u16,
+    ) -> std::io::Result<()> {
+        use crossterm::cursor::MoveTo;
+
+        let content = self.input_buffer.get_content();
+        let content_width = width.saturating_sub(4) as usize; // " > " prefix + margin
+
+        // Simple word wrap for display
+        let mut row = 0u16;
+        let mut first_line = true;
+
+        for logical_line in content.lines() {
+            let chars: Vec<char> = logical_line.chars().collect();
+            let mut start = 0;
+
+            loop {
+                if row >= height {
+                    break;
+                }
+
+                let end = (start + content_width).min(chars.len());
+                let chunk: String = chars[start..end].iter().collect();
+
+                execute!(w, MoveTo(0, start_row + row))?;
+                if first_line {
+                    write!(w, " > {}", chunk)?;
+                    first_line = false;
+                } else {
+                    write!(w, "   {}", chunk)?;
+                }
+
+                row += 1;
+                start = end;
+
+                if start >= chars.len() {
+                    break;
+                }
+            }
+        }
+
+        // If empty, just show the gutter
+        if content.is_empty() && row < height {
+            execute!(w, MoveTo(0, start_row))?;
+            write!(w, " > ")?;
+        }
+
+        Ok(())
+    }
+
+    /// Render status line directly with crossterm.
+    fn render_status_direct<W: std::io::Write>(
+        &self,
+        w: &mut W,
+        _width: u16,
+    ) -> std::io::Result<()> {
+        use crate::tool::ToolMode;
+        use crossterm::style::{
+            Attribute, Color as CColor, Print, ResetColor, SetAttribute, SetForegroundColor,
+        };
+
+        let model_name = self
+            .session
+            .model
+            .split('/')
+            .next_back()
+            .unwrap_or(&self.session.model);
+
+        let (mode_label, mode_color) = match self.tool_mode {
+            ToolMode::Read => ("READ", CColor::Cyan),
+            ToolMode::Write => ("WRITE", CColor::Yellow),
+            ToolMode::Agi => ("AGI", CColor::Red),
+        };
+
+        write!(w, " [")?;
+        execute!(
+            w,
+            SetForegroundColor(mode_color),
+            Print(mode_label),
+            ResetColor
+        )?;
+        write!(w, "] · {}", model_name)?;
+
+        // Token usage if available
+        if let Some((used, max)) = self.token_usage {
+            let format_k = |n: usize| -> String {
+                if n >= 1000 {
+                    format!("{}k", n / 1000)
+                } else {
+                    n.to_string()
+                }
+            };
+            execute!(w, SetAttribute(Attribute::Dim))?;
+            write!(w, " · {}/{}", format_k(used), format_k(max))?;
+            if max > 0 {
+                let pct = (used * 100) / max;
+                write!(w, " ({}%)", pct)?;
+            }
+            execute!(w, SetAttribute(Attribute::Reset))?;
+        }
+
+        Ok(())
     }
 }
