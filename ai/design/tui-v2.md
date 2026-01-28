@@ -136,20 +136,39 @@ fn render_bottom_ui(&self) -> io::Result<()> {
 
 ### Q3: Terminal Resize Handling
 
-**Decision:** Width change = full redraw, Height change = position adjust only.
+**Decision:** Clear screen and reprint everything from memory. No debounce needed.
 
 **Rationale:**
 
-- Width change: terminal reflows scrollback automatically, we must recalculate word wrap
-- Height change: only bottom UI position changes, quick adjust
-- Always wrap in synchronized output
+- Terminal rewrap on resize produces wrong widths for our formatted content
+- Solution: clear and reprint ALL chat from `message_list` at new width
+- Rust is fast - reprinting 500 messages takes <10ms, no debounce needed
+- This is what Claude Code does (~1s debounce because JS/React is slow)
 
-**Pattern (pi-mono style):**
+**Pattern:**
 
+```rust
+fn handle_resize(&mut self) -> io::Result<()> {
+    let (width, height) = terminal::size()?;
+
+    // Clear everything
+    execute!(stdout(), Clear(ClearType::All), MoveTo(0, 0))?;
+
+    // Reprint all chat history from memory at new width
+    for entry in &self.message_list.entries {
+        let formatted = ChatRenderer::format_entry(entry, width);
+        println!("{}", formatted);
+        println!();  // blank line separator
+    }
+
+    // Re-render bottom UI at new position
+    self.render_bottom_ui()?;
+
+    Ok(())
+}
 ```
-Width change:  \x1b[3J\x1b[2J\x1b[H + full redraw
-Height change: Recalculate ui_height, reposition, redraw bottom
-```
+
+**Why no debounce:** Claude Code debounces for ~1s because Ink/React rerenders are slow. In Rust, string formatting and printing is fast enough to handle every resize event.
 
 ### Q4: Streaming Response Rendering
 
@@ -258,5 +277,16 @@ match event {
 
 ## Status
 
-**Phase:** Research complete, implementing Phase 1
+**Phase:** Research complete, ready to implement
 **Updated:** 2026-01-27
+
+## Summary
+
+Simple architecture:
+
+1. Chat → `println!()` to native scrollback (scroll/search work)
+2. Bottom UI → cursor positioning + clear/redraw
+3. Resize → clear screen, reprint all chat from `message_list`, re-render bottom UI
+4. Exit → clear bottom UI only, chat history stays in scrollback
+
+No ratatui. No managed area. No exit dump. Just print to terminal and reprint on resize.
