@@ -245,30 +245,74 @@ User perception: Instant
 
 ## Implementation Plan
 
+### Phase 0: Codebase Reorganization (DO FIRST)
+
+Refactor early to prevent issues later. Split render.rs and establish clean module structure.
+
+**New structure:**
+
+```
+src/tui/
+├── render/
+│   ├── mod.rs          # Render loop coordination, draw_frame()
+│   ├── chat.rs         # Chat area rendering (TUI v3 core)
+│   ├── bottom_ui.rs    # Input, status, progress (from draw_direct)
+│   └── legacy.rs       # Old ratatui Frame path (selectors, help)
+├── viewport.rs         # Chat viewport state management
+│   - FormattedCache    # Cached lines per width
+│   - scroll_offset     # Virtual scroll position
+│   - visible_range()   # Calculate visible slice
+├── composer/           # Keep as-is (input handling)
+├── message_list.rs     # Keep as-is (chat storage)
+├── ...                 # Rest unchanged
+```
+
+**Steps:**
+
+1. Create `render/` directory
+2. Move `draw_direct` + helpers → `render/bottom_ui.rs`
+3. Move old `draw(Frame)` → `render/legacy.rs`
+4. Create `render/mod.rs` with `draw_frame()` coordinator
+5. Create `viewport.rs` with format cache + scroll state
+6. Create `render/chat.rs` (initially empty, filled in Phase 1)
+7. Update imports, verify builds
+
 ### Phase 1: Managed Chat Rendering
 
-1. Add `chat_scroll_offset` to App
-2. Implement `format_chat_history(width) -> Vec<String>`
-3. Render visible portion instead of println
-4. Handle Page Up/Down
+1. Implement `FormattedCache` in viewport.rs
+2. Implement `format_chat_history(width) -> Vec<FormattedLine>`
+3. Implement `render_chat_area()` in render/chat.rs
+4. Integrate into main render loop
+5. Handle Page Up/Down for virtual scroll
 
 ### Phase 2: Resize Handling
 
-1. Debounce resize events
-2. Full clear + re-render on resize
-3. Test with varying widths
+1. Add resize debounce (100-500ms)
+2. Invalidate format cache on width change
+3. Full clear + re-render on resize
+4. Test with varying widths
 
 ### Phase 3: Exit Cleanup
 
 1. Clear screen on exit
-2. Dump formatted history to stdout
+2. Dump formatted history to stdout (native scrollback)
 3. Ensure clean terminal state (cursor visible, raw mode off)
+4. Test: history searchable after exit
 
-### Phase 4: Polish
+### Phase 4: Selector Migration
 
-1. Scroll position indicator
-2. Optimize with line caching
-3. Handle edge cases (empty history, very long messages)
+1. Port model_picker to direct crossterm
+2. Port provider_picker to direct crossterm
+3. Port session_picker to direct crossterm
+4. Port help overlay
+5. Remove render/legacy.rs and ratatui dependency
+
+### Phase 5: Polish
+
+1. Scroll position indicator ("↑ 50 more lines")
+2. Responsive table rendering
+3. Mouse scroll support (if needed)
+4. Optimize with lazy formatting (if needed)
 
 ## Markdown and Table Rendering
 

@@ -5,65 +5,61 @@
 | Metric     | Value             | Updated    |
 | ---------- | ----------------- | ---------- |
 | Phase      | TUI v3 Design     | 2026-01-27 |
-| Status     | Research complete | 2026-01-27 |
+| Status     | Ready to refactor | 2026-01-27 |
 | Toolchain  | stable            | 2026-01-22 |
 | Tests      | 108 passing       | 2026-01-27 |
 | Visibility | **PUBLIC**        | 2026-01-22 |
 
 ## TUI Architecture Evolution
 
-### v1: Viewport::Inline(15) - ABANDONED
+| Version | Approach                            | Status                              |
+| ------- | ----------------------------------- | ----------------------------------- |
+| v1      | Viewport::Inline(15) fixed height   | ABANDONED - gaps, cursor bugs       |
+| v2      | Direct crossterm, native scrollback | ISSUES - can't re-render scrollback |
+| v3      | Managed history, exit dump          | DESIGNED - ready to implement       |
 
-- Fixed 15-line viewport caused gaps and cursor bugs
-- Dynamic input height didn't fit fixed viewport
+## Next Session: TUI v3 Implementation
 
-### v2: Direct crossterm, native scrollback - ISSUES FOUND
+**Start with Phase 0: Codebase Reorganization**
 
-- Chat printed to native scrollback via println
-- Bottom UI managed with cursor positioning
-- **Problems discovered:**
-  - Can't re-render scrollback content (terminal owns it)
-  - Resize causes terminal rewrap we can't control
-  - Scroll/print/clear logic conflicts
-  - Header not showing, visual artifacts
+See `ai/design/tui-v3.md` for full plan.
 
-### v3: Managed history with exit dump - DESIGNED
+```
+src/tui/
+├── render/
+│   ├── mod.rs          # Render loop coordination
+│   ├── chat.rs         # Chat area rendering (v3 core)
+│   ├── bottom_ui.rs    # Input, status, progress
+│   └── legacy.rs       # Old ratatui path (temporary)
+├── viewport.rs         # Format cache, virtual scroll
+├── ...
+```
 
-- Manage ALL rendering ourselves (chat + UI)
-- Keep chat history in memory, render visible portion
-- Re-render on resize at new width (like Claude Code)
-- Page Up/Down for scrolling during session
-- On exit: dump formatted history to native scrollback
-- See: `ai/design/tui-v3.md`
+**Then Phase 1: Managed Chat Rendering**
 
-## What Claude Code Does (Observed)
+- FormattedCache with width-based invalidation
+- Virtual scroll with Page Up/Down
+- Render visible portion only
 
-1. **During session**: Renders chat from memory (not native scrollback)
-2. **On resize**: ~1s debounce, re-renders at new width
-3. **On exit**: Dumps history to native scrollback, cleans up UI
-4. Result: Terminal prompt appears cleanly, history searchable
+## What Claude Code Does (Reference)
 
-## Next Steps (TUI v3 Implementation)
+1. Renders chat from memory (not native scrollback)
+2. Re-renders on resize (~1s debounce)
+3. On exit: dumps history to native scrollback
+4. Result: clean terminal, searchable history
 
-1. **Add chat_scroll_offset** to App for virtual scrolling
-2. **Implement render_chat_area()** - format + render visible portion
-3. **Handle Page Up/Down** for scrolling
-4. **Debounce resize** with full re-render
-5. **Exit cleanup** - clear screen, dump history
+## Key Design Decisions
 
-## Known Working (from v2 work)
-
-- [x] Cursor positioning after " > " prompt
-- [x] Display-width word wrap (unicode_width)
-- [x] Word wrap matches cursor calculation (build_visual_lines)
-- [x] Width decrease detection (ClearType::All)
-- [x] UI height change detection (last_ui_start)
+- Display history (`message_list`) separate from agent context
+- Compaction doesn't affect visible chat
+- Only render visible lines (O(visible) not O(total))
+- Cache formatted lines, invalidate on width change
 
 ## Module Health
 
 | Module    | Health | Notes                     |
 | --------- | ------ | ------------------------- |
-| tui/      | WIP    | v3 design ready           |
+| tui/      | WIP    | v3 refactor next          |
 | agent/    | GOOD   | Clean turn loop           |
 | provider/ | OK     | llm-connector limitations |
 | tool/     | GOOD   | Orchestrator + spawn      |
@@ -71,8 +67,8 @@
 | skill/    | GOOD   | YAML frontmatter          |
 | mcp/      | OK     | Needs tests               |
 
-## Key Design Docs
+## Key Files
 
-- `ai/design/tui-v3.md` - Managed history architecture
+- `ai/design/tui-v3.md` - Full implementation plan
 - `ai/design/tui-v2.md` - Previous attempt (reference)
-- `ai/research/inline-viewport-scrollback-2026.md` - Research on approaches
+- `ai/research/inline-viewport-scrollback-2026.md` - Research
