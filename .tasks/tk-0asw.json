@@ -31,10 +31,14 @@
     {
       "ts": "2026-01-28T22:35:45.355Z",
       "msg": "Trim trailing whitespace-only lines per entry to keep tool spacing at one blank line."
+    },
+    {
+      "ts": "2026-01-28T22:57:35.716Z",
+      "msg": "Trim leading blank lines per entry; normalize tool error lines to drop repeated Error: prefix."
     }
   ],
   "created_at": "2026-01-28T18:29:20.190Z",
-  "updated_at": "2026-01-28T22:35:45.355Z",
+  "updated_at": "2026-01-28T22:57:35.716Z",
   "completed_at": null,
   "external": {}
 }
