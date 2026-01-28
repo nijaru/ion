@@ -35,10 +35,14 @@
     {
       "ts": "2026-01-28T22:57:35.716Z",
       "msg": "Trim leading blank lines per entry; normalize tool error lines to drop repeated Error: prefix."
+    },
+    {
+      "ts": "2026-01-28T23:09:37.369Z",
+      "msg": "Collapse consecutive blank lines after rendering entries; remove render-time tool error normalization (handled at source)."
     }
   ],
   "created_at": "2026-01-28T18:29:20.190Z",
-  "updated_at": "2026-01-28T22:57:35.716Z",
+  "updated_at": "2026-01-28T23:09:37.369Z",
   "completed_at": null,
   "external": {}
 }
