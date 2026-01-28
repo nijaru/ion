@@ -512,20 +512,33 @@ impl App {
         let spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
         let frame = (self.frame_count % spinner.len() as u64) as usize;
 
-        write!(w, " {}", spinner[frame])?;
+        // Cyan spinner
+        execute!(
+            w,
+            Print(" "),
+            SetForegroundColor(CColor::Cyan),
+            Print(spinner[frame]),
+            ResetColor
+        )?;
 
-        // "Ionizing..." or tool name
+        // "Ionizing..." or tool name in cyan
+        execute!(w, SetForegroundColor(CColor::Cyan))?;
         if let Some(ref tool) = self.current_tool {
-            write!(w, " {}", tool)?;
+            execute!(w, Print(format!(" {}", tool)))?;
         } else {
-            write!(w, " Ionizing...")?;
+            execute!(w, Print(" Ionizing..."))?;
         }
+        execute!(w, ResetColor)?;
 
-        // Elapsed time
+        // Elapsed time in dim
         if let Some(start) = self.task_start_time {
             let elapsed = start.elapsed().as_secs();
-            write!(w, " ({}s", elapsed)?;
-            write!(w, " · Esc to cancel)")?;
+            execute!(
+                w,
+                SetAttribute(Attribute::Dim),
+                Print(format!(" ({}s · Esc to cancel)", elapsed)),
+                SetAttribute(Attribute::Reset)
+            )?;
         }
 
         Ok(())
