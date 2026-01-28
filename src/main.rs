@@ -59,20 +59,19 @@ async fn run_tui(
     resume_option: ResumeOption,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use crossterm::{
+        cursor::{MoveTo, Show},
         event::{
             self, DisableBracketedPaste, EnableBracketedPaste, KeyboardEnhancementFlags,
             PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
         },
         execute,
         terminal::{
-            disable_raw_mode, enable_raw_mode, supports_keyboard_enhancement,
-            BeginSynchronizedUpdate, EndSynchronizedUpdate,
+            self, disable_raw_mode, enable_raw_mode, supports_keyboard_enhancement,
+            BeginSynchronizedUpdate, Clear, ClearType, EndSynchronizedUpdate,
         },
     };
     use ion::tui::App;
-    use ratatui::{TerminalOptions, Viewport, prelude::*};
-    use ratatui::widgets::{Paragraph, Wrap};
-    use std::io;
+    use std::io::{self, Write};
 
     // Setup terminal
     enable_raw_mode()?;
@@ -89,8 +88,6 @@ async fn run_tui(
             PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
         )?;
     }
-
-    let backend = CrosstermBackend::new(stdout);
 
     // Create app with permission settings
     let mut app = App::with_permissions(permissions).await?;
@@ -117,20 +114,11 @@ async fn run_tui(
         }
     }
 
-    // Fixed-size viewport for UI only. Chat content appears above via insert_before.
-    // Using a fixed size (not full terminal height) ensures inserted content is visible.
-    // Never recreated to preserve scrollback.
-    // 15 lines allows: progress (2) + input (up to 12) + status (1)
-    const UI_VIEWPORT_HEIGHT: u16 = 15;
-    let mut terminal = Terminal::with_options(
-        backend,
-        TerminalOptions {
-            viewport: Viewport::Inline(UI_VIEWPORT_HEIGHT),
-        },
-    )?;
-
     // Check for debug mode via environment variable
     let debug_events = std::env::var("ION_DEBUG_EVENTS").is_ok();
+
+    // Track terminal size
+    let (mut term_width, mut term_height) = terminal::size()?;
 
     // Main loop
     loop {
@@ -150,9 +138,8 @@ async fn run_tui(
                     app.handle_event(event::Event::Paste(text));
                 }
                 event::Event::Resize(w, h) => {
-                    // Inline viewports auto-resize during draw().
-                    // Recreating the terminal would break scrollback preservation.
-                    // But we need to invalidate cached cursor position width.
+                    term_width = w;
+                    term_height = h;
                     app.handle_event(event::Event::Resize(w, h));
                 }
                 _ => {}
@@ -161,33 +148,38 @@ async fn run_tui(
 
         app.update();
 
-        // Begin synchronized output (prevents flicker, ignored by unsupported terminals)
-        execute!(terminal.backend_mut(), BeginSynchronizedUpdate)?;
+        // Begin synchronized output (prevents flicker)
+        execute!(stdout, BeginSynchronizedUpdate)?;
 
-        let width = terminal.size()?.width;
-        let chat_lines = app.take_chat_inserts(width);
+        // Print any new chat content to native scrollback
+        let chat_lines = app.take_chat_inserts(term_width);
         if !chat_lines.is_empty() {
-            let wrap_width = width.saturating_sub(2);
-            if wrap_width > 0 {
-                let paragraph = Paragraph::new(chat_lines.clone()).wrap(Wrap { trim: false });
-                // Calculate height by counting wrapped lines
-                let height = count_wrapped_lines(&chat_lines, wrap_width as usize);
-                if height > 0 {
-                    let height = u16::try_from(height).unwrap_or(u16::MAX);
-                    // With scrolling-regions feature, insert_before uses scroll regions
-                    // to avoid flicker when pushing content into scrollback
-                    terminal.insert_before(height, |buf| {
-                        let area = Rect::new(1, 0, wrap_width, height);
-                        paragraph.render(area, buf);
-                    })?;
-                }
-            }
+            // Move cursor to where we want to insert (above bottom UI)
+            let ui_height = app.calculate_ui_height(term_width, term_height);
+            let insert_row = term_height.saturating_sub(ui_height);
+
+            // Save cursor, move to insert position, print lines, restore
+            execute!(stdout, crossterm::cursor::SavePosition)?;
+            execute!(stdout, MoveTo(0, insert_row))?;
+
+            // Use scroll region to push content up
+            execute!(
+                stdout,
+                crossterm::terminal::ScrollUp(chat_lines.len() as u16)
+            )?;
+
+            // Print the chat lines
+            ion::tui::terminal::print_lines_to_scrollback(&chat_lines)?;
+
+            execute!(stdout, crossterm::cursor::RestorePosition)?;
         }
 
-        terminal.draw(|f| app.draw(f))?;
+        // Render the bottom UI area
+        app.draw_direct(&mut stdout, term_width, term_height)?;
 
         // End synchronized output
-        execute!(terminal.backend_mut(), EndSynchronizedUpdate)?;
+        execute!(stdout, EndSynchronizedUpdate)?;
+        stdout.flush()?;
 
         if app.should_quit {
             break;
@@ -198,19 +190,19 @@ async fn run_tui(
             app.editor_requested = false;
 
             // Temporarily restore terminal for editor
-            execute!(terminal.backend_mut(), DisableBracketedPaste)?;
+            execute!(stdout, DisableBracketedPaste)?;
             if supports_enhancement {
-                execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags)?;
+                execute!(stdout, PopKeyboardEnhancementFlags)?;
             }
             disable_raw_mode()?;
-            terminal.show_cursor()?;
+            execute!(stdout, Show)?;
 
             // Open editor and get result (handle errors gracefully)
             match open_editor(&app.input_buffer.get_content()) {
                 Ok(Some(new_input)) => app.set_input_text(&new_input),
                 Ok(None) => {} // No changes or editor cancelled
                 Err(e) => {
-                    // Show error in TUI chat instead of stderr (which may be hidden in raw mode)
+                    // Show error in TUI chat instead of stderr
                     app.message_list.push_entry(
                         ion::tui::message_list::MessageEntry::new(
                             ion::tui::message_list::Sender::System,
@@ -222,10 +214,10 @@ async fn run_tui(
 
             // Re-enter TUI mode
             enable_raw_mode()?;
-            execute!(terminal.backend_mut(), EnableBracketedPaste)?;
+            execute!(stdout, EnableBracketedPaste)?;
             if supports_enhancement {
                 execute!(
-                    terminal.backend_mut(),
+                    stdout,
                     PushKeyboardEnhancementFlags(
                         KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
                     )
@@ -234,40 +226,20 @@ async fn run_tui(
         }
     }
 
-    // Clear viewport before exit to prevent input box from being left in scrollback
-    terminal.draw(|frame| {
-        frame.render_widget(ratatui::widgets::Clear, frame.area());
-    })?;
+    // Clear bottom UI area before exit
+    let ui_height = app.calculate_ui_height(term_width, term_height);
+    let ui_start = term_height.saturating_sub(ui_height);
+    execute!(stdout, MoveTo(0, ui_start), Clear(ClearType::FromCursorDown))?;
 
     // Restore terminal
-    execute!(terminal.backend_mut(), DisableBracketedPaste)?;
+    execute!(stdout, DisableBracketedPaste)?;
     if supports_enhancement {
-        execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags)?;
+        execute!(stdout, PopKeyboardEnhancementFlags)?;
     }
     disable_raw_mode()?;
-    terminal.show_cursor()?;
+    execute!(stdout, Show)?;
 
     Ok(())
-}
-
-/// Count the number of lines after wrapping text to a given width.
-fn count_wrapped_lines(lines: &[ratatui::prelude::Line], width: usize) -> usize {
-    use unicode_width::UnicodeWidthStr;
-
-    if width == 0 {
-        return lines.len();
-    }
-
-    let mut count = 0;
-    for line in lines {
-        let line_width: usize = line.spans.iter().map(|s| s.content.width()).sum();
-        if line_width == 0 {
-            count += 1;
-        } else {
-            count += line_width.div_ceil(width);
-        }
-    }
-    count
 }
 
 /// Open text in external editor, returns edited content or None if unchanged/cancelled

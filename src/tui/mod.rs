@@ -13,7 +13,7 @@ pub mod provider_picker;
 mod render;
 pub mod session_picker;
 mod session;
-mod terminal;
+pub mod terminal;
 mod types;
 mod util;
 pub mod widgets;
