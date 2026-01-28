@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "5ayv",
+  "title": "[UX] Markdown table rendering with width-aware wrapping",
+  "description": null,
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-28T19:11:43.112Z",
+  "updated_at": "2026-01-28T19:11:43.112Z",
+  "completed_at": null,
+  "external": {}
+}

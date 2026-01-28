@@ -183,19 +183,19 @@ pub struct Cli {
     #[arg(long = "agi", global = true)]
     pub agi_mode: bool,
 
-    /// Resume the most recent session from current directory
-    #[arg(long = "resume", conflicts_with = "session_id")]
-    pub resume: bool,
+    /// Continue the most recent session from current directory
+    #[arg(long = "continue", conflicts_with = "resume")]
+    pub continue_session: bool,
 
-    /// Continue the most recent session (or specify a session ID)
+    /// Resume a session (open selector if omitted)
     #[arg(
-        long = "continue",
+        long = "resume",
         value_name = "SESSION_ID",
         num_args = 0..=1,
-        default_missing_value = "__LATEST__",
-        conflicts_with = "resume"
+        default_missing_value = "__SELECT__",
+        conflicts_with = "continue_session"
     )]
-    pub session_id: Option<String>,
+    pub resume: Option<String>,
 }
 
 #[derive(Subcommand, Debug)]

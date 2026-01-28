@@ -511,7 +511,7 @@ impl App {
     }
 
     /// Open session selector (/resume).
-    pub(super) fn open_session_selector(&mut self) {
+    pub fn open_session_selector(&mut self) {
         self.mode = Mode::Selector;
         self.selector_page = SelectorPage::Session;
         self.session_picker.load_sessions(&self.store, 50);
