@@ -27,10 +27,14 @@
     {
       "ts": "2026-01-28T22:28:29.112Z",
       "msg": "Trim trailing empty lines per entry to enforce single separator line; add blank line after top-level lists."
+    },
+    {
+      "ts": "2026-01-28T22:35:45.355Z",
+      "msg": "Trim trailing whitespace-only lines per entry to keep tool spacing at one blank line."
     }
   ],
   "created_at": "2026-01-28T18:29:20.190Z",
-  "updated_at": "2026-01-28T22:28:29.112Z",
+  "updated_at": "2026-01-28T22:35:45.355Z",
   "completed_at": null,
   "external": {}
 }
