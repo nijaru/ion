@@ -64,7 +64,7 @@
 
 **2026-01-28:** TUI v2 review. Fixed cursor wrap drift + scrollback CRLF; added input normalization + markdown list cleanup; added input scroll; resize now reflows chat by clearing scrollback when chat exists.
 **2026-01-28:** Anchored startup UI near header, added width-aware chat wrapping, and tightened markdown list rendering. Need terminal verification.
-**2026-01-28:** Exit now clears only UI rows; --continue errors reported in chat. Needs repro if behavior still wrong.
+**2026-01-28:** Exit now avoids adding system "Session closed" message; empty/system-only sessions are skipped and pruned on startup; list_recent filters to sessions with user messages.
 
 ## Module Health
 

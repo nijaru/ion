@@ -38,6 +38,10 @@
   - Location: `src/main.rs` exit cleanup
   - Impact: blank scrollback gap after quitting TUI
   - Fix: clear only UI rows, keep cursor near UI start
+- [LOW] --continue may load empty sessions
+  - Location: `src/session/store.rs`, `src/tui/session.rs`
+  - Impact: resume shows empty UI instead of last conversation
+  - Fix: skip saving empty/system-only sessions, prune empty sessions, filter list_recent to user messages
 
 ## Fixes Applied
 
@@ -48,6 +52,7 @@
 - Anchor startup UI near header; clear anchored UI on exit.
 - Wrap StyledLine output to terminal width for resize reflow.
 - Exit clears only UI rows instead of whole screen.
+- Skip saving empty/system-only sessions; prune empty sessions on startup; list_recent filters to sessions with user messages.
 
 ## Plan
 
