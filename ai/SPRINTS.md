@@ -19,6 +19,7 @@ Updated: 2026-01-23
 | 8      | Core Loop & TUI Deep Review       | COMPLETE |
 | 9      | Feature Parity & Extensibility    | COMPLETE |
 | 10     | Stabilization & Refactor          | COMPLETE |
+| 11     | TUI v2: Remove ratatui            | PLANNED  |
 
 ## Sprint 0: TUI Architecture - Custom Text Entry + Viewport Fix
 
@@ -1807,3 +1808,591 @@ Final verification of all changes.
 - [ ] All S10 tasks complete
 - [ ] No regressions
 - [ ] ai/STATUS.md reflects current state
+
+---
+
+## Sprint 11: TUI v2 - Remove ratatui, Pure Crossterm
+
+**Goal:** Remove ratatui dependency, use crossterm directly. Native scroll/search work.
+**Source:** `ai/design/tui-v2.md`
+**Status:** PLANNED
+
+### Overview
+
+Key behaviors:
+
+- Chat prints to native scrollback (scroll/search work)
+- Resize: clear scrollback + reprint everything (no duplicates)
+- Streaming: print lines to scrollback as received, input hidden during stream
+- Exit: clear bottom UI only, chat stays in scrollback
+
+### Dependency Graph (Revised)
+
+```
+Phase 1: Foundation
+S11-T1 (StyledLine API)
+
+Phase 2: Rendering (sequential - highlight must come before chat_renderer)
+S11-T2 (highlight functions) ──> S11-T3 (markdown renderer) ──> S11-T4 (chat_renderer)
+
+Phase 3: Core Behavior
+S11-T5 (resize handler)
+S11-T6 (streaming to scrollback)
+
+Phase 4: Selectors
+S11-T7 (selector base) ──> S11-T8 (provider) ──> S11-T9 (model) ──> S11-T10 (session)
+
+Phase 5: Cleanup
+S11-T11 (delete ratatui render path)
+S11-T12 (delete widgets)
+S11-T13 (remove ratatui from Cargo.toml)
+S11-T14 (dead code + exit cleanup)
+```
+
+---
+
+## Task: S11-T1 Consolidate StyledLine API
+
+**Sprint:** 11
+**Depends on:** none
+**Status:** PENDING
+
+### Description
+
+terminal.rs has `StyledLine`/`StyledSpan`. Make it the canonical type, remove ratatui conversion functions.
+
+### Implementation
+
+```rust
+// Add to StyledLine
+pub fn println(&self) -> io::Result<()> {
+    self.write_to(&mut io::stdout())?;
+    writeln!(io::stdout())
+}
+
+// Add to StyledSpan
+pub fn bold(content: impl Into<String>) -> Self { ... }
+pub fn italic(content: impl Into<String>) -> Self { ... }
+```
+
+### Acceptance Criteria
+
+- [ ] Remove `convert_style()`, `convert_span()`, `convert_line()`, `convert_lines()`
+- [ ] Remove `print_lines_to_scrollback()` (will be replaced)
+- [ ] Add `StyledLine::println()` convenience method
+- [ ] Add `StyledSpan::bold()`, `StyledSpan::italic()` builders
+- [ ] `cargo build` passes
+
+**Files:** `src/tui/terminal.rs`
+
+---
+
+## Task: S11-T2 Migrate highlight functions to StyledLine
+
+**Sprint:** 11
+**Depends on:** S11-T1
+**Status:** PENDING
+
+### Description
+
+Migrate syntax highlighting functions to return `StyledLine`. Keep syntect integration.
+
+### Implementation
+
+```rust
+pub fn highlight_diff_line(line: &str) -> StyledLine {
+    let color = if line.starts_with('+') { Color::Green } else { ... };
+    StyledLine::new(vec![StyledSpan::colored(line, color)])
+}
+
+pub fn highlight_line(line: &str, syntax: &str) -> StyledLine {
+    // Same syntect logic, output to StyledSpan instead of ratatui Span
+}
+```
+
+### Acceptance Criteria
+
+- [ ] `highlight_diff_line()` returns `StyledLine`
+- [ ] `highlight_line()` returns `StyledLine`
+- [ ] `highlight_code_block()` returns `Vec<StyledLine>`
+- [ ] Syntect highlighting preserved
+- [ ] `cargo build` passes
+
+**Files:** `src/tui/highlight.rs`
+
+---
+
+## Task: S11-T3 Replace tui-markdown with pulldown-cmark renderer
+
+**Sprint:** 11
+**Depends on:** S11-T2
+**Status:** PENDING
+
+### Description
+
+tui-markdown depends on ratatui. Replace with custom renderer using pulldown-cmark.
+
+### Implementation
+
+```rust
+pub fn render_markdown(text: &str) -> Vec<StyledLine> {
+    use pulldown_cmark::{Parser, Event, Tag};
+
+    let parser = Parser::new(text);
+    let mut lines = Vec::new();
+    let mut current_line = Vec::new();
+
+    for event in parser {
+        match event {
+            Event::Text(text) => current_line.push(StyledSpan::raw(text.to_string())),
+            Event::Code(code) => current_line.push(StyledSpan::colored(code.to_string(), Color::Yellow)),
+            Event::Start(Tag::Strong) => { /* set bold flag */ }
+            Event::Start(Tag::Emphasis) => { /* set italic flag */ }
+            Event::Start(Tag::CodeBlock(kind)) => { /* delegate to highlight_code_block */ }
+            Event::SoftBreak | Event::HardBreak => {
+                lines.push(StyledLine::new(current_line));
+                current_line = Vec::new();
+            }
+            // ... handle headers, lists, etc.
+        }
+    }
+    lines
+}
+```
+
+### Acceptance Criteria
+
+- [ ] Add `pulldown-cmark` to Cargo.toml
+- [ ] `render_markdown()` handles: bold, italic, code spans, code blocks, headers, lists
+- [ ] Code blocks delegate to `highlight_code_block()` for syntax highlighting
+- [ ] No tui-markdown import
+- [ ] Manual test: agent response with markdown renders correctly
+
+**Files:** `src/tui/highlight.rs`, `Cargo.toml`
+
+**Estimate:** 150-250 lines of new code
+
+---
+
+## Task: S11-T4 Migrate chat_renderer to StyledLine
+
+**Sprint:** 11
+**Depends on:** S11-T3
+**Status:** PENDING
+
+### Description
+
+Change `ChatRenderer::build_lines()` to return `Vec<StyledLine>`.
+
+### Implementation
+
+```rust
+pub fn build_lines(entries: &[MessageEntry], ...) -> Vec<StyledLine> {
+    for entry in entries {
+        match entry.sender {
+            Sender::User => {
+                // Cyan prefix, dim text
+                chat_lines.push(StyledLine::new(vec![
+                    StyledSpan::colored("> ", Color::Cyan),
+                    StyledSpan::dim(text),
+                ]));
+            }
+            Sender::Agent => {
+                // Use render_markdown() from T3
+                chat_lines.extend(render_markdown(&text));
+            }
+            Sender::Tool => {
+                // Handle ANSI escapes in tool output
+                chat_lines.extend(parse_ansi_line(&line));
+            }
+            // ...
+        }
+    }
+}
+
+// Replace ansi-to-tui with simple SGR parser
+fn parse_ansi_line(line: &str) -> StyledLine {
+    // Parse SGR sequences (colors), output StyledSpans
+}
+```
+
+### Acceptance Criteria
+
+- [ ] `build_lines()` returns `Vec<StyledLine>`
+- [ ] User messages: cyan `>` prefix, dim text
+- [ ] Agent messages: markdown rendered via `render_markdown()`
+- [ ] Tool messages: ANSI colors preserved (replace ansi-to-tui)
+- [ ] System messages: dim or red for errors
+- [ ] No ratatui imports in chat_renderer.rs
+- [ ] `cargo test` passes
+
+**Files:** `src/tui/chat_renderer.rs`
+
+---
+
+## Task: S11-T5 Implement resize handler
+
+**Sprint:** 11
+**Depends on:** S11-T4
+**Status:** PENDING
+
+### Description
+
+On resize: clear scrollback + screen, reprint all chat from message_list at new width.
+
+### Implementation
+
+```rust
+fn handle_resize(&mut self) -> io::Result<()> {
+    // Clear scrollback and screen (CSI 3J + 2J + H)
+    print!("\x1b[3J\x1b[2J\x1b[H");
+    io::stdout().flush()?;
+
+    // Reset state to force full reprint
+    self.rendered_entries = 0;
+    self.header_inserted = false;
+
+    Ok(())
+}
+```
+
+### Acceptance Criteria
+
+- [ ] `Event::Resize` triggers `handle_resize()`
+- [ ] Uses `\x1b[3J\x1b[2J\x1b[H` to clear scrollback + screen
+- [ ] `rendered_entries` reset to 0
+- [ ] `header_inserted` reset to false
+- [ ] Next render loop reprints all entries
+- [ ] Bottom UI re-renders at correct position
+- [ ] No duplicate content after resize
+- [ ] Manual test: resize terminal, all chat re-renders at new width
+
+**Files:** `src/tui/events.rs`, `src/main.rs`
+
+---
+
+## Task: S11-T6 Streaming response to scrollback
+
+**Sprint:** 11
+**Depends on:** S11-T4
+**Status:** PENDING
+
+### Description
+
+Print streaming response lines directly to scrollback as received. Hide input during streaming.
+
+### Implementation
+
+Add to App struct:
+
+```rust
+pub streaming_buffer: String,
+```
+
+In agent event handler:
+
+```rust
+AgentEvent::Delta(text) => {
+    self.streaming_buffer.push_str(&text);
+    while let Some(pos) = self.streaming_buffer.find('\n') {
+        let line: String = self.streaming_buffer.drain(..=pos).collect();
+        // Print line with leading space (agent indent)
+        print!(" {}", line);
+        io::stdout().flush()?;
+    }
+    // Re-render bottom UI after printing
+    self.render_bottom_ui()?;
+}
+AgentEvent::Complete => {
+    // Flush remaining partial line
+    if !self.streaming_buffer.is_empty() {
+        println!(" {}", self.streaming_buffer);
+        self.streaming_buffer.clear();
+    }
+    println!(); // Blank separator
+}
+```
+
+### Acceptance Criteria
+
+- [ ] Add `streaming_buffer: String` to App struct
+- [ ] Streaming text prints line-by-line to scrollback
+- [ ] Each complete line prints immediately (not per-token)
+- [ ] Input area hidden during streaming (progress shows instead)
+- [ ] Esc cancels streaming (abort_token)
+- [ ] Keystrokes during streaming queued to `message_queue`
+- [ ] Bottom UI re-renders after each line printed
+- [ ] On complete: flush partial line, add blank separator
+- [ ] Manual test: send message, watch lines stream
+
+**Files:** `src/tui/mod.rs`, `src/tui/session.rs`, `src/main.rs`
+
+---
+
+## Task: S11-T7 Selector base renderer
+
+**Sprint:** 11
+**Depends on:** S11-T1
+**Status:** PENDING
+
+### Description
+
+Create reusable selector renderer for all pickers.
+
+### Implementation
+
+```rust
+struct SelectorItem {
+    label: String,
+    hint: Option<String>,
+    enabled: bool,
+}
+
+fn render_selector_list<W: Write>(
+    w: &mut W,
+    items: &[SelectorItem],
+    selected: usize,
+    start_row: u16,
+    height: u16,
+) -> io::Result<()> {
+    for (i, item) in items.iter().take(height as usize).enumerate() {
+        execute!(w, MoveTo(0, start_row + i as u16))?;
+        if i == selected {
+            execute!(w, SetBackgroundColor(Color::DarkGrey))?;
+            write!(w, "▸ ")?;
+        } else {
+            write!(w, "  ")?;
+        }
+        if item.enabled {
+            write!(w, "{}", item.label)?;
+        } else {
+            execute!(w, SetAttribute(Attribute::Dim))?;
+            write!(w, "{}", item.label)?;
+        }
+        if let Some(hint) = &item.hint {
+            execute!(w, SetAttribute(Attribute::Dim))?;
+            write!(w, " {}", hint)?;
+        }
+        execute!(w, ResetColor, SetAttribute(Attribute::Reset))?;
+    }
+    Ok(())
+}
+```
+
+### Acceptance Criteria
+
+- [ ] `SelectorItem` struct defined
+- [ ] `render_selector_list()` renders items with selection highlight
+- [ ] Supports enabled/disabled items (dim when disabled)
+- [ ] Supports optional hint text
+- [ ] `cargo build` passes
+
+**Files:** `src/tui/render.rs`
+
+---
+
+## Task: S11-T8 Port provider picker to crossterm
+
+**Sprint:** 11
+**Depends on:** S11-T7
+**Status:** PENDING
+
+### Description
+
+Migrate provider picker to use `render_selector_list()`.
+
+### Acceptance Criteria
+
+- [ ] Provider picker uses `render_selector_list()`
+- [ ] Authenticated providers show green dot
+- [ ] Unauthenticated providers show "set API_KEY" hint
+- [ ] Filter input renders with crossterm
+- [ ] Arrow keys, Enter, Esc work
+- [ ] Manual test: open provider picker, filter, select
+
+**Files:** `src/tui/render.rs`, `src/tui/provider_picker.rs`
+
+---
+
+## Task: S11-T9 Port model picker to crossterm
+
+**Sprint:** 11
+**Depends on:** S11-T8
+**Status:** PENDING
+
+### Description
+
+Migrate model picker to use `render_selector_list()`.
+
+### Acceptance Criteria
+
+- [ ] Model picker uses `render_selector_list()`
+- [ ] Shows model name and context size
+- [ ] Loading state renders without ratatui
+- [ ] Error state renders without ratatui
+- [ ] Manual test: open model picker, filter, select
+
+**Files:** `src/tui/render.rs`, `src/tui/model_picker.rs`
+
+---
+
+## Task: S11-T10 Port session picker to crossterm
+
+**Sprint:** 11
+**Depends on:** S11-T9
+**Status:** PENDING
+
+### Description
+
+Migrate session picker to use `render_selector_list()`.
+
+### Acceptance Criteria
+
+- [ ] Session picker uses `render_selector_list()`
+- [ ] Shows relative time, session ID preview, first message
+- [ ] Empty state ("No sessions found") renders
+- [ ] After selector closes, bottom UI restored
+- [ ] Manual test: open session picker, filter, select
+
+**Files:** `src/tui/render.rs`, `src/tui/session_picker.rs`
+
+---
+
+## Task: S11-T11 Delete ratatui render path
+
+**Sprint:** 11
+**Depends on:** S11-T10
+**Status:** PENDING
+
+### Description
+
+Remove `draw()` function and all ratatui Frame usage from render.rs.
+
+### Acceptance Criteria
+
+- [ ] `draw()` function deleted
+- [ ] `take_snapshot()` deleted
+- [ ] `render_progress()` (Frame version) deleted
+- [ ] `render_input_or_approval()` deleted
+- [ ] `render_status_line()` (Frame version) deleted
+- [ ] `render_selector_shell()` deleted
+- [ ] `render_help_overlay()` rewritten for crossterm
+- [ ] `layout_areas()` deleted
+- [ ] `take_chat_inserts()` returns `Vec<StyledLine>` or deleted
+- [ ] Only `draw_direct()` and `*_direct()` methods remain
+- [ ] `cargo build` passes
+
+**Files:** `src/tui/render.rs`
+
+---
+
+## Task: S11-T12 Delete ratatui widget implementations
+
+**Sprint:** 11
+**Depends on:** S11-T11
+**Status:** PENDING
+
+### Description
+
+Delete ComposerWidget, FilterInput widget, and unused widgets.
+
+### Acceptance Criteria
+
+- [ ] `ComposerWidget` struct deleted from composer/mod.rs
+- [ ] `FilterInput` widget deleted from filter_input.rs
+- [ ] `FilterInputState` kept (state management only)
+- [ ] Delete `src/tui/widgets/mod.rs` entirely
+- [ ] No ratatui Widget trait implementations remain
+- [ ] `cargo build` passes
+
+**Files:** `src/tui/composer/mod.rs`, `src/tui/filter_input.rs`, `src/tui/widgets/`
+
+---
+
+## Task: S11-T13 Remove ratatui from Cargo.toml
+
+**Sprint:** 11
+**Depends on:** S11-T12
+**Status:** PENDING
+
+### Description
+
+Remove ratatui and dependent crates from Cargo.toml.
+
+### Acceptance Criteria
+
+- [ ] `ratatui` removed from Cargo.toml
+- [ ] `tui-markdown` removed (replaced by pulldown-cmark in T3)
+- [ ] `ansi-to-tui` removed (replaced by custom parser in T4)
+- [ ] `pulldown-cmark` added (if not already)
+- [ ] No ratatui imports in any file
+- [ ] `cargo build` passes
+- [ ] `cargo test` passes
+
+**Files:** `Cargo.toml`
+
+---
+
+## Task: S11-T14 Dead code cleanup and exit handling
+
+**Sprint:** 11
+**Depends on:** S11-T13
+**Status:** PENDING
+
+### Description
+
+Remove unused code and ensure clean exit.
+
+### Acceptance Criteria
+
+- [ ] Remove `LayoutAreas` struct from types.rs
+- [ ] Remove unused imports from all tui files
+- [ ] On exit: clear bottom UI area only
+- [ ] Chat history visible in scrollback after exit
+- [ ] No cursor positioning artifacts after exit
+- [ ] `cargo clippy` passes with no warnings
+- [ ] `cargo test` passes
+- [ ] Update ai/STATUS.md
+
+**Files:** `src/tui/types.rs`, `src/main.rs`, all `src/tui/*.rs`
+
+---
+
+## Sprint 11 Validation Checklist
+
+### After Phase 2 (T4 complete):
+
+- [ ] `cargo build`
+- [ ] Manual test: basic chat renders correctly
+
+### After Phase 3 (T6 complete):
+
+- [ ] Manual test: resize clears and reprints
+- [ ] Manual test: streaming prints line-by-line
+
+### After Phase 4 (T10 complete):
+
+- [ ] Manual test: all three selectors work
+
+### Final (T14 complete):
+
+- [ ] `cargo build`
+- [ ] `cargo test`
+- [ ] `cargo clippy` - no warnings
+- [ ] Binary size reduced (ratatui removed)
+- [ ] Manual test: full session flow
+- [ ] Manual test: resize terminal - no duplicates
+- [ ] Manual test: Cmd+F search works
+- [ ] Manual test: native scroll works
+- [ ] Manual test: clean exit (no artifacts)
+
+---
+
+## Risk Notes
+
+| Risk                          | Mitigation                                      |
+| ----------------------------- | ----------------------------------------------- |
+| tui-markdown replacement (T3) | ~200 LOC, handle bold/italic/code/headers/lists |
+| ansi-to-tui replacement (T4)  | Simple SGR parser, ~50 LOC                      |
+| ComposerWidget cursor math    | Don't change - only output format               |
+| Syntect integration           | Keep syntect, change output type only           |
