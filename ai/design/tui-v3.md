@@ -143,14 +143,105 @@ fn handle_key(&mut self, key: KeyEvent) {
 
 ## Performance Considerations
 
-| Operation            | Cost          | Mitigation                                        |
-| -------------------- | ------------- | ------------------------------------------------- |
-| Format chat history  | O(n) messages | Cache formatted lines, invalidate on width change |
-| Render visible lines | O(visible)    | Only render what's on screen                      |
-| Resize re-render     | O(n) messages | Debounce resize events (100-500ms)                |
-| Memory for history   | O(n) messages | Already storing in message_list                   |
+### Memory Usage
 
-For typical sessions (100s of messages), this is negligible.
+| Data                    | Size Estimate      | Notes                          |
+| ----------------------- | ------------------ | ------------------------------ |
+| Raw message text        | 1-10KB per message | User prompts + agent responses |
+| Long session (500 msgs) | 0.5-5MB            | Negligible for modern systems  |
+| Formatted line cache    | 2-3x raw           | Only for current width         |
+
+**Verdict:** Memory is not a concern. A 1000-message session uses <20MB.
+
+### Render Performance
+
+**Key principle: Only render what's visible**
+
+```
+Total messages: 500
+Formatted lines: 2000 (after word-wrap)
+Visible lines: 40 (terminal height - UI)
+Render cost: O(40), not O(2000)
+```
+
+### Caching Strategy
+
+```rust
+struct FormattedCache {
+    width: u16,                    // Invalidate if width changes
+    lines: Vec<FormattedLine>,     // Cached formatted output
+    message_count: usize,          // Invalidate if new messages
+}
+
+struct FormattedLine {
+    content: String,               // Pre-formatted with styles
+    source_message_idx: usize,     // For scroll position tracking
+}
+```
+
+**Cache invalidation:**
+
+- Width changes → full re-format (unavoidable, word-wrap changes)
+- New message → append to cache (incremental)
+- Scroll → no re-format needed, just render different slice
+
+### Operation Costs
+
+| Operation      | Cost             | When           | Mitigation                  |
+| -------------- | ---------------- | -------------- | --------------------------- |
+| Initial format | O(n) messages    | Session load   | Lazy format on first render |
+| Render frame   | O(visible) lines | Every 50ms     | Only visible portion        |
+| Width resize   | O(n) messages    | User resizes   | Debounce 100-500ms          |
+| Height resize  | O(1)             | User resizes   | Just adjust visible slice   |
+| New message    | O(1) message     | Agent responds | Append to cache             |
+| Scroll         | O(visible) lines | Page Up/Down   | No re-format, just render   |
+
+### Compaction and Display History
+
+**Important distinction:**
+
+- `message_list` = Display history (what user sees) - KEPT
+- Agent context = LLM conversation (gets compacted) - SEPARATE
+
+Compaction does NOT affect display history. User can still scroll through full chat even after context compaction.
+
+```rust
+struct App {
+    // Display history - persists entire session
+    message_list: MessageList,     // Never compacted
+
+    // Agent context - may be compacted
+    agent: Agent,                  // Has its own message history
+}
+```
+
+### Worst Case Analysis
+
+**Scenario:** 1000 messages, 100 chars avg, 80-char terminal width
+
+```
+Raw text: 1000 * 100 = 100KB
+Formatted lines: ~1250 lines (1.25 lines per message avg)
+Format time: <10ms (string ops are fast)
+Render time: <1ms (40 visible lines)
+```
+
+**Scenario:** Resize from 200 → 80 chars wide
+
+```
+Re-format all: <10ms
+Debounce: 100ms minimum anyway
+User perception: Instant
+```
+
+### Optimizations (implement if needed)
+
+1. **Lazy formatting:** Only format messages as they scroll into view
+2. **Incremental cache:** Keep old formatted lines, only re-format on width change
+3. **Virtual list:** For 10K+ messages, only keep nearby messages formatted
+4. **Background formatting:** Format in separate task during idle
+
+**For v0.0.0:** Simple eager formatting is fine. Optimize later if profiling shows need.
 
 ## Implementation Plan
 
