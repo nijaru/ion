@@ -26,6 +26,7 @@
   - Location: `src/tui/highlight.rs` (render_markdown)
   - Impact: mixed alignment, lists/tables look malformed at small widths
   - Fix: add markdown pretty-printer or table renderer with wrapping
+  - Follow-up: enforce single blank line between entries; add spacing after lists
 - [MEDIUM] Resize reflow clears pre-ion scrollback once chat exists
   - Location: `src/main.rs` resize handler (`\x1b[3J`)
   - Impact: terminal history lost after resize during chat sessions
@@ -53,6 +54,7 @@
 - Wrap StyledLine output to terminal width for resize reflow.
 - Exit clears only UI rows instead of whole screen.
 - Skip saving empty/system-only sessions; list_recent filters to sessions with user messages.
+- Enforce single blank line between entries; add spacing after lists in markdown rendering.
 
 ## Plan
 
