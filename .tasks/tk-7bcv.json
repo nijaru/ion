@@ -1,0 +1,24 @@
+{
+  "project": "tk",
+  "ref": "7bcv",
+  "title": "[BUG] --continue broken after recent changes",
+  "description": null,
+  "status": "open",
+  "priority": 2,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [
+    {
+      "ts": "2026-01-28T21:20:04.411Z",
+      "msg": "--continue now surfaces session-list/load failures in chat; still need user repro if resume logic still misbehaves."
+    }
+  ],
+  "created_at": "2026-01-28T21:15:39.684Z",
+  "updated_at": "2026-01-28T21:20:04.411Z",
+  "completed_at": null,
+  "external": {}
+}

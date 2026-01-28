@@ -51,6 +51,8 @@
 - Resize reflow clears pre-ion scrollback; decide preservation strategy (tk-2bk7)
 - Startup UI anchoring added; verify launch gap + resize behavior (tk-9s5m)
 - Width-aware chat wrapping added; verify lists/tables on resize (tk-lyxj)
+- Exiting TUI leaves blank lines before shell prompt (tk-3o0l)
+- --continue resume behavior needs verification (tk-7bcv)
 
 ## Recent Session
 
@@ -62,6 +64,7 @@
 
 **2026-01-28:** TUI v2 review. Fixed cursor wrap drift + scrollback CRLF; added input normalization + markdown list cleanup; added input scroll; resize now reflows chat by clearing scrollback when chat exists.
 **2026-01-28:** Anchored startup UI near header, added width-aware chat wrapping, and tightened markdown list rendering. Need terminal verification.
+**2026-01-28:** Exit now clears only UI rows; --continue errors reported in chat. Needs repro if behavior still wrong.
 
 ## Module Health
 

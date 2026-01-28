@@ -34,6 +34,10 @@
   - Location: `src/main.rs` + insert-before rendering
   - Impact: many empty lines between shell output and header/input
   - Fix: top-anchor UI until first message and verify resize behavior
+- [LOW] Exiting clears too much screen area, leaving blank lines before prompt
+  - Location: `src/main.rs` exit cleanup
+  - Impact: blank scrollback gap after quitting TUI
+  - Fix: clear only UI rows, keep cursor near UI start
 
 ## Fixes Applied
 
@@ -43,6 +47,7 @@
 - Reflow chat on resize by clearing scrollback once chat exists.
 - Anchor startup UI near header; clear anchored UI on exit.
 - Wrap StyledLine output to terminal width for resize reflow.
+- Exit clears only UI rows instead of whole screen.
 
 ## Plan
 
