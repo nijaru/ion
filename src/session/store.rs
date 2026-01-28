@@ -130,6 +130,10 @@ impl SessionStore {
 
     /// Save a session. Upserts session metadata and appends new messages.
     pub fn save(&self, session: &Session) -> Result<(), SessionStoreError> {
+        if !session.messages.iter().any(|m| m.role != Role::System) {
+            return Ok(());
+        }
+
         let now = chrono::Utc::now().timestamp();
         let working_dir = session.working_dir.to_string_lossy().to_string();
 
@@ -186,6 +190,20 @@ impl SessionStore {
                 Err(e)
             }
         }
+    }
+
+    /// Delete sessions without any user messages (empty/aborted runs).
+    pub fn prune_empty_sessions(&self) -> Result<usize, SessionStoreError> {
+        let deleted = self.db.execute(
+            r#"
+            DELETE FROM sessions
+            WHERE id NOT IN (
+                SELECT DISTINCT session_id FROM messages WHERE role = 'user'
+            )
+            "#,
+            [],
+        )?;
+        Ok(deleted as usize)
     }
 
     /// Load a session by ID.
@@ -248,6 +266,9 @@ impl SessionStore {
                  WHERE m.session_id = s.id AND m.role = 'user'
                  ORDER BY m.position LIMIT 1) as first_user_message
             FROM sessions s
+            WHERE EXISTS (
+                SELECT 1 FROM messages m WHERE m.session_id = s.id AND m.role = 'user'
+            )
             ORDER BY s.updated_at DESC
             LIMIT ?1
             "#,
