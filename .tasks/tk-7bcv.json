@@ -19,10 +19,14 @@
     {
       "ts": "2026-01-28T21:41:44.565Z",
       "msg": "Adjusted session store to ignore empty/system-only sessions and filter list_recent to sessions with user messages; added prune_empty_sessions on startup."
+    },
+    {
+      "ts": "2026-01-28T22:16:37.921Z",
+      "msg": "Removed prune-on-startup; sessions now skip saving empty/system-only. History printed once on startup to avoid scrollup blank gap."
     }
   ],
   "created_at": "2026-01-28T21:15:39.684Z",
-  "updated_at": "2026-01-28T21:41:44.565Z",
+  "updated_at": "2026-01-28T22:16:37.921Z",
   "completed_at": null,
   "external": {}
 }
