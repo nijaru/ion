@@ -27,10 +27,14 @@
     {
       "ts": "2026-01-27T22:36:04.568Z",
       "msg": "Research complete for Q1-Q6. Created terminal.rs with StyledSpan/StyledLine types and ratatui conversion functions. Next: Create v2 render path in main.rs with ION_TUI_V2 toggle."
+    },
+    {
+      "ts": "2026-01-28T00:08:04.170Z",
+      "msg": "TUI v2 migration in progress. Removed ratatui Terminal/Viewport from main.rs. Added draw_direct() in render.rs. Compiles but untested. Next: test basic rendering, fix cursor positioning, port selectors. See STATUS.md for full details."
     }
   ],
   "created_at": "2026-01-27T06:40:15.218Z",
-  "updated_at": "2026-01-27T22:36:04.568Z",
+  "updated_at": "2026-01-28T00:08:04.170Z",
   "completed_at": null,
   "external": {}
 }
