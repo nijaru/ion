@@ -11,9 +11,14 @@
   "blocked_by": [],
   "estimate": null,
   "due_date": null,
-  "logs": [],
+  "logs": [
+    {
+      "ts": "2026-01-28T18:18:50.764Z",
+      "msg": "User report: progress text appended to tool output line (e.g., '• list(.)ng... (11s · Esc to cancel)') in first request output"
+    }
+  ],
   "created_at": "2026-01-28T06:48:22.024Z",
-  "updated_at": "2026-01-28T06:48:22.024Z",
+  "updated_at": "2026-01-28T18:18:50.764Z",
   "completed_at": null,
   "external": {}
 }
