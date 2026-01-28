@@ -120,6 +120,8 @@ impl ChatRenderer {
                     }
 
                     for line in lines {
+                        let normalized = normalize_tool_error_line(line);
+                        let line = normalized.as_ref();
                         let is_diff_line = is_edit_tool
                             && (line.starts_with('+')
                                 || line.starts_with('-')
@@ -178,6 +180,7 @@ impl ChatRenderer {
                     }
                 }
             }
+            trim_leading_blank_lines(&mut entry_lines);
             trim_trailing_empty_lines(&mut entry_lines);
             chat_lines.extend(entry_lines);
             chat_lines.push(StyledLine::empty());
@@ -201,6 +204,7 @@ impl ChatRenderer {
                         StyledSpan::dim("…").with_italic(),
                     ]));
                 }
+                trim_leading_blank_lines(&mut entry_lines);
                 trim_trailing_empty_lines(&mut entry_lines);
                 chat_lines.extend(entry_lines);
                 chat_lines.push(StyledLine::empty());
@@ -358,6 +362,12 @@ fn trim_trailing_empty_lines(lines: &mut Vec<StyledLine>) {
     }
 }
 
+fn trim_leading_blank_lines(lines: &mut Vec<StyledLine>) {
+    while lines.first().is_some_and(line_is_blank) {
+        lines.remove(0);
+    }
+}
+
 fn line_is_blank(line: &StyledLine) -> bool {
     if line.spans.is_empty() {
         return true;
@@ -365,6 +375,25 @@ fn line_is_blank(line: &StyledLine) -> bool {
     line.spans
         .iter()
         .all(|span| span.content.chars().all(char::is_whitespace))
+}
+
+fn normalize_tool_error_line(line: &str) -> std::borrow::Cow<'_, str> {
+    const PREFIXES: [&str; 2] = ["⎿ Error:", "  Error:"];
+    let prefix = PREFIXES.iter().copied().find(|p| line.starts_with(p));
+    let Some(prefix) = prefix else {
+        return std::borrow::Cow::Borrowed(line);
+    };
+
+    let mut msg = line[prefix.len()..].trim_start();
+    while let Some(stripped) = msg.strip_prefix("Error:") {
+        msg = stripped.trim_start();
+    }
+
+    if msg.is_empty() {
+        return std::borrow::Cow::Borrowed(line);
+    }
+
+    std::borrow::Cow::Owned(format!("{prefix} {msg}"))
 }
 
 fn styled_line_text(line: &StyledLine) -> String {
