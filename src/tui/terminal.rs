@@ -67,8 +67,9 @@ impl Terminal {
     /// Print text to native scrollback (chat history).
     /// This will scroll the terminal naturally.
     pub fn print_to_scrollback(&self, text: &str) -> io::Result<()> {
-        println!("{}", text);
-        Ok(())
+        let mut stdout = io::stdout();
+        write!(stdout, "{}\r\n", text)?;
+        stdout.flush()
     }
 
     /// Print styled text to native scrollback.
@@ -76,7 +77,7 @@ impl Terminal {
         let mut stdout = io::stdout();
         for line in lines {
             line.write_to(&mut stdout)?;
-            writeln!(stdout)?;
+            write!(stdout, "\r\n")?;
         }
         stdout.flush()
     }
@@ -288,7 +289,7 @@ impl StyledLine {
     pub fn println(&self) -> io::Result<()> {
         let mut stdout = io::stdout();
         self.write_to(&mut stdout)?;
-        writeln!(stdout)?;
+        write!(stdout, "\r\n")?;
         stdout.flush()
     }
 
@@ -385,7 +386,7 @@ pub fn print_styled_lines_to_scrollback(lines: &[StyledLine]) -> io::Result<()> 
     let mut stdout = io::stdout();
     for line in lines {
         line.write_to(&mut stdout)?;
-        writeln!(stdout)?;
+        write!(stdout, "\r\n")?;
     }
     stdout.flush()
 }

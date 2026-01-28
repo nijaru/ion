@@ -272,7 +272,7 @@ impl ComposerState {
         // Move to same column on previous visual line
         let prev_line = &lines[cur_line - 1];
         let prev_line_len = prev_line.1 - prev_line.0;
-        let target_col = col_in_line.min(prev_line_len.saturating_sub(1));
+        let target_col = col_in_line.min(prev_line_len);
         self.cursor_char_idx = prev_line.0 + target_col;
         true
     }
@@ -297,7 +297,7 @@ impl ComposerState {
         // Move to same column on next visual line
         let next_line = &lines[cur_line + 1];
         let next_line_len = next_line.1 - next_line.0;
-        let target_col = col_in_line.min(next_line_len.saturating_sub(1));
+        let target_col = col_in_line.min(next_line_len);
         self.cursor_char_idx = next_line.0 + target_col;
         true
     }
@@ -890,20 +890,20 @@ mod tests {
         state.set_cursor(8, buf.len_chars());
         state.calculate_cursor_pos(&buf, 10);
 
-        // Move down - line 1 only has 3 chars, so cursor should go to end (col 2)
+        // Move down - line 1 only has 3 chars, so cursor should go to end (col 3)
         assert!(state.move_down(&buf));
         assert_eq!(
             state.cursor_char_idx(),
-            12,
-            "down from col 8 should clamp to end of shorter line 1 (char 12)"
+            13,
+            "down from col 8 should clamp to end of shorter line 1 (char 13)"
         );
 
         // Move up should preserve the clamped column
         assert!(state.move_up(&buf));
         assert_eq!(
             state.cursor_char_idx(),
-            2,
-            "up from col 2 should go to col 2 on line 0 (char 2)"
+            3,
+            "up from col 3 should go to col 3 on line 0 (char 3)"
         );
     }
 

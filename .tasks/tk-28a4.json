@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "28a4",
+  "title": "[BUG] Input composer lacks scroll offset for long input; cursor can move off-screen",
+  "description": null,
+  "status": "open",
+  "priority": 2,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-28T06:48:19.440Z",
+  "updated_at": "2026-01-28T06:48:19.440Z",
+  "completed_at": null,
+  "external": {}
+}

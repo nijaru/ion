@@ -45,8 +45,9 @@
 
 ## Known Issues
 
-- Version line in header shows 3-space indent (needs investigation)
 - Kimi k2.5 API returns malformed JSON (tk-1lso)
+- Input composer lacks scroll offset for long input (tk-28a4)
+- Progress line duplicates when switching terminal tabs during streaming (tk-7aem)
 
 ## Recent Session
 
@@ -55,6 +56,8 @@
 - `input-research.md` ← input/fuzzy files
 - `context-management.md` ← context/compaction files
 - `agent-survey.md` ← terminal-agents comparison
+
+**2026-01-28:** TUI v2 review. Fixed cursor wrap drift + scrollback CRLF; logged input scroll + tab-switch progress duplication.
 
 ## Module Health
 
