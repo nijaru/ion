@@ -227,7 +227,6 @@ impl App {
             last_thinking_duration: None,
             last_render_width: None,
             last_ui_start: None,
-            scrollback_lines: 0,
         };
 
         // Set initial API provider name on model picker

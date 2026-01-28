@@ -131,6 +131,4 @@ pub struct App {
     /// Last render state for detecting changes that need extra clearing
     pub(crate) last_render_width: Option<u16>,
     pub(crate) last_ui_start: Option<u16>,
-    /// Total lines printed to scrollback (for knowing when to scroll)
-    pub scrollback_lines: u16,
 }
