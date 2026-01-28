@@ -120,6 +120,9 @@ impl ChatRenderer {
                     }
 
                     for line in lines {
+                        if line.trim().is_empty() {
+                            continue;
+                        }
                         let is_diff_line = is_edit_tool
                             && (line.starts_with('+')
                                 || line.starts_with('-')
