@@ -9,7 +9,7 @@ use unicode_segmentation::UnicodeSegmentation;
 /// Build a list of visual lines as (start_char_idx, end_char_idx) pairs using word-wrap.
 /// This matches Ratatui's Paragraph::wrap(Wrap { trim: false }) behavior.
 /// end_char_idx is exclusive.
-fn build_visual_lines(content: &str, width: usize) -> Vec<(usize, usize)> {
+pub fn build_visual_lines(content: &str, width: usize) -> Vec<(usize, usize)> {
     use unicode_width::UnicodeWidthChar;
 
     let mut lines = Vec::new();
