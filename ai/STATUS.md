@@ -2,29 +2,27 @@
 
 ## Current State
 
-| Metric     | Value       | Updated    |
-| ---------- | ----------- | ---------- |
-| Phase      | TUI v2 Done | 2026-01-27 |
-| Status     | Testing     | 2026-01-27 |
-| Toolchain  | stable      | 2026-01-22 |
-| Tests      | 113 passing | 2026-01-27 |
-| Visibility | **PUBLIC**  | 2026-01-22 |
+| Metric     | Value           | Updated    |
+| ---------- | --------------- | ---------- |
+| Phase      | TUI v2 Complete | 2026-01-27 |
+| Status     | Testing         | 2026-01-27 |
+| Toolchain  | stable          | 2026-01-22 |
+| Tests      | 113 passing     | 2026-01-27 |
+| Visibility | **PUBLIC**      | 2026-01-22 |
 
 ## TUI Architecture
 
-| Version | Approach                            | Status                        |
-| ------- | ----------------------------------- | ----------------------------- |
-| v1      | Viewport::Inline(15) fixed height   | ABANDONED - gaps, cursor bugs |
-| v2      | Direct crossterm, native scrollback | COMPLETE - ratatui removed    |
+| Version | Approach                            | Status                     |
+| ------- | ----------------------------------- | -------------------------- |
+| v1      | Viewport::Inline(15) fixed height   | ABANDONED - gaps, cursor   |
+| v2      | Direct crossterm, native scrollback | COMPLETE - ratatui removed |
 
 ## TUI v2 Architecture
 
-See `ai/design/tui-v2.md` for full plan.
-
 **Core model:**
 
-1. Chat → `println!()` to native scrollback (scroll/search work)
-2. Bottom UI → cursor positioning + clear/redraw
+1. Chat → insert_before pattern (ScrollUp + print above UI)
+2. Bottom UI → cursor positioning + clear/redraw at height-ui_height
 3. Resize → clear screen, reprint all chat from `message_list`
 4. Exit → clear bottom UI only, chat stays in scrollback
 
@@ -32,33 +30,29 @@ See `ai/design/tui-v2.md` for full plan.
 
 - `draw_direct()` - bottom UI rendering
 - `render_progress_direct()`, `render_input_direct()`, `render_status_direct()`
-- Resize handler that reprints all chat
+- `render_selector_direct()` for picker modals
 - `render_markdown()` using pulldown-cmark
 - `parse_ansi_line()` for ANSI SGR parsing
-- `render_selector_direct()` for picker modals
+- Progress line styling (cyan spinner, dim elapsed time)
 
 **Dependencies removed:**
 
-- ratatui
-- tui-markdown
-- ansi-to-tui
+- ratatui, tui-markdown, ansi-to-tui
 
 **Dependencies added:**
 
 - pulldown-cmark
 
-## Key Design Decisions
+## Known Issues
 
-- Native scrollback for chat (scroll/search work)
-- Reprint everything on resize (no debounce, Rust is fast)
-- Display history (`message_list`) separate from agent context
-- Compaction doesn't affect visible chat
+- Version line in header still shows 3-space indent (needs investigation)
+- Kimi k2.5 API returns malformed JSON (tk-1lso)
 
 ## Module Health
 
 | Module    | Health | Notes                     |
 | --------- | ------ | ------------------------- |
-| tui/      | GOOD   | v2 complete               |
+| tui/      | GOOD   | v2 complete, testing      |
 | agent/    | GOOD   | Clean turn loop           |
 | provider/ | OK     | llm-connector limitations |
 | tool/     | GOOD   | Orchestrator + spawn      |
