@@ -45,8 +45,16 @@
 
 ## Known Issues
 
-- Version line in header still shows 3-space indent (needs investigation)
+- Version line in header shows 3-space indent (needs investigation)
 - Kimi k2.5 API returns malformed JSON (tk-1lso)
+
+## Recent Session
+
+**2026-01-27:** Consolidated ai/research/ from 44 → 33 files. Key consolidations:
+
+- `input-research.md` ← input/fuzzy files
+- `context-management.md` ← context/compaction files
+- `agent-survey.md` ← terminal-agents comparison
 
 ## Module Health
 
@@ -62,5 +70,13 @@
 
 ## Key Files
 
+**Design:**
+
 - `ai/design/tui-v2.md` - TUI architecture and implementation plan
-- `ai/research/ratatui-vs-crossterm-v3.md` - Framework comparison research
+
+**Research (consolidated):**
+
+- `ai/research/agent-survey.md` - Agent comparison (Claude Code, Codex, Gemini, etc.)
+- `ai/research/context-management.md` - Context compaction strategies
+- `ai/research/input-research.md` - Input handling, fuzzy matching
+- `ai/research/inline-tui-patterns-2026.md` - TUI patterns across ecosystems
