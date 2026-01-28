@@ -57,7 +57,7 @@
 - `context-management.md` ← context/compaction files
 - `agent-survey.md` ← terminal-agents comparison
 
-**2026-01-28:** TUI v2 review. Fixed cursor wrap drift + scrollback CRLF; logged input scroll + tab-switch progress duplication.
+**2026-01-28:** TUI v2 review. Fixed cursor wrap drift + scrollback CRLF; added input normalization + markdown list cleanup; logged input scroll + tab-switch progress duplication.
 
 ## Module Health
 

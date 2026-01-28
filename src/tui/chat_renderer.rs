@@ -23,8 +23,8 @@ impl ChatRenderer {
                             combined.push_str(text);
                         }
                     }
-                    // Sanitize (tabs, control chars) and trim
-                    let combined = sanitize_for_display(combined.trim());
+                    // Sanitize (tabs, control chars) without trimming content
+                    let combined = sanitize_for_display(&combined);
                     let prefix = "> ";
                     let prefix_len = prefix.chars().count();
                     let available_width = wrap_width.saturating_sub(prefix_len).max(1);
@@ -60,8 +60,8 @@ impl ChatRenderer {
                     for part in &entry.parts {
                         match part {
                             MessagePart::Text(text) => {
-                                // Sanitize (tabs, control chars) and trim
-                                let sanitized = sanitize_for_display(text.trim());
+                                // Sanitize (tabs, control chars) without trimming content
+                                let sanitized = sanitize_for_display(text);
                                 let highlighted_lines =
                                     highlight::highlight_markdown_with_code(&sanitized);
                                 for mut line in highlighted_lines {
@@ -161,7 +161,7 @@ impl ChatRenderer {
                     }
                 }
                 Sender::System => {
-                    let content = entry.content_as_markdown().trim();
+                    let content = entry.content_as_markdown();
                     if content.lines().count() <= 1 {
                         if content.starts_with("Error:") {
                             chat_lines.push(StyledLine::colored(content.to_string(), Color::Red));

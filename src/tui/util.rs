@@ -113,6 +113,17 @@ pub(crate) fn sanitize_for_display(s: &str) -> String {
     result
 }
 
+/// Normalize user input for history/storage.
+/// - Normalizes CRLF to LF
+/// - Trims trailing whitespace (keeps leading indentation)
+pub(crate) fn normalize_input(content: &str) -> String {
+    let mut out = content.replace("\r\n", "\n").replace('\r', "\n");
+    while out.ends_with(|c: char| c.is_whitespace()) {
+        out.pop();
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
