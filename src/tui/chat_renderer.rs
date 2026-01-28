@@ -353,9 +353,18 @@ fn wrap_line(line: &str, width: usize) -> Vec<String> {
 }
 
 fn trim_trailing_empty_lines(lines: &mut Vec<StyledLine>) {
-    while lines.last().is_some_and(StyledLine::is_empty) {
+    while lines.last().is_some_and(line_is_blank) {
         lines.pop();
     }
+}
+
+fn line_is_blank(line: &StyledLine) -> bool {
+    if line.spans.is_empty() {
+        return true;
+    }
+    line.spans
+        .iter()
+        .all(|span| span.content.chars().all(char::is_whitespace))
 }
 
 fn styled_line_text(line: &StyledLine) -> String {

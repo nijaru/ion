@@ -107,6 +107,14 @@ fn truncate_line(s: &str, max: usize) -> String {
     format!("{}…", take_head(s, max - 1))
 }
 
+fn strip_error_prefixes(message: &str) -> &str {
+    let mut out = message.trim_start();
+    while let Some(stripped) = out.strip_prefix("Error:") {
+        out = stripped.trim_start();
+    }
+    out
+}
+
 fn take_head(s: &str, max: usize) -> String {
     s.chars().take(max).collect()
 }
@@ -298,7 +306,7 @@ impl MessageList {
 
                 let result_content = if is_error {
                     // Clean up error message - keep it concise
-                    let msg = result.strip_prefix("Error: ").unwrap_or(&result).trim();
+                    let msg = strip_error_prefixes(&result);
                     format!("⎿ Error: {}", truncate_line(msg, TOOL_RESULT_LINE_MAX))
                 } else if is_collapsed_tool {
                     // Collapsed tools: just show line count or OK
@@ -444,7 +452,8 @@ impl MessageList {
                         } = block
                         {
                             let display = if *is_error {
-                                format!("⎿ Error: {}", truncate_line(content, TOOL_RESULT_LINE_MAX))
+                                let msg = strip_error_prefixes(content);
+                                format!("⎿ Error: {}", truncate_line(msg, TOOL_RESULT_LINE_MAX))
                             } else {
                                 // Format result with actual content
                                 let formatted = format_tool_result(content);
