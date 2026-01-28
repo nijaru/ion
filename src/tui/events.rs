@@ -294,16 +294,19 @@ impl App {
 
                         // Send message - resolve blobs for agent, keep display version for UI
                         let resolved_input = self.resolved_input_text();
-                        self.input_history.push(input.clone());
+                        let normalized_input = crate::tui::util::normalize_input(&input);
+                        let normalized_resolved =
+                            crate::tui::util::normalize_input(&resolved_input);
+                        self.input_history.push(normalized_input.clone());
                         self.history_index = self.input_history.len();
                         self.history_draft = None;
                         self.clear_input();
                         // Persist to database (with placeholders, for shorter storage)
-                        let _ = self.store.add_input_history(&input);
+                        let _ = self.store.add_input_history(&normalized_input);
                         // Display shows placeholder (user can see what they typed)
-                        self.message_list.push_user_message(input.clone());
+                        self.message_list.push_user_message(normalized_input.clone());
                         // Agent gets full resolved content
-                        self.run_agent_task(resolved_input);
+                        self.run_agent_task(normalized_resolved);
                     }
                 }
             }

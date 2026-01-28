@@ -198,6 +198,8 @@ pub fn render_markdown(content: &str) -> Vec<StyledLine> {
     let mut code_block_lang: Option<&'static str> = None;
     let mut code_block_buffer = String::new();
     let mut list_depth: usize = 0;
+    let mut list_prefix: Option<String> = None;
+    let mut current_line_is_prefix_only = false;
 
     for event in parser {
         match event {
@@ -232,21 +234,27 @@ pub fn render_markdown(content: &str) -> Vec<StyledLine> {
                     list_depth += 1;
                 }
                 Tag::Item => {
-                    // Push current line if not empty
-                    let line = current_line.build();
-                    if !line.is_empty() {
-                        result.push(line);
-                    }
                     let indent = "  ".repeat(list_depth.saturating_sub(1));
-                    current_line = LineBuilder::new().raw(format!("{}* ", indent));
+                    let prefix = format!("{}* ", indent);
+                    list_prefix = Some(prefix.clone());
+                    current_line = LineBuilder::new().raw(prefix);
+                    current_line_is_prefix_only = true;
                 }
                 Tag::Paragraph => {
                     // Start fresh line for paragraphs
-                    let line = current_line.build();
-                    if !line.is_empty() {
-                        result.push(line);
+                    if !current_line_is_prefix_only {
+                        let line = current_line.build();
+                        if !line.is_empty() {
+                            result.push(line);
+                        }
                     }
-                    current_line = LineBuilder::new();
+                    if let Some(prefix) = list_prefix.as_ref() {
+                        current_line = LineBuilder::new().raw(prefix.clone());
+                        current_line_is_prefix_only = true;
+                    } else {
+                        current_line = LineBuilder::new();
+                        current_line_is_prefix_only = false;
+                    }
                 }
                 _ => {}
             },
@@ -291,18 +299,25 @@ pub fn render_markdown(content: &str) -> Vec<StyledLine> {
                     list_depth = list_depth.saturating_sub(1);
                 }
                 TagEnd::Item => {
-                    let line = current_line.build();
-                    if !line.is_empty() {
-                        result.push(line);
+                    if !current_line_is_prefix_only {
+                        let line = current_line.build();
+                        if !line.is_empty() {
+                            result.push(line);
+                        }
                     }
+                    list_prefix = None;
+                    current_line_is_prefix_only = false;
                     current_line = LineBuilder::new();
                 }
                 TagEnd::Paragraph => {
-                    let line = current_line.build();
-                    if !line.is_empty() {
-                        result.push(line);
+                    if !current_line_is_prefix_only {
+                        let line = current_line.build();
+                        if !line.is_empty() {
+                            result.push(line);
+                        }
                     }
                     current_line = LineBuilder::new();
+                    current_line_is_prefix_only = false;
                 }
                 _ => {}
             },
@@ -314,8 +329,11 @@ pub fn render_markdown(content: &str) -> Vec<StyledLine> {
                     // Handle line breaks within text
                     for (i, part) in content.split('\n').enumerate() {
                         if i > 0 {
-                            result.push(current_line.build());
+                            if !current_line_is_prefix_only {
+                                result.push(current_line.build());
+                            }
                             current_line = LineBuilder::new();
+                            current_line_is_prefix_only = false;
                         }
                         if !part.is_empty() {
                             let span = if in_bold && in_italic {
@@ -328,6 +346,7 @@ pub fn render_markdown(content: &str) -> Vec<StyledLine> {
                                 StyledSpan::raw(part.to_string())
                             };
                             current_line = current_line.styled(span);
+                            current_line_is_prefix_only = false;
                         }
                     }
                 }
@@ -336,10 +355,14 @@ pub fn render_markdown(content: &str) -> Vec<StyledLine> {
                 // Inline code - render with dim styling
                 let span = StyledSpan::dim(format!("`{}`", code));
                 current_line = current_line.styled(span);
+                current_line_is_prefix_only = false;
             }
             Event::SoftBreak | Event::HardBreak => {
-                result.push(current_line.build());
+                if !current_line_is_prefix_only {
+                    result.push(current_line.build());
+                }
                 current_line = LineBuilder::new();
+                current_line_is_prefix_only = false;
             }
             _ => {}
         }
@@ -455,6 +478,21 @@ Next paragraph"#;
         let input = "# Heading 1\n## Heading 2";
         let lines = render_markdown(input);
         assert!(lines.len() >= 2);
+    }
+
+    #[test]
+    fn test_render_markdown_drops_empty_list_item() {
+        let input = "*\n\nParagraph";
+        let lines = render_markdown(input);
+        let line_texts: Vec<String> = lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_str()).collect())
+            .collect();
+        assert!(
+            !line_texts.iter().any(|l| l.trim() == "*"),
+            "Expected empty list item marker to be dropped, got: {:?}",
+            line_texts
+        );
     }
 
     #[test]
