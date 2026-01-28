@@ -1,7 +1,7 @@
 //! Input handling for the TUI composer.
 
-use crate::tui::terminal::{StyledLine, StyledSpan};
 use crate::tui::App;
+use crate::tui::terminal::{StyledLine, StyledSpan};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 impl App {
@@ -50,6 +50,15 @@ impl App {
             StyledLine::new(vec![StyledSpan::dim(version)]),
             StyledLine::empty(),
         ]
+    }
+
+    /// Return startup header lines once and mark them as inserted.
+    pub fn take_startup_header_lines(&mut self) -> Vec<StyledLine> {
+        if self.header_inserted {
+            return Vec::new();
+        }
+        self.header_inserted = true;
+        self.startup_header_lines()
     }
 
     /// Handle a key event for the input composer.

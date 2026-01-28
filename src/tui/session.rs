@@ -3,20 +3,18 @@
 use crate::agent::subagent::SubagentRegistry;
 use crate::agent::{Agent, AgentEvent};
 use crate::cli::PermissionSettings;
-use crate::config::{subagents_dir, Config};
+use crate::config::{Config, subagents_dir};
 use crate::provider::{Client, ContentBlock, LlmApi, ModelRegistry, Provider, Role};
 use crate::session::{Session, SessionStore};
-use crate::tool::builtin::SpawnSubagentTool;
 use crate::tool::ToolOrchestrator;
+use crate::tool::builtin::SpawnSubagentTool;
+use crate::tui::App;
 use crate::tui::composer::{ComposerBuffer, ComposerState};
 use crate::tui::message_list::{MessageEntry, MessageList, Sender};
 use crate::tui::model_picker::{self, ModelPicker};
 use crate::tui::provider_picker::ProviderPicker;
 use crate::tui::session_picker::SessionPicker;
-use crate::tui::types::{
-    Mode, SelectorPage, TaskSummary, ThinkingLevel, TuiApprovalHandler,
-};
-use crate::tui::App;
+use crate::tui::types::{Mode, SelectorPage, TaskSummary, ThinkingLevel, TuiApprovalHandler};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -227,6 +225,7 @@ impl App {
             last_thinking_duration: None,
             last_render_width: None,
             last_ui_start: None,
+            startup_ui_anchor: None,
         };
 
         // Set initial API provider name on model picker
@@ -266,6 +265,7 @@ impl App {
         self.message_list.load_from_messages(&loaded.messages);
         self.rendered_entries = 0;
         self.buffered_chat_lines.clear();
+        self.startup_ui_anchor = None;
         self.session = loaded;
         Ok(())
     }
@@ -346,12 +346,13 @@ impl App {
                     debug!("Received ModelsFetched event with {} models", models.len());
                     self.model_picker.set_models(models.clone());
                     if let Some(model) = models.iter().find(|m| m.id == self.session.model)
-                        && model.context_window > 0 {
-                            let ctx_window = model.context_window as usize;
-                            self.model_context_window = Some(ctx_window);
-                            // Update agent's compaction config
-                            self.agent.set_context_window(ctx_window);
-                        }
+                        && model.context_window > 0
+                    {
+                        let ctx_window = model.context_window as usize;
+                        self.model_context_window = Some(ctx_window);
+                        // Update agent's compaction config
+                        self.agent.set_context_window(ctx_window);
+                    }
                     self.last_error = None; // Clear error on success
                     // Show all models directly (user can type to filter/search)
                     self.model_picker.start_all_models();
@@ -537,6 +538,7 @@ impl App {
         // Rebuild message list from session messages
         self.message_list.clear();
         self.rendered_entries = 0;
+        self.startup_ui_anchor = None;
         for msg in &self.session.messages {
             match msg.role {
                 Role::User => {
@@ -573,7 +575,10 @@ impl App {
                 }
                 Role::ToolResult => {
                     for block in msg.content.iter() {
-                        if let ContentBlock::ToolResult { content, is_error, .. } = block {
+                        if let ContentBlock::ToolResult {
+                            content, is_error, ..
+                        } = block
+                        {
                             let display = if *is_error {
                                 format!("⎿ Error: {}", content.lines().next().unwrap_or(""))
                             } else {

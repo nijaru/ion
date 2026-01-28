@@ -1,12 +1,12 @@
 //! Rendering functions for the TUI.
 
+use crate::tui::App;
 use crate::tui::chat_renderer::ChatRenderer;
 use crate::tui::composer::build_visual_lines;
 use crate::tui::message_list::Sender;
 use crate::tui::terminal::StyledLine;
 use crate::tui::types::{Mode, SelectorPage};
 use crate::tui::util::{format_elapsed, format_relative_time, format_tokens};
-use crate::tui::App;
 use crossterm::execute;
 
 /// Input prompt prefix " > "
@@ -65,6 +65,17 @@ impl App {
         let input_height = self.calculate_input_height(width, height);
         let status_height = 1u16;
         progress_height + input_height + status_height
+    }
+
+    /// Resolve the UI start row, using the startup anchor when no messages exist.
+    pub fn ui_start_row(&self, height: u16, ui_height: u16) -> u16 {
+        let bottom_start = height.saturating_sub(ui_height);
+        if self.message_list.entries.is_empty() {
+            if let Some(anchor) = self.startup_ui_anchor {
+                return anchor.min(bottom_start);
+            }
+        }
+        bottom_start
     }
 
     /// Take new chat entries and render them as lines for insertion.
@@ -164,13 +175,23 @@ impl App {
         w: &mut W,
         width: u16,
     ) -> std::io::Result<()> {
+        let entry_count = self.message_list.entries.len();
+        let mut end = entry_count;
+        if self.is_running {
+            if let Some(last) = self.message_list.entries.last() {
+                if last.sender == Sender::Agent {
+                    end = end.saturating_sub(1);
+                }
+            }
+        }
+
         let lines = self.build_chat_lines(width);
         for line in &lines {
             line.write_to(w)?;
             write!(w, "\r\n")?;
         }
 
-        self.rendered_entries = self.message_list.entries.len();
+        self.rendered_entries = end;
         self.header_inserted = true;
         self.buffered_chat_lines.clear();
 
@@ -203,7 +224,7 @@ impl App {
         };
 
         let ui_height = self.calculate_ui_height(width, height);
-        let ui_start = height.saturating_sub(ui_height);
+        let ui_start = self.ui_start_row(height, ui_height);
         let progress_height = self.progress_height();
 
         // Detect width decrease - terminal rewraps old content, pushing it up
@@ -214,7 +235,9 @@ impl App {
         let clear_from = self.last_ui_start.map_or(ui_start, |old| old.min(ui_start));
         self.last_ui_start = Some(ui_start);
 
-        if width_decreased {
+        let preserve_header =
+            self.message_list.entries.is_empty() && self.startup_ui_anchor.is_some();
+        if width_decreased && !preserve_header {
             // Full clear needed: old wider borders got wrapped into multiple lines
             execute!(w, Clear(ClearType::All), MoveTo(0, ui_start))?;
         } else {

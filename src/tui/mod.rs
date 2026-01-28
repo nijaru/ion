@@ -11,8 +11,8 @@ pub mod message_list;
 pub mod model_picker;
 pub mod provider_picker;
 mod render;
-pub mod session_picker;
 mod session;
+pub mod session_picker;
 pub mod terminal;
 mod types;
 mod util;
@@ -131,6 +131,8 @@ pub struct App {
     /// Last render state for detecting changes that need extra clearing
     pub(crate) last_render_width: Option<u16>,
     pub(crate) last_ui_start: Option<u16>,
+    /// UI anchor row for startup before first message (keeps UI near header)
+    pub(crate) startup_ui_anchor: Option<u16>,
 }
 
 impl App {
@@ -140,5 +142,13 @@ impl App {
 
     pub fn set_header_inserted(&mut self, value: bool) {
         self.header_inserted = value;
+    }
+
+    pub fn startup_ui_anchor(&self) -> Option<u16> {
+        self.startup_ui_anchor
+    }
+
+    pub fn set_startup_ui_anchor(&mut self, value: Option<u16>) {
+        self.startup_ui_anchor = value;
     }
 }

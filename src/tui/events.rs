@@ -2,13 +2,13 @@
 
 use crate::session::Session;
 use crate::tool::{ApprovalResponse, ToolMode};
+use crate::tui::App;
 use crate::tui::composer::ComposerBuffer;
 use crate::tui::fuzzy;
 use crate::tui::message_list::{MessageEntry, Sender};
 use crate::tui::model_picker::PickerStage;
-use crate::tui::types::{Mode, SelectorPage, CANCEL_WINDOW};
+use crate::tui::types::{CANCEL_WINDOW, Mode, SelectorPage};
 use crate::tui::util::handle_filter_input_event;
-use crate::tui::App;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use std::time::Instant;
 
@@ -301,10 +301,12 @@ impl App {
                         self.history_index = self.input_history.len();
                         self.history_draft = None;
                         self.clear_input();
+                        self.startup_ui_anchor = None;
                         // Persist to database (with placeholders, for shorter storage)
                         let _ = self.store.add_input_history(&normalized_input);
                         // Display shows placeholder (user can see what they typed)
-                        self.message_list.push_user_message(normalized_input.clone());
+                        self.message_list
+                            .push_user_message(normalized_input.clone());
                         // Agent gets full resolved content
                         self.run_agent_task(normalized_resolved);
                     }
@@ -543,11 +545,14 @@ impl App {
 
     /// Handle terminal resize: reset state to force reprint of all chat.
     fn handle_resize(&mut self) {
-        // Reset render tracking for full reflow
-        self.rendered_entries = 0;
-        self.header_inserted = false;
+        if !self.message_list.entries.is_empty() {
+            // Reset render tracking for full reflow
+            self.rendered_entries = 0;
+            self.header_inserted = false;
+            self.startup_ui_anchor = None;
+        }
         self.buffered_chat_lines.clear();
-        // Clear cached render state
+        // Clear cached render state for UI redraw
         self.last_render_width = None;
         self.last_ui_start = None;
     }
