@@ -156,9 +156,7 @@ impl App {
         };
 
         let ui_height = self.calculate_ui_height(width, height);
-        // Position UI immediately after content, or at bottom if content fills screen
-        let bottom_position = height.saturating_sub(ui_height);
-        let ui_start = self.scrollback_lines.min(bottom_position);
+        let ui_start = height.saturating_sub(ui_height);
 
         // Detect width decrease - terminal rewraps old content, pushing it up
         let width_decreased = self.last_render_width.is_some_and(|old| width < old);
