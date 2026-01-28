@@ -129,6 +129,7 @@ pub struct App {
     pub thinking_start: Option<Instant>,
     /// Duration of last completed thinking (for "thought for Xs" display)
     pub last_thinking_duration: Option<std::time::Duration>,
-    /// Last UI start row (for clearing old content on resize)
+    /// Last render state for detecting changes that need extra clearing
+    pub(crate) last_render_width: Option<u16>,
     pub(crate) last_ui_start: Option<u16>,
 }

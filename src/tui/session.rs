@@ -225,6 +225,7 @@ impl App {
             header_inserted: false,
             thinking_start: None,
             last_thinking_duration: None,
+            last_render_width: None,
             last_ui_start: None,
         };
 
