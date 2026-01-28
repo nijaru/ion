@@ -120,6 +120,11 @@ async fn run_tui(
     // Track terminal size
     let (mut term_width, mut term_height) = terminal::size()?;
 
+    // Clear screen for TUI startup (preserves scrollback)
+    // \x1b[2J = clear visible screen, \x1b[H = home cursor
+    print!("\x1b[2J\x1b[H");
+    stdout.flush()?;
+
     // Main loop
     loop {
         if event::poll(std::time::Duration::from_millis(50))? {
