@@ -158,31 +158,37 @@ async fn run_tui(
         // Print any new chat content to native scrollback
         let chat_lines = app.take_chat_inserts(term_width);
         if !chat_lines.is_empty() {
-            // Calculate where chat area ends (above bottom UI)
             let ui_height = app.calculate_ui_height(term_width, term_height);
-            let chat_bottom = term_height.saturating_sub(ui_height);
+            let chat_area_height = term_height.saturating_sub(ui_height);
+            let line_count = chat_lines.len() as u16;
 
-            // Set scroll region to chat area only (excludes bottom UI)
-            // DECSTBM: \x1b[<top>;<bottom>r (1-indexed)
-            write!(stdout, "\x1b[1;{}r", chat_bottom)?;
+            // Only scroll if we've already filled the chat area
+            if app.scrollback_lines >= chat_area_height {
+                // Set scroll region to chat area only (excludes bottom UI)
+                // DECSTBM: \x1b[<top>;<bottom>r (1-indexed)
+                write!(stdout, "\x1b[1;{}r", chat_area_height)?;
 
-            // Move to bottom of scroll region and scroll up
-            execute!(stdout, MoveTo(0, chat_bottom.saturating_sub(1)))?;
-            execute!(
-                stdout,
-                crossterm::terminal::ScrollUp(chat_lines.len() as u16)
-            )?;
+                // Scroll up within region
+                execute!(stdout, crossterm::terminal::ScrollUp(line_count))?;
 
-            // Position and print the chat lines
-            let print_start = chat_bottom.saturating_sub(chat_lines.len() as u16);
-            execute!(stdout, MoveTo(0, print_start))?;
-            for line in &chat_lines {
-                line.println()?;
+                // Position at bottom of scroll region and print
+                let print_start = chat_area_height.saturating_sub(line_count);
+                execute!(stdout, MoveTo(0, print_start))?;
+                for line in &chat_lines {
+                    line.println()?;
+                }
+
+                // Reset scroll region
+                write!(stdout, "\x1b[r")?;
+            } else {
+                // Chat area not full yet - just print at current position
+                execute!(stdout, MoveTo(0, app.scrollback_lines))?;
+                for line in &chat_lines {
+                    line.println()?;
+                }
             }
 
-            // Reset scroll region to full terminal
-            // DECSTBM with no params resets to full screen
-            write!(stdout, "\x1b[r")?;
+            app.scrollback_lines += line_count;
         }
 
         // Render the bottom UI area

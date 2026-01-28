@@ -544,6 +544,7 @@ impl App {
         self.rendered_entries = 0;
         self.header_inserted = false;
         self.buffered_chat_lines.clear();
+        self.scrollback_lines = 0;
         // Clear cached render state
         self.last_render_width = None;
         self.last_ui_start = None;
