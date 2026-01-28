@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "cslh",
+  "title": "[UX] Review CLI behavior for --continue/--resume/--review",
+  "description": null,
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-28T18:42:57.958Z",
+  "updated_at": "2026-01-28T18:42:57.958Z",
+  "completed_at": null,
+  "external": {}
+}

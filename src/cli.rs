@@ -187,8 +187,14 @@ pub struct Cli {
     #[arg(long = "resume", conflicts_with = "session_id")]
     pub resume: bool,
 
-    /// Continue a specific session by ID
-    #[arg(long = "continue", value_name = "SESSION_ID")]
+    /// Continue the most recent session (or specify a session ID)
+    #[arg(
+        long = "continue",
+        value_name = "SESSION_ID",
+        num_args = 0..=1,
+        default_missing_value = "__LATEST__",
+        conflicts_with = "resume"
+    )]
     pub session_id: Option<String>,
 }
 

@@ -35,7 +35,11 @@ async fn main() -> ExitCode {
 
             // Determine resume option from CLI flags
             let resume_option = if let Some(ref id) = cli.session_id {
-                ResumeOption::ById(id.clone())
+                if id == "__LATEST__" {
+                    ResumeOption::Latest
+                } else {
+                    ResumeOption::ById(id.clone())
+                }
             } else if cli.resume {
                 ResumeOption::Latest
             } else {
