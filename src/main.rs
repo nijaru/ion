@@ -102,11 +102,31 @@ async fn run_tui(
         ResumeOption::None => {}
         ResumeOption::Latest => {
             // Load most recent session
-            if let Ok(sessions) = app.store.list_recent(1)
-                && let Some(session) = sessions.first()
-                && let Err(e) = app.load_session(&session.id)
-            {
-                eprintln!("Warning: Failed to load session: {}", e);
+            match app.store.list_recent(1) {
+                Ok(sessions) => {
+                    if let Some(session) = sessions.first() {
+                        if let Err(e) = app.load_session(&session.id) {
+                            app.message_list
+                                .push_entry(ion::tui::message_list::MessageEntry::new(
+                                    ion::tui::message_list::Sender::System,
+                                    format!("Error: Failed to load session: {}", e),
+                                ));
+                        }
+                    } else {
+                        app.message_list
+                            .push_entry(ion::tui::message_list::MessageEntry::new(
+                                ion::tui::message_list::Sender::System,
+                                "No recent sessions found.".to_string(),
+                            ));
+                    }
+                }
+                Err(e) => {
+                    app.message_list
+                        .push_entry(ion::tui::message_list::MessageEntry::new(
+                            ion::tui::message_list::Sender::System,
+                            format!("Error: Failed to list sessions: {}", e),
+                        ));
+                }
             }
         }
         ResumeOption::ById(id) => {
@@ -270,14 +290,14 @@ async fn run_tui(
         }
     }
 
-    // Clear bottom UI area before exit
+    // Clear UI area before exit (only the UI rows, avoid wiping the whole screen)
     let ui_height = app.calculate_ui_height(term_width, term_height);
     let ui_start = app.ui_start_row(term_height, ui_height);
-    execute!(
-        stdout,
-        MoveTo(0, ui_start),
-        Clear(ClearType::FromCursorDown)
-    )?;
+    let ui_end = ui_start.saturating_add(ui_height).min(term_height);
+    for row in ui_start..ui_end {
+        execute!(stdout, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
+    }
+    execute!(stdout, MoveTo(0, ui_start))?;
 
     // Restore terminal
     execute!(stdout, DisableBracketedPaste)?;
