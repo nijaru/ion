@@ -158,24 +158,31 @@ async fn run_tui(
         // Print any new chat content to native scrollback
         let chat_lines = app.take_chat_inserts(term_width);
         if !chat_lines.is_empty() {
-            // Move cursor to where we want to insert (above bottom UI)
+            // Calculate where chat area ends (above bottom UI)
             let ui_height = app.calculate_ui_height(term_width, term_height);
-            let insert_row = term_height.saturating_sub(ui_height);
+            let chat_bottom = term_height.saturating_sub(ui_height);
 
-            // Save cursor, move to insert position, print lines, restore
-            execute!(stdout, crossterm::cursor::SavePosition)?;
-            execute!(stdout, MoveTo(0, insert_row))?;
+            // Set scroll region to chat area only (excludes bottom UI)
+            // DECSTBM: \x1b[<top>;<bottom>r (1-indexed)
+            write!(stdout, "\x1b[1;{}r", chat_bottom)?;
 
-            // Use scroll region to push content up
+            // Move to bottom of scroll region and scroll up
+            execute!(stdout, MoveTo(0, chat_bottom.saturating_sub(1)))?;
             execute!(
                 stdout,
                 crossterm::terminal::ScrollUp(chat_lines.len() as u16)
             )?;
 
-            // Print the chat lines
-            ion::tui::terminal::print_styled_lines_to_scrollback(&chat_lines)?;
+            // Position and print the chat lines
+            let print_start = chat_bottom.saturating_sub(chat_lines.len() as u16);
+            execute!(stdout, MoveTo(0, print_start))?;
+            for line in &chat_lines {
+                line.println()?;
+            }
 
-            execute!(stdout, crossterm::cursor::RestorePosition)?;
+            // Reset scroll region to full terminal
+            // DECSTBM with no params resets to full screen
+            write!(stdout, "\x1b[r")?;
         }
 
         // Render the bottom UI area
