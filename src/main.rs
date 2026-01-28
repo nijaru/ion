@@ -71,8 +71,8 @@ async fn run_tui(
         },
         execute,
         terminal::{
-            self, disable_raw_mode, enable_raw_mode, supports_keyboard_enhancement,
-            BeginSynchronizedUpdate, Clear, ClearType, EndSynchronizedUpdate,
+            self, BeginSynchronizedUpdate, Clear, ClearType, EndSynchronizedUpdate,
+            disable_raw_mode, enable_raw_mode, supports_keyboard_enhancement,
         },
     };
     use ion::tui::App;
@@ -104,9 +104,10 @@ async fn run_tui(
             // Load most recent session
             if let Ok(sessions) = app.store.list_recent(1)
                 && let Some(session) = sessions.first()
-                    && let Err(e) = app.load_session(&session.id) {
-                        eprintln!("Warning: Failed to load session: {}", e);
-                    }
+                && let Err(e) = app.load_session(&session.id)
+            {
+                eprintln!("Warning: Failed to load session: {}", e);
+            }
         }
         ResumeOption::ById(id) => {
             if let Err(e) = app.load_session(&id) {
@@ -148,7 +149,6 @@ async fn run_tui(
                 event::Event::Resize(w, h) => {
                     term_width = w;
                     term_height = h;
-                    let had_header = app.header_inserted();
                     let has_chat = !app.message_list.entries.is_empty();
                     app.handle_event(event::Event::Resize(w, h));
                     if has_chat {
@@ -158,8 +158,6 @@ async fn run_tui(
                         let _ = std::io::stdout().flush();
                         app.reprint_chat_scrollback(&mut stdout, term_width)?;
                         stdout.flush()?;
-                    } else {
-                        app.set_header_inserted(had_header);
                     }
                 }
                 _ => {}
@@ -171,7 +169,6 @@ async fn run_tui(
             if w != term_width || h != term_height {
                 term_width = w;
                 term_height = h;
-                let had_header = app.header_inserted();
                 let has_chat = !app.message_list.entries.is_empty();
                 app.handle_event(event::Event::Resize(w, h));
                 if has_chat {
@@ -179,13 +176,23 @@ async fn run_tui(
                     let _ = std::io::stdout().flush();
                     app.reprint_chat_scrollback(&mut stdout, term_width)?;
                     stdout.flush()?;
-                } else {
-                    app.set_header_inserted(had_header);
                 }
             }
         }
 
         app.update();
+
+        if !app.header_inserted() && app.message_list.entries.is_empty() {
+            let header_lines = app.take_startup_header_lines();
+            if !header_lines.is_empty() {
+                for line in &header_lines {
+                    line.println()?;
+                }
+                if let Ok((_x, y)) = crossterm::cursor::position() {
+                    app.set_startup_ui_anchor(Some(y));
+                }
+            }
+        }
 
         // Begin synchronized output (prevents flicker)
         execute!(stdout, BeginSynchronizedUpdate)?;
@@ -241,12 +248,11 @@ async fn run_tui(
                 Ok(None) => {} // No changes or editor cancelled
                 Err(e) => {
                     // Show error in TUI chat instead of stderr
-                    app.message_list.push_entry(
-                        ion::tui::message_list::MessageEntry::new(
+                    app.message_list
+                        .push_entry(ion::tui::message_list::MessageEntry::new(
                             ion::tui::message_list::Sender::System,
                             format!("Editor error: {}", e),
-                        ),
-                    );
+                        ));
                 }
             }
 
@@ -266,8 +272,12 @@ async fn run_tui(
 
     // Clear bottom UI area before exit
     let ui_height = app.calculate_ui_height(term_width, term_height);
-    let ui_start = term_height.saturating_sub(ui_height);
-    execute!(stdout, MoveTo(0, ui_start), Clear(ClearType::FromCursorDown))?;
+    let ui_start = app.ui_start_row(term_height, ui_height);
+    execute!(
+        stdout,
+        MoveTo(0, ui_start),
+        Clear(ClearType::FromCursorDown)
+    )?;
 
     // Restore terminal
     execute!(stdout, DisableBracketedPaste)?;
