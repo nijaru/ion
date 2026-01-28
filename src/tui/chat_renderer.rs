@@ -65,7 +65,7 @@ impl ChatRenderer {
                                 let highlighted_lines =
                                     highlight::highlight_markdown_with_code(&sanitized);
                                 for mut line in highlighted_lines {
-                                    line.prepend(StyledSpan::raw(" "));
+                                    line.prepend(StyledSpan::raw("  "));
                                     chat_lines.push(line);
                                 }
                             }
@@ -173,7 +173,7 @@ impl ChatRenderer {
                         // Use our new markdown renderer for multi-line system messages
                         let md_lines = highlight::render_markdown(content);
                         for mut line in md_lines {
-                            line.prepend(StyledSpan::raw(" "));
+                            line.prepend(StyledSpan::raw("  "));
                             chat_lines.push(line);
                         }
                     }

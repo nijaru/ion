@@ -20,11 +20,7 @@ const INPUT_MARGIN: u16 = 4;
 
 impl App {
     fn progress_height(&self) -> u16 {
-        if self.is_running || self.last_task_summary.is_some() || self.retry_status.is_some() {
-            1
-        } else {
-            0
-        }
+        1
     }
 
     /// Calculate the height needed for the input box based on content.
@@ -132,28 +128,11 @@ impl App {
         out
     }
 
-    /// Render chat history into the visible viewport without touching scrollback.
-    pub fn render_chat_viewport<W: std::io::Write>(
-        &self,
-        w: &mut W,
-        width: u16,
-        height: u16,
-    ) -> std::io::Result<()> {
-        use crossterm::{
-            cursor::MoveTo,
-            execute,
-            terminal::{Clear, ClearType},
-        };
-
-        let ui_height = self.calculate_ui_height(width, height);
-        let chat_height = height.saturating_sub(ui_height);
-        if chat_height == 0 {
-            return Ok(());
-        }
-
+    /// Build chat history lines for a given width.
+    pub fn build_chat_lines(&self, width: u16) -> Vec<StyledLine> {
         let wrap_width = width.saturating_sub(2);
         if wrap_width == 0 {
-            return Ok(());
+            return Vec::new();
         }
 
         let mut lines = Vec::new();
@@ -176,18 +155,25 @@ impl App {
             ));
         }
 
-        let visible = chat_height as usize;
-        let start = lines.len().saturating_sub(visible);
-        for row in 0..visible {
-            execute!(
-                w,
-                MoveTo(0, row as u16),
-                Clear(ClearType::CurrentLine)
-            )?;
-            if let Some(line) = lines.get(start + row) {
-                line.write_to(w)?;
-            }
+        lines
+    }
+
+    /// Reprint full chat history into scrollback (used on resize reflow).
+    pub fn reprint_chat_scrollback<W: std::io::Write>(
+        &mut self,
+        w: &mut W,
+        width: u16,
+    ) -> std::io::Result<()> {
+        let lines = self.build_chat_lines(width);
+        for line in &lines {
+            line.write_to(w)?;
+            write!(w, "\r\n")?;
         }
+
+        self.rendered_entries = self.message_list.entries.len();
+        self.header_inserted = true;
+        self.buffered_chat_lines.clear();
+
         Ok(())
     }
 

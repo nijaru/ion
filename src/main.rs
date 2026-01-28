@@ -148,11 +148,19 @@ async fn run_tui(
                 event::Event::Resize(w, h) => {
                     term_width = w;
                     term_height = h;
+                    let had_header = app.header_inserted();
+                    let has_chat = !app.message_list.entries.is_empty();
                     app.handle_event(event::Event::Resize(w, h));
-                    // Clear screen and re-render chat viewport (preserve scrollback)
-                    execute!(stdout, Clear(ClearType::All), MoveTo(0, 0))?;
-                    app.render_chat_viewport(&mut stdout, term_width, term_height)?;
-                    stdout.flush()?;
+                    if has_chat {
+                        // Clear scrollback + screen + home cursor for full reflow
+                        // \x1b[3J = clear scrollback, \x1b[2J = clear screen, \x1b[H = home cursor
+                        print!("\x1b[3J\x1b[2J\x1b[H");
+                        let _ = std::io::stdout().flush();
+                        app.reprint_chat_scrollback(&mut stdout, term_width)?;
+                        stdout.flush()?;
+                    } else {
+                        app.set_header_inserted(had_header);
+                    }
                 }
                 _ => {}
             }
@@ -163,10 +171,17 @@ async fn run_tui(
             if w != term_width || h != term_height {
                 term_width = w;
                 term_height = h;
+                let had_header = app.header_inserted();
+                let has_chat = !app.message_list.entries.is_empty();
                 app.handle_event(event::Event::Resize(w, h));
-                execute!(stdout, Clear(ClearType::All), MoveTo(0, 0))?;
-                app.render_chat_viewport(&mut stdout, term_width, term_height)?;
-                stdout.flush()?;
+                if has_chat {
+                    print!("\x1b[3J\x1b[2J\x1b[H");
+                    let _ = std::io::stdout().flush();
+                    app.reprint_chat_scrollback(&mut stdout, term_width)?;
+                    stdout.flush()?;
+                } else {
+                    app.set_header_inserted(had_header);
+                }
             }
         }
 
