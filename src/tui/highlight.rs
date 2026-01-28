@@ -300,6 +300,9 @@ pub fn render_markdown(content: &str) -> Vec<StyledLine> {
                 }
                 TagEnd::List(_) => {
                     list_depth = list_depth.saturating_sub(1);
+                    if list_depth == 0 {
+                        result.push(StyledLine::empty());
+                    }
                 }
                 TagEnd::Item => {
                     if !current_line_is_prefix_only {
