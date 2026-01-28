@@ -23,7 +23,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, warn};
+use tracing::{debug, error};
 
 impl App {
     /// Create a new App with default permissions.
@@ -144,9 +144,6 @@ impl App {
         // Open session store
         let store = SessionStore::open(&config.sessions_db_path())
             .context("Failed to open session store")?;
-        if let Err(e) = store.prune_empty_sessions() {
-            tracing::warn!("Failed to prune empty sessions: {}", e);
-        }
 
         // Create new session with current directory
         let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));

@@ -294,6 +294,9 @@ pub fn render_markdown(content: &str) -> Vec<StyledLine> {
                     let line = current_line.build();
                     result.push(line);
                     current_line = LineBuilder::new();
+                    if list_depth == 0 {
+                        result.push(StyledLine::empty());
+                    }
                 }
                 TagEnd::List(_) => {
                     list_depth = list_depth.saturating_sub(1);
@@ -318,6 +321,9 @@ pub fn render_markdown(content: &str) -> Vec<StyledLine> {
                     }
                     current_line = LineBuilder::new();
                     current_line_is_prefix_only = false;
+                    if list_depth == 0 {
+                        result.push(StyledLine::empty());
+                    }
                 }
                 _ => {}
             },
@@ -378,6 +384,10 @@ pub fn render_markdown(content: &str) -> Vec<StyledLine> {
     let line = current_line.build();
     if !line.is_empty() {
         result.push(line);
+    }
+
+    while result.last().is_some_and(StyledLine::is_empty) {
+        result.pop();
     }
 
     result

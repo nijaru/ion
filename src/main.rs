@@ -149,6 +149,11 @@ async fn run_tui(
     // Track terminal size
     let (mut term_width, mut term_height) = terminal::size()?;
 
+    if !app.message_list.entries.is_empty() {
+        app.reprint_chat_scrollback(&mut stdout, term_width)?;
+        stdout.flush()?;
+    }
+
     // Main loop
     loop {
         if event::poll(std::time::Duration::from_millis(50))? {
