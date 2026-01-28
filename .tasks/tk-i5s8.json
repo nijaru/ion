@@ -3,7 +3,7 @@
   "ref": "i5s8",
   "title": "[REFACTOR] TUI v2: Replace Viewport::Inline with custom bottom area management",
   "description": null,
-  "status": "open",
+  "status": "done",
   "priority": 2,
   "labels": [],
   "assignees": [],
@@ -34,7 +34,7 @@
     }
   ],
   "created_at": "2026-01-27T06:40:15.218Z",
-  "updated_at": "2026-01-28T00:08:04.170Z",
-  "completed_at": null,
+  "updated_at": "2026-01-28T02:02:41.266Z",
+  "completed_at": "2026-01-28T02:02:41.266Z",
   "external": {}
 }
