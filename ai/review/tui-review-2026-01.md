@@ -60,7 +60,7 @@
 - Skip saving empty/system-only sessions; list_recent filters to sessions with user messages.
 - Enforce single blank line between entries; add spacing after lists in markdown rendering.
 - Strip repeated \"Error:\" prefixes in tool results.
-- Trim leading/trailing blank lines per entry to avoid double separators.
+- Trim leading/trailing blank lines per entry; collapse consecutive blank lines to avoid double separators.
 
 ## Plan
 
