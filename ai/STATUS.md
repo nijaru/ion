@@ -48,6 +48,9 @@
 - Kimi k2.5 API returns malformed JSON (tk-1lso)
 - Input composer lacks scroll offset for long input (tk-28a4)
 - Progress line duplicates when switching terminal tabs during streaming (tk-7aem)
+- Markdown pretty printing + tables need width-aware rendering (tk-0asw, tk-fsto)
+- Resize reflow clears pre-ion scrollback; decide preservation strategy (tk-2bk7)
+- Idle UI height could be reduced by hiding progress line (tk-sk30)
 
 ## Recent Session
 
@@ -57,7 +60,7 @@
 - `context-management.md` ← context/compaction files
 - `agent-survey.md` ← terminal-agents comparison
 
-**2026-01-28:** TUI v2 review. Fixed cursor wrap drift + scrollback CRLF; added input normalization + markdown list cleanup; logged input scroll + tab-switch progress duplication.
+**2026-01-28:** TUI v2 review. Fixed cursor wrap drift + scrollback CRLF; added input normalization + markdown list cleanup; logged input scroll, tab-switch progress duplication, markdown/table rendering, scrollback preservation, idle UI height.
 
 ## Module Health
 

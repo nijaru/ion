@@ -34,6 +34,18 @@
   - Location: `src/tui/events.rs` → `SessionStore::add_input_history`
   - Impact: inconsistent recall/history spacing
   - Fix: normalize CRLF → LF and trim trailing whitespace before storing
+- [MEDIUM] Markdown tables and list spacing need width-aware pretty printing
+  - Location: `src/tui/highlight.rs` (render_markdown)
+  - Impact: mixed alignment, lists/tables look malformed at small widths
+  - Fix: add markdown pretty-printer or table renderer with wrapping
+- [MEDIUM] Resize reflow clears pre-ion scrollback
+  - Location: `src/main.rs` resize handler (`\x1b[3J`)
+  - Impact: terminal history lost on resize
+  - Fix: decide on preserving history vs full reflow; implement chosen strategy
+- [LOW] Idle UI height could be reduced by hiding progress line
+  - Location: `src/tui/render.rs`, `calculate_ui_height`
+  - Impact: extra blank line when idle
+  - Fix: make progress line conditional
 
 ## Fixes Applied
 
