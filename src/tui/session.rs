@@ -23,7 +23,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 
 impl App {
     /// Create a new App with default permissions.
@@ -144,6 +144,9 @@ impl App {
         // Open session store
         let store = SessionStore::open(&config.sessions_db_path())
             .context("Failed to open session store")?;
+        if let Err(e) = store.prune_empty_sessions() {
+            tracing::warn!("Failed to prune empty sessions: {}", e);
+        }
 
         // Create new session with current directory
         let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -701,18 +704,9 @@ impl App {
     pub(super) fn quit(&mut self) {
         self.should_quit = true;
 
-        // Final session save
+        // Final session save (skip empty sessions)
         if let Err(e) = self.store.save(&self.session) {
             error!("Failed to save session on quit: {}", e);
         }
-
-        // Push a system message about session end
-        let end_msg = format!(
-            "Session {} closed. {} messages saved.",
-            self.session.id,
-            self.session.messages.len()
-        );
-        self.message_list
-            .push_entry(MessageEntry::new(Sender::System, end_msg));
     }
 }
