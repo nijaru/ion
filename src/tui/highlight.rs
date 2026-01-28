@@ -336,6 +336,12 @@ pub fn render_markdown(content: &str) -> Vec<StyledLine> {
                             current_line_is_prefix_only = false;
                         }
                         if !part.is_empty() {
+                            if list_prefix.is_some()
+                                && current_line_is_prefix_only
+                                && part.trim().is_empty()
+                            {
+                                continue;
+                            }
                             let span = if in_bold && in_italic {
                                 StyledSpan::bold(part.to_string()).with_italic()
                             } else if in_bold {

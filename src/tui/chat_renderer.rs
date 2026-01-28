@@ -1,7 +1,7 @@
 use crate::tui::highlight;
 use crate::tui::message_list::{MessagePart, Sender};
 use crate::tui::terminal::{LineBuilder, StyledLine, StyledSpan};
-use crate::tui::{sanitize_for_display, QUEUED_PREVIEW_LINES};
+use crate::tui::{QUEUED_PREVIEW_LINES, sanitize_for_display};
 use crossterm::style::Color;
 
 pub struct ChatRenderer;
@@ -46,11 +46,9 @@ impl ChatRenderer {
                                         .build(),
                                 );
                             } else {
-                                chat_lines.push(StyledLine::new(vec![StyledSpan::colored(
-                                    chunk,
-                                    Color::Cyan,
-                                )
-                                .with_dim()]));
+                                chat_lines.push(StyledLine::new(vec![
+                                    StyledSpan::colored(chunk, Color::Cyan).with_dim(),
+                                ]));
                             }
                             first_line = false;
                         }
@@ -203,7 +201,25 @@ impl ChatRenderer {
             }
         }
 
-        chat_lines
+        if wrap_width == 0 {
+            return chat_lines;
+        }
+
+        let mut wrapped = Vec::new();
+        for line in chat_lines {
+            if line.is_empty() {
+                wrapped.push(line);
+                continue;
+            }
+            let text_len = styled_line_text(&line).chars().count();
+            if text_len <= wrap_width {
+                wrapped.push(line);
+                continue;
+            }
+            wrapped.extend(wrap_styled_line(&line, wrap_width));
+        }
+
+        wrapped
     }
 }
 
@@ -328,4 +344,126 @@ fn wrap_line(line: &str, width: usize) -> Vec<String> {
     }
 
     chunks
+}
+
+fn styled_line_text(line: &StyledLine) -> String {
+    let mut out = String::new();
+    for span in &line.spans {
+        out.push_str(&span.content);
+    }
+    out
+}
+
+fn continuation_indent_width(text: &str) -> usize {
+    let indent = text.chars().take_while(|c| *c == ' ').count();
+    let trimmed = text[indent..].trim_end();
+
+    if trimmed.starts_with("* ")
+        || trimmed.starts_with("- ")
+        || trimmed.starts_with("+ ")
+        || trimmed.starts_with("> ")
+    {
+        return indent + 2;
+    }
+
+    if trimmed.starts_with('#') {
+        let hashes = trimmed.chars().take_while(|c| *c == '#').count();
+        if trimmed.chars().nth(hashes) == Some(' ') {
+            return indent + hashes + 1;
+        }
+    }
+
+    let mut digits = 0usize;
+    for ch in trimmed.chars() {
+        if ch.is_ascii_digit() {
+            digits += 1;
+        } else {
+            break;
+        }
+    }
+    if digits > 0 {
+        let rest = trimmed.chars().skip(digits).collect::<String>();
+        if rest.starts_with(". ") {
+            return indent + digits + 2;
+        }
+    }
+
+    indent
+}
+
+fn wrap_styled_line(line: &StyledLine, width: usize) -> Vec<StyledLine> {
+    if width == 0 || line.is_empty() {
+        return vec![line.clone()];
+    }
+
+    let text = styled_line_text(line);
+    if text.chars().count() <= width {
+        return vec![line.clone()];
+    }
+
+    let indent_width = continuation_indent_width(&text).min(width.saturating_sub(1));
+    let indent_prefix = " ".repeat(indent_width);
+
+    let mut lines = Vec::new();
+    let mut current_spans: Vec<StyledSpan> = Vec::new();
+    let mut current_len = 0usize;
+    let mut is_first_line = true;
+
+    let start_new_line = |lines: &mut Vec<StyledLine>,
+                              current_spans: &mut Vec<StyledSpan>,
+                              current_len: &mut usize,
+                              is_first_line: &mut bool| {
+        if !current_spans.is_empty() {
+            lines.push(StyledLine::new(std::mem::take(current_spans)));
+        }
+        *current_len = 0;
+        if !*is_first_line && !indent_prefix.is_empty() {
+            current_spans.push(StyledSpan::raw(indent_prefix.clone()));
+            *current_len = indent_width;
+        }
+        *is_first_line = false;
+    };
+
+    start_new_line(
+        &mut lines,
+        &mut current_spans,
+        &mut current_len,
+        &mut is_first_line,
+    );
+
+    for span in &line.spans {
+        let style = span.style;
+        for ch in span.content.chars() {
+            if current_len >= width {
+                start_new_line(
+                    &mut lines,
+                    &mut current_spans,
+                    &mut current_len,
+                    &mut is_first_line,
+                );
+            }
+            push_char(&mut current_spans, style, ch);
+            current_len += 1;
+        }
+    }
+
+    if !current_spans.is_empty() {
+        lines.push(StyledLine::new(current_spans));
+    }
+
+    if lines.is_empty() {
+        vec![StyledLine::empty()]
+    } else {
+        lines
+    }
+}
+
+fn push_char(spans: &mut Vec<StyledSpan>, style: crossterm::style::ContentStyle, ch: char) {
+    if let Some(last) = spans.last_mut() {
+        if last.style == style {
+            last.content.push(ch);
+            return;
+        }
+    }
+    spans.push(StyledSpan::new(ch.to_string(), style));
 }
