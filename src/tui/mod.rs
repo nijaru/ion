@@ -132,3 +132,13 @@ pub struct App {
     pub(crate) last_render_width: Option<u16>,
     pub(crate) last_ui_start: Option<u16>,
 }
+
+impl App {
+    pub fn header_inserted(&self) -> bool {
+        self.header_inserted
+    }
+
+    pub fn set_header_inserted(&mut self, value: bool) {
+        self.header_inserted = value;
+    }
+}

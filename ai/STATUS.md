@@ -48,6 +48,8 @@
 - Kimi k2.5 API returns malformed JSON (tk-1lso)
 - Progress line duplicates when switching terminal tabs during streaming (tk-7aem)
 - Markdown pretty printing + tables need width-aware rendering (tk-0asw, tk-fsto)
+- Resize reflow clears pre-ion scrollback; decide preservation strategy (tk-2bk7)
+- Large blank gap on launch; UI anchoring decision needed (tk-9s5m)
 
 ## Recent Session
 
@@ -57,7 +59,7 @@
 - `context-management.md` ← context/compaction files
 - `agent-survey.md` ← terminal-agents comparison
 
-**2026-01-28:** TUI v2 review. Fixed cursor wrap drift + scrollback CRLF; added input normalization + markdown list cleanup; added input scroll + idle UI reduction; reflow viewport on resize while preserving scrollback.
+**2026-01-28:** TUI v2 review. Fixed cursor wrap drift + scrollback CRLF; added input normalization + markdown list cleanup; added input scroll; resize now reflows chat by clearing scrollback when chat exists.
 
 ## Module Health
 

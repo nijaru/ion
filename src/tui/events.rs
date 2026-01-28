@@ -543,8 +543,9 @@ impl App {
 
     /// Handle terminal resize: reset state to force reprint of all chat.
     fn handle_resize(&mut self) {
-        // Mark all entries as already rendered to avoid scrollback duplication
-        self.rendered_entries = self.message_list.entries.len();
+        // Reset render tracking for full reflow
+        self.rendered_entries = 0;
+        self.header_inserted = false;
         self.buffered_chat_lines.clear();
         // Clear cached render state
         self.last_render_width = None;

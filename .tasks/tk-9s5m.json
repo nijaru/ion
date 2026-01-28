@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "9s5m",
+  "title": "[UX] Reduce blank screen gap on launch (UI anchoring)",
+  "description": null,
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-28T20:40:10.856Z",
+  "updated_at": "2026-01-28T20:40:10.856Z",
+  "completed_at": null,
+  "external": {}
+}

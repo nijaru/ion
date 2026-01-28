@@ -26,14 +26,21 @@
   - Location: `src/tui/highlight.rs` (render_markdown)
   - Impact: mixed alignment, lists/tables look malformed at small widths
   - Fix: add markdown pretty-printer or table renderer with wrapping
+- [MEDIUM] Resize reflow clears pre-ion scrollback once chat exists
+  - Location: `src/main.rs` resize handler (`\x1b[3J`)
+  - Impact: terminal history lost after resize during chat sessions
+  - Fix: decide on preservation strategy or make behavior configurable
+- [LOW] Large blank gap on launch due to UI anchoring
+  - Location: `src/main.rs` + insert-before rendering
+  - Impact: many empty lines between shell output and header/input
+  - Fix: consider top-anchoring UI until first message or dynamic ui_start
 
 ## Fixes Applied
 
 - Normalize input spacing before history/storage.
 - Drop empty list-item markers in markdown rendering.
 - Add input scroll offset for long input.
-- Hide idle progress line to reduce UI height.
-- Reflow visible chat on resize while preserving scrollback (scrollback itself not reflowed).
+- Reflow chat on resize by clearing scrollback once chat exists.
 
 ## Plan
 
@@ -52,4 +59,4 @@
 - Line indent: scrollback writes use `writeln!` only; raw mode can keep column.
 - Input scroll: `scroll_to_cursor` never called; `scroll_offset` unused in render path.
 - Markdown lists: pulldown-cmark emits empty list items; renderer prints marker without text.
-- Resize: terminal scrollback cannot be reflowed; viewport reflow only.
+- Resize: chat reflow clears scrollback to avoid stale wrapping.
