@@ -1,106 +1,180 @@
-# ion - Codex Context
+# ion - TUI Code Review
 
-Fast, lightweight TUI coding agent in Rust.
+Fast, lightweight TUI coding agent in Rust. Review the TUI v2 implementation.
 
 ## Quick Start
 
 ```bash
 cargo build              # Build
 cargo test               # Test (113 passing)
-cargo run                # Run TUI
+cargo clippy             # Lint warnings
+cargo run                # Manual testing
 ```
 
 ## Project Structure
 
 ```
 src/
-├── main.rs          # TUI entry point, render loop
-├── tui/             # Terminal interface (pure crossterm, no ratatui)
+├── main.rs          # TUI entry, render loop, insert_before logic
+├── tui/             # Terminal interface (pure crossterm)
 │   ├── mod.rs       # App state
 │   ├── render.rs    # Bottom UI rendering
 │   ├── events.rs    # Event handling
-│   ├── session.rs   # Session initialization
 │   ├── terminal.rs  # StyledLine/StyledSpan primitives
 │   ├── composer/    # Custom text input (ropey-backed)
-│   └── chat_renderer.rs  # Message formatting
+│   ├── chat_renderer.rs  # Message formatting
+│   └── highlight.rs # Markdown + syntax highlighting
 ├── agent/           # Multi-turn conversation loop
 ├── provider/        # LLM providers via llm crate
 ├── tool/            # Built-in tools + MCP client
-├── skill/           # SKILL.md loader (YAML frontmatter)
 └── session/         # SQLite persistence
 
-ai/                  # Session context (read before working)
+ai/                  # Session context
 ├── STATUS.md        # Current state, known issues
-├── DESIGN.md        # Architecture overview
-├── DECISIONS.md     # Decision log
-├── design/          # Detailed designs
-└── research/        # Reference material (33 files, consolidated)
+├── design/tui-v2.md # TUI architecture spec
+└── research/        # Reference material
 ```
 
-## Current State
-
-- **Phase:** TUI v2 Complete
-- **Status:** Testing
-- **Known Issues:**
-  - Version line shows 3-space indent (needs investigation)
-  - Kimi k2.5 API returns malformed JSON
-
-## TUI Architecture (v2)
+## TUI v2 Architecture
 
 Pure crossterm, native terminal scrollback:
 
 1. **Chat** → insert_before pattern (ScrollUp + print above UI)
 2. **Bottom UI** → cursor positioning at `height - ui_height`
-3. **Resize** → clear screen, reprint all chat
-4. **Exit** → clear bottom UI only, chat stays in scrollback
+3. **Rendering** → Synchronized output (Begin/EndSynchronizedUpdate)
+4. **Resize** → clear screen, reprint all chat from message_list
+5. **Exit** → clear bottom UI only, chat stays in scrollback
 
-Key files:
+## Files to Review
 
-- `src/main.rs` - Render loop with insert_before pattern
-- `src/tui/render.rs` - `draw_direct()`, progress/input/status rendering
-- `src/tui/terminal.rs` - StyledLine/StyledSpan primitives
+### HIGH Priority
 
-## Priority Tasks
+| File                      | Purpose                                       |
+| ------------------------- | --------------------------------------------- |
+| `src/main.rs:57-200`      | TUI setup, render loop, insert_before logic   |
+| `src/tui/render.rs`       | Bottom UI: progress, input, status, selectors |
+| `src/tui/mod.rs`          | App struct, state fields                      |
+| `src/tui/events.rs`       | Event handling, mode transitions              |
+| `src/tui/composer/mod.rs` | ComposerState, cursor, scroll                 |
+| `src/tui/input.rs`        | Key event handling, startup header            |
 
-From `tk ls`:
+### MEDIUM Priority
 
-| Priority | Task    | Description                                |
-| -------- | ------- | ------------------------------------------ |
-| P2       | tk-268g | Anthropic caching - 50-100x cost savings   |
-| P2       | tk-80az | Image attachment - @image:path syntax      |
-| P2       | tk-ik05 | File autocomplete - @ triggers path picker |
-| P2       | tk-hk6p | Command autocomplete - / and // prefixes   |
-| P2       | tk-1lso | BUG: Kimi k2.5 API error                   |
+| File                         | Purpose                          |
+| ---------------------------- | -------------------------------- |
+| `src/tui/terminal.rs`        | StyledLine/StyledSpan primitives |
+| `src/tui/chat_renderer.rs`   | Message → StyledLine conversion  |
+| `src/tui/composer/buffer.rs` | ComposerBuffer (ropey-backed)    |
 
-## Code Standards
+## Known Issues to Investigate
 
-- **Toolchain:** Rust stable, Edition 2024
-- **Errors:** anyhow (app), thiserror (lib)
-- **Async:** tokio (network), sync (files)
-- **Patterns:** `&str` over `String`, `crate::` over `super::`
-- **Dependencies:** Use `cargo add`, never edit Cargo.toml versions manually
+### 1. Version Line 3-Space Indent
 
-## Task Tracking
+**Location:** `src/tui/input.rs:46-53`
 
-```bash
-tk ls              # List all tasks
-tk add "title"     # Add task
-tk start <id>      # Start working
-tk done <id>       # Mark complete
-tk show <id>       # Get details
+Version line appears with 3 spaces before it on startup. Check:
+
+- `startup_header_lines()` creation
+- insert_before logic in `src/main.rs`
+- MoveTo positioning before printing
+
+### 2. Cursor Position on Wrapped Lines
+
+**Location:** `src/tui/composer/mod.rs`
+
+Cursor position off-by-one on wrapped lines (accumulates). Check:
+
+- `calculate_cursor_position()` logic
+- Visual line wrapping vs cursor column calculation
+- Byte vs grapheme counting consistency
+
+### 3. Progress Line During Tab Switch
+
+**Location:** `src/tui/render.rs`
+
+Multiple progress lines when switching terminal tabs during streaming. Check:
+
+- UI clear before redraw
+- Synchronized update correctness
+- Terminal state after tab switch
+
+## Review Checklist
+
+### Correctness
+
+- [ ] insert_before: ScrollUp count matches line count
+- [ ] MoveTo positions: 0-indexed, within bounds
+- [ ] Synchronized output: Begin/End pairs balanced
+- [ ] Cursor: hidden during render, shown correctly after
+- [ ] Clear operations: correct ClearType used
+
+### Input Handling
+
+- [ ] Grapheme-aware cursor movement
+- [ ] Word navigation respects Unicode
+- [ ] Scroll offset keeps cursor visible
+- [ ] Large paste handling (blob storage)
+- [ ] History navigation at edges
+
+### State Consistency
+
+- [ ] `rendered_entries` tracks printed content
+- [ ] `header_inserted` prevents duplicates
+- [ ] `is_running` reflects agent state
+- [ ] Mode transitions clean up properly
+
+### Edge Cases
+
+- [ ] Empty input
+- [ ] Lines wider than terminal
+- [ ] Rapid resize events
+- [ ] Paste during streaming
+- [ ] Ctrl+C in different modes
+
+## Code Patterns to Verify
+
+### Insert Before (src/main.rs)
+
+```rust
+let ui_start = term_height.saturating_sub(ui_height);
+execute!(stdout, MoveTo(0, ui_start))?;
+execute!(stdout, ScrollUp(line_count))?;
+execute!(stdout, MoveTo(0, ui_start.saturating_sub(line_count)))?;
+for line in &chat_lines {
+    line.println()?;
+}
 ```
 
-## Before Starting
+### Synchronized Output
 
-1. Read `ai/STATUS.md` for current state
-2. Run `tk ls` to see open tasks
-3. Pick a task and run `tk start <id>`
-4. When done: `tk done <id>` and commit
+```rust
+execute!(stdout, BeginSynchronizedUpdate)?;
+// ... all drawing ...
+execute!(stdout, EndSynchronizedUpdate)?;
+```
 
-## Suggested First Tasks
+## Output Format
 
-1. **TUI Code Review** - See `TUI-REVIEW.md` for comprehensive review guide with file list, known issues, and checklist.
+For each file, report:
 
-2. **Fix Kimi API error (tk-1lso)** - OpenRouter returns malformed JSON for Kimi k2.5. Check `src/provider/` for response parsing.
+```markdown
+## [filename]
 
-3. **Anthropic caching (tk-268g)** - Implement direct Anthropic client with cache_control. See `ai/research/prompt-caching-providers-2026.md` for context.
+### Issues Found
+
+- [HIGH/MEDIUM/LOW] Description
+  - Location: line X-Y
+  - Impact: what breaks
+  - Fix: suggested approach
+
+### Observations
+
+- Pattern X is correct
+- Consider refactoring Y
+```
+
+## After Review
+
+1. Create tasks: `tk add "[BUG] description" -p 2`
+2. Update: `ai/STATUS.md` with findings
+3. Commit notes to: `ai/review/tui-review-2026-01.md`
