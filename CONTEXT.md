@@ -99,7 +99,7 @@ tk show <id>       # Get details
 
 ## Suggested First Tasks
 
-1. **Investigate version indent** - `src/tui/input.rs:46-53` has `startup_header_lines()`. The version line appears with 3 spaces before it. Check terminal positioning in `src/main.rs` insert_before logic.
+1. **TUI Code Review** - See `TUI-REVIEW.md` for comprehensive review guide with file list, known issues, and checklist.
 
 2. **Fix Kimi API error (tk-1lso)** - OpenRouter returns malformed JSON for Kimi k2.5. Check `src/provider/` for response parsing.
 
