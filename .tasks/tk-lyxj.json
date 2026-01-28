@@ -1,0 +1,24 @@
+{
+  "project": "tk",
+  "ref": "lyxj",
+  "title": "[BUG] Width-aware wrapping for chat lines on resize (markdown/tool output)",
+  "description": null,
+  "status": "open",
+  "priority": 2,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [
+    {
+      "ts": "2026-01-28T21:04:21.287Z",
+      "msg": "Added width-aware wrapping for StyledLine output; resize reflow now uses wrapped chat lines. Needs terminal verification (lists/tables)."
+    }
+  ],
+  "created_at": "2026-01-28T20:50:39.740Z",
+  "updated_at": "2026-01-28T21:04:21.287Z",
+  "completed_at": null,
+  "external": {}
+}

@@ -15,10 +15,14 @@
     {
       "ts": "2026-01-28T20:40:17.819Z",
       "msg": "Include paragraph spacing between messages and header/list spacing"
+    },
+    {
+      "ts": "2026-01-28T21:04:26.557Z",
+      "msg": "Dropped whitespace-only list item markers in markdown rendering; full pretty-printing (spacing/tables) still open."
     }
   ],
   "created_at": "2026-01-28T18:29:20.190Z",
-  "updated_at": "2026-01-28T20:40:17.819Z",
+  "updated_at": "2026-01-28T21:04:26.557Z",
   "completed_at": null,
   "external": {}
 }

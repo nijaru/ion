@@ -33,7 +33,7 @@
 - [LOW] Large blank gap on launch due to UI anchoring
   - Location: `src/main.rs` + insert-before rendering
   - Impact: many empty lines between shell output and header/input
-  - Fix: consider top-anchoring UI until first message or dynamic ui_start
+  - Fix: top-anchor UI until first message and verify resize behavior
 
 ## Fixes Applied
 
@@ -41,6 +41,8 @@
 - Drop empty list-item markers in markdown rendering.
 - Add input scroll offset for long input.
 - Reflow chat on resize by clearing scrollback once chat exists.
+- Anchor startup UI near header; clear anchored UI on exit.
+- Wrap StyledLine output to terminal width for resize reflow.
 
 ## Plan
 

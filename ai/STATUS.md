@@ -49,7 +49,8 @@
 - Progress line duplicates when switching terminal tabs during streaming (tk-7aem)
 - Markdown pretty printing + tables need width-aware rendering (tk-0asw, tk-fsto)
 - Resize reflow clears pre-ion scrollback; decide preservation strategy (tk-2bk7)
-- Large blank gap on launch; UI anchoring decision needed (tk-9s5m)
+- Startup UI anchoring added; verify launch gap + resize behavior (tk-9s5m)
+- Width-aware chat wrapping added; verify lists/tables on resize (tk-lyxj)
 
 ## Recent Session
 
@@ -60,6 +61,7 @@
 - `agent-survey.md` ← terminal-agents comparison
 
 **2026-01-28:** TUI v2 review. Fixed cursor wrap drift + scrollback CRLF; added input normalization + markdown list cleanup; added input scroll; resize now reflows chat by clearing scrollback when chat exists.
+**2026-01-28:** Anchored startup UI near header, added width-aware chat wrapping, and tightened markdown list rendering. Need terminal verification.
 
 ## Module Health
 
