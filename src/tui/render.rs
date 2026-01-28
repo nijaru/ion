@@ -19,6 +19,14 @@ const PROMPT_WIDTH: u16 = 3;
 const INPUT_MARGIN: u16 = 4;
 
 impl App {
+    fn progress_height(&self) -> u16 {
+        if self.is_running || self.last_task_summary.is_some() || self.retry_status.is_some() {
+            1
+        } else {
+            0
+        }
+    }
+
     /// Calculate the height needed for the input box based on content.
     /// Returns height including borders.
     /// Min: 3 lines (1 content + 2 borders)
@@ -57,7 +65,7 @@ impl App {
     /// Calculate the total height of the bottom UI area.
     /// Returns: progress (1) + input (with borders) + status (1)
     pub fn calculate_ui_height(&self, width: u16, height: u16) -> u16 {
-        let progress_height = 1u16;
+        let progress_height = self.progress_height();
         let input_height = self.calculate_input_height(width, height);
         let status_height = 1u16;
         progress_height + input_height + status_height
@@ -124,6 +132,65 @@ impl App {
         out
     }
 
+    /// Render chat history into the visible viewport without touching scrollback.
+    pub fn render_chat_viewport<W: std::io::Write>(
+        &self,
+        w: &mut W,
+        width: u16,
+        height: u16,
+    ) -> std::io::Result<()> {
+        use crossterm::{
+            cursor::MoveTo,
+            execute,
+            terminal::{Clear, ClearType},
+        };
+
+        let ui_height = self.calculate_ui_height(width, height);
+        let chat_height = height.saturating_sub(ui_height);
+        if chat_height == 0 {
+            return Ok(());
+        }
+
+        let wrap_width = width.saturating_sub(2);
+        if wrap_width == 0 {
+            return Ok(());
+        }
+
+        let mut lines = Vec::new();
+        lines.extend(self.startup_header_lines());
+
+        let entry_count = self.message_list.entries.len();
+        let mut end = entry_count;
+        if self.is_running {
+            if let Some(last) = self.message_list.entries.last() {
+                if last.sender == Sender::Agent {
+                    end = end.saturating_sub(1);
+                }
+            }
+        }
+        if end > 0 {
+            lines.extend(ChatRenderer::build_lines(
+                &self.message_list.entries[..end],
+                None,
+                wrap_width as usize,
+            ));
+        }
+
+        let visible = chat_height as usize;
+        let start = lines.len().saturating_sub(visible);
+        for row in 0..visible {
+            execute!(
+                w,
+                MoveTo(0, row as u16),
+                Clear(ClearType::CurrentLine)
+            )?;
+            if let Some(line) = lines.get(start + row) {
+                line.write_to(w)?;
+            }
+        }
+        Ok(())
+    }
+
     /// Calculate the viewport height needed for the UI (progress + input + status).
     /// Header is inserted into scrollback, not rendered in viewport.
     /// Note: With full-height viewport, this is no longer used for viewport sizing,
@@ -131,13 +198,7 @@ impl App {
     #[allow(dead_code)]
     pub fn viewport_height(&self, terminal_width: u16, terminal_height: u16) -> u16 {
         let input_height = self.calculate_input_height(terminal_width, terminal_height);
-        let progress_height = if self.is_running {
-            2 // Line 1: gap or queued indicator, Line 2: spinner
-        } else if self.last_task_summary.is_some() {
-            1
-        } else {
-            0
-        };
+        let progress_height = self.progress_height();
         progress_height + input_height + 1 // +1 for status line
     }
 
@@ -157,6 +218,7 @@ impl App {
 
         let ui_height = self.calculate_ui_height(width, height);
         let ui_start = height.saturating_sub(ui_height);
+        let progress_height = self.progress_height();
 
         // Detect width decrease - terminal rewraps old content, pushing it up
         let width_decreased = self.last_render_width.is_some_and(|old| width < old);
@@ -174,12 +236,14 @@ impl App {
             execute!(w, MoveTo(0, clear_from), Clear(ClearType::FromCursorDown))?;
         }
 
-        // Progress line
-        execute!(w, MoveTo(0, ui_start), Clear(ClearType::CurrentLine))?;
-        self.render_progress_direct(w, width)?;
+        // Progress line (only when active)
+        if progress_height > 0 {
+            execute!(w, MoveTo(0, ui_start), Clear(ClearType::CurrentLine))?;
+            self.render_progress_direct(w, width)?;
+        }
 
         // Input area (with borders)
-        let input_start = ui_start + 1; // After progress line
+        let input_start = ui_start + progress_height;
         let input_height = self.calculate_input_height(width, height).saturating_sub(2); // Minus borders
 
         // Top border
@@ -205,6 +269,8 @@ impl App {
             // Position cursor in input area
             // cursor_pos is relative (x within content, y is visual line 0-indexed)
             let (cursor_x, cursor_y) = self.input_state.cursor_pos;
+            let scroll_offset = self.input_state.scroll_offset() as u16;
+            let cursor_y = cursor_y.saturating_sub(scroll_offset);
             execute!(w, MoveTo(cursor_x + PROMPT_WIDTH, content_start + cursor_y))?;
         }
 
@@ -565,22 +631,36 @@ impl App {
 
         // Use same word-wrap algorithm as cursor calculation
         let visual_lines = build_visual_lines(&content, content_width);
+        let total_lines = self
+            .input_state
+            .visual_line_count(&self.input_buffer, content_width);
+        let visible_height = height as usize;
+        self.input_state
+            .scroll_to_cursor(visible_height, total_lines);
+        let scroll_offset = self.input_state.scroll_offset();
+        let total_chars = content.chars().count();
 
-        for (row, (start, end)) in visual_lines.iter().enumerate() {
-            if row as u16 >= height {
+        for row in 0..visible_height {
+            let line_index = scroll_offset + row;
+            if line_index >= total_lines {
                 break;
             }
+            let (start, end) = if line_index < visual_lines.len() {
+                visual_lines[line_index]
+            } else {
+                (total_chars, total_chars)
+            };
 
             // Extract chunk for this visual line (exclude trailing newline if present)
             let chunk: String = content
                 .chars()
-                .skip(*start)
-                .take(end.saturating_sub(*start))
+                .skip(start)
+                .take(end.saturating_sub(start))
                 .filter(|&c| c != '\n')
                 .collect();
 
             execute!(w, MoveTo(0, start_row + row as u16))?;
-            if row == 0 {
+            if line_index == 0 {
                 write!(w, "{}{}", PROMPT, chunk)?;
             } else {
                 write!(w, "{}{}", CONTINUATION, chunk)?;
