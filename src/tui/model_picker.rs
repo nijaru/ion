@@ -1,11 +1,10 @@
 //! Two-stage model picker: Provider → Model selection.
 
 use crate::provider::{ModelFilter, ModelInfo, ModelRegistry, ProviderPrefs};
-use crate::tui::filter_input::{FilterInput, FilterInputState};
-use fuzzy_matcher::FuzzyMatcher;
+use crate::tui::filter_input::FilterInputState;
+use crate::tui::types::SelectionState;
 use fuzzy_matcher::skim::SkimMatcherV2;
-use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
+use fuzzy_matcher::FuzzyMatcher;
 use std::collections::BTreeMap;
 
 /// Selection stage for the picker.
@@ -41,9 +40,9 @@ pub struct ModelPicker {
     /// Filter input state.
     pub filter_input: FilterInputState,
     /// Provider list state.
-    pub provider_state: ListState,
+    pub provider_state: SelectionState,
     /// Model list state.
-    pub model_state: ListState,
+    pub model_state: SelectionState,
     /// Selected provider name.
     pub selected_provider: Option<String>,
     /// Provider preferences for filtering.
@@ -66,8 +65,8 @@ impl Default for ModelPicker {
             provider_models: Vec::new(),
             filtered_models: Vec::new(),
             filter_input: FilterInputState::default(),
-            provider_state: ListState::default(),
-            model_state: ListState::default(),
+            provider_state: SelectionState::default(),
+            model_state: SelectionState::default(),
             selected_provider: None,
             prefs: ProviderPrefs::default(),
             is_loading: false,
@@ -366,280 +365,6 @@ impl ModelPicker {
         self.model_state
             .selected()
             .and_then(|i| self.filtered_models.get(i))
-    }
-
-    /// Render the picker modal.
-    pub fn render(&mut self, frame: &mut Frame) {
-        let area = frame.area();
-
-        // Modal width for columns: name(36) + provider(20) + context(7) + price(9) + borders/spacing
-        let content_width = 80u16;
-        let list_len = match self.stage {
-            PickerStage::Provider => self.filtered_providers.len(),
-            PickerStage::Model => self.filtered_models.len(),
-        };
-        let list_height = (list_len as u16 + 2).clamp(5, 30); // +2 for borders, min 5, max 30
-        let total_height = 3 + list_height; // search bar + list
-
-        let modal_width = content_width.min(area.width.saturating_sub(4));
-        let modal_height = total_height.min(area.height.saturating_sub(4));
-        let x = (area.width - modal_width) / 2;
-        let y = (area.height - modal_height) / 2;
-        let modal_area = Rect::new(x, y, modal_width, modal_height);
-
-        // Clear the background
-        frame.render_widget(Clear, modal_area);
-
-        // Split into search bar + list
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(3), Constraint::Min(0)])
-            .split(modal_area);
-
-        // Search input with API provider name
-        let search_title = match self.stage {
-            PickerStage::Provider => " Filter (type to search) ".to_string(),
-            PickerStage::Model => {
-                if let Some(ref name) = self.api_provider_name {
-                    format!(" {} - Filter (type to search) ", name)
-                } else {
-                    " Filter (type to search) ".to_string()
-                }
-            }
-        };
-
-        let search_block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan))
-            .title(search_title);
-
-        let search_input = FilterInput::new().block(search_block);
-        frame.render_stateful_widget(search_input, chunks[0], &mut self.filter_input);
-        if let Some(cursor) = self.filter_input.screen_cursor() {
-            frame.set_cursor_position(cursor);
-        }
-
-        // Loading/Error state
-        if self.is_loading {
-            let provider_name = self.api_provider_name.as_deref().unwrap_or("provider");
-            let loading = Paragraph::new(format!("Loading models from {}...", provider_name))
-                .style(Style::default().fg(Color::Yellow))
-                .block(Block::default().borders(Borders::ALL).title(" Loading "));
-            frame.render_widget(loading, chunks[1]);
-            return;
-        }
-
-        if let Some(ref err) = self.error {
-            let error = Paragraph::new(format!("Error: {}", err))
-                .style(Style::default().fg(Color::Red))
-                .block(Block::default().borders(Borders::ALL).title(" Error "));
-            frame.render_widget(error, chunks[1]);
-            return;
-        }
-
-        match self.stage {
-            PickerStage::Provider => self.render_provider_list(frame, chunks[1]),
-            PickerStage::Model => {
-                // Split area for header + list
-                let model_chunks = Layout::default()
-                    .direction(Direction::Vertical)
-                    .constraints([Constraint::Length(1), Constraint::Min(0)])
-                    .split(chunks[1]);
-                self.render_model_header(frame, model_chunks[0]);
-                self.render_model_list(frame, model_chunks[1]);
-            }
-        }
-    }
-
-    fn render_model_header(&self, frame: &mut Frame, area: Rect) {
-        // Column widths (must match render_model_list)
-        let name_width = 38usize;
-        let provider_width = 12usize;
-        let context_width = 7usize;
-        let input_width = 7usize;
-        let output_width = 7usize;
-
-        let header_line = Line::from(vec![
-            Span::raw("  "), // Space for highlight symbol
-            Span::styled(
-                format!("{:width$}", "Model", width = name_width),
-                Style::default().fg(Color::Cyan).bold(),
-            ),
-            Span::styled(
-                format!("{:width$}", "Org", width = provider_width),
-                Style::default().fg(Color::Cyan).bold(),
-            ),
-            Span::styled(
-                format!("{:>width$}", "Context", width = context_width),
-                Style::default().fg(Color::Cyan).bold(),
-            ),
-            Span::styled(
-                format!("{:>width$}", "Input", width = input_width),
-                Style::default().fg(Color::Cyan).bold(),
-            ),
-            Span::styled(
-                format!("{:>width$}", "Output", width = output_width),
-                Style::default().fg(Color::Cyan).bold(),
-            ),
-        ]);
-
-        frame.render_widget(Paragraph::new(header_line), area);
-    }
-
-    fn render_provider_list(&mut self, frame: &mut Frame, area: Rect) {
-        let items: Vec<ListItem> = self
-            .filtered_providers
-            .iter()
-            .map(|p| {
-                let cache_indicator = if p.has_cache { "◆" } else { "○" };
-                let price = format!("from ${:.2}/M", p.min_price);
-
-                let line = Line::from(vec![
-                    Span::styled(
-                        cache_indicator,
-                        if p.has_cache {
-                            Style::default().fg(Color::Green)
-                        } else {
-                            Style::default().dim()
-                        },
-                    ),
-                    Span::raw(" "),
-                    Span::styled(&p.name, Style::default().fg(Color::White).bold()),
-                    Span::raw(" "),
-                    Span::styled(
-                        format!("({} models)", p.model_count),
-                        Style::default().fg(Color::Blue).dim(),
-                    ),
-                    Span::raw(" "),
-                    Span::styled(price, Style::default().fg(Color::Yellow).dim()),
-                ]);
-
-                ListItem::new(line)
-            })
-            .collect();
-
-        let filtered_count = self.filtered_providers.len();
-        let selected_idx = self.provider_state.selected().unwrap_or(0) + 1;
-        let title = format!(" Providers ({}/{}) ", selected_idx, filtered_count);
-
-        let list = List::new(items)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Cyan))
-                    .title(title),
-            )
-            .highlight_style(
-                Style::default()
-                    .bg(Color::DarkGray)
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
-            )
-            .highlight_symbol("▸ ");
-
-        frame.render_stateful_widget(list, area, &mut self.provider_state);
-    }
-
-    fn render_model_list(&mut self, frame: &mut Frame, area: Rect) {
-        // Column widths (must match render_model_header)
-        let name_width = 38usize;
-        let provider_width = 12usize;
-        let context_width = 7usize;
-        let input_width = 7usize;
-        let output_width = 7usize;
-
-        let items: Vec<ListItem> = self
-            .filtered_models
-            .iter()
-            .map(|m| {
-                // Extract display name based on provider format
-                let model_name = if m.provider == "ollama" {
-                    // Ollama: strip ":latest" suffix (it's the default)
-                    m.id.strip_suffix(":latest").unwrap_or(&m.id)
-                } else {
-                    // Others: strip "provider/" prefix
-                    m.id.split('/').nth(1).unwrap_or(&m.id)
-                };
-                let provider = &m.provider;
-
-                // Truncate if needed (accounting for ellipsis)
-                let name_display: String = if model_name.chars().count() > name_width {
-                    let truncated: String = model_name.chars().take(name_width - 1).collect();
-                    format!("{}…", truncated)
-                } else {
-                    model_name.to_string()
-                };
-                let provider_display: String = if provider.chars().count() > provider_width {
-                    let truncated: String = provider.chars().take(provider_width - 1).collect();
-                    format!("{}…", truncated)
-                } else {
-                    provider.to_string()
-                };
-
-                // Format columns with padding
-                let name_col = format!("{:width$}", name_display, width = name_width);
-                let provider_col = format!("{:width$}", provider_display, width = provider_width);
-                let context_col = format!(
-                    "{:>width$}",
-                    format!("{}k", m.context_window / 1000),
-                    width = context_width
-                );
-
-                // Format prices - free models show "free", others show price
-                let (input_str, input_style) = if m.pricing.input == 0.0 {
-                    ("free".to_string(), Style::default().fg(Color::Green))
-                } else {
-                    (
-                        format!("${:.2}", m.pricing.input),
-                        Style::default().fg(Color::Yellow),
-                    )
-                };
-                let (output_str, output_style) = if m.pricing.output == 0.0 {
-                    ("free".to_string(), Style::default().fg(Color::Green))
-                } else {
-                    (
-                        format!("${:.2}", m.pricing.output),
-                        Style::default().fg(Color::Yellow),
-                    )
-                };
-                let input_col = format!("{:>width$}", input_str, width = input_width);
-                let output_col = format!("{:>width$}", output_str, width = output_width);
-
-                let line = Line::from(vec![
-                    Span::styled(name_col, Style::default().fg(Color::White)),
-                    Span::styled(provider_col, Style::default().dim()),
-                    Span::styled(context_col, Style::default().fg(Color::Blue)),
-                    Span::styled(input_col, input_style),
-                    Span::styled(output_col, output_style),
-                ]);
-
-                ListItem::new(line)
-            })
-            .collect();
-
-        let filtered_count = self.filtered_models.len();
-        let selected_idx = self.model_state.selected().unwrap_or(0) + 1;
-        let title = match &self.selected_provider {
-            Some(p) => format!(" {} ({}/{}) ", p, selected_idx, filtered_count),
-            None => format!(" Models ({}/{}) ", selected_idx, filtered_count),
-        };
-
-        let list = List::new(items)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Cyan))
-                    .title(title),
-            )
-            .highlight_style(
-                Style::default()
-                    .bg(Color::DarkGray)
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
-            )
-            .highlight_symbol("▸ ");
-
-        frame.render_stateful_widget(list, area, &mut self.model_state);
     }
 }
 

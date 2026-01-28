@@ -2,8 +2,6 @@ pub mod buffer;
 
 pub use buffer::ComposerBuffer;
 
-use ratatui::prelude::*;
-use ratatui::widgets::{Block, Paragraph, Widget, Wrap};
 use unicode_segmentation::UnicodeSegmentation;
 
 /// Build a list of visual lines as (start_char_idx, end_char_idx) pairs using word-wrap.
@@ -40,8 +38,8 @@ pub fn build_visual_lines(content: &str, width: usize) -> Vec<(usize, usize)> {
                     line_start = space_idx;
                     // Recalculate col from space_idx to i
                     col = 0;
-                    for j in space_idx..i {
-                        col += UnicodeWidthChar::width(chars[j]).unwrap_or(0);
+                    for ch in chars.iter().take(i).skip(space_idx) {
+                        col += UnicodeWidthChar::width(*ch).unwrap_or(0);
                     }
                     last_space_idx = None;
                 } else {
@@ -649,135 +647,6 @@ impl ComposerState {
             lines.len() + 1
         } else {
             lines.len()
-        }
-    }
-}
-
-/// The Composer widget for Ratatui.
-pub struct ComposerWidget<'a> {
-    buffer: &'a ComposerBuffer,
-    state: &'a mut ComposerState,
-    block: Option<Block<'a>>,
-    placeholder: Option<&'a str>,
-    style: Style,
-    show_gutter: bool,
-}
-
-impl<'a> ComposerWidget<'a> {
-    pub fn new(buffer: &'a ComposerBuffer, state: &'a mut ComposerState) -> Self {
-        Self {
-            buffer,
-            state,
-            block: None,
-            placeholder: None,
-            style: Style::default(),
-            show_gutter: true,
-        }
-    }
-
-    pub fn block(mut self, block: Block<'a>) -> Self {
-        self.block = Some(block);
-        self
-    }
-
-    pub fn placeholder(mut self, placeholder: &'a str) -> Self {
-        self.placeholder = Some(placeholder);
-        self
-    }
-
-    pub fn style(mut self, style: Style) -> Self {
-        self.style = style;
-        self
-    }
-
-    pub fn show_gutter(mut self, show: bool) -> Self {
-        self.show_gutter = show;
-        self
-    }
-}
-
-impl Widget for ComposerWidget<'_> {
-    fn render(self, area: Rect, buf: &mut Buffer) {
-        let text_area = if let Some(block) = self.block {
-            let inner = block.inner(area);
-            block.render(area, buf);
-            inner
-        } else {
-            area
-        };
-
-        // Render gutter " > " (left margin)
-        // Right margin is 1 char for symmetry
-        const LEFT_MARGIN: u16 = 3; // " > "
-        const RIGHT_MARGIN: u16 = 1;
-
-        let input_area = if self.show_gutter {
-            buf.set_string(
-                text_area.x,
-                text_area.y,
-                " > ",
-                Style::default().fg(Color::DarkGray),
-            );
-            Rect {
-                x: text_area.x + LEFT_MARGIN,
-                y: text_area.y,
-                width: text_area.width.saturating_sub(LEFT_MARGIN + RIGHT_MARGIN),
-                height: text_area.height,
-            }
-        } else {
-            Rect {
-                x: text_area.x,
-                y: text_area.y,
-                width: text_area.width.saturating_sub(RIGHT_MARGIN),
-                height: text_area.height,
-            }
-        };
-
-        // Need at least 1 char of content width
-        if input_area.width == 0 || input_area.height == 0 {
-            return;
-        }
-
-        let content_width = input_area.width as usize;
-
-        // Always set last_width so visual line navigation works even after first keypress
-        self.state.last_width = content_width;
-
-        if self.buffer.is_empty() {
-            if let Some(placeholder) = self.placeholder {
-                Paragraph::new(placeholder)
-                    .style(Style::default().fg(Color::DarkGray).italic())
-                    .render(input_area, buf);
-            }
-            self.state.cursor_pos = (input_area.x, input_area.y);
-        } else {
-            let content = self.buffer.get_content();
-
-            // Calculate cursor position and total visual lines before rendering
-            self.state.calculate_cursor_pos(self.buffer, content_width);
-            let total_lines = self.state.visual_line_count(self.buffer, content_width);
-
-            // Adjust scroll to keep cursor visible (also clamps when content shrinks)
-            self.state
-                .scroll_to_cursor(input_area.height as usize, total_lines);
-
-            // Render content with Ratatui's word-wrap
-            Paragraph::new(content)
-                .style(self.style)
-                .wrap(Wrap { trim: false })
-                .scroll((self.state.scroll_offset as u16, 0))
-                .render(input_area, buf);
-
-            // Adjust cursor position for scroll and gutter
-            let visual_cursor_y = self
-                .state
-                .cursor_pos
-                .1
-                .saturating_sub(self.state.scroll_offset as u16);
-            self.state.cursor_pos = (
-                input_area.x + self.state.cursor_pos.0,
-                input_area.y + visual_cursor_y,
-            );
         }
     }
 }

@@ -7,8 +7,6 @@
 //!
 //! Design: See ai/design/tui-v2.md
 
-#![allow(dead_code)] // Module is new, not yet integrated
-
 use crossterm::{
     cursor::{Hide, MoveTo, Show},
     execute,
@@ -180,6 +178,59 @@ impl StyledSpan {
         }
     }
 
+    /// Create a bold span.
+    pub fn bold(content: impl Into<String>) -> Self {
+        Self {
+            content: content.into(),
+            style: ContentStyle {
+                attributes: Attribute::Bold.into(),
+                ..ContentStyle::default()
+            },
+        }
+    }
+
+    /// Create an italic span.
+    pub fn italic(content: impl Into<String>) -> Self {
+        Self {
+            content: content.into(),
+            style: ContentStyle {
+                attributes: Attribute::Italic.into(),
+                ..ContentStyle::default()
+            },
+        }
+    }
+
+    /// Create a colored bold span.
+    pub fn colored_bold(content: impl Into<String>, color: Color) -> Self {
+        let mut style = ContentStyle {
+            foreground_color: Some(color),
+            ..ContentStyle::default()
+        };
+        style.attributes.set(Attribute::Bold);
+        Self {
+            content: content.into(),
+            style,
+        }
+    }
+
+    /// Add bold modifier to this span.
+    pub fn with_bold(mut self) -> Self {
+        self.style.attributes.set(Attribute::Bold);
+        self
+    }
+
+    /// Add dim modifier to this span.
+    pub fn with_dim(mut self) -> Self {
+        self.style.attributes.set(Attribute::Dim);
+        self
+    }
+
+    /// Add italic modifier to this span.
+    pub fn with_italic(mut self) -> Self {
+        self.style.attributes.set(Attribute::Italic);
+        self
+    }
+
     /// Write this span to a writer.
     pub fn write_to<W: Write>(&self, w: &mut W) -> io::Result<()> {
         let styled = StyledContent::new(self.style, &self.content);
@@ -211,6 +262,20 @@ impl StyledLine {
         }
     }
 
+    /// Create a line from a single colored span.
+    pub fn colored(content: impl Into<String>, color: Color) -> Self {
+        Self {
+            spans: vec![StyledSpan::colored(content, color)],
+        }
+    }
+
+    /// Create a line from a single dim span.
+    pub fn dim(content: impl Into<String>) -> Self {
+        Self {
+            spans: vec![StyledSpan::dim(content)],
+        }
+    }
+
     /// Write this line to a writer.
     pub fn write_to<W: Write>(&self, w: &mut W) -> io::Result<()> {
         for span in &self.spans {
@@ -219,9 +284,32 @@ impl StyledLine {
         Ok(())
     }
 
+    /// Print this line to stdout with a trailing newline.
+    pub fn println(&self) -> io::Result<()> {
+        let mut stdout = io::stdout();
+        self.write_to(&mut stdout)?;
+        writeln!(stdout)?;
+        stdout.flush()
+    }
+
     /// Push a span to this line.
     pub fn push(&mut self, span: StyledSpan) {
         self.spans.push(span);
+    }
+
+    /// Extend this line with spans from another line.
+    pub fn extend(&mut self, other: StyledLine) {
+        self.spans.extend(other.spans);
+    }
+
+    /// Check if this line is empty (no spans or only empty spans).
+    pub fn is_empty(&self) -> bool {
+        self.spans.is_empty() || self.spans.iter().all(|s| s.content.is_empty())
+    }
+
+    /// Prepend a span to the beginning of this line.
+    pub fn prepend(&mut self, span: StyledSpan) {
+        self.spans.insert(0, span);
     }
 }
 
@@ -256,6 +344,24 @@ impl LineBuilder {
         self
     }
 
+    /// Add a bold span.
+    pub fn bold(mut self, content: impl Into<String>) -> Self {
+        self.line.push(StyledSpan::bold(content));
+        self
+    }
+
+    /// Add an italic span.
+    pub fn italic(mut self, content: impl Into<String>) -> Self {
+        self.line.push(StyledSpan::italic(content));
+        self
+    }
+
+    /// Add a colored bold span.
+    pub fn colored_bold(mut self, content: impl Into<String>, color: Color) -> Self {
+        self.line.push(StyledSpan::colored_bold(content, color));
+        self
+    }
+
     /// Add a styled span.
     pub fn styled(mut self, span: StyledSpan) -> Self {
         self.line.push(span);
@@ -274,98 +380,11 @@ impl Default for LineBuilder {
     }
 }
 
-/// Convert a ratatui Style to crossterm ContentStyle.
-pub fn convert_style(style: &ratatui::style::Style) -> ContentStyle {
-    let mut cs = ContentStyle::default();
-
-    // Convert foreground color
-    if let Some(fg) = style.fg {
-        cs.foreground_color = Some(convert_color(fg));
-    }
-
-    // Convert background color
-    if let Some(bg) = style.bg {
-        cs.background_color = Some(convert_color(bg));
-    }
-
-    // Convert modifiers to attributes
-    let mods = style.add_modifier;
-    if mods.contains(ratatui::style::Modifier::BOLD) {
-        cs.attributes.set(Attribute::Bold);
-    }
-    if mods.contains(ratatui::style::Modifier::DIM) {
-        cs.attributes.set(Attribute::Dim);
-    }
-    if mods.contains(ratatui::style::Modifier::ITALIC) {
-        cs.attributes.set(Attribute::Italic);
-    }
-    if mods.contains(ratatui::style::Modifier::UNDERLINED) {
-        cs.attributes.set(Attribute::Underlined);
-    }
-    if mods.contains(ratatui::style::Modifier::REVERSED) {
-        cs.attributes.set(Attribute::Reverse);
-    }
-    if mods.contains(ratatui::style::Modifier::CROSSED_OUT) {
-        cs.attributes.set(Attribute::CrossedOut);
-    }
-
-    cs
-}
-
-/// Convert a ratatui Color to crossterm Color.
-fn convert_color(color: ratatui::style::Color) -> Color {
-    match color {
-        ratatui::style::Color::Reset => Color::Reset,
-        ratatui::style::Color::Black => Color::Black,
-        ratatui::style::Color::Red => Color::DarkRed,
-        ratatui::style::Color::Green => Color::DarkGreen,
-        ratatui::style::Color::Yellow => Color::DarkYellow,
-        ratatui::style::Color::Blue => Color::DarkBlue,
-        ratatui::style::Color::Magenta => Color::DarkMagenta,
-        ratatui::style::Color::Cyan => Color::DarkCyan,
-        ratatui::style::Color::Gray => Color::Grey,
-        ratatui::style::Color::DarkGray => Color::DarkGrey,
-        ratatui::style::Color::LightRed => Color::Red,
-        ratatui::style::Color::LightGreen => Color::Green,
-        ratatui::style::Color::LightYellow => Color::Yellow,
-        ratatui::style::Color::LightBlue => Color::Blue,
-        ratatui::style::Color::LightMagenta => Color::Magenta,
-        ratatui::style::Color::LightCyan => Color::Cyan,
-        ratatui::style::Color::White => Color::White,
-        ratatui::style::Color::Rgb(r, g, b) => Color::Rgb { r, g, b },
-        ratatui::style::Color::Indexed(i) => Color::AnsiValue(i),
-    }
-}
-
-/// Convert a ratatui Span to StyledSpan.
-pub fn convert_span(span: &ratatui::text::Span) -> StyledSpan {
-    StyledSpan {
-        content: span.content.to_string(),
-        style: convert_style(&span.style),
-    }
-}
-
-/// Convert a ratatui Line to StyledLine.
-pub fn convert_line(line: &ratatui::text::Line) -> StyledLine {
-    StyledLine {
-        spans: line.spans.iter().map(convert_span).collect(),
-    }
-}
-
-/// Convert a Vec of ratatui Lines to Vec of StyledLines.
-pub fn convert_lines(lines: &[ratatui::text::Line]) -> Vec<StyledLine> {
-    lines.iter().map(convert_line).collect()
-}
-
-/// Print ratatui Lines directly to stdout (for v2 scrollback rendering).
-/// This bypasses ratatui's Terminal/Frame and writes directly.
-pub fn print_lines_to_scrollback(lines: &[ratatui::text::Line]) -> io::Result<()> {
+/// Print StyledLines directly to stdout (for v2 scrollback rendering).
+pub fn print_styled_lines_to_scrollback(lines: &[StyledLine]) -> io::Result<()> {
     let mut stdout = io::stdout();
     for line in lines {
-        for span in &line.spans {
-            let styled = convert_span(span);
-            styled.write_to(&mut stdout)?;
-        }
+        line.write_to(&mut stdout)?;
         writeln!(stdout)?;
     }
     stdout.flush()
@@ -382,6 +401,15 @@ mod tests {
     }
 
     #[test]
+    fn test_styled_span_modifiers() {
+        let span = StyledSpan::bold("bold text");
+        assert_eq!(span.content, "bold text");
+
+        let span = StyledSpan::colored("colored", Color::Red).with_bold();
+        assert_eq!(span.content, "colored");
+    }
+
+    #[test]
     fn test_styled_line() {
         let line = LineBuilder::new()
             .raw("prefix: ")
@@ -392,23 +420,24 @@ mod tests {
     }
 
     #[test]
-    fn test_convert_ratatui_line() {
-        use ratatui::style::{Color as RColor, Modifier, Style};
-        use ratatui::text::{Line, Span};
+    fn test_styled_line_methods() {
+        let mut line = StyledLine::raw("hello");
+        assert!(!line.is_empty());
 
-        let ratatui_line = Line::from(vec![
-            Span::raw("hello "),
-            Span::styled(
-                "world",
-                Style::default()
-                    .fg(RColor::Red)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]);
+        line.push(StyledSpan::raw(" world"));
+        assert_eq!(line.spans.len(), 2);
 
-        let styled_line = convert_line(&ratatui_line);
-        assert_eq!(styled_line.spans.len(), 2);
-        assert_eq!(styled_line.spans[0].content, "hello ");
-        assert_eq!(styled_line.spans[1].content, "world");
+        line.prepend(StyledSpan::colored("> ", Color::Cyan));
+        assert_eq!(line.spans.len(), 3);
+        assert_eq!(line.spans[0].content, "> ");
+    }
+
+    #[test]
+    fn test_line_builder() {
+        let line = LineBuilder::new()
+            .colored("> ", Color::Cyan)
+            .raw("hello world")
+            .build();
+        assert_eq!(line.spans.len(), 2);
     }
 }

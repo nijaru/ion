@@ -1,7 +1,8 @@
 //! Syntax highlighting for tool output using syntect.
 
-use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span};
+use crate::tui::terminal::{LineBuilder, StyledLine, StyledSpan};
+use crossterm::style::Color;
+use pulldown_cmark::{Event, HeadingLevel, Parser, Tag, TagEnd};
 use std::sync::LazyLock;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::{FontStyle, ThemeSet};
@@ -16,19 +17,18 @@ static THEME_SET: LazyLock<ThemeSet> = LazyLock::new(ThemeSet::load_defaults);
 /// - `-` lines → Red (deletions)
 /// - `@` lines → Cyan (hunk headers)
 /// - Other lines → Dim (context)
-pub fn highlight_diff_line(line: &str) -> Line<'static> {
-    let style = if line.starts_with('+') && !line.starts_with("+++") {
-        Style::default().fg(Color::Green)
+pub fn highlight_diff_line(line: &str) -> StyledLine {
+    if line.starts_with('+') && !line.starts_with("+++") {
+        StyledLine::colored(line.to_string(), Color::Green)
     } else if line.starts_with('-') && !line.starts_with("---") {
-        Style::default().fg(Color::Red)
+        StyledLine::colored(line.to_string(), Color::Red)
     } else if line.starts_with('@') {
-        Style::default().fg(Color::Cyan)
+        StyledLine::colored(line.to_string(), Color::Cyan)
     } else if line.starts_with("+++") || line.starts_with("---") {
-        Style::default().bold()
+        StyledLine::new(vec![StyledSpan::bold(line.to_string())])
     } else {
-        Style::default().dim()
-    };
-    Line::from(Span::styled(line.to_string(), style))
+        StyledLine::dim(line.to_string())
+    }
 }
 
 /// Detect syntax from file extension.
@@ -63,33 +63,40 @@ pub fn detect_syntax(path: &str) -> Option<&'static str> {
     }
 }
 
-/// Convert syntect style to ratatui style.
-fn syntect_to_ratatui(style: syntect::highlighting::Style) -> Style {
-    let fg = Color::Rgb(style.foreground.r, style.foreground.g, style.foreground.b);
+/// Convert syntect style to crossterm ContentStyle.
+fn syntect_to_crossterm(style: syntect::highlighting::Style) -> crossterm::style::ContentStyle {
+    use crossterm::style::{Attribute, ContentStyle};
 
-    let mut ratatui_style = Style::default().fg(fg);
+    let mut cs = ContentStyle {
+        foreground_color: Some(Color::Rgb {
+            r: style.foreground.r,
+            g: style.foreground.g,
+            b: style.foreground.b,
+        }),
+        ..Default::default()
+    };
 
     if style.font_style.contains(FontStyle::BOLD) {
-        ratatui_style = ratatui_style.add_modifier(Modifier::BOLD);
+        cs.attributes.set(Attribute::Bold);
     }
     if style.font_style.contains(FontStyle::ITALIC) {
-        ratatui_style = ratatui_style.add_modifier(Modifier::ITALIC);
+        cs.attributes.set(Attribute::Italic);
     }
     if style.font_style.contains(FontStyle::UNDERLINE) {
-        ratatui_style = ratatui_style.add_modifier(Modifier::UNDERLINED);
+        cs.attributes.set(Attribute::Underlined);
     }
 
-    ratatui_style
+    cs
 }
 
 /// Highlight a single line of code.
-pub fn highlight_line<'a>(text: &'a str, syntax_name: &str) -> Line<'a> {
+pub fn highlight_line(text: &str, syntax_name: &str) -> StyledLine {
     let syntax = SYNTAX_SET
         .find_syntax_by_name(syntax_name)
         .or_else(|| Some(SYNTAX_SET.find_syntax_plain_text()));
 
     let Some(syntax) = syntax else {
-        return Line::raw(text.to_string());
+        return StyledLine::raw(text.to_string());
     };
 
     let theme = &THEME_SET.themes["base16-ocean.dark"];
@@ -97,27 +104,29 @@ pub fn highlight_line<'a>(text: &'a str, syntax_name: &str) -> Line<'a> {
 
     match highlighter.highlight_line(text, &SYNTAX_SET) {
         Ok(ranges) => {
-            let spans: Vec<Span> = ranges
+            let spans: Vec<StyledSpan> = ranges
                 .iter()
                 .map(|(style, content)| {
-                    Span::styled(content.to_string(), syntect_to_ratatui(*style))
+                    StyledSpan::new(content.to_string(), syntect_to_crossterm(*style))
                 })
                 .collect();
-            Line::from(spans)
+            StyledLine::new(spans)
         }
-        Err(_) => Line::raw(text.to_string()),
+        Err(_) => StyledLine::raw(text.to_string()),
     }
 }
 
-/// Highlight multiple lines of code, returning ratatui Lines.
-#[allow(dead_code)]
-pub fn highlight_code(code: &str, syntax_name: &str) -> Vec<Line<'static>> {
+/// Highlight multiple lines of code, returning StyledLines.
+pub fn highlight_code(code: &str, syntax_name: &str) -> Vec<StyledLine> {
     let syntax = SYNTAX_SET
         .find_syntax_by_name(syntax_name)
         .or_else(|| Some(SYNTAX_SET.find_syntax_plain_text()));
 
     let Some(syntax) = syntax else {
-        return code.lines().map(|l| Line::raw(l.to_string())).collect();
+        return code
+            .lines()
+            .map(|l| StyledLine::raw(l.to_string()))
+            .collect();
     };
 
     let theme = &THEME_SET.themes["base16-ocean.dark"];
@@ -127,16 +136,16 @@ pub fn highlight_code(code: &str, syntax_name: &str) -> Vec<Line<'static>> {
     for line in code.lines() {
         match highlighter.highlight_line(line, &SYNTAX_SET) {
             Ok(ranges) => {
-                let spans: Vec<Span> = ranges
+                let spans: Vec<StyledSpan> = ranges
                     .iter()
                     .map(|(style, content)| {
-                        Span::styled(content.to_string(), syntect_to_ratatui(*style))
+                        StyledSpan::new(content.to_string(), syntect_to_crossterm(*style))
                     })
                     .collect();
-                lines.push(Line::from(spans));
+                lines.push(StyledLine::new(spans));
             }
             Err(_) => {
-                lines.push(Line::raw(line.to_string()));
+                lines.push(StyledLine::raw(line.to_string()));
             }
         }
     }
@@ -177,125 +186,179 @@ pub fn syntax_from_fence(lang: &str) -> Option<&'static str> {
     }
 }
 
-/// Highlight markdown content with syntax highlighting for code blocks.
-/// Returns a vector of Lines with code blocks highlighted.
-pub fn highlight_markdown_with_code(content: &str) -> Vec<Line<'static>> {
+/// Render markdown content to styled lines using pulldown-cmark.
+/// Supports: bold, italic, code spans, code blocks, headers, lists.
+pub fn render_markdown(content: &str) -> Vec<StyledLine> {
+    let parser = Parser::new(content);
     let mut result = Vec::new();
+    let mut current_line = LineBuilder::new();
+    let mut in_bold = false;
+    let mut in_italic = false;
     let mut in_code_block = false;
-    let mut code_lang: Option<&'static str> = None;
-    let mut code_buffer = String::new();
-    let mut markdown_buffer = String::new();
+    let mut code_block_lang: Option<&'static str> = None;
+    let mut code_block_buffer = String::new();
+    let mut list_depth: usize = 0;
 
-    for line in content.lines() {
-        if line.starts_with("```") {
-            if in_code_block {
-                // Closing fence - highlight accumulated code
-                if !code_buffer.is_empty() {
-                    if let Some(lang) = code_lang {
-                        // Use diff highlighting for diff blocks
-                        if lang == "Diff" {
-                            for code_line in code_buffer.lines() {
-                                let mut highlighted = highlight_diff_line(code_line);
-                                highlighted.spans.insert(0, Span::raw("  "));
-                                result.push(highlighted);
+    for event in parser {
+        match event {
+            Event::Start(tag) => match tag {
+                Tag::Strong => in_bold = true,
+                Tag::Emphasis => in_italic = true,
+                Tag::CodeBlock(kind) => {
+                    in_code_block = true;
+                    code_block_buffer.clear();
+                    code_block_lang = match kind {
+                        pulldown_cmark::CodeBlockKind::Fenced(ref lang) => syntax_from_fence(lang),
+                        pulldown_cmark::CodeBlockKind::Indented => None,
+                    };
+                }
+                Tag::Heading { level, .. } => {
+                    // Push current line if not empty
+                    let line = current_line.build();
+                    if !line.is_empty() {
+                        result.push(line);
+                    }
+                    // Headers get bold styling with prefix
+                    let prefix = match level {
+                        HeadingLevel::H1 => "# ",
+                        HeadingLevel::H2 => "## ",
+                        HeadingLevel::H3 => "### ",
+                        _ => "#### ",
+                    };
+                    current_line = LineBuilder::new().bold(prefix);
+                    in_bold = true;
+                }
+                Tag::List(_) => {
+                    list_depth += 1;
+                }
+                Tag::Item => {
+                    // Push current line if not empty
+                    let line = current_line.build();
+                    if !line.is_empty() {
+                        result.push(line);
+                    }
+                    let indent = "  ".repeat(list_depth.saturating_sub(1));
+                    current_line = LineBuilder::new().raw(format!("{}* ", indent));
+                }
+                Tag::Paragraph => {
+                    // Start fresh line for paragraphs
+                    let line = current_line.build();
+                    if !line.is_empty() {
+                        result.push(line);
+                    }
+                    current_line = LineBuilder::new();
+                }
+                _ => {}
+            },
+            Event::End(tag_end) => match tag_end {
+                TagEnd::Strong => in_bold = false,
+                TagEnd::Emphasis => in_italic = false,
+                TagEnd::CodeBlock => {
+                    in_code_block = false;
+                    // Render the code block with syntax highlighting
+                    if !code_block_buffer.is_empty() {
+                        if let Some(lang) = code_block_lang {
+                            if lang == "Diff" {
+                                for line in code_block_buffer.lines() {
+                                    let mut highlighted = highlight_diff_line(line);
+                                    highlighted.prepend(StyledSpan::raw("  "));
+                                    result.push(highlighted);
+                                }
+                            } else {
+                                for mut line in highlight_code(&code_block_buffer, lang) {
+                                    line.prepend(StyledSpan::raw("  "));
+                                    result.push(line);
+                                }
                             }
                         } else {
-                            for code_line in highlight_code(&code_buffer, lang) {
-                                let mut padded = vec![Span::raw("  ")];
-                                padded.extend(code_line.spans);
-                                result.push(Line::from(padded));
+                            // No language - render as dim
+                            for line in code_block_buffer.lines() {
+                                result.push(LineBuilder::new().raw("  ").dim(line).build());
                             }
                         }
-                    } else {
-                        // No language - render as dim monospace
-                        for code_line in code_buffer.lines() {
-                            result.push(Line::from(vec![
-                                Span::raw("  "),
-                                Span::styled(code_line.to_string(), Style::default().dim()),
-                            ]));
+                    }
+                    // Add blank line after code block
+                    result.push(StyledLine::empty());
+                    code_block_lang = None;
+                }
+                TagEnd::Heading { .. } => {
+                    in_bold = false;
+                    let line = current_line.build();
+                    result.push(line);
+                    current_line = LineBuilder::new();
+                }
+                TagEnd::List(_) => {
+                    list_depth = list_depth.saturating_sub(1);
+                }
+                TagEnd::Item => {
+                    let line = current_line.build();
+                    if !line.is_empty() {
+                        result.push(line);
+                    }
+                    current_line = LineBuilder::new();
+                }
+                TagEnd::Paragraph => {
+                    let line = current_line.build();
+                    if !line.is_empty() {
+                        result.push(line);
+                    }
+                    current_line = LineBuilder::new();
+                }
+                _ => {}
+            },
+            Event::Text(text) => {
+                if in_code_block {
+                    code_block_buffer.push_str(&text);
+                } else {
+                    let content = text.to_string();
+                    // Handle line breaks within text
+                    for (i, part) in content.split('\n').enumerate() {
+                        if i > 0 {
+                            result.push(current_line.build());
+                            current_line = LineBuilder::new();
+                        }
+                        if !part.is_empty() {
+                            let span = if in_bold && in_italic {
+                                StyledSpan::bold(part.to_string()).with_italic()
+                            } else if in_bold {
+                                StyledSpan::bold(part.to_string())
+                            } else if in_italic {
+                                StyledSpan::italic(part.to_string())
+                            } else {
+                                StyledSpan::raw(part.to_string())
+                            };
+                            current_line = current_line.styled(span);
                         }
                     }
                 }
-                // Add blank line after code block for visual separation
-                result.push(Line::from(""));
-                code_buffer.clear();
-                in_code_block = false;
-                code_lang = None;
-            } else {
-                // Flush markdown buffer before entering code block
-                if !markdown_buffer.is_empty() {
-                    let md = tui_markdown::from_str(&markdown_buffer);
-                    for md_line in md.lines {
-                        // Clone each span to get owned data
-                        let owned_spans: Vec<Span<'static>> = md_line
-                            .spans
-                            .iter()
-                            .map(|s| Span::styled(s.content.to_string(), s.style))
-                            .collect();
-                        result.push(Line::from(owned_spans));
-                    }
-                    markdown_buffer.clear();
-                }
-                // Opening fence - extract language
-                let lang_str = line.trim_start_matches('`').trim();
-                code_lang = syntax_from_fence(lang_str);
-                in_code_block = true;
             }
-        } else if in_code_block {
-            // Accumulate code
-            if !code_buffer.is_empty() {
-                code_buffer.push('\n');
+            Event::Code(code) => {
+                // Inline code - render with dim styling
+                let span = StyledSpan::dim(format!("`{}`", code));
+                current_line = current_line.styled(span);
             }
-            code_buffer.push_str(line);
-        } else {
-            // Accumulate markdown
-            if !markdown_buffer.is_empty() {
-                markdown_buffer.push('\n');
+            Event::SoftBreak | Event::HardBreak => {
+                result.push(current_line.build());
+                current_line = LineBuilder::new();
             }
-            markdown_buffer.push_str(line);
+            _ => {}
         }
     }
 
-    // Flush remaining markdown
-    if !markdown_buffer.is_empty() {
-        let md = tui_markdown::from_str(&markdown_buffer);
-        for md_line in md.lines {
-            let owned_spans: Vec<Span<'static>> = md_line
-                .spans
-                .iter()
-                .map(|s| Span::styled(s.content.to_string(), s.style))
-                .collect();
-            result.push(Line::from(owned_spans));
-        }
-    }
-
-    // Handle unclosed code block
-    if in_code_block && !code_buffer.is_empty() {
-        if let Some(lang) = code_lang {
-            if lang == "Diff" {
-                for code_line in code_buffer.lines() {
-                    let mut highlighted = highlight_diff_line(code_line);
-                    highlighted.spans.insert(0, Span::raw("  "));
-                    result.push(highlighted);
-                }
-            } else {
-                for code_line in highlight_code(&code_buffer, lang) {
-                    let mut padded = vec![Span::raw("  ")];
-                    padded.extend(code_line.spans);
-                    result.push(Line::from(padded));
-                }
-            }
-        } else {
-            for code_line in code_buffer.lines() {
-                result.push(Line::from(vec![
-                    Span::raw("  "),
-                    Span::styled(code_line.to_string(), Style::default().dim()),
-                ]));
-            }
-        }
+    // Push final line
+    let line = current_line.build();
+    if !line.is_empty() {
+        result.push(line);
     }
 
     result
+}
+
+/// Highlight markdown content with syntax highlighting for code blocks.
+/// Returns a vector of StyledLines with code blocks highlighted.
+/// (Alias for render_markdown for backward compatibility)
+pub fn highlight_markdown_with_code(content: &str) -> Vec<StyledLine> {
+    render_markdown(content)
 }
 
 #[cfg(test)]
@@ -316,12 +379,12 @@ pub fn example() {
 
 Text after"#;
 
-        let lines = highlight_markdown_with_code(input);
+        let lines = render_markdown(input);
 
         // Extract text content from lines
         let line_texts: Vec<String> = lines
             .iter()
-            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .map(|l| l.spans.iter().map(|s| s.content.as_str()).collect())
             .collect();
 
         // Find the "if true" line
@@ -357,10 +420,10 @@ code
 ```
 Next paragraph"#;
 
-        let lines = highlight_markdown_with_code(input);
+        let lines = render_markdown(input);
         let line_texts: Vec<String> = lines
             .iter()
-            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .map(|l| l.spans.iter().map(|s| s.content.as_str()).collect())
             .collect();
 
         // Should have: code line, blank line, "Next paragraph"
@@ -375,5 +438,34 @@ Next paragraph"#;
             "Expected blank line after code block, got: {:?}",
             line_texts.get(blank_idx)
         );
+    }
+
+    #[test]
+    fn test_render_markdown_bold_italic() {
+        let input = "**bold** and *italic* text";
+        let lines = render_markdown(input);
+        assert!(!lines.is_empty());
+        // Check that spans are created
+        let line = &lines[0];
+        assert!(line.spans.len() >= 3);
+    }
+
+    #[test]
+    fn test_render_markdown_headers() {
+        let input = "# Heading 1\n## Heading 2";
+        let lines = render_markdown(input);
+        assert!(lines.len() >= 2);
+    }
+
+    #[test]
+    fn test_diff_highlighting() {
+        let line = highlight_diff_line("+added line");
+        assert!(!line.is_empty());
+
+        let line = highlight_diff_line("-removed line");
+        assert!(!line.is_empty());
+
+        let line = highlight_diff_line("@@ hunk header @@");
+        assert!(!line.is_empty());
     }
 }

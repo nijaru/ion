@@ -2,7 +2,6 @@
 
 use crate::tool::ApprovalResponse;
 use async_trait::async_trait;
-use ratatui::prelude::Rect;
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 
@@ -75,11 +74,24 @@ pub enum SelectorPage {
     Session,
 }
 
-/// Layout areas for the main UI (progress, input, status).
-pub(super) struct LayoutAreas {
-    pub progress: Rect,
-    pub input: Rect,
-    pub status: Rect,
+/// Simple list selection state (replaces ratatui::widgets::ListState).
+#[derive(Debug, Clone, Default)]
+pub struct SelectionState {
+    selected: Option<usize>,
+}
+
+impl SelectionState {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn selected(&self) -> Option<usize> {
+        self.selected
+    }
+
+    pub fn select(&mut self, index: Option<usize>) {
+        self.selected = index;
+    }
 }
 
 /// Request for tool approval sent from agent to TUI.

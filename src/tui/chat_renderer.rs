@@ -1,8 +1,8 @@
 use crate::tui::highlight;
 use crate::tui::message_list::{MessagePart, Sender};
-use crate::tui::{own_line, sanitize_for_display, strip_ansi, QUEUED_PREVIEW_LINES};
-use ratatui::prelude::*;
-use ratatui::style::Modifier;
+use crate::tui::terminal::{LineBuilder, StyledLine, StyledSpan};
+use crate::tui::{sanitize_for_display, QUEUED_PREVIEW_LINES};
+use crossterm::style::Color;
 
 pub struct ChatRenderer;
 
@@ -11,7 +11,7 @@ impl ChatRenderer {
         entries: &[crate::tui::message_list::MessageEntry],
         queued: Option<&Vec<String>>,
         wrap_width: usize,
-    ) -> Vec<Line<'static>> {
+    ) -> Vec<StyledLine> {
         let mut chat_lines = Vec::new();
 
         for entry in entries {
@@ -28,8 +28,6 @@ impl ChatRenderer {
                     let prefix = "> ";
                     let prefix_len = prefix.chars().count();
                     let available_width = wrap_width.saturating_sub(prefix_len).max(1);
-                    let prefix_style = Style::default().fg(Color::Cyan).add_modifier(Modifier::DIM);
-                    let text_style = Style::default().fg(Color::Cyan).add_modifier(Modifier::DIM);
 
                     let mut first_line = true;
                     for line in combined.lines() {
@@ -41,12 +39,18 @@ impl ChatRenderer {
                         let chunks = wrap_line(line, line_width);
                         for (idx, chunk) in chunks.into_iter().enumerate() {
                             if first_line && idx == 0 {
-                                chat_lines.push(Line::from(vec![
-                                    Span::styled(prefix, prefix_style),
-                                    Span::styled(chunk, text_style),
-                                ]));
+                                chat_lines.push(
+                                    LineBuilder::new()
+                                        .styled(StyledSpan::colored(prefix, Color::Cyan).with_dim())
+                                        .styled(StyledSpan::colored(chunk, Color::Cyan).with_dim())
+                                        .build(),
+                                );
                             } else {
-                                chat_lines.push(Line::from(vec![Span::styled(chunk, text_style)]));
+                                chat_lines.push(StyledLine::new(vec![StyledSpan::colored(
+                                    chunk,
+                                    Color::Cyan,
+                                )
+                                .with_dim()]));
                             }
                             first_line = false;
                         }
@@ -60,10 +64,9 @@ impl ChatRenderer {
                                 let sanitized = sanitize_for_display(text.trim());
                                 let highlighted_lines =
                                     highlight::highlight_markdown_with_code(&sanitized);
-                                for line in highlighted_lines {
-                                    let mut padded = vec![Span::raw(" ")];
-                                    padded.extend(line.spans);
-                                    chat_lines.push(Line::from(padded));
+                                for mut line in highlighted_lines {
+                                    line.prepend(StyledSpan::raw(" "));
+                                    chat_lines.push(line);
                                 }
                             }
                             MessagePart::Thinking(_) => {
@@ -79,9 +82,9 @@ impl ChatRenderer {
                         .lines()
                         .any(|line| line.starts_with("⎿ Error:") || line.starts_with("  Error:"));
                     let tool_prefix = if has_error {
-                        Span::styled("• ", Style::default().fg(Color::Red))
+                        StyledSpan::colored("• ", Color::Red)
                     } else {
-                        Span::raw("• ")
+                        StyledSpan::raw("• ")
                     };
                     let mut lines = content.lines();
 
@@ -104,15 +107,15 @@ impl ChatRenderer {
                                 is_edit_tool = true;
                             }
 
-                            chat_lines.push(Line::from(vec![
+                            chat_lines.push(StyledLine::new(vec![
                                 tool_prefix.clone(),
-                                Span::styled(tool_name.to_string(), Style::default().bold()),
-                                Span::raw(args.to_string()),
+                                StyledSpan::bold(tool_name.to_string()),
+                                StyledSpan::raw(args.to_string()),
                             ]));
                         } else {
-                            chat_lines.push(Line::from(vec![
+                            chat_lines.push(StyledLine::new(vec![
                                 tool_prefix.clone(),
-                                Span::styled(first_line.to_string(), Style::default().bold()),
+                                StyledSpan::bold(first_line.to_string()),
                             ]));
                         }
                     }
@@ -125,44 +128,34 @@ impl ChatRenderer {
                                 || line.starts_with(' '));
 
                         if line.starts_with("⎿ Error:") || line.starts_with("  Error:") {
-                            chat_lines.push(Line::from(vec![
-                                Span::raw("  "),
-                                Span::styled(line.to_string(), Style::default().fg(Color::Red)),
+                            chat_lines.push(StyledLine::new(vec![
+                                StyledSpan::raw("  "),
+                                StyledSpan::colored(line.to_string(), Color::Red),
                             ]));
                         } else if line.starts_with("⎿") || line.starts_with("  … +") {
-                            chat_lines.push(Line::from(vec![
-                                Span::raw("  "),
-                                Span::styled(line.to_string(), Style::default().dim()),
+                            chat_lines.push(StyledLine::new(vec![
+                                StyledSpan::raw("  "),
+                                StyledSpan::dim(line.to_string()),
                             ]));
                         } else if is_diff_line {
                             let mut highlighted = highlight::highlight_diff_line(line);
-                            highlighted.spans.insert(0, Span::raw("    "));
+                            highlighted.prepend(StyledSpan::raw("    "));
                             chat_lines.push(highlighted);
                         } else if line.contains("\x1b[") {
-                            use ansi_to_tui::IntoText;
-                            if let Ok(ansi_text) = line.as_bytes().into_text() {
-                                for ansi_line in ansi_text.lines {
-                                    let mut padded = vec![Span::raw("  ")];
-                                    padded.extend(ansi_line.spans.iter().map(|span| {
-                                        Span::styled(span.content.to_string(), span.style)
-                                    }));
-                                    chat_lines.push(Line::from(padded));
-                                }
-                            } else {
-                                chat_lines.push(Line::from(vec![
-                                    Span::raw("  "),
-                                    Span::raw(strip_ansi(line)),
-                                ]));
-                            }
+                            // Parse ANSI escape sequences
+                            let parsed = parse_ansi_line(line);
+                            let mut padded = StyledLine::new(vec![StyledSpan::raw("  ")]);
+                            padded.extend(parsed);
+                            chat_lines.push(padded);
                         } else if let Some(syntax) = syntax_name {
                             let code_line = line.strip_prefix("  ").unwrap_or(line);
                             let mut highlighted = highlight::highlight_line(code_line, syntax);
-                            highlighted.spans.insert(0, Span::raw("    "));
-                            chat_lines.push(own_line(highlighted));
+                            highlighted.prepend(StyledSpan::raw("    "));
+                            chat_lines.push(highlighted);
                         } else {
-                            chat_lines.push(Line::from(vec![
-                                Span::raw("  "),
-                                Span::styled(line.to_string(), Style::default().dim()),
+                            chat_lines.push(StyledLine::new(vec![
+                                StyledSpan::raw("  "),
+                                StyledSpan::dim(line.to_string()),
                             ]));
                         }
                     }
@@ -171,57 +164,141 @@ impl ChatRenderer {
                     let content = entry.content_as_markdown().trim();
                     if content.lines().count() <= 1 {
                         if content.starts_with("Error:") {
-                            chat_lines.push(Line::from(vec![Span::styled(
-                                content.to_string(),
-                                Style::default().fg(Color::Red),
-                            )]));
+                            chat_lines.push(StyledLine::colored(content.to_string(), Color::Red));
                         } else {
                             let text = format!("[{}]", content);
-                            chat_lines
-                                .push(Line::from(vec![Span::styled(text, Style::default().dim())]));
+                            chat_lines.push(StyledLine::dim(text));
                         }
                     } else {
-                        let md = tui_markdown::from_str(content);
-                        for line in &md.lines {
-                            let mut padded = vec![Span::raw(" ")];
-                            padded.extend(
-                                line.spans
-                                    .iter()
-                                    .map(|span| Span::styled(span.content.to_string(), span.style)),
-                            );
-                            chat_lines.push(Line::from(padded));
+                        // Use our new markdown renderer for multi-line system messages
+                        let md_lines = highlight::render_markdown(content);
+                        for mut line in md_lines {
+                            line.prepend(StyledSpan::raw(" "));
+                            chat_lines.push(line);
                         }
                     }
                 }
             }
-            chat_lines.push(Line::from(""));
+            chat_lines.push(StyledLine::empty());
         }
 
         if let Some(queue) = queued {
-            let prefix_style = Style::default().dim();
-            let queued_style = Style::default().dim().italic();
-            for queued in queue.iter() {
-                let lines: Vec<&str> = queued.lines().collect();
+            for queued_msg in queue.iter() {
+                let lines: Vec<&str> = queued_msg.lines().collect();
                 let shown = lines.len().min(QUEUED_PREVIEW_LINES);
                 for (idx, line) in lines.iter().take(shown).enumerate() {
                     let prefix = if idx == 0 { " > " } else { "   " };
-                    chat_lines.push(Line::from(vec![
-                        Span::styled(prefix, prefix_style),
-                        Span::styled((*line).to_string(), queued_style),
+                    chat_lines.push(StyledLine::new(vec![
+                        StyledSpan::dim(prefix),
+                        StyledSpan::dim((*line).to_string()).with_italic(),
                     ]));
                 }
                 if lines.len() > shown {
-                    chat_lines.push(Line::from(vec![
-                        Span::styled("   ", prefix_style),
-                        Span::styled("…", queued_style),
+                    chat_lines.push(StyledLine::new(vec![
+                        StyledSpan::dim("   "),
+                        StyledSpan::dim("…").with_italic(),
                     ]));
                 }
-                chat_lines.push(Line::from(""));
+                chat_lines.push(StyledLine::empty());
             }
         }
 
         chat_lines
     }
+}
+
+/// Parse ANSI escape sequences and convert to StyledLine.
+/// Simple SGR parser that handles common formatting codes.
+fn parse_ansi_line(input: &str) -> StyledLine {
+    use crossterm::style::{Attribute, ContentStyle};
+
+    let mut spans = Vec::new();
+    let mut current_style = ContentStyle::default();
+    let mut current_text = String::new();
+    let mut chars = input.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            // Check for CSI sequence
+            if chars.peek() == Some(&'[') {
+                chars.next(); // consume '['
+
+                // Flush current text
+                if !current_text.is_empty() {
+                    spans.push(StyledSpan::new(
+                        std::mem::take(&mut current_text),
+                        current_style,
+                    ));
+                }
+
+                // Parse the SGR parameters
+                let mut params = String::new();
+                while let Some(&pc) = chars.peek() {
+                    if pc.is_ascii_digit() || pc == ';' {
+                        params.push(chars.next().unwrap());
+                    } else {
+                        break;
+                    }
+                }
+
+                // Get the command character
+                if let Some(cmd) = chars.next()
+                    && cmd == 'm'
+                {
+                    // SGR sequence - apply styles
+                    for param in params.split(';') {
+                        match param {
+                            "0" | "" => current_style = ContentStyle::default(),
+                            "1" => current_style.attributes.set(Attribute::Bold),
+                            "2" => current_style.attributes.set(Attribute::Dim),
+                            "3" => current_style.attributes.set(Attribute::Italic),
+                            "4" => current_style.attributes.set(Attribute::Underlined),
+                            "7" => current_style.attributes.set(Attribute::Reverse),
+                            "9" => current_style.attributes.set(Attribute::CrossedOut),
+                            "22" => {
+                                current_style.attributes.unset(Attribute::Bold);
+                                current_style.attributes.unset(Attribute::Dim);
+                            }
+                            "23" => current_style.attributes.unset(Attribute::Italic),
+                            "24" => current_style.attributes.unset(Attribute::Underlined),
+                            "27" => current_style.attributes.unset(Attribute::Reverse),
+                            "29" => current_style.attributes.unset(Attribute::CrossedOut),
+                            "30" => current_style.foreground_color = Some(Color::Black),
+                            "31" => current_style.foreground_color = Some(Color::DarkRed),
+                            "32" => current_style.foreground_color = Some(Color::DarkGreen),
+                            "33" => current_style.foreground_color = Some(Color::DarkYellow),
+                            "34" => current_style.foreground_color = Some(Color::DarkBlue),
+                            "35" => current_style.foreground_color = Some(Color::DarkMagenta),
+                            "36" => current_style.foreground_color = Some(Color::DarkCyan),
+                            "37" => current_style.foreground_color = Some(Color::Grey),
+                            "39" => current_style.foreground_color = None,
+                            "90" => current_style.foreground_color = Some(Color::DarkGrey),
+                            "91" => current_style.foreground_color = Some(Color::Red),
+                            "92" => current_style.foreground_color = Some(Color::Green),
+                            "93" => current_style.foreground_color = Some(Color::Yellow),
+                            "94" => current_style.foreground_color = Some(Color::Blue),
+                            "95" => current_style.foreground_color = Some(Color::Magenta),
+                            "96" => current_style.foreground_color = Some(Color::Cyan),
+                            "97" => current_style.foreground_color = Some(Color::White),
+                            _ => {} // Ignore unknown codes
+                        }
+                    }
+                }
+                // Ignore other CSI sequences
+            } else {
+                current_text.push(c);
+            }
+        } else {
+            current_text.push(c);
+        }
+    }
+
+    // Flush remaining text
+    if !current_text.is_empty() {
+        spans.push(StyledSpan::new(current_text, current_style));
+    }
+
+    StyledLine::new(spans)
 }
 
 fn wrap_line(line: &str, width: usize) -> Vec<String> {

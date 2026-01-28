@@ -1,8 +1,8 @@
 //! Input handling for the TUI composer.
 
+use crate::tui::terminal::{StyledLine, StyledSpan};
 use crate::tui::App;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ratatui::prelude::*;
 
 impl App {
     /// Get the current input text (with placeholders for large pastes).
@@ -43,12 +43,12 @@ impl App {
     }
 
     /// Generate the startup header lines for the TUI.
-    pub(super) fn startup_header_lines(&self) -> Vec<Line<'static>> {
+    pub(super) fn startup_header_lines(&self) -> Vec<StyledLine> {
         let version = format!("v{}", env!("CARGO_PKG_VERSION"));
         vec![
-            Line::from(Span::styled("ION", Style::default().bold())),
-            Line::from(Span::styled(version, Style::default().dim())),
-            Line::from(""),
+            StyledLine::new(vec![StyledSpan::bold("ION")]),
+            StyledLine::new(vec![StyledSpan::dim(version)]),
+            StyledLine::empty(),
         ]
     }
 

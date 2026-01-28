@@ -2,7 +2,6 @@
 
 use crate::tui::filter_input;
 use crossterm::event::{KeyCode, KeyEvent};
-use ratatui::prelude::*;
 
 /// Format token count as human-readable (e.g., 1500 -> "1.5k")
 pub(super) fn format_tokens(n: usize) -> String {
@@ -96,30 +95,6 @@ pub(super) fn handle_filter_input_event(
     }
 }
 
-/// Strip ANSI escape sequences from a string.
-pub(crate) fn strip_ansi(s: &str) -> String {
-    let mut result = String::with_capacity(s.len());
-    let mut in_escape = false;
-    let mut chars = s.chars().peekable();
-
-    while let Some(c) = chars.next() {
-        if c == '\x1b' && chars.peek() == Some(&'[') {
-            in_escape = true;
-            chars.next(); // consume '['
-            continue;
-        }
-        if in_escape {
-            // End of escape sequence on 'm' or other command char
-            if c.is_ascii_alphabetic() {
-                in_escape = false;
-            }
-            continue;
-        }
-        result.push(c);
-    }
-    result
-}
-
 /// Sanitize text for terminal display.
 /// - Converts tabs to 4 spaces (consistent width)
 /// - Strips carriage returns (prevents text overwrite)
@@ -136,16 +111,6 @@ pub(crate) fn sanitize_for_display(s: &str) -> String {
         }
     }
     result
-}
-
-/// Convert a borrowed Line to an owned Line<'static>.
-pub(crate) fn own_line(line: Line<'_>) -> Line<'static> {
-    Line::from(
-        line.spans
-            .into_iter()
-            .map(|span| Span::styled(span.content.to_string(), span.style))
-            .collect::<Vec<_>>(),
-    )
 }
 
 #[cfg(test)]
