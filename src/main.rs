@@ -149,10 +149,10 @@ async fn run_tui(
                     term_width = w;
                     term_height = h;
                     app.handle_event(event::Event::Resize(w, h));
-                    // Clear scrollback + screen + home cursor for full redraw
-                    // \x1b[3J = clear scrollback, \x1b[2J = clear screen, \x1b[H = home cursor
-                    print!("\x1b[3J\x1b[2J\x1b[H");
-                    let _ = std::io::stdout().flush();
+                    // Clear screen and re-render chat viewport (preserve scrollback)
+                    execute!(stdout, Clear(ClearType::All), MoveTo(0, 0))?;
+                    app.render_chat_viewport(&mut stdout, term_width, term_height)?;
+                    stdout.flush()?;
                 }
                 _ => {}
             }
@@ -164,8 +164,9 @@ async fn run_tui(
                 term_width = w;
                 term_height = h;
                 app.handle_event(event::Event::Resize(w, h));
-                print!("\x1b[3J\x1b[2J\x1b[H");
-                let _ = std::io::stdout().flush();
+                execute!(stdout, Clear(ClearType::All), MoveTo(0, 0))?;
+                app.render_chat_viewport(&mut stdout, term_width, term_height)?;
+                stdout.flush()?;
             }
         }
 
