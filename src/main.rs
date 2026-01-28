@@ -9,6 +9,7 @@ enum ResumeOption {
     None,
     Latest,
     ById(String),
+    Selector,
 }
 
 #[tokio::main]
@@ -34,14 +35,14 @@ async fn main() -> ExitCode {
             let permissions = cli.resolve_permissions(&config);
 
             // Determine resume option from CLI flags
-            let resume_option = if let Some(ref id) = cli.session_id {
-                if id == "__LATEST__" {
-                    ResumeOption::Latest
-                } else {
-                    ResumeOption::ById(id.clone())
-                }
-            } else if cli.resume {
+            let resume_option = if cli.continue_session {
                 ResumeOption::Latest
+            } else if let Some(ref value) = cli.resume {
+                if value == "__SELECT__" {
+                    ResumeOption::Selector
+                } else {
+                    ResumeOption::ById(value.clone())
+                }
             } else {
                 ResumeOption::None
             };
@@ -115,6 +116,9 @@ async fn run_tui(
                 eprintln!("Error: Session '{}' not found: {}", id, e);
                 return Err(e.into());
             }
+        }
+        ResumeOption::Selector => {
+            app.open_session_selector();
         }
     }
 
