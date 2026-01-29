@@ -268,20 +268,17 @@ pub fn render_markdown(content: &str) -> Vec<StyledLine> {
                         if let Some(lang) = code_block_lang {
                             if lang == "Diff" {
                                 for line in code_block_buffer.lines() {
-                                    let mut highlighted = highlight_diff_line(line);
-                                    highlighted.prepend(StyledSpan::raw("  "));
-                                    result.push(highlighted);
+                                    result.push(highlight_diff_line(line));
                                 }
                             } else {
-                                for mut line in highlight_code(&code_block_buffer, lang) {
-                                    line.prepend(StyledSpan::raw("  "));
+                                for line in highlight_code(&code_block_buffer, lang) {
                                     result.push(line);
                                 }
                             }
                         } else {
                             // No language - render as dim
                             for line in code_block_buffer.lines() {
-                                result.push(LineBuilder::new().raw("  ").dim(line).build());
+                                result.push(LineBuilder::new().dim(line).build());
                             }
                         }
                     }
@@ -435,21 +432,21 @@ Text after"#;
             .find(|l| l.contains("if true"))
             .expect("Should find 'if true' line");
 
-        // Should have 2-space code indent + 4-space source indent = starts with 6 spaces
+        // Should preserve 4-space source indent
         assert!(
-            if_line.starts_with("      ") || if_line.contains("    if"),
+            if_line.starts_with("    ") || if_line.contains("    if"),
             "Code indentation not preserved. Line: '{}'",
             if_line
         );
 
-        // Find println line - should have even more indentation
+        // Find println line - should have 8-space source indent
         let println_line = line_texts
             .iter()
             .find(|l| l.contains("println"))
             .expect("Should find println line");
 
         assert!(
-            println_line.contains("        ") || println_line.contains("println"),
+            println_line.starts_with("        ") || println_line.contains("println"),
             "Nested indentation not preserved. Line: '{}'",
             println_line
         );
