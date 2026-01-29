@@ -107,12 +107,22 @@ fn truncate_line(s: &str, max: usize) -> String {
     format!("{}…", take_head(s, max - 1))
 }
 
-fn strip_error_prefixes(message: &str) -> &str {
+/// Strip redundant "Error:" prefixes from error messages.
+pub fn strip_error_prefixes(message: &str) -> &str {
     let mut out = message.trim_start();
     while let Some(stripped) = out.strip_prefix("Error:") {
         out = stripped.trim_start();
     }
     out
+}
+
+/// Sanitize tool name from model garbage (embedded args, XML artifacts).
+pub fn sanitize_tool_name(name: &str) -> &str {
+    // Strip embedded arguments: "tool(args)" -> "tool"
+    let name = name.split('(').next().unwrap_or(name);
+    // Strip XML artifacts: "tool</tag>" -> "tool"
+    let name = name.split('<').next().unwrap_or(name);
+    name.trim()
 }
 
 fn take_head(s: &str, max: usize) -> String {
@@ -281,12 +291,14 @@ impl MessageList {
                 // but not rendered in the chat (per design)
             }
             AgentEvent::ToolCallStart(_id, name, args) => {
+                // Sanitize tool name (strip model garbage like embedded args, XML)
+                let clean_name = sanitize_tool_name(&name);
                 // Format: tool_name(key_arg)
-                let key_arg = extract_key_arg(&name, &args);
+                let key_arg = extract_key_arg(clean_name, &args);
                 let display = if key_arg.is_empty() {
-                    name
+                    clean_name.to_string()
                 } else {
-                    format!("{}({})", name, key_arg)
+                    format!("{}({})", clean_name, key_arg)
                 };
                 self.push_entry(MessageEntry::new(Sender::Tool, display));
             }

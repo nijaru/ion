@@ -10,7 +10,7 @@ use crate::tool::ToolOrchestrator;
 use crate::tool::builtin::SpawnSubagentTool;
 use crate::tui::App;
 use crate::tui::composer::{ComposerBuffer, ComposerState};
-use crate::tui::message_list::{MessageEntry, MessageList, Sender};
+use crate::tui::message_list::{MessageEntry, MessageList, Sender, strip_error_prefixes};
 use crate::tui::model_picker::{self, ModelPicker};
 use crate::tui::provider_picker::ProviderPicker;
 use crate::tui::session_picker::SessionPicker;
@@ -580,7 +580,9 @@ impl App {
                         } = block
                         {
                             let display = if *is_error {
-                                format!("⎿ Error: {}", content.lines().next().unwrap_or(""))
+                                let msg = strip_error_prefixes(content).trim();
+                                let first_line = msg.lines().next().unwrap_or("");
+                                format!("⎿ Error: {}", first_line)
                             } else {
                                 let line_count = content.lines().count();
                                 if line_count > 1 {

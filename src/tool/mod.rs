@@ -39,6 +39,8 @@ impl ToolOrchestrator {
         args: serde_json::Value,
         ctx: &ToolContext,
     ) -> Result<ToolResult, ToolError> {
+        // Sanitize tool name (models sometimes embed args or XML artifacts)
+        let name = crate::tui::message_list::sanitize_tool_name(name);
         let tool = self
             .tools
             .get(name)
