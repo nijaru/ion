@@ -240,50 +240,78 @@ impl Table {
                     continue;
                 }
 
-                // Build lines manually: first line gets header prefix
-                let mut chars = cell_trimmed.chars().peekable();
+                // Build lines with word-aware wrapping
+                // Use owned strings to handle partial word breaking
+                let mut words: Vec<String> =
+                    cell_trimmed.split_whitespace().map(String::from).collect();
+                let mut word_idx = 0;
                 let mut is_first = true;
 
-                while chars.peek().is_some() {
+                while word_idx < words.len() {
                     let width = if is_first {
                         first_line_width
                     } else {
                         continuation_width
                     };
 
-                    // Collect chars for this line
                     let mut line_content = String::new();
                     let mut line_width = 0;
 
-                    // Skip leading whitespace on continuation lines
-                    if !is_first {
-                        while chars.peek().is_some_and(|c| c.is_whitespace()) {
-                            chars.next();
-                        }
-                    }
+                    while word_idx < words.len() {
+                        let word = &words[word_idx];
+                        let word_width = measure_width(word);
+                        let space_needed = if line_content.is_empty() { 0 } else { 1 };
 
-                    while let Some(&ch) = chars.peek() {
-                        let ch_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1);
-                        if line_width + ch_width > width && !line_content.is_empty() {
+                        if line_width + space_needed + word_width <= width {
+                            // Word fits on this line
+                            if !line_content.is_empty() {
+                                line_content.push(' ');
+                                line_width += 1;
+                            }
+                            line_content.push_str(word);
+                            line_width += word_width;
+                            word_idx += 1;
+                        } else if line_content.is_empty() {
+                            // Word is too long for any line - must break it
+                            let mut chars = word.chars().peekable();
+                            while let Some(&ch) = chars.peek() {
+                                let ch_width =
+                                    unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1);
+                                if line_width + ch_width > width && !line_content.is_empty() {
+                                    break;
+                                }
+                                line_content.push(chars.next().unwrap());
+                                line_width += ch_width;
+                            }
+                            // Store remaining chars back for next line
+                            let remaining: String = chars.collect();
+                            if remaining.is_empty() {
+                                word_idx += 1;
+                            } else {
+                                words[word_idx] = remaining;
+                            }
+                            break;
+                        } else {
+                            // Word doesn't fit, move to next line
                             break;
                         }
-                        line_content.push(chars.next().unwrap());
-                        line_width += ch_width;
                     }
 
-                    if is_first {
-                        lines.push(StyledLine::new(vec![
-                            StyledSpan::bold(header.to_string()),
-                            StyledSpan::dim(": ".to_string()),
-                            StyledSpan::raw(line_content),
-                        ]));
-                        is_first = false;
-                    } else {
-                        let indent = " ".repeat(CONTINUATION_INDENT);
-                        lines.push(StyledLine::new(vec![
-                            StyledSpan::raw(indent),
-                            StyledSpan::raw(line_content),
-                        ]));
+                    if !line_content.is_empty() {
+                        if is_first {
+                            lines.push(StyledLine::new(vec![
+                                StyledSpan::bold(header.to_string()),
+                                StyledSpan::dim(": ".to_string()),
+                                StyledSpan::raw(line_content),
+                            ]));
+                            is_first = false;
+                        } else {
+                            let indent = " ".repeat(CONTINUATION_INDENT);
+                            lines.push(StyledLine::new(vec![
+                                StyledSpan::raw(indent),
+                                StyledSpan::raw(line_content),
+                            ]));
+                        }
                     }
                 }
             }
