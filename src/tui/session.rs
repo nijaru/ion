@@ -10,7 +10,9 @@ use crate::tool::ToolOrchestrator;
 use crate::tool::builtin::SpawnSubagentTool;
 use crate::tui::App;
 use crate::tui::composer::{ComposerBuffer, ComposerState};
-use crate::tui::message_list::{MessageEntry, MessageList, Sender, strip_error_prefixes};
+use crate::tui::message_list::{
+    MessageEntry, MessageList, Sender, sanitize_tool_name, strip_error_prefixes,
+};
 use crate::tui::model_picker::{self, ModelPicker};
 use crate::tui::provider_picker::ProviderPicker;
 use crate::tui::session_picker::SessionPicker;
@@ -558,13 +560,15 @@ impl App {
                             ContentBlock::ToolCall {
                                 name, arguments, ..
                             } => {
+                                // Sanitize tool name (models sometimes embed args or XML artifacts)
+                                let clean_name = sanitize_tool_name(name);
                                 // Format tool call with key argument, same as live display
                                 let key_arg =
-                                    crate::tui::message_list::extract_key_arg(name, arguments);
+                                    crate::tui::message_list::extract_key_arg(clean_name, arguments);
                                 let display = if key_arg.is_empty() {
-                                    name.clone()
+                                    clean_name.to_string()
                                 } else {
-                                    format!("{}({})", name, key_arg)
+                                    format!("{}({})", clean_name, key_arg)
                                 };
                                 self.message_list
                                     .push_entry(MessageEntry::new(Sender::Tool, display));
