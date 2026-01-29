@@ -492,10 +492,6 @@ impl App {
 
     /// Open model selector (Ctrl+M or during setup).
     pub(super) fn open_model_selector(&mut self) {
-        // Trigger repaint if switching between selector pages (different heights)
-        if self.mode == Mode::Selector && self.selector_page != SelectorPage::Model {
-            self.needs_full_repaint = true;
-        }
         self.mode = Mode::Selector;
         self.selector_page = SelectorPage::Model;
         self.model_picker.error = None;
@@ -513,10 +509,6 @@ impl App {
 
     /// Open API provider selector (Ctrl+P).
     pub(super) fn open_provider_selector(&mut self) {
-        // Trigger repaint if switching between selector pages (different heights)
-        if self.mode == Mode::Selector && self.selector_page != SelectorPage::Provider {
-            self.needs_full_repaint = true;
-        }
         self.mode = Mode::Selector;
         self.selector_page = SelectorPage::Provider;
         self.provider_picker.refresh();
@@ -525,10 +517,6 @@ impl App {
 
     /// Open session selector (/resume).
     pub fn open_session_selector(&mut self) {
-        // Trigger repaint if switching between selector pages (different heights)
-        if self.mode == Mode::Selector && self.selector_page != SelectorPage::Session {
-            self.needs_full_repaint = true;
-        }
         self.mode = Mode::Selector;
         self.selector_page = SelectorPage::Session;
         self.session_picker.load_sessions(&self.store, 50);
