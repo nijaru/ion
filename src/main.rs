@@ -312,6 +312,9 @@ async fn run_tui(
     disable_raw_mode()?;
     execute!(stdout, Show)?;
 
+    // Print session ID for future reference
+    println!("Session: {}", app.session.id);
+
     Ok(())
 }
 

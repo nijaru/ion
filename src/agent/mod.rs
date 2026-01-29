@@ -694,16 +694,17 @@ impl Agent {
                         }
                     }
                     Err(e) => {
+                        let error_msg = e.to_string();
                         let _ = tx
                             .send(AgentEvent::ToolCallResult(
                                 call.id.clone(),
-                                format!("Error: {}", e),
+                                error_msg.clone(),
                                 true,
                             ))
                             .await;
                         ContentBlock::ToolResult {
                             tool_call_id: call.id,
-                            content: format!("Error: {}", e),
+                            content: error_msg,
                             is_error: true,
                         }
                     }
