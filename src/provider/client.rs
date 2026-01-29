@@ -158,13 +158,15 @@ impl Client {
                                 is_error
                             );
                             // Encode error status in content (llm-connector doesn't pass is_error)
-                            let final_content = if *is_error {
-                                format!("[ERROR] {}", content)
-                            } else {
-                                content.clone()
-                            };
                             // Note: llm-connector expects (content, tool_call_id) order
-                            result.push(llm_connector::Message::tool(&final_content, tool_call_id));
+                            if *is_error {
+                                result.push(llm_connector::Message::tool(
+                                    format!("[ERROR] {}", content),
+                                    tool_call_id,
+                                ));
+                            } else {
+                                result.push(llm_connector::Message::tool(content, tool_call_id));
+                            }
                         }
                     }
                 }
@@ -330,9 +332,9 @@ impl LlmApi for Client {
                 error = ?e,
                 "API error"
             );
-            // Full request body on error for debugging
+            // Full request body on error for debugging (trace level to avoid logging user data at debug)
             if let Ok(json) = serde_json::to_string_pretty(&llm_request) {
-                tracing::debug!("Failed request body:\n{}", json);
+                tracing::trace!("Failed request body:\n{}", json);
             }
             // Format error with helpful context
             Error::Api(format!(
