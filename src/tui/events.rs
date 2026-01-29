@@ -381,7 +381,7 @@ impl App {
                         self.open_provider_selector();
                     } else {
                         self.model_picker.reset();
-                        self.mode = Mode::Input;
+                        self.exit_selector_mode();
                     }
                 }
             }
@@ -400,7 +400,7 @@ impl App {
                         self.open_provider_selector();
                     } else {
                         self.model_picker.reset();
-                        self.mode = Mode::Input;
+                        self.exit_selector_mode();
                     }
                 }
             }
@@ -476,7 +476,7 @@ impl App {
                             if self.needs_setup {
                                 self.needs_setup = false;
                             }
-                            self.mode = Mode::Input;
+                            self.exit_selector_mode();
                         }
                     }
                 },
@@ -487,7 +487,7 @@ impl App {
                             self.last_error = Some(format!("Failed to load session: {e}"));
                         }
                         self.session_picker.reset();
-                        self.mode = Mode::Input;
+                        self.exit_selector_mode();
                     }
                 }
             },
@@ -514,7 +514,7 @@ impl App {
                 } else {
                     self.model_picker.reset();
                     self.session_picker.reset();
-                    self.mode = Mode::Input;
+                    self.exit_selector_mode();
                 }
             }
 
@@ -562,6 +562,12 @@ impl App {
 
     /// Handle terminal resize: reset state to force reprint of all chat.
     fn handle_resize(&mut self) {
+        self.force_full_repaint();
+    }
+
+    /// Force a full repaint of chat history and UI.
+    /// Used after resize or when exiting fullscreen selector.
+    fn force_full_repaint(&mut self) {
         if !self.message_list.entries.is_empty() {
             // Reset render tracking for full reflow
             self.rendered_entries = 0;
@@ -572,5 +578,13 @@ impl App {
         // Clear cached render state for UI redraw
         self.last_render_width = None;
         self.last_ui_start = None;
+    }
+
+    /// Exit selector mode and return to input, triggering repaint.
+    pub(super) fn exit_selector_mode(&mut self) {
+        self.mode = Mode::Input;
+        // Selector used large area - flag for full clear + repaint
+        self.needs_full_repaint = true;
+        self.force_full_repaint();
     }
 }

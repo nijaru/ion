@@ -228,6 +228,7 @@ impl App {
             last_render_width: None,
             last_ui_start: None,
             startup_ui_anchor: None,
+            needs_full_repaint: false,
         };
 
         // Set initial API provider name on model picker

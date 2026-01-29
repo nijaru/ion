@@ -286,6 +286,19 @@ async fn run_tui(
 
         app.update();
 
+        // Handle full repaint request (e.g., after exiting fullscreen selector)
+        if app.needs_full_repaint {
+            app.needs_full_repaint = false;
+            let has_chat = !app.message_list.entries.is_empty();
+            if has_chat {
+                // Clear scrollback + screen + home cursor for full reflow
+                print!("\x1b[3J\x1b[2J\x1b[H");
+                let _ = std::io::stdout().flush();
+                app.reprint_chat_scrollback(&mut stdout, term_width)?;
+                stdout.flush()?;
+            }
+        }
+
         if !app.header_inserted() && app.message_list.entries.is_empty() {
             let header_lines = app.take_startup_header_lines();
             if !header_lines.is_empty() {
