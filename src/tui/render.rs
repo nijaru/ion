@@ -26,7 +26,7 @@ impl App {
     /// Calculate the height needed for the input box based on content.
     /// Returns height including borders.
     /// Min: 3 lines (1 content + 2 borders)
-    /// Max: viewport_height - 3 (reserved for progress + status)
+    /// Max: `viewport_height` - 3 (reserved for progress + status)
     pub(super) fn calculate_input_height(&self, viewport_width: u16, viewport_height: u16) -> u16 {
         const MIN_HEIGHT: u16 = 3;
         const MIN_RESERVED: u16 = 3; // status (1) + optional progress (up to 2)
@@ -70,11 +70,10 @@ impl App {
     /// Resolve the UI start row, using the startup anchor when no messages exist.
     pub fn ui_start_row(&self, height: u16, ui_height: u16) -> u16 {
         let bottom_start = height.saturating_sub(ui_height);
-        if self.message_list.entries.is_empty() {
-            if let Some(anchor) = self.startup_ui_anchor {
+        if self.message_list.entries.is_empty()
+            && let Some(anchor) = self.startup_ui_anchor {
                 return anchor.min(bottom_start);
             }
-        }
         bottom_start
     }
 
@@ -86,11 +85,11 @@ impl App {
         }
 
         // Insert header once at startup (into scrollback, not viewport)
-        let header_lines = if !self.header_inserted {
+        let header_lines = if self.header_inserted {
+            Vec::new()
+        } else {
             self.header_inserted = true;
             self.startup_header_lines()
-        } else {
-            Vec::new()
         };
 
         let entry_count = self.message_list.entries.len();
@@ -110,7 +109,7 @@ impl App {
                 break;
             }
             let mut entry_lines = ChatRenderer::build_lines(
-                &self.message_list.entries[index..index + 1],
+                &self.message_list.entries[index..=index],
                 None,
                 wrap_width as usize,
             );
@@ -151,13 +150,11 @@ impl App {
 
         let entry_count = self.message_list.entries.len();
         let mut end = entry_count;
-        if self.is_running {
-            if let Some(last) = self.message_list.entries.last() {
-                if last.sender == Sender::Agent {
+        if self.is_running
+            && let Some(last) = self.message_list.entries.last()
+                && last.sender == Sender::Agent {
                     end = end.saturating_sub(1);
                 }
-            }
-        }
         if end > 0 {
             lines.extend(ChatRenderer::build_lines(
                 &self.message_list.entries[..end],
@@ -177,13 +174,11 @@ impl App {
     ) -> std::io::Result<()> {
         let entry_count = self.message_list.entries.len();
         let mut end = entry_count;
-        if self.is_running {
-            if let Some(last) = self.message_list.entries.last() {
-                if last.sender == Sender::Agent {
+        if self.is_running
+            && let Some(last) = self.message_list.entries.last()
+                && last.sender == Sender::Agent {
                     end = end.saturating_sub(1);
                 }
-            }
-        }
 
         let lines = self.build_chat_lines(width);
         for line in &lines {
@@ -346,9 +341,7 @@ impl App {
                     .map(|s| {
                         let preview = s
                             .first_user_message
-                            .as_ref()
-                            .map(|m| m.chars().take(40).collect::<String>())
-                            .unwrap_or_else(|| "No preview".to_string());
+                            .as_ref().map_or_else(|| "No preview".to_string(), |m| m.chars().take(40).collect::<String>());
                         let label = format!("{} - {}", preview, format_relative_time(s.updated_at));
                         (label, true)
                     })
@@ -419,7 +412,7 @@ impl App {
 
         // Description
         execute!(w, MoveTo(0, row))?;
-        write!(w, " {}", description)?;
+        write!(w, " {description}")?;
         row += 1;
 
         // Search box
@@ -518,7 +511,7 @@ impl App {
             // Truncate item name if too long
             let max_item_len = (width as usize).saturating_sub(6);
             let display_name: String = item.chars().take(max_item_len).collect();
-            write!(w, "{}", display_name)?;
+            write!(w, "{display_name}")?;
             execute!(w, SetAttribute(Attribute::Reset), ResetColor)?;
 
             row += 1;
@@ -599,7 +592,7 @@ impl App {
         // "Ionizing..." or tool name in cyan
         execute!(w, SetForegroundColor(CColor::Cyan))?;
         if let Some(ref tool) = self.current_tool {
-            execute!(w, Print(format!(" {}", tool)))?;
+            execute!(w, Print(format!(" {tool}")))?;
         } else {
             execute!(w, Print(" Ionizing..."))?;
         }
@@ -611,7 +604,7 @@ impl App {
             execute!(
                 w,
                 SetAttribute(Attribute::Dim),
-                Print(format!(" ({}s · Esc to cancel)", elapsed)),
+                Print(format!(" ({elapsed}s · Esc to cancel)")),
                 SetAttribute(Attribute::Reset)
             )?;
         }
@@ -670,16 +663,16 @@ impl App {
 
             execute!(w, MoveTo(0, start_row + row as u16))?;
             if line_index == 0 {
-                write!(w, "{}{}", PROMPT, chunk)?;
+                write!(w, "{PROMPT}{chunk}")?;
             } else {
-                write!(w, "{}{}", CONTINUATION, chunk)?;
+                write!(w, "{CONTINUATION}{chunk}")?;
             }
         }
 
         // If empty, just show the prompt
         if content.is_empty() {
             execute!(w, MoveTo(0, start_row))?;
-            write!(w, "{}", PROMPT)?;
+            write!(w, "{PROMPT}")?;
         }
 
         Ok(())
@@ -716,7 +709,7 @@ impl App {
             Print(mode_label),
             ResetColor
         )?;
-        write!(w, "] · {}", model_name)?;
+        write!(w, "] · {model_name}")?;
 
         // Token usage if available
         if let Some((used, max)) = self.token_usage {
@@ -731,7 +724,7 @@ impl App {
             write!(w, " · {}/{}", format_k(used), format_k(max))?;
             if max > 0 {
                 let pct = (used * 100) / max;
-                write!(w, " ({}%)", pct)?;
+                write!(w, " ({pct}%)")?;
             }
             execute!(w, SetAttribute(Attribute::Reset))?;
         }

@@ -5,6 +5,7 @@ use grep_searcher::sinks::UTF8;
 use grep_searcher::Searcher;
 use ignore::WalkBuilder;
 use serde_json::json;
+use std::fmt::Write as _;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
@@ -15,11 +16,11 @@ pub struct GrepTool;
 
 #[async_trait]
 impl Tool for GrepTool {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "grep"
     }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Search for a pattern in files (regex supported). Uses ripgrep's optimized search engine."
     }
 
@@ -57,7 +58,7 @@ impl Tool for GrepTool {
         let search_path_str = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
 
         let matcher = RegexMatcher::new(pattern_str)
-            .map_err(|e| ToolError::InvalidArgs(format!("Invalid regex: {}", e)))?;
+            .map_err(|e| ToolError::InvalidArgs(format!("Invalid regex: {e}")))?;
 
         let search_path = ctx.working_dir.join(search_path_str);
         let validated_path = ctx
@@ -79,10 +80,7 @@ impl Tool for GrepTool {
         };
 
         if truncated {
-            content.push_str(&format!(
-                "\n\n[Truncated: showing first {} matches]",
-                MAX_RESULTS
-            ));
+            let _ = write!(content, "\n\n[Truncated: showing first {MAX_RESULTS} matches]");
         }
 
         Ok(ToolResult {

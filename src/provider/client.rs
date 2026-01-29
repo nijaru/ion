@@ -8,6 +8,7 @@ use super::types::{
 use async_trait::async_trait;
 use futures::StreamExt;
 use llm_connector::LlmClient;
+use std::fmt::Write as _;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -29,7 +30,7 @@ impl Client {
     pub fn from_provider(provider: Provider) -> Result<Self, Error> {
         let api_key = provider.api_key().ok_or_else(|| Error::MissingApiKey {
             backend: provider.name().to_string(),
-            env_vars: provider.env_vars().iter().map(|s| s.to_string()).collect(),
+            env_vars: provider.env_vars().iter().map(std::string::ToString::to_string).collect(),
         })?;
         Self::new(provider, api_key)
     }
@@ -47,6 +48,7 @@ impl Client {
     }
 
     /// Get the provider type.
+    #[must_use] 
     pub fn provider(&self) -> Provider {
         self.provider
     }
@@ -115,7 +117,7 @@ impl Client {
                         match block {
                             ContentBlock::Text { text: t } => text.push_str(t),
                             ContentBlock::Thinking { thinking } => {
-                                text.push_str(&format!("<thinking>{}</thinking>", thinking));
+                                let _ = write!(text, "<thinking>{thinking}</thinking>");
                             }
                             ContentBlock::ToolCall {
                                 id,
@@ -161,7 +163,7 @@ impl Client {
                             // Note: llm-connector expects (content, tool_call_id) order
                             if *is_error {
                                 result.push(llm_connector::Message::tool(
-                                    format!("[ERROR] {}", content),
+                                    format!("[ERROR] {content}"),
                                     tool_call_id,
                                 ));
                             } else {
@@ -191,7 +193,7 @@ impl Client {
             .collect()
     }
 
-    /// Build a ChatRequest for llm-connector.
+    /// Build a `ChatRequest` for llm-connector.
     fn build_request(request: &ChatRequest) -> llm_connector::ChatRequest {
         let messages = Self::convert_messages(&request.messages);
         let tools = Self::convert_tools(&request.tools);
@@ -246,7 +248,7 @@ impl LlmApi for Client {
         tracing::debug!(
             provider = %self.provider.id(),
             model = %llm_request.model,
-            tools = llm_request.tools.as_ref().map(|t| t.len()).unwrap_or(0),
+            tools = llm_request.tools.as_ref().map_or(0, std::vec::Vec::len),
             messages = llm_request.messages.len(),
             "API stream request"
         );
@@ -312,7 +314,7 @@ impl LlmApi for Client {
         tracing::debug!(
             provider = %self.provider.id(),
             model = %llm_request.model,
-            tools = llm_request.tools.as_ref().map(|t| t.len()).unwrap_or(0),
+            tools = llm_request.tools.as_ref().map_or(0, std::vec::Vec::len),
             messages = llm_request.messages.len(),
             "API request"
         );
@@ -371,7 +373,7 @@ impl LlmApi for Client {
                                 "Malformed tool arguments for {}: {}",
                                 tc.function.name,
                                 e
-                            )
+                            );
                         })
                         .unwrap_or(serde_json::Value::Null);
                     content_blocks.push(ContentBlock::ToolCall {

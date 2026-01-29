@@ -32,15 +32,16 @@ pub struct Skill {
 
 impl Skill {
     /// Get the model to use, falling back to the provided default
+    #[must_use] 
     pub fn resolve_model<'a>(&'a self, default: &'a str) -> &'a str {
         self.models
             .as_ref()
             .and_then(|m| m.first())
-            .map(|s| s.as_str())
-            .unwrap_or(default)
+            .map_or(default, std::string::String::as_str)
     }
 
     /// Check if a model is allowed for this skill
+    #[must_use] 
     pub fn is_model_allowed(&self, model: &str) -> bool {
         match &self.models {
             None => true, // No restriction, any model allowed
@@ -70,6 +71,7 @@ pub struct SkillRegistry {
 }
 
 impl SkillRegistry {
+    #[must_use] 
     pub fn new() -> Self {
         Self::default()
     }
@@ -116,11 +118,13 @@ impl SkillRegistry {
     }
 
     /// Get skill summary without loading full content.
+    #[must_use] 
     pub fn get_summary(&self, name: &str) -> Option<&SkillSummary> {
         self.entries.get(name).map(|e| &e.summary)
     }
 
     /// List all skill summaries (no loading required).
+    #[must_use] 
     pub fn list(&self) -> Vec<SkillSummary> {
         self.entries.values().map(|e| e.summary.clone()).collect()
     }
@@ -162,8 +166,9 @@ pub struct SkillLoader;
 
 impl SkillLoader {
     pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Vec<Skill>> {
-        let content = std::fs::read_to_string(path.as_ref())
-            .with_context(|| format!("Failed to read SKILL.md at {:?}", path.as_ref()))?;
+        let path = path.as_ref();
+        let content = std::fs::read_to_string(path)
+            .with_context(|| format!("Failed to read SKILL.md at {}", path.display()))?;
 
         Self::parse_skill_md(&content)
     }
@@ -171,8 +176,9 @@ impl SkillLoader {
     /// Load only the skill summary (name + description) for progressive disclosure.
     /// This is efficient for startup - avoids loading full prompt content.
     pub fn load_summary<P: AsRef<Path>>(path: P) -> Result<SkillSummary> {
-        let content = std::fs::read_to_string(path.as_ref())
-            .with_context(|| format!("Failed to read SKILL.md at {:?}", path.as_ref()))?;
+        let path = path.as_ref();
+        let content = std::fs::read_to_string(path)
+            .with_context(|| format!("Failed to read SKILL.md at {}", path.display()))?;
 
         Self::parse_summary(&content)
     }

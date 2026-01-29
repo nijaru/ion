@@ -17,7 +17,7 @@ pub(super) fn format_elapsed(secs: u64) -> String {
     if secs >= 60 {
         format!("{}m {}s", secs / 60, secs % 60)
     } else {
-        format!("{}s", secs)
+        format!("{secs}s")
     }
 }
 
@@ -30,16 +30,16 @@ pub(super) fn format_relative_time(timestamp: i64) -> String {
         "just now".to_string()
     } else if diff < 3600 {
         let mins = diff / 60;
-        format!("{}m ago", mins)
+        format!("{mins}m ago")
     } else if diff < 86400 {
         let hours = diff / 3600;
-        format!("{}h ago", hours)
-    } else if diff < 604800 {
+        format!("{hours}h ago")
+    } else if diff < 604_800 {
         let days = diff / 86400;
-        format!("{}d ago", days)
+        format!("{days}d ago")
     } else {
-        let weeks = diff / 604800;
-        format!("{}w ago", weeks)
+        let weeks = diff / 604_800;
+        format!("{weeks}w ago")
     }
 }
 

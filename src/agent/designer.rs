@@ -1,14 +1,13 @@
 use crate::provider::{ChatRequest, ContentBlock, LlmApi, Message, Role};
 use anyhow::{Result, anyhow};
-use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::sync::Arc;
 
 /// Regex for extracting JSON objects from model responses (non-greedy).
-static JSON_EXTRACTOR: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?s)\{.*?\}").expect("JSON extractor regex must be valid"));
+static JSON_EXTRACTOR: std::sync::LazyLock<Regex> =
+    std::sync::LazyLock::new(|| Regex::new(r"(?s)\{.*?\}").expect("JSON extractor regex must be valid"));
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub enum TaskStatus {
@@ -35,6 +34,7 @@ pub struct Plan {
 }
 
 impl Plan {
+    #[must_use] 
     pub fn current_task(&self) -> Option<&PlannedTask> {
         self.tasks
             .iter()
@@ -86,7 +86,7 @@ impl Designer {
         messages.push(Message {
             role: Role::User,
             content: Arc::new(vec![ContentBlock::Text {
-                text: format!("Plan the following task: {}", user_msg),
+                text: format!("Plan the following task: {user_msg}"),
             }]),
         });
 

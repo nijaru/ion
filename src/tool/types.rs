@@ -31,7 +31,7 @@ pub struct ToolContext {
 
 impl ToolContext {
     /// Check if a path is within the sandbox (CWD).
-    /// Returns Ok(canonical_path) if allowed, Err with message if blocked.
+    /// Returns `Ok(canonical_path)` if allowed, Err with message if blocked.
     pub fn check_sandbox(&self, path: &std::path::Path) -> Result<PathBuf, String> {
         // If sandbox disabled, allow anything
         if self.no_sandbox {
@@ -61,12 +61,12 @@ impl ToolContext {
                     ))
                 }
             })
-            .map_err(|e| format!("Failed to resolve path: {}", e))?;
+            .map_err(|e| format!("Failed to resolve path: {e}"))?;
 
         let cwd_canonical = self
             .working_dir
             .canonicalize()
-            .map_err(|e| format!("Failed to resolve working directory: {}", e))?;
+            .map_err(|e| format!("Failed to resolve working directory: {e}"))?;
 
         // Check if path is within CWD
         if canonical.starts_with(&cwd_canonical) {

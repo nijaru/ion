@@ -35,7 +35,7 @@ pub struct ModelRegistry {
     ttl: Duration,
 }
 
-/// OpenRouter API response structures.
+/// `OpenRouter` API response structures.
 #[derive(Debug, Deserialize)]
 struct ModelsResponse {
     data: Vec<ApiModel>,
@@ -102,6 +102,7 @@ trait Pipe: Sized {
 impl<T> Pipe for T {}
 
 impl ModelRegistry {
+    #[must_use] 
     pub fn new(api_key: String, ttl_secs: u64) -> Self {
         Self {
             client: crate::provider::create_http_client(),
@@ -114,18 +115,17 @@ impl ModelRegistry {
 
     /// Check if cache is valid.
     fn cache_valid(&self) -> bool {
-        let cache = self.cache.read().unwrap_or_else(|e| e.into_inner());
+        let cache = self.cache.read().unwrap_or_else(std::sync::PoisonError::into_inner);
         cache
             .fetched_at
-            .map(|t| t.elapsed() < self.ttl)
-            .unwrap_or(false)
+            .is_some_and(|t| t.elapsed() < self.ttl)
     }
 
     /// Fetch models for the given provider.
     ///
     /// This is the primary entry point for model discovery. Each provider has its own
     /// fetching strategy:
-    /// - OpenRouter: Direct API call
+    /// - `OpenRouter`: Direct API call
     /// - Ollama: Local server API call
     /// - Others: models.dev metadata fallback
     pub async fn fetch_models_for_provider(&self, provider: Provider) -> Result<Vec<ModelInfo>> {
@@ -141,19 +141,6 @@ impl ModelRegistry {
 
     /// Fetch models from Ollama local server.
     async fn fetch_ollama_models(&self) -> Result<Vec<ModelInfo>> {
-        let base_url = "http://localhost:11434";
-
-        let response = self
-            .client
-            .get(format!("{}/api/tags", base_url))
-            .send()
-            .await
-            .context("Failed to connect to Ollama - is it running?")?;
-
-        if !response.status().is_success() {
-            anyhow::bail!("Ollama returned status {}", response.status());
-        }
-
         #[derive(Deserialize)]
         struct OllamaTagsResponse {
             models: Vec<OllamaModel>,
@@ -162,6 +149,19 @@ impl ModelRegistry {
         #[derive(Deserialize)]
         struct OllamaModel {
             name: String,
+        }
+
+        let base_url = "http://localhost:11434";
+
+        let response = self
+            .client
+            .get(format!("{base_url}/api/tags"))
+            .send()
+            .await
+            .context("Failed to connect to Ollama - is it running?")?;
+
+        if !response.status().is_success() {
+            anyhow::bail!("Ollama returned status {}", response.status());
         }
 
         let data: OllamaTagsResponse = response
@@ -187,7 +187,7 @@ impl ModelRegistry {
         // Context length is stored at {architecture}.context_length, not general.context_length
         let context_window = match self
             .client
-            .post(format!("{}/api/show", base_url))
+            .post(format!("{base_url}/api/show"))
             .json(&serde_json::json!({ "name": name }))
             .send()
             .await
@@ -208,8 +208,8 @@ impl ModelRegistry {
                         // Get architecture name (e.g., "qwen3next", "mistral3", "llama")
                         let arch = info.get("general.architecture").and_then(|v| v.as_str())?;
                         // Context length is at {architecture}.context_length
-                        let key = format!("{}.context_length", arch);
-                        info.get(&key).and_then(|v| v.as_u64()).map(|v| v as u32)
+                        let key = format!("{arch}.context_length");
+                        info.get(&key).and_then(serde_json::Value::as_u64).map(|v| v as u32)
                     })
                     .unwrap_or(32768) // Conservative default for modern models
             }
@@ -246,7 +246,7 @@ impl ModelRegistry {
         Ok(filtered)
     }
 
-    /// Fetch models from OpenRouter API and Models.dev.
+    /// Fetch models from `OpenRouter` API and Models.dev.
     pub async fn fetch_models(&self) -> Result<()> {
         let mut all_models = Vec::new();
 
@@ -268,7 +268,7 @@ impl ModelRegistry {
             }
         }
 
-        let mut cache = self.cache.write().unwrap_or_else(|e| e.into_inner());
+        let mut cache = self.cache.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         cache.models = all_models;
         cache.fetched_at = Some(Instant::now());
 
@@ -287,7 +287,7 @@ impl ModelRegistry {
         if !response.status().is_success() {
             let status = response.status();
             let text = response.text().await.unwrap_or_default();
-            anyhow::bail!("OpenRouter error {}: {}", status, text);
+            anyhow::bail!("OpenRouter error {status}: {text}");
         }
 
         let data: ModelsResponse = response
@@ -299,13 +299,12 @@ impl ModelRegistry {
             .data
             .into_iter()
             .map(|m| {
-                let supports_cache = m.pricing.cache_read.map(|p| p > 0.0).unwrap_or(false);
+                let supports_cache = m.pricing.cache_read.is_some_and(|p| p > 0.0);
                 let supports_vision = m
                     .architecture
                     .as_ref()
                     .and_then(|a| a.modality.as_ref())
-                    .map(|modality| modality.contains("image"))
-                    .unwrap_or(false);
+                    .is_some_and(|modality| modality.contains("image"));
                 let provider = m.id.split('/').next().unwrap_or("unknown").to_string();
                 let supports_tools = m
                     .architecture
@@ -344,7 +343,7 @@ impl ModelRegistry {
         Ok(self
             .cache
             .read()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .models
             .clone())
     }
@@ -367,7 +366,7 @@ impl ModelRegistry {
 
     /// List models matching filter criteria.
     pub fn list_models(&self, filter: &ModelFilter, prefs: &ProviderPrefs) -> Vec<ModelInfo> {
-        let cache = self.cache.read().unwrap_or_else(|e| e.into_inner());
+        let cache = self.cache.read().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut models: Vec<ModelInfo> = cache
             .models
             .iter()
@@ -492,7 +491,7 @@ impl ModelRegistry {
 
     /// Get a specific model by ID.
     pub fn get_model(&self, id: &str) -> Option<ModelInfo> {
-        let cache = self.cache.read().unwrap_or_else(|e| e.into_inner());
+        let cache = self.cache.read().unwrap_or_else(std::sync::PoisonError::into_inner);
         cache.models.iter().find(|m| m.id == id).cloned()
     }
 
@@ -500,7 +499,7 @@ impl ModelRegistry {
     pub fn model_count(&self) -> usize {
         self.cache
             .read()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .models
             .len()
     }

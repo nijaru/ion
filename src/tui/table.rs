@@ -46,7 +46,7 @@ impl Table {
     fn num_columns(&self) -> usize {
         self.headers
             .len()
-            .max(self.rows.iter().map(|r| r.len()).max().unwrap_or(0))
+            .max(self.rows.iter().map(std::vec::Vec::len).max().unwrap_or(0))
     }
 
     /// Full-width table with box drawing and text wrapping.
@@ -135,13 +135,17 @@ impl Table {
         // Wrap each cell and determine row height
         let wrapped_cells: Vec<Vec<String>> = (0..num_cols)
             .map(|i| {
-                let content = cells.get(i).map(|s| s.as_str()).unwrap_or("");
+                let content = cells.get(i).map_or("", std::string::String::as_str);
                 let width = col_widths[i];
                 wrap_text(content, width)
             })
             .collect();
 
-        let row_height = wrapped_cells.iter().map(|c| c.len()).max().unwrap_or(1);
+        let row_height = wrapped_cells
+            .iter()
+            .map(std::vec::Vec::len)
+            .max()
+            .unwrap_or(1);
 
         // Render each line of the row
         let mut lines = Vec::new();
@@ -150,7 +154,9 @@ impl Table {
             spans.push(StyledSpan::dim("│".to_string()));
 
             for (col_idx, wrapped) in wrapped_cells.iter().enumerate() {
-                let cell_line = wrapped.get(line_idx).map(|s| s.as_str()).unwrap_or("");
+                let cell_line = wrapped
+                    .get(line_idx)
+                    .map_or("", std::string::String::as_str);
                 let width = col_widths[col_idx];
                 let alignment = self
                     .alignments
@@ -179,8 +185,7 @@ impl Table {
     fn render_border(&self, col_widths: &[usize], position: BorderPosition) -> StyledLine {
         let (left, mid, right, fill) = match position {
             BorderPosition::Top => ("┌", "┬", "┐", "─"),
-            BorderPosition::Middle => ("├", "┼", "┤", "─"),
-            BorderPosition::RowSep => ("├", "┼", "┤", "─"),
+            BorderPosition::Middle | BorderPosition::RowSep => ("├", "┼", "┤", "─"),
             BorderPosition::Bottom => ("└", "┴", "┘", "─"),
         };
 
@@ -205,7 +210,10 @@ impl Table {
 
         for (row_idx, row) in self.rows.iter().enumerate() {
             for (col_idx, cell) in row.iter().enumerate() {
-                let header = self.headers.get(col_idx).map(|s| s.as_str()).unwrap_or("?");
+                let header = self
+                    .headers
+                    .get(col_idx)
+                    .map_or("?", std::string::String::as_str);
 
                 // Wrap the value if needed
                 let label_width = measure_width(header) + 2; // ": "
@@ -251,7 +259,10 @@ enum BorderPosition {
 /// Measure display width of a string (handles unicode).
 fn measure_width(s: &str) -> usize {
     // Take the longest line if multiline
-    s.lines().map(|line| line.width()).max().unwrap_or(0)
+    s.lines()
+        .map(unicode_width::UnicodeWidthStr::width)
+        .max()
+        .unwrap_or(0)
 }
 
 /// Wrap text to fit within given width.

@@ -8,11 +8,11 @@ pub struct ListTool;
 
 #[async_trait]
 impl Tool for ListTool {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "list"
     }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "List directory contents with optional filtering. Like fd/find but respects .gitignore."
     }
 
@@ -54,9 +54,8 @@ impl Tool for ListTool {
 
         let depth = args
             .get("depth")
-            .and_then(|v| v.as_u64())
-            .map(|d| d as usize)
-            .unwrap_or(1);
+            .and_then(serde_json::Value::as_u64)
+            .map_or(1, |d| d as usize);
 
         let type_filter = args
             .get("type")
@@ -66,7 +65,7 @@ impl Tool for ListTool {
 
         let show_hidden = args
             .get("hidden")
-            .and_then(|v| v.as_bool())
+            .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
 
         // Resolve path relative to working directory
@@ -82,15 +81,13 @@ impl Tool for ListTool {
 
         if !target_path.exists() {
             return Err(ToolError::InvalidArgs(format!(
-                "Path does not exist: {}",
-                path
+                "Path does not exist: {path}"
             )));
         }
 
         if !target_path.is_dir() {
             return Err(ToolError::InvalidArgs(format!(
-                "Path is not a directory: {}",
-                path
+                "Path is not a directory: {path}"
             )));
         }
 
@@ -135,7 +132,7 @@ impl Tool for ListTool {
 
                 // Add trailing slash for directories
                 let formatted = if is_dir {
-                    format!("{}/", display_path)
+                    format!("{display_path}/")
                 } else {
                     display_path
                 };

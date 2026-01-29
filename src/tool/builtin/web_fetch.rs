@@ -1,5 +1,6 @@
 use crate::tool::{DangerLevel, Tool, ToolContext, ToolError, ToolResult};
 use async_trait::async_trait;
+use futures::StreamExt as _;
 use html2text::from_read;
 use reqwest::Client;
 use serde_json::json;
@@ -73,6 +74,7 @@ impl Default for WebFetchTool {
 }
 
 impl WebFetchTool {
+    #[must_use] 
     pub fn new() -> Self {
         let client = Client::builder()
             .timeout(Duration::from_secs(30))
@@ -86,11 +88,11 @@ impl WebFetchTool {
 
 #[async_trait]
 impl Tool for WebFetchTool {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "web_fetch"
     }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Fetch content from a URL. HTML is converted to readable text. Returns plain text suitable for analysis."
     }
 
@@ -132,26 +134,24 @@ impl Tool for WebFetchTool {
 
         let max_length = args
             .get("max_length")
-            .and_then(|v| v.as_u64())
-            .map(|v| v as usize)
-            .unwrap_or(50_000);
+            .and_then(serde_json::Value::as_u64)
+            .map_or(50_000, |v| v as usize);
 
         let raw_mode = args
             .get("raw")
-            .and_then(|v| v.as_bool())
+            .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
 
         // Validate URL
         let parsed_url = reqwest::Url::parse(url)
-            .map_err(|e| ToolError::InvalidArgs(format!("Invalid URL: {}", e)))?;
+            .map_err(|e| ToolError::InvalidArgs(format!("Invalid URL: {e}")))?;
 
         // Only allow http/https
         match parsed_url.scheme() {
             "http" | "https" => {}
             scheme => {
                 return Err(ToolError::InvalidArgs(format!(
-                    "Unsupported URL scheme: {}. Only http and https are allowed.",
-                    scheme
+                    "Unsupported URL scheme: {scheme}. Only http and https are allowed."
                 )));
             }
         }
@@ -169,7 +169,7 @@ impl Tool for WebFetchTool {
             .get(url)
             .send()
             .await
-            .map_err(|e| ToolError::ExecutionFailed(format!("Request failed: {}", e)))?;
+            .map_err(|e| ToolError::ExecutionFailed(format!("Request failed: {e}")))?;
 
         let status = response.status();
         let content_type = response
@@ -202,10 +202,9 @@ impl Tool for WebFetchTool {
         let mut bytes = Vec::with_capacity(read_limit.min(content_length.unwrap_or(read_limit)));
         let mut stream = response.bytes_stream();
 
-        use futures::StreamExt;
         while let Some(chunk) = stream.next().await {
             let chunk =
-                chunk.map_err(|e| ToolError::ExecutionFailed(format!("Failed to read response: {}", e)))?;
+                chunk.map_err(|e| ToolError::ExecutionFailed(format!("Failed to read response: {e}")))?;
             let remaining = read_limit.saturating_sub(bytes.len());
             if remaining == 0 {
                 break;
@@ -223,24 +222,20 @@ impl Tool for WebFetchTool {
         let is_html = content_type.contains("text/html") || content_type.contains("application/xhtml");
 
         // Try to convert to string
-        let raw_text = match String::from_utf8(bytes.clone()) {
-            Ok(text) => text,
-            Err(_) => {
-                let total = content_length.unwrap_or(bytes.len());
-                return Ok(ToolResult {
-                    content: format!(
-                        "[Binary content: {} bytes, content-type: {}]",
-                        total, content_type
-                    ),
-                    is_error: false,
-                    metadata: Some(json!({
-                        "status": status.as_u16(),
-                        "content_type": content_type,
-                        "length": bytes.len(),
-                        "binary": true
-                    })),
-                });
-            }
+        let raw_text = if let Ok(text) = String::from_utf8(bytes.clone()) { text } else {
+            let total = content_length.unwrap_or(bytes.len());
+            return Ok(ToolResult {
+                content: format!(
+                    "[Binary content: {total} bytes, content-type: {content_type}]"
+                ),
+                is_error: false,
+                metadata: Some(json!({
+                    "status": status.as_u16(),
+                    "content_type": content_type,
+                    "length": bytes.len(),
+                    "binary": true
+                })),
+            });
         };
 
         // Convert HTML to readable text unless raw mode requested
@@ -258,8 +253,7 @@ impl Tool for WebFetchTool {
                 .char_indices()
                 .take_while(|(i, _)| *i < max_length)
                 .last()
-                .map(|(i, c)| i + c.len_utf8())
-                .unwrap_or(processed_text.len());
+                .map_or(processed_text.len(), |(i, c)| i + c.len_utf8());
             let truncated_text: String = processed_text.chars().take(truncate_at).collect();
             (
                 format!(

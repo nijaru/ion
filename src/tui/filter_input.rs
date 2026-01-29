@@ -93,8 +93,7 @@ impl FilterInputState {
         self.content
             .char_indices()
             .nth(char_idx)
-            .map(|(i, _)| i)
-            .unwrap_or(self.content.len())
+            .map_or(self.content.len(), |(i, _)| i)
     }
 }
 

@@ -26,8 +26,7 @@ fn extract_key_arg(tool_name: &str, args: &serde_json::Value) -> String {
     let key = match tool_name {
         "read" | "write" | "edit" => "file_path",
         "bash" => "command",
-        "glob" => "pattern",
-        "grep" => "pattern",
+        "glob" | "grep" => "pattern",
         _ => {
             // Fall back to first string argument
             return obj
@@ -105,6 +104,7 @@ impl Cli {
     /// 1. CLI flags (--agi, --yes, --no-sandbox, -r, -w)
     /// 2. Config file settings
     /// 3. Built-in defaults (write mode, sandboxed, approval required)
+    #[must_use] 
     pub fn resolve_permissions(&self, config: &Config) -> PermissionSettings {
         // Start with config defaults
         let mut settings = PermissionSettings {
@@ -268,8 +268,7 @@ struct DenyApprovalHandler;
 impl ApprovalHandler for DenyApprovalHandler {
     async fn ask_approval(&self, tool_name: &str, _args: &serde_json::Value) -> ApprovalResponse {
         eprintln!(
-            "Tool '{}' requires approval. Use --yes flag to auto-approve.",
-            tool_name
+            "Tool '{tool_name}' requires approval. Use --yes flag to auto-approve."
         );
         ApprovalResponse::No
     }
@@ -302,7 +301,7 @@ pub async fn run(args: RunArgs, auto_approve: bool) -> ExitCode {
     match run_inner(args, auto_approve).await {
         Ok(code) => code,
         Err(e) => {
-            eprintln!("Error: {}", e);
+            eprintln!("Error: {e}");
             ExitCode::from(1)
         }
     }
@@ -357,22 +356,19 @@ async fn run_inner(args: RunArgs, auto_approve: bool) -> Result<ExitCode> {
     let provider = Provider::from_id(provider_id).unwrap_or(Provider::OpenRouter);
 
     // Get API key (env var first, then config)
-    let api_key = match config.api_key_for(provider_id) {
-        Some(key) => key,
-        None => {
-            eprintln!(
-                "Error: No API key for {}. Set {} or configure in ~/.ion/config.toml, or run `ion` to set up.",
-                provider_id,
-                match provider_id {
-                    "anthropic" => "ANTHROPIC_API_KEY",
-                    "openai" => "OPENAI_API_KEY",
-                    "google" => "GOOGLE_API_KEY",
-                    "groq" => "GROQ_API_KEY",
-                    _ => "OPENROUTER_API_KEY",
-                }
-            );
-            return Ok(ExitCode::from(1));
-        }
+    let api_key = if let Some(key) = config.api_key_for(provider_id) { key } else {
+        eprintln!(
+            "Error: No API key for {}. Set {} or configure in ~/.ion/config.toml, or run `ion` to set up.",
+            provider_id,
+            match provider_id {
+                "anthropic" => "ANTHROPIC_API_KEY",
+                "openai" => "OPENAI_API_KEY",
+                "google" => "GOOGLE_API_KEY",
+                "groq" => "GROQ_API_KEY",
+                _ => "OPENROUTER_API_KEY",
+            }
+        );
+        return Ok(ExitCode::from(1));
     };
 
     // Determine model
@@ -443,13 +439,13 @@ async fn run_inner(args: RunArgs, auto_approve: bool) -> Result<ExitCode> {
                 response.push_str(text);
                 match output_format {
                     OutputFormat::Text if !quiet => {
-                        print!("{}", text);
+                        print!("{text}");
                         io::stdout().flush()?;
                     }
                     OutputFormat::StreamJson => {
                         let json =
                             serde_json::to_string(&JsonEvent::TextDelta { text: text.clone() })?;
-                        println!("{}", json);
+                        println!("{json}");
                     }
                     _ => {}
                 }
@@ -458,13 +454,13 @@ async fn run_inner(args: RunArgs, auto_approve: bool) -> Result<ExitCode> {
                 if verbose {
                     match output_format {
                         OutputFormat::Text => {
-                            eprint!("[thinking] {}", text);
+                            eprint!("[thinking] {text}");
                         }
                         OutputFormat::StreamJson => {
                             let json = serde_json::to_string(&JsonEvent::ThinkingDelta {
                                 text: text.clone(),
                             })?;
-                            println!("{}", json);
+                            println!("{json}");
                         }
                         _ => {}
                     }
@@ -475,7 +471,7 @@ async fn run_inner(args: RunArgs, auto_approve: bool) -> Result<ExitCode> {
                 if let Some(max) = max_turns
                     && turn_count >= max
                 {
-                    eprintln!("\nMax turns ({}) reached", max);
+                    eprintln!("\nMax turns ({max}) reached");
                     abort_token.cancel(); // Signal agent to stop
                     interrupted = true;
                     break;
@@ -485,14 +481,14 @@ async fn run_inner(args: RunArgs, auto_approve: bool) -> Result<ExitCode> {
                     let key_arg = extract_key_arg(name, args);
                     match output_format {
                         OutputFormat::Text => {
-                            eprintln!("\n> {}({})", name, key_arg);
+                            eprintln!("\n> {name}({key_arg})");
                         }
                         OutputFormat::StreamJson => {
                             let json = serde_json::to_string(&JsonEvent::ToolCallStart {
                                 id: id.clone(),
                                 name: name.clone(),
                             })?;
-                            println!("{}", json);
+                            println!("{json}");
                         }
                         _ => {}
                     }
@@ -505,11 +501,11 @@ async fn run_inner(args: RunArgs, auto_approve: bool) -> Result<ExitCode> {
                             // Use char-safe truncation to avoid UTF-8 panic
                             let preview = if content.chars().count() > 200 {
                                 let truncated: String = content.chars().take(200).collect();
-                                format!("{}...", truncated)
+                                format!("{truncated}...")
                             } else {
                                 content.clone()
                             };
-                            eprintln!("  -> {}", preview);
+                            eprintln!("  -> {preview}");
                         }
                         OutputFormat::StreamJson => {
                             let json = serde_json::to_string(&JsonEvent::ToolCallResult {
@@ -517,7 +513,7 @@ async fn run_inner(args: RunArgs, auto_approve: bool) -> Result<ExitCode> {
                                 content: content.clone(),
                                 is_error: *is_error,
                             })?;
-                            println!("{}", json);
+                            println!("{json}");
                         }
                         _ => {}
                     }
@@ -535,7 +531,7 @@ async fn run_inner(args: RunArgs, auto_approve: bool) -> Result<ExitCode> {
         OutputFormat::Text => {
             if quiet {
                 // In quiet mode, print the full response at the end
-                println!("{}", response);
+                println!("{response}");
             } else if !response.ends_with('\n') {
                 // In normal mode, just ensure trailing newline
                 println!();
@@ -543,11 +539,11 @@ async fn run_inner(args: RunArgs, auto_approve: bool) -> Result<ExitCode> {
         }
         OutputFormat::Json => {
             let json = serde_json::to_string_pretty(&JsonEvent::Done { response })?;
-            println!("{}", json);
+            println!("{json}");
         }
         OutputFormat::StreamJson => {
             let json = serde_json::to_string(&JsonEvent::Done { response })?;
-            println!("{}", json);
+            println!("{json}");
         }
     }
 
@@ -556,12 +552,12 @@ async fn run_inner(args: RunArgs, auto_approve: bool) -> Result<ExitCode> {
         Ok(ExitCode::from(3)) // Max turns reached
     } else if let Some(e) = error {
         match output_format {
-            OutputFormat::Text => eprintln!("Error: {}", e),
+            OutputFormat::Text => eprintln!("Error: {e}"),
             OutputFormat::Json | OutputFormat::StreamJson => {
                 let json = serde_json::to_string(&JsonEvent::Error {
                     message: e.to_string(),
                 })?;
-                println!("{}", json);
+                println!("{json}");
             }
         }
         Ok(ExitCode::from(1)) // Error

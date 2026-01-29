@@ -23,6 +23,7 @@ pub struct SessionPicker {
 }
 
 impl SessionPicker {
+    #[must_use] 
     pub fn new() -> Self {
         Self::default()
     }
@@ -51,6 +52,7 @@ impl SessionPicker {
     }
 
     /// Check if we have sessions loaded.
+    #[must_use] 
     pub fn has_sessions(&self) -> bool {
         !self.sessions.is_empty()
     }
@@ -76,7 +78,7 @@ impl SessionPicker {
                 })
                 .collect();
 
-            let candidate_refs: Vec<&str> = candidates.iter().map(|s| s.as_str()).collect();
+            let candidate_refs: Vec<&str> = candidates.iter().map(std::string::String::as_str).collect();
             let matches = fuzzy::top_matches(filter, candidate_refs.iter().copied(), 50);
 
             // Map matches back to sessions
@@ -91,10 +93,10 @@ impl SessionPicker {
                 .collect();
         }
 
-        if !self.filtered_sessions.is_empty() {
-            self.list_state.select(Some(0));
-        } else {
+        if self.filtered_sessions.is_empty() {
             self.list_state.select(None);
+        } else {
+            self.list_state.select(Some(0));
         }
     }
 
@@ -135,6 +137,7 @@ impl SessionPicker {
     }
 
     /// Get currently selected session.
+    #[must_use] 
     pub fn selected_session(&self) -> Option<&SessionSummary> {
         self.list_state
             .selected()

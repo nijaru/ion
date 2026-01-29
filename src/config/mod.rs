@@ -20,6 +20,7 @@ pub struct PermissionConfig {
 
 impl PermissionConfig {
     /// Get the tool mode from config, defaulting to Write if not specified.
+    #[must_use] 
     pub fn mode(&self) -> ToolMode {
         match self.default_mode.as_deref() {
             Some("read") => ToolMode::Read,
@@ -43,6 +44,7 @@ pub struct ApiKeys {
 
 impl ApiKeys {
     /// Get API key for a provider (returns None if not configured).
+    #[must_use] 
     pub fn get(&self, provider: &str) -> Option<&str> {
         match provider {
             "openrouter" => self.openrouter.as_deref(),
@@ -67,6 +69,7 @@ impl ApiKeys {
     }
 
     /// Check if any key is configured.
+    #[must_use] 
     pub fn has_any(&self) -> bool {
         self.openrouter.is_some()
             || self.anthropic.is_some()
@@ -124,18 +127,21 @@ impl Default for Config {
 }
 
 impl Config {
-    /// Path to the sessions SQLite database.
+    /// Path to the sessions `SQLite` database.
+    #[must_use] 
     pub fn sessions_db_path(&self) -> PathBuf {
         self.data_dir.join("sessions.db")
     }
 
     /// Check if first-time setup is needed (no provider or model selected).
+    #[must_use] 
     pub fn needs_setup(&self) -> bool {
         self.provider.is_none() || self.model.is_none()
     }
 
     /// Get API key for a provider.
     /// Priority: config file > env var (explicit config is more intentional).
+    #[must_use] 
     pub fn api_key_for(&self, provider: &str) -> Option<String> {
         // Ollama doesn't need a key
         if provider == "ollama" {
@@ -301,25 +307,25 @@ impl Config {
 }
 
 /// ion config directory: ~/.ion/
+#[must_use] 
 pub fn ion_config_dir() -> PathBuf {
-    dirs::home_dir()
-        .map(|h| h.join(".ion"))
-        .unwrap_or_else(|| PathBuf::from(".ion"))
+    dirs::home_dir().map_or_else(|| PathBuf::from(".ion"), |h| h.join(".ion"))
 }
 
 /// ion data directory: ~/.ion/data/
+#[must_use] 
 pub fn ion_data_dir() -> PathBuf {
     ion_config_dir().join("data")
 }
 
 /// Universal agents directory: ~/.agents/ (proposed standard)
+#[must_use] 
 pub fn agents_dir() -> PathBuf {
-    dirs::home_dir()
-        .map(|h| h.join(".agents"))
-        .unwrap_or_else(|| PathBuf::from(".agents"))
+    dirs::home_dir().map_or_else(|| PathBuf::from(".agents"), |h| h.join(".agents"))
 }
 
 /// Subagents directory: ~/.agents/subagents/
+#[must_use] 
 pub fn subagents_dir() -> PathBuf {
     agents_dir().join("subagents")
 }
@@ -393,6 +399,7 @@ fn migrate_old_config() -> anyhow::Result<()> {
 /// 4. ~/.ion/AGENTS.md (user global, fallback - only if ~/.agents/AGENTS.md not found)
 ///
 /// Returns project instructions + user instructions (max 2 files).
+#[must_use] 
 pub fn load_instructions(working_dir: &Path) -> String {
     let mut instructions = String::new();
 

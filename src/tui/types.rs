@@ -25,6 +25,7 @@ pub enum ThinkingLevel {
 
 impl ThinkingLevel {
     /// Cycle to the next level
+    #[must_use] 
     pub fn next(self) -> Self {
         match self {
             Self::Off => Self::Standard,
@@ -34,6 +35,7 @@ impl ThinkingLevel {
     }
 
     /// Get the token budget for this level, None if Off
+    #[must_use] 
     pub fn budget_tokens(self) -> Option<u32> {
         match self {
             Self::Off => None,
@@ -43,6 +45,7 @@ impl ThinkingLevel {
     }
 
     /// Display label for the status line (empty string when off)
+    #[must_use] 
     pub fn label(self) -> &'static str {
         match self {
             Self::Off => "",
@@ -74,17 +77,19 @@ pub enum SelectorPage {
     Session,
 }
 
-/// Simple list selection state (replaces ratatui::widgets::ListState).
+/// Simple list selection state (replaces `ratatui::widgets::ListState`).
 #[derive(Debug, Clone, Default)]
 pub struct SelectionState {
     selected: Option<usize>,
 }
 
 impl SelectionState {
+    #[must_use] 
     pub fn new() -> Self {
         Self::default()
     }
 
+    #[must_use] 
     pub fn selected(&self) -> Option<usize> {
         self.selected
     }

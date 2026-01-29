@@ -26,7 +26,7 @@ async fn main() -> ExitCode {
             let config = match Config::load() {
                 Ok(c) => c,
                 Err(e) => {
-                    eprintln!("Error loading config: {}", e);
+                    eprintln!("Error loading config: {e}");
                     return ExitCode::FAILURE;
                 }
             };
@@ -51,7 +51,7 @@ async fn main() -> ExitCode {
             match run_tui(permissions, resume_option).await {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(e) => {
-                    eprintln!("Error: {}", e);
+                    eprintln!("Error: {e}");
                     ExitCode::FAILURE
                 }
             }
@@ -109,7 +109,7 @@ async fn run_tui(
                             app.message_list
                                 .push_entry(ion::tui::message_list::MessageEntry::new(
                                     ion::tui::message_list::Sender::System,
-                                    format!("Error: Failed to load session: {}", e),
+                                    format!("Error: Failed to load session: {e}"),
                                 ));
                         }
                     } else {
@@ -124,7 +124,7 @@ async fn run_tui(
                     app.message_list
                         .push_entry(ion::tui::message_list::MessageEntry::new(
                             ion::tui::message_list::Sender::System,
-                            format!("Error: Failed to list sessions: {}", e),
+                            format!("Error: Failed to list sessions: {e}"),
                         ));
                 }
             }
@@ -134,7 +134,7 @@ async fn run_tui(
                 // Restore terminal before printing error
                 let _ = execute!(io::stdout(), DisableBracketedPaste);
                 let _ = disable_raw_mode();
-                eprintln!("Error: Session '{}' not found: {}", id, e);
+                eprintln!("Error: Session '{id}' not found: {e}");
                 return Err(e.into());
             }
         }
@@ -190,8 +190,8 @@ async fn run_tui(
         }
 
         // Some terminals don't emit Resize on tab switches; re-check size each frame.
-        if let Ok((w, h)) = terminal::size() {
-            if w != term_width || h != term_height {
+        if let Ok((w, h)) = terminal::size()
+            && (w != term_width || h != term_height) {
                 term_width = w;
                 term_height = h;
                 let has_chat = !app.message_list.entries.is_empty();
@@ -203,7 +203,6 @@ async fn run_tui(
                     stdout.flush()?;
                 }
             }
-        }
 
         app.update();
 
@@ -285,7 +284,7 @@ async fn run_tui(
                     app.message_list
                         .push_entry(ion::tui::message_list::MessageEntry::new(
                             ion::tui::message_list::Sender::System,
-                            format!("Editor error: {}", e),
+                            format!("Editor error: {e}"),
                         ));
                 }
             }

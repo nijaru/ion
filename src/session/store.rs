@@ -74,7 +74,7 @@ impl SessionStore {
         // Migration v0 -> v1: Initial schema
         if version < 1 {
             self.db.execute_batch(
-                r#"
+                r"
                 CREATE TABLE IF NOT EXISTS sessions (
                     id          TEXT PRIMARY KEY,
                     working_dir TEXT NOT NULL,
@@ -100,14 +100,14 @@ impl SessionStore {
                     ON sessions(updated_at DESC);
 
                 PRAGMA user_version = 1;
-                "#,
+                ",
             )?;
         }
 
         // Migration v1 -> v2: Add input history table
         if version < SCHEMA_VERSION {
             self.db.execute_batch(
-                r#"
+                r"
                 CREATE TABLE IF NOT EXISTS input_history (
                     id          INTEGER PRIMARY KEY AUTOINCREMENT,
                     content     TEXT NOT NULL,
@@ -118,7 +118,7 @@ impl SessionStore {
                     ON input_history(created_at DESC);
 
                 PRAGMA user_version = 2;
-                "#,
+                ",
             )?;
         }
 
@@ -143,14 +143,14 @@ impl SessionStore {
         let result = (|| {
             // Upsert session metadata
             self.db.execute(
-                r#"
+                r"
                 INSERT INTO sessions (id, working_dir, model, created_at, updated_at)
                 VALUES (?1, ?2, ?3, ?4, ?4)
                 ON CONFLICT(id) DO UPDATE SET
                     working_dir = excluded.working_dir,
                     model = excluded.model,
                     updated_at = excluded.updated_at
-                "#,
+                ",
                 params![session.id, working_dir, session.model, now],
             )?;
 
@@ -161,7 +161,7 @@ impl SessionStore {
                 |row| row.get(0),
             )?;
 
-            let start_position = max_position.map(|p| p + 1).unwrap_or(0) as usize;
+            let start_position = max_position.map_or(0, |p| p + 1) as usize;
 
             // Only insert messages beyond the last saved position
             for (i, msg) in session.messages.iter().enumerate().skip(start_position) {
@@ -169,10 +169,10 @@ impl SessionStore {
                 let content_json = serde_json::to_string(&*msg.content)?;
 
                 self.db.execute(
-                    r#"
+                    r"
                     INSERT INTO messages (session_id, position, role, content, created_at)
                     VALUES (?1, ?2, ?3, ?4, ?5)
-                    "#,
+                    ",
                     params![session.id, i as i64, role_str, content_json, now],
                 )?;
             }
@@ -195,15 +195,15 @@ impl SessionStore {
     /// Delete sessions without any user messages (empty/aborted runs).
     pub fn prune_empty_sessions(&self) -> Result<usize, SessionStoreError> {
         let deleted = self.db.execute(
-            r#"
+            r"
             DELETE FROM sessions
             WHERE id NOT IN (
                 SELECT DISTINCT session_id FROM messages WHERE role = 'user'
             )
-            "#,
+            ",
             [],
         )?;
-        Ok(deleted as usize)
+        Ok(deleted)
     }
 
     /// Load a session by ID.
@@ -256,7 +256,7 @@ impl SessionStore {
     /// List recent sessions, ordered by most recently updated.
     pub fn list_recent(&self, limit: usize) -> Result<Vec<SessionSummary>, SessionStoreError> {
         let mut stmt = self.db.prepare(
-            r#"
+            r"
             SELECT
                 s.id,
                 s.working_dir,
@@ -271,7 +271,7 @@ impl SessionStore {
             )
             ORDER BY s.updated_at DESC
             LIMIT ?1
-            "#,
+            ",
         )?;
 
         let summaries: Result<Vec<SessionSummary>, SessionStoreError> = stmt
@@ -332,14 +332,14 @@ impl SessionStore {
 
             // Prune old entries beyond limit
             self.db.execute(
-                r#"
+                r"
                 DELETE FROM input_history
                 WHERE id NOT IN (
                     SELECT id FROM input_history
                     ORDER BY created_at DESC
                     LIMIT ?1
                 )
-                "#,
+                ",
                 params![INPUT_HISTORY_LIMIT as i64],
             )?;
 
@@ -386,8 +386,7 @@ fn str_to_role(s: &str) -> Result<Role, SessionStoreError> {
         "assistant" => Ok(Role::Assistant),
         "tool_result" => Ok(Role::ToolResult),
         _ => Err(SessionStoreError::InvalidData(format!(
-            "Unknown role: {}",
-            s
+            "Unknown role: {s}"
         ))),
     }
 }

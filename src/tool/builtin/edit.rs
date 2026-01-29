@@ -1,6 +1,7 @@
 use crate::tool::{DangerLevel, Tool, ToolContext, ToolError, ToolResult};
 use async_trait::async_trait;
 use serde_json::json;
+use std::fmt::Write as _;
 use std::path::Path;
 
 /// Maximum file size for editing (5MB).
@@ -13,11 +14,11 @@ pub struct EditTool;
 
 #[async_trait]
 impl Tool for EditTool {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "edit"
     }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Edit a file by replacing exact text. Use for surgical edits instead of rewriting entire files."
     }
 
@@ -72,7 +73,7 @@ impl Tool for EditTool {
 
         let replace_all = args
             .get("replace_all")
-            .and_then(|v| v.as_bool())
+            .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
 
         // Validation: old_string != new_string
@@ -97,15 +98,14 @@ impl Tool for EditTool {
         // Validation: file exists
         if !validated_path.exists() {
             return Err(ToolError::InvalidArgs(format!(
-                "File not found: {}. Use the write tool to create new files.",
-                file_path_str
+                "File not found: {file_path_str}. Use the write tool to create new files."
             )));
         }
 
         // Check file size
         let metadata = tokio::fs::metadata(&validated_path)
             .await
-            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read file: {}", e)))?;
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read file: {e}")))?;
 
         if metadata.len() > MAX_FILE_SIZE {
             return Err(ToolError::InvalidArgs(format!(
@@ -118,7 +118,7 @@ impl Tool for EditTool {
         // Read current content
         let content = tokio::fs::read_to_string(&validated_path)
             .await
-            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read file: {}", e)))?;
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read file: {e}")))?;
 
         // Count occurrences
         let count = content.matches(old_string).count();
@@ -129,16 +129,14 @@ impl Tool for EditTool {
             let preview: String = old_string.chars().take(100).collect();
             let suffix = if old_string.len() > 100 { "..." } else { "" };
             return Err(ToolError::InvalidArgs(format!(
-                "Text not found in file: \"{}{}\"",
-                preview, suffix
+                "Text not found in file: \"{preview}{suffix}\""
             )));
         }
 
         // Validation: uniqueness (unless replace_all)
         if count > 1 && !replace_all {
             return Err(ToolError::InvalidArgs(format!(
-                "Text appears {} times. Use replace_all: true or provide more surrounding context for uniqueness.",
-                count
+                "Text appears {count} times. Use replace_all: true or provide more surrounding context for uniqueness."
             )));
         }
 
@@ -152,7 +150,7 @@ impl Tool for EditTool {
         // Write the file
         tokio::fs::write(&validated_path, &new_content)
             .await
-            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to write file: {}", e)))?;
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to write file: {e}")))?;
 
         // Lazy indexing
         if let Some(callback) = &ctx.index_callback {
@@ -162,13 +160,12 @@ impl Tool for EditTool {
         // Generate diff for output
         let diff = similar::TextDiff::from_lines(&content, &new_content);
         let mut diff_output = String::new();
-        use std::fmt::Write;
         for change in diff
             .unified_diff()
             .header(file_path_str, file_path_str)
             .iter_hunks()
         {
-            let _ = write!(diff_output, "{}", change);
+            let _ = write!(diff_output, "{change}");
         }
 
         // Truncate large diffs at char boundary
@@ -178,20 +175,19 @@ impl Tool for EditTool {
                 .char_indices()
                 .take_while(|(i, _)| *i < MAX_DIFF_SIZE)
                 .last()
-                .map(|(i, c)| i + c.len_utf8())
-                .unwrap_or(MAX_DIFF_SIZE);
+                .map_or(MAX_DIFF_SIZE, |(i, c)| i + c.len_utf8());
             diff_output.truncate(truncate_at);
             diff_output.push_str("\n\n[Diff truncated]");
         }
 
         let occurrences = if replace_all && count > 1 {
-            format!(" ({} occurrences)", count)
+            format!(" ({count} occurrences)")
         } else {
             String::new()
         };
 
         // Return diff without markdown fences - TUI handles highlighting
-        let result_msg = format!("Edited {}{}:\n{}", file_path_str, occurrences, diff_output);
+        let result_msg = format!("Edited {file_path_str}{occurrences}:\n{diff_output}");
 
         Ok(ToolResult {
             content: result_msg,

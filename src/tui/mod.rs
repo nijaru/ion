@@ -52,7 +52,7 @@ pub struct App {
     pub input_state: ComposerState,
     /// Input history for arrow-up recall
     pub input_history: Vec<String>,
-    /// Current position in history (input_history.len() = current input)
+    /// Current position in history (`input_history.len()` = current input)
     pub history_index: usize,
     /// Draft input before entering history navigation
     pub history_draft: Option<String>,
@@ -111,7 +111,7 @@ pub struct App {
     pub output_tokens: usize,
     /// Currently executing tool name (for interrupt handling)
     pub current_tool: Option<String>,
-    /// Retry status (reason, delay_seconds) - shown in progress line
+    /// Retry status (reason, `delay_seconds`) - shown in progress line
     pub retry_status: Option<(String, u64)>,
     /// Timestamp of first Ctrl+C press for double-tap quit/cancel
     pub cancel_pending: Option<Instant>,

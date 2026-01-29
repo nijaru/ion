@@ -50,16 +50,19 @@ impl Terminal {
     }
 
     /// Get terminal width.
+    #[must_use] 
     pub fn width(&self) -> u16 {
         self.width
     }
 
     /// Get terminal height.
+    #[must_use] 
     pub fn height(&self) -> u16 {
         self.height
     }
 
     /// Get the UI area height.
+    #[must_use] 
     pub fn ui_height(&self) -> u16 {
         self.ui_height
     }
@@ -68,7 +71,7 @@ impl Terminal {
     /// This will scroll the terminal naturally.
     pub fn print_to_scrollback(&self, text: &str) -> io::Result<()> {
         let mut stdout = io::stdout();
-        write!(stdout, "{}\r\n", text)?;
+        write!(stdout, "{text}\r\n")?;
         stdout.flush()
     }
 
@@ -215,18 +218,21 @@ impl StyledSpan {
     }
 
     /// Add bold modifier to this span.
+    #[must_use] 
     pub fn with_bold(mut self) -> Self {
         self.style.attributes.set(Attribute::Bold);
         self
     }
 
     /// Add dim modifier to this span.
+    #[must_use] 
     pub fn with_dim(mut self) -> Self {
         self.style.attributes.set(Attribute::Dim);
         self
     }
 
     /// Add italic modifier to this span.
+    #[must_use] 
     pub fn with_italic(mut self) -> Self {
         self.style.attributes.set(Attribute::Italic);
         self
@@ -235,7 +241,7 @@ impl StyledSpan {
     /// Write this span to a writer.
     pub fn write_to<W: Write>(&self, w: &mut W) -> io::Result<()> {
         let styled = StyledContent::new(self.style, &self.content);
-        write!(w, "{}", styled)
+        write!(w, "{styled}")
     }
 }
 
@@ -247,11 +253,13 @@ pub struct StyledLine {
 
 impl StyledLine {
     /// Create a new line from spans.
+    #[must_use] 
     pub fn new(spans: Vec<StyledSpan>) -> Self {
         Self { spans }
     }
 
     /// Create an empty line.
+    #[must_use] 
     pub fn empty() -> Self {
         Self { spans: Vec::new() }
     }
@@ -304,6 +312,7 @@ impl StyledLine {
     }
 
     /// Check if this line is empty (no spans or only empty spans).
+    #[must_use] 
     pub fn is_empty(&self) -> bool {
         self.spans.is_empty() || self.spans.iter().all(|s| s.content.is_empty())
     }
@@ -321,6 +330,7 @@ pub struct LineBuilder {
 
 impl LineBuilder {
     /// Create a new line builder.
+    #[must_use] 
     pub fn new() -> Self {
         Self {
             line: StyledLine::empty(),
@@ -364,12 +374,14 @@ impl LineBuilder {
     }
 
     /// Add a styled span.
+    #[must_use] 
     pub fn styled(mut self, span: StyledSpan) -> Self {
         self.line.push(span);
         self
     }
 
     /// Build the line.
+    #[must_use] 
     pub fn build(self) -> StyledLine {
         self.line
     }
@@ -381,7 +393,7 @@ impl Default for LineBuilder {
     }
 }
 
-/// Print StyledLines directly to stdout (for v2 scrollback rendering).
+/// Print `StyledLines` directly to stdout (for v2 scrollback rendering).
 pub fn print_styled_lines_to_scrollback(lines: &[StyledLine]) -> io::Result<()> {
     let mut stdout = io::stdout();
     for line in lines {

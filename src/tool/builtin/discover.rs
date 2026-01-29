@@ -1,16 +1,17 @@
 use crate::tool::{DangerLevel, Tool, ToolContext, ToolError, ToolResult};
 use async_trait::async_trait;
 use serde_json::json;
+use std::fmt::Write as _;
 
 pub struct DiscoverTool;
 
 #[async_trait]
 impl Tool for DiscoverTool {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "discover"
     }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Search for relevant files, functions, or classes in the codebase using semantic search. Useful when you don't know the exact file path or symbol name."
     }
 
@@ -44,7 +45,7 @@ impl Tool for DiscoverTool {
         if let Some(callback) = &ctx.discovery_callback {
             let results = callback(query.to_string())
                 .await
-                .map_err(|e| ToolError::ExecutionFailed(format!("Discovery failed: {}", e)))?;
+                .map_err(|e| ToolError::ExecutionFailed(format!("Discovery failed: {e}")))?;
 
             if results.is_empty() {
                 return Ok(ToolResult {
@@ -56,7 +57,7 @@ impl Tool for DiscoverTool {
 
             let mut output = String::from("Semantic Search Results:\n");
             for (text, score) in results {
-                output.push_str(&format!("- {} (Relevance: {:.2})\n", text, score));
+                let _ = writeln!(output, "- {text} (Relevance: {score:.2})");
             }
 
             Ok(ToolResult {

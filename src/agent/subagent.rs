@@ -4,6 +4,7 @@ use crate::provider::LlmApi;
 use crate::tool::ToolOrchestrator;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use std::fmt::Write as _;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -44,6 +45,7 @@ pub struct SubagentRegistry {
 }
 
 impl SubagentRegistry {
+    #[must_use] 
     pub fn new() -> Self {
         Self::default()
     }
@@ -74,11 +76,13 @@ impl SubagentRegistry {
     }
 
     /// Get a subagent config by name.
+    #[must_use] 
     pub fn get(&self, name: &str) -> Option<&SubagentConfig> {
         self.configs.get(name)
     }
 
     /// List all available subagents.
+    #[must_use] 
     pub fn list(&self) -> Vec<SubagentSummary> {
         self.configs
             .values()
@@ -116,8 +120,7 @@ pub async fn run_subagent(
     // Build system prompt
     let system_prompt = if let Some(ref extra) = config.system_prompt {
         format!(
-            "You are a subagent. Complete the assigned task concisely.\n\n{}",
-            extra
+            "You are a subagent. Complete the assigned task concisely.\n\n{extra}"
         )
     } else {
         "You are a subagent. Complete the assigned task concisely and report the result.".into()
@@ -166,7 +169,7 @@ pub async fn run_subagent(
                         }
                     }
                     Some(crate::agent::AgentEvent::Error(e)) => {
-                        output.push_str(&format!("\nError: {}", e));
+                        let _ = write!(output, "\nError: {e}");
                         was_truncated = false;
                         break;
                     }

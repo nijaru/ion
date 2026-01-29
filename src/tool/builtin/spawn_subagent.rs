@@ -22,11 +22,11 @@ impl SpawnSubagentTool {
 
 #[async_trait]
 impl Tool for SpawnSubagentTool {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "spawn_subagent"
     }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Spawn a subagent to handle a delegated task. Subagents run with restricted tools and isolated state."
     }
 
@@ -73,13 +73,13 @@ impl Tool for SpawnSubagentTool {
             registry
                 .get(name)
                 .cloned()
-                .ok_or_else(|| ToolError::InvalidArgs(format!("Subagent not found: {}", name)))?
+                .ok_or_else(|| ToolError::InvalidArgs(format!("Subagent not found: {name}")))?
         };
 
         // Run the subagent
         let result = run_subagent(&config, task, self.provider.clone())
             .await
-            .map_err(|e| ToolError::ExecutionFailed(format!("Subagent failed: {}", e)))?;
+            .map_err(|e| ToolError::ExecutionFailed(format!("Subagent failed: {e}")))?;
 
         let status = if result.was_truncated {
             format!(

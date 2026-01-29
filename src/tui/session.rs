@@ -52,7 +52,7 @@ impl App {
                         .try_init();
                 }
                 Err(err) => {
-                    eprintln!("Failed to create log file: {}", err);
+                    eprintln!("Failed to create log file: {err}");
                 }
             }
         } else if std::env::var("RUST_LOG").is_ok() {
@@ -568,7 +568,7 @@ impl App {
                                 let display = if key_arg.is_empty() {
                                     clean_name.to_string()
                                 } else {
-                                    format!("{}({})", clean_name, key_arg)
+                                    format!("{clean_name}({key_arg})")
                                 };
                                 self.message_list
                                     .push_entry(MessageEntry::new(Sender::Tool, display));
@@ -586,11 +586,11 @@ impl App {
                             let display = if *is_error {
                                 let msg = strip_error_prefixes(content).trim();
                                 let first_line = msg.lines().next().unwrap_or("");
-                                format!("⎿ Error: {}", first_line)
+                                format!("⎿ Error: {first_line}")
                             } else {
                                 let line_count = content.lines().count();
                                 if line_count > 1 {
-                                    format!("⎿ {} lines", line_count)
+                                    format!("⎿ {line_count} lines")
                                 } else {
                                     format!("⎿ {}", content.chars().take(60).collect::<String>())
                                 }
@@ -599,7 +599,7 @@ impl App {
                             if let Some(last) = self.message_list.entries.last_mut()
                                 && last.sender == Sender::Tool
                             {
-                                last.append_text(&format!("\n{}", display));
+                                last.append_text(&format!("\n{display}"));
                                 continue;
                             }
                             self.message_list

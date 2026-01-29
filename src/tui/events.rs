@@ -135,8 +135,7 @@ impl App {
                     // Normal mode: Read ↔ Write only
                     match self.tool_mode {
                         ToolMode::Read => ToolMode::Write,
-                        ToolMode::Write => ToolMode::Read,
-                        ToolMode::Agi => ToolMode::Read, // Shouldn't happen, but handle it
+                        ToolMode::Write | ToolMode::Agi => ToolMode::Read,
                     }
                 };
                 // Update the orchestrator
@@ -275,7 +274,7 @@ impl App {
                                             3,
                                         );
                                         let message = if suggestions.is_empty() {
-                                            format!("Unknown command {}", cmd_name)
+                                            format!("Unknown command {cmd_name}")
                                         } else {
                                             format!(
                                                 "Unknown command {}. Did you mean {}?",
@@ -347,10 +346,9 @@ impl App {
         if let Some(request) = self.pending_approval.take() {
             let response = match key.code {
                 KeyCode::Char('y') | KeyCode::Enter => Some(ApprovalResponse::Yes),
-                KeyCode::Char('n') => Some(ApprovalResponse::No),
+                KeyCode::Char('n') | KeyCode::Esc => Some(ApprovalResponse::No),
                 KeyCode::Char('a') => Some(ApprovalResponse::AlwaysSession),
                 KeyCode::Char('A') => Some(ApprovalResponse::AlwaysPermanent),
-                KeyCode::Esc => Some(ApprovalResponse::No),
                 _ => None,
             };
 
@@ -467,7 +465,7 @@ impl App {
                     if let Some(summary) = self.session_picker.selected_session() {
                         let session_id = summary.id.clone();
                         if let Err(e) = self.load_session(&session_id) {
-                            self.last_error = Some(format!("Failed to load session: {}", e));
+                            self.last_error = Some(format!("Failed to load session: {e}"));
                         }
                         self.session_picker.reset();
                         self.mode = Mode::Input;
