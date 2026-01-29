@@ -82,6 +82,9 @@ impl Client {
             Provider::Groq => {
                 LlmClient::openai_compatible(api_key, "https://api.groq.com/openai/v1", "groq")
             }
+            Provider::Kimi => {
+                LlmClient::openai_compatible(api_key, "https://api.moonshot.cn/v1", "moonshot")
+            }
         };
         client.map_err(|e| Error::Build(e.to_string()))
     }

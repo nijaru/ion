@@ -19,6 +19,8 @@ pub enum Provider {
     Ollama,
     /// Groq cloud inference
     Groq,
+    /// Moonshot AI Kimi
+    Kimi,
 }
 
 impl Provider {
@@ -30,10 +32,11 @@ impl Provider {
         Provider::Google,
         Provider::Ollama,
         Provider::Groq,
+        Provider::Kimi,
     ];
 
     /// Lowercase ID for config storage.
-    #[must_use] 
+    #[must_use]
     pub fn id(self) -> &'static str {
         match self {
             Provider::OpenRouter => "openrouter",
@@ -42,11 +45,12 @@ impl Provider {
             Provider::Google => "google",
             Provider::Ollama => "ollama",
             Provider::Groq => "groq",
+            Provider::Kimi => "kimi",
         }
     }
 
     /// Parse provider from ID string.
-    #[must_use] 
+    #[must_use]
     pub fn from_id(id: &str) -> Option<Self> {
         match id.to_lowercase().as_str() {
             "openrouter" => Some(Provider::OpenRouter),
@@ -55,12 +59,13 @@ impl Provider {
             "google" => Some(Provider::Google),
             "ollama" => Some(Provider::Ollama),
             "groq" => Some(Provider::Groq),
+            "kimi" | "moonshot" => Some(Provider::Kimi),
             _ => None,
         }
     }
 
     /// Display name for the provider.
-    #[must_use] 
+    #[must_use]
     pub fn name(self) -> &'static str {
         match self {
             Provider::OpenRouter => "OpenRouter",
@@ -69,11 +74,12 @@ impl Provider {
             Provider::Google => "Google AI",
             Provider::Ollama => "Ollama",
             Provider::Groq => "Groq",
+            Provider::Kimi => "Kimi",
         }
     }
 
     /// Short description of the provider.
-    #[must_use] 
+    #[must_use]
     pub fn description(self) -> &'static str {
         match self {
             Provider::OpenRouter => "Aggregator with 200+ models",
@@ -82,11 +88,12 @@ impl Provider {
             Provider::Google => "Gemini via AI Studio",
             Provider::Ollama => "Local models",
             Provider::Groq => "Fast inference",
+            Provider::Kimi => "Moonshot K2 models",
         }
     }
 
     /// Environment variable(s) for API key.
-    #[must_use] 
+    #[must_use]
     pub fn env_vars(self) -> &'static [&'static str] {
         match self {
             Provider::OpenRouter => &["OPENROUTER_API_KEY"],
@@ -95,6 +102,7 @@ impl Provider {
             Provider::Google => &["GOOGLE_API_KEY", "GEMINI_API_KEY"],
             Provider::Ollama => &[], // No key needed
             Provider::Groq => &["GROQ_API_KEY"],
+            Provider::Kimi => &["MOONSHOT_API_KEY", "KIMI_API_KEY"],
         }
     }
 
