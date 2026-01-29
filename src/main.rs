@@ -321,12 +321,13 @@ async fn run_tui(
         let chat_lines = app.take_chat_inserts(term_width);
         if !chat_lines.is_empty() {
             let ui_height = app.calculate_ui_height(term_width, term_height);
+            let ui_start = term_height.saturating_sub(ui_height);
 
-            // If this is the first message and we had startup UI at anchor,
-            // clear that area first to avoid artifacts (blank lines, border remnants)
-            if let Some(anchor) = app.take_startup_ui_anchor() {
-                let clear_end = anchor.saturating_add(ui_height).min(term_height);
-                for row in anchor..clear_end {
+            // If this is the first message, clear the old UI area before scrolling
+            // to prevent input box borders from being pushed into scrollback
+            if let Some(_anchor) = app.take_startup_ui_anchor() {
+                // Clear from where UI was rendered to bottom of screen
+                for row in ui_start..term_height {
                     execute!(stdout, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
                 }
             }
@@ -334,7 +335,6 @@ async fn run_tui(
             let line_count = chat_lines.len() as u16;
 
             // Move to where UI starts, scroll up to make room, then print
-            let ui_start = term_height.saturating_sub(ui_height);
             execute!(stdout, MoveTo(0, ui_start))?;
 
             // Insert lines by scrolling up (pushes existing content into scrollback)
