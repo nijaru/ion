@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "mcof",
+  "title": "[BUG] Unordered lists rendered with numbers",
+  "description": "Markdown unordered lists (bullets) are being rendered with numbers (1., 2., etc.) instead of bullet points. Should use bullets for unordered, numbers for ordered.",
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-29T22:27:02.684Z",
+  "updated_at": "2026-01-29T22:27:02.684Z",
+  "completed_at": null,
+  "external": {}
+}

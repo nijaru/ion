@@ -65,7 +65,16 @@ impl App {
 
     /// Calculate the total height of the bottom UI area.
     /// Returns: progress (1) + input (with borders) + status (1)
+    /// For selector mode, returns larger height to accommodate the picker UI.
     pub fn calculate_ui_height(&self, width: u16, height: u16) -> u16 {
+        if self.mode == Mode::Selector {
+            // Selector needs: tabs(1) + desc(1) + search box(3) + list(~10) + hint(1) = ~16
+            // Use most of the screen but leave a few lines at top for context
+            let min_selector_height = 15u16;
+            let max_selector_height = height.saturating_sub(3); // Leave 3 lines at top
+            return max_selector_height.max(min_selector_height).min(height);
+        }
+
         let progress_height = PROGRESS_HEIGHT;
         let input_height = self.calculate_input_height(width, height);
         let status_height = 1u16;

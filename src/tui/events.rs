@@ -386,6 +386,25 @@ impl App {
                 }
             }
 
+            // Ctrl+D: Close selector, double-tap to quit (same as Ctrl+C)
+            KeyCode::Char('d') if ctrl => {
+                if let Some(when) = self.cancel_pending
+                    && when.elapsed() <= CANCEL_WINDOW
+                {
+                    self.should_quit = true;
+                    self.cancel_pending = None;
+                } else {
+                    self.cancel_pending = Some(Instant::now());
+                    if self.needs_setup && self.selector_page == SelectorPage::Model {
+                        self.model_picker.reset();
+                        self.open_provider_selector();
+                    } else {
+                        self.model_picker.reset();
+                        self.mode = Mode::Input;
+                    }
+                }
+            }
+
             // Navigation
             KeyCode::Up => match self.selector_page {
                 SelectorPage::Provider => self.provider_picker.move_up(1),

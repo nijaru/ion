@@ -368,7 +368,8 @@ impl App {
                     self.token_usage = Some((*used, *max));
                 }
                 AgentEvent::InputTokens(count) => {
-                    self.input_tokens += count;
+                    // Store latest turn's input (context size), not accumulated
+                    self.input_tokens = *count;
                 }
                 AgentEvent::OutputTokensDelta(count) => {
                     self.output_tokens += count;

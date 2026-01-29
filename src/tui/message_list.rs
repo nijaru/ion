@@ -118,25 +118,13 @@ pub fn strip_error_prefixes(message: &str) -> &str {
 }
 
 /// Sanitize tool name from model garbage (embedded args, XML artifacts).
-/// Also handles common model hallucinations by aliasing to actual tools.
 #[must_use]
 pub fn sanitize_tool_name(name: &str) -> &str {
     // Strip embedded arguments: "tool(args)" -> "tool"
     let name = name.split('(').next().unwrap_or(name);
     // Strip XML artifacts: "tool</tag>" -> "tool"
     let name = name.split('<').next().unwrap_or(name);
-    let name = name.trim();
-
-    // Alias common model hallucinations to actual tools
-    match name {
-        "find_files_matching_pattern" | "find_files" | "search_files" | "list_files" => "glob",
-        "search_content" | "search_text" | "find_in_files" | "grep_files" => "grep",
-        "read_file" | "view_file" | "cat_file" | "get_file" => "read",
-        "write_file" | "create_file" | "save_file" => "write",
-        "edit_file" | "modify_file" | "update_file" => "edit",
-        "run_command" | "execute" | "shell" | "run" => "bash",
-        _ => name,
-    }
+    name.trim()
 }
 
 fn take_head(s: &str, max: usize) -> String {
