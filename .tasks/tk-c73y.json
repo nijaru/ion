@@ -19,10 +19,14 @@
     {
       "ts": "2026-01-29T21:57:32.164Z",
       "msg": "Root cause: Progress line accumulates input_tokens across all turns (+=), Status shows token_usage snapshot of context. In multi-turn tasks with tool calls, progress keeps growing while status shows current context. Consider: show same metric in both, or clarify labels."
+    },
+    {
+      "ts": "2026-01-29T22:33:30.511Z",
+      "msg": "Fixed: input_tokens now shows latest turn's context size instead of accumulating across turns. This matches the context % display better. Output tokens still accumulate (correct for streaming deltas)."
     }
   ],
   "created_at": "2026-01-27T04:36:52.579Z",
-  "updated_at": "2026-01-29T21:57:32.164Z",
+  "updated_at": "2026-01-29T22:33:30.511Z",
   "completed_at": null,
   "external": {}
 }
