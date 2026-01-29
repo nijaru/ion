@@ -25,10 +25,14 @@
     {
       "ts": "2026-01-29T20:32:36.625Z",
       "msg": "Consolidated from tk-axae. Both were about Kimi errors on OpenRouter. Root cause: unclear - could be OpenRouter-side, tool calling bugs, or something else. Native Kimi provider at api.moonshot.ai works (OpenAI-compatible format, confirmed from GitHub docs). OpenRouter routing (provider field) is a SEPARATE issue tracked in llm-connector limitations."
+    },
+    {
+      "ts": "2026-01-29T23:28:02.077Z",
+      "msg": "Error analysis: 'missing field id at line 53 column 101' - llm-connector's OpenAI parser fails on OpenRouter's Kimi response format. Workaround: use native Kimi provider. Fix requires llm-connector changes or fork."
     }
   ],
   "created_at": "2026-01-27T19:12:44.381Z",
-  "updated_at": "2026-01-29T20:32:44.286Z",
+  "updated_at": "2026-01-29T23:28:02.077Z",
   "completed_at": null,
   "external": {}
 }

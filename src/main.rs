@@ -289,14 +289,17 @@ async fn run_tui(
         // Handle full repaint request (e.g., after exiting fullscreen selector)
         if app.needs_full_repaint {
             app.needs_full_repaint = false;
-            let has_chat = !app.message_list.entries.is_empty();
-            if has_chat {
-                // Clear scrollback + screen + home cursor for full reflow
-                print!("\x1b[3J\x1b[2J\x1b[H");
-                let _ = std::io::stdout().flush();
+            // Clear screen (always) and reprint chat (if any)
+            print!("\x1b[3J\x1b[2J\x1b[H");
+            let _ = std::io::stdout().flush();
+            if !app.message_list.entries.is_empty() {
                 app.reprint_chat_scrollback(&mut stdout, term_width)?;
-                stdout.flush()?;
             }
+            // Re-insert header if no chat yet
+            if app.message_list.entries.is_empty() {
+                app.set_header_inserted(false);
+            }
+            stdout.flush()?;
         }
 
         if !app.header_inserted() && app.message_list.entries.is_empty() {
