@@ -212,6 +212,8 @@ impl Table {
 
     /// Narrow fallback: "Header: Value" format with separators.
     fn render_narrow(&self, available_width: usize) -> Vec<StyledLine> {
+        const CONTINUATION_INDENT: usize = 2;
+
         let mut lines = Vec::new();
         let separator = "─".repeat(available_width.min(40));
 
@@ -222,24 +224,65 @@ impl Table {
                     .get(col_idx)
                     .map_or("?", std::string::String::as_str);
 
-                // Wrap the value if needed
-                let label_width = measure_width(header) + 2; // ": "
-                let value_width = available_width.saturating_sub(label_width).max(10);
-                let wrapped = wrap_text(cell, value_width);
+                let header_width = measure_width(header) + 2; // ": "
+                let first_line_width = available_width.saturating_sub(header_width).max(10);
+                let continuation_width =
+                    available_width.saturating_sub(CONTINUATION_INDENT).max(10);
 
-                for (i, line) in wrapped.iter().enumerate() {
-                    if i == 0 {
+                // First line has less space (header takes some)
+                // Continuation lines get almost full width
+                let cell_trimmed = cell.trim();
+                if cell_trimmed.is_empty() {
+                    lines.push(StyledLine::new(vec![
+                        StyledSpan::bold(header.to_string()),
+                        StyledSpan::dim(": ".to_string()),
+                    ]));
+                    continue;
+                }
+
+                // Build lines manually: first line gets header prefix
+                let mut chars = cell_trimmed.chars().peekable();
+                let mut is_first = true;
+
+                while chars.peek().is_some() {
+                    let width = if is_first {
+                        first_line_width
+                    } else {
+                        continuation_width
+                    };
+
+                    // Collect chars for this line
+                    let mut line_content = String::new();
+                    let mut line_width = 0;
+
+                    // Skip leading whitespace on continuation lines
+                    if !is_first {
+                        while chars.peek().is_some_and(|c| c.is_whitespace()) {
+                            chars.next();
+                        }
+                    }
+
+                    while let Some(&ch) = chars.peek() {
+                        let ch_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1);
+                        if line_width + ch_width > width && !line_content.is_empty() {
+                            break;
+                        }
+                        line_content.push(chars.next().unwrap());
+                        line_width += ch_width;
+                    }
+
+                    if is_first {
                         lines.push(StyledLine::new(vec![
                             StyledSpan::bold(header.to_string()),
                             StyledSpan::dim(": ".to_string()),
-                            StyledSpan::raw(line.clone()),
+                            StyledSpan::raw(line_content),
                         ]));
+                        is_first = false;
                     } else {
-                        // Continuation lines indented
-                        let indent = " ".repeat(label_width);
+                        let indent = " ".repeat(CONTINUATION_INDENT);
                         lines.push(StyledLine::new(vec![
                             StyledSpan::raw(indent),
-                            StyledSpan::raw(line.clone()),
+                            StyledSpan::raw(line_content),
                         ]));
                     }
                 }
