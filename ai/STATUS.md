@@ -7,7 +7,8 @@
 | Phase      | TUI v2 Complete | 2026-01-27 |
 | Status     | Testing         | 2026-01-27 |
 | Toolchain  | stable          | 2026-01-22 |
-| Tests      | 122 passing     | 2026-01-28 |
+| Tests      | 122 passing     | 2026-01-29 |
+| Clippy     | 97 pedantic     | 2026-01-29 |
 | Visibility | **PUBLIC**      | 2026-01-22 |
 
 ## TUI Architecture
@@ -66,6 +67,7 @@
 **2026-01-28:** Exit avoids adding system "Session closed" message; empty/system-only sessions are skipped (no prune on startup); list_recent filters to sessions with user messages; markdown renderer inserts paragraph/heading/list spacing and trims leading/trailing entry blanks; consecutive blank lines collapsed and blank tool lines skipped.
 **2026-01-28:** Fixed error duplication, tool name sanitization (live + session load), session ID on exit, removed code block 2-space indent, added table rendering (full-width with box drawing + narrow fallback with "Header: Value" format).
 **2026-01-28:** Investigated Kimi k2.5 errors - llm-connector ChatRequest lacks `extra`/`provider` field for OpenRouter routing. Known Kimi tool calling bugs. ProviderPrefs built but can't be sent to API without llm-connector changes.
+**2026-01-29:** Sprint 12 clippy pedantic refactoring (139→97 warnings). Split run_tui/run_inner into focused helpers. Converted unused self to associated functions. Added #[allow] for intentional patterns. Session persistence on error fix. Architecture analysis vs Claude Code hooks system - gaps documented for future extensibility work.
 
 ## Module Health
 

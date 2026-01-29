@@ -20,7 +20,7 @@ Updated: 2026-01-23
 | 9      | Feature Parity & Extensibility    | COMPLETE |
 | 10     | Stabilization & Refactor          | COMPLETE |
 | 11     | TUI v2: Remove ratatui            | PLANNED  |
-| 12     | Clippy Pedantic Refactoring       | ACTIVE   |
+| 12     | Clippy Pedantic Refactoring       | COMPLETE |
 
 ## Sprint 0: TUI Architecture - Custom Text Entry + Viewport Fix
 
