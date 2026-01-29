@@ -1,0 +1,24 @@
+{
+  "project": "tk",
+  "ref": "mmzs",
+  "title": "[FEATURE] Native Kimi provider - Anthropic Messages API",
+  "description": null,
+  "status": "open",
+  "priority": 2,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [
+    {
+      "ts": "2026-01-29T18:24:22.359Z",
+      "msg": "Use Anthropic Messages API directly like pi does, instead of OpenRouter's OpenAI completions. This fixes the 'Invalid request' errors with Kimi k2.5. Reference: https://kimi.com/code/en"
+    }
+  ],
+  "created_at": "2026-01-29T18:24:22.303Z",
+  "updated_at": "2026-01-29T18:24:22.359Z",
+  "completed_at": null,
+  "external": {}
+}

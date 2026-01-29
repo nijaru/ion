@@ -8,7 +8,9 @@
   "labels": [],
   "assignees": [],
   "parent": null,
-  "blocked_by": [],
+  "blocked_by": [
+    "tk-mmzs"
+  ],
   "estimate": null,
   "due_date": null,
   "logs": [
@@ -22,7 +24,7 @@
     }
   ],
   "created_at": "2026-01-29T05:32:18.963Z",
-  "updated_at": "2026-01-29T05:38:08.284Z",
+  "updated_at": "2026-01-29T18:24:47.580Z",
   "completed_at": null,
   "external": {}
 }
