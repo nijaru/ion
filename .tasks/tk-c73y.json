@@ -11,9 +11,14 @@
   "blocked_by": [],
   "estimate": null,
   "due_date": null,
-  "logs": [],
+  "logs": [
+    {
+      "ts": "2026-01-29T21:15:19.225Z",
+      "msg": "Reviewed code - progress shows per-request tokens, status shows cumulative context. These are different metrics. Need specific repro to understand what mismatch is expected."
+    }
+  ],
   "created_at": "2026-01-27T04:36:52.579Z",
-  "updated_at": "2026-01-27T04:36:52.579Z",
+  "updated_at": "2026-01-29T21:15:19.225Z",
   "completed_at": null,
   "external": {}
 }

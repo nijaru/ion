@@ -15,10 +15,14 @@
     {
       "ts": "2026-01-28T18:18:50.764Z",
       "msg": "User report: progress text appended to tool output line (e.g., '• list(.)ng... (11s · Esc to cancel)') in first request output"
+    },
+    {
+      "ts": "2026-01-29T21:15:32.646Z",
+      "msg": "Likely caused by terminal focus change not triggering proper UI redraw. Need to investigate FocusGained/FocusLost events in events.rs and ensure full UI clear on focus change."
     }
   ],
   "created_at": "2026-01-28T06:48:22.024Z",
-  "updated_at": "2026-01-28T18:18:50.764Z",
+  "updated_at": "2026-01-29T21:15:32.646Z",
   "completed_at": null,
   "external": {}
 }
