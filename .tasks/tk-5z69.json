@@ -3,7 +3,7 @@
   "ref": "5z69",
   "title": "[BUG] Unknown tool call name from model (find_files_matching_pattern) - add alias or prompt guard",
   "description": null,
-  "status": "open",
+  "status": "done",
   "priority": 2,
   "labels": [],
   "assignees": [],
@@ -18,7 +18,7 @@
     }
   ],
   "created_at": "2026-01-28T18:18:46.399Z",
-  "updated_at": "2026-01-28T22:35:50.203Z",
-  "completed_at": null,
+  "updated_at": "2026-01-29T21:14:06.486Z",
+  "completed_at": "2026-01-29T21:14:06.486Z",
   "external": {}
 }
