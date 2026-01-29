@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "l9bn",
+  "title": "[BUG] Session ID printed on startup with no messages",
+  "description": null,
+  "status": "open",
+  "priority": 2,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-29T20:27:27.130Z",
+  "updated_at": "2026-01-29T20:27:27.130Z",
+  "completed_at": null,
+  "external": {}
+}
