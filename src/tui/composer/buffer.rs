@@ -124,11 +124,11 @@ impl ComposerBuffer {
     }
 
     /// Get the internal placeholder for a blob index (1-indexed).
-    /// Uses Unit Separator (\x1f) as invisible delimiter to prevent collision
-    /// with user-typed text. The visible portion is "[Pasted text #N]".
+    /// Uses angle brackets which are unlikely in normal text and have display width 1.
+    /// Format: «Pasted #N» - visible, consistent width, easily identifiable.
     #[must_use]
     pub fn internal_placeholder(blob_idx: usize) -> String {
-        format!("\x1f[Pasted text #{blob_idx}]\x1f")
+        format!("«Pasted #{blob_idx}»")
     }
 }
 
@@ -165,11 +165,10 @@ mod tests {
     fn test_blob_placeholder_collision_protection() {
         let mut buf = ComposerBuffer::new();
         buf.push_blob("Actual blob content".to_string());
-        // User types what looks like a placeholder - should NOT be replaced
-        // because we use invisible delimiters (\x1f) in the internal format
+        // User types something that looks similar but isn't the exact placeholder
         buf.insert_str(0, "User typed: [Pasted text #1] literally");
 
-        // The user-typed text should remain unchanged
+        // The user-typed text should remain unchanged (different format)
         assert_eq!(
             buf.resolve_content(),
             "User typed: [Pasted text #1] literally"
