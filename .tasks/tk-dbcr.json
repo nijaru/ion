@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "dbcr",
+  "title": "[BUG] Gap when switching between selectors of different heights",
+  "description": "Switching from model selector (tall) to provider selector (short) leaves empty gap. Need to clear old selector area when switching.",
+  "status": "done",
+  "priority": 2,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-29T23:06:28.540Z",
+  "updated_at": "2026-01-29T23:10:12.953Z",
+  "completed_at": "2026-01-29T23:10:12.953Z",
+  "external": {}
+}

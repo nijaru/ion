@@ -316,7 +316,7 @@ impl App {
         w: &mut W,
         start_row: u16,
         width: u16,
-        height: u16,
+        _height: u16,
     ) -> std::io::Result<()> {
         use crossterm::{
             cursor::MoveTo,
@@ -490,9 +490,9 @@ impl App {
         )?;
         row += 1;
 
-        // List items
-        let max_list_height = height.saturating_sub(row.saturating_sub(start_row) + 1);
-        let list_height = (items.len() as u16).min(max_list_height).max(1);
+        // List items - use the same height calculation as calculate_ui_height
+        const MAX_VISIBLE_ITEMS: u16 = 15;
+        let list_height = (items.len() as u16).clamp(3, MAX_VISIBLE_ITEMS);
 
         // Calculate scroll offset to keep selection visible
         let scroll_offset = if selected_idx >= list_height as usize {
