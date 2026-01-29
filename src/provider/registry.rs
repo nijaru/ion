@@ -127,7 +127,7 @@ impl ModelRegistry {
     /// fetching strategy:
     /// - `OpenRouter`: Direct API call
     /// - Ollama: Local server API call
-    /// - Kimi: Static model list (Moonshot API doesn't have model listing)
+    /// - Kimi: Moonshot API /v1/models endpoint
     /// - Others: models.dev metadata fallback
     pub async fn fetch_models_for_provider(&self, provider: Provider) -> Result<Vec<ModelInfo>> {
         tracing::debug!("fetch_models_for_provider: {:?}", provider);
@@ -135,101 +135,81 @@ impl ModelRegistry {
         match provider {
             Provider::OpenRouter => self.fetch_openrouter_models().await,
             Provider::Ollama => self.fetch_ollama_models().await,
-            Provider::Kimi => Ok(Self::kimi_models()),
+            Provider::Kimi => self.fetch_kimi_models().await,
             // Cloud providers: use models.dev metadata
             _ => self.fetch_from_models_dev(provider).await,
         }
     }
 
-    /// Static list of Kimi models (Moonshot API doesn't provide model listing endpoint).
-    fn kimi_models() -> Vec<ModelInfo> {
-        vec![
-            ModelInfo {
-                id: "moonshot-v1-auto".to_string(),
-                name: "Kimi Auto".to_string(),
-                provider: "kimi".to_string(),
-                context_window: 128_000,
-                supports_tools: true,
-                supports_vision: false,
-                supports_thinking: false,
-                supports_cache: false,
-                pricing: ModelPricing {
-                    input: 0.12,  // Per million tokens
-                    output: 0.12,
-                    cache_read: None,
-                    cache_write: None,
-                },
-                created: 0,
-            },
-            ModelInfo {
-                id: "moonshot-v1-8k".to_string(),
-                name: "Kimi 8K".to_string(),
-                provider: "kimi".to_string(),
-                context_window: 8192,
-                supports_tools: true,
-                supports_vision: false,
-                supports_thinking: false,
-                supports_cache: false,
-                pricing: ModelPricing {
-                    input: 0.12,
-                    output: 0.12,
-                    cache_read: None,
-                    cache_write: None,
-                },
-                created: 0,
-            },
-            ModelInfo {
-                id: "moonshot-v1-32k".to_string(),
-                name: "Kimi 32K".to_string(),
-                provider: "kimi".to_string(),
-                context_window: 32768,
-                supports_tools: true,
-                supports_vision: false,
-                supports_thinking: false,
-                supports_cache: false,
-                pricing: ModelPricing {
-                    input: 0.24,
-                    output: 0.24,
-                    cache_read: None,
-                    cache_write: None,
-                },
-                created: 0,
-            },
-            ModelInfo {
-                id: "moonshot-v1-128k".to_string(),
-                name: "Kimi 128K".to_string(),
-                provider: "kimi".to_string(),
-                context_window: 128_000,
-                supports_tools: true,
-                supports_vision: false,
-                supports_thinking: false,
-                supports_cache: false,
-                pricing: ModelPricing {
-                    input: 0.60,
-                    output: 0.60,
-                    cache_read: None,
-                    cache_write: None,
-                },
-                created: 0,
-            },
-            ModelInfo {
-                id: "kimi-k2-0528-preview".to_string(),
-                name: "Kimi K2".to_string(),
-                provider: "kimi".to_string(),
-                context_window: 256_000,
-                supports_tools: true,
-                supports_vision: false,
-                supports_thinking: false,
-                supports_cache: false,
-                pricing: ModelPricing {
-                    input: 2.0,  // Estimated pricing
-                    output: 8.0,
-                    cache_read: None,
-                    cache_write: None,
-                },
-                created: 0,
-            },
-        ]
+    /// Fetch models from Moonshot AI (Kimi) API.
+    async fn fetch_kimi_models(&self) -> Result<Vec<ModelInfo>> {
+        #[derive(Deserialize)]
+        struct KimiModelsResponse {
+            data: Vec<KimiModel>,
+        }
+
+        #[derive(Deserialize)]
+        struct KimiModel {
+            id: String,
+        }
+
+        let api_key = Provider::Kimi.api_key().unwrap_or_default();
+        if api_key.is_empty() {
+            anyhow::bail!("Kimi API key not set (MOONSHOT_API_KEY or KIMI_API_KEY)");
+        }
+
+        let response = self
+            .client
+            .get("https://api.moonshot.ai/v1/models")
+            .header("Authorization", format!("Bearer {api_key}"))
+            .send()
+            .await
+            .context("Failed to fetch models from Kimi")?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            anyhow::bail!("Kimi API error {status}: {text}");
+        }
+
+        let data: KimiModelsResponse = response
+            .json()
+            .await
+            .context("Failed to parse Kimi models response")?;
+
+        let models: Vec<ModelInfo> = data
+            .data
+            .into_iter()
+            .map(|m| {
+                // Infer context window from model name
+                let context_window = if m.id.contains("128k") {
+                    128_000
+                } else if m.id.contains("32k") {
+                    32_768
+                } else if m.id.contains("8k") {
+                    8_192
+                } else if m.id.contains("k2") {
+                    256_000
+                } else {
+                    128_000 // Default for auto and unknown
+                };
+
+                ModelInfo {
+                    id: m.id.clone(),
+                    name: m.id.clone(),
+                    provider: "kimi".to_string(),
+                    context_window,
+                    supports_tools: true,
+                    supports_vision: m.id.contains("vision"),
+                    supports_thinking: m.id.contains("thinking"),
+                    supports_cache: false,
+                    pricing: ModelPricing::default(),
+                    created: 0,
+                }
+            })
+            .collect();
+
+        Ok(models)
     }
 
     /// Fetch models from Ollama local server.

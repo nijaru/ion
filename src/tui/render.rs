@@ -661,14 +661,12 @@ impl App {
                 (total_chars, total_chars)
             };
 
-            // Extract chunk for this visual line (exclude newlines and control chars)
-            // Control chars must be filtered to match cursor width calculation (which uses
-            // UnicodeWidthChar::width that returns 0 for control chars)
+            // Extract chunk for this visual line (exclude trailing newline if present)
             let chunk: String = content
                 .chars()
                 .skip(start)
                 .take(end.saturating_sub(start))
-                .filter(|&c| c != '\n' && !c.is_control())
+                .filter(|&c| c != '\n')
                 .collect();
 
             execute!(w, MoveTo(0, start_row + row as u16))?;
