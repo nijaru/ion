@@ -7,7 +7,7 @@
 | Phase      | TUI v2 Complete | 2026-01-27 |
 | Status     | Testing         | 2026-01-27 |
 | Toolchain  | stable          | 2026-01-22 |
-| Tests      | 113 passing     | 2026-01-27 |
+| Tests      | 122 passing     | 2026-01-28 |
 | Visibility | **PUBLIC**      | 2026-01-22 |
 
 ## TUI Architecture
@@ -45,15 +45,13 @@
 
 ## Known Issues
 
-- Kimi k2.5 API returns malformed JSON (tk-1lso)
+- Separator line not cleared on first message (tk-y0gs)
+- Cursor off by 1 with pasted text / placeholder (tk-6gxy)
+- Kimi k2.5 'Invalid request' errors on OpenRouter (tk-axae)
 - Progress line duplicates when switching terminal tabs during streaming (tk-7aem)
-- Markdown pretty printing + tables need width-aware rendering (tk-0asw, tk-fsto)
 - Resize reflow clears pre-ion scrollback; decide preservation strategy (tk-2bk7)
-- Startup UI anchoring added; verify launch gap + resize behavior (tk-9s5m)
-- Width-aware chat wrapping added; verify lists/tables on resize (tk-lyxj)
 - Exiting TUI leaves blank lines before shell prompt (tk-3o0l)
 - --continue resume behavior needs verification (tk-7bcv)
-- Tool call errors show duplicated \"Error:\" prefix (spacing fix in progress)
 
 ## Recent Session
 
@@ -66,6 +64,7 @@
 **2026-01-28:** TUI v2 review. Fixed cursor wrap drift + scrollback CRLF; added input normalization + markdown list cleanup; added input scroll; resize now reflows chat by clearing scrollback when chat exists.
 **2026-01-28:** Anchored startup UI near header, added width-aware chat wrapping, and tightened markdown list rendering. Need terminal verification.
 **2026-01-28:** Exit avoids adding system "Session closed" message; empty/system-only sessions are skipped (no prune on startup); list_recent filters to sessions with user messages; markdown renderer inserts paragraph/heading/list spacing and trims leading/trailing entry blanks; consecutive blank lines collapsed and blank tool lines skipped.
+**2026-01-28:** Fixed error duplication, tool name sanitization (live + session load), session ID on exit, removed code block 2-space indent, added table rendering (full-width with box drawing + narrow fallback with "Header: Value" format).
 
 ## Module Health
 

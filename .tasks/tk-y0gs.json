@@ -1,0 +1,24 @@
+{
+  "project": "tk",
+  "ref": "y0gs",
+  "title": "[BUG] Separator line not cleared on first message",
+  "description": null,
+  "status": "open",
+  "priority": 2,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [
+    {
+      "ts": "2026-01-29T05:32:28.182Z",
+      "msg": "When UI transitions from startup anchor (near header) to bottom on first message, the old separator line at the startup position doesn't get cleared. ScrollUp scrolls old UI content but clear only starts from new position."
+    }
+  ],
+  "created_at": "2026-01-29T05:32:18.923Z",
+  "updated_at": "2026-01-29T05:32:28.182Z",
+  "completed_at": null,
+  "external": {}
+}
