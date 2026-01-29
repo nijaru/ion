@@ -3,7 +3,7 @@
   "ref": "5cs9",
   "title": "[BUG] Ctrl+D doesn't work in selector",
   "description": "Ctrl+D to exit doesn't work in provider/model selector. Should use same keybinding code as regular textbox input.",
-  "status": "open",
+  "status": "done",
   "priority": 2,
   "labels": [],
   "assignees": [],
@@ -13,7 +13,7 @@
   "due_date": null,
   "logs": [],
   "created_at": "2026-01-29T22:27:02.171Z",
-  "updated_at": "2026-01-29T22:27:02.171Z",
-  "completed_at": null,
+  "updated_at": "2026-01-29T22:34:41.643Z",
+  "completed_at": "2026-01-29T22:34:41.643Z",
   "external": {}
 }
