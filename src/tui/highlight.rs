@@ -252,6 +252,14 @@ pub fn render_markdown_with_width(content: &str, width: usize) -> Vec<StyledLine
                     }
                 }
                 Tag::Item => {
+                    // Push any existing content before starting new item
+                    // (handles nested lists inside items)
+                    if !current_line_is_prefix_only {
+                        let line = current_line.build();
+                        if !line.is_empty() {
+                            result.push(line);
+                        }
+                    }
                     let indent = "  ".repeat(list_depth.saturating_sub(1));
                     let prefix = if let Some(counter) = ordered_list_counters.last_mut() {
                         if *counter > 0 {
@@ -672,6 +680,159 @@ Next paragraph"#;
         assert!(
             all_text.contains("Name") && all_text.contains("foo"),
             "Should contain header and value, got: {:?}",
+            all_text
+        );
+    }
+
+    #[test]
+    fn test_render_markdown_unordered_list_dash() {
+        let input = "- Item one\n- Item two\n- Item three";
+        let lines = render_markdown(input);
+        let all_text: String = lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_str())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        // Unordered lists should use * prefix, not numbers
+        assert!(
+            all_text.contains("* Item one"),
+            "Unordered list (dash) should use * prefix, got: {:?}",
+            all_text
+        );
+        assert!(
+            !all_text.contains("1."),
+            "Unordered list should not have numbers, got: {:?}",
+            all_text
+        );
+    }
+
+    #[test]
+    fn test_render_markdown_unordered_list_asterisk() {
+        let input = "* Item one\n* Item two\n* Item three";
+        let lines = render_markdown(input);
+        let all_text: String = lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_str())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        // Unordered lists should use * prefix, not numbers
+        assert!(
+            all_text.contains("* Item one"),
+            "Unordered list (asterisk) should use * prefix, got: {:?}",
+            all_text
+        );
+        assert!(
+            !all_text.contains("1."),
+            "Unordered list should not have numbers, got: {:?}",
+            all_text
+        );
+    }
+
+    #[test]
+    fn test_render_markdown_unordered_list_plus() {
+        let input = "+ Item one\n+ Item two\n+ Item three";
+        let lines = render_markdown(input);
+        let all_text: String = lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_str())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        // Unordered lists should use * prefix, not numbers
+        assert!(
+            all_text.contains("* Item one"),
+            "Unordered list (plus) should use * prefix, got: {:?}",
+            all_text
+        );
+        assert!(
+            !all_text.contains("1."),
+            "Unordered list should not have numbers, got: {:?}",
+            all_text
+        );
+    }
+
+    #[test]
+    fn test_render_markdown_ordered_list() {
+        let input = "1. First\n2. Second\n3. Third";
+        let lines = render_markdown(input);
+        let all_text: String = lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_str())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        // Ordered lists should use numbered prefix
+        assert!(
+            all_text.contains("1. First"),
+            "Ordered list should use numbered prefix, got: {:?}",
+            all_text
+        );
+    }
+
+    #[test]
+    fn test_render_markdown_nested_unordered_list() {
+        let input = "- Item one\n  - Nested one\n  - Nested two\n- Item two";
+        let lines = render_markdown(input);
+        let all_text: String = lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_str())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        // Nested lists should not get numbered
+        assert!(
+            !all_text.contains("1.") && !all_text.contains("2."),
+            "Nested unordered list should not have numbers, got: {:?}",
+            all_text
+        );
+    }
+
+    #[test]
+    fn test_render_markdown_mixed_lists() {
+        // Ordered list with unordered sub-list
+        let input = "1. First\n   - Sub one\n   - Sub two\n2. Second";
+        let lines = render_markdown(input);
+        let all_text: String = lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_str())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        // Should have both 1. and * prefixes, sub-list should use *
+        assert!(
+            all_text.contains("1. First"),
+            "Should have ordered prefix, got: {:?}",
+            all_text
+        );
+        assert!(
+            all_text.contains("* Sub one"),
+            "Nested unordered should use *, got: {:?}",
             all_text
         );
     }
