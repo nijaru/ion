@@ -93,6 +93,28 @@ tk done <id>             # Complete task
 - **Task tracking**: Use `tk` for all work
 - **Issue tracking**: When user reports bugs/issues, **immediately create a `tk` task**
 
+## Bug Investigation
+
+**Before investigating:**
+
+1. `tk show <id>` - check existing notes in task log
+2. Search ai/ for prior research: `grep -ri "keyword" ai/`
+3. Check git log for related commits
+
+**During investigation:**
+
+- Log findings immediately: `tk log <id> "finding"`
+- Include: error messages, root cause hypothesis, files involved
+- For complex bugs, note which ai/ file has detailed analysis
+
+**After investigating:**
+
+- Update task with conclusion (fixed, needs more info, blocked by X)
+- If blocked by external dependency, note the specific limitation
+- Cross-reference related tasks if issues are distinct but confused
+
+**Never claim something is undocumented without searching first.**
+
 ## Reference
 
 **ai/ directory contents:**

@@ -5,52 +5,57 @@
 | Metric    | Value           | Updated    |
 | --------- | --------------- | ---------- |
 | Phase     | TUI v2 Complete | 2026-01-27 |
-| Status    | Testing         | 2026-01-29 |
+| Status    | Stabilizing     | 2026-01-29 |
 | Toolchain | stable          | 2026-01-22 |
 | Tests     | 122 passing     | 2026-01-29 |
 | Clippy    | 97 pedantic     | 2026-01-29 |
 
+## Top Priorities
+
+1. **Anthropic caching** (tk-268g) - 50-100x cost savings, blocked by llm-connector
+2. **llm-connector decision** (tk-aq7x) - Unblocks caching + OpenRouter routing
+3. **Input UX** - File/command autocomplete (tk-ik05, tk-hk6p)
+
 ## Open Bugs
 
-| ID      | Issue                                               | Priority |
-| ------- | --------------------------------------------------- | -------- |
-| tk-l9bn | Session ID printed on startup with no messages      | p2       |
-| tk-7bcv | --continue resume broken                            | p2       |
-| tk-7aem | Progress line duplicates on terminal tab switch     | p2       |
-| tk-1lso | Kimi k2.5 errors on OpenRouter (root cause unclear) | p2       |
-| tk-2bk7 | Resize clears pre-ion scrollback                    | p3       |
+| ID      | Issue                                  | Root Cause                                              |
+| ------- | -------------------------------------- | ------------------------------------------------------- |
+| tk-7aem | Progress line duplicates on tab switch | Missing focus event handling (may be fixed)             |
+| tk-c73y | Token display mismatch                 | Progress accumulates, status shows snapshot             |
+| tk-1lso | Kimi errors on OpenRouter              | reasoning_content field not extracted (Q6 in tui-v2.md) |
+| tk-2bk7 | Resize clears pre-ion scrollback       | Needs decision on preservation strategy                 |
 
 ## Architecture Decisions Pending
 
 ### llm-connector Dependency (tk-aq7x)
 
-**Problem:** llm-connector blocks features we need:
+**Blocks:** Anthropic caching (tk-268g), OpenRouter routing, Kimi reasoning_content
 
 | Missing Feature             | Impact                                   |
 | --------------------------- | ---------------------------------------- |
 | OpenRouter `provider` field | Can't use ProviderPrefs for routing      |
 | Anthropic `cache_control`   | No prompt caching (50-100x cost savings) |
-| Custom request fields       | Can't add provider-specific params       |
+| Kimi `reasoning_content`    | Can't extract thinking from Kimi models  |
 
-**Options:**
+**Options:** Remove (~500 LOC), fork, or PR upstream
 
-1. Remove llm-connector, implement direct API calls (~500 LOC)
-2. Fork and add missing fields
-3. PR upstream and wait
+### Hooks/Plugins
 
-ProviderPrefs already built in `src/provider/prefs.rs` but unused.
+- Design exists: `ai/design/plugin-architecture.md`
+- Claude Code compatible protocol
+- Architecture supports it, can defer - not blocking anything
 
-### Kimi Provider
+## Fixed Today (2026-01-29)
 
-- **Native provider works**: api.moonshot.ai with OpenAI-compatible format
-- **OpenRouter errors**: Root cause unclear (tk-1lso) - NOT same as provider routing issue
-- Kimi supports BOTH OpenAI and Anthropic-compatible APIs per their docs
+- tk-l9bn: Session ID no longer printed when no messages
+- tk-5z69: Tool name aliasing for model hallucinations
+- tk-7bcv: --continue already working (verified)
 
 ## Module Health
 
 | Module    | Health | Notes                     |
 | --------- | ------ | ------------------------- |
-| tui/      | GOOD   | v2 complete, testing      |
+| tui/      | GOOD   | v2 complete, stabilizing  |
 | agent/    | GOOD   | Clean turn loop           |
 | provider/ | OK     | llm-connector limitations |
 | tool/     | GOOD   | Orchestrator + spawn      |
@@ -58,22 +63,12 @@ ProviderPrefs already built in `src/provider/prefs.rs` but unused.
 | skill/    | GOOD   | YAML frontmatter          |
 | mcp/      | OK     | Needs tests               |
 
-## Recent Work
+## Key References
 
-**2026-01-29:**
-
-- Fixed cursor off-by-1 (root cause: control chars in placeholder had zero display width)
-- Added native Kimi provider (api.moonshot.ai, OpenAI-compatible)
-- Sprint 12 clippy pedantic refactoring (139→97 warnings)
-- Documented llm-connector limitations vs Kimi-specific issues (separate problems)
-
-**2026-01-28:**
-
-- TUI v2 polish: table rendering, markdown spacing, exit cleanup
-- Investigated OpenRouter Kimi errors - built ProviderPrefs but can't send via llm-connector
-
-## Key Files
-
-- `ai/design/tui-v2.md` - TUI v2 architecture
-- `ai/research/agent-survey.md` - Competitive analysis
-- `src/provider/prefs.rs` - OpenRouter routing prefs (unused due to llm-connector)
+| Topic                | Location                              |
+| -------------------- | ------------------------------------- |
+| TUI architecture     | ai/design/tui-v2.md                   |
+| Plugin design        | ai/design/plugin-architecture.md      |
+| Kimi reasoning issue | ai/design/tui-v2.md Q6                |
+| OpenRouter prefs     | src/provider/prefs.rs (built, unused) |
+| Competitive analysis | ai/research/agent-survey.md           |
