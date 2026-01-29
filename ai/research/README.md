@@ -1,129 +1,70 @@
 # Research Directory
 
-> Organized research for AI agent development. Topic-based structure for easy navigation.
+Research notes for ion development. All files are topic-specific markdown.
 
-## Quick Reference
+## Agent Comparison
 
-| Task             | Directory     | Start With                  |
-| ---------------- | ------------- | --------------------------- |
-| Context patterns | context/      | engineering.md              |
-| Stack-based ctx  | context/      | stack-patterns.md           |
-| Competitor intel | competitive/  | analysis-2025.md            |
-| Agent patterns   | architecture/ | agent-scaffolding.md        |
-| Tool integration | reference/    | tools-strategy.md           |
-| Historical ref   | \_archive/    | (Python-era, concepts only) |
+| File                         | Content                                |
+| ---------------------------- | -------------------------------------- |
+| agent-survey.md              | 6-agent comparison (Claude Code, etc.) |
+| agent-comparison-2026.md     | Pi-Mono vs Claude Code deep dive       |
+| claude-code-architecture.md  | Claude Code internals                  |
+| pi-mono-architecture-2026.md | Pi-Mono design philosophy              |
 
----
+## TUI Patterns
 
-## context/
+| File                        | Content                      |
+| --------------------------- | ---------------------------- |
+| inline-tui-patterns-2026.md | Cross-ecosystem TUI patterns |
+| tui-state-of-art-2026.md    | State of terminal UI in 2026 |
+| ratatui-vs-crossterm-v3.md  | TUI library comparison       |
+| codex-tui-analysis.md       | Codex CLI TUI analysis       |
+| pi-mono-tui-analysis.md     | Pi-Mono TUI analysis         |
 
-Context engineering, memory systems, and attention management.
+## TUI Implementation
 
-| File              | Content                                     |
-| ----------------- | ------------------------------------------- |
-| engineering.md    | Context rot, ACE, decision traces, Zep      |
-| stack-patterns.md | ContextBranch, THREAD, bi-temporal, Factory |
+| File                               | Content                 |
+| ---------------------------------- | ----------------------- |
+| inline-viewport-2026.md            | Viewport implementation |
+| inline-viewport-scrollback-2026.md | Scrollback handling     |
+| viewport-investigation-2026-01.md  | Viewport debugging      |
+| tui-rendering-research.md          | Rendering approaches    |
+| tui-resize-streaming-research.md   | Resize + streaming      |
+| tui-diffing-research.md            | Diff-based rendering    |
+| tui-selectors-http-research.md     | Selector widgets        |
 
-**Key insights:**
+## Context & Memory
 
-- Shuffled > logical organization (counterintuitive)
-- Delta updates +17% accuracy, -83% cost (ACE)
-- Claude lowest hallucination, abstains when uncertain
+| File                         | Content                       |
+| ---------------------------- | ----------------------------- |
+| context-management.md        | Context compaction strategies |
+| memory-systems-comparison.md | Memory system designs         |
 
----
+## Providers & Models
 
-## competitive/
+| File                             | Content                    |
+| -------------------------------- | -------------------------- |
+| rust-llm-crates-2026.md          | Rust LLM library options   |
+| prompt-caching-providers-2026.md | Prompt caching comparison  |
+| deepseek-research-2026.md        | DeepSeek analysis          |
+| model-routing-for-subagents.md   | Model selection strategies |
 
-SOTA agent analysis with evidence levels.
+## Tools & Patterns
 
-| File             | Content                            |
-| ---------------- | ---------------------------------- |
-| analysis-2025.md | Comprehensive with evidence levels |
-| claude-code.md   | Anthropic patterns (43.2% T-Bench) |
-| codex-cli.md     | OpenAI patterns                    |
-| factory-droid.md | #2 T-Bench (58.8%), spec-first     |
-| tui-agents.md    | Terminal agent landscape           |
+| File                               | Content               |
+| ---------------------------------- | --------------------- |
+| edit-tool-patterns-2026.md         | Edit tool designs     |
+| tool-display-patterns-2026.md      | Tool output UX        |
+| plugin-architectures-2026.md       | Plugin system designs |
+| cli-agent-config-best-practices.md | Config patterns       |
+| cli-oneshot-patterns-2026.md       | One-shot CLI patterns |
 
-**Key benchmarks:**
+## Other
 
-- Terminal-Bench SOTA: Ante 60.3%, Factory 58.8%, Claude 43.2%
-- SWE-bench SOTA: Grok 4 75%, GPT-5 74.9%, Claude Opus 74.5%
-
----
-
-## architecture/
-
-Agent design patterns and scaffolding.
-
-| File                 | Content                          |
-| -------------------- | -------------------------------- |
-| agent-scaffolding.md | LM-centric interfaces, SWE-Agent |
-| subagent-patterns.md | Sub-agent coordination (CRUSH)   |
-| adaptive-spec.md     | Memory-informed spec generation  |
-
----
-
-## reference/
-
-Tools, protocols, and implementation guides.
-
-| File                     | Content                       |
-| ------------------------ | ----------------------------- |
-| tools-strategy.md        | Tool bundling, fallbacks      |
-| tool-calling.md          | Reality check on tool calling |
-| acp-integration.md       | ACP protocol details          |
-| lsp-landscape.md         | LSP tooling options           |
-| codebase-intelligence.md | Code analysis approaches      |
-| benchmarking.md          | Terminal-Bench, SWE-bench     |
-| discoveries.md           | Key research insights         |
-
----
-
-## \_archive/
-
-Python-era research. Concepts valid, implementation outdated.
-
-| File                     | Original Purpose               |
-| ------------------------ | ------------------------------ |
-| memory-system-python.md  | DuckDB-era memory design       |
-| distribution-python.md   | Python/Mojo distribution       |
-| rust-vs-python.md        | Language decision (historical) |
-| v14-improvements.md      | Pre-Bun improvements           |
-| week8-validation.md      | Old integration testing        |
-| codex-roadmap.md         | Python-era roadmap             |
-| sota-research-nov2025.md | Recovery report + trends       |
-
----
-
-## Current Stack
-
-| Component | Choice     | Research Source                 |
-| --------- | ---------- | ------------------------------- |
-| Database  | bun:sqlite | context/engineering.md          |
-| Vectors   | OmenDB     | reference/codebase-intelligence |
-| Graph     | Graphology | architecture/subagent-patterns  |
-| Agent     | AI SDK v5  | architecture/agent-scaffolding  |
-| Runtime   | Bun        | competitive/analysis-2025       |
-
----
-
-## Research Validated (No Change Needed)
-
-From context/engineering.md:
-
-- Budget-based context assembly
-- Append-only episodic store
-- Outcome tracking (success/failure)
-- Artifacts section for files
-- Bi-temporal schema
-
-## Priority Additions (Backlog)
-
-From recent research synthesis:
-
-| Change                   | Source             | Priority |
-| ------------------------ | ------------------ | -------- |
-| Helpful/harmful counters | ACE paper          | High     |
-| Query-needle similarity  | Chroma context rot | High     |
-| Tool masking             | Manus/Momo         | Medium   |
-| Decision event type      | Foundation Capital | Medium   |
+| File                              | Content                     |
+| --------------------------------- | --------------------------- |
+| input-research.md                 | Input handling, fuzzy match |
+| rust-file-finder-crates.md        | File finder libraries       |
+| rust-tui-agent-patterns-2026.md   | Rust agent patterns         |
+| session-storage-patterns-2026.md  | Session persistence         |
+| recursive-language-models-2026.md | Recursive LLM patterns      |
