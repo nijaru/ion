@@ -684,22 +684,19 @@ impl App {
                 });
 
         tokio::spawn(async move {
-            match agent
+            let (updated_session, error) = agent
                 .run_task(session, input, event_tx.clone(), Some(queue), thinking)
-                .await
-            {
-                Ok(updated_session) => {
-                    // Send completion event
-                    let _ = event_tx
-                        .send(AgentEvent::Finished("Task completed".to_string()))
-                        .await;
-                    // Send updated session back to preserve conversation history
-                    let _ = session_tx.send(updated_session).await;
-                }
-                Err(e) => {
-                    let _ = event_tx.send(AgentEvent::Error(e.to_string())).await;
-                }
+                .await;
+
+            if let Some(e) = error {
+                let _ = event_tx.send(AgentEvent::Error(e.to_string())).await;
+            } else {
+                let _ = event_tx
+                    .send(AgentEvent::Finished("Task completed".to_string()))
+                    .await;
             }
+            // Always send session back - contains whatever work was done
+            let _ = session_tx.send(updated_session).await;
         });
     }
 

@@ -254,6 +254,10 @@ impl Agent {
         }
     }
 
+    /// Run a task with the given user message.
+    ///
+    /// Returns the session (with any work completed) and optionally an error.
+    /// The session is always returned so partial work can be persisted.
     pub async fn run_task(
         &self,
         mut session: Session,
@@ -261,7 +265,7 @@ impl Agent {
         tx: mpsc::Sender<AgentEvent>,
         message_queue: Option<Arc<std::sync::Mutex<Vec<String>>>>,
         thinking: Option<ThinkingConfig>,
-    ) -> Result<Session> {
+    ) -> (Session, Option<anyhow::Error>) {
         session.messages.push(Message {
             role: Role::User,
             content: Arc::new(vec![ContentBlock::Text {
@@ -286,7 +290,7 @@ impl Agent {
 
         loop {
             if session.abort_token.is_cancelled() {
-                return Err(anyhow::anyhow!("Cancelled"));
+                return (session, Some(anyhow::anyhow!("Cancelled")));
             }
 
             // Check for queued user messages between turns
@@ -316,15 +320,14 @@ impl Agent {
                 self.emit_token_usage(&session.messages, &tx).await;
             }
 
-            if !self
-                .execute_turn(&mut session, &tx, thinking.clone())
-                .await?
-            {
-                break;
+            match self.execute_turn(&mut session, &tx, thinking.clone()).await {
+                Ok(true) => continue,
+                Ok(false) => break,
+                Err(e) => return (session, Some(e)),
             }
         }
 
-        Ok(session)
+        (session, None)
     }
 
     async fn execute_turn(
