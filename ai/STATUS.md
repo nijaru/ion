@@ -65,6 +65,7 @@
 **2026-01-28:** Anchored startup UI near header, added width-aware chat wrapping, and tightened markdown list rendering. Need terminal verification.
 **2026-01-28:** Exit avoids adding system "Session closed" message; empty/system-only sessions are skipped (no prune on startup); list_recent filters to sessions with user messages; markdown renderer inserts paragraph/heading/list spacing and trims leading/trailing entry blanks; consecutive blank lines collapsed and blank tool lines skipped.
 **2026-01-28:** Fixed error duplication, tool name sanitization (live + session load), session ID on exit, removed code block 2-space indent, added table rendering (full-width with box drawing + narrow fallback with "Header: Value" format).
+**2026-01-28:** Investigated Kimi k2.5 errors - llm-connector ChatRequest lacks `extra`/`provider` field for OpenRouter routing. Known Kimi tool calling bugs. ProviderPrefs built but can't be sent to API without llm-connector changes.
 
 ## Module Health
 
