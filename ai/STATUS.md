@@ -46,12 +46,12 @@
 
 ## Known Issues
 
-- Separator line not cleared on first message (tk-y0gs)
-- Cursor off by 1 with pasted text / placeholder (tk-6gxy)
-- Kimi k2.5 'Invalid request' errors on OpenRouter (tk-axae) - **FIX**: native provider using Anthropic Messages API (like pi)
+- ~~Separator line not cleared on first message (tk-y0gs)~~ **FIXED 2026-01-29**
+- ~~Cursor off by 1 with pasted text / placeholder (tk-6gxy)~~ **FIXED 2026-01-29**
+- ~~Kimi k2.5 'Invalid request' errors on OpenRouter (tk-axae)~~ **FIXED**: Native Kimi provider (2026-01-29)
 - Progress line duplicates when switching terminal tabs during streaming (tk-7aem)
 - Resize reflow clears pre-ion scrollback; decide preservation strategy (tk-2bk7)
-- Exiting TUI leaves blank lines before shell prompt (tk-3o0l)
+- ~~Exiting TUI leaves blank lines before shell prompt (tk-3o0l)~~ **FIXED 2026-01-29**
 - --continue resume behavior needs verification (tk-7bcv)
 
 ## Recent Session
@@ -68,6 +68,7 @@
 **2026-01-28:** Fixed error duplication, tool name sanitization (live + session load), session ID on exit, removed code block 2-space indent, added table rendering (full-width with box drawing + narrow fallback with "Header: Value" format).
 **2026-01-28:** Investigated Kimi k2.5 errors - llm-connector ChatRequest lacks `extra`/`provider` field for OpenRouter routing. Known Kimi tool calling bugs. ProviderPrefs built but can't be sent to API without llm-connector changes.
 **2026-01-29:** Sprint 12 clippy pedantic refactoring (139→97 warnings). Split run_tui/run_inner into focused helpers. Converted unused self to associated functions. Added #[allow] for intentional patterns. Session persistence on error fix. Architecture analysis vs Claude Code hooks system - gaps documented for future extensibility work.
+**2026-01-29:** Implemented dev plan phases 1-3: Fixed UI bugs (cursor off-by-1, separator clearing, exit blank lines, width-aware wrapping); Added markdown ordered lists, blockquotes, horizontal rules; Added filter input Ctrl-W/Ctrl-U shortcuts; Added native Kimi (Moonshot) provider with OpenAI-compatible API.
 
 ## Module Health
 
