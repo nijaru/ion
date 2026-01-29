@@ -232,7 +232,10 @@ impl App {
         self.last_render_width = Some(width);
 
         // Clear from min of old/new ui_start to handle UI height changes
-        let clear_from = self.last_ui_start.map_or(ui_start, |old| old.min(ui_start));
+        // Also include startup_ui_anchor when last_ui_start is None (first render after startup)
+        let clear_from = self
+            .last_ui_start
+            .map_or_else(|| self.startup_ui_anchor.unwrap_or(ui_start).min(ui_start), |old| old.min(ui_start));
         self.last_ui_start = Some(ui_start);
 
         let preserve_header =
@@ -658,12 +661,14 @@ impl App {
                 (total_chars, total_chars)
             };
 
-            // Extract chunk for this visual line (exclude trailing newline if present)
+            // Extract chunk for this visual line (exclude newlines and control chars)
+            // Control chars must be filtered to match cursor width calculation (which uses
+            // UnicodeWidthChar::width that returns 0 for control chars)
             let chunk: String = content
                 .chars()
                 .skip(start)
                 .take(end.saturating_sub(start))
-                .filter(|&c| c != '\n')
+                .filter(|&c| c != '\n' && !c.is_control())
                 .collect();
 
             execute!(w, MoveTo(0, start_row + row as u16))?;
