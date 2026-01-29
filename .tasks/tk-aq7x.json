@@ -1,0 +1,24 @@
+{
+  "project": "tk",
+  "ref": "aq7x",
+  "title": "[ARCH] Evaluate llm-connector dependency - consider removal",
+  "description": null,
+  "status": "open",
+  "priority": 2,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [
+    {
+      "ts": "2026-01-29T20:33:06.067Z",
+      "msg": "llm-connector limitations blocking ion features:\n1. No OpenRouter 'provider' field for routing prefs (ProviderPrefs already built but unused)\n2. No Anthropic cache_control for prompt caching (tk-268g)\n3. No extra_body/custom fields for provider-specific params\n\nOptions:\nA) Remove llm-connector, implement direct API calls (~500 LOC for OpenAI/Anthropic/Google)\nB) Fork llm-connector and add missing fields\nC) Submit upstream PRs and wait\n\nPros of removal: Full control, unblocks features, less dependency churn\nCons: More code to maintain (but simple HTTP calls)\n\nKimi works on llm-connector via openai_compatible() - confirmed OpenAI format at api.moonshot.ai"
+    }
+  ],
+  "created_at": "2026-01-29T20:32:56.846Z",
+  "updated_at": "2026-01-29T20:33:06.067Z",
+  "completed_at": null,
+  "external": {}
+}

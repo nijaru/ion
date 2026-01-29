@@ -25,37 +25,35 @@ Fast, lightweight TUI coding agent.
 
 ## Architecture
 
-| Module    | Purpose                             |
-| --------- | ----------------------------------- |
-| provider/ | Multi-provider LLM via `llm` crate  |
-| tool/     | Built-in tools + MCP client         |
-| skill/    | SKILL.md loader                     |
-| agent/    | Multi-turn loop, session management |
-| tui/      | ratatui + crossterm chat interface  |
+| Module    | Purpose                              |
+| --------- | ------------------------------------ |
+| provider/ | Multi-provider LLM via llm-connector |
+| tool/     | Built-in tools + MCP client          |
+| skill/    | SKILL.md loader                      |
+| agent/    | Multi-turn loop, session management  |
+| tui/      | Direct crossterm (no ratatui)        |
 
-### TUI Architecture
+### TUI Architecture (v2)
 
 - **Chat history**: Printed to stdout via `insert_before`, terminal handles scrollback natively
-- **Bottom UI**: We manage (progress, input, status) - stays at bottom via `Viewport::Inline`
-- **Input composer**: Custom `ComposerWidget` with own cursor/wrap calculation
-  - `ComposerBuffer` - ropey-backed text buffer with blob storage for large pastes
-  - `ComposerState` - cursor position, scroll state, stash
-  - **Known bug**: Cursor position off-by-one on wrapped lines (accumulates)
-- **Rendering**: Uses ratatui's `Paragraph` with `Wrap` for display, but cursor calculation is custom
+- **Bottom UI**: Direct cursor positioning at terminal height - ui_height
+- **Input composer**: Custom with ropey-backed buffer + blob storage for large pastes
+- **Rendering**: Direct crossterm escape sequences, pulldown-cmark for markdown
 
 **Built-in tools:** read, write, edit, bash, glob, grep
 
-**Providers:** Anthropic, Google, Groq, Ollama, OpenAI, OpenRouter (alphabetical, no default)
+**Providers:** Anthropic, Google, Groq, Kimi, Ollama, OpenAI, OpenRouter
 
 ## Tech Stack
 
-| Component | Choice            |
-| --------- | ----------------- |
-| TUI       | ratatui/crossterm |
-| Async     | tokio             |
-| HTTP      | reqwest           |
-| Database  | rusqlite          |
-| Tokens    | bpe-openai        |
+| Component | Choice         |
+| --------- | -------------- |
+| TUI       | crossterm      |
+| Markdown  | pulldown-cmark |
+| Async     | tokio          |
+| HTTP      | reqwest        |
+| Database  | rusqlite       |
+| Tokens    | bpe-openai     |
 
 ## Code Standards
 
@@ -116,8 +114,8 @@ tk done <id>             # Complete task
 
 **Key research:**
 
+- `ai/research/agent-survey.md` - Competitive analysis (6 agents)
 - `ai/research/tool-display-patterns-2026.md` - Tool output UX
-- `ai/research/tui-agents-comparison-2026.md` - Competitive analysis
 - `ai/research/edit-tool-patterns-2026.md` - Edit tool design
 
 **Competitive reference:** Claude Code, Gemini CLI, opencode, pi-mono, amp

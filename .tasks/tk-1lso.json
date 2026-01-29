@@ -1,7 +1,7 @@
 {
   "project": "tk",
   "ref": "1lso",
-  "title": "[BUG] Kimi k2.5 API error on OpenRouter - investigate model compatibility",
+  "title": "[BUG] Kimi k2.5 errors on OpenRouter - root cause unclear",
   "description": null,
   "status": "open",
   "priority": 2,
@@ -21,10 +21,14 @@
     {
       "ts": "2026-01-29T20:27:40.581Z",
       "msg": "DISTINCT ISSUE: This is about Kimi-specific API errors (reasoning field not in content, etc.) - separate from OpenRouter provider routing field issue. Native Kimi provider bypasses this but doesn't fix OpenRouter integration."
+    },
+    {
+      "ts": "2026-01-29T20:32:36.625Z",
+      "msg": "Consolidated from tk-axae. Both were about Kimi errors on OpenRouter. Root cause: unclear - could be OpenRouter-side, tool calling bugs, or something else. Native Kimi provider at api.moonshot.ai works (OpenAI-compatible format, confirmed from GitHub docs). OpenRouter routing (provider field) is a SEPARATE issue tracked in llm-connector limitations."
     }
   ],
   "created_at": "2026-01-27T19:12:44.381Z",
-  "updated_at": "2026-01-29T20:27:40.581Z",
+  "updated_at": "2026-01-29T20:32:44.286Z",
   "completed_at": null,
   "external": {}
 }
