@@ -25,6 +25,7 @@ pub struct InstructionLoader {
 
 impl InstructionLoader {
     /// Create a new loader for the given project directory.
+    #[must_use] 
     pub fn new(project_path: PathBuf) -> Self {
         Self {
             project_path,
@@ -66,7 +67,7 @@ impl InstructionLoader {
     }
 
     /// Load global instructions from ~/.config/agents/AGENTS.md
-    /// Respects $XDG_CONFIG_HOME on Linux.
+    /// Respects $`XDG_CONFIG_HOME` on Linux.
     fn load_global(&self) -> Option<String> {
         let config_dir = std::env::var("XDG_CONFIG_HOME")
             .map(PathBuf::from)

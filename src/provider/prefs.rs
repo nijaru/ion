@@ -1,11 +1,11 @@
-//! Provider preferences for OpenRouter model routing.
+//! Provider preferences for `OpenRouter` model routing.
 //!
 //! Supports quantization filtering, provider selection, and sorting.
 //! Based on orcx patterns for three-layer config with merge precedence.
 
 use serde::{Deserialize, Serialize};
 
-/// Known OpenRouter providers for validation.
+/// Known `OpenRouter` providers for validation.
 pub const KNOWN_PROVIDERS: &[&str] = &[
     "Anthropic",
     "Azure",
@@ -45,7 +45,7 @@ pub const KNOWN_PROVIDERS: &[&str] = &[
     "AnyScale",
 ];
 
-/// Quantization mappings for min_bits resolution.
+/// Quantization mappings for `min_bits` resolution.
 fn quantizations_for_min_bits(min_bits: u8) -> Vec<String> {
     match min_bits {
         32 => vec!["fp32".into()],
@@ -120,12 +120,14 @@ fn default_allow_fallbacks() -> bool {
 
 impl ProviderPrefs {
     /// Create empty preferences (no filtering).
+    #[must_use]
     pub fn none() -> Self {
         Self::default()
     }
 
     /// Merge self with other, self takes precedence for scalars.
     /// Lists are unioned.
+    #[must_use]
     pub fn merge_with(&self, other: &Self) -> Self {
         Self {
             quantizations: merge_option_vec(&self.quantizations, &other.quantizations),
@@ -141,8 +143,8 @@ impl ProviderPrefs {
         }
     }
 
-    /// Resolve min_bits to a quantization list.
-    /// Returns explicit quantizations if set, otherwise resolves from min_bits.
+    /// Resolve `min_bits` to a quantization list.
+    /// Returns explicit quantizations if set, otherwise resolves from `min_bits`.
     pub fn resolve_quantizations(&self) -> Option<Vec<String>> {
         if self.quantizations.is_some() {
             return self.quantizations.clone();
@@ -152,6 +154,7 @@ impl ProviderPrefs {
 
     /// Validate provider names against known list.
     /// Returns typo suggestions for unknown providers.
+    #[must_use]
     pub fn validate_providers(&self) -> Vec<String> {
         let mut warnings = Vec::new();
 
@@ -165,12 +168,10 @@ impl ProviderPrefs {
                     {
                         if let Some(suggestion) = find_similar_provider(provider) {
                             field_warnings.push(format!(
-                                "{}: unknown provider '{}', did you mean '{}'?",
-                                field, provider, suggestion
+                                "{field}: unknown provider '{provider}', did you mean '{suggestion}'?"
                             ));
                         } else {
-                            field_warnings
-                                .push(format!("{}: unknown provider '{}'", field, provider));
+                            field_warnings.push(format!("{field}: unknown provider '{provider}'"));
                         }
                     }
                 }
@@ -186,7 +187,8 @@ impl ProviderPrefs {
         warnings
     }
 
-    /// Convert to OpenRouter provider routing parameters.
+    /// Convert to `OpenRouter` provider routing parameters.
+    #[must_use]
     pub fn to_routing_params(&self) -> Option<serde_json::Value> {
         let mut provider = serde_json::Map::new();
         let mut has_content = false;
@@ -220,13 +222,12 @@ impl ProviderPrefs {
         }
 
         if let Some(sort) = self.sort {
-            // Alphabetical is local-only, not sent to OpenRouter
+            // Alphabetical and Newest are local-only, not sent to OpenRouter
             let sort_str = match sort {
-                SortStrategy::Alphabetical => None,
+                SortStrategy::Alphabetical | SortStrategy::Newest => None,
                 SortStrategy::Price => Some("price"),
                 SortStrategy::Throughput => Some("throughput"),
                 SortStrategy::Latency => Some("latency"),
-                SortStrategy::Newest => None,
             };
             if let Some(s) = sort_str {
                 provider.insert("sort".to_string(), serde_json::json!(s));
@@ -296,11 +297,7 @@ fn levenshtein_distance(a: &str, b: &str) -> usize {
     for i in 1..=m {
         curr_row[0] = i;
         for j in 1..=n {
-            let cost = if a_chars[i - 1] == b_chars[j - 1] {
-                0
-            } else {
-                1
-            };
+            let cost = usize::from(a_chars[i - 1] != b_chars[j - 1]);
             curr_row[j] = (prev_row[j] + 1)
                 .min(curr_row[j - 1] + 1)
                 .min(prev_row[j - 1] + cost);

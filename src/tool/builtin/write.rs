@@ -1,6 +1,7 @@
 use crate::tool::{DangerLevel, Tool, ToolContext, ToolError, ToolResult};
 use async_trait::async_trait;
 use serde_json::json;
+use std::fmt::Write as _;
 use std::path::Path;
 
 /// Maximum old file size to read for diffing (1MB).
@@ -13,11 +14,11 @@ pub struct WriteTool;
 
 #[async_trait]
 impl Tool for WriteTool {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "write"
     }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Write content to a file. Overwrites existing content."
     }
 
@@ -77,13 +78,13 @@ impl Tool for WriteTool {
         // Ensure parent directory exists
         if let Some(parent) = validated_path.parent() {
             tokio::fs::create_dir_all(parent).await.map_err(|e| {
-                ToolError::ExecutionFailed(format!("Failed to create directories: {}", e))
+                ToolError::ExecutionFailed(format!("Failed to create directories: {e}"))
             })?;
         }
 
         tokio::fs::write(&validated_path, content)
             .await
-            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to write file: {}", e)))?;
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to write file: {e}")))?;
 
         // Lazy indexing
         if let Some(callback) = &ctx.index_callback {
@@ -94,17 +95,16 @@ impl Tool for WriteTool {
         let result_msg = if let Some(old) = old_content {
             let diff = similar::TextDiff::from_lines(old.as_str(), content);
             let mut diff_output = String::new();
-            use std::fmt::Write;
             for change in diff
                 .unified_diff()
                 .header(file_path_str, file_path_str)
                 .iter_hunks()
             {
-                let _ = write!(diff_output, "{}", change);
+                let _ = write!(diff_output, "{change}");
             }
 
             if diff_output.is_empty() {
-                format!("Wrote {} (no changes)", file_path_str)
+                format!("Wrote {file_path_str} (no changes)")
             } else {
                 // Truncate large diffs at char boundary
                 if diff_output.len() > MAX_DIFF_SIZE {
@@ -112,16 +112,15 @@ impl Tool for WriteTool {
                         .char_indices()
                         .take_while(|(i, _)| *i < MAX_DIFF_SIZE)
                         .last()
-                        .map(|(i, c)| i + c.len_utf8())
-                        .unwrap_or(MAX_DIFF_SIZE);
+                        .map_or(MAX_DIFF_SIZE, |(i, c)| i + c.len_utf8());
                     diff_output.truncate(truncate_at);
                     diff_output.push_str("\n\n[Diff truncated]");
                 }
-                format!("Wrote {}:\n{}", file_path_str, diff_output)
+                format!("Wrote {file_path_str}:\n{diff_output}")
             }
         } else {
             // New file: just show line count, not full content
-            format!("Created {} ({} lines)", file_path_str, line_count)
+            format!("Created {file_path_str} ({line_count} lines)")
         };
 
         Ok(ToolResult {

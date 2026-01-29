@@ -1,5 +1,6 @@
 use crate::agent::AgentEvent;
 use crate::provider::{ContentBlock, Message, Role};
+use std::fmt::Write as _;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Sender {
@@ -25,8 +26,7 @@ pub(crate) fn extract_key_arg(tool_name: &str, args: &serde_json::Value) -> Stri
     let key = match tool_name {
         "read" | "write" | "edit" => "file_path",
         "bash" => "command",
-        "glob" => "pattern",
-        "grep" => "pattern",
+        "glob" | "grep" => "pattern",
         _ => {
             // Fall back to first string argument
             return obj
@@ -108,6 +108,7 @@ fn truncate_line(s: &str, max: usize) -> String {
 }
 
 /// Strip redundant "Error:" prefixes from error messages.
+#[must_use] 
 pub fn strip_error_prefixes(message: &str) -> &str {
     let mut out = message.trim_start();
     while let Some(stripped) = out.strip_prefix("Error:") {
@@ -117,6 +118,7 @@ pub fn strip_error_prefixes(message: &str) -> &str {
 }
 
 /// Sanitize tool name from model garbage (embedded args, XML artifacts).
+#[must_use] 
 pub fn sanitize_tool_name(name: &str) -> &str {
     // Strip embedded arguments: "tool(args)" -> "tool"
     let name = name.split('(').next().unwrap_or(name);
@@ -153,6 +155,7 @@ pub struct MessageEntry {
 }
 
 impl MessageEntry {
+    #[must_use] 
     pub fn new(sender: Sender, content: String) -> Self {
         let mut entry = Self {
             sender,
@@ -163,6 +166,7 @@ impl MessageEntry {
         entry
     }
 
+    #[must_use] 
     pub fn new_thinking(sender: Sender, content: String) -> Self {
         let mut entry = Self {
             sender,
@@ -215,6 +219,7 @@ impl MessageEntry {
         self.markdown_cache = Some(full);
     }
 
+    #[must_use] 
     pub fn content_as_markdown(&self) -> &str {
         self.markdown_cache.as_deref().unwrap_or("")
     }
@@ -230,6 +235,7 @@ pub struct MessageList {
 }
 
 impl MessageList {
+    #[must_use] 
     pub fn new() -> Self {
         Self {
             entries: Vec::new(),
@@ -268,6 +274,7 @@ impl MessageList {
     }
 
     /// Returns true if currently at bottom
+    #[must_use] 
     pub fn is_at_bottom(&self) -> bool {
         self.scroll_offset == 0
     }
@@ -286,10 +293,6 @@ impl MessageList {
                     self.push_entry(MessageEntry::new(Sender::Agent, delta));
                 }
             }
-            AgentEvent::ThinkingDelta(_) => {
-                // Thinking events are tracked in session.rs for progress display
-                // but not rendered in the chat (per design)
-            }
             AgentEvent::ToolCallStart(_id, name, args) => {
                 // Sanitize tool name (strip model garbage like embedded args, XML)
                 let clean_name = sanitize_tool_name(&name);
@@ -298,7 +301,7 @@ impl MessageList {
                 let display = if key_arg.is_empty() {
                     clean_name.to_string()
                 } else {
-                    format!("{}({})", clean_name, key_arg)
+                    format!("{clean_name}({key_arg})")
                 };
                 self.push_entry(MessageEntry::new(Sender::Tool, display));
             }
@@ -307,14 +310,13 @@ impl MessageList {
                 let is_collapsed_tool = self
                     .entries
                     .last()
-                    .map(|e| {
+                    .is_some_and(|e| {
                         e.sender == Sender::Tool
                             && (e.content_as_markdown().starts_with("read(")
                                 || e.content_as_markdown().starts_with("glob(")
                                 || e.content_as_markdown().starts_with("grep(")
                                 || e.content_as_markdown().starts_with("list("))
-                    })
-                    .unwrap_or(false);
+                    });
 
                 let result_content = if is_error {
                     // Clean up error message - keep it concise
@@ -324,7 +326,7 @@ impl MessageList {
                     // Collapsed tools: just show line count or OK
                     let line_count = result.lines().count();
                     if line_count > 1 {
-                        format!("⎿ {} lines", line_count)
+                        format!("⎿ {line_count} lines")
                     } else if result.trim().is_empty() {
                         "⎿ OK".to_string()
                     } else {
@@ -337,10 +339,10 @@ impl MessageList {
                     let mut lines = formatted.lines();
                     let mut output = String::new();
                     if let Some(first) = lines.next() {
-                        output.push_str(&format!("⎿ {}", first));
+                        let _ = write!(output, "⎿ {first}");
                     }
                     for line in lines {
-                        output.push_str(&format!("\n  {}", line));
+                        let _ = write!(output, "\n  {line}");
                     }
                     output
                 };
@@ -349,7 +351,7 @@ impl MessageList {
                 if let Some(last) = self.entries.last_mut()
                     && last.sender == Sender::Tool
                 {
-                    last.append_text(&format!("\n{}", result_content));
+                    last.append_text(&format!("\n{result_content}"));
                 } else {
                     self.push_entry(MessageEntry::new(Sender::Tool, result_content));
                 }
@@ -357,25 +359,26 @@ impl MessageList {
             AgentEvent::PlanGenerated(plan) => {
                 let mut content = String::from("### 📋 Proposed Plan\n\n");
                 for task in &plan.tasks {
-                    content.push_str(&format!("- **{}**: {}\n", task.title, task.description));
+                    let _ = writeln!(content, "- **{}**: {}", task.title, task.description);
                     if !task.dependencies.is_empty() {
-                        content.push_str(&format!(
-                            "  *(Depends on: {})*\n",
+                        let _ = writeln!(
+                            content,
+                            "  *(Depends on: {})*",
                             task.dependencies.join(", ")
-                        ));
+                        );
                     }
                 }
                 self.push_entry(MessageEntry::new(Sender::System, content));
-            }
-            AgentEvent::CompactionStatus { .. } => {
-                // Handled by TUI main loop for status bar
             }
             AgentEvent::Finished(msg) => {
                 self.push_entry(MessageEntry::new(Sender::System, msg));
             }
             AgentEvent::Error(e) => {
-                self.push_entry(MessageEntry::new(Sender::System, format!("Error: {}", e)));
+                self.push_entry(MessageEntry::new(Sender::System, format!("Error: {e}")));
             }
+            // ThinkingDelta: tracked in session.rs for progress display, not rendered
+            // CompactionStatus: handled by TUI main loop for status bar
+            // Other events: ignored
             _ => {}
         }
     }
@@ -423,10 +426,7 @@ impl MessageList {
                     for block in msg.content.iter() {
                         match block {
                             ContentBlock::Text { text } => {
-                                parts.push(MessagePart::Text(text.clone()))
-                            }
-                            ContentBlock::Thinking { .. } => {
-                                // Don't display thinking content in history
+                                parts.push(MessagePart::Text(text.clone()));
                             }
                             ContentBlock::ToolCall {
                                 id: _,
@@ -438,10 +438,11 @@ impl MessageList {
                                 let display = if key_arg.is_empty() {
                                     name.clone()
                                 } else {
-                                    format!("{}({})", name, key_arg)
+                                    format!("{name}({key_arg})")
                                 };
                                 self.entries.push(MessageEntry::new(Sender::Tool, display));
                             }
+                            // Thinking blocks not displayed in history
                             _ => {}
                         }
                     }
@@ -472,10 +473,10 @@ impl MessageList {
                                 let mut lines = formatted.lines();
                                 let mut output = String::new();
                                 if let Some(first) = lines.next() {
-                                    output.push_str(&format!("⎿ {}", first));
+                                    let _ = write!(output, "⎿ {first}");
                                 }
                                 for line in lines {
-                                    output.push_str(&format!("\n  {}", line));
+                                    let _ = write!(output, "\n  {line}");
                                 }
                                 output
                             };

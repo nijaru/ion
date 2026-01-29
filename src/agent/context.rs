@@ -54,6 +54,7 @@ Instructions:
 "#;
 
 impl ContextManager {
+    #[must_use] 
     pub fn new(system_prompt_base: String) -> Self {
         let mut env = Environment::new();
         env.add_template("system", DEFAULT_SYSTEM_TEMPLATE)
@@ -135,7 +136,7 @@ impl ContextManager {
             messages.push(Message {
                 role: crate::provider::Role::User,
                 content: Arc::new(vec![crate::provider::ContentBlock::Text {
-                    text: format!("Context from codebase memory:\n{}", context),
+                    text: format!("Context from codebase memory:\n{context}"),
                 }]),
             });
         }

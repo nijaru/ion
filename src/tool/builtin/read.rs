@@ -1,6 +1,7 @@
 use crate::tool::{DangerLevel, Tool, ToolContext, ToolError, ToolResult};
 use async_trait::async_trait;
 use serde_json::json;
+use std::fmt::Write as _;
 use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 
@@ -17,11 +18,11 @@ pub struct ReadTool;
 
 #[async_trait]
 impl Tool for ReadTool {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "read"
     }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Read a file from the filesystem. For large files, use offset and limit to read specific line ranges."
     }
 
@@ -62,12 +63,12 @@ impl Tool for ReadTool {
 
         let offset = args
             .get("offset")
-            .and_then(|v| v.as_u64())
+            .and_then(serde_json::Value::as_u64)
             .map(|v| v as usize);
 
         let limit = args
             .get("limit")
-            .and_then(|v| v.as_u64())
+            .and_then(serde_json::Value::as_u64)
             .map(|v| v as usize);
 
         let file_path = Path::new(file_path_str);
@@ -80,7 +81,7 @@ impl Tool for ReadTool {
         // Check file size first
         let metadata = tokio::fs::metadata(&validated_path)
             .await
-            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read file: {}", e)))?;
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read file: {e}")))?;
 
         let file_size = metadata.len();
 
@@ -94,8 +95,8 @@ impl Tool for ReadTool {
                 read_lines_single_pass(&path_clone, start, count)
             })
             .await
-            .map_err(|e| ToolError::ExecutionFailed(format!("Task join error: {}", e)))?
-            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read file: {}", e)))?;
+            .map_err(|e| ToolError::ExecutionFailed(format!("Task join error: {e}")))?
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read file: {e}")))?;
 
             // Lazy indexing
             if let Some(callback) = &ctx.index_callback {
@@ -105,12 +106,13 @@ impl Tool for ReadTool {
             let mut content = result.lines.join("\n");
             let shown_end = (start + result.lines.len()).min(result.total_lines);
             if shown_end < result.total_lines {
-                content.push_str(&format!(
+                let _ = write!(
+                    content,
                     "\n\n[Showing lines {}-{} of {}. Use offset/limit for more.]",
                     start + 1,
                     shown_end,
                     result.total_lines
-                ));
+                );
             }
 
             return Ok(ToolResult {
@@ -137,8 +139,7 @@ impl Tool for ReadTool {
 
             return Ok(ToolResult {
                 content: format!(
-                    "File is too large ({} bytes, {} lines). Use offset and limit to read specific line ranges.",
-                    file_size, total_lines
+                    "File is too large ({file_size} bytes, {total_lines} lines). Use offset and limit to read specific line ranges."
                 ),
                 is_error: true,
                 metadata: Some(json!({
@@ -151,7 +152,7 @@ impl Tool for ReadTool {
 
         let content = tokio::fs::read_to_string(&validated_path)
             .await
-            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read file: {}", e)))?;
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read file: {e}")))?;
 
         // Lazy indexing
         if let Some(callback) = &ctx.index_callback {

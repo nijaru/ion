@@ -140,7 +140,7 @@ impl McpClient {
         let content = response["content"].clone();
         let is_error = response
             .get("isError")
-            .and_then(|v| v.as_bool())
+            .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
 
         // MCP content is often an array of objects like { type: "text", text: "..." }
@@ -190,7 +190,7 @@ impl Tool for McpTool {
         self.client
             .call_tool(&self.name, args)
             .await
-            .map_err(|e| ToolError::ExecutionFailed(format!("MCP error: {}", e)))
+            .map_err(|e| ToolError::ExecutionFailed(format!("MCP error: {e}")))
     }
 
     fn danger_level(&self) -> DangerLevel {
@@ -204,6 +204,7 @@ pub struct McpManager {
 }
 
 impl McpManager {
+    #[must_use] 
     pub fn new() -> Self {
         Self::default()
     }

@@ -51,7 +51,7 @@ pub struct ModelPicker {
     pub is_loading: bool,
     /// Error message if fetch failed.
     pub error: Option<String>,
-    /// Current API provider name (e.g., "OpenRouter", "Ollama").
+    /// Current API provider name (e.g., "`OpenRouter`", "Ollama").
     pub api_provider_name: Option<String>,
 }
 
@@ -77,6 +77,7 @@ impl Default for ModelPicker {
 }
 
 impl ModelPicker {
+    #[must_use] 
     pub fn new(prefs: ProviderPrefs) -> Self {
         Self {
             prefs,
@@ -120,11 +121,12 @@ impl ModelPicker {
     }
 
     /// Check if we have models loaded.
+    #[must_use] 
     pub fn has_models(&self) -> bool {
         !self.all_models.is_empty()
     }
 
-    /// Set the API provider name (e.g., "OpenRouter", "Ollama").
+    /// Set the API provider name (e.g., "`OpenRouter`", "Ollama").
     pub fn set_api_provider(&mut self, name: impl Into<String>) {
         self.api_provider_name = Some(name.into());
     }
@@ -206,10 +208,10 @@ impl ModelPicker {
             .cloned()
             .collect();
 
-        if !self.filtered_providers.is_empty() {
-            self.provider_state.select(Some(0));
-        } else {
+        if self.filtered_providers.is_empty() {
             self.provider_state.select(None);
+        } else {
+            self.provider_state.select(Some(0));
         }
     }
 
@@ -237,10 +239,10 @@ impl ModelPicker {
             })
         });
 
-        if !self.filtered_models.is_empty() {
-            self.model_state.select(Some(0));
-        } else {
+        if self.filtered_models.is_empty() {
             self.model_state.select(None);
+        } else {
+            self.model_state.select(Some(0));
         }
     }
 
@@ -358,6 +360,7 @@ impl ModelPicker {
     }
 
     /// Get currently selected model (only valid in Model stage).
+    #[must_use] 
     pub fn selected_model(&self) -> Option<&ModelInfo> {
         if self.stage != PickerStage::Model {
             return None;

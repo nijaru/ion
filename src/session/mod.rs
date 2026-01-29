@@ -23,10 +23,11 @@ fn generate_session_id() -> String {
     let timestamp = Local::now().format("%Y%m%d-%H%M%S");
     // Use first 4 chars of UUID for random suffix (avoids adding rand dependency)
     let suffix = &uuid::Uuid::new_v4().to_string()[..4];
-    format!("{}-{}", timestamp, suffix)
+    format!("{timestamp}-{suffix}")
 }
 
 impl Session {
+    #[must_use] 
     pub fn new(working_dir: PathBuf, model: String) -> Self {
         Self {
             id: generate_session_id(),
@@ -39,6 +40,7 @@ impl Session {
     }
 
     /// Create a new session with sandbox disabled.
+    #[must_use] 
     pub fn with_no_sandbox(mut self) -> Self {
         self.no_sandbox = true;
         self

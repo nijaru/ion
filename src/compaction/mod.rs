@@ -9,15 +9,15 @@ use crate::provider::Message;
 /// Configuration for context compaction.
 #[derive(Debug, Clone)]
 pub struct CompactionConfig {
-    /// Context window size for the model (default: 200_000)
+    /// Context window size for the model (default: `200_000`)
     pub context_window: usize,
     /// Trigger compaction at this percentage of context (default: 0.85)
     pub trigger_threshold: f32,
     /// Target percentage after compaction (default: 0.60)
     pub target_threshold: f32,
-    /// Tokens to reserve for output (default: 16_000)
+    /// Tokens to reserve for output (default: `16_000`)
     pub output_reserve: usize,
-    /// Maximum tokens per tool output before truncation (default: 2_000)
+    /// Maximum tokens per tool output before truncation (default: `2_000`)
     pub max_tool_output_tokens: usize,
     /// Tokens to keep at head/tail when truncating (default: 250 each)
     pub truncate_keep_tokens: usize,
@@ -40,16 +40,19 @@ impl Default for CompactionConfig {
 
 impl CompactionConfig {
     /// Available tokens after reserving output space.
+    #[must_use] 
     pub fn available_tokens(&self) -> usize {
         self.context_window.saturating_sub(self.output_reserve)
     }
 
     /// Token count that triggers compaction.
+    #[must_use] 
     pub fn trigger_tokens(&self) -> usize {
         (self.available_tokens() as f32 * self.trigger_threshold) as usize
     }
 
     /// Target token count after compaction.
+    #[must_use] 
     pub fn target_tokens(&self) -> usize {
         (self.available_tokens() as f32 * self.target_threshold) as usize
     }
@@ -65,6 +68,7 @@ pub struct CompactionStatus {
 }
 
 /// Check if messages need compaction.
+#[must_use] 
 pub fn check_compaction_needed(
     messages: &[Message],
     config: &CompactionConfig,

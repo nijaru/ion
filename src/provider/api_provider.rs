@@ -7,11 +7,11 @@ use std::env;
 /// Supported LLM providers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Provider {
-    /// OpenRouter aggregator - access to many providers
+    /// `OpenRouter` aggregator - access to many providers
     OpenRouter,
     /// Direct Anthropic API
     Anthropic,
-    /// Direct OpenAI API
+    /// Direct `OpenAI` API
     OpenAI,
     /// Google AI Studio (Gemini)
     Google,
@@ -33,6 +33,7 @@ impl Provider {
     ];
 
     /// Lowercase ID for config storage.
+    #[must_use] 
     pub fn id(self) -> &'static str {
         match self {
             Provider::OpenRouter => "openrouter",
@@ -45,6 +46,7 @@ impl Provider {
     }
 
     /// Parse provider from ID string.
+    #[must_use] 
     pub fn from_id(id: &str) -> Option<Self> {
         match id.to_lowercase().as_str() {
             "openrouter" => Some(Provider::OpenRouter),
@@ -58,6 +60,7 @@ impl Provider {
     }
 
     /// Display name for the provider.
+    #[must_use] 
     pub fn name(self) -> &'static str {
         match self {
             Provider::OpenRouter => "OpenRouter",
@@ -70,6 +73,7 @@ impl Provider {
     }
 
     /// Short description of the provider.
+    #[must_use] 
     pub fn description(self) -> &'static str {
         match self {
             Provider::OpenRouter => "Aggregator with 200+ models",
@@ -82,6 +86,7 @@ impl Provider {
     }
 
     /// Environment variable(s) for API key.
+    #[must_use] 
     pub fn env_vars(self) -> &'static [&'static str] {
         match self {
             Provider::OpenRouter => &["OPENROUTER_API_KEY"],
@@ -94,6 +99,7 @@ impl Provider {
     }
 
     /// Get API key from environment.
+    #[must_use] 
     pub fn api_key(self) -> Option<String> {
         for var in self.env_vars() {
             if let Ok(key) = env::var(var)
@@ -110,6 +116,7 @@ impl Provider {
     }
 
     /// Check if this provider is available (has credentials or doesn't need them).
+    #[must_use] 
     pub fn is_available(self) -> bool {
         self.api_key().is_some()
     }
@@ -124,6 +131,7 @@ pub struct ProviderStatus {
 
 impl ProviderStatus {
     /// Detect all providers and their availability.
+    #[must_use] 
     pub fn detect_all() -> Vec<ProviderStatus> {
         Provider::ALL
             .iter()
@@ -135,6 +143,7 @@ impl ProviderStatus {
     }
 
     /// Get only available providers.
+    #[must_use] 
     pub fn available() -> Vec<Provider> {
         Provider::ALL
             .iter()
@@ -144,6 +153,7 @@ impl ProviderStatus {
     }
 
     /// Sort providers: authenticated first, then alphabetically within each group.
+    #[must_use] 
     pub fn sorted(mut statuses: Vec<ProviderStatus>) -> Vec<ProviderStatus> {
         statuses.sort_by(|a, b| {
             // Primary: authenticated first

@@ -21,7 +21,7 @@ pub enum PruningTier {
 /// Prune messages to reduce token count.
 ///
 /// Applies tiers in order until under target:
-/// 1. Truncate large tool outputs (>max_tool_output_tokens) to head+tail
+/// 1. Truncate large tool outputs (>`max_tool_output_tokens`) to head+tail
 /// 2. Remove old tool output content entirely (keep reference marker)
 pub fn prune_messages(
     messages: &mut [Message],
@@ -160,7 +160,7 @@ fn remove_old_output_content(
 
     let cutoff = len - protected_count;
 
-    for message in messages[..cutoff].iter_mut() {
+    for message in &mut messages[..cutoff] {
         if message.role != Role::ToolResult {
             continue;
         }

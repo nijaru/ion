@@ -38,10 +38,8 @@ pub fn detect_syntax(path: &str) -> Option<&'static str> {
     match ext.to_lowercase().as_str() {
         "rs" => Some("Rust"),
         "py" => Some("Python"),
-        "js" | "mjs" | "cjs" => Some("JavaScript"),
-        "ts" | "mts" | "cts" => Some("TypeScript"),
-        "tsx" => Some("TypeScript"),
-        "jsx" => Some("JavaScript"),
+        "js" | "mjs" | "cjs" | "jsx" => Some("JavaScript"),
+        "ts" | "mts" | "cts" | "tsx" => Some("TypeScript"),
         "json" => Some("JSON"),
         "toml" => Some("TOML"),
         "yaml" | "yml" => Some("YAML"),
@@ -64,7 +62,7 @@ pub fn detect_syntax(path: &str) -> Option<&'static str> {
     }
 }
 
-/// Convert syntect style to crossterm ContentStyle.
+/// Convert syntect style to crossterm `ContentStyle`.
 fn syntect_to_crossterm(style: syntect::highlighting::Style) -> crossterm::style::ContentStyle {
     use crossterm::style::{Attribute, ContentStyle};
 
@@ -117,7 +115,7 @@ pub fn highlight_line(text: &str, syntax_name: &str) -> StyledLine {
     }
 }
 
-/// Highlight multiple lines of code, returning StyledLines.
+/// Highlight multiple lines of code, returning `StyledLines`.
 pub fn highlight_code(code: &str, syntax_name: &str) -> Vec<StyledLine> {
     let syntax = SYNTAX_SET
         .find_syntax_by_name(syntax_name)
@@ -160,10 +158,8 @@ pub fn syntax_from_fence(lang: &str) -> Option<&'static str> {
     match lang.to_lowercase().as_str() {
         "rust" | "rs" => Some("Rust"),
         "python" | "py" => Some("Python"),
-        "javascript" | "js" => Some("JavaScript"),
-        "typescript" | "ts" => Some("TypeScript"),
-        "tsx" => Some("TypeScript"),
-        "jsx" => Some("JavaScript"),
+        "javascript" | "js" | "jsx" => Some("JavaScript"),
+        "typescript" | "ts" | "tsx" => Some("TypeScript"),
         "json" => Some("JSON"),
         "toml" => Some("TOML"),
         "yaml" | "yml" => Some("YAML"),
@@ -250,7 +246,7 @@ pub fn render_markdown_with_width(content: &str, width: usize) -> Vec<StyledLine
                 }
                 Tag::Item => {
                     let indent = "  ".repeat(list_depth.saturating_sub(1));
-                    let prefix = format!("{}* ", indent);
+                    let prefix = format!("{indent}* ");
                     list_prefix = Some(prefix.clone());
                     current_line = LineBuilder::new().raw(prefix);
                     current_line_is_prefix_only = true;
@@ -422,7 +418,7 @@ pub fn render_markdown_with_width(content: &str, width: usize) -> Vec<StyledLine
             }
             Event::Code(code) => {
                 // Inline code - render with dim styling
-                let span = StyledSpan::dim(format!("`{}`", code));
+                let span = StyledSpan::dim(format!("`{code}`"));
                 current_line = current_line.styled(span);
                 current_line_is_prefix_only = false;
             }

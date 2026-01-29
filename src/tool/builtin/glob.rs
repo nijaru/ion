@@ -3,6 +3,7 @@ use async_trait::async_trait;
 use globset::Glob;
 use ignore::WalkBuilder;
 use serde_json::json;
+use std::fmt::Write as _;
 use std::sync::Mutex;
 
 /// Maximum number of results to return.
@@ -12,11 +13,11 @@ pub struct GlobTool;
 
 #[async_trait]
 impl Tool for GlobTool {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "glob"
     }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Find files matching a glob pattern (e.g., 'src/**/*.rs')"
     }
 
@@ -49,7 +50,7 @@ impl Tool for GlobTool {
 
         // Compile glob pattern
         let glob = Glob::new(pattern)
-            .map_err(|e| ToolError::InvalidArgs(format!("Invalid glob pattern: {}", e)))?;
+            .map_err(|e| ToolError::InvalidArgs(format!("Invalid glob pattern: {e}")))?;
         let matcher = glob.compile_matcher();
 
         let working_dir = ctx.working_dir.clone();
@@ -120,10 +121,7 @@ impl Tool for GlobTool {
         };
 
         if truncated {
-            content.push_str(&format!(
-                "\n\n[Truncated: showing first {} results]",
-                MAX_RESULTS
-            ));
+            let _ = write!(content, "\n\n[Truncated: showing first {MAX_RESULTS} results]");
         }
 
         Ok(ToolResult {

@@ -1,7 +1,7 @@
 //! LLM provider abstraction.
 //!
 //! This module provides a unified interface for interacting with various LLM providers
-//! (OpenAI, Anthropic, Ollama, Groq, Google) using the `llm` crate.
+//! (`OpenAI`, Anthropic, Ollama, Groq, Google) using the `llm` crate.
 //!
 //! # Example
 //!
@@ -36,6 +36,7 @@ pub const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 pub const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Create an HTTP client with standard timeouts.
+#[must_use] 
 pub fn create_http_client() -> reqwest::Client {
     reqwest::Client::builder()
         .timeout(HTTP_TIMEOUT)

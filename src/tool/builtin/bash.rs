@@ -10,11 +10,11 @@ pub struct BashTool;
 
 #[async_trait]
 impl Tool for BashTool {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "bash"
     }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Execute a bash command"
     }
 
@@ -58,17 +58,17 @@ impl Tool for BashTool {
             .stderr(std::process::Stdio::piped())
             .kill_on_drop(true)
             .spawn()
-            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to spawn command: {}", e)))?;
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to spawn command: {e}")))?;
 
         // Wait for completion or user cancellation (no timeout - user can Ctrl+C)
         let output = tokio::select! {
             res = child.wait_with_output() => {
                 match res {
                     Ok(out) => out,
-                    Err(e) => return Err(ToolError::ExecutionFailed(format!("Failed to read command output: {}", e))),
+                    Err(e) => return Err(ToolError::ExecutionFailed(format!("Failed to read command output: {e}"))),
                 }
             }
-            _ = ctx.abort_signal.cancelled() => {
+            () = ctx.abort_signal.cancelled() => {
                 return Err(ToolError::Cancelled);
             }
         };
@@ -92,8 +92,7 @@ impl Tool for BashTool {
                 .char_indices()
                 .take_while(|(i, _)| *i < MAX_OUTPUT_SIZE)
                 .last()
-                .map(|(i, c)| i + c.len_utf8())
-                .unwrap_or(MAX_OUTPUT_SIZE);
+                .map_or(MAX_OUTPUT_SIZE, |(i, c)| i + c.len_utf8());
             content.truncate(truncate_at);
             content.push_str("\n\n[Output truncated]");
         }

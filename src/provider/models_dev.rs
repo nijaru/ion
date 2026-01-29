@@ -82,7 +82,7 @@ pub async fn fetch_models_dev() -> Result<Vec<ModelInfo>> {
                 id: model_id.clone(),
                 name: m.name,
                 provider: provider_id.clone(),
-                context_window: m.limit.map(|l| l.context).unwrap_or(0),
+                context_window: m.limit.map_or(0, |l| l.context),
                 supports_tools,
                 supports_vision,
                 supports_thinking: false,

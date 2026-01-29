@@ -1,6 +1,6 @@
 //! API Provider picker modal.
 //!
-//! Allows selecting the API provider (Anthropic, OpenRouter, etc.)
+//! Allows selecting the API provider (Anthropic, `OpenRouter`, etc.)
 //! with visual indication of authentication status.
 
 use crate::provider::ProviderStatus;
@@ -23,6 +23,7 @@ pub struct ProviderPicker {
 }
 
 impl ProviderPicker {
+    #[must_use] 
     pub fn new() -> Self {
         Self::default()
     }
@@ -54,10 +55,10 @@ impl ProviderPicker {
             .cloned()
             .collect();
 
-        if !self.filtered.is_empty() {
-            self.list_state.select(Some(0));
-        } else {
+        if self.filtered.is_empty() {
             self.list_state.select(None);
+        } else {
+            self.list_state.select(Some(0));
         }
     }
 
@@ -97,6 +98,7 @@ impl ProviderPicker {
     }
 
     /// Get currently selected provider.
+    #[must_use] 
     pub fn selected(&self) -> Option<&ProviderStatus> {
         self.list_state
             .selected()

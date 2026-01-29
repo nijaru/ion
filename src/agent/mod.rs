@@ -159,6 +159,7 @@ impl Agent {
         }
     }
 
+    #[must_use] 
     pub fn with_compaction_config(mut self, config: CompactionConfig) -> Self {
         self.context_window.store(
             config.context_window,
@@ -175,17 +176,20 @@ impl Agent {
     }
 
     /// Get the current context window size.
+    #[must_use] 
     pub fn context_window(&self) -> usize {
         self.context_window
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
+    #[must_use] 
     pub fn with_skills(mut self, skills: SkillRegistry) -> Self {
         self.skills = Arc::new(tokio::sync::RwLock::new(skills));
         self
     }
 
     /// Set a custom system prompt (overrides default).
+    #[must_use] 
     pub fn with_system_prompt(self, prompt: String) -> Self {
         Self {
             context_manager: Arc::new(create_context_manager(prompt)),
@@ -200,7 +204,7 @@ impl Agent {
                 skills
                     .get(n)
                     .cloned()
-                    .ok_or_else(|| anyhow::anyhow!("Skill not found: {}", n))?,
+                    .ok_or_else(|| anyhow::anyhow!("Skill not found: {n}"))?,
             )
         } else {
             None
@@ -209,6 +213,7 @@ impl Agent {
         Ok(())
     }
 
+    #[must_use] 
     pub fn provider(&self) -> Arc<dyn LlmApi> {
         self.provider.clone()
     }
@@ -321,7 +326,7 @@ impl Agent {
             }
 
             match self.execute_turn(&mut session, &tx, thinking.clone()).await {
-                Ok(true) => continue,
+                Ok(true) => {}
                 Ok(false) => break,
                 Err(e) => return (session, Some(e)),
             }
@@ -474,7 +479,7 @@ impl Agent {
 
             loop {
                 tokio::select! {
-                    _ = abort_token.cancelled() => {
+                    () = abort_token.cancelled() => {
                         handle.abort();
                         return Err(anyhow::anyhow!("Cancelled"));
                     }
@@ -554,13 +559,11 @@ impl Agent {
                     tool_calls.clear();
                     tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
                     continue 'retry;
-                } else {
-                    error!("Stream error: {}", err);
-                    return Err(anyhow::anyhow!("{}", err));
                 }
-            } else {
-                return Ok(Some((assistant_blocks, tool_calls)));
+                error!("Stream error: {}", err);
+                return Err(anyhow::anyhow!("{err}"));
             }
+            return Ok(Some((assistant_blocks, tool_calls)));
         }
     }
 
@@ -580,7 +583,7 @@ impl Agent {
                 self.provider.id()
             );
             let result = tokio::select! {
-                _ = abort_token.cancelled() => {
+                () = abort_token.cancelled() => {
                     return Err(anyhow::anyhow!("Cancelled"));
                 }
                 result = self.provider.complete(request.clone()) => result
@@ -601,9 +604,8 @@ impl Agent {
                         let _ = tx.send(AgentEvent::Retry(reason.to_string(), delay)).await;
                         tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
                         continue;
-                    } else {
-                        return Err(anyhow::anyhow!("Completion error: {}", e));
                     }
+                    return Err(anyhow::anyhow!("Completion error: {e}"));
                 }
             }
         };
@@ -719,7 +721,7 @@ impl Agent {
         let mut results = vec![None; num_tools];
         loop {
             tokio::select! {
-                _ = abort_token.cancelled() => {
+                () = abort_token.cancelled() => {
                     set.abort_all();
                     return Err(anyhow::anyhow!("Cancelled"));
                 }
@@ -733,9 +735,8 @@ impl Agent {
                             // JoinError: task panicked or was cancelled
                             if e.is_panic() {
                                 return Err(anyhow::anyhow!("Tool task panicked unexpectedly"));
-                            } else {
-                                return Err(anyhow::anyhow!("Tool task cancelled"));
                             }
+                            return Err(anyhow::anyhow!("Tool task cancelled"));
                         }
                         None => break,
                     }
@@ -768,7 +769,7 @@ pub enum AgentEvent {
     },
     InputTokens(usize),
     OutputTokensDelta(usize),
-    /// Retry in progress: (reason, delay_seconds)
+    /// Retry in progress: (reason, `delay_seconds`)
     Retry(String, u64),
     Finished(String),
     Error(String),

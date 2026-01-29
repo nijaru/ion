@@ -4,9 +4,10 @@ pub use buffer::ComposerBuffer;
 
 use unicode_segmentation::UnicodeSegmentation;
 
-/// Build a list of visual lines as (start_char_idx, end_char_idx) pairs using word-wrap.
-/// This matches Ratatui's Paragraph::wrap(Wrap { trim: false }) behavior.
-/// end_char_idx is exclusive.
+/// Build a list of visual lines as (`start_char_idx`, `end_char_idx`) pairs using word-wrap.
+/// This matches Ratatui's `Paragraph::wrap(Wrap` { trim: false }) behavior.
+/// `end_char_idx` is exclusive.
+#[must_use] 
 pub fn build_visual_lines(content: &str, width: usize) -> Vec<(usize, usize)> {
     use unicode_width::UnicodeWidthChar;
 
@@ -95,10 +96,12 @@ pub struct ComposerState {
 }
 
 impl ComposerState {
+    #[must_use] 
     pub fn new() -> Self {
         Self::default()
     }
 
+    #[must_use] 
     pub fn cursor_char_idx(&self) -> usize {
         self.cursor_char_idx
     }
@@ -148,7 +151,7 @@ impl ComposerState {
     }
 
     /// Move cursor to the start of the current VISUAL line (wrapped line).
-    /// Uses last_width from previous render; falls back to logical line start if width unknown.
+    /// Uses `last_width` from previous render; falls back to logical line start if width unknown.
     pub fn move_to_visual_line_start(&mut self, buffer: &ComposerBuffer) {
         if self.last_width == 0 || self.cursor_char_idx == 0 {
             self.move_to_line_start(buffer);
@@ -165,7 +168,7 @@ impl ComposerState {
     }
 
     /// Move cursor to the end of the current VISUAL line (wrapped line).
-    /// Uses last_width from previous render; falls back to logical line end if width unknown.
+    /// Uses `last_width` from previous render; falls back to logical line end if width unknown.
     pub fn move_to_visual_line_end(&mut self, buffer: &ComposerBuffer) {
         if self.last_width == 0 {
             self.move_to_line_end(buffer);
@@ -235,7 +238,7 @@ impl ComposerState {
     }
 
     /// Move cursor up one visual line (including wrapped lines).
-    /// Uses last_width from previous render; falls back to logical line if width unknown.
+    /// Uses `last_width` from previous render; falls back to logical line if width unknown.
     pub fn move_up(&mut self, buffer: &ComposerBuffer) -> bool {
         if self.last_width == 0 {
             return self.move_up_logical(buffer);
@@ -244,7 +247,7 @@ impl ComposerState {
     }
 
     /// Move cursor down one visual line (including wrapped lines).
-    /// Uses last_width from previous render; falls back to logical line if width unknown.
+    /// Uses `last_width` from previous render; falls back to logical line if width unknown.
     pub fn move_down(&mut self, buffer: &ComposerBuffer) -> bool {
         if self.last_width == 0 {
             return self.move_down_logical(buffer);
@@ -534,6 +537,7 @@ impl ComposerState {
         }
     }
 
+    #[must_use] 
     pub fn has_stash(&self) -> bool {
         self.stash.is_some()
     }
@@ -545,12 +549,13 @@ impl ComposerState {
     }
 
     /// Get the current scroll offset.
+    #[must_use] 
     pub fn scroll_offset(&self) -> usize {
         self.scroll_offset
     }
 
     /// Adjust scroll to keep cursor visible within the given height.
-    /// Also clamps scroll_offset when content has shrunk.
+    /// Also clamps `scroll_offset` when content has shrunk.
     pub fn scroll_to_cursor(&mut self, visible_height: usize, total_lines: usize) {
         // Guard against zero height (very small terminal)
         if visible_height == 0 {
@@ -579,7 +584,7 @@ impl ComposerState {
     }
 
     /// Calculate cursor visual position using word-wrap logic that matches Ratatui's Paragraph.
-    /// Returns (cursor_x, cursor_y) relative to text area origin.
+    /// Returns (`cursor_x`, `cursor_y`) relative to text area origin.
     pub fn calculate_cursor_pos(&mut self, buffer: &ComposerBuffer, width: usize) -> (u16, u16) {
         use unicode_width::UnicodeWidthChar;
 
@@ -625,6 +630,7 @@ impl ComposerState {
 
     /// Get the number of visual lines the content occupies at the given width.
     /// Uses word-wrap to match Ratatui's Paragraph behavior.
+    #[must_use] 
     pub fn visual_line_count(&self, buffer: &ComposerBuffer, width: usize) -> usize {
         if buffer.is_empty() {
             return 1;

@@ -170,7 +170,7 @@ impl ChatRenderer {
                         if content.starts_with("Error:") {
                             entry_lines.push(StyledLine::colored(content.to_string(), Color::Red));
                         } else {
-                            let text = format!("[{}]", content);
+                            let text = format!("[{content}]");
                             entry_lines.push(StyledLine::dim(text));
                         }
                     } else {
@@ -190,7 +190,7 @@ impl ChatRenderer {
         }
 
         if let Some(queue) = queued {
-            for queued_msg in queue.iter() {
+            for queued_msg in queue {
                 let mut entry_lines = Vec::new();
                 let lines: Vec<&str> = queued_msg.lines().collect();
                 let shown = lines.len().min(QUEUED_PREVIEW_LINES);
@@ -238,7 +238,7 @@ impl ChatRenderer {
     }
 }
 
-/// Parse ANSI escape sequences and convert to StyledLine.
+/// Parse ANSI escape sequences and convert to `StyledLine`.
 /// Simple SGR parser that handles common formatting codes.
 fn parse_ansi_line(input: &str) -> StyledLine {
     use crossterm::style::{Attribute, ContentStyle};
@@ -509,11 +509,10 @@ fn wrap_styled_line(line: &StyledLine, width: usize) -> Vec<StyledLine> {
 }
 
 fn push_char(spans: &mut Vec<StyledSpan>, style: crossterm::style::ContentStyle, ch: char) {
-    if let Some(last) = spans.last_mut() {
-        if last.style == style {
+    if let Some(last) = spans.last_mut()
+        && last.style == style {
             last.content.push(ch);
             return;
         }
-    }
     spans.push(StyledSpan::new(ch.to_string(), style));
 }

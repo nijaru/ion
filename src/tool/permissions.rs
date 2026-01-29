@@ -14,6 +14,7 @@ pub struct PermissionMatrix {
 }
 
 impl PermissionMatrix {
+    #[must_use] 
     pub fn new(mode: ToolMode) -> Self {
         Self {
             mode,
@@ -24,6 +25,7 @@ impl PermissionMatrix {
         }
     }
 
+    #[must_use] 
     pub fn mode(&self) -> ToolMode {
         self.mode
     }
@@ -51,6 +53,7 @@ impl PermissionMatrix {
     }
 
     /// Check if a bash command is allowed.
+    #[must_use] 
     pub fn check_command_permission(&self, command: &str) -> PermissionStatus {
         match self.mode {
             ToolMode::Agi => PermissionStatus::Allowed,
