@@ -52,6 +52,7 @@ impl Tool for ListTool {
     ) -> Result<ToolResult, ToolError> {
         let path = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
 
+        #[allow(clippy::cast_possible_truncation)] // JSON u64 depth value fits in usize
         let depth = args
             .get("depth")
             .and_then(serde_json::Value::as_u64)

@@ -61,11 +61,13 @@ impl Tool for ReadTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidArgs("file_path is required".to_string()))?;
 
+        #[allow(clippy::cast_possible_truncation)] // JSON u64 values are user-provided sizes
         let offset = args
             .get("offset")
             .and_then(serde_json::Value::as_u64)
             .map(|v| v as usize);
 
+        #[allow(clippy::cast_possible_truncation)]
         let limit = args
             .get("limit")
             .and_then(serde_json::Value::as_u64)

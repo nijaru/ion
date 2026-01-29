@@ -59,6 +59,136 @@ async fn main() -> ExitCode {
     }
 }
 
+/// Terminal state returned from setup.
+struct TerminalState {
+    stdout: std::io::Stdout,
+    supports_enhancement: bool,
+}
+
+/// Setup terminal for TUI mode (raw mode, bracketed paste, keyboard enhancement).
+fn setup_terminal() -> Result<TerminalState, Box<dyn std::error::Error>> {
+    use crossterm::{
+        event::{
+            EnableBracketedPaste, KeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+        },
+        execute,
+        terminal::{enable_raw_mode, supports_keyboard_enhancement},
+    };
+    use std::io;
+
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnableBracketedPaste)?;
+
+    let supports_enhancement = supports_keyboard_enhancement().unwrap_or(false);
+    if supports_enhancement {
+        execute!(
+            stdout,
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+        )?;
+    }
+
+    Ok(TerminalState {
+        stdout,
+        supports_enhancement,
+    })
+}
+
+/// Handle resume option, loading session or opening selector.
+/// Returns Err if session load fails fatally (ById with invalid id).
+fn handle_resume(
+    app: &mut ion::tui::App,
+    resume_option: ResumeOption,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use crossterm::{event::DisableBracketedPaste, execute, terminal::disable_raw_mode};
+    use ion::tui::message_list::{MessageEntry, Sender};
+    use std::io;
+
+    match resume_option {
+        ResumeOption::None => {}
+        ResumeOption::Latest => match app.store.list_recent(1) {
+            Ok(sessions) => {
+                if let Some(session) = sessions.first() {
+                    if let Err(e) = app.load_session(&session.id) {
+                        app.message_list.push_entry(MessageEntry::new(
+                            Sender::System,
+                            format!("Error: Failed to load session: {e}"),
+                        ));
+                    }
+                } else {
+                    app.message_list.push_entry(MessageEntry::new(
+                        Sender::System,
+                        "No recent sessions found.".to_string(),
+                    ));
+                }
+            }
+            Err(e) => {
+                app.message_list.push_entry(MessageEntry::new(
+                    Sender::System,
+                    format!("Error: Failed to list sessions: {e}"),
+                ));
+            }
+        },
+        ResumeOption::ById(id) => {
+            if let Err(e) = app.load_session(&id) {
+                let _ = execute!(io::stdout(), DisableBracketedPaste);
+                let _ = disable_raw_mode();
+                eprintln!("Error: Session '{id}' not found: {e}");
+                return Err(e.into());
+            }
+        }
+        ResumeOption::Selector => {
+            app.open_session_selector();
+        }
+    }
+    Ok(())
+}
+
+/// Cleanup terminal and print session ID on exit.
+fn cleanup_terminal(
+    app: &ion::tui::App,
+    stdout: &mut std::io::Stdout,
+    supports_enhancement: bool,
+    term_width: u16,
+    term_height: u16,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use crossterm::{
+        cursor::{MoveTo, Show},
+        event::{DisableBracketedPaste, PopKeyboardEnhancementFlags},
+        execute,
+        terminal::{disable_raw_mode, Clear, ClearType},
+    };
+
+    // Clear UI area before exit
+    let ui_height = app.calculate_ui_height(term_width, term_height);
+    let ui_start = app.ui_start_row(term_height, ui_height);
+    let ui_end = ui_start.saturating_add(ui_height).min(term_height);
+    for row in ui_start..ui_end {
+        execute!(stdout, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
+    }
+    execute!(stdout, MoveTo(0, ui_start))?;
+
+    // Restore terminal
+    execute!(stdout, DisableBracketedPaste)?;
+    if supports_enhancement {
+        execute!(stdout, PopKeyboardEnhancementFlags)?;
+    }
+    disable_raw_mode()?;
+    execute!(stdout, Show)?;
+
+    // Print session ID
+    println!();
+    execute!(
+        stdout,
+        crossterm::style::SetAttribute(crossterm::style::Attribute::Dim),
+        crossterm::style::Print(format!("Session: {}", app.session.id)),
+        crossterm::style::SetAttribute(crossterm::style::Attribute::Reset),
+    )?;
+    println!();
+
+    Ok(())
+}
+
 async fn run_tui(
     permissions: PermissionSettings,
     resume_option: ResumeOption,
@@ -72,78 +202,20 @@ async fn run_tui(
         execute,
         terminal::{
             self, BeginSynchronizedUpdate, Clear, ClearType, EndSynchronizedUpdate,
-            disable_raw_mode, enable_raw_mode, supports_keyboard_enhancement,
+            disable_raw_mode, enable_raw_mode,
         },
     };
     use ion::tui::App;
-    use std::io::{self, Write};
+    use std::io::Write;
 
-    // Setup terminal
-    enable_raw_mode()?;
-    let mut stdout = io::stdout();
+    let TerminalState {
+        mut stdout,
+        supports_enhancement,
+    } = setup_terminal()?;
 
-    // Enable bracketed paste mode (prevents terminal from treating paste as commands)
-    execute!(stdout, EnableBracketedPaste)?;
-
-    // Enable keyboard enhancement for Shift+Enter detection (Kitty protocol)
-    let supports_enhancement = supports_keyboard_enhancement().unwrap_or(false);
-    if supports_enhancement {
-        execute!(
-            stdout,
-            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
-        )?;
-    }
-
-    // Create app with permission settings
     let mut app = App::with_permissions(permissions).await?;
+    handle_resume(&mut app, resume_option)?;
 
-    // Handle resume option
-    match resume_option {
-        ResumeOption::None => {}
-        ResumeOption::Latest => {
-            // Load most recent session
-            match app.store.list_recent(1) {
-                Ok(sessions) => {
-                    if let Some(session) = sessions.first() {
-                        if let Err(e) = app.load_session(&session.id) {
-                            app.message_list
-                                .push_entry(ion::tui::message_list::MessageEntry::new(
-                                    ion::tui::message_list::Sender::System,
-                                    format!("Error: Failed to load session: {e}"),
-                                ));
-                        }
-                    } else {
-                        app.message_list
-                            .push_entry(ion::tui::message_list::MessageEntry::new(
-                                ion::tui::message_list::Sender::System,
-                                "No recent sessions found.".to_string(),
-                            ));
-                    }
-                }
-                Err(e) => {
-                    app.message_list
-                        .push_entry(ion::tui::message_list::MessageEntry::new(
-                            ion::tui::message_list::Sender::System,
-                            format!("Error: Failed to list sessions: {e}"),
-                        ));
-                }
-            }
-        }
-        ResumeOption::ById(id) => {
-            if let Err(e) = app.load_session(&id) {
-                // Restore terminal before printing error
-                let _ = execute!(io::stdout(), DisableBracketedPaste);
-                let _ = disable_raw_mode();
-                eprintln!("Error: Session '{id}' not found: {e}");
-                return Err(e.into());
-            }
-        }
-        ResumeOption::Selector => {
-            app.open_session_selector();
-        }
-    }
-
-    // Check for debug mode via environment variable
     let debug_events = std::env::var("ION_DEBUG_EVENTS").is_ok();
 
     // Track terminal size
@@ -234,6 +306,7 @@ async fn run_tui(
                     execute!(stdout, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
                 }
             }
+            #[allow(clippy::cast_possible_truncation)] // Chat lines fit in terminal u16 height
             let line_count = chat_lines.len() as u16;
 
             // Move to where UI starts, scroll up to make room, then print
@@ -303,34 +376,7 @@ async fn run_tui(
         }
     }
 
-    // Clear UI area before exit (only the UI rows, avoid wiping the whole screen)
-    let ui_height = app.calculate_ui_height(term_width, term_height);
-    let ui_start = app.ui_start_row(term_height, ui_height);
-    let ui_end = ui_start.saturating_add(ui_height).min(term_height);
-    for row in ui_start..ui_end {
-        execute!(stdout, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
-    }
-    execute!(stdout, MoveTo(0, ui_start))?;
-
-    // Restore terminal
-    execute!(stdout, DisableBracketedPaste)?;
-    if supports_enhancement {
-        execute!(stdout, PopKeyboardEnhancementFlags)?;
-    }
-    disable_raw_mode()?;
-    execute!(stdout, Show)?;
-
-    // Print session ID for future reference (dimmed, on newline)
-    println!();
-    execute!(
-        stdout,
-        crossterm::style::SetAttribute(crossterm::style::Attribute::Dim),
-        crossterm::style::Print(format!("Session: {}", app.session.id)),
-        crossterm::style::SetAttribute(crossterm::style::Attribute::Reset),
-    )?;
-    println!();
-
-    Ok(())
+    cleanup_terminal(&app, &mut stdout, supports_enhancement, term_width, term_height)
 }
 
 /// Open text in external editor, returns edited content or None if unchanged/cancelled

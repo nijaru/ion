@@ -47,7 +47,7 @@
 
 - Separator line not cleared on first message (tk-y0gs)
 - Cursor off by 1 with pasted text / placeholder (tk-6gxy)
-- Kimi k2.5 'Invalid request' errors on OpenRouter (tk-axae)
+- Kimi k2.5 'Invalid request' errors on OpenRouter (tk-axae) - **FIX**: native provider using Anthropic Messages API (like pi)
 - Progress line duplicates when switching terminal tabs during streaming (tk-7aem)
 - Resize reflow clears pre-ion scrollback; decide preservation strategy (tk-2bk7)
 - Exiting TUI leaves blank lines before shell prompt (tk-3o0l)

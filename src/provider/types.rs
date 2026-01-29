@@ -39,6 +39,7 @@ pub struct ModelPricing {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(clippy::struct_excessive_bools)] // Model capabilities are naturally boolean flags
 pub struct ModelInfo {
     pub id: String,
     pub name: String,

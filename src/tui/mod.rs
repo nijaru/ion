@@ -44,6 +44,7 @@ use std::time::Instant;
 use tokio::sync::mpsc;
 
 /// Main TUI application state.
+#[allow(clippy::struct_excessive_bools)] // TUI state flags are naturally boolean
 pub struct App {
     pub mode: Mode,
     pub selector_page: SelectorPage,

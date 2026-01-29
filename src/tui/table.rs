@@ -1,4 +1,11 @@
 //! Markdown table rendering with full-width and narrow fallback modes.
+//!
+//! Terminal APIs use u16 for dimensions; numeric casts are intentional.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss
+)]
 
 use crate::tui::terminal::{StyledLine, StyledSpan};
 use pulldown_cmark::Alignment;
@@ -57,14 +64,14 @@ impl Table {
         let mut lines = Vec::new();
 
         // Top border
-        lines.push(self.render_border(&col_widths, BorderPosition::Top));
+        lines.push(Self::render_border(&col_widths, BorderPosition::Top));
 
         // Header row
         if !self.headers.is_empty() {
             let header_lines = self.render_row(&self.headers, &col_widths, true);
             lines.extend(header_lines);
             // Header separator
-            lines.push(self.render_border(&col_widths, BorderPosition::Middle));
+            lines.push(Self::render_border(&col_widths, BorderPosition::Middle));
         }
 
         // Data rows
@@ -74,12 +81,12 @@ impl Table {
 
             // Row separator (except after last row)
             if i < self.rows.len() - 1 {
-                lines.push(self.render_border(&col_widths, BorderPosition::RowSep));
+                lines.push(Self::render_border(&col_widths, BorderPosition::RowSep));
             }
         }
 
         // Bottom border
-        lines.push(self.render_border(&col_widths, BorderPosition::Bottom));
+        lines.push(Self::render_border(&col_widths, BorderPosition::Bottom));
 
         lines
     }
@@ -182,7 +189,7 @@ impl Table {
         lines
     }
 
-    fn render_border(&self, col_widths: &[usize], position: BorderPosition) -> StyledLine {
+    fn render_border(col_widths: &[usize], position: BorderPosition) -> StyledLine {
         let (left, mid, right, fill) = match position {
             BorderPosition::Top => ("┌", "┬", "┐", "─"),
             BorderPosition::Middle | BorderPosition::RowSep => ("├", "┼", "┤", "─"),

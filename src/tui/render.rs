@@ -1,4 +1,11 @@
 //! Rendering functions for the TUI.
+//!
+//! Terminal APIs use u16 for dimensions; numeric casts are intentional.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss
+)]
 
 use crate::tui::App;
 use crate::tui::chat_renderer::ChatRenderer;
@@ -17,12 +24,10 @@ const CONTINUATION: &str = "   ";
 const PROMPT_WIDTH: u16 = 3;
 /// Total input margin (prompt + right padding)
 const INPUT_MARGIN: u16 = 4;
+/// Height of the progress bar area
+const PROGRESS_HEIGHT: u16 = 1;
 
 impl App {
-    fn progress_height(&self) -> u16 {
-        1
-    }
-
     /// Calculate the height needed for the input box based on content.
     /// Returns height including borders.
     /// Min: 3 lines (1 content + 2 borders)
@@ -61,7 +66,7 @@ impl App {
     /// Calculate the total height of the bottom UI area.
     /// Returns: progress (1) + input (with borders) + status (1)
     pub fn calculate_ui_height(&self, width: u16, height: u16) -> u16 {
-        let progress_height = self.progress_height();
+        let progress_height = PROGRESS_HEIGHT;
         let input_height = self.calculate_input_height(width, height);
         let status_height = 1u16;
         progress_height + input_height + status_height
@@ -89,7 +94,7 @@ impl App {
             Vec::new()
         } else {
             self.header_inserted = true;
-            self.startup_header_lines()
+            Self::startup_header_lines()
         };
 
         let entry_count = self.message_list.entries.len();
@@ -146,7 +151,7 @@ impl App {
         }
 
         let mut lines = Vec::new();
-        lines.extend(self.startup_header_lines());
+        lines.extend(Self::startup_header_lines());
 
         let entry_count = self.message_list.entries.len();
         let mut end = entry_count;
@@ -200,7 +205,7 @@ impl App {
     #[allow(dead_code)]
     pub fn viewport_height(&self, terminal_width: u16, terminal_height: u16) -> u16 {
         let input_height = self.calculate_input_height(terminal_width, terminal_height);
-        let progress_height = self.progress_height();
+        let progress_height = PROGRESS_HEIGHT;
         progress_height + input_height + 1 // +1 for status line
     }
 
@@ -220,7 +225,7 @@ impl App {
 
         let ui_height = self.calculate_ui_height(width, height);
         let ui_start = self.ui_start_row(height, ui_height);
-        let progress_height = self.progress_height();
+        let progress_height = PROGRESS_HEIGHT;
 
         // Detect width decrease - terminal rewraps old content, pushing it up
         let width_decreased = self.last_render_width.is_some_and(|old| width < old);

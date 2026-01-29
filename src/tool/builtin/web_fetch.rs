@@ -132,6 +132,7 @@ impl Tool for WebFetchTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidArgs("url is required".to_string()))?;
 
+        #[allow(clippy::cast_possible_truncation)] // JSON u64 max_length fits in usize
         let max_length = args
             .get("max_length")
             .and_then(serde_json::Value::as_u64)

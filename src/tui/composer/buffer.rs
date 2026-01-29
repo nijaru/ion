@@ -14,7 +14,7 @@ pub struct ComposerBuffer {
 
 impl ComposerBuffer {
     /// Create a new empty buffer.
-    #[must_use] 
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -48,19 +48,19 @@ impl ComposerBuffer {
     }
 
     /// Get the total number of characters in the buffer.
-    #[must_use] 
+    #[must_use]
     pub fn len_chars(&self) -> usize {
         self.rope.len_chars()
     }
 
     /// Check if the buffer is empty.
-    #[must_use] 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.rope.len_chars() == 0
     }
 
     /// Get the number of lines in the buffer.
-    #[must_use] 
+    #[must_use]
     pub fn len_lines(&self) -> usize {
         self.rope.len_lines()
     }
@@ -72,7 +72,7 @@ impl ComposerBuffer {
     }
 
     /// Returns the full content of the buffer as a String.
-    #[must_use] 
+    #[must_use]
     pub fn get_content(&self) -> String {
         self.rope.to_string()
     }
@@ -84,20 +84,20 @@ impl ComposerBuffer {
     }
 
     /// Get a reference to the underlying Rope.
-    #[must_use] 
+    #[must_use]
     pub fn rope(&self) -> &Rope {
         &self.rope
     }
 
     /// Get the character index at the start of a line.
-    #[must_use] 
+    #[must_use]
     pub fn line_to_char(&self, line_idx: usize) -> usize {
         self.rope
             .line_to_char(line_idx.min(self.rope.len_lines().saturating_sub(1)))
     }
 
     /// Get the line index containing a character position.
-    #[must_use] 
+    #[must_use]
     pub fn char_to_line(&self, char_idx: usize) -> usize {
         self.rope.char_to_line(char_idx.min(self.rope.len_chars()))
     }
@@ -109,7 +109,7 @@ impl ComposerBuffer {
     }
 
     /// Resolve all placeholders in the given text using the stored blobs.
-    #[must_use] 
+    #[must_use]
     pub fn resolve_content(&self) -> String {
         let mut final_content = self.get_content();
 
@@ -126,7 +126,7 @@ impl ComposerBuffer {
     /// Get the internal placeholder for a blob index (1-indexed).
     /// Uses Unit Separator (\x1f) as invisible delimiter to prevent collision
     /// with user-typed text. The visible portion is "[Pasted text #N]".
-    #[must_use] 
+    #[must_use]
     pub fn internal_placeholder(blob_idx: usize) -> String {
         format!("\x1f[Pasted text #{blob_idx}]\x1f")
     }
