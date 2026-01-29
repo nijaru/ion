@@ -19,10 +19,10 @@
 
 ## Demoable Outcomes
 
-- [ ] `cargo clippy -- -W clippy::pedantic` < 100 warnings
-- [ ] Largest functions split (>200 lines)
-- [ ] Unused self converted to associated functions
-- [ ] `#[allow]` attributes added for intentional patterns
+- [x] `cargo clippy -- -W clippy::pedantic` < 100 warnings (97)
+- [x] Largest functions split (run_tui, run_inner)
+- [x] Unused self converted to associated functions
+- [x] `#[allow]` attributes added for intentional patterns
 
 ---
 
@@ -30,7 +30,7 @@
 
 **Sprint:** 12
 **Depends on:** none
-**Status:** PENDING
+**Status:** DONE
 **Effort:** Quick (15 min)
 
 ### Description
@@ -66,7 +66,7 @@ For each method:
 
 **Sprint:** 12
 **Depends on:** none
-**Status:** PENDING
+**Status:** DONE
 **Effort:** Medium (30 min)
 
 ### Description
@@ -110,7 +110,7 @@ async fn run_tui(...) -> Result<()> {
 
 **Sprint:** 12
 **Depends on:** none
-**Status:** PENDING
+**Status:** DONE
 **Effort:** Medium (30 min)
 
 ### Description
@@ -151,7 +151,7 @@ async fn run_inner(args: RunArgs, auto_approve: bool) -> Result<ExitCode> {
 
 **Sprint:** 12
 **Depends on:** none
-**Status:** PENDING
+**Status:** DONE
 **Effort:** Quick (20 min)
 
 ### Description
