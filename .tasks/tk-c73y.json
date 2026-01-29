@@ -15,10 +15,14 @@
     {
       "ts": "2026-01-29T21:15:19.225Z",
       "msg": "Reviewed code - progress shows per-request tokens, status shows cumulative context. These are different metrics. Need specific repro to understand what mismatch is expected."
+    },
+    {
+      "ts": "2026-01-29T21:57:32.164Z",
+      "msg": "Root cause: Progress line accumulates input_tokens across all turns (+=), Status shows token_usage snapshot of context. In multi-turn tasks with tool calls, progress keeps growing while status shows current context. Consider: show same metric in both, or clarify labels."
     }
   ],
   "created_at": "2026-01-27T04:36:52.579Z",
-  "updated_at": "2026-01-29T21:15:19.225Z",
+  "updated_at": "2026-01-29T21:57:32.164Z",
   "completed_at": null,
   "external": {}
 }

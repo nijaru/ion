@@ -19,10 +19,14 @@
     {
       "ts": "2026-01-29T21:15:32.646Z",
       "msg": "Likely caused by terminal focus change not triggering proper UI redraw. Need to investigate FocusGained/FocusLost events in events.rs and ensure full UI clear on focus change."
+    },
+    {
+      "ts": "2026-01-29T21:58:09.804Z",
+      "msg": "No focus handling implemented. Fix requires: 1) EnableFocusChange at startup, 2) Handle FocusGained event to force full UI redraw. Moderate complexity."
     }
   ],
   "created_at": "2026-01-28T06:48:22.024Z",
-  "updated_at": "2026-01-29T21:15:32.646Z",
+  "updated_at": "2026-01-29T21:58:09.804Z",
   "completed_at": null,
   "external": {}
 }
