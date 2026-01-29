@@ -52,6 +52,9 @@
 - tk-ei0n: Selector rendering in --continue sessions (UI height calculation)
 - tk-5cs9: Ctrl+D in selector (close behavior matches input mode)
 - tk-c73y: Token display - show per-turn input instead of accumulating
+- Selector height now dynamic (provider list ~14 lines, model list uses more as needed)
+- Selector exit triggers full repaint (no more empty newlines in chat)
+- Narrow table continuation lines use 2-char indent (not full header width)
 
 **Reverted:** tk-5z69 tool name aliasing - should fix at prompt/definition level, not mask with aliasing
 
