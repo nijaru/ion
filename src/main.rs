@@ -312,8 +312,15 @@ async fn run_tui(
     disable_raw_mode()?;
     execute!(stdout, Show)?;
 
-    // Print session ID for future reference
-    println!("Session: {}", app.session.id);
+    // Print session ID for future reference (dimmed, on newline)
+    println!();
+    execute!(
+        stdout,
+        crossterm::style::SetAttribute(crossterm::style::Attribute::Dim),
+        crossterm::style::Print(format!("Session: {}", app.session.id)),
+        crossterm::style::SetAttribute(crossterm::style::Attribute::Reset),
+    )?;
+    println!();
 
     Ok(())
 }
