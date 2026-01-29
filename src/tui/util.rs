@@ -1,7 +1,7 @@
 //! TUI utility functions.
 
 use crate::tui::filter_input;
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 /// Format token count as human-readable (e.g., 1500 -> "1.5k")
 #[allow(clippy::cast_precision_loss)] // Precision loss acceptable for display
@@ -63,7 +63,17 @@ pub(super) fn handle_filter_input_event(
     state: &mut filter_input::FilterInputState,
     key: KeyEvent,
 ) -> bool {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
     match key.code {
+        KeyCode::Char('w') if ctrl => {
+            state.delete_word();
+            true
+        }
+        KeyCode::Char('u') if ctrl => {
+            state.delete_line_left();
+            true
+        }
         KeyCode::Char(c) => {
             state.insert_char(c);
             true

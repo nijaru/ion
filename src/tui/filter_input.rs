@@ -62,6 +62,45 @@ impl FilterInputState {
         }
     }
 
+    /// Delete the word before the cursor (Ctrl-W).
+    pub fn delete_word(&mut self) {
+        if self.cursor == 0 {
+            return;
+        }
+
+        // Find word boundary (skip trailing spaces, then word chars)
+        let prefix: String = self.content.chars().take(self.cursor).collect();
+        let trimmed = prefix.trim_end();
+        if trimmed.is_empty() {
+            // All spaces - delete everything
+            self.content = self.content.chars().skip(self.cursor).collect();
+            self.cursor = 0;
+            return;
+        }
+
+        // Find last word boundary in trimmed content
+        let new_cursor = trimmed
+            .char_indices()
+            .rev()
+            .find(|(_, c)| !c.is_alphanumeric() && *c != '_')
+            .map_or(0, |(i, _)| i + 1);
+
+        let byte_start = self.char_to_byte(new_cursor);
+        let byte_end = self.char_to_byte(self.cursor);
+        self.content.drain(byte_start..byte_end);
+        self.cursor = new_cursor;
+    }
+
+    /// Delete from start of line to cursor (Ctrl-U).
+    pub fn delete_line_left(&mut self) {
+        if self.cursor == 0 {
+            return;
+        }
+        let byte_idx = self.char_to_byte(self.cursor);
+        self.content.drain(..byte_idx);
+        self.cursor = 0;
+    }
+
     /// Move cursor left.
     pub fn move_left(&mut self) {
         self.cursor = self.cursor.saturating_sub(1);
