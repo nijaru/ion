@@ -1,8 +1,9 @@
 //! Syntax highlighting for tool output using syntect.
 
+use crate::tui::table::Table;
 use crate::tui::terminal::{LineBuilder, StyledLine, StyledSpan};
 use crossterm::style::Color;
-use pulldown_cmark::{Event, HeadingLevel, Parser, Tag, TagEnd};
+use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use std::sync::LazyLock;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::{FontStyle, ThemeSet};
@@ -187,9 +188,16 @@ pub fn syntax_from_fence(lang: &str) -> Option<&'static str> {
 }
 
 /// Render markdown content to styled lines using pulldown-cmark.
-/// Supports: bold, italic, code spans, code blocks, headers, lists.
+/// Supports: bold, italic, code spans, code blocks, headers, lists, tables.
 pub fn render_markdown(content: &str) -> Vec<StyledLine> {
-    let parser = Parser::new(content);
+    render_markdown_with_width(content, 80)
+}
+
+/// Render markdown with explicit width for table rendering.
+pub fn render_markdown_with_width(content: &str, width: usize) -> Vec<StyledLine> {
+    let mut options = Options::empty();
+    options.insert(Options::ENABLE_TABLES);
+    let parser = Parser::new_ext(content, options);
     let mut result = Vec::new();
     let mut current_line = LineBuilder::new();
     let mut in_bold = false;
@@ -200,6 +208,13 @@ pub fn render_markdown(content: &str) -> Vec<StyledLine> {
     let mut list_depth: usize = 0;
     let mut list_prefix: Option<String> = None;
     let mut current_line_is_prefix_only = false;
+
+    // Table state
+    let mut in_table = false;
+    let mut table = Table::new();
+    let mut current_row: Vec<String> = Vec::new();
+    let mut current_cell = String::new();
+    let mut in_table_head = false;
 
     for event in parser {
         match event {
@@ -255,6 +270,22 @@ pub fn render_markdown(content: &str) -> Vec<StyledLine> {
                         current_line = LineBuilder::new();
                         current_line_is_prefix_only = false;
                     }
+                }
+                Tag::Table(alignments) => {
+                    in_table = true;
+                    table = Table::new();
+                    table.alignments = alignments.into_iter().collect();
+                    current_row.clear();
+                }
+                Tag::TableHead => {
+                    in_table_head = true;
+                    current_row.clear();
+                }
+                Tag::TableRow => {
+                    current_row.clear();
+                }
+                Tag::TableCell => {
+                    current_cell.clear();
                 }
                 _ => {}
             },
@@ -325,11 +356,37 @@ pub fn render_markdown(content: &str) -> Vec<StyledLine> {
                         result.push(StyledLine::empty());
                     }
                 }
+                TagEnd::TableCell => {
+                    current_row.push(std::mem::take(&mut current_cell));
+                }
+                TagEnd::TableRow => {
+                    if in_table_head {
+                        table.headers = std::mem::take(&mut current_row);
+                    } else {
+                        table.rows.push(std::mem::take(&mut current_row));
+                    }
+                }
+                TagEnd::TableHead => {
+                    // Header cells come directly under TableHead (no TableRow wrapper)
+                    // Save accumulated cells as headers
+                    table.headers = std::mem::take(&mut current_row);
+                    in_table_head = false;
+                }
+                TagEnd::Table => {
+                    in_table = false;
+                    // Render the table
+                    let table_lines = table.render(width);
+                    result.extend(table_lines);
+                    result.push(StyledLine::empty());
+                    table = Table::new();
+                }
                 _ => {}
             },
             Event::Text(text) => {
                 if in_code_block {
                     code_block_buffer.push_str(&text);
+                } else if in_table {
+                    current_cell.push_str(&text);
                 } else {
                     let content = text.to_string();
                     // Handle line breaks within text
@@ -393,11 +450,9 @@ pub fn render_markdown(content: &str) -> Vec<StyledLine> {
     result
 }
 
-/// Highlight markdown content with syntax highlighting for code blocks.
-/// Returns a vector of StyledLines with code blocks highlighted.
-/// (Alias for render_markdown for backward compatibility)
-pub fn highlight_markdown_with_code(content: &str) -> Vec<StyledLine> {
-    render_markdown(content)
+/// Highlight markdown content with explicit width for table rendering.
+pub fn highlight_markdown_with_width(content: &str, width: usize) -> Vec<StyledLine> {
+    render_markdown_with_width(content, width)
 }
 
 #[cfg(test)]
@@ -521,5 +576,61 @@ Next paragraph"#;
 
         let line = highlight_diff_line("@@ hunk header @@");
         assert!(!line.is_empty());
+    }
+
+    #[test]
+    fn test_render_markdown_table() {
+        let input = r#"| Name | Value |
+|------|-------|
+| foo  | 123   |
+| bar  | 456   |"#;
+
+        let lines = render_markdown_with_width(input, 80);
+        assert!(!lines.is_empty(), "Table should produce lines");
+
+        // Should have box drawing characters
+        let all_text: String = lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_str())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(all_text.contains("┌"), "Should have top border");
+        assert!(all_text.contains("│"), "Should have column separators");
+        assert!(all_text.contains("foo"), "Should contain cell content");
+    }
+
+    #[test]
+    fn test_render_markdown_table_narrow() {
+        let input = r#"| Name | Value |
+|------|-------|
+| foo  | 123   |"#;
+
+        // Very narrow width forces fallback mode
+        let lines = render_markdown_with_width(input, 20);
+        assert!(!lines.is_empty(), "Narrow table should produce lines");
+
+        let all_text: String = lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_str())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Narrow mode uses "Header: Value" format
+        assert!(
+            all_text.contains("Name") && all_text.contains("foo"),
+            "Should contain header and value, got: {:?}",
+            all_text
+        );
     }
 }
