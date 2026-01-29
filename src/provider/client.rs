@@ -148,16 +148,23 @@ impl Client {
                         if let ContentBlock::ToolResult {
                             tool_call_id,
                             content,
-                            ..
+                            is_error,
                         } = block
                         {
                             tracing::debug!(
-                                "Tool result: id={}, content_len={}",
+                                "Tool result: id={}, content_len={}, is_error={}",
                                 tool_call_id,
-                                content.len()
+                                content.len(),
+                                is_error
                             );
+                            // Encode error status in content (llm-connector doesn't pass is_error)
+                            let final_content = if *is_error {
+                                format!("[ERROR] {}", content)
+                            } else {
+                                content.clone()
+                            };
                             // Note: llm-connector expects (content, tool_call_id) order
-                            result.push(llm_connector::Message::tool(content, tool_call_id));
+                            result.push(llm_connector::Message::tool(&final_content, tool_call_id));
                         }
                     }
                 }
@@ -234,6 +241,14 @@ impl LlmApi for Client {
     ) -> Result<(), Error> {
         let llm_request = Self::build_request(&request);
 
+        tracing::debug!(
+            provider = %self.provider.id(),
+            model = %llm_request.model,
+            tools = llm_request.tools.as_ref().map(|t| t.len()).unwrap_or(0),
+            messages = llm_request.messages.len(),
+            "API stream request"
+        );
+
         let mut stream = self.client.chat_stream(&llm_request).await.map_err(|e| {
             tracing::error!("Stream error from {}: {:?}", self.provider.id(), e);
             Error::Stream(format!("{} ({})", e, self.provider.id()))
@@ -293,26 +308,32 @@ impl LlmApi for Client {
         let llm_request = Self::build_request(&request);
 
         tracing::debug!(
-            "LLM request: provider={}, model={}, tools={}, messages={}",
-            self.provider.id(),
-            llm_request.model,
-            llm_request.tools.as_ref().map(|t| t.len()).unwrap_or(0),
-            llm_request.messages.len()
+            provider = %self.provider.id(),
+            model = %llm_request.model,
+            tools = llm_request.tools.as_ref().map(|t| t.len()).unwrap_or(0),
+            messages = llm_request.messages.len(),
+            "API request"
         );
-        if let Some(tools) = &llm_request.tools {
-            for tool in tools {
-                tracing::trace!("  Tool: {}", tool.function.name);
-            }
+
+        // Full request body at trace level (verbose)
+        if tracing::enabled!(tracing::Level::TRACE)
+            && let Ok(json) = serde_json::to_string_pretty(&llm_request)
+        {
+            tracing::trace!("Request body:\n{}", json);
         }
 
         let response = self.client.chat(&llm_request).await.map_err(|e| {
             // Log full error details for debugging
             tracing::error!(
-                "API error: provider={}, model={}, error={:?}",
-                self.provider.id(),
-                llm_request.model,
-                e
+                provider = %self.provider.id(),
+                model = %llm_request.model,
+                error = ?e,
+                "API error"
             );
+            // Full request body on error for debugging
+            if let Ok(json) = serde_json::to_string_pretty(&llm_request) {
+                tracing::debug!("Failed request body:\n{}", json);
+            }
             // Format error with helpful context
             Error::Api(format!(
                 "{}\n  Provider: {}\n  Model: {}",
@@ -321,6 +342,12 @@ impl LlmApi for Client {
                 llm_request.model
             ))
         })?;
+
+        tracing::debug!(
+            provider = %self.provider.id(),
+            choices = response.choices.len(),
+            "API response"
+        );
 
         let mut content_blocks = Vec::new();
 

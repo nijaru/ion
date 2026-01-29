@@ -538,7 +538,7 @@ async fn run_inner(args: RunArgs, auto_approve: bool) -> Result<ExitCode> {
     }
 
     // Wait for agent to finish
-    let result = agent_handle.await?;
+    let (_session, error) = agent_handle.await?;
 
     // Output final result
     match output_format {
@@ -564,13 +564,10 @@ async fn run_inner(args: RunArgs, auto_approve: bool) -> Result<ExitCode> {
     // Return appropriate exit code
     if interrupted {
         Ok(ExitCode::from(3)) // Max turns reached
+    } else if let Some(e) = error {
+        eprintln!("Error: {}", e);
+        Ok(ExitCode::from(1)) // Error
     } else {
-        match result {
-            Ok(_) => Ok(ExitCode::from(0)), // Success
-            Err(e) => {
-                eprintln!("Error: {}", e);
-                Ok(ExitCode::from(1)) // Error
-            }
-        }
+        Ok(ExitCode::from(0)) // Success
     }
 }

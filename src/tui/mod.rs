@@ -152,4 +152,9 @@ impl App {
     pub fn set_startup_ui_anchor(&mut self, value: Option<u16>) {
         self.startup_ui_anchor = value;
     }
+
+    /// Take and clear the startup UI anchor (for clearing startup area on first message).
+    pub fn take_startup_ui_anchor(&mut self) -> Option<u16> {
+        self.startup_ui_anchor.take()
+    }
 }
