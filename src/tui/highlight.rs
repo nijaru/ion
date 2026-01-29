@@ -204,6 +204,8 @@ pub fn render_markdown_with_width(content: &str, width: usize) -> Vec<StyledLine
     let mut list_depth: usize = 0;
     let mut list_prefix: Option<String> = None;
     let mut current_line_is_prefix_only = false;
+    let mut ordered_list_counters: Vec<usize> = Vec::new();
+    let mut in_blockquote = false;
 
     // Table state
     let mut in_table = false;
@@ -241,15 +243,33 @@ pub fn render_markdown_with_width(content: &str, width: usize) -> Vec<StyledLine
                     current_line = LineBuilder::new().bold(prefix);
                     in_bold = true;
                 }
-                Tag::List(_) => {
+                Tag::List(start_num) => {
                     list_depth += 1;
+                    if let Some(n) = start_num {
+                        ordered_list_counters.push(n as usize);
+                    } else {
+                        ordered_list_counters.push(0); // 0 = unordered
+                    }
                 }
                 Tag::Item => {
                     let indent = "  ".repeat(list_depth.saturating_sub(1));
-                    let prefix = format!("{indent}* ");
+                    let prefix = if let Some(counter) = ordered_list_counters.last_mut() {
+                        if *counter > 0 {
+                            let num = *counter;
+                            *counter += 1;
+                            format!("{indent}{num}. ")
+                        } else {
+                            format!("{indent}* ")
+                        }
+                    } else {
+                        format!("{indent}* ")
+                    };
                     list_prefix = Some(prefix.clone());
                     current_line = LineBuilder::new().raw(prefix);
                     current_line_is_prefix_only = true;
+                }
+                Tag::BlockQuote(_) => {
+                    in_blockquote = true;
                 }
                 Tag::Paragraph => {
                     // Start fresh line for paragraphs
@@ -324,9 +344,14 @@ pub fn render_markdown_with_width(content: &str, width: usize) -> Vec<StyledLine
                 }
                 TagEnd::List(_) => {
                     list_depth = list_depth.saturating_sub(1);
+                    ordered_list_counters.pop();
                     if list_depth == 0 {
                         result.push(StyledLine::empty());
                     }
+                }
+                TagEnd::BlockQuote(_) => {
+                    in_blockquote = false;
+                    result.push(StyledLine::empty());
                 }
                 TagEnd::Item => {
                     if !current_line_is_prefix_only {
@@ -391,7 +416,12 @@ pub fn render_markdown_with_width(content: &str, width: usize) -> Vec<StyledLine
                             if !current_line_is_prefix_only {
                                 result.push(current_line.build());
                             }
-                            current_line = LineBuilder::new();
+                            if in_blockquote {
+                                current_line =
+                                    LineBuilder::new().styled(StyledSpan::dim("> ".to_string()));
+                            } else {
+                                current_line = LineBuilder::new();
+                            }
                             current_line_is_prefix_only = false;
                         }
                         if !part.is_empty() {
@@ -401,11 +431,16 @@ pub fn render_markdown_with_width(content: &str, width: usize) -> Vec<StyledLine
                             {
                                 continue;
                             }
+                            // Add blockquote prefix if this is the start of a blockquote line
+                            if in_blockquote && current_line_is_prefix_only {
+                                current_line =
+                                    LineBuilder::new().styled(StyledSpan::dim("> ".to_string()));
+                            }
                             let span = if in_bold && in_italic {
                                 StyledSpan::bold(part.to_string()).with_italic()
                             } else if in_bold {
                                 StyledSpan::bold(part.to_string())
-                            } else if in_italic {
+                            } else if in_italic || in_blockquote {
                                 StyledSpan::italic(part.to_string())
                             } else {
                                 StyledSpan::raw(part.to_string())
@@ -415,6 +450,17 @@ pub fn render_markdown_with_width(content: &str, width: usize) -> Vec<StyledLine
                         }
                     }
                 }
+            }
+            Event::Rule => {
+                // Horizontal rule / thematic break
+                let line = current_line.build();
+                if !line.is_empty() {
+                    result.push(line);
+                }
+                let rule_width = width.min(40);
+                result.push(StyledLine::dim("─".repeat(rule_width)));
+                result.push(StyledLine::empty());
+                current_line = LineBuilder::new();
             }
             Event::Code(code) => {
                 // Inline code - render with dim styling
