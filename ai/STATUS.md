@@ -7,7 +7,7 @@
 | Phase     | TUI v2 Complete | 2026-01-27 |
 | Status    | Stabilizing     | 2026-01-29 |
 | Toolchain | stable          | 2026-01-22 |
-| Tests     | 122 passing     | 2026-01-29 |
+| Tests     | 128 passing     | 2026-01-29 |
 | Clippy    | 97 pedantic     | 2026-01-29 |
 
 ## Top Priorities
@@ -23,7 +23,6 @@
 | tk-7aem | Progress line tab switch dupe    | Missing focus event handling (may be fixed)             |
 | tk-1lso | Kimi errors on OpenRouter        | reasoning_content field not extracted (Q6 in tui-v2.md) |
 | tk-2bk7 | Resize clears pre-ion scrollback | Needs decision on preservation strategy                 |
-| tk-mcof | Unordered lists show numbers     | Needs investigation - may be parser issue               |
 
 ## Architecture Decisions Pending
 
@@ -55,6 +54,9 @@
 - Selector height now dynamic (provider list ~14 lines, model list uses more as needed)
 - Selector exit triggers full repaint (no more empty newlines in chat)
 - Narrow table continuation lines use 2-char indent (not full header width)
+- tk-mnq0: Model name bleed into selector hint line (list_height mismatch)
+- tk-dbcr: Gap when switching selectors (needs_full_repaint on page switch)
+- tk-mcof: Unordered lists rendered with numbers (nested list content discarded)
 
 **Reverted:** tk-5z69 tool name aliasing - should fix at prompt/definition level, not mask with aliasing
 
