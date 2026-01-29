@@ -12,6 +12,7 @@ pub mod model_picker;
 pub mod provider_picker;
 mod render;
 mod session;
+mod table;
 pub mod session_picker;
 pub mod terminal;
 mod types;
