@@ -225,17 +225,16 @@ async fn run_tui(
         // Print any new chat content using insert_before pattern
         let chat_lines = app.take_chat_inserts(term_width);
         if !chat_lines.is_empty() {
+            let ui_height = app.calculate_ui_height(term_width, term_height);
+
             // If this is the first message and we had startup UI at anchor,
             // clear that area first to avoid artifacts (blank lines, border remnants)
             if let Some(anchor) = app.take_startup_ui_anchor() {
-                let ui_height = app.calculate_ui_height(term_width, term_height);
                 let clear_end = anchor.saturating_add(ui_height).min(term_height);
                 for row in anchor..clear_end {
                     execute!(stdout, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
                 }
             }
-
-            let ui_height = app.calculate_ui_height(term_width, term_height);
             let line_count = chat_lines.len() as u16;
 
             // Move to where UI starts, scroll up to make room, then print

@@ -523,16 +523,6 @@ async fn run_inner(args: RunArgs, auto_approve: bool) -> Result<ExitCode> {
                     }
                 }
             }
-            AgentEvent::Error(e) => {
-                match output_format {
-                    OutputFormat::Text => eprintln!("Error: {}", e),
-                    OutputFormat::StreamJson | OutputFormat::Json => {
-                        let json = serde_json::to_string(&JsonEvent::Error { message: e.clone() })?;
-                        println!("{}", json);
-                    }
-                }
-                return Ok(ExitCode::from(1));
-            }
             _ => {}
         }
     }
@@ -565,7 +555,15 @@ async fn run_inner(args: RunArgs, auto_approve: bool) -> Result<ExitCode> {
     if interrupted {
         Ok(ExitCode::from(3)) // Max turns reached
     } else if let Some(e) = error {
-        eprintln!("Error: {}", e);
+        match output_format {
+            OutputFormat::Text => eprintln!("Error: {}", e),
+            OutputFormat::Json | OutputFormat::StreamJson => {
+                let json = serde_json::to_string(&JsonEvent::Error {
+                    message: e.to_string(),
+                })?;
+                println!("{}", json);
+            }
+        }
         Ok(ExitCode::from(1)) // Error
     } else {
         Ok(ExitCode::from(0)) // Success
