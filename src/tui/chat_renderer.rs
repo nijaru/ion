@@ -3,6 +3,7 @@ use crate::tui::message_list::{MessagePart, Sender};
 use crate::tui::terminal::{LineBuilder, StyledLine, StyledSpan};
 use crate::tui::{QUEUED_PREVIEW_LINES, sanitize_for_display};
 use crossterm::style::Color;
+use unicode_width::UnicodeWidthChar;
 
 pub struct ChatRenderer;
 
@@ -342,16 +343,17 @@ fn wrap_line(line: &str, width: usize) -> Vec<String> {
 
     let mut chunks = Vec::new();
     let mut current = String::new();
-    let mut current_len = 0usize;
+    let mut current_width = 0usize;
 
     for ch in line.chars() {
-        current.push(ch);
-        current_len += 1;
-        if current_len >= width {
+        let char_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if current_width + char_width > width && !current.is_empty() {
             chunks.push(current);
             current = String::new();
-            current_len = 0;
+            current_width = 0;
         }
+        current.push(ch);
+        current_width += char_width;
     }
 
     if !current.is_empty() || chunks.is_empty() {
@@ -447,7 +449,8 @@ fn wrap_styled_line(line: &StyledLine, width: usize) -> Vec<StyledLine> {
     }
 
     let text = styled_line_text(line);
-    if text.chars().count() <= width {
+    let text_width: usize = text.chars().filter_map(UnicodeWidthChar::width).sum();
+    if text_width <= width {
         return vec![line.clone()];
     }
 
@@ -456,20 +459,20 @@ fn wrap_styled_line(line: &StyledLine, width: usize) -> Vec<StyledLine> {
 
     let mut lines = Vec::new();
     let mut current_spans: Vec<StyledSpan> = Vec::new();
-    let mut current_len = 0usize;
+    let mut current_width = 0usize;
     let mut is_first_line = true;
 
     let start_new_line = |lines: &mut Vec<StyledLine>,
                           current_spans: &mut Vec<StyledSpan>,
-                          current_len: &mut usize,
+                          current_width: &mut usize,
                           is_first_line: &mut bool| {
         if !current_spans.is_empty() {
             lines.push(StyledLine::new(std::mem::take(current_spans)));
         }
-        *current_len = 0;
+        *current_width = 0;
         if !*is_first_line && !indent_prefix.is_empty() {
             current_spans.push(StyledSpan::raw(indent_prefix.clone()));
-            *current_len = indent_width;
+            *current_width = indent_width;
         }
         *is_first_line = false;
     };
@@ -477,23 +480,24 @@ fn wrap_styled_line(line: &StyledLine, width: usize) -> Vec<StyledLine> {
     start_new_line(
         &mut lines,
         &mut current_spans,
-        &mut current_len,
+        &mut current_width,
         &mut is_first_line,
     );
 
     for span in &line.spans {
         let style = span.style;
         for ch in span.content.chars() {
-            if current_len >= width {
+            let char_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+            if current_width + char_width > width && !current_spans.is_empty() {
                 start_new_line(
                     &mut lines,
                     &mut current_spans,
-                    &mut current_len,
+                    &mut current_width,
                     &mut is_first_line,
                 );
             }
             push_char(&mut current_spans, style, ch);
-            current_len += 1;
+            current_width += char_width;
         }
     }
 

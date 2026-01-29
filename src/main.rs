@@ -166,6 +166,7 @@ fn cleanup_terminal(
     for row in ui_start..ui_end {
         execute!(stdout, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
     }
+    // Position cursor at ui_start (just after chat content)
     execute!(stdout, MoveTo(0, ui_start))?;
 
     // Restore terminal
@@ -176,8 +177,7 @@ fn cleanup_terminal(
     disable_raw_mode()?;
     execute!(stdout, Show)?;
 
-    // Print session ID
-    println!();
+    // Print session ID directly without extra leading blank line
     execute!(
         stdout,
         crossterm::style::SetAttribute(crossterm::style::Attribute::Dim),
