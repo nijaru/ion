@@ -1,6 +1,7 @@
 use clap::Parser;
 use ion::cli::{Cli, Commands, PermissionSettings};
 use ion::config::Config;
+use ion::tui::Sender;
 use std::process::ExitCode;
 
 /// Resume option for TUI mode.
@@ -177,14 +178,21 @@ fn cleanup_terminal(
     disable_raw_mode()?;
     execute!(stdout, Show)?;
 
-    // Print session ID directly without extra leading blank line
-    execute!(
-        stdout,
-        crossterm::style::SetAttribute(crossterm::style::Attribute::Dim),
-        crossterm::style::Print(format!("Session: {}", app.session.id)),
-        crossterm::style::SetAttribute(crossterm::style::Attribute::Reset),
-    )?;
-    println!();
+    // Only print session ID if there were user messages
+    let has_user_messages = app
+        .message_list
+        .entries
+        .iter()
+        .any(|e| e.sender == Sender::User);
+    if has_user_messages {
+        execute!(
+            stdout,
+            crossterm::style::SetAttribute(crossterm::style::Attribute::Dim),
+            crossterm::style::Print(format!("Session: {}", app.session.id)),
+            crossterm::style::SetAttribute(crossterm::style::Attribute::Reset),
+        )?;
+        println!();
+    }
 
     Ok(())
 }
