@@ -323,11 +323,11 @@ async fn run_tui(
             let ui_height = app.calculate_ui_height(term_width, term_height);
             let ui_start = term_height.saturating_sub(ui_height);
 
-            // If this is the first message, clear the old UI area before scrolling
-            // to prevent input box borders from being pushed into scrollback
-            if let Some(_anchor) = app.take_startup_ui_anchor() {
-                // Clear from where UI was rendered to bottom of screen
-                for row in ui_start..term_height {
+            // If this is the first message, clear entire screen to prevent any
+            // startup UI artifacts from being pushed into scrollback
+            if let Some(anchor) = app.take_startup_ui_anchor() {
+                // Clear from header position to bottom of screen
+                for row in anchor..term_height {
                     execute!(stdout, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
                 }
             }

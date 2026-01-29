@@ -559,7 +559,13 @@ impl Agent {
                     let _ = tx.send(AgentEvent::Retry(reason.to_string(), delay)).await;
                     assistant_blocks.clear();
                     tool_calls.clear();
-                    tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+                    // Interruptible sleep - check abort token during retry delay
+                    tokio::select! {
+                        () = abort_token.cancelled() => {
+                            return Err(anyhow::anyhow!("Cancelled"));
+                        }
+                        () = tokio::time::sleep(std::time::Duration::from_secs(delay)) => {}
+                    }
                     continue 'retry;
                 }
                 error!("Stream error: {}", err);
@@ -604,7 +610,13 @@ impl Agent {
                             reason, delay, retry_count, MAX_RETRIES
                         );
                         let _ = tx.send(AgentEvent::Retry(reason.to_string(), delay)).await;
-                        tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+                        // Interruptible sleep - check abort token during retry delay
+                        tokio::select! {
+                            () = abort_token.cancelled() => {
+                                return Err(anyhow::anyhow!("Cancelled"));
+                            }
+                            () = tokio::time::sleep(std::time::Duration::from_secs(delay)) => {}
+                        }
                         continue;
                     }
                     return Err(anyhow::anyhow!("Completion error: {e}"));
