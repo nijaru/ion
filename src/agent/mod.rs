@@ -375,7 +375,9 @@ impl Agent {
 
         if check_compaction_needed(&session.messages, &config, &self.token_counter).needs_compaction
         {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let threshold = config.trigger_threshold as usize;
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let target_tokens = config.target_threshold as usize;
 
             let mut messages = (*session.messages).to_vec();

@@ -4,6 +4,7 @@ use crate::tui::filter_input;
 use crossterm::event::{KeyCode, KeyEvent};
 
 /// Format token count as human-readable (e.g., 1500 -> "1.5k")
+#[allow(clippy::cast_precision_loss)] // Precision loss acceptable for display
 pub(super) fn format_tokens(n: usize) -> String {
     if n >= 1000 {
         format!("{:.1}k", n as f64 / 1000.0)

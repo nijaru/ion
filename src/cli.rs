@@ -158,6 +158,7 @@ impl Cli {
 /// Fast, lightweight, open-source coding agent
 #[derive(Parser, Debug)]
 #[command(name = "ion", version, about)]
+#[allow(clippy::struct_excessive_bools)] // CLI flags are naturally boolean
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Commands>,
@@ -296,32 +297,22 @@ enum JsonEvent {
     Error { message: String },
 }
 
-/// Run the CLI one-shot mode
-pub async fn run(args: RunArgs, auto_approve: bool) -> ExitCode {
-    match run_inner(args, auto_approve).await {
-        Ok(code) => code,
-        Err(e) => {
-            eprintln!("Error: {e}");
-            ExitCode::from(1)
-        }
-    }
+/// Components needed for CLI agent execution.
+struct CliAgentSetup {
+    agent: Arc<Agent>,
+    session: Session,
+    prompt: String,
 }
 
-async fn run_inner(args: RunArgs, auto_approve: bool) -> Result<ExitCode> {
-    // Initialize tracing for CLI mode
-    if args.verbose || std::env::var("ION_LOG").is_ok() {
-        let _ = tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::DEBUG)
-            .with_writer(std::io::stderr)
-            .try_init();
-    }
-
+/// Setup CLI agent: config, provider, client, orchestrator, agent, session.
+async fn setup_cli_agent(args: &RunArgs, auto_approve: bool) -> Result<CliAgentSetup> {
     // Load config
     let config = Config::load()?;
 
     // Determine working directory
     let working_dir = args
         .cwd
+        .clone()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
     // Read prompt (handle stdin with "-")
@@ -330,12 +321,12 @@ async fn run_inner(args: RunArgs, auto_approve: bool) -> Result<ExitCode> {
         io::stdin().read_to_string(&mut buffer)?;
         buffer.trim().to_string()
     } else {
-        args.prompt
+        args.prompt.clone()
     };
 
     // Optionally prepend context file
-    let prompt = if let Some(file_path) = args.context_file {
-        let content = std::fs::read_to_string(&file_path)?;
+    let prompt = if let Some(ref file_path) = args.context_file {
+        let content = std::fs::read_to_string(file_path)?;
         format!(
             "Context from {}:\n```\n{}\n```\n\n{}",
             file_path.display(),
@@ -347,8 +338,7 @@ async fn run_inner(args: RunArgs, auto_approve: bool) -> Result<ExitCode> {
     };
 
     if prompt.is_empty() {
-        eprintln!("Error: Empty prompt");
-        return Ok(ExitCode::from(1));
+        anyhow::bail!("Empty prompt");
     }
 
     // Determine provider from config (or default to openrouter)
@@ -356,9 +346,9 @@ async fn run_inner(args: RunArgs, auto_approve: bool) -> Result<ExitCode> {
     let provider = Provider::from_id(provider_id).unwrap_or(Provider::OpenRouter);
 
     // Get API key (env var first, then config)
-    let api_key = if let Some(key) = config.api_key_for(provider_id) { key } else {
-        eprintln!(
-            "Error: No API key for {}. Set {} or configure in ~/.ion/config.toml, or run `ion` to set up.",
+    let api_key = config.api_key_for(provider_id).ok_or_else(|| {
+        anyhow::anyhow!(
+            "No API key for {}. Set {} or configure in ~/.ion/config.toml",
             provider_id,
             match provider_id {
                 "anthropic" => "ANTHROPIC_API_KEY",
@@ -367,13 +357,13 @@ async fn run_inner(args: RunArgs, auto_approve: bool) -> Result<ExitCode> {
                 "groq" => "GROQ_API_KEY",
                 _ => "OPENROUTER_API_KEY",
             }
-        );
-        return Ok(ExitCode::from(1));
-    };
+        )
+    })?;
 
     // Determine model
     let model = args
         .model
+        .clone()
         .or(config.model.clone())
         .unwrap_or_else(|| "anthropic/claude-sonnet-4".to_string());
 
@@ -381,18 +371,13 @@ async fn run_inner(args: RunArgs, auto_approve: bool) -> Result<ExitCode> {
     let llm_client: Arc<dyn LlmApi> = Arc::new(Client::new(provider, api_key)?);
 
     // Create orchestrator
-    // Note: --yes grants Write mode with auto-approve (no approval handler)
-    // Use --agi for full autonomy (AGI mode + no sandbox)
     let orchestrator = if args.no_tools {
-        // Truly disable all tools - empty orchestrator
         Arc::new(ToolOrchestrator::new(ToolMode::Read))
     } else if auto_approve {
-        // Write mode with auto-approve handler
         let mut orch = ToolOrchestrator::with_builtins(ToolMode::Write);
         orch.set_approval_handler(Arc::new(AutoApproveHandler));
         Arc::new(orch)
     } else {
-        // Write mode with deny handler (restricted tools fail with clear message)
         let mut orch = ToolOrchestrator::with_builtins(ToolMode::Write);
         orch.set_approval_handler(Arc::new(DenyApprovalHandler));
         Arc::new(orch)
@@ -400,13 +385,94 @@ async fn run_inner(args: RunArgs, auto_approve: bool) -> Result<ExitCode> {
 
     // Create agent
     let mut agent = Agent::new(llm_client, orchestrator);
-    if let Some(ref prompt) = config.system_prompt {
-        agent = agent.with_system_prompt(prompt.clone());
+    if let Some(ref system_prompt) = config.system_prompt {
+        agent = agent.with_system_prompt(system_prompt.clone());
     }
-    let agent = Arc::new(agent);
 
     // Create session
     let session = Session::new(working_dir, model);
+
+    Ok(CliAgentSetup {
+        agent: Arc::new(agent),
+        session,
+        prompt,
+    })
+}
+
+/// Output final result based on format.
+fn output_result(
+    response: &str,
+    output_format: &OutputFormat,
+    quiet: bool,
+    interrupted: bool,
+    error: Option<anyhow::Error>,
+) -> Result<ExitCode> {
+    match output_format {
+        OutputFormat::Text => {
+            if quiet {
+                println!("{response}");
+            } else if !response.ends_with('\n') {
+                println!();
+            }
+        }
+        OutputFormat::Json => {
+            let json = serde_json::to_string_pretty(&JsonEvent::Done {
+                response: response.to_string(),
+            })?;
+            println!("{json}");
+        }
+        OutputFormat::StreamJson => {
+            let json = serde_json::to_string(&JsonEvent::Done {
+                response: response.to_string(),
+            })?;
+            println!("{json}");
+        }
+    }
+
+    if interrupted {
+        Ok(ExitCode::from(3))
+    } else if let Some(e) = error {
+        match output_format {
+            OutputFormat::Text => eprintln!("Error: {e}"),
+            OutputFormat::Json | OutputFormat::StreamJson => {
+                let json = serde_json::to_string(&JsonEvent::Error {
+                    message: e.to_string(),
+                })?;
+                println!("{json}");
+            }
+        }
+        Ok(ExitCode::from(1))
+    } else {
+        Ok(ExitCode::from(0))
+    }
+}
+
+/// Run the CLI one-shot mode
+pub async fn run(args: RunArgs, auto_approve: bool) -> ExitCode {
+    match run_inner(args, auto_approve).await {
+        Ok(code) => code,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+#[allow(clippy::match_wildcard_for_single_variants)] // Defensive for future OutputFormat variants
+async fn run_inner(args: RunArgs, auto_approve: bool) -> Result<ExitCode> {
+    // Initialize tracing for CLI mode
+    if args.verbose || std::env::var("ION_LOG").is_ok() {
+        let _ = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .with_writer(std::io::stderr)
+            .try_init();
+    }
+
+    let CliAgentSetup {
+        agent,
+        session,
+        prompt,
+    } = setup_cli_agent(&args, auto_approve).await?;
     let abort_token = session.abort_token.clone();
 
     // Create event channel
@@ -526,42 +592,5 @@ async fn run_inner(args: RunArgs, auto_approve: bool) -> Result<ExitCode> {
     // Wait for agent to finish
     let (_session, error) = agent_handle.await?;
 
-    // Output final result
-    match output_format {
-        OutputFormat::Text => {
-            if quiet {
-                // In quiet mode, print the full response at the end
-                println!("{response}");
-            } else if !response.ends_with('\n') {
-                // In normal mode, just ensure trailing newline
-                println!();
-            }
-        }
-        OutputFormat::Json => {
-            let json = serde_json::to_string_pretty(&JsonEvent::Done { response })?;
-            println!("{json}");
-        }
-        OutputFormat::StreamJson => {
-            let json = serde_json::to_string(&JsonEvent::Done { response })?;
-            println!("{json}");
-        }
-    }
-
-    // Return appropriate exit code
-    if interrupted {
-        Ok(ExitCode::from(3)) // Max turns reached
-    } else if let Some(e) = error {
-        match output_format {
-            OutputFormat::Text => eprintln!("Error: {e}"),
-            OutputFormat::Json | OutputFormat::StreamJson => {
-                let json = serde_json::to_string(&JsonEvent::Error {
-                    message: e.to_string(),
-                })?;
-                println!("{json}");
-            }
-        }
-        Ok(ExitCode::from(1)) // Error
-    } else {
-        Ok(ExitCode::from(0)) // Success
-    }
+    output_result(&response, &output_format, quiet, interrupted, error)
 }

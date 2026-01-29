@@ -209,6 +209,7 @@ impl ModelRegistry {
                         let arch = info.get("general.architecture").and_then(|v| v.as_str())?;
                         // Context length is at {architecture}.context_length
                         let key = format!("{arch}.context_length");
+                        #[allow(clippy::cast_possible_truncation)] // Context lengths fit in u32
                         info.get(&key).and_then(serde_json::Value::as_u64).map(|v| v as u32)
                     })
                     .unwrap_or(32768) // Conservative default for modern models
@@ -360,7 +361,7 @@ impl ModelRegistry {
             .filter(|m| Self::model_matches_filter(m, filter, prefs))
             .collect();
 
-        self.sort_models(&mut filtered, filter, prefs);
+        Self::sort_models(&mut filtered, filter, prefs);
         filtered
     }
 
@@ -374,12 +375,12 @@ impl ModelRegistry {
             .cloned()
             .collect();
 
-        self.sort_models(&mut models, filter, prefs);
+        Self::sort_models(&mut models, filter, prefs);
         models
     }
 
     /// Sort models according to preferences.
-    fn sort_models(&self, models: &mut [ModelInfo], filter: &ModelFilter, prefs: &ProviderPrefs) {
+    fn sort_models(models: &mut [ModelInfo], filter: &ModelFilter, prefs: &ProviderPrefs) {
         models.sort_by(|a, b| {
             // Preferred providers first
             if let Some(ref prefer) = prefs.prefer {

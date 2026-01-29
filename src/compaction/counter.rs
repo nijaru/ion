@@ -19,25 +19,25 @@ impl Default for TokenCounter {
 }
 
 impl TokenCounter {
-    #[must_use] 
+    #[must_use]
     pub fn new() -> Self {
         Self
     }
 
     /// Count tokens in a string.
-    #[must_use] 
+    #[must_use]
     pub fn count_str(&self, text: &str) -> usize {
         cl100k_base().count(text)
     }
 
     /// Fast estimate without tokenization (~4 chars per token).
-    #[must_use] 
+    #[must_use]
     pub fn estimate_str(text: &str) -> usize {
         text.len() / 4
     }
 
     /// Count tokens in a single message.
-    #[must_use] 
+    #[must_use]
     pub fn count_message(&self, message: &Message) -> MessageTokenCount {
         let mut text_tokens = 0;
         let mut tool_tokens = 0;
@@ -78,7 +78,7 @@ impl TokenCounter {
     }
 
     /// Count tokens across all messages.
-    #[must_use] 
+    #[must_use]
     pub fn count_messages(&self, messages: &[Message]) -> TokenCount {
         let mut total = 0;
         let mut by_role = RoleTokens::default();

@@ -1,8 +1,11 @@
+//! Context compaction for managing conversation length.
+#![allow(clippy::cast_precision_loss)] // Intentional for threshold calculations
+
 mod counter;
 mod pruning;
 
 pub use counter::{TokenCount, TokenCounter};
-pub use pruning::{PruningResult, PruningTier, prune_messages};
+pub use pruning::{prune_messages, PruningResult, PruningTier};
 
 use crate::provider::Message;
 
@@ -40,19 +43,21 @@ impl Default for CompactionConfig {
 
 impl CompactionConfig {
     /// Available tokens after reserving output space.
-    #[must_use] 
+    #[must_use]
     pub fn available_tokens(&self) -> usize {
         self.context_window.saturating_sub(self.output_reserve)
     }
 
     /// Token count that triggers compaction.
-    #[must_use] 
+    #[must_use]
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     pub fn trigger_tokens(&self) -> usize {
         (self.available_tokens() as f32 * self.trigger_threshold) as usize
     }
 
     /// Target token count after compaction.
-    #[must_use] 
+    #[must_use]
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     pub fn target_tokens(&self) -> usize {
         (self.available_tokens() as f32 * self.target_threshold) as usize
     }
@@ -68,7 +73,7 @@ pub struct CompactionStatus {
 }
 
 /// Check if messages need compaction.
-#[must_use] 
+#[must_use]
 pub fn check_compaction_needed(
     messages: &[Message],
     config: &CompactionConfig,

@@ -7,7 +7,7 @@ use unicode_segmentation::UnicodeSegmentation;
 /// Build a list of visual lines as (`start_char_idx`, `end_char_idx`) pairs using word-wrap.
 /// This matches Ratatui's `Paragraph::wrap(Wrap` { trim: false }) behavior.
 /// `end_char_idx` is exclusive.
-#[must_use] 
+#[must_use]
 pub fn build_visual_lines(content: &str, width: usize) -> Vec<(usize, usize)> {
     use unicode_width::UnicodeWidthChar;
 
@@ -96,12 +96,12 @@ pub struct ComposerState {
 }
 
 impl ComposerState {
-    #[must_use] 
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn cursor_char_idx(&self) -> usize {
         self.cursor_char_idx
     }
@@ -537,7 +537,7 @@ impl ComposerState {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn has_stash(&self) -> bool {
         self.stash.is_some()
     }
@@ -549,7 +549,7 @@ impl ComposerState {
     }
 
     /// Get the current scroll offset.
-    #[must_use] 
+    #[must_use]
     pub fn scroll_offset(&self) -> usize {
         self.scroll_offset
     }
@@ -624,13 +624,16 @@ impl ComposerState {
             x
         };
 
-        self.cursor_pos = (x as u16, y as u16);
+        #[allow(clippy::cast_possible_truncation)] // Terminal cursor fits in u16
+        {
+            self.cursor_pos = (x as u16, y as u16);
+        }
         self.cursor_pos
     }
 
     /// Get the number of visual lines the content occupies at the given width.
     /// Uses word-wrap to match Ratatui's Paragraph behavior.
-    #[must_use] 
+    #[must_use]
     pub fn visual_line_count(&self, buffer: &ComposerBuffer, width: usize) -> usize {
         if buffer.is_empty() {
             return 1;

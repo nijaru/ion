@@ -607,7 +607,8 @@ impl App {
                         }
                     }
                 }
-                _ => {}
+                #[allow(clippy::match_wildcard_for_single_variants)]
+                _ => {} // System messages not displayed in chat
             }
         }
 
