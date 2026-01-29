@@ -127,6 +127,7 @@ impl ModelRegistry {
     /// fetching strategy:
     /// - `OpenRouter`: Direct API call
     /// - Ollama: Local server API call
+    /// - Kimi: Static model list (Moonshot API doesn't have model listing)
     /// - Others: models.dev metadata fallback
     pub async fn fetch_models_for_provider(&self, provider: Provider) -> Result<Vec<ModelInfo>> {
         tracing::debug!("fetch_models_for_provider: {:?}", provider);
@@ -134,9 +135,101 @@ impl ModelRegistry {
         match provider {
             Provider::OpenRouter => self.fetch_openrouter_models().await,
             Provider::Ollama => self.fetch_ollama_models().await,
+            Provider::Kimi => Ok(Self::kimi_models()),
             // Cloud providers: use models.dev metadata
             _ => self.fetch_from_models_dev(provider).await,
         }
+    }
+
+    /// Static list of Kimi models (Moonshot API doesn't provide model listing endpoint).
+    fn kimi_models() -> Vec<ModelInfo> {
+        vec![
+            ModelInfo {
+                id: "moonshot-v1-auto".to_string(),
+                name: "Kimi Auto".to_string(),
+                provider: "kimi".to_string(),
+                context_window: 128_000,
+                supports_tools: true,
+                supports_vision: false,
+                supports_thinking: false,
+                supports_cache: false,
+                pricing: ModelPricing {
+                    input: 0.12,  // Per million tokens
+                    output: 0.12,
+                    cache_read: None,
+                    cache_write: None,
+                },
+                created: 0,
+            },
+            ModelInfo {
+                id: "moonshot-v1-8k".to_string(),
+                name: "Kimi 8K".to_string(),
+                provider: "kimi".to_string(),
+                context_window: 8192,
+                supports_tools: true,
+                supports_vision: false,
+                supports_thinking: false,
+                supports_cache: false,
+                pricing: ModelPricing {
+                    input: 0.12,
+                    output: 0.12,
+                    cache_read: None,
+                    cache_write: None,
+                },
+                created: 0,
+            },
+            ModelInfo {
+                id: "moonshot-v1-32k".to_string(),
+                name: "Kimi 32K".to_string(),
+                provider: "kimi".to_string(),
+                context_window: 32768,
+                supports_tools: true,
+                supports_vision: false,
+                supports_thinking: false,
+                supports_cache: false,
+                pricing: ModelPricing {
+                    input: 0.24,
+                    output: 0.24,
+                    cache_read: None,
+                    cache_write: None,
+                },
+                created: 0,
+            },
+            ModelInfo {
+                id: "moonshot-v1-128k".to_string(),
+                name: "Kimi 128K".to_string(),
+                provider: "kimi".to_string(),
+                context_window: 128_000,
+                supports_tools: true,
+                supports_vision: false,
+                supports_thinking: false,
+                supports_cache: false,
+                pricing: ModelPricing {
+                    input: 0.60,
+                    output: 0.60,
+                    cache_read: None,
+                    cache_write: None,
+                },
+                created: 0,
+            },
+            ModelInfo {
+                id: "kimi-k2-0528-preview".to_string(),
+                name: "Kimi K2".to_string(),
+                provider: "kimi".to_string(),
+                context_window: 256_000,
+                supports_tools: true,
+                supports_vision: false,
+                supports_thinking: false,
+                supports_cache: false,
+                pricing: ModelPricing {
+                    input: 2.0,  // Estimated pricing
+                    output: 8.0,
+                    cache_read: None,
+                    cache_write: None,
+                },
+                created: 0,
+            },
+        ]
     }
 
     /// Fetch models from Ollama local server.
