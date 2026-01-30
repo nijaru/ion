@@ -27,6 +27,18 @@ const USER_AGENT: &str = "antigravity/1.15.8 darwin/arm64";
 /// API client identifier.
 const API_CLIENT: &str = "google-cloud-sdk vscode_cloudshelleditor/0.1";
 
+/// Map model names to Code Assist API names.
+fn map_model_name(model: &str) -> &str {
+    match model {
+        "gemini-3-flash-preview" => "gemini-3-flash",
+        "gemini-3-pro-preview" => "gemini-3-pro-high",
+        "gemini-3-pro-image-preview" => "gemini-3-pro-image",
+        "gemini-2.5-flash" => "gemini-2.5-flash",
+        "gemini-2.5-pro" => "gemini-2.5-pro",
+        other => other,
+    }
+}
+
 /// Gemini OAuth client.
 pub struct GeminiOAuthClient {
     client: reqwest::Client,
@@ -96,9 +108,10 @@ impl GeminiOAuthClient {
     /// Make a chat completion request.
     pub async fn complete(&self, request: ChatRequest) -> Result<Message, Error> {
         let gemini_request = GeminiRequest::from_chat_request(&request);
+        let model = map_model_name(&request.model);
 
         let response = self
-            .request_with_fallback(&request.model, "generateContent", &gemini_request)
+            .request_with_fallback(model, "generateContent", &gemini_request)
             .await?;
 
         let status = response.status();
@@ -128,6 +141,7 @@ impl GeminiOAuthClient {
     ) -> Result<(), Error> {
         let headers = self.build_headers();
         let gemini_request = GeminiRequest::from_chat_request(&request);
+        let model = map_model_name(&request.model);
 
         // Try each endpoint until one succeeds
         let mut last_error = None;
@@ -135,8 +149,7 @@ impl GeminiOAuthClient {
 
         for endpoint in CODE_ASSIST_ENDPOINTS {
             let url = format!(
-                "{endpoint}/{API_VERSION}/models/{}:streamGenerateContent?alt=sse",
-                request.model
+                "{endpoint}/{API_VERSION}/models/{model}:streamGenerateContent?alt=sse"
             );
 
             match self
