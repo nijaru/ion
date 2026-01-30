@@ -121,6 +121,8 @@ impl RenderState {
         self.buffered_chat_lines.clear();
         self.header_inserted = false;
         self.chat_row = None;
+        self.last_ui_start = None;
+        self.last_render_width = None;
     }
 
     /// Reset for loading existing session (resume/load).
