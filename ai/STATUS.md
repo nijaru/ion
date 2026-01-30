@@ -12,72 +12,75 @@
 
 ## Top Priorities
 
-1. **Anthropic caching** (tk-268g) - 50-100x cost savings, blocked by llm-connector
-2. **llm-connector decision** (tk-aq7x) - Unblocks caching + OpenRouter routing
+1. **Provider layer replacement** (tk-aq7x) - Replace llm-connector with native HTTP
+   - Design: `ai/design/provider-replacement.md`
+   - Unblocks: Anthropic caching, OpenRouter routing, Kimi fixes
+2. **Anthropic caching** (tk-268g) - 50-100x cost savings, blocked by provider work
 3. **Input UX** - File/command autocomplete (tk-ik05, tk-hk6p)
+
+## Active Work
+
+### Provider Layer Replacement
+
+**Decision:** Replace llm-connector with native implementations.
+
+**Phases:**
+
+1. HTTP foundation (SSE streaming, retry logic)
+2. Anthropic native client (with cache_control)
+3. OpenAI-compatible client (OpenRouter, Groq, Kimi)
+4. Client refactor + remove llm-connector
+
+See `ai/design/provider-replacement.md` for full plan.
 
 ## Open Bugs
 
-| ID      | Issue                            | Root Cause                                              |
-| ------- | -------------------------------- | ------------------------------------------------------- |
-| tk-7aem | Progress line tab switch dupe    | Missing focus event handling (may be fixed)             |
-| tk-1lso | Kimi errors on OpenRouter        | reasoning_content field not extracted (Q6 in tui-v2.md) |
-| tk-2bk7 | Resize clears pre-ion scrollback | Needs decision on preservation strategy                 |
-
-## Architecture Decisions Pending
-
-### llm-connector Dependency (tk-aq7x)
-
-**Blocks:** Anthropic caching (tk-268g), OpenRouter routing, Kimi reasoning_content
-
-| Missing Feature             | Impact                                   |
-| --------------------------- | ---------------------------------------- |
-| OpenRouter `provider` field | Can't use ProviderPrefs for routing      |
-| Anthropic `cache_control`   | No prompt caching (50-100x cost savings) |
-| Kimi `reasoning_content`    | Can't extract thinking from Kimi models  |
-
-**Options:** Remove (~500 LOC), fork, or PR upstream
-
-### Hooks/Plugins
-
-- Design exists: `ai/design/plugin-architecture.md`
-- Claude Code compatible protocol
-- Architecture supports it, can defer - not blocking anything
+| ID      | Issue                            | Root Cause                                   |
+| ------- | -------------------------------- | -------------------------------------------- |
+| tk-7aem | Progress line tab switch dupe    | Missing focus event handling (may fixed)     |
+| tk-1lso | Kimi errors on OpenRouter        | llm-connector parsing (fix in provider work) |
+| tk-2bk7 | Resize clears pre-ion scrollback | Needs decision on preservation strategy      |
 
 ## Fixed Today (2026-01-29)
 
-- tk-l9bn: Session ID no longer printed when no messages
-- tk-7bcv: --continue already working (verified)
-- tk-ei0n: Selector rendering in --continue sessions (UI height calculation)
-- tk-5cs9: Ctrl+D in selector (close behavior matches input mode)
-- tk-c73y: Token display - show per-turn input instead of accumulating
-- Selector height now dynamic (provider list ~14 lines, model list uses more as needed)
-- Selector exit triggers full repaint (no more empty newlines in chat)
-- Narrow table continuation lines use 2-char indent (not full header width)
-- tk-mnq0: Model name bleed into selector hint line (list_height mismatch)
-- tk-dbcr: Gap when switching selectors (needs_full_repaint on page switch)
-- tk-mcof: Unordered lists rendered with numbers (nested list content discarded)
+**UI Fixes:**
 
-**Reverted:** tk-5z69 tool name aliasing - should fix at prompt/definition level, not mask with aliasing
+- tk-ei0n: Selector rendering in --continue sessions
+- tk-5cs9: Ctrl+D in selector
+- tk-c73y: Token display per-turn
+- tk-mnq0: Model name bleed into hint line
+- tk-dbcr: Gap when switching selectors (reverted flicker, accept gap)
+- tk-mcof: Nested list content preserved
+- Startup border artifact on first message
+- Word-aware wrapping for narrow tables
+- Selector remnants cleared on exit before first message
+
+**Agent Fixes:**
+
+- Retry delays now interruptible (Esc cancels immediately)
+
+**Docs:**
+
+- DESIGN.md updated for TUI v2 (crossterm, not ratatui)
 
 ## Module Health
 
-| Module    | Health | Notes                     |
-| --------- | ------ | ------------------------- |
-| tui/      | GOOD   | v2 complete, stabilizing  |
-| agent/    | GOOD   | Clean turn loop           |
-| provider/ | OK     | llm-connector limitations |
-| tool/     | GOOD   | Orchestrator + spawn      |
-| session/  | GOOD   | SQLite persistence + WAL  |
-| skill/    | GOOD   | YAML frontmatter          |
-| mcp/      | OK     | Needs tests               |
+| Module    | Health   | Notes                    |
+| --------- | -------- | ------------------------ |
+| tui/      | GOOD     | v2 complete, stabilizing |
+| agent/    | GOOD     | Clean turn loop          |
+| provider/ | REFACTOR | Replacing llm-connector  |
+| tool/     | GOOD     | Orchestrator + spawn     |
+| session/  | GOOD     | SQLite persistence + WAL |
+| skill/    | GOOD     | YAML frontmatter         |
+| mcp/      | OK       | Needs tests              |
 
 ## Key References
 
-| Topic                | Location                              |
-| -------------------- | ------------------------------------- |
-| TUI architecture     | ai/design/tui-v2.md                   |
-| Plugin design        | ai/design/plugin-architecture.md      |
-| Kimi reasoning issue | ai/design/tui-v2.md Q6                |
-| OpenRouter prefs     | src/provider/prefs.rs (built, unused) |
-| Competitive analysis | ai/research/agent-survey.md           |
+| Topic                | Location                           |
+| -------------------- | ---------------------------------- |
+| TUI architecture     | ai/design/tui-v2.md                |
+| Provider replacement | ai/design/provider-replacement.md  |
+| Plugin design        | ai/design/plugin-architecture.md   |
+| OpenRouter prefs     | src/provider/prefs.rs (unused yet) |
+| Competitive analysis | ai/research/agent-survey.md        |
