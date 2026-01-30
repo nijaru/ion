@@ -22,10 +22,10 @@ pub enum Provider {
     Groq,
     /// Moonshot AI Kimi
     Kimi,
-    /// ChatGPT Plus/Pro via OAuth ($20-200/month subscription)
-    ChatGptPlus,
-    /// Google AI via OAuth (consumer subscription)
-    GoogleAi,
+    /// ChatGPT via OAuth (Plus/Pro subscription)
+    ChatGpt,
+    /// Gemini via OAuth (consumer subscription)
+    Gemini,
 }
 
 impl Provider {
@@ -38,8 +38,8 @@ impl Provider {
         Provider::Ollama,
         Provider::Groq,
         Provider::Kimi,
-        Provider::ChatGptPlus,
-        Provider::GoogleAi,
+        Provider::ChatGpt,
+        Provider::Gemini,
     ];
 
     /// Lowercase ID for config storage.
@@ -53,8 +53,8 @@ impl Provider {
             Provider::Ollama => "ollama",
             Provider::Groq => "groq",
             Provider::Kimi => "kimi",
-            Provider::ChatGptPlus => "chatgpt-plus",
-            Provider::GoogleAi => "google-ai",
+            Provider::ChatGpt => "chatgpt",
+            Provider::Gemini => "gemini",
         }
     }
 
@@ -69,8 +69,8 @@ impl Provider {
             "ollama" => Some(Provider::Ollama),
             "groq" => Some(Provider::Groq),
             "kimi" | "moonshot" => Some(Provider::Kimi),
-            "chatgpt-plus" | "chatgpt" | "chatgptplus" => Some(Provider::ChatGptPlus),
-            "google-ai" | "googleai" | "gemini-oauth" => Some(Provider::GoogleAi),
+            "chatgpt" => Some(Provider::ChatGpt),
+            "gemini" => Some(Provider::Gemini),
             _ => None,
         }
     }
@@ -86,8 +86,8 @@ impl Provider {
             Provider::Ollama => "Ollama",
             Provider::Groq => "Groq",
             Provider::Kimi => "Kimi",
-            Provider::ChatGptPlus => "ChatGPT Plus",
-            Provider::GoogleAi => "Google AI (OAuth)",
+            Provider::ChatGpt => "ChatGPT",
+            Provider::Gemini => "Gemini",
         }
     }
 
@@ -102,8 +102,8 @@ impl Provider {
             Provider::Ollama => "Local models",
             Provider::Groq => "Fast inference",
             Provider::Kimi => "Moonshot K2 models",
-            Provider::ChatGptPlus => "$20/month subscription",
-            Provider::GoogleAi => "Consumer subscription",
+            Provider::ChatGpt => "Sign in with ChatGPT",
+            Provider::Gemini => "Sign in with Google",
         }
     }
 
@@ -118,23 +118,23 @@ impl Provider {
             Provider::Ollama => &[], // No key needed
             Provider::Groq => &["GROQ_API_KEY"],
             Provider::Kimi => &["MOONSHOT_API_KEY", "KIMI_API_KEY"],
-            Provider::ChatGptPlus => &[], // OAuth only
-            Provider::GoogleAi => &[], // OAuth only
+            Provider::ChatGpt => &[], // OAuth only
+            Provider::Gemini => &[], // OAuth only
         }
     }
 
     /// Check if this is an OAuth-based provider.
     #[must_use]
     pub fn is_oauth(self) -> bool {
-        matches!(self, Provider::ChatGptPlus | Provider::GoogleAi)
+        matches!(self, Provider::ChatGpt | Provider::Gemini)
     }
 
     /// Get the corresponding OAuth provider, if any.
     #[must_use]
     pub fn oauth_provider(self) -> Option<OAuthProvider> {
         match self {
-            Provider::ChatGptPlus => Some(OAuthProvider::OpenAI),
-            Provider::GoogleAi => Some(OAuthProvider::Google),
+            Provider::ChatGpt => Some(OAuthProvider::OpenAI),
+            Provider::Gemini => Some(OAuthProvider::Google),
             _ => None,
         }
     }
@@ -278,24 +278,24 @@ mod tests {
 
     #[test]
     fn test_oauth_providers() {
-        assert!(Provider::ChatGptPlus.is_oauth());
-        assert!(Provider::GoogleAi.is_oauth());
+        assert!(Provider::ChatGpt.is_oauth());
+        assert!(Provider::Gemini.is_oauth());
         assert!(!Provider::OpenAI.is_oauth());
         assert!(!Provider::Google.is_oauth());
 
         // OAuth providers have no env vars
-        assert!(Provider::ChatGptPlus.env_vars().is_empty());
-        assert!(Provider::GoogleAi.env_vars().is_empty());
+        assert!(Provider::ChatGpt.env_vars().is_empty());
+        assert!(Provider::Gemini.env_vars().is_empty());
     }
 
     #[test]
     fn test_oauth_provider_mapping() {
         assert_eq!(
-            Provider::ChatGptPlus.oauth_provider(),
+            Provider::ChatGpt.oauth_provider(),
             Some(OAuthProvider::OpenAI)
         );
         assert_eq!(
-            Provider::GoogleAi.oauth_provider(),
+            Provider::Gemini.oauth_provider(),
             Some(OAuthProvider::Google)
         );
         assert_eq!(Provider::OpenAI.oauth_provider(), None);

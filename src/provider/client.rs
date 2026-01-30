@@ -111,16 +111,16 @@ impl Client {
                 LlmClient::openai_compatible(api_key, "https://api.moonshot.ai/v1", "moonshot")
             }
             // OAuth providers use the same API backends as their non-OAuth counterparts
-            Provider::ChatGptPlus => {
-                // ChatGPT Plus uses OpenAI API with OAuth token
+            Provider::ChatGpt => {
+                // ChatGPT uses OpenAI API with OAuth token
                 if let Some(url) = base_url {
                     LlmClient::openai_with_base_url(api_key, url)
                 } else {
                     LlmClient::openai(api_key)
                 }
             }
-            Provider::GoogleAi => {
-                // Google AI OAuth uses Google API with OAuth token
+            Provider::Gemini => {
+                // Gemini OAuth uses Google API with OAuth token
                 LlmClient::google(api_key)
             }
         };

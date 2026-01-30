@@ -259,19 +259,19 @@ pub enum OutputFormat {
 /// OAuth provider for login/logout
 #[derive(ValueEnum, Clone, Debug)]
 pub enum AuthProvider {
-    /// ChatGPT Plus/Pro (OpenAI OAuth)
-    #[value(alias = "chatgpt", alias = "chatgpt-plus")]
-    OpenAI,
-    /// Google AI subscription
-    #[value(alias = "gemini")]
-    Google,
+    /// ChatGPT (OpenAI OAuth - Plus/Pro subscription)
+    #[value(name = "chatgpt")]
+    ChatGpt,
+    /// Gemini (Google OAuth)
+    #[value(name = "gemini")]
+    Gemini,
 }
 
 impl From<AuthProvider> for crate::auth::OAuthProvider {
     fn from(p: AuthProvider) -> Self {
         match p {
-            AuthProvider::OpenAI => Self::OpenAI,
-            AuthProvider::Google => Self::Google,
+            AuthProvider::ChatGpt => Self::OpenAI,
+            AuthProvider::Gemini => Self::Google,
         }
     }
 }
