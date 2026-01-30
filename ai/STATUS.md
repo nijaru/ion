@@ -8,63 +8,45 @@
 | Status    | Stabilizing     | 2026-01-29 |
 | Toolchain | stable          | 2026-01-22 |
 | Tests     | 128 passing     | 2026-01-29 |
-| Clippy    | 97 pedantic     | 2026-01-29 |
+| Clippy    | clean           | 2026-01-29 |
 
 ## Top Priorities
 
 1. **Provider layer replacement** (tk-aq7x) - Replace llm-connector with native HTTP
    - Design: `ai/design/provider-replacement.md`
    - Unblocks: Anthropic caching, OpenRouter routing, Kimi fixes
-2. **Chat positioning** (tk-zn6h) - Avoid empty lines before short chat
-   - Design: `ai/design/chat-positioning.md`
-   - Needs row-tracking approach instead of ScrollUp
-3. **Anthropic caching** (tk-268g) - 50-100x cost savings, blocked by provider work
+2. **Anthropic caching** (tk-268g) - 50-100x cost savings, blocked by provider work
+3. **App struct decomposition** - Extract TaskState, AgentContext from App
 
-## Active Work
+## Recent Work
 
-### Provider Layer Replacement
+### RenderState Refactor (2026-01-29)
 
-**Decision:** Replace llm-connector with native implementations.
+Extracted render state from App struct, implemented row-tracking chat positioning.
 
-**Phases:**
+**Changes:**
 
-1. HTTP foundation (SSE streaming, retry logic)
-2. Anthropic native client (with cache_control)
-3. OpenAI-compatible client (OpenRouter, Groq, Kimi)
-4. Client refactor + remove llm-connector
+- New `src/tui/render_state.rs` - centralized render state
+- 4 reset methods: `reset_for_reflow`, `reset_for_new_conversation`, `reset_for_session_load`, `mark_reflow_complete`
+- Two-mode positioning: row-tracking (content fits) vs scroll (overflow)
 
-See `ai/design/provider-replacement.md` for full plan.
+**Commits:** bb36486, a10d57f
+
+**Fixed:** tk-zn6h (chat positioning - no empty lines before short chat)
+
+**Review findings for future:**
+
+- App struct still large (30+ fields) - consider extracting TaskState, AgentContext
+- render.rs is 800 lines - consider splitting selector rendering
+- Duplicate resize handling in main.rs
 
 ## Open Bugs
 
 | ID      | Issue                            | Root Cause                                   |
 | ------- | -------------------------------- | -------------------------------------------- |
-| tk-7aem | Progress line tab switch dupe    | Missing focus event handling (may fixed)     |
+| tk-7aem | Progress line tab switch dupe    | Missing focus event handling                 |
 | tk-1lso | Kimi errors on OpenRouter        | llm-connector parsing (fix in provider work) |
 | tk-2bk7 | Resize clears pre-ion scrollback | Needs decision on preservation strategy      |
-
-## Fixed Today (2026-01-29)
-
-**UI Fixes:**
-
-- tk-990b: Input border in scrollback - anchor was cleared prematurely in event handler
-- tk-ei0n: Selector rendering in --continue sessions
-- tk-5cs9: Ctrl+D in selector
-- tk-c73y: Token display per-turn
-- tk-mnq0: Model name bleed into hint line
-- tk-dbcr: Gap when switching selectors (reverted flicker, accept gap)
-- tk-mcof: Nested list content preserved
-- Startup border artifact on first message
-- Word-aware wrapping for narrow tables
-- Selector remnants cleared on exit before first message
-
-**Agent Fixes:**
-
-- Retry delays now interruptible (Esc cancels immediately)
-
-**Docs:**
-
-- DESIGN.md updated for TUI v2 (crossterm, not ratatui)
 
 ## Module Health
 
@@ -80,11 +62,10 @@ See `ai/design/provider-replacement.md` for full plan.
 
 ## Key References
 
-| Topic                | Location                           |
-| -------------------- | ---------------------------------- |
-| TUI architecture     | ai/design/tui-v2.md                |
-| Chat positioning     | ai/design/chat-positioning.md      |
-| Provider replacement | ai/design/provider-replacement.md  |
-| Plugin design        | ai/design/plugin-architecture.md   |
-| OpenRouter prefs     | src/provider/prefs.rs (unused yet) |
-| Competitive analysis | ai/research/agent-survey.md        |
+| Topic                | Location                          |
+| -------------------- | --------------------------------- |
+| TUI architecture     | ai/design/tui-v2.md               |
+| Chat positioning     | ai/design/chat-positioning.md     |
+| Provider replacement | ai/design/provider-replacement.md |
+| Plugin design        | ai/design/plugin-architecture.md  |
+| Competitive analysis | ai/research/agent-survey.md       |
