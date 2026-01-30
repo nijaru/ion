@@ -170,6 +170,28 @@ impl Provider {
         }
         self.api_key().is_some()
     }
+
+    /// Get authentication hint for display in provider picker.
+    ///
+    /// Returns the CLI command for OAuth providers, env var for API providers,
+    /// or empty string for providers that don't need auth.
+    #[must_use]
+    pub fn auth_hint(self) -> &'static str {
+        match self {
+            // OAuth providers: CLI command
+            Provider::ChatGpt => "ion login chatgpt",
+            Provider::Gemini => "ion login gemini",
+            // Ollama: no auth needed
+            Provider::Ollama => "",
+            // API providers: first env var
+            Provider::OpenRouter => "OPENROUTER_API_KEY",
+            Provider::Anthropic => "ANTHROPIC_API_KEY",
+            Provider::OpenAI => "OPENAI_API_KEY",
+            Provider::Google => "GOOGLE_API_KEY",
+            Provider::Groq => "GROQ_API_KEY",
+            Provider::Kimi => "MOONSHOT_API_KEY",
+        }
+    }
 }
 
 /// Provider with availability status.
