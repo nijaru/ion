@@ -250,8 +250,7 @@ impl App {
 
                                     // Clear display state
                                     self.message_list.clear();
-                                    self.rendered_entries = 0;
-                                    self.buffered_chat_lines.clear();
+                                    self.render_state.reset_for_new_conversation();
 
                                     // Clear active plan so it doesn't pollute new conversations
                                     let agent = self.agent.clone();
@@ -569,23 +568,15 @@ impl App {
     /// Force a full repaint of chat history and UI.
     /// Used after resize or when exiting fullscreen selector.
     fn force_full_repaint(&mut self) {
-        if !self.message_list.entries.is_empty() {
-            // Reset render tracking for full reflow
-            self.rendered_entries = 0;
-            self.header_inserted = false;
-            self.startup_ui_anchor = None;
-        }
-        self.buffered_chat_lines.clear();
-        // Clear cached render state for UI redraw
-        self.last_render_width = None;
-        self.last_ui_start = None;
+        let has_entries = !self.message_list.entries.is_empty();
+        self.render_state.reset_for_reflow(has_entries);
     }
 
     /// Exit selector mode and return to input, triggering repaint.
     pub(super) fn exit_selector_mode(&mut self) {
         self.mode = Mode::Input;
         // Selector used large area - flag for full clear + repaint
-        self.needs_full_repaint = true;
+        self.render_state.needs_full_repaint = true;
         self.force_full_repaint();
     }
 }

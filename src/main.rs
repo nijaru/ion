@@ -287,8 +287,8 @@ async fn run_tui(
         app.update();
 
         // Handle full repaint request (e.g., after exiting fullscreen selector)
-        if app.needs_full_repaint {
-            app.needs_full_repaint = false;
+        if app.render_state.needs_full_repaint {
+            app.render_state.needs_full_repaint = false;
             // Clear screen (always) and reprint chat (if any)
             print!("\x1b[3J\x1b[2J\x1b[H");
             let _ = std::io::stdout().flush();
@@ -310,6 +310,8 @@ async fn run_tui(
                 }
                 if let Ok((_x, y)) = crossterm::cursor::position() {
                     app.set_startup_ui_anchor(Some(y));
+                    // Initialize row-tracking mode: chat will start at this row
+                    app.render_state.chat_row = Some(y);
                 }
             }
         }
@@ -330,23 +332,54 @@ async fn run_tui(
 
         if !chat_lines.is_empty() {
             let ui_height = app.calculate_ui_height(term_width, term_height);
-            let ui_start = term_height.saturating_sub(ui_height);
 
             #[allow(clippy::cast_possible_truncation)] // Chat lines fit in terminal u16 height
             let line_count = chat_lines.len() as u16;
 
-            // Move to where UI starts, scroll up to make room, then print
-            execute!(stdout, MoveTo(0, ui_start))?;
+            // Row-tracking mode: print at tracked row if content fits
+            if let Some(chat_row) = app.render_state.chat_row {
+                let space_needed = chat_row.saturating_add(line_count).saturating_add(ui_height);
+                if space_needed <= term_height {
+                    // Content fits: print at current row, advance chat_row
+                    for (i, line) in chat_lines.iter().enumerate() {
+                        execute!(stdout, MoveTo(0, chat_row + i as u16))?;
+                        line.println()?;
+                    }
+                    app.render_state.chat_row = Some(chat_row.saturating_add(line_count));
+                } else {
+                    // Overflow: transition to scroll mode
+                    let content_end = chat_row.saturating_add(line_count);
+                    let ui_start = term_height.saturating_sub(ui_height);
+                    let scroll_amount = content_end.saturating_sub(ui_start);
 
-            // Insert lines by scrolling up (pushes existing content into scrollback)
-            execute!(stdout, crossterm::terminal::ScrollUp(line_count))?;
+                    execute!(stdout, MoveTo(0, ui_start))?;
+                    execute!(stdout, crossterm::terminal::ScrollUp(scroll_amount))?;
 
-            // Print at the newly created space (just above where UI will be)
-            let mut row = ui_start.saturating_sub(line_count);
-            for line in &chat_lines {
-                execute!(stdout, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
-                line.println()?;
-                row = row.saturating_add(1);
+                    // Print at top of the scrolled area
+                    let print_row = ui_start.saturating_sub(line_count);
+                    for (i, line) in chat_lines.iter().enumerate() {
+                        execute!(stdout, MoveTo(0, print_row + i as u16), Clear(ClearType::CurrentLine))?;
+                        line.println()?;
+                    }
+                    app.render_state.chat_row = None; // Now in scroll mode
+                }
+            } else {
+                // Scroll mode: existing behavior (content pushed into scrollback)
+                let ui_start = term_height.saturating_sub(ui_height);
+
+                // Move to where UI starts, scroll up to make room, then print
+                execute!(stdout, MoveTo(0, ui_start))?;
+
+                // Insert lines by scrolling up (pushes existing content into scrollback)
+                execute!(stdout, crossterm::terminal::ScrollUp(line_count))?;
+
+                // Print at the newly created space (just above where UI will be)
+                let mut row = ui_start.saturating_sub(line_count);
+                for line in &chat_lines {
+                    execute!(stdout, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
+                    line.println()?;
+                    row = row.saturating_add(1);
+                }
             }
         }
 
