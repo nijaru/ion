@@ -66,8 +66,6 @@ pub struct App {
     pub message_list: MessageList,
     /// Number of chat entries already inserted into scrollback
     pub rendered_entries: usize,
-    /// Total chat lines printed (for deciding when to start scrolling)
-    pub total_chat_lines: u16,
     /// Buffered chat lines while selector is open
     pub buffered_chat_lines: Vec<StyledLine>,
     pub agent: Arc<Agent>,

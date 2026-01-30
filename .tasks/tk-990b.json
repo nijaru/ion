@@ -3,7 +3,7 @@
   "ref": "990b",
   "title": "[BUG] Input box top border pushed to scrollback on first message",
   "description": "When sending the first message in a fresh session, the input box's top border (─────) appears in scrollback above the chat. Attempted fixes haven't resolved it. Need to trace exactly where the border is being rendered and ensure it's cleared before scrolling.",
-  "status": "done",
+  "status": "active",
   "priority": 2,
   "labels": [],
   "assignees": [],
@@ -22,7 +22,7 @@
     }
   ],
   "created_at": "2026-01-30T00:03:33.118Z",
-  "updated_at": "2026-01-30T00:22:23.426Z",
-  "completed_at": "2026-01-30T00:22:23.426Z",
+  "updated_at": "2026-01-30T00:22:10.080Z",
+  "completed_at": null,
   "external": {}
 }
