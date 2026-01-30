@@ -1,7 +1,9 @@
-//! Google OAuth for Google AI subscriptions.
+//! Google OAuth for Gemini via Antigravity (Code Assist API).
 //!
-//! Uses the same OAuth flow as Gemini CLI to authenticate with
-//! Google AI consumer subscriptions.
+//! Uses the Antigravity OAuth flow to access Gemini models through
+//! Google's Code Assist API (cloudcode-pa.googleapis.com).
+//!
+//! Note: This is different from the consumer Gemini API which only supports API keys.
 
 use super::pkce::{generate_state, PkceCodes};
 use super::server::CallbackServer;
@@ -10,24 +12,23 @@ use super::{OAuthFlow, CALLBACK_TIMEOUT};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
-/// Google OAuth client ID (same as Gemini CLI).
-pub const CLIENT_ID: &str = "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com";
+/// Antigravity OAuth client ID.
+pub const CLIENT_ID: &str =
+    "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com";
 
-/// Google OAuth client secret (safe for installed apps per OAuth spec).
-pub const CLIENT_SECRET: &str = "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";
+/// Antigravity OAuth client secret (safe for installed apps per OAuth spec).
+pub const CLIENT_SECRET: &str = "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";
 
 /// Google OAuth endpoints.
 pub const AUTH_ENDPOINT: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 pub const TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
 
-/// OAuth scopes for Google Cloud access.
-///
-/// NOTE: The consumer Gemini API (generativelanguage.googleapis.com) only supports
-/// API keys, not OAuth. Gemini CLI uses the Code Assist API (cloudaicompanion.googleapis.com)
-/// which is a different service. This OAuth flow is currently not functional.
-/// See: https://ai.google.dev/gemini-api/docs/oauth
+/// OAuth scopes for Antigravity/Code Assist access.
 pub const SCOPES: &str = "https://www.googleapis.com/auth/cloud-platform \
-                          https://www.googleapis.com/auth/userinfo.email";
+                          https://www.googleapis.com/auth/userinfo.email \
+                          https://www.googleapis.com/auth/userinfo.profile \
+                          https://www.googleapis.com/auth/cclog \
+                          https://www.googleapis.com/auth/experimentsandconfigs";
 
 /// Google OAuth authentication.
 pub struct GoogleAuth {

@@ -63,7 +63,7 @@ impl CallbackServer {
     /// Get the redirect URI for OAuth.
     #[must_use]
     pub fn redirect_uri(&self) -> String {
-        format!("http://127.0.0.1:{}/callback", self.port)
+        format!("http://localhost:{}/auth/callback", self.port)
     }
 
     /// Wait for the OAuth callback with timeout.
@@ -123,7 +123,7 @@ impl CallbackServer {
                     };
 
                     // Handle callback path
-                    if path.starts_with("/callback") {
+                    if path.starts_with("/auth/callback") {
                         match Self::parse_callback(path, expected_state) {
                             Ok(result) => {
                                 // Send success response
@@ -279,7 +279,7 @@ mod tests {
 
     #[test]
     fn test_parse_callback_success() {
-        let path = "/callback?code=abc123&state=xyz789";
+        let path = "/auth/callback?code=abc123&state=xyz789";
         let result = CallbackServer::parse_callback(path, "xyz789").unwrap();
         assert_eq!(result.code, "abc123");
         assert_eq!(result.state, "xyz789");
@@ -287,7 +287,7 @@ mod tests {
 
     #[test]
     fn test_parse_callback_state_mismatch() {
-        let path = "/callback?code=abc123&state=wrong";
+        let path = "/auth/callback?code=abc123&state=wrong";
         let result = CallbackServer::parse_callback(path, "expected");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("State mismatch"));
@@ -295,7 +295,7 @@ mod tests {
 
     #[test]
     fn test_parse_callback_error() {
-        let path = "/callback?error=access_denied&error_description=User%20denied%20access";
+        let path = "/auth/callback?error=access_denied&error_description=User%20denied%20access";
         let result = CallbackServer::parse_callback(path, "any");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("access_denied"));
