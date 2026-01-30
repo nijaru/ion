@@ -37,6 +37,7 @@ See `ai/design/provider-replacement.md` for full plan.
 
 | ID      | Issue                            | Root Cause                                   |
 | ------- | -------------------------------- | -------------------------------------------- |
+| tk-990b | Input border in scrollback       | Top border pushed up on first message        |
 | tk-7aem | Progress line tab switch dupe    | Missing focus event handling (may fixed)     |
 | tk-1lso | Kimi errors on OpenRouter        | llm-connector parsing (fix in provider work) |
 | tk-2bk7 | Resize clears pre-ion scrollback | Needs decision on preservation strategy      |
