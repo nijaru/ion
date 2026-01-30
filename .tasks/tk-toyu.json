@@ -21,10 +21,14 @@
     {
       "ts": "2026-01-30T04:17:08.717Z",
       "msg": "Renamed from GoogleAi to Gemini. CLI: ion login gemini. Uses Gemini CLI client ID."
+    },
+    {
+      "ts": "2026-01-30T04:37:18.696Z",
+      "msg": "OAuth issue: Google API returns 'API key not valid' because llm-connector's GoogleProvider uses x-goog-api-key header, but OAuth tokens need Authorization: Bearer header. Need to either: (1) create custom HTTP client for OAuth, (2) contribute Bearer auth to llm-connector, or (3) use ConfigurableProtocol with custom auth."
     }
   ],
   "created_at": "2026-01-30T03:12:45.222Z",
-  "updated_at": "2026-01-30T04:17:08.717Z",
+  "updated_at": "2026-01-30T04:37:18.696Z",
   "completed_at": null,
   "external": {}
 }

@@ -2,6 +2,7 @@
 
 use super::api_provider::Provider;
 use super::error::Error;
+use super::gemini_oauth::GeminiOAuthClient;
 use super::types::{
     ChatRequest, ContentBlock, Message, Role, StreamEvent, ToolCallEvent, ToolDefinition,
 };
@@ -13,18 +14,38 @@ use std::fmt::Write as _;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
+/// Backend implementation for different provider types.
+enum Backend {
+    /// Standard llm-connector client
+    LlmConnector(LlmClient),
+    /// Custom Gemini OAuth client (uses Bearer auth)
+    GeminiOAuth(GeminiOAuthClient),
+}
+
 /// LLM client for making API calls.
 pub struct Client {
     provider: Provider,
-    client: LlmClient,
+    backend: Backend,
 }
 
 impl Client {
     /// Create a new client for the given provider.
     pub fn new(provider: Provider, api_key: impl Into<String>) -> Result<Self, Error> {
         let api_key = api_key.into();
+
+        // Gemini OAuth needs special handling (Bearer auth instead of API key)
+        if provider == Provider::Gemini {
+            return Ok(Self {
+                provider,
+                backend: Backend::GeminiOAuth(GeminiOAuthClient::new(api_key)),
+            });
+        }
+
         let client = Self::create_llm_client(provider, &api_key, None)?;
-        Ok(Self { provider, client })
+        Ok(Self {
+            provider,
+            backend: Backend::LlmConnector(client),
+        })
     }
 
     /// Create client from provider, auto-detecting API key or OAuth credentials.
@@ -68,12 +89,24 @@ impl Client {
     ) -> Result<Self, Error> {
         let api_key = api_key.into();
         let base_url = base_url.into();
+
+        // Gemini OAuth doesn't support custom base URL yet
+        if provider == Provider::Gemini {
+            return Ok(Self {
+                provider,
+                backend: Backend::GeminiOAuth(GeminiOAuthClient::new(api_key)),
+            });
+        }
+
         let client = Self::create_llm_client(provider, &api_key, Some(&base_url))?;
-        Ok(Self { provider, client })
+        Ok(Self {
+            provider,
+            backend: Backend::LlmConnector(client),
+        })
     }
 
     /// Get the provider type.
-    #[must_use] 
+    #[must_use]
     pub fn provider(&self) -> Provider {
         self.provider
     }
@@ -284,6 +317,23 @@ impl LlmApi for Client {
         request: ChatRequest,
         tx: mpsc::Sender<StreamEvent>,
     ) -> Result<(), Error> {
+        // Handle Gemini OAuth separately
+        if let Backend::GeminiOAuth(ref client) = self.backend {
+            tracing::debug!(
+                provider = %self.provider.id(),
+                model = %request.model,
+                tools = request.tools.len(),
+                messages = request.messages.len(),
+                "API stream request (Gemini OAuth)"
+            );
+            return client.stream(request, tx).await;
+        }
+
+        // Standard llm-connector path
+        let Backend::LlmConnector(ref llm_client) = self.backend else {
+            unreachable!()
+        };
+
         let llm_request = Self::build_request(&request);
 
         tracing::debug!(
@@ -294,7 +344,7 @@ impl LlmApi for Client {
             "API stream request"
         );
 
-        let mut stream = self.client.chat_stream(&llm_request).await.map_err(|e| {
+        let mut stream = llm_client.chat_stream(&llm_request).await.map_err(|e| {
             tracing::error!("Stream error from {}: {:?}", self.provider.id(), e);
             Error::Stream(format!("{} ({})", e, self.provider.id()))
         })?;
@@ -350,6 +400,23 @@ impl LlmApi for Client {
     }
 
     async fn complete(&self, request: ChatRequest) -> Result<Message, Error> {
+        // Handle Gemini OAuth separately
+        if let Backend::GeminiOAuth(ref client) = self.backend {
+            tracing::debug!(
+                provider = %self.provider.id(),
+                model = %request.model,
+                tools = request.tools.len(),
+                messages = request.messages.len(),
+                "API request (Gemini OAuth)"
+            );
+            return client.complete(request).await;
+        }
+
+        // Standard llm-connector path
+        let Backend::LlmConnector(ref llm_client) = self.backend else {
+            unreachable!()
+        };
+
         let llm_request = Self::build_request(&request);
 
         tracing::debug!(
@@ -367,7 +434,7 @@ impl LlmApi for Client {
             tracing::trace!("Request body:\n{}", json);
         }
 
-        let response = self.client.chat(&llm_request).await.map_err(|e| {
+        let response = llm_client.chat(&llm_request).await.map_err(|e| {
             // Log full error details for debugging
             tracing::error!(
                 provider = %self.provider.id(),
