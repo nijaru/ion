@@ -73,14 +73,14 @@ impl GeminiOAuthClient {
     /// Try request with endpoint fallback.
     async fn request_with_fallback(
         &self,
-        model: &str,
         action: &str,
         body: &impl Serialize,
     ) -> Result<reqwest::Response, Error> {
         let headers = self.build_headers();
 
         for (i, endpoint) in CODE_ASSIST_ENDPOINTS.iter().enumerate() {
-            let url = format!("{endpoint}/{API_VERSION}/models/{model}:{action}");
+            // Code Assist API uses /{version}:{action} format, not /models/{model}:{action}
+            let url = format!("{endpoint}/{API_VERSION}:{action}");
 
             let response = self
                 .client
@@ -107,11 +107,12 @@ impl GeminiOAuthClient {
 
     /// Make a chat completion request.
     pub async fn complete(&self, request: ChatRequest) -> Result<Message, Error> {
-        let gemini_request = GeminiRequest::from_chat_request(&request);
         let model = map_model_name(&request.model);
+        let gemini_request = GeminiRequest::from_chat_request(&request);
+        let wrapped = CodeAssistRequest::new(model, &gemini_request);
 
         let response = self
-            .request_with_fallback(model, "generateContent", &gemini_request)
+            .request_with_fallback("generateContent", &wrapped)
             .await?;
 
         let status = response.status();
@@ -140,23 +141,25 @@ impl GeminiOAuthClient {
         tx: mpsc::Sender<StreamEvent>,
     ) -> Result<(), Error> {
         let headers = self.build_headers();
-        let gemini_request = GeminiRequest::from_chat_request(&request);
         let model = map_model_name(&request.model);
+        let gemini_request = GeminiRequest::from_chat_request(&request);
+        let wrapped = CodeAssistRequest::new(model, &gemini_request);
 
         // Try each endpoint until one succeeds
         let mut last_error = None;
         let mut response = None;
 
         for endpoint in CODE_ASSIST_ENDPOINTS {
+            // Code Assist API uses /{version}:{action} format
             let url = format!(
-                "{endpoint}/{API_VERSION}/models/{model}:streamGenerateContent?alt=sse"
+                "{endpoint}/{API_VERSION}:streamGenerateContent?alt=sse"
             );
 
             match self
                 .client
                 .post(&url)
                 .headers(headers.clone())
-                .json(&gemini_request)
+                .json(&wrapped)
                 .send()
                 .await
             {
@@ -217,6 +220,30 @@ impl GeminiOAuthClient {
 
         let _ = tx.send(StreamEvent::Done).await;
         Ok(())
+    }
+}
+
+// --- Code Assist API Wrapper ---
+
+/// Wrapper for Code Assist API requests.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CodeAssistRequest<'a> {
+    /// Model name (mapped for Code Assist)
+    model: &'a str,
+    /// The inner Gemini request
+    request: &'a GeminiRequest,
+    /// User agent identifier
+    user_agent: &'static str,
+}
+
+impl<'a> CodeAssistRequest<'a> {
+    fn new(model: &'a str, request: &'a GeminiRequest) -> Self {
+        Self {
+            model,
+            request,
+            user_agent: "antigravity",
+        }
     }
 }
 
