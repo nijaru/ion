@@ -128,6 +128,7 @@ impl ModelRegistry {
     /// - `OpenRouter`: Direct API call
     /// - Ollama: Local server API call
     /// - Kimi: Moonshot API /v1/models endpoint
+    /// - OAuth providers: Map to underlying API provider
     /// - Others: models.dev metadata fallback
     pub async fn fetch_models_for_provider(&self, provider: Provider) -> Result<Vec<ModelInfo>> {
         tracing::debug!("fetch_models_for_provider: {:?}", provider);
@@ -136,6 +137,9 @@ impl ModelRegistry {
             Provider::OpenRouter => self.fetch_openrouter_models().await,
             Provider::Ollama => self.fetch_ollama_models().await,
             Provider::Kimi => self.fetch_kimi_models().await,
+            // OAuth providers use same models as their underlying API
+            Provider::ChatGptPlus => self.fetch_from_models_dev(Provider::OpenAI).await,
+            Provider::GoogleAi => self.fetch_from_models_dev(Provider::Google).await,
             // Cloud providers: use models.dev metadata
             _ => self.fetch_from_models_dev(provider).await,
         }
