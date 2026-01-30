@@ -15,6 +15,7 @@
 mod api_provider;
 mod client;
 mod error;
+mod gemini_oauth;
 mod models_dev;
 mod prefs;
 mod registry;
