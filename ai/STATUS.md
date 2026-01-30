@@ -37,9 +37,16 @@ ion login gemini    # Google AI (free tier available)
 
 ## Top Priorities
 
-1. **Test OAuth** with real subscriptions
-2. **Provider layer replacement** (tk-aq7x) - native HTTP
-3. **App struct decomposition** - TaskState, UiState
+1. **Review OAuth code** - verify client ID approach (see Decision Needed below)
+2. **Test OAuth** with real subscriptions
+3. **Provider layer replacement** (tk-aq7x) - native HTTP
+
+## Decision Needed
+
+**OAuth Client IDs:** Currently using public client IDs from Codex CLI and Gemini CLI (installed-app credentials, safe per OAuth spec). Options:
+
+1. **Keep borrowed IDs** - Works now, may break if upstream changes credentials
+2. **Register our own** - More stable long-term, requires OpenAI/Google developer accounts
 
 ## Future: Extensibility
 
