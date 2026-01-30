@@ -251,7 +251,6 @@ impl App {
                                     // Clear display state
                                     self.message_list.clear();
                                     self.rendered_entries = 0;
-                                    self.total_chat_lines = 0;
                                     self.buffered_chat_lines.clear();
 
                                     // Clear active plan so it doesn't pollute new conversations

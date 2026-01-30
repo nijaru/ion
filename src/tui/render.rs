@@ -93,26 +93,13 @@ impl App {
         progress_height + input_height + status_height
     }
 
-    /// Resolve the UI start row based on chat content height.
-    /// When chat is short, UI appears right after chat. When chat fills screen, UI is at bottom.
+    /// Resolve the UI start row, using the startup anchor when no messages exist.
     pub fn ui_start_row(&self, height: u16, ui_height: u16) -> u16 {
         let bottom_start = height.saturating_sub(ui_height);
-        let header_height: u16 = 3; // ION, version, empty line
-
-        // On startup with no messages, use anchor position
         if self.message_list.entries.is_empty()
             && let Some(anchor) = self.startup_ui_anchor {
                 return anchor.min(bottom_start);
             }
-
-        // When chat is short, position UI right after chat
-        let available_space = height.saturating_sub(ui_height).saturating_sub(header_height);
-        if self.total_chat_lines <= available_space {
-            let chat_end = header_height + self.total_chat_lines;
-            return chat_end.min(bottom_start);
-        }
-
-        // Chat exceeds screen - UI at bottom
         bottom_start
     }
 
@@ -134,7 +121,6 @@ impl App {
         let entry_count = self.message_list.entries.len();
         if self.rendered_entries > entry_count {
             self.rendered_entries = 0;
-            self.total_chat_lines = 0;
             self.buffered_chat_lines.clear();
         }
 

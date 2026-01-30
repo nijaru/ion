@@ -188,7 +188,6 @@ impl App {
             provider_picker: ProviderPicker::new(),
             message_list: MessageList::new(),
             rendered_entries: 0,
-            total_chat_lines: 0,
             buffered_chat_lines: Vec::new(),
             agent,
             session,
@@ -268,7 +267,6 @@ impl App {
         let loaded = self.store.load(session_id)?;
         self.message_list.load_from_messages(&loaded.messages);
         self.rendered_entries = 0;
-        self.total_chat_lines = 0;
         self.buffered_chat_lines.clear();
         self.startup_ui_anchor = None;
         self.session = loaded;
@@ -544,7 +542,6 @@ impl App {
         // Rebuild message list from session messages
         self.message_list.clear();
         self.rendered_entries = 0;
-        self.total_chat_lines = 0;
         self.startup_ui_anchor = None;
         for msg in &self.session.messages {
             match msg.role {
