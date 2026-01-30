@@ -12,11 +12,14 @@
 //! let response = client.complete(request).await?;
 //! ```
 
+mod anthropic;
 mod api_provider;
 mod client;
 mod error;
 mod gemini_oauth;
+mod http;
 mod models_dev;
+mod openai_compat;
 mod prefs;
 mod registry;
 mod types;
