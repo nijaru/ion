@@ -1,6 +1,6 @@
-//! Google OAuth for Gemini via Antigravity (Code Assist API).
+//! Google OAuth for Gemini via Code Assist API.
 //!
-//! Uses the Antigravity OAuth flow to access Gemini models through
+//! Uses the Gemini CLI OAuth flow to access Gemini models through
 //! Google's Code Assist API (cloudcode-pa.googleapis.com).
 //!
 //! Note: This is different from the consumer Gemini API which only supports API keys.
@@ -12,18 +12,19 @@ use super::{OAuthFlow, CALLBACK_TIMEOUT};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
-/// Antigravity OAuth client ID.
+/// Gemini CLI OAuth client ID.
 pub const CLIENT_ID: &str =
-    "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com";
+    "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com";
 
-/// Antigravity OAuth client secret (safe for installed apps per OAuth spec).
-pub const CLIENT_SECRET: &str = "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";
+/// Gemini CLI OAuth client secret (safe for installed apps per OAuth spec).
+pub const CLIENT_SECRET: &str = "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";
 
 /// Google OAuth endpoints.
 pub const AUTH_ENDPOINT: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 pub const TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
 
-/// OAuth scopes for Antigravity/Code Assist access.
+/// OAuth scopes for Code Assist access.
+/// Uses Gemini CLI scopes plus cclog/experimentsandconfigs for API access.
 pub const SCOPES: &str = "https://www.googleapis.com/auth/cloud-platform \
                           https://www.googleapis.com/auth/userinfo.email \
                           https://www.googleapis.com/auth/userinfo.profile \
