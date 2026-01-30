@@ -26,6 +26,28 @@ const PROMPT_WIDTH: u16 = 3;
 const INPUT_MARGIN: u16 = 4;
 /// Height of the progress bar area
 const PROGRESS_HEIGHT: u16 = 1;
+/// Selector layout overhead: tabs(1) + desc(1) + search box(3) + hint(1) + list header
+const SELECTOR_OVERHEAD: u16 = 7;
+/// Maximum visible items in selector list
+const MAX_VISIBLE_ITEMS: u16 = 15;
+
+/// A single item in the selector list.
+struct SelectorItem {
+    label: String,
+    is_valid: bool,
+    hint: String,
+}
+
+/// Data needed to render the selector UI.
+struct SelectorData {
+    title: &'static str,
+    description: &'static str,
+    items: Vec<SelectorItem>,
+    selected_idx: usize,
+    filter_text: String,
+    show_tabs: bool,
+    active_tab: usize, // 0 = providers, 1 = models
+}
 
 impl App {
     /// Calculate the height needed for the input box based on content.
@@ -68,10 +90,6 @@ impl App {
     /// For selector mode, returns height based on actual item count.
     pub fn calculate_ui_height(&self, width: u16, height: u16) -> u16 {
         if self.mode == Mode::Selector {
-            // Selector layout: tabs(1) + desc(1) + search box(3) + list(N) + hint(1) = 7 + N
-            const SELECTOR_OVERHEAD: u16 = 7;
-            const MAX_VISIBLE_ITEMS: u16 = 15;
-
             let item_count = match self.selector_page {
                 SelectorPage::Provider => self.provider_picker.filtered.len(),
                 SelectorPage::Model => self.model_picker.filtered_models.len(),
@@ -335,6 +353,89 @@ impl App {
         Ok(())
     }
 
+    /// Extract data needed to render the current selector page.
+    fn selector_data(&self) -> SelectorData {
+        match self.selector_page {
+            SelectorPage::Provider => {
+                let items = self
+                    .provider_picker
+                    .filtered
+                    .iter()
+                    .map(|s| {
+                        let hint = if s.authenticated {
+                            String::new()
+                        } else {
+                            s.provider.auth_hint().to_string()
+                        };
+                        SelectorItem {
+                            label: s.provider.name().to_string(),
+                            is_valid: s.authenticated,
+                            hint,
+                        }
+                    })
+                    .collect();
+                SelectorData {
+                    title: "Providers",
+                    description: "Select a provider",
+                    items,
+                    selected_idx: self.provider_picker.list_state.selected().unwrap_or(0),
+                    filter_text: self.provider_picker.filter_input.text().to_string(),
+                    show_tabs: true,
+                    active_tab: 0,
+                }
+            }
+            SelectorPage::Model => {
+                let items = self
+                    .model_picker
+                    .filtered_models
+                    .iter()
+                    .map(|m| SelectorItem {
+                        label: m.id.clone(),
+                        is_valid: true,
+                        hint: String::new(),
+                    })
+                    .collect();
+                SelectorData {
+                    title: "Models",
+                    description: "Select a model",
+                    items,
+                    selected_idx: self.model_picker.model_state.selected().unwrap_or(0),
+                    filter_text: self.model_picker.filter_input.text().to_string(),
+                    show_tabs: true,
+                    active_tab: 1,
+                }
+            }
+            SelectorPage::Session => {
+                let items = self
+                    .session_picker
+                    .filtered_sessions
+                    .iter()
+                    .map(|s| {
+                        let preview = s.first_user_message.as_ref().map_or_else(
+                            || "No preview".to_string(),
+                            |m| m.chars().take(40).collect::<String>(),
+                        );
+                        let label = format!("{} - {}", preview, format_relative_time(s.updated_at));
+                        SelectorItem {
+                            label,
+                            is_valid: true,
+                            hint: String::new(),
+                        }
+                    })
+                    .collect();
+                SelectorData {
+                    title: "Sessions",
+                    description: "Select a session to resume",
+                    items,
+                    selected_idx: self.session_picker.list_state.selected().unwrap_or(0),
+                    filter_text: self.session_picker.filter_input.text().to_string(),
+                    show_tabs: false,
+                    active_tab: 0,
+                }
+            }
+        }
+    }
+
     /// Render selector (provider/model/session picker) directly with crossterm.
     fn render_selector_direct<W: std::io::Write>(
         &mut self,
@@ -350,73 +451,7 @@ impl App {
             },
         };
 
-        // Items: (name, is_authenticated, auth_hint)
-        let (title, description, items, selected_idx, filter_text): (
-            &str,
-            &str,
-            Vec<(String, bool, String)>,
-            usize,
-            String,
-        ) = match self.selector_page {
-            SelectorPage::Provider => {
-                let items: Vec<(String, bool, String)> = self
-                    .provider_picker
-                    .filtered
-                    .iter()
-                    .map(|s| {
-                        let hint = if s.authenticated {
-                            String::new() // No hint needed if already authenticated
-                        } else {
-                            s.provider.auth_hint().to_string()
-                        };
-                        (s.provider.name().to_string(), s.authenticated, hint)
-                    })
-                    .collect();
-                (
-                    "Providers",
-                    "Select a provider",
-                    items,
-                    self.provider_picker.list_state.selected().unwrap_or(0),
-                    self.provider_picker.filter_input.text().to_string(),
-                )
-            }
-            SelectorPage::Model => {
-                let items: Vec<(String, bool, String)> = self
-                    .model_picker
-                    .filtered_models
-                    .iter()
-                    .map(|m| (m.id.clone(), true, String::new()))
-                    .collect();
-                (
-                    "Models",
-                    "Select a model",
-                    items,
-                    self.model_picker.model_state.selected().unwrap_or(0),
-                    self.model_picker.filter_input.text().to_string(),
-                )
-            }
-            SelectorPage::Session => {
-                let items: Vec<(String, bool, String)> = self
-                    .session_picker
-                    .filtered_sessions
-                    .iter()
-                    .map(|s| {
-                        let preview = s
-                            .first_user_message
-                            .as_ref().map_or_else(|| "No preview".to_string(), |m| m.chars().take(40).collect::<String>());
-                        let label = format!("{} - {}", preview, format_relative_time(s.updated_at));
-                        (label, true, String::new())
-                    })
-                    .collect();
-                (
-                    "Sessions",
-                    "Select a session to resume",
-                    items,
-                    self.session_picker.list_state.selected().unwrap_or(0),
-                    self.session_picker.filter_input.text().to_string(),
-                )
-            }
-        };
+        let data = self.selector_data();
 
         // Layout: tabs, description, search box, list, hint
         // Clear from start_row to bottom
@@ -429,21 +464,8 @@ impl App {
         let mut row = start_row;
 
         // Tab bar (only for provider/model, session has its own header)
-        if self.selector_page == SelectorPage::Session {
-            execute!(w, MoveTo(0, row))?;
-            execute!(
-                w,
-                SetForegroundColor(CColor::Yellow),
-                SetAttribute(Attribute::Bold),
-                Print(" Sessions"),
-                SetAttribute(Attribute::Reset),
-                ResetColor
-            )?;
-        } else {
-            let (provider_bold, model_bold) = match self.selector_page {
-                SelectorPage::Provider => (true, false),
-                _ => (false, true),
-            };
+        if data.show_tabs {
+            let provider_bold = data.active_tab == 0;
             execute!(w, MoveTo(0, row))?;
             write!(w, " ")?;
             if provider_bold {
@@ -458,7 +480,7 @@ impl App {
             write!(w, "Providers")?;
             execute!(w, SetAttribute(Attribute::Reset), ResetColor)?;
             write!(w, "  ")?;
-            if model_bold {
+            if !provider_bold {
                 execute!(
                     w,
                     SetForegroundColor(CColor::Yellow),
@@ -469,12 +491,23 @@ impl App {
             }
             write!(w, "Models")?;
             execute!(w, SetAttribute(Attribute::Reset), ResetColor)?;
+        } else {
+            execute!(w, MoveTo(0, row))?;
+            execute!(
+                w,
+                SetForegroundColor(CColor::Yellow),
+                SetAttribute(Attribute::Bold),
+                Print(" "),
+                Print(data.title),
+                SetAttribute(Attribute::Reset),
+                ResetColor
+            )?;
         }
         row += 1;
 
         // Description
         execute!(w, MoveTo(0, row))?;
-        write!(w, " {description}")?;
+        write!(w, " {}", data.description)?;
         row += 1;
 
         // Search box
@@ -483,9 +516,9 @@ impl App {
             MoveTo(0, row),
             SetForegroundColor(CColor::Cyan),
             Print("┌─ "),
-            Print(title),
+            Print(data.title),
             Print(" "),
-            Print("─".repeat((width as usize).saturating_sub(title.len() + 5))),
+            Print("─".repeat((width as usize).saturating_sub(data.title.len() + 5))),
             Print("┐"),
             ResetColor
         )?;
@@ -498,10 +531,10 @@ impl App {
             Print("│"),
             ResetColor,
             Print(" "),
-            Print(&filter_text),
+            Print(&data.filter_text),
         )?;
         // Save cursor position for filter input
-        let filter_cursor_col = 2 + filter_text.len() as u16;
+        let filter_cursor_col = 2 + data.filter_text.len() as u16;
         let filter_cursor_row = row;
         execute!(
             w,
@@ -523,77 +556,8 @@ impl App {
         )?;
         row += 1;
 
-        // List items - use the same height calculation as calculate_ui_height
-        const MAX_VISIBLE_ITEMS: u16 = 15;
-        let list_height = (items.len() as u16).clamp(3, MAX_VISIBLE_ITEMS);
-
-        // Calculate scroll offset to keep selection visible
-        let scroll_offset = if selected_idx >= list_height as usize {
-            selected_idx.saturating_sub(list_height as usize - 1)
-        } else {
-            0
-        };
-
-        // Calculate max name length for column alignment (only for visible items)
-        let visible_items: Vec<_> = items
-            .iter()
-            .skip(scroll_offset)
-            .take(list_height as usize)
-            .collect();
-        let max_name_len = visible_items
-            .iter()
-            .map(|(name, _, _)| name.chars().count())
-            .max()
-            .unwrap_or(0);
-
-        for (i, (item, is_valid, auth_hint)) in visible_items.into_iter().enumerate() {
-            execute!(w, MoveTo(0, row))?;
-            let actual_idx = scroll_offset + i;
-            let is_selected = actual_idx == selected_idx;
-
-            if is_selected {
-                execute!(
-                    w,
-                    SetForegroundColor(CColor::Yellow),
-                    SetAttribute(Attribute::Bold)
-                )?;
-                write!(w, " >")?;
-            } else {
-                write!(w, "  ")?;
-            }
-
-            if *is_valid {
-                execute!(w, SetForegroundColor(CColor::Green), Print(" ● "))?;
-            } else {
-                execute!(w, SetAttribute(Attribute::Dim), Print(" ○ "))?;
-            }
-
-            if is_selected {
-                execute!(
-                    w,
-                    SetForegroundColor(CColor::Yellow),
-                    SetAttribute(Attribute::Bold)
-                )?;
-            } else if !is_valid {
-                execute!(w, SetAttribute(Attribute::Dim))?;
-            }
-
-            // Render name with padding for column alignment
-            let name_len = item.chars().count();
-            let padding = max_name_len.saturating_sub(name_len);
-            write!(w, "{item}")?;
-            execute!(w, SetAttribute(Attribute::Reset), ResetColor)?;
-
-            // Show auth hint in second column (dimmed)
-            if !auth_hint.is_empty() {
-                write!(w, "{:padding$}  ", "", padding = padding)?;
-                execute!(w, SetAttribute(Attribute::Dim))?;
-                write!(w, "{auth_hint}")?;
-                execute!(w, SetAttribute(Attribute::Reset))?;
-            }
-
-            row += 1;
-        }
+        // Render list items
+        row = render_selector_list(w, &data, row)?;
 
         // Hint line
         execute!(w, MoveTo(0, row), SetAttribute(Attribute::Dim))?;
@@ -612,62 +576,30 @@ impl App {
         w: &mut W,
         _width: u16,
     ) -> std::io::Result<()> {
+        if self.is_running {
+            self.render_progress_running(w)
+        } else {
+            self.render_progress_completed(w)
+        }
+    }
+
+    /// Render progress line when a task is running (spinner + tool name + elapsed).
+    fn render_progress_running<W: std::io::Write>(&self, w: &mut W) -> std::io::Result<()> {
         use crossterm::style::{
             Attribute, Color as CColor, Print, ResetColor, SetAttribute, SetForegroundColor,
         };
 
-        if !self.is_running {
-            // Show last task summary if available
-            if let Some(ref summary) = self.last_task_summary {
-                let elapsed = format_elapsed(summary.elapsed.as_secs());
-                let mut stats = vec![elapsed];
-                if summary.input_tokens > 0 {
-                    stats.push(format!("↑ {}", format_tokens(summary.input_tokens)));
-                }
-                if summary.output_tokens > 0 {
-                    stats.push(format!("↓ {}", format_tokens(summary.output_tokens)));
-                }
+        const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+        let frame = (self.frame_count % SPINNER.len() as u64) as usize;
 
-                let (symbol, label, color) = if self.last_error.is_some() {
-                    ("✗ ", "Error", CColor::Red)
-                } else if summary.was_cancelled {
-                    ("⚠ ", "Canceled", CColor::Yellow)
-                } else {
-                    ("✓ ", "Completed", CColor::Green)
-                };
-
-                write!(w, " ")?;
-                execute!(
-                    w,
-                    SetForegroundColor(color),
-                    Print(symbol),
-                    Print(label),
-                    ResetColor
-                )?;
-                execute!(
-                    w,
-                    SetAttribute(Attribute::Dim),
-                    Print(format!(" ({})", stats.join(" · "))),
-                    SetAttribute(Attribute::Reset)
-                )?;
-            }
-            return Ok(());
-        }
-
-        // Running state - show spinner and stats
-        let spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-        let frame = (self.frame_count % spinner.len() as u64) as usize;
-
-        // Cyan spinner
         execute!(
             w,
             Print(" "),
             SetForegroundColor(CColor::Cyan),
-            Print(spinner[frame]),
+            Print(SPINNER[frame]),
             ResetColor
         )?;
 
-        // "Ionizing..." or tool name in cyan
         execute!(w, SetForegroundColor(CColor::Cyan))?;
         if let Some(ref tool) = self.current_tool {
             execute!(w, Print(format!(" {tool}")))?;
@@ -676,7 +608,6 @@ impl App {
         }
         execute!(w, ResetColor)?;
 
-        // Elapsed time in dim
         if let Some(start) = self.task_start_time {
             let elapsed = start.elapsed().as_secs();
             execute!(
@@ -686,6 +617,51 @@ impl App {
                 SetAttribute(Attribute::Reset)
             )?;
         }
+
+        Ok(())
+    }
+
+    /// Render progress line after task completion (status + stats summary).
+    fn render_progress_completed<W: std::io::Write>(&self, w: &mut W) -> std::io::Result<()> {
+        use crossterm::style::{
+            Attribute, Color as CColor, Print, ResetColor, SetAttribute, SetForegroundColor,
+        };
+
+        let Some(ref summary) = self.last_task_summary else {
+            return Ok(());
+        };
+
+        let elapsed = format_elapsed(summary.elapsed.as_secs());
+        let mut stats = vec![elapsed];
+        if summary.input_tokens > 0 {
+            stats.push(format!("↑ {}", format_tokens(summary.input_tokens)));
+        }
+        if summary.output_tokens > 0 {
+            stats.push(format!("↓ {}", format_tokens(summary.output_tokens)));
+        }
+
+        let (symbol, label, color) = if self.last_error.is_some() {
+            ("✗ ", "Error", CColor::Red)
+        } else if summary.was_cancelled {
+            ("⚠ ", "Canceled", CColor::Yellow)
+        } else {
+            ("✓ ", "Completed", CColor::Green)
+        };
+
+        write!(w, " ")?;
+        execute!(
+            w,
+            SetForegroundColor(color),
+            Print(symbol),
+            Print(label),
+            ResetColor
+        )?;
+        execute!(
+            w,
+            SetAttribute(Attribute::Dim),
+            Print(format!(" ({})", stats.join(" · "))),
+            SetAttribute(Attribute::Reset)
+        )?;
 
         Ok(())
     }
@@ -828,4 +804,93 @@ fn draw_horizontal_border<W: std::io::Write>(
         Print("─".repeat(width as usize)),
         ResetColor
     )
+}
+
+/// Render the selector item list with scrolling. Returns the next row after the list.
+fn render_selector_list<W: std::io::Write>(
+    w: &mut W,
+    data: &SelectorData,
+    start_row: u16,
+) -> std::io::Result<u16> {
+    use crossterm::{
+        cursor::MoveTo,
+        style::{Attribute, Color as CColor, Print, ResetColor, SetAttribute, SetForegroundColor},
+    };
+
+    let list_height = (data.items.len() as u16).clamp(3, MAX_VISIBLE_ITEMS);
+
+    // Calculate scroll offset to keep selection visible
+    let scroll_offset = if data.selected_idx >= list_height as usize {
+        data.selected_idx.saturating_sub(list_height as usize - 1)
+    } else {
+        0
+    };
+
+    // Calculate max label length for column alignment (visible items only)
+    let visible_items: Vec<_> = data
+        .items
+        .iter()
+        .skip(scroll_offset)
+        .take(list_height as usize)
+        .collect();
+    let max_label_len = visible_items
+        .iter()
+        .map(|item| item.label.chars().count())
+        .max()
+        .unwrap_or(0);
+
+    let mut row = start_row;
+    for (i, item) in visible_items.into_iter().enumerate() {
+        execute!(w, MoveTo(0, row))?;
+        let actual_idx = scroll_offset + i;
+        let is_selected = actual_idx == data.selected_idx;
+
+        // Selection indicator
+        if is_selected {
+            execute!(
+                w,
+                SetForegroundColor(CColor::Yellow),
+                SetAttribute(Attribute::Bold)
+            )?;
+            write!(w, " >")?;
+        } else {
+            write!(w, "  ")?;
+        }
+
+        // Validity indicator
+        if item.is_valid {
+            execute!(w, SetForegroundColor(CColor::Green), Print(" ● "))?;
+        } else {
+            execute!(w, SetAttribute(Attribute::Dim), Print(" ○ "))?;
+        }
+
+        // Label styling
+        if is_selected {
+            execute!(
+                w,
+                SetForegroundColor(CColor::Yellow),
+                SetAttribute(Attribute::Bold)
+            )?;
+        } else if !item.is_valid {
+            execute!(w, SetAttribute(Attribute::Dim))?;
+        }
+
+        // Label with padding for column alignment
+        let label_len = item.label.chars().count();
+        let padding = max_label_len.saturating_sub(label_len);
+        write!(w, "{}", item.label)?;
+        execute!(w, SetAttribute(Attribute::Reset), ResetColor)?;
+
+        // Auth hint in second column (dimmed)
+        if !item.hint.is_empty() {
+            write!(w, "{:padding$}  ", "", padding = padding)?;
+            execute!(w, SetAttribute(Attribute::Dim))?;
+            write!(w, "{}", item.hint)?;
+            execute!(w, SetAttribute(Attribute::Reset))?;
+        }
+
+        row += 1;
+    }
+
+    Ok(row)
 }

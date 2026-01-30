@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "rgze",
+  "title": "[REFACTOR] render.rs - selector data model",
+  "description": "Task 3 from ai/sprints/render-refactor.md - Create SelectorData/SelectorItem structs, separate data from rendering",
+  "status": "done",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-30T22:39:00.485Z",
+  "updated_at": "2026-01-30T22:55:06.736Z",
+  "completed_at": "2026-01-30T22:55:06.736Z",
+  "external": {}
+}
