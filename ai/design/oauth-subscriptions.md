@@ -1,166 +1,131 @@
 # OAuth Subscription Support
 
-Use ChatGPT Plus/Pro and Google AI subscriptions instead of API credits.
+Use ChatGPT and Gemini subscriptions instead of API credits.
+
+## Status: Implemented
+
+| Component       | Status |
+| --------------- | ------ |
+| PKCE flow       | Done   |
+| Callback server | Done   |
+| Token storage   | Done   |
+| ChatGPT OAuth   | Done   |
+| Gemini OAuth    | Done   |
+| CLI commands    | Done   |
+| TUI integration | Done   |
+
+## Usage
+
+```bash
+# Login
+ion login chatgpt   # Opens browser for ChatGPT OAuth
+ion login gemini    # Opens browser for Google OAuth
+
+# Logout
+ion logout chatgpt
+ion logout gemini
+```
+
+After login, select the provider in TUI (Ctrl+P):
+
+- **ChatGPT** - "Sign in with ChatGPT"
+- **Gemini** - "Sign in with Google"
 
 ## Value Proposition
 
-| Approach         | Cost            | Rate Limits          |
-| ---------------- | --------------- | -------------------- |
-| API Keys         | Pay per token   | High                 |
-| ChatGPT Plus     | $20/month flat  | ~80 msgs/3hr         |
-| ChatGPT Pro      | $200/month flat | Higher               |
-| Google AI (free) | $0              | 60 req/min, 1000/day |
+| Provider      | Cost            | Rate Limits          |
+| ------------- | --------------- | -------------------- |
+| API Keys      | Pay per token   | High                 |
+| ChatGPT Plus  | $20/month flat  | ~80 msgs/3hr         |
+| ChatGPT Pro   | $200/month flat | Higher               |
+| Gemini (free) | $0              | 60 req/min, 1000/day |
 
-## Reference Implementations
-
-### OpenAI Codex (Rust)
-
-**OAuth 2.0 PKCE Flow:**
-
-1. Start local server on `localhost:1455`
-2. Generate `code_verifier` and `code_challenge`
-3. Open browser to auth endpoint
-4. User authenticates, redirected back with `authorization_code`
-5. Exchange code for tokens
-6. Store in `~/.codex/auth.json`
-
-**Endpoints:**
-
-- Client ID: `app_EMoamEEZ73f0CkXaXp7hrann`
-- Auth: `https://auth.openai.com/oauth/authorize`
-- Token: `https://auth.openai.com/oauth/token`
-
-**Device Code (headless):**
-
-- For SSH, containers, CI environments
-- User visits URL, enters code manually
-
-**Source:** `codex-rs/login/src/server.rs`
-
-### Gemini CLI (TypeScript)
-
-**OAuth Flow:**
-
-- `packages/core/src/code_assist/oauth2.ts`
-- Uses Google OAuth endpoints
-- Tokens stored in system keychain via `MCPOAuthTokenStorage`
-
-**Auth Types:**
-
-- `oauth` - Google account
-- `oauth-personal` - Personal Google account
-- `api-key` - Gemini API key
-- `vertex-ai` - GCP Vertex AI
-
-**Source:** `packages/core/src/core/apiKeyCredentialStorage.ts`
-
-## Implementation Plan
-
-### Phase 1: OAuth Infrastructure
-
-**New module:** `src/auth/`
+## Architecture
 
 ```
 src/auth/
-├── mod.rs           # Auth traits and types
-├── oauth.rs         # PKCE flow, browser launch
-├── server.rs        # Local callback server
-├── storage.rs       # Credential storage
-└── device_code.rs   # Headless auth (optional)
+├── mod.rs        # Auth traits, login/logout functions
+├── pkce.rs       # PKCE code generation (RFC 7636)
+├── server.rs     # Local callback server (port 1455)
+├── storage.rs    # Token storage (~/.config/ion/auth.json)
+├── openai.rs     # ChatGPT OAuth endpoints
+└── google.rs     # Gemini OAuth endpoints
 ```
 
-**Core types:**
+## Provider Naming
 
-```rust
-pub enum AuthMethod {
-    ApiKey(String),
-    OAuth(OAuthCredentials),
-}
+| ID        | CLI                 | Display   | Description          |
+| --------- | ------------------- | --------- | -------------------- |
+| `openai`  | -                   | OpenAI    | API key access       |
+| `chatgpt` | `ion login chatgpt` | ChatGPT   | Sign in with ChatGPT |
+| `google`  | -                   | Google AI | API key access       |
+| `gemini`  | `ion login gemini`  | Gemini    | Sign in with Google  |
 
-pub struct OAuthCredentials {
-    pub access_token: String,
-    pub refresh_token: Option<String>,
-    pub expires_at: Option<DateTime<Utc>>,
-}
+## Token Storage
 
-pub trait CredentialStorage {
-    fn load(&self, provider: &str) -> Option<AuthMethod>;
-    fn save(&self, provider: &str, auth: &AuthMethod) -> Result<()>;
-    fn clear(&self, provider: &str) -> Result<()>;
-}
-```
-
-### Phase 2: ChatGPT OAuth
-
-**Add to Provider enum:**
-
-```rust
-pub enum Provider {
-    // Existing API providers
-    Anthropic,
-    OpenAI,
-    Google,
-    // ...
-
-    // OAuth subscription providers
-    ChatGptPlus,   // Uses OpenAI OAuth
-    GoogleAi,      // Uses Google OAuth
+```json
+// ~/.config/ion/auth.json
+{
+  "openai": {
+    "type": "oauth",
+    "access_token": "...",
+    "refresh_token": "...",
+    "expires_at": 1234567890000
+  },
+  "google": {
+    "type": "oauth",
+    "access_token": "...",
+    "refresh_token": "...",
+    "expires_at": 1234567890000
+  }
 }
 ```
 
-**Login command:**
+File permissions: 0600 (user read/write only)
 
-```bash
-ion login chatgpt    # Opens browser for ChatGPT OAuth
-ion login google     # Opens browser for Google OAuth
-ion logout chatgpt   # Clears stored credentials
-```
+## OAuth Flow
 
-### Phase 3: Google OAuth
+1. Generate PKCE codes (verifier + challenge)
+2. Generate state for CSRF protection
+3. Start callback server on localhost:1455
+4. Open browser to auth endpoint
+5. User authenticates
+6. Receive callback with authorization code
+7. Exchange code for tokens (with PKCE verifier)
+8. Store tokens in auth.json
 
-Same pattern as ChatGPT but with Google endpoints.
+## Credentials
 
-### Phase 4: Provider Selection
+Both use official public client IDs from their respective CLIs:
 
-Auto-detect available auth:
+- **ChatGPT**: Codex CLI client ID (`app_EMoamEEZ73f0CkXaXp7hrann`)
+- **Gemini**: Gemini CLI client ID (Google-owned)
 
-1. Check for OAuth tokens first (free!)
-2. Fall back to API keys
-3. Prompt for login if neither available
+These are installed-app credentials, safe to embed per OAuth spec.
 
-## File Storage
+## Future: Extensibility
 
-```
-~/.config/ion/
-├── config.toml      # User preferences
-├── auth.json        # OAuth tokens (plaintext, like Codex)
-└── sessions.db      # Session history
-```
-
-Or use OS keychain for better security (like Gemini CLI).
-
-## Security Considerations
-
-1. **Token storage**: Start with file-based (like Codex), upgrade to keychain later
-2. **PKCE required**: Prevents authorization code interception
-3. **Token refresh**: Handle expired tokens gracefully
-4. **Secure callback**: Validate state parameter
-
-## Dependencies
+3rd party OAuth providers can be added via config or plugins:
 
 ```toml
-[dependencies]
-# OAuth
-oauth2 = "5"           # OAuth 2.0 client
-tiny_http = "0.12"     # Local callback server
-open = "5"             # Open browser
-# Optional: keyring for secure storage
-keyring = "3"
+# Config approach (technical users)
+[[oauth]]
+id = "anthropic"
+name = "Claude"
+client_id = "app_xxx"
+auth_url = "https://auth.anthropic.com/oauth/authorize"
+token_url = "https://auth.anthropic.com/oauth/token"
+scopes = ["openid", "offline_access"]
+api_type = "anthropic"
 ```
+
+Plugin approach: drop-in file with pre-configured provider (for non-technical users).
+
+See tasks: tk-o0g7 (API providers), tk-a2s8 (OAuth providers)
 
 ## References
 
-- [OpenAI Codex Auth Docs](https://developers.openai.com/codex/auth/)
+- [OpenAI Codex Auth](https://developers.openai.com/codex/auth/)
 - [Gemini CLI Auth](https://deepwiki.com/google-gemini/gemini-cli/2.2-authentication)
-- [OpenCode Codex Auth Plugin](https://github.com/numman-ali/opencode-openai-codex-auth)
 - [OAuth 2.0 PKCE RFC](https://datatracker.ietf.org/doc/html/rfc7636)
+- Research: `ai/research/oauth-implementations-2026.md`
