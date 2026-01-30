@@ -112,13 +112,14 @@ impl RenderState {
         self.chat_row = None;
     }
 
-    /// Partial reset for /clear command.
+    /// Reset for /clear command (new conversation).
     ///
-    /// Resets state for starting a new conversation while keeping
-    /// some UI state intact.
+    /// Resets state for starting a fresh conversation, including
+    /// re-showing the startup header.
     pub fn reset_for_new_conversation(&mut self) {
         self.rendered_entries = 0;
         self.buffered_chat_lines.clear();
+        self.header_inserted = false;
         self.chat_row = None;
     }
 

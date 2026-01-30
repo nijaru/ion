@@ -342,7 +342,7 @@ async fn run_tui(
                 if space_needed <= term_height {
                     // Content fits: print at current row, advance chat_row
                     for (i, line) in chat_lines.iter().enumerate() {
-                        execute!(stdout, MoveTo(0, chat_row + i as u16))?;
+                        execute!(stdout, MoveTo(0, chat_row.saturating_add(i as u16)))?;
                         line.println()?;
                     }
                     app.render_state.chat_row = Some(chat_row.saturating_add(line_count));
@@ -358,7 +358,7 @@ async fn run_tui(
                     // Print at top of the scrolled area
                     let print_row = ui_start.saturating_sub(line_count);
                     for (i, line) in chat_lines.iter().enumerate() {
-                        execute!(stdout, MoveTo(0, print_row + i as u16), Clear(ClearType::CurrentLine))?;
+                        execute!(stdout, MoveTo(0, print_row.saturating_add(i as u16)), Clear(ClearType::CurrentLine))?;
                         line.println()?;
                     }
                     app.render_state.chat_row = None; // Now in scroll mode
