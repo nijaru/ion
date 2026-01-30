@@ -3,7 +3,7 @@
   "ref": "3a5h",
   "title": "[AUTH] ChatGPT Plus/Pro OAuth integration",
   "description": "Phase 2: OpenAI OAuth endpoints, ChatGptPlus provider variant, ion login chatgpt command",
-  "status": "open",
+  "status": "done",
   "priority": 2,
   "labels": [],
   "assignees": [],
@@ -21,10 +21,14 @@
     {
       "ts": "2026-01-30T04:17:07.455Z",
       "msg": "Renamed from ChatGptPlus to ChatGpt. CLI: ion login chatgpt. Uses Codex CLI client ID."
+    },
+    {
+      "ts": "2026-01-30T18:28:31.165Z",
+      "msg": "ChatGPT OAuth WORKING. Fixed callback URI to /auth/callback and localhost. Client ID app_EMoamEEZ73f0CkXaXp7hrann works."
     }
   ],
   "created_at": "2026-01-30T03:12:44.575Z",
-  "updated_at": "2026-01-30T04:17:07.455Z",
-  "completed_at": null,
+  "updated_at": "2026-01-30T18:28:37.790Z",
+  "completed_at": "2026-01-30T18:28:37.790Z",
   "external": {}
 }

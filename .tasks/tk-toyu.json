@@ -25,10 +25,18 @@
     {
       "ts": "2026-01-30T04:37:18.696Z",
       "msg": "OAuth issue: Google API returns 'API key not valid' because llm-connector's GoogleProvider uses x-goog-api-key header, but OAuth tokens need Authorization: Bearer header. Need to either: (1) create custom HTTP client for OAuth, (2) contribute Bearer auth to llm-connector, or (3) use ConfigurableProtocol with custom auth."
+    },
+    {
+      "ts": "2026-01-30T18:28:32.064Z",
+      "msg": "Gemini OAuth login works but API calls fail. Consumer API (generativelanguage) only supports API keys. Code Assist API (cloudcode-pa) returns 403 Permission Denied with Gemini CLI client ID. May need Antigravity client ID or different scopes. Files: src/provider/gemini_oauth.rs, src/auth/google.rs"
+    },
+    {
+      "ts": "2026-01-30T18:30:11.092Z",
+      "msg": "Gemini OAuth login succeeds but API calls to Code Assist API return 403 Permission Denied. Tried: consumer API (no OAuth support), Code Assist v1internal format, model name mapping. May need different client ID or scopes"
     }
   ],
   "created_at": "2026-01-30T03:12:45.222Z",
-  "updated_at": "2026-01-30T04:37:18.696Z",
+  "updated_at": "2026-01-30T18:30:11.092Z",
   "completed_at": null,
   "external": {}
 }

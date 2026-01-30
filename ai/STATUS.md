@@ -26,12 +26,10 @@
 
 ## Current Focus
 
-**OAuth testing** - infrastructure complete, needs real-world verification:
+**OAuth testing** - ChatGPT working, Gemini needs investigation:
 
-```bash
-ion login chatgpt   # ChatGPT Plus/Pro
-ion login gemini    # Google AI (free tier available)
-```
+- ChatGPT OAuth: Working end-to-end
+- Gemini OAuth: Login works, API calls return 403 (Code Assist API permission issue)
 
 ## Decision Needed
 
@@ -45,7 +43,6 @@ ion login gemini    # Google AI (free tier available)
 | ID      | Issue                         | Root Cause                   |
 | ------- | ----------------------------- | ---------------------------- |
 | tk-7aem | Progress line tab switch dupe | Missing focus event handling |
-| tk-u25b | Errors not visible            | Chat rendering timing        |
 | tk-2bk7 | Resize clears scrollback      | Needs preservation strategy  |
 
 ## Module Health

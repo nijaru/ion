@@ -260,17 +260,26 @@ impl App {
         let width_decreased = self.render_state.last_render_width.is_some_and(|old| width < old);
         self.render_state.last_render_width = Some(width);
 
-        // Clear from min of old/new ui_start to handle UI height changes
-        // Also include startup_ui_anchor when last_ui_start is None (first render after startup)
-        let clear_from = self.render_state.last_ui_start.map_or_else(
-            || {
-                self.render_state
-                    .startup_ui_anchor
-                    .unwrap_or(ui_start)
-                    .min(ui_start)
-            },
-            |old| old.min(ui_start),
-        );
+        // In row-tracking mode, chat content lives immediately above the UI,
+        // so we must NOT clear above ui_start or we'll wipe freshly-printed chat.
+        // In scroll mode (chat_row = None), we can clear from old_ui_start to handle
+        // shrinking UI (e.g., multiline input becoming single line).
+        let in_row_tracking = self.render_state.chat_row.is_some();
+        let clear_from = if in_row_tracking {
+            // Row-tracking: only clear UI area itself, preserve chat above
+            ui_start
+        } else {
+            // Scroll mode: clear from min of old/new ui_start for UI shrinking
+            self.render_state.last_ui_start.map_or_else(
+                || {
+                    self.render_state
+                        .startup_ui_anchor
+                        .unwrap_or(ui_start)
+                        .min(ui_start)
+                },
+                |old| old.min(ui_start),
+            )
+        };
         self.render_state.last_ui_start = Some(ui_start);
 
         let preserve_header =
@@ -279,7 +288,7 @@ impl App {
             // Full clear needed: old wider borders got wrapped into multiple lines
             execute!(w, Clear(ClearType::All), MoveTo(0, ui_start))?;
         } else {
-            // Clear from earliest UI position to handle shrinking input
+            // Clear from appropriate position
             execute!(w, MoveTo(0, clear_from), Clear(ClearType::FromCursorDown))?;
         }
 

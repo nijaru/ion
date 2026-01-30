@@ -15,10 +15,14 @@
     {
       "ts": "2026-01-30T04:17:06.963Z",
       "msg": "Implementation complete. All components done: PKCE flow, callback server, token storage, ChatGpt OAuth (ion login chatgpt), Gemini OAuth (ion login gemini), CLI commands, TUI integration. Awaiting real-world testing with subscriptions. Client IDs are from Codex CLI and Gemini CLI (public installed-app credentials)."
+    },
+    {
+      "ts": "2026-01-30T18:30:09.727Z",
+      "msg": "ChatGPT OAuth working end-to-end. Gemini OAuth login works but API calls return 403 - Code Assist API may need different approach"
     }
   ],
   "created_at": "2026-01-30T03:12:43.012Z",
-  "updated_at": "2026-01-30T04:17:06.963Z",
+  "updated_at": "2026-01-30T18:30:09.727Z",
   "completed_at": null,
   "external": {}
 }
