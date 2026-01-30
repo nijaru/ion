@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "r75w",
+  "title": "Provider layer replacement - Phase 1: HTTP Foundation",
+  "description": "Create shared HTTP client and SSE parser utilities in src/provider/http/",
+  "status": "done",
+  "priority": 2,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-30T06:08:52.154Z",
+  "updated_at": "2026-01-30T06:10:19.044Z",
+  "completed_at": "2026-01-30T06:10:19.044Z",
+  "external": {}
+}

@@ -3,7 +3,7 @@
   "ref": "1lso",
   "title": "[BUG] Kimi k2.5 errors on OpenRouter - root cause unclear",
   "description": null,
-  "status": "open",
+  "status": "done",
   "priority": 2,
   "labels": [],
   "assignees": [],
@@ -29,10 +29,14 @@
     {
       "ts": "2026-01-29T23:28:02.077Z",
       "msg": "Error analysis: 'missing field id at line 53 column 101' - llm-connector's OpenAI parser fails on OpenRouter's Kimi response format. Workaround: use native Kimi provider. Fix requires llm-connector changes or fork."
+    },
+    {
+      "ts": "2026-01-30T06:28:24.988Z",
+      "msg": "Completed: OpenAI-compat client now parses reasoning_content field"
     }
   ],
   "created_at": "2026-01-27T19:12:44.381Z",
-  "updated_at": "2026-01-29T23:28:02.077Z",
-  "completed_at": null,
+  "updated_at": "2026-01-30T06:28:24.988Z",
+  "completed_at": "2026-01-30T06:28:24.963Z",
   "external": {}
 }

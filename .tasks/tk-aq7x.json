@@ -3,7 +3,7 @@
   "ref": "aq7x",
   "title": "[ARCH] Evaluate llm-connector dependency - consider removal",
   "description": null,
-  "status": "open",
+  "status": "done",
   "priority": 2,
   "labels": [],
   "assignees": [],
@@ -19,10 +19,14 @@
     {
       "ts": "2026-01-30T00:01:32.225Z",
       "msg": "DECISION: Replace llm-connector with native implementation\n\nScope:\n1. src/provider/http.rs - Shared HTTP client with SSE streaming\n2. src/provider/anthropic.rs - Anthropic Messages API (cache_control support)\n3. src/provider/openai_compat.rs - OpenAI-compatible (OpenRouter, Groq, Kimi, OpenAI)\n4. src/provider/google.rs - Google AI Studio (if needed, may keep llm-connector for this)\n\nFeatures to add:\n- Anthropic cache_control for prompt caching (tk-268g)\n- OpenRouter provider field for routing prefs\n- Proper response parsing for all providers\n- reasoning_content extraction for thinking models\n\nEstimate: 400-600 LOC new, removes ~200 LOC llm-connector usage\nDependencies: reqwest (already have), serde_json (already have)"
+    },
+    {
+      "ts": "2026-01-30T06:28:23.098Z",
+      "msg": "Completed: replaced llm-connector with native HTTP implementations"
     }
   ],
   "created_at": "2026-01-29T20:32:56.846Z",
-  "updated_at": "2026-01-30T00:01:32.225Z",
-  "completed_at": null,
+  "updated_at": "2026-01-30T06:28:23.098Z",
+  "completed_at": "2026-01-30T06:28:23.073Z",
   "external": {}
 }
