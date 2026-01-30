@@ -54,10 +54,10 @@ impl App {
 
     /// Return startup header lines once and mark them as inserted.
     pub fn take_startup_header_lines(&mut self) -> Vec<StyledLine> {
-        if self.header_inserted {
+        if self.render_state.header_inserted {
             return Vec::new();
         }
-        self.header_inserted = true;
+        self.render_state.header_inserted = true;
         Self::startup_header_lines()
     }
 

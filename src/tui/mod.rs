@@ -11,6 +11,7 @@ pub mod message_list;
 pub mod model_picker;
 pub mod provider_picker;
 mod render;
+mod render_state;
 mod session;
 mod table;
 pub mod session_picker;
@@ -36,8 +37,8 @@ use crate::tui::composer::{ComposerBuffer, ComposerState};
 use crate::tui::message_list::MessageList;
 use crate::tui::model_picker::ModelPicker;
 use crate::tui::provider_picker::ProviderPicker;
+use crate::tui::render_state::RenderState;
 use crate::tui::session_picker::SessionPicker;
-use crate::tui::terminal::StyledLine;
 use crate::tui::types::ApprovalRequest as ApprovalRequestInternal;
 use std::sync::Arc;
 use std::time::Instant;
@@ -64,10 +65,8 @@ pub struct App {
     /// API provider picker state
     pub provider_picker: ProviderPicker,
     pub message_list: MessageList,
-    /// Number of chat entries already inserted into scrollback
-    pub rendered_entries: usize,
-    /// Buffered chat lines while selector is open
-    pub buffered_chat_lines: Vec<StyledLine>,
+    /// Render state for chat positioning and incremental updates
+    pub render_state: RenderState,
     pub agent: Arc<Agent>,
     pub session: Session,
     pub orchestrator: Arc<ToolOrchestrator>,
@@ -124,40 +123,31 @@ pub struct App {
     pub last_task_summary: Option<TaskSummary>,
     /// Request to open input in external editor (Ctrl+G)
     pub editor_requested: bool,
-    /// Whether the startup header has been inserted into scrollback
-    pub(crate) header_inserted: bool,
     /// When thinking started (for progress display)
     pub thinking_start: Option<Instant>,
     /// Duration of last completed thinking (for "thought for Xs" display)
     pub last_thinking_duration: Option<std::time::Duration>,
-    /// Last render state for detecting changes that need extra clearing
-    pub(crate) last_render_width: Option<u16>,
-    pub(crate) last_ui_start: Option<u16>,
-    /// UI anchor row for startup before first message (keeps UI near header)
-    pub(crate) startup_ui_anchor: Option<u16>,
-    /// Flag to request full screen clear + repaint (e.g., after selector closes)
-    pub needs_full_repaint: bool,
 }
 
 impl App {
     pub fn header_inserted(&self) -> bool {
-        self.header_inserted
+        self.render_state.header_inserted
     }
 
     pub fn set_header_inserted(&mut self, value: bool) {
-        self.header_inserted = value;
+        self.render_state.header_inserted = value;
     }
 
     pub fn startup_ui_anchor(&self) -> Option<u16> {
-        self.startup_ui_anchor
+        self.render_state.startup_ui_anchor
     }
 
     pub fn set_startup_ui_anchor(&mut self, value: Option<u16>) {
-        self.startup_ui_anchor = value;
+        self.render_state.startup_ui_anchor = value;
     }
 
     /// Take and clear the startup UI anchor (for clearing startup area on first message).
     pub fn take_startup_ui_anchor(&mut self) -> Option<u16> {
-        self.startup_ui_anchor.take()
+        self.render_state.startup_ui_anchor.take()
     }
 }

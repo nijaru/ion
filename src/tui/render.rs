@@ -93,13 +93,23 @@ impl App {
         progress_height + input_height + status_height
     }
 
-    /// Resolve the UI start row, using the startup anchor when no messages exist.
+    /// Resolve the UI start row, using row tracking or startup anchor.
     pub fn ui_start_row(&self, height: u16, ui_height: u16) -> u16 {
         let bottom_start = height.saturating_sub(ui_height);
+
+        // Row tracking mode: UI follows chat content
+        if let Some(chat_row) = self.render_state.chat_row {
+            return chat_row.min(bottom_start);
+        }
+
+        // Startup: use anchor when no messages exist
         if self.message_list.entries.is_empty()
-            && let Some(anchor) = self.startup_ui_anchor {
-                return anchor.min(bottom_start);
-            }
+            && let Some(anchor) = self.render_state.startup_ui_anchor
+        {
+            return anchor.min(bottom_start);
+        }
+
+        // Default: bottom of screen
         bottom_start
     }
 
@@ -111,21 +121,21 @@ impl App {
         }
 
         // Insert header once at startup (into scrollback, not viewport)
-        let header_lines = if self.header_inserted {
+        let header_lines = if self.render_state.header_inserted {
             Vec::new()
         } else {
-            self.header_inserted = true;
+            self.render_state.header_inserted = true;
             Self::startup_header_lines()
         };
 
         let entry_count = self.message_list.entries.len();
-        if self.rendered_entries > entry_count {
-            self.rendered_entries = 0;
-            self.buffered_chat_lines.clear();
+        if self.render_state.rendered_entries > entry_count {
+            self.render_state.rendered_entries = 0;
+            self.render_state.buffered_chat_lines.clear();
         }
 
         let mut new_lines = Vec::new();
-        let mut index = self.rendered_entries;
+        let mut index = self.render_state.rendered_entries;
         while index < entry_count {
             let entry = &self.message_list.entries[index];
             // Only skip the last entry if it's an Agent entry being actively streamed
@@ -142,23 +152,23 @@ impl App {
             new_lines.append(&mut entry_lines);
             index += 1;
         }
-        self.rendered_entries = index;
+        self.render_state.rendered_entries = index;
 
         if self.mode == Mode::Selector {
             if !new_lines.is_empty() {
-                self.buffered_chat_lines.extend(new_lines);
+                self.render_state.buffered_chat_lines.extend(new_lines);
             }
             // Still return header if it needs to be inserted
             return header_lines;
         }
 
-        if new_lines.is_empty() && self.buffered_chat_lines.is_empty() && header_lines.is_empty() {
+        if new_lines.is_empty() && self.render_state.buffered_chat_lines.is_empty() && header_lines.is_empty() {
             return Vec::new();
         }
 
         let mut out = header_lines;
-        if !self.buffered_chat_lines.is_empty() {
-            out.append(&mut self.buffered_chat_lines);
+        if !self.render_state.buffered_chat_lines.is_empty() {
+            out.append(&mut self.render_state.buffered_chat_lines);
         }
         out.extend(new_lines);
         out
@@ -212,9 +222,7 @@ impl App {
             write!(w, "\r\n")?;
         }
 
-        self.rendered_entries = end;
-        self.header_inserted = true;
-        self.buffered_chat_lines.clear();
+        self.render_state.mark_reflow_complete(end);
 
         Ok(())
     }
@@ -249,18 +257,18 @@ impl App {
         let progress_height = PROGRESS_HEIGHT;
 
         // Detect width decrease - terminal rewraps old content, pushing it up
-        let width_decreased = self.last_render_width.is_some_and(|old| width < old);
-        self.last_render_width = Some(width);
+        let width_decreased = self.render_state.last_render_width.is_some_and(|old| width < old);
+        self.render_state.last_render_width = Some(width);
 
         // Clear from min of old/new ui_start to handle UI height changes
         // Also include startup_ui_anchor when last_ui_start is None (first render after startup)
         let clear_from = self
-            .last_ui_start
-            .map_or_else(|| self.startup_ui_anchor.unwrap_or(ui_start).min(ui_start), |old| old.min(ui_start));
-        self.last_ui_start = Some(ui_start);
+            .render_state.last_ui_start
+            .map_or_else(|| self.render_state.startup_ui_anchor.unwrap_or(ui_start).min(ui_start), |old| old.min(ui_start));
+        self.render_state.last_ui_start = Some(ui_start);
 
         let preserve_header =
-            self.message_list.entries.is_empty() && self.startup_ui_anchor.is_some();
+            self.message_list.entries.is_empty() && self.render_state.startup_ui_anchor.is_some();
         if width_decreased && !preserve_header {
             // Full clear needed: old wider borders got wrapped into multiple lines
             execute!(w, Clear(ClearType::All), MoveTo(0, ui_start))?;

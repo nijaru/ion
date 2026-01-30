@@ -15,6 +15,7 @@ use crate::tui::message_list::{
 };
 use crate::tui::model_picker::{self, ModelPicker};
 use crate::tui::provider_picker::ProviderPicker;
+use crate::tui::render_state::RenderState;
 use crate::tui::session_picker::SessionPicker;
 use crate::tui::types::{Mode, SelectorPage, TaskSummary, ThinkingLevel, TuiApprovalHandler};
 use anyhow::{Context, Result};
@@ -187,8 +188,7 @@ impl App {
             api_provider,
             provider_picker: ProviderPicker::new(),
             message_list: MessageList::new(),
-            rendered_entries: 0,
-            buffered_chat_lines: Vec::new(),
+            render_state: RenderState::new(),
             agent,
             session,
             orchestrator,
@@ -222,13 +222,8 @@ impl App {
             permissions,
             last_task_summary: None,
             editor_requested: false,
-            header_inserted: false,
             thinking_start: None,
             last_thinking_duration: None,
-            last_render_width: None,
-            last_ui_start: None,
-            startup_ui_anchor: None,
-            needs_full_repaint: false,
         };
 
         // Set initial API provider name on model picker
@@ -266,9 +261,7 @@ impl App {
     ) -> Result<(), crate::session::SessionStoreError> {
         let loaded = self.store.load(session_id)?;
         self.message_list.load_from_messages(&loaded.messages);
-        self.rendered_entries = 0;
-        self.buffered_chat_lines.clear();
-        self.startup_ui_anchor = None;
+        self.render_state.reset_for_session_load();
         self.session = loaded;
         Ok(())
     }
@@ -541,8 +534,7 @@ impl App {
 
         // Rebuild message list from session messages
         self.message_list.clear();
-        self.rendered_entries = 0;
-        self.startup_ui_anchor = None;
+        self.render_state.reset_for_session_load();
         for msg in &self.session.messages {
             match msg.role {
                 Role::User => {
