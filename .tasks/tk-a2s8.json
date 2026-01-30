@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "a2s8",
+  "title": "Extensible OAuth providers (config + plugin)",
+  "description": "Allow adding 3rd party OAuth providers via:\n1. Config: Edit config.toml with id, name, client_id, auth_url, token_url, scopes, api_type\n2. Plugin: Drop-in file with pre-configured OAuth flow (for non-technical users)\n\nCore provides PKCE, callback server, storage. Config/plugin provides endpoints.\nBuilt-in (ChatGPT, Gemini) stay hardcoded. This is for 3rd party extensibility.",
+  "status": "open",
+  "priority": 4,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-30T04:14:13.898Z",
+  "updated_at": "2026-01-30T04:14:13.898Z",
+  "completed_at": null,
+  "external": {}
+}
