@@ -23,13 +23,10 @@ pub const CLIENT_SECRET: &str = "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";
 pub const AUTH_ENDPOINT: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 pub const TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
 
-/// OAuth scopes for Code Assist access.
-/// Uses Gemini CLI scopes plus cclog/experimentsandconfigs for API access.
+/// OAuth scopes for Code Assist access (Gemini CLI scopes).
 pub const SCOPES: &str = "https://www.googleapis.com/auth/cloud-platform \
                           https://www.googleapis.com/auth/userinfo.email \
-                          https://www.googleapis.com/auth/userinfo.profile \
-                          https://www.googleapis.com/auth/cclog \
-                          https://www.googleapis.com/auth/experimentsandconfigs";
+                          https://www.googleapis.com/auth/userinfo.profile";
 
 /// Google OAuth authentication.
 pub struct GoogleAuth {
