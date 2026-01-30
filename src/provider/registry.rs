@@ -138,8 +138,8 @@ impl ModelRegistry {
             Provider::Ollama => self.fetch_ollama_models().await,
             Provider::Kimi => self.fetch_kimi_models().await,
             // OAuth providers use same models as their underlying API
-            Provider::ChatGptPlus => self.fetch_from_models_dev(Provider::OpenAI).await,
-            Provider::GoogleAi => self.fetch_from_models_dev(Provider::Google).await,
+            Provider::ChatGpt => self.fetch_from_models_dev(Provider::OpenAI).await,
+            Provider::Gemini => self.fetch_from_models_dev(Provider::Google).await,
             // Cloud providers: use models.dev metadata
             _ => self.fetch_from_models_dev(provider).await,
         }
