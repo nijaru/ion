@@ -262,9 +262,15 @@ impl App {
 
         // Clear from min of old/new ui_start to handle UI height changes
         // Also include startup_ui_anchor when last_ui_start is None (first render after startup)
-        let clear_from = self
-            .render_state.last_ui_start
-            .map_or_else(|| self.render_state.startup_ui_anchor.unwrap_or(ui_start).min(ui_start), |old| old.min(ui_start));
+        let clear_from = self.render_state.last_ui_start.map_or_else(
+            || {
+                self.render_state
+                    .startup_ui_anchor
+                    .unwrap_or(ui_start)
+                    .min(ui_start)
+            },
+            |old| old.min(ui_start),
+        );
         self.render_state.last_ui_start = Some(ui_start);
 
         let preserve_header =
