@@ -131,6 +131,8 @@ impl RenderState {
         self.buffered_chat_lines.clear();
         self.startup_ui_anchor = None;
         self.chat_row = None;
+        self.last_ui_start = None;
+        self.last_render_width = None;
     }
 
     /// Mark reflow as complete after reprint_chat_scrollback.

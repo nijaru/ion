@@ -260,17 +260,20 @@ impl App {
         let width_decreased = self.render_state.last_render_width.is_some_and(|old| width < old);
         self.render_state.last_render_width = Some(width);
 
-        // In row-tracking mode, chat content lives immediately above the UI,
-        // so we must NOT clear above ui_start or we'll wipe freshly-printed chat.
-        // In scroll mode (chat_row = None), we can clear from old_ui_start to handle
-        // shrinking UI (e.g., multiline input becoming single line).
+        // Determine clear_from based on positioning mode:
+        // - Row-tracking: only clear UI area (chat is immediately above, must preserve)
+        // - Scroll mode: clear from min(old, new) ui_start to handle UI shrinking
+        //
+        // Note: We read last_ui_start BEFORE updating it - the old value is needed
+        // for the scroll mode comparison, then we store the new value for next frame.
         let in_row_tracking = self.render_state.chat_row.is_some();
+        let old_ui_start = self.render_state.last_ui_start;
+        self.render_state.last_ui_start = Some(ui_start);
+
         let clear_from = if in_row_tracking {
-            // Row-tracking: only clear UI area itself, preserve chat above
             ui_start
         } else {
-            // Scroll mode: clear from min of old/new ui_start for UI shrinking
-            self.render_state.last_ui_start.map_or_else(
+            old_ui_start.map_or_else(
                 || {
                     self.render_state
                         .startup_ui_anchor
@@ -280,7 +283,6 @@ impl App {
                 |old| old.min(ui_start),
             )
         };
-        self.render_state.last_ui_start = Some(ui_start);
 
         let preserve_header =
             self.message_list.entries.is_empty() && self.render_state.startup_ui_anchor.is_some();
