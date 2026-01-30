@@ -35,8 +35,40 @@ impl Client {
     }
 
     /// Create client from provider, auto-detecting API key or OAuth credentials.
-    pub fn from_provider(provider: Provider) -> Result<Self, Error> {
-        // OAuth providers: get credentials from auth storage
+    /// For OAuth providers, this will refresh expired tokens if possible.
+    pub async fn from_provider(provider: Provider) -> Result<Self, Error> {
+        // OAuth providers: get credentials from auth storage (with refresh)
+        if let Some(oauth_provider) = provider.oauth_provider() {
+            let creds = auth::get_credentials(oauth_provider)
+                .await
+                .map_err(|e| Error::Build(format!("Failed to get credentials: {e}")))?
+                .ok_or_else(|| Error::MissingApiKey {
+                    backend: provider.name().to_string(),
+                    env_vars: vec![format!(
+                        "Run 'ion login {}' to authenticate",
+                        oauth_provider.storage_key()
+                    )],
+                })?;
+
+            return Self::new(provider, creds.token());
+        }
+
+        // Standard providers: get API key from environment
+        let api_key = provider.api_key().ok_or_else(|| Error::MissingApiKey {
+            backend: provider.name().to_string(),
+            env_vars: provider
+                .env_vars()
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect(),
+        })?;
+        Self::new(provider, api_key)
+    }
+
+    /// Create client from provider synchronously (no token refresh).
+    /// Use `from_provider` for OAuth providers to ensure token refresh.
+    pub fn from_provider_sync(provider: Provider) -> Result<Self, Error> {
+        // OAuth providers: get credentials from auth storage (no refresh)
         if let Some(oauth_provider) = provider.oauth_provider() {
             let storage = auth::AuthStorage::new()
                 .map_err(|e| Error::Build(format!("Failed to access auth storage: {e}")))?;
@@ -183,18 +215,18 @@ impl LlmApi for Client {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_client_creation() {
+    #[tokio::test]
+    async fn test_client_creation() {
         // Ollama doesn't need a key
-        let client = Client::from_provider(Provider::Ollama);
+        let client = Client::from_provider(Provider::Ollama).await;
         assert!(client.is_ok());
         assert_eq!(client.unwrap().provider(), Provider::Ollama);
     }
 
-    #[test]
-    fn test_from_provider_ollama() {
+    #[tokio::test]
+    async fn test_from_provider_ollama() {
         // Ollama should always work (no key needed)
-        let client = Client::from_provider(Provider::Ollama);
+        let client = Client::from_provider(Provider::Ollama).await;
         assert!(client.is_ok());
     }
 

@@ -72,6 +72,7 @@ impl App {
         // Create LLM client - OAuth providers use stored credentials, others use API keys
         let (provider_impl, api_key): (Arc<dyn LlmApi>, String) = if api_provider.is_oauth() {
             let client = Client::from_provider(api_provider)
+                .await
                 .context("Failed to create OAuth client - run 'ion login' first")?;
             (Arc::new(client), String::new())
         } else {
@@ -445,10 +446,11 @@ impl App {
 
     /// Set the active API provider and re-create the agent.
     pub(super) fn set_provider(&mut self, api_provider: Provider) -> Result<()> {
-        // For OAuth providers, use from_provider which handles OAuth credentials
-        // For regular providers, get API key from config
+        // For OAuth providers, use from_provider_sync (no token refresh in sync context).
+        // Token refresh happens at startup via from_provider() which is async.
+        // For regular providers, get API key from config.
         let (provider, api_key): (Arc<dyn LlmApi>, String) = if api_provider.is_oauth() {
-            let client = Client::from_provider(api_provider)
+            let client = Client::from_provider_sync(api_provider)
                 .context("Failed to create OAuth client - run 'ion login' first")?;
             (Arc::new(client), String::new())
         } else {

@@ -89,29 +89,39 @@ pub async fn get_credentials(provider: OAuthProvider) -> Result<Option<Credentia
     // Check if OAuth tokens need refresh
     if let Credentials::OAuth(ref tokens) = creds
         && tokens.needs_refresh()
-        && let Some(ref refresh_token) = tokens.refresh_token
     {
-        let new_tokens = match provider {
-            OAuthProvider::OpenAI => {
-                openai::OpenAIAuth::new().refresh(refresh_token).await?
+        match &tokens.refresh_token {
+            Some(refresh_token) => {
+                let new_tokens = match provider {
+                    OAuthProvider::OpenAI => {
+                        openai::OpenAIAuth::new().refresh(refresh_token).await?
+                    }
+                    OAuthProvider::Google => {
+                        google::GoogleAuth::new().refresh(refresh_token).await?
+                    }
+                };
+                storage.save(provider, Credentials::OAuth(new_tokens.clone()))?;
+                return Ok(Some(Credentials::OAuth(new_tokens)));
             }
-            OAuthProvider::Google => {
-                google::GoogleAuth::new().refresh(refresh_token).await?
+            None => {
+                // Token expired and no refresh token available
+                anyhow::bail!(
+                    "OAuth token expired. Please run 'ion login {}' again.",
+                    provider.storage_key()
+                );
             }
-        };
-        storage.save(provider, Credentials::OAuth(new_tokens.clone()))?;
-        return Ok(Some(Credentials::OAuth(new_tokens)));
+        }
     }
 
     Ok(Some(creds))
 }
 
-/// Check if a provider has valid credentials.
+/// Check if a provider has usable credentials (not expired, or can be refreshed).
 pub fn is_logged_in(provider: OAuthProvider) -> bool {
     AuthStorage::new()
         .ok()
         .and_then(|s| s.load(provider).ok().flatten())
-        .is_some()
+        .is_some_and(|c| c.is_usable())
 }
 
 /// Default callback timeout.
