@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "itk5",
+  "title": "Provider layer replacement - Phase 3: OpenAI-Compatible",
+  "description": "Implement OpenAI-compatible client with provider quirks for OpenRouter, Groq, Kimi, etc.",
+  "status": "done",
+  "priority": 2,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-30T06:10:19.092Z",
+  "updated_at": "2026-01-30T06:16:21.990Z",
+  "completed_at": "2026-01-30T06:16:21.990Z",
+  "external": {}
+}

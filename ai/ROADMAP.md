@@ -1,107 +1,78 @@
 # ion Roadmap
 
-**Updated:** 2026-01-26
+**Updated:** 2026-01-29
 
-## Overview
+## Completed
 
-ion is a fast, lightweight TUI coding agent. This roadmap organizes remaining work into phases by impact.
+- ✅ Provider layer replacement (native HTTP, cache_control, provider routing)
+- ✅ Anthropic caching support
+- ✅ Kimi/DeepSeek reasoning extraction
+- ✅ OAuth infrastructure (PKCE, callback server)
+- ✅ Skills YAML frontmatter
+- ✅ Subagent support
+- ✅ TUI refactor (v2)
 
-## Phase 1: Cost Optimization (CRITICAL)
+## In Progress
 
-**Goal:** 50-100x cost reduction on Anthropic via prompt caching
+### OAuth Testing (P0)
 
-| Task                      | ID      | Description                                                  |
-| ------------------------- | ------- | ------------------------------------------------------------ |
-| Direct Anthropic client   | tk-268g | Bypass llm-connector, implement streaming with cache_control |
-| Cache conversation prefix | -       | Mark all prior turns with cache_control: ephemeral           |
+**Goal:** Verify OAuth flows work with real subscriptions
 
-**Why critical:** Long sessions (100k+ context) currently pay full price every turn. With caching, pay 90% less on everything except the new delta. This is the single highest-impact improvement.
+| Task         | ID      | Status          |
+| ------------ | ------- | --------------- |
+| ChatGPT auth | tk-3a5h | Ready to test   |
+| Gemini auth  | tk-toyu | Ready to test   |
+| OAuth review | tk-uqt6 | Decision needed |
 
-**Implementation:**
+### Bug Fixes (P1)
 
-1. `src/provider/anthropic.rs` - Direct reqwest client
-2. Streaming SSE parser for Anthropic format
-3. cache_control on system + all prior messages
-4. Keep llm-connector for other providers
+| Task                     | ID      | Root Cause                   |
+| ------------------------ | ------- | ---------------------------- |
+| Error visibility         | tk-u25b | Chat rendering timing        |
+| Progress line duplicates | tk-7aem | Missing focus event handling |
+| Error JSON pretty-print  | tk-eu8s | Raw JSON in error messages   |
 
-## Phase 2: Vision & Input (HIGH)
+## Upcoming
 
-**Goal:** Enable vision workflows and improve input UX
+### Vision & Input (P2)
 
-| Task                 | ID      | Description                                       |
-| -------------------- | ------- | ------------------------------------------------- |
-| Image attachment     | tk-80az | @image:path syntax, base64 encoding, vision check |
-| File autocomplete    | tk-ik05 | @ triggers path picker with fuzzy search          |
-| Command autocomplete | tk-hk6p | / for builtins, // for skills                     |
+| Task                 | ID      | Description                   |
+| -------------------- | ------- | ----------------------------- |
+| Image attachment     | tk-80az | @image:path syntax, base64    |
+| File autocomplete    | tk-ik05 | @ triggers path picker        |
+| Command autocomplete | tk-hk6p | / for builtins, // for skills |
+| History navigation   | tk-50sw | Ctrl+P/N readline-style       |
+| Fuzzy history search | tk-g3dt | Ctrl+R search                 |
 
-**Dependencies:** Phase 1 not required
+### Code Organization (P2)
 
-## Phase 3: Provider Improvements (MEDIUM)
+| Task            | Description                                     |
+| --------------- | ----------------------------------------------- |
+| Split render.rs | Extract selector + progress rendering (820 LOC) |
+| Split events.rs | Extract keys + commands handling (630 LOC)      |
+| Add context/    | Message conversion, ID remapping, truncation    |
 
-**Goal:** Better provider support and cost visibility
+### Extensibility (P3)
 
-| Task                      | ID               | Description                                      |
-| ------------------------- | ---------------- | ------------------------------------------------ |
-| Direct provider interface | tk-g1fy          | Modular streaming for provider-specific features |
-| OAuth for Google          | tk-f564          | Native Google auth without API key               |
-| Model sorting             | tk-wj4b, tk-r9c7 | Newest first, org grouping                       |
+| Task                 | ID      | Description                     |
+| -------------------- | ------- | ------------------------------- |
+| Extensible providers | tk-o0g7 | Config-defined API providers    |
+| Hook system          | -       | Lifecycle events for extensions |
 
-## Phase 4: Tools (MEDIUM)
+## Deferred
 
-**Goal:** Expand agent capabilities
-
-| Task       | ID      | Description                              |
-| ---------- | ------- | ---------------------------------------- |
-| Web search | tk-1y3g | Search tool (SerpAPI, Brave, or similar) |
-| ast-grep   | tk-imza | Structural code search/transform         |
-
-## Phase 5: Extensibility (LOW)
-
-**Goal:** Claude Code-like hooks and customization
-
-| Task            | ID      | Description                            |
-| --------------- | ------- | -------------------------------------- |
-| Hook system     | tk-iso7 | Lifecycle events for extensions        |
-| True sandboxing | tk-8jtm | Container/namespace isolation for bash |
-| Theme support   | tk-vsdp | Customizable colors                    |
-
-## Phase 6: Polish (LOW)
-
-**Goal:** Minor UX improvements
-
-| Task                | ID      | Description                     |
-| ------------------- | ------- | ------------------------------- |
-| Markdown styling    | tk-v11j | Reduce inline code highlighting |
-| Model display       | tk-x3zf | provider:model vs just model    |
-| Provider selector   | tk-a4q5 | Show config id and display name |
-| Interactive prompts | tk-kf3r | y/n confirmation flows          |
-
-## Deferred / Research
-
-| Task                     | ID      | Notes                      |
-| ------------------------ | ------- | -------------------------- |
-| Agent loop decomposition | tk-mmpr | Nice to have, not blocking |
-| System prompt comparison | tk-8qwn | Research task              |
-| Permission audit         | tk-5h0j | Security review            |
-| OpenRouter routing modal | tk-iegz | Idea, needs research       |
-
-## Completed (Recent)
-
-- ✅ Web fetch tool
-- ✅ Skills YAML frontmatter (agentskills.io spec)
-- ✅ Progressive skill loading
-- ✅ Subagent support (spawn_subagent tool)
-- ✅ Thinking display ("thought for Xs")
-- ✅ TUI refactor (6 modules)
-- ✅ Codebase review (all critical issues fixed)
+| Task                    | Notes                               |
+| ----------------------- | ----------------------------------- |
+| PDF handling            | tk-ur3b - pdf2text integration      |
+| Scrollback preservation | tk-2bk7 - complex terminal handling |
+| True sandboxing         | Container/namespace for bash        |
 
 ## Timeline Guidance
 
-| Phase             | Effort   | Impact                          |
-| ----------------- | -------- | ------------------------------- |
-| 1 - Caching       | 1-2 days | CRITICAL - 50-100x cost savings |
-| 2 - Vision/Input  | 1 day    | HIGH - new capabilities + UX    |
-| 3 - Providers     | 1-2 days | MEDIUM - better model support   |
-| 4 - Tools         | 1 day    | MEDIUM - expanded capabilities  |
-| 5 - Extensibility | 2-3 days | LOW - power user features       |
-| 6 - Polish        | ongoing  | LOW - incremental improvements  |
+| Phase             | Effort   | Impact |
+| ----------------- | -------- | ------ |
+| OAuth testing     | 1 day    | HIGH   |
+| Bug fixes         | 1-2 days | HIGH   |
+| Vision & input    | 2-3 days | HIGH   |
+| Code organization | 1-2 days | MEDIUM |
+| Extensibility     | 2-3 days | LOW    |

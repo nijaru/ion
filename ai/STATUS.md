@@ -4,83 +4,67 @@
 
 | Metric    | Value         | Updated    |
 | --------- | ------------- | ---------- |
-| Phase     | OAuth Testing | 2026-01-29 |
+| Phase     | Provider Done | 2026-01-29 |
 | Status    | Ready to Test | 2026-01-29 |
 | Toolchain | stable        | 2026-01-22 |
-| Tests     | 135 passing   | 2026-01-29 |
+| Tests     | 202 passing   | 2026-01-29 |
 | Clippy    | clean         | 2026-01-29 |
+
+## Just Completed
+
+**Provider layer replacement** - native HTTP implementations:
+
+- Anthropic Messages API with `cache_control` support
+- OpenAI-compatible with provider quirks (OpenRouter routing, Kimi reasoning)
+- Removed llm-connector dependency
 
 ## Current Focus
 
-**OAuth subscription support implemented** - ready for real-world testing.
+**OAuth testing** - infrastructure complete, needs real-world verification:
 
 ```bash
 ion login chatgpt   # ChatGPT Plus/Pro
 ion login gemini    # Google AI (free tier available)
 ```
 
-## Provider Naming
-
-| ID        | Type  | Display   | Description          |
-| --------- | ----- | --------- | -------------------- |
-| `openai`  | API   | OpenAI    | API key              |
-| `chatgpt` | OAuth | ChatGPT   | Sign in with ChatGPT |
-| `google`  | API   | Google AI | API key              |
-| `gemini`  | OAuth | Gemini    | Sign in with Google  |
-
-## Recent Changes
-
-- OAuth infrastructure complete (PKCE, callback server, storage)
-- CLI: `ion login/logout chatgpt/gemini`
-- Providers: `ChatGpt`, `Gemini` variants
-- TUI integration with provider picker
-
-## Top Priorities
-
-1. **Review OAuth code** - verify client ID approach (see Decision Needed below)
-2. **Test OAuth** with real subscriptions
-3. **Provider layer replacement** (tk-aq7x) - native HTTP
-
 ## Decision Needed
 
-**OAuth Client IDs:** Currently using public client IDs from Codex CLI and Gemini CLI (installed-app credentials, safe per OAuth spec). Options:
+**OAuth Client IDs:** Using public client IDs from Codex CLI and Gemini CLI.
 
-1. **Keep borrowed IDs** - Works now, may break if upstream changes credentials
-2. **Register our own** - More stable long-term, requires OpenAI/Google developer accounts
-
-## Future: Extensibility
-
-| Task                                         | ID      | Priority |
-| -------------------------------------------- | ------- | -------- |
-| Extensible API providers (config + plugin)   | tk-o0g7 | p3       |
-| Extensible OAuth providers (config + plugin) | tk-a2s8 | p4       |
+1. Keep borrowed IDs - works now, may break if upstream changes
+2. Register our own - more stable, requires developer accounts
 
 ## Open Bugs
 
-| ID      | Issue                            | Root Cause                   |
-| ------- | -------------------------------- | ---------------------------- |
-| tk-7aem | Progress line tab switch dupe    | Missing focus event handling |
-| tk-1lso | Kimi errors on OpenRouter        | llm-connector parsing        |
-| tk-2bk7 | Resize clears pre-ion scrollback | Needs preservation strategy  |
+| ID      | Issue                         | Root Cause                   |
+| ------- | ----------------------------- | ---------------------------- |
+| tk-7aem | Progress line tab switch dupe | Missing focus event handling |
+| tk-u25b | Errors not visible            | Chat rendering timing        |
+| tk-2bk7 | Resize clears scrollback      | Needs preservation strategy  |
 
 ## Module Health
 
-| Module    | Health | Notes                         |
-| --------- | ------ | ----------------------------- |
-| auth/     | NEW    | OAuth complete, needs testing |
-| tui/      | GOOD   | OAuth integrated              |
-| agent/    | GOOD   | Clean turn loop               |
-| provider/ | GOOD   | OAuth providers added         |
-| tool/     | GOOD   | Orchestrator + spawn          |
-| session/  | GOOD   | SQLite + WAL                  |
-| skill/    | GOOD   | YAML frontmatter              |
-| mcp/      | OK     | Needs tests                   |
+| Module    | Files | Lines | Health | Notes                              |
+| --------- | ----- | ----- | ------ | ---------------------------------- |
+| provider/ | 18    | ~2500 | GOOD   | Native HTTP, 3 backends            |
+| tui/      | 20    | ~6700 | OK     | render.rs large (820), needs split |
+| agent/    | 6     | ~1500 | GOOD   | Clean turn loop                    |
+| tool/     | 15    | ~2500 | GOOD   | Orchestrator + spawn               |
+| auth/     | 5     | ~800  | NEW    | OAuth complete, needs testing      |
+| session/  | 3     | ~600  | GOOD   | SQLite + WAL                       |
+| skill/    | 3     | ~400  | GOOD   | YAML frontmatter                   |
+| mcp/      | 2     | ~300  | OK     | Needs tests                        |
+
+## Top Priorities
+
+1. Test OAuth with real subscriptions
+2. Fix error visibility bug (tk-u25b)
+3. Split large TUI files
 
 ## Key References
 
-| Topic                | Location                                  |
-| -------------------- | ----------------------------------------- |
-| OAuth design         | ai/design/oauth-subscriptions.md          |
-| OAuth research       | ai/research/oauth-implementations-2026.md |
-| Refactoring roadmap  | ai/design/refactoring-roadmap.md          |
-| Provider replacement | ai/design/provider-replacement.md         |
+| Topic                 | Location                         |
+| --------------------- | -------------------------------- |
+| Architecture overview | ai/DESIGN.md                     |
+| OAuth design          | ai/design/oauth-subscriptions.md |
+| Module organization   | ai/design/module-structure.md    |

@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "u25b",
+  "title": "[BUG] Error messages not visible until terminal resize",
+  "description": "Errors in chat history don't appear until terminal is resized. Likely render state issue - errors not triggering repaint or being buffered incorrectly.",
+  "status": "open",
+  "priority": 2,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-30T06:07:06.407Z",
+  "updated_at": "2026-01-30T06:07:06.407Z",
+  "completed_at": null,
+  "external": {}
+}
