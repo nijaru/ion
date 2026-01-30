@@ -19,10 +19,14 @@
     {
       "ts": "2026-01-30T18:33:06.316Z",
       "msg": "Root cause: In row-tracking mode, draw_direct() cleared from min(old_ui_start, new_ui_start) downwards. When chat was printed, chat_row advanced, making new_ui_start higher. The clear then wiped the freshly-printed chat. Fix: In row-tracking mode, only clear from ui_start (not old values) to preserve chat content above UI."
+    },
+    {
+      "ts": "2026-01-30T21:15:37.243Z",
+      "msg": "Additional fix: Reset last_ui_start when transitioning from row-tracking to scroll mode in main.rs overflow handling. Without this, stale ui_start values could cause the scroll mode clearing to wipe freshly-printed content."
     }
   ],
   "created_at": "2026-01-30T06:07:06.407Z",
-  "updated_at": "2026-01-30T18:33:21.871Z",
+  "updated_at": "2026-01-30T21:15:37.243Z",
   "completed_at": "2026-01-30T18:33:21.871Z",
   "external": {}
 }

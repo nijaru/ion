@@ -369,7 +369,10 @@ async fn run_tui(
                         execute!(stdout, MoveTo(0, print_row.saturating_add(i as u16)), Clear(ClearType::CurrentLine))?;
                         line.println()?;
                     }
-                    app.render_state.chat_row = None; // Now in scroll mode
+                    // Transition to scroll mode - reset both chat_row and last_ui_start
+                    // to prevent draw_direct from using stale row-tracking values
+                    app.render_state.chat_row = None;
+                    app.render_state.last_ui_start = None;
                 }
             } else {
                 // Scroll mode: existing behavior (content pushed into scrollback)
