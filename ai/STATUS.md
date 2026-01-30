@@ -15,8 +15,10 @@
 1. **Provider layer replacement** (tk-aq7x) - Replace llm-connector with native HTTP
    - Design: `ai/design/provider-replacement.md`
    - Unblocks: Anthropic caching, OpenRouter routing, Kimi fixes
-2. **Anthropic caching** (tk-268g) - 50-100x cost savings, blocked by provider work
-3. **Input UX** - File/command autocomplete (tk-ik05, tk-hk6p)
+2. **Chat positioning** (tk-zn6h) - Avoid empty lines before short chat
+   - Design: `ai/design/chat-positioning.md`
+   - Needs row-tracking approach instead of ScrollUp
+3. **Anthropic caching** (tk-268g) - 50-100x cost savings, blocked by provider work
 
 ## Active Work
 
@@ -45,7 +47,7 @@ See `ai/design/provider-replacement.md` for full plan.
 
 **UI Fixes:**
 
-- tk-990b: Input border in scrollback (anchor cleared prematurely in event handler)
+- tk-990b: Input border in scrollback - anchor was cleared prematurely in event handler
 - tk-ei0n: Selector rendering in --continue sessions
 - tk-5cs9: Ctrl+D in selector
 - tk-c73y: Token display per-turn
@@ -81,6 +83,7 @@ See `ai/design/provider-replacement.md` for full plan.
 | Topic                | Location                           |
 | -------------------- | ---------------------------------- |
 | TUI architecture     | ai/design/tui-v2.md                |
+| Chat positioning     | ai/design/chat-positioning.md      |
 | Provider replacement | ai/design/provider-replacement.md  |
 | Plugin design        | ai/design/plugin-architecture.md   |
 | OpenRouter prefs     | src/provider/prefs.rs (unused yet) |

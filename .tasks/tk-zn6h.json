@@ -1,0 +1,28 @@
+{
+  "project": "tk",
+  "ref": "zn6h",
+  "title": "[UX] Chat positioning - avoid empty lines before short chat",
+  "description": "When chat is short, it appears near the bottom with empty lines above. Should appear right after header until chat fills screen. Needs proper design - current ScrollUp approach inherently positions content near bottom.",
+  "status": "open",
+  "priority": 2,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [
+    {
+      "ts": "2026-01-30T01:25:56.777Z",
+      "msg": "Design documented in ai/design/chat-positioning.md. Key insight: ScrollUp inherently positions content near bottom - need row-tracking for short chat mode. Previous attempts failed because they didn't handle the transition from short→full chat properly."
+    },
+    {
+      "ts": "2026-01-30T01:51:19.371Z",
+      "msg": "Attempted implementation twice, both caused regressions. Need proper row-tracking approach - see ai/design/chat-positioning.md. The issue is that ScrollUp inherently positions content near bottom."
+    }
+  ],
+  "created_at": "2026-01-30T01:23:13.179Z",
+  "updated_at": "2026-01-30T01:51:19.371Z",
+  "completed_at": null,
+  "external": {}
+}
