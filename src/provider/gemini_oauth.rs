@@ -1,8 +1,8 @@
-//! Gemini OAuth client using Bearer authentication.
+//! Gemini OAuth client using Antigravity (Code Assist API).
 //!
-//! The standard llm-connector Google provider uses API key auth (x-goog-api-key header).
-//! OAuth tokens require Bearer auth (Authorization: Bearer header).
-//! This module provides a minimal Gemini client for OAuth.
+//! The consumer Gemini API (generativelanguage.googleapis.com) only supports API keys.
+//! OAuth access requires the Code Assist API (cloudcode-pa.googleapis.com).
+//! This module provides a Gemini client for OAuth via Antigravity.
 
 use crate::provider::error::Error;
 use crate::provider::types::{ChatRequest, ContentBlock, Message, Role, StreamEvent};
@@ -11,7 +11,21 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-const BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta";
+/// Code Assist API endpoints (Antigravity).
+const CODE_ASSIST_ENDPOINTS: &[&str] = &[
+    "https://daily-cloudcode-pa.sandbox.googleapis.com",
+    "https://autopush-cloudcode-pa.sandbox.googleapis.com",
+    "https://cloudcode-pa.googleapis.com",
+];
+
+/// API version for Code Assist.
+const API_VERSION: &str = "v1internal";
+
+/// User agent for Antigravity requests.
+const USER_AGENT: &str = "antigravity/1.15.8 darwin/arm64";
+
+/// API client identifier.
+const API_CLIENT: &str = "google-cloud-sdk vscode_cloudshelleditor/0.1";
 
 /// Gemini OAuth client.
 pub struct GeminiOAuthClient {
@@ -28,21 +42,64 @@ impl GeminiOAuthClient {
         }
     }
 
+    /// Build headers for Antigravity requests.
+    fn build_headers(&self) -> reqwest::header::HeaderMap {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::AUTHORIZATION,
+            format!("Bearer {}", self.access_token).parse().unwrap(),
+        );
+        headers.insert(
+            reqwest::header::CONTENT_TYPE,
+            "application/json".parse().unwrap(),
+        );
+        headers.insert(reqwest::header::USER_AGENT, USER_AGENT.parse().unwrap());
+        headers.insert("X-Goog-Api-Client", API_CLIENT.parse().unwrap());
+        headers
+    }
+
+    /// Try request with endpoint fallback.
+    async fn request_with_fallback(
+        &self,
+        model: &str,
+        action: &str,
+        body: &impl Serialize,
+    ) -> Result<reqwest::Response, Error> {
+        let headers = self.build_headers();
+
+        for (i, endpoint) in CODE_ASSIST_ENDPOINTS.iter().enumerate() {
+            let url = format!("{endpoint}/{API_VERSION}/models/{model}:{action}");
+
+            let response = self
+                .client
+                .post(&url)
+                .headers(headers.clone())
+                .json(body)
+                .send()
+                .await;
+
+            match response {
+                Ok(resp) if resp.status().is_success() || i == CODE_ASSIST_ENDPOINTS.len() - 1 => {
+                    return Ok(resp);
+                }
+                Ok(_) => continue, // Try next endpoint
+                Err(e) if i == CODE_ASSIST_ENDPOINTS.len() - 1 => {
+                    return Err(Error::Api(format!("Request failed: {e}")));
+                }
+                Err(_) => continue, // Try next endpoint
+            }
+        }
+
+        Err(Error::Api("All endpoints failed".to_string()))
+    }
+
     /// Make a chat completion request.
     pub async fn complete(&self, request: ChatRequest) -> Result<Message, Error> {
-        let url = format!("{BASE_URL}/models/{}:generateContent", request.model);
-
         let gemini_request = GeminiRequest::from_chat_request(&request);
 
         let response = self
-            .client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", self.access_token))
-            .header("Content-Type", "application/json")
-            .json(&gemini_request)
-            .send()
-            .await
-            .map_err(|e| Error::Api(format!("Request failed: {e}")))?;
+            .request_with_fallback(&request.model, "generateContent", &gemini_request)
+            .await?;
 
         let status = response.status();
         let text = response
@@ -69,31 +126,45 @@ impl GeminiOAuthClient {
         request: ChatRequest,
         tx: mpsc::Sender<StreamEvent>,
     ) -> Result<(), Error> {
-        let url = format!(
-            "{BASE_URL}/models/{}:streamGenerateContent?alt=sse",
-            request.model
-        );
-
+        let headers = self.build_headers();
         let gemini_request = GeminiRequest::from_chat_request(&request);
 
-        let response = self
-            .client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", self.access_token))
-            .header("Content-Type", "application/json")
-            .json(&gemini_request)
-            .send()
-            .await
-            .map_err(|e| Error::Stream(format!("Request failed: {e}")))?;
+        // Try each endpoint until one succeeds
+        let mut last_error = None;
+        let mut response = None;
 
-        let status = response.status();
-        if !status.is_success() {
-            let text = response.text().await.unwrap_or_default();
-            return Err(Error::Stream(format!(
-                "Gemini API error: {} - {}",
-                status, text
-            )));
+        for endpoint in CODE_ASSIST_ENDPOINTS {
+            let url = format!(
+                "{endpoint}/{API_VERSION}/models/{}:streamGenerateContent?alt=sse",
+                request.model
+            );
+
+            match self
+                .client
+                .post(&url)
+                .headers(headers.clone())
+                .json(&gemini_request)
+                .send()
+                .await
+            {
+                Ok(resp) if resp.status().is_success() => {
+                    response = Some(resp);
+                    break;
+                }
+                Ok(resp) => {
+                    let status = resp.status();
+                    let text = resp.text().await.unwrap_or_default();
+                    last_error = Some(format!("Gemini API error: {status} - {text}"));
+                }
+                Err(e) => {
+                    last_error = Some(format!("Request failed: {e}"));
+                }
+            }
         }
+
+        let response = response.ok_or_else(|| {
+            Error::Stream(last_error.unwrap_or_else(|| "All endpoints failed".to_string()))
+        })?;
 
         // Parse SSE stream
         use futures::StreamExt;
