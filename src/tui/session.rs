@@ -228,6 +228,7 @@ impl App {
             last_render_width: None,
             last_ui_start: None,
             startup_ui_anchor: None,
+            chat_print_row: None,
             needs_full_repaint: false,
         };
 

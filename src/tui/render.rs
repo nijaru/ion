@@ -93,13 +93,22 @@ impl App {
         progress_height + input_height + status_height
     }
 
-    /// Resolve the UI start row, using the startup anchor when no messages exist.
+    /// Resolve the UI start row based on chat position or screen bottom.
     pub fn ui_start_row(&self, height: u16, ui_height: u16) -> u16 {
         let bottom_start = height.saturating_sub(ui_height);
+
+        // On startup with no messages, use anchor position
         if self.message_list.entries.is_empty()
             && let Some(anchor) = self.startup_ui_anchor {
                 return anchor.min(bottom_start);
             }
+
+        // When in row-based mode, UI follows chat content
+        if let Some(chat_row) = self.chat_print_row {
+            return chat_row.min(bottom_start);
+        }
+
+        // Default: UI at bottom
         bottom_start
     }
 
