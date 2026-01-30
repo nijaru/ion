@@ -1,8 +1,6 @@
 //! Anthropic Messages API client.
 
-use super::request::{
-    AnthropicMessage, AnthropicRequest, AnthropicTool, CacheControl, ContentBlock, SystemBlock,
-};
+use super::request::{AnthropicMessage, AnthropicRequest, AnthropicTool, ContentBlock, SystemBlock};
 use super::response::{AnthropicResponse, ResponseBlock};
 use super::stream::{ContentBlockInfo, ContentDelta, StreamEvent as AnthropicStreamEvent};
 use crate::provider::error::Error;

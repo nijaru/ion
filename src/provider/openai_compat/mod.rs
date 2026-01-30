@@ -9,4 +9,3 @@ mod response;
 mod stream;
 
 pub use client::OpenAICompatClient;
-pub use quirks::ProviderQuirks;
