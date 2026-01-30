@@ -330,23 +330,43 @@ async fn run_tui(
 
         if !chat_lines.is_empty() {
             let ui_height = app.calculate_ui_height(term_width, term_height);
-            let ui_start = term_height.saturating_sub(ui_height);
+            let header_height: u16 = 3; // ION, version, empty line
 
             #[allow(clippy::cast_possible_truncation)] // Chat lines fit in terminal u16 height
             let line_count = chat_lines.len() as u16;
 
-            // Move to where UI starts, scroll up to make room, then print
-            execute!(stdout, MoveTo(0, ui_start))?;
+            // Available space for chat (between header and UI)
+            let available_space = term_height.saturating_sub(ui_height).saturating_sub(header_height);
+            let new_total = app.total_chat_lines.saturating_add(line_count);
 
-            // Insert lines by scrolling up (pushes existing content into scrollback)
-            execute!(stdout, crossterm::terminal::ScrollUp(line_count))?;
+            if new_total <= available_space {
+                // Chat fits on screen - print at current position without scrolling
+                let chat_start = header_height + app.total_chat_lines;
+                let mut row = chat_start;
+                for line in &chat_lines {
+                    execute!(stdout, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
+                    line.println()?;
+                    row = row.saturating_add(1);
+                }
+                app.total_chat_lines = new_total;
+            } else {
+                // Chat exceeds screen - use scroll-based insertion
+                let ui_start = term_height.saturating_sub(ui_height);
 
-            // Print at the newly created space (just above where UI will be)
-            let mut row = ui_start.saturating_sub(line_count);
-            for line in &chat_lines {
-                execute!(stdout, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
-                line.println()?;
-                row = row.saturating_add(1);
+                // Move to where UI starts, scroll up to make room, then print
+                execute!(stdout, MoveTo(0, ui_start))?;
+
+                // Insert lines by scrolling up (pushes existing content into scrollback)
+                execute!(stdout, crossterm::terminal::ScrollUp(line_count))?;
+
+                // Print at the newly created space (just above where UI will be)
+                let mut row = ui_start.saturating_sub(line_count);
+                for line in &chat_lines {
+                    execute!(stdout, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
+                    line.println()?;
+                    row = row.saturating_add(1);
+                }
+                app.total_chat_lines = new_total;
             }
         }
 
