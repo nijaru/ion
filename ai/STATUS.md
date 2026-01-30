@@ -59,10 +59,11 @@ New feature: use consumer subscriptions instead of API credits.
 
 ## Key References
 
-| Topic                | Location                          |
-| -------------------- | --------------------------------- |
-| OAuth subscriptions  | ai/design/oauth-subscriptions.md  |
-| TUI architecture     | ai/design/tui-v2.md               |
-| Provider replacement | ai/design/provider-replacement.md |
-| Plugin design        | ai/design/plugin-architecture.md  |
-| Competitive analysis | ai/research/agent-survey.md       |
+| Topic                   | Location                          |
+| ----------------------- | --------------------------------- |
+| **Refactoring roadmap** | ai/design/refactoring-roadmap.md  |
+| OAuth subscriptions     | ai/design/oauth-subscriptions.md  |
+| TUI architecture        | ai/design/tui-v2.md               |
+| Provider replacement    | ai/design/provider-replacement.md |
+| Plugin design           | ai/design/plugin-architecture.md  |
+| Competitive analysis    | ai/research/agent-survey.md       |
