@@ -69,12 +69,17 @@ impl App {
             .and_then(Provider::from_id)
             .unwrap_or(Provider::OpenRouter);
 
-        // Get API key (env var first, then config)
-        let api_key = config.api_key_for(api_provider.id()).unwrap_or_default();
-
-        let provider_impl: Arc<dyn LlmApi> = Arc::new(
-            Client::new(api_provider, api_key.clone()).context("Failed to create LLM client")?,
-        );
+        // Create LLM client - OAuth providers use stored credentials, others use API keys
+        let (provider_impl, api_key): (Arc<dyn LlmApi>, String) = if api_provider.is_oauth() {
+            let client = Client::from_provider(api_provider)
+                .context("Failed to create OAuth client - run 'ion login' first")?;
+            (Arc::new(client), String::new())
+        } else {
+            let api_key = config.api_key_for(api_provider.id()).unwrap_or_default();
+            let client =
+                Client::new(api_provider, api_key.clone()).context("Failed to create LLM client")?;
+            (Arc::new(client), api_key)
+        };
 
         let (approval_tx, approval_rx) = mpsc::channel(100);
         let mut orchestrator = ToolOrchestrator::with_builtins(permissions.mode);
@@ -440,15 +445,21 @@ impl App {
 
     /// Set the active API provider and re-create the agent.
     pub(super) fn set_provider(&mut self, api_provider: Provider) -> Result<()> {
-        // Get API key (env var first, then config)
-        let api_key = self
-            .config
-            .api_key_for(api_provider.id())
-            .unwrap_or_default();
-
-        let provider: Arc<dyn LlmApi> = Arc::new(
-            Client::new(api_provider, api_key.clone()).context("Failed to create LLM client")?,
-        );
+        // For OAuth providers, use from_provider which handles OAuth credentials
+        // For regular providers, get API key from config
+        let (provider, api_key): (Arc<dyn LlmApi>, String) = if api_provider.is_oauth() {
+            let client = Client::from_provider(api_provider)
+                .context("Failed to create OAuth client - run 'ion login' first")?;
+            (Arc::new(client), String::new())
+        } else {
+            let api_key = self
+                .config
+                .api_key_for(api_provider.id())
+                .unwrap_or_default();
+            let client =
+                Client::new(api_provider, api_key.clone()).context("Failed to create LLM client")?;
+            (Arc::new(client), api_key)
+        };
 
         self.api_provider = api_provider;
 
