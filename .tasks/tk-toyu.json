@@ -17,10 +17,14 @@
     {
       "ts": "2026-01-30T03:59:14.292Z",
       "msg": "OAuth infrastructure complete. GoogleAi provider integrated with:\n- Google OAuth flow (PKCE)\n- Token storage in ~/.config/ion/auth.json\n- TUI provider picker shows GoogleAi\n- Model fetching maps to Google models\nNeeds real-world testing with actual Google AI subscription."
+    },
+    {
+      "ts": "2026-01-30T04:17:08.717Z",
+      "msg": "Renamed from GoogleAi to Gemini. CLI: ion login gemini. Uses Gemini CLI client ID."
     }
   ],
   "created_at": "2026-01-30T03:12:45.222Z",
-  "updated_at": "2026-01-30T03:59:14.292Z",
+  "updated_at": "2026-01-30T04:17:08.717Z",
   "completed_at": null,
   "external": {}
 }
