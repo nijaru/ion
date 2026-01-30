@@ -5,6 +5,7 @@ use super::error::Error;
 use super::types::{
     ChatRequest, ContentBlock, Message, Role, StreamEvent, ToolCallEvent, ToolDefinition,
 };
+use crate::auth;
 use async_trait::async_trait;
 use futures::StreamExt;
 use llm_connector::LlmClient;
@@ -26,11 +27,35 @@ impl Client {
         Ok(Self { provider, client })
     }
 
-    /// Create client from provider, auto-detecting API key.
+    /// Create client from provider, auto-detecting API key or OAuth credentials.
     pub fn from_provider(provider: Provider) -> Result<Self, Error> {
+        // OAuth providers: get credentials from auth storage
+        if let Some(oauth_provider) = provider.oauth_provider() {
+            let storage = auth::AuthStorage::new()
+                .map_err(|e| Error::Build(format!("Failed to access auth storage: {e}")))?;
+
+            let creds = storage
+                .load(oauth_provider)
+                .map_err(|e| Error::Build(format!("Failed to load credentials: {e}")))?
+                .ok_or_else(|| Error::MissingApiKey {
+                    backend: provider.name().to_string(),
+                    env_vars: vec![format!(
+                        "Run 'ion login {}' to authenticate",
+                        oauth_provider.storage_key()
+                    )],
+                })?;
+
+            return Self::new(provider, creds.token());
+        }
+
+        // Standard providers: get API key from environment
         let api_key = provider.api_key().ok_or_else(|| Error::MissingApiKey {
             backend: provider.name().to_string(),
-            env_vars: provider.env_vars().iter().map(std::string::ToString::to_string).collect(),
+            env_vars: provider
+                .env_vars()
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect(),
         })?;
         Self::new(provider, api_key)
     }
@@ -84,6 +109,19 @@ impl Client {
             }
             Provider::Kimi => {
                 LlmClient::openai_compatible(api_key, "https://api.moonshot.ai/v1", "moonshot")
+            }
+            // OAuth providers use the same API backends as their non-OAuth counterparts
+            Provider::ChatGptPlus => {
+                // ChatGPT Plus uses OpenAI API with OAuth token
+                if let Some(url) = base_url {
+                    LlmClient::openai_with_base_url(api_key, url)
+                } else {
+                    LlmClient::openai(api_key)
+                }
+            }
+            Provider::GoogleAi => {
+                // Google AI OAuth uses Google API with OAuth token
+                LlmClient::google(api_key)
             }
         };
         client.map_err(|e| Error::Build(e.to_string()))

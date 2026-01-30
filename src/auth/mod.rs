@@ -1,0 +1,118 @@
+//! OAuth authentication for subscription-based providers.
+//!
+//! Supports ChatGPT Plus/Pro (OpenAI OAuth) and Google AI (Google OAuth)
+//! for using consumer subscriptions instead of API credits.
+
+mod pkce;
+mod server;
+mod storage;
+
+pub mod google;
+pub mod openai;
+
+pub use pkce::PkceCodes;
+pub use server::{CallbackServer, CallbackResult};
+pub use storage::{AuthStorage, Credentials, OAuthTokens};
+
+use anyhow::Result;
+use std::time::Duration;
+
+/// Supported OAuth providers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OAuthProvider {
+    /// OpenAI OAuth for ChatGPT Plus/Pro subscriptions.
+    OpenAI,
+    /// Google OAuth for Google AI subscriptions.
+    Google,
+}
+
+impl OAuthProvider {
+    /// Storage key for this provider.
+    #[must_use]
+    pub fn storage_key(&self) -> &'static str {
+        match self {
+            Self::OpenAI => "openai",
+            Self::Google => "google",
+        }
+    }
+
+    /// Human-readable name.
+    #[must_use]
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::OpenAI => "ChatGPT Plus/Pro",
+            Self::Google => "Google AI",
+        }
+    }
+}
+
+/// Common trait for OAuth login flows.
+pub trait OAuthFlow {
+    /// Perform the OAuth login flow.
+    fn login(&self) -> impl std::future::Future<Output = Result<OAuthTokens>> + Send;
+
+    /// Refresh an expired access token.
+    fn refresh(
+        &self,
+        refresh_token: &str,
+    ) -> impl std::future::Future<Output = Result<OAuthTokens>> + Send;
+}
+
+/// Login to an OAuth provider.
+pub async fn login(provider: OAuthProvider) -> Result<()> {
+    let storage = AuthStorage::new()?;
+
+    let tokens = match provider {
+        OAuthProvider::OpenAI => openai::OpenAIAuth::new().login().await?,
+        OAuthProvider::Google => google::GoogleAuth::new().login().await?,
+    };
+
+    storage.save(provider, Credentials::OAuth(tokens))?;
+    Ok(())
+}
+
+/// Logout from an OAuth provider.
+pub fn logout(provider: OAuthProvider) -> Result<()> {
+    let storage = AuthStorage::new()?;
+    storage.clear(provider)?;
+    Ok(())
+}
+
+/// Get valid credentials for a provider, refreshing if needed.
+pub async fn get_credentials(provider: OAuthProvider) -> Result<Option<Credentials>> {
+    let storage = AuthStorage::new()?;
+
+    let Some(creds) = storage.load(provider)? else {
+        return Ok(None);
+    };
+
+    // Check if OAuth tokens need refresh
+    if let Credentials::OAuth(ref tokens) = creds
+        && tokens.needs_refresh()
+        && let Some(ref refresh_token) = tokens.refresh_token
+    {
+        let new_tokens = match provider {
+            OAuthProvider::OpenAI => {
+                openai::OpenAIAuth::new().refresh(refresh_token).await?
+            }
+            OAuthProvider::Google => {
+                google::GoogleAuth::new().refresh(refresh_token).await?
+            }
+        };
+        storage.save(provider, Credentials::OAuth(new_tokens.clone()))?;
+        return Ok(Some(Credentials::OAuth(new_tokens)));
+    }
+
+    Ok(Some(creds))
+}
+
+/// Check if a provider has valid credentials.
+pub fn is_logged_in(provider: OAuthProvider) -> bool {
+    AuthStorage::new()
+        .ok()
+        .and_then(|s| s.load(provider).ok().flatten())
+        .is_some()
+}
+
+/// Default callback timeout.
+pub const CALLBACK_TIMEOUT: Duration = Duration::from_secs(300); // 5 minutes

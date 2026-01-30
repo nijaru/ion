@@ -2,6 +2,7 @@
 //!
 //! Single source of truth for provider detection, configuration, and LLM backend mapping.
 
+use crate::auth::{self, OAuthProvider};
 use std::env;
 
 /// Supported LLM providers.
@@ -21,6 +22,10 @@ pub enum Provider {
     Groq,
     /// Moonshot AI Kimi
     Kimi,
+    /// ChatGPT Plus/Pro via OAuth ($20-200/month subscription)
+    ChatGptPlus,
+    /// Google AI via OAuth (consumer subscription)
+    GoogleAi,
 }
 
 impl Provider {
@@ -33,6 +38,8 @@ impl Provider {
         Provider::Ollama,
         Provider::Groq,
         Provider::Kimi,
+        Provider::ChatGptPlus,
+        Provider::GoogleAi,
     ];
 
     /// Lowercase ID for config storage.
@@ -46,6 +53,8 @@ impl Provider {
             Provider::Ollama => "ollama",
             Provider::Groq => "groq",
             Provider::Kimi => "kimi",
+            Provider::ChatGptPlus => "chatgpt-plus",
+            Provider::GoogleAi => "google-ai",
         }
     }
 
@@ -60,6 +69,8 @@ impl Provider {
             "ollama" => Some(Provider::Ollama),
             "groq" => Some(Provider::Groq),
             "kimi" | "moonshot" => Some(Provider::Kimi),
+            "chatgpt-plus" | "chatgpt" | "chatgptplus" => Some(Provider::ChatGptPlus),
+            "google-ai" | "googleai" | "gemini-oauth" => Some(Provider::GoogleAi),
             _ => None,
         }
     }
@@ -75,6 +86,8 @@ impl Provider {
             Provider::Ollama => "Ollama",
             Provider::Groq => "Groq",
             Provider::Kimi => "Kimi",
+            Provider::ChatGptPlus => "ChatGPT Plus",
+            Provider::GoogleAi => "Google AI (OAuth)",
         }
     }
 
@@ -89,6 +102,8 @@ impl Provider {
             Provider::Ollama => "Local models",
             Provider::Groq => "Fast inference",
             Provider::Kimi => "Moonshot K2 models",
+            Provider::ChatGptPlus => "$20/month subscription",
+            Provider::GoogleAi => "Consumer subscription",
         }
     }
 
@@ -103,12 +118,35 @@ impl Provider {
             Provider::Ollama => &[], // No key needed
             Provider::Groq => &["GROQ_API_KEY"],
             Provider::Kimi => &["MOONSHOT_API_KEY", "KIMI_API_KEY"],
+            Provider::ChatGptPlus => &[], // OAuth only
+            Provider::GoogleAi => &[], // OAuth only
+        }
+    }
+
+    /// Check if this is an OAuth-based provider.
+    #[must_use]
+    pub fn is_oauth(self) -> bool {
+        matches!(self, Provider::ChatGptPlus | Provider::GoogleAi)
+    }
+
+    /// Get the corresponding OAuth provider, if any.
+    #[must_use]
+    pub fn oauth_provider(self) -> Option<OAuthProvider> {
+        match self {
+            Provider::ChatGptPlus => Some(OAuthProvider::OpenAI),
+            Provider::GoogleAi => Some(OAuthProvider::Google),
+            _ => None,
         }
     }
 
     /// Get API key from environment.
-    #[must_use] 
+    #[must_use]
     pub fn api_key(self) -> Option<String> {
+        // OAuth providers don't use env vars
+        if self.is_oauth() {
+            return None;
+        }
+
         for var in self.env_vars() {
             if let Ok(key) = env::var(var)
                 && !key.is_empty()
@@ -124,8 +162,12 @@ impl Provider {
     }
 
     /// Check if this provider is available (has credentials or doesn't need them).
-    #[must_use] 
+    #[must_use]
     pub fn is_available(self) -> bool {
+        // OAuth providers check OAuth credentials
+        if let Some(oauth_provider) = self.oauth_provider() {
+            return auth::is_logged_in(oauth_provider);
+        }
         self.api_key().is_some()
     }
 }
@@ -232,5 +274,30 @@ mod tests {
         assert_eq!(sorted[0].provider, Provider::OpenRouter); // Authenticated first
         assert!(!sorted[1].authenticated);
         assert!(!sorted[2].authenticated);
+    }
+
+    #[test]
+    fn test_oauth_providers() {
+        assert!(Provider::ChatGptPlus.is_oauth());
+        assert!(Provider::GoogleAi.is_oauth());
+        assert!(!Provider::OpenAI.is_oauth());
+        assert!(!Provider::Google.is_oauth());
+
+        // OAuth providers have no env vars
+        assert!(Provider::ChatGptPlus.env_vars().is_empty());
+        assert!(Provider::GoogleAi.env_vars().is_empty());
+    }
+
+    #[test]
+    fn test_oauth_provider_mapping() {
+        assert_eq!(
+            Provider::ChatGptPlus.oauth_provider(),
+            Some(OAuthProvider::OpenAI)
+        );
+        assert_eq!(
+            Provider::GoogleAi.oauth_provider(),
+            Some(OAuthProvider::Google)
+        );
+        assert_eq!(Provider::OpenAI.oauth_provider(), None);
     }
 }

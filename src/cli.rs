@@ -203,6 +203,10 @@ pub struct Cli {
 pub enum Commands {
     /// Run a one-shot prompt (non-interactive)
     Run(RunArgs),
+    /// Login to an OAuth provider (ChatGPT Plus/Pro, Google AI)
+    Login(LoginArgs),
+    /// Logout from an OAuth provider
+    Logout(LogoutArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -250,6 +254,40 @@ pub enum OutputFormat {
     Text,
     Json,
     StreamJson,
+}
+
+/// OAuth provider for login/logout
+#[derive(ValueEnum, Clone, Debug)]
+pub enum AuthProvider {
+    /// ChatGPT Plus/Pro (OpenAI OAuth)
+    #[value(alias = "chatgpt", alias = "chatgpt-plus")]
+    OpenAI,
+    /// Google AI subscription
+    #[value(alias = "gemini")]
+    Google,
+}
+
+impl From<AuthProvider> for crate::auth::OAuthProvider {
+    fn from(p: AuthProvider) -> Self {
+        match p {
+            AuthProvider::OpenAI => Self::OpenAI,
+            AuthProvider::Google => Self::Google,
+        }
+    }
+}
+
+#[derive(Parser, Debug)]
+pub struct LoginArgs {
+    /// Provider to login to
+    #[arg(value_enum)]
+    pub provider: AuthProvider,
+}
+
+#[derive(Parser, Debug)]
+pub struct LogoutArgs {
+    /// Provider to logout from
+    #[arg(value_enum)]
+    pub provider: AuthProvider,
 }
 
 /// Auto-approve handler for CLI mode with --yes flag
@@ -593,4 +631,36 @@ async fn run_inner(args: RunArgs, auto_approve: bool) -> Result<ExitCode> {
     let (_session, error) = agent_handle.await?;
 
     output_result(&response, &output_format, quiet, interrupted, error)
+}
+
+/// Run the login command
+pub async fn login(args: LoginArgs) -> ExitCode {
+    let provider: crate::auth::OAuthProvider = args.provider.into();
+    let display_name = provider.display_name();
+    match crate::auth::login(provider).await {
+        Ok(()) => {
+            println!("Successfully logged in to {display_name}");
+            ExitCode::from(0)
+        }
+        Err(e) => {
+            eprintln!("Login failed: {e}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+/// Run the logout command
+pub fn logout(args: LogoutArgs) -> ExitCode {
+    let provider: crate::auth::OAuthProvider = args.provider.into();
+    let display_name = provider.display_name();
+    match crate::auth::logout(provider) {
+        Ok(()) => {
+            println!("Logged out from {display_name}");
+            ExitCode::from(0)
+        }
+        Err(e) => {
+            eprintln!("Logout failed: {e}");
+            ExitCode::from(1)
+        }
+    }
 }
