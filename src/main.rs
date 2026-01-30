@@ -317,13 +317,12 @@ async fn run_tui(
         // Print any new chat content using insert_before pattern
         let chat_lines = app.take_chat_inserts(term_width);
 
-        // If this is the first message, clear startup UI and initialize chat_print_row
+        // If this is the first message, clear startup UI BEFORE sync update
+        // This ensures the clear is fully processed before we start scrolling
         if !chat_lines.is_empty()
             && let Some(anchor) = app.take_startup_ui_anchor() {
                 execute!(stdout, MoveTo(0, anchor), Clear(ClearType::FromCursorDown))?;
                 stdout.flush()?;
-                // Initialize where chat should be printed (right after header)
-                app.chat_print_row = Some(anchor);
             }
 
         // Begin synchronized output (prevents flicker)
@@ -331,43 +330,23 @@ async fn run_tui(
 
         if !chat_lines.is_empty() {
             let ui_height = app.calculate_ui_height(term_width, term_height);
+            let ui_start = term_height.saturating_sub(ui_height);
 
             #[allow(clippy::cast_possible_truncation)] // Chat lines fit in terminal u16 height
             let line_count = chat_lines.len() as u16;
 
-            // Check if we can print without scrolling (chat fits on screen)
-            let can_fit = app.chat_print_row.is_some_and(|row| {
-                row.saturating_add(line_count).saturating_add(ui_height) <= term_height
-            });
+            // Move to where UI starts, scroll up to make room, then print
+            execute!(stdout, MoveTo(0, ui_start))?;
 
-            if can_fit {
-                // Print at current position without scrolling
-                let mut row = app.chat_print_row.unwrap();
-                for line in &chat_lines {
-                    execute!(stdout, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
-                    line.println()?;
-                    row = row.saturating_add(1);
-                }
-                app.chat_print_row = Some(row);
-            } else {
-                // Chat exceeds screen - use scroll-based insertion
-                let ui_start = term_height.saturating_sub(ui_height);
+            // Insert lines by scrolling up (pushes existing content into scrollback)
+            execute!(stdout, crossterm::terminal::ScrollUp(line_count))?;
 
-                // Move to where UI starts, scroll up to make room, then print
-                execute!(stdout, MoveTo(0, ui_start))?;
-
-                // Insert lines by scrolling up (pushes existing content into scrollback)
-                execute!(stdout, crossterm::terminal::ScrollUp(line_count))?;
-
-                // Print at the newly created space (just above where UI will be)
-                let mut row = ui_start.saturating_sub(line_count);
-                for line in &chat_lines {
-                    execute!(stdout, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
-                    line.println()?;
-                    row = row.saturating_add(1);
-                }
-                // Once we start scrolling, disable row-based printing
-                app.chat_print_row = None;
+            // Print at the newly created space (just above where UI will be)
+            let mut row = ui_start.saturating_sub(line_count);
+            for line in &chat_lines {
+                execute!(stdout, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
+                line.println()?;
+                row = row.saturating_add(1);
             }
         }
 

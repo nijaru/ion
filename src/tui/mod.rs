@@ -135,8 +135,6 @@ pub struct App {
     pub(crate) last_ui_start: Option<u16>,
     /// UI anchor row for startup before first message (keeps UI near header)
     pub(crate) startup_ui_anchor: Option<u16>,
-    /// Row where next chat content should be printed (None = use scroll-based positioning)
-    pub chat_print_row: Option<u16>,
     /// Flag to request full screen clear + repaint (e.g., after selector closes)
     pub needs_full_repaint: bool,
 }
