@@ -1,24 +1,22 @@
-//! LLM client implementation using llm-connector.
+//! LLM client implementation with native HTTP backends.
 
+use super::anthropic::AnthropicClient;
 use super::api_provider::Provider;
 use super::error::Error;
 use super::gemini_oauth::GeminiOAuthClient;
-use super::types::{
-    ChatRequest, ContentBlock, Message, Role, StreamEvent, ToolCallEvent, ToolDefinition,
-};
+use super::openai_compat::OpenAICompatClient;
+use super::types::{ChatRequest, Message, StreamEvent};
 use crate::auth;
 use async_trait::async_trait;
-use futures::StreamExt;
-use llm_connector::LlmClient;
-use std::fmt::Write as _;
-use std::sync::Arc;
 use tokio::sync::mpsc;
 
 /// Backend implementation for different provider types.
 enum Backend {
-    /// Standard llm-connector client
-    LlmConnector(LlmClient),
-    /// Custom Gemini OAuth client (uses Bearer auth)
+    /// Native Anthropic Messages API
+    Anthropic(AnthropicClient),
+    /// Native OpenAI-compatible API (OpenAI, OpenRouter, Groq, Kimi, Ollama, ChatGPT)
+    OpenAICompat(OpenAICompatClient),
+    /// Native Google Generative AI (Gemini OAuth, Google)
     GeminiOAuth(GeminiOAuthClient),
 }
 
@@ -32,20 +30,8 @@ impl Client {
     /// Create a new client for the given provider.
     pub fn new(provider: Provider, api_key: impl Into<String>) -> Result<Self, Error> {
         let api_key = api_key.into();
-
-        // Gemini OAuth needs special handling (Bearer auth instead of API key)
-        if provider == Provider::Gemini {
-            return Ok(Self {
-                provider,
-                backend: Backend::GeminiOAuth(GeminiOAuthClient::new(api_key)),
-            });
-        }
-
-        let client = Self::create_llm_client(provider, &api_key, None)?;
-        Ok(Self {
-            provider,
-            backend: Backend::LlmConnector(client),
-        })
+        let backend = Self::create_backend(provider, &api_key, None)?;
+        Ok(Self { provider, backend })
     }
 
     /// Create client from provider, auto-detecting API key or OAuth credentials.
@@ -89,20 +75,8 @@ impl Client {
     ) -> Result<Self, Error> {
         let api_key = api_key.into();
         let base_url = base_url.into();
-
-        // Gemini OAuth doesn't support custom base URL yet
-        if provider == Provider::Gemini {
-            return Ok(Self {
-                provider,
-                backend: Backend::GeminiOAuth(GeminiOAuthClient::new(api_key)),
-            });
-        }
-
-        let client = Self::create_llm_client(provider, &api_key, Some(&base_url))?;
-        Ok(Self {
-            provider,
-            backend: Backend::LlmConnector(client),
-        })
+        let backend = Self::create_backend(provider, &api_key, Some(&base_url))?;
+        Ok(Self { provider, backend })
     }
 
     /// Get the provider type.
@@ -111,179 +85,35 @@ impl Client {
         self.provider
     }
 
-    /// Create the appropriate llm-connector client for a provider.
-    fn create_llm_client(
+    /// Create the appropriate backend for a provider.
+    fn create_backend(
         provider: Provider,
         api_key: &str,
         base_url: Option<&str>,
-    ) -> Result<LlmClient, Error> {
-        let client = match provider {
-            Provider::Anthropic => LlmClient::anthropic(api_key),
-            Provider::OpenAI => {
-                if let Some(url) = base_url {
-                    LlmClient::openai_with_base_url(api_key, url)
+    ) -> Result<Backend, Error> {
+        match provider {
+            // Anthropic uses native Messages API
+            Provider::Anthropic => Ok(Backend::Anthropic(AnthropicClient::new(api_key))),
+
+            // Google/Gemini use native Generative AI API
+            Provider::Google | Provider::Gemini => {
+                Ok(Backend::GeminiOAuth(GeminiOAuthClient::new(api_key)))
+            }
+
+            // OpenAI-compatible providers
+            Provider::OpenAI
+            | Provider::ChatGpt
+            | Provider::OpenRouter
+            | Provider::Groq
+            | Provider::Kimi
+            | Provider::Ollama => {
+                let client = if let Some(url) = base_url {
+                    OpenAICompatClient::with_base_url(provider, api_key, url)?
                 } else {
-                    LlmClient::openai(api_key)
-                }
+                    OpenAICompatClient::new(provider, api_key)?
+                };
+                Ok(Backend::OpenAICompat(client))
             }
-            Provider::Google => LlmClient::google(api_key),
-            Provider::Ollama => {
-                if let Some(url) = base_url {
-                    LlmClient::ollama_with_base_url(url)
-                } else {
-                    LlmClient::ollama()
-                }
-            }
-            Provider::OpenRouter => {
-                LlmClient::openai_compatible(api_key, "https://openrouter.ai/api/v1", "openrouter")
-            }
-            Provider::Groq => {
-                LlmClient::openai_compatible(api_key, "https://api.groq.com/openai/v1", "groq")
-            }
-            Provider::Kimi => {
-                LlmClient::openai_compatible(api_key, "https://api.moonshot.ai/v1", "moonshot")
-            }
-            // OAuth providers use the same API backends as their non-OAuth counterparts
-            Provider::ChatGpt => {
-                // ChatGPT uses OpenAI API with OAuth token
-                if let Some(url) = base_url {
-                    LlmClient::openai_with_base_url(api_key, url)
-                } else {
-                    LlmClient::openai(api_key)
-                }
-            }
-            Provider::Gemini => {
-                // Gemini OAuth uses Google API with OAuth token
-                LlmClient::google(api_key)
-            }
-        };
-        client.map_err(|e| Error::Build(e.to_string()))
-    }
-
-    /// Convert our messages to llm-connector format.
-    fn convert_messages(messages: &[Message]) -> Vec<llm_connector::Message> {
-        let mut result = Vec::new();
-
-        for msg in messages {
-            match msg.role {
-                Role::System => {
-                    for block in msg.content.as_ref() {
-                        if let ContentBlock::Text { text } = block {
-                            result.push(llm_connector::Message::system(text));
-                        }
-                    }
-                }
-                Role::User => {
-                    let mut text = String::new();
-                    for block in msg.content.as_ref() {
-                        if let ContentBlock::Text { text: t } = block {
-                            text.push_str(t);
-                        }
-                    }
-                    if !text.is_empty() {
-                        result.push(llm_connector::Message::user(&text));
-                    }
-                }
-                Role::Assistant => {
-                    let mut text = String::new();
-                    let mut tool_calls = Vec::new();
-                    for block in msg.content.as_ref() {
-                        match block {
-                            ContentBlock::Text { text: t } => text.push_str(t),
-                            ContentBlock::Thinking { thinking } => {
-                                let _ = write!(text, "<thinking>{thinking}</thinking>");
-                            }
-                            ContentBlock::ToolCall {
-                                id,
-                                name,
-                                arguments,
-                            } => {
-                                tool_calls.push(llm_connector::types::ToolCall {
-                                    id: id.clone(),
-                                    call_type: "function".to_string(),
-                                    index: None,
-                                    function: llm_connector::types::FunctionCall {
-                                        name: name.clone(),
-                                        arguments: arguments.to_string(),
-                                    },
-                                });
-                            }
-                            _ => {}
-                        }
-                    }
-                    if !text.is_empty() || !tool_calls.is_empty() {
-                        let mut msg = llm_connector::Message::assistant(&text);
-                        if !tool_calls.is_empty() {
-                            msg.tool_calls = Some(tool_calls);
-                        }
-                        result.push(msg);
-                    }
-                }
-                Role::ToolResult => {
-                    for block in msg.content.as_ref() {
-                        if let ContentBlock::ToolResult {
-                            tool_call_id,
-                            content,
-                            is_error,
-                        } = block
-                        {
-                            tracing::debug!(
-                                "Tool result: id={}, content_len={}, is_error={}",
-                                tool_call_id,
-                                content.len(),
-                                is_error
-                            );
-                            // Encode error status in content (llm-connector doesn't pass is_error)
-                            // Note: llm-connector expects (content, tool_call_id) order
-                            if *is_error {
-                                result.push(llm_connector::Message::tool(
-                                    format!("[ERROR] {content}"),
-                                    tool_call_id,
-                                ));
-                            } else {
-                                result.push(llm_connector::Message::tool(content, tool_call_id));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        result
-    }
-
-    /// Convert our tool definitions to llm-connector format.
-    fn convert_tools(tools: &[ToolDefinition]) -> Vec<llm_connector::types::Tool> {
-        tools
-            .iter()
-            .map(|t| llm_connector::types::Tool {
-                tool_type: "function".to_string(),
-                function: llm_connector::types::Function {
-                    name: t.name.clone(),
-                    description: Some(t.description.clone()),
-                    parameters: t.parameters.clone(),
-                },
-            })
-            .collect()
-    }
-
-    /// Build a `ChatRequest` for llm-connector.
-    fn build_request(request: &ChatRequest) -> llm_connector::ChatRequest {
-        let messages = Self::convert_messages(&request.messages);
-        let tools = Self::convert_tools(&request.tools);
-
-        tracing::debug!(
-            "Building request: model='{}', input_tools={}, converted_tools={}",
-            request.model,
-            request.tools.len(),
-            tools.len()
-        );
-
-        llm_connector::ChatRequest {
-            model: request.model.clone(),
-            messages,
-            tools: if tools.is_empty() { None } else { Some(tools) },
-            ..Default::default()
         }
     }
 }
@@ -317,186 +147,35 @@ impl LlmApi for Client {
         request: ChatRequest,
         tx: mpsc::Sender<StreamEvent>,
     ) -> Result<(), Error> {
-        // Handle Gemini OAuth separately
-        if let Backend::GeminiOAuth(ref client) = self.backend {
-            tracing::debug!(
-                provider = %self.provider.id(),
-                model = %request.model,
-                tools = request.tools.len(),
-                messages = request.messages.len(),
-                "API stream request (Gemini OAuth)"
-            );
-            return client.stream(request, tx).await;
-        }
-
-        // Standard llm-connector path
-        let Backend::LlmConnector(ref llm_client) = self.backend else {
-            unreachable!()
-        };
-
-        let llm_request = Self::build_request(&request);
-
         tracing::debug!(
             provider = %self.provider.id(),
-            model = %llm_request.model,
-            tools = llm_request.tools.as_ref().map_or(0, std::vec::Vec::len),
-            messages = llm_request.messages.len(),
+            model = %request.model,
+            tools = request.tools.len(),
+            messages = request.messages.len(),
             "API stream request"
         );
 
-        let mut stream = llm_client.chat_stream(&llm_request).await.map_err(|e| {
-            tracing::error!("Stream error from {}: {:?}", self.provider.id(), e);
-            Error::Stream(format!("{} ({})", e, self.provider.id()))
-        })?;
-
-        while let Some(chunk_result) = stream.next().await {
-            match chunk_result {
-                Ok(chunk) => {
-                    // Handle text content
-                    if let Some(content) = chunk.get_content()
-                        && !content.is_empty()
-                    {
-                        let _ = tx.send(StreamEvent::TextDelta(content.to_string())).await;
-                    }
-
-                    // Handle tool calls from choices
-                    for choice in &chunk.choices {
-                        if let Some(tool_calls) = &choice.delta.tool_calls {
-                            for tc in tool_calls {
-                                // Only emit complete tool calls (with id and name)
-                                if !tc.id.is_empty() && !tc.function.name.is_empty() {
-                                    let arguments: serde_json::Value =
-                                        serde_json::from_str(&tc.function.arguments)
-                                            .unwrap_or(serde_json::Value::Null);
-
-                                    let _ = tx
-                                        .send(StreamEvent::ToolCall(ToolCallEvent {
-                                            id: tc.id.clone(),
-                                            name: tc.function.name.clone(),
-                                            arguments,
-                                        }))
-                                        .await;
-                                }
-                            }
-                        }
-
-                        // Check for completion
-                        if choice.finish_reason.as_deref() == Some("stop")
-                            || choice.finish_reason.as_deref() == Some("tool_calls")
-                        {
-                            break;
-                        }
-                    }
-                }
-                Err(e) => {
-                    let _ = tx.send(StreamEvent::Error(e.to_string())).await;
-                    return Err(Error::Stream(e.to_string()));
-                }
-            }
+        match &self.backend {
+            Backend::Anthropic(client) => client.stream(request, tx).await,
+            Backend::OpenAICompat(client) => client.stream(request, tx).await,
+            Backend::GeminiOAuth(client) => client.stream(request, tx).await,
         }
-
-        let _ = tx.send(StreamEvent::Done).await;
-        Ok(())
     }
 
     async fn complete(&self, request: ChatRequest) -> Result<Message, Error> {
-        // Handle Gemini OAuth separately
-        if let Backend::GeminiOAuth(ref client) = self.backend {
-            tracing::debug!(
-                provider = %self.provider.id(),
-                model = %request.model,
-                tools = request.tools.len(),
-                messages = request.messages.len(),
-                "API request (Gemini OAuth)"
-            );
-            return client.complete(request).await;
-        }
-
-        // Standard llm-connector path
-        let Backend::LlmConnector(ref llm_client) = self.backend else {
-            unreachable!()
-        };
-
-        let llm_request = Self::build_request(&request);
-
         tracing::debug!(
             provider = %self.provider.id(),
-            model = %llm_request.model,
-            tools = llm_request.tools.as_ref().map_or(0, std::vec::Vec::len),
-            messages = llm_request.messages.len(),
+            model = %request.model,
+            tools = request.tools.len(),
+            messages = request.messages.len(),
             "API request"
         );
 
-        // Full request body at trace level (verbose)
-        if tracing::enabled!(tracing::Level::TRACE)
-            && let Ok(json) = serde_json::to_string_pretty(&llm_request)
-        {
-            tracing::trace!("Request body:\n{}", json);
+        match &self.backend {
+            Backend::Anthropic(client) => client.complete(request).await,
+            Backend::OpenAICompat(client) => client.complete(request).await,
+            Backend::GeminiOAuth(client) => client.complete(request).await,
         }
-
-        let response = llm_client.chat(&llm_request).await.map_err(|e| {
-            // Log full error details for debugging
-            tracing::error!(
-                provider = %self.provider.id(),
-                model = %llm_request.model,
-                error = ?e,
-                "API error"
-            );
-            // Full request body on error for debugging (trace level to avoid logging user data at debug)
-            if let Ok(json) = serde_json::to_string_pretty(&llm_request) {
-                tracing::trace!("Failed request body:\n{}", json);
-            }
-            // Format error with helpful context
-            Error::Api(format!(
-                "{}\n  Provider: {}\n  Model: {}",
-                e,
-                self.provider.id(),
-                llm_request.model
-            ))
-        })?;
-
-        tracing::debug!(
-            provider = %self.provider.id(),
-            choices = response.choices.len(),
-            "API response"
-        );
-
-        let mut content_blocks = Vec::new();
-
-        // Extract content from first choice
-        if let Some(choice) = response.choices.first() {
-            // Extract text content from message blocks
-            for block in &choice.message.content {
-                if let llm_connector::types::MessageBlock::Text { text } = block {
-                    content_blocks.push(ContentBlock::Text { text: text.clone() });
-                }
-            }
-
-            // Extract tool calls
-            if let Some(tool_calls) = &choice.message.tool_calls {
-                for tc in tool_calls {
-                    let arguments = serde_json::from_str(&tc.function.arguments)
-                        .inspect_err(|e| {
-                            tracing::warn!(
-                                "Malformed tool arguments for {}: {}",
-                                tc.function.name,
-                                e
-                            );
-                        })
-                        .unwrap_or(serde_json::Value::Null);
-                    content_blocks.push(ContentBlock::ToolCall {
-                        id: tc.id.clone(),
-                        name: tc.function.name.clone(),
-                        arguments,
-                    });
-                }
-            }
-        }
-
-        Ok(Message {
-            role: Role::Assistant,
-            content: Arc::new(content_blocks),
-        })
     }
 }
 
@@ -517,5 +196,40 @@ mod tests {
         // Ollama should always work (no key needed)
         let client = Client::from_provider(Provider::Ollama);
         assert!(client.is_ok());
+    }
+
+    #[test]
+    fn test_anthropic_backend() {
+        let client = Client::new(Provider::Anthropic, "test-key").unwrap();
+        assert_eq!(client.provider(), Provider::Anthropic);
+        assert!(matches!(client.backend, Backend::Anthropic(_)));
+    }
+
+    #[test]
+    fn test_openai_backend() {
+        let client = Client::new(Provider::OpenAI, "test-key").unwrap();
+        assert_eq!(client.provider(), Provider::OpenAI);
+        assert!(matches!(client.backend, Backend::OpenAICompat(_)));
+    }
+
+    #[test]
+    fn test_openrouter_backend() {
+        let client = Client::new(Provider::OpenRouter, "test-key").unwrap();
+        assert_eq!(client.provider(), Provider::OpenRouter);
+        assert!(matches!(client.backend, Backend::OpenAICompat(_)));
+    }
+
+    #[test]
+    fn test_gemini_backend() {
+        let client = Client::new(Provider::Gemini, "test-token").unwrap();
+        assert_eq!(client.provider(), Provider::Gemini);
+        assert!(matches!(client.backend, Backend::GeminiOAuth(_)));
+    }
+
+    #[test]
+    fn test_google_backend() {
+        let client = Client::new(Provider::Google, "test-key").unwrap();
+        assert_eq!(client.provider(), Provider::Google);
+        assert!(matches!(client.backend, Backend::GeminiOAuth(_)));
     }
 }

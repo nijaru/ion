@@ -386,21 +386,21 @@ impl GeminiResponse {
     fn into_message(self) -> Message {
         let mut content_blocks = Vec::new();
 
-        if let Some(candidates) = self.candidates {
-            if let Some(candidate) = candidates.into_iter().next() {
-                if let Some(content) = candidate.content {
-                    for part in content.parts {
-                        if let Some(text) = part.text {
-                            content_blocks.push(ContentBlock::Text { text });
-                        }
-                        if let Some(fc) = part.function_call {
-                            content_blocks.push(ContentBlock::ToolCall {
-                                id: format!("call_{}", fc.name), // Generate ID
-                                name: fc.name,
-                                arguments: fc.args,
-                            });
-                        }
-                    }
+        if let Some(content) = self
+            .candidates
+            .and_then(|mut c| c.pop())
+            .and_then(|c| c.content)
+        {
+            for part in content.parts {
+                if let Some(text) = part.text {
+                    content_blocks.push(ContentBlock::Text { text });
+                }
+                if let Some(fc) = part.function_call {
+                    content_blocks.push(ContentBlock::ToolCall {
+                        id: format!("call_{}", fc.name), // Generate ID
+                        name: fc.name,
+                        arguments: fc.args,
+                    });
                 }
             }
         }
