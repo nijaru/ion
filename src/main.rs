@@ -78,7 +78,8 @@ struct TerminalState {
 fn setup_terminal() -> Result<TerminalState, Box<dyn std::error::Error>> {
     use crossterm::{
         event::{
-            EnableBracketedPaste, KeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+            EnableBracketedPaste, EnableFocusChange, KeyboardEnhancementFlags,
+            PushKeyboardEnhancementFlags,
         },
         execute,
         terminal::{enable_raw_mode, supports_keyboard_enhancement},
@@ -87,7 +88,7 @@ fn setup_terminal() -> Result<TerminalState, Box<dyn std::error::Error>> {
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnableBracketedPaste)?;
+    execute!(stdout, EnableBracketedPaste, EnableFocusChange)?;
 
     let supports_enhancement = supports_keyboard_enhancement().unwrap_or(false);
     if supports_enhancement {
@@ -109,7 +110,11 @@ fn handle_resume(
     app: &mut ion::tui::App,
     resume_option: ResumeOption,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use crossterm::{event::DisableBracketedPaste, execute, terminal::disable_raw_mode};
+    use crossterm::{
+        event::{DisableBracketedPaste, DisableFocusChange},
+        execute,
+        terminal::disable_raw_mode,
+    };
     use ion::tui::message_list::{MessageEntry, Sender};
     use std::io;
 
@@ -140,7 +145,7 @@ fn handle_resume(
         },
         ResumeOption::ById(id) => {
             if let Err(e) = app.load_session(&id) {
-                let _ = execute!(io::stdout(), DisableBracketedPaste);
+                let _ = execute!(io::stdout(), DisableBracketedPaste, DisableFocusChange);
                 let _ = disable_raw_mode();
                 eprintln!("Error: Session '{id}' not found: {e}");
                 return Err(e.into());
@@ -163,7 +168,7 @@ fn cleanup_terminal(
 ) -> Result<(), Box<dyn std::error::Error>> {
     use crossterm::{
         cursor::{MoveTo, Show},
-        event::{DisableBracketedPaste, PopKeyboardEnhancementFlags},
+        event::{DisableBracketedPaste, DisableFocusChange, PopKeyboardEnhancementFlags},
         execute,
         terminal::{disable_raw_mode, Clear, ClearType},
     };
@@ -179,7 +184,7 @@ fn cleanup_terminal(
     execute!(stdout, MoveTo(0, ui_start))?;
 
     // Restore terminal
-    execute!(stdout, DisableBracketedPaste)?;
+    execute!(stdout, DisableBracketedPaste, DisableFocusChange)?;
     if supports_enhancement {
         execute!(stdout, PopKeyboardEnhancementFlags)?;
     }
@@ -410,7 +415,7 @@ async fn run_tui(
             app.editor_requested = false;
 
             // Temporarily restore terminal for editor
-            execute!(stdout, DisableBracketedPaste)?;
+            execute!(stdout, DisableBracketedPaste, event::DisableFocusChange)?;
             if supports_enhancement {
                 execute!(stdout, PopKeyboardEnhancementFlags)?;
             }
@@ -433,7 +438,7 @@ async fn run_tui(
 
             // Re-enter TUI mode
             enable_raw_mode()?;
-            execute!(stdout, EnableBracketedPaste)?;
+            execute!(stdout, EnableBracketedPaste, event::EnableFocusChange)?;
             if supports_enhancement {
                 execute!(
                     stdout,
