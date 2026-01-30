@@ -22,6 +22,14 @@ async fn main() -> ExitCode {
             // One-shot CLI mode
             ion::cli::run(args, cli.auto_approve).await
         }
+        Some(Commands::Login(args)) => {
+            // OAuth login
+            ion::cli::login(args).await
+        }
+        Some(Commands::Logout(args)) => {
+            // OAuth logout
+            ion::cli::logout(args)
+        }
         None => {
             // Load config for permission defaults
             let config = match Config::load() {
