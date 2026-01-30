@@ -13,12 +13,25 @@ const TIMEOUT: Duration = Duration::from_secs(120);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Authentication configuration.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum AuthConfig {
     /// Bearer token authentication (Authorization: Bearer {token}).
     Bearer(String),
     /// Custom header authentication (e.g., x-api-key: {key}).
     ApiKey { header: String, key: String },
+}
+
+impl std::fmt::Debug for AuthConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Bearer(_) => f.debug_tuple("Bearer").field(&"[REDACTED]").finish(),
+            Self::ApiKey { header, .. } => f
+                .debug_struct("ApiKey")
+                .field("header", header)
+                .field("key", &"[REDACTED]")
+                .finish(),
+        }
+    }
 }
 
 /// HTTP client for LLM API requests.
@@ -52,16 +65,16 @@ impl HttpClient {
 
         match &self.auth {
             AuthConfig::Bearer(token) => {
-                if let Ok(value) = HeaderValue::from_str(&format!("Bearer {token}")) {
-                    headers.insert(AUTHORIZATION, value);
-                }
+                let value = HeaderValue::from_str(&format!("Bearer {token}"))
+                    .expect("Bearer token contains invalid header characters");
+                headers.insert(AUTHORIZATION, value);
             }
             AuthConfig::ApiKey { header, key } => {
-                if let (Ok(name), Ok(value)) =
-                    (reqwest::header::HeaderName::try_from(header), HeaderValue::from_str(key))
-                {
-                    headers.insert(name, value);
-                }
+                let name = reqwest::header::HeaderName::try_from(header)
+                    .expect("API key header name is invalid");
+                let value =
+                    HeaderValue::from_str(key).expect("API key contains invalid header characters");
+                headers.insert(name, value);
             }
         }
 

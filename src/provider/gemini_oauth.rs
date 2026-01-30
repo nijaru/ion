@@ -7,6 +7,7 @@
 use crate::provider::error::Error;
 use crate::provider::types::{ChatRequest, ContentBlock, Message, Role, StreamEvent};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -231,6 +232,18 @@ impl GeminiRequest {
         let mut contents = Vec::new();
         let mut system_instruction = None;
 
+        // Build a map of tool_call_id -> function_name from assistant messages
+        let mut tool_call_names: HashMap<String, String> = HashMap::new();
+        for msg in request.messages.iter() {
+            if msg.role == Role::Assistant {
+                for block in msg.content.iter() {
+                    if let ContentBlock::ToolCall { id, name, .. } = block {
+                        tool_call_names.insert(id.clone(), name.clone());
+                    }
+                }
+            }
+        }
+
         for msg in request.messages.iter() {
             match msg.role {
                 Role::System => {
@@ -326,6 +339,13 @@ impl GeminiRequest {
                             ..
                         } = block
                         {
+                            // Gemini expects function name, not tool_call_id
+                            // Look up the function name from our map
+                            let function_name = tool_call_names
+                                .get(tool_call_id)
+                                .cloned()
+                                .unwrap_or_else(|| tool_call_id.clone());
+
                             // Gemini expects function responses as user messages
                             contents.push(GeminiContent {
                                 role: Some("user".to_string()),
@@ -333,7 +353,7 @@ impl GeminiRequest {
                                     text: None,
                                     function_call: None,
                                     function_response: Some(GeminiFunctionResponse {
-                                        name: tool_call_id.clone(), // Use tool_call_id as name
+                                        name: function_name,
                                         response: serde_json::json!({ "result": content }),
                                     }),
                                 }],
@@ -384,6 +404,12 @@ impl GeminiResponse {
     }
 
     fn into_message(self) -> Message {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        // Generate unique IDs using timestamp + counter
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+
         let mut content_blocks = Vec::new();
 
         if let Some(content) = self
@@ -396,8 +422,16 @@ impl GeminiResponse {
                     content_blocks.push(ContentBlock::Text { text });
                 }
                 if let Some(fc) = part.function_call {
+                    // Generate unique ID: timestamp_counter_name
+                    let ts = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map(|d| d.as_millis())
+                        .unwrap_or(0);
+                    let count = COUNTER.fetch_add(1, Ordering::Relaxed);
+                    let id = format!("call_{}_{ts}_{count}", fc.name);
+
                     content_blocks.push(ContentBlock::ToolCall {
-                        id: format!("call_{}", fc.name), // Generate ID
+                        id,
                         name: fc.name,
                         arguments: fc.args,
                     });
