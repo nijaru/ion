@@ -2,39 +2,47 @@
 
 ## Current State
 
-| Metric    | Value           | Updated    |
-| --------- | --------------- | ---------- |
-| Phase     | TUI v2 Complete | 2026-01-27 |
-| Status    | Bootstrap Ready | 2026-01-29 |
-| Toolchain | stable          | 2026-01-22 |
-| Tests     | 128 passing     | 2026-01-29 |
-| Clippy    | clean           | 2026-01-29 |
+| Metric    | Value             | Updated    |
+| --------- | ----------------- | ---------- |
+| Phase     | OAuth Integration | 2026-01-29 |
+| Status    | Testing Needed    | 2026-01-29 |
+| Toolchain | stable            | 2026-01-22 |
+| Tests     | 135 passing       | 2026-01-29 |
+| Clippy    | clean             | 2026-01-29 |
 
-## Top Priorities
+## Current Focus
 
-1. **OAuth subscription support** (tk-uqt6) - Use ChatGPT Plus/Pro & Google AI subscriptions
-   - Design: `ai/design/oauth-subscriptions.md`
-   - Unblocks: Free usage with existing subscriptions
-   - Reference: Codex CLI (Rust), Gemini CLI (TypeScript)
+**OAuth subscription support implemented** - needs real-world testing.
 
-2. **Provider layer replacement** (tk-aq7x) - Replace llm-connector with native HTTP
-   - Design: `ai/design/provider-replacement.md`
-   - Unblocks: Anthropic caching, OpenRouter routing
+```bash
+# Test ChatGPT Plus/Pro
+ion login openai
+ion  # Should show ChatGPT Plus in provider picker
 
-3. **App struct decomposition** - Extract TaskState, AgentContext from App
-   - Lower priority, do incrementally while bootstrapping
+# Test Google AI
+ion login google
+ion  # Should show Google AI (OAuth) in provider picker
+```
 
 ## OAuth Implementation
 
-New feature: use consumer subscriptions instead of API credits.
+| Task                 | ID      | Status  | Notes                          |
+| -------------------- | ------- | ------- | ------------------------------ |
+| OAuth infrastructure | tk-7zp8 | done    | PKCE, callback server, storage |
+| ChatGPT Plus/Pro     | tk-3a5h | testing | Needs real subscription test   |
+| Google AI            | tk-toyu | testing | Needs real subscription test   |
 
-| Task                 | ID      | Status | Blocked By |
-| -------------------- | ------- | ------ | ---------- |
-| OAuth infrastructure | tk-7zp8 | open   | -          |
-| ChatGPT Plus/Pro     | tk-3a5h | open   | tk-7zp8    |
-| Google AI            | tk-toyu | open   | tk-7zp8    |
+**New modules:**
 
-**Value:** $20/month flat vs pay-per-token API credits.
+- `src/auth/` - OAuth PKCE flow, token storage
+- CLI: `ion login openai`, `ion login google`, `ion logout`
+- Providers: `ChatGptPlus`, `GoogleAi` variants
+
+## Top Priorities
+
+1. **Test OAuth with real subscriptions** - Verify login flow works end-to-end
+2. **Provider layer replacement** (tk-aq7x) - Replace llm-connector with native HTTP
+3. **App struct decomposition** - Extract TaskState, UiState from App
 
 ## Open Bugs
 
@@ -46,24 +54,23 @@ New feature: use consumer subscriptions instead of API credits.
 
 ## Module Health
 
-| Module    | Health   | Notes                      |
-| --------- | -------- | -------------------------- |
-| tui/      | GOOD     | v2 complete, stabilizing   |
-| agent/    | GOOD     | Clean turn loop            |
-| provider/ | REFACTOR | Adding OAuth + native HTTP |
-| tool/     | GOOD     | Orchestrator + spawn       |
-| session/  | GOOD     | SQLite persistence + WAL   |
-| skill/    | GOOD     | YAML frontmatter           |
-| mcp/      | OK       | Needs tests                |
-| auth/     | NEW      | OAuth subscription support |
+| Module    | Health | Notes                         |
+| --------- | ------ | ----------------------------- |
+| auth/     | NEW    | OAuth infrastructure complete |
+| tui/      | GOOD   | v2 complete, OAuth integrated |
+| agent/    | GOOD   | Clean turn loop               |
+| provider/ | GOOD   | OAuth providers added         |
+| tool/     | GOOD   | Orchestrator + spawn          |
+| session/  | GOOD   | SQLite persistence + WAL      |
+| skill/    | GOOD   | YAML frontmatter              |
+| mcp/      | OK     | Needs tests                   |
 
 ## Key References
 
-| Topic                   | Location                          |
-| ----------------------- | --------------------------------- |
-| **Refactoring roadmap** | ai/design/refactoring-roadmap.md  |
-| OAuth subscriptions     | ai/design/oauth-subscriptions.md  |
-| TUI architecture        | ai/design/tui-v2.md               |
-| Provider replacement    | ai/design/provider-replacement.md |
-| Plugin design           | ai/design/plugin-architecture.md  |
-| Competitive analysis    | ai/research/agent-survey.md       |
+| Topic                | Location                                  |
+| -------------------- | ----------------------------------------- |
+| **OAuth research**   | ai/research/oauth-implementations-2026.md |
+| OAuth design         | ai/design/oauth-subscriptions.md          |
+| Refactoring roadmap  | ai/design/refactoring-roadmap.md          |
+| TUI architecture     | ai/design/tui-v2.md                       |
+| Provider replacement | ai/design/provider-replacement.md         |
