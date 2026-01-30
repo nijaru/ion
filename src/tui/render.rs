@@ -339,19 +339,27 @@ impl App {
             },
         };
 
+        // Items: (name, is_authenticated, auth_hint)
         let (title, description, items, selected_idx, filter_text): (
             &str,
             &str,
-            Vec<(String, bool)>,
+            Vec<(String, bool, String)>,
             usize,
             String,
         ) = match self.selector_page {
             SelectorPage::Provider => {
-                let items: Vec<(String, bool)> = self
+                let items: Vec<(String, bool, String)> = self
                     .provider_picker
                     .filtered
                     .iter()
-                    .map(|s| (format!("{:?}", s.provider), s.authenticated))
+                    .map(|s| {
+                        let hint = if s.authenticated {
+                            String::new() // No hint needed if already authenticated
+                        } else {
+                            s.provider.auth_hint().to_string()
+                        };
+                        (s.provider.name().to_string(), s.authenticated, hint)
+                    })
                     .collect();
                 (
                     "Providers",
@@ -362,11 +370,11 @@ impl App {
                 )
             }
             SelectorPage::Model => {
-                let items: Vec<(String, bool)> = self
+                let items: Vec<(String, bool, String)> = self
                     .model_picker
                     .filtered_models
                     .iter()
-                    .map(|m| (m.id.clone(), true))
+                    .map(|m| (m.id.clone(), true, String::new()))
                     .collect();
                 (
                     "Models",
@@ -377,7 +385,7 @@ impl App {
                 )
             }
             SelectorPage::Session => {
-                let items: Vec<(String, bool)> = self
+                let items: Vec<(String, bool, String)> = self
                     .session_picker
                     .filtered_sessions
                     .iter()
@@ -386,7 +394,7 @@ impl App {
                             .first_user_message
                             .as_ref().map_or_else(|| "No preview".to_string(), |m| m.chars().take(40).collect::<String>());
                         let label = format!("{} - {}", preview, format_relative_time(s.updated_at));
-                        (label, true)
+                        (label, true, String::new())
                     })
                     .collect();
                 (
@@ -515,7 +523,7 @@ impl App {
             0
         };
 
-        for (i, (item, is_valid)) in items
+        for (i, (item, is_valid, auth_hint)) in items
             .iter()
             .skip(scroll_offset)
             .take(list_height as usize)
@@ -551,10 +559,19 @@ impl App {
             } else if !is_valid {
                 execute!(w, SetAttribute(Attribute::Dim))?;
             }
-            // Truncate item name if too long
-            let max_item_len = (width as usize).saturating_sub(6);
+
+            // Calculate max lengths for name and hint
+            let hint_len = if auth_hint.is_empty() { 0 } else { auth_hint.len() + 3 }; // " · hint"
+            let max_item_len = (width as usize).saturating_sub(6 + hint_len);
             let display_name: String = item.chars().take(max_item_len).collect();
             write!(w, "{display_name}")?;
+
+            // Show auth hint for unauthenticated providers
+            if !auth_hint.is_empty() {
+                execute!(w, SetAttribute(Attribute::Reset), SetAttribute(Attribute::Dim))?;
+                write!(w, " · {auth_hint}")?;
+            }
+
             execute!(w, SetAttribute(Attribute::Reset), ResetColor)?;
 
             row += 1;
