@@ -523,12 +523,19 @@ impl App {
             0
         };
 
-        for (i, (item, is_valid, auth_hint)) in items
+        // Calculate max name length for column alignment (only for visible items)
+        let visible_items: Vec<_> = items
             .iter()
             .skip(scroll_offset)
             .take(list_height as usize)
-            .enumerate()
-        {
+            .collect();
+        let max_name_len = visible_items
+            .iter()
+            .map(|(name, _, _)| name.chars().count())
+            .max()
+            .unwrap_or(0);
+
+        for (i, (item, is_valid, auth_hint)) in visible_items.into_iter().enumerate() {
             execute!(w, MoveTo(0, row))?;
             let actual_idx = scroll_offset + i;
             let is_selected = actual_idx == selected_idx;
@@ -560,19 +567,19 @@ impl App {
                 execute!(w, SetAttribute(Attribute::Dim))?;
             }
 
-            // Calculate max lengths for name and hint
-            let hint_len = if auth_hint.is_empty() { 0 } else { auth_hint.len() + 3 }; // " · hint"
-            let max_item_len = (width as usize).saturating_sub(6 + hint_len);
-            let display_name: String = item.chars().take(max_item_len).collect();
-            write!(w, "{display_name}")?;
-
-            // Show auth hint for unauthenticated providers
-            if !auth_hint.is_empty() {
-                execute!(w, SetAttribute(Attribute::Reset), SetAttribute(Attribute::Dim))?;
-                write!(w, " · {auth_hint}")?;
-            }
-
+            // Render name with padding for column alignment
+            let name_len = item.chars().count();
+            let padding = max_name_len.saturating_sub(name_len);
+            write!(w, "{item}")?;
             execute!(w, SetAttribute(Attribute::Reset), ResetColor)?;
+
+            // Show auth hint in second column (dimmed)
+            if !auth_hint.is_empty() {
+                write!(w, "{:padding$}  ", "", padding = padding)?;
+                execute!(w, SetAttribute(Attribute::Dim))?;
+                write!(w, "{auth_hint}")?;
+                execute!(w, SetAttribute(Attribute::Reset))?;
+            }
 
             row += 1;
         }
