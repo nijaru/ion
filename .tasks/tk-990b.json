@@ -3,7 +3,7 @@
   "ref": "990b",
   "title": "[BUG] Input box top border pushed to scrollback on first message",
   "description": "When sending the first message in a fresh session, the input box's top border (─────) appears in scrollback above the chat. Attempted fixes haven't resolved it. Need to trace exactly where the border is being rendered and ensure it's cleared before scrolling.",
-  "status": "open",
+  "status": "active",
   "priority": 2,
   "labels": [],
   "assignees": [],
@@ -15,10 +15,14 @@
     {
       "ts": "2026-01-30T00:03:46.808Z",
       "msg": "Attempted fixes (2026-01-29):\n1. Clear from ui_start to term_height before scrolling - didn't work\n2. Clear from startup_ui_anchor to term_height - didn't work\n\nThe border appears at row 3-4 (right after ION/version header) but the input box is drawn at ui_start (near bottom, e.g., row 47). Somehow the top border ends up near the header position after scrolling.\n\nNeed to investigate:\n- Order of operations in main.rs render loop\n- When exactly draw_direct runs vs when chat lines are inserted\n- Whether the scroll operation is pushing unexpected content"
+    },
+    {
+      "ts": "2026-01-30T00:22:10.080Z",
+      "msg": "Root cause found: startup_ui_anchor was cleared in events.rs line 303 when Enter was pressed, BEFORE the render loop could use it to clear the screen. This caused the clear to be skipped, so the input box border at the anchor position was pushed to scrollback by ScrollUp. Fix: removed the premature clear, anchor is now only consumed by take_startup_ui_anchor() in main.rs. Also moved the clear to outside sync update block and use single Clear(FromCursorDown) instead of line-by-line clearing."
     }
   ],
   "created_at": "2026-01-30T00:03:33.118Z",
-  "updated_at": "2026-01-30T00:03:46.808Z",
+  "updated_at": "2026-01-30T00:22:10.080Z",
   "completed_at": null,
   "external": {}
 }
