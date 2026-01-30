@@ -1,0 +1,21 @@
+{
+  "project": "tk",
+  "ref": "toyu",
+  "title": "[AUTH] Google AI OAuth integration",
+  "description": "Phase 3: Google OAuth endpoints, GoogleAi provider variant, ion login google command",
+  "status": "open",
+  "priority": 2,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [
+    "tk-7zp8"
+  ],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-30T03:12:45.222Z",
+  "updated_at": "2026-01-30T03:12:51.689Z",
+  "completed_at": null,
+  "external": {}
+}

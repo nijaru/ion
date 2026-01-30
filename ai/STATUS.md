@@ -5,40 +5,36 @@
 | Metric    | Value           | Updated    |
 | --------- | --------------- | ---------- |
 | Phase     | TUI v2 Complete | 2026-01-27 |
-| Status    | Stabilizing     | 2026-01-29 |
+| Status    | Bootstrap Ready | 2026-01-29 |
 | Toolchain | stable          | 2026-01-22 |
 | Tests     | 128 passing     | 2026-01-29 |
 | Clippy    | clean           | 2026-01-29 |
 
 ## Top Priorities
 
-1. **Provider layer replacement** (tk-aq7x) - Replace llm-connector with native HTTP
+1. **OAuth subscription support** (tk-uqt6) - Use ChatGPT Plus/Pro & Google AI subscriptions
+   - Design: `ai/design/oauth-subscriptions.md`
+   - Unblocks: Free usage with existing subscriptions
+   - Reference: Codex CLI (Rust), Gemini CLI (TypeScript)
+
+2. **Provider layer replacement** (tk-aq7x) - Replace llm-connector with native HTTP
    - Design: `ai/design/provider-replacement.md`
-   - Unblocks: Anthropic caching, OpenRouter routing, Kimi fixes
-2. **Anthropic caching** (tk-268g) - 50-100x cost savings, blocked by provider work
+   - Unblocks: Anthropic caching, OpenRouter routing
+
 3. **App struct decomposition** - Extract TaskState, AgentContext from App
+   - Lower priority, do incrementally while bootstrapping
 
-## Recent Work
+## OAuth Implementation
 
-### RenderState Refactor (2026-01-29)
+New feature: use consumer subscriptions instead of API credits.
 
-Extracted render state from App struct, implemented row-tracking chat positioning.
+| Task                 | ID      | Status | Blocked By |
+| -------------------- | ------- | ------ | ---------- |
+| OAuth infrastructure | tk-7zp8 | open   | -          |
+| ChatGPT Plus/Pro     | tk-3a5h | open   | tk-7zp8    |
+| Google AI            | tk-toyu | open   | tk-7zp8    |
 
-**Changes:**
-
-- New `src/tui/render_state.rs` - centralized render state
-- 4 reset methods: `reset_for_reflow`, `reset_for_new_conversation`, `reset_for_session_load`, `mark_reflow_complete`
-- Two-mode positioning: row-tracking (content fits) vs scroll (overflow)
-
-**Commits:** bb36486, a10d57f
-
-**Fixed:** tk-zn6h (chat positioning - no empty lines before short chat)
-
-**Review findings for future:**
-
-- App struct still large (30+ fields) - consider extracting TaskState, AgentContext
-- render.rs is 800 lines - consider splitting selector rendering
-- Duplicate resize handling in main.rs
+**Value:** $20/month flat vs pay-per-token API credits.
 
 ## Open Bugs
 
@@ -50,22 +46,23 @@ Extracted render state from App struct, implemented row-tracking chat positionin
 
 ## Module Health
 
-| Module    | Health   | Notes                    |
-| --------- | -------- | ------------------------ |
-| tui/      | GOOD     | v2 complete, stabilizing |
-| agent/    | GOOD     | Clean turn loop          |
-| provider/ | REFACTOR | Replacing llm-connector  |
-| tool/     | GOOD     | Orchestrator + spawn     |
-| session/  | GOOD     | SQLite persistence + WAL |
-| skill/    | GOOD     | YAML frontmatter         |
-| mcp/      | OK       | Needs tests              |
+| Module    | Health   | Notes                      |
+| --------- | -------- | -------------------------- |
+| tui/      | GOOD     | v2 complete, stabilizing   |
+| agent/    | GOOD     | Clean turn loop            |
+| provider/ | REFACTOR | Adding OAuth + native HTTP |
+| tool/     | GOOD     | Orchestrator + spawn       |
+| session/  | GOOD     | SQLite persistence + WAL   |
+| skill/    | GOOD     | YAML frontmatter           |
+| mcp/      | OK       | Needs tests                |
+| auth/     | NEW      | OAuth subscription support |
 
 ## Key References
 
 | Topic                | Location                          |
 | -------------------- | --------------------------------- |
+| OAuth subscriptions  | ai/design/oauth-subscriptions.md  |
 | TUI architecture     | ai/design/tui-v2.md               |
-| Chat positioning     | ai/design/chat-positioning.md     |
 | Provider replacement | ai/design/provider-replacement.md |
 | Plugin design        | ai/design/plugin-architecture.md  |
 | Competitive analysis | ai/research/agent-survey.md       |
