@@ -78,6 +78,15 @@ impl Credentials {
             Self::OAuth(tokens) => &tokens.access_token,
         }
     }
+
+    /// Check if credentials are usable (not expired, or can be refreshed).
+    #[must_use]
+    pub fn is_usable(&self) -> bool {
+        match self {
+            Self::ApiKey { .. } => true,
+            Self::OAuth(tokens) => !tokens.is_expired() || tokens.refresh_token.is_some(),
+        }
+    }
 }
 
 /// Storage file format.

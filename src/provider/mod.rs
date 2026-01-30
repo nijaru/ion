@@ -50,8 +50,9 @@ pub fn create_http_client() -> reqwest::Client {
 }
 
 /// Create a client for the given provider, auto-detecting API key from environment.
-pub fn create(provider: Provider) -> Result<Client, Error> {
-    Client::from_provider(provider)
+/// For OAuth providers, this will refresh expired tokens if possible.
+pub async fn create(provider: Provider) -> Result<Client, Error> {
+    Client::from_provider(provider).await
 }
 
 #[cfg(test)]
@@ -73,9 +74,9 @@ mod tests {
         assert_eq!(Provider::Google.id(), "google");
     }
 
-    #[test]
-    fn test_ollama_no_key_needed() {
-        let result = Client::from_provider(Provider::Ollama);
+    #[tokio::test]
+    async fn test_ollama_no_key_needed() {
+        let result = Client::from_provider(Provider::Ollama).await;
         assert!(result.is_ok());
     }
 }
