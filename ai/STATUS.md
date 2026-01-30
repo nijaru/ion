@@ -26,6 +26,18 @@
 
 ## Current Focus
 
+**render.rs refactoring** - Sprint plan at `ai/sprints/render-refactor.md`:
+
+| Task    | Description                | Status  |
+| ------- | -------------------------- | ------- |
+| tk-j6tw | Consolidate constants      | pending |
+| tk-3dzs | Extract progress helpers   | pending |
+| tk-rgze | Selector data model        | pending |
+| tk-w1rg | Selector rendering helpers | pending |
+| tk-8y5l | Extract selector module    | pending |
+
+Tasks 1-2 are independent (can be done in parallel). Tasks 3-5 are sequential.
+
 **OAuth testing** - ChatGPT working, Gemini needs investigation:
 
 - ChatGPT OAuth: Working end-to-end

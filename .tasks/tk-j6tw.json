@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "j6tw",
+  "title": "[REFACTOR] render.rs - consolidate constants",
+  "description": "Task 1 from ai/sprints/render-refactor.md - Move MAX_VISIBLE_ITEMS and SELECTOR_OVERHEAD to module level",
+  "status": "done",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-30T22:38:58.958Z",
+  "updated_at": "2026-01-30T22:53:31.565Z",
+  "completed_at": "2026-01-30T22:53:31.565Z",
+  "external": {}
+}
