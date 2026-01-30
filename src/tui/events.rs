@@ -39,6 +39,11 @@ impl App {
                 // Reset render state to force reprint of all chat
                 self.handle_resize();
             }
+            Event::FocusGained => {
+                // Force full UI redraw when terminal regains focus
+                // This fixes rendering artifacts from terminal tab switching
+                self.render_state.needs_full_repaint = true;
+            }
             _ => {}
         }
     }
