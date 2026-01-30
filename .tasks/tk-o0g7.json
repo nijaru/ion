@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "o0g7",
+  "title": "Extensible API providers (config + plugin)",
+  "description": "Allow adding OpenAI-compatible API providers via:\n1. Config: Edit config.toml with id, name, base_url, env_var, type\n2. Plugin: Drop-in file with pre-configured provider (for non-technical users)\n\nExamples: xAI, Together, Fireworks, self-hosted LLMs.\nPlugins are pre-packaged configs that can be shared/distributed.",
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-01-30T04:14:13.261Z",
+  "updated_at": "2026-01-30T04:14:13.261Z",
+  "completed_at": null,
+  "external": {}
+}
