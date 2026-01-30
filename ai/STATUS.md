@@ -12,6 +12,12 @@
 
 ## Just Completed
 
+**Code review fixes** (2026-01-29):
+
+- AuthConfig Debug redacts credentials
+- HTTP client fails fast on invalid auth headers
+- Gemini tool calls use function name and unique IDs
+
 **Provider layer replacement** - native HTTP implementations:
 
 - Anthropic Messages API with `cache_control` support
