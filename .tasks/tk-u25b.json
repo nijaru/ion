@@ -23,10 +23,14 @@
     {
       "ts": "2026-01-30T21:15:37.243Z",
       "msg": "Additional fix: Reset last_ui_start when transitioning from row-tracking to scroll mode in main.rs overflow handling. Without this, stale ui_start values could cause the scroll mode clearing to wipe freshly-printed content."
+    },
+    {
+      "ts": "2026-01-30T21:58:52.184Z",
+      "msg": "Additional fixes from thorough review: 1) Added last_ui_start and last_render_width reset to reset_for_session_load() to prevent stale values after session load. 2) Refactored clear_from calculation for clarity - explicitly capture old_ui_start before updating."
     }
   ],
   "created_at": "2026-01-30T06:07:06.407Z",
-  "updated_at": "2026-01-30T21:15:37.243Z",
+  "updated_at": "2026-01-30T21:58:52.184Z",
   "completed_at": "2026-01-30T18:33:21.871Z",
   "external": {}
 }
