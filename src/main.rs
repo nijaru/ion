@@ -314,23 +314,24 @@ async fn run_tui(
             }
         }
 
+        // Print any new chat content using insert_before pattern
+        let chat_lines = app.take_chat_inserts(term_width);
+
+        // If this is the first message, clear startup UI BEFORE sync update
+        // This ensures the clear is fully processed before we start scrolling
+        if !chat_lines.is_empty()
+            && let Some(anchor) = app.take_startup_ui_anchor() {
+                execute!(stdout, MoveTo(0, anchor), Clear(ClearType::FromCursorDown))?;
+                stdout.flush()?;
+            }
+
         // Begin synchronized output (prevents flicker)
         execute!(stdout, BeginSynchronizedUpdate)?;
 
-        // Print any new chat content using insert_before pattern
-        let chat_lines = app.take_chat_inserts(term_width);
         if !chat_lines.is_empty() {
             let ui_height = app.calculate_ui_height(term_width, term_height);
             let ui_start = term_height.saturating_sub(ui_height);
 
-            // If this is the first message, clear entire screen to prevent any
-            // startup UI artifacts from being pushed into scrollback
-            if let Some(anchor) = app.take_startup_ui_anchor() {
-                // Clear from header position to bottom of screen
-                for row in anchor..term_height {
-                    execute!(stdout, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
-                }
-            }
             #[allow(clippy::cast_possible_truncation)] // Chat lines fit in terminal u16 height
             let line_count = chat_lines.len() as u16;
 

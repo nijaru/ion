@@ -300,7 +300,8 @@ impl App {
                         self.history_index = self.input_history.len();
                         self.history_draft = None;
                         self.clear_input();
-                        self.startup_ui_anchor = None;
+                        // Note: startup_ui_anchor is consumed by main.rs when rendering
+                        // the first chat content - don't clear it here
                         // Persist to database (with placeholders, for shorter storage)
                         let _ = self.store.add_input_history(&normalized_input);
                         // Display shows placeholder (user can see what they typed)
