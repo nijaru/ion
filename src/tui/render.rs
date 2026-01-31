@@ -351,14 +351,11 @@ impl App {
         } else {
             self.render_status_direct(w, width)?;
 
-            // Render file completer popup above input if active
-            if self.file_completer.is_active() {
-                self.render_file_completer_direct(w, input_start, width)?;
-            }
-
-            // Render command completer popup above input if active
+            // Render completer popup above input (mutually exclusive)
             if self.command_completer.is_active() {
                 self.render_command_completer_direct(w, input_start, width)?;
+            } else if self.file_completer.is_active() {
+                self.render_file_completer_direct(w, input_start, width)?;
             }
 
             // Position cursor in input area
