@@ -19,7 +19,7 @@ impl Tool for EditTool {
     }
 
     fn description(&self) -> &'static str {
-        "Edit a file by replacing exact text. Use for surgical edits instead of rewriting entire files."
+        "Modify a file by replacing exact text with new text. Provide the exact string to find and its replacement. Use this for targeted changes; for complete rewrites use write instead."
     }
 
     fn parameters(&self) -> serde_json::Value {

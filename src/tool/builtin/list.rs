@@ -13,7 +13,7 @@ impl Tool for ListTool {
     }
 
     fn description(&self) -> &'static str {
-        "List directory contents with optional filtering. Like fd/find but respects .gitignore."
+        "List contents of a specific directory. Shows files and subdirectories at the given path. For recursive file search by pattern, use glob instead."
     }
 
     fn parameters(&self) -> serde_json::Value {

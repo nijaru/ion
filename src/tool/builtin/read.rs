@@ -23,7 +23,7 @@ impl Tool for ReadTool {
     }
 
     fn description(&self) -> &'static str {
-        "Read a file from the filesystem. For large files, use offset and limit to read specific line ranges."
+        "Read file contents. Returns the full file or a specific line range (use offset/limit for large files). Use this after finding a file with glob to examine its contents."
     }
 
     fn parameters(&self) -> serde_json::Value {

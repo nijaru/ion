@@ -3,7 +3,7 @@
   "ref": "5z69",
   "title": "[PROMPT] Improve tool definitions to prevent model hallucinations",
   "description": null,
-  "status": "open",
+  "status": "done",
   "priority": 2,
   "labels": [],
   "assignees": [],
@@ -23,10 +23,14 @@
     {
       "ts": "2026-01-29T22:34:52.195Z",
       "msg": "Not aliasing - this is a model/prompt issue to fix. If model hallucinates tool names, it should get an error and the system prompt or tool definitions should be improved."
+    },
+    {
+      "ts": "2026-01-31T05:26:32.332Z",
+      "msg": "Improved all tool descriptions with explicit use cases and cross-references to prevent hallucinations like 'find_files_matching_pattern'"
     }
   ],
   "created_at": "2026-01-28T18:18:46.399Z",
-  "updated_at": "2026-01-29T22:34:57.694Z",
-  "completed_at": null,
+  "updated_at": "2026-01-31T05:26:32.357Z",
+  "completed_at": "2026-01-31T05:26:32.357Z",
   "external": {}
 }

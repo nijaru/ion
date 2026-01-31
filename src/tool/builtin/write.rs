@@ -19,7 +19,7 @@ impl Tool for WriteTool {
     }
 
     fn description(&self) -> &'static str {
-        "Write content to a file. Overwrites existing content."
+        "Create or overwrite a file with new content. Use for new files or complete rewrites. For modifying existing files, prefer edit to make surgical changes."
     }
 
     fn parameters(&self) -> serde_json::Value {
