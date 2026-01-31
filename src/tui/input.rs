@@ -176,6 +176,7 @@ impl App {
             return true;
         }
 
+        // When running with empty input, recall queued messages
         if self.is_running && input_empty {
             let queued = self.message_queue.as_ref().and_then(|queue| {
                 if let Ok(mut q) = queue.lock() {
@@ -195,15 +196,8 @@ impl App {
             }
         }
 
-        if self.history_index == self.input_history.len() && self.history_draft.is_none() {
-            // Save resolved content (with blobs expanded) so it survives history navigation
-            self.history_draft = Some(self.resolved_input_text());
-        }
-
-        if !self.input_history.is_empty() && self.history_index > 0 {
-            self.history_index -= 1;
-            let entry = self.input_history[self.history_index].clone();
-            self.set_input_text(&entry);
+        // Navigate to previous history entry
+        if self.prev_history() {
             return true;
         }
 
@@ -217,9 +211,38 @@ impl App {
             return true;
         }
 
+        self.next_history()
+    }
+
+    /// Navigate to previous history entry (Ctrl+P).
+    /// Skips cursor movement, directly accesses history.
+    pub(super) fn prev_history(&mut self) -> bool {
+        if self.input_history.is_empty() {
+            return false;
+        }
+
+        // Save current input as draft before navigating
+        if self.history_index == self.input_history.len() && self.history_draft.is_none() {
+            self.history_draft = Some(self.resolved_input_text());
+        }
+
+        if self.history_index > 0 {
+            self.history_index -= 1;
+            let entry = self.input_history[self.history_index].clone();
+            self.set_input_text(&entry);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Navigate to next history entry (Ctrl+N).
+    /// Skips cursor movement, directly accesses history.
+    pub(super) fn next_history(&mut self) -> bool {
         if self.history_index < self.input_history.len() {
             self.history_index += 1;
             if self.history_index == self.input_history.len() {
+                // Restore draft or clear
                 if let Some(draft) = self.history_draft.take() {
                     self.set_input_text(&draft);
                 } else {
@@ -229,9 +252,9 @@ impl App {
                 let entry = self.input_history[self.history_index].clone();
                 self.set_input_text(&entry);
             }
-            return true;
+            true
+        } else {
+            false
         }
-
-        !self.input_is_empty()
     }
 }
