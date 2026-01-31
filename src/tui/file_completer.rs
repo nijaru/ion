@@ -1,6 +1,13 @@
 //! File path autocomplete for @ mentions in input.
 
 use crate::tui::fuzzy;
+use crossterm::{
+    cursor::MoveTo,
+    execute,
+    style::{Attribute, Color, Print, ResetColor, SetAttribute, SetForegroundColor},
+    terminal::{Clear, ClearType},
+};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 /// Maximum number of candidates to show in the popup.
@@ -124,6 +131,74 @@ impl FileCompleter {
             let max = self.filtered.len().min(MAX_VISIBLE).saturating_sub(1);
             self.selected = (self.selected + 1).min(max);
         }
+    }
+
+    /// Render the file completion popup above the input box.
+    #[allow(clippy::cast_possible_truncation)]
+    pub fn render<W: Write>(&self, w: &mut W, input_start: u16, width: u16) -> std::io::Result<()> {
+        let candidates = self.visible_candidates();
+        if candidates.is_empty() {
+            return Ok(());
+        }
+
+        let popup_height = candidates.len() as u16;
+        let popup_start = input_start.saturating_sub(popup_height);
+
+        // Calculate popup width (max path length + padding)
+        let max_label_len = candidates
+            .iter()
+            .map(|p| p.to_string_lossy().len())
+            .max()
+            .unwrap_or(20);
+        let popup_width = (max_label_len + 4).min(width as usize - 4) as u16;
+
+        for (i, path) in candidates.iter().enumerate() {
+            let row = popup_start + i as u16;
+            let is_selected = i == self.selected;
+            let path_str = path.to_string_lossy();
+
+            execute!(w, MoveTo(1, row), Clear(ClearType::CurrentLine))?;
+
+            if is_selected {
+                execute!(w, SetAttribute(Attribute::Reverse))?;
+            }
+
+            // Add icon for directories
+            let is_dir = self.working_dir.join(path).is_dir();
+            let icon = if is_dir { "󰉋 " } else { "  " };
+
+            // Truncate path if needed
+            let display_width = popup_width.saturating_sub(4) as usize;
+            let display: String = if path_str.len() > display_width {
+                format!(
+                    "…{}",
+                    &path_str[path_str.len().saturating_sub(display_width - 1)..]
+                )
+            } else {
+                path_str.to_string()
+            };
+
+            execute!(
+                w,
+                Print(" "),
+                SetForegroundColor(if is_dir { Color::Blue } else { Color::Reset }),
+                Print(icon),
+                ResetColor,
+                Print(&display),
+            )?;
+
+            // Pad to popup width
+            let padding = popup_width.saturating_sub(display.len() as u16 + 3);
+            for _ in 0..padding {
+                execute!(w, Print(" "))?;
+            }
+
+            if is_selected {
+                execute!(w, SetAttribute(Attribute::NoReverse))?;
+            }
+        }
+
+        Ok(())
     }
 
     /// Refresh candidates from the filesystem.
