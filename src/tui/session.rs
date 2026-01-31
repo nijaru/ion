@@ -38,6 +38,7 @@ impl App {
     }
 
     /// Create a new App with the given permission settings.
+    #[allow(clippy::too_many_lines)]
     pub async fn with_permissions(permissions: PermissionSettings) -> Result<Self> {
         let config = Config::load().context("Failed to load config")?;
 
@@ -283,6 +284,7 @@ impl App {
     }
 
     /// Update state on each frame (poll events, check timeouts).
+    #[allow(clippy::too_many_lines)]
     pub fn update(&mut self) {
         use crate::tui::types::CANCEL_WINDOW;
         use crate::tui::util::format_status_error;
@@ -623,8 +625,7 @@ impl App {
                         }
                     }
                 }
-                #[allow(clippy::match_wildcard_for_single_variants)]
-                _ => {} // System messages not displayed in chat
+                Role::System => {} // System messages not displayed in chat
             }
         }
 
@@ -669,6 +670,7 @@ impl App {
     }
 
     /// Run an agent task with the given input.
+    #[allow(clippy::needless_pass_by_value)]
     pub(super) fn run_agent_task(&mut self, input: String) {
         self.is_running = true;
         self.task_start_time = Some(Instant::now());

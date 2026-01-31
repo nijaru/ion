@@ -71,6 +71,7 @@ impl App {
     }
 
     /// Main input handler - always active unless a modal is open.
+    #[allow(clippy::too_many_lines)]
     pub(super) fn handle_input_mode(&mut self, key: KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
@@ -512,32 +513,14 @@ impl App {
     }
 
     /// Handle selector mode key events.
+    #[allow(clippy::too_many_lines)]
     pub(super) fn handle_selector_mode(&mut self, key: KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let mut handled = true;
 
         match key.code {
-            // Ctrl+C: Close selector, double-tap to quit
-            KeyCode::Char('c') if ctrl => {
-                if let Some(when) = self.cancel_pending
-                    && when.elapsed() <= CANCEL_WINDOW
-                {
-                    self.should_quit = true;
-                    self.cancel_pending = None;
-                } else {
-                    self.cancel_pending = Some(Instant::now());
-                    if self.needs_setup && self.selector_page == SelectorPage::Model {
-                        self.model_picker.reset();
-                        self.open_provider_selector();
-                    } else {
-                        self.model_picker.reset();
-                        self.exit_selector_mode();
-                    }
-                }
-            }
-
-            // Ctrl+D: Close selector, double-tap to quit (same as Ctrl+C)
-            KeyCode::Char('d') if ctrl => {
+            // Ctrl+C/Ctrl+D: Close selector, double-tap to quit
+            KeyCode::Char('c' | 'd') if ctrl => {
                 if let Some(when) = self.cancel_pending
                     && when.elapsed() <= CANCEL_WINDOW
                 {

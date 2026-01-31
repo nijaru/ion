@@ -84,6 +84,7 @@ pub(crate) async fn stream_response(
 
 /// Attempt streaming completion with retry logic.
 /// Returns Some((blocks, calls)) on success, None if fallback to non-streaming is needed.
+#[allow(clippy::too_many_lines)]
 async fn stream_with_retry(
     provider: &Arc<dyn LlmApi>,
     token_counter: &TokenCounter,

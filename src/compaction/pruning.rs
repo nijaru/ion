@@ -41,7 +41,7 @@ pub fn prune_messages(
     }
 
     // Tier 1: Truncate large tool outputs
-    let modified_t1 = truncate_large_outputs(messages, config, counter);
+    let modified_t1 = truncate_large_outputs(messages, config, *counter);
     let tokens_after_t1 = counter.count_messages(messages).total;
 
     if tokens_after_t1 <= target_tokens {
@@ -55,7 +55,7 @@ pub fn prune_messages(
 
     // Tier 2: Remove old tool output content (keep last N messages protected)
     let protected_count = 6; // Protect last 3 exchanges (user + assistant pairs)
-    let modified_t2 = remove_old_output_content(messages, protected_count, counter);
+    let modified_t2 = remove_old_output_content(messages, protected_count, *counter);
     let tokens_after_t2 = counter.count_messages(messages).total;
 
     PruningResult {
@@ -70,7 +70,7 @@ pub fn prune_messages(
 fn truncate_large_outputs(
     messages: &mut [Message],
     config: &CompactionConfig,
-    counter: &TokenCounter,
+    counter: TokenCounter,
 ) -> usize {
     let mut modified = 0;
     let max_tokens = config.max_tool_output_tokens;
@@ -119,7 +119,7 @@ fn truncate_large_outputs(
 }
 
 /// Truncate content to approximately head + tail tokens.
-fn truncate_to_head_tail(content: &str, keep_tokens: usize, _counter: &TokenCounter) -> String {
+fn truncate_to_head_tail(content: &str, keep_tokens: usize, _counter: TokenCounter) -> String {
     let lines: Vec<&str> = content.lines().collect();
 
     if lines.len() <= 10 {
@@ -149,7 +149,7 @@ fn truncate_to_head_tail(content: &str, keep_tokens: usize, _counter: &TokenCoun
 fn remove_old_output_content(
     messages: &mut [Message],
     protected_count: usize,
-    _counter: &TokenCounter,
+    _counter: TokenCounter,
 ) -> usize {
     let mut modified = 0;
     let len = messages.len();
@@ -250,7 +250,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
-        let truncated = truncate_to_head_tail(&content, 100, &counter);
+        let truncated = truncate_to_head_tail(&content, 100, counter);
 
         assert!(truncated.contains("Line 0"));
         assert!(truncated.contains("lines truncated"));

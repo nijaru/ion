@@ -52,7 +52,7 @@ impl AnthropicClient {
         tracing::debug!(
             model = %api_request.model,
             messages = api_request.messages.len(),
-            tools = api_request.tools.as_ref().map_or(0, |t| t.len()),
+            tools = api_request.tools.as_ref().map_or(0, std::vec::Vec::len),
             "Anthropic API request"
         );
 
@@ -72,7 +72,7 @@ impl AnthropicClient {
         tracing::debug!(
             model = %api_request.model,
             messages = api_request.messages.len(),
-            tools = api_request.tools.as_ref().map_or(0, |t| t.len()),
+            tools = api_request.tools.as_ref().map_or(0, std::vec::Vec::len),
             "Anthropic API stream request"
         );
 
@@ -117,6 +117,7 @@ impl AnthropicClient {
     }
 
     /// Build an Anthropic API request from our common request type.
+    #[allow(clippy::too_many_lines)]
     fn build_request(&self, request: &ChatRequest, stream: bool) -> AnthropicRequest {
         let mut system_blocks = Vec::new();
         let mut messages = Vec::new();
@@ -250,6 +251,7 @@ impl AnthropicClient {
     }
 
     /// Convert a tool definition to Anthropic format.
+    #[allow(clippy::unused_self)]
     fn convert_tool(&self, tool: &ToolDefinition) -> AnthropicTool {
         AnthropicTool {
             name: tool.name.clone(),
@@ -259,6 +261,7 @@ impl AnthropicClient {
     }
 
     /// Convert an API response to our common message type.
+    #[allow(clippy::unused_self)]
     fn convert_response(&self, response: AnthropicResponse) -> Message {
         let content_blocks: Vec<IonContentBlock> = response
             .content
@@ -316,13 +319,13 @@ impl AnthropicClient {
                 }
             }
             AnthropicStreamEvent::ContentBlockDelta { index, delta } => match delta {
-                ContentDelta::TextDelta { text } => {
+                ContentDelta::Text { text } => {
                     let _ = tx.send(StreamEvent::TextDelta(text)).await;
                 }
-                ContentDelta::ThinkingDelta { thinking } => {
+                ContentDelta::Thinking { thinking } => {
                     let _ = tx.send(StreamEvent::ThinkingDelta(thinking)).await;
                 }
-                ContentDelta::InputJsonDelta { partial_json } => {
+                ContentDelta::InputJson { partial_json } => {
                     if let Some(builder) = tool_builders.get_mut(&index) {
                         builder.json_parts.push(partial_json);
                     }
@@ -354,11 +357,9 @@ impl AnthropicClient {
                     }))
                     .await;
             }
-            AnthropicStreamEvent::MessageStop => {
-                // Stream end handled by caller
-            }
-            AnthropicStreamEvent::Ping => {
-                // Keepalive, ignore
+            AnthropicStreamEvent::MessageStop | AnthropicStreamEvent::Ping => {
+                // MessageStop: stream end handled by caller
+                // Ping: keepalive, ignore
             }
             AnthropicStreamEvent::Error { error } => {
                 return Err(Error::Api(format!(

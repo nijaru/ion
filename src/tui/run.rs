@@ -56,7 +56,7 @@ fn setup_terminal() -> Result<TerminalState, Box<dyn std::error::Error>> {
 }
 
 /// Handle resume option, loading session or opening selector.
-/// Returns Err if session load fails fatally (ById with invalid id).
+/// Returns Err if session load fails fatally (`ById` with invalid id).
 fn handle_resume(
     app: &mut App,
     resume_option: ResumeOption,
@@ -192,6 +192,7 @@ fn open_editor(initial: &str) -> Result<Option<String>, Box<dyn std::error::Erro
 ///
 /// This function sets up the terminal, creates the App, handles resume options,
 /// and runs the main event/render loop until the user quits.
+#[allow(clippy::too_many_lines)]
 pub async fn run(
     permissions: PermissionSettings,
     resume_option: ResumeOption,
@@ -326,6 +327,7 @@ pub async fn run(
                 if space_needed <= term_height {
                     // Content fits: print at current row, advance chat_row
                     for (i, line) in chat_lines.iter().enumerate() {
+                        #[allow(clippy::cast_possible_truncation)]
                         execute!(stdout, MoveTo(0, chat_row.saturating_add(i as u16)))?;
                         line.println()?;
                     }
@@ -342,6 +344,7 @@ pub async fn run(
                     // Print at top of the scrolled area
                     let print_row = ui_start.saturating_sub(line_count);
                     for (i, line) in chat_lines.iter().enumerate() {
+                        #[allow(clippy::cast_possible_truncation)]
                         execute!(
                             stdout,
                             MoveTo(0, print_row.saturating_add(i as u16)),

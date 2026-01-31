@@ -28,6 +28,7 @@ pub struct OpenAICompatClient {
 
 impl OpenAICompatClient {
     /// Create a new OpenAI-compatible client.
+    #[allow(clippy::unnecessary_wraps)]
     pub fn new(provider: Provider, api_key: impl Into<String>) -> Result<Self, Error> {
         let quirks = ProviderQuirks::for_provider(provider);
         let api_key = api_key.into();
@@ -49,6 +50,7 @@ impl OpenAICompatClient {
     }
 
     /// Create a client with custom base URL.
+    #[allow(clippy::unnecessary_wraps)]
     pub fn with_base_url(
         provider: Provider,
         api_key: impl Into<String>,
@@ -80,7 +82,7 @@ impl OpenAICompatClient {
             provider = %self.provider.id(),
             model = %api_request.model,
             messages = api_request.messages.len(),
-            tools = api_request.tools.as_ref().map_or(0, |t| t.len()),
+            tools = api_request.tools.as_ref().map_or(0, std::vec::Vec::len),
             "OpenAI-compat API request"
         );
 
@@ -89,7 +91,7 @@ impl OpenAICompatClient {
             .post_json("/chat/completions", &api_request)
             .await?;
 
-        Ok(self.convert_response(response))
+        Ok(self.convert_response(&response))
     }
 
     /// Stream a chat completion request.
@@ -101,7 +103,7 @@ impl OpenAICompatClient {
         self.stream_with_prefs(request, None, tx).await
     }
 
-    /// Stream with provider preferences (for OpenRouter routing).
+    /// Stream with provider preferences (for `OpenRouter` routing).
     pub async fn stream_with_prefs(
         &self,
         request: ChatRequest,
@@ -114,7 +116,7 @@ impl OpenAICompatClient {
             provider = %self.provider.id(),
             model = %api_request.model,
             messages = api_request.messages.len(),
-            tools = api_request.tools.as_ref().map_or(0, |t| t.len()),
+            tools = api_request.tools.as_ref().map_or(0, std::vec::Vec::len),
             has_routing = api_request.provider.is_some(),
             "OpenAI-compat API stream request"
         );
@@ -184,6 +186,7 @@ impl OpenAICompatClient {
     }
 
     /// Build an OpenAI-compatible request.
+    #[allow(clippy::too_many_lines)]
     fn build_request(
         &self,
         request: &ChatRequest,
@@ -320,7 +323,8 @@ impl OpenAICompatClient {
         api_request.apply_quirks(&self.quirks)
     }
 
-    /// Convert user content blocks to OpenAI format.
+    /// Convert user content blocks to `OpenAI` format.
+    #[allow(clippy::unused_self)]
     fn convert_user_content(&self, content: &[ContentBlock]) -> MessageContent {
         let mut parts = Vec::new();
         let mut has_image = false;
@@ -354,6 +358,7 @@ impl OpenAICompatClient {
     }
 
     /// Extract text and tool calls from assistant content.
+    #[allow(clippy::unused_self)]
     fn extract_assistant_content(
         &self,
         content: &[ContentBlock],
@@ -371,10 +376,11 @@ impl OpenAICompatClient {
                 }
                 ContentBlock::Thinking { thinking } => {
                     // Include thinking in text for providers that don't support it natively
+                    use std::fmt::Write;
                     if !text.is_empty() {
                         text.push('\n');
                     }
-                    text.push_str(&format!("<thinking>{thinking}</thinking>"));
+                    let _ = write!(text, "<thinking>{thinking}</thinking>");
                 }
                 ContentBlock::ToolCall {
                     id,
@@ -403,7 +409,8 @@ impl OpenAICompatClient {
         (text, tool_calls)
     }
 
-    /// Convert a tool definition to OpenAI format.
+    /// Convert a tool definition to `OpenAI` format.
+    #[allow(clippy::unused_self)]
     fn convert_tool(&self, tool: &ToolDefinition) -> OpenAITool {
         OpenAITool {
             tool_type: "function".to_string(),
@@ -416,7 +423,7 @@ impl OpenAICompatClient {
     }
 
     /// Convert an API response to our common message type.
-    fn convert_response(&self, response: OpenAIResponse) -> Message {
+    fn convert_response(&self, response: &OpenAIResponse) -> Message {
         let mut content_blocks = Vec::new();
 
         if let Some(choice) = response.choices.first() {

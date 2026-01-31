@@ -14,7 +14,7 @@ use tokio::sync::mpsc;
 enum Backend {
     /// Native Anthropic Messages API
     Anthropic(AnthropicClient),
-    /// Native OpenAI-compatible API (OpenAI, OpenRouter, Groq, Kimi, Ollama, ChatGPT)
+    /// Native OpenAI-compatible API (`OpenAI`, `OpenRouter`, Groq, Kimi, Ollama, `ChatGPT`)
     OpenAICompat(OpenAICompatClient),
     /// Native Google Generative AI (Gemini OAuth, Google)
     GeminiOAuth(GeminiOAuthClient),

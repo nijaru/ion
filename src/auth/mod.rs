@@ -1,6 +1,6 @@
 //! OAuth authentication for subscription-based providers.
 //!
-//! Supports ChatGPT Plus/Pro (OpenAI OAuth) and Google AI (Google OAuth)
+//! Supports `ChatGPT` Plus/Pro (`OpenAI` OAuth) and Google AI (Google OAuth)
 //! for using consumer subscriptions instead of API credits.
 
 mod pkce;
@@ -20,7 +20,7 @@ use std::time::Duration;
 /// Supported OAuth providers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OAuthProvider {
-    /// OpenAI OAuth for ChatGPT Plus/Pro subscriptions.
+    /// `OpenAI` OAuth for `ChatGPT` Plus/Pro subscriptions.
     OpenAI,
     /// Google OAuth for Google AI subscriptions.
     Google,
@@ -117,6 +117,7 @@ pub async fn get_credentials(provider: OAuthProvider) -> Result<Option<Credentia
 }
 
 /// Check if a provider has usable credentials (not expired, or can be refreshed).
+#[must_use]
 pub fn is_logged_in(provider: OAuthProvider) -> bool {
     AuthStorage::new()
         .ok()

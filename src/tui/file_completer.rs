@@ -32,7 +32,7 @@ pub struct FileCompleter {
     at_position: usize,
     /// Working directory for relative paths.
     working_dir: PathBuf,
-    /// All candidates (unfiltered) with cached is_dir.
+    /// All candidates (unfiltered) with cached `is_dir`.
     candidates: Vec<FileCandidate>,
     /// Filtered candidates (after fuzzy match).
     filtered: Vec<FileCandidate>,
@@ -119,10 +119,10 @@ impl FileCompleter {
         let was_hidden = self.query.starts_with('.');
         let is_hidden = query.starts_with('.');
         self.query = query.to_string();
-        if was_hidden != is_hidden {
-            self.refresh_candidates();
-        } else {
+        if was_hidden == is_hidden {
             self.apply_filter();
+        } else {
+            self.refresh_candidates();
         }
     }
 

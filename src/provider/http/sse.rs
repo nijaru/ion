@@ -4,6 +4,7 @@
 
 /// A parsed SSE event.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct SseEvent {
     /// Event type (from `event:` line), if present.
     pub event: Option<String>,
@@ -77,11 +78,13 @@ impl SseParser {
     }
 
     /// Clear the internal buffer.
+    #[allow(dead_code)]
     pub fn clear(&mut self) {
         self.buffer.clear();
     }
 
     /// Check if there's pending data in the buffer.
+    #[allow(dead_code)]
     pub fn has_pending(&self) -> bool {
         !self.buffer.is_empty()
     }

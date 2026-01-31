@@ -22,7 +22,7 @@ pub enum Provider {
     Groq,
     /// Moonshot AI Kimi
     Kimi,
-    /// ChatGPT via OAuth (Plus/Pro subscription)
+    /// `ChatGPT` via OAuth (Plus/Pro subscription)
     ChatGpt,
     /// Gemini via OAuth (consumer subscription)
     Gemini,
@@ -115,11 +115,9 @@ impl Provider {
             Provider::Anthropic => &["ANTHROPIC_API_KEY"],
             Provider::OpenAI => &["OPENAI_API_KEY"],
             Provider::Google => &["GOOGLE_API_KEY", "GEMINI_API_KEY"],
-            Provider::Ollama => &[], // No key needed
             Provider::Groq => &["GROQ_API_KEY"],
             Provider::Kimi => &["MOONSHOT_API_KEY", "KIMI_API_KEY"],
-            Provider::ChatGpt => &[], // OAuth only
-            Provider::Gemini => &[],  // OAuth only
+            Provider::Ollama | Provider::ChatGpt | Provider::Gemini => &[], // No key or OAuth only
         }
     }
 

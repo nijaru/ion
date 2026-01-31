@@ -32,7 +32,7 @@ pub struct SelectorData {
     pub active_tab: usize, // 0 = providers, 1 = models
 }
 
-/// Render the selector UI. Returns (filter_cursor_col, filter_cursor_row) for cursor positioning.
+/// Render the selector UI. Returns (`filter_cursor_col`, `filter_cursor_row`) for cursor positioning.
 pub fn render_selector<W: Write>(
     w: &mut W,
     data: &SelectorData,
@@ -61,14 +61,14 @@ pub fn render_selector<W: Write>(
         write!(w, "Providers")?;
         execute!(w, SetAttribute(Attribute::Reset), ResetColor)?;
         write!(w, "  ")?;
-        if !provider_bold {
+        if provider_bold {
+            execute!(w, SetAttribute(Attribute::Dim))?;
+        } else {
             execute!(
                 w,
                 SetForegroundColor(Color::Yellow),
                 SetAttribute(Attribute::Bold)
             )?;
-        } else {
-            execute!(w, SetAttribute(Attribute::Dim))?;
         }
         write!(w, "Models")?;
         execute!(w, SetAttribute(Attribute::Reset), ResetColor)?;

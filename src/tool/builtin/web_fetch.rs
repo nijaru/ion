@@ -7,6 +7,7 @@ use serde_json::json;
 use std::time::Duration;
 
 /// Check if URL points to private/internal addresses (SSRF protection).
+#[allow(clippy::case_sensitive_file_extension_comparisons)] // These are domain suffixes, not file extensions
 fn is_private_or_internal(url: &reqwest::Url) -> bool {
     match url.host_str() {
         Some(host) => {
@@ -87,6 +88,7 @@ impl WebFetchTool {
 }
 
 #[async_trait]
+#[allow(clippy::too_many_lines)]
 impl Tool for WebFetchTool {
     fn name(&self) -> &'static str {
         "web_fetch"
@@ -229,9 +231,7 @@ impl Tool for WebFetchTool {
             content_type.contains("text/html") || content_type.contains("application/xhtml");
 
         // Try to convert to string
-        let raw_text = if let Ok(text) = String::from_utf8(bytes.clone()) {
-            text
-        } else {
+        let Ok(raw_text) = String::from_utf8(bytes.clone()) else {
             let total = content_length.unwrap_or(bytes.len());
             return Ok(ToolResult {
                 content: format!("[Binary content: {total} bytes, content-type: {content_type}]"),

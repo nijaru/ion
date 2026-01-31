@@ -1,7 +1,7 @@
-//! OpenAI OAuth for ChatGPT Plus/Pro subscriptions.
+//! `OpenAI` OAuth for `ChatGPT` Plus/Pro subscriptions.
 //!
 //! Uses the same OAuth flow as Codex CLI to authenticate with
-//! ChatGPT Plus ($20/month) or ChatGPT Pro ($200/month) subscriptions.
+//! `ChatGPT` Plus ($20/month) or `ChatGPT` Pro ($200/month) subscriptions.
 
 use super::pkce::{PkceCodes, generate_state};
 use super::server::CallbackServer;
@@ -10,23 +10,23 @@ use super::{CALLBACK_TIMEOUT, OAuthFlow};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
-/// OpenAI OAuth client ID (same as Codex CLI).
+/// `OpenAI` OAuth client ID (same as Codex CLI).
 pub const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 
-/// OpenAI OAuth endpoints.
+/// `OpenAI` OAuth endpoints.
 pub const AUTH_ENDPOINT: &str = "https://auth.openai.com/oauth/authorize";
 pub const TOKEN_ENDPOINT: &str = "https://auth.openai.com/oauth/token";
 
-/// OAuth scopes for ChatGPT access.
+/// OAuth scopes for `ChatGPT` access.
 pub const SCOPES: &str = "openid profile email offline_access";
 
-/// OpenAI OAuth authentication.
+/// `OpenAI` OAuth authentication.
 pub struct OpenAIAuth {
     client: reqwest::Client,
 }
 
 impl OpenAIAuth {
-    /// Create a new OpenAI auth handler.
+    /// Create a new `OpenAI` auth handler.
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -37,6 +37,7 @@ impl OpenAIAuth {
         }
     }
 
+    #[allow(clippy::unused_self)]
     fn build_auth_url(&self, redirect_uri: &str, state: &str, pkce: &PkceCodes) -> String {
         format!(
             "{}?response_type=code\
@@ -126,7 +127,7 @@ impl OAuthFlow for OpenAIAuth {
         if !response.status().is_success() {
             let status = response.status();
             let text = response.text().await.unwrap_or_default();
-            anyhow::bail!("Token refresh failed: {} - {}", status, text);
+            anyhow::bail!("Token refresh failed: {status} - {text}");
         }
 
         let token_response: TokenResponse = response
@@ -134,6 +135,7 @@ impl OAuthFlow for OpenAIAuth {
             .await
             .context("Failed to parse token response")?;
 
+        #[allow(clippy::cast_possible_truncation)] // ms since epoch won't overflow u64
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -182,7 +184,7 @@ impl OpenAIAuth {
         if !response.status().is_success() {
             let status = response.status();
             let text = response.text().await.unwrap_or_default();
-            anyhow::bail!("Token exchange failed: {} - {}", status, text);
+            anyhow::bail!("Token exchange failed: {status} - {text}");
         }
 
         let token_response: TokenResponse = response
@@ -190,6 +192,7 @@ impl OpenAIAuth {
             .await
             .context("Failed to parse token response")?;
 
+        #[allow(clippy::cast_possible_truncation)] // ms since epoch won't overflow u64
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()

@@ -45,6 +45,7 @@ impl GoogleAuth {
         }
     }
 
+    #[allow(clippy::unused_self)]
     fn build_auth_url(&self, redirect_uri: &str, state: &str, pkce: &PkceCodes) -> String {
         format!(
             "{}?response_type=code\
@@ -137,7 +138,7 @@ impl OAuthFlow for GoogleAuth {
         if !response.status().is_success() {
             let status = response.status();
             let text = response.text().await.unwrap_or_default();
-            anyhow::bail!("Token refresh failed: {} - {}", status, text);
+            anyhow::bail!("Token refresh failed: {status} - {text}");
         }
 
         let token_response: TokenResponse = response
@@ -145,6 +146,7 @@ impl OAuthFlow for GoogleAuth {
             .await
             .context("Failed to parse token response")?;
 
+        #[allow(clippy::cast_possible_truncation)] // ms since epoch won't overflow u64
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -194,7 +196,7 @@ impl GoogleAuth {
         if !response.status().is_success() {
             let status = response.status();
             let text = response.text().await.unwrap_or_default();
-            anyhow::bail!("Token exchange failed: {} - {}", status, text);
+            anyhow::bail!("Token exchange failed: {status} - {text}");
         }
 
         let token_response: TokenResponse = response
@@ -202,6 +204,7 @@ impl GoogleAuth {
             .await
             .context("Failed to parse token response")?;
 
+        #[allow(clippy::cast_possible_truncation)] // ms since epoch won't overflow u64
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()

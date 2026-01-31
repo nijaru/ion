@@ -4,6 +4,7 @@ use serde::Deserialize;
 
 /// Streaming chunk from OpenAI-compatible APIs.
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct StreamChunk {
     pub id: String,
     pub object: String,
@@ -16,6 +17,7 @@ pub struct StreamChunk {
 
 /// A choice in a streaming chunk.
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct StreamChoice {
     pub index: usize,
     pub delta: StreamDelta,
@@ -24,6 +26,7 @@ pub struct StreamChoice {
 
 /// Delta content in a streaming choice.
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct StreamDelta {
     #[serde(default)]
     pub role: Option<String>,
@@ -31,7 +34,7 @@ pub struct StreamDelta {
     pub content: Option<String>,
     #[serde(default)]
     pub tool_calls: Option<Vec<StreamToolCall>>,
-    /// Reasoning content (DeepSeek, Kimi via OpenRouter).
+    /// Reasoning content (`DeepSeek`, Kimi via `OpenRouter`).
     #[serde(default)]
     pub reasoning_content: Option<String>,
     /// Alternative reasoning field.
@@ -41,6 +44,7 @@ pub struct StreamDelta {
 
 /// Tool call delta in streaming.
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub struct StreamToolCall {
     pub index: usize,
     #[serde(default)]
@@ -62,6 +66,7 @@ pub struct StreamFunctionCall {
 
 /// Usage info in streaming (sent at end).
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code, clippy::struct_field_names)] // Field names match API response
 pub struct StreamUsage {
     pub prompt_tokens: u32,
     pub completion_tokens: u32,

@@ -83,6 +83,7 @@ impl CallbackServer {
             .map_err(|_| anyhow!("OAuth callback timeout"))?
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn handle_requests(
         listener: TcpListener,
         expected_state: &str,
@@ -103,9 +104,8 @@ impl CallbackServer {
                     let mut buffer = [0u8; 4096];
                     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
 
-                    let n = match stream.read(&mut buffer) {
-                        Ok(n) => n,
-                        Err(_) => continue,
+                    let Ok(n) = stream.read(&mut buffer) else {
+                        continue;
                     };
 
                     let request = String::from_utf8_lossy(&buffer[..n]);
@@ -136,17 +136,16 @@ impl CallbackServer {
                                 bail!(e);
                             }
                         }
-                    } else {
-                        // Send 404 for other paths
-                        Self::send_404_response(&mut stream)?;
                     }
+                    // Send 404 for other paths
+                    Self::send_404_response(&mut stream)?;
                 }
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                     // No connection yet, wait a bit
                     thread::sleep(Duration::from_millis(100));
                 }
                 Err(e) => {
-                    bail!("Failed to accept connection: {}", e);
+                    bail!("Failed to accept connection: {e}");
                 }
             }
         }
@@ -161,9 +160,9 @@ impl CallbackServer {
         if let Some(error) = params.get("error") {
             let description = params
                 .get("error_description")
-                .map(|s| s.to_string())
+                .map(std::string::ToString::to_string)
                 .unwrap_or_default();
-            bail!("OAuth error: {} - {}", error, description);
+            bail!("OAuth error: {error} - {description}");
         }
 
         // Get and validate state
@@ -187,7 +186,7 @@ impl CallbackServer {
     }
 
     fn send_success_response(stream: &mut std::net::TcpStream) -> Result<()> {
-        let body = r#"<!DOCTYPE html>
+        let body = r"<!DOCTYPE html>
 <html>
 <head>
     <title>Login Successful</title>
@@ -200,7 +199,7 @@ impl CallbackServer {
     <h1>Login Successful!</h1>
     <p>You can close this tab and return to ion.</p>
 </body>
-</html>"#;
+</html>";
 
         let response = format!(
             "HTTP/1.1 200 OK\r\n\
@@ -220,7 +219,7 @@ impl CallbackServer {
 
     fn send_error_response(stream: &mut std::net::TcpStream, error: &str) -> Result<()> {
         let body = format!(
-            r#"<!DOCTYPE html>
+            r"<!DOCTYPE html>
 <html>
 <head>
     <title>Login Failed</title>
@@ -234,7 +233,7 @@ impl CallbackServer {
     <p>{}</p>
     <p>Please try again.</p>
 </body>
-</html>"#,
+</html>",
             html_escape(error)
         );
 
