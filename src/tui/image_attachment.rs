@@ -19,6 +19,10 @@ const SUPPORTED_FORMATS: &[(&str, &str)] = &[
 /// Parse input text and extract image attachments.
 /// Returns a list of content blocks (text and images).
 ///
+/// Supports:
+/// - `@image:path.png` - simple paths without spaces
+/// - `@image:"path with spaces.png"` - quoted paths
+///
 /// Example input: "Look at this @image:screenshot.png and tell me what you see"
 /// Returns: [Text("Look at this "), Image(...), Text(" and tell me what you see")]
 pub fn parse_image_attachments(input: &str, working_dir: &Path) -> Vec<ContentBlock> {
@@ -30,12 +34,24 @@ pub fn parse_image_attachments(input: &str, working_dir: &Path) -> Vec<ContentBl
         // Add text before the @image: marker
         current_text.push_str(&remaining[..pos]);
 
-        // Find the end of the path (next whitespace or end of string)
+        // Find the end of the path - handle quoted paths for spaces
         let after_prefix = &remaining[pos + IMAGE_PREFIX.len()..];
-        let path_end = after_prefix
-            .find(char::is_whitespace)
-            .unwrap_or(after_prefix.len());
-        let path_str = &after_prefix[..path_end];
+        let (path_str, consumed) = if after_prefix.starts_with('"') {
+            // Quoted path: find closing quote
+            let after_quote = &after_prefix[1..];
+            if let Some(end_quote) = after_quote.find('"') {
+                (&after_quote[..end_quote], end_quote + 2) // +2 for both quotes
+            } else {
+                // No closing quote - treat rest as path
+                (after_quote, after_quote.len() + 1)
+            }
+        } else {
+            // Unquoted path: ends at whitespace
+            let path_end = after_prefix
+                .find(char::is_whitespace)
+                .unwrap_or(after_prefix.len());
+            (&after_prefix[..path_end], path_end)
+        };
 
         // Try to load the image
         let full_path = if Path::new(path_str).is_absolute() {
@@ -63,7 +79,7 @@ pub fn parse_image_attachments(input: &str, working_dir: &Path) -> Vec<ContentBl
         }
 
         // Continue with rest of string
-        remaining = &after_prefix[path_end..];
+        remaining = &after_prefix[consumed..];
     }
 
     // Add remaining text
@@ -196,5 +212,30 @@ mod tests {
         assert!(
             matches!(&blocks[0], ContentBlock::Text { text } if text.contains("Unsupported format"))
         );
+    }
+
+    #[test]
+    fn test_quoted_path_with_spaces() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("my screenshot.png");
+        // Minimal valid PNG
+        let png_data: Vec<u8> = vec![
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00,
+            0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41, 0x54, 0x78,
+            0x9C, 0x63, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x49,
+            0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+        ];
+        fs::write(&path, &png_data).unwrap();
+
+        let input = format!("Look at @image:\"{}\" please", path.display());
+        let blocks = parse_image_attachments(&input, dir.path());
+
+        assert_eq!(blocks.len(), 3);
+        assert!(matches!(&blocks[0], ContentBlock::Text { text } if text == "Look at "));
+        assert!(
+            matches!(&blocks[1], ContentBlock::Image { media_type, .. } if media_type == "image/png")
+        );
+        assert!(matches!(&blocks[2], ContentBlock::Text { text } if text == " please"));
     }
 }

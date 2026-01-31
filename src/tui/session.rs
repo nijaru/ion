@@ -540,12 +540,15 @@ impl App {
         // Restore session state
         self.session = Session {
             id: loaded.id,
-            working_dir: loaded.working_dir,
+            working_dir: loaded.working_dir.clone(),
             model: loaded.model.clone(),
             messages: loaded.messages,
             abort_token: CancellationToken::new(),
             no_sandbox: self.permissions.no_sandbox,
         };
+
+        // Update file completer working directory
+        self.file_completer.set_working_dir(loaded.working_dir);
 
         // Update model display
         self.config.model = Some(loaded.model);

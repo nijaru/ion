@@ -35,6 +35,14 @@ impl FileCompleter {
         }
     }
 
+    /// Update the working directory (e.g., after session resume).
+    pub fn set_working_dir(&mut self, working_dir: PathBuf) {
+        self.working_dir = working_dir;
+        // Clear cached candidates - they'll be refreshed on next activation
+        self.candidates.clear();
+        self.filtered.clear();
+    }
+
     /// Check if completion is active.
     #[must_use]
     pub fn is_active(&self) -> bool {
@@ -92,8 +100,15 @@ impl FileCompleter {
 
     /// Update the query and refresh filtering.
     pub fn set_query(&mut self, query: &str) {
+        // If transitioning to/from hidden file query, refresh candidates
+        let was_hidden = self.query.starts_with('.');
+        let is_hidden = query.starts_with('.');
         self.query = query.to_string();
-        self.apply_filter();
+        if was_hidden != is_hidden {
+            self.refresh_candidates();
+        } else {
+            self.apply_filter();
+        }
     }
 
     /// Move selection up.
@@ -114,12 +129,14 @@ impl FileCompleter {
     /// Refresh candidates from the filesystem.
     fn refresh_candidates(&mut self) {
         self.candidates.clear();
-        self.collect_entries(&self.working_dir.clone(), "", 0);
+        // Include hidden files if query starts with '.'
+        let include_hidden = self.query.starts_with('.');
+        self.collect_entries(&self.working_dir.clone(), "", 0, include_hidden);
         self.apply_filter();
     }
 
     /// Recursively collect directory entries up to a depth limit.
-    fn collect_entries(&mut self, base: &Path, prefix: &str, depth: usize) {
+    fn collect_entries(&mut self, base: &Path, prefix: &str, depth: usize, include_hidden: bool) {
         // Limit depth to avoid scanning entire filesystem
         if depth > 2 {
             return;
@@ -133,8 +150,12 @@ impl FileCompleter {
             let file_name = entry.file_name();
             let name = file_name.to_string_lossy();
 
-            // Skip hidden files and common noise
-            if name.starts_with('.') || name == "node_modules" || name == "target" {
+            // Skip hidden files unless query starts with '.'
+            if name.starts_with('.') && !include_hidden {
+                continue;
+            }
+            // Always skip noise directories
+            if name == "node_modules" || name == "target" {
                 continue;
             }
 
@@ -149,7 +170,7 @@ impl FileCompleter {
 
             // Recurse into directories
             if path.is_dir() {
-                self.collect_entries(&path, &rel_path, depth + 1);
+                self.collect_entries(&path, &rel_path, depth + 1, include_hidden);
             }
         }
     }
