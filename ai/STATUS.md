@@ -7,17 +7,16 @@
 | Phase     | Provider Done | 2026-01-30 |
 | Status    | Ready to Test | 2026-01-30 |
 | Toolchain | stable        | 2026-01-22 |
-| Tests     | 217 passing   | 2026-01-30 |
+| Tests     | 222 passing   | 2026-01-30 |
 | Clippy    | clean         | 2026-01-30 |
 
 ## Just Completed
 
-**Autocomplete features** (2026-01-30):
+**Input enhancements** (2026-01-30):
 
-- File autocomplete: Type `@` at word boundary for path completion
-- Command autocomplete: Type `/` at start for command completion
-- Both use fuzzy matching, Up/Down navigation, Tab/Enter to accept
-- Popup renders above input with icons/descriptions
+- File autocomplete: `@path` for path completion with fuzzy matching
+- Command autocomplete: `/` at start shows commands with descriptions
+- Image attachment: `@image:path.png` for multimodal input (png/jpg/gif/webp)
 
 ## Current Focus
 
@@ -38,16 +37,16 @@
 
 ## Module Health
 
-| Module    | Files | Lines | Health | Notes                        |
-| --------- | ----- | ----- | ------ | ---------------------------- |
-| provider/ | 18    | ~2500 | GOOD   | Native HTTP, 3 backends      |
-| tui/      | 22    | ~7600 | OK     | +autocomplete, render.rs big |
-| agent/    | 9     | ~900  | GOOD   | Decomposed, clean structure  |
-| tool/     | 15    | ~2500 | GOOD   | Orchestrator + spawn         |
-| auth/     | 5     | ~800  | NEW    | OAuth complete               |
-| session/  | 3     | ~600  | GOOD   | SQLite + WAL                 |
-| skill/    | 3     | ~400  | GOOD   | YAML frontmatter             |
-| mcp/      | 2     | ~300  | OK     | Needs tests                  |
+| Module    | Files | Lines | Health | Notes                       |
+| --------- | ----- | ----- | ------ | --------------------------- |
+| provider/ | 18    | ~2500 | GOOD   | Native HTTP, 3 backends     |
+| tui/      | 24    | ~8300 | OK     | +autocomplete/images, big   |
+| agent/    | 9     | ~900  | GOOD   | Decomposed, clean structure |
+| tool/     | 15    | ~2500 | GOOD   | Orchestrator + spawn        |
+| auth/     | 5     | ~800  | NEW    | OAuth complete              |
+| session/  | 3     | ~600  | GOOD   | SQLite + WAL                |
+| skill/    | 3     | ~400  | GOOD   | YAML frontmatter            |
+| mcp/      | 2     | ~300  | OK     | Needs tests                 |
 
 ## Top Priorities
 
