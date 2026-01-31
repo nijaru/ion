@@ -257,4 +257,49 @@ impl App {
             false
         }
     }
+
+    /// Update the file completer query based on current input.
+    /// Called after input changes when completer is active.
+    pub(super) fn update_file_completer_query(&mut self) {
+        if !self.file_completer.is_active() {
+            return;
+        }
+
+        let at_pos = self.file_completer.at_position();
+        let cursor = self.input_state.cursor_char_idx();
+        let content = self.input_buffer.get_content();
+
+        // Extract text between @ and cursor
+        if cursor > at_pos {
+            let query: String = content
+                .chars()
+                .skip(at_pos + 1)
+                .take(cursor - at_pos - 1)
+                .collect();
+            self.file_completer.set_query(&query);
+        } else {
+            self.file_completer.set_query("");
+        }
+    }
+
+    /// Check if we should activate file completion (@ at word boundary).
+    pub(super) fn check_activate_file_completer(&mut self) {
+        let cursor = self.input_state.cursor_char_idx();
+        if cursor == 0 {
+            return;
+        }
+
+        let content = self.input_buffer.get_content();
+        let chars: Vec<char> = content.chars().collect();
+
+        // Check if character before cursor is @
+        if cursor > 0 && chars.get(cursor - 1) == Some(&'@') {
+            // Check if @ is at start or preceded by whitespace (word boundary)
+            let is_at_boundary =
+                cursor == 1 || chars.get(cursor - 2).map_or(true, |c| c.is_whitespace());
+            if is_at_boundary {
+                self.file_completer.activate(cursor - 1);
+            }
+        }
+    }
 }

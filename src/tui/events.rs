@@ -75,6 +75,74 @@ impl App {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
 
+        // Handle file completer input first if active
+        if self.file_completer.is_active() {
+            match key.code {
+                // Navigation within completer
+                KeyCode::Up => {
+                    self.file_completer.move_up();
+                    return;
+                }
+                KeyCode::Down => {
+                    self.file_completer.move_down();
+                    return;
+                }
+                // Accept selection
+                KeyCode::Tab | KeyCode::Enter if !shift => {
+                    if let Some(path) = self.file_completer.selected_path() {
+                        let at_pos = self.file_completer.at_position();
+                        let path_str = path.to_string_lossy().to_string();
+
+                        // Replace @query with the selected path
+                        let cursor = self.input_state.cursor_char_idx();
+                        let delete_end = cursor;
+
+                        // Delete from @ to cursor
+                        if delete_end > at_pos {
+                            self.input_buffer.remove_range(at_pos..delete_end);
+                            self.input_state
+                                .set_cursor(at_pos, self.input_buffer.len_chars());
+                        }
+
+                        // Insert selected path with @
+                        let full_path = format!("@{path_str} ");
+                        self.input_state
+                            .insert_str(&mut self.input_buffer, &full_path);
+                    }
+                    self.file_completer.deactivate();
+                    return;
+                }
+                // Cancel completer
+                KeyCode::Esc => {
+                    self.file_completer.deactivate();
+                    return;
+                }
+                // Backspace might cancel if we delete past @
+                KeyCode::Backspace => {
+                    let at_pos = self.file_completer.at_position();
+                    let cursor = self.input_state.cursor_char_idx();
+                    if cursor <= at_pos + 1 {
+                        self.file_completer.deactivate();
+                    } else {
+                        // Continue with normal backspace, then update query
+                        self.handle_input_event_with_history(key);
+                        self.update_file_completer_query();
+                    }
+                    return;
+                }
+                // Character input updates the query
+                KeyCode::Char(_) if !ctrl => {
+                    self.handle_input_event_with_history(key);
+                    self.update_file_completer_query();
+                    return;
+                }
+                _ => {
+                    // Other keys deactivate completer and process normally
+                    self.file_completer.deactivate();
+                }
+            }
+        }
+
         match key.code {
             // Esc: Cancel running task, or double-Esc to clear input
             KeyCode::Esc => {
@@ -345,6 +413,12 @@ impl App {
             // ? shows help when input is empty
             KeyCode::Char('?') if self.input_is_empty() => {
                 self.mode = Mode::HelpOverlay;
+            }
+
+            // @ might trigger file completion
+            KeyCode::Char('@') => {
+                self.handle_input_event_with_history(key);
+                self.check_activate_file_completer();
             }
 
             _ => {
