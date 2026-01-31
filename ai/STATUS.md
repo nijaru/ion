@@ -7,18 +7,17 @@
 | Phase     | Provider Done | 2026-01-30 |
 | Status    | Ready to Test | 2026-01-30 |
 | Toolchain | stable        | 2026-01-22 |
-| Tests     | 208 passing   | 2026-01-30 |
+| Tests     | 217 passing   | 2026-01-30 |
 | Clippy    | clean         | 2026-01-30 |
 
 ## Just Completed
 
-**Agent refactoring + UX improvements** (2026-01-30):
+**Autocomplete features** (2026-01-30):
 
-- Decomposed agent/mod.rs: 785 → 328 lines (events, retry, stream, tools modules)
-- Pretty-print API error JSON: extracts message from raw JSON blobs
-- StreamContext struct reduces params (9 → 5)
-- Unified retry logic: retryable_category() replaces two functions
-- Readline history: Ctrl+P/N for direct history navigation
+- File autocomplete: Type `@` at word boundary for path completion
+- Command autocomplete: Type `/` at start for command completion
+- Both use fuzzy matching, Up/Down navigation, Tab/Enter to accept
+- Popup renders above input with icons/descriptions
 
 ## Current Focus
 
@@ -39,20 +38,20 @@
 
 ## Module Health
 
-| Module    | Files | Lines | Health | Notes                       |
-| --------- | ----- | ----- | ------ | --------------------------- |
-| provider/ | 18    | ~2500 | GOOD   | Native HTTP, 3 backends     |
-| tui/      | 20    | ~6700 | OK     | render.rs needs split       |
-| agent/    | 9     | ~900  | GOOD   | Decomposed, clean structure |
-| tool/     | 15    | ~2500 | GOOD   | Orchestrator + spawn        |
-| auth/     | 5     | ~800  | NEW    | OAuth complete              |
-| session/  | 3     | ~600  | GOOD   | SQLite + WAL                |
-| skill/    | 3     | ~400  | GOOD   | YAML frontmatter            |
-| mcp/      | 2     | ~300  | OK     | Needs tests                 |
+| Module    | Files | Lines | Health | Notes                        |
+| --------- | ----- | ----- | ------ | ---------------------------- |
+| provider/ | 18    | ~2500 | GOOD   | Native HTTP, 3 backends      |
+| tui/      | 22    | ~7600 | OK     | +autocomplete, render.rs big |
+| agent/    | 9     | ~900  | GOOD   | Decomposed, clean structure  |
+| tool/     | 15    | ~2500 | GOOD   | Orchestrator + spawn         |
+| auth/     | 5     | ~800  | NEW    | OAuth complete               |
+| session/  | 3     | ~600  | GOOD   | SQLite + WAL                 |
+| skill/    | 3     | ~400  | GOOD   | YAML frontmatter             |
+| mcp/      | 2     | ~300  | OK     | Needs tests                  |
 
 ## Top Priorities
 
-1. Test TUI changes manually (history nav, error display)
+1. Test TUI changes manually (autocomplete, history nav)
 2. OAuth testing with real subscriptions
 3. Split large TUI files (render.rs)
 
