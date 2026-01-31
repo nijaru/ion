@@ -60,6 +60,7 @@ fn setup_terminal() -> Result<TerminalState, Box<dyn std::error::Error>> {
 fn handle_resume(
     app: &mut App,
     resume_option: ResumeOption,
+    supports_enhancement: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     match resume_option {
         ResumeOption::None => {}
@@ -88,7 +89,11 @@ fn handle_resume(
         },
         ResumeOption::ById(id) => {
             if let Err(e) = app.load_session(&id) {
-                let _ = execute!(io::stdout(), DisableBracketedPaste, DisableFocusChange);
+                let mut stdout = io::stdout();
+                let _ = execute!(stdout, DisableBracketedPaste, DisableFocusChange);
+                if supports_enhancement {
+                    let _ = execute!(stdout, PopKeyboardEnhancementFlags);
+                }
                 let _ = disable_raw_mode();
                 eprintln!("Error: Session '{id}' not found: {e}");
                 return Err(e.into());
@@ -197,7 +202,7 @@ pub async fn run(
     } = setup_terminal()?;
 
     let mut app = App::with_permissions(permissions).await?;
-    handle_resume(&mut app, resume_option)?;
+    handle_resume(&mut app, resume_option, supports_enhancement)?;
 
     let debug_events = std::env::var("ION_DEBUG_EVENTS").is_ok();
 
