@@ -13,6 +13,7 @@ const MAX_DIFF_SIZE: usize = 50_000;
 pub struct EditTool;
 
 #[async_trait]
+#[allow(clippy::too_many_lines)]
 impl Tool for EditTool {
     fn name(&self) -> &'static str {
         "edit"

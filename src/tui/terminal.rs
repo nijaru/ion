@@ -338,36 +338,42 @@ impl LineBuilder {
     }
 
     /// Add a raw (unstyled) span.
+    #[must_use]
     pub fn raw(mut self, content: impl Into<String>) -> Self {
         self.line.push(StyledSpan::raw(content));
         self
     }
 
     /// Add a colored span.
+    #[must_use]
     pub fn colored(mut self, content: impl Into<String>, color: Color) -> Self {
         self.line.push(StyledSpan::colored(content, color));
         self
     }
 
     /// Add a dim span.
+    #[must_use]
     pub fn dim(mut self, content: impl Into<String>) -> Self {
         self.line.push(StyledSpan::dim(content));
         self
     }
 
     /// Add a bold span.
+    #[must_use]
     pub fn bold(mut self, content: impl Into<String>) -> Self {
         self.line.push(StyledSpan::bold(content));
         self
     }
 
     /// Add an italic span.
+    #[must_use]
     pub fn italic(mut self, content: impl Into<String>) -> Self {
         self.line.push(StyledSpan::italic(content));
         self
     }
 
     /// Add a colored bold span.
+    #[must_use]
     pub fn colored_bold(mut self, content: impl Into<String>, color: Color) -> Self {
         self.line.push(StyledSpan::colored_bold(content, color));
         self

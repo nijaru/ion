@@ -197,6 +197,7 @@ fn read_lines_single_pass(path: &Path, start: usize, count: usize) -> std::io::R
 }
 
 /// Count lines using streaming with SIMD (constant memory, handles huge files).
+#[allow(clippy::large_stack_arrays)] // Intentional: 64KB buffer for efficient large file handling
 fn count_lines_streaming(path: &Path) -> std::io::Result<usize> {
     let file = std::fs::File::open(path)?;
     let mut reader = BufReader::new(file);

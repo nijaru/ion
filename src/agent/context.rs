@@ -70,6 +70,7 @@ impl ContextManager {
     }
 
     /// Set the instruction loader for AGENTS.md support.
+    #[must_use]
     pub fn with_instruction_loader(mut self, loader: Arc<InstructionLoader>) -> Self {
         self.instruction_loader = Some(loader);
         self

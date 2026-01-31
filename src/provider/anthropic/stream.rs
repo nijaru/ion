@@ -6,6 +6,7 @@ use serde::Deserialize;
 /// Streaming event from the Anthropic Messages API.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]
+#[allow(dead_code)]
 pub enum StreamEvent {
     #[serde(rename = "message_start")]
     MessageStart { message: MessageStart },
@@ -30,6 +31,7 @@ pub enum StreamEvent {
 
 /// Initial message info.
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct MessageStart {
     pub id: String,
     #[serde(rename = "type")]
@@ -42,6 +44,7 @@ pub struct MessageStart {
 /// Content block type info at start.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]
+#[allow(dead_code)]
 pub enum ContentBlockInfo {
     #[serde(rename = "text")]
     Text { text: String },
@@ -56,15 +59,16 @@ pub enum ContentBlockInfo {
 #[serde(tag = "type")]
 pub enum ContentDelta {
     #[serde(rename = "text_delta")]
-    TextDelta { text: String },
+    Text { text: String },
     #[serde(rename = "thinking_delta")]
-    ThinkingDelta { thinking: String },
+    Thinking { thinking: String },
     #[serde(rename = "input_json_delta")]
-    InputJsonDelta { partial_json: String },
+    InputJson { partial_json: String },
 }
 
 /// Final message delta with stop info.
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct MessageDelta {
     pub stop_reason: Option<String>,
     pub stop_sequence: Option<String>,
@@ -149,7 +153,7 @@ mod tests {
         }"#;
         let event: StreamEvent = serde_json::from_str(json).unwrap();
         if let StreamEvent::ContentBlockDelta { delta, .. } = event {
-            if let ContentDelta::TextDelta { text } = delta {
+            if let ContentDelta::Text { text } = delta {
                 assert_eq!(text, "Hello");
             } else {
                 panic!("Expected TextDelta");
@@ -168,7 +172,7 @@ mod tests {
         }"#;
         let event: StreamEvent = serde_json::from_str(json).unwrap();
         if let StreamEvent::ContentBlockDelta { delta, .. } = event {
-            if let ContentDelta::ThinkingDelta { thinking } = delta {
+            if let ContentDelta::Thinking { thinking } = delta {
                 assert!(thinking.contains("consider"));
             } else {
                 panic!("Expected ThinkingDelta");
@@ -187,7 +191,7 @@ mod tests {
         }"#;
         let event: StreamEvent = serde_json::from_str(json).unwrap();
         if let StreamEvent::ContentBlockDelta { delta, .. } = event {
-            if let ContentDelta::InputJsonDelta { partial_json } = delta {
+            if let ContentDelta::InputJson { partial_json } = delta {
                 assert!(partial_json.contains("path"));
             } else {
                 panic!("Expected InputJsonDelta");

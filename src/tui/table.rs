@@ -260,7 +260,7 @@ impl Table {
                     while word_idx < words.len() {
                         let word = &words[word_idx];
                         let word_width = measure_width(word);
-                        let space_needed = if line_content.is_empty() { 0 } else { 1 };
+                        let space_needed = usize::from(!line_content.is_empty());
 
                         if line_width + space_needed + word_width <= width {
                             // Word fits on this line

@@ -296,7 +296,7 @@ impl App {
         if cursor > 0 && chars.get(cursor - 1) == Some(&'@') {
             // Check if @ is at start or preceded by whitespace (word boundary)
             let is_at_boundary =
-                cursor == 1 || chars.get(cursor - 2).map_or(true, |c| c.is_whitespace());
+                cursor == 1 || chars.get(cursor - 2).is_none_or(|c| c.is_whitespace());
             if is_at_boundary {
                 self.file_completer.activate(cursor - 1);
             }

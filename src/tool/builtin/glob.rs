@@ -81,9 +81,8 @@ impl Tool for GlobTool {
                         return ignore::WalkState::Quit;
                     }
 
-                    let entry = match entry {
-                        Ok(e) => e,
-                        Err(_) => return ignore::WalkState::Continue,
+                    let Ok(entry) = entry else {
+                        return ignore::WalkState::Continue;
                     };
 
                     let path = entry.path();

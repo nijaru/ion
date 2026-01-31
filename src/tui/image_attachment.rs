@@ -36,9 +36,8 @@ pub fn parse_image_attachments(input: &str, working_dir: &Path) -> Vec<ContentBl
 
         // Find the end of the path - handle quoted paths for spaces
         let after_prefix = &remaining[pos + IMAGE_PREFIX.len()..];
-        let (path_str, consumed) = if after_prefix.starts_with('"') {
+        let (path_str, consumed) = if let Some(after_quote) = after_prefix.strip_prefix('"') {
             // Quoted path: find closing quote
-            let after_quote = &after_prefix[1..];
             if let Some(end_quote) = after_quote.find('"') {
                 (&after_quote[..end_quote], end_quote + 2) // +2 for both quotes
             } else {
@@ -74,7 +73,8 @@ pub fn parse_image_attachments(input: &str, working_dir: &Path) -> Vec<ContentBl
             }
             Err(e) => {
                 // On error, keep the original text and add error note
-                current_text.push_str(&format!("[Image error: {e}]"));
+                use std::fmt::Write;
+                let _ = write!(current_text, "[Image error: {e}]");
             }
         }
 
@@ -98,8 +98,10 @@ pub fn parse_image_attachments(input: &str, working_dir: &Path) -> Vec<ContentBl
     blocks
 }
 
-/// Load an image file and return (media_type, base64_data).
+/// Load an image file and return (`media_type`, `base64_data`).
 fn load_image(path: &str) -> Result<(String, String), String> {
+    const MAX_SIZE: u64 = 20 * 1024 * 1024;
+
     let path = Path::new(path);
 
     // Check extension
@@ -116,7 +118,6 @@ fn load_image(path: &str) -> Result<(String, String), String> {
         .ok_or_else(|| format!("Unsupported format: {ext}"))?;
 
     // Check file size BEFORE reading (prevents OOM with large files)
-    const MAX_SIZE: u64 = 20 * 1024 * 1024;
     let metadata = std::fs::metadata(path).map_err(|e| format!("Failed to stat: {e}"))?;
     if metadata.len() > MAX_SIZE {
         return Err(format!(
@@ -133,12 +134,6 @@ fn load_image(path: &str) -> Result<(String, String), String> {
     let encoded = base64::engine::general_purpose::STANDARD.encode(&data);
 
     Ok((media_type.to_string(), encoded))
-}
-
-/// Check if input contains image attachments.
-#[must_use]
-pub fn has_image_attachments(input: &str) -> bool {
-    input.contains(IMAGE_PREFIX)
 }
 
 #[cfg(test)]
@@ -170,12 +165,6 @@ mod tests {
         let blocks = parse_image_attachments("Hello world", Path::new("."));
         assert_eq!(blocks.len(), 1);
         assert!(matches!(&blocks[0], ContentBlock::Text { text } if text == "Hello world"));
-    }
-
-    #[test]
-    fn test_has_image_attachments() {
-        assert!(!has_image_attachments("Hello world"));
-        assert!(has_image_attachments("Look at @image:test.png"));
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! Session persistence with SQLite.
+//! Session persistence with `SQLite`.
 #![allow(clippy::cast_possible_wrap, clippy::cast_sign_loss)] // SQLite uses i64 for rowids
 
 use crate::provider::{ContentBlock, Message, Role};
@@ -164,7 +164,8 @@ impl SessionStore {
                 |row| row.get(0),
             )?;
 
-            #[allow(clippy::cast_sign_loss)] // SQLite rowid is non-negative
+            #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+            // SQLite rowid fits in usize
             let start_position = max_position.map_or(0, |p| p + 1) as usize;
 
             // Only insert messages beyond the last saved position

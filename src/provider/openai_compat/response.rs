@@ -4,6 +4,7 @@ use serde::Deserialize;
 
 /// Response from OpenAI-compatible chat completions.
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct OpenAIResponse {
     pub id: String,
     pub object: String,
@@ -16,6 +17,7 @@ pub struct OpenAIResponse {
 
 /// A choice in the response.
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct Choice {
     pub index: usize,
     pub message: ResponseMessage,
@@ -24,13 +26,14 @@ pub struct Choice {
 
 /// Message content in a response.
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct ResponseMessage {
     pub role: String,
     #[serde(default)]
     pub content: Option<String>,
     #[serde(default)]
     pub tool_calls: Option<Vec<ToolCall>>,
-    /// Reasoning content (DeepSeek, Kimi via OpenRouter).
+    /// Reasoning content (`DeepSeek`, Kimi via `OpenRouter`).
     #[serde(default)]
     pub reasoning_content: Option<String>,
     /// Alternative reasoning field (some providers).
@@ -40,6 +43,7 @@ pub struct ResponseMessage {
 
 /// Tool call in a response.
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub struct ToolCall {
     pub id: String,
     #[serde(rename = "type")]
@@ -55,22 +59,13 @@ pub struct FunctionCall {
 }
 
 /// Token usage information.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Default)]
+#[allow(dead_code, clippy::struct_field_names)] // Field names match API response
 pub struct Usage {
     pub prompt_tokens: u32,
     pub completion_tokens: u32,
     #[serde(default)]
     pub total_tokens: u32,
-}
-
-impl Default for Usage {
-    fn default() -> Self {
-        Self {
-            prompt_tokens: 0,
-            completion_tokens: 0,
-            total_tokens: 0,
-        }
-    }
 }
 
 #[cfg(test)]

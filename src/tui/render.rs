@@ -11,7 +11,7 @@ use crate::tui::App;
 use crate::tui::chat_renderer::ChatRenderer;
 use crate::tui::composer::build_visual_lines;
 use crate::tui::message_list::Sender;
-use crate::tui::render_selector::{self, SelectorData, SelectorItem, MAX_VISIBLE_ITEMS};
+use crate::tui::render_selector::{self, MAX_VISIBLE_ITEMS, SelectorData, SelectorItem};
 use crate::tui::terminal::StyledLine;
 use crate::tui::types::{Mode, SelectorPage};
 use crate::tui::util::{format_elapsed, format_relative_time, format_tokens};

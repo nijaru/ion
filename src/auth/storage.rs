@@ -18,7 +18,7 @@ pub struct OAuthTokens {
     /// Token expiration timestamp (milliseconds since epoch).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<u64>,
-    /// ID token (OpenID Connect).
+    /// ID token (`OpenID` Connect).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id_token: Option<String>,
 }
@@ -33,6 +33,7 @@ impl OAuthTokens {
             return false;
         };
 
+        #[allow(clippy::cast_possible_truncation)] // ms since epoch won't overflow u64
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -49,6 +50,7 @@ impl OAuthTokens {
             return false;
         };
 
+        #[allow(clippy::cast_possible_truncation)] // ms since epoch won't overflow u64
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()

@@ -8,6 +8,7 @@ use unicode_width::UnicodeWidthChar;
 pub struct ChatRenderer;
 
 impl ChatRenderer {
+    #[allow(clippy::too_many_lines)]
     pub fn build_lines(
         entries: &[crate::tui::message_list::MessageEntry],
         queued: Option<&Vec<String>>,

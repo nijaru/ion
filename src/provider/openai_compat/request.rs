@@ -5,7 +5,7 @@ use crate::provider::prefs::ProviderPrefs;
 use serde::Serialize;
 
 /// Top-level request to OpenAI-compatible APIs.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Default)]
 pub struct OpenAIRequest {
     pub model: String,
     pub messages: Vec<OpenAIMessage>,
@@ -25,7 +25,7 @@ pub struct OpenAIRequest {
     pub stream: bool,
 }
 
-/// Provider routing configuration (OpenRouter specific).
+/// Provider routing configuration (`OpenRouter` specific).
 #[derive(Debug, Clone, Serialize)]
 pub struct ProviderRouting {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -177,22 +177,6 @@ impl OpenAIRequest {
         }
 
         self
-    }
-}
-
-impl Default for OpenAIRequest {
-    fn default() -> Self {
-        Self {
-            model: String::new(),
-            messages: Vec::new(),
-            tools: None,
-            max_tokens: None,
-            max_completion_tokens: None,
-            temperature: None,
-            store: None,
-            provider: None,
-            stream: false,
-        }
     }
 }
 

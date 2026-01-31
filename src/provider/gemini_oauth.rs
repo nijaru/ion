@@ -94,11 +94,10 @@ impl GeminiOAuthClient {
                 Ok(resp) if resp.status().is_success() || i == CODE_ASSIST_ENDPOINTS.len() - 1 => {
                     return Ok(resp);
                 }
-                Ok(_) => continue, // Try next endpoint
                 Err(e) if i == CODE_ASSIST_ENDPOINTS.len() - 1 => {
                     return Err(Error::Api(format!("Request failed: {e}")));
                 }
-                Err(_) => continue, // Try next endpoint
+                Ok(_) | Err(_) => {} // Try next endpoint
             }
         }
 
@@ -122,10 +121,7 @@ impl GeminiOAuthClient {
             .map_err(|e| Error::Api(format!("Failed to read response: {e}")))?;
 
         if !status.is_success() {
-            return Err(Error::Api(format!(
-                "Gemini API error: {} - {}",
-                status, text
-            )));
+            return Err(Error::Api(format!("Gemini API error: {status} - {text}")));
         }
 
         let gemini_response: GeminiResponse = serde_json::from_str(&text)
@@ -140,6 +136,8 @@ impl GeminiOAuthClient {
         request: ChatRequest,
         tx: mpsc::Sender<StreamEvent>,
     ) -> Result<(), Error> {
+        use futures::StreamExt;
+
         let headers = self.build_headers();
         let model = map_model_name(&request.model);
         let gemini_request = GeminiRequest::from_chat_request(&request);
@@ -181,7 +179,6 @@ impl GeminiOAuthClient {
         })?;
 
         // Parse SSE stream
-        use futures::StreamExt;
         let mut stream = response.bytes_stream();
         let mut buffer = String::new();
 
@@ -327,7 +324,7 @@ struct GeminiCandidate {
     finish_reason: Option<String>,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code, clippy::struct_field_names)] // Field names match API response
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct GeminiUsageMetadata {
@@ -337,6 +334,7 @@ struct GeminiUsageMetadata {
 }
 
 impl GeminiRequest {
+    #[allow(clippy::too_many_lines)]
     fn from_chat_request(request: &ChatRequest) -> Self {
         let mut contents = Vec::new();
         let mut system_instruction = None;

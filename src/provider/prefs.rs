@@ -244,6 +244,7 @@ impl ProviderPrefs {
 }
 
 /// Merge two optional vectors, unioning their contents.
+#[allow(clippy::ref_option)]
 fn merge_option_vec(a: &Option<Vec<String>>, b: &Option<Vec<String>>) -> Option<Vec<String>> {
     match (a, b) {
         (Some(a_vec), Some(b_vec)) => {

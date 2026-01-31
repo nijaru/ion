@@ -28,7 +28,7 @@
 //! ## Scroll Mode (`chat_row = None`)
 //!
 //! When content exceeds screen height, we transition to scroll mode.
-//! Content is pushed into terminal scrollback via ScrollUp, and the
+//! Content is pushed into terminal scrollback via `ScrollUp`, and the
 //! UI stays at the bottom.
 //!
 //! ```text
@@ -81,7 +81,7 @@ pub struct RenderState {
 }
 
 impl RenderState {
-    /// Create a new RenderState with default values.
+    /// Create a new `RenderState` with default values.
     pub fn new() -> Self {
         Self {
             rendered_entries: 0,
@@ -98,7 +98,7 @@ impl RenderState {
     /// Full reset for resize/selector exit.
     ///
     /// Resets all render state to force a complete reflow of chat content.
-    /// The `has_entries` parameter determines whether header_inserted should
+    /// The `has_entries` parameter determines whether `header_inserted` should
     /// be reset (only reset if there are entries to re-render).
     pub fn reset_for_reflow(&mut self, has_entries: bool) {
         if has_entries {
@@ -137,7 +137,7 @@ impl RenderState {
         self.last_render_width = None;
     }
 
-    /// Mark reflow as complete after reprint_chat_scrollback.
+    /// Mark reflow as complete after `reprint_chat_scrollback`.
     ///
     /// Updates state to reflect that all entries have been rendered.
     pub fn mark_reflow_complete(&mut self, entries: usize) {

@@ -6,10 +6,11 @@ use crate::provider::api_provider::Provider;
 
 /// How providers handle reasoning/thinking content.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum ReasoningField {
     /// No reasoning support.
     None,
-    /// Uses `reasoning_content` field in delta (DeepSeek, Kimi).
+    /// Uses `reasoning_content` field in delta (`DeepSeek`, Kimi).
     ReasoningContent,
     /// Uses `reasoning` field in message (some custom deployments).
     Reasoning,
@@ -17,6 +18,7 @@ pub enum ReasoningField {
 
 /// Provider-specific quirks for OpenAI-compatible APIs.
 #[derive(Debug, Clone)]
+#[allow(dead_code, clippy::struct_excessive_bools)]
 pub struct ProviderQuirks {
     /// Use `max_tokens` instead of `max_completion_tokens`.
     pub use_max_tokens: bool,
@@ -26,7 +28,7 @@ pub struct ProviderQuirks {
     pub skip_developer_role: bool,
     /// How reasoning/thinking is returned.
     pub reasoning_field: ReasoningField,
-    /// Supports `provider` field for routing (OpenRouter).
+    /// Supports `provider` field for routing (`OpenRouter`).
     pub supports_provider_routing: bool,
     /// Base URL for the provider.
     pub base_url: &'static str,
@@ -38,17 +40,20 @@ impl ProviderQuirks {
     /// Get quirks for a specific provider.
     pub fn for_provider(provider: Provider) -> Self {
         match provider {
-            Provider::OpenAI | Provider::ChatGpt => Self::openai(),
             Provider::OpenRouter => Self::openrouter(),
             Provider::Groq => Self::groq(),
             Provider::Kimi => Self::kimi(),
             Provider::Ollama => Self::ollama(),
-            // Non-OpenAI-compatible providers should not reach here
-            Provider::Anthropic | Provider::Google | Provider::Gemini => Self::openai(),
+            // OpenAI-compatible or fallback for non-compatible providers
+            Provider::OpenAI
+            | Provider::ChatGpt
+            | Provider::Anthropic
+            | Provider::Google
+            | Provider::Gemini => Self::openai(),
         }
     }
 
-    /// OpenAI (standard behavior).
+    /// `OpenAI` (standard behavior).
     fn openai() -> Self {
         Self {
             use_max_tokens: false,
@@ -61,7 +66,7 @@ impl ProviderQuirks {
         }
     }
 
-    /// OpenRouter (supports provider routing).
+    /// `OpenRouter` (supports provider routing).
     fn openrouter() -> Self {
         Self {
             use_max_tokens: false,

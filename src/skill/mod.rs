@@ -77,6 +77,7 @@ impl SkillRegistry {
     }
 
     /// Register a fully loaded skill (backwards compatible).
+    #[allow(clippy::needless_pass_by_value)]
     pub fn register(&mut self, skill: Skill) {
         let entry = SkillEntry {
             summary: SkillSummary {
@@ -302,6 +303,7 @@ impl SkillLoader {
     }
 
     /// Parse legacy XML format for backwards compatibility.
+    #[allow(clippy::unnecessary_wraps)]
     fn parse_xml_format(content: &str) -> Result<Vec<Skill>> {
         let mut skills = Vec::new();
         let mut current_skill: Option<Skill> = None;

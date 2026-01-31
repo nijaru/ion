@@ -4,6 +4,7 @@ use serde::Deserialize;
 
 /// Response from the Anthropic Messages API.
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct AnthropicResponse {
     pub id: String,
     #[serde(rename = "type")]
@@ -33,7 +34,8 @@ pub enum ResponseBlock {
 }
 
 /// Token usage information.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Default)]
+#[allow(clippy::struct_field_names)] // Field names match API response
 pub struct Usage {
     pub input_tokens: u32,
     pub output_tokens: u32,
@@ -41,17 +43,6 @@ pub struct Usage {
     pub cache_creation_input_tokens: u32,
     #[serde(default)]
     pub cache_read_input_tokens: u32,
-}
-
-impl Default for Usage {
-    fn default() -> Self {
-        Self {
-            input_tokens: 0,
-            output_tokens: 0,
-            cache_creation_input_tokens: 0,
-            cache_read_input_tokens: 0,
-        }
-    }
 }
 
 #[cfg(test)]

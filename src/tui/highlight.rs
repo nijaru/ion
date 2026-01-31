@@ -190,6 +190,7 @@ pub fn render_markdown(content: &str) -> Vec<StyledLine> {
 }
 
 /// Render markdown with explicit width for table rendering.
+#[allow(clippy::too_many_lines)]
 pub fn render_markdown_with_width(content: &str, width: usize) -> Vec<StyledLine> {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_TABLES);
@@ -246,6 +247,7 @@ pub fn render_markdown_with_width(content: &str, width: usize) -> Vec<StyledLine
                 Tag::List(start_num) => {
                     list_depth += 1;
                     if let Some(n) = start_num {
+                        #[allow(clippy::cast_possible_truncation)]
                         ordered_list_counters.push(n as usize);
                     } else {
                         ordered_list_counters.push(0); // 0 = unordered

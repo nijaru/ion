@@ -17,9 +17,8 @@ use tokio::sync::mpsc;
 
 /// Extract the most relevant argument from a tool call for display.
 fn extract_key_arg(tool_name: &str, args: &serde_json::Value) -> String {
-    let obj = match args.as_object() {
-        Some(o) => o,
-        None => return String::new(),
+    let Some(obj) = args.as_object() else {
+        return String::new();
     };
 
     // Tool-specific key arguments
@@ -203,7 +202,7 @@ pub struct Cli {
 pub enum Commands {
     /// Run a one-shot prompt (non-interactive)
     Run(RunArgs),
-    /// Login to an OAuth provider (ChatGPT Plus/Pro, Google AI)
+    /// Login to an OAuth provider (`ChatGPT` Plus/Pro, Google AI)
     Login(LoginArgs),
     /// Logout from an OAuth provider
     Logout(LogoutArgs),
@@ -259,7 +258,7 @@ pub enum OutputFormat {
 /// OAuth provider for login/logout
 #[derive(ValueEnum, Clone, Debug)]
 pub enum AuthProvider {
-    /// ChatGPT (OpenAI OAuth - Plus/Pro subscription)
+    /// `ChatGPT` (`OpenAI` OAuth - Plus/Pro subscription)
     #[value(name = "chatgpt")]
     ChatGpt,
     /// Gemini (Google OAuth)
@@ -341,7 +340,7 @@ struct CliAgentSetup {
 }
 
 /// Setup CLI agent: config, provider, client, orchestrator, agent, session.
-async fn setup_cli_agent(args: &RunArgs, auto_approve: bool) -> Result<CliAgentSetup> {
+fn setup_cli_agent(args: &RunArgs, auto_approve: bool) -> Result<CliAgentSetup> {
     // Load config
     let config = Config::load()?;
 
@@ -494,7 +493,7 @@ pub async fn run(args: RunArgs, auto_approve: bool) -> ExitCode {
     }
 }
 
-#[allow(clippy::match_wildcard_for_single_variants)] // Defensive for future OutputFormat variants
+#[allow(clippy::match_wildcard_for_single_variants, clippy::too_many_lines)]
 async fn run_inner(args: RunArgs, auto_approve: bool) -> Result<ExitCode> {
     // Initialize tracing for CLI mode
     if args.verbose || std::env::var("ION_LOG").is_ok() {
@@ -508,7 +507,7 @@ async fn run_inner(args: RunArgs, auto_approve: bool) -> Result<ExitCode> {
         agent,
         session,
         prompt,
-    } = setup_cli_agent(&args, auto_approve).await?;
+    } = setup_cli_agent(&args, auto_approve)?;
     let abort_token = session.abort_token.clone();
 
     // Create event channel
@@ -649,6 +648,7 @@ pub async fn login(args: LoginArgs) -> ExitCode {
 }
 
 /// Run the logout command
+#[must_use]
 pub fn logout(args: LogoutArgs) -> ExitCode {
     let provider: crate::auth::OAuthProvider = args.provider.into();
     let display_name = provider.display_name();
