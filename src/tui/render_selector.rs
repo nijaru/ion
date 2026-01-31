@@ -12,7 +12,7 @@ use crossterm::{
 use std::io::Write;
 
 /// Maximum visible items in selector list.
-const MAX_VISIBLE_ITEMS: u16 = 15;
+pub const MAX_VISIBLE_ITEMS: u16 = 15;
 
 /// A single item in the selector list.
 pub struct SelectorItem {
@@ -119,7 +119,7 @@ pub fn render_selector<W: Write>(
     let filter_cursor_row = row;
     execute!(
         w,
-        MoveTo(width - 1, row),
+        MoveTo(width.saturating_sub(1), row),
         SetForegroundColor(Color::Cyan),
         Print("│"),
         ResetColor

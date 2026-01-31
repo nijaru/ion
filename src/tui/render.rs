@@ -11,7 +11,7 @@ use crate::tui::App;
 use crate::tui::chat_renderer::ChatRenderer;
 use crate::tui::composer::build_visual_lines;
 use crate::tui::message_list::Sender;
-use crate::tui::render_selector::{self, SelectorData, SelectorItem};
+use crate::tui::render_selector::{self, SelectorData, SelectorItem, MAX_VISIBLE_ITEMS};
 use crate::tui::terminal::StyledLine;
 use crate::tui::types::{Mode, SelectorPage};
 use crate::tui::util::{format_elapsed, format_relative_time, format_tokens};
@@ -29,8 +29,6 @@ const INPUT_MARGIN: u16 = 4;
 const PROGRESS_HEIGHT: u16 = 1;
 /// Selector layout overhead: tabs(1) + desc(1) + search box(3) + hint(1) + list header
 const SELECTOR_OVERHEAD: u16 = 7;
-/// Maximum visible items in selector list
-const MAX_VISIBLE_ITEMS: u16 = 15;
 
 impl App {
     /// Calculate the height needed for the input box based on content.
