@@ -1,6 +1,13 @@
 //! Command autocomplete for / prefix in input.
 
 use crate::tui::fuzzy;
+use crossterm::{
+    cursor::MoveTo,
+    execute,
+    style::{Attribute, Color, Print, ResetColor, SetAttribute, SetForegroundColor},
+    terminal::{Clear, ClearType},
+};
+use std::io::Write;
 
 /// Maximum number of candidates to show in the popup.
 const MAX_VISIBLE: usize = 7;
@@ -101,6 +108,78 @@ impl CommandCompleter {
             let max = self.filtered.len().min(MAX_VISIBLE).saturating_sub(1);
             self.selected = (self.selected + 1).min(max);
         }
+    }
+
+    /// Render the command completion popup above the input box.
+    #[allow(clippy::cast_possible_truncation)]
+    pub fn render<W: Write>(&self, w: &mut W, input_start: u16, width: u16) -> std::io::Result<()> {
+        let candidates = self.visible_candidates();
+        if candidates.is_empty() {
+            return Ok(());
+        }
+
+        let popup_height = candidates.len() as u16;
+        let popup_start = input_start.saturating_sub(popup_height);
+
+        // Calculate popup width (command + description + padding)
+        let max_cmd_len = candidates
+            .iter()
+            .map(|(cmd, _)| cmd.len())
+            .max()
+            .unwrap_or(10);
+        let max_desc_len = candidates
+            .iter()
+            .map(|(_, desc)| desc.len())
+            .max()
+            .unwrap_or(20);
+        let popup_width = (max_cmd_len + max_desc_len + 6).min(width as usize - 4) as u16;
+
+        for (i, (cmd, desc)) in candidates.iter().enumerate() {
+            let row = popup_start + i as u16;
+            let is_selected = i == self.selected;
+
+            execute!(w, MoveTo(1, row), Clear(ClearType::CurrentLine))?;
+
+            if is_selected {
+                execute!(w, SetAttribute(Attribute::Reverse))?;
+            }
+
+            // Command in cyan, description dimmed
+            execute!(
+                w,
+                Print(" "),
+                SetForegroundColor(Color::Cyan),
+                Print(*cmd),
+                ResetColor,
+            )?;
+
+            // Pad between command and description
+            let cmd_padding = max_cmd_len.saturating_sub(cmd.len()) + 2;
+            for _ in 0..cmd_padding {
+                execute!(w, Print(" "))?;
+            }
+
+            // Description (dimmed)
+            execute!(
+                w,
+                SetAttribute(Attribute::Dim),
+                Print(*desc),
+                SetAttribute(Attribute::NormalIntensity),
+            )?;
+
+            // Pad to popup width
+            let total_len = cmd.len() + cmd_padding + desc.len() + 1;
+            let padding = popup_width.saturating_sub(total_len as u16);
+            for _ in 0..padding {
+                execute!(w, Print(" "))?;
+            }
+
+            if is_selected {
+                execute!(w, SetAttribute(Attribute::NoReverse))?;
+            }
+        }
+
+        Ok(())
     }
 
     /// Apply fuzzy filter to commands.

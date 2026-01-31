@@ -14,6 +14,7 @@ pub mod message_list;
 pub mod model_picker;
 pub mod provider_picker;
 mod render;
+mod render_selector;
 mod render_state;
 mod run;
 mod session;
