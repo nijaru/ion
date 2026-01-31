@@ -29,7 +29,7 @@ use std::time::Duration;
 // Re-export the clean public API
 pub use api_provider::{Provider, ProviderStatus};
 pub use client::{Client, LlmApi};
-pub use error::Error;
+pub use error::{Error, format_api_error};
 pub use prefs::ProviderPrefs;
 pub use registry::{ModelFilter, ModelRegistry};
 pub use types::*;
