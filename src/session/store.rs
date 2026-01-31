@@ -138,7 +138,7 @@ impl SessionStore {
         }
 
         let now = chrono::Utc::now().timestamp();
-        let working_dir = session.working_dir.to_string_lossy().to_string();
+        let working_dir = session.working_dir.display().to_string();
 
         // Begin transaction for atomicity
         self.db.execute("BEGIN IMMEDIATE", [])?;
@@ -262,18 +262,21 @@ impl SessionStore {
     pub fn list_recent(&self, limit: usize) -> Result<Vec<SessionSummary>, SessionStoreError> {
         let mut stmt = self.db.prepare(
             r"
+            WITH first_user_messages AS (
+                SELECT session_id, content, ROW_NUMBER() OVER (
+                    PARTITION BY session_id ORDER BY position
+                ) as rn
+                FROM messages
+                WHERE role = 'user'
+            )
             SELECT
                 s.id,
                 s.working_dir,
                 s.model,
                 s.updated_at,
-                (SELECT content FROM messages m
-                 WHERE m.session_id = s.id AND m.role = 'user'
-                 ORDER BY m.position LIMIT 1) as first_user_message
+                fum.content as first_user_message
             FROM sessions s
-            WHERE EXISTS (
-                SELECT 1 FROM messages m WHERE m.session_id = s.id AND m.role = 'user'
-            )
+            INNER JOIN first_user_messages fum ON fum.session_id = s.id AND fum.rn = 1
             ORDER BY s.updated_at DESC
             LIMIT ?1
             ",

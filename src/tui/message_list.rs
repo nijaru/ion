@@ -131,13 +131,11 @@ fn take_head(s: &str, max: usize) -> String {
 }
 
 fn take_tail(s: &str, max: usize) -> String {
-    s.chars()
-        .rev()
-        .take(max)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect()
+    let char_count = s.chars().count();
+    if char_count <= max {
+        return s.to_string();
+    }
+    s.chars().skip(char_count - max).collect()
 }
 
 #[derive(Debug, Clone, PartialEq)]

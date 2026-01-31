@@ -32,7 +32,7 @@ impl SystemBlock {
     /// Create a text system block.
     pub fn text(content: impl Into<String>) -> Self {
         Self {
-            block_type: "text".to_string(),
+            block_type: "text".into(),
             text: content.into(),
             cache_control: None,
         }
@@ -56,7 +56,7 @@ impl CacheControl {
     /// Create an ephemeral cache control marker.
     pub fn ephemeral() -> Self {
         Self {
-            cache_type: "ephemeral".to_string(),
+            cache_type: "ephemeral".into(),
         }
     }
 }

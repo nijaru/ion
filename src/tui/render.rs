@@ -485,7 +485,7 @@ impl App {
 
         execute!(w, SetForegroundColor(CColor::Cyan))?;
         if let Some(ref tool) = self.current_tool {
-            execute!(w, Print(format!(" {tool}")))?;
+            execute!(w, Print(" "), Print(tool))?;
         } else {
             execute!(w, Print(" Ionizing..."))?;
         }
@@ -496,7 +496,9 @@ impl App {
             execute!(
                 w,
                 SetAttribute(Attribute::Dim),
-                Print(format!(" ({elapsed}s · Esc to cancel)")),
+                Print(" ("),
+                Print(elapsed),
+                Print("s · Esc to cancel)"),
                 SetAttribute(Attribute::Reset)
             )?;
         }
@@ -542,7 +544,9 @@ impl App {
         execute!(
             w,
             SetAttribute(Attribute::Dim),
-            Print(format!(" ({})", stats.join(" · "))),
+            Print(" ("),
+            Print(stats.join(" · ")),
+            Print(")"),
             SetAttribute(Attribute::Reset)
         )?;
 
