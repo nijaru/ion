@@ -84,15 +84,17 @@ impl ContextManager {
     /// Get just the system prompt (cached), without assembling messages.
     pub async fn get_system_prompt(&self, plan: Option<&Plan>) -> String {
         let active_skill = self.active_skill.lock().await;
-        let skill = active_skill.clone();
 
         let mut cache = self.render_cache.lock().await;
         if let Some(ref c) = *cache
             && c.plan.as_ref() == plan
-            && c.skill == skill
+            && c.skill.as_ref() == active_skill.as_ref()
         {
             return c.rendered.clone();
         }
+
+        let skill = active_skill.clone();
+        drop(active_skill); // Release lock before potentially slow render
 
         let rendered = self.render_system_prompt(plan, skill.as_ref());
         *cache = Some(RenderCache {
@@ -111,22 +113,27 @@ impl ContextManager {
         plan: Option<&Plan>,
     ) -> ContextAssembly {
         let active_skill = self.active_skill.lock().await;
-        let skill = active_skill.clone();
 
-        // Check cache
+        // Check cache - compare by reference to avoid clone
         let mut cache = self.render_cache.lock().await;
-        let system_prompt = if let Some(ref c) = *cache {
-            if c.plan.as_ref() == plan && c.skill == skill {
-                c.rendered.clone()
+        let (system_prompt, need_cache_update) = if let Some(ref c) = *cache {
+            if c.plan.as_ref() == plan && c.skill.as_ref() == active_skill.as_ref() {
+                (c.rendered.clone(), false)
             } else {
-                self.render_system_prompt(plan, skill.as_ref())
+                let skill = active_skill.clone();
+                drop(active_skill);
+                (self.render_system_prompt(plan, skill.as_ref()), true)
             }
         } else {
-            self.render_system_prompt(plan, skill.as_ref())
+            let skill = active_skill.clone();
+            drop(active_skill);
+            (self.render_system_prompt(plan, skill.as_ref()), true)
         };
 
-        // Update cache
-        if cache.as_ref().map(|c| &c.rendered) != Some(&system_prompt) {
+        // Update cache if needed
+        if need_cache_update {
+            // Re-acquire skill for cache storage
+            let skill = self.active_skill.lock().await.clone();
             *cache = Some(RenderCache {
                 rendered: system_prompt.clone(),
                 plan: plan.cloned(),
