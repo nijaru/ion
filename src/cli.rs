@@ -521,8 +521,9 @@ async fn run_inner(args: RunArgs, auto_approve: bool) -> Result<ExitCode> {
     let max_turns = args.max_turns;
 
     let agent_handle = tokio::spawn(async move {
+        let content = vec![crate::provider::ContentBlock::Text { text: prompt_clone }];
         agent_clone
-            .run_task(session_clone, prompt_clone, tx, None, None)
+            .run_task(session_clone, content, tx, None, None)
             .await
     });
 

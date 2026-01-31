@@ -148,9 +148,8 @@ pub async fn run_subagent(
     let agent_clone = agent.clone();
     let task_str = task.to_string();
     let handle = tokio::spawn(async move {
-        agent_clone
-            .run_task(session, task_str, tx, None, None)
-            .await
+        let content = vec![crate::provider::ContentBlock::Text { text: task_str }];
+        agent_clone.run_task(session, content, tx, None, None).await
     });
 
     // Collect output events

@@ -12,6 +12,7 @@ use crate::tui::App;
 use crate::tui::command_completer::CommandCompleter;
 use crate::tui::composer::{ComposerBuffer, ComposerState};
 use crate::tui::file_completer::FileCompleter;
+use crate::tui::image_attachment::parse_image_attachments;
 use crate::tui::message_list::{
     MessageEntry, MessageList, Sender, sanitize_tool_name, strip_error_prefixes,
 };
@@ -682,6 +683,9 @@ impl App {
         let queue = Arc::new(std::sync::Mutex::new(Vec::new()));
         self.message_queue = Some(queue.clone());
 
+        // Parse image attachments from input
+        let user_content = parse_image_attachments(&input, &self.session.working_dir);
+
         let agent = self.agent.clone();
         let session = self.session.clone();
         let event_tx = self.agent_tx.clone();
@@ -698,7 +702,13 @@ impl App {
 
         tokio::spawn(async move {
             let (updated_session, error) = agent
-                .run_task(session, input, event_tx.clone(), Some(queue), thinking)
+                .run_task(
+                    session,
+                    user_content,
+                    event_tx.clone(),
+                    Some(queue),
+                    thinking,
+                )
                 .await;
 
             if let Some(e) = error {
