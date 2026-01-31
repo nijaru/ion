@@ -350,12 +350,104 @@ impl App {
             self.render_selector_direct(w, ui_start, width, height)?;
         } else {
             self.render_status_direct(w, width)?;
+
+            // Render file completer popup above input if active
+            if self.file_completer.is_active() {
+                self.render_file_completer_direct(w, input_start, width)?;
+            }
+
             // Position cursor in input area
             // cursor_pos is relative (x within content, y is visual line 0-indexed)
             let (cursor_x, cursor_y) = self.input_state.cursor_pos;
             let scroll_offset = self.input_state.scroll_offset() as u16;
             let cursor_y = cursor_y.saturating_sub(scroll_offset);
             execute!(w, MoveTo(cursor_x + PROMPT_WIDTH, content_start + cursor_y))?;
+        }
+
+        Ok(())
+    }
+
+    /// Render file path completion popup above the input box.
+    fn render_file_completer_direct<W: std::io::Write>(
+        &self,
+        w: &mut W,
+        input_start: u16,
+        width: u16,
+    ) -> std::io::Result<()> {
+        use crossterm::{
+            cursor::MoveTo,
+            style::{Attribute, Color, Print, ResetColor, SetAttribute, SetForegroundColor},
+            terminal::{Clear, ClearType},
+        };
+
+        let candidates = self.file_completer.visible_candidates();
+        if candidates.is_empty() {
+            return Ok(());
+        }
+
+        let selected = self.file_completer.selected();
+        let popup_height = candidates.len() as u16;
+
+        // Position popup above input box
+        // input_start is where the top border is, so popup goes above that
+        let popup_start = input_start.saturating_sub(popup_height);
+
+        // Calculate popup width (max path length + padding)
+        let max_label_len = candidates
+            .iter()
+            .map(|p| p.to_string_lossy().len())
+            .max()
+            .unwrap_or(20);
+        let popup_width = (max_label_len + 4).min(width as usize - 4) as u16;
+
+        // Render each candidate
+        for (i, path) in candidates.iter().enumerate() {
+            let row = popup_start + i as u16;
+            let is_selected = i == selected;
+            let path_str = path.to_string_lossy();
+
+            // Clear and position
+            execute!(w, MoveTo(1, row), Clear(ClearType::CurrentLine))?;
+
+            // Background highlight for selected item
+            if is_selected {
+                execute!(w, SetAttribute(Attribute::Reverse))?;
+            }
+
+            // Add icon for directories
+            let working_dir = &self.session.working_dir;
+            let is_dir = working_dir.join(path).is_dir();
+            let icon = if is_dir { "󰉋 " } else { "  " };
+
+            // Truncate path if needed
+            let display_width = popup_width.saturating_sub(4) as usize;
+            let display: String = if path_str.len() > display_width {
+                format!(
+                    "…{}",
+                    &path_str[path_str.len().saturating_sub(display_width - 1)..]
+                )
+            } else {
+                path_str.to_string()
+            };
+
+            execute!(
+                w,
+                Print(" "),
+                SetForegroundColor(if is_dir { Color::Blue } else { Color::Reset }),
+                Print(icon),
+                ResetColor,
+                Print(&display),
+            )?;
+
+            // Pad to popup width
+            let padding = popup_width.saturating_sub(display.len() as u16 + 3);
+            for _ in 0..padding {
+                execute!(w, Print(" "))?;
+            }
+
+            if is_selected {
+                execute!(w, SetAttribute(Attribute::NoReverse))?;
+            }
         }
 
         Ok(())

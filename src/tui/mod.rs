@@ -3,6 +3,7 @@
 mod chat_renderer;
 pub mod composer;
 mod events;
+mod file_completer;
 mod filter_input;
 mod fuzzy;
 mod highlight;
@@ -36,6 +37,7 @@ use crate::provider::{ModelRegistry, Provider};
 use crate::session::{Session, SessionStore};
 use crate::tool::{ToolMode, ToolOrchestrator};
 use crate::tui::composer::{ComposerBuffer, ComposerState};
+use crate::tui::file_completer::FileCompleter;
 use crate::tui::message_list::MessageList;
 use crate::tui::model_picker::ModelPicker;
 use crate::tui::provider_picker::ProviderPicker;
@@ -129,6 +131,8 @@ pub struct App {
     pub thinking_start: Option<Instant>,
     /// Duration of last completed thinking (for "thought for Xs" display)
     pub last_thinking_duration: Option<std::time::Duration>,
+    /// File path autocomplete state
+    pub file_completer: FileCompleter,
 }
 
 impl App {

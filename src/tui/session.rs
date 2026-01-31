@@ -10,6 +10,7 @@ use crate::tool::ToolOrchestrator;
 use crate::tool::builtin::SpawnSubagentTool;
 use crate::tui::App;
 use crate::tui::composer::{ComposerBuffer, ComposerState};
+use crate::tui::file_completer::FileCompleter;
 use crate::tui::message_list::{
     MessageEntry, MessageList, Sender, sanitize_tool_name, strip_error_prefixes,
 };
@@ -157,7 +158,7 @@ impl App {
         // Create new session with current directory
         let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let model = config.model.clone().unwrap_or_default();
-        let mut session = Session::new(working_dir, model);
+        let mut session = Session::new(working_dir.clone(), model);
         session.no_sandbox = permissions.no_sandbox;
 
         let (agent_tx, agent_rx) = mpsc::channel(100);
@@ -230,6 +231,7 @@ impl App {
             editor_requested: false,
             thinking_start: None,
             last_thinking_duration: None,
+            file_completer: FileCompleter::new(working_dir.clone()),
         };
 
         // Set initial API provider name on model picker
