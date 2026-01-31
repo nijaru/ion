@@ -99,18 +99,19 @@ fn load_image(path: &str) -> Result<(String, String), String> {
         .map(|(_, mt)| *mt)
         .ok_or_else(|| format!("Unsupported format: {ext}"))?;
 
-    // Read file
-    let data = std::fs::read(path).map_err(|e| format!("Failed to read: {e}"))?;
-
-    // Check file size (limit to 20MB)
-    const MAX_SIZE: usize = 20 * 1024 * 1024;
-    if data.len() > MAX_SIZE {
+    // Check file size BEFORE reading (prevents OOM with large files)
+    const MAX_SIZE: u64 = 20 * 1024 * 1024;
+    let metadata = std::fs::metadata(path).map_err(|e| format!("Failed to stat: {e}"))?;
+    if metadata.len() > MAX_SIZE {
         return Err(format!(
             "Image too large: {} bytes (max {})",
-            data.len(),
+            metadata.len(),
             MAX_SIZE
         ));
     }
+
+    // Read file (now safe, size is bounded)
+    let data = std::fs::read(path).map_err(|e| format!("Failed to read: {e}"))?;
 
     // Base64 encode
     let encoded = base64::engine::general_purpose::STANDARD.encode(&data);

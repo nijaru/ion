@@ -178,7 +178,9 @@ impl App {
                     let at_pos = self.file_completer.at_position();
                     let cursor = self.input_state.cursor_char_idx();
                     if cursor <= at_pos + 1 {
+                        // Deactivate and perform the backspace (delete the @)
                         self.file_completer.deactivate();
+                        self.handle_input_event_with_history(key);
                     } else {
                         // Continue with normal backspace, then update query
                         self.handle_input_event_with_history(key);
