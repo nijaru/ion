@@ -7,12 +7,11 @@
 | 0-10   | See ai/sprints/archive-0-10.md | COMPLETE |
 | 11     | TUI v2: Remove ratatui         | COMPLETE |
 | 12     | Clippy Pedantic Refactoring    | COMPLETE |
-| 13     | Agent Loop Decomposition       | ACTIVE   |
+| 13     | Agent Loop Decomposition       | COMPLETE |
 
 ## Current Focus
 
-Sprint 13: Decompose 785-line agent/mod.rs into focused modules.
-See ai/sprints/13-agent-decomposition.md
+None active. See tk for backlog.
 
 See ai/STATUS.md for details.
 
