@@ -12,12 +12,12 @@
 
 ## Just Completed
 
-**Input enhancements + review fixes** (2026-01-30):
+**Code organization + tool definitions** (2026-01-30):
 
-- File autocomplete: `@path` with fuzzy matching, hidden files with `@.`
-- Command autocomplete: `/` at start shows commands with descriptions
-- Image attachment: `@image:path.png` or `@image:"path with spaces.png"`
-- Review fixes: OOM prevention, backspace behavior, session resume
+- Split render.rs: 1086 → 692 lines (-36%)
+- Extracted render_selector.rs (229 lines)
+- Moved completer rendering to completer modules
+- Improved 7 tool descriptions to prevent hallucinations
 
 ## Current Focus
 
@@ -38,22 +38,22 @@
 
 ## Module Health
 
-| Module    | Files | Lines | Health | Notes                       |
-| --------- | ----- | ----- | ------ | --------------------------- |
-| provider/ | 18    | ~2500 | GOOD   | Native HTTP, 3 backends     |
-| tui/      | 24    | ~8300 | OK     | +autocomplete/images, big   |
-| agent/    | 9     | ~900  | GOOD   | Decomposed, clean structure |
-| tool/     | 15    | ~2500 | GOOD   | Orchestrator + spawn        |
-| auth/     | 5     | ~800  | NEW    | OAuth complete              |
-| session/  | 3     | ~600  | GOOD   | SQLite + WAL                |
-| skill/    | 3     | ~400  | GOOD   | YAML frontmatter            |
-| mcp/      | 2     | ~300  | OK     | Needs tests                 |
+| Module    | Files | Lines | Health | Notes                        |
+| --------- | ----- | ----- | ------ | ---------------------------- |
+| provider/ | 18    | ~2500 | GOOD   | Native HTTP, 3 backends      |
+| tui/      | 25    | ~8500 | GOOD   | render.rs split, cleaner now |
+| agent/    | 9     | ~900  | GOOD   | Decomposed, clean structure  |
+| tool/     | 15    | ~2500 | GOOD   | Improved descriptions        |
+| auth/     | 5     | ~800  | NEW    | OAuth complete               |
+| session/  | 3     | ~600  | GOOD   | SQLite + WAL                 |
+| skill/    | 3     | ~400  | GOOD   | YAML frontmatter             |
+| mcp/      | 2     | ~300  | OK     | Needs tests                  |
 
 ## Top Priorities
 
-1. Test TUI changes manually (autocomplete, history nav)
+1. Test TUI changes manually (autocomplete, history nav, images)
 2. OAuth testing with real subscriptions
-3. Split large TUI files (render.rs)
+3. Consider Ctrl+R fuzzy history search (tk-g3dt)
 
 ## Key References
 
