@@ -5,7 +5,7 @@ mod counter;
 mod pruning;
 
 pub use counter::{TokenCount, TokenCounter};
-pub use pruning::{prune_messages, PruningResult, PruningTier};
+pub use pruning::{PruningResult, PruningTier, prune_messages};
 
 use crate::provider::Message;
 

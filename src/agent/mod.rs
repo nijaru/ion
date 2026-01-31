@@ -159,12 +159,10 @@ impl Agent {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn with_compaction_config(mut self, config: CompactionConfig) -> Self {
-        self.context_window.store(
-            config.context_window,
-            std::sync::atomic::Ordering::Relaxed,
-        );
+        self.context_window
+            .store(config.context_window, std::sync::atomic::Ordering::Relaxed);
         self.compaction_config = config;
         self
     }
@@ -176,20 +174,20 @@ impl Agent {
     }
 
     /// Get the current context window size.
-    #[must_use] 
+    #[must_use]
     pub fn context_window(&self) -> usize {
         self.context_window
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn with_skills(mut self, skills: SkillRegistry) -> Self {
         self.skills = Arc::new(tokio::sync::RwLock::new(skills));
         self
     }
 
     /// Set a custom system prompt (overrides default).
-    #[must_use] 
+    #[must_use]
     pub fn with_system_prompt(self, prompt: String) -> Self {
         Self {
             context_manager: Arc::new(create_context_manager(prompt)),
@@ -213,7 +211,7 @@ impl Agent {
         Ok(())
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn provider(&self) -> Arc<dyn LlmApi> {
         self.provider.clone()
     }
@@ -227,10 +225,7 @@ impl Agent {
     async fn emit_token_usage(&self, messages: &[Message], tx: &mpsc::Sender<AgentEvent>) {
         // Get system prompt (cached) without cloning messages
         let plan = self.active_plan.lock().await;
-        let system_prompt = self
-            .context_manager
-            .get_system_prompt(plan.as_ref())
-            .await;
+        let system_prompt = self.context_manager.get_system_prompt(plan.as_ref()).await;
 
         // Count system prompt + all messages
         let system_tokens = self.token_counter.count_str(&system_prompt);
@@ -445,9 +440,7 @@ impl Agent {
             (provider_id != "ollama" && provider_id != "openrouter") || request.tools.is_empty();
 
         if use_streaming
-            && let Some(result) = self
-                .stream_with_retry(&request, tx, &abort_token)
-                .await?
+            && let Some(result) = self.stream_with_retry(&request, tx, &abort_token).await?
         {
             return Ok(result);
         }

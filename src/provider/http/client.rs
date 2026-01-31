@@ -3,8 +3,8 @@
 use crate::provider::error::Error;
 use bytes::Bytes;
 use futures::Stream;
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
-use serde::{de::DeserializeOwned, Serialize};
+use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
+use serde::{Serialize, de::DeserializeOwned};
 use std::time::Duration;
 
 /// HTTP request timeout.
@@ -162,12 +162,12 @@ mod tests {
 
     #[test]
     fn test_bearer_auth() {
-        let client = HttpClient::new("https://api.example.com", AuthConfig::Bearer("test-token".into()));
-        let headers = client.build_headers();
-        assert_eq!(
-            headers.get(AUTHORIZATION).unwrap(),
-            "Bearer test-token"
+        let client = HttpClient::new(
+            "https://api.example.com",
+            AuthConfig::Bearer("test-token".into()),
         );
+        let headers = client.build_headers();
+        assert_eq!(headers.get(AUTHORIZATION).unwrap(), "Bearer test-token");
     }
 
     #[test]

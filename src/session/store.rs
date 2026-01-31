@@ -389,9 +389,7 @@ fn str_to_role(s: &str) -> Result<Role, SessionStoreError> {
         "user" => Ok(Role::User),
         "assistant" => Ok(Role::Assistant),
         "tool_result" => Ok(Role::ToolResult),
-        _ => Err(SessionStoreError::InvalidData(format!(
-            "Unknown role: {s}"
-        ))),
+        _ => Err(SessionStoreError::InvalidData(format!("Unknown role: {s}"))),
     }
 }
 

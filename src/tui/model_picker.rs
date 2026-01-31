@@ -3,8 +3,8 @@
 use crate::provider::{ModelFilter, ModelInfo, ModelRegistry, ProviderPrefs};
 use crate::tui::filter_input::FilterInputState;
 use crate::tui::types::SelectionState;
-use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
+use fuzzy_matcher::skim::SkimMatcherV2;
 use std::collections::BTreeMap;
 
 /// Selection stage for the picker.
@@ -77,7 +77,7 @@ impl Default for ModelPicker {
 }
 
 impl ModelPicker {
-    #[must_use] 
+    #[must_use]
     pub fn new(prefs: ProviderPrefs) -> Self {
         Self {
             prefs,
@@ -121,7 +121,7 @@ impl ModelPicker {
     }
 
     /// Check if we have models loaded.
-    #[must_use] 
+    #[must_use]
     pub fn has_models(&self) -> bool {
         !self.all_models.is_empty()
     }
@@ -360,7 +360,7 @@ impl ModelPicker {
     }
 
     /// Get currently selected model (only valid in Model stage).
-    #[must_use] 
+    #[must_use]
     pub fn selected_model(&self) -> Option<&ModelInfo> {
         if self.stage != PickerStage::Model {
             return None;

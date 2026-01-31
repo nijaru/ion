@@ -10,7 +10,7 @@
 
 use rustyline_async::{Readline, ReadlineError, ReadlineEvent, SharedWriter};
 use std::io::Write;
-use tokio::time::{interval, Duration};
+use tokio::time::{Duration, interval};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -43,14 +43,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         break;
                     }
                     "async" => {
-                        writeln!(writer, "[Starting async output test - type while messages appear]")?;
+                        writeln!(
+                            writer,
+                            "[Starting async output test - type while messages appear]"
+                        )?;
                         let w = writer.clone();
                         tokio::spawn(async move {
                             async_output_test(w).await;
                         });
                     }
                     "multi" => {
-                        writeln!(writer, "[Multi-line test: type multiple lines, empty line to finish]")?;
+                        writeln!(
+                            writer,
+                            "[Multi-line test: type multiple lines, empty line to finish]"
+                        )?;
                         // Note: rustyline-async handles multi-line natively
                         // This is just demonstrating the API
                     }

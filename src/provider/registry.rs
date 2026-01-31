@@ -102,7 +102,7 @@ trait Pipe: Sized {
 impl<T> Pipe for T {}
 
 impl ModelRegistry {
-    #[must_use] 
+    #[must_use]
     pub fn new(api_key: String, ttl_secs: u64) -> Self {
         Self {
             client: crate::provider::create_http_client(),
@@ -115,10 +115,11 @@ impl ModelRegistry {
 
     /// Check if cache is valid.
     fn cache_valid(&self) -> bool {
-        let cache = self.cache.read().unwrap_or_else(std::sync::PoisonError::into_inner);
-        cache
-            .fetched_at
-            .is_some_and(|t| t.elapsed() < self.ttl)
+        let cache = self
+            .cache
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        cache.fetched_at.is_some_and(|t| t.elapsed() < self.ttl)
     }
 
     /// Fetch models for the given provider.
@@ -287,7 +288,9 @@ impl ModelRegistry {
                         // Context length is at {architecture}.context_length
                         let key = format!("{arch}.context_length");
                         #[allow(clippy::cast_possible_truncation)] // Context lengths fit in u32
-                        info.get(&key).and_then(serde_json::Value::as_u64).map(|v| v as u32)
+                        info.get(&key)
+                            .and_then(serde_json::Value::as_u64)
+                            .map(|v| v as u32)
                     })
                     .unwrap_or(32768) // Conservative default for modern models
             }
@@ -346,7 +349,10 @@ impl ModelRegistry {
             }
         }
 
-        let mut cache = self.cache.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut cache = self
+            .cache
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         cache.models = all_models;
         cache.fetched_at = Some(Instant::now());
 
@@ -444,7 +450,10 @@ impl ModelRegistry {
 
     /// List models matching filter criteria.
     pub fn list_models(&self, filter: &ModelFilter, prefs: &ProviderPrefs) -> Vec<ModelInfo> {
-        let cache = self.cache.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let cache = self
+            .cache
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut models: Vec<ModelInfo> = cache
             .models
             .iter()
@@ -496,15 +505,13 @@ impl ModelRegistry {
                     // Smaller models generally have lower latency
                     a.context_window.cmp(&b.context_window)
                 }
-                super::prefs::SortStrategy::Newest => {
-                    match b.created.cmp(&a.created) {
-                        std::cmp::Ordering::Equal => match a.provider.cmp(&b.provider) {
-                            std::cmp::Ordering::Equal => a.name.cmp(&b.name),
-                            other => other,
-                        },
+                super::prefs::SortStrategy::Newest => match b.created.cmp(&a.created) {
+                    std::cmp::Ordering::Equal => match a.provider.cmp(&b.provider) {
+                        std::cmp::Ordering::Equal => a.name.cmp(&b.name),
                         other => other,
-                    }
-                }
+                    },
+                    other => other,
+                },
             }
         });
     }
@@ -557,9 +564,7 @@ impl ModelRegistry {
 
         // Provider only list
         if let Some(ref only) = prefs.only
-            && !only
-                .iter()
-                .any(|p| p.eq_ignore_ascii_case(&model.provider))
+            && !only.iter().any(|p| p.eq_ignore_ascii_case(&model.provider))
         {
             return false;
         }
@@ -569,7 +574,10 @@ impl ModelRegistry {
 
     /// Get a specific model by ID.
     pub fn get_model(&self, id: &str) -> Option<ModelInfo> {
-        let cache = self.cache.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let cache = self
+            .cache
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         cache.models.iter().find(|m| m.id == id).cloned()
     }
 

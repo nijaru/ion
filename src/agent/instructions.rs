@@ -25,7 +25,7 @@ pub struct InstructionLoader {
 
 impl InstructionLoader {
     /// Create a new loader for the given project directory.
-    #[must_use] 
+    #[must_use]
     pub fn new(project_path: PathBuf) -> Self {
         Self {
             project_path,
@@ -97,9 +97,10 @@ impl InstructionLoader {
 
         // Check if cached and still fresh
         if let Some(cached) = cache.get(path)
-            && cached.mtime == mtime {
-                return Some(cached.content.clone());
-            }
+            && cached.mtime == mtime
+        {
+            return Some(cached.content.clone());
+        }
 
         // Read and cache
         let content = fs::read_to_string(path).ok()?;

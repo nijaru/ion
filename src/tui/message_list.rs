@@ -108,7 +108,7 @@ fn truncate_line(s: &str, max: usize) -> String {
 }
 
 /// Strip redundant "Error:" prefixes from error messages.
-#[must_use] 
+#[must_use]
 pub fn strip_error_prefixes(message: &str) -> &str {
     let mut out = message.trim_start();
     while let Some(stripped) = out.strip_prefix("Error:") {
@@ -155,7 +155,7 @@ pub struct MessageEntry {
 }
 
 impl MessageEntry {
-    #[must_use] 
+    #[must_use]
     pub fn new(sender: Sender, content: String) -> Self {
         let mut entry = Self {
             sender,
@@ -166,7 +166,7 @@ impl MessageEntry {
         entry
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn new_thinking(sender: Sender, content: String) -> Self {
         let mut entry = Self {
             sender,
@@ -219,7 +219,7 @@ impl MessageEntry {
         self.markdown_cache = Some(full);
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn content_as_markdown(&self) -> &str {
         self.markdown_cache.as_deref().unwrap_or("")
     }
@@ -235,7 +235,7 @@ pub struct MessageList {
 }
 
 impl MessageList {
-    #[must_use] 
+    #[must_use]
     pub fn new() -> Self {
         Self {
             entries: Vec::new(),
@@ -274,7 +274,7 @@ impl MessageList {
     }
 
     /// Returns true if currently at bottom
-    #[must_use] 
+    #[must_use]
     pub fn is_at_bottom(&self) -> bool {
         self.scroll_offset == 0
     }
@@ -307,16 +307,13 @@ impl MessageList {
             }
             AgentEvent::ToolCallResult(_id, result, is_error) => {
                 // Check if this is a context-gathering tool (collapse output)
-                let is_collapsed_tool = self
-                    .entries
-                    .last()
-                    .is_some_and(|e| {
-                        e.sender == Sender::Tool
-                            && (e.content_as_markdown().starts_with("read(")
-                                || e.content_as_markdown().starts_with("glob(")
-                                || e.content_as_markdown().starts_with("grep(")
-                                || e.content_as_markdown().starts_with("list("))
-                    });
+                let is_collapsed_tool = self.entries.last().is_some_and(|e| {
+                    e.sender == Sender::Tool
+                        && (e.content_as_markdown().starts_with("read(")
+                            || e.content_as_markdown().starts_with("glob(")
+                            || e.content_as_markdown().starts_with("grep(")
+                            || e.content_as_markdown().starts_with("list("))
+                });
 
                 let result_content = if is_error {
                     // Clean up error message - keep it concise

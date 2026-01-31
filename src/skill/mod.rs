@@ -32,7 +32,7 @@ pub struct Skill {
 
 impl Skill {
     /// Get the model to use, falling back to the provided default
-    #[must_use] 
+    #[must_use]
     pub fn resolve_model<'a>(&'a self, default: &'a str) -> &'a str {
         self.models
             .as_ref()
@@ -41,7 +41,7 @@ impl Skill {
     }
 
     /// Check if a model is allowed for this skill
-    #[must_use] 
+    #[must_use]
     pub fn is_model_allowed(&self, model: &str) -> bool {
         match &self.models {
             None => true, // No restriction, any model allowed
@@ -71,7 +71,7 @@ pub struct SkillRegistry {
 }
 
 impl SkillRegistry {
-    #[must_use] 
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -104,27 +104,30 @@ impl SkillRegistry {
     pub fn get(&mut self, name: &str) -> Option<&Skill> {
         // Check if we need to load
         if let Some(entry) = self.entries.get(name)
-            && entry.full.is_none() && entry.source_path.is_some() {
-                // Need to load - clone path to avoid borrow issues
-                let path = entry.source_path.clone().unwrap();
-                if let Ok(skills) = SkillLoader::load_from_file(&path)
-                    && let Some(skill) = skills.into_iter().find(|s| s.name == name)
-                        && let Some(entry) = self.entries.get_mut(name) {
-                            entry.full = Some(skill);
-                        }
+            && entry.full.is_none()
+            && entry.source_path.is_some()
+        {
+            // Need to load - clone path to avoid borrow issues
+            let path = entry.source_path.clone().unwrap();
+            if let Ok(skills) = SkillLoader::load_from_file(&path)
+                && let Some(skill) = skills.into_iter().find(|s| s.name == name)
+                && let Some(entry) = self.entries.get_mut(name)
+            {
+                entry.full = Some(skill);
             }
+        }
 
         self.entries.get(name).and_then(|e| e.full.as_ref())
     }
 
     /// Get skill summary without loading full content.
-    #[must_use] 
+    #[must_use]
     pub fn get_summary(&self, name: &str) -> Option<&SkillSummary> {
         self.entries.get(name).map(|e| &e.summary)
     }
 
     /// List all skill summaries (no loading required).
-    #[must_use] 
+    #[must_use]
     pub fn list(&self) -> Vec<SkillSummary> {
         self.entries.values().map(|e| e.summary.clone()).collect()
     }
@@ -144,10 +147,11 @@ impl SkillRegistry {
                 if path.is_dir() {
                     let skill_file = path.join("SKILL.md");
                     if skill_file.exists()
-                        && let Ok(summary) = SkillLoader::load_summary(&skill_file) {
-                            self.register_summary(summary, skill_file);
-                            count += 1;
-                        }
+                        && let Ok(summary) = SkillLoader::load_summary(&skill_file)
+                    {
+                        self.register_summary(summary, skill_file);
+                        count += 1;
+                    }
                 } else if path.extension().is_some_and(|e| e == "md") {
                     // Also check for standalone SKILL.md files
                     if let Ok(summary) = SkillLoader::load_summary(&path) {
@@ -470,9 +474,11 @@ Do YAML things."#;
         assert_eq!(skills.len(), 1);
         assert_eq!(skills[0].name, "yaml-skill");
         assert_eq!(skills[0].description, "A YAML formatted skill");
-        assert!(skills[0]
-            .prompt
-            .contains("You are an agent using YAML format."));
+        assert!(
+            skills[0]
+                .prompt
+                .contains("You are an agent using YAML format.")
+        );
     }
 
     #[test]

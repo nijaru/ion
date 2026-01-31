@@ -180,7 +180,10 @@ impl App {
             return header_lines;
         }
 
-        if new_lines.is_empty() && self.render_state.buffered_chat_lines.is_empty() && header_lines.is_empty() {
+        if new_lines.is_empty()
+            && self.render_state.buffered_chat_lines.is_empty()
+            && header_lines.is_empty()
+        {
             return Vec::new();
         }
 
@@ -206,9 +209,10 @@ impl App {
         let mut end = entry_count;
         if self.is_running
             && let Some(last) = self.message_list.entries.last()
-                && last.sender == Sender::Agent {
-                    end = end.saturating_sub(1);
-                }
+            && last.sender == Sender::Agent
+        {
+            end = end.saturating_sub(1);
+        }
         if end > 0 {
             lines.extend(ChatRenderer::build_lines(
                 &self.message_list.entries[..end],
@@ -230,9 +234,10 @@ impl App {
         let mut end = entry_count;
         if self.is_running
             && let Some(last) = self.message_list.entries.last()
-                && last.sender == Sender::Agent {
-                    end = end.saturating_sub(1);
-                }
+            && last.sender == Sender::Agent
+        {
+            end = end.saturating_sub(1);
+        }
 
         let lines = self.build_chat_lines(width);
         for line in &lines {
@@ -275,7 +280,10 @@ impl App {
         let progress_height = PROGRESS_HEIGHT;
 
         // Detect width decrease - terminal rewraps old content, pushing it up
-        let width_decreased = self.render_state.last_render_width.is_some_and(|old| width < old);
+        let width_decreased = self
+            .render_state
+            .last_render_width
+            .is_some_and(|old| width < old);
         self.render_state.last_render_width = Some(width);
 
         // Determine clear_from based on positioning mode:

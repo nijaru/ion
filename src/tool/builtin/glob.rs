@@ -93,14 +93,15 @@ impl Tool for GlobTool {
 
                     // Match against relative path
                     if let Ok(rel_path) = path.strip_prefix(working_dir)
-                        && matcher.is_match(rel_path) {
-                            let mut paths_guard = paths.lock().unwrap();
-                            if paths_guard.len() >= MAX_RESULTS {
-                                *truncated.lock().unwrap() = true;
-                                return ignore::WalkState::Quit;
-                            }
-                            paths_guard.push(rel_path.to_string_lossy().into_owned());
+                        && matcher.is_match(rel_path)
+                    {
+                        let mut paths_guard = paths.lock().unwrap();
+                        if paths_guard.len() >= MAX_RESULTS {
+                            *truncated.lock().unwrap() = true;
+                            return ignore::WalkState::Quit;
                         }
+                        paths_guard.push(rel_path.to_string_lossy().into_owned());
+                    }
 
                     ignore::WalkState::Continue
                 })
@@ -121,7 +122,10 @@ impl Tool for GlobTool {
         };
 
         if truncated {
-            let _ = write!(content, "\n\n[Truncated: showing first {MAX_RESULTS} results]");
+            let _ = write!(
+                content,
+                "\n\n[Truncated: showing first {MAX_RESULTS} results]"
+            );
         }
 
         Ok(ToolResult {

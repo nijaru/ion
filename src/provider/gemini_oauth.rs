@@ -151,9 +151,7 @@ impl GeminiOAuthClient {
 
         for endpoint in CODE_ASSIST_ENDPOINTS {
             // Code Assist API uses /{version}:{action} format
-            let url = format!(
-                "{endpoint}/{API_VERSION}:streamGenerateContent?alt=sse"
-            );
+            let url = format!("{endpoint}/{API_VERSION}:streamGenerateContent?alt=sse");
 
             match self
                 .client

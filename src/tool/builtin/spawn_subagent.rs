@@ -1,6 +1,6 @@
 //! Tool for spawning subagents to handle tasks.
 
-use crate::agent::subagent::{run_subagent, SubagentRegistry};
+use crate::agent::subagent::{SubagentRegistry, run_subagent};
 use crate::provider::LlmApi;
 use crate::tool::{DangerLevel, Tool, ToolContext, ToolError, ToolResult};
 use async_trait::async_trait;
@@ -82,10 +82,7 @@ impl Tool for SpawnSubagentTool {
             .map_err(|e| ToolError::ExecutionFailed(format!("Subagent failed: {e}")))?;
 
         let status = if result.was_truncated {
-            format!(
-                "Completed (truncated at {} turns)",
-                result.turns_used
-            )
+            format!("Completed (truncated at {} turns)", result.turns_used)
         } else {
             format!("Completed in {} turns", result.turns_used)
         };

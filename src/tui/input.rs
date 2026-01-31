@@ -1,7 +1,7 @@
 //! Input handling for the TUI composer.
 
-use crate::tui::terminal::{StyledLine, StyledSpan};
 use crate::tui::App;
+use crate::tui::terminal::{StyledLine, StyledSpan};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 impl App {

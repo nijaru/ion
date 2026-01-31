@@ -64,8 +64,10 @@ impl ChatRenderer {
                                 let sanitized = sanitize_for_display(text);
                                 // Account for 2-space prefix when rendering tables
                                 let content_width = wrap_width.saturating_sub(2);
-                                let highlighted_lines =
-                                    highlight::highlight_markdown_with_width(&sanitized, content_width);
+                                let highlighted_lines = highlight::highlight_markdown_with_width(
+                                    &sanitized,
+                                    content_width,
+                                );
                                 for mut line in highlighted_lines {
                                     line.prepend(StyledSpan::raw("  "));
                                     entry_lines.push(line);
@@ -514,9 +516,10 @@ fn wrap_styled_line(line: &StyledLine, width: usize) -> Vec<StyledLine> {
 
 fn push_char(spans: &mut Vec<StyledSpan>, style: crossterm::style::ContentStyle, ch: char) {
     if let Some(last) = spans.last_mut()
-        && last.style == style {
-            last.content.push(ch);
-            return;
-        }
+        && last.style == style
+    {
+        last.content.push(ch);
+        return;
+    }
     spans.push(StyledSpan::new(ch.to_string(), style));
 }

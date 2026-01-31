@@ -147,7 +147,9 @@ impl OpenAICompatClient {
                         if let Some(msg) =
                             serde_json::from_str::<serde_json::Value>(&sse_event.data)
                                 .ok()
-                                .and_then(|v| v.get("error")?.get("message")?.as_str().map(String::from))
+                                .and_then(|v| {
+                                    v.get("error")?.get("message")?.as_str().map(String::from)
+                                })
                         {
                             return Err(Error::Api(msg));
                         }
@@ -293,13 +295,7 @@ impl OpenAICompatClient {
         let tools = if request.tools.is_empty() {
             None
         } else {
-            Some(
-                request
-                    .tools
-                    .iter()
-                    .map(|t| self.convert_tool(t))
-                    .collect(),
-            )
+            Some(request.tools.iter().map(|t| self.convert_tool(t)).collect())
         };
 
         // Build provider routing if supported
@@ -503,7 +499,9 @@ impl OpenAICompatClient {
             // Handle tool calls
             if let Some(tool_calls) = &choice.delta.tool_calls {
                 for tc in tool_calls {
-                    let builder = tool_builders.entry(tc.index).or_insert_with(ToolBuilder::new);
+                    let builder = tool_builders
+                        .entry(tc.index)
+                        .or_insert_with(ToolBuilder::new);
 
                     // Capture id and name when first seen
                     if let Some(ref id) = tc.id {
@@ -780,10 +778,7 @@ mod tests {
 
         assert!(api_request.provider.is_some());
         let routing = api_request.provider.unwrap();
-        assert_eq!(
-            routing.order,
-            Some(vec!["Anthropic".to_string()])
-        );
+        assert_eq!(routing.order, Some(vec!["Anthropic".to_string()]));
         assert_eq!(routing.allow_fallbacks, Some(false));
     }
 }
