@@ -74,7 +74,7 @@ impl Default for WebFetchTool {
 }
 
 impl WebFetchTool {
-    #[must_use] 
+    #[must_use]
     pub fn new() -> Self {
         let client = Client::builder()
             .timeout(Duration::from_secs(30))
@@ -160,7 +160,8 @@ impl Tool for WebFetchTool {
         // Block private/internal IPs (SSRF protection)
         if is_private_or_internal(&parsed_url) {
             return Err(ToolError::InvalidArgs(
-                "Cannot fetch private/internal URLs (localhost, private IPs, link-local)".to_string(),
+                "Cannot fetch private/internal URLs (localhost, private IPs, link-local)"
+                    .to_string(),
             ));
         }
 
@@ -182,7 +183,11 @@ impl Tool for WebFetchTool {
 
         if !status.is_success() {
             return Ok(ToolResult {
-                content: format!("HTTP {} {}", status.as_u16(), status.canonical_reason().unwrap_or("")),
+                content: format!(
+                    "HTTP {} {}",
+                    status.as_u16(),
+                    status.canonical_reason().unwrap_or("")
+                ),
                 is_error: true,
                 metadata: Some(json!({
                     "status": status.as_u16(),
@@ -204,8 +209,8 @@ impl Tool for WebFetchTool {
         let mut stream = response.bytes_stream();
 
         while let Some(chunk) = stream.next().await {
-            let chunk =
-                chunk.map_err(|e| ToolError::ExecutionFailed(format!("Failed to read response: {e}")))?;
+            let chunk = chunk
+                .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read response: {e}")))?;
             let remaining = read_limit.saturating_sub(bytes.len());
             if remaining == 0 {
                 break;
@@ -220,15 +225,16 @@ impl Tool for WebFetchTool {
         }
 
         // Check if content is HTML
-        let is_html = content_type.contains("text/html") || content_type.contains("application/xhtml");
+        let is_html =
+            content_type.contains("text/html") || content_type.contains("application/xhtml");
 
         // Try to convert to string
-        let raw_text = if let Ok(text) = String::from_utf8(bytes.clone()) { text } else {
+        let raw_text = if let Ok(text) = String::from_utf8(bytes.clone()) {
+            text
+        } else {
             let total = content_length.unwrap_or(bytes.len());
             return Ok(ToolResult {
-                content: format!(
-                    "[Binary content: {total} bytes, content-type: {content_type}]"
-                ),
+                content: format!("[Binary content: {total} bytes, content-type: {content_type}]"),
                 is_error: false,
                 metadata: Some(json!({
                     "status": status.as_u16(),

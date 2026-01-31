@@ -54,7 +54,7 @@ Instructions:
 "#;
 
 impl ContextManager {
-    #[must_use] 
+    #[must_use]
     pub fn new(system_prompt_base: String) -> Self {
         let mut env = Environment::new();
         env.add_template("system", DEFAULT_SYSTEM_TEMPLATE)
@@ -87,9 +87,11 @@ impl ContextManager {
 
         let mut cache = self.render_cache.lock().await;
         if let Some(ref c) = *cache
-            && c.plan.as_ref() == plan && c.skill == skill {
-                return c.rendered.clone();
-            }
+            && c.plan.as_ref() == plan
+            && c.skill == skill
+        {
+            return c.rendered.clone();
+        }
 
         let rendered = self.render_system_prompt(plan, skill.as_ref());
         *cache = Some(RenderCache {

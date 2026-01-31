@@ -104,7 +104,7 @@ impl Cli {
     /// 1. CLI flags (--agi, --yes, --no-sandbox, -r, -w)
     /// 2. Config file settings
     /// 3. Built-in defaults (write mode, sandboxed, approval required)
-    #[must_use] 
+    #[must_use]
     pub fn resolve_permissions(&self, config: &Config) -> PermissionSettings {
         // Start with config defaults
         let mut settings = PermissionSettings {
@@ -306,9 +306,7 @@ struct DenyApprovalHandler;
 #[async_trait]
 impl ApprovalHandler for DenyApprovalHandler {
     async fn ask_approval(&self, tool_name: &str, _args: &serde_json::Value) -> ApprovalResponse {
-        eprintln!(
-            "Tool '{tool_name}' requires approval. Use --yes flag to auto-approve."
-        );
+        eprintln!("Tool '{tool_name}' requires approval. Use --yes flag to auto-approve.");
         ApprovalResponse::No
     }
 }

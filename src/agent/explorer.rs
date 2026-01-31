@@ -8,7 +8,7 @@ pub struct Explorer {
 }
 
 impl Explorer {
-    #[must_use] 
+    #[must_use]
     pub fn new(working_dir: PathBuf) -> Self {
         Self { working_dir }
     }

@@ -119,7 +119,7 @@ impl Provider {
             Provider::Groq => &["GROQ_API_KEY"],
             Provider::Kimi => &["MOONSHOT_API_KEY", "KIMI_API_KEY"],
             Provider::ChatGpt => &[], // OAuth only
-            Provider::Gemini => &[], // OAuth only
+            Provider::Gemini => &[],  // OAuth only
         }
     }
 
@@ -203,7 +203,7 @@ pub struct ProviderStatus {
 
 impl ProviderStatus {
     /// Detect all providers and their availability.
-    #[must_use] 
+    #[must_use]
     pub fn detect_all() -> Vec<ProviderStatus> {
         Provider::ALL
             .iter()
@@ -215,7 +215,7 @@ impl ProviderStatus {
     }
 
     /// Get only available providers.
-    #[must_use] 
+    #[must_use]
     pub fn available() -> Vec<Provider> {
         Provider::ALL
             .iter()
@@ -225,7 +225,7 @@ impl ProviderStatus {
     }
 
     /// Sort providers: authenticated first, then alphabetically within each group.
-    #[must_use] 
+    #[must_use]
     pub fn sorted(mut statuses: Vec<ProviderStatus>) -> Vec<ProviderStatus> {
         statuses.sort_by(|a, b| {
             // Primary: authenticated first

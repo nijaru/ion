@@ -17,7 +17,7 @@ pub struct ToolOrchestrator {
 }
 
 impl ToolOrchestrator {
-    #[must_use] 
+    #[must_use]
     pub fn new(mode: ToolMode) -> Self {
         Self {
             tools: HashMap::new(),
@@ -107,7 +107,10 @@ impl ToolOrchestrator {
     }
 
     pub fn list_tools(&self) -> Vec<&dyn Tool> {
-        self.tools.values().map(std::convert::AsRef::as_ref).collect()
+        self.tools
+            .values()
+            .map(std::convert::AsRef::as_ref)
+            .collect()
     }
 
     pub async fn set_tool_mode(&self, mode: ToolMode) {
@@ -118,7 +121,7 @@ impl ToolOrchestrator {
         self.permissions.read().await.mode()
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn with_builtins(mode: ToolMode) -> Self {
         let mut orch = Self::new(mode);
         orch.register_tool(Box::new(builtin::ReadTool));

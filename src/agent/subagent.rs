@@ -45,7 +45,7 @@ pub struct SubagentRegistry {
 }
 
 impl SubagentRegistry {
-    #[must_use] 
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -65,10 +65,11 @@ impl SubagentRegistry {
                 // Look for .yaml or .yml files
                 if path.extension().is_some_and(|e| e == "yaml" || e == "yml")
                     && let Ok(content) = std::fs::read_to_string(&path)
-                        && let Ok(config) = serde_yaml::from_str::<SubagentConfig>(&content) {
-                            self.configs.insert(config.name.clone(), config);
-                            count += 1;
-                        }
+                    && let Ok(config) = serde_yaml::from_str::<SubagentConfig>(&content)
+                {
+                    self.configs.insert(config.name.clone(), config);
+                    count += 1;
+                }
             }
         }
 
@@ -76,13 +77,13 @@ impl SubagentRegistry {
     }
 
     /// Get a subagent config by name.
-    #[must_use] 
+    #[must_use]
     pub fn get(&self, name: &str) -> Option<&SubagentConfig> {
         self.configs.get(name)
     }
 
     /// List all available subagents.
-    #[must_use] 
+    #[must_use]
     pub fn list(&self) -> Vec<SubagentSummary> {
         self.configs
             .values()
@@ -119,9 +120,7 @@ pub async fn run_subagent(
 
     // Build system prompt
     let system_prompt = if let Some(ref extra) = config.system_prompt {
-        format!(
-            "You are a subagent. Complete the assigned task concisely.\n\n{extra}"
-        )
+        format!("You are a subagent. Complete the assigned task concisely.\n\n{extra}")
     } else {
         "You are a subagent. Complete the assigned task concisely and report the result.".into()
     };
@@ -131,7 +130,10 @@ pub async fn run_subagent(
 
     // Create isolated session
     let working_dir = std::env::current_dir().unwrap_or_default();
-    let model = config.model.clone().unwrap_or_else(|| "default".to_string());
+    let model = config
+        .model
+        .clone()
+        .unwrap_or_else(|| "default".to_string());
     let session = Session::new(working_dir, model);
 
     // Create channel for events (we'll collect output)

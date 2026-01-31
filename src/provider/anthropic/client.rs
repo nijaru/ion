@@ -1,6 +1,8 @@
 //! Anthropic Messages API client.
 
-use super::request::{AnthropicMessage, AnthropicRequest, AnthropicTool, ContentBlock, SystemBlock};
+use super::request::{
+    AnthropicMessage, AnthropicRequest, AnthropicTool, ContentBlock, SystemBlock,
+};
 use super::response::{AnthropicResponse, ResponseBlock};
 use super::stream::{ContentBlockInfo, ContentDelta, StreamEvent as AnthropicStreamEvent};
 use crate::provider::error::Error;
@@ -101,7 +103,10 @@ impl AnthropicClient {
                         }
                     }
                     Err(e) => {
-                        tracing::warn!("Failed to parse Anthropic event: {e}\nData: {}", sse_event.data);
+                        tracing::warn!(
+                            "Failed to parse Anthropic event: {e}\nData: {}",
+                            sse_event.data
+                        );
                     }
                 }
             }
@@ -226,13 +231,7 @@ impl AnthropicClient {
         let tools = if request.tools.is_empty() {
             None
         } else {
-            Some(
-                request
-                    .tools
-                    .iter()
-                    .map(|t| self.convert_tool(t))
-                    .collect(),
-            )
+            Some(request.tools.iter().map(|t| self.convert_tool(t)).collect())
         };
 
         AnthropicRequest {
@@ -362,7 +361,10 @@ impl AnthropicClient {
                 // Keepalive, ignore
             }
             AnthropicStreamEvent::Error { error } => {
-                return Err(Error::Api(format!("{}: {}", error.error_type, error.message)));
+                return Err(Error::Api(format!(
+                    "{}: {}",
+                    error.error_type, error.message
+                )));
             }
         }
         Ok(())

@@ -11,7 +11,7 @@ pub mod google;
 pub mod openai;
 
 pub use pkce::PkceCodes;
-pub use server::{CallbackServer, CallbackResult};
+pub use server::{CallbackResult, CallbackServer};
 pub use storage::{AuthStorage, Credentials, OAuthTokens};
 
 use anyhow::Result;

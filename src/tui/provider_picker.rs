@@ -6,8 +6,8 @@
 use crate::provider::ProviderStatus;
 use crate::tui::filter_input::FilterInputState;
 use crate::tui::types::SelectionState;
-use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
+use fuzzy_matcher::skim::SkimMatcherV2;
 
 /// State for the API provider picker modal.
 #[derive(Default)]
@@ -23,7 +23,7 @@ pub struct ProviderPicker {
 }
 
 impl ProviderPicker {
-    #[must_use] 
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -98,7 +98,7 @@ impl ProviderPicker {
     }
 
     /// Get currently selected provider.
-    #[must_use] 
+    #[must_use]
     pub fn selected(&self) -> Option<&ProviderStatus> {
         self.list_state
             .selected()

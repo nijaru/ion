@@ -77,8 +77,8 @@ impl App {
             (Arc::new(client), String::new())
         } else {
             let api_key = config.api_key_for(api_provider.id()).unwrap_or_default();
-            let client =
-                Client::new(api_provider, api_key.clone()).context("Failed to create LLM client")?;
+            let client = Client::new(api_provider, api_key.clone())
+                .context("Failed to create LLM client")?;
             (Arc::new(client), api_key)
         };
 
@@ -458,8 +458,8 @@ impl App {
                 .config
                 .api_key_for(api_provider.id())
                 .unwrap_or_default();
-            let client =
-                Client::new(api_provider, api_key.clone()).context("Failed to create LLM client")?;
+            let client = Client::new(api_provider, api_key.clone())
+                .context("Failed to create LLM client")?;
             (Arc::new(client), api_key)
         };
 
@@ -570,8 +570,9 @@ impl App {
                                 // Sanitize tool name (models sometimes embed args or XML artifacts)
                                 let clean_name = sanitize_tool_name(name);
                                 // Format tool call with key argument, same as live display
-                                let key_arg =
-                                    crate::tui::message_list::extract_key_arg(clean_name, arguments);
+                                let key_arg = crate::tui::message_list::extract_key_arg(
+                                    clean_name, arguments,
+                                );
                                 let display = if key_arg.is_empty() {
                                     clean_name.to_string()
                                 } else {

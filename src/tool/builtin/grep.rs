@@ -1,13 +1,13 @@
 use crate::tool::{DangerLevel, Tool, ToolContext, ToolError, ToolResult};
 use async_trait::async_trait;
 use grep_regex::RegexMatcher;
-use grep_searcher::sinks::UTF8;
 use grep_searcher::Searcher;
+use grep_searcher::sinks::UTF8;
 use ignore::WalkBuilder;
 use serde_json::json;
 use std::fmt::Write as _;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 /// Maximum number of matches to return.
 const MAX_RESULTS: usize = 500;
@@ -80,7 +80,10 @@ impl Tool for GrepTool {
         };
 
         if truncated {
-            let _ = write!(content, "\n\n[Truncated: showing first {MAX_RESULTS} matches]");
+            let _ = write!(
+                content,
+                "\n\n[Truncated: showing first {MAX_RESULTS} matches]"
+            );
         }
 
         Ok(ToolResult {

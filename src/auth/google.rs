@@ -5,10 +5,10 @@
 //!
 //! Note: This is different from the consumer Gemini API which only supports API keys.
 
-use super::pkce::{generate_state, PkceCodes};
+use super::pkce::{PkceCodes, generate_state};
 use super::server::CallbackServer;
 use super::storage::OAuthTokens;
-use super::{OAuthFlow, CALLBACK_TIMEOUT};
+use super::{CALLBACK_TIMEOUT, OAuthFlow};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
@@ -104,7 +104,9 @@ impl OAuthFlow for GoogleAuth {
 
         // Exchange code for tokens
         println!("Exchanging authorization code...");
-        let tokens = self.exchange_code(&callback.code, &redirect_uri, &pkce).await?;
+        let tokens = self
+            .exchange_code(&callback.code, &redirect_uri, &pkce)
+            .await?;
 
         println!("Login successful!");
         Ok(tokens)
@@ -150,7 +152,9 @@ impl OAuthFlow for GoogleAuth {
 
         Ok(OAuthTokens {
             access_token: token_response.access_token,
-            refresh_token: token_response.refresh_token.or_else(|| Some(refresh_token.to_string())),
+            refresh_token: token_response
+                .refresh_token
+                .or_else(|| Some(refresh_token.to_string())),
             expires_at: token_response.expires_in.map(|secs| now + secs * 1000),
             id_token: token_response.id_token,
         })
