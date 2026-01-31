@@ -75,6 +75,62 @@ impl App {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
 
+        // Handle command completer input first if active
+        if self.command_completer.is_active() {
+            match key.code {
+                // Navigation within completer
+                KeyCode::Up => {
+                    self.command_completer.move_up();
+                    return;
+                }
+                KeyCode::Down => {
+                    self.command_completer.move_down();
+                    return;
+                }
+                // Accept selection
+                KeyCode::Tab | KeyCode::Enter if !shift => {
+                    if let Some(cmd) = self.command_completer.selected_command() {
+                        // Replace current input with selected command + space
+                        self.input_buffer.clear();
+                        self.input_state.move_to_start();
+                        let cmd_with_space = format!("{cmd} ");
+                        self.input_state
+                            .insert_str(&mut self.input_buffer, &cmd_with_space);
+                    }
+                    self.command_completer.deactivate();
+                    return;
+                }
+                // Cancel completer
+                KeyCode::Esc => {
+                    self.command_completer.deactivate();
+                    return;
+                }
+                // Backspace might cancel if we delete the /
+                KeyCode::Backspace => {
+                    let cursor = self.input_state.cursor_char_idx();
+                    if cursor <= 1 {
+                        self.command_completer.deactivate();
+                        self.handle_input_event_with_history(key);
+                    } else {
+                        // Continue with normal backspace, then update query
+                        self.handle_input_event_with_history(key);
+                        self.update_command_completer_query();
+                    }
+                    return;
+                }
+                // Character input updates the query
+                KeyCode::Char(_) if !ctrl => {
+                    self.handle_input_event_with_history(key);
+                    self.update_command_completer_query();
+                    return;
+                }
+                _ => {
+                    // Other keys deactivate completer and process normally
+                    self.command_completer.deactivate();
+                }
+            }
+        }
+
         // Handle file completer input first if active
         if self.file_completer.is_active() {
             match key.code {
@@ -419,6 +475,12 @@ impl App {
             KeyCode::Char('@') => {
                 self.handle_input_event_with_history(key);
                 self.check_activate_file_completer();
+            }
+
+            // / might trigger command completion (at start of input)
+            KeyCode::Char('/') => {
+                self.handle_input_event_with_history(key);
+                self.check_activate_command_completer();
             }
 
             _ => {
