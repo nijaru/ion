@@ -12,15 +12,17 @@ pub mod model_picker;
 pub mod provider_picker;
 mod render;
 mod render_state;
+mod run;
 mod session;
-mod table;
 pub mod session_picker;
+mod table;
 pub mod terminal;
 mod types;
 mod util;
 
 // Re-export public types
 pub use message_list::Sender;
+pub use run::{ResumeOption, run};
 pub use types::{ApprovalRequest, Mode, SelectionState, SelectorPage, TaskSummary, ThinkingLevel};
 
 // Re-export internal utilities for sibling modules
