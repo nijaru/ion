@@ -7,20 +7,21 @@
 | Phase     | Provider Done | 2026-01-30 |
 | Status    | Ready to Test | 2026-01-30 |
 | Toolchain | stable        | 2026-01-22 |
-| Tests     | 222 passing   | 2026-01-30 |
+| Tests     | 223 passing   | 2026-01-30 |
 | Clippy    | clean         | 2026-01-30 |
 
 ## Just Completed
 
-**Input enhancements** (2026-01-30):
+**Input enhancements + review fixes** (2026-01-30):
 
-- File autocomplete: `@path` for path completion with fuzzy matching
+- File autocomplete: `@path` with fuzzy matching, hidden files with `@.`
 - Command autocomplete: `/` at start shows commands with descriptions
-- Image attachment: `@image:path.png` for multimodal input (png/jpg/gif/webp)
+- Image attachment: `@image:path.png` or `@image:"path with spaces.png"`
+- Review fixes: OOM prevention, backspace behavior, session resume
 
 ## Current Focus
 
-**TUI polish and testing** - limited automated testing for TUI, needs manual verification.
+**TUI polish and testing** - features implemented, need manual verification.
 
 ## Decision Needed
 
