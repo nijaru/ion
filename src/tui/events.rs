@@ -158,11 +158,18 @@ impl App {
                 }
             }
 
-            // Ctrl+P: Provider → Model picker (two-stage)
+            // Ctrl+P: Previous history (readline), or provider picker when input empty
             KeyCode::Char('p') if ctrl => {
-                if !self.is_running {
+                if self.input_is_empty() && !self.is_running {
                     self.open_provider_selector();
+                } else {
+                    self.prev_history();
                 }
+            }
+
+            // Ctrl+N: Next history (readline)
+            KeyCode::Char('n') if ctrl => {
+                self.next_history();
             }
 
             // Ctrl+H: Open help overlay

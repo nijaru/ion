@@ -3,7 +3,7 @@
   "ref": "50sw",
   "title": "Readline-style history navigation (Ctrl+P/N)",
   "description": "Add Ctrl+P (previous) and Ctrl+N (next) for prompt history. Arrow keys at edge already work but are O(n) vs O(1). Consider config option to disable arrow-key history navigation. Reference: fish, fzf, atuin for ctrl+r fuzzy search.",
-  "status": "open",
+  "status": "active",
   "priority": 2,
   "labels": [],
   "assignees": [],
@@ -13,7 +13,7 @@
   "due_date": null,
   "logs": [],
   "created_at": "2026-01-30T04:34:45.109Z",
-  "updated_at": "2026-01-30T04:34:45.109Z",
+  "updated_at": "2026-01-31T03:38:54.907Z",
   "completed_at": null,
   "external": {}
 }
