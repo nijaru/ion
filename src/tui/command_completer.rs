@@ -155,8 +155,8 @@ impl CommandCompleter {
 
             // Pad between command and description
             let cmd_padding = max_cmd_len.saturating_sub(cmd.len()) + 2;
-            for _ in 0..cmd_padding {
-                execute!(w, Print(" "))?;
+            if cmd_padding > 0 {
+                execute!(w, Print(" ".repeat(cmd_padding)))?;
             }
 
             // Description (dimmed)
@@ -169,9 +169,9 @@ impl CommandCompleter {
 
             // Pad to popup width
             let total_len = cmd.len() + cmd_padding + desc.len() + 1;
-            let padding = popup_width.saturating_sub(total_len as u16);
-            for _ in 0..padding {
-                execute!(w, Print(" "))?;
+            let padding = popup_width.saturating_sub(total_len as u16) as usize;
+            if padding > 0 {
+                execute!(w, Print(" ".repeat(padding)))?;
             }
 
             if is_selected {

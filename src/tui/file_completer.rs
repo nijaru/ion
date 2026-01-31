@@ -7,11 +7,19 @@ use crossterm::{
     style::{Attribute, Color, Print, ResetColor, SetAttribute, SetForegroundColor},
     terminal::{Clear, ClearType},
 };
+use std::borrow::Cow;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
 /// Maximum number of candidates to show in the popup.
 const MAX_VISIBLE: usize = 7;
+
+/// A file candidate with cached directory status.
+#[derive(Debug, Clone)]
+pub struct FileCandidate {
+    pub path: PathBuf,
+    pub is_dir: bool,
+}
 
 /// State for file path autocomplete.
 #[derive(Debug, Default)]
@@ -24,10 +32,10 @@ pub struct FileCompleter {
     at_position: usize,
     /// Working directory for relative paths.
     working_dir: PathBuf,
-    /// All candidates (unfiltered).
-    candidates: Vec<PathBuf>,
+    /// All candidates (unfiltered) with cached is_dir.
+    candidates: Vec<FileCandidate>,
     /// Filtered candidates (after fuzzy match).
-    filtered: Vec<PathBuf>,
+    filtered: Vec<FileCandidate>,
     /// Currently selected index in filtered list.
     selected: usize,
 }
@@ -70,7 +78,7 @@ impl FileCompleter {
 
     /// Get filtered candidates for display.
     #[must_use]
-    pub fn visible_candidates(&self) -> &[PathBuf] {
+    pub fn visible_candidates(&self) -> &[FileCandidate] {
         let end = self.filtered.len().min(MAX_VISIBLE);
         &self.filtered[..end]
     }
@@ -84,7 +92,7 @@ impl FileCompleter {
     /// Get the selected path if any.
     #[must_use]
     pub fn selected_path(&self) -> Option<&PathBuf> {
-        self.filtered.get(self.selected)
+        self.filtered.get(self.selected).map(|c| &c.path)
     }
 
     /// Activate completion at the given cursor position.
@@ -147,15 +155,15 @@ impl FileCompleter {
         // Calculate popup width (max path length + padding)
         let max_label_len = candidates
             .iter()
-            .map(|p| p.to_string_lossy().len())
+            .map(|c| c.path.to_string_lossy().len())
             .max()
             .unwrap_or(20);
-        let popup_width = (max_label_len + 4).min(width as usize - 4) as u16;
+        let popup_width = (max_label_len + 4).min(width.saturating_sub(4) as usize) as u16;
 
-        for (i, path) in candidates.iter().enumerate() {
+        for (i, candidate) in candidates.iter().enumerate() {
             let row = popup_start + i as u16;
             let is_selected = i == self.selected;
-            let path_str = path.to_string_lossy();
+            let path_str = candidate.path.to_string_lossy();
 
             execute!(w, MoveTo(1, row), Clear(ClearType::CurrentLine))?;
 
@@ -163,34 +171,39 @@ impl FileCompleter {
                 execute!(w, SetAttribute(Attribute::Reverse))?;
             }
 
-            // Add icon for directories
-            let is_dir = self.working_dir.join(path).is_dir();
-            let icon = if is_dir { "󰉋 " } else { "  " };
+            // Use cached is_dir status
+            let icon = if candidate.is_dir { "󰉋 " } else { "  " };
 
-            // Truncate path if needed
+            // Truncate path if needed (use saturating_sub for safety)
             let display_width = popup_width.saturating_sub(4) as usize;
-            let display: String = if path_str.len() > display_width {
-                format!(
+            let display: Cow<str> = if display_width > 1 && path_str.len() > display_width {
+                Cow::Owned(format!(
                     "…{}",
-                    &path_str[path_str.len().saturating_sub(display_width - 1)..]
-                )
+                    &path_str[path_str
+                        .len()
+                        .saturating_sub(display_width.saturating_sub(1))..]
+                ))
             } else {
-                path_str.to_string()
+                path_str
             };
 
             execute!(
                 w,
                 Print(" "),
-                SetForegroundColor(if is_dir { Color::Blue } else { Color::Reset }),
+                SetForegroundColor(if candidate.is_dir {
+                    Color::Blue
+                } else {
+                    Color::Reset
+                }),
                 Print(icon),
                 ResetColor,
-                Print(&display),
+                Print(display.as_ref()),
             )?;
 
             // Pad to popup width
-            let padding = popup_width.saturating_sub(display.len() as u16 + 3);
-            for _ in 0..padding {
-                execute!(w, Print(" "))?;
+            let padding = popup_width.saturating_sub(display.len() as u16 + 3) as usize;
+            if padding > 0 {
+                execute!(w, Print(" ".repeat(padding)))?;
             }
 
             if is_selected {
@@ -241,10 +254,14 @@ impl FileCompleter {
             };
 
             let path = entry.path();
-            self.candidates.push(PathBuf::from(&rel_path));
+            let is_dir = path.is_dir();
+            self.candidates.push(FileCandidate {
+                path: PathBuf::from(&rel_path),
+                is_dir,
+            });
 
             // Recurse into directories
-            if path.is_dir() {
+            if is_dir {
                 self.collect_entries(&path, &rel_path, depth + 1, include_hidden);
             }
         }
@@ -257,7 +274,7 @@ impl FileCompleter {
             self.filtered = self
                 .candidates
                 .iter()
-                .filter(|p| !p.to_string_lossy().contains('/'))
+                .filter(|c| !c.path.to_string_lossy().contains('/'))
                 .take(MAX_VISIBLE * 2)
                 .cloned()
                 .collect();
@@ -266,18 +283,24 @@ impl FileCompleter {
             let candidates: Vec<&str> = self
                 .candidates
                 .iter()
-                .map(|p| p.to_str().unwrap_or(""))
+                .map(|c| c.path.to_str().unwrap_or(""))
                 .collect();
             let matches = fuzzy::top_matches(&self.query, candidates, MAX_VISIBLE * 2);
-            self.filtered = matches.into_iter().map(PathBuf::from).collect();
+            // Look up the full FileCandidate for each match
+            self.filtered = matches
+                .into_iter()
+                .filter_map(|m| {
+                    self.candidates
+                        .iter()
+                        .find(|c| c.path.to_str() == Some(m))
+                        .cloned()
+                })
+                .collect();
         }
 
-        // Sort: directories first, then alphabetically
-        self.filtered.sort_by(|a, b| {
-            let a_is_dir = self.working_dir.join(a).is_dir();
-            let b_is_dir = self.working_dir.join(b).is_dir();
-            b_is_dir.cmp(&a_is_dir).then_with(|| a.cmp(b))
-        });
+        // Sort: directories first (using cached is_dir), then alphabetically
+        self.filtered
+            .sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.path.cmp(&b.path)));
 
         // Clamp selection
         if self.selected >= self.filtered.len() {
@@ -338,7 +361,7 @@ mod tests {
         assert!(
             candidates
                 .iter()
-                .any(|p| p.to_string_lossy().contains("main")),
+                .any(|c| c.path.to_string_lossy().contains("main")),
             "Expected to find main.rs in {:?}",
             candidates
         );
