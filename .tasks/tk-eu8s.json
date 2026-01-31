@@ -3,7 +3,7 @@
   "ref": "eu8s",
   "title": "[UX] Pretty-print API error JSON responses",
   "description": "API errors like Gemini 403 return raw JSON blobs. Should format nicely: extract message, show relevant details, hide verbose metadata. See Gemini 'insufficient scopes' error as example.",
-  "status": "active",
+  "status": "done",
   "priority": 2,
   "labels": [],
   "assignees": [],
@@ -13,7 +13,7 @@
   "due_date": null,
   "logs": [],
   "created_at": "2026-01-30T06:08:24.819Z",
-  "updated_at": "2026-01-31T03:00:21.576Z",
-  "completed_at": null,
+  "updated_at": "2026-01-31T03:03:07.475Z",
+  "completed_at": "2026-01-31T03:03:07.475Z",
   "external": {}
 }

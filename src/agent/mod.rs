@@ -256,18 +256,16 @@ impl Agent {
         tx: &mpsc::Sender<AgentEvent>,
         thinking: Option<ThinkingConfig>,
     ) -> Result<bool> {
-        let (assistant_blocks, tool_calls) = stream::stream_response(
-            &self.provider,
-            &self.orchestrator,
-            &self.context_manager,
-            &self.active_plan,
-            &self.token_counter,
-            session,
-            tx,
-            thinking,
-            session.abort_token.clone(),
-        )
-        .await?;
+        let ctx = stream::StreamContext {
+            provider: &self.provider,
+            orchestrator: &self.orchestrator,
+            context_manager: &self.context_manager,
+            active_plan: &self.active_plan,
+            token_counter: &self.token_counter,
+        };
+        let (assistant_blocks, tool_calls) =
+            stream::stream_response(&ctx, session, tx, thinking, session.abort_token.clone())
+                .await?;
 
         session.messages.push(Message {
             role: Role::Assistant,

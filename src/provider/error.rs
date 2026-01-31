@@ -15,15 +15,15 @@ pub fn format_api_error(error: &str) -> String {
         let json_str = &error[json_start..];
 
         // Try to parse and extract meaningful message
-        if let Ok(json) = serde_json::from_str::<serde_json::Value>(json_str) {
-            if let Some(msg) = extract_error_message(&json) {
-                // Preserve HTTP status prefix if present
-                let prefix = &error[..json_start].trim();
-                if prefix.is_empty() {
-                    return msg;
-                }
-                return format!("{prefix} {msg}");
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(json_str)
+            && let Some(msg) = extract_error_message(&json)
+        {
+            // Preserve HTTP status prefix if present
+            let prefix = &error[..json_start].trim();
+            if prefix.is_empty() {
+                return msg;
             }
+            return format!("{prefix} {msg}");
         }
     }
 

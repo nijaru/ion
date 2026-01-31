@@ -1,7 +1,7 @@
 use crate::agent::AgentEvent;
 use crate::agent::context::ContextManager;
 use crate::agent::designer::Plan;
-use crate::agent::retry::{categorize_error, is_retryable_error};
+use crate::agent::retry::retryable_category;
 use crate::compaction::TokenCounter;
 use crate::provider::{
     ChatRequest, ContentBlock, LlmApi, StreamEvent, ThinkingConfig, ToolCallEvent, ToolDefinition,
@@ -15,18 +15,24 @@ use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, warn};
 
+/// Context for streaming operations, bundling agent state.
+pub(crate) struct StreamContext<'a> {
+    pub provider: &'a Arc<dyn LlmApi>,
+    pub orchestrator: &'a Arc<ToolOrchestrator>,
+    pub context_manager: &'a Arc<ContextManager>,
+    pub active_plan: &'a Mutex<Option<Plan>>,
+    pub token_counter: &'a TokenCounter,
+}
+
 pub(crate) async fn stream_response(
-    provider: &Arc<dyn LlmApi>,
-    orchestrator: &Arc<ToolOrchestrator>,
-    context_manager: &Arc<ContextManager>,
-    active_plan: &Mutex<Option<Plan>>,
-    token_counter: &TokenCounter,
+    ctx: &StreamContext<'_>,
     session: &Session,
     tx: &mpsc::Sender<AgentEvent>,
     thinking: Option<ThinkingConfig>,
     abort_token: CancellationToken,
 ) -> Result<(Vec<ContentBlock>, Vec<ToolCallEvent>)> {
-    let tool_defs: Vec<ToolDefinition> = orchestrator
+    let tool_defs: Vec<ToolDefinition> = ctx
+        .orchestrator
         .list_tools()
         .into_iter()
         .map(|t| ToolDefinition {
@@ -36,8 +42,9 @@ pub(crate) async fn stream_response(
         })
         .collect();
 
-    let plan = active_plan.lock().await;
-    let assembly = context_manager
+    let plan = ctx.active_plan.lock().await;
+    let assembly = ctx
+        .context_manager
         .assemble(&session.messages, None, tool_defs, plan.as_ref())
         .await;
 
@@ -51,33 +58,33 @@ pub(crate) async fn stream_response(
         thinking,
     };
 
-    let input_tokens = token_counter.count_str(&assembly.system_prompt)
+    let input_tokens = ctx.token_counter.count_str(&assembly.system_prompt)
         + assembly
             .messages
             .iter()
-            .map(|m| token_counter.count_message(m).total)
+            .map(|m| ctx.token_counter.count_message(m).total)
             .sum::<usize>();
     let _ = tx.send(AgentEvent::InputTokens(input_tokens)).await;
 
     // Ollama and OpenRouter don't support streaming with tools reliably
-    let provider_id = provider.id();
+    let provider_id = ctx.provider.id();
     let use_streaming =
         (provider_id != "ollama" && provider_id != "openrouter") || request.tools.is_empty();
 
     if use_streaming
         && let Some(result) =
-            stream_with_retry(provider, token_counter, &request, tx, &abort_token).await?
+            stream_with_retry(ctx.provider, ctx.token_counter, &request, tx, &abort_token).await?
     {
         return Ok(result);
     }
     // Fallback to non-streaming if streaming not supported or returns None
 
-    complete_with_retry(provider, token_counter, &request, tx, &abort_token).await
+    complete_with_retry(ctx.provider, ctx.token_counter, &request, tx, &abort_token).await
 }
 
 /// Attempt streaming completion with retry logic.
 /// Returns Some((blocks, calls)) on success, None if fallback to non-streaming is needed.
-pub(crate) async fn stream_with_retry(
+async fn stream_with_retry(
     provider: &Arc<dyn LlmApi>,
     token_counter: &TokenCounter,
     request: &ChatRequest,
@@ -166,10 +173,11 @@ pub(crate) async fn stream_with_retry(
                     "Provider doesn't support streaming with tools, falling back to non-streaming"
                 );
                 return Ok(None); // Signal fallback needed
-            } else if is_retryable_error(err) && retry_count < MAX_RETRIES {
+            } else if let Some(reason) = retryable_category(err)
+                && retry_count < MAX_RETRIES
+            {
                 retry_count += 1;
                 let delay = 1u64 << retry_count;
-                let reason = categorize_error(err);
                 warn!(
                     "{}, retrying in {}s (attempt {}/{})",
                     reason, delay, retry_count, MAX_RETRIES
@@ -194,7 +202,7 @@ pub(crate) async fn stream_with_retry(
 }
 
 /// Non-streaming completion with retry logic.
-pub(crate) async fn complete_with_retry(
+async fn complete_with_retry(
     provider: &Arc<dyn LlmApi>,
     token_counter: &TokenCounter,
     request: &ChatRequest,
@@ -220,10 +228,11 @@ pub(crate) async fn complete_with_retry(
             Ok(response) => break response,
             Err(e) => {
                 let err = e.to_string();
-                if is_retryable_error(&err) && retry_count < MAX_RETRIES {
+                if let Some(reason) = retryable_category(&err)
+                    && retry_count < MAX_RETRIES
+                {
                     retry_count += 1;
                     let delay = 1u64 << retry_count;
-                    let reason = categorize_error(&err);
                     warn!(
                         "{}, retrying in {}s (attempt {}/{})",
                         reason, delay, retry_count, MAX_RETRIES
