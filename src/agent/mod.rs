@@ -181,16 +181,27 @@ impl Agent {
     pub async fn run_task(
         &self,
         mut session: Session,
-        user_msg: String,
+        user_content: Vec<ContentBlock>,
         tx: mpsc::Sender<AgentEvent>,
         message_queue: Option<Arc<std::sync::Mutex<Vec<String>>>>,
         thinking: Option<ThinkingConfig>,
     ) -> (Session, Option<anyhow::Error>) {
+        // Extract text for plan generation (ignore images for this purpose)
+        let user_msg: String = user_content
+            .iter()
+            .filter_map(|b| {
+                if let ContentBlock::Text { text } = b {
+                    Some(text.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+
         session.messages.push(Message {
             role: Role::User,
-            content: Arc::new(vec![ContentBlock::Text {
-                text: user_msg.clone(),
-            }]),
+            content: Arc::new(user_content),
         });
 
         // Send initial token usage
