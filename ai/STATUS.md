@@ -2,23 +2,23 @@
 
 ## Current State
 
-| Metric    | Value         | Updated    |
-| --------- | ------------- | ---------- |
-| Phase     | Provider Done | 2026-01-30 |
-| Status    | Ready to Test | 2026-01-30 |
-| Toolchain | stable        | 2026-01-22 |
-| Tests     | 223 passing   | 2026-01-30 |
-| Clippy    | clean         | 2026-01-30 |
+| Metric    | Value          | Updated    |
+| --------- | -------------- | ---------- |
+| Phase     | Provider Done  | 2026-01-30 |
+| Status    | Ready to Test  | 2026-01-30 |
+| Toolchain | stable         | 2026-01-22 |
+| Tests     | 222 passing    | 2026-01-30 |
+| Clippy    | pedantic clean | 2026-01-30 |
 
 ## Just Completed
 
-**Code quality fixes** (2026-01-30):
+**Clippy pedantic cleanup** (2026-01-30):
 
-- Split render.rs: 1086 → 692 lines (-36%)
-- Improved 7 tool descriptions to prevent hallucinations
-- Fixed review issues: underflow guards, is_dir caching
-- FileCandidate struct caches is_dir (no syscalls in render loop)
-- Deduplicated MAX_VISIBLE_ITEMS constant
+- Fixed 242 clippy pedantic warnings → 0
+- Added crate-level allows for missing doc sections
+- Consolidated identical match arms across providers
+- Fixed pass-by-value for Copy types (TokenCounter)
+- Added targeted allows for intentional patterns
 
 ## Current Focus
 
