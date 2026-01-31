@@ -15,7 +15,7 @@ impl Tool for BashTool {
     }
 
     fn description(&self) -> &'static str {
-        "Execute a bash command"
+        "Execute a shell command. Use for git, build tools, package managers, and system operations. Prefer specialized tools (glob, grep, read, edit) for file operations."
     }
 
     fn parameters(&self) -> serde_json::Value {

@@ -21,7 +21,7 @@ impl Tool for GrepTool {
     }
 
     fn description(&self) -> &'static str {
-        "Search for a pattern in files (regex supported). Uses ripgrep's optimized search engine."
+        "Search file contents for a text pattern (regex supported). Use this to find where code, strings, or patterns appear inside files. For finding files by name, use glob instead."
     }
 
     fn parameters(&self) -> serde_json::Value {

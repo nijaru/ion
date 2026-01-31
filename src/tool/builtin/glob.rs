@@ -18,7 +18,7 @@ impl Tool for GlobTool {
     }
 
     fn description(&self) -> &'static str {
-        "Find files matching a glob pattern (e.g., 'src/**/*.rs')"
+        "Find files by name or path pattern. Use glob patterns like '**/*.rs' for recursive search, '*.json' for current dir, or 'src/**/*test*' for matching substrings. This is the primary tool for locating files when you know part of the name."
     }
 
     fn parameters(&self) -> serde_json::Value {
