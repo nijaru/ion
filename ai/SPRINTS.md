@@ -2,17 +2,17 @@
 
 ## Status
 
-| Sprint | Goal                          | Status   |
-| ------ | ----------------------------- | -------- |
+| Sprint | Goal                           | Status   |
+| ------ | ------------------------------ | -------- |
 | 0-10   | See ai/sprints/archive-0-10.md | COMPLETE |
-| 11     | TUI v2: Remove ratatui        | COMPLETE |
-| 12     | Clippy Pedantic Refactoring   | COMPLETE |
+| 11     | TUI v2: Remove ratatui         | COMPLETE |
+| 12     | Clippy Pedantic Refactoring    | COMPLETE |
+| 13     | Agent Loop Decomposition       | ACTIVE   |
 
 ## Current Focus
 
-TUI v2 complete. Next priorities:
-1. Provider layer replacement (tk-aq7x)
-2. Anthropic caching (tk-268g)
+Sprint 13: Decompose 785-line agent/mod.rs into focused modules.
+See ai/sprints/13-agent-decomposition.md
 
 See ai/STATUS.md for details.
 

@@ -1,5 +1,6 @@
 //! TUI utility functions.
 
+use crate::provider::format_api_error;
 use crate::tui::filter_input;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -46,15 +47,21 @@ pub(super) fn format_relative_time(timestamp: i64) -> String {
 
 /// Normalize errors for status line display.
 pub(super) fn format_status_error(msg: &str) -> String {
-    let mut out = msg.trim().to_string();
+    // First extract message from JSON if present
+    let mut out = format_api_error(msg.trim());
+
+    // Strip common prefixes
     for prefix in ["Completion error: ", "Stream error: ", "API error: "] {
         if let Some(rest) = out.strip_prefix(prefix) {
             out = rest.to_string();
         }
     }
+
+    // Friendly message for common errors
     if out.to_lowercase().contains("operation timed out") {
         return "Network timeout".to_string();
     }
+
     out
 }
 

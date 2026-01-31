@@ -1,5 +1,5 @@
 use crate::agent::AgentEvent;
-use crate::provider::{ContentBlock, Message, Role};
+use crate::provider::{ContentBlock, Message, Role, format_api_error};
 use std::fmt::Write as _;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -371,7 +371,11 @@ impl MessageList {
                 self.push_entry(MessageEntry::new(Sender::System, msg));
             }
             AgentEvent::Error(e) => {
-                self.push_entry(MessageEntry::new(Sender::System, format!("Error: {e}")));
+                let formatted = format_api_error(&e);
+                self.push_entry(MessageEntry::new(
+                    Sender::System,
+                    format!("Error: {formatted}"),
+                ));
             }
             // ThinkingDelta: tracked in session.rs for progress display, not rendered
             // CompactionStatus: handled by TUI main loop for status bar
