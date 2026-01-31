@@ -1,6 +1,7 @@
 //! TUI module for the ion agent interface.
 
 mod chat_renderer;
+mod command_completer;
 pub mod composer;
 mod events;
 mod file_completer;
@@ -36,6 +37,7 @@ use crate::config::Config;
 use crate::provider::{ModelRegistry, Provider};
 use crate::session::{Session, SessionStore};
 use crate::tool::{ToolMode, ToolOrchestrator};
+use crate::tui::command_completer::CommandCompleter;
 use crate::tui::composer::{ComposerBuffer, ComposerState};
 use crate::tui::file_completer::FileCompleter;
 use crate::tui::message_list::MessageList;
@@ -133,6 +135,8 @@ pub struct App {
     pub last_thinking_duration: Option<std::time::Duration>,
     /// File path autocomplete state
     pub file_completer: FileCompleter,
+    /// Command autocomplete state
+    pub command_completer: CommandCompleter,
 }
 
 impl App {

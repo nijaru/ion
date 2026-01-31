@@ -302,4 +302,33 @@ impl App {
             }
         }
     }
+
+    /// Update the command completer query based on current input.
+    pub(super) fn update_command_completer_query(&mut self) {
+        if !self.command_completer.is_active() {
+            return;
+        }
+
+        let cursor = self.input_state.cursor_char_idx();
+        let content = self.input_buffer.get_content();
+
+        // Extract text after / (the query)
+        if cursor > 1 {
+            let query: String = content.chars().skip(1).take(cursor - 1).collect();
+            self.command_completer.set_query(&query);
+        } else {
+            self.command_completer.set_query("");
+        }
+    }
+
+    /// Check if we should activate command completion (/ at start of input).
+    pub(super) fn check_activate_command_completer(&mut self) {
+        let cursor = self.input_state.cursor_char_idx();
+        let content = self.input_buffer.get_content();
+
+        // Only activate if / is at position 0 (start of input)
+        if cursor == 1 && content.starts_with('/') {
+            self.command_completer.activate();
+        }
+    }
 }

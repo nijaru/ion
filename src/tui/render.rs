@@ -356,6 +356,11 @@ impl App {
                 self.render_file_completer_direct(w, input_start, width)?;
             }
 
+            // Render command completer popup above input if active
+            if self.command_completer.is_active() {
+                self.render_command_completer_direct(w, input_start, width)?;
+            }
+
             // Position cursor in input area
             // cursor_pos is relative (x within content, y is visual line 0-indexed)
             let (cursor_x, cursor_y) = self.input_state.cursor_pos;
@@ -441,6 +446,94 @@ impl App {
 
             // Pad to popup width
             let padding = popup_width.saturating_sub(display.len() as u16 + 3);
+            for _ in 0..padding {
+                execute!(w, Print(" "))?;
+            }
+
+            if is_selected {
+                execute!(w, SetAttribute(Attribute::NoReverse))?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Render command completion popup above the input box.
+    fn render_command_completer_direct<W: std::io::Write>(
+        &self,
+        w: &mut W,
+        input_start: u16,
+        width: u16,
+    ) -> std::io::Result<()> {
+        use crossterm::{
+            cursor::MoveTo,
+            style::{Attribute, Color, Print, ResetColor, SetAttribute, SetForegroundColor},
+            terminal::{Clear, ClearType},
+        };
+
+        let candidates = self.command_completer.visible_candidates();
+        if candidates.is_empty() {
+            return Ok(());
+        }
+
+        let selected = self.command_completer.selected();
+        let popup_height = candidates.len() as u16;
+
+        // Position popup above input box
+        let popup_start = input_start.saturating_sub(popup_height);
+
+        // Calculate popup width (command + description + padding)
+        let max_cmd_len = candidates
+            .iter()
+            .map(|(cmd, _)| cmd.len())
+            .max()
+            .unwrap_or(10);
+        let max_desc_len = candidates
+            .iter()
+            .map(|(_, desc)| desc.len())
+            .max()
+            .unwrap_or(20);
+        let popup_width = (max_cmd_len + max_desc_len + 6).min(width as usize - 4) as u16;
+
+        // Render each candidate
+        for (i, (cmd, desc)) in candidates.iter().enumerate() {
+            let row = popup_start + i as u16;
+            let is_selected = i == selected;
+
+            // Clear and position
+            execute!(w, MoveTo(1, row), Clear(ClearType::CurrentLine))?;
+
+            // Background highlight for selected item
+            if is_selected {
+                execute!(w, SetAttribute(Attribute::Reverse))?;
+            }
+
+            // Command in cyan, description dimmed
+            execute!(
+                w,
+                Print(" "),
+                SetForegroundColor(Color::Cyan),
+                Print(*cmd),
+                ResetColor,
+            )?;
+
+            // Pad between command and description
+            let cmd_padding = max_cmd_len.saturating_sub(cmd.len()) + 2;
+            for _ in 0..cmd_padding {
+                execute!(w, Print(" "))?;
+            }
+
+            // Description (dimmed)
+            execute!(
+                w,
+                SetAttribute(Attribute::Dim),
+                Print(*desc),
+                SetAttribute(Attribute::NormalIntensity),
+            )?;
+
+            // Pad to popup width
+            let total_len = cmd.len() + cmd_padding + desc.len() + 1;
+            let padding = popup_width.saturating_sub(total_len as u16);
             for _ in 0..padding {
                 execute!(w, Print(" "))?;
             }

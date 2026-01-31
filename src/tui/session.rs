@@ -9,6 +9,7 @@ use crate::session::{Session, SessionStore};
 use crate::tool::ToolOrchestrator;
 use crate::tool::builtin::SpawnSubagentTool;
 use crate::tui::App;
+use crate::tui::command_completer::CommandCompleter;
 use crate::tui::composer::{ComposerBuffer, ComposerState};
 use crate::tui::file_completer::FileCompleter;
 use crate::tui::message_list::{
@@ -232,6 +233,7 @@ impl App {
             thinking_start: None,
             last_thinking_duration: None,
             file_completer: FileCompleter::new(working_dir.clone()),
+            command_completer: CommandCompleter::new(),
         };
 
         // Set initial API provider name on model picker
