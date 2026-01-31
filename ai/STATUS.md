@@ -12,12 +12,13 @@
 
 ## Just Completed
 
-**Code organization + tool definitions** (2026-01-30):
+**Code quality fixes** (2026-01-30):
 
 - Split render.rs: 1086 → 692 lines (-36%)
-- Extracted render_selector.rs (229 lines)
-- Moved completer rendering to completer modules
 - Improved 7 tool descriptions to prevent hallucinations
+- Fixed review issues: underflow guards, is_dir caching
+- FileCandidate struct caches is_dir (no syscalls in render loop)
+- Deduplicated MAX_VISIBLE_ITEMS constant
 
 ## Current Focus
 
