@@ -26,13 +26,6 @@
 - Hook integration wired into ToolOrchestrator
 - Added 79 automated tests (message_list, OAuth, CLI)
 
-## Decision Needed
-
-**OAuth Client IDs:** Using public client IDs from Codex CLI and Gemini CLI.
-
-1. Keep borrowed IDs - works now, may break if upstream changes
-2. Register our own - more stable, requires developer accounts
-
 ## Open Bugs
 
 | ID      | Issue                    | Root Cause                  |
