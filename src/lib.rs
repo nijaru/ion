@@ -7,6 +7,7 @@ pub mod cli;
 pub mod compaction;
 pub mod config;
 pub mod error;
+pub mod hook;
 pub mod mcp;
 pub mod provider;
 pub mod session;
