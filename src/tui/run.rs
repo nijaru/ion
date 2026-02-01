@@ -338,7 +338,8 @@ pub async fn run(
                     let ui_start = term_height.saturating_sub(ui_height);
                     let scroll_amount = content_end.saturating_sub(ui_start);
 
-                    execute!(stdout, MoveTo(0, ui_start))?;
+                    // Clear old UI before scrolling so borders don't get pushed into scrollback
+                    execute!(stdout, MoveTo(0, ui_start), Clear(ClearType::FromCursorDown))?;
                     execute!(stdout, crossterm::terminal::ScrollUp(scroll_amount))?;
 
                     // Print at top of the scrolled area
@@ -361,10 +362,10 @@ pub async fn run(
                 // Scroll mode: existing behavior (content pushed into scrollback)
                 let ui_start = term_height.saturating_sub(ui_height);
 
-                // Move to where UI starts, scroll up to make room, then print
-                execute!(stdout, MoveTo(0, ui_start))?;
+                // Clear old UI before scrolling so borders don't get pushed into scrollback
+                execute!(stdout, MoveTo(0, ui_start), Clear(ClearType::FromCursorDown))?;
 
-                // Insert lines by scrolling up (pushes existing content into scrollback)
+                // Insert lines by scrolling up (now pushes blank lines, not old UI)
                 execute!(stdout, crossterm::terminal::ScrollUp(line_count))?;
 
                 // Print at the newly created space (just above where UI will be)
