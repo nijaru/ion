@@ -46,7 +46,7 @@ impl ModelRegistry {
         cache.fetched_at.is_some_and(|t| t.elapsed() < self.ttl)
     }
 
-    /// Fetch models from OpenRouter API and Models.dev.
+    /// Fetch models from `OpenRouter` API and `Models.dev`.
     pub async fn fetch_models(&self) -> Result<()> {
         let mut all_models = Vec::new();
 

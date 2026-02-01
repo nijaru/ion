@@ -11,7 +11,7 @@ impl ModelRegistry {
     ///
     /// This is the primary entry point for model discovery. Each provider has its own
     /// fetching strategy:
-    /// - OpenRouter: Direct API call
+    /// - `OpenRouter`: Direct API call
     /// - Ollama: Local server API call
     /// - Kimi: Moonshot API /v1/models endpoint
     /// - OAuth providers: Map to underlying API provider
@@ -212,7 +212,7 @@ impl ModelRegistry {
         Ok(filtered)
     }
 
-    /// Fetch models from OpenRouter API.
+    /// Fetch models from `OpenRouter` API.
     pub(crate) async fn fetch_openrouter_models(&self) -> Result<Vec<ModelInfo>> {
         let response = self
             .client
@@ -236,13 +236,13 @@ impl ModelRegistry {
         let models: Vec<ModelInfo> = data
             .data
             .into_iter()
-            .map(|m| Self::convert_api_model(m))
+            .map(Self::convert_api_model)
             .collect();
 
         Ok(models)
     }
 
-    /// Convert an API model response to ModelInfo.
+    /// Convert an API model response to `ModelInfo`.
     fn convert_api_model(m: super::types::ApiModel) -> ModelInfo {
         let supports_cache = m.pricing.cache_read.is_some_and(|p| p > 0.0);
         let supports_vision = m
