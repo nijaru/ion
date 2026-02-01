@@ -15,62 +15,8 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-/// Extract the most relevant argument from a tool call for display.
-fn extract_key_arg(tool_name: &str, args: &serde_json::Value) -> String {
-    let Some(obj) = args.as_object() else {
-        return String::new();
-    };
-
-    // Tool-specific key arguments
-    let key = match tool_name {
-        "read" | "write" | "edit" => "file_path",
-        "bash" => "command",
-        "glob" | "grep" => "pattern",
-        _ => {
-            // Fall back to first string argument
-            return obj
-                .values()
-                .find_map(|v| v.as_str())
-                .map(|s| truncate_arg(s, 50))
-                .unwrap_or_default();
-        }
-    };
-
-    obj.get(key)
-        .and_then(|v| v.as_str())
-        .map(|s| truncate_arg(s, 60))
-        .unwrap_or_default()
-}
-
-/// Truncate a string for display, showing the end for paths.
-fn truncate_arg(s: &str, max: usize) -> String {
-    let len = s.chars().count();
-    if len <= max {
-        s.to_string()
-    } else if max <= 3 {
-        take_head(s, max)
-    } else if s.contains('/') {
-        // For paths, show the end
-        format!("...{}", take_tail(s, max - 3))
-    } else {
-        // For other strings, show the beginning
-        format!("{}...", take_head(s, max - 3))
-    }
-}
-
-fn take_head(s: &str, max: usize) -> String {
-    s.chars().take(max).collect()
-}
-
-fn take_tail(s: &str, max: usize) -> String {
-    s.chars()
-        .rev()
-        .take(max)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect()
-}
+// Re-use shared helper from message_list
+use crate::tui::message_list::extract_key_arg;
 
 /// Permission settings resolved from CLI flags and config.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -840,37 +786,5 @@ mod tests {
         assert!(!settings.agi_enabled);
     }
 
-    // --- Helper function tests ---
-
-    #[test]
-    fn test_extract_key_arg_read() {
-        let args = serde_json::json!({"file_path": "/path/to/file.txt"});
-        assert_eq!(extract_key_arg("read", &args), "/path/to/file.txt");
-    }
-
-    #[test]
-    fn test_extract_key_arg_bash() {
-        let args = serde_json::json!({"command": "ls -la"});
-        assert_eq!(extract_key_arg("bash", &args), "ls -la");
-    }
-
-    #[test]
-    fn test_truncate_arg_short() {
-        assert_eq!(truncate_arg("hello", 10), "hello");
-    }
-
-    #[test]
-    fn test_truncate_arg_path_long() {
-        let path = "/very/long/path/to/some/deeply/nested/file.txt";
-        let result = truncate_arg(path, 20);
-        assert!(result.starts_with("..."));
-        assert!(result.ends_with("file.txt"));
-    }
-
-    #[test]
-    fn test_truncate_arg_non_path_long() {
-        let text = "This is a very long string that needs truncation";
-        let result = truncate_arg(text, 20);
-        assert!(result.ends_with("..."));
-    }
+    // Helper function tests moved to message_list.rs (shared implementation)
 }

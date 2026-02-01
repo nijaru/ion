@@ -81,8 +81,18 @@ pub(crate) async fn handle_stream_chunk(
             for (idx, builder) in tool_builders.drain() {
                 if let (Some(id), Some(name)) = (builder.id, builder.name) {
                     let json_str: String = builder.argument_parts.concat();
-                    let arguments: serde_json::Value =
-                        serde_json::from_str(&json_str).unwrap_or(serde_json::Value::Null);
+                    let arguments: serde_json::Value = match serde_json::from_str(&json_str) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            tracing::warn!(
+                                tool = %name,
+                                error = %e,
+                                json_preview = %json_str.chars().take(100).collect::<String>(),
+                                "Malformed tool arguments JSON, using null"
+                            );
+                            serde_json::Value::Null
+                        }
+                    };
 
                     tracing::debug!(
                         index = idx,
