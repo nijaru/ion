@@ -3,6 +3,7 @@
 use crate::session::{SessionStore, SessionSummary};
 use crate::tui::filter_input::FilterInputState;
 use crate::tui::fuzzy;
+use crate::tui::picker_trait::PickerNavigation;
 use crate::tui::types::SelectionState;
 
 /// State for the session picker modal.
@@ -143,5 +144,23 @@ impl SessionPicker {
         self.list_state
             .selected()
             .and_then(|i| self.filtered_sessions.get(i))
+    }
+}
+
+impl PickerNavigation for SessionPicker {
+    fn move_up(&mut self, count: usize) {
+        Self::move_up(self, count);
+    }
+
+    fn move_down(&mut self, count: usize) {
+        Self::move_down(self, count);
+    }
+
+    fn jump_to_top(&mut self) {
+        Self::jump_to_top(self);
+    }
+
+    fn jump_to_bottom(&mut self) {
+        Self::jump_to_bottom(self);
     }
 }
