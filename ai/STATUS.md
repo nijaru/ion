@@ -4,27 +4,27 @@
 
 | Metric    | Value          | Updated    |
 | --------- | -------------- | ---------- |
-| Phase     | Testing        | 2026-01-31 |
-| Status    | Tests Added    | 2026-01-31 |
+| Phase     | Stable         | 2026-01-31 |
+| Status    | Review Done    | 2026-01-31 |
 | Toolchain | stable         | 2026-01-22 |
-| Tests     | 304 passing    | 2026-01-31 |
+| Tests     | 299 passing    | 2026-01-31 |
 | Clippy    | pedantic clean | 2026-01-31 |
 
 ## Just Completed
 
-**Automated Test Coverage** (2026-01-31):
+**Code Review & Fixes** (2026-01-31):
 
-Added 79 new tests (225 → 304):
+- Deduplicated helper functions (cli.rs uses message_list's extract_key_arg)
+- Removed unused Pipe trait
+- Cleaned up test file structure (removed redundant mod tests wrappers)
+- Added hook behavior documentation (last-wins semantics)
+- Added tracing::warn for malformed JSON fallback
 
-- `message_list.rs`: 43 tests (formatting, scrolling, tool output)
-- `auth/openai.rs`: 5 tests (OAuth URL building, endpoints)
-- `auth/google.rs`: 6 tests (OAuth URL, offline access, scopes)
-- `cli.rs`: 25 tests (arg parsing, commands, permissions)
+**Refactor Sprint** (2026-01-31):
 
-**Refactor Sprint Complete** (2026-01-31):
-
-- Phases 1-5: Performance, file splits, PickerNavigation trait, hook system
+- 12 commits: file splits, hook system, PickerNavigation trait
 - Hook integration wired into ToolOrchestrator
+- Added 79 automated tests (message_list, OAuth, CLI)
 
 ## Decision Needed
 
@@ -39,35 +39,17 @@ Added 79 new tests (225 → 304):
 | ------- | ------------------------ | --------------------------- |
 | tk-2bk7 | Resize clears scrollback | Needs preservation strategy |
 
-## Module Health
-
-| Module    | Files | Lines | Health | Notes                                   |
-| --------- | ----- | ----- | ------ | --------------------------------------- |
-| provider/ | 24    | ~2700 | GOOD   | Split openai_compat + registry          |
-| tui/      | 36    | ~7500 | GOOD   | Split composer/highlight/session/render |
-| agent/    | 9     | ~900  | GOOD   | Decomposed, clean structure             |
-| tool/     | 15    | ~2700 | GOOD   | Hook integration complete               |
-| hook/     | 1     | ~250  | READY  | Integrated into ToolOrchestrator        |
-| auth/     | 5     | ~800  | GOOD   | OAuth complete                          |
-| session/  | 3     | ~600  | GOOD   | SQLite + WAL                            |
-| skill/    | 3     | ~400  | GOOD   | YAML frontmatter                        |
-| mcp/      | 2     | ~300  | OK     | Needs tests                             |
-
 ## Top Priorities
 
-1. Test TUI changes manually (autocomplete, history nav, images)
-2. OAuth testing with real subscriptions
-3. Consider Ctrl+R fuzzy history search (tk-g3dt)
-
-## Deferred Items
-
-- **Completer trait**: Analyzed, minimal duplication (~24 lines), different acceptance semantics. Not worth abstracting.
-- **events.rs split**: Now 702 lines after PickerNavigation refactor, well-organized. No split needed.
+1. OAuth testing with real subscriptions (tk-uqt6, tk-toyu)
+2. Ctrl+R fuzzy history search (tk-g3dt)
+3. Manual TUI testing if needed
 
 ## Key References
 
-| Topic                 | Location                         |
-| --------------------- | -------------------------------- |
-| Architecture overview | ai/DESIGN.md                     |
-| OAuth design          | ai/design/oauth-subscriptions.md |
-| Module organization   | ai/design/module-structure.md    |
+| Topic                 | Location                                |
+| --------------------- | --------------------------------------- |
+| Architecture overview | ai/DESIGN.md                            |
+| OAuth design          | ai/design/oauth-subscriptions.md        |
+| Module organization   | ai/design/module-structure.md           |
+| Review report         | ai/review/refactor-sprint-2026-01-31.md |
