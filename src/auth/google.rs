@@ -218,3 +218,67 @@ impl GoogleAuth {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::auth::pkce::PkceCodes;
+
+    #[test]
+    fn test_auth_url_contains_required_params() {
+        let auth = GoogleAuth::new();
+        let pkce = PkceCodes::generate();
+        let url = auth.build_auth_url("http://localhost:8080/callback", "test_state", &pkce);
+
+        assert!(url.starts_with(AUTH_ENDPOINT));
+        assert!(url.contains("response_type=code"));
+        assert!(url.contains("client_id="));
+        assert!(url.contains("redirect_uri="));
+        assert!(url.contains("state=test_state"));
+        assert!(url.contains("code_challenge="));
+        assert!(url.contains("code_challenge_method=S256"));
+    }
+
+    #[test]
+    fn test_auth_url_has_offline_access() {
+        let auth = GoogleAuth::new();
+        let pkce = PkceCodes::generate();
+        let url = auth.build_auth_url("http://localhost:8080", "state", &pkce);
+
+        // Google requires access_type=offline for refresh tokens
+        assert!(url.contains("access_type=offline"));
+        assert!(url.contains("prompt=consent"));
+    }
+
+    #[test]
+    fn test_auth_url_includes_cloud_platform_scope() {
+        let auth = GoogleAuth::new();
+        let pkce = PkceCodes::generate();
+        let url = auth.build_auth_url("http://localhost:8080", "state", &pkce);
+
+        // Cloud platform scope is required for Code Assist API
+        assert!(url.contains("cloud-platform"));
+    }
+
+    #[test]
+    fn test_client_id_matches_gemini_cli() {
+        // Verify we're using the same client ID as Gemini CLI
+        assert!(CLIENT_ID.ends_with(".apps.googleusercontent.com"));
+        assert!(CLIENT_ID.starts_with("681255809395"));
+    }
+
+    #[test]
+    fn test_endpoints_are_valid() {
+        assert!(AUTH_ENDPOINT.starts_with("https://"));
+        assert!(TOKEN_ENDPOINT.starts_with("https://"));
+        assert!(AUTH_ENDPOINT.contains("google.com"));
+        assert!(TOKEN_ENDPOINT.contains("googleapis.com"));
+    }
+
+    #[test]
+    fn test_scopes_include_user_info() {
+        // User info scopes are needed for identification
+        assert!(SCOPES.contains("userinfo.email"));
+        assert!(SCOPES.contains("userinfo.profile"));
+    }
+}

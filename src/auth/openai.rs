@@ -206,3 +206,59 @@ impl OpenAIAuth {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::auth::pkce::PkceCodes;
+
+    #[test]
+    fn test_auth_url_contains_required_params() {
+        let auth = OpenAIAuth::new();
+        let pkce = PkceCodes::generate();
+        let url = auth.build_auth_url("http://localhost:8080/callback", "test_state", &pkce);
+
+        assert!(url.starts_with(AUTH_ENDPOINT));
+        assert!(url.contains("response_type=code"));
+        assert!(url.contains(&format!("client_id={CLIENT_ID}")));
+        assert!(url.contains("redirect_uri="));
+        assert!(url.contains("state=test_state"));
+        assert!(url.contains("code_challenge="));
+        assert!(url.contains("code_challenge_method=S256"));
+    }
+
+    #[test]
+    fn test_auth_url_encodes_redirect_uri() {
+        let auth = OpenAIAuth::new();
+        let pkce = PkceCodes::generate();
+        let url = auth.build_auth_url("http://localhost:8080/callback", "state", &pkce);
+
+        // The redirect URI should be URL-encoded
+        assert!(url.contains("redirect_uri=http%3A%2F%2Flocalhost%3A8080%2Fcallback"));
+    }
+
+    #[test]
+    fn test_auth_url_includes_scopes() {
+        let auth = OpenAIAuth::new();
+        let pkce = PkceCodes::generate();
+        let url = auth.build_auth_url("http://localhost:8080", "state", &pkce);
+
+        // Scopes should be URL-encoded
+        assert!(url.contains("scope="));
+        assert!(url.contains("openid"));
+    }
+
+    #[test]
+    fn test_client_id_matches_codex() {
+        // Verify we're using the same client ID as Codex CLI
+        assert_eq!(CLIENT_ID, "app_EMoamEEZ73f0CkXaXp7hrann");
+    }
+
+    #[test]
+    fn test_endpoints_are_valid() {
+        assert!(AUTH_ENDPOINT.starts_with("https://"));
+        assert!(TOKEN_ENDPOINT.starts_with("https://"));
+        assert!(AUTH_ENDPOINT.contains("openai.com"));
+        assert!(TOKEN_ENDPOINT.contains("openai.com"));
+    }
+}
