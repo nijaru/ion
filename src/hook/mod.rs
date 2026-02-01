@@ -26,13 +26,13 @@ pub struct HookContext {
     pub point: HookPoint,
     /// Tool name (for tool-related hooks).
     pub tool_name: Option<String>,
-    /// Tool input (for PreToolUse).
+    /// Tool input (for `PreToolUse`).
     pub tool_input: Option<serde_json::Value>,
-    /// Tool output (for PostToolUse).
+    /// Tool output (for `PostToolUse`).
     pub tool_output: Option<String>,
-    /// Error message (for OnError).
+    /// Error message (for `OnError`).
     pub error: Option<String>,
-    /// Model response text (for OnResponse).
+    /// Model response text (for `OnResponse`).
     pub response: Option<String>,
 }
 
@@ -87,24 +87,19 @@ impl HookContext {
 }
 
 /// Result of a hook execution.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum HookResult {
     /// Continue normal execution.
+    #[default]
     Continue,
     /// Skip the current operation (e.g., skip tool execution).
     Skip,
-    /// Replace the tool input with new input (PreToolUse only).
+    /// Replace the tool input with new input (`PreToolUse` only).
     ReplaceInput(serde_json::Value),
-    /// Replace the tool output with new output (PostToolUse only).
+    /// Replace the tool output with new output (`PostToolUse` only).
     ReplaceOutput(String),
     /// Abort with an error message.
     Abort(String),
-}
-
-impl Default for HookResult {
-    fn default() -> Self {
-        Self::Continue
-    }
 }
 
 /// Trait for implementing hooks.
@@ -117,7 +112,7 @@ pub trait Hook: Send + Sync {
     async fn execute(&self, ctx: &HookContext) -> HookResult;
 
     /// Optional name for debugging/logging.
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "unnamed_hook"
     }
 
