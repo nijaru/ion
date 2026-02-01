@@ -65,7 +65,7 @@ where
     D: serde::Deserializer<'de>,
 {
     let s: String = Deserialize::deserialize(deserializer)?;
-    s.parse().unwrap_or(0.0).pipe(Ok)
+    Ok(s.parse().unwrap_or(0.0))
 }
 
 pub(crate) fn parse_optional_price<'de, D>(deserializer: D) -> Result<Option<f64>, D::Error>
@@ -75,15 +75,3 @@ where
     let opt: Option<String> = Deserialize::deserialize(deserializer)?;
     Ok(opt.and_then(|s| s.parse().ok()))
 }
-
-/// Helper trait for pipe syntax.
-pub(crate) trait Pipe: Sized {
-    fn pipe<F, R>(self, f: F) -> R
-    where
-        F: FnOnce(Self) -> R,
-    {
-        f(self)
-    }
-}
-
-impl<T> Pipe for T {}

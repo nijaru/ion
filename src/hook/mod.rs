@@ -144,6 +144,13 @@ impl HookRegistry {
 
     /// Execute all hooks for a given hook point.
     /// Returns the final result after all hooks have run.
+    ///
+    /// Hook execution follows these rules:
+    /// - Hooks are executed in priority order (lower priority number = earlier)
+    /// - `Continue` allows the next hook to run
+    /// - `Skip` and `Abort` stop execution immediately
+    /// - `ReplaceInput`/`ReplaceOutput` are kept but don't stop execution,
+    ///   so later hooks can override earlier transformations (last wins)
     pub async fn execute(&self, ctx: &HookContext) -> HookResult {
         let mut result = HookResult::Continue;
 
