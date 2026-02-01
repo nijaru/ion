@@ -487,3 +487,323 @@ impl MessageList {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // --- extract_key_arg tests ---
+
+    #[test]
+    fn test_extract_key_arg_read() {
+        // Short path - no truncation
+        let args = json!({"file_path": "/home/user/test.rs"});
+        assert_eq!(extract_key_arg("read", &args), "/home/user/test.rs");
+    }
+
+    #[test]
+    fn test_extract_key_arg_read_long_path() {
+        // Long path (>50 chars) - truncated from end (paths show suffix)
+        let args = json!({"file_path": "/home/user/projects/really/very/long/nested/path/to/some/deeply/buried/file.rs"});
+        let result = extract_key_arg("read", &args);
+        assert!(result.starts_with("..."), "Long paths should start with ..., got: {result}");
+        assert!(result.ends_with("file.rs"), "Should preserve filename, got: {result}");
+        assert!(result.chars().count() <= 50, "Should be truncated to 50 chars, got: {}", result.chars().count());
+    }
+
+    #[test]
+    fn test_extract_key_arg_bash() {
+        let args = json!({"command": "cargo test"});
+        assert_eq!(extract_key_arg("bash", &args), "cargo test");
+    }
+
+    #[test]
+    fn test_extract_key_arg_glob() {
+        let args = json!({"pattern": "**/*.rs"});
+        assert_eq!(extract_key_arg("glob", &args), "**/*.rs");
+    }
+
+    #[test]
+    fn test_extract_key_arg_unknown_tool() {
+        let args = json!({"query": "search term"});
+        assert_eq!(extract_key_arg("custom_tool", &args), "search term");
+    }
+
+    #[test]
+    fn test_extract_key_arg_empty() {
+        let args = json!({});
+        assert_eq!(extract_key_arg("read", &args), "");
+    }
+
+    #[test]
+    fn test_extract_key_arg_non_object() {
+        let args = json!("string");
+        assert_eq!(extract_key_arg("read", &args), "");
+    }
+
+    // --- truncate_for_display tests ---
+
+    #[test]
+    fn test_truncate_short_string() {
+        assert_eq!(truncate_for_display("hello", 10), "hello");
+    }
+
+    #[test]
+    fn test_truncate_path_shows_end() {
+        let path = "/home/user/projects/myapp/src/main.rs";
+        let truncated = truncate_for_display(path, 20);
+        assert!(truncated.starts_with("..."));
+        assert!(truncated.ends_with("main.rs"));
+    }
+
+    #[test]
+    fn test_truncate_non_path_shows_beginning() {
+        let text = "This is a very long string that needs truncation";
+        let truncated = truncate_for_display(text, 20);
+        assert!(truncated.starts_with("This"));
+        assert!(truncated.ends_with("..."));
+    }
+
+    #[test]
+    fn test_truncate_multiline_uses_first() {
+        let text = "first line\nsecond line";
+        assert_eq!(truncate_for_display(text, 50), "first line");
+    }
+
+    // --- format_tool_result tests ---
+
+    #[test]
+    fn test_format_tool_result_empty() {
+        assert_eq!(format_tool_result(""), "OK");
+        assert_eq!(format_tool_result("   "), "OK");
+    }
+
+    #[test]
+    fn test_format_tool_result_short() {
+        assert_eq!(format_tool_result("success"), "success");
+    }
+
+    #[test]
+    fn test_format_tool_result_few_lines() {
+        let input = "line1\nline2\nline3";
+        let output = format_tool_result(input);
+        assert_eq!(output, "line1\nline2\nline3");
+    }
+
+    #[test]
+    fn test_format_tool_result_many_lines_shows_tail() {
+        let lines: Vec<&str> = (0..10).map(|i| match i {
+            0 => "line0",
+            1 => "line1",
+            2 => "line2",
+            3 => "line3",
+            4 => "line4",
+            5 => "line5",
+            6 => "line6",
+            7 => "line7",
+            8 => "line8",
+            _ => "line9",
+        }).collect();
+        let input = lines.join("\n");
+        let output = format_tool_result(&input);
+        assert!(output.starts_with("… +5 lines"));
+        assert!(output.contains("line9"));
+        assert!(!output.contains("line0"));
+    }
+
+    // --- strip_error_prefixes tests ---
+
+    #[test]
+    fn test_strip_error_prefixes_single() {
+        assert_eq!(strip_error_prefixes("Error: something went wrong"), "something went wrong");
+    }
+
+    #[test]
+    fn test_strip_error_prefixes_multiple() {
+        assert_eq!(strip_error_prefixes("Error: Error: nested error"), "nested error");
+    }
+
+    #[test]
+    fn test_strip_error_prefixes_none() {
+        assert_eq!(strip_error_prefixes("no error prefix here"), "no error prefix here");
+    }
+
+    #[test]
+    fn test_strip_error_prefixes_whitespace() {
+        assert_eq!(strip_error_prefixes("  Error:  message"), "message");
+    }
+
+    // --- sanitize_tool_name tests ---
+
+    #[test]
+    fn test_sanitize_tool_name_clean() {
+        assert_eq!(sanitize_tool_name("read"), "read");
+    }
+
+    #[test]
+    fn test_sanitize_tool_name_with_args() {
+        assert_eq!(sanitize_tool_name("read(file.txt)"), "read");
+    }
+
+    #[test]
+    fn test_sanitize_tool_name_with_xml() {
+        assert_eq!(sanitize_tool_name("bash</tool>"), "bash");
+    }
+
+    #[test]
+    fn test_sanitize_tool_name_with_both() {
+        assert_eq!(sanitize_tool_name("edit(file)</tag>"), "edit");
+    }
+
+    #[test]
+    fn test_sanitize_tool_name_whitespace() {
+        assert_eq!(sanitize_tool_name("  read  "), "read");
+    }
+
+    // --- truncate_line tests ---
+
+    #[test]
+    fn test_truncate_line_short() {
+        assert_eq!(truncate_line("hello", 10), "hello");
+    }
+
+    #[test]
+    fn test_truncate_line_exact() {
+        assert_eq!(truncate_line("hello", 5), "hello");
+    }
+
+    #[test]
+    fn test_truncate_line_long() {
+        assert_eq!(truncate_line("hello world", 5), "hell…");
+    }
+
+    #[test]
+    fn test_truncate_line_zero() {
+        assert_eq!(truncate_line("hello", 0), "");
+    }
+
+    #[test]
+    fn test_truncate_line_one() {
+        assert_eq!(truncate_line("hello", 1), "…");
+    }
+
+    // --- MessageList scroll tests ---
+
+    #[test]
+    fn test_message_list_new() {
+        let list = MessageList::new();
+        assert!(list.entries.is_empty());
+        assert_eq!(list.scroll_offset, 0);
+        assert!(list.auto_scroll);
+    }
+
+    #[test]
+    fn test_message_list_scroll_up() {
+        let mut list = MessageList::new();
+        list.scroll_up(5);
+        assert_eq!(list.scroll_offset, 5);
+        assert!(!list.auto_scroll);
+    }
+
+    #[test]
+    fn test_message_list_scroll_down() {
+        let mut list = MessageList::new();
+        list.scroll_offset = 10;
+        list.auto_scroll = false;
+        list.scroll_down(3);
+        assert_eq!(list.scroll_offset, 7);
+        assert!(!list.auto_scroll);
+    }
+
+    #[test]
+    fn test_message_list_scroll_down_to_bottom() {
+        let mut list = MessageList::new();
+        list.scroll_offset = 5;
+        list.auto_scroll = false;
+        list.scroll_down(10);
+        assert_eq!(list.scroll_offset, 0);
+        assert!(list.auto_scroll);
+    }
+
+    #[test]
+    fn test_message_list_scroll_to_top() {
+        let mut list = MessageList::new();
+        list.scroll_to_top();
+        assert_eq!(list.scroll_offset, 10000);
+        assert!(!list.auto_scroll);
+    }
+
+    #[test]
+    fn test_message_list_scroll_to_bottom() {
+        let mut list = MessageList::new();
+        list.scroll_offset = 100;
+        list.auto_scroll = false;
+        list.scroll_to_bottom();
+        assert_eq!(list.scroll_offset, 0);
+        assert!(list.auto_scroll);
+    }
+
+    #[test]
+    fn test_message_list_is_at_bottom() {
+        let mut list = MessageList::new();
+        assert!(list.is_at_bottom());
+        list.scroll_up(5);
+        assert!(!list.is_at_bottom());
+    }
+
+    // --- MessageEntry tests ---
+
+    #[test]
+    fn test_message_entry_new() {
+        let entry = MessageEntry::new(Sender::User, "hello".to_string());
+        assert_eq!(entry.sender, Sender::User);
+        assert_eq!(entry.content_as_markdown(), "hello");
+    }
+
+    #[test]
+    fn test_message_entry_append_text() {
+        let mut entry = MessageEntry::new(Sender::Agent, "hello".to_string());
+        entry.append_text(" world");
+        assert_eq!(entry.content_as_markdown(), "hello world");
+    }
+
+    #[test]
+    fn test_message_entry_thinking() {
+        let entry = MessageEntry::new_thinking(Sender::Agent, "reasoning here".to_string());
+        let md = entry.content_as_markdown();
+        assert!(md.contains("*Reasoning*"));
+        assert!(md.contains("> reasoning here"));
+    }
+
+    #[test]
+    fn test_message_entry_append_thinking() {
+        let mut entry = MessageEntry::new(Sender::Agent, "response".to_string());
+        entry.append_thinking("thought");
+        let md = entry.content_as_markdown();
+        assert!(md.contains("response"));
+        assert!(md.contains("*Reasoning*"));
+    }
+
+    // --- take_head / take_tail tests ---
+
+    #[test]
+    fn test_take_head() {
+        assert_eq!(take_head("hello world", 5), "hello");
+        assert_eq!(take_head("hi", 10), "hi");
+        assert_eq!(take_head("test", 0), "");
+    }
+
+    #[test]
+    fn test_take_tail() {
+        assert_eq!(take_tail("hello world", 5), "world");
+        assert_eq!(take_tail("hi", 10), "hi");
+        assert_eq!(take_tail("test", 2), "st");
+    }
+
+    #[test]
+    fn test_take_tail_unicode() {
+        // Ensure we handle unicode correctly (char-based, not byte-based)
+        assert_eq!(take_tail("héllo", 3), "llo");
+    }
+}

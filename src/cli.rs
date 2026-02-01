@@ -663,3 +663,214 @@ pub fn logout(args: LogoutArgs) -> ExitCode {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    // --- CLI parsing tests ---
+
+    #[test]
+    fn test_parse_no_args() {
+        let cli = Cli::try_parse_from(["ion"]).unwrap();
+        assert!(cli.command.is_none());
+        assert!(!cli.read_mode);
+        assert!(!cli.write_mode);
+        assert!(!cli.auto_approve);
+    }
+
+    #[test]
+    fn test_parse_read_mode() {
+        let cli = Cli::try_parse_from(["ion", "-r"]).unwrap();
+        assert!(cli.read_mode);
+        assert!(!cli.write_mode);
+    }
+
+    #[test]
+    fn test_parse_write_mode() {
+        let cli = Cli::try_parse_from(["ion", "-w"]).unwrap();
+        assert!(cli.write_mode);
+        assert!(!cli.read_mode);
+    }
+
+    #[test]
+    fn test_parse_auto_approve() {
+        let cli = Cli::try_parse_from(["ion", "-y"]).unwrap();
+        assert!(cli.auto_approve);
+    }
+
+    #[test]
+    fn test_parse_agi_mode() {
+        let cli = Cli::try_parse_from(["ion", "--agi"]).unwrap();
+        assert!(cli.agi_mode);
+    }
+
+    #[test]
+    fn test_parse_no_sandbox() {
+        let cli = Cli::try_parse_from(["ion", "--no-sandbox"]).unwrap();
+        assert!(cli.no_sandbox);
+    }
+
+    #[test]
+    fn test_parse_continue() {
+        let cli = Cli::try_parse_from(["ion", "--continue"]).unwrap();
+        assert!(cli.continue_session);
+    }
+
+    #[test]
+    fn test_parse_resume_without_id() {
+        let cli = Cli::try_parse_from(["ion", "--resume"]).unwrap();
+        assert_eq!(cli.resume, Some("__SELECT__".to_string()));
+    }
+
+    #[test]
+    fn test_parse_resume_with_id() {
+        let cli = Cli::try_parse_from(["ion", "--resume", "abc123"]).unwrap();
+        assert_eq!(cli.resume, Some("abc123".to_string()));
+    }
+
+    #[test]
+    fn test_continue_and_resume_conflict() {
+        let result = Cli::try_parse_from(["ion", "--continue", "--resume"]);
+        assert!(result.is_err());
+    }
+
+    // --- Run command tests ---
+
+    #[test]
+    fn test_parse_run_basic() {
+        let cli = Cli::try_parse_from(["ion", "run", "hello"]).unwrap();
+        if let Some(Commands::Run(args)) = cli.command {
+            assert_eq!(args.prompt, "hello");
+            assert!(args.model.is_none());
+            assert!(!args.quiet);
+        } else {
+            panic!("Expected Run command");
+        }
+    }
+
+    #[test]
+    fn test_parse_run_with_model() {
+        let cli = Cli::try_parse_from(["ion", "run", "-m", "anthropic/claude-3", "prompt"]).unwrap();
+        if let Some(Commands::Run(args)) = cli.command {
+            assert_eq!(args.model, Some("anthropic/claude-3".to_string()));
+        } else {
+            panic!("Expected Run command");
+        }
+    }
+
+    #[test]
+    fn test_parse_run_with_quiet() {
+        let cli = Cli::try_parse_from(["ion", "run", "-q", "prompt"]).unwrap();
+        if let Some(Commands::Run(args)) = cli.command {
+            assert!(args.quiet);
+        } else {
+            panic!("Expected Run command");
+        }
+    }
+
+    #[test]
+    fn test_parse_run_with_output_format() {
+        let cli = Cli::try_parse_from(["ion", "run", "-o", "json", "prompt"]).unwrap();
+        if let Some(Commands::Run(args)) = cli.command {
+            assert!(matches!(args.output_format, OutputFormat::Json));
+        } else {
+            panic!("Expected Run command");
+        }
+    }
+
+    #[test]
+    fn test_parse_run_with_max_turns() {
+        let cli = Cli::try_parse_from(["ion", "run", "--max-turns", "5", "prompt"]).unwrap();
+        if let Some(Commands::Run(args)) = cli.command {
+            assert_eq!(args.max_turns, Some(5));
+        } else {
+            panic!("Expected Run command");
+        }
+    }
+
+    #[test]
+    fn test_parse_run_global_flags() {
+        let cli = Cli::try_parse_from(["ion", "-y", "run", "prompt"]).unwrap();
+        assert!(cli.auto_approve);
+        assert!(cli.command.is_some());
+    }
+
+    // --- Login/Logout command tests ---
+
+    #[test]
+    fn test_parse_login_chatgpt() {
+        let cli = Cli::try_parse_from(["ion", "login", "chatgpt"]).unwrap();
+        if let Some(Commands::Login(args)) = cli.command {
+            assert!(matches!(args.provider, AuthProvider::ChatGpt));
+        } else {
+            panic!("Expected Login command");
+        }
+    }
+
+    #[test]
+    fn test_parse_login_gemini() {
+        let cli = Cli::try_parse_from(["ion", "login", "gemini"]).unwrap();
+        if let Some(Commands::Login(args)) = cli.command {
+            assert!(matches!(args.provider, AuthProvider::Gemini));
+        } else {
+            panic!("Expected Login command");
+        }
+    }
+
+    #[test]
+    fn test_parse_logout() {
+        let cli = Cli::try_parse_from(["ion", "logout", "chatgpt"]).unwrap();
+        if let Some(Commands::Logout(args)) = cli.command {
+            assert!(matches!(args.provider, AuthProvider::ChatGpt));
+        } else {
+            panic!("Expected Logout command");
+        }
+    }
+
+    // --- Permission settings tests ---
+
+    #[test]
+    fn test_permission_settings_default() {
+        let settings = PermissionSettings::default();
+        assert!(matches!(settings.mode, ToolMode::Write));
+        assert!(!settings.auto_approve);
+        assert!(!settings.no_sandbox);
+        assert!(!settings.agi_enabled);
+    }
+
+    // --- Helper function tests ---
+
+    #[test]
+    fn test_extract_key_arg_read() {
+        let args = serde_json::json!({"file_path": "/path/to/file.txt"});
+        assert_eq!(extract_key_arg("read", &args), "/path/to/file.txt");
+    }
+
+    #[test]
+    fn test_extract_key_arg_bash() {
+        let args = serde_json::json!({"command": "ls -la"});
+        assert_eq!(extract_key_arg("bash", &args), "ls -la");
+    }
+
+    #[test]
+    fn test_truncate_arg_short() {
+        assert_eq!(truncate_arg("hello", 10), "hello");
+    }
+
+    #[test]
+    fn test_truncate_arg_path_long() {
+        let path = "/very/long/path/to/some/deeply/nested/file.txt";
+        let result = truncate_arg(path, 20);
+        assert!(result.starts_with("..."));
+        assert!(result.ends_with("file.txt"));
+    }
+
+    #[test]
+    fn test_truncate_arg_non_path_long() {
+        let text = "This is a very long string that needs truncation";
+        let result = truncate_arg(text, 20);
+        assert!(result.ends_with("..."));
+    }
+}
