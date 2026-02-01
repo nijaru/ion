@@ -5,7 +5,12 @@
 mod client;
 mod quirks;
 mod request;
+mod request_builder;
 mod response;
 mod stream;
+mod stream_handler;
+
+#[cfg(test)]
+mod tests;
 
 pub use client::OpenAICompatClient;

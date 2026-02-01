@@ -1,247 +1,17 @@
-//! Rendering functions for the TUI.
-//!
-//! Terminal APIs use u16 for dimensions; numeric casts are intentional.
-#![allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_precision_loss,
-    clippy::cast_sign_loss
-)]
+//! Direct crossterm rendering functions (TUI v2 - no ratatui).
 
-use crate::tui::App;
-use crate::tui::chat_renderer::ChatRenderer;
 use crate::tui::composer::build_visual_lines;
-use crate::tui::message_list::Sender;
-use crate::tui::render_selector::{self, MAX_VISIBLE_ITEMS, SelectorData, SelectorItem};
-use crate::tui::terminal::StyledLine;
+use crate::tui::render::{
+    widgets::draw_horizontal_border, CONTINUATION, INPUT_MARGIN, PROGRESS_HEIGHT, PROMPT,
+    PROMPT_WIDTH,
+};
+use crate::tui::render_selector::{self, SelectorData, SelectorItem};
 use crate::tui::types::{Mode, SelectorPage};
 use crate::tui::util::{format_elapsed, format_relative_time, format_tokens};
+use crate::tui::App;
 use crossterm::execute;
 
-/// Input prompt prefix " > "
-const PROMPT: &str = " > ";
-/// Continuation line prefix "   "
-const CONTINUATION: &str = "   ";
-/// Width of prompt/continuation prefix
-const PROMPT_WIDTH: u16 = 3;
-/// Total input margin (prompt + right padding)
-const INPUT_MARGIN: u16 = 4;
-/// Height of the progress bar area
-const PROGRESS_HEIGHT: u16 = 1;
-/// Selector layout overhead: tabs(1) + desc(1) + search box(3) + hint(1) + list header
-const SELECTOR_OVERHEAD: u16 = 7;
-
 impl App {
-    /// Calculate the height needed for the input box based on content.
-    /// Returns height including borders.
-    /// Min: 3 lines (1 content + 2 borders)
-    /// Max: `viewport_height` - 3 (reserved for progress + status)
-    pub(super) fn calculate_input_height(&self, viewport_width: u16, viewport_height: u16) -> u16 {
-        const MIN_HEIGHT: u16 = 3;
-        const MIN_RESERVED: u16 = 3; // status (1) + optional progress (up to 2)
-        const BORDER_OVERHEAD: u16 = 2; // Top and bottom borders
-        const LEFT_MARGIN: u16 = 3; // " > " prompt gutter
-        const RIGHT_MARGIN: u16 = 1; // Right margin for symmetry
-
-        // Dynamic max based on viewport height
-        let max_height = viewport_height.saturating_sub(MIN_RESERVED).max(MIN_HEIGHT);
-
-        if self.input_is_empty() {
-            return MIN_HEIGHT;
-        }
-
-        // Available width for text (subtract borders, gutter, and right margin)
-        let text_width = viewport_width
-            .saturating_sub(BORDER_OVERHEAD)
-            .saturating_sub(LEFT_MARGIN + RIGHT_MARGIN) as usize;
-        if text_width == 0 {
-            return MIN_HEIGHT;
-        }
-
-        // Use ComposerState's visual line count
-        let line_count = self
-            .input_state
-            .visual_line_count(&self.input_buffer, text_width) as u16;
-
-        // Add border overhead and clamp to bounds
-        (line_count + BORDER_OVERHEAD).clamp(MIN_HEIGHT, max_height)
-    }
-
-    /// Calculate the total height of the bottom UI area.
-    /// Returns: progress (1) + input (with borders) + status (1)
-    /// For selector mode, returns height based on actual item count.
-    pub fn calculate_ui_height(&self, width: u16, height: u16) -> u16 {
-        if self.mode == Mode::Selector {
-            let item_count = match self.selector_page {
-                SelectorPage::Provider => self.provider_picker.filtered.len(),
-                SelectorPage::Model => self.model_picker.filtered_models.len(),
-                SelectorPage::Session => self.session_picker.filtered_sessions.len(),
-            } as u16;
-
-            // Show all items up to max, with minimum of 3 for usability
-            let list_height = item_count.clamp(3, MAX_VISIBLE_ITEMS);
-            let needed_height = SELECTOR_OVERHEAD + list_height;
-
-            // Cap at screen height minus a few lines for context
-            let max_height = height.saturating_sub(2);
-            return needed_height.min(max_height);
-        }
-
-        let progress_height = PROGRESS_HEIGHT;
-        let input_height = self.calculate_input_height(width, height);
-        let status_height = 1u16;
-        progress_height + input_height + status_height
-    }
-
-    /// Resolve the UI start row, using row tracking or startup anchor.
-    pub fn ui_start_row(&self, height: u16, ui_height: u16) -> u16 {
-        let bottom_start = height.saturating_sub(ui_height);
-
-        // Row tracking mode: UI follows chat content
-        if let Some(chat_row) = self.render_state.chat_row {
-            return chat_row.min(bottom_start);
-        }
-
-        // Startup: use anchor when no messages exist
-        if self.message_list.entries.is_empty()
-            && let Some(anchor) = self.render_state.startup_ui_anchor
-        {
-            return anchor.min(bottom_start);
-        }
-
-        // Default: bottom of screen
-        bottom_start
-    }
-
-    /// Take new chat entries and render them as lines for insertion.
-    pub fn take_chat_inserts(&mut self, width: u16) -> Vec<StyledLine> {
-        let wrap_width = width.saturating_sub(2);
-        if wrap_width == 0 {
-            return Vec::new();
-        }
-
-        // Insert header once at startup (into scrollback, not viewport)
-        let header_lines = if self.render_state.header_inserted {
-            Vec::new()
-        } else {
-            self.render_state.header_inserted = true;
-            Self::startup_header_lines()
-        };
-
-        let entry_count = self.message_list.entries.len();
-        if self.render_state.rendered_entries > entry_count {
-            self.render_state.rendered_entries = 0;
-            self.render_state.buffered_chat_lines.clear();
-        }
-
-        let mut new_lines = Vec::new();
-        let mut index = self.render_state.rendered_entries;
-        while index < entry_count {
-            let entry = &self.message_list.entries[index];
-            // Only skip the last entry if it's an Agent entry being actively streamed
-            // This allows Tool entries and completed Agent responses to render mid-run
-            let is_last = index == entry_count - 1;
-            if entry.sender == Sender::Agent && self.is_running && is_last {
-                break;
-            }
-            let mut entry_lines = ChatRenderer::build_lines(
-                &self.message_list.entries[index..=index],
-                None,
-                wrap_width as usize,
-            );
-            new_lines.append(&mut entry_lines);
-            index += 1;
-        }
-        self.render_state.rendered_entries = index;
-
-        if self.mode == Mode::Selector {
-            if !new_lines.is_empty() {
-                self.render_state.buffered_chat_lines.extend(new_lines);
-            }
-            // Still return header if it needs to be inserted
-            return header_lines;
-        }
-
-        if new_lines.is_empty()
-            && self.render_state.buffered_chat_lines.is_empty()
-            && header_lines.is_empty()
-        {
-            return Vec::new();
-        }
-
-        let mut out = header_lines;
-        if !self.render_state.buffered_chat_lines.is_empty() {
-            out.append(&mut self.render_state.buffered_chat_lines);
-        }
-        out.extend(new_lines);
-        out
-    }
-
-    /// Build chat history lines for a given width.
-    pub fn build_chat_lines(&self, width: u16) -> Vec<StyledLine> {
-        let wrap_width = width.saturating_sub(2);
-        if wrap_width == 0 {
-            return Vec::new();
-        }
-
-        let mut lines = Vec::new();
-        lines.extend(Self::startup_header_lines());
-
-        let entry_count = self.message_list.entries.len();
-        let mut end = entry_count;
-        if self.is_running
-            && let Some(last) = self.message_list.entries.last()
-            && last.sender == Sender::Agent
-        {
-            end = end.saturating_sub(1);
-        }
-        if end > 0 {
-            lines.extend(ChatRenderer::build_lines(
-                &self.message_list.entries[..end],
-                None,
-                wrap_width as usize,
-            ));
-        }
-
-        lines
-    }
-
-    /// Reprint full chat history into scrollback (used on resize reflow).
-    pub fn reprint_chat_scrollback<W: std::io::Write>(
-        &mut self,
-        w: &mut W,
-        width: u16,
-    ) -> std::io::Result<()> {
-        let entry_count = self.message_list.entries.len();
-        let mut end = entry_count;
-        if self.is_running
-            && let Some(last) = self.message_list.entries.last()
-            && last.sender == Sender::Agent
-        {
-            end = end.saturating_sub(1);
-        }
-
-        let lines = self.build_chat_lines(width);
-        for line in &lines {
-            line.write_to(w)?;
-            write!(w, "\r\n")?;
-        }
-
-        self.render_state.mark_reflow_complete(end);
-
-        Ok(())
-    }
-
-    /// Calculate the viewport height needed for the UI (progress + input + status).
-    /// Header is inserted into scrollback, not rendered in viewport.
-    /// Note: With full-height viewport, this is no longer used for viewport sizing,
-    /// but may be useful for debugging or future use.
-    #[allow(dead_code)]
-    pub fn viewport_height(&self, terminal_width: u16, terminal_height: u16) -> u16 {
-        let input_height = self.calculate_input_height(terminal_width, terminal_height);
-        let progress_height = PROGRESS_HEIGHT;
-        progress_height + input_height + 1 // +1 for status line
-    }
-
     /// Direct crossterm rendering (TUI v2 - no ratatui Terminal/Frame).
     /// Renders the bottom UI area: progress, input, status.
     pub fn draw_direct<W: std::io::Write>(
@@ -252,7 +22,6 @@ impl App {
     ) -> std::io::Result<()> {
         use crossterm::{
             cursor::MoveTo,
-            execute,
             terminal::{Clear, ClearType},
         };
 
@@ -351,7 +120,7 @@ impl App {
     }
 
     /// Extract data needed to render the current selector page.
-    fn selector_data(&self) -> SelectorData {
+    pub(crate) fn selector_data(&self) -> SelectorData {
         match self.selector_page {
             SelectorPage::Provider => {
                 let items = self
@@ -434,7 +203,7 @@ impl App {
     }
 
     /// Render selector (provider/model/session picker) directly with crossterm.
-    fn render_selector_direct<W: std::io::Write>(
+    pub(crate) fn render_selector_direct<W: std::io::Write>(
         &mut self,
         w: &mut W,
         start_row: u16,
@@ -454,7 +223,7 @@ impl App {
     }
 
     /// Render progress line directly with crossterm.
-    fn render_progress_direct<W: std::io::Write>(
+    pub(crate) fn render_progress_direct<W: std::io::Write>(
         &self,
         w: &mut W,
         _width: u16,
@@ -467,7 +236,10 @@ impl App {
     }
 
     /// Render progress line when a task is running (spinner + tool name + elapsed).
-    fn render_progress_running<W: std::io::Write>(&self, w: &mut W) -> std::io::Result<()> {
+    pub(crate) fn render_progress_running<W: std::io::Write>(
+        &self,
+        w: &mut W,
+    ) -> std::io::Result<()> {
         use crossterm::style::{
             Attribute, Color as CColor, Print, ResetColor, SetAttribute, SetForegroundColor,
         };
@@ -507,7 +279,10 @@ impl App {
     }
 
     /// Render progress line after task completion (status + stats summary).
-    fn render_progress_completed<W: std::io::Write>(&self, w: &mut W) -> std::io::Result<()> {
+    pub(crate) fn render_progress_completed<W: std::io::Write>(
+        &self,
+        w: &mut W,
+    ) -> std::io::Result<()> {
         use crossterm::style::{
             Attribute, Color as CColor, Print, ResetColor, SetAttribute, SetForegroundColor,
         };
@@ -554,7 +329,7 @@ impl App {
     }
 
     /// Render input content directly with crossterm.
-    fn render_input_direct<W: std::io::Write>(
+    pub(crate) fn render_input_direct<W: std::io::Write>(
         &mut self,
         w: &mut W,
         start_row: u16,
@@ -620,7 +395,7 @@ impl App {
     }
 
     /// Render status line directly with crossterm.
-    fn render_status_direct<W: std::io::Write>(
+    pub(crate) fn render_status_direct<W: std::io::Write>(
         &self,
         w: &mut W,
         _width: u16,
@@ -672,23 +447,4 @@ impl App {
 
         Ok(())
     }
-}
-
-/// Draw a horizontal border line at the given row.
-fn draw_horizontal_border<W: std::io::Write>(
-    w: &mut W,
-    row: u16,
-    width: u16,
-) -> std::io::Result<()> {
-    use crossterm::{
-        cursor::MoveTo,
-        style::{Color, Print, ResetColor, SetForegroundColor},
-    };
-    execute!(
-        w,
-        MoveTo(0, row),
-        SetForegroundColor(Color::Cyan),
-        Print("─".repeat(width as usize)),
-        ResetColor
-    )
 }
