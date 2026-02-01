@@ -4,21 +4,20 @@
 
 | Metric    | Value          | Updated    |
 | --------- | -------------- | ---------- |
-| Phase     | Provider Done  | 2026-01-30 |
-| Status    | Ready to Test  | 2026-01-30 |
+| Phase     | Refactor Done  | 2026-01-31 |
+| Status    | Ready to Test  | 2026-01-31 |
 | Toolchain | stable         | 2026-01-22 |
-| Tests     | 222 passing    | 2026-01-30 |
-| Clippy    | pedantic clean | 2026-01-30 |
+| Tests     | 225 passing    | 2026-01-31 |
+| Clippy    | pedantic clean | 2026-01-31 |
 
 ## Just Completed
 
-**Clippy pedantic cleanup** (2026-01-30):
+**Code Review & Refactor Sprint** (2026-01-31):
 
-- Fixed 242 clippy pedantic warnings → 0
-- Added crate-level allows for missing doc sections
-- Consolidated identical match arms across providers
-- Fixed pass-by-value for Copy types (TokenCounter)
-- Added targeted allows for intentional patterns
+- Phase 1: Performance + idiom improvements (CTE query, single-pass take_tail, format! → Print)
+- Phase 2: Split 3 large files (composer 1103→4, highlight 841→5, session 740→6)
+- Phase 3: PickerNavigation trait (18 match arms → 6 dispatch calls)
+- Phase 4: Hook system + tool metadata types (foundations for extensibility)
 
 ## Current Focus
 
@@ -39,22 +38,29 @@
 
 ## Module Health
 
-| Module    | Files | Lines | Health | Notes                        |
-| --------- | ----- | ----- | ------ | ---------------------------- |
-| provider/ | 18    | ~2500 | GOOD   | Native HTTP, 3 backends      |
-| tui/      | 25    | ~8500 | GOOD   | render.rs split, cleaner now |
-| agent/    | 9     | ~900  | GOOD   | Decomposed, clean structure  |
-| tool/     | 15    | ~2500 | GOOD   | Improved descriptions        |
-| auth/     | 5     | ~800  | NEW    | OAuth complete               |
-| session/  | 3     | ~600  | GOOD   | SQLite + WAL                 |
-| skill/    | 3     | ~400  | GOOD   | YAML frontmatter             |
-| mcp/      | 2     | ~300  | OK     | Needs tests                  |
+| Module    | Files | Lines | Health | Notes                            |
+| --------- | ----- | ----- | ------ | -------------------------------- |
+| provider/ | 18    | ~2500 | GOOD   | Native HTTP, 3 backends          |
+| tui/      | 31    | ~7500 | GOOD   | Split composer/highlight/session |
+| agent/    | 9     | ~900  | GOOD   | Decomposed, clean structure      |
+| tool/     | 15    | ~2600 | GOOD   | Added ToolMetadata types         |
+| hook/     | 1     | ~250  | NEW    | Hook system for extensibility    |
+| auth/     | 5     | ~800  | GOOD   | OAuth complete                   |
+| session/  | 3     | ~600  | GOOD   | SQLite + WAL                     |
+| skill/    | 3     | ~400  | GOOD   | YAML frontmatter                 |
+| mcp/      | 2     | ~300  | OK     | Needs tests                      |
 
 ## Top Priorities
 
 1. Test TUI changes manually (autocomplete, history nav, images)
 2. OAuth testing with real subscriptions
 3. Consider Ctrl+R fuzzy history search (tk-g3dt)
+
+## Remaining Refactor Work (optional)
+
+- File splits: openai_compat/client.rs, registry.rs, events.rs, render.rs
+- Completer logic deduplication
+- Dynamic tool loading integration
 
 ## Key References
 

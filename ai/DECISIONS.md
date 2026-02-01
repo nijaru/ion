@@ -916,3 +916,39 @@ Native scrollback (stdout)     Managed bottom area (crossterm)
 **Rationale**: ratatui's Viewport::Inline doesn't support dynamic height. Fighting the framework is worse than not using it. Our actual needs (styled text, borders, cursor positioning) are simple enough that crossterm alone suffices.
 
 **Design doc**: `ai/design/tui-v2.md`
+
+---
+
+## 2026-01-31: Code Refactor Sprint - File Splits & Architecture Prep
+
+**Context**: Codebase audit identified 7 files >700 lines, performance hot paths, and architecture needs for extensibility.
+
+**Decision**: Four-phase refactor sprint with incremental commits.
+
+| Phase | Goal                 | Outcome                                               |
+| ----- | -------------------- | ----------------------------------------------------- |
+| 1     | Performance + idioms | CTE query, single-pass take_tail, format!→Print       |
+| 2     | File splits          | composer (1103→4), highlight (841→5), session (740→6) |
+| 3     | Code deduplication   | PickerNavigation trait (18→6 match arms)              |
+| 4     | Architecture prep    | Hook system, tool metadata types                      |
+
+**Hook System** (`src/hook/mod.rs`):
+
+- `HookPoint`: PreToolUse, PostToolUse, OnError, OnResponse
+- `HookContext`: Carries data to hooks
+- `HookResult`: Continue, Skip, ReplaceInput/Output, Abort
+- `HookRegistry`: Priority-ordered execution
+
+**Tool Metadata** (`src/tool/types.rs`):
+
+- `ToolSource`: Builtin, Mcp { server }, Plugin { path }
+- `ToolCapability`: Read, Write, Execute, Network, System
+- `ToolMetadata`: name, description, source, capabilities, enabled
+
+**Deferred** (lower priority):
+
+- File splits: openai_compat/client.rs, registry.rs, events.rs, render.rs
+- Completer logic deduplication
+- Dynamic tool loading integration
+
+**Rationale**: Smaller files improve navigation and cognitive load. Hook system enables future extensibility (logging, rate limiting, content filtering) without core changes.
