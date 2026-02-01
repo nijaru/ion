@@ -180,9 +180,10 @@ pub enum ToolMode {
 }
 
 /// Source of a tool (where it came from).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum ToolSource {
     /// Built-in tool (part of the binary).
+    #[default]
     Builtin,
     /// Tool provided by an MCP server.
     Mcp {
@@ -194,12 +195,6 @@ pub enum ToolSource {
         /// Path to the plugin file.
         path: PathBuf,
     },
-}
-
-impl Default for ToolSource {
-    fn default() -> Self {
-        Self::Builtin
-    }
 }
 
 /// Capabilities that a tool might have.
