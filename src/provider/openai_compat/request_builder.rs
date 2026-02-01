@@ -8,7 +8,7 @@ use super::request::{
 use crate::provider::prefs::ProviderPrefs;
 use crate::provider::types::{ChatRequest, ContentBlock, Role, ToolDefinition};
 
-/// Build an OpenAI-compatible request from a ChatRequest.
+/// Build an `OpenAI`-compatible request from a `ChatRequest`.
 #[allow(clippy::too_many_lines)]
 pub(crate) fn build_request(
     request: &ChatRequest,
@@ -146,7 +146,7 @@ pub(crate) fn build_request(
     api_request.apply_quirks(quirks)
 }
 
-/// Convert user content blocks to OpenAI format.
+/// Convert user content blocks to `OpenAI` format.
 pub(crate) fn convert_user_content(content: &[ContentBlock]) -> MessageContent {
     let mut parts = Vec::new();
     let mut has_image = false;
@@ -227,7 +227,7 @@ pub(crate) fn extract_assistant_content(content: &[ContentBlock]) -> (String, Op
     (text, tool_calls)
 }
 
-/// Convert a tool definition to OpenAI format.
+/// Convert a tool definition to `OpenAI` format.
 pub(crate) fn convert_tool(tool: &ToolDefinition) -> OpenAITool {
     OpenAITool {
         tool_type: "function".to_string(),

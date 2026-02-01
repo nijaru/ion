@@ -22,7 +22,7 @@ pub(crate) struct ModelCache {
     pub(crate) fetched_at: Option<Instant>,
 }
 
-/// OpenRouter API response structures.
+/// `OpenRouter` API response structures.
 #[derive(Debug, Deserialize)]
 pub(crate) struct ModelsResponse {
     pub(crate) data: Vec<ApiModel>,
