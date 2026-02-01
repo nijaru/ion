@@ -328,7 +328,11 @@ pub async fn run(
                     // Content fits: print at current row, advance chat_row
                     for (i, line) in chat_lines.iter().enumerate() {
                         #[allow(clippy::cast_possible_truncation)]
-                        execute!(stdout, MoveTo(0, chat_row.saturating_add(i as u16)))?;
+                        execute!(
+                            stdout,
+                            MoveTo(0, chat_row.saturating_add(i as u16)),
+                            Clear(ClearType::CurrentLine)
+                        )?;
                         line.println()?;
                     }
                     app.render_state.chat_row = Some(chat_row.saturating_add(line_count));
