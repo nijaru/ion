@@ -2,6 +2,7 @@
 
 use crate::provider::{ModelFilter, ModelInfo, ModelRegistry, ProviderPrefs};
 use crate::tui::filter_input::FilterInputState;
+use crate::tui::picker_trait::PickerNavigation;
 use crate::tui::types::SelectionState;
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
@@ -368,6 +369,24 @@ impl ModelPicker {
         self.model_state
             .selected()
             .and_then(|i| self.filtered_models.get(i))
+    }
+}
+
+impl PickerNavigation for ModelPicker {
+    fn move_up(&mut self, count: usize) {
+        Self::move_up(self, count);
+    }
+
+    fn move_down(&mut self, count: usize) {
+        Self::move_down(self, count);
+    }
+
+    fn jump_to_top(&mut self) {
+        Self::jump_to_top(self);
+    }
+
+    fn jump_to_bottom(&mut self) {
+        Self::jump_to_bottom(self);
     }
 }
 

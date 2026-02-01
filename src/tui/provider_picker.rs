@@ -5,9 +5,10 @@
 
 use crate::provider::ProviderStatus;
 use crate::tui::filter_input::FilterInputState;
+use crate::tui::picker_trait::PickerNavigation;
 use crate::tui::types::SelectionState;
-use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
+use fuzzy_matcher::FuzzyMatcher;
 
 /// State for the API provider picker modal.
 #[derive(Default)]
@@ -110,5 +111,23 @@ impl ProviderPicker {
         if let Some(idx) = self.filtered.iter().position(|s| s.provider == provider) {
             self.list_state.select(Some(idx));
         }
+    }
+}
+
+impl PickerNavigation for ProviderPicker {
+    fn move_up(&mut self, count: usize) {
+        Self::move_up(self, count);
+    }
+
+    fn move_down(&mut self, count: usize) {
+        Self::move_down(self, count);
+    }
+
+    fn jump_to_top(&mut self) {
+        Self::jump_to_top(self);
+    }
+
+    fn jump_to_bottom(&mut self) {
+        Self::jump_to_bottom(self);
     }
 }

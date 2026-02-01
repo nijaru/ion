@@ -12,6 +12,7 @@ mod image_attachment;
 mod input;
 pub mod message_list;
 pub mod model_picker;
+mod picker_trait;
 pub mod provider_picker;
 mod render;
 mod render_selector;
@@ -23,6 +24,8 @@ mod table;
 pub mod terminal;
 mod types;
 mod util;
+
+pub use picker_trait::PickerNavigation;
 
 // Re-export public types
 pub use message_list::Sender;

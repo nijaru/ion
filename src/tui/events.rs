@@ -3,6 +3,7 @@
 use crate::session::Session;
 use crate::tool::{ApprovalResponse, ToolMode};
 use crate::tui::App;
+use crate::tui::PickerNavigation;
 use crate::tui::composer::ComposerBuffer;
 use crate::tui::fuzzy;
 use crate::tui::message_list::{MessageEntry, Sender};
@@ -538,37 +539,13 @@ impl App {
                 }
             }
 
-            // Navigation
-            KeyCode::Up => match self.selector_page {
-                SelectorPage::Provider => self.provider_picker.move_up(1),
-                SelectorPage::Model => self.model_picker.move_up(1),
-                SelectorPage::Session => self.session_picker.move_up(1),
-            },
-            KeyCode::Down => match self.selector_page {
-                SelectorPage::Provider => self.provider_picker.move_down(1),
-                SelectorPage::Model => self.model_picker.move_down(1),
-                SelectorPage::Session => self.session_picker.move_down(1),
-            },
-            KeyCode::PageUp => match self.selector_page {
-                SelectorPage::Provider => self.provider_picker.move_up(10),
-                SelectorPage::Model => self.model_picker.move_up(10),
-                SelectorPage::Session => self.session_picker.move_up(10),
-            },
-            KeyCode::PageDown => match self.selector_page {
-                SelectorPage::Provider => self.provider_picker.move_down(10),
-                SelectorPage::Model => self.model_picker.move_down(10),
-                SelectorPage::Session => self.session_picker.move_down(10),
-            },
-            KeyCode::Home => match self.selector_page {
-                SelectorPage::Provider => self.provider_picker.jump_to_top(),
-                SelectorPage::Model => self.model_picker.jump_to_top(),
-                SelectorPage::Session => self.session_picker.jump_to_top(),
-            },
-            KeyCode::End => match self.selector_page {
-                SelectorPage::Provider => self.provider_picker.jump_to_bottom(),
-                SelectorPage::Model => self.model_picker.jump_to_bottom(),
-                SelectorPage::Session => self.session_picker.jump_to_bottom(),
-            },
+            // Navigation - dispatch to active picker
+            KeyCode::Up => self.dispatch_picker(|p| p.move_up(1)),
+            KeyCode::Down => self.dispatch_picker(|p| p.move_down(1)),
+            KeyCode::PageUp => self.dispatch_picker(|p| p.move_up(10)),
+            KeyCode::PageDown => self.dispatch_picker(|p| p.move_down(10)),
+            KeyCode::Home => self.dispatch_picker(|p| p.jump_to_top()),
+            KeyCode::End => self.dispatch_picker(|p| p.jump_to_bottom()),
 
             // Selection
             KeyCode::Enter => match self.selector_page {
@@ -711,5 +688,14 @@ impl App {
         // Selector used large area - flag for full clear + repaint
         self.render_state.needs_full_repaint = true;
         self.force_full_repaint();
+    }
+
+    /// Dispatch a navigation action to the active picker.
+    fn dispatch_picker(&mut self, action: impl FnOnce(&mut dyn PickerNavigation)) {
+        match self.selector_page {
+            SelectorPage::Provider => action(&mut self.provider_picker),
+            SelectorPage::Model => action(&mut self.model_picker),
+            SelectorPage::Session => action(&mut self.session_picker),
+        }
     }
 }
