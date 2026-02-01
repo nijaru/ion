@@ -178,3 +178,56 @@ pub enum ToolMode {
     /// Full autonomy, no prompts (Bypass mode).
     Agi,
 }
+
+/// Source of a tool (where it came from).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ToolSource {
+    /// Built-in tool (part of the binary).
+    Builtin,
+    /// Tool provided by an MCP server.
+    Mcp {
+        /// The MCP server name or identifier.
+        server: String,
+    },
+    /// Tool loaded from a plugin file.
+    Plugin {
+        /// Path to the plugin file.
+        path: PathBuf,
+    },
+}
+
+impl Default for ToolSource {
+    fn default() -> Self {
+        Self::Builtin
+    }
+}
+
+/// Capabilities that a tool might have.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ToolCapability {
+    /// Can read files or data.
+    Read,
+    /// Can write/modify files or data.
+    Write,
+    /// Can execute commands or code.
+    Execute,
+    /// Can access the network.
+    Network,
+    /// Can modify system state.
+    System,
+}
+
+/// Metadata about a tool for discovery and display.
+#[derive(Debug, Clone)]
+pub struct ToolMetadata {
+    /// Tool name (must be unique within a registry).
+    pub name: String,
+    /// Human-readable description.
+    pub description: String,
+    /// Where the tool came from.
+    pub source: ToolSource,
+    /// What the tool can do.
+    pub capabilities: Vec<ToolCapability>,
+    /// Whether the tool is currently enabled.
+    pub enabled: bool,
+}
