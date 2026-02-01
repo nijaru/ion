@@ -21,7 +21,22 @@
 
 ## Current Focus
 
-**TUI polish and testing** - features implemented, need manual verification.
+**Review refactor sprint changes** - 8 commits need review before continuing.
+
+```bash
+git log --oneline -8
+```
+
+Key files to review:
+
+- `src/hook/mod.rs` - New hook system
+- `src/tool/types.rs` - New ToolSource/ToolCapability/ToolMetadata types
+- `src/tui/picker_trait.rs` - New PickerNavigation trait
+- `src/tui/composer/` - Split from mod.rs (4 files)
+- `src/tui/highlight/` - Split from highlight.rs (5 files)
+- `src/tui/session/` - Split from session.rs (6 files)
+- `src/agent/context.rs` - Cache comparison optimization
+- `src/session/store.rs` - CTE query optimization
 
 ## Decision Needed
 
@@ -56,11 +71,21 @@
 2. OAuth testing with real subscriptions
 3. Consider Ctrl+R fuzzy history search (tk-g3dt)
 
-## Remaining Refactor Work (optional)
+## Remaining Refactor Work
 
-- File splits: openai_compat/client.rs, registry.rs, events.rs, render.rs
-- Completer logic deduplication
-- Dynamic tool loading integration
+After review, complete these deferred items:
+
+| File                    | Lines | Target Split                            |
+| ----------------------- | ----- | --------------------------------------- |
+| openai_compat/client.rs | 791   | client, request_builder, stream_handler |
+| registry.rs             | 744   | registry, fetch, filter, types          |
+| events.rs               | 715   | input, selector, approval, completer    |
+| render.rs               | 694   | layout, chat, direct, widgets           |
+
+Also:
+
+- Completer logic deduplication (trait for command/file completers)
+- Dynamic tool loading integration (wire HookRegistry into ToolOrchestrator)
 
 ## Key References
 
