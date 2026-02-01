@@ -5,6 +5,7 @@ pub mod types;
 pub use permissions::{PermissionMatrix, PermissionStatus};
 pub use types::*;
 
+use crate::hook::{HookContext, HookPoint, HookRegistry, HookResult};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -14,6 +15,7 @@ pub struct ToolOrchestrator {
     tools: HashMap<String, Box<dyn Tool>>,
     permissions: RwLock<PermissionMatrix>,
     approval_handler: Option<Arc<dyn ApprovalHandler>>,
+    hooks: RwLock<HookRegistry>,
 }
 
 impl ToolOrchestrator {
@@ -23,6 +25,7 @@ impl ToolOrchestrator {
             tools: HashMap::new(),
             permissions: RwLock::new(PermissionMatrix::new(mode)),
             approval_handler: None,
+            hooks: RwLock::new(HookRegistry::new()),
         }
     }
 
@@ -32,6 +35,11 @@ impl ToolOrchestrator {
 
     pub fn register_tool(&mut self, tool: Box<dyn Tool>) {
         self.tools.insert(tool.name().to_string(), tool);
+    }
+
+    /// Register a hook with the orchestrator.
+    pub async fn register_hook(&self, hook: Arc<dyn crate::hook::Hook>) {
+        self.hooks.write().await.register(hook);
     }
 
     pub async fn call_tool(
@@ -47,6 +55,32 @@ impl ToolOrchestrator {
             .get(name)
             .ok_or_else(|| ToolError::ExecutionFailed(format!("Tool not found: {name}")))?;
 
+        // Run PreToolUse hooks
+        let pre_ctx = HookContext::new(HookPoint::PreToolUse)
+            .with_tool_name(name)
+            .with_tool_input(args.clone());
+        let args = match self.hooks.read().await.execute(&pre_ctx).await {
+            HookResult::Continue => args,
+            HookResult::Skip => {
+                return Ok(ToolResult {
+                    content: "Tool execution skipped by hook".to_string(),
+                    is_error: false,
+                    metadata: None,
+                });
+            }
+            HookResult::ReplaceInput(new_args) => new_args,
+            HookResult::ReplaceOutput(output) => {
+                return Ok(ToolResult {
+                    content: output,
+                    is_error: false,
+                    metadata: None,
+                });
+            }
+            HookResult::Abort(msg) => {
+                return Err(ToolError::ExecutionFailed(format!("Hook aborted: {msg}")));
+            }
+        };
+
         // For bash, use per-command permission checking
         let (status, bash_command) = if name == "bash" {
             let command = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
@@ -60,7 +94,7 @@ impl ToolOrchestrator {
             (perms.check_permission(tool.as_ref()), None)
         };
 
-        match status {
+        let result = match status {
             PermissionStatus::Allowed => tool.execute(args, ctx).await,
             PermissionStatus::NeedsApproval => {
                 if let Some(handler) = &self.approval_handler {
@@ -103,6 +137,21 @@ impl ToolOrchestrator {
                 }
             }
             PermissionStatus::Denied(reason) => Err(ToolError::PermissionDenied(reason)),
+        }?;
+
+        // Run PostToolUse hooks
+        let post_ctx = HookContext::new(HookPoint::PostToolUse)
+            .with_tool_name(name)
+            .with_tool_output(&result.content);
+        match self.hooks.read().await.execute(&post_ctx).await {
+            HookResult::ReplaceOutput(output) => Ok(ToolResult {
+                content: output,
+                is_error: result.is_error,
+                metadata: result.metadata,
+            }),
+            HookResult::Abort(msg) => Err(ToolError::ExecutionFailed(format!("Hook aborted: {msg}"))),
+            // Continue, Skip, and ReplaceInput all pass through unchanged for PostToolUse
+            HookResult::Continue | HookResult::Skip | HookResult::ReplaceInput(_) => Ok(result),
         }
     }
 
@@ -134,6 +183,11 @@ impl ToolOrchestrator {
         orch.register_tool(Box::new(builtin::WebFetchTool::new()));
         // Note: DiscoverTool requires semantic search backend (not yet implemented)
         orch
+    }
+
+    /// Get the number of registered hooks.
+    pub async fn hook_count(&self) -> usize {
+        self.hooks.read().await.len()
     }
 }
 
