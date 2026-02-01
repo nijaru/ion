@@ -4,25 +4,27 @@
 
 | Metric    | Value          | Updated    |
 | --------- | -------------- | ---------- |
-| Phase     | Refactor Done  | 2026-01-31 |
-| Status    | Ready to Test  | 2026-01-31 |
+| Phase     | Testing        | 2026-01-31 |
+| Status    | Tests Added    | 2026-01-31 |
 | Toolchain | stable         | 2026-01-22 |
-| Tests     | 225 passing    | 2026-01-31 |
+| Tests     | 304 passing    | 2026-01-31 |
 | Clippy    | pedantic clean | 2026-01-31 |
 
 ## Just Completed
 
+**Automated Test Coverage** (2026-01-31):
+
+Added 79 new tests (225 → 304):
+
+- `message_list.rs`: 43 tests (formatting, scrolling, tool output)
+- `auth/openai.rs`: 5 tests (OAuth URL building, endpoints)
+- `auth/google.rs`: 6 tests (OAuth URL, offline access, scopes)
+- `cli.rs`: 25 tests (arg parsing, commands, permissions)
+
 **Refactor Sprint Complete** (2026-01-31):
 
-- Phase 1: Performance + idiom improvements (CTE query, single-pass take_tail, format! → Print)
-- Phase 2: Split 6 large files into focused modules:
-  - `composer/` (1103→4 files), `highlight/` (841→5), `session/` (740→6)
-  - `openai_compat/` (792→4 files), `registry/` (745→5), `render/` (695→5)
-- Phase 3: PickerNavigation trait (18 match arms → 6 dispatch calls)
-- Phase 4: Hook system + tool metadata types (foundations for extensibility)
-- Phase 5: Hook integration (HookRegistry wired into ToolOrchestrator)
-
-**Review completed** - All changes pass build, tests, and clippy pedantic.
+- Phases 1-5: Performance, file splits, PickerNavigation trait, hook system
+- Hook integration wired into ToolOrchestrator
 
 ## Decision Needed
 
