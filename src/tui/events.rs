@@ -286,9 +286,9 @@ impl App {
                 }
             }
 
-            // Ctrl+P: Previous history (readline), or provider picker when input empty
+            // Ctrl+P: Open provider picker (history still available via Up/Down)
             KeyCode::Char('p') if ctrl => {
-                if self.input_is_empty() && !self.is_running {
+                if !self.is_running {
                     self.open_provider_selector();
                 } else {
                     self.prev_history();
