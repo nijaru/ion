@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "4trn",
+  "title": "[BUG] Progress line duplicates during streaming",
+  "description": "Multiple progress bars appear during tab switches while streaming. File: src/tui/render.rs",
+  "status": "open",
+  "priority": 1,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-02-04T22:16:24.957Z",
+  "updated_at": "2026-02-04T22:16:24.957Z",
+  "completed_at": null,
+  "external": {}
+}

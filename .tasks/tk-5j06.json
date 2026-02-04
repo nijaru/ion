@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "5j06",
+  "title": "[ARCH] Implement semantic memory system",
+  "description": "Memory was claimed differentiator but not implemented. Episodic/semantic/working memory needed for competitive parity.",
+  "status": "open",
+  "priority": 2,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-02-04T22:16:26.745Z",
+  "updated_at": "2026-02-04T22:16:26.745Z",
+  "completed_at": null,
+  "external": {}
+}

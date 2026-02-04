@@ -3,7 +3,7 @@
   "ref": "srze",
   "title": "[BUG] ChatGPT OAuth consent targets API org",
   "description": "User reports ChatGPT login shows 'Codex wants access to your API organization' and project selection (API credits). Need ChatGPT subscription auth flow instead of API org consent. Related to tk-uqt6.",
-  "status": "active",
+  "status": "done",
   "priority": 1,
   "labels": [],
   "assignees": [],
@@ -30,7 +30,7 @@
     }
   ],
   "created_at": "2026-02-04T05:27:50.045Z",
-  "updated_at": "2026-02-04T05:38:51.571Z",
-  "completed_at": null,
+  "updated_at": "2026-02-04T22:16:16.330Z",
+  "completed_at": "2026-02-04T22:16:16.330Z",
   "external": {}
 }
