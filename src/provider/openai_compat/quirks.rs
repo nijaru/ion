@@ -44,12 +44,11 @@ impl ProviderQuirks {
             Provider::Groq => Self::groq(),
             Provider::Kimi => Self::kimi(),
             Provider::Ollama => Self::ollama(),
+            Provider::ChatGpt => Self::chatgpt(),
             // OpenAI-compatible or fallback for non-compatible providers
-            Provider::OpenAI
-            | Provider::ChatGpt
-            | Provider::Anthropic
-            | Provider::Google
-            | Provider::Gemini => Self::openai(),
+            Provider::OpenAI | Provider::Anthropic | Provider::Google | Provider::Gemini => {
+                Self::openai()
+            }
         }
     }
 
@@ -115,6 +114,20 @@ impl ProviderQuirks {
             supports_provider_routing: false,
             base_url: "http://localhost:11434/v1",
             auth_header: None, // No auth needed
+        }
+    }
+
+    /// `ChatGPT` subscription (Plus/Pro via OAuth).
+    fn chatgpt() -> Self {
+        Self {
+            use_max_tokens: false,
+            skip_store: false,
+            skip_developer_role: false,
+            reasoning_field: ReasoningField::None,
+            supports_provider_routing: false,
+            // ChatGPT subscription uses different endpoint than API
+            base_url: "https://chatgpt.com/backend-api/codex",
+            auth_header: None, // Standard Bearer auth
         }
     }
 }
