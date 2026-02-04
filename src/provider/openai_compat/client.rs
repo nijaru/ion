@@ -10,6 +10,7 @@ use crate::provider::http::{AuthConfig, HttpClient, SseParser};
 use crate::provider::prefs::ProviderPrefs;
 use crate::provider::types::{ChatRequest, Message, StreamEvent, ToolCallEvent};
 use futures::StreamExt;
+use reqwest::header::HeaderMap;
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 
@@ -35,6 +36,32 @@ impl OpenAICompatClient {
         };
 
         let http = HttpClient::new(quirks.base_url, auth);
+
+        Ok(Self {
+            http,
+            quirks,
+            provider,
+        })
+    }
+
+    /// Create a new OpenAI-compatible client with extra headers.
+    #[allow(clippy::unnecessary_wraps)]
+    pub fn new_with_headers(
+        provider: Provider,
+        api_key: impl Into<String>,
+        extra_headers: HeaderMap,
+    ) -> Result<Self, Error> {
+        let quirks = ProviderQuirks::for_provider(provider);
+        let api_key = api_key.into();
+
+        // Ollama doesn't need auth
+        let auth = if provider == Provider::Ollama {
+            AuthConfig::Bearer(String::new())
+        } else {
+            AuthConfig::Bearer(api_key)
+        };
+
+        let http = HttpClient::new(quirks.base_url, auth).with_extra_headers(extra_headers);
 
         Ok(Self {
             http,

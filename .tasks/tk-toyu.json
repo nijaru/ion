@@ -37,10 +37,14 @@
     {
       "ts": "2026-02-04T05:17:46.872Z",
       "msg": "Added Client-Metadata header matching Gemini CLI/pi-mono. Removed project field (not needed for personal Gemini subscriptions). Headers now: User-Agent, X-Goog-Api-Client, Client-Metadata with ideType/platform/pluginType. Still getting 500 errors - needs testing."
+    },
+    {
+      "ts": "2026-02-04T05:20:43.993Z",
+      "msg": "2026-02-03: Added Client-Metadata header (ideType/platform/pluginType), X-Goog-Api-Client header, removed project field (not needed for personal subscriptions). Headers now match Gemini CLI/pi-mono. Still getting 500 errors - compare full request payload with working CLI."
     }
   ],
   "created_at": "2026-01-30T03:12:45.222Z",
-  "updated_at": "2026-02-04T05:17:46.872Z",
+  "updated_at": "2026-02-04T05:20:43.993Z",
   "completed_at": null,
   "external": {}
 }

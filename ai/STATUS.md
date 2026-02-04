@@ -4,18 +4,18 @@
 
 | Metric    | Value          | Updated    |
 | --------- | -------------- | ---------- |
-| Phase     | OAuth Testing  | 2026-02-03 |
-| Status    | In Progress    | 2026-02-03 |
+| Phase     | OAuth Testing  | 2026-02-04 |
+| Status    | In Progress    | 2026-02-04 |
 | Toolchain | stable         | 2026-01-22 |
 | Tests     | 299 passing    | 2026-01-31 |
 | Clippy    | pedantic clean | 2026-01-31 |
 
 ## In Progress
 
-**OAuth Subscription Auth** (2026-02-03):
+**OAuth Subscription Auth** (2026-02-04):
 
 - **Gemini OAuth (tk-toyu)**: Added Client-Metadata header, removed project field. Using cloudcode-pa.googleapis.com/v1internal:streamGenerateContent. Still getting 500 errors - needs more testing.
-- **ChatGPT OAuth (tk-uqt6)**: Fixed endpoint to use `chatgpt.com/backend-api/codex` instead of `api.openai.com/v1`. May need Responses API format instead of Chat Completions. May need ChatGPT-Account-ID header.
+- **ChatGPT OAuth (tk-uqt6)**: Added Codex CLI authorize params (id_token_add_organizations, codex_cli_simplified_flow, originator) and ChatGPT-Account-ID extraction/header. Needs real subscription re-test.
 
 ## Open Blockers
 

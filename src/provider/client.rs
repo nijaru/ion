@@ -8,6 +8,7 @@ use super::openai_compat::OpenAICompatClient;
 use super::types::{ChatRequest, Message, StreamEvent};
 use crate::auth;
 use async_trait::async_trait;
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use tokio::sync::mpsc;
 
 /// Backend implementation for different provider types.
@@ -50,6 +51,19 @@ impl Client {
                     )],
                 })?;
 
+            if provider == Provider::ChatGpt {
+                let extra_headers = chatgpt_headers(&creds);
+                let client = if extra_headers.is_empty() {
+                    OpenAICompatClient::new(provider, creds.token())?
+                } else {
+                    OpenAICompatClient::new_with_headers(provider, creds.token(), extra_headers)?
+                };
+                return Ok(Self {
+                    provider,
+                    backend: Backend::OpenAICompat(client),
+                });
+            }
+
             return Self::new(provider, creds.token());
         }
 
@@ -83,6 +97,19 @@ impl Client {
                         oauth_provider.storage_key()
                     )],
                 })?;
+
+            if provider == Provider::ChatGpt {
+                let extra_headers = chatgpt_headers(&creds);
+                let client = if extra_headers.is_empty() {
+                    OpenAICompatClient::new(provider, creds.token())?
+                } else {
+                    OpenAICompatClient::new_with_headers(provider, creds.token(), extra_headers)?
+                };
+                return Ok(Self {
+                    provider,
+                    backend: Backend::OpenAICompat(client),
+                });
+            }
 
             return Self::new(provider, creds.token());
         }
@@ -148,6 +175,21 @@ impl Client {
             }
         }
     }
+}
+
+fn chatgpt_headers(creds: &auth::Credentials) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    let auth::Credentials::OAuth(tokens) = creds else {
+        return headers;
+    };
+    let Some(account_id) = tokens.chatgpt_account_id.as_deref() else {
+        return headers;
+    };
+    let name = HeaderName::from_static("chatgpt-account-id");
+    if let Ok(value) = HeaderValue::from_str(account_id) {
+        headers.insert(name, value);
+    }
+    headers
 }
 
 /// Trait for LLM operations.

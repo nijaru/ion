@@ -158,6 +158,7 @@ impl OAuthFlow for GoogleAuth {
                 .or_else(|| Some(refresh_token.to_string())),
             expires_at: token_response.expires_in.map(|secs| now + secs * 1000),
             id_token: token_response.id_token,
+            chatgpt_account_id: None,
         })
     }
 }
@@ -214,6 +215,7 @@ impl GoogleAuth {
             refresh_token: token_response.refresh_token,
             expires_at: token_response.expires_in.map(|secs| now + secs * 1000),
             id_token: token_response.id_token,
+            chatgpt_account_id: None,
         })
     }
 }
