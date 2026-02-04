@@ -33,7 +33,7 @@ impl Client {
     /// Create a new client for the given provider.
     pub fn new(provider: Provider, api_key: impl Into<String>) -> Result<Self, Error> {
         let api_key = api_key.into();
-        let backend = Self::create_backend(provider, &api_key, None)?;
+        let backend = Self::create_backend(provider, &api_key, None, None)?;
         Ok(Self { provider, backend })
     }
 
@@ -65,7 +65,16 @@ impl Client {
                 });
             }
 
-            return Self::new(provider, creds.token());
+            let project_id = if provider == Provider::Gemini {
+                match &creds {
+                    auth::Credentials::OAuth(tokens) => tokens.google_project_id.clone(),
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            let backend = Self::create_backend(provider, creds.token(), None, project_id.as_deref())?;
+            return Ok(Self { provider, backend });
         }
 
         // Standard providers: get API key from environment
@@ -111,7 +120,16 @@ impl Client {
                 });
             }
 
-            return Self::new(provider, creds.token());
+            let project_id = if provider == Provider::Gemini {
+                match &creds {
+                    auth::Credentials::OAuth(tokens) => tokens.google_project_id.clone(),
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            let backend = Self::create_backend(provider, creds.token(), None, project_id.as_deref())?;
+            return Ok(Self { provider, backend });
         }
 
         // Standard providers: get API key from environment
@@ -163,6 +181,7 @@ impl Client {
         provider: Provider,
         api_key: &str,
         base_url: Option<&str>,
+        project_id: Option<&str>,
     ) -> Result<Backend, Error> {
         if base_url.is_some() {
             return Err(Error::Build(
@@ -182,7 +201,10 @@ impl Client {
 
             // Google/Gemini use native Generative AI API
             Provider::Google | Provider::Gemini => {
-                Ok(Backend::GeminiOAuth(GeminiOAuthClient::new(api_key)))
+                Ok(Backend::GeminiOAuth(GeminiOAuthClient::new(
+                    api_key,
+                    project_id.map(str::to_string),
+                )))
             }
 
             // OpenAI-compatible providers

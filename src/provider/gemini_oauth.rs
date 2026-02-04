@@ -1,7 +1,7 @@
-//! Gemini OAuth client using Google Code Assist API.
+//! Gemini OAuth client using Antigravity-backed Code Assist API.
 //!
 //! Uses `cloudcode-pa.googleapis.com` with OAuth authentication.
-//! This is the same API used by Gemini CLI with "Login with Google".
+//! This is the same backend used by Antigravity/Gemini CLI for consumer subscriptions.
 
 use crate::provider::error::Error;
 use crate::provider::types::{ChatRequest, ContentBlock, Message, Role, StreamEvent};
@@ -10,34 +10,45 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-/// Code Assist API endpoints (internal Google API for Gemini CLI).
+/// Code Assist API endpoints (Antigravity fallback order).
 const CODE_ASSIST_ENDPOINTS: &[&str] = &[
-    "https://cloudcode-pa.googleapis.com",
-    "https://autopush-cloudcode-pa.sandbox.googleapis.com",
     "https://daily-cloudcode-pa.sandbox.googleapis.com",
+    "https://autopush-cloudcode-pa.sandbox.googleapis.com",
+    "https://cloudcode-pa.googleapis.com",
 ];
+
+const ANTIGRAVITY_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Antigravity/1.15.8 Chrome/138.0.7204.235 Electron/37.3.1 Safari/537.36";
+const ANTIGRAVITY_API_CLIENT: &str = "google-cloud-sdk vscode_cloudshelleditor/0.1";
+const CLIENT_METADATA: &str =
+    r#"{"ideType":"IDE_UNSPECIFIED","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}"#;
+const DEFAULT_PROJECT_ID: &str = "rising-fact-p41fc";
 
 /// Ensure models/ prefix (Code Assist API expects it).
 fn normalize_model_name(model: &str) -> String {
-    if model.starts_with("models/") {
-        model.to_string()
-    } else {
-        format!("models/{model}")
-    }
+    let trimmed = model.trim();
+    let stripped = trimmed.strip_prefix("models/").unwrap_or(trimmed);
+    let stripped = stripped.strip_prefix("antigravity-").unwrap_or(stripped);
+    let stripped = stripped.strip_suffix(":antigravity").unwrap_or(stripped);
+    format!("models/{stripped}")
 }
 
 /// Gemini OAuth client.
 pub struct GeminiOAuthClient {
     client: reqwest::Client,
     access_token: String,
+    project_id: String,
 }
 
 impl GeminiOAuthClient {
     /// Create a new Gemini OAuth client.
-    pub fn new(access_token: impl Into<String>) -> Self {
+    pub fn new(access_token: impl Into<String>, project_id: Option<String>) -> Self {
+        let project_id = project_id
+            .filter(|id| !id.trim().is_empty())
+            .unwrap_or_else(|| DEFAULT_PROJECT_ID.to_string());
         Self {
             client: reqwest::Client::new(),
             access_token: access_token.into(),
+            project_id,
         }
     }
 
@@ -60,21 +71,19 @@ impl GeminiOAuthClient {
                 "application/json".parse().unwrap()
             },
         );
-        // Headers required by Code Assist API (matching Gemini CLI)
+        // Headers required by Antigravity-backed Code Assist API
         headers.insert(
             reqwest::header::USER_AGENT,
-            "google-cloud-sdk vscode_cloudshelleditor/0.1".parse().unwrap(),
+            ANTIGRAVITY_USER_AGENT.parse().unwrap(),
         );
         headers.insert(
             reqwest::header::HeaderName::from_static("x-goog-api-client"),
-            "gl-node/22.17.0".parse().unwrap(),
+            ANTIGRAVITY_API_CLIENT.parse().unwrap(),
         );
         // Client metadata required by Code Assist API
         headers.insert(
             reqwest::header::HeaderName::from_static("client-metadata"),
-            r#"{"ideType":"IDE_UNSPECIFIED","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}"#
-                .parse()
-                .unwrap(),
+            CLIENT_METADATA.parse().unwrap(),
         );
         // Do NOT send x-goog-user-project for consumer subscriptions.
         // This header binds requests to a Cloud Project and triggers license errors.
@@ -84,7 +93,8 @@ impl GeminiOAuthClient {
     /// Make a chat completion request.
     pub async fn complete(&self, request: ChatRequest) -> Result<Message, Error> {
         let model = normalize_model_name(&request.model);
-        let gemini_request = CodeAssistRequest::from_chat_request(&request, &model);
+        let gemini_request =
+            CodeAssistRequest::from_chat_request(&request, &model, &self.project_id);
 
         for endpoint in CODE_ASSIST_ENDPOINTS {
             // Code Assist API: /v1internal:generateContent
@@ -131,7 +141,8 @@ impl GeminiOAuthClient {
         use futures::StreamExt;
 
         let model = normalize_model_name(&request.model);
-        let gemini_request = CodeAssistRequest::from_chat_request(&request, &model);
+        let gemini_request =
+            CodeAssistRequest::from_chat_request(&request, &model, &self.project_id);
 
         // Debug: log the request
         if let Ok(json) = serde_json::to_string_pretty(&gemini_request) {
@@ -213,10 +224,11 @@ impl GeminiOAuthClient {
 // --- Code Assist API Types ---
 
 /// Code Assist API request wrapper.
-/// The API expects: { model, request: { contents, ... }, userAgent, requestId }
+/// The API expects: { project, model, request: { contents, ... }, userAgent, requestId }
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CodeAssistRequest {
+    project: String,
     model: String,
     request: VertexRequest,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -239,7 +251,7 @@ struct VertexRequest {
 }
 
 impl CodeAssistRequest {
-    fn from_chat_request(request: &ChatRequest, model: &str) -> Self {
+    fn from_chat_request(request: &ChatRequest, model: &str, project_id: &str) -> Self {
         use std::time::{SystemTime, UNIX_EPOCH};
 
         let inner = GeminiRequest::from_chat_request(request);
@@ -253,6 +265,7 @@ impl CodeAssistRequest {
         let request_id = format!("ion-{timestamp}-{random_suffix:x}");
 
         Self {
+            project: project_id.to_string(),
             model: model.to_string(),
             request: VertexRequest {
                 contents: inner.contents,
@@ -260,7 +273,7 @@ impl CodeAssistRequest {
                 tools: inner.tools,
                 generation_config: inner.generation_config,
             },
-            user_agent: Some("ion-coding-agent".to_string()),
+            user_agent: Some(ANTIGRAVITY_USER_AGENT.to_string()),
             request_id: Some(request_id),
         }
     }

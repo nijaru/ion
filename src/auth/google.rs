@@ -1,7 +1,7 @@
-//! Google OAuth for Gemini API.
+//! Google OAuth for Gemini subscriptions via Antigravity.
 //!
-//! Uses the Gemini CLI OAuth flow to access Gemini models through
-//! Google's Generative Language API (generativelanguage.googleapis.com).
+//! Uses the Antigravity OAuth flow to access Gemini models through
+//! the Code Assist backend (cloudcode-pa.googleapis.com).
 //! This enables access using Google AI Pro/Ultra subscriptions.
 
 use super::pkce::{PkceCodes, generate_state};
@@ -11,21 +11,42 @@ use super::{CALLBACK_TIMEOUT, OAuthFlow};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
-/// Gemini CLI OAuth client ID.
+/// Antigravity OAuth client ID.
 pub const CLIENT_ID: &str =
-    "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com";
+    "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com";
 
-/// Gemini CLI OAuth client secret (safe for installed apps per OAuth spec).
-pub const CLIENT_SECRET: &str = "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";
+/// Antigravity OAuth client secret (safe for installed apps per OAuth spec).
+pub const CLIENT_SECRET: &str = "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";
 
 /// Google OAuth endpoints.
 pub const AUTH_ENDPOINT: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 pub const TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
 
-/// OAuth scopes for Gemini API access.
+/// OAuth scopes for Antigravity access.
 pub const SCOPES: &str = "https://www.googleapis.com/auth/cloud-platform \
                           https://www.googleapis.com/auth/userinfo.email \
-                          https://www.googleapis.com/auth/userinfo.profile";
+                          https://www.googleapis.com/auth/userinfo.profile \
+                          https://www.googleapis.com/auth/cclog \
+                          https://www.googleapis.com/auth/experimentsandconfigs";
+
+/// Antigravity OAuth callback path and port (fixed).
+const CALLBACK_PATH: &str = "/oauth-callback";
+const CALLBACK_PORT: u16 = 51121;
+
+/// Default project ID used when loadCodeAssist does not return one.
+const DEFAULT_PROJECT_ID: &str = "rising-fact-p41fc";
+
+/// Code Assist endpoints used to resolve the project ID.
+const LOAD_ENDPOINTS: &[&str] = &[
+    "https://cloudcode-pa.googleapis.com",
+    "https://daily-cloudcode-pa.sandbox.googleapis.com",
+    "https://autopush-cloudcode-pa.sandbox.googleapis.com",
+];
+
+const CLIENT_METADATA: &str =
+    r#"{"ideType":"IDE_UNSPECIFIED","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}"#;
+const GEMINI_CLI_USER_AGENT: &str = "google-api-nodejs-client/10.3.0";
+const GEMINI_CLI_API_CLIENT: &str = "gl-node/22.18.0";
 
 /// Google OAuth authentication.
 pub struct GoogleAuth {
@@ -78,8 +99,11 @@ impl OAuthFlow for GoogleAuth {
         let pkce = PkceCodes::generate();
         let state = generate_state();
 
-        // Start callback server
-        let server = CallbackServer::new(state.clone())?;
+        // Start callback server (fixed port/path for Antigravity)
+        let server = CallbackServer::new_with_config(
+            state.clone(),
+            super::server::CallbackConfig::fixed(CALLBACK_PORT, CALLBACK_PATH),
+        )?;
         let redirect_uri = server.redirect_uri();
         let port = server.port();
 
@@ -104,9 +128,10 @@ impl OAuthFlow for GoogleAuth {
 
         // Exchange code for tokens
         println!("Exchanging authorization code...");
-        let tokens = self
+        let mut tokens = self
             .exchange_code(&callback.code, &redirect_uri, &pkce)
             .await?;
+        tokens.google_project_id = Some(self.resolve_project_id(&tokens.access_token).await?);
 
         println!("Login successful!");
         Ok(tokens)
@@ -159,6 +184,7 @@ impl OAuthFlow for GoogleAuth {
             expires_at: token_response.expires_in.map(|secs| now + secs * 1000),
             id_token: token_response.id_token,
             chatgpt_account_id: None,
+            google_project_id: None,
         })
     }
 }
@@ -216,8 +242,99 @@ impl GoogleAuth {
             expires_at: token_response.expires_in.map(|secs| now + secs * 1000),
             id_token: token_response.id_token,
             chatgpt_account_id: None,
+            google_project_id: None,
         })
     }
+
+    pub(crate) async fn resolve_project_id(&self, access_token: &str) -> Result<String> {
+        let mut errors = Vec::new();
+        let metadata = serde_json::json!({
+            "metadata": {
+                "ideType": "IDE_UNSPECIFIED",
+                "platform": "PLATFORM_UNSPECIFIED",
+                "pluginType": "GEMINI",
+            }
+        });
+
+        for endpoint in LOAD_ENDPOINTS {
+            let url = format!("{endpoint}/v1internal:loadCodeAssist");
+            let response = self
+                .client
+                .post(&url)
+                .headers(self.build_load_headers(access_token))
+                .json(&metadata)
+                .timeout(std::time::Duration::from_secs(10))
+                .send()
+                .await;
+
+            match response {
+                Ok(resp) => {
+                    if !resp.status().is_success() {
+                        let status = resp.status();
+                        let text = resp.text().await.unwrap_or_default();
+                        errors.push(format!("{endpoint} {status}: {text}"));
+                        continue;
+                    }
+
+                    let value: serde_json::Value = resp
+                        .json()
+                        .await
+                        .context("Failed to parse loadCodeAssist response")?;
+
+                    if let Some(project_id) = extract_project_id(&value) {
+                        return Ok(project_id);
+                    }
+
+                    errors.push(format!("{endpoint} missing project id"));
+                }
+                Err(err) => {
+                    errors.push(format!("{endpoint} error: {err}"));
+                }
+            }
+        }
+
+        if !errors.is_empty() {
+            tracing::warn!(
+                "loadCodeAssist failed, falling back to default project id: {}",
+                errors.join("; ")
+            );
+        }
+
+        Ok(DEFAULT_PROJECT_ID.to_string())
+    }
+
+    fn build_load_headers(&self, access_token: &str) -> reqwest::header::HeaderMap {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::AUTHORIZATION,
+            format!("Bearer {access_token}").parse().unwrap(),
+        );
+        headers.insert(
+            reqwest::header::CONTENT_TYPE,
+            "application/json".parse().unwrap(),
+        );
+        headers.insert(reqwest::header::USER_AGENT, GEMINI_CLI_USER_AGENT.parse().unwrap());
+        headers.insert(
+            reqwest::header::HeaderName::from_static("x-goog-api-client"),
+            GEMINI_CLI_API_CLIENT.parse().unwrap(),
+        );
+        headers.insert(
+            reqwest::header::HeaderName::from_static("client-metadata"),
+            CLIENT_METADATA.parse().unwrap(),
+        );
+        headers
+    }
+}
+
+fn extract_project_id(value: &serde_json::Value) -> Option<String> {
+    let project = value.get("cloudaicompanionProject")?;
+    if let Some(project_id) = project.as_str() {
+        return Some(project_id.to_string());
+    }
+    project
+        .get("id")
+        .and_then(|id| id.as_str())
+        .map(str::to_string)
 }
 
 #[cfg(test)]
@@ -262,10 +379,10 @@ mod tests {
     }
 
     #[test]
-    fn test_client_id_matches_gemini_cli() {
-        // Verify we're using the same client ID as Gemini CLI
+    fn test_client_id_matches_antigravity() {
+        // Verify we're using the Antigravity client ID
         assert!(CLIENT_ID.ends_with(".apps.googleusercontent.com"));
-        assert!(CLIENT_ID.starts_with("681255809395"));
+        assert!(CLIENT_ID.starts_with("1071006060591"));
     }
 
     #[test]
@@ -281,5 +398,11 @@ mod tests {
         // User info scopes are needed for identification
         assert!(SCOPES.contains("userinfo.email"));
         assert!(SCOPES.contains("userinfo.profile"));
+    }
+
+    #[test]
+    fn test_scopes_include_antigravity_internal() {
+        assert!(SCOPES.contains("cclog"));
+        assert!(SCOPES.contains("experimentsandconfigs"));
     }
 }

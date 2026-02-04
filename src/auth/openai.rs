@@ -168,6 +168,7 @@ impl OAuthFlow for OpenAIAuth {
             expires_at: token_response.expires_in.map(|secs| now + secs * 1000),
             id_token,
             chatgpt_account_id,
+            google_project_id: None,
         })
     }
 }
@@ -229,6 +230,7 @@ impl OpenAIAuth {
             expires_at: token_response.expires_in.map(|secs| now + secs * 1000),
             id_token,
             chatgpt_account_id,
+            google_project_id: None,
         })
     }
 }
