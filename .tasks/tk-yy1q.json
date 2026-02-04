@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "yy1q",
+  "title": "Fix Provider::Google to use standard Generative Language API instead of Code Assist",
+  "description": "Currently both Provider::Google (API key) and Provider::Gemini (OAuth) use GeminiOAuthClient which targets Code Assist API. Provider::Google should use generativelanguage.googleapis.com with API key auth. Reference: https://mariozechner.at/posts/2025-11-30-pi-coding-agent/ for API standards, model switching, models.dev integration.",
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-02-01T18:43:06.184Z",
+  "updated_at": "2026-02-01T18:43:06.184Z",
+  "completed_at": null,
+  "external": {}
+}
