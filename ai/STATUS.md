@@ -14,7 +14,7 @@
 
 **OAuth Subscription Auth** (2026-02-04):
 
-- **Gemini OAuth (tk-toyu)**: Added Client-Metadata header, removed project field. Using cloudcode-pa.googleapis.com/v1internal:streamGenerateContent. Still getting 500 errors - needs more testing.
+- **Gemini OAuth (tk-toyu)**: Ensuring `models/` prefix, mapping `generation_config`, optional `x-goog-user-project` header, and fallback endpoints for 5xx. Needs re-test after changes.
 - **ChatGPT OAuth (tk-uqt6)**: Added Codex CLI authorize params (id_token_add_organizations, codex_cli_simplified_flow, originator) and ChatGPT-Account-ID extraction/header. Needs real subscription re-test.
 
 ## Open Blockers

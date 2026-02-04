@@ -23,10 +23,14 @@
     {
       "ts": "2026-02-04T05:37:53.090Z",
       "msg": "Implemented Codex-style OAuth params (id_token_add_organizations, codex_cli_simplified_flow, originator) and ChatGPT-Account-ID extraction + header injection. Added chatgpt_account_id to OAuthTokens and preserved across refresh. Added test for JWT parsing."
+    },
+    {
+      "ts": "2026-02-04T05:38:51.571Z",
+      "msg": "Push blocked by GitHub secret scanning: Google OAuth client secret detected in ai/research/gemini-oauth-subscription-auth.md (commit 8615be8e...). Need to redact or unblock via GitHub link before pushing."
     }
   ],
   "created_at": "2026-02-04T05:27:50.045Z",
-  "updated_at": "2026-02-04T05:37:53.090Z",
+  "updated_at": "2026-02-04T05:38:51.571Z",
   "completed_at": null,
   "external": {}
 }

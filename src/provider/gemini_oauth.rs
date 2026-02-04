@@ -10,12 +10,20 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-/// Code Assist API base URL (internal Google API for Gemini CLI).
-const CODE_ASSIST_API: &str = "https://cloudcode-pa.googleapis.com";
+/// Code Assist API endpoints (internal Google API for Gemini CLI).
+const CODE_ASSIST_ENDPOINTS: &[&str] = &[
+    "https://cloudcode-pa.googleapis.com",
+    "https://autopush-cloudcode-pa.sandbox.googleapis.com",
+    "https://daily-cloudcode-pa.sandbox.googleapis.com",
+];
 
-/// Strip models/ prefix if present (Code Assist API doesn't want it).
-fn normalize_model_name(model: &str) -> &str {
-    model.strip_prefix("models/").unwrap_or(model)
+/// Ensure models/ prefix (Code Assist API expects it).
+fn normalize_model_name(model: &str) -> String {
+    if model.starts_with("models/") {
+        model.to_string()
+    } else {
+        format!("models/{model}")
+    }
 }
 
 /// Gemini OAuth client.
@@ -34,7 +42,7 @@ impl GeminiOAuthClient {
     }
 
     /// Build headers for Code Assist API requests.
-    fn build_headers(&self) -> reqwest::header::HeaderMap {
+    fn build_headers(&self, accept_sse: bool) -> reqwest::header::HeaderMap {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(
             reqwest::header::AUTHORIZATION,
@@ -46,7 +54,11 @@ impl GeminiOAuthClient {
         );
         headers.insert(
             reqwest::header::ACCEPT,
-            "text/event-stream".parse().unwrap(),
+            if accept_sse {
+                "text/event-stream".parse().unwrap()
+            } else {
+                "application/json".parse().unwrap()
+            },
         );
         // Headers required by Code Assist API (matching Gemini CLI)
         headers.insert(
@@ -64,40 +76,58 @@ impl GeminiOAuthClient {
                 .parse()
                 .unwrap(),
         );
+        if let Ok(project) = std::env::var("GOOGLE_CLOUD_PROJECT")
+            .or_else(|_| std::env::var("CLOUDSDK_CORE_PROJECT"))
+        {
+            if let Ok(value) = project.parse() {
+                headers.insert(
+                    reqwest::header::HeaderName::from_static("x-goog-user-project"),
+                    value,
+                );
+            }
+        }
         headers
     }
 
     /// Make a chat completion request.
     pub async fn complete(&self, request: ChatRequest) -> Result<Message, Error> {
         let model = normalize_model_name(&request.model);
-        let gemini_request = CodeAssistRequest::from_chat_request(&request, model);
+        let gemini_request = CodeAssistRequest::from_chat_request(&request, &model);
 
-        // Code Assist API: /v1internal:generateContent
-        let url = format!("{CODE_ASSIST_API}/v1internal:generateContent");
+        for endpoint in CODE_ASSIST_ENDPOINTS {
+            // Code Assist API: /v1internal:generateContent
+            let url = format!("{endpoint}/v1internal:generateContent");
 
-        let response = self
-            .client
-            .post(&url)
-            .headers(self.build_headers())
-            .json(&gemini_request)
-            .send()
-            .await
-            .map_err(|e| Error::Api(format!("Request failed: {e}")))?;
+            let response = self
+                .client
+                .post(&url)
+                .headers(self.build_headers(false))
+                .json(&gemini_request)
+                .send()
+                .await
+                .map_err(|e| Error::Api(format!("Request failed: {e}")))?;
 
-        let status = response.status();
-        let text = response
-            .text()
-            .await
-            .map_err(|e| Error::Api(format!("Failed to read response: {e}")))?;
+            let status = response.status();
+            let text = response
+                .text()
+                .await
+                .map_err(|e| Error::Api(format!("Failed to read response: {e}")))?;
 
-        if !status.is_success() {
-            return Err(Error::Api(format!("Gemini API error: {status} - {text}")));
+            if status.is_success() {
+                let ca_response: CodeAssistResponse = serde_json::from_str(&text).map_err(|e| {
+                    Error::Api(format!("Failed to parse response: {e}\nBody: {text}"))
+                })?;
+                return Ok(ca_response.response.into_message());
+            }
+
+            if !should_retry(status) {
+                return Err(Error::Api(format!("Gemini API error: {status} - {text}")));
+            }
         }
 
-        let ca_response: CodeAssistResponse = serde_json::from_str(&text)
-            .map_err(|e| Error::Api(format!("Failed to parse response: {e}\nBody: {text}")))?;
-
-        Ok(ca_response.response.into_message())
+        Err(Error::Api(
+            "Gemini API error: all Code Assist endpoints failed".to_string(),
+        ))
     }
 
     /// Stream a chat completion.
@@ -109,30 +139,44 @@ impl GeminiOAuthClient {
         use futures::StreamExt;
 
         let model = normalize_model_name(&request.model);
-        let gemini_request = CodeAssistRequest::from_chat_request(&request, model);
-
-        // Code Assist API: /v1internal:streamGenerateContent
-        let url = format!("{CODE_ASSIST_API}/v1internal:streamGenerateContent?alt=sse");
+        let gemini_request = CodeAssistRequest::from_chat_request(&request, &model);
 
         // Debug: log the request
         if let Ok(json) = serde_json::to_string_pretty(&gemini_request) {
             tracing::debug!("Code Assist request: {}", json);
         }
 
-        let response = self
-            .client
-            .post(&url)
-            .headers(self.build_headers())
-            .json(&gemini_request)
-            .send()
-            .await
-            .map_err(|e| Error::Stream(format!("Request failed: {e}")))?;
+        let mut response = None;
+        for endpoint in CODE_ASSIST_ENDPOINTS {
+            // Code Assist API: /v1internal:streamGenerateContent
+            let url = format!("{endpoint}/v1internal:streamGenerateContent?alt=sse");
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let text = response.text().await.unwrap_or_default();
-            return Err(Error::Stream(format!("Gemini API error: {status} - {text}")));
+            let attempt = self
+                .client
+                .post(&url)
+                .headers(self.build_headers(true))
+                .json(&gemini_request)
+                .send()
+                .await
+                .map_err(|e| Error::Stream(format!("Request failed: {e}")))?;
+
+            if attempt.status().is_success() {
+                response = Some(attempt);
+                break;
+            }
+
+            let status = attempt.status();
+            let text = attempt.text().await.unwrap_or_default();
+            if !should_retry(status) {
+                return Err(Error::Stream(format!("Gemini API error: {status} - {text}")));
+            }
         }
+
+        let Some(response) = response else {
+            return Err(Error::Stream(
+                "Gemini API error: all Code Assist endpoints failed".to_string(),
+            ));
+        };
 
         // Parse SSE stream
         let mut stream = response.bytes_stream();
@@ -483,13 +527,32 @@ impl GeminiRequest {
             }])
         };
 
+        let generation_config = if request.temperature.is_some() || request.max_tokens.is_some() {
+            Some(GeminiGenerationConfig {
+                temperature: request.temperature,
+                max_output_tokens: request.max_tokens,
+            })
+        } else {
+            None
+        };
+
         Self {
             contents,
             system_instruction,
             tools,
-            generation_config: None,
+            generation_config,
         }
     }
+}
+
+fn should_retry(status: reqwest::StatusCode) -> bool {
+    matches!(
+        status,
+        reqwest::StatusCode::INTERNAL_SERVER_ERROR
+            | reqwest::StatusCode::BAD_GATEWAY
+            | reqwest::StatusCode::SERVICE_UNAVAILABLE
+            | reqwest::StatusCode::GATEWAY_TIMEOUT
+    )
 }
 
 impl GeminiResponse {
