@@ -121,12 +121,21 @@ pub async fn get_credentials(provider: OAuthProvider) -> Result<Option<Credentia
                 if new_tokens.chatgpt_account_id.is_none() {
                     new_tokens.chatgpt_account_id = tokens.chatgpt_account_id.clone();
                 }
+                if new_tokens.google_project_id.is_none() {
+                    new_tokens.google_project_id = tokens.google_project_id.clone();
+                }
                 if provider == OAuthProvider::OpenAI
                     && new_tokens.chatgpt_account_id.is_none()
                     && let Some(id_token) = new_tokens.id_token.as_deref()
                 {
                     new_tokens.chatgpt_account_id =
                         openai::extract_chatgpt_account_id(id_token);
+                }
+                if provider == OAuthProvider::Google && new_tokens.google_project_id.is_none() {
+                    new_tokens.google_project_id =
+                        Some(google::GoogleAuth::new()
+                            .resolve_project_id(&new_tokens.access_token)
+                            .await?);
                 }
                 storage.save(provider, Credentials::OAuth(new_tokens.clone()))?;
                 return Ok(Some(Credentials::OAuth(new_tokens)));
@@ -138,6 +147,21 @@ pub async fn get_credentials(provider: OAuthProvider) -> Result<Option<Credentia
                     provider.storage_key()
                 );
             }
+        }
+    }
+
+    if provider == OAuthProvider::Google {
+        if let Credentials::OAuth(ref tokens) = creds
+            && tokens.google_project_id.is_none()
+        {
+            let mut updated = tokens.clone();
+            updated.google_project_id = Some(
+                google::GoogleAuth::new()
+                    .resolve_project_id(&updated.access_token)
+                    .await?,
+            );
+            storage.save(provider, Credentials::OAuth(updated.clone()))?;
+            return Ok(Some(Credentials::OAuth(updated)));
         }
     }
 

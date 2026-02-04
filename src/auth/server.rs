@@ -1,6 +1,6 @@
 //! Local callback server for OAuth redirects.
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -11,6 +11,35 @@ use url::Url;
 
 /// Default callback port (same as Codex CLI).
 pub const DEFAULT_PORT: u16 = 1455;
+const DEFAULT_PATH: &str = "/auth/callback";
+
+/// Callback server configuration.
+pub struct CallbackConfig {
+    preferred_port: u16,
+    allow_fallback: bool,
+    callback_path: &'static str,
+}
+
+impl CallbackConfig {
+    #[must_use]
+    pub fn fixed(preferred_port: u16, callback_path: &'static str) -> Self {
+        Self {
+            preferred_port,
+            allow_fallback: false,
+            callback_path,
+        }
+    }
+}
+
+impl Default for CallbackConfig {
+    fn default() -> Self {
+        Self {
+            preferred_port: DEFAULT_PORT,
+            allow_fallback: true,
+            callback_path: DEFAULT_PATH,
+        }
+    }
+}
 
 /// Result from OAuth callback.
 #[derive(Debug, Clone)]
@@ -26,6 +55,7 @@ pub struct CallbackServer {
     port: u16,
     expected_state: String,
     listener: TcpListener,
+    callback_path: String,
 }
 
 impl CallbackServer {
@@ -33,16 +63,24 @@ impl CallbackServer {
     ///
     /// Tries the default port first, then finds an available port.
     pub fn new(expected_state: String) -> Result<Self> {
-        // Try default port first
-        let listener = match TcpListener::bind(format!("127.0.0.1:{DEFAULT_PORT}")) {
-            Ok(l) => l,
-            Err(_) => {
-                // Find an available port
-                TcpListener::bind("127.0.0.1:0")?
+        Self::new_with_config(expected_state, CallbackConfig::default())
+    }
+
+    /// Create a new callback server with custom config.
+    pub fn new_with_config(expected_state: String, config: CallbackConfig) -> Result<Self> {
+        let listener = if config.allow_fallback {
+            match TcpListener::bind(format!("127.0.0.1:{}", config.preferred_port)) {
+                Ok(l) => l,
+                Err(_) => TcpListener::bind("127.0.0.1:0")?,
             }
+        } else {
+            TcpListener::bind(format!("127.0.0.1:{}", config.preferred_port)).with_context(
+                || format!("Failed to bind fixed callback port {}", config.preferred_port),
+            )?
         };
 
         let port = listener.local_addr()?.port();
+        let callback_path = normalize_callback_path(config.callback_path);
 
         // Set non-blocking for timeout support
         listener.set_nonblocking(true)?;
@@ -51,6 +89,7 @@ impl CallbackServer {
             port,
             expected_state,
             listener,
+            callback_path,
         })
     }
 
@@ -63,18 +102,19 @@ impl CallbackServer {
     /// Get the redirect URI for OAuth.
     #[must_use]
     pub fn redirect_uri(&self) -> String {
-        format!("http://localhost:{}/auth/callback", self.port)
+        format!("http://localhost:{}{}", self.port, self.callback_path)
     }
 
     /// Wait for the OAuth callback with timeout.
     pub fn wait_for_callback(self, timeout: Duration) -> Result<CallbackResult> {
         let (tx, rx) = mpsc::channel();
         let expected_state = self.expected_state.clone();
+        let callback_path = self.callback_path.clone();
 
         // Spawn a thread to handle the request
         let listener = self.listener;
         thread::spawn(move || {
-            let result = Self::handle_requests(listener, &expected_state, timeout);
+            let result = Self::handle_requests(listener, &expected_state, &callback_path, timeout);
             let _ = tx.send(result);
         });
 
@@ -87,6 +127,7 @@ impl CallbackServer {
     fn handle_requests(
         listener: TcpListener,
         expected_state: &str,
+        callback_path: &str,
         timeout: Duration,
     ) -> Result<CallbackResult> {
         let start = std::time::Instant::now();
@@ -123,7 +164,7 @@ impl CallbackServer {
                     };
 
                     // Handle callback path
-                    if path.starts_with("/auth/callback") {
+                    if path.starts_with(callback_path) {
                         match Self::parse_callback(path, expected_state) {
                             Ok(result) => {
                                 // Send success response
@@ -270,6 +311,14 @@ fn html_escape(s: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
+}
+
+fn normalize_callback_path(path: &str) -> String {
+    if path.starts_with('/') {
+        path.to_string()
+    } else {
+        format!("/{path}")
+    }
 }
 
 #[cfg(test)]

@@ -3,7 +3,7 @@
   "ref": "toyu",
   "title": "[AUTH] Google AI OAuth integration",
   "description": "Phase 3: Google OAuth endpoints, GoogleAi provider variant, ion login google command",
-  "status": "open",
+  "status": "active",
   "priority": 2,
   "labels": [],
   "assignees": [],
@@ -61,10 +61,14 @@
     {
       "ts": "2026-02-04T18:02:25.062Z",
       "msg": "Removed x-goog-user-project header entirely for Gemini OAuth to avoid Cloud Project license gating. Consumer subscriptions should not bind to project."
+    },
+    {
+      "ts": "2026-02-04T19:36:45.213Z",
+      "msg": "Aligned Google OAuth to Antigravity: fixed callback port/path (51121 /oauth-callback), added loadCodeAssist project resolution with fallback project, stored google_project_id in OAuthTokens, and updated GeminiOAuth client to send project wrapper + Antigravity headers."
     }
   ],
   "created_at": "2026-01-30T03:12:45.222Z",
-  "updated_at": "2026-02-04T18:02:25.062Z",
+  "updated_at": "2026-02-04T19:36:45.213Z",
   "completed_at": null,
   "external": {}
 }

@@ -19,7 +19,7 @@ Source: `google-gemini/gemini-cli/packages/core/src/code_assist/oauth2.ts`
 | Parameter     | Value                                                                      |
 | ------------- | -------------------------------------------------------------------------- |
 | Client ID     | `681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com` |
-| Client Secret | `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`                                      |
+| Client Secret | `GOCSPX-REDACTED`                                                          |
 | Scopes        | `https://www.googleapis.com/auth/cloud-platform`                           |
 |               | `https://www.googleapis.com/auth/userinfo.email`                           |
 |               | `https://www.googleapis.com/auth/userinfo.profile`                         |
@@ -82,9 +82,10 @@ Source: `firdyfirdy/antigravity-auth/src/antigravity_auth/constants.py`
 
 - OAuth 2.0 Authorization Code flow with PKCE
 - S256 (SHA-256) challenge method
-- Local callback: `http://localhost:36742/oauth-callback` or port 50327
+- Local callback: `http://localhost:51121/oauth-callback` (fixed)
 - Prompt: `consent` (forces consent screen)
 - Access type: `offline`
+- Project resolution: `POST {endpoint}/v1internal:loadCodeAssist` (fallback to `rising-fact-p41fc`)
 
 ## 3. pi-mono (badlogic)
 
@@ -110,7 +111,7 @@ Uses the Gemini CLI OAuth flow with:
 
 ## Request Format
 
-All implementations use the same request format once authenticated:
+Gemini CLI (Code Assist) uses the direct `streamGenerateContent` request:
 
 ```http
 POST {endpoint}/v1internal:streamGenerateContent?alt=sse
@@ -122,6 +123,25 @@ x-goog-user-project: {project_id}
   "model": "models/gemini-2.5-pro",
   "contents": [...],
   "generationConfig": {...}
+}
+```
+
+Antigravity uses a wrapper with `project`, `request`, and `requestId`:
+
+```http
+POST {endpoint}/v1internal:streamGenerateContent?alt=sse
+Authorization: Bearer {access_token}
+Content-Type: application/json
+
+{
+  "project": "rising-fact-p41fc",
+  "model": "models/gemini-2.5-pro",
+  "request": {
+    "contents": [...],
+    "generationConfig": {...}
+  },
+  "userAgent": "antigravity/1.15.8",
+  "requestId": "client-123"
 }
 ```
 

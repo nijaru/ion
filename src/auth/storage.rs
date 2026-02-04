@@ -24,6 +24,9 @@ pub struct OAuthTokens {
     /// ChatGPT workspace/account ID (from id_token claims).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub chatgpt_account_id: Option<String>,
+    /// Google project ID for Gemini Code Assist/Antigravity.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub google_project_id: Option<String>,
 }
 
 impl OAuthTokens {
@@ -192,6 +195,7 @@ mod tests {
             expires_at: Some(now + 60_000),
             id_token: None,
             chatgpt_account_id: None,
+            google_project_id: None,
         };
         assert!(tokens.needs_refresh());
 
@@ -202,6 +206,7 @@ mod tests {
             expires_at: Some(now + 600_000),
             id_token: None,
             chatgpt_account_id: None,
+            google_project_id: None,
         };
         assert!(!tokens.needs_refresh());
     }
@@ -214,6 +219,7 @@ mod tests {
             expires_at: Some(1234567890000),
             id_token: None,
             chatgpt_account_id: None,
+            google_project_id: None,
         });
 
         let json = serde_json::to_string(&oauth).unwrap();

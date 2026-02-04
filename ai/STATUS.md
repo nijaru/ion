@@ -14,14 +14,14 @@
 
 **OAuth Subscription Auth** (2026-02-04):
 
-- **Gemini OAuth (tk-toyu)**: Removed `x-goog-user-project` header entirely to avoid Cloud Project license gating. Needs re-test after rebuild.
+- **Gemini OAuth (tk-toyu)**: Switched to Antigravity OAuth (fixed port 51121 `/oauth-callback`), added `loadCodeAssist` project resolution + request wrapper `project`. Needs re-test after rebuild.
 - **ChatGPT OAuth (tk-uqt6)**: Responses API client now sets `store=false` and sends `function_call_output.output` as string (not object). Needs re-test after rebuild.
 
 ## Open Blockers
 
 | Provider | Issue                                  | Next Step                     |
 | -------- | -------------------------------------- | ----------------------------- |
-| Gemini   | 403 license error (project-bound)      | Verify `ION_GEMINI_PROJECT` is unset |
+| Gemini   | 403 license error (project-bound)      | Re-test with Antigravity OAuth + project wrapper |
 | ChatGPT  | 400 invalid_type for input[*].output   | Rebuild with string output fix |
 
 ## Top Priorities
