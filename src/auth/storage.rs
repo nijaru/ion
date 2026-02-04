@@ -21,6 +21,9 @@ pub struct OAuthTokens {
     /// ID token (`OpenID` Connect).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id_token: Option<String>,
+    /// ChatGPT workspace/account ID (from id_token claims).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chatgpt_account_id: Option<String>,
 }
 
 impl OAuthTokens {
@@ -188,6 +191,7 @@ mod tests {
             refresh_token: None,
             expires_at: Some(now + 60_000),
             id_token: None,
+            chatgpt_account_id: None,
         };
         assert!(tokens.needs_refresh());
 
@@ -197,6 +201,7 @@ mod tests {
             refresh_token: None,
             expires_at: Some(now + 600_000),
             id_token: None,
+            chatgpt_account_id: None,
         };
         assert!(!tokens.needs_refresh());
     }
@@ -208,6 +213,7 @@ mod tests {
             refresh_token: Some("refresh".into()),
             expires_at: Some(1234567890000),
             id_token: None,
+            chatgpt_account_id: None,
         });
 
         let json = serde_json::to_string(&oauth).unwrap();

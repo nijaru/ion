@@ -23,10 +23,14 @@
     {
       "ts": "2026-02-04T05:17:39.413Z",
       "msg": "ChatGPT OAuth now uses chatgpt.com/backend-api/codex endpoint instead of api.openai.com. Found from Codex source: model_provider_info.rs shows AuthMode::Chatgpt uses this URL. May need Responses API format (/responses) instead of Chat Completions - Codex uses that format. Also may need ChatGPT-Account-ID header."
+    },
+    {
+      "ts": "2026-02-04T05:37:57.269Z",
+      "msg": "Added Codex OAuth authorize params and ChatGPT-Account-ID handling. OAuthTokens now stores chatgpt_account_id; client injects ChatGPT-Account-ID header when available."
     }
   ],
   "created_at": "2026-01-30T03:12:43.012Z",
-  "updated_at": "2026-02-04T05:17:39.413Z",
+  "updated_at": "2026-02-04T05:37:57.269Z",
   "completed_at": null,
   "external": {}
 }

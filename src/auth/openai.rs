@@ -8,7 +8,9 @@ use super::server::CallbackServer;
 use super::storage::OAuthTokens;
 use super::{CALLBACK_TIMEOUT, OAuthFlow};
 use anyhow::{Context, Result};
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::Deserialize;
+use serde_json::Value;
 
 /// `OpenAI` OAuth client ID (same as Codex CLI).
 pub const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
@@ -19,6 +21,12 @@ pub const TOKEN_ENDPOINT: &str = "https://auth.openai.com/oauth/token";
 
 /// OAuth scopes for `ChatGPT` access.
 pub const SCOPES: &str = "openid profile email offline_access";
+/// Include org/workspace IDs in id_token.
+pub const ID_TOKEN_ADD_ORGANIZATIONS: &str = "true";
+/// Use Codex simplified flow (avoids API org/project selection).
+pub const CODEX_CLI_SIMPLIFIED_FLOW: &str = "true";
+/// Identify the client to OpenAI (match Codex CLI).
+pub const ORIGINATOR: &str = "codex_cli_rs";
 
 /// `OpenAI` OAuth authentication.
 pub struct OpenAIAuth {
@@ -46,13 +54,19 @@ impl OpenAIAuth {
              &scope={}\
              &state={}\
              &code_challenge={}\
-             &code_challenge_method=S256",
+             &code_challenge_method=S256\
+             &id_token_add_organizations={}\
+             &codex_cli_simplified_flow={}\
+             &originator={}",
             AUTH_ENDPOINT,
             CLIENT_ID,
             urlencoding::encode(redirect_uri),
             urlencoding::encode(SCOPES),
             state,
-            pkce.challenge
+            pkce.challenge,
+            ID_TOKEN_ADD_ORGANIZATIONS,
+            CODEX_CLI_SIMPLIFIED_FLOW,
+            urlencoding::encode(ORIGINATOR)
         )
     }
 }
@@ -141,13 +155,19 @@ impl OAuthFlow for OpenAIAuth {
             .unwrap_or_default()
             .as_millis() as u64;
 
+        let id_token = token_response.id_token;
+        let chatgpt_account_id = id_token
+            .as_deref()
+            .and_then(extract_chatgpt_account_id);
+
         Ok(OAuthTokens {
             access_token: token_response.access_token,
             refresh_token: token_response
                 .refresh_token
                 .or_else(|| Some(refresh_token.to_string())),
             expires_at: token_response.expires_in.map(|secs| now + secs * 1000),
-            id_token: token_response.id_token,
+            id_token,
+            chatgpt_account_id,
         })
     }
 }
@@ -198,13 +218,30 @@ impl OpenAIAuth {
             .unwrap_or_default()
             .as_millis() as u64;
 
+        let id_token = token_response.id_token;
+        let chatgpt_account_id = id_token
+            .as_deref()
+            .and_then(extract_chatgpt_account_id);
+
         Ok(OAuthTokens {
             access_token: token_response.access_token,
             refresh_token: token_response.refresh_token,
             expires_at: token_response.expires_in.map(|secs| now + secs * 1000),
-            id_token: token_response.id_token,
+            id_token,
+            chatgpt_account_id,
         })
     }
+}
+
+pub(crate) fn extract_chatgpt_account_id(id_token: &str) -> Option<String> {
+    let payload_b64 = id_token.split('.').nth(1)?;
+    let payload_bytes = URL_SAFE_NO_PAD.decode(payload_b64).ok()?;
+    let claims: Value = serde_json::from_slice(&payload_bytes).ok()?;
+    claims
+        .get("https://api.openai.com/auth")?
+        .get("chatgpt_account_id")?
+        .as_str()
+        .map(str::to_string)
 }
 
 #[cfg(test)]
@@ -246,6 +283,34 @@ mod tests {
         // Scopes should be URL-encoded
         assert!(url.contains("scope="));
         assert!(url.contains("openid"));
+    }
+
+    #[test]
+    fn test_auth_url_includes_codex_params() {
+        let auth = OpenAIAuth::new();
+        let pkce = PkceCodes::generate();
+        let url = auth.build_auth_url("http://localhost:8080", "state", &pkce);
+
+        assert!(url.contains("id_token_add_organizations=true"));
+        assert!(url.contains("codex_cli_simplified_flow=true"));
+        assert!(url.contains(&format!("originator={ORIGINATOR}")));
+    }
+
+    #[test]
+    fn test_extract_chatgpt_account_id() {
+        let payload = serde_json::json!({
+            "https://api.openai.com/auth": {
+                "chatgpt_account_id": "acct_123"
+            }
+        });
+        let payload_bytes = serde_json::to_vec(&payload).unwrap();
+        let payload_b64 = URL_SAFE_NO_PAD.encode(payload_bytes);
+        let token = format!("header.{payload_b64}.sig");
+
+        assert_eq!(
+            extract_chatgpt_account_id(&token),
+            Some("acct_123".to_string())
+        );
     }
 
     #[test]
