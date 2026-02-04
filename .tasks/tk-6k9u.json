@@ -1,0 +1,28 @@
+{
+  "project": "tk",
+  "ref": "6k9u",
+  "title": "[UX] Ctrl+P model selector blocked by non-empty input",
+  "description": "User reports Ctrl+P doesn't work if input box has text; must delete message to change model. Investigate TUI key handling so Ctrl+P works regardless of input.",
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [
+    {
+      "ts": "2026-02-04T17:52:41.684Z",
+      "msg": "Ctrl+P currently routes to history when input non-empty (see src/tui/events.rs: Ctrl+P handler). User wants provider picker even with input present."
+    },
+    {
+      "ts": "2026-02-04T17:53:05.231Z",
+      "msg": "Changed Ctrl+P to always open provider selector when not running (history via Up/Down)."
+    }
+  ],
+  "created_at": "2026-02-04T17:51:34.086Z",
+  "updated_at": "2026-02-04T17:53:05.231Z",
+  "completed_at": null,
+  "external": {}
+}

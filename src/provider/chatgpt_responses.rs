@@ -81,6 +81,7 @@ impl ChatGptResponsesClient {
                 Some("auto")
             },
             parallel_tool_calls: if request.tools.is_empty() { None } else { Some(true) },
+            store: false,
             stream,
             include: vec!["reasoning.encrypted_content".to_string()],
         }
@@ -217,6 +218,7 @@ struct ResponsesRequest {
     tool_choice: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     parallel_tool_calls: Option<bool>,
+    store: bool,
     stream: bool,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     include: Vec<String>,
