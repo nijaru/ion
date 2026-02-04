@@ -1,9 +1,8 @@
-//! Google OAuth for Gemini via Code Assist API.
+//! Google OAuth for Gemini API.
 //!
 //! Uses the Gemini CLI OAuth flow to access Gemini models through
-//! Google's Code Assist API (cloudcode-pa.googleapis.com).
-//!
-//! Note: This is different from the consumer Gemini API which only supports API keys.
+//! Google's Generative Language API (generativelanguage.googleapis.com).
+//! This enables access using Google AI Pro/Ultra subscriptions.
 
 use super::pkce::{PkceCodes, generate_state};
 use super::server::CallbackServer;
@@ -23,7 +22,7 @@ pub const CLIENT_SECRET: &str = "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";
 pub const AUTH_ENDPOINT: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 pub const TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
 
-/// OAuth scopes for Code Assist access (Gemini CLI scopes).
+/// OAuth scopes for Gemini API access.
 pub const SCOPES: &str = "https://www.googleapis.com/auth/cloud-platform \
                           https://www.googleapis.com/auth/userinfo.email \
                           https://www.googleapis.com/auth/userinfo.profile";
