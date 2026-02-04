@@ -76,9 +76,7 @@ impl GeminiOAuthClient {
                 .parse()
                 .unwrap(),
         );
-        if let Ok(project) = std::env::var("GOOGLE_CLOUD_PROJECT")
-            .or_else(|_| std::env::var("CLOUDSDK_CORE_PROJECT"))
-        {
+        if let Ok(project) = std::env::var("ION_GEMINI_PROJECT") {
             if let Ok(value) = project.parse() {
                 headers.insert(
                     reqwest::header::HeaderName::from_static("x-goog-user-project"),

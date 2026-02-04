@@ -126,7 +126,7 @@ impl ProviderQuirks {
             reasoning_field: ReasoningField::None,
             supports_provider_routing: false,
             // ChatGPT subscription uses different endpoint than API
-            base_url: "https://chatgpt.com/backend-api/codex",
+            base_url: "https://chatgpt.com/backend-api/codex/v1",
             auth_header: None, // Standard Bearer auth
         }
     }
