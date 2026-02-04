@@ -4,11 +4,11 @@ use super::anthropic::AnthropicClient;
 use super::api_provider::Provider;
 use super::error::Error;
 use super::gemini_oauth::GeminiOAuthClient;
+use super::chatgpt_responses::ChatGptResponsesClient;
 use super::openai_compat::OpenAICompatClient;
 use super::types::{ChatRequest, Message, StreamEvent};
 use crate::auth;
 use async_trait::async_trait;
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use tokio::sync::mpsc;
 
 /// Backend implementation for different provider types.
@@ -17,6 +17,8 @@ enum Backend {
     Anthropic(AnthropicClient),
     /// Native OpenAI-compatible API (`OpenAI`, `OpenRouter`, Groq, Kimi, Ollama, `ChatGPT`)
     OpenAICompat(OpenAICompatClient),
+    /// ChatGPT subscription via Responses API
+    ChatGptResponses(ChatGptResponsesClient),
     /// Native Google Generative AI (Gemini OAuth, Google)
     GeminiOAuth(GeminiOAuthClient),
 }
@@ -52,15 +54,14 @@ impl Client {
                 })?;
 
             if provider == Provider::ChatGpt {
-                let extra_headers = chatgpt_headers(&creds);
-                let client = if extra_headers.is_empty() {
-                    OpenAICompatClient::new(provider, creds.token())?
-                } else {
-                    OpenAICompatClient::new_with_headers(provider, creds.token(), extra_headers)?
+                let account_id = match &creds {
+                    auth::Credentials::OAuth(tokens) => tokens.chatgpt_account_id.clone(),
+                    _ => None,
                 };
+                let client = ChatGptResponsesClient::new(creds.token(), account_id);
                 return Ok(Self {
                     provider,
-                    backend: Backend::OpenAICompat(client),
+                    backend: Backend::ChatGptResponses(client),
                 });
             }
 
@@ -99,15 +100,14 @@ impl Client {
                 })?;
 
             if provider == Provider::ChatGpt {
-                let extra_headers = chatgpt_headers(&creds);
-                let client = if extra_headers.is_empty() {
-                    OpenAICompatClient::new(provider, creds.token())?
-                } else {
-                    OpenAICompatClient::new_with_headers(provider, creds.token(), extra_headers)?
+                let account_id = match &creds {
+                    auth::Credentials::OAuth(tokens) => tokens.chatgpt_account_id.clone(),
+                    _ => None,
                 };
+                let client = ChatGptResponsesClient::new(creds.token(), account_id);
                 return Ok(Self {
                     provider,
-                    backend: Backend::OpenAICompat(client),
+                    backend: Backend::ChatGptResponses(client),
                 });
             }
 
@@ -134,8 +134,22 @@ impl Client {
     ) -> Result<Self, Error> {
         let api_key = api_key.into();
         let base_url = base_url.into();
-        let backend = Self::create_backend(provider, &api_key, Some(&base_url))?;
-        Ok(Self { provider, backend })
+        match provider {
+            Provider::OpenAI
+            | Provider::OpenRouter
+            | Provider::Groq
+            | Provider::Kimi
+            | Provider::Ollama => {
+                let client = OpenAICompatClient::with_base_url(provider, api_key, base_url)?;
+                Ok(Self {
+                    provider,
+                    backend: Backend::OpenAICompat(client),
+                })
+            }
+            _ => Err(Error::Build(
+                "Custom base URL is not supported for this provider".to_string(),
+            )),
+        }
     }
 
     /// Get the provider type.
@@ -150,9 +164,21 @@ impl Client {
         api_key: &str,
         base_url: Option<&str>,
     ) -> Result<Backend, Error> {
+        if base_url.is_some() {
+            return Err(Error::Build(
+                "Custom base URL is not supported for this provider".to_string(),
+            ));
+        }
+
         match provider {
             // Anthropic uses native Messages API
             Provider::Anthropic => Ok(Backend::Anthropic(AnthropicClient::new(api_key))),
+
+            // ChatGPT subscription uses Responses API
+            Provider::ChatGpt => Ok(Backend::ChatGptResponses(ChatGptResponsesClient::new(
+                api_key,
+                None,
+            ))),
 
             // Google/Gemini use native Generative AI API
             Provider::Google | Provider::Gemini => {
@@ -161,36 +187,17 @@ impl Client {
 
             // OpenAI-compatible providers
             Provider::OpenAI
-            | Provider::ChatGpt
             | Provider::OpenRouter
             | Provider::Groq
             | Provider::Kimi
             | Provider::Ollama => {
-                let client = if let Some(url) = base_url {
-                    OpenAICompatClient::with_base_url(provider, api_key, url)?
-                } else {
-                    OpenAICompatClient::new(provider, api_key)?
-                };
+                let client = OpenAICompatClient::new(provider, api_key)?;
                 Ok(Backend::OpenAICompat(client))
             }
         }
     }
 }
 
-fn chatgpt_headers(creds: &auth::Credentials) -> HeaderMap {
-    let mut headers = HeaderMap::new();
-    let auth::Credentials::OAuth(tokens) = creds else {
-        return headers;
-    };
-    let Some(account_id) = tokens.chatgpt_account_id.as_deref() else {
-        return headers;
-    };
-    let name = HeaderName::from_static("chatgpt-account-id");
-    if let Ok(value) = HeaderValue::from_str(account_id) {
-        headers.insert(name, value);
-    }
-    headers
-}
 
 /// Trait for LLM operations.
 ///
@@ -232,6 +239,7 @@ impl LlmApi for Client {
         match &self.backend {
             Backend::Anthropic(client) => client.stream(request, tx).await,
             Backend::OpenAICompat(client) => client.stream(request, tx).await,
+            Backend::ChatGptResponses(client) => client.stream(request, tx).await,
             Backend::GeminiOAuth(client) => client.stream(request, tx).await,
         }
     }
@@ -248,6 +256,7 @@ impl LlmApi for Client {
         match &self.backend {
             Backend::Anthropic(client) => client.complete(request).await,
             Backend::OpenAICompat(client) => client.complete(request).await,
+            Backend::ChatGptResponses(client) => client.complete(request).await,
             Backend::GeminiOAuth(client) => client.complete(request).await,
         }
     }

@@ -14,21 +14,20 @@
 
 **OAuth Subscription Auth** (2026-02-04):
 
-- **Gemini OAuth (tk-toyu)**: Ensuring `models/` prefix, mapping `generation_config`, optional `x-goog-user-project` header (now only if `ION_GEMINI_PROJECT` set), and fallback endpoints for 5xx. Needs re-test after changes.
-- **ChatGPT OAuth (tk-uqt6)**: Added Codex CLI authorize params (id_token_add_organizations, codex_cli_simplified_flow, originator) and ChatGPT-Account-ID extraction/header. Needs real subscription re-test.
+- **Gemini OAuth (tk-toyu)**: Ensuring `models/` prefix, mapping `generation_config`, optional `x-goog-user-project` header (now only if `ION_GEMINI_PROJECT` set), and fallback endpoints for 5xx. Needs re-test after rebuild (fish `unset` doesn’t work).
+- **ChatGPT OAuth (tk-uqt6)**: Switched to Responses API client (POST /responses), with fallback between `/backend-api/codex` and `/backend-api/codex/v1`. Needs re-test after rebuild.
 
 ## Open Blockers
 
 | Provider | Issue                                  | Next Step                     |
 | -------- | -------------------------------------- | ----------------------------- |
-| Gemini   | 500 errors despite matching Gemini CLI | Compare full request/headers  |
-| ChatGPT  | Untested with new endpoint             | Test + may need Responses API |
+| Gemini   | 403 license error (project-bound)      | Rebuild + ensure no project header |
+| ChatGPT  | 404 Not Found                          | Rebuild and re-test /responses path |
 
 ## Top Priorities
 
-1. Test Gemini OAuth with real subscription
-2. Test ChatGPT OAuth with new endpoint
-3. If ChatGPT fails, implement Responses API format
+1. Rebuild and test Gemini OAuth without project header
+2. Rebuild and test ChatGPT Responses API
 
 ## Key References
 

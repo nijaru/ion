@@ -49,10 +49,14 @@
     {
       "ts": "2026-02-04T05:57:18.007Z",
       "msg": "Adjusted x-goog-user-project header: only sent when ION_GEMINI_PROJECT is set (avoid accidental Cloud Project binding that triggers license error)."
+    },
+    {
+      "ts": "2026-02-04T06:08:01.027Z",
+      "msg": "Fish shell note: unset failed; Gemini still saw project license error likely due to old binary. Header now only sent when ION_GEMINI_PROJECT is set; rebuild required."
     }
   ],
   "created_at": "2026-01-30T03:12:45.222Z",
-  "updated_at": "2026-02-04T05:57:18.007Z",
+  "updated_at": "2026-02-04T06:08:01.027Z",
   "completed_at": null,
   "external": {}
 }
