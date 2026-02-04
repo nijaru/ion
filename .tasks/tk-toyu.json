@@ -53,10 +53,18 @@
     {
       "ts": "2026-02-04T06:08:01.027Z",
       "msg": "Fish shell note: unset failed; Gemini still saw project license error likely due to old binary. Header now only sent when ION_GEMINI_PROJECT is set; rebuild required."
+    },
+    {
+      "ts": "2026-02-04T17:59:06.441Z",
+      "msg": "Gemini still returns 403 'configured to use a Google Cloud Project' after rebuild; likely ION_GEMINI_PROJECT set in environment. Added trim check; need env inspection."
+    },
+    {
+      "ts": "2026-02-04T18:02:25.062Z",
+      "msg": "Removed x-goog-user-project header entirely for Gemini OAuth to avoid Cloud Project license gating. Consumer subscriptions should not bind to project."
     }
   ],
   "created_at": "2026-01-30T03:12:45.222Z",
-  "updated_at": "2026-02-04T06:08:01.027Z",
+  "updated_at": "2026-02-04T18:02:25.062Z",
   "completed_at": null,
   "external": {}
 }

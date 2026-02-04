@@ -687,6 +687,7 @@ impl App {
         self.mode = Mode::Input;
         // Selector used large area - flag for full clear + repaint
         self.render_state.needs_full_repaint = true;
+        self.render_state.clear_scrollback_on_repaint = false;
         self.force_full_repaint();
     }
 

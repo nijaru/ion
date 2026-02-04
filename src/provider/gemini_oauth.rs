@@ -76,14 +76,8 @@ impl GeminiOAuthClient {
                 .parse()
                 .unwrap(),
         );
-        if let Ok(project) = std::env::var("ION_GEMINI_PROJECT") {
-            if let Ok(value) = project.parse() {
-                headers.insert(
-                    reqwest::header::HeaderName::from_static("x-goog-user-project"),
-                    value,
-                );
-            }
-        }
+        // Do NOT send x-goog-user-project for consumer subscriptions.
+        // This header binds requests to a Cloud Project and triggers license errors.
         headers
     }
 

@@ -238,7 +238,7 @@ enum ResponseInputItem {
     },
     FunctionCallOutput {
         call_id: String,
-        output: FunctionCallOutputPayload,
+        output: String,
     },
 }
 
@@ -250,11 +250,6 @@ enum ResponseContent {
     InputImage { image_url: String },
 }
 
-#[derive(Debug, Serialize)]
-struct FunctionCallOutputPayload {
-    success: bool,
-    output: String,
-}
 
 #[derive(Debug)]
 enum ParsedEvent {
@@ -348,12 +343,14 @@ fn build_instructions_and_input(request: &ChatRequest) -> (String, Vec<ResponseI
                         is_error,
                     } = block
                     {
+                        let output = if *is_error {
+                            format!("[ERROR] {content}")
+                        } else {
+                            content.clone()
+                        };
                         input.push(ResponseInputItem::FunctionCallOutput {
                             call_id: tool_call_id.clone(),
-                            output: FunctionCallOutputPayload {
-                                success: !*is_error,
-                                output: content.clone(),
-                            },
+                            output,
                         });
                     }
                 }

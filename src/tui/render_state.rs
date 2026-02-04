@@ -78,6 +78,8 @@ pub struct RenderState {
 
     /// Flag to request full screen clear + repaint (e.g., after selector closes).
     pub needs_full_repaint: bool,
+    /// When true, clear scrollback on full repaint.
+    pub clear_scrollback_on_repaint: bool,
 }
 
 impl RenderState {
@@ -92,6 +94,7 @@ impl RenderState {
             last_render_width: None,
             last_ui_start: None,
             needs_full_repaint: false,
+            clear_scrollback_on_repaint: true,
         }
     }
 
