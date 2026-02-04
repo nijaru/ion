@@ -19,10 +19,14 @@
     {
       "ts": "2026-02-04T17:53:05.231Z",
       "msg": "Changed Ctrl+P to always open provider selector when not running (history via Up/Down)."
+    },
+    {
+      "ts": "2026-02-04T18:02:32.582Z",
+      "msg": "Selector close now avoids clearing scrollback to prevent extra blank lines; added flag to skip \\x1b[3J on selector exit."
     }
   ],
   "created_at": "2026-02-04T17:51:34.086Z",
-  "updated_at": "2026-02-04T17:53:05.231Z",
+  "updated_at": "2026-02-04T18:02:32.582Z",
   "completed_at": null,
   "external": {}
 }

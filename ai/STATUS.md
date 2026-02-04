@@ -14,15 +14,15 @@
 
 **OAuth Subscription Auth** (2026-02-04):
 
-- **Gemini OAuth (tk-toyu)**: Ensuring `models/` prefix, mapping `generation_config`, optional `x-goog-user-project` header (now only if `ION_GEMINI_PROJECT` set), and fallback endpoints for 5xx. Needs re-test after rebuild (fish `unset` doesn’t work).
-- **ChatGPT OAuth (tk-uqt6)**: Responses API client now sets `store=false`, with fallback between `/backend-api/codex` and `/backend-api/codex/v1`. Needs re-test after rebuild.
+- **Gemini OAuth (tk-toyu)**: Removed `x-goog-user-project` header entirely to avoid Cloud Project license gating. Needs re-test after rebuild.
+- **ChatGPT OAuth (tk-uqt6)**: Responses API client now sets `store=false` and sends `function_call_output.output` as string (not object). Needs re-test after rebuild.
 
 ## Open Blockers
 
 | Provider | Issue                                  | Next Step                     |
 | -------- | -------------------------------------- | ----------------------------- |
-| Gemini   | 403 license error (project-bound)      | Rebuild + ensure no project header |
-| ChatGPT  | 400 store must be false                | Rebuild with store=false in payload |
+| Gemini   | 403 license error (project-bound)      | Verify `ION_GEMINI_PROJECT` is unset |
+| ChatGPT  | 400 invalid_type for input[*].output   | Rebuild with string output fix |
 
 ## Top Priorities
 

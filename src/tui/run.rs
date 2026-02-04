@@ -271,8 +271,13 @@ pub async fn run(
         // Handle full repaint request (e.g., after exiting fullscreen selector)
         if app.render_state.needs_full_repaint {
             app.render_state.needs_full_repaint = false;
-            // Clear screen (always) and reprint chat (if any)
-            print!("\x1b[3J\x1b[2J\x1b[H");
+            let clear_scrollback = app.render_state.clear_scrollback_on_repaint;
+            // Clear screen (always); clear scrollback only when requested
+            if clear_scrollback {
+                print!("\x1b[3J\x1b[2J\x1b[H");
+            } else {
+                print!("\x1b[2J\x1b[H");
+            }
             let _ = io::stdout().flush();
             if !app.message_list.entries.is_empty() {
                 app.reprint_chat_scrollback(&mut stdout, term_width)?;
@@ -282,6 +287,8 @@ pub async fn run(
                 app.set_header_inserted(false);
             }
             stdout.flush()?;
+            // Reset to default behavior for future repaints
+            app.render_state.clear_scrollback_on_repaint = true;
         }
 
         if !app.header_inserted() && app.message_list.entries.is_empty() {
