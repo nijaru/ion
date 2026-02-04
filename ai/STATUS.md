@@ -4,45 +4,36 @@
 
 | Metric    | Value          | Updated    |
 | --------- | -------------- | ---------- |
-| Phase     | Stable         | 2026-01-31 |
-| Status    | Review Done    | 2026-01-31 |
+| Phase     | OAuth Testing  | 2026-02-03 |
+| Status    | In Progress    | 2026-02-03 |
 | Toolchain | stable         | 2026-01-22 |
 | Tests     | 299 passing    | 2026-01-31 |
 | Clippy    | pedantic clean | 2026-01-31 |
 
-## Just Completed
+## In Progress
 
-**Code Review & Fixes** (2026-01-31):
+**OAuth Subscription Auth** (2026-02-03):
 
-- Deduplicated helper functions (cli.rs uses message_list's extract_key_arg)
-- Removed unused Pipe trait
-- Cleaned up test file structure (removed redundant mod tests wrappers)
-- Added hook behavior documentation (last-wins semantics)
-- Added tracing::warn for malformed JSON fallback
+- **Gemini OAuth (tk-toyu)**: Added Client-Metadata header, removed project field. Using cloudcode-pa.googleapis.com/v1internal:streamGenerateContent. Still getting 500 errors - needs more testing.
+- **ChatGPT OAuth (tk-uqt6)**: Fixed endpoint to use `chatgpt.com/backend-api/codex` instead of `api.openai.com/v1`. May need Responses API format instead of Chat Completions. May need ChatGPT-Account-ID header.
 
-**Refactor Sprint** (2026-01-31):
+## Open Blockers
 
-- 12 commits: file splits, hook system, PickerNavigation trait
-- Hook integration wired into ToolOrchestrator
-- Added 79 automated tests (message_list, OAuth, CLI)
-
-## Open Bugs
-
-| ID      | Issue                    | Root Cause                  |
-| ------- | ------------------------ | --------------------------- |
-| tk-2bk7 | Resize clears scrollback | Needs preservation strategy |
+| Provider | Issue                                  | Next Step                     |
+| -------- | -------------------------------------- | ----------------------------- |
+| Gemini   | 500 errors despite matching Gemini CLI | Compare full request/headers  |
+| ChatGPT  | Untested with new endpoint             | Test + may need Responses API |
 
 ## Top Priorities
 
-1. OAuth testing with real subscriptions (tk-uqt6, tk-toyu)
-2. Ctrl+R fuzzy history search (tk-g3dt)
-3. Manual TUI testing if needed
+1. Test Gemini OAuth with real subscription
+2. Test ChatGPT OAuth with new endpoint
+3. If ChatGPT fails, implement Responses API format
 
 ## Key References
 
-| Topic                 | Location                                |
-| --------------------- | --------------------------------------- |
-| Architecture overview | ai/DESIGN.md                            |
-| OAuth design          | ai/design/oauth-subscriptions.md        |
-| Module organization   | ai/design/module-structure.md           |
-| Review report         | ai/review/refactor-sprint-2026-01-31.md |
+| Topic                 | Location                                      |
+| --------------------- | --------------------------------------------- |
+| Gemini OAuth research | ai/research/gemini-oauth-subscription-auth.md |
+| OAuth design          | ai/design/oauth-subscriptions.md              |
+| Architecture overview | ai/DESIGN.md                                  |

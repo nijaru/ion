@@ -33,10 +33,14 @@
     {
       "ts": "2026-01-30T18:30:11.092Z",
       "msg": "Gemini OAuth login succeeds but API calls to Code Assist API return 403 Permission Denied. Tried: consumer API (no OAuth support), Code Assist v1internal format, model name mapping. May need different client ID or scopes"
+    },
+    {
+      "ts": "2026-02-04T05:17:46.872Z",
+      "msg": "Added Client-Metadata header matching Gemini CLI/pi-mono. Removed project field (not needed for personal Gemini subscriptions). Headers now: User-Agent, X-Goog-Api-Client, Client-Metadata with ideType/platform/pluginType. Still getting 500 errors - needs testing."
     }
   ],
   "created_at": "2026-01-30T03:12:45.222Z",
-  "updated_at": "2026-01-30T18:30:11.092Z",
+  "updated_at": "2026-02-04T05:17:46.872Z",
   "completed_at": null,
   "external": {}
 }
