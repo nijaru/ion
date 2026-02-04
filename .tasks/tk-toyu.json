@@ -45,10 +45,14 @@
     {
       "ts": "2026-02-04T05:43:49.728Z",
       "msg": "Adjusted Gemini OAuth request: ensure models/ prefix, add generation_config from request, optional x-goog-user-project header, separate Accept for stream, and endpoint fallback to autopush/daily on 5xx."
+    },
+    {
+      "ts": "2026-02-04T05:57:18.007Z",
+      "msg": "Adjusted x-goog-user-project header: only sent when ION_GEMINI_PROJECT is set (avoid accidental Cloud Project binding that triggers license error)."
     }
   ],
   "created_at": "2026-01-30T03:12:45.222Z",
-  "updated_at": "2026-02-04T05:43:49.728Z",
+  "updated_at": "2026-02-04T05:57:18.007Z",
   "completed_at": null,
   "external": {}
 }
