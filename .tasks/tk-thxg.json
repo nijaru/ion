@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "thxg",
+  "title": "[BUG] Subagent tool filtering not implemented",
+  "description": "TODO at src/agent/subagent.rs:118 - subagents get all tools regardless of config.tools whitelist. Security gap.",
+  "status": "open",
+  "priority": 1,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-02-04T22:16:25.803Z",
+  "updated_at": "2026-02-04T22:16:25.803Z",
+  "completed_at": null,
+  "external": {}
+}

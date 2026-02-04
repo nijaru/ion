@@ -2,47 +2,53 @@
 
 ## Current State
 
-| Metric    | Value          | Updated    |
-| --------- | -------------- | ---------- |
-| Phase     | Code Cleanup   | 2026-02-04 |
-| Status    | Clean          | 2026-02-04 |
-| Toolchain | stable         | 2026-01-22 |
-| Tests     | 303 passing    | 2026-02-04 |
-| Clippy    | pedantic clean | 2026-01-31 |
+| Metric    | Value            | Updated    |
+| --------- | ---------------- | ---------- |
+| Phase     | TUI/Agent Polish | 2026-02-04 |
+| Status    | In Progress      | 2026-02-04 |
+| Toolchain | stable           | 2026-01-22 |
+| Tests     | 303 passing      | 2026-02-04 |
+| Clippy    | pedantic clean   | 2026-01-31 |
 
-## Recently Completed
+## Current Focus
 
-**Code Cleanup** (2026-02-04):
+**TUI bug fixes and core agent completion** using local models (Ollama) or OpenRouter (`openrouter/free`).
 
-- Moved subscription OAuth providers to `src/provider/subscription/` with warning documentation
-- Fixed `take_tail()` double iteration in `message_list.rs` (single-pass via reverse)
-- Verified `store.rs` queries already optimized (CTE+ROW_NUMBER for list_recent)
-- TUI line handling audit: confirmed clean (selector, help overlay, progress bar)
+## Architecture Assessment (2026-02-04)
 
-**Subscription OAuth Organization**:
+**Verdict:** Solid foundation (~60% complete), feature-incomplete vs competitors.
 
-- `src/provider/subscription/mod.rs` - Module with warning about unofficial nature
-- `src/provider/subscription/chatgpt.rs` - ChatGPT Responses API client
-- `src/provider/subscription/gemini.rs` - Gemini OAuth client (Antigravity flow)
+| Aspect                  | Status                             |
+| ----------------------- | ---------------------------------- |
+| Module separation       | Good - clean boundaries            |
+| Agent loop              | Good - matches Claude Code pattern |
+| Provider abstraction    | Good - 9 providers                 |
+| Tool system             | Good - permissions, hooks          |
+| Memory system           | Missing - claimed differentiator   |
+| Session branching       | Missing - linear only              |
+| Extensibility           | Basic - hooks only                 |
+| Subagent tool filtering | TODO in code                       |
 
-## Open Blockers
+## High Priority Bugs
 
-| Provider | Issue                                | Status                     |
-| -------- | ------------------------------------ | -------------------------- |
-| Gemini   | 403 license error (project-bound)    | Needs testing with new org |
-| ChatGPT  | 400 invalid_type for input[*].output | Needs testing with new org |
+| Bug                         | File              | Task    |
+| --------------------------- | ----------------- | ------- |
+| Visual line cursor clamping | `composer/mod.rs` | tk-wi1s |
+| Progress line duplicates    | `render.rs`       | tk-4trn |
+| Subagent tool filtering     | `subagent.rs:118` | tk-thxg |
 
-## Top Priorities
+## Deferred
 
-1. Test Gemini OAuth with new subscription/gemini.rs location
-2. Test ChatGPT OAuth with new subscription/chatgpt.rs location
-3. Implement plugin system when ready (deferred)
+- OAuth subscription (ChatGPT, Gemini) - unofficial, deprioritized
+- Plugin system - waiting for core completion
+- Memory system (tk-5j06) - P2 after bugs fixed
 
 ## Key References
 
-| Topic                 | Location                                      |
-| --------------------- | --------------------------------------------- |
-| Gemini OAuth research | ai/research/gemini-oauth-subscription-auth.md |
-| OAuth design          | ai/design/oauth-subscriptions.md              |
-| Architecture overview | ai/DESIGN.md                                  |
-| Plugin architecture   | ai/design/plugin-architecture.md              |
+| Topic                  | Location                                 |
+| ---------------------- | ---------------------------------------- |
+| Architecture           | ai/DESIGN.md                             |
+| TUI design             | ai/design/tui-v2.md                      |
+| Agent design           | ai/design/agent.md                       |
+| Claude Code comparison | ai/research/claude-code-architecture.md  |
+| Pi-mono comparison     | ai/research/pi-mono-architecture-2026.md |
