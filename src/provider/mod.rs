@@ -16,13 +16,12 @@ mod anthropic;
 mod api_provider;
 mod client;
 mod error;
-mod gemini_oauth;
-mod chatgpt_responses;
 mod http;
 mod models_dev;
 mod openai_compat;
 mod prefs;
 mod registry;
+mod subscription;
 mod types;
 
 use std::time::Duration;

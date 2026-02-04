@@ -3,9 +3,8 @@
 use super::anthropic::AnthropicClient;
 use super::api_provider::Provider;
 use super::error::Error;
-use super::gemini_oauth::GeminiOAuthClient;
-use super::chatgpt_responses::ChatGptResponsesClient;
 use super::openai_compat::OpenAICompatClient;
+use super::subscription::{ChatGptResponsesClient, GeminiOAuthClient};
 use super::types::{ChatRequest, Message, StreamEvent};
 use crate::auth;
 use async_trait::async_trait;

@@ -4,33 +4,39 @@
 
 | Metric    | Value          | Updated    |
 | --------- | -------------- | ---------- |
-| Phase     | OAuth Testing  | 2026-02-04 |
-| Status    | In Progress    | 2026-02-04 |
+| Phase     | Code Cleanup   | 2026-02-04 |
+| Status    | Clean          | 2026-02-04 |
 | Toolchain | stable         | 2026-01-22 |
-| Tests     | 299 passing    | 2026-01-31 |
+| Tests     | 303 passing    | 2026-02-04 |
 | Clippy    | pedantic clean | 2026-01-31 |
 
-## In Progress
+## Recently Completed
 
-**OAuth Subscription Auth** (2026-02-04):
+**Code Cleanup** (2026-02-04):
 
-- User wants **subscription OAuth moved to plugin/extension** so core stays supported-only. New task: `tk-kfx5`.
-- **Gemini OAuth (tk-toyu)**: Antigravity OAuth implemented (fixed port 51121 `/oauth-callback`, `loadCodeAssist` project resolution, request wrapper `project`). Will move into plugin/extension per new direction.
-- **ChatGPT OAuth (tk-uqt6)**: Responses API client now sets `store=false` and sends `function_call_output.output` as string. Will move into plugin/extension per new direction.
+- Moved subscription OAuth providers to `src/provider/subscription/` with warning documentation
+- Fixed `take_tail()` double iteration in `message_list.rs` (single-pass via reverse)
+- Verified `store.rs` queries already optimized (CTE+ROW_NUMBER for list_recent)
+- TUI line handling audit: confirmed clean (selector, help overlay, progress bar)
+
+**Subscription OAuth Organization**:
+
+- `src/provider/subscription/mod.rs` - Module with warning about unofficial nature
+- `src/provider/subscription/chatgpt.rs` - ChatGPT Responses API client
+- `src/provider/subscription/gemini.rs` - Gemini OAuth client (Antigravity flow)
 
 ## Open Blockers
 
-| Provider | Issue                                  | Next Step                     |
-| -------- | -------------------------------------- | ----------------------------- |
-| Gemini   | 403 license error (project-bound)      | Move OAuth to plugin; re-test there |
-| ChatGPT  | 400 invalid_type for input[*].output   | Move OAuth to plugin; re-test there |
-| TUI      | Line handling audit pending             | Review render/input/history for similar newline/scrollback issues |
+| Provider | Issue                                | Status                     |
+| -------- | ------------------------------------ | -------------------------- |
+| Gemini   | 403 license error (project-bound)    | Needs testing with new org |
+| ChatGPT  | 400 invalid_type for input[*].output | Needs testing with new org |
 
 ## Top Priorities
 
-1. Rebuild and test Gemini OAuth without project header
-2. Rebuild and test ChatGPT Responses API
-3. Plan OAuth move to plugin/extension (core supported-only)
+1. Test Gemini OAuth with new subscription/gemini.rs location
+2. Test ChatGPT OAuth with new subscription/chatgpt.rs location
+3. Implement plugin system when ready (deferred)
 
 ## Key References
 
@@ -39,3 +45,4 @@
 | Gemini OAuth research | ai/research/gemini-oauth-subscription-auth.md |
 | OAuth design          | ai/design/oauth-subscriptions.md              |
 | Architecture overview | ai/DESIGN.md                                  |
+| Plugin architecture   | ai/design/plugin-architecture.md              |
