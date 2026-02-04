@@ -23,10 +23,14 @@
     {
       "ts": "2026-02-04T18:02:32.582Z",
       "msg": "Selector close now avoids clearing scrollback to prevent extra blank lines; added flag to skip \\x1b[3J on selector exit."
+    },
+    {
+      "ts": "2026-02-04T20:11:56.894Z",
+      "msg": "Line/scrollback audit not done yet; only selector newline fix applied earlier. User asked for review of similar line handling bugs later."
     }
   ],
   "created_at": "2026-02-04T17:51:34.086Z",
-  "updated_at": "2026-02-04T18:02:32.582Z",
+  "updated_at": "2026-02-04T20:11:56.894Z",
   "completed_at": null,
   "external": {}
 }

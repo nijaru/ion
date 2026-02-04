@@ -39,10 +39,14 @@
     {
       "ts": "2026-02-04T17:59:01.145Z",
       "msg": "User sees 400 invalid_type for input[n].output (expected string/array, got object) after rebuild. Fix: send function_call_output output as string, not object payload. Requires rebuild."
+    },
+    {
+      "ts": "2026-02-04T20:11:51.224Z",
+      "msg": "User wants subscription OAuth moved to plugin/extension; core should stick to supported APIs. ChatGPT subscription OAuth should be plugin-only."
     }
   ],
   "created_at": "2026-01-30T03:12:43.012Z",
-  "updated_at": "2026-02-04T17:59:01.145Z",
+  "updated_at": "2026-02-04T20:11:51.224Z",
   "completed_at": null,
   "external": {}
 }
