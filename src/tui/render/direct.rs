@@ -9,7 +9,9 @@ use crate::tui::render_selector::{self, SelectorData, SelectorItem};
 use crate::tui::types::{Mode, SelectorPage};
 use crate::tui::util::{format_elapsed, format_relative_time, format_tokens};
 use crate::tui::App;
+use crossterm::cursor::MoveTo;
 use crossterm::execute;
+use crossterm::terminal::{Clear, ClearType};
 
 impl App {
     /// Direct crossterm rendering (TUI v2 - no ratatui Terminal/Frame).
@@ -98,6 +100,8 @@ impl App {
         // In selector mode, render selector instead of normal input/status
         if self.mode == Mode::Selector {
             self.render_selector_direct(w, ui_start, width, height)?;
+        } else if self.mode == Mode::HistorySearch {
+            self.render_history_search(w, input_start, width)?;
         } else {
             self.render_status_direct(w, width)?;
 
@@ -443,6 +447,94 @@ impl App {
                 write!(w, " ({pct}%)")?;
             }
             execute!(w, SetAttribute(Attribute::Reset))?;
+        }
+
+        Ok(())
+    }
+
+    /// Render history search overlay (Ctrl+R).
+    #[allow(clippy::cast_possible_truncation)]
+    fn render_history_search<W: std::io::Write>(
+        &self,
+        w: &mut W,
+        input_start: u16,
+        width: u16,
+    ) -> std::io::Result<()> {
+        use crossterm::style::{
+            Attribute, Color as CColor, Print, ResetColor, SetAttribute, SetForegroundColor,
+        };
+
+        let max_visible = 8;
+        let matches = &self.history_search.matches;
+        let selected = self.history_search.selected;
+        let query = &self.history_search.query;
+
+        // Calculate how many matches to show
+        let visible_count = matches.len().min(max_visible);
+        let popup_height = (visible_count + 1) as u16; // +1 for search prompt
+        let popup_start = input_start.saturating_sub(popup_height);
+
+        // Render search prompt at bottom of popup
+        let prompt_row = input_start.saturating_sub(1);
+        execute!(w, MoveTo(0, prompt_row), Clear(ClearType::CurrentLine))?;
+        execute!(
+            w,
+            SetForegroundColor(CColor::Cyan),
+            Print("(reverse-i-search)`"),
+            ResetColor,
+            Print(query),
+            SetForegroundColor(CColor::Cyan),
+            Print("': "),
+            ResetColor,
+        )?;
+
+        // Show selected entry preview
+        if let Some(&idx) = matches.get(selected) {
+            if let Some(entry) = self.input_history.get(idx) {
+                let preview: String = entry
+                    .chars()
+                    .take((width as usize).saturating_sub(25))
+                    .collect();
+                execute!(w, Print(&preview))?;
+            }
+        }
+
+        // Render matches above the prompt
+        if !matches.is_empty() {
+            // Calculate visible window
+            let start_idx = if selected >= max_visible {
+                selected - max_visible + 1
+            } else {
+                0
+            };
+
+            for (i, &history_idx) in matches.iter().skip(start_idx).take(max_visible).enumerate() {
+                let row = popup_start + i as u16;
+                let is_selected = start_idx + i == selected;
+
+                execute!(w, MoveTo(1, row), Clear(ClearType::CurrentLine))?;
+
+                if is_selected {
+                    execute!(w, SetAttribute(Attribute::Reverse))?;
+                } else {
+                    execute!(w, SetAttribute(Attribute::Dim))?;
+                }
+
+                if let Some(entry) = self.input_history.get(history_idx) {
+                    // Truncate long entries
+                    let max_len = (width as usize).saturating_sub(4);
+                    let display: String = entry
+                        .lines()
+                        .next()
+                        .unwrap_or("")
+                        .chars()
+                        .take(max_len)
+                        .collect();
+                    execute!(w, Print(" "), Print(&display))?;
+                }
+
+                execute!(w, SetAttribute(Attribute::Reset))?;
+            }
         }
 
         Ok(())

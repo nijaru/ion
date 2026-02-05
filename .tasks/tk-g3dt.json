@@ -3,7 +3,7 @@
   "ref": "g3dt",
   "title": "[FEATURE] Ctrl+R fuzzy history search for input",
   "description": null,
-  "status": "open",
+  "status": "done",
   "priority": 3,
   "labels": [],
   "assignees": [],
@@ -11,9 +11,14 @@
   "blocked_by": [],
   "estimate": null,
   "due_date": null,
-  "logs": [],
+  "logs": [
+    {
+      "ts": "2026-02-05T05:43:23.307Z",
+      "msg": "Implemented Ctrl+R fuzzy history search. Added HistorySearchState with query, matches, selected. Handler for HistorySearch mode in events.rs. Rendering in direct.rs showing matches above input with bash-style prompt. Navigation: Ctrl+R/Up=older, Down/Ctrl+N=newer, Enter=select, Esc=cancel."
+    }
+  ],
   "created_at": "2026-01-27T19:12:46.175Z",
-  "updated_at": "2026-01-27T19:12:46.175Z",
-  "completed_at": null,
+  "updated_at": "2026-02-05T05:43:24.536Z",
+  "completed_at": "2026-02-05T05:43:24.536Z",
   "external": {}
 }

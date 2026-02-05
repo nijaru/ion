@@ -18,7 +18,7 @@ use crate::tui::model_picker::ModelPicker;
 use crate::tui::provider_picker::ProviderPicker;
 use crate::tui::render_state::RenderState;
 use crate::tui::session_picker::SessionPicker;
-use crate::tui::types::{Mode, SelectorPage, ThinkingLevel, TuiApprovalHandler};
+use crate::tui::types::{HistorySearchState, Mode, SelectorPage, ThinkingLevel, TuiApprovalHandler};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -224,6 +224,7 @@ impl App {
             last_task_summary: None,
             file_completer: FileCompleter::new(working_dir.clone()),
             command_completer: CommandCompleter::new(),
+            history_search: HistorySearchState::new(),
         };
 
         // Set initial API provider name on model picker
