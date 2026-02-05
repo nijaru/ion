@@ -5,7 +5,7 @@
 
 use crate::provider::ProviderStatus;
 use crate::tui::filter_input::FilterInputState;
-use crate::tui::picker_trait::PickerNavigation;
+use crate::tui::picker_trait::{FilterablePicker, PickerNavigation};
 use crate::tui::types::SelectionState;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
@@ -13,14 +13,7 @@ use fuzzy_matcher::FuzzyMatcher;
 /// State for the API provider picker modal.
 #[derive(Default)]
 pub struct ProviderPicker {
-    /// All provider statuses (detected on open).
-    pub providers: Vec<ProviderStatus>,
-    /// List selection state.
-    pub list_state: SelectionState,
-    /// Filter input state for type-to-filter.
-    pub filter_input: FilterInputState,
-    /// Filtered providers based on search.
-    pub filtered: Vec<ProviderStatus>,
+    picker: FilterablePicker<ProviderStatus>,
 }
 
 impl ProviderPicker {
@@ -31,103 +24,76 @@ impl ProviderPicker {
 
     /// Refresh provider detection and reset selection.
     pub fn refresh(&mut self) {
-        self.providers = ProviderStatus::sorted(ProviderStatus::detect_all());
-        self.filter_input.clear();
-        self.apply_filter();
+        let providers = ProviderStatus::sorted(ProviderStatus::detect_all());
+        self.picker.set_items(providers);
     }
 
     /// Apply filter to provider list.
     pub fn apply_filter(&mut self) {
         let matcher = SkimMatcherV2::default().ignore_case();
-        let filter = self.filter_input.text();
-
-        self.filtered = self
-            .providers
-            .iter()
-            .filter(|p| {
-                if filter.is_empty() {
-                    return true;
-                }
-                matcher.fuzzy_match(p.provider.name(), filter).is_some()
-                    || matcher
-                        .fuzzy_match(p.provider.description(), filter)
-                        .is_some()
-            })
-            .cloned()
-            .collect();
-
-        if self.filtered.is_empty() {
-            self.list_state.select(None);
-        } else {
-            self.list_state.select(Some(0));
-        }
+        self.picker.apply_filter(|p, filter| {
+            matcher.fuzzy_match(p.provider.name(), filter).is_some()
+                || matcher
+                    .fuzzy_match(p.provider.description(), filter)
+                    .is_some()
+        });
     }
 
-    /// Move selection up.
-    pub fn move_up(&mut self, count: usize) {
-        if self.filtered.is_empty() {
-            return;
-        }
-        let i = self.list_state.selected().unwrap_or(0);
-        let new_i = i.saturating_sub(count);
-        self.list_state.select(Some(new_i));
+    /// Get all providers.
+    #[must_use]
+    pub fn providers(&self) -> &[ProviderStatus] {
+        self.picker.items()
     }
 
-    /// Move selection down.
-    pub fn move_down(&mut self, count: usize) {
-        if self.filtered.is_empty() {
-            return;
-        }
-        let len = self.filtered.len();
-        let i = self.list_state.selected().unwrap_or(0);
-        let new_i = (i + count).min(len - 1);
-        self.list_state.select(Some(new_i));
+    /// Get filtered providers.
+    #[must_use]
+    pub fn filtered(&self) -> &[ProviderStatus] {
+        self.picker.filtered()
     }
 
-    /// Jump to top.
-    pub fn jump_to_top(&mut self) {
-        if !self.filtered.is_empty() {
-            self.list_state.select(Some(0));
-        }
+    /// Get filter input state.
+    #[must_use]
+    pub fn filter_input(&self) -> &FilterInputState {
+        self.picker.filter_input()
     }
 
-    /// Jump to bottom.
-    pub fn jump_to_bottom(&mut self) {
-        if !self.filtered.is_empty() {
-            self.list_state.select(Some(self.filtered.len() - 1));
-        }
+    /// Get mutable filter input state.
+    pub fn filter_input_mut(&mut self) -> &mut FilterInputState {
+        self.picker.filter_input_mut()
+    }
+
+    /// Get list state.
+    #[must_use]
+    pub fn list_state(&self) -> &SelectionState {
+        self.picker.list_state()
     }
 
     /// Get currently selected provider.
     #[must_use]
     pub fn selected(&self) -> Option<&ProviderStatus> {
-        self.list_state
-            .selected()
-            .and_then(|i| self.filtered.get(i))
+        self.picker.selected()
     }
 
     /// Select a specific provider by enum value.
     pub fn select_provider(&mut self, provider: crate::provider::Provider) {
-        if let Some(idx) = self.filtered.iter().position(|s| s.provider == provider) {
-            self.list_state.select(Some(idx));
-        }
+        self.picker.select_by(|s| s.provider == provider);
     }
 }
 
 impl PickerNavigation for ProviderPicker {
     fn move_up(&mut self, count: usize) {
-        Self::move_up(self, count);
+        self.picker.move_up(count);
     }
 
     fn move_down(&mut self, count: usize) {
-        Self::move_down(self, count);
+        self.picker.move_down(count);
     }
 
     fn jump_to_top(&mut self) {
-        Self::jump_to_top(self);
+        self.picker.jump_to_top();
     }
 
     fn jump_to_bottom(&mut self) {
-        Self::jump_to_bottom(self);
+        self.picker.jump_to_bottom();
     }
 }

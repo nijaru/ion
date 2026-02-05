@@ -46,9 +46,9 @@ impl App {
     pub fn calculate_ui_height(&self, width: u16, height: u16) -> u16 {
         if self.mode == Mode::Selector {
             let item_count = match self.selector_page {
-                SelectorPage::Provider => self.provider_picker.filtered.len(),
+                SelectorPage::Provider => self.provider_picker.filtered().len(),
                 SelectorPage::Model => self.model_picker.filtered_models.len(),
-                SelectorPage::Session => self.session_picker.filtered_sessions.len(),
+                SelectorPage::Session => self.session_picker.filtered_sessions().len(),
             };
             return selector_height(item_count, height);
         }
