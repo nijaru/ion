@@ -160,10 +160,13 @@ impl App {
                     .model_picker
                     .filtered_models
                     .iter()
-                    .map(|m| SelectorItem {
-                        label: m.id.clone(),
-                        is_valid: true,
-                        hint: String::new(),
+                    .map(|m| {
+                        let hint = crate::tui::util::format_context_window(m.context_window);
+                        SelectorItem {
+                            label: m.id.clone(),
+                            is_valid: true,
+                            hint,
+                        }
                     })
                     .collect();
                 SelectorData {
