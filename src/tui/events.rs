@@ -28,6 +28,7 @@ impl App {
                 Mode::HelpOverlay => {
                     self.mode = Mode::Input;
                 }
+                Mode::HistorySearch => self.handle_history_search_mode(key),
             },
             Event::Paste(text) => {
                 if self.mode == Mode::Input {
@@ -313,6 +314,15 @@ impl App {
             // Ctrl+G: Open input in external editor
             KeyCode::Char('g') if ctrl => {
                 self.interaction.editor_requested = true;
+            }
+
+            // Ctrl+R: Open history search
+            KeyCode::Char('r') if ctrl => {
+                if !self.input_history.is_empty() {
+                    self.history_search.clear();
+                    self.history_search.update_matches(&self.input_history);
+                    self.mode = Mode::HistorySearch;
+                }
             }
 
             // Shift+Enter or Alt+Enter: Insert newline
@@ -697,6 +707,55 @@ impl App {
             SelectorPage::Provider => action(&mut self.provider_picker),
             SelectorPage::Model => action(&mut self.model_picker),
             SelectorPage::Session => action(&mut self.session_picker),
+        }
+    }
+
+    /// Handle key events in history search mode (Ctrl+R).
+    fn handle_history_search_mode(&mut self, key: KeyEvent) {
+        match key.code {
+            // Escape or Ctrl+C: Cancel search
+            KeyCode::Esc | KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.history_search.clear();
+                self.mode = Mode::Input;
+            }
+
+            // Enter: Select current match and insert into input
+            KeyCode::Enter => {
+                if let Some(idx) = self.history_search.selected_entry() {
+                    if let Some(entry) = self.input_history.get(idx).cloned() {
+                        self.set_input_text(&entry);
+                    }
+                }
+                self.history_search.clear();
+                self.mode = Mode::Input;
+            }
+
+            // Ctrl+R or Up: Select previous (older) match
+            KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.history_search.select_next();
+            }
+            KeyCode::Up | KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.history_search.select_next();
+            }
+
+            // Down or Ctrl+N: Select next (newer) match
+            KeyCode::Down | KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.history_search.select_prev();
+            }
+
+            // Backspace: Remove last char from query
+            KeyCode::Backspace => {
+                self.history_search.query.pop();
+                self.history_search.update_matches(&self.input_history);
+            }
+
+            // Regular character: Add to query
+            KeyCode::Char(c) => {
+                self.history_search.query.push(c);
+                self.history_search.update_matches(&self.input_history);
+            }
+
+            _ => {}
         }
     }
 }

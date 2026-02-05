@@ -32,7 +32,10 @@ pub use picker_trait::PickerNavigation;
 // Re-export public types
 pub use message_list::Sender;
 pub use run::{ResumeOption, run};
-pub use types::{ApprovalRequest, Mode, SelectionState, SelectorPage, TaskSummary, ThinkingLevel};
+pub use types::{
+    ApprovalRequest, HistorySearchState, Mode, SelectionState, SelectorPage, TaskSummary,
+    ThinkingLevel,
+};
 
 // Re-export internal utilities for sibling modules
 pub(crate) use types::QUEUED_PREVIEW_LINES;
@@ -128,6 +131,8 @@ pub struct App {
     pub file_completer: FileCompleter,
     /// Command autocomplete state
     pub command_completer: CommandCompleter,
+    /// Ctrl+R history search state
+    pub history_search: HistorySearchState,
 }
 
 impl App {

@@ -67,6 +67,70 @@ pub enum Mode {
     Selector,
     /// Keybinding help overlay (Ctrl+H)
     HelpOverlay,
+    /// Ctrl+R history search
+    HistorySearch,
+}
+
+/// State for Ctrl+R history search.
+#[derive(Debug, Clone, Default)]
+pub struct HistorySearchState {
+    /// Current search query
+    pub query: String,
+    /// Filtered history entries (indices into input_history)
+    pub matches: Vec<usize>,
+    /// Currently selected match index
+    pub selected: usize,
+}
+
+impl HistorySearchState {
+    /// Create a new history search state.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Update matches based on query and history.
+    pub fn update_matches(&mut self, history: &[String]) {
+        let query_lower = self.query.to_lowercase();
+        self.matches = history
+            .iter()
+            .enumerate()
+            .rev() // Most recent first
+            .filter(|(_, entry)| entry.to_lowercase().contains(&query_lower))
+            .map(|(i, _)| i)
+            .collect();
+        // Reset selection if out of bounds
+        if self.selected >= self.matches.len() {
+            self.selected = 0;
+        }
+    }
+
+    /// Get the currently selected history entry index, if any.
+    #[must_use]
+    pub fn selected_entry(&self) -> Option<usize> {
+        self.matches.get(self.selected).copied()
+    }
+
+    /// Move selection up (to older entries in filtered list).
+    pub fn select_prev(&mut self) {
+        if !self.matches.is_empty() && self.selected > 0 {
+            self.selected -= 1;
+        }
+    }
+
+    /// Move selection down (to newer entries in filtered list).
+    pub fn select_next(&mut self) {
+        if !self.matches.is_empty() && self.selected + 1 < self.matches.len() {
+            self.selected += 1;
+        }
+    }
+
+    /// Clear the search state.
+    pub fn clear(&mut self) {
+        self.query.clear();
+        self.matches.clear();
+        self.selected = 0;
+    }
 }
 
 /// Active page within the selector shell.
