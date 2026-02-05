@@ -15,8 +15,8 @@ pub struct TaskState {
     pub output_tokens: usize,
     /// Currently executing tool name (for interrupt handling).
     pub current_tool: Option<String>,
-    /// Retry status (reason, `delay_seconds`) - shown in progress line.
-    pub retry_status: Option<(String, u64)>,
+    /// Retry status (reason, `delay_seconds`, started_at) - shown in progress line.
+    pub retry_status: Option<(String, u64, Instant)>,
     /// When thinking started (for progress display).
     pub thinking_start: Option<Instant>,
     /// Duration of last completed thinking (for "thought for Xs" display).

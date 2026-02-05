@@ -255,6 +255,25 @@ impl App {
         const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
         let frame = (self.frame_count % SPINNER.len() as u64) as usize;
 
+        // Check if we're in a retry state
+        if let Some((ref reason, delay, started)) = self.task.retry_status {
+            let elapsed = started.elapsed().as_secs();
+            let remaining = delay.saturating_sub(elapsed);
+            execute!(
+                w,
+                Print(" "),
+                SetForegroundColor(CColor::Yellow),
+                Print(SPINNER[frame]),
+                Print(" "),
+                Print(reason),
+                Print(" · retrying in "),
+                Print(remaining),
+                Print("s"),
+                ResetColor
+            )?;
+            return Ok(());
+        }
+
         execute!(
             w,
             Print(" "),
