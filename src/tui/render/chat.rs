@@ -100,7 +100,7 @@ impl App {
         lines
     }
 
-    /// Reprint full chat history into scrollback (used on resize reflow).
+    /// Reprint full chat history into scrollback (used on session resume).
     pub fn reprint_chat_scrollback<W: std::io::Write>(
         &mut self,
         w: &mut W,
