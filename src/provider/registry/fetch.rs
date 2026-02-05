@@ -12,7 +12,7 @@ impl ModelRegistry {
     /// This is the primary entry point for model discovery. Each provider has its own
     /// fetching strategy:
     /// - `OpenRouter`: Direct API call
-    /// - Ollama: Local server API call
+    /// - Local: OpenAI-compatible /v1/models endpoint
     /// - Kimi: Moonshot API /v1/models endpoint
     /// - OAuth providers: Map to underlying API provider
     /// - Others: models.dev metadata fallback
@@ -21,7 +21,7 @@ impl ModelRegistry {
 
         match provider {
             Provider::OpenRouter => self.fetch_openrouter_models().await,
-            Provider::Ollama => self.fetch_ollama_models().await,
+            Provider::Local => self.fetch_local_models().await,
             Provider::Kimi => self.fetch_kimi_models().await,
             // OAuth providers use same models as their underlying API
             Provider::ChatGpt => self.fetch_from_models_dev(Provider::OpenAI).await,
@@ -102,98 +102,55 @@ impl ModelRegistry {
         Ok(models)
     }
 
-    /// Fetch models from Ollama local server.
-    pub(crate) async fn fetch_ollama_models(&self) -> Result<Vec<ModelInfo>> {
+    /// Fetch models from local LLM server (OpenAI-compatible /v1/models endpoint).
+    pub(crate) async fn fetch_local_models(&self) -> Result<Vec<ModelInfo>> {
         #[derive(Deserialize)]
-        struct OllamaTagsResponse {
-            models: Vec<OllamaModel>,
+        struct ModelsResponse {
+            data: Vec<ModelData>,
         }
 
         #[derive(Deserialize)]
-        struct OllamaModel {
-            name: String,
+        struct ModelData {
+            id: String,
         }
 
-        let base_url = "http://localhost:11434";
+        let base_url = std::env::var("ION_LOCAL_URL")
+            .unwrap_or_else(|_| "http://localhost:8080/v1".to_string());
 
-        let response = self
-            .client
-            .get(format!("{base_url}/api/tags"))
-            .send()
-            .await
-            .context("Failed to connect to Ollama - is it running?")?;
-
-        if !response.status().is_success() {
-            anyhow::bail!("Ollama returned status {}", response.status());
-        }
-
-        let data: OllamaTagsResponse = response
-            .json()
-            .await
-            .context("Failed to parse Ollama response")?;
-
-        // Fetch details for each model in parallel
-        let mut models = Vec::new();
-        for m in data.models {
-            let info = self.fetch_ollama_model_info(&m.name).await;
-            models.push(info);
-        }
-
-        Ok(models)
-    }
-
-    /// Fetch detailed info for a single Ollama model.
-    pub(crate) async fn fetch_ollama_model_info(&self, name: &str) -> ModelInfo {
-        let base_url = "http://localhost:11434";
-
-        // Try to get model details from /api/show
-        // Context length is stored at {architecture}.context_length, not general.context_length
-        let context_window = match self
-            .client
-            .post(format!("{base_url}/api/show"))
-            .json(&serde_json::json!({ "name": name }))
-            .send()
-            .await
-        {
-            Ok(response) if response.status().is_success() => {
-                #[derive(Deserialize)]
-                struct OllamaShowResponse {
-                    #[serde(default)]
-                    model_info: Option<std::collections::HashMap<String, serde_json::Value>>,
-                }
-
-                response
-                    .json::<OllamaShowResponse>()
-                    .await
-                    .ok()
-                    .and_then(|r| r.model_info)
-                    .and_then(|info| {
-                        // Get architecture name (e.g., "qwen3next", "mistral3", "llama")
-                        let arch = info.get("general.architecture").and_then(|v| v.as_str())?;
-                        // Context length is at {architecture}.context_length
-                        let key = format!("{arch}.context_length");
-                        #[allow(clippy::cast_possible_truncation)] // Context lengths fit in u32
-                        info.get(&key)
-                            .and_then(serde_json::Value::as_u64)
-                            .map(|v| v as u32)
-                    })
-                    .unwrap_or(32768) // Conservative default for modern models
+        // Try OpenAI-compatible /v1/models endpoint
+        let response = match self.client.get(format!("{base_url}/models")).send().await {
+            Ok(r) => r,
+            Err(_) => {
+                // Server not running - return empty list
+                return Ok(vec![]);
             }
-            _ => 32768, // Conservative default for modern models
         };
 
-        ModelInfo {
-            id: name.to_string(),
-            name: name.to_string(),
-            provider: "ollama".to_string(),
-            context_window,
-            supports_tools: true,
-            supports_vision: false,
-            supports_thinking: false,
-            supports_cache: false,
-            pricing: ModelPricing::default(),
-            created: 0,
+        if !response.status().is_success() {
+            // Server doesn't support /v1/models - return empty list
+            return Ok(vec![]);
         }
+
+        let data: ModelsResponse = response.json().await.unwrap_or(ModelsResponse { data: vec![] });
+
+        let models = data
+            .data
+            .into_iter()
+            .map(|m| ModelInfo {
+                id: m.id.clone(),
+                name: m.id,
+                provider: "local".to_string(),
+                context_window: 32768, // Conservative default
+                supports_tools: true,
+                supports_vision: false,
+                supports_thinking: false,
+                supports_cache: false,
+                pricing: ModelPricing::default(),
+                created: 0,
+            })
+            .collect();
+
+        Ok(models)
     }
 
     /// Fetch models from models.dev, filtered by provider.
@@ -233,11 +190,28 @@ impl ModelRegistry {
             .await
             .context("Failed to parse OpenRouter models response")?;
 
-        let models: Vec<ModelInfo> = data
+        let mut models: Vec<ModelInfo> = data
             .data
             .into_iter()
             .map(Self::convert_api_model)
             .collect();
+
+        // Add openrouter/free at the beginning - routes to free models based on request
+        models.insert(
+            0,
+            ModelInfo {
+                id: "openrouter/free".to_string(),
+                name: "Free Router".to_string(),
+                provider: "openrouter".to_string(),
+                context_window: 128_000,
+                supports_tools: true,
+                supports_vision: false,
+                supports_thinking: false,
+                supports_cache: false,
+                pricing: ModelPricing::default(),
+                created: u64::MAX, // Sort to top as "newest"
+            },
+        );
 
         Ok(models)
     }

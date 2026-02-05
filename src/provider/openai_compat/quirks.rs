@@ -43,7 +43,7 @@ impl ProviderQuirks {
             Provider::OpenRouter => Self::openrouter(),
             Provider::Groq => Self::groq(),
             Provider::Kimi => Self::kimi(),
-            Provider::Ollama => Self::ollama(),
+            Provider::Local => Self::local(),
             Provider::ChatGpt => Self::chatgpt(),
             // OpenAI-compatible or fallback for non-compatible providers
             Provider::OpenAI | Provider::Anthropic | Provider::Google | Provider::Gemini => {
@@ -104,15 +104,15 @@ impl ProviderQuirks {
         }
     }
 
-    /// Ollama (local inference).
-    fn ollama() -> Self {
+    /// Local LLM server (mlx-lm, vLLM, Ollama, etc.).
+    fn local() -> Self {
         Self {
             use_max_tokens: true,
             skip_store: true,
             skip_developer_role: true,
             reasoning_field: ReasoningField::None,
             supports_provider_routing: false,
-            base_url: "http://localhost:11434/v1",
+            base_url: "http://localhost:8080/v1",
             auth_header: None, // No auth needed
         }
     }

@@ -1,7 +1,7 @@
 //! LLM provider abstraction.
 //!
 //! This module provides a unified interface for interacting with various LLM providers
-//! (`OpenAI`, Anthropic, Ollama, Groq, Google) using the `llm` crate.
+//! (`OpenAI`, Anthropic, Local, Groq, Google).
 //!
 //! # Example
 //!
@@ -69,14 +69,14 @@ mod tests {
     fn test_provider_ids() {
         assert_eq!(Provider::OpenAI.id(), "openai");
         assert_eq!(Provider::Anthropic.id(), "anthropic");
-        assert_eq!(Provider::Ollama.id(), "ollama");
+        assert_eq!(Provider::Local.id(), "local");
         assert_eq!(Provider::Groq.id(), "groq");
         assert_eq!(Provider::Google.id(), "google");
     }
 
     #[tokio::test]
-    async fn test_ollama_no_key_needed() {
-        let result = Client::from_provider(Provider::Ollama).await;
+    async fn test_local_no_key_needed() {
+        let result = Client::from_provider(Provider::Local).await;
         assert!(result.is_ok());
     }
 }

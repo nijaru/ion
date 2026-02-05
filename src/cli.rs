@@ -680,7 +680,7 @@ pub fn config(args: ConfigArgs) -> ExitCode {
                     // Validate provider
                     if crate::provider::Provider::from_id(&value).is_none() {
                         eprintln!("Unknown provider: {value}");
-                        eprintln!("Valid providers: anthropic, openrouter, openai, google, groq, kimi, ollama, chatgpt, gemini");
+                        eprintln!("Valid providers: anthropic, openrouter, openai, google, groq, kimi, local, chatgpt, gemini");
                         return ExitCode::from(1);
                     }
                     config.provider = Some(value);
