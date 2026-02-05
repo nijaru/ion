@@ -222,15 +222,26 @@ impl ProviderStatus {
             .collect()
     }
 
-    /// Sort providers: authenticated first, then alphabetically within each group.
+    /// Sort providers: Local last, then authenticated first, then alphabetically.
     #[must_use]
     pub fn sorted(mut statuses: Vec<ProviderStatus>) -> Vec<ProviderStatus> {
         statuses.sort_by(|a, b| {
-            // Primary: authenticated first
+            // Primary: Local always last
+            let a_local = a.provider == Provider::Local;
+            let b_local = b.provider == Provider::Local;
+            if a_local != b_local {
+                return if a_local {
+                    std::cmp::Ordering::Greater
+                } else {
+                    std::cmp::Ordering::Less
+                };
+            }
+
+            // Secondary: authenticated first
             match (a.authenticated, b.authenticated) {
                 (true, false) => std::cmp::Ordering::Less,
                 (false, true) => std::cmp::Ordering::Greater,
-                // Secondary: alphabetical by name
+                // Tertiary: alphabetical by name
                 _ => a.provider.name().cmp(b.provider.name()),
             }
         });
