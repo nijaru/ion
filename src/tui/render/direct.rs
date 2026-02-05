@@ -144,20 +144,27 @@ impl App {
                         // Always show id and auth method in aligned columns
                         let id = s.provider.id();
                         let auth_hint = s.provider.auth_hint();
-                        let hint = if auth_hint.is_empty() {
+                        let (hint, warning) = if auth_hint.is_empty() {
                             // Local provider - no auth needed
-                            id.to_string()
+                            (id.to_string(), None)
                         } else if s.provider.is_oauth() {
                             // OAuth providers - show warning (unofficial)
-                            format!("{:width$}  ⚠ unofficial", id, width = max_id_len)
+                            (
+                                format!("{:width$}", id, width = max_id_len),
+                                Some("⚠ unofficial".to_string()),
+                            )
                         } else {
                             // API key providers - show env var
-                            format!("{:width$}  {}", id, auth_hint, width = max_id_len)
+                            (
+                                format!("{:width$}  {}", id, auth_hint, width = max_id_len),
+                                None,
+                            )
                         };
                         SelectorItem {
                             label: s.provider.name().to_string(),
                             is_valid: s.authenticated,
                             hint,
+                            warning,
                         }
                     })
                     .collect();
@@ -182,6 +189,7 @@ impl App {
                             label: m.id.clone(),
                             is_valid: true,
                             hint,
+                            warning: None,
                         }
                     })
                     .collect();
@@ -210,6 +218,7 @@ impl App {
                             label,
                             is_valid: true,
                             hint: String::new(),
+                            warning: None,
                         }
                     })
                     .collect();

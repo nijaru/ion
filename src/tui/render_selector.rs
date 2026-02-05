@@ -19,6 +19,8 @@ pub struct SelectorItem {
     pub label: String,
     pub is_valid: bool,
     pub hint: String,
+    /// Optional warning text (rendered in yellow).
+    pub warning: Option<String>,
 }
 
 /// Data needed to render the selector UI.
@@ -220,6 +222,19 @@ fn render_list<W: Write>(w: &mut W, data: &SelectorData, start_row: u16) -> std:
             execute!(w, SetAttribute(Attribute::Dim))?;
             write!(w, "{}", item.hint)?;
             execute!(w, SetAttribute(Attribute::Reset))?;
+        }
+
+        // Warning in yellow (dimmed)
+        if let Some(ref warning) = item.warning {
+            execute!(
+                w,
+                SetAttribute(Attribute::Dim),
+                SetForegroundColor(Color::Yellow),
+                Print("  "),
+                Print(warning),
+                SetAttribute(Attribute::Reset),
+                ResetColor
+            )?;
         }
 
         row += 1;
