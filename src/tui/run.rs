@@ -298,11 +298,10 @@ pub async fn run(
 
         app.update();
 
-        // Handle full repaint request (e.g., after exiting fullscreen selector)
+        // Handle full repaint request (e.g., after resize)
         if app.render_state.needs_full_repaint {
             app.render_state.needs_full_repaint = false;
             let clear_scrollback = app.render_state.clear_scrollback_on_repaint;
-            // Clear screen (always); clear scrollback only when requested
             if clear_scrollback {
                 print!("\x1b[3J\x1b[2J\x1b[H");
             } else {
@@ -312,13 +311,24 @@ pub async fn run(
             if !app.message_list.entries.is_empty() {
                 app.reprint_chat_scrollback(&mut stdout, term_width)?;
             }
-            // Re-insert header if no chat yet
             if app.message_list.entries.is_empty() {
                 app.set_header_inserted(false);
             }
             stdout.flush()?;
-            // Reset to default behavior for future repaints
             app.render_state.clear_scrollback_on_repaint = true;
+        }
+
+        // Handle selector close: clear only the selector area, not full screen
+        if app.render_state.needs_selector_clear {
+            app.render_state.needs_selector_clear = false;
+            // Clear lines from the new (smaller) UI start to the bottom of screen
+            let ui_height = app.calculate_ui_height(term_width, term_height);
+            let ui_start = term_height.saturating_sub(ui_height);
+            for row in ui_start..term_height {
+                execute!(stdout, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
+            }
+            stdout.flush()?;
+            // Buffered chat lines will be flushed by the normal chat render below
         }
 
         if !app.header_inserted() && app.message_list.entries.is_empty() {

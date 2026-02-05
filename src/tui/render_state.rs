@@ -76,10 +76,12 @@ pub struct RenderState {
     /// Last UI start row for detecting changes that need extra clearing.
     pub last_ui_start: Option<u16>,
 
-    /// Flag to request full screen clear + repaint (e.g., after selector closes).
+    /// Flag to request full screen clear + repaint (e.g., after resize).
     pub needs_full_repaint: bool,
     /// When true, clear scrollback on full repaint.
     pub clear_scrollback_on_repaint: bool,
+    /// Flag to clear selector area without full screen repaint.
+    pub needs_selector_clear: bool,
 }
 
 impl RenderState {
@@ -95,6 +97,7 @@ impl RenderState {
             last_ui_start: None,
             needs_full_repaint: false,
             clear_scrollback_on_repaint: true,
+            needs_selector_clear: false,
         }
     }
 
