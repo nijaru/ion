@@ -188,6 +188,15 @@ fn open_editor(initial: &str) -> Result<Option<String>, Box<dyn std::error::Erro
     }
 }
 
+/// Guard that restores the original panic hook on drop.
+struct PanicHookGuard;
+
+impl Drop for PanicHookGuard {
+    fn drop(&mut self) {
+        let _ = std::panic::take_hook();
+    }
+}
+
 /// Main entry point for the TUI.
 ///
 /// This function sets up the terminal, creates the App, handles resume options,
@@ -197,13 +206,14 @@ pub async fn run(
     permissions: PermissionSettings,
     resume_option: ResumeOption,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Set panic hook to restore terminal on panic
+    // Set panic hook to restore terminal on panic (guard ensures cleanup on all exit paths)
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let _ = disable_raw_mode();
         let _ = execute!(io::stdout(), Show);
         original_hook(info);
     }));
+    let _panic_guard = PanicHookGuard;
 
     let TerminalState {
         mut stdout,
@@ -446,9 +456,6 @@ pub async fn run(
             }
         }
     }
-
-    // Restore original panic hook before cleanup
-    let _ = std::panic::take_hook();
 
     cleanup_terminal(
         &app,
