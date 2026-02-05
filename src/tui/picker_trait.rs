@@ -43,12 +43,6 @@ impl<T: Clone> Default for FilterablePicker<T> {
 }
 
 impl<T: Clone> FilterablePicker<T> {
-    /// Create a new empty picker.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Set the items and reset filter.
     pub fn set_items(&mut self, items: Vec<T>) {
         self.items = items;
@@ -88,11 +82,6 @@ impl<T: Clone> FilterablePicker<T> {
     #[must_use]
     pub fn list_state(&self) -> &SelectionState {
         &self.list_state
-    }
-
-    /// Get mutable list state.
-    pub fn list_state_mut(&mut self) -> &mut SelectionState {
-        &mut self.list_state
     }
 
     /// Apply filter using the provided matcher function.
@@ -204,7 +193,7 @@ mod tests {
 
     #[test]
     fn test_picker_navigation() {
-        let mut picker: FilterablePicker<String> = FilterablePicker::new();
+        let mut picker: FilterablePicker<String> = FilterablePicker::default();
         picker.set_items(vec!["a".into(), "b".into(), "c".into()]);
 
         assert_eq!(picker.selected(), Some(&"a".to_string()));
@@ -227,7 +216,7 @@ mod tests {
 
     #[test]
     fn test_picker_filter() {
-        let mut picker: FilterablePicker<String> = FilterablePicker::new();
+        let mut picker: FilterablePicker<String> = FilterablePicker::default();
         picker.set_items(vec!["apple".into(), "banana".into(), "apricot".into()]);
 
         picker.filter_input_mut().set_text("ap");
@@ -239,7 +228,7 @@ mod tests {
 
     #[test]
     fn test_picker_empty() {
-        let mut picker: FilterablePicker<String> = FilterablePicker::new();
+        let mut picker: FilterablePicker<String> = FilterablePicker::default();
         picker.set_items(vec![]);
 
         assert_eq!(picker.selected(), None);
@@ -249,7 +238,7 @@ mod tests {
 
     #[test]
     fn test_picker_select_by() {
-        let mut picker: FilterablePicker<String> = FilterablePicker::new();
+        let mut picker: FilterablePicker<String> = FilterablePicker::default();
         picker.set_items(vec!["a".into(), "b".into(), "c".into()]);
 
         picker.select_by(|s| s == "b");
