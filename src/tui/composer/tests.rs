@@ -1,5 +1,6 @@
 //! Tests for composer state and cursor movement.
 
+use crate::tui::composer::visual_lines::find_visual_line_and_col;
 use crate::tui::composer::{ComposerBuffer, ComposerState};
 
 #[test]
@@ -437,4 +438,12 @@ fn test_render_cursor_alignment() {
         (last_char.0 + 1, last_char.1),
         "Cursor after last char should be one position after it"
     );
+}
+
+#[test]
+fn test_find_visual_line_empty_lines() {
+    // Empty lines vec should not panic, returns (0, 0)
+    let empty: Vec<(usize, usize)> = vec![];
+    assert_eq!(find_visual_line_and_col(&empty, 0), (0, 0));
+    assert_eq!(find_visual_line_and_col(&empty, 5), (0, 0));
 }
