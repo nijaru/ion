@@ -1,6 +1,6 @@
 //! Local callback server for OAuth redirects.
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{anyhow, bail, Context, Result};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -26,6 +26,16 @@ impl CallbackConfig {
         Self {
             preferred_port,
             allow_fallback: false,
+            callback_path,
+        }
+    }
+
+    /// Dynamic port with custom callback path.
+    #[must_use]
+    pub fn dynamic(callback_path: &'static str) -> Self {
+        Self {
+            preferred_port: 0,
+            allow_fallback: true,
             callback_path,
         }
     }
@@ -75,7 +85,12 @@ impl CallbackServer {
             }
         } else {
             TcpListener::bind(format!("127.0.0.1:{}", config.preferred_port)).with_context(
-                || format!("Failed to bind fixed callback port {}", config.preferred_port),
+                || {
+                    format!(
+                        "Failed to bind fixed callback port {}",
+                        config.preferred_port
+                    )
+                },
             )?
         };
 
