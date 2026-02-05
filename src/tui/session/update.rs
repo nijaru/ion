@@ -127,7 +127,8 @@ impl App {
                 }
                 AgentEvent::Retry(reason, delay) => {
                     // Show retry status in progress line (not in chat)
-                    self.task.retry_status = Some((reason.clone(), *delay));
+                    self.task.retry_status =
+                        Some((reason.clone(), *delay, std::time::Instant::now()));
                 }
                 _ => {
                     self.message_list.push_event(event);
