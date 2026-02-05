@@ -132,10 +132,11 @@ impl App {
                     .filtered()
                     .iter()
                     .map(|s| {
+                        // Show hint as config id (dim) or auth hint if not authenticated
                         let hint = if s.authenticated {
-                            String::new()
+                            s.provider.id().to_string()
                         } else {
-                            s.provider.auth_hint().to_string()
+                            format!("{} · {}", s.provider.id(), s.provider.auth_hint())
                         };
                         SelectorItem {
                             label: s.provider.name().to_string(),
