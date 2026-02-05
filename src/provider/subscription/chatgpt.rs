@@ -38,7 +38,9 @@ impl ChatGptResponsesClient {
     fn build_headers(&self, accept_sse: bool) -> HeaderMap {
         let mut headers = HeaderMap::new();
         let auth = format!("Bearer {}", self.access_token);
-        headers.insert(AUTHORIZATION, HeaderValue::from_str(&auth).unwrap());
+        if let Ok(value) = HeaderValue::from_str(&auth) {
+            headers.insert(AUTHORIZATION, value);
+        }
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         headers.insert(
             ACCEPT,

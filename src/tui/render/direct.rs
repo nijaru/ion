@@ -79,22 +79,22 @@ impl App {
         }
 
         // Input area (with borders)
-        let input_start = ui_start + progress_height;
+        let input_start = ui_start.saturating_add(progress_height);
         let input_height = self.calculate_input_height(width, height).saturating_sub(2); // Minus borders
 
         // Top border
         draw_horizontal_border(w, input_start, width)?;
 
         // Input content
-        let content_start = input_start + 1;
+        let content_start = input_start.saturating_add(1);
         self.render_input_direct(w, content_start, width, input_height)?;
 
         // Bottom border
-        let border_row = content_start + input_height;
+        let border_row = content_start.saturating_add(input_height);
         draw_horizontal_border(w, border_row, width)?;
 
         // Status line
-        let status_row = border_row + 1;
+        let status_row = border_row.saturating_add(1);
         execute!(w, MoveTo(0, status_row), Clear(ClearType::CurrentLine))?;
 
         // In selector mode, render selector instead of normal input/status

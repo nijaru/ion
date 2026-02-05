@@ -117,8 +117,7 @@ impl App {
 
         let lines = self.build_chat_lines(width);
         for line in &lines {
-            line.write_to(w)?;
-            write!(w, "\r\n")?;
+            line.writeln(w)?;
         }
 
         self.render_state.mark_reflow_complete(end);

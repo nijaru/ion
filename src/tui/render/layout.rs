@@ -78,5 +78,4 @@ impl App {
         // Default: bottom of screen
         bottom_start
     }
-
 }
