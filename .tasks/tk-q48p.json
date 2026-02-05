@@ -3,7 +3,7 @@
   "ref": "q48p",
   "title": "Fix visual_lines.rs:74 empty vec panic",
   "description": "In find_visual_line_and_col, if lines is empty (width=0 edge case), accessing lines[last] panics. Add guard: if lines.is_empty() { return (0, 0); }",
-  "status": "open",
+  "status": "done",
   "priority": 2,
   "labels": [],
   "assignees": [],
@@ -18,7 +18,7 @@
     }
   ],
   "created_at": "2026-02-05T01:58:49.211Z",
-  "updated_at": "2026-02-05T02:06:31.371Z",
-  "completed_at": null,
+  "updated_at": "2026-02-05T02:21:32.775Z",
+  "completed_at": "2026-02-05T02:21:32.775Z",
   "external": {}
 }
