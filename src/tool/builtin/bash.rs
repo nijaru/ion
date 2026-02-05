@@ -1,3 +1,4 @@
+use super::guard::{CommandRisk, analyze_command};
 use crate::tool::{DangerLevel, Tool, ToolContext, ToolError, ToolResult};
 use async_trait::async_trait;
 use serde_json::json;
@@ -7,6 +8,18 @@ use tokio::process::Command;
 const MAX_OUTPUT_SIZE: usize = 100_000;
 
 pub struct BashTool;
+
+impl BashTool {
+    /// Check if command is dangerous and return metadata about the risk.
+    fn check_danger(&self, command: &str) -> Option<CommandRisk> {
+        let risk = analyze_command(command);
+        if risk.is_dangerous() {
+            Some(risk)
+        } else {
+            None
+        }
+    }
+}
 
 #[async_trait]
 impl Tool for BashTool {
@@ -44,6 +57,26 @@ impl Tool for BashTool {
             .get("command")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidArgs("command is required".to_string()))?;
+
+        // Check for destructive command patterns
+        if let Some(risk) = self.check_danger(command_str) {
+            if let Some(reason) = risk.reason() {
+                return Ok(ToolResult {
+                    content: format!(
+                        "⚠️ BLOCKED: Destructive command detected.\n\n\
+                        Reason: {reason}\n\n\
+                        If you need to run this command, explain why it's safe \
+                        and ask the user to run it manually."
+                    ),
+                    is_error: true,
+                    metadata: Some(json!({
+                        "blocked": true,
+                        "reason": reason,
+                        "command": command_str,
+                    })),
+                });
+            }
+        }
 
         // Spawn child process with kill_on_drop for cancellation safety
         // Set environment variables to force color output in non-TTY context

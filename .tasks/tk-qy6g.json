@@ -3,7 +3,7 @@
   "ref": "qy6g",
   "title": "Destructive command guard - pattern match dangerous commands (rm -rf, git reset --hard, DROP TABLE), detect heredoc scripts, block/warn based on mode",
   "description": null,
-  "status": "open",
+  "status": "done",
   "priority": 3,
   "labels": [],
   "assignees": [],
@@ -11,9 +11,14 @@
   "blocked_by": [],
   "estimate": null,
   "due_date": null,
-  "logs": [],
+  "logs": [
+    {
+      "ts": "2026-02-05T05:35:15.594Z",
+      "msg": "Implemented guard.rs with pattern matching for: rm -rf, git reset --hard, git push --force main, git clean -f, git checkout/restore ., SQL DROP/TRUNCATE/DELETE, chmod 777, device writes, mkfs, curl|bash. Bash tool now blocks destructive commands with explanation. 9 tests added, 322 total passing."
+    }
+  ],
   "created_at": "2026-01-27T03:50:28.228Z",
-  "updated_at": "2026-01-27T03:50:28.228Z",
-  "completed_at": null,
+  "updated_at": "2026-02-05T05:35:16.610Z",
+  "completed_at": "2026-02-05T05:35:16.610Z",
   "external": {}
 }

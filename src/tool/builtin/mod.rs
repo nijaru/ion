@@ -1,5 +1,6 @@
 mod bash;
 mod discover;
+mod guard;
 mod edit;
 mod glob;
 mod grep;
