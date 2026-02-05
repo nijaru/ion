@@ -9,8 +9,6 @@ pub struct ComposerState {
     cursor_char_idx: usize,
     /// Vertical scroll offset (in visual lines) for internal scrolling.
     scroll_offset: usize,
-    /// Stashed draft (Ctrl+S style) - includes both text and blobs.
-    stash: Option<(String, Vec<String>)>,
     /// Calculated cursor position (x, y) relative to the widget area.
     pub cursor_pos: (u16, u16),
     /// Last known render width (for scroll calculations).
@@ -461,27 +459,6 @@ impl ComposerState {
         buffer.clear();
         self.cursor_char_idx = 0;
         self.scroll_offset = 0;
-    }
-
-    /// Stash the current buffer content.
-    pub fn stash_buffer(&mut self, buffer: &mut ComposerBuffer) {
-        self.stash = Some((buffer.get_content(), buffer.blobs.clone()));
-        buffer.clear();
-        self.cursor_char_idx = 0;
-    }
-
-    /// Restore the stashed buffer content.
-    pub fn restore_stash(&mut self, buffer: &mut ComposerBuffer) {
-        if let Some((content, blobs)) = self.stash.take() {
-            buffer.set_content(&content);
-            buffer.blobs = blobs;
-            self.cursor_char_idx = buffer.len_chars();
-        }
-    }
-
-    #[must_use]
-    pub fn has_stash(&self) -> bool {
-        self.stash.is_some()
     }
 
     /// Invalidate cached width (call on terminal resize).

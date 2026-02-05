@@ -74,19 +74,6 @@ impl StyledSpan {
         }
     }
 
-    /// Create a colored bold span.
-    pub fn colored_bold(content: impl Into<String>, color: Color) -> Self {
-        let mut style = ContentStyle {
-            foreground_color: Some(color),
-            ..ContentStyle::default()
-        };
-        style.attributes.set(Attribute::Bold);
-        Self {
-            content: content.into(),
-            style,
-        }
-    }
-
     /// Add bold modifier to this span.
     #[must_use]
     pub fn with_bold(mut self) -> Self {
@@ -230,20 +217,6 @@ impl LineBuilder {
     #[must_use]
     pub fn bold(mut self, content: impl Into<String>) -> Self {
         self.line.push(StyledSpan::bold(content));
-        self
-    }
-
-    /// Add an italic span.
-    #[must_use]
-    pub fn italic(mut self, content: impl Into<String>) -> Self {
-        self.line.push(StyledSpan::italic(content));
-        self
-    }
-
-    /// Add a colored bold span.
-    #[must_use]
-    pub fn colored_bold(mut self, content: impl Into<String>, color: Color) -> Self {
-        self.line.push(StyledSpan::colored_bold(content, color));
         self
     }
 
