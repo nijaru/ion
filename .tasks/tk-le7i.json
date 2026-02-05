@@ -3,7 +3,7 @@
   "ref": "le7i",
   "title": "[UX] Retry countdown timer - show seconds counting down",
   "description": null,
-  "status": "open",
+  "status": "done",
   "priority": 4,
   "labels": [],
   "assignees": [],
@@ -13,7 +13,7 @@
   "due_date": null,
   "logs": [],
   "created_at": "2026-01-27T04:46:20.594Z",
-  "updated_at": "2026-01-27T04:46:20.594Z",
-  "completed_at": null,
+  "updated_at": "2026-02-05T06:00:12.321Z",
+  "completed_at": "2026-02-05T06:00:12.321Z",
   "external": {}
 }

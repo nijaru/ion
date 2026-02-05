@@ -3,7 +3,7 @@
   "ref": "3xov",
   "title": "[TUI] Ctrl+A triggers rat-text select-all - intercept before handle_events",
   "description": null,
-  "status": "open",
+  "status": "done",
   "priority": 4,
   "labels": [],
   "assignees": [],
@@ -11,9 +11,14 @@
   "blocked_by": [],
   "estimate": null,
   "due_date": null,
-  "logs": [],
+  "logs": [
+    {
+      "ts": "2026-02-05T06:02:01.639Z",
+      "msg": "Verified Ctrl+A is handled in input.rs:125-127 (move_to_line_start). rat-text is not used - TUI uses direct crossterm. Task is obsolete."
+    }
+  ],
   "created_at": "2026-01-23T15:18:16.841Z",
-  "updated_at": "2026-01-23T15:24:47.282Z",
-  "completed_at": null,
+  "updated_at": "2026-02-05T06:02:02.396Z",
+  "completed_at": "2026-02-05T06:02:02.396Z",
   "external": {}
 }

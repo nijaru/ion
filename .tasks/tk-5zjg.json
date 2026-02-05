@@ -3,7 +3,7 @@
   "ref": "5zjg",
   "title": "TUI minor fixes",
   "description": "1. run.rs: Extract handle_resize_reflow helper (duplicated at lines 235-247 and 254-267). 2. message_list.rs:245: Remove magic .min(10000) scroll limit. 3. direct.rs: Use saturating_add for cursor coordinate math.",
-  "status": "open",
+  "status": "done",
   "priority": 4,
   "labels": [],
   "assignees": [],
@@ -13,7 +13,7 @@
   "due_date": null,
   "logs": [],
   "created_at": "2026-02-05T01:59:04.585Z",
-  "updated_at": "2026-02-05T01:59:04.585Z",
-  "completed_at": null,
+  "updated_at": "2026-02-05T05:54:31.081Z",
+  "completed_at": "2026-02-05T05:54:31.081Z",
   "external": {}
 }

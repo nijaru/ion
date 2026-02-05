@@ -3,7 +3,7 @@
   "ref": "vrmx",
   "title": "[CLI] Add config subcommand for provider/model changes",
   "description": "ion config set provider openrouter, ion config set model gpt-4, etc. Avoids manual file edits.",
-  "status": "open",
+  "status": "done",
   "priority": 3,
   "labels": [],
   "assignees": [],
@@ -13,7 +13,7 @@
   "due_date": null,
   "logs": [],
   "created_at": "2026-02-05T05:25:55.096Z",
-  "updated_at": "2026-02-05T05:25:55.096Z",
-  "completed_at": null,
+  "updated_at": "2026-02-05T05:52:26.141Z",
+  "completed_at": "2026-02-05T05:52:26.141Z",
   "external": {}
 }

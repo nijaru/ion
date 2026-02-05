@@ -3,7 +3,7 @@
   "ref": "wj4b",
   "title": "[PROVIDER] Add newest sort option using OpenRouter created timestamps",
   "description": null,
-  "status": "open",
+  "status": "done",
   "priority": 3,
   "labels": [],
   "assignees": [],
@@ -13,7 +13,7 @@
   "due_date": null,
   "logs": [],
   "created_at": "2026-01-21T10:40:18.394Z",
-  "updated_at": "2026-01-21T10:40:18.394Z",
-  "completed_at": null,
+  "updated_at": "2026-02-05T05:58:43.082Z",
+  "completed_at": "2026-02-05T05:58:43.082Z",
   "external": {}
 }

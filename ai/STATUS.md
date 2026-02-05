@@ -29,12 +29,15 @@
 - tk-r9c7 ✓ Model sorting (org → newest) - already implemented
 - tk-x3zf ✓ Model display format - already correct
 - tk-wj4b ✓ Newest sort option - already implemented
-- tk-le7i ✓ Retry countdown timer
+- tk-le7i ✓ Retry countdown timer (yellow spinner, countdown)
+- tk-3xov ✓ Ctrl+A - already implemented in input.rs
 
 Next priorities:
 
 - Memory system (tk-5j06) - P2
-- Remaining UX backlog (~8 tasks)
+- Web search tool (tk-1y3g) - matches Claude Code
+- Settings selector UI (tk-4gm9)
+- Remaining UX backlog (~6 tasks)
 
 ## Architecture Assessment (2026-02-04)
 
