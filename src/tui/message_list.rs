@@ -16,30 +16,92 @@ const TOOL_RESULT_MAX_LINES: usize = 5;
 const TOOL_RESULT_LINE_MAX: usize = 120;
 
 /// Extract the key argument from a tool call for display.
+/// Returns the main argument plus any secondary params in Claude Code style.
 pub(crate) fn extract_key_arg(tool_name: &str, args: &serde_json::Value) -> String {
     let Some(obj) = args.as_object() else {
         return String::new();
     };
 
-    // Tool-specific key arguments
-    let key = match tool_name {
-        "read" | "write" | "edit" => "file_path",
-        "bash" => "command",
-        "glob" | "grep" => "pattern",
+    match tool_name {
+        "read" => {
+            let path = obj
+                .get("file_path")
+                .and_then(|v| v.as_str())
+                .map(|s| truncate_for_display(s, 40))
+                .unwrap_or_default();
+
+            // Show offset/limit if specified
+            let mut extras = Vec::new();
+            if let Some(offset) = obj.get("offset").and_then(|v| v.as_u64()) {
+                extras.push(format!("offset={offset}"));
+            }
+            if let Some(limit) = obj.get("limit").and_then(|v| v.as_u64()) {
+                extras.push(format!("limit={limit}"));
+            }
+
+            if extras.is_empty() {
+                path
+            } else {
+                format!("{path}, {}", extras.join(", "))
+            }
+        }
+        "write" | "edit" => obj
+            .get("file_path")
+            .and_then(|v| v.as_str())
+            .map(|s| truncate_for_display(s, 50))
+            .unwrap_or_default(),
+        "bash" => obj
+            .get("command")
+            .and_then(|v| v.as_str())
+            .map(|s| truncate_for_display(s, 50))
+            .unwrap_or_default(),
+        "glob" => {
+            let pattern = obj
+                .get("pattern")
+                .and_then(|v| v.as_str())
+                .map(|s| truncate_for_display(s, 40))
+                .unwrap_or_default();
+
+            // Show path if not cwd
+            if let Some(path) = obj.get("path").and_then(|v| v.as_str()) {
+                if path != "." && !path.is_empty() {
+                    return format!("{pattern} in {}", truncate_for_display(path, 30));
+                }
+            }
+            pattern
+        }
+        "grep" => {
+            let pattern = obj
+                .get("pattern")
+                .and_then(|v| v.as_str())
+                .map(|s| truncate_for_display(s, 35))
+                .unwrap_or_default();
+
+            // Show path/type filter if specified
+            let mut extras = Vec::new();
+            if let Some(path) = obj.get("path").and_then(|v| v.as_str()) {
+                if path != "." && !path.is_empty() {
+                    extras.push(format!("in {}", truncate_for_display(path, 20)));
+                }
+            }
+            if let Some(typ) = obj.get("type").and_then(|v| v.as_str()) {
+                extras.push(format!("type={typ}"));
+            }
+
+            if extras.is_empty() {
+                pattern
+            } else {
+                format!("{pattern} {}", extras.join(" "))
+            }
+        }
         _ => {
             // Fall back to first string argument
-            return obj
-                .values()
+            obj.values()
                 .find_map(|v| v.as_str())
                 .map(|s| truncate_for_display(s, 50))
-                .unwrap_or_default();
+                .unwrap_or_default()
         }
-    };
-
-    obj.get(key)
-        .and_then(|v| v.as_str())
-        .map(|s| truncate_for_display(s, 50))
-        .unwrap_or_default()
+    }
 }
 
 /// Truncate a string for display, showing the end for paths.
@@ -309,31 +371,32 @@ impl MessageList {
                             || e.content_as_markdown().starts_with("list("))
                 });
 
+                // Status icons: ✓ for success, ✗ for error
                 let result_content = if is_error {
                     // Clean up error message - keep it concise
                     let msg = strip_error_prefixes(&result).trim();
-                    format!("⎿ Error: {}", truncate_line(msg, TOOL_RESULT_LINE_MAX))
+                    format!(" ✗ {}", truncate_line(msg, TOOL_RESULT_LINE_MAX))
                 } else if is_collapsed_tool {
                     // Collapsed tools: just show line count or OK
                     let line_count = result.lines().count();
                     if line_count > 1 {
-                        format!("⎿ {line_count} lines")
+                        format!(" ✓ {line_count} lines")
                     } else if result.trim().is_empty() {
-                        "⎿ OK".to_string()
+                        " ✓".to_string()
                     } else {
-                        format!("⎿ {}", truncate_line(result.trim(), 60))
+                        format!(" ✓ {}", truncate_line(result.trim(), 60))
                     }
                 } else {
                     // Full output: format with tail display
                     let formatted = format_tool_result(&result);
-                    // Prefix first line with ⎿, indent rest
+                    // Prefix first line with ✓, indent rest
                     let mut lines = formatted.lines();
                     let mut output = String::new();
                     if let Some(first) = lines.next() {
-                        let _ = write!(output, "⎿ {first}");
+                        let _ = write!(output, " ✓ {first}");
                     }
                     for line in lines {
-                        let _ = write!(output, "\n  {line}");
+                        let _ = write!(output, "\n   {line}");
                     }
                     output
                 };
