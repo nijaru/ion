@@ -125,7 +125,7 @@ impl App {
             SelectorPage::Provider => {
                 let items = self
                     .provider_picker
-                    .filtered
+                    .filtered()
                     .iter()
                     .map(|s| {
                         let hint = if s.authenticated {
@@ -144,8 +144,8 @@ impl App {
                     title: "Providers",
                     description: "Select a provider",
                     items,
-                    selected_idx: self.provider_picker.list_state.selected().unwrap_or(0),
-                    filter_text: self.provider_picker.filter_input.text().to_string(),
+                    selected_idx: self.provider_picker.list_state().selected().unwrap_or(0),
+                    filter_text: self.provider_picker.filter_input().text().to_string(),
                     show_tabs: true,
                     active_tab: 0,
                 }
@@ -174,12 +174,12 @@ impl App {
             SelectorPage::Session => {
                 let items = self
                     .session_picker
-                    .filtered_sessions
+                    .filtered_sessions()
                     .iter()
                     .map(|s| {
                         let preview = s.first_user_message.as_ref().map_or_else(
                             || "No preview".to_string(),
-                            |m| m.chars().take(40).collect::<String>(),
+                            |m: &String| m.chars().take(40).collect::<String>(),
                         );
                         let label = format!("{} - {}", preview, format_relative_time(s.updated_at));
                         SelectorItem {
@@ -193,8 +193,8 @@ impl App {
                     title: "Sessions",
                     description: "Select a session to resume",
                     items,
-                    selected_idx: self.session_picker.list_state.selected().unwrap_or(0),
-                    filter_text: self.session_picker.filter_input.text().to_string(),
+                    selected_idx: self.session_picker.list_state().selected().unwrap_or(0),
+                    filter_text: self.session_picker.filter_input().text().to_string(),
                     show_tabs: false,
                     active_tab: 0,
                 }

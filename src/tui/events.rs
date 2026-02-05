@@ -650,13 +650,13 @@ impl App {
             // Handle filter input key events
             let text_changed = match self.selector_page {
                 SelectorPage::Provider => {
-                    handle_filter_input_event(&mut self.provider_picker.filter_input, key)
+                    handle_filter_input_event(self.provider_picker.filter_input_mut(), key)
                 }
                 SelectorPage::Model => {
                     handle_filter_input_event(&mut self.model_picker.filter_input, key)
                 }
                 SelectorPage::Session => {
-                    handle_filter_input_event(&mut self.session_picker.filter_input, key)
+                    handle_filter_input_event(self.session_picker.filter_input_mut(), key)
                 }
             };
 

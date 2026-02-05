@@ -3,20 +3,13 @@
 use crate::session::{SessionStore, SessionSummary};
 use crate::tui::filter_input::FilterInputState;
 use crate::tui::fuzzy;
-use crate::tui::picker_trait::PickerNavigation;
+use crate::tui::picker_trait::{FilterablePicker, PickerNavigation};
 use crate::tui::types::SelectionState;
 
 /// State for the session picker modal.
 #[derive(Default)]
 pub struct SessionPicker {
-    /// All available sessions.
-    pub sessions: Vec<SessionSummary>,
-    /// Filtered sessions based on search.
-    pub filtered_sessions: Vec<SessionSummary>,
-    /// Filter input state.
-    pub filter_input: FilterInputState,
-    /// List state.
-    pub list_state: SelectionState,
+    picker: FilterablePicker<SessionSummary>,
     /// Loading state.
     pub is_loading: bool,
     /// Error message if load failed.
@@ -31,7 +24,7 @@ impl SessionPicker {
 
     /// Reset picker state.
     pub fn reset(&mut self) {
-        self.filter_input.clear();
+        self.picker.filter_input_mut().clear();
         self.apply_filter();
     }
 
@@ -40,10 +33,9 @@ impl SessionPicker {
         self.is_loading = true;
         match store.list_recent(limit) {
             Ok(sessions) => {
-                self.sessions = sessions;
+                self.picker.set_items(sessions);
                 self.is_loading = false;
                 self.error = None;
-                self.apply_filter();
             }
             Err(e) => {
                 self.error = Some(e.to_string());
@@ -55,19 +47,20 @@ impl SessionPicker {
     /// Check if we have sessions loaded.
     #[must_use]
     pub fn has_sessions(&self) -> bool {
-        !self.sessions.is_empty()
+        !self.picker.items().is_empty()
     }
 
     /// Apply filter to session list.
     pub fn apply_filter(&mut self) {
-        let filter = self.filter_input.text();
+        let filter = self.picker.filter_input().text();
 
         if filter.is_empty() {
-            self.filtered_sessions = self.sessions.clone();
+            self.picker.set_filtered(self.picker.items().to_vec());
         } else {
             // Build candidate strings for fuzzy matching
             let candidates: Vec<String> = self
-                .sessions
+                .picker
+                .items()
                 .iter()
                 .map(|s| {
                     format!(
@@ -84,83 +77,69 @@ impl SessionPicker {
             let matches = fuzzy::top_matches(filter, candidate_refs.iter().copied(), 50);
 
             // Map matches back to sessions
-            self.filtered_sessions = matches
+            let filtered: Vec<SessionSummary> = matches
                 .iter()
                 .filter_map(|matched| {
                     candidates
                         .iter()
                         .position(|c| c.as_str() == *matched)
-                        .map(|idx| self.sessions[idx].clone())
+                        .map(|idx| self.picker.items()[idx].clone())
                 })
                 .collect();
-        }
-
-        if self.filtered_sessions.is_empty() {
-            self.list_state.select(None);
-        } else {
-            self.list_state.select(Some(0));
+            self.picker.set_filtered(filtered);
         }
     }
 
-    /// Move selection up.
-    pub fn move_up(&mut self, count: usize) {
-        if self.filtered_sessions.is_empty() {
-            return;
-        }
-        let i = self.list_state.selected().unwrap_or(0);
-        let new_i = i.saturating_sub(count);
-        self.list_state.select(Some(new_i));
+    /// Get all sessions.
+    #[must_use]
+    pub fn sessions(&self) -> &[SessionSummary] {
+        self.picker.items()
     }
 
-    /// Move selection down.
-    pub fn move_down(&mut self, count: usize) {
-        if self.filtered_sessions.is_empty() {
-            return;
-        }
-        let len = self.filtered_sessions.len();
-        let i = self.list_state.selected().unwrap_or(0);
-        let new_i = (i + count).min(len - 1);
-        self.list_state.select(Some(new_i));
+    /// Get filtered sessions.
+    #[must_use]
+    pub fn filtered_sessions(&self) -> &[SessionSummary] {
+        self.picker.filtered()
     }
 
-    /// Jump to top.
-    pub fn jump_to_top(&mut self) {
-        if !self.filtered_sessions.is_empty() {
-            self.list_state.select(Some(0));
-        }
+    /// Get filter input state.
+    #[must_use]
+    pub fn filter_input(&self) -> &FilterInputState {
+        self.picker.filter_input()
     }
 
-    /// Jump to bottom.
-    pub fn jump_to_bottom(&mut self) {
-        if !self.filtered_sessions.is_empty() {
-            self.list_state
-                .select(Some(self.filtered_sessions.len() - 1));
-        }
+    /// Get mutable filter input state.
+    pub fn filter_input_mut(&mut self) -> &mut FilterInputState {
+        self.picker.filter_input_mut()
+    }
+
+    /// Get list state.
+    #[must_use]
+    pub fn list_state(&self) -> &SelectionState {
+        self.picker.list_state()
     }
 
     /// Get currently selected session.
     #[must_use]
     pub fn selected_session(&self) -> Option<&SessionSummary> {
-        self.list_state
-            .selected()
-            .and_then(|i| self.filtered_sessions.get(i))
+        self.picker.selected()
     }
 }
 
 impl PickerNavigation for SessionPicker {
     fn move_up(&mut self, count: usize) {
-        Self::move_up(self, count);
+        self.picker.move_up(count);
     }
 
     fn move_down(&mut self, count: usize) {
-        Self::move_down(self, count);
+        self.picker.move_down(count);
     }
 
     fn jump_to_top(&mut self) {
-        Self::jump_to_top(self);
+        self.picker.jump_to_top();
     }
 
     fn jump_to_bottom(&mut self) {
-        Self::jump_to_bottom(self);
+        self.picker.jump_to_bottom();
     }
 }
