@@ -4,19 +4,29 @@
 
 | Metric    | Value               | Updated    |
 | --------- | ------------------- | ---------- |
-| Phase     | TUI Refactoring     | 2026-02-04 |
-| Status    | Sprint 14 Complete  | 2026-02-04 |
+| Phase     | UX Polish           | 2026-02-04 |
+| Status    | Backlog burndown    | 2026-02-04 |
 | Toolchain | stable              | 2026-01-22 |
-| Tests     | 313 passing         | 2026-02-04 |
+| Tests     | 322 passing         | 2026-02-04 |
 | Clippy    | pedantic clean      | 2026-02-04 |
-| TUI Lines | ~9,300 (excl tests) | 2026-02-04 |
+| TUI Lines | ~9,500 (excl tests) | 2026-02-04 |
 
 ## Current Focus
 
-**Sprint 14 complete.** Next priorities:
+**UX backlog burndown.** Completed this session:
+
+- tk-6k9u ✓ Scrollback audit
+- tk-9s5m ✓ Blank screen gap verification
+- tk-cslh ✓ CLI behavior review
+- tk-qy6g ✓ Destructive command guard (rm -rf, git reset --hard, etc.)
+- tk-6ydy ✓ Tool output format (✓/✗ icons, multi-param display)
+- tk-g3dt ✓ Ctrl+R fuzzy history search
+- tk-kwxn ✓ Deferred provider change until model selection
+
+Next priorities:
 
 - Memory system (tk-5j06) - P2
-- UX improvements from backlog (20 tasks)
+- Remaining UX backlog (~13 tasks)
 
 ## Architecture Assessment (2026-02-04)
 
