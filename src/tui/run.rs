@@ -189,11 +189,16 @@ fn open_editor(initial: &str) -> Result<Option<String>, Box<dyn std::error::Erro
 }
 
 /// Guard that restores the original panic hook on drop.
-struct PanicHookGuard;
+struct PanicHookGuard {
+    original_hook: std::sync::Arc<dyn Fn(&std::panic::PanicInfo) + Send + Sync + 'static>,
+}
 
 impl Drop for PanicHookGuard {
     fn drop(&mut self) {
-        let _ = std::panic::take_hook();
+        let original_hook = std::sync::Arc::clone(&self.original_hook);
+        std::panic::set_hook(Box::new(move |info| {
+            (original_hook)(info);
+        }));
     }
 }
 
@@ -206,14 +211,15 @@ pub async fn run(
     permissions: PermissionSettings,
     resume_option: ResumeOption,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Set panic hook to restore terminal on panic (guard ensures cleanup on all exit paths)
-    let original_hook = std::panic::take_hook();
+    // Set panic hook to restore terminal on panic (guard restores original on exit)
+    let original_hook = std::sync::Arc::from(std::panic::take_hook());
+    let hook_for_panic = std::sync::Arc::clone(&original_hook);
     std::panic::set_hook(Box::new(move |info| {
         let _ = disable_raw_mode();
         let _ = execute!(io::stdout(), Show);
-        original_hook(info);
+        (hook_for_panic)(info);
     }));
-    let _panic_guard = PanicHookGuard;
+    let _panic_guard = PanicHookGuard { original_hook };
 
     let TerminalState {
         mut stdout,
