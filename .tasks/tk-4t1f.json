@@ -3,7 +3,7 @@
   "ref": "4t1f",
   "title": "TUI refactor: Decompose App struct",
   "description": "App has 35+ fields. Group into focused structs: TaskState (start_time, tokens, current_tool), CompletionState (file_completer, command_completer), InteractionState (cancel_pending, esc_pending).",
-  "status": "open",
+  "status": "done",
   "priority": 3,
   "labels": [],
   "assignees": [],
@@ -18,7 +18,7 @@
     }
   ],
   "created_at": "2026-02-05T01:59:02.941Z",
-  "updated_at": "2026-02-05T02:06:40.246Z",
-  "completed_at": null,
+  "updated_at": "2026-02-05T03:03:10.267Z",
+  "completed_at": "2026-02-05T03:03:10.267Z",
   "external": {}
 }
