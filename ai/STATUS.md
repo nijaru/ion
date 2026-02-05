@@ -13,31 +13,26 @@
 
 ## Current Focus
 
-**UX backlog burndown.** Completed this session:
+**UX polish + OAuth fix (tk-f564).** Completed this session:
 
-- tk-6k9u ✓ Scrollback audit
-- tk-9s5m ✓ Blank screen gap verification
-- tk-cslh ✓ CLI behavior review
-- tk-qy6g ✓ Destructive command guard (rm -rf, git reset --hard, etc.)
-- tk-6ydy ✓ Tool output format (✓/✗ icons, multi-param display)
-- tk-g3dt ✓ Ctrl+R fuzzy history search
-- tk-kwxn ✓ Deferred provider change until model selection
-- tk-a4q5 ✓ Provider selector shows config id
-- tk-vrmx ✓ CLI config subcommand (ion config get/set/path)
-- tk-5zjg ✓ TUI minor fixes (resize helper, scroll limit)
-- tk-u133 ✓ Model context window display (128K, 1M format)
-- tk-r9c7 ✓ Model sorting (org → newest) - already implemented
-- tk-x3zf ✓ Model display format - already correct
-- tk-wj4b ✓ Newest sort option - already implemented
-- tk-le7i ✓ Retry countdown timer (yellow spinner, countdown)
-- tk-3xov ✓ Ctrl+A - already implemented in input.rs
+- Provider selector: "⚠ unofficial" warning for OAuth providers (dim yellow)
+- Provider selector: Local provider sorts to bottom
+- OAuth login: One-time warning about unofficial status
+- Ollama → Local rename with ION_LOCAL_URL env var
+- OpenRouter: Added `openrouter/free` as first model option
+
+**In Progress:** Gemini OAuth fix (tk-f564)
+
+- Root cause: Using Antigravity credentials/format instead of Gemini CLI
+- gemini-cli source analyzed at `/Users/nick/github/google-gemini/gemini-cli`
+- Fix needed: Update OAuth creds + request format (see tk-f564 log)
 
 Next priorities:
 
+- Fix Gemini OAuth (tk-f564) - credentials + request format
+- Fix ChatGPT OAuth - similar investigation needed
 - Memory system (tk-5j06) - P2
-- Web search tool (tk-1y3g) - matches Claude Code
-- Settings selector UI (tk-4gm9)
-- Remaining UX backlog (~6 tasks)
+- Web search tool (tk-1y3g)
 
 ## Architecture Assessment (2026-02-04)
 
@@ -66,9 +61,8 @@ See `ai/sprints/14-tui-refactoring.md` for full plan.
 
 ## Deferred
 
-- OAuth subscription (ChatGPT, Gemini) - unofficial, deprioritized
 - Plugin system - waiting for core completion
-- Memory system (tk-5j06) - P2 after bugs fixed
+- Memory system (tk-5j06) - P2 after OAuth fixed
 
 ## Key References
 

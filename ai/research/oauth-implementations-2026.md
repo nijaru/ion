@@ -128,7 +128,7 @@ pub struct LoginServer {
 | Authorization | `https://accounts.google.com/o/oauth2/v2/auth`                             |
 | Token         | Google OAuth2 token endpoint                                               |
 | Client ID     | `681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com` |
-| Client Secret | `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` (safe for installed apps)            |
+| Client Secret | `(see src/auth/google.rs)` (safe for installed apps)                       |
 | API Endpoint  | `https://cloudcode-pa.googleapis.com/v1internal`                           |
 
 ### Scopes
