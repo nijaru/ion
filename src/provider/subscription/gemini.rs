@@ -125,32 +125,35 @@ impl GeminiOAuthClient {
             return Err(Error::Stream(format!("Gemini API error: {status} - {text}")));
         }
 
-        // Parse SSE stream
+        // Parse SSE stream (matching Gemini CLI: buffer data lines, join on empty line)
         let mut stream = response.bytes_stream();
-        let mut buffer = String::new();
+        let mut line_buffer = String::new();
+        let mut data_lines: Vec<String> = Vec::new();
 
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.map_err(|e| Error::Stream(format!("Stream error: {e}")))?;
             let text = String::from_utf8_lossy(&chunk);
-            buffer.push_str(&text);
+            line_buffer.push_str(&text);
 
-            // Process complete SSE events
-            while let Some(pos) = buffer.find("\n\n") {
-                let event = buffer[..pos].to_string();
-                buffer = buffer[pos + 2..].to_string();
+            while let Some(newline_pos) = line_buffer.find('\n') {
+                let line = line_buffer[..newline_pos].trim_end_matches('\r').to_string();
+                line_buffer = line_buffer[newline_pos + 1..].to_string();
 
-                // Parse SSE event
-                if let Some(data) = event.strip_prefix("data: ") {
-                    if data.trim().is_empty() {
+                if let Some(data) = line.strip_prefix("data: ") {
+                    data_lines.push(data.to_string());
+                } else if line.is_empty() && !data_lines.is_empty() {
+                    let json_str = data_lines.join("\n");
+                    data_lines.clear();
+
+                    if json_str.trim().is_empty() {
                         continue;
                     }
 
-                    match serde_json::from_str::<CodeAssistResponse>(data) {
+                    match serde_json::from_str::<CodeAssistResponse>(&json_str) {
                         Ok(ca_response) => {
                             if let Some(text) = ca_response.response.get_text() {
                                 let _ = tx.send(StreamEvent::TextDelta(text)).await;
                             }
-                            // TODO: Handle tool calls in streaming
                         }
                         Err(e) => {
                             tracing::warn!("Failed to parse Code Assist SSE event: {e}");

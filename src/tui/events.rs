@@ -709,7 +709,7 @@ impl App {
         self.render_state.reset_for_reflow(has_entries);
     }
 
-    /// Exit selector mode and return to input, triggering repaint.
+    /// Exit selector mode and return to input.
     pub(super) fn exit_selector_mode(&mut self) {
         self.mode = Mode::Input;
         // Clear any pending provider change (user cancelled)
@@ -717,10 +717,8 @@ impl App {
             // Reset model picker to current provider's models
             self.model_picker.set_api_provider(self.api_provider.name());
         }
-        // Selector used large area - flag for full clear + repaint
-        self.render_state.needs_full_repaint = true;
-        self.render_state.clear_scrollback_on_repaint = false;
-        self.force_full_repaint();
+        // Mark that we need to clear the selector area (not full screen repaint)
+        self.render_state.needs_selector_clear = true;
     }
 
     /// Dispatch a navigation action to the active picker.
