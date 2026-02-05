@@ -1,7 +1,7 @@
 # Sprint 14: TUI Refactoring
 
 **Goal:** Fix critical bugs, reduce code duplication, improve maintainability
-**Status:** ACTIVE
+**Status:** COMPLETE (2026-02-04)
 **Source:** ai/review/tui-analysis-2026-02-04.md
 **Target:** Reduce TUI from ~9,300 to ~7,500 lines (~20% reduction)
 
