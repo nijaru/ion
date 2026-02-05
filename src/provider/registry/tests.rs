@@ -128,26 +128,28 @@ fn test_sort_by_price() {
 }
 
 #[tokio::test]
-async fn test_fetch_ollama_models() {
-    // Skip if Ollama isn't running
+async fn test_fetch_local_models() {
+    // Skip if local server isn't running
+    let base_url = std::env::var("ION_LOCAL_URL")
+        .unwrap_or_else(|_| "http://localhost:8080/v1".to_string());
     let client = reqwest::Client::new();
     if client
-        .get("http://localhost:11434/api/tags")
+        .get(format!("{base_url}/models"))
         .send()
         .await
         .is_err()
     {
-        eprintln!("Skipping test: Ollama not running");
+        eprintln!("Skipping test: local LLM server not running");
         return;
     }
 
     let registry = ModelRegistry::new("".into(), 3600);
-    let models = registry.fetch_models_for_provider(Provider::Ollama).await;
+    let models = registry.fetch_models_for_provider(Provider::Local).await;
     assert!(models.is_ok(), "fetch_models_for_provider should succeed");
     let models = models.unwrap();
-    assert!(!models.is_empty(), "Ollama should have at least one model");
+    // Local server may have 0 or more models depending on /v1/models support
     for model in &models {
         assert!(!model.id.is_empty());
-        assert_eq!(model.provider, "ollama");
+        assert_eq!(model.provider, "local");
     }
 }

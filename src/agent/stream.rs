@@ -66,10 +66,10 @@ pub(crate) async fn stream_response(
             .sum::<usize>();
     let _ = tx.send(AgentEvent::InputTokens(input_tokens)).await;
 
-    // Ollama and OpenRouter don't support streaming with tools reliably
+    // Local and OpenRouter don't support streaming with tools reliably
     let provider_id = ctx.provider.id();
     let use_streaming =
-        (provider_id != "ollama" && provider_id != "openrouter") || request.tools.is_empty();
+        (provider_id != "local" && provider_id != "openrouter") || request.tools.is_empty();
 
     if use_streaming
         && let Some(result) =

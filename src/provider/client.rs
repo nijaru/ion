@@ -14,7 +14,7 @@ use tokio::sync::mpsc;
 enum Backend {
     /// Native Anthropic Messages API
     Anthropic(AnthropicClient),
-    /// Native OpenAI-compatible API (`OpenAI`, `OpenRouter`, Groq, Kimi, Ollama, `ChatGPT`)
+    /// Native OpenAI-compatible API (`OpenAI`, `OpenRouter`, Groq, Kimi, Local, `ChatGPT`)
     OpenAICompat(OpenAICompatClient),
     /// ChatGPT subscription via Responses API
     ChatGptResponses(ChatGptResponsesClient),
@@ -156,7 +156,7 @@ impl Client {
             | Provider::OpenRouter
             | Provider::Groq
             | Provider::Kimi
-            | Provider::Ollama => {
+            | Provider::Local => {
                 let client = OpenAICompatClient::with_base_url(provider, api_key, base_url)?;
                 Ok(Self {
                     provider,
@@ -211,7 +211,7 @@ impl Client {
             | Provider::OpenRouter
             | Provider::Groq
             | Provider::Kimi
-            | Provider::Ollama => {
+            | Provider::Local => {
                 let client = OpenAICompatClient::new(provider, api_key)?;
                 Ok(Backend::OpenAICompat(client))
             }
@@ -289,16 +289,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_client_creation() {
-        // Ollama doesn't need a key
-        let client = Client::from_provider(Provider::Ollama).await;
+        // Local doesn't need a key
+        let client = Client::from_provider(Provider::Local).await;
         assert!(client.is_ok());
-        assert_eq!(client.unwrap().provider(), Provider::Ollama);
+        assert_eq!(client.unwrap().provider(), Provider::Local);
     }
 
     #[tokio::test]
-    async fn test_from_provider_ollama() {
-        // Ollama should always work (no key needed)
-        let client = Client::from_provider(Provider::Ollama).await;
+    async fn test_from_provider_local() {
+        // Local should always work (no key needed)
+        let client = Client::from_provider(Provider::Local).await;
         assert!(client.is_ok());
     }
 

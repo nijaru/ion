@@ -16,8 +16,8 @@ pub enum Provider {
     OpenAI,
     /// Google AI Studio (Gemini)
     Google,
-    /// Local Ollama instance
-    Ollama,
+    /// Local LLM server (mlx-lm, vLLM, Ollama, etc.)
+    Local,
     /// Groq cloud inference
     Groq,
     /// Moonshot AI Kimi
@@ -35,7 +35,7 @@ impl Provider {
         Provider::Anthropic,
         Provider::OpenAI,
         Provider::Google,
-        Provider::Ollama,
+        Provider::Local,
         Provider::Groq,
         Provider::Kimi,
         Provider::ChatGpt,
@@ -50,7 +50,7 @@ impl Provider {
             Provider::Anthropic => "anthropic",
             Provider::OpenAI => "openai",
             Provider::Google => "google",
-            Provider::Ollama => "ollama",
+            Provider::Local => "local",
             Provider::Groq => "groq",
             Provider::Kimi => "kimi",
             Provider::ChatGpt => "chatgpt",
@@ -66,7 +66,7 @@ impl Provider {
             "anthropic" => Some(Provider::Anthropic),
             "openai" => Some(Provider::OpenAI),
             "google" => Some(Provider::Google),
-            "ollama" => Some(Provider::Ollama),
+            "local" | "ollama" => Some(Provider::Local),
             "groq" => Some(Provider::Groq),
             "kimi" | "moonshot" => Some(Provider::Kimi),
             "chatgpt" => Some(Provider::ChatGpt),
@@ -83,7 +83,7 @@ impl Provider {
             Provider::Anthropic => "Anthropic",
             Provider::OpenAI => "OpenAI",
             Provider::Google => "Google AI",
-            Provider::Ollama => "Ollama",
+            Provider::Local => "Local",
             Provider::Groq => "Groq",
             Provider::Kimi => "Kimi",
             Provider::ChatGpt => "ChatGPT",
@@ -99,7 +99,7 @@ impl Provider {
             Provider::Anthropic => "Claude models directly",
             Provider::OpenAI => "GPT models directly",
             Provider::Google => "Gemini via AI Studio",
-            Provider::Ollama => "Local models",
+            Provider::Local => "Local models",
             Provider::Groq => "Fast inference",
             Provider::Kimi => "Moonshot K2 models",
             Provider::ChatGpt => "Sign in with ChatGPT",
@@ -117,7 +117,7 @@ impl Provider {
             Provider::Google => &["GOOGLE_API_KEY", "GEMINI_API_KEY"],
             Provider::Groq => &["GROQ_API_KEY"],
             Provider::Kimi => &["MOONSHOT_API_KEY", "KIMI_API_KEY"],
-            Provider::Ollama | Provider::ChatGpt | Provider::Gemini => &[], // No key or OAuth only
+            Provider::Local | Provider::ChatGpt | Provider::Gemini => &[], // No key or OAuth only
         }
     }
 
@@ -152,8 +152,8 @@ impl Provider {
                 return Some(key);
             }
         }
-        // Ollama doesn't need a key
-        if self == Provider::Ollama {
+        // Local provider doesn't need a key
+        if self == Provider::Local {
             return Some(String::new());
         }
         None
@@ -179,8 +179,8 @@ impl Provider {
             // OAuth providers: CLI command
             Provider::ChatGpt => "ion login chatgpt",
             Provider::Gemini => "ion login gemini",
-            // Ollama: no auth needed
-            Provider::Ollama => "",
+            // Local: no auth needed
+            Provider::Local => "",
             // API providers: first env var
             Provider::OpenRouter => "OPENROUTER_API_KEY",
             Provider::Anthropic => "ANTHROPIC_API_KEY",
@@ -252,10 +252,10 @@ mod tests {
     }
 
     #[test]
-    fn test_ollama_always_available() {
-        // Ollama doesn't need an API key
-        assert!(Provider::Ollama.api_key().is_some());
-        assert!(Provider::Ollama.is_available());
+    fn test_local_always_available() {
+        // Local provider doesn't need an API key
+        assert!(Provider::Local.api_key().is_some());
+        assert!(Provider::Local.is_available());
     }
 
     #[test]

@@ -27,14 +27,22 @@ impl OpenAICompatClient {
         let quirks = ProviderQuirks::for_provider(provider);
         let api_key = api_key.into();
 
-        // Ollama doesn't need auth
-        let auth = if provider == Provider::Ollama {
+        // Local provider doesn't need auth
+        let auth = if provider == Provider::Local {
             AuthConfig::Bearer(String::new())
         } else {
             AuthConfig::Bearer(api_key)
         };
 
-        let http = HttpClient::new(quirks.base_url, auth);
+        // Allow env var override for local provider URL
+        let base_url = if provider == Provider::Local {
+            std::env::var("ION_LOCAL_URL")
+                .unwrap_or_else(|_| quirks.base_url.to_string())
+        } else {
+            quirks.base_url.to_string()
+        };
+
+        let http = HttpClient::new(base_url, auth);
 
         Ok(Self {
             http,
@@ -54,7 +62,7 @@ impl OpenAICompatClient {
         let quirks = ProviderQuirks::for_provider(provider);
         let api_key = api_key.into();
 
-        let auth = if provider == Provider::Ollama {
+        let auth = if provider == Provider::Local {
             AuthConfig::Bearer(String::new())
         } else {
             AuthConfig::Bearer(api_key)

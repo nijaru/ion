@@ -132,11 +132,17 @@ impl App {
                     .filtered()
                     .iter()
                     .map(|s| {
-                        // Show hint as config id (dim) or auth hint if not authenticated
-                        let hint = if s.authenticated {
+                        // Always show id and auth method
+                        let auth_hint = s.provider.auth_hint();
+                        let hint = if auth_hint.is_empty() {
+                            // Local provider - no auth needed
                             s.provider.id().to_string()
+                        } else if s.provider.is_oauth() {
+                            // OAuth providers - show warning (unofficial)
+                            format!("{} · ⚠ unofficial", s.provider.id())
                         } else {
-                            format!("{} · {}", s.provider.id(), s.provider.auth_hint())
+                            // API key providers - show env var
+                            format!("{} · {}", s.provider.id(), auth_hint)
                         };
                         SelectorItem {
                             label: s.provider.name().to_string(),

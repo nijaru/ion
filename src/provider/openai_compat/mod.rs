@@ -1,6 +1,6 @@
 //! OpenAI-compatible API client.
 //!
-//! Handles `OpenRouter`, Groq, Kimi, `OpenAI`, Ollama, `ChatGPT` with provider-specific quirks.
+//! Handles `OpenRouter`, Groq, Kimi, `OpenAI`, Local, `ChatGPT` with provider-specific quirks.
 
 mod client;
 mod quirks;

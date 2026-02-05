@@ -52,7 +52,7 @@ pub struct ModelPicker {
     pub is_loading: bool,
     /// Error message if fetch failed.
     pub error: Option<String>,
-    /// Current API provider name (e.g., "`OpenRouter`", "Ollama").
+    /// Current API provider name (e.g., "`OpenRouter`", "Local").
     pub api_provider_name: Option<String>,
 }
 
@@ -127,7 +127,7 @@ impl ModelPicker {
         !self.all_models.is_empty()
     }
 
-    /// Set the API provider name (e.g., "`OpenRouter`", "Ollama").
+    /// Set the API provider name (e.g., "`OpenRouter`", "Local").
     pub fn set_api_provider(&mut self, name: impl Into<String>) {
         self.api_provider_name = Some(name.into());
     }

@@ -143,8 +143,8 @@ impl Config {
     /// Priority: config file > env var (explicit config is more intentional).
     #[must_use]
     pub fn api_key_for(&self, provider: &str) -> Option<String> {
-        // Ollama doesn't need a key
-        if provider == "ollama" {
+        // Local provider doesn't need a key
+        if provider == "local" || provider == "ollama" {
             return Some(String::new());
         }
 
