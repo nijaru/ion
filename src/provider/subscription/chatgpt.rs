@@ -13,11 +13,8 @@ use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-/// ChatGPT Codex backend base URLs (fallback on 404).
-const CHATGPT_ENDPOINTS: &[&str] = &[
-    "https://chatgpt.com/backend-api/codex",
-    "https://chatgpt.com/backend-api/codex/v1",
-];
+/// ChatGPT Codex backend base URL (matches Codex CLI).
+const CHATGPT_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 /// Originator header value (match Codex CLI).
 const ORIGINATOR: &str = "codex_cli_rs";
 
@@ -55,6 +52,17 @@ impl ChatGptResponsesClient {
             HeaderName::from_static("originator"),
             HeaderValue::from_static(ORIGINATOR),
         );
+        // Match Codex CLI user-agent format
+        let ua = format!(
+            "{ORIGINATOR}/{} ({} {}; {})",
+            env!("CARGO_PKG_VERSION"),
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+            "ion"
+        );
+        if let Ok(value) = HeaderValue::from_str(&ua) {
+            headers.insert(reqwest::header::USER_AGENT, value);
+        }
         if let Some(account_id) = self.account_id.as_deref() {
             if let Ok(value) = HeaderValue::from_str(account_id) {
                 headers.insert(
@@ -90,43 +98,35 @@ impl ChatGptResponsesClient {
     /// Make a non-streaming responses request.
     pub async fn complete(&self, request: ChatRequest) -> Result<Message, Error> {
         let body = self.build_request(&request, false);
-        for endpoint in CHATGPT_ENDPOINTS {
-            let url = format!("{endpoint}/responses");
+        let url = format!("{CHATGPT_BASE_URL}/responses");
 
-            let response = self
-                .client
-                .post(&url)
-                .headers(self.build_headers(false))
-                .json(&body)
-                .send()
-                .await
-                .map_err(|e| Error::Api(format!("Request failed: {e}")))?;
+        let response = self
+            .client
+            .post(&url)
+            .headers(self.build_headers(false))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| Error::Api(format!("Request failed: {e}")))?;
 
-            let status = response.status();
-            let text = response
-                .text()
-                .await
-                .map_err(|e| Error::Api(format!("Failed to read response: {e}")))?;
+        let status = response.status();
+        let text = response
+            .text()
+            .await
+            .map_err(|e| Error::Api(format!("Failed to read response: {e}")))?;
 
-            if status.is_success() {
-                let value: Value = serde_json::from_str(&text).map_err(|e| {
-                    Error::Api(format!("Failed to parse response: {e}\nBody: {text}"))
-                })?;
-                let text = extract_output_text(&value);
-                return Ok(Message {
-                    role: Role::Assistant,
-                    content: Arc::new(vec![ContentBlock::Text { text }]),
-                });
-            }
-
-            if status != reqwest::StatusCode::NOT_FOUND {
-                return Err(Error::Api(format!("HTTP {status}: {text}")));
-            }
+        if !status.is_success() {
+            return Err(Error::Api(format!("HTTP {status}: {text}")));
         }
 
-        Err(Error::Api(
-            "HTTP 404: No ChatGPT responses endpoint matched".to_string(),
-        ))
+        let value: Value = serde_json::from_str(&text).map_err(|e| {
+            Error::Api(format!("Failed to parse response: {e}\nBody: {text}"))
+        })?;
+        let text = extract_output_text(&value);
+        Ok(Message {
+            role: Role::Assistant,
+            content: Arc::new(vec![ContentBlock::Text { text }]),
+        })
     }
 
     /// Stream a responses request.
@@ -138,36 +138,22 @@ impl ChatGptResponsesClient {
         use futures::StreamExt;
 
         let body = self.build_request(&request, true);
-        let mut response = None;
-        for endpoint in CHATGPT_ENDPOINTS {
-            let url = format!("{endpoint}/responses");
+        let url = format!("{CHATGPT_BASE_URL}/responses");
 
-            let attempt = self
-                .client
-                .post(&url)
-                .headers(self.build_headers(true))
-                .json(&body)
-                .send()
-                .await
-                .map_err(|e| Error::Stream(format!("Request failed: {e}")))?;
+        let response = self
+            .client
+            .post(&url)
+            .headers(self.build_headers(true))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| Error::Stream(format!("Request failed: {e}")))?;
 
-            if attempt.status().is_success() {
-                response = Some(attempt);
-                break;
-            }
-
-            let status = attempt.status();
-            let text = attempt.text().await.unwrap_or_default();
-            if status != reqwest::StatusCode::NOT_FOUND {
-                return Err(Error::Stream(format!("HTTP {status}: {text}")));
-            }
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            return Err(Error::Stream(format!("HTTP {status}: {text}")));
         }
-
-        let Some(response) = response else {
-            return Err(Error::Stream(
-                "HTTP 404: No ChatGPT responses endpoint matched".to_string(),
-            ));
-        };
 
         let mut stream = response.bytes_stream();
         let mut parser = SseParser::new();
