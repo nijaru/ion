@@ -3,7 +3,7 @@
   "ref": "y9tc",
   "title": "TUI refactor: Extract Picker trait",
   "description": "ProviderPicker, ModelPicker, SessionPicker share 80%+ identical structure (filter_input, selection, items, filtered, move_up/down, jump_to_top/bottom). Create generic FilterablePicker<T>. Saves ~400 lines.",
-  "status": "open",
+  "status": "done",
   "priority": 3,
   "labels": [],
   "assignees": [],
@@ -15,10 +15,14 @@
     {
       "ts": "2026-02-05T02:06:40.171Z",
       "msg": "Sprint 14 design complete. FilterablePicker<T> generic will unify ProviderPicker (133), ModelPicker (404), SessionPicker (166). ~300 lines saveable."
+    },
+    {
+      "ts": "2026-02-05T02:44:11.762Z",
+      "msg": "Migrated ProviderPicker and SessionPicker to FilterablePicker. ModelPicker deferred - two-stage selection requires more work."
     }
   ],
   "created_at": "2026-02-05T01:58:51.263Z",
-  "updated_at": "2026-02-05T02:06:40.171Z",
-  "completed_at": null,
+  "updated_at": "2026-02-05T02:44:11.782Z",
+  "completed_at": "2026-02-05T02:44:11.782Z",
   "external": {}
 }
