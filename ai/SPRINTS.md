@@ -1,46 +1,25 @@
-# Sprint Plan: ion Stabilization & UX
+# Sprint Plan: ion
 
 ## Status
 
-| Sprint | Goal                           | Status   |
-| ------ | ------------------------------ | -------- |
-| 0-10   | See ai/sprints/archive-0-10.md | COMPLETE |
-| 11     | TUI v2: Remove ratatui         | COMPLETE |
-| 12     | Clippy Pedantic Refactoring    | COMPLETE |
-| 13     | Agent Loop Decomposition       | COMPLETE |
+| Sprint | Goal                | Status   |
+| ------ | ------------------- | -------- |
+| 0-13   | Foundation + TUI v2 | COMPLETE |
+| 14     | TUI Refactoring     | ACTIVE   |
 
 ## Current Focus
 
-None active. See tk for backlog.
+**Sprint 14: TUI Refactoring** - Fix panic bugs, reduce duplication, improve maintainability.
 
-See ai/STATUS.md for details.
+See [ai/sprints/14-tui-refactoring.md](sprints/14-tui-refactoring.md) for details.
 
-## Sprint 11: TUI v2 - Remove ratatui, Pure Crossterm
+## Completed Sprints
 
-**Goal:** Replace ratatui with direct crossterm for proper native scrollback.
-**Status:** COMPLETE (2026-01-27)
-**Design:** ai/design/tui-v2.md
+| Sprint | Goal                     | Completed  |
+| ------ | ------------------------ | ---------- |
+| 0-10   | Foundation               | 2026-01    |
+| 11     | TUI v2: Remove ratatui   | 2026-01-27 |
+| 12     | Clippy Pedantic          | 2026-01-29 |
+| 13     | Agent Loop Decomposition | 2026-01-31 |
 
-### Key Changes
-
-- Removed ratatui dependency
-- Direct crossterm terminal control
-- Native scrollback for chat history
-- Dynamic UI height for input area
-- insert_before pattern for chat insertion
-
-### Commits
-
-See git log for 2026-01-26 to 2026-01-27.
-
-## Sprint 12: Clippy Pedantic Refactoring
-
-**Goal:** Enable clippy::pedantic for higher code quality.
-**Status:** COMPLETE (2026-01-29)
-**Design:** ai/sprints/12-clippy-pedantic.md
-
-### Key Changes
-
-- 97 pedantic lints enabled
-- Pattern cleanup (must_use, needless_pass_by_value, etc.)
-- Documentation improvements
+Details in `ai/sprints/archive-0-10.md` and git history.

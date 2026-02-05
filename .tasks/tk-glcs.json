@@ -1,0 +1,24 @@
+{
+  "project": "tk",
+  "ref": "glcs",
+  "title": "Fix state.rs unchecked array accesses",
+  "description": "Line 549: lines[line_idx] can panic when line_idx equals lines.len(). Line 588: lines.last().unwrap() can panic on empty vec. Line 261: underflow in prev_line_len calculation. Use get(), unwrap_or(), and saturating_sub.",
+  "status": "open",
+  "priority": 2,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [
+    {
+      "ts": "2026-02-05T02:06:31.396Z",
+      "msg": "Code review identified 3 issues: (1) line 261 underflow in move_up_logical, (2) line 549 unchecked lines[line_idx], (3) line 588 unwrap on potentially empty vec"
+    }
+  ],
+  "created_at": "2026-02-05T01:58:49.986Z",
+  "updated_at": "2026-02-05T02:06:31.396Z",
+  "completed_at": null,
+  "external": {}
+}

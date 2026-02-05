@@ -2,17 +2,20 @@
 
 ## Current State
 
-| Metric    | Value            | Updated    |
-| --------- | ---------------- | ---------- |
-| Phase     | TUI/Agent Polish | 2026-02-04 |
-| Status    | In Progress      | 2026-02-04 |
-| Toolchain | stable           | 2026-01-22 |
-| Tests     | 303 passing      | 2026-02-04 |
-| Clippy    | pedantic clean   | 2026-01-31 |
+| Metric    | Value               | Updated    |
+| --------- | ------------------- | ---------- |
+| Phase     | TUI Refactoring     | 2026-02-04 |
+| Status    | Sprint Planning     | 2026-02-04 |
+| Toolchain | stable              | 2026-01-22 |
+| Tests     | 303 passing         | 2026-02-04 |
+| Clippy    | pedantic clean      | 2026-02-04 |
+| TUI Lines | ~9,300 (excl tests) | 2026-02-04 |
 
 ## Current Focus
 
-**TUI bug fixes and core agent completion** using local models (Ollama) or OpenRouter (`openrouter/free`).
+**TUI refactoring sprint** - Fix panic bugs, reduce code duplication, improve maintainability.
+
+Code review completed 2026-02-04. See `ai/review/tui-analysis-2026-02-04.md`.
 
 ## Architecture Assessment (2026-02-04)
 
@@ -31,11 +34,16 @@
 
 ## High Priority Bugs
 
-| Bug                         | File              | Task    |
-| --------------------------- | ----------------- | ------- |
-| Visual line cursor clamping | `composer/mod.rs` | tk-wi1s |
-| Progress line duplicates    | `render.rs`       | tk-4trn |
-| Subagent tool filtering     | `subagent.rs:118` | tk-thxg |
+All P1 bugs fixed 2026-02-04 (tk-wi1s, tk-4trn, tk-thxg).
+
+**Remaining P2 (panics):**
+| Bug | File | Task |
+| --- | ---- | ---- |
+| Empty vec panic | `visual_lines.rs:74` | tk-q48p |
+| Array bounds + unwrap | `state.rs:549,588,261` | tk-glcs |
+| No terminal panic hook | `run.rs` | tk-xznp |
+
+See `ai/review/tui-analysis-2026-02-04.md` for full refactoring analysis.
 
 ## Deferred
 
