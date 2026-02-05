@@ -1,8 +1,8 @@
-//! Google OAuth for Gemini subscriptions via Antigravity.
+//! Google OAuth for Gemini subscriptions via Code Assist API.
 //!
-//! Uses the Antigravity OAuth flow to access Gemini models through
+//! Uses the Gemini CLI OAuth flow to access Gemini models through
 //! the Code Assist backend (cloudcode-pa.googleapis.com).
-//! This enables access using Google AI Pro/Ultra subscriptions.
+//! This enables access using Gemini subscriptions.
 
 use super::pkce::{PkceCodes, generate_state};
 use super::server::CallbackServer;
@@ -11,27 +11,24 @@ use super::{CALLBACK_TIMEOUT, OAuthFlow};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
-/// Antigravity OAuth client ID.
+/// Gemini CLI OAuth client ID (safe for installed apps per OAuth spec).
 pub const CLIENT_ID: &str =
-    "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com";
+    "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com";
 
-/// Antigravity OAuth client secret (safe for installed apps per OAuth spec).
-pub const CLIENT_SECRET: &str = "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";
+/// Gemini CLI OAuth client secret (safe for installed apps per OAuth spec).
+pub const CLIENT_SECRET: &str = "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";
 
 /// Google OAuth endpoints.
 pub const AUTH_ENDPOINT: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 pub const TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
 
-/// OAuth scopes for Antigravity access.
+/// OAuth scopes for Code Assist API access.
 pub const SCOPES: &str = "https://www.googleapis.com/auth/cloud-platform \
                           https://www.googleapis.com/auth/userinfo.email \
-                          https://www.googleapis.com/auth/userinfo.profile \
-                          https://www.googleapis.com/auth/cclog \
-                          https://www.googleapis.com/auth/experimentsandconfigs";
+                          https://www.googleapis.com/auth/userinfo.profile";
 
-/// Antigravity OAuth callback path and port (fixed).
-const CALLBACK_PATH: &str = "/oauth-callback";
-const CALLBACK_PORT: u16 = 51121;
+/// OAuth callback path and port (dynamic port, matching Gemini CLI).
+const CALLBACK_PATH: &str = "/oauth2callback";
 
 /// Default project ID used when loadCodeAssist does not return one.
 const DEFAULT_PROJECT_ID: &str = "rising-fact-p41fc";
@@ -99,10 +96,10 @@ impl OAuthFlow for GoogleAuth {
         let pkce = PkceCodes::generate();
         let state = generate_state();
 
-        // Start callback server (fixed port/path for Antigravity)
+        // Start callback server (dynamic port, matching Gemini CLI)
         let server = CallbackServer::new_with_config(
             state.clone(),
-            super::server::CallbackConfig::fixed(CALLBACK_PORT, CALLBACK_PATH),
+            super::server::CallbackConfig::dynamic(CALLBACK_PATH),
         )?;
         let redirect_uri = server.redirect_uri();
         let port = server.port();
@@ -379,10 +376,9 @@ mod tests {
     }
 
     #[test]
-    fn test_client_id_matches_antigravity() {
-        // Verify we're using the Antigravity client ID
+    fn test_client_id_matches_gemini_cli() {
         assert!(CLIENT_ID.ends_with(".apps.googleusercontent.com"));
-        assert!(CLIENT_ID.starts_with("1071006060591"));
+        assert!(CLIENT_ID.starts_with("681255809395"));
     }
 
     #[test]
@@ -401,8 +397,10 @@ mod tests {
     }
 
     #[test]
-    fn test_scopes_include_antigravity_internal() {
-        assert!(SCOPES.contains("cclog"));
-        assert!(SCOPES.contains("experimentsandconfigs"));
+    fn test_scopes_match_gemini_cli() {
+        assert!(SCOPES.contains("cloud-platform"));
+        assert!(SCOPES.contains("userinfo.email"));
+        assert!(SCOPES.contains("userinfo.profile"));
+        assert!(!SCOPES.contains("cclog"));
     }
 }
