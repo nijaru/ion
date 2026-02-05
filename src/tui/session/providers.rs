@@ -94,6 +94,45 @@ impl App {
         self.session_picker.load_sessions(&self.store, 50);
     }
 
+    /// Preview models for a provider without committing to it.
+    /// Used when user selects a different provider - shows models before confirming.
+    pub(in crate::tui) fn preview_provider_models(&mut self, provider: Provider) {
+        // Set up model picker to show this provider's models
+        self.model_picker.set_api_provider(provider.name());
+        self.model_picker.set_models(vec![]);
+        self.model_picker.is_loading = true;
+        self.mode = Mode::Selector;
+        self.selector_page = SelectorPage::Model;
+        self.model_picker.error = None;
+
+        // Fetch models for the preview provider
+        self.fetch_models_for_provider(provider);
+    }
+
+    /// Fetch models asynchronously for a specific provider.
+    pub(in crate::tui) fn fetch_models_for_provider(&self, provider: Provider) {
+        debug!("Starting model fetch for {:?}", provider);
+        let registry = self.model_registry.clone();
+        let prefs = self.config.provider_prefs.clone();
+        let agent_tx = self.agent_tx.clone();
+
+        tokio::spawn(async move {
+            debug!("Model fetch task started for {:?}", provider);
+            match model_picker::fetch_models_for_picker(&registry, provider, &prefs).await {
+                Ok(models) => {
+                    debug!("Fetched {} models", models.len());
+                    let _ = agent_tx.send(AgentEvent::ModelsFetched(models)).await;
+                }
+                Err(e) => {
+                    debug!("Model fetch error: {}", e);
+                    let _ = agent_tx
+                        .send(AgentEvent::ModelFetchError(e.to_string()))
+                        .await;
+                }
+            }
+        });
+    }
+
     /// Fetch models asynchronously.
     pub(in crate::tui) fn fetch_models(&self) {
         debug!("Starting model fetch");

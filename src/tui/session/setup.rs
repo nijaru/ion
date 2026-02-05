@@ -225,6 +225,7 @@ impl App {
             file_completer: FileCompleter::new(working_dir.clone()),
             command_completer: CommandCompleter::new(),
             history_search: HistorySearchState::new(),
+            pending_provider: None,
         };
 
         // Set initial API provider name on model picker

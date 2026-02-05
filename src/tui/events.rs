@@ -564,10 +564,14 @@ impl App {
                         && status.authenticated
                     {
                         let provider = status.provider;
-                        if let Err(err) = self.set_provider(provider) {
-                            self.last_error = Some(err.to_string());
-                        } else {
+                        // Defer provider change until model is selected
+                        // Only set now if it's the same provider (just opening model selector)
+                        if provider == self.api_provider {
                             self.open_model_selector();
+                        } else {
+                            // Store pending provider and preview its models
+                            self.pending_provider = Some(provider);
+                            self.preview_provider_models(provider);
                         }
                     }
                 }
@@ -576,10 +580,23 @@ impl App {
                         self.model_picker.select_provider();
                     }
                     PickerStage::Model => {
-                        if let Some(model) = self.model_picker.selected_model() {
-                            self.session.model = model.id.clone();
-                            if model.context_window > 0 {
-                                let ctx_window = model.context_window as usize;
+                        // Clone model data to avoid borrow conflict with set_provider
+                        let model_data = self.model_picker.selected_model().map(|m| {
+                            (m.id.clone(), m.context_window)
+                        });
+                        if let Some((model_id, context_window)) = model_data {
+                            // Commit pending provider change now that model is selected
+                            if let Some(provider) = self.pending_provider.take() {
+                                if let Err(err) = self.set_provider(provider) {
+                                    self.last_error = Some(err.to_string());
+                                    self.exit_selector_mode();
+                                    return;
+                                }
+                            }
+
+                            self.session.model = model_id.clone();
+                            if context_window > 0 {
+                                let ctx_window = context_window as usize;
                                 self.model_context_window = Some(ctx_window);
                                 // Update agent's compaction config
                                 self.agent.set_context_window(ctx_window);
@@ -587,7 +604,7 @@ impl App {
                                 self.model_context_window = None;
                             }
                             // Persist selection to config
-                            self.config.model = Some(model.id.clone());
+                            self.config.model = Some(model_id);
                             if let Err(e) = self.config.save() {
                                 tracing::warn!("Failed to save config: {}", e);
                             }
@@ -695,6 +712,11 @@ impl App {
     /// Exit selector mode and return to input, triggering repaint.
     pub(super) fn exit_selector_mode(&mut self) {
         self.mode = Mode::Input;
+        // Clear any pending provider change (user cancelled)
+        if self.pending_provider.take().is_some() {
+            // Reset model picker to current provider's models
+            self.model_picker.set_api_provider(self.api_provider.name());
+        }
         // Selector used large area - flag for full clear + repaint
         self.render_state.needs_full_repaint = true;
         self.render_state.clear_scrollback_on_repaint = false;
