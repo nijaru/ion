@@ -41,6 +41,8 @@ impl App {
                 // Row tracking is invalid after resize, but keep last_ui_start
                 // so draw_direct can clear the old UI position
                 self.render_state.chat_row = None;
+                // Startup anchor becomes stale after resize (UI would float mid-screen)
+                self.render_state.startup_ui_anchor = None;
             }
             Event::FocusGained => {
                 // Redraw UI at bottom when terminal regains focus
@@ -722,7 +724,11 @@ impl App {
     fn handle_history_search_mode(&mut self, key: KeyEvent) {
         match key.code {
             // Escape or Ctrl+C: Cancel search
-            KeyCode::Esc | KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::Esc => {
+                self.history_search.clear();
+                self.mode = Mode::Input;
+            }
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.history_search.clear();
                 self.mode = Mode::Input;
             }
@@ -742,12 +748,18 @@ impl App {
             KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.history_search.select_next();
             }
-            KeyCode::Up | KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::Up => {
+                self.history_search.select_next();
+            }
+            KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.history_search.select_next();
             }
 
             // Down or Ctrl+N: Select next (newer) match
-            KeyCode::Down | KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::Down => {
+                self.history_search.select_prev();
+            }
+            KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.history_search.select_prev();
             }
 
