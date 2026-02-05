@@ -1,5 +1,6 @@
 //! File path autocomplete for @ mentions in input.
 
+use crate::tui::completer_state::CompleterState;
 use crate::tui::fuzzy;
 use crossterm::{
     cursor::MoveTo,
@@ -22,22 +23,27 @@ pub struct FileCandidate {
 }
 
 /// State for file path autocomplete.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone)]
 pub struct FileCompleter {
-    /// Whether completion is active (@ detected).
-    active: bool,
-    /// The query text after @.
-    query: String,
+    /// Base completer state.
+    state: CompleterState<FileCandidate>,
     /// Character index where @ starts in the buffer.
     at_position: usize,
     /// Working directory for relative paths.
     working_dir: PathBuf,
     /// All candidates (unfiltered) with cached `is_dir`.
     candidates: Vec<FileCandidate>,
-    /// Filtered candidates (after fuzzy match).
-    filtered: Vec<FileCandidate>,
-    /// Currently selected index in filtered list.
-    selected: usize,
+}
+
+impl Default for FileCompleter {
+    fn default() -> Self {
+        Self {
+            state: CompleterState::new(MAX_VISIBLE),
+            at_position: 0,
+            working_dir: PathBuf::new(),
+            candidates: Vec::new(),
+        }
+    }
 }
 
 impl FileCompleter {
@@ -55,19 +61,19 @@ impl FileCompleter {
         self.working_dir = working_dir;
         // Clear cached candidates - they'll be refreshed on next activation
         self.candidates.clear();
-        self.filtered.clear();
+        self.state.deactivate();
     }
 
     /// Check if completion is active.
     #[must_use]
     pub fn is_active(&self) -> bool {
-        self.active
+        self.state.is_active()
     }
 
     /// Get the current query (text after @).
     #[must_use]
     pub fn query(&self) -> &str {
-        &self.query
+        self.state.query()
     }
 
     /// Get the position where @ starts in the buffer.
@@ -79,46 +85,40 @@ impl FileCompleter {
     /// Get filtered candidates for display.
     #[must_use]
     pub fn visible_candidates(&self) -> &[FileCandidate] {
-        let end = self.filtered.len().min(MAX_VISIBLE);
-        &self.filtered[..end]
+        self.state.visible_candidates()
     }
 
     /// Get the currently selected index.
     #[must_use]
     pub fn selected(&self) -> usize {
-        self.selected
+        self.state.selected_index()
     }
 
     /// Get the selected path if any.
     #[must_use]
     pub fn selected_path(&self) -> Option<&PathBuf> {
-        self.filtered.get(self.selected).map(|c| &c.path)
+        self.state.selected().map(|c| &c.path)
     }
 
     /// Activate completion at the given cursor position.
     pub fn activate(&mut self, at_position: usize) {
-        self.active = true;
+        self.state.activate();
         self.at_position = at_position;
-        self.query.clear();
-        self.selected = 0;
         self.refresh_candidates();
     }
 
     /// Deactivate completion.
     pub fn deactivate(&mut self) {
-        self.active = false;
-        self.query.clear();
+        self.state.deactivate();
         self.candidates.clear();
-        self.filtered.clear();
-        self.selected = 0;
     }
 
     /// Update the query and refresh filtering.
     pub fn set_query(&mut self, query: &str) {
         // If transitioning to/from hidden file query, refresh candidates
-        let was_hidden = self.query.starts_with('.');
+        let was_hidden = self.state.query().starts_with('.');
         let is_hidden = query.starts_with('.');
-        self.query = query.to_string();
+        self.state.set_query(query);
         if was_hidden == is_hidden {
             self.apply_filter();
         } else {
@@ -128,17 +128,12 @@ impl FileCompleter {
 
     /// Move selection up.
     pub fn move_up(&mut self) {
-        if !self.filtered.is_empty() {
-            self.selected = self.selected.saturating_sub(1);
-        }
+        self.state.move_up();
     }
 
     /// Move selection down.
     pub fn move_down(&mut self) {
-        if !self.filtered.is_empty() {
-            let max = self.filtered.len().min(MAX_VISIBLE).saturating_sub(1);
-            self.selected = (self.selected + 1).min(max);
-        }
+        self.state.move_down();
     }
 
     /// Render the file completion popup above the input box.
@@ -162,7 +157,7 @@ impl FileCompleter {
 
         for (i, candidate) in candidates.iter().enumerate() {
             let row = popup_start + i as u16;
-            let is_selected = i == self.selected;
+            let is_selected = i == self.state.selected_index();
             let path_str = candidate.path.to_string_lossy();
 
             execute!(w, MoveTo(1, row), Clear(ClearType::CurrentLine))?;
@@ -218,7 +213,7 @@ impl FileCompleter {
     fn refresh_candidates(&mut self) {
         self.candidates.clear();
         // Include hidden files if query starts with '.'
-        let include_hidden = self.query.starts_with('.');
+        let include_hidden = self.state.query().starts_with('.');
         self.collect_entries(&self.working_dir.clone(), "", 0, include_hidden);
         self.apply_filter();
     }
@@ -269,15 +264,15 @@ impl FileCompleter {
 
     /// Apply fuzzy filter to candidates.
     fn apply_filter(&mut self) {
-        if self.query.is_empty() {
+        let query = self.state.query();
+        let mut filtered: Vec<FileCandidate> = if query.is_empty() {
             // Show top-level entries when no query
-            self.filtered = self
-                .candidates
+            self.candidates
                 .iter()
                 .filter(|c| !c.path.to_string_lossy().contains('/'))
                 .take(MAX_VISIBLE * 2)
                 .cloned()
-                .collect();
+                .collect()
         } else {
             // Fuzzy match on query
             let candidates: Vec<&str> = self
@@ -285,9 +280,9 @@ impl FileCompleter {
                 .iter()
                 .map(|c| c.path.to_str().unwrap_or(""))
                 .collect();
-            let matches = fuzzy::top_matches(&self.query, candidates, MAX_VISIBLE * 2);
+            let matches = fuzzy::top_matches(query, candidates, MAX_VISIBLE * 2);
             // Look up the full FileCandidate for each match
-            self.filtered = matches
+            matches
                 .into_iter()
                 .filter_map(|m| {
                     self.candidates
@@ -295,17 +290,13 @@ impl FileCompleter {
                         .find(|c| c.path.to_str() == Some(m))
                         .cloned()
                 })
-                .collect();
-        }
+                .collect()
+        };
 
         // Sort: directories first (using cached is_dir), then alphabetically
-        self.filtered
-            .sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.path.cmp(&b.path)));
+        filtered.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.path.cmp(&b.path)));
 
-        // Clamp selection
-        if self.selected >= self.filtered.len() {
-            self.selected = self.filtered.len().saturating_sub(1);
-        }
+        self.state.set_filtered(filtered);
     }
 }
 

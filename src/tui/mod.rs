@@ -2,6 +2,7 @@
 
 mod chat_renderer;
 mod command_completer;
+mod completer_state;
 pub mod composer;
 mod events;
 mod file_completer;

@@ -1,5 +1,6 @@
 //! Command autocomplete for / prefix in input.
 
+use crate::tui::completer_state::CompleterState;
 use crate::tui::fuzzy;
 use crossterm::{
     cursor::MoveTo,
@@ -12,8 +13,11 @@ use std::io::Write;
 /// Maximum number of candidates to show in the popup.
 const MAX_VISIBLE: usize = 7;
 
+/// Command with its description.
+pub type Command = (&'static str, &'static str);
+
 /// Available slash commands with their descriptions.
-pub const COMMANDS: &[(&str, &str)] = &[
+pub const COMMANDS: &[Command] = &[
     ("/model", "Open model selector"),
     ("/provider", "Open provider selector"),
     ("/resume", "Resume a previous session"),
@@ -23,16 +27,17 @@ pub const COMMANDS: &[(&str, &str)] = &[
 ];
 
 /// State for command autocomplete.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone)]
 pub struct CommandCompleter {
-    /// Whether completion is active (/ detected at start).
-    active: bool,
-    /// The query text after /.
-    query: String,
-    /// Filtered commands (after fuzzy match).
-    filtered: Vec<(&'static str, &'static str)>,
-    /// Currently selected index in filtered list.
-    selected: usize,
+    state: CompleterState<Command>,
+}
+
+impl Default for CommandCompleter {
+    fn default() -> Self {
+        Self {
+            state: CompleterState::new(MAX_VISIBLE),
+        }
+    }
 }
 
 impl CommandCompleter {
@@ -45,69 +50,58 @@ impl CommandCompleter {
     /// Check if completion is active.
     #[must_use]
     pub fn is_active(&self) -> bool {
-        self.active
+        self.state.is_active()
     }
 
     /// Get the current query (text after /).
     #[must_use]
     pub fn query(&self) -> &str {
-        &self.query
+        self.state.query()
     }
 
     /// Get filtered candidates for display.
     #[must_use]
-    pub fn visible_candidates(&self) -> &[(&'static str, &'static str)] {
-        let end = self.filtered.len().min(MAX_VISIBLE);
-        &self.filtered[..end]
+    pub fn visible_candidates(&self) -> &[Command] {
+        self.state.visible_candidates()
     }
 
     /// Get the currently selected index.
     #[must_use]
     pub fn selected(&self) -> usize {
-        self.selected
+        self.state.selected_index()
     }
 
     /// Get the selected command if any.
     #[must_use]
     pub fn selected_command(&self) -> Option<&'static str> {
-        self.filtered.get(self.selected).map(|(cmd, _)| *cmd)
+        self.state.selected().map(|(cmd, _)| *cmd)
     }
 
     /// Activate completion.
     pub fn activate(&mut self) {
-        self.active = true;
-        self.query.clear();
-        self.selected = 0;
+        self.state.activate();
         self.apply_filter();
     }
 
     /// Deactivate completion.
     pub fn deactivate(&mut self) {
-        self.active = false;
-        self.query.clear();
-        self.filtered.clear();
-        self.selected = 0;
+        self.state.deactivate();
     }
 
     /// Update the query and refresh filtering.
     pub fn set_query(&mut self, query: &str) {
-        self.query = query.to_string();
+        self.state.set_query(query);
         self.apply_filter();
     }
 
     /// Move selection up.
     pub fn move_up(&mut self) {
-        if !self.filtered.is_empty() {
-            self.selected = self.selected.saturating_sub(1);
-        }
+        self.state.move_up();
     }
 
     /// Move selection down.
     pub fn move_down(&mut self) {
-        if !self.filtered.is_empty() {
-            let max = self.filtered.len().min(MAX_VISIBLE).saturating_sub(1);
-            self.selected = (self.selected + 1).min(max);
-        }
+        self.state.move_down();
     }
 
     /// Render the command completion popup above the input box.
@@ -136,7 +130,7 @@ impl CommandCompleter {
 
         for (i, (cmd, desc)) in candidates.iter().enumerate() {
             let row = popup_start + i as u16;
-            let is_selected = i == self.selected;
+            let is_selected = i == self.state.selected_index();
 
             execute!(w, MoveTo(1, row), Clear(ClearType::CurrentLine))?;
 
@@ -184,24 +178,20 @@ impl CommandCompleter {
 
     /// Apply fuzzy filter to commands.
     fn apply_filter(&mut self) {
-        if self.query.is_empty() {
+        let filtered = if self.state.query().is_empty() {
             // Show all commands
-            self.filtered = COMMANDS.to_vec();
+            COMMANDS.to_vec()
         } else {
             // Fuzzy match on command names
-            let query_with_slash = format!("/{}", self.query);
+            let query_with_slash = format!("/{}", self.state.query());
             let candidates: Vec<&str> = COMMANDS.iter().map(|(cmd, _)| *cmd).collect();
             let matches = fuzzy::top_matches(&query_with_slash, candidates, MAX_VISIBLE);
-            self.filtered = matches
+            matches
                 .into_iter()
                 .filter_map(|m| COMMANDS.iter().find(|(cmd, _)| *cmd == m).copied())
-                .collect();
-        }
-
-        // Clamp selection
-        if self.selected >= self.filtered.len() {
-            self.selected = self.filtered.len().saturating_sub(1);
-        }
+                .collect()
+        };
+        self.state.set_filtered(filtered);
     }
 }
 
