@@ -133,6 +133,8 @@ pub struct App {
     pub command_completer: CommandCompleter,
     /// Ctrl+R history search state
     pub history_search: HistorySearchState,
+    /// Pending provider change (deferred until model selection)
+    pub pending_provider: Option<Provider>,
 }
 
 impl App {
