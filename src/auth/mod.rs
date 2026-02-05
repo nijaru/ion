@@ -60,6 +60,13 @@ pub trait OAuthFlow {
 
 /// Login to an OAuth provider.
 pub async fn login(provider: OAuthProvider) -> Result<()> {
+    // Display warning about unofficial OAuth
+    eprintln!();
+    eprintln!("  Note: {} uses unofficial OAuth.", provider.display_name());
+    eprintln!("  This may break if the provider changes their login system.");
+    eprintln!("  Your credentials are stored locally and never sent to third parties.");
+    eprintln!();
+
     let storage = AuthStorage::new()?;
 
     let tokens = match provider {
