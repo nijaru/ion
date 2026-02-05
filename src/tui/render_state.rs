@@ -78,6 +78,8 @@ pub struct RenderState {
 
     /// Flag to clear visible screen (e.g., /clear command).
     pub needs_screen_clear: bool,
+    /// Flag to clear screen and reprint chat at new width (resize).
+    pub needs_reflow: bool,
     /// Flag to clear selector area without full screen repaint.
     pub needs_selector_clear: bool,
 }
@@ -94,6 +96,7 @@ impl RenderState {
             last_render_width: None,
             last_ui_start: None,
             needs_screen_clear: false,
+            needs_reflow: false,
             needs_selector_clear: false,
         }
     }

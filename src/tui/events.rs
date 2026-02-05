@@ -38,11 +38,12 @@ impl App {
             Event::Resize(_, _) => {
                 // Invalidate cached width so cursor position is recalculated
                 self.input_state.invalidate_width();
-                // Row tracking is invalid after resize, but keep last_ui_start
-                // so draw_direct can clear the old UI position
+                // Row tracking is invalid after resize
                 self.render_state.chat_row = None;
-                // Startup anchor becomes stale after resize (UI would float mid-screen)
+                // Startup anchor becomes stale after resize
                 self.render_state.startup_ui_anchor = None;
+                // Reflow chat at new width (clear visible screen + reprint, not scrollback)
+                self.render_state.needs_reflow = true;
             }
             Event::FocusGained => {
                 // Redraw UI at bottom when terminal regains focus

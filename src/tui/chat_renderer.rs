@@ -58,16 +58,25 @@ impl ChatRenderer {
                     }
                 }
                 Sender::Agent => {
+                    let mut first_line = true;
                     for part in &entry.parts {
                         match part {
                             MessagePart::Text(text) => {
                                 // Sanitize (tabs, control chars) without trimming content
                                 let sanitized = sanitize_for_display(text);
+                                // Account for 2-char prefix when wrapping
+                                let content_width = wrap_width.saturating_sub(2);
                                 let highlighted_lines = highlight::highlight_markdown_with_width(
                                     &sanitized,
-                                    wrap_width,
+                                    content_width,
                                 );
-                                for line in highlighted_lines {
+                                for mut line in highlighted_lines {
+                                    if first_line {
+                                        line.prepend(StyledSpan::raw("· "));
+                                        first_line = false;
+                                    } else {
+                                        line.prepend(StyledSpan::raw("  "));
+                                    }
                                     entry_lines.push(line);
                                 }
                             }
