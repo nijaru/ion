@@ -21,6 +21,10 @@ async fn main() -> ExitCode {
             // OAuth logout
             ion::cli::logout(args)
         }
+        Some(Commands::Config(args)) => {
+            // View or modify configuration
+            ion::cli::config(args)
+        }
         None => {
             // Load config for permission defaults
             let config = match Config::load() {

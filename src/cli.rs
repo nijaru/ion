@@ -152,6 +152,32 @@ pub enum Commands {
     Login(LoginArgs),
     /// Logout from an OAuth provider
     Logout(LogoutArgs),
+    /// View or modify configuration
+    Config(ConfigArgs),
+}
+
+#[derive(Parser, Debug)]
+pub struct ConfigArgs {
+    #[command(subcommand)]
+    pub action: Option<ConfigAction>,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ConfigAction {
+    /// Get a configuration value
+    Get {
+        /// Key to get (provider, model)
+        key: String,
+    },
+    /// Set a configuration value
+    Set {
+        /// Key to set (provider, model)
+        key: String,
+        /// Value to set
+        value: String,
+    },
+    /// Show config file path
+    Path,
 }
 
 #[derive(Parser, Debug)]
@@ -606,6 +632,73 @@ pub fn logout(args: LogoutArgs) -> ExitCode {
         Err(e) => {
             eprintln!("Logout failed: {e}");
             ExitCode::from(1)
+        }
+    }
+}
+
+/// Run the config command
+#[must_use]
+pub fn config(args: ConfigArgs) -> ExitCode {
+    use crate::config::Config;
+
+    let config = match Config::load() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Error loading config: {e}");
+            return ExitCode::from(1);
+        }
+    };
+
+    match args.action {
+        None => {
+            // Show current config
+            println!("provider: {}", config.provider.as_deref().unwrap_or("(not set)"));
+            println!("model: {}", config.model.as_deref().unwrap_or("(not set)"));
+            ExitCode::from(0)
+        }
+        Some(ConfigAction::Path) => {
+            let path = crate::config::ion_config_dir();
+            println!("{}", path.join("config.toml").display());
+            ExitCode::from(0)
+        }
+        Some(ConfigAction::Get { key }) => {
+            let value = match key.as_str() {
+                "provider" => config.provider.as_deref(),
+                "model" => config.model.as_deref(),
+                _ => {
+                    eprintln!("Unknown key: {key}. Valid keys: provider, model");
+                    return ExitCode::from(1);
+                }
+            };
+            println!("{}", value.unwrap_or("(not set)"));
+            ExitCode::from(0)
+        }
+        Some(ConfigAction::Set { key, value }) => {
+            let mut config = config;
+            match key.as_str() {
+                "provider" => {
+                    // Validate provider
+                    if crate::provider::Provider::from_id(&value).is_none() {
+                        eprintln!("Unknown provider: {value}");
+                        eprintln!("Valid providers: anthropic, openrouter, openai, google, groq, kimi, ollama, chatgpt, gemini");
+                        return ExitCode::from(1);
+                    }
+                    config.provider = Some(value);
+                }
+                "model" => {
+                    config.model = Some(value);
+                }
+                _ => {
+                    eprintln!("Unknown key: {key}. Valid keys: provider, model");
+                    return ExitCode::from(1);
+                }
+            };
+            if let Err(e) = config.save() {
+                eprintln!("Failed to save config: {e}");
+                return ExitCode::from(1);
+            }
+            println!("Updated {key}");
+            ExitCode::from(0)
         }
     }
 }
