@@ -262,6 +262,9 @@ pub async fn run(
                     term_height = h;
                     app.handle_event(event::Event::Resize(w, h));
                 }
+                event::Event::FocusGained => {
+                    app.handle_event(event::Event::FocusGained);
+                }
                 _ => {}
             }
         }
