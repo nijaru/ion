@@ -190,7 +190,7 @@ fn open_editor(initial: &str) -> Result<Option<String>, Box<dyn std::error::Erro
 
 /// Guard that restores the original panic hook on drop.
 struct PanicHookGuard {
-    original_hook: std::sync::Arc<dyn Fn(&std::panic::PanicInfo) + Send + Sync + 'static>,
+    original_hook: std::sync::Arc<dyn Fn(&std::panic::PanicHookInfo) + Send + Sync + 'static>,
 }
 
 impl Drop for PanicHookGuard {
@@ -212,7 +212,8 @@ pub async fn run(
     resume_option: ResumeOption,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Set panic hook to restore terminal on panic (guard restores original on exit)
-    let original_hook = std::sync::Arc::from(std::panic::take_hook());
+    let original_hook: std::sync::Arc<dyn Fn(&std::panic::PanicHookInfo) + Send + Sync> =
+        std::sync::Arc::from(std::panic::take_hook());
     let hook_for_panic = std::sync::Arc::clone(&original_hook);
     std::panic::set_hook(Box::new(move |info| {
         let _ = disable_raw_mode();
