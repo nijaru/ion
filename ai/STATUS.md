@@ -5,7 +5,7 @@
 | Metric    | Value               | Updated    |
 | --------- | ------------------- | ---------- |
 | Phase     | TUI Refactoring     | 2026-02-04 |
-| Status    | Sprint 14 Phase 4 ✓ | 2026-02-04 |
+| Status    | Sprint 14 Complete  | 2026-02-04 |
 | Toolchain | stable              | 2026-01-22 |
 | Tests     | 313 passing         | 2026-02-04 |
 | Clippy    | pedantic clean      | 2026-02-04 |
@@ -38,7 +38,7 @@ Code review completed 2026-02-04. See `ai/review/tui-analysis-2026-02-04.md`.
 **Phase 2 ✓** - Dead code removal (-130 lines, Terminal struct)
 **Phase 3 ✓** - Picker trait extraction (FilterablePicker<T>, ProviderPicker, SessionPicker)
 **Phase 4 ✓** - Completer trait extraction (CompleterState<T>, FileCompleter, CommandCompleter)
-**Phase 5** - App decomposition (pending)
+**Phase 5 ✓** - App decomposition (TaskState, InteractionState)
 
 See `ai/sprints/14-tui-refactoring.md` for full plan.
 
