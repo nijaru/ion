@@ -3,7 +3,7 @@
   "ref": "4zp4",
   "title": "TUI refactor: Remove unused Terminal struct",
   "description": "terminal.rs has 462 lines and 47 public methods but Terminal struct is never imported/used - direct.rs uses raw crossterm calls. Either remove or migrate to use it consistently.",
-  "status": "open",
+  "status": "done",
   "priority": 3,
   "labels": [],
   "assignees": [],
@@ -18,7 +18,7 @@
     }
   ],
   "created_at": "2026-02-05T01:58:52.645Z",
-  "updated_at": "2026-02-05T02:06:40.221Z",
-  "completed_at": null,
+  "updated_at": "2026-02-05T02:44:11.741Z",
+  "completed_at": "2026-02-05T02:44:11.741Z",
   "external": {}
 }
