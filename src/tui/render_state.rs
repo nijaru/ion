@@ -70,16 +70,11 @@ pub struct RenderState {
     /// UI anchor row for startup before first message (keeps UI near header).
     pub startup_ui_anchor: Option<u16>,
 
-    /// Last render width for detecting changes that need extra clearing.
-    pub last_render_width: Option<u16>,
-
     /// Last UI start row for detecting changes that need extra clearing.
     pub last_ui_start: Option<u16>,
 
     /// Flag to clear visible screen (e.g., /clear command).
     pub needs_screen_clear: bool,
-    /// Flag to clear screen and reprint chat at new width (resize).
-    pub needs_reflow: bool,
     /// Flag to clear selector area without full screen repaint.
     pub needs_selector_clear: bool,
 }
@@ -93,10 +88,8 @@ impl RenderState {
             header_inserted: false,
             chat_row: None,
             startup_ui_anchor: None,
-            last_render_width: None,
             last_ui_start: None,
             needs_screen_clear: false,
-            needs_reflow: false,
             needs_selector_clear: false,
         }
     }
@@ -111,7 +104,6 @@ impl RenderState {
         self.header_inserted = false;
         self.chat_row = None;
         self.last_ui_start = None;
-        self.last_render_width = None;
     }
 
     /// Reset for loading existing session (resume/load).
@@ -123,7 +115,6 @@ impl RenderState {
         self.startup_ui_anchor = None;
         self.chat_row = None;
         self.last_ui_start = None;
-        self.last_render_width = None;
     }
 
     /// Mark reflow as complete after `reprint_chat_scrollback`.

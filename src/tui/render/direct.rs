@@ -22,21 +22,9 @@ impl App {
         width: u16,
         height: u16,
     ) -> std::io::Result<()> {
-        use crossterm::{
-            cursor::MoveTo,
-            terminal::{Clear, ClearType},
-        };
-
         let ui_height = self.calculate_ui_height(width, height);
         let ui_start = self.ui_start_row(height, ui_height);
         let progress_height = PROGRESS_HEIGHT;
-
-        // Detect width decrease - terminal rewraps old content, pushing it up
-        let width_decreased = self
-            .render_state
-            .last_render_width
-            .is_some_and(|old| width < old);
-        self.render_state.last_render_width = Some(width);
 
         // Determine clear_from based on positioning mode:
         // - Row-tracking: only clear UI area (chat is immediately above, must preserve)
@@ -62,15 +50,8 @@ impl App {
             )
         };
 
-        let preserve_header =
-            self.message_list.entries.is_empty() && self.render_state.startup_ui_anchor.is_some();
-        if width_decreased && !preserve_header {
-            // Full clear needed: old wider borders got wrapped into multiple lines
-            execute!(w, Clear(ClearType::All), MoveTo(0, ui_start))?;
-        } else {
-            // Clear from appropriate position
-            execute!(w, MoveTo(0, clear_from), Clear(ClearType::FromCursorDown))?;
-        }
+        // Clear from UI position downward (never clear full screen - preserves scrollback)
+        execute!(w, MoveTo(0, clear_from), Clear(ClearType::FromCursorDown))?;
 
         // Progress line (only in Input mode when active - selector has its own UI)
         if progress_height > 0 && self.mode == Mode::Input {
