@@ -14,6 +14,32 @@ pub(super) fn format_tokens(n: usize) -> String {
     }
 }
 
+/// Format context window as human-readable (e.g., 128000 -> "128K", 1000000 -> "1M")
+#[allow(clippy::cast_precision_loss)] // Precision loss acceptable for display
+pub(super) fn format_context_window(n: u32) -> String {
+    if n == 0 {
+        return String::new();
+    }
+    let n = n as f64;
+    if n >= 1_000_000.0 {
+        let m = n / 1_000_000.0;
+        if (m - m.round()).abs() < 0.05 {
+            format!("{}M", m.round() as u32)
+        } else {
+            format!("{:.1}M", m)
+        }
+    } else if n >= 1000.0 {
+        let k = n / 1000.0;
+        if (k - k.round()).abs() < 0.5 {
+            format!("{}K", k.round() as u32)
+        } else {
+            format!("{:.0}K", k)
+        }
+    } else {
+        format!("{}", n as u32)
+    }
+}
+
 /// Format seconds as human-readable duration (e.g., "1m 30s" or "45s")
 pub(super) fn format_elapsed(secs: u64) -> String {
     if secs >= 60 {
@@ -170,5 +196,26 @@ mod tests {
             sanitize_for_display("line1\r\n\tindented\nline3"),
             "line1\n    indented\nline3"
         );
+    }
+
+    #[test]
+    fn test_format_context_window() {
+        // Zero returns empty
+        assert_eq!(format_context_window(0), "");
+
+        // Small values
+        assert_eq!(format_context_window(512), "512");
+
+        // Thousands (K)
+        assert_eq!(format_context_window(4096), "4K");
+        assert_eq!(format_context_window(8192), "8K");
+        assert_eq!(format_context_window(32768), "33K");
+        assert_eq!(format_context_window(128000), "128K");
+        assert_eq!(format_context_window(200000), "200K");
+
+        // Millions (M)
+        assert_eq!(format_context_window(1_000_000), "1M");
+        assert_eq!(format_context_window(1_100_000), "1.1M");
+        assert_eq!(format_context_window(2_000_000), "2M");
     }
 }
