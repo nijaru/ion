@@ -1,5 +1,6 @@
 //! TUI module for the ion agent interface.
 
+mod app_state;
 mod chat_renderer;
 mod command_completer;
 mod completer_state;
@@ -43,6 +44,7 @@ use crate::config::Config;
 use crate::provider::{ModelRegistry, Provider};
 use crate::session::{Session, SessionStore};
 use crate::tool::{ToolMode, ToolOrchestrator};
+use crate::tui::app_state::{InteractionState, TaskState};
 use crate::tui::command_completer::CommandCompleter;
 use crate::tui::composer::{ComposerBuffer, ComposerState};
 use crate::tui::file_completer::FileCompleter;
@@ -53,7 +55,6 @@ use crate::tui::render_state::RenderState;
 use crate::tui::session_picker::SessionPicker;
 use crate::tui::types::ApprovalRequest as ApprovalRequestInternal;
 use std::sync::Arc;
-use std::time::Instant;
 use tokio::sync::mpsc;
 
 /// Main TUI application state.
@@ -115,30 +116,14 @@ pub struct App {
     pub last_error: Option<String>,
     /// Shared message queue for mid-task steering (TUI pushes, agent drains)
     pub message_queue: Option<Arc<std::sync::Mutex<Vec<String>>>>,
-    /// When the current task started (for elapsed time display)
-    pub task_start_time: Option<Instant>,
-    /// Input tokens sent to model (current task)
-    pub input_tokens: usize,
-    /// Output tokens received from model (current task)
-    pub output_tokens: usize,
-    /// Currently executing tool name (for interrupt handling)
-    pub current_tool: Option<String>,
-    /// Retry status (reason, `delay_seconds`) - shown in progress line
-    pub retry_status: Option<(String, u64)>,
-    /// Timestamp of first Ctrl+C press for double-tap quit/cancel
-    pub cancel_pending: Option<Instant>,
-    /// Timestamp of first Esc press for double-tap clear input
-    pub(crate) esc_pending: Option<Instant>,
+    /// State for the current agent task (timing, tokens, tool)
+    pub task: TaskState,
+    /// State for user interaction tracking (double-tap, editor requests)
+    pub interaction: InteractionState,
     /// Permission settings from CLI flags
     pub permissions: PermissionSettings,
     /// Last completed task summary (for brief display after completion)
     pub last_task_summary: Option<TaskSummary>,
-    /// Request to open input in external editor (Ctrl+G)
-    pub editor_requested: bool,
-    /// When thinking started (for progress display)
-    pub thinking_start: Option<Instant>,
-    /// Duration of last completed thinking (for "thought for Xs" display)
-    pub last_thinking_duration: Option<std::time::Duration>,
     /// File path autocomplete state
     pub file_completer: FileCompleter,
     /// Command autocomplete state

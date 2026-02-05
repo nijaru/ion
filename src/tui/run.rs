@@ -419,8 +419,8 @@ pub async fn run(
         }
 
         // Handle external editor request (Ctrl+G)
-        if app.editor_requested {
-            app.editor_requested = false;
+        if app.interaction.editor_requested {
+            app.interaction.editor_requested = false;
 
             // Temporarily restore terminal for editor
             execute!(stdout, DisableBracketedPaste, DisableFocusChange)?;

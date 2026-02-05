@@ -9,6 +9,7 @@ use crate::session::{Session, SessionStore};
 use crate::tool::ToolOrchestrator;
 use crate::tool::builtin::SpawnSubagentTool;
 use crate::tui::App;
+use crate::tui::app_state::{InteractionState, TaskState};
 use crate::tui::command_completer::CommandCompleter;
 use crate::tui::composer::{ComposerBuffer, ComposerState};
 use crate::tui::file_completer::FileCompleter;
@@ -217,18 +218,10 @@ impl App {
             model_context_window: None,
             last_error: None,
             message_queue: None,
-            task_start_time: None,
-            input_tokens: 0,
-            output_tokens: 0,
-            current_tool: None,
-            retry_status: None,
-            cancel_pending: None,
-            esc_pending: None,
+            task: TaskState::default(),
+            interaction: InteractionState::default(),
             permissions,
             last_task_summary: None,
-            editor_requested: false,
-            thinking_start: None,
-            last_thinking_duration: None,
             file_completer: FileCompleter::new(working_dir.clone()),
             command_completer: CommandCompleter::new(),
         };
