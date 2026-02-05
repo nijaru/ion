@@ -297,7 +297,8 @@ pub async fn run(
             let header_lines = app.take_startup_header_lines();
             if !header_lines.is_empty() {
                 for line in &header_lines {
-                    line.println()?;
+                    line.write_to(&mut stdout)?;
+                    write!(stdout, "\r\n")?;
                 }
                 if let Ok((_x, y)) = crossterm::cursor::position() {
                     app.set_startup_ui_anchor(Some(y));
@@ -342,7 +343,8 @@ pub async fn run(
                             MoveTo(0, chat_row.saturating_add(i as u16)),
                             Clear(ClearType::CurrentLine)
                         )?;
-                        line.println()?;
+                        line.write_to(&mut stdout)?;
+                        write!(stdout, "\r\n")?;
                     }
                     app.render_state.chat_row = Some(chat_row.saturating_add(line_count));
                 } else {
@@ -364,7 +366,8 @@ pub async fn run(
                             MoveTo(0, print_row.saturating_add(i as u16)),
                             Clear(ClearType::CurrentLine)
                         )?;
-                        line.println()?;
+                        line.write_to(&mut stdout)?;
+                        write!(stdout, "\r\n")?;
                     }
                     // Transition to scroll mode - reset both chat_row and last_ui_start
                     // to prevent draw_direct from using stale row-tracking values
@@ -385,7 +388,8 @@ pub async fn run(
                 let mut row = ui_start.saturating_sub(line_count);
                 for line in &chat_lines {
                     execute!(stdout, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
-                    line.println()?;
+                    line.write_to(&mut stdout)?;
+                    write!(stdout, "\r\n")?;
                     row = row.saturating_add(1);
                 }
             }

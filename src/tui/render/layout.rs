@@ -79,14 +79,4 @@ impl App {
         bottom_start
     }
 
-    /// Calculate the viewport height needed for the UI (progress + input + status).
-    /// Header is inserted into scrollback, not rendered in viewport.
-    /// Note: With full-height viewport, this is no longer used for viewport sizing,
-    /// but may be useful for debugging or future use.
-    #[allow(dead_code)]
-    pub fn viewport_height(&self, terminal_width: u16, terminal_height: u16) -> u16 {
-        let input_height = self.calculate_input_height(terminal_width, terminal_height);
-        let progress_height = PROGRESS_HEIGHT;
-        progress_height + input_height + 1 // +1 for status line
-    }
 }

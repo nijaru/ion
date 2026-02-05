@@ -142,10 +142,6 @@ impl App {
         self.render_state.header_inserted
     }
 
-    pub fn set_header_inserted(&mut self, value: bool) {
-        self.render_state.header_inserted = value;
-    }
-
     pub fn startup_ui_anchor(&self) -> Option<u16> {
         self.render_state.startup_ui_anchor
     }

@@ -163,14 +163,6 @@ impl StyledLine {
         Ok(())
     }
 
-    /// Print this line to stdout with a trailing newline.
-    pub fn println(&self) -> io::Result<()> {
-        let mut stdout = io::stdout();
-        self.write_to(&mut stdout)?;
-        write!(stdout, "\r\n")?;
-        stdout.flush()
-    }
-
     /// Push a span to this line.
     pub fn push(&mut self, span: StyledSpan) {
         self.spans.push(span);
