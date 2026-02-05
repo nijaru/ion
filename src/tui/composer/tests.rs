@@ -245,12 +245,12 @@ fn test_visual_line_navigation_shorter_line() {
         "down from col 8 should clamp to end of shorter line 1 (char 13)"
     );
 
-    // Move up should preserve the clamped column
+    // Move up should restore preferred column (8), not the clamped position
     assert!(state.move_up(&buf));
     assert_eq!(
         state.cursor_char_idx(),
-        3,
-        "up from col 3 should go to col 3 on line 0 (char 3)"
+        8,
+        "up should restore preferred column 8 on line 0 (char 8)"
     );
 }
 

@@ -70,8 +70,8 @@ impl App {
             execute!(w, MoveTo(0, clear_from), Clear(ClearType::FromCursorDown))?;
         }
 
-        // Progress line (only when active)
-        if progress_height > 0 {
+        // Progress line (only in Input mode when active - selector has its own UI)
+        if progress_height > 0 && self.mode == Mode::Input {
             execute!(w, MoveTo(0, ui_start), Clear(ClearType::CurrentLine))?;
             self.render_progress_direct(w, width)?;
         }
