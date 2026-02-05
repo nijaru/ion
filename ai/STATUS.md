@@ -13,9 +13,10 @@
 
 ## Current Focus
 
-**TUI refactoring sprint** - Fix panic bugs, reduce code duplication, improve maintainability.
+**Sprint 14 complete.** Next priorities:
 
-Code review completed 2026-02-04. See `ai/review/tui-analysis-2026-02-04.md`.
+- Memory system (tk-5j06) - P2
+- UX improvements from backlog (20 tasks)
 
 ## Architecture Assessment (2026-02-04)
 
