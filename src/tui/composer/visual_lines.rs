@@ -60,6 +60,9 @@ pub fn build_visual_lines(content: &str, width: usize) -> Vec<(usize, usize)> {
 
 /// Find which visual line contains the given char index and the column within that line.
 pub fn find_visual_line_and_col(lines: &[(usize, usize)], char_idx: usize) -> (usize, usize) {
+    if lines.is_empty() {
+        return (0, 0);
+    }
     for (i, (start, end)) in lines.iter().enumerate() {
         if char_idx >= *start && char_idx < *end {
             return (i, char_idx - start);

@@ -197,6 +197,14 @@ pub async fn run(
     permissions: PermissionSettings,
     resume_option: ResumeOption,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // Set panic hook to restore terminal on panic
+    let original_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = disable_raw_mode();
+        let _ = execute!(io::stdout(), Show);
+        original_hook(info);
+    }));
+
     let TerminalState {
         mut stdout,
         supports_enhancement,
@@ -438,6 +446,9 @@ pub async fn run(
             }
         }
     }
+
+    // Restore original panic hook before cleanup
+    let _ = std::panic::take_hook();
 
     cleanup_terminal(
         &app,

@@ -258,7 +258,7 @@ impl ComposerState {
         let col = self.cursor_char_idx - line_start;
 
         let prev_line_start = buffer.line_to_char(line_idx - 1);
-        let prev_line_len = line_start - prev_line_start - 1;
+        let prev_line_len = line_start.saturating_sub(prev_line_start).saturating_sub(1);
 
         self.cursor_char_idx = prev_line_start + col.min(prev_line_len);
         true
@@ -546,7 +546,7 @@ impl ComposerState {
         let (line_idx, col_in_line) = find_visual_line_and_col(&lines, cursor_idx);
 
         // Convert column (char offset) to x position (display width)
-        let line_start = lines[line_idx].0;
+        let line_start = lines.get(line_idx).map_or(0, |l| l.0);
         let x: usize = content
             .chars()
             .skip(line_start)
@@ -585,7 +585,7 @@ impl ComposerState {
         let lines = build_visual_lines(&content, width);
 
         // Check if cursor at end would be on a new line
-        let last_line = lines.last().unwrap();
+        let last_line = lines.last().unwrap_or(&(0, 0));
         let last_line_width: usize = content
             .chars()
             .skip(last_line.0)
