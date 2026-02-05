@@ -1,6 +1,6 @@
 //! Direct crossterm rendering functions (TUI v2 - no ratatui).
 
-use crate::tui::composer::build_visual_lines;
+use crate::tui::composer::{build_visual_lines, ComposerState};
 use crate::tui::render::{
     widgets::draw_horizontal_border, CONTINUATION, INPUT_MARGIN, PROGRESS_HEIGHT, PROMPT,
     PROMPT_WIDTH,
@@ -392,18 +392,19 @@ impl App {
 
         let content = self.input_buffer.get_content();
         let content_width = width.saturating_sub(INPUT_MARGIN) as usize;
-
-        // Recalculate cursor position for current width
-        if content_width > 0 {
-            self.input_state
-                .calculate_cursor_pos(&self.input_buffer, content_width);
-        }
-
-        // Use same word-wrap algorithm as cursor calculation
         let visual_lines = build_visual_lines(&content, content_width);
-        let total_lines = self
-            .input_state
-            .visual_line_count(&self.input_buffer, content_width);
+
+        // Calculate cursor and line count from precomputed content/lines (single pass)
+        if content_width > 0 {
+            self.input_state.calculate_cursor_pos_with(
+                &content,
+                &visual_lines,
+                self.input_buffer.len_chars(),
+                content_width,
+            );
+        }
+        let total_lines =
+            ComposerState::visual_line_count_with(&content, &visual_lines, content_width);
         let visible_height = height as usize;
         self.input_state
             .scroll_to_cursor(visible_height, total_lines);

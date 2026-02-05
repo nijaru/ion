@@ -403,6 +403,7 @@ impl App {
                                     // Clear display state
                                     self.message_list.clear();
                                     self.render_state.reset_for_new_conversation();
+                                    self.render_state.needs_screen_clear = true;
 
                                     // Clear active plan so it doesn't pollute new conversations
                                     let agent = self.agent.clone();

@@ -142,10 +142,6 @@ impl App {
         self.render_state.header_inserted
     }
 
-    pub fn startup_ui_anchor(&self) -> Option<u16> {
-        self.render_state.startup_ui_anchor
-    }
-
     pub fn set_startup_ui_anchor(&mut self, value: Option<u16>) {
         self.render_state.startup_ui_anchor = value;
     }

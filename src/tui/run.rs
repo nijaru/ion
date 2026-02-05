@@ -6,6 +6,7 @@
 use crate::cli::PermissionSettings;
 use crate::tui::App;
 use crate::tui::message_list::{MessageEntry, Sender};
+use anyhow::Result;
 use crossterm::{
     cursor::{MoveTo, Show},
     event::{
@@ -36,7 +37,7 @@ struct TerminalState {
 }
 
 /// Setup terminal for TUI mode (raw mode, bracketed paste, keyboard enhancement).
-fn setup_terminal() -> Result<TerminalState, Box<dyn std::error::Error>> {
+fn setup_terminal() -> Result<TerminalState> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnableBracketedPaste, EnableFocusChange)?;
@@ -61,7 +62,7 @@ fn handle_resume(
     app: &mut App,
     resume_option: ResumeOption,
     supports_enhancement: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<()> {
     match resume_option {
         ResumeOption::None => {}
         ResumeOption::Latest => match app.store.list_recent(1) {
@@ -96,7 +97,7 @@ fn handle_resume(
                 }
                 let _ = disable_raw_mode();
                 eprintln!("Error: Session '{id}' not found: {e}");
-                return Err(e.into());
+                return Err(e);
             }
         }
         ResumeOption::Selector => {
@@ -113,7 +114,7 @@ fn cleanup_terminal(
     supports_enhancement: bool,
     term_width: u16,
     term_height: u16,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<()> {
     // Ensure synchronized update mode is ended (safety net if error interrupted the main loop)
     let _ = execute!(stdout, EndSynchronizedUpdate);
 
@@ -155,13 +156,13 @@ fn cleanup_terminal(
 }
 
 /// Open text in external editor, returns edited content or None if unchanged/cancelled
-fn open_editor(initial: &str) -> Result<Option<String>, Box<dyn std::error::Error>> {
+fn open_editor(initial: &str) -> Result<Option<String>> {
     use std::process::Command;
 
     // Get editor from environment (VISUAL for full-screen, EDITOR as fallback)
     let editor = std::env::var("VISUAL")
         .or_else(|_| std::env::var("EDITOR"))
-        .map_err(|_| "No editor configured. Set VISUAL or EDITOR environment variable.\nExample: export VISUAL=nano")?;
+        .map_err(|_| anyhow::anyhow!("No editor configured. Set VISUAL or EDITOR environment variable.\nExample: export VISUAL=nano"))?;
 
     // Create temp file with initial content
     let mut temp = tempfile::NamedTempFile::with_suffix(".md")?;
@@ -170,7 +171,7 @@ fn open_editor(initial: &str) -> Result<Option<String>, Box<dyn std::error::Erro
 
     // Open editor - split command and args (handles "code --wait", "nvim -u NONE", etc.)
     let parts: Vec<&str> = editor.split_whitespace().collect();
-    let (cmd, args) = parts.split_first().ok_or("Empty editor command")?;
+    let (cmd, args) = parts.split_first().ok_or_else(|| anyhow::anyhow!("Empty editor command"))?;
     let status = Command::new(cmd)
         .args(args.iter())
         .arg(temp.path())
@@ -213,7 +214,7 @@ impl Drop for PanicHookGuard {
 pub async fn run(
     permissions: PermissionSettings,
     resume_option: ResumeOption,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<()> {
     // Set panic hook to restore terminal on panic (guard restores original on exit)
     let original_hook: std::sync::Arc<dyn Fn(&std::panic::PanicHookInfo) + Send + Sync> =
         std::sync::Arc::from(std::panic::take_hook());
@@ -253,23 +254,11 @@ pub async fn run(
                 tracing::info!("Event: {:?}", evt);
             }
 
-            match evt {
-                event::Event::Key(key) => {
-                    app.handle_event(event::Event::Key(key));
-                }
-                event::Event::Paste(text) => {
-                    app.handle_event(event::Event::Paste(text));
-                }
-                event::Event::Resize(w, h) => {
-                    term_width = w;
-                    term_height = h;
-                    app.handle_event(event::Event::Resize(w, h));
-                }
-                event::Event::FocusGained => {
-                    app.handle_event(event::Event::FocusGained);
-                }
-                _ => {}
+            if let event::Event::Resize(w, h) = evt {
+                term_width = w;
+                term_height = h;
             }
+            app.handle_event(evt);
         }
 
         // Some terminals don't emit Resize on tab switches; re-check size each frame.
@@ -282,6 +271,13 @@ pub async fn run(
         }
 
         app.update();
+
+        // Handle /clear: clear visible screen (not scrollback)
+        if app.render_state.needs_screen_clear {
+            app.render_state.needs_screen_clear = false;
+            execute!(stdout, MoveTo(0, 0), Clear(ClearType::All))?;
+            stdout.flush()?;
+        }
 
         // Handle selector close: clear only the selector area, not full screen
         if app.render_state.needs_selector_clear {

@@ -528,12 +528,23 @@ impl ComposerState {
     /// Calculate cursor visual position using word-wrap logic that matches Ratatui's Paragraph.
     /// Returns (`cursor_x`, `cursor_y`) relative to text area origin.
     pub fn calculate_cursor_pos(&mut self, buffer: &ComposerBuffer, width: usize) -> (u16, u16) {
+        let content = buffer.get_content();
+        let lines = build_visual_lines(&content, width);
+        self.calculate_cursor_pos_with(&content, &lines, buffer.len_chars(), width)
+    }
+
+    /// Calculate cursor position from precomputed content and visual lines.
+    pub fn calculate_cursor_pos_with(
+        &mut self,
+        content: &str,
+        lines: &[(usize, usize)],
+        len_chars: usize,
+        width: usize,
+    ) -> (u16, u16) {
         use unicode_width::UnicodeWidthChar;
 
         self.last_width = width;
-        let content = buffer.get_content();
-        // Clamp cursor to buffer bounds (safety for external buffer changes)
-        self.cursor_char_idx = self.cursor_char_idx.min(buffer.len_chars());
+        self.cursor_char_idx = self.cursor_char_idx.min(len_chars);
         let cursor_idx = self.cursor_char_idx;
 
         if width == 0 || content.is_empty() {
@@ -541,11 +552,8 @@ impl ComposerState {
             return self.cursor_pos;
         }
 
-        // Build visual line map using word-wrap
-        let lines = build_visual_lines(&content, width);
-        let (line_idx, col_in_line) = find_visual_line_and_col(&lines, cursor_idx);
+        let (line_idx, col_in_line) = find_visual_line_and_col(lines, cursor_idx);
 
-        // Convert column (char offset) to x position (display width)
         let line_start = lines.get(line_idx).map_or(0, |l| l.0);
         let x: usize = content
             .chars()
@@ -554,13 +562,12 @@ impl ComposerState {
             .map(|c| UnicodeWidthChar::width(c).unwrap_or(0))
             .sum();
 
-        // Handle cursor at exact end of full line
-        let y = if cursor_idx == buffer.len_chars() && x >= width {
+        let y = if cursor_idx == len_chars && x >= width {
             line_idx + 1
         } else {
             line_idx
         };
-        let x = if cursor_idx == buffer.len_chars() && x >= width {
+        let x = if cursor_idx == len_chars && x >= width {
             0
         } else {
             x
@@ -577,14 +584,18 @@ impl ComposerState {
     /// Uses word-wrap to match Ratatui's Paragraph behavior.
     #[must_use]
     pub fn visual_line_count(&self, buffer: &ComposerBuffer, width: usize) -> usize {
-        if buffer.is_empty() {
+        let content = buffer.get_content();
+        let lines = build_visual_lines(&content, width);
+        Self::visual_line_count_with(&content, &lines, width)
+    }
+
+    /// Get visual line count from precomputed content and visual lines.
+    #[must_use]
+    pub fn visual_line_count_with(content: &str, lines: &[(usize, usize)], width: usize) -> usize {
+        if content.is_empty() {
             return 1;
         }
 
-        let content = buffer.get_content();
-        let lines = build_visual_lines(&content, width);
-
-        // Check if cursor at end would be on a new line
         let last_line = lines.last().unwrap_or(&(0, 0));
         let last_line_width: usize = content
             .chars()
