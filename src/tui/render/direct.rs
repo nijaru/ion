@@ -127,22 +127,32 @@ impl App {
     pub(crate) fn selector_data(&self) -> SelectorData {
         match self.selector_page {
             SelectorPage::Provider => {
+                // Find max id length for column alignment
+                let max_id_len = self
+                    .provider_picker
+                    .filtered()
+                    .iter()
+                    .map(|s| s.provider.id().len())
+                    .max()
+                    .unwrap_or(0);
+
                 let items = self
                     .provider_picker
                     .filtered()
                     .iter()
                     .map(|s| {
-                        // Always show id and auth method
+                        // Always show id and auth method in aligned columns
+                        let id = s.provider.id();
                         let auth_hint = s.provider.auth_hint();
                         let hint = if auth_hint.is_empty() {
                             // Local provider - no auth needed
-                            s.provider.id().to_string()
+                            id.to_string()
                         } else if s.provider.is_oauth() {
                             // OAuth providers - show warning (unofficial)
-                            format!("{} · ⚠ unofficial", s.provider.id())
+                            format!("{:width$}  ⚠ unofficial", id, width = max_id_len)
                         } else {
                             // API key providers - show env var
-                            format!("{} · {}", s.provider.id(), auth_hint)
+                            format!("{:width$}  {}", id, auth_hint, width = max_id_len)
                         };
                         SelectorItem {
                             label: s.provider.name().to_string(),
