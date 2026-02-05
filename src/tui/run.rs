@@ -279,20 +279,6 @@ pub async fn run(
             stdout.flush()?;
         }
 
-        // Handle resize reflow: clear visible screen and reprint chat at new width
-        if app.render_state.needs_reflow {
-            app.render_state.needs_reflow = false;
-            execute!(stdout, MoveTo(0, 0), Clear(ClearType::All))?;
-            stdout.flush()?;
-            if !app.message_list.entries.is_empty() {
-                app.reprint_chat_scrollback(&mut stdout, term_width)?;
-                stdout.flush()?;
-            } else {
-                // No entries -- let header reprint naturally
-                app.render_state.header_inserted = false;
-            }
-        }
-
         // Handle selector close: clear only the selector area, not full screen
         if app.render_state.needs_selector_clear {
             app.render_state.needs_selector_clear = false;
