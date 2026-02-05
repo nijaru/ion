@@ -256,14 +256,14 @@ impl App {
         )?;
 
         execute!(w, SetForegroundColor(CColor::Cyan))?;
-        if let Some(ref tool) = self.current_tool {
+        if let Some(ref tool) = self.task.current_tool {
             execute!(w, Print(" "), Print(tool))?;
         } else {
             execute!(w, Print(" Ionizing..."))?;
         }
         execute!(w, ResetColor)?;
 
-        if let Some(start) = self.task_start_time {
+        if let Some(start) = self.task.start_time {
             let elapsed = start.elapsed().as_secs();
             execute!(
                 w,

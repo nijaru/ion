@@ -208,17 +208,17 @@ impl App {
             KeyCode::Esc => {
                 if self.is_running && !self.session.abort_token.is_cancelled() {
                     self.session.abort_token.cancel();
-                    self.cancel_pending = None;
-                    self.esc_pending = None;
+                    self.interaction.cancel_pending = None;
+                    self.interaction.esc_pending = None;
                 } else if !self.input_is_empty() {
                     // Double-Esc to clear input
-                    if let Some(when) = self.esc_pending
+                    if let Some(when) = self.interaction.esc_pending
                         && when.elapsed() <= CANCEL_WINDOW
                     {
                         self.clear_input();
-                        self.esc_pending = None;
+                        self.interaction.esc_pending = None;
                     } else {
-                        self.esc_pending = Some(Instant::now());
+                        self.interaction.esc_pending = Some(Instant::now());
                     }
                 }
             }
@@ -227,16 +227,16 @@ impl App {
             KeyCode::Char('c') if ctrl => {
                 if !self.input_is_empty() {
                     self.clear_input();
-                    self.cancel_pending = None;
+                    self.interaction.cancel_pending = None;
                 } else if !self.is_running {
                     // Only quit when idle (double-tap)
-                    if let Some(when) = self.cancel_pending
+                    if let Some(when) = self.interaction.cancel_pending
                         && when.elapsed() <= CANCEL_WINDOW
                     {
                         self.quit();
-                        self.cancel_pending = None;
+                        self.interaction.cancel_pending = None;
                     } else {
-                        self.cancel_pending = Some(Instant::now());
+                        self.interaction.cancel_pending = Some(Instant::now());
                     }
                 }
             }
@@ -244,13 +244,13 @@ impl App {
             // Ctrl+D: Quit if input empty (double-tap required, like Ctrl+C)
             KeyCode::Char('d') if ctrl => {
                 if self.input_is_empty() {
-                    if let Some(when) = self.cancel_pending
+                    if let Some(when) = self.interaction.cancel_pending
                         && when.elapsed() <= CANCEL_WINDOW
                     {
                         self.quit();
-                        self.cancel_pending = None;
+                        self.interaction.cancel_pending = None;
                     } else {
-                        self.cancel_pending = Some(Instant::now());
+                        self.interaction.cancel_pending = Some(Instant::now());
                     }
                 }
             }
@@ -312,7 +312,7 @@ impl App {
 
             // Ctrl+G: Open input in external editor
             KeyCode::Char('g') if ctrl => {
-                self.editor_requested = true;
+                self.interaction.editor_requested = true;
             }
 
             // Shift+Enter or Alt+Enter: Insert newline
@@ -522,13 +522,13 @@ impl App {
         match key.code {
             // Ctrl+C/Ctrl+D: Close selector, double-tap to quit
             KeyCode::Char('c' | 'd') if ctrl => {
-                if let Some(when) = self.cancel_pending
+                if let Some(when) = self.interaction.cancel_pending
                     && when.elapsed() <= CANCEL_WINDOW
                 {
                     self.should_quit = true;
-                    self.cancel_pending = None;
+                    self.interaction.cancel_pending = None;
                 } else {
-                    self.cancel_pending = Some(Instant::now());
+                    self.interaction.cancel_pending = Some(Instant::now());
                     if self.needs_setup && self.selector_page == SelectorPage::Model {
                         self.model_picker.reset();
                         self.open_provider_selector();

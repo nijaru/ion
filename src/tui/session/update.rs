@@ -41,16 +41,14 @@ impl App {
                 AgentEvent::Finished(_) => {
                     self.save_task_summary(false);
                     self.is_running = false;
-                    self.cancel_pending = None;
+                    self.interaction.cancel_pending = None;
                     self.last_error = None;
                     self.message_queue = None;
-                    self.task_start_time = None;
-                    self.current_tool = None;
-                    self.retry_status = None;
                     // End thinking tracking
-                    if let Some(start) = self.thinking_start.take() {
-                        self.last_thinking_duration = Some(start.elapsed());
+                    if let Some(start) = self.task.thinking_start.take() {
+                        self.task.last_thinking_duration = Some(start.elapsed());
                     }
+                    self.task.clear();
                     // Auto-scroll to bottom so user sees completion
                     self.message_list.scroll_to_bottom();
                 }
@@ -59,13 +57,9 @@ impl App {
                     let was_cancelled = msg.contains("Cancelled");
                     self.save_task_summary(was_cancelled);
                     self.is_running = false;
-                    self.cancel_pending = None;
+                    self.interaction.cancel_pending = None;
                     self.message_queue = None;
-                    self.task_start_time = None;
-                    self.current_tool = None;
-                    self.retry_status = None;
-                    self.thinking_start = None;
-                    self.last_thinking_duration = None;
+                    self.task.clear();
                     if !was_cancelled {
                         self.last_error = Some(format_status_error(msg));
                         // Auto-scroll to bottom so user sees error
@@ -98,42 +92,42 @@ impl App {
                 }
                 AgentEvent::InputTokens(count) => {
                     // Store latest turn's input (context size), not accumulated
-                    self.input_tokens = *count;
+                    self.task.input_tokens = *count;
                 }
                 AgentEvent::OutputTokensDelta(count) => {
-                    self.output_tokens += count;
+                    self.task.output_tokens += count;
                 }
                 AgentEvent::ToolCallStart(_, name, _) => {
-                    self.current_tool = Some(name.clone());
+                    self.task.current_tool = Some(name.clone());
                     // End thinking if in progress
-                    if let Some(start) = self.thinking_start.take() {
-                        self.last_thinking_duration = Some(start.elapsed());
+                    if let Some(start) = self.task.thinking_start.take() {
+                        self.task.last_thinking_duration = Some(start.elapsed());
                     }
                     self.message_list.push_event(event);
                 }
                 AgentEvent::ToolCallResult(..) => {
-                    self.current_tool = None;
+                    self.task.current_tool = None;
                     self.message_list.push_event(event);
                 }
                 AgentEvent::ThinkingDelta(_) => {
                     // Start tracking thinking time if not already
-                    if self.thinking_start.is_none() {
-                        self.thinking_start = Some(Instant::now());
+                    if self.task.thinking_start.is_none() {
+                        self.task.thinking_start = Some(Instant::now());
                     }
                     // Don't push to message_list - we don't render thinking content
                 }
                 AgentEvent::TextDelta(_) => {
                     // End thinking if in progress (text output started)
-                    if let Some(start) = self.thinking_start.take() {
-                        self.last_thinking_duration = Some(start.elapsed());
+                    if let Some(start) = self.task.thinking_start.take() {
+                        self.task.last_thinking_duration = Some(start.elapsed());
                     }
                     // Clear retry status (retry succeeded)
-                    self.retry_status = None;
+                    self.task.retry_status = None;
                     self.message_list.push_event(event);
                 }
                 AgentEvent::Retry(reason, delay) => {
                     // Show retry status in progress line (not in chat)
-                    self.retry_status = Some((reason.clone(), *delay));
+                    self.task.retry_status = Some((reason.clone(), *delay));
                 }
                 _ => {
                     self.message_list.push_event(event);
@@ -145,10 +139,9 @@ impl App {
         if let Ok(updated_session) = self.session_rx.try_recv() {
             self.save_task_summary(false);
             self.is_running = false;
-            self.cancel_pending = None;
+            self.interaction.cancel_pending = None;
             self.message_queue = None;
-            self.task_start_time = None;
-            self.current_tool = None;
+            self.task.clear();
 
             // Auto-save to persistent storage
             if let Err(e) = self.store.save(&updated_session) {
@@ -158,10 +151,10 @@ impl App {
         }
 
         // Clear expired cancel prompt
-        if let Some(when) = self.cancel_pending
+        if let Some(when) = self.interaction.cancel_pending
             && when.elapsed() > CANCEL_WINDOW
         {
-            self.cancel_pending = None;
+            self.interaction.cancel_pending = None;
         }
 
         // Poll approval requests

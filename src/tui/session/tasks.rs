@@ -4,18 +4,17 @@ use crate::tui::App;
 use crate::tui::image_attachment::parse_image_attachments;
 use crate::tui::types::TaskSummary;
 use std::sync::Arc;
-use std::time::Instant;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 
 impl App {
     /// Save task summary before clearing task state.
     pub(in crate::tui) fn save_task_summary(&mut self, was_cancelled: bool) {
-        if let Some(start) = self.task_start_time {
+        if let Some(start) = self.task.start_time {
             self.last_task_summary = Some(TaskSummary {
                 elapsed: start.elapsed(),
-                input_tokens: self.input_tokens,
-                output_tokens: self.output_tokens,
+                input_tokens: self.task.input_tokens,
+                output_tokens: self.task.output_tokens,
                 was_cancelled,
             });
         }
@@ -25,13 +24,9 @@ impl App {
     #[allow(clippy::needless_pass_by_value)]
     pub(in crate::tui) fn run_agent_task(&mut self, input: String) {
         self.is_running = true;
-        self.task_start_time = Some(Instant::now());
-        self.input_tokens = 0;
-        self.output_tokens = 0;
+        self.task.reset();
         self.last_task_summary = None;
         self.last_error = None;
-        self.thinking_start = None;
-        self.last_thinking_duration = None;
 
         // Reset cancellation token for new task (tokens are single-use)
         self.session.abort_token = CancellationToken::new();
