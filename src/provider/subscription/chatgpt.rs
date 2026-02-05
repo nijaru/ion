@@ -35,12 +35,12 @@ impl ChatGptResponsesClient {
         }
     }
 
-    fn build_headers(&self, accept_sse: bool) -> HeaderMap {
+    fn build_headers(&self, accept_sse: bool) -> Result<HeaderMap, Error> {
         let mut headers = HeaderMap::new();
         let auth = format!("Bearer {}", self.access_token);
-        if let Ok(value) = HeaderValue::from_str(&auth) {
-            headers.insert(AUTHORIZATION, value);
-        }
+        let value = HeaderValue::from_str(&auth)
+            .map_err(|_| Error::Api("Invalid access token: contains non-ASCII characters".into()))?;
+        headers.insert(AUTHORIZATION, value);
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         headers.insert(
             ACCEPT,
@@ -73,7 +73,7 @@ impl ChatGptResponsesClient {
                 );
             }
         }
-        headers
+        Ok(headers)
     }
 
     fn build_request(&self, request: &ChatRequest, stream: bool) -> ResponsesRequest {
@@ -105,7 +105,7 @@ impl ChatGptResponsesClient {
         let response = self
             .client
             .post(&url)
-            .headers(self.build_headers(false))
+            .headers(self.build_headers(false)?)
             .json(&body)
             .send()
             .await
@@ -145,7 +145,7 @@ impl ChatGptResponsesClient {
         let response = self
             .client
             .post(&url)
-            .headers(self.build_headers(true))
+            .headers(self.build_headers(true)?)
             .json(&body)
             .send()
             .await
