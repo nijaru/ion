@@ -56,12 +56,3 @@ pub struct InteractionState {
     /// Request to open input in external editor (Ctrl+G).
     pub editor_requested: bool,
 }
-
-impl InteractionState {
-    /// Clear all pending interaction state.
-    pub fn clear(&mut self) {
-        self.cancel_pending = None;
-        self.esc_pending = None;
-        self.editor_requested = false;
-    }
-}
