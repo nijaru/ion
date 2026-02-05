@@ -15,6 +15,9 @@ pub struct ComposerState {
     pub cursor_pos: (u16, u16),
     /// Last known render width (for scroll calculations).
     last_width: usize,
+    /// Preferred column for vertical navigation (preserved across short lines).
+    /// Set on up/down movement, cleared on horizontal movement or explicit cursor set.
+    preferred_col: Option<usize>,
 }
 
 impl ComposerState {
@@ -30,6 +33,7 @@ impl ComposerState {
 
     pub fn set_cursor(&mut self, idx: usize, max_len: usize) {
         self.cursor_char_idx = idx.min(max_len);
+        self.preferred_col = None;
     }
 
     /// Move cursor to the start of the buffer.
@@ -124,6 +128,8 @@ impl ComposerState {
             return;
         }
 
+        self.preferred_col = None;
+
         let rope = buffer.rope();
         let window_size = 10;
         let start = self.cursor_char_idx.saturating_sub(window_size);
@@ -144,6 +150,8 @@ impl ComposerState {
         if self.cursor_char_idx >= len {
             return;
         }
+
+        self.preferred_col = None;
 
         let rope = buffer.rope();
         let window_size = 10;
@@ -194,11 +202,17 @@ impl ComposerState {
             return false; // Already on first visual line
         }
 
-        // Move to same column on previous visual line
+        // Use preferred column if set, otherwise use current column and remember it
+        let target_col = self.preferred_col.unwrap_or(col_in_line);
+        if self.preferred_col.is_none() {
+            self.preferred_col = Some(col_in_line);
+        }
+
+        // Move to target column on previous visual line (clamped to line length)
         let prev_line = &lines[cur_line - 1];
         let prev_line_len = prev_line.1 - prev_line.0;
-        let target_col = col_in_line.min(prev_line_len);
-        self.cursor_char_idx = prev_line.0 + target_col;
+        let actual_col = target_col.min(prev_line_len);
+        self.cursor_char_idx = prev_line.0 + actual_col;
         true
     }
 
@@ -219,11 +233,17 @@ impl ComposerState {
             return false; // Already on last visual line
         }
 
-        // Move to same column on next visual line
+        // Use preferred column if set, otherwise use current column and remember it
+        let target_col = self.preferred_col.unwrap_or(col_in_line);
+        if self.preferred_col.is_none() {
+            self.preferred_col = Some(col_in_line);
+        }
+
+        // Move to target column on next visual line (clamped to line length)
         let next_line = &lines[cur_line + 1];
         let next_line_len = next_line.1 - next_line.0;
-        let target_col = col_in_line.min(next_line_len);
-        self.cursor_char_idx = next_line.0 + target_col;
+        let actual_col = target_col.min(next_line_len);
+        self.cursor_char_idx = next_line.0 + actual_col;
         true
     }
 

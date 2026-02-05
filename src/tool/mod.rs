@@ -185,6 +185,15 @@ impl ToolOrchestrator {
         orch
     }
 
+    /// Keep only tools in whitelist. Empty whitelist = keep all.
+    pub fn filter_tools(&mut self, whitelist: &[String]) {
+        if whitelist.is_empty() {
+            return;
+        }
+        self.tools
+            .retain(|name, _| whitelist.iter().any(|w| w == name));
+    }
+
     /// Get the number of registered hooks.
     pub async fn hook_count(&self) -> usize {
         self.hooks.read().await.len()

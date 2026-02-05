@@ -114,9 +114,10 @@ pub async fn run_subagent(
     use crate::tool::ToolMode;
     use tokio::sync::mpsc;
 
-    // Create tool orchestrator with standard builtins
-    // TODO: Filter tools based on config.tools whitelist
-    let orchestrator = Arc::new(ToolOrchestrator::with_builtins(ToolMode::Write));
+    // Create tool orchestrator with standard builtins, filtered by whitelist
+    let mut orchestrator = ToolOrchestrator::with_builtins(ToolMode::Write);
+    orchestrator.filter_tools(&config.tools);
+    let orchestrator = Arc::new(orchestrator);
 
     // Build system prompt
     let system_prompt = if let Some(ref extra) = config.system_prompt {
