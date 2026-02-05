@@ -272,53 +272,54 @@ pub async fn run(
 
         app.update();
 
-        // Handle /clear: clear visible screen (not scrollback)
+        // Handle /clear: push visible content to scrollback, then blank viewport.
+        // Unlike Clear(All), ScrollUp preserves content in terminal scrollback
+        // so the user can scroll up to see their previous conversation.
         if app.render_state.needs_screen_clear {
             app.render_state.needs_screen_clear = false;
-            execute!(stdout, MoveTo(0, 0), Clear(ClearType::All))?;
+            execute!(
+                stdout,
+                crossterm::terminal::ScrollUp(term_height),
+                MoveTo(0, 0)
+            )?;
             stdout.flush()?;
         }
 
         // Handle resize: re-render ion's chat at new width.
-        // Clears only from the bottom up based on how much space ion's content
-        // needs, preserving pre-ion terminal content above.
+        // ScrollUp pushes all visible content into terminal scrollback (preserved,
+        // user can scroll up). Then we reprint chat in the blank viewport at the
+        // new width with row-tracking so the UI draws right below.
         if app.render_state.needs_reflow {
             app.render_state.needs_reflow = false;
+            execute!(
+                stdout,
+                crossterm::terminal::ScrollUp(term_height),
+                MoveTo(0, 0)
+            )?;
             if !app.message_list.entries.is_empty() {
                 let all_lines = app.build_chat_lines(term_width);
                 let ui_height = app.calculate_ui_height(term_width, term_height);
-
-                #[allow(clippy::cast_possible_truncation)]
-                let chat_rows = all_lines.len() as u16;
-                let total_ion_rows = chat_rows.saturating_add(ui_height);
-
-                // Clear from bottom up: only ion's area, not pre-ion content
-                let clear_start = term_height.saturating_sub(total_ion_rows);
-                execute!(
-                    stdout,
-                    MoveTo(0, clear_start),
-                    Clear(ClearType::FromCursorDown)
-                )?;
-
-                // Print only the chat tail that fits above the UI
-                let visible_chat_rows = term_height.saturating_sub(ui_height) as usize;
-                let skip = all_lines.len().saturating_sub(visible_chat_rows);
-                execute!(stdout, MoveTo(0, clear_start))?;
+                let available = term_height.saturating_sub(ui_height) as usize;
+                let skip = all_lines.len().saturating_sub(available);
                 for line in all_lines.iter().skip(skip) {
                     line.writeln(&mut stdout)?;
                 }
+                #[allow(clippy::cast_possible_truncation)]
+                let printed = all_lines.len().min(available) as u16;
+                app.render_state.chat_row = Some(printed);
 
-                let end = app.message_list.entries.len();
+                let mut end = app.message_list.entries.len();
+                if app.is_running
+                    && app
+                        .message_list
+                        .entries
+                        .last()
+                        .is_some_and(|e| e.sender == Sender::Agent)
+                {
+                    end = end.saturating_sub(1);
+                }
                 app.render_state.mark_reflow_complete(end);
             } else {
-                // No entries: clear stale UI remnants, let header reprint
-                let ui_height = app.calculate_ui_height(term_width, term_height);
-                let clear_start = term_height.saturating_sub(ui_height);
-                execute!(
-                    stdout,
-                    MoveTo(0, clear_start),
-                    Clear(ClearType::FromCursorDown)
-                )?;
                 app.render_state.header_inserted = false;
             }
             stdout.flush()?;
