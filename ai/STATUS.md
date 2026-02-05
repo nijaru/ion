@@ -7,7 +7,7 @@
 | Phase     | UX Polish           | 2026-02-04 |
 | Status    | Backlog burndown    | 2026-02-04 |
 | Toolchain | stable              | 2026-01-22 |
-| Tests     | 322 passing         | 2026-02-04 |
+| Tests     | 323 passing         | 2026-02-04 |
 | Clippy    | pedantic clean      | 2026-02-04 |
 | TUI Lines | ~9,500 (excl tests) | 2026-02-04 |
 
@@ -22,11 +22,19 @@
 - tk-6ydy ✓ Tool output format (✓/✗ icons, multi-param display)
 - tk-g3dt ✓ Ctrl+R fuzzy history search
 - tk-kwxn ✓ Deferred provider change until model selection
+- tk-a4q5 ✓ Provider selector shows config id
+- tk-vrmx ✓ CLI config subcommand (ion config get/set/path)
+- tk-5zjg ✓ TUI minor fixes (resize helper, scroll limit)
+- tk-u133 ✓ Model context window display (128K, 1M format)
+- tk-r9c7 ✓ Model sorting (org → newest) - already implemented
+- tk-x3zf ✓ Model display format - already correct
+- tk-wj4b ✓ Newest sort option - already implemented
+- tk-le7i ✓ Retry countdown timer
 
 Next priorities:
 
 - Memory system (tk-5j06) - P2
-- Remaining UX backlog (~13 tasks)
+- Remaining UX backlog (~8 tasks)
 
 ## Architecture Assessment (2026-02-04)
 
