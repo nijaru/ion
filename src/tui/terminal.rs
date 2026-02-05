@@ -163,6 +163,12 @@ impl StyledLine {
         Ok(())
     }
 
+    /// Write this line to a writer with a trailing `\r\n`.
+    pub fn writeln<W: Write>(&self, w: &mut W) -> io::Result<()> {
+        self.write_to(w)?;
+        write!(w, "\r\n")
+    }
+
     /// Push a span to this line.
     pub fn push(&mut self, span: StyledSpan) {
         self.spans.push(span);
@@ -259,16 +265,6 @@ impl Default for LineBuilder {
     fn default() -> Self {
         Self::new()
     }
-}
-
-/// Print `StyledLines` directly to stdout (for v2 scrollback rendering).
-pub fn print_styled_lines_to_scrollback(lines: &[StyledLine]) -> io::Result<()> {
-    let mut stdout = io::stdout();
-    for line in lines {
-        line.write_to(&mut stdout)?;
-        write!(stdout, "\r\n")?;
-    }
-    stdout.flush()
 }
 
 #[cfg(test)]

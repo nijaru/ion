@@ -114,6 +114,9 @@ fn cleanup_terminal(
     term_width: u16,
     term_height: u16,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // Ensure synchronized update mode is ended (safety net if error interrupted the main loop)
+    let _ = execute!(stdout, EndSynchronizedUpdate);
+
     // Clear UI area before exit
     let ui_height = app.calculate_ui_height(term_width, term_height);
     let ui_start = app.ui_start_row(term_height, ui_height);
@@ -297,8 +300,7 @@ pub async fn run(
             let header_lines = app.take_startup_header_lines();
             if !header_lines.is_empty() {
                 for line in &header_lines {
-                    line.write_to(&mut stdout)?;
-                    write!(stdout, "\r\n")?;
+                    line.writeln(&mut stdout)?;
                 }
                 if let Ok((_x, y)) = crossterm::cursor::position() {
                     app.set_startup_ui_anchor(Some(y));
@@ -343,8 +345,7 @@ pub async fn run(
                             MoveTo(0, chat_row.saturating_add(i as u16)),
                             Clear(ClearType::CurrentLine)
                         )?;
-                        line.write_to(&mut stdout)?;
-                        write!(stdout, "\r\n")?;
+                        line.writeln(&mut stdout)?;
                     }
                     app.render_state.chat_row = Some(chat_row.saturating_add(line_count));
                 } else {
@@ -366,8 +367,7 @@ pub async fn run(
                             MoveTo(0, print_row.saturating_add(i as u16)),
                             Clear(ClearType::CurrentLine)
                         )?;
-                        line.write_to(&mut stdout)?;
-                        write!(stdout, "\r\n")?;
+                        line.writeln(&mut stdout)?;
                     }
                     // Transition to scroll mode - reset both chat_row and last_ui_start
                     // to prevent draw_direct from using stale row-tracking values
@@ -388,8 +388,7 @@ pub async fn run(
                 let mut row = ui_start.saturating_sub(line_count);
                 for line in &chat_lines {
                     execute!(stdout, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
-                    line.write_to(&mut stdout)?;
-                    write!(stdout, "\r\n")?;
+                    line.writeln(&mut stdout)?;
                     row = row.saturating_add(1);
                 }
             }
