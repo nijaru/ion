@@ -3,7 +3,7 @@
   "ref": "glcs",
   "title": "Fix state.rs unchecked array accesses",
   "description": "Line 549: lines[line_idx] can panic when line_idx equals lines.len(). Line 588: lines.last().unwrap() can panic on empty vec. Line 261: underflow in prev_line_len calculation. Use get(), unwrap_or(), and saturating_sub.",
-  "status": "open",
+  "status": "done",
   "priority": 2,
   "labels": [],
   "assignees": [],
@@ -18,7 +18,7 @@
     }
   ],
   "created_at": "2026-02-05T01:58:49.986Z",
-  "updated_at": "2026-02-05T02:06:31.396Z",
-  "completed_at": null,
+  "updated_at": "2026-02-05T02:21:32.751Z",
+  "completed_at": "2026-02-05T02:21:32.751Z",
   "external": {}
 }

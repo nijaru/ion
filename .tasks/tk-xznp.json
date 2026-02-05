@@ -3,7 +3,7 @@
   "ref": "xznp",
   "title": "Add terminal panic hook for raw mode cleanup",
   "description": "If program panics, terminal remains in raw mode. Add panic hook or RAII TerminalGuard with Drop impl to restore terminal state.",
-  "status": "open",
+  "status": "done",
   "priority": 2,
   "labels": [],
   "assignees": [],
@@ -18,7 +18,7 @@
     }
   ],
   "created_at": "2026-02-05T01:58:50.775Z",
-  "updated_at": "2026-02-05T02:06:31.422Z",
-  "completed_at": null,
+  "updated_at": "2026-02-05T02:21:32.725Z",
+  "completed_at": "2026-02-05T02:21:32.725Z",
   "external": {}
 }

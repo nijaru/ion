@@ -5,7 +5,7 @@
 | Metric    | Value               | Updated    |
 | --------- | ------------------- | ---------- |
 | Phase     | TUI Refactoring     | 2026-02-04 |
-| Status    | Sprint Planning     | 2026-02-04 |
+| Status    | Sprint 14 Phase 1 ✓ | 2026-02-04 |
 | Toolchain | stable              | 2026-01-22 |
 | Tests     | 303 passing         | 2026-02-04 |
 | Clippy    | pedantic clean      | 2026-02-04 |
@@ -34,16 +34,14 @@ Code review completed 2026-02-04. See `ai/review/tui-analysis-2026-02-04.md`.
 
 ## High Priority Bugs
 
-All P1 bugs fixed 2026-02-04 (tk-wi1s, tk-4trn, tk-thxg).
+All P1 bugs fixed 2026-02-04.
+All P2 panic bugs fixed 2026-02-04 (Sprint 14 Phase 1):
 
-**Remaining P2 (panics):**
-| Bug | File | Task |
-| --- | ---- | ---- |
-| Empty vec panic | `visual_lines.rs:74` | tk-q48p |
-| Array bounds + unwrap | `state.rs:549,588,261` | tk-glcs |
-| No terminal panic hook | `run.rs` | tk-xznp |
+- Empty vec guard in `find_visual_line_and_col`
+- Safe array access in `state.rs` (3 fixes)
+- Terminal panic hook with guard struct
 
-See `ai/review/tui-analysis-2026-02-04.md` for full refactoring analysis.
+See `ai/review/tui-analysis-2026-02-04.md` for refactoring roadmap.
 
 ## Deferred
 
