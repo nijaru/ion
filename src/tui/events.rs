@@ -38,13 +38,13 @@ impl App {
             Event::Resize(_, _) => {
                 // Invalidate cached width so cursor position is recalculated
                 self.input_state.invalidate_width();
-                // Reset render state to force reprint of all chat
-                self.handle_resize();
+                // Row tracking is invalid after resize, but keep last_ui_start
+                // so draw_direct can clear the old UI position
+                self.render_state.chat_row = None;
             }
             Event::FocusGained => {
-                // Force full UI redraw when terminal regains focus
-                // This fixes rendering artifacts from terminal tab switching
-                self.render_state.needs_full_repaint = true;
+                // Redraw UI at bottom when terminal regains focus
+                self.render_state.chat_row = None;
             }
             _ => {}
         }
@@ -695,18 +695,6 @@ impl App {
                 }
             }
         }
-    }
-
-    /// Handle terminal resize: reset state to force reprint of all chat.
-    fn handle_resize(&mut self) {
-        self.force_full_repaint();
-    }
-
-    /// Force a full repaint of chat history and UI.
-    /// Used after resize or when exiting fullscreen selector.
-    fn force_full_repaint(&mut self) {
-        let has_entries = !self.message_list.entries.is_empty();
-        self.render_state.reset_for_reflow(has_entries);
     }
 
     /// Exit selector mode and return to input.

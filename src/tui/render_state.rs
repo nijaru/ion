@@ -76,10 +76,6 @@ pub struct RenderState {
     /// Last UI start row for detecting changes that need extra clearing.
     pub last_ui_start: Option<u16>,
 
-    /// Flag to request full screen clear + repaint (e.g., after resize).
-    pub needs_full_repaint: bool,
-    /// When true, clear scrollback on full repaint.
-    pub clear_scrollback_on_repaint: bool,
     /// Flag to clear selector area without full screen repaint.
     pub needs_selector_clear: bool,
 }
@@ -95,27 +91,8 @@ impl RenderState {
             startup_ui_anchor: None,
             last_render_width: None,
             last_ui_start: None,
-            needs_full_repaint: false,
-            clear_scrollback_on_repaint: true,
             needs_selector_clear: false,
         }
-    }
-
-    /// Full reset for resize/selector exit.
-    ///
-    /// Resets all render state to force a complete reflow of chat content.
-    /// The `has_entries` parameter determines whether `header_inserted` should
-    /// be reset (only reset if there are entries to re-render).
-    pub fn reset_for_reflow(&mut self, has_entries: bool) {
-        if has_entries {
-            self.rendered_entries = 0;
-            self.header_inserted = false;
-            self.startup_ui_anchor = None;
-        }
-        self.buffered_chat_lines.clear();
-        self.last_render_width = None;
-        self.last_ui_start = None;
-        self.chat_row = None;
     }
 
     /// Reset for /clear command (new conversation).

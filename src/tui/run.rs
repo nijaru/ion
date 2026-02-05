@@ -202,27 +202,6 @@ impl Drop for PanicHookGuard {
     }
 }
 
-/// Handle resize by reflowing chat scrollback.
-///
-/// Clears scrollback and screen, then reprints all chat history at the new width.
-fn handle_resize_reflow(
-    app: &mut App,
-    stdout: &mut io::Stdout,
-    new_width: u16,
-    new_height: u16,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let has_chat = !app.message_list.entries.is_empty();
-    app.handle_event(event::Event::Resize(new_width, new_height));
-    if has_chat {
-        // \x1b[3J = clear scrollback, \x1b[2J = clear screen, \x1b[H = home cursor
-        print!("\x1b[3J\x1b[2J\x1b[H");
-        let _ = io::stdout().flush();
-        app.reprint_chat_scrollback(stdout, new_width)?;
-        stdout.flush()?;
-    }
-    Ok(())
-}
-
 /// Main entry point for the TUI.
 ///
 /// This function sets up the terminal, creates the App, handles resume options,
@@ -281,7 +260,7 @@ pub async fn run(
                 event::Event::Resize(w, h) => {
                     term_width = w;
                     term_height = h;
-                    handle_resize_reflow(&mut app, &mut stdout, w, h)?;
+                    app.handle_event(event::Event::Resize(w, h));
                 }
                 _ => {}
             }
@@ -293,30 +272,10 @@ pub async fn run(
         {
             term_width = w;
             term_height = h;
-            handle_resize_reflow(&mut app, &mut stdout, w, h)?;
+            app.handle_event(event::Event::Resize(w, h));
         }
 
         app.update();
-
-        // Handle full repaint request (e.g., after resize)
-        if app.render_state.needs_full_repaint {
-            app.render_state.needs_full_repaint = false;
-            let clear_scrollback = app.render_state.clear_scrollback_on_repaint;
-            if clear_scrollback {
-                print!("\x1b[3J\x1b[2J\x1b[H");
-            } else {
-                print!("\x1b[2J\x1b[H");
-            }
-            let _ = io::stdout().flush();
-            if !app.message_list.entries.is_empty() {
-                app.reprint_chat_scrollback(&mut stdout, term_width)?;
-            }
-            if app.message_list.entries.is_empty() {
-                app.set_header_inserted(false);
-            }
-            stdout.flush()?;
-            app.render_state.clear_scrollback_on_repaint = true;
-        }
 
         // Handle selector close: clear only the selector area, not full screen
         if app.render_state.needs_selector_clear {

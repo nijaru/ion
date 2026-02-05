@@ -63,14 +63,11 @@ impl ChatRenderer {
                             MessagePart::Text(text) => {
                                 // Sanitize (tabs, control chars) without trimming content
                                 let sanitized = sanitize_for_display(text);
-                                // Account for 2-space prefix when rendering tables
-                                let content_width = wrap_width.saturating_sub(2);
                                 let highlighted_lines = highlight::highlight_markdown_with_width(
                                     &sanitized,
-                                    content_width,
+                                    wrap_width,
                                 );
-                                for mut line in highlighted_lines {
-                                    line.prepend(StyledSpan::raw("  "));
+                                for line in highlighted_lines {
                                     entry_lines.push(line);
                                 }
                             }
