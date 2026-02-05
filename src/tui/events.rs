@@ -37,12 +37,13 @@ impl App {
             }
             Event::Resize(_, _) => {
                 self.input_state.invalidate_width();
-                // Reset all positioning state - row values are invalid after resize.
-                // Don't clear or reprint: terminal handles text reflow, we just
-                // redraw the bottom UI at the new position.
+                // Invalidate all positioning state - row values are wrong after
+                // terminal reflow. The needs_reflow flag triggers a targeted
+                // clear + reprint of ion's content only (not pre-ion history).
                 self.render_state.chat_row = None;
                 self.render_state.startup_ui_anchor = None;
                 self.render_state.last_ui_start = None;
+                self.render_state.needs_reflow = true;
             }
             Event::FocusGained => {
                 // Redraw UI at bottom when terminal regains focus
