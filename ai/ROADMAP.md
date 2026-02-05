@@ -1,78 +1,55 @@
 # ion Roadmap
 
-**Updated:** 2026-01-29
+**Updated:** 2026-02-04
 
 ## Completed
 
-- ✅ Provider layer replacement (native HTTP, cache_control, provider routing)
+- ✅ Provider layer (native HTTP, cache_control, provider routing)
 - ✅ Anthropic caching support
 - ✅ Kimi/DeepSeek reasoning extraction
 - ✅ OAuth infrastructure (PKCE, callback server)
 - ✅ Skills YAML frontmatter
 - ✅ Subagent support
-- ✅ TUI refactor (v2)
+- ✅ TUI v2 (direct crossterm, no ratatui)
+- ✅ TUI refactoring (Sprint 14 - panic fixes, code deduplication)
 
-## In Progress
+## Priority Backlog
 
-### OAuth Testing (P0)
+### P2 - Architecture
 
-**Goal:** Verify OAuth flows work with real subscriptions
+| Task          | ID      | Description                               |
+| ------------- | ------- | ----------------------------------------- |
+| Memory system | tk-5j06 | Semantic memory for cross-session context |
 
-| Task         | ID      | Status          |
-| ------------ | ------- | --------------- |
-| ChatGPT auth | tk-3a5h | Ready to test   |
-| Gemini auth  | tk-toyu | Ready to test   |
-| OAuth review | tk-uqt6 | Decision needed |
+### P3 - UX Improvements
 
-### Bug Fixes (P1)
+| Task                  | ID      | Description                |
+| --------------------- | ------- | -------------------------- |
+| Ctrl+R history search | tk-g3dt | Fuzzy search input history |
+| Settings UI           | tk-4gm9 | Settings selector modal    |
+| Tool output format    | tk-6ydy | Review display patterns    |
 
-| Task                     | ID      | Root Cause                   |
-| ------------------------ | ------- | ---------------------------- |
-| Error visibility         | tk-u25b | Chat rendering timing        |
-| Progress line duplicates | tk-7aem | Missing focus event handling |
-| Error JSON pretty-print  | tk-eu8s | Raw JSON in error messages   |
+### P3 - Provider/Config
 
-## Upcoming
+| Task                 | ID      | Description                      |
+| -------------------- | ------- | -------------------------------- |
+| Extensible providers | tk-o0g7 | Config-defined API providers     |
+| Google provider fix  | tk-yy1q | Standard Generative Language API |
 
-### Vision & Input (P2)
+### P3 - Tools
 
-| Task                 | ID      | Description                   |
-| -------------------- | ------- | ----------------------------- |
-| Image attachment     | tk-80az | @image:path syntax, base64    |
-| File autocomplete    | tk-ik05 | @ triggers path picker        |
-| Command autocomplete | tk-hk6p | / for builtins, // for skills |
-| History navigation   | tk-50sw | Ctrl+P/N readline-style       |
-| Fuzzy history search | tk-g3dt | Ctrl+R search                 |
-
-### Code Organization (P2)
-
-| Task            | Description                                     |
-| --------------- | ----------------------------------------------- |
-| Split render.rs | Extract selector + progress rendering (820 LOC) |
-| Split events.rs | Extract keys + commands handling (630 LOC)      |
-| Add context/    | Message conversion, ID remapping, truncation    |
-
-### Extensibility (P3)
-
-| Task                 | ID      | Description                     |
-| -------------------- | ------- | ------------------------------- |
-| Extensible providers | tk-o0g7 | Config-defined API providers    |
-| Hook system          | -       | Lifecycle events for extensions |
+| Task                 | ID      | Description            |
+| -------------------- | ------- | ---------------------- |
+| ast-grep integration | tk-imza | Structural code search |
+| Web search tool      | tk-1y3g | Search integration     |
+| PDF handling         | tk-ur3b | pdf2text integration   |
 
 ## Deferred
 
-| Task                    | Notes                               |
-| ----------------------- | ----------------------------------- |
-| PDF handling            | tk-ur3b - pdf2text integration      |
-| Scrollback preservation | tk-2bk7 - complex terminal handling |
-| True sandboxing         | Container/namespace for bash        |
+| Task                    | Notes                                           |
+| ----------------------- | ----------------------------------------------- |
+| OAuth subscription      | ChatGPT/Gemini - unofficial APIs, deprioritized |
+| Plugin system           | Waiting for core completion                     |
+| Scrollback preservation | tk-2bk7 - complex terminal handling             |
 
-## Timeline Guidance
-
-| Phase             | Effort   | Impact |
-| ----------------- | -------- | ------ |
-| OAuth testing     | 1 day    | HIGH   |
-| Bug fixes         | 1-2 days | HIGH   |
-| Vision & input    | 2-3 days | HIGH   |
-| Code organization | 1-2 days | MEDIUM |
-| Extensibility     | 2-3 days | LOW    |
+See `tk ls` for full task list (20 items).

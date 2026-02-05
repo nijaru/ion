@@ -1,7 +1,7 @@
 # Codebase Review Summary
 
 **Last Updated:** 2026-01-25
-**Status:** All critical/important issues fixed
+**Status:** Historical - see tui-analysis-2026-02-04.md for latest TUI review
 
 ## Overall Health
 
