@@ -13,26 +13,19 @@
 
 ## Current Focus
 
-**UX polish + OAuth fix (tk-f564).** Completed this session:
+**Sprint 15: OAuth subscription support.**
 
-- Provider selector: "⚠ unofficial" warning for OAuth providers (dim yellow)
-- Provider selector: Local provider sorts to bottom
-- OAuth login: One-time warning about unofficial status
-- Ollama → Local rename with ION_LOCAL_URL env var
-- OpenRouter: Added `openrouter/free` as first model option
+Completed:
 
-**In Progress:** Gemini OAuth fix (tk-f564)
+- tk-f564 ✓ Gemini OAuth (credentials, model format, SSE parsing)
+- Selector exit no longer clears screen
+- Provider selector: warnings, Local last, column alignment
 
-- Root cause: Using Antigravity credentials/format instead of Gemini CLI
-- gemini-cli source analyzed at `/Users/nick/github/google-gemini/gemini-cli`
-- Fix needed: Update OAuth creds + request format (see tk-f564 log)
+Next:
 
-Next priorities:
-
-- Fix Gemini OAuth (tk-f564) - credentials + request format
-- Fix ChatGPT OAuth - similar investigation needed
-- Memory system (tk-5j06) - P2
-- Web search tool (tk-1y3g)
+- tk-5q6b: Fix ChatGPT OAuth (investigate Codex CLI source)
+- tk-67su: Review TUI clearing/repaint logic
+- tk-5j06: Memory system (P2)
 
 ## Architecture Assessment (2026-02-04)
 

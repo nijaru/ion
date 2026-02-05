@@ -3,7 +3,7 @@
   "ref": "f564",
   "title": "[FEATURE] OAuth support for providers (Google, etc)",
   "description": null,
-  "status": "open",
+  "status": "done",
   "priority": 3,
   "labels": [],
   "assignees": [],
@@ -15,10 +15,14 @@
     {
       "ts": "2026-02-05T06:55:24.384Z",
       "msg": "Investigated Gemini OAuth 404 error. Found root cause: using Antigravity credentials/format instead of Gemini CLI. Key findings from gemini-cli source:\n- Endpoint: cloudcode-pa.googleapis.com/v1internal (same as ours - correct)\n- OAuth Client ID: 681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com\n- OAuth Secret: (see src/auth/google.rs)\n- Scopes: cloud-platform, userinfo.email, userinfo.profile\n- Model format: NO 'models/' prefix (we incorrectly add it)\n- Request uses user_prompt_id not userAgent/requestId\nFix: Update src/auth/google.rs credentials and src/provider/subscription/gemini.rs request format"
+    },
+    {
+      "ts": "2026-02-05T18:42:19.859Z",
+      "msg": "Gemini OAuth WORKING. Fixed: credentials (Gemini CLI), model format (no models/ prefix), request fields (user_prompt_id), SSE parsing (multi-line data buffering). Also fixed screen clear on selector exit."
     }
   ],
   "created_at": "2026-01-19T15:36:19.862Z",
-  "updated_at": "2026-02-05T06:55:24.384Z",
-  "completed_at": null,
+  "updated_at": "2026-02-05T18:42:25.802Z",
+  "completed_at": "2026-02-05T18:42:25.802Z",
   "external": {}
 }

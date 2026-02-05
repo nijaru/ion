@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "5q6b",
+  "title": "Fix ChatGPT OAuth subscription support",
+  "description": "ChatGPT OAuth login works but API requests fail. Need to investigate Codex CLI source for correct credentials and request format. Similar to Gemini fix (tk-f564).",
+  "status": "open",
+  "priority": 2,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-02-05T18:42:25.830Z",
+  "updated_at": "2026-02-05T18:42:25.830Z",
+  "completed_at": null,
+  "external": {}
+}

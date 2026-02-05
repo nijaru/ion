@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "67su",
+  "title": "Review and refactor TUI clearing/repaint logic",
+  "description": "Review all screen clearing code paths (needs_full_repaint, needs_selector_clear, reset_for_reflow, etc). Consolidate and ensure no unnecessary full-screen clears. Test selector exit, resize, session load.",
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-02-05T18:42:31.663Z",
+  "updated_at": "2026-02-05T18:42:31.663Z",
+  "completed_at": null,
+  "external": {}
+}
