@@ -302,9 +302,8 @@ impl MessageList {
 
     /// Scroll up by n lines (towards older messages)
     pub fn scroll_up(&mut self, n: usize) {
-        // Cap at a reasonable maximum to prevent overflow
-        // Actual content length is handled during render
-        self.scroll_offset = (self.scroll_offset + n).min(10000);
+        // Saturating add - render will clamp to actual content length
+        self.scroll_offset = self.scroll_offset.saturating_add(n);
         self.auto_scroll = false;
     }
 
@@ -319,7 +318,7 @@ impl MessageList {
     /// Jump to top (oldest messages)
     pub fn scroll_to_top(&mut self) {
         // Set to max - render will clamp to actual content
-        self.scroll_offset = 10000;
+        self.scroll_offset = usize::MAX;
         self.auto_scroll = false;
     }
 
@@ -790,7 +789,7 @@ mod tests {
     fn test_message_list_scroll_to_top() {
         let mut list = MessageList::new();
         list.scroll_to_top();
-        assert_eq!(list.scroll_offset, 10000);
+        assert_eq!(list.scroll_offset, usize::MAX);
         assert!(!list.auto_scroll);
     }
 
