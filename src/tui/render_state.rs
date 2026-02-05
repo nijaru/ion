@@ -76,6 +76,8 @@ pub struct RenderState {
     /// Last UI start row for detecting changes that need extra clearing.
     pub last_ui_start: Option<u16>,
 
+    /// Flag to clear visible screen (e.g., /clear command).
+    pub needs_screen_clear: bool,
     /// Flag to clear selector area without full screen repaint.
     pub needs_selector_clear: bool,
 }
@@ -91,6 +93,7 @@ impl RenderState {
             startup_ui_anchor: None,
             last_render_width: None,
             last_ui_start: None,
+            needs_screen_clear: false,
             needs_selector_clear: false,
         }
     }

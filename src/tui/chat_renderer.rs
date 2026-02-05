@@ -370,8 +370,9 @@ fn trim_trailing_empty_lines(lines: &mut Vec<StyledLine>) {
 }
 
 fn trim_leading_blank_lines(lines: &mut Vec<StyledLine>) {
-    while lines.first().is_some_and(line_is_blank) {
-        lines.remove(0);
+    let count = lines.iter().take_while(|l| line_is_blank(l)).count();
+    if count > 0 {
+        lines.drain(..count);
     }
 }
 

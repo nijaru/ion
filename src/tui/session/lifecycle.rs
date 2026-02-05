@@ -1,4 +1,4 @@
-//! Session loading, resuming, and listing.
+//! Session loading and state restoration.
 
 use crate::provider::{ContentBlock, Role};
 use crate::session::Session;
@@ -10,23 +10,6 @@ use anyhow::Result;
 use tokio_util::sync::CancellationToken;
 
 impl App {
-    /// Resume an existing session by ID.
-    pub fn resume_session(
-        &mut self,
-        session_id: &str,
-    ) -> Result<(), crate::session::SessionStoreError> {
-        let loaded = self.store.load(session_id)?;
-        self.message_list.load_from_messages(&loaded.messages);
-        self.render_state.reset_for_session_load();
-        self.session = loaded;
-        Ok(())
-    }
-
-    /// List recent sessions for display.
-    pub fn list_recent_sessions(&self, limit: usize) -> Vec<crate::session::SessionSummary> {
-        self.store.list_recent(limit).unwrap_or_default()
-    }
-
     /// Load a session by ID and restore its state.
     pub fn load_session(&mut self, session_id: &str) -> Result<()> {
         let loaded = self.store.load(session_id)?;
