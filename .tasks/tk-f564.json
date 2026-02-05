@@ -11,9 +11,14 @@
   "blocked_by": [],
   "estimate": null,
   "due_date": null,
-  "logs": [],
+  "logs": [
+    {
+      "ts": "2026-02-05T06:55:24.384Z",
+      "msg": "Investigated Gemini OAuth 404 error. Found root cause: using Antigravity credentials/format instead of Gemini CLI. Key findings from gemini-cli source:\n- Endpoint: cloudcode-pa.googleapis.com/v1internal (same as ours - correct)\n- OAuth Client ID: 681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com\n- OAuth Secret: (see src/auth/google.rs)\n- Scopes: cloud-platform, userinfo.email, userinfo.profile\n- Model format: NO 'models/' prefix (we incorrectly add it)\n- Request uses user_prompt_id not userAgent/requestId\nFix: Update src/auth/google.rs credentials and src/provider/subscription/gemini.rs request format"
+    }
+  ],
   "created_at": "2026-01-19T15:36:19.862Z",
-  "updated_at": "2026-01-19T15:36:19.862Z",
+  "updated_at": "2026-02-05T06:55:24.384Z",
   "completed_at": null,
   "external": {}
 }
