@@ -5,7 +5,7 @@
 | Metric    | Value               | Updated    |
 | --------- | ------------------- | ---------- |
 | Phase     | Core hardening      | 2026-02-06 |
-| Status    | System prompt done  | 2026-02-06 |
+| Status    | Prompt + cleanup    | 2026-02-06 |
 | Toolchain | stable              | 2026-01-22 |
 | Tests     | 322 passing         | 2026-02-06 |
 | Clippy    | clean               | 2026-02-06 |
@@ -13,20 +13,21 @@
 
 ## Session Summary (2026-02-06)
 
-**Done this session:**
+**Done this session (continued):**
 
-- System prompt: replaced 1-sentence prompt with ~400 token structured prompt (identity, core principles, tool usage hierarchy, output format, safety)
-- Added working directory + date to context template via `ContextManager.with_working_dir()`
-- Fixed flaky `test_no_files_returns_none` (broke when global AGENTS.md was added)
-- Removed unused `tempfile::TempDir` import from config tests
+- System prompt: ~450 token structured prompt with identity, core principles, tool hierarchy, output format, safety
+- Refined prompt: code quality within scope, clean deletion, suggest improvements, task completion
+- Added working directory + date to context template (`ContextManager.with_working_dir()`)
+- Fixed flaky instruction test, removed unused tempfile import
+- Consolidated 5 stale ai/ files: merged useful content into agent.md and tui-v2.md, deleted rest
+- Updated research/README.md and design/README.md indexes
 
 **Previous session (same day):**
 
 - Tool pass: bash directory param, read-mode safe commands, grep output_mode, grep context lines
 - Full codebase audit + competitive comparison vs Claude Code, Gemini CLI, aider, pi-mono
 - Removed dead config::load_instructions (83 lines)
-- Set up ~/.config/agents/AGENTS.md symlink -> ~/.claude/CLAUDE.md
-- System prompt research: ai/research/system-prompt-survey-2026.md
+- Set up ~/.config/agents/AGENTS.md symlink, system prompt research
 
 ## Next Session
 

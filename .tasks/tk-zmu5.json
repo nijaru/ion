@@ -15,10 +15,14 @@
     {
       "ts": "2026-02-06T20:47:42.862Z",
       "msg": "Implemented: ~400 token prompt with identity, core principles, tool usage hierarchy, output format, safety rules. Added working_dir + date to context template. Fixed flaky instruction test."
+    },
+    {
+      "ts": "2026-02-06T21:09:32.472Z",
+      "msg": "Completed: ~450 token structured prompt (identity, principles, tool hierarchy, output, safety). Added working_dir + date to context template. Refined with code quality + clean deletion + task completion guidance. Research in ai/research/system-prompt-survey-2026.md."
     }
   ],
   "created_at": "2026-02-06T19:59:58.652Z",
-  "updated_at": "2026-02-06T20:47:42.862Z",
+  "updated_at": "2026-02-06T21:09:32.472Z",
   "completed_at": "2026-02-06T20:47:42.837Z",
   "external": {}
 }
