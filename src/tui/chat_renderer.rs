@@ -244,11 +244,6 @@ impl ChatRenderer {
             wrapped.extend(wrap_styled_line(&line, wrap_width));
         }
 
-        // Remove trailing blank lines so chat butts up against the progress bar
-        while wrapped.last().is_some_and(StyledLine::is_empty) {
-            wrapped.pop();
-        }
-
         wrapped
     }
 }
