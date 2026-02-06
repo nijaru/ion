@@ -3,7 +3,7 @@
   "ref": "rxsz",
   "title": "Tool pass: grep context lines + output modes",
   "description": "Add -A/-B/-C context line parameters and output_mode (content/files_with_matches/count) to grep tool. Matches ripgrep UX that users expect. Update tool schema and display.",
-  "status": "open",
+  "status": "done",
   "priority": 2,
   "labels": [],
   "assignees": [],
@@ -13,7 +13,7 @@
   "due_date": null,
   "logs": [],
   "created_at": "2026-02-06T05:23:19.526Z",
-  "updated_at": "2026-02-06T05:23:19.526Z",
-  "completed_at": null,
+  "updated_at": "2026-02-06T19:24:08.934Z",
+  "completed_at": "2026-02-06T19:24:08.934Z",
   "external": {}
 }
