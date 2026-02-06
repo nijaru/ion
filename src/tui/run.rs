@@ -427,8 +427,9 @@ pub async fn run(
                     let ui_start = term_height.saturating_sub(ui_height);
                     let scroll_amount = content_end.saturating_sub(ui_start);
 
-                    // Clear old UI before scrolling so borders don't get pushed into scrollback
-                    execute!(stdout, MoveTo(0, ui_start), Clear(ClearType::FromCursorDown))?;
+                    // Clear old UI at chat_row (where it was drawn in row-tracking mode)
+                    // before scrolling, so borders don't get pushed into scrollback
+                    execute!(stdout, MoveTo(0, chat_row), Clear(ClearType::FromCursorDown))?;
                     execute!(stdout, crossterm::terminal::ScrollUp(scroll_amount))?;
 
                     // Print at top of the scrolled area
