@@ -4,28 +4,32 @@
 
 | Metric    | Value               | Updated    |
 | --------- | ------------------- | ---------- |
-| Phase     | UX Polish           | 2026-02-04 |
-| Status    | Backlog burndown    | 2026-02-04 |
+| Phase     | UX Polish           | 2026-02-05 |
+| Status    | TUI stabilization   | 2026-02-05 |
 | Toolchain | stable              | 2026-01-22 |
-| Tests     | 323 passing         | 2026-02-04 |
-| Clippy    | pedantic clean      | 2026-02-04 |
+| Tests     | 323 passing         | 2026-02-05 |
+| Clippy    | pedantic clean      | 2026-02-05 |
 | TUI Lines | ~9,500 (excl tests) | 2026-02-04 |
 
 ## Current Focus
 
-**Sprint 15: OAuth subscription support.**
+**TUI rendering stabilization (tk-67su).**
 
-Completed:
+Completed this session:
 
-- tk-f564 ✓ Gemini OAuth (credentials, model format, SSE parsing)
-- Selector exit no longer clears screen
-- Provider selector: warnings, Local last, column alignment
+- Fixed draw_direct clearing chat in row-tracking mode (min(old,new) regression)
+- Fixed FocusGained resetting chat_row (gap on tab switch)
+- Added dirty tracking to skip idle redraws (~20 saved/sec)
+- Resize: Clear(All) + reprint all chat at new width
+- All rendering paths verified: normal chat, resize, tab switch, selector, /clear
 
-Next:
+TUI rendering is now stable. Two-mode system (row-tracking + scroll) working correctly.
 
-- tk-5q6b: Fix ChatGPT OAuth (investigate Codex CLI source)
-- tk-67su: Review TUI clearing/repaint logic
+## Next
+
+- tk-2bk7: Pre-ion scrollback preservation on resize (terminal limitation, low priority)
 - tk-5j06: Memory system (P2)
+- tk-epd1: TUI refactor - extract long event handlers (P4)
 
 ## Architecture Assessment (2026-02-04)
 
@@ -42,20 +46,10 @@ Next:
 | Extensibility           | Basic - hooks only                 |
 | Subagent tool filtering | TODO in code                       |
 
-## Sprint 14 Progress
-
-**Phase 1 ✓** - Panic fixes (5 bugs)
-**Phase 2 ✓** - Dead code removal (-130 lines, Terminal struct)
-**Phase 3 ✓** - Picker trait extraction (FilterablePicker<T>, ProviderPicker, SessionPicker)
-**Phase 4 ✓** - Completer trait extraction (CompleterState<T>, FileCompleter, CommandCompleter)
-**Phase 5 ✓** - App decomposition (TaskState, InteractionState)
-
-See `ai/sprints/14-tui-refactoring.md` for full plan.
-
 ## Deferred
 
 - Plugin system - waiting for core completion
-- Memory system (tk-5j06) - P2 after OAuth fixed
+- Memory system (tk-5j06) - P2 after TUI stable
 
 ## Key References
 
