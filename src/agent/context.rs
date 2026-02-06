@@ -3,6 +3,7 @@ use crate::agent::instructions::InstructionLoader;
 use crate::provider::{Message, ToolDefinition};
 use crate::skill::Skill;
 use minijinja::{Environment, context};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -12,6 +13,7 @@ pub struct ContextManager {
     instruction_loader: Option<Arc<InstructionLoader>>,
     active_skill: Arc<Mutex<Option<Skill>>>,
     render_cache: Mutex<Option<RenderCache>>,
+    working_dir: Option<PathBuf>,
 }
 
 #[derive(Clone)]
@@ -27,15 +29,21 @@ pub struct ContextAssembly {
     pub tools: Vec<ToolDefinition>,
 }
 
-const DEFAULT_SYSTEM_TEMPLATE: &str = r#"
-{{ base_instructions }}
+const DEFAULT_SYSTEM_TEMPLATE: &str = r#"{{ base_instructions }}
+{% if working_dir %}
+## Environment
 
+Working directory: {{ working_dir }}
+Date: {{ date }}
+{% endif %}
 {% if instructions %}
+## Project Instructions
+
 {{ instructions }}
 {% endif %}
-
 {% if plan %}
---- CURRENT PLAN ---
+## Current Plan
+
 Title: {{ plan.title }}
 {% for task in plan.tasks -%}
 {% if task.status == "Completed" %}[x]{% elif task.status == "InProgress" %}[>]{% elif task.status == "Failed" %}[!]{% else %}[ ]{% endif %} {{ task.id }} - {{ task.title }}
@@ -45,10 +53,9 @@ FOCUS: You are currently working on {{ current_task.id }}. {{ current_task.descr
 VERIFICATION: After each tool call, verify if the output matches the requirements of this task.
 {% endif %}
 {% endif %}
-
 {% if skill %}
-Active Skill: {{ skill.name }}
-Instructions:
+## Active Skill: {{ skill.name }}
+
 {{ skill.prompt }}
 {% endif %}
 "#;
@@ -66,6 +73,7 @@ impl ContextManager {
             instruction_loader: None,
             active_skill: Arc::new(Mutex::new(None)),
             render_cache: Mutex::new(None),
+            working_dir: None,
         }
     }
 
@@ -73,6 +81,13 @@ impl ContextManager {
     #[must_use]
     pub fn with_instruction_loader(mut self, loader: Arc<InstructionLoader>) -> Self {
         self.instruction_loader = Some(loader);
+        self
+    }
+
+    /// Set the working directory for environment context in the system prompt.
+    #[must_use]
+    pub fn with_working_dir(mut self, dir: PathBuf) -> Self {
+        self.working_dir = Some(dir);
         self
     }
 
@@ -171,9 +186,19 @@ impl ContextManager {
             .as_ref()
             .and_then(|loader| loader.load_all());
 
+        // Environment context
+        let working_dir = self.working_dir.as_ref().map(|d| d.display().to_string());
+        let date = if self.working_dir.is_some() {
+            Some(chrono::Local::now().format("%Y-%m-%d").to_string())
+        } else {
+            None
+        };
+
         template
             .render(context! {
                 base_instructions => self.system_prompt_base,
+                working_dir => working_dir,
+                date => date,
                 instructions => instructions,
                 plan => plan,
                 current_task => current_task,
