@@ -189,9 +189,11 @@ mod tests {
     }
 
     #[test]
-    fn test_no_files_returns_none() {
+    fn test_no_project_files_returns_none() {
         let dir = TempDir::new().unwrap();
         let loader = InstructionLoader::new(dir.path().to_path_buf());
-        assert!(loader.load_all().is_none());
+        // load_project returns None when dir has no AGENTS.md or CLAUDE.md
+        // (load_all may find global files in ~/.ion/ or ~/.config/agents/)
+        assert!(loader.load_project().is_none());
     }
 }
