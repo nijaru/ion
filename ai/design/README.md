@@ -1,22 +1,29 @@
 # Design Specs
 
-**Purpose**: Consolidated architectural specifications for `ion`.
+Architectural specifications for ion.
 
-## Core Pillars
+## Core
 
-| Spec                             | Purpose                                       | Status  |
-| :------------------------------- | :-------------------------------------------- | :------ |
-| [Context & Memory](./context.md) | Persistence, Compaction, and OmenDB Retrieval | Current |
-| [Agent & Tools](./agent.md)      | Multi-turn loop, Sub-agents, and Skills       | Current |
-| [TUI Interface](./tui.md)        | Layout, Interaction, and Visual Polish        | Current |
+| Spec                                        | Purpose                   |
+| ------------------------------------------- | ------------------------- |
+| [Agent & Tools](./agent.md)                 | Multi-turn loop, skills   |
+| [TUI v2](./tui-v2.md)                       | Layout, crossterm, render |
+| [Context System](./context-system.md)       | Prompt assembly, caching  |
+| [Permission System](./permission-system.md) | Tool modes, sandbox       |
+| [Config System](./config-system.md)         | TOML layering, MCP        |
+| [Session Storage](./session-storage.md)     | SQLite persistence        |
+| [Tool Pass](./tool-pass.md)                 | Bash/grep enhancements    |
 
-## Reference Specs (Legacy)
+## Reference
 
-These are archived in `ai/design/_archive/` for historical context.
-
-- `rust-architecture.md`: Initial Rust transition notes.
-- `sub-agents.md`: Detailed sub-agent vs skill research.
-- `context-compaction.md`: Original token budget research.
-- `hybrid-search.md`: Early ripgrep+chroma design.
-- `tui-spec.md`: Initial keybinding layout.
-- `session-persistence-schema.md`: Initial SQLite schema.
+| Spec                                            | Purpose                 |
+| ----------------------------------------------- | ----------------------- |
+| [Keybindings](./keybindings.md)                 | Key mapping reference   |
+| [Chat Positioning](./chat-positioning.md)       | insert_before algorithm |
+| [Module Structure](./module-structure.md)       | File organization       |
+| [Diff Highlighting](./diff-highlighting.md)     | Edit tool display       |
+| [Interrupt Handling](./interrupt-handling.md)   | Cancellation flow       |
+| [Dependency Upgrades](./dependency-upgrades.md) | Crate update tracking   |
+| [Model Listing](./model-listing-refactor.md)    | Registry refactor       |
+| [OAuth Subscriptions](./oauth-subscriptions.md) | ChatGPT/Gemini OAuth    |
+| [Plugin Architecture](./plugin-architecture.md) | Future plugin design    |
