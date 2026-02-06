@@ -46,8 +46,8 @@ impl App {
                 self.render_state.needs_reflow = true;
             }
             Event::FocusGained => {
-                // Redraw UI at bottom when terminal regains focus
-                self.render_state.chat_row = None;
+                // No-op: terminal size poll handles any resize that
+                // happened while away. Don't disturb chat_row tracking.
             }
             _ => {}
         }
