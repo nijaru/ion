@@ -50,11 +50,18 @@ pub(crate) fn extract_key_arg(tool_name: &str, args: &serde_json::Value) -> Stri
             .and_then(|v| v.as_str())
             .map(|s| truncate_for_display(s, 50))
             .unwrap_or_default(),
-        "bash" => obj
-            .get("command")
-            .and_then(|v| v.as_str())
-            .map(|s| truncate_for_display(s, 50))
-            .unwrap_or_default(),
+        "bash" => {
+            let cmd = obj
+                .get("command")
+                .and_then(|v| v.as_str())
+                .map(|s| truncate_for_display(s, 50))
+                .unwrap_or_default();
+            if let Some(dir) = obj.get("directory").and_then(|v| v.as_str()) {
+                format!("{cmd}, dir={}", truncate_for_display(dir, 20))
+            } else {
+                cmd
+            }
+        }
         "glob" => {
             let pattern = obj
                 .get("pattern")

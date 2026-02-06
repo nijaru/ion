@@ -38,6 +38,10 @@ impl Tool for BashTool {
                 "command": {
                     "type": "string",
                     "description": "The command to execute"
+                },
+                "directory": {
+                    "type": "string",
+                    "description": "Working directory for this command (default: project root)"
                 }
             },
             "required": ["command"]
@@ -57,6 +61,23 @@ impl Tool for BashTool {
             .get("command")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidArgs("command is required".to_string()))?;
+
+        // Resolve working directory
+        let dir = args
+            .get("directory")
+            .and_then(|v| v.as_str())
+            .map(|d| {
+                let p = std::path::Path::new(d);
+                if p.is_absolute() {
+                    p.to_path_buf()
+                } else {
+                    ctx.working_dir.join(d)
+                }
+            })
+            .unwrap_or_else(|| ctx.working_dir.clone());
+        let dir = ctx
+            .check_sandbox(&dir)
+            .map_err(ToolError::PermissionDenied)?;
 
         // Check for destructive command patterns
         if let Some(risk) = self.check_danger(command_str) {
@@ -83,7 +104,7 @@ impl Tool for BashTool {
         let child = Command::new("bash")
             .arg("-c")
             .arg(command_str)
-            .current_dir(&ctx.working_dir)
+            .current_dir(&dir)
             .env("CLICOLOR_FORCE", "1")
             .env("FORCE_COLOR", "1")
             .env("TERM", "xterm-256color")
