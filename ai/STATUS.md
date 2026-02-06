@@ -4,43 +4,37 @@
 
 | Metric    | Value               | Updated    |
 | --------- | ------------------- | ---------- |
-| Phase     | Tool pass           | 2026-02-05 |
-| Status    | Planning            | 2026-02-05 |
+| Phase     | Feature dev         | 2026-02-06 |
+| Status    | Ready               | 2026-02-06 |
 | Toolchain | stable              | 2026-01-22 |
-| Tests     | 323 passing         | 2026-02-05 |
-| Clippy    | pedantic clean      | 2026-02-05 |
+| Tests     | 325 passing         | 2026-02-06 |
+| Clippy    | pedantic clean      | 2026-02-06 |
 | TUI Lines | ~9,500 (excl tests) | 2026-02-04 |
 
 ## Current Focus
 
-**Tool pass planned. Design at ai/design/tool-pass.md.**
+**Tool pass complete.** All 4 items shipped:
 
-Completed this session:
-
-- TUI: Restored blank line separators between chat entries (trailing trim was too aggressive)
-- TUI: Contextual units for collapsed tool results (list→items, grep→matches, read→lines)
-- TUI: Fixed queued message prefix inconsistency (> → ›)
-- Research: Working directory patterns across agents (ai/research/working-directory-patterns-2026.md)
-- Tool audit: Compared with Claude Code, identified gaps and priorities
+- Bash: `directory` parameter (resolve relative to project root, sandbox check)
+- Bash: Read-mode safe command allowlist (~50 prefixes, chain-aware)
+- Grep: `output_mode` parameter (content/files/count)
+- Grep: `context_before`/`context_after` with custom Sink implementation
 
 ## Next
 
-**Tool pass (P2):**
+**P2:**
 
-- tk-d7jh: Bash directory param + read-mode safe commands
-- tk-rxsz: Grep context lines + output modes
-- Design: ai/design/tool-pass.md
+- tk-5j06: Memory system (claimed differentiator, still missing)
 
-**New features (P3):**
+**P3 features:**
 
 - tk-75jw: Web search tool (DuckDuckGo scraping, free)
 - tk-ltyy: ask_user tool (selector + text input UI)
+- tk-2bk7: Pre-ion scrollback preservation on resize
 
-**Existing (P2-P4):**
+**P4:**
 
-- tk-5j06: Memory system (P2)
-- tk-epd1: TUI refactor - extract long event handlers (P4)
-- tk-2bk7: Pre-ion scrollback preservation on resize (P3)
+- tk-epd1: TUI refactor - extract long event handlers
 
 ## Architecture Assessment (2026-02-04)
 
