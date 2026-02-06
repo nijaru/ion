@@ -4,7 +4,7 @@
   "title": "[CONFIG] Provider/model identity normalization and config semantics",
   "description": null,
   "status": "open",
-  "priority": 3,
+  "priority": 4,
   "labels": [],
   "assignees": [],
   "parent": null,
@@ -13,7 +13,7 @@
   "due_date": null,
   "logs": [],
   "created_at": "2026-01-21T12:23:35.273Z",
-  "updated_at": "2026-01-21T12:23:35.273Z",
+  "updated_at": "2026-02-06T19:42:01.213Z",
   "completed_at": null,
   "external": {}
 }

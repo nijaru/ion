@@ -4,54 +4,77 @@
 
 | Metric    | Value               | Updated    |
 | --------- | ------------------- | ---------- |
-| Phase     | Feature dev         | 2026-02-06 |
-| Status    | Ready               | 2026-02-06 |
+| Phase     | Core hardening      | 2026-02-06 |
+| Status    | Prioritized         | 2026-02-06 |
 | Toolchain | stable              | 2026-01-22 |
 | Tests     | 325 passing         | 2026-02-06 |
-| Clippy    | pedantic clean      | 2026-02-06 |
+| Clippy    | clean               | 2026-02-06 |
 | TUI Lines | ~9,500 (excl tests) | 2026-02-04 |
 
 ## Current Focus
 
-**Tool pass complete.** All 4 items shipped:
+Full codebase audit completed 2026-02-06. Tool pass done, priorities reorganized around core functionality.
 
-- Bash: `directory` parameter (resolve relative to project root, sandbox check)
-- Bash: Read-mode safe command allowlist (~50 prefixes, chain-aware)
-- Grep: `output_mode` parameter (content/files/count)
-- Grep: `context_before`/`context_after` with custom Sink implementation
+**What works well:** Agent loop, tool system (10 tools + MCP), TUI rendering, provider abstraction (7 providers), session persistence, skills, compaction.
 
-## Next
+**Key gaps:** Permission persistence, manual compaction, Google provider broken, streaming robustness, no web search tool.
 
-**P3 — core feature gaps:**
+## Priority Queue
 
-- tk-ltyy: ask_user tool (selector + text input UI)
-- tk-75jw: Web search tool (DuckDuckGo scraping, free)
-- tk-2bk7: Pre-ion scrollback preservation on resize
+### P2 — Core functionality gaps
 
-**P4 — deferred until core complete:**
+| Task    | Title                                     | Why                                               |
+| ------- | ----------------------------------------- | ------------------------------------------------- |
+| tk-w1ou | Persist permanent tool approvals          | TODO in code; approvals lost on restart           |
+| tk-ubad | /compact slash command                    | No way to manually trigger compaction             |
+| tk-yy1q | Fix Google provider (Generative Lang API) | Broken provider — streaming+tools doesn't work    |
+| tk-g1fy | Modular streaming interface               | Core agent UX; needed for Google fix + robustness |
 
-- tk-5j06: Memory system (needs working agent/TUI first)
-- tk-epd1: TUI refactor - extract long event handlers
+### P3 — Important improvements
 
-## Architecture Assessment (2026-02-04)
+| Task    | Title                               | Why                                              |
+| ------- | ----------------------------------- | ------------------------------------------------ |
+| tk-75jw | Web search tool                     | Agents need web access; DuckDuckGo scraping      |
+| tk-kqie | Streaming timeout / stale detection | Hung streams freeze the UI                       |
+| tk-c1ij | Rate limit Retry-After parsing      | Better retry behavior with provider rate limits  |
+| tk-4fyx | Compaction threshold tuning         | 55%/45% is aggressive, compacts every 3-4 turns  |
+| tk-g8xo | Session cleanup / retention         | Old sessions accumulate, no auto-cleanup         |
+| tk-2bk7 | Scrollback preservation on resize   | Content lost when terminal resizes               |
+| tk-jqe6 | Group parallel tool calls in TUI    | Visual clutter from many simultaneous tool calls |
+| tk-5h0j | Permission system audit             | Review for correctness and completeness          |
 
-**Verdict:** Solid foundation (~60% complete), feature-incomplete vs competitors.
+### P4 — Deferred
 
-| Aspect                  | Status                             |
-| ----------------------- | ---------------------------------- |
-| Module separation       | Good - clean boundaries            |
-| Agent loop              | Good - matches Claude Code pattern |
-| Provider abstraction    | Good - 9 providers                 |
-| Tool system             | Good - 8 tools, permissions, hooks |
-| Memory system           | Missing - claimed differentiator   |
-| Session branching       | Missing - linear only              |
-| Extensibility           | Basic - hooks only                 |
-| Subagent tool filtering | TODO in code                       |
+| Task    | Title                                 |
+| ------- | ------------------------------------- |
+| tk-ltyy | ask_user tool                         |
+| tk-epd1 | TUI refactor: extract event handlers  |
+| tk-5j06 | Semantic memory system                |
+| tk-a2s8 | Extensible OAuth providers            |
+| tk-o0g7 | Extensible API providers              |
+| tk-ije3 | Hooks/plugin system architecture      |
+| tk-ur3b | PDF handling                          |
+| tk-9zri | Auto-backticks around pastes          |
+| tk-4gm9 | Settings selector UI                  |
+| tk-tnzs | Provider/model identity normalization |
+| tk-imza | ast-grep integration                  |
+| tk-8qwn | System prompt comparison research     |
+| tk-iegz | OpenRouter routing modal              |
 
-## Deferred
+## Architecture Assessment (2026-02-06)
 
-- Plugin system - waiting for core completion
-- Memory system (tk-5j06) - P2 after tool pass
+| Area        | Score | Key Strength              | Key Gap                          |
+| ----------- | ----- | ------------------------- | -------------------------------- |
+| Agent loop  | 85%   | Multi-turn, retry, cancel | No branching, limited recovery   |
+| Tool system | 80%   | 10 tools + MCP + perms    | Approval persistence, no web     |
+| TUI         | 75%   | Direct crossterm, md      | No /compact, resize issues       |
+| Providers   | 80%   | 7 providers, streaming    | Google broken, no fallback       |
+| Session/DB  | 78%   | SQLite WAL, resume        | No cleanup, no branching         |
+| Config      | 80%   | 3-tier TOML, MCP          | No validation, no hot-reload     |
+| Skills      | 85%   | YAML + lazy load          | No parameters, no composition    |
+| Compaction  | 72%   | Token-based pruning       | Aggressive thresholds, no manual |
+
+**Only 1 TODO in codebase:** `src/tool/mod.rs:129` — persist approvals to config.
 
 ## Key References
 
@@ -61,6 +84,6 @@
 | TUI design             | ai/design/tui-v2.md                            |
 | Tool pass design       | ai/design/tool-pass.md                         |
 | Agent design           | ai/design/agent.md                             |
+| TUI analysis           | ai/review/tui-analysis-2026-02-04.md           |
 | Working dir patterns   | ai/research/working-directory-patterns-2026.md |
 | Claude Code comparison | ai/research/claude-code-architecture.md        |
-| Pi-mono comparison     | ai/research/pi-mono-architecture-2026.md       |

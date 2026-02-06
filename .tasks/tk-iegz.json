@@ -4,7 +4,7 @@
   "title": "[IDEA] OpenRouter provider routing modal - research whether needed or config-only",
   "description": null,
   "status": "open",
-  "priority": 3,
+  "priority": 4,
   "labels": [],
   "assignees": [],
   "parent": null,
@@ -22,7 +22,7 @@
     }
   ],
   "created_at": "2026-01-18T19:29:03.274Z",
-  "updated_at": "2026-01-19T09:38:01.164Z",
+  "updated_at": "2026-02-06T19:42:01.277Z",
   "completed_at": null,
   "external": {}
 }
