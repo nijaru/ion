@@ -4,16 +4,21 @@
   "title": "[ARCH] Implement semantic memory system",
   "description": "Memory was claimed differentiator but not implemented. Episodic/semantic/working memory needed for competitive parity.",
   "status": "open",
-  "priority": 2,
+  "priority": 4,
   "labels": [],
   "assignees": [],
   "parent": null,
   "blocked_by": [],
   "estimate": null,
   "due_date": null,
-  "logs": [],
+  "logs": [
+    {
+      "ts": "2026-02-06T19:35:03.600Z",
+      "msg": "Deprioritized per user: core TUI and agent must be feature-complete first. Memory is useless without a working foundation."
+    }
+  ],
   "created_at": "2026-02-04T22:16:26.745Z",
-  "updated_at": "2026-02-04T22:16:26.745Z",
+  "updated_at": "2026-02-06T19:35:03.625Z",
   "completed_at": null,
   "external": {}
 }

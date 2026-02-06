@@ -22,18 +22,15 @@
 
 ## Next
 
-**P2:**
+**P3 — core feature gaps:**
 
-- tk-5j06: Memory system (claimed differentiator, still missing)
-
-**P3 features:**
-
-- tk-75jw: Web search tool (DuckDuckGo scraping, free)
 - tk-ltyy: ask_user tool (selector + text input UI)
+- tk-75jw: Web search tool (DuckDuckGo scraping, free)
 - tk-2bk7: Pre-ion scrollback preservation on resize
 
-**P4:**
+**P4 — deferred until core complete:**
 
+- tk-5j06: Memory system (needs working agent/TUI first)
 - tk-epd1: TUI refactor - extract long event handlers
 
 ## Architecture Assessment (2026-02-04)
