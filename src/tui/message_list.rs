@@ -362,13 +362,19 @@ impl MessageList {
             }
             AgentEvent::ToolCallResult(_id, result, is_error) => {
                 // Check if this is a context-gathering tool (collapse output)
-                let is_collapsed_tool = self.entries.last().is_some_and(|e| {
-                    e.sender == Sender::Tool
-                        && (e.content_as_markdown().starts_with("read(")
-                            || e.content_as_markdown().starts_with("glob(")
-                            || e.content_as_markdown().starts_with("grep(")
-                            || e.content_as_markdown().starts_with("list("))
+                let tool_name = self.entries.last().and_then(|e| {
+                    if e.sender == Sender::Tool {
+                        let md = e.content_as_markdown();
+                        let name = md.split('(').next().unwrap_or("");
+                        match name {
+                            "read" | "glob" | "grep" | "list" => Some(name.to_string()),
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    }
                 });
+                let is_collapsed_tool = tool_name.is_some();
 
                 // Status icons: ✓ for success, ✗ for error
                 let result_content = if is_error {
@@ -376,10 +382,15 @@ impl MessageList {
                     let msg = strip_error_prefixes(&result).trim();
                     format!(" ✗ {}", truncate_line(msg, TOOL_RESULT_LINE_MAX))
                 } else if is_collapsed_tool {
-                    // Collapsed tools: just show line count or OK
+                    // Collapsed tools: show count with appropriate unit
                     let line_count = result.lines().count();
+                    let unit = match tool_name.as_deref() {
+                        Some("list" | "glob") => "items",
+                        Some("grep") => "matches",
+                        _ => "lines",
+                    };
                     if line_count > 1 {
-                        format!(" ✓ {line_count} lines")
+                        format!(" ✓ {line_count} {unit}")
                     } else if result.trim().is_empty() {
                         " ✓".to_string()
                     } else {
