@@ -4,6 +4,19 @@
 
 `Viewport::Inline(15)` creates a fixed 15-line viewport. Our UI needs dynamic height (input box grows/shrinks). This mismatch causes gaps and bugs.
 
+## Background (from viewport investigation, 2026-01)
+
+Researched how Codex CLI, Pi-mono, and OpenTUI handle inline rendering:
+
+| Aspect                  | Pi-mono             | Codex CLI                | Ion v1                       |
+| ----------------------- | ------------------- | ------------------------ | ---------------------------- |
+| Rendering               | Inline (natural)    | Inline + custom          | ratatui Viewport::Inline(15) |
+| Uses ratatui Viewport:: | N/A                 | **No** — custom terminal | Yes                          |
+| Dynamic viewport        | Yes (content-based) | Yes (custom mgmt)        | No (fixed 15 lines)          |
+| Scrollback              | Natural terminal    | Scroll regions (DECSTBM) | insert_before()              |
+
+Key finding: **Codex doesn't use Viewport::Inline**. They implemented `custom_terminal.rs` with manual viewport area management and scroll regions, bypassing the fixed-size limitation. Codex also tried and reverted fullscreen mode — users complained about losing scrollback.
+
 ## Decision
 
 Drop ratatui. Use crossterm directly for terminal I/O.
@@ -269,7 +282,6 @@ match event {
 
 ## References
 
-- Research: `ai/research/viewport-investigation-2026-01.md`
 - Research: `ai/research/pi-mono-tui-analysis.md`
 - Research: `ai/research/codex-tui-analysis.md`
 - Research: `ai/research/tui-rendering-research.md`

@@ -10,6 +10,7 @@ Research notes for ion development. All files are topic-specific markdown.
 | agent-comparison-2026.md     | Pi-Mono vs Claude Code deep dive       |
 | claude-code-architecture.md  | Claude Code internals                  |
 | pi-mono-architecture-2026.md | Pi-Mono design philosophy              |
+| system-prompt-survey-2026.md | System prompt comparison (6 agents)    |
 
 ## TUI Patterns
 
@@ -23,15 +24,13 @@ Research notes for ion development. All files are topic-specific markdown.
 
 ## TUI Implementation
 
-| File                               | Content                 |
-| ---------------------------------- | ----------------------- |
-| inline-viewport-2026.md            | Viewport implementation |
-| inline-viewport-scrollback-2026.md | Scrollback handling     |
-| viewport-investigation-2026-01.md  | Viewport debugging      |
-| tui-rendering-research.md          | Rendering approaches    |
-| tui-resize-streaming-research.md   | Resize + streaming      |
-| tui-diffing-research.md            | Diff-based rendering    |
-| tui-selectors-http-research.md     | Selector widgets        |
+| File                               | Content              |
+| ---------------------------------- | -------------------- |
+| inline-viewport-scrollback-2026.md | Scrollback handling  |
+| tui-rendering-research.md          | Rendering approaches |
+| tui-resize-streaming-research.md   | Resize + streaming   |
+| tui-diffing-research.md            | Diff-based rendering |
+| tui-selectors-http-research.md     | Selector widgets     |
 
 ## Context & Memory
 
@@ -46,7 +45,6 @@ Research notes for ion development. All files are topic-specific markdown.
 | -------------------------------- | -------------------------- |
 | rust-llm-crates-2026.md          | Rust LLM library options   |
 | prompt-caching-providers-2026.md | Prompt caching comparison  |
-| deepseek-research-2026.md        | DeepSeek analysis          |
 | model-routing-for-subagents.md   | Model selection strategies |
 
 ## Tools & Patterns
@@ -61,10 +59,12 @@ Research notes for ion development. All files are topic-specific markdown.
 
 ## Other
 
-| File                              | Content                     |
-| --------------------------------- | --------------------------- |
-| input-research.md                 | Input handling, fuzzy match |
-| rust-file-finder-crates.md        | File finder libraries       |
-| rust-tui-agent-patterns-2026.md   | Rust agent patterns         |
-| session-storage-patterns-2026.md  | Session persistence         |
-| recursive-language-models-2026.md | Recursive LLM patterns      |
+| File                               | Content                     |
+| ---------------------------------- | --------------------------- |
+| input-research.md                  | Input handling, fuzzy match |
+| rust-file-finder-crates.md         | File finder libraries       |
+| rust-tui-agent-patterns-2026.md    | Rust agent patterns         |
+| session-storage-patterns-2026.md   | Session persistence         |
+| working-directory-patterns-2026.md | Working directory handling  |
+| gemini-oauth-subscription-auth.md  | Gemini OAuth configuration  |
+| oauth-implementations-2026.md      | OAuth PKCE patterns         |

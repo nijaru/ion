@@ -4,15 +4,14 @@ Architectural specifications for ion.
 
 ## Core
 
-| Spec                                        | Purpose                   |
-| ------------------------------------------- | ------------------------- |
-| [Agent & Tools](./agent.md)                 | Multi-turn loop, skills   |
-| [TUI v2](./tui-v2.md)                       | Layout, crossterm, render |
-| [Context System](./context-system.md)       | Prompt assembly, caching  |
-| [Permission System](./permission-system.md) | Tool modes, sandbox       |
-| [Config System](./config-system.md)         | TOML layering, MCP        |
-| [Session Storage](./session-storage.md)     | SQLite persistence        |
-| [Tool Pass](./tool-pass.md)                 | Bash/grep enhancements    |
+| Spec                                        | Purpose                          |
+| ------------------------------------------- | -------------------------------- |
+| [Agent & Tools](./agent.md)                 | Multi-turn loop, context, skills |
+| [TUI v2](./tui-v2.md)                       | Layout, crossterm, render        |
+| [Permission System](./permission-system.md) | Tool modes, sandbox              |
+| [Config System](./config-system.md)         | TOML layering, MCP               |
+| [Session Storage](./session-storage.md)     | SQLite persistence               |
+| [Tool Pass](./tool-pass.md)                 | Bash/grep enhancements           |
 
 ## Reference
 

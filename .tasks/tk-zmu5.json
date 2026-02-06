@@ -3,7 +3,7 @@
   "ref": "zmu5",
   "title": "Write proper system prompt with tool usage guidance",
   "description": "Current system prompt is one sentence. Needs: tool descriptions, working directory context, safety guidelines, output format guidance. Claude Code has extensive system prompt. This directly affects agent quality.",
-  "status": "open",
+  "status": "done",
   "priority": 1,
   "labels": [],
   "assignees": [],
@@ -11,9 +11,14 @@
   "blocked_by": [],
   "estimate": null,
   "due_date": null,
-  "logs": [],
+  "logs": [
+    {
+      "ts": "2026-02-06T20:47:42.862Z",
+      "msg": "Implemented: ~400 token prompt with identity, core principles, tool usage hierarchy, output format, safety rules. Added working_dir + date to context template. Fixed flaky instruction test."
+    }
+  ],
   "created_at": "2026-02-06T19:59:58.652Z",
-  "updated_at": "2026-02-06T19:59:58.652Z",
-  "completed_at": null,
+  "updated_at": "2026-02-06T20:47:42.862Z",
+  "completed_at": "2026-02-06T20:47:42.837Z",
   "external": {}
 }
