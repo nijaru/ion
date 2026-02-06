@@ -4,16 +4,21 @@
   "title": "ask_user tool with selector + text input UI",
   "description": "Tool for agent to ask clarifying questions during execution. Reuse selector UI for multiple choice + text input for freeform. Complex edge cases around blocking agent loop, timeout, UI state.",
   "status": "open",
-  "priority": 3,
+  "priority": 4,
   "labels": [],
   "assignees": [],
   "parent": null,
   "blocked_by": [],
   "estimate": null,
   "due_date": null,
-  "logs": [],
+  "logs": [
+    {
+      "ts": "2026-02-06T19:38:00.674Z",
+      "msg": "Deprioritized: core UI/UX and functionality comes first"
+    }
+  ],
   "created_at": "2026-02-06T05:23:21.542Z",
-  "updated_at": "2026-02-06T05:23:21.542Z",
+  "updated_at": "2026-02-06T19:38:00.674Z",
   "completed_at": null,
   "external": {}
 }

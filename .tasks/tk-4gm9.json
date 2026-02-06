@@ -4,7 +4,7 @@
   "title": "[UX] Settings selector UI",
   "description": null,
   "status": "open",
-  "priority": 3,
+  "priority": 4,
   "labels": [],
   "assignees": [],
   "parent": null,
@@ -13,7 +13,7 @@
   "due_date": null,
   "logs": [],
   "created_at": "2026-01-27T05:12:41.717Z",
-  "updated_at": "2026-01-27T05:12:41.717Z",
+  "updated_at": "2026-02-06T19:42:01.188Z",
   "completed_at": null,
   "external": {}
 }

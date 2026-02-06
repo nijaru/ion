@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "kqie",
+  "title": "Streaming timeout / stale stream detection",
+  "description": "Long-running streams can hang forever. Need watchdog for stale streams where no data arrives.",
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-02-06T19:41:46.042Z",
+  "updated_at": "2026-02-06T19:41:46.042Z",
+  "completed_at": null,
+  "external": {}
+}

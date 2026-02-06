@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "g8xo",
+  "title": "Session cleanup / retention",
+  "description": "No auto-deletion of old sessions. Config has retention_days design but not implemented.",
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-02-06T19:41:46.062Z",
+  "updated_at": "2026-02-06T19:41:46.062Z",
+  "completed_at": null,
+  "external": {}
+}
