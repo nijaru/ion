@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "nyqq",
+  "title": "Symlink ~/.claude/agents and skills to ~/.config/agents/",
+  "description": "Create symlinks: ~/.config/agents/subagents/ -> ~/.claude/agents/, ~/.config/agents/skills/ -> ~/.claude/skills/. Add to chezmoi. Lets ion access Claude Code agent configs and skills.",
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-02-06T20:41:56.045Z",
+  "updated_at": "2026-02-06T20:41:56.045Z",
+  "completed_at": null,
+  "external": {}
+}
