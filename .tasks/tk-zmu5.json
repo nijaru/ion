@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "zmu5",
+  "title": "Write proper system prompt with tool usage guidance",
+  "description": "Current system prompt is one sentence. Needs: tool descriptions, working directory context, safety guidelines, output format guidance. Claude Code has extensive system prompt. This directly affects agent quality.",
+  "status": "open",
+  "priority": 1,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-02-06T19:59:58.652Z",
+  "updated_at": "2026-02-06T19:59:58.652Z",
+  "completed_at": null,
+  "external": {}
+}
