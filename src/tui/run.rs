@@ -246,10 +246,9 @@ pub async fn run(
 
     // Main loop
     loop {
-        if event::poll(std::time::Duration::from_millis(50))? {
+        let had_event = if event::poll(std::time::Duration::from_millis(50))? {
             let evt = event::read()?;
 
-            // Debug: log raw events when ION_DEBUG_EVENTS is set
             if debug_events {
                 tracing::info!("Event: {:?}", evt);
             }
@@ -259,7 +258,10 @@ pub async fn run(
                 term_height = h;
             }
             app.handle_event(evt);
-        }
+            true
+        } else {
+            false
+        };
 
         // Some terminals don't emit Resize on tab switches; re-check size each frame.
         if let Ok((w, h)) = terminal::size()
@@ -270,7 +272,10 @@ pub async fn run(
             app.handle_event(event::Event::Resize(w, h));
         }
 
+        let was_running = app.is_running;
         app.update();
+
+        let mut frame_changed = false;
 
         // Handle /clear: push visible content to scrollback, then blank viewport.
         // Unlike Clear(All), ScrollUp preserves content in terminal scrollback
@@ -283,30 +288,42 @@ pub async fn run(
                 MoveTo(0, 0)
             )?;
             stdout.flush()?;
+            frame_changed = true;
         }
 
-        // Handle resize: re-render ion's chat at new width.
-        // ScrollUp pushes all visible content into terminal scrollback (preserved,
-        // user can scroll up). Then we reprint chat in the blank viewport at the
-        // new width with row-tracking so the UI draws right below.
+        // Handle resize: clear viewport and reprint all chat at new width.
+        // Clear(All) erases the visible viewport; scrollback is untouched.
+        // Then we print ALL chat lines -- overflow goes to scrollback at new width.
         if app.render_state.needs_reflow {
             app.render_state.needs_reflow = false;
-            execute!(
-                stdout,
-                crossterm::terminal::ScrollUp(term_height),
-                MoveTo(0, 0)
-            )?;
+            execute!(stdout, MoveTo(0, 0), Clear(ClearType::All))?;
             if !app.message_list.entries.is_empty() {
                 let all_lines = app.build_chat_lines(term_width);
                 let ui_height = app.calculate_ui_height(term_width, term_height);
                 let available = term_height.saturating_sub(ui_height) as usize;
-                let skip = all_lines.len().saturating_sub(available);
-                for line in all_lines.iter().skip(skip) {
+
+                for line in &all_lines {
                     line.writeln(&mut stdout)?;
                 }
-                #[allow(clippy::cast_possible_truncation)]
-                let printed = all_lines.len().min(available) as u16;
-                app.render_state.chat_row = Some(printed);
+
+                if all_lines.len() <= available {
+                    #[allow(clippy::cast_possible_truncation)]
+                    {
+                        app.render_state.chat_row = Some(all_lines.len() as u16);
+                    }
+                } else {
+                    // Chat extends into UI area -- push excess to scrollback
+                    #[allow(clippy::cast_possible_truncation)]
+                    let excess = (all_lines
+                        .len()
+                        .min(term_height as usize)
+                        .saturating_sub(available)) as u16;
+                    if excess > 0 {
+                        execute!(stdout, crossterm::terminal::ScrollUp(excess))?;
+                    }
+                    app.render_state.chat_row = None;
+                    app.render_state.last_ui_start = None;
+                }
 
                 let mut end = app.message_list.entries.len();
                 if app.is_running
@@ -323,19 +340,19 @@ pub async fn run(
                 app.render_state.header_inserted = false;
             }
             stdout.flush()?;
+            frame_changed = true;
         }
 
-        // Handle selector close: clear only the selector area, not full screen
+        // Handle selector close: clear the selector area
         if app.render_state.needs_selector_clear {
             app.render_state.needs_selector_clear = false;
-            // Clear lines from the new (smaller) UI start to the bottom of screen
             let ui_height = app.calculate_ui_height(term_width, term_height);
-            let ui_start = term_height.saturating_sub(ui_height);
+            let ui_start = app.ui_start_row(term_height, ui_height);
             for row in ui_start..term_height {
                 execute!(stdout, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
             }
             stdout.flush()?;
-            // Buffered chat lines will be flushed by the normal chat render below
+            frame_changed = true;
         }
 
         if !app.header_inserted() && app.message_list.entries.is_empty() {
@@ -346,9 +363,9 @@ pub async fn run(
                 }
                 if let Ok((_x, y)) = crossterm::cursor::position() {
                     app.set_startup_ui_anchor(Some(y));
-                    // Initialize row-tracking mode: chat will start at this row
                     app.render_state.chat_row = Some(y);
                 }
+                frame_changed = true;
             }
         }
 
@@ -356,12 +373,26 @@ pub async fn run(
         let chat_lines = app.take_chat_inserts(term_width);
 
         // If this is the first message, clear startup UI BEFORE sync update
-        // This ensures the clear is fully processed before we start scrolling
         if !chat_lines.is_empty()
             && let Some(anchor) = app.take_startup_ui_anchor()
         {
             execute!(stdout, MoveTo(0, anchor), Clear(ClearType::FromCursorDown))?;
             stdout.flush()?;
+        }
+
+        // Only render when something changed: event, agent running/stopped,
+        // new chat content, or a flag was processed above.
+        let needs_render = frame_changed
+            || had_event
+            || app.is_running
+            || was_running
+            || !chat_lines.is_empty();
+
+        if !needs_render {
+            if app.should_quit {
+                break;
+            }
+            continue;
         }
 
         // Begin synchronized output (prevents flicker)

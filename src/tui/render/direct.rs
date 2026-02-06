@@ -26,29 +26,14 @@ impl App {
         let ui_start = self.ui_start_row(height, ui_height);
         let progress_height = PROGRESS_HEIGHT;
 
-        // Determine clear_from based on positioning mode:
-        // - Row-tracking: only clear UI area (chat is immediately above, must preserve)
-        // - Scroll mode: clear from min(old, new) ui_start to handle UI shrinking
-        //
-        // Note: We read last_ui_start BEFORE updating it - the old value is needed
-        // for the scroll mode comparison, then we store the new value for next frame.
-        let in_row_tracking = self.render_state.chat_row.is_some();
+        // Clear from min(old, new) ui_start to handle UI moving up or down.
+        // This covers both row-tracking mode (UI shrink after agent finish)
+        // and scroll mode (UI position changes). We read last_ui_start BEFORE
+        // updating it, then store the new value for next frame.
         let old_ui_start = self.render_state.last_ui_start;
         self.render_state.last_ui_start = Some(ui_start);
 
-        let clear_from = if in_row_tracking {
-            ui_start
-        } else {
-            old_ui_start.map_or_else(
-                || {
-                    self.render_state
-                        .startup_ui_anchor
-                        .unwrap_or(ui_start)
-                        .min(ui_start)
-                },
-                |old| old.min(ui_start),
-            )
-        };
+        let clear_from = old_ui_start.map_or(ui_start, |old| old.min(ui_start));
 
         // Clear from UI position downward (never clear full screen - preserves scrollback)
         execute!(w, MoveTo(0, clear_from), Clear(ClearType::FromCursorDown))?;
