@@ -3,7 +3,7 @@
   "ref": "d7jh",
   "title": "Tool pass: bash directory param + read-mode safe commands",
   "description": "Add 'directory' parameter to bash tool (per-call cwd, Codex/Gemini pattern). Add safe-command allowlist for read mode so read-only sessions can still run ls, git log, cat, tk, etc. Update guard.rs pattern.",
-  "status": "open",
+  "status": "done",
   "priority": 2,
   "labels": [],
   "assignees": [],
@@ -13,7 +13,7 @@
   "due_date": null,
   "logs": [],
   "created_at": "2026-02-06T05:23:18.337Z",
-  "updated_at": "2026-02-06T05:23:18.337Z",
-  "completed_at": null,
+  "updated_at": "2026-02-06T19:24:08.958Z",
+  "completed_at": "2026-02-06T19:24:08.958Z",
   "external": {}
 }
