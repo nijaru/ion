@@ -128,6 +128,109 @@ pub fn analyze_command(command: &str) -> CommandRisk {
     CommandRisk::Safe
 }
 
+/// Safe command prefixes allowed in read mode.
+const SAFE_PREFIXES: &[&str] = &[
+    // Filesystem (read-only)
+    "ls",
+    "find",
+    "tree",
+    "file",
+    "stat",
+    "du",
+    "df",
+    "wc",
+    // Reading
+    "cat",
+    "head",
+    "tail",
+    "less",
+    "bat",
+    // Search
+    "grep",
+    "rg",
+    "ag",
+    "fd",
+    "fzf",
+    // Git (read-only subcommands)
+    "git status",
+    "git log",
+    "git diff",
+    "git show",
+    "git branch",
+    "git tag",
+    "git remote",
+    "git rev-parse",
+    "git describe",
+    "git ls-files",
+    "git blame",
+    // Version checks
+    "cargo --version",
+    "rustc --version",
+    "node --version",
+    "python --version",
+    "go version",
+    // Build/test (read-only side effects only)
+    "cargo check",
+    "cargo clippy",
+    "cargo test",
+    "cargo bench",
+    "npm test",
+    "pytest",
+    "go test",
+    "go vet",
+    // Task tracking
+    "tk",
+    // System info
+    "uname",
+    "whoami",
+    "hostname",
+    "date",
+    "env",
+    "printenv",
+    "which",
+    "type",
+    // Misc read-only
+    "echo",
+    "pwd",
+    "realpath",
+    "dirname",
+    "basename",
+];
+
+/// Check if a command consists only of safe (read-only) operations.
+///
+/// Splits on `&&`, `||`, `;`, `|` and checks each segment against the safe
+/// prefix list. All segments must match for the command to be safe.
+#[must_use]
+pub fn is_safe_command(command: &str) -> bool {
+    split_command_chain(command).iter().all(|segment| {
+        let trimmed = segment.trim();
+        SAFE_PREFIXES.iter().any(|prefix| {
+            trimmed == *prefix
+                || trimmed.starts_with(&format!("{prefix} "))
+                || trimmed.starts_with(&format!("{prefix}\t"))
+        })
+    })
+}
+
+/// Split a command string on shell operators (`&&`, `||`, `;`, `|`).
+fn split_command_chain(command: &str) -> Vec<&str> {
+    let mut segments = Vec::new();
+    for part in command.split("&&") {
+        for part in part.split("||") {
+            for part in part.split(';') {
+                for part in part.split('|') {
+                    let trimmed = part.trim();
+                    if !trimmed.is_empty() {
+                        segments.push(trimmed);
+                    }
+                }
+            }
+        }
+    }
+    segments
+}
+
 /// Check for rm with both force and recursive flags.
 fn is_rm_force_recursive(cmd: &str) -> bool {
     let lower = cmd.to_lowercase();
@@ -286,5 +389,28 @@ mod tests {
     fn test_mkfs() {
         assert!(analyze_command("mkfs.ext4 /dev/sda1").is_dangerous());
         assert!(analyze_command("mkfs -t ext4 /dev/sdb").is_dangerous());
+    }
+
+    #[test]
+    fn test_safe_commands_read_mode() {
+        assert!(is_safe_command("ls -la"));
+        assert!(is_safe_command("git log --oneline"));
+        assert!(is_safe_command("cargo test"));
+        assert!(is_safe_command("cat file.txt | grep pattern"));
+        assert!(is_safe_command("git diff && git status"));
+        assert!(is_safe_command("tk ls"));
+        assert!(is_safe_command("echo hello"));
+        assert!(is_safe_command("pwd"));
+        assert!(is_safe_command("which cargo"));
+    }
+
+    #[test]
+    fn test_unsafe_commands_read_mode() {
+        assert!(!is_safe_command("rm file.txt"));
+        assert!(!is_safe_command("cargo build"));
+        assert!(!is_safe_command("git commit -m 'test'"));
+        assert!(!is_safe_command("git log && rm -rf ."));
+        assert!(!is_safe_command("echo hi | bash"));
+        assert!(!is_safe_command("curl https://example.com"));
     }
 }

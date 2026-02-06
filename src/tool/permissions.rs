@@ -1,3 +1,4 @@
+use crate::tool::builtin::guard::is_safe_command;
 use crate::tool::types::{DangerLevel, Tool, ToolMode};
 use std::collections::HashSet;
 
@@ -58,7 +59,13 @@ impl PermissionMatrix {
         match self.mode {
             ToolMode::Agi => PermissionStatus::Allowed,
             ToolMode::Read => {
-                PermissionStatus::Denied("Bash commands are blocked in Read mode".to_string())
+                if is_safe_command(command) {
+                    PermissionStatus::Allowed
+                } else {
+                    PermissionStatus::Denied(
+                        "Command blocked in Read mode (not in safe list)".into(),
+                    )
+                }
             }
             ToolMode::Write => {
                 if self.session_allowed_commands.contains(command)
