@@ -205,7 +205,7 @@ impl ChatRenderer {
                 let lines: Vec<&str> = queued_msg.lines().collect();
                 let shown = lines.len().min(QUEUED_PREVIEW_LINES);
                 for (idx, line) in lines.iter().take(shown).enumerate() {
-                    let prefix = if idx == 0 { " > " } else { "   " };
+                    let prefix = if idx == 0 { " › " } else { "   " };
                     entry_lines.push(StyledLine::new(vec![
                         StyledSpan::dim(prefix),
                         StyledSpan::dim((*line).to_string()).with_italic(),
