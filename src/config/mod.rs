@@ -390,58 +390,6 @@ fn migrate_old_config() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Load instruction files (AGENTS.md, CLAUDE.md).
-///
-/// Loading order:
-/// 1. ./AGENTS.md (project root, primary)
-/// 2. ./CLAUDE.md (project root, fallback - only if AGENTS.md not found)
-/// 3. ~/.agents/AGENTS.md (user global, preferred)
-/// 4. ~/.ion/AGENTS.md (user global, fallback - only if ~/.agents/AGENTS.md not found)
-///
-/// Returns project instructions + user instructions (max 2 files).
-#[must_use]
-pub fn load_instructions(working_dir: &Path) -> String {
-    let mut instructions = String::new();
-
-    // Project level: first found wins
-    let project_agents = working_dir.join("AGENTS.md");
-    let project_claude = working_dir.join("CLAUDE.md");
-
-    if project_agents.exists() {
-        if let Ok(content) = std::fs::read_to_string(&project_agents) {
-            instructions.push_str(&content);
-            instructions.push_str("\n\n");
-        }
-    } else if project_claude.exists()
-        && let Ok(content) = std::fs::read_to_string(&project_claude)
-    {
-        instructions.push_str(&content);
-        instructions.push_str("\n\n");
-    }
-
-    // User level: ~/.agents/AGENTS.md preferred, ~/.ion/AGENTS.md fallback
-    let user_agents_global = agents_dir().join("AGENTS.md");
-    let user_ion_agents = ion_config_dir().join("AGENTS.md");
-
-    if user_agents_global.exists() {
-        if let Ok(content) = std::fs::read_to_string(&user_agents_global) {
-            if !instructions.is_empty() {
-                instructions.push_str("---\n\n");
-            }
-            instructions.push_str(&content);
-        }
-    } else if user_ion_agents.exists()
-        && let Ok(content) = std::fs::read_to_string(&user_ion_agents)
-    {
-        if !instructions.is_empty() {
-            instructions.push_str("---\n\n");
-        }
-        instructions.push_str(&content);
-    }
-
-    instructions
-}
-
 /// Ensure local config files are gitignored.
 /// Call this when creating .ion/config.local.toml.
 pub fn ensure_local_gitignored() -> anyhow::Result<()> {
@@ -495,37 +443,6 @@ mod tests {
         assert_eq!(base.provider, Some("openrouter".to_string()));
         assert_eq!(base.model, Some("test-model".to_string()));
         assert_eq!(base.api_keys.openrouter, Some("test-key".to_string()));
-    }
-
-    #[test]
-    fn test_load_instructions() {
-        let temp_dir = TempDir::new().unwrap();
-        let agents_path = temp_dir.path().join("AGENTS.md");
-        std::fs::write(&agents_path, "# Test Instructions").unwrap();
-
-        let instructions = load_instructions(temp_dir.path());
-        assert!(instructions.contains("# Test Instructions"));
-    }
-
-    #[test]
-    fn test_claude_md_fallback() {
-        let temp_dir = TempDir::new().unwrap();
-        let claude_path = temp_dir.path().join("CLAUDE.md");
-        std::fs::write(&claude_path, "# Claude Instructions").unwrap();
-
-        let instructions = load_instructions(temp_dir.path());
-        assert!(instructions.contains("# Claude Instructions"));
-    }
-
-    #[test]
-    fn test_agents_md_takes_priority() {
-        let temp_dir = TempDir::new().unwrap();
-        std::fs::write(temp_dir.path().join("AGENTS.md"), "# Agents").unwrap();
-        std::fs::write(temp_dir.path().join("CLAUDE.md"), "# Claude").unwrap();
-
-        let instructions = load_instructions(temp_dir.path());
-        assert!(instructions.contains("# Agents"));
-        assert!(!instructions.contains("# Claude"));
     }
 
     #[test]
