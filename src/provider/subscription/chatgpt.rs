@@ -375,7 +375,7 @@ fn parse_response_event(data: &str, event_type: Option<&str>) -> Option<ParsedEv
             .get("delta")
             .and_then(Value::as_str)
             .map(|delta| ParsedEvent::TextDelta(delta.to_string())),
-        "response.output_item.done" | "response.output_item.added" => {
+        "response.output_item.done" => {
             if let Some(item) = value.get("item") {
                 if let Some(tool_call) = extract_tool_call(item) {
                     return Some(ParsedEvent::ToolCall(tool_call));
