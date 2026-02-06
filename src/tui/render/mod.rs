@@ -14,8 +14,8 @@ mod widgets;
 
 use crate::tui::render_selector::MAX_VISIBLE_ITEMS;
 
-/// Input prompt prefix " > "
-pub(crate) const PROMPT: &str = " > ";
+/// Input prompt prefix " › "
+pub(crate) const PROMPT: &str = " › ";
 /// Continuation line prefix "   "
 pub(crate) const CONTINUATION: &str = "   ";
 /// Width of prompt/continuation prefix

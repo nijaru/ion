@@ -28,7 +28,7 @@ impl ChatRenderer {
                     }
                     // Sanitize (tabs, control chars) without trimming content
                     let combined = sanitize_for_display(&combined);
-                    let prefix = "> ";
+                    let prefix = "› ";
                     let prefix_len = prefix.chars().count();
                     let available_width = wrap_width.saturating_sub(prefix_len).max(1);
 
