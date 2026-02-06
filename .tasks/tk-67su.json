@@ -23,10 +23,14 @@
     {
       "ts": "2026-02-06T03:54:25.886Z",
       "msg": "Fixed row-tracking clear regression in draw_direct (min(old,new) was wiping chat). Fixed FocusGained resetting chat_row (caused gap on tab switch). Dirty tracking added to skip idle redraws. All TUI rendering paths working: normal chat, resize reflow, tab switch, selector, /clear."
+    },
+    {
+      "ts": "2026-02-06T04:38:37.524Z",
+      "msg": "Review complete (3 subagents): No critical issues. Fixed queued msg prefix inconsistency (> → ›). Two low-priority WARNs: u16 truncation on chat_lines.len() (edge case >65535 lines), unchecked u16 add in render_input_direct on tiny terminals. NIT: duplicated skip-agent logic in 3 places, run.rs growing (528 lines) - both tracked by tk-epd1."
     }
   ],
   "created_at": "2026-02-05T18:42:31.663Z",
-  "updated_at": "2026-02-06T03:54:25.886Z",
+  "updated_at": "2026-02-06T04:38:37.524Z",
   "completed_at": "2026-02-05T23:15:16.005Z",
   "external": {}
 }

@@ -2,34 +2,42 @@
 
 ## Current State
 
-| Metric    | Value               | Updated    |
-| --------- | ------------------- | ---------- |
-| Phase     | UX Polish           | 2026-02-05 |
-| Status    | TUI stabilization   | 2026-02-05 |
-| Toolchain | stable              | 2026-01-22 |
-| Tests     | 323 passing         | 2026-02-05 |
-| Clippy    | pedantic clean      | 2026-02-05 |
-| TUI Lines | ~9,500 (excl tests) | 2026-02-04 |
+| Metric    | Value                | Updated    |
+| --------- | -------------------- | ---------- |
+| Phase     | UX Polish            | 2026-02-05 |
+| Status    | TUI stable, reviewed | 2026-02-05 |
+| Toolchain | stable               | 2026-01-22 |
+| Tests     | 323 passing          | 2026-02-05 |
+| Clippy    | pedantic clean       | 2026-02-05 |
+| TUI Lines | ~9,500 (excl tests)  | 2026-02-04 |
 
 ## Current Focus
 
-**TUI rendering stabilization (tk-67su).**
+**TUI rendering stabilization complete (tk-67su done).**
 
-Completed this session:
+Session work:
 
 - Fixed draw_direct clearing chat in row-tracking mode (min(old,new) regression)
 - Fixed FocusGained resetting chat_row (gap on tab switch)
-- Added dirty tracking to skip idle redraws (~20 saved/sec)
-- Resize: Clear(All) + reprint all chat at new width
-- All rendering paths verified: normal chat, resize, tab switch, selector, /clear
+- Fixed duplicate UI in scrollback during overflow transition (clear from chat_row)
+- Fixed duplicate tool display in ChatGPT provider (removed response.output_item.added)
+- Removed trailing blank line between chat and progress bar
+- Changed prompt symbol from > to › (all locations including queued preview)
+- Added dirty tracking to skip idle redraws
+- Removed dead code: stash, colored_bold, italic, last_render_width
+- Simplified draw_direct: removed width_decreased/startup_ui_anchor paths
+- Review passed (3 subagents): no critical issues
 
-TUI rendering is now stable. Two-mode system (row-tracking + scroll) working correctly.
+TUI rendering is stable. Two-mode system (row-tracking + scroll) working correctly.
 
 ## Next
 
 - tk-2bk7: Pre-ion scrollback preservation on resize (terminal limitation, low priority)
 - tk-5j06: Memory system (P2)
 - tk-epd1: TUI refactor - extract long event handlers (P4)
+  - Duplicated skip-agent logic in 3 places
+  - run.rs main loop at 528 lines
+  - u16 truncation edge cases (chat_lines.len(), render_input_direct)
 
 ## Architecture Assessment (2026-02-04)
 
