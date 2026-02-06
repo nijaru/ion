@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "kxup",
+  "title": "Cost tracking and /cost slash command",
+  "description": "Track estimated dollar cost per turn and session total. Need pricing data per model (from models.dev or OpenRouter API). Display in status bar and /cost command.",
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-02-06T19:59:58.714Z",
+  "updated_at": "2026-02-06T19:59:58.714Z",
+  "completed_at": null,
+  "external": {}
+}
