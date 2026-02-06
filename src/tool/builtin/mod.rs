@@ -1,6 +1,6 @@
 mod bash;
 mod discover;
-mod guard;
+pub(crate) mod guard;
 mod edit;
 mod glob;
 mod grep;
