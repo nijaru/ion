@@ -84,15 +84,20 @@ pub(crate) fn extract_key_arg(tool_name: &str, args: &serde_json::Value) -> Stri
                 .map(|s| truncate_for_display(s, 35))
                 .unwrap_or_default();
 
-            // Show path/type filter if specified
+            // Show path/type/mode filter if specified
             let mut extras = Vec::new();
-            if let Some(path) = obj.get("path").and_then(|v| v.as_str()) {
-                if path != "." && !path.is_empty() {
-                    extras.push(format!("in {}", truncate_for_display(path, 20)));
-                }
+            if let Some(path) = obj.get("path").and_then(|v| v.as_str())
+                && path != "." && !path.is_empty()
+            {
+                extras.push(format!("in {}", truncate_for_display(path, 20)));
             }
             if let Some(typ) = obj.get("type").and_then(|v| v.as_str()) {
                 extras.push(format!("type={typ}"));
+            }
+            if let Some(mode) = obj.get("output_mode").and_then(|v| v.as_str())
+                && mode != "content"
+            {
+                extras.push(format!("mode={mode}"));
             }
 
             if extras.is_empty() {
