@@ -90,6 +90,9 @@ async fn stream_with_retry(
     abort_token: &CancellationToken,
 ) -> Result<Option<(Vec<ContentBlock>, Vec<ToolCallEvent>)>> {
     const MAX_RETRIES: u32 = 3;
+    /// No SSE event received for this duration → treat as stale stream.
+    /// Resets on every received event (select! recreates the sleep each iteration).
+    const STREAM_STALE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
     let mut retry_count = 0;
     let mut assistant_blocks = Vec::new();
     let mut tool_calls = Vec::new();
@@ -108,6 +111,12 @@ async fn stream_with_retry(
                 () = abort_token.cancelled() => {
                     handle.abort();
                     return Err(anyhow::anyhow!("Cancelled"));
+                }
+                () = tokio::time::sleep(STREAM_STALE_TIMEOUT) => {
+                    warn!("Stream stale: no data received for {}s", STREAM_STALE_TIMEOUT.as_secs());
+                    handle.abort();
+                    stream_error = Some("Stream timed out (no data received)".to_string());
+                    break;
                 }
                 event = stream_rx.recv() => {
                     match event {
