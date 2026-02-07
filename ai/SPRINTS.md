@@ -5,7 +5,7 @@
 | Sprint | Goal                | Status   |
 | ------ | ------------------- | -------- |
 | 0-14   | Foundation + TUI v2 | COMPLETE |
-| 15     | Code Quality + UX   | ACTIVE   |
+| 15     | Code Quality + UX   | COMPLETE |
 
 ## Sprint 15: Code Quality + UX
 
@@ -28,12 +28,12 @@
 
 ### Phase 2: TUI UX Improvements
 
-| #   | Task                                        | File(s)                     | Status  |
-| --- | ------------------------------------------- | --------------------------- | ------- |
-| 9   | Extract slash command dispatch method       | `tui/events.rs:347-458`     | Done    |
-| 10  | Increase tool result max lines 5→10         | `tui/message_list.rs`       | Done    |
-| 11  | Show thinking indicator in progress line    | `tui/render/direct.rs`      | Done    |
-| 12  | Streaming text display (incremental render) | `tui/render/`, `tui/run.rs` | Pending |
+| #   | Task                                        | File(s)                                     | Status |
+| --- | ------------------------------------------- | ------------------------------------------- | ------ |
+| 9   | Extract slash command dispatch method       | `tui/events.rs:347-458`                     | Done   |
+| 10  | Increase tool result max lines 5→10         | `tui/message_list.rs`                       | Done   |
+| 11  | Show thinking indicator in progress line    | `tui/render/direct.rs`                      | Done   |
+| 12  | Streaming text display (incremental render) | `tui/render/chat.rs`, `tui/render_state.rs` | Done   |
 
 ### Phase 3: Architecture (if time)
 
@@ -51,5 +51,6 @@
 | 12     | Clippy Pedantic          | 2026-01-29 |
 | 13     | Agent Loop Decomposition | 2026-01-31 |
 | 14     | TUI Refactoring          | 2026-02-04 |
+| 15     | Code Quality + UX        | 2026-02-06 |
 
 Details in `ai/sprints/archive-0-10.md` and git history.
