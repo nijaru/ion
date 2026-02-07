@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "w51v",
+  "title": "Token budget warning for large attachments",
+  "description": "Warn user if attachments consume >25% of remaining context window. Requires token counting of attachment text blocks before sending.",
+  "status": "open",
+  "priority": 4,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-02-07T23:00:53.971Z",
+  "updated_at": "2026-02-07T23:00:53.971Z",
+  "completed_at": null,
+  "external": {}
+}
