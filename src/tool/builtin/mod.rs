@@ -1,4 +1,5 @@
 mod bash;
+mod compact;
 mod discover;
 pub(crate) mod guard;
 mod edit;
@@ -11,6 +12,7 @@ mod web_fetch;
 mod write;
 
 pub use bash::BashTool;
+pub use compact::{COMPACT_TOOL_NAME, CompactTool};
 pub use discover::DiscoverTool;
 pub use edit::EditTool;
 pub use glob::GlobTool;

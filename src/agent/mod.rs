@@ -378,6 +378,11 @@ impl Agent {
             return Ok(false);
         }
 
+        // Check if any tool call is the compact tool (agent-triggered compaction)
+        let compact_requested = tool_calls
+            .iter()
+            .any(|tc| tc.name == crate::tool::builtin::COMPACT_TOOL_NAME);
+
         let tool_results = tools::execute_tools_parallel(
             &self.orchestrator,
             session,
@@ -395,12 +400,15 @@ impl Agent {
         // Token usage tracking
         self.emit_token_usage(&session.messages, tx).await;
 
-        // Check for compaction using dynamic context window
+        // Check for compaction: forced if compact tool was called, or automatic at threshold
         let mut config = self.compaction_config.clone();
         config.context_window = self.context_window();
 
-        if check_compaction_needed(&session.messages, &config, &self.token_counter).needs_compaction
-        {
+        let needs_compaction = compact_requested
+            || check_compaction_needed(&session.messages, &config, &self.token_counter)
+                .needs_compaction;
+
+        if needs_compaction {
             let mut messages = (*session.messages).to_vec();
             let result = compact_with_summarization(
                 &mut messages,
