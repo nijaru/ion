@@ -451,6 +451,18 @@ impl App {
         )?;
         write!(w, "] · {model_name}")?;
 
+        // Thinking level (only shown when active)
+        let think_label = self.thinking_level.label();
+        if !think_label.is_empty() {
+            write!(w, " ")?;
+            execute!(
+                w,
+                SetForegroundColor(CColor::Magenta),
+                Print(think_label),
+                ResetColor
+            )?;
+        }
+
         // Token usage if available
         if let Some((used, max)) = self.token_usage {
             let format_k = |n: usize| -> String {
