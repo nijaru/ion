@@ -45,10 +45,9 @@ impl ProviderQuirks {
             Provider::Kimi => Self::kimi(),
             Provider::Local => Self::local(),
             Provider::ChatGpt => Self::chatgpt(),
+            Provider::Google => Self::google(),
             // OpenAI-compatible or fallback for non-compatible providers
-            Provider::OpenAI | Provider::Anthropic | Provider::Google | Provider::Gemini => {
-                Self::openai()
-            }
+            Provider::OpenAI | Provider::Anthropic | Provider::Gemini => Self::openai(),
         }
     }
 
@@ -114,6 +113,19 @@ impl ProviderQuirks {
             supports_provider_routing: false,
             base_url: "http://localhost:8080/v1",
             auth_header: None, // No auth needed
+        }
+    }
+
+    /// Google AI Studio (Generative Language API, OpenAI-compatible endpoint).
+    fn google() -> Self {
+        Self {
+            use_max_tokens: true,
+            skip_store: true,
+            skip_developer_role: true,
+            reasoning_field: ReasoningField::None,
+            supports_provider_routing: false,
+            base_url: "https://generativelanguage.googleapis.com/v1beta/openai",
+            auth_header: None, // Bearer {API_KEY}
         }
     }
 
