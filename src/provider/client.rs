@@ -228,6 +228,13 @@ impl Client {
 pub trait LlmApi: Send + Sync {
     /// Get the provider identifier.
     fn id(&self) -> &str;
+    /// Whether this provider supports streaming when tools are present.
+    ///
+    /// Some providers (e.g. local Ollama, OpenRouter) don't reliably support
+    /// streaming with tool calls. The agent falls back to non-streaming for these.
+    fn supports_tool_streaming(&self) -> bool {
+        true
+    }
     /// Stream a chat completion.
     async fn stream(
         &self,
@@ -242,6 +249,10 @@ pub trait LlmApi: Send + Sync {
 impl LlmApi for Client {
     fn id(&self) -> &str {
         self.provider.id()
+    }
+
+    fn supports_tool_streaming(&self) -> bool {
+        !matches!(self.provider, Provider::Local | Provider::OpenRouter)
     }
 
     async fn stream(

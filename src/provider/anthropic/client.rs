@@ -8,7 +8,7 @@ use super::stream::{ContentBlockInfo, ContentDelta, StreamEvent as AnthropicStre
 use crate::provider::error::Error;
 use crate::provider::http::{AuthConfig, HttpClient, SseParser};
 use crate::provider::types::{
-    ChatRequest, ContentBlock as IonContentBlock, Message, Role, StreamEvent, ToolCallEvent,
+    ChatRequest, ContentBlock as IonContentBlock, Message, Role, StreamEvent, ToolBuilder,
     ToolDefinition, Usage,
 };
 use futures::StreamExt;
@@ -308,14 +308,7 @@ impl AnthropicClient {
             } => {
                 // Track tool use blocks for later assembly
                 if let ContentBlockInfo::ToolUse { id, name } = content_block {
-                    tool_builders.insert(
-                        index,
-                        ToolBuilder {
-                            id,
-                            name,
-                            json_parts: Vec::new(),
-                        },
-                    );
+                    tool_builders.insert(index, ToolBuilder::with_id_name(id, name));
                 }
             }
             AnthropicStreamEvent::ContentBlockDelta { index, delta } => match delta {
@@ -327,24 +320,15 @@ impl AnthropicClient {
                 }
                 ContentDelta::InputJson { partial_json } => {
                     if let Some(builder) = tool_builders.get_mut(&index) {
-                        builder.json_parts.push(partial_json);
+                        builder.push(partial_json);
                     }
                 }
             },
             AnthropicStreamEvent::ContentBlockStop { index } => {
-                // Emit completed tool call
-                if let Some(builder) = tool_builders.remove(&index) {
-                    let json_str: String = builder.json_parts.concat();
-                    let arguments: serde_json::Value =
-                        serde_json::from_str(&json_str).unwrap_or(serde_json::Value::Null);
-
-                    let _ = tx
-                        .send(StreamEvent::ToolCall(ToolCallEvent {
-                            id: builder.id,
-                            name: builder.name,
-                            arguments,
-                        }))
-                        .await;
+                if let Some(builder) = tool_builders.remove(&index)
+                    && let Some(call) = builder.finish()
+                {
+                    let _ = tx.send(StreamEvent::ToolCall(call)).await;
                 }
             }
             AnthropicStreamEvent::MessageDelta { usage, .. } => {
@@ -372,12 +356,6 @@ impl AnthropicClient {
     }
 }
 
-/// Helper for assembling tool call arguments from streamed JSON deltas.
-struct ToolBuilder {
-    id: String,
-    name: String,
-    json_parts: Vec<String>,
-}
 
 #[cfg(test)]
 mod tests {

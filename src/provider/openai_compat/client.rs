@@ -3,12 +3,12 @@
 use super::quirks::ProviderQuirks;
 use super::request_builder::build_request;
 use super::stream::StreamChunk;
-use super::stream_handler::{convert_response, handle_stream_chunk, ToolBuilder};
+use super::stream_handler::{convert_response, handle_stream_chunk};
 use crate::provider::api_provider::Provider;
 use crate::provider::error::Error;
 use crate::provider::http::{AuthConfig, HttpClient, SseParser};
 use crate::provider::prefs::ProviderPrefs;
-use crate::provider::types::{ChatRequest, Message, StreamEvent, ToolCallEvent};
+use crate::provider::types::{ChatRequest, Message, StreamEvent, ToolBuilder};
 use futures::StreamExt;
 use std::collections::HashMap;
 use tokio::sync::mpsc;
@@ -168,18 +168,8 @@ impl OpenAICompatClient {
 
         // Emit any remaining tool calls
         for (_, builder) in tool_builders {
-            if let (Some(id), Some(name)) = (builder.id, builder.name) {
-                let json_str: String = builder.argument_parts.concat();
-                let arguments: serde_json::Value =
-                    serde_json::from_str(&json_str).unwrap_or(serde_json::Value::Null);
-
-                let _ = tx
-                    .send(StreamEvent::ToolCall(ToolCallEvent {
-                        id,
-                        name,
-                        arguments,
-                    }))
-                    .await;
+            if let Some(call) = builder.finish() {
+                let _ = tx.send(StreamEvent::ToolCall(call)).await;
             }
         }
 

@@ -4,27 +4,12 @@ use super::quirks::{ProviderQuirks, ReasoningField};
 use super::response::OpenAIResponse;
 use super::stream::StreamChunk;
 use crate::provider::error::Error;
-use crate::provider::types::{ContentBlock, Message, Role, StreamEvent, ToolCallEvent, Usage};
+use crate::provider::types::{
+    ContentBlock, Message, Role, StreamEvent, ToolBuilder, Usage,
+};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-
-/// Helper for assembling tool calls from streamed deltas.
-pub(crate) struct ToolBuilder {
-    pub(crate) id: Option<String>,
-    pub(crate) name: Option<String>,
-    pub(crate) argument_parts: Vec<String>,
-}
-
-impl ToolBuilder {
-    pub(crate) fn new() -> Self {
-        Self {
-            id: None,
-            name: None,
-            argument_parts: Vec::new(),
-        }
-    }
-}
 
 /// Handle a streaming chunk.
 pub(crate) async fn handle_stream_chunk(
@@ -58,7 +43,7 @@ pub(crate) async fn handle_stream_chunk(
             for tc in tool_calls {
                 let builder = tool_builders
                     .entry(tc.index)
-                    .or_insert_with(ToolBuilder::new);
+                    .or_default();
 
                 // Capture id and name when first seen
                 if let Some(ref id) = tc.id {
@@ -69,7 +54,7 @@ pub(crate) async fn handle_stream_chunk(
                         builder.name = Some(name.clone());
                     }
                     if let Some(ref args) = func.arguments {
-                        builder.argument_parts.push(args.clone());
+                        builder.push(args.clone());
                     }
                 }
             }
@@ -77,37 +62,10 @@ pub(crate) async fn handle_stream_chunk(
 
         // Check for finish_reason = tool_calls
         if choice.finish_reason.as_deref() == Some("tool_calls") {
-            // Emit all completed tool calls
             for (idx, builder) in tool_builders.drain() {
-                if let (Some(id), Some(name)) = (builder.id, builder.name) {
-                    let json_str: String = builder.argument_parts.concat();
-                    let arguments: serde_json::Value = match serde_json::from_str(&json_str) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            tracing::warn!(
-                                tool = %name,
-                                error = %e,
-                                json_preview = %json_str.chars().take(100).collect::<String>(),
-                                "Malformed tool arguments JSON, using null"
-                            );
-                            serde_json::Value::Null
-                        }
-                    };
-
-                    tracing::debug!(
-                        index = idx,
-                        id = %id,
-                        name = %name,
-                        "Emitting tool call"
-                    );
-
-                    let _ = tx
-                        .send(StreamEvent::ToolCall(ToolCallEvent {
-                            id,
-                            name,
-                            arguments,
-                        }))
-                        .await;
+                if let Some(call) = builder.finish() {
+                    tracing::debug!(index = idx, id = %call.id, name = %call.name, "Emitting tool call");
+                    let _ = tx.send(StreamEvent::ToolCall(call)).await;
                 }
             }
         }
