@@ -7,7 +7,7 @@ use crate::tui::render::{
 };
 use crate::tui::render_selector::{self, SelectorData, SelectorItem};
 use crate::tui::types::{Mode, SelectorPage};
-use crate::tui::util::{format_elapsed, format_relative_time, format_tokens};
+use crate::tui::util::{format_cost, format_elapsed, format_relative_time, format_tokens};
 use crate::tui::App;
 use crossterm::cursor::MoveTo;
 use crossterm::execute;
@@ -324,6 +324,9 @@ impl App {
         }
         if summary.output_tokens > 0 {
             stats.push(format!("↓ {}", format_tokens(summary.output_tokens)));
+        }
+        if summary.cost > 0.0 {
+            stats.push(format_cost(summary.cost));
         }
 
         let (symbol, label, color) = if self.last_error.is_some() {

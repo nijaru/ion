@@ -164,5 +164,6 @@ pub struct TaskSummary {
     pub elapsed: std::time::Duration,
     pub input_tokens: usize,
     pub output_tokens: usize,
+    pub cost: f64,
     pub was_cancelled: bool,
 }

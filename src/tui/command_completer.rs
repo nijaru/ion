@@ -11,7 +11,7 @@ use crossterm::{
 use std::io::Write;
 
 /// Maximum number of candidates to show in the popup.
-const MAX_VISIBLE: usize = 7;
+const MAX_VISIBLE: usize = 8;
 
 /// Command with its description.
 pub type Command = (&'static str, &'static str);
@@ -19,6 +19,7 @@ pub type Command = (&'static str, &'static str);
 /// Available slash commands with their descriptions.
 pub const COMMANDS: &[Command] = &[
     ("/compact", "Compact context (prune tool outputs)"),
+    ("/cost", "Show session cost and pricing"),
     ("/model", "Open model selector"),
     ("/provider", "Open provider selector"),
     ("/resume", "Resume a previous session"),
@@ -258,6 +259,6 @@ mod tests {
         assert_eq!(completer.selected_command(), Some("/compact"));
 
         completer.move_down();
-        assert_eq!(completer.selected_command(), Some("/model"));
+        assert_eq!(completer.selected_command(), Some("/cost"));
     }
 }

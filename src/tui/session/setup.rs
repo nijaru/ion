@@ -216,6 +216,8 @@ impl App {
             command_completer: CommandCompleter::new(),
             history_search: HistorySearchState::new(),
             pending_provider: None,
+            model_pricing: crate::provider::ModelPricing::default(),
+            session_cost: 0.0,
         };
 
         // Set initial API provider name on model picker
