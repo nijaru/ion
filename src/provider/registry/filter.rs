@@ -119,8 +119,7 @@ impl ModelRegistry {
         candidates.retain(|m| m.pricing.input <= price_ceiling);
 
         // Among cheap models, pick newest (highest created timestamp)
-        candidates.sort_by(|a, b| b.created.cmp(&a.created));
-        candidates.into_iter().next()
+        candidates.into_iter().max_by_key(|m| m.created)
     }
 
     /// Check if a model passes the filter criteria.
