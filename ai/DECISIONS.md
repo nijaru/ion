@@ -375,11 +375,11 @@ No reason to go through MCP when we can use the Rust crate directly.
 
 **Decision**: Prioritize fix for "Lock-Across-Await" and "Silent Error Hiding".
 
-| Component            | Decision                                                                                   | Rationale                                                                                                                       |
-| -------------------- | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
-| **Tool Permissions** | Drop `RwLock` read-guard _before_ calling `ask_approval`.                                  | Prevents deadlocks if the UI thread or a config update tries to acquire a write lock while the agent is waiting for user input. |
-| **Agent Loop**       | Wrap provider stream in a robust error-handling block that always signals `tx` on failure. | Prevents the TUI from being stuck in "RUNNING" state when the backend stream crashes or errors out.                             |
-| **Bash Tool**        | Use `kill_on_drop(true)` with user-cancellation support.                                   | Allows user to cancel long-running commands; process is killed on cancellation.                                                 |
+| Component            | Decision                                                                                   | Rationale                                                                                           |
+| -------------------- | ------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------- |
+| **Tool Permissions** | Simplified to Read/Write modes. Approval system removed (v2).                              | Sandbox provides security, not prompts. ~60% of users ended up in YOLO mode.                        |
+| **Agent Loop**       | Wrap provider stream in a robust error-handling block that always signals `tx` on failure. | Prevents the TUI from being stuck in "RUNNING" state when the backend stream crashes or errors out. |
+| **Bash Tool**        | Use `kill_on_drop(true)` with user-cancellation support.                                   | Allows user to cancel long-running commands; process is killed on cancellation.                     |
 
 **Rationale**: These are fundamental "correctness" and "safety" fixes that must precede Phase 3 feature completion (RAG/Compaction).
 

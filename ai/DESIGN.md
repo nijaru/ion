@@ -93,7 +93,7 @@ Key pattern: `insert_before` - scroll up to make room, print at ui_start.
 
 - **Built-in**: `read`, `write`, `edit`, `bash`, `glob`, `grep`, `list`
 - **MCP**: Client support for external tool servers
-- **Permission matrix**: Read/Write/AGI modes with interactive prompts
+- **Permission matrix**: Read/Write modes (sandbox-based security)
 
 ## Data Model
 

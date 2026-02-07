@@ -120,7 +120,7 @@ impl Tool for WebFetchTool {
     }
 
     fn danger_level(&self) -> DangerLevel {
-        // Network access has security implications - requires approval
+        // Network access has security implications
         DangerLevel::Restricted
     }
 
