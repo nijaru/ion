@@ -409,9 +409,8 @@ impl Agent {
                 .needs_compaction;
 
         if needs_compaction {
-            let mut messages = (*session.messages).to_vec();
             let result = compact_with_summarization(
-                &mut messages,
+                &mut session.messages,
                 &config,
                 &self.token_counter,
                 self.provider.as_ref(),
@@ -420,7 +419,6 @@ impl Agent {
             .await;
 
             if result.tier_reached != CompactionTier::None {
-                session.messages = messages;
                 let _ = tx
                     .send(AgentEvent::CompactionStatus {
                         before: result.tokens_before,
