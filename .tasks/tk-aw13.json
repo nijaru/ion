@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "aw13",
+  "title": "Streaming text display (incremental render)",
+  "description": "Critical UX gap: agent text is invisible during generation. Every competitor shows tokens live. Design in tui-v2.md Q4. Buffer TextDelta in managed area, differential render, commit to scrollback on Finished. Needs BeginSynchronizedUpdate for flicker prevention. Sprint 15 item 12.",
+  "status": "open",
+  "priority": 2,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-02-07T05:54:25.017Z",
+  "updated_at": "2026-02-07T05:54:25.017Z",
+  "completed_at": null,
+  "external": {}
+}
