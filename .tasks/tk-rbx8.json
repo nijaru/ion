@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "rbx8",
+  "title": "Compaction summarization model selection per provider",
+  "description": "Default to cheap/fast models for summarization by provider:\n- Anthropic: claude-3-haiku (or claude-3.5-haiku when available)\n- OpenAI: gpt-4o-mini\n- Google: gemini-2.0-flash-lite\n- Groq: whatever is cheapest available\n- OpenRouter: use provider-prefixed cheap model (e.g. google/gemini-2.0-flash-lite-001)\n- Local/Kimi/ChatGPT: use user's selected model (can't assume availability)\n- Fallback: if cheap model errors, retry with user's model\n\nImplement as a method on Provider or a helper in compaction config. Update compact_with_summarization to resolve the model before calling. Fix misleading 'small/fast LLM' doc to match reality until this lands.",
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-02-07T20:19:29.561Z",
+  "updated_at": "2026-02-07T20:19:29.561Z",
+  "completed_at": null,
+  "external": {}
+}
