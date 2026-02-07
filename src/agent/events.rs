@@ -18,6 +18,13 @@ pub enum AgentEvent {
     },
     InputTokens(usize),
     OutputTokensDelta(usize),
+    /// Provider-reported token usage (more accurate than local estimates).
+    ProviderUsage {
+        input_tokens: usize,
+        output_tokens: usize,
+        cache_read_tokens: usize,
+        cache_write_tokens: usize,
+    },
     /// Retry in progress: (reason, `delay_seconds`)
     Retry(String, u64),
     Finished(String),
