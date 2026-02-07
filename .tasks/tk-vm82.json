@@ -3,7 +3,7 @@
   "ref": "vm82",
   "title": "Implement permissions v2: remove approval system, simplify to Read/Write modes",
   "description": "Remove entire approval system (ApprovalHandler, ApprovalResponse, NeedsApproval, TUI approval modal, session/permanent allowed sets). Simplify to Read/Write modes (no Agi). Remove CLI flags: -r short, -w, -y, --agi. Keep --read (long only) and --no-sandbox. See ai/design/permissions-v2.md for complete file-by-file migration plan.",
-  "status": "open",
+  "status": "done",
   "priority": 2,
   "labels": [],
   "assignees": [],
@@ -11,9 +11,14 @@
   "blocked_by": [],
   "estimate": null,
   "due_date": null,
-  "logs": [],
+  "logs": [
+    {
+      "ts": "2026-02-07T00:47:51.750Z",
+      "msg": "Implemented: removed ApprovalHandler, ApprovalResponse, NeedsApproval, TuiApprovalHandler, Mode::Approval, ToolMode::Agi. Removed CLI flags -r -w -y --agi. Kept --read (long) and --no-sandbox. 870 lines deleted. Review found --read not wired to CLI run mode — fixed. Removed unimplemented deny_commands config field. Updated stale docs. All 314 tests pass."
+    }
+  ],
   "created_at": "2026-02-07T00:05:22.911Z",
-  "updated_at": "2026-02-07T00:05:22.911Z",
-  "completed_at": null,
+  "updated_at": "2026-02-07T00:47:51.774Z",
+  "completed_at": "2026-02-07T00:47:51.774Z",
   "external": {}
 }
