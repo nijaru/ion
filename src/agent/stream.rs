@@ -153,11 +153,23 @@ async fn stream_with_retry(
                                 arguments: call.arguments,
                             });
                         }
+                        Some(StreamEvent::Usage(usage)) => {
+                            if usage.input_tokens > 0 || usage.output_tokens > 0 {
+                                let _ = tx
+                                    .send(AgentEvent::ProviderUsage {
+                                        input_tokens: usage.input_tokens as usize,
+                                        output_tokens: usage.output_tokens as usize,
+                                        cache_read_tokens: usage.cache_read_tokens as usize,
+                                        cache_write_tokens: usage.cache_write_tokens as usize,
+                                    })
+                                    .await;
+                            }
+                        }
                         Some(StreamEvent::Error(e)) => {
                             stream_error = Some(e);
                             break;
                         }
-                        Some(_) => {}
+                        Some(StreamEvent::Done) => {}
                         None => {
                             if let Ok(Err(e)) = handle.await {
                                 stream_error = Some(e.to_string());

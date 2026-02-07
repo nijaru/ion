@@ -457,7 +457,7 @@ impl MessageList {
                     format!("Error: {formatted}"),
                 ));
             }
-            // ThinkingDelta: tracked in session.rs for progress display, not rendered
+            // ThinkingDelta, ProviderUsage: tracked in update.rs
             // CompactionStatus: handled by TUI main loop for status bar
             // Other events: ignored
             _ => {}

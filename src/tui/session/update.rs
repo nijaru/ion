@@ -97,6 +97,19 @@ impl App {
                 AgentEvent::OutputTokensDelta(count) => {
                     self.task.output_tokens += count;
                 }
+                AgentEvent::ProviderUsage {
+                    input_tokens,
+                    output_tokens,
+                    ..
+                } => {
+                    // Provider-reported counts override local estimates
+                    if *input_tokens > 0 {
+                        self.task.input_tokens = *input_tokens;
+                    }
+                    if *output_tokens > 0 {
+                        self.task.output_tokens = *output_tokens;
+                    }
+                }
                 AgentEvent::ToolCallStart(_, name, _) => {
                     self.task.current_tool = Some(name.clone());
                     // End thinking if in progress
