@@ -470,15 +470,8 @@ impl App {
 
         // Token usage if available
         if let Some((used, max)) = self.token_usage {
-            let format_k = |n: usize| -> String {
-                if n >= 1000 {
-                    format!("{}k", n / 1000)
-                } else {
-                    n.to_string()
-                }
-            };
             execute!(w, SetAttribute(Attribute::Dim))?;
-            write!(w, " · {}/{}", format_k(used), format_k(max))?;
+            write!(w, " · {}/{}", format_tokens(used), format_tokens(max))?;
             if max > 0 {
                 let pct = (used * 100) / max;
                 write!(w, " ({pct}%)")?;

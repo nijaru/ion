@@ -1,11 +1,24 @@
 //! Tier 3: LLM-based summarization for context compaction.
 //!
 //! When mechanical pruning (Tier 1/2) cannot reach the target token count,
-//! this module uses a small/fast LLM to produce a structured summary of
-//! older conversation turns, replacing them with a single system message.
+//! this module uses an LLM to produce a structured summary of older
+//! conversation turns, replacing them with a single system message.
 
 use crate::provider::{ChatRequest, ContentBlock, LlmApi, Message, Role};
 use std::sync::Arc;
+
+/// Truncate a string to at most `max_bytes`, ensuring the cut is on a UTF-8
+/// char boundary. Returns the original string if already short enough.
+fn truncate(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
 
 const SUMMARIZATION_PROMPT: &str = "\
 Summarize the following conversation for seamless continuation.
@@ -144,9 +157,8 @@ fn format_messages_for_summary(messages: &[Message]) -> String {
                     parts.push(format!("[{role_label}]: {text}"));
                 }
                 ContentBlock::Thinking { thinking } => {
-                    // Include abbreviated thinking
                     let abbreviated = if thinking.len() > 500 {
-                        format!("{}... [truncated]", &thinking[..500])
+                        format!("{}... [truncated]", truncate(thinking, 500))
                     } else {
                         thinking.clone()
                     };
@@ -158,7 +170,7 @@ fn format_messages_for_summary(messages: &[Message]) -> String {
                     // Compact tool call representation
                     let args_str = arguments.to_string();
                     let args_display = if args_str.len() > 200 {
-                        format!("{}...", &args_str[..200])
+                        format!("{}...", truncate(&args_str, 200))
                     } else {
                         args_str
                     };
@@ -170,7 +182,7 @@ fn format_messages_for_summary(messages: &[Message]) -> String {
                     let prefix = if *is_error { "Error" } else { "Result" };
                     // Already-pruned outputs are short; include full
                     let display = if content.len() > 500 {
-                        format!("{}... [truncated]", &content[..500])
+                        format!("{}... [truncated]", truncate(content, 500))
                     } else {
                         content.clone()
                     };

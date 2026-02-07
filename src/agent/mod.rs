@@ -154,27 +154,6 @@ impl Agent {
         result.messages_modified
     }
 
-    /// Full compaction pipeline (Tier 1 + 2 + 3) with LLM summarization.
-    ///
-    /// Async -- uses the provider to call a summarization model.
-    pub async fn compact_with_summary(
-        &self,
-        messages: &mut Vec<Message>,
-        model: &str,
-    ) -> crate::compaction::CompactionResult {
-        let mut config = self.compaction_config.clone();
-        config.context_window = self.context_window();
-
-        compact_with_summarization(
-            messages,
-            &config,
-            &self.token_counter,
-            self.provider.as_ref(),
-            model,
-        )
-        .await
-    }
-
     /// Update the context window size (call when model changes).
     pub fn set_context_window(&self, window: usize) {
         self.context_window
@@ -379,9 +358,11 @@ impl Agent {
         }
 
         // Check if any tool call is the compact tool (agent-triggered compaction)
-        let compact_requested = tool_calls
+        let compact_tool_call_id = tool_calls
             .iter()
-            .any(|tc| tc.name == crate::tool::builtin::COMPACT_TOOL_NAME);
+            .find(|tc| tc.name == crate::tool::builtin::COMPACT_TOOL_NAME)
+            .map(|tc| tc.id.clone());
+        let compact_requested = compact_tool_call_id.is_some();
 
         let tool_results = tools::execute_tools_parallel(
             &self.orchestrator,
@@ -419,6 +400,16 @@ impl Agent {
             .await;
 
             if result.tier_reached != CompactionTier::None {
+                // Replace compact tool placeholder with actual result
+                if let Some(ref call_id) = compact_tool_call_id {
+                    let summary = format!(
+                        "Compacted: {}k → {}k tokens ({:?})",
+                        result.tokens_before / 1000,
+                        result.tokens_after / 1000,
+                        result.tier_reached,
+                    );
+                    replace_tool_result(&mut session.messages, call_id, &summary);
+                }
                 let _ = tx
                     .send(AgentEvent::CompactionStatus {
                         before: result.tokens_before,
@@ -429,5 +420,37 @@ impl Agent {
         }
 
         Ok(true)
+    }
+}
+
+/// Replace the content of a specific tool result in the message list.
+fn replace_tool_result(messages: &mut [Message], tool_call_id: &str, new_content: &str) {
+    for msg in messages.iter_mut().rev() {
+        if msg.role != Role::ToolResult {
+            continue;
+        }
+        let blocks: Vec<_> = msg
+            .content
+            .iter()
+            .map(|b| match b {
+                ContentBlock::ToolResult {
+                    tool_call_id: id,
+                    is_error,
+                    ..
+                } if id == tool_call_id => ContentBlock::ToolResult {
+                    tool_call_id: id.clone(),
+                    content: new_content.to_string(),
+                    is_error: *is_error,
+                },
+                other => other.clone(),
+            })
+            .collect();
+        if blocks
+            .iter()
+            .any(|b| matches!(b, ContentBlock::ToolResult { content, .. } if content == new_content))
+        {
+            msg.content = Arc::new(blocks);
+            return;
+        }
     }
 }

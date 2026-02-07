@@ -48,8 +48,8 @@ impl Tool for CompactTool {
         _ctx: &ToolContext,
     ) -> Result<ToolResult, ToolError> {
         // The actual compaction is handled by the agent loop after detecting
-        // this tool was called. This response is a placeholder that gets
-        // replaced with the real compaction result.
+        // this tool was called. This placeholder is replaced with the real
+        // compaction result (e.g. "Compacted: 147k → 110k tokens").
         Ok(ToolResult {
             content: "Compaction will be performed after this tool call completes.".to_string(),
             is_error: false,
