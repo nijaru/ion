@@ -13,10 +13,6 @@ pub enum HookPoint {
     PreToolUse,
     /// After a tool completes. Can inspect or modify the result.
     PostToolUse,
-    /// When an error occurs. Can handle, transform, or suppress errors.
-    OnError,
-    /// After receiving a response from the model.
-    OnResponse,
 }
 
 /// Context passed to hooks during execution.
@@ -30,10 +26,6 @@ pub struct HookContext {
     pub tool_input: Option<serde_json::Value>,
     /// Tool output (for `PostToolUse`).
     pub tool_output: Option<String>,
-    /// Error message (for `OnError`).
-    pub error: Option<String>,
-    /// Model response text (for `OnResponse`).
-    pub response: Option<String>,
 }
 
 impl HookContext {
@@ -45,8 +37,6 @@ impl HookContext {
             tool_name: None,
             tool_input: None,
             tool_output: None,
-            error: None,
-            response: None,
         }
     }
 
@@ -71,19 +61,6 @@ impl HookContext {
         self
     }
 
-    /// Set the error message.
-    #[must_use]
-    pub fn with_error(mut self, error: impl Into<String>) -> Self {
-        self.error = Some(error.into());
-        self
-    }
-
-    /// Set the response text.
-    #[must_use]
-    pub fn with_response(mut self, response: impl Into<String>) -> Self {
-        self.response = Some(response.into());
-        self
-    }
 }
 
 /// Result of a hook execution.

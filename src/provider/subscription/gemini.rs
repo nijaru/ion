@@ -43,17 +43,19 @@ impl GeminiOAuthClient {
     }
 
     /// Build headers for Code Assist API requests (matching Gemini CLI).
-    fn build_headers(&self) -> reqwest::header::HeaderMap {
+    fn build_headers(&self) -> Result<reqwest::header::HeaderMap, Error> {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(
             reqwest::header::AUTHORIZATION,
-            format!("Bearer {}", self.access_token).parse().unwrap(),
+            format!("Bearer {}", self.access_token)
+                .parse()
+                .map_err(|_| Error::Api("Invalid access token for header".into()))?,
         );
         headers.insert(
             reqwest::header::CONTENT_TYPE,
-            "application/json".parse().unwrap(),
+            "application/json".parse().expect("static header value"),
         );
-        headers
+        Ok(headers)
     }
 
     /// Make a chat completion request.
@@ -67,7 +69,7 @@ impl GeminiOAuthClient {
         let response = self
             .client
             .post(&url)
-            .headers(self.build_headers())
+            .headers(self.build_headers()?)
             .json(&gemini_request)
             .send()
             .await
@@ -113,7 +115,7 @@ impl GeminiOAuthClient {
         let response = self
             .client
             .post(&url)
-            .headers(self.build_headers())
+            .headers(self.build_headers()?)
             .json(&gemini_request)
             .send()
             .await

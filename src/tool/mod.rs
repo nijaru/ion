@@ -3,7 +3,7 @@ pub mod permissions;
 pub mod types;
 
 pub use permissions::{PermissionMatrix, PermissionStatus};
-pub use types::*;
+pub use types::{DangerLevel, DiscoveryCallback, Tool, ToolContext, ToolError, ToolMode, ToolResult};
 
 use crate::hook::{HookContext, HookPoint, HookRegistry, HookResult};
 use std::collections::HashMap;

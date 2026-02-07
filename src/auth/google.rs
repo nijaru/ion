@@ -258,7 +258,7 @@ impl GoogleAuth {
             let response = self
                 .client
                 .post(&url)
-                .headers(self.build_load_headers(access_token))
+                .headers(self.build_load_headers(access_token)?)
                 .json(&metadata)
                 .timeout(std::time::Duration::from_secs(10))
                 .send()
@@ -300,26 +300,31 @@ impl GoogleAuth {
         Ok(DEFAULT_PROJECT_ID.to_string())
     }
 
-    fn build_load_headers(&self, access_token: &str) -> reqwest::header::HeaderMap {
+    fn build_load_headers(&self, access_token: &str) -> Result<reqwest::header::HeaderMap> {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(
             reqwest::header::AUTHORIZATION,
-            format!("Bearer {access_token}").parse().unwrap(),
+            format!("Bearer {access_token}")
+                .parse()
+                .map_err(|_| anyhow::anyhow!("Invalid access token for header"))?,
         );
         headers.insert(
             reqwest::header::CONTENT_TYPE,
-            "application/json".parse().unwrap(),
+            "application/json".parse().expect("static header value"),
         );
-        headers.insert(reqwest::header::USER_AGENT, GEMINI_CLI_USER_AGENT.parse().unwrap());
+        headers.insert(
+            reqwest::header::USER_AGENT,
+            GEMINI_CLI_USER_AGENT.parse().expect("static header value"),
+        );
         headers.insert(
             reqwest::header::HeaderName::from_static("x-goog-api-client"),
-            GEMINI_CLI_API_CLIENT.parse().unwrap(),
+            GEMINI_CLI_API_CLIENT.parse().expect("static header value"),
         );
         headers.insert(
             reqwest::header::HeaderName::from_static("client-metadata"),
-            CLIENT_METADATA.parse().unwrap(),
+            CLIENT_METADATA.parse().expect("static header value"),
         );
-        headers
+        Ok(headers)
     }
 }
 

@@ -1,7 +1,6 @@
 pub mod context;
 pub mod designer;
 mod events;
-pub mod explorer;
 pub mod instructions;
 mod retry;
 mod stream;
