@@ -43,7 +43,7 @@ pub(crate) use util::sanitize_for_display;
 use crate::agent::Agent;
 use crate::cli::PermissionSettings;
 use crate::config::Config;
-use crate::provider::{ModelRegistry, Provider};
+use crate::provider::{ModelPricing, ModelRegistry, Provider};
 use crate::session::{Session, SessionStore};
 use crate::tool::{ToolMode, ToolOrchestrator};
 use crate::tui::app_state::{InteractionState, TaskState};
@@ -131,6 +131,10 @@ pub struct App {
     pub history_search: HistorySearchState,
     /// Pending provider change (deferred until model selection)
     pub pending_provider: Option<Provider>,
+    /// Pricing for the current model (per million tokens).
+    pub model_pricing: ModelPricing,
+    /// Accumulated cost for the current session (USD).
+    pub session_cost: f64,
 }
 
 impl App {

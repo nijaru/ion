@@ -71,6 +71,17 @@ pub(super) fn format_relative_time(timestamp: i64) -> String {
     }
 }
 
+/// Format a dollar cost as human-readable (e.g., "$0.0042", "$1.23").
+pub(super) fn format_cost(cost: f64) -> String {
+    if cost < 0.0001 {
+        "$0.00".to_string()
+    } else if cost < 0.01 {
+        format!("${cost:.4}")
+    } else {
+        format!("${cost:.2}")
+    }
+}
+
 /// Normalize errors for status line display.
 pub(super) fn format_status_error(msg: &str) -> String {
     // First extract message from JSON if present
@@ -196,6 +207,15 @@ mod tests {
             sanitize_for_display("line1\r\n\tindented\nline3"),
             "line1\n    indented\nline3"
         );
+    }
+
+    #[test]
+    fn test_format_cost() {
+        assert_eq!(format_cost(0.0), "$0.00");
+        assert_eq!(format_cost(0.00001), "$0.00");
+        assert_eq!(format_cost(0.0042), "$0.0042");
+        assert_eq!(format_cost(0.0100), "$0.01");
+        assert_eq!(format_cost(1.234), "$1.23");
     }
 
     #[test]

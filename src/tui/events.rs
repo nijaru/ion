@@ -9,7 +9,7 @@ use crate::tui::fuzzy;
 use crate::tui::message_list::{MessageEntry, Sender};
 use crate::tui::model_picker::PickerStage;
 use crate::tui::types::{CANCEL_WINDOW, Mode, SelectorPage};
-use crate::tui::util::handle_filter_input_event;
+use crate::tui::util::{format_cost, handle_filter_input_event};
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use std::time::Instant;
 
@@ -414,8 +414,8 @@ impl App {
 
     /// Dispatch a slash command (e.g., /compact, /model, /clear).
     fn dispatch_slash_command(&mut self, input: &str) {
-        const COMMANDS: [&str; 7] =
-            ["/compact", "/model", "/provider", "/clear", "/quit", "/help", "/resume"];
+        const COMMANDS: [&str; 8] =
+            ["/compact", "/cost", "/model", "/provider", "/clear", "/quit", "/help", "/resume"];
 
         let cmd_line = input.trim().to_lowercase();
         let cmd_name = cmd_line.split_whitespace().next().unwrap_or("");
@@ -440,6 +440,24 @@ impl App {
                     ));
                 }
             }
+            "/cost" => {
+                let msg = if self.session_cost > 0.0 {
+                    let p = &self.model_pricing;
+                    let mut parts = vec![format!("Session cost: {}", format_cost(self.session_cost))];
+                    if p.input > 0.0 || p.output > 0.0 {
+                        parts.push(format!(
+                            "Pricing: {}/M input, {}/M output",
+                            format_cost(p.input),
+                            format_cost(p.output),
+                        ));
+                    }
+                    parts.join(" · ")
+                } else {
+                    "No cost data yet (pricing available after model list loads)".to_string()
+                };
+                self.message_list
+                    .push_entry(MessageEntry::new(Sender::System, msg));
+            }
             "/model" | "/models" => self.open_model_selector(),
             "/provider" | "/providers" => self.open_provider_selector(),
             "/resume" | "/sessions" => self.open_session_selector(),
@@ -453,6 +471,7 @@ impl App {
                 let no_sandbox = self.session.no_sandbox;
                 self.session = Session::new(working_dir, model);
                 self.session.no_sandbox = no_sandbox;
+                self.session_cost = 0.0;
 
                 self.message_list.clear();
                 self.render_state.reset_for_new_conversation();
@@ -545,9 +564,9 @@ impl App {
                     PickerStage::Model => {
                         // Clone model data to avoid borrow conflict with set_provider
                         let model_data = self.model_picker.selected_model().map(|m| {
-                            (m.id.clone(), m.context_window)
+                            (m.id.clone(), m.context_window, m.pricing.clone())
                         });
-                        if let Some((model_id, context_window)) = model_data {
+                        if let Some((model_id, context_window, pricing)) = model_data {
                             // Commit pending provider change now that model is selected
                             if let Some(provider) = self.pending_provider.take()
                                 && let Err(err) = self.set_provider(provider)
@@ -558,6 +577,7 @@ impl App {
                             }
 
                             self.session.model = model_id.clone();
+                            self.model_pricing = pricing;
                             if context_window > 0 {
                                 let ctx_window = context_window as usize;
                                 self.model_context_window = Some(ctx_window);

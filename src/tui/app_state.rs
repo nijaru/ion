@@ -13,6 +13,8 @@ pub struct TaskState {
     pub input_tokens: usize,
     /// Output tokens received from model (current task).
     pub output_tokens: usize,
+    /// Accumulated cost for current task (USD).
+    pub cost: f64,
     /// Currently executing tool name (for interrupt handling).
     pub current_tool: Option<String>,
     /// Retry status (reason, `delay_seconds`, started_at) - shown in progress line.
@@ -29,6 +31,7 @@ impl TaskState {
         self.start_time = Some(Instant::now());
         self.input_tokens = 0;
         self.output_tokens = 0;
+        self.cost = 0.0;
         self.current_tool = None;
         self.retry_status = None;
         self.thinking_start = None;

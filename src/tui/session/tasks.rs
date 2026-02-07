@@ -11,10 +11,12 @@ impl App {
     /// Save task summary before clearing task state.
     pub(in crate::tui) fn save_task_summary(&mut self, was_cancelled: bool) {
         if let Some(start) = self.task.start_time {
+            self.session_cost += self.task.cost;
             self.last_task_summary = Some(TaskSummary {
                 elapsed: start.elapsed(),
                 input_tokens: self.task.input_tokens,
                 output_tokens: self.task.output_tokens,
+                cost: self.task.cost,
                 was_cancelled,
             });
         }

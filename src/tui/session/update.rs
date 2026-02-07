@@ -70,13 +70,14 @@ impl App {
                 AgentEvent::ModelsFetched(models) => {
                     debug!("Received ModelsFetched event with {} models", models.len());
                     self.model_picker.set_models(models.clone());
-                    if let Some(model) = models.iter().find(|m| m.id == self.session.model)
-                        && model.context_window > 0
-                    {
-                        let ctx_window = model.context_window as usize;
-                        self.model_context_window = Some(ctx_window);
-                        // Update agent's compaction config
-                        self.agent.set_context_window(ctx_window);
+                    if let Some(model) = models.iter().find(|m| m.id == self.session.model) {
+                        if model.context_window > 0 {
+                            let ctx_window = model.context_window as usize;
+                            self.model_context_window = Some(ctx_window);
+                            // Update agent's compaction config
+                            self.agent.set_context_window(ctx_window);
+                        }
+                        self.model_pricing = model.pricing.clone();
                     }
                     self.last_error = None; // Clear error on success
                     // Show all models directly (user can type to filter/search)
@@ -100,7 +101,8 @@ impl App {
                 AgentEvent::ProviderUsage {
                     input_tokens,
                     output_tokens,
-                    ..
+                    cache_read_tokens,
+                    cache_write_tokens,
                 } => {
                     // Provider-reported counts override local estimates
                     if *input_tokens > 0 {
@@ -109,6 +111,14 @@ impl App {
                     if *output_tokens > 0 {
                         self.task.output_tokens = *output_tokens;
                     }
+                    // Accumulate cost for this API call
+                    let p = &self.model_pricing;
+                    let cost = (*input_tokens as f64 * p.input
+                        + *output_tokens as f64 * p.output
+                        + *cache_read_tokens as f64 * p.cache_read.unwrap_or(0.0)
+                        + *cache_write_tokens as f64 * p.cache_write.unwrap_or(0.0))
+                        / 1_000_000.0;
+                    self.task.cost += cost;
                 }
                 AgentEvent::ToolCallStart(_, name, _) => {
                     self.task.current_tool = Some(name.clone());
