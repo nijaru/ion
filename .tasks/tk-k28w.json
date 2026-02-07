@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "k28w",
+  "title": "LLM-based compaction (Tier 3)",
+  "description": "P0 from architecture review. When mechanical pruning insufficient, send conversation to LLM for summarization. Preserve: failed approaches, errors, file paths, decisions. Output structured summary replacing conversation prefix. Prerequisite for memory system. See ai/review/architecture-review-2026-02-06.md.",
+  "status": "open",
+  "priority": 2,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-02-07T05:54:25.528Z",
+  "updated_at": "2026-02-07T05:54:25.528Z",
+  "completed_at": null,
+  "external": {}
+}
