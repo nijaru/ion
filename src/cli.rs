@@ -238,7 +238,7 @@ struct CliAgentSetup {
 }
 
 /// Setup CLI agent: config, provider, client, orchestrator, agent, session.
-fn setup_cli_agent(args: &RunArgs, mode: ToolMode) -> Result<CliAgentSetup> {
+fn setup_cli_agent(args: &RunArgs, permissions: &PermissionSettings) -> Result<CliAgentSetup> {
     // Load config
     let config = Config::load()?;
 
@@ -307,7 +307,7 @@ fn setup_cli_agent(args: &RunArgs, mode: ToolMode) -> Result<CliAgentSetup> {
     let orchestrator = if args.no_tools {
         Arc::new(ToolOrchestrator::new(ToolMode::Read))
     } else {
-        Arc::new(ToolOrchestrator::with_builtins(mode))
+        Arc::new(ToolOrchestrator::with_builtins(permissions.mode))
     };
 
     // Create agent
@@ -317,7 +317,8 @@ fn setup_cli_agent(args: &RunArgs, mode: ToolMode) -> Result<CliAgentSetup> {
     }
 
     // Create session
-    let session = Session::new(working_dir, model);
+    let mut session = Session::new(working_dir, model);
+    session.no_sandbox = permissions.no_sandbox;
 
     Ok(CliAgentSetup {
         agent: Arc::new(agent),
@@ -375,8 +376,8 @@ fn output_result(
 }
 
 /// Run the CLI one-shot mode
-pub async fn run(args: RunArgs, read_mode: bool) -> ExitCode {
-    match run_inner(args, read_mode).await {
+pub async fn run(args: RunArgs, permissions: PermissionSettings) -> ExitCode {
+    match run_inner(args, permissions).await {
         Ok(code) => code,
         Err(e) => {
             eprintln!("Error: {e}");
@@ -386,7 +387,7 @@ pub async fn run(args: RunArgs, read_mode: bool) -> ExitCode {
 }
 
 #[allow(clippy::match_wildcard_for_single_variants, clippy::too_many_lines)]
-async fn run_inner(args: RunArgs, read_mode: bool) -> Result<ExitCode> {
+async fn run_inner(args: RunArgs, permissions: PermissionSettings) -> Result<ExitCode> {
     // Initialize tracing for CLI mode
     if args.verbose || std::env::var("ION_LOG").is_ok() {
         let _ = tracing_subscriber::fmt()
@@ -395,12 +396,11 @@ async fn run_inner(args: RunArgs, read_mode: bool) -> Result<ExitCode> {
             .try_init();
     }
 
-    let mode = if read_mode { ToolMode::Read } else { ToolMode::Write };
     let CliAgentSetup {
         agent,
         session,
         prompt,
-    } = setup_cli_agent(&args, mode)?;
+    } = setup_cli_agent(&args, &permissions)?;
     let abort_token = session.abort_token.clone();
 
     // Create event channel

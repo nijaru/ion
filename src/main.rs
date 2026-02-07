@@ -8,10 +8,14 @@ use std::process::ExitCode;
 async fn main() -> ExitCode {
     let cli = Cli::parse();
 
+    // Load config and resolve permissions upfront (used by both TUI and CLI run paths)
+    let config = Config::load().unwrap_or_default();
+    let permissions = cli.resolve_permissions(&config);
+
     match cli.command {
         Some(Commands::Run(args)) => {
             // One-shot CLI mode
-            ion::cli::run(args, cli.read_mode).await
+            ion::cli::run(args, permissions).await
         }
         Some(Commands::Login(args)) => {
             // OAuth login
@@ -26,18 +30,6 @@ async fn main() -> ExitCode {
             ion::cli::config(args)
         }
         None => {
-            // Load config for permission defaults
-            let config = match Config::load() {
-                Ok(c) => c,
-                Err(e) => {
-                    eprintln!("Error loading config: {e}");
-                    return ExitCode::FAILURE;
-                }
-            };
-
-            // Resolve permission settings from CLI flags and config
-            let permissions = cli.resolve_permissions(&config);
-
             // Determine resume option from CLI flags
             let resume_option = if cli.continue_session {
                 ResumeOption::Latest
