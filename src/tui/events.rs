@@ -558,12 +558,12 @@ impl App {
                         });
                         if let Some((model_id, context_window)) = model_data {
                             // Commit pending provider change now that model is selected
-                            if let Some(provider) = self.pending_provider.take() {
-                                if let Err(err) = self.set_provider(provider) {
-                                    self.last_error = Some(err.to_string());
-                                    self.exit_selector_mode();
-                                    return;
-                                }
+                            if let Some(provider) = self.pending_provider.take()
+                                && let Err(err) = self.set_provider(provider)
+                            {
+                                self.last_error = Some(err.to_string());
+                                self.exit_selector_mode();
+                                return;
                             }
 
                             self.session.model = model_id.clone();
@@ -705,10 +705,10 @@ impl App {
 
             // Enter: Select current match and insert into input
             KeyCode::Enter => {
-                if let Some(idx) = self.history_search.selected_entry() {
-                    if let Some(entry) = self.input_history.get(idx).cloned() {
-                        self.set_input_text(&entry);
-                    }
+                if let Some(idx) = self.history_search.selected_entry()
+                    && let Some(entry) = self.input_history.get(idx).cloned()
+                {
+                    self.set_input_text(&entry);
                 }
                 self.history_search.clear();
                 self.mode = Mode::Input;

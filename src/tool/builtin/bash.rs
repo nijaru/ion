@@ -80,23 +80,23 @@ impl Tool for BashTool {
             .map_err(ToolError::PermissionDenied)?;
 
         // Check for destructive command patterns
-        if let Some(risk) = self.check_danger(command_str) {
-            if let Some(reason) = risk.reason() {
-                return Ok(ToolResult {
-                    content: format!(
-                        "⚠️ BLOCKED: Destructive command detected.\n\n\
-                        Reason: {reason}\n\n\
-                        If you need to run this command, explain why it's safe \
-                        and ask the user to run it manually."
-                    ),
-                    is_error: true,
-                    metadata: Some(json!({
-                        "blocked": true,
-                        "reason": reason,
-                        "command": command_str,
-                    })),
-                });
-            }
+        if let Some(risk) = self.check_danger(command_str)
+            && let Some(reason) = risk.reason()
+        {
+            return Ok(ToolResult {
+                content: format!(
+                    "⚠️ BLOCKED: Destructive command detected.\n\n\
+                    Reason: {reason}\n\n\
+                    If you need to run this command, explain why it's safe \
+                    and ask the user to run it manually."
+                ),
+                is_error: true,
+                metadata: Some(json!({
+                    "blocked": true,
+                    "reason": reason,
+                    "command": command_str,
+                })),
+            });
         }
 
         // Spawn child process with kill_on_drop for cancellation safety

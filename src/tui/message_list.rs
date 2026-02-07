@@ -70,10 +70,11 @@ pub(crate) fn extract_key_arg(tool_name: &str, args: &serde_json::Value) -> Stri
                 .unwrap_or_default();
 
             // Show path if not cwd
-            if let Some(path) = obj.get("path").and_then(|v| v.as_str()) {
-                if path != "." && !path.is_empty() {
-                    return format!("{pattern} in {}", truncate_for_display(path, 30));
-                }
+            if let Some(path) = obj.get("path").and_then(|v| v.as_str())
+                && path != "."
+                && !path.is_empty()
+            {
+                return format!("{pattern} in {}", truncate_for_display(path, 30));
             }
             pattern
         }

@@ -132,7 +132,7 @@ tk done <id>             # Complete task
 
 - `ai/design/tui.md` - TUI interface spec
 - `ai/design/config-system.md` - Config hierarchy
-- `ai/design/permission-system.md` - CLI flags, modes, sandbox
+- `ai/design/permissions-v2.md` - Read/Write modes, sandbox
 
 **Key research:**
 

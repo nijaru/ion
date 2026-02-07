@@ -509,14 +509,14 @@ impl App {
         )?;
 
         // Show selected entry preview
-        if let Some(&idx) = matches.get(selected) {
-            if let Some(entry) = self.input_history.get(idx) {
-                let preview: String = entry
-                    .chars()
-                    .take((width as usize).saturating_sub(25))
-                    .collect();
-                execute!(w, Print(&preview))?;
-            }
+        if let Some(&idx) = matches.get(selected)
+            && let Some(entry) = self.input_history.get(idx)
+        {
+            let preview: String = entry
+                .chars()
+                .take((width as usize).saturating_sub(25))
+                .collect();
+            execute!(w, Print(&preview))?;
         }
 
         // Render matches above the prompt

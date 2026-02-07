@@ -373,9 +373,8 @@ Manifest bundling skills + MCP config + hooks. Install via `ion plugin add <git-
 
 - Research: `ai/research/permission-systems-2026.md`
 - Research: `ai/research/extensibility-systems-2026.md`
-- Current design: `ai/design/permission-system.md` (v1, superseded)
 
 ## Status
 
-**Phase**: Design complete, ready to implement
+**Phase**: Implemented
 **Updated**: 2026-02-06
