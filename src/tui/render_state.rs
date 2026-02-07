@@ -81,6 +81,10 @@ pub struct RenderState {
     pub needs_reflow: bool,
     /// Flag to clear selector area without full screen repaint.
     pub needs_selector_clear: bool,
+
+    /// Lines from the streaming agent entry already committed to scrollback.
+    /// Reset when the entry finishes, a tool call interrupts, or reflow occurs.
+    pub streaming_lines_rendered: usize,
 }
 
 impl RenderState {
@@ -96,6 +100,7 @@ impl RenderState {
             needs_screen_clear: false,
             needs_reflow: false,
             needs_selector_clear: false,
+            streaming_lines_rendered: 0,
         }
     }
 
@@ -109,6 +114,7 @@ impl RenderState {
         self.header_inserted = false;
         self.chat_row = None;
         self.last_ui_start = None;
+        self.streaming_lines_rendered = 0;
     }
 
     /// Reset for loading existing session (resume/load).
@@ -120,6 +126,7 @@ impl RenderState {
         self.startup_ui_anchor = None;
         self.chat_row = None;
         self.last_ui_start = None;
+        self.streaming_lines_rendered = 0;
     }
 
     /// Mark reflow as complete after `reprint_chat_scrollback`.
@@ -129,6 +136,7 @@ impl RenderState {
         self.rendered_entries = entries;
         self.header_inserted = true;
         self.buffered_chat_lines.clear();
+        self.streaming_lines_rendered = 0;
     }
 }
 
