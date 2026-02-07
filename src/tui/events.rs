@@ -153,6 +153,8 @@ impl App {
                     if let Some(path) = self.file_completer.selected_path() {
                         let at_pos = self.file_completer.at_position();
                         let path_str = path.to_string_lossy().to_string();
+                        let is_dir = path.is_dir();
+                        let has_spaces = path_str.contains(' ');
 
                         // Replace @query with the selected path
                         let cursor = self.input_state.cursor_char_idx();
@@ -166,7 +168,15 @@ impl App {
                         }
 
                         // Insert selected path with @
-                        let full_path = format!("@{path_str} ");
+                        // - Directory: trailing slash
+                        // - Spaces: auto-quote
+                        let full_path = if has_spaces {
+                            format!("@\"{path_str}\" ")
+                        } else if is_dir {
+                            format!("@{path_str}/ ")
+                        } else {
+                            format!("@{path_str} ")
+                        };
                         self.input_state
                             .insert_str(&mut self.input_buffer, &full_path);
                     }

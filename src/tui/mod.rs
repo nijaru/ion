@@ -10,7 +10,7 @@ mod file_completer;
 mod filter_input;
 mod fuzzy;
 mod highlight;
-mod image_attachment;
+mod attachment;
 mod input;
 pub mod message_list;
 pub mod model_picker;
