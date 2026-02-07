@@ -1,9 +1,6 @@
 //! TUI type definitions: enums, structs, and constants.
 
-use crate::tool::ApprovalResponse;
-use async_trait::async_trait;
 use std::time::Duration;
-use tokio::sync::{mpsc, oneshot};
 
 /// Window duration for double-tap cancel/quit detection.
 pub(super) const CANCEL_WINDOW: Duration = Duration::from_millis(1500);
@@ -61,8 +58,6 @@ pub enum Mode {
     /// Standard input mode (always active unless a modal is open)
     #[default]
     Input,
-    /// Tool approval prompt
-    Approval,
     /// Bottom-anchored selector shell (provider/model)
     Selector,
     /// Keybinding help overlay (Ctrl+H)
@@ -163,13 +158,6 @@ impl SelectionState {
     }
 }
 
-/// Request for tool approval sent from agent to TUI.
-pub struct ApprovalRequest {
-    pub tool_name: String,
-    pub args: serde_json::Value,
-    pub response_tx: oneshot::Sender<ApprovalResponse>,
-}
-
 /// Summary of a completed task for post-completion display.
 #[derive(Clone)]
 pub struct TaskSummary {
@@ -177,27 +165,4 @@ pub struct TaskSummary {
     pub input_tokens: usize,
     pub output_tokens: usize,
     pub was_cancelled: bool,
-}
-
-/// Approval handler that sends requests to the TUI for user confirmation.
-pub(super) struct TuiApprovalHandler {
-    pub request_tx: mpsc::Sender<ApprovalRequest>,
-}
-
-#[async_trait]
-impl crate::tool::ApprovalHandler for TuiApprovalHandler {
-    async fn ask_approval(&self, tool_name: &str, args: &serde_json::Value) -> ApprovalResponse {
-        let (tx, rx) = oneshot::channel();
-        let request = ApprovalRequest {
-            tool_name: tool_name.to_string(),
-            args: args.clone(),
-            response_tx: tx,
-        };
-
-        if self.request_tx.send(request).await.is_err() {
-            return ApprovalResponse::No;
-        }
-
-        rx.await.unwrap_or(ApprovalResponse::No)
-    }
 }

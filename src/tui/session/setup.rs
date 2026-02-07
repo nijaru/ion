@@ -18,7 +18,7 @@ use crate::tui::model_picker::ModelPicker;
 use crate::tui::provider_picker::ProviderPicker;
 use crate::tui::render_state::RenderState;
 use crate::tui::session_picker::SessionPicker;
-use crate::tui::types::{HistorySearchState, Mode, SelectorPage, ThinkingLevel, TuiApprovalHandler};
+use crate::tui::types::{HistorySearchState, Mode, SelectorPage, ThinkingLevel};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -82,15 +82,7 @@ impl App {
             (Arc::new(client), api_key)
         };
 
-        let (approval_tx, approval_rx) = mpsc::channel(100);
         let mut orchestrator = ToolOrchestrator::with_builtins(permissions.mode);
-
-        // Only set approval handler if not auto-approving
-        if !permissions.auto_approve {
-            orchestrator.set_approval_handler(Arc::new(TuiApprovalHandler {
-                request_tx: approval_tx,
-            }));
-        }
 
         // Initialize MCP servers
         let mut mcp_manager = crate::mcp::McpManager::new();
@@ -200,10 +192,8 @@ impl App {
             orchestrator,
             agent_tx,
             agent_rx,
-            approval_rx,
             session_rx,
             session_tx,
-            pending_approval: None,
             is_running: false,
             store,
             model_picker: ModelPicker::new(config.provider_prefs.clone()),

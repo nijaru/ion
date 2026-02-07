@@ -14,7 +14,6 @@ use tokio::sync::RwLock;
 pub struct ToolOrchestrator {
     tools: HashMap<String, Box<dyn Tool>>,
     permissions: RwLock<PermissionMatrix>,
-    approval_handler: Option<Arc<dyn ApprovalHandler>>,
     hooks: RwLock<HookRegistry>,
 }
 
@@ -24,13 +23,8 @@ impl ToolOrchestrator {
         Self {
             tools: HashMap::new(),
             permissions: RwLock::new(PermissionMatrix::new(mode)),
-            approval_handler: None,
             hooks: RwLock::new(HookRegistry::new()),
         }
-    }
-
-    pub fn set_approval_handler(&mut self, handler: Arc<dyn ApprovalHandler>) {
-        self.approval_handler = Some(handler);
     }
 
     pub fn register_tool(&mut self, tool: Box<dyn Tool>) {
@@ -82,60 +76,15 @@ impl ToolOrchestrator {
         };
 
         // For bash, use per-command permission checking
-        let (status, bash_command) = if name == "bash" {
+        let status = if name == "bash" {
             let command = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
-            let perms = self.permissions.read().await;
-            (
-                perms.check_command_permission(command),
-                Some(command.to_string()),
-            )
+            self.permissions.read().await.check_command_permission(command)
         } else {
-            let perms = self.permissions.read().await;
-            (perms.check_permission(tool.as_ref()), None)
+            self.permissions.read().await.check_permission(tool.as_ref())
         };
 
         let result = match status {
             PermissionStatus::Allowed => tool.execute(args, ctx).await,
-            PermissionStatus::NeedsApproval => {
-                if let Some(handler) = &self.approval_handler {
-                    let response = handler.ask_approval(name, &args).await;
-                    match response {
-                        ApprovalResponse::Yes => tool.execute(args, ctx).await,
-                        ApprovalResponse::No => Err(ToolError::PermissionDenied(
-                            "User rejected tool execution".to_string(),
-                        )),
-                        ApprovalResponse::AlwaysSession => {
-                            {
-                                let mut perms = self.permissions.write().await;
-                                if let Some(ref cmd) = bash_command {
-                                    // For bash, allow the specific command
-                                    perms.allow_command_session(cmd);
-                                } else {
-                                    perms.allow_session(name);
-                                }
-                            }
-                            tool.execute(args, ctx).await
-                        }
-                        ApprovalResponse::AlwaysPermanent => {
-                            {
-                                let mut perms = self.permissions.write().await;
-                                if let Some(ref cmd) = bash_command {
-                                    // For bash, allow the specific command
-                                    perms.allow_command_permanently(cmd);
-                                } else {
-                                    perms.allow_permanently(name);
-                                }
-                            }
-                            // TODO: Persist to config
-                            tool.execute(args, ctx).await
-                        }
-                    }
-                } else {
-                    Err(ToolError::PermissionDenied(
-                        "Approval required but no handler registered".to_string(),
-                    ))
-                }
-            }
             PermissionStatus::Denied(reason) => Err(ToolError::PermissionDenied(reason)),
         }?;
 
@@ -239,16 +188,6 @@ mod tests {
     }
 
     #[test]
-    fn test_permission_matrix_agi() {
-        let matrix = PermissionMatrix::new(ToolMode::Agi);
-        let tool = MockTool {
-            name: "test".into(),
-            danger: DangerLevel::Restricted,
-        };
-        assert_eq!(matrix.check_permission(&tool), PermissionStatus::Allowed);
-    }
-
-    #[test]
     fn test_permission_matrix_read_safe() {
         let matrix = PermissionMatrix::new(ToolMode::Read);
         let tool = MockTool {
@@ -282,42 +221,8 @@ mod tests {
     }
 
     #[test]
-    fn test_permission_matrix_write_write_tool_allowed() {
+    fn test_permission_matrix_write_all_allowed() {
         let matrix = PermissionMatrix::new(ToolMode::Write);
-        let tool = MockTool {
-            name: "write".into(),
-            danger: DangerLevel::Restricted,
-        };
-        assert_eq!(matrix.check_permission(&tool), PermissionStatus::Allowed);
-    }
-
-    #[test]
-    fn test_permission_matrix_write_edit_tool_allowed() {
-        let matrix = PermissionMatrix::new(ToolMode::Write);
-        let tool = MockTool {
-            name: "edit".into(),
-            danger: DangerLevel::Restricted,
-        };
-        assert_eq!(matrix.check_permission(&tool), PermissionStatus::Allowed);
-    }
-
-    #[test]
-    fn test_permission_matrix_write_restricted_needs_approval() {
-        let matrix = PermissionMatrix::new(ToolMode::Write);
-        let tool = MockTool {
-            name: "test".into(),
-            danger: DangerLevel::Restricted,
-        };
-        assert_eq!(
-            matrix.check_permission(&tool),
-            PermissionStatus::NeedsApproval
-        );
-    }
-
-    #[test]
-    fn test_permission_matrix_write_restricted_allowed_session() {
-        let mut matrix = PermissionMatrix::new(ToolMode::Write);
-        matrix.allow_session("test");
         let tool = MockTool {
             name: "test".into(),
             danger: DangerLevel::Restricted,

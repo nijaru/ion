@@ -157,13 +157,5 @@ impl App {
         {
             self.interaction.cancel_pending = None;
         }
-
-        // Poll approval requests
-        if self.pending_approval.is_none()
-            && let Ok(request) = self.approval_rx.try_recv()
-        {
-            self.pending_approval = Some(request);
-            self.mode = Mode::Approval;
-        }
     }
 }

@@ -152,31 +152,14 @@ pub enum ToolError {
     Cancelled,
 }
 
-/// User's response to an approval request.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ApprovalResponse {
-    Yes,
-    No,
-    AlwaysSession,
-    AlwaysPermanent,
-}
-
-/// Interface for handling tool approvals. Usually implemented by the TUI.
-#[async_trait]
-pub trait ApprovalHandler: Send + Sync {
-    async fn ask_approval(&self, tool_name: &str, args: &serde_json::Value) -> ApprovalResponse;
-}
-
 /// The active execution mode of the agent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ToolMode {
     /// Only safe tools (read-only) are allowed.
     Read,
-    /// Standard interactive mode with prompts for restricted tools.
+    /// Full access, all tools allowed.
     #[default]
     Write,
-    /// Full autonomy, no prompts (Bypass mode).
-    Agi,
 }
 
 /// Source of a tool (where it came from).

@@ -4,9 +4,8 @@ use crate::agent::{Agent, AgentEvent};
 use crate::config::Config;
 use crate::provider::{Client, LlmApi, Provider};
 use crate::session::Session;
-use crate::tool::{ApprovalHandler, ApprovalResponse, ToolMode, ToolOrchestrator};
+use crate::tool::{ToolMode, ToolOrchestrator};
 use anyhow::Result;
-use async_trait::async_trait;
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 use std::io::{self, Read, Write};
@@ -21,23 +20,17 @@ use crate::tui::message_list::extract_key_arg;
 /// Permission settings resolved from CLI flags and config.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionSettings {
-    /// The effective tool mode (Read, Write, AGI)
+    /// The effective tool mode (Read or Write)
     pub mode: ToolMode,
-    /// Auto-approve all tool calls without prompting
-    pub auto_approve: bool,
     /// Allow operations outside CWD (sandbox disabled)
     pub no_sandbox: bool,
-    /// AGI mode was explicitly enabled (allows TUI mode cycling to AGI)
-    pub agi_enabled: bool,
 }
 
 impl Default for PermissionSettings {
     fn default() -> Self {
         Self {
             mode: ToolMode::Write,
-            auto_approve: false,
             no_sandbox: false,
-            agi_enabled: false,
         }
     }
 }
@@ -46,54 +39,22 @@ impl Cli {
     /// Resolve effective permission settings from CLI flags and config.
     ///
     /// Precedence (highest to lowest):
-    /// 1. CLI flags (--agi, --yes, --no-sandbox, -r, -w)
+    /// 1. CLI flags (--read, --no-sandbox)
     /// 2. Config file settings
-    /// 3. Built-in defaults (write mode, sandboxed, approval required)
+    /// 3. Built-in defaults (write mode, sandboxed)
     #[must_use]
     pub fn resolve_permissions(&self, config: &Config) -> PermissionSettings {
-        // Start with config defaults
         let mut settings = PermissionSettings {
             mode: config.permissions.mode(),
-            auto_approve: config.permissions.auto_approve.unwrap_or(false),
             no_sandbox: config.permissions.allow_outside_cwd.unwrap_or(false),
-            agi_enabled: config.permissions.mode() == ToolMode::Agi,
         };
 
-        // --agi is the ultimate override
-        if self.agi_mode {
-            settings.mode = ToolMode::Agi;
-            settings.auto_approve = true;
-            settings.no_sandbox = true;
-            settings.agi_enabled = true;
-            return settings;
-        }
-
-        // CLI flags override config
         if self.no_sandbox {
             settings.no_sandbox = true;
         }
 
-        // --yes implies write mode and auto-approve
-        if self.auto_approve {
-            settings.auto_approve = true;
-            settings.mode = ToolMode::Write;
-        }
-
-        // Explicit mode flags (last specified wins, but we can only check presence)
-        // -r takes precedence for safety if both specified
         if self.read_mode {
             settings.mode = ToolMode::Read;
-            if self.auto_approve || settings.auto_approve {
-                eprintln!("Warning: --yes / auto_approve is ignored in read mode");
-                settings.auto_approve = false;
-            }
-        } else if self.write_mode {
-            settings.mode = ToolMode::Write;
-        }
-
-        // Check for --yes --no-sandbox without --agi (same effect, enable AGI in TUI)
-        if settings.auto_approve && settings.no_sandbox && !self.agi_mode {
-            settings.agi_enabled = true;
         }
 
         settings
@@ -103,31 +64,17 @@ impl Cli {
 /// Fast, lightweight, open-source coding agent
 #[derive(Parser, Debug)]
 #[command(name = "ion", version, about)]
-#[allow(clippy::struct_excessive_bools)] // CLI flags are naturally boolean
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Commands>,
 
-    // Global permission flags (apply to TUI mode)
     /// Read-only mode (no writes, no bash)
-    #[arg(short = 'r', long = "read", global = true)]
+    #[arg(long = "read", global = true)]
     pub read_mode: bool,
-
-    /// Write mode (explicit, default)
-    #[arg(short = 'w', long = "write", global = true)]
-    pub write_mode: bool,
-
-    /// Auto-approve all tool calls (implies write mode)
-    #[arg(short = 'y', long = "yes", global = true)]
-    pub auto_approve: bool,
 
     /// Allow operations outside current directory
     #[arg(long = "no-sandbox", global = true)]
     pub no_sandbox: bool,
-
-    /// Full autonomy mode (--yes + --no-sandbox)
-    #[arg(long = "agi", global = true)]
-    pub agi_mode: bool,
 
     /// Continue the most recent session from current directory
     #[arg(long = "continue", conflicts_with = "resume")]
@@ -261,27 +208,6 @@ pub struct LogoutArgs {
     pub provider: AuthProvider,
 }
 
-/// Auto-approve handler for CLI mode with --yes flag
-struct AutoApproveHandler;
-
-#[async_trait]
-impl ApprovalHandler for AutoApproveHandler {
-    async fn ask_approval(&self, _tool_name: &str, _args: &serde_json::Value) -> ApprovalResponse {
-        ApprovalResponse::Yes
-    }
-}
-
-/// Deny handler for CLI mode without --yes flag (restricted tools will fail with clear message)
-struct DenyApprovalHandler;
-
-#[async_trait]
-impl ApprovalHandler for DenyApprovalHandler {
-    async fn ask_approval(&self, tool_name: &str, _args: &serde_json::Value) -> ApprovalResponse {
-        eprintln!("Tool '{tool_name}' requires approval. Use --yes flag to auto-approve.");
-        ApprovalResponse::No
-    }
-}
-
 /// JSON output structure for json/stream-json modes
 #[derive(Serialize)]
 #[serde(tag = "type")]
@@ -312,7 +238,7 @@ struct CliAgentSetup {
 }
 
 /// Setup CLI agent: config, provider, client, orchestrator, agent, session.
-fn setup_cli_agent(args: &RunArgs, auto_approve: bool) -> Result<CliAgentSetup> {
+fn setup_cli_agent(args: &RunArgs) -> Result<CliAgentSetup> {
     // Load config
     let config = Config::load()?;
 
@@ -380,14 +306,8 @@ fn setup_cli_agent(args: &RunArgs, auto_approve: bool) -> Result<CliAgentSetup> 
     // Create orchestrator
     let orchestrator = if args.no_tools {
         Arc::new(ToolOrchestrator::new(ToolMode::Read))
-    } else if auto_approve {
-        let mut orch = ToolOrchestrator::with_builtins(ToolMode::Write);
-        orch.set_approval_handler(Arc::new(AutoApproveHandler));
-        Arc::new(orch)
     } else {
-        let mut orch = ToolOrchestrator::with_builtins(ToolMode::Write);
-        orch.set_approval_handler(Arc::new(DenyApprovalHandler));
-        Arc::new(orch)
+        Arc::new(ToolOrchestrator::with_builtins(ToolMode::Write))
     };
 
     // Create agent
@@ -455,8 +375,8 @@ fn output_result(
 }
 
 /// Run the CLI one-shot mode
-pub async fn run(args: RunArgs, auto_approve: bool) -> ExitCode {
-    match run_inner(args, auto_approve).await {
+pub async fn run(args: RunArgs) -> ExitCode {
+    match run_inner(args).await {
         Ok(code) => code,
         Err(e) => {
             eprintln!("Error: {e}");
@@ -466,7 +386,7 @@ pub async fn run(args: RunArgs, auto_approve: bool) -> ExitCode {
 }
 
 #[allow(clippy::match_wildcard_for_single_variants, clippy::too_many_lines)]
-async fn run_inner(args: RunArgs, auto_approve: bool) -> Result<ExitCode> {
+async fn run_inner(args: RunArgs) -> Result<ExitCode> {
     // Initialize tracing for CLI mode
     if args.verbose || std::env::var("ION_LOG").is_ok() {
         let _ = tracing_subscriber::fmt()
@@ -479,7 +399,7 @@ async fn run_inner(args: RunArgs, auto_approve: bool) -> Result<ExitCode> {
         agent,
         session,
         prompt,
-    } = setup_cli_agent(&args, auto_approve)?;
+    } = setup_cli_agent(&args)?;
     let abort_token = session.abort_token.clone();
 
     // Create event channel
@@ -708,41 +628,17 @@ mod tests {
     use super::*;
     use clap::Parser;
 
-    // --- CLI parsing tests ---
-
     #[test]
     fn test_parse_no_args() {
         let cli = Cli::try_parse_from(["ion"]).unwrap();
         assert!(cli.command.is_none());
         assert!(!cli.read_mode);
-        assert!(!cli.write_mode);
-        assert!(!cli.auto_approve);
     }
 
     #[test]
     fn test_parse_read_mode() {
-        let cli = Cli::try_parse_from(["ion", "-r"]).unwrap();
+        let cli = Cli::try_parse_from(["ion", "--read"]).unwrap();
         assert!(cli.read_mode);
-        assert!(!cli.write_mode);
-    }
-
-    #[test]
-    fn test_parse_write_mode() {
-        let cli = Cli::try_parse_from(["ion", "-w"]).unwrap();
-        assert!(cli.write_mode);
-        assert!(!cli.read_mode);
-    }
-
-    #[test]
-    fn test_parse_auto_approve() {
-        let cli = Cli::try_parse_from(["ion", "-y"]).unwrap();
-        assert!(cli.auto_approve);
-    }
-
-    #[test]
-    fn test_parse_agi_mode() {
-        let cli = Cli::try_parse_from(["ion", "--agi"]).unwrap();
-        assert!(cli.agi_mode);
     }
 
     #[test]
@@ -774,8 +670,6 @@ mod tests {
         let result = Cli::try_parse_from(["ion", "--continue", "--resume"]);
         assert!(result.is_err());
     }
-
-    // --- Run command tests ---
 
     #[test]
     fn test_parse_run_basic() {
@@ -830,15 +724,6 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_run_global_flags() {
-        let cli = Cli::try_parse_from(["ion", "-y", "run", "prompt"]).unwrap();
-        assert!(cli.auto_approve);
-        assert!(cli.command.is_some());
-    }
-
-    // --- Login/Logout command tests ---
-
-    #[test]
     fn test_parse_login_chatgpt() {
         let cli = Cli::try_parse_from(["ion", "login", "chatgpt"]).unwrap();
         if let Some(Commands::Login(args)) = cli.command {
@@ -868,16 +753,10 @@ mod tests {
         }
     }
 
-    // --- Permission settings tests ---
-
     #[test]
     fn test_permission_settings_default() {
         let settings = PermissionSettings::default();
         assert!(matches!(settings.mode, ToolMode::Write));
-        assert!(!settings.auto_approve);
         assert!(!settings.no_sandbox);
-        assert!(!settings.agi_enabled);
     }
-
-    // Helper function tests moved to message_list.rs (shared implementation)
 }
