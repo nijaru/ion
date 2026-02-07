@@ -2,33 +2,37 @@
 
 ## Current State
 
-| Metric    | Value               | Updated    |
-| --------- | ------------------- | ---------- |
-| Phase     | Core hardening      | 2026-02-06 |
-| Status    | Permissions v2 done | 2026-02-06 |
-| Toolchain | stable              | 2026-01-22 |
-| Tests     | 314 passing         | 2026-02-06 |
-| Clippy    | clean               | 2026-02-06 |
-| TUI Lines | ~9,500 (excl tests) | 2026-02-04 |
+| Metric    | Value                 | Updated    |
+| --------- | --------------------- | ---------- |
+| Phase     | Sprint 15: Quality+UX | 2026-02-06 |
+| Status    | Phase 1-2 done        | 2026-02-06 |
+| Toolchain | stable                | 2026-01-22 |
+| Tests     | 314 passing           | 2026-02-06 |
+| Clippy    | clean                 | 2026-02-06 |
+| TUI Lines | ~9,500 (excl tests)   | 2026-02-06 |
 
 ## Session Summary (2026-02-06)
 
-**Permissions v2 implemented:**
+**Completed:**
 
-- Removed approval system: ApprovalHandler, ApprovalResponse, NeedsApproval, TuiApprovalHandler, Mode::Approval
-- Removed ToolMode::Agi variant, CLI flags -r -w -y --agi
-- Kept --read (long only) and --no-sandbox
-- Write mode allows all tools unconditionally; sandbox provides security
-- 870 lines deleted across 12 source files
-- Review found --read not wired to CLI `run` mode — fixed
-- Removed unimplemented deny_commands config field
-- Deleted stale v1 permission design doc, updated DESIGN.md and DECISIONS.md
+- Permissions v2: removed approval system (870 lines), simplified to Read/Write
+- Compaction tuning: trigger 80%, target 60%, configurable protected_messages
+- Streaming refactor: shared ToolBuilder, supports_tool_streaming trait method
+- Stale stream detection: 120s timeout
+- CLI run path fix: --no-sandbox + config defaults wired through
+- Reviews: architecture, TUI/UX, code quality audits completed
+
+**Sprint 15 progress:**
+
+- Phase 1 (code quality): 8/8 tasks done
+- Phase 2 (TUI UX): 3/4 tasks done (streaming text display pending)
+- Phase 3 (architecture): 2/2 tasks done
 
 ## Next Session
 
-1. **tk-ubad (P2):** /compact slash command
+1. **Streaming text display** — critical UX gap, biggest differentiator from competitors
 2. **tk-yy1q (P2):** Fix Google provider (Generative Lang API)
-3. **tk-g1fy (P2):** Modular streaming interface
+3. **Cost tracking** — provider usage now wired, can calculate costs
 
 ## Priority Queue
 
@@ -36,29 +40,24 @@
 
 | Task    | Title                                     | Status |
 | ------- | ----------------------------------------- | ------ |
-| tk-ubad | /compact slash command                    | Open   |
 | tk-yy1q | Fix Google provider (Generative Lang API) | Open   |
-| tk-g1fy | Modular streaming interface               | Open   |
 
 ### P3 — Important improvements
 
-tk-75jw (web search), tk-kxup (cost tracking), tk-i2o1 (@file refs), tk-nyqq (symlink skills), tk-r11l (research standard locations), tk-kqie (stream timeout), tk-c1ij (retry-after), tk-4fyx (compaction tuning), tk-g8xo (session cleanup), tk-2bk7 (scrollback), tk-jqe6 (parallel tool grouping)
+tk-kxup (cost tracking), tk-i2o1 (@file refs), tk-75jw (web search), tk-c1ij (retry-after), tk-g8xo (session cleanup), tk-2bk7 (scrollback), tk-jqe6 (parallel tool grouping), tk-r11l (research locations), tk-nyqq (symlink skills)
 
 ### P4 — Deferred
 
-tk-ltyy, tk-epd1, tk-5j06, tk-a2s8, tk-o0g7, tk-ije3
+tk-epd1, tk-ltyy, tk-5j06, tk-a2s8, tk-o0g7, tk-ije3
 
 ## Key References
 
-| Topic                  | Location                                  |
-| ---------------------- | ----------------------------------------- |
-| Architecture           | ai/DESIGN.md                              |
-| Permissions v2         | ai/design/permissions-v2.md               |
-| Permission research    | ai/research/permission-systems-2026.md    |
-| Extensibility research | ai/research/extensibility-systems-2026.md |
-| System prompt research | ai/research/system-prompt-survey-2026.md  |
-| TUI design             | ai/design/tui-v2.md                       |
-| Tool pass design       | ai/design/tool-pass.md                    |
-| Agent design           | ai/design/agent.md                        |
-| TUI analysis           | ai/review/tui-analysis-2026-02-04.md      |
-| Claude Code comparison | ai/research/claude-code-architecture.md   |
+| Topic               | Location                                    |
+| ------------------- | ------------------------------------------- |
+| Architecture        | ai/DESIGN.md                                |
+| Architecture review | ai/review/architecture-review-2026-02-06.md |
+| TUI/UX review       | ai/review/tui-ux-review-2026-02-06.md       |
+| Code quality audit  | ai/review/code-quality-audit-2026-02-06.md  |
+| Sprint 15 plan      | ai/SPRINTS.md                               |
+| Permissions v2      | ai/design/permissions-v2.md                 |
+| TUI design          | ai/design/tui-v2.md                         |
