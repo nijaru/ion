@@ -7,7 +7,7 @@
 | Phase     | Feature work  | 2026-02-07 |
 | Status    | P3 tasks open | 2026-02-07 |
 | Toolchain | stable        | 2026-01-22 |
-| Tests     | 327 passing   | 2026-02-07 |
+| Tests     | 335 passing   | 2026-02-07 |
 | Clippy    | clean         | 2026-02-07 |
 
 ## Session Summary (2026-02-07)
@@ -22,12 +22,13 @@
 - Compact tool placeholder now replaced with actual result after compaction
 - Eliminated format_k duplication in status bar (reuses format_tokens)
 - Dynamic summarization model selection (tk-rbx8): parse release_date from models.dev, select newest-cheapest model for Tier 3, provider-scoped guard (79d5f62, c726250)
+- Retry-After header parsing (tk-c1ij): extract Retry-After from 429 responses, use server delay instead of hardcoded backoff, cap at 60s (ea12bff)
 
 ## Priority Queue
 
 ### P3 — Important improvements
 
-tk-c1ij (retry-after), tk-i2o1 (@file refs), tk-g8xo (session cleanup), tk-75jw (web search), tk-2bk7 (scrollback), tk-jqe6 (parallel tool grouping), tk-r11l (research locations), tk-nyqq (symlink skills)
+tk-i2o1 (@file refs), tk-g8xo (session cleanup), tk-75jw (web search), tk-2bk7 (scrollback), tk-jqe6 (parallel tool grouping), tk-r11l (research locations), tk-nyqq (symlink skills)
 
 ### P4 — Deferred
 
