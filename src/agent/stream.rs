@@ -90,6 +90,8 @@ async fn stream_with_retry(
     abort_token: &CancellationToken,
 ) -> Result<Option<(Vec<ContentBlock>, Vec<ToolCallEvent>)>> {
     const MAX_RETRIES: u32 = 3;
+    /// Cap server-requested retry delays to prevent excessively long waits.
+    const MAX_RETRY_DELAY: u64 = 60;
     /// No SSE event received for this duration → treat as stale stream.
     /// Resets on every received event (select! recreates the sleep each iteration).
     const STREAM_STALE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
@@ -105,6 +107,7 @@ async fn stream_with_retry(
         let handle = tokio::spawn(async move { provider.stream(request_clone, stream_tx).await });
 
         let mut stream_error: Option<String> = None;
+        let mut server_retry_after: Option<u64> = None;
 
         loop {
             tokio::select! {
@@ -172,6 +175,9 @@ async fn stream_with_retry(
                         Some(StreamEvent::Done) => {}
                         None => {
                             if let Ok(Err(e)) = handle.await {
+                                if let crate::provider::Error::RateLimited { retry_after } = &e {
+                                    server_retry_after = *retry_after;
+                                }
                                 stream_error = Some(e.to_string());
                             }
                             break;
@@ -196,7 +202,10 @@ async fn stream_with_retry(
                 && retry_count < MAX_RETRIES
             {
                 retry_count += 1;
-                let delay = 1u64 << retry_count;
+                let delay = server_retry_after
+                    .take()
+                    .unwrap_or(1u64 << retry_count)
+                    .min(MAX_RETRY_DELAY);
                 warn!(
                     "{}, retrying in {}s (attempt {}/{})",
                     reason, delay, retry_count, MAX_RETRIES
@@ -229,6 +238,7 @@ async fn complete_with_retry(
     abort_token: &CancellationToken,
 ) -> Result<(Vec<ContentBlock>, Vec<ToolCallEvent>)> {
     const MAX_RETRIES: u32 = 3;
+    const MAX_RETRY_DELAY: u64 = 60;
     let mut retry_count = 0u32;
 
     let response = loop {
@@ -246,12 +256,20 @@ async fn complete_with_retry(
         match result {
             Ok(response) => break response,
             Err(e) => {
+                let server_retry_after =
+                    if let crate::provider::Error::RateLimited { retry_after } = &e {
+                        *retry_after
+                    } else {
+                        None
+                    };
                 let err = e.to_string();
                 if let Some(reason) = retryable_category(&err)
                     && retry_count < MAX_RETRIES
                 {
                     retry_count += 1;
-                    let delay = 1u64 << retry_count;
+                    let delay = server_retry_after
+                        .unwrap_or(1u64 << retry_count)
+                        .min(MAX_RETRY_DELAY);
                     warn!(
                         "{}, retrying in {}s (attempt {}/{})",
                         reason, delay, retry_count, MAX_RETRIES
