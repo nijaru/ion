@@ -20,7 +20,12 @@ impl PermissionConfig {
     /// Get the tool mode from config, defaulting to Write if not specified.
     #[must_use]
     pub fn mode(&self) -> ToolMode {
-        match self.default_mode.as_deref() {
+        match self
+            .default_mode
+            .as_deref()
+            .map(str::to_ascii_lowercase)
+            .as_deref()
+        {
             Some("read") => ToolMode::Read,
             Some("write") | None => ToolMode::Write,
             Some(other) => {
