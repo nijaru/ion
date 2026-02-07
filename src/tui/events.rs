@@ -1,7 +1,7 @@
 //! Event handling for the TUI.
 
 use crate::session::Session;
-use crate::tool::{ApprovalResponse, ToolMode};
+use crate::tool::ToolMode;
 use crate::tui::App;
 use crate::tui::PickerNavigation;
 use crate::tui::composer::ComposerBuffer;
@@ -23,7 +23,6 @@ impl App {
         match event {
             Event::Key(key) => match self.mode {
                 Mode::Input => self.handle_input_mode(key),
-                Mode::Approval => self.handle_approval_mode(key),
                 Mode::Selector => self.handle_selector_mode(key),
                 Mode::HelpOverlay => {
                     self.mode = Mode::Input;
@@ -259,23 +258,12 @@ impl App {
                 }
             }
 
-            // Shift+Tab: Cycle tool mode (Read ↔ Write, or Read → Write → Agi if --agi)
+            // Shift+Tab: Cycle tool mode (Read ↔ Write)
             KeyCode::BackTab => {
-                self.tool_mode = if self.permissions.agi_enabled {
-                    // AGI mode available: Read → Write → Agi → Read
-                    match self.tool_mode {
-                        ToolMode::Read => ToolMode::Write,
-                        ToolMode::Write => ToolMode::Agi,
-                        ToolMode::Agi => ToolMode::Read,
-                    }
-                } else {
-                    // Normal mode: Read ↔ Write only
-                    match self.tool_mode {
-                        ToolMode::Read => ToolMode::Write,
-                        ToolMode::Write | ToolMode::Agi => ToolMode::Read,
-                    }
+                self.tool_mode = match self.tool_mode {
+                    ToolMode::Read => ToolMode::Write,
+                    ToolMode::Write => ToolMode::Read,
                 };
-                // Update the orchestrator
                 let orchestrator = self.orchestrator.clone();
                 let mode = self.tool_mode;
                 tokio::spawn(async move {
@@ -503,26 +491,6 @@ impl App {
 
             _ => {
                 self.handle_input_event_with_history(key);
-            }
-        }
-    }
-
-    /// Handle approval mode key events.
-    pub(super) fn handle_approval_mode(&mut self, key: KeyEvent) {
-        if let Some(request) = self.pending_approval.take() {
-            let response = match key.code {
-                KeyCode::Char('y') | KeyCode::Enter => Some(ApprovalResponse::Yes),
-                KeyCode::Char('n') | KeyCode::Esc => Some(ApprovalResponse::No),
-                KeyCode::Char('a') => Some(ApprovalResponse::AlwaysSession),
-                KeyCode::Char('A') => Some(ApprovalResponse::AlwaysPermanent),
-                _ => None,
-            };
-
-            if let Some(resp) = response {
-                let _ = request.response_tx.send(resp);
-                self.mode = Mode::Input;
-            } else {
-                self.pending_approval = Some(request);
             }
         }
     }

@@ -10,12 +10,12 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct PermissionConfig {
-    /// Default mode (read, write, agi). Default: write.
+    /// Default mode (read, write). Default: write.
     pub default_mode: Option<String>,
-    /// Auto-approve all tool calls (--yes behavior). Default: false.
-    pub auto_approve: Option<bool>,
     /// Allow operations outside CWD (--no-sandbox behavior). Default: false.
     pub allow_outside_cwd: Option<bool>,
+    /// Commands to deny even in Write mode.
+    pub deny_commands: Option<Vec<String>>,
 }
 
 impl PermissionConfig {
@@ -24,7 +24,6 @@ impl PermissionConfig {
     pub fn mode(&self) -> ToolMode {
         match self.default_mode.as_deref() {
             Some("read") => ToolMode::Read,
-            Some("agi") => ToolMode::Agi,
             _ => ToolMode::Write,
         }
     }
@@ -280,11 +279,11 @@ impl Config {
         if other.permissions.default_mode.is_some() {
             self.permissions.default_mode = other.permissions.default_mode;
         }
-        if other.permissions.auto_approve.is_some() {
-            self.permissions.auto_approve = other.permissions.auto_approve;
-        }
         if other.permissions.allow_outside_cwd.is_some() {
             self.permissions.allow_outside_cwd = other.permissions.allow_outside_cwd;
+        }
+        if other.permissions.deny_commands.is_some() {
+            self.permissions.deny_commands = other.permissions.deny_commands;
         }
         if other.system_prompt.is_some() {
             self.system_prompt = other.system_prompt;

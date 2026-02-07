@@ -33,8 +33,7 @@ pub use picker_trait::PickerNavigation;
 pub use message_list::Sender;
 pub use run::{ResumeOption, run};
 pub use types::{
-    ApprovalRequest, HistorySearchState, Mode, SelectionState, SelectorPage, TaskSummary,
-    ThinkingLevel,
+    HistorySearchState, Mode, SelectionState, SelectorPage, TaskSummary, ThinkingLevel,
 };
 
 // Re-export internal utilities for sibling modules
@@ -56,7 +55,6 @@ use crate::tui::model_picker::ModelPicker;
 use crate::tui::provider_picker::ProviderPicker;
 use crate::tui::render_state::RenderState;
 use crate::tui::session_picker::SessionPicker;
-use crate::tui::types::ApprovalRequest as ApprovalRequestInternal;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -74,7 +72,7 @@ pub struct App {
     pub history_index: usize,
     /// Draft input before entering history navigation
     pub history_draft: Option<String>,
-    /// Current tool permission mode (Read/Write/Agi)
+    /// Current tool permission mode (Read/Write)
     pub tool_mode: ToolMode,
     /// Currently selected API provider
     pub api_provider: Provider,
@@ -88,10 +86,8 @@ pub struct App {
     pub orchestrator: Arc<ToolOrchestrator>,
     pub agent_tx: mpsc::Sender<crate::agent::AgentEvent>,
     pub agent_rx: mpsc::Receiver<crate::agent::AgentEvent>,
-    pub approval_rx: mpsc::Receiver<ApprovalRequestInternal>,
     pub session_rx: mpsc::Receiver<Session>,
     pub session_tx: mpsc::Sender<Session>,
-    pub pending_approval: Option<ApprovalRequestInternal>,
     pub is_running: bool,
     /// Session persistence store
     pub store: SessionStore,

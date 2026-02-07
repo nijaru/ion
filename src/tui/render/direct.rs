@@ -440,7 +440,6 @@ impl App {
         let (mode_label, mode_color) = match self.tool_mode {
             ToolMode::Read => ("READ", CColor::Cyan),
             ToolMode::Write => ("WRITE", CColor::Yellow),
-            ToolMode::Agi => ("AGI", CColor::Red),
         };
 
         write!(w, " [")?;

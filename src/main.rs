@@ -11,7 +11,7 @@ async fn main() -> ExitCode {
     match cli.command {
         Some(Commands::Run(args)) => {
             // One-shot CLI mode
-            ion::cli::run(args, cli.auto_approve).await
+            ion::cli::run(args).await
         }
         Some(Commands::Login(args)) => {
             // OAuth login
