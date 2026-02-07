@@ -14,8 +14,6 @@ pub struct PermissionConfig {
     pub default_mode: Option<String>,
     /// Allow operations outside CWD (--no-sandbox behavior). Default: false.
     pub allow_outside_cwd: Option<bool>,
-    /// Commands to deny even in Write mode.
-    pub deny_commands: Option<Vec<String>>,
 }
 
 impl PermissionConfig {
@@ -24,7 +22,11 @@ impl PermissionConfig {
     pub fn mode(&self) -> ToolMode {
         match self.default_mode.as_deref() {
             Some("read") => ToolMode::Read,
-            _ => ToolMode::Write,
+            Some("write") | None => ToolMode::Write,
+            Some(other) => {
+                tracing::warn!("Unknown permission mode '{other}', defaulting to write");
+                ToolMode::Write
+            }
         }
     }
 }
@@ -281,9 +283,6 @@ impl Config {
         }
         if other.permissions.allow_outside_cwd.is_some() {
             self.permissions.allow_outside_cwd = other.permissions.allow_outside_cwd;
-        }
-        if other.permissions.deny_commands.is_some() {
-            self.permissions.deny_commands = other.permissions.deny_commands;
         }
         if other.system_prompt.is_some() {
             self.system_prompt = other.system_prompt;

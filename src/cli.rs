@@ -238,7 +238,7 @@ struct CliAgentSetup {
 }
 
 /// Setup CLI agent: config, provider, client, orchestrator, agent, session.
-fn setup_cli_agent(args: &RunArgs) -> Result<CliAgentSetup> {
+fn setup_cli_agent(args: &RunArgs, mode: ToolMode) -> Result<CliAgentSetup> {
     // Load config
     let config = Config::load()?;
 
@@ -307,7 +307,7 @@ fn setup_cli_agent(args: &RunArgs) -> Result<CliAgentSetup> {
     let orchestrator = if args.no_tools {
         Arc::new(ToolOrchestrator::new(ToolMode::Read))
     } else {
-        Arc::new(ToolOrchestrator::with_builtins(ToolMode::Write))
+        Arc::new(ToolOrchestrator::with_builtins(mode))
     };
 
     // Create agent
@@ -375,8 +375,8 @@ fn output_result(
 }
 
 /// Run the CLI one-shot mode
-pub async fn run(args: RunArgs) -> ExitCode {
-    match run_inner(args).await {
+pub async fn run(args: RunArgs, read_mode: bool) -> ExitCode {
+    match run_inner(args, read_mode).await {
         Ok(code) => code,
         Err(e) => {
             eprintln!("Error: {e}");
@@ -386,7 +386,7 @@ pub async fn run(args: RunArgs) -> ExitCode {
 }
 
 #[allow(clippy::match_wildcard_for_single_variants, clippy::too_many_lines)]
-async fn run_inner(args: RunArgs) -> Result<ExitCode> {
+async fn run_inner(args: RunArgs, read_mode: bool) -> Result<ExitCode> {
     // Initialize tracing for CLI mode
     if args.verbose || std::env::var("ION_LOG").is_ok() {
         let _ = tracing_subscriber::fmt()
@@ -395,11 +395,12 @@ async fn run_inner(args: RunArgs) -> Result<ExitCode> {
             .try_init();
     }
 
+    let mode = if read_mode { ToolMode::Read } else { ToolMode::Write };
     let CliAgentSetup {
         agent,
         session,
         prompt,
-    } = setup_cli_agent(&args)?;
+    } = setup_cli_agent(&args, mode)?;
     let abort_token = session.abort_token.clone();
 
     // Create event channel
