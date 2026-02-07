@@ -184,7 +184,7 @@ impl Agent {
     }
 
     /// Get the summarization model, falling back to the given session model.
-    fn summarization_model_or<'a>(&'a self, session_model: &'a str) -> String {
+    fn summarization_model_or(&self, session_model: &str) -> String {
         self.summarization_model
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)

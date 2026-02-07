@@ -58,6 +58,10 @@ fn parse_release_date(date: &str) -> u64 {
         (Ok(y), Ok(m), Ok(d)) => (y, m, d),
         _ => return 0,
     };
+    // Reject values that would cause overflow in the calendar math below
+    if y < 1970 || m == 0 || m > 12 || d == 0 || d > 31 {
+        return 0;
+    }
     // Days from epoch (1970-01-01) using a simple calendar calculation.
     // Accurate enough for sorting — exact second precision isn't needed.
     let days = {
@@ -158,6 +162,11 @@ mod tests {
         assert_eq!(parse_release_date(""), 0);
         assert_eq!(parse_release_date("not-a-date"), 0);
         assert_eq!(parse_release_date("2025"), 0);
+        // Malformed dates that would cause overflow without guards
+        assert_eq!(parse_release_date("2025-03-00"), 0); // day 0
+        assert_eq!(parse_release_date("2025-00-15"), 0); // month 0
+        assert_eq!(parse_release_date("2025-13-15"), 0); // month 13
+        assert_eq!(parse_release_date("0001-01-15"), 0); // pre-epoch year
     }
 
     #[tokio::test]
