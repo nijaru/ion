@@ -3,7 +3,7 @@
   "ref": "5h0j",
   "title": "[AUDIT] Permission system review",
   "description": null,
-  "status": "open",
+  "status": "done",
   "priority": 3,
   "labels": [],
   "assignees": [],
@@ -15,10 +15,14 @@
     {
       "ts": "2026-01-20T20:16:22.425Z",
       "msg": "User requested security/permission system review (priority TBD)"
+    },
+    {
+      "ts": "2026-02-07T00:05:15.813Z",
+      "msg": "Closed: replaced by permissions v2 design (ai/design/permissions-v2.md)"
     }
   ],
   "created_at": "2026-01-19T13:28:56.187Z",
-  "updated_at": "2026-01-20T20:16:22.425Z",
-  "completed_at": null,
+  "updated_at": "2026-02-07T00:05:15.813Z",
+  "completed_at": "2026-02-07T00:05:15.747Z",
   "external": {}
 }

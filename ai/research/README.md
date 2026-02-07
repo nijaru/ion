@@ -4,13 +4,15 @@ Research notes for ion development. All files are topic-specific markdown.
 
 ## Agent Comparison
 
-| File                         | Content                                |
-| ---------------------------- | -------------------------------------- |
-| agent-survey.md              | 6-agent comparison (Claude Code, etc.) |
-| agent-comparison-2026.md     | Pi-Mono vs Claude Code deep dive       |
-| claude-code-architecture.md  | Claude Code internals                  |
-| pi-mono-architecture-2026.md | Pi-Mono design philosophy              |
-| system-prompt-survey-2026.md | System prompt comparison (6 agents)    |
+| File                          | Content                                         |
+| ----------------------------- | ----------------------------------------------- |
+| agent-survey.md               | 6-agent comparison (Claude Code, etc.)          |
+| agent-comparison-2026.md      | Pi-Mono vs Claude Code deep dive                |
+| claude-code-architecture.md   | Claude Code internals                           |
+| pi-mono-architecture-2026.md  | Pi-Mono design philosophy                       |
+| system-prompt-survey-2026.md  | System prompt comparison (6 agents)             |
+| permission-systems-2026.md    | Permission models, user behavior, OS sandboxing |
+| extensibility-systems-2026.md | Extension systems, MCP, hooks, plugins          |
 
 ## TUI Patterns
 

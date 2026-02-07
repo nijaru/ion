@@ -8,7 +8,8 @@ Architectural specifications for ion.
 | ------------------------------------------- | -------------------------------- |
 | [Agent & Tools](./agent.md)                 | Multi-turn loop, context, skills |
 | [TUI v2](./tui-v2.md)                       | Layout, crossterm, render        |
-| [Permission System](./permission-system.md) | Tool modes, sandbox              |
+| [Permission System](./permission-system.md) | Tool modes, sandbox (v1)         |
+| [Permissions v2](./permissions-v2.md)       | Read/Auto modes, OS sandbox, ext |
 | [Config System](./config-system.md)         | TOML layering, MCP               |
 | [Session Storage](./session-storage.md)     | SQLite persistence               |
 | [Tool Pass](./tool-pass.md)                 | Bash/grep enhancements           |
