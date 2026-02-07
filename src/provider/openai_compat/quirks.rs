@@ -177,4 +177,25 @@ mod tests {
         assert!(quirks.use_max_tokens);
         assert_eq!(quirks.reasoning_field, ReasoningField::ReasoningContent);
     }
+
+    #[test]
+    fn test_google_quirks() {
+        let quirks = ProviderQuirks::for_provider(Provider::Google);
+        assert!(quirks.use_max_tokens);
+        assert!(quirks.skip_store);
+        assert!(quirks.skip_developer_role);
+        assert_eq!(
+            quirks.base_url,
+            "https://generativelanguage.googleapis.com/v1beta/openai"
+        );
+    }
+
+    #[test]
+    fn test_chatgpt_quirks() {
+        let quirks = ProviderQuirks::for_provider(Provider::ChatGpt);
+        assert!(!quirks.use_max_tokens);
+        assert!(!quirks.skip_store);
+        assert!(!quirks.skip_developer_role);
+        assert_eq!(quirks.base_url, "https://chatgpt.com/backend-api/codex/v1");
+    }
 }

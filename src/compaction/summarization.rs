@@ -118,7 +118,8 @@ pub fn apply_summary(messages: &[Message], result: &SummarizationResult) -> Vec<
         }]),
     };
 
-    let protected = &messages[result.messages_summarized..];
+    let cutoff = result.messages_summarized.min(messages.len());
+    let protected = &messages[cutoff..];
     let mut new_messages = Vec::with_capacity(1 + protected.len());
     new_messages.push(summary_message);
     new_messages.extend_from_slice(protected);
