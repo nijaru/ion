@@ -1,7 +1,7 @@
 //! Agent task execution and summary tracking.
 
 use crate::tui::App;
-use crate::tui::image_attachment::parse_image_attachments;
+use crate::tui::attachment::parse_attachments;
 use crate::tui::types::TaskSummary;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -37,9 +37,8 @@ impl App {
         let queue = Arc::new(std::sync::Mutex::new(Vec::new()));
         self.message_queue = Some(queue.clone());
 
-        // Parse image attachments from input
-        let user_content = parse_image_attachments(&input, &self.session.working_dir);
-
+        let working_dir = self.session.working_dir.clone();
+        let no_sandbox = self.session.no_sandbox;
         let agent = self.agent.clone();
         let session = self.session.clone();
         let event_tx = self.agent_tx.clone();
@@ -55,6 +54,8 @@ impl App {
                 });
 
         tokio::spawn(async move {
+            let user_content = parse_attachments(&input, &working_dir, no_sandbox).await;
+
             let (updated_session, error) = agent
                 .run_task(
                     session,
