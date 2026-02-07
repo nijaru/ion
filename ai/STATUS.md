@@ -14,19 +14,24 @@
 
 **Completed:**
 
-- Compaction v2: Tier 3 LLM summarization + compact built-in tool + chat display (tk-k28w)
-- Code review fixes: removed Vec clone in compaction, added bounds check in apply_summary, added Google/ChatGPT quirks tests
-- Cost tracking: per-API-call cost via ProviderUsage x ModelPricing, /cost command, completion line display (tk-kxup)
+- Code review fixes: Vec clone removal, bounds check, Google/ChatGPT quirks tests (cd8c2a9)
+- Cost tracking: per-API-call cost via ProviderUsage x ModelPricing, /cost command, completion line display (8118e5c, tk-kxup)
+- Full 3-agent review + refactor of commits 827c699..38a8939
+- UTF-8 panic fix: char-boundary-safe truncation in summarization (was crashing on CJK/emoji)
+- Dead code cleanup: removed unused Agent::compact_with_summary
+- Compact tool placeholder now replaced with actual result after compaction
+- Eliminated format_k duplication in status bar (reuses format_tokens)
+- Created tk-rbx8: per-provider summarization model defaults
 
 ## Priority Queue
 
 ### P3 — Important improvements
 
-tk-i2o1 (@file refs), tk-75jw (web search), tk-c1ij (retry-after), tk-g8xo (session cleanup), tk-2bk7 (scrollback), tk-jqe6 (parallel tool grouping), tk-r11l (research locations), tk-nyqq (symlink skills)
+tk-rbx8 (summarization model per provider), tk-c1ij (retry-after), tk-i2o1 (@file refs), tk-g8xo (session cleanup), tk-75jw (web search), tk-2bk7 (scrollback), tk-jqe6 (parallel tool grouping), tk-r11l (research locations), tk-nyqq (symlink skills)
 
 ### P4 — Deferred
 
-tk-ltyy, tk-5j06, tk-a2s8, tk-o0g7, tk-ije3, tk-epd1, tk-ur3b, tk-9zri, tk-4gm9, tk-tnzs, tk-imza, tk-8qwn, tk-iegz
+tk-ltyy, tk-5j06, tk-a2s8, tk-o0g7, tk-ije3, tk-ur3b, tk-9zri, tk-4gm9, tk-tnzs, tk-imza, tk-8qwn, tk-iegz
 
 ## Key References
 
