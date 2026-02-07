@@ -19,6 +19,9 @@ pub struct ModelsDevEntry {
     pub modalities: ModelsDevModalities,
     pub cost: Option<ModelsDevCost>,
     pub limit: Option<ModelsDevLimit>,
+    /// Release date (YYYY-MM-DD format from models.dev).
+    #[serde(default)]
+    pub release_date: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -39,6 +42,34 @@ pub struct ModelsDevCost {
 pub struct ModelsDevLimit {
     #[serde(default)]
     pub context: u32,
+}
+
+/// Parse a "YYYY-MM-DD" date string into a unix timestamp (seconds since epoch).
+fn parse_release_date(date: &str) -> u64 {
+    let parts: Vec<&str> = date.split('-').collect();
+    if parts.len() != 3 {
+        return 0;
+    }
+    let (y, m, d) = match (
+        parts[0].parse::<i64>(),
+        parts[1].parse::<u32>(),
+        parts[2].parse::<u32>(),
+    ) {
+        (Ok(y), Ok(m), Ok(d)) => (y, m, d),
+        _ => return 0,
+    };
+    // Days from epoch (1970-01-01) using a simple calendar calculation.
+    // Accurate enough for sorting — exact second precision isn't needed.
+    let days = {
+        let m_adj = if m > 2 { m - 3 } else { m + 9 };
+        let y_adj = if m <= 2 { y - 1 } else { y };
+        let era = y_adj / 400;
+        let yoe = (y_adj - era * 400) as u64;
+        let doy = (153 * m_adj as u64 + 2) / 5 + d as u64 - 1;
+        let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+        (era * 146097) as u64 + doe - 719_468
+    };
+    days * 86400
 }
 
 pub async fn fetch_models_dev() -> Result<Vec<ModelInfo>> {
@@ -77,6 +108,11 @@ pub async fn fetch_models_dev() -> Result<Vec<ModelInfo>> {
                 ModelPricing::default()
             };
 
+            let created = m
+                .release_date
+                .as_deref()
+                .map_or(0, parse_release_date);
+
             all_models.push(ModelInfo {
                 // Use native model ID (what the API expects), not prefixed
                 id: model_id.clone(),
@@ -88,7 +124,7 @@ pub async fn fetch_models_dev() -> Result<Vec<ModelInfo>> {
                 supports_thinking: false,
                 supports_cache: false,
                 pricing,
-                created: 0,
+                created,
             });
         }
     }
@@ -99,6 +135,30 @@ pub async fn fetch_models_dev() -> Result<Vec<ModelInfo>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_parse_release_date() {
+        // Known date: 2025-06-20 -> 1750377600
+        let ts = parse_release_date("2025-06-20");
+        assert!(ts > 0);
+        // Should be in the right ballpark (2025 is ~1.74B seconds from epoch)
+        assert!(ts > 1_700_000_000, "timestamp {ts} too small");
+        assert!(ts < 1_800_000_000, "timestamp {ts} too large");
+    }
+
+    #[test]
+    fn test_parse_release_date_ordering() {
+        let older = parse_release_date("2024-01-15");
+        let newer = parse_release_date("2025-11-25");
+        assert!(newer > older);
+    }
+
+    #[test]
+    fn test_parse_release_date_invalid() {
+        assert_eq!(parse_release_date(""), 0);
+        assert_eq!(parse_release_date("not-a-date"), 0);
+        assert_eq!(parse_release_date("2025"), 0);
+    }
 
     #[tokio::test]
     async fn test_fetch_models_dev() {
@@ -114,5 +174,17 @@ mod tests {
             .any(|m| m.provider == "openai" && m.id.contains("gpt"));
 
         assert!(has_claude || has_gpt, "Should contain some major models");
+    }
+
+    #[tokio::test]
+    async fn test_models_have_release_dates() {
+        let models = fetch_models_dev().await.unwrap();
+        let with_dates = models.iter().filter(|m| m.created > 0).count();
+        // Most models should have dates
+        assert!(
+            with_dates > models.len() / 2,
+            "Only {with_dates}/{} models have release dates",
+            models.len()
+        );
     }
 }

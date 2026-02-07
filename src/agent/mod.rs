@@ -85,6 +85,9 @@ pub struct Agent {
     skills: Arc<tokio::sync::RwLock<SkillRegistry>>,
     context_manager: Arc<ContextManager>,
     active_plan: Arc<Mutex<Option<Plan>>>,
+    /// Cheap model for Tier 3 summarization (dynamically selected from model list).
+    /// Falls back to session model when None.
+    summarization_model: Arc<std::sync::Mutex<Option<String>>>,
 }
 
 /// Create instruction loader from current directory.
@@ -128,6 +131,7 @@ impl Agent {
             skills: Arc::new(tokio::sync::RwLock::new(SkillRegistry::new())),
             context_manager: Arc::new(context_manager),
             active_plan: Arc::new(Mutex::new(None)),
+            summarization_model: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -165,6 +169,27 @@ impl Agent {
     pub fn context_window(&self) -> usize {
         self.context_window
             .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Set the model to use for Tier 3 summarization.
+    ///
+    /// When set, compaction uses this cheap model instead of the session's
+    /// active model. Pass `None` to fall back to the session model.
+    pub fn set_summarization_model(&self, model: Option<String>) {
+        let mut guard = self
+            .summarization_model
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *guard = model;
+    }
+
+    /// Get the summarization model, falling back to the given session model.
+    fn summarization_model_or<'a>(&'a self, session_model: &'a str) -> String {
+        self.summarization_model
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+            .unwrap_or_else(|| session_model.to_string())
     }
 
     #[must_use]
@@ -390,12 +415,13 @@ impl Agent {
                 .needs_compaction;
 
         if needs_compaction {
+            let summarization_model = self.summarization_model_or(&session.model);
             let result = compact_with_summarization(
                 &mut session.messages,
                 &config,
                 &self.token_counter,
                 self.provider.as_ref(),
-                &session.model,
+                &summarization_model,
             )
             .await;
 
