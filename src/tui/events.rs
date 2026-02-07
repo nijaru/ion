@@ -345,116 +345,8 @@ impl App {
                     } else {
                         // Check for slash commands
                         if input.starts_with('/') {
-                            const COMMANDS: [&str; 7] =
-                                ["/compact", "/model", "/provider", "/clear", "/quit", "/help", "/resume"];
-                            let cmd_line = input.trim().to_lowercase();
-                            let cmd_name = cmd_line.split_whitespace().next().unwrap_or("");
-                            match cmd_name {
-                                "/compact" => {
-                                    self.clear_input();
-                                    self.history_index = self.input_history.len();
-
-                                    let modified = self.agent.compact_messages(&mut self.session.messages);
-                                    if modified > 0 {
-                                        self.last_error = None;
-                                        self.message_list.push_entry(
-                                            crate::tui::message_list::MessageEntry::new(
-                                                crate::tui::message_list::Sender::System,
-                                                format!("Compacted: pruned {modified} tool outputs"),
-                                            ),
-                                        );
-                                        // Save compacted session
-                                        let _ = self.store.save(&self.session);
-                                    } else {
-                                        self.message_list.push_entry(
-                                            crate::tui::message_list::MessageEntry::new(
-                                                crate::tui::message_list::Sender::System,
-                                                "Nothing to compact".to_string(),
-                                            ),
-                                        );
-                                    }
-                                    return;
-                                }
-                                "/model" | "/models" => {
-                                    self.clear_input();
-                                    self.history_index = self.input_history.len();
-                                    self.open_model_selector();
-                                    return;
-                                }
-                                "/provider" | "/providers" => {
-                                    self.clear_input();
-                                    self.history_index = self.input_history.len();
-                                    self.open_provider_selector();
-                                    return;
-                                }
-                                "/resume" | "/sessions" => {
-                                    self.clear_input();
-                                    self.history_index = self.input_history.len();
-                                    self.open_session_selector();
-                                    return;
-                                }
-                                "/quit" | "/exit" | "/q" => {
-                                    self.clear_input();
-                                    self.quit();
-                                    return;
-                                }
-                                "/clear" => {
-                                    self.clear_input();
-                                    self.history_index = self.input_history.len();
-
-                                    // Save current session before starting fresh
-                                    if !self.session.messages.is_empty() {
-                                        let _ = self.store.save(&self.session);
-                                    }
-
-                                    // Start a new session (keeps old session in history)
-                                    let working_dir = self.session.working_dir.clone();
-                                    let model = self.session.model.clone();
-                                    let no_sandbox = self.session.no_sandbox;
-                                    self.session = Session::new(working_dir, model);
-                                    self.session.no_sandbox = no_sandbox;
-
-                                    // Clear display state
-                                    self.message_list.clear();
-                                    self.render_state.reset_for_new_conversation();
-                                    self.render_state.needs_screen_clear = true;
-
-                                    // Clear active plan so it doesn't pollute new conversations
-                                    let agent = self.agent.clone();
-                                    tokio::spawn(async move {
-                                        agent.clear_plan().await;
-                                    });
-                                    return;
-                                }
-                                "/help" | "/?" => {
-                                    self.clear_input();
-                                    self.history_index = self.input_history.len();
-                                    self.mode = Mode::HelpOverlay;
-                                    return;
-                                }
-                                _ => {
-                                    if !cmd_name.is_empty() {
-                                        let suggestions = fuzzy::top_matches(
-                                            cmd_name,
-                                            COMMANDS.iter().copied(),
-                                            3,
-                                        );
-                                        let message = if suggestions.is_empty() {
-                                            format!("Unknown command {cmd_name}")
-                                        } else {
-                                            format!(
-                                                "Unknown command {}. Did you mean {}?",
-                                                cmd_name,
-                                                suggestions.join(", ")
-                                            )
-                                        };
-                                        self.message_list
-                                            .push_entry(MessageEntry::new(Sender::System, message));
-                                    }
-                                    self.clear_input();
-                                    return;
-                                }
-                            }
+                            self.dispatch_slash_command(&input);
+                            return;
                         }
 
                         // Send message - resolve blobs for agent, keep display version for UI
@@ -516,6 +408,80 @@ impl App {
 
             _ => {
                 self.handle_input_event_with_history(key);
+            }
+        }
+    }
+
+    /// Dispatch a slash command (e.g., /compact, /model, /clear).
+    fn dispatch_slash_command(&mut self, input: &str) {
+        const COMMANDS: [&str; 7] =
+            ["/compact", "/model", "/provider", "/clear", "/quit", "/help", "/resume"];
+
+        let cmd_line = input.trim().to_lowercase();
+        let cmd_name = cmd_line.split_whitespace().next().unwrap_or("");
+
+        self.clear_input();
+        self.history_index = self.input_history.len();
+
+        match cmd_name {
+            "/compact" => {
+                let modified = self.agent.compact_messages(&mut self.session.messages);
+                if modified > 0 {
+                    self.last_error = None;
+                    self.message_list.push_entry(MessageEntry::new(
+                        Sender::System,
+                        format!("Compacted: pruned {modified} tool outputs"),
+                    ));
+                    let _ = self.store.save(&self.session);
+                } else {
+                    self.message_list.push_entry(MessageEntry::new(
+                        Sender::System,
+                        "Nothing to compact".to_string(),
+                    ));
+                }
+            }
+            "/model" | "/models" => self.open_model_selector(),
+            "/provider" | "/providers" => self.open_provider_selector(),
+            "/resume" | "/sessions" => self.open_session_selector(),
+            "/quit" | "/exit" | "/q" => self.quit(),
+            "/clear" => {
+                if !self.session.messages.is_empty() {
+                    let _ = self.store.save(&self.session);
+                }
+                let working_dir = self.session.working_dir.clone();
+                let model = self.session.model.clone();
+                let no_sandbox = self.session.no_sandbox;
+                self.session = Session::new(working_dir, model);
+                self.session.no_sandbox = no_sandbox;
+
+                self.message_list.clear();
+                self.render_state.reset_for_new_conversation();
+                self.render_state.needs_screen_clear = true;
+
+                let agent = self.agent.clone();
+                tokio::spawn(async move {
+                    agent.clear_plan().await;
+                });
+            }
+            "/help" | "/?" => {
+                self.mode = Mode::HelpOverlay;
+            }
+            _ => {
+                if !cmd_name.is_empty() {
+                    let suggestions =
+                        fuzzy::top_matches(cmd_name, COMMANDS.iter().copied(), 3);
+                    let message = if suggestions.is_empty() {
+                        format!("Unknown command {cmd_name}")
+                    } else {
+                        format!(
+                            "Unknown command {}. Did you mean {}?",
+                            cmd_name,
+                            suggestions.join(", ")
+                        )
+                    };
+                    self.message_list
+                        .push_entry(MessageEntry::new(Sender::System, message));
+                }
             }
         }
     }

@@ -11,7 +11,7 @@ pub enum Sender {
 }
 
 /// Max lines to show in tool output (tail).
-const TOOL_RESULT_MAX_LINES: usize = 5;
+const TOOL_RESULT_MAX_LINES: usize = 10;
 /// Max chars per line in tool output.
 const TOOL_RESULT_LINE_MAX: usize = 120;
 
@@ -676,23 +676,12 @@ mod tests {
 
     #[test]
     fn test_format_tool_result_many_lines_shows_tail() {
-        let lines: Vec<&str> = (0..10).map(|i| match i {
-            0 => "line0",
-            1 => "line1",
-            2 => "line2",
-            3 => "line3",
-            4 => "line4",
-            5 => "line5",
-            6 => "line6",
-            7 => "line7",
-            8 => "line8",
-            _ => "line9",
-        }).collect();
+        let lines: Vec<String> = (0..20).map(|i| format!("line{i}")).collect();
         let input = lines.join("\n");
         let output = format_tool_result(&input);
-        assert!(output.starts_with("… +5 lines"));
-        assert!(output.contains("line9"));
-        assert!(!output.contains("line0"));
+        assert!(output.starts_with("… +10 lines"));
+        assert!(output.contains("line19"));
+        assert!(!output.contains("line0\n"));
     }
 
     // --- strip_error_prefixes tests ---
