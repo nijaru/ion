@@ -9,8 +9,8 @@ pub enum AgentEvent {
     ToolCallResult(String, String, bool),
     PlanGenerated(Plan),
     CompactionStatus {
-        threshold: usize,
-        pruned: bool,
+        before: usize,
+        after: usize,
     },
     TokenUsage {
         used: usize,

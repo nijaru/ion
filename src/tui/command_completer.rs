@@ -18,6 +18,7 @@ pub type Command = (&'static str, &'static str);
 
 /// Available slash commands with their descriptions.
 pub const COMMANDS: &[Command] = &[
+    ("/compact", "Compact context (prune tool outputs)"),
     ("/model", "Open model selector"),
     ("/provider", "Open provider selector"),
     ("/resume", "Resume a previous session"),
@@ -254,9 +255,9 @@ mod tests {
         let mut completer = CommandCompleter::new();
         completer.activate();
 
-        assert_eq!(completer.selected_command(), Some("/model"));
+        assert_eq!(completer.selected_command(), Some("/compact"));
 
         completer.move_down();
-        assert_eq!(completer.selected_command(), Some("/provider"));
+        assert_eq!(completer.selected_command(), Some("/model"));
     }
 }

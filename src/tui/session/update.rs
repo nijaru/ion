@@ -130,6 +130,10 @@ impl App {
                     self.task.retry_status =
                         Some((reason.clone(), *delay, std::time::Instant::now()));
                 }
+                AgentEvent::CompactionStatus { before, after } => {
+                    let saved = before.saturating_sub(*after);
+                    tracing::info!("Compacted: {before} -> {after} tokens ({saved} freed)");
+                }
                 _ => {
                     self.message_list.push_event(event);
                 }

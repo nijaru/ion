@@ -345,11 +345,36 @@ impl App {
                     } else {
                         // Check for slash commands
                         if input.starts_with('/') {
-                            const COMMANDS: [&str; 6] =
-                                ["/model", "/provider", "/clear", "/quit", "/help", "/resume"];
+                            const COMMANDS: [&str; 7] =
+                                ["/compact", "/model", "/provider", "/clear", "/quit", "/help", "/resume"];
                             let cmd_line = input.trim().to_lowercase();
                             let cmd_name = cmd_line.split_whitespace().next().unwrap_or("");
                             match cmd_name {
+                                "/compact" => {
+                                    self.clear_input();
+                                    self.history_index = self.input_history.len();
+
+                                    let modified = self.agent.compact_messages(&mut self.session.messages);
+                                    if modified > 0 {
+                                        self.last_error = None;
+                                        self.message_list.push_entry(
+                                            crate::tui::message_list::MessageEntry::new(
+                                                crate::tui::message_list::Sender::System,
+                                                format!("Compacted: pruned {modified} tool outputs"),
+                                            ),
+                                        );
+                                        // Save compacted session
+                                        let _ = self.store.save(&self.session);
+                                    } else {
+                                        self.message_list.push_entry(
+                                            crate::tui::message_list::MessageEntry::new(
+                                                crate::tui::message_list::Sender::System,
+                                                "Nothing to compact".to_string(),
+                                            ),
+                                        );
+                                    }
+                                    return;
+                                }
                                 "/model" | "/models" => {
                                     self.clear_input();
                                     self.history_index = self.input_history.len();

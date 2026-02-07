@@ -139,6 +139,18 @@ impl Agent {
         self
     }
 
+    /// Manually compact messages by pruning tool outputs.
+    ///
+    /// Returns the number of messages modified, or 0 if no pruning was needed.
+    pub fn compact_messages(&self, messages: &mut [Message]) -> usize {
+        let mut config = self.compaction_config.clone();
+        config.context_window = self.context_window();
+
+        let target = config.target_tokens();
+        let result = prune_messages(messages, &config, &self.token_counter, target);
+        result.messages_modified
+    }
+
     /// Update the context window size (call when model changes).
     pub fn set_context_window(&self, window: usize) {
         self.context_window
@@ -365,20 +377,16 @@ impl Agent {
 
         if check_compaction_needed(&session.messages, &config, &self.token_counter).needs_compaction
         {
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let threshold = config.trigger_threshold as usize;
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let target_tokens = config.target_threshold as usize;
-
             let mut messages = (*session.messages).to_vec();
-            let result = prune_messages(&mut messages, &config, &self.token_counter, target_tokens);
+            let target = config.target_tokens();
+            let result = prune_messages(&mut messages, &config, &self.token_counter, target);
 
             if result.tier_reached != PruningTier::None {
                 session.messages = messages;
                 let _ = tx
                     .send(AgentEvent::CompactionStatus {
-                        threshold,
-                        pruned: true,
+                        before: result.tokens_before,
+                        after: result.tokens_after,
                     })
                     .await;
             }
