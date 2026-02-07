@@ -106,16 +106,12 @@ impl SkillRegistry {
         // Check if we need to load
         if let Some(entry) = self.entries.get(name)
             && entry.full.is_none()
-            && entry.source_path.is_some()
+            && let Some(path) = entry.source_path.clone()
+            && let Ok(skills) = SkillLoader::load_from_file(&path)
+            && let Some(skill) = skills.into_iter().find(|s| s.name == name)
+            && let Some(entry) = self.entries.get_mut(name)
         {
-            // Need to load - clone path to avoid borrow issues
-            let path = entry.source_path.clone().unwrap();
-            if let Ok(skills) = SkillLoader::load_from_file(&path)
-                && let Some(skill) = skills.into_iter().find(|s| s.name == name)
-                && let Some(entry) = self.entries.get_mut(name)
-            {
-                entry.full = Some(skill);
-            }
+            entry.full = Some(skill);
         }
 
         self.entries.get(name).and_then(|e| e.full.as_ref())
@@ -330,7 +326,9 @@ impl SkillLoader {
 
             if let Some(ref mut skill) = current_skill {
                 if trimmed == "</skill>" {
-                    skills.push(current_skill.take().unwrap());
+                    if let Some(completed) = current_skill.take() {
+                        skills.push(completed);
+                    }
                     continue;
                 }
 

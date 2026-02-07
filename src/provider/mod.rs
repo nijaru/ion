@@ -32,7 +32,10 @@ pub use client::{Client, LlmApi};
 pub use error::{Error, format_api_error};
 pub use prefs::ProviderPrefs;
 pub use registry::{ModelFilter, ModelRegistry};
-pub use types::*;
+pub use types::{
+    ChatRequest, ContentBlock, Message, ModelInfo, ModelPricing, Role, StreamEvent, ThinkingConfig,
+    ToolBuilder, ToolCallEvent, ToolDefinition, Usage,
+};
 
 /// Default timeout for HTTP requests.
 pub const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
