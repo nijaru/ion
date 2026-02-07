@@ -164,18 +164,27 @@ impl HttpClient {
     }
 }
 
-/// Parse `Retry-After` header value as seconds.
-///
-/// Handles the common case of a decimal seconds value (e.g. `Retry-After: 30`).
-/// Ignores HTTP-date format — falls back to None.
+/// Extract and parse `Retry-After` header from a response.
 fn parse_retry_after(response: &reqwest::Response) -> Option<u64> {
     let value = response.headers().get(RETRY_AFTER)?;
-    let s = value.to_str().ok()?.trim();
-    // Parse as integer seconds; also handle fractional (round up)
+    let s = value.to_str().ok()?;
+    parse_retry_after_value(s)
+}
+
+/// Parse a `Retry-After` header value as seconds.
+///
+/// Handles integer and fractional seconds (rounds up). Ignores HTTP-date
+/// format and non-finite values — returns None.
+fn parse_retry_after_value(s: &str) -> Option<u64> {
+    let s = s.trim();
     if let Ok(secs) = s.parse::<u64>() {
         Some(secs.max(1))
     } else if let Ok(f) = s.parse::<f64>() {
-        Some((f.ceil() as u64).max(1))
+        if f.is_finite() && f > 0.0 {
+            Some((f.ceil() as u64).max(1))
+        } else {
+            None
+        }
     } else {
         None
     }
@@ -206,5 +215,41 @@ mod tests {
         );
         let headers = client.build_headers();
         assert_eq!(headers.get("x-api-key").unwrap(), "secret");
+    }
+
+    #[test]
+    fn test_parse_retry_after_integer() {
+        assert_eq!(parse_retry_after_value("30"), Some(30));
+        assert_eq!(parse_retry_after_value("1"), Some(1));
+        assert_eq!(parse_retry_after_value("120"), Some(120));
+    }
+
+    #[test]
+    fn test_parse_retry_after_fractional() {
+        assert_eq!(parse_retry_after_value("2.5"), Some(3)); // ceil
+        assert_eq!(parse_retry_after_value("0.1"), Some(1)); // ceil + max(1)
+        assert_eq!(parse_retry_after_value("59.9"), Some(60));
+    }
+
+    #[test]
+    fn test_parse_retry_after_zero() {
+        // Integer 0 → clamped to 1
+        assert_eq!(parse_retry_after_value("0"), Some(1));
+    }
+
+    #[test]
+    fn test_parse_retry_after_invalid() {
+        assert_eq!(parse_retry_after_value(""), None);
+        assert_eq!(parse_retry_after_value("Thu, 01 Jan 2026 00:00:00 GMT"), None);
+        assert_eq!(parse_retry_after_value("abc"), None);
+        assert_eq!(parse_retry_after_value("-1"), None); // negative integer parses as i64, not u64
+        assert_eq!(parse_retry_after_value("-1.5"), None); // negative float, filtered
+        assert_eq!(parse_retry_after_value("Infinity"), None);
+        assert_eq!(parse_retry_after_value("NaN"), None);
+    }
+
+    #[test]
+    fn test_parse_retry_after_whitespace() {
+        assert_eq!(parse_retry_after_value("  30  "), Some(30));
     }
 }
