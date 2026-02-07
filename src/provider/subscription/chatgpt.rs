@@ -65,13 +65,13 @@ impl ChatGptResponsesClient {
         if let Ok(value) = HeaderValue::from_str(&ua) {
             headers.insert(reqwest::header::USER_AGENT, value);
         }
-        if let Some(account_id) = self.account_id.as_deref() {
-            if let Ok(value) = HeaderValue::from_str(account_id) {
-                headers.insert(
-                    HeaderName::from_static("chatgpt-account-id"),
-                    value,
-                );
-            }
+        if let Some(account_id) = self.account_id.as_deref()
+            && let Ok(value) = HeaderValue::from_str(account_id)
+        {
+            headers.insert(
+                HeaderName::from_static("chatgpt-account-id"),
+                value,
+            );
         }
         Ok(headers)
     }
@@ -419,10 +419,10 @@ fn extract_output_text(value: &Value) -> String {
     for item in items {
         if let Some(contents) = item.get("content").and_then(Value::as_array) {
             for content in contents {
-                if content.get("type").and_then(Value::as_str) == Some("output_text") {
-                    if let Some(text) = content.get("text").and_then(Value::as_str) {
-                        out.push_str(text);
-                    }
+                if content.get("type").and_then(Value::as_str) == Some("output_text")
+                    && let Some(text) = content.get("text").and_then(Value::as_str)
+                {
+                    out.push_str(text);
                 }
             }
         }

@@ -94,17 +94,16 @@ pub async fn get_credentials(provider: OAuthProvider) -> Result<Option<Credentia
     };
 
     // Fill in ChatGPT account ID if missing and id_token is present.
-    if provider == OAuthProvider::OpenAI {
-        if let Credentials::OAuth(ref tokens) = creds
-            && tokens.chatgpt_account_id.is_none()
-            && let Some(id_token) = tokens.id_token.as_deref()
-            && let Some(account_id) = openai::extract_chatgpt_account_id(id_token)
-        {
-            let mut updated = tokens.clone();
-            updated.chatgpt_account_id = Some(account_id);
-            storage.save(provider, Credentials::OAuth(updated.clone()))?;
-            return Ok(Some(Credentials::OAuth(updated)));
-        }
+    if provider == OAuthProvider::OpenAI
+        && let Credentials::OAuth(ref tokens) = creds
+        && tokens.chatgpt_account_id.is_none()
+        && let Some(id_token) = tokens.id_token.as_deref()
+        && let Some(account_id) = openai::extract_chatgpt_account_id(id_token)
+    {
+        let mut updated = tokens.clone();
+        updated.chatgpt_account_id = Some(account_id);
+        storage.save(provider, Credentials::OAuth(updated.clone()))?;
+        return Ok(Some(Credentials::OAuth(updated)));
     }
 
     // Check if OAuth tokens need refresh
@@ -157,19 +156,18 @@ pub async fn get_credentials(provider: OAuthProvider) -> Result<Option<Credentia
         }
     }
 
-    if provider == OAuthProvider::Google {
-        if let Credentials::OAuth(ref tokens) = creds
-            && tokens.google_project_id.is_none()
-        {
-            let mut updated = tokens.clone();
-            updated.google_project_id = Some(
-                google::GoogleAuth::new()
-                    .resolve_project_id(&updated.access_token)
-                    .await?,
-            );
-            storage.save(provider, Credentials::OAuth(updated.clone()))?;
-            return Ok(Some(Credentials::OAuth(updated)));
-        }
+    if provider == OAuthProvider::Google
+        && let Credentials::OAuth(ref tokens) = creds
+        && tokens.google_project_id.is_none()
+    {
+        let mut updated = tokens.clone();
+        updated.google_project_id = Some(
+            google::GoogleAuth::new()
+                .resolve_project_id(&updated.access_token)
+                .await?,
+        );
+        storage.save(provider, Credentials::OAuth(updated.clone()))?;
+        return Ok(Some(Credentials::OAuth(updated)));
     }
 
     Ok(Some(creds))
