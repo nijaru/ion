@@ -54,8 +54,7 @@ pub fn prune_messages(
     }
 
     // Tier 2: Remove old tool output content (keep last N messages protected)
-    let protected_count = 6; // Protect last 3 exchanges (user + assistant pairs)
-    let modified_t2 = remove_old_output_content(messages, protected_count, *counter);
+    let modified_t2 = remove_old_output_content(messages, config.protected_messages, *counter);
     let tokens_after_t2 = counter.count_messages(messages).total;
 
     PruningResult {
@@ -285,10 +284,13 @@ mod tests {
 
     #[test]
     fn test_remove_old_outputs() {
-        let config = CompactionConfig::default();
+        let config = CompactionConfig {
+            protected_messages: 6,
+            ..Default::default()
+        };
         let counter = TokenCounter::new();
 
-        // Need more messages than protected_count (6) to trigger tier 2
+        // Need more messages than protected_messages (6) to trigger tier 2
         let mut messages = vec![
             make_text_message(Role::User, "First request"),
             make_tool_result("Old tool output content that should be removed"),

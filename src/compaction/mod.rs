@@ -5,7 +5,7 @@ mod counter;
 mod pruning;
 
 pub use counter::{TokenCount, TokenCounter};
-pub use pruning::{PruningResult, PruningTier, prune_messages};
+pub use pruning::{prune_messages, PruningResult, PruningTier};
 
 use crate::provider::Message;
 
@@ -14,7 +14,7 @@ use crate::provider::Message;
 pub struct CompactionConfig {
     /// Context window size for the model (default: `200_000`)
     pub context_window: usize,
-    /// Trigger compaction at this percentage of context (default: 0.85)
+    /// Trigger compaction at this percentage of available context (default: 0.80)
     pub trigger_threshold: f32,
     /// Target percentage after compaction (default: 0.60)
     pub target_threshold: f32,
@@ -24,19 +24,23 @@ pub struct CompactionConfig {
     pub max_tool_output_tokens: usize,
     /// Tokens to keep at head/tail when truncating (default: 250 each)
     pub truncate_keep_tokens: usize,
+    /// Number of recent messages protected from Tier 2 pruning (default: 12)
+    pub protected_messages: usize,
 }
 
 impl Default for CompactionConfig {
     fn default() -> Self {
         Self {
             context_window: 200_000,
-            // Trigger early to maintain quality (avoid "lost in the middle")
-            trigger_threshold: 0.55,
-            // Small gap = frequent small compactions (less disruptive)
-            target_threshold: 0.45,
+            // Match Claude Code range (70-85%). Modern models handle long contexts well.
+            trigger_threshold: 0.80,
+            // 20% gap frees ~37k tokens per compaction on 200k context
+            target_threshold: 0.60,
             output_reserve: 16_000,
             max_tool_output_tokens: 2_000,
             truncate_keep_tokens: 250,
+            // ~4 full turns (user + assistant + tool_result per turn)
+            protected_messages: 12,
         }
     }
 }
@@ -98,23 +102,24 @@ mod tests {
     fn test_config_defaults() {
         let config = CompactionConfig::default();
         assert_eq!(config.context_window, 200_000);
-        assert_eq!(config.trigger_threshold, 0.55);
-        assert_eq!(config.target_threshold, 0.45);
+        assert_eq!(config.trigger_threshold, 0.80);
+        assert_eq!(config.target_threshold, 0.60);
+        assert_eq!(config.protected_messages, 12);
     }
 
     #[test]
     fn test_trigger_tokens() {
         let config = CompactionConfig::default();
         // Available: 200k - 16k = 184k
-        // Trigger: 184k * 0.55 = 101,200
-        assert_eq!(config.trigger_tokens(), 101_200);
+        // Trigger: 184k * 0.80 = 147,200
+        assert_eq!(config.trigger_tokens(), 147_200);
     }
 
     #[test]
     fn test_target_tokens() {
         let config = CompactionConfig::default();
         // Available: 184k
-        // Target: 184k * 0.45 = 82,800
-        assert_eq!(config.target_tokens(), 82_800);
+        // Target: 184k * 0.60 = 110,400
+        assert_eq!(config.target_tokens(), 110_400);
     }
 }
