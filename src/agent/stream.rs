@@ -15,6 +15,10 @@ use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, warn};
 
+const MAX_RETRIES: u32 = 3;
+/// Cap server-requested retry delays to prevent excessively long waits.
+const MAX_RETRY_DELAY: u64 = 60;
+
 /// Context for streaming operations, bundling agent state.
 pub(crate) struct StreamContext<'a> {
     pub provider: &'a Arc<dyn LlmApi>,
@@ -89,9 +93,6 @@ async fn stream_with_retry(
     tx: &mpsc::Sender<AgentEvent>,
     abort_token: &CancellationToken,
 ) -> Result<Option<(Vec<ContentBlock>, Vec<ToolCallEvent>)>> {
-    const MAX_RETRIES: u32 = 3;
-    /// Cap server-requested retry delays to prevent excessively long waits.
-    const MAX_RETRY_DELAY: u64 = 60;
     /// No SSE event received for this duration → treat as stale stream.
     /// Resets on every received event (select! recreates the sleep each iteration).
     const STREAM_STALE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
@@ -174,11 +175,17 @@ async fn stream_with_retry(
                         }
                         Some(StreamEvent::Done) => {}
                         None => {
-                            if let Ok(Err(e)) = handle.await {
-                                if let crate::provider::Error::RateLimited { retry_after } = &e {
-                                    server_retry_after = *retry_after;
+                            match handle.await {
+                                Ok(Err(e)) => {
+                                    if let crate::provider::Error::RateLimited { retry_after } = &e {
+                                        server_retry_after = *retry_after;
+                                    }
+                                    stream_error = Some(e.to_string());
                                 }
-                                stream_error = Some(e.to_string());
+                                Err(join_err) if join_err.is_panic() => {
+                                    stream_error = Some("Provider task panicked".to_string());
+                                }
+                                _ => {}
                             }
                             break;
                         }
@@ -237,8 +244,6 @@ async fn complete_with_retry(
     tx: &mpsc::Sender<AgentEvent>,
     abort_token: &CancellationToken,
 ) -> Result<(Vec<ContentBlock>, Vec<ToolCallEvent>)> {
-    const MAX_RETRIES: u32 = 3;
-    const MAX_RETRY_DELAY: u64 = 60;
     let mut retry_count = 0u32;
 
     let response = loop {
