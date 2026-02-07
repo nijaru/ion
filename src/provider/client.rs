@@ -39,44 +39,60 @@ impl Client {
     /// Create client from provider, auto-detecting API key or OAuth credentials.
     /// For OAuth providers, this will refresh expired tokens if possible.
     pub async fn from_provider(provider: Provider) -> Result<Self, Error> {
-        // OAuth providers: get credentials from auth storage (with refresh)
         if let Some(oauth_provider) = provider.oauth_provider() {
             let creds = auth::get_credentials(oauth_provider)
                 .await
                 .map_err(|e| Error::Build(format!("Failed to get credentials: {e}")))?
-                .ok_or_else(|| Error::MissingApiKey {
-                    backend: provider.name().to_string(),
-                    env_vars: vec![format!(
-                        "Run 'ion login {}' to authenticate",
-                        oauth_provider.storage_key()
-                    )],
-                })?;
+                .ok_or_else(|| Self::missing_oauth_error(provider, oauth_provider))?;
+            return Self::from_credentials(provider, &creds);
+        }
+        Self::from_env(provider)
+    }
 
-            if provider == Provider::ChatGpt {
-                let account_id = match &creds {
-                    auth::Credentials::OAuth(tokens) => tokens.chatgpt_account_id.clone(),
-                    _ => None,
-                };
-                let client = ChatGptResponsesClient::new(creds.token(), account_id);
-                return Ok(Self {
-                    provider,
-                    backend: Backend::ChatGptResponses(client),
-                });
-            }
+    /// Create client from provider synchronously (no token refresh).
+    /// Use `from_provider` for OAuth providers to ensure token refresh.
+    pub fn from_provider_sync(provider: Provider) -> Result<Self, Error> {
+        if let Some(oauth_provider) = provider.oauth_provider() {
+            let storage = auth::AuthStorage::new()
+                .map_err(|e| Error::Build(format!("Failed to access auth storage: {e}")))?;
+            let creds = storage
+                .load(oauth_provider)
+                .map_err(|e| Error::Build(format!("Failed to load credentials: {e}")))?
+                .ok_or_else(|| Self::missing_oauth_error(provider, oauth_provider))?;
+            return Self::from_credentials(provider, &creds);
+        }
+        Self::from_env(provider)
+    }
 
-            let project_id = if provider == Provider::Gemini {
-                match &creds {
-                    auth::Credentials::OAuth(tokens) => tokens.google_project_id.clone(),
-                    _ => None,
-                }
-            } else {
-                None
+    /// Build a client from already-resolved credentials.
+    fn from_credentials(provider: Provider, creds: &auth::Credentials) -> Result<Self, Error> {
+        if provider == Provider::ChatGpt {
+            let account_id = match creds {
+                auth::Credentials::OAuth(tokens) => tokens.chatgpt_account_id.clone(),
+                _ => None,
             };
-            let backend = Self::create_backend(provider, creds.token(), None, project_id.as_deref())?;
-            return Ok(Self { provider, backend });
+            let client = ChatGptResponsesClient::new(creds.token(), account_id);
+            return Ok(Self {
+                provider,
+                backend: Backend::ChatGptResponses(client),
+            });
         }
 
-        // Standard providers: get API key from environment
+        let project_id = if provider == Provider::Gemini {
+            match creds {
+                auth::Credentials::OAuth(tokens) => tokens.google_project_id.clone(),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        let backend =
+            Self::create_backend(provider, creds.token(), None, project_id.as_deref())?;
+        Ok(Self { provider, backend })
+    }
+
+    /// Build a client from environment API key.
+    fn from_env(provider: Provider) -> Result<Self, Error> {
         let api_key = provider.api_key().ok_or_else(|| Error::MissingApiKey {
             backend: provider.name().to_string(),
             env_vars: provider
@@ -88,59 +104,14 @@ impl Client {
         Self::new(provider, api_key)
     }
 
-    /// Create client from provider synchronously (no token refresh).
-    /// Use `from_provider` for OAuth providers to ensure token refresh.
-    pub fn from_provider_sync(provider: Provider) -> Result<Self, Error> {
-        // OAuth providers: get credentials from auth storage (no refresh)
-        if let Some(oauth_provider) = provider.oauth_provider() {
-            let storage = auth::AuthStorage::new()
-                .map_err(|e| Error::Build(format!("Failed to access auth storage: {e}")))?;
-
-            let creds = storage
-                .load(oauth_provider)
-                .map_err(|e| Error::Build(format!("Failed to load credentials: {e}")))?
-                .ok_or_else(|| Error::MissingApiKey {
-                    backend: provider.name().to_string(),
-                    env_vars: vec![format!(
-                        "Run 'ion login {}' to authenticate",
-                        oauth_provider.storage_key()
-                    )],
-                })?;
-
-            if provider == Provider::ChatGpt {
-                let account_id = match &creds {
-                    auth::Credentials::OAuth(tokens) => tokens.chatgpt_account_id.clone(),
-                    _ => None,
-                };
-                let client = ChatGptResponsesClient::new(creds.token(), account_id);
-                return Ok(Self {
-                    provider,
-                    backend: Backend::ChatGptResponses(client),
-                });
-            }
-
-            let project_id = if provider == Provider::Gemini {
-                match &creds {
-                    auth::Credentials::OAuth(tokens) => tokens.google_project_id.clone(),
-                    _ => None,
-                }
-            } else {
-                None
-            };
-            let backend = Self::create_backend(provider, creds.token(), None, project_id.as_deref())?;
-            return Ok(Self { provider, backend });
-        }
-
-        // Standard providers: get API key from environment
-        let api_key = provider.api_key().ok_or_else(|| Error::MissingApiKey {
+    fn missing_oauth_error(provider: Provider, oauth_provider: auth::OAuthProvider) -> Error {
+        Error::MissingApiKey {
             backend: provider.name().to_string(),
-            env_vars: provider
-                .env_vars()
-                .iter()
-                .map(std::string::ToString::to_string)
-                .collect(),
-        })?;
-        Self::new(provider, api_key)
+            env_vars: vec![format!(
+                "Run 'ion login {}' to authenticate",
+                oauth_provider.storage_key()
+            )],
+        }
     }
 
     /// Create client with custom base URL (for proxies or local servers).
