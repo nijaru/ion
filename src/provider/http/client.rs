@@ -3,7 +3,7 @@
 use crate::provider::error::Error;
 use bytes::Bytes;
 use futures::Stream;
-use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
+use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue, RETRY_AFTER};
 use serde::{Serialize, de::DeserializeOwned};
 use std::time::Duration;
 
@@ -99,6 +99,10 @@ impl HttpClient {
             .await?;
 
         let status = response.status();
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            let retry_after = parse_retry_after(&response);
+            return Err(Error::RateLimited { retry_after });
+        }
         let text = response.text().await?;
 
         if !status.is_success() {
@@ -127,6 +131,10 @@ impl HttpClient {
             .await?;
 
         let status = response.status();
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            let retry_after = parse_retry_after(&response);
+            return Err(Error::RateLimited { retry_after });
+        }
         if !status.is_success() {
             let text = response.text().await.unwrap_or_default();
             return Err(Error::Api(format!("HTTP {status}: {text}")));
@@ -153,6 +161,23 @@ impl HttpClient {
             base_url: self.base_url,
             auth: self.auth,
         }
+    }
+}
+
+/// Parse `Retry-After` header value as seconds.
+///
+/// Handles the common case of a decimal seconds value (e.g. `Retry-After: 30`).
+/// Ignores HTTP-date format — falls back to None.
+fn parse_retry_after(response: &reqwest::Response) -> Option<u64> {
+    let value = response.headers().get(RETRY_AFTER)?;
+    let s = value.to_str().ok()?.trim();
+    // Parse as integer seconds; also handle fractional (round up)
+    if let Ok(secs) = s.parse::<u64>() {
+        Some(secs.max(1))
+    } else if let Ok(f) = s.parse::<f64>() {
+        Some((f.ceil() as u64).max(1))
+    } else {
+        None
     }
 }
 

@@ -88,7 +88,9 @@ pub enum Error {
     #[error("HTTP error: {0}")]
     Http(#[from] reqwest::Error),
 
-    #[error("Rate limited, retry after {retry_after:?}s")]
+    #[error("Rate limited{}",
+        if let Some(s) = .retry_after { format!(", retry after {s}s") } else { String::new() }
+    )]
     RateLimited { retry_after: Option<u64> },
 
     #[error("Context overflow: {used} > {limit}")]
@@ -148,5 +150,31 @@ mod tests {
         let error = "HTTP 500: {invalid json}";
         let formatted = format_api_error(error);
         assert_eq!(formatted, "HTTP 500: {invalid json}");
+    }
+
+    #[test]
+    fn test_rate_limited_display_with_retry_after() {
+        let err = Error::RateLimited {
+            retry_after: Some(30),
+        };
+        assert_eq!(err.to_string(), "Rate limited, retry after 30s");
+    }
+
+    #[test]
+    fn test_rate_limited_display_without_retry_after() {
+        let err = Error::RateLimited { retry_after: None };
+        assert_eq!(err.to_string(), "Rate limited");
+    }
+
+    #[test]
+    fn test_rate_limited_display_detected_as_retryable() {
+        // Verify the RateLimited display matches retryable_category detection
+        let with = Error::RateLimited {
+            retry_after: Some(10),
+        }
+        .to_string();
+        let without = Error::RateLimited { retry_after: None }.to_string();
+        assert!(with.to_lowercase().contains("rate limited"));
+        assert!(without.to_lowercase().contains("rate limited"));
     }
 }

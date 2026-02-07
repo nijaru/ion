@@ -42,3 +42,72 @@ pub(crate) fn retryable_category(err: &str) -> Option<&'static str> {
 
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_rate_limit_detection() {
+        assert_eq!(
+            retryable_category("HTTP 429: rate limit"),
+            Some("Rate limited")
+        );
+        assert_eq!(retryable_category("Rate limited"), Some("Rate limited"));
+        assert_eq!(
+            retryable_category("Rate limited, retry after 30s"),
+            Some("Rate limited")
+        );
+    }
+
+    #[test]
+    fn test_timeout_detection() {
+        assert_eq!(
+            retryable_category("request timeout"),
+            Some("Request timed out")
+        );
+        assert_eq!(
+            retryable_category("connection timed out"),
+            Some("Request timed out")
+        );
+        assert_eq!(
+            retryable_category("deadline exceeded"),
+            Some("Request timed out")
+        );
+    }
+
+    #[test]
+    fn test_network_error_detection() {
+        assert_eq!(
+            retryable_category("connection refused"),
+            Some("Network error")
+        );
+        assert_eq!(
+            retryable_category("DNS resolution failed"),
+            Some("Network error")
+        );
+    }
+
+    #[test]
+    fn test_server_error_detection() {
+        assert_eq!(
+            retryable_category("HTTP 500: Internal"),
+            Some("Server error")
+        );
+        assert_eq!(
+            retryable_category("HTTP 502: Bad Gateway"),
+            Some("Server error")
+        );
+        assert_eq!(
+            retryable_category("HTTP 503: Service Unavailable"),
+            Some("Server error")
+        );
+    }
+
+    #[test]
+    fn test_non_retryable() {
+        assert_eq!(retryable_category("HTTP 400: Bad Request"), None);
+        assert_eq!(retryable_category("HTTP 401: Unauthorized"), None);
+        assert_eq!(retryable_category("Invalid API key"), None);
+    }
+}
