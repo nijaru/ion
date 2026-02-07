@@ -169,16 +169,15 @@ impl Client {
                 None,
             ))),
 
-            // Google/Gemini use native Generative AI API
-            Provider::Google | Provider::Gemini => {
-                Ok(Backend::GeminiOAuth(GeminiOAuthClient::new(
-                    api_key,
-                    project_id.map(str::to_string),
-                )))
-            }
+            // Gemini OAuth uses Code Assist API
+            Provider::Gemini => Ok(Backend::GeminiOAuth(GeminiOAuthClient::new(
+                api_key,
+                project_id.map(str::to_string),
+            ))),
 
-            // OpenAI-compatible providers
-            Provider::OpenAI
+            // OpenAI-compatible providers (including Google via Generative Language API)
+            Provider::Google
+            | Provider::OpenAI
             | Provider::OpenRouter
             | Provider::Groq
             | Provider::Kimi
@@ -316,6 +315,6 @@ mod tests {
     fn test_google_backend() {
         let client = Client::new(Provider::Google, "test-key").unwrap();
         assert_eq!(client.provider(), Provider::Google);
-        assert!(matches!(client.backend, Backend::GeminiOAuth(_)));
+        assert!(matches!(client.backend, Backend::OpenAICompat(_)));
     }
 }
