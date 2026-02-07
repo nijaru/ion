@@ -218,23 +218,9 @@ impl CodeAssistRequest {
     }
 }
 
-/// Generate a simple UUID v4.
+/// Generate a UUID v4.
 fn uuid_v4() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let ts = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let pid = u128::from(std::process::id());
-    let val = ts ^ (pid << 32);
-    format!(
-        "{:08x}-{:04x}-4{:03x}-{:04x}-{:012x}",
-        (val >> 96) as u32,
-        (val >> 80) as u16,
-        (val >> 64) as u16 & 0x0fff,
-        ((val >> 48) as u16 & 0x3fff) | 0x8000,
-        val as u64 & 0xffff_ffff_ffff,
-    )
+    uuid::Uuid::new_v4().to_string()
 }
 
 #[derive(Debug, Serialize)]
