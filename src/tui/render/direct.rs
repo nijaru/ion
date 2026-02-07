@@ -282,6 +282,8 @@ impl App {
         execute!(w, SetForegroundColor(CColor::Cyan))?;
         if let Some(ref tool) = self.task.current_tool {
             execute!(w, Print(" "), Print(tool))?;
+        } else if self.task.thinking_start.is_some() {
+            execute!(w, Print(" Thinking..."))?;
         } else {
             execute!(w, Print(" Ionizing..."))?;
         }
