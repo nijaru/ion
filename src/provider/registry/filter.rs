@@ -91,6 +91,38 @@ impl ModelRegistry {
         });
     }
 
+    /// Select the best model for summarization from a model list.
+    ///
+    /// Picks the newest model among the cheapest tier (input price within 2x of
+    /// the minimum). Requires at least 8k context. Falls back to `None` if no
+    /// model has pricing data (e.g., local providers).
+    pub fn select_summarization_model(models: &[ModelInfo]) -> Option<&ModelInfo> {
+        // Filter: has pricing, reasonable context window
+        let mut candidates: Vec<&ModelInfo> = models
+            .iter()
+            .filter(|m| m.pricing.input > 0.0 && m.context_window >= 8_000)
+            .collect();
+
+        if candidates.is_empty() {
+            return None;
+        }
+
+        // Find cheapest input price
+        let min_price = candidates
+            .iter()
+            .map(|m| m.pricing.input)
+            .fold(f64::INFINITY, f64::min);
+
+        // Keep models within 2x of cheapest (avoids picking an ancient model
+        // that's $0.001 cheaper than the newest small model)
+        let price_ceiling = min_price * 2.0;
+        candidates.retain(|m| m.pricing.input <= price_ceiling);
+
+        // Among cheap models, pick newest (highest created timestamp)
+        candidates.sort_by(|a, b| b.created.cmp(&a.created));
+        candidates.into_iter().next()
+    }
+
     /// Check if a model passes the filter criteria.
     pub(crate) fn model_matches_filter(
         model: &ModelInfo,

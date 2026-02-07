@@ -6,6 +6,16 @@ use super::ModelRegistry;
 use std::time::Instant;
 
 fn make_test_model(id: &str, provider: &str, price: f64, has_cache: bool) -> ModelInfo {
+    make_test_model_dated(id, provider, price, has_cache, 0)
+}
+
+fn make_test_model_dated(
+    id: &str,
+    provider: &str,
+    price: f64,
+    has_cache: bool,
+    created: u64,
+) -> ModelInfo {
     ModelInfo {
         id: id.to_string(),
         name: id.to_string(),
@@ -21,7 +31,7 @@ fn make_test_model(id: &str, provider: &str, price: f64, has_cache: bool) -> Mod
             cache_read: if has_cache { Some(price * 0.1) } else { None },
             cache_write: if has_cache { Some(price * 1.25) } else { None },
         },
-        created: 0,
+        created,
     }
 }
 
@@ -152,4 +162,43 @@ async fn test_fetch_local_models() {
         assert!(!model.id.is_empty());
         assert_eq!(model.provider, "local");
     }
+}
+
+#[test]
+fn test_select_summarization_model_picks_newest_cheap() {
+    let models = vec![
+        make_test_model_dated("old-cheap", "a", 0.10, false, 1_700_000_000),
+        make_test_model_dated("new-cheap", "a", 0.12, false, 1_750_000_000),
+        make_test_model_dated("expensive", "a", 15.0, false, 1_760_000_000),
+    ];
+    let picked = ModelRegistry::select_summarization_model(&models).unwrap();
+    assert_eq!(picked.id, "new-cheap");
+}
+
+#[test]
+fn test_select_summarization_model_no_pricing() {
+    let models = vec![ModelInfo {
+        id: "local-model".to_string(),
+        name: "local-model".to_string(),
+        provider: "local".to_string(),
+        context_window: 32_000,
+        supports_tools: true,
+        supports_vision: false,
+        supports_thinking: false,
+        supports_cache: false,
+        pricing: ModelPricing::default(), // zero pricing
+        created: 0,
+    }];
+    assert!(ModelRegistry::select_summarization_model(&models).is_none());
+}
+
+#[test]
+fn test_select_summarization_model_skips_small_context() {
+    let models = vec![
+        make_test_model_dated("tiny-ctx", "a", 0.05, false, 1_750_000_000),
+    ];
+    // Override context window to be too small
+    let mut models = models;
+    models[0].context_window = 4_000;
+    assert!(ModelRegistry::select_summarization_model(&models).is_none());
 }
