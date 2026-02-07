@@ -13,7 +13,8 @@ use crate::agent::context::ContextManager;
 use crate::agent::designer::{Designer, Plan};
 use crate::agent::instructions::InstructionLoader;
 use crate::compaction::{
-    CompactionConfig, PruningTier, TokenCounter, check_compaction_needed, prune_messages,
+    CompactionConfig, CompactionTier, TokenCounter, check_compaction_needed,
+    compact_with_summarization,
 };
 use crate::provider::{ContentBlock, LlmApi, Message, Role, ThinkingConfig};
 use crate::session::Session;
@@ -138,16 +139,40 @@ impl Agent {
         self
     }
 
-    /// Manually compact messages by pruning tool outputs.
+    /// Manually compact messages with mechanical pruning only (Tier 1 + 2).
     ///
+    /// Synchronous -- safe to call from event handlers.
     /// Returns the number of messages modified, or 0 if no pruning was needed.
     pub fn compact_messages(&self, messages: &mut [Message]) -> usize {
+        use crate::compaction::prune_messages;
+
         let mut config = self.compaction_config.clone();
         config.context_window = self.context_window();
 
         let target = config.target_tokens();
         let result = prune_messages(messages, &config, &self.token_counter, target);
         result.messages_modified
+    }
+
+    /// Full compaction pipeline (Tier 1 + 2 + 3) with LLM summarization.
+    ///
+    /// Async -- uses the provider to call a summarization model.
+    pub async fn compact_with_summary(
+        &self,
+        messages: &mut Vec<Message>,
+        model: &str,
+    ) -> crate::compaction::CompactionResult {
+        let mut config = self.compaction_config.clone();
+        config.context_window = self.context_window();
+
+        compact_with_summarization(
+            messages,
+            &config,
+            &self.token_counter,
+            self.provider.as_ref(),
+            model,
+        )
+        .await
     }
 
     /// Update the context window size (call when model changes).
@@ -377,10 +402,16 @@ impl Agent {
         if check_compaction_needed(&session.messages, &config, &self.token_counter).needs_compaction
         {
             let mut messages = (*session.messages).to_vec();
-            let target = config.target_tokens();
-            let result = prune_messages(&mut messages, &config, &self.token_counter, target);
+            let result = compact_with_summarization(
+                &mut messages,
+                &config,
+                &self.token_counter,
+                self.provider.as_ref(),
+                &session.model,
+            )
+            .await;
 
-            if result.tier_reached != PruningTier::None {
+            if result.tier_reached != CompactionTier::None {
                 session.messages = messages;
                 let _ = tx
                     .send(AgentEvent::CompactionStatus {

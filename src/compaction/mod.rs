@@ -3,11 +3,13 @@
 
 mod counter;
 mod pruning;
+mod summarization;
 
 pub use counter::{TokenCount, TokenCounter};
 pub use pruning::{prune_messages, PruningResult, PruningTier};
+pub use summarization::{SummarizationResult, apply_summary, summarize_messages};
 
-use crate::provider::Message;
+use crate::provider::{LlmApi, Message};
 
 /// Configuration for context compaction.
 #[derive(Debug, Clone)]
@@ -91,6 +93,110 @@ pub fn check_compaction_needed(
         trigger_tokens: trigger,
         needs_compaction: count.total >= trigger,
         message_count: messages.len(),
+    }
+}
+
+/// Result of full compaction pipeline (Tier 1 + 2 + 3).
+#[derive(Debug, Clone)]
+pub struct CompactionResult {
+    pub tokens_before: usize,
+    pub tokens_after: usize,
+    pub tier_reached: CompactionTier,
+    /// Summary text if Tier 3 was applied.
+    pub summary: Option<String>,
+}
+
+/// Which compaction tier was applied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompactionTier {
+    None,
+    /// Tier 1/2: mechanical pruning only
+    Mechanical,
+    /// Tier 3: LLM-based summarization
+    Summarized,
+}
+
+/// Run the full compaction pipeline: Tier 1 → 2 → 3.
+///
+/// Tier 1/2 are synchronous mechanical pruning. If still over target,
+/// Tier 3 uses an LLM to summarize old conversation turns.
+pub async fn compact_with_summarization(
+    messages: &mut Vec<Message>,
+    config: &CompactionConfig,
+    counter: &TokenCounter,
+    provider: &dyn LlmApi,
+    model: &str,
+) -> CompactionResult {
+    let tokens_before = counter.count_messages(messages).total;
+    let target = config.target_tokens();
+
+    if tokens_before <= target {
+        return CompactionResult {
+            tokens_before,
+            tokens_after: tokens_before,
+            tier_reached: CompactionTier::None,
+            summary: None,
+        };
+    }
+
+    // Tier 1 + 2: mechanical pruning
+    let pruning_result = prune_messages(messages, config, counter, target);
+    let tokens_after_mechanical = pruning_result.tokens_after;
+
+    if tokens_after_mechanical <= target {
+        return CompactionResult {
+            tokens_before,
+            tokens_after: tokens_after_mechanical,
+            tier_reached: CompactionTier::Mechanical,
+            summary: None,
+        };
+    }
+
+    // Tier 3: LLM summarization
+    tracing::info!(
+        tokens_after_mechanical,
+        target,
+        "Tier 1/2 insufficient, running Tier 3 LLM summarization"
+    );
+
+    match summarize_messages(messages, config.protected_messages, provider, model, counter).await {
+        Ok(result) if !result.summary.is_empty() => {
+            let new_messages = apply_summary(messages, &result);
+            let tokens_after = counter.count_messages(&new_messages).total;
+
+            tracing::info!(
+                messages_summarized = result.messages_summarized,
+                tokens_after,
+                "Tier 3 summarization complete"
+            );
+
+            *messages = new_messages;
+
+            CompactionResult {
+                tokens_before,
+                tokens_after,
+                tier_reached: CompactionTier::Summarized,
+                summary: Some(result.summary),
+            }
+        }
+        Ok(_) => {
+            tracing::warn!("Summarization returned empty result, keeping Tier 2 output");
+            CompactionResult {
+                tokens_before,
+                tokens_after: tokens_after_mechanical,
+                tier_reached: CompactionTier::Mechanical,
+                summary: None,
+            }
+        }
+        Err(e) => {
+            tracing::warn!("Summarization failed, keeping Tier 2 output: {e}");
+            CompactionResult {
+                tokens_before,
+                tokens_after: tokens_after_mechanical,
+                tier_reached: CompactionTier::Mechanical,
+                summary: None,
+            }
+        }
     }
 }
 
