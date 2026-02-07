@@ -70,7 +70,7 @@ impl App {
                 let already = self.render_state.streaming_lines_rendered;
                 let safe = all_lines.len().saturating_sub(2);
                 if safe > already {
-                    new_lines.extend(all_lines[already..safe].iter().cloned());
+                    new_lines.extend(all_lines.into_iter().skip(already).take(safe - already));
                     self.render_state.streaming_lines_rendered = safe;
                 }
             }
