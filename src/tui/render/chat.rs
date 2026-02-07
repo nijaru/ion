@@ -26,27 +26,55 @@ impl App {
         if self.render_state.rendered_entries > entry_count {
             self.render_state.rendered_entries = 0;
             self.render_state.buffered_chat_lines.clear();
+            self.render_state.streaming_lines_rendered = 0;
         }
 
         let mut new_lines = Vec::new();
         let mut index = self.render_state.rendered_entries;
         while index < entry_count {
             let entry = &self.message_list.entries[index];
-            // Only skip the last entry if it's an Agent entry being actively streamed
-            // This allows Tool entries and completed Agent responses to render mid-run
+            // Skip the actively streaming agent entry (handled in streaming phase below)
             let is_last = index == entry_count - 1;
             if entry.sender == Sender::Agent && self.is_running && is_last {
                 break;
             }
-            let mut entry_lines = ChatRenderer::build_lines(
+            let entry_lines = ChatRenderer::build_lines(
                 &self.message_list.entries[index..=index],
                 None,
                 wrap_width as usize,
             );
-            new_lines.append(&mut entry_lines);
+            // Skip already-committed streaming lines to prevent duplicates
+            // (handles tool-call interruption and agent finish)
+            if entry.sender == Sender::Agent && self.render_state.streaming_lines_rendered > 0 {
+                let skip = self.render_state.streaming_lines_rendered;
+                self.render_state.streaming_lines_rendered = 0;
+                new_lines.extend(entry_lines.into_iter().skip(skip));
+            } else {
+                new_lines.extend(entry_lines);
+            }
             index += 1;
         }
         self.render_state.rendered_entries = index;
+
+        // Incrementally render the actively streaming agent entry.
+        // Hold back last 2 lines: the last content line may change from
+        // word-wrapping or unclosed markdown, plus the trailing blank line.
+        if self.is_running && index < entry_count {
+            let entry = &self.message_list.entries[index];
+            if entry.sender == Sender::Agent {
+                let all_lines = ChatRenderer::build_lines(
+                    &self.message_list.entries[index..=index],
+                    None,
+                    wrap_width as usize,
+                );
+                let already = self.render_state.streaming_lines_rendered;
+                let safe = all_lines.len().saturating_sub(2);
+                if safe > already {
+                    new_lines.extend(all_lines[already..safe].iter().cloned());
+                    self.render_state.streaming_lines_rendered = safe;
+                }
+            }
+        }
 
         if self.mode == Mode::Selector {
             if !new_lines.is_empty() {
