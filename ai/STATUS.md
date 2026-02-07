@@ -7,7 +7,7 @@
 | Phase     | Feature work  | 2026-02-07 |
 | Status    | P3 tasks open | 2026-02-07 |
 | Toolchain | stable        | 2026-01-22 |
-| Tests     | 320 passing   | 2026-02-07 |
+| Tests     | 327 passing   | 2026-02-07 |
 | Clippy    | clean         | 2026-02-07 |
 
 ## Session Summary (2026-02-07)
@@ -21,13 +21,13 @@
 - Dead code cleanup: removed unused Agent::compact_with_summary
 - Compact tool placeholder now replaced with actual result after compaction
 - Eliminated format_k duplication in status bar (reuses format_tokens)
-- Created tk-rbx8: per-provider summarization model defaults
+- Dynamic summarization model selection (tk-rbx8): parse release_date from models.dev, select newest-cheapest model for Tier 3, provider-scoped guard (79d5f62, c726250)
 
 ## Priority Queue
 
 ### P3 — Important improvements
 
-tk-rbx8 (summarization model per provider), tk-c1ij (retry-after), tk-i2o1 (@file refs), tk-g8xo (session cleanup), tk-75jw (web search), tk-2bk7 (scrollback), tk-jqe6 (parallel tool grouping), tk-r11l (research locations), tk-nyqq (symlink skills)
+tk-c1ij (retry-after), tk-i2o1 (@file refs), tk-g8xo (session cleanup), tk-75jw (web search), tk-2bk7 (scrollback), tk-jqe6 (parallel tool grouping), tk-r11l (research locations), tk-nyqq (symlink skills)
 
 ### P4 — Deferred
 
