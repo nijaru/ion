@@ -146,6 +146,24 @@ impl App {
                 AgentEvent::CompactionStatus { before, after } => {
                     let saved = before.saturating_sub(*after);
                     tracing::info!("Compacted: {before} -> {after} tokens ({saved} freed)");
+
+                    use crate::tui::message_list::{MessageEntry, Sender};
+                    let format_k = |n: &usize| -> String {
+                        if *n >= 1000 {
+                            format!("{}k", n / 1000)
+                        } else {
+                            n.to_string()
+                        }
+                    };
+                    self.message_list.push_entry(MessageEntry::new(
+                        Sender::System,
+                        format!(
+                            "Context compacted ({} -> {} tokens, {} freed)",
+                            format_k(before),
+                            format_k(after),
+                            format_k(&saved),
+                        ),
+                    ));
                 }
                 _ => {
                     self.message_list.push_event(event);
