@@ -21,6 +21,56 @@ pub struct ToolCallEvent {
     pub arguments: serde_json::Value,
 }
 
+/// Accumulates streamed tool call deltas into a complete `ToolCallEvent`.
+///
+/// Used by providers that receive tool call arguments as incremental JSON chunks.
+/// Anthropic sends id/name upfront; OpenAI-compatible providers send them incrementally.
+#[derive(Debug, Default)]
+pub struct ToolBuilder {
+    pub id: Option<String>,
+    pub name: Option<String>,
+    parts: Vec<String>,
+}
+
+impl ToolBuilder {
+    /// Create a builder with id and name already known (Anthropic pattern).
+    pub fn with_id_name(id: String, name: String) -> Self {
+        Self {
+            id: Some(id),
+            name: Some(name),
+            parts: Vec::new(),
+        }
+    }
+
+    /// Append a JSON fragment to the arguments buffer.
+    pub fn push(&mut self, part: String) {
+        self.parts.push(part);
+    }
+
+    /// Assemble the final tool call event, parsing the accumulated JSON.
+    ///
+    /// Returns `None` if id or name is missing.
+    pub fn finish(self) -> Option<ToolCallEvent> {
+        let id = self.id?;
+        let name = self.name?;
+        let json_str: String = self.parts.concat();
+        let arguments = serde_json::from_str(&json_str).unwrap_or_else(|e| {
+            tracing::warn!(
+                tool = %name,
+                error = %e,
+                json_preview = %json_str.chars().take(100).collect::<String>(),
+                "Malformed tool arguments JSON, using null"
+            );
+            serde_json::Value::Null
+        });
+        Some(ToolCallEvent {
+            id,
+            name,
+            arguments,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Usage {
     pub input_tokens: u32,
