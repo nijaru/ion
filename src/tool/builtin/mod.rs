@@ -9,6 +9,7 @@ mod list;
 mod read;
 mod spawn_subagent;
 mod web_fetch;
+mod web_search;
 mod write;
 
 pub use bash::BashTool;
@@ -21,4 +22,5 @@ pub use list::ListTool;
 pub use read::ReadTool;
 pub use spawn_subagent::SpawnSubagentTool;
 pub use web_fetch::WebFetchTool;
+pub use web_search::WebSearchTool;
 pub use write::WriteTool;
