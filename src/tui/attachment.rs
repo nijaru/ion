@@ -94,11 +94,12 @@ pub async fn parse_attachments(
         };
 
         // Sandbox check
+        let display_header = format_display_header(&r.path, r.range);
         if !no_sandbox
             && let Err(msg) = check_within_dir(&path, working_dir)
         {
             attachment_blocks.push(ContentBlock::Text {
-                text: format!("--- {} ---\n[Error: {}]\n---", r.path, msg),
+                text: format!("--- {display_header} ---\n[Error: {msg}]\n---"),
             });
             continue;
         }
@@ -108,7 +109,7 @@ pub async fn parse_attachments(
             Ok(block) => attachment_blocks.push(block),
             Err(msg) => {
                 attachment_blocks.push(ContentBlock::Text {
-                    text: format!("--- {} ---\n[Error: {}]\n---", r.path, msg),
+                    text: format!("--- {display_header} ---\n[Error: {msg}]\n---"),
                 });
             }
         }
@@ -1019,5 +1020,45 @@ mod tests {
         assert!(!text.contains("line 1\n"), "should not include line 1");
         // Should not error — just reads to EOF
         assert!(!text.contains("Error"), "should not error on out-of-bounds range");
+    }
+
+    // --- parse_line_range edge cases ---
+
+    #[test]
+    fn test_parse_line_range_zero_line() {
+        // Line 0 is invalid (1-indexed), treat as path
+        let (path, range) = parse_line_range("file.rs:0");
+        assert_eq!(path, "file.rs:0");
+        assert_eq!(range, None);
+    }
+
+    #[test]
+    fn test_parse_line_range_reversed() {
+        // end < start is invalid
+        let (path, range) = parse_line_range("file.rs:50-10");
+        assert_eq!(path, "file.rs:50-10");
+        assert_eq!(range, None);
+    }
+
+    #[test]
+    fn test_parse_line_range_trailing_dash() {
+        let (path, range) = parse_line_range("file.rs:10-");
+        assert_eq!(path, "file.rs:10-");
+        assert_eq!(range, None);
+    }
+
+    #[test]
+    fn test_parse_line_range_no_colon() {
+        let (path, range) = parse_line_range("file.rs");
+        assert_eq!(path, "file.rs");
+        assert_eq!(range, None);
+    }
+
+    #[test]
+    fn test_parse_line_range_colon_in_dir() {
+        // Last colon is the range separator, earlier colons are preserved
+        let (path, range) = parse_line_range("some:dir/file.rs:42");
+        assert_eq!(path, "some:dir/file.rs");
+        assert_eq!(range, Some((42, 42)));
     }
 }
