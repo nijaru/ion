@@ -85,6 +85,8 @@ pub struct Agent {
     skills: Arc<tokio::sync::RwLock<SkillRegistry>>,
     context_manager: Arc<ContextManager>,
     active_plan: Arc<Mutex<Option<Plan>>>,
+    /// Whether the current model supports vision (image inputs).
+    supports_vision: Arc<std::sync::atomic::AtomicBool>,
     /// Cheap model for Tier 3 summarization (dynamically selected from model list).
     /// Falls back to session model when None.
     summarization_model: Arc<std::sync::Mutex<Option<String>>>,
@@ -131,6 +133,7 @@ impl Agent {
             skills: Arc::new(tokio::sync::RwLock::new(SkillRegistry::new())),
             context_manager: Arc::new(context_manager),
             active_plan: Arc::new(Mutex::new(None)),
+            supports_vision: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             summarization_model: Arc::new(std::sync::Mutex::new(None)),
         }
     }
@@ -168,6 +171,19 @@ impl Agent {
     #[must_use]
     pub fn context_window(&self) -> usize {
         self.context_window
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Update whether the current model supports vision.
+    pub fn set_supports_vision(&self, val: bool) {
+        self.supports_vision
+            .store(val, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Check if the current model supports vision.
+    #[must_use]
+    pub fn supports_vision(&self) -> bool {
+        self.supports_vision
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
@@ -291,6 +307,16 @@ impl Agent {
             .collect::<Vec<_>>()
             .join(" ");
 
+        // Estimate attachment token count for budget warning
+        let attachment_tokens: usize = user_content
+            .iter()
+            .map(|b| match b {
+                ContentBlock::Text { text } => TokenCounter::estimate_str(text),
+                ContentBlock::Image { data, .. } => data.len() * 3 / 4 / 4,
+                _ => 0,
+            })
+            .sum();
+
         session.messages.push(Message {
             role: Role::User,
             content: Arc::new(user_content),
@@ -298,6 +324,19 @@ impl Agent {
 
         // Send initial token usage
         self.emit_token_usage(&session.messages, &tx).await;
+
+        // Warn if attachments consume >25% of context window
+        let ctx_window = self.context_window();
+        if ctx_window > 0 && attachment_tokens > ctx_window / 4 {
+            let pct = attachment_tokens * 100 / ctx_window;
+            let _ = tx
+                .send(AgentEvent::Warning(format!(
+                    "Attachments use ~{pct}% of context window (~{}k of {}k tokens)",
+                    attachment_tokens / 1000,
+                    ctx_window / 1000,
+                )))
+                .await;
+        }
 
         // Optional: Run designer for complex requests
         if session.messages.len() <= 2
@@ -365,6 +404,7 @@ impl Agent {
             context_manager: &self.context_manager,
             active_plan: &self.active_plan,
             token_counter: &self.token_counter,
+            supports_vision: self.supports_vision(),
         };
         let (assistant_blocks, tool_calls) =
             stream::stream_response(&ctx, session, tx, thinking, session.abort_token.clone())

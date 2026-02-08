@@ -25,6 +25,8 @@ pub enum AgentEvent {
         cache_read_tokens: usize,
         cache_write_tokens: usize,
     },
+    /// Non-fatal warning displayed in chat (e.g., large attachment budget usage).
+    Warning(String),
     /// Retry in progress: (reason, `delay_seconds`)
     Retry(String, u64),
     Finished(String),

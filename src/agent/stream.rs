@@ -4,7 +4,8 @@ use crate::agent::designer::Plan;
 use crate::agent::retry::retryable_category;
 use crate::compaction::TokenCounter;
 use crate::provider::{
-    ChatRequest, ContentBlock, LlmApi, StreamEvent, ThinkingConfig, ToolCallEvent, ToolDefinition,
+    ChatRequest, ContentBlock, LlmApi, Message, StreamEvent, ThinkingConfig, ToolCallEvent,
+    ToolDefinition,
 };
 use crate::session::Session;
 use crate::tool::ToolOrchestrator;
@@ -26,6 +27,7 @@ pub(crate) struct StreamContext<'a> {
     pub context_manager: &'a Arc<ContextManager>,
     pub active_plan: &'a Mutex<Option<Plan>>,
     pub token_counter: &'a TokenCounter,
+    pub supports_vision: bool,
 }
 
 pub(crate) async fn stream_response(
@@ -52,9 +54,15 @@ pub(crate) async fn stream_response(
         .assemble(&session.messages, None, tool_defs, plan.as_ref())
         .await;
 
+    let messages = if ctx.supports_vision {
+        assembly.messages.clone()
+    } else {
+        strip_images(&assembly.messages)
+    };
+
     let request = ChatRequest {
         model: session.model.clone(),
-        messages: Arc::new(assembly.messages.clone()),
+        messages: Arc::new(messages),
         system: Some(Cow::Owned(assembly.system_prompt.clone())),
         tools: Arc::new(assembly.tools),
         max_tokens: None,
@@ -333,4 +341,35 @@ async fn complete_with_retry(
     }
 
     Ok((assistant_blocks, tool_calls))
+}
+
+/// Replace Image content blocks with text placeholders for non-vision models.
+fn strip_images(messages: &[Message]) -> Vec<Message> {
+    messages
+        .iter()
+        .map(|msg| {
+            let has_images = msg
+                .content
+                .iter()
+                .any(|b| matches!(b, ContentBlock::Image { .. }));
+            if !has_images {
+                return msg.clone();
+            }
+            let blocks: Vec<ContentBlock> = msg
+                .content
+                .iter()
+                .map(|b| match b {
+                    ContentBlock::Image { .. } => ContentBlock::Text {
+                        text: "[Image attachment (not sent: model does not support vision)]"
+                            .to_string(),
+                    },
+                    other => other.clone(),
+                })
+                .collect();
+            Message {
+                role: msg.role,
+                content: Arc::new(blocks),
+            }
+        })
+        .collect()
 }

@@ -104,7 +104,7 @@ pub async fn parse_attachments(
         }
 
         let ref_path = r.path.clone();
-        match resolve_attachment(&path, &ref_path, &mut aggregate_text_bytes).await {
+        match resolve_attachment(&path, &ref_path, r.range, &mut aggregate_text_bytes).await {
             Ok(block) => attachment_blocks.push(block),
             Err(msg) => {
                 attachment_blocks.push(ContentBlock::Text {
@@ -139,6 +139,8 @@ pub async fn parse_attachments(
 #[derive(Debug)]
 struct PathRef {
     path: String,
+    /// Optional line range (start, end), 1-indexed inclusive.
+    range: Option<(usize, usize)>,
     start: usize,
     end: usize,
 }
@@ -173,7 +175,7 @@ fn extract_refs(input: &str) -> Vec<PathRef> {
             break;
         }
 
-        // Quoted path: @"path with spaces"
+        // Quoted path: @"path with spaces" or @"path":10-50
         let (path, end) = if bytes[i] == b'"' {
             i += 1; // skip opening quote
             let quote_start = i;
@@ -184,7 +186,19 @@ fn extract_refs(input: &str) -> Vec<PathRef> {
             if i < bytes.len() {
                 i += 1; // skip closing quote
             }
-            (path.to_string(), i)
+            // Consume optional :N-M suffix after closing quote
+            let suffix_start = i;
+            if i < bytes.len() && bytes[i] == b':' {
+                i += 1;
+                while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == b'-') {
+                    i += 1;
+                }
+                // Include the suffix in the path so parse_line_range can extract it
+                let suffix = &input[suffix_start..i];
+                (format!("{path}{suffix}"), i)
+            } else {
+                (path.to_string(), i)
+            }
         } else {
             // Unquoted path: ends at whitespace
             let path_start = i;
@@ -199,6 +213,9 @@ fn extract_refs(input: &str) -> Vec<PathRef> {
             continue;
         }
 
+        // Parse optional :N-M or :N line range suffix
+        let (path, range) = parse_line_range(&path);
+
         // Must contain `/` or `.` to distinguish from @username
         if !path.contains('/') && !path.contains('.') {
             continue;
@@ -206,12 +223,58 @@ fn extract_refs(input: &str) -> Vec<PathRef> {
 
         refs.push(PathRef {
             path,
+            range,
             start: at_pos,
             end,
         });
     }
 
     refs
+}
+
+/// Parse a `:N-M` or `:N` line range suffix from a path string.
+///
+/// Returns `(path, Some((start, end)))` if a valid range was found,
+/// or `(original_path, None)` if not. Only treats as range when the
+/// colon is followed by digits (avoids matching Windows paths like `C:\`).
+fn parse_line_range(path: &str) -> (String, Option<(usize, usize)>) {
+    // Find last colon
+    let Some(colon_pos) = path.rfind(':') else {
+        return (path.to_string(), None);
+    };
+
+    let suffix = &path[colon_pos + 1..];
+    if suffix.is_empty() {
+        return (path.to_string(), None);
+    }
+
+    // Must start with a digit
+    if !suffix.as_bytes()[0].is_ascii_digit() {
+        return (path.to_string(), None);
+    }
+
+    // Try N-M format
+    if let Some(dash_pos) = suffix.find('-') {
+        let start_str = &suffix[..dash_pos];
+        let end_str = &suffix[dash_pos + 1..];
+        if let (Ok(start), Ok(end)) = (start_str.parse::<usize>(), end_str.parse::<usize>())
+            && start > 0
+            && end >= start
+        {
+            return (path[..colon_pos].to_string(), Some((start, end)));
+        }
+        // Invalid range format — treat whole thing as path
+        return (path.to_string(), None);
+    }
+
+    // Try single line N
+    if let Ok(line) = suffix.parse::<usize>()
+        && line > 0
+    {
+        return (path[..colon_pos].to_string(), Some((line, line)));
+    }
+
+    (path.to_string(), None)
 }
 
 /// Sandbox check: verify path resolves within working_dir.
@@ -244,6 +307,7 @@ fn check_within_dir(path: &Path, working_dir: &Path) -> Result<(), String> {
 async fn resolve_attachment(
     path: &Path,
     display_path: &str,
+    range: Option<(usize, usize)>,
     aggregate_text_bytes: &mut usize,
 ) -> Result<ContentBlock, String> {
     let metadata = std::fs::metadata(path).map_err(|e| format!("cannot read: {e}"))?;
@@ -306,7 +370,7 @@ async fn resolve_attachment(
     }
 
     // Text file
-    let block = load_text_file(path, display_path, &metadata)?;
+    let block = load_text_file(path, display_path, &metadata, range)?;
     if let ContentBlock::Text { ref text } = block {
         *aggregate_text_bytes += text.len();
         if *aggregate_text_bytes > AGGREGATE_TEXT_CAP {
@@ -316,11 +380,21 @@ async fn resolve_attachment(
     Ok(block)
 }
 
+/// Format the display header for a file, including optional line range.
+fn format_display_header(display_path: &str, range: Option<(usize, usize)>) -> String {
+    match range {
+        Some((start, end)) if start == end => format!("{display_path}:{start}"),
+        Some((start, end)) => format!("{display_path}:{start}-{end}"),
+        None => display_path.to_string(),
+    }
+}
+
 /// Load a text file with size and line truncation.
 fn load_text_file(
     path: &Path,
     display_path: &str,
     metadata: &std::fs::Metadata,
+    range: Option<(usize, usize)>,
 ) -> Result<ContentBlock, String> {
     if metadata.len() > MAX_TEXT_SIZE {
         return Err(format!(
@@ -341,6 +415,18 @@ fn load_text_file(
         total_lines += 1;
         match line_result {
             Ok(line) => {
+                // Skip lines before range start
+                if let Some((start, _)) = range
+                    && total_lines < start
+                {
+                    continue;
+                }
+                // Stop after range end
+                if let Some((_, end)) = range
+                    && total_lines > end
+                {
+                    break;
+                }
                 if lines.len() < MAX_TEXT_LINES {
                     lines.push(line);
                 } else {
@@ -349,7 +435,7 @@ fn load_text_file(
             }
             Err(_) => {
                 // Non-UTF-8 — fall back to lossy read
-                return load_text_file_lossy(path, display_path, metadata);
+                return load_text_file_lossy(path, display_path, range);
             }
         }
     }
@@ -357,15 +443,14 @@ fn load_text_file(
     let mut content = lines.join("\n");
     if truncated {
         content.push_str(&format!(
-            "\n[... truncated at line {} of {} ({} bytes)]",
+            "\n[... truncated at {} lines]",
             MAX_TEXT_LINES,
-            total_lines,
-            metadata.len()
         ));
     }
 
+    let header = format_display_header(display_path, range);
     Ok(ContentBlock::Text {
-        text: format!("--- {display_path} ---\n{content}\n---"),
+        text: format!("--- {header} ---\n{content}\n---"),
     })
 }
 
@@ -373,29 +458,38 @@ fn load_text_file(
 fn load_text_file_lossy(
     path: &Path,
     display_path: &str,
-    metadata: &std::fs::Metadata,
+    range: Option<(usize, usize)>,
 ) -> Result<ContentBlock, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("cannot read: {e}"))?;
     let text = String::from_utf8_lossy(&bytes);
 
-    let lines: Vec<&str> = text.lines().collect();
+    let all_lines: Vec<&str> = text.lines().collect();
+
+    // Apply line range filter
+    let lines: Vec<&str> = if let Some((start, end)) = range {
+        let start_idx = start.saturating_sub(1); // 1-indexed to 0-indexed
+        let end_idx = end.min(all_lines.len());
+        all_lines.get(start_idx..end_idx).unwrap_or_default().to_vec()
+    } else {
+        all_lines
+    };
+
     let total = lines.len();
     let truncated = total > MAX_TEXT_LINES;
     let content: String = if truncated {
         let mut s = lines[..MAX_TEXT_LINES].join("\n");
         s.push_str(&format!(
-            "\n[... truncated at line {} of {} ({} bytes)]",
+            "\n[... truncated at {} lines]",
             MAX_TEXT_LINES,
-            total,
-            metadata.len()
         ));
         s
     } else {
         lines.join("\n")
     };
 
+    let header = format_display_header(display_path, range);
     Ok(ContentBlock::Text {
-        text: format!("--- {display_path} ---\n{content}\n---"),
+        text: format!("--- {header} ---\n{content}\n---"),
     })
 }
 
@@ -851,5 +945,79 @@ mod tests {
             matches!(b, ContentBlock::Text { text } if text.contains("aggregate") && text.contains("1MB"))
         });
         assert!(has_limit_error, "should hit aggregate size limit");
+    }
+
+    // --- Line range tests ---
+
+    #[test]
+    fn test_extract_refs_line_range() {
+        let refs = extract_refs("@file.rs:10-50");
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].path, "file.rs");
+        assert_eq!(refs[0].range, Some((10, 50)));
+    }
+
+    #[test]
+    fn test_extract_refs_single_line() {
+        let refs = extract_refs("@file.rs:42");
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].path, "file.rs");
+        assert_eq!(refs[0].range, Some((42, 42)));
+    }
+
+    #[test]
+    fn test_colon_not_range() {
+        // Non-digit after colon — treated as part of path
+        let refs = extract_refs("@file.rs:abc");
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].path, "file.rs:abc");
+        assert_eq!(refs[0].range, None);
+    }
+
+    #[test]
+    fn test_extract_refs_quoted_with_range() {
+        let refs = extract_refs("@\"file.rs\":10-50");
+        assert_eq!(refs.len(), 1);
+        // Quoted path gets range parsed from after the closing quote
+        assert_eq!(refs[0].path, "file.rs");
+        assert_eq!(refs[0].range, Some((10, 50)));
+    }
+
+    #[tokio::test]
+    async fn test_line_range_extraction() {
+        let dir = test_dir();
+        let file_path = dir.path().join("lines.txt");
+        let content: String = (1..=30).map(|i| format!("line {i}\n")).collect();
+        fs::write(&file_path, &content).unwrap();
+
+        let blocks = parse_attachments("@lines.txt:10-20", dir.path(), true).await;
+        assert_eq!(blocks.len(), 1); // No user text left after stripping ref
+        let text = match &blocks[0] {
+            ContentBlock::Text { text } => text,
+            _ => panic!("expected text block"),
+        };
+        assert!(text.contains("--- lines.txt:10-20 ---"), "header should show range");
+        assert!(text.contains("line 10"), "should include line 10");
+        assert!(text.contains("line 20"), "should include line 20");
+        assert!(!text.contains("line 9\n"), "should not include line 9");
+        assert!(!text.contains("line 21"), "should not include line 21");
+    }
+
+    #[tokio::test]
+    async fn test_line_range_out_of_bounds() {
+        let dir = test_dir();
+        let file_path = dir.path().join("short.txt");
+        fs::write(&file_path, "line 1\nline 2\nline 3\n").unwrap();
+
+        let blocks = parse_attachments("@short.txt:2-100", dir.path(), true).await;
+        let text = match &blocks[0] {
+            ContentBlock::Text { text } => text,
+            _ => panic!("expected text block"),
+        };
+        assert!(text.contains("line 2"), "should include line 2");
+        assert!(text.contains("line 3"), "should include line 3");
+        assert!(!text.contains("line 1\n"), "should not include line 1");
+        // Should not error — just reads to EOF
+        assert!(!text.contains("Error"), "should not error on out-of-bounds range");
     }
 }
