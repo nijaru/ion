@@ -3,7 +3,7 @@
   "ref": "roct",
   "title": "Vision model detection — supports_vision() guard in provider adapters",
   "description": "Add supports_vision() check on LlmApi trait. Non-vision models should replace Image content blocks with text placeholder in provider adapters before sending request.",
-  "status": "open",
+  "status": "done",
   "priority": 4,
   "labels": [],
   "assignees": [],
@@ -13,7 +13,7 @@
   "due_date": null,
   "logs": [],
   "created_at": "2026-02-07T23:00:53.949Z",
-  "updated_at": "2026-02-07T23:00:53.949Z",
-  "completed_at": null,
+  "updated_at": "2026-02-08T02:45:46.738Z",
+  "completed_at": "2026-02-08T02:45:46.738Z",
   "external": {}
 }
