@@ -211,6 +211,20 @@ impl SessionStore {
         Ok(deleted)
     }
 
+    /// Delete sessions older than the given number of days.
+    /// Returns the number of sessions deleted.
+    pub fn cleanup_old_sessions(&self, retention_days: u32) -> Result<usize, SessionStoreError> {
+        if retention_days == 0 {
+            return Ok(0);
+        }
+        let cutoff = chrono::Utc::now().timestamp() - i64::from(retention_days) * 86400;
+        let deleted = self.db.execute(
+            "DELETE FROM sessions WHERE updated_at < ?1",
+            params![cutoff],
+        )?;
+        Ok(deleted)
+    }
+
     /// Load a session by ID.
     pub fn load(&self, id: &str) -> Result<Session, SessionStoreError> {
         // Load session metadata
@@ -557,6 +571,55 @@ mod tests {
             store.load("nonexistent"),
             Err(SessionStoreError::NotFound(_))
         ));
+    }
+
+    #[test]
+    fn test_cleanup_old_sessions() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("sessions.db");
+        let store = SessionStore::open(&db_path).unwrap();
+
+        // Create a session
+        let session = make_test_session();
+        let id = session.id.clone();
+        store.save(&session).unwrap();
+
+        // Cleanup with 90 days — should keep the session (it was just created)
+        let deleted = store.cleanup_old_sessions(90).unwrap();
+        assert_eq!(deleted, 0);
+        assert!(store.load(&id).is_ok());
+
+        // Manually backdate the session to 100 days ago
+        let old_ts = chrono::Utc::now().timestamp() - 100 * 86400;
+        store
+            .db
+            .execute(
+                "UPDATE sessions SET updated_at = ?1 WHERE id = ?2",
+                params![old_ts, id],
+            )
+            .unwrap();
+
+        // Cleanup with 90 days — should delete the old session
+        let deleted = store.cleanup_old_sessions(90).unwrap();
+        assert_eq!(deleted, 1);
+        assert!(matches!(
+            store.load(&id),
+            Err(SessionStoreError::NotFound(_))
+        ));
+    }
+
+    #[test]
+    fn test_cleanup_zero_days_noop() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("sessions.db");
+        let store = SessionStore::open(&db_path).unwrap();
+
+        let session = make_test_session();
+        store.save(&session).unwrap();
+
+        // 0 days = disabled
+        let deleted = store.cleanup_old_sessions(0).unwrap();
+        assert_eq!(deleted, 0);
     }
 
     #[test]
