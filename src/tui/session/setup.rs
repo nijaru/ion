@@ -146,6 +146,18 @@ impl App {
         let store = SessionStore::open(&config.sessions_db_path())
             .context("Failed to open session store")?;
 
+        // Cleanup old sessions and empty sessions
+        if config.session_retention_days > 0 {
+            match store.cleanup_old_sessions(config.session_retention_days) {
+                Ok(n) if n > 0 => tracing::info!("Cleaned up {n} expired sessions"),
+                Err(e) => tracing::warn!("Session cleanup failed: {e}"),
+                _ => {}
+            }
+        }
+        if let Err(e) = store.prune_empty_sessions() {
+            tracing::warn!("Empty session pruning failed: {e}");
+        }
+
         // Create new session with current directory
         let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let model = config.model.clone().unwrap_or_default();

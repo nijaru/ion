@@ -114,6 +114,9 @@ pub struct Config {
 
     /// Custom system prompt (overrides default).
     pub system_prompt: Option<String>,
+
+    /// Delete sessions older than this many days. 0 = never delete.
+    pub session_retention_days: u32,
 }
 
 impl Default for Config {
@@ -128,6 +131,7 @@ impl Default for Config {
             mcp_servers: HashMap::new(),
             permissions: PermissionConfig::default(),
             system_prompt: None,
+            session_retention_days: 90,
         }
     }
 }
@@ -291,6 +295,9 @@ impl Config {
         }
         if other.system_prompt.is_some() {
             self.system_prompt = other.system_prompt;
+        }
+        if other.session_retention_days != 90 {
+            self.session_retention_days = other.session_retention_days;
         }
     }
 
