@@ -291,12 +291,17 @@ pub async fn run(
             frame_changed = true;
         }
 
-        // Handle resize: clear viewport and reprint all chat at new width.
-        // Clear(All) erases the visible viewport; scrollback is untouched.
-        // Then we print ALL chat lines -- overflow goes to scrollback at new width.
+        // Handle resize: push viewport to scrollback, then reprint chat at new width.
+        // ScrollUp preserves pre-ion terminal content in scrollback (unlike Clear(All)
+        // which would erase it). Old chat at wrong width ends up in scrollback too —
+        // acceptable trade-off vs losing the user's terminal history.
         if app.render_state.needs_reflow {
             app.render_state.needs_reflow = false;
-            execute!(stdout, MoveTo(0, 0), Clear(ClearType::All))?;
+            execute!(
+                stdout,
+                crossterm::terminal::ScrollUp(term_height),
+                MoveTo(0, 0)
+            )?;
             if !app.message_list.entries.is_empty() {
                 let all_lines = app.build_chat_lines(term_width);
                 let ui_height = app.calculate_ui_height(term_width, term_height);
