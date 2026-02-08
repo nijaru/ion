@@ -179,6 +179,8 @@ impl ChatRenderer {
                     if content.lines().count() <= 1 {
                         if content.starts_with("Error:") {
                             entry_lines.push(StyledLine::colored(content.to_string(), Color::Red));
+                        } else if content.starts_with("Warning:") {
+                            entry_lines.push(StyledLine::colored(content.to_string(), Color::Yellow));
                         } else {
                             let text = format!("[{content}]");
                             entry_lines.push(StyledLine::dim(text));

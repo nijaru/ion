@@ -574,9 +574,9 @@ impl App {
                     PickerStage::Model => {
                         // Clone model data to avoid borrow conflict with set_provider
                         let model_data = self.model_picker.selected_model().map(|m| {
-                            (m.id.clone(), m.context_window, m.pricing.clone())
+                            (m.id.clone(), m.context_window, m.supports_vision, m.pricing.clone())
                         });
-                        if let Some((model_id, context_window, pricing)) = model_data {
+                        if let Some((model_id, context_window, vision, pricing)) = model_data {
                             // Commit pending provider change now that model is selected
                             if let Some(provider) = self.pending_provider.take()
                                 && let Err(err) = self.set_provider(provider)
@@ -588,6 +588,7 @@ impl App {
 
                             self.session.model = model_id.clone();
                             self.model_pricing = pricing;
+                            self.agent.set_supports_vision(vision);
                             if context_window > 0 {
                                 let ctx_window = context_window as usize;
                                 self.model_context_window = Some(ctx_window);

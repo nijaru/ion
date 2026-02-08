@@ -447,6 +447,9 @@ impl MessageList {
                 }
                 self.push_entry(MessageEntry::new(Sender::System, content));
             }
+            AgentEvent::Warning(msg) => {
+                self.push_entry(MessageEntry::new(Sender::System, format!("Warning: {msg}")));
+            }
             AgentEvent::Finished(msg) => {
                 self.push_entry(MessageEntry::new(Sender::System, msg));
             }

@@ -77,6 +77,7 @@ impl App {
                             // Update agent's compaction config
                             self.agent.set_context_window(ctx_window);
                         }
+                        self.agent.set_supports_vision(model.supports_vision);
                         self.model_pricing = model.pricing.clone();
                     }
                     // Select cheap model for summarization (newest among cheapest).
@@ -161,6 +162,9 @@ impl App {
                     // Show retry status in progress line (not in chat)
                     self.task.retry_status =
                         Some((reason.clone(), *delay, std::time::Instant::now()));
+                }
+                AgentEvent::Warning(_) => {
+                    self.message_list.push_event(event);
                 }
                 AgentEvent::CompactionStatus { before, after } => {
                     let saved = before.saturating_sub(*after);
