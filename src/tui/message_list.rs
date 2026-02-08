@@ -1,5 +1,6 @@
 use crate::agent::AgentEvent;
 use crate::provider::{ContentBlock, Message, Role, format_api_error};
+use std::collections::HashMap;
 use std::fmt::Write as _;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -294,6 +295,128 @@ impl MessageEntry {
     }
 }
 
+/// Tracks a pending tool call awaiting its result.
+#[derive(Debug)]
+struct PendingCall {
+    entry_idx: usize,
+    key_arg: String,
+    grouped: bool,
+}
+
+/// Tracks the current sequence of same-name tool calls being grouped.
+#[derive(Debug)]
+struct ActiveToolGroup {
+    entry_idx: usize,
+    tool_name: String,
+    count: usize,
+}
+
+/// Unit name for grouped tool call headers.
+fn group_unit(tool_name: &str) -> &str {
+    match tool_name {
+        "read" | "write" | "edit" => "files",
+        "bash" => "commands",
+        "glob" => "patterns",
+        "grep" => "queries",
+        _ => "calls",
+    }
+}
+
+/// Format a grouped tool call result line: `⎿ key_arg ✓ summary`.
+fn format_grouped_result(key_arg: &str, result: &str, is_error: bool) -> String {
+    if is_error {
+        let msg = strip_error_prefixes(result).trim();
+        format!("⎿ {key_arg} ✗ {}", truncate_line(msg, 80))
+    } else if result.trim().is_empty() {
+        format!("⎿ {key_arg} ✓")
+    } else {
+        let line_count = result.lines().count();
+        if line_count > 1 {
+            format!("⎿ {key_arg} ✓ {line_count} lines")
+        } else {
+            format!("⎿ {key_arg} ✓ {}", truncate_line(result.trim(), 60))
+        }
+    }
+}
+
+/// Format a single (non-grouped) tool result, using the entry at the given index.
+fn format_single_result(
+    entry_idx: usize,
+    entries: &[MessageEntry],
+    result: &str,
+    is_error: bool,
+) -> String {
+    let tool_name = entries.get(entry_idx).and_then(|e| {
+        if e.sender == Sender::Tool {
+            let md = e.content_as_markdown();
+            let name = md.split('(').next().unwrap_or("");
+            match name {
+                "read" | "glob" | "grep" | "list" => Some(name.to_string()),
+                _ => None,
+            }
+        } else {
+            None
+        }
+    });
+    format_result_content(tool_name.as_deref(), result, is_error)
+}
+
+/// Format a single tool result, using the last entry for tool name detection.
+fn format_single_result_last(
+    entries: &[MessageEntry],
+    result: &str,
+    is_error: bool,
+) -> String {
+    let tool_name = entries.last().and_then(|e| {
+        if e.sender == Sender::Tool {
+            let md = e.content_as_markdown();
+            let name = md.split('(').next().unwrap_or("");
+            match name {
+                "read" | "glob" | "grep" | "list" => Some(name.to_string()),
+                _ => None,
+            }
+        } else {
+            None
+        }
+    });
+    format_result_content(tool_name.as_deref(), result, is_error)
+}
+
+/// Common formatting for single-call tool results.
+fn format_result_content(tool_name: Option<&str>, result: &str, is_error: bool) -> String {
+    if is_error {
+        let msg = strip_error_prefixes(result).trim();
+        format!(" ✗ {}", truncate_line(msg, TOOL_RESULT_LINE_MAX))
+    } else if tool_name.is_some() {
+        // Collapsed tools: show count with appropriate unit
+        let line_count = result.lines().count();
+        let unit = match tool_name {
+            Some("list" | "glob") => "items",
+            Some("grep") => "matches",
+            _ => "lines",
+        };
+        if line_count > 1 {
+            format!(" ✓ {line_count} {unit}")
+        } else if result.trim().is_empty() {
+            " ✓".to_string()
+        } else {
+            format!(" ✓ {}", truncate_line(result.trim(), 60))
+        }
+    } else {
+        // Full output: format with tail display
+        let formatted = format_tool_result(result);
+        let mut lines = formatted.lines();
+        let mut output = String::new();
+        if let Some(first) = lines.next() {
+            let _ = write!(output, " ✓ {first}");
+        }
+        for line in lines {
+            let _ = write!(output, "\n   {line}");
+        }
+        output
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct MessageList {
     pub entries: Vec<MessageEntry>,
@@ -301,6 +424,10 @@ pub struct MessageList {
     pub scroll_offset: usize,
     /// Whether to auto-scroll when new content arrives
     pub auto_scroll: bool,
+    /// Pending tool calls awaiting results, keyed by call ID.
+    pending_tool_calls: HashMap<String, PendingCall>,
+    /// Active grouping state for consecutive same-name tool calls.
+    active_group: Option<ActiveToolGroup>,
 }
 
 impl MessageList {
@@ -310,6 +437,8 @@ impl MessageList {
             entries: Vec::new(),
             scroll_offset: 0,
             auto_scroll: true,
+            pending_tool_calls: HashMap::new(),
+            active_group: None,
         }
     }
 
@@ -350,6 +479,7 @@ impl MessageList {
     pub fn push_event(&mut self, event: AgentEvent) {
         match event {
             AgentEvent::TextDelta(delta) => {
+                self.active_group = None;
                 if let Some(last) = self.entries.last_mut()
                     && last.sender == Sender::Agent
                 {
@@ -361,79 +491,103 @@ impl MessageList {
                     self.push_entry(MessageEntry::new(Sender::Agent, delta));
                 }
             }
-            AgentEvent::ToolCallStart(_id, name, args) => {
-                // Sanitize tool name (strip model garbage like embedded args, XML)
+            AgentEvent::ToolCallStart(id, name, args) => {
                 let clean_name = sanitize_tool_name(&name);
-                // Format: tool_name(key_arg)
                 let key_arg = extract_key_arg(clean_name, &args);
-                let display = if key_arg.is_empty() {
-                    clean_name.to_string()
-                } else {
-                    format!("{clean_name}({key_arg})")
-                };
+                let key_arg_display =
+                    if key_arg.is_empty() { clean_name.to_string() } else { key_arg };
+
+                // Check if this should be grouped with previous same-name tool call
+                if let Some(ref mut group) = self.active_group
+                    && group.tool_name == clean_name
+                {
+                    group.count += 1;
+
+                    // Mark first call as grouped when transitioning from single
+                    if group.count == 2 {
+                        for call in self.pending_tool_calls.values_mut() {
+                            if call.entry_idx == group.entry_idx {
+                                call.grouped = true;
+                            }
+                        }
+                    }
+
+                    // Update group header
+                    let unit = group_unit(clean_name);
+                    let header = format!("{clean_name}({} {unit})", group.count);
+                    if let Some(entry) = self.entries.get_mut(group.entry_idx) {
+                        entry.parts = vec![MessagePart::Text(header)];
+                        entry.update_cache();
+                    }
+
+                    self.pending_tool_calls.insert(
+                        id,
+                        PendingCall {
+                            entry_idx: group.entry_idx,
+                            key_arg: key_arg_display,
+                            grouped: true,
+                        },
+                    );
+                    return;
+                }
+
+                // New tool call (not grouped with previous)
+                let display = format!("{clean_name}({key_arg_display})");
+                let entry_idx = self.entries.len();
                 self.push_entry(MessageEntry::new(Sender::Tool, display));
+
+                self.active_group = Some(ActiveToolGroup {
+                    entry_idx,
+                    tool_name: clean_name.to_string(),
+                    count: 1,
+                });
+
+                self.pending_tool_calls.insert(
+                    id,
+                    PendingCall {
+                        entry_idx,
+                        key_arg: key_arg_display,
+                        grouped: false,
+                    },
+                );
             }
-            AgentEvent::ToolCallResult(_id, result, is_error) => {
-                // Check if this is a context-gathering tool (collapse output)
-                let tool_name = self.entries.last().and_then(|e| {
-                    if e.sender == Sender::Tool {
-                        let md = e.content_as_markdown();
-                        let name = md.split('(').next().unwrap_or("");
-                        match name {
-                            "read" | "glob" | "grep" | "list" => Some(name.to_string()),
-                            _ => None,
+            AgentEvent::ToolCallResult(id, result, is_error) => {
+                self.active_group = None;
+
+                if let Some(call) = self.pending_tool_calls.remove(&id) {
+                    if call.grouped {
+                        // Grouped result: brief per-item line
+                        let result_line = format_grouped_result(
+                            &call.key_arg,
+                            &result,
+                            is_error,
+                        );
+                        if let Some(entry) = self.entries.get_mut(call.entry_idx) {
+                            entry.append_text(&format!("\n{result_line}"));
                         }
                     } else {
-                        None
+                        // Single call: format based on tool type
+                        let result_content =
+                            format_single_result(call.entry_idx, &self.entries, &result, is_error);
+                        if let Some(entry) = self.entries.get_mut(call.entry_idx) {
+                            entry.append_text(&format!("\n{result_content}"));
+                        }
                     }
-                });
-                let is_collapsed_tool = tool_name.is_some();
-
-                // Status icons: ✓ for success, ✗ for error
-                let result_content = if is_error {
-                    // Clean up error message - keep it concise
-                    let msg = strip_error_prefixes(&result).trim();
-                    format!(" ✗ {}", truncate_line(msg, TOOL_RESULT_LINE_MAX))
-                } else if is_collapsed_tool {
-                    // Collapsed tools: show count with appropriate unit
-                    let line_count = result.lines().count();
-                    let unit = match tool_name.as_deref() {
-                        Some("list" | "glob") => "items",
-                        Some("grep") => "matches",
-                        _ => "lines",
-                    };
-                    if line_count > 1 {
-                        format!(" ✓ {line_count} {unit}")
-                    } else if result.trim().is_empty() {
-                        " ✓".to_string()
+                } else {
+                    // Fallback: no pending call tracked, append to last Tool entry
+                    let result_content =
+                        format_single_result_last(&self.entries, &result, is_error);
+                    if let Some(last) = self.entries.last_mut()
+                        && last.sender == Sender::Tool
+                    {
+                        last.append_text(&format!("\n{result_content}"));
                     } else {
-                        format!(" ✓ {}", truncate_line(result.trim(), 60))
+                        self.push_entry(MessageEntry::new(Sender::Tool, result_content));
                     }
-                } else {
-                    // Full output: format with tail display
-                    let formatted = format_tool_result(&result);
-                    // Prefix first line with ✓, indent rest
-                    let mut lines = formatted.lines();
-                    let mut output = String::new();
-                    if let Some(first) = lines.next() {
-                        let _ = write!(output, " ✓ {first}");
-                    }
-                    for line in lines {
-                        let _ = write!(output, "\n   {line}");
-                    }
-                    output
-                };
-
-                // Append result to last tool entry if it exists
-                if let Some(last) = self.entries.last_mut()
-                    && last.sender == Sender::Tool
-                {
-                    last.append_text(&format!("\n{result_content}"));
-                } else {
-                    self.push_entry(MessageEntry::new(Sender::Tool, result_content));
                 }
             }
             AgentEvent::PlanGenerated(plan) => {
+                self.active_group = None;
                 let mut content = String::from("### 📋 Proposed Plan\n\n");
                 for task in &plan.tasks {
                     let _ = writeln!(content, "- **{}**: {}", task.title, task.description);
@@ -448,12 +602,15 @@ impl MessageList {
                 self.push_entry(MessageEntry::new(Sender::System, content));
             }
             AgentEvent::Warning(msg) => {
+                self.active_group = None;
                 self.push_entry(MessageEntry::new(Sender::System, format!("Warning: {msg}")));
             }
             AgentEvent::Finished(msg) => {
+                self.active_group = None;
                 self.push_entry(MessageEntry::new(Sender::System, msg));
             }
             AgentEvent::Error(e) => {
+                self.active_group = None;
                 let formatted = format_api_error(&e);
                 self.push_entry(MessageEntry::new(
                     Sender::System,
@@ -487,6 +644,8 @@ impl MessageList {
 
     pub fn clear(&mut self) {
         self.entries.clear();
+        self.pending_tool_calls.clear();
+        self.active_group = None;
     }
 
     /// Load entries from persisted session messages (for resume).
@@ -880,5 +1039,117 @@ mod tests {
     fn test_take_tail_unicode() {
         // Ensure we handle unicode correctly (char-based, not byte-based)
         assert_eq!(take_tail("héllo", 3), "llo");
+    }
+
+    // --- Parallel tool call grouping tests ---
+
+    #[test]
+    fn test_single_tool_call_no_grouping() {
+        let mut list = MessageList::new();
+        list.push_event(AgentEvent::ToolCallStart(
+            "id1".into(),
+            "read".into(),
+            json!({"file_path": "a.rs"}),
+        ));
+        list.push_event(AgentEvent::ToolCallResult("id1".into(), "content".into(), false));
+
+        assert_eq!(list.entries.len(), 1);
+        let md = list.entries[0].content_as_markdown();
+        assert!(md.starts_with("read(a.rs)"), "got: {md}");
+        assert!(md.contains("✓"), "should have success marker");
+    }
+
+    #[test]
+    fn test_parallel_tool_calls_grouped() {
+        let mut list = MessageList::new();
+
+        // 3 parallel reads
+        list.push_event(AgentEvent::ToolCallStart(
+            "id1".into(), "read".into(), json!({"file_path": "a.rs"}),
+        ));
+        list.push_event(AgentEvent::ToolCallStart(
+            "id2".into(), "read".into(), json!({"file_path": "b.rs"}),
+        ));
+        list.push_event(AgentEvent::ToolCallStart(
+            "id3".into(), "read".into(), json!({"file_path": "c.rs"}),
+        ));
+
+        // Should be 1 entry with group header
+        assert_eq!(list.entries.len(), 1);
+        let md = list.entries[0].content_as_markdown();
+        assert!(md.contains("read(3 files)"), "header should show count, got: {md}");
+
+        // Results come back
+        list.push_event(AgentEvent::ToolCallResult("id1".into(), "line1\nline2".into(), false));
+        list.push_event(AgentEvent::ToolCallResult("id2".into(), "content".into(), false));
+        list.push_event(AgentEvent::ToolCallResult("id3".into(), "".into(), false));
+
+        // Still 1 entry, results appended
+        assert_eq!(list.entries.len(), 1);
+        let md = list.entries[0].content_as_markdown();
+        assert!(md.contains("⎿ a.rs ✓"), "should have per-file result for a.rs");
+        assert!(md.contains("⎿ b.rs ✓"), "should have per-file result for b.rs");
+        assert!(md.contains("⎿ c.rs ✓"), "should have per-file result for c.rs");
+    }
+
+    #[test]
+    fn test_mixed_tool_calls_not_grouped() {
+        let mut list = MessageList::new();
+
+        list.push_event(AgentEvent::ToolCallStart(
+            "id1".into(), "read".into(), json!({"file_path": "a.rs"}),
+        ));
+        list.push_event(AgentEvent::ToolCallStart(
+            "id2".into(), "bash".into(), json!({"command": "ls"}),
+        ));
+
+        // Different tool names → separate entries
+        assert_eq!(list.entries.len(), 2);
+        assert!(list.entries[0].content_as_markdown().starts_with("read("));
+        assert!(list.entries[1].content_as_markdown().starts_with("bash("));
+    }
+
+    #[test]
+    fn test_grouped_error_result() {
+        let mut list = MessageList::new();
+
+        list.push_event(AgentEvent::ToolCallStart(
+            "id1".into(), "read".into(), json!({"file_path": "a.rs"}),
+        ));
+        list.push_event(AgentEvent::ToolCallStart(
+            "id2".into(), "read".into(), json!({"file_path": "missing.rs"}),
+        ));
+
+        list.push_event(AgentEvent::ToolCallResult("id1".into(), "content".into(), false));
+        list.push_event(AgentEvent::ToolCallResult(
+            "id2".into(), "file not found".into(), true,
+        ));
+
+        let md = list.entries[0].content_as_markdown();
+        assert!(md.contains("⎿ a.rs ✓"), "success result");
+        assert!(md.contains("⎿ missing.rs ✗"), "error result");
+    }
+
+    #[test]
+    fn test_result_routing_without_grouping() {
+        // Two different tools — results should go to correct entries
+        let mut list = MessageList::new();
+
+        list.push_event(AgentEvent::ToolCallStart(
+            "id1".into(), "read".into(), json!({"file_path": "a.rs"}),
+        ));
+        list.push_event(AgentEvent::ToolCallStart(
+            "id2".into(), "bash".into(), json!({"command": "ls"}),
+        ));
+
+        // Result for id1 should go to the read entry, not the bash entry
+        list.push_event(AgentEvent::ToolCallResult("id1".into(), "file content".into(), false));
+        list.push_event(AgentEvent::ToolCallResult("id2".into(), "dir listing".into(), false));
+
+        assert_eq!(list.entries.len(), 2);
+        let read_md = list.entries[0].content_as_markdown();
+        let bash_md = list.entries[1].content_as_markdown();
+        assert!(read_md.contains("✓"), "read should have result");
+        assert!(bash_md.contains("✓"), "bash should have result");
     }
 }
