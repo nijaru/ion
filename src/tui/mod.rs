@@ -17,7 +17,6 @@ pub mod model_picker;
 mod picker_trait;
 pub mod provider_picker;
 mod render;
-mod render_selector;
 mod render_state;
 mod run;
 mod session;
