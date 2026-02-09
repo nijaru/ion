@@ -50,7 +50,7 @@ impl App {
             };
             let sel_height = selector_height(item_count, height);
             let top = height.saturating_sub(sel_height);
-            let clear_from = last_top.map_or(top, |old| old.min(top));
+            let clear_from = last_top.map_or(top, |old| old.min(top)).min(height.saturating_sub(1));
             return UiLayout {
                 top,
                 clear_from,
@@ -71,7 +71,7 @@ impl App {
         let total = popup_height + progress_height + input_height + status_height;
 
         let top = self.ui_start_row(height, total);
-        let clear_from = last_top.map_or(top, |old| old.min(top));
+        let clear_from = last_top.map_or(top, |old| old.min(top)).min(height.saturating_sub(1));
 
         let mut row = top;
         let popup = if popup_height > 0 {
