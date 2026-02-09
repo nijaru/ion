@@ -242,7 +242,9 @@ pub async fn run(
     let (mut term_width, mut term_height) = terminal::size()?;
 
     if !app.message_list.entries.is_empty() {
-        // Push pre-ion terminal content to scrollback and start from row 0
+        // Push pre-ion terminal content to scrollback and start from row 0.
+        // Wrap in synchronized update so the scroll + reprint is atomic.
+        execute!(stdout, BeginSynchronizedUpdate)?;
         execute!(
             stdout,
             crossterm::terminal::ScrollUp(term_height),
@@ -254,6 +256,7 @@ pub async fn run(
         if excess > 0 {
             execute!(stdout, crossterm::terminal::ScrollUp(excess))?;
         }
+        execute!(stdout, EndSynchronizedUpdate)?;
         stdout.flush()?;
     }
 
@@ -302,8 +305,10 @@ pub async fn run(
             app.render_state.needs_screen_clear = false;
             execute!(
                 stdout,
+                BeginSynchronizedUpdate,
                 crossterm::terminal::ScrollUp(term_height),
-                MoveTo(0, 0)
+                MoveTo(0, 0),
+                EndSynchronizedUpdate
             )?;
             stdout.flush()?;
             frame_changed = true;
@@ -315,6 +320,7 @@ pub async fn run(
         // acceptable trade-off vs losing the user's terminal history.
         if app.render_state.needs_reflow {
             app.render_state.needs_reflow = false;
+            execute!(stdout, BeginSynchronizedUpdate)?;
             execute!(
                 stdout,
                 crossterm::terminal::ScrollUp(term_height),
@@ -347,6 +353,7 @@ pub async fn run(
             } else {
                 app.render_state.header_inserted = false;
             }
+            execute!(stdout, EndSynchronizedUpdate)?;
             stdout.flush()?;
             frame_changed = true;
         }
