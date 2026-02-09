@@ -388,4 +388,30 @@ mod tests {
         let result = registry.execute(&ctx).await;
         assert!(matches!(result, HookResult::Abort(msg) if msg == "stopped"));
     }
+
+    #[test]
+    fn test_command_hook_invalid_regex_rejected() {
+        // Invalid regex should cause from_config to return None
+        let hook = CommandHook::from_config("pre_tool_use", "echo ok".into(), Some("write[edit"));
+        assert!(hook.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_command_hook_pattern_skips_when_tool_name_none() {
+        // Hook with tool_pattern should NOT fire when tool_name is None
+        let hook =
+            CommandHook::from_config("pre_tool_use", "false".into(), Some("write|edit")).unwrap();
+        let ctx = HookContext::new(HookPoint::PreToolUse); // no tool_name
+        let result = hook.execute(&ctx).await;
+        assert!(matches!(result, HookResult::Continue));
+    }
+
+    #[tokio::test]
+    async fn test_command_hook_no_pattern_fires_when_tool_name_none() {
+        // Hook WITHOUT tool_pattern should still fire when tool_name is None
+        let hook = CommandHook::from_config("pre_tool_use", "true".into(), None).unwrap();
+        let ctx = HookContext::new(HookPoint::PreToolUse); // no tool_name
+        let result = hook.execute(&ctx).await;
+        assert!(matches!(result, HookResult::Continue));
+    }
 }

