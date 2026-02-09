@@ -9,7 +9,7 @@ use std::sync::Arc;
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
-const SCHEMA_VERSION: i32 = 2;
+const SCHEMA_VERSION: i32 = 3;
 /// Max input history entries to keep
 const INPUT_HISTORY_LIMIT: usize = 100;
 
@@ -108,7 +108,7 @@ impl SessionStore {
         }
 
         // Migration v1 -> v2: Add input history table
-        if version < SCHEMA_VERSION {
+        if version < 2 {
             self.db.execute_batch(
                 r"
                 CREATE TABLE IF NOT EXISTS input_history (
@@ -121,6 +121,17 @@ impl SessionStore {
                     ON input_history(created_at DESC);
 
                 PRAGMA user_version = 2;
+                ",
+            )?;
+        }
+
+        // Migration v2 -> v3: Add provider column to sessions
+        if version < SCHEMA_VERSION {
+            self.db.execute_batch(
+                r"
+                ALTER TABLE sessions ADD COLUMN provider TEXT NOT NULL DEFAULT '';
+
+                PRAGMA user_version = 3;
                 ",
             )?;
         }
@@ -147,14 +158,15 @@ impl SessionStore {
             // Upsert session metadata
             self.db.execute(
                 r"
-                INSERT INTO sessions (id, working_dir, model, created_at, updated_at)
-                VALUES (?1, ?2, ?3, ?4, ?4)
+                INSERT INTO sessions (id, working_dir, model, provider, created_at, updated_at)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?5)
                 ON CONFLICT(id) DO UPDATE SET
                     working_dir = excluded.working_dir,
                     model = excluded.model,
+                    provider = excluded.provider,
                     updated_at = excluded.updated_at
                 ",
-                params![session.id, working_dir, session.model, now],
+                params![session.id, working_dir, session.model, session.provider, now],
             )?;
 
             // Get the current max position for this session
@@ -228,12 +240,12 @@ impl SessionStore {
     /// Load a session by ID.
     pub fn load(&self, id: &str) -> Result<Session, SessionStoreError> {
         // Load session metadata
-        let (working_dir, model): (String, String) = self
+        let (working_dir, model, provider): (String, String, String) = self
             .db
             .query_row(
-                "SELECT working_dir, model FROM sessions WHERE id = ?1",
+                "SELECT working_dir, model, provider FROM sessions WHERE id = ?1",
                 params![id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .map_err(|e| match e {
                 rusqlite::Error::QueryReturnedNoRows => SessionStoreError::NotFound(id.to_string()),
@@ -266,6 +278,7 @@ impl SessionStore {
             id: id.to_string(),
             working_dir: working_dir.into(),
             model,
+            provider,
             messages: messages?,
             abort_token: CancellationToken::new(),
             no_sandbox: false, // Default to sandboxed for restored sessions
@@ -309,6 +322,63 @@ impl SessionStore {
                 let (id, working_dir, model, updated_at, first_user_message_json) = r?;
 
                 // Extract text from first user message JSON
+                let first_user_message =
+                    first_user_message_json.and_then(|json| extract_first_text_from_content(&json));
+
+                Ok(SessionSummary {
+                    id,
+                    working_dir,
+                    model,
+                    updated_at,
+                    first_user_message,
+                })
+            })
+            .collect();
+
+        summaries
+    }
+
+    /// List recent sessions for a specific working directory, ordered by most recently updated.
+    pub fn list_recent_for_dir(
+        &self,
+        working_dir: &str,
+        limit: usize,
+    ) -> Result<Vec<SessionSummary>, SessionStoreError> {
+        let mut stmt = self.db.prepare(
+            r"
+            WITH first_user_messages AS (
+                SELECT session_id, content, ROW_NUMBER() OVER (
+                    PARTITION BY session_id ORDER BY position
+                ) as rn
+                FROM messages
+                WHERE role = 'user'
+            )
+            SELECT
+                s.id,
+                s.working_dir,
+                s.model,
+                s.updated_at,
+                fum.content as first_user_message
+            FROM sessions s
+            INNER JOIN first_user_messages fum ON fum.session_id = s.id AND fum.rn = 1
+            WHERE s.working_dir = ?1
+            ORDER BY s.updated_at DESC
+            LIMIT ?2
+            ",
+        )?;
+
+        let summaries: Result<Vec<SessionSummary>, SessionStoreError> = stmt
+            .query_map(params![working_dir, limit as i64], |row| {
+                let id: String = row.get(0)?;
+                let working_dir: String = row.get(1)?;
+                let model: String = row.get(2)?;
+                let updated_at: i64 = row.get(3)?;
+                let first_user_message: Option<String> = row.get(4)?;
+                Ok((id, working_dir, model, updated_at, first_user_message))
+            })?
+            .map(|r| {
+                let (id, working_dir, model, updated_at, first_user_message_json) = r?;
+
                 let first_user_message =
                     first_user_message_json.and_then(|json| extract_first_text_from_content(&json));
 

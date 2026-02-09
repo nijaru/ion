@@ -65,29 +65,35 @@ fn handle_resume(
 ) -> Result<()> {
     match resume_option {
         ResumeOption::None => {}
-        ResumeOption::Latest => match app.store.list_recent(1) {
-            Ok(sessions) => {
-                if let Some(session) = sessions.first() {
-                    if let Err(e) = app.load_session(&session.id) {
+        ResumeOption::Latest => {
+            let cwd = std::env::current_dir()
+                .unwrap_or_default()
+                .display()
+                .to_string();
+            match app.store.list_recent_for_dir(&cwd, 1) {
+                Ok(sessions) => {
+                    if let Some(session) = sessions.first() {
+                        if let Err(e) = app.load_session(&session.id) {
+                            app.message_list.push_entry(MessageEntry::new(
+                                Sender::System,
+                                format!("Error: Failed to load session: {e}"),
+                            ));
+                        }
+                    } else {
                         app.message_list.push_entry(MessageEntry::new(
                             Sender::System,
-                            format!("Error: Failed to load session: {e}"),
+                            "No recent sessions in this directory.".to_string(),
                         ));
                     }
-                } else {
+                }
+                Err(e) => {
                     app.message_list.push_entry(MessageEntry::new(
                         Sender::System,
-                        "No recent sessions found.".to_string(),
+                        format!("Error: Failed to list sessions: {e}"),
                     ));
                 }
             }
-            Err(e) => {
-                app.message_list.push_entry(MessageEntry::new(
-                    Sender::System,
-                    format!("Error: Failed to list sessions: {e}"),
-                ));
-            }
-        },
+        }
         ResumeOption::ById(id) => {
             if let Err(e) = app.load_session(&id) {
                 let mut stdout = io::stdout();
