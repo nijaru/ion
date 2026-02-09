@@ -2,15 +2,19 @@
 
 use crate::tui::util::{format_cost, format_elapsed, format_tokens};
 use crate::tui::App;
+use crossterm::cursor::MoveTo;
 use crossterm::execute;
+use crossterm::terminal::{Clear, ClearType};
 
 impl App {
     /// Render progress line directly with crossterm.
     pub(crate) fn render_progress_direct<W: std::io::Write>(
         &self,
         w: &mut W,
+        row: u16,
         _width: u16,
     ) -> std::io::Result<()> {
+        execute!(w, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
         if self.is_running {
             self.render_progress_running(w)
         } else {
