@@ -9,11 +9,16 @@
 
 mod chat;
 mod direct;
+mod history;
+mod input_box;
 mod layout;
 pub(crate) mod popup;
+mod progress;
+pub(crate) mod selector;
+mod status;
 mod widgets;
 
-use crate::tui::render_selector::MAX_VISIBLE_ITEMS;
+use selector::MAX_VISIBLE_ITEMS;
 
 /// Input prompt prefix " › "
 pub(crate) const PROMPT: &str = " › ";
