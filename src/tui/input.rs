@@ -46,16 +46,7 @@ impl App {
     pub(super) fn startup_header_lines(working_dir: &std::path::Path) -> Vec<StyledLine> {
         let version = format!("v{}", env!("CARGO_PKG_VERSION"));
 
-        // Shorten working dir: replace home prefix with ~
-        let dir_display = if let Some(home) = dirs::home_dir() {
-            if let Ok(suffix) = working_dir.strip_prefix(&home) {
-                format!("~/{}", suffix.display())
-            } else {
-                working_dir.display().to_string()
-            }
-        } else {
-            working_dir.display().to_string()
-        };
+        let dir_display = crate::tui::util::shorten_home_prefix(&working_dir.display().to_string());
 
         // Try to get git branch (falls back to short SHA on detached HEAD)
         let branch = std::process::Command::new("git")

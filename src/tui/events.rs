@@ -483,8 +483,10 @@ impl App {
                 }
                 let working_dir = self.session.working_dir.clone();
                 let model = self.session.model.clone();
+                let provider = self.session.provider.clone();
                 let no_sandbox = self.session.no_sandbox;
                 self.session = Session::new(working_dir, model);
+                self.session.provider = provider;
                 self.session.no_sandbox = no_sandbox;
                 self.session_cost = 0.0;
 
@@ -592,6 +594,7 @@ impl App {
                             }
 
                             self.session.model = model_id.clone();
+                            self.session.provider = self.api_provider.id().to_string();
                             self.model_pricing = pricing;
                             self.agent.set_supports_vision(vision);
                             if context_window > 0 {

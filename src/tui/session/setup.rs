@@ -184,6 +184,7 @@ impl App {
         let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let model = config.model.clone().unwrap_or_default();
         let mut session = Session::new(working_dir.clone(), model);
+        session.provider = api_provider.id().to_string();
         session.no_sandbox = permissions.no_sandbox;
 
         let (agent_tx, agent_rx) = mpsc::channel(100);

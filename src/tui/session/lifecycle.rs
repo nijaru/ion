@@ -1,6 +1,6 @@
 //! Session loading and state restoration.
 
-use crate::provider::{ContentBlock, Role};
+use crate::provider::{ContentBlock, Provider, Role};
 use crate::session::Session;
 use crate::tui::App;
 use crate::tui::message_list::{
@@ -15,14 +15,40 @@ impl App {
         let loaded = self.store.load(session_id)?;
 
         // Restore session state
+        let saved_provider = loaded.provider.clone();
         self.session = Session {
             id: loaded.id,
             working_dir: loaded.working_dir.clone(),
             model: loaded.model.clone(),
+            provider: loaded.provider,
             messages: loaded.messages,
             abort_token: CancellationToken::new(),
             no_sandbox: self.permissions.no_sandbox,
         };
+
+        // Warn if session's working directory no longer exists
+        if !self.session.working_dir.exists() {
+            self.message_list.push_entry(MessageEntry::new(
+                Sender::System,
+                format!(
+                    "Warning: session directory no longer exists: {}",
+                    self.session.working_dir.display()
+                ),
+            ));
+        }
+
+        // Restore provider if it differs from current
+        if !saved_provider.is_empty() {
+            if let Some(provider) = Provider::from_id(&saved_provider) {
+                if provider != self.api_provider
+                    && let Err(e) = self.set_provider(provider)
+                {
+                    tracing::warn!("Failed to restore provider '{}': {}", saved_provider, e);
+                }
+            } else {
+                tracing::warn!("Unknown provider '{}' in saved session", saved_provider);
+            }
+        }
 
         // Update file completer working directory
         self.file_completer.set_working_dir(loaded.working_dir);

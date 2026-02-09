@@ -150,6 +150,17 @@ pub(super) fn handle_filter_input_event(
     }
 }
 
+/// Shorten a path by replacing the home directory prefix with `~`.
+pub(crate) fn shorten_home_prefix(path: &str) -> String {
+    if let Some(home) = dirs::home_dir() {
+        let home_str = home.display().to_string();
+        if let Some(rest) = path.strip_prefix(&home_str) {
+            return format!("~{rest}");
+        }
+    }
+    path.to_string()
+}
+
 /// Sanitize text for terminal display.
 /// - Converts tabs to 4 spaces (consistent width)
 /// - Strips carriage returns (prevents text overwrite)

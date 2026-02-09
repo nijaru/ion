@@ -12,6 +12,7 @@ pub struct Session {
     pub id: String,
     pub working_dir: PathBuf,
     pub model: String,
+    pub provider: String,
     pub messages: Vec<Message>,
     pub abort_token: CancellationToken,
     /// Allow operations outside CWD (sandbox disabled)
@@ -33,6 +34,7 @@ impl Session {
             id: generate_session_id(),
             working_dir,
             model,
+            provider: String::new(),
             messages: Vec::new(),
             abort_token: CancellationToken::new(),
             no_sandbox: false,

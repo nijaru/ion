@@ -4,7 +4,7 @@ use crate::tui::render::layout::{BodyLayout, UiLayout};
 use crate::tui::render::selector::{self, SelectorData, SelectorItem};
 use crate::tui::render::{widgets::draw_horizontal_border, PROMPT_WIDTH};
 use crate::tui::types::{Mode, SelectorPage};
-use crate::tui::util::format_relative_time;
+use crate::tui::util::{format_relative_time, shorten_home_prefix};
 use crate::tui::App;
 use crossterm::cursor::MoveTo;
 use crossterm::execute;
@@ -174,10 +174,11 @@ impl App {
                             |m: &String| m.chars().take(40).collect::<String>(),
                         );
                         let label = format!("{} - {}", preview, format_relative_time(s.updated_at));
+                        let hint = shorten_home_prefix(&s.working_dir);
                         SelectorItem {
                             label,
                             is_valid: true,
-                            hint: String::new(),
+                            hint,
                             warning: None,
                         }
                     })
