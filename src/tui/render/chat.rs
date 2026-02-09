@@ -19,7 +19,7 @@ impl App {
             Vec::new()
         } else {
             self.render_state.header_inserted = true;
-            Self::startup_header_lines()
+            Self::startup_header_lines(&self.session.working_dir)
         };
 
         let entry_count = self.message_list.entries.len();
@@ -107,7 +107,7 @@ impl App {
         }
 
         let mut lines = Vec::new();
-        lines.extend(Self::startup_header_lines());
+        lines.extend(Self::startup_header_lines(&self.session.working_dir));
 
         let entry_count = self.message_list.entries.len();
         let mut end = entry_count;

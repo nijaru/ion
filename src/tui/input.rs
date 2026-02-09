@@ -1,7 +1,7 @@
 //! Input handling for the TUI composer.
 
-use crate::tui::App;
 use crate::tui::terminal::{StyledLine, StyledSpan};
+use crate::tui::App;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 impl App {
@@ -43,11 +43,41 @@ impl App {
     }
 
     /// Generate the startup header lines for the TUI.
-    pub(super) fn startup_header_lines() -> Vec<StyledLine> {
+    pub(super) fn startup_header_lines(working_dir: &std::path::Path) -> Vec<StyledLine> {
         let version = format!("v{}", env!("CARGO_PKG_VERSION"));
+
+        // Shorten working dir: replace home prefix with ~
+        let dir_display = if let Some(home) = dirs::home_dir() {
+            if let Ok(suffix) = working_dir.strip_prefix(&home) {
+                format!("~/{}", suffix.display())
+            } else {
+                working_dir.display().to_string()
+            }
+        } else {
+            working_dir.display().to_string()
+        };
+
+        // Try to get git branch
+        let branch = std::process::Command::new("git")
+            .args(["rev-parse", "--abbrev-ref", "HEAD"])
+            .current_dir(working_dir)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string());
+
+        let mut location_spans = vec![StyledSpan::dim(&dir_display)];
+        if let Some(ref b) = branch {
+            location_spans.push(StyledSpan::dim(format!(" [{b}]")));
+        }
+
         vec![
-            StyledLine::new(vec![StyledSpan::bold("ION")]),
-            StyledLine::new(vec![StyledSpan::dim(version)]),
+            StyledLine::new(vec![
+                StyledSpan::bold("ion"),
+                StyledSpan::dim(format!(" {version}")),
+            ]),
+            StyledLine::new(location_spans),
             StyledLine::empty(),
         ]
     }
@@ -58,7 +88,7 @@ impl App {
             return Vec::new();
         }
         self.render_state.header_inserted = true;
-        Self::startup_header_lines()
+        Self::startup_header_lines(&self.session.working_dir)
     }
 
     /// Handle a key event for the input composer.
