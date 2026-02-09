@@ -1,9 +1,11 @@
 //! CLI module for one-shot/non-interactive mode.
 
+use crate::agent::subagent::SubagentRegistry;
 use crate::agent::{Agent, AgentEvent};
-use crate::config::Config;
+use crate::config::{Config, subagents_dir};
 use crate::provider::{Client, LlmApi, Provider};
 use crate::session::Session;
+use crate::tool::builtin::SpawnSubagentTool;
 use crate::tool::{ToolMode, ToolOrchestrator};
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
@@ -307,7 +309,21 @@ fn setup_cli_agent(args: &RunArgs, permissions: &PermissionSettings) -> Result<C
     let orchestrator = if args.no_tools {
         Arc::new(ToolOrchestrator::new(ToolMode::Read))
     } else {
-        Arc::new(ToolOrchestrator::with_builtins(permissions.mode))
+        let mut orch = ToolOrchestrator::with_builtins(permissions.mode);
+
+        // Register subagents
+        let mut subagent_registry = SubagentRegistry::with_defaults();
+        let subagents_path = subagents_dir();
+        if subagents_path.exists() {
+            let _ = subagent_registry.load_directory(&subagents_path);
+        }
+        let subagent_registry = Arc::new(tokio::sync::RwLock::new(subagent_registry));
+        orch.register_tool(Box::new(SpawnSubagentTool::new(
+            subagent_registry,
+            llm_client.clone(),
+        )));
+
+        Arc::new(orch)
     };
 
     // Create agent

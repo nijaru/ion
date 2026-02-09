@@ -117,8 +117,8 @@ impl App {
             orchestrator.register_tool(tool);
         }
 
-        // Load subagent configurations
-        let mut subagent_registry = SubagentRegistry::new();
+        // Load subagent configurations (defaults first, user YAML overrides by name)
+        let mut subagent_registry = SubagentRegistry::with_defaults();
         let subagents_path = subagents_dir();
         if subagents_path.exists()
             && let Ok(count) = subagent_registry.load_directory(&subagents_path)
