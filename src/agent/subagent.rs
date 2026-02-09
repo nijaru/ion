@@ -50,6 +50,42 @@ impl SubagentRegistry {
         Self::default()
     }
 
+    /// Create registry with built-in default subagents.
+    #[must_use]
+    pub fn with_defaults() -> Self {
+        let mut registry = Self::new();
+        registry.configs.insert(
+            "explorer".into(),
+            SubagentConfig {
+                name: "explorer".into(),
+                description: "Fast codebase search and file discovery. Use for finding files, symbols, and patterns.".into(),
+                tools: vec!["read".into(), "glob".into(), "grep".into(), "list".into()],
+                model: None,
+                system_prompt: None,
+                max_turns: 15,
+            },
+        );
+        registry.configs.insert(
+            "planner".into(),
+            SubagentConfig {
+                name: "planner".into(),
+                description: "Analyze codebase architecture and design implementation plans. Read-only.".into(),
+                tools: vec![
+                    "read".into(),
+                    "glob".into(),
+                    "grep".into(),
+                    "list".into(),
+                    "web_search".into(),
+                    "web_fetch".into(),
+                ],
+                model: None,
+                system_prompt: None,
+                max_turns: 10,
+            },
+        );
+        registry
+    }
+
     /// Load subagent configs from a directory.
     pub fn load_directory(&mut self, dir: &Path) -> Result<usize> {
         let mut count = 0;
@@ -215,6 +251,44 @@ max_turns: 5
         assert_eq!(config.name, "researcher");
         assert_eq!(config.tools.len(), 3);
         assert_eq!(config.max_turns, 5);
+    }
+
+    #[test]
+    fn test_with_defaults() {
+        let registry = SubagentRegistry::with_defaults();
+        let list = registry.list();
+        assert_eq!(list.len(), 2);
+
+        let explorer = registry.get("explorer").unwrap();
+        assert_eq!(explorer.tools, vec!["read", "glob", "grep", "list"]);
+        assert_eq!(explorer.max_turns, 15);
+        assert!(explorer.model.is_none());
+
+        let planner = registry.get("planner").unwrap();
+        assert_eq!(planner.tools.len(), 6);
+        assert_eq!(planner.max_turns, 10);
+        assert!(planner.model.is_none());
+    }
+
+    #[test]
+    fn test_with_defaults_user_override() {
+        let mut registry = SubagentRegistry::with_defaults();
+        // User override replaces built-in by name
+        registry.configs.insert(
+            "explorer".into(),
+            SubagentConfig {
+                name: "explorer".into(),
+                description: "Custom explorer".into(),
+                tools: vec!["read".into()],
+                model: Some("cheap-model".into()),
+                system_prompt: None,
+                max_turns: 5,
+            },
+        );
+        let explorer = registry.get("explorer").unwrap();
+        assert_eq!(explorer.description, "Custom explorer");
+        assert_eq!(explorer.max_turns, 5);
+        assert_eq!(explorer.model, Some("cheap-model".into()));
     }
 
     #[test]
