@@ -11,7 +11,7 @@ mod chat;
 mod direct;
 mod history;
 mod input_box;
-mod layout;
+pub(crate) mod layout;
 pub(crate) mod popup;
 mod progress;
 pub(crate) mod selector;
