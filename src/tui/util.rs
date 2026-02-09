@@ -154,7 +154,9 @@ pub(super) fn handle_filter_input_event(
 pub(crate) fn shorten_home_prefix(path: &str) -> String {
     if let Some(home) = dirs::home_dir() {
         let home_str = home.display().to_string();
-        if let Some(rest) = path.strip_prefix(&home_str) {
+        if let Some(rest) = path.strip_prefix(&home_str)
+            && (rest.is_empty() || rest.starts_with('/'))
+        {
             return format!("~{rest}");
         }
     }
@@ -227,6 +229,32 @@ mod tests {
         assert_eq!(format_cost(0.0042), "$0.0042");
         assert_eq!(format_cost(0.0100), "$0.01");
         assert_eq!(format_cost(1.234), "$1.23");
+    }
+
+    #[test]
+    fn test_shorten_home_prefix() {
+        // Can only test the non-home paths deterministically (home dir varies)
+        // but we can test that non-matching paths pass through unchanged
+        assert_eq!(shorten_home_prefix("/etc/config"), "/etc/config");
+        assert_eq!(shorten_home_prefix("/tmp/foo"), "/tmp/foo");
+        assert_eq!(shorten_home_prefix("relative/path"), "relative/path");
+        assert_eq!(shorten_home_prefix(""), "");
+
+        // If home dir is available, test path-boundary safety
+        if let Some(home) = dirs::home_dir() {
+            let home_str = home.display().to_string();
+
+            // Exact home dir
+            assert_eq!(shorten_home_prefix(&home_str), "~");
+
+            // Subpath of home
+            let sub = format!("{home_str}/projects/foo");
+            assert_eq!(shorten_home_prefix(&sub), "~/projects/foo");
+
+            // Path sharing prefix but not a child (e.g. /Users/nicky vs /Users/nick)
+            let sibling = format!("{home_str}xxx/projects");
+            assert_eq!(shorten_home_prefix(&sibling), sibling);
+        }
     }
 
     #[test]
