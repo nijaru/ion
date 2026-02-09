@@ -144,14 +144,15 @@ pub async fn run_subagent(
     config: &SubagentConfig,
     task: &str,
     provider: Arc<dyn LlmApi>,
+    mode: crate::tool::ToolMode,
 ) -> Result<SubagentResult> {
     use crate::agent::Agent;
     use crate::session::Session;
-    use crate::tool::ToolMode;
     use tokio::sync::mpsc;
 
-    // Create tool orchestrator with standard builtins, filtered by whitelist
-    let mut orchestrator = ToolOrchestrator::with_builtins(ToolMode::Write);
+    // Create tool orchestrator with standard builtins, filtered by whitelist.
+    // Inherit the parent's tool mode so subagents can't escalate privileges.
+    let mut orchestrator = ToolOrchestrator::with_builtins(mode);
     orchestrator.filter_tools(&config.tools);
     let orchestrator = Arc::new(orchestrator);
 

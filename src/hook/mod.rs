@@ -196,7 +196,16 @@ impl CommandHook {
             "post_tool_use" => HookPoint::PostToolUse,
             _ => return None,
         };
-        let tool_pattern = tool_pattern.and_then(|p| regex::Regex::new(p).ok());
+        let tool_pattern = match tool_pattern {
+            Some(p) => match regex::Regex::new(p) {
+                Ok(re) => Some(re),
+                Err(e) => {
+                    tracing::warn!("Invalid regex in hook tool_pattern '{p}': {e}");
+                    return None;
+                }
+            },
+            None => None,
+        };
         Some(Self {
             point,
             command,
@@ -213,11 +222,12 @@ impl Hook for CommandHook {
 
     async fn execute(&self, ctx: &HookContext) -> HookResult {
         // Check tool pattern filter
-        if let Some(ref pattern) = self.tool_pattern
-            && let Some(ref tool_name) = ctx.tool_name
-            && !pattern.is_match(tool_name)
-        {
-            return HookResult::Continue;
+        if let Some(ref pattern) = self.tool_pattern {
+            match ctx.tool_name {
+                Some(ref tool_name) if pattern.is_match(tool_name) => {}
+                // No match or no tool name — skip this hook
+                _ => return HookResult::Continue,
+            }
         }
 
         let event_str = match self.point {
@@ -229,7 +239,7 @@ impl Hook for CommandHook {
         let working_dir =
             std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
 
-        let result = tokio::process::Command::new("sh")
+        let child = match tokio::process::Command::new("sh")
             .arg("-c")
             .arg(&self.command)
             .env("ION_HOOK_EVENT", event_str)
@@ -237,8 +247,14 @@ impl Hook for CommandHook {
             .env("ION_WORKING_DIR", working_dir.to_string_lossy().as_ref())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
-            .output();
+            .kill_on_drop(true)
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(e) => return HookResult::Abort(format!("Hook spawn failed: {e}")),
+        };
 
+        let result = child.wait_with_output();
         match tokio::time::timeout(std::time::Duration::from_secs(10), result).await {
             Ok(Ok(output)) => {
                 if output.status.success() {
@@ -252,7 +268,7 @@ impl Hook for CommandHook {
                     })
                 }
             }
-            Ok(Err(e)) => HookResult::Abort(format!("Hook spawn failed: {e}")),
+            Ok(Err(e)) => HookResult::Abort(format!("Hook I/O error: {e}")),
             Err(_) => HookResult::Abort(format!("Hook timed out: {}", self.command)),
         }
     }

@@ -55,9 +55,49 @@ impl ToolOrchestrator {
         // Try MCP fallback for unknown tool names
         if !self.tools.contains_key(name)
             && let Some(ref mcp) = self.mcp_fallback
-            && let Some(result) = mcp.call_tool_by_name(name, args.clone()).await
+            && mcp.has_tool(name)
         {
-            let mcp_result = result?;
+            // MCP tools are all DangerLevel::Restricted — block in Read mode
+            let mode = self.permissions.read().await.mode();
+            if mode == ToolMode::Read {
+                return Err(ToolError::PermissionDenied(
+                    "MCP tools are blocked in Read mode".to_string(),
+                ));
+            }
+
+            // Run PreToolUse hooks (same as builtin path)
+            let pre_ctx = HookContext::new(HookPoint::PreToolUse)
+                .with_tool_name(name)
+                .with_tool_input(args.clone());
+            let args = match self.hooks.read().await.execute(&pre_ctx).await {
+                HookResult::Continue => args,
+                HookResult::Skip => {
+                    return Ok(ToolResult {
+                        content: "Tool execution skipped by hook".to_string(),
+                        is_error: false,
+                        metadata: None,
+                    });
+                }
+                HookResult::ReplaceInput(new_args) => new_args,
+                HookResult::ReplaceOutput(output) => {
+                    return Ok(ToolResult {
+                        content: output,
+                        is_error: false,
+                        metadata: None,
+                    });
+                }
+                HookResult::Abort(msg) => {
+                    return Err(ToolError::ExecutionFailed(format!("Hook aborted: {msg}")));
+                }
+            };
+
+            let mcp_result = match mcp.call_tool_by_name(name, args).await {
+                Some(result) => result?,
+                None => {
+                    return Err(ToolError::ExecutionFailed(format!("MCP tool not found: {name}")));
+                }
+            };
+
             let post_ctx = HookContext::new(HookPoint::PostToolUse)
                 .with_tool_name(name)
                 .with_tool_output(&mcp_result.content);
