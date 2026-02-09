@@ -79,9 +79,21 @@ impl App {
 
             // Render completer popup above input (mutually exclusive)
             if self.command_completer.is_active() {
+                let h = self.command_completer.visible_candidates().len() as u16;
                 self.command_completer.render(w, input_start, width)?;
+                self.render_state.last_popup_height = h;
             } else if self.file_completer.is_active() {
+                let h = self.file_completer.visible_candidates().len() as u16;
                 self.file_completer.render(w, input_start, width)?;
+                self.render_state.last_popup_height = h;
+            } else if self.render_state.last_popup_height > 0 {
+                // Clear stale popup rows left from previous render
+                let h = self.render_state.last_popup_height;
+                for i in 0..h {
+                    let row = input_start.saturating_sub(h).saturating_add(i);
+                    execute!(w, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
+                }
+                self.render_state.last_popup_height = 0;
             }
 
             // Position cursor in input area

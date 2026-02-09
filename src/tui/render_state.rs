@@ -85,6 +85,10 @@ pub struct RenderState {
     /// Lines from the streaming agent entry already committed to scrollback.
     /// Reset when the entry finishes, a tool call interrupts, or reflow occurs.
     pub streaming_lines_rendered: usize,
+
+    /// Height of the last completer popup rendered (0 = none).
+    /// Used to clear stale popup rows when the completer deactivates.
+    pub last_popup_height: u16,
 }
 
 impl RenderState {
@@ -101,6 +105,7 @@ impl RenderState {
             needs_reflow: false,
             needs_selector_clear: false,
             streaming_lines_rendered: 0,
+            last_popup_height: 0,
         }
     }
 
