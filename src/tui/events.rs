@@ -707,6 +707,8 @@ impl App {
             // Reset model picker to current provider's models
             self.model_picker.set_api_provider(self.api_provider.name());
         }
+        // Prevent stale selector position from affecting clear_from on the next input-mode frame
+        self.render_state.last_ui_start = None;
         // Mark that we need to clear the selector area (not full screen repaint)
         self.render_state.needs_selector_clear = true;
     }
