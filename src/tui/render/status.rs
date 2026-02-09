@@ -2,15 +2,19 @@
 
 use crate::tui::util::format_tokens;
 use crate::tui::App;
+use crossterm::cursor::MoveTo;
 use crossterm::execute;
+use crossterm::terminal::{Clear, ClearType};
 
 impl App {
     /// Render status line directly with crossterm.
     pub(crate) fn render_status_direct<W: std::io::Write>(
         &self,
         w: &mut W,
+        row: u16,
         _width: u16,
     ) -> std::io::Result<()> {
+        execute!(w, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
         use crate::tool::ToolMode;
         use crossterm::style::{
             Attribute, Color as CColor, Print, ResetColor, SetAttribute, SetForegroundColor,

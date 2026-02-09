@@ -45,18 +45,11 @@ impl App {
                 let border_row = content_start.saturating_add(content_height);
                 draw_horizontal_border(w, border_row, layout.width)?;
 
-                // Status line
-                execute!(w, MoveTo(0, status.row), Clear(ClearType::CurrentLine))?;
-
                 if self.mode == Mode::HistorySearch {
                     self.render_history_search(w, input.row, layout.width)?;
                 } else {
-                    // Progress line (not shown during history search)
-                    execute!(w, MoveTo(0, progress.row), Clear(ClearType::CurrentLine))?;
-                    self.render_progress_direct(w, layout.width)?;
-
-                    execute!(w, MoveTo(0, status.row))?;
-                    self.render_status_direct(w, layout.width)?;
+                    self.render_progress_direct(w, progress.row, layout.width)?;
+                    self.render_status_direct(w, status.row, layout.width)?;
 
                     // Render completer popup in its assigned region.
                     // The popup region is at the top of the UI area; when the popup
