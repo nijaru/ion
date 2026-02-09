@@ -85,6 +85,17 @@ impl ApiKeys {
     }
 }
 
+/// Configuration for a shell command hook.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HookConfig {
+    /// Hook point: "pre_tool_use" or "post_tool_use".
+    pub event: String,
+    /// Shell command to execute.
+    pub command: String,
+    /// Optional regex filter on tool name (hook only fires for matching tools).
+    pub tool_pattern: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -117,6 +128,10 @@ pub struct Config {
 
     /// Delete sessions older than this many days. 0 = never delete.
     pub session_retention_days: u32,
+
+    /// Shell command hooks triggered at tool execution points.
+    #[serde(default)]
+    pub hooks: Vec<HookConfig>,
 }
 
 impl Default for Config {
@@ -132,6 +147,7 @@ impl Default for Config {
             permissions: PermissionConfig::default(),
             system_prompt: None,
             session_retention_days: 90,
+            hooks: Vec::new(),
         }
     }
 }
@@ -299,6 +315,9 @@ impl Config {
         if other.session_retention_days != 90 {
             self.session_retention_days = other.session_retention_days;
         }
+        if !other.hooks.is_empty() {
+            self.hooks.extend(other.hooks);
+        }
     }
 
     /// Save configuration to user global config file (~/.ion/config.toml).
@@ -452,6 +471,47 @@ mod tests {
         assert_eq!(base.provider, Some("openrouter".to_string()));
         assert_eq!(base.model, Some("test-model".to_string()));
         assert_eq!(base.api_keys.openrouter, Some("test-key".to_string()));
+    }
+
+    #[test]
+    fn test_hooks_config_parse() {
+        let toml_str = r#"
+[[hooks]]
+event = "post_tool_use"
+command = "cargo fmt"
+tool_pattern = "write|edit"
+
+[[hooks]]
+event = "pre_tool_use"
+command = "echo check"
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.hooks.len(), 2);
+        assert_eq!(config.hooks[0].event, "post_tool_use");
+        assert_eq!(config.hooks[0].command, "cargo fmt");
+        assert_eq!(
+            config.hooks[0].tool_pattern,
+            Some("write|edit".to_string())
+        );
+        assert_eq!(config.hooks[1].event, "pre_tool_use");
+        assert!(config.hooks[1].tool_pattern.is_none());
+    }
+
+    #[test]
+    fn test_hooks_merge() {
+        let mut base = Config::default();
+        assert!(base.hooks.is_empty());
+
+        let other = Config {
+            hooks: vec![HookConfig {
+                event: "pre_tool_use".to_string(),
+                command: "echo test".to_string(),
+                tool_pattern: None,
+            }],
+            ..Default::default()
+        };
+        base.merge(other);
+        assert_eq!(base.hooks.len(), 1);
     }
 
     #[test]

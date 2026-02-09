@@ -240,7 +240,7 @@ struct CliAgentSetup {
 }
 
 /// Setup CLI agent: config, provider, client, orchestrator, agent, session.
-fn setup_cli_agent(args: &RunArgs, permissions: &PermissionSettings) -> Result<CliAgentSetup> {
+async fn setup_cli_agent(args: &RunArgs, permissions: &PermissionSettings) -> Result<CliAgentSetup> {
     // Load config
     let config = Config::load()?;
 
@@ -323,7 +323,20 @@ fn setup_cli_agent(args: &RunArgs, permissions: &PermissionSettings) -> Result<C
             llm_client.clone(),
         )));
 
-        Arc::new(orch)
+        let orch = Arc::new(orch);
+
+        // Register config-driven hooks
+        for hook_cfg in &config.hooks {
+            if let Some(hook) = crate::hook::CommandHook::from_config(
+                &hook_cfg.event,
+                hook_cfg.command.clone(),
+                hook_cfg.tool_pattern.as_deref(),
+            ) {
+                orch.register_hook(Arc::new(hook)).await;
+            }
+        }
+
+        orch
     };
 
     // Create agent
@@ -416,7 +429,7 @@ async fn run_inner(args: RunArgs, permissions: PermissionSettings) -> Result<Exi
         agent,
         session,
         prompt,
-    } = setup_cli_agent(&args, &permissions)?;
+    } = setup_cli_agent(&args, &permissions).await?;
     let abort_token = session.abort_token.clone();
 
     // Create event channel
