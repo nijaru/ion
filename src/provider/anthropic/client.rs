@@ -1,7 +1,7 @@
 //! Anthropic Messages API client.
 
 use super::request::{
-    AnthropicMessage, AnthropicRequest, AnthropicTool, ContentBlock, SystemBlock,
+    AnthropicMessage, AnthropicRequest, AnthropicTool, CacheControl, ContentBlock, SystemBlock,
 };
 use super::response::{AnthropicResponse, ResponseBlock};
 use super::stream::{ContentBlockInfo, ContentDelta, StreamEvent as AnthropicStreamEvent};
@@ -228,12 +228,37 @@ impl AnthropicClient {
             system_blocks.push(SystemBlock::text(sys.to_string()).with_cache());
         }
 
-        // Convert tools
-        let tools = if request.tools.is_empty() {
+        // Convert tools and cache the last tool definition.
+        // Anthropic caches everything from start to the last cache_control marker,
+        // so system prompt + all tool definitions get cached together as one prefix.
+        let mut tools: Option<Vec<AnthropicTool>> = if request.tools.is_empty() {
             None
         } else {
             Some(request.tools.iter().map(|t| self.convert_tool(t)).collect())
         };
+        if let Some(ref mut tool_vec) = tools
+            && let Some(last) = tool_vec.last_mut()
+        {
+            last.cache_control = Some(CacheControl::ephemeral());
+        }
+
+        // Place a cache breakpoint on the second-to-last user message.
+        // This caches the conversation prefix from prior turns so only the
+        // current turn is billed at full input rate.
+        let mut user_msg_count = 0;
+        for msg in messages.iter_mut().rev() {
+            if msg.role == "user" {
+                user_msg_count += 1;
+                if user_msg_count == 2 {
+                    if let Some(ContentBlock::Text { cache_control, .. }) =
+                        msg.content.last_mut()
+                    {
+                        *cache_control = Some(CacheControl::ephemeral());
+                    }
+                    break;
+                }
+            }
+        }
 
         AnthropicRequest {
             model: request.model.clone(),
@@ -257,6 +282,7 @@ impl AnthropicClient {
             name: tool.name.clone(),
             description: tool.description.clone(),
             input_schema: tool.parameters.clone(),
+            cache_control: None,
         }
     }
 
