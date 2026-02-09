@@ -2,13 +2,8 @@
 
 use crate::tui::completer_state::CompleterState;
 use crate::tui::fuzzy;
-use crossterm::{
-    cursor::MoveTo,
-    execute,
-    style::{Attribute, Color, Print, ResetColor, SetAttribute, SetForegroundColor},
-    terminal::{Clear, ClearType},
-};
-use std::borrow::Cow;
+use crate::tui::render::popup::{render_popup, PopupItem, PopupRegion, PopupStyle};
+use crossterm::style::Color;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -139,6 +134,8 @@ impl FileCompleter {
     /// Render the file completion popup above the input box.
     #[allow(clippy::cast_possible_truncation)]
     pub fn render<W: Write>(&self, w: &mut W, input_start: u16, width: u16) -> std::io::Result<()> {
+        use std::borrow::Cow;
+
         let candidates = self.visible_candidates();
         if candidates.is_empty() {
             return Ok(());
@@ -147,7 +144,7 @@ impl FileCompleter {
         let popup_height = candidates.len() as u16;
         let popup_start = input_start.saturating_sub(popup_height);
 
-        // Calculate popup width (max path length + padding)
+        // Calculate popup width (max path length + icon + padding)
         let max_label_len = candidates
             .iter()
             .map(|c| c.path.to_string_lossy().len())
@@ -155,58 +152,53 @@ impl FileCompleter {
             .unwrap_or(20);
         let popup_width = (max_label_len + 4).min(width.saturating_sub(4) as usize) as u16;
 
-        for (i, candidate) in candidates.iter().enumerate() {
-            let row = popup_start + i as u16;
-            let is_selected = i == self.state.selected_index();
-            let path_str = candidate.path.to_string_lossy();
-
-            execute!(w, MoveTo(1, row), Clear(ClearType::CurrentLine))?;
-
-            if is_selected {
-                execute!(w, SetAttribute(Attribute::Reverse))?;
-            }
-
-            // Use cached is_dir status
-            let icon = if candidate.is_dir { "󰉋 " } else { "  " };
-
-            // Truncate path if needed (use saturating_sub for safety)
-            let display_width = popup_width.saturating_sub(4) as usize;
-            let display: Cow<str> = if display_width > 1 && path_str.len() > display_width {
-                Cow::Owned(format!(
-                    "…{}",
-                    &path_str[path_str
-                        .len()
-                        .saturating_sub(display_width.saturating_sub(1))..]
-                ))
-            } else {
-                path_str
-            };
-
-            execute!(
-                w,
-                Print(" "),
-                SetForegroundColor(if candidate.is_dir {
-                    Color::Blue
+        // Build display strings: "icon path" as primary, no secondary
+        let display_width = popup_width.saturating_sub(4) as usize;
+        let formatted: Vec<String> = candidates
+            .iter()
+            .map(|c| {
+                let icon = if c.is_dir { "󰉋 " } else { "  " };
+                let path_str = c.path.to_string_lossy();
+                let display: Cow<str> = if display_width > 1 && path_str.len() > display_width {
+                    Cow::Owned(format!(
+                        "…{}",
+                        &path_str[path_str
+                            .len()
+                            .saturating_sub(display_width.saturating_sub(1))..]
+                    ))
                 } else {
-                    Color::Reset
-                }),
-                Print(icon),
-                ResetColor,
-                Print(display.as_ref()),
-            )?;
+                    path_str
+                };
+                format!("{icon}{display}")
+            })
+            .collect();
 
-            // Pad to popup width
-            let padding = popup_width.saturating_sub(display.len() as u16 + 3) as usize;
-            if padding > 0 {
-                execute!(w, Print(" ".repeat(padding)))?;
-            }
+        let items: Vec<PopupItem> = candidates
+            .iter()
+            .zip(formatted.iter())
+            .enumerate()
+            .map(|(i, (c, label))| PopupItem {
+                primary: label,
+                secondary: "",
+                is_selected: i == self.state.selected_index(),
+                color_override: Some(if c.is_dir { Color::Blue } else { Color::Reset }),
+            })
+            .collect();
 
-            if is_selected {
-                execute!(w, SetAttribute(Attribute::NoReverse))?;
-            }
-        }
-
-        Ok(())
+        render_popup(
+            w,
+            &items,
+            PopupRegion {
+                row: popup_start,
+                height: popup_height,
+            },
+            PopupStyle {
+                primary_color: Color::Reset,
+                show_secondary_dimmed: false,
+                dim_unselected: false,
+            },
+            popup_width,
+        )
     }
 
     /// Refresh candidates from the filesystem.

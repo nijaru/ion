@@ -10,6 +10,7 @@
 mod chat;
 mod direct;
 mod layout;
+pub(crate) mod popup;
 mod widgets;
 
 use crate::tui::render_selector::MAX_VISIBLE_ITEMS;
