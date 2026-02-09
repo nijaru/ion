@@ -2,12 +2,8 @@
 
 use crate::tui::completer_state::CompleterState;
 use crate::tui::fuzzy;
-use crossterm::{
-    cursor::MoveTo,
-    execute,
-    style::{Attribute, Color, Print, ResetColor, SetAttribute, SetForegroundColor},
-    terminal::{Clear, ClearType},
-};
+use crate::tui::render::popup::{render_popup, PopupItem, PopupRegion, PopupStyle};
+use crossterm::style::Color;
 use std::io::Write;
 
 /// Maximum number of candidates to show in the popup.
@@ -117,7 +113,7 @@ impl CommandCompleter {
         let popup_height = candidates.len() as u16;
         let popup_start = input_start.saturating_sub(popup_height);
 
-        // Calculate popup width (command + description + padding)
+        // Calculate popup width and column alignment
         let max_cmd_len = candidates
             .iter()
             .map(|(cmd, _)| cmd.len())
@@ -130,52 +126,41 @@ impl CommandCompleter {
             .unwrap_or(20);
         let popup_width = (max_cmd_len + max_desc_len + 6).min(width as usize - 4) as u16;
 
-        for (i, (cmd, desc)) in candidates.iter().enumerate() {
-            let row = popup_start + i as u16;
-            let is_selected = i == self.state.selected_index();
+        // Build items with padded secondary (aligns descriptions in a column)
+        let formatted: Vec<String> = candidates
+            .iter()
+            .map(|(cmd, desc)| {
+                let pad = max_cmd_len.saturating_sub(cmd.len()) + 2;
+                format!("{:pad$}{desc}", "", pad = pad)
+            })
+            .collect();
 
-            execute!(w, MoveTo(1, row), Clear(ClearType::CurrentLine))?;
+        let items: Vec<PopupItem> = candidates
+            .iter()
+            .zip(formatted.iter())
+            .enumerate()
+            .map(|(i, ((cmd, _), secondary))| PopupItem {
+                primary: cmd,
+                secondary,
+                is_selected: i == self.state.selected_index(),
+                color_override: None,
+            })
+            .collect();
 
-            if is_selected {
-                execute!(w, SetAttribute(Attribute::Reverse))?;
-            }
-
-            // Command in cyan, description dimmed
-            execute!(
-                w,
-                Print(" "),
-                SetForegroundColor(Color::Cyan),
-                Print(*cmd),
-                ResetColor,
-            )?;
-
-            // Pad between command and description
-            let cmd_padding = max_cmd_len.saturating_sub(cmd.len()) + 2;
-            if cmd_padding > 0 {
-                execute!(w, Print(" ".repeat(cmd_padding)))?;
-            }
-
-            // Description (dimmed)
-            execute!(
-                w,
-                SetAttribute(Attribute::Dim),
-                Print(*desc),
-                SetAttribute(Attribute::NormalIntensity),
-            )?;
-
-            // Pad to popup width
-            let total_len = cmd.len() + cmd_padding + desc.len() + 1;
-            let padding = popup_width.saturating_sub(total_len as u16) as usize;
-            if padding > 0 {
-                execute!(w, Print(" ".repeat(padding)))?;
-            }
-
-            if is_selected {
-                execute!(w, SetAttribute(Attribute::NoReverse))?;
-            }
-        }
-
-        Ok(())
+        render_popup(
+            w,
+            &items,
+            PopupRegion {
+                row: popup_start,
+                height: popup_height,
+            },
+            PopupStyle {
+                primary_color: Color::Cyan,
+                show_secondary_dimmed: true,
+                dim_unselected: false,
+            },
+            popup_width,
+        )
     }
 
     /// Apply fuzzy filter to commands.
