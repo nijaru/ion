@@ -6,16 +6,41 @@ use crate::tool::{DangerLevel, Tool, ToolContext, ToolError, ToolMode, ToolResul
 use async_trait::async_trait;
 use serde_json::json;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
+
+/// Shared atomic for live ToolMode (0 = Read, 1 = Write).
+pub type SharedToolMode = Arc<AtomicU8>;
+
+/// Create a new shared tool mode from an initial value.
+pub fn shared_tool_mode(mode: ToolMode) -> SharedToolMode {
+    Arc::new(AtomicU8::new(mode_to_u8(mode)))
+}
+
+fn mode_to_u8(mode: ToolMode) -> u8 {
+    match mode {
+        ToolMode::Read => 0,
+        ToolMode::Write => 1,
+    }
+}
+
+fn u8_to_mode(v: u8) -> ToolMode {
+    if v == 0 { ToolMode::Read } else { ToolMode::Write }
+}
+
+/// Update a shared tool mode atomically.
+pub fn set_shared_mode(shared: &SharedToolMode, mode: ToolMode) {
+    shared.store(mode_to_u8(mode), Ordering::Relaxed);
+}
 
 /// Tool for spawning subagents to handle delegated tasks.
 pub struct SpawnSubagentTool {
     registry: Arc<SubagentRegistry>,
     provider: Arc<dyn LlmApi>,
-    mode: ToolMode,
+    mode: SharedToolMode,
 }
 
 impl SpawnSubagentTool {
-    pub fn new(registry: Arc<SubagentRegistry>, provider: Arc<dyn LlmApi>, mode: ToolMode) -> Self {
+    pub fn new(registry: Arc<SubagentRegistry>, provider: Arc<dyn LlmApi>, mode: SharedToolMode) -> Self {
         Self { registry, provider, mode }
     }
 }
@@ -74,8 +99,11 @@ impl Tool for SpawnSubagentTool {
             .cloned()
             .ok_or_else(|| ToolError::InvalidArgs(format!("Subagent not found: {name}")))?;
 
-        // Run the subagent (inherits parent's tool mode)
-        let result = run_subagent(&config, task, self.provider.clone(), self.mode)
+        // Read live mode (reflects runtime toggle via Shift+Tab)
+        let current_mode = u8_to_mode(self.mode.load(Ordering::Relaxed));
+
+        // Run the subagent (inherits parent's current tool mode)
+        let result = run_subagent(&config, task, self.provider.clone(), current_mode)
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("Subagent failed: {e}")))?;
 

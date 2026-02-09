@@ -320,10 +320,11 @@ async fn setup_cli_agent(args: &RunArgs, permissions: &PermissionSettings) -> Re
             tracing::warn!("Failed to load subagent configs: {e}");
         }
         let subagent_registry = Arc::new(subagent_registry);
+        let shared_mode = crate::tool::builtin::spawn_subagent::shared_tool_mode(permissions.mode);
         orch.register_tool(Box::new(SpawnSubagentTool::new(
             subagent_registry,
             llm_client.clone(),
-            permissions.mode,
+            shared_mode,
         )));
 
         let orch = Arc::new(orch);

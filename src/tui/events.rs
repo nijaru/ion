@@ -274,6 +274,10 @@ impl App {
                     ToolMode::Read => ToolMode::Write,
                     ToolMode::Write => ToolMode::Read,
                 };
+                crate::tool::builtin::spawn_subagent::set_shared_mode(
+                    &self.shared_tool_mode,
+                    self.tool_mode,
+                );
                 let orchestrator = self.orchestrator.clone();
                 let mode = self.tool_mode;
                 tokio::spawn(async move {

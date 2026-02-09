@@ -74,6 +74,8 @@ pub struct App {
     pub history_draft: Option<String>,
     /// Current tool permission mode (Read/Write)
     pub tool_mode: ToolMode,
+    /// Shared atomic mode for subagent live reads
+    pub shared_tool_mode: crate::tool::builtin::spawn_subagent::SharedToolMode,
     /// Currently selected API provider
     pub api_provider: Provider,
     /// API provider picker state
