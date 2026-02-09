@@ -1,10 +1,10 @@
 //! Chat history rendering functions.
 
+use crate::tui::App;
 use crate::tui::chat_renderer::ChatRenderer;
 use crate::tui::message_list::Sender;
 use crate::tui::terminal::StyledLine;
 use crate::tui::types::Mode;
-use crate::tui::App;
 
 impl App {
     /// Take new chat entries and render them as lines for insertion.
@@ -13,14 +13,6 @@ impl App {
         if wrap_width == 0 {
             return Vec::new();
         }
-
-        // Insert header once at startup (into scrollback, not viewport)
-        let header_lines = if self.render_state.header_inserted {
-            Vec::new()
-        } else {
-            self.render_state.header_inserted = true;
-            Self::startup_header_lines(&self.session.working_dir)
-        };
 
         let entry_count = self.message_list.entries.len();
         if self.render_state.rendered_entries > entry_count {
@@ -80,18 +72,14 @@ impl App {
             if !new_lines.is_empty() {
                 self.render_state.buffered_chat_lines.extend(new_lines);
             }
-            // Still return header if it needs to be inserted
-            return header_lines;
-        }
-
-        if new_lines.is_empty()
-            && self.render_state.buffered_chat_lines.is_empty()
-            && header_lines.is_empty()
-        {
             return Vec::new();
         }
 
-        let mut out = header_lines;
+        if new_lines.is_empty() && self.render_state.buffered_chat_lines.is_empty() {
+            return Vec::new();
+        }
+
+        let mut out = Vec::new();
         if !self.render_state.buffered_chat_lines.is_empty() {
             out.append(&mut self.render_state.buffered_chat_lines);
         }
