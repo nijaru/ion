@@ -422,6 +422,7 @@ impl App {
 
             _ => {
                 self.handle_input_event_with_history(key);
+                self.update_command_completer_query();
             }
         }
     }

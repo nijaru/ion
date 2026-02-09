@@ -312,6 +312,11 @@ impl App {
         let cursor = self.input_state.cursor_char_idx();
         let content = self.input_buffer.get_content();
 
+        if !content.starts_with('/') || cursor == 0 {
+            self.command_completer.deactivate();
+            return;
+        }
+
         // Extract text after / (the query)
         if cursor > 1 {
             let query: String = content.chars().skip(1).take(cursor - 1).collect();
