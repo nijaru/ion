@@ -112,9 +112,14 @@ impl App {
                 error!("Failed to start MCP server {}: {}", name, e);
             }
         }
-        let mcp_tools = mcp_manager.get_all_tools().await;
-        for tool in mcp_tools {
-            orchestrator.register_tool(tool);
+        // Lazy MCP loading: index tools but don't register them individually.
+        // The model discovers tools via mcp_tools search and calls them via fallback.
+        mcp_manager.build_index().await;
+        if mcp_manager.has_tools() {
+            debug!("Indexed {} MCP tools (lazy loading)", mcp_manager.tool_count());
+            let mcp_manager = Arc::new(mcp_manager);
+            orchestrator.set_mcp_fallback(mcp_manager.clone());
+            orchestrator.register_tool(Box::new(crate::tool::builtin::McpToolsTool::new(mcp_manager)));
         }
 
         // Load subagent configurations (defaults first, user YAML overrides by name)
