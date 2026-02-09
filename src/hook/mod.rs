@@ -213,12 +213,11 @@ impl Hook for CommandHook {
 
     async fn execute(&self, ctx: &HookContext) -> HookResult {
         // Check tool pattern filter
-        if let Some(ref pattern) = self.tool_pattern {
-            if let Some(ref tool_name) = ctx.tool_name {
-                if !pattern.is_match(tool_name) {
-                    return HookResult::Continue;
-                }
-            }
+        if let Some(ref pattern) = self.tool_pattern
+            && let Some(ref tool_name) = ctx.tool_name
+            && !pattern.is_match(tool_name)
+        {
+            return HookResult::Continue;
         }
 
         let event_str = match self.point {

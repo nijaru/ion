@@ -15,6 +15,7 @@ pub struct ToolOrchestrator {
     tools: HashMap<String, Box<dyn Tool>>,
     permissions: RwLock<PermissionMatrix>,
     hooks: RwLock<HookRegistry>,
+    mcp_fallback: Option<Arc<crate::mcp::McpManager>>,
 }
 
 impl ToolOrchestrator {
@@ -24,7 +25,13 @@ impl ToolOrchestrator {
             tools: HashMap::new(),
             permissions: RwLock::new(PermissionMatrix::new(mode)),
             hooks: RwLock::new(HookRegistry::new()),
+            mcp_fallback: None,
         }
+    }
+
+    /// Set an MCP manager as fallback for unknown tool names.
+    pub fn set_mcp_fallback(&mut self, manager: Arc<crate::mcp::McpManager>) {
+        self.mcp_fallback = Some(manager);
     }
 
     pub fn register_tool(&mut self, tool: Box<dyn Tool>) {
@@ -44,6 +51,29 @@ impl ToolOrchestrator {
     ) -> Result<ToolResult, ToolError> {
         // Sanitize tool name (models sometimes embed args or XML artifacts)
         let name = crate::tui::message_list::sanitize_tool_name(name);
+
+        // Try MCP fallback for unknown tool names
+        if !self.tools.contains_key(name)
+            && let Some(ref mcp) = self.mcp_fallback
+            && let Some(result) = mcp.call_tool_by_name(name, args.clone()).await
+        {
+            let mcp_result = result?;
+            let post_ctx = HookContext::new(HookPoint::PostToolUse)
+                .with_tool_name(name)
+                .with_tool_output(&mcp_result.content);
+            return match self.hooks.read().await.execute(&post_ctx).await {
+                HookResult::ReplaceOutput(output) => Ok(ToolResult {
+                    content: output,
+                    is_error: mcp_result.is_error,
+                    metadata: mcp_result.metadata,
+                }),
+                HookResult::Abort(msg) => {
+                    Err(ToolError::ExecutionFailed(format!("Hook aborted: {msg}")))
+                }
+                _ => Ok(mcp_result),
+            };
+        }
+
         let tool = self
             .tools
             .get(name)

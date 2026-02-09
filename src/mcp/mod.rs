@@ -198,10 +198,20 @@ impl Tool for McpTool {
     }
 }
 
+/// Lightweight index entry for an MCP tool.
+struct McpToolEntry {
+    name: String,
+    description: String,
+    input_schema: serde_json::Value,
+    client: Arc<McpClient>,
+}
+
 #[derive(Default)]
 pub struct McpManager {
     clients: Vec<Arc<McpClient>>,
+    tool_index: Vec<McpToolEntry>,
 }
+
 
 impl McpManager {
     #[must_use]
@@ -217,6 +227,74 @@ impl McpManager {
         let client = McpClient::spawn(name.to_string(), config).await?;
         self.clients.push(Arc::new(client));
         Ok(())
+    }
+
+    /// Build the tool index from all connected servers.
+    /// Call this after all servers are added.
+    pub async fn build_index(&mut self) {
+        self.tool_index.clear();
+        for client in &self.clients {
+            match client.list_tools().await {
+                Ok(tools) => {
+                    for tool_def in tools {
+                        self.tool_index.push(McpToolEntry {
+                            name: tool_def.name,
+                            description: tool_def.description,
+                            input_schema: tool_def.input_schema,
+                            client: client.clone(),
+                        });
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Failed to list tools for an MCP server: {}", e);
+                }
+            }
+        }
+    }
+
+    /// Search tools by keyword (case-insensitive substring match on name + description).
+    pub fn search_tools(&self, query: &str) -> Vec<McpToolSearchResult> {
+        let query_lower = query.to_lowercase();
+        self.tool_index
+            .iter()
+            .filter(|entry| {
+                entry.name.to_lowercase().contains(&query_lower)
+                    || entry.description.to_lowercase().contains(&query_lower)
+            })
+            .map(|entry| McpToolSearchResult {
+                name: entry.name.clone(),
+                description: entry.description.clone(),
+                input_schema: entry.input_schema.clone(),
+            })
+            .collect()
+    }
+
+    /// Call an MCP tool by name, looking up the right client.
+    pub async fn call_tool_by_name(
+        &self,
+        name: &str,
+        args: serde_json::Value,
+    ) -> Option<Result<ToolResult, ToolError>> {
+        let entry = self.tool_index.iter().find(|e| e.name == name)?;
+        Some(
+            entry
+                .client
+                .call_tool(name, args)
+                .await
+                .map_err(|e| ToolError::ExecutionFailed(format!("MCP error: {e}"))),
+        )
+    }
+
+    /// Check if any tools are indexed.
+    #[must_use]
+    pub fn has_tools(&self) -> bool {
+        !self.tool_index.is_empty()
+    }
+
+    /// Get the number of indexed tools.
+    #[must_use]
+    pub fn tool_count(&self) -> usize {
+        self.tool_index.len()
     }
 
     pub async fn get_all_tools(&self) -> Vec<Box<dyn Tool>> {
@@ -240,4 +318,12 @@ impl McpManager {
         }
         all_tools
     }
+}
+
+/// Result from searching MCP tools.
+#[derive(Debug, Clone, Serialize)]
+pub struct McpToolSearchResult {
+    pub name: String,
+    pub description: String,
+    pub input_schema: serde_json::Value,
 }
