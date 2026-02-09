@@ -15,7 +15,7 @@ pub struct ToolOrchestrator {
     tools: HashMap<String, Box<dyn Tool>>,
     permissions: RwLock<PermissionMatrix>,
     hooks: RwLock<HookRegistry>,
-    mcp_fallback: Option<Arc<crate::mcp::McpManager>>,
+    mcp_fallback: Option<Arc<dyn crate::mcp::McpFallback>>,
 }
 
 impl ToolOrchestrator {
@@ -29,9 +29,9 @@ impl ToolOrchestrator {
         }
     }
 
-    /// Set an MCP manager as fallback for unknown tool names.
-    pub fn set_mcp_fallback(&mut self, manager: Arc<crate::mcp::McpManager>) {
-        self.mcp_fallback = Some(manager);
+    /// Set an MCP fallback for unknown tool names.
+    pub fn set_mcp_fallback(&mut self, fallback: Arc<dyn crate::mcp::McpFallback>) {
+        self.mcp_fallback = Some(fallback);
     }
 
     pub fn register_tool(&mut self, tool: Box<dyn Tool>) {
@@ -300,5 +300,135 @@ mod tests {
             danger: DangerLevel::Restricted,
         };
         assert_eq!(matrix.check_permission(&tool), PermissionStatus::Allowed);
+    }
+
+    /// Mock MCP fallback that reports a tool exists but returns a canned result.
+    struct MockMcpFallback {
+        tools: Vec<String>,
+        result: Option<Result<ToolResult, ToolError>>,
+    }
+
+    #[async_trait]
+    impl crate::mcp::McpFallback for MockMcpFallback {
+        fn has_tool(&self, name: &str) -> bool {
+            self.tools.iter().any(|t| t == name)
+        }
+        async fn call_tool_by_name(
+            &self,
+            _name: &str,
+            _args: serde_json::Value,
+        ) -> Option<Result<ToolResult, ToolError>> {
+            self.result.clone()
+        }
+    }
+
+    fn test_ctx() -> ToolContext {
+        ToolContext {
+            working_dir: std::path::PathBuf::from("/tmp"),
+            session_id: "test".into(),
+            abort_signal: tokio_util::sync::CancellationToken::new(),
+            no_sandbox: false,
+            index_callback: None,
+            discovery_callback: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_mcp_fallback_blocked_in_read_mode() {
+        let mut orch = ToolOrchestrator::new(ToolMode::Read);
+        orch.set_mcp_fallback(Arc::new(MockMcpFallback {
+            tools: vec!["mcp_dangerous_tool".into()],
+            result: None, // should never be reached
+        }));
+
+        let result = orch
+            .call_tool("mcp_dangerous_tool", json!({}), &test_ctx())
+            .await;
+        match result {
+            Err(ToolError::PermissionDenied(msg)) => {
+                assert!(msg.contains("Read mode"), "Expected Read mode message, got: {msg}");
+            }
+            other => panic!("Expected PermissionDenied, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_mcp_fallback_allowed_in_write_mode() {
+        let mut orch = ToolOrchestrator::new(ToolMode::Write);
+        orch.set_mcp_fallback(Arc::new(MockMcpFallback {
+            tools: vec!["mcp_tool".into()],
+            result: Some(Ok(ToolResult {
+                content: "mcp result".into(),
+                is_error: false,
+                metadata: None,
+            })),
+        }));
+
+        let result = orch
+            .call_tool("mcp_tool", json!({}), &test_ctx())
+            .await
+            .unwrap();
+        assert_eq!(result.content, "mcp result");
+    }
+
+    #[tokio::test]
+    async fn test_mcp_fallback_runs_pre_hooks() {
+        let mut orch = ToolOrchestrator::new(ToolMode::Write);
+        orch.set_mcp_fallback(Arc::new(MockMcpFallback {
+            tools: vec!["mcp_tool".into()],
+            result: None, // should never be reached — hook aborts first
+        }));
+
+        // Register an abort hook
+        use crate::hook::{Hook, HookContext, HookPoint, HookResult as HR};
+        struct AbortHook;
+        #[async_trait]
+        impl Hook for AbortHook {
+            fn hook_point(&self) -> HookPoint {
+                HookPoint::PreToolUse
+            }
+            async fn execute(&self, _ctx: &HookContext) -> HR {
+                HR::Abort("blocked by hook".into())
+            }
+        }
+        orch.register_hook(Arc::new(AbortHook)).await;
+
+        let result = orch
+            .call_tool("mcp_tool", json!({}), &test_ctx())
+            .await;
+        match result {
+            Err(ToolError::ExecutionFailed(msg)) => {
+                assert!(msg.contains("blocked by hook"), "Expected hook abort, got: {msg}");
+            }
+            other => panic!("Expected ExecutionFailed from hook abort, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_mcp_fallback_skip_hook() {
+        let mut orch = ToolOrchestrator::new(ToolMode::Write);
+        orch.set_mcp_fallback(Arc::new(MockMcpFallback {
+            tools: vec!["mcp_tool".into()],
+            result: None, // should never be reached — hook skips
+        }));
+
+        use crate::hook::{Hook, HookContext, HookPoint, HookResult as HR};
+        struct SkipHook;
+        #[async_trait]
+        impl Hook for SkipHook {
+            fn hook_point(&self) -> HookPoint {
+                HookPoint::PreToolUse
+            }
+            async fn execute(&self, _ctx: &HookContext) -> HR {
+                HR::Skip
+            }
+        }
+        orch.register_hook(Arc::new(SkipHook)).await;
+
+        let result = orch
+            .call_tool("mcp_tool", json!({}), &test_ctx())
+            .await
+            .unwrap();
+        assert_eq!(result.content, "Tool execution skipped by hook");
     }
 }

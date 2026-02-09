@@ -137,7 +137,7 @@ pub enum DangerLevel {
     Restricted,
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, Error)]
 pub enum ToolError {
     #[error("Invalid arguments: {0}")]
     InvalidArgs(String),

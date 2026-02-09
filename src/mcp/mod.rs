@@ -13,6 +13,19 @@ use tokio::sync::{Mutex, mpsc};
 
 use crate::tool::types::{DangerLevel, Tool, ToolContext, ToolError, ToolResult};
 
+/// Trait for MCP tool fallback — allows testing without real MCP servers.
+#[async_trait]
+pub trait McpFallback: Send + Sync {
+    /// Check if a specific tool exists.
+    fn has_tool(&self, name: &str) -> bool;
+    /// Call a tool by name. Returns None if tool not found.
+    async fn call_tool_by_name(
+        &self,
+        name: &str,
+        args: serde_json::Value,
+    ) -> Option<Result<ToolResult, ToolError>>;
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpServerConfig {
     pub command: String,
@@ -269,8 +282,26 @@ impl McpManager {
             .collect()
     }
 
-    /// Call an MCP tool by name, looking up the right client.
-    pub async fn call_tool_by_name(
+    /// Check if any tools are indexed.
+    #[must_use]
+    pub fn has_tools(&self) -> bool {
+        !self.tool_index.is_empty()
+    }
+
+    /// Get the number of indexed tools.
+    #[must_use]
+    pub fn tool_count(&self) -> usize {
+        self.tool_index.len()
+    }
+}
+
+#[async_trait]
+impl McpFallback for McpManager {
+    fn has_tool(&self, name: &str) -> bool {
+        self.tool_index.iter().any(|e| e.name == name)
+    }
+
+    async fn call_tool_by_name(
         &self,
         name: &str,
         args: serde_json::Value,
@@ -283,24 +314,6 @@ impl McpManager {
                 .await
                 .map_err(|e| ToolError::ExecutionFailed(format!("MCP error: {e}"))),
         )
-    }
-
-    /// Check if any tools are indexed.
-    #[must_use]
-    pub fn has_tools(&self) -> bool {
-        !self.tool_index.is_empty()
-    }
-
-    /// Check if a specific tool exists in the index.
-    #[must_use]
-    pub fn has_tool(&self, name: &str) -> bool {
-        self.tool_index.iter().any(|e| e.name == name)
-    }
-
-    /// Get the number of indexed tools.
-    #[must_use]
-    pub fn tool_count(&self) -> usize {
-        self.tool_index.len()
     }
 }
 
