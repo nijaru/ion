@@ -85,6 +85,9 @@ pub struct RenderState {
     /// Lines from the streaming agent entry already committed to scrollback.
     /// Reset when the entry finishes, a tool call interrupts, or reflow occurs.
     pub streaming_lines_rendered: usize,
+
+    /// Force a render on the first frame after session load or /clear.
+    pub needs_initial_render: bool,
 }
 
 impl RenderState {
@@ -101,6 +104,7 @@ impl RenderState {
             needs_reflow: false,
             needs_selector_clear: false,
             streaming_lines_rendered: 0,
+            needs_initial_render: false,
         }
     }
 
@@ -115,6 +119,7 @@ impl RenderState {
         self.chat_row = None;
         self.last_ui_start = None;
         self.streaming_lines_rendered = 0;
+        self.needs_initial_render = true;
     }
 
     /// Reset for loading existing session (resume/load).
@@ -127,6 +132,30 @@ impl RenderState {
         self.chat_row = None;
         self.last_ui_start = None;
         self.streaming_lines_rendered = 0;
+        self.needs_initial_render = true;
+    }
+
+    /// After printing `line_count` lines from row 0, set chat_row or transition to scroll mode.
+    /// Returns scroll-up amount needed (0 if content fits).
+    #[allow(clippy::cast_possible_truncation)]
+    pub fn position_after_reprint(
+        &mut self,
+        line_count: usize,
+        term_height: u16,
+        ui_height: u16,
+    ) -> u16 {
+        let available = term_height.saturating_sub(ui_height) as usize;
+        if line_count <= available {
+            self.chat_row = Some(line_count as u16);
+            0
+        } else {
+            let excess = (line_count
+                .min(term_height as usize)
+                .saturating_sub(available)) as u16;
+            self.chat_row = None;
+            self.last_ui_start = None;
+            excess
+        }
     }
 
     /// Mark reflow as complete after `reprint_chat_scrollback`.
@@ -143,5 +172,60 @@ impl RenderState {
 impl Default for RenderState {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn position_after_reprint_fits_on_screen() {
+        let mut state = RenderState::new();
+        let excess = state.position_after_reprint(5, 40, 6);
+        assert_eq!(excess, 0);
+        assert_eq!(state.chat_row, Some(5));
+    }
+
+    #[test]
+    fn position_after_reprint_overflows() {
+        let mut state = RenderState::new();
+        // 40 lines of content, terminal 40 tall, UI 6 tall → 34 available, 6 excess
+        let excess = state.position_after_reprint(40, 40, 6);
+        assert_eq!(excess, 6);
+        assert_eq!(state.chat_row, None);
+        assert_eq!(state.last_ui_start, None);
+    }
+
+    #[test]
+    fn position_after_reprint_exact_fit() {
+        let mut state = RenderState::new();
+        // Exactly fills available space
+        let excess = state.position_after_reprint(34, 40, 6);
+        assert_eq!(excess, 0);
+        assert_eq!(state.chat_row, Some(34));
+    }
+
+    #[test]
+    fn position_after_reprint_content_exceeds_terminal() {
+        let mut state = RenderState::new();
+        // More lines than terminal height (capped to term_height)
+        let excess = state.position_after_reprint(100, 40, 6);
+        // min(100, 40) - 34 = 6
+        assert_eq!(excess, 6);
+        assert_eq!(state.chat_row, None);
+    }
+
+    #[test]
+    fn needs_initial_render_set_on_reset() {
+        let mut state = RenderState::new();
+        assert!(!state.needs_initial_render);
+
+        state.reset_for_new_conversation();
+        assert!(state.needs_initial_render);
+
+        state.needs_initial_render = false;
+        state.reset_for_session_load();
+        assert!(state.needs_initial_render);
     }
 }
