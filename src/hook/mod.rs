@@ -168,6 +168,101 @@ impl HookRegistry {
     }
 }
 
+/// A hook that executes a shell command.
+///
+/// Context is passed via environment variables:
+/// - `ION_HOOK_EVENT` — "pre_tool_use" or "post_tool_use"
+/// - `ION_TOOL_NAME` — tool name
+/// - `ION_WORKING_DIR` — working directory
+///
+/// Exit 0 = Continue, non-zero = Abort(stderr).
+pub struct CommandHook {
+    point: HookPoint,
+    command: String,
+    tool_pattern: Option<regex::Regex>,
+}
+
+impl CommandHook {
+    /// Create a `CommandHook` from config values.
+    ///
+    /// Returns `None` if the event string is invalid.
+    pub fn from_config(
+        event: &str,
+        command: String,
+        tool_pattern: Option<&str>,
+    ) -> Option<Self> {
+        let point = match event {
+            "pre_tool_use" => HookPoint::PreToolUse,
+            "post_tool_use" => HookPoint::PostToolUse,
+            _ => return None,
+        };
+        let tool_pattern = tool_pattern.and_then(|p| regex::Regex::new(p).ok());
+        Some(Self {
+            point,
+            command,
+            tool_pattern,
+        })
+    }
+}
+
+#[async_trait]
+impl Hook for CommandHook {
+    fn hook_point(&self) -> HookPoint {
+        self.point
+    }
+
+    async fn execute(&self, ctx: &HookContext) -> HookResult {
+        // Check tool pattern filter
+        if let Some(ref pattern) = self.tool_pattern {
+            if let Some(ref tool_name) = ctx.tool_name {
+                if !pattern.is_match(tool_name) {
+                    return HookResult::Continue;
+                }
+            }
+        }
+
+        let event_str = match self.point {
+            HookPoint::PreToolUse => "pre_tool_use",
+            HookPoint::PostToolUse => "post_tool_use",
+        };
+
+        let tool_name = ctx.tool_name.as_deref().unwrap_or("");
+        let working_dir =
+            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+
+        let result = tokio::process::Command::new("sh")
+            .arg("-c")
+            .arg(&self.command)
+            .env("ION_HOOK_EVENT", event_str)
+            .env("ION_TOOL_NAME", tool_name)
+            .env("ION_WORKING_DIR", working_dir.to_string_lossy().as_ref())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output();
+
+        match tokio::time::timeout(std::time::Duration::from_secs(10), result).await {
+            Ok(Ok(output)) => {
+                if output.status.success() {
+                    HookResult::Continue
+                } else {
+                    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                    HookResult::Abort(if stderr.is_empty() {
+                        format!("Hook command failed: {}", self.command)
+                    } else {
+                        stderr
+                    })
+                }
+            }
+            Ok(Err(e)) => HookResult::Abort(format!("Hook spawn failed: {e}")),
+            Err(_) => HookResult::Abort(format!("Hook timed out: {}", self.command)),
+        }
+    }
+
+    fn name(&self) -> &'static str {
+        "command_hook"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -212,6 +307,54 @@ mod tests {
         let ctx = HookContext::new(HookPoint::PreToolUse);
         let result = registry.execute(&ctx).await;
         assert!(matches!(result, HookResult::Continue)); // PostToolUse hook not triggered
+    }
+
+    #[test]
+    fn test_command_hook_from_config() {
+        let hook = CommandHook::from_config("pre_tool_use", "echo ok".into(), None);
+        assert!(hook.is_some());
+        assert_eq!(hook.unwrap().hook_point(), HookPoint::PreToolUse);
+
+        let hook = CommandHook::from_config("post_tool_use", "echo ok".into(), Some("write|edit"));
+        assert!(hook.is_some());
+
+        let hook = CommandHook::from_config("invalid_event", "echo ok".into(), None);
+        assert!(hook.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_command_hook_success() {
+        let hook = CommandHook::from_config("pre_tool_use", "true".into(), None).unwrap();
+        let ctx = HookContext::new(HookPoint::PreToolUse).with_tool_name("write");
+        let result = hook.execute(&ctx).await;
+        assert!(matches!(result, HookResult::Continue));
+    }
+
+    #[tokio::test]
+    async fn test_command_hook_failure() {
+        let hook = CommandHook::from_config("pre_tool_use", "false".into(), None).unwrap();
+        let ctx = HookContext::new(HookPoint::PreToolUse).with_tool_name("write");
+        let result = hook.execute(&ctx).await;
+        assert!(matches!(result, HookResult::Abort(_)));
+    }
+
+    #[tokio::test]
+    async fn test_command_hook_tool_pattern_match() {
+        let hook =
+            CommandHook::from_config("pre_tool_use", "true".into(), Some("write|edit")).unwrap();
+        let ctx = HookContext::new(HookPoint::PreToolUse).with_tool_name("write");
+        let result = hook.execute(&ctx).await;
+        assert!(matches!(result, HookResult::Continue));
+    }
+
+    #[tokio::test]
+    async fn test_command_hook_tool_pattern_no_match() {
+        let hook =
+            CommandHook::from_config("pre_tool_use", "false".into(), Some("write|edit")).unwrap();
+        // Tool name "read" doesn't match pattern, so hook should skip (Continue)
+        let ctx = HookContext::new(HookPoint::PreToolUse).with_tool_name("read");
+        let result = hook.execute(&ctx).await;
+        assert!(matches!(result, HookResult::Continue));
     }
 
     #[tokio::test]

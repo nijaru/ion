@@ -136,6 +136,19 @@ impl App {
 
         let orchestrator = Arc::new(orchestrator);
 
+        // Register config-driven hooks
+        for hook_cfg in &config.hooks {
+            if let Some(hook) = crate::hook::CommandHook::from_config(
+                &hook_cfg.event,
+                hook_cfg.command.clone(),
+                hook_cfg.tool_pattern.as_deref(),
+            ) {
+                orchestrator.register_hook(Arc::new(hook)).await;
+            } else {
+                error!("Invalid hook event '{}', expected 'pre_tool_use' or 'post_tool_use'", hook_cfg.event);
+            }
+        }
+
         let mut agent = Agent::new(provider_impl, orchestrator.clone());
         if let Some(ref prompt) = config.system_prompt {
             agent = agent.with_system_prompt(prompt.clone());
