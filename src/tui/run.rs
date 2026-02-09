@@ -308,9 +308,11 @@ fn render_frame(
                 }
                 #[allow(clippy::cast_possible_truncation)]
                 let new_row = start_row.saturating_add(lines.len() as u16);
+                // Don't set ui_drawn_at here — draw_direct does that after
+                // recomputing layout with the updated next_row.
                 app.render_state.position = ChatPosition::Tracking {
                     next_row: new_row,
-                    ui_drawn_at: Some(new_row),
+                    ui_drawn_at: None,
                 };
             }
             ChatInsert::Overflow {
@@ -358,8 +360,11 @@ fn render_frame(
         }
     }
 
-    // Draw bottom UI
-    app.draw_direct(stdout, layout)?;
+    // Recompute layout after chat insertion — position may have changed,
+    // and draw_direct uses clear_from (derived from last_ui_top) which must
+    // reflect the post-insertion state to avoid clearing newly inserted lines.
+    let post_layout = app.compute_layout(term_width, term_height);
+    app.draw_direct(stdout, &post_layout)?;
 
     execute!(stdout, EndSynchronizedUpdate)?;
     stdout.flush()?;
@@ -608,6 +613,9 @@ pub async fn run(permissions: PermissionSettings, resume_option: ResumeOption) -
             MoveTo(0, 0)
         )?;
         let line_count = app.reprint_chat_scrollback(&mut stdout, term_width)?;
+        // Clear any stale content below the reprinted chat (the partial scroll
+        // only blanked scroll_amount rows, not the full viewport).
+        execute!(stdout, Clear(ClearType::FromCursorDown))?;
         let layout = app.compute_layout(term_width, term_height);
         let ui_height = layout.height();
         let excess =
