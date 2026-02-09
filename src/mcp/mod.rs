@@ -291,32 +291,16 @@ impl McpManager {
         !self.tool_index.is_empty()
     }
 
+    /// Check if a specific tool exists in the index.
+    #[must_use]
+    pub fn has_tool(&self, name: &str) -> bool {
+        self.tool_index.iter().any(|e| e.name == name)
+    }
+
     /// Get the number of indexed tools.
     #[must_use]
     pub fn tool_count(&self) -> usize {
         self.tool_index.len()
-    }
-
-    pub async fn get_all_tools(&self) -> Vec<Box<dyn Tool>> {
-        let mut all_tools = Vec::new();
-        for client in &self.clients {
-            match client.list_tools().await {
-                Ok(tools) => {
-                    for tool_def in tools {
-                        all_tools.push(Box::new(McpTool {
-                            client: client.clone(),
-                            name: tool_def.name,
-                            description: tool_def.description,
-                            input_schema: tool_def.input_schema,
-                        }) as Box<dyn Tool>);
-                    }
-                }
-                Err(e) => {
-                    tracing::error!("Failed to list tools for an MCP server: {}", e);
-                }
-            }
-        }
-        all_tools
     }
 }
 

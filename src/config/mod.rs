@@ -222,6 +222,10 @@ impl Config {
             }
         }
 
+        // Snapshot hooks — only user-global config can define hooks.
+        // Project configs could inject arbitrary shell commands via a malicious repo.
+        let user_hooks = std::mem::take(&mut config.hooks);
+
         // Layer 2: Project shared (.ion/config.toml)
         let project_config = PathBuf::from(".ion/config.toml");
         if project_config.exists() {
@@ -233,6 +237,9 @@ impl Config {
         if local_config.exists() {
             config.merge_from_file(&local_config)?;
         }
+
+        // Restore user-global hooks only (discard any from project configs)
+        config.hooks = user_hooks;
 
         Ok(config)
     }

@@ -2,21 +2,21 @@
 
 use crate::agent::subagent::{SubagentRegistry, run_subagent};
 use crate::provider::LlmApi;
-use crate::tool::{DangerLevel, Tool, ToolContext, ToolError, ToolResult};
+use crate::tool::{DangerLevel, Tool, ToolContext, ToolError, ToolMode, ToolResult};
 use async_trait::async_trait;
 use serde_json::json;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 
 /// Tool for spawning subagents to handle delegated tasks.
 pub struct SpawnSubagentTool {
-    registry: Arc<RwLock<SubagentRegistry>>,
+    registry: Arc<SubagentRegistry>,
     provider: Arc<dyn LlmApi>,
+    mode: ToolMode,
 }
 
 impl SpawnSubagentTool {
-    pub fn new(registry: Arc<RwLock<SubagentRegistry>>, provider: Arc<dyn LlmApi>) -> Self {
-        Self { registry, provider }
+    pub fn new(registry: Arc<SubagentRegistry>, provider: Arc<dyn LlmApi>, mode: ToolMode) -> Self {
+        Self { registry, provider, mode }
     }
 }
 
@@ -36,7 +36,7 @@ impl Tool for SpawnSubagentTool {
             "properties": {
                 "name": {
                     "type": "string",
-                    "description": "Name of the subagent to spawn (from ~/.config/agents/subagents/)"
+                    "description": "Name of the subagent to spawn (e.g. 'explorer', 'planner')"
                 },
                 "task": {
                     "type": "string",
@@ -68,16 +68,14 @@ impl Tool for SpawnSubagentTool {
             .ok_or_else(|| ToolError::InvalidArgs("task is required".to_string()))?;
 
         // Look up subagent config
-        let config = {
-            let registry = self.registry.read().await;
-            registry
-                .get(name)
-                .cloned()
-                .ok_or_else(|| ToolError::InvalidArgs(format!("Subagent not found: {name}")))?
-        };
+        let config = self
+            .registry
+            .get(name)
+            .cloned()
+            .ok_or_else(|| ToolError::InvalidArgs(format!("Subagent not found: {name}")))?;
 
-        // Run the subagent
-        let result = run_subagent(&config, task, self.provider.clone())
+        // Run the subagent (inherits parent's tool mode)
+        let result = run_subagent(&config, task, self.provider.clone(), self.mode)
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("Subagent failed: {e}")))?;
 

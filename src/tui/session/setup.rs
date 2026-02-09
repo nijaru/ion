@@ -131,12 +131,13 @@ impl App {
         {
             debug!("Loaded {} subagent configurations", count);
         }
-        let subagent_registry = Arc::new(tokio::sync::RwLock::new(subagent_registry));
+        let subagent_registry = Arc::new(subagent_registry);
 
         // Register spawn_subagent tool
         orchestrator.register_tool(Box::new(SpawnSubagentTool::new(
             subagent_registry,
             provider_impl.clone(),
+            permissions.mode,
         )));
 
         let orchestrator = Arc::new(orchestrator);

@@ -314,13 +314,16 @@ async fn setup_cli_agent(args: &RunArgs, permissions: &PermissionSettings) -> Re
         // Register subagents
         let mut subagent_registry = SubagentRegistry::with_defaults();
         let subagents_path = subagents_dir();
-        if subagents_path.exists() {
-            let _ = subagent_registry.load_directory(&subagents_path);
+        if subagents_path.exists()
+            && let Err(e) = subagent_registry.load_directory(&subagents_path)
+        {
+            tracing::warn!("Failed to load subagent configs: {e}");
         }
-        let subagent_registry = Arc::new(tokio::sync::RwLock::new(subagent_registry));
+        let subagent_registry = Arc::new(subagent_registry);
         orch.register_tool(Box::new(SpawnSubagentTool::new(
             subagent_registry,
             llm_client.clone(),
+            permissions.mode,
         )));
 
         let orch = Arc::new(orch);
@@ -333,6 +336,11 @@ async fn setup_cli_agent(args: &RunArgs, permissions: &PermissionSettings) -> Re
                 hook_cfg.tool_pattern.as_deref(),
             ) {
                 orch.register_hook(Arc::new(hook)).await;
+            } else {
+                tracing::error!(
+                    "Invalid hook event '{}', expected 'pre_tool_use' or 'post_tool_use'",
+                    hook_cfg.event
+                );
             }
         }
 
