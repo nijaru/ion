@@ -73,11 +73,15 @@ pub(crate) async fn handle_stream_chunk(
 
     // Handle usage at end of stream
     if let Some(usage) = chunk.usage {
+        let cache_read_tokens = usage
+            .prompt_tokens_details
+            .as_ref()
+            .map_or(0, |d| d.cached_tokens);
         let _ = tx
             .send(StreamEvent::Usage(Usage {
                 input_tokens: usage.prompt_tokens,
                 output_tokens: usage.completion_tokens,
-                cache_read_tokens: 0,
+                cache_read_tokens,
                 cache_write_tokens: 0,
             }))
             .await;
