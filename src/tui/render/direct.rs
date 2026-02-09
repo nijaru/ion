@@ -26,6 +26,21 @@ impl App {
         let ui_start = self.ui_start_row(height, ui_height);
         let progress_height = PROGRESS_HEIGHT;
 
+        // Popup height (already included in ui_height via calculate_ui_height).
+        // When active, the popup occupies the top rows of the UI area and
+        // progress/input/status shift down by this amount.
+        let popup_height = if self.mode == Mode::Input {
+            if self.command_completer.is_active() {
+                self.command_completer.visible_candidates().len() as u16
+            } else if self.file_completer.is_active() {
+                self.file_completer.visible_candidates().len() as u16
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+
         // Determine clear_from based on positioning mode.
         // Read last_ui_start BEFORE updating; store new value for next frame.
         let old_ui_start = self.render_state.last_ui_start;
@@ -38,14 +53,20 @@ impl App {
         // Clear from UI position downward (never clear full screen - preserves scrollback)
         execute!(w, MoveTo(0, clear_from), Clear(ClearType::FromCursorDown))?;
 
-        // Progress line (only in Input mode when active - selector has its own UI)
+        // Progress line (after popup area; only in Input mode - selector has its own UI)
         if progress_height > 0 && self.mode == Mode::Input {
-            execute!(w, MoveTo(0, ui_start), Clear(ClearType::CurrentLine))?;
+            execute!(
+                w,
+                MoveTo(0, ui_start + popup_height),
+                Clear(ClearType::CurrentLine)
+            )?;
             self.render_progress_direct(w, width)?;
         }
 
-        // Input area (with borders)
-        let input_start = ui_start.saturating_add(progress_height);
+        // Input area (after popup + progress, with borders)
+        let input_start = ui_start
+            .saturating_add(popup_height)
+            .saturating_add(progress_height);
         let input_height = self.calculate_input_height(width, height).saturating_sub(2); // Minus borders
 
         // Top border
@@ -71,15 +92,17 @@ impl App {
         } else {
             self.render_status_direct(w, width)?;
 
-            // Render completer popup above input (mutually exclusive).
-            // The popup height is included in calculate_ui_height(), so the
-            // Clear(FromCursorDown) at ui_start already covers the popup area.
-            // When the popup deactivates, ui_height shrinks and the existing
-            // old_ui_start.min(ui_start) logic clears stale rows.
+            // Render completer popup at top of UI area (rows ui_start to
+            // ui_start + popup_height - 1). The popup render function draws
+            // upward from a given row, so pass ui_start + popup_height.
+            // When the popup deactivates, ui_height shrinks, ui_start moves
+            // down, and old_ui_start.min(ui_start) clears stale popup rows.
             if self.command_completer.is_active() {
-                self.command_completer.render(w, input_start, width)?;
+                self.command_completer
+                    .render(w, ui_start + popup_height, width)?;
             } else if self.file_completer.is_active() {
-                self.file_completer.render(w, input_start, width)?;
+                self.file_completer
+                    .render(w, ui_start + popup_height, width)?;
             }
 
             // Position cursor in input area
