@@ -9,7 +9,6 @@ use std::sync::Arc;
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
-const SCHEMA_VERSION: i32 = 3;
 /// Max input history entries to keep
 const INPUT_HISTORY_LIMIT: usize = 100;
 
@@ -126,7 +125,7 @@ impl SessionStore {
         }
 
         // Migration v2 -> v3: Add provider column to sessions
-        if version < SCHEMA_VERSION {
+        if version < 3 {
             self.db.execute_batch(
                 r"
                 ALTER TABLE sessions ADD COLUMN provider TEXT NOT NULL DEFAULT '';
@@ -287,55 +286,7 @@ impl SessionStore {
 
     /// List recent sessions, ordered by most recently updated.
     pub fn list_recent(&self, limit: usize) -> Result<Vec<SessionSummary>, SessionStoreError> {
-        let mut stmt = self.db.prepare(
-            r"
-            WITH first_user_messages AS (
-                SELECT session_id, content, ROW_NUMBER() OVER (
-                    PARTITION BY session_id ORDER BY position
-                ) as rn
-                FROM messages
-                WHERE role = 'user'
-            )
-            SELECT
-                s.id,
-                s.working_dir,
-                s.model,
-                s.updated_at,
-                fum.content as first_user_message
-            FROM sessions s
-            INNER JOIN first_user_messages fum ON fum.session_id = s.id AND fum.rn = 1
-            ORDER BY s.updated_at DESC
-            LIMIT ?1
-            ",
-        )?;
-
-        let summaries: Result<Vec<SessionSummary>, SessionStoreError> = stmt
-            .query_map(params![limit as i64], |row| {
-                let id: String = row.get(0)?;
-                let working_dir: String = row.get(1)?;
-                let model: String = row.get(2)?;
-                let updated_at: i64 = row.get(3)?;
-                let first_user_message: Option<String> = row.get(4)?;
-                Ok((id, working_dir, model, updated_at, first_user_message))
-            })?
-            .map(|r| {
-                let (id, working_dir, model, updated_at, first_user_message_json) = r?;
-
-                // Extract text from first user message JSON
-                let first_user_message =
-                    first_user_message_json.and_then(|json| extract_first_text_from_content(&json));
-
-                Ok(SessionSummary {
-                    id,
-                    working_dir,
-                    model,
-                    updated_at,
-                    first_user_message,
-                })
-            })
-            .collect();
-
-        summaries
+        self.query_sessions(None, limit)
     }
 
     /// List recent sessions for a specific working directory, ordered by most recently updated.
@@ -344,44 +295,81 @@ impl SessionStore {
         working_dir: &str,
         limit: usize,
     ) -> Result<Vec<SessionSummary>, SessionStoreError> {
-        let mut stmt = self.db.prepare(
-            r"
-            WITH first_user_messages AS (
-                SELECT session_id, content, ROW_NUMBER() OVER (
-                    PARTITION BY session_id ORDER BY position
-                ) as rn
-                FROM messages
-                WHERE role = 'user'
+        self.query_sessions(Some(working_dir), limit)
+    }
+
+    /// Shared query for listing sessions with optional directory filter.
+    fn query_sessions(
+        &self,
+        working_dir_filter: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<SessionSummary>, SessionStoreError> {
+        let (sql, has_dir_param) = if working_dir_filter.is_some() {
+            (
+                r"
+                WITH first_user_messages AS (
+                    SELECT session_id, content, ROW_NUMBER() OVER (
+                        PARTITION BY session_id ORDER BY position
+                    ) as rn
+                    FROM messages
+                    WHERE role = 'user'
+                )
+                SELECT
+                    s.id,
+                    s.working_dir,
+                    s.model,
+                    s.updated_at,
+                    fum.content as first_user_message
+                FROM sessions s
+                INNER JOIN first_user_messages fum ON fum.session_id = s.id AND fum.rn = 1
+                WHERE s.working_dir = ?1
+                ORDER BY s.updated_at DESC
+                LIMIT ?2
+                ",
+                true,
             )
-            SELECT
-                s.id,
-                s.working_dir,
-                s.model,
-                s.updated_at,
-                fum.content as first_user_message
-            FROM sessions s
-            INNER JOIN first_user_messages fum ON fum.session_id = s.id AND fum.rn = 1
-            WHERE s.working_dir = ?1
-            ORDER BY s.updated_at DESC
-            LIMIT ?2
-            ",
-        )?;
+        } else {
+            (
+                r"
+                WITH first_user_messages AS (
+                    SELECT session_id, content, ROW_NUMBER() OVER (
+                        PARTITION BY session_id ORDER BY position
+                    ) as rn
+                    FROM messages
+                    WHERE role = 'user'
+                )
+                SELECT
+                    s.id,
+                    s.working_dir,
+                    s.model,
+                    s.updated_at,
+                    fum.content as first_user_message
+                FROM sessions s
+                INNER JOIN first_user_messages fum ON fum.session_id = s.id AND fum.rn = 1
+                ORDER BY s.updated_at DESC
+                LIMIT ?1
+                ",
+                false,
+            )
+        };
 
-        let summaries: Result<Vec<SessionSummary>, SessionStoreError> = stmt
-            .query_map(params![working_dir, limit as i64], |row| {
-                let id: String = row.get(0)?;
-                let working_dir: String = row.get(1)?;
-                let model: String = row.get(2)?;
-                let updated_at: i64 = row.get(3)?;
-                let first_user_message: Option<String> = row.get(4)?;
-                Ok((id, working_dir, model, updated_at, first_user_message))
-            })?
-            .map(|r| {
-                let (id, working_dir, model, updated_at, first_user_message_json) = r?;
+        let mut stmt = self.db.prepare(sql)?;
 
+        let rows: Vec<(String, String, String, i64, Option<String>)> = if has_dir_param {
+            stmt.query_map(
+                params![working_dir_filter.unwrap_or_default(), limit as i64],
+                Self::map_summary_row,
+            )?
+            .collect::<Result<_, _>>()?
+        } else {
+            stmt.query_map(params![limit as i64], Self::map_summary_row)?
+                .collect::<Result<_, _>>()?
+        };
+
+        rows.into_iter()
+            .map(|(id, working_dir, model, updated_at, first_user_message_json)| {
                 let first_user_message =
                     first_user_message_json.and_then(|json| extract_first_text_from_content(&json));
-
                 Ok(SessionSummary {
                     id,
                     working_dir,
@@ -390,9 +378,20 @@ impl SessionStore {
                     first_user_message,
                 })
             })
-            .collect();
+            .collect()
+    }
 
-        summaries
+    /// Map a row from the session summary query.
+    fn map_summary_row(
+        row: &rusqlite::Row,
+    ) -> rusqlite::Result<(String, String, String, i64, Option<String>)> {
+        Ok((
+            row.get(0)?,
+            row.get(1)?,
+            row.get(2)?,
+            row.get(3)?,
+            row.get(4)?,
+        ))
     }
 
     /// Delete a session and all its messages.
@@ -610,6 +609,57 @@ mod tests {
         for summary in &recent {
             assert!(session_ids.contains(&summary.id));
         }
+    }
+
+    #[test]
+    fn test_list_recent_for_dir() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("sessions.db");
+        let store = SessionStore::open(&db_path).unwrap();
+
+        // Create sessions in two directories
+        for i in 0..3 {
+            let mut session = Session::new("/project/alpha".into(), "model".to_string());
+            session.messages.push(Message {
+                role: Role::User,
+                content: Arc::new(vec![ContentBlock::Text {
+                    text: format!("Alpha session {i}"),
+                }]),
+            });
+            store.save(&session).unwrap();
+        }
+        for i in 0..2 {
+            let mut session = Session::new("/project/beta".into(), "model".to_string());
+            session.messages.push(Message {
+                role: Role::User,
+                content: Arc::new(vec![ContentBlock::Text {
+                    text: format!("Beta session {i}"),
+                }]),
+            });
+            store.save(&session).unwrap();
+        }
+
+        // Filter by /project/alpha — should return only those 3
+        let alpha = store.list_recent_for_dir("/project/alpha", 10).unwrap();
+        assert_eq!(alpha.len(), 3);
+        for s in &alpha {
+            assert_eq!(s.working_dir, "/project/alpha");
+        }
+
+        // Filter by /project/beta — should return only those 2
+        let beta = store.list_recent_for_dir("/project/beta", 10).unwrap();
+        assert_eq!(beta.len(), 2);
+        for s in &beta {
+            assert_eq!(s.working_dir, "/project/beta");
+        }
+
+        // Filter by non-existent directory — should return empty
+        let empty = store.list_recent_for_dir("/project/gamma", 10).unwrap();
+        assert!(empty.is_empty());
+
+        // Limit works with directory filter
+        let limited = store.list_recent_for_dir("/project/alpha", 1).unwrap();
+        assert_eq!(limited.len(), 1);
     }
 
     #[test]

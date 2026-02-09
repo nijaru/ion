@@ -26,27 +26,19 @@ impl App {
             no_sandbox: self.permissions.no_sandbox,
         };
 
-        // Warn if session's working directory no longer exists
-        if !self.session.working_dir.exists() {
-            self.message_list.push_entry(MessageEntry::new(
-                Sender::System,
-                format!(
-                    "Warning: session directory no longer exists: {}",
-                    self.session.working_dir.display()
-                ),
-            ));
-        }
-
         // Restore provider if it differs from current
+        let mut provider_warning: Option<String> = None;
         if !saved_provider.is_empty() {
             if let Some(provider) = Provider::from_id(&saved_provider) {
                 if provider != self.api_provider
                     && let Err(e) = self.set_provider(provider)
                 {
-                    tracing::warn!("Failed to restore provider '{}': {}", saved_provider, e);
+                    provider_warning =
+                        Some(format!("Warning: could not restore provider '{saved_provider}': {e}"));
                 }
             } else {
-                tracing::warn!("Unknown provider '{}' in saved session", saved_provider);
+                provider_warning =
+                    Some(format!("Warning: unknown provider '{saved_provider}' in saved session"));
             }
         }
 
@@ -126,6 +118,21 @@ impl App {
                 }
                 Role::System => {} // System messages not displayed in chat
             }
+        }
+
+        // Post-rebuild warnings (after message list is populated so they appear at the end)
+        if !self.session.working_dir.exists() {
+            self.message_list.push_entry(MessageEntry::new(
+                Sender::System,
+                format!(
+                    "Warning: session directory no longer exists: {}",
+                    self.session.working_dir.display()
+                ),
+            ));
+        }
+        if let Some(warning) = provider_warning {
+            self.message_list
+                .push_entry(MessageEntry::new(Sender::System, warning));
         }
 
         Ok(())
