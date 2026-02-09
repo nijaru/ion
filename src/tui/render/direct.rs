@@ -1,7 +1,8 @@
 //! Direct crossterm rendering orchestrator (TUI v2 - no ratatui).
 
+use crate::tui::render::layout::{BodyLayout, UiLayout};
 use crate::tui::render::selector::{self, SelectorData, SelectorItem};
-use crate::tui::render::{widgets::draw_horizontal_border, PROGRESS_HEIGHT, PROMPT_WIDTH};
+use crate::tui::render::{widgets::draw_horizontal_border, PROMPT_WIDTH};
 use crate::tui::types::{Mode, SelectorPage};
 use crate::tui::util::format_relative_time;
 use crate::tui::App;
@@ -11,102 +12,72 @@ use crossterm::terminal::{Clear, ClearType};
 
 impl App {
     /// Direct crossterm rendering (TUI v2 - no ratatui Terminal/Frame).
-    /// Renders the bottom UI area: progress, input, status.
+    /// Renders the bottom UI area using precomputed layout regions.
     pub fn draw_direct<W: std::io::Write>(
         &mut self,
         w: &mut W,
-        width: u16,
-        height: u16,
+        layout: &UiLayout,
     ) -> std::io::Result<()> {
-        let ui_height = self.calculate_ui_height(width, height);
-        let ui_start = self.ui_start_row(height, ui_height);
-        let progress_height = PROGRESS_HEIGHT;
-
-        // Popup height (already included in ui_height via calculate_ui_height).
-        // When active, the popup occupies the top rows of the UI area and
-        // progress/input/status shift down by this amount.
-        let popup_height = if self.mode == Mode::Input {
-            if self.command_completer.is_active() {
-                self.command_completer.visible_candidates().len() as u16
-            } else if self.file_completer.is_active() {
-                self.file_completer.visible_candidates().len() as u16
-            } else {
-                0
-            }
-        } else {
-            0
-        };
-
-        // Determine clear_from based on positioning mode.
-        // Read last_ui_start BEFORE updating; store new value for next frame.
-        let old_ui_start = self.render_state.last_ui_start;
-        self.render_state.last_ui_start = Some(ui_start);
-
-        // Use min(old, new) so stale UI rows (e.g. popup dismiss, mode change)
-        // are cleared when the UI area shrinks.
-        let clear_from = old_ui_start.map_or(ui_start, |old| old.min(ui_start));
+        self.render_state.last_ui_start = Some(layout.top);
 
         // Clear from UI position downward (never clear full screen - preserves scrollback)
-        execute!(w, MoveTo(0, clear_from), Clear(ClearType::FromCursorDown))?;
+        execute!(
+            w,
+            MoveTo(0, layout.clear_from),
+            Clear(ClearType::FromCursorDown)
+        )?;
 
-        // Progress line (after popup area; only in Input mode - selector has its own UI)
-        if progress_height > 0 && self.mode == Mode::Input {
-            execute!(
-                w,
-                MoveTo(0, ui_start + popup_height),
-                Clear(ClearType::CurrentLine)
-            )?;
-            self.render_progress_direct(w, width)?;
-        }
-
-        // Input area (after popup + progress, with borders)
-        let input_start = ui_start
-            .saturating_add(popup_height)
-            .saturating_add(progress_height);
-        let input_height = self.calculate_input_height(width, height).saturating_sub(2); // Minus borders
-
-        // Top border
-        draw_horizontal_border(w, input_start, width)?;
-
-        // Input content
-        let content_start = input_start.saturating_add(1);
-        self.render_input_direct(w, content_start, width, input_height)?;
-
-        // Bottom border
-        let border_row = content_start.saturating_add(input_height);
-        draw_horizontal_border(w, border_row, width)?;
-
-        // Status line
-        let status_row = border_row.saturating_add(1);
-        execute!(w, MoveTo(0, status_row), Clear(ClearType::CurrentLine))?;
-
-        // In selector mode, render selector instead of normal input/status
-        if self.mode == Mode::Selector {
-            self.render_selector_direct(w, ui_start, width, height)?;
-        } else if self.mode == Mode::HistorySearch {
-            self.render_history_search(w, input_start, width)?;
-        } else {
-            self.render_status_direct(w, width)?;
-
-            // Render completer popup at top of UI area (rows ui_start to
-            // ui_start + popup_height - 1). The popup render function draws
-            // upward from a given row, so pass ui_start + popup_height.
-            // When the popup deactivates, ui_height shrinks, ui_start moves
-            // down, and old_ui_start.min(ui_start) clears stale popup rows.
-            if self.command_completer.is_active() {
-                self.command_completer
-                    .render(w, ui_start + popup_height, width)?;
-            } else if self.file_completer.is_active() {
-                self.file_completer
-                    .render(w, ui_start + popup_height, width)?;
+        match &layout.body {
+            BodyLayout::Selector { selector } => {
+                self.render_selector_direct(w, selector.row, layout.width, 0)?;
             }
+            BodyLayout::Input {
+                popup,
+                progress,
+                input,
+                status,
+            } => {
+                // Progress line
+                execute!(w, MoveTo(0, progress.row), Clear(ClearType::CurrentLine))?;
+                self.render_progress_direct(w, layout.width)?;
 
-            // Position cursor in input area
-            // cursor_pos is relative (x within content, y is visual line 0-indexed)
-            let (cursor_x, cursor_y) = self.input_state.cursor_pos;
-            let scroll_offset = self.input_state.scroll_offset() as u16;
-            let cursor_y = cursor_y.saturating_sub(scroll_offset);
-            execute!(w, MoveTo(cursor_x + PROMPT_WIDTH, content_start + cursor_y))?;
+                // Input area with borders
+                let content_height = input.height.saturating_sub(2); // Minus borders
+                draw_horizontal_border(w, input.row, layout.width)?;
+                let content_start = input.row.saturating_add(1);
+                self.render_input_direct(w, content_start, layout.width, content_height)?;
+                let border_row = content_start.saturating_add(content_height);
+                draw_horizontal_border(w, border_row, layout.width)?;
+
+                // Status line
+                execute!(w, MoveTo(0, status.row), Clear(ClearType::CurrentLine))?;
+
+                if self.mode == Mode::HistorySearch {
+                    self.render_history_search(w, input.row, layout.width)?;
+                } else {
+                    self.render_status_direct(w, layout.width)?;
+
+                    // Render completer popup in its assigned region.
+                    // The popup region is at the top of the UI area; when the popup
+                    // deactivates, the region disappears, top moves down, and
+                    // clear_from covers stale popup rows.
+                    if let Some(popup_region) = popup {
+                        let popup_anchor = popup_region.row + popup_region.height;
+                        if self.command_completer.is_active() {
+                            self.command_completer
+                                .render(w, popup_anchor, layout.width)?;
+                        } else if self.file_completer.is_active() {
+                            self.file_completer.render(w, popup_anchor, layout.width)?;
+                        }
+                    }
+
+                    // Position cursor in input area
+                    let (cursor_x, cursor_y) = self.input_state.cursor_pos;
+                    let scroll_offset = self.input_state.scroll_offset() as u16;
+                    let cursor_y = cursor_y.saturating_sub(scroll_offset);
+                    execute!(w, MoveTo(cursor_x + PROMPT_WIDTH, content_start + cursor_y))?;
+                }
+            }
         }
 
         Ok(())

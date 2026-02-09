@@ -119,14 +119,10 @@ fn cleanup_terminal(
     let _ = execute!(stdout, EndSynchronizedUpdate);
 
     // Clear UI area before exit
-    let ui_height = app.calculate_ui_height(term_width, term_height);
-    let ui_start = app.ui_start_row(term_height, ui_height);
-    let ui_end = ui_start.saturating_add(ui_height).min(term_height);
-    for row in ui_start..ui_end {
-        execute!(stdout, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
-    }
-    // Position cursor at ui_start (just after chat content)
-    execute!(stdout, MoveTo(0, ui_start))?;
+    let layout = app.compute_layout(term_width, term_height, app.render_state.last_ui_start);
+    execute!(stdout, MoveTo(0, layout.top), Clear(ClearType::FromCursorDown))?;
+    // Position cursor at layout top (just after chat content)
+    execute!(stdout, MoveTo(0, layout.top))?;
 
     // Restore terminal
     execute!(stdout, DisableBracketedPaste, DisableFocusChange)?;
@@ -351,11 +347,16 @@ pub async fn run(
         // Handle selector close: clear the selector area
         if app.render_state.needs_selector_clear {
             app.render_state.needs_selector_clear = false;
-            let ui_height = app.calculate_ui_height(term_width, term_height);
-            let ui_start = app.ui_start_row(term_height, ui_height);
-            for row in ui_start..term_height {
-                execute!(stdout, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
-            }
+            let sel_layout = app.compute_layout(
+                term_width,
+                term_height,
+                app.render_state.last_ui_start,
+            );
+            execute!(
+                stdout,
+                MoveTo(0, sel_layout.top),
+                Clear(ClearType::FromCursorDown)
+            )?;
             stdout.flush()?;
             frame_changed = true;
         }
@@ -473,8 +474,13 @@ pub async fn run(
             }
         }
 
-        // Render the bottom UI area
-        app.draw_direct(&mut stdout, term_width, term_height)?;
+        // Compute layout once per frame, render the bottom UI area
+        let layout = app.compute_layout(
+            term_width,
+            term_height,
+            app.render_state.last_ui_start,
+        );
+        app.draw_direct(&mut stdout, &layout)?;
 
         // End synchronized output
         execute!(stdout, EndSynchronizedUpdate)?;
