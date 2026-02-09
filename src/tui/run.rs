@@ -33,10 +33,13 @@ use std::io::{self, Write};
 
 /// Operations that happen before chat insertion.
 enum PreOp {
-    /// Push viewport to scrollback, blank the screen.
-    ClearScreen,
-    /// Push viewport to scrollback, reprint chat at new width.
-    Reflow(Vec<StyledLine>),
+    /// Push visible content to scrollback, blank the screen.
+    ClearScreen { scroll_amount: u16 },
+    /// Push visible content to scrollback, reprint chat at new width.
+    Reflow {
+        lines: Vec<StyledLine>,
+        scroll_amount: u16,
+    },
     /// Clear the area where the selector was.
     ClearSelectorArea,
     /// Print the startup header.
@@ -80,7 +83,7 @@ struct FramePrep {
 // ---------------------------------------------------------------------------
 
 /// Process flags, take chat inserts, build pre-render operations.
-fn prepare_frame(app: &mut App, term_width: u16) -> FramePrep {
+fn prepare_frame(app: &mut App, term_width: u16, term_height: u16) -> FramePrep {
     let mut pre_ops = Vec::new();
     let mut state_changed = false;
 
@@ -90,10 +93,19 @@ fn prepare_frame(app: &mut App, term_width: u16) -> FramePrep {
         state_changed = true;
     }
 
+    // Capture scroll amount from current position before any ops modify it.
+    // In-session clears/reflows only scroll the rows with actual content,
+    // not the full terminal height (avoids pushing blank lines into scrollback).
+    let ui_height = app.compute_layout(term_width, term_height).height();
+    let scroll_amount = app
+        .render_state
+        .position
+        .scroll_amount(ui_height, term_height);
+
     // Screen clear (/clear)
     if app.render_state.needs_screen_clear {
         app.render_state.needs_screen_clear = false;
-        pre_ops.push(PreOp::ClearScreen);
+        pre_ops.push(PreOp::ClearScreen { scroll_amount });
         state_changed = true;
     }
 
@@ -102,7 +114,10 @@ fn prepare_frame(app: &mut App, term_width: u16) -> FramePrep {
         app.render_state.needs_reflow = false;
         if !app.message_list.entries.is_empty() {
             let lines = app.build_chat_lines(term_width);
-            pre_ops.push(PreOp::Reflow(lines));
+            pre_ops.push(PreOp::Reflow {
+                lines,
+                scroll_amount,
+            });
         } else {
             app.render_state.position = ChatPosition::Empty;
         }
@@ -215,17 +230,20 @@ fn render_frame(
     // Execute pre-ops
     for op in &pre_ops {
         match op {
-            PreOp::ClearScreen => {
+            PreOp::ClearScreen { scroll_amount } => {
                 execute!(
                     stdout,
-                    crossterm::terminal::ScrollUp(term_height),
+                    crossterm::terminal::ScrollUp(*scroll_amount),
                     MoveTo(0, 0)
                 )?;
             }
-            PreOp::Reflow(lines) => {
+            PreOp::Reflow {
+                lines,
+                scroll_amount,
+            } => {
                 execute!(
                     stdout,
-                    crossterm::terminal::ScrollUp(term_height),
+                    crossterm::terminal::ScrollUp(*scroll_amount),
                     MoveTo(0, 0)
                 )?;
                 for line in lines {
@@ -576,12 +594,17 @@ pub async fn run(permissions: PermissionSettings, resume_option: ResumeOption) -
     // Track terminal size
     let (mut term_width, mut term_height) = terminal::size()?;
 
-    // Resume: reprint loaded session into scrollback
+    // Resume: reprint loaded session into scrollback.
+    // Only scroll up by the cursor row so blank lines below the shell prompt
+    // don't get pushed into scrollback history.
     if !app.message_list.entries.is_empty() {
+        let scroll_amount = crossterm::cursor::position()
+            .map(|(_, y)| y.saturating_add(1))
+            .unwrap_or(term_height);
         execute!(stdout, BeginSynchronizedUpdate)?;
         execute!(
             stdout,
-            crossterm::terminal::ScrollUp(term_height),
+            crossterm::terminal::ScrollUp(scroll_amount),
             MoveTo(0, 0)
         )?;
         let line_count = app.reprint_chat_scrollback(&mut stdout, term_width)?;
@@ -628,7 +651,7 @@ pub async fn run(permissions: PermissionSettings, resume_option: ResumeOption) -
         app.update();
 
         // 2. PREPARE
-        let prep = prepare_frame(&mut app, term_width);
+        let prep = prepare_frame(&mut app, term_width, term_height);
 
         // 3. PLAN
         let needs_render = prep.state_changed

@@ -127,6 +127,27 @@ impl ChatPosition {
     pub fn is_tracking(&self) -> bool {
         matches!(self, Self::Tracking { .. })
     }
+
+    /// How many rows to scroll to push visible content into scrollback.
+    /// In Scrolling mode, the full viewport is used; in other modes,
+    /// only the rows with actual content are counted.
+    pub fn scroll_amount(&self, ui_height: u16, term_height: u16) -> u16 {
+        match self {
+            Self::Scrolling { .. } => term_height,
+            Self::Tracking {
+                next_row,
+                ui_drawn_at,
+            } => {
+                // Content up to next_row, UI drawn at ui_drawn_at
+                let content_bottom = ui_drawn_at
+                    .map(|row| row.saturating_add(ui_height))
+                    .unwrap_or(next_row.saturating_add(ui_height));
+                content_bottom.min(term_height)
+            }
+            Self::Header { anchor } => anchor.saturating_add(ui_height).min(term_height),
+            Self::Empty => term_height,
+        }
+    }
 }
 
 /// Manages render state for chat positioning and incremental updates.
@@ -378,6 +399,37 @@ mod tests {
         }
         .header_inserted());
         assert!(ChatPosition::Scrolling { ui_drawn_at: None }.header_inserted());
+    }
+
+    #[test]
+    fn chat_position_scroll_amount() {
+        // Scrolling: full terminal
+        assert_eq!(
+            ChatPosition::Scrolling { ui_drawn_at: None }.scroll_amount(5, 40),
+            40
+        );
+        // Tracking: content rows + UI height
+        assert_eq!(
+            ChatPosition::Tracking {
+                next_row: 10,
+                ui_drawn_at: Some(10)
+            }
+            .scroll_amount(5, 40),
+            15 // ui_drawn_at(10) + ui_height(5) = 15
+        );
+        // Tracking without ui_drawn_at: next_row + UI height
+        assert_eq!(
+            ChatPosition::Tracking {
+                next_row: 10,
+                ui_drawn_at: None
+            }
+            .scroll_amount(5, 40),
+            15
+        );
+        // Header: anchor + UI height
+        assert_eq!(ChatPosition::Header { anchor: 3 }.scroll_amount(5, 40), 8);
+        // Empty: full terminal (safe fallback)
+        assert_eq!(ChatPosition::Empty.scroll_amount(5, 40), 40);
     }
 
     #[test]
