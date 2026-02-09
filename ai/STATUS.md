@@ -7,36 +7,26 @@
 | Phase     | Feature work  | 2026-02-08 |
 | Status    | Post-refactor | 2026-02-09 |
 | Toolchain | stable        | 2026-01-22 |
-| Tests     | 403 passing   | 2026-02-09 |
+| Tests     | 405 passing   | 2026-02-09 |
 | Clippy    | clean         | 2026-02-09 |
 
 ## Session Summary (2026-02-09)
 
-**Review fixes (1584e3f):**
+**Session resume fixes (079de4a, 1fe6671) — tk-x65k DONE:**
 
-- Fixed unsigned underflow in command_completer.rs on narrow terminals
-- Restored pre-refactor behavior: progress not rendered during HistorySearch
-- Unified PopupRegion as re-export of layout::Region (eliminated duplicate type)
-- Fixed popup padding calculation when secondary text not rendered
-- Removed dead `_height` parameter from render_selector_direct
+- Schema v3: added `provider` column to sessions table
+- `--continue` scoped to cwd (was globally most recent)
+- Provider persisted and restored on session load; user-visible warnings on failure
+- Session picker shows shortened working dir as hint
+- Warning when resumed session's working dir no longer exists
+- Review findings fixed: migration guard hardcoded, path boundary check in `shorten_home_prefix`, deduplicated `list_recent`/`list_recent_for_dir` into `query_sessions`, added tests
 
-**Startup banner (1ec3506, e4e1357):**
-
-- Added cwd + git branch to startup header: `ion v0.0.0` / `~/path [branch]`
-- Detached HEAD falls back to short SHA via `git rev-parse --short HEAD`
-
-**Previous: TUI layout refactor (tk-5lfp) — DONE:**
-
-- Phase 1: Unified popup renderer (`render/popup.rs`)
-- Phase 2: Split `render/direct.rs` into focused modules
-- Phase 3: `compute_layout()` returns `UiLayout` with `Region` structs
-- Review: ai/review/tui-refactor-review-2026-02-09.md
+**Previous: Review fixes (1584e3f), startup banner (1ec3506, e4e1357), TUI layout refactor (tk-5lfp)**
 
 ## Priority Queue
 
 ### P3
 
-- tk-x65k: Evaluate --continue session resumption logic
 - tk-9tig: Custom slash commands via // prefix (skill menu)
 
 ### P4 — Deferred
