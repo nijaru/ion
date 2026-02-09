@@ -24,58 +24,42 @@ pub(crate) fn extract_key_arg(tool_name: &str, args: &serde_json::Value) -> Stri
     };
 
     match tool_name {
-        "read" => {
-            let path = obj
-                .get("file_path")
-                .and_then(|v| v.as_str())
-                .map(|s| truncate_for_display(s, 40))
-                .unwrap_or_default();
-
-            // Show offset/limit if specified
-            let mut extras = Vec::new();
-            if let Some(offset) = obj.get("offset").and_then(|v| v.as_u64()) {
-                extras.push(format!("offset={offset}"));
-            }
-            if let Some(limit) = obj.get("limit").and_then(|v| v.as_u64()) {
-                extras.push(format!("limit={limit}"));
-            }
-
-            if extras.is_empty() {
-                path
-            } else {
-                format!("{path}, {}", extras.join(", "))
-            }
-        }
-        "write" | "edit" => obj
+        "read" | "write" | "edit" => obj
             .get("file_path")
             .and_then(|v| v.as_str())
-            .map(|s| truncate_for_display(s, 50))
+            .map(|s| truncate_for_display(&relative_display_path(s), 60))
             .unwrap_or_default(),
         "bash" => {
             let cmd = obj
                 .get("command")
                 .and_then(|v| v.as_str())
-                .map(|s| truncate_for_display(s, 50))
+                .map(|s| truncate_for_display(s, 60))
                 .unwrap_or_default();
+            // Only show dir if it differs from cwd
             if let Some(dir) = obj.get("directory").and_then(|v| v.as_str()) {
-                format!("{cmd}, dir={}", truncate_for_display(dir, 20))
-            } else {
-                cmd
+                let is_cwd = std::env::current_dir()
+                    .map(|cwd| cwd.to_string_lossy() == dir)
+                    .unwrap_or(false);
+                if !is_cwd {
+                    let rel = relative_display_path(dir);
+                    return format!("{cmd}, dir={}", truncate_for_display(&rel, 40));
+                }
             }
+            cmd
         }
         "glob" => {
             let pattern = obj
                 .get("pattern")
                 .and_then(|v| v.as_str())
-                .map(|s| truncate_for_display(s, 40))
+                .map(|s| truncate_for_display(s, 50))
                 .unwrap_or_default();
 
-            // Show path if not cwd
             if let Some(path) = obj.get("path").and_then(|v| v.as_str())
                 && path != "."
                 && !path.is_empty()
             {
-                return format!("{pattern} in {}", truncate_for_display(path, 30));
+                let rel = relative_display_path(path);
+                return format!("{pattern} in {}", truncate_for_display(&rel, 40));
             }
             pattern
         }
@@ -83,15 +67,15 @@ pub(crate) fn extract_key_arg(tool_name: &str, args: &serde_json::Value) -> Stri
             let pattern = obj
                 .get("pattern")
                 .and_then(|v| v.as_str())
-                .map(|s| truncate_for_display(s, 35))
+                .map(|s| truncate_for_display(s, 50))
                 .unwrap_or_default();
 
-            // Show path/type/mode filter if specified
             let mut extras = Vec::new();
             if let Some(path) = obj.get("path").and_then(|v| v.as_str())
                 && path != "." && !path.is_empty()
             {
-                extras.push(format!("in {}", truncate_for_display(path, 20)));
+                let rel = relative_display_path(path);
+                extras.push(format!("in {}", truncate_for_display(&rel, 40)));
             }
             if let Some(typ) = obj.get("type").and_then(|v| v.as_str()) {
                 extras.push(format!("type={typ}"));
@@ -109,10 +93,9 @@ pub(crate) fn extract_key_arg(tool_name: &str, args: &serde_json::Value) -> Stri
             }
         }
         _ => {
-            // Fall back to first string argument
             obj.values()
                 .find_map(|v| v.as_str())
-                .map(|s| truncate_for_display(s, 50))
+                .map(|s| truncate_for_display(s, 60))
                 .unwrap_or_default()
         }
     }
@@ -209,6 +192,20 @@ fn take_head(s: &str, max: usize) -> String {
 fn take_tail(s: &str, max: usize) -> String {
     // Single pass: reverse, take, reverse back
     s.chars().rev().take(max).collect::<Vec<_>>().into_iter().rev().collect()
+}
+
+/// Convert an absolute path to relative (strips cwd prefix).
+fn relative_display_path(path: &str) -> String {
+    if let Ok(cwd) = std::env::current_dir() {
+        let cwd_str = cwd.to_string_lossy();
+        if let Some(rel) = path.strip_prefix(cwd_str.as_ref()) {
+            let rel = rel.strip_prefix('/').unwrap_or(rel);
+            if !rel.is_empty() {
+                return rel.to_string();
+            }
+        }
+    }
+    path.to_string()
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -339,6 +336,38 @@ fn format_grouped_result(key_arg: &str, result: &str, is_error: bool) -> String 
     }
 }
 
+/// Extract tool name from a tool entry.
+fn tool_name_from_entry(entry: &MessageEntry) -> Option<String> {
+    if entry.sender == Sender::Tool {
+        let md = entry.content_as_markdown();
+        let name = md.split('(').next().unwrap_or("");
+        if !name.is_empty() {
+            return Some(name.to_string());
+        }
+    }
+    None
+}
+
+/// Classify tool result display style by tool name.
+enum ResultStyle {
+    /// Collapsed: show line/item count only (read, glob, grep, list)
+    Collapsed(&'static str),
+    /// Diff summary: "Added X lines, removed Y lines" + diff (edit, write)
+    DiffSummary,
+    /// Full tail output (bash, etc.)
+    Full,
+}
+
+fn result_style(tool_name: Option<&str>) -> ResultStyle {
+    match tool_name {
+        Some("read") => ResultStyle::Collapsed("lines"),
+        Some("list" | "glob") => ResultStyle::Collapsed("items"),
+        Some("grep") => ResultStyle::Collapsed("matches"),
+        Some("edit" | "write") => ResultStyle::DiffSummary,
+        _ => ResultStyle::Full,
+    }
+}
+
 /// Format a single (non-grouped) tool result, using the entry at the given index.
 fn format_single_result(
     entry_idx: usize,
@@ -346,18 +375,7 @@ fn format_single_result(
     result: &str,
     is_error: bool,
 ) -> String {
-    let tool_name = entries.get(entry_idx).and_then(|e| {
-        if e.sender == Sender::Tool {
-            let md = e.content_as_markdown();
-            let name = md.split('(').next().unwrap_or("");
-            match name {
-                "read" | "glob" | "grep" | "list" => Some(name.to_string()),
-                _ => None,
-            }
-        } else {
-            None
-        }
-    });
+    let tool_name = entries.get(entry_idx).and_then(tool_name_from_entry);
     format_result_content(tool_name.as_deref(), result, is_error)
 }
 
@@ -367,53 +385,79 @@ fn format_single_result_last(
     result: &str,
     is_error: bool,
 ) -> String {
-    let tool_name = entries.last().and_then(|e| {
-        if e.sender == Sender::Tool {
-            let md = e.content_as_markdown();
-            let name = md.split('(').next().unwrap_or("");
-            match name {
-                "read" | "glob" | "grep" | "list" => Some(name.to_string()),
-                _ => None,
-            }
-        } else {
-            None
-        }
-    });
+    let tool_name = entries.last().and_then(tool_name_from_entry);
     format_result_content(tool_name.as_deref(), result, is_error)
+}
+
+/// Count added/removed lines in a unified diff.
+fn count_diff_lines(result: &str) -> (usize, usize) {
+    let mut added = 0;
+    let mut removed = 0;
+    for line in result.lines() {
+        if line.starts_with('+') && !line.starts_with("+++") {
+            added += 1;
+        } else if line.starts_with('-') && !line.starts_with("---") {
+            removed += 1;
+        }
+    }
+    (added, removed)
+}
+
+/// Format a diff summary string like "Added 4 lines, removed 1 line".
+fn format_diff_summary(added: usize, removed: usize) -> String {
+    match (added, removed) {
+        (0, 0) => " ✓".to_string(),
+        (a, 0) => format!(" ⎿ Added {a} line{}", if a == 1 { "" } else { "s" }),
+        (0, r) => format!(" ⎿ Removed {r} line{}", if r == 1 { "" } else { "s" }),
+        (a, r) => format!(
+            " ⎿ Added {a} line{}, removed {r} line{}",
+            if a == 1 { "" } else { "s" },
+            if r == 1 { "" } else { "s" },
+        ),
+    }
 }
 
 /// Common formatting for single-call tool results.
 fn format_result_content(tool_name: Option<&str>, result: &str, is_error: bool) -> String {
     if is_error {
         let msg = strip_error_prefixes(result).trim();
-        format!(" ✗ {}", truncate_line(msg, TOOL_RESULT_LINE_MAX))
-    } else if tool_name.is_some() {
-        // Collapsed tools: show count with appropriate unit
-        let line_count = result.lines().count();
-        let unit = match tool_name {
-            Some("list" | "glob") => "items",
-            Some("grep") => "matches",
-            _ => "lines",
-        };
-        if line_count > 1 {
-            format!(" ✓ {line_count} {unit}")
-        } else if result.trim().is_empty() {
-            " ✓".to_string()
-        } else {
-            format!(" ✓ {}", truncate_line(result.trim(), 60))
+        return format!(" ✗ {}", truncate_line(msg, TOOL_RESULT_LINE_MAX));
+    }
+
+    match result_style(tool_name) {
+        ResultStyle::Collapsed(unit) => {
+            let line_count = result.lines().count();
+            if line_count > 1 {
+                format!(" ✓ {line_count} {unit}")
+            } else if result.trim().is_empty() {
+                " ✓".to_string()
+            } else {
+                format!(" ✓ {}", truncate_line(result.trim(), 60))
+            }
         }
-    } else {
-        // Full output: format with tail display
-        let formatted = format_tool_result(result);
-        let mut lines = formatted.lines();
-        let mut output = String::new();
-        if let Some(first) = lines.next() {
-            let _ = write!(output, " ✓ {first}");
+        ResultStyle::DiffSummary => {
+            let (added, removed) = count_diff_lines(result);
+            let summary = format_diff_summary(added, removed);
+            // Append the diff content below the summary for rendering
+            let formatted = format_tool_result(result);
+            let mut output = summary;
+            for line in formatted.lines() {
+                let _ = write!(output, "\n   {line}");
+            }
+            output
         }
-        for line in lines {
-            let _ = write!(output, "\n   {line}");
+        ResultStyle::Full => {
+            let formatted = format_tool_result(result);
+            let mut lines = formatted.lines();
+            let mut output = String::new();
+            if let Some(first) = lines.next() {
+                let _ = write!(output, " ✓ {first}");
+            }
+            for line in lines {
+                let _ = write!(output, "\n   {line}");
+            }
+            output
         }
-        output
     }
 }
 
@@ -749,12 +793,12 @@ mod tests {
 
     #[test]
     fn test_extract_key_arg_read_long_path() {
-        // Long path (>50 chars) - truncated from end (paths show suffix)
+        // Long path (>60 chars) - truncated from end (paths show suffix)
         let args = json!({"file_path": "/home/user/projects/really/very/long/nested/path/to/some/deeply/buried/file.rs"});
         let result = extract_key_arg("read", &args);
         assert!(result.starts_with("..."), "Long paths should start with ..., got: {result}");
         assert!(result.ends_with("file.rs"), "Should preserve filename, got: {result}");
-        assert!(result.chars().count() <= 50, "Should be truncated to 50 chars, got: {}", result.chars().count());
+        assert!(result.chars().count() <= 60, "Should be truncated to 60 chars, got: {}", result.chars().count());
     }
 
     #[test]
