@@ -57,15 +57,32 @@ impl App {
             working_dir.display().to_string()
         };
 
-        // Try to get git branch
+        // Try to get git branch (falls back to short SHA on detached HEAD)
         let branch = std::process::Command::new("git")
             .args(["rev-parse", "--abbrev-ref", "HEAD"])
             .current_dir(working_dir)
+            .stderr(std::process::Stdio::null())
             .output()
             .ok()
             .filter(|o| o.status.success())
             .and_then(|o| String::from_utf8(o.stdout).ok())
-            .map(|s| s.trim().to_string());
+            .map(|s| s.trim().to_string())
+            .and_then(|b| {
+                if b == "HEAD" {
+                    // Detached HEAD — show short SHA instead
+                    std::process::Command::new("git")
+                        .args(["rev-parse", "--short", "HEAD"])
+                        .current_dir(working_dir)
+                        .stderr(std::process::Stdio::null())
+                        .output()
+                        .ok()
+                        .filter(|o| o.status.success())
+                        .and_then(|o| String::from_utf8(o.stdout).ok())
+                        .map(|s| s.trim().to_string())
+                } else {
+                    Some(b)
+                }
+            });
 
         let mut location_spans = vec![StyledSpan::dim(&dir_display)];
         if let Some(ref b) = branch {
