@@ -2,47 +2,44 @@
 
 ## Current State
 
-| Metric    | Value         | Updated    |
-| --------- | ------------- | ---------- |
-| Phase     | Feature work  | 2026-02-07 |
-| Status    | P3 tasks open | 2026-02-07 |
-| Toolchain | stable        | 2026-01-22 |
-| Tests     | 372 passing   | 2026-02-07 |
-| Clippy    | clean         | 2026-02-07 |
+| Metric    | Value          | Updated    |
+| --------- | -------------- | ---------- |
+| Phase     | Feature work   | 2026-02-08 |
+| Status    | P1 gaps closed | 2026-02-08 |
+| Toolchain | stable         | 2026-01-22 |
+| Tests     | 390 passing    | 2026-02-08 |
+| Clippy    | clean          | 2026-02-08 |
 
-## Session Summary (2026-02-07)
+## Session Summary (2026-02-08)
 
-**Completed:**
+**Sprint 16: Activate Dormant Infrastructure**
 
-- Parallel tool call grouping (tk-jqe6): Consecutive same-name tool calls collapsed into "read(3 files)" with per-item `⎿` results. ID-based result routing fixes bug where parallel results went to wrong entry. (e52c255)
-- Session retention (tk-g8xo): `session_retention_days` config (default 90), auto-cleanup on startup. Also prunes empty sessions. (cf21462)
-- Attachment follow-ups (tk-24mu, tk-roct, tk-w51v): Line ranges, vision guard, token warning. (fb9996d, c807403)
-- @file/@folder inline references (tk-i2o1): Bare `@path` syntax. (2810bf2)
+Three P1 gaps from architecture review now closed:
 
-**Prior this session:**
+- Default subagents (Phase 1): `SubagentRegistry::with_defaults()` ships explorer + planner configs. User YAML overrides by name. CLI mode now registers subagents too. (cf9ca9c)
+- Config-driven hooks (Phase 2): `[[hooks]]` in TOML parsed into `CommandHook` at startup. Shell commands run with env vars (ION_HOOK_EVENT, ION_TOOL_NAME, ION_WORKING_DIR). Supports tool_pattern regex filtering. Both TUI and CLI. (92b0586)
+- MCP lazy loading (Phase 3): MCP tools indexed but not registered in system prompt. Model discovers via `mcp_tools` search tool, calls via `ToolOrchestrator` fallback. Saves ~13K tokens per MCP server. (32639c0)
 
-- Retry-After header parsing (tk-c1ij), cost tracking, compact fixes, UTF-8 panic fix
+Also closed: tk-ije3 (hooks architecture).
+
+**Prior session (2026-02-07):**
+
+- Web search tool (tk-75jw), scrollback preservation (tk-2bk7), parallel tool grouping, session retention, attachment improvements
 
 ## Priority Queue
 
-### P3 — Important improvements
-
-tk-75jw (web search), tk-2bk7 (scrollback), tk-r11l (research locations), tk-nyqq (symlink skills)
-
 ### P4 — Deferred
 
-tk-ltyy, tk-5j06, tk-a2s8, tk-o0g7, tk-ije3, tk-9zri, tk-4gm9, tk-tnzs, tk-imza, tk-8qwn, tk-iegz
+tk-r11l, tk-nyqq, tk-ltyy, tk-5j06, tk-a2s8, tk-o0g7, tk-9zri, tk-4gm9, tk-tnzs, tk-imza, tk-8qwn, tk-iegz
 
 ## Key References
 
-| Topic                | Location                                    |
-| -------------------- | ------------------------------------------- |
-| Architecture         | ai/DESIGN.md                                |
-| File refs research   | ai/research/file-refs-2026.md               |
-| Compaction v2 design | ai/design/compaction-v2.md                  |
-| Architecture review  | ai/review/architecture-review-2026-02-06.md |
-| TUI/UX review        | ai/review/tui-ux-review-2026-02-06.md       |
-| Code quality audit   | ai/review/code-quality-audit-2026-02-06.md  |
-| Sprint 15 plan       | ai/SPRINTS.md                               |
-| Permissions v2       | ai/design/permissions-v2.md                 |
-| TUI design           | ai/design/tui-v2.md                         |
+| Topic               | Location                                    |
+| ------------------- | ------------------------------------------- |
+| Architecture        | ai/DESIGN.md                                |
+| Architecture review | ai/review/architecture-review-2026-02-06.md |
+| TUI/UX review       | ai/review/tui-ux-review-2026-02-06.md       |
+| Code quality audit  | ai/review/code-quality-audit-2026-02-06.md  |
+| Sprint 16 plan      | ai/SPRINTS.md                               |
+| Permissions v2      | ai/design/permissions-v2.md                 |
+| TUI design          | ai/design/tui-v2.md                         |
