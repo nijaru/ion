@@ -14,6 +14,7 @@ pub struct ContextManager {
     active_skill: Arc<Mutex<Option<Skill>>>,
     render_cache: Mutex<Option<RenderCache>>,
     working_dir: Option<PathBuf>,
+    has_mcp_tools: std::sync::atomic::AtomicBool,
 }
 
 #[derive(Clone)]
@@ -35,6 +36,11 @@ const DEFAULT_SYSTEM_TEMPLATE: &str = r#"{{ base_instructions }}
 
 Working directory: {{ working_dir }}
 Date: {{ date }}
+{% endif %}
+{% if has_mcp_tools %}
+## MCP Tools
+
+MCP tools are available via external servers. Use `mcp_tools` to search for relevant tools by keyword before falling back to shell commands. Only use shell commands if MCP tools for that system are not available.
 {% endif %}
 {% if instructions %}
 ## Project Instructions
@@ -74,6 +80,7 @@ impl ContextManager {
             active_skill: Arc::new(Mutex::new(None)),
             render_cache: Mutex::new(None),
             working_dir: None,
+            has_mcp_tools: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -89,6 +96,16 @@ impl ContextManager {
     pub fn with_working_dir(mut self, dir: PathBuf) -> Self {
         self.working_dir = Some(dir);
         self
+    }
+
+    /// Set whether MCP tools are available (enables MCP guidance in system prompt).
+    pub fn set_has_mcp_tools(&self, val: bool) {
+        self.has_mcp_tools
+            .store(val, std::sync::atomic::Ordering::Relaxed);
+        // Invalidate cache so prompt re-renders with MCP section
+        if let Ok(mut cache) = self.render_cache.try_lock() {
+            *cache = None;
+        }
     }
 
     pub async fn set_active_skill(&self, skill: Option<Skill>) {
@@ -194,6 +211,10 @@ impl ContextManager {
             None
         };
 
+        let has_mcp_tools = self
+            .has_mcp_tools
+            .load(std::sync::atomic::Ordering::Relaxed);
+
         template
             .render(context! {
                 base_instructions => self.system_prompt_base,
@@ -203,6 +224,7 @@ impl ContextManager {
                 plan => plan,
                 current_task => current_task,
                 skill => skill,
+                has_mcp_tools => has_mcp_tools,
             })
             .unwrap_or_else(|e| {
                 tracing::error!("Failed to render system prompt template: {}", e);
