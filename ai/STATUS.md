@@ -2,35 +2,46 @@
 
 ## Current State
 
-| Metric    | Value          | Updated    |
-| --------- | -------------- | ---------- |
-| Phase     | Feature work   | 2026-02-08 |
-| Status    | P1 gaps closed | 2026-02-08 |
-| Toolchain | stable         | 2026-01-22 |
-| Tests     | 390 passing    | 2026-02-08 |
-| Clippy    | clean          | 2026-02-08 |
+| Metric    | Value         | Updated    |
+| --------- | ------------- | ---------- |
+| Phase     | Feature work  | 2026-02-08 |
+| Status    | Post-refactor | 2026-02-09 |
+| Toolchain | stable        | 2026-01-22 |
+| Tests     | 403 passing   | 2026-02-09 |
+| Clippy    | clean         | 2026-02-09 |
 
-## Session Summary (2026-02-08)
+## Session Summary (2026-02-09)
 
-**Sprint 16: Activate Dormant Infrastructure**
+**Review fixes (1584e3f):**
 
-Three P1 gaps from architecture review now closed:
+- Fixed unsigned underflow in command_completer.rs on narrow terminals
+- Restored pre-refactor behavior: progress not rendered during HistorySearch
+- Unified PopupRegion as re-export of layout::Region (eliminated duplicate type)
+- Fixed popup padding calculation when secondary text not rendered
+- Removed dead `_height` parameter from render_selector_direct
 
-- Default subagents (Phase 1): `SubagentRegistry::with_defaults()` ships explorer + planner configs. User YAML overrides by name. CLI mode now registers subagents too. (cf9ca9c)
-- Config-driven hooks (Phase 2): `[[hooks]]` in TOML parsed into `CommandHook` at startup. Shell commands run with env vars (ION_HOOK_EVENT, ION_TOOL_NAME, ION_WORKING_DIR). Supports tool_pattern regex filtering. Both TUI and CLI. (92b0586)
-- MCP lazy loading (Phase 3): MCP tools indexed but not registered in system prompt. Model discovers via `mcp_tools` search tool, calls via `ToolOrchestrator` fallback. Saves ~13K tokens per MCP server. (32639c0)
+**Startup banner (1ec3506, e4e1357):**
 
-Also closed: tk-ije3 (hooks architecture).
+- Added cwd + git branch to startup header: `ion v0.0.0` / `~/path [branch]`
+- Detached HEAD falls back to short SHA via `git rev-parse --short HEAD`
 
-**Prior session (2026-02-07):**
+**Previous: TUI layout refactor (tk-5lfp) — DONE:**
 
-- Web search tool (tk-75jw), scrollback preservation (tk-2bk7), parallel tool grouping, session retention, attachment improvements
+- Phase 1: Unified popup renderer (`render/popup.rs`)
+- Phase 2: Split `render/direct.rs` into focused modules
+- Phase 3: `compute_layout()` returns `UiLayout` with `Region` structs
+- Review: ai/review/tui-refactor-review-2026-02-09.md
 
 ## Priority Queue
 
+### P3
+
+- tk-x65k: Evaluate --continue session resumption logic
+- tk-9tig: Custom slash commands via // prefix (skill menu)
+
 ### P4 — Deferred
 
-tk-r11l, tk-nyqq, tk-ltyy, tk-5j06, tk-a2s8, tk-o0g7, tk-9zri, tk-4gm9, tk-tnzs, tk-imza, tk-8qwn, tk-iegz
+tk-r11l, tk-nyqq, tk-ltyy, tk-5j06, tk-a2s8, tk-o0g7, tk-9zri, tk-4gm9, tk-tnzs, tk-imza, tk-8qwn, tk-iegz, tk-mmup
 
 ## Key References
 

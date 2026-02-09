@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "aw9q",
+  "title": "Fix slash command menu not hiding after slash deletion",
+  "description": "Repro: typing '/' opens slash command menu, deleting slash leaves menu visible. Should hide when input no longer starts with slash/command trigger.",
+  "status": "done",
+  "priority": 2,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-02-09T04:18:42.772Z",
+  "updated_at": "2026-02-09T07:06:47.215Z",
+  "completed_at": "2026-02-09T07:06:47.215Z",
+  "external": {}
+}
