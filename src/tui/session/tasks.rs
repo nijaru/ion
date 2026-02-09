@@ -26,6 +26,7 @@ impl App {
     #[allow(clippy::needless_pass_by_value)]
     pub(in crate::tui) fn run_agent_task(&mut self, input: String) {
         self.is_running = true;
+        self.render_state.streaming_lines_rendered = 0;
         self.task.reset();
         self.last_task_summary = None;
         self.last_error = None;
