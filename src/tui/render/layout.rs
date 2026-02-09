@@ -56,7 +56,21 @@ impl App {
         let progress_height = PROGRESS_HEIGHT;
         let input_height = self.calculate_input_height(width, height);
         let status_height = 1u16;
-        progress_height + input_height + status_height
+        let base = progress_height + input_height + status_height;
+
+        // When a completer popup is active, include its height so the UI area
+        // extends upward to cover the popup. This ensures the existing
+        // Clear(FromCursorDown) at ui_start clears the popup area, and the
+        // old_ui_start.min(ui_start) logic clears stale rows on dismiss.
+        let popup_height = if self.command_completer.is_active() {
+            self.command_completer.visible_candidates().len() as u16
+        } else if self.file_completer.is_active() {
+            self.file_completer.visible_candidates().len() as u16
+        } else {
+            0
+        };
+
+        base + popup_height
     }
 
     /// Resolve the UI start row, using row tracking or startup anchor.
