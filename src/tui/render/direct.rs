@@ -31,15 +31,9 @@ impl App {
         let old_ui_start = self.render_state.last_ui_start;
         self.render_state.last_ui_start = Some(ui_start);
 
-        let clear_from = if self.render_state.chat_row.is_some() {
-            // Row-tracking: UI sits directly below chat content. Never clear
-            // above ui_start -- that would erase chat lines printed this frame.
-            ui_start
-        } else {
-            // Scroll mode: UI is at bottom. Use min(old, new) to clear stale
-            // UI remnants when ui_height changes (e.g. agent finish, selector).
-            old_ui_start.map_or(ui_start, |old| old.min(ui_start))
-        };
+        // Use min(old, new) so stale UI rows (e.g. popup dismiss, mode change)
+        // are cleared when the UI area shrinks.
+        let clear_from = old_ui_start.map_or(ui_start, |old| old.min(ui_start));
 
         // Clear from UI position downward (never clear full screen - preserves scrollback)
         execute!(w, MoveTo(0, clear_from), Clear(ClearType::FromCursorDown))?;
@@ -77,23 +71,15 @@ impl App {
         } else {
             self.render_status_direct(w, width)?;
 
-            // Render completer popup above input (mutually exclusive)
+            // Render completer popup above input (mutually exclusive).
+            // The popup height is included in calculate_ui_height(), so the
+            // Clear(FromCursorDown) at ui_start already covers the popup area.
+            // When the popup deactivates, ui_height shrinks and the existing
+            // old_ui_start.min(ui_start) logic clears stale rows.
             if self.command_completer.is_active() {
-                let h = self.command_completer.visible_candidates().len() as u16;
                 self.command_completer.render(w, input_start, width)?;
-                self.render_state.last_popup_height = h;
             } else if self.file_completer.is_active() {
-                let h = self.file_completer.visible_candidates().len() as u16;
                 self.file_completer.render(w, input_start, width)?;
-                self.render_state.last_popup_height = h;
-            } else if self.render_state.last_popup_height > 0 {
-                // Clear stale popup rows left from previous render
-                let h = self.render_state.last_popup_height;
-                for i in 0..h {
-                    let row = input_start.saturating_sub(h).saturating_add(i);
-                    execute!(w, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
-                }
-                self.render_state.last_popup_height = 0;
             }
 
             // Position cursor in input area
