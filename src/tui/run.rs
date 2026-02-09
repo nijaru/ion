@@ -250,20 +250,9 @@ pub async fn run(
         )?;
         let line_count = app.reprint_chat_scrollback(&mut stdout, term_width)?;
         let ui_height = app.calculate_ui_height(term_width, term_height);
-        let available = term_height.saturating_sub(ui_height) as usize;
-        #[allow(clippy::cast_possible_truncation)]
-        if line_count <= available {
-            app.render_state.chat_row = Some(line_count as u16);
-        } else {
-            // Chat overflows screen — scroll excess into scrollback
-            #[allow(clippy::cast_possible_truncation)]
-            let excess =
-                (line_count.min(term_height as usize).saturating_sub(available)) as u16;
-            if excess > 0 {
-                execute!(stdout, crossterm::terminal::ScrollUp(excess))?;
-            }
-            app.render_state.chat_row = None;
-            app.render_state.last_ui_start = None;
+        let excess = app.render_state.position_after_reprint(line_count, term_height, ui_height);
+        if excess > 0 {
+            execute!(stdout, crossterm::terminal::ScrollUp(excess))?;
         }
         stdout.flush()?;
     }
@@ -301,6 +290,11 @@ pub async fn run(
 
         let mut frame_changed = false;
 
+        if app.render_state.needs_initial_render {
+            app.render_state.needs_initial_render = false;
+            frame_changed = true;
+        }
+
         // Handle /clear: push visible content to scrollback, then blank viewport.
         // Unlike Clear(All), ScrollUp preserves content in terminal scrollback
         // so the user can scroll up to see their previous conversation.
@@ -329,29 +323,14 @@ pub async fn run(
             if !app.message_list.entries.is_empty() {
                 let all_lines = app.build_chat_lines(term_width);
                 let ui_height = app.calculate_ui_height(term_width, term_height);
-                let available = term_height.saturating_sub(ui_height) as usize;
 
                 for line in &all_lines {
                     line.writeln(&mut stdout)?;
                 }
 
-                if all_lines.len() <= available {
-                    #[allow(clippy::cast_possible_truncation)]
-                    {
-                        app.render_state.chat_row = Some(all_lines.len() as u16);
-                    }
-                } else {
-                    // Chat extends into UI area -- push excess to scrollback
-                    #[allow(clippy::cast_possible_truncation)]
-                    let excess = (all_lines
-                        .len()
-                        .min(term_height as usize)
-                        .saturating_sub(available)) as u16;
-                    if excess > 0 {
-                        execute!(stdout, crossterm::terminal::ScrollUp(excess))?;
-                    }
-                    app.render_state.chat_row = None;
-                    app.render_state.last_ui_start = None;
+                let excess = app.render_state.position_after_reprint(all_lines.len(), term_height, ui_height);
+                if excess > 0 {
+                    execute!(stdout, crossterm::terminal::ScrollUp(excess))?;
                 }
 
                 let mut end = app.message_list.entries.len();
@@ -389,7 +368,7 @@ pub async fn run(
             frame_changed = true;
         }
 
-        if !app.header_inserted() && app.message_list.entries.is_empty() {
+        if !app.header_inserted() {
             let header_lines = app.take_startup_header_lines();
             if !header_lines.is_empty() {
                 for line in &header_lines {
