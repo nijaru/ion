@@ -3,7 +3,7 @@
   "ref": "ije3",
   "title": "[DESIGN] Hooks/plugin system architecture",
   "description": null,
-  "status": "open",
+  "status": "done",
   "priority": 4,
   "labels": [],
   "assignees": [],
@@ -15,10 +15,14 @@
     {
       "ts": "2026-01-29T18:24:39.089Z",
       "msg": "Long-term: Design extensibility similar to Claude Code, opencode, pi. Key hooks: PreToolUse, PostToolUse, SessionStart, SessionEnd. See ai/ architecture analysis for gaps."
+    },
+    {
+      "ts": "2026-02-09T00:20:11.865Z",
+      "msg": "Covered by Sprint 16 Phase 2: CommandHook implements pre/post tool use hooks loaded from [[hooks]] in config.toml. SessionStart/PreCompact etc. are future work."
     }
   ],
   "created_at": "2026-01-29T18:24:33.439Z",
-  "updated_at": "2026-01-29T18:24:39.089Z",
-  "completed_at": null,
+  "updated_at": "2026-02-09T00:20:11.865Z",
+  "completed_at": "2026-02-09T00:20:11.820Z",
   "external": {}
 }
