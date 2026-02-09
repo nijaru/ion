@@ -242,7 +242,29 @@ pub async fn run(
     let (mut term_width, mut term_height) = terminal::size()?;
 
     if !app.message_list.entries.is_empty() {
-        app.reprint_chat_scrollback(&mut stdout, term_width)?;
+        // Push pre-ion terminal content to scrollback and start from row 0
+        execute!(
+            stdout,
+            crossterm::terminal::ScrollUp(term_height),
+            MoveTo(0, 0)
+        )?;
+        let line_count = app.reprint_chat_scrollback(&mut stdout, term_width)?;
+        let ui_height = app.calculate_ui_height(term_width, term_height);
+        let available = term_height.saturating_sub(ui_height) as usize;
+        #[allow(clippy::cast_possible_truncation)]
+        if line_count <= available {
+            app.render_state.chat_row = Some(line_count as u16);
+        } else {
+            // Chat overflows screen — scroll excess into scrollback
+            #[allow(clippy::cast_possible_truncation)]
+            let excess =
+                (line_count.min(term_height as usize).saturating_sub(available)) as u16;
+            if excess > 0 {
+                execute!(stdout, crossterm::terminal::ScrollUp(excess))?;
+            }
+            app.render_state.chat_row = None;
+            app.render_state.last_ui_start = None;
+        }
         stdout.flush()?;
     }
 
@@ -432,7 +454,11 @@ pub async fn run(
                         )?;
                         line.writeln(&mut stdout)?;
                     }
-                    app.render_state.chat_row = Some(chat_row.saturating_add(line_count));
+                    let new_chat_row = chat_row.saturating_add(line_count);
+                    app.render_state.chat_row = Some(new_chat_row);
+                    // Keep last_ui_start in sync so draw_direct's clear_from
+                    // doesn't erase the chat content we just printed
+                    app.render_state.last_ui_start = Some(new_chat_row);
                 } else {
                     // Overflow: transition to scroll mode
                     let content_end = chat_row.saturating_add(line_count);
