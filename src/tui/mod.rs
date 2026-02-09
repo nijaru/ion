@@ -137,5 +137,3 @@ pub struct App {
     /// Accumulated cost for the current session (USD).
     pub session_cost: f64,
 }
-
-// Position-related accessors are on render_state.position directly.
