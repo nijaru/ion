@@ -42,6 +42,11 @@ impl ToolOrchestrator {
         self.mcp_fallback = Some(fallback);
     }
 
+    /// Check if an MCP fallback is configured.
+    pub fn has_mcp_fallback(&self) -> bool {
+        self.mcp_fallback.is_some()
+    }
+
     pub fn register_tool(&mut self, tool: Box<dyn Tool>) {
         self.tools.insert(tool.name().to_string(), tool);
     }

@@ -158,9 +158,13 @@ impl App {
             }
         }
 
+        let has_mcp_tools = orchestrator.has_mcp_fallback();
         let mut agent = Agent::new(provider_impl, orchestrator.clone());
         if let Some(ref prompt) = config.system_prompt {
             agent = agent.with_system_prompt(prompt.clone());
+        }
+        if has_mcp_tools {
+            agent.context_manager().set_has_mcp_tools(true);
         }
         let agent = Arc::new(agent);
 
