@@ -55,6 +55,7 @@ impl App {
                     execute!(w, MoveTo(0, progress.row), Clear(ClearType::CurrentLine))?;
                     self.render_progress_direct(w, layout.width)?;
 
+                    execute!(w, MoveTo(0, status.row))?;
                     self.render_status_direct(w, layout.width)?;
 
                     // Render completer popup in its assigned region.

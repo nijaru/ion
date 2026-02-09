@@ -129,11 +129,12 @@ impl App {
     }
 
     /// Reprint full chat history into scrollback (used on session resume).
+    /// Returns the number of lines written.
     pub fn reprint_chat_scrollback<W: std::io::Write>(
         &mut self,
         w: &mut W,
         width: u16,
-    ) -> std::io::Result<()> {
+    ) -> std::io::Result<usize> {
         let entry_count = self.message_list.entries.len();
         let mut end = entry_count;
         if self.is_running
@@ -150,6 +151,6 @@ impl App {
 
         self.render_state.mark_reflow_complete(end);
 
-        Ok(())
+        Ok(lines.len())
     }
 }
