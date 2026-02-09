@@ -194,9 +194,11 @@ impl App {
             }
         }
 
-        // Poll session updates (preserves conversation history)
+        // Poll session updates (preserves conversation history).
+        // Don't re-save summary — AgentEvent::Finished already saved it
+        // and cleared task.start_time, so a second save would overwrite
+        // last_task_summary with None.
         if let Ok(updated_session) = self.session_rx.try_recv() {
-            self.save_task_summary(false);
             self.is_running = false;
             self.interaction.cancel_pending = None;
             self.message_queue = None;
