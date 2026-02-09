@@ -6,6 +6,7 @@
 use crate::cli::PermissionSettings;
 use crate::tui::App;
 use crate::tui::message_list::{MessageEntry, Sender};
+use crate::tui::render_state::ChatPosition;
 use anyhow::Result;
 use crossterm::{
     cursor::{MoveTo, Show},
@@ -125,7 +126,7 @@ fn cleanup_terminal(
     let _ = execute!(stdout, EndSynchronizedUpdate);
 
     // Clear UI area before exit
-    let layout = app.compute_layout(term_width, term_height, app.render_state.last_ui_start);
+    let layout = app.compute_layout(term_width, term_height);
     execute!(stdout, MoveTo(0, layout.top), Clear(ClearType::FromCursorDown))?;
     // Position cursor at layout top (just after chat content)
     execute!(stdout, MoveTo(0, layout.top))?;
@@ -251,7 +252,8 @@ pub async fn run(
             MoveTo(0, 0)
         )?;
         let line_count = app.reprint_chat_scrollback(&mut stdout, term_width)?;
-        let ui_height = app.calculate_ui_height(term_width, term_height);
+        let layout = app.compute_layout(term_width, term_height);
+        let ui_height = layout.height();
         let excess = app.render_state.position_after_reprint(line_count, term_height, ui_height);
         if excess > 0 {
             execute!(stdout, crossterm::terminal::ScrollUp(excess))?;
@@ -316,7 +318,7 @@ pub async fn run(
 
         // Handle resize: push viewport to scrollback, then reprint chat at new width.
         // ScrollUp preserves pre-ion terminal content in scrollback (unlike Clear(All)
-        // which would erase it). Old chat at wrong width ends up in scrollback too —
+        // which would erase it). Old chat at wrong width ends up in scrollback too --
         // acceptable trade-off vs losing the user's terminal history.
         if app.render_state.needs_reflow {
             app.render_state.needs_reflow = false;
@@ -328,7 +330,8 @@ pub async fn run(
             )?;
             if !app.message_list.entries.is_empty() {
                 let all_lines = app.build_chat_lines(term_width);
-                let ui_height = app.calculate_ui_height(term_width, term_height);
+                let layout = app.compute_layout(term_width, term_height);
+                let ui_height = layout.height();
 
                 for line in &all_lines {
                     line.writeln(&mut stdout)?;
@@ -351,7 +354,7 @@ pub async fn run(
                 }
                 app.render_state.mark_reflow_complete(end);
             } else {
-                app.render_state.header_inserted = false;
+                app.render_state.position = ChatPosition::Empty;
             }
             execute!(stdout, EndSynchronizedUpdate)?;
             stdout.flush()?;
@@ -361,11 +364,7 @@ pub async fn run(
         // Handle selector close: clear the selector area
         if app.render_state.needs_selector_clear {
             app.render_state.needs_selector_clear = false;
-            let sel_layout = app.compute_layout(
-                term_width,
-                term_height,
-                app.render_state.last_ui_start,
-            );
+            let sel_layout = app.compute_layout(term_width, term_height);
             execute!(
                 stdout,
                 MoveTo(0, sel_layout.top),
@@ -375,15 +374,14 @@ pub async fn run(
             frame_changed = true;
         }
 
-        if !app.header_inserted() {
+        if !app.render_state.position.header_inserted() {
             let header_lines = app.take_startup_header_lines();
             if !header_lines.is_empty() {
                 for line in &header_lines {
                     line.writeln(&mut stdout)?;
                 }
                 if let Ok((_x, y)) = crossterm::cursor::position() {
-                    app.set_startup_ui_anchor(Some(y));
-                    app.render_state.chat_row = Some(y);
+                    app.render_state.position = ChatPosition::Header { anchor: y };
                 }
                 frame_changed = true;
             }
@@ -394,7 +392,7 @@ pub async fn run(
 
         // If this is the first message, clear startup UI BEFORE sync update
         if !chat_lines.is_empty()
-            && let Some(anchor) = app.take_startup_ui_anchor()
+            && let ChatPosition::Header { anchor } = app.render_state.position
         {
             execute!(stdout, MoveTo(0, anchor), Clear(ClearType::FromCursorDown))?;
             stdout.flush()?;
@@ -419,85 +417,82 @@ pub async fn run(
         execute!(stdout, BeginSynchronizedUpdate)?;
 
         if !chat_lines.is_empty() {
-            let ui_height = app.calculate_ui_height(term_width, term_height);
+            let layout = app.compute_layout(term_width, term_height);
+            let ui_height = layout.height();
 
             #[allow(clippy::cast_possible_truncation)] // Chat lines fit in terminal u16 height
             let line_count = chat_lines.len() as u16;
 
             // Row-tracking mode: print at tracked row if content fits
-            if let Some(chat_row) = app.render_state.chat_row {
-                let space_needed = chat_row
-                    .saturating_add(line_count)
-                    .saturating_add(ui_height);
-                if space_needed <= term_height {
-                    // Content fits: print at current row, advance chat_row
-                    for (i, line) in chat_lines.iter().enumerate() {
-                        #[allow(clippy::cast_possible_truncation)]
-                        execute!(
-                            stdout,
-                            MoveTo(0, chat_row.saturating_add(i as u16)),
-                            Clear(ClearType::CurrentLine)
-                        )?;
-                        line.writeln(&mut stdout)?;
-                    }
-                    let new_chat_row = chat_row.saturating_add(line_count);
-                    app.render_state.chat_row = Some(new_chat_row);
-                    // Keep last_ui_start in sync so draw_direct's clear_from
-                    // doesn't erase the chat content we just printed
-                    app.render_state.last_ui_start = Some(new_chat_row);
-                } else {
-                    // Overflow: transition to scroll mode
-                    let content_end = chat_row.saturating_add(line_count);
-                    let ui_start = term_height.saturating_sub(ui_height);
-                    let scroll_amount = content_end.saturating_sub(ui_start);
+            match app.render_state.position {
+                ChatPosition::Tracking { next_row, .. } | ChatPosition::Header { anchor: next_row } => {
+                    let space_needed = next_row
+                        .saturating_add(line_count)
+                        .saturating_add(ui_height);
+                    if space_needed <= term_height {
+                        // Content fits: print at current row, advance position
+                        for (i, line) in chat_lines.iter().enumerate() {
+                            #[allow(clippy::cast_possible_truncation)]
+                            execute!(
+                                stdout,
+                                MoveTo(0, next_row.saturating_add(i as u16)),
+                                Clear(ClearType::CurrentLine)
+                            )?;
+                            line.writeln(&mut stdout)?;
+                        }
+                        let new_next_row = next_row.saturating_add(line_count);
+                        app.render_state.position = ChatPosition::Tracking {
+                            next_row: new_next_row,
+                            ui_drawn_at: Some(new_next_row),
+                        };
+                    } else {
+                        // Overflow: transition to scroll mode
+                        let content_end = next_row.saturating_add(line_count);
+                        let ui_start = term_height.saturating_sub(ui_height);
+                        let scroll_amount = content_end.saturating_sub(ui_start);
 
-                    // Clear old UI at chat_row (where it was drawn in row-tracking mode)
-                    // before scrolling, so borders don't get pushed into scrollback
-                    execute!(stdout, MoveTo(0, chat_row), Clear(ClearType::FromCursorDown))?;
-                    execute!(stdout, crossterm::terminal::ScrollUp(scroll_amount))?;
+                        // Clear old UI at next_row (where it was drawn in row-tracking mode)
+                        // before scrolling, so borders don't get pushed into scrollback
+                        execute!(stdout, MoveTo(0, next_row), Clear(ClearType::FromCursorDown))?;
+                        execute!(stdout, crossterm::terminal::ScrollUp(scroll_amount))?;
 
-                    // Print at top of the scrolled area
-                    let print_row = ui_start.saturating_sub(line_count);
-                    for (i, line) in chat_lines.iter().enumerate() {
-                        #[allow(clippy::cast_possible_truncation)]
-                        execute!(
-                            stdout,
-                            MoveTo(0, print_row.saturating_add(i as u16)),
-                            Clear(ClearType::CurrentLine)
-                        )?;
-                        line.writeln(&mut stdout)?;
+                        // Print at top of the scrolled area
+                        let print_row = ui_start.saturating_sub(line_count);
+                        for (i, line) in chat_lines.iter().enumerate() {
+                            #[allow(clippy::cast_possible_truncation)]
+                            execute!(
+                                stdout,
+                                MoveTo(0, print_row.saturating_add(i as u16)),
+                                Clear(ClearType::CurrentLine)
+                            )?;
+                            line.writeln(&mut stdout)?;
+                        }
+                        app.render_state.position = ChatPosition::Scrolling { ui_drawn_at: None };
                     }
-                    // Transition to scroll mode - reset both chat_row and last_ui_start
-                    // to prevent draw_direct from using stale row-tracking values
-                    app.render_state.chat_row = None;
-                    app.render_state.last_ui_start = None;
                 }
-            } else {
-                // Scroll mode: existing behavior (content pushed into scrollback)
-                let ui_start = term_height.saturating_sub(ui_height);
+                ChatPosition::Scrolling { .. } | ChatPosition::Empty => {
+                    // Scroll mode: existing behavior (content pushed into scrollback)
+                    let ui_start = term_height.saturating_sub(ui_height);
 
-                // Clear old UI before scrolling so borders don't get pushed into scrollback
-                execute!(stdout, MoveTo(0, ui_start), Clear(ClearType::FromCursorDown))?;
+                    // Clear old UI before scrolling so borders don't get pushed into scrollback
+                    execute!(stdout, MoveTo(0, ui_start), Clear(ClearType::FromCursorDown))?;
 
-                // Insert lines by scrolling up (now pushes blank lines, not old UI)
-                execute!(stdout, crossterm::terminal::ScrollUp(line_count))?;
+                    // Insert lines by scrolling up (now pushes blank lines, not old UI)
+                    execute!(stdout, crossterm::terminal::ScrollUp(line_count))?;
 
-                // Print at the newly created space (just above where UI will be)
-                let mut row = ui_start.saturating_sub(line_count);
-                for line in &chat_lines {
-                    execute!(stdout, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
-                    line.writeln(&mut stdout)?;
-                    row = row.saturating_add(1);
+                    // Print at the newly created space (just above where UI will be)
+                    let mut row = ui_start.saturating_sub(line_count);
+                    for line in &chat_lines {
+                        execute!(stdout, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
+                        line.writeln(&mut stdout)?;
+                        row = row.saturating_add(1);
+                    }
                 }
             }
         }
 
         // Compute layout once per frame, render the bottom UI area
-        let layout = app.compute_layout(
-            term_width,
-            term_height,
-            app.render_state.last_ui_start,
-        );
+        let layout = app.compute_layout(term_width, term_height);
         app.draw_direct(&mut stdout, &layout)?;
 
         // End synchronized output

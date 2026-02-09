@@ -18,7 +18,7 @@ impl App {
         w: &mut W,
         layout: &UiLayout,
     ) -> std::io::Result<()> {
-        self.render_state.last_ui_start = Some(layout.top);
+        self.render_state.position.set_ui_drawn_at(layout.top);
 
         // Clear from UI position downward (never clear full screen - preserves scrollback)
         execute!(

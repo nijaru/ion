@@ -36,17 +36,13 @@ impl App {
             }
             Event::Resize(_, _) => {
                 self.input_state.invalidate_width();
-                // Invalidate all positioning state - row values are wrong after
-                // terminal reflow. The needs_reflow flag triggers a targeted
-                // clear + reprint of ion's content only (not pre-ion history).
-                self.render_state.chat_row = None;
-                self.render_state.startup_ui_anchor = None;
-                self.render_state.last_ui_start = None;
+                // Position is invalid after terminal reflow.
+                // Reflow will reprint and set the correct position.
                 self.render_state.needs_reflow = true;
             }
             Event::FocusGained => {
                 // No-op: terminal size poll handles any resize that
-                // happened while away. Don't disturb chat_row tracking.
+                // happened while away. Don't disturb position tracking.
             }
             _ => {}
         }
@@ -372,8 +368,6 @@ impl App {
                         self.history_index = self.input_history.len();
                         self.history_draft = None;
                         self.clear_input();
-                        // Note: startup_ui_anchor is consumed by main.rs when rendering
-                        // the first chat content - don't clear it here
                         // Persist to database (with placeholders, for shorter storage)
                         let _ = self.store.add_input_history(&normalized_input);
                         // Display shows placeholder (user can see what they typed)
@@ -708,7 +702,7 @@ impl App {
             self.model_picker.set_api_provider(self.api_provider.name());
         }
         // Prevent stale selector position from affecting clear_from on the next input-mode frame
-        self.render_state.last_ui_start = None;
+        self.render_state.position.clear_ui_drawn_at();
         // Mark that we need to clear the selector area (not full screen repaint)
         self.render_state.needs_selector_clear = true;
     }

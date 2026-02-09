@@ -24,6 +24,16 @@ pub struct UiLayout {
     pub width: u16,
 }
 
+impl UiLayout {
+    /// Total height of the UI area.
+    pub fn height(&self) -> u16 {
+        match &self.body {
+            BodyLayout::Input { status, .. } => status.row + status.height - self.top,
+            BodyLayout::Selector { selector } => selector.height,
+        }
+    }
+}
+
 /// Layout variant for different UI modes.
 #[derive(Debug)]
 pub enum BodyLayout {
@@ -41,7 +51,11 @@ pub enum BodyLayout {
 impl App {
     /// Compute the complete UI layout for the current frame.
     /// Returns a `UiLayout` with regions for each component.
-    pub fn compute_layout(&self, width: u16, height: u16, last_top: Option<u16>) -> UiLayout {
+    ///
+    /// Reads `self.render_state.position.last_ui_top()` for clear_from computation.
+    pub fn compute_layout(&self, width: u16, height: u16) -> UiLayout {
+        let last_top = self.render_state.position.last_ui_top();
+
         if self.mode == Mode::Selector {
             let item_count = match self.selector_page {
                 SelectorPage::Provider => self.provider_picker.filtered().len(),
@@ -50,7 +64,9 @@ impl App {
             };
             let sel_height = selector_height(item_count, height);
             let top = height.saturating_sub(sel_height);
-            let clear_from = last_top.map_or(top, |old| old.min(top)).min(height.saturating_sub(1));
+            let clear_from = last_top
+                .map_or(top, |old| old.min(top))
+                .min(height.saturating_sub(1));
             return UiLayout {
                 top,
                 clear_from,
@@ -71,7 +87,9 @@ impl App {
         let total = popup_height + progress_height + input_height + status_height;
 
         let top = self.ui_start_row(height, total);
-        let clear_from = last_top.map_or(top, |old| old.min(top)).min(height.saturating_sub(1));
+        let clear_from = last_top
+            .map_or(top, |old| old.min(top))
+            .min(height.saturating_sub(1));
 
         let mut row = top;
         let popup = if popup_height > 0 {
@@ -162,45 +180,13 @@ impl App {
         (line_count + BORDER_OVERHEAD).clamp(MIN_HEIGHT, max_height)
     }
 
-    /// Calculate the total height of the bottom UI area.
-    /// Returns: progress (1) + input (with borders) + status (1)
-    /// For selector mode, returns height based on actual item count.
-    pub fn calculate_ui_height(&self, width: u16, height: u16) -> u16 {
-        if self.mode == Mode::Selector {
-            let item_count = match self.selector_page {
-                SelectorPage::Provider => self.provider_picker.filtered().len(),
-                SelectorPage::Model => self.model_picker.filtered_models.len(),
-                SelectorPage::Session => self.session_picker.filtered_sessions().len(),
-            };
-            return selector_height(item_count, height);
-        }
-
-        let progress_height = PROGRESS_HEIGHT;
-        let input_height = self.calculate_input_height(width, height);
-        let status_height = 1u16;
-        let base = progress_height + input_height + status_height;
-
-        base + self.active_popup_height()
-    }
-
-    /// Resolve the UI start row, using row tracking or startup anchor.
-    pub fn ui_start_row(&self, height: u16, ui_height: u16) -> u16 {
+    /// Resolve the UI start row, using position state.
+    fn ui_start_row(&self, height: u16, ui_height: u16) -> u16 {
         let bottom_start = height.saturating_sub(ui_height);
-
-        // Row tracking mode: UI follows chat content
-        if let Some(chat_row) = self.render_state.chat_row {
-            return chat_row.min(bottom_start);
+        match self.render_state.position.ui_anchor() {
+            Some(anchor) => anchor.min(bottom_start),
+            None => bottom_start,
         }
-
-        // Startup: use anchor when no messages exist
-        if self.message_list.entries.is_empty()
-            && let Some(anchor) = self.render_state.startup_ui_anchor
-        {
-            return anchor.min(bottom_start);
-        }
-
-        // Default: bottom of screen
-        bottom_start
     }
 }
 
@@ -353,5 +339,31 @@ mod tests {
             assert_eq!(selector.row, top);
             assert!(selector.row + selector.height <= 40);
         }
+    }
+
+    #[test]
+    fn test_layout_height() {
+        let layout = test_input_layout(0, 3, 40, 80, None);
+        // progress (1) + input (3) + status (1) = 5
+        assert_eq!(layout.height(), 5);
+
+        let layout_popup = test_input_layout(5, 3, 40, 80, None);
+        // popup (5) + progress (1) + input (3) + status (1) = 10
+        assert_eq!(layout_popup.height(), 10);
+
+        let sel_height = selector_height(10, 40);
+        let top = 40u16.saturating_sub(sel_height);
+        let sel_layout = UiLayout {
+            top,
+            clear_from: top,
+            body: BodyLayout::Selector {
+                selector: Region {
+                    row: top,
+                    height: sel_height,
+                },
+            },
+            width: 80,
+        };
+        assert_eq!(sel_layout.height(), sel_height);
     }
 }

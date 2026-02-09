@@ -138,17 +138,4 @@ pub struct App {
     pub session_cost: f64,
 }
 
-impl App {
-    pub fn header_inserted(&self) -> bool {
-        self.render_state.header_inserted
-    }
-
-    pub fn set_startup_ui_anchor(&mut self, value: Option<u16>) {
-        self.render_state.startup_ui_anchor = value;
-    }
-
-    /// Take and clear the startup UI anchor (for clearing startup area on first message).
-    pub fn take_startup_ui_anchor(&mut self) -> Option<u16> {
-        self.render_state.startup_ui_anchor.take()
-    }
-}
+// Position-related accessors are on render_state.position directly.

@@ -90,12 +90,12 @@ impl App {
         ]
     }
 
-    /// Return startup header lines once and mark them as inserted.
+    /// Return startup header lines if header has not been inserted yet.
+    /// The caller (run.rs) is responsible for transitioning position to Header.
     pub fn take_startup_header_lines(&mut self) -> Vec<StyledLine> {
-        if self.render_state.header_inserted {
+        if self.render_state.position.header_inserted() {
             return Vec::new();
         }
-        self.render_state.header_inserted = true;
         Self::startup_header_lines(&self.session.working_dir)
     }
 
