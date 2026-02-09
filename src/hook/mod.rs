@@ -239,9 +239,17 @@ impl Hook for CommandHook {
         let working_dir =
             std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
 
+        // Clear inherited environment to avoid leaking API keys to hook commands.
+        // Only PATH and HOME are passed through for basic command resolution.
+        let path = std::env::var("PATH").unwrap_or_default();
+        let home = std::env::var("HOME").unwrap_or_default();
+
         let child = match tokio::process::Command::new("sh")
             .arg("-c")
             .arg(&self.command)
+            .env_clear()
+            .env("PATH", &path)
+            .env("HOME", &home)
             .env("ION_HOOK_EVENT", event_str)
             .env("ION_TOOL_NAME", tool_name)
             .env("ION_WORKING_DIR", working_dir.to_string_lossy().as_ref())

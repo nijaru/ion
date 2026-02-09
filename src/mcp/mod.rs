@@ -11,7 +11,7 @@ use thiserror::Error;
 use tokio::process::Command;
 use tokio::sync::{Mutex, mpsc};
 
-use crate::tool::types::{DangerLevel, Tool, ToolContext, ToolError, ToolResult};
+use crate::tool::types::{ToolError, ToolResult};
 
 /// Trait for MCP tool fallback — allows testing without real MCP servers.
 #[async_trait]
@@ -171,43 +171,6 @@ impl McpClient {
             is_error,
             metadata: Some(response),
         })
-    }
-}
-
-pub struct McpTool {
-    pub client: Arc<McpClient>,
-    pub name: String,
-    pub description: String,
-    pub input_schema: serde_json::Value,
-}
-
-#[async_trait]
-impl Tool for McpTool {
-    fn name(&self) -> &str {
-        &self.name
-    }
-
-    fn description(&self) -> &str {
-        &self.description
-    }
-
-    fn parameters(&self) -> serde_json::Value {
-        self.input_schema.clone()
-    }
-
-    async fn execute(
-        &self,
-        args: serde_json::Value,
-        _ctx: &ToolContext,
-    ) -> Result<ToolResult, ToolError> {
-        self.client
-            .call_tool(&self.name, args)
-            .await
-            .map_err(|e| ToolError::ExecutionFailed(format!("MCP error: {e}")))
-    }
-
-    fn danger_level(&self) -> DangerLevel {
-        DangerLevel::Restricted
     }
 }
 

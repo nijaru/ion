@@ -133,11 +133,14 @@ impl App {
         }
         let subagent_registry = Arc::new(subagent_registry);
 
+        // Shared atomic mode so subagents read the live value after Shift+Tab toggle
+        let shared_tool_mode = crate::tool::builtin::spawn_subagent::shared_tool_mode(permissions.mode);
+
         // Register spawn_subagent tool
         orchestrator.register_tool(Box::new(SpawnSubagentTool::new(
             subagent_registry,
             provider_impl.clone(),
-            permissions.mode,
+            shared_tool_mode.clone(),
         )));
 
         let orchestrator = Arc::new(orchestrator);
@@ -214,6 +217,7 @@ impl App {
             history_index: 0,
             history_draft: None,
             tool_mode: permissions.mode,
+            shared_tool_mode,
             api_provider,
             provider_picker: ProviderPicker::new(),
             message_list: MessageList::new(),

@@ -10,6 +10,14 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+/// Outcome of running PreToolUse hooks.
+enum PreHookOutcome {
+    /// Continue with (possibly modified) args.
+    Continue(serde_json::Value),
+    /// Hook short-circuited execution with a result (Skip or ReplaceOutput).
+    ShortCircuit(ToolResult),
+}
+
 /// Orchestrates tool discovery and execution with permission checks.
 pub struct ToolOrchestrator {
     tools: HashMap<String, Box<dyn Tool>>,
@@ -65,30 +73,9 @@ impl ToolOrchestrator {
                 ));
             }
 
-            // Run PreToolUse hooks (same as builtin path)
-            let pre_ctx = HookContext::new(HookPoint::PreToolUse)
-                .with_tool_name(name)
-                .with_tool_input(args.clone());
-            let args = match self.hooks.read().await.execute(&pre_ctx).await {
-                HookResult::Continue => args,
-                HookResult::Skip => {
-                    return Ok(ToolResult {
-                        content: "Tool execution skipped by hook".to_string(),
-                        is_error: false,
-                        metadata: None,
-                    });
-                }
-                HookResult::ReplaceInput(new_args) => new_args,
-                HookResult::ReplaceOutput(output) => {
-                    return Ok(ToolResult {
-                        content: output,
-                        is_error: false,
-                        metadata: None,
-                    });
-                }
-                HookResult::Abort(msg) => {
-                    return Err(ToolError::ExecutionFailed(format!("Hook aborted: {msg}")));
-                }
+            let args = match self.run_pre_hooks(name, args).await? {
+                PreHookOutcome::Continue(args) => args,
+                PreHookOutcome::ShortCircuit(result) => return Ok(result),
             };
 
             let mcp_result = match mcp.call_tool_by_name(name, args).await {
@@ -98,20 +85,7 @@ impl ToolOrchestrator {
                 }
             };
 
-            let post_ctx = HookContext::new(HookPoint::PostToolUse)
-                .with_tool_name(name)
-                .with_tool_output(&mcp_result.content);
-            return match self.hooks.read().await.execute(&post_ctx).await {
-                HookResult::ReplaceOutput(output) => Ok(ToolResult {
-                    content: output,
-                    is_error: mcp_result.is_error,
-                    metadata: mcp_result.metadata,
-                }),
-                HookResult::Abort(msg) => {
-                    Err(ToolError::ExecutionFailed(format!("Hook aborted: {msg}")))
-                }
-                _ => Ok(mcp_result),
-            };
+            return self.run_post_hooks(name, mcp_result).await;
         }
 
         let tool = self
@@ -119,30 +93,9 @@ impl ToolOrchestrator {
             .get(name)
             .ok_or_else(|| ToolError::ExecutionFailed(format!("Tool not found: {name}")))?;
 
-        // Run PreToolUse hooks
-        let pre_ctx = HookContext::new(HookPoint::PreToolUse)
-            .with_tool_name(name)
-            .with_tool_input(args.clone());
-        let args = match self.hooks.read().await.execute(&pre_ctx).await {
-            HookResult::Continue => args,
-            HookResult::Skip => {
-                return Ok(ToolResult {
-                    content: "Tool execution skipped by hook".to_string(),
-                    is_error: false,
-                    metadata: None,
-                });
-            }
-            HookResult::ReplaceInput(new_args) => new_args,
-            HookResult::ReplaceOutput(output) => {
-                return Ok(ToolResult {
-                    content: output,
-                    is_error: false,
-                    metadata: None,
-                });
-            }
-            HookResult::Abort(msg) => {
-                return Err(ToolError::ExecutionFailed(format!("Hook aborted: {msg}")));
-            }
+        let args = match self.run_pre_hooks(name, args).await? {
+            PreHookOutcome::Continue(args) => args,
+            PreHookOutcome::ShortCircuit(result) => return Ok(result),
         };
 
         // For bash, use per-command permission checking
@@ -158,7 +111,44 @@ impl ToolOrchestrator {
             PermissionStatus::Denied(reason) => Err(ToolError::PermissionDenied(reason)),
         }?;
 
-        // Run PostToolUse hooks
+        self.run_post_hooks(name, result).await
+    }
+
+    /// Run PreToolUse hooks. Returns modified args on Continue/ReplaceInput,
+    /// or a short-circuit ToolResult for Skip/ReplaceOutput.
+    async fn run_pre_hooks(
+        &self,
+        name: &str,
+        args: serde_json::Value,
+    ) -> Result<PreHookOutcome, ToolError> {
+        let pre_ctx = HookContext::new(HookPoint::PreToolUse)
+            .with_tool_name(name)
+            .with_tool_input(args.clone());
+        match self.hooks.read().await.execute(&pre_ctx).await {
+            HookResult::Continue => Ok(PreHookOutcome::Continue(args)),
+            HookResult::ReplaceInput(new_args) => Ok(PreHookOutcome::Continue(new_args)),
+            HookResult::Skip => Ok(PreHookOutcome::ShortCircuit(ToolResult {
+                content: "Tool execution skipped by hook".to_string(),
+                is_error: false,
+                metadata: None,
+            })),
+            HookResult::ReplaceOutput(output) => Ok(PreHookOutcome::ShortCircuit(ToolResult {
+                content: output,
+                is_error: false,
+                metadata: None,
+            })),
+            HookResult::Abort(msg) => {
+                Err(ToolError::ExecutionFailed(format!("Hook aborted: {msg}")))
+            }
+        }
+    }
+
+    /// Run PostToolUse hooks, returning the (possibly modified) result.
+    async fn run_post_hooks(
+        &self,
+        name: &str,
+        result: ToolResult,
+    ) -> Result<ToolResult, ToolError> {
         let post_ctx = HookContext::new(HookPoint::PostToolUse)
             .with_tool_name(name)
             .with_tool_output(&result.content);
@@ -169,7 +159,6 @@ impl ToolOrchestrator {
                 metadata: result.metadata,
             }),
             HookResult::Abort(msg) => Err(ToolError::ExecutionFailed(format!("Hook aborted: {msg}"))),
-            // Continue, Skip, and ReplaceInput all pass through unchanged for PostToolUse
             HookResult::Continue | HookResult::Skip | HookResult::ReplaceInput(_) => Ok(result),
         }
     }

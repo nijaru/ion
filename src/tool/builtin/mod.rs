@@ -8,7 +8,7 @@ mod grep;
 mod list;
 mod mcp_tools;
 mod read;
-mod spawn_subagent;
+pub(crate) mod spawn_subagent;
 mod web_fetch;
 mod web_search;
 mod write;
