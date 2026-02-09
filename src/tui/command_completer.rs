@@ -124,7 +124,8 @@ impl CommandCompleter {
             .map(|(_, desc)| desc.len())
             .max()
             .unwrap_or(20);
-        let popup_width = (max_cmd_len + max_desc_len + 6).min(width as usize - 4) as u16;
+        let popup_width =
+            (max_cmd_len + max_desc_len + 6).min((width as usize).saturating_sub(4)) as u16;
 
         // Build items with padded secondary (aligns descriptions in a column)
         let formatted: Vec<String> = candidates

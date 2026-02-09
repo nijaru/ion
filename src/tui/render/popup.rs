@@ -26,12 +26,8 @@ pub struct PopupItem<'a> {
     pub color_override: Option<Color>,
 }
 
-/// Region within the terminal (row + height).
-#[derive(Debug, Clone, Copy)]
-pub struct PopupRegion {
-    pub row: u16,
-    pub height: u16,
-}
+/// Re-export Region as PopupRegion for popup callers.
+pub use crate::tui::render::layout::Region as PopupRegion;
 
 /// Render a popup list within a given region.
 /// Items render top-down starting at `region.row`.
@@ -77,7 +73,12 @@ pub fn render_popup<W: Write>(
         }
 
         // Pad to popup width for consistent reverse-video highlight
-        let content_len = 1 + item.primary.len() + item.secondary.len();
+        let secondary_len = if style.show_secondary_dimmed {
+            item.secondary.len()
+        } else {
+            0
+        };
+        let content_len = 1 + item.primary.len() + secondary_len;
         let padding = (popup_width as usize).saturating_sub(content_len);
         if padding > 0 {
             execute!(w, Print(" ".repeat(padding)))?;

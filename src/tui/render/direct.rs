@@ -29,7 +29,7 @@ impl App {
 
         match &layout.body {
             BodyLayout::Selector { selector } => {
-                self.render_selector_direct(w, selector.row, layout.width, 0)?;
+                self.render_selector_direct(w, selector.row, layout.width)?;
             }
             BodyLayout::Input {
                 popup,
@@ -37,10 +37,6 @@ impl App {
                 input,
                 status,
             } => {
-                // Progress line
-                execute!(w, MoveTo(0, progress.row), Clear(ClearType::CurrentLine))?;
-                self.render_progress_direct(w, layout.width)?;
-
                 // Input area with borders
                 let content_height = input.height.saturating_sub(2); // Minus borders
                 draw_horizontal_border(w, input.row, layout.width)?;
@@ -55,6 +51,10 @@ impl App {
                 if self.mode == Mode::HistorySearch {
                     self.render_history_search(w, input.row, layout.width)?;
                 } else {
+                    // Progress line (not shown during history search)
+                    execute!(w, MoveTo(0, progress.row), Clear(ClearType::CurrentLine))?;
+                    self.render_progress_direct(w, layout.width)?;
+
                     self.render_status_direct(w, layout.width)?;
 
                     // Render completer popup in its assigned region.
@@ -201,7 +201,6 @@ impl App {
         w: &mut W,
         start_row: u16,
         width: u16,
-        _height: u16,
     ) -> std::io::Result<()> {
         let data = self.selector_data();
         let (cursor_col, cursor_row) = selector::render_selector(w, &data, start_row, width)?;
