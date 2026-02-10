@@ -79,6 +79,13 @@ pub struct Usage {
     pub cache_write_tokens: u32,
 }
 
+/// Response from a non-streaming completion request.
+#[derive(Debug, Clone)]
+pub struct CompletionResponse {
+    pub message: Message,
+    pub usage: Usage,
+}
+
 /// Pricing per million tokens.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ModelPricing {

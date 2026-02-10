@@ -254,7 +254,7 @@ async fn complete_with_retry(
 ) -> Result<(Vec<ContentBlock>, Vec<ToolCallEvent>)> {
     let mut retry_count = 0u32;
 
-    let response = loop {
+    let completion = loop {
         debug!(
             "Using non-streaming completion (provider: {})",
             provider.id()
@@ -302,10 +302,23 @@ async fn complete_with_retry(
         }
     };
 
+    // Emit provider-reported usage
+    let usage = &completion.usage;
+    if usage.input_tokens > 0 || usage.output_tokens > 0 {
+        let _ = tx
+            .send(AgentEvent::ProviderUsage {
+                input_tokens: usage.input_tokens as usize,
+                output_tokens: usage.output_tokens as usize,
+                cache_read_tokens: usage.cache_read_tokens as usize,
+                cache_write_tokens: usage.cache_write_tokens as usize,
+            })
+            .await;
+    }
+
     let mut assistant_blocks = Vec::new();
     let mut tool_calls = Vec::new();
 
-    for block in response.content.iter() {
+    for block in completion.message.content.iter() {
         match block {
             ContentBlock::Text { text } => {
                 let tokens = token_counter.count_str(text);

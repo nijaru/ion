@@ -5,7 +5,7 @@ use super::api_provider::Provider;
 use super::error::Error;
 use super::openai_compat::OpenAICompatClient;
 use super::subscription::{ChatGptResponsesClient, GeminiOAuthClient};
-use super::types::{ChatRequest, Message, StreamEvent};
+use super::types::{ChatRequest, CompletionResponse, StreamEvent};
 use crate::auth;
 use async_trait::async_trait;
 use tokio::sync::mpsc;
@@ -212,7 +212,7 @@ pub trait LlmApi: Send + Sync {
         tx: mpsc::Sender<StreamEvent>,
     ) -> Result<(), Error>;
     /// Get a non-streaming chat completion.
-    async fn complete(&self, request: ChatRequest) -> Result<Message, Error>;
+    async fn complete(&self, request: ChatRequest) -> Result<CompletionResponse, Error>;
 }
 
 #[async_trait]
@@ -246,7 +246,7 @@ impl LlmApi for Client {
         }
     }
 
-    async fn complete(&self, request: ChatRequest) -> Result<Message, Error> {
+    async fn complete(&self, request: ChatRequest) -> Result<CompletionResponse, Error> {
         tracing::debug!(
             provider = %self.provider.id(),
             model = %request.model,

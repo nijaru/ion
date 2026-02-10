@@ -33,8 +33,8 @@ pub use error::{Error, format_api_error};
 pub use prefs::ProviderPrefs;
 pub use registry::{ModelFilter, ModelRegistry};
 pub use types::{
-    ChatRequest, ContentBlock, Message, ModelInfo, ModelPricing, Role, StreamEvent, ThinkingConfig,
-    ToolBuilder, ToolCallEvent, ToolDefinition, Usage,
+    ChatRequest, CompletionResponse, ContentBlock, Message, ModelInfo, ModelPricing, Role,
+    StreamEvent, ThinkingConfig, ToolBuilder, ToolCallEvent, ToolDefinition, Usage,
 };
 
 /// Default timeout for HTTP requests.

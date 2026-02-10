@@ -302,7 +302,7 @@ impl Agent {
         &self,
         user_msg: &str,
         session: &Session,
-    ) -> Result<crate::agent::designer::Plan> {
+    ) -> Result<(crate::agent::designer::Plan, crate::provider::Usage)> {
         if let Some(designer) = &self.designer {
             designer
                 .plan(user_msg, &session.model, &session.messages)
@@ -371,8 +371,18 @@ impl Agent {
         // Optional: Run designer for complex requests
         if session.messages.len() <= 2
             && user_msg.len() > 100
-            && let Ok(plan) = self.plan(&user_msg, &session).await
+            && let Ok((plan, usage)) = self.plan(&user_msg, &session).await
         {
+            if usage.input_tokens > 0 || usage.output_tokens > 0 {
+                let _ = tx
+                    .send(AgentEvent::ProviderUsage {
+                        input_tokens: usage.input_tokens as usize,
+                        output_tokens: usage.output_tokens as usize,
+                        cache_read_tokens: usage.cache_read_tokens as usize,
+                        cache_write_tokens: usage.cache_write_tokens as usize,
+                    })
+                    .await;
+            }
             {
                 let mut active_plan = self.active_plan.lock().await;
                 *active_plan = Some(plan.clone());
@@ -494,6 +504,19 @@ impl Agent {
                 &summarization_model,
             )
             .await;
+
+            if let Some(usage) = result.api_usage
+                && (usage.input_tokens > 0 || usage.output_tokens > 0)
+            {
+                let _ = tx
+                    .send(AgentEvent::ProviderUsage {
+                        input_tokens: usage.input_tokens as usize,
+                        output_tokens: usage.output_tokens as usize,
+                        cache_read_tokens: usage.cache_read_tokens as usize,
+                        cache_write_tokens: usage.cache_write_tokens as usize,
+                    })
+                    .await;
+            }
 
             if result.tier_reached != CompactionTier::None {
                 // Replace compact tool placeholder with actual result

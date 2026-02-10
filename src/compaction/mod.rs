@@ -9,7 +9,7 @@ pub use counter::{TokenCount, TokenCounter};
 pub use pruning::{prune_messages, PruningResult, PruningTier};
 pub use summarization::{SummarizationResult, apply_summary, summarize_messages};
 
-use crate::provider::{LlmApi, Message};
+use crate::provider::{LlmApi, Message, Usage};
 
 /// Configuration for context compaction.
 #[derive(Debug, Clone)]
@@ -104,6 +104,8 @@ pub struct CompactionResult {
     pub tier_reached: CompactionTier,
     /// Summary text if Tier 3 was applied.
     pub summary: Option<String>,
+    /// Provider-reported token usage from the Tier 3 summarization API call.
+    pub api_usage: Option<Usage>,
 }
 
 /// Which compaction tier was applied.
@@ -136,6 +138,7 @@ pub async fn compact_with_summarization(
             tokens_after: tokens_before,
             tier_reached: CompactionTier::None,
             summary: None,
+            api_usage: None,
         };
     }
 
@@ -149,6 +152,7 @@ pub async fn compact_with_summarization(
             tokens_after: tokens_after_mechanical,
             tier_reached: CompactionTier::Mechanical,
             summary: None,
+            api_usage: None,
         };
     }
 
@@ -177,6 +181,7 @@ pub async fn compact_with_summarization(
                 tokens_after,
                 tier_reached: CompactionTier::Summarized,
                 summary: Some(result.summary),
+                api_usage: Some(result.api_usage),
             }
         }
         Ok(_) => {
@@ -186,6 +191,7 @@ pub async fn compact_with_summarization(
                 tokens_after: tokens_after_mechanical,
                 tier_reached: CompactionTier::Mechanical,
                 summary: None,
+                api_usage: None,
             }
         }
         Err(e) => {
@@ -195,6 +201,7 @@ pub async fn compact_with_summarization(
                 tokens_after: tokens_after_mechanical,
                 tier_reached: CompactionTier::Mechanical,
                 summary: None,
+                api_usage: None,
             }
         }
     }

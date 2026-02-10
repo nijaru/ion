@@ -3,7 +3,8 @@
 use crate::provider::error::Error;
 use crate::provider::http::SseParser;
 use crate::provider::types::{
-    ChatRequest, ContentBlock, Message, Role, StreamEvent, ToolCallEvent,
+    ChatRequest, CompletionResponse, ContentBlock, Message, Role, StreamEvent, ToolCallEvent,
+    Usage,
 };
 use reqwest::header::{
     HeaderMap, HeaderName, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE,
@@ -98,7 +99,7 @@ impl ChatGptResponsesClient {
     }
 
     /// Make a non-streaming responses request.
-    pub async fn complete(&self, request: ChatRequest) -> Result<Message, Error> {
+    pub async fn complete(&self, request: ChatRequest) -> Result<CompletionResponse, Error> {
         let body = self.build_request(&request, false);
         let url = format!("{CHATGPT_BASE_URL}/responses");
 
@@ -125,9 +126,12 @@ impl ChatGptResponsesClient {
             Error::Api(format!("Failed to parse response: {e}\nBody: {text}"))
         })?;
         let text = extract_output_text(&value);
-        Ok(Message {
-            role: Role::Assistant,
-            content: Arc::new(vec![ContentBlock::Text { text }]),
+        Ok(CompletionResponse {
+            message: Message {
+                role: Role::Assistant,
+                content: Arc::new(vec![ContentBlock::Text { text }]),
+            },
+            usage: Usage::default(),
         })
     }
 

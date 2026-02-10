@@ -8,7 +8,9 @@ use crate::provider::api_provider::Provider;
 use crate::provider::error::Error;
 use crate::provider::http::{AuthConfig, HttpClient, SseParser};
 use crate::provider::prefs::ProviderPrefs;
-use crate::provider::types::{ChatRequest, Message, StreamEvent, ToolBuilder};
+use crate::provider::types::{
+    ChatRequest, CompletionResponse, StreamEvent, ToolBuilder, Usage as IonUsage,
+};
 use futures::StreamExt;
 use std::collections::HashMap;
 use tokio::sync::mpsc;
@@ -78,7 +80,7 @@ impl OpenAICompatClient {
     }
 
     /// Make a non-streaming chat completion request.
-    pub async fn complete(&self, request: ChatRequest) -> Result<Message, Error> {
+    pub async fn complete(&self, request: ChatRequest) -> Result<CompletionResponse, Error> {
         let api_request = build_request(&request, None, false, &self.quirks);
 
         tracing::debug!(
@@ -89,12 +91,22 @@ impl OpenAICompatClient {
             "OpenAI-compat API request"
         );
 
-        let response = self
+        let response: super::response::OpenAIResponse = self
             .http
             .post_json("/chat/completions", &api_request)
             .await?;
 
-        Ok(convert_response(&response, &self.quirks))
+        let usage = response.usage.as_ref().map_or(IonUsage::default(), |u| IonUsage {
+            input_tokens: u.prompt_tokens,
+            output_tokens: u.completion_tokens,
+            cache_read_tokens: u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens),
+            cache_write_tokens: 0,
+        });
+
+        Ok(CompletionResponse {
+            message: convert_response(&response, &self.quirks),
+            usage,
+        })
     }
 
     /// Stream a chat completion request.
