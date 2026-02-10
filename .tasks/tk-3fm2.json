@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "3fm2",
+  "title": "DeepSeek cache token field names differ from OpenAI",
+  "description": "DeepSeek returns prompt_cache_hit_tokens at top level, not nested under prompt_tokens_details. Low priority since DeepSeek mostly routes through OpenRouter which normalizes. Add to ProviderQuirks if direct DeepSeek support needed.",
+  "status": "open",
+  "priority": 4,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-02-10T04:48:45.241Z",
+  "updated_at": "2026-02-10T04:48:45.241Z",
+  "completed_at": null,
+  "external": {}
+}
