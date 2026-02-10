@@ -3,7 +3,7 @@
   "ref": "8qwn",
   "title": "[RESEARCH] Compare system prompts with other TUI agents",
   "description": null,
-  "status": "open",
+  "status": "done",
   "priority": 4,
   "labels": [],
   "assignees": [],
@@ -11,9 +11,14 @@
   "blocked_by": [],
   "estimate": null,
   "due_date": null,
-  "logs": [],
+  "logs": [
+    {
+      "ts": "2026-02-10T04:48:30.851Z",
+      "msg": "Completed: expanded system prompt from ~47 to ~80 lines with Task Execution + Tool Usage sections. Added MCP tool template hint. Surveyed Claude Code, Codex CLI, Gemini CLI patterns. Research in ai/research/system-prompt-survey-2026.md"
+    }
+  ],
   "created_at": "2026-01-19T15:36:19.947Z",
-  "updated_at": "2026-02-06T19:42:01.256Z",
-  "completed_at": null,
+  "updated_at": "2026-02-10T04:48:30.851Z",
+  "completed_at": "2026-02-10T04:48:30.828Z",
   "external": {}
 }
