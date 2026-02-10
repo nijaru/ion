@@ -8,8 +8,8 @@ use super::stream::{ContentBlockInfo, ContentDelta, StreamEvent as AnthropicStre
 use crate::provider::error::Error;
 use crate::provider::http::{AuthConfig, HttpClient, SseParser};
 use crate::provider::types::{
-    ChatRequest, ContentBlock as IonContentBlock, Message, Role, StreamEvent, ToolBuilder,
-    ToolDefinition, Usage,
+    ChatRequest, CompletionResponse, ContentBlock as IonContentBlock, Message, Role, StreamEvent,
+    ToolBuilder, ToolDefinition, Usage as IonUsage,
 };
 use futures::StreamExt;
 use std::sync::Arc;
@@ -46,7 +46,7 @@ impl AnthropicClient {
     }
 
     /// Make a non-streaming chat completion request.
-    pub async fn complete(&self, request: ChatRequest) -> Result<Message, Error> {
+    pub async fn complete(&self, request: ChatRequest) -> Result<CompletionResponse, Error> {
         let api_request = self.build_request(&request, false);
 
         tracing::debug!(
@@ -58,7 +58,17 @@ impl AnthropicClient {
 
         let response: AnthropicResponse = self.http.post_json("/v1/messages", &api_request).await?;
 
-        Ok(self.convert_response(response))
+        let usage = IonUsage {
+            input_tokens: response.usage.input_tokens,
+            output_tokens: response.usage.output_tokens,
+            cache_read_tokens: response.usage.cache_read_input_tokens,
+            cache_write_tokens: response.usage.cache_creation_input_tokens,
+        };
+
+        Ok(CompletionResponse {
+            message: self.convert_response(response),
+            usage,
+        })
     }
 
     /// Stream a chat completion request.
@@ -335,7 +345,7 @@ impl AnthropicClient {
             AnthropicStreamEvent::MessageStart { message } => {
                 // Send initial usage if available
                 let _ = tx
-                    .send(StreamEvent::Usage(Usage {
+                    .send(StreamEvent::Usage(IonUsage {
                         input_tokens: message.usage.input_tokens,
                         output_tokens: message.usage.output_tokens,
                         cache_read_tokens: message.usage.cache_read_input_tokens,
@@ -374,7 +384,7 @@ impl AnthropicClient {
             }
             AnthropicStreamEvent::MessageDelta { usage, .. } => {
                 let _ = tx
-                    .send(StreamEvent::Usage(Usage {
+                    .send(StreamEvent::Usage(IonUsage {
                         input_tokens: usage.input_tokens,
                         output_tokens: usage.output_tokens,
                         cache_read_tokens: usage.cache_read_input_tokens,

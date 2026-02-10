@@ -4,7 +4,7 @@
 //! this module uses an LLM to produce a structured summary of older
 //! conversation turns, replacing them with a single system message.
 
-use crate::provider::{ChatRequest, ContentBlock, LlmApi, Message, Role};
+use crate::provider::{ChatRequest, ContentBlock, LlmApi, Message, Role, Usage};
 use std::sync::Arc;
 
 /// Truncate a string to at most `max_bytes`, ensuring the cut is on a UTF-8
@@ -44,6 +44,8 @@ pub struct SummarizationResult {
     pub messages_summarized: usize,
     /// Token count of the summary message.
     pub summary_tokens: usize,
+    /// Provider-reported token usage for the summarization API call.
+    pub api_usage: Usage,
 }
 
 /// Summarize old messages using an LLM.
@@ -64,6 +66,7 @@ pub async fn summarize_messages(
             summary: String::new(),
             messages_summarized: 0,
             summary_tokens: 0,
+            api_usage: Usage::default(),
         });
     }
 
@@ -89,10 +92,11 @@ pub async fn summarize_messages(
         thinking: None,
     };
 
-    let response = provider.complete(request).await?;
+    let completion = provider.complete(request).await?;
 
     // Extract text from response
-    let summary = response
+    let summary = completion
+        .message
         .content
         .iter()
         .filter_map(|block| match block {
@@ -108,6 +112,7 @@ pub async fn summarize_messages(
         summary,
         messages_summarized: cutoff,
         summary_tokens,
+        api_usage: completion.usage,
     })
 }
 
@@ -239,6 +244,7 @@ mod tests {
             summary: String::new(),
             messages_summarized: 0,
             summary_tokens: 0,
+            api_usage: Usage::default(),
         };
 
         let new_messages = apply_summary(&messages, &result);
@@ -260,6 +266,7 @@ mod tests {
             summary: "Summary of earlier work".to_string(),
             messages_summarized: 4, // first 4 messages summarized
             summary_tokens: 10,
+            api_usage: Usage::default(),
         };
 
         let new_messages = apply_summary(&messages, &result);

@@ -4,7 +4,9 @@
 //! This is the same backend used by Gemini CLI for consumer subscriptions.
 
 use crate::provider::error::Error;
-use crate::provider::types::{ChatRequest, ContentBlock, Message, Role, StreamEvent};
+use crate::provider::types::{
+    ChatRequest, CompletionResponse, ContentBlock, Message, Role, StreamEvent, Usage,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -59,7 +61,7 @@ impl GeminiOAuthClient {
     }
 
     /// Make a chat completion request.
-    pub async fn complete(&self, request: ChatRequest) -> Result<Message, Error> {
+    pub async fn complete(&self, request: ChatRequest) -> Result<CompletionResponse, Error> {
         let model = normalize_model_name(&request.model);
         let gemini_request =
             CodeAssistRequest::from_chat_request(&request, &model, &self.project_id);
@@ -85,7 +87,10 @@ impl GeminiOAuthClient {
             let ca_response: CodeAssistResponse = serde_json::from_str(&text).map_err(|e| {
                 Error::Api(format!("Failed to parse response: {e}\nBody: {text}"))
             })?;
-            return Ok(ca_response.response.into_message());
+            return Ok(CompletionResponse {
+                message: ca_response.response.into_message(),
+                usage: Usage::default(),
+            });
         }
 
         Err(Error::Api(format!("Gemini API error: {status} - {text}")))

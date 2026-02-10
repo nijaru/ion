@@ -1,4 +1,4 @@
-use crate::provider::{ChatRequest, ContentBlock, LlmApi, Message, Role};
+use crate::provider::{ChatRequest, ContentBlock, LlmApi, Message, Role, Usage};
 use anyhow::{Result, anyhow};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -82,7 +82,12 @@ impl Designer {
         Self { provider }
     }
 
-    pub async fn plan(&self, user_msg: &str, model: &str, history: &[Message]) -> Result<Plan> {
+    pub async fn plan(
+        &self,
+        user_msg: &str,
+        model: &str,
+        history: &[Message],
+    ) -> Result<(Plan, Usage)> {
         let mut messages = history.to_vec();
         messages.push(Message {
             role: Role::User,
@@ -101,9 +106,10 @@ impl Designer {
             thinking: None,
         };
 
-        let response = self.provider.complete(request).await?;
+        let completion = self.provider.complete(request).await?;
 
-        let text = response
+        let text = completion
+            .message
             .content
             .iter()
             .filter_map(|b| {
@@ -123,6 +129,6 @@ impl Designer {
             .as_str();
 
         let plan: Plan = serde_json::from_str(json_str)?;
-        Ok(plan)
+        Ok((plan, completion.usage))
     }
 }
