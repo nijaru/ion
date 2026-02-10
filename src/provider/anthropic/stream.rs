@@ -218,6 +218,23 @@ mod tests {
     }
 
     #[test]
+    fn test_message_delta_output_tokens_only() {
+        // Anthropic's message_delta often sends only output_tokens
+        let json = r#"{
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": null},
+            "usage": {"output_tokens": 42}
+        }"#;
+        let event: StreamEvent = serde_json::from_str(json).unwrap();
+        if let StreamEvent::MessageDelta { usage, .. } = event {
+            assert_eq!(usage.input_tokens, 0);
+            assert_eq!(usage.output_tokens, 42);
+        } else {
+            panic!("Expected MessageDelta");
+        }
+    }
+
+    #[test]
     fn test_error_event() {
         let json = r#"{
             "type": "error",
