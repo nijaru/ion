@@ -110,6 +110,13 @@ impl ContextManager {
         *active = skill;
     }
 
+    /// Check if instruction files have changed on disk.
+    fn instructions_stale(&self) -> bool {
+        self.instruction_loader
+            .as_ref()
+            .is_some_and(|l| l.is_stale())
+    }
+
     /// Get just the system prompt (cached), without assembling messages.
     pub async fn get_system_prompt(&self, plan: Option<&Plan>) -> String {
         let active_skill = self.active_skill.lock().await;
@@ -120,6 +127,7 @@ impl ContextManager {
             && c.plan.as_ref() == plan
             && c.skill.as_ref() == active_skill.as_ref()
             && c.has_mcp_tools == mcp
+            && !self.instructions_stale()
         {
             return c.rendered.clone();
         }
@@ -153,6 +161,7 @@ impl ContextManager {
             if c.plan.as_ref() == plan
                 && c.skill.as_ref() == active_skill.as_ref()
                 && c.has_mcp_tools == mcp
+                && !self.instructions_stale()
             {
                 (c.rendered.clone(), false)
             } else {

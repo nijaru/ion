@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::SystemTime;
 
 /// Cached file content with modification time.
@@ -21,6 +22,7 @@ struct CachedFile {
 pub struct InstructionLoader {
     project_path: PathBuf,
     cache: Mutex<HashMap<PathBuf, CachedFile>>,
+    loaded_once: AtomicBool,
 }
 
 impl InstructionLoader {
@@ -30,12 +32,14 @@ impl InstructionLoader {
         Self {
             project_path,
             cache: Mutex::new(HashMap::new()),
+            loaded_once: AtomicBool::new(false),
         }
     }
 
     /// Load all instruction layers, returning combined content.
     /// Returns None if no instruction files are found.
     pub fn load_all(&self) -> Option<String> {
+        self.loaded_once.store(true, Ordering::Relaxed);
         let mut parts = Vec::new();
 
         // 1. Ion-specific (~/.ion/AGENTS.md)
@@ -58,6 +62,25 @@ impl InstructionLoader {
         } else {
             Some(parts.join("\n\n---\n\n"))
         }
+    }
+
+    /// All candidate instruction file paths.
+    fn instruction_paths(&self) -> Vec<PathBuf> {
+        let mut paths = Vec::new();
+        if let Some(home) = dirs::home_dir() {
+            paths.push(home.join(".ion/AGENTS.md"));
+        }
+        let config_dir = std::env::var("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .ok()
+            .or_else(|| dirs::home_dir().map(|h| h.join(".config")));
+        if let Some(dir) = config_dir {
+            paths.push(dir.join("agents/AGENTS.md"));
+        }
+        for name in ["AGENTS.md", "CLAUDE.md"] {
+            paths.push(self.project_path.join(name));
+        }
+        paths
     }
 
     /// Load ion-specific instructions from ~/.ion/AGENTS.md
@@ -86,6 +109,34 @@ impl InstructionLoader {
             }
         }
         None
+    }
+
+    /// Check if any instruction file has changed since it was last cached.
+    /// Cheap: only stats files, doesn't read content.
+    pub fn is_stale(&self) -> bool {
+        // Not stale if load_all() hasn't been called yet (render cache
+        // will miss on its own for the first call).
+        if !self.loaded_once.load(Ordering::Relaxed) {
+            return false;
+        }
+        let cache = match self.cache.lock() {
+            Ok(c) => c,
+            Err(_) => return true,
+        };
+        // Check if cached files changed on disk
+        for (path, cached) in cache.iter() {
+            let current_mtime = fs::metadata(path).and_then(|m| m.modified()).ok();
+            if current_mtime != Some(cached.mtime) {
+                return true;
+            }
+        }
+        // Check if new instruction files appeared at uncached paths
+        for path in self.instruction_paths() {
+            if !cache.contains_key(&path) && path.exists() {
+                return true;
+            }
+        }
+        false
     }
 
     /// Load file with mtime-based caching.
@@ -195,5 +246,63 @@ mod tests {
         // load_project returns None when dir has no AGENTS.md or CLAUDE.md
         // (load_all may find global files in ~/.ion/ or ~/.config/agents/)
         assert!(loader.load_project().is_none());
+    }
+
+    #[test]
+    fn test_is_stale_before_load() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("AGENTS.md"), "content").unwrap();
+
+        let loader = InstructionLoader::new(dir.path().to_path_buf());
+        // Before load_all(), is_stale returns false (nothing loaded yet)
+        assert!(!loader.is_stale());
+    }
+
+    #[test]
+    fn test_is_stale_after_load_unchanged() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("AGENTS.md"), "content").unwrap();
+
+        let loader = InstructionLoader::new(dir.path().to_path_buf());
+        loader.load_all();
+        // File unchanged, should not be stale
+        assert!(!loader.is_stale());
+    }
+
+    #[test]
+    fn test_is_stale_after_file_modified() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("AGENTS.md");
+        fs::write(&path, "original").unwrap();
+
+        let loader = InstructionLoader::new(dir.path().to_path_buf());
+        loader.load_all();
+
+        // Modify file with new mtime
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        fs::write(&path, "modified").unwrap();
+
+        assert!(loader.is_stale());
+    }
+
+    #[test]
+    fn test_is_stale_no_files() {
+        let dir = TempDir::new().unwrap();
+        let loader = InstructionLoader::new(dir.path().to_path_buf());
+        loader.load_all(); // No files found
+        // Empty cache after load_all means no files to go stale
+        assert!(!loader.is_stale());
+    }
+
+    #[test]
+    fn test_is_stale_new_file_appears() {
+        let dir = TempDir::new().unwrap();
+        let loader = InstructionLoader::new(dir.path().to_path_buf());
+        loader.load_all(); // No files found
+        assert!(!loader.is_stale());
+
+        // Create AGENTS.md mid-session
+        fs::write(dir.path().join("AGENTS.md"), "new instructions").unwrap();
+        assert!(loader.is_stale());
     }
 }
