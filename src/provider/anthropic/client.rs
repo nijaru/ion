@@ -228,16 +228,10 @@ impl AnthropicClient {
             system_blocks.push(SystemBlock::text(sys.to_string()));
         }
 
-        // Only mark the last system block for caching. Anthropic caches everything
-        // from the start up to the last cache_control marker, so a single breakpoint
-        // on the final block covers all system content.
-        if let Some(last) = system_blocks.last_mut() {
-            last.cache_control = Some(CacheControl::ephemeral());
-        }
-
         // Convert tools and cache the last tool definition.
-        // Anthropic caches everything from start to the last cache_control marker,
-        // so system prompt + all tool definitions get cached together as one prefix.
+        // Anthropic caches in order: system -> tools -> messages. A breakpoint on
+        // the last tool creates a cache prefix covering system + all tools together.
+        // No separate system breakpoint needed (tools are always registered in ion).
         let mut tools: Option<Vec<AnthropicTool>> = if request.tools.is_empty() {
             None
         } else {
@@ -438,7 +432,8 @@ mod tests {
         assert!(api_request.system.is_some());
         let system = api_request.system.unwrap();
         assert_eq!(system.len(), 1);
-        assert!(system[0].cache_control.is_some()); // Should have cache_control
+        // No system breakpoint — tool breakpoint covers system content
+        assert!(system[0].cache_control.is_none());
     }
 
     #[test]
@@ -513,7 +508,7 @@ mod tests {
     }
 
     #[test]
-    fn test_only_last_system_block_cached() {
+    fn test_system_blocks_not_independently_cached() {
         let client = AnthropicClient::new("test-key");
         let request = ChatRequest {
             model: "claude-sonnet-4-20250514".to_string(),
@@ -541,8 +536,9 @@ mod tests {
         let api_request = client.build_request(&request, false);
         let system = api_request.system.unwrap();
         assert_eq!(system.len(), 2);
-        assert!(system[0].cache_control.is_none()); // First: no cache
-        assert!(system[1].cache_control.is_some()); // Last: cached
+        // No system breakpoints — tool breakpoint covers system content
+        assert!(system[0].cache_control.is_none());
+        assert!(system[1].cache_control.is_none());
     }
 
     #[test]

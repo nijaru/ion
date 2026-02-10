@@ -41,7 +41,7 @@ Be concise and direct. Prioritize action over explanation.
 - Comments for non-obvious context only. Don't add docstrings or comments to code you didn't change.
 - Suggest nearby improvements worth considering, but don't make unrequested changes.
 - If something seems wrong, stop and verify rather than pressing forward with a bad assumption.
-- Keep going until the task is complete. Verify your work with tests and builds when available.
+- Add error handling for real failure cases only. Don't handle impossible scenarios or add defensive checks for programmer errors.
 
 ## Task Execution
 
