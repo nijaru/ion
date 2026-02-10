@@ -37,7 +37,9 @@ pub enum ResponseBlock {
 #[derive(Debug, Clone, Deserialize, Default)]
 #[allow(clippy::struct_field_names)] // Field names match API response
 pub struct Usage {
+    #[serde(default)]
     pub input_tokens: u32,
+    #[serde(default)]
     pub output_tokens: u32,
     #[serde(default)]
     pub cache_creation_input_tokens: u32,
