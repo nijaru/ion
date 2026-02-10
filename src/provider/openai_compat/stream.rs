@@ -258,5 +258,36 @@ mod tests {
         let usage = chunk.usage.unwrap();
         assert_eq!(usage.prompt_tokens, 10);
         assert_eq!(usage.completion_tokens, 20);
+        assert!(usage.prompt_tokens_details.is_none());
+    }
+
+    #[test]
+    fn test_usage_with_cached_tokens() {
+        let json = r#"{
+            "id": "chatcmpl-123",
+            "object": "chat.completion.chunk",
+            "created": 1677652288,
+            "model": "gpt-4",
+            "choices": [{
+                "index": 0,
+                "delta": {},
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": 1000,
+                "completion_tokens": 200,
+                "total_tokens": 1200,
+                "prompt_tokens_details": {
+                    "cached_tokens": 800
+                }
+            }
+        }"#;
+
+        let chunk: StreamChunk = serde_json::from_str(json).unwrap();
+        let usage = chunk.usage.unwrap();
+        assert_eq!(usage.prompt_tokens, 1000);
+        assert_eq!(usage.completion_tokens, 200);
+        let details = usage.prompt_tokens_details.unwrap();
+        assert_eq!(details.cached_tokens, 800);
     }
 }
