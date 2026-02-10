@@ -5,6 +5,7 @@ use crate::skill::Skill;
 use minijinja::{Environment, context};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::Mutex;
 
 pub struct ContextManager {
@@ -14,7 +15,7 @@ pub struct ContextManager {
     active_skill: Arc<Mutex<Option<Skill>>>,
     render_cache: Mutex<Option<RenderCache>>,
     working_dir: Option<PathBuf>,
-    has_mcp_tools: std::sync::atomic::AtomicBool,
+    has_mcp_tools: AtomicBool,
 }
 
 #[derive(Clone)]
@@ -22,6 +23,7 @@ struct RenderCache {
     rendered: String,
     plan: Option<Plan>,
     skill: Option<Skill>,
+    has_mcp_tools: bool,
 }
 
 pub struct ContextAssembly {
@@ -80,7 +82,7 @@ impl ContextManager {
             active_skill: Arc::new(Mutex::new(None)),
             render_cache: Mutex::new(None),
             working_dir: None,
-            has_mcp_tools: std::sync::atomic::AtomicBool::new(false),
+            has_mcp_tools: AtomicBool::new(false),
         }
     }
 
@@ -100,12 +102,7 @@ impl ContextManager {
 
     /// Set whether MCP tools are available (enables MCP guidance in system prompt).
     pub fn set_has_mcp_tools(&self, val: bool) {
-        self.has_mcp_tools
-            .store(val, std::sync::atomic::Ordering::Relaxed);
-        // Invalidate cache so prompt re-renders with MCP section
-        if let Ok(mut cache) = self.render_cache.try_lock() {
-            *cache = None;
-        }
+        self.has_mcp_tools.store(val, Ordering::Relaxed);
     }
 
     pub async fn set_active_skill(&self, skill: Option<Skill>) {
@@ -116,11 +113,13 @@ impl ContextManager {
     /// Get just the system prompt (cached), without assembling messages.
     pub async fn get_system_prompt(&self, plan: Option<&Plan>) -> String {
         let active_skill = self.active_skill.lock().await;
+        let mcp = self.has_mcp_tools.load(Ordering::Relaxed);
 
         let mut cache = self.render_cache.lock().await;
         if let Some(ref c) = *cache
             && c.plan.as_ref() == plan
             && c.skill.as_ref() == active_skill.as_ref()
+            && c.has_mcp_tools == mcp
         {
             return c.rendered.clone();
         }
@@ -133,6 +132,7 @@ impl ContextManager {
             rendered: rendered.clone(),
             plan: plan.cloned(),
             skill,
+            has_mcp_tools: mcp,
         });
         rendered
     }
@@ -145,11 +145,15 @@ impl ContextManager {
         plan: Option<&Plan>,
     ) -> ContextAssembly {
         let active_skill = self.active_skill.lock().await;
+        let mcp = self.has_mcp_tools.load(Ordering::Relaxed);
 
         // Check cache - compare by reference to avoid clone
         let mut cache = self.render_cache.lock().await;
         let (system_prompt, need_cache_update) = if let Some(ref c) = *cache {
-            if c.plan.as_ref() == plan && c.skill.as_ref() == active_skill.as_ref() {
+            if c.plan.as_ref() == plan
+                && c.skill.as_ref() == active_skill.as_ref()
+                && c.has_mcp_tools == mcp
+            {
                 (c.rendered.clone(), false)
             } else {
                 let skill = active_skill.clone();
@@ -170,6 +174,7 @@ impl ContextManager {
                 rendered: system_prompt.clone(),
                 plan: plan.cloned(),
                 skill,
+                has_mcp_tools: mcp,
             });
         }
 
@@ -213,7 +218,7 @@ impl ContextManager {
 
         let has_mcp_tools = self
             .has_mcp_tools
-            .load(std::sync::atomic::Ordering::Relaxed);
+            .load(Ordering::Relaxed);
 
         template
             .render(context! {
