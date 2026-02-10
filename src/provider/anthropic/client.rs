@@ -122,14 +122,13 @@ impl AnthropicClient {
         let mut system_blocks = Vec::new();
         let mut messages = Vec::new();
 
-        // Extract system messages and build system blocks with cache control
+        // Extract system messages and build system blocks (cache applied to last only)
         for msg in request.messages.iter() {
             match msg.role {
                 Role::System => {
                     for block in msg.content.iter() {
                         if let IonContentBlock::Text { text } = block {
-                            // Mark system prompts for caching
-                            system_blocks.push(SystemBlock::text(text.clone()).with_cache());
+                            system_blocks.push(SystemBlock::text(text.clone()));
                         }
                     }
                 }
@@ -149,6 +148,7 @@ impl AnthropicClient {
                                         media_type: media_type.clone(),
                                         data: data.clone(),
                                     },
+                                    cache_control: None,
                                 })
                             }
                             _ => None,
@@ -225,7 +225,14 @@ impl AnthropicClient {
 
         // Also include explicit system prompt if provided
         if let Some(ref sys) = request.system {
-            system_blocks.push(SystemBlock::text(sys.to_string()).with_cache());
+            system_blocks.push(SystemBlock::text(sys.to_string()));
+        }
+
+        // Only mark the last system block for caching. Anthropic caches everything
+        // from the start up to the last cache_control marker, so a single breakpoint
+        // on the final block covers all system content.
+        if let Some(last) = system_blocks.last_mut() {
+            last.cache_control = Some(CacheControl::ephemeral());
         }
 
         // Convert tools and cache the last tool definition.
@@ -242,21 +249,33 @@ impl AnthropicClient {
             last.cache_control = Some(CacheControl::ephemeral());
         }
 
-        // Place a cache breakpoint on the second-to-last user message.
+        // Place a cache breakpoint on the second-to-last real user message
+        // (skip tool result messages which also have role "user").
         // This caches the conversation prefix from prior turns so only the
         // current turn is billed at full input rate.
-        let mut user_msg_count = 0;
+        let mut user_turn_count = 0;
         for msg in messages.iter_mut().rev() {
-            if msg.role == "user" {
-                user_msg_count += 1;
-                if user_msg_count == 2 {
-                    if let Some(ContentBlock::Text { cache_control, .. }) =
-                        msg.content.last_mut()
-                    {
-                        *cache_control = Some(CacheControl::ephemeral());
-                    }
-                    break;
+            if msg.role != "user" {
+                continue;
+            }
+            // Real user messages contain Text/Image; tool results contain only ToolResult
+            let is_user_content = msg
+                .content
+                .iter()
+                .any(|b| matches!(b, ContentBlock::Text { .. } | ContentBlock::Image { .. }));
+            if !is_user_content {
+                continue;
+            }
+            user_turn_count += 1;
+            if user_turn_count == 2 {
+                if let Some(
+                    ContentBlock::Text { cache_control, .. }
+                    | ContentBlock::Image { cache_control, .. },
+                ) = msg.content.last_mut()
+                {
+                    *cache_control = Some(CacheControl::ephemeral());
                 }
+                break;
             }
         }
 
@@ -458,6 +477,176 @@ mod tests {
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0].name, "read_file");
         assert!(api_request.stream);
+    }
+
+    fn make_tool(name: &str) -> ToolDefinition {
+        ToolDefinition {
+            name: name.to_string(),
+            description: format!("{name} tool"),
+            parameters: serde_json::json!({"type": "object", "properties": {}}),
+        }
+    }
+
+    #[test]
+    fn test_last_tool_has_cache_control() {
+        let client = AnthropicClient::new("test-key");
+        let request = ChatRequest {
+            model: "claude-sonnet-4-20250514".to_string(),
+            messages: Arc::new(vec![Message {
+                role: Role::User,
+                content: Arc::new(vec![IonContentBlock::Text {
+                    text: "Hi".to_string(),
+                }]),
+            }]),
+            system: None,
+            tools: Arc::new(vec![make_tool("read"), make_tool("write"), make_tool("bash")]),
+            max_tokens: None,
+            temperature: None,
+            thinking: None,
+        };
+
+        let api_request = client.build_request(&request, false);
+        let tools = api_request.tools.unwrap();
+        assert!(tools[0].cache_control.is_none());
+        assert!(tools[1].cache_control.is_none());
+        assert!(tools[2].cache_control.is_some()); // Only last tool cached
+    }
+
+    #[test]
+    fn test_only_last_system_block_cached() {
+        let client = AnthropicClient::new("test-key");
+        let request = ChatRequest {
+            model: "claude-sonnet-4-20250514".to_string(),
+            messages: Arc::new(vec![
+                Message {
+                    role: Role::System,
+                    content: Arc::new(vec![IonContentBlock::Text {
+                        text: "System block 1".to_string(),
+                    }]),
+                },
+                Message {
+                    role: Role::User,
+                    content: Arc::new(vec![IonContentBlock::Text {
+                        text: "Hi".to_string(),
+                    }]),
+                },
+            ]),
+            system: Some("System block 2".into()),
+            tools: Arc::new(vec![]),
+            max_tokens: None,
+            temperature: None,
+            thinking: None,
+        };
+
+        let api_request = client.build_request(&request, false);
+        let system = api_request.system.unwrap();
+        assert_eq!(system.len(), 2);
+        assert!(system[0].cache_control.is_none()); // First: no cache
+        assert!(system[1].cache_control.is_some()); // Last: cached
+    }
+
+    #[test]
+    fn test_history_cache_skips_tool_results() {
+        let client = AnthropicClient::new("test-key");
+        let request = ChatRequest {
+            model: "claude-sonnet-4-20250514".to_string(),
+            messages: Arc::new(vec![
+                Message {
+                    role: Role::User,
+                    content: Arc::new(vec![IonContentBlock::Text {
+                        text: "First question".to_string(),
+                    }]),
+                },
+                Message {
+                    role: Role::Assistant,
+                    content: Arc::new(vec![IonContentBlock::ToolCall {
+                        id: "call_1".to_string(),
+                        name: "bash".to_string(),
+                        arguments: serde_json::json!({"command": "ls"}),
+                    }]),
+                },
+                Message {
+                    role: Role::ToolResult,
+                    content: Arc::new(vec![IonContentBlock::ToolResult {
+                        tool_call_id: "call_1".to_string(),
+                        content: "file.txt".to_string(),
+                        is_error: false,
+                    }]),
+                },
+                Message {
+                    role: Role::Assistant,
+                    content: Arc::new(vec![IonContentBlock::Text {
+                        text: "Found file.txt".to_string(),
+                    }]),
+                },
+                Message {
+                    role: Role::User,
+                    content: Arc::new(vec![IonContentBlock::Text {
+                        text: "Second question".to_string(),
+                    }]),
+                },
+            ]),
+            system: None,
+            tools: Arc::new(vec![]),
+            max_tokens: None,
+            temperature: None,
+            thinking: None,
+        };
+
+        let api_request = client.build_request(&request, false);
+
+        // messages[0] = "First question" (user) -- should get cache breakpoint
+        // messages[1] = tool call (assistant)
+        // messages[2] = tool result (user role but NOT a real user message)
+        // messages[3] = "Found file.txt" (assistant)
+        // messages[4] = "Second question" (user) -- most recent, no cache
+
+        // First user message should have cache_control (second-to-last real user turn)
+        if let ContentBlock::Text { cache_control, .. } = &api_request.messages[0].content[0] {
+            assert!(cache_control.is_some(), "First user message should be cached");
+        } else {
+            panic!("Expected Text block");
+        }
+
+        // Tool result message should NOT have cache_control
+        if let ContentBlock::ToolResult { .. } = &api_request.messages[2].content[0] {
+            // ToolResult doesn't have cache_control field, so this is fine
+        } else {
+            panic!("Expected ToolResult block");
+        }
+
+        // Latest user message should NOT have cache_control
+        if let ContentBlock::Text { cache_control, .. } = &api_request.messages[4].content[0] {
+            assert!(cache_control.is_none(), "Latest user message should not be cached");
+        } else {
+            panic!("Expected Text block");
+        }
+    }
+
+    #[test]
+    fn test_single_user_message_no_history_cache() {
+        let client = AnthropicClient::new("test-key");
+        let request = ChatRequest {
+            model: "claude-sonnet-4-20250514".to_string(),
+            messages: Arc::new(vec![Message {
+                role: Role::User,
+                content: Arc::new(vec![IonContentBlock::Text {
+                    text: "Hello".to_string(),
+                }]),
+            }]),
+            system: None,
+            tools: Arc::new(vec![]),
+            max_tokens: None,
+            temperature: None,
+            thinking: None,
+        };
+
+        let api_request = client.build_request(&request, false);
+
+        // Only one user message -- no history cache breakpoint
+        if let ContentBlock::Text { cache_control, .. } = &api_request.messages[0].content[0] {
+            assert!(cache_control.is_none());
+        }
     }
 
     #[test]

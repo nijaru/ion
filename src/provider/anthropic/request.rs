@@ -37,12 +37,6 @@ impl SystemBlock {
             cache_control: None,
         }
     }
-
-    /// Add ephemeral cache control to this block.
-    pub fn with_cache(mut self) -> Self {
-        self.cache_control = Some(CacheControl::ephemeral());
-        self
-    }
 }
 
 /// Cache control configuration.
@@ -92,7 +86,11 @@ pub enum ContentBlock {
         is_error: bool,
     },
     #[serde(rename = "image")]
-    Image { source: ImageSource },
+    Image {
+        source: ImageSource,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cache_control: Option<CacheControl>,
+    },
 }
 
 /// Image source for vision requests.
@@ -134,7 +132,8 @@ mod tests {
 
     #[test]
     fn test_system_block_serialization() {
-        let block = SystemBlock::text("You are helpful").with_cache();
+        let mut block = SystemBlock::text("You are helpful");
+        block.cache_control = Some(CacheControl::ephemeral());
         let json = serde_json::to_string(&block).unwrap();
         assert!(json.contains("\"type\":\"text\""));
         assert!(json.contains("\"cache_control\""));
@@ -181,7 +180,11 @@ mod tests {
         let request = AnthropicRequest {
             model: "claude-sonnet-4-20250514".to_string(),
             max_tokens: 1024,
-            system: Some(vec![SystemBlock::text("Be helpful").with_cache()]),
+            system: Some(vec![{
+                let mut b = SystemBlock::text("Be helpful");
+                b.cache_control = Some(CacheControl::ephemeral());
+                b
+            }]),
             messages: vec![AnthropicMessage {
                 role: "user".to_string(),
                 content: vec![ContentBlock::Text {
