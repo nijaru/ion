@@ -228,10 +228,10 @@ impl AnthropicClient {
             system_blocks.push(SystemBlock::text(sys.to_string()));
         }
 
-        // Convert tools and cache the last tool definition.
+        // Convert tools and place a cache breakpoint.
         // Anthropic caches in order: system -> tools -> messages. A breakpoint on
         // the last tool creates a cache prefix covering system + all tools together.
-        // No separate system breakpoint needed (tools are always registered in ion).
+        // When no tools are present, fall back to caching the last system block.
         let mut tools: Option<Vec<AnthropicTool>> = if request.tools.is_empty() {
             None
         } else {
@@ -240,6 +240,8 @@ impl AnthropicClient {
         if let Some(ref mut tool_vec) = tools
             && let Some(last) = tool_vec.last_mut()
         {
+            last.cache_control = Some(CacheControl::ephemeral());
+        } else if let Some(last) = system_blocks.last_mut() {
             last.cache_control = Some(CacheControl::ephemeral());
         }
 
@@ -432,8 +434,8 @@ mod tests {
         assert!(api_request.system.is_some());
         let system = api_request.system.unwrap();
         assert_eq!(system.len(), 1);
-        // No system breakpoint — tool breakpoint covers system content
-        assert!(system[0].cache_control.is_none());
+        // No tools -> system block gets the cache breakpoint
+        assert!(system[0].cache_control.is_some());
     }
 
     #[test]
@@ -508,7 +510,7 @@ mod tests {
     }
 
     #[test]
-    fn test_system_blocks_not_independently_cached() {
+    fn test_system_cache_fallback_without_tools() {
         let client = AnthropicClient::new("test-key");
         let request = ChatRequest {
             model: "claude-sonnet-4-20250514".to_string(),
@@ -536,9 +538,43 @@ mod tests {
         let api_request = client.build_request(&request, false);
         let system = api_request.system.unwrap();
         assert_eq!(system.len(), 2);
-        // No system breakpoints — tool breakpoint covers system content
+        // No tools -> last system block gets the cache breakpoint
         assert!(system[0].cache_control.is_none());
-        assert!(system[1].cache_control.is_none());
+        assert!(system[1].cache_control.is_some());
+    }
+
+    #[test]
+    fn test_tool_breakpoint_covers_system() {
+        let client = AnthropicClient::new("test-key");
+        let request = ChatRequest {
+            model: "claude-sonnet-4-20250514".to_string(),
+            messages: Arc::new(vec![
+                Message {
+                    role: Role::System,
+                    content: Arc::new(vec![IonContentBlock::Text {
+                        text: "System prompt".to_string(),
+                    }]),
+                },
+                Message {
+                    role: Role::User,
+                    content: Arc::new(vec![IonContentBlock::Text {
+                        text: "Hi".to_string(),
+                    }]),
+                },
+            ]),
+            system: None,
+            tools: Arc::new(vec![make_tool("bash")]),
+            max_tokens: None,
+            temperature: None,
+            thinking: None,
+        };
+
+        let api_request = client.build_request(&request, false);
+        let system = api_request.system.unwrap();
+        // Tool breakpoint covers system, so no system breakpoint needed
+        assert!(system[0].cache_control.is_none());
+        // Tool has the breakpoint
+        assert!(api_request.tools.unwrap()[0].cache_control.is_some());
     }
 
     #[test]
