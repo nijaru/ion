@@ -177,6 +177,9 @@ pub struct RenderState {
     /// Row to clear from when leaving selector mode.
     /// Captured before mode switch so stale selector rows are removed safely.
     pub selector_clear_from: Option<u16>,
+    /// Last top row where selector UI was rendered.
+    /// Used as fallback when position state cannot provide a prior UI top.
+    pub last_selector_top: Option<u16>,
 
     /// Force a render on the first frame after session load or /clear.
     pub needs_initial_render: bool,
@@ -194,6 +197,7 @@ impl RenderState {
             needs_reflow: false,
             needs_selector_clear: false,
             selector_clear_from: None,
+            last_selector_top: None,
             needs_initial_render: false,
         }
     }
@@ -208,6 +212,7 @@ impl RenderState {
         self.buffered_chat_lines.clear();
         self.streaming_lines_rendered = 0;
         self.selector_clear_from = None;
+        self.last_selector_top = None;
         self.needs_initial_render = true;
     }
 
@@ -221,12 +226,19 @@ impl RenderState {
         self.buffered_chat_lines.clear();
         self.streaming_lines_rendered = 0;
         self.selector_clear_from = None;
+        self.last_selector_top = None;
         self.needs_initial_render = true;
+    }
+
+    /// Record where selector UI was last rendered.
+    pub fn note_selector_top(&mut self, row: u16) {
+        self.last_selector_top = Some(row);
     }
 
     /// Queue selector-area clearing from a captured row.
     pub fn queue_selector_clear(&mut self, from_row: Option<u16>) {
-        self.selector_clear_from = from_row;
+        self.selector_clear_from = from_row.or(self.last_selector_top);
+        self.last_selector_top = None;
         self.needs_selector_clear = true;
     }
 
@@ -234,6 +246,7 @@ impl RenderState {
     pub fn cancel_selector_clear(&mut self) {
         self.needs_selector_clear = false;
         self.selector_clear_from = None;
+        self.last_selector_top = None;
     }
 
     /// Resolve and consume pending selector clear row.
@@ -368,6 +381,7 @@ mod tests {
         state.buffered_chat_lines.push(StyledLine::raw("buffered"));
         state.streaming_lines_rendered = 3;
         state.selector_clear_from = Some(5);
+        state.last_selector_top = Some(9);
         state.needs_initial_render = false;
 
         state.reset_for_session_load();
@@ -383,23 +397,29 @@ mod tests {
         assert!(state.buffered_chat_lines.is_empty());
         assert_eq!(state.streaming_lines_rendered, 0);
         assert_eq!(state.selector_clear_from, None);
+        assert_eq!(state.last_selector_top, None);
         assert!(state.needs_initial_render);
     }
 
     #[test]
     fn selector_clear_queue_take_cancel() {
         let mut state = RenderState::new();
+        state.note_selector_top(7);
         state.queue_selector_clear(Some(9));
         assert!(state.needs_selector_clear);
         assert_eq!(state.selector_clear_from, Some(9));
+        assert_eq!(state.last_selector_top, None);
         assert_eq!(state.take_selector_clear_from(20), 9);
         assert_eq!(state.selector_clear_from, None);
 
+        state.note_selector_top(8);
         state.queue_selector_clear(None);
-        assert_eq!(state.take_selector_clear_from(20), 20);
+        assert_eq!(state.selector_clear_from, Some(8));
+        assert_eq!(state.take_selector_clear_from(20), 8);
         state.cancel_selector_clear();
         assert!(!state.needs_selector_clear);
         assert_eq!(state.selector_clear_from, None);
+        assert_eq!(state.last_selector_top, None);
     }
 
     #[test]

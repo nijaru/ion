@@ -18,6 +18,9 @@ impl App {
         w: &mut W,
         layout: &UiLayout,
     ) -> std::io::Result<()> {
+        if self.mode == Mode::Selector {
+            self.render_state.note_selector_top(layout.top);
+        }
         self.render_state.position.set_ui_drawn_at(layout.top);
 
         // Clear from UI position downward (never clear full screen - preserves scrollback)

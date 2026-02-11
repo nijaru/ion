@@ -87,10 +87,14 @@
     {
       "ts": "2026-02-11T06:02:45.528Z",
       "msg": "Implemented selector-clear source fix for Header/Empty edge cases: added RenderState.selector_clear_from queue/cancel/take methods, captured selector top on exit_selector_mode(), and changed run.rs PreOp::ClearSelectorArea to clear from captured row instead of recomputed input layout top. This prevents stale selector rows above UI when selector height shrinks while avoiding chat-area over-clear. Added unit test selector_clear_queue_take_cancel. cargo test -q: 437 passed."
+    },
+    {
+      "ts": "2026-02-11T06:04:06.433Z",
+      "msg": "Follow-up hardening: tracked last selector render top in RenderState (note_selector_top called from draw_direct in selector mode) and queue_selector_clear now falls back to that top when position.last_ui_top is unavailable (Header/Empty). This closes the remaining pre-message selector-clear gap identified in prior note. cargo test -q still 437 passed."
     }
   ],
   "created_at": "2026-02-11T01:13:44.111Z",
-  "updated_at": "2026-02-11T06:02:45.528Z",
+  "updated_at": "2026-02-11T06:04:06.433Z",
   "completed_at": null,
   "external": {}
 }
