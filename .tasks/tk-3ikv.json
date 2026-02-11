@@ -1,0 +1,24 @@
+{
+  "project": "tk",
+  "ref": "3ikv",
+  "title": "[P1] Harden cancellation classification in TUI update flow",
+  "description": "Detect cancellation reliably from agent/tool error strings to avoid false error states when user cancels tasks.",
+  "status": "done",
+  "priority": 2,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [
+    {
+      "ts": "2026-02-11T06:27:15.923Z",
+      "msg": "Hardened cancellation classification in src/tui/session/update.rs: replaced exact 'Cancelled' substring check with case-insensitive detection for canceled/cancelled variants, preventing false error-state display after user/tool cancellation. Added unit test coverage. cargo test -q now 444 passing."
+    }
+  ],
+  "created_at": "2026-02-11T06:26:47.017Z",
+  "updated_at": "2026-02-11T06:27:29.103Z",
+  "completed_at": "2026-02-11T06:27:29.103Z",
+  "external": {}
+}
