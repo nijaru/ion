@@ -37,6 +37,12 @@ Detailed research in `ai/research/*-2026-02.md` (5 files).
 - `/clear` now clears viewport without `ScrollUp(term_height)` blank-row artifacts
 - `ChatPosition::Empty` now tracks content until real overflow (no implicit bottom-pinned insert)
 
+## Session Focus (2026-02-11 PM)
+
+- Planned dogfood-readiness work in Sprint 16-18
+- Added source spec: `ai/design/dogfood-readiness-2026-02.md`
+- Set Sprint 16 active with lean testing constraints (unit checks + manual visual checklist, no heavy harness)
+
 ## Session Summary (2026-02-09)
 
 **Non-streaming complete() usage tracking (72eede9):**
