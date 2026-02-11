@@ -51,6 +51,8 @@ fn restore_queued_input(app: &mut App) {
     let existing = app.input_buffer.get_content();
     if let Some(merged) = merged_input_with_queued(&existing, &queued) {
         app.set_input_text(&merged);
+        app.history_index = app.input_history.len();
+        app.history_draft = None;
     }
 }
 
