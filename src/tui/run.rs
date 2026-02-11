@@ -624,6 +624,9 @@ pub async fn run(permissions: PermissionSettings, resume_option: ResumeOption) -
         if excess > 0 {
             execute!(stdout, crossterm::terminal::ScrollUp(excess))?;
         }
+        // Resume should behave like normal terminal scrollback: keep the bottom UI locked,
+        // and avoid re-anchoring UI to top/header when history is short.
+        app.render_state.position = ChatPosition::Scrolling { ui_drawn_at: None };
         execute!(stdout, EndSynchronizedUpdate)?;
         stdout.flush()?;
     }
