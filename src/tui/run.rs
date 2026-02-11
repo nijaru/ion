@@ -95,6 +95,28 @@ fn rendered_entry_count(app: &App) -> usize {
     end
 }
 
+fn scroll_up_and_home(stdout: &mut io::Stdout, amount: u16) -> io::Result<()> {
+    execute!(stdout, crossterm::terminal::ScrollUp(amount), MoveTo(0, 0))
+}
+
+fn write_lines(stdout: &mut io::Stdout, lines: &[StyledLine]) -> io::Result<()> {
+    for line in lines {
+        line.writeln(stdout)?;
+    }
+    Ok(())
+}
+
+#[allow(clippy::cast_possible_truncation)]
+fn write_lines_at(stdout: &mut io::Stdout, start_row: u16, lines: &[StyledLine]) -> io::Result<u16> {
+    let mut row = start_row;
+    for line in lines {
+        execute!(stdout, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
+        line.writeln(stdout)?;
+        row = row.saturating_add(1);
+    }
+    Ok(row)
+}
+
 // ---------------------------------------------------------------------------
 // Frame pipeline functions
 // ---------------------------------------------------------------------------
@@ -293,25 +315,15 @@ fn render_frame(
                 if *full_clear {
                     execute!(stdout, MoveTo(0, 0), Clear(ClearType::All), MoveTo(0, 0))?;
                 } else {
-                    execute!(
-                        stdout,
-                        crossterm::terminal::ScrollUp(*scroll_amount),
-                        MoveTo(0, 0)
-                    )?;
+                    scroll_up_and_home(stdout, *scroll_amount)?;
                 }
             }
             PreOp::Reflow {
                 lines,
                 scroll_amount,
             } => {
-                execute!(
-                    stdout,
-                    crossterm::terminal::ScrollUp(*scroll_amount),
-                    MoveTo(0, 0)
-                )?;
-                for line in lines {
-                    line.writeln(stdout)?;
-                }
+                scroll_up_and_home(stdout, *scroll_amount)?;
+                write_lines(stdout, lines)?;
                 let ui_height = layout.height();
                 let excess = app.render_state.position_after_reprint(
                     lines.len(),
@@ -328,9 +340,7 @@ fn render_frame(
                 execute!(stdout, MoveTo(0, *from_row), Clear(ClearType::FromCursorDown))?;
             }
             PreOp::PrintHeader(lines) => {
-                for line in lines {
-                    line.writeln(stdout)?;
-                }
+                write_lines(stdout, lines)?;
                 if let Ok((_x, y)) = crossterm::cursor::position() {
                     app.render_state.position = ChatPosition::Header { anchor: y };
                 }
@@ -345,17 +355,7 @@ fn render_frame(
     if let Some(insert) = chat_insert {
         match insert {
             ChatInsert::AtRow { start_row, lines } => {
-                for (i, line) in lines.iter().enumerate() {
-                    #[allow(clippy::cast_possible_truncation)]
-                    execute!(
-                        stdout,
-                        MoveTo(0, start_row.saturating_add(i as u16)),
-                        Clear(ClearType::CurrentLine)
-                    )?;
-                    line.writeln(stdout)?;
-                }
-                #[allow(clippy::cast_possible_truncation)]
-                let new_row = start_row.saturating_add(lines.len() as u16);
+                let new_row = write_lines_at(stdout, start_row, &lines)?;
                 // Don't set ui_drawn_at here — draw_direct does that after
                 // recomputing layout with the updated next_row.
                 app.render_state.position = ChatPosition::Tracking {
@@ -375,15 +375,7 @@ fn render_frame(
                     Clear(ClearType::FromCursorDown)
                 )?;
                 execute!(stdout, crossterm::terminal::ScrollUp(scroll_amount))?;
-                for (i, line) in lines.iter().enumerate() {
-                    #[allow(clippy::cast_possible_truncation)]
-                    execute!(
-                        stdout,
-                        MoveTo(0, print_row.saturating_add(i as u16)),
-                        Clear(ClearType::CurrentLine)
-                    )?;
-                    line.writeln(stdout)?;
-                }
+                write_lines_at(stdout, print_row, &lines)?;
                 app.render_state.position = ChatPosition::Scrolling { ui_drawn_at: None };
             }
             ChatInsert::ScrollInsert {
@@ -398,12 +390,7 @@ fn render_frame(
                     Clear(ClearType::FromCursorDown)
                 )?;
                 execute!(stdout, crossterm::terminal::ScrollUp(scroll_amount))?;
-                let mut row = print_row;
-                for line in &lines {
-                    execute!(stdout, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
-                    line.writeln(stdout)?;
-                    row = row.saturating_add(1);
-                }
+                write_lines_at(stdout, print_row, &lines)?;
                 app.render_state.position = ChatPosition::Scrolling { ui_drawn_at: None };
             }
         }
@@ -435,20 +422,14 @@ fn reprint_loaded_session(
         .map(|(_, y)| y.saturating_add(1))
         .unwrap_or(term_height);
     execute!(stdout, BeginSynchronizedUpdate)?;
-    execute!(
-        stdout,
-        crossterm::terminal::ScrollUp(scroll_amount),
-        MoveTo(0, 0)
-    )?;
+    scroll_up_and_home(stdout, scroll_amount)?;
     let layout = app.compute_layout(term_width, term_height);
     let ui_height = layout.height();
     let lines = app.build_chat_lines(term_width);
     let line_count = lines.len();
 
     execute!(stdout, MoveTo(0, 0))?;
-    for line in &lines {
-        line.writeln(stdout)?;
-    }
+    write_lines(stdout, &lines)?;
 
     let excess = app
         .render_state
