@@ -15,6 +15,11 @@ fn clears_retry_status(event: &AgentEvent) -> bool {
     )
 }
 
+fn is_cancelled_error(msg: &str) -> bool {
+    let lower = msg.to_ascii_lowercase();
+    lower.contains("cancelled") || lower.contains("canceled")
+}
+
 fn drain_queued_messages(queue: Option<&Arc<Mutex<Vec<String>>>>) -> Vec<String> {
     let Some(queue) = queue else {
         return Vec::new();
@@ -101,7 +106,7 @@ impl App {
                 }
                 AgentEvent::Error(msg) => {
                     // Check if this was a cancellation
-                    let was_cancelled = msg.contains("Cancelled");
+                    let was_cancelled = is_cancelled_error(msg);
                     self.save_task_summary(was_cancelled);
                     self.is_running = false;
                     self.interaction.cancel_pending = None;
@@ -270,7 +275,9 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::{clears_retry_status, drain_queued_messages, merged_input_with_queued};
+    use super::{
+        clears_retry_status, drain_queued_messages, is_cancelled_error, merged_input_with_queued,
+    };
     use crate::agent::AgentEvent;
     use std::sync::{Arc, Mutex};
 
@@ -318,5 +325,13 @@ mod tests {
             Some("draft\n\nnext\n\nlater".to_string())
         );
         assert_eq!(merged_input_with_queued("draft", &[]), None);
+    }
+
+    #[test]
+    fn cancel_error_detection_handles_common_variants() {
+        assert!(is_cancelled_error("Cancelled"));
+        assert!(is_cancelled_error("Tool task cancelled"));
+        assert!(is_cancelled_error("request was CANCELED by user"));
+        assert!(!is_cancelled_error("validation error"));
     }
 }
