@@ -1,0 +1,32 @@
+{
+  "project": "tk",
+  "ref": "sa89",
+  "title": "Plan TUI v3 architecture and sprint breakdown",
+  "description": "Create a full refactor plan for TUI structure emphasizing correctness, performance, and developer-facing API ergonomics; output design doc + sprint files + updated SPRINTS index.",
+  "status": "done",
+  "priority": 2,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [
+    {
+      "ts": "2026-02-11T07:30:53.634Z",
+      "msg": "Created TUI v3 architecture spec at ai/design/tui-v3-architecture-2026-02.md with invariants, frame pipeline, performance targets, and phased migration."
+    },
+    {
+      "ts": "2026-02-11T07:30:53.676Z",
+      "msg": "Added sprint execution plan: ai/sprints/19-tui-render-core.md, 20-tui-component-apis.md, 21-tui-frame-planner-and-reflow.md, 22-tui-perf-and-regression-gates.md; updated ai/SPRINTS.md index."
+    },
+    {
+      "ts": "2026-02-11T07:30:53.715Z",
+      "msg": "Review pass: ensured each sprint has demo goal, explicit dependencies, acceptance criteria, and atomic task granularity; split broad tasks in sprints 19 and 20."
+    }
+  ],
+  "created_at": "2026-02-11T07:26:05.349Z",
+  "updated_at": "2026-02-11T07:31:11.734Z",
+  "completed_at": "2026-02-11T07:31:11.734Z",
+  "external": {}
+}

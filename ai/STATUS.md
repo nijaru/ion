@@ -23,6 +23,7 @@
 ## Recent Work
 
 - Planned dogfood-readiness roadmap and sprints 16-18 from `ai/design/dogfood-readiness-2026-02.md`.
+- Drafted TUI v3 architecture program in `ai/design/tui-v3-architecture-2026-02.md` and created execution sprints 19-22 (`ai/sprints/19-tui-render-core.md` through `ai/sprints/22-tui-perf-and-regression-gates.md`).
 - Landed source-level TUI render-state fixes across `src/tui/run.rs`, `src/tui/events.rs`, and `src/tui/render_state.rs`.
 - Added lean transition regression coverage; suite now at 444 passing tests.
 - Startup `--continue` redraw now uses full-viewport clear (`Clear(All)+MoveTo(0,0)`) instead of `ScrollUp(cursor_y+1)`, removing a source of phantom blank-row insertion.
@@ -36,7 +37,8 @@
 1. Run manual TUI checklist: `ai/review/tui-manual-checklist-2026-02.md`.
 2. Validate Ghostty regressions specifically: narrow resize wrap integrity, no redraw duplication, Shift+Enter grow/shrink preserving history, paste placeholder numbering behavior.
 3. Fix any remaining resize/selector edge cases found during manual verification.
-4. Close `tk-86lk` if checklist passes, then move Sprint 17 to `active`.
+4. Decide whether to execute sprint 19 immediately (TUI render core refactor) or finish sprint-16 closure work first.
+5. Close `tk-86lk` if checklist passes, then move Sprint 17 to `active` unless reprioritizing to sprint 19.
 
 ## Key References
 
@@ -44,6 +46,8 @@
 | --- | --- |
 | Sprint index | `ai/SPRINTS.md` |
 | Sprint 16 tasks | `ai/sprints/16-dogfood-tui-stability.md` |
+| TUI v3 architecture plan | `ai/design/tui-v3-architecture-2026-02.md` |
+| TUI v3 sprint execution | `ai/sprints/19-tui-render-core.md` |
 | Manual TUI checklist | `ai/review/tui-manual-checklist-2026-02.md` |
 | Dogfood readiness design | `ai/design/dogfood-readiness-2026-02.md` |
 | Permissions architecture | `ai/design/permissions-v2.md` |
