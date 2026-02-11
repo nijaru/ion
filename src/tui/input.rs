@@ -217,14 +217,17 @@ impl App {
         // When running with empty input, recall queued messages
         if self.is_running && input_empty {
             let queued = self.message_queue.as_ref().and_then(|queue| {
-                if let Ok(mut q) = queue.lock() {
-                    if q.is_empty() {
-                        None
-                    } else {
-                        Some(q.drain(..).collect::<Vec<_>>())
+                let mut q = match queue.lock() {
+                    Ok(q) => q,
+                    Err(poisoned) => {
+                        tracing::warn!("Message queue lock poisoned during recall; recovering");
+                        poisoned.into_inner()
                     }
-                } else {
+                };
+                if q.is_empty() {
                     None
+                } else {
+                    Some(q.drain(..).collect::<Vec<_>>())
                 }
             });
 

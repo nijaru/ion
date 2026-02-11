@@ -4,14 +4,49 @@ use crate::agent::AgentEvent;
 use crate::tui::App;
 use crate::tui::types::{CANCEL_WINDOW, Mode, SelectorPage};
 use crate::tui::util::format_status_error;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
-use tracing::debug;
+use tracing::{debug, warn};
 
 fn clears_retry_status(event: &AgentEvent) -> bool {
     matches!(
         event,
         AgentEvent::ToolCallStart(..) | AgentEvent::ThinkingDelta(_) | AgentEvent::TextDelta(_)
     )
+}
+
+fn drain_queued_messages(queue: Option<&Arc<Mutex<Vec<String>>>>) -> Vec<String> {
+    let Some(queue) = queue else {
+        return Vec::new();
+    };
+
+    let mut guard = match queue.lock() {
+        Ok(g) => g,
+        Err(poisoned) => {
+            warn!("Message queue lock poisoned while restoring queued input; recovering");
+            poisoned.into_inner()
+        }
+    };
+    guard.drain(..).collect()
+}
+
+fn merged_input_with_queued(existing: &str, queued: &[String]) -> Option<String> {
+    if queued.is_empty() {
+        return None;
+    }
+    let queued_text = queued.join("\n\n");
+    if existing.is_empty() {
+        return Some(queued_text);
+    }
+    Some(format!("{existing}\n\n{queued_text}"))
+}
+
+fn restore_queued_input(app: &mut App) {
+    let queued = drain_queued_messages(app.message_queue.as_ref());
+    let existing = app.input_buffer.get_content();
+    if let Some(merged) = merged_input_with_queued(&existing, &queued) {
+        app.set_input_text(&merged);
+    }
 }
 
 impl App {
@@ -54,6 +89,7 @@ impl App {
                     self.is_running = false;
                     self.interaction.cancel_pending = None;
                     self.last_error = None;
+                    restore_queued_input(self);
                     self.message_queue = None;
                     // End thinking tracking
                     if let Some(start) = self.task.thinking_start.take() {
@@ -69,6 +105,7 @@ impl App {
                     self.save_task_summary(was_cancelled);
                     self.is_running = false;
                     self.interaction.cancel_pending = None;
+                    restore_queued_input(self);
                     self.message_queue = None;
                     self.task.clear();
                     if !was_cancelled {
@@ -211,6 +248,7 @@ impl App {
         if let Ok(updated_session) = self.session_rx.try_recv() {
             self.is_running = false;
             self.interaction.cancel_pending = None;
+            restore_queued_input(self);
             self.message_queue = None;
             self.task.clear();
 
@@ -232,8 +270,9 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::clears_retry_status;
+    use super::{clears_retry_status, drain_queued_messages, merged_input_with_queued};
     use crate::agent::AgentEvent;
+    use std::sync::{Arc, Mutex};
 
     #[test]
     fn retry_status_clears_on_progress_events() {
@@ -258,5 +297,26 @@ mod tests {
         assert!(!clears_retry_status(&AgentEvent::Error(
             "boom".to_string()
         )));
+    }
+
+    #[test]
+    fn drain_queued_messages_recovers_all_messages() {
+        let queue = Arc::new(Mutex::new(vec!["one".to_string(), "two".to_string()]));
+        let drained = drain_queued_messages(Some(&queue));
+        assert_eq!(drained, vec!["one".to_string(), "two".to_string()]);
+        assert!(queue.lock().expect("lock").is_empty());
+    }
+
+    #[test]
+    fn merged_input_with_queued_handles_empty_and_non_empty_input() {
+        assert_eq!(
+            merged_input_with_queued("", &["next".to_string()]),
+            Some("next".to_string())
+        );
+        assert_eq!(
+            merged_input_with_queued("draft", &["next".to_string(), "later".to_string()]),
+            Some("draft\n\nnext\n\nlater".to_string())
+        );
+        assert_eq!(merged_input_with_queued("draft", &[]), None);
     }
 }
