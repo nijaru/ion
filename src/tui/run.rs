@@ -473,16 +473,30 @@ fn reprint_loaded_session(
     let layout = app.compute_layout(term_width, term_height);
     let ui_height = layout.height();
     let lines = app.build_chat_lines(term_width);
-    let line_count = lines.len();
 
-    execute!(stdout, BeginSynchronizedUpdate, MoveTo(0, 0))?;
+    // Print chat lines naturally from the current cursor position.
+    // The terminal scrolls content into scrollback as needed — same
+    // as how fresh-start prints the header.
+    execute!(stdout, BeginSynchronizedUpdate)?;
     write_lines(stdout, &lines)?;
 
-    let excess = app
-        .render_state
-        .position_after_reprint(line_count, term_height, ui_height);
-    if excess > 0 {
-        execute!(stdout, crossterm::terminal::ScrollUp(excess))?;
+    // Check where cursor landed to set position state.
+    let (_, cursor_y) = crossterm::cursor::position()?;
+    let available = term_height.saturating_sub(ui_height);
+
+    if cursor_y >= available {
+        // Chat fills past the UI zone — scroll to make room for the
+        // bottom UI, then enter scroll mode.
+        let excess = cursor_y.saturating_sub(available);
+        if excess > 0 {
+            execute!(stdout, crossterm::terminal::ScrollUp(excess))?;
+        }
+        app.render_state.position = ChatPosition::Scrolling { ui_drawn_at: None };
+    } else {
+        app.render_state.position = ChatPosition::Tracking {
+            next_row: cursor_y,
+            ui_drawn_at: None,
+        };
     }
 
     app.render_state
