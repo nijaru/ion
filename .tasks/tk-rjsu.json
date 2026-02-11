@@ -1,0 +1,28 @@
+{
+  "project": "tk",
+  "ref": "rjsu",
+  "title": "[P2] Remove panic paths from agent context template setup",
+  "description": "Replace runtime expect() in context template initialization/lookup with graceful fallback to avoid startup panics.",
+  "status": "done",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [
+    {
+      "ts": "2026-02-11T06:29:53.190Z",
+      "msg": "Hardening plan: remove runtime expect() in ContextManager template registration/lookup; log and fall back to base system prompt instead of panicking."
+    },
+    {
+      "ts": "2026-02-11T06:30:43.877Z",
+      "msg": "Removed panic paths in src/agent/context.rs: ContextManager::new now logs template registration failures instead of expect-panicking; render_system_prompt now logs and falls back to base prompt if template lookup fails. Validation: cargo test -q 444 pass, cargo clippy -q clean."
+    }
+  ],
+  "created_at": "2026-02-11T06:29:46.010Z",
+  "updated_at": "2026-02-11T06:30:51.797Z",
+  "completed_at": "2026-02-11T06:30:51.797Z",
+  "external": {}
+}
