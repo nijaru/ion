@@ -2,7 +2,7 @@
 
 use crate::tui::completer_state::CompleterState;
 use crate::tui::fuzzy;
-use crate::tui::render::popup::{render_popup, PopupItem, PopupRegion, PopupStyle};
+use crate::tui::render::popup::{PopupItem, PopupRegion, PopupStyle, render_popup};
 use crossterm::style::Color;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -132,10 +132,7 @@ impl FileCompleter {
     }
 
     /// Render the file completion popup above the input box.
-    #[allow(clippy::cast_possible_truncation)]
     pub fn render<W: Write>(&self, w: &mut W, input_start: u16, width: u16) -> std::io::Result<()> {
-        use std::borrow::Cow;
-
         let candidates = self.visible_candidates();
         if candidates.is_empty() {
             return Ok(());
@@ -159,15 +156,14 @@ impl FileCompleter {
             .map(|c| {
                 let icon = if c.is_dir { "󰉋 " } else { "  " };
                 let path_str = c.path.to_string_lossy();
-                let display: Cow<str> = if display_width > 1 && path_str.len() > display_width {
-                    Cow::Owned(format!(
-                        "…{}",
-                        &path_str[path_str
-                            .len()
-                            .saturating_sub(display_width.saturating_sub(1))..]
-                    ))
+                let display = if display_width > 1 && path_str.chars().count() > display_width {
+                    let tail_chars = path_str
+                        .chars()
+                        .count()
+                        .saturating_sub(display_width.saturating_sub(1));
+                    format!("…{}", path_str.chars().skip(tail_chars).collect::<String>())
                 } else {
-                    path_str
+                    path_str.to_string()
                 };
                 format!("{icon}{display}")
             })

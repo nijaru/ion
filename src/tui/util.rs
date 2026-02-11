@@ -202,6 +202,14 @@ pub(crate) fn truncate_to_display_width(s: &str, max_width: usize) -> String {
     out
 }
 
+/// Return the display width (terminal cells) of a string.
+#[must_use]
+pub(crate) fn display_width(s: &str) -> usize {
+    s.chars()
+        .map(|ch| UnicodeWidthChar::width(ch).unwrap_or(0))
+        .sum()
+}
+
 /// Normalize user input for history/storage.
 /// - Normalizes CRLF to LF
 /// - Trims trailing whitespace (keeps leading indentation)
@@ -255,6 +263,13 @@ mod tests {
         // Full-width CJK char should count as width 2.
         assert_eq!(truncate_to_display_width("界a", 2), "界");
         assert_eq!(truncate_to_display_width("界a", 3), "界a");
+    }
+
+    #[test]
+    fn test_display_width() {
+        assert_eq!(display_width("abc"), 3);
+        assert_eq!(display_width("界a"), 3);
+        assert_eq!(display_width(""), 0);
     }
 
     #[test]

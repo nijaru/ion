@@ -1,5 +1,6 @@
 //! Shared popup rendering for command completer, file completer, and history search.
 
+use crate::tui::util::{display_width, truncate_to_display_width};
 use crossterm::{
     cursor::MoveTo,
     execute,
@@ -40,6 +41,11 @@ pub fn render_popup<W: Write>(
     style: PopupStyle,
     popup_width: u16,
 ) -> std::io::Result<()> {
+    let max_cells = popup_width as usize;
+    if max_cells == 0 {
+        return Ok(());
+    }
+
     for (i, item) in items.iter().enumerate().take(region.height as usize) {
         let row = region.row + i as u16;
 
@@ -53,33 +59,30 @@ pub fn render_popup<W: Write>(
 
         let color = item.color_override.unwrap_or(style.primary_color);
 
-        // Primary text in configured color
-        execute!(
-            w,
-            Print(" "),
-            SetForegroundColor(color),
-            Print(item.primary),
-            ResetColor,
-        )?;
+        let mut cells_used = 0usize;
+        execute!(w, Print(" "))?;
+        cells_used += 1;
 
-        // Secondary text (dimmed)
+        // Primary text in configured color (clamped)
+        let primary = truncate_to_display_width(item.primary, max_cells.saturating_sub(cells_used));
+        execute!(w, SetForegroundColor(color), Print(&primary), ResetColor,)?;
+        cells_used += display_width(&primary);
+
+        // Secondary text (dimmed, clamped)
         if !item.secondary.is_empty() && style.show_secondary_dimmed {
+            let secondary =
+                truncate_to_display_width(item.secondary, max_cells.saturating_sub(cells_used));
             execute!(
                 w,
                 SetAttribute(Attribute::Dim),
-                Print(item.secondary),
+                Print(&secondary),
                 SetAttribute(Attribute::NormalIntensity),
             )?;
+            cells_used += display_width(&secondary);
         }
 
-        // Pad to popup width for consistent reverse-video highlight
-        let secondary_len = if style.show_secondary_dimmed {
-            item.secondary.len()
-        } else {
-            0
-        };
-        let content_len = 1 + item.primary.len() + secondary_len;
-        let padding = (popup_width as usize).saturating_sub(content_len);
+        // Pad to popup width for consistent reverse-video highlight.
+        let padding = max_cells.saturating_sub(cells_used);
         if padding > 0 {
             execute!(w, Print(" ".repeat(padding)))?;
         }
