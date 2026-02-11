@@ -637,7 +637,11 @@ pub async fn run(permissions: PermissionSettings, resume_option: ResumeOption) -
         for line in &lines {
             line.writeln(&mut stdout)?;
         }
-        let overflow = line_count.saturating_sub(available_rows) as u16;
+        // Only trim the currently visible viewport overlap.
+        // When line_count exceeds terminal height, writing already scrolls the terminal;
+        // we only need to reclaim space for the bottom UI region.
+        let visible_lines = line_count.min(term_height as usize);
+        let overflow = visible_lines.saturating_sub(available_rows) as u16;
         if overflow > 0 {
             execute!(stdout, crossterm::terminal::ScrollUp(overflow))?;
         }

@@ -39,10 +39,14 @@
     {
       "ts": "2026-02-11T01:49:33.470Z",
       "msg": "User requested no alignment. Updated startup resume path to render history from row 0 and only trim overflow for UI. Removed short-history start-row alignment logic."
+    },
+    {
+      "ts": "2026-02-11T01:50:15.891Z",
+      "msg": "Fix follow-up: cap resume overflow trim to visible viewport (min(line_count, term_height)) to avoid overscroll on long histories."
     }
   ],
   "created_at": "2026-02-11T01:13:44.111Z",
-  "updated_at": "2026-02-11T01:49:33.470Z",
+  "updated_at": "2026-02-11T01:50:15.891Z",
   "completed_at": null,
   "external": {}
 }
