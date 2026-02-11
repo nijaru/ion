@@ -27,10 +27,18 @@
     {
       "ts": "2026-02-11T01:32:27.015Z",
       "msg": "Adjusted startup resume reprint: when history is shorter than available chat rows, apply ScrollDown padding so content is bottom-aligned above UI (no top pinning for short history). Keep position Scrolling for bottom-locked UI."
+    },
+    {
+      "ts": "2026-02-11T01:40:25.553Z",
+      "msg": "Re-evaluating fix quality: user reports current behavior still wrong. Performing full resume render-path audit to replace startup padding workaround with source-level layouted reprint."
+    },
+    {
+      "ts": "2026-02-11T01:41:45.103Z",
+      "msg": "Replaced workaround with source-level startup resume layout: build lines first, compute available chat rows, render short histories at computed start_row above UI, render long histories from top with overflow trim; mark reflow complete and force Scrolling mode."
     }
   ],
   "created_at": "2026-02-11T01:13:44.111Z",
-  "updated_at": "2026-02-11T01:32:27.015Z",
+  "updated_at": "2026-02-11T01:41:45.103Z",
   "completed_at": null,
   "external": {}
 }
