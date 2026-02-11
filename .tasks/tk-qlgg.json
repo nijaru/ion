@@ -3,7 +3,7 @@
   "ref": "qlgg",
   "title": "[P2] Programmatic TUI rendering tests + architecture roadmap",
   "description": "Design repeatable non-manual tests for TUI rendering (resume/clear/overflow), assess state-of-the-art tooling/libraries, and propose prioritized simplifications/improvements.",
-  "status": "active",
+  "status": "done",
   "priority": 2,
   "labels": [],
   "assignees": [],
@@ -22,7 +22,7 @@
     }
   ],
   "created_at": "2026-02-11T04:37:35.783Z",
-  "updated_at": "2026-02-11T04:46:20.389Z",
-  "completed_at": null,
+  "updated_at": "2026-02-11T04:46:34.003Z",
+  "completed_at": "2026-02-11T04:46:34.003Z",
   "external": {}
 }
