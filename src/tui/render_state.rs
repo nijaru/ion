@@ -130,7 +130,7 @@ impl ChatPosition {
 
     /// How many rows to scroll to push visible content into scrollback.
     /// In Scrolling mode, the full viewport is used; in other modes,
-    /// only the rows with actual content are counted.
+    /// only rows with known content are counted.
     pub fn scroll_amount(&self, ui_height: u16, term_height: u16) -> u16 {
         match self {
             Self::Scrolling { .. } => term_height,
@@ -145,7 +145,7 @@ impl ChatPosition {
                 content_bottom.min(term_height)
             }
             Self::Header { anchor } => anchor.saturating_add(ui_height).min(term_height),
-            Self::Empty => term_height,
+            Self::Empty => 0,
         }
     }
 }
@@ -456,8 +456,8 @@ mod tests {
         );
         // Header: anchor + UI height
         assert_eq!(ChatPosition::Header { anchor: 3 }.scroll_amount(5, 40), 8);
-        // Empty: full terminal (safe fallback)
-        assert_eq!(ChatPosition::Empty.scroll_amount(5, 40), 40);
+        // Empty: no known content rows
+        assert_eq!(ChatPosition::Empty.scroll_amount(5, 40), 0);
     }
 
     #[test]

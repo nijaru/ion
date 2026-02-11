@@ -45,7 +45,7 @@ impl App {
                 Print(SPINNER[frame]),
                 Print(" "),
                 Print(reason),
-                Print(" · retrying in "),
+                Print(" • retrying in "),
                 Print(remaining),
                 Print("s"),
                 ResetColor
@@ -78,7 +78,7 @@ impl App {
                 SetAttribute(Attribute::Dim),
                 Print(" ("),
                 Print(elapsed),
-                Print("s · Esc to cancel)"),
+                Print("s • Esc to cancel)"),
                 SetAttribute(Attribute::Reset)
             )?;
         }
@@ -131,7 +131,7 @@ impl App {
             w,
             SetAttribute(Attribute::Dim),
             Print(" ("),
-            Print(stats.join(" · ")),
+            Print(stats.join(" • ")),
             Print(")"),
             SetAttribute(Attribute::Reset)
         )?;

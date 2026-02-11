@@ -39,7 +39,7 @@ impl App {
             Print(mode_label),
             ResetColor
         )?;
-        write!(w, "] · {model_name}")?;
+        write!(w, "] • {model_name}")?;
 
         // Thinking level (only shown when active)
         let think_label = self.thinking_level.label();
@@ -56,7 +56,7 @@ impl App {
         // Token usage if available
         if let Some((used, max)) = self.token_usage {
             execute!(w, SetAttribute(Attribute::Dim))?;
-            write!(w, " · {}/{}", format_tokens(used), format_tokens(max))?;
+            write!(w, " • {}/{}", format_tokens(used), format_tokens(max))?;
             if max > 0 {
                 let pct = (used * 100) / max;
                 write!(w, " ({pct}%)")?;
