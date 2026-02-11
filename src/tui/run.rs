@@ -612,29 +612,51 @@ pub async fn run(permissions: PermissionSettings, resume_option: ResumeOption) -
             crossterm::terminal::ScrollUp(scroll_amount),
             MoveTo(0, 0)
         )?;
-        let line_count = app.reprint_chat_scrollback(&mut stdout, term_width)?;
-        // Clear any stale content below the reprinted chat (the partial scroll
-        // only blanked scroll_amount rows, not the full viewport).
-        execute!(stdout, Clear(ClearType::FromCursorDown))?;
         let layout = app.compute_layout(term_width, term_height);
         let ui_height = layout.height();
         let available_rows = term_height.saturating_sub(ui_height) as usize;
-        let excess =
-            app.render_state
-                .position_after_reprint(line_count, term_height, ui_height);
-        if excess > 0 {
-            execute!(stdout, crossterm::terminal::ScrollUp(excess))?;
+
+        let entry_count = app.message_list.entries.len();
+        let mut end = entry_count;
+        if app.is_running
+            && app
+                .message_list
+                .entries
+                .last()
+                .is_some_and(|e| e.sender == Sender::Agent)
+        {
+            end = end.saturating_sub(1);
         }
-        // If history is shorter than the chat viewport, bottom-align it above the UI
-        // instead of pinning it to row 0 (avoids the "header glued to top" effect).
-        if line_count < available_rows {
-            let pad = (available_rows - line_count) as u16;
-            if pad > 0 {
-                execute!(stdout, crossterm::terminal::ScrollDown(pad))?;
+
+        let lines = app.build_chat_lines(term_width);
+        let line_count = lines.len();
+
+        // Source-level resume layout:
+        // - Short history: bottom-align directly above UI (no top pinning).
+        // - Long history: render then trim overflow so newest content stays visible.
+        if line_count <= available_rows {
+            let start_row = (available_rows - line_count) as u16;
+            execute!(stdout, MoveTo(0, start_row))?;
+            for line in &lines {
+                line.writeln(&mut stdout)?;
+            }
+        } else {
+            execute!(stdout, MoveTo(0, 0))?;
+            for line in &lines {
+                line.writeln(&mut stdout)?;
+            }
+            let overflow = (line_count - available_rows) as u16;
+            if overflow > 0 {
+                execute!(stdout, crossterm::terminal::ScrollUp(overflow))?;
             }
         }
+
+        // Clear any stale content below the reprinted chat (the partial scroll
+        // only blanked scroll_amount rows, not the full viewport).
+        execute!(stdout, Clear(ClearType::FromCursorDown))?;
+        app.render_state.mark_reflow_complete(end);
         // Resume should behave like normal terminal scrollback: keep the bottom UI locked,
-        // and avoid re-anchoring UI to top/header when history is short.
+        // never re-anchoring to the startup header.
         app.render_state.position = ChatPosition::Scrolling { ui_drawn_at: None };
         execute!(stdout, EndSynchronizedUpdate)?;
         stdout.flush()?;
