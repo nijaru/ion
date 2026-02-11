@@ -58,8 +58,9 @@ impl ContextManager {
     #[must_use]
     pub fn new(system_prompt_base: String) -> Self {
         let mut env = Environment::new();
-        env.add_template("system", DEFAULT_SYSTEM_TEMPLATE)
-            .expect("DEFAULT_SYSTEM_TEMPLATE must be valid minijinja syntax");
+        if let Err(e) = env.add_template("system", DEFAULT_SYSTEM_TEMPLATE) {
+            tracing::error!("Failed to register system template: {}", e);
+        }
 
         Self {
             env,
@@ -186,10 +187,13 @@ impl ContextManager {
     }
 
     fn render_system_prompt(&self, skill: Option<&Skill>) -> String {
-        let template = self
-            .env
-            .get_template("system")
-            .expect("system template must exist - added in constructor");
+        let template = match self.env.get_template("system") {
+            Ok(template) => template,
+            Err(e) => {
+                tracing::error!("System template unavailable: {}", e);
+                return self.system_prompt_base.clone();
+            }
+        };
 
         // Load instructions from AGENTS.md files
         let instructions = self
