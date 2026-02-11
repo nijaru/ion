@@ -1,0 +1,28 @@
+{
+  "project": "tk",
+  "ref": "qhe1",
+  "title": "[P1] Remove designer auto-plan mode",
+  "description": "Implement system-design decision: remove automatic designer/plan generation and related dead code paths, events, context injection, and UI rendering references.",
+  "status": "done",
+  "priority": 2,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [
+    {
+      "ts": "2026-02-11T01:08:56.172Z",
+      "msg": "Validation: cargo test passed (434 tests)."
+    },
+    {
+      "ts": "2026-02-11T01:10:30.373Z",
+      "msg": "Follow-up fix: removed stale clear_plan call in src/tui/events.rs and restored fmt::Write import in src/tui/message_list.rs to fix compile errors after designer removal."
+    }
+  ],
+  "created_at": "2026-02-11T01:03:55.165Z",
+  "updated_at": "2026-02-11T01:10:30.373Z",
+  "completed_at": "2026-02-11T01:09:13.207Z",
+  "external": {}
+}

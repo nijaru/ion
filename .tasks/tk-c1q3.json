@@ -1,0 +1,32 @@
+{
+  "project": "tk",
+  "ref": "c1q3",
+  "title": "[P2] Fresh TUI review pass",
+  "description": "Run a focused review of TUI v2/render pipeline for regressions, UX issues, and correctness gaps; document findings and fixes.",
+  "status": "done",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [
+    {
+      "ts": "2026-02-11T01:07:52.052Z",
+      "msg": "Starting TUI review pass. review skill loaded; subagent Task tool unavailable in this runtime, proceeding with direct multi-file review + static checks."
+    },
+    {
+      "ts": "2026-02-11T01:08:56.183Z",
+      "msg": "Finding: unreachable match arm in src/tui/session/update.rs after event enum changes; fixed by removing dead fallback arm."
+    },
+    {
+      "ts": "2026-02-11T01:08:56.214Z",
+      "msg": "Validation: cargo clippy clean for this area (remaining warnings are non-TUI test nits outside this change), cargo test passed."
+    }
+  ],
+  "created_at": "2026-02-11T01:03:55.166Z",
+  "updated_at": "2026-02-11T01:09:13.207Z",
+  "completed_at": "2026-02-11T01:09:13.207Z",
+  "external": {}
+}

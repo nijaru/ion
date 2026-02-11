@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "oh88",
+  "title": "[P1] Implement OS sandbox execution",
+  "description": "Ship process sandboxing for tool/bash execution per permissions v2 design (macOS seatbelt + linux landlock where supported).",
+  "status": "open",
+  "priority": 2,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-02-11T01:03:55.166Z",
+  "updated_at": "2026-02-11T01:03:55.166Z",
+  "completed_at": null,
+  "external": {}
+}

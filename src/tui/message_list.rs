@@ -630,21 +630,6 @@ impl MessageList {
                     }
                 }
             }
-            AgentEvent::PlanGenerated(plan) => {
-                self.active_group = None;
-                let mut content = String::from("### 📋 Proposed Plan\n\n");
-                for task in &plan.tasks {
-                    let _ = writeln!(content, "- **{}**: {}", task.title, task.description);
-                    if !task.dependencies.is_empty() {
-                        let _ = writeln!(
-                            content,
-                            "  *(Depends on: {})*",
-                            task.dependencies.join(", ")
-                        );
-                    }
-                }
-                self.push_entry(MessageEntry::new(Sender::System, content));
-            }
             AgentEvent::Warning(msg) => {
                 self.active_group = None;
                 self.push_entry(MessageEntry::new(Sender::System, format!("Warning: {msg}")));

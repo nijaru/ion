@@ -1,0 +1,24 @@
+{
+  "project": "tk",
+  "ref": "qwp3",
+  "title": "[P1] Add /resume session command",
+  "description": "Add command to resume prior sessions from local storage, matching competitive baseline.",
+  "status": "done",
+  "priority": 2,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [
+    {
+      "ts": "2026-02-11T01:09:00.099Z",
+      "msg": "Checked codebase: /resume command and CLI resume path already implemented (see src/tui/events.rs and cli tests). Task appears already complete in current code."
+    }
+  ],
+  "created_at": "2026-02-11T01:03:55.165Z",
+  "updated_at": "2026-02-11T01:09:13.221Z",
+  "completed_at": "2026-02-11T01:09:13.221Z",
+  "external": {}
+}

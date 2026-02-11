@@ -1,6 +1,5 @@
 use crate::agent::AgentEvent;
 use crate::agent::context::ContextManager;
-use crate::agent::designer::Plan;
 use crate::agent::retry::retryable_category;
 use crate::compaction::TokenCounter;
 use crate::provider::{
@@ -12,7 +11,7 @@ use crate::tool::ToolOrchestrator;
 use anyhow::Result;
 use std::borrow::Cow;
 use std::sync::Arc;
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, warn};
 
@@ -25,7 +24,6 @@ pub(crate) struct StreamContext<'a> {
     pub provider: &'a Arc<dyn LlmApi>,
     pub orchestrator: &'a Arc<ToolOrchestrator>,
     pub context_manager: &'a Arc<ContextManager>,
-    pub active_plan: &'a Mutex<Option<Plan>>,
     pub token_counter: &'a TokenCounter,
     pub supports_vision: bool,
 }
@@ -48,10 +46,9 @@ pub(crate) async fn stream_response(
         })
         .collect();
 
-    let plan = ctx.active_plan.lock().await;
     let assembly = ctx
         .context_manager
-        .assemble(&session.messages, None, tool_defs, plan.as_ref())
+        .assemble(&session.messages, None, tool_defs)
         .await;
 
     let messages = if ctx.supports_vision {

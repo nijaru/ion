@@ -1,4 +1,3 @@
-use crate::agent::designer::Plan;
 use crate::provider::ModelInfo;
 
 pub enum AgentEvent {
@@ -7,7 +6,6 @@ pub enum AgentEvent {
     /// Tool call started: (id, name, arguments)
     ToolCallStart(String, String, serde_json::Value),
     ToolCallResult(String, String, bool),
-    PlanGenerated(Plan),
     CompactionStatus {
         before: usize,
         after: usize,

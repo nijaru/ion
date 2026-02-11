@@ -1,4 +1,3 @@
-use crate::agent::designer::Plan;
 use crate::agent::instructions::InstructionLoader;
 use crate::provider::{Message, ToolDefinition};
 use crate::skill::Skill;
@@ -21,7 +20,6 @@ pub struct ContextManager {
 #[derive(Clone)]
 struct RenderCache {
     rendered: String,
-    plan: Option<Plan>,
     skill: Option<Skill>,
     has_mcp_tools: bool,
 }
@@ -48,18 +46,6 @@ MCP tools are available via external servers. Use `mcp_tools` to search for rele
 ## Project Instructions
 
 {{ instructions }}
-{% endif %}
-{% if plan %}
-## Current Plan
-
-Title: {{ plan.title }}
-{% for task in plan.tasks -%}
-{% if task.status == "Completed" %}[x]{% elif task.status == "InProgress" %}[>]{% elif task.status == "Failed" %}[!]{% else %}[ ]{% endif %} {{ task.id }} - {{ task.title }}
-{% endfor %}
-{% if current_task %}
-FOCUS: You are currently working on {{ current_task.id }}. {{ current_task.description }}
-VERIFICATION: After each tool call, verify if the output matches the requirements of this task.
-{% endif %}
 {% endif %}
 {% if skill %}
 ## Active Skill: {{ skill.name }}
@@ -118,13 +104,12 @@ impl ContextManager {
     }
 
     /// Get just the system prompt (cached), without assembling messages.
-    pub async fn get_system_prompt(&self, plan: Option<&Plan>) -> String {
+    pub async fn get_system_prompt(&self) -> String {
         let active_skill = self.active_skill.lock().await;
         let mcp = self.has_mcp_tools.load(Ordering::Relaxed);
 
         let mut cache = self.render_cache.lock().await;
         if let Some(ref c) = *cache
-            && c.plan.as_ref() == plan
             && c.skill.as_ref() == active_skill.as_ref()
             && c.has_mcp_tools == mcp
             && !self.instructions_stale()
@@ -135,10 +120,9 @@ impl ContextManager {
         let skill = active_skill.clone();
         drop(active_skill); // Release lock before potentially slow render
 
-        let rendered = self.render_system_prompt(plan, skill.as_ref());
+        let rendered = self.render_system_prompt(skill.as_ref());
         *cache = Some(RenderCache {
             rendered: rendered.clone(),
-            plan: plan.cloned(),
             skill,
             has_mcp_tools: mcp,
         });
@@ -150,7 +134,6 @@ impl ContextManager {
         history: &[Message],
         memory_context: Option<&str>,
         available_tools: Vec<ToolDefinition>,
-        plan: Option<&Plan>,
     ) -> ContextAssembly {
         let active_skill = self.active_skill.lock().await;
         let mcp = self.has_mcp_tools.load(Ordering::Relaxed);
@@ -158,8 +141,7 @@ impl ContextManager {
         // Check cache - compare by reference to avoid clone
         let mut cache = self.render_cache.lock().await;
         let (system_prompt, need_cache_update) = if let Some(ref c) = *cache {
-            if c.plan.as_ref() == plan
-                && c.skill.as_ref() == active_skill.as_ref()
+            if c.skill.as_ref() == active_skill.as_ref()
                 && c.has_mcp_tools == mcp
                 && !self.instructions_stale()
             {
@@ -167,12 +149,12 @@ impl ContextManager {
             } else {
                 let skill = active_skill.clone();
                 drop(active_skill);
-                (self.render_system_prompt(plan, skill.as_ref()), true)
+                (self.render_system_prompt(skill.as_ref()), true)
             }
         } else {
             let skill = active_skill.clone();
             drop(active_skill);
-            (self.render_system_prompt(plan, skill.as_ref()), true)
+            (self.render_system_prompt(skill.as_ref()), true)
         };
 
         // Update cache if needed
@@ -181,7 +163,6 @@ impl ContextManager {
             let skill = self.active_skill.lock().await.clone();
             *cache = Some(RenderCache {
                 rendered: system_prompt.clone(),
-                plan: plan.cloned(),
                 skill,
                 has_mcp_tools: mcp,
             });
@@ -204,12 +185,11 @@ impl ContextManager {
         }
     }
 
-    fn render_system_prompt(&self, plan: Option<&Plan>, skill: Option<&Skill>) -> String {
+    fn render_system_prompt(&self, skill: Option<&Skill>) -> String {
         let template = self
             .env
             .get_template("system")
             .expect("system template must exist - added in constructor");
-        let current_task = plan.and_then(|p| p.current_task());
 
         // Load instructions from AGENTS.md files
         let instructions = self
@@ -225,9 +205,7 @@ impl ContextManager {
             None
         };
 
-        let has_mcp_tools = self
-            .has_mcp_tools
-            .load(Ordering::Relaxed);
+        let has_mcp_tools = self.has_mcp_tools.load(Ordering::Relaxed);
 
         template
             .render(context! {
@@ -235,8 +213,6 @@ impl ContextManager {
                 working_dir => working_dir,
                 date => date,
                 instructions => instructions,
-                plan => plan,
-                current_task => current_task,
                 skill => skill,
                 has_mcp_tools => has_mcp_tools,
             })

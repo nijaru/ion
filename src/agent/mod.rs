@@ -1,5 +1,4 @@
 pub mod context;
-pub mod designer;
 mod events;
 pub mod instructions;
 mod retry;
@@ -10,7 +9,6 @@ mod tools;
 pub use events::AgentEvent;
 
 use crate::agent::context::ContextManager;
-use crate::agent::designer::{Designer, Plan};
 use crate::agent::instructions::InstructionLoader;
 use crate::compaction::{
     CompactionConfig, CompactionTier, TokenCounter, check_compaction_needed,
@@ -22,7 +20,7 @@ use crate::skill::SkillRegistry;
 use crate::tool::ToolOrchestrator;
 use anyhow::Result;
 use std::sync::Arc;
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::mpsc;
 use tracing::warn;
 
 const DEFAULT_SYSTEM_PROMPT: &str = "\
@@ -102,14 +100,12 @@ at once. If you need to search for two patterns, search simultaneously.
 pub struct Agent {
     provider: Arc<dyn LlmApi>,
     orchestrator: Arc<ToolOrchestrator>,
-    designer: Option<Arc<Designer>>,
     compaction_config: CompactionConfig,
     /// Dynamic context window size (updated when model changes)
     context_window: Arc<std::sync::atomic::AtomicUsize>,
     token_counter: TokenCounter,
     skills: Arc<tokio::sync::RwLock<SkillRegistry>>,
     context_manager: Arc<ContextManager>,
-    active_plan: Arc<Mutex<Option<Plan>>>,
     /// Whether the current model supports vision (image inputs).
     supports_vision: Arc<std::sync::atomic::AtomicBool>,
     /// Cheap model for Tier 3 summarization (dynamically selected from model list).
@@ -139,7 +135,6 @@ fn create_context_manager(system_prompt: String) -> ContextManager {
 
 impl Agent {
     pub fn new(provider: Arc<dyn LlmApi>, orchestrator: Arc<ToolOrchestrator>) -> Self {
-        let designer = Arc::new(Designer::new(provider.clone()));
         let system_prompt = DEFAULT_SYSTEM_PROMPT.to_string();
         let compaction_config = CompactionConfig::default();
         let context_window = Arc::new(std::sync::atomic::AtomicUsize::new(
@@ -151,13 +146,11 @@ impl Agent {
         Self {
             provider,
             orchestrator,
-            designer: Some(designer),
             compaction_config,
             context_window,
             token_counter: TokenCounter::new(),
             skills: Arc::new(tokio::sync::RwLock::new(SkillRegistry::new())),
             context_manager: Arc::new(context_manager),
-            active_plan: Arc::new(Mutex::new(None)),
             supports_vision: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             summarization_model: Arc::new(std::sync::Mutex::new(None)),
         }
@@ -274,16 +267,9 @@ impl Agent {
         &self.context_manager
     }
 
-    /// Clear the active plan (e.g., when starting fresh with /clear).
-    pub async fn clear_plan(&self) {
-        let mut plan = self.active_plan.lock().await;
-        *plan = None;
-    }
-
     async fn emit_token_usage(&self, messages: &[Message], tx: &mpsc::Sender<AgentEvent>) {
         // Get system prompt (cached) without cloning messages
-        let plan = self.active_plan.lock().await;
-        let system_prompt = self.context_manager.get_system_prompt(plan.as_ref()).await;
+        let system_prompt = self.context_manager.get_system_prompt().await;
 
         // Count system prompt + all messages
         let system_tokens = self.token_counter.count_str(&system_prompt);
@@ -298,20 +284,6 @@ impl Agent {
             .await;
     }
 
-    pub async fn plan(
-        &self,
-        user_msg: &str,
-        session: &Session,
-    ) -> Result<(crate::agent::designer::Plan, crate::provider::Usage)> {
-        if let Some(designer) = &self.designer {
-            designer
-                .plan(user_msg, &session.model, &session.messages)
-                .await
-        } else {
-            Err(anyhow::anyhow!("Designer not initialized"))
-        }
-    }
-
     /// Run a task with the given user message.
     ///
     /// Returns the session (with any work completed) and optionally an error.
@@ -324,19 +296,6 @@ impl Agent {
         message_queue: Option<Arc<std::sync::Mutex<Vec<String>>>>,
         thinking: Option<ThinkingConfig>,
     ) -> (Session, Option<anyhow::Error>) {
-        // Extract text for plan generation (ignore images for this purpose)
-        let user_msg: String = user_content
-            .iter()
-            .filter_map(|b| {
-                if let ContentBlock::Text { text } = b {
-                    Some(text.as_str())
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(" ");
-
         // Estimate attachment token count for budget warning
         let attachment_tokens: usize = user_content
             .iter()
@@ -366,28 +325,6 @@ impl Agent {
                     ctx_window / 1000,
                 )))
                 .await;
-        }
-
-        // Optional: Run designer for complex requests
-        if session.messages.len() <= 2
-            && user_msg.len() > 100
-            && let Ok((plan, usage)) = self.plan(&user_msg, &session).await
-        {
-            if usage.input_tokens > 0 || usage.output_tokens > 0 {
-                let _ = tx
-                    .send(AgentEvent::ProviderUsage {
-                        input_tokens: usage.input_tokens as usize,
-                        output_tokens: usage.output_tokens as usize,
-                        cache_read_tokens: usage.cache_read_tokens as usize,
-                        cache_write_tokens: usage.cache_write_tokens as usize,
-                    })
-                    .await;
-            }
-            {
-                let mut active_plan = self.active_plan.lock().await;
-                *active_plan = Some(plan.clone());
-            }
-            let _ = tx.send(AgentEvent::PlanGenerated(plan)).await;
         }
 
         loop {
@@ -442,7 +379,6 @@ impl Agent {
             provider: &self.provider,
             orchestrator: &self.orchestrator,
             context_manager: &self.context_manager,
-            active_plan: &self.active_plan,
             token_counter: &self.token_counter,
             supports_vision: self.supports_vision(),
         };
@@ -564,10 +500,9 @@ fn replace_tool_result(messages: &mut [Message], tool_call_id: &str, new_content
                 other => other.clone(),
             })
             .collect();
-        if blocks
-            .iter()
-            .any(|b| matches!(b, ContentBlock::ToolResult { content, .. } if content == new_content))
-        {
+        if blocks.iter().any(
+            |b| matches!(b, ContentBlock::ToolResult { content, .. } if content == new_content),
+        ) {
             msg.content = Arc::new(blocks);
             return;
         }
