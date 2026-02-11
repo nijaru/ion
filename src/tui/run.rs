@@ -134,11 +134,17 @@ fn prepare_frame(app: &mut App, term_width: u16, term_height: u16) -> FramePrep 
 
     // Selector clear
     if app.render_state.needs_selector_clear {
-        let fallback = app.compute_layout(term_width, term_height).top;
-        let from_row = app.render_state.take_selector_clear_from(fallback);
-        app.render_state.needs_selector_clear = false;
-        pre_ops.push(PreOp::ClearSelectorArea { from_row });
-        state_changed = true;
+        if reflow_scheduled {
+            // Reflow redraws chat/UI for the full frame; selector-only clear would
+            // run after reflow and can wipe freshly reprinted content.
+            app.render_state.cancel_selector_clear();
+        } else {
+            let fallback = app.compute_layout(term_width, term_height).top;
+            let from_row = app.render_state.take_selector_clear_from(fallback);
+            app.render_state.needs_selector_clear = false;
+            pre_ops.push(PreOp::ClearSelectorArea { from_row });
+            state_changed = true;
+        }
     }
 
     // Header insertion
