@@ -618,11 +618,20 @@ pub async fn run(permissions: PermissionSettings, resume_option: ResumeOption) -
         execute!(stdout, Clear(ClearType::FromCursorDown))?;
         let layout = app.compute_layout(term_width, term_height);
         let ui_height = layout.height();
+        let available_rows = term_height.saturating_sub(ui_height) as usize;
         let excess =
             app.render_state
                 .position_after_reprint(line_count, term_height, ui_height);
         if excess > 0 {
             execute!(stdout, crossterm::terminal::ScrollUp(excess))?;
+        }
+        // If history is shorter than the chat viewport, bottom-align it above the UI
+        // instead of pinning it to row 0 (avoids the "header glued to top" effect).
+        if line_count < available_rows {
+            let pad = (available_rows - line_count) as u16;
+            if pad > 0 {
+                execute!(stdout, crossterm::terminal::ScrollDown(pad))?;
+            }
         }
         // Resume should behave like normal terminal scrollback: keep the bottom UI locked,
         // and avoid re-anchoring UI to top/header when history is short.
