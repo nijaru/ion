@@ -111,10 +111,14 @@
     {
       "ts": "2026-02-11T06:21:05.919Z",
       "msg": "Sprint17 usability hardening overlap: fixed stale retry-status display in src/tui/session/update.rs by clearing on ToolCallStart/ThinkingDelta/TextDelta progress events (not just TextDelta). Added unit tests; cargo test -q now 439 passing."
+    },
+    {
+      "ts": "2026-02-11T06:26:20.986Z",
+      "msg": "Agent/TUI flow hardening continued: queued steering/input is now preserved across turn completion and finish/error transitions; added late-drain in Agent::run_task and queue-restore into composer in TUI update. Also recovered poisoned queue locks in input recall path."
     }
   ],
   "created_at": "2026-02-11T01:13:44.111Z",
-  "updated_at": "2026-02-11T06:21:05.919Z",
+  "updated_at": "2026-02-11T06:26:20.986Z",
   "completed_at": null,
   "external": {}
 }
