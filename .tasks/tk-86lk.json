@@ -147,10 +147,18 @@
     {
       "ts": "2026-02-11T07:21:37.846Z",
       "msg": "Render-path hardening pass: added display-width utilities and width clamping in popup/history/selector renderers to prevent terminal autowrap from corrupting frame redraws at narrow widths. Also removed Unicode-unsafe byte slicing in file completer truncation path (char-based tail). Validation: cargo clippy -q clean; cargo test -q tui:: (181 passed)."
+    },
+    {
+      "ts": "2026-02-11T07:35:47.810Z",
+      "msg": "Patched remaining narrow-width redraw risk: horizontal input borders now reserve last terminal column (no full-width border autowrap), input chunks are width-clamped defensively, and input cursor placement is clamped to visible input region/terminal width to avoid out-of-bounds cursor moves during resize/composer growth."
+    },
+    {
+      "ts": "2026-02-11T07:35:47.832Z",
+      "msg": "Validation: cargo test -q tui:: (181 passed), cargo clippy -q clean, cargo fmt."
     }
   ],
   "created_at": "2026-02-11T01:13:44.111Z",
-  "updated_at": "2026-02-11T07:21:37.846Z",
+  "updated_at": "2026-02-11T07:35:47.832Z",
   "completed_at": null,
   "external": {}
 }
