@@ -44,7 +44,7 @@ Detailed research in `ai/research/*-2026-02.md` (5 files).
 
 ### P4 — Deferred
 
-tk-r11l, tk-nyqq, tk-ltyy, tk-5j06, tk-a2s8, tk-o0g7, tk-9zri, tk-4gm9, tk-tnzs, tk-imza, tk-iegz, tk-mmup, tk-3fm2
+tk-r11l, tk-nyqq, tk-ltyy, tk-5j06, tk-a2s8, tk-o0g7, tk-9zri, tk-4gm9, tk-tnzs, tk-imza, tk-iegz, tk-3fm2
 
 ## Key References
 
