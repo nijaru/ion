@@ -107,7 +107,11 @@ fn write_lines(stdout: &mut io::Stdout, lines: &[StyledLine]) -> io::Result<()> 
 }
 
 #[allow(clippy::cast_possible_truncation)]
-fn write_lines_at(stdout: &mut io::Stdout, start_row: u16, lines: &[StyledLine]) -> io::Result<u16> {
+fn write_lines_at(
+    stdout: &mut io::Stdout,
+    start_row: u16,
+    lines: &[StyledLine],
+) -> io::Result<u16> {
     let mut row = start_row;
     for line in lines {
         execute!(stdout, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
@@ -120,7 +124,11 @@ fn write_lines_at(stdout: &mut io::Stdout, start_row: u16, lines: &[StyledLine])
 fn clear_header_areas(stdout: &mut io::Stdout, pre_ops: &[PreOp]) -> io::Result<()> {
     for op in pre_ops {
         if let PreOp::ClearHeaderArea { from_row } = op {
-            execute!(stdout, MoveTo(0, *from_row), Clear(ClearType::FromCursorDown))?;
+            execute!(
+                stdout,
+                MoveTo(0, *from_row),
+                Clear(ClearType::FromCursorDown)
+            )?;
             stdout.flush()?;
         }
     }
@@ -163,7 +171,11 @@ fn apply_pre_ops(
                     .mark_reflow_complete(rendered_entry_count(app));
             }
             PreOp::ClearSelectorArea { from_row } => {
-                execute!(stdout, MoveTo(0, *from_row), Clear(ClearType::FromCursorDown))?;
+                execute!(
+                    stdout,
+                    MoveTo(0, *from_row),
+                    Clear(ClearType::FromCursorDown)
+                )?;
             }
             PreOp::PrintHeader(lines) => {
                 write_lines(stdout, lines)?;
@@ -202,7 +214,11 @@ fn apply_chat_insert(
             print_row,
             lines,
         } => {
-            execute!(stdout, MoveTo(0, old_ui_row), Clear(ClearType::FromCursorDown))?;
+            execute!(
+                stdout,
+                MoveTo(0, old_ui_row),
+                Clear(ClearType::FromCursorDown)
+            )?;
             execute!(stdout, crossterm::terminal::ScrollUp(scroll_amount))?;
             write_lines_at(stdout, print_row, &lines)?;
             app.render_state.position = ChatPosition::Scrolling { ui_drawn_at: None };
@@ -213,7 +229,11 @@ fn apply_chat_insert(
             print_row,
             lines,
         } => {
-            execute!(stdout, MoveTo(0, ui_start), Clear(ClearType::FromCursorDown))?;
+            execute!(
+                stdout,
+                MoveTo(0, ui_start),
+                Clear(ClearType::FromCursorDown)
+            )?;
             execute!(stdout, crossterm::terminal::ScrollUp(scroll_amount))?;
             write_lines_at(stdout, print_row, &lines)?;
             app.render_state.position = ChatPosition::Scrolling { ui_drawn_at: None };
@@ -426,11 +446,8 @@ fn reprint_loaded_session(
         return Ok(());
     }
 
-    let scroll_amount = crossterm::cursor::position()
-        .map(|(_, y)| y.saturating_add(1))
-        .unwrap_or(term_height);
     execute!(stdout, BeginSynchronizedUpdate)?;
-    scroll_up_and_home(stdout, scroll_amount)?;
+    execute!(stdout, MoveTo(0, 0), Clear(ClearType::All), MoveTo(0, 0))?;
     let layout = app.compute_layout(term_width, term_height);
     let ui_height = layout.height();
     let lines = app.build_chat_lines(term_width);
@@ -563,7 +580,11 @@ fn cleanup_terminal(
 
     // Clear UI area before exit
     let layout = app.compute_layout(term_width, term_height);
-    execute!(stdout, MoveTo(0, layout.top), Clear(ClearType::FromCursorDown))?;
+    execute!(
+        stdout,
+        MoveTo(0, layout.top),
+        Clear(ClearType::FromCursorDown)
+    )?;
     // Position cursor at layout top (just after chat content)
     execute!(stdout, MoveTo(0, layout.top))?;
 
@@ -804,8 +825,8 @@ pub async fn run(permissions: PermissionSettings, resume_option: ResumeOption) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tui::render::layout::{BodyLayout, Region, UiLayout};
     use crate::tui::render::PROGRESS_HEIGHT;
+    use crate::tui::render::layout::{BodyLayout, Region, UiLayout};
 
     fn test_layout(top: u16, width: u16) -> UiLayout {
         let progress_height = PROGRESS_HEIGHT;
@@ -846,13 +867,7 @@ mod tests {
         let layout = test_layout(35, 80); // ui_height = 5
         let insert = plan_chat_insert(&pos, lines, &layout, 40);
         // 5 + 2 + 5 = 12 <= 40, so AtRow
-        assert!(matches!(
-            insert,
-            ChatInsert::AtRow {
-                start_row: 5,
-                ..
-            }
-        ));
+        assert!(matches!(insert, ChatInsert::AtRow { start_row: 5, .. }));
     }
 
     #[test]
@@ -861,7 +876,11 @@ mod tests {
             next_row: 33,
             ui_drawn_at: None,
         };
-        let lines = vec![StyledLine::empty(), StyledLine::empty(), StyledLine::empty()];
+        let lines = vec![
+            StyledLine::empty(),
+            StyledLine::empty(),
+            StyledLine::empty(),
+        ];
         let layout = test_layout(35, 80); // ui_height = 5
         let insert = plan_chat_insert(&pos, lines, &layout, 40);
         // 33 + 3 + 5 = 41 > 40, so Overflow
@@ -884,13 +903,7 @@ mod tests {
         let layout = test_layout(35, 80); // ui_height = 5
         let insert = plan_chat_insert(&pos, lines, &layout, 40);
         // 3 + 1 + 5 = 9 <= 40, so AtRow
-        assert!(matches!(
-            insert,
-            ChatInsert::AtRow {
-                start_row: 3,
-                ..
-            }
-        ));
+        assert!(matches!(insert, ChatInsert::AtRow { start_row: 3, .. }));
     }
 
     #[test]
@@ -899,13 +912,7 @@ mod tests {
         let lines = vec![StyledLine::empty()];
         let layout = test_layout(35, 80);
         let insert = plan_chat_insert(&pos, lines, &layout, 40);
-        assert!(matches!(
-            insert,
-            ChatInsert::AtRow {
-                start_row: 0,
-                ..
-            }
-        ));
+        assert!(matches!(insert, ChatInsert::AtRow { start_row: 0, .. }));
     }
 
     #[test]
@@ -914,12 +921,6 @@ mod tests {
         let lines = vec![StyledLine::empty(); 40];
         let layout = test_layout(35, 80); // ui_height = 5, available = 35
         let insert = plan_chat_insert(&pos, lines, &layout, 40);
-        assert!(matches!(
-            insert,
-            ChatInsert::Overflow {
-                old_ui_row: 0,
-                ..
-            }
-        ));
+        assert!(matches!(insert, ChatInsert::Overflow { old_ui_row: 0, .. }));
     }
 }
