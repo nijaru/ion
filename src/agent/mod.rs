@@ -133,6 +133,39 @@ fn create_context_manager(system_prompt: String) -> ContextManager {
     cm
 }
 
+fn drain_queued_user_messages(
+    session: &mut Session,
+    message_queue: Option<&Arc<std::sync::Mutex<Vec<String>>>>,
+) -> bool {
+    let Some(queue) = message_queue else {
+        return false;
+    };
+
+    // Handle poisoned lock by recovering inner data.
+    let mut guard = match queue.lock() {
+        Ok(g) => g,
+        Err(poisoned) => {
+            warn!("Message queue lock was poisoned, recovering");
+            poisoned.into_inner()
+        }
+    };
+    if guard.is_empty() {
+        return false;
+    }
+
+    let drained: Vec<String> = guard.drain(..).collect();
+    drop(guard);
+
+    for queued_msg in drained {
+        session.messages.push(Message {
+            role: Role::User,
+            content: Arc::new(vec![ContentBlock::Text { text: queued_msg }]),
+        });
+    }
+
+    true
+}
+
 impl Agent {
     pub fn new(provider: Arc<dyn LlmApi>, orchestrator: Arc<ToolOrchestrator>) -> Self {
         let system_prompt = DEFAULT_SYSTEM_PROMPT.to_string();
@@ -333,27 +366,7 @@ impl Agent {
             }
 
             // Check for queued user messages between turns
-            let had_queued = if let Some(ref queue) = message_queue {
-                // Handle poisoned lock by recovering inner data
-                let mut guard = match queue.lock() {
-                    Ok(g) => g,
-                    Err(poisoned) => {
-                        warn!("Message queue lock was poisoned, recovering");
-                        poisoned.into_inner()
-                    }
-                };
-                let had_queued = !guard.is_empty();
-                for queued_msg in guard.drain(..) {
-                    session.messages.push(Message {
-                        role: Role::User,
-                        content: Arc::new(vec![ContentBlock::Text { text: queued_msg }]),
-                    });
-                }
-                had_queued
-                // guard dropped here before await
-            } else {
-                false
-            };
+            let had_queued = drain_queued_user_messages(&mut session, message_queue.as_ref());
             // Update token count if we added queued messages
             if had_queued {
                 self.emit_token_usage(&session.messages, &tx).await;
@@ -361,7 +374,17 @@ impl Agent {
 
             match self.execute_turn(&mut session, &tx, thinking.clone()).await {
                 Ok(true) => {}
-                Ok(false) => break,
+                Ok(false) => {
+                    // Final-answer turns can race with late user steering messages.
+                    // Drain once more before exiting so queued input isn't lost.
+                    let had_late_queued =
+                        drain_queued_user_messages(&mut session, message_queue.as_ref());
+                    if had_late_queued {
+                        self.emit_token_usage(&session.messages, &tx).await;
+                        continue;
+                    }
+                    break;
+                }
                 Err(e) => return (session, Some(e)),
             }
         }
@@ -506,5 +529,47 @@ fn replace_tool_result(messages: &mut [Message], tool_call_id: &str, new_content
             msg.content = Arc::new(blocks);
             return;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::drain_queued_user_messages;
+    use crate::provider::{ContentBlock, Role};
+    use crate::session::Session;
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn drain_queued_user_messages_none_queue() {
+        let mut session = Session::new(PathBuf::from("."), "test-model".to_string());
+        assert!(!drain_queued_user_messages(&mut session, None));
+        assert!(session.messages.is_empty());
+    }
+
+    #[test]
+    fn drain_queued_user_messages_appends_and_drains_in_order() {
+        let mut session = Session::new(PathBuf::from("."), "test-model".to_string());
+        let queue = Arc::new(Mutex::new(vec![
+            "first message".to_string(),
+            "second message".to_string(),
+        ]));
+
+        assert!(drain_queued_user_messages(&mut session, Some(&queue)));
+        assert_eq!(session.messages.len(), 2);
+        assert!(queue.lock().expect("queue lock").is_empty());
+
+        let first = &session.messages[0];
+        let second = &session.messages[1];
+        assert!(matches!(first.role, Role::User));
+        assert!(matches!(second.role, Role::User));
+        assert!(matches!(
+            first.content.first(),
+            Some(ContentBlock::Text { text }) if text == "first message"
+        ));
+        assert!(matches!(
+            second.content.first(),
+            Some(ContentBlock::Text { text }) if text == "second message"
+        ));
     }
 }
