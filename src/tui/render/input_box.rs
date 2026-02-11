@@ -1,8 +1,9 @@
 //! Input box rendering (prompt, content lines, scrolling).
 
-use crate::tui::composer::{build_visual_lines, ComposerState};
-use crate::tui::render::{CONTINUATION, INPUT_MARGIN, PROMPT};
 use crate::tui::App;
+use crate::tui::composer::{ComposerState, build_visual_lines};
+use crate::tui::render::{CONTINUATION, INPUT_MARGIN, PROMPT};
+use crate::tui::util::truncate_to_display_width;
 use crossterm::cursor::MoveTo;
 use crossterm::execute;
 
@@ -54,6 +55,7 @@ impl App {
                 .take(end.saturating_sub(start))
                 .filter(|&c| c != '\n')
                 .collect();
+            let chunk = truncate_to_display_width(&chunk, content_width);
 
             execute!(w, MoveTo(0, start_row + row as u16))?;
             if line_index == 0 {
