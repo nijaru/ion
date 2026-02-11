@@ -72,7 +72,7 @@ impl ChatRenderer {
                                 );
                                 for mut line in highlighted_lines {
                                     if first_line {
-                                        line.prepend(StyledSpan::raw("· "));
+                                        line.prepend(StyledSpan::raw("• "));
                                         first_line = false;
                                     } else {
                                         line.prepend(StyledSpan::raw("  "));
