@@ -163,10 +163,18 @@
     {
       "ts": "2026-02-11T07:38:10.849Z",
       "msg": "Added tests for last_ui_top fallback behavior and reset semantics; validation: cargo test -q tui::render_state, cargo test -q tui::, cargo clippy -q, cargo fmt."
+    },
+    {
+      "ts": "2026-02-11T07:47:17.638Z",
+      "msg": "Regression fix: restored colorized status mode label rendering ([READ]=cyan, [WRITE]=yellow) and thinking label magenta while preserving width-safe clipping (last-column reserve) and dimmed token usage in status row."
+    },
+    {
+      "ts": "2026-02-11T07:47:17.663Z",
+      "msg": "Validation: cargo fmt; cargo test -q tui:: (182 passed); cargo test -q tui::run (8 passed); cargo clippy -q clean."
     }
   ],
   "created_at": "2026-02-11T01:13:44.111Z",
-  "updated_at": "2026-02-11T07:38:10.849Z",
+  "updated_at": "2026-02-11T07:47:17.663Z",
   "completed_at": null,
   "external": {}
 }
