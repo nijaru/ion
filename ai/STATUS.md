@@ -7,8 +7,8 @@
 | Phase | Dogfood readiness (Sprint 16 active) | 2026-02-11 |
 | Status | Headless deferred; TUI stability pass in progress | 2026-02-11 |
 | Toolchain | stable | 2026-01-22 |
-| Tests | 436 passing (`cargo test -q`) | 2026-02-11 |
-| Clippy | clean (last verified) | 2026-02-09 |
+| Tests | 444 passing (`cargo test -q`) | 2026-02-11 |
+| Clippy | clean (`cargo clippy -q`) | 2026-02-11 |
 
 ## Active Focus
 
@@ -23,7 +23,8 @@
 
 - Planned dogfood-readiness roadmap and sprints 16-18 from `ai/design/dogfood-readiness-2026-02.md`.
 - Landed source-level TUI render-state fixes across `src/tui/run.rs`, `src/tui/events.rs`, and `src/tui/render_state.rs`.
-- Added lean transition regression coverage; suite now at 436 passing tests.
+- Added lean transition regression coverage; suite now at 444 passing tests.
+- Startup `--continue` redraw now uses full-viewport clear (`Clear(All)+MoveTo(0,0)`) instead of `ScrollUp(cursor_y+1)`, removing a source of phantom blank-row insertion.
 
 ## Next Session Start
 
