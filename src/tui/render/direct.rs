@@ -1,11 +1,11 @@
 //! Direct crossterm rendering orchestrator (TUI v2 - no ratatui).
 
+use crate::tui::App;
 use crate::tui::render::layout::{BodyLayout, UiLayout};
 use crate::tui::render::selector::{self, SelectorData, SelectorItem};
-use crate::tui::render::{widgets::draw_horizontal_border, PROMPT_WIDTH};
+use crate::tui::render::{PROMPT_WIDTH, widgets::draw_horizontal_border};
 use crate::tui::types::{Mode, SelectorPage};
 use crate::tui::util::{format_relative_time, shorten_home_prefix};
-use crate::tui::App;
 use crossterm::cursor::MoveTo;
 use crossterm::execute;
 use crossterm::terminal::{Clear, ClearType};
@@ -72,7 +72,13 @@ impl App {
                     let (cursor_x, cursor_y) = self.input_state.cursor_pos;
                     let scroll_offset = self.input_state.scroll_offset() as u16;
                     let cursor_y = cursor_y.saturating_sub(scroll_offset);
-                    execute!(w, MoveTo(cursor_x + PROMPT_WIDTH, content_start + cursor_y))?;
+                    let cursor_col = cursor_x
+                        .saturating_add(PROMPT_WIDTH)
+                        .min(layout.width.saturating_sub(1));
+                    let cursor_row = content_start
+                        .saturating_add(cursor_y)
+                        .min(content_start.saturating_add(content_height.saturating_sub(1)));
+                    execute!(w, MoveTo(cursor_col, cursor_row))?;
                 }
             }
         }
