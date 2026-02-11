@@ -259,14 +259,23 @@ fn prepare_frame(app: &mut App, term_width: u16, term_height: u16) -> FramePrep 
         state_changed = true;
     }
 
-    // Capture scroll amount from current position before any ops modify it.
-    // In-session clears/reflows only scroll the rows with actual content,
-    // not the full terminal height (avoids pushing blank lines into scrollback).
-    let ui_height = app.compute_layout(term_width, term_height).height();
-    let scroll_amount = app
+    let layout = app.compute_layout(term_width, term_height);
+    let ui_height = layout.height();
+    let mut scroll_amount = app
         .render_state
         .position
         .scroll_amount(ui_height, term_height);
+
+    // If bottom UI growth (multiline input/popup changes) would overlap tracked chat rows,
+    // force a full reflow so history is re-laid out instead of being erased by UI clearing.
+    let needs_overlap_reflow = tracking_ui_overlap(&app.render_state.position, &layout)
+        && !app.message_list.entries.is_empty();
+    if needs_overlap_reflow {
+        app.render_state.needs_reflow = true;
+        // Composer-driven height changes can make row-based scroll estimates stale.
+        // Full-viewport scroll avoids residual rows and duplicate redraw artifacts.
+        scroll_amount = term_height;
+    }
 
     // Screen clear (/clear)
     if app.render_state.needs_screen_clear {
@@ -301,7 +310,7 @@ fn prepare_frame(app: &mut App, term_width: u16, term_height: u16) -> FramePrep 
             // run after reflow and can wipe freshly reprinted content.
             app.render_state.cancel_selector_clear();
         } else {
-            let fallback = app.compute_layout(term_width, term_height).top;
+            let fallback = layout.top;
             let from_row = app.render_state.take_selector_clear_from(fallback);
             app.render_state.needs_selector_clear = false;
             pre_ops.push(PreOp::ClearSelectorArea { from_row });
@@ -340,6 +349,13 @@ fn prepare_frame(app: &mut App, term_width: u16, term_height: u16) -> FramePrep 
         chat_lines,
         state_changed,
     }
+}
+
+fn tracking_ui_overlap(position: &ChatPosition, layout: &UiLayout) -> bool {
+    matches!(
+        position,
+        ChatPosition::Tracking { next_row, .. } if layout.top < *next_row
+    )
 }
 
 /// Pure arithmetic to decide how to insert chat lines.
@@ -922,5 +938,31 @@ mod tests {
         let layout = test_layout(35, 80); // ui_height = 5, available = 35
         let insert = plan_chat_insert(&pos, lines, &layout, 40);
         assert!(matches!(insert, ChatInsert::Overflow { old_ui_row: 0, .. }));
+    }
+
+    #[test]
+    fn tracking_ui_overlap_detects_intrusion() {
+        let pos = ChatPosition::Tracking {
+            next_row: 20,
+            ui_drawn_at: Some(20),
+        };
+        let layout = test_layout(18, 80);
+        assert!(tracking_ui_overlap(&pos, &layout));
+    }
+
+    #[test]
+    fn tracking_ui_overlap_ignores_non_intrusion() {
+        let pos = ChatPosition::Tracking {
+            next_row: 20,
+            ui_drawn_at: Some(20),
+        };
+        let layout = test_layout(20, 80);
+        assert!(!tracking_ui_overlap(&pos, &layout));
+
+        let scrolling = ChatPosition::Scrolling {
+            ui_drawn_at: Some(20),
+        };
+        let layout = test_layout(18, 80);
+        assert!(!tracking_ui_overlap(&scrolling, &layout));
     }
 }
