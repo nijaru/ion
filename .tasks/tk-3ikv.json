@@ -15,10 +15,14 @@
     {
       "ts": "2026-02-11T06:27:15.923Z",
       "msg": "Hardened cancellation classification in src/tui/session/update.rs: replaced exact 'Cancelled' substring check with case-insensitive detection for canceled/cancelled variants, preventing false error-state display after user/tool cancellation. Added unit test coverage. cargo test -q now 444 passing."
+    },
+    {
+      "ts": "2026-02-11T06:31:35.919Z",
+      "msg": "Follow-up: queue restoration now resets history navigation state after set_input_text, preventing stale draft/history-index behavior after cancellation/completion transitions."
     }
   ],
   "created_at": "2026-02-11T06:26:47.017Z",
-  "updated_at": "2026-02-11T06:27:29.103Z",
+  "updated_at": "2026-02-11T06:31:35.919Z",
   "completed_at": "2026-02-11T06:27:29.103Z",
   "external": {}
 }
