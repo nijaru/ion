@@ -7,9 +7,10 @@ use ropey::Rope;
 #[derive(Debug, Clone, Default)]
 pub struct ComposerBuffer {
     rope: Rope,
-    /// Large pastes (>5 lines or >500 chars) are stored here.
-    /// The buffer contains a placeholder like `[Pasted text #1]`.
-    pub blobs: Vec<String>,
+    /// Large pastes (>5 lines or >500 chars) keyed by placeholder id.
+    pub blobs: Vec<(usize, String)>,
+    /// Monotonic placeholder id so paste markers don't reset to #1 every clear.
+    next_blob_id: usize,
 }
 
 impl ComposerBuffer {
@@ -104,8 +105,10 @@ impl ComposerBuffer {
 
     /// Store a large paste and return its placeholder index.
     pub fn push_blob(&mut self, content: String) -> usize {
-        self.blobs.push(content);
-        self.blobs.len()
+        self.next_blob_id = self.next_blob_id.saturating_add(1);
+        let blob_id = self.next_blob_id;
+        self.blobs.push((blob_id, content));
+        blob_id
     }
 
     /// Resolve all placeholders in the given text using the stored blobs.
@@ -113,10 +116,10 @@ impl ComposerBuffer {
     pub fn resolve_content(&self) -> String {
         let mut final_content = self.get_content();
 
-        for (i, blob) in self.blobs.iter().enumerate() {
+        for (blob_id, blob) in &self.blobs {
             // Use unique delimiter (\x1f = Unit Separator) that can't be accidentally typed
             // but still allows the visible text to be human-readable
-            let placeholder = Self::internal_placeholder(i + 1);
+            let placeholder = Self::internal_placeholder(*blob_id);
             final_content = final_content.replace(&placeholder, blob);
         }
 
@@ -173,6 +176,14 @@ mod tests {
             buf.resolve_content(),
             "User typed: [Pasted text #1] literally"
         );
+    }
+
+    #[test]
+    fn test_blob_ids_are_monotonic_across_clear() {
+        let mut buf = ComposerBuffer::new();
+        assert_eq!(buf.push_blob("first".to_string()), 1);
+        buf.clear();
+        assert_eq!(buf.push_blob("second".to_string()), 2);
     }
 
     #[test]

@@ -180,7 +180,8 @@ impl ChatRenderer {
                         if content.starts_with("Error:") {
                             entry_lines.push(StyledLine::colored(content.to_string(), Color::Red));
                         } else if content.starts_with("Warning:") {
-                            entry_lines.push(StyledLine::colored(content.to_string(), Color::Yellow));
+                            entry_lines
+                                .push(StyledLine::colored(content.to_string(), Color::Yellow));
                         } else {
                             let text = format!("[{content}]");
                             entry_lines.push(StyledLine::dim(text));
@@ -238,8 +239,11 @@ impl ChatRenderer {
                 wrapped.push(line);
                 continue;
             }
-            let text_len = styled_line_text(&line).chars().count();
-            if text_len <= wrap_width {
+            let text_width: usize = styled_line_text(&line)
+                .chars()
+                .filter_map(UnicodeWidthChar::width)
+                .sum();
+            if text_width <= wrap_width {
                 wrapped.push(line);
                 continue;
             }
