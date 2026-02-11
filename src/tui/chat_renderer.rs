@@ -565,7 +565,6 @@ fn wrap_styled_line(line: &StyledLine, width: usize) -> Vec<StyledLine> {
     let mut lines: Vec<StyledLine> = Vec::new();
     let mut current_chars: Vec<(char, crossterm::style::ContentStyle)> = Vec::new();
     let mut current_width = 0usize;
-    let mut is_first_line = true;
 
     let effective_width = if indent_width > 0 {
         width.saturating_sub(indent_width)
@@ -595,8 +594,7 @@ fn wrap_styled_line(line: &StyledLine, width: usize) -> Vec<StyledLine> {
             lines.push(chars_to_styled_line(&current_chars));
             current_chars.clear();
             current_width = 0;
-            is_first_line = false;
-            if !is_first_line && indent_width > 0 {
+            if indent_width > 0 {
                 for ich in indent_prefix.chars() {
                     current_chars.push((ich, crossterm::style::ContentStyle::default()));
                 }
@@ -612,7 +610,6 @@ fn wrap_styled_line(line: &StyledLine, width: usize) -> Vec<StyledLine> {
                     lines.push(chars_to_styled_line(&current_chars));
                     current_chars.clear();
                     current_width = 0;
-                    is_first_line = false;
                     if indent_width > 0 {
                         for ich in indent_prefix.chars() {
                             current_chars

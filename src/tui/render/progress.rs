@@ -6,7 +6,7 @@ use crate::tui::util::{
 use crate::tui::App;
 use crossterm::cursor::MoveTo;
 use crossterm::execute;
-use crossterm::style::{Color, Print, ResetColor, SetForegroundColor};
+use crossterm::style::{Color, ResetColor, SetForegroundColor};
 use crossterm::terminal::{Clear, ClearType};
 use std::io::Write;
 
