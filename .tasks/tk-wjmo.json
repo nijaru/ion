@@ -1,0 +1,24 @@
+{
+  "project": "tk",
+  "ref": "wjmo",
+  "title": "[P1] Preserve queued input across agent turn/task boundaries",
+  "description": "Fix agent/TUI flow so queued mid-run user input is not lost at final-turn boundaries or finish/error state transitions; recover poisoned queue locks in recall path.",
+  "status": "done",
+  "priority": 2,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [
+    {
+      "ts": "2026-02-11T06:26:20.985Z",
+      "msg": "Implemented queue preservation hardening: agent run_task now drains queued messages both before turns and once more after final-answer turns (no tools) to avoid late steering loss; TUI update restores any queued messages back into input on Finished/Error/session-finalization before dropping queue; input Up-arrow recall now recovers poisoned queue locks. Added unit tests in src/agent/mod.rs and src/tui/session/update.rs. Validation: cargo test -q (443 pass) and cargo clippy -q clean."
+    }
+  ],
+  "created_at": "2026-02-11T06:26:14.748Z",
+  "updated_at": "2026-02-11T06:26:31.796Z",
+  "completed_at": "2026-02-11T06:26:31.796Z",
+  "external": {}
+}
