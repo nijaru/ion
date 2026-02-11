@@ -612,7 +612,6 @@ pub async fn run(permissions: PermissionSettings, resume_option: ResumeOption) -
         )?;
         let layout = app.compute_layout(term_width, term_height);
         let ui_height = layout.height();
-        let available_rows = term_height.saturating_sub(ui_height) as usize;
 
         let entry_count = app.message_list.entries.len();
         let mut end = entry_count;
@@ -633,15 +632,15 @@ pub async fn run(permissions: PermissionSettings, resume_option: ResumeOption) -
         for line in &lines {
             line.writeln(&mut stdout)?;
         }
-        let visible_lines = line_count.min(term_height as usize);
-        let overflow = visible_lines.saturating_sub(available_rows) as u16;
-        if overflow > 0 {
-            execute!(stdout, crossterm::terminal::ScrollUp(overflow))?;
+        let excess =
+            app.render_state
+                .position_after_reprint(line_count, term_height, ui_height);
+        if excess > 0 {
+            execute!(stdout, crossterm::terminal::ScrollUp(excess))?;
         }
 
         execute!(stdout, Clear(ClearType::FromCursorDown))?;
         app.render_state.mark_reflow_complete(end);
-        app.render_state.position = ChatPosition::Scrolling { ui_drawn_at: None };
         execute!(stdout, EndSynchronizedUpdate)?;
         stdout.flush()?;
     }
