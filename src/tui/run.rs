@@ -34,7 +34,10 @@ use std::io::{self, Write};
 /// Operations that happen before chat insertion.
 enum PreOp {
     /// Push visible content to scrollback, blank the screen.
-    ClearScreen { scroll_amount: u16 },
+    ClearScreen {
+        scroll_amount: u16,
+        full_clear: bool,
+    },
     /// Push visible content to scrollback, reprint chat at new width.
     Reflow {
         lines: Vec<StyledLine>,
@@ -86,6 +89,7 @@ struct FramePrep {
 fn prepare_frame(app: &mut App, term_width: u16, term_height: u16) -> FramePrep {
     let mut pre_ops = Vec::new();
     let mut state_changed = false;
+    let mut reflow_scheduled = false;
 
     // Consume initial render flag
     if app.render_state.needs_initial_render {
@@ -105,7 +109,10 @@ fn prepare_frame(app: &mut App, term_width: u16, term_height: u16) -> FramePrep 
     // Screen clear (/clear)
     if app.render_state.needs_screen_clear {
         app.render_state.needs_screen_clear = false;
-        pre_ops.push(PreOp::ClearScreen { scroll_amount });
+        pre_ops.push(PreOp::ClearScreen {
+            scroll_amount,
+            full_clear: matches!(app.render_state.position, ChatPosition::Empty),
+        });
         state_changed = true;
     }
 
@@ -118,6 +125,7 @@ fn prepare_frame(app: &mut App, term_width: u16, term_height: u16) -> FramePrep 
                 lines,
                 scroll_amount,
             });
+            reflow_scheduled = true;
         } else {
             app.render_state.position = ChatPosition::Empty;
         }
@@ -132,7 +140,10 @@ fn prepare_frame(app: &mut App, term_width: u16, term_height: u16) -> FramePrep 
     }
 
     // Header insertion
-    if !app.render_state.position.header_inserted() {
+    if !reflow_scheduled
+        && app.message_list.entries.is_empty()
+        && !app.render_state.position.header_inserted()
+    {
         let header_lines = app.take_startup_header_lines();
         if !header_lines.is_empty() {
             pre_ops.push(PreOp::PrintHeader(header_lines));
@@ -141,7 +152,11 @@ fn prepare_frame(app: &mut App, term_width: u16, term_height: u16) -> FramePrep 
     }
 
     // Chat content
-    let chat_lines = app.take_chat_inserts(term_width);
+    let chat_lines = if reflow_scheduled {
+        Vec::new()
+    } else {
+        app.take_chat_inserts(term_width)
+    };
 
     // First-message: clear header area
     if !chat_lines.is_empty()
@@ -191,7 +206,26 @@ fn plan_chat_insert(
                 }
             }
         }
-        ChatPosition::Scrolling { .. } | ChatPosition::Empty => {
+        ChatPosition::Empty => {
+            let space_needed = line_count.saturating_add(ui_height);
+            if space_needed <= term_height {
+                ChatInsert::AtRow {
+                    start_row: 0,
+                    lines,
+                }
+            } else {
+                let ui_start = term_height.saturating_sub(ui_height);
+                let scroll_amount = line_count.saturating_sub(ui_start);
+                let print_row = ui_start.saturating_sub(line_count);
+                ChatInsert::Overflow {
+                    old_ui_row: 0,
+                    scroll_amount,
+                    print_row,
+                    lines,
+                }
+            }
+        }
+        ChatPosition::Scrolling { .. } => {
             let ui_start = term_height.saturating_sub(ui_height);
             ChatInsert::ScrollInsert {
                 ui_start,
@@ -230,12 +264,19 @@ fn render_frame(
     // Execute pre-ops
     for op in &pre_ops {
         match op {
-            PreOp::ClearScreen { scroll_amount } => {
-                execute!(
-                    stdout,
-                    crossterm::terminal::ScrollUp(*scroll_amount),
-                    MoveTo(0, 0)
-                )?;
+            PreOp::ClearScreen {
+                scroll_amount,
+                full_clear,
+            } => {
+                if *full_clear {
+                    execute!(stdout, MoveTo(0, 0), Clear(ClearType::All), MoveTo(0, 0))?;
+                } else {
+                    execute!(
+                        stdout,
+                        crossterm::terminal::ScrollUp(*scroll_amount),
+                        MoveTo(0, 0)
+                    )?;
+                }
             }
             PreOp::Reflow {
                 lines,
@@ -356,6 +397,7 @@ fn render_frame(
                     line.writeln(stdout)?;
                     row = row.saturating_add(1);
                 }
+                app.render_state.position = ChatPosition::Scrolling { ui_drawn_at: None };
             }
         }
     }
@@ -856,11 +898,17 @@ mod tests {
     }
 
     #[test]
-    fn plan_empty_acts_like_scroll() {
+    fn plan_empty_starts_tracking_until_overflow() {
         let pos = ChatPosition::Empty;
         let lines = vec![StyledLine::empty()];
         let layout = test_layout(35, 80);
         let insert = plan_chat_insert(&pos, lines, &layout, 40);
-        assert!(matches!(insert, ChatInsert::ScrollInsert { .. }));
+        assert!(matches!(
+            insert,
+            ChatInsert::AtRow {
+                start_row: 0,
+                ..
+            }
+        ));
     }
 }
