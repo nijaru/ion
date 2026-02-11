@@ -341,17 +341,29 @@ impl App {
                     if self.is_running {
                         // Queue message for injection at next turn (resolve blobs)
                         let resolved = self.resolved_input_text();
+                        let mut queued = false;
                         if let Some(queue) = self.message_queue.as_ref() {
                             match queue.lock() {
-                                Ok(mut q) => q.push(resolved),
+                                Ok(mut q) => {
+                                    q.push(resolved);
+                                    queued = true;
+                                }
                                 Err(poisoned) => {
                                     // Lock poisoned - recover and push anyway
                                     tracing::warn!("Message queue lock poisoned, recovering");
                                     poisoned.into_inner().push(resolved);
+                                    queued = true;
                                 }
                             }
                         }
-                        self.clear_input();
+                        if queued {
+                            self.clear_input();
+                        } else {
+                            self.last_error = Some(
+                                "Task ended before message could be queued; press Enter again"
+                                    .to_string(),
+                            );
+                        }
                     } else {
                         // Check for slash commands
                         if input.starts_with('/') {
