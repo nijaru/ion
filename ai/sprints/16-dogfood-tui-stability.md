@@ -71,8 +71,8 @@ Create and adopt a short manual verification checklist for TUI-critical changes.
 
 ### Acceptance Criteria
 
-- [ ] Checklist covers `--continue` short/long, in-app `/resume`, `/clear`, resize, cancel, and editor suspend/resume.
-- [ ] Checklist is documented in `ai/review/` or `ai/design/` and referenced from `ai/STATUS.md`.
+- [x] Checklist covers `--continue` short/long, in-app `/resume`, `/clear`, resize, cancel, and editor suspend/resume.
+- [x] Checklist is documented in `ai/review/` or `ai/design/` and referenced from `ai/STATUS.md`.
 - [ ] Team can run checklist in under 10 minutes.
 
 ### Technical Notes

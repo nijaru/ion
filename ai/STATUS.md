@@ -27,7 +27,7 @@
 
 ## Next Session Start
 
-1. Run manual TUI checklist on `--continue` short/long history, in-app `/resume`, `/clear`, resize, cancel, and suspend/resume.
+1. Run manual TUI checklist: `ai/review/tui-manual-checklist-2026-02.md`.
 2. Fix any remaining resize/selector edge cases found during manual verification.
 3. Close `tk-86lk` if checklist passes, then move Sprint 17 to `active`.
 
@@ -37,6 +37,7 @@
 | --- | --- |
 | Sprint index | `ai/SPRINTS.md` |
 | Sprint 16 tasks | `ai/sprints/16-dogfood-tui-stability.md` |
+| Manual TUI checklist | `ai/review/tui-manual-checklist-2026-02.md` |
 | Dogfood readiness design | `ai/design/dogfood-readiness-2026-02.md` |
 | Permissions architecture | `ai/design/permissions-v2.md` |
 | TUI render pipeline | `ai/design/tui-render-pipeline.md` |
