@@ -21,7 +21,7 @@ impl App {
         if self.mode == Mode::Selector {
             self.render_state.note_selector_top(layout.top);
         }
-        self.render_state.position.set_ui_drawn_at(layout.top);
+        self.render_state.note_ui_top(layout.top);
 
         // Clear from UI position downward (never clear full screen - preserves scrollback)
         execute!(

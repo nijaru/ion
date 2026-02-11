@@ -31,7 +31,8 @@
 - Small-width redraw hardening: progress and status rows are now width-bounded/truncated before printing (`src/tui/render/progress.rs`, `src/tui/render/status.rs`, `src/tui/util.rs`) so narrow terminals cannot autowrap bottom rows and corrupt chat/history rendering.
 - Follow-up width safety pass: clamped popup/history/selector renderer rows to display width and switched file completer truncation away from Unicode-unsafe byte slicing (`src/tui/render/popup.rs`, `src/tui/render/history.rs`, `src/tui/render/selector.rs`, `src/tui/file_completer.rs`).
 - Additional narrow-width hardening: input borders now reserve the last terminal column to avoid autowrap churn, input lines are defensively display-width-clipped, and composer cursor placement is clamped to the visible input region (`src/tui/render/widgets.rs`, `src/tui/render/input_box.rs`, `src/tui/render/direct.rs`).
-- Validation: `cargo fmt`; `cargo test -q tui::` (181 passed); `cargo clippy -q` clean. Full `cargo test -q` still fails in this environment due existing non-TUI reqwest/system-configuration proxy panics.
+- Render-state/layout hardening: track last bottom-UI top row independently of chat position state so `compute_layout.clear_from` remains correct in `Empty/Header` phases when UI height shrinks (`src/tui/render_state.rs`, `src/tui/render/layout.rs`, `src/tui/render/direct.rs`).
+- Validation: `cargo fmt`; `cargo test -q tui::` (182 passed); `cargo clippy -q` clean. Full `cargo test -q` still fails in this environment due existing non-TUI reqwest/system-configuration proxy panics.
 
 ## Next Session Start
 
