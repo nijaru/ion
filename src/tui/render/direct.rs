@@ -1,11 +1,11 @@
 //! Direct crossterm rendering orchestrator (TUI v2 - no ratatui).
 
-use crate::tui::App;
 use crate::tui::render::layout::{BodyLayout, UiLayout};
 use crate::tui::render::selector::{self, SelectorData, SelectorItem};
-use crate::tui::render::{PROMPT_WIDTH, widgets::draw_horizontal_border};
+use crate::tui::render::{widgets::draw_horizontal_border, PROMPT_WIDTH};
 use crate::tui::types::{Mode, SelectorPage};
 use crate::tui::util::{format_relative_time, shorten_home_prefix};
+use crate::tui::App;
 use crossterm::cursor::MoveTo;
 use crossterm::execute;
 use crossterm::terminal::{Clear, ClearType};
@@ -23,12 +23,10 @@ impl App {
         }
         self.render_state.note_ui_top(layout.top);
 
-        // Clear from UI position downward (never clear full screen - preserves scrollback)
-        execute!(
-            w,
-            MoveTo(0, layout.clear_from),
-            Clear(ClearType::FromCursorDown)
-        )?;
+        // Clear current UI area downward (preserves chat scrollback above top).
+        // Stale rows between clear_from and top are handled separately in
+        // render_frame before chat insertion to avoid erasing new content.
+        execute!(w, MoveTo(0, layout.top), Clear(ClearType::FromCursorDown))?;
 
         match &layout.body {
             BodyLayout::Selector { selector } => {

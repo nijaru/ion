@@ -438,11 +438,19 @@ fn render_frame(
 
     execute!(stdout, BeginSynchronizedUpdate)?;
     apply_pre_ops(stdout, app, &pre_ops, layout, term_height)?;
+
+    // Clear stale UI rows between old top and current top (e.g., popup dismiss).
+    // Must happen BEFORE chat insertion: new chat lines may occupy these rows.
+    // draw_direct only clears from its current top down to preserve chat above.
+    if layout.clear_from < layout.top {
+        for row in layout.clear_from..layout.top {
+            execute!(stdout, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
+        }
+    }
+
     apply_chat_insert(stdout, app, chat_insert)?;
 
-    // Recompute layout after chat insertion — position may have changed,
-    // and draw_direct uses clear_from (derived from last_ui_top) which must
-    // reflect the post-insertion state to avoid clearing newly inserted lines.
+    // Recompute layout after chat insertion — position may have changed.
     let post_layout = app.compute_layout(term_width, term_height);
     app.draw_direct(stdout, &post_layout)?;
 
