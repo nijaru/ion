@@ -487,11 +487,6 @@ impl App {
                 self.message_list.clear();
                 self.render_state.reset_for_new_conversation();
                 self.render_state.needs_screen_clear = true;
-
-                let agent = self.agent.clone();
-                tokio::spawn(async move {
-                    agent.clear_plan().await;
-                });
             }
             "/help" | "/?" => {
                 self.mode = Mode::HelpOverlay;

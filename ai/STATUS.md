@@ -5,7 +5,7 @@
 | Metric    | Value                             | Updated    |
 | --------- | --------------------------------- | ---------- |
 | Phase     | Feature work                      | 2026-02-10 |
-| Status    | System design evaluation complete | 2026-02-10 |
+| Status    | Designer removal complete; sandbox next | 2026-02-10 |
 | Toolchain | stable                            | 2026-01-22 |
 | Tests     | 434 passing                       | 2026-02-09 |
 | Clippy    | clean                             | 2026-02-09 |
@@ -23,6 +23,13 @@
 
 Detailed research in `ai/research/*-2026-02.md` (5 files).
 
+## Session Focus (2026-02-10 PM)
+
+- Completed `tk-qhe1`: removed designer auto-plan mode + dead integrations
+- Completed `tk-c1q3`: TUI review pass + fixed dead event match arm in `src/tui/session/update.rs`
+- Confirmed `/resume` is already implemented (tracked in `tk-qwp3`)
+- Next highest-priority open item: `tk-oh88` (OS sandbox execution)
+
 ## Session Summary (2026-02-09)
 
 **Non-streaming complete() usage tracking (72eede9):**
@@ -37,6 +44,10 @@ Detailed research in `ai/research/*-2026-02.md` (5 files).
 **Earlier: Agent quality + caching improvements (12 commits), TUI render pipeline refactor**
 
 ## Priority Queue
+
+### P2
+
+- tk-oh88: Implement OS sandbox execution
 
 ### P3
 

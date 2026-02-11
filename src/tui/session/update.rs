@@ -83,9 +83,13 @@ impl App {
                     // Select cheap model for summarization (newest among cheapest).
                     // Only update when not previewing another provider's models.
                     if self.pending_provider.is_none() {
-                        let summ_model = crate::provider::ModelRegistry::select_summarization_model(models);
+                        let summ_model =
+                            crate::provider::ModelRegistry::select_summarization_model(models);
                         if let Some(m) = summ_model {
-                            debug!("Selected summarization model: {} (${}/M in)", m.id, m.pricing.input);
+                            debug!(
+                                "Selected summarization model: {} (${}/M in)",
+                                m.id, m.pricing.input
+                            );
                             self.agent.set_summarization_model(Some(m.id.clone()));
                         }
                     }
@@ -187,9 +191,6 @@ impl App {
                             format_k(&saved),
                         ),
                     ));
-                }
-                _ => {
-                    self.message_list.push_event(event);
                 }
             }
         }
