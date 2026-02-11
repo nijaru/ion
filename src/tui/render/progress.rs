@@ -10,24 +10,7 @@ use crossterm::style::{Color, Print, ResetColor, SetForegroundColor};
 use crossterm::terminal::{Clear, ClearType};
 use std::io::Write;
 
-fn write_colored<W: Write>(
-    w: &mut W,
-    text: &str,
-    color: Color,
-    remaining: &mut usize,
-) -> std::io::Result<()> {
-    if *remaining == 0 {
-        return Ok(());
-    }
-    let clipped = truncate_to_display_width(text, *remaining);
-    if clipped.is_empty() {
-        return Ok(());
-    }
-    *remaining = remaining.saturating_sub(display_width(&clipped));
-    execute!(w, SetForegroundColor(color), Print(clipped), ResetColor)
-}
-
-fn write_plain<W: Write>(w: &mut W, text: &str, remaining: &mut usize) -> std::io::Result<()> {
+fn write_clipped<W: Write>(w: &mut W, text: &str, remaining: &mut usize) -> std::io::Result<()> {
     if *remaining == 0 {
         return Ok(());
     }
@@ -71,35 +54,39 @@ impl App {
         let frame = (self.frame_count % SPINNER.len() as u64) as usize;
         let mut remaining = max_cells;
 
+        let color = if self.task.retry_status.is_some() {
+            Color::Yellow
+        } else {
+            Color::Cyan
+        };
+        execute!(w, SetForegroundColor(color))?;
+
         if let Some((ref reason, delay, started)) = self.task.retry_status {
             let elapsed = started.elapsed().as_secs();
             let secs_left = delay.saturating_sub(elapsed);
-            write_plain(w, " ", &mut remaining)?;
-            write_colored(w, SPINNER[frame], Color::Yellow, &mut remaining)?;
-            write_plain(
+            write_clipped(
                 w,
-                &format!(" {reason} • retrying in {secs_left}s"),
+                &format!(" {} {reason} • retrying in {secs_left}s", SPINNER[frame]),
                 &mut remaining,
             )?;
-            return Ok(());
-        }
-
-        write_plain(w, " ", &mut remaining)?;
-        write_colored(w, SPINNER[frame], Color::Cyan, &mut remaining)?;
-        write_plain(w, " ", &mut remaining)?;
-
-        if let Some(ref tool) = self.task.current_tool {
-            write_plain(w, tool, &mut remaining)?;
-        } else if self.task.thinking_start.is_some() {
-            write_plain(w, "Thinking...", &mut remaining)?;
         } else {
-            write_plain(w, "Ionizing...", &mut remaining)?;
+            write_clipped(w, &format!(" {} ", SPINNER[frame]), &mut remaining)?;
+
+            if let Some(ref tool) = self.task.current_tool {
+                write_clipped(w, tool, &mut remaining)?;
+            } else if self.task.thinking_start.is_some() {
+                write_clipped(w, "Thinking...", &mut remaining)?;
+            } else {
+                write_clipped(w, "Ionizing...", &mut remaining)?;
+            }
+
+            if let Some(start) = self.task.start_time {
+                let elapsed = start.elapsed().as_secs();
+                write_clipped(w, &format!(" ({elapsed}s • Esc to cancel)"), &mut remaining)?;
+            }
         }
 
-        if let Some(start) = self.task.start_time {
-            let elapsed = start.elapsed().as_secs();
-            write_plain(w, &format!(" ({elapsed}s • Esc to cancel)"), &mut remaining)?;
-        }
+        execute!(w, ResetColor)?;
         Ok(())
     }
 
@@ -114,17 +101,13 @@ impl App {
 
         let mut remaining = max_cells;
 
-        let (symbol, symbol_color, label) = if self.last_error.is_some() {
-            ("✗ ", Color::Red, "Error")
+        let (symbol, color, label) = if self.last_error.is_some() {
+            ("✗", Color::Red, "Error")
         } else if summary.was_cancelled {
-            ("⚠ ", Color::Yellow, "Canceled")
+            ("⚠", Color::Yellow, "Canceled")
         } else {
-            ("✓ ", Color::Green, "Completed")
+            ("✓", Color::Green, "Completed")
         };
-
-        write_plain(w, " ", &mut remaining)?;
-        write_colored(w, symbol, symbol_color, &mut remaining)?;
-        write_plain(w, label, &mut remaining)?;
 
         let elapsed = format_elapsed(summary.elapsed.as_secs());
         let mut stats = vec![elapsed];
@@ -138,7 +121,13 @@ impl App {
             stats.push(format_cost(summary.cost));
         }
 
-        write_plain(w, &format!(" ({})", stats.join(" • ")), &mut remaining)?;
+        execute!(w, SetForegroundColor(color))?;
+        write_clipped(
+            w,
+            &format!(" {symbol} {label} ({})", stats.join(" • ")),
+            &mut remaining,
+        )?;
+        execute!(w, ResetColor)?;
         Ok(())
     }
 }

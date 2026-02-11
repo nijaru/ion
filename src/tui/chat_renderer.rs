@@ -360,26 +360,67 @@ fn wrap_line(line: &str, width: usize) -> Vec<String> {
         return vec![String::new()];
     }
 
+    let line_width: usize = line.chars().filter_map(UnicodeWidthChar::width).sum();
+    if line_width <= width {
+        return vec![line.to_string()];
+    }
+
     let mut chunks = Vec::new();
     let mut current = String::new();
     let mut current_width = 0usize;
 
-    for ch in line.chars() {
-        let char_width = UnicodeWidthChar::width(ch).unwrap_or(0);
-        if current_width + char_width > width && !current.is_empty() {
-            chunks.push(current);
-            current = String::new();
-            current_width = 0;
-        }
-        current.push(ch);
-        current_width += char_width;
-    }
+    for word in split_words(line) {
+        let word_width: usize = word.chars().filter_map(UnicodeWidthChar::width).sum();
 
+        if current_width + word_width <= width {
+            current.push_str(word);
+            current_width += word_width;
+        } else if word_width <= width && !current.is_empty() {
+            // Word fits on a fresh line - trim trailing space from current
+            chunks.push(current.trim_end().to_string());
+            current = word.to_string();
+            current_width = word_width;
+        } else {
+            // Word wider than line or first word - character-break
+            for ch in word.chars() {
+                let cw = UnicodeWidthChar::width(ch).unwrap_or(0);
+                if current_width + cw > width && !current.is_empty() {
+                    chunks.push(current);
+                    current = String::new();
+                    current_width = 0;
+                }
+                current.push(ch);
+                current_width += cw;
+            }
+        }
+    }
     if !current.is_empty() || chunks.is_empty() {
         chunks.push(current);
     }
 
     chunks
+}
+
+/// Split text into alternating word and space segments.
+fn split_words(text: &str) -> Vec<&str> {
+    let mut segments = Vec::new();
+    let mut start = 0;
+    let mut in_space = text.starts_with(' ');
+
+    for (i, ch) in text.char_indices() {
+        let is_space = ch == ' ';
+        if is_space != in_space {
+            if start < i {
+                segments.push(&text[start..i]);
+            }
+            start = i;
+            in_space = is_space;
+        }
+    }
+    if start < text.len() {
+        segments.push(&text[start..]);
+    }
+    segments
 }
 
 fn trim_trailing_empty_lines(lines: &mut Vec<StyledLine>) {
@@ -477,52 +518,117 @@ fn wrap_styled_line(line: &StyledLine, width: usize) -> Vec<StyledLine> {
     let indent_width = continuation_indent_width(&text).min(width.saturating_sub(1));
     let indent_prefix = " ".repeat(indent_width);
 
-    let mut lines = Vec::new();
-    let mut current_spans: Vec<StyledSpan> = Vec::new();
+    // Flatten spans into (char, style) pairs
+    let flat: Vec<(char, crossterm::style::ContentStyle)> = line
+        .spans
+        .iter()
+        .flat_map(|span| span.content.chars().map(move |ch| (ch, span.style)))
+        .collect();
+
+    // Split into word/space segments, tracking char indices into flat
+    struct Segment {
+        start: usize,
+        end: usize,
+        width: usize,
+        is_space: bool,
+    }
+    let mut segments: Vec<Segment> = Vec::new();
+    let mut seg_start = 0;
+    let mut seg_width = 0usize;
+    let mut in_space = flat.first().map_or(false, |(ch, _)| *ch == ' ');
+
+    for (i, &(ch, _)) in flat.iter().enumerate() {
+        let is_space = ch == ' ';
+        if is_space != in_space && seg_start < i {
+            segments.push(Segment {
+                start: seg_start,
+                end: i,
+                width: seg_width,
+                is_space: in_space,
+            });
+            seg_start = i;
+            seg_width = 0;
+            in_space = is_space;
+        }
+        seg_width += UnicodeWidthChar::width(ch).unwrap_or(0);
+    }
+    if seg_start < flat.len() {
+        segments.push(Segment {
+            start: seg_start,
+            end: flat.len(),
+            width: seg_width,
+            is_space: in_space,
+        });
+    }
+
+    // Greedily place segments on lines
+    let mut lines: Vec<StyledLine> = Vec::new();
+    let mut current_chars: Vec<(char, crossterm::style::ContentStyle)> = Vec::new();
     let mut current_width = 0usize;
     let mut is_first_line = true;
 
-    let start_new_line = |lines: &mut Vec<StyledLine>,
-                          current_spans: &mut Vec<StyledSpan>,
-                          current_width: &mut usize,
-                          is_first_line: &mut bool| {
-        if !current_spans.is_empty() {
-            lines.push(StyledLine::new(std::mem::take(current_spans)));
-        }
-        *current_width = 0;
-        if !*is_first_line && !indent_prefix.is_empty() {
-            current_spans.push(StyledSpan::raw(indent_prefix.clone()));
-            *current_width = indent_width;
-        }
-        *is_first_line = false;
+    let effective_width = if indent_width > 0 {
+        width.saturating_sub(indent_width)
+    } else {
+        width
     };
 
-    start_new_line(
-        &mut lines,
-        &mut current_spans,
-        &mut current_width,
-        &mut is_first_line,
-    );
-
-    for span in &line.spans {
-        let style = span.style;
-        for ch in span.content.chars() {
-            let char_width = UnicodeWidthChar::width(ch).unwrap_or(0);
-            if current_width + char_width > width && !current_spans.is_empty() {
-                start_new_line(
-                    &mut lines,
-                    &mut current_spans,
-                    &mut current_width,
-                    &mut is_first_line,
-                );
+    for seg in &segments {
+        if seg.is_space {
+            if current_width + seg.width <= width {
+                current_chars.extend_from_slice(&flat[seg.start..seg.end]);
+                current_width += seg.width;
             }
-            push_char(&mut current_spans, style, ch);
-            current_width += char_width;
+            // Drop spaces at line break
+            continue;
+        }
+
+        // Word segment
+        if current_width + seg.width <= width {
+            current_chars.extend_from_slice(&flat[seg.start..seg.end]);
+            current_width += seg.width;
+        } else if seg.width <= effective_width && !current_chars.is_empty() {
+            // Trim trailing spaces from current line
+            while current_chars.last().map_or(false, |(ch, _)| *ch == ' ') {
+                current_chars.pop();
+            }
+            lines.push(chars_to_styled_line(&current_chars));
+            current_chars.clear();
+            current_width = 0;
+            is_first_line = false;
+            if !is_first_line && indent_width > 0 {
+                for ich in indent_prefix.chars() {
+                    current_chars.push((ich, crossterm::style::ContentStyle::default()));
+                }
+                current_width = indent_width;
+            }
+            current_chars.extend_from_slice(&flat[seg.start..seg.end]);
+            current_width += seg.width;
+        } else {
+            // Word wider than line - character-break
+            for &(ch, style) in &flat[seg.start..seg.end] {
+                let cw = UnicodeWidthChar::width(ch).unwrap_or(0);
+                if current_width + cw > width && !current_chars.is_empty() {
+                    lines.push(chars_to_styled_line(&current_chars));
+                    current_chars.clear();
+                    current_width = 0;
+                    is_first_line = false;
+                    if indent_width > 0 {
+                        for ich in indent_prefix.chars() {
+                            current_chars
+                                .push((ich, crossterm::style::ContentStyle::default()));
+                        }
+                        current_width = indent_width;
+                    }
+                }
+                current_chars.push((ch, style));
+                current_width += cw;
+            }
         }
     }
 
-    if !current_spans.is_empty() {
-        lines.push(StyledLine::new(current_spans));
+    if !current_chars.is_empty() {
+        lines.push(chars_to_styled_line(&current_chars));
     }
 
     if lines.is_empty() {
@@ -532,12 +638,17 @@ fn wrap_styled_line(line: &StyledLine, width: usize) -> Vec<StyledLine> {
     }
 }
 
-fn push_char(spans: &mut Vec<StyledSpan>, style: crossterm::style::ContentStyle, ch: char) {
-    if let Some(last) = spans.last_mut()
-        && last.style == style
-    {
-        last.content.push(ch);
-        return;
+fn chars_to_styled_line(chars: &[(char, crossterm::style::ContentStyle)]) -> StyledLine {
+    let mut spans: Vec<StyledSpan> = Vec::new();
+    for &(ch, style) in chars {
+        if let Some(last) = spans.last_mut()
+            && last.style == style
+        {
+            last.content.push(ch);
+        } else {
+            spans.push(StyledSpan::new(ch.to_string(), style));
+        }
     }
-    spans.push(StyledSpan::new(ch.to_string(), style));
+    StyledLine::new(spans)
 }
+
