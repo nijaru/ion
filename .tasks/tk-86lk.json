@@ -91,10 +91,14 @@
     {
       "ts": "2026-02-11T06:04:06.433Z",
       "msg": "Follow-up hardening: tracked last selector render top in RenderState (note_selector_top called from draw_direct in selector mode) and queue_selector_clear now falls back to that top when position.last_ui_top is unavailable (Header/Empty). This closes the remaining pre-message selector-clear gap identified in prior note. cargo test -q still 437 passed."
+    },
+    {
+      "ts": "2026-02-11T06:04:58.443Z",
+      "msg": "Added frame-order guard in prepare_frame: if selector clear and reflow are both pending, selector clear is canceled so it cannot run after reflow and erase newly reprinted chat rows. This narrows resize/selector transition regressions. cargo test -q remains 437 passing."
     }
   ],
   "created_at": "2026-02-11T01:13:44.111Z",
-  "updated_at": "2026-02-11T06:04:06.433Z",
+  "updated_at": "2026-02-11T06:04:58.443Z",
   "completed_at": null,
   "external": {}
 }
