@@ -470,15 +470,15 @@ fn reprint_loaded_session(
         return Ok(());
     }
 
-    execute!(stdout, BeginSynchronizedUpdate)?;
-    execute!(stdout, MoveTo(0, 0), Clear(ClearType::All), MoveTo(0, 0))?;
     let layout = app.compute_layout(term_width, term_height);
     let ui_height = layout.height();
     let lines = app.build_chat_lines(term_width);
     let line_count = lines.len();
 
-    execute!(stdout, MoveTo(0, 0))?;
+    // Print chat history into terminal scrollback naturally.
+    // Each line produces a \r\n, scrolling the terminal as needed.
     write_lines(stdout, &lines)?;
+    stdout.flush()?;
 
     let excess = app
         .render_state
@@ -487,11 +487,8 @@ fn reprint_loaded_session(
         execute!(stdout, crossterm::terminal::ScrollUp(excess))?;
     }
 
-    execute!(stdout, Clear(ClearType::FromCursorDown))?;
     app.render_state
         .mark_reflow_complete(rendered_entry_count(app));
-    execute!(stdout, EndSynchronizedUpdate)?;
-    stdout.flush()?;
     Ok(())
 }
 
