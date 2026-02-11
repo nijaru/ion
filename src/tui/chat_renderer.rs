@@ -278,7 +278,11 @@ fn parse_ansi_line(input: &str) -> StyledLine {
                 let mut params = String::new();
                 while let Some(&pc) = chars.peek() {
                     if pc.is_ascii_digit() || pc == ';' {
-                        params.push(chars.next().unwrap());
+                        if let Some(next_char) = chars.next() {
+                            params.push(next_char);
+                        } else {
+                            break;
+                        }
                     } else {
                         break;
                     }
