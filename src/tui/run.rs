@@ -600,8 +600,6 @@ pub async fn run(permissions: PermissionSettings, resume_option: ResumeOption) -
     let (mut term_width, mut term_height) = terminal::size()?;
 
     // Resume: reprint loaded session into scrollback.
-    // Only scroll up by the cursor row so blank lines below the shell prompt
-    // don't get pushed into scrollback history.
     if !app.message_list.entries.is_empty() {
         let scroll_amount = crossterm::cursor::position()
             .map(|(_, y)| y.saturating_add(1))
@@ -631,27 +629,18 @@ pub async fn run(permissions: PermissionSettings, resume_option: ResumeOption) -
         let lines = app.build_chat_lines(term_width);
         let line_count = lines.len();
 
-        // Resume render policy: no manual top/bottom alignment.
-        // Print history as-is, only trimming overflow required to keep UI area visible.
         execute!(stdout, MoveTo(0, 0))?;
         for line in &lines {
             line.writeln(&mut stdout)?;
         }
-        // Only trim the currently visible viewport overlap.
-        // When line_count exceeds terminal height, writing already scrolls the terminal;
-        // we only need to reclaim space for the bottom UI region.
         let visible_lines = line_count.min(term_height as usize);
         let overflow = visible_lines.saturating_sub(available_rows) as u16;
         if overflow > 0 {
             execute!(stdout, crossterm::terminal::ScrollUp(overflow))?;
         }
 
-        // Clear any stale content below the reprinted chat (the partial scroll
-        // only blanked scroll_amount rows, not the full viewport).
         execute!(stdout, Clear(ClearType::FromCursorDown))?;
         app.render_state.mark_reflow_complete(end);
-        // Resume should behave like normal terminal scrollback: keep the bottom UI locked,
-        // never re-anchoring to the startup header.
         app.render_state.position = ChatPosition::Scrolling { ui_drawn_at: None };
         execute!(stdout, EndSynchronizedUpdate)?;
         stdout.flush()?;
