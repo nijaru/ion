@@ -117,6 +117,112 @@ fn write_lines_at(stdout: &mut io::Stdout, start_row: u16, lines: &[StyledLine])
     Ok(row)
 }
 
+fn clear_header_areas(stdout: &mut io::Stdout, pre_ops: &[PreOp]) -> io::Result<()> {
+    for op in pre_ops {
+        if let PreOp::ClearHeaderArea { from_row } = op {
+            execute!(stdout, MoveTo(0, *from_row), Clear(ClearType::FromCursorDown))?;
+            stdout.flush()?;
+        }
+    }
+    Ok(())
+}
+
+fn apply_pre_ops(
+    stdout: &mut io::Stdout,
+    app: &mut App,
+    pre_ops: &[PreOp],
+    layout: &UiLayout,
+    term_height: u16,
+) -> io::Result<()> {
+    for op in pre_ops {
+        match op {
+            PreOp::ClearScreen {
+                scroll_amount,
+                full_clear,
+            } => {
+                if *full_clear {
+                    execute!(stdout, MoveTo(0, 0), Clear(ClearType::All), MoveTo(0, 0))?;
+                } else {
+                    scroll_up_and_home(stdout, *scroll_amount)?;
+                }
+            }
+            PreOp::Reflow {
+                lines,
+                scroll_amount,
+            } => {
+                scroll_up_and_home(stdout, *scroll_amount)?;
+                write_lines(stdout, lines)?;
+                let ui_height = layout.height();
+                let excess =
+                    app.render_state
+                        .position_after_reprint(lines.len(), term_height, ui_height);
+                if excess > 0 {
+                    execute!(stdout, crossterm::terminal::ScrollUp(excess))?;
+                }
+                app.render_state
+                    .mark_reflow_complete(rendered_entry_count(app));
+            }
+            PreOp::ClearSelectorArea { from_row } => {
+                execute!(stdout, MoveTo(0, *from_row), Clear(ClearType::FromCursorDown))?;
+            }
+            PreOp::PrintHeader(lines) => {
+                write_lines(stdout, lines)?;
+                if let Ok((_x, y)) = crossterm::cursor::position() {
+                    app.render_state.position = ChatPosition::Header { anchor: y };
+                }
+            }
+            PreOp::ClearHeaderArea { .. } => {}
+        }
+    }
+    Ok(())
+}
+
+fn apply_chat_insert(
+    stdout: &mut io::Stdout,
+    app: &mut App,
+    chat_insert: Option<ChatInsert>,
+) -> io::Result<()> {
+    let Some(insert) = chat_insert else {
+        return Ok(());
+    };
+
+    match insert {
+        ChatInsert::AtRow { start_row, lines } => {
+            let new_row = write_lines_at(stdout, start_row, &lines)?;
+            // Don't set ui_drawn_at here — draw_direct does that after
+            // recomputing layout with the updated next_row.
+            app.render_state.position = ChatPosition::Tracking {
+                next_row: new_row,
+                ui_drawn_at: None,
+            };
+        }
+        ChatInsert::Overflow {
+            old_ui_row,
+            scroll_amount,
+            print_row,
+            lines,
+        } => {
+            execute!(stdout, MoveTo(0, old_ui_row), Clear(ClearType::FromCursorDown))?;
+            execute!(stdout, crossterm::terminal::ScrollUp(scroll_amount))?;
+            write_lines_at(stdout, print_row, &lines)?;
+            app.render_state.position = ChatPosition::Scrolling { ui_drawn_at: None };
+        }
+        ChatInsert::ScrollInsert {
+            ui_start,
+            scroll_amount,
+            print_row,
+            lines,
+        } => {
+            execute!(stdout, MoveTo(0, ui_start), Clear(ClearType::FromCursorDown))?;
+            execute!(stdout, crossterm::terminal::ScrollUp(scroll_amount))?;
+            write_lines_at(stdout, print_row, &lines)?;
+            app.render_state.position = ChatPosition::Scrolling { ui_drawn_at: None };
+        }
+    }
+
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Frame pipeline functions
 // ---------------------------------------------------------------------------
@@ -292,109 +398,11 @@ fn render_frame(
     term_height: u16,
 ) -> io::Result<()> {
     // ClearHeaderArea must happen outside sync block (avoids flicker)
-    for op in &pre_ops {
-        if let PreOp::ClearHeaderArea { from_row } = op {
-            execute!(
-                stdout,
-                MoveTo(0, *from_row),
-                Clear(ClearType::FromCursorDown)
-            )?;
-            stdout.flush()?;
-        }
-    }
+    clear_header_areas(stdout, &pre_ops)?;
 
     execute!(stdout, BeginSynchronizedUpdate)?;
-
-    // Execute pre-ops
-    for op in &pre_ops {
-        match op {
-            PreOp::ClearScreen {
-                scroll_amount,
-                full_clear,
-            } => {
-                if *full_clear {
-                    execute!(stdout, MoveTo(0, 0), Clear(ClearType::All), MoveTo(0, 0))?;
-                } else {
-                    scroll_up_and_home(stdout, *scroll_amount)?;
-                }
-            }
-            PreOp::Reflow {
-                lines,
-                scroll_amount,
-            } => {
-                scroll_up_and_home(stdout, *scroll_amount)?;
-                write_lines(stdout, lines)?;
-                let ui_height = layout.height();
-                let excess = app.render_state.position_after_reprint(
-                    lines.len(),
-                    term_height,
-                    ui_height,
-                );
-                if excess > 0 {
-                    execute!(stdout, crossterm::terminal::ScrollUp(excess))?;
-                }
-                app.render_state
-                    .mark_reflow_complete(rendered_entry_count(app));
-            }
-            PreOp::ClearSelectorArea { from_row } => {
-                execute!(stdout, MoveTo(0, *from_row), Clear(ClearType::FromCursorDown))?;
-            }
-            PreOp::PrintHeader(lines) => {
-                write_lines(stdout, lines)?;
-                if let Ok((_x, y)) = crossterm::cursor::position() {
-                    app.render_state.position = ChatPosition::Header { anchor: y };
-                }
-            }
-            PreOp::ClearHeaderArea { .. } => {
-                // Already handled outside sync block
-            }
-        }
-    }
-
-    // Execute chat insertion
-    if let Some(insert) = chat_insert {
-        match insert {
-            ChatInsert::AtRow { start_row, lines } => {
-                let new_row = write_lines_at(stdout, start_row, &lines)?;
-                // Don't set ui_drawn_at here — draw_direct does that after
-                // recomputing layout with the updated next_row.
-                app.render_state.position = ChatPosition::Tracking {
-                    next_row: new_row,
-                    ui_drawn_at: None,
-                };
-            }
-            ChatInsert::Overflow {
-                old_ui_row,
-                scroll_amount,
-                print_row,
-                lines,
-            } => {
-                execute!(
-                    stdout,
-                    MoveTo(0, old_ui_row),
-                    Clear(ClearType::FromCursorDown)
-                )?;
-                execute!(stdout, crossterm::terminal::ScrollUp(scroll_amount))?;
-                write_lines_at(stdout, print_row, &lines)?;
-                app.render_state.position = ChatPosition::Scrolling { ui_drawn_at: None };
-            }
-            ChatInsert::ScrollInsert {
-                ui_start,
-                scroll_amount,
-                print_row,
-                lines,
-            } => {
-                execute!(
-                    stdout,
-                    MoveTo(0, ui_start),
-                    Clear(ClearType::FromCursorDown)
-                )?;
-                execute!(stdout, crossterm::terminal::ScrollUp(scroll_amount))?;
-                write_lines_at(stdout, print_row, &lines)?;
-                app.render_state.position = ChatPosition::Scrolling { ui_drawn_at: None };
-            }
-        }
-    }
+    apply_pre_ops(stdout, app, &pre_ops, layout, term_height)?;
+    apply_chat_insert(stdout, app, chat_insert)?;
 
     // Recompute layout after chat insertion — position may have changed,
     // and draw_direct uses clear_from (derived from last_ui_top) which must
