@@ -81,6 +81,20 @@ struct FramePrep {
     state_changed: bool,
 }
 
+fn rendered_entry_count(app: &App) -> usize {
+    let mut end = app.message_list.entries.len();
+    if app.is_running
+        && app
+            .message_list
+            .entries
+            .last()
+            .is_some_and(|entry| entry.sender == Sender::Agent)
+    {
+        end = end.saturating_sub(1);
+    }
+    end
+}
+
 // ---------------------------------------------------------------------------
 // Frame pipeline functions
 // ---------------------------------------------------------------------------
@@ -307,17 +321,8 @@ fn render_frame(
                 if excess > 0 {
                     execute!(stdout, crossterm::terminal::ScrollUp(excess))?;
                 }
-                let mut end = app.message_list.entries.len();
-                if app.is_running
-                    && app
-                        .message_list
-                        .entries
-                        .last()
-                        .is_some_and(|e| e.sender == Sender::Agent)
-                {
-                    end = end.saturating_sub(1);
-                }
-                app.render_state.mark_reflow_complete(end);
+                app.render_state
+                    .mark_reflow_complete(rendered_entry_count(app));
             }
             PreOp::ClearSelectorArea { from_row } => {
                 execute!(stdout, MoveTo(0, *from_row), Clear(ClearType::FromCursorDown))?;
@@ -413,6 +418,50 @@ fn render_frame(
     execute!(stdout, EndSynchronizedUpdate)?;
     stdout.flush()?;
 
+    Ok(())
+}
+
+fn reprint_loaded_session(
+    stdout: &mut io::Stdout,
+    app: &mut App,
+    term_width: u16,
+    term_height: u16,
+) -> io::Result<()> {
+    if app.message_list.entries.is_empty() {
+        return Ok(());
+    }
+
+    let scroll_amount = crossterm::cursor::position()
+        .map(|(_, y)| y.saturating_add(1))
+        .unwrap_or(term_height);
+    execute!(stdout, BeginSynchronizedUpdate)?;
+    execute!(
+        stdout,
+        crossterm::terminal::ScrollUp(scroll_amount),
+        MoveTo(0, 0)
+    )?;
+    let layout = app.compute_layout(term_width, term_height);
+    let ui_height = layout.height();
+    let lines = app.build_chat_lines(term_width);
+    let line_count = lines.len();
+
+    execute!(stdout, MoveTo(0, 0))?;
+    for line in &lines {
+        line.writeln(stdout)?;
+    }
+
+    let excess = app
+        .render_state
+        .position_after_reprint(line_count, term_height, ui_height);
+    if excess > 0 {
+        execute!(stdout, crossterm::terminal::ScrollUp(excess))?;
+    }
+
+    execute!(stdout, Clear(ClearType::FromCursorDown))?;
+    app.render_state
+        .mark_reflow_complete(rendered_entry_count(app));
+    execute!(stdout, EndSynchronizedUpdate)?;
+    stdout.flush()?;
     Ok(())
 }
 
@@ -643,51 +692,7 @@ pub async fn run(permissions: PermissionSettings, resume_option: ResumeOption) -
     // Track terminal size
     let (mut term_width, mut term_height) = terminal::size()?;
 
-    // Resume: reprint loaded session into scrollback.
-    if !app.message_list.entries.is_empty() {
-        let scroll_amount = crossterm::cursor::position()
-            .map(|(_, y)| y.saturating_add(1))
-            .unwrap_or(term_height);
-        execute!(stdout, BeginSynchronizedUpdate)?;
-        execute!(
-            stdout,
-            crossterm::terminal::ScrollUp(scroll_amount),
-            MoveTo(0, 0)
-        )?;
-        let layout = app.compute_layout(term_width, term_height);
-        let ui_height = layout.height();
-
-        let entry_count = app.message_list.entries.len();
-        let mut end = entry_count;
-        if app.is_running
-            && app
-                .message_list
-                .entries
-                .last()
-                .is_some_and(|e| e.sender == Sender::Agent)
-        {
-            end = end.saturating_sub(1);
-        }
-
-        let lines = app.build_chat_lines(term_width);
-        let line_count = lines.len();
-
-        execute!(stdout, MoveTo(0, 0))?;
-        for line in &lines {
-            line.writeln(&mut stdout)?;
-        }
-        let excess =
-            app.render_state
-                .position_after_reprint(line_count, term_height, ui_height);
-        if excess > 0 {
-            execute!(stdout, crossterm::terminal::ScrollUp(excess))?;
-        }
-
-        execute!(stdout, Clear(ClearType::FromCursorDown))?;
-        app.render_state.mark_reflow_complete(end);
-        execute!(stdout, EndSynchronizedUpdate)?;
-        stdout.flush()?;
-    }
+    reprint_loaded_session(&mut stdout, &mut app, term_width, term_height)?;
 
     // Main loop: prepare -> plan -> render
     loop {
