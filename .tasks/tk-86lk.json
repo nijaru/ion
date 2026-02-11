@@ -155,10 +155,18 @@
     {
       "ts": "2026-02-11T07:35:47.832Z",
       "msg": "Validation: cargo test -q tui:: (181 passed), cargo clippy -q clean, cargo fmt."
+    },
+    {
+      "ts": "2026-02-11T07:38:10.824Z",
+      "msg": "Follow-up render-state hardening: added RenderState.last_ui_top fallback tracked from draw_direct each frame (including Empty/Header states). compute_layout clear_from now uses render_state.last_ui_top() so UI shrink can clear stale rows even without Tracking/Scrolling position anchors."
+    },
+    {
+      "ts": "2026-02-11T07:38:10.849Z",
+      "msg": "Added tests for last_ui_top fallback behavior and reset semantics; validation: cargo test -q tui::render_state, cargo test -q tui::, cargo clippy -q, cargo fmt."
     }
   ],
   "created_at": "2026-02-11T01:13:44.111Z",
-  "updated_at": "2026-02-11T07:35:47.832Z",
+  "updated_at": "2026-02-11T07:38:10.849Z",
   "completed_at": null,
   "external": {}
 }

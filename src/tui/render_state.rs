@@ -174,6 +174,9 @@ pub struct RenderState {
     pub needs_reflow: bool,
     /// Flag to clear selector area without full screen repaint.
     pub needs_selector_clear: bool,
+    /// Last top row where any bottom UI variant was rendered.
+    /// Used for clear-from calculations when position state is Empty/Header.
+    pub last_ui_top: Option<u16>,
     /// Row to clear from when leaving selector mode.
     /// Captured before mode switch so stale selector rows are removed safely.
     pub selector_clear_from: Option<u16>,
@@ -196,6 +199,7 @@ impl RenderState {
             needs_screen_clear: false,
             needs_reflow: false,
             needs_selector_clear: false,
+            last_ui_top: None,
             selector_clear_from: None,
             last_selector_top: None,
             needs_initial_render: false,
@@ -211,6 +215,7 @@ impl RenderState {
         self.rendered_entries = 0;
         self.buffered_chat_lines.clear();
         self.streaming_lines_rendered = 0;
+        self.last_ui_top = None;
         self.selector_clear_from = None;
         self.last_selector_top = None;
         self.needs_initial_render = true;
@@ -228,6 +233,18 @@ impl RenderState {
         self.selector_clear_from = None;
         self.last_selector_top = None;
         self.needs_initial_render = true;
+    }
+
+    /// Record where bottom UI was rendered this frame.
+    pub fn note_ui_top(&mut self, row: u16) {
+        self.last_ui_top = Some(row);
+        self.position.set_ui_drawn_at(row);
+    }
+
+    /// Last known top row for bottom UI clearing.
+    #[must_use]
+    pub fn last_ui_top(&self) -> Option<u16> {
+        self.position.last_ui_top().or(self.last_ui_top)
     }
 
     /// Record where selector UI was last rendered.
@@ -362,12 +379,15 @@ mod tests {
         let mut state = RenderState::new();
         assert!(!state.needs_initial_render);
 
+        state.note_ui_top(9);
         state.reset_for_new_conversation();
         assert!(state.needs_initial_render);
+        assert_eq!(state.last_ui_top, None);
 
         state.needs_initial_render = false;
         state.reset_for_session_load();
         assert!(state.needs_initial_render);
+        assert_eq!(state.last_ui_top, None);
     }
 
     #[test]
@@ -420,6 +440,22 @@ mod tests {
         assert!(!state.needs_selector_clear);
         assert_eq!(state.selector_clear_from, None);
         assert_eq!(state.last_selector_top, None);
+    }
+
+    #[test]
+    fn render_state_last_ui_top_falls_back_for_empty_and_header() {
+        let mut state = RenderState::new();
+        state.note_ui_top(11);
+        assert_eq!(state.last_ui_top(), Some(11));
+
+        state.position = ChatPosition::Header { anchor: 3 };
+        assert_eq!(state.last_ui_top(), Some(11));
+
+        state.position = ChatPosition::Tracking {
+            next_row: 5,
+            ui_drawn_at: Some(8),
+        };
+        assert_eq!(state.last_ui_top(), Some(8));
     }
 
     #[test]
@@ -484,11 +520,13 @@ mod tests {
     fn chat_position_header_inserted() {
         assert!(!ChatPosition::Empty.header_inserted());
         assert!(ChatPosition::Header { anchor: 3 }.header_inserted());
-        assert!(ChatPosition::Tracking {
-            next_row: 5,
-            ui_drawn_at: None
-        }
-        .header_inserted());
+        assert!(
+            ChatPosition::Tracking {
+                next_row: 5,
+                ui_drawn_at: None
+            }
+            .header_inserted()
+        );
         assert!(ChatPosition::Scrolling { ui_drawn_at: None }.header_inserted());
     }
 

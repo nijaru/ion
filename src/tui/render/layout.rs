@@ -1,8 +1,8 @@
 //! Layout calculations for the TUI.
 
-use crate::tui::render::{selector_height, PROGRESS_HEIGHT};
-use crate::tui::types::{Mode, SelectorPage};
 use crate::tui::App;
+use crate::tui::render::{PROGRESS_HEIGHT, selector_height};
+use crate::tui::types::{Mode, SelectorPage};
 
 /// A rectangular region within the terminal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,9 +52,9 @@ impl App {
     /// Compute the complete UI layout for the current frame.
     /// Returns a `UiLayout` with regions for each component.
     ///
-    /// Reads `self.render_state.position.last_ui_top()` for clear_from computation.
+    /// Reads `self.render_state.last_ui_top()` for clear_from computation.
     pub fn compute_layout(&self, width: u16, height: u16) -> UiLayout {
-        let last_top = self.render_state.position.last_ui_top();
+        let last_top = self.render_state.last_ui_top();
 
         if self.mode == Mode::Selector {
             let item_count = match self.selector_page {
