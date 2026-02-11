@@ -1,0 +1,28 @@
+{
+  "project": "tk",
+  "ref": "qlgg",
+  "title": "[P2] Programmatic TUI rendering tests + architecture roadmap",
+  "description": "Design repeatable non-manual tests for TUI rendering (resume/clear/overflow), assess state-of-the-art tooling/libraries, and propose prioritized simplifications/improvements.",
+  "status": "active",
+  "priority": 2,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [
+    {
+      "ts": "2026-02-11T04:40:43.269Z",
+      "msg": "Investigated programmatic TUI testing options. Current expect/tmux transcript capture is insufficient for layout assertions because of escape-sequence rewrites. Recommended robust approach: PTY harness (portable-pty or expectrl) + vt100 terminal parser snapshots to assert final screen and scrollback. Also reviewed ratatui TestBackend and snapshot testing docs for unit/integration buffer tests."
+    },
+    {
+      "ts": "2026-02-11T04:46:20.389Z",
+      "msg": "Lean test additions landed: added two unit regressions only (no harness/abstraction changes). 1) reset_for_session_load preserves position while clearing counters/buffers. 2) plan_chat_insert for ChatPosition::Empty overflows via Overflow path (not ScrollInsert). cargo test now 436 passed."
+    }
+  ],
+  "created_at": "2026-02-11T04:37:35.783Z",
+  "updated_at": "2026-02-11T04:46:20.389Z",
+  "completed_at": null,
+  "external": {}
+}
