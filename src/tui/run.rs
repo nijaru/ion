@@ -631,24 +631,15 @@ pub async fn run(permissions: PermissionSettings, resume_option: ResumeOption) -
         let lines = app.build_chat_lines(term_width);
         let line_count = lines.len();
 
-        // Source-level resume layout:
-        // - Short history: bottom-align directly above UI (no top pinning).
-        // - Long history: render then trim overflow so newest content stays visible.
-        if line_count <= available_rows {
-            let start_row = (available_rows - line_count) as u16;
-            execute!(stdout, MoveTo(0, start_row))?;
-            for line in &lines {
-                line.writeln(&mut stdout)?;
-            }
-        } else {
-            execute!(stdout, MoveTo(0, 0))?;
-            for line in &lines {
-                line.writeln(&mut stdout)?;
-            }
-            let overflow = (line_count - available_rows) as u16;
-            if overflow > 0 {
-                execute!(stdout, crossterm::terminal::ScrollUp(overflow))?;
-            }
+        // Resume render policy: no manual top/bottom alignment.
+        // Print history as-is, only trimming overflow required to keep UI area visible.
+        execute!(stdout, MoveTo(0, 0))?;
+        for line in &lines {
+            line.writeln(&mut stdout)?;
+        }
+        let overflow = line_count.saturating_sub(available_rows) as u16;
+        if overflow > 0 {
+            execute!(stdout, crossterm::terminal::ScrollUp(overflow))?;
         }
 
         // Clear any stale content below the reprinted chat (the partial scroll
