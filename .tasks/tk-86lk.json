@@ -83,10 +83,14 @@
     {
       "ts": "2026-02-11T05:56:47.184Z",
       "msg": "Residual edge to verify: in pre-message states (Header/Empty), ui_drawn_at is not tracked, so popup/selector height shrink could leave stale rows above current top. Not reproduced yet; include in manual checklist during resize/completer/selector transitions before closing."
+    },
+    {
+      "ts": "2026-02-11T06:02:45.528Z",
+      "msg": "Implemented selector-clear source fix for Header/Empty edge cases: added RenderState.selector_clear_from queue/cancel/take methods, captured selector top on exit_selector_mode(), and changed run.rs PreOp::ClearSelectorArea to clear from captured row instead of recomputed input layout top. This prevents stale selector rows above UI when selector height shrinks while avoiding chat-area over-clear. Added unit test selector_clear_queue_take_cancel. cargo test -q: 437 passed."
     }
   ],
   "created_at": "2026-02-11T01:13:44.111Z",
-  "updated_at": "2026-02-11T05:56:47.184Z",
+  "updated_at": "2026-02-11T06:02:45.528Z",
   "completed_at": null,
   "external": {}
 }

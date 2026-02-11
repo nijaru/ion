@@ -44,7 +44,7 @@ enum PreOp {
         scroll_amount: u16,
     },
     /// Clear the area where the selector was.
-    ClearSelectorArea,
+    ClearSelectorArea { from_row: u16 },
     /// Print the startup header.
     PrintHeader(Vec<StyledLine>),
     /// Clear the startup header area (first message arriving).
@@ -134,8 +134,10 @@ fn prepare_frame(app: &mut App, term_width: u16, term_height: u16) -> FramePrep 
 
     // Selector clear
     if app.render_state.needs_selector_clear {
+        let fallback = app.compute_layout(term_width, term_height).top;
+        let from_row = app.render_state.take_selector_clear_from(fallback);
         app.render_state.needs_selector_clear = false;
-        pre_ops.push(PreOp::ClearSelectorArea);
+        pre_ops.push(PreOp::ClearSelectorArea { from_row });
         state_changed = true;
     }
 
@@ -311,14 +313,8 @@ fn render_frame(
                 }
                 app.render_state.mark_reflow_complete(end);
             }
-            PreOp::ClearSelectorArea => {
-                // Compute a fresh layout for selector clear since position may differ
-                let sel_layout = app.compute_layout(term_width, term_height);
-                execute!(
-                    stdout,
-                    MoveTo(0, sel_layout.top),
-                    Clear(ClearType::FromCursorDown)
-                )?;
+            PreOp::ClearSelectorArea { from_row } => {
+                execute!(stdout, MoveTo(0, *from_row), Clear(ClearType::FromCursorDown))?;
             }
             PreOp::PrintHeader(lines) => {
                 for line in lines {
