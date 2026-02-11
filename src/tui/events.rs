@@ -460,7 +460,7 @@ impl App {
                             format_cost(p.output),
                         ));
                     }
-                    parts.join(" · ")
+                    parts.join(" • ")
                 } else {
                     "No cost data yet (pricing available after model list loads)".to_string()
                 };

@@ -144,7 +144,7 @@ pub fn render_selector<W: Write>(
 
     // Hint line
     execute!(w, MoveTo(0, row), SetAttribute(Attribute::Dim))?;
-    write!(w, " Type to filter · Enter to select · Esc to close")?;
+    write!(w, " Type to filter • Enter to select • Esc to close")?;
     execute!(w, SetAttribute(Attribute::Reset))?;
 
     Ok((filter_cursor_col, filter_cursor_row))
