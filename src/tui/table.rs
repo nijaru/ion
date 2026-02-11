@@ -280,8 +280,12 @@ impl Table {
                                 if line_width + ch_width > width && !line_content.is_empty() {
                                     break;
                                 }
-                                line_content.push(chars.next().unwrap());
-                                line_width += ch_width;
+                                if let Some(next_char) = chars.next() {
+                                    line_content.push(next_char);
+                                    line_width += ch_width;
+                                } else {
+                                    break;
+                                }
                             }
                             // Store remaining chars back for next line
                             let remaining: String = chars.collect();
