@@ -7,6 +7,13 @@ use crate::tui::util::format_status_error;
 use std::time::Instant;
 use tracing::debug;
 
+fn clears_retry_status(event: &AgentEvent) -> bool {
+    matches!(
+        event,
+        AgentEvent::ToolCallStart(..) | AgentEvent::ThinkingDelta(_) | AgentEvent::TextDelta(_)
+    )
+}
+
 impl App {
     /// Update state on each frame (poll events, check timeouts).
     #[allow(clippy::too_many_lines)]
@@ -37,6 +44,10 @@ impl App {
 
         // Poll agent events
         while let Ok(event) = self.agent_rx.try_recv() {
+            if clears_retry_status(&event) {
+                self.task.retry_status = None;
+            }
+
             match &event {
                 AgentEvent::Finished(_) => {
                     self.save_task_summary(false);
@@ -158,8 +169,6 @@ impl App {
                     if let Some(start) = self.task.thinking_start.take() {
                         self.task.last_thinking_duration = Some(start.elapsed());
                     }
-                    // Clear retry status (retry succeeded)
-                    self.task.retry_status = None;
                     self.message_list.push_event(event);
                 }
                 AgentEvent::Retry(reason, delay) => {
@@ -218,5 +227,36 @@ impl App {
         {
             self.interaction.cancel_pending = None;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::clears_retry_status;
+    use crate::agent::AgentEvent;
+
+    #[test]
+    fn retry_status_clears_on_progress_events() {
+        assert!(clears_retry_status(&AgentEvent::ThinkingDelta("...".to_string())));
+        assert!(clears_retry_status(&AgentEvent::TextDelta("ok".to_string())));
+        assert!(clears_retry_status(&AgentEvent::ToolCallStart(
+            "id".to_string(),
+            "read".to_string(),
+            serde_json::json!({})
+        )));
+    }
+
+    #[test]
+    fn retry_status_preserved_on_non_progress_events() {
+        assert!(!clears_retry_status(&AgentEvent::Retry(
+            "Rate limited".to_string(),
+            2
+        )));
+        assert!(!clears_retry_status(&AgentEvent::Finished(
+            "done".to_string()
+        )));
+        assert!(!clears_retry_status(&AgentEvent::Error(
+            "boom".to_string()
+        )));
     }
 }
