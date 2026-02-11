@@ -622,7 +622,7 @@ impl App {
                         if loaded {
                             // Session load performs a full reflow render; avoid
                             // selector-clear-only incremental insertion path.
-                            self.render_state.needs_selector_clear = false;
+                            self.render_state.cancel_selector_clear();
                             self.render_state.needs_reflow = true;
                         }
                     }
@@ -705,10 +705,11 @@ impl App {
             // Reset model picker to current provider's models
             self.model_picker.set_api_provider(self.api_provider.name());
         }
+        let selector_top = self.render_state.position.last_ui_top();
         // Prevent stale selector position from affecting clear_from on the next input-mode frame
         self.render_state.position.clear_ui_drawn_at();
-        // Mark that we need to clear the selector area (not full screen repaint)
-        self.render_state.needs_selector_clear = true;
+        // Mark selector region for explicit clearing in the next frame.
+        self.render_state.queue_selector_clear(selector_top);
     }
 
     /// Dispatch a navigation action to the active picker.
