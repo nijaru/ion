@@ -333,6 +333,33 @@ mod tests {
     }
 
     #[test]
+    fn reset_for_session_load_preserves_position_and_clears_buffers() {
+        let mut state = RenderState::new();
+        state.position = ChatPosition::Tracking {
+            next_row: 12,
+            ui_drawn_at: Some(12),
+        };
+        state.rendered_entries = 7;
+        state.buffered_chat_lines.push(StyledLine::raw("buffered"));
+        state.streaming_lines_rendered = 3;
+        state.needs_initial_render = false;
+
+        state.reset_for_session_load();
+
+        assert!(matches!(
+            state.position,
+            ChatPosition::Tracking {
+                next_row: 12,
+                ui_drawn_at: Some(12)
+            }
+        ));
+        assert_eq!(state.rendered_entries, 0);
+        assert!(state.buffered_chat_lines.is_empty());
+        assert_eq!(state.streaming_lines_rendered, 0);
+        assert!(state.needs_initial_render);
+    }
+
+    #[test]
     fn chat_position_ui_anchor() {
         assert_eq!(ChatPosition::Empty.ui_anchor(), None);
         assert_eq!(ChatPosition::Header { anchor: 3 }.ui_anchor(), Some(3));

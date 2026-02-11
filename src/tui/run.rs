@@ -911,4 +911,19 @@ mod tests {
             }
         ));
     }
+
+    #[test]
+    fn plan_empty_overflow_transitions_like_tracking() {
+        let pos = ChatPosition::Empty;
+        let lines = vec![StyledLine::empty(); 40];
+        let layout = test_layout(35, 80); // ui_height = 5, available = 35
+        let insert = plan_chat_insert(&pos, lines, &layout, 40);
+        assert!(matches!(
+            insert,
+            ChatInsert::Overflow {
+                old_ui_row: 0,
+                ..
+            }
+        ));
+    }
 }
