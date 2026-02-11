@@ -1,0 +1,28 @@
+{
+  "project": "tk",
+  "ref": "s6fq",
+  "title": "[P1] Sprint 16 dogfood readiness plan",
+  "description": "Create a sprint plan for using ion to work on ion: TUI stability, agent usability, and lean automated checks without test-driven overengineering.",
+  "status": "active",
+  "priority": 1,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [
+    {
+      "ts": "2026-02-11T04:49:55.032Z",
+      "msg": "Creating Sprint 16 dogfood readiness plan focused on TUI stability + agent usability with lean automation only."
+    },
+    {
+      "ts": "2026-02-11T04:52:03.962Z",
+      "msg": "Performed sprint-plan review pass: checked dependency chain completeness, task atomicity, acceptance criteria specificity, and demoability across Sprint 16-18. Adjusted scope to lean testing (L0/L1 only) and explicit non-goal for heavy TUI test harness."
+    }
+  ],
+  "created_at": "2026-02-11T04:49:45.599Z",
+  "updated_at": "2026-02-11T04:52:03.962Z",
+  "completed_at": null,
+  "external": {}
+}
