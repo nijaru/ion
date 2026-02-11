@@ -3,6 +3,7 @@
 use crate::provider::format_api_error;
 use crate::tui::filter_input;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use unicode_width::UnicodeWidthChar;
 
 /// Format token count as human-readable (e.g., 1500 -> "1.5k")
 #[allow(clippy::cast_precision_loss)] // Precision loss acceptable for display
@@ -181,6 +182,26 @@ pub(crate) fn sanitize_for_display(s: &str) -> String {
     result
 }
 
+/// Truncate a string to a maximum display width (terminal cells).
+/// Uses Unicode width rules and never appends a trailing newline.
+pub(crate) fn truncate_to_display_width(s: &str, max_width: usize) -> String {
+    if max_width == 0 {
+        return String::new();
+    }
+
+    let mut out = String::new();
+    let mut width = 0usize;
+    for ch in s.chars() {
+        let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if width + ch_width > max_width {
+            break;
+        }
+        out.push(ch);
+        width += ch_width;
+    }
+    out
+}
+
 /// Normalize user input for history/storage.
 /// - Normalizes CRLF to LF
 /// - Trims trailing whitespace (keeps leading indentation)
@@ -220,6 +241,20 @@ mod tests {
             sanitize_for_display("line1\r\n\tindented\nline3"),
             "line1\n    indented\nline3"
         );
+    }
+
+    #[test]
+    fn test_truncate_to_display_width_ascii() {
+        assert_eq!(truncate_to_display_width("hello", 10), "hello");
+        assert_eq!(truncate_to_display_width("hello", 4), "hell");
+        assert_eq!(truncate_to_display_width("hello", 0), "");
+    }
+
+    #[test]
+    fn test_truncate_to_display_width_unicode() {
+        // Full-width CJK char should count as width 2.
+        assert_eq!(truncate_to_display_width("界a", 2), "界");
+        assert_eq!(truncate_to_display_width("界a", 3), "界a");
     }
 
     #[test]

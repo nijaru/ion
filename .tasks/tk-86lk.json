@@ -139,10 +139,14 @@
     {
       "ts": "2026-02-11T07:04:12.849Z",
       "msg": "Validation after patch: cargo fmt; cargo test -q tui:: (178 passed); cargo clippy -q clean. Full cargo test -q fails in this environment due existing reqwest/system-configuration mac proxy panics (40 failures), unrelated to TUI patch."
+    },
+    {
+      "ts": "2026-02-11T07:14:46.496Z",
+      "msg": "Fix for small-width duplicate redraws: progress/status rows now render width-bounded single-line text (truncate_to_display_width, width-1 safety) to prevent terminal autowrap from pushing scrollback and corrupting frame layout. Added util tests for unicode-aware display-width truncation. Validation: cargo clippy -q clean; cargo test -q tui:: (180 passed)."
     }
   ],
   "created_at": "2026-02-11T01:13:44.111Z",
-  "updated_at": "2026-02-11T07:04:12.849Z",
+  "updated_at": "2026-02-11T07:14:46.496Z",
   "completed_at": null,
   "external": {}
 }

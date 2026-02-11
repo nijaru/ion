@@ -27,7 +27,8 @@
 - Added lean transition regression coverage; suite now at 444 passing tests.
 - Startup `--continue` redraw now uses full-viewport clear (`Clear(All)+MoveTo(0,0)`) instead of `ScrollUp(cursor_y+1)`, removing a source of phantom blank-row insertion.
 - Ghostty manual-repro follow-up patch: force reflow when UI growth would intrude into tracked chat (`src/tui/run.rs`), use display-width wrap gate for styled lines (`src/tui/chat_renderer.rs`), and make paste blob IDs monotonic across clears to avoid repeated `«Pasted #1»` (`src/tui/composer/buffer.rs`).
-- Validation: `cargo fmt`; `cargo test -q tui::` (178 passed); `cargo clippy -q` clean. Full `cargo test -q` still fails in this environment due existing non-TUI reqwest/system-configuration proxy panics.
+- Small-width redraw hardening: progress and status rows are now width-bounded/truncated before printing (`src/tui/render/progress.rs`, `src/tui/render/status.rs`, `src/tui/util.rs`) so narrow terminals cannot autowrap bottom rows and corrupt chat/history rendering.
+- Validation: `cargo fmt`; `cargo test -q tui::` (180 passed); `cargo clippy -q` clean. Full `cargo test -q` still fails in this environment due existing non-TUI reqwest/system-configuration proxy panics.
 
 ## Next Session Start
 
