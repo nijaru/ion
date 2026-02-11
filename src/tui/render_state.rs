@@ -209,8 +209,9 @@ impl RenderState {
     /// Reset for loading existing session (resume/load).
     ///
     /// Prepares state for displaying a loaded session's chat history.
+    /// Position is preserved so the next frame can compute an accurate
+    /// reflow scroll amount from the currently visible viewport.
     pub fn reset_for_session_load(&mut self) {
-        self.position = ChatPosition::Empty;
         self.rendered_entries = 0;
         self.buffered_chat_lines.clear();
         self.streaming_lines_rendered = 0;

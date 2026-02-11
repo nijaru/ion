@@ -43,10 +43,38 @@
     {
       "ts": "2026-02-11T01:50:15.891Z",
       "msg": "Fix follow-up: cap resume overflow trim to visible viewport (min(line_count, term_height)) to avoid overscroll on long histories."
+    },
+    {
+      "ts": "2026-02-11T02:58:53.458Z",
+      "msg": "Adopted requested behavior: resume now uses position_after_reprint state directly (Tracking when chat+UI fits, Scrolling only on overflow). Removed forced Scrolling override."
+    },
+    {
+      "ts": "2026-02-11T03:31:14.747Z",
+      "msg": "Review pass: found state-order bug in in-session /resume path. load_session() resets render_state.position=Empty (src/tui/session/lifecycle.rs:53), prepare_frame queues PrintHeader and chat_lines in same frame (src/tui/run.rs:135-144), but plan_chat_insert uses pre-op state before pre-ops run (src/tui/run.rs:695-704) so Empty maps to ScrollInsert (src/tui/run.rs:194-201). This can misplace chat/UI and reintroduce pinning/blank-line artifacts for /resume via selector."
+    },
+    {
+      "ts": "2026-02-11T03:31:18.574Z",
+      "msg": "Review pass: /clear currently over-scrolls full viewport after reset. /clear sets render_state to Empty then needs_screen_clear (src/tui/events.rs:487-490). prepare_frame computes scroll_amount from Empty (src/tui/run.rs:96-103), and ChatPosition::Empty.scroll_amount returns term_height (src/tui/render_state.rs:148), so ClearScreen uses ScrollUp(term_height) (src/tui/run.rs:233-238) and pushes blank lines into scrollback."
+    },
+    {
+      "ts": "2026-02-11T03:31:22.697Z",
+      "msg": "Validation: cargo test -q passes (434 tests). No compile regressions in current tree."
+    },
+    {
+      "ts": "2026-02-11T03:46:17.592Z",
+      "msg": "Implementing source-level fix plan: 1) in-session /resume triggers full reflow and suppresses selector-clear-only path, 2) reflow frame suppresses incremental chat insert to avoid duplicate/stale planning, 3) /clear uses full viewport clear when state already reset to Empty, 4) ScrollInsert updates render_state.position."
+    },
+    {
+      "ts": "2026-02-11T03:47:54.157Z",
+      "msg": "Implemented fixes: run.rs now treats /clear reset path as full viewport clear (no ScrollUp blank rows), schedules no incremental chat insertion during reflow frames, updates position after ScrollInsert, and plans ChatPosition::Empty as tracking-until-overflow. events.rs session selection now triggers needs_reflow and suppresses selector-clear path after successful load. render_state.rs reset_for_session_load now preserves position to compute accurate pre-reflow scroll amount."
+    },
+    {
+      "ts": "2026-02-11T03:49:48.644Z",
+      "msg": "Post-fix validation: cargo test -q passes (434 tests)."
     }
   ],
   "created_at": "2026-02-11T01:13:44.111Z",
-  "updated_at": "2026-02-11T01:50:15.891Z",
+  "updated_at": "2026-02-11T03:49:48.644Z",
   "completed_at": null,
   "external": {}
 }

@@ -611,11 +611,20 @@ impl App {
                 SelectorPage::Session => {
                     if let Some(summary) = self.session_picker.selected_session() {
                         let session_id = summary.id.clone();
-                        if let Err(e) = self.load_session(&session_id) {
+                        let loaded = if let Err(e) = self.load_session(&session_id) {
                             self.last_error = Some(format!("Failed to load session: {e}"));
-                        }
+                            false
+                        } else {
+                            true
+                        };
                         self.session_picker.reset();
                         self.exit_selector_mode();
+                        if loaded {
+                            // Session load performs a full reflow render; avoid
+                            // selector-clear-only incremental insertion path.
+                            self.render_state.needs_selector_clear = false;
+                            self.render_state.needs_reflow = true;
+                        }
                     }
                 }
             },

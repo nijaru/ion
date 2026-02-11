@@ -30,6 +30,13 @@ Detailed research in `ai/research/*-2026-02.md` (5 files).
 - Confirmed `/resume` is already implemented (tracked in `tk-qwp3`)
 - Next highest-priority open item: `tk-oh88` (OS sandbox execution)
 
+## Session Focus (2026-02-11)
+
+- Active `tk-86lk`: source-level fixes for resume/clear rendering regressions
+- In-session `/resume` now forces full reflow after session selection and avoids incremental duplicate insertion
+- `/clear` now clears viewport without `ScrollUp(term_height)` blank-row artifacts
+- `ChatPosition::Empty` now tracks content until real overflow (no implicit bottom-pinned insert)
+
 ## Session Summary (2026-02-09)
 
 **Non-streaming complete() usage tracking (72eede9):**
