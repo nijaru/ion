@@ -1,7 +1,8 @@
 //! History search overlay rendering (Ctrl+R).
 
-use crate::tui::render::popup::{PopupItem, PopupRegion, PopupStyle, render_popup};
 use crate::tui::App;
+use crate::tui::render::popup::{PopupItem, PopupRegion, PopupStyle, render_popup};
+use crate::tui::util::{display_width, truncate_to_display_width};
 use crossterm::cursor::MoveTo;
 use crossterm::execute;
 use crossterm::terminal::{Clear, ClearType};
@@ -15,7 +16,7 @@ impl App {
         input_start: u16,
         width: u16,
     ) -> std::io::Result<()> {
-        use crossterm::style::{Color as CColor, Print, ResetColor, SetForegroundColor};
+        use crossterm::style::Print;
 
         let max_visible = 8;
         let matches = &self.history_search.matches;
@@ -30,27 +31,25 @@ impl App {
         // Render search prompt at bottom of popup (not an item list — rendered separately)
         let prompt_row = input_start.saturating_sub(1);
         execute!(w, MoveTo(0, prompt_row), Clear(ClearType::CurrentLine))?;
-        execute!(
-            w,
-            SetForegroundColor(CColor::Cyan),
-            Print("(reverse-i-search)`"),
-            ResetColor,
-            Print(query),
-            SetForegroundColor(CColor::Cyan),
-            Print("': "),
-            ResetColor,
-        )?;
+        let total_width = width.saturating_sub(1) as usize;
+        let prefix = "(reverse-i-search)`";
+        let middle = "': ";
+        let mut prompt = String::new();
+        prompt.push_str(prefix);
+        let query_budget =
+            total_width.saturating_sub(display_width(prefix) + display_width(middle));
+        prompt.push_str(&truncate_to_display_width(query, query_budget));
+        prompt.push_str(middle);
 
         // Show selected entry preview
         if let Some(&idx) = matches.get(selected)
             && let Some(entry) = self.input_history.get(idx)
         {
-            let preview: String = entry
-                .chars()
-                .take((width as usize).saturating_sub(25))
-                .collect();
-            execute!(w, Print(&preview))?;
+            let preview = entry.lines().next().unwrap_or("");
+            let preview_budget = total_width.saturating_sub(display_width(&prompt));
+            prompt.push_str(&truncate_to_display_width(preview, preview_budget));
         }
+        execute!(w, Print(prompt))?;
 
         // Render matches above the prompt using shared popup renderer
         if !matches.is_empty() {
@@ -60,7 +59,6 @@ impl App {
                 0
             };
 
-            let max_len = (width as usize).saturating_sub(4);
             let display_strings: Vec<String> = matches
                 .iter()
                 .skip(start_idx)
@@ -68,15 +66,7 @@ impl App {
                 .map(|&history_idx| {
                     self.input_history
                         .get(history_idx)
-                        .map(|entry| {
-                            entry
-                                .lines()
-                                .next()
-                                .unwrap_or("")
-                                .chars()
-                                .take(max_len)
-                                .collect()
-                        })
+                        .map(|entry| entry.lines().next().unwrap_or("").to_string())
                         .unwrap_or_default()
                 })
                 .collect();
@@ -100,7 +90,7 @@ impl App {
                     height: visible_count as u16,
                 },
                 PopupStyle {
-                    primary_color: CColor::Reset,
+                    primary_color: crossterm::style::Color::Reset,
                     show_secondary_dimmed: false,
                     dim_unselected: true,
                 },
