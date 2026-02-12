@@ -6,7 +6,7 @@ Stabilize Ion's highest-risk surfaces while avoiding unnecessary rewrites:
 
 1. Reduce TUI rendering bugs through targeted improvements to the custom crossterm renderer.
 2. Move MCP integration to the official Rust SDK ecosystem (`rmcp`).
-3. Add a standardized request layer (`genai`) where it lowers maintenance cost for API-key providers.
+3. Keep the provider stack custom and defer `genai` until there is clear provider-expansion pressure.
 4. Keep SQLite session storage; improve migration discipline without changing storage engine.
 
 ## Current Baseline
@@ -25,9 +25,9 @@ Stabilize Ion's highest-risk surfaces while avoiding unnecessary rewrites:
 | Crate                              | Role                                      | Decision                       | Why                                                                                                          |
 | ---------------------------------- | ----------------------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------ |
 | `rmcp`                             | MCP client/server protocol                | Integrate (near-term)          | Official MCP Rust SDK (v0.14.0, 3.4M DL), best long-term interop                                             |
-| `genai`                            | Request abstraction for API-key providers | Integrate as optional adapter  | v0.5.3 now has tool call streaming; reduces OpenAI-compat boilerplate for standard providers                 |
+| `genai`                            | Request abstraction for API-key providers | Skip for now (watch list)      | Adds dual-path complexity and cannot replace Anthropic cache_control, OAuth flows, or key provider quirks     |
 | `rusqlite_migration` or `refinery` | SQLite migration tooling                  | Integrate (low priority)       | Keeps current storage model, reduces migration drift risk                                                    |
-| `rnk`                              | TUI runtime                               | Do not adopt (spike abandoned) | 158 total downloads, single author, no production evidence; see review below                                 |
+| `rnk`                              | TUI runtime                               | Spike only (branch + kill criteria) | Architecture aligns with Ion's inline model, but maturity risk is high; evaluate before any adoption       |
 | `rig`                              | Full agent framework/orchestrator         | Do not adopt                   | 5.7K stars but too much framework; would require conforming to rig's Agent model, ~278K SLoC transitive deps |
 | `ratatui`                          | Full TUI framework                        | Do not adopt                   | Viewport::Inline has broken horizontal resize (#2086); doesn't fit Ion's scrollback model                    |
 | storage engine replacement         | Session backend swap                      | Do not adopt                   | No immediate product need                                                                                    |
@@ -52,13 +52,13 @@ Every major inline terminal agent (Claude Code, Codex CLI, pi-mono, opencode, Io
 
 Full research: `ai/research/tui-crates-2026-02.md`
 
-### Providers: Custom is justified, genai is a viable adapter
+### Providers: Custom is justified; genai is deferred
 
-Ion's custom provider layer exists because no crate handles streaming + tools for all providers. This remains true. What changed since January 2026:
+Ion's custom provider layer exists because no crate handles streaming + tools for all providers. This remains true. `genai` is useful but currently deferred:
 
-- **genai v0.5.3** now has full tool call streaming (`ToolCallChunk`, `ChatOptions.capture_tool_calls`). Previously noted as "Planned."
-- genai covers 14+ providers, has `AuthResolver` + `ServiceTargetResolver` for custom endpoints.
-- ~40-50% of Ion's provider code (OpenAI-compat request building, SSE parsing) could delegate to genai.
+- **genai v0.5.3** now has full tool call streaming (`ToolCallChunk`, `ChatOptions.capture_tool_calls`).
+- genai covers 14+ providers and could offload some OpenAI-compat boilerplate.
+- Current decision is to avoid a dual provider path until we have concrete pressure to add many new providers quickly.
 
 **What genai cannot replace:**
 
@@ -88,36 +88,29 @@ Full research: `ai/research/provider-crates-2026-02.md`
   - `tools/list` and `tools/call` parity tests pass against existing MCP servers.
   - No changes required in tool prompt contract or user workflow.
 
-### Phase 2: TUI Targeted Improvements (highest impact)
+### Phase 2: RNK Bottom-UI Spike (time-boxed)
 
-> **Changed from original:** Replaced "RNK TUI Migration Spike" with targeted custom improvements. rnk's immaturity (158 DL, single author, no production users, unstable API) makes it too risky for Ion's highest-bug-rate surface. The correct approach is to fix the bugs in the existing renderer, which is architecturally sound.
-
-- Task: `tk-add8` (scope revised)
+- Task: `tk-add8`
 - Scope:
-  - **Differential bottom-UI rendering:** Front/back buffer comparison for the managed area (input, progress, status). Only write changed cells. Reduces flicker on terminals without CSI 2026 support.
-  - **Debounced resize:** Batch rapid SIGWINCH events (100ms window) to avoid multiple reflows.
-  - **Width-safe rendering contract:** Enforce the TUI v3 architecture plan's single render authority and deterministic frame pipeline.
-  - **Streaming response area:** Render streaming text in the managed area above input, below scrollback. Biggest UX gap vs Claude Code / pi-mono.
+  - Run spike on branch `codex/rnk-bottom-ui-spike`.
+  - Limit RNK usage to bottom UI (`input`, `progress`, `status`); keep chat history insertion on current custom path.
+  - Validate against the manual checklist and Ghostty narrow-width regressions.
+  - Record integration complexity and regression delta versus current crossterm path.
+- Kill Criteria:
+  - Resize/autowrap regressions match or exceed current baseline.
+  - RNK requires taking over chat scrollback semantics to stay stable.
+  - API churn prevents a clean fork-ready integration path.
 - Exit Criteria:
-  - Resize/autowrap bugs from manual checklist resolved.
-  - No regressions in `--continue`, `/resume`, `/clear`, narrow-width scenarios.
-  - Flicker measurably reduced (fewer bytes per frame in steady state).
+  - Keep/kill decision logged in `tk-add8` and reflected in `ai/STATUS.md`.
+  - If killed: continue custom crossterm improvements in the same task stream.
+  - If kept: open follow-up integration tasks with explicit rollout guardrails.
 
-### Phase 3: genai Provider Adapter (controlled rollout)
+### Phase 3: Deferred `genai` Adapter (watch only)
 
-- Task: `tk-wr9i`
-- Scope:
-  - Add a feature-gated provider backend that maps Ion `ChatRequest`/stream events to `genai`.
-  - Start with API-key OpenAI-compat providers (OpenAI, Groq, OpenRouter).
-  - Keep existing custom provider stack as default path.
-  - genai is an implementation detail behind `LlmApi` trait; Ion canonical types at all edges.
-- Explicit Non-Goals in this phase:
-  - Replacing Anthropic provider (needs `cache_control` genai doesn't expose).
-  - Replacing OAuth/subscription providers (`chatgpt`, `gemini`).
-  - Removing provider-specific routing/quirks until parity is proven.
-- Exit Criteria:
-  - Equivalent tool-call streaming behavior for selected providers.
-  - Equivalent token usage capture and error handling for selected providers.
+- Task: `tk-wr9i` (deprioritized)
+- Decision:
+  - Keep task open as a watch item only.
+  - Revisit when provider growth or maintenance load justifies dual-path complexity.
 
 ### Phase 4: SQLite Migration Tooling (hygiene)
 
@@ -141,8 +134,8 @@ Full research: `ai/research/provider-crates-2026-02.md`
 | Task      | Purpose                                                              | Priority |
 | --------- | -------------------------------------------------------------------- | -------- |
 | `tk-na3u` | MCP migration to `rmcp`                                              | p2       |
-| `tk-add8` | TUI targeted improvements (differential rendering, debounced resize) | p2       |
-| `tk-wr9i` | `genai` provider adapter                                             | p3       |
+| `tk-add8` | RNK bottom-UI spike (time-boxed, fork-ready, kill criteria)         | p2       |
+| `tk-wr9i` | `genai` provider adapter (deferred/watch)                            | p4       |
 | `tk-ww4t` | SQLite migration tooling                                             | p4       |
 
 ## Watch List

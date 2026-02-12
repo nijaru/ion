@@ -4,15 +4,15 @@
 
 | Metric    | Value                                                 | Updated    |
 | --------- | ----------------------------------------------------- | ---------- |
-| Phase     | Dogfood readiness (Sprint 16 active)                  | 2026-02-11 |
-| Status    | TUI stability pass; runtime stack decisions finalized | 2026-02-11 |
+| Phase     | Dogfood readiness (Sprint 16 active)                  | 2026-02-12 |
+| Status    | Sprint-16 closure gate + runtime stack ordering aligned | 2026-02-12 |
 | Toolchain | stable                                                | 2026-01-22 |
 | Tests     | 444 passing (`cargo test -q`)                         | 2026-02-11 |
 | Clippy    | clean (`cargo clippy -q`)                             | 2026-02-11 |
 
 ## Active Focus
 
-- `tk-86lk` (`active`): Close `--continue`/`/resume`/`/clear` rendering regressions. Ghostty manual pass found narrow-width wrap truncation, duplicated redraw artifacts, composer growth overwriting history.
+- `tk-86lk` (`active`): Code fixes are in; remaining gate is manual checklist + Ghostty validation before closing.
 - Sprint 16: `ai/sprints/16-dogfood-tui-stability.md`
 
 ## Key Decisions (2026-02-11)
@@ -33,7 +33,8 @@
 1. Manual TUI checklist: `ai/review/tui-manual-checklist-2026-02.md`
 2. Validate Ghostty regressions (narrow resize, redraw duplication, composer grow/shrink)
 3. Close `tk-86lk` if checklist passes
-4. Begin Phase 1 (MCP `rmcp` migration) or rnk spike depending on priority
+4. Start `tk-na3u` (MCP `rmcp` migration, Phase 1 priority) after `tk-86lk` is closed
+5. Start `tk-add8` on branch `codex/rnk-bottom-ui-spike` (bottom-UI-only spike with kill criteria)
 
 ## Key References
 
