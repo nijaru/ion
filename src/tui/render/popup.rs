@@ -4,15 +4,16 @@ use crate::tui::util::{display_width, truncate_to_display_width};
 use crossterm::{
     cursor::MoveTo,
     execute,
-    style::{Attribute, Color, Print, ResetColor, SetAttribute, SetForegroundColor},
     terminal::{Clear, ClearType},
 };
+use rnk::components::{Box as RnkBox, Span, Text};
+use rnk::core::{Color as RnkColor, FlexDirection, TextWrap};
 use std::io::Write;
 
 /// Visual style for a popup list.
 #[derive(Clone, Copy)]
 pub struct PopupStyle {
-    pub primary_color: Color,
+    pub primary_color: RnkColor,
     pub show_secondary_dimmed: bool,
     /// Apply Dim attribute to unselected items (e.g., history search).
     pub dim_unselected: bool,
@@ -24,11 +25,21 @@ pub struct PopupItem<'a> {
     pub secondary: &'a str,
     pub is_selected: bool,
     /// Override the style's primary color for this item.
-    pub color_override: Option<Color>,
+    pub color_override: Option<RnkColor>,
 }
 
 /// Re-export Region as PopupRegion for popup callers.
 pub use crate::tui::render::layout::Region as PopupRegion;
+
+fn render_rnk_text_line(text: Text, max_cells: usize) -> String {
+    let element = RnkBox::new()
+        .flex_direction(FlexDirection::Row)
+        .width(max_cells as u16)
+        .child(text.wrap(TextWrap::Truncate).into_element())
+        .into_element();
+    let rendered = rnk::render_to_string_no_trim(&element, max_cells as u16);
+    rendered.lines().next().unwrap_or_default().to_string()
+}
 
 /// Render a popup list within a given region.
 /// Items render top-down starting at `region.row`.
@@ -48,48 +59,58 @@ pub fn render_popup<W: Write>(
 
     for (i, item) in items.iter().enumerate().take(region.height as usize) {
         let row = region.row + i as u16;
-
-        execute!(w, MoveTo(1, row), Clear(ClearType::CurrentLine))?;
-
-        if item.is_selected {
-            execute!(w, SetAttribute(Attribute::Reverse))?;
-        } else if style.dim_unselected {
-            execute!(w, SetAttribute(Attribute::Dim))?;
-        }
+        execute!(
+            w,
+            MoveTo(0, row),
+            Clear(ClearType::CurrentLine),
+            MoveTo(1, row)
+        )?;
 
         let color = item.color_override.unwrap_or(style.primary_color);
 
         let mut cells_used = 0usize;
-        execute!(w, Print(" "))?;
+        let mut spans = Vec::new();
+        spans.push(Span::new(" "));
         cells_used += 1;
 
-        // Primary text in configured color (clamped)
+        // Primary text in configured color (clamped).
         let primary = truncate_to_display_width(item.primary, max_cells.saturating_sub(cells_used));
-        execute!(w, SetForegroundColor(color), Print(&primary), ResetColor,)?;
-        cells_used += display_width(&primary);
+        let primary_width = display_width(&primary);
+        let mut primary_span = Span::new(primary);
+        primary_span = primary_span.color(color);
+        if !item.is_selected && style.dim_unselected {
+            primary_span = primary_span.dim();
+        }
+        spans.push(primary_span);
+        cells_used += primary_width;
 
-        // Secondary text (dimmed, clamped)
+        // Secondary text (dimmed, clamped).
         if !item.secondary.is_empty() && style.show_secondary_dimmed {
             let secondary =
                 truncate_to_display_width(item.secondary, max_cells.saturating_sub(cells_used));
-            execute!(
-                w,
-                SetAttribute(Attribute::Dim),
-                Print(&secondary),
-                SetAttribute(Attribute::NormalIntensity),
-            )?;
-            cells_used += display_width(&secondary);
+            let secondary_width = display_width(&secondary);
+            let mut secondary_span = Span::new(secondary).dim();
+            if item.is_selected {
+                secondary_span = secondary_span.color(RnkColor::BrightWhite);
+            }
+            spans.push(secondary_span);
+            cells_used += secondary_width;
         }
 
         // Pad to popup width for consistent reverse-video highlight.
         let padding = max_cells.saturating_sub(cells_used);
         if padding > 0 {
-            execute!(w, Print(" ".repeat(padding)))?;
+            spans.push(Span::new(" ".repeat(padding)));
         }
 
-        if item.is_selected || style.dim_unselected {
-            execute!(w, SetAttribute(Attribute::Reset))?;
+        if item.is_selected {
+            for span in &mut spans {
+                span.style.background_color = Some(RnkColor::BrightBlack);
+            }
         }
+
+        let rendered = render_rnk_text_line(Text::spans(spans), max_cells);
+        write!(w, "{rendered}")?;
     }
 
     Ok(())
