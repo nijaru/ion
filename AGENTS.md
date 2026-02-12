@@ -27,7 +27,7 @@ Fast, lightweight TUI coding agent.
 
 | Module    | Purpose                              |
 | --------- | ------------------------------------ |
-| provider/ | Multi-provider LLM via llm-connector |
+| provider/ | Custom multi-provider LLM (streaming + tools) |
 | tool/     | Built-in tools + MCP client          |
 | skill/    | SKILL.md loader                      |
 | agent/    | Multi-turn loop, session management  |
