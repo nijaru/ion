@@ -3,7 +3,7 @@
   "ref": "rpst",
   "title": "[BUG] Resize redraw duplicates history and prompt box",
   "description": "RNK UI: resizing from larger to smaller width causes reprinted history below old content and prompt-box artifacts in scrollback. Need single canonical history repaint and bottom-only prompt.",
-  "status": "active",
+  "status": "done",
   "priority": 2,
   "labels": [],
   "assignees": [],
@@ -23,10 +23,14 @@
     {
       "ts": "2026-02-12T08:17:31.262Z",
       "msg": "Validation: cargo check -q and cargo test -q pass. cargo clippy --all-targets -D warnings fails on pre-existing project-wide lint backlog (duplicated cfg attr in provider/openai_compat/tests.rs, chat_renderer map_or, rnk_spike too_many_arguments, test lint issues); no new failures from resize patch."
+    },
+    {
+      "ts": "2026-02-12T08:17:53.832Z",
+      "msg": "Code fix landed in cb69d3a; awaiting user terminal smoke validation."
     }
   ],
   "created_at": "2026-02-12T08:13:06.244Z",
-  "updated_at": "2026-02-12T08:17:31.262Z",
-  "completed_at": null,
+  "updated_at": "2026-02-12T08:17:53.832Z",
+  "completed_at": "2026-02-12T08:17:53.805Z",
   "external": {}
 }
