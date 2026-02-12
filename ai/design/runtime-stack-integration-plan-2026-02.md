@@ -5,9 +5,10 @@
 Stabilize Ion's highest-risk surfaces while avoiding unnecessary rewrites:
 
 1. Reduce TUI rendering bugs through targeted improvements to the custom crossterm renderer.
-2. Move MCP integration to the official Rust SDK ecosystem (`rmcp`).
-3. Keep the provider stack custom and defer `genai` until there is clear provider-expansion pressure.
-4. Keep SQLite session storage; improve migration discipline without changing storage engine.
+2. Prioritize core agent/API reliability work that impacts daily dogfooding.
+3. Move MCP integration to `rmcp` only when MCP is part of active product workflows.
+4. Keep the provider stack custom and defer `genai` until there is clear provider-expansion pressure.
+5. Keep SQLite session storage; improve migration discipline without changing storage engine.
 
 ## Current Baseline
 
@@ -24,7 +25,7 @@ Stabilize Ion's highest-risk surfaces while avoiding unnecessary rewrites:
 
 | Crate                              | Role                                      | Decision                       | Why                                                                                                          |
 | ---------------------------------- | ----------------------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------ |
-| `rmcp`                             | MCP client/server protocol                | Integrate (near-term)          | Official MCP Rust SDK (v0.14.0, 3.4M DL), best long-term interop                                             |
+| `rmcp`                             | MCP client/server protocol                | Integrate (deferred)           | Official MCP Rust SDK (v0.14.0, 3.4M DL); defer until MCP is in active use                                    |
 | `genai`                            | Request abstraction for API-key providers | Skip for now (watch list)      | Adds dual-path complexity and cannot replace Anthropic cache_control, OAuth flows, or key provider quirks     |
 | `rusqlite_migration` or `refinery` | SQLite migration tooling                  | Integrate (low priority)       | Keeps current storage model, reduces migration drift risk                                                    |
 | `rnk`                              | TUI runtime                               | Spike only (branch + kill criteria) | Architecture aligns with Ion's inline model, but maturity risk is high; evaluate before any adoption       |
@@ -71,24 +72,13 @@ Ion's custom provider layer exists because no crate handles streaming + tools fo
 
 Full research: `ai/research/provider-crates-2026-02.md`
 
-### MCP: rmcp is confirmed correct
+### MCP: rmcp is confirmed correct, but not current priority
 
 `rmcp` v0.14.0 (3.4M downloads) is the official Rust MCP SDK under `github.com/modelcontextprotocol/rust-sdk`. Migration from `mcp-sdk-rs` v0.3.4 is straightforward and the right call.
 
 ## Phased Plan
 
-### Phase 1: MCP Migration (low blast radius)
-
-- Task: `tk-na3u`
-- Scope:
-  - Replace `mcp-sdk-rs` usage in `src/mcp/mod.rs` with `rmcp` client primitives.
-  - Preserve current `McpFallback` contract used by `ToolOrchestrator`.
-  - Keep tool search/index behavior unchanged from user perspective.
-- Exit Criteria:
-  - `tools/list` and `tools/call` parity tests pass against existing MCP servers.
-  - No changes required in tool prompt contract or user workflow.
-
-### Phase 2: RNK Bottom-UI Spike (time-boxed)
+### Phase 1: RNK Bottom-UI Spike (time-boxed)
 
 - Task: `tk-add8`
 - Scope:
@@ -105,14 +95,35 @@ Full research: `ai/research/provider-crates-2026-02.md`
   - If killed: continue custom crossterm improvements in the same task stream.
   - If kept: open follow-up integration tasks with explicit rollout guardrails.
 
-### Phase 3: Deferred `genai` Adapter (watch only)
+### Phase 2: Core Agent/API Reliability Follow-ups
+
+- Tasks: `tk-oh88`, `tk-ts00`
+- Scope:
+  - `tk-oh88`: sandbox execution behavior for normal coding workflows.
+  - `tk-ts00`: persist last task summary so `--continue` progress line is accurate.
+- Exit Criteria:
+  - Agent flow remains stable under normal dogfood loops (run/cancel/resume/restart).
+  - No regressions in TUI behavior after phase 1 decision.
+
+### Phase 3: MCP Migration (deferred until needed)
+
+- Task: `tk-na3u`
+- Scope:
+  - Replace `mcp-sdk-rs` usage in `src/mcp/mod.rs` with `rmcp` client primitives.
+  - Preserve current `McpFallback` contract used by `ToolOrchestrator`.
+  - Keep tool search/index behavior unchanged from user perspective.
+- Exit Criteria:
+  - `tools/list` and `tools/call` parity tests pass against existing MCP servers.
+  - No changes required in tool prompt contract or user workflow.
+
+### Phase 4: Deferred `genai` Adapter (watch only)
 
 - Task: `tk-wr9i` (deprioritized)
 - Decision:
   - Keep task open as a watch item only.
   - Revisit when provider growth or maintenance load justifies dual-path complexity.
 
-### Phase 4: SQLite Migration Tooling (hygiene)
+### Phase 5: SQLite Migration Tooling (hygiene)
 
 - Task: `tk-ww4t`
 - Scope:
@@ -133,8 +144,10 @@ Full research: `ai/research/provider-crates-2026-02.md`
 
 | Task      | Purpose                                                              | Priority |
 | --------- | -------------------------------------------------------------------- | -------- |
-| `tk-na3u` | MCP migration to `rmcp`                                              | p2       |
 | `tk-add8` | RNK bottom-UI spike (time-boxed, fork-ready, kill criteria)         | p2       |
+| `tk-oh88` | OS sandbox execution for tool safety                                 | p2       |
+| `tk-ts00` | Persist task summary for resume progress line                        | p3       |
+| `tk-na3u` | MCP migration to `rmcp` (deferred)                                   | p4       |
 | `tk-wr9i` | `genai` provider adapter (deferred/watch)                            | p4       |
 | `tk-ww4t` | SQLite migration tooling                                             | p4       |
 

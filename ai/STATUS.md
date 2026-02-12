@@ -5,21 +5,22 @@
 | Metric    | Value                                                 | Updated    |
 | --------- | ----------------------------------------------------- | ---------- |
 | Phase     | Dogfood readiness (Sprint 16 active)                  | 2026-02-12 |
-| Status    | Sprint-16 closure gate + runtime stack ordering aligned | 2026-02-12 |
+| Status    | RNK/core-TUI spike prioritized; MCP migration deferred | 2026-02-12 |
 | Toolchain | stable                                                | 2026-01-22 |
 | Tests     | 444 passing (`cargo test -q`)                         | 2026-02-11 |
 | Clippy    | clean (`cargo clippy -q`)                             | 2026-02-11 |
 
 ## Active Focus
 
-- `tk-86lk` (`active`): Code fixes are in; remaining gate is manual checklist + Ghostty validation before closing.
+- `tk-add8` (`active`): Time-boxed RNK bottom-UI spike on `codex/rnk-bottom-ui-spike` with explicit keep/kill criteria.
+- `tk-86lk` (`open`, blocked by `tk-add8`): Keep as fallback regression stream if RNK spike is killed.
 - Sprint 16: `ai/sprints/16-dogfood-tui-stability.md`
 
 ## Key Decisions (2026-02-11)
 
 - **TUI**: Stay custom crossterm. rnk spike worth trying (bottom UI only, fork-ready). No crate solves inline-chat + bottom-UI pattern.
 - **Providers**: Stay fully custom (~8.9K LOC). Skip genai — custom is justified, genai can't replace cache_control/OAuth/quirks.
-- **MCP**: Migrate to `rmcp` (official SDK, 3.4M DL). Phase 1 priority.
+- **MCP**: Defer `rmcp` migration until MCP is part of active workflows; not currently a near-term product blocker.
 - **Architecture target**: Workspace crate split (ion-provider, ion-tool, ion-agent, ion-tui, ion). Design trait boundaries now, split when needed.
 - **Language**: Rust everywhere. Multi-environment (desktop, web) via Tauri/Wasm later.
 - Full analysis: `ai/design/runtime-stack-integration-plan-2026-02.md`
@@ -30,11 +31,11 @@
 
 ## Next Session
 
-1. Manual TUI checklist: `ai/review/tui-manual-checklist-2026-02.md`
-2. Validate Ghostty regressions (narrow resize, redraw duplication, composer grow/shrink)
-3. Close `tk-86lk` if checklist passes
-4. Start `tk-na3u` (MCP `rmcp` migration, Phase 1 priority) after `tk-86lk` is closed
-5. Start `tk-add8` on branch `codex/rnk-bottom-ui-spike` (bottom-UI-only spike with kill criteria)
+1. Execute `tk-add8` on `codex/rnk-bottom-ui-spike` (bottom UI only: input/progress/status)
+2. Record keep/kill decision with evidence against Ghostty/narrow-width regressions
+3. If RNK is killed, resume `tk-86lk` + checklist closure on current crossterm path
+4. Continue core agent/API reliability tasks (`tk-oh88`, `tk-ts00`) after TUI direction is decided
+5. Keep `tk-na3u` deferred until MCP usage becomes product-relevant
 
 ## Key References
 
