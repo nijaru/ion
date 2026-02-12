@@ -8,19 +8,21 @@
   "labels": [],
   "assignees": [],
   "parent": null,
-  "blocked_by": [
-    "tk-86lk"
-  ],
+  "blocked_by": [],
   "estimate": null,
   "due_date": null,
   "logs": [
     {
       "ts": "2026-02-12T04:59:55.689Z",
       "msg": "Roadmap alignment 2026-02-12: useful UX follow-up, but not a Sprint 16 gate. Hold until tk-86lk closure."
+    },
+    {
+      "ts": "2026-02-12T05:07:45.736Z",
+      "msg": "Reprioritized 2026-02-12: unblocked from tk-86lk because resume-summary persistence can proceed independently of the RNK spike."
     }
   ],
   "created_at": "2026-02-11T08:09:10.969Z",
-  "updated_at": "2026-02-12T04:59:55.689Z",
+  "updated_at": "2026-02-12T05:07:45.736Z",
   "completed_at": null,
   "external": {}
 }

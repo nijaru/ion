@@ -9,7 +9,7 @@
   "assignees": [],
   "parent": null,
   "blocked_by": [
-    "tk-86lk"
+    "tk-add8"
   ],
   "estimate": null,
   "due_date": null,
@@ -25,10 +25,14 @@
     {
       "ts": "2026-02-12T04:59:35.801Z",
       "msg": "Roadmap alignment 2026-02-12: still Sprint 17 safety gate, but held until Sprint 16 tk-86lk is closed."
+    },
+    {
+      "ts": "2026-02-12T05:06:42.845Z",
+      "msg": "Reprioritized 2026-02-12: sequence after RNK/core TUI direction is validated."
     }
   ],
   "created_at": "2026-02-11T01:03:55.166Z",
-  "updated_at": "2026-02-12T04:59:35.801Z",
+  "updated_at": "2026-02-12T05:06:42.845Z",
   "completed_at": null,
   "external": {}
 }
