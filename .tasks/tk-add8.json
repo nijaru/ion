@@ -31,10 +31,18 @@
     {
       "ts": "2026-02-12T05:23:24.696Z",
       "msg": "Implemented first RNK spike slice: env-gated bottom-UI renderer (ION_RNK_BOTTOM_UI) using rnk::render_to_string_no_trim for progress/input/status rows while preserving existing chat scrollback path. Wired switch in src/tui/render/direct.rs; default path unchanged. Validation: cargo check -q; cargo test -q tui:: (184 passed)."
+    },
+    {
+      "ts": "2026-02-12T06:42:59.554Z",
+      "msg": "RNK spike follow-up: restored colored status mode label ([READ]/[WRITE]) via RNK span styling; added dedicated progress spacer row by increasing progress region in RNK mode and drawing progress on region bottom row."
+    },
+    {
+      "ts": "2026-02-12T06:43:02.426Z",
+      "msg": "Validation: cargo check -q, cargo test -q tui::render::, cargo test -q tui:: all pass after RNK status/spacer fixes."
     }
   ],
   "created_at": "2026-02-11T23:32:50.878Z",
-  "updated_at": "2026-02-12T05:23:24.696Z",
+  "updated_at": "2026-02-12T06:43:02.426Z",
   "completed_at": null,
   "external": {}
 }

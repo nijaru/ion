@@ -12,7 +12,7 @@ use crate::tui::util::{format_cost, format_elapsed, format_tokens, truncate_to_d
 use crossterm::cursor::MoveTo;
 use crossterm::execute;
 use crossterm::terminal::{Clear, ClearType};
-use rnk::components::{Box as RnkBox, Text};
+use rnk::components::{Box as RnkBox, Span, Text};
 use rnk::core::{Color as RnkColor, FlexDirection, TextWrap};
 use std::io::Write;
 use std::sync::OnceLock;
@@ -52,7 +52,7 @@ fn render_rnk_line(
         return String::new();
     }
 
-    let mut line = Text::new(clipped).wrap(TextWrap::Truncate);
+    let mut line = Text::new(clipped);
     if let Some(color) = color {
         line = line.color(color);
     }
@@ -63,10 +63,14 @@ fn render_rnk_line(
         line = line.dim();
     }
 
+    render_rnk_text_line(line, max_cells)
+}
+
+fn render_rnk_text_line(text: Text, max_cells: usize) -> String {
     let element = RnkBox::new()
         .flex_direction(FlexDirection::Row)
         .width(max_cells as u16)
-        .child(line.into_element())
+        .child(text.wrap(TextWrap::Truncate).into_element())
         .into_element();
     let rendered = rnk::render_to_string_no_trim(&element, max_cells as u16);
     rendered.lines().next().unwrap_or_default().to_string()
@@ -91,6 +95,22 @@ fn paint_row<W: Write>(
     Ok(())
 }
 
+fn paint_row_spans<W: Write>(
+    w: &mut W,
+    row: u16,
+    width: u16,
+    spans: Vec<Span>,
+) -> std::io::Result<()> {
+    execute!(w, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
+    let max_cells = width.saturating_sub(1) as usize;
+    if max_cells == 0 || spans.is_empty() {
+        return Ok(());
+    }
+    let rendered = render_rnk_text_line(Text::spans(spans), max_cells);
+    write!(w, "{rendered}")?;
+    Ok(())
+}
+
 impl App {
     pub(crate) fn should_use_rnk_bottom_ui(&self, popup_active: bool) -> bool {
         rnk_bottom_ui_enabled()
@@ -100,10 +120,15 @@ impl App {
             && !self.file_completer.is_active()
     }
 
+    pub(crate) fn rnk_progress_gap_rows(&self, popup_active: bool) -> u16 {
+        u16::from(self.should_use_rnk_bottom_ui(popup_active))
+    }
+
     pub(crate) fn render_bottom_ui_rnk<W: Write>(
         &mut self,
         w: &mut W,
         progress_row: u16,
+        progress_height: u16,
         input_row: u16,
         input_height: u16,
         status_row: u16,
@@ -112,11 +137,16 @@ impl App {
         // Mirror existing input-box shape: top border + content + bottom border.
         let content_start = input_row.saturating_add(1);
         let content_height = input_height.saturating_sub(2);
+        let progress_line_row = progress_row.saturating_add(progress_height.saturating_sub(1));
+
+        for row in progress_row..progress_line_row {
+            paint_row(w, row, width, "", None, false, false)?;
+        }
 
         let (progress_text, progress_color) = self.progress_line_text(width);
         paint_row(
             w,
-            progress_row,
+            progress_line_row,
             width,
             &progress_text,
             progress_color,
@@ -152,8 +182,8 @@ impl App {
             false,
         )?;
 
-        let status_text = self.status_line_text(width);
-        paint_row(w, status_row, width, &status_text, None, false, false)?;
+        let status_spans = self.status_line_spans();
+        paint_row_spans(w, status_row, width, status_spans)?;
 
         let (cursor_x, cursor_y) = self.input_state.cursor_pos;
         let scroll_offset = self.input_state.scroll_offset() as u16;
@@ -296,12 +326,7 @@ impl App {
         )
     }
 
-    fn status_line_text(&self, width: u16) -> String {
-        let max_cells = width.saturating_sub(1) as usize;
-        if max_cells == 0 {
-            return String::new();
-        }
-
+    fn status_line_spans(&self) -> Vec<Span> {
         let model_name = self
             .session
             .model
@@ -309,32 +334,35 @@ impl App {
             .next_back()
             .unwrap_or(&self.session.model);
 
-        let mode = match self.tool_mode {
-            ToolMode::Read => "READ",
-            ToolMode::Write => "WRITE",
+        let (mode_label, mode_color) = match self.tool_mode {
+            ToolMode::Read => ("READ", RnkColor::Cyan),
+            ToolMode::Write => ("WRITE", RnkColor::Yellow),
         };
 
-        let mut line = format!(" [{mode}] • {model_name}");
+        let mut spans = vec![
+            Span::new(" ["),
+            Span::new(mode_label).color(mode_color),
+            Span::new("] • "),
+            Span::new(model_name),
+        ];
 
         let think_label = self.thinking_level.label();
         if !think_label.is_empty() {
-            line.push(' ');
-            line.push_str(think_label);
+            spans.push(Span::new(" "));
+            spans.push(Span::new(think_label).color(RnkColor::Magenta));
         }
 
         if let Some((used, max)) = self.token_usage {
-            line.push_str(&format!(
-                " • {}/{}",
-                format_tokens(used),
-                format_tokens(max)
-            ));
+            spans.push(
+                Span::new(format!(" • {}/{}", format_tokens(used), format_tokens(max))).dim(),
+            );
             if max > 0 {
                 let pct = (used * 100) / max;
-                line.push_str(&format!(" ({pct}%)"));
+                spans.push(Span::new(format!(" ({pct}%)")).dim());
             }
         }
 
-        truncate_to_display_width(&line, max_cells)
+        spans
     }
 }
 
