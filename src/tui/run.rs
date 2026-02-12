@@ -43,6 +43,9 @@ enum PreOp {
         lines: Vec<StyledLine>,
         scroll_amount: u16,
     },
+    /// Scroll viewport content up to make room for a taller bottom UI
+    /// without reprinting prior chat lines.
+    ScrollViewport { scroll_amount: u16 },
     /// Clear the area where the selector was.
     ClearSelectorArea { from_row: u16 },
     /// Print the startup header.
@@ -170,6 +173,11 @@ fn apply_pre_ops(
                 app.render_state
                     .mark_reflow_complete(rendered_entry_count(app));
             }
+            PreOp::ScrollViewport { scroll_amount } => {
+                if *scroll_amount > 0 {
+                    scroll_up_and_home(stdout, *scroll_amount)?;
+                }
+            }
             PreOp::ClearSelectorArea { from_row } => {
                 execute!(
                     stdout,
@@ -261,20 +269,30 @@ fn prepare_frame(app: &mut App, term_width: u16, term_height: u16) -> FramePrep 
 
     let layout = app.compute_layout(term_width, term_height);
     let ui_height = layout.height();
-    let mut scroll_amount = app
+    let scroll_amount = app
         .render_state
         .position
         .scroll_amount(ui_height, term_height);
 
     // If bottom UI growth (multiline input/popup changes) would overlap tracked chat rows,
-    // force a full reflow so history is re-laid out instead of being erased by UI clearing.
-    let needs_overlap_reflow = tracking_ui_overlap(&app.render_state.position, &layout)
-        && !app.message_list.entries.is_empty();
-    if needs_overlap_reflow {
-        app.render_state.needs_reflow = true;
-        // Composer-driven height changes can make row-based scroll estimates stale.
-        // Full-viewport scroll avoids residual rows and duplicate redraw artifacts.
-        scroll_amount = term_height;
+    // scroll just enough rows into scrollback to keep chat single-copy and preserve
+    // native terminal history. Avoid transcript reprints here.
+    let overlap_rows = if tracking_ui_overlap(&app.render_state.position, &layout) {
+        tracking_ui_overlap_rows(&app.render_state.position, &layout)
+    } else {
+        0
+    };
+    if overlap_rows > 0 && !app.message_list.entries.is_empty() {
+        pre_ops.push(PreOp::ScrollViewport {
+            scroll_amount: overlap_rows,
+        });
+        if let ChatPosition::Tracking { next_row, .. } = app.render_state.position {
+            app.render_state.position = ChatPosition::Tracking {
+                next_row: next_row.saturating_sub(overlap_rows),
+                ui_drawn_at: None,
+            };
+        }
+        state_changed = true;
     }
 
     // Screen clear (/clear)
@@ -352,10 +370,16 @@ fn prepare_frame(app: &mut App, term_width: u16, term_height: u16) -> FramePrep 
 }
 
 fn tracking_ui_overlap(position: &ChatPosition, layout: &UiLayout) -> bool {
-    matches!(
-        position,
-        ChatPosition::Tracking { next_row, .. } if layout.top < *next_row
-    )
+    tracking_ui_overlap_rows(position, layout) > 0
+}
+
+fn tracking_ui_overlap_rows(position: &ChatPosition, layout: &UiLayout) -> u16 {
+    match position {
+        ChatPosition::Tracking { next_row, .. } if layout.top < *next_row => {
+            next_row.saturating_sub(layout.top)
+        }
+        _ => 0,
+    }
 }
 
 /// Pure arithmetic to decide how to insert chat lines.
