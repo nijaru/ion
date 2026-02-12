@@ -43,10 +43,14 @@
     {
       "ts": "2026-02-12T06:52:42.421Z",
       "msg": "Adjusted RNK spacer behavior: reserve extra progress-gap row only while is_running to avoid extra idle blank lines on startup/restart."
+    },
+    {
+      "ts": "2026-02-12T07:15:10.077Z",
+      "msg": "Architectural direction confirmed: chat history should move to soft-wrap append-only model independent of RNK decision. RNK spike remains bottom-UI evaluation slice."
     }
   ],
   "created_at": "2026-02-11T23:32:50.878Z",
-  "updated_at": "2026-02-12T06:52:42.421Z",
+  "updated_at": "2026-02-12T07:15:10.077Z",
   "completed_at": null,
   "external": {}
 }
