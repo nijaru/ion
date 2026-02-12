@@ -36,9 +36,9 @@ impl App {
             }
             Event::Resize(_, _) => {
                 self.input_state.invalidate_width();
-                // Position is invalid after terminal reflow.
-                // Reflow will reprint and set the correct position.
-                self.render_state.needs_reflow = true;
+                // Force a render frame for bottom-UI relayout on size changes.
+                // Keep existing chat lines intact (no full transcript reprint).
+                self.render_state.needs_initial_render = true;
             }
             Event::FocusGained => {
                 // No-op: terminal size poll handles any resize that
