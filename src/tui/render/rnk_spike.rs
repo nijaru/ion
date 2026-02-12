@@ -1,7 +1,4 @@
-//! Experimental RNK-backed renderer for the bottom UI area.
-//!
-//! This is a scoped spike path for input/progress/status rendering while
-//! preserving Ion's existing chat-scrollback behavior.
+//! RNK-backed renderer for the bottom UI area.
 
 use crate::tool::ToolMode;
 use crate::tui::App;
@@ -15,26 +12,8 @@ use crossterm::terminal::{Clear, ClearType};
 use rnk::components::{Box as RnkBox, Span, Text};
 use rnk::core::{Color as RnkColor, FlexDirection, TextWrap};
 use std::io::Write;
-use std::sync::OnceLock;
 
-const RNK_BOTTOM_UI_ENV: &str = "ION_RNK_BOTTOM_UI";
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-
-fn parse_env_bool(value: &str) -> bool {
-    !matches!(
-        value.trim().to_ascii_lowercase().as_str(),
-        "" | "0" | "false" | "off" | "no"
-    )
-}
-
-fn rnk_bottom_ui_enabled() -> bool {
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        std::env::var(RNK_BOTTOM_UI_ENV)
-            .map(|value| parse_env_bool(&value))
-            .unwrap_or(false)
-    })
-}
 
 fn render_rnk_line(
     text: &str,
@@ -112,16 +91,8 @@ fn paint_row_spans<W: Write>(
 }
 
 impl App {
-    pub(crate) fn should_use_rnk_bottom_ui(&self, popup_active: bool) -> bool {
-        rnk_bottom_ui_enabled()
-            && self.mode == Mode::Input
-            && !popup_active
-            && !self.command_completer.is_active()
-            && !self.file_completer.is_active()
-    }
-
-    pub(crate) fn rnk_progress_gap_rows(&self, popup_active: bool) -> u16 {
-        u16::from(self.should_use_rnk_bottom_ui(popup_active) && self.is_running)
+    pub(crate) fn rnk_progress_gap_rows(&self) -> u16 {
+        u16::from(self.mode == Mode::Input && self.is_running)
     }
 
     pub(crate) fn render_bottom_ui_rnk<W: Write>(
@@ -133,6 +104,7 @@ impl App {
         input_height: u16,
         status_row: u16,
         width: u16,
+        show_progress_status: bool,
     ) -> std::io::Result<()> {
         // Mirror existing input-box shape: top border + content + bottom border.
         let content_start = input_row.saturating_add(1);
@@ -143,16 +115,20 @@ impl App {
             paint_row(w, row, width, "", None, false, false)?;
         }
 
-        let (progress_text, progress_color) = self.progress_line_text(width);
-        paint_row(
-            w,
-            progress_line_row,
-            width,
-            &progress_text,
-            progress_color,
-            false,
-            false,
-        )?;
+        if show_progress_status {
+            let (progress_text, progress_color) = self.progress_line_text(width);
+            paint_row(
+                w,
+                progress_line_row,
+                width,
+                &progress_text,
+                progress_color,
+                false,
+                false,
+            )?;
+        } else {
+            paint_row(w, progress_line_row, width, "", None, false, false)?;
+        }
 
         let border = "─".repeat(width.saturating_sub(1) as usize);
         paint_row(
@@ -182,8 +158,12 @@ impl App {
             false,
         )?;
 
-        let status_spans = self.status_line_spans();
-        paint_row_spans(w, status_row, width, status_spans)?;
+        if show_progress_status {
+            let status_spans = self.status_line_spans();
+            paint_row_spans(w, status_row, width, status_spans)?;
+        } else {
+            paint_row(w, status_row, width, "", None, false, false)?;
+        }
 
         let (cursor_x, cursor_y) = self.input_state.cursor_pos;
         let scroll_offset = self.input_state.scroll_offset() as u16;
@@ -363,24 +343,5 @@ impl App {
         }
 
         spans
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::parse_env_bool;
-
-    #[test]
-    fn parse_env_bool_false_values() {
-        for value in ["", "0", "false", "False", "off", "no"] {
-            assert!(!parse_env_bool(value), "expected false for {value:?}");
-        }
-    }
-
-    #[test]
-    fn parse_env_bool_true_values() {
-        for value in ["1", "true", "yes", "on", "anything"] {
-            assert!(parse_env_bool(value), "expected true for {value:?}");
-        }
     }
 }
