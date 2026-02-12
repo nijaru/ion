@@ -19,7 +19,7 @@
 - `tk-add8` progress (2026-02-12): RNK-first collapse landed: Input-mode bottom UI now renders through RNK path only; legacy crossterm bottom-UI modules removed.
 - `tk-add8` progress (2026-02-12): Remaining UI surfaces migrated to RNK primitives (selector + popup/completer + history-search prompt row). UI rendering stack is now RNK-first across active surfaces.
 - `tk-add8` progress (2026-02-12): Resize behavior updated to preserve single-copy chat history: removed resize-triggered full transcript reprint; overlap now handled by bounded viewport scroll before bottom UI redraw.
-- `tk-rpst` (`active`, p2): Validate resize bugfix for duplicate history + prompt-box artifacts after shrinking terminal width/height.
+- `tk-rpst` (`done`, p2): Resize bugfix shipped for duplicate history + prompt-box artifacts after shrinking terminal width/height.
 - `tk-bcau` (`open`, p2): Soft-wrap chat + viewport-separation architecture selected as target regardless of RNK choice.
 - `tk-86lk` (`open`, blocked by `tk-add8`): Keep as fallback regression stream if RNK spike is killed.
 - Sprint 16: `ai/sprints/16-dogfood-tui-stability.md`
