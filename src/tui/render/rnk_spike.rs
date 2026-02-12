@@ -121,7 +121,7 @@ impl App {
     }
 
     pub(crate) fn rnk_progress_gap_rows(&self, popup_active: bool) -> u16 {
-        u16::from(self.should_use_rnk_bottom_ui(popup_active))
+        u16::from(self.should_use_rnk_bottom_ui(popup_active) && self.is_running)
     }
 
     pub(crate) fn render_bottom_ui_rnk<W: Write>(
