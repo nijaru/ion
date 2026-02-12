@@ -27,10 +27,14 @@
     {
       "ts": "2026-02-12T05:06:42.865Z",
       "msg": "Reprioritized 2026-02-12: promoted to current focus (core TUI direction)."
+    },
+    {
+      "ts": "2026-02-12T05:23:24.696Z",
+      "msg": "Implemented first RNK spike slice: env-gated bottom-UI renderer (ION_RNK_BOTTOM_UI) using rnk::render_to_string_no_trim for progress/input/status rows while preserving existing chat scrollback path. Wired switch in src/tui/render/direct.rs; default path unchanged. Validation: cargo check -q; cargo test -q tui:: (184 passed)."
     }
   ],
   "created_at": "2026-02-11T23:32:50.878Z",
-  "updated_at": "2026-02-12T05:06:42.865Z",
+  "updated_at": "2026-02-12T05:23:24.696Z",
   "completed_at": null,
   "external": {}
 }
