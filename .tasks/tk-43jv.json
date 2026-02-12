@@ -1,0 +1,32 @@
+{
+  "project": "tk",
+  "ref": "43jv",
+  "title": "Compare TUI/provider/storage crates vs ion custom",
+  "description": "Evaluate rnk/ratatui/termimad for TUI stability, provider abstraction crates, and SQLite storage alternatives for ion.",
+  "status": "done",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [
+    {
+      "ts": "2026-02-11T21:15:02.267Z",
+      "msg": "TUI comparison: rnk 0.17.1 is active (docs.rs shows ~66.67% docs, ~25.49 kB docs, github repo ~456 stars). termimad README explicitly says it is not a TUI framework; better as markdown renderer. ratatui offers mature layout/widgets + TestBackend for rendering tests."
+    },
+    {
+      "ts": "2026-02-11T21:15:06.484Z",
+      "msg": "Provider layer: rig-core is feature-rich but still fast-moving ('Here be dragons' notice in repo). genai crate is stable lightweight multi-provider abstraction. Given ion has custom provider quirks + OAuth endpoints and is not failing in this area, custom remains best default; evaluate adapter only if maintenance cost rises."
+    },
+    {
+      "ts": "2026-02-11T21:15:10.544Z",
+      "msg": "Storage: current rusqlite store is solid; main incremental improvement is schema migration tooling (rusqlite_migration or refinery) rather than replacing storage engine. Consider libsql only if multi-machine sync/remote state is required."
+    }
+  ],
+  "created_at": "2026-02-11T21:13:37.788Z",
+  "updated_at": "2026-02-11T21:15:13.616Z",
+  "completed_at": "2026-02-11T21:15:13.616Z",
+  "external": {}
+}

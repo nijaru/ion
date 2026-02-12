@@ -1,0 +1,32 @@
+{
+  "project": "tk",
+  "ref": "ovlo",
+  "title": "Research 2026 Rust agent crates for ion",
+  "description": "Validate claims about rig, mcp-rust/gemini-mcp, rs-graph-llm, similar, rnk; compare alternatives and recommend stack fit for ion.",
+  "status": "done",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [
+    {
+      "ts": "2026-02-11T20:42:29.819Z",
+      "msg": "Verified Rig remains active (0xPlaygrounds/rig); supports provider integrations + agent/tool abstractions and vector-store integrations; README warns 'here be dragons' / potential breaking changes."
+    },
+    {
+      "ts": "2026-02-11T20:42:33.055Z",
+      "msg": "MCP ecosystem check: official modelcontextprotocol/rust-sdk uses rmcp crate; current ion uses mcp-sdk-rs 0.3.4 (custom integration in src/mcp/mod.rs). mcp-sdk-rs README/docs still marked WIP, making rmcp likely stronger long-term target."
+    },
+    {
+      "ts": "2026-02-11T20:42:36.363Z",
+      "msg": "rs-graph-llm maps to graph-flow crate, but published storage backends are InMemory + Postgres (no stated SQLite/Turso). Ion already has SQLite session persistence + custom compaction + similar-based diffing; recommendation is incremental MCP migration and optional adapter experimentation, not framework rewrite."
+    }
+  ],
+  "created_at": "2026-02-11T20:37:44.903Z",
+  "updated_at": "2026-02-11T20:42:56.978Z",
+  "completed_at": "2026-02-11T20:42:56.978Z",
+  "external": {}
+}
