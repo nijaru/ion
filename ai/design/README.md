@@ -8,6 +8,7 @@ Architectural specifications for ion.
 | ----------------------------------------------------------------- | -------------------------------------------------------- |
 | [Runtime Stack Plan](./runtime-stack-integration-plan-2026-02.md) | rmcp/rnk/genai integration roadmap (reviewed 2026-02-11) |
 | [TUI v3 Architecture](./tui-v3-architecture-2026-02.md)           | Render pipeline, frame planning, width safety            |
+| [Chat Soft-Wrap + Viewport Separation](./chat-softwrap-scrollback-2026-02.md) | Append-only chat + ephemeral bottom UI on resize |
 | [Dogfood Readiness](./dogfood-readiness-2026-02.md)               | Sprint 16-18 roadmap                                     |
 | [Permissions v2](./permissions-v2.md)                             | Read/Write modes, sandbox                                |
 | [Agent & Tools](./agent.md)                                       | Multi-turn loop, context, skills                         |
