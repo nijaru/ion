@@ -10,14 +10,10 @@
 mod chat;
 mod direct;
 mod history;
-mod input_box;
 pub(crate) mod layout;
 pub(crate) mod popup;
-mod progress;
 mod rnk_spike;
 pub(crate) mod selector;
-mod status;
-mod widgets;
 
 use selector::MAX_VISIBLE_ITEMS;
 

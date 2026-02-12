@@ -5,9 +5,9 @@
 | Metric    | Value                                                 | Updated    |
 | --------- | ----------------------------------------------------- | ---------- |
 | Phase     | Dogfood readiness (Sprint 16 active)                  | 2026-02-12 |
-| Status    | RNK/core-TUI spike prioritized; MCP migration deferred | 2026-02-12 |
+| Status    | RNK-first TUI spike active; MCP migration deferred     | 2026-02-12 |
 | Toolchain | stable                                                | 2026-01-22 |
-| Tests     | 444 passing (`cargo test -q`)                         | 2026-02-11 |
+| Tests     | 451 passing (`cargo test -q`)                         | 2026-02-12 |
 | Clippy    | clean (`cargo clippy -q`)                             | 2026-02-11 |
 
 ## Active Focus
@@ -15,6 +15,8 @@
 - `tk-add8` (`active`): Time-boxed RNK bottom-UI spike on `codex/rnk-bottom-ui-spike` with explicit keep/kill criteria.
 - `tk-add8` progress (2026-02-12): Initial RNK path landed in `9e41163` behind `ION_RNK_BOTTOM_UI=1`. Scope includes progress/input/status rendering only; chat scrollback path unchanged.
 - `tk-add8` progress (2026-02-12): Follow-up RNK fixes restore colored `[READ]/[WRITE]` mode label and reserve a persistent blank spacer row above progress while streaming.
+- `tk-add8` progress (2026-02-12): Direction updated to RNK-first on this branch: collapse env-gated bottom-UI split path and keep one Input-mode renderer path.
+- `tk-add8` progress (2026-02-12): RNK-first collapse landed: Input-mode bottom UI now renders through RNK path only; legacy crossterm bottom-UI modules removed.
 - `tk-bcau` (`open`, p2): Soft-wrap chat + viewport-separation architecture selected as target regardless of RNK choice.
 - `tk-86lk` (`open`, blocked by `tk-add8`): Keep as fallback regression stream if RNK spike is killed.
 - Sprint 16: `ai/sprints/16-dogfood-tui-stability.md`
@@ -34,13 +36,12 @@
 
 ## Next Session
 
-1. Execute `tk-add8` on `codex/rnk-bottom-ui-spike` (bottom UI only: input/progress/status)
-2. Manual smoke with `ION_RNK_BOTTOM_UI=1 cargo run -- --continue` on Ghostty (confirm colored mode label + persistent spacer above progress mid-stream, then narrow resize/composer grow-shrink/redraw checks)
-3. Record keep/kill decision with evidence against Ghostty/narrow-width regressions
-4. Start `tk-bcau` soft-wrap viewport migration (remove width-coupled reflow path first, then planner transition updates)
-5. If RNK is killed, resume `tk-86lk` + checklist closure on current crossterm path
-6. Continue core agent/API reliability tasks (`tk-oh88`, `tk-ts00`) after TUI direction is decided
-7. Keep `tk-na3u` deferred until MCP usage becomes product-relevant
+1. Manual smoke with `cargo run -- --continue` on Ghostty (confirm mode colors/spacer/resize/composer/completer/history-search behavior) against RNK-first path
+2. Record keep/kill decision with evidence against Ghostty/narrow-width regressions
+3. Start `tk-bcau` soft-wrap viewport migration (remove width-coupled reflow path first, then planner transition updates)
+4. If RNK is killed, resume `tk-86lk` + checklist closure on current crossterm path
+5. Continue core agent/API reliability tasks (`tk-oh88`, `tk-ts00`) after TUI direction is decided
+6. Keep `tk-na3u` deferred until MCP usage becomes product-relevant
 
 ## Key References
 

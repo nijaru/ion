@@ -3,7 +3,6 @@
 use crate::tui::App;
 use crate::tui::render::layout::{BodyLayout, UiLayout};
 use crate::tui::render::selector::{self, SelectorData, SelectorItem};
-use crate::tui::render::{PROGRESS_HEIGHT, PROMPT_WIDTH, widgets::draw_horizontal_border};
 use crate::tui::types::{Mode, SelectorPage};
 use crate::tui::util::{format_relative_time, shorten_home_prefix};
 use crossterm::cursor::MoveTo;
@@ -38,59 +37,31 @@ impl App {
                 input,
                 status,
             } => {
-                let progress_row = progress
-                    .row
-                    .saturating_add(progress.height.saturating_sub(PROGRESS_HEIGHT));
-                if self.should_use_rnk_bottom_ui(popup.is_some()) {
-                    self.render_bottom_ui_rnk(
-                        w,
-                        progress.row,
-                        progress.height,
-                        input.row,
-                        input.height,
-                        status.row,
-                        layout.width,
-                    )?;
-                } else {
-                    // Input area with borders
-                    let content_height = input.height.saturating_sub(2); // Minus borders
-                    draw_horizontal_border(w, input.row, layout.width)?;
-                    let content_start = input.row.saturating_add(1);
-                    self.render_input_direct(w, content_start, layout.width, content_height)?;
-                    let border_row = content_start.saturating_add(content_height);
-                    draw_horizontal_border(w, border_row, layout.width)?;
+                let show_progress_status = self.mode != Mode::HistorySearch;
+                self.render_bottom_ui_rnk(
+                    w,
+                    progress.row,
+                    progress.height,
+                    input.row,
+                    input.height,
+                    status.row,
+                    layout.width,
+                    show_progress_status,
+                )?;
 
-                    if self.mode == Mode::HistorySearch {
-                        self.render_history_search(w, input.row, layout.width)?;
-                    } else {
-                        self.render_progress_direct(w, progress_row, layout.width)?;
-                        self.render_status_direct(w, status.row, layout.width)?;
-
-                        // Render completer popup in its assigned region.
-                        // The popup region is at the top of the UI area; when the popup
-                        // deactivates, the region disappears, top moves down, and
-                        // clear_from covers stale popup rows.
-                        if let Some(popup_region) = popup {
-                            let popup_anchor = popup_region.row + popup_region.height;
-                            if self.command_completer.is_active() {
-                                self.command_completer
-                                    .render(w, popup_anchor, layout.width)?;
-                            } else if self.file_completer.is_active() {
-                                self.file_completer.render(w, popup_anchor, layout.width)?;
-                            }
-                        }
-
-                        // Position cursor in input area
-                        let (cursor_x, cursor_y) = self.input_state.cursor_pos;
-                        let scroll_offset = self.input_state.scroll_offset() as u16;
-                        let cursor_y = cursor_y.saturating_sub(scroll_offset);
-                        let cursor_col = cursor_x
-                            .saturating_add(PROMPT_WIDTH)
-                            .min(layout.width.saturating_sub(1));
-                        let cursor_row = content_start
-                            .saturating_add(cursor_y)
-                            .min(content_start.saturating_add(content_height.saturating_sub(1)));
-                        execute!(w, MoveTo(cursor_col, cursor_row))?;
+                if self.mode == Mode::HistorySearch {
+                    self.render_history_search(w, input.row, layout.width)?;
+                } else if let Some(popup_region) = popup {
+                    // Render completer popup in its assigned region.
+                    // The popup region is at the top of the UI area; when the popup
+                    // deactivates, the region disappears, top moves down, and
+                    // clear_from covers stale popup rows.
+                    let popup_anchor = popup_region.row + popup_region.height;
+                    if self.command_completer.is_active() {
+                        self.command_completer
+                            .render(w, popup_anchor, layout.width)?;
+                    } else if self.file_completer.is_active() {
+                        self.file_completer.render(w, popup_anchor, layout.width)?;
                     }
                 }
             }
