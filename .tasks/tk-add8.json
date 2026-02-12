@@ -2,13 +2,15 @@
   "project": "tk",
   "ref": "add8",
   "title": "[ARCH] RNK migration spike for TUI stability",
-  "description": "Prototype RNK-based rendering path for input/composer/progress/status and selector overlays while preserving chat history behavior; compare resize/autowrap/scrollback regressions against current crossterm path.",
+  "description": "Time-boxed RNK spike on branch codex/rnk-bottom-ui-spike. Scope: bottom UI only (input/progress/status); keep chat history insertion + scrollback behavior on current custom crossterm path. Compare resize/autowrap/scrollback behavior against current baseline and apply kill criteria if RNK regressions match/exceed baseline or require taking over chat semantics.",
   "status": "open",
   "priority": 2,
   "labels": [],
   "assignees": [],
   "parent": null,
-  "blocked_by": [],
+  "blocked_by": [
+    "tk-86lk"
+  ],
   "estimate": null,
   "due_date": null,
   "logs": [
@@ -19,10 +21,14 @@
     {
       "ts": "2026-02-12T00:24:44.106Z",
       "msg": "2026-02-11 review: rnk (v0.17.3, 158 DL) is immature but architecture aligns perfectly with Ion inline model (println above UI, flexbox bottom layout). Decision: proceed with spike, fork-ready mindset. Scope: bottom UI only (input/progress/status). Kill criteria: if rnk resize bugs match or exceed current bugs. See ai/research/tui-crates-2026-02.md, ai/design/runtime-stack-integration-plan-2026-02.md."
+    },
+    {
+      "ts": "2026-02-12T04:59:35.780Z",
+      "msg": "Roadmap alignment 2026-02-12: spike remains approved but gated behind tk-86lk closure; execute on codex/rnk-bottom-ui-spike with explicit keep/kill decision."
     }
   ],
   "created_at": "2026-02-11T23:32:50.878Z",
-  "updated_at": "2026-02-12T00:24:44.106Z",
+  "updated_at": "2026-02-12T04:59:35.780Z",
   "completed_at": null,
   "external": {}
 }

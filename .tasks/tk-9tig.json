@@ -4,16 +4,21 @@
   "title": "Custom slash commands via // prefix",
   "description": "// activates skill menu from SkillRegistry. / shows built-in commands, // shows custom skills, erasing back transitions between them. Needs: dynamic candidates in CommandCompleter, skill dispatch on Enter, mode transition in update_command_completer_query.",
   "status": "open",
-  "priority": 3,
+  "priority": 4,
   "labels": [],
   "assignees": [],
   "parent": null,
   "blocked_by": [],
   "estimate": null,
   "due_date": null,
-  "logs": [],
+  "logs": [
+    {
+      "ts": "2026-02-12T04:59:55.731Z",
+      "msg": "Roadmap alignment 2026-02-12: moved to backlog while dogfood readiness gates (Sprint 16/17 + runtime stack decisions) are in flight."
+    }
+  ],
   "created_at": "2026-02-09T04:32:35.126Z",
-  "updated_at": "2026-02-09T04:32:35.126Z",
+  "updated_at": "2026-02-12T04:59:55.731Z",
   "completed_at": null,
   "external": {}
 }
