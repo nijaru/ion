@@ -3,7 +3,7 @@
 use crate::tui::App;
 use crate::tui::render::layout::{BodyLayout, UiLayout};
 use crate::tui::render::selector::{self, SelectorData, SelectorItem};
-use crate::tui::render::{PROMPT_WIDTH, widgets::draw_horizontal_border};
+use crate::tui::render::{PROGRESS_HEIGHT, PROMPT_WIDTH, widgets::draw_horizontal_border};
 use crate::tui::types::{Mode, SelectorPage};
 use crate::tui::util::{format_relative_time, shorten_home_prefix};
 use crossterm::cursor::MoveTo;
@@ -38,10 +38,14 @@ impl App {
                 input,
                 status,
             } => {
+                let progress_row = progress
+                    .row
+                    .saturating_add(progress.height.saturating_sub(PROGRESS_HEIGHT));
                 if self.should_use_rnk_bottom_ui(popup.is_some()) {
                     self.render_bottom_ui_rnk(
                         w,
                         progress.row,
+                        progress.height,
                         input.row,
                         input.height,
                         status.row,
@@ -59,7 +63,7 @@ impl App {
                     if self.mode == Mode::HistorySearch {
                         self.render_history_search(w, input.row, layout.width)?;
                     } else {
-                        self.render_progress_direct(w, progress.row, layout.width)?;
+                        self.render_progress_direct(w, progress_row, layout.width)?;
                         self.render_status_direct(w, status.row, layout.width)?;
 
                         // Render completer popup in its assigned region.
