@@ -7,9 +7,10 @@ use crate::tui::util::{display_width, truncate_to_display_width};
 use crossterm::{
     cursor::MoveTo,
     execute,
-    style::{Attribute, Color, Print, ResetColor, SetAttribute, SetForegroundColor},
     terminal::{Clear, ClearType},
 };
+use rnk::components::{Box as RnkBox, Span, Text};
+use rnk::core::{Color as RnkColor, FlexDirection, TextWrap};
 use std::io::Write;
 
 /// Maximum visible items in selector list.
@@ -35,114 +36,195 @@ pub struct SelectorData {
     pub active_tab: usize, // 0 = providers, 1 = models
 }
 
-/// Render the selector UI. Returns (`filter_cursor_col`, `filter_cursor_row`) for cursor positioning.
+fn render_rnk_text_line(text: Text, max_cells: usize) -> String {
+    let element = RnkBox::new()
+        .flex_direction(FlexDirection::Row)
+        .width(max_cells as u16)
+        .child(text.wrap(TextWrap::Truncate).into_element())
+        .into_element();
+    let rendered = rnk::render_to_string_no_trim(&element, max_cells as u16);
+    rendered.lines().next().unwrap_or_default().to_string()
+}
+
+fn paint_row_text<W: Write>(
+    w: &mut W,
+    row: u16,
+    width: u16,
+    text: &str,
+    color: Option<RnkColor>,
+    bold: bool,
+    dim: bool,
+) -> std::io::Result<()> {
+    execute!(w, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
+    let max_cells = width.saturating_sub(1) as usize;
+    if max_cells == 0 {
+        return Ok(());
+    }
+
+    let clipped = truncate_to_display_width(text, max_cells);
+    let mut line = Text::new(clipped);
+    if let Some(color) = color {
+        line = line.color(color);
+    }
+    if bold {
+        line = line.bold();
+    }
+    if dim {
+        line = line.dim();
+    }
+    let rendered = render_rnk_text_line(line, max_cells);
+    write!(w, "{rendered}")?;
+    Ok(())
+}
+
+fn paint_row_spans<W: Write>(
+    w: &mut W,
+    row: u16,
+    width: u16,
+    spans: Vec<Span>,
+) -> std::io::Result<()> {
+    execute!(w, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
+    let max_cells = width.saturating_sub(1) as usize;
+    if max_cells == 0 || spans.is_empty() {
+        return Ok(());
+    }
+    let rendered = render_rnk_text_line(Text::spans(spans), max_cells);
+    write!(w, "{rendered}")?;
+    Ok(())
+}
+
+fn push_clipped_span(
+    spans: &mut Vec<Span>,
+    text: &str,
+    remaining: &mut usize,
+    color: Option<RnkColor>,
+    bold: bool,
+    dim: bool,
+) {
+    if *remaining == 0 {
+        return;
+    }
+    let clipped = truncate_to_display_width(text, *remaining);
+    if clipped.is_empty() {
+        return;
+    }
+    *remaining = remaining.saturating_sub(display_width(&clipped));
+
+    let mut span = Span::new(clipped);
+    if let Some(color) = color {
+        span = span.color(color);
+    }
+    if bold {
+        span = span.bold();
+    }
+    if dim {
+        span = span.dim();
+    }
+    spans.push(span);
+}
+
+/// Render the selector UI. Returns (`filter_cursor_col`, `filter_cursor_row`) for cursor
+/// positioning.
 pub fn render_selector<W: Write>(
     w: &mut W,
     data: &SelectorData,
     start_row: u16,
     width: u16,
 ) -> std::io::Result<(u16, u16)> {
-    // Clear from start_row to bottom
     execute!(w, MoveTo(0, start_row), Clear(ClearType::FromCursorDown))?;
     let line_width = width.saturating_sub(1) as usize;
 
     let mut row = start_row;
 
-    // Tab bar (only for provider/model, session has its own header)
-    execute!(w, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
+    // Tab bar (provider/model) or section header (session selector).
     if data.show_tabs {
         let tabs = if data.active_tab == 0 {
             " [Providers]  Models"
         } else {
             " Providers  [Models]"
         };
-        write!(w, "{}", truncate_to_display_width(tabs, line_width))?;
+        paint_row_text(w, row, width, tabs, None, false, false)?;
     } else {
-        execute!(
+        paint_row_spans(
             w,
-            SetForegroundColor(Color::Yellow),
-            SetAttribute(Attribute::Bold),
-            Print(" "),
-            Print(truncate_to_display_width(
-                data.title,
-                line_width.saturating_sub(1)
-            )),
-            SetAttribute(Attribute::Reset),
-            ResetColor
+            row,
+            width,
+            vec![
+                Span::new(" "),
+                Span::new(data.title).color(RnkColor::Yellow).bold(),
+            ],
         )?;
     }
     row += 1;
 
-    // Description
-    execute!(w, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
+    // Description.
     let description = format!(" {}", data.description);
-    write!(w, "{}", truncate_to_display_width(&description, line_width))?;
+    paint_row_text(w, row, width, &description, None, false, false)?;
     row += 1;
 
-    // Search box top border
-    let top_border = format!(
-        "┌─ {} {}┐",
-        data.title,
-        "─".repeat((width as usize).saturating_sub(data.title.len() + 5))
+    // Search box top border.
+    let title_block = format!(" {} ", data.title);
+    let border_fill = "─".repeat(
+        line_width
+            .saturating_sub(display_width("┌─"))
+            .saturating_sub(display_width(&title_block))
+            .saturating_sub(display_width("┐")),
     );
-    execute!(
+    let top_border = format!("┌─{title_block}{border_fill}┐");
+    paint_row_text(
         w,
-        MoveTo(0, row),
-        Clear(ClearType::CurrentLine),
-        SetForegroundColor(Color::Cyan),
-        Print(truncate_to_display_width(&top_border, line_width)),
-        ResetColor
+        row,
+        width,
+        &top_border,
+        Some(RnkColor::Cyan),
+        false,
+        false,
     )?;
     row += 1;
 
+    // Search box query row.
     let query_budget = line_width.saturating_sub(display_width("│ "));
     let query = truncate_to_display_width(&data.filter_text, query_budget);
-    execute!(
+    paint_row_spans(
         w,
-        MoveTo(0, row),
-        Clear(ClearType::CurrentLine),
-        SetForegroundColor(Color::Cyan),
-        Print("│"),
-        ResetColor,
-        Print(" "),
-        Print(&query),
+        row,
+        width,
+        vec![
+            Span::new("│").color(RnkColor::Cyan),
+            Span::new(" "),
+            Span::new(query.clone()),
+        ],
     )?;
-    // Save cursor position for filter input
     let filter_cursor_col =
         ((display_width("│ ") + display_width(&query)) as u16).min(width.saturating_sub(1));
     let filter_cursor_row = row;
     row += 1;
 
-    let bottom_border = format!("└{}┘", "─".repeat((width as usize).saturating_sub(2)));
-    execute!(
+    let bottom_border = format!("└{}┘", "─".repeat(line_width.saturating_sub(2)));
+    paint_row_text(
         w,
-        MoveTo(0, row),
-        Clear(ClearType::CurrentLine),
-        SetForegroundColor(Color::Cyan),
-        Print(truncate_to_display_width(&bottom_border, line_width)),
-        ResetColor
+        row,
+        width,
+        &bottom_border,
+        Some(RnkColor::Cyan),
+        false,
+        false,
     )?;
     row += 1;
 
-    // Render list items
+    // Render list items.
     row = render_list(w, data, row, width)?;
 
-    // Hint line
-    execute!(
+    // Hint line.
+    paint_row_text(
         w,
-        MoveTo(0, row),
-        Clear(ClearType::CurrentLine),
-        SetAttribute(Attribute::Dim)
+        row,
+        width,
+        " Type to filter • Enter to select • Esc to close",
+        None,
+        false,
+        true,
     )?;
-    write!(
-        w,
-        "{}",
-        truncate_to_display_width(
-            " Type to filter • Enter to select • Esc to close",
-            line_width
-        )
-    )?;
-    execute!(w, SetAttribute(Attribute::Reset))?;
 
     Ok((filter_cursor_col, filter_cursor_row))
 }
@@ -156,7 +238,7 @@ fn render_list<W: Write>(
 ) -> std::io::Result<u16> {
     let list_height = (data.items.len() as u16).clamp(3, MAX_VISIBLE_ITEMS);
 
-    // Calculate scroll offset to keep selection visible
+    // Keep selection visible.
     let scroll_offset = if data.selected_idx >= list_height as usize {
         data.selected_idx.saturating_sub(list_height as usize - 1)
     } else {
@@ -171,49 +253,84 @@ fn render_list<W: Write>(
         .collect();
 
     let mut row = start_row;
+    let line_width = width.saturating_sub(1) as usize;
+
     for (i, item) in visible_items.into_iter().enumerate() {
-        execute!(w, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
         let actual_idx = scroll_offset + i;
         let is_selected = actual_idx == data.selected_idx;
+        let default_color = is_selected.then_some(RnkColor::Yellow);
+        let default_bold = is_selected;
+        let default_dim = !is_selected && !item.is_valid;
 
-        let mut line = String::new();
-        if is_selected {
-            line.push_str(" >");
-        } else {
-            line.push_str("  ");
-        }
+        let mut spans = Vec::new();
+        let mut remaining = line_width;
 
-        if item.is_valid {
-            line.push_str(" ● ");
-        } else {
-            line.push_str(" ○ ");
-        }
-
-        line.push_str(&item.label);
+        let prefix = if is_selected { " >" } else { "  " };
+        push_clipped_span(
+            &mut spans,
+            prefix,
+            &mut remaining,
+            default_color,
+            default_bold,
+            default_dim,
+        );
+        let marker = if item.is_valid { " ● " } else { " ○ " };
+        push_clipped_span(
+            &mut spans,
+            marker,
+            &mut remaining,
+            default_color,
+            default_bold,
+            default_dim,
+        );
+        push_clipped_span(
+            &mut spans,
+            &item.label,
+            &mut remaining,
+            default_color,
+            default_bold,
+            default_dim,
+        );
 
         if !item.hint.is_empty() {
-            line.push_str("  ");
-            line.push_str(&item.hint);
+            push_clipped_span(
+                &mut spans,
+                "  ",
+                &mut remaining,
+                default_color,
+                default_bold,
+                default_dim,
+            );
+            push_clipped_span(
+                &mut spans,
+                &item.hint,
+                &mut remaining,
+                default_color,
+                default_bold,
+                true,
+            );
         }
 
-        if let Some(ref warning) = item.warning {
-            line.push_str("  ");
-            line.push_str(warning);
+        if let Some(warning) = &item.warning {
+            push_clipped_span(
+                &mut spans,
+                "  ",
+                &mut remaining,
+                default_color,
+                default_bold,
+                default_dim,
+            );
+            push_clipped_span(
+                &mut spans,
+                warning,
+                &mut remaining,
+                Some(RnkColor::Yellow),
+                default_bold,
+                default_dim,
+            );
         }
 
-        let clipped = truncate_to_display_width(&line, width.saturating_sub(1) as usize);
-        if is_selected {
-            execute!(
-                w,
-                SetForegroundColor(Color::Yellow),
-                SetAttribute(Attribute::Bold)
-            )?;
-        } else if !item.is_valid {
-            execute!(w, SetAttribute(Attribute::Dim))?;
-        }
-        write!(w, "{clipped}")?;
-        execute!(w, SetAttribute(Attribute::Reset), ResetColor)?;
-
+        paint_row_spans(w, row, width, spans)?;
         row += 1;
     }
 

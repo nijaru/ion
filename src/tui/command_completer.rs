@@ -2,8 +2,8 @@
 
 use crate::tui::completer_state::CompleterState;
 use crate::tui::fuzzy;
-use crate::tui::render::popup::{render_popup, PopupItem, PopupRegion, PopupStyle};
-use crossterm::style::Color;
+use crate::tui::render::popup::{PopupItem, PopupRegion, PopupStyle, render_popup};
+use rnk::core::Color;
 use std::io::Write;
 
 /// Maximum number of candidates to show in the popup.

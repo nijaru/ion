@@ -3,7 +3,7 @@
 use crate::tui::completer_state::CompleterState;
 use crate::tui::fuzzy;
 use crate::tui::render::popup::{PopupItem, PopupRegion, PopupStyle, render_popup};
-use crossterm::style::Color;
+use rnk::core::Color;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
