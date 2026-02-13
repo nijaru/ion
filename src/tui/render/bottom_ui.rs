@@ -16,6 +16,16 @@ use std::io::Write;
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
+pub(crate) struct BottomUiFrame {
+    pub progress_row: u16,
+    pub progress_height: u16,
+    pub input_row: u16,
+    pub input_height: u16,
+    pub status_row: u16,
+    pub width: u16,
+    pub show_progress_status: bool,
+}
+
 fn render_rnk_line(
     text: &str,
     max_cells: usize,
@@ -89,14 +99,17 @@ impl App {
     pub(crate) fn render_bottom_ui<W: Write>(
         &mut self,
         w: &mut W,
-        progress_row: u16,
-        progress_height: u16,
-        input_row: u16,
-        input_height: u16,
-        status_row: u16,
-        width: u16,
-        show_progress_status: bool,
+        frame: BottomUiFrame,
     ) -> std::io::Result<()> {
+        let BottomUiFrame {
+            progress_row,
+            progress_height,
+            input_row,
+            input_height,
+            status_row,
+            width,
+            show_progress_status,
+        } = frame;
         // Mirror existing input-box shape: top border + content + bottom border.
         let content_start = input_row.saturating_add(1);
         let content_height = input_height.saturating_sub(2);

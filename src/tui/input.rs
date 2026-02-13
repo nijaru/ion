@@ -1,7 +1,7 @@
 //! Input handling for the TUI composer.
 
-use crate::tui::terminal::{StyledLine, StyledSpan};
 use crate::tui::App;
+use crate::tui::terminal::{StyledLine, StyledSpan};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 impl App {
@@ -96,7 +96,13 @@ impl App {
         if self.render_state.position.header_inserted() {
             return Vec::new();
         }
-        Self::startup_header_lines(&self.session.working_dir)
+        self.startup_header_lines.clone()
+    }
+
+    /// Recompute the startup header cache (e.g., after loading a session
+    /// with a different working directory).
+    pub(super) fn refresh_startup_header_cache(&mut self) {
+        self.startup_header_lines = Self::startup_header_lines(&self.session.working_dir);
     }
 
     /// Handle a key event for the input composer.

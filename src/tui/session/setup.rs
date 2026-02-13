@@ -116,10 +116,15 @@ impl App {
         // The model discovers tools via mcp_tools search and calls them via fallback.
         mcp_manager.build_index().await;
         if mcp_manager.has_tools() {
-            debug!("Indexed {} MCP tools (lazy loading)", mcp_manager.tool_count());
+            debug!(
+                "Indexed {} MCP tools (lazy loading)",
+                mcp_manager.tool_count()
+            );
             let mcp_manager = Arc::new(mcp_manager);
             orchestrator.set_mcp_fallback(mcp_manager.clone());
-            orchestrator.register_tool(Box::new(crate::tool::builtin::McpToolsTool::new(mcp_manager)));
+            orchestrator.register_tool(Box::new(crate::tool::builtin::McpToolsTool::new(
+                mcp_manager,
+            )));
         }
 
         // Load subagent configurations (defaults first, user YAML overrides by name)
@@ -134,7 +139,8 @@ impl App {
         let subagent_registry = Arc::new(subagent_registry);
 
         // Shared atomic mode so subagents read the live value after Shift+Tab toggle
-        let shared_tool_mode = crate::tool::builtin::spawn_subagent::shared_tool_mode(permissions.mode);
+        let shared_tool_mode =
+            crate::tool::builtin::spawn_subagent::shared_tool_mode(permissions.mode);
 
         // Register spawn_subagent tool
         orchestrator.register_tool(Box::new(SpawnSubagentTool::new(
@@ -154,7 +160,10 @@ impl App {
             ) {
                 orchestrator.register_hook(Arc::new(hook)).await;
             } else {
-                error!("Invalid hook event '{}', expected 'pre_tool_use' or 'post_tool_use'", hook_cfg.event);
+                error!(
+                    "Invalid hook event '{}', expected 'pre_tool_use' or 'post_tool_use'",
+                    hook_cfg.event
+                );
             }
         }
 
@@ -227,6 +236,7 @@ impl App {
             provider_picker: ProviderPicker::new(),
             message_list: MessageList::new(),
             render_state: RenderState::new(),
+            startup_header_lines: Self::startup_header_lines(&working_dir),
             agent,
             session,
             orchestrator,

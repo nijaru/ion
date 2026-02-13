@@ -1,6 +1,7 @@
 //! Direct crossterm rendering orchestrator (TUI v2 - no ratatui).
 
 use crate::tui::App;
+use crate::tui::render::bottom_ui::BottomUiFrame;
 use crate::tui::render::layout::{BodyLayout, UiLayout};
 use crate::tui::render::selector::{self, SelectorData, SelectorItem};
 use crate::tui::types::{Mode, SelectorPage};
@@ -40,13 +41,15 @@ impl App {
                 let show_progress_status = self.mode != Mode::HistorySearch;
                 self.render_bottom_ui(
                     w,
-                    progress.row,
-                    progress.height,
-                    input.row,
-                    input.height,
-                    status.row,
-                    layout.width,
-                    show_progress_status,
+                    BottomUiFrame {
+                        progress_row: progress.row,
+                        progress_height: progress.height,
+                        input_row: input.row,
+                        input_height: input.height,
+                        status_row: status.row,
+                        width: layout.width,
+                        show_progress_status,
+                    },
                 )?;
 
                 if self.mode == Mode::HistorySearch {

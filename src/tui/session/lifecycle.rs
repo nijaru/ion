@@ -25,6 +25,7 @@ impl App {
             abort_token: CancellationToken::new(),
             no_sandbox: self.permissions.no_sandbox,
         };
+        self.refresh_startup_header_cache();
 
         // Restore provider if it differs from current
         let mut provider_warning: Option<String> = None;
@@ -33,12 +34,14 @@ impl App {
                 if provider != self.api_provider
                     && let Err(e) = self.set_provider(provider)
                 {
-                    provider_warning =
-                        Some(format!("Warning: could not restore provider '{saved_provider}': {e}"));
+                    provider_warning = Some(format!(
+                        "Warning: could not restore provider '{saved_provider}': {e}"
+                    ));
                 }
             } else {
-                provider_warning =
-                    Some(format!("Warning: unknown provider '{saved_provider}' in saved session"));
+                provider_warning = Some(format!(
+                    "Warning: unknown provider '{saved_provider}' in saved session"
+                ));
             }
         }
 
