@@ -4,6 +4,19 @@ use crate::tui::App;
 use crate::tui::terminal::{StyledLine, StyledSpan};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+fn git_output(working_dir: &std::path::Path, args: &[&str]) -> Option<String> {
+    std::process::Command::new("git")
+        .args(args)
+        .current_dir(working_dir)
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
 impl App {
     /// Get the current input text (with placeholders for large pastes).
     pub(super) fn input_text(&self) -> String {
@@ -48,46 +61,24 @@ impl App {
 
         let dir_display = crate::tui::util::shorten_home_prefix(&working_dir.display().to_string());
 
-        // Try to get git branch (falls back to short SHA on detached HEAD)
-        let branch = std::process::Command::new("git")
-            .args(["rev-parse", "--abbrev-ref", "HEAD"])
-            .current_dir(working_dir)
-            .stderr(std::process::Stdio::null())
-            .output()
-            .ok()
-            .filter(|o| o.status.success())
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .map(|s| s.trim().to_string())
-            .and_then(|b| {
-                if b == "HEAD" {
-                    // Detached HEAD — show short SHA instead
-                    std::process::Command::new("git")
-                        .args(["rev-parse", "--short", "HEAD"])
-                        .current_dir(working_dir)
-                        .stderr(std::process::Stdio::null())
-                        .output()
-                        .ok()
-                        .filter(|o| o.status.success())
-                        .and_then(|o| String::from_utf8(o.stdout).ok())
-                        .map(|s| s.trim().to_string())
-                } else {
-                    Some(b)
-                }
-            });
-
-        let mut location_spans = vec![StyledSpan::dim(&dir_display)];
-        if let Some(ref b) = branch {
-            location_spans.push(StyledSpan::dim(format!(" [{b}]")));
-        }
-
         vec![
             StyledLine::new(vec![
                 StyledSpan::bold("ion"),
                 StyledSpan::dim(format!(" {version}")),
             ]),
-            StyledLine::new(location_spans),
+            StyledLine::new(vec![StyledSpan::dim(&dir_display)]),
             StyledLine::empty(),
         ]
+    }
+
+    /// Resolve git branch for a working directory.
+    /// Returns short SHA when on detached HEAD.
+    pub(super) fn git_branch_for(working_dir: &std::path::Path) -> Option<String> {
+        let branch = git_output(working_dir, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+        if branch == "HEAD" {
+            return git_output(working_dir, &["rev-parse", "--short", "HEAD"]);
+        }
+        Some(branch)
     }
 
     /// Return startup header lines if header has not been inserted yet.
@@ -103,6 +94,7 @@ impl App {
     /// with a different working directory).
     pub(super) fn refresh_startup_header_cache(&mut self) {
         self.startup_header_lines = Self::startup_header_lines(&self.session.working_dir);
+        self.git_branch = Self::git_branch_for(&self.session.working_dir);
     }
 
     /// Handle a key event for the input composer.

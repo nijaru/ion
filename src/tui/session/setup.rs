@@ -237,6 +237,7 @@ impl App {
             message_list: MessageList::new(),
             render_state: RenderState::new(),
             startup_header_lines: Self::startup_header_lines(&working_dir),
+            git_branch: Self::git_branch_for(&working_dir),
             agent,
             session,
             orchestrator,

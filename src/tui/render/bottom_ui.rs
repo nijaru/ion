@@ -317,6 +317,12 @@ impl App {
             .split('/')
             .next_back()
             .unwrap_or(&self.session.model);
+        let cwd =
+            crate::tui::util::shorten_home_prefix(&self.session.working_dir.display().to_string());
+        let location = match self.git_branch.as_deref() {
+            Some(branch) => format!("{cwd} [{branch}]"),
+            None => cwd,
+        };
 
         let (mode_label, mode_color) = match self.tool_mode {
             ToolMode::Read => ("READ", RnkColor::Cyan),
@@ -327,6 +333,8 @@ impl App {
             Span::new(" ["),
             Span::new(mode_label).color(mode_color),
             Span::new("] • "),
+            Span::new(location).dim(),
+            Span::new(" • "),
             Span::new(model_name),
         ];
 

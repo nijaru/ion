@@ -84,9 +84,11 @@ pub struct App {
     pub message_list: MessageList,
     /// Render state for chat positioning and incremental updates
     pub render_state: RenderState,
-    /// Cached startup header lines (version + cwd + branch) to avoid shelling out
+    /// Cached startup header lines (version + cwd) to avoid recomputation
     /// on every transcript reflow.
     pub startup_header_lines: Vec<StyledLine>,
+    /// Cached git branch (or detached-head short SHA) for status line display.
+    pub git_branch: Option<String>,
     pub agent: Arc<Agent>,
     pub session: Session,
     pub orchestrator: Arc<ToolOrchestrator>,
