@@ -38,7 +38,7 @@ impl App {
                 status,
             } => {
                 let show_progress_status = self.mode != Mode::HistorySearch;
-                self.render_bottom_ui_rnk(
+                self.render_bottom_ui(
                     w,
                     progress.row,
                     progress.height,
