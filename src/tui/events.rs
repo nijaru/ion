@@ -36,9 +36,9 @@ impl App {
             }
             Event::Resize(_, _) => {
                 self.input_state.invalidate_width();
-                // Force a render frame for bottom-UI relayout on size changes.
-                // Keep existing chat lines intact (no full transcript reprint).
-                self.render_state.needs_initial_render = true;
+                // Repaint viewport chat at the new width to avoid stale soft-wrap
+                // row accounting and bottom-UI overlap artifacts.
+                self.render_state.needs_reflow = true;
             }
             Event::FocusGained => {
                 // No-op: terminal size poll handles any resize that
@@ -435,8 +435,16 @@ impl App {
 
     /// Dispatch a slash command (e.g., /compact, /model, /clear).
     fn dispatch_slash_command(&mut self, input: &str) {
-        const COMMANDS: [&str; 8] =
-            ["/compact", "/cost", "/model", "/provider", "/clear", "/quit", "/help", "/resume"];
+        const COMMANDS: [&str; 8] = [
+            "/compact",
+            "/cost",
+            "/model",
+            "/provider",
+            "/clear",
+            "/quit",
+            "/help",
+            "/resume",
+        ];
 
         let cmd_line = input.trim().to_lowercase();
         let cmd_name = cmd_line.split_whitespace().next().unwrap_or("");
@@ -464,7 +472,8 @@ impl App {
             "/cost" => {
                 let msg = if self.session_cost > 0.0 {
                     let p = &self.model_pricing;
-                    let mut parts = vec![format!("Session cost: {}", format_cost(self.session_cost))];
+                    let mut parts =
+                        vec![format!("Session cost: {}", format_cost(self.session_cost))];
                     if p.input > 0.0 || p.output > 0.0 {
                         parts.push(format!(
                             "Pricing: {}/M input, {}/M output",
@@ -505,8 +514,7 @@ impl App {
             }
             _ => {
                 if !cmd_name.is_empty() {
-                    let suggestions =
-                        fuzzy::top_matches(cmd_name, COMMANDS.iter().copied(), 3);
+                    let suggestions = fuzzy::top_matches(cmd_name, COMMANDS.iter().copied(), 3);
                     let message = if suggestions.is_empty() {
                         format!("Unknown command {cmd_name}")
                     } else {
@@ -582,7 +590,12 @@ impl App {
                     PickerStage::Model => {
                         // Clone model data to avoid borrow conflict with set_provider
                         let model_data = self.model_picker.selected_model().map(|m| {
-                            (m.id.clone(), m.context_window, m.supports_vision, m.pricing.clone())
+                            (
+                                m.id.clone(),
+                                m.context_window,
+                                m.supports_vision,
+                                m.pricing.clone(),
+                            )
                         });
                         if let Some((model_id, context_window, vision, pricing)) = model_data {
                             // Commit pending provider change now that model is selected

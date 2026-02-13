@@ -38,10 +38,11 @@ enum PreOp {
         scroll_amount: u16,
         full_clear: bool,
     },
-    /// Push visible content to scrollback, reprint chat at new width.
+    /// Repaint visible chat viewport at the current width.
     Reflow {
         lines: Vec<StyledLine>,
-        scroll_amount: u16,
+        total_lines: usize,
+        available_rows: u16,
     },
     /// Scroll viewport content up to make room for a taller bottom UI
     /// without reprinting prior chat lines.
@@ -138,13 +139,7 @@ fn clear_header_areas(stdout: &mut io::Stdout, pre_ops: &[PreOp]) -> io::Result<
     Ok(())
 }
 
-fn apply_pre_ops(
-    stdout: &mut io::Stdout,
-    app: &mut App,
-    pre_ops: &[PreOp],
-    layout: &UiLayout,
-    term_height: u16,
-) -> io::Result<()> {
+fn apply_pre_ops(stdout: &mut io::Stdout, app: &mut App, pre_ops: &[PreOp]) -> io::Result<()> {
     for op in pre_ops {
         match op {
             PreOp::ClearScreen {
@@ -159,16 +154,18 @@ fn apply_pre_ops(
             }
             PreOp::Reflow {
                 lines,
-                scroll_amount,
+                total_lines,
+                available_rows,
             } => {
-                scroll_up_and_home(stdout, *scroll_amount)?;
-                write_lines(stdout, lines)?;
-                let ui_height = layout.height();
-                let excess =
-                    app.render_state
-                        .position_after_reprint(lines.len(), term_height, ui_height);
-                if excess > 0 {
-                    execute!(stdout, crossterm::terminal::ScrollUp(excess))?;
+                execute!(stdout, MoveTo(0, 0), Clear(ClearType::All), MoveTo(0, 0))?;
+                write_lines_at(stdout, 0, lines)?;
+                if total_lines <= &(*available_rows as usize) {
+                    app.render_state.position = ChatPosition::Tracking {
+                        next_row: *total_lines as u16,
+                        ui_drawn_at: None,
+                    };
+                } else {
+                    app.render_state.position = ChatPosition::Scrolling { ui_drawn_at: None };
                 }
                 app.render_state
                     .mark_reflow_complete(rendered_entry_count(app));
@@ -308,11 +305,22 @@ fn prepare_frame(app: &mut App, term_width: u16, term_height: u16) -> FramePrep 
     // Reflow (resize)
     if app.render_state.needs_reflow {
         app.render_state.needs_reflow = false;
-        if !app.message_list.entries.is_empty() {
-            let lines = app.build_chat_lines(term_width);
+        if !app.message_list.entries.is_empty() || app.render_state.position.header_inserted() {
+            let all_lines = app.build_chat_lines(term_width);
+            let total_lines = all_lines.len();
+            let available_rows = term_height.saturating_sub(ui_height);
+            let visible_lines = if total_lines > available_rows as usize {
+                all_lines
+                    .into_iter()
+                    .skip(total_lines.saturating_sub(available_rows as usize))
+                    .collect()
+            } else {
+                all_lines
+            };
             pre_ops.push(PreOp::Reflow {
-                lines,
-                scroll_amount,
+                lines: visible_lines,
+                total_lines,
+                available_rows,
             });
             reflow_scheduled = true;
         } else {
@@ -461,7 +469,7 @@ fn render_frame(
     clear_header_areas(stdout, &pre_ops)?;
 
     execute!(stdout, BeginSynchronizedUpdate)?;
-    apply_pre_ops(stdout, app, &pre_ops, layout, term_height)?;
+    apply_pre_ops(stdout, app, &pre_ops)?;
 
     // Clear stale UI rows between old top and current top (e.g., popup dismiss).
     // Must happen BEFORE chat insertion: new chat lines may occupy these rows.

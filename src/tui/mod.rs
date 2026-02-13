@@ -1,6 +1,7 @@
 //! TUI module for the ion agent interface.
 
 mod app_state;
+mod attachment;
 mod chat_renderer;
 mod command_completer;
 mod completer_state;
@@ -10,7 +11,6 @@ mod file_completer;
 mod filter_input;
 mod fuzzy;
 mod highlight;
-mod attachment;
 mod input;
 pub mod message_list;
 pub mod model_picker;
@@ -18,6 +18,7 @@ mod picker_trait;
 pub mod provider_picker;
 mod render;
 mod render_state;
+mod rnk_text;
 mod run;
 mod session;
 pub mod session_picker;

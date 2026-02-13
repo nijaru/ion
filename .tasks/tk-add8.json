@@ -75,10 +75,18 @@
     {
       "ts": "2026-02-12T08:17:31.354Z",
       "msg": "Post-fix validation: cargo test -q (451 pass). Clippy -D warnings still fails due existing repo-wide warnings unrelated to this change."
+    },
+    {
+      "ts": "2026-02-13T00:45:37.985Z",
+      "msg": "RNK rendering consolidation: added shared rnk_text helper; removed per-module duplicate RNK line renderers (rnk_spike/popup/selector/history); StyledLine write path now renders through RNK spans/text instead of crossterm StyledContent."
+    },
+    {
+      "ts": "2026-02-13T00:45:38.821Z",
+      "msg": "Resize hardening pass: Event::Resize now triggers viewport reflow from canonical chat lines; Reflow pre-op repaints visible chat viewport at new width (clear + write visible tail) to avoid stale soft-wrap row accounting and word-cut overlap."
     }
   ],
   "created_at": "2026-02-11T23:32:50.878Z",
-  "updated_at": "2026-02-12T08:17:31.354Z",
+  "updated_at": "2026-02-13T00:45:38.821Z",
   "completed_at": null,
   "external": {}
 }

@@ -1,13 +1,14 @@
 //! Shared popup rendering for command completer, file completer, and history search.
 
+use crate::tui::rnk_text::render_truncated_text_line;
 use crate::tui::util::{display_width, truncate_to_display_width};
 use crossterm::{
     cursor::MoveTo,
     execute,
     terminal::{Clear, ClearType},
 };
-use rnk::components::{Box as RnkBox, Span, Text};
-use rnk::core::{Color as RnkColor, FlexDirection, TextWrap};
+use rnk::components::{Span, Text};
+use rnk::core::Color as RnkColor;
 use std::io::Write;
 
 /// Visual style for a popup list.
@@ -30,16 +31,6 @@ pub struct PopupItem<'a> {
 
 /// Re-export Region as PopupRegion for popup callers.
 pub use crate::tui::render::layout::Region as PopupRegion;
-
-fn render_rnk_text_line(text: Text, max_cells: usize) -> String {
-    let element = RnkBox::new()
-        .flex_direction(FlexDirection::Row)
-        .width(max_cells as u16)
-        .child(text.wrap(TextWrap::Truncate).into_element())
-        .into_element();
-    let rendered = rnk::render_to_string_no_trim(&element, max_cells as u16);
-    rendered.lines().next().unwrap_or_default().to_string()
-}
 
 /// Render a popup list within a given region.
 /// Items render top-down starting at `region.row`.
@@ -109,7 +100,7 @@ pub fn render_popup<W: Write>(
             }
         }
 
-        let rendered = render_rnk_text_line(Text::spans(spans), max_cells);
+        let rendered = render_truncated_text_line(Text::spans(spans), max_cells);
         write!(w, "{rendered}")?;
     }
 
