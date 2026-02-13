@@ -56,38 +56,23 @@ Core multi-turn loop with decomposed phases:
 2. **Tool Phase**: Execute tool calls via orchestrator
 3. **State Phase**: Commit assistant and tool turns to history
 
-### TUI Layer (crossterm)
+### TUI Layer (RNK-first rendering + crossterm control)
 
-Direct crossterm rendering with native terminal scrollback. No ratatui.
+RNK is now the primary text/style renderer for TUI surfaces. crossterm remains responsible for
+terminal control (raw mode, cursor movement, clear/scroll, event polling).
 
-- **Chat history**: Printed to stdout, lives in terminal scrollback
-- **Bottom UI**: Cursor-positioned at terminal height - ui_height
-- **Input**: Custom composer with ropey-backed buffer
-- **Markdown**: pulldown-cmark for rendering
+- **Chat history**: Append-only transcript in native terminal scrollback.
+- **Bottom UI**: Ephemeral UI plane (progress/input/status) rendered each frame near terminal bottom.
+- **Input**: Custom composer with rope-backed multiline editing.
+- **Markdown**: pulldown-cmark + custom wrap/indent handling before terminal writes.
 
-Key pattern: `insert_before` - scroll up to make room, print at ui_start.
+Current resize/reflow contract:
 
-**Module structure (~9,300 lines excl. tests):**
+- Reflow repaints from canonical entries at current width (viewport-safe, no full transcript replay).
+- Streaming carryover tracks committed lines by width to avoid duplicate appends after resize.
+- Header content is static (version + cwd); dynamic location (`cwd [branch]`) is shown in status line.
 
-| Module                                          | Lines | Purpose                               |
-| ----------------------------------------------- | ----- | ------------------------------------- |
-| `run.rs`, `mod.rs`, `types.rs`, `events.rs`     | 1,458 | Core loop, App struct, event handling |
-| `composer/`                                     | 1,216 | Multiline input with rope buffer      |
-| `render/`                                       | 1,114 | Direct crossterm rendering            |
-| `message_list.rs`, `chat_renderer.rs`           | 1,332 | Message display and formatting        |
-| `highlight/`                                    | 527   | Markdown + syntax highlighting        |
-| `table.rs`                                      | 567   | Markdown table rendering              |
-| `*_picker.rs`, `*_completer.rs`                 | 1,456 | Selection UIs (duplicated patterns)   |
-| `session/`                                      | 784   | Provider setup, session management    |
-| `terminal.rs`, `util.rs`, `image_attachment.rs` | 866   | Utilities (120 lines unused)          |
-
-**Known issues (see ai/review/tui-analysis-2026-02-04.md):**
-
-- Picker/completer code duplication (~500 lines saveable with traits)
-- Unused Terminal struct (~120 lines dead code)
-- 5 panic-causing bugs in composer/state.rs and visual_lines.rs
-- Long functions in events.rs (420, 155 lines)
-- App struct has 35+ fields (should decompose)
+Primary architecture target is documented in `ai/design/tui-v3-architecture-2026-02.md`.
 
 ### Tool Framework
 
