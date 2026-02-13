@@ -103,7 +103,18 @@ fn scroll_up_and_home(stdout: &mut io::Stdout, amount: u16) -> io::Result<()> {
     execute!(stdout, crossterm::terminal::ScrollUp(amount), MoveTo(0, 0))
 }
 
-fn write_lines(stdout: &mut io::Stdout, lines: &[StyledLine], term_width: u16) -> io::Result<()> {
+fn append_lines(stdout: &mut io::Stdout, lines: &[StyledLine]) -> io::Result<()> {
+    for line in lines {
+        line.writeln(stdout)?;
+    }
+    Ok(())
+}
+
+fn append_lines_clipped(
+    stdout: &mut io::Stdout,
+    lines: &[StyledLine],
+    term_width: u16,
+) -> io::Result<()> {
     for line in lines {
         line.writeln_with_width(stdout, term_width)?;
     }
@@ -120,7 +131,7 @@ fn write_lines_at(
     let mut row = start_row;
     for line in lines {
         execute!(stdout, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
-        line.writeln_with_width(stdout, term_width)?;
+        line.write_to_width(stdout, term_width)?;
         row = row.saturating_add(1);
     }
     Ok(row)
@@ -189,7 +200,7 @@ fn apply_pre_ops(
                 )?;
             }
             PreOp::PrintHeader(lines) => {
-                write_lines(stdout, lines, term_width)?;
+                append_lines_clipped(stdout, lines, term_width)?;
                 if let Ok((_x, y)) = crossterm::cursor::position() {
                     app.render_state.position = ChatPosition::Header { anchor: y };
                 }
@@ -311,7 +322,7 @@ fn prepare_frame(app: &mut App, term_width: u16, term_height: u16) -> FramePrep 
         state_changed = true;
     }
 
-    // Reflow (explicit full redraw, e.g. session load)
+    // Reflow (explicit full redraw: session load and terminal resize)
     if app.render_state.needs_reflow {
         app.render_state.needs_reflow = false;
         if !app.message_list.entries.is_empty() || app.render_state.position.header_inserted() {
@@ -519,7 +530,7 @@ fn reprint_loaded_session(
     // The terminal scrolls content into scrollback as needed — same
     // as how fresh-start prints the header.
     execute!(stdout, BeginSynchronizedUpdate)?;
-    write_lines(stdout, &lines, term_width)?;
+    append_lines(stdout, &lines)?;
 
     // Check where cursor landed to set position state.
     let (_, cursor_y) = crossterm::cursor::position()?;
