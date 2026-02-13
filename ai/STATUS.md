@@ -7,7 +7,7 @@
 | Phase     | Dogfood readiness (Sprint 16 active)                  | 2026-02-12 |
 | Status    | RNK-first TUI spike active; MCP migration deferred     | 2026-02-12 |
 | Toolchain | stable                                                | 2026-01-22 |
-| Tests     | 451 passing (`cargo test -q`)                         | 2026-02-12 |
+| Tests     | 455 passing (`cargo test -q`)                         | 2026-02-12 |
 | Clippy    | clean (`cargo clippy -q`)                             | 2026-02-11 |
 
 ## Active Focus
@@ -21,6 +21,7 @@
 - `tk-add8` progress (2026-02-12): Resize behavior updated to preserve single-copy chat history: removed resize-triggered full transcript reprint; overlap now handled by bounded viewport scroll before bottom UI redraw.
 - `tk-add8` progress (2026-02-12): Shared RNK text-line helper introduced and duplicated per-module RNK render snippets removed; chat `StyledLine` terminal writes now render through RNK spans/text path.
 - `tk-add8` progress (2026-02-12): Resize now triggers viewport-safe reflow from canonical chat lines (visible-tail repaint at new width) to prevent narrow-width soft-wrap cutoff artifacts while keeping a single on-screen transcript block.
+- `tk-add8` progress (2026-02-12): TUI style internals migrated to RNK-native types (`terminal::Color` + `terminal::TextStyle`): removed `crossterm` style primitives from chat renderer, ANSI parser, syntax highlighting, and diff highlighting.
 - `tk-rpst` (`done`, p2): Resize bugfix shipped for duplicate history + prompt-box artifacts after shrinking terminal width/height.
 - `tk-bcau` (`open`, p2): Soft-wrap chat + viewport-separation architecture selected as target regardless of RNK choice.
 - `tk-86lk` (`open`, blocked by `tk-add8`): Keep as fallback regression stream if RNK spike is killed.

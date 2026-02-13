@@ -1,8 +1,7 @@
 use crate::tui::highlight;
 use crate::tui::message_list::{MessagePart, Sender};
-use crate::tui::terminal::{LineBuilder, StyledLine, StyledSpan};
+use crate::tui::terminal::{Color, LineBuilder, StyledLine, StyledSpan, TextStyle};
 use crate::tui::{QUEUED_PREVIEW_LINES, sanitize_for_display};
-use crossterm::style::Color;
 use unicode_width::UnicodeWidthChar;
 
 pub struct ChatRenderer;
@@ -257,10 +256,8 @@ impl ChatRenderer {
 /// Parse ANSI escape sequences and convert to `StyledLine`.
 /// Simple SGR parser that handles common formatting codes.
 fn parse_ansi_line(input: &str) -> StyledLine {
-    use crossterm::style::{Attribute, ContentStyle};
-
     let mut spans = Vec::new();
-    let mut current_style = ContentStyle::default();
+    let mut current_style = TextStyle::default();
     let mut current_text = String::new();
     let mut chars = input.chars().peekable();
 
@@ -297,23 +294,30 @@ fn parse_ansi_line(input: &str) -> StyledLine {
                     && cmd == 'm'
                 {
                     // SGR sequence - apply styles
-                    for param in params.split(';') {
-                        match param {
-                            "0" | "" => current_style = ContentStyle::default(),
-                            "1" => current_style.attributes.set(Attribute::Bold),
-                            "2" => current_style.attributes.set(Attribute::Dim),
-                            "3" => current_style.attributes.set(Attribute::Italic),
-                            "4" => current_style.attributes.set(Attribute::Underlined),
-                            "7" => current_style.attributes.set(Attribute::Reverse),
-                            "9" => current_style.attributes.set(Attribute::CrossedOut),
+                    let parts: Vec<&str> = if params.is_empty() {
+                        vec!["0"]
+                    } else {
+                        params.split(';').collect()
+                    };
+
+                    let mut i = 0usize;
+                    while i < parts.len() {
+                        match parts[i] {
+                            "0" | "" => current_style = TextStyle::default(),
+                            "1" => current_style.bold = true,
+                            "2" => current_style.dim = true,
+                            "3" => current_style.italic = true,
+                            "4" => current_style.underlined = true,
+                            "7" => current_style.reverse = true,
+                            "9" => current_style.crossed_out = true,
                             "22" => {
-                                current_style.attributes.unset(Attribute::Bold);
-                                current_style.attributes.unset(Attribute::Dim);
+                                current_style.bold = false;
+                                current_style.dim = false;
                             }
-                            "23" => current_style.attributes.unset(Attribute::Italic),
-                            "24" => current_style.attributes.unset(Attribute::Underlined),
-                            "27" => current_style.attributes.unset(Attribute::Reverse),
-                            "29" => current_style.attributes.unset(Attribute::CrossedOut),
+                            "23" => current_style.italic = false,
+                            "24" => current_style.underlined = false,
+                            "27" => current_style.reverse = false,
+                            "29" => current_style.crossed_out = false,
                             "30" => current_style.foreground_color = Some(Color::Black),
                             "31" => current_style.foreground_color = Some(Color::DarkRed),
                             "32" => current_style.foreground_color = Some(Color::DarkGreen),
@@ -323,6 +327,15 @@ fn parse_ansi_line(input: &str) -> StyledLine {
                             "36" => current_style.foreground_color = Some(Color::DarkCyan),
                             "37" => current_style.foreground_color = Some(Color::Grey),
                             "39" => current_style.foreground_color = None,
+                            "40" => current_style.background_color = Some(Color::Black),
+                            "41" => current_style.background_color = Some(Color::DarkRed),
+                            "42" => current_style.background_color = Some(Color::DarkGreen),
+                            "43" => current_style.background_color = Some(Color::DarkYellow),
+                            "44" => current_style.background_color = Some(Color::DarkBlue),
+                            "45" => current_style.background_color = Some(Color::DarkMagenta),
+                            "46" => current_style.background_color = Some(Color::DarkCyan),
+                            "47" => current_style.background_color = Some(Color::Grey),
+                            "49" => current_style.background_color = None,
                             "90" => current_style.foreground_color = Some(Color::DarkGrey),
                             "91" => current_style.foreground_color = Some(Color::Red),
                             "92" => current_style.foreground_color = Some(Color::Green),
@@ -331,8 +344,51 @@ fn parse_ansi_line(input: &str) -> StyledLine {
                             "95" => current_style.foreground_color = Some(Color::Magenta),
                             "96" => current_style.foreground_color = Some(Color::Cyan),
                             "97" => current_style.foreground_color = Some(Color::White),
-                            _ => {} // Ignore unknown codes
+                            "100" => current_style.background_color = Some(Color::DarkGrey),
+                            "101" => current_style.background_color = Some(Color::Red),
+                            "102" => current_style.background_color = Some(Color::Green),
+                            "103" => current_style.background_color = Some(Color::Yellow),
+                            "104" => current_style.background_color = Some(Color::Blue),
+                            "105" => current_style.background_color = Some(Color::Magenta),
+                            "106" => current_style.background_color = Some(Color::Cyan),
+                            "107" => current_style.background_color = Some(Color::White),
+                            "38" | "48" => {
+                                let is_fg = parts[i] == "38";
+                                if i + 1 < parts.len() && parts[i + 1] == "5" && i + 2 < parts.len()
+                                {
+                                    if let Ok(code) = parts[i + 2].parse::<u8>() {
+                                        if is_fg {
+                                            current_style.foreground_color =
+                                                Some(Color::AnsiValue(code));
+                                        } else {
+                                            current_style.background_color =
+                                                Some(Color::AnsiValue(code));
+                                        }
+                                    }
+                                    i += 2;
+                                } else if i + 1 < parts.len()
+                                    && parts[i + 1] == "2"
+                                    && i + 4 < parts.len()
+                                {
+                                    let parsed = (
+                                        parts[i + 2].parse::<u8>(),
+                                        parts[i + 3].parse::<u8>(),
+                                        parts[i + 4].parse::<u8>(),
+                                    );
+                                    if let (Ok(r), Ok(g), Ok(b)) = parsed {
+                                        let color = Color::Rgb { r, g, b };
+                                        if is_fg {
+                                            current_style.foreground_color = Some(color);
+                                        } else {
+                                            current_style.background_color = Some(color);
+                                        }
+                                    }
+                                    i += 4;
+                                }
+                            }
+                            _ => {}
                         }
+                        i += 1;
                     }
                 }
                 // Ignore other CSI sequences
@@ -519,7 +575,7 @@ fn wrap_styled_line(line: &StyledLine, width: usize) -> Vec<StyledLine> {
     let indent_prefix = " ".repeat(indent_width);
 
     // Flatten spans into (char, style) pairs
-    let flat: Vec<(char, crossterm::style::ContentStyle)> = line
+    let flat: Vec<(char, TextStyle)> = line
         .spans
         .iter()
         .flat_map(|span| span.content.chars().map(move |ch| (ch, span.style)))
@@ -535,7 +591,7 @@ fn wrap_styled_line(line: &StyledLine, width: usize) -> Vec<StyledLine> {
     let mut segments: Vec<Segment> = Vec::new();
     let mut seg_start = 0;
     let mut seg_width = 0usize;
-    let mut in_space = flat.first().map_or(false, |(ch, _)| *ch == ' ');
+    let mut in_space = flat.first().is_some_and(|(ch, _)| *ch == ' ');
 
     for (i, &(ch, _)) in flat.iter().enumerate() {
         let is_space = ch == ' ';
@@ -563,7 +619,7 @@ fn wrap_styled_line(line: &StyledLine, width: usize) -> Vec<StyledLine> {
 
     // Greedily place segments on lines
     let mut lines: Vec<StyledLine> = Vec::new();
-    let mut current_chars: Vec<(char, crossterm::style::ContentStyle)> = Vec::new();
+    let mut current_chars: Vec<(char, TextStyle)> = Vec::new();
     let mut current_width = 0usize;
 
     let effective_width = if indent_width > 0 {
@@ -588,7 +644,7 @@ fn wrap_styled_line(line: &StyledLine, width: usize) -> Vec<StyledLine> {
             current_width += seg.width;
         } else if seg.width <= effective_width && !current_chars.is_empty() {
             // Trim trailing spaces from current line
-            while current_chars.last().map_or(false, |(ch, _)| *ch == ' ') {
+            while current_chars.last().is_some_and(|(ch, _)| *ch == ' ') {
                 current_chars.pop();
             }
             lines.push(chars_to_styled_line(&current_chars));
@@ -596,7 +652,7 @@ fn wrap_styled_line(line: &StyledLine, width: usize) -> Vec<StyledLine> {
             current_width = 0;
             if indent_width > 0 {
                 for ich in indent_prefix.chars() {
-                    current_chars.push((ich, crossterm::style::ContentStyle::default()));
+                    current_chars.push((ich, TextStyle::default()));
                 }
                 current_width = indent_width;
             }
@@ -612,8 +668,7 @@ fn wrap_styled_line(line: &StyledLine, width: usize) -> Vec<StyledLine> {
                     current_width = 0;
                     if indent_width > 0 {
                         for ich in indent_prefix.chars() {
-                            current_chars
-                                .push((ich, crossterm::style::ContentStyle::default()));
+                            current_chars.push((ich, TextStyle::default()));
                         }
                         current_width = indent_width;
                     }
@@ -635,7 +690,7 @@ fn wrap_styled_line(line: &StyledLine, width: usize) -> Vec<StyledLine> {
     }
 }
 
-fn chars_to_styled_line(chars: &[(char, crossterm::style::ContentStyle)]) -> StyledLine {
+fn chars_to_styled_line(chars: &[(char, TextStyle)]) -> StyledLine {
     let mut spans: Vec<StyledSpan> = Vec::new();
     for &(ch, style) in chars {
         if let Some(last) = spans.last_mut()
@@ -649,3 +704,69 @@ fn chars_to_styled_line(chars: &[(char, crossterm::style::ContentStyle)]) -> Sty
     StyledLine::new(spans)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn line_text(line: &StyledLine) -> String {
+        line.spans
+            .iter()
+            .map(|s| s.content.as_str())
+            .collect::<String>()
+    }
+
+    #[test]
+    fn parse_ansi_line_resets_styles() {
+        let line = parse_ansi_line("\x1b[31merr\x1b[0m ok");
+        assert_eq!(line.spans.len(), 2);
+        assert_eq!(line.spans[0].content, "err");
+        assert_eq!(line.spans[0].style.foreground_color, Some(Color::DarkRed));
+        assert_eq!(line.spans[1].content, " ok");
+        assert_eq!(line.spans[1].style, TextStyle::default());
+    }
+
+    #[test]
+    fn parse_ansi_line_supports_rgb_and_ansi256() {
+        let line = parse_ansi_line("\x1b[38;2;1;2;3mA\x1b[48;5;42mB\x1b[0mC");
+        assert_eq!(line.spans.len(), 3);
+        assert_eq!(line.spans[0].content, "A");
+        assert_eq!(
+            line.spans[0].style.foreground_color,
+            Some(Color::Rgb { r: 1, g: 2, b: 3 })
+        );
+        assert_eq!(line.spans[0].style.background_color, None);
+
+        assert_eq!(line.spans[1].content, "B");
+        assert_eq!(
+            line.spans[1].style.foreground_color,
+            Some(Color::Rgb { r: 1, g: 2, b: 3 })
+        );
+        assert_eq!(
+            line.spans[1].style.background_color,
+            Some(Color::AnsiValue(42))
+        );
+
+        assert_eq!(line.spans[2].content, "C");
+        assert_eq!(line.spans[2].style, TextStyle::default());
+    }
+
+    #[test]
+    fn wrap_styled_line_preserves_styles() {
+        let line = StyledLine::new(vec![
+            StyledSpan::colored("abc", Color::Green),
+            StyledSpan::colored("def", Color::Red),
+        ]);
+        let wrapped = wrap_styled_line(&line, 4);
+
+        assert_eq!(wrapped.len(), 2);
+        assert_eq!(line_text(&wrapped[0]), "abcd");
+        assert_eq!(line_text(&wrapped[1]), "ef");
+
+        assert_eq!(
+            wrapped[0].spans[0].style.foreground_color,
+            Some(Color::Green)
+        );
+        assert_eq!(wrapped[0].spans[1].style.foreground_color, Some(Color::Red));
+        assert_eq!(wrapped[1].spans[0].style.foreground_color, Some(Color::Red));
+    }
+}

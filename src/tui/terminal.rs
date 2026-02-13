@@ -4,11 +4,37 @@
 //! styled terminal output.
 
 use crate::tui::rnk_text::render_no_wrap_text_line;
-use crossterm::style::{Attribute, Color, ContentStyle};
 use rnk::components::{Span as RnkSpan, Text};
 use rnk::core::Color as RnkColor;
 use std::io::{self, Write};
 use unicode_width::UnicodeWidthChar;
+
+/// Internal color model for TUI styled spans.
+///
+/// Mirrors commonly used ANSI color names (including dark/bright variants)
+/// while mapping directly to RNK colors at render time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Color {
+    Reset,
+    Black,
+    DarkGrey,
+    Red,
+    DarkRed,
+    Green,
+    DarkGreen,
+    Yellow,
+    DarkYellow,
+    Blue,
+    DarkBlue,
+    Magenta,
+    DarkMagenta,
+    Cyan,
+    DarkCyan,
+    White,
+    Grey,
+    Rgb { r: u8, g: u8, b: u8 },
+    AnsiValue(u8),
+}
 
 fn map_color(color: Color) -> RnkColor {
     match color {
@@ -34,6 +60,35 @@ fn map_color(color: Color) -> RnkColor {
     }
 }
 
+/// Lightweight text style model used throughout TUI chat rendering.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct TextStyle {
+    pub foreground_color: Option<Color>,
+    pub background_color: Option<Color>,
+    pub bold: bool,
+    pub dim: bool,
+    pub italic: bool,
+    pub underlined: bool,
+    pub crossed_out: bool,
+    pub reverse: bool,
+}
+
+impl TextStyle {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            foreground_color: None,
+            background_color: None,
+            bold: false,
+            dim: false,
+            italic: false,
+            underlined: false,
+            crossed_out: false,
+            reverse: false,
+        }
+    }
+}
+
 fn display_width(text: &str) -> usize {
     text.chars().filter_map(UnicodeWidthChar::width).sum()
 }
@@ -46,37 +101,37 @@ fn to_rnk_span(span: &StyledSpan) -> RnkSpan {
     if let Some(bg) = span.style.background_color {
         out = out.background(map_color(bg));
     }
-    if span.style.attributes.has(Attribute::Bold) {
+    if span.style.bold {
         out = out.bold();
     }
-    if span.style.attributes.has(Attribute::Dim) {
+    if span.style.dim {
         out = out.dim();
     }
-    if span.style.attributes.has(Attribute::Italic) {
+    if span.style.italic {
         out = out.italic();
     }
-    if span.style.attributes.has(Attribute::Underlined) {
+    if span.style.underlined {
         out = out.underline();
     }
-    if span.style.attributes.has(Attribute::CrossedOut) {
+    if span.style.crossed_out {
         out = out.strikethrough();
     }
-    if span.style.attributes.has(Attribute::Reverse) {
+    if span.style.reverse {
         out = out.inverse();
     }
     out
 }
 
-/// A styled span of text (crossterm equivalent of ratatui Span).
+/// A styled span of text.
 #[derive(Clone, Debug)]
 pub struct StyledSpan {
     pub content: String,
-    pub style: ContentStyle,
+    pub style: TextStyle,
 }
 
 impl StyledSpan {
     /// Create a new styled span.
-    pub fn new(content: impl Into<String>, style: ContentStyle) -> Self {
+    pub fn new(content: impl Into<String>, style: TextStyle) -> Self {
         Self {
             content: content.into(),
             style,
@@ -87,7 +142,7 @@ impl StyledSpan {
     pub fn raw(content: impl Into<String>) -> Self {
         Self {
             content: content.into(),
-            style: ContentStyle::new(),
+            style: TextStyle::new(),
         }
     }
 
@@ -95,9 +150,9 @@ impl StyledSpan {
     pub fn colored(content: impl Into<String>, color: Color) -> Self {
         Self {
             content: content.into(),
-            style: ContentStyle {
+            style: TextStyle {
                 foreground_color: Some(color),
-                ..ContentStyle::default()
+                ..TextStyle::new()
             },
         }
     }
@@ -106,9 +161,9 @@ impl StyledSpan {
     pub fn dim(content: impl Into<String>) -> Self {
         Self {
             content: content.into(),
-            style: ContentStyle {
-                attributes: Attribute::Dim.into(),
-                ..ContentStyle::default()
+            style: TextStyle {
+                dim: true,
+                ..TextStyle::new()
             },
         }
     }
@@ -117,9 +172,9 @@ impl StyledSpan {
     pub fn bold(content: impl Into<String>) -> Self {
         Self {
             content: content.into(),
-            style: ContentStyle {
-                attributes: Attribute::Bold.into(),
-                ..ContentStyle::default()
+            style: TextStyle {
+                bold: true,
+                ..TextStyle::new()
             },
         }
     }
@@ -128,9 +183,9 @@ impl StyledSpan {
     pub fn italic(content: impl Into<String>) -> Self {
         Self {
             content: content.into(),
-            style: ContentStyle {
-                attributes: Attribute::Italic.into(),
-                ..ContentStyle::default()
+            style: TextStyle {
+                italic: true,
+                ..TextStyle::new()
             },
         }
     }
@@ -138,21 +193,21 @@ impl StyledSpan {
     /// Add bold modifier to this span.
     #[must_use]
     pub fn with_bold(mut self) -> Self {
-        self.style.attributes.set(Attribute::Bold);
+        self.style.bold = true;
         self
     }
 
     /// Add dim modifier to this span.
     #[must_use]
     pub fn with_dim(mut self) -> Self {
-        self.style.attributes.set(Attribute::Dim);
+        self.style.dim = true;
         self
     }
 
     /// Add italic modifier to this span.
     #[must_use]
     pub fn with_italic(mut self) -> Self {
-        self.style.attributes.set(Attribute::Italic);
+        self.style.italic = true;
         self
     }
 
@@ -165,7 +220,7 @@ impl StyledSpan {
     }
 }
 
-/// A line of styled text (crossterm equivalent of ratatui Line).
+/// A line of styled text.
 #[derive(Clone, Debug, Default)]
 pub struct StyledLine {
     pub spans: Vec<StyledSpan>,

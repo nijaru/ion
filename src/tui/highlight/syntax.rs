@@ -1,6 +1,6 @@
 //! Syntax highlighting using syntect.
 
-use crate::tui::terminal::{StyledLine, StyledSpan};
+use crate::tui::terminal::{Color, StyledLine, StyledSpan, TextStyle};
 use std::sync::LazyLock;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::{FontStyle, ThemeSet};
@@ -71,30 +71,19 @@ pub fn syntax_from_fence(lang: &str) -> Option<&'static str> {
     }
 }
 
-/// Convert syntect style to crossterm `ContentStyle`.
-fn syntect_to_crossterm(style: syntect::highlighting::Style) -> crossterm::style::ContentStyle {
-    use crossterm::style::{Attribute, Color, ContentStyle};
-
-    let mut cs = ContentStyle {
+/// Convert syntect style to TUI TextStyle.
+fn syntect_to_style(style: syntect::highlighting::Style) -> TextStyle {
+    TextStyle {
         foreground_color: Some(Color::Rgb {
             r: style.foreground.r,
             g: style.foreground.g,
             b: style.foreground.b,
         }),
-        ..Default::default()
-    };
-
-    if style.font_style.contains(FontStyle::BOLD) {
-        cs.attributes.set(Attribute::Bold);
+        bold: style.font_style.contains(FontStyle::BOLD),
+        italic: style.font_style.contains(FontStyle::ITALIC),
+        underlined: style.font_style.contains(FontStyle::UNDERLINE),
+        ..TextStyle::default()
     }
-    if style.font_style.contains(FontStyle::ITALIC) {
-        cs.attributes.set(Attribute::Italic);
-    }
-    if style.font_style.contains(FontStyle::UNDERLINE) {
-        cs.attributes.set(Attribute::Underlined);
-    }
-
-    cs
 }
 
 /// Highlight a single line of code.
@@ -115,7 +104,7 @@ pub fn highlight_line(text: &str, syntax_name: &str) -> StyledLine {
             let spans: Vec<StyledSpan> = ranges
                 .iter()
                 .map(|(style, content)| {
-                    StyledSpan::new(content.to_string(), syntect_to_crossterm(*style))
+                    StyledSpan::new(content.to_string(), syntect_to_style(*style))
                 })
                 .collect();
             StyledLine::new(spans)
@@ -147,7 +136,7 @@ pub fn highlight_code(code: &str, syntax_name: &str) -> Vec<StyledLine> {
                 let spans: Vec<StyledSpan> = ranges
                     .iter()
                     .map(|(style, content)| {
-                        StyledSpan::new(content.to_string(), syntect_to_crossterm(*style))
+                        StyledSpan::new(content.to_string(), syntect_to_style(*style))
                     })
                     .collect();
                 lines.push(StyledLine::new(spans));

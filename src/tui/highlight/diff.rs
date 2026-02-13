@@ -1,7 +1,6 @@
 //! Diff syntax highlighting.
 
-use crate::tui::terminal::{StyledLine, StyledSpan};
-use crossterm::style::Color;
+use crate::tui::terminal::{Color, StyledLine, StyledSpan};
 
 /// Highlight a diff line with appropriate colors.
 /// - `+` lines → Green (additions)
