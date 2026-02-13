@@ -55,6 +55,7 @@ use crate::tui::model_picker::ModelPicker;
 use crate::tui::provider_picker::ProviderPicker;
 use crate::tui::render_state::RenderState;
 use crate::tui::session_picker::SessionPicker;
+use crate::tui::terminal::StyledLine;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -83,6 +84,9 @@ pub struct App {
     pub message_list: MessageList,
     /// Render state for chat positioning and incremental updates
     pub render_state: RenderState,
+    /// Cached startup header lines (version + cwd + branch) to avoid shelling out
+    /// on every transcript reflow.
+    pub startup_header_lines: Vec<StyledLine>,
     pub agent: Arc<Agent>,
     pub session: Session,
     pub orchestrator: Arc<ToolOrchestrator>,

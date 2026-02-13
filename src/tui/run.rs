@@ -12,6 +12,7 @@ use crate::tui::message_list::{MessageEntry, Sender};
 use crate::tui::render::layout::UiLayout;
 use crate::tui::render_state::{ChatPosition, StreamingCarryover};
 use crate::tui::terminal::StyledLine;
+use crate::tui::types::Mode;
 use anyhow::Result;
 use crossterm::{
     cursor::{MoveTo, Show},
@@ -312,7 +313,12 @@ fn prepare_frame(app: &mut App, term_width: u16, term_height: u16) -> FramePrep 
     } else {
         0
     };
-    if !reflow_requested && overlap_rows > 0 && !app.message_list.entries.is_empty() {
+    if should_scroll_for_overlap(
+        app.mode,
+        reflow_requested,
+        overlap_rows,
+        !app.message_list.entries.is_empty(),
+    ) {
         pre_ops.push(PreOp::ScrollViewport {
             scroll_amount: overlap_rows,
         });
@@ -424,6 +430,15 @@ fn tracking_ui_overlap_rows(position: &ChatPosition, layout: &UiLayout) -> u16 {
         }
         _ => 0,
     }
+}
+
+fn should_scroll_for_overlap(
+    mode: Mode,
+    reflow_requested: bool,
+    overlap_rows: u16,
+    has_entries: bool,
+) -> bool {
+    mode != Mode::Selector && !reflow_requested && overlap_rows > 0 && has_entries
 }
 
 /// Pure arithmetic to decide how to insert chat lines.
@@ -1045,5 +1060,19 @@ mod tests {
         };
         let layout = test_layout(18, 80);
         assert!(!tracking_ui_overlap(&scrolling, &layout));
+    }
+
+    #[test]
+    fn overlap_scroll_disabled_for_selector_mode() {
+        assert!(!should_scroll_for_overlap(Mode::Selector, false, 2, true));
+        assert!(!should_scroll_for_overlap(Mode::Selector, false, 0, true));
+    }
+
+    #[test]
+    fn overlap_scroll_enabled_only_when_needed() {
+        assert!(should_scroll_for_overlap(Mode::Input, false, 1, true));
+        assert!(!should_scroll_for_overlap(Mode::Input, true, 1, true));
+        assert!(!should_scroll_for_overlap(Mode::Input, false, 0, true));
+        assert!(!should_scroll_for_overlap(Mode::Input, false, 1, false));
     }
 }

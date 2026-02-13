@@ -6,7 +6,6 @@ use crate::tui::message_list::{MessageEntry, Sender};
 use crate::tui::render_state::StreamingCarryover;
 use crate::tui::terminal::StyledLine;
 use crate::tui::types::Mode;
-use std::path::Path;
 
 fn stable_transcript_end(entries: &[MessageEntry], is_running: bool) -> usize {
     let mut end = entries.len();
@@ -21,7 +20,7 @@ fn stable_transcript_end(entries: &[MessageEntry], is_running: bool) -> usize {
 }
 
 fn build_base_transcript_lines(
-    working_dir: &Path,
+    header_lines: &[StyledLine],
     entries: &[MessageEntry],
     is_running: bool,
     wrap_width: usize,
@@ -30,12 +29,25 @@ fn build_base_transcript_lines(
         return (Vec::new(), 0);
     }
 
-    let mut lines = App::startup_header_lines(working_dir);
+    let mut lines = header_lines.to_vec();
     let end = stable_transcript_end(entries, is_running);
     if end > 0 {
         lines.extend(ChatRenderer::build_lines(&entries[..end], None, wrap_width));
     }
     (lines, end)
+}
+
+fn apply_stable_agent_carryover(
+    entry_lines: Vec<StyledLine>,
+    carryover: &mut StreamingCarryover,
+    wrap_width: usize,
+) -> Vec<StyledLine> {
+    let skip = carryover.lines_for_width(wrap_width);
+    carryover.reset();
+    if skip == 0 {
+        return entry_lines;
+    }
+    entry_lines.into_iter().skip(skip).collect()
 }
 
 impl App {
@@ -69,9 +81,11 @@ impl App {
             );
 
             if entry.sender == Sender::Agent && !self.render_state.streaming_carryover.is_empty() {
-                let skip = self.render_state.streaming_carryover.committed_lines();
-                self.render_state.streaming_carryover.reset();
-                new_lines.extend(entry_lines.into_iter().skip(skip));
+                new_lines.extend(apply_stable_agent_carryover(
+                    entry_lines,
+                    &mut self.render_state.streaming_carryover,
+                    wrap_width,
+                ));
             } else {
                 new_lines.extend(entry_lines);
             }
@@ -129,7 +143,7 @@ impl App {
         }
 
         let (lines, _rendered_entries) = build_base_transcript_lines(
-            &self.session.working_dir,
+            &self.startup_header_lines,
             &self.message_list.entries,
             self.is_running,
             wrap_width,
@@ -152,7 +166,7 @@ impl App {
         }
 
         let (mut lines, rendered_entries) = build_base_transcript_lines(
-            &self.session.working_dir,
+            &self.startup_header_lines,
             &self.message_list.entries,
             self.is_running,
             wrap_width,
@@ -208,11 +222,10 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_base_transcript_lines, stable_transcript_end};
+    use super::{apply_stable_agent_carryover, build_base_transcript_lines, stable_transcript_end};
     use crate::tui::chat_renderer::ChatRenderer;
     use crate::tui::message_list::{MessageEntry, Sender};
     use crate::tui::render_state::StreamingCarryover;
-    use std::path::Path;
 
     fn line_text(line: &crate::tui::terminal::StyledLine) -> String {
         line.spans
@@ -237,7 +250,12 @@ mod tests {
             MessageEntry::new(Sender::User, "hello".to_string()),
             MessageEntry::new(Sender::Agent, "streaming".to_string()),
         ];
-        let (lines, end) = build_base_transcript_lines(Path::new("."), &entries, true, 80);
+        let header = vec![
+            crate::tui::terminal::StyledLine::raw("ion v0.0.0"),
+            crate::tui::terminal::StyledLine::raw("~/repo [branch]"),
+            crate::tui::terminal::StyledLine::empty(),
+        ];
+        let (lines, end) = build_base_transcript_lines(&header, &entries, true, 80);
         assert_eq!(end, 1);
         let ion_header_count = lines
             .iter()
@@ -274,7 +292,12 @@ mod tests {
         ];
 
         let wrap_width = 52usize;
-        let (base, end) = build_base_transcript_lines(Path::new("."), &entries, true, wrap_width);
+        let header = vec![
+            crate::tui::terminal::StyledLine::raw("ion v0.0.0"),
+            crate::tui::terminal::StyledLine::raw("~/repo [branch]"),
+            crate::tui::terminal::StyledLine::empty(),
+        ];
+        let (base, end) = build_base_transcript_lines(&header, &entries, true, wrap_width);
         assert_eq!(end, 1);
 
         let mut carryover = StreamingCarryover::default();
@@ -299,5 +322,27 @@ mod tests {
 
         assert_eq!(ion_header_count, 1);
         assert_eq!(user_prompt_count, 1);
+    }
+
+    #[test]
+    fn stable_agent_carryover_skips_only_for_matching_width() {
+        let mut carryover = StreamingCarryover::default();
+        carryover.set(2, 80);
+
+        let entry_lines = vec![
+            crate::tui::terminal::StyledLine::raw("line 1"),
+            crate::tui::terminal::StyledLine::raw("line 2"),
+            crate::tui::terminal::StyledLine::raw("line 3"),
+        ];
+
+        let matching = apply_stable_agent_carryover(entry_lines.clone(), &mut carryover, 80);
+        assert_eq!(matching.len(), 1);
+        assert_eq!(line_text(&matching[0]), "line 3");
+        assert!(carryover.is_empty());
+
+        carryover.set(2, 120);
+        let mismatched = apply_stable_agent_carryover(entry_lines, &mut carryover, 80);
+        assert_eq!(mismatched.len(), 3);
+        assert!(carryover.is_empty());
     }
 }
