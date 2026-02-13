@@ -134,7 +134,7 @@ impl App {
 
         let lines = self.build_chat_lines(width);
         for line in &lines {
-            line.writeln(w)?;
+            line.writeln_with_width(w, width)?;
         }
 
         self.render_state.mark_reflow_complete(end);

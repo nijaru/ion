@@ -103,9 +103,9 @@ fn scroll_up_and_home(stdout: &mut io::Stdout, amount: u16) -> io::Result<()> {
     execute!(stdout, crossterm::terminal::ScrollUp(amount), MoveTo(0, 0))
 }
 
-fn write_lines(stdout: &mut io::Stdout, lines: &[StyledLine]) -> io::Result<()> {
+fn write_lines(stdout: &mut io::Stdout, lines: &[StyledLine], term_width: u16) -> io::Result<()> {
     for line in lines {
-        line.writeln(stdout)?;
+        line.writeln_with_width(stdout, term_width)?;
     }
     Ok(())
 }
@@ -115,11 +115,12 @@ fn write_lines_at(
     stdout: &mut io::Stdout,
     start_row: u16,
     lines: &[StyledLine],
+    term_width: u16,
 ) -> io::Result<u16> {
     let mut row = start_row;
     for line in lines {
         execute!(stdout, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
-        line.writeln(stdout)?;
+        line.writeln_with_width(stdout, term_width)?;
         row = row.saturating_add(1);
     }
     Ok(row)
@@ -139,7 +140,12 @@ fn clear_header_areas(stdout: &mut io::Stdout, pre_ops: &[PreOp]) -> io::Result<
     Ok(())
 }
 
-fn apply_pre_ops(stdout: &mut io::Stdout, app: &mut App, pre_ops: &[PreOp]) -> io::Result<()> {
+fn apply_pre_ops(
+    stdout: &mut io::Stdout,
+    app: &mut App,
+    pre_ops: &[PreOp],
+    term_width: u16,
+) -> io::Result<()> {
     for op in pre_ops {
         match op {
             PreOp::ClearScreen {
@@ -158,7 +164,7 @@ fn apply_pre_ops(stdout: &mut io::Stdout, app: &mut App, pre_ops: &[PreOp]) -> i
                 available_rows,
             } => {
                 execute!(stdout, MoveTo(0, 0), Clear(ClearType::All), MoveTo(0, 0))?;
-                write_lines_at(stdout, 0, lines)?;
+                write_lines_at(stdout, 0, lines, term_width)?;
                 if total_lines <= &(*available_rows as usize) {
                     app.render_state.position = ChatPosition::Tracking {
                         next_row: *total_lines as u16,
@@ -183,7 +189,7 @@ fn apply_pre_ops(stdout: &mut io::Stdout, app: &mut App, pre_ops: &[PreOp]) -> i
                 )?;
             }
             PreOp::PrintHeader(lines) => {
-                write_lines(stdout, lines)?;
+                write_lines(stdout, lines, term_width)?;
                 if let Ok((_x, y)) = crossterm::cursor::position() {
                     app.render_state.position = ChatPosition::Header { anchor: y };
                 }
@@ -205,7 +211,8 @@ fn apply_chat_insert(
 
     match insert {
         ChatInsert::AtRow { start_row, lines } => {
-            let new_row = write_lines_at(stdout, start_row, &lines)?;
+            let (term_width, _) = terminal::size()?;
+            let new_row = write_lines_at(stdout, start_row, &lines, term_width)?;
             // Don't set ui_drawn_at here — draw_direct does that after
             // recomputing layout with the updated next_row.
             app.render_state.position = ChatPosition::Tracking {
@@ -225,7 +232,8 @@ fn apply_chat_insert(
                 Clear(ClearType::FromCursorDown)
             )?;
             execute!(stdout, crossterm::terminal::ScrollUp(scroll_amount))?;
-            write_lines_at(stdout, print_row, &lines)?;
+            let (term_width, _) = terminal::size()?;
+            write_lines_at(stdout, print_row, &lines, term_width)?;
             app.render_state.position = ChatPosition::Scrolling { ui_drawn_at: None };
         }
         ChatInsert::ScrollInsert {
@@ -240,7 +248,8 @@ fn apply_chat_insert(
                 Clear(ClearType::FromCursorDown)
             )?;
             execute!(stdout, crossterm::terminal::ScrollUp(scroll_amount))?;
-            write_lines_at(stdout, print_row, &lines)?;
+            let (term_width, _) = terminal::size()?;
+            write_lines_at(stdout, print_row, &lines, term_width)?;
             app.render_state.position = ChatPosition::Scrolling { ui_drawn_at: None };
         }
     }
@@ -302,7 +311,7 @@ fn prepare_frame(app: &mut App, term_width: u16, term_height: u16) -> FramePrep 
         state_changed = true;
     }
 
-    // Reflow (resize)
+    // Reflow (explicit full redraw, e.g. session load)
     if app.render_state.needs_reflow {
         app.render_state.needs_reflow = false;
         if !app.message_list.entries.is_empty() || app.render_state.position.header_inserted() {
@@ -469,7 +478,7 @@ fn render_frame(
     clear_header_areas(stdout, &pre_ops)?;
 
     execute!(stdout, BeginSynchronizedUpdate)?;
-    apply_pre_ops(stdout, app, &pre_ops)?;
+    apply_pre_ops(stdout, app, &pre_ops, term_width)?;
 
     // Clear stale UI rows between old top and current top (e.g., popup dismiss).
     // Must happen BEFORE chat insertion: new chat lines may occupy these rows.
@@ -510,7 +519,7 @@ fn reprint_loaded_session(
     // The terminal scrolls content into scrollback as needed — same
     // as how fresh-start prints the header.
     execute!(stdout, BeginSynchronizedUpdate)?;
-    write_lines(stdout, &lines)?;
+    write_lines(stdout, &lines, term_width)?;
 
     // Check where cursor landed to set position state.
     let (_, cursor_y) = crossterm::cursor::position()?;

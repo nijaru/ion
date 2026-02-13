@@ -7,7 +7,7 @@
 | Phase     | Dogfood readiness (Sprint 16 active)                  | 2026-02-12 |
 | Status    | RNK-first TUI spike active; MCP migration deferred     | 2026-02-12 |
 | Toolchain | stable                                                | 2026-01-22 |
-| Tests     | 455 passing (`cargo test -q`)                         | 2026-02-12 |
+| Tests     | 457 passing (`cargo test -q`)                         | 2026-02-13 |
 | Clippy    | clean (`cargo clippy -q`)                             | 2026-02-11 |
 
 ## Active Focus
@@ -20,7 +20,7 @@
 - `tk-add8` progress (2026-02-12): Remaining UI surfaces migrated to RNK primitives (selector + popup/completer + history-search prompt row). UI rendering stack is now RNK-first across active surfaces.
 - `tk-add8` progress (2026-02-12): Resize behavior updated to preserve single-copy chat history: removed resize-triggered full transcript reprint; overlap now handled by bounded viewport scroll before bottom UI redraw.
 - `tk-add8` progress (2026-02-12): Shared RNK text-line helper introduced and duplicated per-module RNK render snippets removed; chat `StyledLine` terminal writes now render through RNK spans/text path.
-- `tk-add8` progress (2026-02-12): Resize now triggers viewport-safe reflow from canonical chat lines (visible-tail repaint at new width) to prevent narrow-width soft-wrap cutoff artifacts while keeping a single on-screen transcript block.
+- `tk-add8` progress (2026-02-13): Resize no longer triggers transcript reprint/reflow; resize now switches to scroll-mode insertion to preserve single-copy scrollback and avoid duplicated transcript blocks.
 - `tk-add8` progress (2026-02-12): TUI style internals migrated to RNK-native types (`terminal::Color` + `terminal::TextStyle`): removed `crossterm` style primitives from chat renderer, ANSI parser, syntax highlighting, and diff highlighting.
 - `tk-rpst` (`done`, p2): Resize bugfix shipped for duplicate history + prompt-box artifacts after shrinking terminal width/height.
 - `tk-bcau` (`open`, p2): Soft-wrap chat + viewport-separation architecture selected as target regardless of RNK choice.
@@ -42,7 +42,7 @@
 
 ## Next Session
 
-1. Manual smoke with `cargo run -- --continue` on Ghostty (selector/completer/history-search visuals + resize/composer behavior) against RNK-first path, specifically verifying no duplicate on-screen transcript block and no narrow-width word clipping after repeated resize/move
+1. Manual smoke with `cargo run -- --continue` on Ghostty (selector/completer/history-search visuals + resize/composer behavior) against RNK-first path, specifically verifying no duplicated transcript blocks during repeated monitor moves/resizes
 2. Record keep/kill decision with evidence against Ghostty/narrow-width regressions
 3. Start `tk-bcau` soft-wrap viewport migration (remove width-coupled reflow path first, then planner transition updates)
 4. If RNK is killed, resume `tk-86lk` + checklist closure on current crossterm path
