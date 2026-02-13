@@ -7,12 +7,12 @@
     clippy::cast_sign_loss
 )]
 
+mod bottom_ui;
 mod chat;
 mod direct;
 mod history;
 pub(crate) mod layout;
 pub(crate) mod popup;
-mod rnk_spike;
 pub(crate) mod selector;
 
 use selector::MAX_VISIBLE_ITEMS;

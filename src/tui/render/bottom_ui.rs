@@ -82,11 +82,11 @@ fn paint_row_spans<W: Write>(
 }
 
 impl App {
-    pub(crate) fn rnk_progress_gap_rows(&self) -> u16 {
+    pub(crate) fn progress_gap_rows(&self) -> u16 {
         u16::from(self.mode == Mode::Input && self.is_running)
     }
 
-    pub(crate) fn render_bottom_ui_rnk<W: Write>(
+    pub(crate) fn render_bottom_ui<W: Write>(
         &mut self,
         w: &mut W,
         progress_row: u16,
