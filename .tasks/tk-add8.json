@@ -99,10 +99,14 @@
     {
       "ts": "2026-02-13T01:10:56.821Z",
       "msg": "Fixed resize duplication root cause: stop setting needs_reflow on Event::Resize, transition render state to Scrolling on resize, keep transcript single-copy. Added RenderState resize tests and width-bounded chat scrollback write path."
+    },
+    {
+      "ts": "2026-02-13T01:49:25.640Z",
+      "msg": "Follow-up resize hardening on RNK branch: restored needs_reflow-on-resize for canonical markdown wrap recalculation and split append-vs-row repaint write semantics in run.rs (row paints no longer emit CRLF)."
     }
   ],
   "created_at": "2026-02-11T23:32:50.878Z",
-  "updated_at": "2026-02-13T01:10:56.821Z",
+  "updated_at": "2026-02-13T01:49:25.640Z",
   "completed_at": null,
   "external": {}
 }

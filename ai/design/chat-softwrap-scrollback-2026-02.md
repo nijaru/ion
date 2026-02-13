@@ -6,7 +6,7 @@ Adopt a two-plane TUI model regardless of RNK choice:
 
 1. Chat history is append-only and soft-wrapped by the terminal (no width-baked hard-wrap lines).
 2. Bottom UI is ephemeral and bottom-anchored (recomputed each frame).
-3. Resize should not trigger full-history chat reprint in normal operation.
+3. Resize should reflow from canonical transcript state but repaint only the visible viewport (never append a second full transcript block).
 
 ## Why
 
@@ -43,9 +43,11 @@ Adopt a two-plane TUI model regardless of RNK choice:
 On resize:
 
 1. Recompute layout (`ui_top`, component heights).
-2. Repaint UI plane only.
-3. Do not reflow/reprint historical chat lines.
-4. If tracked chat rows would be overlapped by UI growth, transition to scrolling mode and scroll just enough to preserve separation.
+2. Rebuild wrapped chat lines from canonical message entries at the new width.
+3. Repaint the visible chat viewport rows in place (absolute-row writes, no newline append).
+4. Repaint UI plane.
+5. Do not rewrite/append historical scrollback.
+6. If tracked chat rows would be overlapped by UI growth, transition to scrolling mode and scroll just enough to preserve separation.
 
 ## Streaming Model
 
@@ -57,7 +59,7 @@ On resize:
 
 | Phase | Scope | Exit Criteria |
 | --- | --- | --- |
-| P1 | Disable width-driven full-history reflow path for standard resize; keep explicit recovery fallback behind debug flag if needed | Resize no longer duplicates chat history |
+| P1 | Make resize reflow explicit: canonical transcript rewrap + in-place viewport repaint (no newline append writes) | Resize no longer duplicates chat history and markdown wraps update correctly |
 | P2 | Convert chat renderer output to logical-line emission (soft-wrap-friendly) and narrow mutable tail semantics | Streaming stable across resize and long outputs |
 | P3 | Replace overlap-triggered "full reflow" with position-state transition/scroll arithmetic | Input/popup growth does not erase or duplicate chat |
 | P4 | Expand manual checks + add targeted unit tests for new planner transitions | Checklist passes in Ghostty narrow/resize stress |

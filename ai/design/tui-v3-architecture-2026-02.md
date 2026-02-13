@@ -25,7 +25,7 @@ Adopt a **RNK-first two-plane renderer** with strict layering:
 2. Exactly one terminal writer per frame.
 3. Chat plane lines are never width-truncated by UI clipping helpers.
 4. UI plane lines are always clipped to `width - 1`.
-5. Resize never triggers full transcript repaint in steady-state.
+5. Resize never appends/replays the full transcript to scrollback.
 6. State mutation and terminal IO are separated (reducer vs runtime executor).
 
 ## Target Module Layout
@@ -113,7 +113,7 @@ src/tui/
 - Accepts logical `StyledLine` records from transcript formatter.
 - Writes with newline append semantics; no UI clipping pass.
 - Allows terminal-native soft-wrap and scrollback behavior.
-- Resize behavior: no transcript repaint in normal operation.
+- Resize behavior: recompute wraps from canonical transcript and repaint the visible viewport in place (no scrollback append).
 
 ### UI Plane
 
@@ -126,10 +126,11 @@ src/tui/
 On terminal resize:
 
 1. Update terminal dimensions in runtime.
-2. Reducer transitions chat position to safe scrolling mode when tracking is invalid.
-3. Recompute layout.
-4. Repaint UI plane only.
-5. Do not append/reprint transcript history.
+2. Recompute wrapped transcript lines from canonical message entries.
+3. Recompute layout and visible viewport tail.
+4. Repaint visible chat viewport rows in place (row-addressed writes, no newline append).
+5. Repaint UI plane.
+6. Do not append/reprint full transcript history.
 
 ## Why This Is Idiomatic Rust
 
