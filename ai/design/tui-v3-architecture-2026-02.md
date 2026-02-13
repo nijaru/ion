@@ -1,163 +1,181 @@
-# TUI v3 Architecture Program (2026-02)
+# TUI v3 Architecture Program (RNK-First, 2026-02)
 
-## Objective
+## Answer First
 
-Create a TUI architecture that is:
+Yes, `src/tui/` currently has too many files in the wrong shape.
 
-- Correct under resize, reflow, streaming, and long sessions
-- High performance with stable frame times and low allocation churn
-- Intuitive to modify with small, explicit renderer APIs
-- Resistant to autowrap/scrollback corruption bugs
+- File count alone is not the problem.
+- The real problem is boundary quality: state, event handling, frame planning, and rendering are split by history rather than by responsibility.
+- The current structure still carries spike-era seams (`run.rs` + `events.rs` + render methods on `App`) that make resize and scrollback behavior fragile.
 
-This document defines the target structure and migration plan.
+This document defines the ideal, idiomatic target architecture for `src/tui/`.
 
-## Scope
+## Architectural Decision
 
-### In Scope
+Adopt a **RNK-first two-plane renderer** with strict layering:
 
-- `src/tui/*` runtime architecture and renderer boundaries
-- Render pipeline invariants and width-safe output guarantees
-- State ownership and modular APIs for components/widgets
-- Test strategy for correctness and performance regressions
+1. **Chat plane**: append-only transcript writes, terminal-native wrap/scrollback/search.
+2. **UI plane**: bottom-anchored ephemeral rows, RNK-rendered and width-clipped.
+3. **Single frame planner**: deterministic plan from state + terminal size.
+4. **Single terminal writer**: one place where escape sequences are emitted.
 
-### Out of Scope
+## Core Invariants
 
-- Product-surface feature expansion unrelated to TUI architecture
-- Moving away from `crossterm`
-- Replacing existing provider/agent architecture
-
-## Core Design
-
-### 1) Single Render Authority
-
-All terminal writes must flow through one rendering surface:
-
-- `RenderEngine` owns frame composition
-- Components return typed draw data, not direct terminal writes
-- `RenderEngine` enforces row clipping and ordering
-
-No component may call terminal output APIs directly after migration.
-
-### 2) Deterministic Frame Pipeline
-
-Every frame follows a strict pipeline:
-
-1. Poll input/events
-2. Reduce events into `TuiState` mutations
-3. Build `FrameModel` from state and terminal size
-4. Render `FrameModel` via `RenderEngine`
-5. Commit post-render bookkeeping
-
-This avoids mixed state/read/write ordering bugs.
-
-### 3) Width-Safe Rendering Contract
-
-All rendered rows must satisfy:
-
-- Display width <= `terminal_width - 1`
-- No renderer emits raw unbounded strings
-- Unicode width rules are used for clipping and cursor placement
-
-Central helpers are required for:
-
-- display width measurement
-- clipping/truncation
-- row padding
-- cursor clamping
-
-### 4) State Decomposition
-
-Split `App` responsibilities into explicit domains:
-
-- `InputState`: composer buffer, cursor, scroll, history search
-- `ChatState`: message list, streaming progress, viewport anchors
-- `UiState`: mode, selector/completer state, status/progress model
-- `SessionState`: provider/model/session metadata
-- `RuntimeState`: running/cancel/retry/task lifecycle flags
-
-Use `TuiState` as a composed root object.
-
-### 5) Typed Component APIs
-
-Each component should expose:
-
-- `fn build_model(&TuiState, &UiLayout) -> ComponentModel`
-- `fn render(&ComponentModel, &mut RowBuffer)`
-
-No component should read unrelated global state.
-
-### 6) Chat + Bottom UI Coordination
-
-The chat/scrollback and bottom UI relationship remains hybrid, but formalized:
-
-- Chat insertion strategy is planned from one `ChatPosition` state machine
-- Bottom UI anchor is derived from a single layout computation per frame
-- Reflow is explicit and idempotent for any terminal resize
-
-## Invariants
-
-1. Exactly one layout computation per frame.
+1. Exactly one frame planner per tick.
 2. Exactly one terminal writer per frame.
-3. No unbounded row writes.
-4. Reflow paths and incremental paths share the same clipping helpers.
-5. Component renderers are side-effect free outside their row buffers.
-6. Mode switches cannot bypass clear/repaint sequencing rules.
+3. Chat plane lines are never width-truncated by UI clipping helpers.
+4. UI plane lines are always clipped to `width - 1`.
+5. Resize never triggers full transcript repaint in steady-state.
+6. State mutation and terminal IO are separated (reducer vs runtime executor).
 
-## Performance Targets
+## Target Module Layout
 
-| Metric | Target |
-| --- | --- |
-| Idle frame CPU | < 1.5 ms on M3 Max |
-| Active streaming frame CPU | < 5 ms p95 |
-| Heap allocations per frame (steady-state) | bounded and non-growing |
-| Reflow on resize | no visible corruption, no panic |
+```text
+src/tui/
+  mod.rs
+  run.rs                     # thin entrypoint only
 
-## Correctness Strategy
+  state/
+    mod.rs
+    app.rs                   # TuiState root
+    chat.rs                  # transcript + chat position machine
+    input.rs                 # composer/history-search state
+    ui.rs                    # selector/completer/modal state
+    task.rs                  # running/retry/tokens/cost timing
 
-### Unit-Level
+  update/
+    mod.rs
+    action.rs                # normalized events/intents
+    reducer.rs               # pure state transitions
+    commands.rs              # side effects requested by reducer
 
-- width-clipping/property tests
-- chat position transition tests
-- frame planning tests (given state + size -> expected ops)
+  frame/
+    mod.rs
+    layout.rs                # ui_top + regions
+    planner.rs               # FramePlan (pre-ops, chat ops, ui ops)
+    ops.rs                   # typed render ops
 
-### Integration-Level
+  render/
+    mod.rs
+    engine.rs                # only terminal writer for a frame
+    line.rs                  # StyledLine/TextStyle + width/display helpers
+    rnk_text.rs              # RNK text helpers
 
-- PTY smoke tests for startup, resize, clear, resume, selector, multiline input
-- deterministic regression tests for previously observed corruption cases
+    widgets/
+      mod.rs
+      bottom_ui.rs           # progress/input/status rendering
+      selector.rs
+      popup.rs
+      history_search.rs
 
-### Manual Gate
+    transcript/
+      mod.rs
+      formatter.rs           # message entry -> logical styled lines
+      markdown.rs            # markdown/syntax formatting adapters
 
-- Keep and expand `ai/review/tui-manual-checklist-2026-02.md`
-- Require narrow-width and rapid-resize checks for TUI-touching changes
+  runtime/
+    mod.rs
+    terminal.rs              # raw mode, sync update, cursor, size
+    loop.rs                  # poll/update/plan/render orchestration
 
-## API Ergonomics Rules
+  features/
+    attachments.rs           # moved from tui root (or lift out of tui entirely)
+```
 
-1. Renderer functions accept explicit typed models, not broad `App` references.
-2. Helper names describe rendering constraints (`clip_row`, `pad_row_to_width`, `safe_cursor`).
-3. Shared behavior (popup/list rows/filter prompt) is centralized, not duplicated.
-4. New render paths require tests or checklist updates in the same change.
+## What Changes From Today
+
+### Files to Keep (mostly as-is)
+
+- `composer/*`
+- `render/popup.rs`, `render/selector.rs`, `render/history.rs` (move under `render/widgets/`)
+- `rnk_text.rs` + `terminal.rs` concepts (consolidate into `render/line.rs` + `render/rnk_text.rs`)
+
+### Files to Split or Move
+
+- `run.rs` -> `runtime/loop.rs` + `frame/planner.rs` + `runtime/terminal.rs`
+- `events.rs` + `input.rs` -> `update/reducer.rs` (+ domain-specific helper modules)
+- `chat_renderer.rs` + `highlight/*` -> `render/transcript/*`
+- `render/layout.rs` -> `frame/layout.rs`
+- `render/direct.rs` -> `render/engine.rs`
+- `render_state.rs` -> `state/chat.rs`
+- `app_state.rs` + large pieces of `mod.rs` fields -> `state/*`
+
+### Files to Retire (post-migration)
+
+- `render/direct.rs` (replaced by `render/engine.rs`)
+- spike-era naming and compatibility shims
+- duplicated width helpers spread across render modules
+
+## Chat vs UI Rendering Contract
+
+### Chat Plane
+
+- Accepts logical `StyledLine` records from transcript formatter.
+- Writes with newline append semantics; no UI clipping pass.
+- Allows terminal-native soft-wrap and scrollback behavior.
+- Resize behavior: no transcript repaint in normal operation.
+
+### UI Plane
+
+- Fully recomputed each frame from layout + state.
+- Always row-addressed and row-cleared.
+- Always width-clipped (`width - 1`) to prevent right-edge autowrap drift.
+
+## Resize Semantics (Required)
+
+On terminal resize:
+
+1. Update terminal dimensions in runtime.
+2. Reducer transitions chat position to safe scrolling mode when tracking is invalid.
+3. Recompute layout.
+4. Repaint UI plane only.
+5. Do not append/reprint transcript history.
+
+## Why This Is Idiomatic Rust
+
+- Pure reducer and planner functions are easy to unit test.
+- Side effects are explicit via command enums.
+- Renderer owns IO; domain code does not write to terminal.
+- Strong enums (`Action`, `FrameOp`, `ChatPosition`) replace ad-hoc flags.
 
 ## Migration Plan
 
-| Phase | Outcome |
-| --- | --- |
-| Phase 1 | Render safety primitives and width-safe enforcement everywhere |
-| Phase 2 | App state decomposition and component API boundaries |
-| Phase 3 | Unified frame planner + chat/UI coordination hardening |
-| Phase 4 | Performance + observability budgets and release gates |
+### Phase 1: Structural Cut (no behavior change)
 
-This maps to sprint files `19` through `22`.
+- Introduce `state/`, `update/`, `frame/`, `runtime/`, `render/widgets/`, `render/transcript/`.
+- Move files with minimal edits and keep behavior parity.
+- Remove spike naming.
 
-## Risks
+### Phase 2: Reducer + Planner Isolation
 
-1. Mid-migration mixed render paths can reintroduce ordering bugs.
-2. Over-abstracting renderer traits can reduce velocity.
-3. PTY tests can become brittle if they assert visual details too tightly.
+- Move event branching out of `impl App` methods into reducer/actions.
+- Move pre-op/chat-op math from `run.rs` into `frame/planner.rs`.
 
-## Risk Controls
+### Phase 3: Render Engine Unification
 
-1. Keep each migration step shippable and demoable.
-2. Prefer structural refactors with behavior parity before behavior changes.
-3. Assert invariants at boundaries (debug asserts + targeted tests).
-4. Keep visual tests focused on lifecycle correctness, not pixel snapshots.
+- Replace `draw_direct` scatter with single `render::engine` entry.
+- Enforce chat-plane vs UI-plane write contracts.
 
+### Phase 4: Transcript/Formatting Cleanup
+
+- Split `message_list.rs` into transcript model vs tool-display helpers.
+- Split markdown/diff/syntax formatting into `render/transcript` adapters.
+
+### Phase 5: Hardening
+
+- Add PTY regression tests for resize/multi-monitor movements.
+- Add invariants/assertions for planner transitions.
+
+## Acceptance Criteria
+
+1. No duplicate transcript blocks under repeated resize/monitor moves.
+2. No growth of blank spacer rows caused by resize churn.
+3. No word truncation in chat transcript after resize.
+4. Selector/completer/history-search rows always clear correctly.
+5. `cargo test` + PTY smoke tests pass.
+
+## Explicit Non-Goals
+
+- Reintroducing ratatui.
+- Maintaining dual renderer paths.
+- Keeping legacy compatibility shims once migration commits land.

@@ -21,6 +21,7 @@
 - `tk-add8` progress (2026-02-12): Resize behavior updated to preserve single-copy chat history: removed resize-triggered full transcript reprint; overlap now handled by bounded viewport scroll before bottom UI redraw.
 - `tk-add8` progress (2026-02-12): Shared RNK text-line helper introduced and duplicated per-module RNK render snippets removed; chat `StyledLine` terminal writes now render through RNK spans/text path.
 - `tk-add8` progress (2026-02-13): Resize no longer triggers transcript reprint/reflow; resize now switches to scroll-mode insertion to preserve single-copy scrollback and avoid duplicated transcript blocks.
+- `tk-bcau` progress (2026-02-13): RNK-first `src/tui/` target architecture locked in `ai/design/tui-v3-architecture-2026-02.md` with explicit state/update/frame/render/runtime boundaries and chat-plane vs UI-plane rendering contracts.
 - `tk-add8` progress (2026-02-12): TUI style internals migrated to RNK-native types (`terminal::Color` + `terminal::TextStyle`): removed `crossterm` style primitives from chat renderer, ANSI parser, syntax highlighting, and diff highlighting.
 - `tk-rpst` (`done`, p2): Resize bugfix shipped for duplicate history + prompt-box artifacts after shrinking terminal width/height.
 - `tk-bcau` (`open`, p2): Soft-wrap chat + viewport-separation architecture selected as target regardless of RNK choice.
@@ -42,12 +43,11 @@
 
 ## Next Session
 
-1. Manual smoke with `cargo run -- --continue` on Ghostty (selector/completer/history-search visuals + resize/composer behavior) against RNK-first path, specifically verifying no duplicated transcript blocks during repeated monitor moves/resizes
-2. Record keep/kill decision with evidence against Ghostty/narrow-width regressions
-3. Start `tk-bcau` soft-wrap viewport migration (remove width-coupled reflow path first, then planner transition updates)
-4. If RNK is killed, resume `tk-86lk` + checklist closure on current crossterm path
-5. Continue core agent/API reliability tasks (`tk-oh88`, `tk-ts00`) after TUI direction is decided
-6. Keep `tk-na3u` deferred until MCP usage becomes product-relevant
+1. Execute Phase 1 structural cut from `ai/design/tui-v3-architecture-2026-02.md` (state/update/frame/runtime folders + module moves, no behavior change)
+2. Fix current resize regressions by enforcing chat-plane unbounded writes and UI-plane clipped writes in the new render engine boundary
+3. Add PTY/manual regression coverage for repeated monitor move + resize churn
+4. Continue core agent/API reliability tasks (`tk-oh88`, `tk-ts00`) after TUI architecture stabilization
+5. Keep `tk-na3u` deferred until MCP usage becomes product-relevant
 
 ## Key References
 

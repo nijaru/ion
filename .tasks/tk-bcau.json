@@ -3,7 +3,7 @@
   "ref": "bcau",
   "title": "[ARCH] Soft-wrap chat history + bottom-ui viewport separation",
   "description": "Adopt append-only soft-wrapped chat history to preserve native terminal scrollback/search across resize, while keeping bottom UI as ephemeral region with dynamic ui_top. Remove width-coupled full-history reflow on resize and replace with viewport-state transitions that avoid chat duplication.",
-  "status": "open",
+  "status": "active",
   "priority": 2,
   "labels": [],
   "assignees": [],
@@ -15,10 +15,18 @@
     {
       "ts": "2026-02-12T07:15:10.050Z",
       "msg": "Design locked: append-only soft-wrapped chat history + ephemeral bottom UI, resize should repaint UI plane without full-history reflow. Spec: ai/design/chat-softwrap-scrollback-2026-02.md"
+    },
+    {
+      "ts": "2026-02-13T01:18:21.135Z",
+      "msg": "User requested a full RNK-idiomatic src/tui architecture design (not spike-aligned). Preparing concrete target module layout, state/render boundaries, and migration sequence."
+    },
+    {
+      "ts": "2026-02-13T01:19:23.725Z",
+      "msg": "Published concrete RNK-first target architecture for src/tui in ai/design/tui-v3-architecture-2026-02.md: state/update/frame/render/runtime split, single render engine, chat-plane vs UI-plane contracts, and phased migration plan."
     }
   ],
   "created_at": "2026-02-12T07:14:22.997Z",
-  "updated_at": "2026-02-12T07:15:10.050Z",
+  "updated_at": "2026-02-13T01:19:23.725Z",
   "completed_at": null,
   "external": {}
 }
