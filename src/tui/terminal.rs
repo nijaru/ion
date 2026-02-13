@@ -1,10 +1,71 @@
 //! Styled text primitives for TUI rendering.
 //!
 //! Provides `StyledSpan`, `StyledLine`, and `LineBuilder` for building
-//! styled terminal output using crossterm.
+//! styled terminal output.
 
-use crossterm::style::{Attribute, Color, ContentStyle, StyledContent};
+use crate::tui::rnk_text::render_no_wrap_text_line;
+use crossterm::style::{Attribute, Color, ContentStyle};
+use rnk::components::{Span as RnkSpan, Text};
+use rnk::core::Color as RnkColor;
 use std::io::{self, Write};
+use unicode_width::UnicodeWidthChar;
+
+fn map_color(color: Color) -> RnkColor {
+    match color {
+        Color::Reset => RnkColor::Reset,
+        Color::Black => RnkColor::Black,
+        Color::DarkGrey => RnkColor::BrightBlack,
+        Color::Red => RnkColor::BrightRed,
+        Color::DarkRed => RnkColor::Red,
+        Color::Green => RnkColor::BrightGreen,
+        Color::DarkGreen => RnkColor::Green,
+        Color::Yellow => RnkColor::BrightYellow,
+        Color::DarkYellow => RnkColor::Yellow,
+        Color::Blue => RnkColor::BrightBlue,
+        Color::DarkBlue => RnkColor::Blue,
+        Color::Magenta => RnkColor::BrightMagenta,
+        Color::DarkMagenta => RnkColor::Magenta,
+        Color::Cyan => RnkColor::BrightCyan,
+        Color::DarkCyan => RnkColor::Cyan,
+        Color::White => RnkColor::White,
+        Color::Grey => RnkColor::BrightWhite,
+        Color::Rgb { r, g, b } => RnkColor::Rgb(r, g, b),
+        Color::AnsiValue(v) => RnkColor::Ansi256(v),
+    }
+}
+
+fn display_width(text: &str) -> usize {
+    text.chars().filter_map(UnicodeWidthChar::width).sum()
+}
+
+fn to_rnk_span(span: &StyledSpan) -> RnkSpan {
+    let mut out = RnkSpan::new(span.content.clone());
+    if let Some(color) = span.style.foreground_color {
+        out = out.color(map_color(color));
+    }
+    if let Some(bg) = span.style.background_color {
+        out = out.background(map_color(bg));
+    }
+    if span.style.attributes.has(Attribute::Bold) {
+        out = out.bold();
+    }
+    if span.style.attributes.has(Attribute::Dim) {
+        out = out.dim();
+    }
+    if span.style.attributes.has(Attribute::Italic) {
+        out = out.italic();
+    }
+    if span.style.attributes.has(Attribute::Underlined) {
+        out = out.underline();
+    }
+    if span.style.attributes.has(Attribute::CrossedOut) {
+        out = out.strikethrough();
+    }
+    if span.style.attributes.has(Attribute::Reverse) {
+        out = out.inverse();
+    }
+    out
+}
 
 /// A styled span of text (crossterm equivalent of ratatui Span).
 #[derive(Clone, Debug)]
@@ -97,8 +158,10 @@ impl StyledSpan {
 
     /// Write this span to a writer.
     pub fn write_to<W: Write>(&self, w: &mut W) -> io::Result<()> {
-        let styled = StyledContent::new(self.style, &self.content);
-        write!(w, "{styled}")
+        let span = to_rnk_span(self);
+        let width = display_width(&self.content).max(1);
+        let rendered = render_no_wrap_text_line(Text::spans(vec![span]), width);
+        write!(w, "{rendered}")
     }
 }
 
@@ -144,9 +207,20 @@ impl StyledLine {
 
     /// Write this line to a writer.
     pub fn write_to<W: Write>(&self, w: &mut W) -> io::Result<()> {
-        for span in &self.spans {
-            span.write_to(w)?;
+        if self.spans.is_empty() {
+            return Ok(());
         }
+
+        let mut spans = Vec::with_capacity(self.spans.len());
+        let mut line_width = 0usize;
+
+        for span in &self.spans {
+            line_width += display_width(&span.content);
+            spans.push(to_rnk_span(span));
+        }
+
+        let rendered = render_no_wrap_text_line(Text::spans(spans), line_width.max(1));
+        write!(w, "{rendered}")?;
         Ok(())
     }
 

@@ -4,13 +4,14 @@ use crate::tool::ToolMode;
 use crate::tui::App;
 use crate::tui::composer::{ComposerState, build_visual_lines};
 use crate::tui::render::{CONTINUATION, INPUT_MARGIN, PROMPT, PROMPT_WIDTH};
+use crate::tui::rnk_text::render_truncated_text_line;
 use crate::tui::types::Mode;
 use crate::tui::util::{format_cost, format_elapsed, format_tokens, truncate_to_display_width};
 use crossterm::cursor::MoveTo;
 use crossterm::execute;
 use crossterm::terminal::{Clear, ClearType};
-use rnk::components::{Box as RnkBox, Span, Text};
-use rnk::core::{Color as RnkColor, FlexDirection, TextWrap};
+use rnk::components::{Span, Text};
+use rnk::core::Color as RnkColor;
 use std::io::Write;
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -42,17 +43,7 @@ fn render_rnk_line(
         line = line.dim();
     }
 
-    render_rnk_text_line(line, max_cells)
-}
-
-fn render_rnk_text_line(text: Text, max_cells: usize) -> String {
-    let element = RnkBox::new()
-        .flex_direction(FlexDirection::Row)
-        .width(max_cells as u16)
-        .child(text.wrap(TextWrap::Truncate).into_element())
-        .into_element();
-    let rendered = rnk::render_to_string_no_trim(&element, max_cells as u16);
-    rendered.lines().next().unwrap_or_default().to_string()
+    render_truncated_text_line(line, max_cells)
 }
 
 fn paint_row<W: Write>(
@@ -85,7 +76,7 @@ fn paint_row_spans<W: Write>(
     if max_cells == 0 || spans.is_empty() {
         return Ok(());
     }
-    let rendered = render_rnk_text_line(Text::spans(spans), max_cells);
+    let rendered = render_truncated_text_line(Text::spans(spans), max_cells);
     write!(w, "{rendered}")?;
     Ok(())
 }

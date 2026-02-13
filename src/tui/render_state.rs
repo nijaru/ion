@@ -168,9 +168,9 @@ pub struct RenderState {
 
     /// Flag to clear visible screen (e.g., /clear command).
     pub needs_screen_clear: bool,
-    /// Flag to re-render ion's chat at new width (resize).
-    /// Pushes viewport to scrollback (preserving pre-ion content), then
-    /// reprints all chat lines at the new terminal width.
+    /// Flag to repaint visible ion chat at new width (resize/session load).
+    /// Uses canonical message entries to rebuild viewport lines without
+    /// appending a second full transcript block.
     pub needs_reflow: bool,
     /// Flag to clear selector area without full screen repaint.
     pub needs_selector_clear: bool,

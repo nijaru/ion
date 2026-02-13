@@ -2,29 +2,13 @@
 
 use crate::tui::App;
 use crate::tui::render::popup::{PopupItem, PopupRegion, PopupStyle, render_popup};
+use crate::tui::rnk_text::render_truncated_text_line;
 use crate::tui::util::{display_width, truncate_to_display_width};
 use crossterm::cursor::MoveTo;
 use crossterm::execute;
 use crossterm::terminal::{Clear, ClearType};
-use rnk::components::{Box as RnkBox, Text};
-use rnk::core::{Color as RnkColor, FlexDirection, TextWrap};
-
-fn render_rnk_line(text: &str, max_cells: usize) -> String {
-    if max_cells == 0 {
-        return String::new();
-    }
-    let clipped = truncate_to_display_width(text, max_cells);
-    if clipped.is_empty() {
-        return String::new();
-    }
-    let element = RnkBox::new()
-        .flex_direction(FlexDirection::Row)
-        .width(max_cells as u16)
-        .child(Text::new(clipped).wrap(TextWrap::Truncate).into_element())
-        .into_element();
-    let rendered = rnk::render_to_string_no_trim(&element, max_cells as u16);
-    rendered.lines().next().unwrap_or_default().to_string()
-}
+use rnk::components::Text;
+use rnk::core::Color as RnkColor;
 
 impl App {
     /// Render history search overlay (Ctrl+R).
@@ -66,7 +50,8 @@ impl App {
             let preview_budget = total_width.saturating_sub(display_width(&prompt));
             prompt.push_str(&truncate_to_display_width(preview, preview_budget));
         }
-        let prompt = render_rnk_line(&prompt, total_width);
+        let clipped = truncate_to_display_width(&prompt, total_width);
+        let prompt = render_truncated_text_line(Text::new(clipped), total_width);
         write!(w, "{prompt}")?;
 
         // Render matches above the prompt using shared popup renderer
