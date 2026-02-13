@@ -2,14 +2,46 @@
 
 use crate::tui::App;
 use crate::tui::chat_renderer::ChatRenderer;
-use crate::tui::message_list::Sender;
+use crate::tui::message_list::{MessageEntry, Sender};
+use crate::tui::render_state::StreamingCarryover;
 use crate::tui::terminal::StyledLine;
 use crate::tui::types::Mode;
+use std::path::Path;
+
+fn stable_transcript_end(entries: &[MessageEntry], is_running: bool) -> usize {
+    let mut end = entries.len();
+    if is_running
+        && entries
+            .last()
+            .is_some_and(|entry| entry.sender == Sender::Agent)
+    {
+        end = end.saturating_sub(1);
+    }
+    end
+}
+
+fn build_base_transcript_lines(
+    working_dir: &Path,
+    entries: &[MessageEntry],
+    is_running: bool,
+    wrap_width: usize,
+) -> (Vec<StyledLine>, usize) {
+    if wrap_width == 0 {
+        return (Vec::new(), 0);
+    }
+
+    let mut lines = App::startup_header_lines(working_dir);
+    let end = stable_transcript_end(entries, is_running);
+    if end > 0 {
+        lines.extend(ChatRenderer::build_lines(&entries[..end], None, wrap_width));
+    }
+    (lines, end)
+}
 
 impl App {
     /// Take new chat entries and render them as lines for insertion.
     pub fn take_chat_inserts(&mut self, width: u16) -> Vec<StyledLine> {
-        let wrap_width = width.saturating_sub(2);
+        let wrap_width = width.saturating_sub(2) as usize;
         if wrap_width == 0 {
             return Vec::new();
         }
@@ -18,30 +50,27 @@ impl App {
         if self.render_state.rendered_entries > entry_count {
             self.render_state.rendered_entries = 0;
             self.render_state.buffered_chat_lines.clear();
-            self.render_state.streaming_lines_rendered = 0;
-            self.render_state.streaming_wrap_width = None;
+            self.render_state.streaming_carryover.reset();
         }
 
         let mut new_lines = Vec::new();
         let mut index = self.render_state.rendered_entries;
         while index < entry_count {
             let entry = &self.message_list.entries[index];
-            // Skip the actively streaming agent entry (handled in streaming phase below)
             let is_last = index == entry_count - 1;
             if entry.sender == Sender::Agent && self.is_running && is_last {
                 break;
             }
+
             let entry_lines = ChatRenderer::build_lines(
                 &self.message_list.entries[index..=index],
                 None,
-                wrap_width as usize,
+                wrap_width,
             );
-            // Skip already-committed streaming lines to prevent duplicates
-            // (handles tool-call interruption and agent finish)
-            if entry.sender == Sender::Agent && self.render_state.streaming_lines_rendered > 0 {
-                let skip = self.render_state.streaming_lines_rendered;
-                self.render_state.streaming_lines_rendered = 0;
-                self.render_state.streaming_wrap_width = None;
+
+            if entry.sender == Sender::Agent && !self.render_state.streaming_carryover.is_empty() {
+                let skip = self.render_state.streaming_carryover.committed_lines();
+                self.render_state.streaming_carryover.reset();
                 new_lines.extend(entry_lines.into_iter().skip(skip));
             } else {
                 new_lines.extend(entry_lines);
@@ -59,14 +88,16 @@ impl App {
                 let all_lines = ChatRenderer::build_lines(
                     &self.message_list.entries[index..=index],
                     None,
-                    wrap_width as usize,
+                    wrap_width,
                 );
-                let already = self.render_state.streaming_lines_rendered;
+                let already = self
+                    .render_state
+                    .streaming_carryover
+                    .lines_for_width(wrap_width);
                 let safe = all_lines.len().saturating_sub(2);
                 if safe > already {
                     new_lines.extend(all_lines.into_iter().skip(already).take(safe - already));
-                    self.render_state.streaming_lines_rendered = safe;
-                    self.render_state.streaming_wrap_width = Some(wrap_width as usize);
+                    self.render_state.streaming_carryover.set(safe, wrap_width);
                 }
             }
         }
@@ -92,30 +123,17 @@ impl App {
 
     /// Build chat history lines for a given width.
     pub fn build_chat_lines(&self, width: u16) -> Vec<StyledLine> {
-        let wrap_width = width.saturating_sub(2);
+        let wrap_width = width.saturating_sub(2) as usize;
         if wrap_width == 0 {
             return Vec::new();
         }
 
-        let mut lines = Vec::new();
-        lines.extend(Self::startup_header_lines(&self.session.working_dir));
-
-        let entry_count = self.message_list.entries.len();
-        let mut end = entry_count;
-        if self.is_running
-            && let Some(last) = self.message_list.entries.last()
-            && last.sender == Sender::Agent
-        {
-            end = end.saturating_sub(1);
-        }
-        if end > 0 {
-            lines.extend(ChatRenderer::build_lines(
-                &self.message_list.entries[..end],
-                None,
-                wrap_width as usize,
-            ));
-        }
-
+        let (lines, _rendered_entries) = build_base_transcript_lines(
+            &self.session.working_dir,
+            &self.message_list.entries,
+            self.is_running,
+            wrap_width,
+        );
         lines
     }
 
@@ -127,56 +145,43 @@ impl App {
     pub fn build_chat_lines_for_reflow(
         &self,
         width: u16,
-    ) -> (Vec<StyledLine>, usize, usize, Option<usize>) {
-        let wrap_width = width.saturating_sub(2);
+    ) -> (Vec<StyledLine>, usize, StreamingCarryover) {
+        let wrap_width = width.saturating_sub(2) as usize;
         if wrap_width == 0 {
-            return (Vec::new(), 0, 0, None);
+            return (Vec::new(), 0, StreamingCarryover::default());
         }
 
-        let mut lines = Vec::new();
-        lines.extend(Self::startup_header_lines(&self.session.working_dir));
+        let (mut lines, rendered_entries) = build_base_transcript_lines(
+            &self.session.working_dir,
+            &self.message_list.entries,
+            self.is_running,
+            wrap_width,
+        );
 
-        let entry_count = self.message_list.entries.len();
-        let mut end = entry_count;
-        if self.is_running
-            && let Some(last) = self.message_list.entries.last()
-            && last.sender == Sender::Agent
-        {
-            end = end.saturating_sub(1);
-        }
-
-        if end > 0 {
-            lines.extend(ChatRenderer::build_lines(
-                &self.message_list.entries[..end],
-                None,
-                wrap_width as usize,
-            ));
-        }
-
-        let mut streaming_committed = 0usize;
-        let mut streaming_wrap_width = None;
-        if self.is_running && end < entry_count {
-            let entry = &self.message_list.entries[end];
+        let mut streaming_carryover = StreamingCarryover::default();
+        if self.is_running && rendered_entries < self.message_list.entries.len() {
+            let entry = &self.message_list.entries[rendered_entries];
             if entry.sender == Sender::Agent {
                 let all_lines = ChatRenderer::build_lines(
-                    &self.message_list.entries[end..=end],
+                    &self.message_list.entries[rendered_entries..=rendered_entries],
                     None,
-                    wrap_width as usize,
+                    wrap_width,
                 );
-                streaming_committed = streaming_lines_for_reflow(
-                    wrap_width as usize,
-                    self.render_state.streaming_lines_rendered,
-                    self.render_state.streaming_wrap_width,
-                    all_lines.len(),
-                );
-                if streaming_committed > 0 {
-                    lines.extend(all_lines.into_iter().take(streaming_committed));
-                    streaming_wrap_width = Some(wrap_width as usize);
+                streaming_carryover = self
+                    .render_state
+                    .streaming_carryover
+                    .for_reflow(wrap_width, all_lines.len());
+                if !streaming_carryover.is_empty() {
+                    lines.extend(
+                        all_lines
+                            .into_iter()
+                            .take(streaming_carryover.committed_lines()),
+                    );
                 }
             }
         }
 
-        (lines, end, streaming_committed, streaming_wrap_width)
+        (lines, rendered_entries, streaming_carryover)
     }
 
     /// Reprint full chat history into scrollback (used on session resume).
@@ -186,52 +191,113 @@ impl App {
         w: &mut W,
         width: u16,
     ) -> std::io::Result<usize> {
-        let entry_count = self.message_list.entries.len();
-        let mut end = entry_count;
-        if self.is_running
-            && let Some(last) = self.message_list.entries.last()
-            && last.sender == Sender::Agent
-        {
-            end = end.saturating_sub(1);
-        }
-
         let lines = self.build_chat_lines(width);
         for line in &lines {
             line.writeln_with_width(w, width)?;
         }
 
-        self.render_state.mark_reflow_complete(end);
+        self.render_state
+            .mark_reflow_complete(stable_transcript_end(
+                &self.message_list.entries,
+                self.is_running,
+            ));
 
         Ok(lines.len())
     }
 }
 
-fn streaming_lines_for_reflow(
-    wrap_width: usize,
-    streaming_lines_rendered: usize,
-    streaming_wrap_width: Option<usize>,
-    all_line_count: usize,
-) -> usize {
-    if streaming_wrap_width != Some(wrap_width) {
-        return 0;
-    }
-
-    let safe = all_line_count.saturating_sub(2);
-    streaming_lines_rendered.min(safe)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::streaming_lines_for_reflow;
+    use super::{build_base_transcript_lines, stable_transcript_end};
+    use crate::tui::chat_renderer::ChatRenderer;
+    use crate::tui::message_list::{MessageEntry, Sender};
+    use crate::tui::render_state::StreamingCarryover;
+    use std::path::Path;
 
-    #[test]
-    fn reflow_streaming_lines_reset_on_width_change() {
-        assert_eq!(streaming_lines_for_reflow(78, 6, Some(118), 30), 0);
+    fn line_text(line: &crate::tui::terminal::StyledLine) -> String {
+        line.spans
+            .iter()
+            .map(|s| s.content.as_str())
+            .collect::<String>()
     }
 
     #[test]
-    fn reflow_streaming_lines_capped_by_safe_tail_holdback() {
+    fn stable_transcript_end_omits_active_streaming_agent_entry() {
+        let entries = vec![
+            MessageEntry::new(Sender::User, "u".to_string()),
+            MessageEntry::new(Sender::Agent, "a".to_string()),
+        ];
+        assert_eq!(stable_transcript_end(&entries, true), 1);
+        assert_eq!(stable_transcript_end(&entries, false), 2);
+    }
+
+    #[test]
+    fn base_transcript_lines_render_startup_header_once() {
+        let entries = vec![
+            MessageEntry::new(Sender::User, "hello".to_string()),
+            MessageEntry::new(Sender::Agent, "streaming".to_string()),
+        ];
+        let (lines, end) = build_base_transcript_lines(Path::new("."), &entries, true, 80);
+        assert_eq!(end, 1);
+        let ion_header_count = lines
+            .iter()
+            .filter(|line| line_text(line).starts_with("ion"))
+            .count();
+        assert_eq!(ion_header_count, 1);
+    }
+
+    #[test]
+    fn streaming_carryover_resets_on_width_change_for_reflow() {
+        let mut carryover = StreamingCarryover::default();
+        carryover.set(6, 118);
+        let resized = carryover.for_reflow(78, 30);
+        assert!(resized.is_empty());
+    }
+
+    #[test]
+    fn streaming_carryover_reflow_caps_to_safe_tail_holdback() {
+        let mut carryover = StreamingCarryover::default();
+        carryover.set(12, 78);
         // all_line_count=9 -> safe=7
-        assert_eq!(streaming_lines_for_reflow(78, 12, Some(78), 9), 7);
+        let reflow = carryover.for_reflow(78, 9);
+        assert_eq!(reflow.committed_lines(), 7);
+    }
+
+    #[test]
+    fn resize_reflow_snapshot_keeps_single_header_and_single_transcript_copy() {
+        let entries = vec![
+            MessageEntry::new(Sender::User, "deps".to_string()),
+            MessageEntry::new(
+                Sender::Agent,
+                "This is actively streaming output that will wrap at narrow widths.".to_string(),
+            ),
+        ];
+
+        let wrap_width = 52usize;
+        let (base, end) = build_base_transcript_lines(Path::new("."), &entries, true, wrap_width);
+        assert_eq!(end, 1);
+
+        let mut carryover = StreamingCarryover::default();
+        carryover.set(6, 120);
+        let streaming_lines = ChatRenderer::build_lines(&entries[1..=1], None, wrap_width);
+        let reflow = carryover.for_reflow(wrap_width, streaming_lines.len());
+        assert!(reflow.is_empty());
+
+        let mut snapshot = base.clone();
+        if !reflow.is_empty() {
+            snapshot.extend(streaming_lines.into_iter().take(reflow.committed_lines()));
+        }
+
+        let ion_header_count = snapshot
+            .iter()
+            .filter(|line| line_text(line).starts_with("ion"))
+            .count();
+        let user_prompt_count = snapshot
+            .iter()
+            .filter(|line| line_text(line).starts_with("› "))
+            .count();
+
+        assert_eq!(ion_header_count, 1);
+        assert_eq!(user_prompt_count, 1);
     }
 }
