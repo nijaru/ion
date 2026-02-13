@@ -92,10 +92,10 @@ pub fn render_markdown_with_width(content: &str, width: usize) -> Vec<StyledLine
                             *counter += 1;
                             format!("{indent}{num}. ")
                         } else {
-                            format!("{indent}* ")
+                            format!("{indent}- ")
                         }
                     } else {
-                        format!("{indent}* ")
+                        format!("{indent}- ")
                     };
                     list_prefix = Some(prefix.clone());
                     current_line = LineBuilder::new().raw(prefix);

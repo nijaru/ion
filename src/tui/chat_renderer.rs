@@ -73,8 +73,6 @@ impl ChatRenderer {
                                     if first_line {
                                         line.prepend(StyledSpan::raw("• "));
                                         first_line = false;
-                                    } else {
-                                        line.prepend(StyledSpan::raw("  "));
                                     }
                                     entry_lines.push(line);
                                 }

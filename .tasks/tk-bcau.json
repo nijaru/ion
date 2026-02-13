@@ -35,10 +35,14 @@
     {
       "ts": "2026-02-13T02:12:03.239Z",
       "msg": "Handled resize+streaming duplication path: reflow now includes previously committed streaming lines (safe subset) and preserves streaming_lines_rendered across reflow. Prevents re-emitting already-shown streaming blocks after resize."
+    },
+    {
+      "ts": "2026-02-13T02:13:24.786Z",
+      "msg": "Formatting pass from user feedback: agent multiline rendering no longer prepends non-semantic two-space prefix on every line; markdown unordered list marker normalized to '-' (from '*') with highlight tests updated."
     }
   ],
   "created_at": "2026-02-12T07:14:22.997Z",
-  "updated_at": "2026-02-13T02:12:03.239Z",
+  "updated_at": "2026-02-13T02:13:24.786Z",
   "completed_at": null,
   "external": {}
 }
