@@ -192,10 +192,10 @@ fn test_render_markdown_unordered_list_dash() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    // Unordered lists should use * prefix, not numbers
+    // Unordered lists should use - prefix, not numbers
     assert!(
-        all_text.contains("* Item one"),
-        "Unordered list (dash) should use * prefix, got: {:?}",
+        all_text.contains("- Item one"),
+        "Unordered list (dash) should use - prefix, got: {:?}",
         all_text
     );
     assert!(
@@ -219,10 +219,10 @@ fn test_render_markdown_unordered_list_asterisk() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    // Unordered lists should use * prefix, not numbers
+    // Unordered lists should use - prefix, not numbers
     assert!(
-        all_text.contains("* Item one"),
-        "Unordered list (asterisk) should use * prefix, got: {:?}",
+        all_text.contains("- Item one"),
+        "Unordered list (asterisk) should use - prefix, got: {:?}",
         all_text
     );
     assert!(
@@ -246,10 +246,10 @@ fn test_render_markdown_unordered_list_plus() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    // Unordered lists should use * prefix, not numbers
+    // Unordered lists should use - prefix, not numbers
     assert!(
-        all_text.contains("* Item one"),
-        "Unordered list (plus) should use * prefix, got: {:?}",
+        all_text.contains("- Item one"),
+        "Unordered list (plus) should use - prefix, got: {:?}",
         all_text
     );
     assert!(
@@ -318,15 +318,15 @@ fn test_render_markdown_mixed_lists() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    // Should have both 1. and * prefixes, sub-list should use *
+    // Should have both 1. and - prefixes, sub-list should use -
     assert!(
         all_text.contains("1. First"),
         "Should have ordered prefix, got: {:?}",
         all_text
     );
     assert!(
-        all_text.contains("* Sub one"),
-        "Nested unordered should use *, got: {:?}",
+        all_text.contains("- Sub one"),
+        "Nested unordered should use -, got: {:?}",
         all_text
     );
 }
