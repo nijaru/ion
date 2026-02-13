@@ -116,6 +116,55 @@ impl App {
         lines
     }
 
+    /// Build chat lines for viewport reflow.
+    ///
+    /// Includes previously committed lines from an actively streaming
+    /// agent entry so resize reflow can repaint without re-appending
+    /// those lines on the next incremental frame.
+    pub fn build_chat_lines_for_reflow(&self, width: u16) -> (Vec<StyledLine>, usize, usize) {
+        let wrap_width = width.saturating_sub(2);
+        if wrap_width == 0 {
+            return (Vec::new(), 0, 0);
+        }
+
+        let mut lines = Vec::new();
+        lines.extend(Self::startup_header_lines(&self.session.working_dir));
+
+        let entry_count = self.message_list.entries.len();
+        let mut end = entry_count;
+        if self.is_running
+            && let Some(last) = self.message_list.entries.last()
+            && last.sender == Sender::Agent
+        {
+            end = end.saturating_sub(1);
+        }
+
+        if end > 0 {
+            lines.extend(ChatRenderer::build_lines(
+                &self.message_list.entries[..end],
+                None,
+                wrap_width as usize,
+            ));
+        }
+
+        let mut streaming_committed = 0usize;
+        if self.is_running && end < entry_count {
+            let entry = &self.message_list.entries[end];
+            if entry.sender == Sender::Agent {
+                let all_lines = ChatRenderer::build_lines(
+                    &self.message_list.entries[end..=end],
+                    None,
+                    wrap_width as usize,
+                );
+                let safe = all_lines.len().saturating_sub(2);
+                streaming_committed = self.render_state.streaming_lines_rendered.min(safe);
+                lines.extend(all_lines.into_iter().take(streaming_committed));
+            }
+        }
+
+        (lines, end, streaming_committed)
+    }
+
     /// Reprint full chat history into scrollback (used on session resume).
     /// Returns the number of lines written.
     pub fn reprint_chat_scrollback<W: std::io::Write>(

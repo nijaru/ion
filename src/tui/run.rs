@@ -43,6 +43,8 @@ enum PreOp {
         lines: Vec<StyledLine>,
         total_lines: usize,
         available_rows: u16,
+        rendered_entries: usize,
+        streaming_lines_rendered: usize,
     },
     /// Scroll viewport content up to make room for a taller bottom UI
     /// without reprinting prior chat lines.
@@ -173,6 +175,8 @@ fn apply_pre_ops(
                 lines,
                 total_lines,
                 available_rows,
+                rendered_entries,
+                streaming_lines_rendered,
             } => {
                 execute!(stdout, MoveTo(0, 0), Clear(ClearType::All), MoveTo(0, 0))?;
                 write_lines_at(stdout, 0, lines, term_width)?;
@@ -184,8 +188,8 @@ fn apply_pre_ops(
                 } else {
                     app.render_state.position = ChatPosition::Scrolling { ui_drawn_at: None };
                 }
-                app.render_state
-                    .mark_reflow_complete(rendered_entry_count(app));
+                app.render_state.mark_reflow_complete(*rendered_entries);
+                app.render_state.streaming_lines_rendered = *streaming_lines_rendered;
             }
             PreOp::ScrollViewport { scroll_amount } => {
                 if *scroll_amount > 0 {
@@ -327,7 +331,8 @@ fn prepare_frame(app: &mut App, term_width: u16, term_height: u16) -> FramePrep 
     if app.render_state.needs_reflow {
         app.render_state.needs_reflow = false;
         if !app.message_list.entries.is_empty() || app.render_state.position.header_inserted() {
-            let all_lines = app.build_chat_lines(term_width);
+            let (all_lines, rendered_entries, streaming_lines_rendered) =
+                app.build_chat_lines_for_reflow(term_width);
             let total_lines = all_lines.len();
             let available_rows = term_height.saturating_sub(ui_height);
             let visible_lines = if total_lines > available_rows as usize {
@@ -342,6 +347,8 @@ fn prepare_frame(app: &mut App, term_width: u16, term_height: u16) -> FramePrep 
                 lines: visible_lines,
                 total_lines,
                 available_rows,
+                rendered_entries,
+                streaming_lines_rendered,
             });
             reflow_scheduled = true;
         } else {
