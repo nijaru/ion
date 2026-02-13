@@ -23,10 +23,14 @@
     {
       "ts": "2026-02-13T01:19:23.725Z",
       "msg": "Published concrete RNK-first target architecture for src/tui in ai/design/tui-v3-architecture-2026-02.md: state/update/frame/render/runtime split, single render engine, chat-plane vs UI-plane contracts, and phased migration plan."
+    },
+    {
+      "ts": "2026-02-13T01:49:25.640Z",
+      "msg": "Implemented resize contract pass: Event::Resize now schedules canonical chat reflow; row-addressed repaint path in run.rs no longer writes newlines (write_to_width instead of writeln_with_width), preventing resize-induced blank-line accumulation and transcript duplication while preserving viewport repaint semantics."
     }
   ],
   "created_at": "2026-02-12T07:14:22.997Z",
-  "updated_at": "2026-02-13T01:19:23.725Z",
+  "updated_at": "2026-02-13T01:49:25.640Z",
   "completed_at": null,
   "external": {}
 }
