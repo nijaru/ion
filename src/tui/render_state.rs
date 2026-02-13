@@ -165,6 +165,9 @@ pub struct RenderState {
     /// Lines from the streaming agent entry already committed to scrollback.
     /// Reset when the entry finishes, a tool call interrupts, or reflow occurs.
     pub streaming_lines_rendered: usize,
+    /// Wrap width used when `streaming_lines_rendered` was computed.
+    /// Prevents line-count carryover across width changes.
+    pub streaming_wrap_width: Option<usize>,
 
     /// Flag to clear visible screen (e.g., /clear command).
     pub needs_screen_clear: bool,
@@ -195,6 +198,7 @@ impl RenderState {
             rendered_entries: 0,
             buffered_chat_lines: Vec::new(),
             streaming_lines_rendered: 0,
+            streaming_wrap_width: None,
             needs_screen_clear: false,
             needs_reflow: false,
             needs_selector_clear: false,
@@ -214,6 +218,7 @@ impl RenderState {
         self.rendered_entries = 0;
         self.buffered_chat_lines.clear();
         self.streaming_lines_rendered = 0;
+        self.streaming_wrap_width = None;
         self.last_ui_top = None;
         self.selector_clear_from = None;
         self.last_selector_top = None;
@@ -229,6 +234,7 @@ impl RenderState {
         self.rendered_entries = 0;
         self.buffered_chat_lines.clear();
         self.streaming_lines_rendered = 0;
+        self.streaming_wrap_width = None;
         self.selector_clear_from = None;
         self.last_selector_top = None;
         self.needs_initial_render = true;
@@ -306,6 +312,7 @@ impl RenderState {
         self.rendered_entries = entries;
         self.buffered_chat_lines.clear();
         self.streaming_lines_rendered = 0;
+        self.streaming_wrap_width = None;
     }
 }
 
