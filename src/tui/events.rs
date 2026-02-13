@@ -49,8 +49,9 @@ impl App {
                 }
             }
             Event::FocusGained => {
-                // No-op: terminal size poll handles any resize that
-                // happened while away. Don't disturb position tracking.
+                // Refresh location/branch status in case repository state changed
+                // while focus was away. Don't disturb position tracking.
+                self.refresh_startup_header_cache();
             }
             _ => {}
         }
@@ -512,6 +513,7 @@ impl App {
                 self.session.provider = provider;
                 self.session.no_sandbox = no_sandbox;
                 self.session_cost = 0.0;
+                self.refresh_startup_header_cache();
 
                 self.message_list.clear();
                 self.render_state.reset_for_new_conversation();

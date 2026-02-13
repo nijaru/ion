@@ -264,6 +264,7 @@ impl App {
                 tracing::warn!("Failed to save session: {}", e);
             }
             self.session = updated_session;
+            self.refresh_startup_header_cache();
         }
 
         // Clear expired cancel prompt
@@ -285,8 +286,12 @@ mod tests {
 
     #[test]
     fn retry_status_clears_on_progress_events() {
-        assert!(clears_retry_status(&AgentEvent::ThinkingDelta("...".to_string())));
-        assert!(clears_retry_status(&AgentEvent::TextDelta("ok".to_string())));
+        assert!(clears_retry_status(&AgentEvent::ThinkingDelta(
+            "...".to_string()
+        )));
+        assert!(clears_retry_status(&AgentEvent::TextDelta(
+            "ok".to_string()
+        )));
         assert!(clears_retry_status(&AgentEvent::ToolCallStart(
             "id".to_string(),
             "read".to_string(),
@@ -303,9 +308,7 @@ mod tests {
         assert!(!clears_retry_status(&AgentEvent::Finished(
             "done".to_string()
         )));
-        assert!(!clears_retry_status(&AgentEvent::Error(
-            "boom".to_string()
-        )));
+        assert!(!clears_retry_status(&AgentEvent::Error("boom".to_string())));
     }
 
     #[test]

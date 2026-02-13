@@ -47,7 +47,11 @@ fn apply_stable_agent_carryover(
     if skip == 0 {
         return entry_lines;
     }
-    entry_lines.into_iter().skip(skip).collect()
+    let mut remaining: Vec<StyledLine> = entry_lines.into_iter().skip(skip).collect();
+    if remaining.is_empty() || !remaining.last().is_some_and(StyledLine::is_empty) {
+        remaining.push(StyledLine::empty());
+    }
+    remaining
 }
 
 impl App {
@@ -336,13 +340,30 @@ mod tests {
         ];
 
         let matching = apply_stable_agent_carryover(entry_lines.clone(), &mut carryover, 80);
-        assert_eq!(matching.len(), 1);
+        assert_eq!(matching.len(), 2);
         assert_eq!(line_text(&matching[0]), "line 3");
+        assert!(matching[1].is_empty());
         assert!(carryover.is_empty());
 
         carryover.set(2, 120);
         let mismatched = apply_stable_agent_carryover(entry_lines, &mut carryover, 80);
         assert_eq!(mismatched.len(), 3);
         assert!(carryover.is_empty());
+    }
+
+    #[test]
+    fn stable_agent_carryover_preserves_separator_when_all_lines_were_committed() {
+        let mut carryover = StreamingCarryover::default();
+        carryover.set(4, 80);
+        let entry_lines = vec![
+            crate::tui::terminal::StyledLine::raw("line 1"),
+            crate::tui::terminal::StyledLine::raw("line 2"),
+            crate::tui::terminal::StyledLine::raw("line 3"),
+            crate::tui::terminal::StyledLine::raw("line 4"),
+        ];
+
+        let remaining = apply_stable_agent_carryover(entry_lines, &mut carryover, 80);
+        assert_eq!(remaining.len(), 1);
+        assert!(remaining[0].is_empty());
     }
 }

@@ -18,7 +18,7 @@ pub(crate) fn render_text_line(text: Text, max_cells: usize, wrap: TextWrap) -> 
         .width(width)
         .child(text.wrap(wrap).into_element())
         .into_element();
-    let rendered = rnk::render_to_string_no_trim(&element, width);
+    let rendered = rnk::render_to_string(&element, width);
     rendered.lines().next().unwrap_or_default().to_string()
 }
 
@@ -33,4 +33,15 @@ pub(crate) fn render_truncated_text_line(text: Text, max_cells: usize) -> String
 /// explicit width preserves single-line behavior.
 pub(crate) fn render_no_wrap_text_line(text: Text, max_cells: usize) -> String {
     render_text_line(text, max_cells, TextWrap::Truncate)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn render_text_line_does_not_pad_to_container_width() {
+        let rendered = render_no_wrap_text_line(Text::new("abc"), 20);
+        assert_eq!(rendered, "abc");
+    }
 }
