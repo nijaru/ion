@@ -527,19 +527,27 @@ fn continuation_indent_width(text: &str) -> usize {
     let indent = text.chars().take_while(|c| *c == ' ').count();
     let trimmed = text[indent..].trim_end();
 
+    indent + marker_indent_width(trimmed)
+}
+
+fn marker_indent_width(trimmed: &str) -> usize {
     if trimmed.starts_with("* ")
         || trimmed.starts_with("- ")
         || trimmed.starts_with("+ ")
-        || trimmed.starts_with("• ")
         || trimmed.starts_with("> ")
     {
-        return indent + 2;
+        return 2;
+    }
+
+    if let Some(rest) = trimmed.strip_prefix("• ") {
+        let nested = marker_indent_width(rest);
+        return 2 + nested;
     }
 
     if trimmed.starts_with('#') {
         let hashes = trimmed.chars().take_while(|c| *c == '#').count();
         if trimmed.chars().nth(hashes) == Some(' ') {
-            return indent + hashes + 1;
+            return hashes + 1;
         }
     }
 
@@ -554,11 +562,11 @@ fn continuation_indent_width(text: &str) -> usize {
     if digits > 0 {
         let rest = trimmed.chars().skip(digits).collect::<String>();
         if rest.starts_with(". ") {
-            return indent + digits + 2;
+            return digits + 2;
         }
     }
 
-    indent
+    0
 }
 
 fn wrap_styled_line(line: &StyledLine, width: usize) -> Vec<StyledLine> {
@@ -790,5 +798,25 @@ mod tests {
         let wrapped = wrap_styled_line(&line, 20);
         assert!(wrapped.len() > 1);
         assert!(line_text(&wrapped[1]).starts_with("  "));
+    }
+
+    #[test]
+    fn wrapped_prefixed_markdown_list_keeps_four_space_continuation_indent() {
+        let line = StyledLine::new(vec![StyledSpan::raw(
+            "• - this list item should wrap and align under list content".to_string(),
+        )]);
+        let wrapped = wrap_styled_line(&line, 26);
+        assert!(wrapped.len() > 1);
+        assert!(line_text(&wrapped[1]).starts_with("    "));
+    }
+
+    #[test]
+    fn wrapped_prefixed_ordered_list_keeps_nested_continuation_indent() {
+        let line = StyledLine::new(vec![StyledSpan::raw(
+            "• 10. this ordered list item should also wrap cleanly".to_string(),
+        )]);
+        let wrapped = wrap_styled_line(&line, 24);
+        assert!(wrapped.len() > 1);
+        assert!(line_text(&wrapped[1]).starts_with("      "));
     }
 }
