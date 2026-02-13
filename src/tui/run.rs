@@ -277,6 +277,7 @@ fn prepare_frame(app: &mut App, term_width: u16, term_height: u16) -> FramePrep 
     let mut pre_ops = Vec::new();
     let mut state_changed = false;
     let mut reflow_scheduled = false;
+    let reflow_requested = app.render_state.needs_reflow;
 
     // Consume initial render flag
     if app.render_state.needs_initial_render {
@@ -299,7 +300,7 @@ fn prepare_frame(app: &mut App, term_width: u16, term_height: u16) -> FramePrep 
     } else {
         0
     };
-    if overlap_rows > 0 && !app.message_list.entries.is_empty() {
+    if !reflow_requested && overlap_rows > 0 && !app.message_list.entries.is_empty() {
         pre_ops.push(PreOp::ScrollViewport {
             scroll_amount: overlap_rows,
         });

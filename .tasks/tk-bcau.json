@@ -27,10 +27,14 @@
     {
       "ts": "2026-02-13T01:49:25.640Z",
       "msg": "Implemented resize contract pass: Event::Resize now schedules canonical chat reflow; row-addressed repaint path in run.rs no longer writes newlines (write_to_width instead of writeln_with_width), preventing resize-induced blank-line accumulation and transcript duplication while preserving viewport repaint semantics."
+    },
+    {
+      "ts": "2026-02-13T01:56:51.870Z",
+      "msg": "Patched prepare_frame overlap logic: when resize reflow is already requested, skip ScrollViewport pre-op so resize does not push existing viewport lines into scrollback (observed duplicate startup header blocks)."
     }
   ],
   "created_at": "2026-02-12T07:14:22.997Z",
-  "updated_at": "2026-02-13T01:49:25.640Z",
+  "updated_at": "2026-02-13T01:56:51.870Z",
   "completed_at": null,
   "external": {}
 }
