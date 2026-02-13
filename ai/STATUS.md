@@ -23,6 +23,7 @@
 - `tk-add8` progress (2026-02-13): Resize no longer triggers transcript reprint/reflow; resize now switches to scroll-mode insertion to preserve single-copy scrollback and avoid duplicated transcript blocks.
 - `tk-bcau` progress (2026-02-13): RNK-first `src/tui/` target architecture locked in `ai/design/tui-v3-architecture-2026-02.md` with explicit state/update/frame/render/runtime boundaries and chat-plane vs UI-plane rendering contracts.
 - `tk-bcau` progress (2026-02-13): Resize contract revised and implemented in pipeline: resize now schedules canonical transcript reflow, repaints visible chat viewport in-place (no newline append row writes), and repaints bottom UI; avoids full transcript replay to scrollback.
+- `tk-bcau` progress (2026-02-13): Reflow/overlap ordering bug fixed: when `needs_reflow` is set (resize), overlap `ScrollViewport` pre-op is skipped so resize no longer pushes existing viewport lines into scrollback before in-place repaint (root cause of repeated startup headers).
 - `tk-add8` progress (2026-02-12): TUI style internals migrated to RNK-native types (`terminal::Color` + `terminal::TextStyle`): removed `crossterm` style primitives from chat renderer, ANSI parser, syntax highlighting, and diff highlighting.
 - `tk-rpst` (`done`, p2): Resize bugfix shipped for duplicate history + prompt-box artifacts after shrinking terminal width/height.
 - `tk-bcau` (`open`, p2): Soft-wrap chat + viewport-separation architecture selected as target regardless of RNK choice.
