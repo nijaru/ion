@@ -307,20 +307,6 @@ impl RenderState {
         self.buffered_chat_lines.clear();
         self.streaming_lines_rendered = 0;
     }
-
-    /// On terminal resize, stop row tracking and use scroll-mode insertion.
-    ///
-    /// This avoids row-accounting drift from terminal-native rewrap of
-    /// already printed lines while preserving single-copy scrollback.
-    pub fn enter_scroll_mode_on_resize(&mut self) {
-        self.position = match self.position {
-            ChatPosition::Tracking { .. } | ChatPosition::Scrolling { .. } => {
-                ChatPosition::Scrolling { ui_drawn_at: None }
-            }
-            ChatPosition::Empty => ChatPosition::Empty,
-            ChatPosition::Header { anchor } => ChatPosition::Header { anchor },
-        };
-    }
 }
 
 impl Default for RenderState {
@@ -469,32 +455,6 @@ mod tests {
             ui_drawn_at: Some(8),
         };
         assert_eq!(state.last_ui_top(), Some(8));
-    }
-
-    #[test]
-    fn resize_transitions_tracking_to_scrolling() {
-        let mut state = RenderState::new();
-        state.position = ChatPosition::Tracking {
-            next_row: 12,
-            ui_drawn_at: Some(9),
-        };
-
-        state.enter_scroll_mode_on_resize();
-
-        assert!(matches!(
-            state.position,
-            ChatPosition::Scrolling { ui_drawn_at: None }
-        ));
-    }
-
-    #[test]
-    fn resize_keeps_header_anchor() {
-        let mut state = RenderState::new();
-        state.position = ChatPosition::Header { anchor: 3 };
-
-        state.enter_scroll_mode_on_resize();
-
-        assert!(matches!(state.position, ChatPosition::Header { anchor: 3 }));
     }
 
     #[test]

@@ -41,11 +41,11 @@ impl App {
                     // reflow, which marks reflow complete and clears the buffer.
                     self.render_state.needs_initial_render = true;
                 } else {
-                    // Keep transcript single-copy on resize: do not reprint history.
-                    // Existing lines are already in terminal scrollback; move to
-                    // scroll-mode insertion so future rows don't depend on stale
-                    // pre-resize row tracking.
-                    self.render_state.enter_scroll_mode_on_resize();
+                    // Resize requires width-aware transcript reflow from canonical
+                    // entries so markdown/list indentation remains readable.
+                    // The reflow path repaints only the visible viewport and does
+                    // not append a second transcript block to scrollback.
+                    self.render_state.needs_reflow = true;
                 }
             }
             Event::FocusGained => {
