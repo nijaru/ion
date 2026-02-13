@@ -36,9 +36,15 @@ impl App {
             }
             Event::Resize(_, _) => {
                 self.input_state.invalidate_width();
-                // Repaint viewport chat at the new width to avoid stale soft-wrap
-                // row accounting and bottom-UI overlap artifacts.
-                self.render_state.needs_reflow = true;
+                if self.mode == Mode::Selector {
+                    // While selector is open we buffer incremental chat lines; avoid
+                    // reflow, which marks reflow complete and clears the buffer.
+                    self.render_state.needs_initial_render = true;
+                } else {
+                    // Repaint viewport chat at the new width to avoid stale soft-wrap
+                    // row accounting and bottom-UI overlap artifacts.
+                    self.render_state.needs_reflow = true;
+                }
             }
             Event::FocusGained => {
                 // No-op: terminal size poll handles any resize that

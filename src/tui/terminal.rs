@@ -27,8 +27,8 @@ fn map_color(color: Color) -> RnkColor {
         Color::DarkMagenta => RnkColor::Magenta,
         Color::Cyan => RnkColor::BrightCyan,
         Color::DarkCyan => RnkColor::Cyan,
-        Color::White => RnkColor::White,
-        Color::Grey => RnkColor::BrightWhite,
+        Color::White => RnkColor::BrightWhite,
+        Color::Grey => RnkColor::White,
         Color::Rgb { r, g, b } => RnkColor::Rgb(r, g, b),
         Color::AnsiValue(v) => RnkColor::Ansi256(v),
     }
@@ -363,5 +363,12 @@ mod tests {
             .raw("hello world")
             .build();
         assert_eq!(line.spans.len(), 2);
+    }
+
+    #[test]
+    fn test_color_mapping_white_grey_semantics() {
+        assert_eq!(map_color(Color::White), RnkColor::BrightWhite);
+        assert_eq!(map_color(Color::Grey), RnkColor::White);
+        assert_eq!(map_color(Color::DarkGrey), RnkColor::BrightBlack);
     }
 }
