@@ -103,10 +103,14 @@
     {
       "ts": "2026-02-13T01:49:25.640Z",
       "msg": "Follow-up resize hardening on RNK branch: restored needs_reflow-on-resize for canonical markdown wrap recalculation and split append-vs-row repaint write semantics in run.rs (row paints no longer emit CRLF)."
+    },
+    {
+      "ts": "2026-02-13T20:39:13.407Z",
+      "msg": "2026-02-13: Commit 53976b7 landed: startup header made static (version+cwd), status line now carries cwd+git branch, and RNK line rendering switched from render_to_string_no_trim -> render_to_string to prevent trailing-space padding from corrupting wrap/scrollback during resize/monitor moves. Added regression in src/tui/rnk_text.rs and validated cargo fmt/check/test (472 pass)."
     }
   ],
   "created_at": "2026-02-11T23:32:50.878Z",
-  "updated_at": "2026-02-13T01:49:25.640Z",
+  "updated_at": "2026-02-13T20:39:13.407Z",
   "completed_at": null,
   "external": {}
 }

@@ -39,10 +39,14 @@
     {
       "ts": "2026-02-13T02:13:24.786Z",
       "msg": "Formatting pass from user feedback: agent multiline rendering no longer prepends non-semantic two-space prefix on every line; markdown unordered list marker normalized to '-' (from '*') with highlight tests updated."
+    },
+    {
+      "ts": "2026-02-13T20:39:13.407Z",
+      "msg": "2026-02-13: Streaming finalize path fixed in src/tui/render/chat.rs: apply_stable_agent_carryover now always preserves a trailing separator blank line after committed carryover so adjacent agent messages do not collapse without spacing. Added unit coverage and validated full suite (472 pass)."
     }
   ],
   "created_at": "2026-02-12T07:14:22.997Z",
-  "updated_at": "2026-02-13T02:13:24.786Z",
+  "updated_at": "2026-02-13T20:39:13.407Z",
   "completed_at": null,
   "external": {}
 }
