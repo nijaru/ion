@@ -95,10 +95,14 @@
     {
       "ts": "2026-02-13T01:02:02.488Z",
       "msg": "Completed RNK-native style model migration in TUI internals: replaced ContentStyle/crossterm color usage with terminal::TextStyle + terminal::Color in StyledSpan/StyledLine, chat ANSI parser, syntax highlighting, and diff highlighting. Added chat_renderer ANSI/wrap tests; full suite passing (455)."
+    },
+    {
+      "ts": "2026-02-13T01:10:56.821Z",
+      "msg": "Fixed resize duplication root cause: stop setting needs_reflow on Event::Resize, transition render state to Scrolling on resize, keep transcript single-copy. Added RenderState resize tests and width-bounded chat scrollback write path."
     }
   ],
   "created_at": "2026-02-11T23:32:50.878Z",
-  "updated_at": "2026-02-13T01:02:02.488Z",
+  "updated_at": "2026-02-13T01:10:56.821Z",
   "completed_at": null,
   "external": {}
 }
