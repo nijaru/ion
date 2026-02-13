@@ -2,6 +2,26 @@
 
 > Decision records for ion development. Historical Python-era decisions archived in DECISIONS-archive.md.
 
+## 2026-02-13: Keep Header Static; Move Location to Status Line
+
+**Context**: Dynamic startup header (including git branch lookup/rendering) increased resize/reflow complexity and contributed to visual duplication/noise during monitor/terminal churn.
+
+**Decision**: Keep startup header static (`ion vX` + cwd only). Display dynamic location context (`cwd [branch]`) in the bottom status line instead.
+
+**Rationale**: Separating static transcript header content from dynamic runtime status reduces reflow churn and keeps chat history cleaner while preserving branch visibility where it matters during active interaction.
+
+---
+
+## 2026-02-13: RNK Line Rendering Must Trim Trailing Padding
+
+**Context**: RNK text line rendering used `render_to_string_no_trim`, which preserves right-padding spaces. During resize/reflow this padding leaked into scrollback and caused malformed wraps/indentation artifacts.
+
+**Decision**: Use `rnk::render_to_string` for line rendering helpers in TUI paths so trailing padding is trimmed before writing to terminal scrollback.
+
+**Rationale**: Trimmed output preserves expected terminal wrap semantics and avoids right-edge padding side effects during viewport resize and monitor switches.
+
+---
+
 ## 2026-01-23: Custom Text Entry with Ropey (Supersedes rat-text)
 
 **Context**: rat-text proved problematic in practice - it didn't fit our use cases well and fighting the crate's assumptions was more work than building custom. Similar experience with other text input crates. We need full control over input handling for a terminal coding agent.

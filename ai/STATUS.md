@@ -2,45 +2,31 @@
 
 ## Current State
 
-| Metric    | Value                                                 | Updated    |
-| --------- | ----------------------------------------------------- | ---------- |
-| Phase     | Dogfood readiness (Sprint 16 active)                  | 2026-02-12 |
-| Status    | RNK-first TUI spike active; MCP migration deferred     | 2026-02-12 |
-| Toolchain | stable                                                | 2026-01-22 |
-| Tests     | 455 passing (`cargo test -q`)                         | 2026-02-13 |
-| Clippy    | clean (`cargo clippy -q`)                             | 2026-02-11 |
+| Metric    | Value                                                                                     | Updated    |
+| --------- | ----------------------------------------------------------------------------------------- | ---------- |
+| Phase     | Dogfood readiness (Sprint 16 active)                                                      | 2026-02-13 |
+| Status    | RNK-first TUI refactor in progress; resize/monitor-churn edge cases still under active fix | 2026-02-13 |
+| Toolchain | stable                                                                                    | 2026-01-22 |
+| Tests     | 472 passing (`cargo test -q`)                                                             | 2026-02-13 |
+| Clippy    | passing with existing repo-wide warnings (non-TUI)                                        | 2026-02-13 |
 
 ## Active Focus
 
-- `tk-add8` (`active`): Time-boxed RNK bottom-UI spike on `codex/rnk-bottom-ui-spike` with explicit keep/kill criteria.
-- `tk-add8` progress (2026-02-12): Initial RNK path landed in `9e41163` behind `ION_RNK_BOTTOM_UI=1`. Scope includes progress/input/status rendering only; chat scrollback path unchanged.
-- `tk-add8` progress (2026-02-12): Follow-up RNK fixes restore colored `[READ]/[WRITE]` mode label and reserve a persistent blank spacer row above progress while streaming.
-- `tk-add8` progress (2026-02-12): Direction updated to RNK-first on this branch: collapse env-gated bottom-UI split path and keep one Input-mode renderer path.
-- `tk-add8` progress (2026-02-12): RNK-first collapse landed: Input-mode bottom UI now renders through RNK path only; legacy crossterm bottom-UI modules removed.
-- `tk-add8` progress (2026-02-12): Remaining UI surfaces migrated to RNK primitives (selector + popup/completer + history-search prompt row). UI rendering stack is now RNK-first across active surfaces.
-- `tk-add8` progress (2026-02-12): Resize behavior updated to preserve single-copy chat history: removed resize-triggered full transcript reprint; overlap now handled by bounded viewport scroll before bottom UI redraw.
-- `tk-add8` progress (2026-02-12): Shared RNK text-line helper introduced and duplicated per-module RNK render snippets removed; chat `StyledLine` terminal writes now render through RNK spans/text path.
-- `tk-add8` progress (2026-02-13): Resize no longer triggers transcript reprint/reflow; resize now switches to scroll-mode insertion to preserve single-copy scrollback and avoid duplicated transcript blocks.
-- `tk-bcau` progress (2026-02-13): RNK-first `src/tui/` target architecture locked in `ai/design/tui-v3-architecture-2026-02.md` with explicit state/update/frame/render/runtime boundaries and chat-plane vs UI-plane rendering contracts.
-- `tk-bcau` progress (2026-02-13): Resize contract revised and implemented in pipeline: resize now schedules canonical transcript reflow, repaints visible chat viewport in-place (no newline append row writes), and repaints bottom UI; avoids full transcript replay to scrollback.
-- `tk-bcau` progress (2026-02-13): Reflow/overlap ordering bug fixed: when `needs_reflow` is set (resize), overlap `ScrollViewport` pre-op is skipped so resize no longer pushes existing viewport lines into scrollback before in-place repaint (root cause of repeated startup headers).
-- `tk-bcau` progress (2026-02-13): Message formatting pass from user feedback: removed non-semantic auto-indent on subsequent agent markdown lines and normalized unordered list markers to `-` (tests updated).
-- `tk-bcau` progress (2026-02-13): Follow-up refactor landed: shared transcript assembly extracted, streaming carryover encapsulated (`StreamingCarryover`), and resize/reflow regression coverage added.
-- `tk-bcau` progress (2026-02-13): Deep TUI audit pass landed: fixed width-mismatch carryover edge case for finalized agent entries, disabled overlap-scroll path while in selector mode, and cached startup header lines to avoid repeated git subprocess calls during resize reflow churn.
-- `tk-add8` progress (2026-02-12): TUI style internals migrated to RNK-native types (`terminal::Color` + `terminal::TextStyle`): removed `crossterm` style primitives from chat renderer, ANSI parser, syntax highlighting, and diff highlighting.
-- `tk-rpst` (`done`, p2): Resize bugfix shipped for duplicate history + prompt-box artifacts after shrinking terminal width/height.
-- `tk-bcau` (`open`, p2): Soft-wrap chat + viewport-separation architecture selected as target regardless of RNK choice.
-- `tk-86lk` (`open`, blocked by `tk-add8`): Keep as fallback regression stream if RNK spike is killed.
-- Sprint 16: `ai/sprints/16-dogfood-tui-stability.md`
+- `tk-add8` (`active`, p2): RNK migration stabilization on `codex/rnk-bottom-ui-spike`.
+- `tk-bcau` (`active`, p2): Soft-wrap/viewport separation and deterministic resize/reflow behavior.
+- `tk-86lk` (`open`, p3): Fallback tracker for `--continue`/header/scrollback regressions under resize churn.
 
-## Key Decisions (2026-02-11)
+### Latest Progress (2026-02-13)
 
-- **TUI**: Stay custom crossterm. rnk spike worth trying (bottom UI only, fork-ready). No crate solves inline-chat + bottom-UI pattern.
-- **Providers**: Stay fully custom (~8.9K LOC). Skip genai — custom is justified, genai can't replace cache_control/OAuth/quirks.
-- **MCP**: Defer `rmcp` migration until MCP is part of active workflows; not currently a near-term product blocker.
-- **Architecture target**: Workspace crate split (ion-provider, ion-tool, ion-agent, ion-tui, ion). Design trait boundaries now, split when needed.
-- **Language**: Rust everywhere. Multi-environment (desktop, web) via Tauri/Wasm later.
-- Full analysis: `ai/design/runtime-stack-integration-plan-2026-02.md`
+- Commit `53976b7`: startup header made static (version + cwd only); status line now shows `cwd [branch]`.
+- RNK rendering contract hardened in `src/tui/rnk_text.rs`: switched from `render_to_string_no_trim` to `render_to_string` to avoid trailing-space padding that corrupted wraps/scrollback on resize and monitor moves.
+- Streaming carryover finalize path fixed in `src/tui/render/chat.rs`: separator blank line is always preserved when carryover is applied, preventing adjacent agent messages from collapsing together.
+- Validation complete: `cargo fmt`, `cargo check -q`, `cargo test -q` (472 pass), `cargo clippy -q --all-targets --all-features` (existing non-TUI warnings only).
+
+## Known Issues
+
+- Intermittent duplicate top transcript/header blocks still reproducible during aggressive monitor-switch + resize churn.
+- Some wrapped markdown lines still show malformed indentation/alignment in edge resize sequences.
 
 ## Blockers
 
@@ -48,11 +34,10 @@
 
 ## Next Session
 
-1. Manual smoke on Ghostty/macOS monitor-move + rapid resize churn to verify: no duplicate transcript block, no blank-line accumulation, and no markdown wrap/indent cutoff
-2. Add PTY/manual regression coverage for repeated monitor move + resize churn
-3. Execute Phase 1 structural cut from `ai/design/tui-v3-architecture-2026-02.md` (state/update/frame/runtime folders + module moves, no behavior change)
-4. Continue core agent/API reliability tasks (`tk-oh88`, `tk-ts00`) after TUI architecture stabilization
-5. Keep `tk-na3u` deferred until MCP usage becomes product-relevant
+1. Reproduce monitor-switch + resize churn with deterministic steps and capture exact failing frame transitions in `prepare_frame`/reflow paths.
+2. Audit markdown wrap pipeline for mixed-width continuation indent edge cases and lock formatting invariants with tests.
+3. Add targeted regression coverage for resize+reflow+streaming interactions (especially top-block duplication and indentation drift).
+4. Continue planned `src/tui/` architecture cut from `ai/design/tui-v3-architecture-2026-02.md` once resize stability is verified.
 
 ## Key References
 
@@ -62,8 +47,5 @@
 | Sprint 16               | `ai/sprints/16-dogfood-tui-stability.md`              |
 | Runtime stack plan      | `ai/design/runtime-stack-integration-plan-2026-02.md` |
 | Soft-wrap viewport plan | `ai/design/chat-softwrap-scrollback-2026-02.md`       |
-| TUI crate research      | `ai/research/tui-crates-2026-02.md`                   |
-| Provider crate research | `ai/research/provider-crates-2026-02.md`              |
-| Manual TUI checklist    | `ai/review/tui-manual-checklist-2026-02.md`           |
 | TUI v3 architecture     | `ai/design/tui-v3-architecture-2026-02.md`            |
-| Dogfood readiness       | `ai/design/dogfood-readiness-2026-02.md`              |
+| Manual TUI checklist    | `ai/review/tui-manual-checklist-2026-02.md`           |
