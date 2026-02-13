@@ -73,6 +73,8 @@ impl ChatRenderer {
                                     if first_line {
                                         line.prepend(StyledSpan::raw("• "));
                                         first_line = false;
+                                    } else if !line.is_empty() {
+                                        line.prepend(StyledSpan::raw("  "));
                                     }
                                     entry_lines.push(line);
                                 }
@@ -528,6 +530,7 @@ fn continuation_indent_width(text: &str) -> usize {
     if trimmed.starts_with("* ")
         || trimmed.starts_with("- ")
         || trimmed.starts_with("+ ")
+        || trimmed.starts_with("• ")
         || trimmed.starts_with("> ")
     {
         return indent + 2;
@@ -766,5 +769,26 @@ mod tests {
         );
         assert_eq!(wrapped[0].spans[1].style.foreground_color, Some(Color::Red));
         assert_eq!(wrapped[1].spans[0].style.foreground_color, Some(Color::Red));
+    }
+
+    #[test]
+    fn agent_multiline_lines_get_base_indent_after_prefix() {
+        let entry = crate::tui::message_list::MessageEntry::new(
+            crate::tui::message_list::Sender::Agent,
+            "first line\nsecond line".to_string(),
+        );
+        let lines = ChatRenderer::build_lines(&[entry], None, 80);
+        assert!(line_text(&lines[0]).starts_with("• "));
+        assert!(line_text(&lines[1]).starts_with("  "));
+    }
+
+    #[test]
+    fn wrapped_bullet_line_keeps_two_space_continuation_indent() {
+        let line = StyledLine::new(vec![StyledSpan::raw(
+            "• this line should wrap and keep aligned continuation".to_string(),
+        )]);
+        let wrapped = wrap_styled_line(&line, 20);
+        assert!(wrapped.len() > 1);
+        assert!(line_text(&wrapped[1]).starts_with("  "));
     }
 }

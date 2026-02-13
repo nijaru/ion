@@ -19,6 +19,7 @@ impl App {
             self.render_state.rendered_entries = 0;
             self.render_state.buffered_chat_lines.clear();
             self.render_state.streaming_lines_rendered = 0;
+            self.render_state.streaming_wrap_width = None;
         }
 
         let mut new_lines = Vec::new();
@@ -40,6 +41,7 @@ impl App {
             if entry.sender == Sender::Agent && self.render_state.streaming_lines_rendered > 0 {
                 let skip = self.render_state.streaming_lines_rendered;
                 self.render_state.streaming_lines_rendered = 0;
+                self.render_state.streaming_wrap_width = None;
                 new_lines.extend(entry_lines.into_iter().skip(skip));
             } else {
                 new_lines.extend(entry_lines);
@@ -64,6 +66,7 @@ impl App {
                 if safe > already {
                     new_lines.extend(all_lines.into_iter().skip(already).take(safe - already));
                     self.render_state.streaming_lines_rendered = safe;
+                    self.render_state.streaming_wrap_width = Some(wrap_width as usize);
                 }
             }
         }
@@ -121,10 +124,13 @@ impl App {
     /// Includes previously committed lines from an actively streaming
     /// agent entry so resize reflow can repaint without re-appending
     /// those lines on the next incremental frame.
-    pub fn build_chat_lines_for_reflow(&self, width: u16) -> (Vec<StyledLine>, usize, usize) {
+    pub fn build_chat_lines_for_reflow(
+        &self,
+        width: u16,
+    ) -> (Vec<StyledLine>, usize, usize, Option<usize>) {
         let wrap_width = width.saturating_sub(2);
         if wrap_width == 0 {
-            return (Vec::new(), 0, 0);
+            return (Vec::new(), 0, 0, None);
         }
 
         let mut lines = Vec::new();
@@ -148,6 +154,7 @@ impl App {
         }
 
         let mut streaming_committed = 0usize;
+        let mut streaming_wrap_width = None;
         if self.is_running && end < entry_count {
             let entry = &self.message_list.entries[end];
             if entry.sender == Sender::Agent {
@@ -156,13 +163,20 @@ impl App {
                     None,
                     wrap_width as usize,
                 );
-                let safe = all_lines.len().saturating_sub(2);
-                streaming_committed = self.render_state.streaming_lines_rendered.min(safe);
-                lines.extend(all_lines.into_iter().take(streaming_committed));
+                streaming_committed = streaming_lines_for_reflow(
+                    wrap_width as usize,
+                    self.render_state.streaming_lines_rendered,
+                    self.render_state.streaming_wrap_width,
+                    all_lines.len(),
+                );
+                if streaming_committed > 0 {
+                    lines.extend(all_lines.into_iter().take(streaming_committed));
+                    streaming_wrap_width = Some(wrap_width as usize);
+                }
             }
         }
 
-        (lines, end, streaming_committed)
+        (lines, end, streaming_committed, streaming_wrap_width)
     }
 
     /// Reprint full chat history into scrollback (used on session resume).
@@ -189,5 +203,35 @@ impl App {
         self.render_state.mark_reflow_complete(end);
 
         Ok(lines.len())
+    }
+}
+
+fn streaming_lines_for_reflow(
+    wrap_width: usize,
+    streaming_lines_rendered: usize,
+    streaming_wrap_width: Option<usize>,
+    all_line_count: usize,
+) -> usize {
+    if streaming_wrap_width != Some(wrap_width) {
+        return 0;
+    }
+
+    let safe = all_line_count.saturating_sub(2);
+    streaming_lines_rendered.min(safe)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::streaming_lines_for_reflow;
+
+    #[test]
+    fn reflow_streaming_lines_reset_on_width_change() {
+        assert_eq!(streaming_lines_for_reflow(78, 6, Some(118), 30), 0);
+    }
+
+    #[test]
+    fn reflow_streaming_lines_capped_by_safe_tail_holdback() {
+        // all_line_count=9 -> safe=7
+        assert_eq!(streaming_lines_for_reflow(78, 12, Some(78), 9), 7);
     }
 }
