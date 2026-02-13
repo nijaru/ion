@@ -41,9 +41,11 @@ impl App {
                     // reflow, which marks reflow complete and clears the buffer.
                     self.render_state.needs_initial_render = true;
                 } else {
-                    // Repaint viewport chat at the new width to avoid stale soft-wrap
-                    // row accounting and bottom-UI overlap artifacts.
-                    self.render_state.needs_reflow = true;
+                    // Keep transcript single-copy on resize: do not reprint history.
+                    // Existing lines are already in terminal scrollback; move to
+                    // scroll-mode insertion so future rows don't depend on stale
+                    // pre-resize row tracking.
+                    self.render_state.enter_scroll_mode_on_resize();
                 }
             }
             Event::FocusGained => {

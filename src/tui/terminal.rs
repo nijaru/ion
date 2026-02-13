@@ -279,9 +279,39 @@ impl StyledLine {
         Ok(())
     }
 
+    /// Write this line to a writer, constrained to the terminal width.
+    ///
+    /// Uses one-cell right padding reservation (`width - 1`) to avoid
+    /// accidental terminal autowrap at the far-right edge.
+    pub fn write_to_width<W: Write>(&self, w: &mut W, width: u16) -> io::Result<()> {
+        if self.spans.is_empty() {
+            return Ok(());
+        }
+
+        let max_cells = width.saturating_sub(1) as usize;
+        if max_cells == 0 {
+            return Ok(());
+        }
+
+        let mut spans = Vec::with_capacity(self.spans.len());
+        for span in &self.spans {
+            spans.push(to_rnk_span(span));
+        }
+
+        let rendered = render_no_wrap_text_line(Text::spans(spans), max_cells);
+        write!(w, "{rendered}")?;
+        Ok(())
+    }
+
     /// Write this line to a writer with a trailing `\r\n`.
     pub fn writeln<W: Write>(&self, w: &mut W) -> io::Result<()> {
         self.write_to(w)?;
+        write!(w, "\r\n")
+    }
+
+    /// Width-constrained variant of `writeln`.
+    pub fn writeln_with_width<W: Write>(&self, w: &mut W, width: u16) -> io::Result<()> {
+        self.write_to_width(w, width)?;
         write!(w, "\r\n")
     }
 
