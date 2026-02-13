@@ -10,7 +10,7 @@ use crate::cli::PermissionSettings;
 use crate::tui::App;
 use crate::tui::message_list::{MessageEntry, Sender};
 use crate::tui::render::layout::UiLayout;
-use crate::tui::render_state::ChatPosition;
+use crate::tui::render_state::{ChatPosition, StreamingCarryover};
 use crate::tui::terminal::StyledLine;
 use anyhow::Result;
 use crossterm::{
@@ -44,8 +44,7 @@ enum PreOp {
         total_lines: usize,
         available_rows: u16,
         rendered_entries: usize,
-        streaming_lines_rendered: usize,
-        streaming_wrap_width: Option<usize>,
+        streaming_carryover: StreamingCarryover,
     },
     /// Scroll viewport content up to make room for a taller bottom UI
     /// without reprinting prior chat lines.
@@ -154,6 +153,13 @@ fn clear_header_areas(stdout: &mut io::Stdout, pre_ops: &[PreOp]) -> io::Result<
     Ok(())
 }
 
+fn clear_viewport_rows(stdout: &mut io::Stdout, term_height: u16) -> io::Result<()> {
+    for row in 0..term_height {
+        execute!(stdout, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
+    }
+    execute!(stdout, MoveTo(0, 0))
+}
+
 fn apply_pre_ops(
     stdout: &mut io::Stdout,
     app: &mut App,
@@ -178,13 +184,9 @@ fn apply_pre_ops(
                 total_lines,
                 available_rows,
                 rendered_entries,
-                streaming_lines_rendered,
-                streaming_wrap_width,
+                streaming_carryover,
             } => {
-                for row in 0..term_height {
-                    execute!(stdout, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
-                }
-                execute!(stdout, MoveTo(0, 0))?;
+                clear_viewport_rows(stdout, term_height)?;
                 write_lines_at(stdout, 0, lines, term_width)?;
                 if total_lines <= &(*available_rows as usize) {
                     app.render_state.position = ChatPosition::Tracking {
@@ -195,8 +197,7 @@ fn apply_pre_ops(
                     app.render_state.position = ChatPosition::Scrolling { ui_drawn_at: None };
                 }
                 app.render_state.mark_reflow_complete(*rendered_entries);
-                app.render_state.streaming_lines_rendered = *streaming_lines_rendered;
-                app.render_state.streaming_wrap_width = *streaming_wrap_width;
+                app.render_state.streaming_carryover = *streaming_carryover;
             }
             PreOp::ScrollViewport { scroll_amount } => {
                 if *scroll_amount > 0 {
@@ -338,7 +339,7 @@ fn prepare_frame(app: &mut App, term_width: u16, term_height: u16) -> FramePrep 
     if app.render_state.needs_reflow {
         app.render_state.needs_reflow = false;
         if !app.message_list.entries.is_empty() || app.render_state.position.header_inserted() {
-            let (all_lines, rendered_entries, streaming_lines_rendered, streaming_wrap_width) =
+            let (all_lines, rendered_entries, streaming_carryover) =
                 app.build_chat_lines_for_reflow(term_width);
             let total_lines = all_lines.len();
             let available_rows = term_height.saturating_sub(ui_height);
@@ -355,8 +356,7 @@ fn prepare_frame(app: &mut App, term_width: u16, term_height: u16) -> FramePrep 
                 total_lines,
                 available_rows,
                 rendered_entries,
-                streaming_lines_rendered,
-                streaming_wrap_width,
+                streaming_carryover,
             });
             reflow_scheduled = true;
         } else {

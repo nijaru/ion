@@ -150,6 +150,62 @@ impl ChatPosition {
     }
 }
 
+/// Committed lines from an actively streaming agent message.
+///
+/// The line count is only valid for the width where it was computed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct StreamingCarryover {
+    committed_lines: usize,
+    wrap_width: Option<usize>,
+}
+
+impl StreamingCarryover {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.committed_lines == 0
+    }
+
+    #[must_use]
+    pub fn committed_lines(&self) -> usize {
+        self.committed_lines
+    }
+
+    pub fn set(&mut self, committed_lines: usize, wrap_width: usize) {
+        self.committed_lines = committed_lines;
+        self.wrap_width = Some(wrap_width);
+    }
+
+    pub fn reset(&mut self) {
+        *self = Self::default();
+    }
+
+    #[must_use]
+    pub fn lines_for_width(&self, wrap_width: usize) -> usize {
+        if self.wrap_width == Some(wrap_width) {
+            self.committed_lines
+        } else {
+            0
+        }
+    }
+
+    #[must_use]
+    pub fn for_reflow(&self, wrap_width: usize, all_line_count: usize) -> Self {
+        if self.wrap_width != Some(wrap_width) {
+            return Self::default();
+        }
+        let safe = all_line_count.saturating_sub(2);
+        let committed_lines = self.committed_lines.min(safe);
+        if committed_lines == 0 {
+            Self::default()
+        } else {
+            Self {
+                committed_lines,
+                wrap_width: Some(wrap_width),
+            }
+        }
+    }
+}
+
 /// Manages render state for chat positioning and incremental updates.
 pub struct RenderState {
     /// Position state machine (replaces chat_row, startup_ui_anchor,
@@ -162,12 +218,9 @@ pub struct RenderState {
     /// Buffered chat lines while selector is open.
     pub buffered_chat_lines: Vec<StyledLine>,
 
-    /// Lines from the streaming agent entry already committed to scrollback.
-    /// Reset when the entry finishes, a tool call interrupts, or reflow occurs.
-    pub streaming_lines_rendered: usize,
-    /// Wrap width used when `streaming_lines_rendered` was computed.
-    /// Prevents line-count carryover across width changes.
-    pub streaming_wrap_width: Option<usize>,
+    /// Lines from the actively streaming agent entry that have already been
+    /// committed to scrollback.
+    pub streaming_carryover: StreamingCarryover,
 
     /// Flag to clear visible screen (e.g., /clear command).
     pub needs_screen_clear: bool,
@@ -197,8 +250,7 @@ impl RenderState {
             position: ChatPosition::Empty,
             rendered_entries: 0,
             buffered_chat_lines: Vec::new(),
-            streaming_lines_rendered: 0,
-            streaming_wrap_width: None,
+            streaming_carryover: StreamingCarryover::default(),
             needs_screen_clear: false,
             needs_reflow: false,
             needs_selector_clear: false,
@@ -217,8 +269,7 @@ impl RenderState {
         self.position = ChatPosition::Empty;
         self.rendered_entries = 0;
         self.buffered_chat_lines.clear();
-        self.streaming_lines_rendered = 0;
-        self.streaming_wrap_width = None;
+        self.streaming_carryover.reset();
         self.last_ui_top = None;
         self.selector_clear_from = None;
         self.last_selector_top = None;
@@ -233,8 +284,7 @@ impl RenderState {
     pub fn reset_for_session_load(&mut self) {
         self.rendered_entries = 0;
         self.buffered_chat_lines.clear();
-        self.streaming_lines_rendered = 0;
-        self.streaming_wrap_width = None;
+        self.streaming_carryover.reset();
         self.selector_clear_from = None;
         self.last_selector_top = None;
         self.needs_initial_render = true;
@@ -311,8 +361,7 @@ impl RenderState {
     pub fn mark_reflow_complete(&mut self, entries: usize) {
         self.rendered_entries = entries;
         self.buffered_chat_lines.clear();
-        self.streaming_lines_rendered = 0;
-        self.streaming_wrap_width = None;
+        self.streaming_carryover.reset();
     }
 }
 
@@ -405,7 +454,7 @@ mod tests {
         };
         state.rendered_entries = 7;
         state.buffered_chat_lines.push(StyledLine::raw("buffered"));
-        state.streaming_lines_rendered = 3;
+        state.streaming_carryover.set(3, 80);
         state.selector_clear_from = Some(5);
         state.last_selector_top = Some(9);
         state.needs_initial_render = false;
@@ -421,10 +470,35 @@ mod tests {
         ));
         assert_eq!(state.rendered_entries, 0);
         assert!(state.buffered_chat_lines.is_empty());
-        assert_eq!(state.streaming_lines_rendered, 0);
+        assert!(state.streaming_carryover.is_empty());
         assert_eq!(state.selector_clear_from, None);
         assert_eq!(state.last_selector_top, None);
         assert!(state.needs_initial_render);
+    }
+
+    #[test]
+    fn streaming_carryover_is_width_bound() {
+        let mut carryover = StreamingCarryover::default();
+        carryover.set(5, 90);
+        assert_eq!(carryover.lines_for_width(90), 5);
+        assert_eq!(carryover.lines_for_width(80), 0);
+    }
+
+    #[test]
+    fn streaming_carryover_reflow_caps_to_safe_lines() {
+        let mut carryover = StreamingCarryover::default();
+        carryover.set(9, 100);
+        // all_line_count=8 => safe=6
+        let reflow = carryover.for_reflow(100, 8);
+        assert_eq!(reflow.committed_lines(), 6);
+    }
+
+    #[test]
+    fn streaming_carryover_reflow_resets_on_width_change() {
+        let mut carryover = StreamingCarryover::default();
+        carryover.set(4, 120);
+        let reflow = carryover.for_reflow(90, 10);
+        assert!(reflow.is_empty());
     }
 
     #[test]
