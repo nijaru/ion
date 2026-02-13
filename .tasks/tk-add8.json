@@ -87,10 +87,14 @@
     {
       "ts": "2026-02-13T00:49:33.932Z",
       "msg": "Review follow-up fixes: corrected crossterm->RNK white/grey color mapping (white was too dim, grey too bright) and guarded resize path in selector mode to avoid needs_reflow clearing buffered selector chat lines."
+    },
+    {
+      "ts": "2026-02-13T00:55:13.811Z",
+      "msg": "Removed last direct crossterm style print in TUI cleanup; session footer now writes via StyledLine RNK path."
     }
   ],
   "created_at": "2026-02-11T23:32:50.878Z",
-  "updated_at": "2026-02-13T00:49:33.932Z",
+  "updated_at": "2026-02-13T00:55:13.811Z",
   "completed_at": null,
   "external": {}
 }

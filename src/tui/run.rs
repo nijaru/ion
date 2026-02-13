@@ -670,13 +670,7 @@ fn cleanup_terminal(
         .iter()
         .any(|e| e.sender == Sender::User);
     if has_user_messages {
-        execute!(
-            stdout,
-            crossterm::style::SetAttribute(crossterm::style::Attribute::Dim),
-            crossterm::style::Print(format!("Session: {}", app.session.id)),
-            crossterm::style::SetAttribute(crossterm::style::Attribute::Reset),
-        )?;
-        println!();
+        StyledLine::dim(format!("Session: {}", app.session.id)).writeln(stdout)?;
     }
 
     Ok(())
