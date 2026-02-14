@@ -3,7 +3,7 @@
   "ref": "9e4y",
   "title": "[ARCH] Migrate MCP from mcp-sdk-rs to rmcp",
   "description": "rmcp is the official Rust MCP SDK (modelcontextprotocol org), 3.6M downloads, v0.15.0, typed APIs, streamable HTTP transport. Current mcp-sdk-rs is 'not production ready' with outdated spec. Migration is ~100 lines in src/mcp/mod.rs. See ai/research/rmcp-and-colgrep-crates-2026-02.md",
-  "status": "open",
+  "status": "done",
   "priority": 2,
   "labels": [],
   "assignees": [],
@@ -13,7 +13,7 @@
   "due_date": null,
   "logs": [],
   "created_at": "2026-02-14T07:06:03.870Z",
-  "updated_at": "2026-02-14T07:06:03.870Z",
-  "completed_at": null,
+  "updated_at": "2026-02-14T08:30:26.360Z",
+  "completed_at": "2026-02-14T08:30:26.360Z",
   "external": {}
 }

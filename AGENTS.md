@@ -92,6 +92,7 @@ tk done <id>             # Complete task
 - **Never force push** to main/master
 - **Task tracking**: Use `tk` for all work
 - **Issue tracking**: When user reports bugs/issues, **immediately create a `tk` task**
+- **Versioning**: Staying at 0.0.0 until stable. First release will be 0.0.1. Do not bump version.
 
 ## Bug Investigation
 
