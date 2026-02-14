@@ -474,7 +474,9 @@ impl App {
                 }
             }
             "/cost" => {
-                let msg = if self.session_cost > 0.0 {
+                let msg = if self.api_provider.is_oauth() {
+                    "Subscription provider — no per-token cost".to_string()
+                } else if self.session_cost > 0.0 {
                     let p = &self.model_pricing;
                     let mut parts =
                         vec![format!("Session cost: {}", format_cost(self.session_cost))];

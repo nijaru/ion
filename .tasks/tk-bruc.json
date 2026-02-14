@@ -3,7 +3,7 @@
   "ref": "bruc",
   "title": "[TUI] Hide cost in statusline for subscription providers",
   "description": "Cost/token display shows in the statusline even when using ChatGPT subscription (where cost is meaningless/misleading). Should either hide cost for subscription providers or show a different indicator (e.g. just token count). Providers: ChatGPT, Gemini (subscription).",
-  "status": "open",
+  "status": "active",
   "priority": 3,
   "labels": [],
   "assignees": [],
@@ -13,7 +13,7 @@
   "due_date": null,
   "logs": [],
   "created_at": "2026-02-14T10:53:11.236Z",
-  "updated_at": "2026-02-14T10:53:11.236Z",
+  "updated_at": "2026-02-14T10:58:58.937Z",
   "completed_at": null,
   "external": {}
 }
