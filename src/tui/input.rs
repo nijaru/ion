@@ -1,7 +1,7 @@
 //! Input handling for the TUI composer.
 
-use crate::tui::App;
 use crate::tui::terminal::{StyledLine, StyledSpan};
+use crate::tui::App;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 fn git_output(working_dir: &std::path::Path, args: &[&str]) -> Option<String> {
@@ -81,6 +81,40 @@ impl App {
         Some(branch)
     }
 
+    /// Get git diff stats (insertions, deletions) for a working directory.
+    pub(super) fn git_diff_stat_for(working_dir: &std::path::Path) -> Option<(usize, usize)> {
+        let output = git_output(working_dir, &["diff", "--shortstat"])?;
+        // Format: " 3 files changed, 42 insertions(+), 11 deletions(-)"
+        let mut insertions = 0usize;
+        let mut deletions = 0usize;
+        for part in output.split(", ") {
+            let part = part.trim();
+            if part.contains("insertion") {
+                insertions = part
+                    .split_whitespace()
+                    .next()
+                    .and_then(|n| n.parse().ok())
+                    .unwrap_or(0);
+            } else if part.contains("deletion") {
+                deletions = part
+                    .split_whitespace()
+                    .next()
+                    .and_then(|n| n.parse().ok())
+                    .unwrap_or(0);
+            }
+        }
+        if insertions == 0 && deletions == 0 {
+            return None;
+        }
+        Some((insertions, deletions))
+    }
+
+    /// Refresh cached git state (branch + diff stats).
+    pub(super) fn refresh_git_state(&mut self) {
+        self.git_branch = Self::git_branch_for(&self.session.working_dir);
+        self.git_diff_stat = Self::git_diff_stat_for(&self.session.working_dir);
+    }
+
     /// Return startup header lines if header has not been inserted yet.
     /// The caller (run.rs) is responsible for transitioning position to Header.
     pub fn take_startup_header_lines(&mut self) -> Vec<StyledLine> {
@@ -94,7 +128,7 @@ impl App {
     /// with a different working directory).
     pub(super) fn refresh_startup_header_cache(&mut self) {
         self.startup_header_lines = Self::startup_header_lines(&self.session.working_dir);
-        self.git_branch = Self::git_branch_for(&self.session.working_dir);
+        self.refresh_git_state();
     }
 
     /// Handle a key event for the input composer.

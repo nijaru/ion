@@ -238,6 +238,7 @@ impl App {
             render_state: RenderState::new(),
             startup_header_lines: Self::startup_header_lines(&working_dir),
             git_branch: Self::git_branch_for(&working_dir),
+            git_diff_stat: Self::git_diff_stat_for(&working_dir),
             agent,
             session,
             orchestrator,
