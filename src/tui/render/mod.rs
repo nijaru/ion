@@ -17,14 +17,14 @@ pub(crate) mod selector;
 
 use selector::MAX_VISIBLE_ITEMS;
 
-/// Input prompt prefix " › "
-pub(crate) const PROMPT: &str = " › ";
-/// Continuation line prefix "   "
-pub(crate) const CONTINUATION: &str = "   ";
+/// Input prompt prefix "› "
+pub(crate) const PROMPT: &str = "› ";
+/// Continuation line prefix "  "
+pub(crate) const CONTINUATION: &str = "  ";
 /// Width of prompt/continuation prefix
-pub(crate) const PROMPT_WIDTH: u16 = 3;
+pub(crate) const PROMPT_WIDTH: u16 = 2;
 /// Total input margin (prompt + right padding)
-pub(crate) const INPUT_MARGIN: u16 = 4;
+pub(crate) const INPUT_MARGIN: u16 = 3;
 /// Height of the progress bar area
 pub(crate) const PROGRESS_HEIGHT: u16 = 1;
 /// Selector layout overhead: tabs(1) + desc(1) + search box(3) + hint(1) + list header
