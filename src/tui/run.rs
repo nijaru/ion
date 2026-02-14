@@ -327,14 +327,24 @@ fn prepare_frame(app: &mut App, term_width: u16, term_height: u16) -> FramePrep 
         state_changed = true;
     }
 
-    // Reflow (explicit full redraw: session load and terminal resize)
+    // Reflow: full redraw on session load or terminal resize.
+    // Debounce resize to avoid rendering at intermediate dimensions.
     if app.render_state.needs_reflow {
-        app.render_state.needs_reflow = false;
-        if !app.message_list.entries.is_empty() || app.render_state.position.header_inserted() {
-            pre_ops.push(PreOp::FullRerender);
-            reflow_scheduled = true;
-        } else {
-            app.render_state.position = ChatPosition::Empty;
+        let settled = match app.render_state.last_resize_at {
+            Some(at) => at.elapsed() >= std::time::Duration::from_millis(16),
+            None => true, // non-resize reflow (session load) — render immediately
+        };
+        if settled {
+            app.render_state.needs_reflow = false;
+            app.render_state.last_resize_at = None;
+            if !app.message_list.entries.is_empty()
+                || app.render_state.position.header_inserted()
+            {
+                pre_ops.push(PreOp::FullRerender);
+                reflow_scheduled = true;
+            } else {
+                app.render_state.position = ChatPosition::Empty;
+            }
         }
         state_changed = true;
     }
@@ -799,16 +809,10 @@ pub async fn run(permissions: PermissionSettings, resume_option: ResumeOption) -
                 other => app.handle_event(other),
             }
 
-            // Drain pending events. Use a short timeout after resize events to
-            // catch burst events from monitor switches (Rectangle sends resize
-            // events in waves with small gaps between them).
+            // Drain all immediately available events (zero-wait). Resize
+            // debouncing is handled at the render level in prepare_frame.
             loop {
-                let timeout = if last_resize.is_some() {
-                    std::time::Duration::from_millis(20)
-                } else {
-                    std::time::Duration::ZERO
-                };
-                if !event::poll(timeout)? {
+                if !event::poll(std::time::Duration::ZERO)? {
                     break;
                 }
                 let evt = event::read()?;

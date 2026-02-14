@@ -215,6 +215,9 @@ pub struct RenderState {
 
     /// Force a render on the first frame after session load or /clear.
     pub needs_initial_render: bool,
+    /// When the last resize event was received. Used to debounce reflow —
+    /// we wait until the size has been stable before re-rendering.
+    pub last_resize_at: Option<std::time::Instant>,
 }
 
 impl RenderState {
@@ -232,6 +235,7 @@ impl RenderState {
             selector_clear_from: None,
             last_selector_top: None,
             needs_initial_render: false,
+            last_resize_at: None,
         }
     }
 
