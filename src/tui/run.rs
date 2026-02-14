@@ -44,8 +44,8 @@ enum PreOp {
     /// Scroll viewport content up to make room for a taller bottom UI
     /// without reprinting prior chat lines.
     ScrollViewport { scroll_amount: u16 },
-    /// Clear the area where the selector was.
-    ClearSelectorArea { from_row: u16 },
+    /// Clear selector area and redraw chat lines in the gap.
+    RestoreAfterSelector { from_row: u16 },
     /// Print the startup header.
     PrintHeader(Vec<StyledLine>),
     /// Clear the startup header area (first message arriving).
@@ -191,12 +191,39 @@ fn apply_pre_ops(
                     scroll_up_and_home(stdout, *scroll_amount)?;
                 }
             }
-            PreOp::ClearSelectorArea { from_row } => {
+            PreOp::RestoreAfterSelector { from_row } => {
                 execute!(
                     stdout,
                     MoveTo(0, *from_row),
                     Clear(ClearType::FromCursorDown)
                 )?;
+
+                let all_lines = app.build_chat_lines(term_width);
+                let total = all_lines.len();
+                let ui_height =
+                    app.compute_layout(term_width, term_height).height() as usize;
+                let new_ui_top = (term_height as usize).saturating_sub(ui_height);
+                let from = *from_row as usize;
+
+                if total > 0 && from < new_ui_top {
+                    let offset = total.saturating_sub(new_ui_top);
+                    let line_start = (offset + from).min(total);
+                    let line_end = (offset + new_ui_top).min(total);
+
+                    if line_start < line_end {
+                        execute!(stdout, MoveTo(0, *from_row))?;
+                        for line in &all_lines[line_start..line_end] {
+                            line.writeln_with_width(stdout, term_width)?;
+                        }
+                    }
+                }
+
+                app.render_state.mark_reflow_complete(
+                    crate::tui::render::chat::stable_transcript_end(
+                        &app.message_list.entries,
+                        app.is_running,
+                    ),
+                );
             }
             PreOp::PrintHeader(lines) => {
                 append_lines_clipped(stdout, lines, term_width)?;
@@ -359,7 +386,7 @@ fn prepare_frame(app: &mut App, term_width: u16, term_height: u16) -> FramePrep 
             let fallback = layout.top;
             let from_row = app.render_state.take_selector_clear_from(fallback);
             app.render_state.needs_selector_clear = false;
-            pre_ops.push(PreOp::ClearSelectorArea { from_row });
+            pre_ops.push(PreOp::RestoreAfterSelector { from_row });
             state_changed = true;
         }
     }
@@ -503,7 +530,11 @@ fn render_frame(
     // Clear stale UI rows between old top and current top (e.g., popup dismiss).
     // Must happen BEFORE chat insertion: new chat lines may occupy these rows.
     // draw_direct only clears from its current top down to preserve chat above.
-    if layout.clear_from < layout.top {
+    // Skip when RestoreAfterSelector already redraws the gap rows.
+    let restored_selector = pre_ops
+        .iter()
+        .any(|op| matches!(op, PreOp::RestoreAfterSelector { .. }));
+    if !restored_selector && layout.clear_from < layout.top {
         for row in layout.clear_from..layout.top {
             execute!(stdout, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
         }
