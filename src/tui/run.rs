@@ -799,8 +799,18 @@ pub async fn run(permissions: PermissionSettings, resume_option: ResumeOption) -
                 other => app.handle_event(other),
             }
 
-            // Drain all immediately available events (zero-wait)
-            while event::poll(std::time::Duration::ZERO)? {
+            // Drain pending events. Use a short timeout after resize events to
+            // catch burst events from monitor switches (Rectangle sends resize
+            // events in waves with small gaps between them).
+            loop {
+                let timeout = if last_resize.is_some() {
+                    std::time::Duration::from_millis(20)
+                } else {
+                    std::time::Duration::ZERO
+                };
+                if !event::poll(timeout)? {
+                    break;
+                }
                 let evt = event::read()?;
                 if debug_events {
                     tracing::info!("Event: {:?}", evt);
