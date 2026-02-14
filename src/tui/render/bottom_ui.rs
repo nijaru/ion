@@ -316,12 +316,12 @@ impl App {
             .split('/')
             .next_back()
             .unwrap_or(&self.session.model);
-        let cwd =
-            crate::tui::util::shorten_home_prefix(&self.session.working_dir.display().to_string());
-        let location = match self.git_branch.as_deref() {
-            Some(branch) => format!("{cwd} [{branch}]"),
-            None => cwd,
-        };
+        let project = self
+            .session
+            .working_dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("~");
 
         let (mode_label, mode_color) = match self.tool_mode {
             ToolMode::Read => ("READ", RnkColor::Cyan),
@@ -360,7 +360,12 @@ impl App {
         spans.push(Span::new(format!(" • {}", format_cost(self.session_cost))).dim());
 
         spans.push(Span::new(" • ").dim());
-        spans.push(Span::new(location).dim());
+        spans.push(Span::new(project));
+        if let Some(branch) = self.git_branch.as_deref() {
+            spans.push(Span::new(" [").dim());
+            spans.push(Span::new(branch));
+            spans.push(Span::new("]").dim());
+        }
 
         spans
     }
