@@ -3,7 +3,7 @@
 use crate::provider::error::Error;
 use bytes::Bytes;
 use futures::Stream;
-use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue, RETRY_AFTER};
+use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue, RETRY_AFTER};
 use serde::{Serialize, de::DeserializeOwned};
 use std::time::Duration;
 
@@ -114,13 +114,16 @@ impl HttpClient {
     }
 
     /// Make a POST request for streaming response.
+    ///
+    /// Automatically sets `Accept: text/event-stream` for SSE compatibility.
     pub async fn post_stream<T: Serialize>(
         &self,
         path: &str,
         body: &T,
     ) -> Result<impl Stream<Item = Result<Bytes, reqwest::Error>>, Error> {
         let url = format!("{}{path}", self.base_url);
-        let headers = self.build_headers();
+        let mut headers = self.build_headers();
+        headers.insert(ACCEPT, HeaderValue::from_static("text/event-stream"));
 
         let response = self
             .client

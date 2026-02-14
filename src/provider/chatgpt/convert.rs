@@ -1,252 +1,34 @@
-//! ChatGPT subscription client using Responses API.
+//! Conversion helpers for ChatGPT Responses API.
 
-use crate::provider::error::Error;
-use crate::provider::http::SseParser;
-use crate::provider::types::{
-    ChatRequest, CompletionResponse, ContentBlock, Message, Role, StreamEvent, ToolCallEvent, Usage,
+use super::types::{
+    ParsedEvent, ResponseContent, ResponseInputItem, ResponsesRequest,
 };
-use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
-use serde::Serialize;
+use crate::provider::types::{ChatRequest, ContentBlock, Role, ToolCallEvent};
 use serde_json::Value;
-use std::sync::Arc;
-use tokio::sync::mpsc;
 
-/// ChatGPT Codex backend base URL (matches Codex CLI).
-const CHATGPT_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
-/// Originator header value (match Codex CLI).
-const ORIGINATOR: &str = "codex_cli_rs";
+pub(crate) fn build_request(request: &ChatRequest, stream: bool) -> ResponsesRequest {
+    let (instructions, input) = build_instructions_and_input(request);
+    let tools = build_tools(request);
 
-/// ChatGPT Responses API client.
-pub struct ChatGptResponsesClient {
-    client: reqwest::Client,
-    access_token: String,
-    account_id: Option<String>,
-}
-
-impl ChatGptResponsesClient {
-    /// Create a new ChatGPT Responses client.
-    pub fn new(access_token: impl Into<String>, account_id: Option<String>) -> Self {
-        Self {
-            client: reqwest::Client::new(),
-            access_token: access_token.into(),
-            account_id,
-        }
+    ResponsesRequest {
+        model: request.model.clone(),
+        instructions,
+        input,
+        tools,
+        tool_choice: if request.tools.is_empty() {
+            None
+        } else {
+            Some("auto")
+        },
+        parallel_tool_calls: if request.tools.is_empty() {
+            None
+        } else {
+            Some(true)
+        },
+        store: false,
+        stream,
+        include: vec!["reasoning.encrypted_content".to_string()],
     }
-
-    fn build_headers(&self, accept_sse: bool) -> Result<HeaderMap, Error> {
-        let mut headers = HeaderMap::new();
-        let auth = format!("Bearer {}", self.access_token);
-        let value = HeaderValue::from_str(&auth).map_err(|_| {
-            Error::Api("Invalid access token: contains non-ASCII characters".into())
-        })?;
-        headers.insert(AUTHORIZATION, value);
-        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-        headers.insert(
-            ACCEPT,
-            HeaderValue::from_static(if accept_sse {
-                "text/event-stream"
-            } else {
-                "application/json"
-            }),
-        );
-        headers.insert(
-            HeaderName::from_static("originator"),
-            HeaderValue::from_static(ORIGINATOR),
-        );
-        // Match Codex CLI user-agent format
-        let ua = format!(
-            "{ORIGINATOR}/{} ({} {}; {})",
-            env!("CARGO_PKG_VERSION"),
-            std::env::consts::OS,
-            std::env::consts::ARCH,
-            "ion"
-        );
-        if let Ok(value) = HeaderValue::from_str(&ua) {
-            headers.insert(reqwest::header::USER_AGENT, value);
-        }
-        if let Some(account_id) = self.account_id.as_deref()
-            && let Ok(value) = HeaderValue::from_str(account_id)
-        {
-            headers.insert(HeaderName::from_static("chatgpt-account-id"), value);
-        }
-        Ok(headers)
-    }
-
-    fn build_request(&self, request: &ChatRequest, stream: bool) -> ResponsesRequest {
-        let (instructions, input) = build_instructions_and_input(request);
-        let tools = build_tools(request);
-
-        ResponsesRequest {
-            model: request.model.clone(),
-            instructions,
-            input,
-            tools,
-            tool_choice: if request.tools.is_empty() {
-                None
-            } else {
-                Some("auto")
-            },
-            parallel_tool_calls: if request.tools.is_empty() {
-                None
-            } else {
-                Some(true)
-            },
-            store: false,
-            stream,
-            include: vec!["reasoning.encrypted_content".to_string()],
-        }
-    }
-
-    /// Make a non-streaming responses request.
-    pub async fn complete(&self, request: ChatRequest) -> Result<CompletionResponse, Error> {
-        let body = self.build_request(&request, false);
-        let url = format!("{CHATGPT_BASE_URL}/responses");
-
-        let response = self
-            .client
-            .post(&url)
-            .headers(self.build_headers(false)?)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| Error::Api(format!("Request failed: {e}")))?;
-
-        let status = response.status();
-        let text = response
-            .text()
-            .await
-            .map_err(|e| Error::Api(format!("Failed to read response: {e}")))?;
-
-        if !status.is_success() {
-            return Err(Error::Api(format!("HTTP {status}: {text}")));
-        }
-
-        let value: Value = serde_json::from_str(&text)
-            .map_err(|e| Error::Api(format!("Failed to parse response: {e}\nBody: {text}")))?;
-        let text = extract_output_text(&value);
-        Ok(CompletionResponse {
-            message: Message {
-                role: Role::Assistant,
-                content: Arc::new(vec![ContentBlock::Text { text }]),
-            },
-            usage: Usage::default(),
-        })
-    }
-
-    /// Stream a responses request.
-    pub async fn stream(
-        &self,
-        request: ChatRequest,
-        tx: mpsc::Sender<StreamEvent>,
-    ) -> Result<(), Error> {
-        use futures::StreamExt;
-
-        let body = self.build_request(&request, true);
-        let url = format!("{CHATGPT_BASE_URL}/responses");
-
-        let response = self
-            .client
-            .post(&url)
-            .headers(self.build_headers(true)?)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| Error::Stream(format!("Request failed: {e}")))?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let text = response.text().await.unwrap_or_default();
-            return Err(Error::Stream(format!("HTTP {status}: {text}")));
-        }
-
-        let mut stream = response.bytes_stream();
-        let mut parser = SseParser::new();
-
-        while let Some(chunk_result) = stream.next().await {
-            let chunk = chunk_result.map_err(|e| Error::Stream(format!("Stream error: {e}")))?;
-            let text = String::from_utf8_lossy(&chunk);
-
-            for event in parser.feed(&text) {
-                if event.data.is_empty() {
-                    continue;
-                }
-
-                if let Some(stream_event) =
-                    parse_response_event(&event.data, event.event.as_deref())
-                {
-                    match stream_event {
-                        ParsedEvent::TextDelta(delta) => {
-                            let _ = tx.send(StreamEvent::TextDelta(delta)).await;
-                        }
-                        ParsedEvent::ToolCall(call) => {
-                            let _ = tx.send(StreamEvent::ToolCall(call)).await;
-                        }
-                        ParsedEvent::Done => {
-                            let _ = tx.send(StreamEvent::Done).await;
-                            return Ok(());
-                        }
-                        ParsedEvent::Error(message) => {
-                            return Err(Error::Stream(message));
-                        }
-                    }
-                }
-            }
-        }
-
-        let _ = tx.send(StreamEvent::Done).await;
-        Ok(())
-    }
-}
-
-#[derive(Debug, Serialize)]
-struct ResponsesRequest {
-    model: String,
-    instructions: String,
-    input: Vec<ResponseInputItem>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    tools: Vec<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tool_choice: Option<&'static str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    parallel_tool_calls: Option<bool>,
-    store: bool,
-    stream: bool,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    include: Vec<String>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum ResponseInputItem {
-    Message {
-        role: String,
-        content: Vec<ResponseContent>,
-    },
-    FunctionCall {
-        call_id: String,
-        name: String,
-        arguments: String,
-    },
-    FunctionCallOutput {
-        call_id: String,
-        output: String,
-    },
-}
-
-#[derive(Debug, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum ResponseContent {
-    InputText { text: String },
-    OutputText { text: String },
-    InputImage { image_url: String },
-}
-
-#[derive(Debug)]
-enum ParsedEvent {
-    TextDelta(String),
-    ToolCall(ToolCallEvent),
-    Done,
-    Error(String),
 }
 
 fn build_instructions_and_input(request: &ChatRequest) -> (String, Vec<ResponseInputItem>) {
@@ -372,7 +154,7 @@ fn build_tools(request: &ChatRequest) -> Vec<Value> {
         .collect()
 }
 
-fn parse_response_event(data: &str, event_type: Option<&str>) -> Option<ParsedEvent> {
+pub(crate) fn parse_response_event(data: &str, event_type: Option<&str>) -> Option<ParsedEvent> {
     let value: Value = serde_json::from_str(data).ok()?;
     let event = event_type
         .or_else(|| value.get("type").and_then(Value::as_str))
@@ -410,7 +192,7 @@ fn parse_response_event(data: &str, event_type: Option<&str>) -> Option<ParsedEv
     }
 }
 
-fn extract_output_text(value: &Value) -> String {
+pub(crate) fn extract_output_text(value: &Value) -> String {
     let mut out = String::new();
     let output = value
         .get("output")
@@ -466,6 +248,7 @@ fn extract_tool_call(item: &Value) -> Option<ToolCallEvent> {
 mod tests {
     use super::*;
     use crate::provider::types::{ContentBlock, Message};
+    use std::sync::Arc;
 
     #[test]
     fn builds_input_with_output_text_for_assistant() {
