@@ -1,5 +1,6 @@
 //! Session loading and state restoration.
 
+use crate::compaction::TokenCounter;
 use crate::provider::{ContentBlock, Provider, Role};
 use crate::session::Session;
 use crate::tui::App;
@@ -136,6 +137,14 @@ impl App {
         if let Some(warning) = provider_warning {
             self.message_list
                 .push_entry(MessageEntry::new(Sender::System, warning));
+        }
+
+        // Compute token usage so the status line shows context % immediately.
+        let ctx_window = self.agent.context_window();
+        if ctx_window > 0 {
+            let counter = TokenCounter::new();
+            let used = counter.count_messages(&self.session.messages).total;
+            self.token_usage = Some((used, ctx_window));
         }
 
         Ok(())
