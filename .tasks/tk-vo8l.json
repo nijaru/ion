@@ -3,7 +3,7 @@
   "ref": "vo8l",
   "title": "[EVAL] Evaluate and iterate on system prompt",
   "description": "Review and improve the system prompt for quality, clarity, and effectiveness. Compare with competitive agents (Claude Code, Gemini CLI, opencode). Consider: instruction format, tool descriptions, behavior guidance, tone/personality directives.",
-  "status": "open",
+  "status": "done",
   "priority": 3,
   "labels": [],
   "assignees": [],
@@ -35,10 +35,18 @@
     {
       "ts": "2026-02-14T22:32:41.418Z",
       "msg": "Next iteration: model-specific prompt selection (GPT-5 vs Claude vs Gemini get different instructions), token-based tool output truncation (10k tokens vs current 100KB bytes), no-flattery line, fast-context-understanding pattern. Tie prompt selection into tk-gkrr (Responses API) since GPT-5.x needs the most different prompt."
+    },
+    {
+      "ts": "2026-02-14T22:49:24.003Z",
+      "msg": "Third iteration complete. Added: no-flattery, hard response limit (<4 lines), fast context understanding, no-permission-questions, colon prohibition, no-emoji, file creation restraint, git commit restraint, no-deps, no-placeholder/TODO, security awareness, no-revert. Consolidated git safety (7→5 bullets). Reduced bash truncation from 100KB to 40KB (~10k tokens). Prompt at 468 words — well under competitors (3500-6000). All survey HIGH patterns adopted. Remaining value is in code changes: model-specific prompt selection, richer environment context."
+    },
+    {
+      "ts": "2026-02-14T23:02:47.069Z",
+      "msg": "Third iteration complete. All survey patterns adopted (17 total). Added model-specific prompt hints (GPT-5/Codex: minimize-reasoning, DeepSeek: directness). Added OS/shell to environment context. Reduced bash truncation 100KB→40KB. Model ID threaded through ContextManager.assemble(). Prompt at 468 words, well under competitors. Remaining: expand model hints as we test with more models, token-based (not byte-based) truncation with actual tokenizer."
     }
   ],
   "created_at": "2026-02-14T04:56:19.106Z",
-  "updated_at": "2026-02-14T22:32:41.418Z",
-  "completed_at": null,
+  "updated_at": "2026-02-14T23:02:50.228Z",
+  "completed_at": "2026-02-14T23:02:50.228Z",
   "external": {}
 }
