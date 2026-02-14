@@ -10,7 +10,7 @@ use crate::cli::PermissionSettings;
 use crate::tui::App;
 use crate::tui::message_list::{MessageEntry, Sender};
 use crate::tui::render::layout::UiLayout;
-use crate::tui::render_state::{ChatPosition, StreamingCarryover};
+use crate::tui::render_state::ChatPosition;
 use crate::tui::terminal::StyledLine;
 use crate::tui::types::Mode;
 use anyhow::Result;
@@ -39,14 +39,8 @@ enum PreOp {
         scroll_amount: u16,
         full_clear: bool,
     },
-    /// Repaint visible chat viewport at the current width.
-    Reflow {
-        lines: Vec<StyledLine>,
-        total_lines: usize,
-        available_rows: u16,
-        rendered_entries: usize,
-        streaming_carryover: StreamingCarryover,
-    },
+    /// Clear screen + scrollback and re-render all chat from the data model.
+    FullRerender,
     /// Scroll viewport content up to make room for a taller bottom UI
     /// without reprinting prior chat lines.
     ScrollViewport { scroll_amount: u16 },
@@ -154,13 +148,6 @@ fn clear_header_areas(stdout: &mut io::Stdout, pre_ops: &[PreOp]) -> io::Result<
     Ok(())
 }
 
-fn clear_viewport_rows(stdout: &mut io::Stdout, term_height: u16) -> io::Result<()> {
-    for row in 0..term_height {
-        execute!(stdout, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
-    }
-    execute!(stdout, MoveTo(0, 0))
-}
-
 fn apply_pre_ops(
     stdout: &mut io::Stdout,
     app: &mut App,
@@ -180,25 +167,24 @@ fn apply_pre_ops(
                     scroll_up_and_home(stdout, *scroll_amount)?;
                 }
             }
-            PreOp::Reflow {
-                lines,
-                total_lines,
-                available_rows,
-                rendered_entries,
-                streaming_carryover,
-            } => {
-                clear_viewport_rows(stdout, term_height)?;
-                write_lines_at(stdout, 0, lines, term_width)?;
-                if total_lines <= &(*available_rows as usize) {
+            PreOp::FullRerender => {
+                execute!(
+                    stdout,
+                    Clear(ClearType::All),
+                    Clear(ClearType::Purge),
+                    MoveTo(0, 0)
+                )?;
+                let line_count = app.reprint_chat_scrollback(stdout, term_width)?;
+                let ui_height = app.compute_layout(term_width, term_height).height();
+                let available_rows = term_height.saturating_sub(ui_height);
+                if (line_count as u16) <= available_rows {
                     app.render_state.position = ChatPosition::Tracking {
-                        next_row: *total_lines as u16,
+                        next_row: line_count as u16,
                         ui_drawn_at: None,
                     };
                 } else {
                     app.render_state.position = ChatPosition::Scrolling { ui_drawn_at: None };
                 }
-                app.render_state.mark_reflow_complete(*rendered_entries);
-                app.render_state.streaming_carryover = *streaming_carryover;
             }
             PreOp::ScrollViewport { scroll_amount } => {
                 if *scroll_amount > 0 {
@@ -345,25 +331,7 @@ fn prepare_frame(app: &mut App, term_width: u16, term_height: u16) -> FramePrep 
     if app.render_state.needs_reflow {
         app.render_state.needs_reflow = false;
         if !app.message_list.entries.is_empty() || app.render_state.position.header_inserted() {
-            let (all_lines, rendered_entries, streaming_carryover) =
-                app.build_chat_lines_for_reflow(term_width);
-            let total_lines = all_lines.len();
-            let available_rows = term_height.saturating_sub(ui_height);
-            let visible_lines = if total_lines > available_rows as usize {
-                all_lines
-                    .into_iter()
-                    .skip(total_lines.saturating_sub(available_rows as usize))
-                    .collect()
-            } else {
-                all_lines
-            };
-            pre_ops.push(PreOp::Reflow {
-                lines: visible_lines,
-                total_lines,
-                available_rows,
-                rendered_entries,
-                streaming_carryover,
-            });
+            pre_ops.push(PreOp::FullRerender);
             reflow_scheduled = true;
         } else {
             app.render_state.position = ChatPosition::Empty;
@@ -818,30 +786,50 @@ pub async fn run(permissions: PermissionSettings, resume_option: ResumeOption) -
 
     // Main loop: prepare -> plan -> render
     loop {
-        // 1. POLL
+        // 1. POLL — drain all pending events, collapsing burst resizes
         let had_event = if event::poll(std::time::Duration::from_millis(50))? {
+            let mut last_resize: Option<(u16, u16)> = None;
+
             let evt = event::read()?;
             if debug_events {
                 tracing::info!("Event: {:?}", evt);
             }
-            if let event::Event::Resize(w, h) = evt {
+            match evt {
+                event::Event::Resize(w, h) => last_resize = Some((w, h)),
+                other => app.handle_event(other),
+            }
+
+            // Drain all immediately available events (zero-wait)
+            while event::poll(std::time::Duration::ZERO)? {
+                let evt = event::read()?;
+                if debug_events {
+                    tracing::info!("Event: {:?}", evt);
+                }
+                match evt {
+                    event::Event::Resize(w, h) => last_resize = Some((w, h)),
+                    other => app.handle_event(other),
+                }
+            }
+
+            // Apply only the final resize dimensions
+            if let Some((w, h)) = last_resize {
                 term_width = w;
                 term_height = h;
+                app.handle_event(event::Event::Resize(w, h));
             }
-            app.handle_event(evt);
+
             true
         } else {
+            // Some terminals don't emit Resize on tab switches; re-check size.
+            if let Ok((w, h)) = terminal::size()
+                && (w != term_width || h != term_height)
+            {
+                term_width = w;
+                term_height = h;
+                app.handle_event(event::Event::Resize(w, h));
+            }
             false
         };
-
-        // Some terminals don't emit Resize on tab switches; re-check size each frame.
-        if let Ok((w, h)) = terminal::size()
-            && (w != term_width || h != term_height)
-        {
-            term_width = w;
-            term_height = h;
-            app.handle_event(event::Event::Resize(w, h));
-        }
 
         let was_running = app.is_running;
         app.update();
