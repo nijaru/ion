@@ -194,18 +194,17 @@ pub(crate) fn parse_response_event(data: &str, event_type: Option<&str>) -> Opti
 
 pub(crate) fn extract_output_text(value: &Value) -> String {
     let mut out = String::new();
+    let empty = Vec::new();
     let output = value
         .get("output")
         .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
+        .unwrap_or(&empty);
 
     let items = if output.is_empty() {
         value
             .get("content")
             .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default()
+            .unwrap_or(&empty)
     } else {
         output
     };

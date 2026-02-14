@@ -3,7 +3,7 @@
 //! Uses `cloudcode-pa.googleapis.com` with OAuth authentication borrowed from
 //! the official Gemini CLI.
 //!
-//! **Warning:** Unofficial / unsupported — see subscription module docs.
+//! **Warning:** Unofficial / unsupported API surface.
 
 mod client;
 mod convert;

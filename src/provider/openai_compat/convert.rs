@@ -298,7 +298,7 @@ pub(crate) async fn handle_stream_chunk(
 
         // Check for finish_reason = tool_calls
         if choice.finish_reason.as_deref() == Some("tool_calls") {
-            tools.drain_finished(tx).await;
+            tools.drain_all(tx).await;
         }
     }
 
