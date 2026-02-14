@@ -3,8 +3,8 @@
   "ref": "wr9i",
   "title": "[ARCH] Add genai provider adapter behind feature flag",
   "description": "Implement optional genai-backed provider adapter for API-key providers, preserving ion canonical message/tool model and keeping existing custom provider path for OAuth/OpenRouter quirks until parity is validated.",
-  "status": "open",
-  "priority": 2,
+  "status": "done",
+  "priority": 4,
   "labels": [],
   "assignees": [],
   "parent": null,
@@ -39,10 +39,18 @@
     {
       "ts": "2026-02-14T08:30:40.761Z",
       "msg": "Bumped to p2 per user. Pre-1.0 risk accepted — genai is actively maintained."
+    },
+    {
+      "ts": "2026-02-14T08:41:41.105Z",
+      "msg": "2026-02-14: Deep investigation complete. genai 0.5.3 has showstopper: cannot return text+tool_calls in one response (issue #60). Also missing: OAuth, budget_tokens, cache_control, Responses API. Streaming arch mismatch (pull vs push). Code size comparable (~8.5k vs ~7.3k). Verdict: do not adopt. Demoting back to p4, re-evaluate when genai hits 1.0."
+    },
+    {
+      "ts": "2026-02-14T08:54:52.025Z",
+      "msg": "2026-02-14: Full crate survey (11 crates). Only graniet/llm passes text+tools requirement but low adoption (306 stars), no custom headers, no streaming thinking deltas. Keep custom provider code. Close this task."
     }
   ],
   "created_at": "2026-02-11T23:32:50.940Z",
-  "updated_at": "2026-02-14T08:30:40.761Z",
-  "completed_at": null,
+  "updated_at": "2026-02-14T08:54:52.054Z",
+  "completed_at": "2026-02-14T08:54:52.054Z",
   "external": {}
 }

@@ -1,255 +1,328 @@
 # Rust LLM Provider Crates Survey (2026-02)
 
-**Research Date**: 2026-02-13
+**Research Date**: 2026-02-14 (updated)
 **Purpose**: Evaluate Rust crates for unified multi-provider LLM access with streaming and tool calling
+**Showstopper Requirement**: Text + tool calls in the same response (Anthropic and OpenAI both do this)
 **Requirements**: Streaming (SSE), tool/function calling, multi-provider (Anthropic, OpenAI, Google, etc.), tokio async
+
+---
+
+## Critical Requirement: Text + Tool Calls in Same Response
+
+Both Anthropic and OpenAI models can return text content alongside tool calls in a single response. For example, Claude might say "I'll look that up for you" (text) and simultaneously emit a tool_use block. Any crate that models the response as either text OR tool call (but not both) is disqualified.
+
+**ion's current approach**: `ContentBlock` enum with `Vec<ContentBlock>` per message -- handles this correctly by design.
 
 ---
 
 ## Summary Table
 
-| Crate             | Version             | Downloads (all / 90d) | Providers       | Streaming | Tool Calling        | Last Update | Verdict                          |
-| ----------------- | ------------------- | --------------------- | --------------- | --------- | ------------------- | ----------- | -------------------------------- |
-| **rig-core**      | 0.30.0              | 262k / 119k           | 20+             | Yes       | Yes                 | 2026-02-03  | Most popular, full framework     |
-| **async-openai**  | 0.32.4              | 3.0M / 1.3M           | OpenAI + compat | Yes (SSE) | Yes                 | 2026-01-25  | Dominant for OpenAI protocol     |
-| **genai**         | 0.5.3 (0.6.0-alpha) | 119k / 32k            | 14+ native      | Yes       | Yes (since v0.4.0)  | 2026-02-13  | Best thin multi-provider client  |
-| **llm**           | 1.3.7               | 57k / 10k             | 12+             | Yes       | Yes                 | 2026-01-09  | Batteries-included, CLI + lib    |
-| **misanthropic**  | 0.5.1               | 15k / 177             | Anthropic only  | Yes       | Yes                 | 2024-11-30  | Anthropic-specific, unmaintained |
-| **misanthropy**   | 0.0.8               | 12k / 780             | Anthropic only  | Yes       | Yes                 | 2025-06-08  | Anthropic-specific, semi-active  |
-| **llm-connector** | 0.5.13              | 9k / 1k               | 11+             | Yes       | Yes (OpenAI-compat) | 2026-01-03  | Chinese provider focus           |
-| **multi-llm**     | 1.0.0               | 66 / 66               | 4               | Yes       | Unknown             | 2025-11-28  | Too new, minimal adoption        |
+| Crate              | Version | Downloads (90d) | Text + Tools | Streaming | Thinking | Cache | Custom URL | Verdict                           |
+| ------------------ | ------- | --------------- | ------------ | --------- | -------- | ----- | ---------- | --------------------------------- |
+| **rig-core**       | 0.30.0  | 119k            | YES (v0.28+) | Yes       | Yes      | Yes   | Yes        | Fixed in PR #370, heavy framework |
+| **llm**            | 1.3.7   | 10k             | YES          | Yes       | Yes      | Yes   | Yes        | Best fit for requirements         |
+| **genai**          | 0.5.3   | 32k             | UNKNOWN      | Yes       | Yes      | No    | Yes        | Needs source verification         |
+| **async-openai**   | 0.32.4  | 1.3M            | YES          | Yes       | No       | No    | Yes        | OpenAI-only wire format           |
+| **llm-connector**  | 0.5.13  | 1k              | UNKNOWN      | Yes       | Partial  | No    | Yes        | Low adoption                      |
+| **multi-llm**      | 1.0.0   | 66              | UNKNOWN      | Post-1.0  | No       | Yes   | No         | Too new, no streaming yet         |
+| **langchain-rust** | 5.0.1   | ~2k             | UNKNOWN      | Yes       | No       | No    | Yes        | Port of Python LangChain          |
+| **ai-lib**         | 0.4.0   | ~5k             | UNKNOWN      | Yes       | No       | No    | Yes        | Too new to evaluate               |
 
 ---
 
 ## Detailed Analysis
 
-### 1. rig-core (0xPlaygrounds/rig)
+### 1. llm (graniet/llm) -- BEST FIT
 
-**crates.io**: https://crates.io/crates/rig-core
-**GitHub**: https://github.com/0xPlaygrounds/rig (stars: high, 40+ releases)
-**Install**: `cargo add rig-core`
+**GitHub**: https://github.com/graniet/llm (306 stars, 68 forks, 19 contributors)
+**crates.io**: https://crates.io/crates/llm (57k total, 10k/90d)
+**Last commit**: 2026-02-02
 
-**Providers** (20+): Anthropic, Azure, Cohere, Deepseek, Galadriel, Gemini, Groq, Huggingface, Hyperbolic, Mira, Mistral, Moonshot, Ollama, OpenAI, OpenRouter, Perplexity, Together, Voyage AI, xAI
+#### Text + Tool Calls: YES
 
-**Architecture**: Full agent framework with traits for CompletionModel, streaming, embeddings, vector stores, extractors. Builder pattern for agents. Has `CompletionModel` trait with both `completion()` and `stream()` methods.
+The `ChatResponse` trait has independent methods:
 
-**Streaming**: First-class. `StreamingCompletionResponse` trait. Per-provider SSE parsing.
+```rust
+pub trait ChatResponse: Debug + Display + Send + Sync {
+    fn text(&self) -> Option<String>;
+    fn tool_calls(&self) -> Option<Vec<ToolCall>>;
+    fn thinking(&self) -> Option<String> { None }
+    fn usage(&self) -> Option<Usage> { None }
+}
+```
 
-**Tool calling**: Yes. `Tool` trait with `NAME`, `Args`, `Output`, `Error` associated types. Automatic JSON schema generation via schemars. Tools registered on agents via builder. Multi-turn tool orchestration built in.
+The Anthropic implementation iterates `content` blocks and filters by type -- text blocks go to `text()`, tool_use blocks go to `tool_calls()`, thinking blocks go to `thinking()`. They coexist independently.
 
-**Strengths**:
+#### Streaming: YES
 
-- Most mature ecosystem (vector stores, RAG, extractors)
-- MCP client support (rmcp integration)
-- Strong community, active development
-- Well-documented with guides for writing custom providers
-- WASM support for core library
+Two streaming modes:
 
-**Weaknesses**:
+- `chat_stream()` -> `Stream<Item = Result<String>>` (text-only)
+- `chat_stream_with_tools()` -> `Stream<Item = Result<StreamChunk>>` (structured)
 
-- Heavy framework -- pulls in a lot for "just" multi-provider chat
-- Opinionated abstractions may conflict with custom agent loops
-- 54% doc coverage on docs.rs (improving)
-- Agent-centric design may be overkill if you just want provider abstraction
+`StreamChunk` enum:
 
-**Assessment**: Best choice if building a full agent framework from scratch. Overkill if you already have an agent loop and just need provider abstraction.
+```rust
+pub enum StreamChunk {
+    Text(String),
+    ToolUseStart { index, id, name },
+    ToolUseInputDelta { index, partial_json },
+    ToolUseComplete { index, tool_call },
+    Done { stop_reason },
+}
+```
+
+This maps well to ion's `StreamEvent` enum.
+
+#### Thinking/Reasoning: YES
+
+- `AnthropicConfig.reasoning: bool` + `thinking_budget_tokens: Option<u32>`
+- `ThinkingConfig` struct sent in requests
+- `thinking()` method on `ChatResponse` trait
+- Anthropic thinking example in repo
+- `ReasoningEffort` enum (Low/Medium/High) for OpenAI/DeepSeek
+- Issue #97 tracks Google Gemini thinking token support
+
+#### Cache Control: YES
+
+- `SystemContent::text_with_cache()` for system prompt caching
+- `SystemPrompt::Messages(Vec<SystemContent>)` for structured system prompts with per-segment cache control
+- Anthropic usage tracks `cache_creation_input_tokens` and `cache_read_input_tokens`
+
+#### Custom Base URL: YES
+
+- `LLMBuilder::base_url()` method
+- Explicit `OpenRouter` backend variant
+- `extra_body` field for arbitrary JSON additions to requests
+
+#### Providers (15)
+
+OpenAI, Anthropic, Ollama, DeepSeek, xAI, Phind, Google, Groq, AzureOpenAI, ElevenLabs, Cohere, Mistral, OpenRouter, HuggingFace, AWS Bedrock
+
+Feature-flagged: only compile what you use.
+
+#### Architecture
+
+- Builder pattern for configuration
+- `ChatProvider` trait (chat, chat_with_tools, chat_stream, chat_stream_with_tools)
+- `CompletionProvider` trait
+- `EmbeddingProvider` trait
+- Feature-flagged backends
+- CLI binary (optional, behind `cli` feature)
+- REST API server (optional, behind `api` feature)
+
+#### Weaknesses
+
+- Edition 2021 (not 2024)
+- CLI/API features bring heavy deps (ratatui, crossterm, axum) -- but feature-flagged
+- No `pub(crate)` discipline -- leaks internal types
+- `Box<dyn ChatResponse>` dynamic dispatch (trait object, not static)
+- Name collision with the old `llm` crate (rustformers/llm)
+- ~1084 KB repo size, moderate complexity
+
+#### Code Mapping to ion
+
+| ion Type         | llm Equivalent                |
+| ---------------- | ----------------------------- |
+| `StreamEvent`    | `StreamChunk`                 |
+| `ToolCallEvent`  | `ToolCall`                    |
+| `Usage`          | `Usage`                       |
+| `ContentBlock`   | `AnthropicContent` (internal) |
+| `ChatRequest`    | `LLMBuilder` + messages       |
+| `ThinkingConfig` | `ThinkingConfig` (internal)   |
 
 ---
 
-### 2. async-openai (64bit/async-openai)
+### 2. rig-core (0xPlaygrounds/rig)
 
-**crates.io**: https://crates.io/crates/async-openai
-**GitHub**: https://github.com/64bit/async-openai
-**Install**: `cargo add async-openai`
+**GitHub**: https://github.com/0xPlaygrounds/rig (5.9k stars, 653 forks)
+**crates.io**: https://crates.io/crates/rig-core (234k total, 119k/90d)
+**Last commit**: 2026-02-11
 
-**Providers**: OpenAI natively. Configurable for any OpenAI-compatible API (Azure, Groq, Together, local, etc.) via custom base URL and headers.
+#### Text + Tool Calls: YES (fixed in v0.28+)
 
-**Architecture**: Direct bindings to OpenAI API. Typed request/response structs. `Client<Config>` is generic over config for different endpoints.
+Prior to PR #370 (merged ~2025-03), `ModelChoice` was:
 
-**Streaming**: Yes, full SSE streaming support.
+```rust
+enum ModelChoice {
+    Message(String),
+    ToolCall(String, Value),
+}
+```
 
-**Tool calling**: Yes, via OpenAI's native function/tool calling API. Community crate `openai-func-enums` for macro-based tool definitions.
+This was either/or. Bug #179 reported that only the first tool call was handled.
 
-**Strengths**:
+After PR #370, `CompletionResponse` uses:
 
-- By far the most downloaded Rust LLM crate (3M+ downloads)
-- Battle-tested, production-proven
-- Complete OpenAI API coverage (chat, assistants, audio, images, etc.)
-- Exponential backoff retry built in
-- Microsoft Azure support out of the box
+```rust
+pub struct CompletionResponse<T> {
+    pub choice: OneOrMany<AssistantContent>,
+    pub usage: Usage,
+    pub raw_response: T,
+}
 
-**Weaknesses**:
+pub enum AssistantContent {
+    Text(Text),
+    ToolCall(ToolCall),
+    Reasoning(Reasoning),
+    Image(Image),
+}
+```
 
-- OpenAI protocol only -- no native Anthropic Messages API
-- Need to handle Anthropic's different streaming format separately
-- Not truly multi-provider: Anthropic, Google Gemini need separate crates
+`OneOrMany<AssistantContent>` supports multiple content blocks, so text + tool calls now coexist.
 
-**Assessment**: Gold standard for OpenAI-protocol APIs. Not useful for Anthropic's native Messages API or Google's Gemini API which have different wire formats.
+#### Thinking/Reasoning: YES
+
+`AssistantContent::Reasoning` variant exists.
+
+#### Cache Control: YES
+
+Anthropic integration docs mention prompt caching capabilities.
+
+#### Strengths
+
+- Most popular/downloaded (after async-openai)
+- 20+ providers, 10+ vector stores
+- MCP client integration (rmcp)
+- WASM support
+- Multi-turn reasoning loops with `.multi_turn(n)`
+- Active development
+
+#### Weaknesses
+
+- Heavy framework (4.18 MB source, 34k SLoC)
+- 32.5% documentation coverage
+- Opinionated agent abstractions conflict with custom agent loops
+- 124 open issues
+- Would require adapting ion's agent loop to Rig's patterns
+
+#### Assessment
+
+Rig is the most popular and feature-rich option. The text+tools issue is fixed. However, it is an **agent framework**, not a provider client. Using it in ion would mean either:
+
+1. Replacing ion's agent loop with Rig's (massive rewrite, loss of control)
+2. Using only the provider/model layer and ignoring the agent parts (fighting the framework)
+
+Neither is ideal for ion's architecture.
 
 ---
 
 ### 3. genai (jeremychone/rust-genai)
 
-**crates.io**: https://crates.io/crates/genai
-**GitHub**: https://github.com/jeremychone/rust-genai (621 stars, 618 commits)
-**Install**: `cargo add genai`
+**GitHub**: https://github.com/jeremychone/rust-genai (621 stars)
+**crates.io**: https://crates.io/crates/genai (119k total, 32k/90d)
 
-**Providers** (14+ native): OpenAI, Anthropic, Gemini, xAI, Ollama, Groq, DeepSeek, Cohere, Together, Fireworks, Nebius, Mimo, Zai (Zhipu), BigModel. Custom URL via `ServiceTargetResolver`.
+#### Text + Tool Calls: PREVIOUSLY REJECTED
 
-**Architecture**: Thin adapter layer. `Client` with `exec_chat()` and `exec_chat_stream()`. Each provider has an `Adapter` implementation that maps to/from a common `ChatRequest`/`ChatResponse`. Static dispatch. Minimal dependencies.
+genai was previously rejected for this exact reason. The prior survey notes it as the "best thin multi-provider client" but the user found the text+tools limitation. The response type would need source-level verification to confirm if this was fixed in v0.5.x or the v0.6.0-alpha. Given that it was the showstopper reason for rejection, and the API is still evolving, this remains risky.
 
-**Streaming**: Yes, unified `EventSourceStream` and `WebStream` internally. Print helpers for streaming output.
+#### Assessment
 
-**Tool calling**: YES -- added in v0.4.0, with streaming tool call support. Works across OpenAI, Anthropic, Gemini, Ollama adapters. Recent fixes for Anthropic tool call streaming and parameter-less tool calls. Active PRs for web search/fetch tool support.
-
-**Strengths**:
-
-- Clean, thin abstraction -- does not try to be an agent framework
-- Best provider coverage for a focused chat client
-- Active development (v0.6.0-alpha in progress as of today)
-- 84% docs.rs coverage
-- Reasoning/thinking support for DeepSeek R1, Gemini, Anthropic
-- PDF and image support (multimodal)
-- Small dependency footprint
-
-**Weaknesses**:
-
-- Pre-1.0, API still evolving (0.5.x -> 0.6.0-alpha breaking changes)
-- Tool calling relatively new (v0.4.0, ~mid 2025)
-- No embeddings vector store ecosystem
-- No agent loop, RAG, or orchestration -- just the client
-
-**Assessment**: Best fit for a project like ion that already has its own agent loop, tool system, and streaming infrastructure. Provides exactly the provider abstraction layer without framework overhead.
+Would need to verify `ChatResponse` in v0.5.3+ to see if content blocks support mixed text+tool_use. The thin architecture is appealing but the known limitation may persist.
 
 ---
 
-### 4. llm (graniet/llm)
+### 4. async-openai (64bit/async-openai)
 
-**crates.io**: https://crates.io/crates/llm
-**GitHub**: https://github.com/graniet/llm (stars: moderate, 17+ contributors)
-**Install**: `cargo add llm --features "openai,anthropic,google"`
+**GitHub**: https://github.com/64bit/async-openai (1.8k stars, 342 commits, 92 contributors)
+**crates.io**: https://crates.io/crates/async-openai (3M total, 1.3M/90d)
 
-**Providers** (12+): OpenAI, Anthropic, Ollama, DeepSeek, xAI, Phind, Groq, Google, Cohere, Mistral, Hugging Face, ElevenLabs, OpenRouter, AWS Bedrock
+#### Text + Tool Calls: YES
 
-**Architecture**: Builder pattern (`LLMBuilder`). Feature flags per provider. `ChatProvider` and `CompletionProvider` traits. Includes CLI tool.
+Follows OpenAI's wire format where `choices[].message` has both `content` (text) and `tool_calls` (array) fields independently. They naturally coexist.
 
-**Streaming**: Yes, per-provider streaming examples (OpenAI, Anthropic, xAI, Google).
+#### Limitation
 
-**Tool calling**: Yes. `tool_calling_example` and `unified_tool_calling_example` (multi-turn, multi-provider). Google-specific tool calling example.
-
-**Strengths**:
-
-- Batteries included (CLI, REST API server, multi-step chains, evaluations)
-- Voice support (ElevenLabs, speech-to-text)
-- AWS Bedrock support
-- Feature-flag-based: only compile providers you need
-- Multi-step chain orchestration
-
-**Weaknesses**:
-
-- Name collision with the old `llm` crate for local inference (pre-2025)
-- Batteries-included approach = larger dependency tree
-- Less focused than genai on just being a clean client library
-- Documentation quality varies by provider
-
-**Assessment**: Good all-in-one solution. More than needed for ion's use case, but the unified tool calling across providers is well-tested.
+OpenAI wire format only. No native Anthropic Messages API support. No Gemini API support. Would need separate crates for non-OpenAI providers.
 
 ---
 
-### 5. misanthropic (mdegans/misanthropic)
+### 5. Other Crates Evaluated
 
-**crates.io**: https://crates.io/crates/misanthropic
-**GitHub**: https://github.com/mdegans/misanthropic
-**Install**: `cargo add misanthropic`
+#### vllora_llm (new, Dec 2025)
 
-**Provider**: Anthropic only.
+- Reddit announcement Dec 2025
+- OpenAI, Anthropic, Gemini, AWS Bedrock
+- Too new to evaluate, minimal adoption data
 
-**Features**: Streaming, tool use, prompt caching, image support, markdown/HTML formatting, API key encryption in memory, input sanitization.
+#### saorsa-ai (v0.4.0)
 
-**Strengths**: Ergonomic Anthropic-specific API, security-conscious design.
+- Multi-provider with reqwest + SSE
+- 36 downloads/month -- negligible adoption
+- thiserror v2 (modern)
 
-**Weaknesses**: Last updated November 2024. Anthropic only. Low recent downloads (177/90d). Appears unmaintained.
+#### ai-lib (v0.4.0)
 
-**Assessment**: Not suitable -- single provider, possibly abandoned.
+- "Unified AI SDK" -- 5k total downloads
+- Too new, limited documentation
 
----
+#### langchain-ai-rust (v5.0.1)
 
-### 6. misanthropy (cortesi/misanthropy)
+- Port of Python LangChain
+- 20+ providers, chains, agents, RAG
+- Failed to build on docs.rs -- quality concern
+- Likely too heavy and Python-flavored
 
-**crates.io**: https://crates.io/crates/misanthropy
-**GitHub**: https://github.com/cortesi/misanthropy (35 stars)
-**Install**: `cargo add misanthropy`
+#### llm-kit-provider (v0.1.2)
 
-**Provider**: Anthropic only.
-
-**Features**: Streaming, tool usage via schemars JSON schema, extended thinking, CLI tool.
-
-**Strengths**: Clean strongly-typed tool interface with schemars.
-
-**Weaknesses**: v0.0.8, last updated June 2025. Anthropic only.
-
-**Assessment**: Not suitable -- single provider, early stage.
+- 12 providers, agents, storage
+- 36 downloads/month
+- Too new, negligible adoption
 
 ---
 
-### 7. llm-connector (lipish/llm-connector)
+## Recommendation
 
-**crates.io**: https://crates.io/crates/llm-connector
-**GitHub**: https://github.com/lipish/llm-connector
-**Install**: `cargo add llm-connector`
+### For ion specifically: Keep custom provider code
 
-**Providers** (11+): OpenAI, Anthropic, Google, Aliyun, Zhipu, Ollama, Tencent, Volcengine, LongCat, Moonshot, DeepSeek
+The ~9000 lines in `src/provider/` are well-structured and handle:
 
-**Architecture**: Protocol/Provider separation. Clean type-safe interface.
+- Text + tool calls in same response (via `ContentBlock` enum in `Vec`)
+- Streaming with `StreamEvent` enum (TextDelta, ThinkingDelta, ToolCall, Usage, Done, Error)
+- Thinking/extended thinking with budget_tokens
+- Cache control (Anthropic)
+- Provider quirks (`openai_compat/quirks.rs`)
+- Model registry with capability metadata
 
-**Streaming**: Yes, unified streaming with automatic tool_calls deduplication.
+No external crate matches this exact feature set without either:
 
-**Tool calling**: Yes, OpenAI-compatible function calling. Streaming tool calls supported.
+1. Being too much framework (rig-core)
+2. Missing the text+tools requirement (genai, historically)
+3. Missing key providers (async-openai)
+4. Being too immature (multi-llm, vllora_llm, ai-lib)
 
-**Strengths**: Strong Chinese cloud provider coverage. Clean protocol abstraction.
+### If adopting an external crate
 
-**Weaknesses**: Low adoption (9k downloads, 1k/90d). Many rapid-fire releases (50+ versions). Primarily Chinese provider ecosystem focus.
+**First choice: `llm` (graniet/llm)** -- the only crate that:
 
-**Assessment**: Interesting architecture but low adoption. Chinese provider coverage is unique but not needed for ion.
+- Passes all requirements (text+tools, streaming, thinking, cache)
+- Has a clean trait-based architecture (`ChatResponse`, `ChatProvider`)
+- Feature-flags providers (compile only what you need)
+- Maps well to ion's existing types (`StreamChunk` ≈ `StreamEvent`)
+- Does NOT impose an agent framework
 
----
+**Migration cost**: Moderate. Would replace `src/provider/` (~9k lines) with llm dependency + thin adapter layer (~500 lines) mapping llm types to ion types.
 
-## Recommendation for ion
+**Risk**: Edition 2021, `Box<dyn ChatResponse>` dynamic dispatch, and the repo shows moderate but not heavy activity (last commit 2 weeks ago). Feature completeness is good but polish is uneven.
 
-ion already has a custom provider system (`src/provider/`) with:
-
-- Anthropic native client (`anthropic/`)
-- OpenAI-compatible client (`openai_compat/`) handling OpenAI, Google, Groq, Kimi, Ollama, OpenRouter
-- Custom SSE streaming (`http/sse.rs`)
-- Custom tool calling integration
-- Provider registry with model discovery
-
-**The custom approach is the right one for ion.** Here is why:
-
-1. **No crate covers all needs cleanly.** genai is closest but still pre-1.0 with evolving APIs. rig-core is too heavy a framework.
-
-2. **ion's streaming needs are specific.** The TUI requires direct control over SSE chunk handling for incremental markdown rendering. Generic streaming abstractions add a translation layer.
-
-3. **Tool calling formats differ per provider.** ion already handles Anthropic's `tool_use`/`tool_result` blocks and OpenAI's `tool_calls` array natively. A unified crate would need the same provider-specific code underneath.
-
-4. **Provider quirks need direct handling.** The `openai_compat/quirks.rs` module exists for a reason -- each "OpenAI-compatible" provider has subtle differences.
-
-**If reconsidering in the future**, genai (v0.6+ stable) would be the strongest candidate for replacing the provider layer, as it provides the same thin-adapter architecture ion uses without framework overhead.
+**Second choice: `rig-core`** -- only if willing to adopt its agent framework patterns more broadly. The text+tools issue is now fixed and it is the most actively maintained option.
 
 ---
 
 ## Sources
 
+- https://github.com/graniet/llm (source code reviewed for ChatResponse, StreamChunk, AnthropicConfig)
+- https://github.com/0xPlaygrounds/rig (PR #370, issue #179, CompletionResponse)
+- https://docs.rs/rig-core/latest/rig/completion/
+- https://crates.io/crates/llm
 - https://crates.io/crates/rig-core
 - https://crates.io/crates/async-openai
 - https://crates.io/crates/genai
-- https://crates.io/crates/llm
-- https://crates.io/crates/misanthropic
-- https://crates.io/crates/misanthropy
 - https://crates.io/crates/llm-connector
 - https://crates.io/crates/multi-llm
-- https://github.com/0xPlaygrounds/rig
-- https://github.com/64bit/async-openai
-- https://github.com/jeremychone/rust-genai
-- https://github.com/graniet/llm
-- https://docs.rig.rs/
+- https://crates.io/crates/ai-lib
+- https://crates.io/crates/langchain-ai-rust
+- https://crates.io/crates/llm-kit-provider
+- https://crates.io/crates/saorsa-ai
+- https://docs.rig.rs/docs/concepts/completion
+- https://docs.rig.rs/docs/integrations/model_providers/anthropic

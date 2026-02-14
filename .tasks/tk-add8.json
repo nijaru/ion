@@ -3,7 +3,7 @@
   "ref": "add8",
   "title": "[ARCH] RNK migration spike for TUI stability",
   "description": "Time-boxed RNK spike on branch codex/rnk-bottom-ui-spike. Scope: bottom UI only (input/progress/status); keep chat history insertion + scrollback behavior on current custom crossterm path. Compare resize/autowrap/scrollback behavior against current baseline and apply kill criteria if RNK regressions match/exceed baseline or require taking over chat semantics.",
-  "status": "active",
+  "status": "done",
   "priority": 2,
   "labels": [],
   "assignees": [],
@@ -107,10 +107,14 @@
     {
       "ts": "2026-02-13T20:39:13.407Z",
       "msg": "2026-02-13: Commit 53976b7 landed: startup header made static (version+cwd), status line now carries cwd+git branch, and RNK line rendering switched from render_to_string_no_trim -> render_to_string to prevent trailing-space padding from corrupting wrap/scrollback during resize/monitor moves. Added regression in src/tui/rnk_text.rs and validated cargo fmt/check/test (472 pass)."
+    },
+    {
+      "ts": "2026-02-14T08:57:28.592Z",
+      "msg": "2026-02-14: RNK is fully merged into main. Spike branch gone. Rendering migrated across bottom-UI, selectors, popups, chat. Closing as complete."
     }
   ],
   "created_at": "2026-02-11T23:32:50.878Z",
-  "updated_at": "2026-02-13T20:39:13.407Z",
-  "completed_at": null,
+  "updated_at": "2026-02-14T08:57:28.592Z",
+  "completed_at": "2026-02-14T08:57:28.566Z",
   "external": {}
 }
