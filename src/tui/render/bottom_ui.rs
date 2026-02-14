@@ -1,12 +1,11 @@
 //! RNK-backed renderer for the bottom UI area.
 
 use crate::tool::ToolMode;
-use crate::tui::App;
-use crate::tui::composer::{ComposerState, build_visual_lines};
+use crate::tui::composer::{build_visual_lines, ComposerState};
 use crate::tui::render::{CONTINUATION, INPUT_MARGIN, PROMPT, PROMPT_WIDTH};
 use crate::tui::rnk_text::render_truncated_text_line;
-use crate::tui::types::Mode;
 use crate::tui::util::{format_cost, format_elapsed, format_tokens, truncate_to_display_width};
+use crate::tui::App;
 use crossterm::cursor::MoveTo;
 use crossterm::execute;
 use crossterm::terminal::{Clear, ClearType};
@@ -93,7 +92,7 @@ fn paint_row_spans<W: Write>(
 
 impl App {
     pub(crate) fn progress_gap_rows(&self) -> u16 {
-        u16::from(self.mode == Mode::Input && self.is_running)
+        0
     }
 
     pub(crate) fn render_bottom_ui<W: Write>(
