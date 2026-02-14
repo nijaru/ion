@@ -85,7 +85,7 @@ impl Tool for BashTool {
         {
             return Ok(ToolResult {
                 content: format!(
-                    "⚠️ BLOCKED: Destructive command detected.\n\n\
+                    "BLOCKED: Destructive command detected.\n\n\
                     Reason: {reason}\n\n\
                     If you need to run this command, explain why it's safe \
                     and ask the user to run it manually."
