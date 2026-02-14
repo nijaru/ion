@@ -22,6 +22,7 @@ struct RenderCache {
     rendered: String,
     skill: Option<Skill>,
     has_mcp_tools: bool,
+    model_id: Option<String>,
 }
 
 pub struct ContextAssembly {
@@ -31,11 +32,18 @@ pub struct ContextAssembly {
 }
 
 const DEFAULT_SYSTEM_TEMPLATE: &str = r#"{{ base_instructions }}
+{% if model_hints %}
+
+{{ model_hints }}
+{% endif %}
 {% if working_dir %}
 ## Environment
 
 Working directory: {{ working_dir }}
 Date: {{ date }}
+OS: {{ os }}
+{% if shell %}Shell: {{ shell }}
+{% endif %}
 {% endif %}
 {% if has_mcp_tools %}
 ## MCP Tools
@@ -53,6 +61,23 @@ MCP tools are available via external servers. Use `mcp_tools` to search for rele
 {{ skill.prompt }}
 {% endif %}
 "#;
+
+/// Return model-specific prompt additions based on model ID.
+fn model_hints(model_id: &str) -> Option<&'static str> {
+    let lower = model_id.to_lowercase();
+    let model_part = lower.split('/').next_back().unwrap_or(&lower);
+
+    if model_part.starts_with("gpt-5") || model_part.contains("-codex") {
+        Some(
+            "Minimize verbose reasoning. Think efficiently and act quickly. \
+             Keep analysis internal — output actions and results, not thought process.",
+        )
+    } else if model_part.contains("deepseek") {
+        Some("Be direct. Show code changes, not lengthy explanations.")
+    } else {
+        None
+    }
+}
 
 impl ContextManager {
     #[must_use]
@@ -105,6 +130,8 @@ impl ContextManager {
     }
 
     /// Get just the system prompt (cached), without assembling messages.
+    /// Uses cached render if available; does not include model-specific hints
+    /// (those are only injected via `assemble()` which has the model ID).
     pub async fn get_system_prompt(&self) -> String {
         let active_skill = self.active_skill.lock().await;
         let mcp = self.has_mcp_tools.load(Ordering::Relaxed);
@@ -121,11 +148,12 @@ impl ContextManager {
         let skill = active_skill.clone();
         drop(active_skill); // Release lock before potentially slow render
 
-        let rendered = self.render_system_prompt(skill.as_ref());
+        let rendered = self.render_system_prompt(skill.as_ref(), None);
         *cache = Some(RenderCache {
             rendered: rendered.clone(),
             skill,
             has_mcp_tools: mcp,
+            model_id: None,
         });
         rendered
     }
@@ -135,6 +163,7 @@ impl ContextManager {
         history: &[Message],
         memory_context: Option<&str>,
         available_tools: Vec<ToolDefinition>,
+        model_id: &str,
     ) -> ContextAssembly {
         let active_skill = self.active_skill.lock().await;
         let mcp = self.has_mcp_tools.load(Ordering::Relaxed);
@@ -144,18 +173,19 @@ impl ContextManager {
         let (system_prompt, need_cache_update) = if let Some(ref c) = *cache {
             if c.skill.as_ref() == active_skill.as_ref()
                 && c.has_mcp_tools == mcp
+                && c.model_id.as_deref() == Some(model_id)
                 && !self.instructions_stale()
             {
                 (c.rendered.clone(), false)
             } else {
                 let skill = active_skill.clone();
                 drop(active_skill);
-                (self.render_system_prompt(skill.as_ref()), true)
+                (self.render_system_prompt(skill.as_ref(), Some(model_id)), true)
             }
         } else {
             let skill = active_skill.clone();
             drop(active_skill);
-            (self.render_system_prompt(skill.as_ref()), true)
+            (self.render_system_prompt(skill.as_ref(), Some(model_id)), true)
         };
 
         // Update cache if needed
@@ -166,6 +196,7 @@ impl ContextManager {
                 rendered: system_prompt.clone(),
                 skill,
                 has_mcp_tools: mcp,
+                model_id: Some(model_id.to_string()),
             });
         }
 
@@ -186,7 +217,7 @@ impl ContextManager {
         }
     }
 
-    fn render_system_prompt(&self, skill: Option<&Skill>) -> String {
+    fn render_system_prompt(&self, skill: Option<&Skill>, model_id: Option<&str>) -> String {
         let template = match self.env.get_template("system") {
             Ok(template) => template,
             Err(e) => {
@@ -208,17 +239,29 @@ impl ContextManager {
         } else {
             None
         };
+        let os = if self.working_dir.is_some() {
+            Some(std::env::consts::OS)
+        } else {
+            None
+        };
+        let shell = std::env::var("SHELL").ok();
 
         let has_mcp_tools = self.has_mcp_tools.load(Ordering::Relaxed);
+
+        // Model-specific hints
+        let hints = model_id.and_then(model_hints);
 
         template
             .render(context! {
                 base_instructions => self.system_prompt_base,
                 working_dir => working_dir,
                 date => date,
+                os => os,
+                shell => shell,
                 instructions => instructions,
                 skill => skill,
                 has_mcp_tools => has_mcp_tools,
+                model_hints => hints,
             })
             .unwrap_or_else(|e| {
                 tracing::error!("Failed to render system prompt template: {}", e);
