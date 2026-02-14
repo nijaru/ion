@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "9ozb",
+  "title": "[UX] Selector column alignment is broken",
+  "description": "Provider and model selector columns are not aligned. Investigate column width calculation in selector rendering.",
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-02-14T04:08:02.872Z",
+  "updated_at": "2026-02-14T04:08:02.872Z",
+  "completed_at": null,
+  "external": {}
+}

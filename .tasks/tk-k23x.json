@@ -1,0 +1,24 @@
+{
+  "project": "tk",
+  "ref": "k23x",
+  "title": "[ARCH] Review tool architecture — built-in vs advanced/searchable",
+  "description": "Review how tools are structured. Claude Code pattern: small built-in set (read/write/edit/bash/glob/grep) + ToolSearch for extended. Consider: standard tool schema handling across providers, which tools are core vs optional, how to expose external tools (MCP, colgrep). Reference other TUI agents (pi-mono, opencode, gemini-cli). See ai/research/agent-survey.md",
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [
+    {
+      "ts": "2026-02-14T08:22:02.006Z",
+      "msg": "User wants tool architecture review bumped to higher priority — after system prompt work"
+    }
+  ],
+  "created_at": "2026-02-14T07:06:10.426Z",
+  "updated_at": "2026-02-14T08:22:02.006Z",
+  "completed_at": null,
+  "external": {}
+}

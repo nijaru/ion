@@ -23,10 +23,22 @@
     {
       "ts": "2026-02-12T04:59:35.823Z",
       "msg": "Roadmap alignment 2026-02-12: remain deferred/watch-only (p4) per STATUS and runtime-stack plan."
+    },
+    {
+      "ts": "2026-02-14T06:52:07.237Z",
+      "msg": "Survey of Rust LLM crates (Feb 2026): genai 0.5.3 is best candidate — thin adapter, 14+ providers, streaming + tool calling. Pre-1.0 though. Full analysis at ai/research/rust-llm-crates-survey-2026-02.md. Recommendation: revisit when genai reaches 1.0."
+    },
+    {
+      "ts": "2026-02-14T06:59:47.846Z",
+      "msg": "User wants to adopt genai for most providers. Keep custom code for subscriptions, quirks, model listing. Start with spike to map genai's API to ion's Provider trait. Pre-1.0 risk accepted — crate is actively maintained."
+    },
+    {
+      "ts": "2026-02-14T07:01:22.774Z",
+      "msg": "Cross-provider message conversion needed: when switching providers mid-conversation, must convert messages, tool calls, and cache metadata between provider formats. Reference: https://mariozechner.at/posts/2025-11-30-pi-coding-agent/ — has relevant design points for multi-provider agent architecture."
     }
   ],
   "created_at": "2026-02-11T23:32:50.940Z",
-  "updated_at": "2026-02-12T04:59:35.823Z",
+  "updated_at": "2026-02-14T07:01:22.774Z",
   "completed_at": null,
   "external": {}
 }

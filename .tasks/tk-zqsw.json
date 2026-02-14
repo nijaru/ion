@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "zqsw",
+  "title": "[UX] Persist progress/completion state for session resume",
+  "description": "On session load, the progress line is blank because completion state (model, tokens, duration) isn't stored. This makes the UI look wrong on restart and creates a visual gap inconsistency (empty progress row looks like an extra blank line). Should persist the last completion summary alongside the session so it renders correctly on resume.",
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-02-14T04:32:16.478Z",
+  "updated_at": "2026-02-14T04:32:16.478Z",
+  "completed_at": null,
+  "external": {}
+}
