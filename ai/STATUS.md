@@ -2,26 +2,22 @@
 
 ## Current State
 
-| Metric    | Value                                                          | Updated    |
-| --------- | -------------------------------------------------------------- | ---------- |
-| Phase     | Dogfood readiness                                              | 2026-02-13 |
-| Status    | TUI polish pass complete, dependency audit done, research done | 2026-02-13 |
-| Toolchain | stable                                                         | 2026-01-22 |
-| Tests     | 468 passing (`cargo test -q`)                                  | 2026-02-13 |
-| Clippy    | clean                                                          | 2026-02-13 |
+| Metric    | Value                                                 | Updated    |
+| --------- | ----------------------------------------------------- | ---------- |
+| Phase     | Dogfood readiness                                     | 2026-02-14 |
+| Status    | Status line polish done, ready for agent architecture | 2026-02-14 |
+| Toolchain | stable                                                | 2026-01-22 |
+| Tests     | 468 passing (`cargo test -q`)                         | 2026-02-14 |
+| Clippy    | clean                                                 | 2026-02-14 |
 
 ## Completed This Session
 
-- Selector cleanup: `RestoreAfterSelector` redraws gap rows instead of leaving blank
-- FullRerender: scroll up to preserve trailing separator in scrolling mode
-- Scroll viewport when UI grows in scrolling mode (overlap detection)
-- Removed progress gap row — chat separator provides spacing, eliminates UI height oscillation
-- Status line: reordered to `[MODE] • model • pct% (used/max) • $cost • ~/path [branch]`
-- Status line: always show cost ($0.00 when fresh), session cost accumulates
-- Context % persisted on `--continue` (computed eagerly in load_session)
-- Flush prompt: removed leading space from `› ` prefix
-- Dependency audit: removed 5 unused deps (grep-matcher, once_cell, tiny_http, reedline, rustyline-async)
-- Research: Rust LLM provider crates survey, rmcp vs mcp-sdk-rs, colgrep evaluation
+- Status line: project name instead of full path (saves ~20 chars)
+- Status line: adaptive width — drops elements by priority (detail → model → diff → branch)
+- Status line: colored % (green <50, yellow 50-80, red >80)
+- Status line: git diff stats (+N/-M green/red) after branch, refreshed on task completion
+- Status line: cyan branch name with dot separator (removed brackets)
+- Status line: project name and branch un-dimmed for visual hierarchy
 
 ## Known Issues
 
