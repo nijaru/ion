@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "5ne8",
+  "title": "Prune repository",
+  "description": "Clean up stale files, unused code, temp artifacts, organize ai/ directory",
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-02-14T22:59:25.858Z",
+  "updated_at": "2026-02-14T22:59:25.858Z",
+  "completed_at": null,
+  "external": {}
+}
