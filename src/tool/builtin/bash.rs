@@ -4,8 +4,8 @@ use async_trait::async_trait;
 use serde_json::json;
 use tokio::process::Command;
 
-/// Maximum output size in bytes (100KB).
-const MAX_OUTPUT_SIZE: usize = 100_000;
+/// Maximum output size in bytes (~10k tokens at ~4 bytes/token).
+const MAX_OUTPUT_SIZE: usize = 40_000;
 
 pub struct BashTool;
 
