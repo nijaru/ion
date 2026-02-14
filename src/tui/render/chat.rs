@@ -7,7 +7,7 @@ use crate::tui::terminal::StyledLine;
 use crate::tui::types::Mode;
 use crate::tui::App;
 
-fn stable_transcript_end(entries: &[MessageEntry], is_running: bool) -> usize {
+pub(crate) fn stable_transcript_end(entries: &[MessageEntry], is_running: bool) -> usize {
     let mut end = entries.len();
     if is_running
         && entries
