@@ -2,13 +2,13 @@
 
 ## Current State
 
-| Metric    | Value                         | Updated    |
-| --------- | ----------------------------- | ---------- |
-| Phase     | Dogfood readiness             | 2026-02-14 |
-| Status    | Provider refactor landed      | 2026-02-14 |
-| Toolchain | stable                        | 2026-01-22 |
-| Tests     | 468 passing (`cargo test -q`) | 2026-02-14 |
-| Clippy    | clean                         | 2026-02-14 |
+| Metric    | Value                                   | Updated    |
+| --------- | --------------------------------------- | ---------- |
+| Phase     | Dogfood readiness                       | 2026-02-14 |
+| Status    | Provider refactor + review fixes landed | 2026-02-14 |
+| Toolchain | stable                                  | 2026-01-22 |
+| Tests     | 468 passing (`cargo test -q`)           | 2026-02-14 |
+| Clippy    | clean                                   | 2026-02-14 |
 
 ## Completed This Session
 
@@ -18,6 +18,7 @@
   - subscription/ → chatgpt/ + gemini/ (named by API surface)
   - Shared ToolCallAccumulator in stream.rs
   - ChatGPT/Gemini now use HttpClient (gains timeouts, rate limiting, Accept header)
+- Review fixes: drain_all rename, stale docs, unnecessary clones, build_headers returns Result, no duplicate auth headers
 
 ## Known Issues
 
