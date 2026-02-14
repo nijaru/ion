@@ -152,11 +152,12 @@ impl ChatPosition {
 
 /// Committed lines from an actively streaming agent message.
 ///
-/// The line count is only valid for the width where it was computed.
+/// Tracks how many lines have been committed to scrollback so the
+/// incremental renderer can skip them. On resize, the full scrollback
+/// is rebuilt from the data model, so width tracking is unnecessary.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct StreamingCarryover {
     committed_lines: usize,
-    wrap_width: Option<usize>,
 }
 
 impl StreamingCarryover {
@@ -170,39 +171,12 @@ impl StreamingCarryover {
         self.committed_lines
     }
 
-    pub fn set(&mut self, committed_lines: usize, wrap_width: usize) {
+    pub fn set(&mut self, committed_lines: usize) {
         self.committed_lines = committed_lines;
-        self.wrap_width = Some(wrap_width);
     }
 
     pub fn reset(&mut self) {
-        *self = Self::default();
-    }
-
-    #[must_use]
-    pub fn lines_for_width(&self, wrap_width: usize) -> usize {
-        if self.wrap_width == Some(wrap_width) {
-            self.committed_lines
-        } else {
-            0
-        }
-    }
-
-    #[must_use]
-    pub fn for_reflow(&self, wrap_width: usize, all_line_count: usize) -> Self {
-        if self.wrap_width != Some(wrap_width) {
-            return Self::default();
-        }
-        let safe = all_line_count.saturating_sub(2);
-        let committed_lines = self.committed_lines.min(safe);
-        if committed_lines == 0 {
-            Self::default()
-        } else {
-            Self {
-                committed_lines,
-                wrap_width: Some(wrap_width),
-            }
-        }
+        self.committed_lines = 0;
     }
 }
 
@@ -454,7 +428,7 @@ mod tests {
         };
         state.rendered_entries = 7;
         state.buffered_chat_lines.push(StyledLine::raw("buffered"));
-        state.streaming_carryover.set(3, 80);
+        state.streaming_carryover.set(3);
         state.selector_clear_from = Some(5);
         state.last_selector_top = Some(9);
         state.needs_initial_render = false;
@@ -477,28 +451,18 @@ mod tests {
     }
 
     #[test]
-    fn streaming_carryover_is_width_bound() {
+    fn streaming_carryover_set_and_reset() {
         let mut carryover = StreamingCarryover::default();
-        carryover.set(5, 90);
-        assert_eq!(carryover.lines_for_width(90), 5);
-        assert_eq!(carryover.lines_for_width(80), 0);
-    }
+        assert!(carryover.is_empty());
+        assert_eq!(carryover.committed_lines(), 0);
 
-    #[test]
-    fn streaming_carryover_reflow_caps_to_safe_lines() {
-        let mut carryover = StreamingCarryover::default();
-        carryover.set(9, 100);
-        // all_line_count=8 => safe=6
-        let reflow = carryover.for_reflow(100, 8);
-        assert_eq!(reflow.committed_lines(), 6);
-    }
+        carryover.set(5);
+        assert!(!carryover.is_empty());
+        assert_eq!(carryover.committed_lines(), 5);
 
-    #[test]
-    fn streaming_carryover_reflow_resets_on_width_change() {
-        let mut carryover = StreamingCarryover::default();
-        carryover.set(4, 120);
-        let reflow = carryover.for_reflow(90, 10);
-        assert!(reflow.is_empty());
+        carryover.reset();
+        assert!(carryover.is_empty());
+        assert_eq!(carryover.committed_lines(), 0);
     }
 
     #[test]
@@ -600,13 +564,11 @@ mod tests {
     fn chat_position_header_inserted() {
         assert!(!ChatPosition::Empty.header_inserted());
         assert!(ChatPosition::Header { anchor: 3 }.header_inserted());
-        assert!(
-            ChatPosition::Tracking {
-                next_row: 5,
-                ui_drawn_at: None
-            }
-            .header_inserted()
-        );
+        assert!(ChatPosition::Tracking {
+            next_row: 5,
+            ui_drawn_at: None
+        }
+        .header_inserted());
         assert!(ChatPosition::Scrolling { ui_drawn_at: None }.header_inserted());
     }
 

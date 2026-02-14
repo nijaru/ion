@@ -1,11 +1,11 @@
 //! Chat history rendering functions.
 
-use crate::tui::App;
 use crate::tui::chat_renderer::ChatRenderer;
 use crate::tui::message_list::{MessageEntry, Sender};
 use crate::tui::render_state::StreamingCarryover;
 use crate::tui::terminal::StyledLine;
 use crate::tui::types::Mode;
+use crate::tui::App;
 
 fn stable_transcript_end(entries: &[MessageEntry], is_running: bool) -> usize {
     let mut end = entries.len();
@@ -40,9 +40,8 @@ fn build_base_transcript_lines(
 fn apply_stable_agent_carryover(
     entry_lines: Vec<StyledLine>,
     carryover: &mut StreamingCarryover,
-    wrap_width: usize,
 ) -> Vec<StyledLine> {
-    let skip = carryover.lines_for_width(wrap_width);
+    let skip = carryover.committed_lines();
     carryover.reset();
     if skip == 0 {
         return entry_lines;
@@ -88,7 +87,6 @@ impl App {
                 new_lines.extend(apply_stable_agent_carryover(
                     entry_lines,
                     &mut self.render_state.streaming_carryover,
-                    wrap_width,
                 ));
             } else {
                 new_lines.extend(entry_lines);
@@ -108,14 +106,11 @@ impl App {
                     None,
                     wrap_width,
                 );
-                let already = self
-                    .render_state
-                    .streaming_carryover
-                    .lines_for_width(wrap_width);
+                let already = self.render_state.streaming_carryover.committed_lines();
                 let safe = all_lines.len().saturating_sub(2);
                 if safe > already {
                     new_lines.extend(all_lines.into_iter().skip(already).take(safe - already));
-                    self.render_state.streaming_carryover.set(safe, wrap_width);
+                    self.render_state.streaming_carryover.set(safe);
                 }
             }
         }
@@ -155,54 +150,7 @@ impl App {
         lines
     }
 
-    /// Build chat lines for viewport reflow.
-    ///
-    /// Includes previously committed lines from an actively streaming
-    /// agent entry so resize reflow can repaint without re-appending
-    /// those lines on the next incremental frame.
-    pub fn build_chat_lines_for_reflow(
-        &self,
-        width: u16,
-    ) -> (Vec<StyledLine>, usize, StreamingCarryover) {
-        let wrap_width = width.saturating_sub(2) as usize;
-        if wrap_width == 0 {
-            return (Vec::new(), 0, StreamingCarryover::default());
-        }
-
-        let (mut lines, rendered_entries) = build_base_transcript_lines(
-            &self.startup_header_lines,
-            &self.message_list.entries,
-            self.is_running,
-            wrap_width,
-        );
-
-        let mut streaming_carryover = StreamingCarryover::default();
-        if self.is_running && rendered_entries < self.message_list.entries.len() {
-            let entry = &self.message_list.entries[rendered_entries];
-            if entry.sender == Sender::Agent {
-                let all_lines = ChatRenderer::build_lines(
-                    &self.message_list.entries[rendered_entries..=rendered_entries],
-                    None,
-                    wrap_width,
-                );
-                streaming_carryover = self
-                    .render_state
-                    .streaming_carryover
-                    .for_reflow(wrap_width, all_lines.len());
-                if !streaming_carryover.is_empty() {
-                    lines.extend(
-                        all_lines
-                            .into_iter()
-                            .take(streaming_carryover.committed_lines()),
-                    );
-                }
-            }
-        }
-
-        (lines, rendered_entries, streaming_carryover)
-    }
-
-    /// Reprint full chat history into scrollback (used on session resume).
+    /// Reprint full chat history into scrollback (used on session resume and resize).
     /// Returns the number of lines written.
     pub fn reprint_chat_scrollback<W: std::io::Write>(
         &mut self,
@@ -227,7 +175,6 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::{apply_stable_agent_carryover, build_base_transcript_lines, stable_transcript_end};
-    use crate::tui::chat_renderer::ChatRenderer;
     use crate::tui::message_list::{MessageEntry, Sender};
     use crate::tui::render_state::StreamingCarryover;
 
@@ -269,69 +216,9 @@ mod tests {
     }
 
     #[test]
-    fn streaming_carryover_resets_on_width_change_for_reflow() {
+    fn stable_agent_carryover_skips_committed_lines() {
         let mut carryover = StreamingCarryover::default();
-        carryover.set(6, 118);
-        let resized = carryover.for_reflow(78, 30);
-        assert!(resized.is_empty());
-    }
-
-    #[test]
-    fn streaming_carryover_reflow_caps_to_safe_tail_holdback() {
-        let mut carryover = StreamingCarryover::default();
-        carryover.set(12, 78);
-        // all_line_count=9 -> safe=7
-        let reflow = carryover.for_reflow(78, 9);
-        assert_eq!(reflow.committed_lines(), 7);
-    }
-
-    #[test]
-    fn resize_reflow_snapshot_keeps_single_header_and_single_transcript_copy() {
-        let entries = vec![
-            MessageEntry::new(Sender::User, "deps".to_string()),
-            MessageEntry::new(
-                Sender::Agent,
-                "This is actively streaming output that will wrap at narrow widths.".to_string(),
-            ),
-        ];
-
-        let wrap_width = 52usize;
-        let header = vec![
-            crate::tui::terminal::StyledLine::raw("ion v0.0.0"),
-            crate::tui::terminal::StyledLine::raw("~/repo [branch]"),
-            crate::tui::terminal::StyledLine::empty(),
-        ];
-        let (base, end) = build_base_transcript_lines(&header, &entries, true, wrap_width);
-        assert_eq!(end, 1);
-
-        let mut carryover = StreamingCarryover::default();
-        carryover.set(6, 120);
-        let streaming_lines = ChatRenderer::build_lines(&entries[1..=1], None, wrap_width);
-        let reflow = carryover.for_reflow(wrap_width, streaming_lines.len());
-        assert!(reflow.is_empty());
-
-        let mut snapshot = base.clone();
-        if !reflow.is_empty() {
-            snapshot.extend(streaming_lines.into_iter().take(reflow.committed_lines()));
-        }
-
-        let ion_header_count = snapshot
-            .iter()
-            .filter(|line| line_text(line).starts_with("ion"))
-            .count();
-        let user_prompt_count = snapshot
-            .iter()
-            .filter(|line| line_text(line).starts_with("› "))
-            .count();
-
-        assert_eq!(ion_header_count, 1);
-        assert_eq!(user_prompt_count, 1);
-    }
-
-    #[test]
-    fn stable_agent_carryover_skips_only_for_matching_width() {
-        let mut carryover = StreamingCarryover::default();
-        carryover.set(2, 80);
+        carryover.set(2);
 
         let entry_lines = vec![
             crate::tui::terminal::StyledLine::raw("line 1"),
@@ -339,22 +226,17 @@ mod tests {
             crate::tui::terminal::StyledLine::raw("line 3"),
         ];
 
-        let matching = apply_stable_agent_carryover(entry_lines.clone(), &mut carryover, 80);
-        assert_eq!(matching.len(), 2);
-        assert_eq!(line_text(&matching[0]), "line 3");
-        assert!(matching[1].is_empty());
-        assert!(carryover.is_empty());
-
-        carryover.set(2, 120);
-        let mismatched = apply_stable_agent_carryover(entry_lines, &mut carryover, 80);
-        assert_eq!(mismatched.len(), 3);
+        let remaining = apply_stable_agent_carryover(entry_lines, &mut carryover);
+        assert_eq!(remaining.len(), 2);
+        assert_eq!(line_text(&remaining[0]), "line 3");
+        assert!(remaining[1].is_empty());
         assert!(carryover.is_empty());
     }
 
     #[test]
     fn stable_agent_carryover_preserves_separator_when_all_lines_were_committed() {
         let mut carryover = StreamingCarryover::default();
-        carryover.set(4, 80);
+        carryover.set(4);
         let entry_lines = vec![
             crate::tui::terminal::StyledLine::raw("line 1"),
             crate::tui::terminal::StyledLine::raw("line 2"),
@@ -362,7 +244,7 @@ mod tests {
             crate::tui::terminal::StyledLine::raw("line 4"),
         ];
 
-        let remaining = apply_stable_agent_carryover(entry_lines, &mut carryover, 80);
+        let remaining = apply_stable_agent_carryover(entry_lines, &mut carryover);
         assert_eq!(remaining.len(), 1);
         assert!(remaining[0].is_empty());
     }
