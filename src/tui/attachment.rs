@@ -44,10 +44,10 @@ const IMAGE_FORMATS: &[(&str, &str)] = &[
 
 /// Known binary file extensions (no content extraction).
 const BINARY_EXTENSIONS: &[&str] = &[
-    "exe", "dll", "so", "dylib", "o", "a", "lib", "class", "jar", "zip", "tar", "gz", "bz2",
-    "xz", "7z", "rar", "wasm", "pyc", "pyo", "beam", "mp4", "mov", "avi", "mp3", "wav", "flac",
-    "ico", "bmp", "tiff", "psd", "doc", "xls", "ppt", "docx", "xlsx", "pptx", "db", "sqlite",
-    "sqlite3", "dat", "bin", "img", "iso", "dmg", "deb", "rpm",
+    "exe", "dll", "so", "dylib", "o", "a", "lib", "class", "jar", "zip", "tar", "gz", "bz2", "xz",
+    "7z", "rar", "wasm", "pyc", "pyo", "beam", "mp4", "mov", "avi", "mp3", "wav", "flac", "ico",
+    "bmp", "tiff", "psd", "doc", "xls", "ppt", "docx", "xlsx", "pptx", "db", "sqlite", "sqlite3",
+    "dat", "bin", "img", "iso", "dmg", "deb", "rpm",
 ];
 
 /// Directories to skip during tree listing.
@@ -95,9 +95,7 @@ pub async fn parse_attachments(
 
         // Sandbox check
         let display_header = format_display_header(&r.path, r.range);
-        if !no_sandbox
-            && let Err(msg) = check_within_dir(&path, working_dir)
-        {
+        if !no_sandbox && let Err(msg) = check_within_dir(&path, working_dir) {
             attachment_blocks.push(ContentBlock::Text {
                 text: format!("--- {display_header} ---\n[Error: {msg}]\n---"),
             });
@@ -286,7 +284,10 @@ fn check_within_dir(path: &Path, working_dir: &Path) -> Result<(), String> {
             // Path might not exist yet — check parent
             path.parent()
                 .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "no parent"))
-                .and_then(|p| p.canonicalize().map(|cp| cp.join(path.file_name().unwrap_or_default())))
+                .and_then(|p| {
+                    p.canonicalize()
+                        .map(|cp| cp.join(path.file_name().unwrap_or_default()))
+                })
         })
         .map_err(|e| format!("cannot resolve path: {e}"))?;
 
@@ -443,10 +444,7 @@ fn load_text_file(
 
     let mut content = lines.join("\n");
     if truncated {
-        content.push_str(&format!(
-            "\n[... truncated at {} lines]",
-            MAX_TEXT_LINES,
-        ));
+        content.push_str(&format!("\n[... truncated at {} lines]", MAX_TEXT_LINES,));
     }
 
     let header = format_display_header(display_path, range);
@@ -470,7 +468,10 @@ fn load_text_file_lossy(
     let lines: Vec<&str> = if let Some((start, end)) = range {
         let start_idx = start.saturating_sub(1); // 1-indexed to 0-indexed
         let end_idx = end.min(all_lines.len());
-        all_lines.get(start_idx..end_idx).unwrap_or_default().to_vec()
+        all_lines
+            .get(start_idx..end_idx)
+            .unwrap_or_default()
+            .to_vec()
     } else {
         all_lines
     };
@@ -479,10 +480,7 @@ fn load_text_file_lossy(
     let truncated = total > MAX_TEXT_LINES;
     let content: String = if truncated {
         let mut s = lines[..MAX_TEXT_LINES].join("\n");
-        s.push_str(&format!(
-            "\n[... truncated at {} lines]",
-            MAX_TEXT_LINES,
-        ));
+        s.push_str(&format!("\n[... truncated at {} lines]", MAX_TEXT_LINES,));
         s
     } else {
         lines.join("\n")
@@ -495,10 +493,7 @@ fn load_text_file_lossy(
 }
 
 /// Load a directory as a tree listing.
-fn load_directory(
-    path: &Path,
-    display_path: &str,
-) -> Result<ContentBlock, String> {
+fn load_directory(path: &Path, display_path: &str) -> Result<ContentBlock, String> {
     let mut entries = Vec::new();
     let mut truncated = false;
     collect_tree(path, "", 0, &mut entries, &mut truncated);
@@ -549,7 +544,9 @@ fn collect_tree(
     items.sort_by(|a, b| {
         let a_dir = a.file_type().is_ok_and(|ft| ft.is_dir());
         let b_dir = b.file_type().is_ok_and(|ft| ft.is_dir());
-        b_dir.cmp(&a_dir).then_with(|| a.file_name().cmp(&b.file_name()))
+        b_dir
+            .cmp(&a_dir)
+            .then_with(|| a.file_name().cmp(&b.file_name()))
     });
 
     for item in items {
@@ -629,10 +626,7 @@ fn load_pdf(path: &Path, display_path: &str) -> Result<ContentBlock, String> {
     let mut truncation_note = String::new();
     if text.len() > MAX_PDF_CHARS {
         text.truncate(MAX_PDF_CHARS);
-        truncation_note = format!(
-            "\n[... truncated at {} chars]",
-            MAX_PDF_CHARS
-        );
+        truncation_note = format!("\n[... truncated at {} chars]", MAX_PDF_CHARS);
     }
 
     Ok(ContentBlock::Text {
@@ -762,7 +756,9 @@ mod tests {
         assert_eq!(blocks.len(), 2);
         assert!(matches!(&blocks[0], ContentBlock::Text { text } if text == "read"));
         assert!(matches!(&blocks[1], ContentBlock::Text { text } if text.contains("line one")));
-        assert!(matches!(&blocks[1], ContentBlock::Text { text } if text.contains("--- test.txt ---")));
+        assert!(
+            matches!(&blocks[1], ContentBlock::Text { text } if text.contains("--- test.txt ---"))
+        );
     }
 
     #[tokio::test]
@@ -787,7 +783,9 @@ mod tests {
 
         let blocks = parse_attachments("look at @screenshot.png", dir.path(), true).await;
         assert_eq!(blocks.len(), 2);
-        assert!(matches!(&blocks[1], ContentBlock::Image { media_type, .. } if media_type == "image/png"));
+        assert!(
+            matches!(&blocks[1], ContentBlock::Image { media_type, .. } if media_type == "image/png")
+        );
     }
 
     #[tokio::test]
@@ -842,15 +840,12 @@ mod tests {
         fs::create_dir(&spaced_dir).unwrap();
         fs::write(spaced_dir.join("file.rs"), "fn spaced() {}").unwrap();
 
-        let blocks = parse_attachments(
-            "@\"path with spaces/file.rs\"",
-            dir.path(),
-            true,
-        )
-        .await;
+        let blocks = parse_attachments("@\"path with spaces/file.rs\"", dir.path(), true).await;
         assert!(blocks.len() >= 1);
         // Should find the file
-        let has_content = blocks.iter().any(|b| matches!(b, ContentBlock::Text { text } if text.contains("fn spaced()")));
+        let has_content = blocks
+            .iter()
+            .any(|b| matches!(b, ContentBlock::Text { text } if text.contains("fn spaced()")));
         assert!(has_content, "should contain file content");
     }
 
@@ -906,9 +901,9 @@ mod tests {
         let blocks = parse_attachments("read @test.pdf", dir.path(), true).await;
         // Should produce a text block with PDF content (or an error if extraction fails on minimal PDF)
         assert!(blocks.len() >= 1);
-        let has_pdf_ref = blocks.iter().any(|b| {
-            matches!(b, ContentBlock::Text { text } if text.contains("test.pdf"))
-        });
+        let has_pdf_ref = blocks
+            .iter()
+            .any(|b| matches!(b, ContentBlock::Text { text } if text.contains("test.pdf")));
         assert!(has_pdf_ref, "should reference the PDF file");
     }
 
@@ -919,9 +914,9 @@ mod tests {
         fs::write(&pdf_path, b"not a real pdf").unwrap();
 
         let blocks = parse_attachments("read @corrupt.pdf", dir.path(), true).await;
-        let has_error = blocks.iter().any(|b| {
-            matches!(b, ContentBlock::Text { text } if text.contains("Error"))
-        });
+        let has_error = blocks
+            .iter()
+            .any(|b| matches!(b, ContentBlock::Text { text } if text.contains("Error")));
         assert!(has_error, "corrupt PDF should produce error, not panic");
     }
 
@@ -935,12 +930,8 @@ mod tests {
             fs::write(dir.path().join(&name), &content).unwrap();
         }
 
-        let blocks = parse_attachments(
-            "@big0.txt @big1.txt @big2.txt @big3.txt",
-            dir.path(),
-            true,
-        )
-        .await;
+        let blocks =
+            parse_attachments("@big0.txt @big1.txt @big2.txt @big3.txt", dir.path(), true).await;
 
         let has_limit_error = blocks.iter().any(|b| {
             matches!(b, ContentBlock::Text { text } if text.contains("aggregate") && text.contains("1MB"))
@@ -997,7 +988,10 @@ mod tests {
             ContentBlock::Text { text } => text,
             _ => panic!("expected text block"),
         };
-        assert!(text.contains("--- lines.txt:10-20 ---"), "header should show range");
+        assert!(
+            text.contains("--- lines.txt:10-20 ---"),
+            "header should show range"
+        );
         assert!(text.contains("line 10"), "should include line 10");
         assert!(text.contains("line 20"), "should include line 20");
         assert!(!text.contains("line 9\n"), "should not include line 9");
@@ -1019,7 +1013,10 @@ mod tests {
         assert!(text.contains("line 3"), "should include line 3");
         assert!(!text.contains("line 1\n"), "should not include line 1");
         // Should not error — just reads to EOF
-        assert!(!text.contains("Error"), "should not error on out-of-bounds range");
+        assert!(
+            !text.contains("Error"),
+            "should not error on out-of-bounds range"
+        );
     }
 
     // --- parse_line_range edge cases ---

@@ -180,7 +180,9 @@ pub(crate) fn convert_user_content(content: &[ContentBlock]) -> MessageContent {
 }
 
 /// Extract text and tool calls from assistant content.
-pub(crate) fn extract_assistant_content(content: &[ContentBlock]) -> (String, Option<Vec<ToolCall>>) {
+pub(crate) fn extract_assistant_content(
+    content: &[ContentBlock],
+) -> (String, Option<Vec<ToolCall>>) {
     let mut text = String::new();
     let mut tool_calls = Vec::new();
 

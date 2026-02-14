@@ -1,8 +1,8 @@
 //! Tests for model registry.
 
-use super::super::{prefs::SortStrategy, ModelInfo, ModelPricing, Provider, ProviderPrefs};
-use super::types::ModelFilter;
+use super::super::{ModelInfo, ModelPricing, Provider, ProviderPrefs, prefs::SortStrategy};
 use super::ModelRegistry;
+use super::types::ModelFilter;
 use std::time::Instant;
 
 fn make_test_model(id: &str, provider: &str, price: f64, has_cache: bool) -> ModelInfo {
@@ -140,8 +140,8 @@ fn test_sort_by_price() {
 #[tokio::test]
 async fn test_fetch_local_models() {
     // Skip if local server isn't running
-    let base_url = std::env::var("ION_LOCAL_URL")
-        .unwrap_or_else(|_| "http://localhost:8080/v1".to_string());
+    let base_url =
+        std::env::var("ION_LOCAL_URL").unwrap_or_else(|_| "http://localhost:8080/v1".to_string());
     let client = reqwest::Client::new();
     if client
         .get(format!("{base_url}/models"))
@@ -194,9 +194,13 @@ fn test_select_summarization_model_no_pricing() {
 
 #[test]
 fn test_select_summarization_model_skips_small_context() {
-    let models = vec![
-        make_test_model_dated("tiny-ctx", "a", 0.05, false, 1_750_000_000),
-    ];
+    let models = vec![make_test_model_dated(
+        "tiny-ctx",
+        "a",
+        0.05,
+        false,
+        1_750_000_000,
+    )];
     // Override context window to be too small
     let mut models = models;
     models[0].context_window = 4_000;

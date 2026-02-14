@@ -407,7 +407,6 @@ impl AnthropicClient {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -506,7 +505,11 @@ mod tests {
                 }]),
             }]),
             system: None,
-            tools: Arc::new(vec![make_tool("read"), make_tool("write"), make_tool("bash")]),
+            tools: Arc::new(vec![
+                make_tool("read"),
+                make_tool("write"),
+                make_tool("bash"),
+            ]),
             max_tokens: None,
             temperature: None,
             thinking: None,
@@ -645,7 +648,10 @@ mod tests {
 
         // First user message should have cache_control (second-to-last real user turn)
         if let ContentBlock::Text { cache_control, .. } = &api_request.messages[0].content[0] {
-            assert!(cache_control.is_some(), "First user message should be cached");
+            assert!(
+                cache_control.is_some(),
+                "First user message should be cached"
+            );
         } else {
             panic!("Expected Text block");
         }
@@ -659,7 +665,10 @@ mod tests {
 
         // Latest user message should NOT have cache_control
         if let ContentBlock::Text { cache_control, .. } = &api_request.messages[4].content[0] {
-            assert!(cache_control.is_none(), "Latest user message should not be cached");
+            assert!(
+                cache_control.is_none(),
+                "Latest user message should not be cached"
+            );
         } else {
             panic!("Expected Text block");
         }

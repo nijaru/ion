@@ -240,7 +240,10 @@ struct CliAgentSetup {
 }
 
 /// Setup CLI agent: config, provider, client, orchestrator, agent, session.
-async fn setup_cli_agent(args: &RunArgs, permissions: &PermissionSettings) -> Result<CliAgentSetup> {
+async fn setup_cli_agent(
+    args: &RunArgs,
+    permissions: &PermissionSettings,
+) -> Result<CliAgentSetup> {
     // Load config
     let config = Config::load()?;
 
@@ -611,7 +614,10 @@ pub fn config(args: ConfigArgs) -> ExitCode {
     match args.action {
         None => {
             // Show current config
-            println!("provider: {}", config.provider.as_deref().unwrap_or("(not set)"));
+            println!(
+                "provider: {}",
+                config.provider.as_deref().unwrap_or("(not set)")
+            );
             println!("model: {}", config.model.as_deref().unwrap_or("(not set)"));
             ExitCode::from(0)
         }
@@ -639,7 +645,9 @@ pub fn config(args: ConfigArgs) -> ExitCode {
                     // Validate provider
                     if crate::provider::Provider::from_id(&value).is_none() {
                         eprintln!("Unknown provider: {value}");
-                        eprintln!("Valid providers: anthropic, openrouter, openai, google, groq, kimi, local, chatgpt, gemini");
+                        eprintln!(
+                            "Valid providers: anthropic, openrouter, openai, google, groq, kimi, local, chatgpt, gemini"
+                        );
                         return ExitCode::from(1);
                     }
                     config.provider = Some(value);
@@ -724,7 +732,8 @@ mod tests {
 
     #[test]
     fn test_parse_run_with_model() {
-        let cli = Cli::try_parse_from(["ion", "run", "-m", "anthropic/claude-3", "prompt"]).unwrap();
+        let cli =
+            Cli::try_parse_from(["ion", "run", "-m", "anthropic/claude-3", "prompt"]).unwrap();
         if let Some(Commands::Run(args)) = cli.command {
             assert_eq!(args.model, Some("anthropic/claude-3".to_string()));
         } else {

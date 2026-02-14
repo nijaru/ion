@@ -3,7 +3,9 @@ pub mod permissions;
 pub mod types;
 
 pub use permissions::{PermissionMatrix, PermissionStatus};
-pub use types::{DangerLevel, DiscoveryCallback, Tool, ToolContext, ToolError, ToolMode, ToolResult};
+pub use types::{
+    DangerLevel, DiscoveryCallback, Tool, ToolContext, ToolError, ToolMode, ToolResult,
+};
 
 use crate::hook::{HookContext, HookPoint, HookRegistry, HookResult};
 use std::collections::HashMap;
@@ -86,7 +88,9 @@ impl ToolOrchestrator {
             let mcp_result = match mcp.call_tool_by_name(name, args).await {
                 Some(result) => result?,
                 None => {
-                    return Err(ToolError::ExecutionFailed(format!("MCP tool not found: {name}")));
+                    return Err(ToolError::ExecutionFailed(format!(
+                        "MCP tool not found: {name}"
+                    )));
                 }
             };
 
@@ -106,9 +110,15 @@ impl ToolOrchestrator {
         // For bash, use per-command permission checking
         let status = if name == "bash" {
             let command = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
-            self.permissions.read().await.check_command_permission(command)
+            self.permissions
+                .read()
+                .await
+                .check_command_permission(command)
         } else {
-            self.permissions.read().await.check_permission(tool.as_ref())
+            self.permissions
+                .read()
+                .await
+                .check_permission(tool.as_ref())
         };
 
         let result = match status {
@@ -163,7 +173,9 @@ impl ToolOrchestrator {
                 is_error: result.is_error,
                 metadata: result.metadata,
             }),
-            HookResult::Abort(msg) => Err(ToolError::ExecutionFailed(format!("Hook aborted: {msg}"))),
+            HookResult::Abort(msg) => {
+                Err(ToolError::ExecutionFailed(format!("Hook aborted: {msg}")))
+            }
             HookResult::Continue | HookResult::Skip | HookResult::ReplaceInput(_) => Ok(result),
         }
     }
@@ -340,7 +352,10 @@ mod tests {
             .await;
         match result {
             Err(ToolError::PermissionDenied(msg)) => {
-                assert!(msg.contains("Read mode"), "Expected Read mode message, got: {msg}");
+                assert!(
+                    msg.contains("Read mode"),
+                    "Expected Read mode message, got: {msg}"
+                );
             }
             other => panic!("Expected PermissionDenied, got: {other:?}"),
         }
@@ -387,12 +402,13 @@ mod tests {
         }
         orch.register_hook(Arc::new(AbortHook)).await;
 
-        let result = orch
-            .call_tool("mcp_tool", json!({}), &test_ctx())
-            .await;
+        let result = orch.call_tool("mcp_tool", json!({}), &test_ctx()).await;
         match result {
             Err(ToolError::ExecutionFailed(msg)) => {
-                assert!(msg.contains("blocked by hook"), "Expected hook abort, got: {msg}");
+                assert!(
+                    msg.contains("blocked by hook"),
+                    "Expected hook abort, got: {msg}"
+                );
             }
             other => panic!("Expected ExecutionFailed from hook abort, got: {other:?}"),
         }

@@ -258,7 +258,7 @@ mod tests {
             make_text(Role::Assistant, "old response 1"),
             make_text(Role::User, "old message 2"),
             make_text(Role::Assistant, "old response 2"),
-            make_text(Role::User, "recent message"),    // protected
+            make_text(Role::User, "recent message"), // protected
             make_text(Role::Assistant, "recent response"), // protected
         ];
 

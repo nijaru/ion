@@ -499,10 +499,7 @@ command = "echo check"
         assert_eq!(config.hooks.len(), 2);
         assert_eq!(config.hooks[0].event, "post_tool_use");
         assert_eq!(config.hooks[0].command, "cargo fmt");
-        assert_eq!(
-            config.hooks[0].tool_pattern,
-            Some("write|edit".to_string())
-        );
+        assert_eq!(config.hooks[0].tool_pattern, Some("write|edit".to_string()));
         assert_eq!(config.hooks[1].event, "pre_tool_use");
         assert!(config.hooks[1].tool_pattern.is_none());
     }

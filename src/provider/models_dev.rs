@@ -112,10 +112,7 @@ pub async fn fetch_models_dev() -> Result<Vec<ModelInfo>> {
                 ModelPricing::default()
             };
 
-            let created = m
-                .release_date
-                .as_deref()
-                .map_or(0, parse_release_date);
+            let created = m.release_date.as_deref().map_or(0, parse_release_date);
 
             all_models.push(ModelInfo {
                 // Use native model ID (what the API expects), not prefixed

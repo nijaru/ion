@@ -38,8 +38,7 @@ impl OpenAICompatClient {
 
         // Allow env var override for local provider URL
         let base_url = if provider == Provider::Local {
-            std::env::var("ION_LOCAL_URL")
-                .unwrap_or_else(|_| quirks.base_url.to_string())
+            std::env::var("ION_LOCAL_URL").unwrap_or_else(|_| quirks.base_url.to_string())
         } else {
             quirks.base_url.to_string()
         };
@@ -52,7 +51,6 @@ impl OpenAICompatClient {
             provider,
         })
     }
-
 
     /// Create a client with custom base URL.
     #[allow(clippy::unnecessary_wraps)]
@@ -96,12 +94,18 @@ impl OpenAICompatClient {
             .post_json("/chat/completions", &api_request)
             .await?;
 
-        let usage = response.usage.as_ref().map_or(IonUsage::default(), |u| IonUsage {
-            input_tokens: u.prompt_tokens,
-            output_tokens: u.completion_tokens,
-            cache_read_tokens: u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens),
-            cache_write_tokens: 0,
-        });
+        let usage = response
+            .usage
+            .as_ref()
+            .map_or(IonUsage::default(), |u| IonUsage {
+                input_tokens: u.prompt_tokens,
+                output_tokens: u.completion_tokens,
+                cache_read_tokens: u
+                    .prompt_tokens_details
+                    .as_ref()
+                    .map_or(0, |d| d.cached_tokens),
+                cache_write_tokens: 0,
+            });
 
         Ok(CompletionResponse {
             message: convert_response(&response, &self.quirks),

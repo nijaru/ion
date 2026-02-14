@@ -188,7 +188,6 @@ pub struct McpManager {
     tool_index: Vec<McpToolEntry>,
 }
 
-
 impl McpManager {
     #[must_use]
     pub fn new() -> Self {

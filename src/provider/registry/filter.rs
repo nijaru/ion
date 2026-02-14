@@ -1,8 +1,8 @@
 //! Model filtering and sorting.
 
-use super::super::{prefs::SortStrategy, ModelInfo, ProviderPrefs};
-use super::types::ModelFilter;
+use super::super::{ModelInfo, ProviderPrefs, prefs::SortStrategy};
 use super::ModelRegistry;
+use super::types::ModelFilter;
 
 impl ModelRegistry {
     /// List models matching filter criteria from a provided list.

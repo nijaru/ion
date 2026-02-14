@@ -24,7 +24,11 @@ fn mode_to_u8(mode: ToolMode) -> u8 {
 }
 
 fn u8_to_mode(v: u8) -> ToolMode {
-    if v == 0 { ToolMode::Read } else { ToolMode::Write }
+    if v == 0 {
+        ToolMode::Read
+    } else {
+        ToolMode::Write
+    }
 }
 
 /// Update a shared tool mode atomically.
@@ -40,8 +44,16 @@ pub struct SpawnSubagentTool {
 }
 
 impl SpawnSubagentTool {
-    pub fn new(registry: Arc<SubagentRegistry>, provider: Arc<dyn LlmApi>, mode: SharedToolMode) -> Self {
-        Self { registry, provider, mode }
+    pub fn new(
+        registry: Arc<SubagentRegistry>,
+        provider: Arc<dyn LlmApi>,
+        mode: SharedToolMode,
+    ) -> Self {
+        Self {
+            registry,
+            provider,
+            mode,
+        }
     }
 }
 
