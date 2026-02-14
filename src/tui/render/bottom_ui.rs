@@ -361,7 +361,7 @@ impl App {
         };
         let detail_extra = detail_text.as_ref().map_or(0, |d| 1 + d.len());
         let cost_seg = 3 + cost_text.len();
-        let branch_extra = branch.map_or(0, |b| 3 + b.len()); // " [b]"
+        let branch_extra = branch.map_or(0, |b| 3 + b.len()); // " • b"
         let diff_stat = self.git_diff_stat;
         let diff_texts = diff_stat.map(|(ins, del)| (format!("+{ins}"), format!("-{del}")));
         let diff_extra = diff_texts
@@ -408,14 +408,29 @@ impl App {
         }
 
         if !pct_text.is_empty() {
-            if show_detail {
-                if let Some(ref detail) = detail_text {
-                    spans.push(Span::new(format!(" • {pct_text} {detail}")).dim());
-                } else {
-                    spans.push(Span::new(format!(" • {pct_text}")).dim());
+            let pct_color = match self.token_usage {
+                Some((used, max)) if max > 0 => {
+                    let pct = (used * 100) / max;
+                    if pct >= 80 {
+                        Some(RnkColor::Red)
+                    } else if pct >= 50 {
+                        Some(RnkColor::Yellow)
+                    } else {
+                        Some(RnkColor::Green)
+                    }
                 }
-            } else {
-                spans.push(Span::new(format!(" • {pct_text}")).dim());
+                _ => None,
+            };
+            spans.push(Span::new(" • ").dim());
+            let mut pct_span = Span::new(&pct_text);
+            if let Some(c) = pct_color {
+                pct_span = pct_span.color(c);
+            }
+            spans.push(pct_span);
+            if show_detail
+                && let Some(ref detail) = detail_text
+            {
+                spans.push(Span::new(format!(" {detail}")).dim());
             }
         }
 
@@ -426,8 +441,8 @@ impl App {
         if show_branch
             && let Some(b) = branch
         {
-            spans.push(Span::new(" [").dim());
-            spans.push(Span::new(b));
+            spans.push(Span::new(" • ").dim());
+            spans.push(Span::new(b).color(RnkColor::Cyan));
             if show_diff
                 && let Some((ref ins, ref del)) = diff_texts
             {
@@ -435,7 +450,6 @@ impl App {
                 spans.push(Span::new("/").dim());
                 spans.push(Span::new(del).color(RnkColor::Red));
             }
-            spans.push(Span::new("]").dim());
         }
 
         spans
