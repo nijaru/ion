@@ -291,10 +291,10 @@ impl App {
         let elapsed = format_elapsed(summary.elapsed.as_secs());
         let mut stats = vec![elapsed];
         if summary.input_tokens > 0 {
-            stats.push(format!("↑ {}", format_tokens(summary.input_tokens)));
+            stats.push(format!("{}↑", format_tokens(summary.input_tokens)));
         }
         if summary.output_tokens > 0 {
-            stats.push(format!("↓ {}", format_tokens(summary.output_tokens)));
+            stats.push(format!("{}↓", format_tokens(summary.output_tokens)));
         }
         if summary.cost > 0.0 {
             stats.push(format_cost(summary.cost));
