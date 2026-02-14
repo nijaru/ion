@@ -183,6 +183,13 @@ fn apply_pre_ops(
                         ui_drawn_at: None,
                     };
                 } else {
+                    // Scroll up so the trailing separator stays above the UI area,
+                    // matching reprint_loaded_session behavior.
+                    let (_, cursor_y) = crossterm::cursor::position()?;
+                    let excess = cursor_y.saturating_sub(available_rows);
+                    if excess > 0 {
+                        execute!(stdout, crossterm::terminal::ScrollUp(excess))?;
+                    }
                     app.render_state.position = ChatPosition::Scrolling { ui_drawn_at: None };
                 }
             }
