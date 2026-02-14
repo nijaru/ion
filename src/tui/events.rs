@@ -36,15 +36,10 @@ impl App {
             }
             Event::Resize(_, _) => {
                 self.input_state.invalidate_width();
+                self.render_state.last_resize_at = Some(std::time::Instant::now());
                 if self.mode == Mode::Selector {
-                    // While selector is open we buffer incremental chat lines; avoid
-                    // reflow, which marks reflow complete and clears the buffer.
                     self.render_state.needs_initial_render = true;
                 } else {
-                    // Resize requires width-aware transcript reflow from canonical
-                    // entries so markdown/list indentation remains readable.
-                    // The reflow path repaints only the visible viewport and does
-                    // not append a second transcript block to scrollback.
                     self.render_state.needs_reflow = true;
                 }
             }
