@@ -342,11 +342,17 @@ fn prepare_frame(app: &mut App, term_width: u16, term_height: u16) -> FramePrep 
         pre_ops.push(PreOp::ScrollViewport {
             scroll_amount: overlap_rows,
         });
-        if let ChatPosition::Tracking { next_row, .. } = app.render_state.position {
-            app.render_state.position = ChatPosition::Tracking {
-                next_row: next_row.saturating_sub(overlap_rows),
-                ui_drawn_at: None,
-            };
+        match app.render_state.position {
+            ChatPosition::Tracking { next_row, .. } => {
+                app.render_state.position = ChatPosition::Tracking {
+                    next_row: next_row.saturating_sub(overlap_rows),
+                    ui_drawn_at: None,
+                };
+            }
+            ChatPosition::Scrolling { .. } => {
+                app.render_state.position = ChatPosition::Scrolling { ui_drawn_at: None };
+            }
+            _ => {}
         }
         state_changed = true;
     }
@@ -440,6 +446,11 @@ fn tracking_ui_overlap_rows(position: &ChatPosition, layout: &UiLayout) -> u16 {
         ChatPosition::Tracking { next_row, .. } if layout.top < *next_row => {
             next_row.saturating_sub(layout.top)
         }
+        // In scrolling mode, detect when the UI grows (e.g., progress gap appears)
+        // and encroaches on the chat row just above the old UI top.
+        ChatPosition::Scrolling {
+            ui_drawn_at: Some(old_top),
+        } if layout.top < *old_top => old_top.saturating_sub(layout.top),
         _ => 0,
     }
 }
@@ -1095,11 +1106,23 @@ mod tests {
         let layout = test_layout(20, 80);
         assert!(!tracking_ui_overlap(&pos, &layout));
 
+        // Scrolling: no overlap when UI hasn't grown.
+        let scrolling = ChatPosition::Scrolling {
+            ui_drawn_at: Some(20),
+        };
+        let layout = test_layout(20, 80);
+        assert!(!tracking_ui_overlap(&scrolling, &layout));
+    }
+
+    #[test]
+    fn scrolling_ui_overlap_detects_growth() {
+        // UI grew: old top=20, new top=18 → 2 rows of overlap.
         let scrolling = ChatPosition::Scrolling {
             ui_drawn_at: Some(20),
         };
         let layout = test_layout(18, 80);
-        assert!(!tracking_ui_overlap(&scrolling, &layout));
+        assert!(tracking_ui_overlap(&scrolling, &layout));
+        assert_eq!(tracking_ui_overlap_rows(&scrolling, &layout), 2);
     }
 
     #[test]
