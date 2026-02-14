@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "p8ha",
+  "title": "[UX] Collapsible/expandable output sections in TUI",
+  "description": "Claude Code has backgrounded agent output that can be expanded (shift+up, ctrl+o). Evaluate similar patterns: collapsible tool output, expandable agent sections, hidden-by-default verbose output. Lower priority than core agent work.",
+  "status": "open",
+  "priority": 4,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-02-14T09:12:12.008Z",
+  "updated_at": "2026-02-14T09:12:12.008Z",
+  "completed_at": null,
+  "external": {}
+}

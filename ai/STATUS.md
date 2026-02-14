@@ -2,22 +2,22 @@
 
 ## Current State
 
-| Metric    | Value                                | Updated    |
-| --------- | ------------------------------------ | ---------- |
-| Phase     | Dogfood readiness                    | 2026-02-14 |
-| Status    | MCP migrated, provider refactor next | 2026-02-14 |
-| Toolchain | stable                               | 2026-01-22 |
-| Tests     | 468 passing (`cargo test -q`)        | 2026-02-14 |
-| Clippy    | clean                                | 2026-02-14 |
+| Metric    | Value                         | Updated    |
+| --------- | ----------------------------- | ---------- |
+| Phase     | Dogfood readiness             | 2026-02-14 |
+| Status    | Provider refactor landed      | 2026-02-14 |
+| Toolchain | stable                        | 2026-01-22 |
+| Tests     | 468 passing (`cargo test -q`) | 2026-02-14 |
+| Clippy    | clean                         | 2026-02-14 |
 
 ## Completed This Session
 
-- MCP: Migrated from mcp-sdk-rs to rmcp (official SDK, v0.15.0) — typed APIs, no manual JSON-RPC
-- Research: Surveyed 11 Rust LLM client crates — none viable (text+tools showstopper)
-- Research: Deep genai investigation — rejected (no text+tools, no OAuth, no cache_control, no budget_tokens)
-- Provider audit: Full module analysis (7.3k lines, 51 types, 4 streaming impls) — refactor plan created
-- Closed stale tasks: tk-add8 (RNK spike — merged), tk-bcau (soft-wrap — landed), tk-wr9i (genai — rejected)
-- Deps: Verified clean after mcp-sdk-rs removal (cargo machete, cargo tree -d)
+- Provider refactor: Split monoliths, extract shared streaming, migrate ChatGPT/Gemini to HttpClient
+  - anthropic/client.rs 760→123 lines (conversion + tests → convert.rs)
+  - openai_compat: merged request_builder + stream_handler → convert.rs
+  - subscription/ → chatgpt/ + gemini/ (named by API surface)
+  - Shared ToolCallAccumulator in stream.rs
+  - ChatGPT/Gemini now use HttpClient (gains timeouts, rate limiting, Accept header)
 
 ## Known Issues
 
@@ -32,18 +32,17 @@
 
 See task list (`tk ls`). Priority items:
 
-1. tk-59vy (p2): Refactor provider module — extract shared core, reduce duplication
-2. tk-k23x (p3): Review tool architecture — built-in vs advanced/searchable
-3. tk-vo8l (p3): Evaluate and iterate on system prompt
-4. tk-oh88 (p3): Implement OS sandbox execution
-5. tk-cmhy (p3): TOML config for approved sandbox directories
+1. tk-k23x (p3): Review tool architecture — built-in vs advanced/searchable
+2. tk-vo8l (p3): Evaluate and iterate on system prompt
+3. tk-oh88 (p3): Implement OS sandbox execution
+4. tk-cmhy (p3): TOML config for approved sandbox directories
 
 ## Key References
 
-| Topic                 | Location                                         |
-| --------------------- | ------------------------------------------------ |
-| Provider audit + plan | tk-59vy description                              |
-| LLM crate survey      | `ai/research/rust-llm-crates-survey-2026-02.md`  |
-| genai deep dive       | `ai/research/genai-crate-deep-dive-2026-02.md`   |
-| rmcp/colgrep research | `ai/research/rmcp-and-colgrep-crates-2026-02.md` |
-| TUI v3 architecture   | `ai/design/tui-v3-architecture-2026-02.md`       |
+| Topic                 | Location                                            |
+| --------------------- | --------------------------------------------------- |
+| LLM crate survey      | `ai/research/rust-llm-crates-survey-2026-02.md`     |
+| genai deep dive       | `ai/research/genai-crate-deep-dive-2026-02.md`      |
+| rmcp/colgrep research | `ai/research/rmcp-and-colgrep-crates-2026-02.md`    |
+| TUI v3 architecture   | `ai/design/tui-v3-architecture-2026-02.md`          |
+| pi-mono provider arch | `ai/research/pi-mono-provider-architecture-2026.md` |

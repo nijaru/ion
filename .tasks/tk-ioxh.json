@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "ioxh",
+  "title": "[ARCH] Evaluate async subagent execution model",
+  "description": "Research and design how to run async subagents — parallel tool execution, background tasks, agent composition. Review what Claude Code, Gemini CLI, and others do. Balance SOTA features with proven effectiveness. Key: modular design so these compose well with agent loop, harness, system prompt. Depends on clean provider/agent architecture.",
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-02-14T09:12:11.209Z",
+  "updated_at": "2026-02-14T09:12:11.209Z",
+  "completed_at": null,
+  "external": {}
+}
