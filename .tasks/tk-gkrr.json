@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "gkrr",
+  "title": "[ARCH] OpenAI Responses API provider path",
+  "description": "gpt-5.x-codex models were trained on Responses API format (local_shell native tool, freeform apply_patch). Ion uses Chat Completions with standard function tools — format mismatch is the biggest performance gap vs Codex CLI. Requires new provider implementation path alongside existing openai_compat. See ai/research/codex-cli-system-prompt-tools-2026.md for full analysis.",
+  "status": "open",
+  "priority": 2,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-02-14T21:17:06.434Z",
+  "updated_at": "2026-02-14T21:17:06.434Z",
+  "completed_at": null,
+  "external": {}
+}
