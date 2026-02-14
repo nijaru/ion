@@ -14,9 +14,9 @@
 
 - Status line: project name instead of full path (saves ~20 chars)
 - Status line: adaptive width — drops elements by priority (detail → model → diff → branch)
-- Status line: colored % (green <50, yellow 50-80, red >80)
-- Status line: git diff stats (+N/-M green/red) after branch, refreshed on task completion
-- Status line: cyan branch name with dot separator (removed brackets)
+- Status line: colored % by usage (green <50, yellow 50-80, red >80)
+- Status line: git diff stats (+N/-M green/red) vs HEAD, refreshed on task completion
+- Status line: cyan branch with dot separator (removed brackets)
 - Status line: project name and branch un-dimmed for visual hierarchy
 
 ## Known Issues
@@ -33,9 +33,9 @@
 See task list (`tk ls`). Priority items:
 
 1. tk-9e4y (p2): Migrate MCP from mcp-sdk-rs to rmcp (official SDK, typed, modern spec)
-2. tk-oh88 (p2): Implement OS sandbox execution
+2. tk-vo8l (p3): Evaluate and iterate on system prompt (add tool usage guidance)
 3. tk-k23x (p3): Review tool architecture — built-in vs advanced/searchable
-4. tk-vo8l (p3): Evaluate and iterate on system prompt (add tool usage guidance)
+4. tk-oh88 (p3): Implement OS sandbox execution
 5. tk-zqsw (p3): Persist progress/completion state for session resume
 
 ## Key References

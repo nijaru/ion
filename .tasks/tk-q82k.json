@@ -1,0 +1,28 @@
+{
+  "project": "tk",
+  "ref": "q82k",
+  "title": "[UX] Configurable status line",
+  "description": "Allow users to configure what appears in the status line (show/hide cost, tokens, path, branch, etc). Could use a config struct with booleans in settings, or a format string. Lower priority — pick good defaults first, add settings when users need different layouts.",
+  "status": "open",
+  "priority": 4,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [
+    {
+      "ts": "2026-02-14T08:19:22.638Z",
+      "msg": "Relative path display: show path relative to invocation dir with last component normal, prefix dim. e.g. dim(ion/src/)tui. Needs a current_dir field separate from session.working_dir when directory changes are supported."
+    },
+    {
+      "ts": "2026-02-14T08:19:23.458Z",
+      "msg": "Status line improvements done: adaptive width dropping, colored % (green/yellow/red), cyan branch, git diff stats (+N/-M green/red), project name instead of full path. Remaining: customizable script-based status line, multiline wrap, git state symbols."
+    }
+  ],
+  "created_at": "2026-02-14T07:42:45.833Z",
+  "updated_at": "2026-02-14T08:19:23.458Z",
+  "completed_at": null,
+  "external": {}
+}

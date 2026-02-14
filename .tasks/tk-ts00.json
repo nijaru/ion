@@ -3,7 +3,7 @@
   "ref": "ts00",
   "title": "Persist last task summary for progress line on resume",
   "description": "When resuming with --continue, the progress completion line (elapsed, tokens, cost) is blank because TaskSummary is in-memory only. Need to persist it in the session store (last_elapsed, last_input_tokens, last_output_tokens, last_cost, last_was_cancelled) and reconstruct TaskSummary on load.",
-  "status": "open",
+  "status": "done",
   "priority": 3,
   "labels": [],
   "assignees": [],
@@ -22,7 +22,7 @@
     }
   ],
   "created_at": "2026-02-11T08:09:10.969Z",
-  "updated_at": "2026-02-12T05:07:45.736Z",
-  "completed_at": null,
+  "updated_at": "2026-02-14T07:16:17.703Z",
+  "completed_at": "2026-02-14T07:16:17.703Z",
   "external": {}
 }
