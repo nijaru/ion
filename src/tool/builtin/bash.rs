@@ -129,33 +129,39 @@ impl Tool for BashTool {
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let exit_code = output.status.code().unwrap_or(-1);
 
-        let mut content = stdout;
+        // Build raw output (stdout + stderr)
+        let mut raw_output = stdout;
         if !stderr.is_empty() {
-            if !content.is_empty() {
-                content.push('\n');
+            if !raw_output.is_empty() {
+                raw_output.push('\n');
             }
-            content.push_str("STDERR:\n");
-            content.push_str(&stderr);
+            raw_output.push_str("STDERR:\n");
+            raw_output.push_str(&stderr);
         }
 
         // Truncate large output to prevent context overflow
-        let truncated = content.len() > MAX_OUTPUT_SIZE;
+        let truncated = raw_output.len() > MAX_OUTPUT_SIZE;
         if truncated {
-            let truncate_at = content
+            let truncate_at = raw_output
                 .char_indices()
                 .take_while(|(i, _)| *i < MAX_OUTPUT_SIZE)
                 .last()
                 .map_or(MAX_OUTPUT_SIZE, |(i, c)| i + c.len_utf8());
-            content.truncate(truncate_at);
-            content.push_str("\n\n[Output truncated]");
+            raw_output.truncate(truncate_at);
+            raw_output.push_str("\n\n[Output truncated]");
         }
+
+        // Structured output with metadata for model signal
+        let total_lines = raw_output.lines().count();
+        let content = format!("Exit code: {exit_code}\nOutput lines: {total_lines}\n\n{raw_output}");
 
         Ok(ToolResult {
             content,
             is_error: !output.status.success(),
             metadata: Some(json!({
-                "exit_code": output.status.code(),
+                "exit_code": exit_code,
                 "truncated": truncated,
             })),
         })
