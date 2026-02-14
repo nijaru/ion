@@ -103,6 +103,7 @@ impl App {
                         self.task.last_thinking_duration = Some(start.elapsed());
                     }
                     self.task.clear();
+                    self.refresh_git_state();
                     // Auto-scroll to bottom so user sees completion
                     self.message_list.scroll_to_bottom();
                 }

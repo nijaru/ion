@@ -89,6 +89,8 @@ pub struct App {
     pub startup_header_lines: Vec<StyledLine>,
     /// Cached git branch (or detached-head short SHA) for status line display.
     pub git_branch: Option<String>,
+    /// Cached git diff stats (insertions, deletions) for status line.
+    pub git_diff_stat: Option<(usize, usize)>,
     pub agent: Arc<Agent>,
     pub session: Session,
     pub orchestrator: Arc<ToolOrchestrator>,

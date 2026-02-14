@@ -348,8 +348,8 @@ impl App {
         };
 
         // Segment widths (each includes its own " • " separator prefix).
-        // Drop order: detail → model → branch → project.
-        // Always shown: mode, short %, cost.
+        // Drop order: detail → model → diff stats → branch.
+        // Always shown: mode, short %, cost, project.
         let mode_w = mode_label.len() + 3; // " [MODE]"
         let think_w = if think.is_empty() { 0 } else { 1 + think.len() };
         let model_seg = 3 + model_name.len() + think_w; // " • model think"
@@ -362,20 +362,30 @@ impl App {
         let detail_extra = detail_text.as_ref().map_or(0, |d| 1 + d.len());
         let cost_seg = 3 + cost_text.len();
         let branch_extra = branch.map_or(0, |b| 3 + b.len()); // " [b]"
+        let diff_stat = self.git_diff_stat;
+        let diff_texts = diff_stat.map(|(ins, del)| (format!("+{ins}"), format!("-{del}")));
+        let diff_extra = diff_texts
+            .as_ref()
+            .map_or(0, |(i, d)| 2 + i.len() + d.len()); // " +N/-M"
         let proj_seg = 3 + project.len();
 
         // Total width at each drop level.
-        let w0 = mode_w + model_seg + pct_seg + detail_extra + cost_seg + proj_seg + branch_extra;
-        let w1 = mode_w + model_seg + pct_seg + cost_seg + proj_seg + branch_extra;
-        let w2 = mode_w + think_seg + pct_seg + cost_seg + proj_seg + branch_extra;
-        let (show_model, show_detail, show_branch) = if w0 <= max_cells {
-            (true, true, true)
+        let w0 =
+            mode_w + model_seg + pct_seg + detail_extra + cost_seg + proj_seg + branch_extra + diff_extra;
+        let w1 = mode_w + model_seg + pct_seg + cost_seg + proj_seg + branch_extra + diff_extra;
+        let w2 = mode_w + think_seg + pct_seg + cost_seg + proj_seg + branch_extra + diff_extra;
+        let w3 = mode_w + think_seg + pct_seg + cost_seg + proj_seg + branch_extra;
+
+        let (show_model, show_detail, show_branch, show_diff) = if w0 <= max_cells {
+            (true, true, true, true)
         } else if w1 <= max_cells {
-            (true, false, true)
+            (true, false, true, true)
         } else if w2 <= max_cells {
-            (false, false, true)
+            (false, false, true, true)
+        } else if w3 <= max_cells {
+            (false, false, true, false)
         } else {
-            (false, false, false)
+            (false, false, false, false)
         };
 
         // Build spans.
@@ -418,6 +428,13 @@ impl App {
         {
             spans.push(Span::new(" [").dim());
             spans.push(Span::new(b));
+            if show_diff
+                && let Some((ref ins, ref del)) = diff_texts
+            {
+                spans.push(Span::new(format!(" {ins}")).color(RnkColor::Green));
+                spans.push(Span::new("/").dim());
+                spans.push(Span::new(del).color(RnkColor::Red));
+            }
             spans.push(Span::new("]").dim());
         }
 
