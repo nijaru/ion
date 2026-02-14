@@ -357,9 +357,7 @@ impl App {
             }
         }
 
-        if self.session_cost > 0.0 {
-            spans.push(Span::new(format!(" • {}", format_cost(self.session_cost))).dim());
-        }
+        spans.push(Span::new(format!(" • {}", format_cost(self.session_cost))).dim());
 
         spans.push(Span::new(" • ").dim());
         spans.push(Span::new(location).dim());
