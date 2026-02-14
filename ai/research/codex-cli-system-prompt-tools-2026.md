@@ -1,26 +1,64 @@
-# Codex CLI: System Prompt and Tool Architecture Analysis
+# Codex CLI: System Prompt, Tools, and Agent Loop Analysis
 
-**Source:** github.com/openai/codex (Rust rewrite, `codex-rs/`)
-**Date:** 2026-02-09
-**Repo stats:** ~60k stars, Apache-2.0, primarily Rust (96%)
+**Date:** 2026-02-14 (updated from 2026-02-09)
+**Source:** github.com/openai/codex (open source, codex-rs Rust implementation)
+**Focus:** What makes Codex CLI effective with gpt-5.3-codex vs. third-party agents
 
-## 1. System Prompt Architecture
+## Key Findings Summary
 
-### Prompt Hierarchy
+| Aspect             | Codex CLI                                                          | ion                           |
+| ------------------ | ------------------------------------------------------------------ | ----------------------------- |
+| API                | Responses API (WebSocket + SSE)                                    | Chat Completions API          |
+| Tool format        | `local_shell` + `apply_patch` (freeform custom type)               | Standard function tools       |
+| Tool result format | Structured text (exit code, duration, output)                      | Raw output                    |
+| System prompt      | Model-specific, ~4000 words for gpt-5.3-codex                      | Generic, ~500 words           |
+| Agent loop         | `needs_follow_up` flag from tool calls, no iteration cap           | `tool_calls.is_empty()` check |
+| Compaction         | Token-limit-triggered auto-compact mid-turn                        | Threshold-based between turns |
+| Env context        | XML-serialized `<environment_context>` block                       | Plain text in system prompt   |
+| Model config       | Per-model JSON with shell_type, apply_patch_type, reasoning levels | None                          |
 
-Codex uses a layered instruction system with **per-model prompt variants**:
+## 1. System Prompts -- Model-Specific Design
 
-| File                                      | Lines | Bytes | Used By                           |
-| ----------------------------------------- | ----- | ----- | --------------------------------- |
-| `prompt.md`                               | 275   | 21KB  | Base models (fallback)            |
-| `prompt_with_apply_patch_instructions.md` | 351   | 24KB  | Models with apply_patch via shell |
-| `gpt_5_codex_prompt.md`                   | 68    | 7KB   | GPT-5 Codex (compact version)     |
-| `gpt_5_1_prompt.md`                       | 331   | -     | GPT-5.1                           |
-| `gpt_5_2_prompt.md`                       | 298   | -     | GPT-5.2                           |
-| `gpt-5.2-codex_instructions_template.md`  | 80    | 7KB   | GPT-5.2 Codex (templated)         |
+Codex CLI uses **different system prompts per model family**, loaded at runtime:
 
-The GPT-5 Codex prompt (68 lines) is **dramatically shorter** than the base prompt (275 lines).
-The templated GPT-5.2 prompt uses `{{ personality }}` substitution.
+| File                                      | Model                             |
+| ----------------------------------------- | --------------------------------- |
+| `prompt.md`                               | Default (generic models)          |
+| `prompt_with_apply_patch_instructions.md` | Models with apply_patch via shell |
+| `gpt_5_codex_prompt.md`                   | gpt-5-codex                       |
+| `gpt_5_1_prompt.md`                       | gpt-5.1                           |
+| `gpt_5_2_prompt.md`                       | gpt-5.2                           |
+| `gpt-5.2-codex_prompt.md`                 | gpt-5.2-codex                     |
+| `gpt-5.1-codex-max_prompt.md`             | gpt-5.1-codex-max                 |
+
+For **gpt-5.3-codex** specifically, the system prompt is embedded directly in `models.json` as `base_instructions` -- a massive ~4000-word prompt stored per-model-config. This is the most sophisticated prompt.
+
+### Personality System (gpt-5.3-codex unique)
+
+The prompt supports templated personality variants via `{{ personality }}`:
+
+- **pragmatic** (default): "deeply pragmatic, effective software engineer"
+- **friendly**: "optimize for team morale and being a supportive teammate"
+
+Injected into the base instructions template at runtime.
+
+### Key Behavioral Instructions (gpt-5.3-codex)
+
+- "Persist until the task is fully handled end-to-end within the current turn"
+- "Unless the user explicitly asks for a plan... assume the user wants you to make code changes"
+- "You must keep going until the query or task is completely resolved"
+- "Persevere even when function calls fail"
+- Explicit instructions about commentary channel vs final channel
+- "You provide user updates frequently, every 20s"
+- "Parallelize tool calls whenever possible - especially file reads. Use `multi_tool_use.parallel`"
+
+### Critical Difference: Autonomy Language
+
+The gpt-5.1+ prompts add an entire "Autonomy and Persistence" section absent from the generic prompt:
+
+> "Persist until the task is fully handled end-to-end within the current turn whenever feasible: do not stop at analysis or partial fixes; carry changes through implementation, verification, and a clear explanation of outcomes unless the user explicitly pauses or redirects you."
+
+The generic `prompt.md` says "Please keep going" -- the codex prompts say "You **must** keep going" and "persevere even when function calls fail."
 
 ### Prompt Assembly
 
@@ -29,7 +67,7 @@ System instructions are sent as the `instructions` field in OpenAI's Responses A
 ```rust
 pub struct ResponsesApiRequest<'a> {
     pub model: &'a str,
-    pub instructions: &'a str,  // system prompt goes here
+    pub instructions: &'a str,  // system prompt
     pub input: &'a [ResponseItem],  // conversation history
     pub tools: &'a [serde_json::Value],
     pub tool_choice: &'static str,
@@ -37,7 +75,6 @@ pub struct ResponsesApiRequest<'a> {
     pub reasoning: Option<Reasoning>,
     pub stream: bool,
     pub text: Option<TextControls>,  // verbosity control
-    ...
 }
 ```
 
@@ -54,225 +91,235 @@ Priority for base instructions:
 - **Skill instructions**: `<skill>\n<name>{name}</name>\n<path>{path}</path>\n{contents}\n</skill>`
 - **Collaboration mode**: Templates appended for plan/execute/pair-programming/default modes
 
-### System Prompt Content (Base ~275 lines)
-
-Major sections in the base `prompt.md`:
-
-1. **Identity & capabilities** (3 lines) - "You are a coding agent running in the Codex CLI"
-2. **Personality** (3 lines) - "concise, direct, and friendly"
-3. **AGENTS.md spec** (10 lines) - Scope rules, precedence
-4. **Responsiveness / Preamble messages** (20 lines) - Rules for pre-tool-call messages, with 8 examples
-5. **Planning** (70 lines!) - Detailed update_plan guidance with good/bad plan examples
-6. **Task execution** (20 lines) - Coding guidelines, apply_patch usage
-7. **Validating work** (15 lines) - Testing philosophy
-8. **Ambition vs precision** (8 lines) - Greenfield vs existing codebase
-9. **Progress updates** (8 lines)
-10. **Final answer formatting** (80 lines) - Very detailed formatting rules: headers, bullets, monospace, file references, tone
-
-The GPT-5 Codex prompt (68 lines) condenses ALL of this into a compressed form:
-
-- Editing constraints, plan tool usage, special requests, presenting work, and file reference rules
-- Much more terse: "Default: be very concise; friendly coding teammate tone"
-
-### Personality System (GPT-5.2+)
-
-Two personalities defined as separate markdown files (~2KB each):
-
-- **Pragmatic**: "deeply pragmatic, effective software engineer" - clarity, pragmatism, rigor
-- **Friendly**: "optimize for team morale and being a supportive teammate" - warm, encouraging, uses "we"
-
-Injected into the template via `{{ personality }}`.
-
 ### Collaboration Modes
 
-Templates that modify behavior:
-
 - **Default** (680 bytes): Minimal, strongly prefers executing over asking
-- **Execute** (3.9KB): Independent execution, assumptions-first, long-horizon planning
-- **Plan** (7KB): 3-phase planning (explore, intent chat, implementation chat), strict no-mutation rules
-- **Pair Programming** (1.1KB): Build together, small steps, liberal planning tool use
+- **Execute** (3.9KB): Independent execution, assumptions-first
+- **Plan** (7KB): 3-phase planning, strict no-mutation rules
+- **Pair Programming** (1.1KB): Build together, small steps
 
-## 2. Tool Definitions
+## 2. Tool Definitions -- Not Standard Function Calling
 
-### Tool Count and Types
+Codex CLI uses the **OpenAI Responses API**, not Chat Completions. Tools are a mix of types:
 
-**Core tools** (always present):
-
-1. `shell` / `shell_command` / `exec_command` (mutually exclusive, depends on model config)
-2. `write_stdin` (only with unified exec)
-3. `update_plan`
-4. `list_mcp_resources`
-5. `list_mcp_resource_templates`
-6. `read_mcp_resource`
-
-**Conditional tools:** 7. `apply_patch` (freeform OR function variant) 8. `request_user_input` (collaboration modes only) 9. `search_tool_bm25` (MCP tool discovery) 10. `grep_files` (experimental) 11. `read_file` (experimental) 12. `list_dir` (experimental) 13. `view_image` (when model supports image input) 14. `web_search` (cached or live) 15. `spawn_agent` / `send_input` / `resume_agent` / `wait` / `close_agent` (collab/multi-agent)
-
-Typical tool count: **6-10 core** + MCP tools. Up to ~16 with all features enabled.
-
-### Tool Format: OpenAI Responses API
-
-Tools are serialized as JSON objects with a `type` discriminator:
+### Tool Types (from `client_common.rs`)
 
 ```rust
 enum ToolSpec {
-    Function(ResponsesApiTool),     // Standard function calling
-    LocalShell {},                   // Built-in shell (no schema)
-    WebSearch { external_web_access },
-    Freeform(FreeformTool),         // Custom tool with grammar
+    Function(ResponsesApiTool),   // Standard JSON schema function
+    LocalShell {},                // Native shell execution (no schema)
+    WebSearch { external_web_access: Option<bool> },
+    Freeform(FreeformTool),       // Custom format tools
 }
 ```
 
-#### Standard Function Tool Format
+### The `local_shell` Tool
 
-```json
-{
-  "type": "function",
-  "name": "shell",
-  "description": "Runs a shell command and returns its output.\n- The arguments to `shell` will be passed to execvp()...",
-  "strict": false,
-  "parameters": {
-    "type": "object",
-    "properties": {
-      "command": {
-        "type": "array",
-        "items": { "type": "string" },
-        "description": "The command to execute"
-      },
-      "workdir": {
-        "type": "string",
-        "description": "The working directory..."
-      },
-      "timeout_ms": { "type": "number", "description": "..." }
+A **first-class Responses API type** -- not a function tool. No JSON schema. The model natively understands how to invoke shell commands through `LocalShellCall` response items. This is an OpenAI-specific capability baked into the model.
+
+### The `apply_patch` Freeform Tool
+
+For gpt-5.x-codex models, file editing uses a **freeform custom tool** -- not JSON function calling:
+
+```rust
+struct FreeformTool {
+    name: String,           // "apply_patch"
+    description: String,
+    format: FreeformToolFormat {
+        r#type: String,     // "freeform"
+        syntax: String,     // The patch format grammar
+        definition: String, // Full BNF-like grammar definition
     },
-    "required": ["command"],
-    "additionalProperties": false
-  }
 }
 ```
 
-#### Freeform Tool Format (GPT-5+ only)
+The model outputs raw patch text directly (not JSON-wrapped), parsed by a custom patch engine. Avoids JSON serialization overhead and escaping issues with code content.
 
-```json
-{
-  "type": "custom",
-  "name": "apply_patch",
-  "description": "Use the `apply_patch` tool to edit files. This is a FREEFORM tool, so do not wrap the patch in JSON.",
-  "format": {
-    "type": "grammar",
-    "syntax": "lark",
-    "definition": "start: begin_patch hunk+ end_patch\nbegin_patch: \"*** Begin Patch\" LF\n..."
-  }
-}
-```
+### Shell Tool Variants (per-model in `models.json`)
+
+- `shell_command`: Simple string command (gpt-5.x-codex models)
+- `shell`: Array-based command (older models)
+- `unified_exec`: PTY-based execution with session management (newer experimental)
+
+For gpt-5.3-codex: `"shell_type": "shell_command"` -- the simplest variant.
+
+### Core Tool Set
+
+Always present: shell (variant depends on model), `update_plan`, MCP resource tools.
+Conditional: `apply_patch`, `request_user_input`, `search_tool_bm25`, `grep_files`, `read_file`, `list_dir`, `view_image`, `web_search`, sub-agent tools (spawn/send/wait/resume/close).
+
+Typical tool count: **6-10 core** + MCP tools. Up to ~16 with all features.
 
 ### Tool Description Verbosity
 
-Descriptions are **concise but functional**:
+All property descriptions are present and human-readable. No abbreviation.
 
-- `shell`: 2-3 lines with usage notes ("pass to execvp", "set workdir")
-- `read_file`: 1 line ("Reads a local file with 1-indexed line numbers...")
-- `grep_files`: 1 line
-- `update_plan`: 3 lines
-- `apply_patch` (JSON variant): ~60 lines with full grammar + examples (very verbose!)
-- `apply_patch` (freeform): 1 line description + Lark grammar definition (20 lines)
+- `additionalProperties: false` on every object (helps model adherence)
+- `strict: false` on all tools (allows flexible model output)
 
-Property descriptions are typically **one short sentence** each:
+Main optimization is **conditional tool inclusion**, not minification.
 
-- "Shell command to execute."
-- "Absolute path to the file"
-- "The maximum number of lines to return."
+## 3. Tool Result Formatting
 
-All tools use `strict: false` (no strict JSON schema enforcement).
+### Structured Shell Output
 
-### Interesting Tool Design Patterns
-
-1. **Sandbox permissions as tool params**: Shell tools include `sandbox_permissions` and `justification` fields for escalation
-2. **prefix_rule param**: Lets model suggest command prefixes for future auto-approval
-3. **Freeform tools**: Custom tool type with Lark grammar definition -- the model outputs raw patch text, not JSON
-4. **search_tool_bm25**: Dynamic MCP tool discovery -- searches tool metadata, makes matches available for next call
-5. **Agent tools**: Full sub-agent lifecycle (spawn, send, wait, resume, close) with agent role types
-
-## 3. Message Formatting for OpenAI Models
-
-### Responses API (not Chat Completions)
-
-Codex uses the **Responses API**, not the Chat Completions API. Key differences:
-
-- System prompt goes in `instructions` field (not a system message)
-- Conversation items are `ResponseItem` objects (not messages)
-- Native support for `local_shell` and `web_search` tool types
-- `FunctionCall` and `FunctionCallOutput` are first-class item types
-- `parallel_tool_calls` is a top-level parameter
-- `reasoning` parameter for reasoning effort control
-- `text.verbosity` for controlling output verbosity (low/medium/high)
-- `prompt_cache_key` for explicit prompt caching
-
-### Shell Output Formatting
-
-When using freeform `apply_patch`, shell tool outputs are **re-serialized** from JSON to structured text:
+Shell outputs are **always** wrapped with metadata:
 
 ```
 Exit code: 0
 Wall time: 1.2 seconds
 Total output lines: 42
 Output:
-[actual output here]
+<actual output, truncated to token limit>
 ```
 
-This avoids double-JSON-encoding when the tool output format is already text-based.
+This is from `format_exec_output_for_model_freeform()` in `tools/mod.rs`. The `reserialize_shell_outputs` function in `client_common.rs` converts JSON tool outputs into this structured text when the freeform apply_patch tool is present.
 
-### Environment Context (XML)
+### Truncation Policy
+
+From `models.json` for gpt-5.3-codex:
+
+```json
+"truncation_policy": { "mode": "tokens", "limit": 10000 }
+```
+
+Large outputs are truncated to 10k tokens per tool result, preventing single tool outputs from dominating context.
+
+## 4. Agent Loop -- How It Decides to Continue
+
+### Core Loop (from `codex.rs:run_turn`, line 4203)
+
+```
+loop {
+    // 1. Drain any pending user messages (mid-turn steering)
+    // 2. Build full history for prompt
+    // 3. Stream model response via run_sampling_request
+    // 4. For each OutputItemDone:
+    //    - If tool call: queue execution future, set needs_follow_up = true
+    //    - If message: record as last_agent_message
+    //    - If error: still set needs_follow_up = true
+    // 5. On Completed event:
+    //    - needs_follow_up |= has_pending_input
+    //    - If token_limit_reached AND needs_follow_up: auto-compact, continue
+    //    - If !needs_follow_up: break (model decided to stop)
+    //    - Otherwise: continue
+}
+```
+
+### Key Design: `needs_follow_up` Flag
+
+The loop continues when **any** of these are true:
+
+1. The model made tool calls (`needs_follow_up` set by `handle_output_item_done`)
+2. A tool error was returned to the model (even missing call IDs trigger follow-up)
+3. The user submitted input mid-turn (`has_pending_input`)
+4. The model's response was interrupted and needs retry
+
+**No visible max-turns/iterations limit.** The model decides when to stop by not making tool calls.
+
+### Mid-Turn Auto-Compaction
+
+When total token usage exceeds `auto_compact_token_limit` AND the turn needs follow-up, Codex runs compaction inline and continues. Prevents context window exhaustion during long agent runs.
+
+### Parallel Tool Execution
+
+Tool calls within a single response are executed via `FuturesOrdered`:
+
+```rust
+let mut in_flight: FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>> =
+    FuturesOrdered::new();
+// ... for each tool call:
+in_flight.push_back(tool_future);
+```
+
+Runs in parallel but results collected in order.
+
+### Retry and Transport Fallback
+
+Streaming failures trigger retries with exponential backoff. After exhausting retry budget, the client falls back from WebSocket to HTTPS SSE transport and resets the retry counter.
+
+## 5. Model-Specific Configuration (gpt-5.3-codex)
+
+From `models.json`:
+
+```json
+{
+  "slug": "gpt-5.3-codex",
+  "context_window": 272000,
+  "supports_parallel_tool_calls": true,
+  "apply_patch_tool_type": "freeform",
+  "shell_type": "shell_command",
+  "default_reasoning_level": "medium",
+  "supported_reasoning_levels": ["low", "medium", "high", "xhigh"],
+  "supports_reasoning_summaries": true,
+  "support_verbosity": true,
+  "default_verbosity": "low",
+  "reasoning_summary_format": "experimental",
+  "truncation_policy": { "mode": "tokens", "limit": 10000 }
+}
+```
+
+Key model-specific features:
+
+- **Verbosity control**: `text.verbosity` parameter set to "low" by default
+- **Reasoning summaries**: Model reasoning traces summarized for display
+- **272k context window**: Enables very long agent runs
+- **xhigh reasoning**: Fourth tier beyond "high" for maximum depth
+- **Truncation at 10k tokens per tool result**
+
+## 6. Environment Context
+
+Codex injects environment context as XML:
 
 ```xml
 <environment_context>
-  <cwd>/path/to/repo</cwd>
+  <cwd>/path/to/project</cwd>
   <shell>bash</shell>
-  <network enabled="true">
-    <allowed>api.example.com</allowed>
-  </network>
 </environment_context>
 ```
 
-## 4. Compact Tool Definitions
+Injected as a system/developer message item, separate from the system prompt. Updated between turns when cwd or network config changes.
 
-Codex does **not** use compact/minified tool definitions. Key observations:
+## 7. Actionable Gaps: What ion is Missing
 
-- All property descriptions are present and human-readable
-- No abbreviation of parameter names or descriptions
-- `additionalProperties: false` on every object (helps model adherence)
-- `strict: false` on all tools (allows flexible model output)
-- Tool schemas use a subset of JSON Schema (no `oneOf`, `anyOf`, etc.)
-- MCP tool schemas are **sanitized** at import time to fit this subset
+### High Impact (likely explains performance gap)
 
-The main optimization is **conditional tool inclusion**:
+1. **Responses API for OpenAI models**: The `local_shell` tool type and freeform `apply_patch` are Responses API features that gpt-5.x-codex models were trained on. Using Chat Completions API means the model must work with a format it wasn't optimized for. This is probably the single biggest factor.
 
-- Tools are added/removed based on model capabilities and feature flags
-- `search_tool_bm25` hides MCP tools until searched (reduces tool count per turn)
-- Experimental tools (`grep_files`, `read_file`, `list_dir`) gated behind model-level flags
-- Web search can be cached or live, or omitted entirely
+2. **Structured tool results**: ion returns raw tool output. Codex wraps every shell result with exit code, duration, and line count metadata. This gives the model better signal about success/failure without parsing.
 
-### Token Budget Awareness
+3. **Dramatically more aggressive autonomy language**: ion's prompt says "Keep going until the task is fully resolved" (1 sentence). Codex's gpt-5.3 prompt has an entire "Autonomy and Persistence" section (~150 words) repeated in multiple phrasings: "You must keep going", "Persevere even when function calls fail", "do not stop at analysis or partial fixes; carry changes through implementation, verification." The repetition and intensity matter for model behavior.
 
-- `auto_compact_token_limit` per model for triggering compaction
-- `effective_context_window_percent: 95` (leaves headroom)
-- Tool output truncation: configurable via `truncation_policy` (bytes or tokens)
-- Context compaction prompt at `core/templates/compact/prompt.md`:
-  "Create a handoff summary for another LLM that will resume the task"
+4. **Tool output truncation**: Codex truncates tool results to 10k tokens. Large outputs (full test suite dumps, big file reads) can poison ion's context and cause the model to lose track.
 
-## 5. Key Takeaways for ion
+### Medium Impact
 
-1. **Prompt size scales inversely with model capability**: GPT-5 Codex gets 68 lines vs 275 for base models. Smarter models need fewer instructions.
+5. **Model-specific prompts**: Codex tailors prompts per model family. Different models get different system prompts, tool types, and behavioral instructions. ion uses the same prompt for all models.
 
-2. **Per-model prompt variants are standard**: Different models get different system prompts, not just different tool sets.
+6. **Mid-turn auto-compaction**: Codex compacts the conversation mid-turn if tokens exceed the limit, then continues. ion compacts between turns only. For long agent runs, this prevents hard failures.
 
-3. **Tool descriptions are concise but not minified**: One-sentence descriptions work well. The apply_patch grammar is the exception (needs to be verbose for correct output).
+7. **Parallel tool call instruction**: The gpt-5.3 prompt explicitly tells the model "Parallelize tool calls whenever possible - especially file reads. Use `multi_tool_use.parallel`." ion mentions parallel calls but less emphatically.
 
-4. **Freeform/custom tools are a GPT-specific feature**: The Lark grammar approach for apply_patch avoids JSON wrapping overhead. Not portable to other providers.
+8. **Freeform apply_patch**: The custom patch format avoids JSON escaping issues with code. When code contains quotes, backslashes, or newlines, JSON function calling can produce malformed tool calls. The freeform format sidesteps this entirely.
 
-5. **Responses API is purpose-built for agents**: The `instructions` + `input` + `tools` separation is cleaner than stuffing everything into messages. For non-OpenAI providers, ion would need to map this pattern onto their APIs.
+### Lower Impact
 
-6. **Collaboration modes are system prompt addons**: Plan/Execute/Pair are just extra text appended to base instructions, not separate tool sets.
+9. **Personality system**: Configurable personality (pragmatic vs friendly) is a UX feature, unlikely to affect task completion.
 
-7. **Multi-agent via tool calls**: Sub-agents are spawned, messaged, and waited-on through standard tool calls, not a separate protocol.
+10. **Progress update instructions**: The gpt-5.3 prompt includes detailed instructions about commentary/progress updates every 20 seconds. UX quality-of-life.
 
-8. **Tool discovery via search**: When many MCP tools exist, `search_tool_bm25` lets the model find relevant ones without bloating every request.
+11. **AGENTS.md scoping spec**: Codex has a detailed spec for AGENTS.md scoping rules (directory-tree scope, precedence). ion loads AGENTS.md but may not implement the full scoping semantics.
+
+## 8. Concrete Recommendations for ion (Priority Order)
+
+1. **Investigate Responses API for OpenAI provider** -- the `local_shell` native tool type and freeform tools likely improve model performance since gpt-5.x-codex was trained on these formats. This requires a new provider implementation path.
+
+2. **Enrich system prompt autonomy language** -- adopt the aggressive persistence language from gpt-5.3-codex prompt. The key phrases: "must keep going", "persevere even when function calls fail", "do not stop at analysis or partial fixes; carry changes through implementation, verification". Quick change, testable immediately.
+
+3. **Add structured tool result metadata** -- wrap shell output with exit code, duration, total lines. Format: `Exit code: N\nWall time: Xs\nOutput:\n...`. ~20 lines of code change in tool result formatting.
+
+4. **Add truncation policy for tool outputs** -- cap at ~10k tokens per tool result. Large outputs currently flood the context.
+
+5. **Model-specific prompt selection** -- at minimum, detect gpt-5.x models and use a more aggressive/specific prompt. The prompts are already available as reference in this analysis.
+
+6. **Mid-turn compaction** -- when token count exceeds threshold during an active tool loop, compact before the next model call rather than failing or waiting for the loop to end.
