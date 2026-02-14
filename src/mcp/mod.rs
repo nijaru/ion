@@ -1,15 +1,12 @@
 use anyhow::Result;
 use async_trait::async_trait;
-use mcp_sdk_rs::client::Client;
-use mcp_sdk_rs::session::Session;
-use mcp_sdk_rs::transport::Message;
+use rmcp::model::{CallToolRequestParams, Tool as RmcpTool};
+use rmcp::service::{RunningService, ServiceExt};
+use rmcp::transport::TokioChildProcess;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
-use std::collections::HashMap;
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::process::Command;
-use tokio::sync::{Mutex, mpsc};
 
 use crate::tool::types::{ToolError, ToolResult};
 
@@ -30,7 +27,7 @@ pub trait McpFallback: Send + Sync {
 pub struct McpServerConfig {
     pub command: String,
     pub args: Vec<String>,
-    pub env: Option<HashMap<String, String>>,
+    pub env: Option<std::collections::HashMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,9 +56,10 @@ pub enum McpError {
     Internal(String),
 }
 
+type ClientService = RunningService<rmcp::service::RoleClient, ()>;
+
 pub struct McpClient {
-    client: Client,
-    _to_session_tx: mpsc::UnboundedSender<Message>,
+    service: ClientService,
 }
 
 impl McpClient {
@@ -76,61 +74,28 @@ impl McpClient {
             cmd.envs(env);
         }
 
-        let (to_session_tx, to_session_rx) = mpsc::unbounded_channel::<Message>();
-        let (from_session_tx, from_session_rx) = mpsc::unbounded_channel::<Message>();
-
-        let session = Session::Local {
-            handler: None,
-            command: cmd,
-            receiver: Arc::new(Mutex::new(to_session_rx)),
-            sender: Arc::new(from_session_tx),
-        };
-
-        session
-            .start()
-            .await
+        let transport = TokioChildProcess::new(cmd)
             .map_err(|e| McpError::SpawnFailed(e.to_string()))?;
 
-        let client = Client::new(to_session_tx.clone(), from_session_rx);
-
-        // Initialize MCP
-        client
-            .request(
-                "initialize",
-                Some(json!({
-                    "protocolVersion": "2024-11-05",
-                    "capabilities": {},
-                    "clientInfo": {
-                        "name": "ion",
-                        "version": "0.1.0"
-                    }
-                })),
-            )
+        let service = ().serve(transport)
             .await
-            .map_err(|e| McpError::Protocol(e.to_string()))?;
+            .map_err(|e| McpError::Connection(e.to_string()))?;
 
-        client
-            .notify("notifications/initialized", None)
-            .await
-            .map_err(|e| McpError::Protocol(e.to_string()))?;
-
-        Ok(Self {
-            client,
-            _to_session_tx: to_session_tx,
-        })
+        Ok(Self { service })
     }
 
     pub async fn list_tools(&self) -> Result<Vec<McpToolDef>, McpError> {
-        let response = self
-            .client
-            .request("tools/list", None)
+        let result = self
+            .service
+            .list_tools(Default::default())
             .await
             .map_err(|e| McpError::Protocol(e.to_string()))?;
 
-        let tools: Vec<McpToolDef> = serde_json::from_value(response["tools"].clone())
-            .map_err(|e| McpError::Protocol(e.to_string()))?;
-
-        Ok(tools)
+        Ok(result
+            .tools
+            .into_iter()
+            .map(|t| rmcp_tool_to_def(&t))
+            .collect())
     }
 
     pub async fn call_tool(
@@ -138,39 +103,39 @@ impl McpClient {
         name: &str,
         arguments: serde_json::Value,
     ) -> Result<ToolResult, McpError> {
-        let response = self
-            .client
-            .request(
-                "tools/call",
-                Some(json!({
-                    "name": name,
-                    "arguments": arguments
-                })),
-            )
+        let result = self
+            .service
+            .call_tool(CallToolRequestParams {
+                name: name.to_string().into(),
+                arguments: arguments.as_object().cloned(),
+                meta: None,
+                task: None,
+            })
             .await
             .map_err(|e| McpError::Protocol(e.to_string()))?;
 
-        let content = response["content"].clone();
-        let is_error = response
-            .get("isError")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
+        let is_error = result.is_error.unwrap_or(false);
 
-        // MCP content is often an array of objects like { type: "text", text: "..." }
-        let text_content = if let Some(arr) = content.as_array() {
-            arr.iter()
-                .filter_map(|item| item.get("text").and_then(|v| v.as_str()))
-                .collect::<Vec<_>>()
-                .join("\n")
-        } else {
-            content.to_string()
-        };
+        let text_content: String = result
+            .content
+            .iter()
+            .filter_map(|c| c.as_text().map(|t| t.text.as_str()))
+            .collect::<Vec<_>>()
+            .join("\n");
 
         Ok(ToolResult {
             content: text_content,
             is_error,
-            metadata: Some(response),
+            metadata: Some(serde_json::to_value(&result).unwrap_or_default()),
         })
+    }
+}
+
+fn rmcp_tool_to_def(tool: &RmcpTool) -> McpToolDef {
+    McpToolDef {
+        name: tool.name.to_string(),
+        description: tool.description.clone().unwrap_or_default().into_owned(),
+        input_schema: serde_json::to_value(&tool.input_schema).unwrap_or_default(),
     }
 }
 

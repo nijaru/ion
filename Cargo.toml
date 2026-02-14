@@ -20,7 +20,6 @@ futures = "0.3.31"
 fuzzy-matcher = "0.3.7"
 globset = "0.4.18"
 ignore = "0.4.25"
-mcp-sdk-rs = "0.3.4"
 minijinja = "2.14.0"
 ropey = "1.6"
 regex = "1.12.2"
@@ -56,6 +55,7 @@ bytes = "1.11.0"
 pdf-extract = "0.10.0"
 scraper = "0.25.0"
 rnk = "0.17.3"
+rmcp = { version = "0.15.0", features = ["client", "transport-child-process"] }
 
 [profile.release]
 strip = true
