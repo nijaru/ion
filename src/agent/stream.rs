@@ -48,7 +48,7 @@ pub(crate) async fn stream_response(
 
     let assembly = ctx
         .context_manager
-        .assemble(&session.messages, None, tool_defs)
+        .assemble(&session.messages, None, tool_defs, &session.model)
         .await;
 
     let messages = if ctx.supports_vision {
