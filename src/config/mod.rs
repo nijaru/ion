@@ -123,7 +123,12 @@ pub struct Config {
     /// Permission settings.
     pub permissions: PermissionConfig,
 
-    /// Custom system prompt (overrides default).
+    /// Extra instructions appended to the default system prompt.
+    /// For project-specific instructions, prefer AGENTS.md instead.
+    pub instructions: Option<String>,
+
+    /// Full system prompt override (replaces default entirely).
+    /// Prefer `instructions` or ~/.ion/AGENTS.md to extend the default.
     pub system_prompt: Option<String>,
 
     /// Delete sessions older than this many days. 0 = never delete.
@@ -145,6 +150,7 @@ impl Default for Config {
             model_cache_ttl_secs: 3600,
             mcp_servers: HashMap::new(),
             permissions: PermissionConfig::default(),
+            instructions: None,
             system_prompt: None,
             session_retention_days: 90,
             hooks: Vec::new(),
@@ -318,6 +324,9 @@ impl Config {
         }
         if other.permissions.allow_outside_cwd.is_some() {
             self.permissions.allow_outside_cwd = other.permissions.allow_outside_cwd;
+        }
+        if other.instructions.is_some() {
+            self.instructions = other.instructions;
         }
         if other.system_prompt.is_some() {
             self.system_prompt = other.system_prompt;
@@ -533,6 +542,28 @@ command = "echo check"
 
         base.merge(other);
         assert_eq!(base.system_prompt, Some("Custom prompt".to_string()));
+    }
+
+    #[test]
+    fn test_instructions_merge() {
+        let mut base = Config::default();
+        assert!(base.instructions.is_none());
+
+        let other = Config {
+            instructions: Some("Always use tabs".to_string()),
+            ..Default::default()
+        };
+
+        base.merge(other);
+        assert_eq!(base.instructions, Some("Always use tabs".to_string()));
+    }
+
+    #[test]
+    fn test_instructions_config_parse() {
+        let toml_str = r#"instructions = "Use functional style""#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.instructions, Some("Use functional style".to_string()));
+        assert!(config.system_prompt.is_none());
     }
 
     #[test]
