@@ -83,7 +83,7 @@ impl App {
 
     /// Get git diff stats (insertions, deletions) for a working directory.
     pub(super) fn git_diff_stat_for(working_dir: &std::path::Path) -> Option<(usize, usize)> {
-        let output = git_output(working_dir, &["diff", "--shortstat"])?;
+        let output = git_output(working_dir, &["diff", "--shortstat", "HEAD"])?;
         // Format: " 3 files changed, 42 insertions(+), 11 deletions(-)"
         let mut insertions = 0usize;
         let mut deletions = 0usize;
