@@ -42,13 +42,10 @@ uuid = { version = "1.19.0", features = ["v4"] }
 unicode-width = "0.2.2"
 bytecount = { version = "0.6.9", features = ["runtime-dispatch-simd"] }
 grep-searcher = "0.1.16"
-grep-matcher = "0.1.8"
 grep-regex = "0.1.14"
-once_cell = "1.21"
 html2text = "0.16.6"
 serde_yaml = "0.9.34"
 pulldown-cmark = "0.13.0"
-tiny_http = "0.12.0"
 open = "5.3.3"
 sha2 = "0.10.9"
 base64 = "0.22.1"
@@ -64,5 +61,3 @@ rnk = "0.17.3"
 strip = true
 
 [dev-dependencies]
-reedline = { version = "0.45.0", features = ["external_printer"] }
-rustyline-async = "0.4.7"
