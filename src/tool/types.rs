@@ -1,20 +1,10 @@
-use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::fmt;
-use std::future::Future;
 use std::path::PathBuf;
-use std::pin::Pin;
 use std::sync::Arc;
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
-
-/// Callback type for semantic discovery/search operations.
-pub type DiscoveryCallback = Arc<
-    dyn Fn(String) -> Pin<Box<dyn Future<Output = Result<Vec<(String, f32)>>> + Send>>
-        + Send
-        + Sync,
->;
 
 #[derive(Clone)]
 pub struct ToolContext {
@@ -25,8 +15,6 @@ pub struct ToolContext {
     pub no_sandbox: bool,
     /// Callback to index a file lazily
     pub index_callback: Option<Arc<dyn Fn(PathBuf) + Send + Sync>>,
-    /// Callback for semantic discovery/search
-    pub discovery_callback: Option<DiscoveryCallback>,
 }
 
 impl ToolContext {
@@ -91,10 +79,6 @@ impl fmt::Debug for ToolContext {
             .field(
                 "index_callback",
                 &self.index_callback.as_ref().map(|_| "Fn(PathBuf)"),
-            )
-            .field(
-                "discovery_callback",
-                &self.discovery_callback.as_ref().map(|_| "Fn(String)"),
             )
             .finish()
     }

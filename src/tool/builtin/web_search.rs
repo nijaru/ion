@@ -472,7 +472,6 @@ mod tests {
             abort_signal: tokio_util::sync::CancellationToken::new(),
             no_sandbox: false,
             index_callback: None,
-            discovery_callback: None,
         };
 
         let result = tool.execute(json!({"query": ""}), &ctx).await;

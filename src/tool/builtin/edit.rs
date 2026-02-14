@@ -211,7 +211,6 @@ mod tests {
             abort_signal: CancellationToken::new(),
             no_sandbox: false,
             index_callback: None,
-            discovery_callback: None,
         }
     }
 

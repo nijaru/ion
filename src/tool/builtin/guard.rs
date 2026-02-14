@@ -185,7 +185,6 @@ const SAFE_PREFIXES: &[&str] = &[
     "whoami",
     "hostname",
     "date",
-    "env",
     "printenv",
     "which",
     "type",
@@ -201,10 +200,26 @@ const SAFE_PREFIXES: &[&str] = &[
 ///
 /// Splits on `&&`, `||`, `;`, `|` and checks each segment against the safe
 /// prefix list. All segments must match for the command to be safe.
+/// Rejects commands containing subshells, process substitution, or redirections.
 #[must_use]
 pub fn is_safe_command(command: &str) -> bool {
+    // Reject subshells and process substitution
+    if command.contains("$(")
+        || command.contains('`')
+        || command.contains("<(")
+        || command.contains(">(")
+    {
+        return false;
+    }
+
     split_command_chain(command).iter().all(|segment| {
         let trimmed = segment.trim();
+
+        // Reject output redirections within any segment
+        if trimmed.contains('>') {
+            return false;
+        }
+
         SAFE_PREFIXES.iter().any(|prefix| {
             trimmed == *prefix
                 || trimmed.starts_with(&format!("{prefix} "))
@@ -412,5 +427,19 @@ mod tests {
         assert!(!is_safe_command("git log && rm -rf ."));
         assert!(!is_safe_command("echo hi | bash"));
         assert!(!is_safe_command("curl https://example.com"));
+    }
+
+    #[test]
+    fn test_subshell_and_redirect_bypass() {
+        // Subshells
+        assert!(!is_safe_command("echo $(rm -rf /)"));
+        assert!(!is_safe_command("echo `rm -rf /`"));
+        assert!(!is_safe_command("cat <(rm -rf /)"));
+        // Redirections
+        assert!(!is_safe_command("echo evil > /tmp/file"));
+        assert!(!is_safe_command("cat /dev/urandom > /tmp/bigfile"));
+        // env prefix removed
+        assert!(!is_safe_command("env rm -rf /"));
+        assert!(!is_safe_command("env bash -c evil"));
     }
 }
