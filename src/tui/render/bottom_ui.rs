@@ -162,7 +162,7 @@ impl App {
         )?;
 
         if show_progress_status {
-            let status_spans = self.status_line_spans();
+            let status_spans = self.status_line_spans(width);
             paint_row_spans(w, status_row, width, status_spans)?;
         } else {
             paint_row(w, status_row, width, "", None, false, false)?;
@@ -309,7 +309,12 @@ impl App {
         )
     }
 
-    fn status_line_spans(&self) -> Vec<Span> {
+    fn status_line_spans(&self, width: u16) -> Vec<Span> {
+        let max_cells = width.saturating_sub(1) as usize;
+        if max_cells == 0 {
+            return vec![];
+        }
+
         let model_name = self
             .session
             .model
@@ -322,48 +327,97 @@ impl App {
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("~");
-
         let (mode_label, mode_color) = match self.tool_mode {
             ToolMode::Read => ("READ", RnkColor::Cyan),
             ToolMode::Write => ("WRITE", RnkColor::Yellow),
         };
+        let think = self.thinking_level.label();
+        let branch = self.git_branch.as_deref();
+        let cost_text = format_cost(self.session_cost);
 
+        let (pct_text, detail_text) = match self.token_usage {
+            Some((used, max)) if max > 0 => {
+                let pct = (used * 100) / max;
+                (
+                    format!("{pct}%"),
+                    Some(format!("({}/{})", format_tokens(used), format_tokens(max))),
+                )
+            }
+            Some((used, _)) if used > 0 => (format_tokens(used), None),
+            _ => (String::new(), None),
+        };
+
+        // Segment widths (each includes its own " • " separator prefix).
+        // Drop order: detail → model → branch → project.
+        // Always shown: mode, short %, cost.
+        let mode_w = mode_label.len() + 3; // " [MODE]"
+        let think_w = if think.is_empty() { 0 } else { 1 + think.len() };
+        let model_seg = 3 + model_name.len() + think_w; // " • model think"
+        let think_seg = if think.is_empty() { 0 } else { 3 + think.len() }; // standalone
+        let pct_seg = if pct_text.is_empty() {
+            0
+        } else {
+            3 + pct_text.len()
+        };
+        let detail_extra = detail_text.as_ref().map_or(0, |d| 1 + d.len());
+        let cost_seg = 3 + cost_text.len();
+        let branch_extra = branch.map_or(0, |b| 3 + b.len()); // " [b]"
+        let proj_seg = 3 + project.len();
+
+        // Total width at each drop level.
+        let w0 = mode_w + model_seg + pct_seg + detail_extra + cost_seg + proj_seg + branch_extra;
+        let w1 = mode_w + model_seg + pct_seg + cost_seg + proj_seg + branch_extra;
+        let w2 = mode_w + think_seg + pct_seg + cost_seg + proj_seg + branch_extra;
+        let (show_model, show_detail, show_branch) = if w0 <= max_cells {
+            (true, true, true)
+        } else if w1 <= max_cells {
+            (true, false, true)
+        } else if w2 <= max_cells {
+            (false, false, true)
+        } else {
+            (false, false, false)
+        };
+
+        // Build spans.
         let mut spans = vec![
             Span::new(" ["),
             Span::new(mode_label).color(mode_color),
-            Span::new("] • "),
-            Span::new(model_name),
+            Span::new("]"),
         ];
 
-        let think_label = self.thinking_level.label();
-        if !think_label.is_empty() {
-            spans.push(Span::new(" "));
-            spans.push(Span::new(think_label).color(RnkColor::Magenta));
+        if show_model {
+            spans.push(Span::new(" • "));
+            spans.push(Span::new(model_name));
+            if !think.is_empty() {
+                spans.push(Span::new(" "));
+                spans.push(Span::new(think).color(RnkColor::Magenta));
+            }
+        } else if !think.is_empty() {
+            spans.push(Span::new(" • "));
+            spans.push(Span::new(think).color(RnkColor::Magenta));
         }
 
-        if let Some((used, max)) = self.token_usage {
-            if max > 0 {
-                let pct = (used * 100) / max;
-                spans.push(
-                    Span::new(format!(
-                        " • {pct}% ({}/{})",
-                        format_tokens(used),
-                        format_tokens(max)
-                    ))
-                    .dim(),
-                );
+        if !pct_text.is_empty() {
+            if show_detail {
+                if let Some(ref detail) = detail_text {
+                    spans.push(Span::new(format!(" • {pct_text} {detail}")).dim());
+                } else {
+                    spans.push(Span::new(format!(" • {pct_text}")).dim());
+                }
             } else {
-                spans.push(Span::new(format!(" • {}", format_tokens(used))).dim());
+                spans.push(Span::new(format!(" • {pct_text}")).dim());
             }
         }
 
-        spans.push(Span::new(format!(" • {}", format_cost(self.session_cost))).dim());
+        spans.push(Span::new(format!(" • {cost_text}")).dim());
 
         spans.push(Span::new(" • ").dim());
         spans.push(Span::new(project));
-        if let Some(branch) = self.git_branch.as_deref() {
+        if show_branch
+            && let Some(b) = branch
+        {
             spans.push(Span::new(" [").dim());
-            spans.push(Span::new(branch));
+            spans.push(Span::new(b));
             spans.push(Span::new("]").dim());
         }
 
