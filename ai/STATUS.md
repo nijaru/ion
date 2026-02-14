@@ -2,23 +2,24 @@
 
 ## Current State
 
-| Metric    | Value                                   | Updated    |
-| --------- | --------------------------------------- | ---------- |
-| Phase     | Dogfood readiness                       | 2026-02-14 |
-| Status    | Provider refactor + review fixes landed | 2026-02-14 |
-| Toolchain | stable                                  | 2026-01-22 |
-| Tests     | 468 passing (`cargo test -q`)           | 2026-02-14 |
-| Clippy    | clean                                   | 2026-02-14 |
+| Metric    | Value                         | Updated    |
+| --------- | ----------------------------- | ---------- |
+| Phase     | Dogfood readiness             | 2026-02-14 |
+| Status    | Tool architecture review done | 2026-02-14 |
+| Toolchain | stable                        | 2026-01-22 |
+| Tests     | 469 passing (`cargo test -q`) | 2026-02-14 |
+| Clippy    | clean                         | 2026-02-14 |
 
 ## Completed This Session
 
 - Provider refactor: Split monoliths, extract shared streaming, migrate ChatGPT/Gemini to HttpClient
-  - anthropic/client.rs 760→123 lines (conversion + tests → convert.rs)
-  - openai_compat: merged request_builder + stream_handler → convert.rs
-  - subscription/ → chatgpt/ + gemini/ (named by API surface)
-  - Shared ToolCallAccumulator in stream.rs
-  - ChatGPT/Gemini now use HttpClient (gains timeouts, rate limiting, Accept header)
-- Review fixes: drain_all rename, stale docs, unnecessary clones, build_headers returns Result, no duplicate auth headers
+- Provider review fixes: drain_all rename, stale docs, unnecessary clones, build_headers returns Result
+- Tool architecture review (tk-k23x): survey of 6 agents, validated current tool set
+  - Removed dead DiscoverTool + DiscoveryCallback
+  - Fixed Read-mode guard bypass: `env` prefix, subshells, redirections
+  - Fixed web_fetch UTF-8 truncation bug
+  - Survey: ai/research/tool-architecture-survey-2026-02.md
+  - Review: ai/review/tool-builtin-review-2026-02-14.md
 
 ## Known Issues
 
@@ -31,19 +32,18 @@
 
 ## Next Steps
 
-See task list (`tk ls`). Priority items:
-
-1. tk-k23x (p3): Review tool architecture — built-in vs advanced/searchable
-2. tk-vo8l (p3): Evaluate and iterate on system prompt
-3. tk-oh88 (p3): Implement OS sandbox execution
-4. tk-cmhy (p3): TOML config for approved sandbox directories
+1. tk-vo8l (p3): Evaluate and iterate on system prompt
+2. tk-oh88 (p3): Implement OS sandbox execution
+3. tk-cmhy (p3): TOML config for approved sandbox directories (blocked by tk-oh88)
 
 ## Key References
 
-| Topic                 | Location                                            |
-| --------------------- | --------------------------------------------------- |
-| LLM crate survey      | `ai/research/rust-llm-crates-survey-2026-02.md`     |
-| genai deep dive       | `ai/research/genai-crate-deep-dive-2026-02.md`      |
-| rmcp/colgrep research | `ai/research/rmcp-and-colgrep-crates-2026-02.md`    |
-| TUI v3 architecture   | `ai/design/tui-v3-architecture-2026-02.md`          |
-| pi-mono provider arch | `ai/research/pi-mono-provider-architecture-2026.md` |
+| Topic                    | Location                                            |
+| ------------------------ | --------------------------------------------------- |
+| Tool architecture survey | `ai/research/tool-architecture-survey-2026-02.md`   |
+| Tool review              | `ai/review/tool-builtin-review-2026-02-14.md`       |
+| LLM crate survey         | `ai/research/rust-llm-crates-survey-2026-02.md`     |
+| genai deep dive          | `ai/research/genai-crate-deep-dive-2026-02.md`      |
+| rmcp/colgrep research    | `ai/research/rmcp-and-colgrep-crates-2026-02.md`    |
+| TUI v3 architecture      | `ai/design/tui-v3-architecture-2026-02.md`          |
+| pi-mono provider arch    | `ai/research/pi-mono-provider-architecture-2026.md` |

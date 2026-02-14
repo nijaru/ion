@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "a6nq",
+  "title": "[TOOL] Guard: strip sudo prefix before analyze_command",
+  "description": "sudo rm -rf / bypasses the rm-rf check because analyze_command sees 'sudo rm -rf /' not 'rm -rf /'. Strip sudo/doas prefix before analysis.",
+  "status": "open",
+  "priority": 4,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-02-14T10:41:37.812Z",
+  "updated_at": "2026-02-14T10:41:37.812Z",
+  "completed_at": null,
+  "external": {}
+}

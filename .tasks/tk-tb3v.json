@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "tb3v",
+  "title": "[TOOL] Remove requires_sandbox dead code from Tool trait",
+  "description": "Tool::requires_sandbox() is defined but never called. Each tool handles sandbox checks internally via ctx.check_sandbox(). Remove the dead trait method.",
+  "status": "open",
+  "priority": 4,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-02-14T10:41:37.834Z",
+  "updated_at": "2026-02-14T10:41:37.834Z",
+  "completed_at": null,
+  "external": {}
+}
