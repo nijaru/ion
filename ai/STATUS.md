@@ -5,7 +5,7 @@
 | Metric    | Value                         | Updated    |
 | --------- | ----------------------------- | ---------- |
 | Phase     | Dogfood readiness             | 2026-02-14 |
-| Status    | Tool architecture review done | 2026-02-14 |
+| Status    | Tool review complete          | 2026-02-14 |
 | Toolchain | stable                        | 2026-01-22 |
 | Tests     | 469 passing (`cargo test -q`) | 2026-02-14 |
 | Clippy    | clean                         | 2026-02-14 |
@@ -14,17 +14,18 @@
 
 - Provider refactor: Split monoliths, extract shared streaming, migrate ChatGPT/Gemini to HttpClient
 - Provider review fixes: drain_all rename, stale docs, unnecessary clones, build_headers returns Result
-- Tool architecture review (tk-k23x): survey of 6 agents, validated current tool set
+- Tool architecture review (tk-k23x): survey of 6 agents, validated 12-tool set
   - Removed dead DiscoverTool + DiscoveryCallback
   - Fixed Read-mode guard bypass: `env` prefix, subshells, redirections
   - Fixed web_fetch UTF-8 truncation bug
-  - Survey: ai/research/tool-architecture-survey-2026-02.md
-  - Review: ai/review/tool-builtin-review-2026-02-14.md
+  - Removed emoji from bash blocked command message
+  - Deep per-tool review: 7 improvement tasks created (p4)
 
 ## Known Issues
 
 - Empty progress line on `--continue` startup (no persisted task summary) — tk-zqsw
 - Intermittent duplicate header on aggressive resize churn
+- Cost shows in statusline for subscription providers (ChatGPT/Gemini) — tk-bruc
 
 ## Blockers
 
@@ -32,9 +33,10 @@
 
 ## Next Steps
 
-1. tk-vo8l (p3): Evaluate and iterate on system prompt
-2. tk-oh88 (p3): Implement OS sandbox execution
-3. tk-cmhy (p3): TOML config for approved sandbox directories (blocked by tk-oh88)
+1. tk-bruc (p3): Hide cost in statusline for subscription providers
+2. tk-vo8l (p3): Evaluate and iterate on system prompt
+3. tk-oh88 (p3): Implement OS sandbox execution
+4. tk-cmhy (p3): TOML config for approved sandbox directories (blocked by tk-oh88)
 
 ## Key References
 

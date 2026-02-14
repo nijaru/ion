@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "xrta",
+  "title": "[TOOL] web_fetch: unnecessary bytes.clone()",
+  "description": "Line 234: String::from_utf8(bytes.clone()) clones the entire body. Save bytes.len() first, then consume bytes with String::from_utf8(bytes).",
+  "status": "open",
+  "priority": 4,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-02-14T10:52:43.079Z",
+  "updated_at": "2026-02-14T10:52:43.079Z",
+  "completed_at": null,
+  "external": {}
+}
