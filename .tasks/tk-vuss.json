@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "vuss",
+  "title": "[TOOL] Remove grep Mutex (sequential walker)",
+  "description": "grep.rs uses Mutex<Vec<String>> and atomics but the walker is sequential (.build() not .build_parallel()). Remove unnecessary synchronization.",
+  "status": "open",
+  "priority": 4,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-02-14T10:41:37.855Z",
+  "updated_at": "2026-02-14T10:41:37.855Z",
+  "completed_at": null,
+  "external": {}
+}

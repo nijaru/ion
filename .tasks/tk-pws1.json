@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "pws1",
+  "title": "[TOOL] Add result limit to list tool",
+  "description": "list tool has no MAX_RESULTS cap unlike glob (1000) and grep (500). Deep traversal on large repos can produce enormous output. Add MAX_RESULTS=2000 with truncation message.",
+  "status": "open",
+  "priority": 4,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-02-14T10:41:37.788Z",
+  "updated_at": "2026-02-14T10:41:37.788Z",
+  "completed_at": null,
+  "external": {}
+}
