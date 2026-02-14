@@ -1,18 +1,15 @@
 //! OpenAI-compatible API client.
 
+use super::convert::{build_request, convert_response, handle_stream_chunk};
 use super::quirks::ProviderQuirks;
-use super::request_builder::build_request;
 use super::stream::StreamChunk;
-use super::stream_handler::{convert_response, handle_stream_chunk};
 use crate::provider::api_provider::Provider;
 use crate::provider::error::Error;
 use crate::provider::http::{AuthConfig, HttpClient, SseParser};
 use crate::provider::prefs::ProviderPrefs;
-use crate::provider::types::{
-    ChatRequest, CompletionResponse, StreamEvent, ToolBuilder, Usage as IonUsage,
-};
+use crate::provider::stream::ToolCallAccumulator;
+use crate::provider::types::{ChatRequest, CompletionResponse, StreamEvent, Usage as IonUsage};
 use futures::StreamExt;
-use std::collections::HashMap;
 use tokio::sync::mpsc;
 
 /// Native OpenAI-compatible API client.
@@ -147,7 +144,7 @@ impl OpenAICompatClient {
         futures::pin_mut!(stream);
 
         let mut parser = SseParser::new();
-        let mut tool_builders: HashMap<usize, ToolBuilder> = HashMap::new();
+        let mut tool_builders = ToolCallAccumulator::new();
 
         while let Some(chunk_result) = stream.next().await {
             let chunk = chunk_result.map_err(|e| Error::Stream(e.to_string()))?;
@@ -183,11 +180,7 @@ impl OpenAICompatClient {
         }
 
         // Emit any remaining tool calls
-        for (_, builder) in tool_builders {
-            if let Some(call) = builder.finish() {
-                let _ = tx.send(StreamEvent::ToolCall(call)).await;
-            }
-        }
+        tool_builders.drain_remaining(&tx).await;
 
         let _ = tx.send(StreamEvent::Done).await;
         Ok(())

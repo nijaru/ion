@@ -2,9 +2,10 @@
 
 use super::anthropic::AnthropicClient;
 use super::api_provider::Provider;
+use super::chatgpt::ChatGptResponsesClient;
 use super::error::Error;
+use super::gemini::GeminiOAuthClient;
 use super::openai_compat::OpenAICompatClient;
-use super::subscription::{ChatGptResponsesClient, GeminiOAuthClient};
 use super::types::{ChatRequest, CompletionResponse, StreamEvent};
 use crate::auth;
 use async_trait::async_trait;
