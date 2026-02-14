@@ -328,7 +328,6 @@ impl App {
             ToolMode::Write => ("WRITE", RnkColor::Yellow),
         };
 
-        // Group 1: mode • model thinking • usage
         let mut spans = vec![
             Span::new(" ["),
             Span::new(mode_label).color(mode_color),
@@ -358,8 +357,11 @@ impl App {
             }
         }
 
-        // Group 2: | location
-        spans.push(Span::new("  |  ").dim());
+        if self.session_cost > 0.0 {
+            spans.push(Span::new(format!(" • {}", format_cost(self.session_cost))).dim());
+        }
+
+        spans.push(Span::new(" • ").dim());
         spans.push(Span::new(location).dim());
 
         spans
