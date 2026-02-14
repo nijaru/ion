@@ -35,8 +35,8 @@ impl ToolCallAccumulator {
         self.builders.remove(&index)
     }
 
-    /// Drain all builders with the given finish reason, emitting completed tool calls.
-    pub async fn drain_finished(&mut self, tx: &mpsc::Sender<StreamEvent>) {
+    /// Drain all accumulated builders, emitting completed tool calls.
+    pub async fn drain_all(&mut self, tx: &mpsc::Sender<StreamEvent>) {
         for (idx, builder) in self.builders.drain() {
             if let Some(call) = builder.finish() {
                 tracing::debug!(index = idx, id = %call.id, name = %call.name, "Emitting tool call");

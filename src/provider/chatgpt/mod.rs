@@ -3,7 +3,7 @@
 //! Uses the ChatGPT Codex backend (`chatgpt.com/backend-api/codex`) with OAuth
 //! authentication. This approach is borrowed from the official Codex CLI.
 //!
-//! **Warning:** Unofficial / unsupported — see subscription module docs.
+//! **Warning:** Unofficial / unsupported API surface.
 
 mod client;
 mod convert;

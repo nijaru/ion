@@ -59,26 +59,26 @@ impl HttpClient {
     }
 
     /// Build headers including authentication.
-    fn build_headers(&self) -> HeaderMap {
+    fn build_headers(&self) -> Result<HeaderMap, Error> {
         let mut headers = HeaderMap::new();
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 
         match &self.auth {
             AuthConfig::Bearer(token) => {
                 let value = HeaderValue::from_str(&format!("Bearer {token}"))
-                    .expect("Bearer token contains invalid header characters");
+                    .map_err(|_| Error::Api("Bearer token contains invalid header characters".into()))?;
                 headers.insert(AUTHORIZATION, value);
             }
             AuthConfig::ApiKey { header, key } => {
                 let name = reqwest::header::HeaderName::try_from(header)
-                    .expect("API key header name is invalid");
-                let value =
-                    HeaderValue::from_str(key).expect("API key contains invalid header characters");
+                    .map_err(|_| Error::Api("API key header name is invalid".into()))?;
+                let value = HeaderValue::from_str(key)
+                    .map_err(|_| Error::Api("API key contains invalid header characters".into()))?;
                 headers.insert(name, value);
             }
         }
 
-        headers
+        Ok(headers)
     }
 
     /// Make a POST request with JSON body and deserialize the response.
@@ -88,7 +88,7 @@ impl HttpClient {
         body: &T,
     ) -> Result<R, Error> {
         let url = format!("{}{path}", self.base_url);
-        let headers = self.build_headers();
+        let headers = self.build_headers()?;
 
         let response = self
             .client
@@ -122,7 +122,7 @@ impl HttpClient {
         body: &T,
     ) -> Result<impl Stream<Item = Result<Bytes, reqwest::Error>>, Error> {
         let url = format!("{}{path}", self.base_url);
-        let mut headers = self.build_headers();
+        let mut headers = self.build_headers()?;
         headers.insert(ACCEPT, HeaderValue::from_static("text/event-stream"));
 
         let response = self
@@ -147,15 +147,12 @@ impl HttpClient {
     }
 
     /// Add extra headers to subsequent requests.
-    /// Returns a new client with additional headers.
+    /// Returns a new client with additional default headers.
     pub fn with_extra_headers(self, extra: HeaderMap) -> Self {
-        let mut headers = self.build_headers();
-        headers.extend(extra);
-
         let client = reqwest::Client::builder()
             .timeout(TIMEOUT)
             .connect_timeout(CONNECT_TIMEOUT)
-            .default_headers(headers)
+            .default_headers(extra)
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
 
@@ -203,7 +200,7 @@ mod tests {
             "https://api.example.com",
             AuthConfig::Bearer("test-token".into()),
         );
-        let headers = client.build_headers();
+        let headers = client.build_headers().unwrap();
         assert_eq!(headers.get(AUTHORIZATION).unwrap(), "Bearer test-token");
     }
 
@@ -216,7 +213,7 @@ mod tests {
                 key: "secret".into(),
             },
         );
-        let headers = client.build_headers();
+        let headers = client.build_headers().unwrap();
         assert_eq!(headers.get("x-api-key").unwrap(), "secret");
     }
 
