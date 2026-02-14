@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "il0w",
+  "title": "[TOOL] glob: add optional path parameter",
+  "description": "glob only searches from working_dir. Add optional 'path' parameter to limit search to a subdirectory, matching Gemini CLI's glob tool. Pattern itself can include dirs but explicit path is cleaner.",
+  "status": "open",
+  "priority": 4,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-02-14T10:52:43.055Z",
+  "updated_at": "2026-02-14T10:52:43.055Z",
+  "completed_at": null,
+  "external": {}
+}

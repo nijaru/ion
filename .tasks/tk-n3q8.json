@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "n3q8",
+  "title": "[TOOL] read: offset/limit decodes all lines past window",
+  "description": "read_lines_single_pass uses BufReader::lines() which always does UTF-8 decode. After collecting the needed line window, remaining lines are decoded just to count total_lines. For large files with offset/limit, this wastes CPU. Fix: switch to byte-counting (like count_lines_streaming) after the window.",
+  "status": "open",
+  "priority": 4,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-02-14T10:52:43.032Z",
+  "updated_at": "2026-02-14T10:52:43.032Z",
+  "completed_at": null,
+  "external": {}
+}
