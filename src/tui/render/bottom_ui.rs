@@ -296,7 +296,7 @@ impl App {
         if summary.output_tokens > 0 {
             stats.push(format!("↓ {}", format_tokens(summary.output_tokens)));
         }
-        if summary.cost > 0.0 {
+        if !self.api_provider.is_oauth() && summary.cost > 0.0 {
             stats.push(format_cost(summary.cost));
         }
 
@@ -333,7 +333,12 @@ impl App {
         };
         let think = self.thinking_level.label();
         let branch = self.git_branch.as_deref();
-        let cost_text = format_cost(self.session_cost);
+        let is_subscription = self.api_provider.is_oauth();
+        let cost_text = if is_subscription {
+            None
+        } else {
+            Some(format_cost(self.session_cost))
+        };
 
         let (pct_text, detail_text) = match self.token_usage {
             Some((used, max)) if max > 0 => {
@@ -349,7 +354,7 @@ impl App {
 
         // Segment widths (each includes its own " • " separator prefix).
         // Drop order: detail → model → diff stats → branch.
-        // Always shown: mode, short %, cost, project.
+        // Always shown: mode, short %, project. Cost shown for non-subscription providers.
         let mode_w = mode_label.len() + 3; // " [MODE]"
         let think_w = if think.is_empty() { 0 } else { 1 + think.len() };
         let model_seg = 3 + model_name.len() + think_w; // " • model think"
@@ -360,7 +365,7 @@ impl App {
             3 + pct_text.len()
         };
         let detail_extra = detail_text.as_ref().map_or(0, |d| 1 + d.len());
-        let cost_seg = 3 + cost_text.len();
+        let cost_seg = cost_text.as_ref().map_or(0, |c| 3 + c.len());
         let branch_extra = branch.map_or(0, |b| 3 + b.len()); // " • b"
         let diff_stat = self.git_diff_stat;
         let diff_texts = diff_stat.map(|(ins, del)| (format!("+{ins}"), format!("-{del}")));
@@ -434,7 +439,9 @@ impl App {
             }
         }
 
-        spans.push(Span::new(format!(" • {cost_text}")).dim());
+        if let Some(ref cost_text) = cost_text {
+            spans.push(Span::new(format!(" • {cost_text}")).dim());
+        }
 
         spans.push(Span::new(" • ").dim());
         spans.push(Span::new(project));
