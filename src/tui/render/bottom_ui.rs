@@ -328,12 +328,11 @@ impl App {
             ToolMode::Write => ("WRITE", RnkColor::Yellow),
         };
 
+        // Group 1: mode • model thinking • usage
         let mut spans = vec![
             Span::new(" ["),
             Span::new(mode_label).color(mode_color),
             Span::new("] • "),
-            Span::new(location).dim(),
-            Span::new(" • "),
             Span::new(model_name),
         ];
 
@@ -344,14 +343,24 @@ impl App {
         }
 
         if let Some((used, max)) = self.token_usage {
-            spans.push(
-                Span::new(format!(" • {}/{}", format_tokens(used), format_tokens(max))).dim(),
-            );
             if max > 0 {
                 let pct = (used * 100) / max;
-                spans.push(Span::new(format!(" ({pct}%)")).dim());
+                spans.push(
+                    Span::new(format!(
+                        " • {pct}% ({}/{})",
+                        format_tokens(used),
+                        format_tokens(max)
+                    ))
+                    .dim(),
+                );
+            } else {
+                spans.push(Span::new(format!(" • {}", format_tokens(used))).dim());
             }
         }
+
+        // Group 2: | location
+        spans.push(Span::new("  |  ").dim());
+        spans.push(Span::new(location).dim());
 
         spans
     }
