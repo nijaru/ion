@@ -3,7 +3,7 @@
   "ref": "k23x",
   "title": "[ARCH] Review tool architecture — built-in vs advanced/searchable",
   "description": "Review how tools are structured. Claude Code pattern: small built-in set (read/write/edit/bash/glob/grep) + ToolSearch for extended. Consider: standard tool schema handling across providers, which tools are core vs optional, how to expose external tools (MCP, colgrep). Reference other TUI agents (pi-mono, opencode, gemini-cli). See ai/research/agent-survey.md",
-  "status": "open",
+  "status": "active",
   "priority": 3,
   "labels": [],
   "assignees": [],
@@ -15,10 +15,22 @@
     {
       "ts": "2026-02-14T08:22:02.006Z",
       "msg": "User wants tool architecture review bumped to higher priority — after system prompt work"
+    },
+    {
+      "ts": "2026-02-14T10:26:27.360Z",
+      "msg": "Explored ion tool architecture: 14 tools (read/write/edit/bash/glob/grep + web + compact/list/discover/spawn_subagent/mcp_tools), ToolOrchestrator with MCP fallback, DangerLevel/ToolMode permissions, hook system"
+    },
+    {
+      "ts": "2026-02-14T10:26:28.063Z",
+      "msg": "Competitor survey written to ai/research/tool-architecture-survey-2026-02.md. Key: 6 core tools is the convergent minimum, Claude Code uses ToolSearch for MCP bloat, pi-mono rejects MCP entirely (7 tools only)"
+    },
+    {
+      "ts": "2026-02-14T10:26:48.791Z",
+      "msg": "Current registered tools: 10 in with_builtins (read/write/edit/glob/grep/list/bash/web_fetch/web_search/compact) + 2 conditional (spawn_subagent, mcp_tools). DiscoverTool exists but not registered (needs semantic search backend). Total: 12 active, 1 dormant."
     }
   ],
   "created_at": "2026-02-14T07:06:10.426Z",
-  "updated_at": "2026-02-14T08:22:02.006Z",
+  "updated_at": "2026-02-14T10:26:48.791Z",
   "completed_at": null,
   "external": {}
 }

@@ -28,7 +28,6 @@ pub(crate) async fn execute_tools_parallel(
         abort_signal: session.abort_token.clone(),
         no_sandbox: session.no_sandbox,
         index_callback: None,
-        discovery_callback: None,
     };
 
     for (index, call) in tool_calls.into_iter().enumerate() {

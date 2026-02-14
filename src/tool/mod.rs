@@ -4,7 +4,7 @@ pub mod types;
 
 pub use permissions::{PermissionMatrix, PermissionStatus};
 pub use types::{
-    DangerLevel, DiscoveryCallback, Tool, ToolContext, ToolError, ToolMode, ToolResult,
+    DangerLevel, Tool, ToolContext, ToolError, ToolMode, ToolResult,
 };
 
 use crate::hook::{HookContext, HookPoint, HookRegistry, HookResult};
@@ -208,7 +208,6 @@ impl ToolOrchestrator {
         orch.register_tool(Box::new(builtin::WebFetchTool::new()));
         orch.register_tool(Box::new(builtin::WebSearchTool::new()));
         orch.register_tool(Box::new(builtin::CompactTool));
-        // Note: DiscoverTool requires semantic search backend (not yet implemented)
         orch
     }
 
@@ -335,7 +334,6 @@ mod tests {
             abort_signal: tokio_util::sync::CancellationToken::new(),
             no_sandbox: false,
             index_callback: None,
-            discovery_callback: None,
         }
     }
 

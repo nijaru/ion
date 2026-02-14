@@ -1,6 +1,5 @@
 mod bash;
 mod compact;
-mod discover;
 mod edit;
 mod glob;
 mod grep;
@@ -15,7 +14,6 @@ mod write;
 
 pub use bash::BashTool;
 pub use compact::{COMPACT_TOOL_NAME, CompactTool};
-pub use discover::DiscoverTool;
 pub use edit::EditTool;
 pub use glob::GlobTool;
 pub use grep::GrepTool;

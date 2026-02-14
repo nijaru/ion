@@ -261,13 +261,12 @@ impl Tool for WebFetchTool {
                 .take_while(|(i, _)| *i < max_length)
                 .last()
                 .map_or(processed_text.len(), |(i, c)| i + c.len_utf8());
-            let truncated_text: String = processed_text.chars().take(truncate_at).collect();
+            let mut truncated_text = processed_text;
+            truncated_text.truncate(truncate_at);
             (
                 format!(
-                    "{}\n\n[Truncated: showing {} of {} chars]",
-                    truncated_text,
-                    truncate_at,
-                    processed_text.len()
+                    "{}\n\n[Truncated: showing {} of original content]",
+                    truncated_text, truncate_at,
                 ),
                 true,
             )
