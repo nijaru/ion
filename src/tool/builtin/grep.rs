@@ -128,7 +128,10 @@ impl Tool for GrepTool {
                 OutputMode::Count => "files",
                 OutputMode::Content => "matches",
             };
-            let _ = write!(content, "\n\n[Truncated: showing first {MAX_RESULTS} {unit}]");
+            let _ = write!(
+                content,
+                "\n\n[Truncated: showing first {MAX_RESULTS} {unit}]"
+            );
         }
 
         let unit = match output_mode {
@@ -428,10 +431,7 @@ impl grep_searcher::Sink for ContextSink<'_> {
         Ok(true)
     }
 
-    fn context_break(
-        &mut self,
-        _searcher: &Searcher,
-    ) -> Result<bool, Self::Error> {
+    fn context_break(&mut self, _searcher: &Searcher) -> Result<bool, Self::Error> {
         *self.need_separator = true;
         Ok(true)
     }

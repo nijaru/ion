@@ -156,9 +156,7 @@ impl OAuthFlow for OpenAIAuth {
             .as_millis() as u64;
 
         let id_token = token_response.id_token;
-        let chatgpt_account_id = id_token
-            .as_deref()
-            .and_then(extract_chatgpt_account_id);
+        let chatgpt_account_id = id_token.as_deref().and_then(extract_chatgpt_account_id);
 
         Ok(OAuthTokens {
             access_token: token_response.access_token,
@@ -220,9 +218,7 @@ impl OpenAIAuth {
             .as_millis() as u64;
 
         let id_token = token_response.id_token;
-        let chatgpt_account_id = id_token
-            .as_deref()
-            .and_then(extract_chatgpt_account_id);
+        let chatgpt_account_id = id_token.as_deref().and_then(extract_chatgpt_account_id);
 
         Ok(OAuthTokens {
             access_token: token_response.access_token,

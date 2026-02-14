@@ -240,7 +240,10 @@ mod tests {
     #[test]
     fn test_parse_retry_after_invalid() {
         assert_eq!(parse_retry_after_value(""), None);
-        assert_eq!(parse_retry_after_value("Thu, 01 Jan 2026 00:00:00 GMT"), None);
+        assert_eq!(
+            parse_retry_after_value("Thu, 01 Jan 2026 00:00:00 GMT"),
+            None
+        );
         assert_eq!(parse_retry_after_value("abc"), None);
         assert_eq!(parse_retry_after_value("-1"), None); // negative integer parses as i64, not u64
         assert_eq!(parse_retry_after_value("-1.5"), None); // negative float, filtered

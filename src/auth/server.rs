@@ -1,6 +1,6 @@
 //! Local callback server for OAuth redirects.
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::TcpListener;

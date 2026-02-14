@@ -72,7 +72,8 @@ pub(crate) fn extract_key_arg(tool_name: &str, args: &serde_json::Value) -> Stri
 
             let mut extras = Vec::new();
             if let Some(path) = obj.get("path").and_then(|v| v.as_str())
-                && path != "." && !path.is_empty()
+                && path != "."
+                && !path.is_empty()
             {
                 let rel = relative_display_path(path);
                 extras.push(format!("in {}", truncate_for_display(&rel, 40)));
@@ -92,12 +93,11 @@ pub(crate) fn extract_key_arg(tool_name: &str, args: &serde_json::Value) -> Stri
                 format!("{pattern} {}", extras.join(" "))
             }
         }
-        _ => {
-            obj.values()
-                .find_map(|v| v.as_str())
-                .map(|s| truncate_for_display(s, 60))
-                .unwrap_or_default()
-        }
+        _ => obj
+            .values()
+            .find_map(|v| v.as_str())
+            .map(|s| truncate_for_display(s, 60))
+            .unwrap_or_default(),
     }
 }
 
@@ -191,7 +191,13 @@ fn take_head(s: &str, max: usize) -> String {
 
 fn take_tail(s: &str, max: usize) -> String {
     // Single pass: reverse, take, reverse back
-    s.chars().rev().take(max).collect::<Vec<_>>().into_iter().rev().collect()
+    s.chars()
+        .rev()
+        .take(max)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect()
 }
 
 /// Convert an absolute path to relative (strips cwd prefix).
@@ -380,11 +386,7 @@ fn format_single_result(
 }
 
 /// Format a single tool result, using the last entry for tool name detection.
-fn format_single_result_last(
-    entries: &[MessageEntry],
-    result: &str,
-    is_error: bool,
-) -> String {
+fn format_single_result_last(entries: &[MessageEntry], result: &str, is_error: bool) -> String {
     let tool_name = entries.last().and_then(tool_name_from_entry);
     format_result_content(tool_name.as_deref(), result, is_error)
 }
@@ -538,8 +540,11 @@ impl MessageList {
             AgentEvent::ToolCallStart(id, name, args) => {
                 let clean_name = sanitize_tool_name(&name);
                 let key_arg = extract_key_arg(clean_name, &args);
-                let key_arg_display =
-                    if key_arg.is_empty() { clean_name.to_string() } else { key_arg };
+                let key_arg_display = if key_arg.is_empty() {
+                    clean_name.to_string()
+                } else {
+                    key_arg
+                };
 
                 // Check if this should be grouped with previous same-name tool call
                 if let Some(ref mut group) = self.active_group
@@ -601,11 +606,7 @@ impl MessageList {
                 if let Some(call) = self.pending_tool_calls.remove(&id) {
                     if call.grouped {
                         // Grouped result: brief per-item line
-                        let result_line = format_grouped_result(
-                            &call.key_arg,
-                            &result,
-                            is_error,
-                        );
+                        let result_line = format_grouped_result(&call.key_arg, &result, is_error);
                         if let Some(entry) = self.entries.get_mut(call.entry_idx) {
                             entry.append_text(&format!("\n{result_line}"));
                         }
@@ -781,9 +782,19 @@ mod tests {
         // Long path (>60 chars) - truncated from end (paths show suffix)
         let args = json!({"file_path": "/home/user/projects/really/very/long/nested/path/to/some/deeply/buried/file.rs"});
         let result = extract_key_arg("read", &args);
-        assert!(result.starts_with("..."), "Long paths should start with ..., got: {result}");
-        assert!(result.ends_with("file.rs"), "Should preserve filename, got: {result}");
-        assert!(result.chars().count() <= 60, "Should be truncated to 60 chars, got: {}", result.chars().count());
+        assert!(
+            result.starts_with("..."),
+            "Long paths should start with ..., got: {result}"
+        );
+        assert!(
+            result.ends_with("file.rs"),
+            "Should preserve filename, got: {result}"
+        );
+        assert!(
+            result.chars().count() <= 60,
+            "Should be truncated to 60 chars, got: {}",
+            result.chars().count()
+        );
     }
 
     #[test]
@@ -879,17 +890,26 @@ mod tests {
 
     #[test]
     fn test_strip_error_prefixes_single() {
-        assert_eq!(strip_error_prefixes("Error: something went wrong"), "something went wrong");
+        assert_eq!(
+            strip_error_prefixes("Error: something went wrong"),
+            "something went wrong"
+        );
     }
 
     #[test]
     fn test_strip_error_prefixes_multiple() {
-        assert_eq!(strip_error_prefixes("Error: Error: nested error"), "nested error");
+        assert_eq!(
+            strip_error_prefixes("Error: Error: nested error"),
+            "nested error"
+        );
     }
 
     #[test]
     fn test_strip_error_prefixes_none() {
-        assert_eq!(strip_error_prefixes("no error prefix here"), "no error prefix here");
+        assert_eq!(
+            strip_error_prefixes("no error prefix here"),
+            "no error prefix here"
+        );
     }
 
     #[test]
@@ -1080,7 +1100,11 @@ mod tests {
             "read".into(),
             json!({"file_path": "a.rs"}),
         ));
-        list.push_event(AgentEvent::ToolCallResult("id1".into(), "content".into(), false));
+        list.push_event(AgentEvent::ToolCallResult(
+            "id1".into(),
+            "content".into(),
+            false,
+        ));
 
         assert_eq!(list.entries.len(), 1);
         let md = list.entries[0].content_as_markdown();
@@ -1094,31 +1118,57 @@ mod tests {
 
         // 3 parallel reads
         list.push_event(AgentEvent::ToolCallStart(
-            "id1".into(), "read".into(), json!({"file_path": "a.rs"}),
+            "id1".into(),
+            "read".into(),
+            json!({"file_path": "a.rs"}),
         ));
         list.push_event(AgentEvent::ToolCallStart(
-            "id2".into(), "read".into(), json!({"file_path": "b.rs"}),
+            "id2".into(),
+            "read".into(),
+            json!({"file_path": "b.rs"}),
         ));
         list.push_event(AgentEvent::ToolCallStart(
-            "id3".into(), "read".into(), json!({"file_path": "c.rs"}),
+            "id3".into(),
+            "read".into(),
+            json!({"file_path": "c.rs"}),
         ));
 
         // Should be 1 entry with group header
         assert_eq!(list.entries.len(), 1);
         let md = list.entries[0].content_as_markdown();
-        assert!(md.contains("read(3 files)"), "header should show count, got: {md}");
+        assert!(
+            md.contains("read(3 files)"),
+            "header should show count, got: {md}"
+        );
 
         // Results come back
-        list.push_event(AgentEvent::ToolCallResult("id1".into(), "line1\nline2".into(), false));
-        list.push_event(AgentEvent::ToolCallResult("id2".into(), "content".into(), false));
+        list.push_event(AgentEvent::ToolCallResult(
+            "id1".into(),
+            "line1\nline2".into(),
+            false,
+        ));
+        list.push_event(AgentEvent::ToolCallResult(
+            "id2".into(),
+            "content".into(),
+            false,
+        ));
         list.push_event(AgentEvent::ToolCallResult("id3".into(), "".into(), false));
 
         // Still 1 entry, results appended
         assert_eq!(list.entries.len(), 1);
         let md = list.entries[0].content_as_markdown();
-        assert!(md.contains("⎿ a.rs ✓"), "should have per-file result for a.rs");
-        assert!(md.contains("⎿ b.rs ✓"), "should have per-file result for b.rs");
-        assert!(md.contains("⎿ c.rs ✓"), "should have per-file result for c.rs");
+        assert!(
+            md.contains("⎿ a.rs ✓"),
+            "should have per-file result for a.rs"
+        );
+        assert!(
+            md.contains("⎿ b.rs ✓"),
+            "should have per-file result for b.rs"
+        );
+        assert!(
+            md.contains("⎿ c.rs ✓"),
+            "should have per-file result for c.rs"
+        );
     }
 
     #[test]
@@ -1126,10 +1176,14 @@ mod tests {
         let mut list = MessageList::new();
 
         list.push_event(AgentEvent::ToolCallStart(
-            "id1".into(), "read".into(), json!({"file_path": "a.rs"}),
+            "id1".into(),
+            "read".into(),
+            json!({"file_path": "a.rs"}),
         ));
         list.push_event(AgentEvent::ToolCallStart(
-            "id2".into(), "bash".into(), json!({"command": "ls"}),
+            "id2".into(),
+            "bash".into(),
+            json!({"command": "ls"}),
         ));
 
         // Different tool names → separate entries
@@ -1143,15 +1197,25 @@ mod tests {
         let mut list = MessageList::new();
 
         list.push_event(AgentEvent::ToolCallStart(
-            "id1".into(), "read".into(), json!({"file_path": "a.rs"}),
+            "id1".into(),
+            "read".into(),
+            json!({"file_path": "a.rs"}),
         ));
         list.push_event(AgentEvent::ToolCallStart(
-            "id2".into(), "read".into(), json!({"file_path": "missing.rs"}),
+            "id2".into(),
+            "read".into(),
+            json!({"file_path": "missing.rs"}),
         ));
 
-        list.push_event(AgentEvent::ToolCallResult("id1".into(), "content".into(), false));
         list.push_event(AgentEvent::ToolCallResult(
-            "id2".into(), "file not found".into(), true,
+            "id1".into(),
+            "content".into(),
+            false,
+        ));
+        list.push_event(AgentEvent::ToolCallResult(
+            "id2".into(),
+            "file not found".into(),
+            true,
         ));
 
         let md = list.entries[0].content_as_markdown();
@@ -1165,15 +1229,27 @@ mod tests {
         let mut list = MessageList::new();
 
         list.push_event(AgentEvent::ToolCallStart(
-            "id1".into(), "read".into(), json!({"file_path": "a.rs"}),
+            "id1".into(),
+            "read".into(),
+            json!({"file_path": "a.rs"}),
         ));
         list.push_event(AgentEvent::ToolCallStart(
-            "id2".into(), "bash".into(), json!({"command": "ls"}),
+            "id2".into(),
+            "bash".into(),
+            json!({"command": "ls"}),
         ));
 
         // Result for id1 should go to the read entry, not the bash entry
-        list.push_event(AgentEvent::ToolCallResult("id1".into(), "file content".into(), false));
-        list.push_event(AgentEvent::ToolCallResult("id2".into(), "dir listing".into(), false));
+        list.push_event(AgentEvent::ToolCallResult(
+            "id1".into(),
+            "file content".into(),
+            false,
+        ));
+        list.push_event(AgentEvent::ToolCallResult(
+            "id2".into(),
+            "dir listing".into(),
+            false,
+        ));
 
         assert_eq!(list.entries.len(), 2);
         let read_md = list.entries[0].content_as_markdown();

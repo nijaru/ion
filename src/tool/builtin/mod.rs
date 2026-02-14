@@ -1,10 +1,10 @@
 mod bash;
 mod compact;
 mod discover;
-pub(crate) mod guard;
 mod edit;
 mod glob;
 mod grep;
+pub(crate) mod guard;
 mod list;
 mod mcp_tools;
 mod read;

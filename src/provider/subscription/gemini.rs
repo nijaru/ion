@@ -21,7 +21,10 @@ const DEFAULT_PROJECT_ID: &str = "rising-fact-p41fc";
 /// Normalize model name (strip any prefix, no models/ prefix added).
 fn normalize_model_name(model: &str) -> String {
     let trimmed = model.trim();
-    trimmed.strip_prefix("models/").unwrap_or(trimmed).to_string()
+    trimmed
+        .strip_prefix("models/")
+        .unwrap_or(trimmed)
+        .to_string()
 }
 
 /// Gemini OAuth client.
@@ -84,9 +87,8 @@ impl GeminiOAuthClient {
             .map_err(|e| Error::Api(format!("Failed to read response: {e}")))?;
 
         if status.is_success() {
-            let ca_response: CodeAssistResponse = serde_json::from_str(&text).map_err(|e| {
-                Error::Api(format!("Failed to parse response: {e}\nBody: {text}"))
-            })?;
+            let ca_response: CodeAssistResponse = serde_json::from_str(&text)
+                .map_err(|e| Error::Api(format!("Failed to parse response: {e}\nBody: {text}")))?;
             return Ok(CompletionResponse {
                 message: ca_response.response.into_message(),
                 usage: Usage::default(),
@@ -129,7 +131,9 @@ impl GeminiOAuthClient {
         if !response.status().is_success() {
             let status = response.status();
             let text = response.text().await.unwrap_or_default();
-            return Err(Error::Stream(format!("Gemini API error: {status} - {text}")));
+            return Err(Error::Stream(format!(
+                "Gemini API error: {status} - {text}"
+            )));
         }
 
         // Parse SSE stream (matching Gemini CLI: buffer data lines, join on empty line)
@@ -143,7 +147,9 @@ impl GeminiOAuthClient {
             line_buffer.push_str(&text);
 
             while let Some(newline_pos) = line_buffer.find('\n') {
-                let line = line_buffer[..newline_pos].trim_end_matches('\r').to_string();
+                let line = line_buffer[..newline_pos]
+                    .trim_end_matches('\r')
+                    .to_string();
                 line_buffer = line_buffer[newline_pos + 1..].to_string();
 
                 if let Some(data) = line.strip_prefix("data: ") {

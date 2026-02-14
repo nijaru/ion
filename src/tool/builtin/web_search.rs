@@ -140,8 +140,8 @@ async fn read_body_capped(response: reqwest::Response) -> Result<String, ToolErr
     let mut stream = response.bytes_stream();
 
     while let Some(chunk) = stream.next().await {
-        let chunk =
-            chunk.map_err(|e| ToolError::ExecutionFailed(format!("Failed to read response: {e}")))?;
+        let chunk = chunk
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read response: {e}")))?;
         let remaining = MAX_RESPONSE_BYTES.saturating_sub(bytes.len());
         if remaining == 0 {
             break;
@@ -196,7 +196,9 @@ impl Tool for WebSearchTool {
             .ok_or_else(|| ToolError::InvalidArgs("query is required".to_string()))?;
 
         if query.trim().is_empty() {
-            return Err(ToolError::InvalidArgs("query must not be empty".to_string()));
+            return Err(ToolError::InvalidArgs(
+                "query must not be empty".to_string(),
+            ));
         }
 
         #[allow(clippy::cast_possible_truncation)]
@@ -392,10 +394,7 @@ mod tests {
             results[0].url,
             "https://doc.rust-lang.org/book/ch16-00-concurrency.html"
         );
-        assert_eq!(
-            results[1].title,
-            "Rust (programming language) - Wikipedia"
-        );
+        assert_eq!(results[1].title, "Rust (programming language) - Wikipedia");
         assert_eq!(
             results[1].url,
             "https://en.wikipedia.org/wiki/Rust_(programming_language)"
@@ -420,9 +419,7 @@ mod tests {
     fn test_url_extraction() {
         // DDG redirect URL
         assert_eq!(
-            extract_ddg_url(
-                "//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fpage&rut=abc"
-            ),
+            extract_ddg_url("//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fpage&rut=abc"),
             Some("https://example.com/page".to_string())
         );
 
@@ -433,7 +430,10 @@ mod tests {
         );
 
         // DDG redirect without uddg param (ad click tracker)
-        assert_eq!(extract_ddg_url("//duckduckgo.com/y.js?ad_provider=bing"), None);
+        assert_eq!(
+            extract_ddg_url("//duckduckgo.com/y.js?ad_provider=bing"),
+            None
+        );
 
         // Invalid URL
         assert_eq!(extract_ddg_url("not a url at all"), None);

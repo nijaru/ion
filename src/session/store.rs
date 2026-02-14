@@ -165,7 +165,13 @@ impl SessionStore {
                     provider = excluded.provider,
                     updated_at = excluded.updated_at
                 ",
-                params![session.id, working_dir, session.model, session.provider, now],
+                params![
+                    session.id,
+                    working_dir,
+                    session.model,
+                    session.provider,
+                    now
+                ],
             )?;
 
             // Get the current max position for this session
@@ -367,17 +373,19 @@ impl SessionStore {
         };
 
         rows.into_iter()
-            .map(|(id, working_dir, model, updated_at, first_user_message_json)| {
-                let first_user_message =
-                    first_user_message_json.and_then(|json| extract_first_text_from_content(&json));
-                Ok(SessionSummary {
-                    id,
-                    working_dir,
-                    model,
-                    updated_at,
-                    first_user_message,
-                })
-            })
+            .map(
+                |(id, working_dir, model, updated_at, first_user_message_json)| {
+                    let first_user_message = first_user_message_json
+                        .and_then(|json| extract_first_text_from_content(&json));
+                    Ok(SessionSummary {
+                        id,
+                        working_dir,
+                        model,
+                        updated_at,
+                        first_user_message,
+                    })
+                },
+            )
             .collect()
     }
 

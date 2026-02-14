@@ -6,7 +6,7 @@ mod pruning;
 mod summarization;
 
 pub use counter::{TokenCount, TokenCounter};
-pub use pruning::{prune_messages, PruningResult, PruningTier};
+pub use pruning::{PruningResult, PruningTier, prune_messages};
 pub use summarization::{SummarizationResult, apply_summary, summarize_messages};
 
 use crate::provider::{LlmApi, Message, Usage};
@@ -163,7 +163,15 @@ pub async fn compact_with_summarization(
         "Tier 1/2 insufficient, running Tier 3 LLM summarization"
     );
 
-    match summarize_messages(messages, config.protected_messages, provider, model, counter).await {
+    match summarize_messages(
+        messages,
+        config.protected_messages,
+        provider,
+        model,
+        counter,
+    )
+    .await
+    {
         Ok(result) if !result.summary.is_empty() => {
             let new_messages = apply_summary(messages, &result);
             let tokens_after = counter.count_messages(&new_messages).total;

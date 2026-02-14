@@ -60,7 +60,6 @@ impl HookContext {
         self.tool_output = Some(output.into());
         self
     }
-
 }
 
 /// Result of a hook execution.
@@ -186,11 +185,7 @@ impl CommandHook {
     /// Create a `CommandHook` from config values.
     ///
     /// Returns `None` if the event string is invalid.
-    pub fn from_config(
-        event: &str,
-        command: String,
-        tool_pattern: Option<&str>,
-    ) -> Option<Self> {
+    pub fn from_config(event: &str, command: String, tool_pattern: Option<&str>) -> Option<Self> {
         let point = match event {
             "pre_tool_use" => HookPoint::PreToolUse,
             "post_tool_use" => HookPoint::PostToolUse,
@@ -236,8 +231,7 @@ impl Hook for CommandHook {
         };
 
         let tool_name = ctx.tool_name.as_deref().unwrap_or("");
-        let working_dir =
-            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let working_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
 
         // Clear inherited environment to avoid leaking API keys to hook commands.
         // Only PATH and HOME are passed through for basic command resolution.

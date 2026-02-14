@@ -69,7 +69,9 @@ impl SubagentRegistry {
             "planner".into(),
             SubagentConfig {
                 name: "planner".into(),
-                description: "Analyze codebase architecture and design implementation plans. Read-only.".into(),
+                description:
+                    "Analyze codebase architecture and design implementation plans. Read-only."
+                        .into(),
                 tools: vec![
                     "read".into(),
                     "glob".into(),

@@ -13,8 +13,8 @@ use anyhow::Result;
 use std::sync::RwLock;
 use std::time::{Duration, Instant};
 
-pub use types::ModelFilter;
 use types::ModelCache;
+pub use types::ModelFilter;
 
 /// Registry for fetching and filtering models.
 pub struct ModelRegistry {

@@ -3,12 +3,9 @@
 use crate::provider::error::Error;
 use crate::provider::http::SseParser;
 use crate::provider::types::{
-    ChatRequest, CompletionResponse, ContentBlock, Message, Role, StreamEvent, ToolCallEvent,
-    Usage,
+    ChatRequest, CompletionResponse, ContentBlock, Message, Role, StreamEvent, ToolCallEvent, Usage,
 };
-use reqwest::header::{
-    HeaderMap, HeaderName, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE,
-};
+use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
 use serde::Serialize;
 use serde_json::Value;
 use std::sync::Arc;
@@ -39,8 +36,9 @@ impl ChatGptResponsesClient {
     fn build_headers(&self, accept_sse: bool) -> Result<HeaderMap, Error> {
         let mut headers = HeaderMap::new();
         let auth = format!("Bearer {}", self.access_token);
-        let value = HeaderValue::from_str(&auth)
-            .map_err(|_| Error::Api("Invalid access token: contains non-ASCII characters".into()))?;
+        let value = HeaderValue::from_str(&auth).map_err(|_| {
+            Error::Api("Invalid access token: contains non-ASCII characters".into())
+        })?;
         headers.insert(AUTHORIZATION, value);
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         headers.insert(
@@ -69,10 +67,7 @@ impl ChatGptResponsesClient {
         if let Some(account_id) = self.account_id.as_deref()
             && let Ok(value) = HeaderValue::from_str(account_id)
         {
-            headers.insert(
-                HeaderName::from_static("chatgpt-account-id"),
-                value,
-            );
+            headers.insert(HeaderName::from_static("chatgpt-account-id"), value);
         }
         Ok(headers)
     }
@@ -91,7 +86,11 @@ impl ChatGptResponsesClient {
             } else {
                 Some("auto")
             },
-            parallel_tool_calls: if request.tools.is_empty() { None } else { Some(true) },
+            parallel_tool_calls: if request.tools.is_empty() {
+                None
+            } else {
+                Some(true)
+            },
             store: false,
             stream,
             include: vec!["reasoning.encrypted_content".to_string()],
@@ -122,9 +121,8 @@ impl ChatGptResponsesClient {
             return Err(Error::Api(format!("HTTP {status}: {text}")));
         }
 
-        let value: Value = serde_json::from_str(&text).map_err(|e| {
-            Error::Api(format!("Failed to parse response: {e}\nBody: {text}"))
-        })?;
+        let value: Value = serde_json::from_str(&text)
+            .map_err(|e| Error::Api(format!("Failed to parse response: {e}\nBody: {text}")))?;
         let text = extract_output_text(&value);
         Ok(CompletionResponse {
             message: Message {
@@ -173,7 +171,8 @@ impl ChatGptResponsesClient {
                     continue;
                 }
 
-                if let Some(stream_event) = parse_response_event(&event.data, event.event.as_deref())
+                if let Some(stream_event) =
+                    parse_response_event(&event.data, event.event.as_deref())
                 {
                     match stream_event {
                         ParsedEvent::TextDelta(delta) => {
@@ -242,7 +241,6 @@ enum ResponseContent {
     InputImage { image_url: String },
 }
 
-
 #[derive(Debug)]
 enum ParsedEvent {
     TextDelta(String),
@@ -283,12 +281,14 @@ fn build_instructions_and_input(request: &ChatRequest) -> (String, Vec<ResponseI
                     .content
                     .iter()
                     .filter_map(|b| match b {
-                        ContentBlock::Text { text } => Some(ResponseContent::InputText {
-                            text: text.clone(),
-                        }),
-                        ContentBlock::Image { media_type, data } => Some(ResponseContent::InputImage {
-                            image_url: format!("data:{media_type};base64,{data}"),
-                        }),
+                        ContentBlock::Text { text } => {
+                            Some(ResponseContent::InputText { text: text.clone() })
+                        }
+                        ContentBlock::Image { media_type, data } => {
+                            Some(ResponseContent::InputImage {
+                                image_url: format!("data:{media_type};base64,{data}"),
+                            })
+                        }
                         _ => None,
                     })
                     .collect::<Vec<_>>();
@@ -307,7 +307,11 @@ fn build_instructions_and_input(request: &ChatRequest) -> (String, Vec<ResponseI
                         ContentBlock::Text { text } => {
                             content.push(ResponseContent::OutputText { text: text.clone() });
                         }
-                        ContentBlock::ToolCall { id, name, arguments } => {
+                        ContentBlock::ToolCall {
+                            id,
+                            name,
+                            arguments,
+                        } => {
                             let args = serde_json::to_string(arguments)
                                 .unwrap_or_else(|_| "{}".to_string());
                             input.push(ResponseInputItem::FunctionCall {
@@ -415,7 +419,11 @@ fn extract_output_text(value: &Value) -> String {
         .unwrap_or_default();
 
     let items = if output.is_empty() {
-        value.get("content").and_then(Value::as_array).cloned().unwrap_or_default()
+        value
+            .get("content")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
     } else {
         output
     };
@@ -442,7 +450,10 @@ fn extract_tool_call(item: &Value) -> Option<ToolCallEvent> {
     }
     let call_id = item.get("call_id").and_then(Value::as_str)?;
     let name = item.get("name").and_then(Value::as_str)?;
-    let arguments_str = item.get("arguments").and_then(Value::as_str).unwrap_or("{}");
+    let arguments_str = item
+        .get("arguments")
+        .and_then(Value::as_str)
+        .unwrap_or("{}");
     let arguments = serde_json::from_str(arguments_str).unwrap_or(Value::Null);
     Some(ToolCallEvent {
         id: call_id.to_string(),
@@ -463,9 +474,7 @@ mod tests {
             messages: Arc::new(vec![
                 Message {
                     role: Role::User,
-                    content: Arc::new(vec![ContentBlock::Text {
-                        text: "hi".into(),
-                    }]),
+                    content: Arc::new(vec![ContentBlock::Text { text: "hi".into() }]),
                 },
                 Message {
                     role: Role::Assistant,
@@ -492,6 +501,10 @@ mod tests {
             })
             .expect("assistant message");
 
-        assert!(assistant.iter().any(|c| matches!(c, ResponseContent::OutputText { .. })));
+        assert!(
+            assistant
+                .iter()
+                .any(|c| matches!(c, ResponseContent::OutputText { .. }))
+        );
     }
 }

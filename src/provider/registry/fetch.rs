@@ -1,8 +1,8 @@
 //! Model fetching from various providers.
 
 use super::super::{ModelInfo, ModelPricing, Provider};
-use super::types::{ApiArchitecture, ModelsResponse};
 use super::ModelRegistry;
+use super::types::{ApiArchitecture, ModelsResponse};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
@@ -131,7 +131,10 @@ impl ModelRegistry {
             return Ok(vec![]);
         }
 
-        let data: ModelsResponse = response.json().await.unwrap_or(ModelsResponse { data: vec![] });
+        let data: ModelsResponse = response
+            .json()
+            .await
+            .unwrap_or(ModelsResponse { data: vec![] });
 
         let models = data
             .data
@@ -190,11 +193,8 @@ impl ModelRegistry {
             .await
             .context("Failed to parse OpenRouter models response")?;
 
-        let mut models: Vec<ModelInfo> = data
-            .data
-            .into_iter()
-            .map(Self::convert_api_model)
-            .collect();
+        let mut models: Vec<ModelInfo> =
+            data.data.into_iter().map(Self::convert_api_model).collect();
 
         // Add openrouter/free at the beginning - routes to free models based on request
         models.insert(

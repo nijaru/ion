@@ -64,7 +64,10 @@ impl Tool for McpToolsTool {
             });
         }
 
-        let mut output = format!("Found {} MCP tool(s) matching '{query}':\n\n", results.len());
+        let mut output = format!(
+            "Found {} MCP tool(s) matching '{query}':\n\n",
+            results.len()
+        );
         for tool in &results {
             output.push_str(&format!("## {}\n{}\n\n", tool.name, tool.description));
             output.push_str(&format!(

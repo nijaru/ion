@@ -86,8 +86,7 @@ impl Client {
         } else {
             None
         };
-        let backend =
-            Self::create_backend(provider, creds.token(), None, project_id.as_deref())?;
+        let backend = Self::create_backend(provider, creds.token(), None, project_id.as_deref())?;
         Ok(Self { provider, backend })
     }
 
@@ -165,8 +164,7 @@ impl Client {
 
             // ChatGPT subscription uses Responses API
             Provider::ChatGpt => Ok(Backend::ChatGptResponses(ChatGptResponsesClient::new(
-                api_key,
-                None,
+                api_key, None,
             ))),
 
             // Gemini OAuth uses Code Assist API
@@ -188,7 +186,6 @@ impl Client {
         }
     }
 }
-
 
 /// Trait for LLM operations.
 ///

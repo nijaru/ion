@@ -4,9 +4,7 @@ use super::quirks::{ProviderQuirks, ReasoningField};
 use super::response::OpenAIResponse;
 use super::stream::StreamChunk;
 use crate::provider::error::Error;
-use crate::provider::types::{
-    ContentBlock, Message, Role, StreamEvent, ToolBuilder, Usage,
-};
+use crate::provider::types::{ContentBlock, Message, Role, StreamEvent, ToolBuilder, Usage};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -41,9 +39,7 @@ pub(crate) async fn handle_stream_chunk(
         // Handle tool calls
         if let Some(tool_calls) = &choice.delta.tool_calls {
             for tc in tool_calls {
-                let builder = tool_builders
-                    .entry(tc.index)
-                    .or_default();
+                let builder = tool_builders.entry(tc.index).or_default();
 
                 // Capture id and name when first seen
                 if let Some(ref id) = tc.id {
@@ -121,11 +117,7 @@ pub(crate) fn convert_response(response: &OpenAIResponse, quirks: &ProviderQuirk
             for tc in tool_calls {
                 let arguments = serde_json::from_str(&tc.function.arguments)
                     .inspect_err(|e| {
-                        tracing::warn!(
-                            "Malformed tool arguments for {}: {}",
-                            tc.function.name,
-                            e
-                        );
+                        tracing::warn!("Malformed tool arguments for {}: {}", tc.function.name, e);
                     })
                     .unwrap_or(serde_json::Value::Null);
 
