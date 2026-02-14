@@ -253,9 +253,19 @@ impl Agent {
         self
     }
 
-    /// Set a custom system prompt (overrides default).
+    /// Set a custom system prompt (overrides default entirely).
     #[must_use]
     pub fn with_system_prompt(self, prompt: String) -> Self {
+        Self {
+            context_manager: Arc::new(create_context_manager(prompt)),
+            ..self
+        }
+    }
+
+    /// Append extra instructions to the default system prompt.
+    #[must_use]
+    pub fn with_extra_instructions(self, instructions: &str) -> Self {
+        let prompt = format!("{DEFAULT_SYSTEM_PROMPT}\n\n{instructions}");
         Self {
             context_manager: Arc::new(create_context_manager(prompt)),
             ..self

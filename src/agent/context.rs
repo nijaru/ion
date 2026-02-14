@@ -41,9 +41,7 @@ const DEFAULT_SYSTEM_TEMPLATE: &str = r#"{{ base_instructions }}
 
 Working directory: {{ working_dir }}
 Date: {{ date }}
-OS: {{ os }}
-{% if shell %}Shell: {{ shell }}
-{% endif %}
+Platform: {{ os }}{% if shell %}, {{ shell }}{% endif %}
 {% endif %}
 {% if has_mcp_tools %}
 ## MCP Tools
