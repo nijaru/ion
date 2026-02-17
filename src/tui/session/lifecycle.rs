@@ -5,7 +5,7 @@ use crate::provider::{ContentBlock, Provider, Role};
 use crate::session::Session;
 use crate::tui::App;
 use crate::tui::message_list::{
-    MessageEntry, Sender, display_name, extract_key_arg, format_result_content,
+    MessageEntry, Sender, ToolMeta, display_name, extract_key_arg, format_result_content,
     sanitize_tool_name,
 };
 use anyhow::Result;
@@ -124,8 +124,17 @@ impl App {
 
                             // Use display name so format_result_content routes correctly
                             let shown = display_name(&tool_name);
-                            let display = format_result_content(Some(shown), content, *is_error);
+                            let expanded = self.message_list.tools_expanded;
+                            let display =
+                                format_result_content(Some(shown), content, *is_error, expanded);
                             if let Some(entry) = self.message_list.entries.get_mut(entry_idx) {
+                                let header = entry.content_as_markdown().to_string();
+                                entry.tool_meta = Some(ToolMeta {
+                                    header,
+                                    tool_name: shown.to_string(),
+                                    raw_result: content.clone(),
+                                    is_error: *is_error,
+                                });
                                 entry.append_text(&format!("\n{display}"));
                             }
                         }

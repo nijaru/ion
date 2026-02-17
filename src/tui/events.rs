@@ -321,6 +321,12 @@ impl App {
                 self.interaction.editor_requested = true;
             }
 
+            // Ctrl+O: Toggle tool output expansion (collapsed ↔ expanded)
+            KeyCode::Char('o') if ctrl => {
+                self.message_list.toggle_tool_expansion();
+                self.render_state.needs_reflow = true;
+            }
+
             // Ctrl+R: Open history search
             KeyCode::Char('r') if ctrl => {
                 if !self.input_history.is_empty() {

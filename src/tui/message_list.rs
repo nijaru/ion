@@ -228,10 +228,21 @@ pub enum MessagePart {
     Thinking(String),
 }
 
+/// Metadata for a non-grouped tool call entry, stored so we can rebuild
+/// the display text when toggling collapsed/expanded.
+#[derive(Debug, Clone)]
+pub struct ToolMeta {
+    pub header: String,
+    pub tool_name: String,
+    pub raw_result: String,
+    pub is_error: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct MessageEntry {
     pub sender: Sender,
     pub parts: Vec<MessagePart>,
+    pub tool_meta: Option<ToolMeta>,
     markdown_cache: Option<String>,
 }
 
@@ -241,6 +252,7 @@ impl MessageEntry {
         let mut entry = Self {
             sender,
             parts: vec![MessagePart::Text(content)],
+            tool_meta: None,
             markdown_cache: None,
         };
         entry.update_cache();
@@ -252,6 +264,7 @@ impl MessageEntry {
         let mut entry = Self {
             sender,
             parts: vec![MessagePart::Thinking(content)],
+            tool_meta: None,
             markdown_cache: None,
         };
         entry.update_cache();
@@ -381,22 +394,6 @@ fn result_style(tool_name: Option<&str>) -> ResultStyle {
     }
 }
 
-/// Format a single (non-grouped) tool result, using the entry at the given index.
-fn format_single_result(
-    entry_idx: usize,
-    entries: &[MessageEntry],
-    result: &str,
-    is_error: bool,
-) -> String {
-    let tool_name = entries.get(entry_idx).and_then(tool_name_from_entry);
-    format_result_content(tool_name.as_deref(), result, is_error)
-}
-
-/// Format a single tool result, using the last entry for tool name detection.
-fn format_single_result_last(entries: &[MessageEntry], result: &str, is_error: bool) -> String {
-    let tool_name = entries.last().and_then(tool_name_from_entry);
-    format_result_content(tool_name.as_deref(), result, is_error)
-}
 
 /// Count added/removed lines in a unified diff.
 fn count_diff_lines(result: &str) -> (usize, usize) {
@@ -427,7 +424,16 @@ fn format_diff_summary(added: usize, removed: usize) -> String {
 }
 
 /// Common formatting for single-call tool results.
-pub(crate) fn format_result_content(tool_name: Option<&str>, result: &str, is_error: bool) -> String {
+///
+/// When `expanded` is false (default), most tools show a minimal pass/fail
+/// indicator. Edit/write diffs and search counts are always shown inline.
+/// When `expanded` is true (Ctrl+O), the full tail-truncated output appears.
+pub(crate) fn format_result_content(
+    tool_name: Option<&str>,
+    result: &str,
+    is_error: bool,
+    expanded: bool,
+) -> String {
     if is_error {
         let msg = strip_error_prefixes(result).trim();
         return format!(" ✗ {}", truncate_line(msg, TOOL_RESULT_LINE_MAX));
@@ -435,6 +441,20 @@ pub(crate) fn format_result_content(tool_name: Option<&str>, result: &str, is_er
 
     match result_style(tool_name) {
         ResultStyle::Collapsed(unit) => {
+            if !expanded && unit != "results" {
+                // Collapsed read/list: just pass/fail
+                return " ✓".to_string();
+            }
+            if !expanded {
+                // Collapsed search: show count
+                let line_count = result.lines().count();
+                return if result.trim().is_empty() {
+                    " ✓ No matches".to_string()
+                } else {
+                    format!(" ✓ {line_count} {unit}")
+                };
+            }
+            // Expanded: current behavior
             let line_count = result.lines().count();
             if line_count > 1 {
                 format!(" ✓ {line_count} {unit}")
@@ -445,9 +465,9 @@ pub(crate) fn format_result_content(tool_name: Option<&str>, result: &str, is_er
             }
         }
         ResultStyle::DiffSummary => {
+            // Always shown (both collapsed and expanded)
             let (added, removed) = count_diff_lines(result);
             let summary = format_diff_summary(added, removed);
-            // Append the diff content below the summary for rendering
             let formatted = format_tool_result(result);
             let mut output = summary;
             for line in formatted.lines() {
@@ -456,10 +476,19 @@ pub(crate) fn format_result_content(tool_name: Option<&str>, result: &str, is_er
             output
         }
         ResultStyle::Full => {
+            if !expanded {
+                // Collapsed bash: just pass/fail
+                return " ✓".to_string();
+            }
+            // Expanded: full tail output
             // Bash stores: "Exit code: {code}\nOutput lines: {n}\n\n{output}"
             // Strip metadata header to show meaningful content.
             let effective = if result.starts_with("Exit code: ") {
-                result.splitn(2, "\n\n").nth(1).unwrap_or("").trim()
+                result
+                    .split_once("\n\n")
+                    .map(|x| x.1)
+                    .unwrap_or("")
+                    .trim()
             } else {
                 result
             };
@@ -489,6 +518,8 @@ pub struct MessageList {
     pub scroll_offset: usize,
     /// Whether to auto-scroll when new content arrives
     pub auto_scroll: bool,
+    /// Whether tool results are shown expanded (Ctrl+O toggle).
+    pub tools_expanded: bool,
     /// Pending tool calls awaiting results, keyed by call ID.
     pending_tool_calls: HashMap<String, PendingCall>,
     /// Active grouping state for consecutive same-name tool calls.
@@ -502,6 +533,7 @@ impl MessageList {
             entries: Vec::new(),
             scroll_offset: 0,
             auto_scroll: true,
+            tools_expanded: false,
             pending_tool_calls: HashMap::new(),
             active_group: None,
         }
@@ -539,6 +571,26 @@ impl MessageList {
     #[must_use]
     pub fn is_at_bottom(&self) -> bool {
         self.scroll_offset == 0
+    }
+
+    /// Toggle between collapsed and expanded tool output display.
+    /// Rebuilds all entries that have `ToolMeta` stored.
+    pub fn toggle_tool_expansion(&mut self) {
+        self.tools_expanded = !self.tools_expanded;
+        let expanded = self.tools_expanded;
+        for entry in &mut self.entries {
+            if let Some(ref meta) = entry.tool_meta {
+                let result_content = format_result_content(
+                    Some(&meta.tool_name),
+                    &meta.raw_result,
+                    meta.is_error,
+                    expanded,
+                );
+                entry.parts =
+                    vec![MessagePart::Text(format!("{}\n{}", meta.header, result_content))];
+                entry.update_cache();
+            }
+        }
     }
 
     pub fn push_event(&mut self, event: AgentEvent) {
@@ -634,20 +686,53 @@ impl MessageList {
                             entry.append_text(&format!("\n{result_line}"));
                         }
                     } else {
-                        // Single call: format based on tool type
-                        let result_content =
-                            format_single_result(call.entry_idx, &self.entries, &result, is_error);
+                        // Single call: extract info before mutable borrow
+                        let tool_name =
+                            self.entries.get(call.entry_idx).and_then(tool_name_from_entry);
+                        let header = self
+                            .entries
+                            .get(call.entry_idx)
+                            .map(|e| e.content_as_markdown().to_string())
+                            .unwrap_or_default();
+                        let result_content = format_result_content(
+                            tool_name.as_deref(),
+                            &result,
+                            is_error,
+                            self.tools_expanded,
+                        );
                         if let Some(entry) = self.entries.get_mut(call.entry_idx) {
+                            entry.tool_meta = Some(ToolMeta {
+                                header,
+                                tool_name: tool_name.unwrap_or_default(),
+                                raw_result: result.clone(),
+                                is_error,
+                            });
                             entry.append_text(&format!("\n{result_content}"));
                         }
                     }
                 } else {
-                    // Fallback: no pending call tracked, append to last Tool entry
-                    let result_content =
-                        format_single_result_last(&self.entries, &result, is_error);
+                    // Fallback: no pending call tracked
+                    let tool_name = self.entries.last().and_then(tool_name_from_entry);
+                    let header = self
+                        .entries
+                        .last()
+                        .map(|e| e.content_as_markdown().to_string())
+                        .unwrap_or_default();
+                    let result_content = format_result_content(
+                        tool_name.as_deref(),
+                        &result,
+                        is_error,
+                        self.tools_expanded,
+                    );
                     if let Some(last) = self.entries.last_mut()
                         && last.sender == Sender::Tool
                     {
+                        last.tool_meta = Some(ToolMeta {
+                            header,
+                            tool_name: tool_name.unwrap_or_default(),
+                            raw_result: result.clone(),
+                            is_error,
+                        });
                         last.append_text(&format!("\n{result_content}"));
                     } else {
                         self.push_entry(MessageEntry::new(Sender::Tool, result_content));
@@ -746,6 +831,7 @@ impl MessageList {
                         let mut entry = MessageEntry {
                             sender: Sender::Agent,
                             parts,
+                            tool_meta: None,
                             markdown_cache: None,
                         };
                         entry.update_cache();
@@ -1279,5 +1365,158 @@ mod tests {
         let bash_md = list.entries[1].content_as_markdown();
         assert!(read_md.contains("✓"), "read should have result");
         assert!(bash_md.contains("✓"), "bash should have result");
+    }
+
+    // --- Collapsed/expanded tool display tests ---
+
+    #[test]
+    fn test_collapsed_read_shows_minimal() {
+        // Default (collapsed): read shows just ✓, no line count
+        let result = format_result_content(Some("read"), "line1\nline2\nline3", false, false);
+        assert_eq!(result, " ✓", "collapsed read should be minimal");
+    }
+
+    #[test]
+    fn test_expanded_read_shows_count() {
+        let result = format_result_content(Some("read"), "line1\nline2\nline3", false, true);
+        assert_eq!(result, " ✓ 3 lines", "expanded read should show line count");
+    }
+
+    #[test]
+    fn test_collapsed_bash_shows_minimal() {
+        let result = format_result_content(None, "lots of output\nmore output", false, false);
+        assert_eq!(result, " ✓", "collapsed bash should be minimal");
+    }
+
+    #[test]
+    fn test_expanded_bash_shows_output() {
+        let result = format_result_content(None, "output line", false, true);
+        assert!(
+            result.contains("output line"),
+            "expanded bash should show output, got: {result}"
+        );
+    }
+
+    #[test]
+    fn test_collapsed_search_shows_count() {
+        let result = format_result_content(Some("search"), "a.rs\nb.rs\nc.rs", false, false);
+        assert_eq!(
+            result, " ✓ 3 results",
+            "collapsed search should show count"
+        );
+    }
+
+    #[test]
+    fn test_collapsed_search_empty_shows_no_matches() {
+        let result = format_result_content(Some("search"), "", false, false);
+        assert_eq!(
+            result, " ✓ No matches",
+            "collapsed empty search should show No matches"
+        );
+    }
+
+    #[test]
+    fn test_collapsed_edit_still_shows_diff() {
+        let diff = "+added line\n-removed line\n context";
+        let result = format_result_content(Some("edit"), diff, false, false);
+        assert!(
+            result.contains("Added 1 line"),
+            "collapsed edit should still show diff summary, got: {result}"
+        );
+    }
+
+    #[test]
+    fn test_errors_shown_in_both_modes() {
+        let collapsed = format_result_content(Some("read"), "file not found", true, false);
+        let expanded = format_result_content(Some("read"), "file not found", true, true);
+        assert!(collapsed.contains("✗"), "collapsed error should show ✗");
+        assert!(expanded.contains("✗"), "expanded error should show ✗");
+        assert_eq!(collapsed, expanded, "errors should look the same");
+    }
+
+    #[test]
+    fn test_toggle_rebuilds_entries() {
+        let mut list = MessageList::new();
+
+        list.push_event(AgentEvent::ToolCallStart(
+            "id1".into(),
+            "read".into(),
+            json!({"file_path": "main.rs"}),
+        ));
+        list.push_event(AgentEvent::ToolCallResult(
+            "id1".into(),
+            "line1\nline2\nline3".into(),
+            false,
+        ));
+
+        // Default collapsed: no line count
+        let md = list.entries[0].content_as_markdown();
+        assert!(!md.contains("3 lines"), "collapsed should not show count");
+        assert!(md.contains("✓"), "collapsed should show ✓");
+
+        // Toggle to expanded
+        list.toggle_tool_expansion();
+        let md = list.entries[0].content_as_markdown();
+        assert!(
+            md.contains("3 lines"),
+            "expanded should show count, got: {md}"
+        );
+
+        // Toggle back to collapsed
+        list.toggle_tool_expansion();
+        let md = list.entries[0].content_as_markdown();
+        assert!(
+            !md.contains("3 lines"),
+            "collapsed again should not show count"
+        );
+    }
+
+    #[test]
+    fn test_toggle_preserves_grouped_entries() {
+        let mut list = MessageList::new();
+
+        // Grouped reads
+        list.push_event(AgentEvent::ToolCallStart(
+            "id1".into(),
+            "read".into(),
+            json!({"file_path": "a.rs"}),
+        ));
+        list.push_event(AgentEvent::ToolCallStart(
+            "id2".into(),
+            "read".into(),
+            json!({"file_path": "b.rs"}),
+        ));
+        list.push_event(AgentEvent::ToolCallResult("id1".into(), "content".into(), false));
+        list.push_event(AgentEvent::ToolCallResult("id2".into(), "content".into(), false));
+
+        let md_before = list.entries[0].content_as_markdown().to_string();
+
+        // Toggle should not affect grouped entries (no tool_meta)
+        list.toggle_tool_expansion();
+        let md_after = list.entries[0].content_as_markdown();
+        assert_eq!(md_before, md_after, "grouped entries should not change on toggle");
+    }
+
+    #[test]
+    fn test_tool_meta_stored_on_single_call() {
+        let mut list = MessageList::new();
+
+        list.push_event(AgentEvent::ToolCallStart(
+            "id1".into(),
+            "bash".into(),
+            json!({"command": "cargo test"}),
+        ));
+        list.push_event(AgentEvent::ToolCallResult(
+            "id1".into(),
+            "test passed".into(),
+            false,
+        ));
+
+        let meta = list.entries[0].tool_meta.as_ref();
+        assert!(meta.is_some(), "single call should have tool_meta");
+        let meta = meta.unwrap();
+        assert_eq!(meta.raw_result, "test passed");
+        assert!(!meta.is_error);
+        assert!(meta.header.contains("bash"), "header should contain tool name");
     }
 }
