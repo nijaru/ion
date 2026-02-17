@@ -997,7 +997,8 @@ mod tests {
     use crate::tui::render::layout::{BodyLayout, Region, UiLayout};
 
     fn test_layout(top: u16, width: u16) -> UiLayout {
-        let progress_height = PROGRESS_HEIGHT;
+        // Include the gap row (matches App::progress_gap_rows() = 1).
+        let progress_height = PROGRESS_HEIGHT + 1;
         let input_height = 3u16;
         let status_height = 1u16;
         let progress = Region {
@@ -1032,9 +1033,9 @@ mod tests {
             ui_drawn_at: None,
         };
         let lines = vec![StyledLine::empty(), StyledLine::empty()];
-        let layout = test_layout(35, 80); // ui_height = 5
+        let layout = test_layout(34, 80); // ui_height = 6
         let insert = plan_chat_insert(&pos, lines, &layout, 40);
-        // 5 + 2 + 5 = 12 <= 40, so AtRow
+        // 5 + 2 + 6 = 13 <= 40, so AtRow
         assert!(matches!(insert, ChatInsert::AtRow { start_row: 5, .. }));
     }
 
@@ -1049,9 +1050,9 @@ mod tests {
             StyledLine::empty(),
             StyledLine::empty(),
         ];
-        let layout = test_layout(35, 80); // ui_height = 5
+        let layout = test_layout(34, 80); // ui_height = 6
         let insert = plan_chat_insert(&pos, lines, &layout, 40);
-        // 33 + 3 + 5 = 41 > 40, so Overflow
+        // 33 + 3 + 6 = 42 > 40, so Overflow
         assert!(matches!(insert, ChatInsert::Overflow { .. }));
     }
 
@@ -1059,7 +1060,7 @@ mod tests {
     fn plan_scroll_insert() {
         let pos = ChatPosition::Scrolling { ui_drawn_at: None };
         let lines = vec![StyledLine::empty(), StyledLine::empty()];
-        let layout = test_layout(35, 80); // ui_height = 5
+        let layout = test_layout(34, 80); // ui_height = 6
         let insert = plan_chat_insert(&pos, lines, &layout, 40);
         assert!(matches!(insert, ChatInsert::ScrollInsert { .. }));
     }
@@ -1068,9 +1069,9 @@ mod tests {
     fn plan_header_acts_like_tracking() {
         let pos = ChatPosition::Header { anchor: 3 };
         let lines = vec![StyledLine::empty()];
-        let layout = test_layout(35, 80); // ui_height = 5
+        let layout = test_layout(34, 80); // ui_height = 6
         let insert = plan_chat_insert(&pos, lines, &layout, 40);
-        // 3 + 1 + 5 = 9 <= 40, so AtRow
+        // 3 + 1 + 6 = 10 <= 40, so AtRow
         assert!(matches!(insert, ChatInsert::AtRow { start_row: 3, .. }));
     }
 
@@ -1078,7 +1079,7 @@ mod tests {
     fn plan_empty_starts_tracking_until_overflow() {
         let pos = ChatPosition::Empty;
         let lines = vec![StyledLine::empty()];
-        let layout = test_layout(35, 80);
+        let layout = test_layout(34, 80);
         let insert = plan_chat_insert(&pos, lines, &layout, 40);
         assert!(matches!(insert, ChatInsert::AtRow { start_row: 0, .. }));
     }
@@ -1087,7 +1088,7 @@ mod tests {
     fn plan_empty_overflow_transitions_like_tracking() {
         let pos = ChatPosition::Empty;
         let lines = vec![StyledLine::empty(); 40];
-        let layout = test_layout(35, 80); // ui_height = 5, available = 35
+        let layout = test_layout(34, 80); // ui_height = 6, available = 34
         let insert = plan_chat_insert(&pos, lines, &layout, 40);
         assert!(matches!(insert, ChatInsert::Overflow { old_ui_row: 0, .. }));
     }
