@@ -101,6 +101,14 @@ pub(crate) fn extract_key_arg(tool_name: &str, args: &serde_json::Value) -> Stri
     }
 }
 
+/// Display name for tool calls (user-facing, not internal tool name).
+fn display_name(tool_name: &str) -> &str {
+    match tool_name {
+        "grep" | "glob" => "search",
+        name => name,
+    }
+}
+
 /// Truncate a string for display, showing the end for paths.
 fn truncate_for_display(s: &str, max: usize) -> String {
     let s = s.lines().next().unwrap_or(s); // First line only
@@ -319,8 +327,7 @@ fn group_unit(tool_name: &str) -> &str {
     match tool_name {
         "read" | "write" | "edit" => "files",
         "bash" => "commands",
-        "glob" => "patterns",
-        "grep" => "queries",
+        "grep" | "glob" => "queries",
         _ => "calls",
     }
 }
@@ -367,8 +374,8 @@ enum ResultStyle {
 fn result_style(tool_name: Option<&str>) -> ResultStyle {
     match tool_name {
         Some("read") => ResultStyle::Collapsed("lines"),
-        Some("list" | "glob") => ResultStyle::Collapsed("items"),
-        Some("grep") => ResultStyle::Collapsed("matches"),
+        Some("list") => ResultStyle::Collapsed("items"),
+        Some("search") => ResultStyle::Collapsed("results"),
         Some("edit" | "write") => ResultStyle::DiffSummary,
         _ => ResultStyle::Full,
     }
@@ -547,8 +554,10 @@ impl MessageList {
                 };
 
                 // Check if this should be grouped with previous same-name tool call
+                // Never collapse bash — each command should be visible individually
                 if let Some(ref mut group) = self.active_group
                     && group.tool_name == clean_name
+                    && clean_name != "bash"
                 {
                     group.count += 1;
 
@@ -562,8 +571,9 @@ impl MessageList {
                     }
 
                     // Update group header
+                    let shown = display_name(clean_name);
                     let unit = group_unit(clean_name);
-                    let header = format!("{clean_name}({} {unit})", group.count);
+                    let header = format!("{shown}({} {unit})", group.count);
                     if let Some(entry) = self.entries.get_mut(group.entry_idx) {
                         entry.parts = vec![MessagePart::Text(header)];
                         entry.update_cache();
@@ -581,7 +591,8 @@ impl MessageList {
                 }
 
                 // New tool call (not grouped with previous)
-                let display = format!("{clean_name}({key_arg_display})");
+                let shown = display_name(clean_name);
+                let display = format!("{shown}({key_arg_display})");
                 let entry_idx = self.entries.len();
                 self.push_entry(MessageEntry::new(Sender::Tool, display));
 
