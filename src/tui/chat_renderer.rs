@@ -120,7 +120,7 @@ impl ChatRenderer {
                             entry_lines.push(StyledLine::new(vec![
                                 tool_prefix.clone(),
                                 StyledSpan::bold(tool_name.to_string()),
-                                StyledSpan::dim(args.to_string()),
+                                StyledSpan::colored(args.to_string(), Color::Cyan).with_dim(),
                             ]));
                         } else {
                             entry_lines.push(StyledLine::new(vec![
