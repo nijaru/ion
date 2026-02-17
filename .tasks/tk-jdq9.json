@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "jdq9",
+  "title": "Display grep and glob as 'search' in tool output",
+  "description": "Rename tool display names: glob -> search(pattern), grep -> search(\"pattern\"). Internal tool names stay the same, just the visible label changes.",
+  "status": "done",
+  "priority": 4,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-02-17T05:20:15.080Z",
+  "updated_at": "2026-02-17T05:27:56.180Z",
+  "completed_at": "2026-02-17T05:27:56.180Z",
+  "external": {}
+}

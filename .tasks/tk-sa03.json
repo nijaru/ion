@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "sa03",
+  "title": "Enable file logging by default in debug builds",
+  "description": "Currently requires ION_LOG env var. Debug builds should always log to file (e.g. /tmp/ion-{pid}.log or ~/.local/state/ion/ion.log) so bugs like the empty Responses API output can be diagnosed after the fact.",
+  "status": "done",
+  "priority": 2,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-02-17T05:06:40.812Z",
+  "updated_at": "2026-02-17T05:27:56.203Z",
+  "completed_at": "2026-02-17T05:27:56.203Z",
+  "external": {}
+}

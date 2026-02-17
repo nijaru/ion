@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "j2kw",
+  "title": "Clear command should clear terminal scrollback buffer",
+  "description": "Currently /clear just scrolls down, reprints header, starts new conversation but leaves full history in scrollback. Should actually clear scrollback buffer for clean reset. Better UX and saves memory in long sessions.",
+  "status": "done",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-02-17T05:06:40.787Z",
+  "updated_at": "2026-02-17T05:08:41.347Z",
+  "completed_at": "2026-02-17T05:08:41.347Z",
+  "external": {}
+}
