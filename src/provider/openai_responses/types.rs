@@ -17,6 +17,8 @@ pub(crate) struct ResponsesRequest {
     pub parallel_tool_calls: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
     pub store: bool,
     pub stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -78,7 +80,6 @@ pub(crate) enum ParsedEvent {
     ThinkingDelta(String),
     ToolCallDelta {
         call_id: String,
-        name: String,
         delta: String,
     },
     ToolCallDone {
