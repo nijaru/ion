@@ -1,5 +1,5 @@
 use crate::agent::AgentEvent;
-use crate::provider::{ContentBlock, Message, Role, format_api_error};
+use crate::provider::format_api_error;
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
@@ -450,6 +450,8 @@ pub(crate) fn format_result_content(
                 let line_count = result.lines().count();
                 return if result.trim().is_empty() {
                     " ✓ No matches".to_string()
+                } else if line_count == 1 {
+                    " ✓ 1 result".to_string()
                 } else {
                     format!(" ✓ {line_count} {unit}")
                 };
@@ -686,7 +688,7 @@ impl MessageList {
                             entry.append_text(&format!("\n{result_line}"));
                         }
                     } else {
-                        // Single call: extract info before mutable borrow
+                        // Single call: build ToolMeta first (moves result), then format
                         let tool_name =
                             self.entries.get(call.entry_idx).and_then(tool_name_from_entry);
                         let header = self
@@ -694,20 +696,21 @@ impl MessageList {
                             .get(call.entry_idx)
                             .map(|e| e.content_as_markdown().to_string())
                             .unwrap_or_default();
-                        let result_content = format_result_content(
-                            tool_name.as_deref(),
-                            &result,
+                        let meta = ToolMeta {
+                            header,
+                            tool_name: tool_name.unwrap_or_default(),
+                            raw_result: result,
                             is_error,
+                        };
+                        let result_content = format_result_content(
+                            Some(&meta.tool_name),
+                            &meta.raw_result,
+                            meta.is_error,
                             self.tools_expanded,
                         );
                         if let Some(entry) = self.entries.get_mut(call.entry_idx) {
-                            entry.tool_meta = Some(ToolMeta {
-                                header,
-                                tool_name: tool_name.unwrap_or_default(),
-                                raw_result: result.clone(),
-                                is_error,
-                            });
                             entry.append_text(&format!("\n{result_content}"));
+                            entry.tool_meta = Some(meta);
                         }
                     }
                 } else {
@@ -718,22 +721,23 @@ impl MessageList {
                         .last()
                         .map(|e| e.content_as_markdown().to_string())
                         .unwrap_or_default();
-                    let result_content = format_result_content(
-                        tool_name.as_deref(),
-                        &result,
+                    let meta = ToolMeta {
+                        header,
+                        tool_name: tool_name.unwrap_or_default(),
+                        raw_result: result,
                         is_error,
+                    };
+                    let result_content = format_result_content(
+                        Some(&meta.tool_name),
+                        &meta.raw_result,
+                        meta.is_error,
                         self.tools_expanded,
                     );
                     if let Some(last) = self.entries.last_mut()
                         && last.sender == Sender::Tool
                     {
-                        last.tool_meta = Some(ToolMeta {
-                            header,
-                            tool_name: tool_name.unwrap_or_default(),
-                            raw_result: result.clone(),
-                            is_error,
-                        });
                         last.append_text(&format!("\n{result_content}"));
+                        last.tool_meta = Some(meta);
                     } else {
                         self.push_entry(MessageEntry::new(Sender::Tool, result_content));
                     }
@@ -786,90 +790,6 @@ impl MessageList {
         self.active_group = None;
     }
 
-    /// Load entries from persisted session messages (for resume).
-    pub fn load_from_messages(&mut self, messages: &[Message]) {
-        self.entries.clear();
-
-        for msg in messages {
-            match msg.role {
-                Role::User => {
-                    // Extract text content
-                    for block in msg.content.iter() {
-                        if let ContentBlock::Text { text } = block {
-                            self.entries
-                                .push(MessageEntry::new(Sender::User, text.clone()));
-                        }
-                    }
-                }
-                Role::Assistant => {
-                    // Collect text into entry (skip thinking blocks in history)
-                    let mut parts = Vec::new();
-                    for block in msg.content.iter() {
-                        match block {
-                            ContentBlock::Text { text } => {
-                                parts.push(MessagePart::Text(text.clone()));
-                            }
-                            ContentBlock::ToolCall {
-                                id: _,
-                                name,
-                                arguments,
-                            } => {
-                                // Format: tool_name(key_arg)
-                                let key_arg = extract_key_arg(name, arguments);
-                                let display = if key_arg.is_empty() {
-                                    name.clone()
-                                } else {
-                                    format!("{name}({key_arg})")
-                                };
-                                self.entries.push(MessageEntry::new(Sender::Tool, display));
-                            }
-                            // Thinking blocks not displayed in history
-                            _ => {}
-                        }
-                    }
-                    if !parts.is_empty() {
-                        let mut entry = MessageEntry {
-                            sender: Sender::Agent,
-                            parts,
-                            tool_meta: None,
-                            markdown_cache: None,
-                        };
-                        entry.update_cache();
-                        self.entries.push(entry);
-                    }
-                }
-                Role::ToolResult => {
-                    for block in msg.content.iter() {
-                        if let ContentBlock::ToolResult {
-                            tool_call_id: _,
-                            content,
-                            is_error,
-                        } = block
-                        {
-                            let display = if *is_error {
-                                let msg = strip_error_prefixes(content).trim();
-                                format!("⎿ Error: {}", truncate_line(msg, TOOL_RESULT_LINE_MAX))
-                            } else {
-                                // Format result with actual content
-                                let formatted = format_tool_result(content);
-                                let mut lines = formatted.lines();
-                                let mut output = String::new();
-                                if let Some(first) = lines.next() {
-                                    let _ = write!(output, "⎿ {first}");
-                                }
-                                for line in lines {
-                                    let _ = write!(output, "\n  {line}");
-                                }
-                                output
-                            };
-                            self.entries.push(MessageEntry::new(Sender::Tool, display));
-                        }
-                    }
-                }
-                Role::System => {} // Don't display system messages in history
-            }
-        }
-    }
 }
 
 #[cfg(test)]
@@ -1404,6 +1324,9 @@ mod tests {
             result, " ✓ 3 results",
             "collapsed search should show count"
         );
+        // Single result should be singular
+        let single = format_result_content(Some("search"), "a.rs", false, false);
+        assert_eq!(single, " ✓ 1 result", "singular grammar");
     }
 
     #[test]
