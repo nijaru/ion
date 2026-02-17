@@ -5,26 +5,30 @@
 | Metric    | Value                         | Updated    |
 | --------- | ----------------------------- | ---------- |
 | Phase     | Dogfood readiness             | 2026-02-16 |
-| Status    | OpenAI Responses API done     | 2026-02-16 |
+| Status    | TUI polish + provider done    | 2026-02-16 |
 | Toolchain | stable                        | 2026-01-22 |
 | Tests     | 486 passing (`cargo test -q`) | 2026-02-16 |
 | Clippy    | clean                         | 2026-02-16 |
 
 ## Completed This Session
 
-- OpenAI Responses API provider (`src/provider/openai_responses/`) — replaces Chat Completions for Provider::OpenAI
-  - types.rs, convert.rs, client.rs with streaming + non-streaming support
-  - Reasoning summary → ThinkingDelta, budget_tokens → effort mapping
-  - Incremental tool call accumulation via ToolBuilder + dedup guard
-  - `strict: false` on tool defs, temperature forwarded, usage extraction
-  - `with_base_url` still routes to OpenAICompat for proxy compatibility
-- Review pass fixed 8 issues (3 ERROR, 5 WARN)
+- OpenAI Responses API provider (`src/provider/openai_responses/`) + review fixes
+- Tool display overhaul:
+  - Grep/glob display as "search" (user-facing rename)
+  - Bash calls never collapsed — each command shown individually
+  - Tool args styled: bold name, plain parens, cyan content
+  - Inline code backticks: cyan instead of dim gray
+- Session replay fix: tool results matched by `tool_call_id` instead of position (fixed misattribution on `--continue`)
+- `/clear` now purges terminal scrollback buffer
+- Debug builds auto-log to `~/.ion/ion.log` (trace-level SSE events in stream loops)
+- CLAUDE.md: added Model Knowledge section (current model generations)
 
 ## Known Issues
 
-- Empty progress line on `--continue` startup (no persisted task summary) — tk-zqsw
-- Intermittent duplicate header on aggressive resize churn
-- Needs manual testing with OPENAI_API_KEY (gpt-4.1-mini, gpt-5.x if available)
+- tk-nupp (p2): Empty response observed once with chatgpt provider — trace logging now active, needs reproduction
+- tk-xjmf (p3): Missing newline above progress line during streaming
+- tk-86lk (p3): `--continue` header pinning breaks scrollback
+- Needs manual testing with OPENAI_API_KEY for openai_responses provider
 
 ## Blockers
 
@@ -32,9 +36,10 @@
 
 ## Next Steps
 
-1. Manual test OpenAI Responses provider with real API key
-2. tk-ioxh (p3): Evaluate async subagent execution model
-3. tk-oh88 (p3): Implement OS sandbox execution
+1. Test all visual changes (tool display, cyan args, `/clear` purge, `--continue` replay)
+2. tk-nupp (p2): Reproduce empty response, check `~/.ion/ion.log`
+3. tk-xjmf (p3): Missing newline above progress line
+4. tk-ioxh (p3): Evaluate async subagent execution model
 
 ## Key References
 

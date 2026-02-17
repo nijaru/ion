@@ -15,10 +15,14 @@
     {
       "ts": "2026-02-17T05:05:05.927Z",
       "msg": "No ion log file found — need to reproduce with ION_LOG=1. The session showed 'Completed (3s • 36.9k tokens)' which suggests the API call succeeded. Possible causes: (1) stream events were received but text wasn't rendered, (2) model returned only tool calls with no final text, (3) TUI rendering bug. Next: reproduce with ION_LOG=/tmp/ion.log and inspect stream events."
+    },
+    {
+      "ts": "2026-02-17T05:51:29.599Z",
+      "msg": "Trace logging now active in debug builds (~/.ion/ion.log). Session was using provider=chatgpt (not openai_responses), so the new provider wasn't exercised. Need to reproduce with provider=openai + API key, or investigate chatgpt provider's stream handling."
     }
   ],
   "created_at": "2026-02-17T05:04:25.129Z",
-  "updated_at": "2026-02-17T05:05:05.927Z",
+  "updated_at": "2026-02-17T05:51:29.599Z",
   "completed_at": null,
   "external": {}
 }
