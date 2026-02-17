@@ -38,11 +38,16 @@ impl App {
     pub async fn with_permissions(permissions: PermissionSettings) -> Result<Self> {
         let config = Config::load().context("Failed to load config")?;
 
-        // Initialize logging - write to file if ION_LOG is set
-        if std::env::var("ION_LOG").is_ok() {
-            use std::fs::File;
+        // Initialize logging:
+        // - ION_LOG=1 or debug builds: log to ~/.ion/ion.log
+        // - RUST_LOG: standard env-based stderr logging
+        let log_to_file = std::env::var("ION_LOG").is_ok() || cfg!(debug_assertions);
+        if log_to_file {
+            use std::fs::{self, File};
             use tracing_subscriber::prelude::*;
-            match File::create("ion.log") {
+            let log_dir = crate::config::ion_config_dir();
+            let _ = fs::create_dir_all(&log_dir);
+            match File::create(log_dir.join("ion.log")) {
                 Ok(file) => {
                     let file_layer = tracing_subscriber::fmt::layer()
                         .with_writer(file)
