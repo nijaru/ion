@@ -3,7 +3,7 @@
 use super::diff::highlight_diff_line;
 use super::syntax::{highlight_code, syntax_from_fence};
 use crate::tui::table::Table;
-use crate::tui::terminal::{LineBuilder, StyledLine, StyledSpan};
+use crate::tui::terminal::{Color, LineBuilder, StyledLine, StyledSpan};
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
 /// Render markdown content to styled lines using pulldown-cmark.
@@ -296,8 +296,8 @@ pub fn render_markdown_with_width(content: &str, width: usize) -> Vec<StyledLine
                 current_line = LineBuilder::new();
             }
             Event::Code(code) => {
-                // Inline code - render with dim styling
-                let span = StyledSpan::dim(format!("`{code}`"));
+                // Inline code - render with cyan for readability
+                let span = StyledSpan::colored(format!("`{code}`"), Color::Cyan);
                 current_line = current_line.styled(span);
                 current_line_is_prefix_only = false;
             }
