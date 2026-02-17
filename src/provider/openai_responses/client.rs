@@ -72,8 +72,13 @@ impl OpenAIResponsesClient {
                     continue;
                 }
 
-                let Some(parsed) = parse_response_event(&event.data, event.event.as_deref())
-                else {
+                let parsed = parse_response_event(&event.data, event.event.as_deref());
+                tracing::trace!(
+                    event_type = ?event.event,
+                    parsed = ?parsed.as_ref().map(std::mem::discriminant),
+                    "SSE event"
+                );
+                let Some(parsed) = parsed else {
                     continue;
                 };
 
