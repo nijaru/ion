@@ -57,6 +57,7 @@ impl App {
         // Rebuild message list from session messages.
         // Track tool call entries by ID so results can be matched to the correct call.
         self.message_list.clear();
+        self.message_list.tools_expanded = true; // full results on replay
         self.render_state.reset_for_session_load();
         let mut tool_entry_map: HashMap<String, (usize, String)> = HashMap::new();
 
