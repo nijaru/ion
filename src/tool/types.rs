@@ -106,10 +106,6 @@ pub trait Tool: Send + Sync {
     fn danger_level(&self) -> DangerLevel {
         DangerLevel::Restricted
     }
-
-    fn requires_sandbox(&self) -> bool {
-        false
-    }
 }
 
 /// Classification of tools based on their potential impact.

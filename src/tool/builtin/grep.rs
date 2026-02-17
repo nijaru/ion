@@ -6,8 +6,6 @@ use grep_searcher::sinks::UTF8;
 use ignore::WalkBuilder;
 use serde_json::json;
 use std::fmt::Write as _;
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 /// Maximum number of matches to return.
 const MAX_RESULTS: usize = 500;
@@ -152,7 +150,6 @@ impl Tool for GrepTool {
 }
 
 /// Search using grep-searcher (ripgrep's library).
-/// Batches results per-file to minimize lock contention.
 fn search_with_grep(
     matcher: &RegexMatcher,
     search_path: &std::path::Path,
@@ -161,9 +158,9 @@ fn search_with_grep(
     context_before: usize,
     context_after: usize,
 ) -> (Vec<String>, bool) {
-    let results = Mutex::new(Vec::new());
-    let result_count = AtomicUsize::new(0);
-    let truncated = AtomicBool::new(false);
+    let mut results = Vec::new();
+    let mut result_count: usize = 0;
+    let mut truncated = false;
 
     // follow_links=false prevents symlink escape from sandbox
     let walker = WalkBuilder::new(search_path)
@@ -192,9 +189,8 @@ fn search_with_grep(
             continue;
         }
 
-        // Check if we've hit the limit (atomic, no lock needed)
-        if result_count.load(Ordering::Relaxed) >= MAX_RESULTS {
-            truncated.store(true, Ordering::Relaxed);
+        if result_count >= MAX_RESULTS {
+            truncated = true;
             break;
         }
 
@@ -208,9 +204,9 @@ fn search_with_grep(
                     matcher,
                     path,
                     &display_path_str,
-                    &results,
-                    &result_count,
-                    &truncated,
+                    &mut results,
+                    &mut result_count,
+                    &mut truncated,
                 );
             }
             OutputMode::Count => {
@@ -219,9 +215,9 @@ fn search_with_grep(
                     matcher,
                     path,
                     &display_path_str,
-                    &results,
-                    &result_count,
-                    &truncated,
+                    &mut results,
+                    &mut result_count,
+                    &mut truncated,
                 );
             }
             OutputMode::Content if use_context => {
@@ -230,9 +226,9 @@ fn search_with_grep(
                     matcher,
                     path,
                     &display_path_str,
-                    &results,
-                    &result_count,
-                    &truncated,
+                    &mut results,
+                    &mut result_count,
+                    &mut truncated,
                 );
             }
             OutputMode::Content => {
@@ -241,16 +237,14 @@ fn search_with_grep(
                     matcher,
                     path,
                     &display_path_str,
-                    &results,
-                    &result_count,
-                    &truncated,
+                    &mut results,
+                    &mut result_count,
+                    &mut truncated,
                 );
             }
         }
     }
 
-    let results = results.into_inner().unwrap();
-    let truncated = truncated.load(Ordering::Relaxed);
     (results, truncated)
 }
 
@@ -260,29 +254,34 @@ fn search_content_mode(
     matcher: &RegexMatcher,
     path: &std::path::Path,
     display_path: &str,
-    results: &Mutex<Vec<String>>,
-    result_count: &AtomicUsize,
-    truncated: &AtomicBool,
+    results: &mut Vec<String>,
+    result_count: &mut usize,
+    truncated: &mut bool,
 ) {
     let mut file_matches = Vec::new();
+    let count = *result_count;
+    let mut local_count = count;
+    let mut local_truncated = false;
 
     let _ = searcher.search_path(
         matcher,
         path,
         UTF8(|line_num, line| {
-            if result_count.load(Ordering::Relaxed) >= MAX_RESULTS {
-                truncated.store(true, Ordering::Relaxed);
+            if local_count >= MAX_RESULTS {
+                local_truncated = true;
                 return Ok(false);
             }
             file_matches.push(format!("{}:{}: {}", display_path, line_num, line.trim()));
-            result_count.fetch_add(1, Ordering::Relaxed);
+            local_count += 1;
             Ok(true)
         }),
     );
 
-    if !file_matches.is_empty() {
-        results.lock().unwrap().extend(file_matches);
+    *result_count = local_count;
+    if local_truncated {
+        *truncated = true;
     }
+    results.extend(file_matches);
 }
 
 /// Files mode: return only file paths that contain matches.
@@ -291,9 +290,9 @@ fn search_file_mode(
     matcher: &RegexMatcher,
     path: &std::path::Path,
     display_path: &str,
-    results: &Mutex<Vec<String>>,
-    result_count: &AtomicUsize,
-    truncated: &AtomicBool,
+    results: &mut Vec<String>,
+    result_count: &mut usize,
+    truncated: &mut bool,
 ) {
     let mut has_match = false;
 
@@ -307,12 +306,12 @@ fn search_file_mode(
     );
 
     if has_match {
-        if result_count.load(Ordering::Relaxed) >= MAX_RESULTS {
-            truncated.store(true, Ordering::Relaxed);
+        if *result_count >= MAX_RESULTS {
+            *truncated = true;
             return;
         }
-        result_count.fetch_add(1, Ordering::Relaxed);
-        results.lock().unwrap().push(display_path.to_string());
+        *result_count += 1;
+        results.push(display_path.to_string());
     }
 }
 
@@ -322,9 +321,9 @@ fn search_count_mode(
     matcher: &RegexMatcher,
     path: &std::path::Path,
     display_path: &str,
-    results: &Mutex<Vec<String>>,
-    result_count: &AtomicUsize,
-    truncated: &AtomicBool,
+    results: &mut Vec<String>,
+    result_count: &mut usize,
+    truncated: &mut bool,
 ) {
     let mut count = 0usize;
 
@@ -338,15 +337,12 @@ fn search_count_mode(
     );
 
     if count > 0 {
-        if result_count.load(Ordering::Relaxed) >= MAX_RESULTS {
-            truncated.store(true, Ordering::Relaxed);
+        if *result_count >= MAX_RESULTS {
+            *truncated = true;
             return;
         }
-        result_count.fetch_add(1, Ordering::Relaxed);
-        results
-            .lock()
-            .unwrap()
-            .push(format!("{display_path}: {count}"));
+        *result_count += 1;
+        results.push(format!("{display_path}: {count}"));
     }
 }
 
@@ -356,36 +352,40 @@ fn search_content_with_context(
     matcher: &RegexMatcher,
     path: &std::path::Path,
     display_path: &str,
-    results: &Mutex<Vec<String>>,
-    result_count: &AtomicUsize,
-    truncated: &AtomicBool,
+    results: &mut Vec<String>,
+    result_count: &mut usize,
+    truncated: &mut bool,
 ) {
     let mut file_matches = Vec::new();
     let mut need_separator = false;
+    let mut local_count = *result_count;
+    let mut local_truncated = false;
 
     let mut sink = ContextSink {
         file_path: display_path,
         matches: &mut file_matches,
-        count: result_count,
+        count: &mut local_count,
         max: MAX_RESULTS,
-        truncated,
+        truncated: &mut local_truncated,
         need_separator: &mut need_separator,
     };
 
     let _ = searcher.search_path(matcher, path, &mut sink);
 
-    if !file_matches.is_empty() {
-        results.lock().unwrap().extend(file_matches);
+    *result_count = local_count;
+    if local_truncated {
+        *truncated = true;
     }
+    results.extend(file_matches);
 }
 
 /// Custom Sink that handles context lines (before/after).
 struct ContextSink<'a> {
     file_path: &'a str,
     matches: &'a mut Vec<String>,
-    count: &'a AtomicUsize,
+    count: &'a mut usize,
     max: usize,
-    truncated: &'a AtomicBool,
+    truncated: &'a mut bool,
     need_separator: &'a mut bool,
 }
 
@@ -397,8 +397,8 @@ impl grep_searcher::Sink for ContextSink<'_> {
         _searcher: &Searcher,
         mat: &grep_searcher::SinkMatch<'_>,
     ) -> Result<bool, Self::Error> {
-        if self.count.load(Ordering::Relaxed) >= self.max {
-            self.truncated.store(true, Ordering::Relaxed);
+        if *self.count >= self.max {
+            *self.truncated = true;
             return Ok(false);
         }
         if *self.need_separator {
@@ -410,7 +410,7 @@ impl grep_searcher::Sink for ContextSink<'_> {
             self.matches
                 .push(format!("{}:{}: {}", self.file_path, n, line.trim()));
         }
-        self.count.fetch_add(1, Ordering::Relaxed);
+        *self.count += 1;
         Ok(true)
     }
 

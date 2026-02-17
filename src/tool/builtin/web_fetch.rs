@@ -231,15 +231,16 @@ impl Tool for WebFetchTool {
             content_type.contains("text/html") || content_type.contains("application/xhtml");
 
         // Try to convert to string
-        let Ok(raw_text) = String::from_utf8(bytes.clone()) else {
-            let total = content_length.unwrap_or(bytes.len());
+        let byte_len = bytes.len();
+        let Ok(raw_text) = String::from_utf8(bytes) else {
+            let total = content_length.unwrap_or(byte_len);
             return Ok(ToolResult {
                 content: format!("[Binary content: {total} bytes, content-type: {content_type}]"),
                 is_error: false,
                 metadata: Some(json!({
                     "status": status.as_u16(),
                     "content_type": content_type,
-                    "length": bytes.len(),
+                    "length": byte_len,
                     "binary": true
                 })),
             });
@@ -281,7 +282,7 @@ impl Tool for WebFetchTool {
             metadata: Some(json!({
                 "status": status.as_u16(),
                 "content_type": content_type,
-                "original_length": bytes.len(),
+                "original_length": byte_len,
                 "processed_length": content_len,
                 "truncated": truncated,
                 "html_converted": is_html && !raw_mode
