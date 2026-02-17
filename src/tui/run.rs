@@ -162,7 +162,12 @@ fn apply_pre_ops(
                 full_clear,
             } => {
                 if *full_clear {
-                    execute!(stdout, MoveTo(0, 0), Clear(ClearType::All), MoveTo(0, 0))?;
+                    execute!(
+                        stdout,
+                        Clear(ClearType::All),
+                        Clear(ClearType::Purge),
+                        MoveTo(0, 0)
+                    )?;
                 } else {
                     scroll_up_and_home(stdout, *scroll_amount)?;
                 }
