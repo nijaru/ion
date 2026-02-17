@@ -6,6 +6,7 @@ use super::chatgpt::ChatGptResponsesClient;
 use super::error::Error;
 use super::gemini::GeminiOAuthClient;
 use super::openai_compat::OpenAICompatClient;
+use super::openai_responses::OpenAIResponsesClient;
 use super::types::{ChatRequest, CompletionResponse, StreamEvent};
 use crate::auth;
 use async_trait::async_trait;
@@ -15,8 +16,10 @@ use tokio::sync::mpsc;
 enum Backend {
     /// Native Anthropic Messages API
     Anthropic(AnthropicClient),
-    /// Native OpenAI-compatible API (`OpenAI`, `OpenRouter`, Groq, Kimi, Local, `ChatGPT`)
+    /// Native OpenAI-compatible Chat Completions API (`OpenRouter`, Groq, Kimi, Local)
     OpenAICompat(OpenAICompatClient),
+    /// OpenAI Responses API (api.openai.com)
+    OpenAIResponses(OpenAIResponsesClient),
     /// ChatGPT subscription via Responses API
     ChatGptResponses(ChatGptResponsesClient),
     /// Native Google Generative AI (Gemini OAuth, Google)
@@ -174,9 +177,13 @@ impl Client {
                 project_id.map(str::to_string),
             ))),
 
+            // OpenAI uses native Responses API
+            Provider::OpenAI => Ok(Backend::OpenAIResponses(OpenAIResponsesClient::new(
+                api_key,
+            ))),
+
             // OpenAI-compatible providers (including Google via Generative Language API)
             Provider::Google
-            | Provider::OpenAI
             | Provider::OpenRouter
             | Provider::Groq
             | Provider::Kimi
@@ -239,6 +246,7 @@ impl LlmApi for Client {
         match &self.backend {
             Backend::Anthropic(client) => client.stream(request, tx).await,
             Backend::OpenAICompat(client) => client.stream(request, tx).await,
+            Backend::OpenAIResponses(client) => client.stream(request, tx).await,
             Backend::ChatGptResponses(client) => client.stream(request, tx).await,
             Backend::GeminiOAuth(client) => client.stream(request, tx).await,
         }
@@ -256,6 +264,7 @@ impl LlmApi for Client {
         match &self.backend {
             Backend::Anthropic(client) => client.complete(request).await,
             Backend::OpenAICompat(client) => client.complete(request).await,
+            Backend::OpenAIResponses(client) => client.complete(request).await,
             Backend::ChatGptResponses(client) => client.complete(request).await,
             Backend::GeminiOAuth(client) => client.complete(request).await,
         }
@@ -292,7 +301,7 @@ mod tests {
     fn test_openai_backend() {
         let client = Client::new(Provider::OpenAI, "test-key").unwrap();
         assert_eq!(client.provider(), Provider::OpenAI);
-        assert!(matches!(client.backend, Backend::OpenAICompat(_)));
+        assert!(matches!(client.backend, Backend::OpenAIResponses(_)));
     }
 
     #[test]
