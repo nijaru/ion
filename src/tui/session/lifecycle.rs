@@ -5,7 +5,8 @@ use crate::provider::{ContentBlock, Provider, Role};
 use crate::session::Session;
 use crate::tui::App;
 use crate::tui::message_list::{
-    MessageEntry, Sender, display_name, extract_key_arg, sanitize_tool_name, strip_error_prefixes,
+    MessageEntry, Sender, display_name, extract_key_arg, format_result_content,
+    sanitize_tool_name,
 };
 use anyhow::Result;
 use std::collections::HashMap;
@@ -121,7 +122,9 @@ impl App {
                                     (idx, String::new())
                                 };
 
-                            let display = format_replay_result(&tool_name, content, *is_error);
+                            // Use display name so format_result_content routes correctly
+                            let shown = display_name(&tool_name);
+                            let display = format_result_content(Some(shown), content, *is_error);
                             if let Some(entry) = self.message_list.entries.get_mut(entry_idx) {
                                 entry.append_text(&format!("\n{display}"));
                             }
@@ -156,54 +159,5 @@ impl App {
         }
 
         Ok(())
-    }
-}
-
-/// Format a tool result for session replay, matching live display style.
-fn format_replay_result(tool_name: &str, content: &str, is_error: bool) -> String {
-    if is_error {
-        let msg = strip_error_prefixes(content).trim();
-        let first_line = msg.lines().next().unwrap_or("");
-        return format!("Error: {first_line}");
-    }
-
-    if content.trim().is_empty() {
-        return " ✓".to_string();
-    }
-
-    let shown = display_name(tool_name);
-    match shown {
-        // Collapsed: count-only summary
-        "read" => {
-            let n = content.lines().count();
-            format!(" ✓ {n} lines")
-        }
-        "search" => {
-            let n = content.lines().filter(|l| !l.trim().is_empty()).count();
-            if n == 0 {
-                format!(" {}", content.lines().next().unwrap_or("✓"))
-            } else {
-                format!(" ✓ {n} results")
-            }
-        }
-        "list" => {
-            let n = content.lines().count();
-            format!(" ✓ {n} items")
-        }
-        // Edit/write: brief summary
-        "edit" | "write" => {
-            let first = content.lines().next().unwrap_or("✓");
-            format!(" ✓ {first}")
-        }
-        // Full: show first line of content
-        _ => {
-            let first = content.lines().next().unwrap_or("OK");
-            let truncated = if first.chars().count() > 80 {
-                format!("{}...", first.chars().take(77).collect::<String>())
-            } else {
-                first.to_string()
-            };
-            format!(" ✓ {truncated}")
-        }
     }
 }

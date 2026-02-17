@@ -427,7 +427,7 @@ fn format_diff_summary(added: usize, removed: usize) -> String {
 }
 
 /// Common formatting for single-call tool results.
-fn format_result_content(tool_name: Option<&str>, result: &str, is_error: bool) -> String {
+pub(crate) fn format_result_content(tool_name: Option<&str>, result: &str, is_error: bool) -> String {
     if is_error {
         let msg = strip_error_prefixes(result).trim();
         return format!(" ✗ {}", truncate_line(msg, TOOL_RESULT_LINE_MAX));
@@ -456,7 +456,19 @@ fn format_result_content(tool_name: Option<&str>, result: &str, is_error: bool) 
             output
         }
         ResultStyle::Full => {
-            let formatted = format_tool_result(result);
+            // Bash stores: "Exit code: {code}\nOutput lines: {n}\n\n{output}"
+            // Strip metadata header to show meaningful content.
+            let effective = if result.starts_with("Exit code: ") {
+                result.splitn(2, "\n\n").nth(1).unwrap_or("").trim()
+            } else {
+                result
+            };
+
+            if effective.is_empty() {
+                return " ✓".to_string();
+            }
+
+            let formatted = format_tool_result(effective);
             let mut lines = formatted.lines();
             let mut output = String::new();
             if let Some(first) = lines.next() {
