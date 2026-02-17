@@ -117,10 +117,16 @@ impl ChatRenderer {
                                 is_edit_tool = true;
                             }
 
+                            // Bold name, plain parens, cyan content inside parens
+                            let inner = args
+                                .trim_start_matches('(')
+                                .trim_end_matches(')');
                             entry_lines.push(StyledLine::new(vec![
                                 tool_prefix.clone(),
                                 StyledSpan::bold(tool_name.to_string()),
-                                StyledSpan::colored(args.to_string(), Color::Cyan).with_dim(),
+                                StyledSpan::raw("("),
+                                StyledSpan::colored(inner.to_string(), Color::Cyan),
+                                StyledSpan::raw(")"),
                             ]));
                         } else {
                             entry_lines.push(StyledLine::new(vec![
