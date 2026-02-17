@@ -4,24 +4,27 @@
 
 | Metric    | Value                         | Updated    |
 | --------- | ----------------------------- | ---------- |
-| Phase     | Dogfood readiness             | 2026-02-14 |
-| Status    | Pruned, prompt/config done    | 2026-02-14 |
+| Phase     | Dogfood readiness             | 2026-02-16 |
+| Status    | OpenAI Responses API done     | 2026-02-16 |
 | Toolchain | stable                        | 2026-01-22 |
-| Tests     | 471 passing (`cargo test -q`) | 2026-02-14 |
-| Clippy    | clean                         | 2026-02-14 |
+| Tests     | 486 passing (`cargo test -q`) | 2026-02-16 |
+| Clippy    | clean                         | 2026-02-16 |
 
 ## Completed This Session
 
-- Added `instructions` config field — appends to default system prompt without replacing it
-- Fixed template whitespace (Platform line combines OS + shell)
-- Provider refactor plan verified complete (already done in prior session)
-- Pruned ai/: DECISIONS.md 974→101 lines (archived to DECISIONS-archive-jan.md), deleted 3 superseded files, removed stale plan
+- OpenAI Responses API provider (`src/provider/openai_responses/`) — replaces Chat Completions for Provider::OpenAI
+  - types.rs, convert.rs, client.rs with streaming + non-streaming support
+  - Reasoning summary → ThinkingDelta, budget_tokens → effort mapping
+  - Incremental tool call accumulation via ToolBuilder + dedup guard
+  - `strict: false` on tool defs, temperature forwarded, usage extraction
+  - `with_base_url` still routes to OpenAICompat for proxy compatibility
+- Review pass fixed 8 issues (3 ERROR, 5 WARN)
 
 ## Known Issues
 
 - Empty progress line on `--continue` startup (no persisted task summary) — tk-zqsw
 - Intermittent duplicate header on aggressive resize churn
-- gpt-5.x-codex underperforms vs Codex CLI due to Chat Completions format mismatch — tk-gkrr
+- Needs manual testing with OPENAI_API_KEY (gpt-4.1-mini, gpt-5.x if available)
 
 ## Blockers
 
@@ -29,7 +32,7 @@
 
 ## Next Steps
 
-1. tk-gkrr (p2): OpenAI Responses API provider path — biggest perf gap for gpt-5.x models
+1. Manual test OpenAI Responses provider with real API key
 2. tk-ioxh (p3): Evaluate async subagent execution model
 3. tk-oh88 (p3): Implement OS sandbox execution
 
