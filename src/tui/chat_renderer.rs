@@ -106,7 +106,7 @@ impl ChatRenderer {
                             let tool_name = &first_line[..paren_pos];
                             let args = &first_line[paren_pos..];
 
-                            if tool_name == "read" || tool_name == "grep" {
+                            if tool_name == "read" || tool_name == "search" {
                                 let path = args
                                     .trim_start_matches('(')
                                     .split(&[',', ')'][..])
@@ -120,7 +120,7 @@ impl ChatRenderer {
                             entry_lines.push(StyledLine::new(vec![
                                 tool_prefix.clone(),
                                 StyledSpan::bold(tool_name.to_string()),
-                                StyledSpan::raw(args.to_string()),
+                                StyledSpan::dim(args.to_string()),
                             ]));
                         } else {
                             entry_lines.push(StyledLine::new(vec![
