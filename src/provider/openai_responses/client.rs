@@ -1,14 +1,14 @@
 //! OpenAI Responses API client.
 
-use super::convert::{build_request, extract_output_text, parse_response_event};
+use super::convert::{build_request, extract_output, extract_usage, parse_response_event};
 use super::types::ParsedEvent;
 use crate::provider::error::Error;
 use crate::provider::http::{AuthConfig, HttpClient, SseParser};
 use crate::provider::types::{
-    ChatRequest, CompletionResponse, ContentBlock, Message, Role, StreamEvent, ToolBuilder, Usage,
+    ChatRequest, CompletionResponse, Message, Role, StreamEvent, ToolBuilder,
 };
 use futures::StreamExt;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -31,33 +31,16 @@ impl OpenAIResponsesClient {
         let body = build_request(&request, false);
         let value: serde_json::Value = self.http.post_json("/responses", &body).await?;
 
-        let text = extract_output_text(&value);
+        let content = extract_output(&value);
         let usage = value
             .get("usage")
-            .map(|u| {
-                let input = u.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                let output = u
-                    .get("output_tokens")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0) as u32;
-                let cache_read = u
-                    .get("input_tokens_details")
-                    .and_then(|d| d.get("cached_tokens"))
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0) as u32;
-                Usage {
-                    input_tokens: input,
-                    output_tokens: output,
-                    cache_read_tokens: cache_read,
-                    cache_write_tokens: 0,
-                }
-            })
+            .map(extract_usage)
             .unwrap_or_default();
 
         Ok(CompletionResponse {
             message: Message {
                 role: Role::Assistant,
-                content: Arc::new(vec![ContentBlock::Text { text }]),
+                content: Arc::new(content),
             },
             usage,
         })
@@ -76,6 +59,9 @@ impl OpenAIResponsesClient {
         let mut parser = SseParser::new();
         // Track in-progress tool calls by item_id for incremental accumulation
         let mut tool_builders: HashMap<String, ToolBuilder> = HashMap::new();
+        // Track tool calls already emitted to avoid double-emission
+        // (arguments.done fires before output_item.done for the same call)
+        let mut emitted_tool_ids: HashSet<String> = HashSet::new();
 
         while let Some(chunk_result) = stream.next().await {
             let chunk = chunk_result.map_err(|e| Error::Stream(format!("Stream error: {e}")))?;
@@ -98,17 +84,10 @@ impl OpenAIResponsesClient {
                     ParsedEvent::ThinkingDelta(delta) => {
                         let _ = tx.send(StreamEvent::ThinkingDelta(delta)).await;
                     }
-                    ParsedEvent::ToolCallDelta {
-                        call_id,
-                        name,
-                        delta,
-                    } => {
+                    ParsedEvent::ToolCallDelta { call_id, delta } => {
                         let builder = tool_builders.entry(call_id.clone()).or_default();
                         if builder.id.is_none() {
                             builder.id = Some(call_id);
-                        }
-                        if builder.name.is_none() && !name.is_empty() {
-                            builder.name = Some(name);
                         }
                         builder.push(delta);
                     }
@@ -118,13 +97,19 @@ impl OpenAIResponsesClient {
                         arguments,
                     } => {
                         // Prefer the accumulated builder if present, otherwise parse directly
-                        if let Some(builder) = tool_builders.remove(&call_id) {
+                        if let Some(mut builder) = tool_builders.remove(&call_id) {
+                            // Ensure name is set from the done event (deltas don't carry it)
+                            if builder.name.is_none() && !name.is_empty() {
+                                builder.name = Some(name.clone());
+                            }
                             if let Some(call) = builder.finish() {
+                                emitted_tool_ids.insert(call.id.clone());
                                 let _ = tx.send(StreamEvent::ToolCall(call)).await;
                             }
                         } else {
                             let arguments = serde_json::from_str(&arguments)
                                 .unwrap_or(serde_json::Value::Null);
+                            emitted_tool_ids.insert(call_id.clone());
                             let _ = tx
                                 .send(StreamEvent::ToolCall(
                                     crate::provider::types::ToolCallEvent {
@@ -137,8 +122,11 @@ impl OpenAIResponsesClient {
                         }
                     }
                     ParsedEvent::ToolCall(call) => {
-                        // From output_item.done — only use if we didn't already emit via arguments.done
-                        let _ = tx.send(StreamEvent::ToolCall(call)).await;
+                        // From output_item.done — skip if already emitted via arguments.done
+                        if !emitted_tool_ids.contains(&call.id) {
+                            emitted_tool_ids.insert(call.id.clone());
+                            let _ = tx.send(StreamEvent::ToolCall(call)).await;
+                        }
                     }
                     ParsedEvent::Usage(usage) => {
                         let _ = tx.send(StreamEvent::Usage(usage)).await;

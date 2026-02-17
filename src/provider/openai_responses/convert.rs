@@ -16,8 +16,13 @@ pub(crate) fn build_request(request: &ChatRequest, stream: bool) -> ResponsesReq
     // Map thinking config to reasoning params
     let reasoning = request.thinking.as_ref().and_then(|t| {
         if t.enabled {
+            let effort = match t.budget_tokens {
+                Some(b) if b < 5000 => "low",
+                Some(b) if b > 20000 => "high",
+                _ => "medium",
+            };
             Some(Reasoning {
-                effort: Some("medium".to_string()),
+                effort: Some(effort.to_string()),
                 summary: Some("auto".to_string()),
             })
         } else {
@@ -33,6 +38,7 @@ pub(crate) fn build_request(request: &ChatRequest, stream: bool) -> ResponsesReq
         tool_choice: if has_tools { Some("auto") } else { None },
         parallel_tool_calls: if has_tools { Some(true) } else { None },
         max_output_tokens: request.max_tokens,
+        temperature: request.temperature,
         store: false,
         stream,
         reasoning,
@@ -163,6 +169,7 @@ fn build_tools(request: &ChatRequest) -> Vec<Value> {
                 "name": tool.name,
                 "description": tool.description,
                 "parameters": tool.parameters,
+                "strict": false,
             })
         })
         .collect()
@@ -187,11 +194,9 @@ pub(crate) fn parse_response_event(data: &str, event_type: Option<&str>) -> Opti
 
         "response.function_call_arguments.delta" => {
             let call_id = value.get("item_id").and_then(Value::as_str)?;
-            let name = value.get("name").and_then(Value::as_str).unwrap_or("");
             let delta = value.get("delta").and_then(Value::as_str)?;
             Some(ParsedEvent::ToolCallDelta {
                 call_id: call_id.to_string(),
-                name: name.to_string(),
                 delta: delta.to_string(),
             })
         }
@@ -211,16 +216,9 @@ pub(crate) fn parse_response_event(data: &str, event_type: Option<&str>) -> Opti
         }
 
         "response.output_item.done" => {
-            if let Some(item) = value.get("item") {
-                if let Some(tool_call) = extract_tool_call(item) {
-                    return Some(ParsedEvent::ToolCall(tool_call));
-                }
-                let text = extract_output_text(item);
-                if !text.is_empty() {
-                    return Some(ParsedEvent::TextDelta(text));
-                }
-            }
-            None
+            // Only extract tool calls; text was already streamed via output_text.delta
+            let item = value.get("item")?;
+            extract_tool_call(item).map(ParsedEvent::ToolCall)
         }
 
         "response.completed" => {
@@ -249,7 +247,7 @@ pub(crate) fn parse_response_event(data: &str, event_type: Option<&str>) -> Opti
     }
 }
 
-fn extract_usage(usage: &Value) -> Usage {
+pub(crate) fn extract_usage(usage: &Value) -> Usage {
     let input = usage
         .get("input_tokens")
         .and_then(Value::as_u64)
@@ -270,6 +268,54 @@ fn extract_usage(usage: &Value) -> Usage {
         cache_read_tokens: cache_read,
         cache_write_tokens: 0,
     }
+}
+
+/// Extract all output content blocks (text + tool calls) from a non-streaming response.
+pub(crate) fn extract_output(value: &Value) -> Vec<ContentBlock> {
+    let mut blocks = Vec::new();
+    let empty = Vec::new();
+    let output = value
+        .get("output")
+        .and_then(Value::as_array)
+        .unwrap_or(&empty);
+
+    for item in output {
+        match item.get("type").and_then(Value::as_str) {
+            Some("message") => {
+                if let Some(contents) = item.get("content").and_then(Value::as_array) {
+                    for content in contents {
+                        if content.get("type").and_then(Value::as_str) == Some("output_text")
+                            && let Some(text) = content.get("text").and_then(Value::as_str)
+                        {
+                            blocks.push(ContentBlock::Text {
+                                text: text.to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+            Some("function_call") => {
+                if let Some(call) = extract_tool_call(item) {
+                    blocks.push(ContentBlock::ToolCall {
+                        id: call.id,
+                        name: call.name,
+                        arguments: call.arguments,
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Fallback: if no output items, try extracting text from content array
+    if blocks.is_empty() {
+        let text = extract_output_text(value);
+        if !text.is_empty() {
+            blocks.push(ContentBlock::Text { text });
+        }
+    }
+
+    blocks
 }
 
 pub(crate) fn extract_output_text(value: &Value) -> String {
@@ -388,6 +434,68 @@ mod tests {
     }
 
     #[test]
+    fn build_request_maps_budget_to_effort() {
+        let make = |budget| {
+            let request = ChatRequest {
+                model: "o3".into(),
+                messages: Arc::new(vec![]),
+                system: None,
+                tools: Arc::new(vec![]),
+                max_tokens: None,
+                temperature: None,
+                thinking: Some(ThinkingConfig {
+                    enabled: true,
+                    budget_tokens: budget,
+                }),
+            };
+            build_request(&request, false)
+                .reasoning
+                .unwrap()
+                .effort
+                .unwrap()
+        };
+
+        assert_eq!(make(Some(1000)), "low");
+        assert_eq!(make(Some(10000)), "medium");
+        assert_eq!(make(Some(50000)), "high");
+        assert_eq!(make(None), "medium");
+    }
+
+    #[test]
+    fn build_request_forwards_temperature() {
+        let request = ChatRequest {
+            model: "gpt-4.1".into(),
+            messages: Arc::new(vec![]),
+            system: None,
+            tools: Arc::new(vec![]),
+            max_tokens: None,
+            temperature: Some(0.7),
+            thinking: None,
+        };
+        let req = build_request(&request, false);
+        assert_eq!(req.temperature, Some(0.7));
+    }
+
+    #[test]
+    fn build_tools_includes_strict_false() {
+        let request = ChatRequest {
+            model: "gpt-4.1".into(),
+            messages: Arc::new(vec![]),
+            system: None,
+            tools: Arc::new(vec![ToolDefinition {
+                name: "read".into(),
+                description: "Read a file".into(),
+                parameters: serde_json::json!({"type": "object"}),
+            }]),
+            max_tokens: None,
+            temperature: None,
+            thinking: None,
+        };
+        let req = build_request(&request, false);
+        assert_eq!(req.tools[0]["strict"], serde_json::json!(false));
+    }
+
+    #[test]
     fn builds_input_with_output_text_for_assistant() {
         let request = ChatRequest {
             model: "gpt-test".into(),
@@ -481,10 +589,10 @@ mod tests {
     #[test]
     fn parse_tool_call_arguments_delta() {
         let data =
-            r#"{"type":"response.function_call_arguments.delta","item_id":"fc_1","name":"read","delta":"{\"pa"}"#;
+            r#"{"type":"response.function_call_arguments.delta","item_id":"fc_1","output_index":0,"delta":"{\"pa"}"#;
         let event = parse_response_event(data, Some("response.function_call_arguments.delta"));
         assert!(
-            matches!(event, Some(ParsedEvent::ToolCallDelta { call_id, name, delta }) if call_id == "fc_1" && name == "read" && delta == "{\"pa")
+            matches!(event, Some(ParsedEvent::ToolCallDelta { call_id, delta }) if call_id == "fc_1" && delta == "{\"pa")
         );
     }
 
