@@ -21,6 +21,7 @@ mod gemini;
 mod http;
 mod models_dev;
 mod openai_compat;
+mod openai_responses;
 mod prefs;
 mod registry;
 mod stream;
