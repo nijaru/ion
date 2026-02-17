@@ -102,7 +102,7 @@ pub(crate) fn extract_key_arg(tool_name: &str, args: &serde_json::Value) -> Stri
 }
 
 /// Display name for tool calls (user-facing, not internal tool name).
-fn display_name(tool_name: &str) -> &str {
+pub(crate) fn display_name(tool_name: &str) -> &str {
     match tool_name {
         "grep" | "glob" => "search",
         name => name,

@@ -5,9 +5,10 @@ use crate::provider::{ContentBlock, Provider, Role};
 use crate::session::Session;
 use crate::tui::App;
 use crate::tui::message_list::{
-    MessageEntry, Sender, extract_key_arg, sanitize_tool_name, strip_error_prefixes,
+    MessageEntry, Sender, display_name, extract_key_arg, sanitize_tool_name, strip_error_prefixes,
 };
 use anyhow::Result;
+use std::collections::HashMap;
 use tokio_util::sync::CancellationToken;
 
 impl App {
@@ -52,9 +53,12 @@ impl App {
         // Update model display
         self.config.model = Some(loaded.model);
 
-        // Rebuild message list from session messages
+        // Rebuild message list from session messages.
+        // Track tool call entries by ID so results can be matched to the correct call.
         self.message_list.clear();
         self.render_state.reset_for_session_load();
+        let mut tool_entry_map: HashMap<String, (usize, String)> = HashMap::new();
+
         for msg in &self.session.messages {
             match msg.role {
                 Role::User => {
@@ -72,19 +76,23 @@ impl App {
                                     .push_entry(MessageEntry::new(Sender::Agent, text.clone()));
                             }
                             ContentBlock::ToolCall {
-                                name, arguments, ..
+                                id, name, arguments, ..
                             } => {
-                                // Sanitize tool name (models sometimes embed args or XML artifacts)
                                 let clean_name = sanitize_tool_name(name);
-                                // Format tool call with key argument, same as live display
+                                let shown = display_name(clean_name);
                                 let key_arg = extract_key_arg(clean_name, arguments);
                                 let display = if key_arg.is_empty() {
-                                    clean_name.to_string()
+                                    shown.to_string()
                                 } else {
-                                    format!("{clean_name}({key_arg})")
+                                    format!("{shown}({key_arg})")
                                 };
+                                let entry_idx = self.message_list.entries.len();
                                 self.message_list
                                     .push_entry(MessageEntry::new(Sender::Tool, display));
+                                tool_entry_map.insert(
+                                    id.clone(),
+                                    (entry_idx, clean_name.to_string()),
+                                );
                             }
                             _ => {}
                         }
@@ -93,30 +101,30 @@ impl App {
                 Role::ToolResult => {
                     for block in msg.content.iter() {
                         if let ContentBlock::ToolResult {
-                            content, is_error, ..
+                            tool_call_id,
+                            content,
+                            is_error,
+                            ..
                         } = block
                         {
-                            let display = if *is_error {
-                                let msg = strip_error_prefixes(content).trim();
-                                let first_line = msg.lines().next().unwrap_or("");
-                                format!("Error: {first_line}")
-                            } else {
-                                let line_count = content.lines().count();
-                                if line_count > 1 {
-                                    format!("{line_count} lines")
+                            let (entry_idx, tool_name) =
+                                if let Some(entry) = tool_entry_map.remove(tool_call_id) {
+                                    entry
                                 } else {
-                                    content.chars().take(60).collect::<String>()
-                                }
-                            };
-                            // Append to previous tool entry if exists
-                            if let Some(last) = self.message_list.entries.last_mut()
-                                && last.sender == Sender::Tool
-                            {
-                                last.append_text(&format!("\n{display}"));
-                                continue;
+                                    // Fallback: append to last tool entry
+                                    let idx = self
+                                        .message_list
+                                        .entries
+                                        .iter()
+                                        .rposition(|e| e.sender == Sender::Tool)
+                                        .unwrap_or(0);
+                                    (idx, String::new())
+                                };
+
+                            let display = format_replay_result(&tool_name, content, *is_error);
+                            if let Some(entry) = self.message_list.entries.get_mut(entry_idx) {
+                                entry.append_text(&format!("\n{display}"));
                             }
-                            self.message_list
-                                .push_entry(MessageEntry::new(Sender::Tool, display));
                         }
                     }
                 }
@@ -148,5 +156,54 @@ impl App {
         }
 
         Ok(())
+    }
+}
+
+/// Format a tool result for session replay, matching live display style.
+fn format_replay_result(tool_name: &str, content: &str, is_error: bool) -> String {
+    if is_error {
+        let msg = strip_error_prefixes(content).trim();
+        let first_line = msg.lines().next().unwrap_or("");
+        return format!("Error: {first_line}");
+    }
+
+    if content.trim().is_empty() {
+        return " ✓".to_string();
+    }
+
+    let shown = display_name(tool_name);
+    match shown {
+        // Collapsed: count-only summary
+        "read" => {
+            let n = content.lines().count();
+            format!(" ✓ {n} lines")
+        }
+        "search" => {
+            let n = content.lines().filter(|l| !l.trim().is_empty()).count();
+            if n == 0 {
+                format!(" {}", content.lines().next().unwrap_or("✓"))
+            } else {
+                format!(" ✓ {n} results")
+            }
+        }
+        "list" => {
+            let n = content.lines().count();
+            format!(" ✓ {n} items")
+        }
+        // Edit/write: brief summary
+        "edit" | "write" => {
+            let first = content.lines().next().unwrap_or("✓");
+            format!(" ✓ {first}")
+        }
+        // Full: show first line of content
+        _ => {
+            let first = content.lines().next().unwrap_or("OK");
+            let truncated = if first.chars().count() > 80 {
+                format!("{}...", first.chars().take(77).collect::<String>())
+            } else {
+                first.to_string()
+            };
+            format!(" ✓ {truncated}")
+        }
     }
 }
