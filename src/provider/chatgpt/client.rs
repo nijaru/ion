@@ -93,14 +93,19 @@ impl ChatGptResponsesClient {
                     continue;
                 }
 
-                if let Some(stream_event) =
-                    parse_response_event(&event.data, event.event.as_deref())
-                {
+                let parsed = parse_response_event(&event.data, event.event.as_deref());
+                tracing::trace!(
+                    event_type = ?event.event,
+                    parsed = ?parsed.as_ref().map(std::mem::discriminant),
+                    "SSE event"
+                );
+                if let Some(stream_event) = parsed {
                     match stream_event {
                         ParsedEvent::TextDelta(delta) => {
                             let _ = tx.send(StreamEvent::TextDelta(delta)).await;
                         }
                         ParsedEvent::ToolCall(call) => {
+                            tracing::debug!(name = %call.name, id = %call.id, "tool call");
                             let _ = tx.send(StreamEvent::ToolCall(call)).await;
                         }
                         ParsedEvent::Done => {

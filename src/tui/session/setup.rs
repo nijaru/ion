@@ -52,7 +52,7 @@ impl App {
                     let file_layer = tracing_subscriber::fmt::layer()
                         .with_writer(file)
                         .with_ansi(false);
-                    let filter = tracing_subscriber::EnvFilter::new("ion=debug");
+                    let filter = tracing_subscriber::EnvFilter::new("ion=trace");
                     let _ = tracing_subscriber::registry()
                         .with(file_layer.with_filter(filter))
                         .try_init();
