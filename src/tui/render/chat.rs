@@ -96,8 +96,8 @@ impl App {
         self.render_state.rendered_entries = index;
 
         // Incrementally render the actively streaming agent entry.
-        // Hold back last 2 lines: the last content line may change from
-        // word-wrapping or unclosed markdown, plus the trailing blank line.
+        // Hold back the last line: it may still change from word-wrapping
+        // or unclosed markdown as new tokens arrive.
         if self.is_running && index < entry_count {
             let entry = &self.message_list.entries[index];
             if entry.sender == Sender::Agent {
@@ -107,7 +107,7 @@ impl App {
                     wrap_width,
                 );
                 let already = self.render_state.streaming_carryover.committed_lines();
-                let safe = all_lines.len().saturating_sub(2);
+                let safe = all_lines.len().saturating_sub(1);
                 if safe > already {
                     new_lines.extend(all_lines.into_iter().skip(already).take(safe - already));
                     self.render_state.streaming_carryover.set(safe);

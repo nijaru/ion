@@ -1,8 +1,8 @@
 //! Layout calculations for the TUI.
 
-use crate::tui::App;
-use crate::tui::render::{PROGRESS_HEIGHT, selector_height};
+use crate::tui::render::{selector_height, PROGRESS_HEIGHT};
 use crate::tui::types::{Mode, SelectorPage};
+use crate::tui::App;
 
 /// A rectangular region within the terminal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -203,8 +203,9 @@ mod tests {
         term_width: u16,
         last_top: Option<u16>,
     ) -> UiLayout {
-        // Manually build what compute_layout would produce for Input mode
-        let progress_height = PROGRESS_HEIGHT;
+        // Manually build what compute_layout would produce for Input mode.
+        // Include the gap row (matches App::progress_gap_rows() = 1).
+        let progress_height = PROGRESS_HEIGHT + 1;
         let status_height = 1u16;
         let total = popup_height + progress_height + input_height + status_height;
         let top = term_height.saturating_sub(total);
@@ -344,12 +345,12 @@ mod tests {
     #[test]
     fn test_layout_height() {
         let layout = test_input_layout(0, 3, 40, 80, None);
-        // progress (1) + input (3) + status (1) = 5
-        assert_eq!(layout.height(), 5);
+        // progress (2: gap + line) + input (3) + status (1) = 6
+        assert_eq!(layout.height(), 6);
 
         let layout_popup = test_input_layout(5, 3, 40, 80, None);
-        // popup (5) + progress (1) + input (3) + status (1) = 10
-        assert_eq!(layout_popup.height(), 10);
+        // popup (5) + progress (2) + input (3) + status (1) = 11
+        assert_eq!(layout_popup.height(), 11);
 
         let sel_height = selector_height(10, 40);
         let top = 40u16.saturating_sub(sel_height);
