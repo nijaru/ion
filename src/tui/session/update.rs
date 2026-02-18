@@ -156,9 +156,21 @@ impl App {
                     }
                     self.last_error = None; // Clear error on success
                     if already_browsing {
-                        // Keep the current stage and filter — just refresh the underlying list.
-                        self.model_picker.provider_models =
-                            self.model_picker.all_models.clone();
+                        // Keep the current stage and filter — just refresh the underlying
+                        // list. Respect selected_provider scope: if the user drilled into
+                        // a specific provider, only show that provider's models.
+                        if let Some(ref p) = self.model_picker.selected_provider.clone() {
+                            self.model_picker.provider_models = self
+                                .model_picker
+                                .all_models
+                                .iter()
+                                .filter(|m| &m.provider == p)
+                                .cloned()
+                                .collect();
+                        } else {
+                            self.model_picker.provider_models =
+                                self.model_picker.all_models.clone();
+                        }
                         self.model_picker.apply_filter();
                     } else {
                         // First load — show all models (user can type to filter/search).
