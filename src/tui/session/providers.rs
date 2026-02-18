@@ -72,16 +72,16 @@ impl App {
             // Already loaded this session — show immediately.
             self.model_picker.start_all_models();
         } else {
-            self.model_picker.is_loading = true;
             self.setup_fetch_started = true;
             // Load from disk cache so the list is populated immediately while
             // the background fetch runs to refresh it.
             if let Some(cached) = self.load_model_cache(self.api_provider) {
                 self.model_picker.set_models(cached);
                 self.model_picker.start_all_models();
-                // Keep is_loading=true so the background fetch still runs.
-                self.model_picker.is_loading = true;
             }
+            // set_models() clears is_loading; set it after any cache load so
+            // the background fetch always runs and the UI shows loading state.
+            self.model_picker.is_loading = true;
             self.fetch_models();
         }
     }
@@ -100,8 +100,13 @@ impl App {
 
     /// Persist the model list to disk so the next session can load it immediately.
     pub(in crate::tui) fn save_model_cache(&self, provider: Provider, models: &[ModelInfo]) {
-        if let Ok(data) = serde_json::to_vec(models) {
-            let _ = std::fs::write(self.model_cache_path(provider), data);
+        match serde_json::to_vec(models) {
+            Ok(data) => {
+                if let Err(e) = std::fs::write(self.model_cache_path(provider), data) {
+                    tracing::warn!("Failed to write model cache: {e}");
+                }
+            }
+            Err(e) => tracing::warn!("Failed to serialize model cache: {e}"),
         }
     }
 
