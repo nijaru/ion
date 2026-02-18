@@ -51,17 +51,18 @@ pub(crate) fn extract_key_arg(tool_name: &str, args: &serde_json::Value) -> Stri
             let pattern = obj
                 .get("pattern")
                 .and_then(|v| v.as_str())
-                .map(|s| truncate_for_display(s, 50))
                 .unwrap_or_default();
+            let rel_pattern = relative_display_path(pattern);
+            let display = truncate_for_display(&rel_pattern, 50);
 
             if let Some(path) = obj.get("path").and_then(|v| v.as_str())
                 && path != "."
                 && !path.is_empty()
             {
                 let rel = relative_display_path(path);
-                return format!("{pattern} in {}", truncate_for_display(&rel, 40));
+                return format!("{display} in {}", truncate_for_display(&rel, 40));
             }
-            pattern
+            display
         }
         "grep" => {
             let pattern = obj
@@ -104,10 +105,7 @@ pub(crate) fn extract_key_arg(tool_name: &str, args: &serde_json::Value) -> Stri
 
 /// Display name for tool calls (user-facing, not internal tool name).
 pub(crate) fn display_name(tool_name: &str) -> &str {
-    match tool_name {
-        "grep" | "glob" => "search",
-        name => name,
-    }
+    tool_name
 }
 
 /// Truncate a string for display, showing the end for paths.
@@ -389,7 +387,7 @@ fn result_style(tool_name: Option<&str>) -> ResultStyle {
     match tool_name {
         Some("read") => ResultStyle::Collapsed("lines"),
         Some("list") => ResultStyle::Collapsed("items"),
-        Some("search") => ResultStyle::Collapsed("results"),
+        Some("grep" | "glob") => ResultStyle::Collapsed("results"),
         Some("edit" | "write") => ResultStyle::DiffSummary,
         _ => ResultStyle::Full,
     }
@@ -1347,19 +1345,19 @@ mod tests {
 
     #[test]
     fn test_collapsed_search_shows_count() {
-        let result = format_result_content(Some("search"), "a.rs\nb.rs\nc.rs", false, false);
+        let result = format_result_content(Some("grep"), "a.rs\nb.rs\nc.rs", false, false);
         assert_eq!(
             result, " ✓ 3 results",
-            "collapsed search should show count"
+            "collapsed grep should show count"
         );
         // Single result should be singular
-        let single = format_result_content(Some("search"), "a.rs", false, false);
+        let single = format_result_content(Some("grep"), "a.rs", false, false);
         assert_eq!(single, " ✓ 1 result", "singular grammar");
     }
 
     #[test]
     fn test_collapsed_search_empty_shows_no_matches() {
-        let result = format_result_content(Some("search"), "", false, false);
+        let result = format_result_content(Some("grep"), "", false, false);
         assert_eq!(
             result, " ✓ No matches",
             "collapsed empty search should show No matches"
