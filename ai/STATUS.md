@@ -12,25 +12,23 @@
 
 ## Completed This Session
 
+- **tk-9ozb fixed** — Selector column alignment: `max_label_width` computed across all items,
+  labels padded before hint column so env vars / context windows align vertically.
+  (`src/tui/render/selector.rs`)
+
 - **Tool result coloring** — result status lines (` ✓`, ` ✗`, ` ⎿`) always dim gray, 2-space
-  indent. Fixed read tool getting 4-space indent via syntax branch. Removed red error bullet.
-  (`src/tui/chat_renderer.rs`)
+  indent. Fixed read tool getting 4-space indent via syntax branch. (`src/tui/chat_renderer.rs`)
 
-- **grep/glob display** — reverted combined `search` alias; `grep`/`glob` display separately.
-  grep now shows path-first: `grep(src, "pattern...")`. glob relativizes absolute patterns.
-  `display_name()` no-op removed, inlined at call sites. (`src/tui/message_list.rs`)
-
-- **tk-86lk closed** — `--continue` header pinning was pre-RNK; current output is clean.
+- **grep/glob display** — path-first format `grep(src, "pattern...")`, glob relativizes absolute
+  paths, `display_name()` no-op removed. (`src/tui/message_list.rs`)
 
 - **Review fixes** — OpenAI Responses API: temperature cleared when reasoning active; InputImage
-  now emits nested `{"url": "..."}` shape for Responses API (was flat string → vision 400s);
-  lifecycle fallback no longer corrupts entry 0 when tool_call_id not in map.
+  nested `{"url": "..."}` shape; lifecycle fallback no longer corrupts entry 0.
   (`src/provider/openai_responses/`, `src/tui/session/lifecycle.rs`)
 
 ## Known Issues
 
 - tk-nupp (p2): Empty response observed once with chatgpt provider — trace logging active
-- tk-86lk (p3): `--continue` header pinning breaks scrollback (gap fixed; pinning separate)
 
 ## Blockers
 
@@ -39,9 +37,8 @@
 ## Next Steps
 
 1. tk-43cd (p3): Persist MessageList display entries in session storage
-2. tk-9ozb (p3): Selector column alignment broken
-3. tk-86lk (p3): `--continue` header pinning breaks scrollback
-4. tk-ioxh (p3): Evaluate async subagent execution model
+2. tk-ioxh (p3): Evaluate async subagent execution model
+3. tk-9eni (p3): Model list loading state + cache
 
 ## Key References
 
