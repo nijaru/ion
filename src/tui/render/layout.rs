@@ -82,11 +82,12 @@ impl App {
 
         let popup_height = self.active_popup_height();
         let has_active_progress = self.is_running || self.last_task_summary.is_some();
-        let progress_height = if has_active_progress {
-            PROGRESS_GAP + PROGRESS_HEIGHT
-        } else {
-            0
-        };
+        let progress_height = PROGRESS_GAP
+            + if has_active_progress {
+                PROGRESS_HEIGHT
+            } else {
+                0
+            };
         let input_height = self.calculate_input_height(width, height);
         let status_height = 1u16;
         let total = popup_height + progress_height + input_height + status_height;
