@@ -441,17 +441,16 @@ pub(crate) fn format_result_content(
 
     match result_style(tool_name) {
         ResultStyle::Collapsed(unit) => {
-            if !expanded && unit != "results" {
-                // Collapsed read/list: just pass/fail
-                return " ✓".to_string();
-            }
             if !expanded {
-                // Collapsed search: show count
                 let line_count = result.lines().count();
                 return if result.trim().is_empty() {
-                    " ✓ No matches".to_string()
+                    if unit == "results" {
+                        " ✓ No matches".to_string()
+                    } else {
+                        " ✓".to_string()
+                    }
                 } else if line_count == 1 {
-                    " ✓ 1 result".to_string()
+                    format!(" ✓ 1 {}", unit.trim_end_matches('s'))
                 } else {
                     format!(" ✓ {line_count} {unit}")
                 };
@@ -479,8 +478,17 @@ pub(crate) fn format_result_content(
         }
         ResultStyle::Full => {
             if !expanded {
-                // Collapsed bash: just pass/fail
-                return " ✓".to_string();
+                // Collapsed bash: show output line count from metadata header.
+                // Header format: "Exit code: {n}\nOutput lines: {n}\n\n{output}"
+                let lines = result
+                    .lines()
+                    .find(|l| l.starts_with("Output lines: "))
+                    .and_then(|l| l["Output lines: ".len()..].parse::<usize>().ok());
+                return match lines {
+                    Some(0) | None => " ✓".to_string(),
+                    Some(1) => " ✓ 1 line".to_string(),
+                    Some(n) => format!(" ✓ {n} lines"),
+                };
             }
             // Expanded: full tail output
             // Bash stores: "Exit code: {code}\nOutput lines: {n}\n\n{output}"
@@ -1290,10 +1298,12 @@ mod tests {
     // --- Collapsed/expanded tool display tests ---
 
     #[test]
-    fn test_collapsed_read_shows_minimal() {
-        // Default (collapsed): read shows just ✓, no line count
+    fn test_collapsed_read_shows_count() {
+        // Collapsed: read shows line count
         let result = format_result_content(Some("read"), "line1\nline2\nline3", false, false);
-        assert_eq!(result, " ✓", "collapsed read should be minimal");
+        assert_eq!(result, " ✓ 3 lines", "collapsed read should show line count");
+        let single = format_result_content(Some("read"), "only one", false, false);
+        assert_eq!(single, " ✓ 1 line", "singular grammar");
     }
 
     #[test]
@@ -1303,9 +1313,18 @@ mod tests {
     }
 
     #[test]
-    fn test_collapsed_bash_shows_minimal() {
-        let result = format_result_content(None, "lots of output\nmore output", false, false);
-        assert_eq!(result, " ✓", "collapsed bash should be minimal");
+    fn test_collapsed_bash_shows_line_count_from_header() {
+        // With metadata header
+        let with_header = "Exit code: 0\nOutput lines: 5\n\nline1\nline2\nline3\nline4\nline5";
+        let result = format_result_content(None, with_header, false, false);
+        assert_eq!(result, " ✓ 5 lines", "collapsed bash should show line count from header");
+        // Zero lines
+        let empty = "Exit code: 0\nOutput lines: 0\n\n";
+        let result = format_result_content(None, empty, false, false);
+        assert_eq!(result, " ✓", "zero output lines shows plain ✓");
+        // No header (fallback)
+        let no_header = format_result_content(None, "raw output", false, false);
+        assert_eq!(no_header, " ✓", "no header falls back to plain ✓");
     }
 
     #[test]
@@ -1372,9 +1391,9 @@ mod tests {
             false,
         ));
 
-        // Default collapsed: no line count
+        // Default collapsed: shows line count
         let md = list.entries[0].content_as_markdown();
-        assert!(!md.contains("3 lines"), "collapsed should not show count");
+        assert!(md.contains("3 lines"), "collapsed read should show line count");
         assert!(md.contains("✓"), "collapsed should show ✓");
 
         // Toggle to expanded
@@ -1385,12 +1404,12 @@ mod tests {
             "expanded should show count, got: {md}"
         );
 
-        // Toggle back to collapsed
+        // Toggle back to collapsed: still shows count (collapsed now shows count too)
         list.toggle_tool_expansion();
         let md = list.entries[0].content_as_markdown();
         assert!(
-            !md.contains("3 lines"),
-            "collapsed again should not show count"
+            md.contains("3 lines"),
+            "collapsed should still show line count, got: {md}"
         );
     }
 
