@@ -1,6 +1,6 @@
 //! Layout calculations for the TUI.
 
-use crate::tui::render::{selector_height, PROGRESS_HEIGHT};
+use crate::tui::render::{selector_height, PROGRESS_GAP, PROGRESS_HEIGHT};
 use crate::tui::types::{Mode, SelectorPage};
 use crate::tui::App;
 
@@ -82,12 +82,11 @@ impl App {
 
         let popup_height = self.active_popup_height();
         let has_active_progress = self.is_running || self.last_task_summary.is_some();
-        let progress_height = self.progress_gap_rows()
-            + if has_active_progress {
-                PROGRESS_HEIGHT
-            } else {
-                0
-            };
+        let progress_height = if has_active_progress {
+            PROGRESS_GAP + PROGRESS_HEIGHT
+        } else {
+            0
+        };
         let input_height = self.calculate_input_height(width, height);
         let status_height = 1u16;
         let total = popup_height + progress_height + input_height + status_height;
@@ -209,9 +208,9 @@ mod tests {
         term_width: u16,
         last_top: Option<u16>,
     ) -> UiLayout {
-        // Manually build what compute_layout would produce for Input mode.
-        // Include the gap row (matches App::progress_gap_rows() = 1).
-        let progress_height = PROGRESS_HEIGHT + 1;
+        // Manually build what compute_layout would produce for Input mode
+        // with active progress (is_running = true): gap + progress line.
+        let progress_height = PROGRESS_GAP + PROGRESS_HEIGHT;
         let status_height = 1u16;
         let total = popup_height + progress_height + input_height + status_height;
         let top = term_height.saturating_sub(total);

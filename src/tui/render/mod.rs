@@ -27,6 +27,8 @@ pub(crate) const PROMPT_WIDTH: u16 = 2;
 pub(crate) const INPUT_MARGIN: u16 = 3;
 /// Height of the progress bar area
 pub(crate) const PROGRESS_HEIGHT: u16 = 1;
+/// Blank gap rows above the progress bar (visual separation from chat)
+pub(crate) const PROGRESS_GAP: u16 = 1;
 /// Selector layout overhead: tabs(1) + desc(1) + search box(3) + hint(1) + list header
 pub(crate) const SELECTOR_OVERHEAD: u16 = 7;
 

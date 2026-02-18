@@ -425,8 +425,9 @@ fn format_diff_summary(added: usize, removed: usize) -> String {
 
 /// Common formatting for single-call tool results.
 ///
-/// When `expanded` is false (default), most tools show a minimal pass/fail
-/// indicator. Edit/write diffs and search counts are always shown inline.
+/// When `expanded` is false (default), tools show pass/fail with counts
+/// (read/list: line or item count, search: result count, bash: output line
+/// count). Edit/write diffs are always shown inline.
 /// When `expanded` is true (Ctrl+O), the full tail-truncated output appears.
 pub(crate) fn format_result_content(
     tool_name: Option<&str>,
@@ -450,7 +451,13 @@ pub(crate) fn format_result_content(
                         " ✓".to_string()
                     }
                 } else if line_count == 1 {
-                    format!(" ✓ 1 {}", unit.trim_end_matches('s'))
+                    let singular = match unit {
+                        "lines" => "line",
+                        "items" => "item",
+                        "results" => "result",
+                        other => other,
+                    };
+                    format!(" ✓ 1 {singular}")
                 } else {
                     format!(" ✓ {line_count} {unit}")
                 };
@@ -482,6 +489,7 @@ pub(crate) fn format_result_content(
                 // Header format: "Exit code: {n}\nOutput lines: {n}\n\n{output}"
                 let lines = result
                     .lines()
+                    .take(3)
                     .find(|l| l.starts_with("Output lines: "))
                     .and_then(|l| l["Output lines: ".len()..].parse::<usize>().ok());
                 return match lines {
