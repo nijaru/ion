@@ -106,7 +106,7 @@ impl ChatRenderer {
                             let tool_name = &first_line[..paren_pos];
                             let args = &first_line[paren_pos..];
 
-                            if tool_name == "read" || tool_name == "search" {
+                            if tool_name == "read" {
                                 let path = args
                                     .trim_start_matches('(')
                                     .split(&[',', ')'][..])
