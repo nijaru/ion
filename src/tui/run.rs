@@ -253,6 +253,7 @@ fn apply_chat_insert(
     stdout: &mut io::Stdout,
     app: &mut App,
     chat_insert: Option<ChatInsert>,
+    term_width: u16,
 ) -> io::Result<()> {
     let Some(insert) = chat_insert else {
         return Ok(());
@@ -260,7 +261,6 @@ fn apply_chat_insert(
 
     match insert {
         ChatInsert::AtRow { start_row, lines } => {
-            let (term_width, _) = terminal::size()?;
             let new_row = write_lines_at(stdout, start_row, &lines, term_width)?;
             // Don't set ui_drawn_at here — draw_direct does that after
             // recomputing layout with the updated next_row.
@@ -281,7 +281,6 @@ fn apply_chat_insert(
                 Clear(ClearType::FromCursorDown)
             )?;
             execute!(stdout, crossterm::terminal::ScrollUp(scroll_amount))?;
-            let (term_width, _) = terminal::size()?;
             write_lines_at(stdout, print_row, &lines, term_width)?;
             app.render_state.position = ChatPosition::Scrolling { ui_drawn_at: None };
         }
@@ -297,7 +296,6 @@ fn apply_chat_insert(
                 Clear(ClearType::FromCursorDown)
             )?;
             execute!(stdout, crossterm::terminal::ScrollUp(scroll_amount))?;
-            let (term_width, _) = terminal::size()?;
             write_lines_at(stdout, print_row, &lines, term_width)?;
             app.render_state.position = ChatPosition::Scrolling { ui_drawn_at: None };
         }
@@ -563,7 +561,7 @@ fn render_frame(
         }
     }
 
-    apply_chat_insert(stdout, app, chat_insert)?;
+    apply_chat_insert(stdout, app, chat_insert, term_width)?;
 
     // Recompute layout after chat insertion — position may have changed.
     let post_layout = app.compute_layout(term_width, term_height);
