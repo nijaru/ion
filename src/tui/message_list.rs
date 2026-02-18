@@ -88,8 +88,8 @@ pub(crate) fn extract_key_arg(tool_name: &str, args: &serde_json::Value) -> Stri
             // Path first (most scannable), then short quoted pattern, then extras.
             let short_pattern = truncate_for_display(pattern, 25);
             match path {
-                Some(p) if extras.is_empty() => format!("{p} \"{short_pattern}\""),
-                Some(p) => format!("{p} \"{short_pattern}\" {}", extras.join(" ")),
+                Some(p) if extras.is_empty() => format!("{p}, \"{short_pattern}\""),
+                Some(p) => format!("{p}, \"{short_pattern}\" {}", extras.join(" ")),
                 None if extras.is_empty() => format!("\"{short_pattern}\""),
                 None => format!("\"{short_pattern}\" {}", extras.join(" ")),
             }
