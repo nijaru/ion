@@ -88,14 +88,6 @@ impl ChatRenderer {
                 }
                 Sender::Tool => {
                     let content = entry.content_as_markdown();
-                    let has_error = content
-                        .lines()
-                        .any(|line| line.starts_with("⎿ Error:") || line.starts_with("  Error:"));
-                    let tool_prefix = if has_error {
-                        StyledSpan::colored("• ", Color::Red)
-                    } else {
-                        StyledSpan::raw("• ")
-                    };
                     let mut lines = content.lines();
 
                     let mut syntax_name: Option<&str> = None;
@@ -122,7 +114,7 @@ impl ChatRenderer {
                                 .trim_start_matches('(')
                                 .trim_end_matches(')');
                             entry_lines.push(StyledLine::new(vec![
-                                tool_prefix.clone(),
+                                StyledSpan::raw("• "),
                                 StyledSpan::bold(tool_name.to_string()),
                                 StyledSpan::raw("("),
                                 StyledSpan::colored(inner.to_string(), Color::Cyan),
@@ -130,7 +122,7 @@ impl ChatRenderer {
                             ]));
                         } else {
                             entry_lines.push(StyledLine::new(vec![
-                                tool_prefix.clone(),
+                                StyledSpan::raw("• "),
                                 StyledSpan::bold(first_line.to_string()),
                             ]));
                         }
@@ -146,12 +138,16 @@ impl ChatRenderer {
                                 || line.starts_with('@')
                                 || line.starts_with(' '));
 
-                        if line.starts_with("⎿ Error:") || line.starts_with("  Error:") {
+                        if line.starts_with(" ✓") || line.starts_with(" ✗") || line.starts_with(" ⎿") {
+                            // Result status lines: always dim gray with consistent 2-space indent.
+                            // Must be checked before syntax_name to prevent ✓/✗ lines from being
+                            // treated as code content (which would add 4-space indent instead of 2).
                             entry_lines.push(StyledLine::new(vec![
                                 StyledSpan::raw("  "),
-                                StyledSpan::colored(line.to_string(), Color::Red),
+                                StyledSpan::dim(line.to_string()),
                             ]));
                         } else if line.starts_with("⎿") || line.starts_with("  … +") {
+                            // Grouped result lines and overflow indicators
                             entry_lines.push(StyledLine::new(vec![
                                 StyledSpan::raw("  "),
                                 StyledSpan::dim(line.to_string()),
