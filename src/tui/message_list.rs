@@ -67,17 +67,15 @@ pub(crate) fn extract_key_arg(tool_name: &str, args: &serde_json::Value) -> Stri
             let pattern = obj
                 .get("pattern")
                 .and_then(|v| v.as_str())
-                .map(|s| truncate_for_display(s, 50))
                 .unwrap_or_default();
 
+            let path = obj
+                .get("path")
+                .and_then(|v| v.as_str())
+                .filter(|p| *p != "." && !p.is_empty())
+                .map(|p| truncate_for_display(&relative_display_path(p), 40));
+
             let mut extras = Vec::new();
-            if let Some(path) = obj.get("path").and_then(|v| v.as_str())
-                && path != "."
-                && !path.is_empty()
-            {
-                let rel = relative_display_path(path);
-                extras.push(format!("in {}", truncate_for_display(&rel, 40)));
-            }
             if let Some(typ) = obj.get("type").and_then(|v| v.as_str()) {
                 extras.push(format!("type={typ}"));
             }
@@ -87,10 +85,13 @@ pub(crate) fn extract_key_arg(tool_name: &str, args: &serde_json::Value) -> Stri
                 extras.push(format!("mode={mode}"));
             }
 
-            if extras.is_empty() {
-                pattern
-            } else {
-                format!("{pattern} {}", extras.join(" "))
+            // Path first (most scannable), then short quoted pattern, then extras.
+            let short_pattern = truncate_for_display(pattern, 25);
+            match path {
+                Some(p) if extras.is_empty() => format!("{p} \"{short_pattern}\""),
+                Some(p) => format!("{p} \"{short_pattern}\" {}", extras.join(" ")),
+                None if extras.is_empty() => format!("\"{short_pattern}\""),
+                None => format!("\"{short_pattern}\" {}", extras.join(" ")),
             }
         }
         _ => obj
