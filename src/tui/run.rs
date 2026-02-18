@@ -585,7 +585,11 @@ fn reprint_loaded_session(
 
     let layout = app.compute_layout(term_width, term_height);
     let ui_height = layout.height();
-    let lines = app.build_chat_lines(term_width);
+    let mut lines = app.build_chat_lines(term_width);
+    // Strip trailing blank lines — the progress area gap provides visual separation.
+    while lines.last().is_some_and(StyledLine::is_empty) {
+        lines.pop();
+    }
 
     // Print chat lines naturally from the current cursor position.
     // The terminal scrolls content into scrollback as needed — same
@@ -899,9 +903,10 @@ pub async fn run(permissions: PermissionSettings, resume_option: ResumeOption) -
 
         let was_running = app.is_running;
         app.update();
-        // Trigger full re-render on agent completion to fix word-wrap reflow artifacts
-        // from lines committed during streaming with potentially incorrect wrapping.
-        if was_running && !app.is_running {
+        // Trigger full re-render on agent completion if streaming lines were committed.
+        // Streaming commits lines as tokens arrive; the final wrap may differ from
+        // what was committed, so reflow corrects any stale rows in scrollback.
+        if was_running && !app.is_running && !app.render_state.streaming_carryover.is_empty() {
             app.render_state.needs_reflow = true;
         }
 
@@ -996,12 +1001,12 @@ pub async fn run(permissions: PermissionSettings, resume_option: ResumeOption) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tui::render::PROGRESS_HEIGHT;
+    use crate::tui::render::{PROGRESS_GAP, PROGRESS_HEIGHT};
     use crate::tui::render::layout::{BodyLayout, Region, UiLayout};
 
     fn test_layout(top: u16, width: u16) -> UiLayout {
-        // Include the gap row (matches App::progress_gap_rows() = 1).
-        let progress_height = PROGRESS_HEIGHT + 1;
+        // Simulates active progress (is_running = true): gap + progress line.
+        let progress_height = PROGRESS_GAP + PROGRESS_HEIGHT;
         let input_height = 3u16;
         let status_height = 1u16;
         let progress = Region {
