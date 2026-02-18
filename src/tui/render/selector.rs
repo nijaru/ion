@@ -35,6 +35,8 @@ pub struct SelectorData {
     pub filter_text: String,
     pub show_tabs: bool,
     pub active_tab: usize, // 0 = providers, 1 = models
+    /// Show a loading placeholder when true and items is empty.
+    pub loading: bool,
 }
 
 fn paint_row_text<W: Write>(
@@ -254,6 +256,17 @@ fn render_list<W: Write>(
 
     let mut row = start_row;
     let line_width = width.saturating_sub(1) as usize;
+
+    // Show a loading placeholder when fetch is in progress and no items yet.
+    if data.loading && data.items.is_empty() {
+        for _ in 0..list_height {
+            execute!(w, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
+            row += 1;
+        }
+        // Overwrite the first row with "Loading..."
+        paint_row_text(w, start_row, width, "  Loading...", None, false, true)?;
+        return Ok(row);
+    }
 
     for (i, item) in visible_items.into_iter().enumerate() {
         let actual_idx = scroll_offset + i;

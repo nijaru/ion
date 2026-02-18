@@ -1,11 +1,11 @@
 //! Direct crossterm rendering orchestrator (TUI v2 - no ratatui).
 
-use crate::tui::App;
 use crate::tui::render::bottom_ui::BottomUiFrame;
 use crate::tui::render::layout::{BodyLayout, UiLayout};
 use crate::tui::render::selector::{self, SelectorData, SelectorItem};
 use crate::tui::types::{Mode, SelectorPage};
 use crate::tui::util::{format_relative_time, shorten_home_prefix};
+use crate::tui::App;
 use crossterm::cursor::MoveTo;
 use crossterm::execute;
 use crossterm::terminal::{Clear, ClearType};
@@ -126,6 +126,7 @@ impl App {
                     filter_text: self.provider_picker.filter_input().text().to_string(),
                     show_tabs: true,
                     active_tab: 0,
+                    loading: false,
                 }
             }
             SelectorPage::Model => {
@@ -151,6 +152,7 @@ impl App {
                     filter_text: self.model_picker.filter_input.text().to_string(),
                     show_tabs: true,
                     active_tab: 1,
+                    loading: self.model_picker.is_loading,
                 }
             }
             SelectorPage::Session => {
@@ -181,6 +183,7 @@ impl App {
                     filter_text: self.session_picker.filter_input().text().to_string(),
                     show_tabs: false,
                     active_tab: 0,
+                    loading: false,
                 }
             }
         }
