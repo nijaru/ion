@@ -4,39 +4,19 @@
 
 | Metric    | Value                         | Updated    |
 | --------- | ----------------------------- | ---------- |
-| Phase     | Dogfood readiness             | 2026-02-17 |
-| Status    | TUI rendering fixes done      | 2026-02-17 |
+| Phase     | Dogfood readiness             | 2026-02-18 |
+| Status    | Tool result coloring fixed    | 2026-02-18 |
 | Toolchain | stable                        | 2026-01-22 |
-| Tests     | 497 passing (`cargo test -q`) | 2026-02-17 |
-| Clippy    | clean                         | 2026-02-16 |
+| Tests     | 497 passing (`cargo test -q`) | 2026-02-18 |
+| Clippy    | clean                         | 2026-02-18 |
 
 ## Completed This Session
 
-- **Collapsed tool display counts** (cont'd from prev session)
-  - Collapsed read/list shows line/item count, bash shows output line count from header
-  - `format_result_content` singular unit uses explicit match (not fragile `trim_end_matches`)
-  - Bash header scan scoped to first 3 lines
-  - Doc comment updated
-
-- **Streaming line truncation** (tk-nx0j) — root cause: `apply_chat_insert` re-queried
-  `terminal::size()` inside `BeginSynchronizedUpdate` instead of using passed `term_width`.
-  Lines wrapped at one width, clipped at another → only ~N columns visible. Fixed by passing
-  `term_width` through to `apply_chat_insert`.
-
-- **Search tool coloring** — `detect_syntax` was applied to `search` tool args (treating query
-  as file path). Result status lines were syntax-highlighted. Removed `search` from the branch.
-
-- **Post-streaming reflow** — `needs_reflow` set on agent completion when `streaming_carryover`
-  is non-empty; triggers `FullRerender` to correct word-wrap artifacts from incremental commits.
-
-- **Missing newline / 3-blank gap** (tk-heug) — stripped trailing blanks from scrollback output
-  in `reprint_chat_scrollback`, `take_chat_inserts` (idle), and `reprint_loaded_session`.
-
-- **Layout gap** — `PROGRESS_GAP` const (1 row) always reserved for visual separation;
-  `PROGRESS_HEIGHT` conditional on `has_active_progress`. Gap present on `--continue`.
-
-- **Review fixes** — progress_gap_rows() → const, bounded header scan, conditional reflow,
-  explicit singular unit match.
+- **Tool result coloring standardized** — result status lines (` ✓`, ` ✗`, ` ⎿`) now always
+  dim gray with 2-space indent. Previously, `read` result lines went through the `syntax_name`
+  branch → 4-space indent + syntax coloring. Fixed by routing space-prefixed result markers
+  before the syntax check. Removed red `⎿ Error:` coloring and `has_error` red bullet.
+  (`src/tui/chat_renderer.rs`)
 
 ## Known Issues
 
