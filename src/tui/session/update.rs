@@ -125,6 +125,11 @@ impl App {
                 }
                 AgentEvent::ModelsFetched(models) => {
                     debug!("Received ModelsFetched event with {} models", models.len());
+                    // Persist to disk so the next session loads immediately.
+                    self.save_model_cache(self.api_provider, models);
+                    // If the user is already browsing a populated model list (cache hit),
+                    // preserve their filter/position rather than resetting.
+                    let already_browsing = self.model_picker.has_models();
                     self.model_picker.set_models(models.clone());
                     if let Some(model) = models.iter().find(|m| m.id == self.session.model) {
                         if model.context_window > 0 {
@@ -150,8 +155,15 @@ impl App {
                         }
                     }
                     self.last_error = None; // Clear error on success
-                    // Show all models directly (user can type to filter/search)
-                    self.model_picker.start_all_models();
+                    if already_browsing {
+                        // Keep the current stage and filter — just refresh the underlying list.
+                        self.model_picker.provider_models =
+                            self.model_picker.all_models.clone();
+                        self.model_picker.apply_filter();
+                    } else {
+                        // First load — show all models (user can type to filter/search).
+                        self.model_picker.start_all_models();
+                    }
                 }
                 AgentEvent::ModelFetchError(err) => {
                     debug!("Received ModelFetchError: {}", err);

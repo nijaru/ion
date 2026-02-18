@@ -1,7 +1,7 @@
 //! Provider selection and model fetching.
 
 use crate::agent::{Agent, AgentEvent};
-use crate::provider::{Client, LlmApi, ModelRegistry, Provider};
+use crate::provider::{Client, LlmApi, ModelInfo, ModelRegistry, Provider};
 use crate::tui::App;
 use crate::tui::model_picker;
 use crate::tui::types::{Mode, SelectorPage};
@@ -69,13 +69,39 @@ impl App {
         self.model_picker.error = None;
 
         if self.model_picker.has_models() {
-            // Show all models directly (user can type to filter)
+            // Already loaded this session — show immediately.
             self.model_picker.start_all_models();
         } else {
-            // Need to fetch models first - update() will configure picker when they arrive
             self.model_picker.is_loading = true;
             self.setup_fetch_started = true;
+            // Load from disk cache so the list is populated immediately while
+            // the background fetch runs to refresh it.
+            if let Some(cached) = self.load_model_cache(self.api_provider) {
+                self.model_picker.set_models(cached);
+                self.model_picker.start_all_models();
+                // Keep is_loading=true so the background fetch still runs.
+                self.model_picker.is_loading = true;
+            }
             self.fetch_models();
+        }
+    }
+
+    /// Path to the on-disk model cache for a given provider.
+    fn model_cache_path(&self, provider: Provider) -> std::path::PathBuf {
+        self.config.data_dir.join(format!("models_{}.json", provider.id()))
+    }
+
+    /// Load cached models from disk. Returns `None` if no cache exists or it
+    /// cannot be parsed.
+    pub(in crate::tui) fn load_model_cache(&self, provider: Provider) -> Option<Vec<ModelInfo>> {
+        let data = std::fs::read(self.model_cache_path(provider)).ok()?;
+        serde_json::from_slice(&data).ok()
+    }
+
+    /// Persist the model list to disk so the next session can load it immediately.
+    pub(in crate::tui) fn save_model_cache(&self, provider: Provider, models: &[ModelInfo]) {
+        if let Ok(data) = serde_json::to_vec(models) {
+            let _ = std::fs::write(self.model_cache_path(provider), data);
         }
     }
 
