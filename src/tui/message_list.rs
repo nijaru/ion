@@ -103,10 +103,6 @@ pub(crate) fn extract_key_arg(tool_name: &str, args: &serde_json::Value) -> Stri
     }
 }
 
-/// Display name for tool calls (user-facing, not internal tool name).
-pub(crate) fn display_name(tool_name: &str) -> &str {
-    tool_name
-}
 
 /// Truncate a string for display, showing the end for paths.
 fn truncate_for_display(s: &str, max: usize) -> String {
@@ -652,9 +648,8 @@ impl MessageList {
                     }
 
                     // Update group header
-                    let shown = display_name(clean_name);
                     let unit = group_unit(clean_name);
-                    let header = format!("{shown}({} {unit})", group.count);
+                    let header = format!("{clean_name}({} {unit})", group.count);
                     if let Some(entry) = self.entries.get_mut(group.entry_idx) {
                         entry.parts = vec![MessagePart::Text(header)];
                         entry.update_cache();
@@ -672,8 +667,7 @@ impl MessageList {
                 }
 
                 // New tool call (not grouped with previous)
-                let shown = display_name(clean_name);
-                let display = format!("{shown}({key_arg_display})");
+                let display = format!("{clean_name}({key_arg_display})");
                 let entry_idx = self.entries.len();
                 self.push_entry(MessageEntry::new(Sender::Tool, display));
 

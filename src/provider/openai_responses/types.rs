@@ -49,9 +49,21 @@ pub(crate) enum ResponseInputItem {
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum ResponseContent {
-    InputText { text: String },
-    OutputText { text: String },
-    InputImage { image_url: String },
+    InputText {
+        text: String,
+    },
+    OutputText {
+        text: String,
+    },
+    /// Responses API requires `image_url` as a nested object, not a flat string.
+    InputImage {
+        image_url: ImageUrl,
+    },
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct ImageUrl {
+    pub url: String,
 }
 
 #[derive(Debug, Serialize)]

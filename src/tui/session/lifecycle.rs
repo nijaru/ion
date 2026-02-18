@@ -5,8 +5,7 @@ use crate::provider::{ContentBlock, Provider, Role};
 use crate::session::Session;
 use crate::tui::App;
 use crate::tui::message_list::{
-    MessageEntry, Sender, ToolMeta, display_name, extract_key_arg, format_result_content,
-    sanitize_tool_name,
+    MessageEntry, Sender, ToolMeta, extract_key_arg, format_result_content, sanitize_tool_name,
 };
 use anyhow::Result;
 use std::collections::HashMap;
@@ -80,12 +79,11 @@ impl App {
                                 id, name, arguments, ..
                             } => {
                                 let clean_name = sanitize_tool_name(name);
-                                let shown = display_name(clean_name);
                                 let key_arg = extract_key_arg(clean_name, arguments);
                                 let display = if key_arg.is_empty() {
-                                    shown.to_string()
+                                    clean_name.to_string()
                                 } else {
-                                    format!("{shown}({key_arg})")
+                                    format!("{clean_name}({key_arg})")
                                 };
                                 let entry_idx = self.message_list.entries.len();
                                 self.message_list
@@ -113,25 +111,31 @@ impl App {
                                     entry
                                 } else {
                                     // Fallback: append to last tool entry
-                                    let idx = self
+                                    let Some(idx) = self
                                         .message_list
                                         .entries
                                         .iter()
                                         .rposition(|e| e.sender == Sender::Tool)
-                                        .unwrap_or(0);
+                                    else {
+                                        continue;
+                                    };
                                     (idx, String::new())
                                 };
 
-                            // Use display name so format_result_content routes correctly
-                            let shown = display_name(&tool_name);
                             let expanded = self.message_list.tools_expanded;
-                            let display =
-                                format_result_content(Some(shown), content, *is_error, expanded);
-                            if let Some(entry) = self.message_list.entries.get_mut(entry_idx) {
+                            let display = format_result_content(
+                                Some(&tool_name),
+                                content,
+                                *is_error,
+                                expanded,
+                            );
+                            if let Some(entry) = self.message_list.entries.get_mut(entry_idx)
+                                && entry.sender == Sender::Tool
+                            {
                                 let header = entry.content_as_markdown().to_string();
                                 entry.tool_meta = Some(ToolMeta {
                                     header,
-                                    tool_name: shown.to_string(),
+                                    tool_name: tool_name.clone(),
                                     raw_result: content.clone(),
                                     is_error: *is_error,
                                 });
