@@ -901,6 +901,11 @@ pub async fn run(permissions: PermissionSettings, resume_option: ResumeOption) -
 
         let was_running = app.is_running;
         app.update();
+        // Trigger full re-render on agent completion to fix word-wrap reflow artifacts
+        // from lines committed during streaming with potentially incorrect wrapping.
+        if was_running && !app.is_running {
+            app.render_state.needs_reflow = true;
+        }
 
         // 2. PREPARE
         let prep = prepare_frame(&mut app, term_width, term_height);
