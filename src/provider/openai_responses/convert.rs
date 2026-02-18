@@ -38,7 +38,8 @@ pub(crate) fn build_request(request: &ChatRequest, stream: bool) -> ResponsesReq
         tool_choice: if has_tools { Some("auto") } else { None },
         parallel_tool_calls: if has_tools { Some(true) } else { None },
         max_output_tokens: request.max_tokens,
-        temperature: request.temperature,
+        // temperature is rejected by the API when reasoning is active (o1/o3 models)
+        temperature: if reasoning.is_some() { None } else { request.temperature },
         store: false,
         stream,
         reasoning,
@@ -88,7 +89,9 @@ pub(crate) fn build_instructions_and_input(
                         }
                         ContentBlock::Image { media_type, data } => {
                             Some(ResponseContent::InputImage {
-                                image_url: format!("data:{media_type};base64,{data}"),
+                                image_url: super::types::ImageUrl {
+                                    url: format!("data:{media_type};base64,{data}"),
+                                },
                             })
                         }
                         _ => None,
