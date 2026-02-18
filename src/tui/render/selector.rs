@@ -243,6 +243,15 @@ fn render_list<W: Write>(
         .take(list_height as usize)
         .collect();
 
+    // Compute max label width across all items (not just visible) so alignment
+    // is stable while scrolling.
+    let max_label_width = data
+        .items
+        .iter()
+        .map(|item| display_width(&item.label))
+        .max()
+        .unwrap_or(0);
+
     let mut row = start_row;
     let line_width = width.saturating_sub(1) as usize;
 
@@ -282,6 +291,13 @@ fn render_list<W: Write>(
             default_bold,
             default_dim,
         );
+
+        // Pad label to max width so hint column aligns across all rows.
+        let label_w = display_width(&item.label);
+        if label_w < max_label_width && (!item.hint.is_empty() || item.warning.is_some()) {
+            let pad = " ".repeat(max_label_width - label_w);
+            push_clipped_span(&mut spans, &pad, &mut remaining, None, false, false);
+        }
 
         if !item.hint.is_empty() {
             push_clipped_span(
