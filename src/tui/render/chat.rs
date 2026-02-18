@@ -131,6 +131,13 @@ impl App {
             out.append(&mut self.render_state.buffered_chat_lines);
         }
         out.extend(new_lines);
+        // Strip trailing blank lines when not streaming — the progress area gap
+        // provides visual separation so the entry separator is not needed here.
+        if !self.is_running {
+            while out.last().is_some_and(StyledLine::is_empty) {
+                out.pop();
+            }
+        }
         out
     }
 
@@ -157,7 +164,11 @@ impl App {
         w: &mut W,
         width: u16,
     ) -> std::io::Result<usize> {
-        let lines = self.build_chat_lines(width);
+        let mut lines = self.build_chat_lines(width);
+        // Strip trailing blank lines — the progress area gap provides visual separation.
+        while lines.last().is_some_and(StyledLine::is_empty) {
+            lines.pop();
+        }
         for line in &lines {
             line.writeln_with_width(w, width)?;
         }
