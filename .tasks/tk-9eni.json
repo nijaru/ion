@@ -3,7 +3,7 @@
   "ref": "9eni",
   "title": "[UX] Model list loading state + cache",
   "description": "Model selector shows empty list while fetching. Show 'Loading...' placeholder. Cache model list and show cached results immediately, fetch in background to update. List rarely changes so cache-first is good UX. Need to handle: 1) Show cached list on open 2) Background fetch for updates 3) Merge new models into list if changed 4) Avoid flicker/reflow if list updates while viewing",
-  "status": "open",
+  "status": "done",
   "priority": 3,
   "labels": [],
   "assignees": [],
@@ -13,7 +13,7 @@
   "due_date": null,
   "logs": [],
   "created_at": "2026-02-14T04:08:08.504Z",
-  "updated_at": "2026-02-14T04:08:08.504Z",
-  "completed_at": null,
+  "updated_at": "2026-02-18T09:43:04.782Z",
+  "completed_at": "2026-02-18T09:43:04.782Z",
   "external": {}
 }

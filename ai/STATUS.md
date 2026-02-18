@@ -12,19 +12,16 @@
 
 ## Completed This Session
 
-- **tk-9ozb fixed** — Selector column alignment: `max_label_width` computed across all items,
-  labels padded before hint column so env vars / context windows align vertically.
-  (`src/tui/render/selector.rs`)
+- **tk-9ozb** — Selector column alignment: `max_label_width` across all items, labels padded
+  before hint column. (`src/tui/render/selector.rs`)
 
-- **Tool result coloring** — result status lines (` ✓`, ` ✗`, ` ⎿`) always dim gray, 2-space
-  indent. Fixed read tool getting 4-space indent via syntax branch. (`src/tui/chat_renderer.rs`)
+- **tk-9eni** — Model list loading indicator + disk cache. `SelectorData.loading` shows
+  "Loading..." when empty; cache-first open with background refresh; no-flicker update
+  preserves filter/provider scope on refresh. (`src/tui/render/selector.rs`,
+  `src/tui/session/providers.rs`, `src/tui/session/update.rs`)
 
-- **grep/glob display** — path-first format `grep(src, "pattern...")`, glob relativizes absolute
-  paths, `display_name()` no-op removed. (`src/tui/message_list.rs`)
-
-- **Review fixes** — OpenAI Responses API: temperature cleared when reasoning active; InputImage
-  nested `{"url": "..."}` shape; lifecycle fallback no longer corrupts entry 0.
-  (`src/provider/openai_responses/`, `src/tui/session/lifecycle.rs`)
+- **Review fixes (round 2)** — provider-scoped model list preserved on background refresh;
+  `is_loading` set once after cache load; cache write errors logged via `tracing::warn!`.
 
 ## Known Issues
 
@@ -38,7 +35,7 @@
 
 1. tk-43cd (p3): Persist MessageList display entries in session storage
 2. tk-ioxh (p3): Evaluate async subagent execution model
-3. tk-9eni (p3): Model list loading state + cache
+3. tk-cmhy (p3): TOML config for approved sandbox directories
 
 ## Key References
 
