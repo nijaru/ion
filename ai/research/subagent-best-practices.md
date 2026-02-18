@@ -1,36 +1,30 @@
-# Subagent Best Practices (Opus 4.6+)
+# Subagent & Skill Design Notes
 
-Findings from auditing Claude Code's agent/skill setup. Apply when ion implements its own subagent/review/refactor workflows.
+Research from auditing Claude Code's agent/skill patterns (Feb 2026, Opus 4.6 era).
 
-## Key Principles
+## Relevant to Ion
 
-**1 reviewer, not N.** One agent with the full checklist (correctness + safety + quality) beats multiple narrow-focus agents reading the same code. Splitting by review type (correctness vs safety vs quality) causes redundant reads and requires deduplication. If parallelism is needed, split by **file area** (module A vs module B), not by focus.
+**Skill design — no trampolines.** Built-in skills should do real work (scoping, measurement, checklist enrichment), not just wrap a tool call or mode switch. A skill that only invokes a tool adds no value over the tool itself.
 
-**Analyze in main first.** Refactoring analysis, debugging, and small reviews (<50 lines) don't need subagents. Spawn only for genuine context isolation (fresh eyes on a review) or parallelism (independent subsystems).
+**System prompt guidance for capable models:**
 
-**Build once in parent.** Run tests before spawning any agent. Include output in the agent prompt. Never let multiple agents build the same project — they contend on the build lock.
+- Consolidate analysis — one thorough pass beats multiple narrow passes on the same code
+- Analyze inline before reaching for tools — don't shell out when reasoning suffices
+- Build/test once, then work from that output rather than re-running between small changes
 
-**Read-only reviewers.** Reviewers find issues, they don't fix them. Don't give review agents edit/write tools for source code. Write only for persisting findings.
+These are model-dependent. Capable models (Opus, Sonnet) benefit from consolidation; smaller models (Ollama locals) may need narrower focus per step.
 
-**No trampoline skills.** A skill that only spawns a subagent adds nothing — just use the agent directly. Skills should add value: baseline measurement, scope detection, checklist enrichment.
+**If ion adds orchestration/subagents:**
 
-**Designer threshold.** Don't auto-spawn a designer/architect agent for routine multi-file changes (renames, interface updates). Reserve for genuine architecture: new module boundaries, dependency restructuring, type hierarchy redesign.
+- One reviewer with a full checklist beats N narrow-focus reviewers on the same code. If parallelism is needed, split by file area, not by concern.
+- Reviewers should be read-only — find issues, don't fix them.
+- Run build/test in the parent before spawning. Never let multiple agents contend on the same build.
+- Don't auto-spawn architect/designer agents for routine multi-file changes. Reserve for genuine architecture decisions.
 
-## What Changed with Opus 4.6
+## Context
 
-- Long-context retrieval: 18.5% → 76% (MRCR v2) — model handles larger diffs in one pass
-- Root cause analysis: +30% — better at diagnosing issues without narrow focus
-- ARC-AGI-2: 37.6% → 68.8% — much stronger reasoning, less need for focus-splitting
-- 128K output tokens — can produce comprehensive reviews without truncation
+The narrow-focus multi-agent pattern was a workaround for weaker models. Improvements in long-context retrieval (MRCR v2: 18.5% → 76%), root cause analysis (+30%), and reasoning (ARC-AGI-2: 37.6% → 68.8%) mean one agent with all lenses is now more effective than N agents with narrow focus on the same code.
 
-The narrow-focus multi-agent pattern was a workaround for weaker models. With current reasoning capability, one agent with all lenses is more effective than N agents with narrow focus on the same code.
+## Source
 
-## Applied Changes (chezmoi dotfiles, Feb 2026)
-
-| File                | Change                                                    |
-| ------------------- | --------------------------------------------------------- |
-| `/review` skill     | 3 agents → 1 agent, added large-review guidance           |
-| `/refactor` skill   | Removed auto-spawn designer for 3+ files                  |
-| `/profile` skill    | Deleted (was trampoline for profiler agent)               |
-| `reviewer.md` agent | Removed Edit tool (read-only reviewer)                    |
-| `CLAUDE.md`         | Compact threshold ~100k → ~150k, added teams vs subagents |
+Dotfiles audit — changes applied to chezmoi config (review skill consolidated 3→1 agents, removed trampoline profile skill, reviewer made read-only).
