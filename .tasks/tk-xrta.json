@@ -3,7 +3,7 @@
   "ref": "xrta",
   "title": "[TOOL] web_fetch: unnecessary bytes.clone()",
   "description": "Line 234: String::from_utf8(bytes.clone()) clones the entire body. Save bytes.len() first, then consume bytes with String::from_utf8(bytes).",
-  "status": "open",
+  "status": "done",
   "priority": 4,
   "labels": [],
   "assignees": [],
@@ -13,7 +13,7 @@
   "due_date": null,
   "logs": [],
   "created_at": "2026-02-14T10:52:43.079Z",
-  "updated_at": "2026-02-14T10:52:43.079Z",
-  "completed_at": null,
+  "updated_at": "2026-02-17T22:54:19.321Z",
+  "completed_at": "2026-02-17T22:54:19.321Z",
   "external": {}
 }

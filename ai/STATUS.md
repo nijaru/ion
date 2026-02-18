@@ -4,27 +4,44 @@
 
 | Metric    | Value                         | Updated    |
 | --------- | ----------------------------- | ---------- |
-| Phase     | Dogfood readiness             | 2026-02-16 |
-| Status    | Collapsed tool display done   | 2026-02-16 |
+| Phase     | Dogfood readiness             | 2026-02-17 |
+| Status    | TUI rendering fixes done      | 2026-02-17 |
 | Toolchain | stable                        | 2026-01-22 |
-| Tests     | 497 passing (`cargo test -q`) | 2026-02-16 |
+| Tests     | 497 passing (`cargo test -q`) | 2026-02-17 |
 | Clippy    | clean                         | 2026-02-16 |
 
 ## Completed This Session
 
-- Collapsed-by-default tool display with Ctrl+O toggle (tk-l4oq)
-  - ToolMeta on non-grouped entries enables rebuild on toggle
-  - Collapsed: read/bash/list show ✓, search shows count, edit/write always inline
-  - Expanded (Ctrl+O): full tail-truncated output (previous default)
-  - Session replay stores ToolMeta identically to live path
-  - Removed dead `load_from_messages` (superseded by lifecycle.rs)
-  - 11 new tests, review-cleaned (no clone, no dead code, grammar fix)
+- **Collapsed tool display counts** (cont'd from prev session)
+  - Collapsed read/list shows line/item count, bash shows output line count from header
+  - `format_result_content` singular unit uses explicit match (not fragile `trim_end_matches`)
+  - Bash header scan scoped to first 3 lines
+  - Doc comment updated
+
+- **Streaming line truncation** (tk-nx0j) — root cause: `apply_chat_insert` re-queried
+  `terminal::size()` inside `BeginSynchronizedUpdate` instead of using passed `term_width`.
+  Lines wrapped at one width, clipped at another → only ~N columns visible. Fixed by passing
+  `term_width` through to `apply_chat_insert`.
+
+- **Search tool coloring** — `detect_syntax` was applied to `search` tool args (treating query
+  as file path). Result status lines were syntax-highlighted. Removed `search` from the branch.
+
+- **Post-streaming reflow** — `needs_reflow` set on agent completion when `streaming_carryover`
+  is non-empty; triggers `FullRerender` to correct word-wrap artifacts from incremental commits.
+
+- **Missing newline / 3-blank gap** (tk-heug) — stripped trailing blanks from scrollback output
+  in `reprint_chat_scrollback`, `take_chat_inserts` (idle), and `reprint_loaded_session`.
+
+- **Layout gap** — `PROGRESS_GAP` const (1 row) always reserved for visual separation;
+  `PROGRESS_HEIGHT` conditional on `has_active_progress`. Gap present on `--continue`.
+
+- **Review fixes** — progress_gap_rows() → const, bounded header scan, conditional reflow,
+  explicit singular unit match.
 
 ## Known Issues
 
 - tk-nupp (p2): Empty response observed once with chatgpt provider — trace logging active
-- tk-xjmf (p3): Missing newline above progress line during streaming
-- tk-86lk (p3): `--continue` header pinning breaks scrollback
+- tk-86lk (p3): `--continue` header pinning breaks scrollback (gap fixed; pinning separate)
 
 ## Blockers
 
@@ -32,9 +49,9 @@
 
 ## Next Steps
 
-1. Manual test: collapsed tool display, Ctrl+O toggle, `--continue` replay
-2. tk-43cd (p3): Persist MessageList display entries in session storage
-3. tk-xjmf (p3): Missing newline above progress line
+1. tk-43cd (p3): Persist MessageList display entries in session storage
+2. tk-9ozb (p3): Selector column alignment broken
+3. tk-86lk (p3): `--continue` header pinning breaks scrollback
 4. tk-ioxh (p3): Evaluate async subagent execution model
 
 ## Key References

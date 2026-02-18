@@ -185,10 +185,14 @@
     {
       "ts": "2026-02-13T20:39:13.408Z",
       "msg": "2026-02-13: User still reproduces intermittent duplicate top blocks and malformed wrapped indentation when repeatedly moving between monitors + aggressive resize churn. Root-cause candidate narrowed: resize/reflow interaction with wrapped markdown replay and scrollback write semantics; keep open as fallback regression tracker while tk-add8/tk-bcau continue."
+    },
+    {
+      "ts": "2026-02-18T07:42:09.204Z",
+      "msg": "gap row now always present (PROGRESS_GAP const); only progress line conditional on has_active_progress. --continue gap fixed in 417706e. header pinning scrollback issue remains separate."
     }
   ],
   "created_at": "2026-02-11T01:13:44.111Z",
-  "updated_at": "2026-02-13T20:39:13.408Z",
+  "updated_at": "2026-02-18T07:42:09.204Z",
   "completed_at": null,
   "external": {}
 }
