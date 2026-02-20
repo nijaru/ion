@@ -94,6 +94,8 @@ impl Tool for ListTool {
 
         let working_dir = ctx.working_dir.clone();
 
+        const MAX_RESULTS: usize = 2000;
+
         let entries = tokio::task::spawn_blocking(move || {
             let walker = WalkBuilder::new(&target_path)
                 .hidden(!show_hidden)
@@ -139,6 +141,9 @@ impl Tool for ListTool {
                 };
 
                 entries.push(formatted);
+                if entries.len() >= MAX_RESULTS {
+                    break;
+                }
             }
 
             entries.sort();
@@ -147,14 +152,22 @@ impl Tool for ListTool {
         .await
         .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
 
+        let truncated = entries.len() >= MAX_RESULTS;
+        let mut content = if entries.is_empty() {
+            "Directory is empty or all contents are ignored.".to_string()
+        } else {
+            entries.join("\n")
+        };
+        if truncated {
+            content.push_str(&format!(
+                "\n\n[Results truncated at {MAX_RESULTS} entries]"
+            ));
+        }
+
         Ok(ToolResult {
-            content: if entries.is_empty() {
-                "Directory is empty or all contents are ignored.".to_string()
-            } else {
-                entries.join("\n")
-            },
+            content,
             is_error: false,
-            metadata: Some(json!({ "count": entries.len() })),
+            metadata: Some(json!({ "count": entries.len(), "truncated": truncated })),
         })
     }
 }

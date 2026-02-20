@@ -31,10 +31,20 @@ impl CommandRisk {
     }
 }
 
+/// Strip privilege-escalation prefixes so the real command is analyzed.
+fn strip_privilege_prefix(cmd: &str) -> &str {
+    for prefix in &["sudo ", "doas ", "sudo\t", "doas\t"] {
+        if let Some(rest) = cmd.strip_prefix(prefix) {
+            return rest.trim_start();
+        }
+    }
+    cmd
+}
+
 /// Analyze a command for destructive patterns.
 #[must_use]
 pub fn analyze_command(command: &str) -> CommandRisk {
-    let cmd = command.trim();
+    let cmd = strip_privilege_prefix(command.trim());
     let lower = cmd.to_lowercase();
 
     // rm -rf / rm -fr / rm --recursive --force
@@ -217,6 +227,11 @@ pub fn is_safe_command(command: &str) -> bool {
 
         // Reject output redirections within any segment
         if trimmed.contains('>') {
+            return false;
+        }
+
+        // Reject privilege escalation — sudo/doas must never be allowed in Read mode
+        if trimmed.starts_with("sudo ") || trimmed.starts_with("doas ") {
             return false;
         }
 
@@ -441,5 +456,19 @@ mod tests {
         // env prefix removed
         assert!(!is_safe_command("env rm -rf /"));
         assert!(!is_safe_command("env bash -c evil"));
+        // sudo/doas bypass blocked
+        assert!(!is_safe_command("sudo ls -la"));
+        assert!(!is_safe_command("doas git log"));
+    }
+
+    #[test]
+    fn test_sudo_bypass_analyze() {
+        // sudo should not let dangerous commands slip through
+        assert!(analyze_command("sudo rm -rf /").is_dangerous());
+        assert!(analyze_command("sudo rm -rf .").is_dangerous());
+        assert!(analyze_command("sudo git reset --hard").is_dangerous());
+        assert!(analyze_command("doas rm -rf /tmp").is_dangerous());
+        // sudo on safe commands still analyzed correctly
+        assert!(!analyze_command("sudo ls -la").is_dangerous());
     }
 }

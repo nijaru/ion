@@ -18,7 +18,7 @@ impl Tool for GlobTool {
     }
 
     fn description(&self) -> &'static str {
-        "Find files by name or path pattern. Use glob patterns like '**/*.rs' for recursive search, '*.json' for current dir, or 'src/**/*test*' for matching substrings. This is the primary tool for locating files when you know part of the name."
+        "Find files by name or path pattern. Use glob patterns like '**/*.rs' for recursive search, '*.json' for current dir, or 'src/**/*test*' for matching substrings. This is the primary tool for locating files when you know part of the name. Use the optional 'path' parameter to limit search to a subdirectory."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -28,6 +28,10 @@ impl Tool for GlobTool {
                 "pattern": {
                     "type": "string",
                     "description": "The glob pattern to search for"
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Optional subdirectory to search in (relative to working directory). Defaults to working directory."
                 }
             },
             "required": ["pattern"]
@@ -55,13 +59,27 @@ impl Tool for GlobTool {
 
         let working_dir = ctx.working_dir.clone();
 
+        // Optional subdirectory to restrict the search
+        let search_root = if let Some(sub) = args.get("path").and_then(|v| v.as_str()) {
+            let p = if std::path::Path::new(sub).is_absolute() {
+                std::path::PathBuf::from(sub)
+            } else {
+                working_dir.join(sub)
+            };
+            ctx.check_sandbox(&p)
+                .map_err(ToolError::PermissionDenied)?;
+            p
+        } else {
+            working_dir.clone()
+        };
+
         // Use parallel walker for better performance on large directories
         let (paths, truncated) = tokio::task::spawn_blocking(move || {
             let paths = Mutex::new(Vec::new());
             let truncated = Mutex::new(false);
 
             // Build parallel walker (follow_links=false prevents symlink escape)
-            let walker = WalkBuilder::new(&working_dir)
+            let walker = WalkBuilder::new(&search_root)
                 .hidden(true)
                 .git_ignore(true)
                 .git_global(true)
@@ -90,7 +108,7 @@ impl Tool for GlobTool {
                         return ignore::WalkState::Continue;
                     }
 
-                    // Match against relative path
+                    // Match against relative path from working_dir for consistent output
                     if let Ok(rel_path) = path.strip_prefix(working_dir)
                         && matcher.is_match(rel_path)
                     {
