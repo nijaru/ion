@@ -5,7 +5,7 @@ use crate::tui::render::layout::{BodyLayout, UiLayout};
 use crate::tui::render::selector::{self, SelectorData, SelectorItem};
 use crate::tui::types::{Mode, SelectorPage};
 use crate::tui::util::{
-    format_context_window, format_price_pair, format_relative_time, shorten_home_prefix,
+    format_context_window, format_price, format_relative_time, shorten_home_prefix,
 };
 use crate::tui::App;
 use crossterm::cursor::MoveTo;
@@ -142,20 +142,44 @@ impl App {
                     .unwrap_or(3)
                     .max(3); // at least "Org" header width
 
+                // Width for price columns: at least as wide as the header label
+                let max_in_w = models
+                    .iter()
+                    .map(|m| format_price(m.pricing.input).len())
+                    .max()
+                    .unwrap_or(2)
+                    .max("In".len());
+                let max_out_w = models
+                    .iter()
+                    .map(|m| format_price(m.pricing.output).len())
+                    .max()
+                    .unwrap_or(3)
+                    .max("Out".len());
+
                 let items = models
                     .iter()
                     .map(|m| {
+                        // Strip org prefix from label when Org column shows it separately.
+                        // e.g. "anthropic/claude-opus-4-5" → "claude-opus-4-5"
+                        let label =
+                            m.id.find('/')
+                                .map_or(m.id.as_str(), |pos| &m.id[pos + 1..])
+                                .to_string();
                         let ctx = format_context_window(m.context_window);
-                        let price = format_price_pair(m.pricing.input, m.pricing.output);
+                        let price_in = format_price(m.pricing.input);
+                        let price_out = format_price(m.pricing.output);
                         let hint = format!(
-                            "{:<max_provider_w$}  {:<6}  {}",
+                            "{:<max_provider_w$}  {:<6}  {:<max_in_w$}  {:<max_out_w$}",
                             m.provider,
                             ctx,
-                            price,
+                            price_in,
+                            price_out,
                             max_provider_w = max_provider_w,
+                            max_in_w = max_in_w,
+                            max_out_w = max_out_w,
                         );
                         SelectorItem {
-                            label: m.id.clone(),
+                            label,
                             is_valid: true,
                             hint,
                             warning: None,
@@ -164,11 +188,14 @@ impl App {
                     .collect();
 
                 let col_hint = format!(
-                    "{:<max_provider_w$}  {:<6}  {}",
+                    "{:<max_provider_w$}  {:<6}  {:<max_in_w$}  {:<max_out_w$}",
                     "Org",
                     "Ctx",
-                    "Price/M",
+                    "In",
+                    "Out",
                     max_provider_w = max_provider_w,
+                    max_in_w = max_in_w,
+                    max_out_w = max_out_w,
                 );
                 SelectorData {
                     title: "Models",

@@ -46,7 +46,7 @@ Platform: {{ os }}{% if shell %}, {{ shell }}{% endif %}
 {% if has_mcp_tools %}
 ## MCP Tools
 
-MCP tools are available via external servers. Use `mcp_tools` to search for relevant tools by keyword before falling back to shell commands. Only use shell commands if MCP tools for that system are not available.
+MCP tools from external servers are available and can be called directly. Use `mcp_tools` to search by keyword when many tools are available and you need to find the right one. Prefer MCP tools over shell commands when they cover the task.
 {% endif %}
 {% if instructions %}
 ## Project Instructions

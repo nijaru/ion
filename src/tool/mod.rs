@@ -187,6 +187,26 @@ impl ToolOrchestrator {
             .collect()
     }
 
+    /// All tool definitions: registered builtins + MCP tools (if any).
+    /// This is the complete list to send to the LLM in each API request.
+    pub fn all_tool_definitions(&self) -> Vec<crate::provider::ToolDefinition> {
+        let mut defs: Vec<crate::provider::ToolDefinition> = self
+            .tools
+            .values()
+            .map(|t| crate::provider::ToolDefinition {
+                name: t.name().to_string(),
+                description: t.description().to_string(),
+                parameters: t.parameters(),
+            })
+            .collect();
+
+        if let Some(ref mcp) = self.mcp_fallback {
+            defs.extend(mcp.list_definitions());
+        }
+
+        defs
+    }
+
     pub async fn set_tool_mode(&self, mode: ToolMode) {
         self.permissions.write().await.set_mode(mode);
     }
@@ -317,6 +337,16 @@ mod tests {
     impl crate::mcp::McpFallback for MockMcpFallback {
         fn has_tool(&self, name: &str) -> bool {
             self.tools.iter().any(|t| t == name)
+        }
+        fn list_definitions(&self) -> Vec<crate::provider::ToolDefinition> {
+            self.tools
+                .iter()
+                .map(|name| crate::provider::ToolDefinition {
+                    name: name.clone(),
+                    description: String::new(),
+                    parameters: serde_json::json!({}),
+                })
+                .collect()
         }
         async fn call_tool_by_name(
             &self,

@@ -4,7 +4,6 @@ use crate::agent::retry::retryable_category;
 use crate::compaction::TokenCounter;
 use crate::provider::{
     ChatRequest, ContentBlock, LlmApi, Message, StreamEvent, ThinkingConfig, ToolCallEvent,
-    ToolDefinition,
 };
 use crate::session::Session;
 use crate::tool::ToolOrchestrator;
@@ -35,16 +34,7 @@ pub(crate) async fn stream_response(
     thinking: Option<ThinkingConfig>,
     abort_token: CancellationToken,
 ) -> Result<(Vec<ContentBlock>, Vec<ToolCallEvent>)> {
-    let tool_defs: Vec<ToolDefinition> = ctx
-        .orchestrator
-        .list_tools()
-        .into_iter()
-        .map(|t| ToolDefinition {
-            name: t.name().to_string(),
-            description: t.description().to_string(),
-            parameters: t.parameters(),
-        })
-        .collect();
+    let tool_defs = ctx.orchestrator.all_tool_definitions();
 
     let assembly = ctx
         .context_manager
