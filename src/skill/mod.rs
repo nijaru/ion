@@ -3,6 +3,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+fn default_true() -> bool {
+    true
+}
+
 /// YAML frontmatter structure per agentskills.io spec.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -15,6 +19,12 @@ struct SkillFrontmatter {
     model: Option<String>,
     #[serde(default)]
     models: Option<Vec<String>>,
+    /// Whether this skill is user-invocable (shown in // completer). Default: true.
+    #[serde(default = "default_true")]
+    user_invocable: bool,
+    /// Argument hint shown in autocomplete popup, e.g. "[issue-number]".
+    #[serde(default)]
+    argument_hint: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -28,6 +38,10 @@ pub struct Skill {
     /// - Multiple models: first is default, others are allowed alternatives
     pub models: Option<Vec<String>>,
     pub prompt: String,
+    /// Whether this skill appears in the // completer (user-facing).
+    pub user_invocable: bool,
+    /// Argument hint shown in the autocomplete popup, e.g. "[issue-number]".
+    pub argument_hint: Option<String>,
 }
 
 impl Skill {
@@ -49,12 +63,24 @@ impl Skill {
             Some(models) => models.iter().any(|m| m == model),
         }
     }
+
+    /// Substitute `$ARGUMENTS` and positional `$0`, `$1`, ... in the prompt.
+    #[must_use]
+    pub fn substitute_args(&self, args: &str) -> String {
+        let mut result = self.prompt.replace("$ARGUMENTS", args);
+        let parts: Vec<&str> = args.split_whitespace().collect();
+        for (i, part) in parts.iter().enumerate() {
+            result = result.replace(&format!("${i}"), part);
+        }
+        result
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SkillSummary {
     pub name: String,
     pub description: String,
+    pub argument_hint: Option<String>,
 }
 
 /// Entry in the skill registry - supports progressive loading.
@@ -63,6 +89,7 @@ struct SkillEntry {
     summary: SkillSummary,
     source_path: Option<PathBuf>,
     full: Option<Skill>,
+    user_invocable: bool,
 }
 
 #[derive(Default, Clone)]
@@ -79,21 +106,25 @@ impl SkillRegistry {
     /// Register a fully loaded skill (backwards compatible).
     #[allow(clippy::needless_pass_by_value)]
     pub fn register(&mut self, skill: Skill) {
+        let user_invocable = skill.user_invocable;
         let entry = SkillEntry {
             summary: SkillSummary {
                 name: skill.name.clone(),
                 description: skill.description.clone(),
+                argument_hint: skill.argument_hint.clone(),
             },
             source_path: None,
             full: Some(skill.clone()),
+            user_invocable,
         };
         self.entries.insert(skill.name.clone(), entry);
     }
 
     /// Register a skill summary for lazy loading.
-    pub fn register_summary(&mut self, summary: SkillSummary, source_path: PathBuf) {
+    pub fn register_summary(&mut self, summary: SkillSummary, source_path: PathBuf, user_invocable: bool) {
         let name = summary.name.clone();
         let entry = SkillEntry {
+            user_invocable,
             summary,
             source_path: Some(source_path),
             full: None,
@@ -123,9 +154,19 @@ impl SkillRegistry {
         self.entries.get(name).map(|e| &e.summary)
     }
 
-    /// List all skill summaries (no loading required).
+    /// List user-invocable skill summaries (no loading required).
     #[must_use]
     pub fn list(&self) -> Vec<SkillSummary> {
+        self.entries
+            .values()
+            .filter(|e| e.user_invocable)
+            .map(|e| e.summary.clone())
+            .collect()
+    }
+
+    /// List all skill summaries including non-user-invocable ones.
+    #[must_use]
+    pub fn list_all(&self) -> Vec<SkillSummary> {
         self.entries.values().map(|e| e.summary.clone()).collect()
     }
 
@@ -144,15 +185,16 @@ impl SkillRegistry {
                 if path.is_dir() {
                     let skill_file = path.join("SKILL.md");
                     if skill_file.exists()
-                        && let Ok(summary) = SkillLoader::load_summary(&skill_file)
+                        && let Ok((summary, user_invocable)) =
+                            SkillLoader::load_summary(&skill_file)
                     {
-                        self.register_summary(summary, skill_file);
+                        self.register_summary(summary, skill_file, user_invocable);
                         count += 1;
                     }
                 } else if path.extension().is_some_and(|e| e == "md") {
                     // Also check for standalone SKILL.md files
-                    if let Ok(summary) = SkillLoader::load_summary(&path) {
-                        self.register_summary(summary, path);
+                    if let Ok((summary, user_invocable)) = SkillLoader::load_summary(&path) {
+                        self.register_summary(summary, path, user_invocable);
                         count += 1;
                     }
                 }
@@ -176,7 +218,8 @@ impl SkillLoader {
 
     /// Load only the skill summary (name + description) for progressive disclosure.
     /// This is efficient for startup - avoids loading full prompt content.
-    pub fn load_summary<P: AsRef<Path>>(path: P) -> Result<SkillSummary> {
+    /// Returns `(summary, user_invocable)`.
+    pub fn load_summary<P: AsRef<Path>>(path: P) -> Result<(SkillSummary, bool)> {
         let path = path.as_ref();
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to read SKILL.md at {}", path.display()))?;
@@ -185,7 +228,8 @@ impl SkillLoader {
     }
 
     /// Parse only the summary (frontmatter) without loading full prompt.
-    pub fn parse_summary(content: &str) -> Result<SkillSummary> {
+    /// Returns `(summary, user_invocable)`.
+    pub fn parse_summary(content: &str) -> Result<(SkillSummary, bool)> {
         let trimmed = content.trim_start();
 
         if trimmed.starts_with("---") {
@@ -201,10 +245,12 @@ impl SkillLoader {
             let frontmatter: SkillFrontmatter = serde_yaml::from_str(yaml_content)
                 .context("Failed to parse skill YAML frontmatter")?;
 
-            Ok(SkillSummary {
+            let summary = SkillSummary {
                 name: frontmatter.name,
                 description: frontmatter.description,
-            })
+                argument_hint: frontmatter.argument_hint,
+            };
+            Ok((summary, frontmatter.user_invocable))
         } else {
             // Legacy XML - need to parse name and description tags
             let mut name = String::new();
@@ -229,7 +275,13 @@ impl SkillLoader {
                 anyhow::bail!("Skill missing name");
             }
 
-            Ok(SkillSummary { name, description })
+            // XML format doesn't support user_invocable; default to true
+            let summary = SkillSummary {
+                name,
+                description,
+                argument_hint: None,
+            };
+            Ok((summary, true))
         }
     }
 
@@ -293,6 +345,8 @@ impl SkillLoader {
             allowed_tools: frontmatter.allowed_tools,
             models,
             prompt: prompt_content.to_string(),
+            user_invocable: frontmatter.user_invocable,
+            argument_hint: frontmatter.argument_hint,
         };
 
         Ok(vec![skill])
@@ -319,6 +373,8 @@ impl SkillLoader {
                     allowed_tools: None,
                     models: None,
                     prompt: String::new(),
+                    user_invocable: true,
+                    argument_hint: None,
                 });
                 in_prompt = false;
                 continue;
@@ -545,9 +601,10 @@ This is a very long prompt that we don't want to load at startup.
 It contains many lines of instructions.
 We only want the name and description initially."#;
 
-        let summary = SkillLoader::parse_summary(content).unwrap();
+        let (summary, user_invocable) = SkillLoader::parse_summary(content).unwrap();
         assert_eq!(summary.name, "summary-test");
         assert_eq!(summary.description, "Test parsing just the summary");
+        assert!(user_invocable);
     }
 
     #[test]
@@ -561,9 +618,86 @@ We only want the name and description initially."#;
     </prompt>
 </skill>
 "#;
-        let summary = SkillLoader::parse_summary(content).unwrap();
+        let (summary, user_invocable) = SkillLoader::parse_summary(content).unwrap();
         assert_eq!(summary.name, "xml-summary");
         assert_eq!(summary.description, "XML format summary test");
+        assert!(user_invocable);
+    }
+
+    #[test]
+    fn test_substitute_args() {
+        let skill = Skill {
+            name: "test".to_string(),
+            description: "test".to_string(),
+            allowed_tools: None,
+            models: None,
+            prompt: "Hello $ARGUMENTS, arg0=$0, arg1=$1".to_string(),
+            user_invocable: true,
+            argument_hint: None,
+        };
+        let result = skill.substitute_args("world foo");
+        assert_eq!(result, "Hello world foo, arg0=world, arg1=foo");
+    }
+
+    #[test]
+    fn test_user_invocable_filtering() {
+        let mut registry = SkillRegistry::new();
+
+        let public_skill = Skill {
+            name: "public".to_string(),
+            description: "Public skill".to_string(),
+            allowed_tools: None,
+            models: None,
+            prompt: "Public prompt".to_string(),
+            user_invocable: true,
+            argument_hint: None,
+        };
+        let private_skill = Skill {
+            name: "private".to_string(),
+            description: "Private skill".to_string(),
+            allowed_tools: None,
+            models: None,
+            prompt: "Private prompt".to_string(),
+            user_invocable: false,
+            argument_hint: None,
+        };
+        registry.register(public_skill);
+        registry.register(private_skill);
+
+        let listed = registry.list();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].name, "public");
+
+        let all = registry.list_all();
+        assert_eq!(all.len(), 2);
+    }
+
+    #[test]
+    fn test_yaml_argument_hint() {
+        let content = r#"---
+name: hint-skill
+description: Skill with argument hint
+argument-hint: "[issue-number]"
+---
+Fix issue $ARGUMENTS."#;
+        let skills = SkillLoader::parse_skill_md(content).unwrap();
+        assert_eq!(skills[0].argument_hint, Some("[issue-number]".to_string()));
+        assert!(skills[0].user_invocable);
+    }
+
+    #[test]
+    fn test_yaml_user_invocable_false() {
+        let content = r#"---
+name: hidden-skill
+description: Not shown in menu
+user-invocable: false
+---
+Hidden prompt."#;
+        let skills = SkillLoader::parse_skill_md(content).unwrap();
+        assert!(!skills[0].user_invocable);
+
+        let (_, user_invocable) = SkillLoader::parse_summary(content).unwrap();
+        assert!(!user_invocable);
     }
 
     #[test]
@@ -574,8 +708,9 @@ We only want the name and description initially."#;
         let summary = SkillSummary {
             name: "lazy-skill".to_string(),
             description: "A lazily loaded skill".to_string(),
+            argument_hint: None,
         };
-        registry.register_summary(summary, PathBuf::from("/nonexistent/path.md"));
+        registry.register_summary(summary, PathBuf::from("/nonexistent/path.md"), true);
 
         // Should have the summary
         let found = registry.get_summary("lazy-skill");

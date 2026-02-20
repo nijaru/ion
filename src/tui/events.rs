@@ -110,14 +110,16 @@ impl App {
                     self.command_completer.deactivate();
                     return;
                 }
-                // Backspace might cancel if we delete the /
+                // Backspace might cancel completer or switch mode (// → /)
                 KeyCode::Backspace => {
                     let cursor = self.input_state.cursor_char_idx();
-                    if cursor <= 1 {
+                    // Deactivate only when deleting the sole / in builtin mode
+                    if cursor <= 1 && !self.command_completer.is_skill_mode() {
                         self.command_completer.deactivate();
                         self.handle_input_event_with_history(key);
                     } else {
-                        // Continue with normal backspace, then update query
+                        // Normal backspace; update_command_completer_query handles
+                        // mode switching when // becomes /
                         self.handle_input_event_with_history(key);
                         self.update_command_completer_query();
                     }
@@ -443,7 +445,7 @@ impl App {
         }
     }
 
-    /// Dispatch a slash command (e.g., /compact, /model, /clear).
+    /// Dispatch a slash command (e.g., /compact, /model, /clear, //skill-name).
     fn dispatch_slash_command(&mut self, input: &str) {
         const COMMANDS: [&str; 8] = [
             "/compact",
@@ -461,6 +463,30 @@ impl App {
 
         self.clear_input();
         self.history_index = self.input_history.len();
+
+        // Handle //skill-name [args] skill invocation
+        if cmd_line.starts_with("//") {
+            let skill_input = cmd_line.strip_prefix("//").unwrap_or("").trim();
+            if !skill_input.is_empty() {
+                let (name, args) = skill_input
+                    .split_once(' ')
+                    .unwrap_or((skill_input, ""));
+                let agent = self.agent.clone();
+                let name = name.to_string();
+                let args = args.to_string();
+                let display_name = name.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = agent.activate_skill_with_args(&name, &args).await {
+                        tracing::warn!("Failed to activate skill '{name}': {e}");
+                    }
+                });
+                self.message_list.push_entry(MessageEntry::new(
+                    Sender::System,
+                    format!("Skill active: {display_name}"),
+                ));
+            }
+            return;
+        }
 
         match cmd_name {
             "/compact" => {

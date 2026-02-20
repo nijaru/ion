@@ -3,7 +3,8 @@
 //! Supports layered instructions from:
 //! 1. ~/.ion/AGENTS.md (ion-specific)
 //! 2. ~/.config/agents/AGENTS.md (cross-agent standard)
-//! 3. ./AGENTS.md or ./CLAUDE.md (project-level)
+//! 3. ~/.agents/AGENTS.md (cross-agent shared, agentskills.io convention)
+//! 4. ./AGENTS.md or ./CLAUDE.md (project-level)
 
 use std::collections::HashMap;
 use std::fs;
@@ -52,7 +53,12 @@ impl InstructionLoader {
             parts.push(content);
         }
 
-        // 3. Project-level (./AGENTS.md or ./CLAUDE.md)
+        // 3. Cross-agent shared (~/.agents/AGENTS.md)
+        if let Some(content) = self.load_agents_home() {
+            parts.push(content);
+        }
+
+        // 4. Project-level (./AGENTS.md or ./CLAUDE.md)
         if let Some(content) = self.load_project() {
             parts.push(content);
         }
@@ -69,6 +75,7 @@ impl InstructionLoader {
         let mut paths = Vec::new();
         if let Some(home) = dirs::home_dir() {
             paths.push(home.join(".ion/AGENTS.md"));
+            paths.push(home.join(".agents/AGENTS.md"));
         }
         let config_dir = std::env::var("XDG_CONFIG_HOME")
             .map(PathBuf::from)
@@ -81,6 +88,12 @@ impl InstructionLoader {
             paths.push(self.project_path.join(name));
         }
         paths
+    }
+
+    /// Load cross-agent shared instructions from ~/.agents/AGENTS.md
+    fn load_agents_home(&self) -> Option<String> {
+        let path = dirs::home_dir()?.join(".agents/AGENTS.md");
+        self.load_cached(&path)
     }
 
     /// Load ion-specific instructions from ~/.ion/AGENTS.md
