@@ -6,6 +6,7 @@ use crate::cli::PermissionSettings;
 use crate::config::{Config, subagents_dir};
 use crate::provider::{Client, LlmApi, ModelRegistry, Provider};
 use crate::session::{Session, SessionStore};
+use crate::skill::SkillRegistry;
 use crate::tool::ToolOrchestrator;
 use crate::tool::builtin::SpawnSubagentTool;
 use crate::tui::App;
@@ -183,6 +184,19 @@ impl App {
         if has_mcp_tools {
             agent.context_manager().set_has_mcp_tools(true);
         }
+
+        // Load skills from standard locations
+        let mut skill_registry = SkillRegistry::new();
+        if let Some(home) = dirs::home_dir() {
+            let _ = skill_registry.scan_directory(&home.join(".agents/skills"));
+            let _ = skill_registry.scan_directory(&home.join(".ion/skills"));
+        }
+        let _ = skill_registry.scan_directory(std::path::Path::new(".ion/skills"));
+        if !skill_registry.list_all().is_empty() {
+            debug!("Loaded {} skills", skill_registry.list_all().len());
+            agent = agent.with_skills(skill_registry);
+        }
+
         let agent = Arc::new(agent);
 
         // Open session store
@@ -287,6 +301,24 @@ impl App {
         if let Ok(history) = this.store.load_input_history() {
             this.input_history = history;
             this.history_index = this.input_history.len();
+        }
+
+        // Inject skill candidates into the // completer
+        let skills = this.agent.list_skills().await;
+        if !skills.is_empty() {
+            this.command_completer.set_skill_candidates(
+                skills
+                    .into_iter()
+                    .map(|s| {
+                        let desc = if let Some(hint) = s.argument_hint {
+                            format!("{} {hint}", s.description)
+                        } else {
+                            s.description
+                        };
+                        (s.name, desc)
+                    })
+                    .collect(),
+            );
         }
 
         // Initialize setup flow if needed

@@ -140,7 +140,7 @@ impl App {
     fn active_popup_height(&self) -> u16 {
         if self.mode == Mode::Input {
             if self.command_completer.is_active() {
-                self.command_completer.visible_candidates().len() as u16
+                self.command_completer.visible_candidates_count() as u16
             } else if self.file_completer.is_active() {
                 self.file_completer.visible_candidates().len() as u16
             } else {

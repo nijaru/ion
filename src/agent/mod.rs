@@ -288,6 +288,26 @@ impl Agent {
         Ok(())
     }
 
+    /// Activate a skill by name, substituting `$ARGUMENTS` with `args`.
+    pub async fn activate_skill_with_args(&self, name: &str, args: &str) -> Result<()> {
+        let mut skills = self.skills.write().await;
+        let mut skill = skills
+            .get(name)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("Skill not found: {name}"))?;
+        drop(skills);
+        if !args.is_empty() {
+            skill.prompt = skill.substitute_args(args);
+        }
+        self.context_manager.set_active_skill(Some(skill)).await;
+        Ok(())
+    }
+
+    /// List user-invocable skill summaries.
+    pub async fn list_skills(&self) -> Vec<crate::skill::SkillSummary> {
+        self.skills.read().await.list()
+    }
+
     #[must_use]
     pub fn provider(&self) -> Arc<dyn LlmApi> {
         self.provider.clone()

@@ -377,6 +377,7 @@ impl App {
     }
 
     /// Update the command completer query based on current input.
+    /// Handles mode switching between builtin (/) and skill (//) completers.
     pub(super) fn update_command_completer_query(&mut self) {
         if !self.command_completer.is_active() {
             return;
@@ -385,17 +386,34 @@ impl App {
         let cursor = self.input_state.cursor_char_idx();
         let content = self.input_buffer.get_content();
 
-        if !content.starts_with('/') || cursor == 0 {
-            self.command_completer.deactivate();
-            return;
-        }
-
-        // Extract text after / (the query)
-        if cursor > 1 {
-            let query: String = content.chars().skip(1).take(cursor - 1).collect();
-            self.command_completer.set_query(&query);
+        if content.starts_with("//") {
+            // Skill mode: query is chars after //
+            if !self.command_completer.is_skill_mode() {
+                self.command_completer.activate_skill_mode();
+            }
+            if cursor > 2 {
+                let query: String = content.chars().skip(2).take(cursor - 2).collect();
+                self.command_completer.set_query(&query);
+            } else {
+                self.command_completer.set_query("");
+            }
+        } else if content.starts_with('/') {
+            // Builtin mode: query is chars after /
+            if self.command_completer.is_skill_mode() {
+                self.command_completer.activate_builtin_mode();
+            }
+            if cursor == 0 {
+                self.command_completer.deactivate();
+                return;
+            }
+            if cursor > 1 {
+                let query: String = content.chars().skip(1).take(cursor - 1).collect();
+                self.command_completer.set_query(&query);
+            } else {
+                self.command_completer.set_query("");
+            }
         } else {
-            self.command_completer.set_query("");
+            self.command_completer.deactivate();
         }
     }
 
@@ -404,8 +422,8 @@ impl App {
         let cursor = self.input_state.cursor_char_idx();
         let content = self.input_buffer.get_content();
 
-        // Only activate if / is at position 0 (start of input)
-        if cursor == 1 && content.starts_with('/') {
+        // Activate builtin mode when first / is typed
+        if cursor == 1 && content.starts_with('/') && !content.starts_with("//") {
             self.command_completer.activate();
         }
     }
