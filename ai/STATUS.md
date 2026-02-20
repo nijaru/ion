@@ -12,29 +12,28 @@
 
 ## Completed This Session
 
-- **Selector column headers + gap fix** — `SELECTOR_OVERHEAD=7` was claiming 1 extra row that was
-  never rendered (comment always said "list header"). Added `column_header: Option<(String,String)>`
-  to `SelectorData`; `render_list` now paints a dim header row using that slot. Gap bug fixed
-  (2-line → 1-line). (`src/tui/render/selector.rs`, `src/tui/render/direct.rs`)
+- **MCP tools callable** — MCP tool defs now included in every API request via `all_tool_definitions()`.
+  Added `list_definitions()` to `McpFallback` trait, `all_tool_definitions()` to `ToolOrchestrator`.
+  LLM can call MCP tools directly; `mcp_tools` is now for search/discovery only.
+  System prompt updated accordingly. (`src/mcp/mod.rs`, `src/tool/mod.rs`, `src/agent/stream.rs`, `src/agent/context.rs`)
 
-- **Model selector columns** — now shows Org, context window, and Price/M (in/out) columns.
-  Added `format_price` / `format_price_pair` helpers. Provider picker shows ID/Auth columns.
-  Session picker shows Directory column. (`src/tui/util.rs`, `src/tui/render/direct.rs`)
+- **Selector column headers + gap fix** — Added `column_header: Option<(String,String)>` to
+  `SelectorData`; `render_list` now paints a dim header row using the previously-wasted overhead slot.
+  2-line gap bug fixed. (`src/tui/render/selector.rs`, `src/tui/render/direct.rs`)
 
-- **cargo update** — 64 packages updated (incl. `time`, `uuid`, `zerocopy`, `zmij`).
+- **Model selector columns** — Org, Ctx, In, Out columns with dynamic widths. Org prefix stripped
+  from model label (redundant with Org column). Provider/session pickers also have column headers.
+  Added `format_price` helper. (`src/tui/util.rs`, `src/tui/render/direct.rs`)
+
+- **cargo update** — 64 packages updated.
 
 ## Key Findings This Session
-
-- **MCP gap (low priority)**: MCP tools are not exposed as API tool definitions — agent can
-  discover via `mcp_tools` search but cannot call them (Anthropic API rejects unknown tool names).
-  Infrastructure exists, fix needed when MCP becomes priority. Options: add MCP tools to
-  `list_tools()`, or add `call_mcp_tool(name, args)` proxy builtin.
 
 - **Skills**: Complete and correct. YAML + XML formats, lazy loading, registry, no external crate.
   No action needed.
 
 - **Agent loop**: Solid. Retry (3x, exponential), stale timeout (120s), non-streaming fallback,
-  parallel tools, abort token. No obvious bugs. tk-nupp was likely provider-side transient.
+  parallel tools, abort token. No obvious bugs.
 
 ## Known Issues
 
@@ -49,7 +48,7 @@
 1. tk-43cd (p3): Persist MessageList display entries in session storage
 2. tk-ioxh (p3): Evaluate async subagent execution model
 3. tk-cmhy (p3): TOML config for approved sandbox directories
-4. MCP callable tools (when priority rises): expose McpManager tools as API tool definitions
+4. tk-oh88 (p3): OS sandbox execution
 
 ## Key References
 
