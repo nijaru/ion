@@ -15,6 +15,8 @@ use crate::tool::types::{ToolError, ToolResult};
 pub trait McpFallback: Send + Sync {
     /// Check if a specific tool exists.
     fn has_tool(&self, name: &str) -> bool;
+    /// Return all tool definitions so they can be included in API requests.
+    fn list_definitions(&self) -> Vec<crate::provider::ToolDefinition>;
     /// Call a tool by name. Returns None if tool not found.
     async fn call_tool_by_name(
         &self,
@@ -226,6 +228,17 @@ impl McpManager {
 impl McpFallback for McpManager {
     fn has_tool(&self, name: &str) -> bool {
         self.tool_index.iter().any(|e| e.name == name)
+    }
+
+    fn list_definitions(&self) -> Vec<crate::provider::ToolDefinition> {
+        self.tool_index
+            .iter()
+            .map(|e| crate::provider::ToolDefinition {
+                name: e.name.clone(),
+                description: e.description.clone(),
+                parameters: e.input_schema.clone(),
+            })
+            .collect()
     }
 
     async fn call_tool_by_name(

@@ -56,14 +56,6 @@ pub(super) fn format_price(price: f64) -> String {
     format!("${price:.2}")
 }
 
-/// Format input/output price pair as "in/out" (e.g., "$3/$15", "free").
-pub(super) fn format_price_pair(input: f64, output: f64) -> String {
-    if input == 0.0 && output == 0.0 {
-        return "free".to_string();
-    }
-    format!("{}/{}", format_price(input), format_price(output))
-}
-
 /// Format seconds as human-readable duration (e.g., "1m 30s" or "45s")
 pub(super) fn format_elapsed(secs: u64) -> String {
     if secs >= 60 {
@@ -361,11 +353,4 @@ mod tests {
         assert_eq!(format_price(75.0), "$75");
     }
 
-    #[test]
-    fn test_format_price_pair() {
-        assert_eq!(format_price_pair(0.0, 0.0), "free");
-        assert_eq!(format_price_pair(3.0, 15.0), "$3/$15");
-        assert_eq!(format_price_pair(0.25, 1.25), "$0.25/$1.25");
-        assert_eq!(format_price_pair(0.0, 1.0), "free/$1");
-    }
 }

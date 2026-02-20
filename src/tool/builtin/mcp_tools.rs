@@ -24,7 +24,7 @@ impl Tool for McpToolsTool {
     }
 
     fn description(&self) -> &str {
-        "Search available MCP tools by keyword. Returns matching tool names, descriptions, and input schemas. Use this to discover what MCP tools are available before calling them."
+        "Search available MCP tools by keyword. Returns matching tool names, descriptions, and input schemas. Useful when many MCP tools are available and you need to find relevant ones by concept."
     }
 
     fn parameters(&self) -> serde_json::Value {
