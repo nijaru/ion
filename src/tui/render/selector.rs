@@ -280,7 +280,9 @@ fn render_list<W: Write>(
         let mut remaining = line_width;
         // 5 spaces matching prefix(2) + marker(3) indent
         push_clipped_span(&mut spans, "     ", &mut remaining, None, false, true);
-        let padded = format!("{label_h:<max_label_width$}");
+        let header_w = display_width(label_h);
+        let padding = " ".repeat(max_label_width.saturating_sub(header_w));
+        let padded = format!("{label_h}{padding}");
         push_clipped_span(&mut spans, &padded, &mut remaining, None, false, true);
         if !hint_h.is_empty() {
             push_clipped_span(&mut spans, "  ", &mut remaining, None, false, true);

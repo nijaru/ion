@@ -1,6 +1,6 @@
 //! Layout calculations for the TUI.
 
-use crate::tui::render::{selector_height, PROGRESS_GAP, PROGRESS_HEIGHT};
+use crate::tui::render::{selector_height, INPUT_MARGIN, PROGRESS_GAP, PROGRESS_HEIGHT};
 use crate::tui::types::{Mode, SelectorPage};
 use crate::tui::App;
 
@@ -158,9 +158,7 @@ impl App {
     pub(crate) fn calculate_input_height(&self, viewport_width: u16, viewport_height: u16) -> u16 {
         const MIN_HEIGHT: u16 = 3;
         const MIN_RESERVED: u16 = 3; // status (1) + optional progress (up to 2)
-        const BORDER_OVERHEAD: u16 = 2; // Top and bottom borders
-        const LEFT_MARGIN: u16 = 3; // " > " prompt gutter
-        const RIGHT_MARGIN: u16 = 1; // Right margin for symmetry
+        const BORDER_ROWS: u16 = 2; // Top and bottom border lines
 
         // Dynamic max based on viewport height
         let max_height = viewport_height.saturating_sub(MIN_RESERVED).max(MIN_HEIGHT);
@@ -169,10 +167,8 @@ impl App {
             return MIN_HEIGHT;
         }
 
-        // Available width for text (subtract borders, gutter, and right margin)
-        let text_width = viewport_width
-            .saturating_sub(BORDER_OVERHEAD)
-            .saturating_sub(LEFT_MARGIN + RIGHT_MARGIN) as usize;
+        // Match the wrap width used by input_lines_for_height
+        let text_width = viewport_width.saturating_sub(INPUT_MARGIN) as usize;
         if text_width == 0 {
             return MIN_HEIGHT;
         }
@@ -182,8 +178,8 @@ impl App {
             .input_state
             .visual_line_count(&self.input_buffer, text_width) as u16;
 
-        // Add border overhead and clamp to bounds
-        (line_count + BORDER_OVERHEAD).clamp(MIN_HEIGHT, max_height)
+        // Add border rows and clamp to bounds
+        (line_count + BORDER_ROWS).clamp(MIN_HEIGHT, max_height)
     }
 
     /// Resolve the UI start row, using position state.

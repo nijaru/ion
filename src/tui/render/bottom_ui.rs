@@ -4,7 +4,7 @@ use crate::tool::ToolMode;
 use crate::tui::composer::{build_visual_lines, ComposerState};
 use crate::tui::render::{CONTINUATION, INPUT_MARGIN, PROMPT, PROMPT_WIDTH};
 use crate::tui::rnk_text::render_truncated_text_line;
-use crate::tui::util::{format_cost, format_elapsed, format_tokens, truncate_to_display_width};
+use crate::tui::util::{display_width, format_cost, format_elapsed, format_tokens, truncate_to_display_width};
 use crate::tui::App;
 use crossterm::cursor::MoveTo;
 use crossterm::execute;
@@ -187,6 +187,8 @@ impl App {
         let content_width = width.saturating_sub(INPUT_MARGIN) as usize;
         let visual_lines = build_visual_lines(&content, content_width);
 
+        let total_lines =
+            ComposerState::visual_line_count_with(&content, &visual_lines, content_width);
         if content_width > 0 {
             self.input_state.calculate_cursor_pos_with(
                 &content,
@@ -194,12 +196,9 @@ impl App {
                 self.input_buffer.len_chars(),
                 content_width,
             );
+            self.input_state
+                .scroll_to_cursor(visible_height, total_lines);
         }
-
-        let total_lines =
-            ComposerState::visual_line_count_with(&content, &visual_lines, content_width);
-        self.input_state
-            .scroll_to_cursor(visible_height, total_lines);
         let scroll_offset = self.input_state.scroll_offset();
         let total_chars = content.chars().count();
 
@@ -351,24 +350,24 @@ impl App {
         // Segment widths (each includes its own " • " separator prefix).
         // Drop order: detail → model → diff stats → branch.
         // Always shown: mode, short %, project. Cost shown for non-subscription providers.
-        let mode_w = mode_label.len() + 3; // " [MODE]"
-        let think_w = if think.is_empty() { 0 } else { 1 + think.len() };
-        let model_seg = 3 + model_name.len() + think_w; // " • model think"
-        let think_seg = if think.is_empty() { 0 } else { 3 + think.len() }; // standalone
+        let mode_w = mode_label.len() + 3; // " [MODE]" — mode_label is static ASCII
+        let think_w = if think.is_empty() { 0 } else { 1 + display_width(think) };
+        let model_seg = 3 + display_width(model_name) + think_w; // " • model think"
+        let think_seg = if think.is_empty() { 0 } else { 3 + display_width(think) }; // standalone
         let pct_seg = if pct_text.is_empty() {
             0
         } else {
-            3 + pct_text.len()
+            3 + pct_text.len() // pct_text is formatted ASCII ("45%", "1.2k")
         };
-        let detail_extra = detail_text.as_ref().map_or(0, |d| 1 + d.len());
-        let cost_seg = cost_text.as_ref().map_or(0, |c| 3 + c.len());
-        let branch_extra = branch.map_or(0, |b| 3 + b.len()); // " • b"
+        let detail_extra = detail_text.as_ref().map_or(0, |d| 1 + d.len()); // ASCII numbers
+        let cost_seg = cost_text.as_ref().map_or(0, |c| 3 + c.len()); // ASCII "$0.12"
+        let branch_extra = branch.map_or(0, |b| 3 + display_width(b)); // " • branch"
         let diff_stat = self.git_diff_stat;
         let diff_texts = diff_stat.map(|(ins, del)| (format!("+{ins}"), format!("-{del}")));
         let diff_extra = diff_texts
             .as_ref()
-            .map_or(0, |(i, d)| 2 + i.len() + d.len()); // " +N/-M"
-        let proj_seg = 3 + project.len();
+            .map_or(0, |(i, d)| 2 + i.len() + d.len()); // " +N/-M" — ASCII
+        let proj_seg = 3 + display_width(project);
 
         // Total width at each drop level.
         let w0 =
