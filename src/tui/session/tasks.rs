@@ -12,13 +12,25 @@ impl App {
     pub(in crate::tui) fn save_task_summary(&mut self, was_cancelled: bool) {
         if let Some(start) = self.task.start_time {
             self.session_cost += self.task.cost;
-            self.last_task_summary = Some(TaskSummary {
+            let summary = TaskSummary {
                 elapsed: start.elapsed(),
                 input_tokens: self.task.input_tokens,
                 output_tokens: self.task.output_tokens,
                 cost: self.task.cost,
                 was_cancelled,
-            });
+            };
+            // Persist completion state so the progress line survives session resume.
+            // Only persist completed (non-cancelled) summaries.
+            if !was_cancelled {
+                let _ = self.store.save_completion(
+                    &self.session.id,
+                    summary.elapsed.as_secs(),
+                    summary.input_tokens,
+                    summary.output_tokens,
+                    summary.cost,
+                );
+            }
+            self.last_task_summary = Some(summary);
         }
     }
 

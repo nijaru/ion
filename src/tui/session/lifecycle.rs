@@ -171,6 +171,19 @@ impl App {
             self.token_usage = Some((used, ctx_window));
         }
 
+        // Restore last completion summary so the progress line is populated on resume.
+        if let Ok(Some((elapsed_secs, input_tokens, output_tokens, cost))) =
+            self.store.load_completion(&self.session.id)
+        {
+            self.last_task_summary = Some(crate::tui::types::TaskSummary {
+                elapsed: std::time::Duration::from_secs(elapsed_secs),
+                input_tokens,
+                output_tokens,
+                cost,
+                was_cancelled: false,
+            });
+        }
+
         Ok(())
     }
 }

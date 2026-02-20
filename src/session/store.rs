@@ -3,7 +3,7 @@
 
 use crate::provider::{ContentBlock, Message, Role};
 use crate::session::Session;
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use std::path::Path;
 use std::sync::Arc;
 use thiserror::Error;
@@ -135,6 +135,20 @@ impl SessionStore {
             )?;
         }
 
+        // Migration v3 -> v4: Add last completion summary columns
+        if version < 4 {
+            self.db.execute_batch(
+                r"
+                ALTER TABLE sessions ADD COLUMN last_elapsed_secs INTEGER;
+                ALTER TABLE sessions ADD COLUMN last_input_tokens  INTEGER;
+                ALTER TABLE sessions ADD COLUMN last_output_tokens INTEGER;
+                ALTER TABLE sessions ADD COLUMN last_cost          REAL;
+
+                PRAGMA user_version = 4;
+                ",
+            )?;
+        }
+
         // Enable foreign key enforcement
         self.db.execute("PRAGMA foreign_keys = ON", [])?;
 
@@ -240,6 +254,65 @@ impl SessionStore {
             params![cutoff],
         )?;
         Ok(deleted)
+    }
+
+    /// Persist the last completion summary for a session.
+    /// Fields: elapsed_secs, input_tokens, output_tokens, cost.
+    pub fn save_completion(
+        &self,
+        session_id: &str,
+        elapsed_secs: u64,
+        input_tokens: usize,
+        output_tokens: usize,
+        cost: f64,
+    ) -> Result<(), SessionStoreError> {
+        self.db.execute(
+            r"
+            UPDATE sessions
+            SET last_elapsed_secs  = ?1,
+                last_input_tokens  = ?2,
+                last_output_tokens = ?3,
+                last_cost          = ?4
+            WHERE id = ?5
+            ",
+            params![
+                elapsed_secs as i64,
+                input_tokens as i64,
+                output_tokens as i64,
+                cost,
+                session_id
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Load the last completion summary for a session.
+    /// Returns `(elapsed_secs, input_tokens, output_tokens, cost)` or `None` if not stored.
+    pub fn load_completion(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<(u64, usize, usize, f64)>, SessionStoreError> {
+        let row: Option<(i64, i64, i64, f64)> = self
+            .db
+            .query_row(
+                r"
+                SELECT last_elapsed_secs, last_input_tokens, last_output_tokens, last_cost
+                FROM sessions
+                WHERE id = ?1 AND last_elapsed_secs IS NOT NULL
+                ",
+                params![session_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()?;
+
+        Ok(row.map(|(elapsed, input, output, cost)| {
+            (
+                elapsed.max(0) as u64,
+                input.max(0) as usize,
+                output.max(0) as usize,
+                cost,
+            )
+        }))
     }
 
     /// Load a session by ID.
