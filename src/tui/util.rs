@@ -41,6 +41,29 @@ pub(super) fn format_context_window(n: u32) -> String {
     }
 }
 
+/// Format a price per million tokens as a compact string (e.g., "$3", "$0.25", "free").
+pub(super) fn format_price(price: f64) -> String {
+    if price == 0.0 {
+        return "free".to_string();
+    }
+    if price < 0.01 {
+        return format!("${price:.4}");
+    }
+    // Use integer format when there's no meaningful fraction.
+    if price.fract() < 0.005 {
+        return format!("${:.0}", price);
+    }
+    format!("${price:.2}")
+}
+
+/// Format input/output price pair as "in/out" (e.g., "$3/$15", "free").
+pub(super) fn format_price_pair(input: f64, output: f64) -> String {
+    if input == 0.0 && output == 0.0 {
+        return "free".to_string();
+    }
+    format!("{}/{}", format_price(input), format_price(output))
+}
+
 /// Format seconds as human-readable duration (e.g., "1m 30s" or "45s")
 pub(super) fn format_elapsed(secs: u64) -> String {
     if secs >= 60 {
@@ -326,5 +349,23 @@ mod tests {
         assert_eq!(format_context_window(1_000_000), "1M");
         assert_eq!(format_context_window(1_100_000), "1.1M");
         assert_eq!(format_context_window(2_000_000), "2M");
+    }
+
+    #[test]
+    fn test_format_price() {
+        assert_eq!(format_price(0.0), "free");
+        assert_eq!(format_price(0.25), "$0.25");
+        assert_eq!(format_price(1.25), "$1.25");
+        assert_eq!(format_price(3.0), "$3");
+        assert_eq!(format_price(15.0), "$15");
+        assert_eq!(format_price(75.0), "$75");
+    }
+
+    #[test]
+    fn test_format_price_pair() {
+        assert_eq!(format_price_pair(0.0, 0.0), "free");
+        assert_eq!(format_price_pair(3.0, 15.0), "$3/$15");
+        assert_eq!(format_price_pair(0.25, 1.25), "$0.25/$1.25");
+        assert_eq!(format_price_pair(0.0, 1.0), "free/$1");
     }
 }

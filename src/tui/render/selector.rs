@@ -37,6 +37,9 @@ pub struct SelectorData {
     pub active_tab: usize, // 0 = providers, 1 = models
     /// Show a loading placeholder when true and items is empty.
     pub loading: bool,
+    /// Column header row rendered above list items: (label_col_name, hint_col_names).
+    /// Uses the reserved overhead row so the selector height stays correct.
+    pub column_header: Option<(String, String)>,
 }
 
 fn paint_row_text<W: Write>(
@@ -259,14 +262,36 @@ fn render_list<W: Write>(
 
     // Show a loading placeholder when fetch is in progress and no items yet.
     if data.loading && data.items.is_empty() {
+        // Still render header row to keep layout stable.
+        execute!(w, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
+        row += 1;
         for _ in 0..list_height {
             execute!(w, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
             row += 1;
         }
-        // Overwrite the first row with "Loading..."
+        // Overwrite the header row with "Loading..."
         paint_row_text(w, start_row, width, "  Loading...", None, false, true)?;
         return Ok(row);
     }
+
+    // Column header row (uses the reserved overhead slot).
+    if let Some((ref label_h, ref hint_h)) = data.column_header {
+        let mut spans = Vec::new();
+        let mut remaining = line_width;
+        // 5 spaces matching prefix(2) + marker(3) indent
+        push_clipped_span(&mut spans, "     ", &mut remaining, None, false, true);
+        let padded = format!("{label_h:<max_label_width$}");
+        push_clipped_span(&mut spans, &padded, &mut remaining, None, false, true);
+        if !hint_h.is_empty() {
+            push_clipped_span(&mut spans, "  ", &mut remaining, None, false, true);
+            push_clipped_span(&mut spans, hint_h, &mut remaining, None, false, true);
+        }
+        paint_row_spans(w, row, width, spans)?;
+    } else {
+        // No header content but still consume the reserved row.
+        execute!(w, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
+    }
+    row += 1;
 
     for (i, item) in visible_items.into_iter().enumerate() {
         let actual_idx = scroll_offset + i;

@@ -4,7 +4,9 @@ use crate::tui::render::bottom_ui::BottomUiFrame;
 use crate::tui::render::layout::{BodyLayout, UiLayout};
 use crate::tui::render::selector::{self, SelectorData, SelectorItem};
 use crate::tui::types::{Mode, SelectorPage};
-use crate::tui::util::{format_relative_time, shorten_home_prefix};
+use crate::tui::util::{
+    format_context_window, format_price_pair, format_relative_time, shorten_home_prefix,
+};
 use crate::tui::App;
 use crossterm::cursor::MoveTo;
 use crossterm::execute;
@@ -91,20 +93,16 @@ impl App {
                     .filtered()
                     .iter()
                     .map(|s| {
-                        // Always show id and auth method in aligned columns
                         let id = s.provider.id();
                         let auth_hint = s.provider.auth_hint();
                         let (hint, warning) = if auth_hint.is_empty() {
-                            // Local provider - no auth needed
                             (id.to_string(), None)
                         } else if s.provider.is_oauth() {
-                            // OAuth providers - show warning (unofficial)
                             (
                                 format!("{:width$}", id, width = max_id_len),
                                 Some("⚠ unofficial".to_string()),
                             )
                         } else {
-                            // API key providers - show env var
                             (
                                 format!("{:width$}  {}", id, auth_hint, width = max_id_len),
                                 None,
@@ -118,6 +116,11 @@ impl App {
                         }
                     })
                     .collect();
+                let col_hint = format!(
+                    "{:<max_id_len$}  Auth",
+                    "ID",
+                    max_id_len = max_id_len.max(2)
+                );
                 SelectorData {
                     title: "Providers",
                     description: "Select a provider",
@@ -127,15 +130,30 @@ impl App {
                     show_tabs: true,
                     active_tab: 0,
                     loading: false,
+                    column_header: Some(("Provider".to_string(), col_hint)),
                 }
             }
             SelectorPage::Model => {
-                let items = self
-                    .model_picker
-                    .filtered_models
+                let models = &self.model_picker.filtered_models;
+                let max_provider_w = models
+                    .iter()
+                    .map(|m| m.provider.len())
+                    .max()
+                    .unwrap_or(3)
+                    .max(3); // at least "Org" header width
+
+                let items = models
                     .iter()
                     .map(|m| {
-                        let hint = crate::tui::util::format_context_window(m.context_window);
+                        let ctx = format_context_window(m.context_window);
+                        let price = format_price_pair(m.pricing.input, m.pricing.output);
+                        let hint = format!(
+                            "{:<max_provider_w$}  {:<6}  {}",
+                            m.provider,
+                            ctx,
+                            price,
+                            max_provider_w = max_provider_w,
+                        );
                         SelectorItem {
                             label: m.id.clone(),
                             is_valid: true,
@@ -144,6 +162,14 @@ impl App {
                         }
                     })
                     .collect();
+
+                let col_hint = format!(
+                    "{:<max_provider_w$}  {:<6}  {}",
+                    "Org",
+                    "Ctx",
+                    "Price/M",
+                    max_provider_w = max_provider_w,
+                );
                 SelectorData {
                     title: "Models",
                     description: "Select a model",
@@ -153,6 +179,7 @@ impl App {
                     show_tabs: true,
                     active_tab: 1,
                     loading: self.model_picker.is_loading,
+                    column_header: Some(("Model".to_string(), col_hint)),
                 }
             }
             SelectorPage::Session => {
@@ -184,6 +211,7 @@ impl App {
                     show_tabs: false,
                     active_tab: 0,
                     loading: false,
+                    column_header: Some(("Session".to_string(), "Directory".to_string())),
                 }
             }
         }
