@@ -28,6 +28,7 @@ impl App {
                     self.mode = Mode::Input;
                 }
                 Mode::HistorySearch => self.handle_history_search_mode(key),
+                Mode::OAuthConfirm => self.handle_oauth_confirm_mode(key),
             },
             Event::Paste(text) => {
                 if self.mode == Mode::Input {
@@ -615,6 +616,10 @@ impl App {
                         // Only set now if it's the same provider (just opening model selector)
                         if provider == self.api_provider {
                             self.open_model_selector();
+                        } else if provider == crate::provider::Provider::Gemini {
+                            // Show ban-risk confirmation before switching to Gemini OAuth
+                            self.oauth_confirm_provider = Some(provider);
+                            self.mode = crate::tui::types::Mode::OAuthConfirm;
                         } else {
                             // Store pending provider and preview its models
                             self.pending_provider = Some(provider);
@@ -782,6 +787,23 @@ impl App {
             SelectorPage::Provider => action(&mut self.provider_picker),
             SelectorPage::Model => action(&mut self.model_picker),
             SelectorPage::Session => action(&mut self.session_picker),
+        }
+    }
+
+    /// Handle key events in the OAuth ban-risk confirmation dialog.
+    fn handle_oauth_confirm_mode(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Enter | KeyCode::Char('y') | KeyCode::Char('Y') => {
+                if let Some(provider) = self.oauth_confirm_provider.take() {
+                    self.pending_provider = Some(provider);
+                    self.preview_provider_models(provider);
+                }
+            }
+            _ => {
+                // Any other key cancels — return to provider selector
+                self.oauth_confirm_provider = None;
+                self.open_provider_selector();
+            }
         }
     }
 

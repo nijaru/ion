@@ -2,6 +2,9 @@
 
 use crate::tui::render::{selector_height, INPUT_MARGIN, PROGRESS_GAP, PROGRESS_HEIGHT};
 use crate::tui::types::{Mode, SelectorPage};
+
+/// Fixed height for the OAuth ban-risk confirmation dialog.
+pub(crate) const OAUTH_CONFIRM_HEIGHT: u16 = 9;
 use crate::tui::App;
 
 /// A rectangular region within the terminal.
@@ -55,6 +58,24 @@ impl App {
     /// Reads `self.render_state.last_ui_top()` for clear_from computation.
     pub fn compute_layout(&self, width: u16, height: u16) -> UiLayout {
         let last_top = self.render_state.last_ui_top();
+
+        if self.mode == Mode::OAuthConfirm {
+            let top = height.saturating_sub(OAUTH_CONFIRM_HEIGHT);
+            let clear_from = last_top
+                .map_or(top, |old| old.min(top))
+                .min(height.saturating_sub(1));
+            return UiLayout {
+                top,
+                clear_from,
+                body: BodyLayout::Selector {
+                    selector: Region {
+                        row: top,
+                        height: OAUTH_CONFIRM_HEIGHT,
+                    },
+                },
+                width,
+            };
+        }
 
         if self.mode == Mode::Selector {
             let item_count = match self.selector_page {

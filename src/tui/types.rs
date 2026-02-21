@@ -64,6 +64,8 @@ pub enum Mode {
     HelpOverlay,
     /// Ctrl+R history search
     HistorySearch,
+    /// OAuth ban-risk confirmation dialog (shown before switching to Gemini OAuth)
+    OAuthConfirm,
 }
 
 /// State for Ctrl+R history search.
