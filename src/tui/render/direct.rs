@@ -5,7 +5,7 @@ use crate::tui::render::layout::{BodyLayout, UiLayout};
 use crate::tui::render::selector::{self, SelectorData, SelectorItem};
 use crate::tui::types::{Mode, SelectorPage};
 use crate::tui::util::{
-    format_context_window, format_price, format_relative_time, shorten_home_prefix,
+    display_width, format_context_window, format_price, format_relative_time, shorten_home_prefix,
 };
 use crate::tui::App;
 use crossterm::cursor::MoveTo;
@@ -84,7 +84,7 @@ impl App {
                     .provider_picker
                     .filtered()
                     .iter()
-                    .map(|s| s.provider.id().len())
+                    .map(|s| display_width(s.provider.id()))
                     .max()
                     .unwrap_or(0);
 
@@ -99,12 +99,21 @@ impl App {
                             (id.to_string(), None)
                         } else if s.provider.is_oauth() {
                             (
-                                format!("{:width$}", id, width = max_id_len),
+                                format!(
+                                    "{}{}",
+                                    id,
+                                    " ".repeat(max_id_len.saturating_sub(display_width(id)))
+                                ),
                                 Some("⚠ unofficial".to_string()),
                             )
                         } else {
                             (
-                                format!("{:width$}  {}", id, auth_hint, width = max_id_len),
+                                format!(
+                                    "{}{}  {}",
+                                    id,
+                                    " ".repeat(max_id_len.saturating_sub(display_width(id))),
+                                    auth_hint
+                                ),
                                 None,
                             )
                         };
@@ -116,10 +125,11 @@ impl App {
                         }
                     })
                     .collect();
+                let effective_id_w = max_id_len.max(2);
                 let col_hint = format!(
-                    "{:<max_id_len$}  Auth",
+                    "{}{}  Auth",
                     "ID",
-                    max_id_len = max_id_len.max(2)
+                    " ".repeat(effective_id_w.saturating_sub(display_width("ID")))
                 );
                 SelectorData {
                     title: "Providers",
@@ -137,7 +147,7 @@ impl App {
                 let models = &self.model_picker.filtered_models;
                 let max_provider_w = models
                     .iter()
-                    .map(|m| m.provider.len())
+                    .map(|m| display_width(&m.provider))
                     .max()
                     .unwrap_or(3)
                     .max(3); // at least "Org" header width
@@ -169,12 +179,12 @@ impl App {
                         let price_in = format_price(m.pricing.input);
                         let price_out = format_price(m.pricing.output);
                         let hint = format!(
-                            "{:<max_provider_w$}  {:<6}  {:<max_in_w$}  {:<max_out_w$}",
+                            "{}{}  {:<6}  {:<max_in_w$}  {:<max_out_w$}",
                             m.provider,
+                            " ".repeat(max_provider_w.saturating_sub(display_width(&m.provider))),
                             ctx,
                             price_in,
                             price_out,
-                            max_provider_w = max_provider_w,
                             max_in_w = max_in_w,
                             max_out_w = max_out_w,
                         );
@@ -188,12 +198,12 @@ impl App {
                     .collect();
 
                 let col_hint = format!(
-                    "{:<max_provider_w$}  {:<6}  {:<max_in_w$}  {:<max_out_w$}",
+                    "{}{}  {:<6}  {:<max_in_w$}  {:<max_out_w$}",
                     "Org",
+                    " ".repeat(max_provider_w.saturating_sub(display_width("Org"))),
                     "Ctx",
                     "In",
                     "Out",
-                    max_provider_w = max_provider_w,
                     max_in_w = max_in_w,
                     max_out_w = max_out_w,
                 );
