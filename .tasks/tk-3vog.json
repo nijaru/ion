@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "3vog",
+  "title": "Review Gemini OAuth subscription — antigravity key bans",
+  "description": "Gemini provider uses antigravity/internal OAuth key that is getting users banned. Gemini CLI uses its own OAuth flow (user authenticates with their own Google account). Need to: 1) investigate how Gemini CLI does OAuth (likely ~/.config/gcloud or similar), 2) decide if we should implement the same flow, 3) check if current antigravity key is actually our key or user-provided. Risky: using an internal key for production users is a TOS violation.",
+  "status": "open",
+  "priority": 2,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-02-20T23:51:19.801Z",
+  "updated_at": "2026-02-20T23:51:19.801Z",
+  "completed_at": null,
+  "external": {}
+}

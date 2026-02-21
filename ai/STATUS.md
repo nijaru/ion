@@ -49,10 +49,9 @@
 
 ## Next Steps
 
-1. **tk-vcm4** (p2): OSC 8 hyperlinks — deferred; Ghostty auto-detects URLs. Only needed for non-URL link text
-2. **tk-3vog** (p2): Review Gemini OAuth — antigravity key banning users; investigate Gemini CLI OAuth flow
-3. **tk-43cd** (p3): Persist MessageList display entries — needs DB schema + lifecycle work
-4. **tk-oh88** (p3): OS sandbox execution — main safety feature, unblocks tk-cmhy
+1. **tk-3vog** (p2): Review Gemini OAuth — antigravity key banning users; investigate Gemini CLI OAuth flow
+2. **tk-43cd** (p3): Persist MessageList display entries — needs DB schema + lifecycle work
+3. **tk-oh88** (p3): OS sandbox execution — main safety feature, unblocks tk-cmhy
 
 ## Key References
 

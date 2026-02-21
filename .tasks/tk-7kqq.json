@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "7kqq",
+  "title": "Fix direct.rs: use display_width for selector column widths",
+  "description": "selector_data() in direct.rs uses .len() to compute max_id_len (provider picker) and max_provider_w (model picker), then uses format\\!(\"{:width$}\", ...) which pads by scalar count not display cells. Should use display_width() for these calculations. Currently ASCII-only so not visible, but should be consistent. Design: ai/design/chat-rendering-enhancements.md",
+  "status": "done",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-02-21T00:03:40.126Z",
+  "updated_at": "2026-02-21T00:45:56.748Z",
+  "completed_at": "2026-02-21T00:45:56.748Z",
+  "external": {}
+}

@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "vcm4",
+  "title": "Add OSC 8 hyperlink support to terminal renderer",
+  "description": "OSC 8 escape: ESC]8;;URL BEL text ESC]8;; BEL. Need to: 1) add url: Option<String> to StyledSpan, 2) emit OSC 8 open/close in write_to/write_to_width when url is Some, 3) handle Tag::Link in highlight/markdown.rs to extract URL and set on inner spans. Supported by iTerm2, kitty, wezterm, ghostty. Ignored by others. Design: ai/design/chat-rendering-enhancements.md",
+  "status": "done",
+  "priority": 2,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-02-21T00:03:40.068Z",
+  "updated_at": "2026-02-21T03:05:28.411Z",
+  "completed_at": "2026-02-21T03:05:28.411Z",
+  "external": {}
+}

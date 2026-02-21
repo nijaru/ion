@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "xj3g",
+  "title": "Add task list support to markdown renderer",
+  "description": "pulldown-cmark supports ENABLE_TASKLISTS. Need to: 1) add Options::ENABLE_TASKLISTS to parser in render_markdown_with_width, 2) handle Event::TaskListMarker(checked) — replace default '- ' prefix with '☑ ' (checked) or '☐ ' (unchecked). Design: ai/design/chat-rendering-enhancements.md",
+  "status": "done",
+  "priority": 2,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-02-21T00:03:40.047Z",
+  "updated_at": "2026-02-21T00:45:56.708Z",
+  "completed_at": "2026-02-21T00:45:56.708Z",
+  "external": {}
+}
