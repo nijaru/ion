@@ -18,6 +18,7 @@ pub fn render_markdown_with_width(content: &str, width: usize) -> Vec<StyledLine
     let mut options = Options::empty();
     options.insert(Options::ENABLE_TABLES);
     options.insert(Options::ENABLE_STRIKETHROUGH);
+    options.insert(Options::ENABLE_TASKLISTS);
     let parser = Parser::new_ext(content, options);
     let mut result = Vec::new();
     let mut current_line = LineBuilder::new();
@@ -301,6 +302,18 @@ pub fn render_markdown_with_width(content: &str, width: usize) -> Vec<StyledLine
                 result.push(StyledLine::dim("─".repeat(rule_width)));
                 result.push(StyledLine::empty());
                 current_line = LineBuilder::new();
+            }
+            Event::TaskListMarker(checked) => {
+                // Replace the "- " prefix set by Tag::Item with a checkbox symbol.
+                let indent = "  ".repeat(list_depth.saturating_sub(1));
+                let checkbox = if checked {
+                    format!("{indent}☑ ")
+                } else {
+                    format!("{indent}☐ ")
+                };
+                list_prefix = Some(checkbox.clone());
+                current_line = LineBuilder::new().raw(checkbox);
+                current_line_is_prefix_only = true;
             }
             Event::Code(code) => {
                 // Inline code - render with cyan for readability

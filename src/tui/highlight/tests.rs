@@ -312,6 +312,31 @@ fn test_strikethrough_renders() {
 }
 
 #[test]
+fn test_task_list_checkboxes() {
+    let lines = render_markdown("- [x] done\n- [ ] todo");
+    let text: String = lines
+        .iter()
+        .flat_map(|l| l.spans.iter().map(|s| s.content.as_str()))
+        .collect();
+    assert!(
+        text.contains('☑'),
+        "expected checked checkbox ☑, got: {:?}",
+        text
+    );
+    assert!(
+        text.contains('☐'),
+        "expected unchecked checkbox ☐, got: {:?}",
+        text
+    );
+    // Should not contain the raw "- " list prefix for task items
+    assert!(
+        !text.contains("- done") && !text.contains("- todo"),
+        "task items should use checkbox prefix, not '- ', got: {:?}",
+        text
+    );
+}
+
+#[test]
 fn test_render_markdown_mixed_lists() {
     // Ordered list with unordered sub-list
     let input = "1. First\n   - Sub one\n   - Sub two\n2. Second";
