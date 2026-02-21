@@ -141,6 +141,8 @@ pub struct App {
     pub history_search: HistorySearchState,
     /// Pending provider change (deferred until model selection)
     pub pending_provider: Option<Provider>,
+    /// Provider waiting for OAuth ban-risk confirmation
+    pub oauth_confirm_provider: Option<Provider>,
     /// Pricing for the current model (per million tokens).
     pub model_pricing: ModelPricing,
     /// Accumulated cost for the current session (USD).
