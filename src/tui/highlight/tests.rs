@@ -304,6 +304,14 @@ fn test_render_markdown_nested_unordered_list() {
 }
 
 #[test]
+fn test_strikethrough_renders() {
+    let lines = render_markdown("~~deleted~~");
+    assert!(!lines.is_empty());
+    let has_strikethrough = lines[0].spans.iter().any(|s| s.style.crossed_out);
+    assert!(has_strikethrough, "expected crossed_out span");
+}
+
+#[test]
 fn test_render_markdown_mixed_lists() {
     // Ordered list with unordered sub-list
     let input = "1. First\n   - Sub one\n   - Sub two\n2. Second";
