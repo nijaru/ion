@@ -211,6 +211,13 @@ impl StyledSpan {
         self
     }
 
+    /// Add strikethrough modifier to this span.
+    #[must_use]
+    pub fn with_strikethrough(mut self) -> Self {
+        self.style.crossed_out = true;
+        self
+    }
+
     /// Write this span to a writer.
     pub fn write_to<W: Write>(&self, w: &mut W) -> io::Result<()> {
         let span = to_rnk_span(self);
@@ -448,6 +455,12 @@ mod tests {
             .raw("hello world")
             .build();
         assert_eq!(line.spans.len(), 2);
+    }
+
+    #[test]
+    fn test_strikethrough_style() {
+        let span = StyledSpan::raw("test").with_strikethrough();
+        assert!(span.style.crossed_out);
     }
 
     #[test]

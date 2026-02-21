@@ -17,11 +17,13 @@ pub fn render_markdown(content: &str) -> Vec<StyledLine> {
 pub fn render_markdown_with_width(content: &str, width: usize) -> Vec<StyledLine> {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_TABLES);
+    options.insert(Options::ENABLE_STRIKETHROUGH);
     let parser = Parser::new_ext(content, options);
     let mut result = Vec::new();
     let mut current_line = LineBuilder::new();
     let mut in_bold = false;
     let mut in_italic = false;
+    let mut in_strikethrough = false;
     let mut in_code_block = false;
     let mut code_block_lang: Option<&'static str> = None;
     let mut code_block_buffer = String::new();
@@ -43,6 +45,7 @@ pub fn render_markdown_with_width(content: &str, width: usize) -> Vec<StyledLine
             Event::Start(tag) => match tag {
                 Tag::Strong => in_bold = true,
                 Tag::Emphasis => in_italic = true,
+                Tag::Strikethrough => in_strikethrough = true,
                 Tag::CodeBlock(kind) => {
                     in_code_block = true;
                     code_block_buffer.clear();
@@ -141,6 +144,7 @@ pub fn render_markdown_with_width(content: &str, width: usize) -> Vec<StyledLine
             Event::End(tag_end) => match tag_end {
                 TagEnd::Strong => in_bold = false,
                 TagEnd::Emphasis => in_italic = false,
+                TagEnd::Strikethrough => in_strikethrough = false,
                 TagEnd::CodeBlock => {
                     in_code_block = false;
                     // Render the code block with syntax highlighting
@@ -269,7 +273,7 @@ pub fn render_markdown_with_width(content: &str, width: usize) -> Vec<StyledLine
                                 current_line =
                                     LineBuilder::new().styled(StyledSpan::dim("> ".to_string()));
                             }
-                            let span = if in_bold && in_italic {
+                            let mut span = if in_bold && in_italic {
                                 StyledSpan::bold(part.to_string()).with_italic()
                             } else if in_bold {
                                 StyledSpan::bold(part.to_string())
@@ -278,6 +282,9 @@ pub fn render_markdown_with_width(content: &str, width: usize) -> Vec<StyledLine
                             } else {
                                 StyledSpan::raw(part.to_string())
                             };
+                            if in_strikethrough {
+                                span = span.with_strikethrough();
+                            }
                             current_line = current_line.styled(span);
                             current_line_is_prefix_only = false;
                         }
