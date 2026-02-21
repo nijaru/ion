@@ -8,8 +8,8 @@
 )]
 
 use crate::tui::terminal::{StyledLine, StyledSpan};
+use crate::tui::util::display_width;
 use pulldown_cmark::Alignment;
-use unicode_width::UnicodeWidthStr;
 
 /// Minimum column width before switching to narrow mode.
 const MIN_COLUMN_WIDTH: usize = 12;
@@ -341,10 +341,7 @@ enum BorderPosition {
 /// Measure display width of a string (handles unicode).
 fn measure_width(s: &str) -> usize {
     // Take the longest line if multiline
-    s.lines()
-        .map(unicode_width::UnicodeWidthStr::width)
-        .max()
-        .unwrap_or(0)
+    s.lines().map(display_width).max().unwrap_or(0)
 }
 
 /// Wrap text to fit within given width.
@@ -365,7 +362,7 @@ fn wrap_text(text: &str, max_width: usize) -> Vec<String> {
         let mut current_width = 0;
 
         for word in paragraph.split_whitespace() {
-            let word_width = word.width();
+            let word_width = display_width(word);
 
             if current_width == 0 {
                 // First word on line
@@ -380,7 +377,7 @@ fn wrap_text(text: &str, max_width: usize) -> Vec<String> {
                             lines.push(std::mem::take(&mut current_line));
                         }
                         current_line = part;
-                        current_width = current_line.width();
+                        current_width = display_width(&current_line);
                     }
                 }
             } else if current_width + 1 + word_width <= max_width {
@@ -402,7 +399,7 @@ fn wrap_text(text: &str, max_width: usize) -> Vec<String> {
                             lines.push(std::mem::take(&mut current_line));
                         }
                         current_line = part;
-                        current_width = current_line.width();
+                        current_width = display_width(&current_line);
                     }
                 }
             }
@@ -491,7 +488,7 @@ fn distribute_widths(natural: &[usize], available: usize, min_width: usize) -> V
 
 /// Pad cell content to width with alignment.
 fn pad_cell(content: &str, width: usize, alignment: Alignment) -> String {
-    let content_width = content.width();
+    let content_width = display_width(content);
     if content_width >= width {
         return content.to_string();
     }
