@@ -110,7 +110,11 @@ impl App {
                             (id.to_string(), None, None)
                         } else if s.provider == crate::provider::Provider::Gemini {
                             // Active ban wave — red warning
-                            (id_pad, Some("⚠ ban risk".to_string()), Some(RnkColor::Red))
+                            (
+                                id_pad,
+                                Some("⚠ bans accounts".to_string()),
+                                Some(RnkColor::Red),
+                            )
                         } else if s.provider.is_oauth() {
                             // Other OAuth (ChatGPT) — yellow unofficial caution
                             (id_pad, Some("⚠ unofficial".to_string()), None)
