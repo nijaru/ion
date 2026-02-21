@@ -7,10 +7,17 @@
 | Phase     | Dogfood readiness             | 2026-02-19 |
 | Status    | Quick wins complete           | 2026-02-19 |
 | Toolchain | stable                        | 2026-01-22 |
-| Tests     | 507 passing (`cargo test -q`) | 2026-02-20 |
+| Tests     | 511 passing (`cargo test -q`) | 2026-02-20 |
 | Clippy    | clean                         | 2026-02-19 |
 
 ## Completed This Session (2026-02-20)
+
+- **Chat rendering enhancements** (tk-s2xv, tk-xj3g, tk-9ar3, tk-7kqq, tk-avmd) — 5 tasks complete, 511 tests passing:
+  - Strikethrough (`~~text~~`) — `with_strikethrough()` builder + `Tag::Strikethrough` in markdown
+  - Task list checkboxes (`- [x]` / `- [ ]`) — `ENABLE_TASKLISTS` + `Event::TaskListMarker` → `☑`/`☐`
+  - `table.rs` display_width consistency — replaced `UnicodeWidthStr` with `crate::tui::util::display_width`
+  - `direct.rs` display_width — selector column alignment uses `display_width` + explicit padding
+  - Visual token bar — `render_token_bar` in util.rs; status line shows `██████ 45%`
 
 - **TUI render layout bugs fixed** (tk-3yus) — wrap width mismatch in `calculate_input_height` (was width-6, now width-INPUT_MARGIN=3); selector column header uses `display_width`; status line drop-levels use `display_width` for model/project/branch/think; `scroll_to_cursor` moved inside `content_width>0` guard.
 
@@ -42,15 +49,10 @@
 
 ## Next Steps
 
-1. **tk-s2xv** (p2): Add strikethrough to markdown renderer (TextStyle + crossterm CrossedOut + pulldown-cmark Tag::Strikethrough)
-2. **tk-xj3g** (p2): Add task list support (`- [x]`) — ENABLE_TASKLISTS + TaskListMarker event
-3. **tk-vcm4** (p2): OSC 8 hyperlinks — StyledSpan url field + write_to + Tag::Link in markdown
-4. **tk-3vog** (p2): Review Gemini OAuth — antigravity key banning users; investigate Gemini CLI OAuth flow
-5. **tk-avmd** (p3): Visual token usage bar in status line
-6. **tk-9ar3** (p3): Fix table.rs display_width consistency
-7. **tk-7kqq** (p3): Fix direct.rs display_width for selector column widths
-8. **tk-43cd** (p3): Persist MessageList display entries — needs DB schema + lifecycle work
-9. **tk-oh88** (p3): OS sandbox execution — main safety feature, unblocks tk-cmhy
+1. **tk-vcm4** (p2): OSC 8 hyperlinks — deferred; Ghostty auto-detects URLs. Only needed for non-URL link text
+2. **tk-3vog** (p2): Review Gemini OAuth — antigravity key banning users; investigate Gemini CLI OAuth flow
+3. **tk-43cd** (p3): Persist MessageList display entries — needs DB schema + lifecycle work
+4. **tk-oh88** (p3): OS sandbox execution — main safety feature, unblocks tk-cmhy
 
 ## Key References
 
