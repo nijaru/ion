@@ -225,6 +225,15 @@ pub(crate) fn display_width(s: &str) -> usize {
         .sum()
 }
 
+/// Render a compact block-char progress bar.
+/// Returns `bar_width` characters using █ (filled) and ░ (empty).
+pub(crate) fn render_token_bar(pct: u64, bar_width: usize) -> String {
+    let filled = ((pct.min(100) * bar_width as u64 + 50) / 100) as usize;
+    let filled = filled.min(bar_width);
+    let empty = bar_width - filled;
+    format!("{}{}", "█".repeat(filled), "░".repeat(empty))
+}
+
 /// Normalize user input for history/storage.
 /// - Normalizes CRLF to LF
 /// - Trims trailing whitespace (keeps leading indentation)
@@ -351,6 +360,14 @@ mod tests {
         assert_eq!(format_price(3.0), "$3");
         assert_eq!(format_price(15.0), "$15");
         assert_eq!(format_price(75.0), "$75");
+    }
+
+    #[test]
+    fn test_render_token_bar() {
+        assert_eq!(render_token_bar(0, 6), "░░░░░░");
+        assert_eq!(render_token_bar(100, 6), "██████");
+        assert_eq!(render_token_bar(50, 6), "███░░░");
+        assert_eq!(render_token_bar(33, 6), "██░░░░");
     }
 
 }
