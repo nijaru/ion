@@ -11,6 +11,8 @@ use crate::tui::App;
 use crossterm::cursor::MoveTo;
 use crossterm::execute;
 use crossterm::terminal::{Clear, ClearType};
+use rnk::components::{Span, Text};
+use rnk::core::Color as RnkColor;
 
 impl App {
     /// Direct crossterm rendering (TUI v2 - no ratatui Terminal/Frame).
@@ -20,7 +22,7 @@ impl App {
         w: &mut W,
         layout: &UiLayout,
     ) -> std::io::Result<()> {
-        if self.mode == Mode::Selector {
+        if self.mode == Mode::Selector || self.mode == Mode::OAuthConfirm {
             self.render_state.note_selector_top(layout.top);
         }
         self.render_state.note_ui_top(layout.top);
@@ -32,7 +34,11 @@ impl App {
 
         match &layout.body {
             BodyLayout::Selector { selector } => {
-                self.render_selector_direct(w, selector.row, layout.width)?;
+                if self.mode == Mode::OAuthConfirm {
+                    self.render_oauth_confirm(w, selector.row, layout.width)?;
+                } else {
+                    self.render_selector_direct(w, selector.row, layout.width)?;
+                }
             }
             BodyLayout::Input {
                 popup,
@@ -104,7 +110,7 @@ impl App {
                                     id,
                                     " ".repeat(max_id_len.saturating_sub(display_width(id)))
                                 ),
-                                Some("⚠ unofficial".to_string()),
+                                Some("⚠ ban risk".to_string()),
                             )
                         } else {
                             (
@@ -266,6 +272,87 @@ impl App {
 
         // Position cursor in filter input
         execute!(w, MoveTo(cursor_col, cursor_row))?;
+
+        Ok(())
+    }
+
+    /// Render the OAuth ban-risk confirmation dialog.
+    pub(crate) fn render_oauth_confirm<W: std::io::Write>(
+        &self,
+        w: &mut W,
+        start_row: u16,
+        width: u16,
+    ) -> std::io::Result<()> {
+        use crate::tui::rnk_text::render_truncated_text_line;
+
+        execute!(w, MoveTo(0, start_row), Clear(ClearType::FromCursorDown))?;
+
+        let line_w = width.saturating_sub(1) as usize;
+        let inner_w = line_w.saturating_sub(2); // inside │ borders
+
+        let paint = |w: &mut W, row: u16, spans: Vec<Span>| -> std::io::Result<()> {
+            execute!(w, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
+            if !spans.is_empty() {
+                let rendered = render_truncated_text_line(Text::spans(spans), line_w);
+                write!(w, "{rendered}")?;
+            }
+            Ok(())
+        };
+
+        let mut row = start_row;
+
+        // Top border with title
+        let title = " ⚠  Google OAuth Warning ";
+        let fill = "─".repeat(
+            line_w
+                .saturating_sub(2) // ┌ + ┐
+                .saturating_sub(title.len()),
+        );
+        let top_border = format!("┌{title}{fill}┐");
+        paint(
+            w,
+            row,
+            vec![Span::new(top_border).color(RnkColor::Red).bold()],
+        )?;
+        row += 1;
+
+        // Warning lines (plain text, padded to inner_w + 2 for "│ " + "│")
+        let warn_lines = [
+            "Google is actively banning accounts using Gemini OAuth in",
+            "third-party tools. Your Google account may be permanently",
+            "disabled with no warning. This includes paying subscribers.",
+        ];
+        for text in &warn_lines {
+            let padded = format!("│ {text:<inner_w$}│");
+            paint(w, row, vec![Span::new(padded).color(RnkColor::Red)])?;
+            row += 1;
+        }
+
+        // Blank separator
+        let blank = format!("│{:<width$}│", "", width = inner_w + 2);
+        paint(w, row, vec![Span::new(blank).color(RnkColor::Red)])?;
+        row += 1;
+
+        // Confirm prompt
+        let prompt_inner = "Continue at your own risk?";
+        let confirm_inner = "  [Enter] Yes, continue   [Esc] No, go back";
+        let prompt_line = format!("│ {prompt_inner:<inner_w$}│");
+        let confirm_line = format!("│{confirm_inner:<width$}│", width = inner_w + 2);
+        paint(w, row, vec![Span::new(prompt_line).color(RnkColor::Red)])?;
+        row += 1;
+        paint(w, row, vec![Span::new(confirm_line).color(RnkColor::Red)])?;
+        row += 1;
+
+        // Bottom border
+        let bottom_border = format!("└{}┘", "─".repeat(line_w.saturating_sub(2)));
+        paint(
+            w,
+            row,
+            vec![Span::new(bottom_border).color(RnkColor::Red).bold()],
+        )?;
+
+        // Hide cursor inside dialog (position off-content area)
+        execute!(w, MoveTo(0, start_row))?;
 
         Ok(())
     }

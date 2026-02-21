@@ -371,7 +371,7 @@ fn render_list<W: Write>(
                 &mut spans,
                 warning,
                 &mut remaining,
-                Some(RnkColor::Yellow),
+                Some(RnkColor::Red),
                 default_bold,
                 default_dim,
             );
