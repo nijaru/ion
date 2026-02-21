@@ -112,7 +112,7 @@ impl App {
                             // Active ban wave — red warning
                             (
                                 id_pad,
-                                Some("⚠ bans accounts".to_string()),
+                                Some("⚠ violates ToS".to_string()),
                                 Some(RnkColor::Red),
                             )
                         } else if s.provider.is_oauth() {
