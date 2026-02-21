@@ -284,11 +284,13 @@ impl App {
         width: u16,
     ) -> std::io::Result<()> {
         use crate::tui::rnk_text::render_truncated_text_line;
+        use crate::tui::util::display_width;
 
         execute!(w, MoveTo(0, start_row), Clear(ClearType::FromCursorDown))?;
 
         let line_w = width.saturating_sub(1) as usize;
-        let inner_w = line_w.saturating_sub(2); // inside │ borders
+        // inner_w: cells available between │ and │ (inner_w + 2 border = line_w)
+        let inner_w = line_w.saturating_sub(2);
 
         let paint = |w: &mut W, row: u16, spans: Vec<Span>| -> std::io::Result<()> {
             execute!(w, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
@@ -299,61 +301,93 @@ impl App {
             Ok(())
         };
 
+        let cyan = |s: String| Span::new(s).color(RnkColor::Cyan);
+        let pad = |used: usize| " ".repeat(inner_w.saturating_sub(used));
+
         let mut row = start_row;
 
-        // Top border with title
-        let title = " ⚠  Google OAuth Warning ";
-        let fill = "─".repeat(
-            line_w
-                .saturating_sub(2) // ┌ + ┐
-                .saturating_sub(title.len()),
-        );
-        let top_border = format!("┌{title}{fill}┐");
+        // ┌─ ⚠ Google OAuth Warning ─────┐  (cyan border, red ⚠, yellow title text)
+        let warn_icon = " ⚠ ";
+        let warn_title = " Google OAuth Warning ";
+        let fill_len = line_w
+            .saturating_sub(2) // ┌ ┐
+            .saturating_sub(display_width(warn_icon))
+            .saturating_sub(display_width(warn_title));
+        let fill = "─".repeat(fill_len);
         paint(
             w,
             row,
-            vec![Span::new(top_border).color(RnkColor::Red).bold()],
+            vec![
+                cyan(format!("┌─{warn_icon}")),
+                Span::new(warn_title).color(RnkColor::Yellow).bold(),
+                cyan(format!("{fill}┐")),
+            ],
         )?;
         row += 1;
 
-        // Warning lines (plain text, padded to inner_w + 2 for "│ " + "│")
+        // Warning body lines: cyan border, red warning text
         let warn_lines = [
             "Google is actively banning accounts using Gemini OAuth in",
-            "third-party tools. Your Google account may be permanently",
-            "disabled with no warning. This includes paying subscribers.",
+            "third-party tools. Accounts are permanently disabled with",
+            "no warning — including paying subscribers.",
         ];
         for text in &warn_lines {
-            let padded = format!("│ {text:<inner_w$}│");
-            paint(w, row, vec![Span::new(padded).color(RnkColor::Red)])?;
+            let used = 1 + display_width(text); // leading space + text
+            paint(
+                w,
+                row,
+                vec![
+                    cyan("│ ".to_string()),
+                    Span::new(text.to_string()).color(RnkColor::Red),
+                    cyan(format!("{}│", pad(used))),
+                ],
+            )?;
             row += 1;
         }
 
         // Blank separator
-        let blank = format!("│{:<width$}│", "", width = inner_w + 2);
-        paint(w, row, vec![Span::new(blank).color(RnkColor::Red)])?;
+        paint(w, row, vec![cyan(format!("│{}│", " ".repeat(inner_w)))])?;
         row += 1;
 
-        // Confirm prompt
-        let prompt_inner = "Continue at your own risk?";
-        let confirm_inner = "  [Enter] Yes, continue   [Esc] No, go back";
-        let prompt_line = format!("│ {prompt_inner:<inner_w$}│");
-        let confirm_line = format!("│{confirm_inner:<width$}│", width = inner_w + 2);
-        paint(w, row, vec![Span::new(prompt_line).color(RnkColor::Red)])?;
-        row += 1;
-        paint(w, row, vec![Span::new(confirm_line).color(RnkColor::Red)])?;
-        row += 1;
-
-        // Bottom border
-        let bottom_border = format!("└{}┘", "─".repeat(line_w.saturating_sub(2)));
+        // "Continue at your own risk?" in yellow
+        let question = "Continue at your own risk?";
+        let q_used = 1 + display_width(question);
         paint(
             w,
             row,
-            vec![Span::new(bottom_border).color(RnkColor::Red).bold()],
+            vec![
+                cyan("│ ".to_string()),
+                Span::new(question).color(RnkColor::Yellow),
+                cyan(format!("{}│", pad(q_used))),
+            ],
+        )?;
+        row += 1;
+
+        // [Enter] in red (danger), [Esc] in cyan (safe)
+        let yes_label = "[Enter] Yes, continue";
+        let no_label = "[Esc] No, go back";
+        let actions_used = 2 + display_width(yes_label) + 3 + display_width(no_label);
+        paint(
+            w,
+            row,
+            vec![
+                cyan("│  ".to_string()),
+                Span::new(yes_label).color(RnkColor::Red),
+                Span::new("   ".to_string()),
+                Span::new(no_label).color(RnkColor::Cyan),
+                cyan(format!("{}│", pad(actions_used))),
+            ],
+        )?;
+        row += 1;
+
+        // └───────────────────────────────┘  (cyan)
+        paint(
+            w,
+            row,
+            vec![cyan(format!("└{}┘", "─".repeat(line_w.saturating_sub(2))))],
         )?;
 
-        // Hide cursor inside dialog (position off-content area)
         execute!(w, MoveTo(0, start_row))?;
-
         Ok(())
     }
 }
