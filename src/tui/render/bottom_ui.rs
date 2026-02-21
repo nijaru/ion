@@ -4,7 +4,7 @@ use crate::tool::ToolMode;
 use crate::tui::composer::{build_visual_lines, ComposerState};
 use crate::tui::render::{CONTINUATION, INPUT_MARGIN, PROMPT, PROMPT_WIDTH};
 use crate::tui::rnk_text::render_truncated_text_line;
-use crate::tui::util::{display_width, format_cost, format_elapsed, format_tokens, truncate_to_display_width};
+use crate::tui::util::{display_width, format_cost, format_elapsed, format_tokens, render_token_bar, truncate_to_display_width};
 use crate::tui::App;
 use crossterm::cursor::MoveTo;
 use crossterm::execute;
@@ -354,10 +354,23 @@ impl App {
         let think_w = if think.is_empty() { 0 } else { 1 + display_width(think) };
         let model_seg = 3 + display_width(model_name) + think_w; // " • model think"
         let think_seg = if think.is_empty() { 0 } else { 3 + display_width(think) }; // standalone
-        let pct_seg = if pct_text.is_empty() {
+        // Build bar display: "██████ 45%" instead of plain "45%"
+        let pct_display = if pct_text.is_empty() {
+            String::new()
+        } else {
+            match self.token_usage {
+                Some((used, max)) if max > 0 => {
+                    let pct_val = (used * 100) / max;
+                    format!("{} {pct_text}", render_token_bar(pct_val as u64, 6))
+                }
+                _ => pct_text.clone(),
+            }
+        };
+
+        let pct_seg = if pct_display.is_empty() {
             0
         } else {
-            3 + pct_text.len() // pct_text is formatted ASCII ("45%", "1.2k")
+            3 + display_width(&pct_display)
         };
         let detail_extra = detail_text.as_ref().map_or(0, |d| 1 + d.len()); // ASCII numbers
         let cost_seg = cost_text.as_ref().map_or(0, |c| 3 + c.len()); // ASCII "$0.12"
@@ -407,7 +420,7 @@ impl App {
             spans.push(Span::new(think).color(RnkColor::Magenta));
         }
 
-        if !pct_text.is_empty() {
+        if !pct_display.is_empty() {
             let pct_color = match self.token_usage {
                 Some((used, max)) if max > 0 => {
                     let pct = (used * 100) / max;
@@ -422,7 +435,7 @@ impl App {
                 _ => None,
             };
             spans.push(Span::new(" • ").dim());
-            let mut pct_span = Span::new(&pct_text);
+            let mut pct_span = Span::new(pct_display.as_str());
             if let Some(c) = pct_color {
                 pct_span = pct_span.color(c);
             }
