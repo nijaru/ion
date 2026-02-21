@@ -101,33 +101,28 @@ impl App {
                     .map(|s| {
                         let id = s.provider.id();
                         let auth_hint = s.provider.auth_hint();
-                        let (hint, warning) = if auth_hint.is_empty() {
-                            (id.to_string(), None)
+                        let id_pad = format!(
+                            "{}{}",
+                            id,
+                            " ".repeat(max_id_len.saturating_sub(display_width(id)))
+                        );
+                        let (hint, warning, warning_color) = if auth_hint.is_empty() {
+                            (id.to_string(), None, None)
+                        } else if s.provider == crate::provider::Provider::Gemini {
+                            // Active ban wave — red warning
+                            (id_pad, Some("⚠ ban risk".to_string()), Some(RnkColor::Red))
                         } else if s.provider.is_oauth() {
-                            (
-                                format!(
-                                    "{}{}",
-                                    id,
-                                    " ".repeat(max_id_len.saturating_sub(display_width(id)))
-                                ),
-                                Some("⚠ ban risk".to_string()),
-                            )
+                            // Other OAuth (ChatGPT) — yellow unofficial caution
+                            (id_pad, Some("⚠ unofficial".to_string()), None)
                         } else {
-                            (
-                                format!(
-                                    "{}{}  {}",
-                                    id,
-                                    " ".repeat(max_id_len.saturating_sub(display_width(id))),
-                                    auth_hint
-                                ),
-                                None,
-                            )
+                            (format!("{}  {}", id_pad, auth_hint), None, None)
                         };
                         SelectorItem {
                             label: s.provider.name().to_string(),
                             is_valid: s.authenticated,
                             hint,
                             warning,
+                            warning_color,
                         }
                     })
                     .collect();
@@ -199,6 +194,7 @@ impl App {
                             is_valid: true,
                             hint,
                             warning: None,
+                            warning_color: None,
                         }
                     })
                     .collect();
@@ -242,6 +238,7 @@ impl App {
                             is_valid: true,
                             hint,
                             warning: None,
+                            warning_color: None,
                         }
                     })
                     .collect();

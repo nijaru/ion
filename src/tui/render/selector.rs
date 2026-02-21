@@ -22,8 +22,10 @@ pub struct SelectorItem {
     pub label: String,
     pub is_valid: bool,
     pub hint: String,
-    /// Optional warning text (rendered in yellow).
+    /// Optional warning text.
     pub warning: Option<String>,
+    /// Color for the warning text. Defaults to Yellow if None.
+    pub warning_color: Option<RnkColor>,
 }
 
 /// Data needed to render the selector UI.
@@ -371,7 +373,7 @@ fn render_list<W: Write>(
                 &mut spans,
                 warning,
                 &mut remaining,
-                Some(RnkColor::Red),
+                Some(item.warning_color.unwrap_or(RnkColor::Yellow)),
                 default_bold,
                 default_dim,
             );
