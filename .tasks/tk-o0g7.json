@@ -19,10 +19,14 @@
     {
       "ts": "2026-02-22T10:23:03.040Z",
       "msg": "Rescoped: NOT a plugin system. Simple TOML config for OpenAI-compatible providers: name + base_url + api_key_env. Covers xAI, Mistral, Together AI, Perplexity, local vLLM/llama.cpp, any future OpenAI-compat endpoint. We already have the OpenAI client — parameterize base URL. ~50 lines. Cut the plugin/extension part; keep the config part."
+    },
+    {
+      "ts": "2026-02-22T10:24:41.986Z",
+      "msg": "Scope updated: (1) OpenAI-compat base_url config for xAI/Mistral/Together/Fireworks/Perplexity (~50 lines, do first). (2) Evaluate llm crate (graniet/llm v1.3.7) for replacing openai_compat/ layer and adding Cohere/HuggingFace/Bedrock — prior research rated it best fit (text+tools, streaming, thinking, cache, feature-flags, maps to StreamEvent). Risk: single maintainer, edition 2021. (3) Add common providers natively: DeepSeek already has quirks so needs own path; Mistral near OpenAI-compat; Cohere/Bedrock need new protocol code or llm crate. See ai/research/provider-crates-2026-02.md and ai/research/rust-llm-crates-survey-2026-02.md."
     }
   ],
   "created_at": "2026-01-30T04:14:13.261Z",
-  "updated_at": "2026-02-22T10:23:03.040Z",
+  "updated_at": "2026-02-22T10:24:41.986Z",
   "completed_at": null,
   "external": {}
 }
