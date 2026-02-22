@@ -93,6 +93,7 @@ tk done <id>             # Complete task
 - **Task tracking**: Use `tk` for all work
 - **Issue tracking**: When user reports bugs/issues, **immediately create a `tk` task**
 - **Versioning**: Staying at 0.0.0 until stable. First release will be 0.0.1. Do not bump version.
+- **Research before implementing**: Before building any feature, check how Claude Code, Codex, Pi, Amp, and OpenCode approach it. See `ai/research/` and `ai/research/feature-gap-analysis-2026-02.md`. Most coding agent problems are solved — start from proven patterns, not blank-slate design.
 
 ## Bug Investigation
 

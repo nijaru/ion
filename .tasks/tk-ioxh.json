@@ -15,10 +15,14 @@
     {
       "ts": "2026-02-22T03:02:30.250Z",
       "msg": "Basic sync subagent execution already exists (spawn_subagent tool, SubagentRegistry, run_subagent). This task is about evaluating async/parallel execution: running multiple subagents concurrently, background subagents, result aggregation. The foundation exists but parallel execution is not yet supported."
+    },
+    {
+      "ts": "2026-02-22T10:21:56.268Z",
+      "msg": "Rescoped after feature audit. Two concrete deliverables: (1) Parallel tool execution — when model returns multiple tool calls in one response, run them concurrently with join_all (Codex does this with FuturesOrdered). Speeds up every session. (2) Parallel subagent dispatch — spawn_subagent accepts multiple tasks, runs them all concurrently, returns all results. Foundation for RLM-style multi-agent work. Background/fire-and-forget excluded — too complex for TUI context. Sync execution exists; this task is about parallelism."
     }
   ],
   "created_at": "2026-02-14T09:12:11.209Z",
-  "updated_at": "2026-02-22T03:02:30.250Z",
+  "updated_at": "2026-02-22T10:21:56.268Z",
   "completed_at": null,
   "external": {}
 }
