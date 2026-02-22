@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "t861",
+  "title": "Shareable sessions / export",
+  "description": "Export session as shareable artifact. Minimum: markdown export of conversation. Stretch: shareable URL (requires backend). Use case: share a debugging session, document what the agent did. Implementation: session export command, renders MessageList to markdown with tool call/result formatting.",
+  "status": "open",
+  "priority": 4,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-02-22T02:48:50.162Z",
+  "updated_at": "2026-02-22T02:48:50.162Z",
+  "completed_at": null,
+  "external": {}
+}

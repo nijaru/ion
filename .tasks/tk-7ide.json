@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "7ide",
+  "title": "Context compaction",
+  "description": "Auto-summarize conversation when approaching context limit. Essential for long sessions — without it sessions die. Research: see ai/research/compaction-techniques-2026.md. Design: rolling summary injected into system prompt or as assistant turn before context fills. Must preserve tool results, decisions, and key file contents. Similar to Claude Code summarization.",
+  "status": "open",
+  "priority": 2,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-02-22T02:48:19.827Z",
+  "updated_at": "2026-02-22T02:48:19.827Z",
+  "completed_at": null,
+  "external": {}
+}

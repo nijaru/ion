@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "xhl5",
+  "title": "Plugin/extension system",
+  "description": "Distributable plugin system like Claude Code plugins / Pi-mono packages. Plugins can contribute: tools, hooks (pre/post tool), skills, providers. Distribution: git URL or local path. Install to ~/.ion/plugins/. Each plugin is a directory with manifest (ion-plugin.toml or similar). Phase 1: hooks system (pre/post tool execution callbacks). Phase 2: plugin loading + tool contribution. Phase 3: distribution/install.",
+  "status": "open",
+  "priority": 4,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-02-22T02:48:46.314Z",
+  "updated_at": "2026-02-22T02:48:46.314Z",
+  "completed_at": null,
+  "external": {}
+}

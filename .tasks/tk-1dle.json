@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "1dle",
+  "title": "Sub-agent execution",
+  "description": "Implement sub-agent spawning from within the main agent loop. Use case: context isolation for tasks where main agent doesn't need full context (web search, exploration, targeted code analysis). tk-ioxh evaluated the async model — close that task first. Design: sub-agent gets its own provider/session/tools subset, results returned as tool output to parent. Worktree support (isolated git state per sub-agent) is a stretch goal for this task.",
+  "status": "open",
+  "priority": 2,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-02-22T02:48:29.237Z",
+  "updated_at": "2026-02-22T02:48:29.237Z",
+  "completed_at": null,
+  "external": {}
+}
