@@ -23,10 +23,14 @@
     {
       "ts": "2026-02-22T10:24:41.986Z",
       "msg": "Scope updated: (1) OpenAI-compat base_url config for xAI/Mistral/Together/Fireworks/Perplexity (~50 lines, do first). (2) Evaluate llm crate (graniet/llm v1.3.7) for replacing openai_compat/ layer and adding Cohere/HuggingFace/Bedrock — prior research rated it best fit (text+tools, streaming, thinking, cache, feature-flags, maps to StreamEvent). Risk: single maintainer, edition 2021. (3) Add common providers natively: DeepSeek already has quirks so needs own path; Mistral near OpenAI-compat; Cohere/Bedrock need new protocol code or llm crate. See ai/research/provider-crates-2026-02.md and ai/research/rust-llm-crates-survey-2026-02.md."
+    },
+    {
+      "ts": "2026-02-22T10:34:06.224Z",
+      "msg": "Fresh research 2026-02-22: llm crate PASSES streaming+tool use (StreamChunk: ToolUseStart/Delta/Complete, incremental, text+tools coexist verified by test). BLOCKING GAP: system prompt cache_control not implemented — ion uses this for Anthropic prompt caching. Tool-level cache_control merged 2026-02-20 but not yet released (still v1.3.7). genai still disqualified: ToolCallChunks are accumulated+emitted once (not incremental), issue #60 unresolved. Plan: (1) OpenAI-compat base_url config first, (2) native providers for quirky ones (DeepSeek, Cohere), (3) re-evaluate llm crate after v1.4.0 ships with system prompt cache_control. See ai/research/provider-crates-fresh-2026-02.md."
     }
   ],
   "created_at": "2026-01-30T04:14:13.261Z",
-  "updated_at": "2026-02-22T10:24:41.986Z",
+  "updated_at": "2026-02-22T10:34:06.224Z",
   "completed_at": null,
   "external": {}
 }
