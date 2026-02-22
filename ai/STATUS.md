@@ -47,24 +47,43 @@
 
 See `tk ls` for full backlog (deferred: tk-t861, tk-vru7, tk-r11l, tk-nyqq).
 
+## Provider Expansion (tk-o0g7) — Current State
+
+**Strategy:** Add common providers natively. Don't route users through OpenRouter.
+
+| Path                             | Scope                                                     | Status                                               |
+| -------------------------------- | --------------------------------------------------------- | ---------------------------------------------------- |
+| OpenAI-compat base_url config    | xAI, Mistral, Together, Fireworks, Perplexity, local vLLM | Not started                                          |
+| Native: DeepSeek                 | Quirks already partially handled                          | Fix tk-3fm2 first                                    |
+| Native: Cohere, Bedrock, Mistral | New protocol paths                                        | Not started                                          |
+| `llm` crate adapter              | Replace openai_compat/ (~4k lines → ~200-line adapter)    | Blocked: no system prompt cache_control in crate yet |
+
+**`llm` crate (graniet/llm v1.3.7) verdict:** Passes streaming + incremental tool calls + text+tools coexistence (verified from source, has named test). Blocked on Anthropic system prompt `cache_control` — not implemented. Tool-level cache_control merged 2026-02-20 but not released. Watch for v1.4.0. See `ai/research/provider-crates-fresh-2026-02.md`.
+
+**`genai` verdict:** Still out — tool calls accumulated+emitted at end (not incremental), issue #60 unresolved.
+
 ## Recent Completed (2026-02-22)
 
+- **Provider crate research** — `llm` passes streaming/tool use (prior rejection reason resolved).
+  Blocked on system prompt `cache_control` for full migration. See research file above.
 - **Backlog audit** — Cut 4 over-engineered tasks (session branching, semantic memory,
   extensible OAuth, extensible providers). Closed 2 moot tasks (image clipboard paste,
   sandbox dirs config). Rescoped tk-ioxh as parallel tool execution + parallel subagent
-  dispatch. Added research-first rule to CLAUDE.md.
+  dispatch. Reopened tk-o0g7 with correct scope (native providers, not plugin system).
+  Added research-first rule to CLAUDE.md.
 - **OS sandbox (tk-oh88)** — Closed won't-do. Existing guards sufficient; OS sandbox
   breaks cargo/npm caches. See DECISIONS.md.
 - **Gemini OAuth ban warning** (tk-3vog) — red `⚠ violates ToS` label + confirm dialog.
 
 ## Key References
 
-| Topic                    | Location                                           |
-| ------------------------ | -------------------------------------------------- |
-| Compaction techniques    | `ai/research/compaction-techniques-2026.md`        |
-| Coding agents survey     | `ai/research/coding-agents-state-2026-02.md`       |
-| Feature gap analysis     | `ai/research/feature-gap-analysis-2026-02.md`      |
-| Tool architecture survey | `ai/research/tool-architecture-survey-2026-02.md`  |
-| TUI render review        | `ai/review/tui-render-layout-review-2026-02-20.md` |
-| TUI v3 architecture      | `ai/design/tui-v3-architecture-2026-02.md`         |
-| Config system design     | `ai/design/config-system.md`                       |
+| Topic                    | Location                                                |
+| ------------------------ | ------------------------------------------------------- |
+| Provider crate research  | `ai/research/provider-crates-fresh-2026-02.md` (latest) |
+| Provider crate survey    | `ai/research/provider-crates-2026-02.md`                |
+| Feature gap analysis     | `ai/research/feature-gap-analysis-2026-02.md`           |
+| Coding agents survey     | `ai/research/coding-agents-state-2026-02.md`            |
+| Compaction techniques    | `ai/research/compaction-techniques-2026.md`             |
+| Tool architecture survey | `ai/research/tool-architecture-survey-2026-02.md`       |
+| TUI render review        | `ai/review/tui-render-layout-review-2026-02-20.md`      |
+| Config system design     | `ai/design/config-system.md`                            |
