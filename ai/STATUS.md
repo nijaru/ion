@@ -36,7 +36,6 @@
 
 | Task    | Pri | Title                               | Notes                                            |
 | ------- | --- | ----------------------------------- | ------------------------------------------------ |
-| tk-oh88 | p3  | OS sandbox execution                | macOS Seatbelt / Linux Landlock (not path-based) |
 | tk-43cd | p3  | Persist MessageList display entries | Session continuity QoL                           |
 | tk-ioxh | p3  | Async subagent execution            | Parallel/background subagents                    |
 | tk-ltyy | p4  | ask_user tool                       | Agent-initiated clarification                    |
@@ -48,11 +47,10 @@
 | tk-4gm9 | p4  | Settings selector UI                | Not started                                      |
 | tk-ww4t | p4  | Formalize SQLite migrations         | Not started                                      |
 
-## Blockers
+## Recent Completed (2026-02-22)
 
-- tk-cmhy blocked by tk-oh88 (config for sandbox dirs needs OS sandbox first)
-
-## Recent Completed (2026-02-21)
+- **OS sandbox (tk-oh88)** — Closed won't-do. Existing guards sufficient;
+  OS sandbox breaks cargo/npm caches and adds install friction on Linux.
 
 - **Gemini OAuth ban warning** (tk-3vog) — red `⚠ violates ToS` label in provider list;
   confirm dialog before switching; ChatGPT stays yellow `⚠ unofficial`.
