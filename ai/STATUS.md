@@ -4,8 +4,8 @@
 
 | Metric    | Value                         | Updated    |
 | --------- | ----------------------------- | ---------- |
-| Phase     | Core agent completeness       | 2026-02-21 |
-| Status    | Feature audit complete        | 2026-02-21 |
+| Phase     | Core agent completeness       | 2026-02-22 |
+| Status    | OS sandbox evaluated + closed | 2026-02-22 |
 | Toolchain | stable                        | 2026-01-22 |
 | Tests     | 511 passing (`cargo test -q`) | 2026-02-20 |
 | Clippy    | clean                         | 2026-02-19 |
@@ -36,26 +36,21 @@
 
 | Task    | Pri | Title                               | Notes                                            |
 | ------- | --- | ----------------------------------- | ------------------------------------------------ |
+| tk-btlv | p3  | Image clipboard paste               | File attachment done; paste missing              |
 | tk-43cd | p3  | Persist MessageList display entries | Session continuity QoL                           |
 | tk-ioxh | p3  | Async subagent execution            | Parallel/background subagents                    |
 | tk-ltyy | p4  | ask_user tool                       | Agent-initiated clarification                    |
-| tk-btlv | p4  | Image clipboard paste               | File attachment done; paste missing              |
 | tk-71bb | p4  | ! bash passthrough mode             | Quick shell escape                               |
 | tk-xhl5 | p4  | Plugin distribution system          | Phase 1 (hooks) done; packages/install remaining |
-| tk-vdjk | p4  | Session branching                   | Not started                                      |
-| tk-t861 | p4  | Shareable sessions                  | Not started                                      |
-| tk-4gm9 | p4  | Settings selector UI                | Not started                                      |
-| tk-ww4t | p4  | Formalize SQLite migrations         | Not started                                      |
+
+See `tk ls` for full p4 backlog.
 
 ## Recent Completed (2026-02-22)
 
-- **OS sandbox (tk-oh88)** — Closed won't-do. Existing guards sufficient;
-  OS sandbox breaks cargo/npm caches and adds install friction on Linux.
-
-- **Gemini OAuth ban warning** (tk-3vog) — red `⚠ violates ToS` label in provider list;
-  confirm dialog before switching; ChatGPT stays yellow `⚠ unofficial`.
-- **Feature audit** — STATUS.md corrected; compaction/sub-agents/hooks/mid-turn steering
-  all already implemented; closed stale tasks (tk-7ide, tk-gzag, tk-1dle).
+- **OS sandbox (tk-oh88)** — Closed won't-do. Existing guards (analyze_command +
+  check_sandbox) sufficient; OS sandbox breaks cargo/npm caches, adds Linux
+  install friction. See DECISIONS.md.
+- **Gemini OAuth ban warning** (tk-3vog) — red `⚠ violates ToS` label + confirm dialog.
 
 ## Key References
 

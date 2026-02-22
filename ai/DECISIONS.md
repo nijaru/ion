@@ -2,6 +2,24 @@
 
 > Decision records for ion development. Pre-February decisions archived in `ai/DECISIONS-archive-jan.md`.
 
+## 2026-02-22: No OS-Level Bash Sandbox
+
+**Context**: Evaluated macOS Seatbelt (`sandbox-exec`) + Linux Landlock for restricting
+bash child processes. Implemented, reviewed, then discarded.
+
+**Decision**: Do not implement OS-level bash sandboxing. Keep existing guards only:
+`analyze_command()` (destructive pattern blocking) and `check_sandbox()` (app-level
+path enforcement for file tools).
+
+**Rationale**: OS sandbox breaks common dev workflows — `cargo build` fails when
+fetching new deps (writes to `~/.cargo/registry/`), same for npm/pip caches. Linux
+requires a co-installed helper binary (`ion-sandbox`) with its own install story.
+`sandbox-exec` is deprecated on macOS. The marginal protection over existing guards
+doesn't justify the UX cost. Per badlogic (pi): once an agent can write+exec code,
+filesystem sandboxing is a speed bump not a wall.
+
+---
+
 ## 2026-02-13: Keep Header Static; Move Location to Status Line
 
 **Context**: Dynamic startup header (including git branch lookup/rendering) increased resize/reflow complexity and contributed to visual duplication/noise during monitor/terminal churn.
@@ -74,9 +92,9 @@
 
 **Decision**: Sub-agents for context isolation; skills for behavior modification.
 
-| Type      | Context      | Examples                      |
-| --------- | ------------ | ----------------------------- |
-| Skills    | Same context | developer, designer, refactor |
+| Type       | Context      | Examples                       |
+| ---------- | ------------ | ------------------------------ |
+| Skills     | Same context | developer, designer, refactor  |
 | Sub-agents | Isolated     | explorer, researcher, reviewer |
 
 Binary model choice: fast (explorer only) vs full (everything else).
