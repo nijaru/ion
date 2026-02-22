@@ -3,7 +3,7 @@
   "ref": "7ide",
   "title": "Context compaction",
   "description": "Auto-summarize conversation when approaching context limit. Essential for long sessions — without it sessions die. Research: see ai/research/compaction-techniques-2026.md. Design: rolling summary injected into system prompt or as assistant turn before context fills. Must preserve tool results, decisions, and key file contents. Similar to Claude Code summarization.",
-  "status": "open",
+  "status": "done",
   "priority": 2,
   "labels": [],
   "assignees": [],
@@ -13,7 +13,7 @@
   "due_date": null,
   "logs": [],
   "created_at": "2026-02-22T02:48:19.827Z",
-  "updated_at": "2026-02-22T02:48:19.827Z",
-  "completed_at": null,
+  "updated_at": "2026-02-22T02:59:09.623Z",
+  "completed_at": "2026-02-22T02:59:09.623Z",
   "external": {}
 }
