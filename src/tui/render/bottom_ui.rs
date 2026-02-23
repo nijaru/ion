@@ -386,6 +386,8 @@ impl App {
             return vec![];
         }
 
+        let sl = &self.config.status_line;
+
         let model_name = self
             .session
             .model
@@ -403,32 +405,36 @@ impl App {
             ToolMode::Write => ("WRITE", Color::DarkYellow),
         };
         let think = self.thinking_level.label();
-        let branch = self.git_branch.as_deref();
+        let branch = if sl.show_branch { self.git_branch.as_deref() } else { None };
         let is_subscription = self.api_provider.is_oauth();
-        let cost_text = if is_subscription {
-            None
-        } else {
+        let cost_text = if sl.show_cost && !is_subscription {
             Some(format_cost(self.session_cost))
+        } else {
+            None
         };
 
-        let (pct_text, detail_text) = match self.token_usage {
-            Some((used, max)) if max > 0 => {
-                let pct = (used * 100) / max;
-                (
-                    format!("{pct}%"),
-                    Some(format!("({}/{})", format_tokens(used), format_tokens(max))),
-                )
+        let (pct_text, detail_text) = if sl.show_tokens {
+            match self.token_usage {
+                Some((used, max)) if max > 0 => {
+                    let pct = (used * 100) / max;
+                    (
+                        format!("{pct}%"),
+                        Some(format!("({}/{})", format_tokens(used), format_tokens(max))),
+                    )
+                }
+                Some((used, _)) if used > 0 => (format_tokens(used), None),
+                _ => (String::new(), None),
             }
-            Some((used, _)) if used > 0 => (format_tokens(used), None),
-            _ => (String::new(), None),
+        } else {
+            (String::new(), None)
         };
 
         // Segment widths (each includes its own " • " separator prefix).
         // Drop order: detail → model → diff stats → branch.
-        // Always shown: mode, short %, project. Cost shown for non-subscription providers.
+        // Always shown: mode, project. Cost/tokens/model/branch subject to config flags.
         let mode_w = mode_label.len() + 3; // " [MODE]" — mode_label is static ASCII
         let think_w = if think.is_empty() { 0 } else { 1 + display_width(think) };
-        let model_seg = 3 + display_width(model_name) + think_w; // " • model think"
+        let model_seg = if sl.show_model { 3 + display_width(model_name) + think_w } else { 0 };
         let think_seg = if think.is_empty() { 0 } else { 3 + display_width(think) }; // standalone
         // Build bar display: "██████ 45%" instead of plain "45%"
         let pct_display = if pct_text.is_empty() {
@@ -451,7 +457,7 @@ impl App {
         let detail_extra = detail_text.as_ref().map_or(0, |d| 1 + d.len()); // ASCII numbers
         let cost_seg = cost_text.as_ref().map_or(0, |c| 3 + c.len()); // ASCII "$0.12"
         let branch_extra = branch.map_or(0, |b| 3 + display_width(b)); // " • branch"
-        let diff_stat = self.git_diff_stat;
+        let diff_stat = if sl.show_git_diff { self.git_diff_stat } else { None };
         let diff_texts = diff_stat.map(|(ins, del)| (format!("+{ins}"), format!("-{del}")));
         let diff_extra = diff_texts
             .as_ref()
@@ -465,7 +471,7 @@ impl App {
         let w2 = mode_w + think_seg + pct_seg + cost_seg + proj_seg + branch_extra + diff_extra;
         let w3 = mode_w + think_seg + pct_seg + cost_seg + proj_seg + branch_extra;
 
-        let (show_model, show_detail, show_branch, show_diff) = if w0 <= max_cells {
+        let (show_model_adaptive, show_detail, show_branch_adaptive, show_diff_adaptive) = if w0 <= max_cells {
             (true, true, true, true)
         } else if w1 <= max_cells {
             (true, false, true, true)
@@ -477,6 +483,11 @@ impl App {
             (false, false, false, false)
         };
 
+        // Combine config flags with adaptive width flags.
+        let show_model_final = sl.show_model && show_model_adaptive;
+        let show_branch_final = show_branch_adaptive;
+        let show_diff_final = sl.show_git_diff && show_diff_adaptive;
+
         // Build spans.
         let mut spans = vec![
             ansi::Span::new(" ["),
@@ -484,7 +495,7 @@ impl App {
             ansi::Span::new("]"),
         ];
 
-        if show_model {
+        if show_model_final {
             spans.push(ansi::Span::new(" • "));
             spans.push(ansi::Span::new(model_name));
             if !think.is_empty() {
@@ -529,12 +540,12 @@ impl App {
 
         spans.push(ansi::Span::new(" • ").dim());
         spans.push(ansi::Span::new(project));
-        if show_branch
+        if show_branch_final
             && let Some(b) = branch
         {
             spans.push(ansi::Span::new(" • ").dim());
             spans.push(ansi::Span::new(b).color(Color::DarkCyan));
-            if show_diff
+            if show_diff_final
                 && let Some((ref ins, ref del)) = diff_texts
             {
                 spans.push(ansi::Span::new(format!(" {ins}")).color(Color::DarkGreen));
