@@ -3,7 +3,7 @@
   "ref": "ww4t",
   "title": "[ARCH] Formalize SQLite migrations for session store",
   "description": "Keep rusqlite storage backend; add migration crate and structured schema migrations to reduce manual PRAGMA version drift risk while preserving existing sessions/messages/input_history tables.",
-  "status": "open",
+  "status": "done",
   "priority": 4,
   "labels": [],
   "assignees": [],
@@ -15,10 +15,14 @@
     {
       "ts": "2026-02-11T23:33:52.054Z",
       "msg": "Planning context captured in ai/design/runtime-stack-integration-plan-2026-02.md. Keep rusqlite storage backend; add migration tooling only."
+    },
+    {
+      "ts": "2026-02-23T07:00:45.142Z",
+      "msg": "Existing if-version-<N chain in init_schema() is already structured and correct. Adding a crate would add complexity without benefit. Closing won't-do."
     }
   ],
   "created_at": "2026-02-11T23:32:50.931Z",
-  "updated_at": "2026-02-11T23:33:52.054Z",
-  "completed_at": null,
+  "updated_at": "2026-02-23T07:00:45.164Z",
+  "completed_at": "2026-02-23T07:00:45.164Z",
   "external": {}
 }

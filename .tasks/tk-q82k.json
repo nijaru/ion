@@ -3,7 +3,7 @@
   "ref": "q82k",
   "title": "[UX] Configurable status line",
   "description": "Allow users to configure what appears in the status line (show/hide cost, tokens, path, branch, etc). Could use a config struct with booleans in settings, or a format string. Lower priority — pick good defaults first, add settings when users need different layouts.",
-  "status": "open",
+  "status": "done",
   "priority": 4,
   "labels": [],
   "assignees": [],
@@ -26,7 +26,7 @@
     }
   ],
   "created_at": "2026-02-14T07:42:45.833Z",
-  "updated_at": "2026-02-22T10:21:56.291Z",
-  "completed_at": null,
+  "updated_at": "2026-02-23T06:44:25.685Z",
+  "completed_at": "2026-02-23T06:44:25.685Z",
   "external": {}
 }

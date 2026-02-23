@@ -3,7 +3,7 @@
   "ref": "71bb",
   "title": "! bash passthrough mode",
   "description": "Like Claude Code: prefix message with ! to run directly as shell command without going through LLM. Quick shell escape without leaving ion. Implementation: detect ! prefix in input handler, bypass agent loop, run via bash tool directly, show output in chat.",
-  "status": "open",
+  "status": "done",
   "priority": 4,
   "labels": [],
   "assignees": [],
@@ -13,7 +13,7 @@
   "due_date": null,
   "logs": [],
   "created_at": "2026-02-22T02:48:37.833Z",
-  "updated_at": "2026-02-22T02:48:37.833Z",
-  "completed_at": null,
+  "updated_at": "2026-02-23T06:37:19.133Z",
+  "completed_at": "2026-02-23T06:37:19.133Z",
   "external": {}
 }

@@ -3,7 +3,7 @@
   "ref": "iegz",
   "title": "[IDEA] OpenRouter provider routing modal - research whether needed or config-only",
   "description": null,
-  "status": "open",
+  "status": "done",
   "priority": 4,
   "labels": [],
   "assignees": [],
@@ -19,10 +19,14 @@
     {
       "ts": "2026-01-19T09:38:01.164Z",
       "msg": "Deprioritized - should be config-based, not modal"
+    },
+    {
+      "ts": "2026-02-23T07:00:49.011Z",
+      "msg": "Deprioritized: OpenRouter already supported as a provider; routing modal premature without actual users."
     }
   ],
   "created_at": "2026-01-18T19:29:03.274Z",
-  "updated_at": "2026-02-06T19:42:01.277Z",
-  "completed_at": null,
+  "updated_at": "2026-02-23T07:00:49.032Z",
+  "completed_at": "2026-02-23T07:00:49.032Z",
   "external": {}
 }
