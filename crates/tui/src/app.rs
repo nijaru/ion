@@ -116,17 +116,29 @@ pub struct AppBuilder<A: App> {
     mouse_capture: bool,
     focus_events: bool,
     bracketed_paste: bool,
+    msg_tx: mpsc::UnboundedSender<A::Message>,
+    msg_rx: mpsc::UnboundedReceiver<A::Message>,
 }
 
 impl<A: App> AppBuilder<A> {
     pub fn new(app: A) -> Self {
+        let (msg_tx, msg_rx) = mpsc::unbounded_channel();
         Self {
             app,
             mode: RenderMode::Fullscreen,
             mouse_capture: false,
             focus_events: false,
             bracketed_paste: false,
+            msg_tx,
+            msg_rx,
         }
+    }
+
+    /// Return a sender that can push messages into the app from external tasks.
+    ///
+    /// The sender is unbounded and can be cloned freely. Call before `run()`.
+    pub fn message_sender(&self) -> mpsc::UnboundedSender<A::Message> {
+        self.msg_tx.clone()
     }
 
     pub fn inline(mut self, height: u16) -> Self {
@@ -172,14 +184,13 @@ impl<A: App> AppBuilder<A> {
 
         let terminal = Terminal::new(self.mode)?;
         let area = terminal.render_area();
-        let (msg_tx, msg_rx) = mpsc::unbounded_channel::<A::Message>();
 
         let runner = AppRunner {
             app: self.app,
             terminal,
             prev_buf: Buffer::empty(area),
-            msg_tx,
-            msg_rx,
+            msg_tx: self.msg_tx,
+            msg_rx: self.msg_rx,
             dirty: true,
             mouse_capture: self.mouse_capture,
             focus_events: self.focus_events,
