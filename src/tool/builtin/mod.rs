@@ -1,3 +1,4 @@
+pub mod ask_user;
 mod ast_grep;
 mod bash;
 mod compact;
@@ -13,6 +14,7 @@ mod web_fetch;
 mod web_search;
 mod write;
 
+pub use ask_user::AskUserTool;
 pub use ast_grep::AstGrepTool;
 pub use bash::BashTool;
 pub use compact::{COMPACT_TOOL_NAME, CompactTool};
