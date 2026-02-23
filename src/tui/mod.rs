@@ -20,6 +20,7 @@ mod render;
 mod render_state;
 mod rnk_text;
 mod run;
+pub(crate) mod text;
 mod session;
 pub mod session_picker;
 mod table;
