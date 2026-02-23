@@ -1,0 +1,12 @@
+[package]
+name = "tui"
+version = "0.1.0"
+edition = "2024"
+license = "LicenseRef-PolyForm-Shield-1.0.0"
+
+[dependencies]
+crossterm    = "0.29"
+unicode-segmentation = "1.12"
+unicode-width = "0.2"
+bitflags     = "2"
+thiserror    = "2"
