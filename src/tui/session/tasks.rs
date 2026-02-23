@@ -1,5 +1,6 @@
 //! Agent task execution and summary tracking.
 
+use crate::agent::AgentEvent;
 use crate::tui::App;
 use crate::tui::attachment::parse_attachments;
 use crate::tui::message_list::Sender;
@@ -93,6 +94,59 @@ impl App {
             }
             // Always send session back - contains whatever work was done
             let _ = session_tx.send(updated_session).await;
+        });
+    }
+
+    /// Run a shell command directly, bypassing the agent loop.
+    ///
+    /// Output is streamed back through `agent_tx` as a `TextDelta` + `Finished`
+    /// so the existing event loop handles display and `is_running` teardown.
+    pub(in crate::tui) fn run_bash_passthrough(&mut self, cmd: String) {
+        self.message_list.push_user_message(format!("! {cmd}"));
+        self.is_running = true;
+        self.task.reset();
+
+        let tx = self.agent_tx.clone();
+        let working_dir = self.session.working_dir.clone();
+
+        tokio::spawn(async move {
+            use std::time::Duration;
+
+            let result = tokio::time::timeout(
+                Duration::from_secs(30),
+                tokio::process::Command::new("bash")
+                    .arg("-c")
+                    .arg(&cmd)
+                    .current_dir(&working_dir)
+                    .output(),
+            )
+            .await;
+
+            let output_str: Option<String> = match result {
+                Ok(Ok(out)) => {
+                    let stdout = String::from_utf8_lossy(&out.stdout);
+                    let stderr = String::from_utf8_lossy(&out.stderr);
+                    let combined = match (stdout.trim().is_empty(), stderr.trim().is_empty()) {
+                        (true, true) if out.status.success() => None,
+                        (true, true) => {
+                            Some(format!("exit {}", out.status.code().unwrap_or(-1)))
+                        }
+                        (false, true) => Some(stdout.trim_end().to_string()),
+                        (true, false) => Some(stderr.trim_end().to_string()),
+                        (false, false) => {
+                            Some(format!("{}\n{}", stdout.trim_end(), stderr.trim_end()))
+                        }
+                    };
+                    combined
+                }
+                Ok(Err(e)) => Some(format!("Error: {e}")),
+                Err(_) => Some("Timed out after 30 seconds".to_string()),
+            };
+
+            if let Some(text) = output_str {
+                let _ = tx.send(AgentEvent::TextDelta(text)).await;
+            }
+            let _ = tx.send(AgentEvent::Finished(String::new())).await;
         });
     }
 
