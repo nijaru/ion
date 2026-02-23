@@ -1,10 +1,15 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::{buffer::Buffer, geometry::Rect, layout::{Dimension, Edges, Layout, LayoutStyle}};
+use crate::{
+    buffer::Buffer,
+    geometry::Rect,
+    layout::{Dimension, Edges, Layout, LayoutStyle},
+};
 
 pub mod block;
 pub mod canvas;
 pub mod col;
+pub mod input;
 pub mod row;
 pub mod testing;
 pub mod text;
