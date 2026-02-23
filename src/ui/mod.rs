@@ -7,6 +7,7 @@ pub mod code_block;
 pub mod conversation;
 pub mod diff_view;
 pub mod streaming;
+pub mod style;
 pub mod tool_call;
 
 pub use code_block::CodeBlock;
