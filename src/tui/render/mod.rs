@@ -8,6 +8,7 @@
 )]
 
 mod bottom_ui;
+pub(crate) mod buffer;
 pub(crate) mod chat;
 mod direct;
 mod history;
