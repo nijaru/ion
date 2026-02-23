@@ -14,7 +14,6 @@ use crate::{
     buffer::Buffer,
     error::Result,
     event::{translate_event, Event, KeyCode, KeyModifiers},
-    geometry::Rect,
     layout::compute_layout,
     terminal::{RenderMode, Terminal},
     widgets::Element,
@@ -169,8 +168,7 @@ impl<A: App> AppBuilder<A> {
         }
 
         let terminal = Terminal::new(self.mode)?;
-        let size = terminal.size();
-        let area = Rect::new(0, 0, size.width, size.height);
+        let area = terminal.render_area();
         let (msg_tx, msg_rx) = mpsc::unbounded_channel::<A::Message>();
 
         let runner = AppRunner {
@@ -304,8 +302,11 @@ impl<A: App> AppRunner<A> {
     }
 
     fn render(&mut self) -> Result<()> {
-        let size = self.terminal.size();
-        let area = Rect::new(0, 0, size.width, size.height);
+        let area = self.terminal.render_area();
+        let size = crate::geometry::Size {
+            width: area.width,
+            height: area.height,
+        };
         let mut buf = Buffer::new(area);
 
         let root = self.app.view();
@@ -313,7 +314,7 @@ impl<A: App> AppRunner<A> {
         root.render(&layout, &mut buf);
 
         let commands = buf.diff(&self.prev_buf);
-        self.terminal.flush_commands(commands)?;
+        self.terminal.flush_commands(commands, area.height)?;
         self.prev_buf = buf;
         Ok(())
     }
