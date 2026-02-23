@@ -87,10 +87,21 @@ rnk removed. All styling via `src/tui/ansi.rs` using `crossterm::style::ContentS
 | 5     | `List` (virtual scroll), `Scroll`                       | Done   |
 | 6     | `Canvas`, `Theme`, `render_to_ansi`, inline mode polish | Done   |
 
-Key design: Elm-style `App` trait + `Effect` system. Taffy flexbox layout. Cell-based
+Key design: Elm-style `App` trait + `Effect` system (chosen over React hooks — scales
+better for LLM streaming state, more testable). Taffy flexbox layout. Cell-based
 double-buffered diff. Inline + fullscreen modes. Snapshot testing built in.
 
-**Next:** ion builds `ConversationView`, `StreamingText`, `ToolCallView` on top.
+**Two-layer architecture:**
+
+- `crates/tui/` — generic library, zero ion knowledge
+- `src/ui/` — agent-specific widgets built on `Canvas`: `StreamingText` ✓, `ConversationView` ✓, `ToolCallView` ✓
+
+**Up next (ion integration):** `CodeBlock` (syntax-highlighted), `DiffView`, then wire
+into ion's actual render loop to replace `src/tui/`.
+
+**Tool display format:** Follow Claude Code's `⏺ ToolName(args)` / `⎿ result` pattern
+for `ToolCallView` header and result display.
+
 Spec: `ai/design/tui-lib-spec.md`
 
 **Open design question:** Inline mode grow-direction. Current: grows downward from

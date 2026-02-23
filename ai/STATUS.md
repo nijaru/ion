@@ -2,13 +2,13 @@
 
 ## Current State
 
-| Metric    | Value                              | Updated    |
-| --------- | ---------------------------------- | ---------- |
-| Phase     | crates/tui Phase 6 complete        | 2026-02-23 |
-| Status    | TUI lib done; ion integration next | 2026-02-23 |
-| Toolchain | stable                             | 2026-01-22 |
-| Tests     | 566 passing                        | 2026-02-23 |
-| Clippy    | clean                              | 2026-02-22 |
+| Metric    | Value                                                                     | Updated    |
+| --------- | ------------------------------------------------------------------------- | ---------- |
+| Phase     | ion src/ui/ widgets in progress                                           | 2026-02-23 |
+| Status    | StreamingText/ConversationView/ToolCallView done; CodeBlock+DiffView next | 2026-02-23 |
+| Toolchain | stable                                                                    | 2026-01-22 |
+| Tests     | 578 passing                                                               | 2026-02-23 |
+| Clippy    | clean                                                                     | 2026-02-22 |
 
 ## Implemented Features
 

@@ -2,20 +2,42 @@
 
 > Decision records for ion development. Pre-February decisions archived in `ai/DECISIONS-archive-jan.md`.
 
+## 2026-02-23: Elm-Style App+Effect over React Hooks for `crates/tui`
+
+**Context**: rnk uses a React hooks model (`use_state`, `use_effect`). Considered adopting the
+same pattern for `crates/tui`.
+
+**Decision**: Use Elm-style `App` trait + `Effect` system instead.
+
+**Rationale**: React hooks get unwieldy at scale — LLM streaming involves a continuous byte
+stream, partial tool call JSON accumulating, multiple concurrent tool executions, and mutable
+conversation history. Mapping that onto `use_state`/`use_effect` creates impedance mismatch.
+Elm-style `update()` is pure, side effects go through `Effect`, state mutation is centralized.
+More testable, scales better to ion's complexity. Bubbletea (Go) uses this model successfully
+for similar workloads.
+
+---
+
 ## 2026-02-22: Build `crates/tui/` as a General-Purpose Library
 
 **Context**: ion's TUI was using rnk only for the bottom UI bar. rnk has been removed and replaced
 with direct crossterm calls. Evaluated whether to continue incrementally cleaning up ion's TUI or
 build a proper general-purpose library.
 
-**Decision**: Build `crates/tui/` as a standalone general-purpose TUI library crate, with ion as
-the first consumer. The library will have no knowledge of ion. ion builds agent-specific widgets
-(`ConversationView`, `StreamingText`, `ToolCallView`) on top.
+**Decision**: Build `crates/tui/` as a standalone general-purpose TUI library crate (workspace
+member), with ion as the first consumer. Two-layer architecture:
 
-**Rationale**: ion's inline rendering model, custom input handling, and streaming requirements all
-point toward owning the stack. The ion-specific cleanup (steps 1–8) revealed the right seams. The
-spec (`ai/design/tui-lib-spec.md`) is detailed enough to build from. A general-purpose library
-extracted from ion will be more useful than ion-specific glue code.
+- `crates/tui/` — generic library, zero ion knowledge; ion depends on it as a path dep
+- `src/ui/` — agent-specific widgets (`StreamingText`, `ConversationView`, `ToolCallView`, etc.)
+  built on `crates/tui`'s `Canvas` escape hatch; live in ion, not the library
+
+The library is designed to eventually be publishable independently. Ion drives the design during
+Phase 1; it won't be over-engineered for hypothetical future consumers.
+
+**Rationale**: ion needs maybe 6–8 custom widgets regardless of framework. The hard infrastructure
+(Taffy layout, tokio event loop, inline mode cursor math, double-buffered diff) is worth owning.
+rnk is young with no community; bugs become ion's problem. Owning the render loop means surgical
+per-widget dirty tracking at high token throughput.
 
 **Architecture**: Cell-based `Buffer`, Taffy layout, `App` trait + `Effect` system (Elm-style),
 `Element`/`Widget` tree. Full inline + fullscreen mode. Spec in `ai/design/tui-lib-spec.md`.
