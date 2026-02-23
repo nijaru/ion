@@ -10,7 +10,9 @@ pub mod block;
 pub mod canvas;
 pub mod col;
 pub mod input;
+pub mod list;
 pub mod row;
+pub mod scroll;
 pub mod testing;
 pub mod text;
 
