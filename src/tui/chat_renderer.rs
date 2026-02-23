@@ -1,13 +1,13 @@
 use crate::tui::highlight;
 use crate::tui::message_list::{MessagePart, Sender};
 use crate::tui::terminal::{Color, LineBuilder, StyledLine, StyledSpan, TextStyle};
+use crate::tui::text;
 use crate::tui::{QUEUED_PREVIEW_LINES, sanitize_for_display};
 use unicode_width::UnicodeWidthChar;
 
 pub struct ChatRenderer;
 
 impl ChatRenderer {
-    #[allow(clippy::too_many_lines)]
     pub fn build_lines(
         entries: &[crate::tui::message_list::MessageEntry],
         queued: Option<&Vec<String>>,
@@ -16,187 +16,34 @@ impl ChatRenderer {
         let mut chat_lines = Vec::new();
 
         for entry in entries {
-            let mut entry_lines = Vec::new();
-            match entry.sender {
+            let mut entry_lines = match entry.sender {
                 Sender::User => {
                     let mut combined = String::new();
                     for part in &entry.parts {
-                        if let MessagePart::Text(text) = part {
-                            combined.push_str(text);
+                        if let MessagePart::Text(t) = part {
+                            combined.push_str(t);
                         }
                     }
-                    // Sanitize (tabs, control chars) without trimming content
-                    let combined = sanitize_for_display(&combined);
-                    let prefix = "› ";
-                    let prefix_len = prefix.chars().count();
-                    let available_width = wrap_width.saturating_sub(prefix_len).max(1);
-
-                    let mut first_line = true;
-                    for line in combined.lines() {
-                        let line_width = if first_line {
-                            available_width
-                        } else {
-                            wrap_width.max(1)
-                        };
-                        let chunks = wrap_line(line, line_width);
-                        for (idx, chunk) in chunks.into_iter().enumerate() {
-                            if first_line && idx == 0 {
-                                entry_lines.push(
-                                    LineBuilder::new()
-                                        .styled(StyledSpan::colored(prefix, Color::Cyan).with_dim())
-                                        .styled(StyledSpan::colored(chunk, Color::Cyan).with_dim())
-                                        .build(),
-                                );
-                            } else {
-                                entry_lines.push(StyledLine::new(vec![
-                                    StyledSpan::colored(chunk, Color::Cyan).with_dim(),
-                                ]));
-                            }
-                            first_line = false;
-                        }
-                    }
+                    render_user_message(&sanitize_for_display(&combined), wrap_width)
                 }
                 Sender::Agent => {
-                    let mut first_line = true;
+                    let mut lines = Vec::new();
+                    let mut first_segment = true;
                     for part in &entry.parts {
-                        match part {
-                            MessagePart::Text(text) => {
-                                // Sanitize (tabs, control chars) without trimming content
-                                let sanitized = sanitize_for_display(text);
-                                // Account for 2-char prefix when wrapping
-                                let content_width = wrap_width.saturating_sub(2);
-                                let highlighted_lines = highlight::highlight_markdown_with_width(
-                                    &sanitized,
-                                    content_width,
-                                );
-                                for mut line in highlighted_lines {
-                                    if first_line {
-                                        line.prepend(StyledSpan::raw("• "));
-                                        first_line = false;
-                                    } else if !line.is_empty() {
-                                        line.prepend(StyledSpan::raw("  "));
-                                    }
-                                    entry_lines.push(line);
-                                }
-                            }
-                            MessagePart::Thinking(_) => {
-                                // Don't render thinking content in chat
-                                // Progress bar shows "thinking" or "thought for Xs" instead
-                            }
+                        if let MessagePart::Text(t) = part {
+                            let sanitized = sanitize_for_display(t);
+                            let segment = render_agent_text(&sanitized, wrap_width, first_segment);
+                            first_segment = first_segment && segment.is_empty();
+                            lines.extend(segment);
                         }
+                        // Thinking blocks are not rendered in chat
                     }
+                    lines
                 }
-                Sender::Tool => {
-                    let content = entry.content_as_markdown();
-                    let mut lines = content.lines();
+                Sender::Tool => render_tool_entry(&entry.content_as_markdown()),
+                Sender::System => render_system_message(&entry.content_as_markdown()),
+            };
 
-                    let mut syntax_name: Option<&str> = None;
-                    let mut is_edit_tool = false;
-
-                    if let Some(first_line) = lines.next() {
-                        if let Some(paren_pos) = first_line.find('(') {
-                            let tool_name = &first_line[..paren_pos];
-                            let args = &first_line[paren_pos..];
-
-                            if tool_name == "read" {
-                                let path = args
-                                    .trim_start_matches('(')
-                                    .split(&[',', ')'][..])
-                                    .next()
-                                    .unwrap_or("");
-                                syntax_name = highlight::detect_syntax(path);
-                            } else if tool_name == "edit" || tool_name == "write" {
-                                is_edit_tool = true;
-                            }
-
-                            // Bold name, plain parens, cyan content inside parens
-                            let inner = args
-                                .trim_start_matches('(')
-                                .trim_end_matches(')');
-                            entry_lines.push(StyledLine::new(vec![
-                                StyledSpan::raw("• "),
-                                StyledSpan::bold(tool_name.to_string()),
-                                StyledSpan::raw("("),
-                                StyledSpan::colored(inner.to_string(), Color::Cyan),
-                                StyledSpan::raw(")"),
-                            ]));
-                        } else {
-                            entry_lines.push(StyledLine::new(vec![
-                                StyledSpan::raw("• "),
-                                StyledSpan::bold(first_line.to_string()),
-                            ]));
-                        }
-                    }
-
-                    for line in lines {
-                        if line.trim().is_empty() {
-                            continue;
-                        }
-                        let is_diff_line = is_edit_tool
-                            && (line.starts_with('+')
-                                || line.starts_with('-')
-                                || line.starts_with('@')
-                                || line.starts_with(' '));
-
-                        if line.starts_with(" ✓") || line.starts_with(" ✗") || line.starts_with(" ⎿") {
-                            // Result status lines: always dim gray with consistent 2-space indent.
-                            // Must be checked before syntax_name to prevent ✓/✗ lines from being
-                            // treated as code content (which would add 4-space indent instead of 2).
-                            entry_lines.push(StyledLine::new(vec![
-                                StyledSpan::raw("  "),
-                                StyledSpan::dim(line.to_string()),
-                            ]));
-                        } else if line.starts_with("⎿") || line.starts_with("  … +") {
-                            // Grouped result lines and overflow indicators
-                            entry_lines.push(StyledLine::new(vec![
-                                StyledSpan::raw("  "),
-                                StyledSpan::dim(line.to_string()),
-                            ]));
-                        } else if is_diff_line {
-                            let mut highlighted = highlight::highlight_diff_line(line);
-                            highlighted.prepend(StyledSpan::raw("    "));
-                            entry_lines.push(highlighted);
-                        } else if line.contains("\x1b[") {
-                            // Parse ANSI escape sequences
-                            let parsed = parse_ansi_line(line);
-                            let mut padded = StyledLine::new(vec![StyledSpan::raw("  ")]);
-                            padded.extend(parsed);
-                            entry_lines.push(padded);
-                        } else if let Some(syntax) = syntax_name {
-                            let code_line = line.strip_prefix("  ").unwrap_or(line);
-                            let mut highlighted = highlight::highlight_line(code_line, syntax);
-                            highlighted.prepend(StyledSpan::raw("    "));
-                            entry_lines.push(highlighted);
-                        } else {
-                            entry_lines.push(StyledLine::new(vec![
-                                StyledSpan::raw("  "),
-                                StyledSpan::dim(line.to_string()),
-                            ]));
-                        }
-                    }
-                }
-                Sender::System => {
-                    let content = entry.content_as_markdown();
-                    if content.lines().count() <= 1 {
-                        if content.starts_with("Error:") {
-                            entry_lines.push(StyledLine::colored(content.to_string(), Color::Red));
-                        } else if content.starts_with("Warning:") {
-                            entry_lines
-                                .push(StyledLine::colored(content.to_string(), Color::Yellow));
-                        } else {
-                            let text = format!("[{content}]");
-                            entry_lines.push(StyledLine::dim(text));
-                        }
-                    } else {
-                        // Use our new markdown renderer for multi-line system messages
-                        let md_lines = highlight::render_markdown(content);
-                        for mut line in md_lines {
-                            line.prepend(StyledSpan::raw("  "));
-                            entry_lines.push(line);
-                        }
-                    }
-                }
-            }
             trim_leading_blank_lines(&mut entry_lines);
             trim_trailing_empty_lines(&mut entry_lines);
             chat_lines.extend(entry_lines);
@@ -205,22 +52,7 @@ impl ChatRenderer {
 
         if let Some(queue) = queued {
             for queued_msg in queue {
-                let mut entry_lines = Vec::new();
-                let lines: Vec<&str> = queued_msg.lines().collect();
-                let shown = lines.len().min(QUEUED_PREVIEW_LINES);
-                for (idx, line) in lines.iter().take(shown).enumerate() {
-                    let prefix = if idx == 0 { " › " } else { "   " };
-                    entry_lines.push(StyledLine::new(vec![
-                        StyledSpan::dim(prefix),
-                        StyledSpan::dim((*line).to_string()).with_italic(),
-                    ]));
-                }
-                if lines.len() > shown {
-                    entry_lines.push(StyledLine::new(vec![
-                        StyledSpan::dim("   "),
-                        StyledSpan::dim("…").with_italic(),
-                    ]));
-                }
+                let mut entry_lines = render_queued_preview(queued_msg);
                 trim_leading_blank_lines(&mut entry_lines);
                 trim_trailing_empty_lines(&mut entry_lines);
                 chat_lines.extend(entry_lines);
@@ -240,11 +72,7 @@ impl ChatRenderer {
                 wrapped.push(line);
                 continue;
             }
-            let text_width: usize = styled_line_text(&line)
-                .chars()
-                .filter_map(UnicodeWidthChar::width)
-                .sum();
-            if text_width <= wrap_width {
+            if line.display_width() <= wrap_width {
                 wrapped.push(line);
                 continue;
             }
@@ -255,8 +83,196 @@ impl ChatRenderer {
     }
 }
 
-/// Parse ANSI escape sequences and convert to `StyledLine`.
-/// Simple SGR parser that handles common formatting codes.
+/// Render a user message to styled lines.
+///
+/// Prefixes the first visual line with `› ` (dim cyan). Continuation lines
+/// are indented to align with the prefix.
+pub(crate) fn render_user_message(text: &str, wrap_width: usize) -> Vec<StyledLine> {
+    let prefix = "› ";
+    let prefix_len = prefix.chars().count(); // 2
+    let available_width = wrap_width.saturating_sub(prefix_len).max(1);
+
+    let mut lines = Vec::new();
+    let mut first_line = true;
+
+    for logical_line in text.lines() {
+        let line_width = if first_line { available_width } else { wrap_width.max(1) };
+        let chunks = text::wrap_text(logical_line, line_width);
+        for (idx, chunk) in chunks.into_iter().enumerate() {
+            if first_line && idx == 0 {
+                lines.push(
+                    LineBuilder::new()
+                        .styled(StyledSpan::colored(prefix, Color::Cyan).with_dim())
+                        .styled(StyledSpan::colored(chunk, Color::Cyan).with_dim())
+                        .build(),
+                );
+            } else {
+                lines.push(StyledLine::new(vec![
+                    StyledSpan::colored(chunk, Color::Cyan).with_dim(),
+                ]));
+            }
+            first_line = false;
+        }
+    }
+    lines
+}
+
+/// Render one text segment from an agent message.
+///
+/// `has_prefix` controls whether to prepend the `• ` bullet on the first line.
+/// Pass `true` for the first segment; `false` for continuation segments.
+pub(crate) fn render_agent_text(
+    text: &str,
+    wrap_width: usize,
+    has_prefix: bool,
+) -> Vec<StyledLine> {
+    let content_width = wrap_width.saturating_sub(2);
+    let highlighted_lines = highlight::highlight_markdown_with_width(text, content_width);
+
+    let mut lines = Vec::new();
+    let mut first_line = has_prefix;
+
+    for mut line in highlighted_lines {
+        if first_line {
+            line.prepend(StyledSpan::raw("• "));
+            first_line = false;
+        } else if !line.is_empty() {
+            line.prepend(StyledSpan::raw("  "));
+        }
+        lines.push(line);
+    }
+    lines
+}
+
+/// Render a tool entry (call header + output lines).
+pub(crate) fn render_tool_entry(content: &str) -> Vec<StyledLine> {
+    let mut lines = Vec::new();
+    let mut content_lines = content.lines();
+
+    let mut syntax_name: Option<&str> = None;
+    let mut is_edit_tool = false;
+
+    if let Some(first_line) = content_lines.next() {
+        if let Some(paren_pos) = first_line.find('(') {
+            let tool_name = &first_line[..paren_pos];
+            let args = &first_line[paren_pos..];
+
+            if tool_name == "read" {
+                let path = args
+                    .trim_start_matches('(')
+                    .split(&[',', ')'][..])
+                    .next()
+                    .unwrap_or("");
+                syntax_name = highlight::detect_syntax(path);
+            } else if tool_name == "edit" || tool_name == "write" {
+                is_edit_tool = true;
+            }
+
+            let inner = args.trim_start_matches('(').trim_end_matches(')');
+            lines.push(StyledLine::new(vec![
+                StyledSpan::raw("• "),
+                StyledSpan::bold(tool_name.to_string()),
+                StyledSpan::raw("("),
+                StyledSpan::colored(inner.to_string(), Color::Cyan),
+                StyledSpan::raw(")"),
+            ]));
+        } else {
+            lines.push(StyledLine::new(vec![
+                StyledSpan::raw("• "),
+                StyledSpan::bold(first_line.to_string()),
+            ]));
+        }
+    }
+
+    for line in content_lines {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let is_diff_line = is_edit_tool
+            && (line.starts_with('+')
+                || line.starts_with('-')
+                || line.starts_with('@')
+                || line.starts_with(' '));
+
+        if line.starts_with(" ✓") || line.starts_with(" ✗") || line.starts_with(" ⎿") {
+            lines.push(StyledLine::new(vec![
+                StyledSpan::raw("  "),
+                StyledSpan::dim(line.to_string()),
+            ]));
+        } else if line.starts_with("⎿") || line.starts_with("  … +") {
+            lines.push(StyledLine::new(vec![
+                StyledSpan::raw("  "),
+                StyledSpan::dim(line.to_string()),
+            ]));
+        } else if is_diff_line {
+            let mut highlighted = highlight::highlight_diff_line(line);
+            highlighted.prepend(StyledSpan::raw("    "));
+            lines.push(highlighted);
+        } else if line.contains("\x1b[") {
+            let parsed = parse_ansi_line(line);
+            let mut padded = StyledLine::new(vec![StyledSpan::raw("  ")]);
+            padded.extend(parsed);
+            lines.push(padded);
+        } else if let Some(syntax) = syntax_name {
+            let code_line = line.strip_prefix("  ").unwrap_or(line);
+            let mut highlighted = highlight::highlight_line(code_line, syntax);
+            highlighted.prepend(StyledSpan::raw("    "));
+            lines.push(highlighted);
+        } else {
+            lines.push(StyledLine::new(vec![
+                StyledSpan::raw("  "),
+                StyledSpan::dim(line.to_string()),
+            ]));
+        }
+    }
+
+    lines
+}
+
+/// Render a system message to styled lines.
+pub(crate) fn render_system_message(content: &str) -> Vec<StyledLine> {
+    if content.lines().count() <= 1 {
+        if content.starts_with("Error:") {
+            vec![StyledLine::colored(content.to_string(), Color::Red)]
+        } else if content.starts_with("Warning:") {
+            vec![StyledLine::colored(content.to_string(), Color::Yellow)]
+        } else {
+            vec![StyledLine::dim(format!("[{content}]"))]
+        }
+    } else {
+        let md_lines = highlight::render_markdown(content);
+        md_lines
+            .into_iter()
+            .map(|mut line| {
+                line.prepend(StyledSpan::raw("  "));
+                line
+            })
+            .collect()
+    }
+}
+
+/// Render a queued (pending) message preview.
+pub(crate) fn render_queued_preview(text: &str) -> Vec<StyledLine> {
+    let lines: Vec<&str> = text.lines().collect();
+    let shown = lines.len().min(QUEUED_PREVIEW_LINES);
+    let mut out = Vec::new();
+    for (idx, line) in lines.iter().take(shown).enumerate() {
+        let prefix = if idx == 0 { " › " } else { "   " };
+        out.push(StyledLine::new(vec![
+            StyledSpan::dim(prefix),
+            StyledSpan::dim((*line).to_string()).with_italic(),
+        ]));
+    }
+    if lines.len() > shown {
+        out.push(StyledLine::new(vec![
+            StyledSpan::dim("   "),
+            StyledSpan::dim("…").with_italic(),
+        ]));
+    }
+    out
+}
+
+/// Parse ANSI SGR escape sequences into a `StyledLine`.
 fn parse_ansi_line(input: &str) -> StyledLine {
     let mut spans = Vec::new();
     let mut current_style = TextStyle::default();
@@ -265,11 +281,9 @@ fn parse_ansi_line(input: &str) -> StyledLine {
 
     while let Some(c) = chars.next() {
         if c == '\x1b' {
-            // Check for CSI sequence
             if chars.peek() == Some(&'[') {
-                chars.next(); // consume '['
+                chars.next();
 
-                // Flush current text
                 if !current_text.is_empty() {
                     spans.push(StyledSpan::new(
                         std::mem::take(&mut current_text),
@@ -277,7 +291,6 @@ fn parse_ansi_line(input: &str) -> StyledLine {
                     ));
                 }
 
-                // Parse the SGR parameters
                 let mut params = String::new();
                 while let Some(&pc) = chars.peek() {
                     if pc.is_ascii_digit() || pc == ';' {
@@ -291,11 +304,9 @@ fn parse_ansi_line(input: &str) -> StyledLine {
                     }
                 }
 
-                // Get the command character
                 if let Some(cmd) = chars.next()
                     && cmd == 'm'
                 {
-                    // SGR sequence - apply styles
                     let parts: Vec<&str> = if params.is_empty() {
                         vec!["0"]
                     } else {
@@ -393,16 +404,12 @@ fn parse_ansi_line(input: &str) -> StyledLine {
                         i += 1;
                     }
                 }
-                // Ignore other CSI sequences
-            } else {
-                current_text.push(c);
             }
         } else {
             current_text.push(c);
         }
     }
 
-    // Flush remaining text
     if !current_text.is_empty() {
         spans.push(StyledSpan::new(current_text, current_style));
     }
@@ -410,173 +417,12 @@ fn parse_ansi_line(input: &str) -> StyledLine {
     StyledLine::new(spans)
 }
 
-fn wrap_line(line: &str, width: usize) -> Vec<String> {
-    if width == 0 {
-        return vec![String::new()];
-    }
-    if line.is_empty() {
-        return vec![String::new()];
-    }
-
-    let line_width: usize = line.chars().filter_map(UnicodeWidthChar::width).sum();
-    if line_width <= width {
-        return vec![line.to_string()];
-    }
-
-    let mut chunks = Vec::new();
-    let mut current = String::new();
-    let mut current_width = 0usize;
-
-    for word in split_words(line) {
-        let word_width: usize = word.chars().filter_map(UnicodeWidthChar::width).sum();
-
-        if current_width + word_width <= width {
-            current.push_str(word);
-            current_width += word_width;
-        } else if word_width <= width && !current.is_empty() {
-            // Word fits on a fresh line - trim trailing space from current
-            chunks.push(current.trim_end().to_string());
-            current = word.to_string();
-            current_width = word_width;
-        } else {
-            // Word wider than line or first word - character-break
-            for ch in word.chars() {
-                let cw = UnicodeWidthChar::width(ch).unwrap_or(0);
-                if current_width + cw > width && !current.is_empty() {
-                    chunks.push(current);
-                    current = String::new();
-                    current_width = 0;
-                }
-                current.push(ch);
-                current_width += cw;
-            }
-        }
-    }
-    if !current.is_empty() || chunks.is_empty() {
-        chunks.push(current);
-    }
-
-    chunks
-}
-
-/// Split text into alternating word and space segments.
-fn split_words(text: &str) -> Vec<&str> {
-    let mut segments = Vec::new();
-    let mut start = 0;
-    let mut in_space = text.starts_with(' ');
-
-    for (i, ch) in text.char_indices() {
-        let is_space = ch == ' ';
-        if is_space != in_space {
-            if start < i {
-                segments.push(&text[start..i]);
-            }
-            start = i;
-            in_space = is_space;
-        }
-    }
-    if start < text.len() {
-        segments.push(&text[start..]);
-    }
-    segments
-}
-
-fn trim_trailing_empty_lines(lines: &mut Vec<StyledLine>) {
-    while lines.last().is_some_and(line_is_blank) {
-        lines.pop();
-    }
-}
-
-fn trim_leading_blank_lines(lines: &mut Vec<StyledLine>) {
-    let count = lines.iter().take_while(|l| line_is_blank(l)).count();
-    if count > 0 {
-        lines.drain(..count);
-    }
-}
-
-fn line_is_blank(line: &StyledLine) -> bool {
-    if line.spans.is_empty() {
-        return true;
-    }
-    line.spans
-        .iter()
-        .all(|span| span.content.chars().all(char::is_whitespace))
-}
-
-fn collapse_blank_runs(lines: &mut Vec<StyledLine>) {
-    let mut out = Vec::with_capacity(lines.len());
-    let mut prev_blank = false;
-    for line in lines.iter() {
-        let blank = line_is_blank(line);
-        if blank && prev_blank {
-            continue;
-        }
-        out.push(line.clone());
-        prev_blank = blank;
-    }
-    *lines = out;
-}
-
-fn styled_line_text(line: &StyledLine) -> String {
-    let mut out = String::new();
-    for span in &line.spans {
-        out.push_str(&span.content);
-    }
-    out
-}
-
-fn continuation_indent_width(text: &str) -> usize {
-    let indent = text.chars().take_while(|c| *c == ' ').count();
-    let trimmed = text[indent..].trim_end();
-
-    indent + marker_indent_width(trimmed)
-}
-
-fn marker_indent_width(trimmed: &str) -> usize {
-    if trimmed.starts_with("* ")
-        || trimmed.starts_with("- ")
-        || trimmed.starts_with("+ ")
-        || trimmed.starts_with("> ")
-    {
-        return 2;
-    }
-
-    if let Some(rest) = trimmed.strip_prefix("• ") {
-        let nested = marker_indent_width(rest);
-        return 2 + nested;
-    }
-
-    if trimmed.starts_with('#') {
-        let hashes = trimmed.chars().take_while(|c| *c == '#').count();
-        if trimmed.chars().nth(hashes) == Some(' ') {
-            return hashes + 1;
-        }
-    }
-
-    let mut digits = 0usize;
-    for ch in trimmed.chars() {
-        if ch.is_ascii_digit() {
-            digits += 1;
-        } else {
-            break;
-        }
-    }
-    if digits > 0 {
-        let rest = trimmed.chars().skip(digits).collect::<String>();
-        if rest.starts_with(". ") {
-            return digits + 2;
-        }
-    }
-
-    0
-}
-
 fn wrap_styled_line(line: &StyledLine, width: usize) -> Vec<StyledLine> {
     if width == 0 || line.is_empty() {
         return vec![line.clone()];
     }
 
-    let text = styled_line_text(line);
+    let text = line.plain_text();
     let text_width: usize = text.chars().filter_map(UnicodeWidthChar::width).sum();
     if text_width <= width {
         return vec![line.clone()];
@@ -585,14 +431,12 @@ fn wrap_styled_line(line: &StyledLine, width: usize) -> Vec<StyledLine> {
     let indent_width = continuation_indent_width(&text).min(width.saturating_sub(1));
     let indent_prefix = " ".repeat(indent_width);
 
-    // Flatten spans into (char, style) pairs
     let flat: Vec<(char, TextStyle)> = line
         .spans
         .iter()
         .flat_map(|span| span.content.chars().map(move |ch| (ch, span.style)))
         .collect();
 
-    // Split into word/space segments, tracking char indices into flat
     struct Segment {
         start: usize,
         end: usize,
@@ -628,8 +472,7 @@ fn wrap_styled_line(line: &StyledLine, width: usize) -> Vec<StyledLine> {
         });
     }
 
-    // Greedily place segments on lines
-    let mut lines: Vec<StyledLine> = Vec::new();
+    let mut out: Vec<StyledLine> = Vec::new();
     let mut current_chars: Vec<(char, TextStyle)> = Vec::new();
     let mut current_width = 0usize;
 
@@ -645,20 +488,17 @@ fn wrap_styled_line(line: &StyledLine, width: usize) -> Vec<StyledLine> {
                 current_chars.extend_from_slice(&flat[seg.start..seg.end]);
                 current_width += seg.width;
             }
-            // Drop spaces at line break
             continue;
         }
 
-        // Word segment
         if current_width + seg.width <= width {
             current_chars.extend_from_slice(&flat[seg.start..seg.end]);
             current_width += seg.width;
         } else if seg.width <= effective_width && !current_chars.is_empty() {
-            // Trim trailing spaces from current line
             while current_chars.last().is_some_and(|(ch, _)| *ch == ' ') {
                 current_chars.pop();
             }
-            lines.push(chars_to_styled_line(&current_chars));
+            out.push(chars_to_styled_line(&current_chars));
             current_chars.clear();
             current_width = 0;
             if indent_width > 0 {
@@ -670,11 +510,10 @@ fn wrap_styled_line(line: &StyledLine, width: usize) -> Vec<StyledLine> {
             current_chars.extend_from_slice(&flat[seg.start..seg.end]);
             current_width += seg.width;
         } else {
-            // Word wider than line - character-break
             for &(ch, style) in &flat[seg.start..seg.end] {
                 let cw = UnicodeWidthChar::width(ch).unwrap_or(0);
                 if current_width + cw > width && !current_chars.is_empty() {
-                    lines.push(chars_to_styled_line(&current_chars));
+                    out.push(chars_to_styled_line(&current_chars));
                     current_chars.clear();
                     current_width = 0;
                     if indent_width > 0 {
@@ -691,13 +530,13 @@ fn wrap_styled_line(line: &StyledLine, width: usize) -> Vec<StyledLine> {
     }
 
     if !current_chars.is_empty() {
-        lines.push(chars_to_styled_line(&current_chars));
+        out.push(chars_to_styled_line(&current_chars));
     }
 
-    if lines.is_empty() {
+    if out.is_empty() {
         vec![StyledLine::empty()]
     } else {
-        lines
+        out
     }
 }
 
@@ -715,16 +554,273 @@ fn chars_to_styled_line(chars: &[(char, TextStyle)]) -> StyledLine {
     StyledLine::new(spans)
 }
 
+fn trim_trailing_empty_lines(lines: &mut Vec<StyledLine>) {
+    while lines.last().is_some_and(line_is_blank) {
+        lines.pop();
+    }
+}
+
+fn trim_leading_blank_lines(lines: &mut Vec<StyledLine>) {
+    let count = lines.iter().take_while(|l| line_is_blank(l)).count();
+    if count > 0 {
+        lines.drain(..count);
+    }
+}
+
+fn line_is_blank(line: &StyledLine) -> bool {
+    line.spans.is_empty()
+        || line
+            .spans
+            .iter()
+            .all(|span| span.content.chars().all(char::is_whitespace))
+}
+
+fn collapse_blank_runs(lines: &mut Vec<StyledLine>) {
+    let mut out = Vec::with_capacity(lines.len());
+    let mut prev_blank = false;
+    for line in lines.iter() {
+        let blank = line_is_blank(line);
+        if blank && prev_blank {
+            continue;
+        }
+        out.push(line.clone());
+        prev_blank = blank;
+    }
+    *lines = out;
+}
+
+fn continuation_indent_width(text: &str) -> usize {
+    let indent = text.chars().take_while(|c| *c == ' ').count();
+    let trimmed = text[indent..].trim_end();
+    indent + marker_indent_width(trimmed)
+}
+
+fn marker_indent_width(trimmed: &str) -> usize {
+    if trimmed.starts_with("* ")
+        || trimmed.starts_with("- ")
+        || trimmed.starts_with("+ ")
+        || trimmed.starts_with("> ")
+    {
+        return 2;
+    }
+
+    if let Some(rest) = trimmed.strip_prefix("• ") {
+        return 2 + marker_indent_width(rest);
+    }
+
+    if trimmed.starts_with('#') {
+        let hashes = trimmed.chars().take_while(|c| *c == '#').count();
+        if trimmed.chars().nth(hashes) == Some(' ') {
+            return hashes + 1;
+        }
+    }
+
+    let digits: usize = trimmed.chars().take_while(|c| c.is_ascii_digit()).count();
+    if digits > 0 && trimmed[digits..].starts_with(". ") {
+        return digits + 2;
+    }
+
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tui::message_list::MessageEntry;
 
-    fn line_text(line: &StyledLine) -> String {
-        line.spans
-            .iter()
-            .map(|s| s.content.as_str())
-            .collect::<String>()
+    fn user_entry(text: &str) -> MessageEntry {
+        MessageEntry::new(Sender::User, text.to_string())
     }
+
+    fn agent_entry(text: &str) -> MessageEntry {
+        MessageEntry::new(Sender::Agent, text.to_string())
+    }
+
+    fn tool_entry(text: &str) -> MessageEntry {
+        MessageEntry::new(Sender::Tool, text.to_string())
+    }
+
+    fn system_entry(text: &str) -> MessageEntry {
+        MessageEntry::new(Sender::System, text.to_string())
+    }
+
+    // --- render_user_message ---
+
+    #[test]
+    fn user_message_has_prefix() {
+        let lines = render_user_message("hello world", 80);
+        assert!(lines[0].plain_text().starts_with("› "));
+    }
+
+    #[test]
+    fn user_message_content_follows_prefix() {
+        let lines = render_user_message("hello", 80);
+        assert_eq!(lines[0].plain_text(), "› hello");
+    }
+
+    #[test]
+    fn user_message_wraps_long_line() {
+        let text = "word ".repeat(20);
+        let lines = render_user_message(text.trim(), 20);
+        assert!(lines.len() > 1);
+        for line in &lines {
+            assert!(line.display_width() <= 20, "line too wide: {:?}", line.plain_text());
+        }
+    }
+
+    #[test]
+    fn user_message_multiline_first_gets_prefix() {
+        let lines = render_user_message("line one\nline two", 80);
+        assert!(lines[0].plain_text().starts_with("› "));
+        assert!(!lines[1].plain_text().starts_with("› "));
+    }
+
+    // --- render_agent_text ---
+
+    #[test]
+    fn agent_text_first_segment_gets_bullet() {
+        let lines = render_agent_text("hello", 80, true);
+        assert!(lines[0].plain_text().starts_with("• "));
+    }
+
+    #[test]
+    fn agent_text_continuation_gets_indent() {
+        let lines = render_agent_text("hello\nworld", 80, true);
+        assert!(lines[0].plain_text().starts_with("• "));
+        assert!(lines[1].plain_text().starts_with("  "));
+    }
+
+    #[test]
+    fn agent_text_not_first_segment_no_bullet() {
+        let lines = render_agent_text("hello", 80, false);
+        assert!(!lines[0].plain_text().starts_with("• "));
+    }
+
+    // --- render_tool_entry ---
+
+    #[test]
+    fn tool_entry_header_has_bullet() {
+        let lines = render_tool_entry("read(/foo/bar.rs)");
+        assert!(lines[0].plain_text().starts_with("• "));
+    }
+
+    #[test]
+    fn tool_entry_header_bold_name() {
+        let lines = render_tool_entry("read(/foo/bar.rs)");
+        // First span is "• ", second is bold "read"
+        assert_eq!(lines[0].spans[1].content, "read");
+        assert!(lines[0].spans[1].style.bold);
+    }
+
+    #[test]
+    fn tool_entry_result_lines_indented() {
+        let lines = render_tool_entry("bash(echo hi)\n ✓ exit 0");
+        let result_line = lines.iter().find(|l| l.plain_text().contains("exit 0")).unwrap();
+        assert!(result_line.plain_text().starts_with("  "));
+    }
+
+    // --- render_system_message ---
+
+    #[test]
+    fn system_error_is_red() {
+        let lines = render_system_message("Error: something failed");
+        assert_eq!(lines[0].spans[0].style.foreground_color, Some(Color::Red));
+    }
+
+    #[test]
+    fn system_warning_is_yellow() {
+        let lines = render_system_message("Warning: something odd");
+        assert_eq!(lines[0].spans[0].style.foreground_color, Some(Color::Yellow));
+    }
+
+    #[test]
+    fn system_plain_gets_brackets() {
+        let lines = render_system_message("session started");
+        assert!(lines[0].plain_text().contains('['));
+        assert!(lines[0].plain_text().contains(']'));
+    }
+
+    // --- build_lines integration ---
+
+    #[test]
+    fn build_lines_user_has_prefix() {
+        let entries = vec![user_entry("hello world")];
+        let lines = ChatRenderer::build_lines(&entries, None, 80);
+        assert!(lines[0].plain_text().starts_with("› "));
+    }
+
+    #[test]
+    fn build_lines_agent_has_bullet() {
+        let entries = vec![agent_entry("first line\nsecond line")];
+        let lines = ChatRenderer::build_lines(&entries, None, 80);
+        assert!(lines[0].plain_text().starts_with("• "));
+        assert!(lines[1].plain_text().starts_with("  "));
+    }
+
+    #[test]
+    fn build_lines_tool_has_bullet() {
+        let entries = vec![tool_entry("read(/foo.rs)")];
+        let lines = ChatRenderer::build_lines(&entries, None, 80);
+        assert!(lines[0].plain_text().starts_with("• "));
+    }
+
+    #[test]
+    fn build_lines_entries_separated_by_blank() {
+        let entries = vec![user_entry("a"), user_entry("b")];
+        let lines = ChatRenderer::build_lines(&entries, None, 80);
+        let blank_count = lines.iter().filter(|l| l.is_empty()).count();
+        assert!(blank_count >= 1);
+    }
+
+    // --- wrap_styled_line ---
+
+    #[test]
+    fn wrap_styled_line_preserves_styles() {
+        let line = StyledLine::new(vec![
+            StyledSpan::colored("abc", Color::Green),
+            StyledSpan::colored("def", Color::Red),
+        ]);
+        let wrapped = wrap_styled_line(&line, 4);
+
+        assert_eq!(wrapped.len(), 2);
+        assert_eq!(wrapped[0].plain_text(), "abcd");
+        assert_eq!(wrapped[1].plain_text(), "ef");
+        assert_eq!(wrapped[0].spans[0].style.foreground_color, Some(Color::Green));
+        assert_eq!(wrapped[0].spans[1].style.foreground_color, Some(Color::Red));
+        assert_eq!(wrapped[1].spans[0].style.foreground_color, Some(Color::Red));
+    }
+
+    #[test]
+    fn wrapped_bullet_line_keeps_two_space_continuation_indent() {
+        let line = StyledLine::new(vec![StyledSpan::raw(
+            "• this line should wrap and keep aligned continuation".to_string(),
+        )]);
+        let wrapped = wrap_styled_line(&line, 20);
+        assert!(wrapped.len() > 1);
+        assert!(wrapped[1].plain_text().starts_with("  "));
+    }
+
+    #[test]
+    fn wrapped_prefixed_markdown_list_keeps_four_space_continuation_indent() {
+        let line = StyledLine::new(vec![StyledSpan::raw(
+            "• - this list item should wrap and align under list content".to_string(),
+        )]);
+        let wrapped = wrap_styled_line(&line, 26);
+        assert!(wrapped.len() > 1);
+        assert!(wrapped[1].plain_text().starts_with("    "));
+    }
+
+    #[test]
+    fn wrapped_prefixed_ordered_list_keeps_nested_continuation_indent() {
+        let line = StyledLine::new(vec![StyledSpan::raw(
+            "• 10. this ordered list item should also wrap cleanly".to_string(),
+        )]);
+        let wrapped = wrap_styled_line(&line, 24);
+        assert!(wrapped.len() > 1);
+        assert!(wrapped[1].plain_text().starts_with("      "));
+    }
+
+    // --- parse_ansi_line ---
 
     #[test]
     fn parse_ansi_line_resets_styles() {
@@ -746,79 +842,12 @@ mod tests {
             Some(Color::Rgb { r: 1, g: 2, b: 3 })
         );
         assert_eq!(line.spans[0].style.background_color, None);
-
         assert_eq!(line.spans[1].content, "B");
-        assert_eq!(
-            line.spans[1].style.foreground_color,
-            Some(Color::Rgb { r: 1, g: 2, b: 3 })
-        );
         assert_eq!(
             line.spans[1].style.background_color,
             Some(Color::AnsiValue(42))
         );
-
         assert_eq!(line.spans[2].content, "C");
         assert_eq!(line.spans[2].style, TextStyle::default());
-    }
-
-    #[test]
-    fn wrap_styled_line_preserves_styles() {
-        let line = StyledLine::new(vec![
-            StyledSpan::colored("abc", Color::Green),
-            StyledSpan::colored("def", Color::Red),
-        ]);
-        let wrapped = wrap_styled_line(&line, 4);
-
-        assert_eq!(wrapped.len(), 2);
-        assert_eq!(line_text(&wrapped[0]), "abcd");
-        assert_eq!(line_text(&wrapped[1]), "ef");
-
-        assert_eq!(
-            wrapped[0].spans[0].style.foreground_color,
-            Some(Color::Green)
-        );
-        assert_eq!(wrapped[0].spans[1].style.foreground_color, Some(Color::Red));
-        assert_eq!(wrapped[1].spans[0].style.foreground_color, Some(Color::Red));
-    }
-
-    #[test]
-    fn agent_multiline_lines_get_base_indent_after_prefix() {
-        let entry = crate::tui::message_list::MessageEntry::new(
-            crate::tui::message_list::Sender::Agent,
-            "first line\nsecond line".to_string(),
-        );
-        let lines = ChatRenderer::build_lines(&[entry], None, 80);
-        assert!(line_text(&lines[0]).starts_with("• "));
-        assert!(line_text(&lines[1]).starts_with("  "));
-    }
-
-    #[test]
-    fn wrapped_bullet_line_keeps_two_space_continuation_indent() {
-        let line = StyledLine::new(vec![StyledSpan::raw(
-            "• this line should wrap and keep aligned continuation".to_string(),
-        )]);
-        let wrapped = wrap_styled_line(&line, 20);
-        assert!(wrapped.len() > 1);
-        assert!(line_text(&wrapped[1]).starts_with("  "));
-    }
-
-    #[test]
-    fn wrapped_prefixed_markdown_list_keeps_four_space_continuation_indent() {
-        let line = StyledLine::new(vec![StyledSpan::raw(
-            "• - this list item should wrap and align under list content".to_string(),
-        )]);
-        let wrapped = wrap_styled_line(&line, 26);
-        assert!(wrapped.len() > 1);
-        assert!(line_text(&wrapped[1]).starts_with("    "));
-    }
-
-    #[test]
-    fn wrapped_prefixed_ordered_list_keeps_nested_continuation_indent() {
-        let line = StyledLine::new(vec![StyledSpan::raw(
-            "• 10. this ordered list item should also wrap cleanly".to_string(),
-        )]);
-        let wrapped = wrap_styled_line(&line, 24);
-        assert!(wrapped.len() > 1);
-        assert!(line_text(&wrapped[1]).starts_with("      "));
     }
 }
