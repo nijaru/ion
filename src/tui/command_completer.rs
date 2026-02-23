@@ -7,7 +7,7 @@ use crate::tui::render::popup::{render_popup, PopupItem, PopupRegion, PopupStyle
 use std::io::Write;
 
 /// Maximum number of candidates to show in the popup.
-const MAX_VISIBLE: usize = 8;
+const MAX_VISIBLE: usize = 9;
 
 /// Command with its description.
 pub type Command = (&'static str, &'static str);
@@ -16,6 +16,7 @@ pub type Command = (&'static str, &'static str);
 pub const COMMANDS: &[Command] = &[
     ("/compact", "Compact context (prune tool outputs)"),
     ("/cost", "Show session cost and pricing"),
+    ("/export", "Export session to markdown file"),
     ("/model", "Open model selector"),
     ("/provider", "Open provider selector"),
     ("/resume", "Resume a previous session"),

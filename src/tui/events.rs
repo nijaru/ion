@@ -468,9 +468,10 @@ impl App {
 
     /// Dispatch a slash command (e.g., /compact, /model, /clear, //skill-name).
     fn dispatch_slash_command(&mut self, input: &str) {
-        const COMMANDS: [&str; 8] = [
+        const COMMANDS: [&str; 9] = [
             "/compact",
             "/cost",
+            "/export",
             "/model",
             "/provider",
             "/clear",
@@ -548,6 +549,7 @@ impl App {
                 self.message_list
                     .push_entry(MessageEntry::new(Sender::System, msg));
             }
+            "/export" => self.export_session_markdown(),
             "/model" | "/models" => self.open_model_selector(),
             "/provider" | "/providers" => self.open_provider_selector(),
             "/resume" | "/sessions" => self.open_session_selector(),
