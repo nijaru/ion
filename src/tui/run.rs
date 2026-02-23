@@ -49,6 +49,7 @@ pub async fn run(permissions: PermissionSettings, resume_option: ResumeOption) -
 
     tui::app::AppBuilder::new(ion_app)
         .fullscreen()
+        .mouse(true)
         .bracketed_paste(true)
         .focus_events(true)
         .run()

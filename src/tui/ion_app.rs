@@ -351,6 +351,11 @@ impl TuiApp for IonApp {
                 }
                 Some(IonMsg::InputKey(k.clone()))
             }
+            Event::Mouse(m) => match m.kind {
+                tui::event::MouseEventKind::ScrollUp => Some(IonMsg::ScrollUp),
+                tui::event::MouseEventKind::ScrollDown => Some(IonMsg::ScrollDown),
+                _ => None,
+            },
             Event::Resize(w, h) => Some(IonMsg::Resize(*w, *h)),
             Event::Tick => Some(IonMsg::Tick),
             _ => None,
