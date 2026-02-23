@@ -8,9 +8,7 @@ use crate::{
     geometry::Rect,
     layout::{Direction, Edges, LayoutStyle},
     style::Style,
-    widgets::{
-        text::Span, Element, IntoElement, Renderable, WidgetId,
-    },
+    widgets::{text::Span, Element, IntoElement, Renderable, WidgetId},
 };
 
 // ── Public types ──────────────────────────────────────────────────────────────
@@ -102,7 +100,11 @@ impl Block {
 
 impl IntoElement for Block {
     fn into_element(self) -> Element {
-        let pad = if self.border_type != BorderType::None { 1u16 } else { 0u16 };
+        let pad = if self.border_type != BorderType::None {
+            1u16
+        } else {
+            0u16
+        };
         let renderer = BlockRenderer {
             title: self.title,
             title_position: self.title_position,
@@ -139,29 +141,44 @@ impl BorderType {
     fn chars(self) -> BorderChars {
         match self {
             BorderType::Plain => BorderChars {
-                top_left: "┌", top_right: "┐",
-                bottom_left: "└", bottom_right: "┘",
-                horizontal: "─", vertical: "│",
+                top_left: "┌",
+                top_right: "┐",
+                bottom_left: "└",
+                bottom_right: "┘",
+                horizontal: "─",
+                vertical: "│",
             },
             BorderType::Rounded => BorderChars {
-                top_left: "╭", top_right: "╮",
-                bottom_left: "╰", bottom_right: "╯",
-                horizontal: "─", vertical: "│",
+                top_left: "╭",
+                top_right: "╮",
+                bottom_left: "╰",
+                bottom_right: "╯",
+                horizontal: "─",
+                vertical: "│",
             },
             BorderType::Double => BorderChars {
-                top_left: "╔", top_right: "╗",
-                bottom_left: "╚", bottom_right: "╝",
-                horizontal: "═", vertical: "║",
+                top_left: "╔",
+                top_right: "╗",
+                bottom_left: "╚",
+                bottom_right: "╝",
+                horizontal: "═",
+                vertical: "║",
             },
             BorderType::Thick => BorderChars {
-                top_left: "┏", top_right: "┓",
-                bottom_left: "┗", bottom_right: "┛",
-                horizontal: "━", vertical: "┃",
+                top_left: "┏",
+                top_right: "┓",
+                bottom_left: "┗",
+                bottom_right: "┛",
+                horizontal: "━",
+                vertical: "┃",
             },
             BorderType::None => BorderChars {
-                top_left: "", top_right: "",
-                bottom_left: "", bottom_right: "",
-                horizontal: "", vertical: "",
+                top_left: "",
+                top_right: "",
+                bottom_left: "",
+                bottom_right: "",
+                horizontal: "",
+                vertical: "",
             },
         }
     }
@@ -277,8 +294,7 @@ mod tests {
 
     #[test]
     fn block_plain_border() {
-        let lines =
-            render_to_lines(Block::new().border(BorderType::Plain).into_element(), 10, 3);
+        let lines = render_to_lines(Block::new().border(BorderType::Plain).into_element(), 10, 3);
         assert_eq!(&lines[0], "┌────────┐");
         assert_eq!(&lines[1], "│        │");
         assert_eq!(&lines[2], "└────────┘");
@@ -286,8 +302,11 @@ mod tests {
 
     #[test]
     fn block_rounded_border() {
-        let lines =
-            render_to_lines(Block::new().border(BorderType::Rounded).into_element(), 6, 3);
+        let lines = render_to_lines(
+            Block::new().border(BorderType::Rounded).into_element(),
+            6,
+            3,
+        );
         assert_eq!(&lines[0], "╭────╮");
         assert_eq!(&lines[1], "│    │");
         assert_eq!(&lines[2], "╰────╯");
@@ -295,8 +314,7 @@ mod tests {
 
     #[test]
     fn block_double_border() {
-        let lines =
-            render_to_lines(Block::new().border(BorderType::Double).into_element(), 6, 3);
+        let lines = render_to_lines(Block::new().border(BorderType::Double).into_element(), 6, 3);
         assert_eq!(&lines[0], "╔════╗");
         assert_eq!(&lines[1], "║    ║");
         assert_eq!(&lines[2], "╚════╝");
@@ -304,8 +322,7 @@ mod tests {
 
     #[test]
     fn block_thick_border() {
-        let lines =
-            render_to_lines(Block::new().border(BorderType::Thick).into_element(), 6, 3);
+        let lines = render_to_lines(Block::new().border(BorderType::Thick).into_element(), 6, 3);
         assert_eq!(&lines[0], "┏━━━━┓");
         assert_eq!(&lines[1], "┃    ┃");
         assert_eq!(&lines[2], "┗━━━━┛");
