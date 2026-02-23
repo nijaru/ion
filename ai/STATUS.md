@@ -2,13 +2,13 @@
 
 ## Current State
 
-| Metric    | Value                                     | Updated    |
-| --------- | ----------------------------------------- | ---------- |
-| Phase     | Core agent completeness                   | 2026-02-22 |
-| Status    | TUI cleanup done; lib spec ready to build | 2026-02-22 |
-| Toolchain | stable                                    | 2026-01-22 |
-| Tests     | 561 passing (`cargo test -q`)             | 2026-02-22 |
-| Clippy    | clean                                     | 2026-02-22 |
+| Metric    | Value                                             | Updated    |
+| --------- | ------------------------------------------------- | ---------- |
+| Phase     | Core agent completeness                           | 2026-02-22 |
+| Status    | crates/tui/ Phase 1+2 done; Phase 3 (layout) next | 2026-02-22 |
+| Toolchain | stable                                            | 2026-01-22 |
+| Tests     | 594 passing (561 ion + 33 tui)                    | 2026-02-22 |
+| Clippy    | clean                                             | 2026-02-22 |
 
 ## Implemented Features
 
@@ -32,18 +32,19 @@
 
 ## Open Tasks (by priority)
 
-| Task    | Pri | Title                               | Notes                                               |
-| ------- | --- | ----------------------------------- | --------------------------------------------------- |
-| tk-43cd | p3  | Persist MessageList display entries | Session continuity — blank history on `--continue`  |
-| tk-ioxh | p3  | Parallel subagent execution         | Parallel tool calls + parallel subagent dispatch    |
-| tk-71bb | p4  | ! bash passthrough mode             | ~20 lines; pi has it                                |
-| tk-ww4t | p4  | SQLite migrations                   | Schema changes silently break sessions without this |
-| tk-ltyy | p4  | ask_user tool                       | Agent-initiated clarification; channel infra exists |
-| tk-3fm2 | p4  | DeepSeek cache token fields         | Bug: wrong field names break cost tracking          |
-| tk-n3q8 | p4  | read: offset/limit allocates all    | Bug: O(n) alloc for 50-line read of 10k-line file   |
-| tk-9zri | p4  | Auto-backticks on paste             | ~20 lines; pi has it                                |
-| tk-q82k | p4  | Configurable status line            | TOML show/hide flags; not an extension API          |
-| tk-xhl5 | p4  | Plugin distribution                 | Defer — premature without users/plugins             |
+| Task    | Pri | Title                               | Notes                                                                         |
+| ------- | --- | ----------------------------------- | ----------------------------------------------------------------------------- |
+| tk-8v8x | p3  | crates/tui/ Phase 3                 | Taffy layout, Text widget, Block (borders), Row/Col; expand Element with tree |
+| tk-43cd | p3  | Persist MessageList display entries | Session continuity — blank history on `--continue`                            |
+| tk-ioxh | p3  | Parallel subagent execution         | Parallel tool calls + parallel subagent dispatch                              |
+| tk-71bb | p4  | ! bash passthrough mode             | ~20 lines; pi has it                                                          |
+| tk-ww4t | p4  | SQLite migrations                   | Schema changes silently break sessions without this                           |
+| tk-ltyy | p4  | ask_user tool                       | Agent-initiated clarification; channel infra exists                           |
+| tk-3fm2 | p4  | DeepSeek cache token fields         | Bug: wrong field names break cost tracking                                    |
+| tk-n3q8 | p4  | read: offset/limit allocates all    | Bug: O(n) alloc for 50-line read of 10k-line file                             |
+| tk-9zri | p4  | Auto-backticks on paste             | ~20 lines; pi has it                                                          |
+| tk-q82k | p4  | Configurable status line            | TOML show/hide flags; not an extension API                                    |
+| tk-xhl5 | p4  | Plugin distribution                 | Defer — premature without users/plugins                                       |
 
 See `tk ls` for full backlog (deferred: tk-t861, tk-vru7, tk-r11l, tk-nyqq).
 
@@ -64,13 +65,16 @@ See `tk ls` for full backlog (deferred: tk-t861, tk-vru7, tk-r11l, tk-nyqq).
 
 ## Recent Completed (2026-02-22)
 
+- **crates/tui/ Phase 1** — geometry, style, cell buffer, terminal backend. 28 unit tests.
+  Cargo workspace set up with ion as root member + `crates/tui/` crate.
+- **crates/tui/ Phase 2** — event system (crossterm translation), App+Effect trait, tokio select!
+  event loop, Canvas widget, hello world example. 594 tests total (561 ion + 33 tui).
 - **TUI cleanup (steps 1–8)** — ion-specific refactor complete. rnk removed. `ansi` module,
   `text` module, split chat renderer, explicit composer width, row-string buffer + snapshot tests.
-  561 tests pass. See `ai/design/tui-architecture-2026-02.md` (marked complete).
 - **TUI lib spec** — Saved to `ai/design/tui-lib-spec.md`. Defines `crates/tui/` general-purpose
-  library: cell buffer, Taffy layout, App+Effect, widget tree. Not yet built.
-- **Provider crate research** — `llm` passes streaming/tool use (prior rejection reason resolved).
-  Blocked on system prompt `cache_control` for full migration. See research file above.
+  library: cell buffer, Taffy layout, App+Effect, widget tree.
+- **Provider crate research** — `llm` passes streaming/tool use. Blocked on system prompt
+  `cache_control` for full migration. Watch v1.4.0. See `ai/research/provider-crates-fresh-2026-02.md`.
 - **Backlog audit** — Cut 4 over-engineered tasks. OS sandbox closed won't-do. See DECISIONS.md.
 
 ## Key References
