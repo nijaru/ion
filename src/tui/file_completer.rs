@@ -1,9 +1,9 @@
 //! File path autocomplete for @ mentions in input.
 
+use crate::tui::ansi::Color;
 use crate::tui::completer_state::CompleterState;
 use crate::tui::fuzzy;
-use crate::tui::render::popup::{PopupItem, PopupRegion, PopupStyle, render_popup};
-use rnk::core::Color;
+use crate::tui::render::popup::{render_popup, PopupItem, PopupRegion, PopupStyle};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -177,7 +177,11 @@ impl FileCompleter {
                 primary: label,
                 secondary: "",
                 is_selected: i == self.state.selected_index(),
-                color_override: Some(if c.is_dir { Color::Blue } else { Color::Reset }),
+                color_override: Some(if c.is_dir {
+                    Color::DarkBlue
+                } else {
+                    Color::Reset
+                }),
             })
             .collect();
 

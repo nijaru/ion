@@ -3,15 +3,13 @@
 //! Terminal APIs use u16 for dimensions; numeric casts are intentional.
 #![allow(clippy::cast_possible_truncation)]
 
-use crate::tui::rnk_text::render_truncated_text_line;
+use crate::tui::ansi::{self, Color};
 use crate::tui::util::{display_width, truncate_to_display_width};
 use crossterm::{
     cursor::MoveTo,
     execute,
     terminal::{Clear, ClearType},
 };
-use rnk::components::{Span, Text};
-use rnk::core::Color as RnkColor;
 use std::io::Write;
 
 /// Maximum visible items in selector list.
@@ -24,8 +22,8 @@ pub struct SelectorItem {
     pub hint: String,
     /// Optional warning text.
     pub warning: Option<String>,
-    /// Color for the warning text. Defaults to Yellow if None.
-    pub warning_color: Option<RnkColor>,
+    /// Color for the warning text. Defaults to DarkYellow if None.
+    pub warning_color: Option<Color>,
 }
 
 /// Data needed to render the selector UI.
@@ -49,7 +47,7 @@ fn paint_row_text<W: Write>(
     row: u16,
     width: u16,
     text: &str,
-    color: Option<RnkColor>,
+    fg: Option<Color>,
     bold: bool,
     dim: bool,
 ) -> std::io::Result<()> {
@@ -58,19 +56,7 @@ fn paint_row_text<W: Write>(
     if max_cells == 0 {
         return Ok(());
     }
-
-    let clipped = truncate_to_display_width(text, max_cells);
-    let mut line = Text::new(clipped);
-    if let Some(color) = color {
-        line = line.color(color);
-    }
-    if bold {
-        line = line.bold();
-    }
-    if dim {
-        line = line.dim();
-    }
-    let rendered = render_truncated_text_line(line, max_cells);
+    let rendered = ansi::render_line(text, max_cells, fg, bold, dim);
     write!(w, "{rendered}")?;
     Ok(())
 }
@@ -79,23 +65,23 @@ fn paint_row_spans<W: Write>(
     w: &mut W,
     row: u16,
     width: u16,
-    spans: Vec<Span>,
+    spans: Vec<ansi::Span>,
 ) -> std::io::Result<()> {
     execute!(w, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
     let max_cells = width.saturating_sub(1) as usize;
     if max_cells == 0 || spans.is_empty() {
         return Ok(());
     }
-    let rendered = render_truncated_text_line(Text::spans(spans), max_cells);
+    let rendered = ansi::render_spans(&spans);
     write!(w, "{rendered}")?;
     Ok(())
 }
 
 fn push_clipped_span(
-    spans: &mut Vec<Span>,
+    spans: &mut Vec<ansi::Span>,
     text: &str,
     remaining: &mut usize,
-    color: Option<RnkColor>,
+    fg: Option<Color>,
     bold: bool,
     dim: bool,
 ) {
@@ -108,8 +94,8 @@ fn push_clipped_span(
     }
     *remaining = remaining.saturating_sub(display_width(&clipped));
 
-    let mut span = Span::new(clipped);
-    if let Some(color) = color {
+    let mut span = ansi::Span::new(clipped);
+    if let Some(color) = fg {
         span = span.color(color);
     }
     if bold {
@@ -148,8 +134,8 @@ pub fn render_selector<W: Write>(
             row,
             width,
             vec![
-                Span::new(" "),
-                Span::new(data.title).color(RnkColor::Yellow).bold(),
+                ansi::Span::new(" "),
+                ansi::Span::new(data.title).color(Color::DarkYellow).bold(),
             ],
         )?;
     }
@@ -174,7 +160,7 @@ pub fn render_selector<W: Write>(
         row,
         width,
         &top_border,
-        Some(RnkColor::Cyan),
+        Some(Color::DarkCyan),
         false,
         false,
     )?;
@@ -188,9 +174,9 @@ pub fn render_selector<W: Write>(
         row,
         width,
         vec![
-            Span::new("│").color(RnkColor::Cyan),
-            Span::new(" "),
-            Span::new(query.clone()),
+            ansi::Span::new("│").color(Color::DarkCyan),
+            ansi::Span::new(" "),
+            ansi::Span::new(query.clone()),
         ],
     )?;
     let filter_cursor_col =
@@ -204,7 +190,7 @@ pub fn render_selector<W: Write>(
         row,
         width,
         &bottom_border,
-        Some(RnkColor::Cyan),
+        Some(Color::DarkCyan),
         false,
         false,
     )?;
@@ -300,7 +286,7 @@ fn render_list<W: Write>(
     for (i, item) in visible_items.into_iter().enumerate() {
         let actual_idx = scroll_offset + i;
         let is_selected = actual_idx == data.selected_idx;
-        let default_color = is_selected.then_some(RnkColor::Yellow);
+        let default_color = is_selected.then_some(Color::DarkYellow);
         let default_bold = is_selected;
         let default_dim = !is_selected && !item.is_valid;
 
@@ -373,7 +359,7 @@ fn render_list<W: Write>(
                 &mut spans,
                 warning,
                 &mut remaining,
-                Some(item.warning_color.unwrap_or(RnkColor::Yellow)),
+                Some(item.warning_color.unwrap_or(Color::DarkYellow)),
                 default_bold,
                 default_dim,
             );
