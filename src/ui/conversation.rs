@@ -7,13 +7,12 @@
 
 use tui::{
     geometry::Rect,
-    style::{Style, StyleModifiers},
     widgets::{canvas::Canvas, Element, IntoElement},
 };
 
 use crate::tui::highlight::markdown::render_markdown_with_width;
 use crate::tui::terminal::{Color as IonColor, StyledLine, TextStyle};
-use crate::ui::streaming::ion_color_to_tui;
+use crate::ui::style::text_style_to_tui;
 
 // ── Entry types ───────────────────────────────────────────────────────────────
 
@@ -305,7 +304,7 @@ impl ConversationView {
                     if col >= max_col {
                         break;
                     }
-                    let style = text_style_to_tui_style(&span.style);
+                    let style = text_style_to_tui(&span.style);
                     col = buf.set_string(col, row, &span.content, style);
                 }
             }
@@ -318,37 +317,6 @@ impl Default for ConversationView {
     fn default() -> Self {
         Self::new()
     }
-}
-
-// ── Style helpers ─────────────────────────────────────────────────────────────
-
-fn text_style_to_tui_style(s: &TextStyle) -> Style {
-    let mut style = Style::new();
-    if let Some(fg) = s.foreground_color {
-        style = style.fg(ion_color_to_tui(fg));
-    }
-    if let Some(bg) = s.background_color {
-        style = style.bg(ion_color_to_tui(bg));
-    }
-    if s.bold {
-        style = style.bold();
-    }
-    if s.dim {
-        style = style.dim();
-    }
-    if s.italic {
-        style = style.italic();
-    }
-    if s.underlined {
-        style = style.underline();
-    }
-    if s.crossed_out {
-        style = style.strikethrough();
-    }
-    if s.reverse {
-        style.modifiers |= StyleModifiers::REVERSED;
-    }
-    style
 }
 
 #[cfg(test)]
