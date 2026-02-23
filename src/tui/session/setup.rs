@@ -293,6 +293,7 @@ impl App {
             oauth_confirm_provider: None,
             model_pricing: crate::provider::ModelPricing::default(),
             session_cost: 0.0,
+            term_width: 0,
         };
 
         // Set initial API provider name on model picker

@@ -35,8 +35,8 @@ impl App {
                     self.handle_paste(text);
                 }
             }
-            Event::Resize(_, _) => {
-                self.input_state.invalidate_width();
+            Event::Resize(w, _) => {
+                self.term_width = w;
                 self.render_state.last_resize_at = Some(std::time::Instant::now());
                 if self.mode == Mode::Selector {
                     self.render_state.needs_initial_render = true;
