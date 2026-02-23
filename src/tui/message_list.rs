@@ -1,9 +1,10 @@
 use crate::agent::AgentEvent;
 use crate::provider::format_api_error;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Sender {
     User,
     Agent,
@@ -217,7 +218,7 @@ fn relative_display_path(path: &str) -> String {
     path.to_string()
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum MessagePart {
     Text(String),
     Thinking(String),
@@ -225,7 +226,7 @@ pub enum MessagePart {
 
 /// Metadata for a non-grouped tool call entry, stored so we can rebuild
 /// the display text when toggling collapsed/expanded.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolMeta {
     pub header: String,
     pub tool_name: String,
@@ -233,11 +234,12 @@ pub struct ToolMeta {
     pub is_error: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MessageEntry {
     pub sender: Sender,
     pub parts: Vec<MessagePart>,
     pub tool_meta: Option<ToolMeta>,
+    #[serde(skip)]
     markdown_cache: Option<String>,
 }
 

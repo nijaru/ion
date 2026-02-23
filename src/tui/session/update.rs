@@ -288,6 +288,7 @@ impl App {
             if let Err(e) = self.store.save(&updated_session) {
                 tracing::warn!("Failed to save session: {}", e);
             }
+            self.persist_display_entries(&updated_session.id);
             self.session = updated_session;
             self.refresh_startup_header_cache();
         }
