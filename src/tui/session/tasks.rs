@@ -3,8 +3,9 @@
 use crate::agent::AgentEvent;
 use crate::tui::App;
 use crate::tui::attachment::parse_attachments;
-use crate::tui::message_list::Sender;
+use crate::tui::message_list::{MessagePart, Sender};
 use crate::tui::types::TaskSummary;
+use std::fmt::Write as _;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
@@ -169,6 +170,100 @@ impl App {
                 }
             }
             Err(e) => error!("Failed to serialize display entries: {e}"),
+        }
+    }
+
+    /// Export the current session to a markdown file in the working directory.
+    pub(in crate::tui) fn export_session_markdown(&mut self) {
+        use crate::tui::message_list::MessageEntry;
+
+        let mut md = String::new();
+        let model = &self.session.model;
+        let provider = &self.session.provider;
+        let _ = writeln!(md, "# ion session export");
+        let _ = writeln!(md);
+        let _ = writeln!(md, "**Model:** {provider}/{model}");
+        let _ = writeln!(md);
+        let _ = writeln!(md, "---");
+        let _ = writeln!(md);
+
+        for entry in &self.message_list.entries {
+            match entry.sender {
+                Sender::System => continue, // skip internal messages
+                Sender::User => {
+                    let _ = writeln!(md, "## User");
+                    let _ = writeln!(md);
+                    for part in &entry.parts {
+                        if let MessagePart::Text(text) = part {
+                            let _ = writeln!(md, "{text}");
+                        }
+                    }
+                    let _ = writeln!(md);
+                }
+                Sender::Agent => {
+                    let _ = writeln!(md, "## Agent");
+                    let _ = writeln!(md);
+                    for part in &entry.parts {
+                        match part {
+                            MessagePart::Text(text) => {
+                                let _ = writeln!(md, "{text}");
+                            }
+                            MessagePart::Thinking(thinking) => {
+                                let _ = writeln!(md, "<details>");
+                                let _ = writeln!(md, "<summary>Thinking</summary>");
+                                let _ = writeln!(md);
+                                let _ = writeln!(md, "{thinking}");
+                                let _ = writeln!(md, "</details>");
+                            }
+                        }
+                    }
+                    let _ = writeln!(md);
+                }
+                Sender::Tool => {
+                    if let Some(ref meta) = entry.tool_meta {
+                        let _ = writeln!(md, "## Tool: {}", meta.tool_name);
+                        let _ = writeln!(md);
+                        let _ = writeln!(md, "**{}**", meta.header);
+                        let _ = writeln!(md);
+                        if meta.is_error {
+                            let _ = writeln!(md, "> **Error:**");
+                        }
+                        let _ = writeln!(md, "```");
+                        let _ = writeln!(md, "{}", meta.raw_result);
+                        let _ = write!(md, "```");
+                        let _ = writeln!(md);
+                    } else {
+                        // Fallback for entries without ToolMeta
+                        let _ = writeln!(md, "## Tool");
+                        let _ = writeln!(md);
+                        for part in &entry.parts {
+                            if let MessagePart::Text(text) = part {
+                                let _ = writeln!(md, "{text}");
+                            }
+                        }
+                    }
+                    let _ = writeln!(md);
+                }
+            }
+        }
+
+        // Write to working directory
+        let now = chrono::Local::now();
+        let filename = format!("ion-export-{}.md", now.format("%Y%m%d-%H%M%S"));
+        let path = self.session.working_dir.join(&filename);
+        match std::fs::write(&path, &md) {
+            Ok(()) => {
+                self.message_list.push_entry(MessageEntry::new(
+                    Sender::System,
+                    format!("Exported to {filename}"),
+                ));
+            }
+            Err(e) => {
+                self.message_list.push_entry(MessageEntry::new(
+                    Sender::System,
+                    format!("Export failed: {e}"),
+                ));
+            }
         }
     }
 
