@@ -847,6 +847,7 @@ pub async fn run(permissions: PermissionSettings, resume_option: ResumeOption) -
 
     // Track terminal size
     let (mut term_width, mut term_height) = terminal::size()?;
+    app.term_width = term_width;
 
     reprint_loaded_session(&mut stdout, &mut app, term_width, term_height)?;
 

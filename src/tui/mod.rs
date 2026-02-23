@@ -148,4 +148,6 @@ pub struct App {
     pub model_pricing: ModelPricing,
     /// Accumulated cost for the current session (USD).
     pub session_cost: f64,
+    /// Last known terminal width, updated on resize and at startup.
+    pub term_width: u16,
 }
