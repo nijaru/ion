@@ -1,7 +1,7 @@
 //! Syntax highlighting for tool output and markdown rendering.
 
 mod diff;
-pub(crate) mod markdown;
+pub mod markdown;
 mod syntax;
 #[cfg(test)]
 mod tests;
