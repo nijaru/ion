@@ -149,6 +149,17 @@ impl SessionStore {
             )?;
         }
 
+        // Migration v4 -> v5: Add persisted display entries
+        if version < 5 {
+            self.db.execute_batch(
+                r"
+                ALTER TABLE sessions ADD COLUMN display_entries TEXT;
+
+                PRAGMA user_version = 5;
+                ",
+            )?;
+        }
+
         // Enable foreign key enforcement
         self.db.execute("PRAGMA foreign_keys = ON", [])?;
 
@@ -284,6 +295,37 @@ impl SessionStore {
             ],
         )?;
         Ok(())
+    }
+
+    /// Persist serialized display entries for a session.
+    /// `json` is a `Vec<MessageEntry>` serialized to JSON.
+    pub fn save_display_entries(
+        &self,
+        session_id: &str,
+        json: &str,
+    ) -> Result<(), SessionStoreError> {
+        self.db.execute(
+            "UPDATE sessions SET display_entries = ?1 WHERE id = ?2",
+            params![json, session_id],
+        )?;
+        Ok(())
+    }
+
+    /// Load persisted display entries for a session, or `None` if not stored.
+    pub fn load_display_entries(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<String>, SessionStoreError> {
+        // Use Option<String> in the row getter so a NULL column maps to None.
+        let result = self
+            .db
+            .query_row(
+                "SELECT display_entries FROM sessions WHERE id = ?1",
+                params![session_id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?;
+        Ok(result.flatten())
     }
 
     /// Load the last completion summary for a session.
@@ -874,5 +916,43 @@ mod tests {
         } else {
             panic!("Expected ToolCall block");
         }
+    }
+
+    #[test]
+    fn test_display_entries_round_trip() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("sessions.db");
+        let store = SessionStore::open(&db_path).unwrap();
+
+        let session = make_test_session();
+        let id = session.id.clone();
+        store.save(&session).unwrap();
+
+        // Initially no display entries
+        assert!(store.load_display_entries(&id).unwrap().is_none());
+
+        // Save display entries
+        let json = r#"[{"sender":"User","parts":[{"Text":"Hello"}],"tool_meta":null}]"#;
+        store.save_display_entries(&id, json).unwrap();
+
+        // Load back
+        let loaded = store.load_display_entries(&id).unwrap();
+        assert_eq!(loaded.as_deref(), Some(json));
+
+        // Update works (overwrite)
+        let json2 = r#"[{"sender":"Agent","parts":[{"Text":"Hi"}],"tool_meta":null}]"#;
+        store.save_display_entries(&id, json2).unwrap();
+        let loaded2 = store.load_display_entries(&id).unwrap();
+        assert_eq!(loaded2.as_deref(), Some(json2));
+    }
+
+    #[test]
+    fn test_display_entries_unknown_session_returns_none() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("sessions.db");
+        let store = SessionStore::open(&db_path).unwrap();
+
+        let result = store.load_display_entries("nonexistent").unwrap();
+        assert!(result.is_none());
     }
 }

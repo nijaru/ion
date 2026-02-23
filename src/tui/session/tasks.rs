@@ -2,6 +2,7 @@
 
 use crate::tui::App;
 use crate::tui::attachment::parse_attachments;
+use crate::tui::message_list::Sender;
 use crate::tui::types::TaskSummary;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -95,6 +96,28 @@ impl App {
         });
     }
 
+    /// Serialize and persist display entries for the current session.
+    ///
+    /// System-sender entries are excluded: they are environment-specific
+    /// (missing-dir warnings, provider warnings) and regenerated fresh on
+    /// each load.
+    pub(in crate::tui) fn persist_display_entries(&self, session_id: &str) {
+        let entries: Vec<_> = self
+            .message_list
+            .entries
+            .iter()
+            .filter(|e| e.sender != Sender::System)
+            .collect();
+        match serde_json::to_string(&entries) {
+            Ok(json) => {
+                if let Err(e) = self.store.save_display_entries(session_id, &json) {
+                    error!("Failed to save display entries: {e}");
+                }
+            }
+            Err(e) => error!("Failed to serialize display entries: {e}"),
+        }
+    }
+
     /// Quit the application, saving session.
     pub(in crate::tui) fn quit(&mut self) {
         self.should_quit = true;
@@ -103,5 +126,6 @@ impl App {
         if let Err(e) = self.store.save(&self.session) {
             error!("Failed to save session on quit: {}", e);
         }
+        self.persist_display_entries(&self.session.id.clone());
     }
 }
