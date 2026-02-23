@@ -1,14 +1,12 @@
 //! History search overlay rendering (Ctrl+R).
 
+use crate::tui::ansi::Color;
 use crate::tui::App;
 use crate::tui::render::popup::{PopupItem, PopupRegion, PopupStyle, render_popup};
-use crate::tui::rnk_text::render_truncated_text_line;
 use crate::tui::util::{display_width, truncate_to_display_width};
 use crossterm::cursor::MoveTo;
 use crossterm::execute;
 use crossterm::terminal::{Clear, ClearType};
-use rnk::components::Text;
-use rnk::core::Color as RnkColor;
 
 impl App {
     /// Render history search overlay (Ctrl+R).
@@ -51,8 +49,7 @@ impl App {
             prompt.push_str(&truncate_to_display_width(preview, preview_budget));
         }
         let clipped = truncate_to_display_width(&prompt, total_width);
-        let prompt = render_truncated_text_line(Text::new(clipped), total_width);
-        write!(w, "{prompt}")?;
+        write!(w, "{clipped}")?;
 
         // Render matches above the prompt using shared popup renderer
         if !matches.is_empty() {
@@ -93,7 +90,7 @@ impl App {
                     height: visible_count as u16,
                 },
                 PopupStyle {
-                    primary_color: RnkColor::Reset,
+                    primary_color: Color::Reset,
                     show_secondary_dimmed: false,
                     dim_unselected: true,
                 },

@@ -1,16 +1,14 @@
-//! RNK-backed renderer for the bottom UI area.
+//! Direct-crossterm renderer for the bottom UI area.
 
 use crate::tool::ToolMode;
+use crate::tui::ansi::{self, Color};
 use crate::tui::composer::{build_visual_lines, ComposerState};
 use crate::tui::render::{CONTINUATION, INPUT_MARGIN, PROMPT, PROMPT_WIDTH};
-use crate::tui::rnk_text::render_truncated_text_line;
 use crate::tui::util::{display_width, format_cost, format_elapsed, format_tokens, render_token_bar, truncate_to_display_width};
 use crate::tui::App;
 use crossterm::cursor::MoveTo;
 use crossterm::execute;
 use crossterm::terminal::{Clear, ClearType};
-use rnk::components::{Span, Text};
-use rnk::core::Color as RnkColor;
 use std::io::Write;
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -25,42 +23,12 @@ pub(crate) struct BottomUiFrame {
     pub show_progress_status: bool,
 }
 
-fn render_rnk_line(
-    text: &str,
-    max_cells: usize,
-    color: Option<RnkColor>,
-    bold: bool,
-    dim: bool,
-) -> String {
-    if max_cells == 0 {
-        return String::new();
-    }
-
-    let clipped = truncate_to_display_width(text, max_cells);
-    if clipped.is_empty() {
-        return String::new();
-    }
-
-    let mut line = Text::new(clipped);
-    if let Some(color) = color {
-        line = line.color(color);
-    }
-    if bold {
-        line = line.bold();
-    }
-    if dim {
-        line = line.dim();
-    }
-
-    render_truncated_text_line(line, max_cells)
-}
-
 fn paint_row<W: Write>(
     w: &mut W,
     row: u16,
     width: u16,
     text: &str,
-    color: Option<RnkColor>,
+    fg: Option<Color>,
     bold: bool,
     dim: bool,
 ) -> std::io::Result<()> {
@@ -69,7 +37,7 @@ fn paint_row<W: Write>(
     if max_cells == 0 {
         return Ok(());
     }
-    let rendered = render_rnk_line(text, max_cells, color, bold, dim);
+    let rendered = ansi::render_line(text, max_cells, fg, bold, dim);
     write!(w, "{rendered}")?;
     Ok(())
 }
@@ -78,14 +46,14 @@ fn paint_row_spans<W: Write>(
     w: &mut W,
     row: u16,
     width: u16,
-    spans: Vec<Span>,
+    spans: Vec<ansi::Span>,
 ) -> std::io::Result<()> {
     execute!(w, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
     let max_cells = width.saturating_sub(1) as usize;
     if max_cells == 0 || spans.is_empty() {
         return Ok(());
     }
-    let rendered = render_truncated_text_line(Text::spans(spans), max_cells);
+    let rendered = ansi::render_spans(&spans);
     write!(w, "{rendered}")?;
     Ok(())
 }
@@ -135,7 +103,7 @@ impl App {
             input_row,
             width,
             &border,
-            Some(RnkColor::Cyan),
+            Some(Color::DarkCyan),
             false,
             false,
         )?;
@@ -152,7 +120,7 @@ impl App {
             border_row,
             width,
             &border,
-            Some(RnkColor::Cyan),
+            Some(Color::DarkCyan),
             false,
             false,
         )?;
@@ -236,7 +204,7 @@ impl App {
         out
     }
 
-    fn progress_line_text(&self, width: u16) -> (String, Option<RnkColor>) {
+    fn progress_line_text(&self, width: u16) -> (String, Option<Color>) {
         let max_cells = width.saturating_sub(1) as usize;
         if max_cells == 0 {
             return (String::new(), None);
@@ -264,9 +232,9 @@ impl App {
                 text
             };
             let color = if self.task.retry_status.is_some() {
-                Some(RnkColor::Yellow)
+                Some(Color::DarkYellow)
             } else {
-                Some(RnkColor::Cyan)
+                Some(Color::DarkCyan)
             };
             return (truncate_to_display_width(&text, max_cells), color);
         }
@@ -276,11 +244,11 @@ impl App {
         };
 
         let (symbol, label, color) = if self.last_error.is_some() {
-            ("✗", "Error", Some(RnkColor::Red))
+            ("✗", "Error", Some(Color::DarkRed))
         } else if summary.was_cancelled {
-            ("⚠", "Canceled", Some(RnkColor::Yellow))
+            ("⚠", "Canceled", Some(Color::DarkYellow))
         } else {
-            ("✓", "Completed", Some(RnkColor::Green))
+            ("✓", "Completed", Some(Color::DarkGreen))
         };
 
         let elapsed = format_elapsed(summary.elapsed.as_secs());
@@ -304,7 +272,7 @@ impl App {
         )
     }
 
-    fn status_line_spans(&self, width: u16) -> Vec<Span> {
+    fn status_line_spans(&self, width: u16) -> Vec<ansi::Span> {
         let max_cells = width.saturating_sub(1) as usize;
         if max_cells == 0 {
             return vec![];
@@ -323,8 +291,8 @@ impl App {
             .and_then(|n| n.to_str())
             .unwrap_or("~");
         let (mode_label, mode_color) = match self.tool_mode {
-            ToolMode::Read => ("READ", RnkColor::Cyan),
-            ToolMode::Write => ("WRITE", RnkColor::Yellow),
+            ToolMode::Read => ("READ", Color::DarkCyan),
+            ToolMode::Write => ("WRITE", Color::DarkYellow),
         };
         let think = self.thinking_level.label();
         let branch = self.git_branch.as_deref();
@@ -403,21 +371,21 @@ impl App {
 
         // Build spans.
         let mut spans = vec![
-            Span::new(" ["),
-            Span::new(mode_label).color(mode_color),
-            Span::new("]"),
+            ansi::Span::new(" ["),
+            ansi::Span::new(mode_label).color(mode_color),
+            ansi::Span::new("]"),
         ];
 
         if show_model {
-            spans.push(Span::new(" • "));
-            spans.push(Span::new(model_name));
+            spans.push(ansi::Span::new(" • "));
+            spans.push(ansi::Span::new(model_name));
             if !think.is_empty() {
-                spans.push(Span::new(" "));
-                spans.push(Span::new(think).color(RnkColor::Magenta));
+                spans.push(ansi::Span::new(" "));
+                spans.push(ansi::Span::new(think).color(Color::DarkMagenta));
             }
         } else if !think.is_empty() {
-            spans.push(Span::new(" • "));
-            spans.push(Span::new(think).color(RnkColor::Magenta));
+            spans.push(ansi::Span::new(" • "));
+            spans.push(ansi::Span::new(think).color(Color::DarkMagenta));
         }
 
         if !pct_display.is_empty() {
@@ -425,17 +393,17 @@ impl App {
                 Some((used, max)) if max > 0 => {
                     let pct = (used * 100) / max;
                     if pct >= 80 {
-                        Some(RnkColor::Red)
+                        Some(Color::DarkRed)
                     } else if pct >= 50 {
-                        Some(RnkColor::Yellow)
+                        Some(Color::DarkYellow)
                     } else {
-                        Some(RnkColor::Green)
+                        Some(Color::DarkGreen)
                     }
                 }
                 _ => None,
             };
-            spans.push(Span::new(" • ").dim());
-            let mut pct_span = Span::new(pct_display.as_str());
+            spans.push(ansi::Span::new(" • ").dim());
+            let mut pct_span = ansi::Span::new(pct_display.as_str());
             if let Some(c) = pct_color {
                 pct_span = pct_span.color(c);
             }
@@ -443,27 +411,27 @@ impl App {
             if show_detail
                 && let Some(ref detail) = detail_text
             {
-                spans.push(Span::new(format!(" {detail}")).dim());
+                spans.push(ansi::Span::new(format!(" {detail}")).dim());
             }
         }
 
         if let Some(ref cost_text) = cost_text {
-            spans.push(Span::new(format!(" • {cost_text}")).dim());
+            spans.push(ansi::Span::new(format!(" • {cost_text}")).dim());
         }
 
-        spans.push(Span::new(" • ").dim());
-        spans.push(Span::new(project));
+        spans.push(ansi::Span::new(" • ").dim());
+        spans.push(ansi::Span::new(project));
         if show_branch
             && let Some(b) = branch
         {
-            spans.push(Span::new(" • ").dim());
-            spans.push(Span::new(b).color(RnkColor::Cyan));
+            spans.push(ansi::Span::new(" • ").dim());
+            spans.push(ansi::Span::new(b).color(Color::DarkCyan));
             if show_diff
                 && let Some((ref ins, ref del)) = diff_texts
             {
-                spans.push(Span::new(format!(" {ins}")).color(RnkColor::Green));
-                spans.push(Span::new("/").dim());
-                spans.push(Span::new(del).color(RnkColor::Red));
+                spans.push(ansi::Span::new(format!(" {ins}")).color(Color::DarkGreen));
+                spans.push(ansi::Span::new("/").dim());
+                spans.push(ansi::Span::new(del).color(Color::DarkRed));
             }
         }
 

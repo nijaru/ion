@@ -1,9 +1,9 @@
 //! Command autocomplete for / and // prefix in input.
 
+use crate::tui::ansi::Color;
 use crate::tui::completer_state::CompleterState;
 use crate::tui::fuzzy;
 use crate::tui::render::popup::{render_popup, PopupItem, PopupRegion, PopupStyle};
-use rnk::core::Color;
 use std::io::Write;
 
 /// Maximum number of candidates to show in the popup.
@@ -192,7 +192,7 @@ impl CommandCompleter {
         let items: Vec<(&str, &str)> = candidates.iter().map(|(cmd, desc)| (*cmd, *desc)).collect();
         let selected = self.state.selected_index();
 
-        render_candidate_popup(w, &items, selected, input_start, width, Color::Cyan)
+        render_candidate_popup(w, &items, selected, input_start, width, Color::DarkCyan)
     }
 
     fn render_skills<W: Write>(
@@ -212,7 +212,7 @@ impl CommandCompleter {
             .collect();
         let selected = self.skill_state.selected_index();
 
-        render_candidate_popup(w, &items, selected, input_start, width, Color::Green)
+        render_candidate_popup(w, &items, selected, input_start, width, Color::DarkGreen)
     }
 
     fn apply_builtin_filter(&mut self) {

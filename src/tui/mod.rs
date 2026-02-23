@@ -1,5 +1,6 @@
 //! TUI module for the ion agent interface.
 
+pub(crate) mod ansi;
 mod app_state;
 mod attachment;
 mod chat_renderer;
@@ -18,7 +19,6 @@ mod picker_trait;
 pub mod provider_picker;
 mod render;
 mod render_state;
-mod rnk_text;
 mod run;
 pub(crate) mod text;
 mod session;

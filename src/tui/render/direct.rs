@@ -1,5 +1,6 @@
 //! Direct crossterm rendering orchestrator (TUI v2 - no ratatui).
 
+use crate::tui::ansi::{self, Color};
 use crate::tui::render::bottom_ui::BottomUiFrame;
 use crate::tui::render::layout::{BodyLayout, UiLayout};
 use crate::tui::render::selector::{self, SelectorData, SelectorItem};
@@ -11,8 +12,6 @@ use crate::tui::App;
 use crossterm::cursor::MoveTo;
 use crossterm::execute;
 use crossterm::terminal::{Clear, ClearType};
-use rnk::components::{Span, Text};
-use rnk::core::Color as RnkColor;
 
 impl App {
     /// Direct crossterm rendering (TUI v2 - no ratatui Terminal/Frame).
@@ -113,7 +112,7 @@ impl App {
                             (
                                 id_pad,
                                 Some("⚠ violates ToS".to_string()),
-                                Some(RnkColor::Red),
+                                Some(Color::DarkRed),
                             )
                         } else if s.provider.is_oauth() {
                             // Other OAuth (ChatGPT) — yellow unofficial caution
@@ -284,7 +283,6 @@ impl App {
         start_row: u16,
         width: u16,
     ) -> std::io::Result<()> {
-        use crate::tui::rnk_text::render_truncated_text_line;
         use crate::tui::util::display_width;
 
         execute!(w, MoveTo(0, start_row), Clear(ClearType::FromCursorDown))?;
@@ -293,16 +291,16 @@ impl App {
         // inner_w: cells available between │ and │ (inner_w + 2 border = line_w)
         let inner_w = line_w.saturating_sub(2);
 
-        let paint = |w: &mut W, row: u16, spans: Vec<Span>| -> std::io::Result<()> {
+        let paint = |w: &mut W, row: u16, spans: Vec<ansi::Span>| -> std::io::Result<()> {
             execute!(w, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
             if !spans.is_empty() {
-                let rendered = render_truncated_text_line(Text::spans(spans), line_w);
+                let rendered = ansi::render_spans(&spans);
                 write!(w, "{rendered}")?;
             }
             Ok(())
         };
 
-        let cyan = |s: String| Span::new(s).color(RnkColor::Cyan);
+        let cyan = |s: String| ansi::Span::new(s).color(Color::DarkCyan);
         let pad = |used: usize| " ".repeat(inner_w.saturating_sub(used));
 
         let mut row = start_row;
@@ -320,7 +318,7 @@ impl App {
             row,
             vec![
                 cyan(format!("┌─{warn_icon}")),
-                Span::new(warn_title).color(RnkColor::Yellow).bold(),
+                ansi::Span::new(warn_title).color(Color::DarkYellow).bold(),
                 cyan(format!("{fill}┐")),
             ],
         )?;
@@ -339,7 +337,7 @@ impl App {
                 row,
                 vec![
                     cyan("│ ".to_string()),
-                    Span::new(text.to_string()).color(RnkColor::Red),
+                    ansi::Span::new(text.to_string()).color(Color::DarkRed),
                     cyan(format!("{}│", pad(used))),
                 ],
             )?;
@@ -358,7 +356,7 @@ impl App {
             row,
             vec![
                 cyan("│ ".to_string()),
-                Span::new(question).color(RnkColor::Yellow),
+                ansi::Span::new(question).color(Color::DarkYellow),
                 cyan(format!("{}│", pad(q_used))),
             ],
         )?;
@@ -373,9 +371,9 @@ impl App {
             row,
             vec![
                 cyan("│  ".to_string()),
-                Span::new(yes_label).color(RnkColor::Red),
-                Span::new("   ".to_string()),
-                Span::new(no_label).color(RnkColor::Cyan),
+                ansi::Span::new(yes_label).color(Color::DarkRed),
+                ansi::Span::new("   ".to_string()),
+                ansi::Span::new(no_label).color(Color::DarkCyan),
                 cyan(format!("{}│", pad(actions_used))),
             ],
         )?;
