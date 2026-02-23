@@ -38,8 +38,11 @@ pub trait App: Sized + Send + 'static {
     fn update(&mut self, msg: Self::Message) -> Effect<Self::Message>;
 
     /// Produce the current UI tree. Called after every state change.
-    /// Must be pure — no side effects, no state mutation.
-    fn view(&self) -> Element;
+    ///
+    /// Takes `&mut self` to allow widgets to update cached derived state
+    /// (e.g., line-height caches that depend on the current terminal width).
+    /// Avoid primary-state mutation here — use `update` for that.
+    fn view(&mut self) -> Element;
 
     /// Translate a raw terminal event into an app message.
     /// Return `None` to let the framework handle the event (Ctrl+C, resize).
@@ -103,7 +106,7 @@ impl<Msg: Send + 'static> Effect<Msg> {
 /// # impl App for MyApp {
 /// #     type Message = ();
 /// #     fn update(&mut self, _: ()) -> Effect<()> { Effect::None }
-/// #     fn view(&self) -> Element { Canvas::new(|_, _| {}).into_element() }
+/// #     fn view(&mut self) -> Element { Canvas::new(|_, _| {}).into_element() }
 /// #     fn handle_event(&self, _: &Event) -> Option<()> { None }
 /// # }
 /// AppBuilder::new(MyApp).inline(3).run().await?;
@@ -123,6 +126,27 @@ pub struct AppBuilder<A: App> {
 impl<A: App> AppBuilder<A> {
     pub fn new(app: A) -> Self {
         let (msg_tx, msg_rx) = mpsc::unbounded_channel();
+        Self {
+            app,
+            mode: RenderMode::Fullscreen,
+            mouse_capture: false,
+            focus_events: false,
+            bracketed_paste: false,
+            msg_tx,
+            msg_rx,
+        }
+    }
+
+    /// Create an `AppBuilder` with a pre-created channel.
+    ///
+    /// Use this when the app itself needs to hold a clone of `msg_tx` before
+    /// `run()` is called (e.g., to spawn agent tasks that push messages into
+    /// the event loop). The caller owns the channel lifetime.
+    pub fn new_with_channel(
+        app: A,
+        msg_tx: mpsc::UnboundedSender<A::Message>,
+        msg_rx: mpsc::UnboundedReceiver<A::Message>,
+    ) -> Self {
         Self {
             app,
             mode: RenderMode::Fullscreen,

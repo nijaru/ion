@@ -1,10 +1,7 @@
 //! Command autocomplete for / and // prefix in input.
 
-use crate::tui::ansi::Color;
 use crate::tui::completer_state::CompleterState;
 use crate::tui::fuzzy;
-use crate::tui::render::popup::{render_popup, PopupItem, PopupRegion, PopupStyle};
-use std::io::Write;
 
 /// Maximum number of candidates to show in the popup.
 const MAX_VISIBLE: usize = 9;
@@ -170,52 +167,6 @@ impl CommandCompleter {
         }
     }
 
-    /// Render the command completion popup above the input box.
-    #[allow(clippy::cast_possible_truncation)]
-    pub fn render<W: Write>(&self, w: &mut W, input_start: u16, width: u16) -> std::io::Result<()> {
-        match self.mode {
-            CompleterMode::Builtin => self.render_builtins(w, input_start, width),
-            CompleterMode::Skill => self.render_skills(w, input_start, width),
-        }
-    }
-
-    fn render_builtins<W: Write>(
-        &self,
-        w: &mut W,
-        input_start: u16,
-        width: u16,
-    ) -> std::io::Result<()> {
-        let candidates = self.state.visible_candidates();
-        if candidates.is_empty() {
-            return Ok(());
-        }
-
-        let items: Vec<(&str, &str)> = candidates.iter().map(|(cmd, desc)| (*cmd, *desc)).collect();
-        let selected = self.state.selected_index();
-
-        render_candidate_popup(w, &items, selected, input_start, width, Color::DarkCyan)
-    }
-
-    fn render_skills<W: Write>(
-        &self,
-        w: &mut W,
-        input_start: u16,
-        width: u16,
-    ) -> std::io::Result<()> {
-        let candidates = self.skill_state.visible_candidates();
-        if candidates.is_empty() {
-            return Ok(());
-        }
-
-        let items: Vec<(&str, &str)> = candidates
-            .iter()
-            .map(|(name, desc)| (name.as_str(), desc.as_str()))
-            .collect();
-        let selected = self.skill_state.selected_index();
-
-        render_candidate_popup(w, &items, selected, input_start, width, Color::DarkGreen)
-    }
-
     fn apply_builtin_filter(&mut self) {
         let filtered = if self.state.query().is_empty() {
             COMMANDS.to_vec()
@@ -249,64 +200,6 @@ impl CommandCompleter {
         };
         self.skill_state.set_filtered(filtered);
     }
-}
-
-/// Shared rendering logic for both builtin and skill popup.
-#[allow(clippy::cast_possible_truncation)]
-fn render_candidate_popup<W: Write>(
-    w: &mut W,
-    items: &[(&str, &str)],
-    selected: usize,
-    input_start: u16,
-    width: u16,
-    primary_color: Color,
-) -> std::io::Result<()> {
-    if items.is_empty() {
-        return Ok(());
-    }
-
-    let popup_height = items.len() as u16;
-    let popup_start = input_start.saturating_sub(popup_height);
-
-    let max_cmd_len = items.iter().map(|(cmd, _)| cmd.len()).max().unwrap_or(10);
-    let max_desc_len = items.iter().map(|(_, desc)| desc.len()).max().unwrap_or(20);
-    let popup_width =
-        (max_cmd_len + max_desc_len + 6).min((width as usize).saturating_sub(4)) as u16;
-
-    let formatted: Vec<String> = items
-        .iter()
-        .map(|(cmd, desc)| {
-            let pad = max_cmd_len.saturating_sub(cmd.len()) + 2;
-            format!("{:pad$}{desc}", "", pad = pad)
-        })
-        .collect();
-
-    let popup_items: Vec<PopupItem> = items
-        .iter()
-        .zip(formatted.iter())
-        .enumerate()
-        .map(|(i, ((cmd, _), secondary))| PopupItem {
-            primary: cmd,
-            secondary,
-            is_selected: i == selected,
-            color_override: None,
-        })
-        .collect();
-
-    render_popup(
-        w,
-        &popup_items,
-        PopupRegion {
-            row: popup_start,
-            height: popup_height,
-        },
-        PopupStyle {
-            primary_color,
-            show_secondary_dimmed: true,
-            dim_unselected: false,
-        },
-        popup_width,
-    )
 }
 
 #[cfg(test)]
