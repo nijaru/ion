@@ -1,8 +1,10 @@
 # Ion TUI Architecture
 
 **Date:** 2026-02-22
-**Status:** Design (not yet implemented)
-**Reference:** See `ai/design/tui-lib-spec.md` for the general-purpose library vision (Claude Desktop conversation). This document is ion-specific and drives the actual refactor.
+**Status:** COMPLETE — all 8 steps implemented and committed.
+**Reference:** See `ai/design/tui-lib-spec.md` for the general-purpose library vision (Claude Desktop conversation). This document was ion-specific cleanup, not the full library.
+
+> **Note:** This was an internal cleanup of ion's existing TUI. It is NOT the `crates/tui/` general-purpose library described in `tui-lib-spec.md`. That library does not exist yet and needs to be built from scratch.
 
 ---
 
@@ -415,16 +417,18 @@ The lib spec (Taffy layout, App trait, Element tree, fullscreen + inline modes) 
 
 ## 8. Implementation Order
 
-| Step | What                                                                                                                     | Payoff                               |
-| ---- | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------ |
-| 1    | `text` module: `display_width`, `wrap_text`, `truncate_to_width` (`-> String`), `safe_width`                             | Single source of truth for width ops |
-| 2    | `StyledSpan::plain_text()`, `StyledLine::plain_text()`, `StyledLine::display_width()`                                    | Unlocks all testing; no rnk touch    |
-| 3    | Split `ChatRenderer::build_lines` into 5 functions using `text::wrap_text`                                               | Each path unit-testable              |
-| 4    | Write tests for chat renderer (user msg, wrap, tool calls, code blocks)                                                  | Regression safety before Step 5      |
-| 5    | `ansi` module using `crossterm::style::ContentStyle`; reimplement `write_to`/`write_to_width`; add `to_ansi`; remove rnk | Remove rnk dependency                |
-| 6    | Composer: remove `last_width`, add `width` param to `move_up`/`move_down`/visual nav methods                             | Fix resize glitch                    |
-| 7    | Bottom UI: `Buffer` with `diff` + `to_plain_lines`; wrap bottom UI renders                                               | Flicker-free, testable               |
-| 8    | Write bottom UI snapshot tests                                                                                           | Regression safety                    |
+| Step | What                                                                                                                     | Payoff                                 | Status                                                                   |
+| ---- | ------------------------------------------------------------------------------------------------------------------------ | -------------------------------------- | ------------------------------------------------------------------------ |
+| 1    | `text` module: `display_width`, `wrap_text`, `truncate_to_width` (`-> String`), `safe_width`                             | Single source of truth for width ops   | ✓ DONE                                                                   |
+| 2    | `StyledSpan::plain_text()`, `StyledLine::plain_text()`, `StyledLine::display_width()`                                    | Unlocks all testing; no rnk touch      | ✓ DONE                                                                   |
+| 3    | Split `ChatRenderer::build_lines` into 5 functions using `text::wrap_text`                                               | Each path unit-testable                | ✓ DONE                                                                   |
+| 4    | Write tests for chat renderer (user msg, wrap, tool calls, code blocks)                                                  | Regression safety before Step 5        | ✓ DONE                                                                   |
+| 5    | `ansi` module using `crossterm::style::ContentStyle`; reimplement `write_to`/`write_to_width`; add `to_ansi`; remove rnk | Remove rnk dependency                  | ✓ DONE                                                                   |
+| 6    | Composer: remove `last_width`, add `width` param to `move_up`/`move_down`/visual nav methods                             | Fix resize glitch                      | ✓ DONE                                                                   |
+| 7    | Bottom UI: row-string `Buffer` with `diff` + `to_plain_lines`; extract formatting helpers from paint_row                 | Testable helpers; partial flicker work | ✓ DONE (partial — row-string buffer, not full cell buffer from lib spec) |
+| 8    | Write bottom UI snapshot tests for formatting helpers                                                                    | Regression safety                      | ✓ DONE                                                                   |
+
+**Gap vs lib spec**: Step 7 implemented a simpler row-string buffer. The full cell-based `Buffer { cells: Vec<Cell> }` with Taffy layout and diff-based live rendering described in `tui-lib-spec.md` §5 is NOT done — that's part of the future `crates/tui/` library build.
 
 Steps 1–4 are pure additions (no existing behavior changes). Steps 5–8 are replacements.
 

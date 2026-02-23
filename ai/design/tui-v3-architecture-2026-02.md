@@ -1,5 +1,7 @@
 # TUI v3 Architecture Program (RNK-First, 2026-02)
 
+> **SUPERSEDED.** rnk has been removed from ion. This document described a refactor that was replaced by `tui-architecture-2026-02.md` (ion-specific cleanup, now complete) and `tui-lib-spec.md` (the general-purpose `crates/tui/` library, not yet built). Do not follow this document.
+
 ## Answer First
 
 Yes, `src/tui/` currently has too many files in the wrong shape.

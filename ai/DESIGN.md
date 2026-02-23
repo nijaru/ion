@@ -56,23 +56,35 @@ Core multi-turn loop with decomposed phases:
 2. **Tool Phase**: Execute tool calls via orchestrator
 3. **State Phase**: Commit assistant and tool turns to history
 
-### TUI Layer (RNK-first rendering + crossterm control)
+### TUI Layer (crossterm-direct, no rnk)
 
-RNK is now the primary text/style renderer for TUI surfaces. crossterm remains responsible for
-terminal control (raw mode, cursor movement, clear/scroll, event polling).
+rnk removed. All styling via `src/tui/ansi.rs` using `crossterm::style::ContentStyle`.
 
-- **Chat history**: Append-only transcript in native terminal scrollback.
-- **Bottom UI**: Ephemeral UI plane (progress/input/status) rendered each frame near terminal bottom.
-- **Input**: Custom composer with rope-backed multiline editing.
-- **Markdown**: pulldown-cmark + custom wrap/indent handling before terminal writes.
+| Component      | Description                                                           |
+| -------------- | --------------------------------------------------------------------- |
+| Chat history   | Append-only transcript in native terminal scrollback (no buffer)      |
+| Bottom UI      | Ephemeral rows cursor-positioned at terminal bottom each frame        |
+| Input/composer | Rope-backed (`ropey`) multiline editor; blob storage for large pastes |
+| Markdown       | `pulldown-cmark` + custom wrap/indent via `src/tui/text.rs`           |
+| Rendering      | Direct crossterm escape sequences; `ansi::render_line`/`render_spans` |
 
-Current resize/reflow contract:
+**Current architecture** (ion-specific cleanup complete as of 2026-02-22):
 
-- Reflow repaints from canonical entries at current width (viewport-safe, no full transcript replay).
-- Streaming carryover tracks committed lines by width to avoid duplicate appends after resize.
-- Header content is static (version + cwd); dynamic location (`cwd [branch]`) is shown in status line.
+- `src/tui/text.rs` — single source of truth for `display_width`, `wrap_text`, `truncate_to_width`
+- `src/tui/ansi.rs` — thin ANSI builder over `crossterm::ContentStyle`
+- `src/tui/render/buffer.rs` — row-string buffer with `diff()`/`to_plain_lines()` for tests
+- `src/tui/composer/` — `ComposerState` takes explicit `width` param (no cached state)
+- `src/tui/render/chat.rs` — split renderer functions: `render_user_message`, `render_agent_text`, etc.
 
-Primary architecture target is documented in `ai/design/tui-v3-architecture-2026-02.md`.
+**Future: `crates/tui/` general-purpose library** (not yet built):
+
+- Cell-based `Buffer { cells: Vec<Cell> }` with proper diff
+- Taffy flexbox layout
+- `App` trait + `Effect` system (Elm-style)
+- `Element`/`Widget` tree; built-in `List`, `Input`, `Block`, `Canvas`
+- Full inline + fullscreen mode with correct scroll math
+- ion builds `ConversationView`, `StreamingText`, `ToolCallView` on top
+- Spec: `ai/design/tui-lib-spec.md`
 
 ### Tool Framework
 

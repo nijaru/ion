@@ -2,6 +2,40 @@
 
 > Decision records for ion development. Pre-February decisions archived in `ai/DECISIONS-archive-jan.md`.
 
+## 2026-02-22: Build `crates/tui/` as a General-Purpose Library
+
+**Context**: ion's TUI was using rnk only for the bottom UI bar. rnk has been removed and replaced
+with direct crossterm calls. Evaluated whether to continue incrementally cleaning up ion's TUI or
+build a proper general-purpose library.
+
+**Decision**: Build `crates/tui/` as a standalone general-purpose TUI library crate, with ion as
+the first consumer. The library will have no knowledge of ion. ion builds agent-specific widgets
+(`ConversationView`, `StreamingText`, `ToolCallView`) on top.
+
+**Rationale**: ion's inline rendering model, custom input handling, and streaming requirements all
+point toward owning the stack. The ion-specific cleanup (steps 1–8) revealed the right seams. The
+spec (`ai/design/tui-lib-spec.md`) is detailed enough to build from. A general-purpose library
+extracted from ion will be more useful than ion-specific glue code.
+
+**Architecture**: Cell-based `Buffer`, Taffy layout, `App` trait + `Effect` system (Elm-style),
+`Element`/`Widget` tree. Full inline + fullscreen mode. Spec in `ai/design/tui-lib-spec.md`.
+
+---
+
+## 2026-02-22: rnk Removed; crossterm-direct + ansi module
+
+**Context**: ion used rnk only to apply ANSI escape codes — running a full flexbox layout engine
+to get back a single styled string. The `.lines().next()` usage discarded all multi-line output.
+
+**Decision**: Remove rnk entirely. Replace with `src/tui/ansi.rs` — a thin wrapper over
+`crossterm::style::ContentStyle` / `StyledContent<D: Display>`.
+
+**Rationale**: crossterm is already in the dependency tree. `ContentStyle::apply()` implements
+`Display` correctly with proper reset handling. 20 lines of wrapper replaces a layout engine
+dependency. No layout was needed — only styling.
+
+---
+
 ## 2026-02-22: No OS-Level Bash Sandbox
 
 **Context**: Evaluated macOS Seatbelt (`sandbox-exec`) + Linux Landlock for restricting
