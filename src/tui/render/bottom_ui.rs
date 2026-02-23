@@ -3,6 +3,8 @@
 use crate::tool::ToolMode;
 use crate::tui::ansi::{self, Color};
 use crate::tui::composer::{build_visual_lines, ComposerState};
+#[cfg(test)]
+use crate::tui::render::buffer as buf_mod;
 use crate::tui::render::{CONTINUATION, INPUT_MARGIN, PROMPT, PROMPT_WIDTH};
 use crate::tui::util::{display_width, format_cost, format_elapsed, format_tokens, render_token_bar, truncate_to_display_width};
 use crate::tui::App;
@@ -12,6 +14,24 @@ use crossterm::terminal::{Clear, ClearType};
 use std::io::Write;
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/// Render a plain-text row into a pre-rendered ANSI string (no terminal I/O).
+fn format_row_content(width: u16, text: &str, fg: Option<Color>, bold: bool, dim: bool) -> String {
+    let max_cells = width.saturating_sub(1) as usize;
+    if max_cells == 0 {
+        return String::new();
+    }
+    ansi::render_line(text, max_cells, fg, bold, dim)
+}
+
+/// Render a span list into a pre-rendered ANSI string (no terminal I/O).
+fn format_spans_content(width: u16, spans: Vec<ansi::Span>) -> String {
+    let max_cells = width.saturating_sub(1) as usize;
+    if max_cells == 0 || spans.is_empty() {
+        return String::new();
+    }
+    ansi::render_spans(&spans)
+}
 
 pub(crate) struct BottomUiFrame {
     pub progress_row: u16,
@@ -33,12 +53,10 @@ fn paint_row<W: Write>(
     dim: bool,
 ) -> std::io::Result<()> {
     execute!(w, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
-    let max_cells = width.saturating_sub(1) as usize;
-    if max_cells == 0 {
-        return Ok(());
+    let content = format_row_content(width, text, fg, bold, dim);
+    if !content.is_empty() {
+        write!(w, "{content}")?;
     }
-    let rendered = ansi::render_line(text, max_cells, fg, bold, dim);
-    write!(w, "{rendered}")?;
     Ok(())
 }
 
@@ -49,12 +67,10 @@ fn paint_row_spans<W: Write>(
     spans: Vec<ansi::Span>,
 ) -> std::io::Result<()> {
     execute!(w, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
-    let max_cells = width.saturating_sub(1) as usize;
-    if max_cells == 0 || spans.is_empty() {
-        return Ok(());
+    let content = format_spans_content(width, spans);
+    if !content.is_empty() {
+        write!(w, "{content}")?;
     }
-    let rendered = ansi::render_spans(&spans);
-    write!(w, "{rendered}")?;
     Ok(())
 }
 
@@ -143,6 +159,98 @@ impl App {
             .min(content_start.saturating_add(content_height.saturating_sub(1)));
         execute!(w, MoveTo(cursor_col, cursor_row))?;
         Ok(())
+    }
+
+    /// Render the bottom UI into a [`buf_mod::Buffer`] for snapshot testing.
+    ///
+    /// Returns `(buffer, cursor_col, cursor_row)` where cursor coordinates are
+    /// absolute terminal positions (same as `render_bottom_ui`).
+    #[cfg(test)]
+    pub(crate) fn render_bottom_ui_to_buffer(
+        &mut self,
+        frame: BottomUiFrame,
+    ) -> (buf_mod::Buffer, u16, u16) {
+        let BottomUiFrame {
+            progress_row,
+            progress_height,
+            input_row,
+            input_height,
+            status_row,
+            width,
+            show_progress_status,
+        } = frame;
+
+        let origin = progress_row;
+        let buf_height = status_row.saturating_sub(origin) as usize + 1;
+        let mut buffer = buf_mod::Buffer::new(width as usize, buf_height);
+
+        let content_start = input_row.saturating_add(1);
+        let content_height = input_height.saturating_sub(2);
+        let progress_line_row =
+            progress_row.saturating_add(progress_height.saturating_sub(1));
+
+        // Progress gap rows (empty)
+        for row in progress_row..progress_line_row {
+            buffer.set_row(
+                (row - origin) as usize,
+                format_row_content(width, "", None, false, false),
+            );
+        }
+
+        // Progress line
+        let progress_content = if show_progress_status {
+            let (text, color) = self.progress_line_text(width);
+            format_row_content(width, &text, color, false, false)
+        } else {
+            format_row_content(width, "", None, false, false)
+        };
+        buffer.set_row((progress_line_row - origin) as usize, progress_content);
+
+        // Top border
+        let border = "─".repeat(width.saturating_sub(1) as usize);
+        buffer.set_row(
+            (input_row - origin) as usize,
+            format_row_content(width, &border, Some(Color::DarkCyan), false, false),
+        );
+
+        // Input lines
+        let input_lines = self.input_lines_for_height(width, content_height);
+        for (idx, line) in input_lines.iter().enumerate() {
+            let row = content_start.saturating_add(idx as u16);
+            buffer.set_row(
+                (row - origin) as usize,
+                format_row_content(width, line, None, false, false),
+            );
+        }
+
+        // Bottom border
+        let border_row = content_start.saturating_add(content_height);
+        buffer.set_row(
+            (border_row - origin) as usize,
+            format_row_content(width, &border, Some(Color::DarkCyan), false, false),
+        );
+
+        // Status line
+        let status_content = if show_progress_status {
+            let spans = self.status_line_spans(width);
+            format_spans_content(width, spans)
+        } else {
+            format_row_content(width, "", None, false, false)
+        };
+        buffer.set_row((status_row - origin) as usize, status_content);
+
+        // Cursor position (absolute)
+        let (cursor_x, cursor_y) = self.input_state.cursor_pos;
+        let scroll_offset = self.input_state.scroll_offset() as u16;
+        let cursor_y = cursor_y.saturating_sub(scroll_offset);
+        let cursor_col = cursor_x
+            .saturating_add(PROMPT_WIDTH)
+            .min(width.saturating_sub(1));
+        let cursor_row = content_start
+            .saturating_add(cursor_y)
+            .min(content_start.saturating_add(content_height.saturating_sub(1)));
+
+        (buffer, cursor_col, cursor_row)
     }
 
     fn input_lines_for_height(&mut self, width: u16, height: u16) -> Vec<String> {
@@ -436,5 +544,128 @@ impl App {
         }
 
         spans
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tui::render::buffer::{strip_ansi, Buffer};
+
+    // --- format_row_content --------------------------------------------------
+
+    #[test]
+    fn test_format_row_content_zero_width() {
+        let out = format_row_content(0, "hello", None, false, false);
+        assert_eq!(out, "");
+    }
+
+    #[test]
+    fn test_format_row_content_empty_text() {
+        let out = format_row_content(80, "", None, false, false);
+        assert_eq!(strip_ansi(&out), "");
+    }
+
+    #[test]
+    fn test_format_row_content_plain_text() {
+        let out = format_row_content(80, "hello world", None, false, false);
+        assert_eq!(strip_ansi(&out), "hello world");
+    }
+
+    #[test]
+    fn test_format_row_content_border() {
+        // Border string uses box-drawing chars; color styling applied.
+        let border = "─".repeat(39);
+        let out = format_row_content(40, &border, Some(Color::DarkCyan), false, false);
+        assert_eq!(strip_ansi(&out), border);
+    }
+
+    #[test]
+    fn test_format_row_content_truncates_to_max_cells() {
+        // width 6 -> max_cells 5
+        let out = format_row_content(6, "abcdefghij", None, false, false);
+        assert_eq!(strip_ansi(&out), "abcde");
+    }
+
+    // --- format_spans_content ------------------------------------------------
+
+    #[test]
+    fn test_format_spans_content_empty_spans() {
+        let out = format_spans_content(80, vec![]);
+        assert_eq!(out, "");
+    }
+
+    #[test]
+    fn test_format_spans_content_zero_width() {
+        let out = format_spans_content(0, vec![ansi::Span::new("hello")]);
+        assert_eq!(out, "");
+    }
+
+    #[test]
+    fn test_format_spans_content_plain() {
+        let spans = vec![
+            ansi::Span::new(" ["),
+            ansi::Span::new("READ"),
+            ansi::Span::new("]"),
+        ];
+        let out = format_spans_content(80, spans);
+        assert_eq!(strip_ansi(&out), " [READ]");
+    }
+
+    #[test]
+    fn test_format_spans_content_styled() {
+        // Styling is stripped by strip_ansi; only text content matters.
+        let spans = vec![
+            ansi::Span::new(" ["),
+            ansi::Span::new("WRITE").color(Color::DarkYellow),
+            ansi::Span::new("]"),
+            ansi::Span::new(" • ").dim(),
+            ansi::Span::new("project"),
+        ];
+        let out = format_spans_content(80, spans);
+        assert_eq!(strip_ansi(&out), " [WRITE] • project");
+    }
+
+    // --- Buffer snapshot via to_plain_lines ----------------------------------
+
+    #[test]
+    fn test_buffer_snapshot_input_box() {
+        // Simulate a minimal input box: top border, one content row, bottom border.
+        let width = 20u16;
+        let border = "─".repeat(19);
+        let mut buf = Buffer::new(width as usize, 3);
+        buf.set_row(
+            0,
+            format_row_content(width, &border, Some(Color::DarkCyan), false, false),
+        );
+        buf.set_row(1, format_row_content(width, "› hello", None, false, false));
+        buf.set_row(
+            2,
+            format_row_content(width, &border, Some(Color::DarkCyan), false, false),
+        );
+
+        let lines = buf.to_plain_lines();
+        assert_eq!(lines[0], border, "top border");
+        assert_eq!(lines[1], "› hello", "input content");
+        assert_eq!(lines[2], border, "bottom border");
+    }
+
+    #[test]
+    fn test_buffer_snapshot_status_line() {
+        let width = 40u16;
+        let spans = vec![
+            ansi::Span::new(" ["),
+            ansi::Span::new("READ").color(Color::DarkCyan),
+            ansi::Span::new("]"),
+            ansi::Span::new(" • ").dim(),
+            ansi::Span::new("myproject"),
+        ];
+        let content = format_spans_content(width, spans);
+
+        let mut buf = Buffer::new(width as usize, 1);
+        buf.set_row(0, content);
+
+        let lines = buf.to_plain_lines();
+        assert_eq!(lines[0], " [READ] • myproject");
     }
 }
