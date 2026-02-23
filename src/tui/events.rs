@@ -58,6 +58,16 @@ impl App {
         let line_count = text.lines().count();
         let char_count = text.chars().count();
 
+        // Optionally wrap multi-line pastes in a code fence.
+        let text = if self.config.auto_backtick_paste && line_count > 1 {
+            format!("```\n{text}\n```")
+        } else {
+            text
+        };
+
+        let line_count = text.lines().count();
+        let char_count = text.chars().count();
+
         if line_count > PASTE_BLOB_LINE_THRESHOLD || char_count > PASTE_BLOB_CHAR_THRESHOLD {
             // Store as blob and insert placeholder with invisible delimiters
             // to prevent collision with user-typed text that looks like a placeholder
