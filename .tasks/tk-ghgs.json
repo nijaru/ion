@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "ghgs",
+  "title": "Build crates/tui/ Phase 1: geometry, style, cell buffer, terminal",
+  "description": "Start crates/tui/ general-purpose library per ai/design/tui-lib-spec.md. Phase 1: geometry.rs (Position, Rect, Size), style.rs (Style, Color, StyleModifiers), buffer.rs (Cell, Buffer, diff, to_lines), terminal.rs (Terminal, RenderMode inline/fullscreen). Deliverable: colored grid renders to terminal.",
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-02-23T02:06:44.423Z",
+  "updated_at": "2026-02-23T02:06:44.423Z",
+  "completed_at": null,
+  "external": {}
+}
