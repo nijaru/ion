@@ -58,6 +58,7 @@ bytes = "1.11.0"
 pdf-extract = "0.10.0"
 scraper = "0.25.0"
 rmcp = { version = "0.15.0", features = ["client", "transport-child-process"] }
+tui = { path = "crates/tui" }
 
 [profile.release]
 strip = true
