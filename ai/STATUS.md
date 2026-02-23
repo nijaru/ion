@@ -2,39 +2,40 @@
 
 ## Current State
 
-| Metric    | Value                         | Updated    |
-| --------- | ----------------------------- | ---------- |
-| Phase     | Core feature completeness     | 2026-02-22 |
-| Status    | All p3 tasks done; p4 backlog | 2026-02-22 |
-| Toolchain | stable                        | 2026-01-22 |
-| Tests     | 565 passing                   | 2026-02-22 |
-| Clippy    | clean                         | 2026-02-22 |
+| Metric    | Value                              | Updated    |
+| --------- | ---------------------------------- | ---------- |
+| Phase     | crates/tui Phase 6 complete        | 2026-02-23 |
+| Status    | TUI lib done; ion integration next | 2026-02-23 |
+| Toolchain | stable                             | 2026-01-22 |
+| Tests     | 566 passing                        | 2026-02-23 |
+| Clippy    | clean                              | 2026-02-22 |
 
 ## Implemented Features
 
-| Feature             | Status | Location                                                                               |
-| ------------------- | ------ | -------------------------------------------------------------------------------------- |
-| Core tools          | Done   | read, write, edit, bash, glob, grep, list, ast_grep                                    |
-| Web tools           | Done   | web_fetch, web_search (built-in, default)                                              |
-| Multi-provider      | Done   | Anthropic, Google, Groq, Kimi, Ollama, OpenAI, OpenRouter                              |
-| OAuth               | Done   | Gemini CLI, ChatGPT (with ban warning for Gemini)                                      |
-| Context compaction  | Done   | 3-tier: truncate → remove → LLM summarize; auto + `/compact`                           |
-| Sub-agents          | Done   | `spawn_subagent` tool + `SubagentRegistry` + YAML config; sync only                    |
-| Hooks               | Done   | Pre/post tool execution; `CommandHook` (shell); config-driven via `ion.toml`           |
-| Mid-turn steering   | Done   | `message_queue` wired TUI → agent; drains between turns                                |
-| Image input         | Done   | File attachment works (png/jpg/gif/webp) via `@path`                                   |
-| Config system       | Done   | `~/.config/ion/ion.toml`; hierarchical user+project; API keys, hooks, MCP, permissions |
-| Session persistence | Done   | SQLite; `--continue` resumes; completion summary saved                                 |
-| Skills              | Done   | `//skill-name` completer; `$ARGUMENTS` substitution                                    |
-| MCP client          | Done   | stdio + HTTP transports; tools callable by LLM                                         |
-| Read/Write modes    | Done   | Shift+Tab toggle; path sandbox (CWD enforcement)                                       |
-| Token tracking      | Done   | Bar in status line; per-turn usage; cost tracking                                      |
-| Bash passthrough    | Done   | `! cmd` prefix runs shell command directly                                             |
-| Configurable status | Done   | TOML flags: show_model, show_tokens, show_cost, show_branch, show_git_diff             |
-| Auto-backtick paste | Done   | `auto_backtick_paste = true` in config wraps multi-line pastes                         |
-| Session export      | Done   | `/export` writes markdown to working dir                                               |
-| ast-grep tool       | Done   | Structural code search via `sg` binary                                                 |
-| ask_user tool       | Done   | Agent pauses and asks user a question; TUI intercepts Enter to respond                 |
+| Feature             | Status            | Location                                                                                      |
+| ------------------- | ----------------- | --------------------------------------------------------------------------------------------- |
+| Core tools          | Done              | read, write, edit, bash, glob, grep, list, ast_grep                                           |
+| Web tools           | Done              | web_fetch, web_search (built-in, default)                                                     |
+| Multi-provider      | Done              | Anthropic, Google, Groq, Kimi, Ollama, OpenAI, OpenRouter                                     |
+| OAuth               | Done              | Gemini CLI, ChatGPT (with ban warning for Gemini)                                             |
+| Context compaction  | Done              | 3-tier: truncate → remove → LLM summarize; auto + `/compact`                                  |
+| Sub-agents          | Done              | `spawn_subagent` tool + `SubagentRegistry` + YAML config; sync only                           |
+| Hooks               | Done              | Pre/post tool execution; `CommandHook` (shell); config-driven via `ion.toml`                  |
+| Mid-turn steering   | Done              | `message_queue` wired TUI → agent; drains between turns                                       |
+| Image input         | Done              | File attachment works (png/jpg/gif/webp) via `@path`                                          |
+| Config system       | Done              | `~/.config/ion/ion.toml`; hierarchical user+project; API keys, hooks, MCP, permissions        |
+| Session persistence | Done              | SQLite; `--continue` resumes; completion summary saved                                        |
+| Skills              | Done              | `//skill-name` completer; `$ARGUMENTS` substitution                                           |
+| MCP client          | Done              | stdio + HTTP transports; tools callable by LLM                                                |
+| Read/Write modes    | Done              | Shift+Tab toggle; path sandbox (CWD enforcement)                                              |
+| Token tracking      | Done              | Bar in status line; per-turn usage; cost tracking                                             |
+| Bash passthrough    | Done              | `! cmd` prefix runs shell command directly                                                    |
+| Configurable status | Done              | TOML flags: show_model, show_tokens, show_cost, show_branch, show_git_diff                    |
+| Auto-backtick paste | Done              | `auto_backtick_paste = true` in config wraps multi-line pastes                                |
+| Session export      | Done              | `/export` writes markdown to working dir                                                      |
+| ast-grep tool       | Done              | Structural code search via `sg` binary                                                        |
+| ask_user tool       | Done              | Agent pauses and asks user a question; TUI intercepts Enter to respond                        |
+| crates/tui library  | Done (Phases 1–6) | Cell buffer, Taffy layout, App+Effect, Input/List/Block/Canvas/Theme; ion integration pending |
 
 ## Open Backlog (p4 only)
 

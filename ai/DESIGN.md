@@ -76,15 +76,26 @@ rnk removed. All styling via `src/tui/ansi.rs` using `crossterm::style::ContentS
 - `src/tui/composer/` — `ComposerState` takes explicit `width` param (no cached state)
 - `src/tui/render/chat.rs` — split renderer functions: `render_user_message`, `render_agent_text`, etc.
 
-**Future: `crates/tui/` general-purpose library** (not yet built):
+**`crates/tui/` general-purpose library** (Phases 1–6 complete, 2026-02-23):
 
-- Cell-based `Buffer { cells: Vec<Cell> }` with proper diff
-- Taffy flexbox layout
-- `App` trait + `Effect` system (Elm-style)
-- `Element`/`Widget` tree; built-in `List`, `Input`, `Block`, `Canvas`
-- Full inline + fullscreen mode with correct scroll math
-- ion builds `ConversationView`, `StreamingText`, `ToolCallView` on top
-- Spec: `ai/design/tui-lib-spec.md`
+| Phase | Deliverable                                             | Status |
+| ----- | ------------------------------------------------------- | ------ |
+| 1     | `geometry`, `style`, `buffer`, `terminal`               | Done   |
+| 2     | `event`, `app` (App trait + AppBuilder + AppRunner)     | Done   |
+| 3     | `layout` (Taffy), `Text`, `Row`, `Col`, `Block`         | Done   |
+| 4     | `Input` widget (multiline, keybindings, history)        | Done   |
+| 5     | `List` (virtual scroll), `Scroll`                       | Done   |
+| 6     | `Canvas`, `Theme`, `render_to_ansi`, inline mode polish | Done   |
+
+Key design: Elm-style `App` trait + `Effect` system. Taffy flexbox layout. Cell-based
+double-buffered diff. Inline + fullscreen modes. Snapshot testing built in.
+
+**Next:** ion builds `ConversationView`, `StreamingText`, `ToolCallView` on top.
+Spec: `ai/design/tui-lib-spec.md`
+
+**Open design question:** Inline mode grow-direction. Current: grows downward from
+`start_row`. For bottom-anchored input bars (ion's use case), grow-up (scroll terminal
+up, keep cursor at bottom) would be more natural — requires dynamic `start_row` tracking.
 
 ### Tool Framework
 
