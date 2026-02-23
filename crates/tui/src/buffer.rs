@@ -306,6 +306,24 @@ impl Buffer {
         commands
     }
 
+    /// Returns the number of rows (from the top) that contain at least one
+    /// non-default cell. Used by the inline-mode renderer to track the actual
+    /// visual height of the content so stale rows can be cleared when the
+    /// inline region shrinks.
+    ///
+    /// Returns `0` if the buffer is entirely blank.
+    pub fn content_height(&self) -> u16 {
+        let default_cell = Cell::default();
+        for row in (0..self.area.height).rev() {
+            for col in 0..self.area.width {
+                if self.get(col, row) != &default_cell {
+                    return row + 1;
+                }
+            }
+        }
+        0
+    }
+
     /// Convert to plain strings, one per row (for snapshot tests).
     /// Wide-char sentinel cells are skipped (their column is covered by the
     /// previous grapheme's visual width).

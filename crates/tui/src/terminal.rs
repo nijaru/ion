@@ -5,7 +5,7 @@ use crossterm::{
     style::{
         Attribute, Color as CtColor, Print, SetAttribute, SetBackgroundColor, SetForegroundColor,
     },
-    terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
 };
 
 use crate::{
@@ -92,6 +92,11 @@ impl Terminal {
         self.size
     }
 
+    /// Current render mode.
+    pub(crate) fn mode(&self) -> RenderMode {
+        self.mode
+    }
+
     /// The buffer area that `AppRunner` should allocate for each frame.
     ///
     /// Always starts at `(0, 0)` so widget coordinates are 0-based. The
@@ -110,12 +115,15 @@ impl Terminal {
     /// Flush a sequence of [`DrawCommand`]s produced by [`crate::buffer::Buffer::diff`].
     ///
     /// In inline mode, all `MoveTo` y-coordinates are shifted by `start_row`.
+    /// When `rendered_height` is less than the previously recorded height (i.e.
+    /// the content shrank), the stale rows are cleared with
+    /// [`ClearType::CurrentLine`] so they don't linger as ghost lines.
     pub(crate) fn flush_commands(
         &mut self,
         commands: Vec<DrawCommand>,
         rendered_height: u16,
     ) -> Result<()> {
-        self.rendered_height = rendered_height;
+        let prev_height = self.rendered_height;
         let out = &mut self.backend.out;
         for cmd in commands {
             match cmd {
@@ -127,6 +135,15 @@ impl Terminal {
                 DrawCommand::ResetStyle => queue!(out, SetAttribute(Attribute::Reset))?,
             }
         }
+        // In inline mode: clear rows that are no longer part of the rendered
+        // region so they don't show as ghost lines when content shrinks.
+        if matches!(self.mode, RenderMode::Inline { .. }) && rendered_height < prev_height {
+            for row in rendered_height..prev_height {
+                queue!(out, cursor::MoveTo(0, self.start_row + row))?;
+                queue!(out, Clear(ClearType::CurrentLine))?;
+            }
+        }
+        self.rendered_height = rendered_height;
         out.flush()?;
         Ok(())
     }

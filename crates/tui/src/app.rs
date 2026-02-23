@@ -19,6 +19,9 @@ use crate::{
     widgets::Element,
 };
 
+// Minimum inline height — never drop below 1 row even if the buffer is blank.
+const MIN_INLINE_HEIGHT: u16 = 1;
+
 // ── App trait ────────────────────────────────────────────────────────────────
 
 /// The trait users implement to build an application.
@@ -313,8 +316,18 @@ impl<A: App> AppRunner<A> {
         let layout = compute_layout(&root, size);
         root.render(&layout, &mut buf);
 
+        // In inline mode, use the actual rendered content height rather than
+        // the fixed buffer height. This lets Terminal::flush_commands clear
+        // rows that were occupied in the previous frame but are now empty,
+        // preventing ghost lines when a multiline input shrinks.
+        let rendered_height = if matches!(self.terminal.mode(), RenderMode::Inline { .. }) {
+            buf.content_height().max(MIN_INLINE_HEIGHT)
+        } else {
+            area.height
+        };
+
         let commands = buf.diff(&self.prev_buf);
-        self.terminal.flush_commands(commands, area.height)?;
+        self.terminal.flush_commands(commands, rendered_height)?;
         self.prev_buf = buf;
         Ok(())
     }
