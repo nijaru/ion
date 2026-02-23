@@ -150,4 +150,8 @@ pub struct App {
     pub session_cost: f64,
     /// Last known terminal width, updated on resize and at startup.
     pub term_width: u16,
+    /// Receiver for ask_user requests from the agent.
+    pub ask_user_rx: Option<crate::tool::builtin::ask_user::AskUserReceiver>,
+    /// Pending ask_user response channel (agent is blocked waiting for user input).
+    pub pending_ask_user: Option<tokio::sync::oneshot::Sender<String>>,
 }
