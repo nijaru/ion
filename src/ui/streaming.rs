@@ -137,7 +137,7 @@ impl Default for StreamingText {
 
 // ── Style bridging ────────────────────────────────────────────────────────────
 
-fn ion_color_to_tui(c: IonColor) -> TuiColor {
+pub(crate) fn ion_color_to_tui(c: IonColor) -> TuiColor {
     // Ion uses crossterm naming: bright variants have no "Dark" prefix,
     // dark variants have the "Dark" prefix.
     // tui::Color uses the inverse: standard variants are dark, Light* are bright.
