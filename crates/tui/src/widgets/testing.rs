@@ -25,6 +25,31 @@ pub fn render_to_lines(element: Element, width: u16, height: u16) -> Vec<String>
     buf.to_lines()
 }
 
+/// Render an element tree into a buffer and return each row as an
+/// ANSI-escaped string for styled snapshot tests.
+///
+/// Useful when you need to assert both content *and* colors / attributes.
+/// For content-only assertions, prefer [`render_to_lines`].
+///
+/// # Example
+///
+/// ```ignore
+/// let lines = render_to_ansi(
+///     Text::new("error").styled(Style::new().fg(Color::Red)).into_element(),
+///     10, 1,
+/// );
+/// // Lines contain ANSI escape codes around "error" followed by a reset.
+/// assert!(lines[0].contains("error"));
+/// ```
+pub fn render_to_ansi(element: Element, width: u16, height: u16) -> Vec<String> {
+    let size = Size { width, height };
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::new(area);
+    let layout = compute_layout(&element, size);
+    element.render(&layout, &mut buf);
+    buf.to_styled_lines()
+}
+
 /// Assert that a widget renders to the expected lines.
 ///
 /// # Example

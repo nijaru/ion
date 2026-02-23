@@ -325,6 +325,142 @@ impl Buffer {
             })
             .collect()
     }
+
+    /// Convert to ANSI-escaped strings, one per row (for styled snapshot tests).
+    ///
+    /// Each row is a string containing ANSI SGR escape codes that reflect the
+    /// cell styles. Adjacent cells sharing the same style are emitted in a
+    /// single run to keep output compact. A reset is appended at the end of
+    /// each row if any styling was applied.
+    ///
+    /// Use [`to_lines`] when you only need to assert content; use this when
+    /// you also need to assert colors or text attributes.
+    pub fn to_styled_lines(&self) -> Vec<String> {
+        use crate::style::{Color, StyleModifiers};
+
+        fn ansi_reset() -> &'static str {
+            "\x1b[0m"
+        }
+
+        fn ansi_for_style(style: &crate::style::Style) -> String {
+            if *style == crate::style::Style::default() {
+                return String::new();
+            }
+            let mut s = String::from("\x1b[");
+            let mut parts: Vec<String> = vec!["0".into()]; // always reset first
+
+            if let Some(fg) = style.fg {
+                match fg {
+                    Color::Reset => {}
+                    Color::Black => parts.push("30".into()),
+                    Color::Red => parts.push("31".into()),
+                    Color::Green => parts.push("32".into()),
+                    Color::Yellow => parts.push("33".into()),
+                    Color::Blue => parts.push("34".into()),
+                    Color::Magenta => parts.push("35".into()),
+                    Color::Cyan => parts.push("36".into()),
+                    Color::White => parts.push("37".into()),
+                    Color::DarkGray => parts.push("90".into()),
+                    Color::LightRed => parts.push("91".into()),
+                    Color::LightGreen => parts.push("92".into()),
+                    Color::LightYellow => parts.push("93".into()),
+                    Color::LightBlue => parts.push("94".into()),
+                    Color::LightMagenta => parts.push("95".into()),
+                    Color::LightCyan => parts.push("96".into()),
+                    Color::Gray => parts.push("37".into()),
+                    Color::Rgb(r, g, b) => parts.push(format!("38;2;{r};{g};{b}")),
+                    Color::Indexed(i) => parts.push(format!("38;5;{i}")),
+                }
+            }
+            if let Some(bg) = style.bg {
+                match bg {
+                    Color::Reset => {}
+                    Color::Black => parts.push("40".into()),
+                    Color::Red => parts.push("41".into()),
+                    Color::Green => parts.push("42".into()),
+                    Color::Yellow => parts.push("43".into()),
+                    Color::Blue => parts.push("44".into()),
+                    Color::Magenta => parts.push("45".into()),
+                    Color::Cyan => parts.push("46".into()),
+                    Color::White => parts.push("47".into()),
+                    Color::DarkGray => parts.push("100".into()),
+                    Color::LightRed => parts.push("101".into()),
+                    Color::LightGreen => parts.push("102".into()),
+                    Color::LightYellow => parts.push("103".into()),
+                    Color::LightBlue => parts.push("104".into()),
+                    Color::LightMagenta => parts.push("105".into()),
+                    Color::LightCyan => parts.push("106".into()),
+                    Color::Gray => parts.push("47".into()),
+                    Color::Rgb(r, g, b) => parts.push(format!("48;2;{r};{g};{b}")),
+                    Color::Indexed(i) => parts.push(format!("48;5;{i}")),
+                }
+            }
+            let m = style.modifiers;
+            if m.contains(StyleModifiers::BOLD) {
+                parts.push("1".into());
+            }
+            if m.contains(StyleModifiers::DIM) {
+                parts.push("2".into());
+            }
+            if m.contains(StyleModifiers::ITALIC) {
+                parts.push("3".into());
+            }
+            if m.contains(StyleModifiers::UNDERLINE) {
+                parts.push("4".into());
+            }
+            if m.contains(StyleModifiers::BLINK) {
+                parts.push("5".into());
+            }
+            if m.contains(StyleModifiers::REVERSED) {
+                parts.push("7".into());
+            }
+            if m.contains(StyleModifiers::HIDDEN) {
+                parts.push("8".into());
+            }
+            if m.contains(StyleModifiers::STRIKETHROUGH) {
+                parts.push("9".into());
+            }
+            s.push_str(&parts.join(";"));
+            s.push('m');
+            s
+        }
+
+        (0..self.area.height)
+            .map(|row| {
+                let mut out = String::new();
+                let mut current_style: Option<crate::style::Style> = None;
+                let mut any_style = false;
+
+                for col in 0..self.area.width {
+                    let cell = self.get(col, row);
+                    if cell.skip {
+                        continue;
+                    }
+                    if current_style.as_ref() != Some(&cell.style) {
+                        // Emit escape for the new style.
+                        let escape = ansi_for_style(&cell.style);
+                        if !escape.is_empty() {
+                            any_style = true;
+                            out.push_str(&escape);
+                        } else if current_style
+                            .as_ref()
+                            .is_some_and(|s| *s != crate::style::Style::default())
+                        {
+                            // Transitioning back to default — emit reset.
+                            out.push_str(ansi_reset());
+                        }
+                        current_style = Some(cell.style);
+                    }
+                    out.push_str(&cell.symbol);
+                }
+                // Trailing reset if any styling was used.
+                if any_style {
+                    out.push_str(ansi_reset());
+                }
+                out
+            })
+            .collect()
+    }
 }
 
 /// A minimal draw instruction produced by [`Buffer::diff`].

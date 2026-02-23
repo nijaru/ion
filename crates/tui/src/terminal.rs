@@ -11,7 +11,7 @@ use crossterm::{
 use crate::{
     buffer::DrawCommand,
     error::Result,
-    geometry::{Position, Size},
+    geometry::{Position, Rect, Size},
     style::{Color, Style, StyleModifiers},
 };
 
@@ -31,11 +31,23 @@ struct CrosstermBackend {
 /// Owns raw mode, the alternate screen, cursor visibility, and I/O flushing.
 ///
 /// Crossterm is used here and nowhere else in the public API.
+///
+/// ## Inline mode
+///
+/// In inline mode the app renders at the cursor's current row (`start_row`)
+/// rather than taking over the full screen. All `MoveTo` y-coordinates
+/// produced by [`Buffer::diff`] are offset by `start_row` so the UI stays
+/// anchored to the right position. On [`Terminal::restore`] the cursor is
+/// moved below the rendered region so the shell prompt appears naturally.
 pub struct Terminal {
     backend: CrosstermBackend,
     size: Size,
     mode: RenderMode,
     cursor_visible: bool,
+    /// Row where inline rendering begins (always 0 for fullscreen).
+    start_row: u16,
+    /// Height of the last render (used by restore to position the cursor).
+    rendered_height: u16,
 }
 
 impl Terminal {
@@ -43,8 +55,22 @@ impl Terminal {
     ///
     /// Enables raw mode and hides the cursor. Enters the alternate screen for
     /// [`RenderMode::Fullscreen`]; inline mode does not touch the screen buffer.
+    ///
+    /// For inline mode, the current cursor row is captured as `start_row`
+    /// before raw mode is enabled.
     pub fn new(mode: RenderMode) -> Result<Self> {
         let (width, height) = terminal::size()?;
+
+        // Capture cursor row for inline mode before enabling raw mode so the
+        // ANSI DSR query doesn't interfere with the application's stdin.
+        let start_row = if matches!(mode, RenderMode::Inline { .. }) {
+            crossterm::cursor::position()
+                .map(|(_, row)| row)
+                .unwrap_or(0)
+        } else {
+            0
+        };
+
         terminal::enable_raw_mode()?;
         let mut out = io::stdout();
         if matches!(mode, RenderMode::Fullscreen) {
@@ -56,6 +82,8 @@ impl Terminal {
             size: Size::new(width, height),
             mode,
             cursor_visible: false,
+            start_row,
+            rendered_height: 0,
         })
     }
 
@@ -64,12 +92,36 @@ impl Terminal {
         self.size
     }
 
+    /// The buffer area that `AppRunner` should allocate for each frame.
+    ///
+    /// Always starts at `(0, 0)` so widget coordinates are 0-based. The
+    /// `start_row` offset is applied in [`flush_commands`] when producing
+    /// terminal `MoveTo` commands.
+    pub fn render_area(&self) -> Rect {
+        match self.mode {
+            RenderMode::Fullscreen => Rect::new(0, 0, self.size.width, self.size.height),
+            RenderMode::Inline { height } => {
+                let h = height.min(self.size.height);
+                Rect::new(0, 0, self.size.width, h)
+            }
+        }
+    }
+
     /// Flush a sequence of [`DrawCommand`]s produced by [`crate::buffer::Buffer::diff`].
-    pub(crate) fn flush_commands(&mut self, commands: Vec<DrawCommand>) -> Result<()> {
+    ///
+    /// In inline mode, all `MoveTo` y-coordinates are shifted by `start_row`.
+    pub(crate) fn flush_commands(
+        &mut self,
+        commands: Vec<DrawCommand>,
+        rendered_height: u16,
+    ) -> Result<()> {
+        self.rendered_height = rendered_height;
         let out = &mut self.backend.out;
         for cmd in commands {
             match cmd {
-                DrawCommand::MoveTo(x, y) => queue!(out, cursor::MoveTo(x, y))?,
+                DrawCommand::MoveTo(x, y) => {
+                    queue!(out, cursor::MoveTo(x, y + self.start_row))?;
+                }
                 DrawCommand::SetStyle(style) => queue_style(out, style)?,
                 DrawCommand::Print(s) => queue!(out, Print(s))?,
                 DrawCommand::ResetStyle => queue!(out, SetAttribute(Attribute::Reset))?,
@@ -91,29 +143,54 @@ impl Terminal {
     }
 
     /// Move the hardware cursor (used by the input widget).
+    ///
+    /// In inline mode, `pos.y` is relative to the render area (0-based) and
+    /// is offset by `start_row` automatically.
     pub fn set_cursor_position(&mut self, pos: Position) -> Result<()> {
-        execute!(self.backend.out, cursor::MoveTo(pos.x, pos.y))?;
+        execute!(
+            self.backend.out,
+            cursor::MoveTo(pos.x, pos.y + self.start_row)
+        )?;
         Ok(())
     }
 
-    /// Restore the terminal to its pre-run state:
-    /// - Leave alternate screen if fullscreen.
-    /// - Show cursor.
-    /// - Disable raw mode.
+    /// Restore the terminal to its pre-run state.
+    ///
+    /// - Leaves the alternate screen (fullscreen only).
+    /// - Shows the cursor.
+    /// - Disables raw mode.
+    /// - In inline mode: moves the cursor to the row below the rendered
+    ///   region so the shell prompt appears naturally.
     pub fn restore(mut self) -> Result<()> {
         let out = &mut self.backend.out;
         execute!(out, SetAttribute(Attribute::Reset))?;
         execute!(out, cursor::Show)?;
-        if matches!(self.mode, RenderMode::Fullscreen) {
-            execute!(out, LeaveAlternateScreen)?;
+        match self.mode {
+            RenderMode::Fullscreen => {
+                execute!(out, LeaveAlternateScreen)?;
+            }
+            RenderMode::Inline { .. } => {
+                // Position cursor below the rendered region.
+                let below = self.start_row + self.rendered_height;
+                execute!(out, cursor::MoveTo(0, below))?;
+                // Print a newline to push the shell prompt onto a fresh line.
+                writeln!(out)?;
+            }
         }
         terminal::disable_raw_mode()?;
         Ok(())
     }
 
     /// Handle a resize event — updates the cached size.
+    ///
+    /// For inline mode, `start_row` is clamped so the render region stays
+    /// within the terminal.
     pub(crate) fn handle_resize(&mut self, width: u16, height: u16) {
         self.size = Size::new(width, height);
+        if matches!(self.mode, RenderMode::Inline { .. }) {
+            let inline_h = self.render_area().height;
+            self.start_row = self.start_row.min(height.saturating_sub(inline_h));
+        }
     }
 
     /// Switch between render modes at runtime.
@@ -121,9 +198,13 @@ impl Terminal {
         match (&self.mode, &mode) {
             (RenderMode::Inline { .. }, RenderMode::Fullscreen) => {
                 execute!(self.backend.out, EnterAlternateScreen)?;
+                self.start_row = 0;
             }
             (RenderMode::Fullscreen, RenderMode::Inline { .. }) => {
                 execute!(self.backend.out, LeaveAlternateScreen)?;
+                self.start_row = crossterm::cursor::position()
+                    .map(|(_, row)| row)
+                    .unwrap_or(0);
             }
             _ => {}
         }
