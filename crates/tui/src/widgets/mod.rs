@@ -1,8 +1,13 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::{buffer::Buffer, geometry::Rect};
+use crate::{buffer::Buffer, geometry::Rect, layout::{Dimension, Edges, Layout, LayoutStyle}};
 
+pub mod block;
 pub mod canvas;
+pub mod col;
+pub mod row;
+pub mod testing;
+pub mod text;
 
 /// A unique identifier for a widget node. Used by the layout pass to map
 /// widgets to screen rects. Generated per-frame; do not persist across frames.
@@ -25,7 +30,7 @@ impl Default for WidgetId {
 /// Trait implemented by widget internals.
 ///
 /// `render` writes into the provided buffer region. Widgets must not write
-/// outside `area`. The area uses buffer-local coordinates.
+/// outside `area`. The area uses absolute terminal coordinates.
 pub(crate) trait Renderable: Send + Sync {
     fn render(&self, area: Rect, buf: &mut Buffer);
 }
@@ -33,17 +38,76 @@ pub(crate) trait Renderable: Send + Sync {
 /// A node in the render tree.
 ///
 /// Produced by widget builder methods via [`IntoElement::into_element`].
-/// Phase 2: no layout children; the root element receives the full terminal
-/// area. Phase 3 will add `layout_style` and `children` for Taffy layout.
+/// Layout is computed by Taffy before rendering; each element gets a [`Rect`]
+/// determined by its [`LayoutStyle`] and its position in the tree.
 pub struct Element {
-    #[allow(dead_code)]
     pub(crate) id: WidgetId,
     pub(crate) inner: Box<dyn Renderable>,
+    pub(crate) layout_style: LayoutStyle,
+    pub(crate) children: Vec<Element>,
 }
 
 impl Element {
-    pub(crate) fn render(&self, area: Rect, buf: &mut Buffer) {
+    /// Render this element and all children into the buffer.
+    /// Each element's area is looked up from the layout pass result.
+    pub(crate) fn render(&self, layout: &Layout, buf: &mut Buffer) {
+        let area = layout.get(self.id);
         self.inner.render(area, buf);
+        for child in &self.children {
+            child.render(layout, buf);
+        }
+    }
+
+    // ── Layout builder methods ────────────────────────────────────────────────
+
+    pub fn width(mut self, w: Dimension) -> Self {
+        self.layout_style.size.width = w;
+        self
+    }
+
+    pub fn height(mut self, h: Dimension) -> Self {
+        self.layout_style.size.height = h;
+        self
+    }
+
+    pub fn min_width(mut self, w: Dimension) -> Self {
+        self.layout_style.min_size.width = w;
+        self
+    }
+
+    pub fn min_height(mut self, h: Dimension) -> Self {
+        self.layout_style.min_size.height = h;
+        self
+    }
+
+    pub fn max_width(mut self, w: Dimension) -> Self {
+        self.layout_style.max_size.width = w;
+        self
+    }
+
+    pub fn max_height(mut self, h: Dimension) -> Self {
+        self.layout_style.max_size.height = h;
+        self
+    }
+
+    pub fn flex_grow(mut self, v: f32) -> Self {
+        self.layout_style.flex_grow = v;
+        self
+    }
+
+    pub fn flex_shrink(mut self, v: f32) -> Self {
+        self.layout_style.flex_shrink = v;
+        self
+    }
+
+    pub fn padding(mut self, edges: Edges) -> Self {
+        self.layout_style.padding = edges;
+        self
+    }
+
+    pub fn margin(mut self, edges: Edges) -> Self {
+        self.layout_style.margin = edges;
+        self
     }
 }
 

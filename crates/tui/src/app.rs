@@ -15,6 +15,7 @@ use crate::{
     error::Result,
     event::{translate_event, Event, KeyCode, KeyModifiers},
     geometry::Rect,
+    layout::compute_layout,
     terminal::{RenderMode, Terminal},
     widgets::Element,
 };
@@ -307,10 +308,9 @@ impl<A: App> AppRunner<A> {
         let area = Rect::new(0, 0, size.width, size.height);
         let mut buf = Buffer::new(area);
 
-        // Phase 2: no layout pass. Root element gets the full terminal area.
-        // Phase 3 will insert a Taffy layout pass between view() and render().
         let root = self.app.view();
-        root.render(area, &mut buf);
+        let layout = compute_layout(&root, size);
+        root.render(&layout, &mut buf);
 
         let commands = buf.diff(&self.prev_buf);
         self.terminal.flush_commands(commands)?;
