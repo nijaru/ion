@@ -361,6 +361,14 @@ impl App {
                 // Reject empty or whitespace-only input
                 let input = self.input_text();
                 if !input.trim().is_empty() {
+                    // ask_user response: deliver to waiting agent tool, skip normal flow
+                    if let Some(tx) = self.pending_ask_user.take() {
+                        self.message_list.push_user_message(input.clone());
+                        self.clear_input();
+                        let _ = tx.send(input);
+                        return;
+                    }
+
                     if self.is_running {
                         // Queue message for injection at next turn (resolve blobs)
                         let resolved = self.resolved_input_text();

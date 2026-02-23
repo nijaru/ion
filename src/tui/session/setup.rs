@@ -155,6 +155,13 @@ impl App {
             shared_tool_mode.clone(),
         )));
 
+        // Register ask_user tool (agent-to-user clarification channel)
+        let (ask_user_tx, ask_user_rx) =
+            crate::tool::builtin::ask_user::ask_user_channel();
+        orchestrator.register_tool(Box::new(
+            crate::tool::builtin::AskUserTool::new(ask_user_tx),
+        ));
+
         let orchestrator = Arc::new(orchestrator);
 
         // Register config-driven hooks
@@ -294,6 +301,8 @@ impl App {
             model_pricing: crate::provider::ModelPricing::default(),
             session_cost: 0.0,
             term_width: 0,
+            ask_user_rx: Some(ask_user_rx),
+            pending_ask_user: None,
         };
 
         // Set initial API provider name on model picker
