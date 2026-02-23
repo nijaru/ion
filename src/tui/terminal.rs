@@ -218,6 +218,12 @@ impl StyledSpan {
         self
     }
 
+    /// Plain text content without ANSI escapes.
+    #[must_use]
+    pub fn plain_text(&self) -> &str {
+        &self.content
+    }
+
     /// Write this span to a writer.
     pub fn write_to<W: Write>(&self, w: &mut W) -> io::Result<()> {
         let span = to_rnk_span(self);
@@ -341,6 +347,21 @@ impl StyledLine {
     /// Prepend a span to the beginning of this line.
     pub fn prepend(&mut self, span: StyledSpan) {
         self.spans.insert(0, span);
+    }
+
+    /// All spans' plain text concatenated (no ANSI escapes).
+    #[must_use]
+    pub fn plain_text(&self) -> String {
+        self.spans.iter().map(|s| s.content.as_str()).collect()
+    }
+
+    /// Total display width of all spans in terminal cells.
+    #[must_use]
+    pub fn display_width(&self) -> usize {
+        self.spans
+            .iter()
+            .map(|s| crate::tui::text::display_width(&s.content))
+            .sum()
     }
 }
 
@@ -468,5 +489,43 @@ mod tests {
         assert_eq!(map_color(Color::White), RnkColor::BrightWhite);
         assert_eq!(map_color(Color::Grey), RnkColor::White);
         assert_eq!(map_color(Color::DarkGrey), RnkColor::BrightBlack);
+    }
+
+    #[test]
+    fn styled_span_plain_text() {
+        let span = StyledSpan::colored("hello", Color::Green);
+        assert_eq!(span.plain_text(), "hello");
+    }
+
+    #[test]
+    fn styled_line_plain_text_concatenates_spans() {
+        let line = LineBuilder::new()
+            .colored("> ", Color::Cyan)
+            .raw("hello world")
+            .build();
+        assert_eq!(line.plain_text(), "> hello world");
+    }
+
+    #[test]
+    fn styled_line_plain_text_empty() {
+        assert_eq!(StyledLine::empty().plain_text(), "");
+    }
+
+    #[test]
+    fn styled_line_display_width_ascii() {
+        let line = StyledLine::raw("hello");
+        assert_eq!(line.display_width(), 5);
+    }
+
+    #[test]
+    fn styled_line_display_width_multi_span() {
+        let line = LineBuilder::new().raw("hi").raw(" there").build();
+        assert_eq!(line.display_width(), 8);
+    }
+
+    #[test]
+    fn styled_line_display_width_cjk() {
+        let line = StyledLine::raw("界a");
+        assert_eq!(line.display_width(), 3);
     }
 }
