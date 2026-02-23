@@ -378,6 +378,16 @@ impl App {
                             );
                         }
                     } else {
+                        // Check for ! bash passthrough (runs shell command without LLM)
+                        if let Some(cmd) = input.strip_prefix('!') {
+                            let cmd = cmd.trim().to_string();
+                            if !cmd.is_empty() {
+                                self.clear_input();
+                                self.run_bash_passthrough(cmd);
+                                return;
+                            }
+                        }
+
                         // Check for slash commands
                         if input.starts_with('/') {
                             self.dispatch_slash_command(&input);
