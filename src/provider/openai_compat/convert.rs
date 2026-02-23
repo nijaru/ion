@@ -304,10 +304,13 @@ pub(crate) async fn handle_stream_chunk(
 
     // Handle usage at end of stream
     if let Some(usage) = chunk.usage {
+        // Prefer nested `prompt_tokens_details.cached_tokens` (OpenAI standard),
+        // fall back to top-level `prompt_cache_hit_tokens` (DeepSeek direct API).
         let cache_read_tokens = usage
             .prompt_tokens_details
             .as_ref()
-            .map_or(0, |d| d.cached_tokens);
+            .map_or(0, |d| d.cached_tokens)
+            .max(usage.prompt_cache_hit_tokens);
         let _ = tx
             .send(StreamEvent::Usage(Usage {
                 input_tokens: usage.prompt_tokens,

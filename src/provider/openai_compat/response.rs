@@ -68,6 +68,9 @@ pub struct Usage {
     pub total_tokens: u32,
     #[serde(default)]
     pub prompt_tokens_details: Option<PromptTokensDetails>,
+    /// DeepSeek direct API: cache hit tokens at top level (not nested).
+    #[serde(default)]
+    pub prompt_cache_hit_tokens: u32,
 }
 
 /// Detailed prompt token breakdown (OpenAI).
