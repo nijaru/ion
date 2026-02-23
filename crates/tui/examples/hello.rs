@@ -35,7 +35,7 @@ impl App for Hello {
         }
     }
 
-    fn view(&self) -> Element {
+    fn view(&mut self) -> Element {
         let msg = self.message;
         let color = self.color;
         Canvas::new(move |area, buf| {

@@ -1,6 +1,5 @@
 //! Input handling for the TUI composer.
 
-use crate::tui::render::INPUT_MARGIN;
 use crate::tui::terminal::{StyledLine, StyledSpan};
 use crate::tui::App;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -244,7 +243,7 @@ impl App {
 
     /// Compute the usable text width for the composer at the current terminal width.
     fn composer_width(&self) -> usize {
-        (self.term_width.saturating_sub(INPUT_MARGIN)) as usize
+        (self.term_width.saturating_sub(3)) as usize
     }
 
     /// Handle Up arrow key: cursor movement, queued message recall, or history.
