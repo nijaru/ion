@@ -11,8 +11,7 @@ use tui::{
 
 use crate::tui::highlight::highlight_diff_line;
 use crate::tui::terminal::{StyledLine, StyledSpan, TextStyle};
-use crate::ui::streaming::ion_color_to_tui;
-use tui::style::{Style, StyleModifiers};
+use crate::ui::style::text_style_to_tui;
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
@@ -90,7 +89,7 @@ impl DiffView {
                     if col >= max_col {
                         break;
                     }
-                    let style = text_style_to_tui_style(&span.style);
+                    let style = text_style_to_tui(&span.style);
                     col = buf.set_string(col, row, &span.content, style);
                 }
             }
@@ -102,35 +101,6 @@ impl DiffView {
     pub fn row_count(&mut self, width: u16) -> u16 {
         self.lines_at_width(width).len() as u16
     }
-}
-
-fn text_style_to_tui_style(s: &TextStyle) -> Style {
-    let mut style = Style::new();
-    if let Some(fg) = s.foreground_color {
-        style = style.fg(ion_color_to_tui(fg));
-    }
-    if let Some(bg) = s.background_color {
-        style = style.bg(ion_color_to_tui(bg));
-    }
-    if s.bold {
-        style = style.bold();
-    }
-    if s.dim {
-        style = style.dim();
-    }
-    if s.italic {
-        style = style.italic();
-    }
-    if s.underlined {
-        style = style.underline();
-    }
-    if s.crossed_out {
-        style = style.strikethrough();
-    }
-    if s.reverse {
-        style.modifiers |= StyleModifiers::REVERSED;
-    }
-    style
 }
 
 #[cfg(test)]
