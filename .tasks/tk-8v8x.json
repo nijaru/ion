@@ -3,7 +3,7 @@
   "ref": "8v8x",
   "title": "Build crates/tui/ Phase 3: Taffy layout, Text, Block, Row/Col",
   "description": "Next sprint after Phase 2. layout.rs (Taffy wrapper: LayoutStyle, Dimension, Direction, Edges, compute_layout), widgets/text.rs (Text, WrapMode), widgets/block.rs (Block, BorderType), widgets/row.rs + col.rs (Row, Col flexbox). Expand Element with layout_style+children. Snapshot tests for all widgets.",
-  "status": "open",
+  "status": "active",
   "priority": 3,
   "labels": [],
   "assignees": [],
@@ -13,7 +13,7 @@
   "due_date": null,
   "logs": [],
   "created_at": "2026-02-23T04:08:31.146Z",
-  "updated_at": "2026-02-23T04:08:31.146Z",
+  "updated_at": "2026-02-23T04:23:54.823Z",
   "completed_at": null,
   "external": {}
 }
