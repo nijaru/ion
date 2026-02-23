@@ -168,6 +168,10 @@ pub struct Config {
 
     /// Status line display options.
     pub status_line: StatusLineConfig,
+
+    /// Automatically wrap multi-line pastes in triple-backtick code fences.
+    /// Default: false (opt-in).
+    pub auto_backtick_paste: bool,
 }
 
 impl Default for Config {
@@ -186,6 +190,7 @@ impl Default for Config {
             session_retention_days: 90,
             hooks: Vec::new(),
             status_line: StatusLineConfig::default(),
+            auto_backtick_paste: false,
         }
     }
 }
@@ -384,6 +389,9 @@ impl Config {
         }
         if !other.status_line.show_git_diff {
             self.status_line.show_git_diff = false;
+        }
+        if other.auto_backtick_paste {
+            self.auto_backtick_paste = true;
         }
     }
 
