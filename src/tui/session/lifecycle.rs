@@ -10,6 +10,7 @@ use crate::tui::message_list::{
 use anyhow::Result;
 use std::collections::HashMap;
 use tokio_util::sync::CancellationToken;
+use tracing::warn;
 
 impl App {
     /// Load a session by ID and restore its state.
@@ -54,101 +55,126 @@ impl App {
         self.config.model = Some(loaded.model);
 
         // Rebuild message list from session messages.
-        // Track tool call entries by ID so results can be matched to the correct call.
         self.message_list.clear();
         self.render_state.reset_for_session_load();
-        let mut tool_entry_map: HashMap<String, (usize, String)> = HashMap::new();
 
-        for msg in &self.session.messages {
-            match msg.role {
-                Role::User => {
-                    for block in msg.content.iter() {
-                        if let ContentBlock::Text { text } = block {
-                            self.message_list.push_user_message(text.clone());
+        // Fast path: restore from persisted display entries if available.
+        // This reproduces the exact live display (grouping, formatting) without
+        // re-deriving it from raw API ContentBlocks.
+        let loaded_from_display = if let Ok(Some(json)) =
+            self.store.load_display_entries(&self.session.id)
+        {
+            match serde_json::from_str::<Vec<MessageEntry>>(&json) {
+                Ok(mut entries) => {
+                    for entry in &mut entries {
+                        entry.update_cache();
+                    }
+                    self.message_list.entries = entries;
+                    true
+                }
+                Err(e) => {
+                    warn!("Failed to deserialize display entries, falling back to reconstruction: {e}");
+                    false
+                }
+            }
+        } else {
+            false
+        };
+
+        // Slow path: reconstruct from API messages (old sessions or fallback).
+        if !loaded_from_display {
+            let mut tool_entry_map: HashMap<String, (usize, String)> = HashMap::new();
+
+            for msg in &self.session.messages {
+                match msg.role {
+                    Role::User => {
+                        for block in msg.content.iter() {
+                            if let ContentBlock::Text { text } = block {
+                                self.message_list.push_user_message(text.clone());
+                            }
                         }
                     }
-                }
-                Role::Assistant => {
-                    for block in msg.content.iter() {
-                        match block {
-                            ContentBlock::Text { text } => {
-                                self.message_list
-                                    .push_entry(MessageEntry::new(Sender::Agent, text.clone()));
-                            }
-                            ContentBlock::ToolCall {
-                                id, name, arguments, ..
-                            } => {
-                                let clean_name = sanitize_tool_name(name);
-                                let key_arg = extract_key_arg(clean_name, arguments);
-                                let display = if key_arg.is_empty() {
-                                    clean_name.to_string()
-                                } else {
-                                    format!("{clean_name}({key_arg})")
-                                };
-                                let entry_idx = self.message_list.entries.len();
-                                self.message_list
-                                    .push_entry(MessageEntry::new(Sender::Tool, display));
-                                tool_entry_map.insert(
-                                    id.clone(),
-                                    (entry_idx, clean_name.to_string()),
-                                );
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                Role::ToolResult => {
-                    for block in msg.content.iter() {
-                        if let ContentBlock::ToolResult {
-                            tool_call_id,
-                            content,
-                            is_error,
-                            ..
-                        } = block
-                        {
-                            let (entry_idx, tool_name) =
-                                if let Some(entry) = tool_entry_map.remove(tool_call_id) {
-                                    entry
-                                } else {
-                                    // Fallback: append to last tool entry
-                                    let Some(idx) = self
-                                        .message_list
-                                        .entries
-                                        .iter()
-                                        .rposition(|e| e.sender == Sender::Tool)
-                                    else {
-                                        continue;
+                    Role::Assistant => {
+                        for block in msg.content.iter() {
+                            match block {
+                                ContentBlock::Text { text } => {
+                                    self.message_list.push_entry(MessageEntry::new(
+                                        Sender::Agent,
+                                        text.clone(),
+                                    ));
+                                }
+                                ContentBlock::ToolCall {
+                                    id, name, arguments, ..
+                                } => {
+                                    let clean_name = sanitize_tool_name(name);
+                                    let key_arg = extract_key_arg(clean_name, arguments);
+                                    let display = if key_arg.is_empty() {
+                                        clean_name.to_string()
+                                    } else {
+                                        format!("{clean_name}({key_arg})")
                                     };
-                                    (idx, String::new())
-                                };
-
-                            let expanded = self.message_list.tools_expanded;
-                            let display = format_result_content(
-                                Some(&tool_name),
-                                content,
-                                *is_error,
-                                expanded,
-                            );
-                            if let Some(entry) = self.message_list.entries.get_mut(entry_idx)
-                                && entry.sender == Sender::Tool
-                            {
-                                let header = entry.content_as_markdown().to_string();
-                                entry.tool_meta = Some(ToolMeta {
-                                    header,
-                                    tool_name: tool_name.clone(),
-                                    raw_result: content.clone(),
-                                    is_error: *is_error,
-                                });
-                                entry.append_text(&format!("\n{display}"));
+                                    let entry_idx = self.message_list.entries.len();
+                                    self.message_list
+                                        .push_entry(MessageEntry::new(Sender::Tool, display));
+                                    tool_entry_map
+                                        .insert(id.clone(), (entry_idx, clean_name.to_string()));
+                                }
+                                _ => {}
                             }
                         }
                     }
+                    Role::ToolResult => {
+                        for block in msg.content.iter() {
+                            if let ContentBlock::ToolResult {
+                                tool_call_id,
+                                content,
+                                is_error,
+                                ..
+                            } = block
+                            {
+                                let (entry_idx, tool_name) =
+                                    if let Some(entry) = tool_entry_map.remove(tool_call_id) {
+                                        entry
+                                    } else {
+                                        let Some(idx) = self
+                                            .message_list
+                                            .entries
+                                            .iter()
+                                            .rposition(|e| e.sender == Sender::Tool)
+                                        else {
+                                            continue;
+                                        };
+                                        (idx, String::new())
+                                    };
+
+                                let expanded = self.message_list.tools_expanded;
+                                let display = format_result_content(
+                                    Some(&tool_name),
+                                    content,
+                                    *is_error,
+                                    expanded,
+                                );
+                                if let Some(entry) = self.message_list.entries.get_mut(entry_idx)
+                                    && entry.sender == Sender::Tool
+                                {
+                                    let header = entry.content_as_markdown().to_string();
+                                    entry.tool_meta = Some(ToolMeta {
+                                        header,
+                                        tool_name: tool_name.clone(),
+                                        raw_result: content.clone(),
+                                        is_error: *is_error,
+                                    });
+                                    entry.append_text(&format!("\n{display}"));
+                                }
+                            }
+                        }
+                    }
+                    Role::System => {}
                 }
-                Role::System => {} // System messages not displayed in chat
             }
         }
 
-        // Post-rebuild warnings (after message list is populated so they appear at the end)
+        // Environment-specific warnings — always appended fresh regardless of load path.
         if !self.session.working_dir.exists() {
             self.message_list.push_entry(MessageEntry::new(
                 Sender::System,

@@ -499,6 +499,7 @@ impl App {
                         format!("Compacted: pruned {modified} tool outputs"),
                     ));
                     let _ = self.store.save(&self.session);
+                    self.persist_display_entries(&self.session.id.clone());
                 } else {
                     self.message_list.push_entry(MessageEntry::new(
                         Sender::System,
@@ -533,7 +534,9 @@ impl App {
             "/quit" | "/exit" | "/q" => self.quit(),
             "/clear" => {
                 if !self.session.messages.is_empty() {
+                    let id = self.session.id.clone();
                     let _ = self.store.save(&self.session);
+                    self.persist_display_entries(&id);
                 }
                 let working_dir = self.session.working_dir.clone();
                 let model = self.session.model.clone();
