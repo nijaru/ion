@@ -1,3 +1,6 @@
+[workspace]
+members = [".", "crates/tui"]
+
 [package]
 name = "ion"
 version = "0.0.0"
