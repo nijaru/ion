@@ -3,6 +3,7 @@ pub mod buffer;
 pub mod error;
 pub mod event;
 pub mod geometry;
+pub mod layout;
 pub mod style;
 pub mod terminal;
 pub mod widgets;

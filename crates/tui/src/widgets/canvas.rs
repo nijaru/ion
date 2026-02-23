@@ -6,6 +6,7 @@
 use crate::{
     buffer::Buffer,
     geometry::Rect,
+    layout::LayoutStyle,
     widgets::{Element, IntoElement, Renderable, WidgetId},
 };
 
@@ -32,6 +33,8 @@ impl IntoElement for Canvas {
         Element {
             id: WidgetId::new(),
             inner: Box::new(self),
+            layout_style: LayoutStyle::default(),
+            children: vec![],
         }
     }
 }
