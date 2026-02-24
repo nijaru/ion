@@ -63,14 +63,27 @@ impl Terminal {
     pub fn new(mode: RenderMode) -> Result<Self> {
         let (width, height) = terminal::size()?;
 
-        // Capture cursor row for inline mode before enabling raw mode so the
-        // ANSI DSR query doesn't interfere with the application's stdin.
-        let start_row = if matches!(mode, RenderMode::Inline { .. }) {
-            crossterm::cursor::position()
-                .map(|(_, row)| row)
-                .unwrap_or(0)
-        } else {
-            0
+        let start_row = match mode {
+            RenderMode::Inline { height: h } => {
+                let inline_h = h.min(height);
+                let target_row = height.saturating_sub(inline_h);
+
+                // Push cursor to the bottom of the terminal so the inline
+                // region anchors at the bottom. Print newlines BEFORE raw
+                // mode (which disables echo) so the terminal scrolls normally.
+                let current_row = crossterm::cursor::position()
+                    .map(|(_, row)| row)
+                    .unwrap_or(0);
+                if current_row < target_row {
+                    let mut out = io::stdout();
+                    for _ in 0..(target_row - current_row) {
+                        let _ = out.write_all(b"\n");
+                    }
+                    let _ = out.flush();
+                }
+                target_row
+            }
+            RenderMode::Fullscreen => 0,
         };
 
         terminal::enable_raw_mode()?;
@@ -235,10 +248,14 @@ impl Terminal {
         let n = lines.len() as u16;
         // Scroll viewport up — pushes N rows into scrollback
         queue!(out, terminal::ScrollUp(n))?;
-        // Write new lines at the rows above the inline region
+        // Write new lines at the rows just above the inline region.
+        // After ScrollUp(n), the inline region content has been displaced
+        // upward by n rows. These rows will be redrawn on the next frame.
         let write_row = self.start_row.saturating_sub(n);
         for (i, line) in lines.iter().enumerate() {
-            queue!(out, cursor::MoveTo(0, write_row + i as u16))?;
+            let row = write_row + i as u16;
+            queue!(out, cursor::MoveTo(0, row))?;
+            queue!(out, Clear(ClearType::CurrentLine))?;
             queue!(out, Print(line))?;
         }
         out.flush()?;
@@ -252,11 +269,10 @@ impl Terminal {
                 execute!(self.backend.out, EnterAlternateScreen)?;
                 self.start_row = 0;
             }
-            (RenderMode::Fullscreen, RenderMode::Inline { .. }) => {
+            (RenderMode::Fullscreen, RenderMode::Inline { height: h }) => {
                 execute!(self.backend.out, LeaveAlternateScreen)?;
-                self.start_row = crossterm::cursor::position()
-                    .map(|(_, row)| row)
-                    .unwrap_or(0);
+                let inline_h = (*h).min(self.size.height);
+                self.start_row = self.size.height.saturating_sub(inline_h);
             }
             _ => {}
         }
