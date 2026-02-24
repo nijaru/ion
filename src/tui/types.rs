@@ -5,6 +5,9 @@ use std::time::Duration;
 /// Window duration for double-tap cancel/quit detection.
 pub(super) const CANCEL_WINDOW: Duration = Duration::from_millis(1500);
 
+/// Number of lines to show in queued message preview.
+pub(crate) const QUEUED_PREVIEW_LINES: usize = 5;
+
 /// Thinking budget level for extended reasoning.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ThinkingLevel {

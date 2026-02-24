@@ -47,6 +47,103 @@ pub(crate) fn truncate_to_width(s: &str, max_cells: usize) -> String {
     }
 }
 
+/// Word-wrap a string to at most `width` display cells per line.
+///
+/// Returns owned `String`s; each line is its own allocation. Splits on
+/// whitespace boundaries. When a word is wider than `width`, it is
+/// character-broken across lines.
+///
+/// An empty input or `width == 0` returns a single empty string.
+pub(crate) fn wrap_text(s: &str, width: usize) -> Vec<String> {
+    if width == 0 || s.is_empty() {
+        return vec![String::new()];
+    }
+
+    if display_width(s) <= width {
+        return vec![s.to_string()];
+    }
+
+    let mut chunks: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut current_width = 0usize;
+
+    for word in split_words(s) {
+        let word_width = display_width(word);
+        let is_space = word.chars().next().is_some_and(|c| c == ' ');
+
+        if is_space {
+            // Space between words: add to current line if it fits, otherwise
+            // drop it (spaces at line break boundaries are discarded).
+            if current_width + word_width <= width && !current.is_empty() {
+                current.push_str(word);
+                current_width += word_width;
+            }
+            continue;
+        }
+
+        if current_width + word_width <= width {
+            current.push_str(word);
+            current_width += word_width;
+        } else if word_width <= width {
+            // Word fits on a fresh line — wrap.
+            if !current.is_empty() {
+                chunks.push(current.trim_end().to_string());
+            }
+            current = word.to_string();
+            current_width = word_width;
+        } else {
+            // Word wider than line — char-break.
+            for ch in word.chars() {
+                let cw = UnicodeWidthChar::width(ch).unwrap_or(0);
+                if current_width + cw > width && !current.is_empty() {
+                    chunks.push(current.trim_end().to_string());
+                    current = String::new();
+                    current_width = 0;
+                }
+                current.push(ch);
+                current_width += cw;
+            }
+        }
+    }
+
+    if !current.is_empty() || chunks.is_empty() {
+        chunks.push(current);
+    }
+
+    chunks
+}
+
+/// Safe terminal width: `terminal_width - 1` to prevent cursor autowrap at
+/// the right edge.
+pub(crate) fn safe_width(terminal_width: u16) -> usize {
+    terminal_width.saturating_sub(1) as usize
+}
+
+/// Split text into alternating word and whitespace segments.
+///
+/// Whitespace segments (spaces) are kept as separate entries so that
+/// `wrap_text` can decide whether to include them at line boundaries.
+fn split_words(text: &str) -> Vec<&str> {
+    let mut segments = Vec::new();
+    let mut start = 0;
+    let mut in_space = text.starts_with(' ');
+
+    for (i, ch) in text.char_indices() {
+        let is_space = ch == ' ';
+        if is_space != in_space {
+            if start < i {
+                segments.push(&text[start..i]);
+            }
+            start = i;
+            in_space = is_space;
+        }
+    }
+    if start < text.len() {
+        segments.push(&text[start..]);
+    }
+    segments
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -75,14 +172,57 @@ mod tests {
 
     #[test]
     fn truncate_cjk_fits() {
+        // 界 is 2 cells — fits exactly at max_cells=2
         assert_eq!(truncate_to_width("界a", 2), "界");
         assert_eq!(truncate_to_width("界a", 3), "界a");
     }
 
     #[test]
     fn truncate_cjk_pad() {
+        // 1 cell left, next char is 2 cells wide — pad with space
         let result = truncate_to_width("a界", 2);
         assert_eq!(result, "a ");
         assert_eq!(display_width(&result), 2);
+    }
+
+    #[test]
+    fn wrap_text_fits() {
+        assert_eq!(wrap_text("hello", 20), vec!["hello"]);
+        assert_eq!(wrap_text("hello world", 20), vec!["hello world"]);
+    }
+
+    #[test]
+    fn wrap_text_empty() {
+        assert_eq!(wrap_text("", 80), vec!["".to_string()]);
+        assert_eq!(wrap_text("hello", 0), vec!["".to_string()]);
+    }
+
+    #[test]
+    fn wrap_text_breaks_at_word() {
+        let chunks = wrap_text("hello world", 5);
+        assert_eq!(chunks, vec!["hello", "world"]);
+    }
+
+    #[test]
+    fn wrap_text_multi_word() {
+        let chunks = wrap_text("hello world foo bar", 10);
+        assert!(chunks.len() > 1);
+        for chunk in &chunks {
+            assert!(display_width(chunk) <= 10, "chunk too wide: {chunk:?}");
+        }
+    }
+
+    #[test]
+    fn wrap_text_long_word_char_breaks() {
+        let long = "abcdefghij";
+        let chunks = wrap_text(long, 4);
+        assert_eq!(chunks, vec!["abcd", "efgh", "ij"]);
+    }
+
+    #[test]
+    fn safe_width_reserves_one_cell() {
+        assert_eq!(safe_width(80), 79);
+        assert_eq!(safe_width(1), 0);
+        assert_eq!(safe_width(0), 0);
     }
 }

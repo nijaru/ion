@@ -1,0 +1,373 @@
+//! Selector UI rendering (provider, model, session pickers).
+//!
+//! Terminal APIs use u16 for dimensions; numeric casts are intentional.
+#![allow(clippy::cast_possible_truncation)]
+
+use crate::tui::ansi::{self, Color};
+use crate::tui::util::{display_width, truncate_to_display_width};
+use crossterm::{
+    cursor::MoveTo,
+    execute,
+    terminal::{Clear, ClearType},
+};
+use std::io::Write;
+
+/// Maximum visible items in selector list.
+pub const MAX_VISIBLE_ITEMS: u16 = 15;
+
+/// A single item in the selector list.
+pub struct SelectorItem {
+    pub label: String,
+    pub is_valid: bool,
+    pub hint: String,
+    /// Optional warning text.
+    pub warning: Option<String>,
+    /// Color for the warning text. Defaults to DarkYellow if None.
+    pub warning_color: Option<Color>,
+}
+
+/// Data needed to render the selector UI.
+pub struct SelectorData {
+    pub title: &'static str,
+    pub description: &'static str,
+    pub items: Vec<SelectorItem>,
+    pub selected_idx: usize,
+    pub filter_text: String,
+    pub show_tabs: bool,
+    pub active_tab: usize, // 0 = providers, 1 = models
+    /// Show a loading placeholder when true and items is empty.
+    pub loading: bool,
+    /// Column header row rendered above list items: (label_col_name, hint_col_names).
+    /// Uses the reserved overhead row so the selector height stays correct.
+    pub column_header: Option<(String, String)>,
+}
+
+fn paint_row_text<W: Write>(
+    w: &mut W,
+    row: u16,
+    width: u16,
+    text: &str,
+    fg: Option<Color>,
+    bold: bool,
+    dim: bool,
+) -> std::io::Result<()> {
+    execute!(w, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
+    let max_cells = width.saturating_sub(1) as usize;
+    if max_cells == 0 {
+        return Ok(());
+    }
+    let rendered = ansi::render_line(text, max_cells, fg, bold, dim);
+    write!(w, "{rendered}")?;
+    Ok(())
+}
+
+fn paint_row_spans<W: Write>(
+    w: &mut W,
+    row: u16,
+    width: u16,
+    spans: Vec<ansi::Span>,
+) -> std::io::Result<()> {
+    execute!(w, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
+    let max_cells = width.saturating_sub(1) as usize;
+    if max_cells == 0 || spans.is_empty() {
+        return Ok(());
+    }
+    let rendered = ansi::render_spans(&spans);
+    write!(w, "{rendered}")?;
+    Ok(())
+}
+
+fn push_clipped_span(
+    spans: &mut Vec<ansi::Span>,
+    text: &str,
+    remaining: &mut usize,
+    fg: Option<Color>,
+    bold: bool,
+    dim: bool,
+) {
+    if *remaining == 0 {
+        return;
+    }
+    let clipped = truncate_to_display_width(text, *remaining);
+    if clipped.is_empty() {
+        return;
+    }
+    *remaining = remaining.saturating_sub(display_width(&clipped));
+
+    let mut span = ansi::Span::new(clipped);
+    if let Some(color) = fg {
+        span = span.color(color);
+    }
+    if bold {
+        span = span.bold();
+    }
+    if dim {
+        span = span.dim();
+    }
+    spans.push(span);
+}
+
+/// Render the selector UI. Returns (`filter_cursor_col`, `filter_cursor_row`) for cursor
+/// positioning.
+pub fn render_selector<W: Write>(
+    w: &mut W,
+    data: &SelectorData,
+    start_row: u16,
+    width: u16,
+) -> std::io::Result<(u16, u16)> {
+    execute!(w, MoveTo(0, start_row), Clear(ClearType::FromCursorDown))?;
+    let line_width = width.saturating_sub(1) as usize;
+
+    let mut row = start_row;
+
+    // Tab bar (provider/model) or section header (session selector).
+    if data.show_tabs {
+        let tabs = if data.active_tab == 0 {
+            " [Providers]  Models"
+        } else {
+            " Providers  [Models]"
+        };
+        paint_row_text(w, row, width, tabs, None, false, false)?;
+    } else {
+        paint_row_spans(
+            w,
+            row,
+            width,
+            vec![
+                ansi::Span::new(" "),
+                ansi::Span::new(data.title).color(Color::DarkYellow).bold(),
+            ],
+        )?;
+    }
+    row += 1;
+
+    // Description.
+    let description = format!(" {}", data.description);
+    paint_row_text(w, row, width, &description, None, false, false)?;
+    row += 1;
+
+    // Search box top border.
+    let title_block = format!(" {} ", data.title);
+    let border_fill = "─".repeat(
+        line_width
+            .saturating_sub(display_width("┌─"))
+            .saturating_sub(display_width(&title_block))
+            .saturating_sub(display_width("┐")),
+    );
+    let top_border = format!("┌─{title_block}{border_fill}┐");
+    paint_row_text(
+        w,
+        row,
+        width,
+        &top_border,
+        Some(Color::DarkCyan),
+        false,
+        false,
+    )?;
+    row += 1;
+
+    // Search box query row.
+    let query_budget = line_width.saturating_sub(display_width("│ "));
+    let query = truncate_to_display_width(&data.filter_text, query_budget);
+    paint_row_spans(
+        w,
+        row,
+        width,
+        vec![
+            ansi::Span::new("│").color(Color::DarkCyan),
+            ansi::Span::new(" "),
+            ansi::Span::new(query.clone()),
+        ],
+    )?;
+    let filter_cursor_col =
+        ((display_width("│ ") + display_width(&query)) as u16).min(width.saturating_sub(1));
+    let filter_cursor_row = row;
+    row += 1;
+
+    let bottom_border = format!("└{}┘", "─".repeat(line_width.saturating_sub(2)));
+    paint_row_text(
+        w,
+        row,
+        width,
+        &bottom_border,
+        Some(Color::DarkCyan),
+        false,
+        false,
+    )?;
+    row += 1;
+
+    // Render list items.
+    row = render_list(w, data, row, width)?;
+
+    // Hint line.
+    paint_row_text(
+        w,
+        row,
+        width,
+        " Type to filter • Enter to select • Esc to close",
+        None,
+        false,
+        true,
+    )?;
+
+    Ok((filter_cursor_col, filter_cursor_row))
+}
+
+/// Render the selector item list with scrolling. Returns the next row after the list.
+fn render_list<W: Write>(
+    w: &mut W,
+    data: &SelectorData,
+    start_row: u16,
+    width: u16,
+) -> std::io::Result<u16> {
+    let list_height = (data.items.len() as u16).clamp(3, MAX_VISIBLE_ITEMS);
+
+    // Keep selection visible.
+    let scroll_offset = if data.selected_idx >= list_height as usize {
+        data.selected_idx.saturating_sub(list_height as usize - 1)
+    } else {
+        0
+    };
+
+    let visible_items: Vec<_> = data
+        .items
+        .iter()
+        .skip(scroll_offset)
+        .take(list_height as usize)
+        .collect();
+
+    // Compute max label width across all items (not just visible) so alignment
+    // is stable while scrolling.
+    let max_label_width = data
+        .items
+        .iter()
+        .map(|item| display_width(&item.label))
+        .max()
+        .unwrap_or(0);
+
+    let mut row = start_row;
+    let line_width = width.saturating_sub(1) as usize;
+
+    // Show a loading placeholder when fetch is in progress and no items yet.
+    if data.loading && data.items.is_empty() {
+        // Still render header row to keep layout stable.
+        execute!(w, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
+        row += 1;
+        for _ in 0..list_height {
+            execute!(w, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
+            row += 1;
+        }
+        // Overwrite the header row with "Loading..."
+        paint_row_text(w, start_row, width, "  Loading...", None, false, true)?;
+        return Ok(row);
+    }
+
+    // Column header row (uses the reserved overhead slot).
+    if let Some((ref label_h, ref hint_h)) = data.column_header {
+        let mut spans = Vec::new();
+        let mut remaining = line_width;
+        // 5 spaces matching prefix(2) + marker(3) indent
+        push_clipped_span(&mut spans, "     ", &mut remaining, None, false, true);
+        let header_w = display_width(label_h);
+        let padding = " ".repeat(max_label_width.saturating_sub(header_w));
+        let padded = format!("{label_h}{padding}");
+        push_clipped_span(&mut spans, &padded, &mut remaining, None, false, true);
+        if !hint_h.is_empty() {
+            push_clipped_span(&mut spans, "  ", &mut remaining, None, false, true);
+            push_clipped_span(&mut spans, hint_h, &mut remaining, None, false, true);
+        }
+        paint_row_spans(w, row, width, spans)?;
+    } else {
+        // No header content but still consume the reserved row.
+        execute!(w, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
+    }
+    row += 1;
+
+    for (i, item) in visible_items.into_iter().enumerate() {
+        let actual_idx = scroll_offset + i;
+        let is_selected = actual_idx == data.selected_idx;
+        let default_color = is_selected.then_some(Color::DarkYellow);
+        let default_bold = is_selected;
+        let default_dim = !is_selected && !item.is_valid;
+
+        let mut spans = Vec::new();
+        let mut remaining = line_width;
+
+        let prefix = if is_selected { " >" } else { "  " };
+        push_clipped_span(
+            &mut spans,
+            prefix,
+            &mut remaining,
+            default_color,
+            default_bold,
+            default_dim,
+        );
+        let marker = if item.is_valid { " ● " } else { " ○ " };
+        push_clipped_span(
+            &mut spans,
+            marker,
+            &mut remaining,
+            default_color,
+            default_bold,
+            default_dim,
+        );
+        push_clipped_span(
+            &mut spans,
+            &item.label,
+            &mut remaining,
+            default_color,
+            default_bold,
+            default_dim,
+        );
+
+        // Pad label to max width so hint column aligns across all rows.
+        let label_w = display_width(&item.label);
+        if label_w < max_label_width && (!item.hint.is_empty() || item.warning.is_some()) {
+            let pad = " ".repeat(max_label_width - label_w);
+            push_clipped_span(&mut spans, &pad, &mut remaining, None, false, false);
+        }
+
+        if !item.hint.is_empty() {
+            push_clipped_span(
+                &mut spans,
+                "  ",
+                &mut remaining,
+                default_color,
+                default_bold,
+                default_dim,
+            );
+            push_clipped_span(
+                &mut spans,
+                &item.hint,
+                &mut remaining,
+                default_color,
+                default_bold,
+                true,
+            );
+        }
+
+        if let Some(warning) = &item.warning {
+            push_clipped_span(
+                &mut spans,
+                "  ",
+                &mut remaining,
+                default_color,
+                default_bold,
+                default_dim,
+            );
+            push_clipped_span(
+                &mut spans,
+                warning,
+                &mut remaining,
+                Some(item.warning_color.unwrap_or(Color::DarkYellow)),
+                default_bold,
+                default_dim,
+            );
+        }
+
+        paint_row_spans(w, row, width, spans)?;
+        row += 1;
+    }
+
+    Ok(row)
+}
