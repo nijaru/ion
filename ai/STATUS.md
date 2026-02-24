@@ -2,14 +2,14 @@
 
 ## Current State
 
-| Metric    | Value                                                                 | Updated    |
-| --------- | --------------------------------------------------------------------- | ---------- |
-| Phase     | TUI parity — IonApp wired but not functionally usable                 | 2026-02-23 |
-| Status    | Compiles, renders, but pickers/completers/tool-expand/history missing | 2026-02-23 |
-| Toolchain | stable                                                                | 2026-01-22 |
-| Tests     | 516 passing                                                           | 2026-02-23 |
-| Clippy    | clean (zero new warnings)                                             | 2026-02-23 |
-| Blocker   | tk-w40u: TUI parity gap — see plan                                    | 2026-02-23 |
+| Metric    | Value                                                              | Updated    |
+| --------- | ------------------------------------------------------------------ | ---------- |
+| Phase     | TUI parity — IonApp functionally complete                          | 2026-02-23 |
+| Status    | All gaps closed: pickers, completers, history, help, submit, blobs | 2026-02-23 |
+| Toolchain | stable                                                             | 2026-01-22 |
+| Tests     | 516 passing                                                        | 2026-02-23 |
+| Clippy    | clean (zero new warnings)                                          | 2026-02-23 |
+| Blocker   | None — parity gaps closed                                          | 2026-02-23 |
 
 ## What Works in IonApp (crates/tui)
 
@@ -17,26 +17,30 @@
 - Cursor visible in input widget
 - Ctrl+C double-tap quit, Esc cancel, Shift+Tab mode toggle
 - Slash commands (/clear, /compact, /model, /provider, etc.)
-- Paste events handled (bracketed paste)
+- Paste events handled (bracketed paste + blob storage for large pastes)
 - Mouse scroll, PageUp/PageDown
 - System messages rendered (dim italic)
 - Tool result sync (content-length delta detection)
 - Auto-scroll re-enable on scroll-to-bottom
 - Terminal Drop guard (panic safety)
+- Picker rendering + key routing (model/provider/session selectors)
+- File/command completers wired with intercept before InputState
+- Input history via inner (DB persistence, Up/Down/Ctrl+N/Ctrl+P)
+- Submit flow: input normalization, history persistence
+- Help overlay (Ctrl+H, ? when empty)
+- History search modal (Ctrl+R with query/navigation)
+- OAuth confirm dialog for Gemini
+- Tool expansion resync (Ctrl+O rebuilds conversation)
+- Startup header pushed to conversation on init
+- Conditional Ctrl+P (provider picker vs prev_history when running)
 
-## What's Broken / Missing for Parity
+## Remaining Polish (not blocking parity)
 
-| Gap                     | Impact | Notes                                                    |
-| ----------------------- | ------ | -------------------------------------------------------- |
-| Pickers don't render    | P1     | AppMode set but view() doesn't switch layout             |
-| File/command completers | P1     | @file and /cmd completers not wired to new input         |
-| Tool expansion cosmetic | P2     | Ctrl+O toggles flag but view() doesn't render expanded   |
-| History Up/Down         | P2     | Arrow keys go to InputState, not inner.handle_input_up() |
-| Startup header          | P2     | Never printed (old used insert_before)                   |
-| Editor open (Ctrl+G)    | P3     | Sets flag but nothing reads it                           |
-| History search (Ctrl+R) | P3     | Mode set but no search UI rendered                       |
-| Thinking level display  | P3     | Ctrl+T cycles but no visual indicator                    |
-| ask_user visual prompt  | P2     | Text works but no distinct visual treatment              |
+| Gap                    | Impact | Notes                                       |
+| ---------------------- | ------ | ------------------------------------------- |
+| Editor open (Ctrl+G)   | P3     | Sets flag but nothing reads it              |
+| Thinking level display | P3     | Ctrl+T cycles but no visual indicator       |
+| ask_user visual prompt | P2     | Text works but no distinct visual treatment |
 
 ## Implemented Features
 
@@ -64,7 +68,7 @@
 | ast-grep tool       | Done              | Structural code search via `sg` binary                                                     |
 | ask_user tool       | Done              | Agent pauses and asks user a question; TUI intercepts Enter to respond                     |
 | crates/tui library  | Done (all phases) | Cell buffer, Taffy layout, App+Effect, Input/List/Block/Canvas/Theme; ion wired via IonApp |
-| ion TUI integration | Partial           | IonApp wired but pickers/completers/tool-expand not rendering                              |
+| ion TUI integration | Done              | IonApp functionally matches old App — all pickers/completers/history/overlays wired        |
 
 ## Open Backlog (p4 only)
 
