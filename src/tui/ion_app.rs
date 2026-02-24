@@ -14,6 +14,7 @@ use tui::{
     event::{Event, KeyCode, KeyModifiers},
     geometry::Rect,
     layout::Dimension,
+    terminal::RenderMode,
 };
 
 use crate::cli::PermissionSettings;
@@ -1748,6 +1749,19 @@ impl TuiApp for IonApp {
         std::mem::take(&mut self.pending_scrollback)
     }
 
+    fn render_mode_override(&self) -> Option<RenderMode> {
+        match self.mode {
+            AppMode::Input => None, // use configured inline mode
+            // Overlays need the full terminal.
+            AppMode::ModelPicker
+            | AppMode::ProviderPicker
+            | AppMode::SessionPicker
+            | AppMode::Help
+            | AppMode::HistorySearch
+            | AppMode::OAuthConfirm => Some(RenderMode::Fullscreen),
+        }
+    }
+
     fn cursor_position(&self) -> Option<(u16, u16)> {
         match self.mode {
             AppMode::Input => Input::new(&self.input).cursor_position(self.input_area),
@@ -1764,11 +1778,9 @@ impl TuiApp for IonApp {
                 Some((col, 1))
             }
             AppMode::HistorySearch => {
-                // Search prompt at bottom of the inline region
+                // Search prompt at bottom of the fullscreen overlay.
                 let col = 8 + self.inner.history_search.query.chars().count() as u16;
-                // In inline mode, the region height comes from the render area,
-                // not the full terminal. Use a fixed offset for now.
-                Some((col, 2))
+                Some((col, self.height.saturating_sub(1)))
             }
             AppMode::Help | AppMode::OAuthConfirm => None,
         }
