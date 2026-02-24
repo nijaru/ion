@@ -88,9 +88,7 @@ impl App {
 
     /// Path to the on-disk model cache for a given provider.
     fn model_cache_path(&self, provider: Provider) -> std::path::PathBuf {
-        self.config
-            .data_dir
-            .join(format!("models_{}.json", provider.id()))
+        self.config.data_dir.join(format!("models_{}.json", provider.id()))
     }
 
     /// Load cached models from disk. Returns `None` if no cache exists or it
