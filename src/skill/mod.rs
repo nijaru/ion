@@ -121,7 +121,12 @@ impl SkillRegistry {
     }
 
     /// Register a skill summary for lazy loading.
-    pub fn register_summary(&mut self, summary: SkillSummary, source_path: PathBuf, user_invocable: bool) {
+    pub fn register_summary(
+        &mut self,
+        summary: SkillSummary,
+        source_path: PathBuf,
+        user_invocable: bool,
+    ) {
         let name = summary.name.clone();
         let entry = SkillEntry {
             user_invocable,

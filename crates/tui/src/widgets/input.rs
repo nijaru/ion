@@ -893,7 +893,7 @@ mod tests {
         let mut s = InputState::new();
         type_str(&mut s, "hello");
         s.handle_key(&ctrl('k')); // kills "" (nothing after cursor? no - at end)
-                                  // Kill "hello" by going home first
+        // Kill "hello" by going home first
         s.handle_key(&ctrl('a'));
         s.handle_key(&ctrl('k'));
         assert_eq!(s.value(), "");

@@ -6,7 +6,7 @@
 
 use tui::{
     geometry::Rect,
-    widgets::{canvas::Canvas, Element, IntoElement},
+    widgets::{Element, IntoElement, canvas::Canvas},
 };
 
 use crate::tui::highlight::highlight_diff_line;

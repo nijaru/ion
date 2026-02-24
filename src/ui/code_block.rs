@@ -6,7 +6,7 @@
 
 use tui::{
     geometry::Rect,
-    widgets::{canvas::Canvas, Element, IntoElement},
+    widgets::{Element, IntoElement, canvas::Canvas},
 };
 
 use crate::tui::highlight::syntax::{highlight_code, syntax_from_fence};

@@ -159,9 +159,7 @@ impl Tool for ListTool {
             entries.join("\n")
         };
         if truncated {
-            content.push_str(&format!(
-                "\n\n[Results truncated at {MAX_RESULTS} entries]"
-            ));
+            content.push_str(&format!("\n\n[Results truncated at {MAX_RESULTS} entries]"));
         }
 
         Ok(ToolResult {
