@@ -14,6 +14,7 @@ use crate::{
     buffer::Buffer,
     error::Result,
     event::{translate_event, Event, KeyCode, KeyModifiers},
+    geometry::Position,
     layout::compute_layout,
     terminal::{RenderMode, Terminal},
     widgets::Element,
@@ -61,6 +62,13 @@ pub trait App: Sized + Send + 'static {
 
     /// Called after the event loop ends (after terminal is restored).
     fn on_exit(&mut self) {}
+
+    /// Return the desired hardware cursor position (col, row) in buffer-local
+    /// coordinates. The framework positions the terminal cursor here after each
+    /// render. Return `None` to hide the cursor.
+    fn cursor_position(&self) -> Option<(u16, u16)> {
+        None
+    }
 }
 
 // ── Effect ───────────────────────────────────────────────────────────────────
@@ -364,6 +372,16 @@ impl<A: App> AppRunner<A> {
         let commands = buf.diff(&self.prev_buf);
         self.terminal.flush_commands(commands, rendered_height)?;
         self.prev_buf = buf;
+
+        // Position the hardware cursor after rendering.
+        if let Some((col, row)) = self.app.cursor_position() {
+            self.terminal
+                .set_cursor_position(Position { x: col, y: row })?;
+            self.terminal.set_cursor_visible(true)?;
+        } else {
+            self.terminal.set_cursor_visible(false)?;
+        }
+
         Ok(())
     }
 
