@@ -56,7 +56,6 @@ impl App {
     /// Handle pasted text - large pastes get stored as blobs with placeholders.
     fn handle_paste(&mut self, text: String) {
         let line_count = text.lines().count();
-        let char_count = text.chars().count();
 
         // Optionally wrap multi-line pastes in a code fence.
         let text = if self.config.auto_backtick_paste && line_count > 1 {
