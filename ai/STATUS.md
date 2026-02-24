@@ -2,37 +2,40 @@
 
 ## Current State
 
-| Metric    | Value                                                              | Updated    |
-| --------- | ------------------------------------------------------------------ | ---------- |
-| Phase     | TUI parity — IonApp functionally complete                          | 2026-02-23 |
-| Status    | All gaps closed: pickers, completers, history, help, submit, blobs | 2026-02-23 |
-| Toolchain | stable                                                             | 2026-01-22 |
-| Tests     | 516 passing                                                        | 2026-02-23 |
-| Clippy    | clean (zero new warnings)                                          | 2026-02-23 |
-| Blocker   | None — parity gaps closed                                          | 2026-02-23 |
+| Metric    | Value                                                    | Updated    |
+| --------- | -------------------------------------------------------- | ---------- |
+| Phase     | TUI inline rendering — fixing crates/tui scrollback mode | 2026-02-24 |
+| Status    | Two bugs fixed, needs manual testing                     | 2026-02-24 |
+| Toolchain | stable                                                   | 2026-01-22 |
+| Tests     | 516 passing                                              | 2026-02-24 |
+| Clippy    | clean (zero new warnings)                                | 2026-02-24 |
+| Blocker   | Manual testing of inline rendering                       | 2026-02-24 |
+
+## Active Work: Inline Rendering Fix
+
+IonApp uses `crates/tui` in inline mode (`.inline(3)`) — chat goes to native terminal scrollback via `insert_before()`, only bottom UI (status + input) renders in the 3-row inline region.
+
+**Bugs fixed (commit 93f2ac3):**
+
+1. **Blank space gap** — `insert_before()` always used `ScrollUp`, creating a gap between the shell prompt and the inline region on startup. Added `content_cursor` to Terminal for two-phase insertion: direct write fills empty space first, then `ScrollUp` for scrollback.
+
+2. **Focus event leak (`^[[O`)** — `EnableFocusChange` executed before `EventStream::new()`, so terminal response escaped as visible text. Moved enables after event stream creation in `AppRunner::run_loop()`.
+
+**Review:** LGTM, 0 errors, 0 warnings, 2 nits (cosmetic).
+
+**Next:** Manual test with `cargo run` and `cargo run -- --continue` to verify rendering.
 
 ## What Works in IonApp (crates/tui)
 
-- App launches, shows conversation + status bar + input
+- App launches, shows status bar + input at terminal bottom
+- Chat content pushed to native terminal scrollback via insert_before
 - Cursor visible in input widget
 - Ctrl+C double-tap quit, Esc cancel, Shift+Tab mode toggle
-- Slash commands (/clear, /compact, /model, /provider, etc.)
-- Paste events handled (bracketed paste + blob storage for large pastes)
-- Mouse scroll, PageUp/PageDown
-- System messages rendered (dim italic)
-- Tool result sync (content-length delta detection)
-- Auto-scroll re-enable on scroll-to-bottom
-- Terminal Drop guard (panic safety)
-- Picker rendering + key routing (model/provider/session selectors)
-- File/command completers wired with intercept before InputState
-- Input history via inner (DB persistence, Up/Down/Ctrl+N/Ctrl+P)
-- Submit flow: input normalization, history persistence
-- Help overlay (Ctrl+H, ? when empty)
-- History search modal (Ctrl+R with query/navigation)
-- OAuth confirm dialog for Gemini
-- Tool expansion resync (Ctrl+O rebuilds conversation)
-- Startup header pushed to conversation on init
-- Conditional Ctrl+P (provider picker vs prev_history when running)
+- Slash commands, paste events, mouse scroll
+- Picker/help/history-search overlays (switch to fullscreen mode)
+- File/command completers, input history
+- Tool expansion resync (Ctrl+O)
+- Startup header pushed to scrollback on init
 
 ## Remaining Polish (not blocking parity)
 
@@ -41,34 +44,6 @@
 | Editor open (Ctrl+G)   | P3     | Sets flag but nothing reads it              |
 | Thinking level display | P3     | Ctrl+T cycles but no visual indicator       |
 | ask_user visual prompt | P2     | Text works but no distinct visual treatment |
-
-## Implemented Features
-
-| Feature             | Status            | Location                                                                                   |
-| ------------------- | ----------------- | ------------------------------------------------------------------------------------------ |
-| Core tools          | Done              | read, write, edit, bash, glob, grep, list, ast_grep                                        |
-| Web tools           | Done              | web_fetch, web_search (built-in, default)                                                  |
-| Multi-provider      | Done              | Anthropic, Google, Groq, Kimi, Ollama, OpenAI, OpenRouter                                  |
-| OAuth               | Done              | Gemini CLI, ChatGPT (with ban warning for Gemini)                                          |
-| Context compaction  | Done              | 3-tier: truncate → remove → LLM summarize; auto + `/compact`                               |
-| Sub-agents          | Done              | `spawn_subagent` tool + `SubagentRegistry` + YAML config; sync only                        |
-| Hooks               | Done              | Pre/post tool execution; `CommandHook` (shell); config-driven via `ion.toml`               |
-| Mid-turn steering   | Done              | `message_queue` wired TUI → agent; drains between turns                                    |
-| Image input         | Done              | File attachment works (png/jpg/gif/webp) via `@path`                                       |
-| Config system       | Done              | `~/.config/ion/ion.toml`; hierarchical user+project; API keys, hooks, MCP, permissions     |
-| Session persistence | Done              | SQLite; `--continue` resumes; completion summary saved                                     |
-| Skills              | Done              | `//skill-name` completer; `$ARGUMENTS` substitution                                        |
-| MCP client          | Done              | stdio + HTTP transports; tools callable by LLM                                             |
-| Read/Write modes    | Done              | Shift+Tab toggle; path sandbox (CWD enforcement)                                           |
-| Token tracking      | Done              | Bar in status line; per-turn usage; cost tracking                                          |
-| Bash passthrough    | Done              | `! cmd` prefix runs shell command directly                                                 |
-| Configurable status | Done              | TOML flags: show_model, show_tokens, show_cost, show_branch, show_git_diff                 |
-| Auto-backtick paste | Done              | `auto_backtick_paste = true` in config wraps multi-line pastes                             |
-| Session export      | Done              | `/export` writes markdown to working dir                                                   |
-| ast-grep tool       | Done              | Structural code search via `sg` binary                                                     |
-| ask_user tool       | Done              | Agent pauses and asks user a question; TUI intercepts Enter to respond                     |
-| crates/tui library  | Done (all phases) | Cell buffer, Taffy layout, App+Effect, Input/List/Block/Canvas/Theme; ion wired via IonApp |
-| ion TUI integration | Done              | IonApp functionally matches old App — all pickers/completers/history/overlays wired        |
 
 ## Open Backlog (p4 only)
 
@@ -80,22 +55,12 @@
 | tk-nyqq | Symlink agents/skills   | Chezmoi dotfile task, not a code change           |
 | tk-4gm9 | Settings selector UI    | Needs design doc first                            |
 
-## Provider Expansion — Current State
-
-**`llm` crate (graniet/llm v1.3.7):** Passes streaming + incremental tool calls. Blocked on
-Anthropic system prompt `cache_control` — not implemented. Tool-level cache_control merged
-2026-02-20 but not released. Watch for v1.4.0. See `ai/research/provider-crates-fresh-2026-02.md`.
-
-**`genai` verdict:** Still out — tool calls accumulated+emitted at end (not incremental), issue #60 unresolved.
-
 ## Key References
 
-| Topic                    | Location                                                |
-| ------------------------ | ------------------------------------------------------- |
-| Provider crate research  | `ai/research/provider-crates-fresh-2026-02.md` (latest) |
-| Feature gap analysis     | `ai/research/feature-gap-analysis-2026-02.md`           |
-| Coding agents survey     | `ai/research/coding-agents-state-2026-02.md`            |
-| Compaction techniques    | `ai/research/compaction-techniques-2026.md`             |
-| Tool architecture survey | `ai/research/tool-architecture-survey-2026-02.md`       |
-| TUI render review        | `ai/review/tui-render-layout-review-2026-02-20.md`      |
-| Config system design     | `ai/design/config-system.md`                            |
+| Topic                     | Location                                             |
+| ------------------------- | ---------------------------------------------------- |
+| TUI inline rendering plan | `/Users/nick/.claude/plans/async-dazzling-widget.md` |
+| TUI lib spec              | `ai/design/tui-lib-spec.md`                          |
+| TUI v3 architecture       | `ai/design/tui-v3-architecture-2026-02.md`           |
+| Feature gap analysis      | `ai/research/feature-gap-analysis-2026-02.md`        |
+| TUI render review         | `ai/review/tui-render-layout-review-2026-02-20.md`   |
