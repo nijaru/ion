@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "w40u",
+  "title": "TUI parity: get crates/tui IonApp to functional parity with rnk version",
+  "description": "IonApp compiles and renders but is functionally broken. Cursor invisible, no working keybindings in practice, pickers don't render, completers missing, tool output not expanding, many state sync gaps. Need systematic gap analysis and implementation.",
+  "status": "open",
+  "priority": 2,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-02-24T01:14:45.656Z",
+  "updated_at": "2026-02-24T01:14:45.656Z",
+  "completed_at": null,
+  "external": {}
+}

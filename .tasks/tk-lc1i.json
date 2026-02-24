@@ -1,0 +1,28 @@
+{
+  "project": "tk",
+  "ref": "lc1i",
+  "title": "[TUI] Phase 4: input widget",
+  "description": "Build widgets/input.rs per spec: InputState, InputAction, handle_key with all required keybindings, Input render widget with cursor positioning. Phase 4 of crates/tui/ library.",
+  "status": "done",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [
+    {
+      "ts": "2026-02-23T10:16:10.373Z",
+      "msg": "Implemented InputState + Input widget. All readline keybindings, history, kill ring, unicode-aware. 71 passing tests."
+    },
+    {
+      "ts": "2026-02-24T01:14:51.634Z",
+      "msg": "Phase 4 complete: cursor positioning, Terminal Drop guard, event handlers ported, slash commands, tool result sync, auto-scroll, dead code cleanup. But still not at functional parity — pickers don't render, completers missing, tool expansion cosmetic only."
+    }
+  ],
+  "created_at": "2026-02-23T10:12:21.354Z",
+  "updated_at": "2026-02-24T01:14:51.634Z",
+  "completed_at": "2026-02-23T10:16:10.351Z",
+  "external": {}
+}
