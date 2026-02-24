@@ -289,6 +289,22 @@ impl StyledLine {
         self.spans.iter().map(|s| s.content.as_str()).collect()
     }
 
+    /// Render this line to a string with ANSI escape codes.
+    #[must_use]
+    pub fn to_ansi_string(&self) -> String {
+        let mut buf = Vec::new();
+        let _ = self.write_to(&mut buf);
+        String::from_utf8_lossy(&buf).into_owned()
+    }
+
+    /// Render this line to a width-constrained string with ANSI escape codes.
+    #[must_use]
+    pub fn to_ansi_string_with_width(&self, width: u16) -> String {
+        let mut buf = Vec::new();
+        let _ = self.write_to_width(&mut buf, width);
+        String::from_utf8_lossy(&buf).into_owned()
+    }
+
     /// Total display width of all spans in terminal cells.
     #[must_use]
     pub fn display_width(&self) -> usize {

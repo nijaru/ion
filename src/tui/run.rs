@@ -48,7 +48,7 @@ pub async fn run(permissions: PermissionSettings, resume_option: ResumeOption) -
     ion_app.apply_resume(resume_option);
 
     tui::app::AppBuilder::new(ion_app)
-        .fullscreen()
+        .inline(3) // status(1) + input(1) + border/gap
         .mouse(true)
         .bracketed_paste(true)
         .focus_events(true)

@@ -220,6 +220,31 @@ impl Terminal {
         }
     }
 
+    /// Insert lines above the inline region into native terminal scrollback.
+    ///
+    /// Scrolls the viewport up by `lines.len()` rows (pushing content into
+    /// scrollback), then writes the new lines at the vacated rows above the
+    /// inline region. The inline region itself is redrawn on the next frame.
+    ///
+    /// No-op in fullscreen mode or when `lines` is empty.
+    pub fn insert_before(&mut self, lines: &[String]) -> Result<()> {
+        if !matches!(self.mode, RenderMode::Inline { .. }) || lines.is_empty() {
+            return Ok(());
+        }
+        let out = &mut self.backend.out;
+        let n = lines.len() as u16;
+        // Scroll viewport up — pushes N rows into scrollback
+        queue!(out, terminal::ScrollUp(n))?;
+        // Write new lines at the rows above the inline region
+        let write_row = self.start_row.saturating_sub(n);
+        for (i, line) in lines.iter().enumerate() {
+            queue!(out, cursor::MoveTo(0, write_row + i as u16))?;
+            queue!(out, Print(line))?;
+        }
+        out.flush()?;
+        Ok(())
+    }
+
     /// Switch between render modes at runtime.
     pub fn switch_mode(&mut self, mode: RenderMode) -> Result<()> {
         match (&self.mode, &mode) {

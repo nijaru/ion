@@ -7,7 +7,7 @@
 
 use tui::{
     geometry::Rect,
-    widgets::{canvas::Canvas, Element, IntoElement},
+    widgets::{Element, IntoElement, canvas::Canvas},
 };
 
 use crate::tui::highlight::markdown::render_markdown_with_width;
@@ -92,7 +92,7 @@ impl ConversationEntry {
         &self.rendered.as_ref().unwrap().1
     }
 
-    fn render_to_lines(&self, width: u16) -> Vec<StyledLine> {
+    pub fn render_to_lines(&self, width: u16) -> Vec<StyledLine> {
         let w = width as usize;
         match &self.role {
             EntryRole::User => {
