@@ -65,6 +65,11 @@ pub struct IonApp {
     /// Content length of the last streaming entry, used to detect incremental
     /// token updates without a full equality check.
     last_streaming_len: usize,
+    /// Indices of tool entries in `conversation` that may need result updates.
+    /// Maps message_list index → conversation index.
+    tool_entry_indices: Vec<(usize, usize)>,
+    /// Content lengths of tool entries at sync time (to detect result arrival).
+    tool_content_lens: Vec<usize>,
     /// Cached input area rect from last render (for cursor positioning).
     input_area: Rect,
     /// Timestamp of last Ctrl+C / Ctrl+D press for double-tap quit detection.
@@ -92,6 +97,8 @@ impl IonApp {
             height,
             synced_entry_count: 0,
             last_streaming_len: 0,
+            tool_entry_indices: Vec::new(),
+            tool_content_lens: Vec::new(),
             input_area: Rect::default(),
             last_cancel_at: None,
             last_esc_at: None,
@@ -146,6 +153,8 @@ impl IonApp {
     pub(crate) fn sync_all_to_conversation(&mut self) {
         self.synced_entry_count = 0;
         self.last_streaming_len = 0;
+        self.tool_entry_indices.clear();
+        self.tool_content_lens.clear();
         self.conversation = ConversationView::new();
         self.sync_conversation();
     }
@@ -168,8 +177,30 @@ impl IonApp {
         // Push all new stable entries.
         while self.synced_entry_count < stable_count {
             let entry = &entries[self.synced_entry_count];
+            let conv_idx = self.conversation.entry_count();
             push_entry_to_conversation(&mut self.conversation, entry);
+            // Track tool entries for result updates.
+            if entry.sender == Sender::Tool {
+                let content_len = entry.content_as_markdown().len();
+                self.tool_entry_indices
+                    .push((self.synced_entry_count, conv_idx));
+                self.tool_content_lens.push(content_len);
+            }
             self.synced_entry_count += 1;
+        }
+
+        // Check if any previously-synced tool entries have been updated
+        // (result arrived, tool_meta changed).
+        for i in 0..self.tool_entry_indices.len() {
+            let (msg_idx, conv_idx) = self.tool_entry_indices[i];
+            if let Some(entry) = entries.get(msg_idx) {
+                let current_len = entry.content_as_markdown().len();
+                if current_len != self.tool_content_lens[i] {
+                    self.tool_content_lens[i] = current_len;
+                    let content = entry.content_as_markdown().to_owned();
+                    self.conversation.update_entry(conv_idx, &content);
+                }
+            }
         }
 
         // Handle the actively streaming last entry.
@@ -737,6 +768,11 @@ impl TuiApp for IonApp {
         // Input is at the bottom: y = height - input_height.
         let input_y = self.height.saturating_sub(input_height);
         self.input_area = Rect::new(0, input_y, width, input_height);
+        // Tell conversation its visible height for auto-scroll boundary detection.
+        let conv_height = self
+            .height
+            .saturating_sub(input_height + status_height) as usize;
+        self.conversation.set_visible_height(conv_height);
 
         Col::new(vec![
             // Conversation fills all space not taken by status + input.
