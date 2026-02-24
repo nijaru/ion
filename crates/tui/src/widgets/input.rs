@@ -264,10 +264,10 @@ impl InputState {
     /// Handles embedded newlines by splitting into multiple lines.
     pub fn insert_text(&mut self, text: &str) {
         for c in text.chars() {
-            if c == '\n' {
-                self.insert_newline();
-            } else {
-                self.insert_char(c);
+            match c {
+                '\n' => self.insert_newline(),
+                '\r' => {} // strip carriage returns
+                c => self.insert_char(c),
             }
         }
         self.history_pos = None;
