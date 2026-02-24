@@ -270,9 +270,12 @@ impl ConversationView {
     pub fn scroll_down(&mut self, n: usize) {
         self.scroll_offset = self.scroll_offset.saturating_add(n);
         // Re-enable auto-scroll when we've scrolled to (or past) the bottom.
-        let max_offset = self.total_lines.saturating_sub(self.visible_height);
-        if self.scroll_offset >= max_offset {
-            self.auto_scroll = true;
+        // Skip check when total_lines is the dirty sentinel (usize::MAX).
+        if self.total_lines != usize::MAX {
+            let max_offset = self.total_lines.saturating_sub(self.visible_height);
+            if self.scroll_offset >= max_offset {
+                self.auto_scroll = true;
+            }
         }
     }
 
