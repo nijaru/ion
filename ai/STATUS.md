@@ -4,11 +4,11 @@
 
 | Metric    | Value                                                                | Updated    |
 | --------- | -------------------------------------------------------------------- | ---------- |
-| Phase     | crates/tui integration complete                                      | 2026-02-23 |
-| Status    | IonApp on AppBuilder; old render pipeline deleted; 528 tests passing | 2026-02-23 |
+| Phase     | crates/tui integration — event handling and state sync complete      | 2026-02-23 |
+| Status    | IonApp fully wired: cursor, events, slash cmds, tool results, scroll | 2026-02-23 |
 | Toolchain | stable                                                               | 2026-01-22 |
-| Tests     | 528 passing                                                          | 2026-02-23 |
-| Clippy    | warnings (dead code in ansi.rs/text.rs — old TUI helpers)            | 2026-02-23 |
+| Tests     | 516 passing (removed 12 dead-code tests)                             | 2026-02-23 |
+| Clippy    | clean (zero new warnings)                                            | 2026-02-23 |
 
 ## Implemented Features
 
