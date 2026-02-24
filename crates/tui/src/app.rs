@@ -77,6 +77,16 @@ pub trait App: Sized + Send + 'static {
     fn pre_render_insert(&mut self) -> Vec<String> {
         Vec::new()
     }
+
+    /// Override the render mode for the current frame.
+    ///
+    /// Return `Some(mode)` to temporarily switch to a different render mode
+    /// (e.g. fullscreen for overlay dialogs). Return `None` to use the
+    /// builder-configured mode. The framework switches automatically and
+    /// restores the original mode when `None` is returned.
+    fn render_mode_override(&self) -> Option<RenderMode> {
+        None
+    }
 }
 
 // ── Effect ───────────────────────────────────────────────────────────────────
@@ -237,6 +247,7 @@ impl<A: App> AppBuilder<A> {
             mouse_capture: self.mouse_capture,
             focus_events: self.focus_events,
             bracketed_paste: self.bracketed_paste,
+            configured_mode: self.mode,
         };
 
         runner.run_loop().await
@@ -255,6 +266,8 @@ struct AppRunner<A: App> {
     mouse_capture: bool,
     focus_events: bool,
     bracketed_paste: bool,
+    /// The builder-configured mode, restored when render_mode_override returns None.
+    configured_mode: RenderMode,
 }
 
 impl<A: App> AppRunner<A> {
@@ -356,6 +369,20 @@ impl<A: App> AppRunner<A> {
     }
 
     fn render(&mut self) -> Result<()> {
+        // Check if the app wants a different render mode (e.g. fullscreen for overlays).
+        let desired_mode = self
+            .app
+            .render_mode_override()
+            .unwrap_or(self.configured_mode);
+        if desired_mode != self.terminal.mode() {
+            self.terminal.switch_mode(desired_mode)?;
+            self.prev_buf = Buffer::empty(self.terminal.render_area());
+        }
+
+        // All terminal output for this frame is wrapped in a synchronized
+        // update so the terminal applies it atomically (no flicker).
+        self.terminal.begin_sync()?;
+
         // Insert scrollback lines before the inline region (no-op in fullscreen).
         let insert_lines = self.app.pre_render_insert();
         if !insert_lines.is_empty() {
@@ -399,6 +426,9 @@ impl<A: App> AppRunner<A> {
         } else {
             self.terminal.set_cursor_visible(false)?;
         }
+
+        // End synchronized update and flush everything.
+        self.terminal.end_sync()?;
 
         Ok(())
     }
