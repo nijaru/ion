@@ -104,6 +104,7 @@ pub(crate) fn extract_key_arg(tool_name: &str, args: &serde_json::Value) -> Stri
     }
 }
 
+
 /// Truncate a string for display, showing the end for paths.
 fn truncate_for_display(s: &str, max: usize) -> String {
     let s = s.lines().next().unwrap_or(s); // First line only
@@ -390,6 +391,7 @@ fn result_style(tool_name: Option<&str>) -> ResultStyle {
     }
 }
 
+
 /// Count added/removed lines in a unified diff.
 fn count_diff_lines(result: &str) -> (usize, usize) {
     let mut added = 0;
@@ -497,7 +499,11 @@ pub(crate) fn format_result_content(
             // Bash stores: "Exit code: {code}\nOutput lines: {n}\n\n{output}"
             // Strip metadata header to show meaningful content.
             let effective = if result.starts_with("Exit code: ") {
-                result.split_once("\n\n").map(|x| x.1).unwrap_or("").trim()
+                result
+                    .split_once("\n\n")
+                    .map(|x| x.1)
+                    .unwrap_or("")
+                    .trim()
             } else {
                 result
             };
@@ -595,10 +601,8 @@ impl MessageList {
                     meta.is_error,
                     expanded,
                 );
-                entry.parts = vec![MessagePart::Text(format!(
-                    "{}\n{}",
-                    meta.header, result_content
-                ))];
+                entry.parts =
+                    vec![MessagePart::Text(format!("{}\n{}", meta.header, result_content))];
                 entry.update_cache();
             }
         }
@@ -696,10 +700,8 @@ impl MessageList {
                         }
                     } else {
                         // Single call: build ToolMeta first (moves result), then format
-                        let tool_name = self
-                            .entries
-                            .get(call.entry_idx)
-                            .and_then(tool_name_from_entry);
+                        let tool_name =
+                            self.entries.get(call.entry_idx).and_then(tool_name_from_entry);
                         let header = self
                             .entries
                             .get(call.entry_idx)
@@ -798,6 +800,7 @@ impl MessageList {
         self.pending_tool_calls.clear();
         self.active_group = None;
     }
+
 }
 
 #[cfg(test)]
@@ -1301,10 +1304,7 @@ mod tests {
     fn test_collapsed_read_shows_count() {
         // Collapsed: read shows line count
         let result = format_result_content(Some("read"), "line1\nline2\nline3", false, false);
-        assert_eq!(
-            result, " ✓ 3 lines",
-            "collapsed read should show line count"
-        );
+        assert_eq!(result, " ✓ 3 lines", "collapsed read should show line count");
         let single = format_result_content(Some("read"), "only one", false, false);
         assert_eq!(single, " ✓ 1 line", "singular grammar");
     }
@@ -1320,10 +1320,7 @@ mod tests {
         // With metadata header
         let with_header = "Exit code: 0\nOutput lines: 5\n\nline1\nline2\nline3\nline4\nline5";
         let result = format_result_content(None, with_header, false, false);
-        assert_eq!(
-            result, " ✓ 5 lines",
-            "collapsed bash should show line count from header"
-        );
+        assert_eq!(result, " ✓ 5 lines", "collapsed bash should show line count from header");
         // Zero lines
         let empty = "Exit code: 0\nOutput lines: 0\n\n";
         let result = format_result_content(None, empty, false, false);
@@ -1345,7 +1342,10 @@ mod tests {
     #[test]
     fn test_collapsed_search_shows_count() {
         let result = format_result_content(Some("grep"), "a.rs\nb.rs\nc.rs", false, false);
-        assert_eq!(result, " ✓ 3 results", "collapsed grep should show count");
+        assert_eq!(
+            result, " ✓ 3 results",
+            "collapsed grep should show count"
+        );
         // Single result should be singular
         let single = format_result_content(Some("grep"), "a.rs", false, false);
         assert_eq!(single, " ✓ 1 result", "singular grammar");
@@ -1396,10 +1396,7 @@ mod tests {
 
         // Default collapsed: shows line count
         let md = list.entries[0].content_as_markdown();
-        assert!(
-            md.contains("3 lines"),
-            "collapsed read should show line count"
-        );
+        assert!(md.contains("3 lines"), "collapsed read should show line count");
         assert!(md.contains("✓"), "collapsed should show ✓");
 
         // Toggle to expanded
@@ -1434,26 +1431,15 @@ mod tests {
             "read".into(),
             json!({"file_path": "b.rs"}),
         ));
-        list.push_event(AgentEvent::ToolCallResult(
-            "id1".into(),
-            "content".into(),
-            false,
-        ));
-        list.push_event(AgentEvent::ToolCallResult(
-            "id2".into(),
-            "content".into(),
-            false,
-        ));
+        list.push_event(AgentEvent::ToolCallResult("id1".into(), "content".into(), false));
+        list.push_event(AgentEvent::ToolCallResult("id2".into(), "content".into(), false));
 
         let md_before = list.entries[0].content_as_markdown().to_string();
 
         // Toggle should not affect grouped entries (no tool_meta)
         list.toggle_tool_expansion();
         let md_after = list.entries[0].content_as_markdown();
-        assert_eq!(
-            md_before, md_after,
-            "grouped entries should not change on toggle"
-        );
+        assert_eq!(md_before, md_after, "grouped entries should not change on toggle");
     }
 
     #[test]
@@ -1476,9 +1462,6 @@ mod tests {
         let meta = meta.unwrap();
         assert_eq!(meta.raw_result, "test passed");
         assert!(!meta.is_error);
-        assert!(
-            meta.header.contains("bash"),
-            "header should contain tool name"
-        );
+        assert!(meta.header.contains("bash"), "header should contain tool name");
     }
 }

@@ -10,7 +10,6 @@ use crossterm::style::{Attribute, ContentStyle};
 pub(crate) use crossterm::style::Color;
 
 use crate::tui::terminal::{Color as TermColor, TextStyle};
-use crate::tui::text::truncate_to_width;
 
 /// Map `terminal::Color` to the equivalent `crossterm::style::Color`.
 ///
@@ -77,90 +76,4 @@ pub(crate) fn apply_style(s: &str, style: &TextStyle) -> String {
         return String::new();
     }
     format!("{}", to_content_style(style).apply(s))
-}
-
-/// A styled span used by the direct-render layer (bottom_ui, selector, popup, history).
-///
-/// Replaces `rnk::components::Span`.
-pub(crate) struct Span {
-    pub content: String,
-    pub style: ContentStyle,
-}
-
-impl Span {
-    pub(crate) fn new(content: impl Into<String>) -> Self {
-        Self {
-            content: content.into(),
-            style: ContentStyle::default(),
-        }
-    }
-
-    #[must_use]
-    pub(crate) fn color(mut self, fg: Color) -> Self {
-        self.style.foreground_color = Some(fg);
-        self
-    }
-
-    #[must_use]
-    pub(crate) fn bold(mut self) -> Self {
-        self.style.attributes.set(Attribute::Bold);
-        self
-    }
-
-    #[must_use]
-    pub(crate) fn dim(mut self) -> Self {
-        self.style.attributes.set(Attribute::Dim);
-        self
-    }
-}
-
-/// Render a list of spans into a single ANSI string.
-///
-/// No width truncation — callers are responsible for pre-clipping span content
-/// (e.g. via `text::truncate_to_width` or `util::truncate_to_display_width`).
-pub(crate) fn render_spans(spans: &[Span]) -> String {
-    let mut out = String::new();
-    for span in spans {
-        if span.content.is_empty() {
-            continue;
-        }
-        let has_style = span.style.foreground_color.is_some()
-            || span.style.background_color.is_some()
-            || span.style.attributes != crossterm::style::Attributes::default();
-        if has_style {
-            out.push_str(&format!("{}", span.style.apply(&span.content)));
-        } else {
-            out.push_str(&span.content);
-        }
-    }
-    out
-}
-
-/// Render a single text string with optional color/bold/dim, truncated to `max_cells`.
-///
-/// Replaces the `render_rnk_line` helper in `bottom_ui.rs` and the
-/// `paint_row_text`/`Text::new(clipped).color(…)` pattern in `selector.rs`.
-pub(crate) fn render_line(
-    text: &str,
-    max_cells: usize,
-    fg: Option<Color>,
-    bold: bool,
-    dim: bool,
-) -> String {
-    if max_cells == 0 {
-        return String::new();
-    }
-    let clipped = truncate_to_width(text, max_cells);
-    if clipped.is_empty() {
-        return String::new();
-    }
-    let mut cs = ContentStyle::default();
-    cs.foreground_color = fg;
-    if bold {
-        cs.attributes.set(Attribute::Bold);
-    }
-    if dim {
-        cs.attributes.set(Attribute::Dim);
-    }
-    format!("{}", cs.apply(clipped))
 }
