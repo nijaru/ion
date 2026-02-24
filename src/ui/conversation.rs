@@ -187,6 +187,8 @@ pub struct ConversationView {
     scroll_offset: usize,
     /// Pin to bottom while streaming.
     pub auto_scroll: bool,
+    /// Visible height from last view() call (for scroll boundary detection).
+    visible_height: usize,
 }
 
 impl ConversationView {
@@ -196,6 +198,7 @@ impl ConversationView {
             total_lines: 0,
             scroll_offset: 0,
             auto_scroll: true,
+            visible_height: 0,
         }
     }
 
@@ -238,6 +241,17 @@ impl ConversationView {
         }
     }
 
+    /// Update an entry at the given index with new content.
+    /// Used to update tool call entries when results arrive.
+    pub fn update_entry(&mut self, index: usize, content: &str) {
+        if let Some(entry) = self.entries.get_mut(index) {
+            entry.content.clear();
+            entry.content.push_str(content);
+            entry.rendered = None;
+            self.total_lines = usize::MAX;
+        }
+    }
+
     pub fn entry_count(&self) -> usize {
         self.entries.len()
     }
@@ -252,14 +266,24 @@ impl ConversationView {
         self.auto_scroll = false;
     }
 
-    /// Scroll down by `n` lines.
+    /// Scroll down by `n` lines. Re-enables auto-scroll when at bottom.
     pub fn scroll_down(&mut self, n: usize) {
         self.scroll_offset = self.scroll_offset.saturating_add(n);
+        // Re-enable auto-scroll when we've scrolled to (or past) the bottom.
+        let max_offset = self.total_lines.saturating_sub(self.visible_height);
+        if self.scroll_offset >= max_offset {
+            self.auto_scroll = true;
+        }
     }
 
     /// Re-enable auto-scroll.
     pub fn resume_auto_scroll(&mut self) {
         self.auto_scroll = true;
+    }
+
+    /// Update the visible height (call from view/layout context).
+    pub fn set_visible_height(&mut self, h: usize) {
+        self.visible_height = h;
     }
 
     /// Compute rendered lines for all entries at the given width, updating
