@@ -92,6 +92,11 @@ impl Style {
         self
     }
 
+    pub fn reversed(mut self) -> Self {
+        self.modifiers |= StyleModifiers::REVERSED;
+        self
+    }
+
     pub fn strikethrough(mut self) -> Self {
         self.modifiers |= StyleModifiers::STRIKETHROUGH;
         self

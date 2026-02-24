@@ -67,4 +67,31 @@ pub enum IonMsg {
     FocusGained,
     /// Terminal lost focus.
     FocusLost,
+
+    // ── Picker events ────────────────────────────────────────────────────────
+    PickerUp,
+    PickerDown,
+    PickerPageUp,
+    PickerPageDown,
+    PickerHome,
+    PickerEnd,
+    /// Enter in picker — select current item.
+    PickerSelect,
+    /// Tab — switch provider/model tab.
+    PickerTab,
+    /// Backspace when filter empty on model stage → back to providers.
+    PickerBack,
+    /// Character/editing input for filter field.
+    PickerFilterKey(KeyEvent),
+
+    // ── History search events ────────────────────────────────────────────────
+    HistorySearchAccept,
+    HistorySearchPrev,
+    HistorySearchNext,
+    HistorySearchBackspace,
+    HistorySearchChar(char),
+
+    // ── History navigation ───────────────────────────────────────────────────
+    /// Ctrl+N — next history entry.
+    HistoryNext,
 }
