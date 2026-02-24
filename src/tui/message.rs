@@ -31,14 +31,40 @@ pub enum IonMsg {
     InputKey(KeyEvent),
     /// The user submitted input (Enter pressed).
     InputSubmit(String),
+    /// Pasted text (bracketed paste).
+    Paste(String),
 
     // ── App control ───────────────────────────────────────────────────────────
     Resize(u16, u16),
     Quit,
-    /// Toggle tool permission mode: read ↔ write.
-    ToggleMode,
     ScrollUp,
     ScrollDown,
     /// Periodic tick — drives inner App::update() polling.
     Tick,
+
+    // ── Keybinding actions ────────────────────────────────────────────────────
+    /// Esc — cancel running task; double-tap clears input.
+    CancelTask,
+    /// Ctrl+C / Ctrl+D — clear input if non-empty; double-tap quit when idle.
+    ClearInputOrQuit,
+    /// Shift+Tab — toggle read/write tool mode.
+    ToggleMode,
+    /// Ctrl+M — open model picker.
+    OpenModelPicker,
+    /// Ctrl+P — open provider picker.
+    OpenProviderPicker,
+    /// Ctrl+H — toggle help overlay.
+    OpenHelp,
+    /// Ctrl+T — cycle thinking level (off → standard → extended → off).
+    CycleThinking,
+    /// Ctrl+G — open input in external editor.
+    OpenEditor,
+    /// Ctrl+O — toggle tool output expansion (collapsed ↔ expanded).
+    ToggleToolExpansion,
+    /// Ctrl+R — open history search.
+    OpenHistorySearch,
+    /// Terminal gained focus.
+    FocusGained,
+    /// Terminal lost focus.
+    FocusLost,
 }

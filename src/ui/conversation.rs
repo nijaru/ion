@@ -21,6 +21,7 @@ use crate::ui::style::text_style_to_tui;
 pub enum EntryRole {
     User,
     Assistant,
+    System,
     ToolCall { name: String },
     ToolResult { name: String, is_error: bool },
 }
@@ -54,6 +55,14 @@ impl ConversationEntry {
     pub fn tool_call(name: impl Into<String>, content: impl Into<String>) -> Self {
         Self {
             role: EntryRole::ToolCall { name: name.into() },
+            content: content.into(),
+            rendered: None,
+        }
+    }
+
+    pub fn system(content: impl Into<String>) -> Self {
+        Self {
+            role: EntryRole::System,
             content: content.into(),
             rendered: None,
         }
@@ -111,6 +120,16 @@ impl ConversationEntry {
                 result
             }
             EntryRole::Assistant => render_markdown_with_width(&self.content, w),
+            EntryRole::System => {
+                let style = TextStyle {
+                    foreground_color: Some(IonColor::DarkGrey),
+                    italic: true,
+                    ..Default::default()
+                };
+                vec![StyledLine::new(vec![
+                    crate::tui::terminal::StyledSpan::new(&self.content, style),
+                ])]
+            }
             EntryRole::ToolCall { name } => {
                 // Compact header: "  [tool: name]" then content indented
                 render_tool_block(&format!("tool: {name}"), &self.content, w, false)
