@@ -260,6 +260,20 @@ impl InputState {
         self.cursor = (row + 1, 0);
     }
 
+    /// Insert a multi-character string at the cursor position.
+    /// Handles embedded newlines by splitting into multiple lines.
+    pub fn insert_text(&mut self, text: &str) {
+        for c in text.chars() {
+            if c == '\n' {
+                self.insert_newline();
+            } else {
+                self.insert_char(c);
+            }
+        }
+        self.history_pos = None;
+        self.history_draft = None;
+    }
+
     // ── Deletion helpers ──────────────────────────────────────────────────────
 
     fn delete_back(&mut self) {
