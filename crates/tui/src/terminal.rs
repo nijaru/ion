@@ -63,25 +63,14 @@ impl Terminal {
     pub fn new(mode: RenderMode) -> Result<Self> {
         let (width, height) = terminal::size()?;
 
+        // For inline mode, anchor the region at the bottom of the terminal.
+        // MoveTo is absolute positioning, so we don't need to physically
+        // move the cursor — just set start_row and let flush_commands
+        // offset all draw commands.
         let start_row = match mode {
             RenderMode::Inline { height: h } => {
                 let inline_h = h.min(height);
-                let target_row = height.saturating_sub(inline_h);
-
-                // Push cursor to the bottom of the terminal so the inline
-                // region anchors at the bottom. Print newlines BEFORE raw
-                // mode (which disables echo) so the terminal scrolls normally.
-                let current_row = crossterm::cursor::position()
-                    .map(|(_, row)| row)
-                    .unwrap_or(0);
-                if current_row < target_row {
-                    let mut out = io::stdout();
-                    for _ in 0..(target_row - current_row) {
-                        let _ = out.write_all(b"\n");
-                    }
-                    let _ = out.flush();
-                }
-                target_row
+                height.saturating_sub(inline_h)
             }
             RenderMode::Fullscreen => 0,
         };
