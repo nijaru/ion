@@ -3,6 +3,7 @@
 pub(crate) mod ansi;
 mod app_state;
 mod attachment;
+mod chat_renderer;
 mod command_completer;
 mod completer_state;
 pub mod composer;
@@ -12,12 +13,11 @@ mod filter_input;
 mod fuzzy;
 pub mod highlight;
 mod input;
-pub mod ion_app;
-pub mod message;
 pub mod message_list;
 pub mod model_picker;
 mod picker_trait;
 pub mod provider_picker;
+mod render;
 mod render_state;
 mod run;
 pub(crate) mod text;
@@ -36,6 +36,10 @@ pub use run::{ResumeOption, run};
 pub use types::{
     HistorySearchState, Mode, SelectionState, SelectorPage, TaskSummary, ThinkingLevel,
 };
+
+// Re-export internal utilities for sibling modules
+pub(crate) use types::QUEUED_PREVIEW_LINES;
+pub(crate) use util::sanitize_for_display;
 
 use crate::agent::Agent;
 use crate::cli::PermissionSettings;
