@@ -93,19 +93,16 @@ impl Tool for AstGrepTool {
             // Avoid inheriting a colorized terminal
             .env("NO_COLOR", "1");
 
-        let output = cmd
-            .output()
-            .await
-            .map_err(|e| {
-                if e.kind() == std::io::ErrorKind::NotFound {
-                    ToolError::ExecutionFailed(
-                        "ast-grep (sg) not found on PATH. Install with: cargo install ast-grep"
-                            .to_string(),
-                    )
-                } else {
-                    ToolError::ExecutionFailed(format!("Failed to run sg: {e}"))
-                }
-            })?;
+        let output = cmd.output().await.map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                ToolError::ExecutionFailed(
+                    "ast-grep (sg) not found on PATH. Install with: cargo install ast-grep"
+                        .to_string(),
+                )
+            } else {
+                ToolError::ExecutionFailed(format!("Failed to run sg: {e}"))
+            }
+        })?;
 
         // sg exits with code 1 when no matches found (like grep), not an error
         let stdout = String::from_utf8_lossy(&output.stdout);

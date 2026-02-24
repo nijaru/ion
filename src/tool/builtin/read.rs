@@ -188,7 +188,10 @@ fn read_lines_single_pass(path: &Path, start: usize, count: usize) -> std::io::R
         line_buf.clear();
         if reader.read_line(&mut line_buf)? == 0 {
             // EOF before window end — no phase 2 needed.
-            return Ok(ReadResult { lines, total_lines: line_num });
+            return Ok(ReadResult {
+                lines,
+                total_lines: line_num,
+            });
         }
         if line_num >= start && lines.len() < count {
             // Strip trailing newline (handles \n and \r\n).
@@ -217,7 +220,10 @@ fn read_lines_single_pass(path: &Path, start: usize, count: usize) -> std::io::R
         line_num += 1;
     }
 
-    Ok(ReadResult { lines, total_lines: line_num })
+    Ok(ReadResult {
+        lines,
+        total_lines: line_num,
+    })
 }
 
 /// Count lines using streaming with SIMD (constant memory, handles huge files).

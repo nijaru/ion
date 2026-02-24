@@ -8,7 +8,7 @@ use tui::{
     app::{App, AppBuilder, Effect},
     event::{Event, KeyCode},
     style::{Color, Style},
-    widgets::{canvas::Canvas, Element, IntoElement},
+    widgets::{Element, IntoElement, canvas::Canvas},
 };
 
 struct Hello {
@@ -29,7 +29,11 @@ impl App for Hello {
         match msg {
             Msg::Quit => Effect::Quit,
             Msg::ToggleColor => {
-                self.color = if self.color == Color::Green { Color::Cyan } else { Color::Green };
+                self.color = if self.color == Color::Green {
+                    Color::Cyan
+                } else {
+                    Color::Green
+                };
                 Effect::None
             }
         }
@@ -41,7 +45,12 @@ impl App for Hello {
         Canvas::new(move |area, buf| {
             let style = Style::new().fg(color).bold();
             buf.set_string(1, 1, msg, style);
-            buf.set_string(1, 2, "Press 'q' to quit, 't' to toggle color.", Style::default());
+            buf.set_string(
+                1,
+                2,
+                "Press 'q' to quit, 't' to toggle color.",
+                Style::default(),
+            );
             // Draw a simple border on row 0.
             let w = area.width;
             for col in 0..w {
@@ -65,9 +74,12 @@ impl App for Hello {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    AppBuilder::new(Hello { message: "Hello, world!", color: Color::Green })
-        .inline(4)
-        .run()
-        .await?;
+    AppBuilder::new(Hello {
+        message: "Hello, world!",
+        color: Color::Green,
+    })
+    .inline(4)
+    .run()
+    .await?;
     Ok(())
 }

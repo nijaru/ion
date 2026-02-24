@@ -178,12 +178,18 @@ impl ContextManager {
             } else {
                 let skill = active_skill.clone();
                 drop(active_skill);
-                (self.render_system_prompt(skill.as_ref(), Some(model_id)), true)
+                (
+                    self.render_system_prompt(skill.as_ref(), Some(model_id)),
+                    true,
+                )
             }
         } else {
             let skill = active_skill.clone();
             drop(active_skill);
-            (self.render_system_prompt(skill.as_ref(), Some(model_id)), true)
+            (
+                self.render_system_prompt(skill.as_ref(), Some(model_id)),
+                true,
+            )
         };
 
         // Update cache if needed

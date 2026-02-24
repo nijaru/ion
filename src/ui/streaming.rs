@@ -6,7 +6,7 @@
 
 use tui::{
     geometry::Rect,
-    widgets::{canvas::Canvas, Element, IntoElement},
+    widgets::{Element, IntoElement, canvas::Canvas},
 };
 
 use crate::ui::style::text_style_to_tui;

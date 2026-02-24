@@ -39,16 +39,14 @@ pub(crate) fn build_request(request: &ChatRequest, stream: bool) -> AnthropicReq
                             text: text.clone(),
                             cache_control: None,
                         }),
-                        IonContentBlock::Image { media_type, data } => {
-                            Some(ContentBlock::Image {
-                                source: super::request::ImageSource {
-                                    source_type: "base64".to_string(),
-                                    media_type: media_type.clone(),
-                                    data: data.clone(),
-                                },
-                                cache_control: None,
-                            })
-                        }
+                        IonContentBlock::Image { media_type, data } => Some(ContentBlock::Image {
+                            source: super::request::ImageSource {
+                                source_type: "base64".to_string(),
+                                media_type: media_type.clone(),
+                                data: data.clone(),
+                            },
+                            cache_control: None,
+                        }),
                         _ => None,
                     })
                     .collect();
@@ -244,7 +242,10 @@ pub(crate) async fn handle_stream_event(
         } => {
             // Track tool use blocks for later assembly
             if let ContentBlockInfo::ToolUse { id, name } = content_block {
-                tools.insert(index, crate::provider::types::ToolBuilder::with_id_name(id, name));
+                tools.insert(
+                    index,
+                    crate::provider::types::ToolBuilder::with_id_name(id, name),
+                );
             }
         }
         AnthropicStreamEvent::ContentBlockDelta { index, delta } => match delta {

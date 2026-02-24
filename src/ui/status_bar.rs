@@ -8,7 +8,7 @@
 
 use tui::{
     style::{Color, Style},
-    widgets::{canvas::Canvas, Element, IntoElement},
+    widgets::{Element, IntoElement, canvas::Canvas},
 };
 
 // ── Widget ────────────────────────────────────────────────────────────────────

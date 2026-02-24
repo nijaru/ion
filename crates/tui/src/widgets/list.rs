@@ -17,7 +17,7 @@
 use crate::{
     buffer::Buffer,
     geometry::{Rect, Size},
-    layout::{compute_layout, Dimension, LayoutStyle},
+    layout::{Dimension, LayoutStyle, compute_layout},
     widgets::{Element, IntoElement, Renderable, WidgetId},
 };
 
@@ -460,9 +460,9 @@ mod tests {
         let items = vec![text_item("A", 2), text_item("B", 2), text_item("C", 2)];
         let lines = crate::widgets::testing::render_to_lines(List::new(items).into_element(), 4, 5);
         assert_eq!(&lines[0][..1], "A"); // item A, row 0
-                                         // lines[1] is item A row 1 — blank (Canvas only writes at area.y)
+        // lines[1] is item A row 1 — blank (Canvas only writes at area.y)
         assert_eq!(&lines[2][..1], "B"); // item B rows 2-3
-                                         // lines[3] is item B row 1 — blank
+        // lines[3] is item B row 1 — blank
         assert_eq!(&lines[4][..1], "C"); // item C: only first row visible
     }
 
