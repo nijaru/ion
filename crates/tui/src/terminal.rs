@@ -43,6 +43,9 @@ pub struct Terminal {
     backend: CrosstermBackend,
     size: Size,
     mode: RenderMode,
+    /// The mode set at construction time — used by `restore()` to determine
+    /// cleanup behavior even if `switch_mode` changed the active mode.
+    initial_mode: RenderMode,
     cursor_visible: bool,
     /// Row where inline rendering begins (always 0 for fullscreen).
     start_row: u16,
@@ -85,6 +88,7 @@ impl Terminal {
             backend: CrosstermBackend { out },
             size: Size::new(width, height),
             mode,
+            initial_mode: mode,
             cursor_visible: false,
             start_row,
             rendered_height: 0,
@@ -149,16 +153,19 @@ impl Terminal {
             }
         }
         self.rendered_height = rendered_height;
-        out.flush()?;
+        // No flush here — caller wraps in begin_sync/end_sync.
         Ok(())
     }
 
     /// Show or hide the hardware cursor.
+    ///
+    /// Uses `queue!` so the command is batched with the current frame.
+    /// The caller must flush (or use `end_sync`).
     pub fn set_cursor_visible(&mut self, visible: bool) -> Result<()> {
         if visible {
-            execute!(self.backend.out, cursor::Show)?;
+            queue!(self.backend.out, cursor::Show)?;
         } else {
-            execute!(self.backend.out, cursor::Hide)?;
+            queue!(self.backend.out, cursor::Hide)?;
         }
         self.cursor_visible = visible;
         Ok(())
@@ -168,8 +175,10 @@ impl Terminal {
     ///
     /// In inline mode, `pos.y` is relative to the render area (0-based) and
     /// is offset by `start_row` automatically.
+    ///
+    /// Uses `queue!` so the command is batched with the current frame.
     pub fn set_cursor_position(&mut self, pos: Position) -> Result<()> {
-        execute!(
+        queue!(
             self.backend.out,
             cursor::MoveTo(pos.x, pos.y + self.start_row)
         )?;
@@ -194,18 +203,25 @@ impl Terminal {
         let out = &mut self.backend.out;
         execute!(out, SetAttribute(Attribute::Reset))?;
         execute!(out, cursor::Show)?;
-        match self.mode {
-            RenderMode::Fullscreen => {
-                execute!(out, LeaveAlternateScreen)?;
-            }
-            RenderMode::Inline { .. } => {
-                // Position cursor below the rendered region.
-                let below = self.start_row + self.rendered_height;
-                execute!(out, cursor::MoveTo(0, below))?;
-                // Print a newline to push the shell prompt onto a fresh line.
-                writeln!(out)?;
-            }
+
+        // If currently in fullscreen (e.g. an overlay) but initially inline,
+        // leave the alternate screen first to restore the main buffer.
+        if matches!(self.mode, RenderMode::Fullscreen) {
+            execute!(out, LeaveAlternateScreen)?;
         }
+
+        // Position cursor for clean shell prompt restoration.
+        if matches!(self.initial_mode, RenderMode::Inline { .. }) {
+            let inline_h = match self.initial_mode {
+                RenderMode::Inline { height } => height.min(self.size.height),
+                _ => 0,
+            };
+            let start = self.size.height.saturating_sub(inline_h);
+            let below = start + inline_h;
+            execute!(out, cursor::MoveTo(0, below))?;
+            writeln!(out)?;
+        }
+
         terminal::disable_raw_mode()?;
         Ok(())
     }
@@ -224,35 +240,73 @@ impl Terminal {
 
     /// Insert lines above the inline region into native terminal scrollback.
     ///
-    /// Scrolls the viewport up by `lines.len()` rows (pushing content into
-    /// scrollback), then writes the new lines at the vacated rows above the
-    /// inline region. The inline region itself is redrawn on the next frame.
+    /// Scrolls the viewport up to make room, then writes the new lines at the
+    /// vacated rows above the inline region. When more lines are inserted than
+    /// fit above the inline region (`start_row` rows), the insert is batched:
+    /// each batch scrolls up by at most `start_row` rows, writes those lines,
+    /// and repeats until all lines are written.
+    ///
+    /// Does **not** flush — the caller is responsible for flushing after all
+    /// terminal output for the frame is queued.
     ///
     /// No-op in fullscreen mode or when `lines` is empty.
     pub fn insert_before(&mut self, lines: &[String]) -> Result<()> {
         if !matches!(self.mode, RenderMode::Inline { .. }) || lines.is_empty() {
             return Ok(());
         }
-        let out = &mut self.backend.out;
-        let n = lines.len() as u16;
-        // Scroll viewport up — pushes N rows into scrollback
-        queue!(out, terminal::ScrollUp(n))?;
-        // Write new lines at the rows just above the inline region.
-        // After ScrollUp(n), the inline region content has been displaced
-        // upward by n rows. These rows will be redrawn on the next frame.
-        let write_row = self.start_row.saturating_sub(n);
-        for (i, line) in lines.iter().enumerate() {
-            let row = write_row + i as u16;
-            queue!(out, cursor::MoveTo(0, row))?;
-            queue!(out, Clear(ClearType::CurrentLine))?;
-            queue!(out, Print(line))?;
+
+        let max_batch = self.start_row as usize;
+        if max_batch == 0 {
+            // No space above inline region — can't insert.
+            return Ok(());
         }
-        out.flush()?;
+
+        let out = &mut self.backend.out;
+        let mut offset = 0;
+
+        while offset < lines.len() {
+            let batch_end = (offset + max_batch).min(lines.len());
+            let batch = &lines[offset..batch_end];
+            let n = batch.len() as u16;
+
+            // Scroll viewport up — pushes n rows into scrollback.
+            queue!(out, terminal::ScrollUp(n))?;
+
+            // Write batch in the vacated rows just above the inline region.
+            let write_row = self.start_row.saturating_sub(n);
+            for (i, line) in batch.iter().enumerate() {
+                let row = write_row + i as u16;
+                queue!(out, cursor::MoveTo(0, row))?;
+                queue!(out, Clear(ClearType::CurrentLine))?;
+                queue!(out, Print(line))?;
+            }
+
+            offset = batch_end;
+        }
+
+        // No flush here — caller handles flushing.
+        Ok(())
+    }
+
+    /// Begin a synchronized update — all output until [`end_sync`] is buffered
+    /// and applied atomically, preventing flicker.
+    pub fn begin_sync(&mut self) -> Result<()> {
+        queue!(self.backend.out, terminal::BeginSynchronizedUpdate)?;
+        Ok(())
+    }
+
+    /// End a synchronized update and flush all queued output.
+    pub fn end_sync(&mut self) -> Result<()> {
+        queue!(self.backend.out, terminal::EndSynchronizedUpdate)?;
+        self.backend.out.flush()?;
         Ok(())
     }
 
     /// Switch between render modes at runtime.
     pub fn switch_mode(&mut self, mode: RenderMode) -> Result<()> {
+        if mode == self.mode {
+            return Ok(());
+        }
         match (&self.mode, &mode) {
             (RenderMode::Inline { .. }, RenderMode::Fullscreen) => {
                 execute!(self.backend.out, EnterAlternateScreen)?;
@@ -266,6 +320,7 @@ impl Terminal {
             _ => {}
         }
         self.mode = mode;
+        self.rendered_height = 0;
         Ok(())
     }
 }
