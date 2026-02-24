@@ -360,6 +360,10 @@ impl<A: App> AppRunner<A> {
         let insert_lines = self.app.pre_render_insert();
         if !insert_lines.is_empty() {
             self.terminal.insert_before(&insert_lines)?;
+            // ScrollUp displaced the physical screen, so prev_buf no longer
+            // matches what's on screen. Invalidate it to force a full redraw
+            // of the inline region.
+            self.prev_buf = Buffer::empty(self.terminal.render_area());
         }
 
         let area = self.terminal.render_area();
