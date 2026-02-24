@@ -49,6 +49,11 @@ pub struct Terminal {
     cursor_visible: bool,
     /// Row where inline rendering begins (always 0 for fullscreen).
     start_row: u16,
+    /// Next row to write content above the inline region. Starts at the
+    /// shell cursor position. Content is written directly while
+    /// `content_cursor < start_row`. Once it reaches `start_row`,
+    /// `ScrollUp` is used to push content into scrollback.
+    content_cursor: u16,
     /// Height of the last render (used by restore to position the cursor).
     rendered_height: u16,
     /// Whether `restore()` has already been called (makes Drop idempotent).
@@ -70,12 +75,16 @@ impl Terminal {
         // MoveTo is absolute positioning, so we don't need to physically
         // move the cursor — just set start_row and let flush_commands
         // offset all draw commands.
-        let start_row = match mode {
+        let (start_row, content_cursor) = match mode {
             RenderMode::Inline { height: h } => {
                 let inline_h = h.min(height);
-                height.saturating_sub(inline_h)
+                let start = height.saturating_sub(inline_h);
+                // Capture current cursor row so insert_before can fill
+                // empty space before resorting to ScrollUp.
+                let cursor_row = cursor::position().map(|(_, row)| row).unwrap_or(0);
+                (start, cursor_row.min(start))
             }
-            RenderMode::Fullscreen => 0,
+            RenderMode::Fullscreen => (0, 0),
         };
 
         terminal::enable_raw_mode()?;
@@ -91,6 +100,7 @@ impl Terminal {
             initial_mode: mode,
             cursor_visible: false,
             start_row,
+            content_cursor,
             rendered_height: 0,
             restored: false,
         })
@@ -235,16 +245,21 @@ impl Terminal {
         if matches!(self.mode, RenderMode::Inline { .. }) {
             let inline_h = self.render_area().height;
             self.start_row = self.start_row.min(height.saturating_sub(inline_h));
+            self.content_cursor = self.content_cursor.min(self.start_row);
         }
     }
 
     /// Insert lines above the inline region into native terminal scrollback.
     ///
-    /// Scrolls the viewport up to make room, then writes the new lines at the
-    /// vacated rows above the inline region. When more lines are inserted than
-    /// fit above the inline region (`start_row` rows), the insert is batched:
-    /// each batch scrolls up by at most `start_row` rows, writes those lines,
-    /// and repeats until all lines are written.
+    /// Works in two phases:
+    ///
+    /// 1. **Direct write** — while `content_cursor < start_row`, lines are
+    ///    written directly at the cursor position with no scrolling. This
+    ///    fills empty space between the shell prompt and the inline region.
+    ///
+    /// 2. **Scroll** — once content reaches the inline region, `ScrollUp`
+    ///    pushes content into terminal scrollback. Large inserts are batched
+    ///    (at most `start_row` lines per scroll).
     ///
     /// Does **not** flush — the caller is responsible for flushing after all
     /// terminal output for the frame is queued.
@@ -255,36 +270,51 @@ impl Terminal {
             return Ok(());
         }
 
-        let max_batch = self.start_row as usize;
-        if max_batch == 0 {
-            // No space above inline region — can't insert.
-            return Ok(());
-        }
-
         let out = &mut self.backend.out;
         let mut offset = 0;
 
-        while offset < lines.len() {
-            let batch_end = (offset + max_batch).min(lines.len());
-            let batch = &lines[offset..batch_end];
-            let n = batch.len() as u16;
-
-            // Scroll viewport up — pushes n rows into scrollback.
-            queue!(out, terminal::ScrollUp(n))?;
-
-            // Write batch in the vacated rows just above the inline region.
-            let write_row = self.start_row.saturating_sub(n);
-            for (i, line) in batch.iter().enumerate() {
-                let row = write_row + i as u16;
+        // Phase 1: Direct write while there's empty space above the inline region.
+        if self.content_cursor < self.start_row {
+            let available = (self.start_row - self.content_cursor) as usize;
+            let direct_count = (lines.len() - offset).min(available);
+            for i in 0..direct_count {
+                let row = self.content_cursor + i as u16;
                 queue!(out, cursor::MoveTo(0, row))?;
                 queue!(out, Clear(ClearType::CurrentLine))?;
-                queue!(out, Print(line))?;
+                queue!(out, Print(&lines[offset + i]))?;
             }
-
-            offset = batch_end;
+            self.content_cursor += direct_count as u16;
+            offset += direct_count;
         }
 
-        // No flush here — caller handles flushing.
+        // Phase 2: ScrollUp for remaining lines (content_cursor >= start_row).
+        if offset < lines.len() {
+            let remaining = &lines[offset..];
+            let max_batch = self.start_row as usize;
+            if max_batch == 0 {
+                return Ok(());
+            }
+
+            let mut batch_offset = 0;
+            while batch_offset < remaining.len() {
+                let batch_end = (batch_offset + max_batch).min(remaining.len());
+                let batch = &remaining[batch_offset..batch_end];
+                let n = batch.len() as u16;
+
+                queue!(out, terminal::ScrollUp(n))?;
+
+                let write_row = self.start_row.saturating_sub(n);
+                for (i, line) in batch.iter().enumerate() {
+                    let row = write_row + i as u16;
+                    queue!(out, cursor::MoveTo(0, row))?;
+                    queue!(out, Clear(ClearType::CurrentLine))?;
+                    queue!(out, Print(line))?;
+                }
+
+                batch_offset = batch_end;
+            }
+        }
+
         Ok(())
     }
 
@@ -316,6 +346,10 @@ impl Terminal {
                 execute!(self.backend.out, LeaveAlternateScreen)?;
                 let inline_h = (*h).min(self.size.height);
                 self.start_row = self.size.height.saturating_sub(inline_h);
+                // After leaving fullscreen, the main buffer is restored.
+                // Content cursor is at start_row since we can't know what's
+                // visible — subsequent inserts will use ScrollUp.
+                self.content_cursor = self.start_row;
             }
             _ => {}
         }
