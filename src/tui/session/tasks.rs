@@ -129,9 +129,7 @@ impl App {
                     let stderr = String::from_utf8_lossy(&out.stderr);
                     let combined = match (stdout.trim().is_empty(), stderr.trim().is_empty()) {
                         (true, true) if out.status.success() => None,
-                        (true, true) => {
-                            Some(format!("exit {}", out.status.code().unwrap_or(-1)))
-                        }
+                        (true, true) => Some(format!("exit {}", out.status.code().unwrap_or(-1))),
                         (false, true) => Some(stdout.trim_end().to_string()),
                         (true, false) => Some(stderr.trim_end().to_string()),
                         (false, false) => {
