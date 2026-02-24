@@ -6,23 +6,49 @@
 //! `inner.agent_rx` through `inner.update()`, then `sync_conversation()`
 //! incrementally propagates changes to `ConversationView`.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tui::{
     app::{App as TuiApp, Effect},
     event::{Event, KeyCode, KeyModifiers},
+    geometry::Rect,
     layout::Dimension,
     Col, Element, Input, InputAction, InputState, IntoElement,
 };
 
 use crate::cli::PermissionSettings;
+use crate::session::Session;
 use crate::tool::ToolMode;
 use crate::tui::{
     App as IonState, ResumeOption,
+    fuzzy,
     message::IonMsg,
     message_list::{MessageEntry, Sender},
 };
 use crate::ui::{ConversationEntry, ConversationView, StatusBar};
+
+/// Double-tap window for Ctrl+C quit and Esc clear.
+const CANCEL_WINDOW: Duration = Duration::from_millis(1500);
+
+// ── AppMode ──────────────────────────────────────────────────────────────────
+
+/// Modal state for the IonApp.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum AppMode {
+    /// Normal chat mode — input focused.
+    #[default]
+    Input,
+    /// Ctrl+M — model picker overlay.
+    ModelPicker,
+    /// Ctrl+P — provider picker overlay.
+    ProviderPicker,
+    /// /resume — session picker overlay.
+    SessionPicker,
+    /// Ctrl+H — help overlay.
+    Help,
+    /// Ctrl+R — incremental history search.
+    HistorySearch,
+}
 
 // ── IonApp ────────────────────────────────────────────────────────────────────
 
@@ -31,6 +57,7 @@ pub struct IonApp {
     conversation: ConversationView,
     input: InputState,
     status: StatusBar,
+    mode: AppMode,
     width: u16,
     height: u16,
     /// Number of `inner.message_list` entries already synced to `conversation`.
@@ -38,6 +65,12 @@ pub struct IonApp {
     /// Content length of the last streaming entry, used to detect incremental
     /// token updates without a full equality check.
     last_streaming_len: usize,
+    /// Cached input area rect from last render (for cursor positioning).
+    input_area: Rect,
+    /// Timestamp of last Ctrl+C / Ctrl+D press for double-tap quit detection.
+    last_cancel_at: Option<Instant>,
+    /// Timestamp of last Esc press for double-tap clear detection.
+    last_esc_at: Option<Instant>,
 }
 
 impl IonApp {
@@ -54,10 +87,14 @@ impl IonApp {
             conversation: ConversationView::new(),
             input: InputState::new(),
             status: StatusBar::new(),
+            mode: AppMode::default(),
             width,
             height,
             synced_entry_count: 0,
             last_streaming_len: 0,
+            input_area: Rect::default(),
+            last_cancel_at: None,
+            last_esc_at: None,
         })
     }
 
@@ -102,6 +139,8 @@ impl IonApp {
         self.sync_all_to_conversation();
     }
 
+    // ── Conversation sync ────────────────────────────────────────────────────
+
     /// Rebuild `conversation` from scratch, syncing all current
     /// `inner.message_list` entries. Used after loading a session.
     pub(crate) fn sync_all_to_conversation(&mut self) {
@@ -140,12 +179,10 @@ impl IonApp {
                     let content = last.content_as_markdown().to_owned();
                     let new_len = content.len();
                     if self.synced_entry_count < entries.len() {
-                        // First time we're seeing this streaming entry.
                         self.conversation.push_assistant(content);
                         self.synced_entry_count += 1;
                         self.last_streaming_len = new_len;
                     } else if new_len != self.last_streaming_len {
-                        // Token update: replace the last entry's content.
                         self.conversation.set_last_content(&content);
                         self.last_streaming_len = new_len;
                     }
@@ -179,6 +216,157 @@ impl IonApp {
             mode: Some(mode.to_string()),
         };
     }
+
+    // ── Slash commands ───────────────────────────────────────────────────────
+
+    fn handle_slash_command(&mut self, input: &str) -> Effect<IonMsg> {
+        const COMMANDS: [&str; 9] = [
+            "/compact",
+            "/cost",
+            "/export",
+            "/model",
+            "/provider",
+            "/clear",
+            "/quit",
+            "/help",
+            "/resume",
+        ];
+
+        let cmd_line = input.trim().to_lowercase();
+        let cmd_name = cmd_line.split_whitespace().next().unwrap_or("");
+
+        // Handle //skill-name [args] skill invocation
+        if cmd_line.starts_with("//") {
+            let skill_input = cmd_line.strip_prefix("//").unwrap_or("").trim();
+            if !skill_input.is_empty() {
+                let (name, args) = skill_input.split_once(' ').unwrap_or((skill_input, ""));
+                let agent = self.inner.agent.clone();
+                let name = name.to_string();
+                let args = args.to_string();
+                let display_name = name.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = agent.activate_skill_with_args(&name, &args).await {
+                        tracing::warn!("Failed to activate skill '{name}': {e}");
+                    }
+                });
+                self.inner.message_list.push_entry(MessageEntry::new(
+                    Sender::System,
+                    format!("Skill active: {display_name}"),
+                ));
+                self.sync_conversation();
+            }
+            return Effect::None;
+        }
+
+        match cmd_name {
+            "/compact" => {
+                let modified = self
+                    .inner
+                    .agent
+                    .compact_messages(&mut self.inner.session.messages);
+                if modified > 0 {
+                    self.inner.last_error = None;
+                    self.inner.message_list.push_entry(MessageEntry::new(
+                        Sender::System,
+                        format!("Compacted: pruned {modified} tool outputs"),
+                    ));
+                    let _ = self.inner.store.save(&self.inner.session);
+                    self.inner
+                        .persist_display_entries(&self.inner.session.id.clone());
+                } else {
+                    self.inner.message_list.push_entry(MessageEntry::new(
+                        Sender::System,
+                        "Nothing to compact".to_string(),
+                    ));
+                }
+                self.sync_conversation();
+            }
+            "/cost" => {
+                let msg = if self.inner.api_provider.is_oauth() {
+                    "Subscription provider — no per-token cost".to_string()
+                } else if self.inner.session_cost > 0.0 {
+                    let p = &self.inner.model_pricing;
+                    let mut parts = vec![format!(
+                        "Session cost: ${:.4}",
+                        self.inner.session_cost
+                    )];
+                    if p.input > 0.0 || p.output > 0.0 {
+                        parts.push(format!(
+                            "Pricing: ${:.2}/M input, ${:.2}/M output",
+                            p.input, p.output,
+                        ));
+                    }
+                    parts.join(" | ")
+                } else {
+                    "No cost data yet (pricing available after model list loads)".to_string()
+                };
+                self.inner
+                    .message_list
+                    .push_entry(MessageEntry::new(Sender::System, msg));
+                self.sync_conversation();
+            }
+            "/export" => {
+                self.inner.export_session_markdown();
+                self.sync_conversation();
+            }
+            "/model" | "/models" => {
+                self.inner.open_model_selector();
+                self.mode = AppMode::ModelPicker;
+            }
+            "/provider" | "/providers" => {
+                self.inner.open_provider_selector();
+                self.mode = AppMode::ProviderPicker;
+            }
+            "/resume" | "/sessions" => {
+                self.inner.open_session_selector();
+                self.mode = AppMode::SessionPicker;
+            }
+            "/quit" | "/exit" | "/q" => {
+                self.inner.quit();
+                return Effect::Quit;
+            }
+            "/clear" => {
+                if !self.inner.session.messages.is_empty() {
+                    let id = self.inner.session.id.clone();
+                    let _ = self.inner.store.save(&self.inner.session);
+                    self.inner.persist_display_entries(&id);
+                }
+                let working_dir = self.inner.session.working_dir.clone();
+                let model = self.inner.session.model.clone();
+                let provider = self.inner.session.provider.clone();
+                let no_sandbox = self.inner.session.no_sandbox;
+                self.inner.session = Session::new(working_dir, model);
+                self.inner.session.provider = provider;
+                self.inner.session.no_sandbox = no_sandbox;
+                self.inner.session_cost = 0.0;
+                self.inner.refresh_startup_header_cache();
+                self.inner.message_list.clear();
+                self.sync_all_to_conversation();
+            }
+            "/help" | "/?" => {
+                self.mode = AppMode::Help;
+            }
+            _ => {
+                if !cmd_name.is_empty() {
+                    let suggestions = fuzzy::top_matches(cmd_name, COMMANDS.iter().copied(), 3);
+                    let message = if suggestions.is_empty() {
+                        format!("Unknown command {cmd_name}")
+                    } else {
+                        format!(
+                            "Unknown command {}. Did you mean {}?",
+                            cmd_name,
+                            suggestions.join(", ")
+                        )
+                    };
+                    self.inner
+                        .message_list
+                        .push_entry(MessageEntry::new(Sender::System, message));
+                    self.sync_conversation();
+                }
+            }
+        }
+        Effect::None
+    }
 }
 
 fn push_entry_to_conversation(conversation: &mut ConversationView, entry: &MessageEntry) {
@@ -196,7 +384,9 @@ fn push_entry_to_conversation(conversation: &mut ConversationView, entry: &Messa
                 conversation.push(ConversationEntry::tool_call(&meta.tool_name, label));
             }
         }
-        Sender::System => {} // System messages are not shown in ConversationView.
+        Sender::System => {
+            conversation.push(ConversationEntry::system(content));
+        }
     }
 }
 
@@ -218,15 +408,76 @@ impl TuiApp for IonApp {
         Some(Duration::from_millis(50))
     }
 
+    fn handle_event(&self, event: &Event) -> Option<IonMsg> {
+        match event {
+            Event::Key(k) => {
+                let ctrl = k.modifiers.contains(KeyModifiers::CTRL);
+
+                // Global keybindings (work in any mode).
+                match k.code {
+                    KeyCode::Char('c') if ctrl => return Some(IonMsg::ClearInputOrQuit),
+                    KeyCode::Char('d') if ctrl => return Some(IonMsg::ClearInputOrQuit),
+                    _ => {}
+                }
+
+                // Mode-specific keybindings.
+                match self.mode {
+                    AppMode::Help => {
+                        // Any key dismisses help.
+                        return Some(IonMsg::OpenHelp);
+                    }
+                    AppMode::ModelPicker
+                    | AppMode::ProviderPicker
+                    | AppMode::SessionPicker
+                    | AppMode::HistorySearch => {
+                        // Esc returns to input mode.
+                        if k.code == KeyCode::Esc {
+                            return Some(IonMsg::CancelTask);
+                        }
+                        // Pass keys through to input for now (pickers handled via inner).
+                        return Some(IonMsg::InputKey(k.clone()));
+                    }
+                    AppMode::Input => {}
+                }
+
+                // Input mode keybindings.
+                match k.code {
+                    KeyCode::Esc => Some(IonMsg::CancelTask),
+                    KeyCode::BackTab => Some(IonMsg::ToggleMode),
+                    KeyCode::Char('m') if ctrl => Some(IonMsg::OpenModelPicker),
+                    KeyCode::Char('p') if ctrl => Some(IonMsg::OpenProviderPicker),
+                    KeyCode::Char('h') if ctrl => Some(IonMsg::OpenHelp),
+                    KeyCode::Char('t') if ctrl => Some(IonMsg::CycleThinking),
+                    KeyCode::Char('g') if ctrl => Some(IonMsg::OpenEditor),
+                    KeyCode::Char('o') if ctrl => Some(IonMsg::ToggleToolExpansion),
+                    KeyCode::Char('r') if ctrl => Some(IonMsg::OpenHistorySearch),
+                    KeyCode::PageUp => Some(IonMsg::ScrollUp),
+                    KeyCode::PageDown => Some(IonMsg::ScrollDown),
+                    _ => Some(IonMsg::InputKey(k.clone())),
+                }
+            }
+            Event::Mouse(m) => match m.kind {
+                tui::event::MouseEventKind::ScrollUp => Some(IonMsg::ScrollUp),
+                tui::event::MouseEventKind::ScrollDown => Some(IonMsg::ScrollDown),
+                _ => None,
+            },
+            Event::Paste(text) => Some(IonMsg::Paste(text.clone())),
+            Event::Resize(w, h) => Some(IonMsg::Resize(*w, *h)),
+            Event::FocusGained => Some(IonMsg::FocusGained),
+            Event::FocusLost => Some(IonMsg::FocusLost),
+            Event::Tick => Some(IonMsg::Tick),
+        }
+    }
+
     fn update(&mut self, msg: IonMsg) -> Effect<IonMsg> {
         match msg {
+            // ── Tick ─────────────────────────────────────────────────────────
             IonMsg::Tick => {
                 let was_running = self.inner.is_running;
                 self.inner.update();
                 self.sync_conversation();
                 self.sync_status();
                 if was_running && !self.inner.is_running {
-                    // Re-enable auto-scroll when streaming completes.
                     self.conversation.resume_auto_scroll();
                 }
                 if self.inner.should_quit {
@@ -235,6 +486,91 @@ impl TuiApp for IonApp {
                 Effect::None
             }
 
+            // ── Ctrl+C / Ctrl+D (double-tap quit) ───────────────────────────
+            IonMsg::ClearInputOrQuit => {
+                // If input has text, clear it.
+                if !self.input.is_empty() {
+                    self.input.clear();
+                    self.last_cancel_at = None;
+                    return Effect::None;
+                }
+                // If in a modal, return to input mode.
+                if self.mode != AppMode::Input {
+                    self.mode = AppMode::Input;
+                    self.last_cancel_at = None;
+                    return Effect::None;
+                }
+                // If running, ignore (Esc is for cancel).
+                if self.inner.is_running {
+                    return Effect::None;
+                }
+                // Double-tap quit.
+                if let Some(when) = self.last_cancel_at {
+                    if when.elapsed() <= CANCEL_WINDOW {
+                        self.inner.quit();
+                        return Effect::Quit;
+                    }
+                }
+                self.last_cancel_at = Some(Instant::now());
+                // Show hint in status (will be overwritten on next sync_status).
+                self.inner.message_list.push_entry(MessageEntry::new(
+                    Sender::System,
+                    "Press Ctrl+C again to quit".to_string(),
+                ));
+                self.sync_conversation();
+                Effect::None
+            }
+
+            // ── Esc (cancel task / clear input) ─────────────────────────────
+            IonMsg::CancelTask => {
+                // If in a modal, return to input.
+                if self.mode != AppMode::Input {
+                    self.mode = AppMode::Input;
+                    self.last_esc_at = None;
+                    return Effect::None;
+                }
+                // If running, cancel the agent task.
+                if self.inner.is_running
+                    && !self.inner.session.abort_token.is_cancelled()
+                {
+                    self.inner.session.abort_token.cancel();
+                    self.last_esc_at = None;
+                    return Effect::None;
+                }
+                // If input non-empty, double-tap to clear.
+                if !self.input.is_empty() {
+                    if let Some(when) = self.last_esc_at {
+                        if when.elapsed() <= CANCEL_WINDOW {
+                            self.input.clear();
+                            self.last_esc_at = None;
+                            return Effect::None;
+                        }
+                    }
+                    self.last_esc_at = Some(Instant::now());
+                }
+                Effect::None
+            }
+
+            // ── Shift+Tab: toggle tool mode ─────────────────────────────────
+            IonMsg::ToggleMode => {
+                self.inner.tool_mode = match self.inner.tool_mode {
+                    ToolMode::Read => ToolMode::Write,
+                    ToolMode::Write => ToolMode::Read,
+                };
+                crate::tool::builtin::spawn_subagent::set_shared_mode(
+                    &self.inner.shared_tool_mode,
+                    self.inner.tool_mode,
+                );
+                let orchestrator = self.inner.orchestrator.clone();
+                let mode = self.inner.tool_mode;
+                tokio::spawn(async move {
+                    orchestrator.set_tool_mode(mode).await;
+                });
+                self.sync_status();
+                Effect::None
+            }
+
+            // ── Input key handling ───────────────────────────────────────────
             IonMsg::InputKey(k) => match self.input.handle_key(&k) {
                 InputAction::Submit => {
                     let text = self.input.value();
@@ -249,6 +585,7 @@ impl TuiApp for IonApp {
                 _ => Effect::None,
             },
 
+            // ── Input submit (Enter) ─────────────────────────────────────────
             IonMsg::InputSubmit(s) => {
                 // Route to ask_user response if the agent is waiting for one.
                 if let Some(tx) = self.inner.pending_ask_user.take() {
@@ -258,15 +595,56 @@ impl TuiApp for IonApp {
                     return Effect::None;
                 }
 
-                // Ignore submissions while the agent is already running.
-                if !self.inner.is_running {
-                    self.inner.message_list.push_user_message(s.clone());
-                    self.sync_conversation();
-                    self.inner.run_agent_task(s);
+                // Check for slash commands.
+                if s.starts_with('/') {
+                    return self.handle_slash_command(&s);
                 }
+
+                // Check for ! bash passthrough.
+                if let Some(cmd) = s.strip_prefix('!') {
+                    let cmd = cmd.trim().to_string();
+                    if !cmd.is_empty() {
+                        self.inner.run_bash_passthrough(cmd);
+                        self.sync_conversation();
+                        return Effect::None;
+                    }
+                }
+
+                // Queue message if agent is already running (mid-turn steering).
+                if self.inner.is_running {
+                    if let Some(queue) = self.inner.message_queue.as_ref() {
+                        match queue.lock() {
+                            Ok(mut q) => q.push(s),
+                            Err(poisoned) => {
+                                tracing::warn!("Message queue lock poisoned, recovering");
+                                poisoned.into_inner().push(s);
+                            }
+                        }
+                    }
+                    return Effect::None;
+                }
+
+                // Normal submit: send to agent.
+                self.inner.message_list.push_user_message(s.clone());
+                self.sync_conversation();
+                self.inner.run_agent_task(s);
                 Effect::None
             }
 
+            // ── Paste ────────────────────────────────────────────────────────
+            IonMsg::Paste(text) => {
+                let text = if self.inner.config.auto_backtick_paste
+                    && text.lines().count() > 1
+                {
+                    format!("```\n{text}\n```")
+                } else {
+                    text
+                };
+                self.input.insert_text(&text);
+                Effect::None
+            }
+
+            // ── Resize ───────────────────────────────────────────────────────
             IonMsg::Resize(w, h) => {
                 self.width = w;
                 self.height = h;
@@ -274,32 +652,74 @@ impl TuiApp for IonApp {
                 Effect::None
             }
 
-            IonMsg::Quit => {
-                self.inner.quit();
-                Effect::Quit
-            }
-
-            IonMsg::ToggleMode => {
-                self.inner.tool_mode = match self.inner.tool_mode {
-                    ToolMode::Read => ToolMode::Write,
-                    ToolMode::Write => ToolMode::Read,
-                };
-                self.sync_status();
-                Effect::None
-            }
-
+            // ── Scroll ───────────────────────────────────────────────────────
             IonMsg::ScrollUp => {
                 self.conversation.scroll_up(3);
                 Effect::None
             }
-
             IonMsg::ScrollDown => {
                 self.conversation.scroll_down(3);
                 Effect::None
             }
 
-            // These variants are reserved for a future direct agent-event
-            // bridge. For now, all agent events arrive via Tick → inner.update().
+            // ── Quit ─────────────────────────────────────────────────────────
+            IonMsg::Quit => {
+                self.inner.quit();
+                Effect::Quit
+            }
+
+            // ── Keybinding actions ───────────────────────────────────────────
+            IonMsg::OpenModelPicker => {
+                if !self.inner.is_running {
+                    self.inner.open_model_selector();
+                    self.mode = AppMode::ModelPicker;
+                }
+                Effect::None
+            }
+            IonMsg::OpenProviderPicker => {
+                if !self.inner.is_running {
+                    self.inner.open_provider_selector();
+                    self.mode = AppMode::ProviderPicker;
+                }
+                Effect::None
+            }
+            IonMsg::OpenHelp => {
+                self.mode = if self.mode == AppMode::Help {
+                    AppMode::Input
+                } else {
+                    AppMode::Help
+                };
+                Effect::None
+            }
+            IonMsg::CycleThinking => {
+                self.inner.thinking_level = self.inner.thinking_level.next();
+                Effect::None
+            }
+            IonMsg::OpenEditor => {
+                self.inner.interaction.editor_requested = true;
+                Effect::None
+            }
+            IonMsg::ToggleToolExpansion => {
+                self.inner.message_list.toggle_tool_expansion();
+                Effect::None
+            }
+            IonMsg::OpenHistorySearch => {
+                if !self.inner.input_history.is_empty() {
+                    self.inner.history_search.clear();
+                    self.inner
+                        .history_search
+                        .update_matches(&self.inner.input_history);
+                    self.mode = AppMode::HistorySearch;
+                }
+                Effect::None
+            }
+            IonMsg::FocusGained => {
+                self.inner.refresh_startup_header_cache();
+                Effect::None
+            }
+            IonMsg::FocusLost => Effect::None,
+
+            // Agent events — arrive via Tick → inner.update() for now.
             IonMsg::TokenReceived(_)
             | IonMsg::ToolStarted { .. }
             | IonMsg::ToolCompleted { .. }
@@ -311,6 +731,12 @@ impl TuiApp for IonApp {
     fn view(&mut self) -> Element {
         let width = self.width;
         let input_height = self.input.line_count().max(1) as u16;
+        // Status bar is 1 row.
+        let status_height: u16 = 1;
+        // Compute input area for cursor positioning.
+        // Input is at the bottom: y = height - input_height.
+        let input_y = self.height.saturating_sub(input_height);
+        self.input_area = Rect::new(0, input_y, width, input_height);
 
         Col::new(vec![
             // Conversation fills all space not taken by status + input.
@@ -318,7 +744,7 @@ impl TuiApp for IonApp {
             // Status bar: exactly 1 row, does not grow or shrink.
             self.status
                 .view(width)
-                .height(Dimension::Cells(1))
+                .height(Dimension::Cells(status_height))
                 .flex_grow(0.0)
                 .flex_shrink(0.0),
             // Input: height matches current line count (1 for empty input).
@@ -332,34 +758,11 @@ impl TuiApp for IonApp {
         .into_element()
     }
 
-    fn handle_event(&self, event: &Event) -> Option<IonMsg> {
-        match event {
-            Event::Key(k) => {
-                // Ctrl+C → quit (saves session).
-                if k.code == KeyCode::Char('c') && k.modifiers.contains(KeyModifiers::CTRL) {
-                    return Some(IonMsg::Quit);
-                }
-                // Tab → toggle tool mode.
-                if k.code == KeyCode::Tab {
-                    return Some(IonMsg::ToggleMode);
-                }
-                // Scroll keybindings.
-                match k.code {
-                    KeyCode::PageUp => return Some(IonMsg::ScrollUp),
-                    KeyCode::PageDown => return Some(IonMsg::ScrollDown),
-                    _ => {}
-                }
-                Some(IonMsg::InputKey(k.clone()))
-            }
-            Event::Mouse(m) => match m.kind {
-                tui::event::MouseEventKind::ScrollUp => Some(IonMsg::ScrollUp),
-                tui::event::MouseEventKind::ScrollDown => Some(IonMsg::ScrollDown),
-                _ => None,
-            },
-            Event::Resize(w, h) => Some(IonMsg::Resize(*w, *h)),
-            Event::Tick => Some(IonMsg::Tick),
-            _ => None,
+    fn cursor_position(&self) -> Option<(u16, u16)> {
+        if self.mode != AppMode::Input {
+            return None;
         }
+        Input::new(&self.input).cursor_position(self.input_area)
     }
 
     fn on_exit(&mut self) {
