@@ -209,9 +209,13 @@ impl<A: App> AppBuilder<A> {
     /// Start the event loop. Blocks until the app exits.
     /// Returns the app (with final state) on success.
     pub async fn run(self) -> Result<A> {
-        let mut out = io::stdout();
+        // Terminal::new() enables raw mode (which disables echo). We must
+        // create it BEFORE enabling focus/mouse/paste, otherwise the
+        // terminal's response sequences (e.g. \x1b[O for focus-lost) get
+        // echoed as visible text in inline mode.
+        let terminal = Terminal::new(self.mode)?;
 
-        // Enable optional terminal features before entering raw mode handling.
+        let mut out = io::stdout();
         if self.mouse_capture {
             execute!(out, EnableMouseCapture)?;
         }
@@ -221,8 +225,6 @@ impl<A: App> AppBuilder<A> {
         if self.bracketed_paste {
             execute!(out, EnableBracketedPaste)?;
         }
-
-        let terminal = Terminal::new(self.mode)?;
         let area = terminal.render_area();
 
         let runner = AppRunner {
