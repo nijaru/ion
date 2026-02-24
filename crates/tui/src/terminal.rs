@@ -48,6 +48,8 @@ pub struct Terminal {
     start_row: u16,
     /// Height of the last render (used by restore to position the cursor).
     rendered_height: u16,
+    /// Whether `restore()` has already been called (makes Drop idempotent).
+    restored: bool,
 }
 
 impl Terminal {
@@ -84,6 +86,7 @@ impl Terminal {
             cursor_visible: false,
             start_row,
             rendered_height: 0,
+            restored: false,
         })
     }
 
@@ -178,7 +181,14 @@ impl Terminal {
     /// - Disables raw mode.
     /// - In inline mode: moves the cursor to the row below the rendered
     ///   region so the shell prompt appears naturally.
-    pub fn restore(mut self) -> Result<()> {
+    ///
+    /// Idempotent — safe to call multiple times (second call is a no-op).
+    pub fn restore(&mut self) -> Result<()> {
+        if self.restored {
+            return Ok(());
+        }
+        self.restored = true;
+
         let out = &mut self.backend.out;
         execute!(out, SetAttribute(Attribute::Reset))?;
         execute!(out, cursor::Show)?;
@@ -227,6 +237,12 @@ impl Terminal {
         }
         self.mode = mode;
         Ok(())
+    }
+}
+
+impl Drop for Terminal {
+    fn drop(&mut self) {
+        let _ = self.restore();
     }
 }
 
