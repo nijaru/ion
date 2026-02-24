@@ -2,7 +2,7 @@
 
 use crate::{
     layout::{Align, Direction, Justify, LayoutStyle},
-    widgets::{row::ContainerRenderer, Element, IntoElement, WidgetId},
+    widgets::{Element, IntoElement, WidgetId, row::ContainerRenderer},
 };
 
 /// A vertical flex container that stacks its children top to bottom.

@@ -618,7 +618,10 @@ command = "echo check"
     fn test_instructions_config_parse() {
         let toml_str = r#"instructions = "Use functional style""#;
         let config: Config = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.instructions, Some("Use functional style".to_string()));
+        assert_eq!(
+            config.instructions,
+            Some("Use functional style".to_string())
+        );
         assert!(config.system_prompt.is_none());
     }
 

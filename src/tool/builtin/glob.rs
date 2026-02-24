@@ -66,8 +66,7 @@ impl Tool for GlobTool {
             } else {
                 working_dir.join(sub)
             };
-            ctx.check_sandbox(&p)
-                .map_err(ToolError::PermissionDenied)?;
+            ctx.check_sandbox(&p).map_err(ToolError::PermissionDenied)?;
             p
         } else {
             working_dir.clone()

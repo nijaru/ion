@@ -76,12 +76,10 @@ impl McpClient {
             cmd.envs(env);
         }
 
-        let transport = TokioChildProcess::new(cmd)
-            .map_err(|e| McpError::SpawnFailed(e.to_string()))?;
+        let transport =
+            TokioChildProcess::new(cmd).map_err(|e| McpError::SpawnFailed(e.to_string()))?;
 
-        let service = ().serve(transport)
-            .await
-            .map_err(|e| McpError::Connection(e.to_string()))?;
+        let service = ().serve(transport).await.map_err(|e| McpError::Connection(e.to_string()))?;
 
         Ok(Self { service })
     }

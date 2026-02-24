@@ -8,7 +8,7 @@
 use crate::{
     buffer::Buffer,
     geometry::{Rect, Size},
-    layout::{compute_layout, LayoutStyle},
+    layout::{LayoutStyle, compute_layout},
     style::Style,
     widgets::{Element, IntoElement, Renderable, WidgetId},
 };

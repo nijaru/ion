@@ -8,7 +8,7 @@ use crate::{
     geometry::Rect,
     layout::{Direction, Edges, LayoutStyle},
     style::Style,
-    widgets::{text::Span, Element, IntoElement, Renderable, WidgetId},
+    widgets::{Element, IntoElement, Renderable, WidgetId, text::Span},
 };
 
 // ── Public types ──────────────────────────────────────────────────────────────

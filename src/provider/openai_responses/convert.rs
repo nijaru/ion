@@ -39,7 +39,11 @@ pub(crate) fn build_request(request: &ChatRequest, stream: bool) -> ResponsesReq
         parallel_tool_calls: if has_tools { Some(true) } else { None },
         max_output_tokens: request.max_tokens,
         // temperature is rejected by the API when reasoning is active (o1/o3 models)
-        temperature: if reasoning.is_some() { None } else { request.temperature },
+        temperature: if reasoning.is_some() {
+            None
+        } else {
+            request.temperature
+        },
         store: false,
         stream,
         reasoning,
@@ -532,9 +536,11 @@ mod tests {
             })
             .expect("assistant message");
 
-        assert!(assistant
-            .iter()
-            .any(|c| matches!(c, ResponseContent::OutputText { .. })));
+        assert!(
+            assistant
+                .iter()
+                .any(|c| matches!(c, ResponseContent::OutputText { .. }))
+        );
     }
 
     #[test]
@@ -567,9 +573,11 @@ mod tests {
         };
 
         let (_, input) = build_instructions_and_input(&request);
-        assert!(input
-            .iter()
-            .any(|i| matches!(i, ResponseInputItem::FunctionCall { name, .. } if name == "read")));
+        assert!(
+            input.iter().any(
+                |i| matches!(i, ResponseInputItem::FunctionCall { name, .. } if name == "read")
+            )
+        );
         assert!(input.iter().any(
             |i| matches!(i, ResponseInputItem::FunctionCallOutput { output, .. } if output == "file contents")
         ));
@@ -591,8 +599,7 @@ mod tests {
 
     #[test]
     fn parse_tool_call_arguments_delta() {
-        let data =
-            r#"{"type":"response.function_call_arguments.delta","item_id":"fc_1","output_index":0,"delta":"{\"pa"}"#;
+        let data = r#"{"type":"response.function_call_arguments.delta","item_id":"fc_1","output_index":0,"delta":"{\"pa"}"#;
         let event = parse_response_event(data, Some("response.function_call_arguments.delta"));
         assert!(
             matches!(event, Some(ParsedEvent::ToolCallDelta { call_id, delta }) if call_id == "fc_1" && delta == "{\"pa")
@@ -638,8 +645,7 @@ mod tests {
 
     #[test]
     fn parse_failed() {
-        let data =
-            r#"{"type":"response.failed","response":{"error":{"message":"rate limited"}}}"#;
+        let data = r#"{"type":"response.failed","response":{"error":{"message":"rate limited"}}}"#;
         let event = parse_response_event(data, Some("response.failed"));
         assert!(matches!(event, Some(ParsedEvent::Error(ref s)) if s == "rate limited"));
     }
