@@ -219,22 +219,10 @@ impl<A: App> AppBuilder<A> {
     /// Start the event loop. Blocks until the app exits.
     /// Returns the app (with final state) on success.
     pub async fn run(self) -> Result<A> {
-        // Terminal::new() enables raw mode (which disables echo). We must
-        // create it BEFORE enabling focus/mouse/paste, otherwise the
-        // terminal's response sequences (e.g. \x1b[O for focus-lost) get
-        // echoed as visible text in inline mode.
+        // Terminal::new() enables raw mode (which disables echo). It must
+        // be created BEFORE enabling focus/mouse/paste, otherwise the
+        // terminal's response sequences get echoed as visible text.
         let terminal = Terminal::new(self.mode)?;
-
-        let mut out = io::stdout();
-        if self.mouse_capture {
-            execute!(out, EnableMouseCapture)?;
-        }
-        if self.focus_events {
-            execute!(out, EnableFocusChange)?;
-        }
-        if self.bracketed_paste {
-            execute!(out, EnableBracketedPaste)?;
-        }
         let area = terminal.render_area();
 
         let runner = AppRunner {
@@ -276,11 +264,26 @@ impl<A: App> AppRunner<A> {
         let init = self.app.init();
         self.execute_effect(init).await;
 
+        // Create the event stream BEFORE enabling focus/mouse/paste so any
+        // terminal response sequences (e.g. \x1b[O for focus-lost) are
+        // captured as events instead of leaking as visible text.
+        let mut event_stream = crossterm::event::EventStream::new();
+
+        let mut out = io::stdout();
+        if self.mouse_capture {
+            execute!(out, EnableMouseCapture)?;
+        }
+        if self.focus_events {
+            execute!(out, EnableFocusChange)?;
+        }
+        if self.bracketed_paste {
+            execute!(out, EnableBracketedPaste)?;
+        }
+
         // Initial render.
         self.render()?;
         self.dirty = false;
 
-        let mut event_stream = crossterm::event::EventStream::new();
         let mut tick_interval = self.app.tick_rate().map(tokio::time::interval);
         let mut render_interval = tokio::time::interval(Duration::from_millis(16)); // 60fps ceiling
         render_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
