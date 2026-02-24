@@ -1,7 +1,10 @@
 //! File path autocomplete for @ mentions in input.
 
+use crate::tui::ansi::Color;
 use crate::tui::completer_state::CompleterState;
 use crate::tui::fuzzy;
+use crate::tui::render::popup::{render_popup, PopupItem, PopupRegion, PopupStyle};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 /// Maximum number of candidates to show in the popup.
@@ -126,6 +129,76 @@ impl FileCompleter {
     /// Move selection down.
     pub fn move_down(&mut self) {
         self.state.move_down();
+    }
+
+    /// Render the file completion popup above the input box.
+    pub fn render<W: Write>(&self, w: &mut W, input_start: u16, width: u16) -> std::io::Result<()> {
+        let candidates = self.visible_candidates();
+        if candidates.is_empty() {
+            return Ok(());
+        }
+
+        let popup_height = candidates.len() as u16;
+        let popup_start = input_start.saturating_sub(popup_height);
+
+        // Calculate popup width (max path length + icon + padding)
+        let max_label_len = candidates
+            .iter()
+            .map(|c| c.path.to_string_lossy().len())
+            .max()
+            .unwrap_or(20);
+        let popup_width = (max_label_len + 4).min(width.saturating_sub(4) as usize) as u16;
+
+        // Build display strings: "icon path" as primary, no secondary
+        let display_width = popup_width.saturating_sub(4) as usize;
+        let formatted: Vec<String> = candidates
+            .iter()
+            .map(|c| {
+                let icon = if c.is_dir { "󰉋 " } else { "  " };
+                let path_str = c.path.to_string_lossy();
+                let display = if display_width > 1 && path_str.chars().count() > display_width {
+                    let tail_chars = path_str
+                        .chars()
+                        .count()
+                        .saturating_sub(display_width.saturating_sub(1));
+                    format!("…{}", path_str.chars().skip(tail_chars).collect::<String>())
+                } else {
+                    path_str.to_string()
+                };
+                format!("{icon}{display}")
+            })
+            .collect();
+
+        let items: Vec<PopupItem> = candidates
+            .iter()
+            .zip(formatted.iter())
+            .enumerate()
+            .map(|(i, (c, label))| PopupItem {
+                primary: label,
+                secondary: "",
+                is_selected: i == self.state.selected_index(),
+                color_override: Some(if c.is_dir {
+                    Color::DarkBlue
+                } else {
+                    Color::Reset
+                }),
+            })
+            .collect();
+
+        render_popup(
+            w,
+            &items,
+            PopupRegion {
+                row: popup_start,
+                height: popup_height,
+            },
+            PopupStyle {
+                primary_color: Color::Reset,
+                show_secondary_dimmed: false,
+                dim_unselected: false,
+            },
+            popup_width,
+        )
     }
 
     /// Refresh candidates from the filesystem.
