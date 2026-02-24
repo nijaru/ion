@@ -13,7 +13,7 @@ use tokio::sync::mpsc;
 use crate::{
     buffer::Buffer,
     error::Result,
-    event::{translate_event, Event, KeyCode, KeyModifiers},
+    event::{Event, KeyCode, KeyModifiers, translate_event},
     geometry::Position,
     layout::compute_layout,
     terminal::{RenderMode, Terminal},
@@ -68,6 +68,14 @@ pub trait App: Sized + Send + 'static {
     /// render. Return `None` to hide the cursor.
     fn cursor_position(&self) -> Option<(u16, u16)> {
         None
+    }
+
+    /// Lines to insert above the inline region before rendering.
+    ///
+    /// Called before each render frame. Return empty vec for no insertion.
+    /// Used in inline mode to push chat content into native terminal scrollback.
+    fn pre_render_insert(&mut self) -> Vec<String> {
+        Vec::new()
     }
 }
 
@@ -259,10 +267,8 @@ impl<A: App> AppRunner<A> {
 
         let mut event_stream = crossterm::event::EventStream::new();
         let mut tick_interval = self.app.tick_rate().map(tokio::time::interval);
-        let mut render_interval =
-            tokio::time::interval(Duration::from_millis(16)); // 60fps ceiling
-        render_interval
-            .set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut render_interval = tokio::time::interval(Duration::from_millis(16)); // 60fps ceiling
+        render_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         loop {
             tokio::select! {
@@ -348,6 +354,12 @@ impl<A: App> AppRunner<A> {
     }
 
     fn render(&mut self) -> Result<()> {
+        // Insert scrollback lines before the inline region (no-op in fullscreen).
+        let insert_lines = self.app.pre_render_insert();
+        if !insert_lines.is_empty() {
+            self.terminal.insert_before(&insert_lines)?;
+        }
+
         let area = self.terminal.render_area();
         let size = crate::geometry::Size {
             width: area.width,
@@ -413,9 +425,7 @@ impl<A: App> AppRunner<A> {
 
 /// Returns the next tick instant, or stays pending forever if there's no
 /// interval. Used in `select!` to conditionally enable the tick arm.
-async fn tick(
-    interval: Option<&mut tokio::time::Interval>,
-) -> Option<tokio::time::Instant> {
+async fn tick(interval: Option<&mut tokio::time::Interval>) -> Option<tokio::time::Instant> {
     match interval {
         Some(i) => Some(i.tick().await),
         None => std::future::pending().await,

@@ -3,30 +3,29 @@
 //! Wraps the existing `App` struct for all business logic (agent, session,
 //! orchestrator) and bridges its data model to the new `crates/tui` widget
 //! layer. Agent events arrive via periodic `Tick` messages that drain
-//! `inner.agent_rx` through `inner.update()`, then `sync_conversation()`
-//! incrementally propagates changes to `ConversationView`.
+//! `inner.agent_rx` through `inner.update()`, then `sync_scrollback()`
+//! incrementally pushes new entries to native terminal scrollback.
 
 use std::time::{Duration, Instant};
 
 use tui::{
+    Col, Element, Input, InputAction, InputState, IntoElement,
     app::{App as TuiApp, Effect},
     event::{Event, KeyCode, KeyModifiers},
     geometry::Rect,
     layout::Dimension,
-    Col, Element, Input, InputAction, InputState, IntoElement,
 };
 
 use crate::cli::PermissionSettings;
 use crate::session::Session;
 use crate::tool::ToolMode;
 use crate::tui::{
-    App as IonState, PickerNavigation, ResumeOption, SelectorPage,
-    fuzzy,
+    App as IonState, PickerNavigation, ResumeOption, SelectorPage, fuzzy,
     message::IonMsg,
     message_list::{MessageEntry, Sender},
     model_picker::PickerStage,
 };
-use crate::ui::{ConversationEntry, ConversationView, StatusBar};
+use crate::ui::{ConversationEntry, StatusBar};
 
 use crate::tui::types::CANCEL_WINDOW;
 
@@ -58,37 +57,31 @@ enum AppMode {
 
 // ── IonApp ────────────────────────────────────────────────────────────────────
 
-/// Tracks a tool entry for result updates.
-struct TrackedTool {
-    /// Index in `inner.message_list.entries`.
-    msg_idx: usize,
-    /// Corresponding index in `conversation.entries`.
-    conv_idx: usize,
-    /// Content length at last sync (detect changes by length delta).
-    content_len: usize,
-}
-
 pub struct IonApp {
     pub(crate) inner: IonState,
-    conversation: ConversationView,
     input: InputState,
     status: StatusBar,
     mode: AppMode,
     width: u16,
     height: u16,
-    /// Number of `inner.message_list` entries already synced to `conversation`.
-    synced_entry_count: usize,
-    /// Content length of the last streaming entry, used to detect incremental
-    /// token updates without a full equality check.
-    last_streaming_len: usize,
-    /// Tool entries tracked for result updates (message_list idx → conversation idx + content len).
-    tracked_tools: Vec<TrackedTool>,
     /// Cached input area rect from last render (for cursor positioning).
     input_area: Rect,
     /// Timestamp of last Ctrl+C / Ctrl+D press for double-tap quit detection.
     last_cancel_at: Option<Instant>,
     /// Timestamp of last Esc press for double-tap clear detection.
     last_esc_at: Option<Instant>,
+
+    // ── Scrollback tracking ─────────────────────────────────────────────────
+    /// Number of message_list entries already printed to scrollback.
+    scrollback_entry_count: usize,
+    /// Lines from the in-progress streaming entry already committed to scrollback.
+    streaming_committed_lines: usize,
+    /// Buffered lines to insert above the inline region on next render.
+    pending_scrollback: Vec<String>,
+    /// Whether the startup header has been printed to scrollback.
+    header_printed: bool,
+    /// Content length of the last streaming entry (detect incremental updates).
+    last_streaming_len: usize,
 }
 
 impl IonApp {
@@ -102,23 +95,24 @@ impl IonApp {
 
         Ok(Self {
             inner,
-            conversation: ConversationView::new(),
             input: InputState::new(),
             status: StatusBar::new(),
             mode: AppMode::default(),
             width,
             height,
-            synced_entry_count: 0,
-            last_streaming_len: 0,
-            tracked_tools: Vec::new(),
             input_area: Rect::default(),
             last_cancel_at: None,
             last_esc_at: None,
+            scrollback_entry_count: 0,
+            streaming_committed_lines: 0,
+            pending_scrollback: Vec::new(),
+            header_printed: false,
+            last_streaming_len: 0,
         })
     }
 
-    /// Apply a resume option, loading session state into `inner` and syncing
-    /// the loaded history to `conversation`.
+    /// Apply a resume option, loading session state into `inner` and queuing
+    /// the loaded history to scrollback.
     pub fn apply_resume(&mut self, resume_option: ResumeOption) {
         match resume_option {
             ResumeOption::None | ResumeOption::Selector => {}
@@ -155,97 +149,130 @@ impl IonApp {
                 }
             }
         }
-        self.sync_all_to_conversation();
+        self.reset_scrollback();
     }
 
-    // ── Conversation sync ────────────────────────────────────────────────────
+    // ── Scrollback sync ──────────────────────────────────────────────────────
 
-    /// Rebuild `conversation` from scratch, syncing all current
-    /// `inner.message_list` entries. Used after loading a session.
-    pub(crate) fn sync_all_to_conversation(&mut self) {
-        self.synced_entry_count = 0;
+    /// Reset scrollback tracking and queue all existing entries for re-print.
+    fn reset_scrollback(&mut self) {
+        self.scrollback_entry_count = 0;
+        self.streaming_committed_lines = 0;
         self.last_streaming_len = 0;
-        self.tracked_tools.clear();
-        self.conversation = ConversationView::new();
-        // Push startup header as system entries.
-        self.push_startup_header();
-        self.sync_conversation();
+        self.header_printed = false;
+        self.pending_scrollback.clear();
     }
 
-    /// Push the startup header lines to conversation (version + cwd).
-    fn push_startup_header(&mut self) {
+    /// Queue the startup header lines for scrollback insertion.
+    fn queue_startup_header(&mut self) {
+        if self.header_printed {
+            return;
+        }
+        self.header_printed = true;
         let header_lines = IonState::startup_header_lines(&self.inner.session.working_dir);
         for line in &header_lines {
-            let text = line.plain_text();
-            if !text.is_empty() {
-                self.conversation.push(ConversationEntry::system(text));
-            }
+            self.pending_scrollback
+                .push(line.to_ansi_string_with_width(self.width));
         }
     }
 
-    /// Incrementally sync new or updated entries from `inner.message_list`
-    /// to `conversation`. Handles both stable (completed) entries and the
-    /// actively streaming last entry.
-    pub(crate) fn sync_conversation(&mut self) {
-        let entries = &self.inner.message_list.entries;
+    /// Incrementally sync new entries from `inner.message_list` to scrollback.
+    /// Handles both stable (completed) entries and the actively streaming last entry.
+    fn sync_scrollback(&mut self) {
+        // Ensure startup header is queued first.
+        self.queue_startup_header();
+
+        let width = self.width;
+        let entry_count = self.inner.message_list.entries.len();
 
         // All entries except the last are "stable" while streaming.
         let stable_count = if self.inner.is_running
-            && entries.last().map_or(false, |e| e.sender == Sender::Agent)
+            && self
+                .inner
+                .message_list
+                .entries
+                .last()
+                .is_some_and(|e| e.sender == Sender::Agent)
         {
-            entries.len().saturating_sub(1)
+            entry_count.saturating_sub(1)
         } else {
-            entries.len()
+            entry_count
         };
 
-        // Push all new stable entries.
-        while self.synced_entry_count < stable_count {
-            let entry = &entries[self.synced_entry_count];
-            let conv_idx = self.conversation.entry_count();
-            push_entry_to_conversation(&mut self.conversation, entry);
-            // Track tool entries for result updates.
-            if entry.sender == Sender::Tool {
-                self.tracked_tools.push(TrackedTool {
-                    msg_idx: self.synced_entry_count,
-                    conv_idx,
-                    content_len: entry.content_as_markdown().len(),
-                });
+        // Push all new stable entries to scrollback.
+        while self.scrollback_entry_count < stable_count {
+            let idx = self.scrollback_entry_count;
+            let entry = &self.inner.message_list.entries[idx];
+            let ce = entry_to_conversation_entry(entry);
+            let lines = ce.render_to_lines(width);
+            // Blank separator between entries
+            if idx > 0 || self.header_printed {
+                self.pending_scrollback.push(String::new());
             }
-            self.synced_entry_count += 1;
+            for line in &lines {
+                self.pending_scrollback
+                    .push(line.to_ansi_string_with_width(width));
+            }
+            self.scrollback_entry_count += 1;
         }
 
-        // Check if any previously-synced tool entries have been updated
-        // (result arrived, tool_meta changed).
-        for tool in &mut self.tracked_tools {
-            if let Some(entry) = entries.get(tool.msg_idx) {
-                let current_len = entry.content_as_markdown().len();
-                if current_len != tool.content_len {
-                    tool.content_len = current_len;
-                    let content = entry.content_as_markdown().to_owned();
-                    self.conversation.update_entry(tool.conv_idx, &content);
+        // Handle the actively streaming last entry — commit new lines incrementally.
+        if self.inner.is_running && entry_count > 0 {
+            let last = &self.inner.message_list.entries[entry_count - 1];
+            if last.sender == Sender::Agent {
+                let content = last.content_as_markdown().to_owned();
+                let new_len = content.len();
+                let is_new_entry = self.scrollback_entry_count < entry_count;
+
+                if is_new_entry || new_len != self.last_streaming_len {
+                    let ce = ConversationEntry::assistant(&content);
+                    let all_lines = ce.render_to_lines(width);
+
+                    // Add separator if this is the first time we see this entry
+                    if is_new_entry && self.streaming_committed_lines == 0 {
+                        self.pending_scrollback.push(String::new());
+                        self.scrollback_entry_count += 1;
+                    }
+
+                    // Commit lines beyond what we've already committed.
+                    // Keep the last line uncommitted (it may still be growing).
+                    let committable = if all_lines.len() > 1 {
+                        all_lines.len() - 1
+                    } else {
+                        0
+                    };
+
+                    if committable > self.streaming_committed_lines {
+                        for line in &all_lines[self.streaming_committed_lines..committable] {
+                            self.pending_scrollback
+                                .push(line.to_ansi_string_with_width(width));
+                        }
+                        self.streaming_committed_lines = committable;
+                    }
+
+                    self.last_streaming_len = new_len;
                 }
             }
         }
 
-        // Handle the actively streaming last entry.
-        if self.inner.is_running && !entries.is_empty() {
-            if let Some(last) = entries.last() {
-                if last.sender == Sender::Agent {
-                    let content = last.content_as_markdown().to_owned();
-                    let new_len = content.len();
-                    if self.synced_entry_count < entries.len() {
-                        self.conversation.push_assistant(content);
-                        self.synced_entry_count += 1;
-                        self.last_streaming_len = new_len;
-                    } else if new_len != self.last_streaming_len {
-                        self.conversation.set_last_content(&content);
-                        self.last_streaming_len = new_len;
+        // When streaming finishes, commit any remaining lines.
+        if !self.inner.is_running && self.streaming_committed_lines > 0 {
+            let final_idx = self.scrollback_entry_count.saturating_sub(1);
+            if let Some(entry) = self.inner.message_list.entries.get(final_idx)
+                && entry.sender == Sender::Agent
+            {
+                let content = entry.content_as_markdown().to_owned();
+                let ce = ConversationEntry::assistant(&content);
+                let all_lines = ce.render_to_lines(width);
+
+                if all_lines.len() > self.streaming_committed_lines {
+                    for line in &all_lines[self.streaming_committed_lines..] {
+                        self.pending_scrollback
+                            .push(line.to_ansi_string_with_width(width));
                     }
                 }
             }
-        }
-
-        if !self.inner.is_running {
+            self.streaming_committed_lines = 0;
             self.last_streaming_len = 0;
         }
     }
@@ -257,11 +284,12 @@ impl IonApp {
             ToolMode::Write => "write",
             ToolMode::Read => "read",
         };
-        let tokens = self.inner.token_usage.map(|(used, max)| {
-            format!("{}/{}", fmt_compact(used), fmt_compact(max))
-        });
-        let cost = (self.inner.session_cost > 0.001)
-            .then(|| format!("${:.2}", self.inner.session_cost));
+        let tokens = self
+            .inner
+            .token_usage
+            .map(|(used, max)| format!("{}/{}", fmt_compact(used), fmt_compact(max)));
+        let cost =
+            (self.inner.session_cost > 0.001).then(|| format!("${:.2}", self.inner.session_cost));
 
         self.status = StatusBar {
             model: (!model.is_empty()).then_some(model),
@@ -309,7 +337,7 @@ impl IonApp {
                     Sender::System,
                     format!("Skill active: {display_name}"),
                 ));
-                self.sync_conversation();
+                self.sync_scrollback();
             }
             return Effect::None;
         }
@@ -335,17 +363,14 @@ impl IonApp {
                         "Nothing to compact".to_string(),
                     ));
                 }
-                self.sync_conversation();
+                self.sync_scrollback();
             }
             "/cost" => {
                 let msg = if self.inner.api_provider.is_oauth() {
                     "Subscription provider — no per-token cost".to_string()
                 } else if self.inner.session_cost > 0.0 {
                     let p = &self.inner.model_pricing;
-                    let mut parts = vec![format!(
-                        "Session cost: ${:.4}",
-                        self.inner.session_cost
-                    )];
+                    let mut parts = vec![format!("Session cost: ${:.4}", self.inner.session_cost)];
                     if p.input > 0.0 || p.output > 0.0 {
                         parts.push(format!(
                             "Pricing: ${:.2}/M input, ${:.2}/M output",
@@ -359,11 +384,11 @@ impl IonApp {
                 self.inner
                     .message_list
                     .push_entry(MessageEntry::new(Sender::System, msg));
-                self.sync_conversation();
+                self.sync_scrollback();
             }
             "/export" => {
                 self.inner.export_session_markdown();
-                self.sync_conversation();
+                self.sync_scrollback();
             }
             "/model" | "/models" => {
                 self.inner.open_model_selector();
@@ -397,7 +422,7 @@ impl IonApp {
                 self.inner.session_cost = 0.0;
                 self.inner.refresh_startup_header_cache();
                 self.inner.message_list.clear();
-                self.sync_all_to_conversation();
+                self.reset_scrollback();
             }
             "/help" | "/?" => {
                 self.mode = AppMode::Help;
@@ -417,7 +442,7 @@ impl IonApp {
                     self.inner
                         .message_list
                         .push_entry(MessageEntry::new(Sender::System, message));
-                    self.sync_conversation();
+                    self.sync_scrollback();
                 }
             }
         }
@@ -506,8 +531,7 @@ impl IonApp {
                         }
 
                         self.inner.session.model = model_id.clone();
-                        self.inner.session.provider =
-                            self.inner.api_provider.id().to_string();
+                        self.inner.session.provider = self.inner.api_provider.id().to_string();
                         self.inner.model_pricing = pricing;
                         self.inner.agent.set_supports_vision(vision);
                         if context_window > 0 {
@@ -534,8 +558,7 @@ impl IonApp {
                 if let Some(summary) = self.inner.session_picker.selected_session() {
                     let session_id = summary.id.clone();
                     let loaded = if let Err(e) = self.inner.load_session(&session_id) {
-                        self.inner.last_error =
-                            Some(format!("Failed to load session: {e}"));
+                        self.inner.last_error = Some(format!("Failed to load session: {e}"));
                         false
                     } else {
                         true
@@ -543,7 +566,7 @@ impl IonApp {
                     self.inner.session_picker.reset();
                     self.exit_selector_mode();
                     if loaded {
-                        self.sync_all_to_conversation();
+                        self.reset_scrollback();
                     }
                 }
             }
@@ -792,7 +815,11 @@ impl IonApp {
         let value = self.input.value();
         let cursor = value.chars().count();
         if cursor > at_pos + 1 {
-            let query: String = value.chars().skip(at_pos + 1).take(cursor - at_pos - 1).collect();
+            let query: String = value
+                .chars()
+                .skip(at_pos + 1)
+                .take(cursor - at_pos - 1)
+                .collect();
             self.inner.file_completer.set_query(&query);
         } else {
             self.inner.file_completer.set_query("");
@@ -866,20 +893,14 @@ impl IonApp {
 
     // ── View methods ─────────────────────────────────────────────────────────
 
-    /// Normal chat view (conversation + status + input).
-    fn view_normal(&mut self) -> Element {
+    /// Bottom-UI only view (status bar + input). Chat goes to native scrollback.
+    fn view_bottom_ui(&mut self) -> Element {
         let width = self.width;
         let input_height = self.input.line_count().max(1) as u16;
         let status_height: u16 = 1;
-        let input_y = self.height.saturating_sub(input_height);
-        self.input_area = Rect::new(0, input_y, width, input_height);
-        let conv_height = self
-            .height
-            .saturating_sub(input_height + status_height) as usize;
-        self.conversation.set_visible_height(conv_height);
+        self.input_area = Rect::new(0, status_height, width, input_height);
 
         Col::new(vec![
-            self.conversation.view(width).flex_grow(1.0),
             self.status
                 .view(width)
                 .height(Dimension::Cells(status_height))
@@ -963,10 +984,7 @@ impl IonApp {
                 let items: Vec<String> = entries
                     .iter()
                     .map(|s| {
-                        let msg = s
-                            .first_user_message
-                            .as_deref()
-                            .unwrap_or("(no messages)");
+                        let msg = s.first_user_message.as_deref().unwrap_or("(no messages)");
                         let truncated: String = msg.chars().take(60).collect();
                         format!("  {truncated}")
                     })
@@ -1078,14 +1096,10 @@ impl IonApp {
         .into_element()
     }
 
-    /// History search view.
+    /// History search view — renders in the inline region.
     fn view_history_search(&mut self) -> Element {
         use tui::{Canvas, Style, buffer::Buffer};
 
-        let width = self.width;
-        let height = self.height;
-
-        // Get current match text
         let match_text = self
             .inner
             .history_search
@@ -1097,62 +1111,32 @@ impl IonApp {
         let match_idx = self.inner.history_search.selected;
         let total_matches = self.inner.history_search.matches.len();
 
-        // Show conversation + status as context, replace input with search bar
-        let status_height: u16 = 1;
-        let search_height: u16 = 1;
-        let preview_height: u16 = 3;
-        let conv_height = height
-            .saturating_sub(status_height + search_height + preview_height) as usize;
-        self.conversation.set_visible_height(conv_height);
+        Canvas::new(move |area: Rect, buf: &mut Buffer| {
+            let dim = Style::default().dim();
+            let normal = Style::default();
 
-        let status = self.status.view(width);
+            // Preview of matched entry (top area)
+            if !match_text.is_empty() {
+                let max_w = area.width as usize;
+                let preview_lines = area.height.saturating_sub(1) as usize;
+                for (i, line) in match_text.lines().take(preview_lines).enumerate() {
+                    let truncated: String = line.chars().take(max_w).collect();
+                    buf.set_string(0, i as u16, &truncated, normal);
+                }
+            } else {
+                buf.set_string(0, 0, "  (no match)", dim);
+            }
 
-        Col::new(vec![
-            self.conversation.view(width).flex_grow(1.0),
-            // Preview of matched entry
-            Canvas::new(move |area: Rect, buf: &mut Buffer| {
-                let dim = Style::default().dim();
-                let normal = Style::default();
-                if !match_text.is_empty() {
-                    // Truncate to available width
-                    let max_w = area.width as usize;
-                    for (i, line) in match_text.lines().enumerate() {
-                        let y = i as u16;
-                        if y >= area.height {
-                            break;
-                        }
-                        let truncated: String = line.chars().take(max_w).collect();
-                        buf.set_string(0, y, &truncated, normal);
-                    }
-                } else {
-                    buf.set_string(0, 0, "  (no match)", dim);
-                }
-            })
-            .into_element()
-            .height(Dimension::Cells(preview_height))
-            .flex_grow(0.0)
-            .flex_shrink(0.0),
-            status
-                .height(Dimension::Cells(status_height))
-                .flex_grow(0.0)
-                .flex_shrink(0.0),
-            // Search bar
-            Canvas::new(move |_area: Rect, buf: &mut Buffer| {
-                let dim = Style::default().dim();
-                let normal = Style::default();
-                let prompt = format!("search: {query}");
-                buf.set_string(0, 0, &prompt, normal);
-                if total_matches > 0 {
-                    let info = format!(" [{}/{}]", match_idx + 1, total_matches);
-                    let x = prompt.chars().count() as u16;
-                    buf.set_string(x, 0, &info, dim);
-                }
-            })
-            .into_element()
-            .height(Dimension::Cells(search_height))
-            .flex_grow(0.0)
-            .flex_shrink(0.0),
-        ])
+            // Search bar at bottom
+            let search_y = area.height.saturating_sub(1);
+            let prompt = format!("search: {query}");
+            buf.set_string(0, search_y, &prompt, normal);
+            if total_matches > 0 {
+                let info = format!(" [{}/{}]", match_idx + 1, total_matches);
+                let x = prompt.chars().count() as u16;
+                buf.set_string(x, search_y, &info, dim);
+            }
+        })
         .into_element()
     }
 
@@ -1187,11 +1171,12 @@ impl IonApp {
     }
 }
 
-fn push_entry_to_conversation(conversation: &mut ConversationView, entry: &MessageEntry) {
+/// Convert a `MessageEntry` to a `ConversationEntry` for rendering.
+fn entry_to_conversation_entry(entry: &MessageEntry) -> ConversationEntry {
     let content = entry.content_as_markdown().to_owned();
     match entry.sender {
-        Sender::User => conversation.push_user(content),
-        Sender::Agent => conversation.push_assistant(content),
+        Sender::User => ConversationEntry::user(content),
+        Sender::Agent => ConversationEntry::assistant(content),
         Sender::Tool => {
             if let Some(meta) = &entry.tool_meta {
                 let label = if meta.header.is_empty() {
@@ -1199,12 +1184,12 @@ fn push_entry_to_conversation(conversation: &mut ConversationView, entry: &Messa
                 } else {
                     format!("{}: {}", meta.tool_name, meta.header)
                 };
-                conversation.push(ConversationEntry::tool_call(&meta.tool_name, label));
+                ConversationEntry::tool_call(&meta.tool_name, label)
+            } else {
+                ConversationEntry::system(content)
             }
         }
-        Sender::System => {
-            conversation.push(ConversationEntry::system(content));
-        }
+        Sender::System => ConversationEntry::system(content),
     }
 }
 
@@ -1252,9 +1237,7 @@ impl TuiApp for IonApp {
                             _ => Some(IonMsg::CancelTask),
                         };
                     }
-                    AppMode::ModelPicker
-                    | AppMode::ProviderPicker
-                    | AppMode::SessionPicker => {
+                    AppMode::ModelPicker | AppMode::ProviderPicker | AppMode::SessionPicker => {
                         return match k.code {
                             KeyCode::Esc => Some(IonMsg::CancelTask),
                             KeyCode::Up => Some(IonMsg::PickerUp),
@@ -1329,13 +1312,9 @@ impl TuiApp for IonApp {
         match msg {
             // ── Tick ─────────────────────────────────────────────────────────
             IonMsg::Tick => {
-                let was_running = self.inner.is_running;
                 self.inner.update();
-                self.sync_conversation();
+                self.sync_scrollback();
                 self.sync_status();
-                if was_running && !self.inner.is_running {
-                    self.conversation.resume_auto_scroll();
-                }
                 if self.inner.should_quit {
                     return Effect::Quit;
                 }
@@ -1373,7 +1352,7 @@ impl TuiApp for IonApp {
                     Sender::System,
                     "Press Ctrl+C again to quit".to_string(),
                 ));
-                self.sync_conversation();
+                self.sync_scrollback();
                 Effect::None
             }
 
@@ -1390,9 +1369,7 @@ impl TuiApp for IonApp {
                     return Effect::None;
                 }
                 // If running, cancel the agent task.
-                if self.inner.is_running
-                    && !self.inner.session.abort_token.is_cancelled()
-                {
+                if self.inner.is_running && !self.inner.session.abort_token.is_cancelled() {
                     self.inner.session.abort_token.cancel();
                     self.last_esc_at = None;
                     return Effect::None;
@@ -1494,7 +1471,7 @@ impl TuiApp for IonApp {
                 if let Some(tx) = self.inner.pending_ask_user.take() {
                     self.inner.message_list.push_user_message(s.clone());
                     let _ = tx.send(s);
-                    self.sync_conversation();
+                    self.sync_scrollback();
                     return Effect::None;
                 }
 
@@ -1508,7 +1485,7 @@ impl TuiApp for IonApp {
                     let cmd = cmd.trim().to_string();
                     if !cmd.is_empty() {
                         self.inner.run_bash_passthrough(cmd);
-                        self.sync_conversation();
+                        self.sync_scrollback();
                         return Effect::None;
                     }
                 }
@@ -1537,16 +1514,14 @@ impl TuiApp for IonApp {
 
                 // Normal submit: send to agent.
                 self.inner.message_list.push_user_message(normalized);
-                self.sync_conversation();
+                self.sync_scrollback();
                 self.inner.run_agent_task(s);
                 Effect::None
             }
 
             // ── Paste ────────────────────────────────────────────────────────
             IonMsg::Paste(text) => {
-                let text = if self.inner.config.auto_backtick_paste
-                    && text.lines().count() > 1
-                {
+                let text = if self.inner.config.auto_backtick_paste && text.lines().count() > 1 {
                     format!("```\n{text}\n```")
                 } else {
                     text
@@ -1555,8 +1530,7 @@ impl TuiApp for IonApp {
                 let line_count = text.lines().count();
                 let char_count = text.chars().count();
 
-                if line_count > PASTE_BLOB_LINE_THRESHOLD
-                    || char_count > PASTE_BLOB_CHAR_THRESHOLD
+                if line_count > PASTE_BLOB_LINE_THRESHOLD || char_count > PASTE_BLOB_CHAR_THRESHOLD
                 {
                     use crate::tui::composer::ComposerBuffer;
                     let blob_idx = self.inner.input_buffer.push_blob(text);
@@ -1576,15 +1550,8 @@ impl TuiApp for IonApp {
                 Effect::None
             }
 
-            // ── Scroll ───────────────────────────────────────────────────────
-            IonMsg::ScrollUp => {
-                self.conversation.scroll_up(3);
-                Effect::None
-            }
-            IonMsg::ScrollDown => {
-                self.conversation.scroll_down(3);
-                Effect::None
-            }
+            // ── Scroll (native scrollback handles this now) ─────────────────
+            IonMsg::ScrollUp | IonMsg::ScrollDown => Effect::None,
 
             // ── Quit ─────────────────────────────────────────────────────────
             IonMsg::Quit => {
@@ -1625,7 +1592,9 @@ impl TuiApp for IonApp {
             }
             IonMsg::ToggleToolExpansion => {
                 self.inner.message_list.toggle_tool_expansion();
-                self.sync_all_to_conversation();
+                // Reset and reprint all entries with new expansion state.
+                self.reset_scrollback();
+                self.sync_scrollback();
                 Effect::None
             }
             IonMsg::OpenHistorySearch => {
@@ -1698,10 +1667,7 @@ impl TuiApp for IonApp {
                     self.mode = AppMode::ProviderPicker;
                 } else {
                     // Normal filter backspace
-                    let key = tui::event::KeyEvent::new(
-                        KeyCode::Backspace,
-                        KeyModifiers::NONE,
-                    );
+                    let key = tui::event::KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE);
                     self.handle_picker_filter_key(&key);
                 }
                 Effect::None
@@ -1775,7 +1741,11 @@ impl TuiApp for IonApp {
             AppMode::Input => {}
         }
 
-        self.view_normal()
+        self.view_bottom_ui()
+    }
+
+    fn pre_render_insert(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.pending_scrollback)
     }
 
     fn cursor_position(&self) -> Option<(u16, u16)> {
@@ -1784,13 +1754,9 @@ impl TuiApp for IonApp {
             // Picker filter: cursor at end of filter text row.
             AppMode::ModelPicker | AppMode::ProviderPicker | AppMode::SessionPicker => {
                 let filter_text = match self.selector_page() {
-                    SelectorPage::Provider => {
-                        self.inner.provider_picker.filter_input().text()
-                    }
+                    SelectorPage::Provider => self.inner.provider_picker.filter_input().text(),
                     SelectorPage::Model => self.inner.model_picker.filter_input.text(),
-                    SelectorPage::Session => {
-                        self.inner.session_picker.filter_input().text()
-                    }
+                    SelectorPage::Session => self.inner.session_picker.filter_input().text(),
                 };
                 // Filter prompt is "> " (2 chars) + text
                 let col = 2 + filter_text.chars().count() as u16;
@@ -1798,10 +1764,11 @@ impl TuiApp for IonApp {
                 Some((col, 1))
             }
             AppMode::HistorySearch => {
-                // Search prompt at bottom row
+                // Search prompt at bottom of the inline region
                 let col = 8 + self.inner.history_search.query.chars().count() as u16;
-                let y = self.height.saturating_sub(1);
-                Some((col, y))
+                // In inline mode, the region height comes from the render area,
+                // not the full terminal. Use a fixed offset for now.
+                Some((col, 2))
             }
             AppMode::Help | AppMode::OAuthConfirm => None,
         }
@@ -1816,8 +1783,10 @@ impl TuiApp for IonApp {
             .iter()
             .any(|e| e.sender == Sender::User);
         if has_user {
-            let line =
-                crate::tui::terminal::StyledLine::dim(format!("Session: {}", self.inner.session.id));
+            let line = crate::tui::terminal::StyledLine::dim(format!(
+                "Session: {}",
+                self.inner.session.id
+            ));
             let mut stdout = std::io::stdout();
             let _ = line.writeln(&mut stdout);
         }
