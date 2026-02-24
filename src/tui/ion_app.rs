@@ -27,8 +27,7 @@ use crate::tui::{
 };
 use crate::ui::{ConversationEntry, ConversationView, StatusBar};
 
-/// Double-tap window for Ctrl+C quit and Esc clear.
-const CANCEL_WINDOW: Duration = Duration::from_millis(1500);
+use crate::tui::types::CANCEL_WINDOW;
 
 // ── AppMode ──────────────────────────────────────────────────────────────────
 
@@ -52,6 +51,16 @@ enum AppMode {
 
 // ── IonApp ────────────────────────────────────────────────────────────────────
 
+/// Tracks a tool entry for result updates.
+struct TrackedTool {
+    /// Index in `inner.message_list.entries`.
+    msg_idx: usize,
+    /// Corresponding index in `conversation.entries`.
+    conv_idx: usize,
+    /// Content length at last sync (detect changes by length delta).
+    content_len: usize,
+}
+
 pub struct IonApp {
     pub(crate) inner: IonState,
     conversation: ConversationView,
@@ -65,11 +74,8 @@ pub struct IonApp {
     /// Content length of the last streaming entry, used to detect incremental
     /// token updates without a full equality check.
     last_streaming_len: usize,
-    /// Indices of tool entries in `conversation` that may need result updates.
-    /// Maps message_list index → conversation index.
-    tool_entry_indices: Vec<(usize, usize)>,
-    /// Content lengths of tool entries at sync time (to detect result arrival).
-    tool_content_lens: Vec<usize>,
+    /// Tool entries tracked for result updates (message_list idx → conversation idx + content len).
+    tracked_tools: Vec<TrackedTool>,
     /// Cached input area rect from last render (for cursor positioning).
     input_area: Rect,
     /// Timestamp of last Ctrl+C / Ctrl+D press for double-tap quit detection.
@@ -97,8 +103,7 @@ impl IonApp {
             height,
             synced_entry_count: 0,
             last_streaming_len: 0,
-            tool_entry_indices: Vec::new(),
-            tool_content_lens: Vec::new(),
+            tracked_tools: Vec::new(),
             input_area: Rect::default(),
             last_cancel_at: None,
             last_esc_at: None,
@@ -153,8 +158,7 @@ impl IonApp {
     pub(crate) fn sync_all_to_conversation(&mut self) {
         self.synced_entry_count = 0;
         self.last_streaming_len = 0;
-        self.tool_entry_indices.clear();
-        self.tool_content_lens.clear();
+        self.tracked_tools.clear();
         self.conversation = ConversationView::new();
         self.sync_conversation();
     }
@@ -181,24 +185,24 @@ impl IonApp {
             push_entry_to_conversation(&mut self.conversation, entry);
             // Track tool entries for result updates.
             if entry.sender == Sender::Tool {
-                let content_len = entry.content_as_markdown().len();
-                self.tool_entry_indices
-                    .push((self.synced_entry_count, conv_idx));
-                self.tool_content_lens.push(content_len);
+                self.tracked_tools.push(TrackedTool {
+                    msg_idx: self.synced_entry_count,
+                    conv_idx,
+                    content_len: entry.content_as_markdown().len(),
+                });
             }
             self.synced_entry_count += 1;
         }
 
         // Check if any previously-synced tool entries have been updated
         // (result arrived, tool_meta changed).
-        for i in 0..self.tool_entry_indices.len() {
-            let (msg_idx, conv_idx) = self.tool_entry_indices[i];
-            if let Some(entry) = entries.get(msg_idx) {
+        for tool in &mut self.tracked_tools {
+            if let Some(entry) = entries.get(tool.msg_idx) {
                 let current_len = entry.content_as_markdown().len();
-                if current_len != self.tool_content_lens[i] {
-                    self.tool_content_lens[i] = current_len;
+                if current_len != tool.content_len {
+                    tool.content_len = current_len;
                     let content = entry.content_as_markdown().to_owned();
-                    self.conversation.update_entry(conv_idx, &content);
+                    self.conversation.update_entry(tool.conv_idx, &content);
                 }
             }
         }
@@ -263,12 +267,13 @@ impl IonApp {
             "/resume",
         ];
 
-        let cmd_line = input.trim().to_lowercase();
+        let trimmed = input.trim();
+        let cmd_line = trimmed.to_lowercase();
         let cmd_name = cmd_line.split_whitespace().next().unwrap_or("");
 
-        // Handle //skill-name [args] skill invocation
-        if cmd_line.starts_with("//") {
-            let skill_input = cmd_line.strip_prefix("//").unwrap_or("").trim();
+        // Handle //skill-name [args] skill invocation (preserve original case)
+        if trimmed.starts_with("//") {
+            let skill_input = trimmed.strip_prefix("//").unwrap_or("").trim();
             if !skill_input.is_empty() {
                 let (name, args) = skill_input.split_once(' ').unwrap_or((skill_input, ""));
                 let agent = self.inner.agent.clone();
