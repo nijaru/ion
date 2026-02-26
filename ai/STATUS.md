@@ -4,11 +4,16 @@
 
 | Metric    | Value                         | Updated    |
 | --------- | ----------------------------- | ---------- |
-| Phase     | Dogfood readiness             | 2026-02-19 |
-| Status    | Quick wins complete           | 2026-02-19 |
+| Phase     | Dogfood readiness             | 2026-02-26 |
+| Status    | Stable — TUI work on branch   | 2026-02-26 |
 | Toolchain | stable                        | 2026-01-22 |
 | Tests     | 511 passing (`cargo test -q`) | 2026-02-20 |
 | Clippy    | clean                         | 2026-02-19 |
+
+## Branch Strategy
+
+- **`main`** — stable rnk-based TUI, tagged `stable-rnk` (`c6c3268`)
+- **`tui-work`** — ongoing inline-mode TUI rewrite (broken, WIP); merge back when proven
 
 ## Completed This Session (2026-02-20)
 
