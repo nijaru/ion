@@ -4,7 +4,7 @@
   "title": "[ARCH] Formalize SQLite migrations for session store",
   "description": "Keep rusqlite storage backend; add migration crate and structured schema migrations to reduce manual PRAGMA version drift risk while preserving existing sessions/messages/input_history tables.",
   "status": "open",
-  "priority": 4,
+  "priority": 2,
   "labels": [],
   "assignees": [],
   "parent": null,
