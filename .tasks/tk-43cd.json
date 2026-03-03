@@ -4,7 +4,7 @@
   "title": "Persist MessageList display entries in session store",
   "description": "Store rendered MessageList entries alongside API messages in the session DB. Replay loads them directly instead of reconstructing from ContentBlocks. Eliminates duplicate formatting logic in lifecycle.rs. Add display_entries JSON blob/table, populate during live tool calls, load on --continue. Keep reconstruction as migration fallback for old sessions.",
   "status": "open",
-  "priority": 3,
+  "priority": 1,
   "labels": [],
   "assignees": [],
   "parent": null,

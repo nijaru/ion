@@ -2,6 +2,26 @@
 
 > Decision records for ion development. Pre-February decisions archived in `ai/DECISIONS-archive-jan.md`.
 
+## 2026-03-03: Deprioritize OS Sandboxing
+
+**Context**: OS sandboxes (macOS Seatbelt, Linux Landlock) were initially planned to eliminate permission prompts.
+
+**Decision**: Deprioritize and remove sandbox constraints from scope. Sandboxes are not critical for our primary use case compared to context persistence and core UI workflows.
+
+**Rationale**: Focus on stability, session resume, and feature delivery.
+
+---
+
+## 2026-03-03: Remove Gemini CLI OAuth
+
+**Context**: Using the Gemini CLI OAuth client ID for user authentication in 3rd party tools is likely a TOS violation and risks user key bans. (Note: ChatGPT subscription usage is fine).
+
+**Decision**: Remove Gemini CLI OAuth provider and track this work via `tk-u9v6`.
+
+**Rationale**: Ensure user safety and avoid banning user accounts.
+
+---
+
 ## 2026-02-13: Keep Header Static; Move Location to Status Line
 
 **Context**: Dynamic startup header (including git branch lookup/rendering) increased resize/reflow complexity and contributed to visual duplication/noise during monitor/terminal churn.

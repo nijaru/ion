@@ -50,14 +50,16 @@
 
 ## Blockers
 
-- tk-cmhy blocked by tk-oh88 (config depends on sandbox landing first)
+- None
 
 ## Next Steps
 
-1. **tk-vcm4** (p2): OSC 8 hyperlinks — deferred; Ghostty auto-detects URLs. Only needed for non-URL link text
-2. **tk-3vog** (p2): Review Gemini OAuth — antigravity key banning users; investigate Gemini CLI OAuth flow
-3. **tk-43cd** (p3): Persist MessageList display entries — needs DB schema + lifecycle work
-4. **tk-oh88** (p3): OS sandbox execution — main safety feature, unblocks tk-cmhy
+1. **tk-43cd** (p1): Persist MessageList display entries — critical for session resume and UI state
+2. **tk-n3q8** (p2): read tool decodes all lines past offset/limit — performance/context window fix
+3. **tk-3fm2** (p2): DeepSeek cache token field names differ — fix token metrics
+4. **tk-u9v6** (p2): Remove Gemini CLI OAuth implementation — TOS violation risk
+5. **tk-ww4t** (p2): Formalize SQLite migrations for session store
+6. **tk-ioxh** (p2): Evaluate async subagent execution model — unblocks multi-agent architecture
 
 ## Key References
 

@@ -4,7 +4,7 @@
   "title": "DeepSeek cache token field names differ from OpenAI",
   "description": "DeepSeek returns prompt_cache_hit_tokens at top level, not nested under prompt_tokens_details. Low priority since DeepSeek mostly routes through OpenRouter which normalizes. Add to ProviderQuirks if direct DeepSeek support needed.",
   "status": "open",
-  "priority": 4,
+  "priority": 2,
   "labels": [],
   "assignees": [],
   "parent": null,
