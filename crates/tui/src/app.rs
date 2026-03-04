@@ -321,14 +321,12 @@ impl<A: App> AppRunner<A> {
                         };
 
                         // Default Ctrl+C handler if app didn't consume it.
-                        if !handled {
-                            if let Event::Key(k) = &ev {
-                                if k.code == KeyCode::Char('c')
-                                    && k.modifiers.contains(KeyModifiers::CTRL)
-                                {
-                                    break;
-                                }
-                            }
+                        if !handled
+                            && let Event::Key(k) = &ev
+                            && k.code == KeyCode::Char('c')
+                            && k.modifiers.contains(KeyModifiers::CTRL)
+                        {
+                            break;
                         }
                     }
                 }

@@ -11,9 +11,18 @@
   "blocked_by": [],
   "estimate": null,
   "due_date": null,
-  "logs": [],
+  "logs": [
+    {
+      "ts": "2026-03-04T13:47:12.931Z",
+      "msg": "Implemented parity pass: restored src/tui/chat_renderer.rs from main and wired IonApp scrollback generation through ChatRenderer::build_lines for stable and streaming agent entries (src/tui/ion_app.rs). This restores main-style formatting semantics for user/assistant/tool/system output and fixes dropped tool-result content."
+    },
+    {
+      "ts": "2026-03-04T13:47:12.959Z",
+      "msg": "Added regression coverage: src/tui/ion_app.rs test validates tool result text is preserved in rendered scrollback lines; src/ui/conversation.rs test asserts assistant bullet prefix semantics. Validation: cargo test -q now 524 passing on tui-work."
+    }
+  ],
   "created_at": "2026-03-04T13:40:39.358Z",
-  "updated_at": "2026-03-04T13:40:39.409Z",
+  "updated_at": "2026-03-04T13:47:12.959Z",
   "completed_at": null,
   "external": {}
 }
