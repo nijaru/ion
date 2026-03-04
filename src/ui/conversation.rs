@@ -119,7 +119,30 @@ impl ConversationEntry {
                 }
                 result
             }
-            EntryRole::Assistant => render_markdown_with_width(&self.content, w),
+            EntryRole::Assistant => {
+                // Keep assistant output visually aligned with the main branch:
+                // first line has "• " prefix, continuation lines are indented.
+                let prefix = "• ";
+                let content_width = w.saturating_sub(prefix.len()).max(1);
+                let mut result = Vec::new();
+                let content_lines = render_markdown_with_width(&self.content, content_width);
+                for (i, line) in content_lines.iter().enumerate() {
+                    let mut spans = Vec::new();
+                    if i == 0 {
+                        spans.push(crate::tui::terminal::StyledSpan::raw(prefix));
+                    } else if !line.is_empty() {
+                        spans.push(crate::tui::terminal::StyledSpan::raw("  "));
+                    }
+                    spans.extend(line.spans.clone());
+                    result.push(StyledLine::new(spans));
+                }
+                if result.is_empty() {
+                    result.push(StyledLine::new(vec![
+                        crate::tui::terminal::StyledSpan::raw(prefix),
+                    ]));
+                }
+                result
+            }
             EntryRole::System => {
                 let style = TextStyle {
                     foreground_color: Some(IonColor::DarkGrey),
@@ -380,6 +403,8 @@ mod tests {
         assert!(!lines.is_empty());
         // User line has the › prefix
         assert!(lines[0].contains('›'));
+        // Assistant line has the • prefix
+        assert!(lines.iter().any(|line| line.trim_start().starts_with('•')));
     }
 
     #[test]

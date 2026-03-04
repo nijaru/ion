@@ -10,8 +10,10 @@ use crate::{
     widgets::{Element, IntoElement, Renderable, WidgetId},
 };
 
+type CanvasRenderFn = dyn Fn(Rect, &mut Buffer) + Send + Sync;
+
 pub struct Canvas {
-    render_fn: Box<dyn Fn(Rect, &mut Buffer) + Send + Sync>,
+    render_fn: Box<CanvasRenderFn>,
 }
 
 impl Canvas {

@@ -3,6 +3,7 @@
 pub(crate) mod ansi;
 mod app_state;
 mod attachment;
+mod chat_renderer;
 mod command_completer;
 mod completer_state;
 pub mod composer;
@@ -20,11 +21,11 @@ mod picker_trait;
 pub mod provider_picker;
 mod render_state;
 mod run;
-pub(crate) mod text;
 mod session;
 pub mod session_picker;
 mod table;
 pub mod terminal;
+pub(crate) mod text;
 mod types;
 mod util;
 

@@ -21,12 +21,14 @@ use crate::cli::PermissionSettings;
 use crate::session::Session;
 use crate::tool::ToolMode;
 use crate::tui::{
-    App as IonState, PickerNavigation, ResumeOption, SelectorPage, fuzzy,
+    App as IonState, PickerNavigation, ResumeOption, SelectorPage,
+    chat_renderer::ChatRenderer,
+    fuzzy,
     message::IonMsg,
     message_list::{MessageEntry, Sender},
     model_picker::PickerStage,
 };
-use crate::ui::{ConversationEntry, StatusBar};
+use crate::ui::StatusBar;
 
 use crate::tui::types::CANCEL_WINDOW;
 
@@ -204,8 +206,7 @@ impl IonApp {
         while self.scrollback_entry_count < stable_count {
             let idx = self.scrollback_entry_count;
             let entry = &self.inner.message_list.entries[idx];
-            let ce = entry_to_conversation_entry(entry);
-            let lines = ce.render_to_lines(width);
+            let lines = render_entry_lines_for_scrollback(entry, width);
             // Blank separator between entries
             if idx > 0 || self.header_printed {
                 self.pending_scrollback.push(String::new());
@@ -226,8 +227,8 @@ impl IonApp {
                 let is_new_entry = self.scrollback_entry_count < entry_count;
 
                 if is_new_entry || new_len != self.last_streaming_len {
-                    let ce = ConversationEntry::assistant(&content);
-                    let all_lines = ce.render_to_lines(width);
+                    let streaming_entry = MessageEntry::new(Sender::Agent, content.clone());
+                    let all_lines = render_entry_lines_for_scrollback(&streaming_entry, width);
 
                     // Add separator if this is the first time we see this entry
                     if is_new_entry && self.streaming_committed_lines == 0 {
@@ -263,8 +264,8 @@ impl IonApp {
                 && entry.sender == Sender::Agent
             {
                 let content = entry.content_as_markdown().to_owned();
-                let ce = ConversationEntry::assistant(&content);
-                let all_lines = ce.render_to_lines(width);
+                let streaming_entry = MessageEntry::new(Sender::Agent, content);
+                let all_lines = render_entry_lines_for_scrollback(&streaming_entry, width);
 
                 if all_lines.len() > self.streaming_committed_lines {
                     for line in &all_lines[self.streaming_committed_lines..] {
@@ -1172,26 +1173,18 @@ impl IonApp {
     }
 }
 
-/// Convert a `MessageEntry` to a `ConversationEntry` for rendering.
-fn entry_to_conversation_entry(entry: &MessageEntry) -> ConversationEntry {
-    let content = entry.content_as_markdown().to_owned();
-    match entry.sender {
-        Sender::User => ConversationEntry::user(content),
-        Sender::Agent => ConversationEntry::assistant(content),
-        Sender::Tool => {
-            if let Some(meta) = &entry.tool_meta {
-                let label = if meta.header.is_empty() {
-                    meta.tool_name.clone()
-                } else {
-                    format!("{}: {}", meta.tool_name, meta.header)
-                };
-                ConversationEntry::tool_call(&meta.tool_name, label)
-            } else {
-                ConversationEntry::system(content)
-            }
-        }
-        Sender::System => ConversationEntry::system(content),
+fn render_entry_lines_for_scrollback(
+    entry: &MessageEntry,
+    width: u16,
+) -> Vec<crate::tui::terminal::StyledLine> {
+    let mut lines = ChatRenderer::build_lines(std::slice::from_ref(entry), None, width as usize);
+    while lines
+        .last()
+        .is_some_and(crate::tui::terminal::StyledLine::is_empty)
+    {
+        lines.pop();
     }
+    lines
 }
 
 fn fmt_compact(n: usize) -> String {
@@ -1802,5 +1795,32 @@ impl TuiApp for IonApp {
             let mut stdout = std::io::stdout();
             let _ = line.writeln(&mut stdout);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::render_entry_lines_for_scrollback;
+    use crate::tui::message_list::{MessageEntry, Sender, ToolMeta};
+
+    #[test]
+    fn tool_mapping_preserves_rendered_result_content() {
+        let mut entry = MessageEntry::new(Sender::Tool, "read(src/main.rs)".to_string());
+        entry.append_text("\n✓ 3 lines");
+        entry.tool_meta = Some(ToolMeta {
+            header: "read(src/main.rs)".to_string(),
+            tool_name: "read".to_string(),
+            raw_result: "line1\nline2\nline3".to_string(),
+            is_error: false,
+        });
+
+        let lines = render_entry_lines_for_scrollback(&entry, 120);
+        let joined = lines
+            .iter()
+            .map(crate::tui::terminal::StyledLine::plain_text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(joined.contains("read"));
+        assert!(joined.contains("✓ 3 lines"));
     }
 }
