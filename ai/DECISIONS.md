@@ -2,6 +2,16 @@
 
 > Decision records for ion development. Pre-February decisions archived in `ai/DECISIONS-archive-jan.md`.
 
+## 2026-03-04: Rebase `tui-work` onto `main` and Drop Metadata-Only Commits
+
+**Context**: `tui-work` had large divergence from `main` and mixed product changes with heavy `ai/*` and `.tasks/*` context churn. Rebasing directly with all commits produced repeated conflicts in status/task metadata rather than product code.
+
+**Decision**: Rebase `tui-work` onto `main` while preserving product commits and skipping metadata-only commits (`ai/*` session updates and `.tasks/*` churn).
+
+**Rationale**: Keeps the branch technically up to date and reviewable without importing stale context noise. This also made parity work tractable by isolating real code deltas from historical bookkeeping changes.
+
+---
+
 ## 2026-03-03: Deprioritize OS Sandboxing
 
 **Context**: OS sandboxes (macOS Seatbelt, Linux Landlock) were initially planned to eliminate permission prompts.

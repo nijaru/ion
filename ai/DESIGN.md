@@ -56,23 +56,23 @@ Core multi-turn loop with decomposed phases:
 2. **Tool Phase**: Execute tool calls via orchestrator
 3. **State Phase**: Commit assistant and tool turns to history
 
-### TUI Layer (RNK-first rendering + crossterm control)
+### TUI Layer (Main vs `tui-work`)
 
-RNK is now the primary text/style renderer for TUI surfaces. crossterm remains responsible for
-terminal control (raw mode, cursor movement, clear/scroll, event polling).
+Current state is split by branch:
 
-- **Chat history**: Append-only transcript in native terminal scrollback.
-- **Bottom UI**: Ephemeral UI plane (progress/input/status) rendered each frame near terminal bottom.
-- **Input**: Custom composer with rope-backed multiline editing.
-- **Markdown**: pulldown-cmark + custom wrap/indent handling before terminal writes.
+- **`main`**: RNK/crossterm rendering path (stable baseline for daily usage).
+- **`tui-work`**: `crates/tui` app/event/layout/widget API with `IonApp` bridge.
 
-Current resize/reflow contract:
+Shared UX contract across both paths:
 
-- Reflow repaints from canonical entries at current width (viewport-safe, no full transcript replay).
-- Streaming carryover tracks committed lines by width to avoid duplicate appends after resize.
-- Header content is static (version + cwd); dynamic location (`cwd [branch]`) is shown in status line.
+- **Chat history**: append-only transcript in native terminal scrollback.
+- **Bottom UI**: ephemeral status/input region anchored at terminal bottom.
+- **Input**: multiline composer with history/completion.
 
-Primary architecture target is documented in `ai/design/tui-v3-architecture-2026-02.md`.
+`tui-work` is the architecture direction for API correctness and maintainability, but still in parity hardening before merge. Primary design targets are documented in:
+
+- `ai/design/tui-architecture-2026-02.md`
+- `ai/design/tui-v3-architecture-2026-02.md`
 
 ### Tool Framework
 

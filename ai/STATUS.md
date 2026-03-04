@@ -2,74 +2,53 @@
 
 ## Current State
 
-| Metric    | Value                         | Updated    |
-| --------- | ----------------------------- | ---------- |
-| Phase     | Dogfood readiness             | 2026-02-26 |
-| Status    | Stable — TUI work on branch   | 2026-02-26 |
-| Toolchain | stable                        | 2026-01-22 |
-| Tests     | 511 passing (`cargo test -q`) | 2026-02-20 |
-| Clippy    | clean                         | 2026-02-19 |
+| Metric    | Value                                                     | Updated    |
+| --------- | --------------------------------------------------------- | ---------- |
+| Phase     | TUI parity hardening (`tui-work`)                         | 2026-03-04 |
+| Status    | Rebased on `main`, compiling/tests green, parity gaps open | 2026-03-04 |
+| Toolchain | stable                                                    | 2026-01-22 |
+| Tests     | `main`: 511 pass, `tui-work`: 516 pass                    | 2026-03-04 |
+| Clippy    | `tui-work`: fails `-D warnings` (3 lint findings)         | 2026-03-04 |
 
 ## Branch Strategy
 
-- **`main`** — stable rnk-based TUI, tagged `stable-rnk` (`c6c3268`)
-- **`tui-work`** — ongoing inline-mode TUI rewrite (broken, WIP); merge back when proven
+- **`main`** — stable RNK/crossterm path (`ff81ece`)
+- **`tui-work`** — rebased rewrite branch (`3a4b65c`), currently **51 commits ahead / 0 behind** `main`
 
-## Completed This Session (2026-02-20)
+## Completed This Session (2026-03-04)
 
-- **Chat rendering enhancements** (tk-s2xv, tk-xj3g, tk-9ar3, tk-7kqq, tk-avmd) — 5 tasks complete, 511 tests passing:
-  - Strikethrough (`~~text~~`) — `with_strikethrough()` builder + `Tag::Strikethrough` in markdown
-  - Task list checkboxes (`- [x]` / `- [ ]`) — `ENABLE_TASKLISTS` + `Event::TaskListMarker` → `☑`/`☐`
-  - `table.rs` display_width consistency — replaced `UnicodeWidthStr` with `crate::tui::util::display_width`
-  - `direct.rs` display_width — selector column alignment uses `display_width` + explicit padding
-  - Visual token bar — `render_token_bar` in util.rs; status line shows `██████ 45%`
+- Rebased `tui-work` onto `main` and preserved product commits (skipped metadata-only `ai/*` + `.tasks/*` churn).
+- Validation:
+  - `cargo test -q` on `main`: 511 passing
+  - `cargo test -q` on rebased `tui-work`: 516 passing
+- Review findings recorded in `tk-6xuh`:
+  - **P1:** tool result content dropped in scrollback rendering on `tui-work`
+  - **P2:** assistant/chat formatting does not yet match `main` parity
+  - **P3:** strict clippy fails in `crates/tui`
 
-- **TUI render layout bugs fixed** (tk-3yus) — wrap width mismatch in `calculate_input_height` (was width-6, now width-INPUT_MARGIN=3); selector column header uses `display_width`; status line drop-levels use `display_width` for model/project/branch/think; `scroll_to_cursor` moved inside `content_width>0` guard.
+## Active Work
 
-- **// skill commands** (tk-9tig) — `//` prefix opens green skill completer; `/` stays cyan builtins.
-  Skills loaded at startup from `~/.agents/skills`, `~/.ion/skills`, `.ion/skills`.
-  `//skill-name [args]` activates skill with `$ARGUMENTS`/`$0`/`$1` substitution.
-  New frontmatter: `user-invocable`, `argument-hint`. `~/.agents/AGENTS.md` added to instruction loader.
-
-## Completed Previous Session
-
-- **MCP tools callable** — `all_tool_definitions()` on `ToolOrchestrator` now includes MCP tools.
-  LLM can call them directly; `mcp_tools` for search only. System prompt updated.
-
-- **Selector column headers + gap fix** — `column_header` field uses the wasted overhead slot.
-  Provides Org/Ctx/In/Out columns on model picker, ID/Auth on provider, Directory on session.
-  Fixed 2-line gap after selector dismissal.
-
-- **Tool quick wins:**
-  - guard: `sudo`/`doas` prefix stripped before `analyze_command`; blocked in Read mode
-  - list: MAX_RESULTS=2000 cap with truncation message
-  - glob: optional `path` parameter to restrict search scope
-
-- **Persist completion summary** (tk-zqsw) — DB migration v4 adds completion columns to sessions.
-  Saved after each completed task, restored on `--continue` so progress line isn't blank.
+1. **tk-avhl** (p1): Restore `tui-work` chat/tool rendering parity with `main`
+   - Fix tool result mapping in `src/tui/ion_app.rs`
+   - Align chat rendering semantics with `main` output expectations
+   - Keep branch green (`cargo test`) and clean clippy for touched files
 
 ## Blockers
 
-- None
+- No hard technical blockers.
+- Requires manual terminal parity verification (inline mode, resize, scrollback behavior).
 
 ## Next Steps
 
-1. **tk-43cd** (p1): Persist MessageList display entries — critical for session resume and UI state
-2. **tk-n3q8** (p2): read tool decodes all lines past offset/limit — performance/context window fix
-3. **tk-3fm2** (p2): DeepSeek cache token field names differ — fix token metrics
-4. **tk-u9v6** (p2): Remove Gemini CLI OAuth implementation — TOS violation risk
-5. **tk-ww4t** (p2): Formalize SQLite migrations for session store
-6. **tk-ioxh** (p2): Evaluate async subagent execution model — unblocks multi-agent architecture
+1. Fix tool result display regression (`Sender::Tool` mapping path).
+2. Align assistant/tool/user visual formatting with `main` chat history.
+3. Run parity checklist in real terminal(s), then rerun tests and clippy.
 
 ## Key References
 
-| Topic                       | Location                                            |
-| --------------------------- | --------------------------------------------------- |
-| Codex CLI analysis          | `ai/research/codex-cli-system-prompt-tools-2026.md` |
-| Prompt survey (5 agents)    | `ai/research/system-prompt-survey-2026-02.md`       |
-| Tool architecture survey    | `ai/research/tool-architecture-survey-2026-02.md`   |
-| Tool review                 | `ai/review/tool-builtin-review-2026-02-14.md`       |
-| TUI render review           | `ai/review/tui-render-layout-review-2026-02-20.md`  |
-| Chat rendering enhancements | `ai/design/chat-rendering-enhancements.md`          |
-| TUI v3 architecture         | `ai/design/tui-v3-architecture-2026-02.md`          |
-| Config system design        | `ai/design/config-system.md`                        |
+| Topic                    | Location                                  |
+| ------------------------ | ----------------------------------------- |
+| Rebase + review task log | `.tasks/tk-6xuh.json`                     |
+| Active parity task       | `.tasks/tk-avhl.json`                     |
+| TUI architecture target  | `ai/design/tui-architecture-2026-02.md`   |
+| TUI v3 architecture      | `ai/design/tui-v3-architecture-2026-02.md` |
