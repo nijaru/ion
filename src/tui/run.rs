@@ -49,7 +49,9 @@ pub async fn run(permissions: PermissionSettings, resume_option: ResumeOption) -
 
     tui::app::AppBuilder::new(ion_app)
         .inline(3) // status(1) + input(1) + border/gap
-        .mouse(true)
+        // Keep terminal-native scrollback working in inline mode.
+        // Mouse capture swallows wheel events that users expect to scroll history.
+        .mouse(false)
         .bracketed_paste(true)
         .focus_events(true)
         .run()
