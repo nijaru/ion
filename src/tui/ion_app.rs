@@ -35,6 +35,7 @@ use crate::tui::types::CANCEL_WINDOW;
 /// Threshold for storing paste as blob: >5 lines or >500 chars
 const PASTE_BLOB_LINE_THRESHOLD: usize = 5;
 const PASTE_BLOB_CHAR_THRESHOLD: usize = 500;
+const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 // ── AppMode ──────────────────────────────────────────────────────────────────
 
@@ -300,6 +301,38 @@ impl IonApp {
             branch,
             mode: Some(mode.to_string()),
         };
+    }
+
+    fn progress_text(&self) -> String {
+        if !self.inner.is_running {
+            return String::new();
+        }
+        let spinner = SPINNER[(self.inner.frame_count % SPINNER.len() as u64) as usize];
+        if let Some((reason, delay_secs, started)) = &self.inner.task.retry_status {
+            let elapsed = started.elapsed().as_secs();
+            let left = delay_secs.saturating_sub(elapsed);
+            return format!(" {spinner} {reason} • retrying in {left}s");
+        }
+        let mut text = format!(" {spinner} ");
+        if let Some(tool) = &self.inner.task.current_tool {
+            text.push_str(tool);
+        } else if self.inner.task.thinking_start.is_some() {
+            text.push_str("Thinking...");
+        } else {
+            text.push_str("Ionizing...");
+        }
+        if let Some(start) = self.inner.task.start_time {
+            text.push_str(&format!(" • {}s", start.elapsed().as_secs()));
+        }
+        text
+    }
+
+    fn inline_height(&self) -> u16 {
+        // Reserve progress + status + composer rows. Clamp to avoid taking over
+        // too much terminal space while still supporting multiline input.
+        let input_rows = self.input.line_count().max(1) as u16;
+        let desired = 2 + input_rows;
+        desired.max(3).min(self.height.max(3)).min(10)
     }
 
     // ── Slash commands ───────────────────────────────────────────────────────
@@ -897,12 +930,34 @@ impl IonApp {
 
     /// Bottom-UI only view (status bar + input). Chat goes to native scrollback.
     fn view_bottom_ui(&mut self) -> Element {
+        use tui::{
+            style::{Color, Style},
+            widgets::canvas::Canvas,
+        };
+
         let width = self.width;
         let input_height = self.input.line_count().max(1) as u16;
+        let progress_height: u16 = 1;
         let status_height: u16 = 1;
-        self.input_area = Rect::new(0, status_height, width, input_height);
+        self.input_area = Rect::new(0, progress_height + status_height, width, input_height);
+        let progress = self.progress_text();
 
         Col::new(vec![
+            Canvas::new(move |area, buf| {
+                if area.is_empty() {
+                    return;
+                }
+                let style = if progress.is_empty() {
+                    Style::new().dim()
+                } else {
+                    Style::new().fg(Color::Cyan).dim()
+                };
+                buf.set_string(area.x, area.y, &progress, style);
+            })
+            .into_element()
+            .height(Dimension::Cells(progress_height))
+            .flex_grow(0.0)
+            .flex_shrink(0.0),
             self.status
                 .view(width)
                 .height(Dimension::Cells(status_height))
@@ -1744,7 +1799,9 @@ impl TuiApp for IonApp {
 
     fn render_mode_override(&self) -> Option<RenderMode> {
         match self.mode {
-            AppMode::Input => None, // use configured inline mode
+            AppMode::Input => Some(RenderMode::Inline {
+                height: self.inline_height(),
+            }),
             // Overlays need the full terminal.
             AppMode::ModelPicker
             | AppMode::ProviderPicker
