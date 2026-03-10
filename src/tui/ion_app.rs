@@ -1152,7 +1152,9 @@ impl IonApp {
                 if area.is_empty() {
                     return;
                 }
-                buf.set_string(area.x, area.y, &progress.0, progress.1);
+                let blank = " ".repeat(area.width as usize);
+                buf.set_string(0, 0, &blank, Style::new());
+                buf.set_string(0, 0, &progress.0, progress.1);
             })
             .into_element()
             .height(Dimension::Cells(progress_height))
@@ -1162,7 +1164,7 @@ impl IonApp {
                 if area.is_empty() {
                     return;
                 }
-                buf.set_string(area.x, area.y, &border, Style::new().fg(Color::Cyan));
+                buf.set_string(0, 0, &border, Style::new().fg(Color::Cyan));
             })
             .into_element()
             .height(Dimension::Cells(border_height))
@@ -1177,12 +1179,16 @@ impl IonApp {
                 } else {
                     Style::new()
                 };
+                let blank = " ".repeat(area.width as usize);
+                for row in 0..area.height {
+                    buf.set_string(0, row, &blank, Style::new());
+                }
                 for (row, line) in input_lines.iter().enumerate() {
-                    let y = area.y + row as u16;
-                    if y >= area.y + area.height {
+                    let y = row as u16;
+                    if y >= area.height {
                         break;
                     }
-                    buf.set_string(area.x, y, line, style);
+                    buf.set_string(0, y, line, style);
                 }
             })
             .into_element()
@@ -1193,7 +1199,7 @@ impl IonApp {
                 if area.is_empty() {
                     return;
                 }
-                buf.set_string(area.x, area.y, &border_bottom, Style::new().fg(Color::Cyan));
+                buf.set_string(0, 0, &border_bottom, Style::new().fg(Color::Cyan));
             })
             .into_element()
             .height(Dimension::Cells(border_height))
@@ -1204,20 +1210,23 @@ impl IonApp {
                     return;
                 }
 
-                let mut col = area.x;
-                let max_col = area.x + area.width;
+                let blank = " ".repeat(area.width as usize);
+                buf.set_string(0, 0, &blank, Style::new());
+
+                let mut col = 0;
+                let max_col = area.width;
                 let sep_style = Style::new().dim();
                 for (idx, (text, style)) in status_segments.iter().enumerate() {
                     if col >= max_col {
                         break;
                     }
                     if idx > 0 {
-                        col = buf.set_string(col, area.y, " • ", sep_style);
+                        col = buf.set_string(col, 0, " • ", sep_style);
                         if col >= max_col {
                             break;
                         }
                     }
-                    col = buf.set_string(col, area.y, text, *style);
+                    col = buf.set_string(col, 0, text, *style);
                 }
             })
             .into_element()
@@ -1509,7 +1518,7 @@ fn token_bar(pct: usize, width: usize) -> String {
     let filled = (pct.min(100) * width).div_ceil(100);
     let mut out = String::with_capacity(width);
     for idx in 0..width {
-        out.push(if idx < filled { '█' } else { '░' });
+        out.push(if idx < filled { '─' } else { '·' });
     }
     out
 }

@@ -21,6 +21,9 @@ struct PanicHookGuard {
 
 impl Drop for PanicHookGuard {
     fn drop(&mut self) {
+        if std::thread::panicking() {
+            return;
+        }
         let original_hook = std::sync::Arc::clone(&self.original_hook);
         std::panic::set_hook(Box::new(move |info| {
             (original_hook)(info);
