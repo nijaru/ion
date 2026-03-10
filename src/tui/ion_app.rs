@@ -940,7 +940,7 @@ impl IonApp {
         let input_height = self.input.line_count().max(1) as u16;
         let progress_height: u16 = 1;
         let status_height: u16 = 1;
-        self.input_area = Rect::new(0, progress_height + status_height, width, input_height);
+        self.input_area = Rect::new(0, progress_height, width, input_height);
         let progress = self.progress_text();
 
         Col::new(vec![
@@ -959,15 +959,15 @@ impl IonApp {
             .height(Dimension::Cells(progress_height))
             .flex_grow(0.0)
             .flex_shrink(0.0),
-            self.status
-                .view(width)
-                .height(Dimension::Cells(status_height))
-                .flex_grow(0.0)
-                .flex_shrink(0.0),
             Input::new(&self.input)
                 .placeholder("Type a message... (Enter to send)")
                 .into_element()
                 .height(Dimension::Cells(input_height))
+                .flex_grow(0.0)
+                .flex_shrink(0.0),
+            self.status
+                .view(width)
+                .height(Dimension::Cells(status_height))
                 .flex_grow(0.0)
                 .flex_shrink(0.0),
         ])
