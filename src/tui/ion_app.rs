@@ -9,13 +9,14 @@
 use std::time::{Duration, Instant};
 
 use tui::{
-    Col, Element, Input, InputAction, InputState, IntoElement,
+    Col, Element, InputAction, InputState, IntoElement,
     app::{App as TuiApp, Effect},
     event::{Event, KeyCode, KeyModifiers},
     geometry::Rect,
     layout::Dimension,
     terminal::RenderMode,
 };
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::cli::PermissionSettings;
 use crate::session::Session;
@@ -23,18 +24,24 @@ use crate::tool::ToolMode;
 use crate::tui::{
     App as IonState, PickerNavigation, ResumeOption, SelectorPage,
     chat_renderer::ChatRenderer,
+    composer::build_visual_lines,
     fuzzy,
     message::IonMsg,
     message_list::{MessageEntry, Sender},
     model_picker::PickerStage,
+    text::{display_width, truncate_to_width},
 };
-use crate::ui::StatusBar;
 
 use crate::tui::types::CANCEL_WINDOW;
 
 /// Threshold for storing paste as blob: >5 lines or >500 chars
 const PASTE_BLOB_LINE_THRESHOLD: usize = 5;
 const PASTE_BLOB_CHAR_THRESHOLD: usize = 500;
+const PROMPT: &str = "› ";
+const CONTINUATION: &str = "  ";
+const PROMPT_WIDTH: u16 = 2;
+const INPUT_MARGIN: u16 = 3;
+const TOKEN_BAR_WIDTH: usize = 6;
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 // ── AppMode ──────────────────────────────────────────────────────────────────
@@ -64,7 +71,6 @@ enum AppMode {
 pub struct IonApp {
     pub(crate) inner: IonState,
     input: InputState,
-    status: StatusBar,
     mode: AppMode,
     width: u16,
     height: u16,
@@ -100,7 +106,6 @@ impl IonApp {
         Ok(Self {
             inner,
             input: InputState::new(),
-            status: StatusBar::new(),
             mode: AppMode::default(),
             width,
             height,
@@ -127,13 +132,13 @@ impl IonApp {
                     .to_string();
                 match self.inner.store.list_recent_for_dir(&cwd, 1) {
                     Ok(sessions) => {
-                        if let Some(session) = sessions.first() {
-                            if let Err(e) = self.inner.load_session(&session.id) {
-                                self.inner.message_list.push_entry(MessageEntry::new(
-                                    Sender::System,
-                                    format!("Error: Failed to load session: {e}"),
-                                ));
-                            }
+                        if let Some(session) = sessions.first()
+                            && let Err(e) = self.inner.load_session(&session.id)
+                        {
+                            self.inner.message_list.push_entry(MessageEntry::new(
+                                Sender::System,
+                                format!("Error: Failed to load session: {e}"),
+                            ));
                         }
                     }
                     Err(e) => {
@@ -281,59 +286,252 @@ impl IonApp {
         }
     }
 
-    fn sync_status(&mut self) {
-        let model = self.inner.session.model.clone();
-        let branch = self.inner.git_branch.clone();
-        let mode = match self.inner.tool_mode {
-            ToolMode::Write => "write",
-            ToolMode::Read => "read",
-        };
-        let tokens = self
-            .inner
-            .token_usage
-            .map(|(used, max)| format!("{}/{}", fmt_compact(used), fmt_compact(max)));
-        let cost =
-            (self.inner.session_cost > 0.001).then(|| format!("${:.2}", self.inner.session_cost));
+    fn sync_status(&mut self) {}
 
-        self.status = StatusBar {
-            model: (!model.is_empty()).then_some(model),
-            tokens,
-            cost,
-            branch,
-            mode: Some(mode.to_string()),
-        };
-    }
+    fn progress_line(&self) -> (String, tui::style::Style) {
+        use tui::style::{Color, Style};
 
-    fn progress_text(&self) -> String {
-        if !self.inner.is_running {
-            return String::new();
+        if self.inner.is_running {
+            let spinner = SPINNER[(self.inner.frame_count % SPINNER.len() as u64) as usize];
+            if let Some((reason, delay_secs, started)) = &self.inner.task.retry_status {
+                let elapsed = started.elapsed().as_secs();
+                let left = delay_secs.saturating_sub(elapsed);
+                return (
+                    format!(" {spinner} {reason} • retrying in {left}s"),
+                    Style::new().fg(Color::Yellow),
+                );
+            }
+
+            let mut text = format!(" {spinner} ");
+            if let Some(tool) = &self.inner.task.current_tool {
+                text.push_str(tool);
+            } else if self.inner.task.thinking_start.is_some() {
+                text.push_str("Thinking...");
+            } else {
+                text.push_str("Ionizing...");
+            }
+            if let Some(start) = self.inner.task.start_time {
+                text.push_str(&format!(
+                    " ({}s • Esc to cancel)",
+                    start.elapsed().as_secs()
+                ));
+            }
+            return (text, Style::new().fg(Color::Cyan));
         }
-        let spinner = SPINNER[(self.inner.frame_count % SPINNER.len() as u64) as usize];
-        if let Some((reason, delay_secs, started)) = &self.inner.task.retry_status {
-            let elapsed = started.elapsed().as_secs();
-            let left = delay_secs.saturating_sub(elapsed);
-            return format!(" {spinner} {reason} • retrying in {left}s");
-        }
-        let mut text = format!(" {spinner} ");
-        if let Some(tool) = &self.inner.task.current_tool {
-            text.push_str(tool);
-        } else if self.inner.task.thinking_start.is_some() {
-            text.push_str("Thinking...");
+
+        let Some(summary) = self.inner.last_task_summary.as_ref() else {
+            return (String::new(), Style::new().dim());
+        };
+
+        let (symbol, label, style) = if self.inner.last_error.is_some() {
+            ("✗", "Error", Style::new().fg(Color::Red))
+        } else if summary.was_cancelled {
+            ("⚠", "Canceled", Style::new().fg(Color::Yellow))
         } else {
-            text.push_str("Ionizing...");
+            ("✓", "Completed", Style::new().fg(Color::Green))
+        };
+
+        let mut stats = vec![format!("{}s", summary.elapsed.as_secs())];
+        if summary.input_tokens > 0 {
+            stats.push(format!("↑ {}", fmt_compact(summary.input_tokens)));
         }
-        if let Some(start) = self.inner.task.start_time {
-            text.push_str(&format!(" • {}s", start.elapsed().as_secs()));
+        if summary.output_tokens > 0 {
+            stats.push(format!("↓ {}", fmt_compact(summary.output_tokens)));
         }
-        text
+        if !self.inner.api_provider.is_oauth() && summary.cost > 0.0 {
+            stats.push(format!("${:.4}", summary.cost));
+        }
+
+        (format!(" {symbol} {label} ({})", stats.join(" • ")), style)
     }
 
     fn inline_height(&self) -> u16 {
-        // Reserve progress + status + composer rows. Clamp to avoid taking over
-        // too much terminal space while still supporting multiline input.
-        let input_rows = self.input.line_count().max(1) as u16;
-        let desired = 2 + input_rows;
+        // Match the old bottom-ui structure:
+        // progress row + top border + composer + bottom border + status row.
+        let input_rows = self.input_visual_height(self.width);
+        let desired = 4 + input_rows;
         desired.max(3).min(self.height.max(3)).min(10)
+    }
+
+    fn input_visual_height(&self, width: u16) -> u16 {
+        let content_width = width.saturating_sub(INPUT_MARGIN) as usize;
+        if content_width == 0 {
+            return 1;
+        }
+        let content = self.input.value();
+        if content.is_empty() {
+            1
+        } else {
+            build_visual_lines(&content, content_width).len().max(1) as u16
+        }
+    }
+
+    fn input_render_lines(&self, width: u16) -> Vec<String> {
+        let content_width = width.saturating_sub(INPUT_MARGIN) as usize;
+        if content_width == 0 {
+            return vec![PROMPT.to_string()];
+        }
+
+        if self.input.is_empty() {
+            return vec![format!("{PROMPT}Type a message... (Enter to send)")];
+        }
+
+        let content = self.input.value();
+        let visual_lines = build_visual_lines(&content, content_width);
+        let chars: Vec<char> = content.chars().collect();
+        let mut out = Vec::with_capacity(visual_lines.len().max(1));
+
+        for (idx, (start, end)) in visual_lines.iter().enumerate() {
+            let chunk: String = chars[*start..*end]
+                .iter()
+                .filter(|&&ch| ch != '\n')
+                .collect();
+            let prefix = if idx == 0 { PROMPT } else { CONTINUATION };
+            out.push(format!(
+                "{prefix}{}",
+                truncate_to_width(&chunk, content_width)
+            ));
+        }
+
+        if out.is_empty() {
+            out.push(PROMPT.to_string());
+        }
+        out
+    }
+
+    fn input_cursor_position(&self) -> Option<(u16, u16)> {
+        if self.input_area.is_empty() {
+            return None;
+        }
+
+        let content_width = self.input_area.width.saturating_sub(INPUT_MARGIN) as usize;
+        if content_width == 0 {
+            return Some((self.input_area.x, self.input_area.y));
+        }
+
+        let content = self.input.value();
+        let lines: Vec<&str> = content.split('\n').collect();
+        let (line_idx, grapheme_col) = self.input.cursor();
+        let cursor_char_idx = logical_cursor_to_char_idx(&lines, line_idx, grapheme_col);
+        let visual_lines = if content.is_empty() {
+            vec![(0, 0)]
+        } else {
+            build_visual_lines(&content, content_width)
+        };
+
+        let (visual_row, line_start) = visual_lines
+            .iter()
+            .enumerate()
+            .find_map(|(idx, (start, end))| {
+                if cursor_char_idx >= *start && cursor_char_idx <= *end {
+                    Some((idx as u16, *start))
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| {
+                let idx = visual_lines.len().saturating_sub(1) as u16;
+                let start = visual_lines.last().map(|(start, _)| *start).unwrap_or(0);
+                (idx, start)
+            });
+
+        let prefix_chars: String = content
+            .chars()
+            .skip(line_start)
+            .take(cursor_char_idx.saturating_sub(line_start))
+            .filter(|&ch| ch != '\n')
+            .collect();
+        let visual_col = display_width(&prefix_chars).min(content_width) as u16;
+        let x = self
+            .input_area
+            .x
+            .saturating_add(PROMPT_WIDTH)
+            .saturating_add(visual_col)
+            .min(self.input_area.x + self.input_area.width.saturating_sub(1));
+        let y = self
+            .input_area
+            .y
+            .saturating_add(visual_row)
+            .min(self.input_area.y + self.input_area.height.saturating_sub(1));
+        Some((x, y))
+    }
+
+    fn status_segments(&self) -> Vec<(String, tui::style::Style)> {
+        use tui::style::{Color, Style};
+
+        let mut segments = Vec::new();
+        let mode_style = match self.inner.tool_mode {
+            ToolMode::Write => Style::new().fg(Color::Yellow),
+            ToolMode::Read => Style::new().fg(Color::Cyan),
+        };
+        let mode_label = match self.inner.tool_mode {
+            ToolMode::Write => "WRITE",
+            ToolMode::Read => "READ",
+        };
+        segments.push((format!("[{mode_label}]"), mode_style));
+
+        let model_name = self
+            .inner
+            .session
+            .model
+            .split('/')
+            .next_back()
+            .unwrap_or(&self.inner.session.model);
+        if !model_name.is_empty() {
+            segments.push((model_name.to_string(), Style::new()));
+        }
+
+        let think = self.inner.thinking_level.label();
+        if !think.is_empty() {
+            segments.push((think.to_string(), Style::new().fg(Color::Magenta)));
+        }
+
+        if let Some((used, max)) = self.inner.token_usage {
+            let pct = if max > 0 { (used * 100) / max } else { 0 };
+            let pct_color = if pct >= 80 {
+                Color::Red
+            } else if pct >= 50 {
+                Color::Yellow
+            } else {
+                Color::Green
+            };
+            let token_text = if max > 0 {
+                format!(
+                    "{} {pct}% ({}/{})",
+                    token_bar(pct, TOKEN_BAR_WIDTH),
+                    fmt_compact(used),
+                    fmt_compact(max)
+                )
+            } else {
+                fmt_compact(used)
+            };
+            segments.push((token_text, Style::new().fg(pct_color)));
+        }
+
+        if !self.inner.api_provider.is_oauth() && self.inner.session_cost > 0.0 {
+            segments.push((
+                format!("${:.2}", self.inner.session_cost),
+                Style::new().dim(),
+            ));
+        }
+
+        let project = self
+            .inner
+            .session
+            .working_dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("~");
+        segments.push((project.to_string(), Style::new()));
+
+        if let Some(branch) = &self.inner.git_branch {
+            segments.push((branch.clone(), Style::new().fg(Color::Cyan)));
+            if let Some((insertions, deletions)) = self.inner.git_diff_stat {
+                segments.push((format!("+{insertions}/-{deletions}"), Style::new().dim()));
+            }
+        }
+
+        segments
     }
 
     // ── Slash commands ───────────────────────────────────────────────────────
@@ -937,39 +1135,95 @@ impl IonApp {
         };
 
         let width = self.width;
-        let input_height = self.input.line_count().max(1) as u16;
+        let input_height = self.input_visual_height(width);
         let progress_height: u16 = 1;
+        let border_height: u16 = 1;
         let status_height: u16 = 1;
-        self.input_area = Rect::new(0, progress_height, width, input_height);
-        let progress = self.progress_text();
+        self.input_area = Rect::new(0, progress_height + border_height, width, input_height);
+        let progress = self.progress_line();
+        let input_lines = self.input_render_lines(width);
+        let status_segments = self.status_segments();
+        let border = "─".repeat(width.saturating_sub(1) as usize);
+        let border_bottom = border.clone();
+        let is_placeholder = self.input.is_empty();
 
         Col::new(vec![
             Canvas::new(move |area, buf| {
                 if area.is_empty() {
                     return;
                 }
-                let style = if progress.is_empty() {
-                    Style::new().dim()
-                } else {
-                    Style::new().fg(Color::Cyan).dim()
-                };
-                buf.set_string(area.x, area.y, &progress, style);
+                buf.set_string(area.x, area.y, &progress.0, progress.1);
             })
             .into_element()
             .height(Dimension::Cells(progress_height))
             .flex_grow(0.0)
             .flex_shrink(0.0),
-            Input::new(&self.input)
-                .placeholder("Type a message... (Enter to send)")
-                .into_element()
-                .height(Dimension::Cells(input_height))
-                .flex_grow(0.0)
-                .flex_shrink(0.0),
-            self.status
-                .view(width)
-                .height(Dimension::Cells(status_height))
-                .flex_grow(0.0)
-                .flex_shrink(0.0),
+            Canvas::new(move |area, buf| {
+                if area.is_empty() {
+                    return;
+                }
+                buf.set_string(area.x, area.y, &border, Style::new().fg(Color::Cyan));
+            })
+            .into_element()
+            .height(Dimension::Cells(border_height))
+            .flex_grow(0.0)
+            .flex_shrink(0.0),
+            Canvas::new(move |area, buf| {
+                if area.is_empty() {
+                    return;
+                }
+                let style = if is_placeholder {
+                    Style::new().dim()
+                } else {
+                    Style::new()
+                };
+                for (row, line) in input_lines.iter().enumerate() {
+                    let y = area.y + row as u16;
+                    if y >= area.y + area.height {
+                        break;
+                    }
+                    buf.set_string(area.x, y, line, style);
+                }
+            })
+            .into_element()
+            .height(Dimension::Cells(input_height))
+            .flex_grow(0.0)
+            .flex_shrink(0.0),
+            Canvas::new(move |area, buf| {
+                if area.is_empty() {
+                    return;
+                }
+                buf.set_string(area.x, area.y, &border_bottom, Style::new().fg(Color::Cyan));
+            })
+            .into_element()
+            .height(Dimension::Cells(border_height))
+            .flex_grow(0.0)
+            .flex_shrink(0.0),
+            Canvas::new(move |area, buf| {
+                if area.is_empty() {
+                    return;
+                }
+
+                let mut col = area.x;
+                let max_col = area.x + area.width;
+                let sep_style = Style::new().dim();
+                for (idx, (text, style)) in status_segments.iter().enumerate() {
+                    if col >= max_col {
+                        break;
+                    }
+                    if idx > 0 {
+                        col = buf.set_string(col, area.y, " • ", sep_style);
+                        if col >= max_col {
+                            break;
+                        }
+                    }
+                    col = buf.set_string(col, area.y, text, *style);
+                }
+            })
+            .into_element()
+            .height(Dimension::Cells(status_height))
+            .flex_grow(0.0)
+            .flex_shrink(0.0),
         ])
         .into_element()
     }
@@ -1251,6 +1505,33 @@ fn fmt_compact(n: usize) -> String {
     }
 }
 
+fn token_bar(pct: usize, width: usize) -> String {
+    let filled = (pct.min(100) * width).div_ceil(100);
+    let mut out = String::with_capacity(width);
+    for idx in 0..width {
+        out.push(if idx < filled { '█' } else { '░' });
+    }
+    out
+}
+
+fn logical_cursor_to_char_idx(lines: &[&str], line_idx: usize, grapheme_col: usize) -> usize {
+    let line_idx = line_idx.min(lines.len().saturating_sub(1));
+    let prefix_chars = lines
+        .iter()
+        .take(line_idx)
+        .map(|line| line.chars().count() + 1)
+        .sum::<usize>();
+    let line_chars = lines
+        .get(line_idx)
+        .copied()
+        .unwrap_or_default()
+        .graphemes(true)
+        .take(grapheme_col)
+        .map(|grapheme| grapheme.chars().count())
+        .sum::<usize>();
+    prefix_chars + line_chars
+}
+
 // ── TuiApp impl ───────────────────────────────────────────────────────────────
 
 impl TuiApp for IonApp {
@@ -1390,11 +1671,11 @@ impl TuiApp for IonApp {
                     return Effect::None;
                 }
                 // Double-tap quit.
-                if let Some(when) = self.last_cancel_at {
-                    if when.elapsed() <= CANCEL_WINDOW {
-                        self.inner.quit();
-                        return Effect::Quit;
-                    }
+                if let Some(when) = self.last_cancel_at
+                    && when.elapsed() <= CANCEL_WINDOW
+                {
+                    self.inner.quit();
+                    return Effect::Quit;
                 }
                 self.last_cancel_at = Some(Instant::now());
                 // Show hint in status (will be overwritten on next sync_status).
@@ -1426,12 +1707,12 @@ impl TuiApp for IonApp {
                 }
                 // If input non-empty, double-tap to clear.
                 if !self.input.is_empty() {
-                    if let Some(when) = self.last_esc_at {
-                        if when.elapsed() <= CANCEL_WINDOW {
-                            self.input.clear();
-                            self.last_esc_at = None;
-                            return Effect::None;
-                        }
+                    if let Some(when) = self.last_esc_at
+                        && when.elapsed() <= CANCEL_WINDOW
+                    {
+                        self.input.clear();
+                        self.last_esc_at = None;
+                        return Effect::None;
                     }
                     self.last_esc_at = Some(Instant::now());
                 }
@@ -1815,7 +2096,7 @@ impl TuiApp for IonApp {
 
     fn cursor_position(&self) -> Option<(u16, u16)> {
         match self.mode {
-            AppMode::Input => Input::new(&self.input).cursor_position(self.input_area),
+            AppMode::Input => self.input_cursor_position(),
             // Picker filter: cursor at end of filter text row.
             AppMode::ModelPicker | AppMode::ProviderPicker | AppMode::SessionPicker => {
                 let filter_text = match self.selector_page() {
