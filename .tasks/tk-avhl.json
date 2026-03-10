@@ -23,10 +23,18 @@
     {
       "ts": "2026-03-05T00:48:32.428Z",
       "msg": "User-reported regression repro (2026-03-04): scroll wheel in inline mode non-functional and bottom UI perceived broken. Root cause: mouse capture enabled while IonMsg::ScrollUp/ScrollDown are no-ops, so wheel events are swallowed; bottom UI lacked explicit progress row and had fixed configured inline area assumptions."
+    },
+    {
+      "ts": "2026-03-10T07:16:21.960Z",
+      "msg": "Fixed inline-height anchor bug: crates/tui/src/terminal.rs now updates start_row/content_cursor when switching Inline->Inline with a new height. This was the likely cause of the bottom prompt region staying visually wrong after dynamic height changes."
+    },
+    {
+      "ts": "2026-03-10T07:16:21.982Z",
+      "msg": "Removed duplicate gap after startup header by only inserting blank separators between chat entries, not between the header block and the first entry. Validation: cargo test -q passes (524)."
     }
   ],
   "created_at": "2026-03-04T13:40:39.358Z",
-  "updated_at": "2026-03-05T00:48:32.428Z",
+  "updated_at": "2026-03-10T07:16:21.982Z",
   "completed_at": null,
   "external": {}
 }
