@@ -208,8 +208,9 @@ impl IonApp {
             let idx = self.scrollback_entry_count;
             let entry = &self.inner.message_list.entries[idx];
             let lines = render_entry_lines_for_scrollback(entry, width);
-            // Blank separator between entries
-            if idx > 0 || self.header_printed {
+            // The startup header already ends with a blank line, so only add
+            // separators between chat entries themselves.
+            if idx > 0 {
                 self.pending_scrollback.push(String::new());
             }
             for line in &lines {

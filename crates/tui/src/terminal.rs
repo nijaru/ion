@@ -342,6 +342,14 @@ impl Terminal {
                 execute!(self.backend.out, EnterAlternateScreen)?;
                 self.start_row = 0;
             }
+            (RenderMode::Inline { .. }, RenderMode::Inline { height: h }) => {
+                let inline_h = (*h).min(self.size.height);
+                self.start_row = self.size.height.saturating_sub(inline_h);
+                // If the inline region grows upward, rows that used to be free
+                // space become part of the UI. Clamp the content cursor so new
+                // inserts never write into that expanded UI area.
+                self.content_cursor = self.content_cursor.min(self.start_row);
+            }
             (RenderMode::Fullscreen, RenderMode::Inline { height: h }) => {
                 execute!(self.backend.out, LeaveAlternateScreen)?;
                 let inline_h = (*h).min(self.size.height);
