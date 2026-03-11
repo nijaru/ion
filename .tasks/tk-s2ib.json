@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "s2ib",
+  "title": "[TUI] Audit crates/tui coordinate and layout contracts",
+  "description": "Umbrella subtask under tk-avhl. Review crates/tui coordinate-space rules, layout overflow behavior, render-area assumptions, and buffer/write invariants. Produce prioritized findings and convert them into explicit tests/guards so custom canvases cannot silently misuse the API again.",
+  "status": "open",
+  "priority": 1,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-03-11T10:00:03.065Z",
+  "updated_at": "2026-03-11T10:00:03.065Z",
+  "completed_at": null,
+  "external": {}
+}

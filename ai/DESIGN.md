@@ -50,29 +50,12 @@ Provider quirks handled in `openai_compat/quirks.rs`:
 
 ### Agent Layer
 
-Core multi-turn loop with decomposed phases:
+Current direct providers remain the primary execution path, but long-term backend structure is now split conceptually into:
 
-1. **Response Phase**: Stream provider response, collect deltas, extract tool calls
-2. **Tool Phase**: Execute tool calls via orchestrator
-3. **State Phase**: Commit assistant and tool turns to history
+- **Direct model backends**: native HTTP providers (`anthropic`, `openai_compat`, `google`, etc.)
+- **Agent backends**: external agent runtimes that own approvals, tool lifecycle, and subscription auth semantics (future ACP path)
 
-### TUI Layer (Main vs `tui-work`)
-
-Current state is split by branch:
-
-- **`main`**: RNK/crossterm rendering path (stable baseline for daily usage).
-- **`tui-work`**: `crates/tui` app/event/layout/widget API with `IonApp` bridge.
-
-Shared UX contract across both paths:
-
-- **Chat history**: append-only transcript in native terminal scrollback.
-- **Bottom UI**: ephemeral status/input region anchored at terminal bottom.
-- **Input**: multiline composer with history/completion.
-
-`tui-work` is the architecture direction for API correctness and maintainability, but still in parity hardening before merge. Primary design targets are documented in:
-
-- `ai/design/tui-architecture-2026-02.md`
-- `ai/design/tui-v3-architecture-2026-02.md`
+ACP work should land as an agent-backend layer above provider clients, not as another provider implementation.
 
 ### Tool Framework
 
