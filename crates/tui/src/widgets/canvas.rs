@@ -1,7 +1,11 @@
 //! Canvas — an escape hatch for custom rendering.
 //!
-//! The closure receives the assigned area and buffer directly. No layout
-//! children. Ion uses this for streaming text, code blocks, and diff views.
+//! The closure receives the assigned frame-buffer area and the root render
+//! buffer directly. The area coordinates are absolute within that frame
+//! buffer; they are not terminal-global coordinates.
+//!
+//! No layout children. Ion uses this for streaming text, code blocks, diff
+//! views, and custom footer rendering.
 
 use crate::{
     buffer::Buffer,

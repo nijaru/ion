@@ -36,8 +36,15 @@ impl Default for WidgetId {
 
 /// Trait implemented by widget internals.
 ///
-/// `render` writes into the provided buffer region. Widgets must not write
-/// outside `area`. The area uses absolute terminal coordinates.
+/// `render` writes into the provided frame buffer region. Widgets must not
+/// write outside `area`.
+///
+/// The `area` coordinates are absolute within the frame buffer, not terminal-
+/// global screen coordinates. In practice this means:
+///
+/// - `area` is already positioned relative to the root render buffer
+/// - `Buffer` writes use the same coordinate space as `area`
+/// - terminal inline/fullscreen offsets are applied later by `Terminal`
 pub(crate) trait Renderable: Send + Sync {
     fn render(&self, area: Rect, buf: &mut Buffer);
 }

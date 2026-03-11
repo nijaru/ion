@@ -46,3 +46,15 @@ The rewrite already hit a panic path in footer rendering. This confirms the olde
 2. Encode coordinate and layout invariants as tests in `crates/tui` (`tk-s2ib`).
 3. Run PTY/manual parity checklist once multiline, resize, and footer placement are stable (`tk-9yt1`).
 4. Only after that, move to session/display ownership cleanup (`tk-43cd`).
+
+## 2026-03-11 Implementation Update
+
+This pass closed the main code-level gap behind the duplicate-row repro:
+
+- `Terminal` now records a stale inline region and clears that union on the next frame whenever the inline reserve height changes or the terminal is resized.
+- `AppRunner` now invalidates `prev_buf` whenever the render area changes, so full redraws happen against the right buffer dimensions.
+- `IonApp` footer rendering no longer uses stacked ad hoc canvases; it renders once from a single `FooterLayout`/`FooterViewModel`, clearing the full reserved region in-frame before drawing progress, composer, borders, and status.
+- Widget/canvas docs now explicitly say render areas are frame-buffer absolute, not terminal-global.
+- New unit coverage exists for inline-region math and footer layout/rendering.
+
+What remains unknown is PTY behavior. The next step is to re-run the original multiline growth/shrink repro in a real terminal and in `tmux`. If the duplicate rows still appear, the remaining bug is likely in terminal IO sequencing rather than footer geometry.

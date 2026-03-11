@@ -395,6 +395,9 @@ impl<A: App> AppRunner<A> {
         }
 
         let area = self.terminal.render_area();
+        if self.prev_buf.area != area {
+            self.prev_buf = Buffer::empty(area);
+        }
         let size = crate::geometry::Size {
             width: area.width,
             height: area.height,

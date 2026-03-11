@@ -5,9 +5,9 @@
 | Metric | Value | Updated |
 | --- | --- | --- |
 | Phase | `tui-work` stabilization and parity hardening | 2026-03-11 |
-| Status | Rewrite retained; `crates/tui` contract audit in progress, text entry box still unstable | 2026-03-11 |
+| Status | Rewrite retained; runtime/footer contract hardening landed, PTY parity still pending | 2026-03-11 |
 | Active branch | `tui-work` | 2026-03-11 |
-| Tests | `cargo test -q`: 524 passing on `tui-work` | 2026-03-11 |
+| Tests | `cargo test -q`: 527 passing on `tui-work` | 2026-03-11 |
 | Clippy | Branch-wide `-D warnings` backlog remains outside current TUI fixes | 2026-03-11 |
 
 ## Active Work
@@ -22,25 +22,29 @@
 ## Current Findings
 
 - The rewrite stays the direction; no fallback to the old renderer.
-- The main TUI failure class is contract mismatch inside the new stack:
-  - buffer/write coordinates vs widget/layout coordinates
+- The main TUI failure class remains contract mismatch inside the new stack:
+  - frame-buffer coordinates vs terminal-global assumptions
   - inline reserve height vs actual rendered height
-  - footer layout overflow when multiline input exceeds the reserved region
-- Recent fixes restored scrollback parity, prompt-box styling, local row clearing, and panic-hook cleanup, but the text entry box is still the main instability.
-- Current footer contract is only partially improved:
-  - shrink behavior is closer to the intended reserve model
-  - initial multiline growth can still duplicate prompt/border rows
-  - PTY parity is still blocked on prompt-box correctness
-- Current implementation direction remains: reserve height grows with the active draft, overflow is clipped within the reserve, and slack stays below the visible footer until reset.
+  - stale inline rows during reserve growth and resize
+- This session hardened the runtime/footer path:
+  - `Terminal` now tracks and clears stale inline regions across `Inline -> Inline` growth and resize
+  - `AppRunner` invalidates `prev_buf` when the render area changes
+  - `IonApp` footer now renders from one `FooterLayout`/`FooterViewModel` instead of stacked ad hoc canvases
+  - widget/canvas docs now explicitly state the frame-buffer coordinate contract
+- Unit coverage now exists for:
+  - bottom-anchored inline region math
+  - stale-clear union math
+  - footer layout clipping/slack behavior
+  - multiline footer row stacking
+- PTY parity is still not closed. The remaining open question is user-observed behavior in a real terminal, especially the former duplicate prompt/border rows on initial multiline growth.
 
 ## Next Steps
 
-1. Fix duplicate prompt/border rows on initial multiline growth in the text entry box.
-2. Complete the `crates/tui` audit and encode findings as tests/guards.
-3. Close remaining parity items (resize, picker/completer clearing, cancel flows, transcript ordering).
-4. Run PTY/manual checklist only after the text entry box is stable enough to trust.
-5. Once TUI is stable enough to dogfood, start `tk-43cd` (persist rendered display entries).
-6. ACP starts only after TUI/core agent are stable enough to support a new backend layer.
+1. Run PTY/manual validation for multiline growth/shrink, resize, and footer placement in native terminal and `tmux`.
+2. If the duplicate-row repro is gone, close `tk-ajlv` and move to the remaining parity checklist (`tk-9yt1`).
+3. If PTY still exposes edge cases, continue the `crates/tui` audit with the new runtime/frame-buffer contract in mind.
+4. Once TUI is stable enough to dogfood, start `tk-43cd` (persist rendered display entries).
+5. ACP starts only after TUI/core agent are stable enough to support a new backend layer.
 
 ## Key References
 
