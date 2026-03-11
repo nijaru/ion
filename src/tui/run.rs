@@ -51,7 +51,7 @@ pub async fn run(permissions: PermissionSettings, resume_option: ResumeOption) -
     ion_app.apply_resume(resume_option);
 
     tui::app::AppBuilder::new(ion_app)
-        .inline(3) // status(1) + input(1) + border/gap
+        .inline(5) // minimum footer reserve; IonApp grows this while a draft expands
         // Keep terminal-native scrollback working in inline mode.
         // Mouse capture swallows wheel events that users expect to scroll history.
         .mouse(false)

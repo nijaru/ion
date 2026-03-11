@@ -621,6 +621,15 @@ mod tests {
     }
 
     #[test]
+    fn diff_offsets_moves_by_buffer_area() {
+        let prev = Buffer::new(Rect::new(5, 7, 3, 1));
+        let mut curr = Buffer::new(Rect::new(5, 7, 3, 1));
+        curr.set_string(0, 0, "X", Style::default());
+        let first_move = cmds_first_move(&curr.diff(&prev));
+        assert_eq!(first_move, Some((5, 7)));
+    }
+
+    #[test]
     fn diff_styled_cell_emits_style_then_reset() {
         let prev = buf(5, 1);
         let mut curr = buf(5, 1);
@@ -679,5 +688,12 @@ mod tests {
 
         base.merge(&overlay);
         assert_eq!(base.to_lines()[0], "ABClo");
+    }
+
+    fn cmds_first_move(cmds: &[DrawCommand]) -> Option<(u16, u16)> {
+        cmds.iter().find_map(|cmd| match cmd {
+            DrawCommand::MoveTo(x, y) => Some((*x, *y)),
+            _ => None,
+        })
     }
 }

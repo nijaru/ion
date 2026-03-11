@@ -42,6 +42,9 @@ const CONTINUATION: &str = "  ";
 const PROMPT_WIDTH: u16 = 2;
 const INPUT_MARGIN: u16 = 3;
 const TOKEN_BAR_WIDTH: usize = 6;
+const FOOTER_FIXED_ROWS: u16 = 4;
+const INLINE_MIN_RESERVED_HEIGHT: u16 = FOOTER_FIXED_ROWS + 1;
+const INLINE_MAX_RESERVED_HEIGHT: u16 = 10;
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 // ── AppMode ──────────────────────────────────────────────────────────────────
@@ -71,6 +74,7 @@ enum AppMode {
 pub struct IonApp {
     pub(crate) inner: IonState,
     input: InputState,
+    inline_reserved_height: u16,
     mode: AppMode,
     width: u16,
     height: u16,
@@ -94,6 +98,34 @@ pub struct IonApp {
     last_streaming_len: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FooterLayout {
+    reserved_height: u16,
+    input_height: u16,
+    input_row: u16,
+}
+
+impl FooterLayout {
+    fn desired_reserved_height(input_visual_height: u16, term_height: u16) -> u16 {
+        (FOOTER_FIXED_ROWS + input_visual_height)
+            .clamp(INLINE_MIN_RESERVED_HEIGHT, INLINE_MAX_RESERVED_HEIGHT)
+            .min(term_height.max(1))
+    }
+
+    fn new(term_height: u16, input_visual_height: u16, reserved_height: u16) -> Self {
+        let reserved_height = reserved_height
+            .clamp(INLINE_MIN_RESERVED_HEIGHT, INLINE_MAX_RESERVED_HEIGHT)
+            .min(term_height.max(1));
+        let max_input_height = reserved_height.saturating_sub(FOOTER_FIXED_ROWS).max(1);
+
+        Self {
+            reserved_height,
+            input_height: input_visual_height.min(max_input_height),
+            input_row: 2,
+        }
+    }
+}
+
 impl IonApp {
     pub async fn new(permissions: PermissionSettings) -> anyhow::Result<Self> {
         let mut inner = IonState::with_permissions(permissions).await?;
@@ -106,6 +138,7 @@ impl IonApp {
         Ok(Self {
             inner,
             input: InputState::new(),
+            inline_reserved_height: INLINE_MIN_RESERVED_HEIGHT.min(height.max(1)),
             mode: AppMode::default(),
             width,
             height,
@@ -288,6 +321,20 @@ impl IonApp {
 
     fn sync_status(&mut self) {}
 
+    fn footer_desired_reserved_height(&self) -> u16 {
+        FooterLayout::desired_reserved_height(self.input_visual_height(self.width), self.height)
+    }
+
+    fn grow_inline_reserve_to_current_content(&mut self) {
+        self.inline_reserved_height = self
+            .inline_reserved_height
+            .max(self.footer_desired_reserved_height());
+    }
+
+    fn reset_inline_reserve_to_current_content(&mut self) {
+        self.inline_reserved_height = self.footer_desired_reserved_height();
+    }
+
     fn progress_line(&self) -> (String, tui::style::Style) {
         use tui::style::{Color, Style};
 
@@ -345,14 +392,6 @@ impl IonApp {
         (format!(" {symbol} {label} ({})", stats.join(" • ")), style)
     }
 
-    fn inline_height(&self) -> u16 {
-        // Match the old bottom-ui structure:
-        // progress row + top border + composer + bottom border + status row.
-        let input_rows = self.input_visual_height(self.width);
-        let desired = 4 + input_rows;
-        desired.max(3).min(self.height.max(3)).min(10)
-    }
-
     fn input_visual_height(&self, width: u16) -> u16 {
         let content_width = width.saturating_sub(INPUT_MARGIN) as usize;
         if content_width == 0 {
@@ -366,7 +405,7 @@ impl IonApp {
         }
     }
 
-    fn input_render_lines(&self, width: u16) -> Vec<String> {
+    fn input_render_lines(&self, width: u16, visible_rows: u16) -> Vec<String> {
         let content_width = width.saturating_sub(INPUT_MARGIN) as usize;
         if content_width == 0 {
             return vec![PROMPT.to_string()];
@@ -378,10 +417,13 @@ impl IonApp {
 
         let content = self.input.value();
         let visual_lines = build_visual_lines(&content, content_width);
+        let visible_start = visual_lines
+            .len()
+            .saturating_sub(visible_rows.max(1) as usize);
         let chars: Vec<char> = content.chars().collect();
-        let mut out = Vec::with_capacity(visual_lines.len().max(1));
+        let mut out = Vec::with_capacity(visible_rows.max(1) as usize);
 
-        for (idx, (start, end)) in visual_lines.iter().enumerate() {
+        for (idx, (start, end)) in visual_lines.iter().enumerate().skip(visible_start) {
             let chunk: String = chars[*start..*end]
                 .iter()
                 .filter(|&&ch| ch != '\n')
@@ -418,6 +460,9 @@ impl IonApp {
         } else {
             build_visual_lines(&content, content_width)
         };
+        let visible_start = visual_lines
+            .len()
+            .saturating_sub(self.input_area.height.max(1) as usize);
 
         let (visual_row, line_start) = visual_lines
             .iter()
@@ -451,7 +496,7 @@ impl IonApp {
         let y = self
             .input_area
             .y
-            .saturating_add(visual_row)
+            .saturating_add(visual_row.saturating_sub(visible_start as u16))
             .min(self.input_area.y + self.input_area.height.saturating_sub(1));
         Some((x, y))
     }
@@ -1135,13 +1180,14 @@ impl IonApp {
         };
 
         let width = self.width;
-        let input_height = self.input_visual_height(width);
-        let progress_height: u16 = 1;
-        let border_height: u16 = 1;
-        let status_height: u16 = 1;
-        self.input_area = Rect::new(0, progress_height + border_height, width, input_height);
+        let layout = FooterLayout::new(
+            self.height,
+            self.input_visual_height(width),
+            self.inline_reserved_height,
+        );
+        self.input_area = Rect::new(0, layout.input_row, width, layout.input_height);
         let progress = self.progress_line();
-        let input_lines = self.input_render_lines(width);
+        let input_lines = self.input_render_lines(width, layout.input_height);
         let status_segments = self.status_segments();
         let border = "─".repeat(width.saturating_sub(1) as usize);
         let border_bottom = border.clone();
@@ -1153,21 +1199,21 @@ impl IonApp {
                     return;
                 }
                 let blank = " ".repeat(area.width as usize);
-                buf.set_string(0, 0, &blank, Style::new());
-                buf.set_string(0, 0, &progress.0, progress.1);
+                buf.set_string(area.x, area.y, &blank, Style::new());
+                buf.set_string(area.x, area.y, &progress.0, progress.1);
             })
             .into_element()
-            .height(Dimension::Cells(progress_height))
+            .height(Dimension::Cells(1))
             .flex_grow(0.0)
             .flex_shrink(0.0),
             Canvas::new(move |area, buf| {
                 if area.is_empty() {
                     return;
                 }
-                buf.set_string(0, 0, &border, Style::new().fg(Color::Cyan));
+                buf.set_string(area.x, area.y, &border, Style::new().fg(Color::Cyan));
             })
             .into_element()
-            .height(Dimension::Cells(border_height))
+            .height(Dimension::Cells(1))
             .flex_grow(0.0)
             .flex_shrink(0.0),
             Canvas::new(move |area, buf| {
@@ -1181,28 +1227,28 @@ impl IonApp {
                 };
                 let blank = " ".repeat(area.width as usize);
                 for row in 0..area.height {
-                    buf.set_string(0, row, &blank, Style::new());
+                    buf.set_string(area.x, area.y + row, &blank, Style::new());
                 }
                 for (row, line) in input_lines.iter().enumerate() {
                     let y = row as u16;
                     if y >= area.height {
                         break;
                     }
-                    buf.set_string(0, y, line, style);
+                    buf.set_string(area.x, area.y + y, line, style);
                 }
             })
             .into_element()
-            .height(Dimension::Cells(input_height))
+            .height(Dimension::Cells(layout.input_height))
             .flex_grow(0.0)
             .flex_shrink(0.0),
             Canvas::new(move |area, buf| {
                 if area.is_empty() {
                     return;
                 }
-                buf.set_string(0, 0, &border_bottom, Style::new().fg(Color::Cyan));
+                buf.set_string(area.x, area.y, &border_bottom, Style::new().fg(Color::Cyan));
             })
             .into_element()
-            .height(Dimension::Cells(border_height))
+            .height(Dimension::Cells(1))
             .flex_grow(0.0)
             .flex_shrink(0.0),
             Canvas::new(move |area, buf| {
@@ -1211,26 +1257,26 @@ impl IonApp {
                 }
 
                 let blank = " ".repeat(area.width as usize);
-                buf.set_string(0, 0, &blank, Style::new());
+                buf.set_string(area.x, area.y, &blank, Style::new());
 
-                let mut col = 0;
-                let max_col = area.width;
+                let mut col = area.x;
+                let max_col = area.x + area.width;
                 let sep_style = Style::new().dim();
                 for (idx, (text, style)) in status_segments.iter().enumerate() {
                     if col >= max_col {
                         break;
                     }
                     if idx > 0 {
-                        col = buf.set_string(col, 0, " • ", sep_style);
+                        col = buf.set_string(col, area.y, " • ", sep_style);
                         if col >= max_col {
                             break;
                         }
                     }
-                    col = buf.set_string(col, 0, text, *style);
+                    col = buf.set_string(col, area.y, text, *style);
                 }
             })
             .into_element()
-            .height(Dimension::Cells(status_height))
+            .height(Dimension::Cells(1))
             .flex_grow(0.0)
             .flex_shrink(0.0),
         ])
@@ -1655,6 +1701,7 @@ impl TuiApp for IonApp {
                 self.inner.update();
                 self.sync_scrollback();
                 self.sync_status();
+                self.grow_inline_reserve_to_current_content();
                 if self.inner.should_quit {
                     return Effect::Quit;
                 }
@@ -1666,6 +1713,7 @@ impl TuiApp for IonApp {
                 // If input has text, clear it.
                 if !self.input.is_empty() {
                     self.input.clear();
+                    self.reset_inline_reserve_to_current_content();
                     self.last_cancel_at = None;
                     return Effect::None;
                 }
@@ -1720,6 +1768,7 @@ impl TuiApp for IonApp {
                         && when.elapsed() <= CANCEL_WINDOW
                     {
                         self.input.clear();
+                        self.reset_inline_reserve_to_current_content();
                         self.last_esc_at = None;
                         return Effect::None;
                     }
@@ -1796,6 +1845,7 @@ impl TuiApp for IonApp {
                         let text = self.input.value();
                         if !text.trim().is_empty() {
                             self.input.clear();
+                            self.reset_inline_reserve_to_current_content();
                             Effect::Emit(IonMsg::InputSubmit(text))
                         } else {
                             Effect::None
@@ -1879,6 +1929,7 @@ impl TuiApp for IonApp {
                 } else {
                     self.input.insert_text(&text);
                 }
+                self.grow_inline_reserve_to_current_content();
                 Effect::None
             }
 
@@ -1887,6 +1938,11 @@ impl TuiApp for IonApp {
                 self.width = w;
                 self.height = h;
                 self.inner.term_width = w;
+                self.inline_reserved_height = self.inline_reserved_height.clamp(
+                    INLINE_MIN_RESERVED_HEIGHT.min(h.max(1)),
+                    INLINE_MAX_RESERVED_HEIGHT.min(h.max(1)),
+                );
+                self.grow_inline_reserve_to_current_content();
                 Effect::None
             }
 
@@ -2091,7 +2147,7 @@ impl TuiApp for IonApp {
     fn render_mode_override(&self) -> Option<RenderMode> {
         match self.mode {
             AppMode::Input => Some(RenderMode::Inline {
-                height: self.inline_height(),
+                height: self.inline_reserved_height,
             }),
             // Overlays need the full terminal.
             AppMode::ModelPicker

@@ -31,10 +31,30 @@
     {
       "ts": "2026-03-10T07:16:21.982Z",
       "msg": "Removed duplicate gap after startup header by only inserting blank separators between chat entries, not between the header block and the first entry. Validation: cargo test -q passes (524)."
+    },
+    {
+      "ts": "2026-03-10T07:33:56.252Z",
+      "msg": "Restored old-style footer semantics in IonApp: prompt-aware composer with › prefix and continuation indent, bordered input box, wrapped visual-height calculation, completion summary in progress row, and richer status row derived from inner state. Validation: cargo test -q passes (524)."
+    },
+    {
+      "ts": "2026-03-10T07:44:48.368Z",
+      "msg": "User repro (2026-03-10): Shift+Enter multiline composer leaves stale border/text in expanded rows; likely row-clearing regression in IonApp custom composer renderer. Also requested thinner token usage indicator in footer."
+    },
+    {
+      "ts": "2026-03-10T07:45:22.743Z",
+      "msg": "User repro (2026-03-10): repeated Shift+Enter can panic in IonApp footer render with y out of bounds at src/tui/ion_app.rs:1220. Likely absolute-vs-local buffer coordinates in custom footer Canvas closures, plus stale row clearing needed."
+    },
+    {
+      "ts": "2026-03-10T07:46:23.720Z",
+      "msg": "Fixed multiline footer regression in IonApp by rendering footer canvases with local buffer coordinates and clearing rows before redraw; this removes stale border artifacts and the y-out-of-bounds panic on repeated Shift+Enter. Also changed token bar glyphs from block chars to thin line/dot style and guarded panic-hook restoration during unwind. Validation: cargo test -q passes (524)."
+    },
+    {
+      "ts": "2026-03-11T10:00:54.245Z",
+      "msg": "Created explicit follow-on subtasks under the parity umbrella: tk-s2ib (crates/tui coordinate/layout audit), tk-ajlv (inline/footer reserve contract), tk-9yt1 (PTY parity checklist). tk-nxz3 remains the ACP architecture track. Current implementation work is focused on replacing the fixed 10-row reserve hack with a stateful reserve that grows with the current draft and avoids footer overflow."
     }
   ],
   "created_at": "2026-03-04T13:40:39.358Z",
-  "updated_at": "2026-03-10T07:16:21.982Z",
+  "updated_at": "2026-03-11T10:00:54.245Z",
   "completed_at": null,
   "external": {}
 }
