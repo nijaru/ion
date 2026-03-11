@@ -55,10 +55,14 @@
     {
       "ts": "2026-03-11T10:10:34.153Z",
       "msg": "User validation on 2026-03-11: footer reserve contract partially improved shrink behavior, but multiline growth still duplicates border/prompt lines when expanding initially. Text entry box remains the main unstable area in tui-work; broad audit still required before parity can be claimed."
+    },
+    {
+      "ts": "2026-03-11T22:40:25.216Z",
+      "msg": "Implemented runtime/footer hardening on 2026-03-11: Terminal now tracks and clears stale inline regions across Inline->Inline growth and resize, AppRunner invalidates prev_buf when render_area changes, and IonApp footer now renders from one FooterViewModel/FooterLayout instead of stacked ad hoc canvases. Added unit coverage for inline-region union math and footer layout/rendering. Validation: cargo test -q now 527 passing."
     }
   ],
   "created_at": "2026-03-04T13:40:39.358Z",
-  "updated_at": "2026-03-11T10:10:34.153Z",
+  "updated_at": "2026-03-11T22:40:25.216Z",
   "completed_at": null,
   "external": {}
 }

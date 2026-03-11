@@ -9,8 +9,9 @@
 use std::time::{Duration, Instant};
 
 use tui::{
-    Col, Element, InputAction, InputState, IntoElement,
+    Element, InputAction, InputState, IntoElement,
     app::{App as TuiApp, Effect},
+    buffer::{Buffer as TuiBuffer, Cell as TuiCell},
     event::{Event, KeyCode, KeyModifiers},
     geometry::Rect,
     layout::Dimension,
@@ -105,6 +106,15 @@ struct FooterLayout {
     input_row: u16,
 }
 
+struct FooterViewModel {
+    layout: FooterLayout,
+    progress: (String, tui::style::Style),
+    input_lines: Vec<String>,
+    is_placeholder: bool,
+    status_segments: Vec<(String, tui::style::Style)>,
+    border_style: tui::style::Style,
+}
+
 impl FooterLayout {
     fn desired_reserved_height(input_visual_height: u16, term_height: u16) -> u16 {
         (FOOTER_FIXED_ROWS + input_visual_height)
@@ -122,6 +132,81 @@ impl FooterLayout {
             reserved_height,
             input_height: input_visual_height.min(max_input_height),
             input_row: 2,
+        }
+    }
+
+    fn top_border_row(self) -> u16 {
+        self.input_row.saturating_sub(1)
+    }
+
+    fn bottom_border_row(self) -> u16 {
+        self.input_row.saturating_add(self.input_height)
+    }
+
+    fn status_row(self) -> u16 {
+        self.bottom_border_row().saturating_add(1)
+    }
+
+    fn used_height(self) -> u16 {
+        self.status_row().saturating_add(1)
+    }
+}
+
+impl FooterViewModel {
+    fn render(&self, buf: &mut TuiBuffer, area: Rect) {
+        use tui::style::Style;
+
+        if area.is_empty() {
+            return;
+        }
+
+        debug_assert!(
+            self.layout.used_height() <= area.height,
+            "footer layout exceeds reserved area: used={} reserved={}",
+            self.layout.used_height(),
+            area.height
+        );
+
+        buf.fill_region(area, &TuiCell::default());
+
+        let border = "─".repeat(area.width.saturating_sub(1) as usize);
+        let progress_row = area.y;
+        let top_border_row = area.y.saturating_add(self.layout.top_border_row());
+        let input_row = area.y.saturating_add(self.layout.input_row);
+        let bottom_border_row = area.y.saturating_add(self.layout.bottom_border_row());
+        let status_row = area.y.saturating_add(self.layout.status_row());
+
+        buf.set_string(area.x, progress_row, &self.progress.0, self.progress.1);
+        buf.set_string(area.x, top_border_row, &border, self.border_style);
+        buf.set_string(area.x, bottom_border_row, &border, self.border_style);
+
+        let input_style = if self.is_placeholder {
+            Style::new().dim()
+        } else {
+            Style::new()
+        };
+        for (row, line) in self.input_lines.iter().enumerate() {
+            let y = input_row.saturating_add(row as u16);
+            if y >= bottom_border_row {
+                break;
+            }
+            buf.set_string(area.x, y, line, input_style);
+        }
+
+        let mut col = area.x;
+        let max_col = area.x.saturating_add(area.width);
+        let sep_style = Style::new().dim();
+        for (idx, (text, style)) in self.status_segments.iter().enumerate() {
+            if col >= max_col {
+                break;
+            }
+            if idx > 0 {
+                col = buf.set_string(col, status_row, " • ", sep_style);
+                if col >= max_col {
+                    break;
+                }
+            }
+            col = buf.set_string(col, status_row, text, *style);
         }
     }
 }
@@ -1186,101 +1271,20 @@ impl IonApp {
             self.inline_reserved_height,
         );
         self.input_area = Rect::new(0, layout.input_row, width, layout.input_height);
-        let progress = self.progress_line();
-        let input_lines = self.input_render_lines(width, layout.input_height);
-        let status_segments = self.status_segments();
-        let border = "─".repeat(width.saturating_sub(1) as usize);
-        let border_bottom = border.clone();
-        let is_placeholder = self.input.is_empty();
+        let footer = FooterViewModel {
+            layout,
+            progress: self.progress_line(),
+            input_lines: self.input_render_lines(width, layout.input_height),
+            status_segments: self.status_segments(),
+            is_placeholder: self.input.is_empty(),
+            border_style: Style::new().fg(Color::Cyan),
+        };
 
-        Col::new(vec![
-            Canvas::new(move |area, buf| {
-                if area.is_empty() {
-                    return;
-                }
-                let blank = " ".repeat(area.width as usize);
-                buf.set_string(area.x, area.y, &blank, Style::new());
-                buf.set_string(area.x, area.y, &progress.0, progress.1);
-            })
-            .into_element()
-            .height(Dimension::Cells(1))
-            .flex_grow(0.0)
-            .flex_shrink(0.0),
-            Canvas::new(move |area, buf| {
-                if area.is_empty() {
-                    return;
-                }
-                buf.set_string(area.x, area.y, &border, Style::new().fg(Color::Cyan));
-            })
-            .into_element()
-            .height(Dimension::Cells(1))
-            .flex_grow(0.0)
-            .flex_shrink(0.0),
-            Canvas::new(move |area, buf| {
-                if area.is_empty() {
-                    return;
-                }
-                let style = if is_placeholder {
-                    Style::new().dim()
-                } else {
-                    Style::new()
-                };
-                let blank = " ".repeat(area.width as usize);
-                for row in 0..area.height {
-                    buf.set_string(area.x, area.y + row, &blank, Style::new());
-                }
-                for (row, line) in input_lines.iter().enumerate() {
-                    let y = row as u16;
-                    if y >= area.height {
-                        break;
-                    }
-                    buf.set_string(area.x, area.y + y, line, style);
-                }
-            })
-            .into_element()
-            .height(Dimension::Cells(layout.input_height))
-            .flex_grow(0.0)
-            .flex_shrink(0.0),
-            Canvas::new(move |area, buf| {
-                if area.is_empty() {
-                    return;
-                }
-                buf.set_string(area.x, area.y, &border_bottom, Style::new().fg(Color::Cyan));
-            })
-            .into_element()
-            .height(Dimension::Cells(1))
-            .flex_grow(0.0)
-            .flex_shrink(0.0),
-            Canvas::new(move |area, buf| {
-                if area.is_empty() {
-                    return;
-                }
-
-                let blank = " ".repeat(area.width as usize);
-                buf.set_string(area.x, area.y, &blank, Style::new());
-
-                let mut col = area.x;
-                let max_col = area.x + area.width;
-                let sep_style = Style::new().dim();
-                for (idx, (text, style)) in status_segments.iter().enumerate() {
-                    if col >= max_col {
-                        break;
-                    }
-                    if idx > 0 {
-                        col = buf.set_string(col, area.y, " • ", sep_style);
-                        if col >= max_col {
-                            break;
-                        }
-                    }
-                    col = buf.set_string(col, area.y, text, *style);
-                }
-            })
-            .into_element()
-            .height(Dimension::Cells(1))
-            .flex_grow(0.0)
-            .flex_shrink(0.0),
-        ])
+        Canvas::new(move |area, buf| {
+            footer.render(buf, area);
+        })
         .into_element()
+        .height(Dimension::Cells(layout.reserved_height))
     }
 
     /// Picker overlay view (model/provider/session).
@@ -2204,8 +2208,9 @@ impl TuiApp for IonApp {
 
 #[cfg(test)]
 mod tests {
-    use super::render_entry_lines_for_scrollback;
+    use super::{FooterLayout, FooterViewModel, render_entry_lines_for_scrollback};
     use crate::tui::message_list::{MessageEntry, Sender, ToolMeta};
+    use tui::{buffer::Buffer, geometry::Rect, style::Style};
 
     #[test]
     fn tool_mapping_preserves_rendered_result_content() {
@@ -2226,5 +2231,61 @@ mod tests {
             .join("\n");
         assert!(joined.contains("read"));
         assert!(joined.contains("✓ 3 lines"));
+    }
+
+    #[test]
+    fn footer_layout_caps_input_height_to_reserved_region() {
+        let layout = FooterLayout::new(24, 8, 6);
+        assert_eq!(layout.reserved_height, 6);
+        assert_eq!(layout.input_height, 2);
+        assert_eq!(layout.used_height(), 6);
+    }
+
+    #[test]
+    fn footer_render_leaves_slack_below_visible_footer() {
+        let area = Rect::new(0, 0, 20, 7);
+        let layout = FooterLayout::new(24, 1, 7);
+        let mut buf = Buffer::new(area);
+        FooterViewModel {
+            layout,
+            progress: (" progress".to_string(), Style::new()),
+            input_lines: vec!["› test".to_string()],
+            is_placeholder: false,
+            status_segments: vec![("status".to_string(), Style::new())],
+            border_style: Style::new(),
+        }
+        .render(&mut buf, area);
+
+        let lines = buf.to_lines();
+        assert!(lines[0].contains("progress"));
+        assert!(lines[1].trim().starts_with('─'));
+        assert!(lines[2].contains("› test"));
+        assert!(lines[3].trim().starts_with('─'));
+        assert!(lines[4].contains("status"));
+        assert!(lines[5].trim().is_empty());
+        assert!(lines[6].trim().is_empty());
+    }
+
+    #[test]
+    fn footer_render_stacks_multiline_input_once() {
+        let area = Rect::new(0, 0, 20, 6);
+        let layout = FooterLayout::new(24, 2, 6);
+        let mut buf = Buffer::new(area);
+        FooterViewModel {
+            layout,
+            progress: ("".to_string(), Style::new()),
+            input_lines: vec!["› one".to_string(), "  two".to_string()],
+            is_placeholder: false,
+            status_segments: vec![("status".to_string(), Style::new())],
+            border_style: Style::new(),
+        }
+        .render(&mut buf, area);
+
+        let lines = buf.to_lines();
+        assert!(lines[1].trim().starts_with('─'));
+        assert!(lines[2].contains("› one"));
+        assert!(lines[3].contains("two"));
+        assert!(lines[4].trim().starts_with('─'));
+        assert!(lines[5].contains("status"));
     }
 }

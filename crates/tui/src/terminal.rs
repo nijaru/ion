@@ -56,6 +56,8 @@ pub struct Terminal {
     content_cursor: u16,
     /// Height of the last render (used by restore to position the cursor).
     rendered_height: u16,
+    /// Terminal-global inline rows that must be cleared before the next frame.
+    stale_inline_region: Option<Rect>,
     /// Whether `restore()` has already been called (makes Drop idempotent).
     restored: bool,
 }
@@ -102,6 +104,7 @@ impl Terminal {
             start_row,
             content_cursor,
             rendered_height: 0,
+            stale_inline_region: None,
             restored: false,
         })
     }
@@ -144,6 +147,9 @@ impl Terminal {
     ) -> Result<()> {
         let prev_height = self.rendered_height;
         let out = &mut self.backend.out;
+        if let Some(region) = self.stale_inline_region.take() {
+            clear_terminal_region(out, region)?;
+        }
         for cmd in commands {
             match cmd {
                 DrawCommand::MoveTo(x, y) => {
@@ -241,11 +247,18 @@ impl Terminal {
     /// For inline mode, `start_row` is clamped so the render region stays
     /// within the terminal.
     pub(crate) fn handle_resize(&mut self, width: u16, height: u16) {
+        let old_size = self.size;
+        let old_region = inline_region(old_size, self.mode);
         self.size = Size::new(width, height);
         if matches!(self.mode, RenderMode::Inline { .. }) {
             let inline_h = self.render_area().height;
-            self.start_row = self.start_row.min(height.saturating_sub(inline_h));
+            self.start_row = height.saturating_sub(inline_h);
             self.content_cursor = self.content_cursor.min(self.start_row);
+            let new_region = inline_region(self.size, self.mode);
+            self.stale_inline_region = union_optional_regions(
+                self.stale_inline_region,
+                union_optional_regions(old_region, new_region),
+            );
         }
     }
 
@@ -337,6 +350,8 @@ impl Terminal {
         if mode == self.mode {
             return Ok(());
         }
+        let old_region = inline_region(self.size, self.mode);
+        let new_region = inline_region(self.size, mode);
         match (&self.mode, &mode) {
             (RenderMode::Inline { .. }, RenderMode::Fullscreen) => {
                 execute!(self.backend.out, EnterAlternateScreen)?;
@@ -363,6 +378,10 @@ impl Terminal {
         }
         self.mode = mode;
         self.rendered_height = 0;
+        self.stale_inline_region = union_optional_regions(
+            self.stale_inline_region,
+            union_optional_regions(old_region, new_region),
+        );
         Ok(())
     }
 }
@@ -436,5 +455,71 @@ fn color_to_ct(c: Color) -> CtColor {
         Color::Gray => CtColor::Grey,
         Color::Rgb(r, g, b) => CtColor::Rgb { r, g, b },
         Color::Indexed(i) => CtColor::AnsiValue(i),
+    }
+}
+
+fn inline_region(size: Size, mode: RenderMode) -> Option<Rect> {
+    match mode {
+        RenderMode::Fullscreen => None,
+        RenderMode::Inline { height } => {
+            let h = height.min(size.height);
+            Some(Rect::new(0, size.height.saturating_sub(h), size.width, h))
+        }
+    }
+}
+
+fn union_optional_regions(a: Option<Rect>, b: Option<Rect>) -> Option<Rect> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(union_rect(a, b)),
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (None, None) => None,
+    }
+}
+
+fn union_rect(a: Rect, b: Rect) -> Rect {
+    let x = a.x.min(b.x);
+    let y = a.y.min(b.y);
+    let right = a.x.saturating_add(a.width).max(b.x.saturating_add(b.width));
+    let bottom =
+        a.y.saturating_add(a.height)
+            .max(b.y.saturating_add(b.height));
+    Rect::new(x, y, right.saturating_sub(x), bottom.saturating_sub(y))
+}
+
+fn clear_terminal_region<W: IoWrite>(out: &mut W, region: Rect) -> io::Result<()> {
+    for row in region.y..region.y.saturating_add(region.height) {
+        queue!(out, cursor::MoveTo(region.x, row))?;
+        queue!(out, Clear(ClearType::CurrentLine))?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RenderMode, inline_region, union_optional_regions, union_rect};
+    use crate::geometry::{Rect, Size};
+
+    #[test]
+    fn inline_region_is_bottom_anchored() {
+        let region = inline_region(Size::new(80, 24), RenderMode::Inline { height: 5 }).unwrap();
+        assert_eq!(region, Rect::new(0, 19, 80, 5));
+    }
+
+    #[test]
+    fn union_rect_covers_growth_transition() {
+        let old = Rect::new(0, 19, 80, 5);
+        let new = Rect::new(0, 18, 80, 6);
+        assert_eq!(union_rect(old, new), Rect::new(0, 18, 80, 6));
+    }
+
+    #[test]
+    fn union_optional_regions_preserves_existing_pending_clear() {
+        let pending = Some(Rect::new(0, 18, 80, 6));
+        let resize = Some(Rect::new(0, 17, 80, 7));
+        assert_eq!(
+            union_optional_regions(pending, resize),
+            Some(Rect::new(0, 17, 80, 7))
+        );
     }
 }
