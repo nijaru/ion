@@ -5,7 +5,7 @@
 | Metric | Value | Updated |
 | --- | --- | --- |
 | Phase | `tui-work` stabilization and parity hardening | 2026-03-11 |
-| Status | Rewrite retained; `crates/tui` contract audit in progress | 2026-03-11 |
+| Status | Rewrite retained; `crates/tui` contract audit in progress, text entry box still unstable | 2026-03-11 |
 | Active branch | `tui-work` | 2026-03-11 |
 | Tests | `cargo test -q`: 524 passing on `tui-work` | 2026-03-11 |
 | Clippy | Branch-wide `-D warnings` backlog remains outside current TUI fixes | 2026-03-11 |
@@ -26,16 +26,21 @@
   - buffer/write coordinates vs widget/layout coordinates
   - inline reserve height vs actual rendered height
   - footer layout overflow when multiline input exceeds the reserved region
-- Recent fixes restored scrollback parity, prompt-box styling, local row clearing, and panic-hook cleanup, but the fixed 10-row reserve hack is not acceptable as the final contract.
-- Current implementation direction: reserve height grows with the active draft, overflow is clipped within the reserve, and slack stays below the visible footer until reset.
+- Recent fixes restored scrollback parity, prompt-box styling, local row clearing, and panic-hook cleanup, but the text entry box is still the main instability.
+- Current footer contract is only partially improved:
+  - shrink behavior is closer to the intended reserve model
+  - initial multiline growth can still duplicate prompt/border rows
+  - PTY parity is still blocked on prompt-box correctness
+- Current implementation direction remains: reserve height grows with the active draft, overflow is clipped within the reserve, and slack stays below the visible footer until reset.
 
 ## Next Steps
 
-1. Finish the footer reserve/overflow contract and verify in a real terminal.
+1. Fix duplicate prompt/border rows on initial multiline growth in the text entry box.
 2. Complete the `crates/tui` audit and encode findings as tests/guards.
 3. Close remaining parity items (resize, picker/completer clearing, cancel flows, transcript ordering).
-4. Once TUI is stable enough to dogfood, start `tk-43cd` (persist rendered display entries).
-5. ACP starts only after TUI/core agent are stable enough to support a new backend layer.
+4. Run PTY/manual checklist only after the text entry box is stable enough to trust.
+5. Once TUI is stable enough to dogfood, start `tk-43cd` (persist rendered display entries).
+6. ACP starts only after TUI/core agent are stable enough to support a new backend layer.
 
 ## Key References
 

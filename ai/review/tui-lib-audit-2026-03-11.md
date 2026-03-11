@@ -30,13 +30,19 @@ The custom prompt-box footer computed input height directly from visual lines wi
 
 **Required fix:** use one small `FooterLayout` value per frame and derive render rows and cursor clipping from it.
 
+### P1: Multiline growth still duplicates prompt/border rows on first expansion
+
+User validation after the reserve-contract pass showed that shrink behavior improved, but the first multiline growth path still duplicates prompt/border rows in the entry box. This means the footer reserve model is not yet fully correct even after the overflow clamp and reset semantics were introduced.
+
+**Required fix:** audit the growth path specifically: visible-tail selection, footer child ordering, reserve growth timing, and redraw/clear behavior while the composer transitions from one visible row to multiple rows.
+
 ### P2: Panic/sync-update cleanup must remain terminal invariants
 
 The rewrite already hit a panic path in footer rendering. This confirms the older render-safety reviews were correct: panic cleanup and synchronized output lifecycle have to be owned by the terminal/runtime layer, not patched piecemeal in call sites.
 
 ## Immediate Implementation Priorities
 
-1. Lock the footer reserve contract (`tk-ajlv`).
+1. Lock the footer reserve contract and close the remaining multiline growth duplication bug (`tk-ajlv`).
 2. Encode coordinate and layout invariants as tests in `crates/tui` (`tk-s2ib`).
 3. Run PTY/manual parity checklist once multiline, resize, and footer placement are stable (`tk-9yt1`).
 4. Only after that, move to session/display ownership cleanup (`tk-43cd`).
