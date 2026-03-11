@@ -51,10 +51,14 @@
     {
       "ts": "2026-03-11T10:00:54.245Z",
       "msg": "Created explicit follow-on subtasks under the parity umbrella: tk-s2ib (crates/tui coordinate/layout audit), tk-ajlv (inline/footer reserve contract), tk-9yt1 (PTY parity checklist). tk-nxz3 remains the ACP architecture track. Current implementation work is focused on replacing the fixed 10-row reserve hack with a stateful reserve that grows with the current draft and avoids footer overflow."
+    },
+    {
+      "ts": "2026-03-11T10:10:34.153Z",
+      "msg": "User validation on 2026-03-11: footer reserve contract partially improved shrink behavior, but multiline growth still duplicates border/prompt lines when expanding initially. Text entry box remains the main unstable area in tui-work; broad audit still required before parity can be claimed."
     }
   ],
   "created_at": "2026-03-04T13:40:39.358Z",
-  "updated_at": "2026-03-11T10:00:54.245Z",
+  "updated_at": "2026-03-11T10:10:34.153Z",
   "completed_at": null,
   "external": {}
 }
