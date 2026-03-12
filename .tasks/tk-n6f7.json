@@ -1,0 +1,24 @@
+{
+  "project": "tk",
+  "ref": "n6f7",
+  "title": "Evaluate Bubble Tea v2 vs custom Rust TUI for ion",
+  "description": "Research Bubble Tea v2 inline/composer/runtime model, compare against ion's custom Rust TUI issues, and produce an architecture decision doc covering all-Go vs custom Rust TUI.",
+  "status": "active",
+  "priority": 1,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [
+    {
+      "ts": "2026-03-12T23:40:14.233Z",
+      "msg": "Created durable research note ai/research/bubbletea-v2-vs-rust-tui-host-2026-03-12.md capturing current Bubble Tea v2 facts, ACP library support, ion-local TUI failure modes, and the live option set (all Go vs Go host + Rust core vs continued custom Rust TUI)."
+    }
+  ],
+  "created_at": "2026-03-12T23:37:40.156Z",
+  "updated_at": "2026-03-12T23:40:14.233Z",
+  "completed_at": null,
+  "external": {}
+}
