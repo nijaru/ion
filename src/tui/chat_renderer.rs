@@ -1,8 +1,25 @@
 use crate::tui::highlight;
 use crate::tui::message_list::{MessagePart, Sender};
 use crate::tui::terminal::{Color, LineBuilder, StyledLine, StyledSpan, TextStyle};
-use crate::tui::{QUEUED_PREVIEW_LINES, sanitize_for_display};
 use unicode_width::UnicodeWidthChar;
+
+const QUEUED_PREVIEW_LINES: usize = 5;
+
+/// Sanitize text for terminal display:
+/// tabs -> spaces, strip carriage returns/control chars, keep newlines.
+fn sanitize_for_display(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\t' => result.push_str("    "),
+            '\r' => {}
+            '\n' => result.push(c),
+            c if c.is_control() => {}
+            c => result.push(c),
+        }
+    }
+    result
+}
 
 pub struct ChatRenderer;
 
@@ -110,9 +127,7 @@ impl ChatRenderer {
                             }
 
                             // Bold name, plain parens, cyan content inside parens
-                            let inner = args
-                                .trim_start_matches('(')
-                                .trim_end_matches(')');
+                            let inner = args.trim_start_matches('(').trim_end_matches(')');
                             entry_lines.push(StyledLine::new(vec![
                                 StyledSpan::raw("• "),
                                 StyledSpan::bold(tool_name.to_string()),
@@ -138,7 +153,10 @@ impl ChatRenderer {
                                 || line.starts_with('@')
                                 || line.starts_with(' '));
 
-                        if line.starts_with(" ✓") || line.starts_with(" ✗") || line.starts_with(" ⎿") {
+                        if line.starts_with(" ✓")
+                            || line.starts_with(" ✗")
+                            || line.starts_with(" ⎿")
+                        {
                             // Result status lines: always dim gray with consistent 2-space indent.
                             // Must be checked before syntax_name to prevent ✓/✗ lines from being
                             // treated as code content (which would add 4-space indent instead of 2).

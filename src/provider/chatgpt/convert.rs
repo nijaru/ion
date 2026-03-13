@@ -1,8 +1,6 @@
 //! Conversion helpers for ChatGPT Responses API.
 
-use super::types::{
-    ParsedEvent, ResponseContent, ResponseInputItem, ResponsesRequest,
-};
+use super::types::{ParsedEvent, ResponseContent, ResponseInputItem, ResponsesRequest};
 use crate::provider::types::{ChatRequest, ContentBlock, Role, ToolCallEvent};
 use serde_json::Value;
 

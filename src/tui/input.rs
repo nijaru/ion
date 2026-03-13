@@ -1,7 +1,7 @@
 //! Input handling for the TUI composer.
 
-use crate::tui::terminal::{StyledLine, StyledSpan};
 use crate::tui::App;
+use crate::tui::terminal::{StyledLine, StyledSpan};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 fn git_output(working_dir: &std::path::Path, args: &[&str]) -> Option<String> {
@@ -147,12 +147,15 @@ impl App {
 
             // Navigation: Cmd+Left/Right (macOS) for visual line start/end (wrapped lines)
             KeyCode::Left if super_key => {
+                let width = self.composer_width();
                 self.input_state
-                    .move_to_visual_line_start(&self.input_buffer);
+                    .move_to_visual_line_start(&self.input_buffer, width);
                 false
             }
             KeyCode::Right if super_key => {
-                self.input_state.move_to_visual_line_end(&self.input_buffer);
+                let width = self.composer_width();
+                self.input_state
+                    .move_to_visual_line_end(&self.input_buffer, width);
                 false
             }
 
@@ -238,11 +241,17 @@ impl App {
         }
     }
 
+    /// Compute the usable text width for the composer at the current terminal width.
+    fn composer_width(&self) -> usize {
+        (self.term_width.saturating_sub(3)) as usize
+    }
+
     /// Handle Up arrow key: cursor movement, queued message recall, or history.
     pub(super) fn handle_input_up(&mut self) -> bool {
         let input_empty = self.input_is_empty();
         // Try visual line movement first (handles both wrapped and newline-separated)
-        if !input_empty && self.input_state.move_up(&self.input_buffer) {
+        let width = self.composer_width();
+        if !input_empty && self.input_state.move_up(&self.input_buffer, width) {
             return true;
         }
 
@@ -280,7 +289,8 @@ impl App {
     /// Handle Down arrow key: cursor movement or history navigation.
     pub(super) fn handle_input_down(&mut self) -> bool {
         // Try visual line movement first (handles both wrapped and newline-separated)
-        if self.input_state.move_down(&self.input_buffer) {
+        let width = self.composer_width();
+        if self.input_state.move_down(&self.input_buffer, width) {
             return true;
         }
 

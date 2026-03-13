@@ -2,74 +2,52 @@
 
 ## Current State
 
-| Metric    | Value                         | Updated    |
-| --------- | ----------------------------- | ---------- |
-| Phase     | Dogfood readiness             | 2026-02-26 |
-| Status    | Stable — TUI work on branch   | 2026-02-26 |
-| Toolchain | stable                        | 2026-01-22 |
-| Tests     | 511 passing (`cargo test -q`) | 2026-02-20 |
-| Clippy    | clean                         | 2026-02-19 |
+| Metric | Value | Updated |
+| --- | --- | --- |
+| Phase | Active rewrite: build the Go host for real and judge Bubble Tea v2 by execution, not theory | 2026-03-12 |
+| Status | `codex/go-rewrite-host` is the active implementation branch | 2026-03-12 |
+| Active branch | `codex/go-rewrite-host` | 2026-03-12 |
+| Go host | `go-host/` now has real app/backend/session package boundaries, streamed backend events, and app-level tests | 2026-03-12 |
+| Rust TUI | `tui-work` remains the fallback reference branch, but is no longer the active direction | 2026-03-12 |
 
-## Branch Strategy
+## Active Work
 
-- **`main`** — stable rnk-based TUI, tagged `stable-rnk` (`c6c3268`)
-- **`tui-work`** — ongoing inline-mode TUI rewrite (broken, WIP); merge back when proven
+1. `tk-3bd5` (p1): build the Go rewrite host for real on `codex/go-rewrite-host`
+2. `tk-n6f7` (p1): Bubble Tea v2 decision/research track and architecture notes
+3. `tk-nxz3` (p3): ACP architecture for external coding agents
+4. `tk-avhl` (p1): Rust TUI parity work remains as reference context on `tui-work`
 
-## Completed This Session (2026-02-20)
+## Current Findings
 
-- **Chat rendering enhancements** (tk-s2xv, tk-xj3g, tk-9ar3, tk-7kqq, tk-avmd) — 5 tasks complete, 511 tests passing:
-  - Strikethrough (`~~text~~`) — `with_strikethrough()` builder + `Tag::Strikethrough` in markdown
-  - Task list checkboxes (`- [x]` / `- [ ]`) — `ENABLE_TASKLISTS` + `Event::TaskListMarker` → `☑`/`☐`
-  - `table.rs` display_width consistency — replaced `UnicodeWidthStr` with `crate::tui::util::display_width`
-  - `direct.rs` display_width — selector column alignment uses `display_width` + explicit padding
-  - Visual token bar — `render_token_bar` in util.rs; status line shows `██████ 45%`
-
-- **TUI render layout bugs fixed** (tk-3yus) — wrap width mismatch in `calculate_input_height` (was width-6, now width-INPUT_MARGIN=3); selector column header uses `display_width`; status line drop-levels use `display_width` for model/project/branch/think; `scroll_to_cursor` moved inside `content_width>0` guard.
-
-- **// skill commands** (tk-9tig) — `//` prefix opens green skill completer; `/` stays cyan builtins.
-  Skills loaded at startup from `~/.agents/skills`, `~/.ion/skills`, `.ion/skills`.
-  `//skill-name [args]` activates skill with `$ARGUMENTS`/`$0`/`$1` substitution.
-  New frontmatter: `user-invocable`, `argument-hint`. `~/.agents/AGENTS.md` added to instruction loader.
-
-## Completed Previous Session
-
-- **MCP tools callable** — `all_tool_definitions()` on `ToolOrchestrator` now includes MCP tools.
-  LLM can call them directly; `mcp_tools` for search only. System prompt updated.
-
-- **Selector column headers + gap fix** — `column_header` field uses the wasted overhead slot.
-  Provides Org/Ctx/In/Out columns on model picker, ID/Auth on provider, Directory on session.
-  Fixed 2-line gap after selector dismissal.
-
-- **Tool quick wins:**
-  - guard: `sudo`/`doas` prefix stripped before `analyze_command`; blocked in Read mode
-  - list: MAX_RESULTS=2000 cap with truncation message
-  - glob: optional `path` parameter to restrict search scope
-
-- **Persist completion summary** (tk-zqsw) — DB migration v4 adds completion columns to sessions.
-  Saved after each completed task, restored on `--continue` so progress line isn't blank.
-
-## Blockers
-
-- None
+- The project is now actively exploring an all-Go rewrite path rather than continuing to default to the custom Rust TUI.
+- The current question is no longer whether Bubble Tea v2 is interesting; it is whether it holds up when we build ion's host for real.
+- `go-host/` now has:
+  - an app package
+  - a backend boundary
+  - session entry types
+  - a transcript viewport
+  - a multiline composer
+  - footer/status rendering
+  - streamed backend events
+  - app-level tests for transcript/layout behavior
+- Practical finding from the first real runtime pass: Bubble Tea's textarea gives us a stable multiline composer immediately. The remaining work is making it feel like ion, not fighting corruption or panic-level footer bugs.
+- The next meaningful checkpoint is a real session/backend boundary in place of the fake backend, shaped so it can later support ACP or a native ion runtime.
+- The custom Rust TUI still provides useful lessons, but it is no longer the main implementation bet.
 
 ## Next Steps
 
-1. **tk-43cd** (p1): Persist MessageList display entries — critical for session resume and UI state
-2. **tk-n3q8** (p2): read tool decodes all lines past offset/limit — performance/context window fix
-3. **tk-3fm2** (p2): DeepSeek cache token field names differ — fix token metrics
-4. **tk-u9v6** (p2): Remove Gemini CLI OAuth implementation — TOS violation risk
-5. **tk-ww4t** (p2): Formalize SQLite migrations for session store
-6. **tk-ioxh** (p2): Evaluate async subagent execution model — unblocks multi-agent architecture
+1. Replace the fake backend with a more realistic session boundary and event model.
+2. Improve transcript/composer/footer behavior until the Go host feels like ion rather than a framework sample.
+3. Decide how native ion runtime and ACP-backed external agents fit behind the same host boundary.
+4. Once the host shape is solid, decide whether the rest of ion should move to Go as well.
 
 ## Key References
 
-| Topic                       | Location                                            |
-| --------------------------- | --------------------------------------------------- |
-| Codex CLI analysis          | `ai/research/codex-cli-system-prompt-tools-2026.md` |
-| Prompt survey (5 agents)    | `ai/research/system-prompt-survey-2026-02.md`       |
-| Tool architecture survey    | `ai/research/tool-architecture-survey-2026-02.md`   |
-| Tool review                 | `ai/review/tool-builtin-review-2026-02-14.md`       |
-| TUI render review           | `ai/review/tui-render-layout-review-2026-02-20.md`  |
-| Chat rendering enhancements | `ai/design/chat-rendering-enhancements.md`          |
-| TUI v3 architecture         | `ai/design/tui-v3-architecture-2026-02.md`          |
-| Config system design        | `ai/design/config-system.md`                        |
+| Topic | Location |
+| --- | --- |
+| Active rewrite task | `.tasks/tk-3bd5.json` |
+| Bubble Tea research | `.tasks/tk-n6f7.json` |
+| Bubble Tea decision note | `ai/research/bubbletea-v2-vs-rust-tui-host-2026-03-12.md` |
+| Go rewrite host | `go-host/` |
+| ACP architecture tracker | `.tasks/tk-nxz3.json` |
+| Rust TUI audit reference | `ai/review/tui-lib-audit-2026-03-11.md` |

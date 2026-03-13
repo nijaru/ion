@@ -3,16 +3,12 @@
 //! Provides `StyledSpan`, `StyledLine`, and `LineBuilder` for building
 //! styled terminal output.
 
-use crate::tui::rnk_text::render_no_wrap_text_line;
-use rnk::components::{Span as RnkSpan, Text};
-use rnk::core::Color as RnkColor;
 use std::io::{self, Write};
-use unicode_width::UnicodeWidthChar;
 
 /// Internal color model for TUI styled spans.
 ///
-/// Mirrors commonly used ANSI color names (including dark/bright variants)
-/// while mapping directly to RNK colors at render time.
+/// Uses the same naming convention as `crossterm::style::Color`; `ansi::map_color`
+/// provides the direct conversion.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Color {
     Reset,
@@ -34,30 +30,6 @@ pub enum Color {
     Grey,
     Rgb { r: u8, g: u8, b: u8 },
     AnsiValue(u8),
-}
-
-fn map_color(color: Color) -> RnkColor {
-    match color {
-        Color::Reset => RnkColor::Reset,
-        Color::Black => RnkColor::Black,
-        Color::DarkGrey => RnkColor::BrightBlack,
-        Color::Red => RnkColor::BrightRed,
-        Color::DarkRed => RnkColor::Red,
-        Color::Green => RnkColor::BrightGreen,
-        Color::DarkGreen => RnkColor::Green,
-        Color::Yellow => RnkColor::BrightYellow,
-        Color::DarkYellow => RnkColor::Yellow,
-        Color::Blue => RnkColor::BrightBlue,
-        Color::DarkBlue => RnkColor::Blue,
-        Color::Magenta => RnkColor::BrightMagenta,
-        Color::DarkMagenta => RnkColor::Magenta,
-        Color::Cyan => RnkColor::BrightCyan,
-        Color::DarkCyan => RnkColor::Cyan,
-        Color::White => RnkColor::BrightWhite,
-        Color::Grey => RnkColor::White,
-        Color::Rgb { r, g, b } => RnkColor::Rgb(r, g, b),
-        Color::AnsiValue(v) => RnkColor::Ansi256(v),
-    }
 }
 
 /// Lightweight text style model used throughout TUI chat rendering.
@@ -87,39 +59,6 @@ impl TextStyle {
             reverse: false,
         }
     }
-}
-
-fn display_width(text: &str) -> usize {
-    text.chars().filter_map(UnicodeWidthChar::width).sum()
-}
-
-fn to_rnk_span(span: &StyledSpan) -> RnkSpan {
-    let mut out = RnkSpan::new(span.content.clone());
-    if let Some(color) = span.style.foreground_color {
-        out = out.color(map_color(color));
-    }
-    if let Some(bg) = span.style.background_color {
-        out = out.background(map_color(bg));
-    }
-    if span.style.bold {
-        out = out.bold();
-    }
-    if span.style.dim {
-        out = out.dim();
-    }
-    if span.style.italic {
-        out = out.italic();
-    }
-    if span.style.underlined {
-        out = out.underline();
-    }
-    if span.style.crossed_out {
-        out = out.strikethrough();
-    }
-    if span.style.reverse {
-        out = out.inverse();
-    }
-    out
 }
 
 /// A styled span of text.
@@ -218,11 +157,15 @@ impl StyledSpan {
         self
     }
 
+    /// Plain text content without ANSI escapes.
+    #[must_use]
+    pub fn plain_text(&self) -> &str {
+        &self.content
+    }
+
     /// Write this span to a writer.
     pub fn write_to<W: Write>(&self, w: &mut W) -> io::Result<()> {
-        let span = to_rnk_span(self);
-        let width = display_width(&self.content).max(1);
-        let rendered = render_no_wrap_text_line(Text::spans(vec![span]), width);
+        let rendered = crate::tui::ansi::apply_style(&self.content, &self.style);
         write!(w, "{rendered}")
     }
 }
@@ -272,17 +215,10 @@ impl StyledLine {
         if self.spans.is_empty() {
             return Ok(());
         }
-
-        let mut spans = Vec::with_capacity(self.spans.len());
-        let mut line_width = 0usize;
-
         for span in &self.spans {
-            line_width += display_width(&span.content);
-            spans.push(to_rnk_span(span));
+            let rendered = crate::tui::ansi::apply_style(&span.content, &span.style);
+            write!(w, "{rendered}")?;
         }
-
-        let rendered = render_no_wrap_text_line(Text::spans(spans), line_width.max(1));
-        write!(w, "{rendered}")?;
         Ok(())
     }
 
@@ -294,19 +230,23 @@ impl StyledLine {
         if self.spans.is_empty() {
             return Ok(());
         }
-
         let max_cells = width.saturating_sub(1) as usize;
         if max_cells == 0 {
             return Ok(());
         }
-
-        let mut spans = Vec::with_capacity(self.spans.len());
+        let mut remaining = max_cells;
         for span in &self.spans {
-            spans.push(to_rnk_span(span));
+            if remaining == 0 {
+                break;
+            }
+            let clipped = crate::tui::text::truncate_to_width(&span.content, remaining);
+            let used = crate::tui::text::display_width(&clipped);
+            if !clipped.is_empty() {
+                let rendered = crate::tui::ansi::apply_style(&clipped, &span.style);
+                write!(w, "{rendered}")?;
+            }
+            remaining = remaining.saturating_sub(used);
         }
-
-        let rendered = render_no_wrap_text_line(Text::spans(spans), max_cells);
-        write!(w, "{rendered}")?;
         Ok(())
     }
 
@@ -341,6 +281,37 @@ impl StyledLine {
     /// Prepend a span to the beginning of this line.
     pub fn prepend(&mut self, span: StyledSpan) {
         self.spans.insert(0, span);
+    }
+
+    /// All spans' plain text concatenated (no ANSI escapes).
+    #[must_use]
+    pub fn plain_text(&self) -> String {
+        self.spans.iter().map(|s| s.content.as_str()).collect()
+    }
+
+    /// Render this line to a string with ANSI escape codes.
+    #[must_use]
+    pub fn to_ansi_string(&self) -> String {
+        let mut buf = Vec::new();
+        let _ = self.write_to(&mut buf);
+        String::from_utf8_lossy(&buf).into_owned()
+    }
+
+    /// Render this line to a width-constrained string with ANSI escape codes.
+    #[must_use]
+    pub fn to_ansi_string_with_width(&self, width: u16) -> String {
+        let mut buf = Vec::new();
+        let _ = self.write_to_width(&mut buf, width);
+        String::from_utf8_lossy(&buf).into_owned()
+    }
+
+    /// Total display width of all spans in terminal cells.
+    #[must_use]
+    pub fn display_width(&self) -> usize {
+        self.spans
+            .iter()
+            .map(|s| crate::tui::text::display_width(&s.content))
+            .sum()
     }
 }
 
@@ -464,9 +435,47 @@ mod tests {
     }
 
     #[test]
-    fn test_color_mapping_white_grey_semantics() {
-        assert_eq!(map_color(Color::White), RnkColor::BrightWhite);
-        assert_eq!(map_color(Color::Grey), RnkColor::White);
-        assert_eq!(map_color(Color::DarkGrey), RnkColor::BrightBlack);
+    fn test_color_enum_variants() {
+        let _ = Color::White;
+        let _ = Color::Grey;
+        let _ = Color::DarkGrey;
+    }
+
+    #[test]
+    fn styled_span_plain_text() {
+        let span = StyledSpan::colored("hello", Color::Green);
+        assert_eq!(span.plain_text(), "hello");
+    }
+
+    #[test]
+    fn styled_line_plain_text_concatenates_spans() {
+        let line = LineBuilder::new()
+            .colored("> ", Color::Cyan)
+            .raw("hello world")
+            .build();
+        assert_eq!(line.plain_text(), "> hello world");
+    }
+
+    #[test]
+    fn styled_line_plain_text_empty() {
+        assert_eq!(StyledLine::empty().plain_text(), "");
+    }
+
+    #[test]
+    fn styled_line_display_width_ascii() {
+        let line = StyledLine::raw("hello");
+        assert_eq!(line.display_width(), 5);
+    }
+
+    #[test]
+    fn styled_line_display_width_multi_span() {
+        let line = LineBuilder::new().raw("hi").raw(" there").build();
+        assert_eq!(line.display_width(), 8);
+    }
+
+    #[test]
+    fn styled_line_display_width_cjk() {
+        let line = StyledLine::raw("界a");
+        assert_eq!(line.display_width(), 3);
     }
 }

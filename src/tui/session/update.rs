@@ -96,6 +96,7 @@ impl App {
                     self.is_running = false;
                     self.interaction.cancel_pending = None;
                     self.last_error = None;
+                    self.pending_ask_user = None;
                     restore_queued_input(self);
                     self.message_queue = None;
                     // End thinking tracking
@@ -113,6 +114,7 @@ impl App {
                     self.save_task_summary(was_cancelled);
                     self.is_running = false;
                     self.interaction.cancel_pending = None;
+                    self.pending_ask_user = None;
                     restore_queued_input(self);
                     self.message_queue = None;
                     self.task.clear();
@@ -273,6 +275,24 @@ impl App {
             }
         }
 
+        // Poll ask_user requests from agent (agent blocks until user responds)
+        if let Some(ref mut rx) = self.ask_user_rx {
+            if let Ok(req) = rx.try_recv() {
+                use crate::tui::message_list::{MessageEntry, Sender};
+                let mut display = req.question.clone();
+                if !req.options.is_empty() {
+                    display.push('\n');
+                    for (i, opt) in req.options.iter().enumerate() {
+                        display.push_str(&format!("  {}. {}\n", i + 1, opt));
+                    }
+                }
+                self.message_list
+                    .push_entry(MessageEntry::new(Sender::System, display));
+                self.pending_ask_user = Some(req.response_tx);
+                self.message_list.scroll_to_bottom();
+            }
+        }
+
         // Poll session updates (preserves conversation history).
         // Don't re-save summary — AgentEvent::Finished already saved it
         // and cleared task.start_time, so a second save would overwrite
@@ -280,6 +300,7 @@ impl App {
         if let Ok(updated_session) = self.session_rx.try_recv() {
             self.is_running = false;
             self.interaction.cancel_pending = None;
+            self.pending_ask_user = None;
             restore_queued_input(self);
             self.message_queue = None;
             self.task.clear();
@@ -288,6 +309,7 @@ impl App {
             if let Err(e) = self.store.save(&updated_session) {
                 tracing::warn!("Failed to save session: {}", e);
             }
+            self.persist_display_entries(&updated_session.id);
             self.session = updated_session;
             self.refresh_startup_header_cache();
         }

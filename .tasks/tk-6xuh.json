@@ -1,0 +1,32 @@
+{
+  "project": "tk",
+  "ref": "6xuh",
+  "title": "[TUI] Review tui-work and attempt rebase onto main",
+  "description": "Assess rewrite branch health, identify major regressions, and attempt local rebase of tui-work onto main with conflict summary and recommendation.",
+  "status": "done",
+  "priority": 2,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [
+    {
+      "ts": "2026-03-04T13:37:13.391Z",
+      "msg": "Rebased tui-work onto main successfully. Replayed product commits and skipped metadata-only commits (ai/STATUS, ai/* docs, .tasks churn). New history is 51 commits ahead of main, 0 behind. Range-diff confirms code commits preserved."
+    },
+    {
+      "ts": "2026-03-04T13:37:13.415Z",
+      "msg": "Validation: main cargo test -q (511 pass), rebased tui-work cargo test -q (516 pass). cargo clippy --all-targets -D warnings fails on branch with 3 lint errors in crates/tui/src/app.rs (collapsible_if) and crates/tui/src/widgets/canvas.rs (type_complexity)."
+    },
+    {
+      "ts": "2026-03-04T13:37:13.439Z",
+      "msg": "Review finding: tool result rendering regression. src/tui/message_list.rs appends formatted tool result to MessageEntry content, but src/tui/ion_app.rs entry_to_conversation_entry() maps Sender::Tool with tool_meta to ConversationEntry::tool_call using only header label, dropping result content in scrollback. This likely explains visual mismatch from main."
+    }
+  ],
+  "created_at": "2026-03-04T13:27:12.739Z",
+  "updated_at": "2026-03-04T13:37:15.336Z",
+  "completed_at": "2026-03-04T13:37:15.336Z",
+  "external": {}
+}

@@ -2,10 +2,11 @@
 
 ## Overview
 
-Fast, lightweight TUI coding agent in Rust.
+ion is currently in architecture transition. The original implementation is a Rust CLI/TUI agent, and the active rewrite branch is exploring a full Go host built on Bubble Tea v2.
 
-**Runtime**: Rust (Stable, Edition 2024)
-**Distribution**: Single static binary
+**Current production line**: Rust CLI/TUI (`main`, `tui-work`)
+**Active rewrite line**: Go host prototype/rewrite (`codex/go-rewrite-host`)
+**Decision in progress**: whether ion should become all-Go, or keep only part of the system in Rust
 
 ```
 User Request → ion CLI → Agent Core → Tool Execution → Response
@@ -50,29 +51,12 @@ Provider quirks handled in `openai_compat/quirks.rs`:
 
 ### Agent Layer
 
-Core multi-turn loop with decomposed phases:
+Current direct providers remain the primary execution path, but long-term backend structure is now split conceptually into:
 
-1. **Response Phase**: Stream provider response, collect deltas, extract tool calls
-2. **Tool Phase**: Execute tool calls via orchestrator
-3. **State Phase**: Commit assistant and tool turns to history
+- **Direct model backends**: native HTTP providers (`anthropic`, `openai_compat`, `google`, etc.)
+- **Agent backends**: external agent runtimes that own approvals, tool lifecycle, and subscription auth semantics (future ACP path)
 
-### TUI Layer (RNK-first rendering + crossterm control)
-
-RNK is now the primary text/style renderer for TUI surfaces. crossterm remains responsible for
-terminal control (raw mode, cursor movement, clear/scroll, event polling).
-
-- **Chat history**: Append-only transcript in native terminal scrollback.
-- **Bottom UI**: Ephemeral UI plane (progress/input/status) rendered each frame near terminal bottom.
-- **Input**: Custom composer with rope-backed multiline editing.
-- **Markdown**: pulldown-cmark + custom wrap/indent handling before terminal writes.
-
-Current resize/reflow contract:
-
-- Reflow repaints from canonical entries at current width (viewport-safe, no full transcript replay).
-- Streaming carryover tracks committed lines by width to avoid duplicate appends after resize.
-- Header content is static (version + cwd); dynamic location (`cwd [branch]`) is shown in status line.
-
-Primary architecture target is documented in `ai/design/tui-v3-architecture-2026-02.md`.
+ACP work should land as an agent-backend layer above provider clients, not as another provider implementation.
 
 ### Tool Framework
 
@@ -122,3 +106,24 @@ Conversion to provider format happens at request time in each client's `build_re
 - **Native**: Leverage terminal scrollback for history
 - **Simple**: Prefer clear+reprint over complex diffing
 - **Provider-agnostic**: Canonical message format, convert at edges
+
+
+## Rewrite Direction (2026-03-12)
+
+The active implementation experiment is now `go-host/`, built with Bubble Tea v2 and Bubbles v2.
+
+Current intent:
+
+- build the host loop for real rather than maintaining a toy demo
+- shape the host/backend boundary so it can later support:
+  - a native ion agent runtime
+  - ACP-backed external agents
+  - subscription-safe hosted agent flows
+- judge the rewrite by actual UX and development velocity, especially in:
+  - multiline composer behavior
+  - transcript/footer interaction
+  - resize and redraw correctness
+  - session/backend event modeling
+
+This does not yet settle the full-system language decision, but it does mean the Go rewrite is now the active path being exercised in code.
+

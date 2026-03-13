@@ -1,0 +1,32 @@
+{
+  "project": "tk",
+  "ref": "n6f7",
+  "title": "Evaluate Bubble Tea v2 vs custom Rust TUI for ion",
+  "description": "Research Bubble Tea v2 inline/composer/runtime model, compare against ion's custom Rust TUI issues, and produce an architecture decision doc covering all-Go vs custom Rust TUI.",
+  "status": "active",
+  "priority": 1,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [
+    {
+      "ts": "2026-03-12T23:40:14.233Z",
+      "msg": "Created durable research note ai/research/bubbletea-v2-vs-rust-tui-host-2026-03-12.md capturing current Bubble Tea v2 facts, ACP library support, ion-local TUI failure modes, and the live option set (all Go vs Go host + Rust core vs continued custom Rust TUI)."
+    },
+    {
+      "ts": "2026-03-13T00:20:52.397Z",
+      "msg": "Bubble Tea research track is now feeding an active implementation branch; project memory updated to treat Go host work as the main execution path under evaluation."
+    },
+    {
+      "ts": "2026-03-13T00:24:49.613Z",
+      "msg": "Practical finding from go-host runtime check: Bubble Tea textarea gives a stable multiline composer immediately, with visible slack rows rather than Rust-style corruption. Remaining work is styling/host behavior, not basic safety."
+    }
+  ],
+  "created_at": "2026-03-12T23:37:40.156Z",
+  "updated_at": "2026-03-13T00:24:49.613Z",
+  "completed_at": null,
+  "external": {}
+}

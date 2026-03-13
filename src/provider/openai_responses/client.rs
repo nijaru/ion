@@ -32,10 +32,7 @@ impl OpenAIResponsesClient {
         let value: serde_json::Value = self.http.post_json("/responses", &body).await?;
 
         let content = extract_output(&value);
-        let usage = value
-            .get("usage")
-            .map(extract_usage)
-            .unwrap_or_default();
+        let usage = value.get("usage").map(extract_usage).unwrap_or_default();
 
         Ok(CompletionResponse {
             message: Message {
@@ -112,8 +109,8 @@ impl OpenAIResponsesClient {
                                 let _ = tx.send(StreamEvent::ToolCall(call)).await;
                             }
                         } else {
-                            let arguments = serde_json::from_str(&arguments)
-                                .unwrap_or(serde_json::Value::Null);
+                            let arguments =
+                                serde_json::from_str(&arguments).unwrap_or(serde_json::Value::Null);
                             emitted_tool_ids.insert(call_id.clone());
                             let _ = tx
                                 .send(StreamEvent::ToolCall(

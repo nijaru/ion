@@ -3,9 +3,7 @@ pub mod permissions;
 pub mod types;
 
 pub use permissions::{PermissionMatrix, PermissionStatus};
-pub use types::{
-    DangerLevel, Tool, ToolContext, ToolError, ToolMode, ToolResult,
-};
+pub use types::{DangerLevel, Tool, ToolContext, ToolError, ToolMode, ToolResult};
 
 use crate::hook::{HookContext, HookPoint, HookRegistry, HookResult};
 use std::collections::HashMap;
@@ -223,6 +221,7 @@ impl ToolOrchestrator {
         orch.register_tool(Box::new(builtin::EditTool));
         orch.register_tool(Box::new(builtin::GlobTool));
         orch.register_tool(Box::new(builtin::GrepTool));
+        orch.register_tool(Box::new(builtin::AstGrepTool));
         orch.register_tool(Box::new(builtin::ListTool));
         orch.register_tool(Box::new(builtin::BashTool));
         orch.register_tool(Box::new(builtin::WebFetchTool::new()));

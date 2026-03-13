@@ -155,7 +155,8 @@ impl Tool for BashTool {
 
         // Structured output with metadata for model signal
         let total_lines = raw_output.lines().count();
-        let content = format!("Exit code: {exit_code}\nOutput lines: {total_lines}\n\n{raw_output}");
+        let content =
+            format!("Exit code: {exit_code}\nOutput lines: {total_lines}\n\n{raw_output}");
 
         Ok(ToolResult {
             content,

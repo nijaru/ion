@@ -1,6 +1,56 @@
+## 2026-03-12: Build the Bubble Tea v2 Rewrite Path for Real
+
+**Context**: The custom Rust TUI continues to consume significant effort in the exact host/runtime layer that Bubble Tea v2 is designed to simplify: inline ownership, multiline composer behavior, redraw/clear contracts, and resize behavior. The user explicitly wants to decide now, not later, whether the project should move toward Go.
+
+**Decision**: Treat `codex/go-rewrite-host` as a real implementation branch rather than a toy spike. Build the Go host until it is representative enough to make an architecture call on an all-Go future.
+
+**Rationale**: Theory is no longer enough. The right comparison is not docs-vs-docs, but whether a real Bubble Tea host for ion becomes easier to evolve and trust than the custom Rust TUI. This keeps the decision grounded in execution rather than preference.
+
+---
+
+## 2026-03-11: Keep `crates/tui` as the Direction and Harden It In-Place
+
+**Context**: `tui-work` reached functional parity in some areas, but footer, resize, and inline rendering issues exposed contract flaws in the new TUI stack. Reverting to the old renderer would discard useful architecture progress and keep correctness problems hidden in ad hoc rendering paths.
+
+**Decision**: Keep `crates/tui` as the target architecture and treat current work as a full correctness/parity audit rather than a sequence of isolated UI fixes.
+
+**Rationale**: The rewrite already provides the right abstraction boundary (terminal/runtime/layout/widgets). The immediate need is to harden the coordinate, reserve-height, and render-safety contracts so the stack becomes trustworthy enough to dogfood and merge.
+
+---
+
+## 2026-03-11: TUI Stability Comes Before Core-Agent Cleanup and ACP
+
+**Context**: Session/display ownership cleanup (`tk-43cd`) and ACP backend work both depend on a trustworthy TUI/runtime surface. The branch is not there yet; multiline footer behavior, resize behavior, and PTY parity are still being closed.
+
+**Decision**: Sequence work as TUI stabilization first, then core agent/session display ownership cleanup, then ACP backend design and implementation.
+
+**Rationale**: Starting ACP or deeper agent refactors before the UI/runtime is stable would make debugging and dogfooding far harder, and would widen the blast radius of every regression.
+
+---
+
+## 2026-03-11: ACP Is an Agent Backend Layer, Not a Provider
+
+**Context**: Supporting Claude Code, Gemini CLI, and potentially Codex through ACP is attractive because it keeps authentication, approvals, and subscription usage inside vendor-supported flows. These integrations expose agent turns, approvals, and tool events rather than raw completion APIs.
+
+**Decision**: Model ACP as a protocol-first agent backend layer above direct model providers, not as another OpenAI-style provider.
+
+**Rationale**: This keeps the provider layer focused on raw model APIs and lets ACP backends own session initialization, streaming events, approvals, tool lifecycle, and cwd/env/session mapping in a way that matches the actual external CLIs.
+
+---
+
 # ion Decisions
 
 > Decision records for ion development. Pre-February decisions archived in `ai/DECISIONS-archive-jan.md`.
+
+## 2026-03-04: Rebase `tui-work` onto `main` and Drop Metadata-Only Commits
+
+**Context**: `tui-work` had large divergence from `main` and mixed product changes with heavy `ai/*` and `.tasks/*` context churn. Rebasing directly with all commits produced repeated conflicts in status/task metadata rather than product code.
+
+**Decision**: Rebase `tui-work` onto `main` while preserving product commits and skipping metadata-only commits (`ai/*` session updates and `.tasks/*` churn).
+
+**Rationale**: Keeps the branch technically up to date and reviewable without importing stale context noise. This also made parity work tractable by isolating real code deltas from historical bookkeeping changes.
+
+---
 
 ## 2026-03-03: Deprioritize OS Sandboxing
 
