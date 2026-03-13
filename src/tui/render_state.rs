@@ -568,11 +568,13 @@ mod tests {
     fn chat_position_header_inserted() {
         assert!(!ChatPosition::Empty.header_inserted());
         assert!(ChatPosition::Header { anchor: 3 }.header_inserted());
-        assert!(ChatPosition::Tracking {
-            next_row: 5,
-            ui_drawn_at: None
-        }
-        .header_inserted());
+        assert!(
+            ChatPosition::Tracking {
+                next_row: 5,
+                ui_drawn_at: None
+            }
+            .header_inserted()
+        );
         assert!(ChatPosition::Scrolling { ui_drawn_at: None }.header_inserted());
     }
 

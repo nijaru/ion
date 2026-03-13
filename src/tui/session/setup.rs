@@ -156,11 +156,10 @@ impl App {
         )));
 
         // Register ask_user tool (agent-to-user clarification channel)
-        let (ask_user_tx, ask_user_rx) =
-            crate::tool::builtin::ask_user::ask_user_channel();
-        orchestrator.register_tool(Box::new(
-            crate::tool::builtin::AskUserTool::new(ask_user_tx),
-        ));
+        let (ask_user_tx, ask_user_rx) = crate::tool::builtin::ask_user::ask_user_channel();
+        orchestrator.register_tool(Box::new(crate::tool::builtin::AskUserTool::new(
+            ask_user_tx,
+        )));
 
         let orchestrator = Arc::new(orchestrator);
 

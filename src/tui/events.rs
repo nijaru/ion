@@ -497,9 +497,7 @@ impl App {
         if cmd_line.starts_with("//") {
             let skill_input = cmd_line.strip_prefix("//").unwrap_or("").trim();
             if !skill_input.is_empty() {
-                let (name, args) = skill_input
-                    .split_once(' ')
-                    .unwrap_or((skill_input, ""));
+                let (name, args) = skill_input.split_once(' ').unwrap_or((skill_input, ""));
                 let agent = self.agent.clone();
                 let name = name.to_string();
                 let args = args.to_string();

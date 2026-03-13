@@ -233,11 +233,13 @@ mod tests {
         completer.activate();
         completer.set_query("mod");
 
-        assert!(completer
-            .state
-            .visible_candidates()
-            .iter()
-            .any(|(cmd, _)| *cmd == "/model"));
+        assert!(
+            completer
+                .state
+                .visible_candidates()
+                .iter()
+                .any(|(cmd, _)| *cmd == "/model")
+        );
     }
 
     #[test]
