@@ -2,128 +2,50 @@
 
 ## Overview
 
-ion is currently in architecture transition. The original implementation is a Rust CLI/TUI agent, and the active rewrite branch is exploring a full Go host built on Bubble Tea v2.
+`ion` is now a Go-first rewrite centered on an inline terminal host built with Bubble Tea v2.
 
-**Current production line**: Rust CLI/TUI (`main`, `tui-work`)
-**Active rewrite line**: Go host prototype/rewrite (`codex/go-rewrite-host`)
-**Decision in progress**: whether ion should become all-Go, or keep only part of the system in Rust
+The architecture is organized around a single host-facing session boundary so the UI can drive:
 
-```
-User Request → ion CLI → Agent Core → Tool Execution → Response
-```
+- a native ion agent runtime
+- ACP-backed external agents
+- later direct API-native execution paths behind the same abstraction
 
-## Module Architecture
+Historical Rust implementation details are archived under `archive/rust/`.
 
-```
-src/
-├── agent/          # Multi-turn agent loop
-├── auth/           # OAuth + credential storage
-├── compaction/     # Context summarization
-├── config/         # TOML config loading
-├── mcp/            # Model Context Protocol client
-├── provider/       # LLM API clients
-│   ├── anthropic/  # Native Anthropic Messages API
-│   ├── openai_compat/  # OpenAI/OpenRouter/Groq/Kimi
-│   ├── http/       # Shared HTTP + SSE utilities
-│   └── ...
-├── session/        # SQLite persistence
-├── skill/          # YAML skill definitions
-├── tool/           # Built-in + MCP tools
-└── tui/            # Terminal UI
+## System Shape
+
+```text
+User
+  -> Go Host (Bubble Tea)
+  -> AgentSession interface
+      -> NativeIonSession
+      -> ACPAgentSession
+  -> Transcript / tools / approvals / plans / persistence
 ```
 
-### Provider Layer (Native HTTP)
+## Active Components
 
-Three protocol implementations:
+| Component | Responsibility |
+| --- | --- |
+| `go-host/` | Inline terminal host, transcript, composer, footer, event loop |
+| `AgentSession` boundary | Typed lifecycle and event model for any backend |
+| `NativeIonSession` | Native ion runtime using direct APIs, tools, memory, and orchestration |
+| `ACPAgentSession` | External agent bridge for Claude Code, Gemini CLI, and similar systems |
+| `ai/` | Durable design memory for the rewrite |
+| `archive/rust/` | Historical implementation and reference docs |
 
-| Protocol  | Providers                                       | Features                       |
-| --------- | ----------------------------------------------- | ------------------------------ |
-| Anthropic | Anthropic                                       | cache_control, thinking blocks |
-| OpenAI    | OpenAI, ChatGPT, OpenRouter, Groq, Kimi, Ollama | provider routing, reasoning    |
-| Google    | Google, Gemini                                  | function calling               |
+## Core Design Principles
 
-Provider quirks handled in `openai_compat/quirks.rs`:
+- **One host, many agent backends**: the UI should not know whether it is talking to a native ion runtime or an external ACP-backed agent.
+- **ACP-shaped, not ACP-wire-native**: session and event types should align with ACP concepts without making raw protocol structs the app’s domain model.
+- **Transcript-first UX**: transcript, composer, footer, progress, tools, and approvals are the product core.
+- **Host/runtime separation**: Bubble Tea state is UI state; agent/session state lives behind the session boundary.
+- **Preserve reusable research**: memory, context, subagents, swarms, RLM, tools, and storage remain first-class future work.
 
-- `max_tokens` vs `max_completion_tokens`
-- `store` field compatibility
-- `developer` vs `system` role
-- `reasoning_content` extraction
+## Current Implementation Priorities
 
-### Agent Layer
-
-Current direct providers remain the primary execution path, but long-term backend structure is now split conceptually into:
-
-- **Direct model backends**: native HTTP providers (`anthropic`, `openai_compat`, `google`, etc.)
-- **Agent backends**: external agent runtimes that own approvals, tool lifecycle, and subscription auth semantics (future ACP path)
-
-ACP work should land as an agent-backend layer above provider clients, not as another provider implementation.
-
-### Tool Framework
-
-- **Built-in**: `read`, `write`, `edit`, `bash`, `glob`, `grep`, `list`
-- **MCP**: Client support for external tool servers
-- **Permission matrix**: Read/Write modes (sandbox-based security)
-
-## Data Model
-
-### Message Types (provider-agnostic)
-
-```rust
-pub enum ContentBlock {
-    Text { text: String },
-    Thinking { thinking: String },
-    ToolCall { id, name, arguments },
-    ToolResult { tool_call_id, content, is_error },
-    Image { media_type, data },
-}
-
-pub struct Message {
-    pub role: Role,  // System, User, Assistant, ToolResult
-    pub content: Arc<Vec<ContentBlock>>,
-}
-```
-
-Conversion to provider format happens at request time in each client's `build_request()`.
-
-### Persistence
-
-```
-~/.ion/
-├── config.toml          # Global settings
-└── data/
-    └── sessions.db      # SQLite with WAL mode
-```
-
-**Tables:**
-
-- `sessions`: metadata (id, working_dir, model, timestamps)
-- `messages`: transcript (role, JSON content, position)
-- `input_history`: global input recall
-
-## Design Principles
-
-- **Minimalist**: Focus on code and chat; avoid UI clutter
-- **Native**: Leverage terminal scrollback for history
-- **Simple**: Prefer clear+reprint over complex diffing
-- **Provider-agnostic**: Canonical message format, convert at edges
-
-
-## Rewrite Direction (2026-03-12)
-
-The active implementation experiment is now `go-host/`, built with Bubble Tea v2 and Bubbles v2.
-
-Current intent:
-
-- build the host loop for real rather than maintaining a toy demo
-- shape the host/backend boundary so it can later support:
-  - a native ion agent runtime
-  - ACP-backed external agents
-  - subscription-safe hosted agent flows
-- judge the rewrite by actual UX and development velocity, especially in:
-  - multiline composer behavior
-  - transcript/footer interaction
-  - resize and redraw correctness
-  - session/backend event modeling
-
-This does not yet settle the full-system language decision, but it does mean the Go rewrite is now the active path being exercised in code.
-
+1. Finalize the host shell behavior.
+2. Replace the fake backend with the canonical session interface.
+3. Implement the first native ion backend in Go.
+4. Add ACP-backed external agents.
+5. Add persistence, memory/context, and higher-order agent orchestration.

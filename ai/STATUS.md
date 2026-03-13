@@ -4,50 +4,55 @@
 
 | Metric | Value | Updated |
 | --- | --- | --- |
-| Phase | Active rewrite: build the Go host for real and judge Bubble Tea v2 by execution, not theory | 2026-03-12 |
-| Status | `codex/go-rewrite-host` is the active implementation branch | 2026-03-12 |
-| Active branch | `codex/go-rewrite-host` | 2026-03-12 |
-| Go host | `go-host/` now has real app/backend/session package boundaries, streamed backend events, and app-level tests | 2026-03-12 |
-| Rust TUI | `tui-work` remains the fallback reference branch, but is no longer the active direction | 2026-03-12 |
+| Phase | Mainline transition to Go rewrite | 2026-03-13 |
+| Status | `main` now tracks the Go/Bubble Tea rewrite direction | 2026-03-13 |
+| Active implementation | `go-host/` | 2026-03-13 |
+| Host state | Transcript, multiline composer, streamed backend scaffold, tool rendering, app tests | 2026-03-13 |
+| Historical checkpoint | `stable-rnk` tag preserved at the last stable RNK-era mainline | 2026-03-13 |
+| Archived implementation | Rust code and Rust-TUI docs moved under `archive/rust/` | 2026-03-13 |
 
 ## Active Work
 
-1. `tk-3bd5` (p1): build the Go rewrite host for real on `codex/go-rewrite-host`
-2. `tk-n6f7` (p1): Bubble Tea v2 decision/research track and architecture notes
-3. `tk-nxz3` (p3): ACP architecture for external coding agents
-4. `tk-avhl` (p1): Rust TUI parity work remains as reference context on `tui-work`
+1. `tk-3bd5` (p1): umbrella Go rewrite program on `main`
+2. `tk-8j82` (p1): define the ACP-shaped `AgentSession` interface
+3. `tk-5fcp` (p1): make the Go host feel like ion in daily use
+4. `tk-n1al` (p1): harden the scripted backend against the session interface
+5. `tk-x1yq` (p1): build the first native ion backend in Go
+6. `tk-mlhe` (p2): build the ACP backend adapter layer
+7. `tk-vmdl` (p2): add transcript/session persistence to the Go host
+8. `tk-qjs2` (p2): design memory and context architecture for the rewrite
+9. `tk-npsw` (p2): design subagents, swarms, and RLM runtime patterns
 
 ## Current Findings
 
-- The project is now actively exploring an all-Go rewrite path rather than continuing to default to the custom Rust TUI.
-- The current question is no longer whether Bubble Tea v2 is interesting; it is whether it holds up when we build ion's host for real.
-- `go-host/` now has:
-  - an app package
-  - a backend boundary
-  - session entry types
-  - a transcript viewport
-  - a multiline composer
-  - footer/status rendering
-  - streamed backend events
-  - app-level tests for transcript/layout behavior
-- Practical finding from the first real runtime pass: Bubble Tea's textarea gives us a stable multiline composer immediately. The remaining work is making it feel like ion, not fighting corruption or panic-level footer bugs.
-- The next meaningful checkpoint is a real session/backend boundary in place of the fake backend, shaped so it can later support ACP or a native ion runtime.
-- The custom Rust TUI still provides useful lessons, but it is no longer the main implementation bet.
+- Bubble Tea v2 is now the chosen host direction, not an evaluation branch.
+- The host should target an ACP-shaped session interface so both native ion execution and external agents fit behind one boundary.
+- The current Go host is already more stable in multiline editing than the Rust TUI path it replaces.
+- The next important transition is replacing the fake backend contract with a real session lifecycle and event model.
+- Archived Rust material remains available for historical context and implementation reference, but should not drive new planning.
 
 ## Next Steps
 
-1. Replace the fake backend with a more realistic session boundary and event model.
-2. Improve transcript/composer/footer behavior until the Go host feels like ion rather than a framework sample.
-3. Decide how native ion runtime and ACP-backed external agents fit behind the same host boundary.
-4. Once the host shape is solid, decide whether the rest of ion should move to Go as well.
+1. Replace the current backend contract with the canonical `AgentSession` interface.
+2. Make the host shell feel like ion: transcript, composer, footer, progress, resize, and scrolling.
+3. Implement the first native ion backend behind that interface.
+4. Add ACP-backed external agent support after the host/session boundary is stable.
+5. Add persistence, memory/context, and advanced agent-runtime features on top of that foundation.
 
 ## Key References
 
 | Topic | Location |
 | --- | --- |
-| Active rewrite task | `.tasks/tk-3bd5.json` |
-| Bubble Tea research | `.tasks/tk-n6f7.json` |
+| Main rewrite task | `.tasks/tk-3bd5.json` |
+| AgentSession task | `.tasks/tk-8j82.json` |
+| Host UX task | `.tasks/tk-5fcp.json` |
+| Host architecture | `ai/design/go-host-architecture.md` |
+| Session interface | `ai/design/session-interface.md` |
+| ACP integration | `ai/design/acp-integration.md` |
+| Native backend | `ai/design/native-ion-agent.md` |
+| Memory and context | `ai/design/memory-and-context.md` |
+| Subagents / swarms / RLM | `ai/design/subagents-swarms-rlm.md` |
+| Rewrite roadmap | `ai/design/rewrite-roadmap.md` |
 | Bubble Tea decision note | `ai/research/bubbletea-v2-vs-rust-tui-host-2026-03-12.md` |
-| Go rewrite host | `go-host/` |
-| ACP architecture tracker | `.tasks/tk-nxz3.json` |
-| Rust TUI audit reference | `ai/review/tui-lib-audit-2026-03-11.md` |
+| Rust TUI audit retained as reference | `ai/review/tui-lib-audit-2026-03-11.md` |
+| Archived Rust implementation | `archive/rust/` |

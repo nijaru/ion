@@ -1,6 +1,10 @@
-# Rust
 target/
-Cargo.lock
+# Archived Rust build output
+archive/rust/target/
+
+# Go build output
+*.test
+.coverprofile
 
 # Worktrees
 .worktrees/

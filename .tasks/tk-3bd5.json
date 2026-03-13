@@ -1,8 +1,8 @@
 {
   "project": "tk",
   "ref": "3bd5",
-  "title": "Go rewrite branch for Bubble Tea v2 host",
-  "description": "Create a dedicated rewrite branch from tui-work to evaluate a real Bubble Tea v2 rewrite path for ion, using a minimal-but-real vertical slice rather than a toy spike.",
+  "title": "Go rewrite program on main",
+  "description": "Umbrella task for the Bubble Tea v2 Go rewrite now that it has been merged into main: transition docs, archive Rust implementation, and drive the new host/session/runtime program.",
   "status": "active",
   "priority": 1,
   "labels": [],
@@ -31,10 +31,18 @@
     {
       "ts": "2026-03-13T00:24:45.940Z",
       "msg": "Reshaped go-host around a streamed backend event contract (status, turn state, stream start/delta/done, append entry). Added tool-role transcript rendering, app tests for stream commit/layout/tool rendering, and confirmed go run launches cleanly in inline mode."
+    },
+    {
+      "ts": "2026-03-13T11:10:27.763Z",
+      "msg": "The rewrite branch has been merged into main. This task now acts as the umbrella program task for the Go/Bubble Tea rewrite on main, not just the original branch creation effort."
+    },
+    {
+      "ts": "2026-03-13T11:12:14.804Z",
+      "msg": "Merged codex/go-rewrite-host into main, rewrote top-level docs around the Go architecture, archived Rust implementation under archive/rust/, preserved stable-rnk, and reset the task program toward Go host / AgentSession / native backend / ACP backend work."
     }
   ],
   "created_at": "2026-03-12T23:52:04.271Z",
-  "updated_at": "2026-03-13T00:24:45.940Z",
+  "updated_at": "2026-03-13T11:12:14.804Z",
   "completed_at": null,
   "external": {}
 }

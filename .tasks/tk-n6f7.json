@@ -3,7 +3,7 @@
   "ref": "n6f7",
   "title": "Evaluate Bubble Tea v2 vs custom Rust TUI for ion",
   "description": "Research Bubble Tea v2 inline/composer/runtime model, compare against ion's custom Rust TUI issues, and produce an architecture decision doc covering all-Go vs custom Rust TUI.",
-  "status": "active",
+  "status": "done",
   "priority": 1,
   "labels": [],
   "assignees": [],
@@ -26,7 +26,7 @@
     }
   ],
   "created_at": "2026-03-12T23:37:40.156Z",
-  "updated_at": "2026-03-13T00:24:49.613Z",
-  "completed_at": null,
+  "updated_at": "2026-03-13T11:10:27.903Z",
+  "completed_at": "2026-03-13T11:10:27.903Z",
   "external": {}
 }

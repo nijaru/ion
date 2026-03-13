@@ -3,7 +3,7 @@
   "ref": "nxz3",
   "title": "ACP support for external coding CLIs",
   "description": "Add an ACP-based integration layer so ion can drive external coding agents like Claude Code, Gemini CLI, and potentially Codex using user subscriptions and provider-native ToS-compliant transports instead of direct model API calls. Design should cover session mapping, streaming/events, tool approvals, cwd/sandbox semantics, and fallback adapters where ACP support differs by client.",
-  "status": "open",
+  "status": "done",
   "priority": 3,
   "labels": [],
   "assignees": [],
@@ -13,7 +13,7 @@
   "due_date": null,
   "logs": [],
   "created_at": "2026-03-11T09:35:44.964Z",
-  "updated_at": "2026-03-11T09:35:44.964Z",
-  "completed_at": null,
+  "updated_at": "2026-03-13T11:11:44.077Z",
+  "completed_at": "2026-03-13T11:11:44.077Z",
   "external": {}
 }

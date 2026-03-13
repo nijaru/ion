@@ -1,60 +1,53 @@
 # ion
 
-Fast, lightweight TUI coding agent.
+> **Warning:** `ion` is currently transitioning to a Go/Bubble Tea v2 rewrite. The architecture, CLI surface, and internal boundaries are in flux. If you need the last known stable Rust/RNK-era checkpoint, use the Git tag `stable-rnk`.
 
-> **Note:** ion is in early development. Expect bugs, incomplete features, and breaking changes.
+Fast, lightweight coding agent with an inline terminal host.
 
-## Features
+## Current Direction
 
-- Multi-provider LLM support (Anthropic, Google, Groq, Ollama, OpenAI, OpenRouter)
-- Built-in tools: read, write, edit, grep, glob, bash
-- MCP server support
-- Session persistence
+- Active implementation: Go host in `go-host/`
+- Active UI stack: Bubble Tea v2 + Bubbles v2
+- Planned runtime boundary: ACP-shaped session interface
+- Historical Rust implementation: archived under `archive/rust/`
 
-## Installation
+## Current Status
 
-```sh
-cargo install --git https://github.com/nijaru/ion
-```
+The rewrite is in progress. The Go host currently includes:
 
-## Usage
+- transcript viewport
+- multiline composer
+- footer/status region
+- streamed backend event scaffold
+- tool-entry rendering
 
-Interactive mode:
-
-```sh
-ion
-```
-
-One-shot mode:
+## Run The Current Host
 
 ```sh
-ion run "explain this codebase"
+cd go-host
+go run ./cmd/ion-go
 ```
 
-## Configuration
+## Development
 
-Config locations:
-
-- User: `~/.ion/config.toml`
-- Project: `.ion/config.toml`
-- Local (gitignored): `.ion/config.local.toml`
-
-```toml
-provider = "anthropic"
-model = "claude-sonnet-4"
+```sh
+cd go-host
+go test ./...
 ```
 
-API keys via environment variables:
+## Historical Checkpoint
 
-- `ANTHROPIC_API_KEY`
-- `OPENROUTER_API_KEY`
-- `GOOGLE_API_KEY`
-- `OPENAI_API_KEY`
-- `GROQ_API_KEY`
+If you need the last pre-rewrite stable terminal experience:
+
+```sh
+git checkout stable-rnk
+```
+
+The prior Rust implementation and TUI planning material are preserved under `archive/rust/` for reference.
 
 ## Agent Instructions
 
-ion reads `AGENTS.md` (or `CLAUDE.md` as fallback) from project root and user directories.
+`ion` reads `AGENTS.md` for project-level instructions and durable workflow context.
 
 ## License
 
