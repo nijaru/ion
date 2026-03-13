@@ -40,12 +40,13 @@ User
 - **ACP-shaped, not ACP-wire-native**: session and event types should align with ACP concepts without making raw protocol structs the app’s domain model.
 - **Transcript-first UX**: transcript, composer, footer, progress, tools, and approvals are the product core.
 - **Host/runtime separation**: Bubble Tea state is UI state; agent/session state lives behind the session boundary.
-- **Preserve reusable research**: memory, context, subagents, swarms, RLM, tools, and storage remain first-class future work.
+- **The 1,000 Token Rule**: Keep system prompts and tool definitions minimal (<1k tokens) to maximize project context.
+- **Tree-Based History**: Support branching and forking sessions to allow exploring multiple solution paths.
+- **Gather-Act-Verify**: Agents operate in explicit research, execution, and validation phases.
 
 ## Current Implementation Priorities
 
-1. Finalize the host shell behavior.
-2. Replace the fake backend with the canonical session interface.
-3. Implement the first native ion backend in Go.
-4. Add ACP-backed external agents.
-5. Add persistence, memory/context, and higher-order agent orchestration.
+1. Finalize the host shell behavior and UX polish.
+2. Implement transcript and session persistence (`tk-vmdl`).
+3. Build the ACP backend adapter layer (`tk-mlhe`).
+4. Add advanced memory, context, and swarm orchestration.

@@ -30,10 +30,10 @@
 
 ---
 
-## 2026-03-13: Archive the Rust Implementation and Rust-TUI Planning Material
+## 2026-03-13: Synthesize SOTA 2026 Agent Patterns
 
-**Context**: Keeping Rust code and Rust-TUI execution plans at the active repo root would continue to confuse the project’s actual direction.
+**Context**: Research into Claude Code, pi-mono, autoresearch, Crush, Droid, and Letta revealed a consensus on high-performance agent architecture.
 
-**Decision**: Move retained Rust code and Rust-TUI-specific docs into `archive/rust/` and treat them as reference-only.
+**Decision**: Adopt the "1,000 Token Rule" for system prompts, prioritize tree-based session storage for branching history, and implement a Gather-Act-Verify reasoning loop.
 
-**Rationale**: The active repo surface should reflect the active architecture. Historical material remains available, but no longer pollutes current implementation work.
+**Rationale**: These patterns are proven to increase context efficiency, reasoning stability, and developer productivity across the most successful agentic tools.
