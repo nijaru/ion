@@ -2,10 +2,11 @@
 
 ## Overview
 
-Fast, lightweight TUI coding agent in Rust.
+ion is currently in architecture transition. The original implementation is a Rust CLI/TUI agent, and the active rewrite branch is exploring a full Go host built on Bubble Tea v2.
 
-**Runtime**: Rust (Stable, Edition 2024)
-**Distribution**: Single static binary
+**Current production line**: Rust CLI/TUI (`main`, `tui-work`)
+**Active rewrite line**: Go host prototype/rewrite (`codex/go-rewrite-host`)
+**Decision in progress**: whether ion should become all-Go, or keep only part of the system in Rust
 
 ```
 User Request → ion CLI → Agent Core → Tool Execution → Response
@@ -105,3 +106,24 @@ Conversion to provider format happens at request time in each client's `build_re
 - **Native**: Leverage terminal scrollback for history
 - **Simple**: Prefer clear+reprint over complex diffing
 - **Provider-agnostic**: Canonical message format, convert at edges
+
+
+## Rewrite Direction (2026-03-12)
+
+The active implementation experiment is now `go-host/`, built with Bubble Tea v2 and Bubbles v2.
+
+Current intent:
+
+- build the host loop for real rather than maintaining a toy demo
+- shape the host/backend boundary so it can later support:
+  - a native ion agent runtime
+  - ACP-backed external agents
+  - subscription-safe hosted agent flows
+- judge the rewrite by actual UX and development velocity, especially in:
+  - multiline composer behavior
+  - transcript/footer interaction
+  - resize and redraw correctness
+  - session/backend event modeling
+
+This does not yet settle the full-system language decision, but it does mean the Go rewrite is now the active path being exercised in code.
+

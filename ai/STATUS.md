@@ -4,73 +4,50 @@
 
 | Metric | Value | Updated |
 | --- | --- | --- |
-| Phase | TUI architecture decision: Bubble Tea v2 vs custom Rust host | 2026-03-12 |
-| Status | Research active; comparing all-Go vs Go-host/Rust-core vs continued custom Rust TUI | 2026-03-12 |
+| Phase | Active rewrite: build the Go host for real and judge Bubble Tea v2 by execution, not theory | 2026-03-12 |
+| Status | `codex/go-rewrite-host` is the active implementation branch | 2026-03-12 |
 | Active branch | `codex/go-rewrite-host` | 2026-03-12 |
-| Tests | `cargo test -q`: 527 passing on `tui-work` | 2026-03-11 |
-| Clippy | Branch-wide `-D warnings` backlog remains outside current TUI fixes | 2026-03-11 |
+| Go host | `go-host/` now has real app/backend/session package boundaries, streamed backend events, and app-level tests | 2026-03-12 |
+| Rust TUI | `tui-work` remains the fallback reference branch, but is no longer the active direction | 2026-03-12 |
 
 ## Active Work
 
-1. `tk-avhl` (p1): TUI parity umbrella on `tui-work`
-2. `tk-s2ib` (p1): audit `crates/tui` coordinate/layout contracts
-3. `tk-ajlv` (p1): lock inline/footer reserve contract
-4. `tk-9yt1` (p1): PTY parity checklist before merge
-5. `tk-6xmj` (p1): user-reported scroll/footer regression tracker
-6. `tk-n6f7` (p1): evaluate Bubble Tea v2 vs custom Rust TUI host
-7. `tk-3bd5` (p1): Go rewrite branch for Bubble Tea v2 host
-8. `tk-nxz3` (p3): ACP backend architecture (protocol-first)
+1. `tk-3bd5` (p1): build the Go rewrite host for real on `codex/go-rewrite-host`
+2. `tk-n6f7` (p1): Bubble Tea v2 decision/research track and architecture notes
+3. `tk-nxz3` (p3): ACP architecture for external coding agents
+4. `tk-avhl` (p1): Rust TUI parity work remains as reference context on `tui-work`
 
 ## Current Findings
 
-- The rewrite stays the direction; no fallback to the old renderer.
-- Bubble Tea v2 is now a serious alternative, not a hypothetical one. The decision is no longer "keep patching the Rust host by default."
-- Current candidate directions:
-  - all Go with Bubble Tea v2
-  - Go Bubble Tea host plus Rust core/runtime
-  - continued custom Rust TUI (currently weakest option)
-- Real rewrite branch now exists:
-  - `codex/go-rewrite-host`
-  - `go-host/` contains the first Bubble Tea v2 vertical slice
-- The current custom Rust TUI still has unresolved trust issues in the exact host/runtime layer Bubble Tea is strongest at:
-  - inline region ownership
-  - redraw/clear contracts
-  - multiline composer growth/shrink
-  - resize behavior
-  - PTY edge cases
-- Research note capturing the current facts and trade-offs:
-  - `ai/research/bubbletea-v2-vs-rust-tui-host-2026-03-12.md`
-- Current Go rewrite slice already proves a few practical things:
-  - Bubble Tea v2 + Bubbles can stand up transcript/textarea/footer structure quickly
-  - the `charm.land/...` module path migration is real but manageable
-  - the next meaningful evaluation step is behavior quality, not framework setup
+- The project is now actively exploring an all-Go rewrite path rather than continuing to default to the custom Rust TUI.
+- The current question is no longer whether Bubble Tea v2 is interesting; it is whether it holds up when we build ion's host for real.
+- `go-host/` now has:
+  - an app package
+  - a backend boundary
+  - session entry types
+  - a transcript viewport
+  - a multiline composer
+  - footer/status rendering
+  - streamed backend events
+  - app-level tests for transcript/layout behavior
+- Practical finding from the first real runtime pass: Bubble Tea's textarea gives us a stable multiline composer immediately. The remaining work is making it feel like ion, not fighting corruption or panic-level footer bugs.
+- The next meaningful checkpoint is a real session/backend boundary in place of the fake backend, shaped so it can later support ACP or a native ion runtime.
+- The custom Rust TUI still provides useful lessons, but it is no longer the main implementation bet.
 
 ## Next Steps
 
-1. Exercise and improve the real `go-host/` vertical slice rather than building a toy spike.
-2. Compare the Bubble Tea host path against the Rust host on actual behavior quality:
-   - multiline composer
-   - inline redraw behavior
-   - transcript/footer interaction
-   - resize behavior
-3. Decide between:
-   - all Go
-   - Go Bubble Tea host + Rust core
-   - continued custom Rust TUI
-4. Only then decide whether more work should land on `tui-work` or the rewrite path.
-5. Keep ACP and native-agent architecture in scope while making the TUI decision so the boundary is right the first time.
+1. Replace the fake backend with a more realistic session boundary and event model.
+2. Improve transcript/composer/footer behavior until the Go host feels like ion rather than a framework sample.
+3. Decide how native ion runtime and ACP-backed external agents fit behind the same host boundary.
+4. Once the host shape is solid, decide whether the rest of ion should move to Go as well.
 
 ## Key References
 
 | Topic | Location |
 | --- | --- |
-| Active parity umbrella | `.tasks/tk-avhl.json` |
-| TUI audit | `.tasks/tk-s2ib.json` |
-| Inline/footer contract | `.tasks/tk-ajlv.json` |
-| PTY checklist | `.tasks/tk-9yt1.json` |
-| Bubble Tea decision track | `.tasks/tk-n6f7.json` |
-| Go rewrite branch task | `.tasks/tk-3bd5.json` |
-| ACP architecture | `.tasks/tk-nxz3.json` |
-| TUI rewrite target | `ai/design/tui-v3-architecture-2026-02.md` |
-| Current TUI audit note | `ai/review/tui-lib-audit-2026-03-11.md` |
-| Bubble Tea research note | `ai/research/bubbletea-v2-vs-rust-tui-host-2026-03-12.md` |
+| Active rewrite task | `.tasks/tk-3bd5.json` |
+| Bubble Tea research | `.tasks/tk-n6f7.json` |
+| Bubble Tea decision note | `ai/research/bubbletea-v2-vs-rust-tui-host-2026-03-12.md` |
+| Go rewrite host | `go-host/` |
+| ACP architecture tracker | `.tasks/tk-nxz3.json` |
+| Rust TUI audit reference | `ai/review/tui-lib-audit-2026-03-11.md` |

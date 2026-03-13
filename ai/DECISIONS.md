@@ -1,3 +1,13 @@
+## 2026-03-12: Build the Bubble Tea v2 Rewrite Path for Real
+
+**Context**: The custom Rust TUI continues to consume significant effort in the exact host/runtime layer that Bubble Tea v2 is designed to simplify: inline ownership, multiline composer behavior, redraw/clear contracts, and resize behavior. The user explicitly wants to decide now, not later, whether the project should move toward Go.
+
+**Decision**: Treat `codex/go-rewrite-host` as a real implementation branch rather than a toy spike. Build the Go host until it is representative enough to make an architecture call on an all-Go future.
+
+**Rationale**: Theory is no longer enough. The right comparison is not docs-vs-docs, but whether a real Bubble Tea host for ion becomes easier to evolve and trust than the custom Rust TUI. This keeps the decision grounded in execution rather than preference.
+
+---
+
 ## 2026-03-11: Keep `crates/tui` as the Direction and Harden It In-Place
 
 **Context**: `tui-work` reached functional parity in some areas, but footer, resize, and inline rendering issues exposed contract flaws in the new TUI stack. Reverting to the old renderer would discard useful architecture progress and keep correctness problems hidden in ad hoc rendering paths.

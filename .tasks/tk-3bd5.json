@@ -19,10 +19,22 @@
     {
       "ts": "2026-03-13T00:16:07.611Z",
       "msg": "Rebased codex/go-rewrite-host onto tui-work after committing the carried-over Rust TUI cleanup batch (3652acc) on tui-work. Branch stack is now clean: tui-work contains the Rust-side cleanup, and the Go rewrite branch sits on top of it."
+    },
+    {
+      "ts": "2026-03-13T00:19:27.220Z",
+      "msg": "Confirmed go-host refactor is the only open diff on codex/go-rewrite-host; branch/rebase cleanup is complete and go build ./... passes."
+    },
+    {
+      "ts": "2026-03-13T00:20:52.366Z",
+      "msg": "Updated ai/STATUS.md, ai/DECISIONS.md, and ai/DESIGN.md to reflect the shift from pure evaluation to active Go rewrite implementation on codex/go-rewrite-host."
+    },
+    {
+      "ts": "2026-03-13T00:24:45.940Z",
+      "msg": "Reshaped go-host around a streamed backend event contract (status, turn state, stream start/delta/done, append entry). Added tool-role transcript rendering, app tests for stream commit/layout/tool rendering, and confirmed go run launches cleanly in inline mode."
     }
   ],
   "created_at": "2026-03-12T23:52:04.271Z",
-  "updated_at": "2026-03-13T00:16:07.611Z",
+  "updated_at": "2026-03-13T00:24:45.940Z",
   "completed_at": null,
   "external": {}
 }

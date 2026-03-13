@@ -18,7 +18,8 @@ import (
 const (
 	minComposerHeight = 3
 	maxComposerHeight = 8
-	footerRows        = 2
+	footerRows        = 3
+	headerRows        = 4
 )
 
 type Model struct {
@@ -27,8 +28,10 @@ type Model struct {
 	ready    bool
 	thinking bool
 
-	backend  backend.Backend
-	entries  []session.Entry
+	backend backend.Backend
+	entries []session.Entry
+	pending *session.Entry
+
 	viewport viewport.Model
 	composer textarea.Model
 
@@ -41,6 +44,7 @@ type Model struct {
 	userSty   lipgloss.Style
 	asstSty   lipgloss.Style
 	sysSty    lipgloss.Style
+	toolSty   lipgloss.Style
 	dimSty    lipgloss.Style
 	lineSty   lipgloss.Style
 }
@@ -52,17 +56,21 @@ func New(backend backend.Backend) Model {
 	ta.ShowLineNumbers = false
 	ta.SetHeight(minComposerHeight)
 	ta.SetWidth(80)
-	ta.Focus()
+	ta.MaxHeight = maxComposerHeight
 
 	cwd, _ := os.Getwd()
-	entries, status := backend.Bootstrap()
+	boot := backend.Bootstrap()
+	vp := viewport.New(viewport.WithWidth(80), viewport.WithHeight(20))
+	vp.SoftWrap = true
+	vp.MouseWheelEnabled = true
+	vp.MouseWheelDelta = 3
 
 	m := Model{
 		backend:  backend,
-		entries:  entries,
-		viewport: viewport.New(viewport.WithWidth(80), viewport.WithHeight(20)),
+		entries:  boot.Entries,
+		viewport: vp,
 		composer: ta,
-		status:   status,
+		status:   boot.Status,
 		workdir:  cwd,
 		branch:   currentBranch(),
 		sendKey:  "ctrl+s",
@@ -74,17 +82,19 @@ func New(backend backend.Backend) Model {
 			Foreground(lipgloss.Color("6")),
 		sysSty: lipgloss.NewStyle().
 			Foreground(lipgloss.Color("8")),
+		toolSty: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("10")),
 		dimSty: lipgloss.NewStyle().
 			Faint(true),
 		lineSty: lipgloss.NewStyle().
 			Foreground(lipgloss.Color("8")),
 	}
-	m.refreshViewport()
+	m.refreshViewport(true)
 	return m
 }
 
 func (m Model) Init() tea.Cmd {
-	return textarea.Blink
+	return tea.Batch(textarea.Blink, m.composer.Focus())
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -96,21 +106,52 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.layout()
-		m.refreshViewport()
+		m.refreshViewport(true)
 		return m, nil
 
-	case backend.ReplyMsg:
-		m.thinking = false
+	case backend.StatusMsg:
+		m.status = msg.Text
+		return m, nil
+
+	case backend.TurnStateMsg:
+		m.thinking = msg.Running
+		return m, nil
+
+	case backend.StreamStartMsg:
+		follow := m.shouldFollowOutput()
+		m.pending = &session.Entry{Role: msg.Role}
+		m.refreshViewport(follow)
+		return m, nil
+
+	case backend.StreamDeltaMsg:
+		follow := m.shouldFollowOutput()
+		if m.pending == nil {
+			m.pending = &session.Entry{Role: session.RoleAssistant}
+		}
+		m.pending.Content += msg.Delta
+		m.refreshViewport(follow)
+		return m, nil
+
+	case backend.StreamDoneMsg:
+		follow := m.shouldFollowOutput()
+		if m.pending != nil {
+			m.entries = append(m.entries, *m.pending)
+			m.pending = nil
+		}
+		m.refreshViewport(follow)
+		return m, nil
+
+	case backend.AppendEntryMsg:
+		follow := m.shouldFollowOutput()
 		m.entries = append(m.entries, msg.Entry)
-		m.status = msg.Status
-		m.refreshViewport()
+		m.refreshViewport(follow)
 		return m, nil
 
 	case tea.KeyPressMsg:
-		switch {
-		case msg.String() == "ctrl+c":
+		switch msg.String() {
+		case "ctrl+c":
 			return m, tea.Quit
-		case msg.String() == m.sendKey:
+		case m.sendKey:
 			text := strings.TrimSpace(m.composer.Value())
 			if text == "" || m.thinking {
 				return m, nil
@@ -122,9 +163,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.composer.Reset()
 			m.thinking = true
 			m.status = fmt.Sprintf("[%s] turn in flight", m.backend.Name())
+			m.pending = nil
 			m.layout()
-			m.refreshViewport()
+			m.refreshViewport(true)
 			return m, m.backend.Submit(text)
+		case "pgup":
+			m.viewport.PageUp()
+			return m, nil
+		case "pgdn":
+			m.viewport.PageDown()
+			return m, nil
+		case "home":
+			m.viewport.GotoTop()
+			return m, nil
+		case "end":
+			m.viewport.GotoBottom()
+			return m, nil
 		}
 	}
 
@@ -172,33 +226,69 @@ func (m *Model) layout() {
 	m.composer.SetWidth(max(20, m.width))
 	m.composer.SetHeight(composerHeight)
 
-	headerRows := 4
 	viewportHeight := max(3, m.height-headerRows-composerHeight-footerRows)
 	m.viewport.SetWidth(max(20, m.width))
 	m.viewport.SetHeight(viewportHeight)
 }
 
-func (m *Model) refreshViewport() {
+func (m *Model) refreshViewport(follow bool) {
 	var b strings.Builder
-	for i, entry := range m.entries {
+	for i, entry := range m.renderEntries() {
 		if i > 0 {
 			b.WriteString("\n\n")
 		}
-		switch entry.Role {
-		case session.RoleUser:
-			b.WriteString(m.userSty.Render("› " + entry.Content))
-		case session.RoleAssistant:
-			b.WriteString(m.asstSty.Render("• " + entry.Content))
-		case session.RoleSystem:
-			b.WriteString(m.sysSty.Render(entry.Content))
-		}
+		b.WriteString(m.renderEntry(entry))
 	}
 	m.viewport.SetContent(b.String())
-	m.viewport.GotoBottom()
+	if follow {
+		m.viewport.GotoBottom()
+	}
+}
+
+func (m Model) renderEntries() []session.Entry {
+	entries := make([]session.Entry, 0, len(m.entries)+1)
+	entries = append(entries, m.entries...)
+	if m.pending != nil {
+		entries = append(entries, *m.pending)
+	}
+	return entries
+}
+
+func (m Model) renderEntry(entry session.Entry) string {
+	switch entry.Role {
+	case session.RoleUser:
+		return m.userSty.Render("› " + entry.Content)
+	case session.RoleAssistant:
+		return m.asstSty.Render("• " + entry.Content)
+	case session.RoleTool:
+		label := entry.Title
+		if label == "" {
+			label = "tool"
+		}
+		if entry.Content == "" {
+			return m.toolSty.Render("• " + label)
+		}
+		return m.toolSty.Render("• "+label) + "\n" + m.dimSty.Render(indentBlock(entry.Content, "  "))
+	case session.RoleSystem:
+		return m.sysSty.Render(entry.Content)
+	default:
+		return entry.Content
+	}
+}
+
+func indentBlock(content, prefix string) string {
+	lines := strings.Split(content, "\n")
+	for i := range lines {
+		lines[i] = prefix + lines[i]
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m Model) progressLine() string {
 	if m.thinking {
+		if m.pending != nil && m.pending.Content != "" {
+			return m.asstSty.Render("• Streaming assistant response...")
+		}
 		return m.asstSty.Render(fmt.Sprintf("• Waiting on %s backend...", m.backend.Name()))
 	}
 	return m.dimSty.Render("• Ready")
@@ -206,13 +296,20 @@ func (m Model) progressLine() string {
 
 func (m Model) statusLine() string {
 	return fmt.Sprintf(
-		"%s • backend=%s • %s • textarea=%d lines • viewport=%d lines",
+		"%s • backend=%s • %s • draft=%d lines • transcript=%d%%",
 		m.status,
 		m.backend.Name(),
 		m.sendKey+" send",
 		m.composer.LineCount(),
-		m.viewport.Height(),
+		int(m.viewport.ScrollPercent()*100),
 	)
+}
+
+func (m Model) shouldFollowOutput() bool {
+	if !m.ready {
+		return true
+	}
+	return m.viewport.AtBottom() || m.viewport.PastBottom()
 }
 
 func currentBranch() string {
