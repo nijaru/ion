@@ -81,15 +81,22 @@ func New(b backend.Backend) Model {
 		branch:   currentBranch(),
 		sendKey:  "ctrl+s",
 		headerSty: lipgloss.NewStyle().
-			Bold(true),
+			Bold(true).
+			Foreground(lipgloss.Color("5")).
+			PaddingLeft(2),
 		userSty: lipgloss.NewStyle().
-			Bold(true),
+			Bold(true).
+			PaddingLeft(2),
 		asstSty: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("6")),
+			Foreground(lipgloss.Color("6")).
+			PaddingLeft(2),
 		sysSty: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("8")),
+			Foreground(lipgloss.Color("8")).
+			Faint(true).
+			PaddingLeft(2),
 		toolSty: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("10")),
+			Foreground(lipgloss.Color("10")).
+			PaddingLeft(2),
 		dimSty: lipgloss.NewStyle().
 			Faint(true),
 		lineSty: lipgloss.NewStyle().
@@ -135,6 +142,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case session.EventStatusChanged:
 		m.status = msg.Status
+		return m, m.awaitSessionEvent()
+
+	case session.EventPlanUpdated:
+		// For now, we don't render the plan separately, but we could.
+		return m, m.awaitSessionEvent()
+
+	case session.EventMetadataLoaded:
 		return m, m.awaitSessionEvent()
 
 	case session.EventTurnStarted:
@@ -248,11 +262,11 @@ func (m Model) View() tea.View {
 		return tea.NewView("loading...")
 	}
 
-	header := m.headerSty.Render("ion-go")
-	subtitle := m.dimSty.Render(fmt.Sprintf("%s  •  %s", m.workdir, m.branch))
+	header := m.headerSty.Render("ion")
+	subtitle := m.dimSty.PaddingLeft(2).Render(fmt.Sprintf("%s  •  %s", m.workdir, m.branch))
 	progress := m.progressLine()
-	separator := m.lineSty.Render(strings.Repeat("─", max(0, m.width-1)))
-	status := m.dimSty.Render(m.statusLine())
+	separator := m.lineSty.Render(strings.Repeat("─", max(0, m.width)))
+	status := m.dimSty.PaddingLeft(2).Render(m.statusLine())
 
 	content := lipgloss.JoinVertical(
 		lipgloss.Left,
@@ -261,8 +275,8 @@ func (m Model) View() tea.View {
 		"",
 		m.viewport.View(),
 		separator,
-		progress,
-		m.composer.View(),
+		lipgloss.NewStyle().PaddingLeft(2).Render(progress),
+		lipgloss.NewStyle().PaddingLeft(1).Render(m.composer.View()),
 		separator,
 		status,
 	)
@@ -272,11 +286,11 @@ func (m Model) View() tea.View {
 
 func (m *Model) layout() {
 	composerHeight := clamp(m.composer.LineCount()+1, minComposerHeight, maxComposerHeight)
-	m.composer.SetWidth(max(20, m.width))
+	m.composer.SetWidth(max(20, m.width-4))
 	m.composer.SetHeight(composerHeight)
 
 	viewportHeight := max(3, m.height-headerRows-composerHeight-footerRows)
-	m.viewport.SetWidth(max(20, m.width))
+	m.viewport.SetWidth(max(20, m.width-4))
 	m.viewport.SetHeight(viewportHeight)
 }
 
@@ -315,22 +329,14 @@ func (m Model) renderEntry(entry session.Entry) string {
 			label = "tool"
 		}
 		if entry.Content == "" {
-			return m.toolSty.Render("• " + label)
+			return m.toolSty.Render("• " + label + " " + m.dimSty.Render("(pending)"))
 		}
-		return m.toolSty.Render("• "+label) + "\n" + m.dimSty.Render(indentBlock(entry.Content, "  "))
+		return m.toolSty.Render("• "+label) + "\n" + m.dimSty.PaddingLeft(4).Render(entry.Content)
 	case session.RoleSystem:
 		return m.sysSty.Render(entry.Content)
 	default:
 		return entry.Content
 	}
-}
-
-func indentBlock(content, prefix string) string {
-	lines := strings.Split(content, "\n")
-	for i := range lines {
-		lines[i] = prefix + lines[i]
-	}
-	return strings.Join(lines, "\n")
 }
 
 func (m Model) progressLine() string {
