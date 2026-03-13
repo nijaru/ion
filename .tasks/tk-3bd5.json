@@ -1,0 +1,24 @@
+{
+  "project": "tk",
+  "ref": "3bd5",
+  "title": "Go rewrite branch for Bubble Tea v2 host",
+  "description": "Create a dedicated rewrite branch from tui-work to evaluate a real Bubble Tea v2 rewrite path for ion, using a minimal-but-real vertical slice rather than a toy spike.",
+  "status": "active",
+  "priority": 1,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [
+    {
+      "ts": "2026-03-12T23:59:24.348Z",
+      "msg": "Created branch codex/go-rewrite-host from tui-work and scaffolded go-host/ as a real Bubble Tea v2 rewrite attempt. Added a first vertical slice with transcript viewport, multiline textarea composer, footer/status, inline-mode run path, and fake async assistant turns. Early finding: Charm v2 module paths are mixed (bubbletea/bubbles on charm.land paths in v2), but the module setup is workable."
+    }
+  ],
+  "created_at": "2026-03-12T23:52:04.271Z",
+  "updated_at": "2026-03-12T23:59:24.348Z",
+  "completed_at": null,
+  "external": {}
+}
