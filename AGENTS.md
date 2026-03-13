@@ -1,144 +1,85 @@
 # ion
 
-Fast, lightweight TUI coding agent.
+Go rewrite of a fast, lightweight inline coding agent.
 
 ## Project Structure
 
-| Directory | Purpose            |
-| --------- | ------------------ |
-| src/      | Rust source        |
-| ai/       | AI session context |
-| .tasks/   | Task tracking (tk) |
+| Directory | Purpose |
+| --------- | ------- |
+| go-host/ | Active Go/Bubble Tea host implementation |
+| ai/ | Active design memory and task context |
+| archive/rust/ | Archived Rust implementation and Rust-TUI docs |
+| .tasks/ | Task tracking (`tk`) |
 
 ## Session Workflow
 
 **Start:**
 
-1. Read `ai/STATUS.md` for current state and open tasks
-2. Run `tk ls` to see task list
+1. Read `ai/STATUS.md`
+2. Run `tk ready`
+3. Check `go-host/` before making architecture assumptions
 
 **End:**
 
 - Update `ai/STATUS.md`
-- `tk done <id>` for completed work
+- Log or complete relevant `tk` tasks
 - Commit changes
 
-## Architecture
+## Active Architecture
 
-| Module    | Purpose                              |
-| --------- | ------------------------------------ |
-| provider/ | Custom multi-provider LLM (streaming + tools) |
-| tool/     | Built-in tools + MCP client          |
-| skill/    | SKILL.md loader                      |
-| agent/    | Multi-turn loop, session management  |
-| tui/      | Direct crossterm (no ratatui)        |
+| Component | Purpose |
+| --------- | ------- |
+| `go-host/` | Bubble Tea v2 host UI: transcript, composer, footer, status |
+| `AgentSession` boundary | Canonical host-facing session lifecycle and event model |
+| `NativeIonSession` | Native ion runtime behind the session interface |
+| `ACPAgentSession` | External agent backends such as Claude Code, Gemini CLI, and similar systems |
+| `archive/rust/` | Historical reference only; not active implementation guidance |
 
-### TUI Architecture (v2)
+## Historical Checkpoint
 
-- **Chat history**: Printed to stdout via `insert_before`, terminal handles scrollback natively
-- **Bottom UI**: Direct cursor positioning at terminal height - ui_height
-- **Input composer**: Custom with ropey-backed buffer + blob storage for large pastes
-- **Rendering**: Direct crossterm escape sequences, pulldown-cmark for markdown
-
-**Built-in tools:** read, write, edit, bash, glob, grep
-
-**Providers:** Anthropic, Google, Groq, Kimi, Ollama, OpenAI, OpenRouter
-
-## Tech Stack
-
-| Component | Choice         |
-| --------- | -------------- |
-| TUI       | crossterm      |
-| Markdown  | pulldown-cmark |
-| Async     | tokio          |
-| HTTP      | reqwest        |
-| Database  | rusqlite       |
-| Tokens    | bpe-openai     |
-
-## Code Standards
-
-| Aspect    | Standard                      |
-| --------- | ----------------------------- |
-| Toolchain | stable                        |
-| Edition   | Rust 2024                     |
-| Errors    | anyhow (app), thiserror (lib) |
-| Async     | tokio (network), sync (files) |
-
-**Patterns:**
-
-- `&str` over `String`, `&[T]` over `Vec<T>` where possible
-- `crate::` over `super::`
-- No `pub use` re-exports unless for downstream API
-- Use `cargo add` for dependencies, never edit Cargo.toml versions directly
+- Use the Git tag `stable-rnk` for the last known stable Rust/RNK-era mainline.
+- Do not move or rewrite that tag.
 
 ## Commands
 
 ```bash
-cargo build              # Debug
-cargo build --release    # Release
-cargo test               # Test
-cargo clippy             # Lint
-cargo fmt                # Format
-tk ls                    # List tasks
-tk add "title"           # Add task
-tk done <id>             # Complete task
+cd go-host && go test ./...
+cd go-host && go run ./cmd/ion-go
+
+tk ls
+ tk ready
+ tk show <id>
+ tk log <id> "finding"
+ tk done <id>
 ```
 
 ## Rules
 
-- **No AI attribution** in commits/PRs
-- **Ask before**: PRs, publishing, force ops
-- **Commit frequently**, push regularly
-- **Never force push** to main/master
-- **Task tracking**: Use `tk` for all work
-- **Issue tracking**: When user reports bugs/issues, **immediately create a `tk` task**
-- **Versioning**: Staying at 0.0.0 until stable. First release will be 0.0.1. Do not bump version.
-
-## Bug Investigation
-
-**Before investigating:**
-
-1. `tk show <id>` - check existing notes in task log
-2. Search ai/ for prior research: `grep -ri "keyword" ai/`
-3. Check git log for related commits
-
-**During investigation:**
-
-- Log findings immediately: `tk log <id> "finding"`
-- Include: error messages, root cause hypothesis, files involved
-- For complex bugs, note which ai/ file has detailed analysis
-
-**After investigating:**
-
-- Update task with conclusion (fixed, needs more info, blocked by X)
-- If blocked by external dependency, note the specific limitation
-- Cross-reference related tasks if issues are distinct but confused
-
-**Never claim something is undocumented without searching first.**
+- Treat Go as the active implementation language.
+- Treat `archive/rust/` as read-only reference unless explicitly migrating something out of it.
+- Do not let archived Rust docs drive new design decisions on `main`.
+- Use `tk` for all multi-step work.
+- When a user reports a bug, create or update a `tk` task immediately.
 
 ## Reference
 
-**ai/ directory contents:**
+**Active design docs:**
 
-| File/Dir        | Purpose                                           |
-| --------------- | ------------------------------------------------- |
-| ai/STATUS.md    | Current state, open tasks, session notes          |
-| ai/DECISIONS.md | Architecture decisions with context and rationale |
-| ai/DESIGN.md    | High-level system design                          |
-| ai/design/      | Detailed designs (TUI, config, permissions, etc)  |
-| ai/research/    | Research notes (agents, patterns, crates)         |
-| ai/ideas/       | Future feature ideas                              |
+- `ai/design/go-host-architecture.md`
+- `ai/design/session-interface.md`
+- `ai/design/acp-integration.md`
+- `ai/design/native-ion-agent.md`
+- `ai/design/memory-and-context.md`
+- `ai/design/subagents-swarms-rlm.md`
+- `ai/design/rewrite-roadmap.md`
 
-**Key design docs:**
+**Retained research themes:**
 
-- `ai/design/tui.md` - TUI interface spec
-- `ai/design/config-system.md` - Config hierarchy
-- `ai/design/permissions-v2.md` - Read/Write modes, sandbox
+- memory and context
+- session persistence
+- tools and MCP/ACP integration
+- subagents, swarms, and RLM patterns
 
-**Key research:**
+**Historical Rust docs:**
 
-- `ai/research/agent-survey.md` - Competitive analysis (6 agents)
-- `ai/research/tool-display-patterns-2026.md` - Tool output UX
-- `ai/research/edit-tool-patterns-2026.md` - Edit tool design
-
-**Competitive reference:** Claude Code, Gemini CLI, opencode, pi-mono, amp
+- `archive/rust/docs/`

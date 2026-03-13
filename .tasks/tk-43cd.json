@@ -3,7 +3,7 @@
   "ref": "43cd",
   "title": "Persist MessageList display entries in session store",
   "description": "Store rendered MessageList entries alongside API messages in the session DB. Replay loads them directly instead of reconstructing from ContentBlocks. Eliminates duplicate formatting logic in lifecycle.rs. Add display_entries JSON blob/table, populate during live tool calls, load on --continue. Keep reconstruction as migration fallback for old sessions.",
-  "status": "open",
+  "status": "done",
   "priority": 1,
   "labels": [],
   "assignees": [],
@@ -13,7 +13,7 @@
   "due_date": null,
   "logs": [],
   "created_at": "2026-02-17T06:06:02.307Z",
-  "updated_at": "2026-02-17T06:06:02.307Z",
-  "completed_at": null,
+  "updated_at": "2026-03-13T11:11:44.053Z",
+  "completed_at": "2026-03-13T11:11:44.053Z",
   "external": {}
 }

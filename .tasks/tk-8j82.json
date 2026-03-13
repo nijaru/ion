@@ -1,0 +1,28 @@
+{
+  "project": "tk",
+  "ref": "8j82",
+  "title": "Define ACP-shaped AgentSession interface",
+  "description": "Design and implement the canonical Go session boundary for the host, including typed lifecycle and event modeling for native ion and ACP-backed agents.",
+  "status": "active",
+  "priority": 1,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [
+    {
+      "ts": "2026-03-13T11:10:27.972Z",
+      "msg": "Started as the next active architecture task after the mainline transition: define the canonical ACP-shaped AgentSession interface for the Go host."
+    },
+    {
+      "ts": "2026-03-13T11:12:14.828Z",
+      "msg": "Mainline transition complete. Session-interface work is now unblocked by repo/layout churn and should define the canonical AgentSession boundary for both NativeIonSession and ACPAgentSession."
+    }
+  ],
+  "created_at": "2026-03-13T11:10:12.346Z",
+  "updated_at": "2026-03-13T11:12:14.828Z",
+  "completed_at": null,
+  "external": {}
+}

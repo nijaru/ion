@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "qjs2",
+  "title": "Design memory and context system for Go rewrite",
+  "description": "Define the rewrite-era memory, context shaping, and compaction architecture behind the new session boundary.",
+  "status": "open",
+  "priority": 2,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-03-13T11:10:12.467Z",
+  "updated_at": "2026-03-13T11:10:12.467Z",
+  "completed_at": null,
+  "external": {}
+}

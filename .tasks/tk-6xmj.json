@@ -3,7 +3,7 @@
   "ref": "6xmj",
   "title": "[BUG] tui-work: scrolling broken and bottom UI region incorrect",
   "description": "User repro on cargo run -- --continue: chat history appears correct, but scroll does not work and bottom UI region behaves incorrectly. Investigate mouse capture/scroll handling and inline bottom UI layout parity vs main.",
-  "status": "open",
+  "status": "done",
   "priority": 1,
   "labels": [],
   "assignees": [],
@@ -18,7 +18,7 @@
     }
   ],
   "created_at": "2026-03-05T00:44:56.052Z",
-  "updated_at": "2026-03-05T00:48:32.458Z",
-  "completed_at": null,
+  "updated_at": "2026-03-13T11:10:27.879Z",
+  "completed_at": "2026-03-13T11:10:27.879Z",
   "external": {}
 }
