@@ -1,26 +1,29 @@
 package fake
 
 import (
+	"context"
 	"fmt"
 	"time"
-
-	tea "charm.land/bubbletea/v2"
 
 	"github.com/nijaru/ion/go-host/internal/backend"
 	"github.com/nijaru/ion/go-host/internal/session"
 )
 
-type Backend struct{}
-
-func New() Backend {
-	return Backend{}
+type Backend struct {
+	events chan session.Event
 }
 
-func (Backend) Name() string {
+func New() *Backend {
+	return &Backend{
+		events: make(chan session.Event, 100),
+	}
+}
+
+func (b *Backend) Name() string {
 	return "fake"
 }
 
-func (Backend) Bootstrap() backend.Bootstrap {
+func (b *Backend) Bootstrap() backend.Bootstrap {
 	return backend.Bootstrap{
 		Entries: []session.Entry{
 			{Role: session.RoleSystem, Content: "ion-go rewrite branch"},
@@ -33,35 +36,58 @@ func (Backend) Bootstrap() backend.Bootstrap {
 	}
 }
 
-func (Backend) Submit(input string) tea.Cmd {
-	return tea.Sequence(
-		deliverAfter(0, backend.TurnStateMsg{Running: true}),
-		deliverAfter(0, backend.StatusMsg{Text: "[fake] planning reply"}),
-		deliverAfter(120*time.Millisecond, backend.StreamStartMsg{Role: session.RoleAssistant}),
-		deliverAfter(220*time.Millisecond, backend.StreamDeltaMsg{
-			Delta: fmt.Sprintf("Reviewing %q in fake mode so we can exercise a streamed host loop.", input),
-		}),
-		deliverAfter(380*time.Millisecond, backend.StreamDeltaMsg{
-			Delta: "\n\nThis backend is intentionally emitting multiple event types because ion will eventually need transcript text, tool output, progress, and completion state from either ACP or a native agent runtime.",
-		}),
-		deliverAfter(520*time.Millisecond, backend.AppendEntryMsg{
-			Entry: session.Entry{
-				Role:    session.RoleTool,
-				Title:   "bash(git status --short)",
-				Content: "✓ fake tool result: working tree checked for rewrite branch cleanliness",
-			},
-		}),
-		deliverAfter(680*time.Millisecond, backend.StreamDeltaMsg{
-			Delta: "\n\nThat means the UI loop is already much closer to a real agent host than a one-shot echo demo.",
-		}),
-		deliverAfter(840*time.Millisecond, backend.StreamDoneMsg{}),
-		deliverAfter(860*time.Millisecond, backend.StatusMsg{Text: "[fake] turn complete"}),
-		deliverAfter(860*time.Millisecond, backend.TurnStateMsg{Running: false}),
-	)
+func (b *Backend) Session() session.AgentSession {
+	return b
 }
 
-func deliverAfter(delay time.Duration, msg tea.Msg) tea.Cmd {
-	return tea.Tick(delay, func(time.Time) tea.Msg {
-		return msg
-	})
+func (b *Backend) Open(ctx context.Context) error {
+	return nil
+}
+
+func (b *Backend) Resume(ctx context.Context, sessionID string) error {
+	return nil
+}
+
+func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
+	go func() {
+		b.events <- session.EventTurnStarted{}
+		b.events <- session.EventStatusChanged{Status: "[fake] planning reply"}
+		
+		time.Sleep(120 * time.Millisecond)
+		b.events <- session.EventAssistantDelta{Delta: fmt.Sprintf("Reviewing %q in fake mode so we can exercise a streamed host loop.", input)}
+		
+		time.Sleep(160 * time.Millisecond)
+		b.events <- session.EventAssistantDelta{Delta: "\n\nThis backend is intentionally emitting multiple event types because ion will eventually need transcript text, tool output, progress, and completion state from either ACP or a native agent runtime."}
+		
+		time.Sleep(140 * time.Millisecond)
+		b.events <- session.EventToolCallStarted{ToolName: "bash", Args: "git status --short"}
+		
+		time.Sleep(100 * time.Millisecond)
+		b.events <- session.EventToolResult{
+			ToolName: "bash",
+			Result:   "✓ fake tool result: working tree checked for rewrite branch cleanliness",
+		}
+		
+		time.Sleep(160 * time.Millisecond)
+		b.events <- session.EventAssistantDelta{Delta: "\n\nThat means the UI loop is already much closer to a real agent host than a one-shot echo demo."}
+		
+		time.Sleep(160 * time.Millisecond)
+		b.events <- session.EventAssistantMessage{Message: ""} // Signal end of message
+		b.events <- session.EventStatusChanged{Status: "[fake] turn complete"}
+		b.events <- session.EventTurnFinished{}
+	}()
+	return nil
+}
+
+func (b *Backend) CancelTurn(ctx context.Context) error {
+	return nil
+}
+
+func (b *Backend) Close() error {
+	close(b.events)
+	return nil
+}
+
+func (b *Backend) Events() <-chan session.Event {
+	return b.events
 }

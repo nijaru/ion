@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -10,22 +11,37 @@ import (
 	"github.com/nijaru/ion/go-host/internal/session"
 )
 
-type stubBackend struct{}
+type stubBackend struct {
+	sess *stubSession
+}
 
-func (stubBackend) Name() string { return "stub" }
+func (b stubBackend) Name() string { return "stub" }
 
-func (stubBackend) Bootstrap() backend.Bootstrap {
+func (b stubBackend) Bootstrap() backend.Bootstrap {
 	return backend.Bootstrap{
 		Entries: []session.Entry{{Role: session.RoleSystem, Content: "boot"}},
 		Status:  "ready",
 	}
 }
 
-func (stubBackend) Submit(string) tea.Cmd { return nil }
+func (b stubBackend) Session() session.AgentSession { return b.sess }
+
+type stubSession struct {
+	events chan session.Event
+}
+
+func (s *stubSession) Open(ctx context.Context) error                    { return nil }
+func (s *stubSession) Resume(ctx context.Context, id string) error       { return nil }
+func (s *stubSession) SubmitTurn(ctx context.Context, turn string) error { return nil }
+func (s *stubSession) CancelTurn(ctx context.Context) error              { return nil }
+func (s *stubSession) Close() error                                      { return nil }
+func (s *stubSession) Events() <-chan session.Event                      { return s.events }
 
 func readyModel(t *testing.T) Model {
 	t.Helper()
-	model := New(stubBackend{})
+	sess := &stubSession{events: make(chan session.Event)}
+	b := stubBackend{sess: sess}
+	model := New(b)
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	ready, ok := updated.(Model)
 	if !ok {
@@ -37,16 +53,16 @@ func readyModel(t *testing.T) Model {
 func TestModelStreamsAndCommitsPendingEntry(t *testing.T) {
 	model := readyModel(t)
 
-	updated, _ := model.Update(backend.StreamStartMsg{Role: session.RoleAssistant})
+	updated, _ := model.Update(session.EventTurnStarted{})
 	model = updated.(Model)
-	updated, _ = model.Update(backend.StreamDeltaMsg{Delta: "streamed reply"})
+	updated, _ = model.Update(session.EventAssistantDelta{Delta: "streamed reply"})
 	model = updated.(Model)
 
 	if model.pending == nil || model.pending.Content != "streamed reply" {
 		t.Fatalf("expected pending streamed assistant entry, got %#v", model.pending)
 	}
 
-	updated, _ = model.Update(backend.StreamDoneMsg{})
+	updated, _ = model.Update(session.EventAssistantMessage{})
 	model = updated.(Model)
 
 	if model.pending != nil {
@@ -62,11 +78,16 @@ func TestModelStreamsAndCommitsPendingEntry(t *testing.T) {
 
 func TestToolEntryRendersIntoTranscript(t *testing.T) {
 	model := readyModel(t)
-	updated, _ := model.Update(backend.AppendEntryMsg{Entry: session.Entry{
-		Role:    session.RoleTool,
-		Title:   "bash(ls)",
-		Content: "ok",
-	}})
+	updated, _ := model.Update(session.EventToolCallStarted{
+		ToolName: "bash",
+		Args:     "ls",
+	})
+	model = updated.(Model)
+	
+	updated, _ = model.Update(session.EventToolResult{
+		ToolName: "bash",
+		Result:   "ok",
+	})
 	model = updated.(Model)
 
 	content := model.viewport.GetContent()
