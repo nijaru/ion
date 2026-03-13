@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "ud8f",
+  "title": "Research: Charm Crush (Go) agent patterns",
+  "description": "Investigate the Bubble Tea-based agent architecture of Charm Crush",
+  "status": "done",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-03-13T12:44:10.799Z",
+  "updated_at": "2026-03-13T13:03:47.763Z",
+  "completed_at": "2026-03-13T13:03:47.763Z",
+  "external": {}
+}

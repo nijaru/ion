@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "qjz0",
+  "title": "Research: Letta memory and state management",
+  "description": "Investigate Letta's memory systems and stateful agent patterns",
+  "status": "done",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-03-13T12:44:10.841Z",
+  "updated_at": "2026-03-13T13:03:47.810Z",
+  "completed_at": "2026-03-13T13:03:47.810Z",
+  "external": {}
+}

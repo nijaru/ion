@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "b0jo",
+  "title": "Research: SOTA RLM and agent orchestration strategies",
+  "description": "Synthesis of current state-of-the-art agent patterns (swarms, planning, tool-use)",
+  "status": "done",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-03-13T12:44:10.863Z",
+  "updated_at": "2026-03-13T13:03:47.834Z",
+  "completed_at": "2026-03-13T13:03:47.834Z",
+  "external": {}
+}
