@@ -11,8 +11,6 @@ pub struct ComposerState {
     scroll_offset: usize,
     /// Calculated cursor position (x, y) relative to the widget area.
     pub cursor_pos: (u16, u16),
-    /// Last known render width (for scroll calculations).
-    last_width: usize,
     /// Preferred column for vertical navigation (preserved across short lines).
     /// Set on up/down movement, cleared on horizontal movement or explicit cursor set.
     preferred_col: Option<usize>,
@@ -75,15 +73,15 @@ impl ComposerState {
     }
 
     /// Move cursor to the start of the current VISUAL line (wrapped line).
-    /// Uses `last_width` from previous render; falls back to logical line start if width unknown.
-    pub fn move_to_visual_line_start(&mut self, buffer: &ComposerBuffer) {
-        if self.last_width == 0 || self.cursor_char_idx == 0 {
+    /// Falls back to logical line start if `width` is zero.
+    pub fn move_to_visual_line_start(&mut self, buffer: &ComposerBuffer, width: usize) {
+        if width == 0 || self.cursor_char_idx == 0 {
             self.move_to_line_start(buffer);
             return;
         }
 
         let content = buffer.get_content();
-        let lines = build_visual_lines(&content, self.last_width);
+        let lines = build_visual_lines(&content, width);
         let (cur_line, _) = find_visual_line_and_col(&lines, self.cursor_char_idx);
 
         if cur_line < lines.len() {
@@ -92,9 +90,9 @@ impl ComposerState {
     }
 
     /// Move cursor to the end of the current VISUAL line (wrapped line).
-    /// Uses `last_width` from previous render; falls back to logical line end if width unknown.
-    pub fn move_to_visual_line_end(&mut self, buffer: &ComposerBuffer) {
-        if self.last_width == 0 {
+    /// Falls back to logical line end if `width` is zero.
+    pub fn move_to_visual_line_end(&mut self, buffer: &ComposerBuffer, width: usize) {
+        if width == 0 {
             self.move_to_line_end(buffer);
             return;
         }
@@ -105,7 +103,7 @@ impl ComposerState {
             return;
         }
 
-        let lines = build_visual_lines(&content, self.last_width);
+        let lines = build_visual_lines(&content, width);
         let (cur_line, _) = find_visual_line_and_col(&lines, self.cursor_char_idx);
 
         if cur_line < lines.len() {
@@ -166,21 +164,21 @@ impl ComposerState {
     }
 
     /// Move cursor up one visual line (including wrapped lines).
-    /// Uses `last_width` from previous render; falls back to logical line if width unknown.
-    pub fn move_up(&mut self, buffer: &ComposerBuffer) -> bool {
-        if self.last_width == 0 {
+    /// Falls back to logical line navigation if `width` is zero.
+    pub fn move_up(&mut self, buffer: &ComposerBuffer, width: usize) -> bool {
+        if width == 0 {
             return self.move_up_logical(buffer);
         }
-        self.move_up_visual(buffer, self.last_width)
+        self.move_up_visual(buffer, width)
     }
 
     /// Move cursor down one visual line (including wrapped lines).
-    /// Uses `last_width` from previous render; falls back to logical line if width unknown.
-    pub fn move_down(&mut self, buffer: &ComposerBuffer) -> bool {
-        if self.last_width == 0 {
+    /// Falls back to logical line navigation if `width` is zero.
+    pub fn move_down(&mut self, buffer: &ComposerBuffer, width: usize) -> bool {
+        if width == 0 {
             return self.move_down_logical(buffer);
         }
-        self.move_down_visual(buffer, self.last_width)
+        self.move_down_visual(buffer, width)
     }
 
     /// Move cursor up one visual line at the given width.
@@ -461,12 +459,6 @@ impl ComposerState {
         self.scroll_offset = 0;
     }
 
-    /// Invalidate cached width (call on terminal resize).
-    /// Forces cursor position recalculation on next render.
-    pub fn invalidate_width(&mut self) {
-        self.last_width = 0;
-    }
-
     /// Get the current scroll offset.
     #[must_use]
     pub fn scroll_offset(&self) -> usize {
@@ -520,7 +512,6 @@ impl ComposerState {
     ) -> (u16, u16) {
         use unicode_width::UnicodeWidthChar;
 
-        self.last_width = width;
         self.cursor_char_idx = self.cursor_char_idx.min(len_chars);
         let cursor_idx = self.cursor_char_idx;
 

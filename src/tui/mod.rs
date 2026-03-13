@@ -1,5 +1,6 @@
 //! TUI module for the ion agent interface.
 
+pub(crate) mod ansi;
 mod app_state;
 mod attachment;
 mod chat_renderer;
@@ -10,20 +11,21 @@ mod events;
 mod file_completer;
 mod filter_input;
 mod fuzzy;
-mod highlight;
+pub mod highlight;
 mod input;
+pub mod ion_app;
+pub mod message;
 pub mod message_list;
 pub mod model_picker;
 mod picker_trait;
 pub mod provider_picker;
-mod render;
 mod render_state;
-mod rnk_text;
 mod run;
 mod session;
 pub mod session_picker;
 mod table;
 pub mod terminal;
+pub(crate) mod text;
 mod types;
 mod util;
 
@@ -35,10 +37,6 @@ pub use run::{ResumeOption, run};
 pub use types::{
     HistorySearchState, Mode, SelectionState, SelectorPage, TaskSummary, ThinkingLevel,
 };
-
-// Re-export internal utilities for sibling modules
-pub(crate) use types::QUEUED_PREVIEW_LINES;
-pub(crate) use util::sanitize_for_display;
 
 use crate::agent::Agent;
 use crate::cli::PermissionSettings;
@@ -141,8 +139,16 @@ pub struct App {
     pub history_search: HistorySearchState,
     /// Pending provider change (deferred until model selection)
     pub pending_provider: Option<Provider>,
+    /// Provider waiting for OAuth ban-risk confirmation
+    pub oauth_confirm_provider: Option<Provider>,
     /// Pricing for the current model (per million tokens).
     pub model_pricing: ModelPricing,
     /// Accumulated cost for the current session (USD).
     pub session_cost: f64,
+    /// Last known terminal width, updated on resize and at startup.
+    pub term_width: u16,
+    /// Receiver for ask_user requests from the agent.
+    pub ask_user_rx: Option<crate::tool::builtin::ask_user::AskUserReceiver>,
+    /// Pending ask_user response channel (agent is blocked waiting for user input).
+    pub pending_ask_user: Option<tokio::sync::oneshot::Sender<String>>,
 }

@@ -177,23 +177,53 @@ struct ReadResult {
 /// Read specific lines in a single pass, counting total lines as we go.
 fn read_lines_single_pass(path: &Path, start: usize, count: usize) -> std::io::Result<ReadResult> {
     let file = std::fs::File::open(path)?;
-    let reader = BufReader::new(file);
+    let mut reader = BufReader::new(file);
 
     let mut lines = Vec::with_capacity(count.min(1000));
-    let mut total_lines = 0;
+    let mut line_num = 0usize;
+    let mut line_buf = String::new();
 
-    for (i, line_result) in reader.lines().enumerate() {
-        total_lines = i + 1;
-        if i >= start && lines.len() < count {
-            lines.push(line_result?);
-        } else if i >= start + count {
-            // After collecting needed lines, just count remaining (skip UTF-8 decode)
-            let line = line_result?;
-            drop(line);
+    // Phase 1: UTF-8 decode only through start + count lines.
+    loop {
+        line_buf.clear();
+        if reader.read_line(&mut line_buf)? == 0 {
+            // EOF before window end — no phase 2 needed.
+            return Ok(ReadResult {
+                lines,
+                total_lines: line_num,
+            });
+        }
+        if line_num >= start && lines.len() < count {
+            // Strip trailing newline (handles \n and \r\n).
+            let content = line_buf.trim_end_matches(['\n', '\r']).to_string();
+            lines.push(content);
+        }
+        line_num += 1;
+        if line_num == start + count {
+            break;
         }
     }
 
-    Ok(ReadResult { lines, total_lines })
+    // Phase 2: count remaining lines with raw byte scanning — no UTF-8 allocation.
+    let mut buf = [0u8; COUNT_BUFFER_SIZE];
+    let mut last_byte = b'\n';
+    loop {
+        let n = reader.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        line_num += bytecount::count(&buf[..n], b'\n');
+        last_byte = buf[n - 1];
+    }
+    // If file doesn't end with a newline, the final line wasn't counted above.
+    if last_byte != b'\n' {
+        line_num += 1;
+    }
+
+    Ok(ReadResult {
+        lines,
+        total_lines: line_num,
+    })
 }
 
 /// Count lines using streaming with SIMD (constant memory, handles huge files).

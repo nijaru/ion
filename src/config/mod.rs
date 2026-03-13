@@ -85,6 +85,34 @@ impl ApiKeys {
     }
 }
 
+/// Status line display configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StatusLineConfig {
+    /// Show the model name. Default: true.
+    pub show_model: bool,
+    /// Show context window usage (token bar + %). Default: true.
+    pub show_tokens: bool,
+    /// Show session cost (non-subscription providers only). Default: true.
+    pub show_cost: bool,
+    /// Show the git branch name. Default: true.
+    pub show_branch: bool,
+    /// Show git diff stats (+N/-M). Default: true.
+    pub show_git_diff: bool,
+}
+
+impl Default for StatusLineConfig {
+    fn default() -> Self {
+        Self {
+            show_model: true,
+            show_tokens: true,
+            show_cost: true,
+            show_branch: true,
+            show_git_diff: true,
+        }
+    }
+}
+
 /// Configuration for a shell command hook.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HookConfig {
@@ -137,6 +165,13 @@ pub struct Config {
     /// Shell command hooks triggered at tool execution points.
     #[serde(default)]
     pub hooks: Vec<HookConfig>,
+
+    /// Status line display options.
+    pub status_line: StatusLineConfig,
+
+    /// Automatically wrap multi-line pastes in triple-backtick code fences.
+    /// Default: false (opt-in).
+    pub auto_backtick_paste: bool,
 }
 
 impl Default for Config {
@@ -154,6 +189,8 @@ impl Default for Config {
             system_prompt: None,
             session_retention_days: 90,
             hooks: Vec::new(),
+            status_line: StatusLineConfig::default(),
+            auto_backtick_paste: false,
         }
     }
 }
@@ -336,6 +373,25 @@ impl Config {
         }
         if !other.hooks.is_empty() {
             self.hooks.extend(other.hooks);
+        }
+        // Merge status_line: any layer can hide an element (but not re-enable a hidden one).
+        if !other.status_line.show_model {
+            self.status_line.show_model = false;
+        }
+        if !other.status_line.show_tokens {
+            self.status_line.show_tokens = false;
+        }
+        if !other.status_line.show_cost {
+            self.status_line.show_cost = false;
+        }
+        if !other.status_line.show_branch {
+            self.status_line.show_branch = false;
+        }
+        if !other.status_line.show_git_diff {
+            self.status_line.show_git_diff = false;
+        }
+        if other.auto_backtick_paste {
+            self.auto_backtick_paste = true;
         }
     }
 
@@ -562,7 +618,10 @@ command = "echo check"
     fn test_instructions_config_parse() {
         let toml_str = r#"instructions = "Use functional style""#;
         let config: Config = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.instructions, Some("Use functional style".to_string()));
+        assert_eq!(
+            config.instructions,
+            Some("Use functional style".to_string())
+        );
         assert!(config.system_prompt.is_none());
     }
 

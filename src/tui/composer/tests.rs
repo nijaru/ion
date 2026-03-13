@@ -36,13 +36,13 @@ fn test_line_navigation() {
     buf.insert_str(0, "line1\nline2\nline3");
     state.set_cursor(8, buf.len_chars()); // Middle of "line2"
 
-    // Move up
-    assert!(state.move_up(&buf));
+    // Move up (width 0 = logical line navigation)
+    assert!(state.move_up(&buf, 0));
     assert_eq!(state.cursor_char_idx(), 2); // Same column in "line1"
 
     // Move down twice
-    assert!(state.move_down(&buf));
-    assert!(state.move_down(&buf));
+    assert!(state.move_down(&buf, 0));
+    assert!(state.move_down(&buf, 0));
     assert_eq!(buf.char_to_line(state.cursor_char_idx()), 2); // On line3
 }
 
@@ -203,12 +203,10 @@ fn test_visual_line_navigation_wrapped() {
     // Line 1: "abcdef" (chars 10-15)
     buf.insert_str(0, "0123456789abcdef");
 
-    // Initialize last_width by calculating cursor pos
     state.set_cursor(5, buf.len_chars()); // at '5' on line 0
-    state.calculate_cursor_pos(&buf, 10);
 
     // Move down should go to line 1, column 5 -> 'f' (char 15)
-    assert!(state.move_down(&buf));
+    assert!(state.move_down(&buf, 10));
     assert_eq!(
         state.cursor_char_idx(),
         15,
@@ -216,7 +214,7 @@ fn test_visual_line_navigation_wrapped() {
     );
 
     // Move up should go back to line 0, column 5 -> '5' (char 5)
-    assert!(state.move_up(&buf));
+    assert!(state.move_up(&buf, 10));
     assert_eq!(
         state.cursor_char_idx(),
         5,
@@ -236,10 +234,9 @@ fn test_visual_line_navigation_shorter_line() {
 
     // Start at column 8 on line 0
     state.set_cursor(8, buf.len_chars());
-    state.calculate_cursor_pos(&buf, 10);
 
     // Move down - line 1 only has 3 chars, so cursor should go to end (col 3)
-    assert!(state.move_down(&buf));
+    assert!(state.move_down(&buf, 10));
     assert_eq!(
         state.cursor_char_idx(),
         13,
@@ -247,7 +244,7 @@ fn test_visual_line_navigation_shorter_line() {
     );
 
     // Move up should restore preferred column (8), not the clamped position
-    assert!(state.move_up(&buf));
+    assert!(state.move_up(&buf, 10));
     assert_eq!(
         state.cursor_char_idx(),
         8,
@@ -268,10 +265,9 @@ fn test_visual_line_navigation_with_newlines() {
 
     // Start at 'b' (char 1) on line 0
     state.set_cursor(1, buf.len_chars());
-    state.calculate_cursor_pos(&buf, 10);
 
     // Move down to line 1, col 1 -> '1' (char 5)
-    assert!(state.move_down(&buf));
+    assert!(state.move_down(&buf, 10));
     assert_eq!(
         state.cursor_char_idx(),
         5,
@@ -279,7 +275,7 @@ fn test_visual_line_navigation_with_newlines() {
     );
 
     // Move down again to line 2, col 1 -> 'e' (char 15)
-    assert!(state.move_down(&buf));
+    assert!(state.move_down(&buf, 10));
     assert_eq!(
         state.cursor_char_idx(),
         15,
@@ -288,7 +284,7 @@ fn test_visual_line_navigation_with_newlines() {
 
     // Can't move down further
     assert!(
-        !state.move_down(&buf),
+        !state.move_down(&buf, 10),
         "should not be able to move down from last line"
     );
 }
@@ -301,14 +297,13 @@ fn test_visual_line_navigation_boundaries() {
     // Single visual line - can't move up or down
     buf.insert_str(0, "hello");
     state.set_cursor(2, buf.len_chars());
-    state.calculate_cursor_pos(&buf, 20);
 
     assert!(
-        !state.move_up(&buf),
+        !state.move_up(&buf, 20),
         "should not move up from first/only line"
     );
     assert!(
-        !state.move_down(&buf),
+        !state.move_down(&buf, 20),
         "should not move down from last/only line"
     );
 }
@@ -318,11 +313,12 @@ fn test_visual_line_navigation_empty() {
     let buf = ComposerBuffer::new();
     let mut state = ComposerState::new();
 
-    state.calculate_cursor_pos(&buf, 10);
-
-    assert!(!state.move_up(&buf), "should not move up in empty buffer");
     assert!(
-        !state.move_down(&buf),
+        !state.move_up(&buf, 10),
+        "should not move up in empty buffer"
+    );
+    assert!(
+        !state.move_down(&buf, 10),
         "should not move down in empty buffer"
     );
 }

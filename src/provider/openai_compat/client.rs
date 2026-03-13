@@ -97,10 +97,12 @@ impl OpenAICompatClient {
             .map_or(IonUsage::default(), |u| IonUsage {
                 input_tokens: u.prompt_tokens,
                 output_tokens: u.completion_tokens,
+                // Prefer nested details (OpenAI standard); fall back to top-level (DeepSeek).
                 cache_read_tokens: u
                     .prompt_tokens_details
                     .as_ref()
-                    .map_or(0, |d| d.cached_tokens),
+                    .map_or(0, |d| d.cached_tokens)
+                    .max(u.prompt_cache_hit_tokens),
                 cache_write_tokens: 0,
             });
 

@@ -65,8 +65,9 @@ impl HttpClient {
 
         match &self.auth {
             AuthConfig::Bearer(token) => {
-                let value = HeaderValue::from_str(&format!("Bearer {token}"))
-                    .map_err(|_| Error::Api("Bearer token contains invalid header characters".into()))?;
+                let value = HeaderValue::from_str(&format!("Bearer {token}")).map_err(|_| {
+                    Error::Api("Bearer token contains invalid header characters".into())
+                })?;
                 headers.insert(AUTHORIZATION, value);
             }
             AuthConfig::ApiKey { header, key } => {

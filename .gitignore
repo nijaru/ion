@@ -2,6 +2,9 @@
 target/
 Cargo.lock
 
+# Worktrees
+.worktrees/
+
 # Local data
 .DS_Store
 *.log

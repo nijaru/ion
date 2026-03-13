@@ -5,9 +5,7 @@ use super::stream::StreamEvent as AnthropicStreamEvent;
 use crate::provider::error::Error;
 use crate::provider::http::{AuthConfig, HttpClient, SseParser};
 use crate::provider::stream::ToolCallAccumulator;
-use crate::provider::types::{
-    ChatRequest, CompletionResponse, StreamEvent, Usage as IonUsage,
-};
+use crate::provider::types::{ChatRequest, CompletionResponse, StreamEvent, Usage as IonUsage};
 use futures::StreamExt;
 use tokio::sync::mpsc;
 
@@ -100,9 +98,7 @@ impl AnthropicClient {
 
                 match serde_json::from_str::<AnthropicStreamEvent>(&sse_event.data) {
                     Ok(event) => {
-                        if let Err(e) =
-                            convert::handle_stream_event(event, &tx, &mut tools).await
-                        {
+                        if let Err(e) = convert::handle_stream_event(event, &tx, &mut tools).await {
                             let _ = tx.send(StreamEvent::Error(e.to_string())).await;
                             return Err(e);
                         }

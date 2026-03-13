@@ -28,14 +28,15 @@ impl App {
                     self.mode = Mode::Input;
                 }
                 Mode::HistorySearch => self.handle_history_search_mode(key),
+                Mode::OAuthConfirm => self.handle_oauth_confirm_mode(key),
             },
             Event::Paste(text) => {
                 if self.mode == Mode::Input {
                     self.handle_paste(text);
                 }
             }
-            Event::Resize(_, _) => {
-                self.input_state.invalidate_width();
+            Event::Resize(w, _) => {
+                self.term_width = w;
                 self.render_state.last_resize_at = Some(std::time::Instant::now());
                 if self.mode == Mode::Selector {
                     self.render_state.needs_initial_render = true;
@@ -54,6 +55,15 @@ impl App {
 
     /// Handle pasted text - large pastes get stored as blobs with placeholders.
     fn handle_paste(&mut self, text: String) {
+        let line_count = text.lines().count();
+
+        // Optionally wrap multi-line pastes in a code fence.
+        let text = if self.config.auto_backtick_paste && line_count > 1 {
+            format!("```\n{text}\n```")
+        } else {
+            text
+        };
+
         let line_count = text.lines().count();
         let char_count = text.chars().count();
 
@@ -350,6 +360,14 @@ impl App {
                 // Reject empty or whitespace-only input
                 let input = self.input_text();
                 if !input.trim().is_empty() {
+                    // ask_user response: deliver to waiting agent tool, skip normal flow
+                    if let Some(tx) = self.pending_ask_user.take() {
+                        self.message_list.push_user_message(input.clone());
+                        self.clear_input();
+                        let _ = tx.send(input);
+                        return;
+                    }
+
                     if self.is_running {
                         // Queue message for injection at next turn (resolve blobs)
                         let resolved = self.resolved_input_text();
@@ -377,6 +395,16 @@ impl App {
                             );
                         }
                     } else {
+                        // Check for ! bash passthrough (runs shell command without LLM)
+                        if let Some(cmd) = input.strip_prefix('!') {
+                            let cmd = cmd.trim().to_string();
+                            if !cmd.is_empty() {
+                                self.clear_input();
+                                self.run_bash_passthrough(cmd);
+                                return;
+                            }
+                        }
+
                         // Check for slash commands
                         if input.starts_with('/') {
                             self.dispatch_slash_command(&input);
@@ -447,9 +475,10 @@ impl App {
 
     /// Dispatch a slash command (e.g., /compact, /model, /clear, //skill-name).
     fn dispatch_slash_command(&mut self, input: &str) {
-        const COMMANDS: [&str; 8] = [
+        const COMMANDS: [&str; 9] = [
             "/compact",
             "/cost",
+            "/export",
             "/model",
             "/provider",
             "/clear",
@@ -468,9 +497,7 @@ impl App {
         if cmd_line.starts_with("//") {
             let skill_input = cmd_line.strip_prefix("//").unwrap_or("").trim();
             if !skill_input.is_empty() {
-                let (name, args) = skill_input
-                    .split_once(' ')
-                    .unwrap_or((skill_input, ""));
+                let (name, args) = skill_input.split_once(' ').unwrap_or((skill_input, ""));
                 let agent = self.agent.clone();
                 let name = name.to_string();
                 let args = args.to_string();
@@ -498,6 +525,7 @@ impl App {
                         format!("Compacted: pruned {modified} tool outputs"),
                     ));
                     let _ = self.store.save(&self.session);
+                    self.persist_display_entries(&self.session.id.clone());
                 } else {
                     self.message_list.push_entry(MessageEntry::new(
                         Sender::System,
@@ -526,13 +554,16 @@ impl App {
                 self.message_list
                     .push_entry(MessageEntry::new(Sender::System, msg));
             }
+            "/export" => self.export_session_markdown(),
             "/model" | "/models" => self.open_model_selector(),
             "/provider" | "/providers" => self.open_provider_selector(),
             "/resume" | "/sessions" => self.open_session_selector(),
             "/quit" | "/exit" | "/q" => self.quit(),
             "/clear" => {
                 if !self.session.messages.is_empty() {
+                    let id = self.session.id.clone();
                     let _ = self.store.save(&self.session);
+                    self.persist_display_entries(&id);
                 }
                 let working_dir = self.session.working_dir.clone();
                 let model = self.session.model.clone();
@@ -615,6 +646,10 @@ impl App {
                         // Only set now if it's the same provider (just opening model selector)
                         if provider == self.api_provider {
                             self.open_model_selector();
+                        } else if provider == crate::provider::Provider::Gemini {
+                            // Show ban-risk confirmation before switching to Gemini OAuth
+                            self.oauth_confirm_provider = Some(provider);
+                            self.mode = crate::tui::types::Mode::OAuthConfirm;
                         } else {
                             // Store pending provider and preview its models
                             self.pending_provider = Some(provider);
@@ -782,6 +817,23 @@ impl App {
             SelectorPage::Provider => action(&mut self.provider_picker),
             SelectorPage::Model => action(&mut self.model_picker),
             SelectorPage::Session => action(&mut self.session_picker),
+        }
+    }
+
+    /// Handle key events in the OAuth ban-risk confirmation dialog.
+    fn handle_oauth_confirm_mode(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Enter | KeyCode::Char('y') | KeyCode::Char('Y') => {
+                if let Some(provider) = self.oauth_confirm_provider.take() {
+                    self.pending_provider = Some(provider);
+                    self.preview_provider_models(provider);
+                }
+            }
+            _ => {
+                // Any other key cancels — return to provider selector
+                self.oauth_confirm_provider = None;
+                self.open_provider_selector();
+            }
         }
     }
 
