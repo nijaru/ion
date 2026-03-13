@@ -73,7 +73,9 @@ impl App {
                     true
                 }
                 Err(e) => {
-                    warn!("Failed to deserialize display entries, falling back to reconstruction: {e}");
+                    warn!(
+                        "Failed to deserialize display entries, falling back to reconstruction: {e}"
+                    );
                     false
                 }
             }
@@ -98,13 +100,14 @@ impl App {
                         for block in msg.content.iter() {
                             match block {
                                 ContentBlock::Text { text } => {
-                                    self.message_list.push_entry(MessageEntry::new(
-                                        Sender::Agent,
-                                        text.clone(),
-                                    ));
+                                    self.message_list
+                                        .push_entry(MessageEntry::new(Sender::Agent, text.clone()));
                                 }
                                 ContentBlock::ToolCall {
-                                    id, name, arguments, ..
+                                    id,
+                                    name,
+                                    arguments,
+                                    ..
                                 } => {
                                     let clean_name = sanitize_tool_name(name);
                                     let key_arg = extract_key_arg(clean_name, arguments);
