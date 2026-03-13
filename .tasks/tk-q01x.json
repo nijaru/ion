@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "q01x",
+  "title": "Research: Claude Code architecture and terminal patterns",
+  "description": "Analyze Anthropic's Claude Code for UX, context management, and tool-use patterns",
+  "status": "done",
+  "priority": 3,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-03-13T12:44:10.778Z",
+  "updated_at": "2026-03-13T13:03:47.739Z",
+  "completed_at": "2026-03-13T13:03:47.739Z",
+  "external": {}
+}

@@ -27,6 +27,11 @@
 - The Go host is now actively consuming stream events from the `AgentSession` boundary, replacing the old fake backend contract.
 - The `NativeIonSession` is now implemented with real Gemini-backed streaming text support.
 - The host UX has been polished with better styling, padding, and robust tool/progress rendering.
+- **SOTA 2026 Research:** Synthesized core patterns from Claude Code, pi-mono, autoresearch, Crush, Droid, and Letta:
+  - **The 1,000 Token Rule:** Minimal system prompts are the industry standard for context efficiency.
+  - **Parallel Tooling:** Programmatic tool execution reduces context bloat and turn latency.
+  - **Guidance vs. Execution Agents:** Asynchronous sub-agents are superior for maintaining long-term memory/planning.
+  - **Tree-Based Sessions:** Branching and forking history is critical for developer workflows.
 - Archived Rust material remains available for historical context and implementation reference, but should not drive new planning.
 
 ## Next Steps
