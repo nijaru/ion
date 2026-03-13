@@ -1,0 +1,19 @@
+{
+  "project": "tk",
+  "ref": "d99k",
+  "title": "Implement tree-based session storage in SQLite (forking/branching)",
+  "description": "Transition session storage to support parent-child relationships for branching/backtracking.",
+  "status": "open",
+  "priority": 2,
+  "labels": [],
+  "assignees": [],
+  "parent": null,
+  "blocked_by": [],
+  "estimate": null,
+  "due_date": null,
+  "logs": [],
+  "created_at": "2026-03-13T13:04:53.628Z",
+  "updated_at": "2026-03-13T13:04:53.628Z",
+  "completed_at": null,
+  "external": {}
+}
