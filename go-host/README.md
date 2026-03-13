@@ -3,7 +3,7 @@
 Real rewrite attempt for ion's terminal host using:
 
 - `charm.land/bubbletea/v2`
-- `github.com/charmbracelet/bubbles`
+- `charm.land/bubbles/v2`
 
 This is not a toy mock. The goal is to evaluate whether Bubble Tea v2 is a better foundation for ion's host UI than the current custom Rust TUI.
 
@@ -18,6 +18,7 @@ The first vertical slice focuses on the exact area that has been unstable in Rus
 - resize behavior
 - user turn submission
 - async assistant reply simulation
+- backend/session boundary inside the host code
 
 ## Run
 
