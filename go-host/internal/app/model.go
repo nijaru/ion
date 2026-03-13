@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -22,6 +23,8 @@ const (
 	headerRows        = 4
 )
 
+type streamClosedMsg struct{}
+
 type Model struct {
 	width    int
 	height   int
@@ -29,6 +32,8 @@ type Model struct {
 	thinking bool
 
 	backend backend.Backend
+	session session.AgentSession
+
 	entries []session.Entry
 	pending *session.Entry
 
@@ -49,7 +54,7 @@ type Model struct {
 	lineSty   lipgloss.Style
 }
 
-func New(backend backend.Backend) Model {
+func New(b backend.Backend) Model {
 	ta := textarea.New()
 	ta.Placeholder = "Type a message... (ctrl+s to send)"
 	ta.Prompt = "› "
@@ -59,14 +64,15 @@ func New(backend backend.Backend) Model {
 	ta.MaxHeight = maxComposerHeight
 
 	cwd, _ := os.Getwd()
-	boot := backend.Bootstrap()
+	boot := b.Bootstrap()
 	vp := viewport.New(viewport.WithWidth(80), viewport.WithHeight(20))
 	vp.SoftWrap = true
 	vp.MouseWheelEnabled = true
 	vp.MouseWheelDelta = 3
 
 	m := Model{
-		backend:  backend,
+		backend:  b,
+		session:  b.Session(),
 		entries:  boot.Entries,
 		viewport: vp,
 		composer: ta,
@@ -94,7 +100,21 @@ func New(backend backend.Backend) Model {
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(textarea.Blink, m.composer.Focus())
+	return tea.Batch(
+		textarea.Blink,
+		m.composer.Focus(),
+		m.awaitSessionEvent(),
+	)
+}
+
+func (m Model) awaitSessionEvent() tea.Cmd {
+	return func() tea.Msg {
+		ev, ok := <-m.session.Events()
+		if !ok {
+			return streamClosedMsg{}
+		}
+		return ev
+	}
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -109,43 +129,73 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshViewport(true)
 		return m, nil
 
-	case backend.StatusMsg:
-		m.status = msg.Text
+	case streamClosedMsg:
+		// channel closed, do nothing for now
 		return m, nil
 
-	case backend.TurnStateMsg:
-		m.thinking = msg.Running
-		return m, nil
+	case session.EventStatusChanged:
+		m.status = msg.Status
+		return m, m.awaitSessionEvent()
 
-	case backend.StreamStartMsg:
-		follow := m.shouldFollowOutput()
-		m.pending = &session.Entry{Role: msg.Role}
-		m.refreshViewport(follow)
-		return m, nil
+	case session.EventTurnStarted:
+		m.thinking = true
+		m.pending = &session.Entry{Role: session.RoleAssistant}
+		m.refreshViewport(m.shouldFollowOutput())
+		return m, m.awaitSessionEvent()
 
-	case backend.StreamDeltaMsg:
+	case session.EventTurnFinished:
+		m.thinking = false
+		return m, m.awaitSessionEvent()
+
+	case session.EventAssistantDelta:
 		follow := m.shouldFollowOutput()
 		if m.pending == nil {
 			m.pending = &session.Entry{Role: session.RoleAssistant}
 		}
 		m.pending.Content += msg.Delta
 		m.refreshViewport(follow)
-		return m, nil
+		return m, m.awaitSessionEvent()
 
-	case backend.StreamDoneMsg:
+	case session.EventAssistantMessage:
 		follow := m.shouldFollowOutput()
 		if m.pending != nil {
+			if msg.Message != "" {
+				m.pending.Content = msg.Message
+			}
 			m.entries = append(m.entries, *m.pending)
 			m.pending = nil
 		}
 		m.refreshViewport(follow)
-		return m, nil
+		return m, m.awaitSessionEvent()
 
-	case backend.AppendEntryMsg:
+	case session.EventToolCallStarted:
+		// Optionally show a pending tool
 		follow := m.shouldFollowOutput()
-		m.entries = append(m.entries, msg.Entry)
+		m.entries = append(m.entries, session.Entry{
+			Role:  session.RoleTool,
+			Title: fmt.Sprintf("%s(%s)", msg.ToolName, msg.Args),
+		})
 		m.refreshViewport(follow)
-		return m, nil
+		return m, m.awaitSessionEvent()
+
+	case session.EventToolResult:
+		follow := m.shouldFollowOutput()
+		// Update the last tool entry or append a new one
+		if len(m.entries) > 0 && m.entries[len(m.entries)-1].Role == session.RoleTool {
+			m.entries[len(m.entries)-1].Content = msg.Result
+		} else {
+			m.entries = append(m.entries, session.Entry{
+				Role:    session.RoleTool,
+				Title:   msg.ToolName,
+				Content: msg.Result,
+			})
+		}
+		m.refreshViewport(follow)
+		return m, m.awaitSessionEvent()
+
+	case session.EventError:
+		m.status = fmt.Sprintf("Error: %v", msg.Error)
+		return m, m.awaitSessionEvent()
 
 	case tea.KeyPressMsg:
 		switch msg.String() {
@@ -161,12 +211,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				Content: text,
 			})
 			m.composer.Reset()
-			m.thinking = true
 			m.status = fmt.Sprintf("[%s] turn in flight", m.backend.Name())
-			m.pending = nil
 			m.layout()
 			m.refreshViewport(true)
-			return m, m.backend.Submit(text)
+			m.session.SubmitTurn(context.Background(), text)
+			return m, nil
 		case "pgup":
 			m.viewport.PageUp()
 			return m, nil

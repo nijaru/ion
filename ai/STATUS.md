@@ -14,30 +14,28 @@
 ## Active Work
 
 1. `tk-3bd5` (p1): umbrella Go rewrite program on `main`
-2. `tk-8j82` (p1): define the ACP-shaped `AgentSession` interface
-3. `tk-5fcp` (p1): make the Go host feel like ion in daily use
-4. `tk-n1al` (p1): harden the scripted backend against the session interface
-5. `tk-x1yq` (p1): build the first native ion backend in Go
-6. `tk-mlhe` (p2): build the ACP backend adapter layer
-7. `tk-vmdl` (p2): add transcript/session persistence to the Go host
-8. `tk-qjs2` (p2): design memory and context architecture for the rewrite
-9. `tk-npsw` (p2): design subagents, swarms, and RLM runtime patterns
+2. `tk-5fcp` (p1): make the Go host feel like ion in daily use
+3. `tk-n1al` (p1): harden the scripted backend against the session interface
+4. `tk-x1yq` (p1): build the first native ion backend in Go
+5. `tk-mlhe` (p2): build the ACP backend adapter layer
+6. `tk-vmdl` (p2): add transcript/session persistence to the Go host
+7. `tk-qjs2` (p2): design memory and context architecture for the rewrite
+8. `tk-npsw` (p2): design subagents, swarms, and RLM runtime patterns
 
 ## Current Findings
 
 - Bubble Tea v2 is now the chosen host direction, not an evaluation branch.
-- The host should target an ACP-shaped session interface so both native ion execution and external agents fit behind one boundary.
+- The host targets an ACP-shaped `AgentSession` interface so both native ion execution and external agents fit behind one boundary.
+- The Go host is now actively consuming stream events from the `AgentSession` boundary, replacing the old fake backend contract.
 - The current Go host is already more stable in multiline editing than the Rust TUI path it replaces.
-- The next important transition is replacing the fake backend contract with a real session lifecycle and event model.
 - Archived Rust material remains available for historical context and implementation reference, but should not drive new planning.
 
 ## Next Steps
 
-1. Replace the current backend contract with the canonical `AgentSession` interface.
-2. Make the host shell feel like ion: transcript, composer, footer, progress, resize, and scrolling.
-3. Implement the first native ion backend behind that interface.
-4. Add ACP-backed external agent support after the host/session boundary is stable.
-5. Add persistence, memory/context, and advanced agent-runtime features on top of that foundation.
+1. Make the host shell feel like ion: transcript, composer, footer, progress, resize, and scrolling.
+2. Implement the first native ion backend behind the `AgentSession` interface.
+3. Add ACP-backed external agent support after the host/session boundary is stable.
+4. Add persistence, memory/context, and advanced agent-runtime features on top of that foundation.
 
 ## Key References
 
