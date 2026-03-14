@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -49,7 +50,6 @@ func TestIntegrationFullLoop(t *testing.T) {
 	model = updated.(Model)
 
 	// Wait for async backend script to finish
-	// In a real TUI test we'd loop, here we just wait or manually trigger updates
 	timeout := time.After(500 * time.Millisecond)
 	done := false
 	for !done {
@@ -65,8 +65,7 @@ func TestIntegrationFullLoop(t *testing.T) {
 		}
 	}
 
-	// 5. Verify transcript has 3 entries: boot assistant, user, and assistant
-	// Wait, boot entries from Bootstrap() are prepended.
+	// 5. Verify transcript has entries
 	if len(model.entries) < 2 {
 		t.Fatalf("expected at least 2 entries, got %d", len(model.entries))
 	}
@@ -88,7 +87,6 @@ func TestIntegrationFullLoop(t *testing.T) {
 		t.Fatalf("failed to read stored entries: %v", err)
 	}
 
-	// Storage should contain: meta (skipped), user "hi", assistant "Hello world"
 	foundUser := false
 	foundAsst := false
 	for _, e := range storedEntries {
@@ -105,6 +103,65 @@ func TestIntegrationFullLoop(t *testing.T) {
 	}
 	if !foundAsst {
 		t.Errorf("assistant message 'Hello world' not found in storage")
+	}
+}
+
+func TestMultiplexedSwarms(t *testing.T) {
+	// Setup store and session
+	tmpRoot := filepath.Join(t.TempDir(), ".ion")
+	store, _ := storage.NewFileStore(tmpRoot)
+	cwd, _ := os.Getwd()
+	sess, _ := store.OpenSession(context.Background(), cwd, "swarm-test", "main")
+
+	// Setup script with two sub-agents
+	b := testutil.New()
+	b.SetScript([]testutil.ScriptStep{
+		{Event: session.EventTurnStarted{BaseEvent: session.BaseEvent{}}, Delay: 0},
+		{Event: session.EventStatusChanged{BaseEvent: session.BaseEvent{AgentID: "Explorer"}, Status: "Mapping codebase..."}, Delay: 10 * time.Millisecond},
+		{Event: session.EventVerificationResult{
+			BaseEvent: session.BaseEvent{AgentID: "Tester"},
+			Command:   "go test ./...",
+			Passed:    true,
+			Metric:    "15/15 passed",
+			Output:    "OK",
+		}, Delay: 20 * time.Millisecond},
+		{Event: session.EventAssistantMessage{BaseEvent: session.BaseEvent{}, Message: "All good."}, Delay: 10 * time.Millisecond},
+		{Event: session.EventTurnFinished{BaseEvent: session.BaseEvent{}}, Delay: 0},
+	})
+
+	model := New(b, sess)
+	
+	// Manually trigger turn
+	b.SubmitTurn(context.Background(), "status check")
+
+	// Consume events
+	timeout := time.After(500 * time.Millisecond)
+	done := false
+	for !done {
+		select {
+		case ev := <-b.Events():
+			updated, _ := model.Update(ev)
+			model = updated.(Model)
+			if _, ok := ev.(session.EventTurnFinished); ok {
+				done = true
+			}
+		case <-timeout:
+			t.Fatalf("timed out")
+		}
+	}
+
+	// Verify entries
+	foundVerify := false
+	for _, e := range model.entries {
+		if e.Role == session.RoleTool && strings.Contains(e.Title, "verify") {
+			foundVerify = true
+			if !strings.Contains(e.Content, "PASSED: 15/15 passed") {
+				t.Errorf("unexpected verification content: %q", e.Content)
+			}
+		}
+	}
+	if !foundVerify {
+		t.Error("verification result not found in transcript")
 	}
 }
 
