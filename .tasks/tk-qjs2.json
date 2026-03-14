@@ -3,7 +3,7 @@
   "ref": "qjs2",
   "title": "Design memory and context system for Go rewrite",
   "description": "Define the rewrite-era memory, context shaping, and compaction architecture behind the new session boundary.",
-  "status": "open",
+  "status": "done",
   "priority": 2,
   "labels": [],
   "assignees": [],
@@ -11,9 +11,14 @@
   "blocked_by": [],
   "estimate": null,
   "due_date": null,
-  "logs": [],
+  "logs": [
+    {
+      "ts": "2026-03-14T01:49:53.181Z",
+      "msg": "Designed Catwalk + API hybrid model discovery. Static metadata from catwalk, live availability from provider APIs. Adopted 1,000 token rule for context efficiency."
+    }
+  ],
   "created_at": "2026-03-13T11:10:12.467Z",
-  "updated_at": "2026-03-13T11:10:12.467Z",
-  "completed_at": null,
+  "updated_at": "2026-03-14T01:49:53.205Z",
+  "completed_at": "2026-03-14T01:49:53.205Z",
   "external": {}
 }
