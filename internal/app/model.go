@@ -262,6 +262,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshViewport(follow)
 		return m, m.awaitSessionEvent()
 
+	case session.EventVerificationResult:
+		follow := m.shouldFollowOutput()
+		status := "PASSED"
+		if !msg.Passed {
+			status = "FAILED"
+		}
+		content := fmt.Sprintf("%s: %s\n%s", status, msg.Metric, msg.Output)
+		m.entries = append(m.entries, session.Entry{
+			Role:    session.RoleTool,
+			Title:   "verify: " + msg.Command,
+			Content: content,
+		})
+		m.refreshViewport(follow)
+		return m, m.awaitSessionEvent()
+
 	case session.EventError:
 		m.status = fmt.Sprintf("Error: %v", msg.Error)
 		return m, m.awaitSessionEvent()
