@@ -4,8 +4,8 @@
 
 | Metric                  | Value                                                                                | Updated    |
 | ----------------------- | ------------------------------------------------------------------------------------ | ---------- |
-| Phase                   | Mainline transition to Go rewrite                                                    | 2026-03-13 |
-| Status                  | `main` now tracks the Go/Bubble Tea rewrite direction                                | 2026-03-13 |
+| Phase                   | Go rewrite active on main                                                            | 2026-03-13 |
+| Status                  | `go-host/` flattened to repo root; module is now `github.com/nijaru/ion`             | 2026-03-13 |
 | Active implementation   | `internal/` (repo root)                                                              | 2026-03-13 |
 | Host state              | Transcript, multiline composer, streamed backend scaffold, tool rendering, app tests | 2026-03-13 |
 | Historical checkpoint   | `stable-rnk` tag preserved at the last stable RNK-era mainline                       | 2026-03-13 |
@@ -33,6 +33,8 @@
   - **Guidance vs. Execution Agents:** Asynchronous sub-agents are superior for maintaining long-term memory/planning.
   - **Tree-Based Sessions:** Branching and forking history is critical for developer workflows.
 - Archived Rust material remains available for historical context and implementation reference, but should not drive new planning.
+- **Repo structure:** `go-host/` flattened to repo root. `cmd/ion/`, `internal/`, `go.mod` now at top level. Run: `go run ./cmd/ion`. Multi-module split deferred — see DECISIONS.md.
+- **Elixir ruled out:** Agent backend stays Go. Self-modification/hot-reload benefits are illusory at ion's scale; the real RLM/swarm patterns are algorithmic, not runtime features.
 
 ## Next Steps
 
