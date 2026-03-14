@@ -4,12 +4,13 @@ Go rewrite of a fast, lightweight inline coding agent.
 
 ## Project Structure
 
-| Directory | Purpose |
-| --------- | ------- |
-| go-host/ | Active Go/Bubble Tea host implementation |
-| ai/ | Active design memory and task context |
+| Directory     | Purpose                                        |
+| ------------- | ---------------------------------------------- |
+| cmd/ion/      | Main entry point                               |
+| internal/     | TUI, session, and backend packages             |
+| ai/           | Active design memory and task context          |
 | archive/rust/ | Archived Rust implementation and Rust-TUI docs |
-| .tasks/ | Task tracking (`tk`) |
+| .tasks/       | Task tracking (`tk`)                           |
 
 ## Session Workflow
 
@@ -17,7 +18,7 @@ Go rewrite of a fast, lightweight inline coding agent.
 
 1. Read `ai/STATUS.md`
 2. Run `tk ready`
-3. Check `go-host/` before making architecture assumptions
+3. Check `internal/` before making architecture assumptions
 
 **End:**
 
@@ -27,13 +28,13 @@ Go rewrite of a fast, lightweight inline coding agent.
 
 ## Active Architecture
 
-| Component | Purpose |
-| --------- | ------- |
-| `go-host/` | Bubble Tea v2 host UI: transcript, composer, footer, status |
-| `AgentSession` boundary | Canonical host-facing session lifecycle and event model |
-| `NativeIonSession` | Native ion runtime behind the session interface |
-| `ACPAgentSession` | External agent backends such as Claude Code, Gemini CLI, and similar systems |
-| `archive/rust/` | Historical reference only; not active implementation guidance |
+| Component               | Purpose                                                                      |
+| ----------------------- | ---------------------------------------------------------------------------- |
+| `internal/app`          | Bubble Tea v2 host UI: transcript, composer, footer, status                  |
+| `AgentSession` boundary | Canonical host-facing session lifecycle and event model                      |
+| `NativeIonSession`      | Native ion runtime behind the session interface                              |
+| `ACPAgentSession`       | External agent backends such as Claude Code, Gemini CLI, and similar systems |
+| `archive/rust/`         | Historical reference only; not active implementation guidance                |
 
 ## Historical Checkpoint
 
@@ -43,8 +44,8 @@ Go rewrite of a fast, lightweight inline coding agent.
 ## Commands
 
 ```bash
-cd go-host && go test ./...
-cd go-host && go run ./cmd/ion-go
+go test ./...
+go run ./cmd/ion
 
 tk ls
  tk ready

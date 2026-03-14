@@ -7,8 +7,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/nijaru/ion/go-host/internal/backend"
-	"github.com/nijaru/ion/go-host/internal/session"
+	"github.com/nijaru/ion/internal/backend"
+	"github.com/nijaru/ion/internal/session"
 )
 
 type stubBackend struct {
