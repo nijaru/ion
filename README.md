@@ -49,4 +49,4 @@ The prior Rust implementation and TUI planning material are preserved under `arc
 
 ## License
 
-[PolyForm Shield 1.0.0](LICENSE)
+[MIT](LICENSE)
