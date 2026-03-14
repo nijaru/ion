@@ -25,14 +25,14 @@ User
 
 ## Active Components
 
-| Component | Responsibility |
-| --- | --- |
-| `go-host/` | Inline terminal host, transcript, composer, footer, event loop |
-| `AgentSession` boundary | Typed lifecycle and event model for any backend |
-| `NativeIonSession` | Native ion runtime using direct APIs, tools, memory, and orchestration |
-| `ACPAgentSession` | External agent bridge for Claude Code, Gemini CLI, and similar systems |
-| `ai/` | Durable design memory for the rewrite |
-| `archive/rust/` | Historical implementation and reference docs |
+| Component               | Responsibility                                                         |
+| ----------------------- | ---------------------------------------------------------------------- |
+| `internal/`             | Inline terminal host, transcript, composer, footer, event loop         |
+| `AgentSession` boundary | Typed lifecycle and event model for any backend                        |
+| `NativeIonSession`      | Native ion runtime using direct APIs, tools, memory, and orchestration |
+| `ACPAgentSession`       | External agent bridge for Claude Code, Gemini CLI, and similar systems |
+| `ai/`                   | Durable design memory for the rewrite                                  |
+| `archive/rust/`         | Historical implementation and reference docs                           |
 
 ## Core Design Principles
 

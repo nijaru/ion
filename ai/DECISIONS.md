@@ -30,6 +30,16 @@
 
 ---
 
+## 2026-03-13: Flatten `go-host/` to Repo Root; Defer Multi-Module Split
+
+**Context**: `go-host/` was named to distinguish the Go implementation from the active Rust codebase. With Rust archived, the prefix is vestigial. `src/` is not idiomatic Go. The standard single-binary Go layout puts `cmd/`, `internal/`, `go.mod` at the repo root.
+
+**Decision**: Flatten `go-host/` to the repo root. Rename `cmd/ion-go` → `cmd/ion`. Hold the multi-module split until there is a concrete reason to do it.
+
+**Rationale**: The TUI and native agent are tightly coupled today. A multi-module split (e.g. `host/` + `agent/` each with their own `go.mod`) pays off when the agent runtime needs to run as a standalone binary or daemon — an ACP server, a background session manager, or a separately importable library. Until one of those is true, the split adds build complexity for no gain.
+
+---
+
 ## 2026-03-13: Synthesize SOTA 2026 Agent Patterns
 
 **Context**: Research into Claude Code, pi-mono, autoresearch, Crush, Droid, and Letta revealed a consensus on high-performance agent architecture.

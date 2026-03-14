@@ -1,7 +1,7 @@
 package backend
 
 import (
-	"github.com/nijaru/ion/go-host/internal/session"
+	"github.com/nijaru/ion/internal/session"
 )
 
 type Bootstrap struct {

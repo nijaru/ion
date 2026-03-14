@@ -2,14 +2,14 @@
 
 ## Current State
 
-| Metric | Value | Updated |
-| --- | --- | --- |
-| Phase | Mainline transition to Go rewrite | 2026-03-13 |
-| Status | `main` now tracks the Go/Bubble Tea rewrite direction | 2026-03-13 |
-| Active implementation | `go-host/` | 2026-03-13 |
-| Host state | Transcript, multiline composer, streamed backend scaffold, tool rendering, app tests | 2026-03-13 |
-| Historical checkpoint | `stable-rnk` tag preserved at the last stable RNK-era mainline | 2026-03-13 |
-| Archived implementation | Rust code and Rust-TUI docs moved under `archive/rust/` | 2026-03-13 |
+| Metric                  | Value                                                                                | Updated    |
+| ----------------------- | ------------------------------------------------------------------------------------ | ---------- |
+| Phase                   | Mainline transition to Go rewrite                                                    | 2026-03-13 |
+| Status                  | `main` now tracks the Go/Bubble Tea rewrite direction                                | 2026-03-13 |
+| Active implementation   | `internal/` (repo root)                                                              | 2026-03-13 |
+| Host state              | Transcript, multiline composer, streamed backend scaffold, tool rendering, app tests | 2026-03-13 |
+| Historical checkpoint   | `stable-rnk` tag preserved at the last stable RNK-era mainline                       | 2026-03-13 |
+| Archived implementation | Rust code and Rust-TUI docs moved under `archive/rust/`                              | 2026-03-13 |
 
 ## Active Work
 
@@ -43,18 +43,18 @@
 
 ## Key References
 
-| Topic | Location |
-| --- | --- |
-| Main rewrite task | `.tasks/tk-3bd5.json` |
-| AgentSession task | `.tasks/tk-8j82.json` |
-| Host UX task | `.tasks/tk-5fcp.json` |
-| Host architecture | `ai/design/go-host-architecture.md` |
-| Session interface | `ai/design/session-interface.md` |
-| ACP integration | `ai/design/acp-integration.md` |
-| Native backend | `ai/design/native-ion-agent.md` |
-| Memory and context | `ai/design/memory-and-context.md` |
-| Subagents / swarms / RLM | `ai/design/subagents-swarms-rlm.md` |
-| Rewrite roadmap | `ai/design/rewrite-roadmap.md` |
-| Bubble Tea decision note | `ai/research/bubbletea-v2-vs-rust-tui-host-2026-03-12.md` |
-| Rust TUI audit retained as reference | `ai/review/tui-lib-audit-2026-03-11.md` |
-| Archived Rust implementation | `archive/rust/` |
+| Topic                                | Location                                                  |
+| ------------------------------------ | --------------------------------------------------------- |
+| Main rewrite task                    | `.tasks/tk-3bd5.json`                                     |
+| AgentSession task                    | `.tasks/tk-8j82.json`                                     |
+| Host UX task                         | `.tasks/tk-5fcp.json`                                     |
+| Host architecture                    | `ai/design/go-host-architecture.md`                       |
+| Session interface                    | `ai/design/session-interface.md`                          |
+| ACP integration                      | `ai/design/acp-integration.md`                            |
+| Native backend                       | `ai/design/native-ion-agent.md`                           |
+| Memory and context                   | `ai/design/memory-and-context.md`                         |
+| Subagents / swarms / RLM             | `ai/design/subagents-swarms-rlm.md`                       |
+| Rewrite roadmap                      | `ai/design/rewrite-roadmap.md`                            |
+| Bubble Tea decision note             | `ai/research/bubbletea-v2-vs-rust-tui-host-2026-03-12.md` |
+| Rust TUI audit retained as reference | `ai/review/tui-lib-audit-2026-03-11.md`                   |
+| Archived Rust implementation         | `archive/rust/`                                           |

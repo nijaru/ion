@@ -1,4 +1,4 @@
-module github.com/nijaru/ion/go-host
+module github.com/nijaru/ion
 
 go 1.26.1
 

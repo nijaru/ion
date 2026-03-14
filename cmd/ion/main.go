@@ -8,10 +8,10 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/nijaru/ion/go-host/internal/app"
-	"github.com/nijaru/ion/go-host/internal/backend"
-	"github.com/nijaru/ion/go-host/internal/backend/fake"
-	"github.com/nijaru/ion/go-host/internal/backend/native"
+	"github.com/nijaru/ion/internal/app"
+	"github.com/nijaru/ion/internal/backend"
+	"github.com/nijaru/ion/internal/backend/fake"
+	"github.com/nijaru/ion/internal/backend/native"
 )
 
 func main() {

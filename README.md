@@ -6,7 +6,7 @@ Fast, lightweight coding agent with an inline terminal host.
 
 ## Current Direction
 
-- Active implementation: Go host in `go-host/`
+- Active implementation: Go host in `internal/`
 - Active UI stack: Bubble Tea v2 + Bubbles v2
 - Planned runtime boundary: ACP-shaped session interface
 - Historical Rust implementation: archived under `archive/rust/`
@@ -24,14 +24,12 @@ The rewrite is in progress. The Go host currently includes:
 ## Run The Current Host
 
 ```sh
-cd go-host
-go run ./cmd/ion-go
+go run ./cmd/ion
 ```
 
 ## Development
 
 ```sh
-cd go-host
 go test ./...
 ```
 

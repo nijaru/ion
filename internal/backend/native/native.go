@@ -9,8 +9,8 @@ import (
 	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
 
-	"github.com/nijaru/ion/go-host/internal/backend"
-	"github.com/nijaru/ion/go-host/internal/session"
+	"github.com/nijaru/ion/internal/backend"
+	"github.com/nijaru/ion/internal/session"
 )
 
 type Backend struct {
