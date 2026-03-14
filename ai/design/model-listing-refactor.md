@@ -31,10 +31,17 @@ ModelPicker
 
 Model listing has two distinct sources:
 
-| Provider Type                               | Source            | Fetcher                     |
-| ------------------------------------------- | ----------------- | --------------------------- |
-| Cloud (OpenRouter, Anthropic, Groq, Google) | API or models.dev | Registry                    |
-| Local (Ollama, vLLM, mlx-lm)                | Local server      | Registry (backend-specific) |
+| Provider Type                               | Metadata Source   | Availability Fetcher       |
+| ------------------------------------------- | ----------------- | -------------------------- |
+| Cloud (Anthropic, Groq, Google, OpenAI)     | `charm.land/catwalk` | Provider API (if possible) |
+| Multi-Provider (OpenRouter)                 | API (Live)        | API (Live)                 |
+| Local (Ollama)                              | API (Live)        | Local server API           |
+
+### Key Insight: Static vs Dynamic
+
+1. **Static Metadata:** Context windows, pricing, and stable model names are sourced from `catwalk` at compile-time/start-time. This eliminates the need for an external "hydration" API like `models.dev` for basic specs.
+2. **Dynamic Availability:** The registry queries provider endpoints (e.g., `GET /api/tags` for Ollama) to see which specific models are *currently* available to the user.
+3. **Fallback:** If a model is found in the API but not in `catwalk`, use a default configuration and flag it for manual update.
 
 ### Changes
 

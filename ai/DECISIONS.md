@@ -40,10 +40,30 @@
 
 ---
 
-## 2026-03-13: Synthesize SOTA 2026 Agent Patterns
+## 2026-03-13: Multiplexed Swarm & RLM Event Model
 
-**Context**: Research into Claude Code, pi-mono, autoresearch, Crush, Droid, and Letta revealed a consensus on high-performance agent architecture.
+**Context**: Advanced agent-runtime patterns like RLM loops (autoresearch) and parallel swarms (Moonshot K2.5, Slate) require a host that can observe multiple concurrent subagents and verification results.
 
-**Decision**: Adopt the "1,000 Token Rule" for system prompts, prioritize tree-based session storage for branching history, and implement a Gather-Act-Verify reasoning loop.
+**Decision**: Include `AgentID` and `TraceID` in the base session event model and add an explicit `EventVerificationResult` for objective function reporting.
 
-**Rationale**: These patterns are proven to increase context efficiency, reasoning stability, and developer productivity across the most successful agentic tools.
+**Rationale**: This enables the host to render complex task trees and parallel worker progress without changing the core session boundary later.
+
+---
+
+## 2026-03-13: Catwalk + API Hybrid Model Listing
+
+**Context**: Model discovery and metadata (context windows, pricing) were previously planned via a remote `models.dev` API, adding latency and a dependency.
+
+**Decision**: Use `charm.land/catwalk` as the primary local metadata database. Hybridize by querying provider APIs (Ollama, OpenRouter, Google) for live availability and credentials-specific model access.
+
+**Rationale**: This is faster, more robust for local models, and aligns with the Go/Charm tech stack.
+
+---
+
+## 2026-03-13: JSONL + SQLite Hybrid Session Storage
+
+**Context**: Session persistence must support both append-only event logging (for durability/streaming) and fast metadata querying (for resuming/listing).
+
+**Decision**: Store session events in per-directory JSONL files and use a local SQLite `index.db` for metadata (branch, model, preview, message count) and `input.db` for user history.
+
+**Rationale**: This combines the durability and transparency of JSONL with the performance of relational queries for UI-driven session management.

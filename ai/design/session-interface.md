@@ -28,9 +28,19 @@ Core event categories:
 - assistant message committed
 - tool call started
 - tool result committed
+- objective function result (Passed/Failed + Metric)
 - approval request opened/resolved
 - turn started / turn finished
 - recoverable or fatal error
+
+### Swarm Multiplexing
+
+To support parallel agent execution (Swarms) and recursive task trees (RLM), all events carry optional identity fields:
+
+- `AgentID`: Identifies the sub-agent or worker.
+- `TraceID`: Identifies the task branch or execution tree.
+
+The host UI is responsible for rendering these events into a coherent parallel display (e.g., nested progress lines or threaded bubbles).
 
 ## Rules
 

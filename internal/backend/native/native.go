@@ -11,13 +11,39 @@ import (
 
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/session"
+	"github.com/nijaru/ion/internal/storage"
 )
 
 type Backend struct {
-	events chan session.Event
-	client *genai.Client
-	model  *genai.GenerativeModel
-	cs     *genai.ChatSession
+	events  chan session.Event
+	client  *genai.Client
+	model   *genai.GenerativeModel
+	cs      *genai.ChatSession
+	storage storage.Store
+	sess    storage.Session
+}
+
+func (b *Backend) SetStore(s storage.Store) {
+	b.storage = s
+}
+
+func (b *Backend) ID() string {
+	if b.sess != nil {
+		return b.sess.ID()
+	}
+	return ""
+}
+
+func (b *Backend) Meta() map[string]string {
+	if b.sess != nil {
+		m := b.sess.Meta()
+		return map[string]string{
+			"model":  m.Model,
+			"branch": m.Branch,
+			"cwd":    m.CWD,
+		}
+	}
+	return nil
 }
 
 func New() *Backend {
@@ -66,7 +92,7 @@ func (b *Backend) Open(ctx context.Context) error {
 	b.model = client.GenerativeModel(modelName)
 	b.cs = b.model.StartChat()
 	
-	b.events <- session.EventStatusChanged{Status: fmt.Sprintf("Connected to %s", modelName)}
+	b.events <- session.EventStatusChanged{BaseEvent: session.BaseEvent{}, Status: fmt.Sprintf("Connected to %s", modelName)}
 	return nil
 }
 
@@ -79,8 +105,8 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 		return fmt.Errorf("session not opened")
 	}
 
-	b.events <- session.EventTurnStarted{}
-	b.events <- session.EventStatusChanged{Status: "Gemini is thinking..."}
+	b.events <- session.EventTurnStarted{BaseEvent: session.BaseEvent{}}
+	b.events <- session.EventStatusChanged{BaseEvent: session.BaseEvent{}, Status: "Gemini is thinking..."}
 
 	go func() {
 		iter := b.cs.SendMessageStream(ctx, genai.Text(input))
@@ -90,7 +116,7 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 				break
 			}
 			if err != nil {
-				b.events <- session.EventError{Error: err, Fatal: false}
+				b.events <- session.EventError{BaseEvent: session.BaseEvent{}, Error: err, Fatal: false}
 				break
 			}
 
@@ -98,16 +124,16 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 				if cand.Content != nil {
 					for _, part := range cand.Content.Parts {
 						if text, ok := part.(genai.Text); ok {
-							b.events <- session.EventAssistantDelta{Delta: string(text)}
+							b.events <- session.EventAssistantDelta{BaseEvent: session.BaseEvent{}, Delta: string(text)}
 						}
 					}
 				}
 			}
 		}
 		
-		b.events <- session.EventAssistantMessage{Message: ""} // Commit
-		b.events <- session.EventStatusChanged{Status: "Ready"}
-		b.events <- session.EventTurnFinished{}
+		b.events <- session.EventAssistantMessage{BaseEvent: session.BaseEvent{}, Message: ""} // Commit
+		b.events <- session.EventStatusChanged{BaseEvent: session.BaseEvent{}, Status: "Ready"}
+		b.events <- session.EventTurnFinished{BaseEvent: session.BaseEvent{}}
 	}()
 
 	return nil

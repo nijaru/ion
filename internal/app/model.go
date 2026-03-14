@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/viewport"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/session"
+	"github.com/nijaru/ion/internal/storage"
 )
 
 const (
@@ -33,12 +35,15 @@ type Model struct {
 
 	backend backend.Backend
 	session session.AgentSession
+	storage storage.Session
 
 	entries []session.Entry
 	pending *session.Entry
 
 	viewport viewport.Model
 	composer textarea.Model
+
+	lastToolUseID string
 
 	status  string
 	workdir string
@@ -54,7 +59,7 @@ type Model struct {
 	lineSty   lipgloss.Style
 }
 
-func New(b backend.Backend) Model {
+func New(b backend.Backend, s storage.Session) Model {
 	ta := textarea.New()
 	ta.Placeholder = "Type a message... (ctrl+s to send)"
 	ta.Prompt = "› "
@@ -64,7 +69,20 @@ func New(b backend.Backend) Model {
 	ta.MaxHeight = maxComposerHeight
 
 	cwd, _ := os.Getwd()
+	
+	// Load existing entries if available
+	var entries []session.Entry
+	if s != nil {
+		if stored, err := s.Entries(context.Background()); err == nil && len(stored) > 0 {
+			entries = stored
+		}
+	}
+
 	boot := b.Bootstrap()
+	if len(entries) == 0 {
+		entries = boot.Entries
+	}
+
 	vp := viewport.New(viewport.WithWidth(80), viewport.WithHeight(20))
 	vp.SoftWrap = true
 	vp.MouseWheelEnabled = true
@@ -73,7 +91,8 @@ func New(b backend.Backend) Model {
 	m := Model{
 		backend:  b,
 		session:  b.Session(),
-		entries:  boot.Entries,
+		storage:  s,
+		entries:  entries,
 		viewport: vp,
 		composer: ta,
 		status:   boot.Status,
@@ -177,6 +196,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.pending.Content = msg.Message
 			}
 			m.entries = append(m.entries, *m.pending)
+
+			if m.storage != nil {
+				m.storage.Append(context.Background(), storage.EntryAssistant{
+					Type: "assistant",
+					Content: []storage.ContentBlock{
+						{Type: "text", Text: &m.pending.Content},
+					},
+					TS: time.Now().Unix(),
+				})
+			}
+
 			m.pending = nil
 		}
 		m.refreshViewport(follow)
@@ -189,6 +219,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			Role:  session.RoleTool,
 			Title: fmt.Sprintf("%s(%s)", msg.ToolName, msg.Args),
 		})
+
+		m.lastToolUseID = session.ShortID()
+		if m.storage != nil {
+			m.storage.Append(context.Background(), storage.EntryToolUse{
+				Type: "tool_use",
+				ID:   m.lastToolUseID,
+				Name: msg.ToolName,
+				Input: map[string]string{
+					"args": msg.Args,
+				},
+				TS: time.Now().Unix(),
+			})
+		}
+
 		m.refreshViewport(follow)
 		return m, m.awaitSessionEvent()
 
@@ -204,6 +248,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				Content: msg.Result,
 			})
 		}
+
+		if m.storage != nil {
+			m.storage.Append(context.Background(), storage.EntryToolResult{
+				Type:      "tool_result",
+				ToolUseID: m.lastToolUseID,
+				Content:   msg.Result,
+				IsError:   msg.Error != nil,
+				TS:        time.Now().Unix(),
+			})
+		}
+
 		m.refreshViewport(follow)
 		return m, m.awaitSessionEvent()
 
@@ -224,6 +279,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				Role:    session.RoleUser,
 				Content: text,
 			})
+			if m.storage != nil {
+				m.storage.Append(context.Background(), storage.EntryUser{
+					Type:    "user",
+					Content: text,
+					TS:      time.Now().Unix(),
+				})
+			}
 			m.composer.Reset()
 			m.status = fmt.Sprintf("[%s] turn in flight", m.backend.Name())
 			m.layout()
@@ -391,3 +453,4 @@ func max(a, b int) int {
 	}
 	return b
 }
+

@@ -1,0 +1,116 @@
+package storage
+
+import (
+	"context"
+	"time"
+
+	"github.com/nijaru/ion/internal/session"
+)
+
+// Store defines the interface for session and input history persistence.
+type Store interface {
+	// OpenSession initializes a new session and its storage file.
+	OpenSession(ctx context.Context, cwd, model, branch string) (Session, error)
+
+	// ResumeSession loads an existing session by ID.
+	ResumeSession(ctx context.Context, id string) (Session, error)
+
+	// ListSessions returns a list of sessions for the given working directory.
+	ListSessions(ctx context.Context, cwd string) ([]SessionInfo, error)
+
+	// GetRecentSession returns the most recently updated session for the given directory.
+	GetRecentSession(ctx context.Context, cwd string) (*SessionInfo, error)
+
+	// AddInput appends a user input string to the directory's history.
+	AddInput(ctx context.Context, cwd, content string) error
+
+	// GetInputs returns the input history for the given directory.
+	GetInputs(ctx context.Context, cwd string, limit int) ([]string, error)
+
+	// UpdateSession updates the session's index metadata.
+	UpdateSession(ctx context.Context, si SessionInfo) error
+}
+
+// Session handles appending events to a specific session's storage.
+type Session interface {
+	// ID returns the unique session identifier.
+	ID() string
+
+	// Meta returns the session's initial metadata.
+	Meta() Meta
+
+	// Append appends a new event to the session storage.
+	Append(ctx context.Context, event any) error
+
+	// Entries returns all entries stored in the session so far.
+	Entries(ctx context.Context) ([]session.Entry, error)
+
+	// Close finalizes and closes any open file handles for the session.
+	Close() error
+}
+
+// Meta represents the persistent metadata for a session.
+type Meta struct {
+	ID        string    `json:"id"`
+	CWD       string    `json:"cwd"`
+	Model     string    `json:"model"`
+	Branch    string    `json:"branch"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// SessionInfo provides summary information about a session for lists and pickers.
+type SessionInfo struct {
+	ID           string    `json:"id"`
+	Model        string    `json:"model"`
+	Branch       string    `json:"branch"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+	MessageCount int       `json:"message_count"`
+	LastPreview  string    `json:"last_preview"`
+}
+
+// JSONL entry types as defined in ai/design/session-storage.md
+type (
+	EntryMeta struct {
+		Type      string `json:"type"` // "meta"
+		ID        string `json:"id"`
+		CWD       string `json:"cwd"`
+		Model     string `json:"model"`
+		Branch    string `json:"branch"`
+		CreatedAt int64  `json:"created_at"`
+	}
+
+	EntryUser struct {
+		Type    string `json:"type"` // "user"
+		Content string `json:"content"`
+		TS      int64  `json:"ts"`
+	}
+
+	EntryAssistant struct {
+		Type    string          `json:"type"` // "assistant"
+		Content []ContentBlock `json:"content"`
+		TS      int64           `json:"ts"`
+	}
+
+	EntryToolUse struct {
+		Type  string `json:"type"` // "tool_use"
+		ID    string `json:"id"`
+		Name  string `json:"name"`
+		Input any    `json:"input"`
+		TS    int64  `json:"ts"`
+	}
+
+	EntryToolResult struct {
+		Type      string `json:"type"` // "tool_result"
+		ToolUseID string `json:"tool_use_id"`
+		Content   string `json:"content"`
+		IsError   bool   `json:"is_error"`
+		TS        int64  `json:"ts"`
+	}
+
+	ContentBlock struct {
+		Type     string  `json:"type"` // "text" or "thinking"
+		Text     *string `json:"text,omitempty"`
+		Thinking *string `json:"thinking,omitempty"`
+	}
+)

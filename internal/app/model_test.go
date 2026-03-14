@@ -9,6 +9,7 @@ import (
 
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/session"
+	"github.com/nijaru/ion/internal/storage"
 )
 
 type stubBackend struct {
@@ -26,6 +27,8 @@ func (b stubBackend) Bootstrap() backend.Bootstrap {
 
 func (b stubBackend) Session() session.AgentSession { return b.sess }
 
+func (b stubBackend) SetStore(s storage.Store) {}
+
 type stubSession struct {
 	events chan session.Event
 }
@@ -36,12 +39,14 @@ func (s *stubSession) SubmitTurn(ctx context.Context, turn string) error { retur
 func (s *stubSession) CancelTurn(ctx context.Context) error              { return nil }
 func (s *stubSession) Close() error                                      { return nil }
 func (s *stubSession) Events() <-chan session.Event                      { return s.events }
+func (s *stubSession) ID() string                                        { return "stub" }
+func (s *stubSession) Meta() map[string]string                           { return nil }
 
 func readyModel(t *testing.T) Model {
 	t.Helper()
 	sess := &stubSession{events: make(chan session.Event)}
 	b := stubBackend{sess: sess}
-	model := New(b)
+	model := New(b, nil)
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	ready, ok := updated.(Model)
 	if !ok {
@@ -53,7 +58,7 @@ func readyModel(t *testing.T) Model {
 func TestModelStreamsAndCommitsPendingEntry(t *testing.T) {
 	model := readyModel(t)
 
-	updated, _ := model.Update(session.EventTurnStarted{})
+	updated, _ := model.Update(session.EventTurnStarted{BaseEvent: session.BaseEvent{}})
 	model = updated.(Model)
 	updated, _ = model.Update(session.EventAssistantDelta{Delta: "streamed reply"})
 	model = updated.(Model)
@@ -62,7 +67,7 @@ func TestModelStreamsAndCommitsPendingEntry(t *testing.T) {
 		t.Fatalf("expected pending streamed assistant entry, got %#v", model.pending)
 	}
 
-	updated, _ = model.Update(session.EventAssistantMessage{})
+	updated, _ = model.Update(session.EventAssistantMessage{BaseEvent: session.BaseEvent{}})
 	model = updated.(Model)
 
 	if model.pending != nil {
@@ -79,14 +84,16 @@ func TestModelStreamsAndCommitsPendingEntry(t *testing.T) {
 func TestToolEntryRendersIntoTranscript(t *testing.T) {
 	model := readyModel(t)
 	updated, _ := model.Update(session.EventToolCallStarted{
-		ToolName: "bash",
-		Args:     "ls",
+		BaseEvent: session.BaseEvent{},
+		ToolName:  "bash",
+		Args:      "ls",
 	})
 	model = updated.(Model)
 	
 	updated, _ = model.Update(session.EventToolResult{
-		ToolName: "bash",
-		Result:   "ok",
+		BaseEvent: session.BaseEvent{},
+		ToolName:  "bash",
+		Result:    "ok",
 	})
 	model = updated.(Model)
 

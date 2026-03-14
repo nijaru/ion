@@ -25,4 +25,10 @@ type AgentSession interface {
 	// Events returns a read-only channel of typed events emitted by the session.
 	// The host UI consumes these events and translates them into UI commands.
 	Events() <-chan Event
+
+	// ID returns the session identifier.
+	ID() string
+
+	// Meta returns session metadata.
+	Meta() map[string]string
 }
