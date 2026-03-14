@@ -2,13 +2,13 @@
 
 ## What Is canto?
 
-[canto](https://github.com/nijaru/canto) is a composable Go framework for building LLM agents and agent swarms. It extracts the agent, session, memory, context, and tool infrastructure into a reusable library — the pieces ion needs under the hood.
+[canto](https://github.com/nijaru/canto) is a composable Go framework for building LLM agents and agent swarms. It provides general-purpose primitives: provider-agnostic LLM streaming, durable session logging, agent loop, tool execution, context compaction, and memory — usable by any agent or application.
 
 ## Relationship
 
-ion is a TUI coding agent. canto is the framework it will eventually run on.
+ion is a TUI coding agent. canto is a general agent framework ion plans to adopt.
 
-ion is being rewritten in Go at the same time canto is being built. The plan is for ion's `NativeIonSession` to become a thin wrapper over canto's runtime once canto reaches a stable Phase 1.
+ion's `NativeIonSession` will become a thin adapter over canto's runtime once canto reaches a stable Phase 1. canto is designed for the general case — ion adapts to canto's APIs, not the other way around.
 
 ```
 ion (TUI + UX layer)
@@ -59,14 +59,14 @@ Files already copied to canto (as of 2026-03-14):
 
 ## Development Order
 
-canto Phase 1 (in progress) delivers the minimal viable stack ion needs:
+canto Phase 1 (in progress):
 
 1. `llm/` — Provider interface, streaming, cost tracking
 2. `session/` — Event log, JSONL store
 3. `agent/` — Agent loop, turn execution
 4. `tool/` + `runtime/` — Tool interface, registry, runner
 
-Once Phase 1 gates pass (`go test ./...`), ion's `NativeIonSession` can be wired to canto's runtime in place of its current internal implementation.
+Once Phase 1 gates pass, ion can wire `NativeIonSession` to canto's runtime. Until then, ion's `internal/` implementations stand independently.
 
 ## Cross-Project Workflow
 
