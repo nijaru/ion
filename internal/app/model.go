@@ -236,6 +236,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshViewport(follow)
 		return m, m.awaitSessionEvent()
 
+	case session.EventToolOutputDelta:
+		follow := m.shouldFollowOutput()
+		// Append to the most recent tool entry if it's currently active.
+		if len(m.entries) > 0 && m.entries[len(m.entries)-1].Role == session.RoleTool {
+			m.entries[len(m.entries)-1].Content += msg.Delta
+		}
+		m.refreshViewport(follow)
+		return m, m.awaitSessionEvent()
+
 	case session.EventToolResult:
 		follow := m.shouldFollowOutput()
 		// Update the last tool entry or append a new one

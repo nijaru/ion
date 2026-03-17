@@ -73,6 +73,14 @@ type EventToolResult struct {
 
 func (e EventToolResult) isSessionEvent() {}
 
+// EventToolOutputDelta is an incremental chunk of tool output text.
+type EventToolOutputDelta struct {
+	BaseEvent
+	Delta string
+}
+
+func (e EventToolOutputDelta) isSessionEvent() {}
+
 // EventVerificationResult fires when an objective function (test, benchmark, 
 // compile check) completes. Essential for RLM loops.
 type EventVerificationResult struct {

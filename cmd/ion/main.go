@@ -63,6 +63,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "failed to resume session %s: %v\n", sessionID, err)
 			os.Exit(1)
 		}
+		b.SetSession(sess)
 		if err := b.Session().Resume(ctx, sessionID); err != nil {
 			fmt.Fprintf(os.Stderr, "backend resume error: %v\n", err)
 			os.Exit(1)
@@ -79,6 +80,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "failed to open session: %v\n", err)
 			os.Exit(1)
 		}
+		b.SetSession(sess)
 		if err := b.Session().Open(ctx); err != nil {
 			fmt.Fprintf(os.Stderr, "backend initialization error: %v\n", err)
 			os.Exit(1)
