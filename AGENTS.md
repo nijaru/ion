@@ -2,39 +2,38 @@
 
 Go rewrite of a fast, lightweight inline coding agent.
 
-## Project Structure
+## Architecture & Philosophy
 
-| Directory     | Purpose                                        |
-| ------------- | ---------------------------------------------- |
-| cmd/ion/      | Main entry point                               |
-| internal/     | TUI, session, and backend packages             |
-| ai/           | Active design memory and task context          |
-| archive/rust/ | Archived Rust implementation and Rust-TUI docs |
-| .tasks/       | Task tracking (`tk`)                           |
+ion is a specialized coding application built on top of the **canto** framework.
 
-## Session Workflow
+- **canto (The Framework):** Provides general-purpose agent primitives (Layer 3): LLM streaming, append-only session logging, agent loop, tool registry, and memory. It is the "Rails" of the agent stack.
+- **ion (The Application):** A TUI-based coding environment (Layer 4) that uses canto's primitives to implement a specific developer workflow. It is a "Rails app."
 
-**Start:**
-
-1. Read `ai/STATUS.md`
-2. Run `tk ready`
-3. Check `internal/` before making architecture assumptions
-
-**End:**
-
-- Update `ai/STATUS.md`
-- Log or complete relevant `tk` tasks
-- Commit changes
+| Layer | Responsibility | Component |
+| ----- | -------------- | --------- |
+| **4** | **Application** | ion (TUI, Coding tools, Workspace logic) |
+| **3** | **Framework** | canto (Session log, Agent loop, Tooling, Memory) |
+| **2** | **Logic** | llm (Provider interface, Token counting, Cost) |
+| **1** | **Transport** | http (API clients, SSE, JSON-RPC) |
 
 ## Active Architecture
 
-| Component               | Purpose                                                                      |
-| ----------------------- | ---------------------------------------------------------------------------- |
-| `internal/app`          | Bubble Tea v2 host UI: transcript, composer, footer, status                  |
-| `AgentSession` boundary | Canonical host-facing session lifecycle and event model                      |
-| `CantoSession`          | Primary native ion runtime powered by the `canto` framework                  |
-| `ACPAgentSession`       | External agent backends such as Claude Code, Gemini CLI, and similar systems |
-| `archive/rust/`         | Historical reference only; not active implementation guidance                |
+| Component | Purpose |
+| --------- | ------- |
+| `internal/app` | Bubble Tea v2 host UI: transcript, composer, viewport, and footer. |
+| `AgentSession` | Canonical host-facing boundary (SubmitTurn, Events, Cancel). |
+| `CantoBackend` | The primary agent core powered by the `canto` framework. |
+| `ACPAgentSession` | Future support for external agents (Claude Code, etc.) via protocol. |
+| `archive/rust/` | Historical reference only; not active implementation guidance. |
+
+## Project Structure
+
+| Directory | Purpose |
+| --------- | ------- |
+| `cmd/ion/` | Main entry point and CLI flag parsing. |
+| `internal/` | Application-specific packages (UI, Backend adapters, Local storage). |
+| `ai/` | Active design memory and task context (local-only). |
+| `.tasks/` | Task tracking (`tk`) state (local-only). |
 
 ## Historical Checkpoint
 
