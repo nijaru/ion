@@ -18,7 +18,7 @@ import (
 func TestIntegrationFullLoop(t *testing.T) {
 	// 1. Setup storage
 	tmpRoot := filepath.Join(t.TempDir(), ".ion")
-	store, err := storage.NewFileStore(tmpRoot)
+	store, err := storage.NewCantoStore(tmpRoot)
 	if err != nil {
 		t.Fatalf("failed to create store: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestIntegrationFullLoop(t *testing.T) {
 func TestMultiplexedSwarms(t *testing.T) {
 	// Setup store and session
 	tmpRoot := filepath.Join(t.TempDir(), ".ion")
-	store, _ := storage.NewFileStore(tmpRoot)
+	store, _ := storage.NewCantoStore(tmpRoot)
 	cwd, _ := os.Getwd()
 	sess, _ := store.OpenSession(context.Background(), cwd, "swarm-test", "main")
 

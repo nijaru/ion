@@ -12,6 +12,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/nijaru/ion/internal/app"
+	"github.com/nijaru/ion/internal/backend"
+	"github.com/nijaru/ion/internal/backend/canto"
 	"github.com/nijaru/ion/internal/backend/native"
 	"github.com/nijaru/ion/internal/storage"
 )
@@ -19,18 +21,25 @@ import (
 func main() {
 	continueFlag := flag.Bool("continue", false, "Continue the most recent session in this directory")
 	resumeFlag := flag.String("resume", "", "Resume a specific session by ID")
+	backendFlag := flag.String("backend", "canto", "Backend to use (canto, native)")
 	flag.Parse()
 
 	// Initialize storage
 	home, _ := os.UserHomeDir()
 	storageRoot := filepath.Join(home, ".ion")
-	store, err := storage.NewFileStore(storageRoot)
+	store, err := storage.NewCantoStore(storageRoot)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to initialize storage: %v\n", err)
 		os.Exit(1)
 	}
 
-	b := native.New()
+	var b backend.Backend
+	switch *backendFlag {
+	case "native":
+		b = native.New()
+	default:
+		b = canto.New()
+	}
 	b.SetStore(store)
 
 	ctx := context.Background()
