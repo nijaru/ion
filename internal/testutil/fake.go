@@ -30,6 +30,10 @@ func (b *Backend) SetStore(s storage.Store) {
 	b.storage = s
 }
 
+func (b *Backend) SetSession(s storage.Session) {
+	b.sess = s
+}
+
 func (b *Backend) ID() string {
 	if b.sess != nil {
 		return b.sess.ID()

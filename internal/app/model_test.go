@@ -29,6 +29,8 @@ func (b stubBackend) Session() session.AgentSession { return b.sess }
 
 func (b stubBackend) SetStore(s storage.Store) {}
 
+func (b stubBackend) SetSession(s storage.Session) {}
+
 type stubSession struct {
 	events chan session.Event
 }

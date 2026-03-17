@@ -192,14 +192,14 @@ func (b *Backend) translateEvents(ctx context.Context, evCh <-chan session.Event
 			}
 
 			switch ev.Type {
-			case session.EventTypeTurnStarted:
+			case session.TurnStarted:
 				b.events <- ionsession.EventTurnStarted{}
 				b.events <- ionsession.EventStatusChanged{Status: "Thinking..."}
-			case session.EventTypeTurnCompleted:
+			case session.TurnCompleted:
 				b.events <- ionsession.EventTurnFinished{}
 				b.events <- ionsession.EventAssistantMessage{Message: ""} // Commit
 				b.events <- ionsession.EventStatusChanged{Status: "Ready"}
-			case session.EventTypeToolExecutionStarted:
+			case session.ToolStarted:
 				var data struct {
 					Tool string `json:"tool"`
 					ID   string `json:"id"`
@@ -212,7 +212,7 @@ func (b *Backend) translateEvents(ctx context.Context, evCh <-chan session.Event
 					}
 					b.events <- ionsession.EventStatusChanged{Status: fmt.Sprintf("Running %s...", data.Tool)}
 				}
-			case session.EventTypeToolExecutionCompleted:
+			case session.ToolCompleted:
 				var data struct {
 					Tool   string `json:"tool"`
 					ID     string `json:"id"`
@@ -230,7 +230,7 @@ func (b *Backend) translateEvents(ctx context.Context, evCh <-chan session.Event
 						Error:    execErr,
 					}
 				}
-			case session.EventTypeToolOutputDelta:
+			case session.ToolOutputDelta:
 				var data struct {
 					Delta string `json:"delta"`
 				}

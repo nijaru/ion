@@ -207,7 +207,7 @@ func (s *cantoSession) Append(ctx context.Context, event any) error {
 	case EntryUser:
 		preview = e.Content
 		// We could save this to Canto store as a User message event
-		ev := session.NewEvent(s.id, session.EventTypeMessageAdded, llm.Message{
+		ev := session.NewEvent(s.id, session.MessageAdded, llm.Message{
 			Role:    llm.RoleUser,
 			Content: e.Content,
 		})
@@ -220,7 +220,7 @@ func (s *cantoSession) Append(ctx context.Context, event any) error {
 			}
 		}
 		preview = content.String()
-		ev := session.NewEvent(s.id, session.EventTypeMessageAdded, llm.Message{
+		ev := session.NewEvent(s.id, session.MessageAdded, llm.Message{
 			Role:    llm.RoleAssistant,
 			Content: preview,
 		})
@@ -243,7 +243,7 @@ func (s *cantoSession) Entries(ctx context.Context) ([]ionsession.Entry, error) 
 	var entries []ionsession.Entry
 	for _, ev := range sess.Events() {
 		switch ev.Type {
-		case session.EventTypeMessageAdded:
+		case session.MessageAdded:
 			var msg llm.Message
 			if err := ev.UnmarshalData(&msg); err == nil {
 				role := ionsession.RoleAssistant
@@ -255,7 +255,7 @@ func (s *cantoSession) Entries(ctx context.Context) ([]ionsession.Entry, error) 
 					Content: msg.Content,
 				})
 			}
-		case session.EventTypeToolExecutionStarted:
+		case session.ToolStarted:
 			var data struct {
 				Tool string `json:"tool"`
 				Args string `json:"args"`
@@ -266,7 +266,7 @@ func (s *cantoSession) Entries(ctx context.Context) ([]ionsession.Entry, error) 
 					Title: fmt.Sprintf("%s(%s)", data.Tool, data.Args),
 				})
 			}
-		case session.EventTypeToolExecutionCompleted:
+		case session.ToolCompleted:
 			var data struct {
 				Output string `json:"output"`
 			}
