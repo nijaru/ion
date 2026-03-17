@@ -60,9 +60,12 @@ func (b *Bash) ExecuteStreaming(ctx context.Context, args string, emit func(stri
 
 	var output strings.Builder
 	var mu sync.Mutex
+	var wg sync.WaitGroup
+	wg.Add(2)
 	
 	// Helper to handle pipe output and emit deltas
 	handlePipe := func(r io.Reader) {
+		defer wg.Done()
 		buf := make([]byte, 1024)
 		for {
 			n, err := r.Read(buf)
@@ -85,6 +88,7 @@ func (b *Bash) ExecuteStreaming(ctx context.Context, args string, emit func(stri
 	go handlePipe(stderr)
 
 	err := cmd.Wait()
+	wg.Wait()
 	res := output.String()
 	
 	if err != nil {
