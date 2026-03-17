@@ -32,7 +32,7 @@ Go rewrite of a fast, lightweight inline coding agent.
 | ----------------------- | ---------------------------------------------------------------------------- |
 | `internal/app`          | Bubble Tea v2 host UI: transcript, composer, footer, status                  |
 | `AgentSession` boundary | Canonical host-facing session lifecycle and event model                      |
-| `NativeIonSession`      | Native ion runtime behind the session interface                              |
+| `CantoSession`          | Primary native ion runtime powered by the `canto` framework                  |
 | `ACPAgentSession`       | External agent backends such as Claude Code, Gemini CLI, and similar systems |
 | `archive/rust/`         | Historical reference only; not active implementation guidance                |
 
