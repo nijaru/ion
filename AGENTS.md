@@ -62,6 +62,16 @@ tk ls
 - Use `tk` for all multi-step work.
 - When a user reports a bug, create or update a `tk` task immediately.
 
+## Go Idioms
+
+Use the `go-expert` skill for full guidance. Key modern idioms:
+
+- `slices` / `maps` packages — not manual loops or `sort.Slice`
+- `iter.Seq` / `iter.Seq2` — range-over-function iterators (Go 1.23+)
+- `sync.WaitGroup.Go` — replaces `Add(1); go func() { defer Done() }()`
+- `errors.AsType[T](err)` — type-safe error unwrapping (Go 1.26)
+- `t.Context()` in tests — not `context.TODO()`
+
 ## Reference
 
 **Active design docs:**
