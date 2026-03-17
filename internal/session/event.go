@@ -16,7 +16,7 @@ type Base struct {
 // MetadataLoaded fires when a session's metadata is loaded or created.
 type MetadataLoaded struct {
 	Base
-	SessionID string
+	SessionID string `json:"session_id"`
 }
 
 func (e MetadataLoaded) isEvent() {}
@@ -25,7 +25,7 @@ func (e MetadataLoaded) isEvent() {}
 // or progresses on a long-running step.
 type StatusChanged struct {
 	Base
-	Status string
+	Status string `json:"status"`
 }
 
 func (e StatusChanged) isEvent() {}
@@ -33,7 +33,7 @@ func (e StatusChanged) isEvent() {}
 // PlanUpdated fires when the agent's internal plan of execution changes.
 type PlanUpdated struct {
 	Base
-	Plan string
+	Plan string `json:"plan"`
 }
 
 func (e PlanUpdated) isEvent() {}
@@ -41,7 +41,7 @@ func (e PlanUpdated) isEvent() {}
 // AssistantDelta is an incremental chunk of assistant output text.
 type AssistantDelta struct {
 	Base
-	Delta string
+	Delta string `json:"delta"`
 }
 
 func (e AssistantDelta) isEvent() {}
@@ -49,7 +49,7 @@ func (e AssistantDelta) isEvent() {}
 // ThinkingDelta is an incremental chunk of assistant reasoning/thinking text.
 type ThinkingDelta struct {
 	Base
-	Delta string
+	Delta string `json:"delta"`
 }
 
 func (e ThinkingDelta) isEvent() {}
@@ -57,7 +57,7 @@ func (e ThinkingDelta) isEvent() {}
 // AssistantMessage fires when a complete assistant message is committed.
 type AssistantMessage struct {
 	Base
-	Message string
+	Message string `json:"message"`
 }
 
 func (e AssistantMessage) isEvent() {}
@@ -65,8 +65,8 @@ func (e AssistantMessage) isEvent() {}
 // ToolCallStarted fires when the agent starts executing a tool.
 type ToolCallStarted struct {
 	Base
-	ToolName string
-	Args     string
+	ToolName string `json:"tool_name"`
+	Args     string `json:"args"`
 }
 
 func (e ToolCallStarted) isEvent() {}
@@ -74,9 +74,9 @@ func (e ToolCallStarted) isEvent() {}
 // ToolResult fires when the agent finishes executing a tool.
 type ToolResult struct {
 	Base
-	ToolName string
-	Result   string
-	Error    error
+	ToolName string `json:"tool_name"`
+	Result   string `json:"result"`
+	Error    error  `json:"error,omitempty"`
 }
 
 func (e ToolResult) isEvent() {}
@@ -84,7 +84,7 @@ func (e ToolResult) isEvent() {}
 // ToolOutputDelta is an incremental chunk of tool output text.
 type ToolOutputDelta struct {
 	Base
-	Delta string
+	Delta string `json:"delta"`
 }
 
 func (e ToolOutputDelta) isEvent() {}
@@ -93,10 +93,10 @@ func (e ToolOutputDelta) isEvent() {}
 // compile check) completes. Essential for RLM loops.
 type VerificationResult struct {
 	Base
-	Command string
-	Passed  bool
-	Metric  string // e.g., "val_loss: 0.12" or "42/42 tests"
-	Output  string
+	Command string `json:"command"`
+	Passed  bool   `json:"passed"`
+	Metric  string `json:"metric,omitempty"`
+	Output  string `json:"output,omitempty"`
 }
 
 func (e VerificationResult) isEvent() {}
@@ -104,8 +104,8 @@ func (e VerificationResult) isEvent() {}
 // ApprovalRequest fires when the agent needs explicit host approval to continue.
 type ApprovalRequest struct {
 	Base
-	RequestID   string
-	Description string
+	RequestID   string `json:"request_id"`
+	Description string `json:"description"`
 }
 
 func (e ApprovalRequest) isEvent() {}
@@ -127,8 +127,8 @@ func (e TurnFinished) isEvent() {}
 // Error represents a recoverable or fatal error in the session.
 type Error struct {
 	Base
-	Err   error
-	Fatal bool
+	Err   error `json:"err"`
+	Fatal bool  `json:"fatal"`
 }
 
 func (e Error) isEvent() {}
