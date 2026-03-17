@@ -5,6 +5,7 @@ archive/rust/target/
 # Go build output
 *.test
 .coverprofile
+ion
 
 # Worktrees
 .worktrees/
