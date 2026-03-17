@@ -19,6 +19,9 @@ type AgentSession interface {
 	// CancelTurn interrupts an in-flight turn if the backend supports it.
 	CancelTurn(ctx context.Context) error
 
+	// Approve sends an approval decision back to the agent for a pending request.
+	Approve(ctx context.Context, requestID string, approved bool) error
+
 	// Close terminates the session and cleans up resources.
 	Close() error
 

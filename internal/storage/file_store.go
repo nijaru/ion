@@ -199,6 +199,21 @@ func (s *fileStore) UpdateSession(ctx context.Context, si SessionInfo) error {
 	return nil
 }
 
+func (s *fileStore) SaveKnowledge(ctx context.Context, item KnowledgeItem) error {
+	// No-op for fileStore
+	return nil
+}
+
+func (s *fileStore) SearchKnowledge(ctx context.Context, cwd, query string, limit int) ([]KnowledgeItem, error) {
+	// No-op for fileStore
+	return nil, nil
+}
+
+func (s *fileStore) DeleteKnowledge(ctx context.Context, id string) error {
+	// No-op for fileStore
+	return nil
+}
+
 func (s *fileStore) dirFor(cwd string) string {
 	encoded := strings.ReplaceAll(cwd, string(filepath.Separator), "-")
 	if encoded == "" {

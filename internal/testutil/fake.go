@@ -129,6 +129,10 @@ func (b *Backend) CancelTurn(ctx context.Context) error {
 	return nil
 }
 
+func (b *Backend) Approve(ctx context.Context, requestID string, approved bool) error {
+	return nil
+}
+
 func (b *Backend) Close() error {
 	close(b.events)
 	return nil
