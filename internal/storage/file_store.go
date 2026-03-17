@@ -51,7 +51,7 @@ func (s *fileStore) OpenSession(ctx context.Context, cwd, model, branch string) 
 		return nil, err
 	}
 
-	meta := EntryMeta{
+	meta := Meta{
 		Type:      "meta",
 		ID:        id,
 		CWD:       cwd,
@@ -80,7 +80,7 @@ func (s *fileStore) OpenSession(ctx context.Context, cwd, model, branch string) 
 
 func (s *fileStore) ResumeSession(ctx context.Context, id string) (Session, error) {
 	var sessionPath string
-	var meta EntryMeta
+	var meta Meta
 
 	err := filepath.Walk(filepath.Join(s.root, "sessions"), func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -302,14 +302,14 @@ type fileSession struct {
 	store *fileStore
 	f     *os.File
 	path  string
-	meta  EntryMeta
+	meta  Meta
 	mu    sync.Mutex
 }
 
 func (s *fileSession) ID() string { return s.meta.ID }
 
-func (s *fileSession) Meta() Meta {
-	return Meta{
+func (s *fileSession) Meta() Metadata {
+	return Metadata{
 		ID:        s.meta.ID,
 		CWD:       s.meta.CWD,
 		Model:     s.meta.Model,
@@ -331,10 +331,10 @@ func (s *fileSession) Append(ctx context.Context, event any) error {
 	var isMsg bool
 
 	switch e := event.(type) {
-	case EntryUser:
+	case User:
 		preview = e.Content
 		isMsg = true
-	case EntryAssistant:
+	case Assistant:
 		for _, b := range e.Content {
 			if b.Type == "text" && b.Text != nil {
 				preview = *b.Text
@@ -375,11 +375,11 @@ func (s *fileSession) Entries(ctx context.Context) ([]session.Entry, error) {
 
 		switch raw["type"] {
 		case "user":
-			var e EntryUser
+			var e User
 			json.Unmarshal(line, &e)
-			entries = append(entries, session.Entry{Role: session.RoleUser, Content: e.Content})
+			entries = append(entries, session.Entry{Role: session.User, Content: e.Content})
 		case "assistant":
-			var e EntryAssistant
+			var e Assistant
 			json.Unmarshal(line, &e)
 			var content strings.Builder
 			for _, b := range e.Content {
@@ -387,18 +387,18 @@ func (s *fileSession) Entries(ctx context.Context) ([]session.Entry, error) {
 					content.WriteString(*b.Text)
 				}
 			}
-			entries = append(entries, session.Entry{Role: session.RoleAssistant, Content: content.String()})
+			entries = append(entries, session.Entry{Role: session.Assistant, Content: content.String()})
 		case "tool_use":
-			var e EntryToolUse
+			var e ToolUse
 			json.Unmarshal(line, &e)
-			entries = append(entries, session.Entry{Role: session.RoleTool, Title: e.Name})
+			entries = append(entries, session.Entry{Role: session.Tool, Title: e.Name})
 		case "tool_result":
-			var e EntryToolResult
+			var e ToolResult
 			json.Unmarshal(line, &e)
-			if len(entries) > 0 && entries[len(entries)-1].Role == session.RoleTool {
+			if len(entries) > 0 && entries[len(entries)-1].Role == session.Tool {
 				entries[len(entries)-1].Content = e.Content
 			} else {
-				entries = append(entries, session.Entry{Role: session.RoleTool, Content: e.Content})
+				entries = append(entries, session.Entry{Role: session.Tool, Content: e.Content})
 			}
 		}
 	}

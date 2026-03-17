@@ -33,11 +33,11 @@ func TestIntegrationFullLoop(t *testing.T) {
 	b := testutil.New()
 	b.SetStore(store)
 	b.SetScript([]testutil.ScriptStep{
-		{Event: session.EventTurnStarted{BaseEvent: session.BaseEvent{}}, Delay: 0},
-		{Event: session.EventAssistantDelta{BaseEvent: session.BaseEvent{}, Delta: "Hello "}, Delay: 10 * time.Millisecond},
-		{Event: session.EventAssistantDelta{BaseEvent: session.BaseEvent{}, Delta: "world"}, Delay: 10 * time.Millisecond},
-		{Event: session.EventAssistantMessage{BaseEvent: session.BaseEvent{}, Message: "Hello world"}, Delay: 10 * time.Millisecond},
-		{Event: session.EventTurnFinished{BaseEvent: session.BaseEvent{}}, Delay: 0},
+		{Event: session.TurnStarted{}, Delay: 0},
+		{Event: session.AssistantDelta{Delta: "Hello "}, Delay: 10 * time.Millisecond},
+		{Event: session.AssistantDelta{Delta: "world"}, Delay: 10 * time.Millisecond},
+		{Event: session.AssistantMessage{Message: "Hello world"}, Delay: 10 * time.Millisecond},
+		{Event: session.TurnFinished{}, Delay: 0},
 	})
 
 	// 3. Setup Model
@@ -57,7 +57,7 @@ func TestIntegrationFullLoop(t *testing.T) {
 		case ev := <-b.Events():
 			updated, _ = model.Update(ev)
 			model = updated.(Model)
-			if _, ok := ev.(session.EventTurnFinished); ok {
+			if _, ok := ev.(session.TurnFinished); ok {
 				done = true
 			}
 		case <-timeout:
@@ -90,10 +90,10 @@ func TestIntegrationFullLoop(t *testing.T) {
 	foundUser := false
 	foundAsst := false
 	for _, e := range storedEntries {
-		if e.Role == session.RoleUser && e.Content == "hi" {
+		if e.Role == session.User && e.Content == "hi" {
 			foundUser = true
 		}
-		if e.Role == session.RoleAssistant && e.Content == "Hello world" {
+		if e.Role == session.Assistant && e.Content == "Hello world" {
 			foundAsst = true
 		}
 	}
@@ -116,17 +116,17 @@ func TestMultiplexedSwarms(t *testing.T) {
 	// Setup script with two sub-agents
 	b := testutil.New()
 	b.SetScript([]testutil.ScriptStep{
-		{Event: session.EventTurnStarted{BaseEvent: session.BaseEvent{}}, Delay: 0},
-		{Event: session.EventStatusChanged{BaseEvent: session.BaseEvent{AgentID: "Explorer"}, Status: "Mapping codebase..."}, Delay: 10 * time.Millisecond},
-		{Event: session.EventVerificationResult{
-			BaseEvent: session.BaseEvent{AgentID: "Tester"},
-			Command:   "go test ./...",
-			Passed:    true,
-			Metric:    "15/15 passed",
-			Output:    "OK",
+		{Event: session.TurnStarted{}, Delay: 0},
+		{Event: session.StatusChanged{Base: session.Base{AgentID: "Explorer"}, Status: "Mapping codebase..."}, Delay: 10 * time.Millisecond},
+		{Event: session.VerificationResult{
+			Base:    session.Base{AgentID: "Tester"},
+			Command: "go test ./...",
+			Passed:  true,
+			Metric:  "15/15 passed",
+			Output:  "OK",
 		}, Delay: 20 * time.Millisecond},
-		{Event: session.EventAssistantMessage{BaseEvent: session.BaseEvent{}, Message: "All good."}, Delay: 10 * time.Millisecond},
-		{Event: session.EventTurnFinished{BaseEvent: session.BaseEvent{}}, Delay: 0},
+		{Event: session.AssistantMessage{Message: "All good."}, Delay: 10 * time.Millisecond},
+		{Event: session.TurnFinished{}, Delay: 0},
 	})
 
 	model := New(b, sess)
@@ -142,7 +142,7 @@ func TestMultiplexedSwarms(t *testing.T) {
 		case ev := <-b.Events():
 			updated, _ := model.Update(ev)
 			model = updated.(Model)
-			if _, ok := ev.(session.EventTurnFinished); ok {
+			if _, ok := ev.(session.TurnFinished); ok {
 				done = true
 			}
 		case <-timeout:
@@ -153,7 +153,7 @@ func TestMultiplexedSwarms(t *testing.T) {
 	// Verify entries
 	foundVerify := false
 	for _, e := range model.entries {
-		if e.Role == session.RoleTool && strings.Contains(e.Title, "verify") {
+		if e.Role == session.Tool && strings.Contains(e.Title, "verify") {
 			foundVerify = true
 			if !strings.Contains(e.Content, "PASSED: 15/15 passed") {
 				t.Errorf("unexpected verification content: %q", e.Content)

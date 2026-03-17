@@ -37,7 +37,7 @@ type Session interface {
 	ID() string
 
 	// Meta returns the session's initial metadata.
-	Meta() Meta
+	Meta() Metadata
 
 	// Append appends a new event to the session storage.
 	Append(ctx context.Context, event any) error
@@ -49,8 +49,8 @@ type Session interface {
 	Close() error
 }
 
-// Meta represents the persistent metadata for a session.
-type Meta struct {
+// Metadata represents the persistent meta for a session.
+type Metadata struct {
 	ID        string    `json:"id"`
 	CWD       string    `json:"cwd"`
 	Model     string    `json:"model"`
@@ -71,7 +71,7 @@ type SessionInfo struct {
 
 // JSONL entry types as defined in ai/design/session-storage.md
 type (
-	EntryMeta struct {
+	Meta struct {
 		Type      string `json:"type"` // "meta"
 		ID        string `json:"id"`
 		CWD       string `json:"cwd"`
@@ -80,19 +80,19 @@ type (
 		CreatedAt int64  `json:"created_at"`
 	}
 
-	EntryUser struct {
+	User struct {
 		Type    string `json:"type"` // "user"
 		Content string `json:"content"`
 		TS      int64  `json:"ts"`
 	}
 
-	EntryAssistant struct {
-		Type    string          `json:"type"` // "assistant"
-		Content []ContentBlock `json:"content"`
-		TS      int64           `json:"ts"`
+	Assistant struct {
+		Type    string  `json:"type"` // "assistant"
+		Content []Block `json:"content"`
+		TS      int64   `json:"ts"`
 	}
 
-	EntryToolUse struct {
+	ToolUse struct {
 		Type  string `json:"type"` // "tool_use"
 		ID    string `json:"id"`
 		Name  string `json:"name"`
@@ -100,7 +100,7 @@ type (
 		TS    int64  `json:"ts"`
 	}
 
-	EntryToolResult struct {
+	ToolResult struct {
 		Type      string `json:"type"` // "tool_result"
 		ToolUseID string `json:"tool_use_id"`
 		Content   string `json:"content"`
@@ -108,7 +108,7 @@ type (
 		TS        int64  `json:"ts"`
 	}
 
-	ContentBlock struct {
+	Block struct {
 		Type     string  `json:"type"` // "text" or "thinking"
 		Text     *string `json:"text,omitempty"`
 		Thinking *string `json:"thinking,omitempty"`
