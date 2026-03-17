@@ -59,6 +59,10 @@ func (b *Backend) SetStore(s storage.Store) {
 	b.ionStore = s
 }
 
+func (b *Backend) SetSession(s storage.Session) {
+	b.sess = s
+}
+
 func (b *Backend) Open(ctx context.Context) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -145,22 +149,31 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 		sessionID = "default"
 	}
 
-	// Subscribe to framework events and translate them to ion UI events
-	evCh, err := b.runner.Subscribe(ctx, sessionID)
+	// Create a sub-context for the turn and store its cancel function.
+	// This allows CancelTurn to interrupt the in-flight generation.
+	turnCtx, cancel := context.WithCancel(context.Background())
+	b.cancel = cancel
+
+	// Subscribe to framework events and translate them to ion UI events.
+	// Use the background context for the subscription to avoid it being
+	// cancelled when the submission command context ends.
+	evCh, err := b.runner.Subscribe(turnCtx, sessionID)
 	if err != nil {
+		cancel()
 		return err
 	}
 
-	go b.translateEvents(ctx, evCh)
+	go b.translateEvents(turnCtx, evCh)
 
 	// Run the agent turn with streaming
 	go func() {
-		_, err := b.runner.SendStream(ctx, sessionID, input, func(chunk *llm.Chunk) {
+		defer cancel()
+		_, err := b.runner.SendStream(turnCtx, sessionID, input, func(chunk *llm.Chunk) {
 			if chunk.Content != "" {
 				b.events <- ionsession.EventAssistantDelta{Delta: chunk.Content}
 			}
 		})
-		if err != nil {
+		if err != nil && err != context.Canceled {
 			b.events <- ionsession.EventError{Error: err}
 		}
 	}()
@@ -222,8 +235,7 @@ func (b *Backend) translateEvents(ctx context.Context, evCh <-chan session.Event
 					Delta string `json:"delta"`
 				}
 				if err := ev.UnmarshalData(&data); err == nil {
-					// Map tool delta to assistant delta for real-time progress in UI
-					b.events <- ionsession.EventAssistantDelta{Delta: data.Delta}
+					b.events <- ionsession.EventToolOutputDelta{Delta: data.Delta}
 				}
 			}
 		}
@@ -231,7 +243,13 @@ func (b *Backend) translateEvents(ctx context.Context, evCh <-chan session.Event
 }
 
 func (b *Backend) CancelTurn(ctx context.Context) error {
-	// TODO: Implement cancellation in Canto Runner
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.cancel != nil {
+		b.cancel()
+		b.cancel = nil
+	}
 	return nil
 }
 

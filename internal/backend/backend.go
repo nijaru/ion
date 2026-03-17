@@ -15,4 +15,5 @@ type Backend interface {
 	Bootstrap() Bootstrap
 	Session() session.AgentSession
 	SetStore(storage.Store)
+	SetSession(storage.Session)
 }
