@@ -1,0 +1,248 @@
+package tools
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/go-json-experiment/json"
+	"github.com/nijaru/canto/llm"
+)
+
+type FileTool struct {
+	cwd string
+}
+
+func NewFileTool(cwd string) *FileTool {
+	return &FileTool{cwd: cwd}
+}
+
+// Read tool (formerly read_file)
+type Read struct {
+	FileTool
+}
+
+func (r *Read) Spec() llm.Spec {
+	return llm.Spec{
+		Name:        "read",
+		Description: "Read file contents. Returns the full file or a specific line range (use offset/limit for large files).",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"file_path": map[string]any{
+					"type":        "string",
+					"description": "Relative path to the file from the current directory.",
+				},
+				"offset": map[string]any{
+					"type":        "integer",
+					"description": "Line number to start reading from (0-indexed).",
+				},
+				"limit": map[string]any{
+					"type":        "integer",
+					"description": "Maximum number of lines to read.",
+				},
+			},
+			"required": []string{"file_path"},
+		},
+	}
+}
+
+func (r *Read) Execute(ctx context.Context, args string) (string, error) {
+	var input struct {
+		FilePath string `json:"file_path"`
+		Offset   int    `json:"offset"`
+		Limit    int    `json:"limit"`
+	}
+	if err := json.Unmarshal([]byte(args), &input); err != nil {
+		return "", err
+	}
+
+	absPath := filepath.Join(r.cwd, input.FilePath)
+	content, err := os.ReadFile(absPath)
+	if err != nil {
+		return "", err
+	}
+
+	lines := strings.Split(string(content), "\n")
+	if input.Limit > 0 {
+		end := input.Offset + input.Limit
+		if end > len(lines) {
+			end = len(lines)
+		}
+		if input.Offset < len(lines) {
+			return strings.Join(lines[input.Offset:end], "\n"), nil
+		}
+		return "", nil
+	}
+
+	return string(content), nil
+}
+
+// Write tool (formerly write_file)
+type Write struct {
+	FileTool
+}
+
+func (w *Write) Spec() llm.Spec {
+	return llm.Spec{
+		Name:        "write",
+		Description: "Create or overwrite a file with new content. Use for new files or complete rewrites.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"file_path": map[string]any{
+					"type":        "string",
+					"description": "Relative path to the file.",
+				},
+				"content": map[string]any{
+					"type":        "string",
+					"description": "The full content to write to the file.",
+				},
+			},
+			"required": []string{"file_path", "content"},
+		},
+	}
+}
+
+func (w *Write) Execute(ctx context.Context, args string) (string, error) {
+	var input struct {
+		FilePath string `json:"file_path"`
+		Content  string `json:"content"`
+	}
+	if err := json.Unmarshal([]byte(args), &input); err != nil {
+		return "", err
+	}
+
+	absPath := filepath.Join(w.cwd, input.FilePath)
+	if err := os.MkdirAll(filepath.Dir(absPath), 0755); err != nil {
+		return "", err
+	}
+
+	if err := os.WriteFile(absPath, []byte(input.Content), 0644); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("Successfully wrote %d bytes to %s", len(input.Content), input.FilePath), nil
+}
+
+// Edit tool
+type Edit struct {
+	FileTool
+}
+
+func (e *Edit) Spec() llm.Spec {
+	return llm.Spec{
+		Name:        "edit",
+		Description: "Modify a file by replacing exact text with new text. Provide the exact string to find and its replacement. Use this for targeted changes.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"file_path": map[string]any{
+					"type":        "string",
+					"description": "The absolute path to the file to modify",
+				},
+				"old_string": map[string]any{
+					"type":        "string",
+					"description": "The exact text to replace (must exist in file)",
+				},
+				"new_string": map[string]any{
+					"type":        "string",
+					"description": "The replacement text (must differ from old_string)",
+				},
+				"replace_all": map[string]any{
+					"type":        "boolean",
+					"description": "Replace all occurrences (default: false, requires unique match)",
+				},
+			},
+			"required": []string{"file_path", "old_string", "new_string"},
+		},
+	}
+}
+
+func (e *Edit) Execute(ctx context.Context, args string) (string, error) {
+	var input struct {
+		FilePath   string `json:"file_path"`
+		OldString  string `json:"old_string"`
+		NewString  string `json:"new_string"`
+		ReplaceAll bool   `json:"replace_all"`
+	}
+	if err := json.Unmarshal([]byte(args), &input); err != nil {
+		return "", err
+	}
+
+	absPath := filepath.Join(e.cwd, input.FilePath)
+	content, err := os.ReadFile(absPath)
+	if err != nil {
+		return "", err
+	}
+
+	strContent := string(content)
+	count := strings.Count(strContent, input.OldString)
+	if count == 0 {
+		return "", fmt.Errorf("old_string not found in file")
+	}
+
+	if !input.ReplaceAll && count > 1 {
+		return "", fmt.Errorf("old_string is not unique in file, found %d occurrences. Use replace_all: true to replace all.", count)
+	}
+
+	newContent := strings.Replace(strContent, input.OldString, input.NewString, -1)
+	if !input.ReplaceAll {
+		newContent = strings.Replace(strContent, input.OldString, input.NewString, 1)
+	}
+
+	if err := os.WriteFile(absPath, []byte(newContent), 0644); err != nil {
+		return "", err
+	}
+
+	return fmt.Sprintf("Successfully replaced %d occurrence(s) in %s", count, input.FilePath), nil
+}
+
+// List tool (formerly list_directory)
+type List struct {
+	FileTool
+}
+
+func (l *List) Spec() llm.Spec {
+	return llm.Spec{
+		Name:        "list",
+		Description: "List contents of a specific directory.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path": map[string]any{
+					"type":        "string",
+					"description": "Directory to list (default: current directory).",
+				},
+			},
+		},
+	}
+}
+
+func (l *List) Execute(ctx context.Context, args string) (string, error) {
+	var input struct {
+		Path string `json:"path"`
+	}
+	// Default path to "." if not provided or unmarshal fails
+	_ = json.Unmarshal([]byte(args), &input)
+	if input.Path == "" {
+		input.Path = "."
+	}
+
+	absPath := filepath.Join(l.cwd, input.Path)
+	entries, err := os.ReadDir(absPath)
+	if err != nil {
+		return "", err
+	}
+
+	var res strings.Builder
+	for _, e := range entries {
+		suffix := ""
+		if e.IsDir() {
+			suffix = "/"
+		}
+		res.WriteString(fmt.Sprintf("%s%s\n", e.Name(), suffix))
+	}
+	return res.String(), nil
+}

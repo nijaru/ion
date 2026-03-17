@@ -96,7 +96,7 @@ func (s *cantoStore) OpenSession(ctx context.Context, cwd, model, branch string)
 			CWD:       cwd,
 			Model:     model,
 			Branch:    branch,
-			CreatedAt: time.Now(),
+			CreatedAt: time.Now().Unix(),
 		},
 	}, nil
 }
@@ -109,7 +109,7 @@ func (s *cantoStore) ResumeSession(ctx context.Context, id string) (Session, err
 	if err != nil {
 		return nil, err
 	}
-	m.CreatedAt = time.Unix(ca, 0)
+	m.CreatedAt = ca
 
 	return &cantoSession{
 		id:    id,
@@ -191,7 +191,15 @@ type cantoSession struct {
 }
 
 func (s *cantoSession) ID() string { return s.id }
-func (s *cantoSession) Meta() Meta { return s.meta }
+func (s *cantoSession) Meta() Metadata {
+	return Metadata{
+		ID:        s.meta.ID,
+		CWD:       s.meta.CWD,
+		Model:     s.meta.Model,
+		Branch:    s.meta.Branch,
+		CreatedAt: time.Unix(s.meta.CreatedAt, 0),
+	}
+}
 
 func (s *cantoSession) Append(ctx context.Context, event any) error {
 	// Map ion storage entries to Canto events if possible, or just ignore if CantoBackend is already saving them
@@ -204,7 +212,7 @@ func (s *cantoSession) Append(ctx context.Context, event any) error {
 	
 	var preview string
 	switch e := event.(type) {
-	case EntryUser:
+	case User:
 		preview = e.Content
 		// We could save this to Canto store as a User message event
 		ev := session.NewEvent(s.id, session.MessageAdded, llm.Message{
@@ -212,17 +220,22 @@ func (s *cantoSession) Append(ctx context.Context, event any) error {
 			Content: e.Content,
 		})
 		s.store.canto.Save(ctx, ev)
-	case EntryAssistant:
+	case Assistant:
 		var content strings.Builder
+		var reasoning strings.Builder
 		for _, b := range e.Content {
 			if b.Type == "text" && b.Text != nil {
 				content.WriteString(*b.Text)
 			}
+			if b.Type == "thinking" && b.Thinking != nil {
+				reasoning.WriteString(*b.Thinking)
+			}
 		}
 		preview = content.String()
 		ev := session.NewEvent(s.id, session.MessageAdded, llm.Message{
-			Role:    llm.RoleAssistant,
-			Content: preview,
+			Role:      llm.RoleAssistant,
+			Content:   preview,
+			Reasoning: reasoning.String(),
 		})
 		s.store.canto.Save(ctx, ev)
 	}
@@ -246,13 +259,14 @@ func (s *cantoSession) Entries(ctx context.Context) ([]ionsession.Entry, error) 
 		case session.MessageAdded:
 			var msg llm.Message
 			if err := ev.UnmarshalData(&msg); err == nil {
-				role := ionsession.RoleAssistant
+				role := ionsession.Assistant
 				if msg.Role == llm.RoleUser {
-					role = ionsession.RoleUser
+					role = ionsession.User
 				}
 				entries = append(entries, ionsession.Entry{
-					Role:    role,
-					Content: msg.Content,
+					Role:      role,
+					Content:   msg.Content,
+					Reasoning: msg.Reasoning,
 				})
 			}
 		case session.ToolStarted:
@@ -262,7 +276,7 @@ func (s *cantoSession) Entries(ctx context.Context) ([]ionsession.Entry, error) 
 			}
 			if err := ev.UnmarshalData(&data); err == nil {
 				entries = append(entries, ionsession.Entry{
-					Role:  ionsession.RoleTool,
+					Role:  ionsession.Tool,
 					Title: fmt.Sprintf("%s(%s)", data.Tool, data.Args),
 				})
 			}
@@ -271,7 +285,7 @@ func (s *cantoSession) Entries(ctx context.Context) ([]ionsession.Entry, error) 
 				Output string `json:"output"`
 			}
 			if err := ev.UnmarshalData(&data); err == nil {
-				if len(entries) > 0 && entries[len(entries)-1].Role == ionsession.RoleTool {
+				if len(entries) > 0 && entries[len(entries)-1].Role == ionsession.Tool {
 					entries[len(entries)-1].Content = data.Output
 				}
 			}

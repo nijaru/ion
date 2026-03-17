@@ -50,13 +50,13 @@ type Model struct {
 	branch  string
 	sendKey string
 
-	headerSty lipgloss.Style
-	userSty   lipgloss.Style
-	asstSty   lipgloss.Style
-	sysSty    lipgloss.Style
-	toolSty   lipgloss.Style
-	dimSty    lipgloss.Style
-	lineSty   lipgloss.Style
+	headerStyle    lipgloss.Style
+	userStyle      lipgloss.Style
+	assistantStyle lipgloss.Style
+	systemStyle    lipgloss.Style
+	toolStyle      lipgloss.Style
+	dimStyle       lipgloss.Style
+	lineStyle      lipgloss.Style
 }
 
 func New(b backend.Backend, s storage.Session) Model {
@@ -99,26 +99,26 @@ func New(b backend.Backend, s storage.Session) Model {
 		workdir:  cwd,
 		branch:   currentBranch(),
 		sendKey:  "ctrl+s",
-		headerSty: lipgloss.NewStyle().
+		headerStyle: lipgloss.NewStyle().
 			Bold(true).
 			Foreground(lipgloss.Color("5")).
 			PaddingLeft(2),
-		userSty: lipgloss.NewStyle().
+		userStyle: lipgloss.NewStyle().
 			Bold(true).
 			PaddingLeft(2),
-		asstSty: lipgloss.NewStyle().
+		assistantStyle: lipgloss.NewStyle().
 			Foreground(lipgloss.Color("6")).
 			PaddingLeft(2),
-		sysSty: lipgloss.NewStyle().
+		systemStyle: lipgloss.NewStyle().
 			Foreground(lipgloss.Color("8")).
 			Faint(true).
 			PaddingLeft(2),
-		toolSty: lipgloss.NewStyle().
+		toolStyle: lipgloss.NewStyle().
 			Foreground(lipgloss.Color("10")).
 			PaddingLeft(2),
-		dimSty: lipgloss.NewStyle().
+		dimStyle: lipgloss.NewStyle().
 			Faint(true),
-		lineSty: lipgloss.NewStyle().
+		lineStyle: lipgloss.NewStyle().
 			Foreground(lipgloss.Color("8")),
 	}
 	m.refreshViewport(true)
@@ -159,37 +159,46 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// channel closed, do nothing for now
 		return m, nil
 
-	case session.EventStatusChanged:
+	case session.StatusChanged:
 		m.status = msg.Status
 		return m, m.awaitSessionEvent()
 
-	case session.EventPlanUpdated:
+	case session.PlanUpdated:
 		// For now, we don't render the plan separately, but we could.
 		return m, m.awaitSessionEvent()
 
-	case session.EventMetadataLoaded:
+	case session.MetadataLoaded:
 		return m, m.awaitSessionEvent()
 
-	case session.EventTurnStarted:
+	case session.TurnStarted:
 		m.thinking = true
-		m.pending = &session.Entry{Role: session.RoleAssistant}
+		m.pending = &session.Entry{Role: session.Assistant}
 		m.refreshViewport(m.shouldFollowOutput())
 		return m, m.awaitSessionEvent()
 
-	case session.EventTurnFinished:
+	case session.TurnFinished:
 		m.thinking = false
 		return m, m.awaitSessionEvent()
 
-	case session.EventAssistantDelta:
+	case session.ThinkingDelta:
 		follow := m.shouldFollowOutput()
 		if m.pending == nil {
-			m.pending = &session.Entry{Role: session.RoleAssistant}
+			m.pending = &session.Entry{Role: session.Assistant}
+		}
+		m.pending.Reasoning += msg.Delta
+		m.refreshViewport(follow)
+		return m, m.awaitSessionEvent()
+
+	case session.AssistantDelta:
+		follow := m.shouldFollowOutput()
+		if m.pending == nil {
+			m.pending = &session.Entry{Role: session.Assistant}
 		}
 		m.pending.Content += msg.Delta
 		m.refreshViewport(follow)
 		return m, m.awaitSessionEvent()
 
-	case session.EventAssistantMessage:
+	case session.AssistantMessage:
 		follow := m.shouldFollowOutput()
 		if m.pending != nil {
 			if msg.Message != "" {
@@ -198,12 +207,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.entries = append(m.entries, *m.pending)
 
 			if m.storage != nil {
-				m.storage.Append(context.Background(), storage.EntryAssistant{
-					Type: "assistant",
-					Content: []storage.ContentBlock{
-						{Type: "text", Text: &m.pending.Content},
-					},
-					TS: time.Now().Unix(),
+				blocks := []storage.Block{}
+				if m.pending.Reasoning != "" {
+					blocks = append(blocks, storage.Block{
+						Type:     "thinking",
+						Thinking: &m.pending.Reasoning,
+					})
+				}
+				blocks = append(blocks, storage.Block{
+					Type: "text",
+					Text: &m.pending.Content,
+				})
+
+				m.storage.Append(context.Background(), storage.Assistant{
+					Type:    "assistant",
+					Content: blocks,
+					TS:      time.Now().Unix(),
 				})
 			}
 
@@ -212,17 +231,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshViewport(follow)
 		return m, m.awaitSessionEvent()
 
-	case session.EventToolCallStarted:
+	case session.ToolCallStarted:
 		// Optionally show a pending tool
 		follow := m.shouldFollowOutput()
 		m.entries = append(m.entries, session.Entry{
-			Role:  session.RoleTool,
+			Role:  session.Tool,
 			Title: fmt.Sprintf("%s(%s)", msg.ToolName, msg.Args),
 		})
 
 		m.lastToolUseID = session.ShortID()
 		if m.storage != nil {
-			m.storage.Append(context.Background(), storage.EntryToolUse{
+			m.storage.Append(context.Background(), storage.ToolUse{
 				Type: "tool_use",
 				ID:   m.lastToolUseID,
 				Name: msg.ToolName,
@@ -236,30 +255,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshViewport(follow)
 		return m, m.awaitSessionEvent()
 
-	case session.EventToolOutputDelta:
+	case session.ToolOutputDelta:
 		follow := m.shouldFollowOutput()
 		// Append to the most recent tool entry if it's currently active.
-		if len(m.entries) > 0 && m.entries[len(m.entries)-1].Role == session.RoleTool {
+		if len(m.entries) > 0 && m.entries[len(m.entries)-1].Role == session.Tool {
 			m.entries[len(m.entries)-1].Content += msg.Delta
 		}
 		m.refreshViewport(follow)
 		return m, m.awaitSessionEvent()
 
-	case session.EventToolResult:
+	case session.ToolResult:
 		follow := m.shouldFollowOutput()
 		// Update the last tool entry or append a new one
-		if len(m.entries) > 0 && m.entries[len(m.entries)-1].Role == session.RoleTool {
+		if len(m.entries) > 0 && m.entries[len(m.entries)-1].Role == session.Tool {
 			m.entries[len(m.entries)-1].Content = msg.Result
 		} else {
 			m.entries = append(m.entries, session.Entry{
-				Role:    session.RoleTool,
+				Role:    session.Tool,
 				Title:   msg.ToolName,
 				Content: msg.Result,
 			})
 		}
 
 		if m.storage != nil {
-			m.storage.Append(context.Background(), storage.EntryToolResult{
+			m.storage.Append(context.Background(), storage.ToolResult{
 				Type:      "tool_result",
 				ToolUseID: m.lastToolUseID,
 				Content:   msg.Result,
@@ -271,7 +290,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshViewport(follow)
 		return m, m.awaitSessionEvent()
 
-	case session.EventVerificationResult:
+	case session.VerificationResult:
 		follow := m.shouldFollowOutput()
 		status := "PASSED"
 		if !msg.Passed {
@@ -279,15 +298,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		content := fmt.Sprintf("%s: %s\n%s", status, msg.Metric, msg.Output)
 		m.entries = append(m.entries, session.Entry{
-			Role:    session.RoleTool,
+			Role:    session.Tool,
 			Title:   "verify: " + msg.Command,
 			Content: content,
 		})
 		m.refreshViewport(follow)
 		return m, m.awaitSessionEvent()
 
-	case session.EventError:
-		m.status = fmt.Sprintf("Error: %v", msg.Error)
+	case session.Error:
+		m.status = fmt.Sprintf("Error: %v", msg.Err)
 		return m, m.awaitSessionEvent()
 
 	case tea.KeyPressMsg:
@@ -300,11 +319,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.entries = append(m.entries, session.Entry{
-				Role:    session.RoleUser,
+				Role:    session.User,
 				Content: text,
 			})
 			if m.storage != nil {
-				m.storage.Append(context.Background(), storage.EntryUser{
+				m.storage.Append(context.Background(), storage.User{
 					Type:    "user",
 					Content: text,
 					TS:      time.Now().Unix(),
@@ -348,11 +367,11 @@ func (m Model) View() tea.View {
 		return tea.NewView("loading...")
 	}
 
-	header := m.headerSty.Render("ion")
-	subtitle := m.dimSty.PaddingLeft(2).Render(fmt.Sprintf("%s  •  %s", m.workdir, m.branch))
+	header := m.headerStyle.Render("ion")
+	subtitle := m.dimStyle.PaddingLeft(2).Render(fmt.Sprintf("%s  •  %s", m.workdir, m.branch))
 	progress := m.progressLine()
-	separator := m.lineSty.Render(strings.Repeat("─", max(0, m.width)))
-	status := m.dimSty.PaddingLeft(2).Render(m.statusLine())
+	separator := m.lineStyle.Render(strings.Repeat("─", max(0, m.width)))
+	status := m.dimStyle.PaddingLeft(2).Render(m.statusLine())
 
 	content := lipgloss.JoinVertical(
 		lipgloss.Left,
@@ -405,21 +424,29 @@ func (m Model) renderEntries() []session.Entry {
 
 func (m Model) renderEntry(entry session.Entry) string {
 	switch entry.Role {
-	case session.RoleUser:
-		return m.userSty.Render("› " + entry.Content)
-	case session.RoleAssistant:
-		return m.asstSty.Render("• " + entry.Content)
-	case session.RoleTool:
+	case session.User:
+		return m.userStyle.Render("› " + entry.Content)
+	case session.Assistant:
+		var b strings.Builder
+		if entry.Reasoning != "" {
+			b.WriteString(m.systemStyle.Render("• Thinking..."))
+			b.WriteString("\n")
+			b.WriteString(m.dimStyle.PaddingLeft(4).Render(entry.Reasoning))
+			b.WriteString("\n\n")
+		}
+		b.WriteString(m.assistantStyle.Render("• " + entry.Content))
+		return b.String()
+	case session.Tool:
 		label := entry.Title
 		if label == "" {
 			label = "tool"
 		}
 		if entry.Content == "" {
-			return m.toolSty.Render("• " + label + " " + m.dimSty.Render("(pending)"))
+			return m.toolStyle.Render("• " + label + " " + m.dimStyle.Render("(pending)"))
 		}
-		return m.toolSty.Render("• "+label) + "\n" + m.dimSty.PaddingLeft(4).Render(entry.Content)
-	case session.RoleSystem:
-		return m.sysSty.Render(entry.Content)
+		return m.toolStyle.Render("• "+label) + "\n" + m.dimStyle.PaddingLeft(4).Render(entry.Content)
+	case session.System:
+		return m.systemStyle.Render(entry.Content)
 	default:
 		return entry.Content
 	}
@@ -428,11 +455,11 @@ func (m Model) renderEntry(entry session.Entry) string {
 func (m Model) progressLine() string {
 	if m.thinking {
 		if m.pending != nil && m.pending.Content != "" {
-			return m.asstSty.Render("• Streaming assistant response...")
+			return m.assistantStyle.Render("• Streaming assistant response...")
 		}
-		return m.asstSty.Render(fmt.Sprintf("• Waiting on %s backend...", m.backend.Name()))
+		return m.assistantStyle.Render(fmt.Sprintf("• Waiting on %s backend...", m.backend.Name()))
 	}
-	return m.dimSty.Render("• Ready")
+	return m.dimStyle.Render("• Ready")
 }
 
 func (m Model) statusLine() string {
@@ -477,4 +504,3 @@ func max(a, b int) int {
 	}
 	return b
 }
-

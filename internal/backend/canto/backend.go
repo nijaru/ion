@@ -15,6 +15,7 @@ import (
 	"github.com/nijaru/canto/session"
 	"github.com/nijaru/canto/tool"
 	"github.com/nijaru/ion/internal/backend"
+	"github.com/nijaru/ion/internal/backend/canto/tools"
 	ionsession "github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
 )
@@ -45,7 +46,7 @@ func (b *Backend) Name() string {
 func (b *Backend) Bootstrap() backend.Bootstrap {
 	return backend.Bootstrap{
 		Entries: []ionsession.Entry{
-			{Role: ionsession.RoleSystem, Content: "Canto Agent Backend (Gemini)"},
+			{Role: ionsession.System, Content: "Canto Agent Backend (Gemini)"},
 		},
 		Status: "Initializing Canto runtime...",
 	}
@@ -111,12 +112,26 @@ func (b *Backend) Open(ctx context.Context) error {
 		"Use tools to explore the codebase, run tests, and apply changes. " +
 		"Be concise and professional."
 	
-	b.agent = agent.New("ion", instructions, modelName, p, tool.NewRegistry())
+	cwd := b.Meta()["cwd"]
+	if cwd == "" {
+		cwd, _ = os.Getwd()
+	}
+
+	registry := tool.NewRegistry()
+	registry.Register(tools.NewBash(cwd))
+	registry.Register(&tools.Read{FileTool: *tools.NewFileTool(cwd)})
+	registry.Register(&tools.Write{FileTool: *tools.NewFileTool(cwd)})
+	registry.Register(&tools.Edit{FileTool: *tools.NewFileTool(cwd)})
+	registry.Register(&tools.List{FileTool: *tools.NewFileTool(cwd)})
+	registry.Register(&tools.Grep{SearchTool: *tools.NewSearchTool(cwd)})
+	registry.Register(&tools.Glob{SearchTool: *tools.NewSearchTool(cwd)})
+
+	b.agent = agent.New("ion", instructions, modelName, p, registry)
 	
 	// Initialize Runner
 	b.runner = runtime.NewRunner(b.store, b.agent)
 
-	b.events <- ionsession.EventStatusChanged{Status: fmt.Sprintf("Connected to %s via Canto", modelName)}
+	b.events <- ionsession.StatusChanged{Status: fmt.Sprintf("Connected to %s via Canto", modelName)}
 	return nil
 }
 
@@ -169,12 +184,15 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 	go func() {
 		defer cancel()
 		_, err := b.runner.SendStream(turnCtx, sessionID, input, func(chunk *llm.Chunk) {
+			if chunk.Reasoning != "" {
+				b.events <- ionsession.ThinkingDelta{Delta: chunk.Reasoning}
+			}
 			if chunk.Content != "" {
-				b.events <- ionsession.EventAssistantDelta{Delta: chunk.Content}
+				b.events <- ionsession.AssistantDelta{Delta: chunk.Content}
 			}
 		})
 		if err != nil && err != context.Canceled {
-			b.events <- ionsession.EventError{Error: err}
+			b.events <- ionsession.Error{Err: err}
 		}
 	}()
 
@@ -193,12 +211,12 @@ func (b *Backend) translateEvents(ctx context.Context, evCh <-chan session.Event
 
 			switch ev.Type {
 			case session.TurnStarted:
-				b.events <- ionsession.EventTurnStarted{}
-				b.events <- ionsession.EventStatusChanged{Status: "Thinking..."}
+				b.events <- ionsession.TurnStarted{}
+				b.events <- ionsession.StatusChanged{Status: "Thinking..."}
 			case session.TurnCompleted:
-				b.events <- ionsession.EventTurnFinished{}
-				b.events <- ionsession.EventAssistantMessage{Message: ""} // Commit
-				b.events <- ionsession.EventStatusChanged{Status: "Ready"}
+				b.events <- ionsession.TurnFinished{}
+				b.events <- ionsession.AssistantMessage{Message: ""} // Commit
+				b.events <- ionsession.StatusChanged{Status: "Ready"}
 			case session.ToolStarted:
 				var data struct {
 					Tool string `json:"tool"`
@@ -206,11 +224,11 @@ func (b *Backend) translateEvents(ctx context.Context, evCh <-chan session.Event
 					Args string `json:"args"`
 				}
 				if err := ev.UnmarshalData(&data); err == nil {
-					b.events <- ionsession.EventToolCallStarted{
+					b.events <- ionsession.ToolCallStarted{
 						ToolName: data.Tool,
 						Args:     data.Args,
 					}
-					b.events <- ionsession.EventStatusChanged{Status: fmt.Sprintf("Running %s...", data.Tool)}
+					b.events <- ionsession.StatusChanged{Status: fmt.Sprintf("Running %s...", data.Tool)}
 				}
 			case session.ToolCompleted:
 				var data struct {
@@ -224,7 +242,7 @@ func (b *Backend) translateEvents(ctx context.Context, evCh <-chan session.Event
 					if data.Error != "" {
 						execErr = fmt.Errorf("%s", data.Error)
 					}
-					b.events <- ionsession.EventToolResult{
+					b.events <- ionsession.ToolResult{
 						ToolName: data.Tool,
 						Result:   data.Output,
 						Error:    execErr,
@@ -235,7 +253,7 @@ func (b *Backend) translateEvents(ctx context.Context, evCh <-chan session.Event
 					Delta string `json:"delta"`
 				}
 				if err := ev.UnmarshalData(&data); err == nil {
-					b.events <- ionsession.EventToolOutputDelta{Delta: data.Delta}
+					b.events <- ionsession.ToolOutputDelta{Delta: data.Delta}
 				}
 			}
 		}

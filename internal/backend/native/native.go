@@ -63,7 +63,7 @@ func (b *Backend) Name() string {
 func (b *Backend) Bootstrap() backend.Bootstrap {
 	return backend.Bootstrap{
 		Entries: []session.Entry{
-			{Role: session.RoleSystem, Content: "Native Ion Session (Gemini)"},
+			{Role: session.System, Content: "Native Ion Session (Gemini)"},
 		},
 		Status: "Initializing API client...",
 	}
@@ -96,7 +96,7 @@ func (b *Backend) Open(ctx context.Context) error {
 	b.model = client.GenerativeModel(modelName)
 	b.cs = b.model.StartChat()
 	
-	b.events <- session.EventStatusChanged{BaseEvent: session.BaseEvent{}, Status: fmt.Sprintf("Connected to %s", modelName)}
+	b.events <- session.StatusChanged{Status: fmt.Sprintf("Connected to %s", modelName)}
 	return nil
 }
 
@@ -109,8 +109,8 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 		return fmt.Errorf("session not opened")
 	}
 
-	b.events <- session.EventTurnStarted{BaseEvent: session.BaseEvent{}}
-	b.events <- session.EventStatusChanged{BaseEvent: session.BaseEvent{}, Status: "Gemini is thinking..."}
+	b.events <- session.TurnStarted{}
+	b.events <- session.StatusChanged{Status: "Gemini is thinking..."}
 
 	go func() {
 		iter := b.cs.SendMessageStream(ctx, genai.Text(input))
@@ -120,7 +120,7 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 				break
 			}
 			if err != nil {
-				b.events <- session.EventError{BaseEvent: session.BaseEvent{}, Error: err, Fatal: false}
+				b.events <- session.Error{Err: err, Fatal: false}
 				break
 			}
 
@@ -128,16 +128,16 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 				if cand.Content != nil {
 					for _, part := range cand.Content.Parts {
 						if text, ok := part.(genai.Text); ok {
-							b.events <- session.EventAssistantDelta{BaseEvent: session.BaseEvent{}, Delta: string(text)}
+							b.events <- session.AssistantDelta{Delta: string(text)}
 						}
 					}
 				}
 			}
 		}
 		
-		b.events <- session.EventAssistantMessage{BaseEvent: session.BaseEvent{}, Message: ""} // Commit
-		b.events <- session.EventStatusChanged{BaseEvent: session.BaseEvent{}, Status: "Ready"}
-		b.events <- session.EventTurnFinished{BaseEvent: session.BaseEvent{}}
+		b.events <- session.AssistantMessage{Message: ""} // Commit
+		b.events <- session.StatusChanged{Status: "Ready"}
+		b.events <- session.TurnFinished{}
 	}()
 
 	return nil

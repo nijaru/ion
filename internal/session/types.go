@@ -3,14 +3,15 @@ package session
 type Role string
 
 const (
-	RoleUser      Role = "user"
-	RoleAssistant Role = "assistant"
-	RoleSystem    Role = "system"
-	RoleTool      Role = "tool"
+	User      Role = "user"
+	Assistant Role = "assistant"
+	System    Role = "system"
+	Tool      Role = "tool"
 )
 
 type Entry struct {
-	Role    Role
-	Title   string
-	Content string
+	Role      Role
+	Title     string
+	Content   string
+	Reasoning string
 }

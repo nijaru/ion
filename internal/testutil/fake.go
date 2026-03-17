@@ -60,9 +60,9 @@ func (b *Backend) Name() string {
 func (b *Backend) Bootstrap() backend.Bootstrap {
 	return backend.Bootstrap{
 		Entries: []session.Entry{
-			{Role: session.RoleSystem, Content: "ion-go rewrite branch"},
+			{Role: session.System, Content: "ion-go rewrite branch"},
 			{
-				Role:    session.RoleAssistant,
+				Role:    session.Assistant,
 				Content: "This host is now shaped around streamed backend events, tool output, and a stable transcript/composer loop so we can judge Bubble Tea by real behavior instead of setup speed.",
 			},
 		},
@@ -96,32 +96,31 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 	}
 
 	go func() {
-		b.events <- session.EventTurnStarted{BaseEvent: session.BaseEvent{}}
-		b.events <- session.EventStatusChanged{BaseEvent: session.BaseEvent{}, Status: "[fake] planning reply"}
+		b.events <- session.TurnStarted{}
+		b.events <- session.StatusChanged{Status: "[fake] planning reply"}
 		
 		time.Sleep(120 * time.Millisecond)
-		b.events <- session.EventAssistantDelta{BaseEvent: session.BaseEvent{}, Delta: fmt.Sprintf("Reviewing %q in fake mode so we can exercise a streamed host loop.", input)}
+		b.events <- session.AssistantDelta{Delta: fmt.Sprintf("Reviewing %q in fake mode so we can exercise a streamed host loop.", input)}
 		
 		time.Sleep(160 * time.Millisecond)
-		b.events <- session.EventAssistantDelta{BaseEvent: session.BaseEvent{}, Delta: "\n\nThis backend is intentionally emitting multiple event types because ion will eventually need transcript text, tool output, progress, and completion state from either ACP or a native agent runtime."}
+		b.events <- session.AssistantDelta{Delta: "\n\nThis backend is intentionally emitting multiple event types because ion will eventually need transcript text, tool output, progress, and completion state from either ACP or a native agent runtime."}
 		
 		time.Sleep(140 * time.Millisecond)
-		b.events <- session.EventToolCallStarted{BaseEvent: session.BaseEvent{}, ToolName: "bash", Args: "git status --short"}
+		b.events <- session.ToolCallStarted{ToolName: "bash", Args: "git status --short"}
 		
 		time.Sleep(100 * time.Millisecond)
-		b.events <- session.EventToolResult{
-			BaseEvent: session.BaseEvent{},
+		b.events <- session.ToolResult{
 			ToolName:  "bash",
 			Result:    "✓ fake tool result: working tree checked for rewrite branch cleanliness",
 		}
 		
 		time.Sleep(160 * time.Millisecond)
-		b.events <- session.EventAssistantDelta{BaseEvent: session.BaseEvent{}, Delta: "\n\nThat means the UI loop is already much closer to a real agent host than a one-shot echo demo."}
+		b.events <- session.AssistantDelta{Delta: "\n\nThat means the UI loop is already much closer to a real agent host than a one-shot echo demo."}
 		
 		time.Sleep(160 * time.Millisecond)
-		b.events <- session.EventAssistantMessage{BaseEvent: session.BaseEvent{}, Message: ""} // Signal end of message
-		b.events <- session.EventStatusChanged{BaseEvent: session.BaseEvent{}, Status: "[fake] turn complete"}
-		b.events <- session.EventTurnFinished{BaseEvent: session.BaseEvent{}}
+		b.events <- session.AssistantMessage{Message: ""} // Signal end of message
+		b.events <- session.StatusChanged{Status: "[fake] turn complete"}
+		b.events <- session.TurnFinished{}
 	}()
 	return nil
 }

@@ -20,7 +20,7 @@ func (b stubBackend) Name() string { return "stub" }
 
 func (b stubBackend) Bootstrap() backend.Bootstrap {
 	return backend.Bootstrap{
-		Entries: []session.Entry{{Role: session.RoleSystem, Content: "boot"}},
+		Entries: []session.Entry{{Role: session.System, Content: "boot"}},
 		Status:  "ready",
 	}
 }
@@ -60,16 +60,16 @@ func readyModel(t *testing.T) Model {
 func TestModelStreamsAndCommitsPendingEntry(t *testing.T) {
 	model := readyModel(t)
 
-	updated, _ := model.Update(session.EventTurnStarted{BaseEvent: session.BaseEvent{}})
+	updated, _ := model.Update(session.TurnStarted{})
 	model = updated.(Model)
-	updated, _ = model.Update(session.EventAssistantDelta{Delta: "streamed reply"})
+	updated, _ = model.Update(session.AssistantDelta{Delta: "streamed reply"})
 	model = updated.(Model)
 
 	if model.pending == nil || model.pending.Content != "streamed reply" {
 		t.Fatalf("expected pending streamed assistant entry, got %#v", model.pending)
 	}
 
-	updated, _ = model.Update(session.EventAssistantMessage{BaseEvent: session.BaseEvent{}})
+	updated, _ = model.Update(session.AssistantMessage{})
 	model = updated.(Model)
 
 	if model.pending != nil {
@@ -85,15 +85,13 @@ func TestModelStreamsAndCommitsPendingEntry(t *testing.T) {
 
 func TestToolEntryRendersIntoTranscript(t *testing.T) {
 	model := readyModel(t)
-	updated, _ := model.Update(session.EventToolCallStarted{
-		BaseEvent: session.BaseEvent{},
+	updated, _ := model.Update(session.ToolCallStarted{
 		ToolName:  "bash",
 		Args:      "ls",
 	})
 	model = updated.(Model)
 	
-	updated, _ = model.Update(session.EventToolResult{
-		BaseEvent: session.BaseEvent{},
+	updated, _ = model.Update(session.ToolResult{
 		ToolName:  "bash",
 		Result:    "ok",
 	})

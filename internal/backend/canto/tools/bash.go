@@ -1,0 +1,98 @@
+package tools
+
+import (
+	"context"
+	"io"
+	"os/exec"
+	"strings"
+	"sync"
+
+	"github.com/go-json-experiment/json"
+	"github.com/nijaru/canto/llm"
+)
+
+type Bash struct {
+	cwd string
+}
+
+func NewBash(cwd string) *Bash {
+	return &Bash{cwd: cwd}
+}
+
+func (b *Bash) Spec() llm.Spec {
+	return llm.Spec{
+		Name:        "bash",
+		Description: "Run a shell command in the current working directory. Always prefer non-interactive commands (e.g. use --yes flags) to prevent hanging the TUI.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"command": map[string]any{
+					"type":        "string",
+					"description": "The command to execute (e.g. 'ls -la', 'go test ./...', 'git status')",
+				},
+			},
+			"required": []string{"command"},
+		},
+	}
+}
+
+func (b *Bash) Execute(ctx context.Context, args string) (string, error) {
+	return b.ExecuteStreaming(ctx, args, nil)
+}
+
+func (b *Bash) ExecuteStreaming(ctx context.Context, args string, emit func(string) error) (string, error) {
+	var input struct {
+		Command string `json:"command"`
+	}
+	if err := json.Unmarshal([]byte(args), &input); err != nil {
+		return "", err
+	}
+	
+	cmd := exec.CommandContext(ctx, "bash", "-c", input.Command)
+	cmd.Dir = b.cwd
+
+	stdout, _ := cmd.StdoutPipe()
+	stderr, _ := cmd.StderrPipe()
+
+	if err := cmd.Start(); err != nil {
+		return "", err
+	}
+
+	var output strings.Builder
+	var mu sync.Mutex
+	
+	// Helper to handle pipe output and emit deltas
+	handlePipe := func(r io.Reader) {
+		buf := make([]byte, 1024)
+		for {
+			n, err := r.Read(buf)
+			if n > 0 {
+				chunk := string(buf[:n])
+				mu.Lock()
+				output.WriteString(chunk)
+				if emit != nil {
+					_ = emit(chunk)
+				}
+				mu.Unlock()
+			}
+			if err != nil {
+				break
+			}
+		}
+	}
+
+	go handlePipe(stdout)
+	go handlePipe(stderr)
+
+	err := cmd.Wait()
+	res := output.String()
+	
+	if err != nil {
+		if res == "" {
+			return "", err
+		}
+		return res + "\nError: " + err.Error(), nil
+	}
+
+	return res, nil
+}
