@@ -44,6 +44,7 @@ type Model struct {
 	composer textarea.Model
 
 	lastToolUseID string
+	pendingApproval *session.ApprovalRequest
 
 	status  string
 	workdir string
@@ -305,6 +306,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshViewport(follow)
 		return m, m.awaitSessionEvent()
 
+	case session.ApprovalRequest:
+		m.pendingApproval = &msg
+		m.status = "Approval Required (y/n)"
+		m.thinking = false // Stop thinking while waiting for approval
+		m.refreshViewport(true)
+		return m, m.awaitSessionEvent()
+
 	case session.Error:
 		m.status = fmt.Sprintf("Error: %v", msg.Err)
 		return m, m.awaitSessionEvent()
@@ -347,6 +355,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "end":
 			m.viewport.GotoBottom()
 			return m, nil
+		case "y", "n":
+			if m.pendingApproval != nil {
+				approved := msg.String() == "y"
+				reqID := m.pendingApproval.RequestID
+				description := m.pendingApproval.Description
+				
+				m.pendingApproval = nil
+				m.status = "Processing approval..."
+				
+				m.entries = append(m.entries, session.Entry{
+					Role:    session.System,
+					Content: fmt.Sprintf("Host %s: %s", ifthen(approved, "approved", "denied"), description),
+				})
+				
+				m.session.Approve(context.Background(), reqID, approved)
+				m.refreshViewport(true)
+				return m, nil
+			}
 		}
 	}
 
@@ -414,10 +440,16 @@ func (m *Model) refreshViewport(follow bool) {
 }
 
 func (m Model) renderEntries() []session.Entry {
-	entries := make([]session.Entry, 0, len(m.entries)+1)
+	entries := make([]session.Entry, 0, len(m.entries)+2)
 	entries = append(entries, m.entries...)
 	if m.pending != nil {
 		entries = append(entries, *m.pending)
+	}
+	if m.pendingApproval != nil {
+		entries = append(entries, session.Entry{
+			Role:    session.System,
+			Content: fmt.Sprintf("APPROVAL REQUIRED: %s\nPress 'y' to approve, 'n' to deny.", m.pendingApproval.Description),
+		})
 	}
 	return entries
 }
@@ -500,6 +532,13 @@ func clamp(v, low, high int) int {
 
 func max(a, b int) int {
 	if a > b {
+		return a
+	}
+	return b
+}
+
+func ifthen[T any](cond bool, a, b T) T {
+	if cond {
 		return a
 	}
 	return b

@@ -147,6 +147,10 @@ func (b *Backend) CancelTurn(ctx context.Context) error {
 	return nil
 }
 
+func (b *Backend) Approve(ctx context.Context, requestID string, approved bool) error {
+	return fmt.Errorf("approvals not supported in native backend")
+}
+
 func (b *Backend) Close() error {
 	if b.client != nil {
 		b.client.Close()

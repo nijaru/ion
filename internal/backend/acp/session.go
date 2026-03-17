@@ -148,6 +148,30 @@ func (s *Session) CancelTurn(ctx context.Context) error {
 	return err
 }
 
+func (s *Session) Approve(ctx context.Context, requestID string, approved bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.stdin == nil {
+		return fmt.Errorf("agent not connected")
+	}
+
+	// Send approval response
+	req := Request{
+		Type:      "approve",
+		RequestID: requestID,
+		Approved:  approved,
+	}
+
+	bytes, err := json.Marshal(req)
+	if err != nil {
+		return err
+	}
+
+	_, err = s.stdin.Write(append(bytes, '\n'))
+	return err
+}
+
 func (s *Session) Close() error {
 	if s.cancel != nil {
 		s.cancel()
@@ -185,8 +209,10 @@ func (s *Session) Meta() map[string]string {
 // ACP Protocol Types
 
 type Request struct {
-	Type  string `json:"type"`
-	Input string `json:"input,omitempty"`
+	Type      string `json:"type"`
+	Input     string `json:"input,omitempty"`
+	RequestID string `json:"request_id,omitempty"`
+	Approved  bool   `json:"approved,omitempty"`
 }
 
 type Wrapper struct {
@@ -218,6 +244,18 @@ func (w Wrapper) ToEvent() session.Event {
 		return e
 	case "assistant_message":
 		var e session.AssistantMessage
+		_ = json.Unmarshal(w.Data, &e)
+		return e
+	case "tool_output_delta":
+		var e session.ToolOutputDelta
+		_ = json.Unmarshal(w.Data, &e)
+		return e
+	case "verification_result":
+		var e session.VerificationResult
+		_ = json.Unmarshal(w.Data, &e)
+		return e
+	case "approval_request":
+		var e session.ApprovalRequest
 		_ = json.Unmarshal(w.Data, &e)
 		return e
 	case "turn_started":
