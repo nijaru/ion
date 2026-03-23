@@ -5,15 +5,18 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"charm.land/catwalk/pkg/catwalk"
 	"github.com/nijaru/canto/agent"
+	ccontext "github.com/nijaru/canto/context"
 	"github.com/nijaru/canto/llm"
 	"github.com/nijaru/canto/llm/providers/gemini"
 	"github.com/nijaru/canto/runtime"
 	"github.com/nijaru/canto/session"
 	"github.com/nijaru/canto/tool"
+	ctools "github.com/nijaru/canto/x/tools"
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/backend/canto/tools"
 	ionsession "github.com/nijaru/ion/internal/session"
@@ -31,11 +34,14 @@ type Backend struct {
 
 	mu     sync.Mutex
 	cancel context.CancelFunc
+
+	approver *tools.ApprovalManager
 }
 
 func New() *Backend {
 	return &Backend{
-		events: make(chan ionsession.Event, 100),
+		events:   make(chan ionsession.Event, 100),
+		approver: tools.NewApprovalManager(),
 	}
 }
 
@@ -132,17 +138,45 @@ func (b *Backend) Open(ctx context.Context) error {
 	}
 
 	registry := tool.NewRegistry()
-	registry.Register(tools.NewBash(cwd))
+
+	// Sensitive tools wrapped with ApprovingTool
+	bash := tools.NewBash(cwd)
+	registry.Register(&tools.ApprovingTool{
+		Tool:    bash,
+		Manager: b.approver,
+		Callback: func(id, description string) {
+			b.events <- ionsession.ApprovalRequest{
+				RequestID:   id,
+				Description: description,
+			}
+		},
+	})
+
 	registry.Register(&tools.Read{FileTool: *tools.NewFileTool(cwd)})
 	registry.Register(&tools.Write{FileTool: *tools.NewFileTool(cwd)})
 	registry.Register(&tools.Edit{FileTool: *tools.NewFileTool(cwd)})
+	registry.Register(&tools.MultiEdit{FileTool: *tools.NewFileTool(cwd)})
 	registry.Register(&tools.List{FileTool: *tools.NewFileTool(cwd)})
 	registry.Register(&tools.Grep{SearchTool: *tools.NewSearchTool(cwd)})
 	registry.Register(&tools.Glob{SearchTool: *tools.NewSearchTool(cwd)})
-	registry.Register(&tools.Recall{Store: b.ionStore, CWD: cwd})
-	registry.Register(&tools.Memorize{Store: b.ionStore, CWD: cwd})
 
-	b.agent = agent.New("ion", instructions, modelName, p, registry)
+	// Register Canto native memory tools
+	sid := b.ID()
+	if sid == "" {
+		sid = "default"
+	}
+	registry.Register(&ctools.RecallKnowledgeTool{Store: b.ionStore.CoreStore(), Limit: 10})
+	registry.Register(&ctools.MemorizeKnowledgeTool{Store: b.ionStore.CoreStore(), SessionID: sid})
+
+	// Add context processors
+	processors := []ccontext.RequestProcessor{
+		NewFileTagProcessor(cwd),
+		ccontext.KnowledgeMemory(b.ionStore.CoreStore(), "", 5),
+	}
+
+	b.agent = agent.New("ion", instructions, modelName, p, registry,
+		agent.WithRequestProcessors(processors...),
+	)
 	
 	// Initialize Runner
 	b.runner = runtime.NewRunner(b.store, b.agent)
@@ -214,7 +248,6 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 
 	return nil
 }
-
 func (b *Backend) translateEvents(ctx context.Context, evCh <-chan session.Event) {
 	for {
 		select {
@@ -271,6 +304,38 @@ func (b *Backend) translateEvents(ctx context.Context, evCh <-chan session.Event
 				if err := ev.UnmarshalData(&data); err == nil {
 					b.events <- ionsession.ToolOutputDelta{Delta: data.Delta}
 				}
+			case session.ChildRequested:
+				var data struct {
+					Agent string `json:"agent"`
+					Query string `json:"query"`
+				}
+				if err := ev.UnmarshalData(&data); err == nil {
+					b.events <- ionsession.StatusChanged{Status: fmt.Sprintf("Requesting child agent %s...", data.Agent)}
+				}
+			case session.ChildStarted:
+				var data struct {
+					Agent     string `json:"agent"`
+					SessionID string `json:"session_id"`
+				}
+				if err := ev.UnmarshalData(&data); err == nil {
+					b.events <- ionsession.StatusChanged{Status: fmt.Sprintf("Child agent %s started (%s)", data.Agent, data.SessionID)}
+				}
+			case session.ChildCompleted:
+				var data struct {
+					Agent  string `json:"agent"`
+					Result string `json:"result"`
+				}
+				if err := ev.UnmarshalData(&data); err == nil {
+					b.events <- ionsession.StatusChanged{Status: fmt.Sprintf("Child agent %s completed", data.Agent)}
+				}
+			case session.ChildFailed, session.ChildCanceled:
+				var data struct {
+					Agent string `json:"agent"`
+					Error string `json:"error"`
+				}
+				if err := ev.UnmarshalData(&data); err == nil {
+					b.events <- ionsession.StatusChanged{Status: fmt.Sprintf("Child agent %s stopped: %s", data.Agent, data.Error)}
+				}
 			}
 		}
 	}
@@ -288,10 +353,9 @@ func (b *Backend) CancelTurn(ctx context.Context) error {
 }
 
 func (b *Backend) Approve(ctx context.Context, requestID string, approved bool) error {
-	// TODO: Implement approval in Canto runner once supported
-	return fmt.Errorf("approvals not yet supported in canto backend")
+	b.approver.Approve(requestID, approved)
+	return nil
 }
-
 func (b *Backend) Close() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()

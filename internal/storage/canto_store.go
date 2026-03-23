@@ -11,24 +11,31 @@ import (
 
 	"github.com/go-json-experiment/json"
 	"github.com/nijaru/canto/llm"
+	"github.com/nijaru/canto/memory"
 	"github.com/nijaru/canto/session"
 	ionsession "github.com/nijaru/ion/internal/session"
 	_ "modernc.org/sqlite"
-)
+	)
 
-type cantoStore struct {
+	type cantoStore struct {
 	dbPath string
 	canto  *session.SQLiteStore
+	memory *memory.CoreStore
 	db     *sql.DB // Direct access for inputs and index
-}
+	}
 
-func NewCantoStore(root string) (Store, error) {
+	func NewCantoStore(root string) (Store, error) {
 	if err := os.MkdirAll(root, 0755); err != nil {
 		return nil, err
 	}
 	dbPath := filepath.Join(root, "ion.db")
-	
+
 	cStore, err := session.NewSQLiteStore(dbPath)
+	if err != nil {
+		return nil, err
+	}
+
+	mStore, err := memory.NewCoreStore(dbPath)
 	if err != nil {
 		return nil, err
 	}
@@ -41,9 +48,9 @@ func NewCantoStore(root string) (Store, error) {
 	s := &cantoStore{
 		dbPath: dbPath,
 		canto:  cStore,
+		memory: mStore,
 		db:     db,
 	}
-
 	if err := s.init(); err != nil {
 		return nil, err
 	}
@@ -54,49 +61,22 @@ func NewCantoStore(root string) (Store, error) {
 func (s *cantoStore) init() error {
 	queries := []string{
 		`CREATE TABLE IF NOT EXISTS session_meta (
-			id TEXT PRIMARY KEY,
-			cwd TEXT,
-			model TEXT,
-			branch TEXT,
-			created_at INTEGER,
-			updated_at INTEGER,
-			last_preview TEXT
-		)`,
+                        id TEXT PRIMARY KEY,
+                        cwd TEXT,
+                        model TEXT,
+                        branch TEXT,
+                        created_at INTEGER,
+                        updated_at INTEGER,
+                        last_preview TEXT
+                )`,
 		`CREATE TABLE IF NOT EXISTS inputs (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			cwd TEXT,
-			content TEXT,
-			created_at INTEGER
-		)`,
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        cwd TEXT,
+                        content TEXT,
+                        created_at INTEGER
+                )`,
 		`CREATE INDEX IF NOT EXISTS idx_inputs_cwd ON inputs(cwd)`,
 		`CREATE INDEX IF NOT EXISTS idx_meta_cwd ON session_meta(cwd)`,
-		`CREATE TABLE IF NOT EXISTS knowledge (
-			rowid INTEGER PRIMARY KEY AUTOINCREMENT,
-			id TEXT UNIQUE NOT NULL,
-			cwd TEXT NOT NULL,
-			path TEXT,
-			content TEXT NOT NULL,
-			metadata TEXT,
-			updated_at INTEGER NOT NULL
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_knowledge_cwd ON knowledge(cwd)`,
-		`CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(
-			content,
-			path,
-			content='knowledge',
-			content_rowid='rowid',
-			tokenize='trigram'
-		)`,
-		`CREATE TRIGGER IF NOT EXISTS knowledge_ai AFTER INSERT ON knowledge BEGIN
-			INSERT INTO knowledge_fts(rowid, content, path) VALUES (new.rowid, new.content, new.path);
-		END`,
-		`CREATE TRIGGER IF NOT EXISTS knowledge_ad AFTER DELETE ON knowledge BEGIN
-			INSERT INTO knowledge_fts(knowledge_fts, rowid, content, path) VALUES('delete', old.rowid, old.content, old.path);
-		END`,
-		`CREATE TRIGGER IF NOT EXISTS knowledge_au AFTER UPDATE ON knowledge BEGIN
-			INSERT INTO knowledge_fts(knowledge_fts, rowid, content, path) VALUES('delete', old.rowid, old.content, old.path);
-			INSERT INTO knowledge_fts(rowid, content, path) VALUES (new.rowid, new.content, new.path);
-		END`,
 	}
 	for _, q := range queries {
 		if _, err := s.db.Exec(q); err != nil {
@@ -105,7 +85,6 @@ func (s *cantoStore) init() error {
 	}
 	return nil
 }
-
 func (s *cantoStore) OpenSession(ctx context.Context, cwd, model, branch string) (Session, error) {
 	id := fmt.Sprintf("%d-%s", time.Now().Unix(), ionsession.ShortID())
 	
@@ -206,6 +185,10 @@ func (s *cantoStore) Canto() *session.SQLiteStore {
 	return s.canto
 }
 
+func (s *cantoStore) CoreStore() *memory.CoreStore {
+	return s.memory
+}
+
 func (s *cantoStore) UpdateSession(ctx context.Context, si SessionInfo) error {
 	_, err := s.db.ExecContext(ctx, "UPDATE session_meta SET updated_at = ?, last_preview = ? WHERE id = ?", 
 		time.Now().Unix(), si.LastPreview, si.ID)
@@ -213,63 +196,52 @@ func (s *cantoStore) UpdateSession(ctx context.Context, si SessionInfo) error {
 }
 
 func (s *cantoStore) SaveKnowledge(ctx context.Context, item KnowledgeItem) error {
-	metaData, err := json.Marshal(item.Metadata)
-	if err != nil {
-		return err
+	metadata := item.Metadata
+	if metadata == nil {
+		metadata = make(map[string]any)
 	}
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO knowledge (id, cwd, path, content, metadata, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?)
-		ON CONFLICT(id) DO UPDATE SET
-			cwd = excluded.cwd,
-			path = excluded.path,
-			content = excluded.content,
-			metadata = excluded.metadata,
-			updated_at = excluded.updated_at
-	`, item.ID, item.CWD, item.Path, item.Content, string(metaData), item.UpdatedAt.Unix())
-	return err
+	metadata["cwd"] = item.CWD
+	if item.Path != "" {
+		metadata["path"] = item.Path
+	}
+
+	return s.memory.SaveKnowledge(ctx, &memory.KnowledgeItem{
+		ID:       item.ID,
+		Content:  item.Content,
+		Metadata: metadata,
+	})
 }
 
 func (s *cantoStore) SearchKnowledge(ctx context.Context, cwd, query string, limit int) ([]KnowledgeItem, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT k.id, k.cwd, k.path, k.content, k.metadata, k.updated_at
-		FROM knowledge k
-		JOIN knowledge_fts f ON f.rowid = k.rowid
-		WHERE k.cwd = ? AND knowledge_fts MATCH ?
-		ORDER BY rank
-		LIMIT ?
-	`, cwd, query, limit)
+	// Note: Canto's SearchKnowledge currently doesn't filter by CWD in its core table,
+	// so we might need to filter manually if necessary, or update Canto.
+	// For now, we search globally across the store.
+	items, err := s.memory.SearchKnowledge(ctx, query, limit)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
-	var items []KnowledgeItem
-	for rows.Next() {
-		var item KnowledgeItem
-		var path sql.NullString
-		var metaStr sql.NullString
-		var ua int64
-		if err := rows.Scan(&item.ID, &item.CWD, &path, &item.Content, &metaStr, &ua); err != nil {
-			return nil, err
+	res := make([]KnowledgeItem, 0, len(items))
+	for _, item := range items {
+		ki := KnowledgeItem{
+			ID:       item.ID,
+			Content:  item.Content,
+			Metadata: item.Metadata,
 		}
-		item.Path = path.String
-		item.UpdatedAt = time.Unix(ua, 0)
-		if metaStr.Valid && metaStr.String != "" {
-			if err := json.Unmarshal([]byte(metaStr.String), &item.Metadata); err != nil {
-				return nil, err
-			}
+		if cwdStr, ok := item.Metadata["cwd"].(string); ok {
+			ki.CWD = cwdStr
 		}
-		items = append(items, item)
+		if pathStr, ok := item.Metadata["path"].(string); ok {
+			ki.Path = pathStr
+		}
+		res = append(res, ki)
 	}
-	return items, nil
+	return res, nil
 }
 
 func (s *cantoStore) DeleteKnowledge(ctx context.Context, id string) error {
-	_, err := s.db.ExecContext(ctx, "DELETE FROM knowledge WHERE id = ?", id)
-	return err
+	return s.memory.DeleteKnowledge(ctx, id)
 }
-
 type cantoSession struct {
 	id    string
 	store *cantoStore

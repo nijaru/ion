@@ -1,11 +1,7 @@
-target/
-# Archived Rust build output
-archive/rust/target/
-
 # Go build output
 *.test
 .coverprofile
-ion
+/ion
 
 # Worktrees
 .worktrees/

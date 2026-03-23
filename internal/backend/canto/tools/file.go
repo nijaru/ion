@@ -187,8 +187,10 @@ func (e *Edit) Execute(ctx context.Context, args string) (string, error) {
 		return "", fmt.Errorf("old_string is not unique in file, found %d occurrences. Use replace_all: true to replace all.", count)
 	}
 
-	newContent := strings.Replace(strContent, input.OldString, input.NewString, -1)
-	if !input.ReplaceAll {
+	var newContent string
+	if input.ReplaceAll {
+		newContent = strings.Replace(strContent, input.OldString, input.NewString, -1)
+	} else {
 		newContent = strings.Replace(strContent, input.OldString, input.NewString, 1)
 	}
 
@@ -197,6 +199,106 @@ func (e *Edit) Execute(ctx context.Context, args string) (string, error) {
 	}
 
 	return fmt.Sprintf("Successfully replaced %d occurrence(s) in %s", count, input.FilePath), nil
+}
+
+// MultiEdit tool
+type MultiEdit struct {
+	FileTool
+}
+
+type EditOperation struct {
+	FilePath   string `json:"file_path"`
+	OldString  string `json:"old_string"`
+	NewString  string `json:"new_string"`
+	ReplaceAll bool   `json:"replace_all"`
+}
+
+func (m *MultiEdit) Spec() llm.Spec {
+	return llm.Spec{
+		Name:        "multi_edit",
+		Description: "Apply multiple targeted text replacements across one or more files in a single atomic operation.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"edits": map[string]any{
+					"type": "array",
+					"items": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"file_path": map[string]any{
+								"type":        "string",
+								"description": "Path to the file to modify.",
+							},
+							"old_string": map[string]any{
+								"type":        "string",
+								"description": "The exact text to replace. Include context lines to ensure uniqueness.",
+							},
+							"new_string": map[string]any{
+								"type":        "string",
+								"description": "The replacement text.",
+							},
+							"replace_all": map[string]any{
+								"type":        "boolean",
+								"description": "Replace all occurrences (default: false, requires unique match).",
+							},
+						},
+						"required": []string{"file_path", "old_string", "new_string"},
+					},
+				},
+			},
+			"required": []string{"edits"},
+		},
+	}
+}
+
+func (m *MultiEdit) Execute(ctx context.Context, args string) (string, error) {
+	var input struct {
+		Edits []EditOperation `json:"edits"`
+	}
+	if err := json.Unmarshal([]byte(args), &input); err != nil {
+		return "", err
+	}
+
+	// First pass: validate all edits
+	contents := make(map[string]string)
+	for _, edit := range input.Edits {
+		absPath := filepath.Join(m.cwd, edit.FilePath)
+		
+		// Load file if not already loaded
+		if _, ok := contents[absPath]; !ok {
+			content, err := os.ReadFile(absPath)
+			if err != nil {
+				return "", fmt.Errorf("failed to read %s: %w", edit.FilePath, err)
+			}
+			contents[absPath] = string(content)
+		}
+
+		strContent := contents[absPath]
+		count := strings.Count(strContent, edit.OldString)
+		if count == 0 {
+			return "", fmt.Errorf("old_string not found in %s", edit.FilePath)
+		}
+
+		if !edit.ReplaceAll && count > 1 {
+			return "", fmt.Errorf("old_string is not unique in %s, found %d occurrences. Provide more context.", edit.FilePath, count)
+		}
+
+		// Apply edit to our in-memory copy
+		if edit.ReplaceAll {
+			contents[absPath] = strings.Replace(strContent, edit.OldString, edit.NewString, -1)
+		} else {
+			contents[absPath] = strings.Replace(strContent, edit.OldString, edit.NewString, 1)
+		}
+	}
+
+	// Second pass: write all modified files
+	for absPath, content := range contents {
+		if err := os.WriteFile(absPath, []byte(content), 0644); err != nil {
+			return "", fmt.Errorf("failed to write %s: %w", absPath, err)
+		}
+	}
+
+	return fmt.Sprintf("Successfully applied %d edit(s) across %d file(s)", len(input.Edits), len(contents)), nil
 }
 
 // List tool (formerly list_directory)

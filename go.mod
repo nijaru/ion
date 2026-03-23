@@ -7,8 +7,12 @@ require (
 	charm.land/bubbletea/v2 v2.0.2
 	charm.land/catwalk v0.29.2
 	charm.land/lipgloss/v2 v2.0.0
+	github.com/bmatcuk/doublestar/v4 v4.10.0
+	github.com/go-json-experiment/json v0.0.0-20260214004413-d219187c3433
 	github.com/google/generative-ai-go v0.20.1
-	github.com/nijaru/canto v0.0.0-20260317124624-acd1b32c52d3
+	github.com/nijaru/canto v0.0.0-20260323093414-e8289219c041
+	github.com/oklog/ulid/v2 v2.1.1
+	github.com/sabhiram/go-gitignore v0.0.0-20210923224102-525f6e181f06
 	google.golang.org/api v0.271.0
 	modernc.org/sqlite v1.46.1
 )
@@ -22,7 +26,6 @@ require (
 	cloud.google.com/go/longrunning v0.5.7 // indirect
 	github.com/anthropics/anthropic-sdk-go v1.26.0 // indirect
 	github.com/atotto/clipboard v0.1.4 // indirect
-	github.com/bmatcuk/doublestar/v4 v4.10.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/charmbracelet/colorprofile v0.4.2 // indirect
 	github.com/charmbracelet/ultraviolet v0.0.0-20260205113103-524a6607adb8 // indirect
@@ -37,7 +40,6 @@ require (
 	github.com/coder/hnsw v0.6.1 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
-	github.com/go-json-experiment/json v0.0.0-20260214004413-d219187c3433 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/google/renameio v1.0.1 // indirect
@@ -50,11 +52,10 @@ require (
 	github.com/mattn/go-runewidth v0.0.20 // indirect
 	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
-	github.com/oklog/ulid/v2 v2.1.1 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
-	github.com/sabhiram/go-gitignore v0.0.0-20210923224102-525f6e181f06 // indirect
 	github.com/sashabaranov/go-openai v1.41.2 // indirect
+	github.com/tetratelabs/wazero v1.11.0 // indirect
 	github.com/tidwall/gjson v1.18.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect

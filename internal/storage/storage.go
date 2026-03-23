@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/nijaru/canto/memory"
 	"github.com/nijaru/ion/internal/session"
 )
 
@@ -38,6 +39,9 @@ type Store interface {
 
 	// DeleteKnowledge removes a specific item by ID.
 	DeleteKnowledge(ctx context.Context, id string) error
+
+	// CoreStore returns the underlying Canto memory store.
+	CoreStore() *memory.CoreStore
 }
 
 // Session handles appending events to a specific session's storage.
