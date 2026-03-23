@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nijaru/canto/memory"
 	"github.com/nijaru/ion/internal/session"
 	"sync"
 	_ "modernc.org/sqlite"
@@ -211,6 +212,10 @@ func (s *fileStore) SearchKnowledge(ctx context.Context, cwd, query string, limi
 
 func (s *fileStore) DeleteKnowledge(ctx context.Context, id string) error {
 	// No-op for fileStore
+	return nil
+}
+
+func (s *fileStore) CoreStore() *memory.CoreStore {
 	return nil
 }
 

@@ -10,12 +10,10 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/go-json-experiment/json"
 	"github.com/nijaru/canto/llm"
-	"github.com/nijaru/ion/internal/storage"
 	ignore "github.com/sabhiram/go-gitignore"
 )
 

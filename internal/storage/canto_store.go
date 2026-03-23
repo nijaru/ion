@@ -9,20 +9,19 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-json-experiment/json"
 	"github.com/nijaru/canto/llm"
 	"github.com/nijaru/canto/memory"
 	"github.com/nijaru/canto/session"
 	ionsession "github.com/nijaru/ion/internal/session"
 	_ "modernc.org/sqlite"
-	)
+)
 
-	type cantoStore struct {
+type cantoStore struct {
 	dbPath string
 	canto  *session.SQLiteStore
 	memory *memory.CoreStore
 	db     *sql.DB // Direct access for inputs and index
-	}
+}
 
 	func NewCantoStore(root string) (Store, error) {
 	if err := os.MkdirAll(root, 0755); err != nil {
@@ -240,7 +239,8 @@ func (s *cantoStore) SearchKnowledge(ctx context.Context, cwd, query string, lim
 }
 
 func (s *cantoStore) DeleteKnowledge(ctx context.Context, id string) error {
-	return s.memory.DeleteKnowledge(ctx, id)
+	_, err := s.db.ExecContext(ctx, "DELETE FROM knowledge WHERE id = ?", id)
+	return err
 }
 type cantoSession struct {
 	id    string

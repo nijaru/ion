@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 
 	"charm.land/catwalk/pkg/catwalk"
@@ -13,9 +12,11 @@ import (
 	ccontext "github.com/nijaru/canto/context"
 	"github.com/nijaru/canto/llm"
 	"github.com/nijaru/canto/llm/providers/gemini"
+	"github.com/nijaru/canto/memory"
 	"github.com/nijaru/canto/runtime"
 	"github.com/nijaru/canto/session"
 	"github.com/nijaru/canto/tool"
+	"github.com/nijaru/canto/tool/mcp"
 	ctools "github.com/nijaru/canto/x/tools"
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/backend/canto/tools"
@@ -36,12 +37,14 @@ type Backend struct {
 	cancel context.CancelFunc
 
 	approver *tools.ApprovalManager
+	mcpClients []*mcp.Client
 }
 
 func New() *Backend {
 	return &Backend{
 		events:   make(chan ionsession.Event, 100),
 		approver: tools.NewApprovalManager(),
+		mcpClients: make([]*mcp.Client, 0),
 	}
 }
 
@@ -118,19 +121,19 @@ func (b *Backend) Open(ctx context.Context) error {
 		"CORE PRINCIPLES:\n" +
 		"1. Be concise, professional, and thorough.\n" +
 		"2. Explore before acting. Use 'list', 'read', and 'glob' to understand the codebase context.\n" +
-		"3. Work in small, verifiable steps. Apply changes and then run tests using 'bash'.\n" +
-		"4. Streaming Output: When you run commands via 'bash', the output is streamed to the host in real-time. " +
-		"This allows you to see progress for long-running tasks like 'go test ./...'.\n" +
-		"5. Modern Idioms: Always prefer modern Go (v1.26+) patterns. Use 'slices', 'maps', and 'iter' packages. " +
-		"Prefer 'sync.WaitGroup.Go' for concurrency.\n" +
-		"6. Error Handling: Always check errors and provide helpful feedback. If a tool fails, explain why and recommend a fix.\n" +
-		"7. Approvals: Some sensitive tools may require host approval. If prompted, wait for the user to 'y/n' before proceeding.\n\n" +
+		"3. Work in small, verifiable steps. Apply changes and then run tests using 'bash' or 'verify'.\n" +
+		"4. Streaming Output: When you run commands via 'bash', the output is streamed to the host in real-time.\n" +
+		"5. Modern Idioms: Always prefer modern Go (v1.26+) patterns.\n" +
+		"6. Error Handling: Always check errors and provide helpful feedback.\n" +
+		"7. Approvals: Some sensitive tools may require host approval.\n" +
+		"8. AUTO-VERIFICATION: After every 'edit', 'multi_edit', or 'write', you MUST run tests (e.g. 'go test ./...' or 'verify') to ensure no regressions were introduced. This is your high-fidelity verification loop.\n\n" +
 		"TOOLSET:\n" +
-		"- file: 'read', 'write', 'edit', 'list' for filesystem operations.\n" +
+		"- file: 'read', 'write', 'edit', 'multi_edit', 'list' for filesystem operations.\n" +
 		"- search: 'grep', 'glob' for finding code patterns.\n" +
 		"- recall: search long-term memory for relevant codebase patterns or cross-session insights.\n" +
 		"- memorize: save important codebase insights or patterns for future sessions.\n" +
-		"- system: 'bash' for running any shell command."
+		"- system: 'bash' for running any shell command.\n" +
+		"- verify: run verification commands (test, lint) and report results to the host."
 	
 	cwd := b.Meta()["cwd"]
 	if cwd == "" {
@@ -159,23 +162,50 @@ func (b *Backend) Open(ctx context.Context) error {
 	registry.Register(&tools.List{FileTool: *tools.NewFileTool(cwd)})
 	registry.Register(&tools.Grep{SearchTool: *tools.NewSearchTool(cwd)})
 	registry.Register(&tools.Glob{SearchTool: *tools.NewSearchTool(cwd)})
+	registry.Register(&tools.Verify{
+		CWD: cwd,
+		Callback: func(command string, passed bool, metric, output string) {
+			b.events <- ionsession.VerificationResult{
+				Command: command,
+				Passed:  passed,
+				Metric:  metric,
+				Output:  output,
+			}
+		},
+	})
 
 	// Register Canto native memory tools
 	sid := b.ID()
 	if sid == "" {
 		sid = "default"
 	}
-	registry.Register(&ctools.RecallKnowledgeTool{Store: b.ionStore.CoreStore(), Limit: 10})
-	registry.Register(&ctools.MemorizeKnowledgeTool{Store: b.ionStore.CoreStore(), SessionID: sid})
+	
+	coreStore := b.ionStore.CoreStore()
+	if coreStore == nil {
+		// Fallback for legacy stores
+		home, _ := os.UserHomeDir()
+		dbPath := filepath.Join(home, ".ion", "ion.db")
+		os.MkdirAll(filepath.Dir(dbPath), 0755)
+		coreStore, _ = memory.NewCoreStore(dbPath)
+	}
+
+	if coreStore != nil {
+		registry.Register(&ctools.RecallKnowledgeTool{Store: coreStore, Limit: 10})
+		registry.Register(&ctools.MemorizeKnowledgeTool{Store: coreStore, SessionID: sid})
+	}
 
 	// Add context processors
-	processors := []ccontext.RequestProcessor{
+	requestProcessors := []ccontext.RequestProcessor{
 		NewFileTagProcessor(cwd),
-		ccontext.KnowledgeMemory(b.ionStore.CoreStore(), "", 5),
+	}
+	var processors []ccontext.Processor
+	if coreStore != nil {
+		processors = append(processors, ccontext.KnowledgeMemory(coreStore, "", 5))
 	}
 
 	b.agent = agent.New("ion", instructions, modelName, p, registry,
-		agent.WithRequestProcessors(processors...),
+		agent.WithRequestProcessors(requestProcessors...),
+		agent.WithProcessors(processors...),
 	)
 	
 	// Initialize Runner
@@ -305,36 +335,59 @@ func (b *Backend) translateEvents(ctx context.Context, evCh <-chan session.Event
 					b.events <- ionsession.ToolOutputDelta{Delta: data.Delta}
 				}
 			case session.ChildRequested:
-				var data struct {
-					Agent string `json:"agent"`
-					Query string `json:"query"`
-				}
+				var data session.ChildRequestedData
 				if err := ev.UnmarshalData(&data); err == nil {
-					b.events <- ionsession.StatusChanged{Status: fmt.Sprintf("Requesting child agent %s...", data.Agent)}
+					b.events <- ionsession.ChildRequested{
+						AgentName: data.AgentID,
+						Query:     data.Task,
+					}
+					b.events <- ionsession.StatusChanged{Status: fmt.Sprintf("Requesting child agent %s...", data.AgentID)}
 				}
 			case session.ChildStarted:
-				var data struct {
-					Agent     string `json:"agent"`
-					SessionID string `json:"session_id"`
-				}
+				var data session.ChildStartedData
 				if err := ev.UnmarshalData(&data); err == nil {
-					b.events <- ionsession.StatusChanged{Status: fmt.Sprintf("Child agent %s started (%s)", data.Agent, data.SessionID)}
+					b.events <- ionsession.ChildStarted{
+						AgentName: data.AgentID,
+						SessionID: data.ChildSessionID,
+					}
+					b.events <- ionsession.StatusChanged{Status: fmt.Sprintf("Child agent %s started (%s)", data.AgentID, data.ChildSessionID)}
+				}
+
+			case session.ChildProgressed:
+				var data session.ChildProgressedData
+				if err := ev.UnmarshalData(&data); err == nil {
+					b.events <- ionsession.ChildDelta{
+						AgentName: data.ChildID,
+						Delta:     data.Message,
+					}
+					b.events <- ionsession.StatusChanged{Status: fmt.Sprintf("Child agent %s: %s", data.ChildID, data.Message)}
 				}
 			case session.ChildCompleted:
-				var data struct {
-					Agent  string `json:"agent"`
-					Result string `json:"result"`
-				}
+				var data session.ChildCompletedData
 				if err := ev.UnmarshalData(&data); err == nil {
-					b.events <- ionsession.StatusChanged{Status: fmt.Sprintf("Child agent %s completed", data.Agent)}
+					b.events <- ionsession.ChildCompleted{
+						AgentName: data.ChildID,
+						Result:    data.Summary,
+					}
+					b.events <- ionsession.StatusChanged{Status: "Ready"}
 				}
-			case session.ChildFailed, session.ChildCanceled:
-				var data struct {
-					Agent string `json:"agent"`
-					Error string `json:"error"`
-				}
+			case session.ChildFailed:
+				var data session.ChildFailedData
 				if err := ev.UnmarshalData(&data); err == nil {
-					b.events <- ionsession.StatusChanged{Status: fmt.Sprintf("Child agent %s stopped: %s", data.Agent, data.Error)}
+					b.events <- ionsession.ChildFailed{
+						AgentName: data.ChildID,
+						Error:     data.Error,
+					}
+					b.events <- ionsession.StatusChanged{Status: "Ready"}
+				}
+			case session.ChildCanceled:
+				var data session.ChildCanceledData
+				if err := ev.UnmarshalData(&data); err == nil {
+					b.events <- ionsession.ChildFailed{
+						AgentName: data.ChildID,
+						Error:     "Canceled: " + data.Reason,
+					}
+					b.events <- ionsession.StatusChanged{Status: "Ready"}
 				}
 			}
 		}
@@ -356,9 +409,42 @@ func (b *Backend) Approve(ctx context.Context, requestID string, approved bool) 
 	b.approver.Approve(requestID, approved)
 	return nil
 }
+
+func (b *Backend) RegisterMCPServer(ctx context.Context, command string, args ...string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.agent == nil {
+		return fmt.Errorf("backend not initialized")
+	}
+
+	client, err := mcp.NewStdioClient(ctx, command, args...)
+	if err != nil {
+		return fmt.Errorf("failed to connect to MCP server: %w", err)
+	}
+
+	tools, err := client.DiscoverTools(ctx)
+	if err != nil {
+		client.Close()
+		return fmt.Errorf("failed to discover tools: %w", err)
+	}
+
+	for _, t := range tools {
+		b.agent.Tools.Register(t)
+	}
+
+	b.mcpClients = append(b.mcpClients, client)
+	b.events <- ionsession.StatusChanged{Status: fmt.Sprintf("Registered %d MCP tools from %s", len(tools), command)}
+	return nil
+}
+
 func (b *Backend) Close() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+
+	for _, client := range b.mcpClients {
+		client.Close()
+	}
 
 	if b.runner != nil {
 		b.runner.Close()
