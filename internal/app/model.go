@@ -56,6 +56,7 @@ type Model struct {
 	assistantStyle lipgloss.Style
 	systemStyle    lipgloss.Style
 	toolStyle      lipgloss.Style
+	agentStyle     lipgloss.Style
 	dimStyle       lipgloss.Style
 	lineStyle      lipgloss.Style
 }
@@ -116,6 +117,9 @@ func New(b backend.Backend, s storage.Session) Model {
 			PaddingLeft(2),
 		toolStyle: lipgloss.NewStyle().
 			Foreground(lipgloss.Color("10")).
+			PaddingLeft(2),
+		agentStyle: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("13")).
 			PaddingLeft(2),
 		dimStyle: lipgloss.NewStyle().
 			Faint(true),
@@ -313,6 +317,44 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshViewport(true)
 		return m, m.awaitSessionEvent()
 
+	case session.ChildRequested:
+		follow := m.shouldFollowOutput()
+		m.entries = append(m.entries, session.Entry{
+			Role:    session.Agent,
+			Title:   msg.AgentName,
+			Content: fmt.Sprintf("Query: %s", msg.Query),
+		})
+		m.refreshViewport(follow)
+		return m, m.awaitSessionEvent()
+
+	case session.ChildStarted:
+		// Optional: update status or title with SessionID
+		return m, m.awaitSessionEvent()
+
+	case session.ChildDelta:
+		follow := m.shouldFollowOutput()
+		if len(m.entries) > 0 && m.entries[len(m.entries)-1].Role == session.Agent {
+			m.entries[len(m.entries)-1].Content += msg.Delta
+		}
+		m.refreshViewport(follow)
+		return m, m.awaitSessionEvent()
+
+	case session.ChildCompleted:
+		follow := m.shouldFollowOutput()
+		if len(m.entries) > 0 && m.entries[len(m.entries)-1].Role == session.Agent {
+			m.entries[len(m.entries)-1].Content = msg.Result
+		}
+		m.refreshViewport(follow)
+		return m, m.awaitSessionEvent()
+
+	case session.ChildFailed:
+		follow := m.shouldFollowOutput()
+		if len(m.entries) > 0 && m.entries[len(m.entries)-1].Role == session.Agent {
+			m.entries[len(m.entries)-1].Content = "ERROR: " + msg.Error
+		}
+		m.refreshViewport(follow)
+		return m, m.awaitSessionEvent()
+
 	case session.Error:
 		m.status = fmt.Sprintf("Error: %v", msg.Err)
 		return m, m.awaitSessionEvent()
@@ -341,6 +383,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = fmt.Sprintf("[%s] turn in flight", m.backend.Name())
 			m.layout()
 			m.refreshViewport(true)
+			
+			if strings.HasPrefix(text, "/") {
+				cmd := m.handleCommand(text)
+				m.composer.Reset()
+				return m, cmd
+			}
+
 			m.session.SubmitTurn(context.Background(), text)
 			return m, nil
 		case "pgup":
@@ -415,6 +464,37 @@ func (m Model) View() tea.View {
 	return tea.NewView(content)
 }
 
+func (m *Model) handleCommand(input string) tea.Cmd {
+	fields := strings.Fields(input)
+	if len(fields) == 0 {
+		return nil
+	}
+
+	cmd := fields[0]
+	switch cmd {
+	case "/mcp":
+		if len(fields) < 3 || fields[1] != "add" {
+			return func() tea.Msg {
+				return session.Error{Err: fmt.Errorf("usage: /mcp add <command> [args...]")}
+			}
+		}
+		mcpCmd := fields[2]
+		mcpArgs := fields[3:]
+		return func() tea.Msg {
+			if err := m.session.RegisterMCPServer(context.Background(), mcpCmd, mcpArgs...); err != nil {
+				return session.Error{Err: err}
+			}
+			return nil
+		}
+	case "/exit", "/quit":
+		return tea.Quit
+	default:
+		return func() tea.Msg {
+			return session.Error{Err: fmt.Errorf("unknown command: %s", cmd)}
+		}
+	}
+}
+
 func (m *Model) layout() {
 	composerHeight := clamp(m.composer.LineCount()+1, minComposerHeight, maxComposerHeight)
 	m.composer.SetWidth(max(20, m.width-4))
@@ -477,6 +557,12 @@ func (m Model) renderEntry(entry session.Entry) string {
 			return m.toolStyle.Render("• " + label + " " + m.dimStyle.Render("(pending)"))
 		}
 		return m.toolStyle.Render("• "+label) + "\n" + m.dimStyle.PaddingLeft(4).Render(entry.Content)
+	case session.Agent:
+		label := entry.Title
+		if label == "" {
+			label = "agent"
+		}
+		return m.agentStyle.Render("🤖 " + label) + "\n" + m.dimStyle.PaddingLeft(4).Render(entry.Content)
 	case session.System:
 		return m.systemStyle.Render(entry.Content)
 	default:
@@ -486,6 +572,14 @@ func (m Model) renderEntry(entry session.Entry) string {
 
 func (m Model) progressLine() string {
 	if m.thinking {
+		// Check for active child agent
+		if len(m.entries) > 0 {
+			last := m.entries[len(m.entries)-1]
+			if last.Role == session.Agent && !strings.HasPrefix(last.Content, "Result:") && !strings.HasPrefix(last.Content, "ERROR:") {
+				return m.agentStyle.Render(fmt.Sprintf("🤖 Agent %s is working...", last.Title))
+			}
+		}
+
 		if m.pending != nil && m.pending.Content != "" {
 			return m.assistantStyle.Render("• Streaming assistant response...")
 		}

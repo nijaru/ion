@@ -22,9 +22,11 @@ type AgentSession interface {
 	// Approve sends an approval decision back to the agent for a pending request.
 	Approve(ctx context.Context, requestID string, approved bool) error
 
+	// RegisterMCPServer connects to an MCP server and registers its tools.
+	RegisterMCPServer(ctx context.Context, command string, args ...string) error
+
 	// Close terminates the session and cleans up resources.
 	Close() error
-
 	// Events returns a read-only channel of typed events emitted by the session.
 	// The host UI consumes these events and translates them into UI commands.
 	Events() <-chan Event

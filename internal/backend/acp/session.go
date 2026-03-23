@@ -19,7 +19,7 @@ type Session struct {
 	events  chan session.Event
 	store   storage.Store
 	storage storage.Session
-	
+
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
 	cancel context.CancelFunc
@@ -64,46 +64,43 @@ func (s *Session) Open(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to open stderr: %w", err)
 	}
-
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start agent: %w", err)
-	}
-
-	var wg sync.WaitGroup
-
-	// Stream stdout (ACP Events)
-	wg.Go(func() {
-		scanner := bufio.NewScanner(stdout)
-		for scanner.Scan() {
-			var ev Wrapper
-			if err := json.Unmarshal(scanner.Bytes(), &ev); err != nil {
-				s.events <- session.Error{Err: fmt.Errorf("failed to parse ACP event: %w", err)}
-				continue
-			}
-			
-			// Map ACP wrapper to session.Event
-			if typedEv := ev.ToEvent(); typedEv != nil {
-				s.events <- typedEv
-			}
-		}
-	})
-
-	// Stream stderr to session errors (non-fatal)
-	wg.Go(func() {
-		scanner := bufio.NewScanner(stderr)
-		for scanner.Scan() {
-			s.events <- session.Error{Err: fmt.Errorf("agent stderr: %s", scanner.Text())}
-		}
-	})
-
-	// Background wait to clean up
-	go func() {
-		wg.Wait()
-		_ = cmd.Wait() // Ensure process is reaped
-	}()
-
-	return nil
+if err := cmd.Start(); err != nil {
+	return fmt.Errorf("failed to start agent: %w", err)
 }
+
+// Stream stdout (ACP Events)
+go func() {
+	scanner := bufio.NewScanner(stdout)
+	for scanner.Scan() {
+		var ev Wrapper
+		if err := json.Unmarshal(scanner.Bytes(), &ev); err != nil {
+			s.events <- session.Error{Err: fmt.Errorf("failed to parse ACP event: %w", err)}
+			continue
+		}
+
+		// Map ACP wrapper to session.Event
+		if typedEv := ev.ToEvent(); typedEv != nil {
+			s.events <- typedEv
+		}
+	}
+}()
+
+// Stream stderr to session errors (non-fatal)
+go func() {
+	scanner := bufio.NewScanner(stderr)
+	for scanner.Scan() {
+		s.events <- session.Error{Err: fmt.Errorf("agent stderr: %s", scanner.Text())}
+	}
+}()
+
+// Background wait to clean up
+go func() {
+	_ = cmd.Wait() // Ensure process is reaped
+}()
+
+return nil
+}
+
 
 func (s *Session) Resume(ctx context.Context, sessionID string) error {
 	// For now, Resume is similar to Open but might pass different flags to the external agent
@@ -123,7 +120,7 @@ func (s *Session) SubmitTurn(ctx context.Context, input string) error {
 		Type:  "submit",
 		Input: input,
 	}
-	
+
 	bytes, err := json.Marshal(req)
 	if err != nil {
 		return err
@@ -172,6 +169,30 @@ func (s *Session) Approve(ctx context.Context, requestID string, approved bool) 
 	return err
 }
 
+func (s *Session) RegisterMCPServer(ctx context.Context, command string, args ...string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.stdin == nil {
+		return fmt.Errorf("agent not connected")
+	}
+
+	// Send MCP registration request to external agent
+	req := Request{
+		Type:    "register_mcp",
+		Command: command,
+		Args:    args,
+	}
+
+	bytes, err := json.Marshal(req)
+	if err != nil {
+		return err
+	}
+
+	_, err = s.stdin.Write(append(bytes, '\n'))
+	return err
+}
+
 func (s *Session) Close() error {
 	if s.cancel != nil {
 		s.cancel()
@@ -209,10 +230,12 @@ func (s *Session) Meta() map[string]string {
 // ACP Protocol Types
 
 type Request struct {
-	Type      string `json:"type"`
-	Input     string `json:"input,omitempty"`
-	RequestID string `json:"request_id,omitempty"`
-	Approved  bool   `json:"approved,omitempty"`
+	Type      string   `json:"type"`
+	Input     string   `json:"input,omitempty"`
+	RequestID string   `json:"request_id,omitempty"`
+	Approved  bool     `json:"approved,omitempty"`
+	Command   string   `json:"command,omitempty"`
+	Args      []string `json:"args,omitempty"`
 }
 
 type Wrapper struct {
@@ -256,6 +279,26 @@ func (w Wrapper) ToEvent() session.Event {
 		return e
 	case "approval_request":
 		var e session.ApprovalRequest
+		_ = json.Unmarshal(w.Data, &e)
+		return e
+	case "child_requested":
+		var e session.ChildRequested
+		_ = json.Unmarshal(w.Data, &e)
+		return e
+	case "child_started":
+		var e session.ChildStarted
+		_ = json.Unmarshal(w.Data, &e)
+		return e
+	case "child_delta":
+		var e session.ChildDelta
+		_ = json.Unmarshal(w.Data, &e)
+		return e
+	case "child_completed":
+		var e session.ChildCompleted
+		_ = json.Unmarshal(w.Data, &e)
+		return e
+	case "child_failed":
+		var e session.ChildFailed
 		_ = json.Unmarshal(w.Data, &e)
 		return e
 	case "turn_started":

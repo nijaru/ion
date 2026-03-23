@@ -151,6 +151,10 @@ func (b *Backend) Approve(ctx context.Context, requestID string, approved bool) 
 	return fmt.Errorf("approvals not supported in native backend")
 }
 
+func (b *Backend) RegisterMCPServer(ctx context.Context, command string, args ...string) error {
+	return fmt.Errorf("MCP not supported in native backend")
+}
+
 func (b *Backend) Close() error {
 	if b.client != nil {
 		b.client.Close()

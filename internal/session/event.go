@@ -132,3 +132,48 @@ type Error struct {
 }
 
 func (e Error) isEvent() {}
+
+// ChildRequested fires when the main agent requests a child execution.
+type ChildRequested struct {
+	Base
+	AgentName string `json:"agent_name"`
+	Query     string `json:"query"`
+}
+
+func (e ChildRequested) isEvent() {}
+
+// ChildStarted fires when the child execution begins.
+type ChildStarted struct {
+	Base
+	AgentName string `json:"agent_name"`
+	SessionID string `json:"session_id"`
+}
+
+func (e ChildStarted) isEvent() {}
+
+// ChildDelta is an incremental chunk of child assistant output.
+type ChildDelta struct {
+	Base
+	AgentName string `json:"agent_name"`
+	Delta     string `json:"delta"`
+}
+
+func (e ChildDelta) isEvent() {}
+
+// ChildCompleted fires when the child execution finishes successfully.
+type ChildCompleted struct {
+	Base
+	AgentName string `json:"agent_name"`
+	Result    string `json:"result"`
+}
+
+func (e ChildCompleted) isEvent() {}
+
+// ChildFailed fires when the child execution fails.
+type ChildFailed struct {
+	Base
+	AgentName string `json:"agent_name"`
+	Error     string `json:"error"`
+}
+
+func (e ChildFailed) isEvent() {}

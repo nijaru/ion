@@ -7,6 +7,7 @@ const (
 	Assistant Role = "assistant"
 	System    Role = "system"
 	Tool      Role = "tool"
+	Agent     Role = "agent"
 )
 
 type Entry struct {
