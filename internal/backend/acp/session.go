@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-json-experiment/json"
 	"github.com/go-json-experiment/json/jsontext"
+	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
 )
@@ -19,6 +20,7 @@ type Session struct {
 	events  chan session.Event
 	store   storage.Store
 	storage storage.Session
+	policy  *backend.PolicyEngine
 
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
@@ -29,6 +31,7 @@ type Session struct {
 func newSession() *Session {
 	return &Session{
 		events: make(chan session.Event, 100),
+		policy: backend.NewPolicyEngine(),
 	}
 }
 
@@ -79,9 +82,35 @@ go func() {
 		}
 
 		// Map ACP wrapper to session.Event
-		if typedEv := ev.ToEvent(); typedEv != nil {
-			s.events <- typedEv
+		typedEv := ev.ToEvent()
+		if typedEv == nil {
+			continue
 		}
+
+		// Intercept approval requests for automated policy handling
+		if req, ok := typedEv.(session.ApprovalRequest); ok {
+			policy, reason := s.policy.Authorize(ctx, req.ToolName, req.Args)
+			switch policy {
+			case backend.PolicyAllow:
+				s.Approve(context.Background(), req.RequestID, true)
+				req.Description = "Auto-approved by policy: " + req.Description
+				s.events <- req
+				continue
+			case backend.PolicyDeny:
+				s.Approve(context.Background(), req.RequestID, false)
+				req.Description = "Auto-denied by policy: " + req.Description
+				s.events <- req
+				continue
+			default:
+				if reason != "" {
+					req.Description += "\n\nPolicy hint: " + reason
+				}
+				s.events <- req
+				continue
+			}
+		}
+
+		s.events <- typedEv
 	}
 }()
 

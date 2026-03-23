@@ -296,6 +296,20 @@ func (s *cantoSession) Append(ctx context.Context, event any) error {
 			Reasoning: reasoning.String(),
 		})
 		s.store.canto.Save(ctx, ev)
+	case ToolUse:
+		ev := session.NewEvent(s.id, session.ToolStarted, map[string]any{
+			"id":   e.ID,
+			"tool": e.Name,
+			"args": e.Input,
+		})
+		s.store.canto.Save(ctx, ev)
+	case ToolResult:
+		ev := session.NewEvent(s.id, session.ToolCompleted, map[string]any{
+			"tool_use_id": e.ToolUseID,
+			"output":      e.Content,
+			"is_error":    e.IsError,
+		})
+		s.store.canto.Save(ctx, ev)
 	}
 
 	if preview != "" {
@@ -330,12 +344,20 @@ func (s *cantoSession) Entries(ctx context.Context) ([]ionsession.Entry, error) 
 		case session.ToolStarted:
 			var data struct {
 				Tool string `json:"tool"`
-				Args string `json:"args"`
+				Args any    `json:"args"`
 			}
 			if err := ev.UnmarshalData(&data); err == nil {
+				argsStr := ""
+				if s, ok := data.Args.(string); ok {
+					argsStr = s
+				} else if m, ok := data.Args.(map[string]any); ok {
+					if a, ok := m["args"].(string); ok {
+						argsStr = a
+					}
+				}
 				entries = append(entries, ionsession.Entry{
 					Role:  ionsession.Tool,
-					Title: fmt.Sprintf("%s(%s)", data.Tool, data.Args),
+					Title: fmt.Sprintf("%s(%s)", data.Tool, argsStr),
 				})
 			}
 		case session.ToolCompleted:

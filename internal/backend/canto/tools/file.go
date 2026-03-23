@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/aymanbagabas/go-udiff"
 	"github.com/go-json-experiment/json"
 	"github.com/nijaru/canto/llm"
 )
@@ -198,7 +199,8 @@ func (e *Edit) Execute(ctx context.Context, args string) (string, error) {
 		return "", err
 	}
 
-	return fmt.Sprintf("Successfully replaced %d occurrence(s) in %s", count, input.FilePath), nil
+	diff := udiff.Unified("a/"+input.FilePath, "b/"+input.FilePath, strContent, newContent)
+	return fmt.Sprintf("Successfully replaced %d occurrence(s) in %s\n\n%s", count, input.FilePath, diff), nil
 }
 
 // MultiEdit tool
@@ -259,8 +261,9 @@ func (m *MultiEdit) Execute(ctx context.Context, args string) (string, error) {
 		return "", err
 	}
 
-	// First pass: validate all edits
+	// First pass: validate all edits and track original content
 	contents := make(map[string]string)
+	originals := make(map[string]string)
 	for _, edit := range input.Edits {
 		absPath := filepath.Join(m.cwd, edit.FilePath)
 		
@@ -271,6 +274,7 @@ func (m *MultiEdit) Execute(ctx context.Context, args string) (string, error) {
 				return "", fmt.Errorf("failed to read %s: %w", edit.FilePath, err)
 			}
 			contents[absPath] = string(content)
+			originals[absPath] = string(content)
 		}
 
 		strContent := contents[absPath]
@@ -291,14 +295,22 @@ func (m *MultiEdit) Execute(ctx context.Context, args string) (string, error) {
 		}
 	}
 
-	// Second pass: write all modified files
+	// Second pass: write all modified files and generate aggregate diff
+	var diffs strings.Builder
 	for absPath, content := range contents {
 		if err := os.WriteFile(absPath, []byte(content), 0644); err != nil {
 			return "", fmt.Errorf("failed to write %s: %w", absPath, err)
 		}
+		
+		relPath, _ := filepath.Rel(m.cwd, absPath)
+		diff := udiff.Unified("a/"+relPath, "b/"+relPath, originals[absPath], content)
+		if diff != "" {
+			diffs.WriteString(diff)
+			diffs.WriteString("\n")
+		}
 	}
 
-	return fmt.Sprintf("Successfully applied %d edit(s) across %d file(s)", len(input.Edits), len(contents)), nil
+	return fmt.Sprintf("Successfully applied %d edit(s) across %d file(s)\n\n%s", len(input.Edits), len(contents), diffs.String()), nil
 }
 
 // List tool (formerly list_directory)

@@ -7,6 +7,7 @@ require (
 	charm.land/bubbletea/v2 v2.0.2
 	charm.land/catwalk v0.29.2
 	charm.land/lipgloss/v2 v2.0.0
+	github.com/aymanbagabas/go-udiff v0.4.0
 	github.com/bmatcuk/doublestar/v4 v4.10.0
 	github.com/go-json-experiment/json v0.0.0-20260214004413-d219187c3433
 	github.com/google/generative-ai-go v0.20.1

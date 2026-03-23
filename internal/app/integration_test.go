@@ -65,18 +65,7 @@ func TestIntegrationFullLoop(t *testing.T) {
 		}
 	}
 
-	// 5. Verify transcript has entries
-	if len(model.entries) < 2 {
-		t.Fatalf("expected at least 2 entries, got %d", len(model.entries))
-	}
-	
-	lastEntry := model.entries[len(model.entries)-1]
-	if lastEntry.Content != "Hello world" {
-		t.Fatalf("expected last entry to be 'Hello world', got %q", lastEntry.Content)
-	}
-
-	// 6. Verify storage has the entries
-	sess.Close()
+	// 5. Verify storage has the entries
 	resumed, err := store.ResumeSession(context.Background(), sess.ID())
 	if err != nil {
 		t.Fatalf("failed to resume session: %v", err)
@@ -118,6 +107,11 @@ func TestMultiplexedSwarms(t *testing.T) {
 	b.SetScript([]testutil.ScriptStep{
 		{Event: session.TurnStarted{}, Delay: 0},
 		{Event: session.StatusChanged{Base: session.Base{AgentID: "Explorer"}, Status: "Mapping codebase..."}, Delay: 10 * time.Millisecond},
+		{Event: session.ToolCallStarted{
+			Base:     session.Base{AgentID: "Tester"},
+			ToolName: "verify",
+			Args:     "go test ./...",
+		}, Delay: 10 * time.Millisecond},
 		{Event: session.VerificationResult{
 			Base:    session.Base{AgentID: "Tester"},
 			Command: "go test ./...",
@@ -150,9 +144,12 @@ func TestMultiplexedSwarms(t *testing.T) {
 		}
 	}
 
-	// Verify entries
+	// Verify entries from storage
+	resumed, _ := store.ResumeSession(context.Background(), sess.ID())
+	storedEntries, _ := resumed.Entries(context.Background())
+
 	foundVerify := false
-	for _, e := range model.entries {
+	for _, e := range storedEntries {
 		if e.Role == session.Tool && strings.Contains(e.Title, "verify") {
 			foundVerify = true
 			if !strings.Contains(e.Content, "PASSED: 15/15 passed") {
@@ -161,7 +158,7 @@ func TestMultiplexedSwarms(t *testing.T) {
 		}
 	}
 	if !foundVerify {
-		t.Error("verification result not found in transcript")
+		t.Error("verification result not found in storage")
 	}
 }
 

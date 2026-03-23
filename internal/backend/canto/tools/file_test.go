@@ -105,6 +105,52 @@ func TestFileTools(t *testing.T) {
 		}
 	})
 
+	t.Run("MultiEdit", func(t *testing.T) {
+		m := &MultiEdit{FileTool: *NewFileTool(tmpDir)}
+		
+		f1 := "file1.txt"
+		f2 := "file2.txt"
+		os.WriteFile(filepath.Join(tmpDir, f1), []byte("hello\nworld"), 0644)
+		os.WriteFile(filepath.Join(tmpDir, f2), []byte("foo\nbar"), 0644)
+		
+		args, _ := json.Marshal(map[string]any{
+			"edits": []map[string]any{
+				{
+					"file_path":  f1,
+					"old_string": "world",
+					"new_string": "ion",
+				},
+				{
+					"file_path":  f2,
+					"old_string": "bar",
+					"new_string": "baz",
+				},
+			},
+		})
+		
+		res, err := m.Execute(context.Background(), string(args))
+		if err != nil {
+			t.Fatalf("multi_edit failed: %v", err)
+		}
+		
+		// Verify content
+		c1, _ := os.ReadFile(filepath.Join(tmpDir, f1))
+		if string(c1) != "hello\nion" {
+			t.Errorf("f1 content mismatch: %q", string(c1))
+		}
+		
+		// Verify diff output
+		if !strings.Contains(res, "--- a/file1.txt") || !strings.Contains(res, "+++ b/file1.txt") {
+			t.Errorf("diff for f1 missing in result: %q", res)
+		}
+		if !strings.Contains(res, "-world") || !strings.Contains(res, "+ion") {
+			t.Errorf("hunk for f1 missing in result: %q", res)
+		}
+		if !strings.Contains(res, "--- a/file2.txt") || !strings.Contains(res, "-bar") || !strings.Contains(res, "+baz") {
+			t.Errorf("diff for f2 missing in result: %q", res)
+		}
+	})
+
 	t.Run("List", func(t *testing.T) {
 		l := &List{FileTool: *NewFileTool(tmpDir)}
 		os.Mkdir(filepath.Join(tmpDir, "subdir"), 0755)

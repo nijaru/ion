@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"charm.land/bubbles/v2/textarea"
-	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
@@ -19,8 +18,8 @@ import (
 )
 
 const (
-	minComposerHeight = 3
-	maxComposerHeight = 8
+	minComposerHeight = 1
+	maxComposerHeight = 10
 	footerRows        = 3
 	headerRows        = 4
 )
@@ -37,10 +36,10 @@ type Model struct {
 	session session.AgentSession
 	storage storage.Session
 
+	// entries is now empty by default; history is flushed to scrollback on init.
 	entries []session.Entry
 	pending *session.Entry
 
-	viewport viewport.Model
 	composer textarea.Model
 
 	lastToolUseID string
@@ -72,7 +71,7 @@ func New(b backend.Backend, s storage.Session) Model {
 
 	cwd, _ := os.Getwd()
 	
-	// Load existing entries if available
+	// Load existing entries for initial flush
 	var entries []session.Entry
 	if s != nil {
 		if stored, err := s.Entries(context.Background()); err == nil && len(stored) > 0 {
@@ -85,17 +84,11 @@ func New(b backend.Backend, s storage.Session) Model {
 		entries = boot.Entries
 	}
 
-	vp := viewport.New(viewport.WithWidth(80), viewport.WithHeight(20))
-	vp.SoftWrap = true
-	vp.MouseWheelEnabled = true
-	vp.MouseWheelDelta = 3
-
 	m := Model{
 		backend:  b,
 		session:  b.Session(),
 		storage:  s,
 		entries:  entries,
-		viewport: vp,
 		composer: ta,
 		status:   boot.Status,
 		workdir:  cwd,
@@ -126,14 +119,24 @@ func New(b backend.Backend, s storage.Session) Model {
 		lineStyle: lipgloss.NewStyle().
 			Foreground(lipgloss.Color("8")),
 	}
-	m.refreshViewport(true)
 	return m
 }
 
 func (m Model) Init() tea.Cmd {
+	// On init, flush the header and any existing history to Plane A.
+	header := m.headerStyle.Render("ion")
+	subtitle := m.dimStyle.PaddingLeft(2).Render(fmt.Sprintf("%s  •  %s", m.workdir, m.branch))
+	
+	var history []string
+	history = append(history, header, subtitle, "")
+	for _, entry := range m.entries {
+		history = append(history, m.renderEntry(entry), "")
+	}
+
 	return tea.Batch(
 		textarea.Blink,
 		m.composer.Focus(),
+		tea.Println(strings.Join(history, "\n")),
 		m.awaitSessionEvent(),
 	)
 }
@@ -157,28 +160,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.layout()
-		m.refreshViewport(true)
 		return m, nil
 
 	case streamClosedMsg:
-		// channel closed, do nothing for now
 		return m, nil
 
 	case session.StatusChanged:
 		m.status = msg.Status
 		return m, m.awaitSessionEvent()
 
-	case session.PlanUpdated:
-		// For now, we don't render the plan separately, but we could.
-		return m, m.awaitSessionEvent()
-
-	case session.MetadataLoaded:
-		return m, m.awaitSessionEvent()
-
 	case session.TurnStarted:
 		m.thinking = true
 		m.pending = &session.Entry{Role: session.Assistant}
-		m.refreshViewport(m.shouldFollowOutput())
 		return m, m.awaitSessionEvent()
 
 	case session.TurnFinished:
@@ -186,30 +179,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.awaitSessionEvent()
 
 	case session.ThinkingDelta:
-		follow := m.shouldFollowOutput()
 		if m.pending == nil {
 			m.pending = &session.Entry{Role: session.Assistant}
 		}
 		m.pending.Reasoning += msg.Delta
-		m.refreshViewport(follow)
 		return m, m.awaitSessionEvent()
 
 	case session.AssistantDelta:
-		follow := m.shouldFollowOutput()
 		if m.pending == nil {
 			m.pending = &session.Entry{Role: session.Assistant}
 		}
 		m.pending.Content += msg.Delta
-		m.refreshViewport(follow)
 		return m, m.awaitSessionEvent()
 
 	case session.AssistantMessage:
-		follow := m.shouldFollowOutput()
+		var cmd tea.Cmd
 		if m.pending != nil {
 			if msg.Message != "" {
 				m.pending.Content = msg.Message
 			}
-			m.entries = append(m.entries, *m.pending)
+			
+			// Flush finalized assistant response to Plane A
+			cmd = tea.Println(m.renderEntry(*m.pending) + "\n")
 
 			if m.storage != nil {
 				blocks := []storage.Block{}
@@ -230,20 +221,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					TS:      time.Now().Unix(),
 				})
 			}
-
 			m.pending = nil
 		}
-		m.refreshViewport(follow)
-		return m, m.awaitSessionEvent()
+		return m, tea.Batch(cmd, m.awaitSessionEvent())
 
 	case session.ToolCallStarted:
-		// Optionally show a pending tool
-		follow := m.shouldFollowOutput()
-		m.entries = append(m.entries, session.Entry{
-			Role:  session.Tool,
-			Title: fmt.Sprintf("%s(%s)", msg.ToolName, msg.Args),
-		})
-
 		m.lastToolUseID = session.ShortID()
 		if m.storage != nil {
 			m.storage.Append(context.Background(), storage.ToolUse{
@@ -256,30 +238,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				TS: time.Now().Unix(),
 			})
 		}
-
-		m.refreshViewport(follow)
+		
+		// Create a placeholder tool entry to show in Plane B while it runs
+		m.pending = &session.Entry{
+			Role:  session.Tool,
+			Title: fmt.Sprintf("%s(%s)", msg.ToolName, msg.Args),
+		}
 		return m, m.awaitSessionEvent()
 
 	case session.ToolOutputDelta:
-		follow := m.shouldFollowOutput()
-		// Append to the most recent tool entry if it's currently active.
-		if len(m.entries) > 0 && m.entries[len(m.entries)-1].Role == session.Tool {
-			m.entries[len(m.entries)-1].Content += msg.Delta
+		if m.pending != nil && m.pending.Role == session.Tool {
+			m.pending.Content += msg.Delta
 		}
-		m.refreshViewport(follow)
 		return m, m.awaitSessionEvent()
 
 	case session.ToolResult:
-		follow := m.shouldFollowOutput()
-		// Update the last tool entry or append a new one
-		if len(m.entries) > 0 && m.entries[len(m.entries)-1].Role == session.Tool {
-			m.entries[len(m.entries)-1].Content = msg.Result
-		} else {
-			m.entries = append(m.entries, session.Entry{
-				Role:    session.Tool,
-				Title:   msg.ToolName,
-				Content: msg.Result,
-			})
+		var cmd tea.Cmd
+		if m.pending != nil && m.pending.Role == session.Tool {
+			m.pending.Content = msg.Result
+			cmd = tea.Println(m.renderEntry(*m.pending) + "\n")
+			m.pending = nil
 		}
 
 		if m.storage != nil {
@@ -291,69 +269,68 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				TS:        time.Now().Unix(),
 			})
 		}
-
-		m.refreshViewport(follow)
-		return m, m.awaitSessionEvent()
+		return m, tea.Batch(cmd, m.awaitSessionEvent())
 
 	case session.VerificationResult:
-		follow := m.shouldFollowOutput()
 		status := "PASSED"
 		if !msg.Passed {
 			status = "FAILED"
 		}
 		content := fmt.Sprintf("%s: %s\n%s", status, msg.Metric, msg.Output)
-		m.entries = append(m.entries, session.Entry{
+		entry := session.Entry{
 			Role:    session.Tool,
 			Title:   "verify: " + msg.Command,
 			Content: content,
-		})
-		m.refreshViewport(follow)
-		return m, m.awaitSessionEvent()
+		}
+
+		if m.storage != nil {
+			m.storage.Append(context.Background(), storage.ToolResult{
+				Type:      "tool_result",
+				ToolUseID: m.lastToolUseID,
+				Content:   content,
+				IsError:   !msg.Passed,
+				TS:        time.Now().Unix(),
+			})
+		}
+		return m, tea.Batch(tea.Println(m.renderEntry(entry)+"\n"), m.awaitSessionEvent())
 
 	case session.ApprovalRequest:
 		m.pendingApproval = &msg
 		m.status = "Approval Required (y/n)"
-		m.thinking = false // Stop thinking while waiting for approval
-		m.refreshViewport(true)
+		m.thinking = false
 		return m, m.awaitSessionEvent()
 
 	case session.ChildRequested:
-		follow := m.shouldFollowOutput()
-		m.entries = append(m.entries, session.Entry{
+		m.pending = &session.Entry{
 			Role:    session.Agent,
 			Title:   msg.AgentName,
 			Content: fmt.Sprintf("Query: %s", msg.Query),
-		})
-		m.refreshViewport(follow)
-		return m, m.awaitSessionEvent()
-
-	case session.ChildStarted:
-		// Optional: update status or title with SessionID
+		}
 		return m, m.awaitSessionEvent()
 
 	case session.ChildDelta:
-		follow := m.shouldFollowOutput()
-		if len(m.entries) > 0 && m.entries[len(m.entries)-1].Role == session.Agent {
-			m.entries[len(m.entries)-1].Content += msg.Delta
+		if m.pending != nil && m.pending.Role == session.Agent {
+			m.pending.Content += msg.Delta
 		}
-		m.refreshViewport(follow)
 		return m, m.awaitSessionEvent()
 
 	case session.ChildCompleted:
-		follow := m.shouldFollowOutput()
-		if len(m.entries) > 0 && m.entries[len(m.entries)-1].Role == session.Agent {
-			m.entries[len(m.entries)-1].Content = msg.Result
+		var cmd tea.Cmd
+		if m.pending != nil && m.pending.Role == session.Agent {
+			m.pending.Content = msg.Result
+			cmd = tea.Println(m.renderEntry(*m.pending) + "\n")
+			m.pending = nil
 		}
-		m.refreshViewport(follow)
-		return m, m.awaitSessionEvent()
+		return m, tea.Batch(cmd, m.awaitSessionEvent())
 
 	case session.ChildFailed:
-		follow := m.shouldFollowOutput()
-		if len(m.entries) > 0 && m.entries[len(m.entries)-1].Role == session.Agent {
-			m.entries[len(m.entries)-1].Content = "ERROR: " + msg.Error
+		var cmd tea.Cmd
+		if m.pending != nil && m.pending.Role == session.Agent {
+			m.pending.Content = "ERROR: " + msg.Error
+			cmd = tea.Println(m.renderEntry(*m.pending) + "\n")
+			m.pending = nil
 		}
-		m.refreshViewport(follow)
-		return m, m.awaitSessionEvent()
+		return m, tea.Batch(cmd, m.awaitSessionEvent())
 
 	case session.Error:
 		m.status = fmt.Sprintf("Error: %v", msg.Err)
@@ -368,10 +345,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if text == "" || m.thinking {
 				return m, nil
 			}
-			m.entries = append(m.entries, session.Entry{
+			
+			userEntry := session.Entry{
 				Role:    session.User,
 				Content: text,
-			})
+			}
+			
+			// Flush user input to Plane A immediately
+			flushCmd := tea.Println(m.renderEntry(userEntry) + "\n")
+
 			if m.storage != nil {
 				m.storage.Append(context.Background(), storage.User{
 					Type:    "user",
@@ -382,28 +364,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.composer.Reset()
 			m.status = fmt.Sprintf("[%s] turn in flight", m.backend.Name())
 			m.layout()
-			m.refreshViewport(true)
 			
 			if strings.HasPrefix(text, "/") {
 				cmd := m.handleCommand(text)
-				m.composer.Reset()
-				return m, cmd
+				return m, tea.Batch(flushCmd, cmd)
 			}
 
 			m.session.SubmitTurn(context.Background(), text)
-			return m, nil
-		case "pgup":
-			m.viewport.PageUp()
-			return m, nil
-		case "pgdn":
-			m.viewport.PageDown()
-			return m, nil
-		case "home":
-			m.viewport.GotoTop()
-			return m, nil
-		case "end":
-			m.viewport.GotoBottom()
-			return m, nil
+			return m, flushCmd
 		case "y", "n":
 			if m.pendingApproval != nil {
 				approved := msg.String() == "y"
@@ -413,19 +381,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.pendingApproval = nil
 				m.status = "Processing approval..."
 				
-				m.entries = append(m.entries, session.Entry{
+				systemEntry := session.Entry{
 					Role:    session.System,
 					Content: fmt.Sprintf("Host %s: %s", ifthen(approved, "approved", "denied"), description),
-				})
+				}
 				
 				m.session.Approve(context.Background(), reqID, approved)
-				m.refreshViewport(true)
-				return m, nil
+				return m, tea.Println(m.renderEntry(systemEntry) + "\n")
 			}
 		}
 	}
 
-	m.viewport, _ = m.viewport.Update(msg)
 	var cmd tea.Cmd
 	m.composer, cmd = m.composer.Update(msg)
 	cmds = append(cmds, cmd)
@@ -442,18 +408,20 @@ func (m Model) View() tea.View {
 		return tea.NewView("loading...")
 	}
 
-	header := m.headerStyle.Render("ion")
-	subtitle := m.dimStyle.PaddingLeft(2).Render(fmt.Sprintf("%s  •  %s", m.workdir, m.branch))
+	// Plane B: Ephemeral active area
+	var b strings.Builder
+	if m.pending != nil {
+		b.WriteString(m.renderEntry(*m.pending))
+		b.WriteString("\n\n")
+	}
+
 	progress := m.progressLine()
 	separator := m.lineStyle.Render(strings.Repeat("─", max(0, m.width)))
 	status := m.dimStyle.PaddingLeft(2).Render(m.statusLine())
 
 	content := lipgloss.JoinVertical(
 		lipgloss.Left,
-		header,
-		subtitle,
-		"",
-		m.viewport.View(),
+		b.String(),
 		separator,
 		lipgloss.NewStyle().PaddingLeft(2).Render(progress),
 		lipgloss.NewStyle().PaddingLeft(1).Render(m.composer.View()),
@@ -496,42 +464,8 @@ func (m *Model) handleCommand(input string) tea.Cmd {
 }
 
 func (m *Model) layout() {
-	composerHeight := clamp(m.composer.LineCount()+1, minComposerHeight, maxComposerHeight)
 	m.composer.SetWidth(max(20, m.width-4))
-	m.composer.SetHeight(composerHeight)
-
-	viewportHeight := max(3, m.height-headerRows-composerHeight-footerRows)
-	m.viewport.SetWidth(max(20, m.width-4))
-	m.viewport.SetHeight(viewportHeight)
-}
-
-func (m *Model) refreshViewport(follow bool) {
-	var b strings.Builder
-	for i, entry := range m.renderEntries() {
-		if i > 0 {
-			b.WriteString("\n\n")
-		}
-		b.WriteString(m.renderEntry(entry))
-	}
-	m.viewport.SetContent(b.String())
-	if follow {
-		m.viewport.GotoBottom()
-	}
-}
-
-func (m Model) renderEntries() []session.Entry {
-	entries := make([]session.Entry, 0, len(m.entries)+2)
-	entries = append(entries, m.entries...)
-	if m.pending != nil {
-		entries = append(entries, *m.pending)
-	}
-	if m.pendingApproval != nil {
-		entries = append(entries, session.Entry{
-			Role:    session.System,
-			Content: fmt.Sprintf("APPROVAL REQUIRED: %s\nPress 'y' to approve, 'n' to deny.", m.pendingApproval.Description),
-		})
-	}
-	return entries
+	m.composer.SetHeight(clamp(m.composer.LineCount(), minComposerHeight, maxComposerHeight))
 }
 
 func (m Model) renderEntry(entry session.Entry) string {
@@ -573,11 +507,8 @@ func (m Model) renderEntry(entry session.Entry) string {
 func (m Model) progressLine() string {
 	if m.thinking {
 		// Check for active child agent
-		if len(m.entries) > 0 {
-			last := m.entries[len(m.entries)-1]
-			if last.Role == session.Agent && !strings.HasPrefix(last.Content, "Result:") && !strings.HasPrefix(last.Content, "ERROR:") {
-				return m.agentStyle.Render(fmt.Sprintf("🤖 Agent %s is working...", last.Title))
-			}
+		if m.pending != nil && m.pending.Role == session.Agent {
+			return m.agentStyle.Render(fmt.Sprintf("🤖 Agent %s is working...", m.pending.Title))
 		}
 
 		if m.pending != nil && m.pending.Content != "" {
@@ -590,20 +521,12 @@ func (m Model) progressLine() string {
 
 func (m Model) statusLine() string {
 	return fmt.Sprintf(
-		"%s • backend=%s • %s • draft=%d lines • transcript=%d%%",
+		"%s • backend=%s • %s • lines=%d",
 		m.status,
 		m.backend.Name(),
 		m.sendKey+" send",
 		m.composer.LineCount(),
-		int(m.viewport.ScrollPercent()*100),
 	)
-}
-
-func (m Model) shouldFollowOutput() bool {
-	if !m.ready {
-		return true
-	}
-	return m.viewport.AtBottom() || m.viewport.PastBottom()
 }
 
 func currentBranch() string {

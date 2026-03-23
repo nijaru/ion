@@ -106,6 +106,8 @@ type ApprovalRequest struct {
 	Base
 	RequestID   string `json:"request_id"`
 	Description string `json:"description"`
+	ToolName    string `json:"tool_name,omitzero"`
+	Args        string `json:"args,omitzero"`
 }
 
 func (e ApprovalRequest) isEvent() {}

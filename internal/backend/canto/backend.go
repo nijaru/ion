@@ -13,6 +13,7 @@ import (
 	"github.com/nijaru/canto/llm"
 	"github.com/nijaru/canto/llm/providers/gemini"
 	"github.com/nijaru/canto/memory"
+	"github.com/nijaru/canto/hook"
 	"github.com/nijaru/canto/runtime"
 	"github.com/nijaru/canto/session"
 	"github.com/nijaru/canto/tool"
@@ -36,6 +37,7 @@ type Backend struct {
 	mu     sync.Mutex
 	cancel context.CancelFunc
 
+	policy   *backend.PolicyEngine
 	approver *tools.ApprovalManager
 	mcpClients []*mcp.Client
 }
@@ -43,11 +45,11 @@ type Backend struct {
 func New() *Backend {
 	return &Backend{
 		events:   make(chan ionsession.Event, 100),
+		policy:   backend.NewPolicyEngine(),
 		approver: tools.NewApprovalManager(),
 		mcpClients: make([]*mcp.Client, 0),
 	}
 }
-
 func (b *Backend) Name() string {
 	return "canto"
 }
@@ -142,19 +144,8 @@ func (b *Backend) Open(ctx context.Context) error {
 
 	registry := tool.NewRegistry()
 
-	// Sensitive tools wrapped with ApprovingTool
-	bash := tools.NewBash(cwd)
-	registry.Register(&tools.ApprovingTool{
-		Tool:    bash,
-		Manager: b.approver,
-		Callback: func(id, description string) {
-			b.events <- ionsession.ApprovalRequest{
-				RequestID:   id,
-				Description: description,
-			}
-		},
-	})
-
+	// Use standard tools; approvals are now handled globally by a PreToolUse hook.
+	registry.Register(tools.NewBash(cwd))
 	registry.Register(&tools.Read{FileTool: *tools.NewFileTool(cwd)})
 	registry.Register(&tools.Write{FileTool: *tools.NewFileTool(cwd)})
 	registry.Register(&tools.Edit{FileTool: *tools.NewFileTool(cwd)})
@@ -179,7 +170,7 @@ func (b *Backend) Open(ctx context.Context) error {
 	if sid == "" {
 		sid = "default"
 	}
-	
+
 	coreStore := b.ionStore.CoreStore()
 	if coreStore == nil {
 		// Fallback for legacy stores
@@ -207,14 +198,58 @@ func (b *Backend) Open(ctx context.Context) error {
 		agent.WithRequestProcessors(requestProcessors...),
 		agent.WithProcessors(processors...),
 	)
-	
+
 	// Initialize Runner
 	b.runner = runtime.NewRunner(b.store, b.agent)
 
+	// Register the global Permission Policy Hook
+	b.runner.Hooks.Register(hook.NewFunc("ion-policy", []hook.Event{hook.EventPreToolUse}, func(ctx context.Context, payload *hook.Payload) *hook.Result {
+		toolName, _ := payload.Data["tool"].(string)
+		args, _ := payload.Data["args"].(string)
+
+		policy, reason := b.policy.Authorize(ctx, toolName, args)
+		switch policy {
+		case backend.PolicyAllow:
+			return &hook.Result{Action: hook.ActionProceed}
+		case backend.PolicyDeny:
+			return &hook.Result{
+				Action: hook.ActionBlock,
+				Error:  fmt.Errorf("policy denied: %s", reason),
+			}
+		case backend.PolicyAsk:
+			id := ionsession.ShortID()
+			description := fmt.Sprintf("Tool: %s\nArgs: %s\n\n%s", toolName, args, reason)
+
+			// Send approval request to TUI
+			b.events <- ionsession.ApprovalRequest{
+				RequestID:   id,
+				Description: description,
+				ToolName:    toolName,
+				Args:        args,
+			}
+
+			// Wait for approval via ApprovalManager
+			ch := b.approver.Request(id)
+			select {
+			case <-ctx.Done():
+				return &hook.Result{Action: hook.ActionBlock, Error: ctx.Err()}
+			case approved := <-ch:
+				if !approved {
+					return &hook.Result{
+						Action: hook.ActionBlock,
+						Error:  fmt.Errorf("user denied tool execution"),
+					}
+				}
+				return &hook.Result{Action: hook.ActionProceed}
+			}
+		default:
+			return &hook.Result{Action: hook.ActionProceed}
+		}
+	}))
+
 	b.events <- ionsession.StatusChanged{Status: fmt.Sprintf("Connected to %s via Canto", modelName)}
 	return nil
-}
-
+	}
 func (b *Backend) Resume(ctx context.Context, sessionID string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()

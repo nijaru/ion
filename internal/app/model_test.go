@@ -73,52 +73,68 @@ func TestModelStreamsAndCommitsPendingEntry(t *testing.T) {
 		t.Fatalf("expected pending streamed assistant entry, got %#v", model.pending)
 	}
 
-	updated, _ = model.Update(session.AssistantMessage{})
+	updated, cmd := model.Update(session.AssistantMessage{})
 	model = updated.(Model)
 
 	if model.pending != nil {
-		t.Fatalf("expected pending entry to be committed")
+		t.Fatalf("expected pending entry to be cleared after flush")
 	}
-	if got := model.entries[len(model.entries)-1].Content; got != "streamed reply" {
-		t.Fatalf("expected last entry to be committed streamed reply, got %q", got)
-	}
-	if !strings.Contains(model.viewport.GetContent(), "streamed reply") {
-		t.Fatalf("expected viewport content to contain streamed reply")
+
+	// Verify that a Println command was returned
+	if cmd == nil {
+		t.Fatalf("expected tea.Println command after finalizing message")
 	}
 }
 
-func TestToolEntryRendersIntoTranscript(t *testing.T) {
+func TestToolEntryFlushesToTranscript(t *testing.T) {
 	model := readyModel(t)
 	updated, _ := model.Update(session.ToolCallStarted{
 		ToolName:  "bash",
 		Args:      "ls",
 	})
 	model = updated.(Model)
+
+	if model.pending == nil || model.pending.Role != session.Tool {
+		t.Fatalf("expected pending tool entry")
+	}
 	
-	updated, _ = model.Update(session.ToolResult{
+	updated, cmd := model.Update(session.ToolResult{
 		ToolName:  "bash",
 		Result:    "ok",
 	})
 	model = updated.(Model)
 
-	content := model.viewport.GetContent()
-	if !strings.Contains(content, "bash(ls)") {
-		t.Fatalf("expected tool title in viewport content: %q", content)
+	if model.pending != nil {
+		t.Fatalf("expected pending entry to be cleared")
 	}
-	if !strings.Contains(content, "ok") {
-		t.Fatalf("expected tool content in viewport content: %q", content)
+	if cmd == nil {
+		t.Fatalf("expected tea.Println command for tool result")
 	}
 }
 
 func TestLayoutClampsComposerHeight(t *testing.T) {
 	model := readyModel(t)
+	
+	// Initial height should be min (1)
+	model.layout()
+	if got := model.composer.Height(); got != minComposerHeight {
+		t.Fatalf("expected initial composer height %d, got %d", minComposerHeight, got)
+	}
+
+	// 5 lines of text
+	model.composer.SetValue("1\n2\n3\n4\n5")
+	model.layout()
+
+	// Should be 5
+	if got := model.composer.Height(); got != 5 {
+		t.Fatalf("expected composer height 5 for 5 lines, got %d", got)
+	}
+
+	// Over the max (10)
 	model.composer.SetValue(strings.Repeat("line\n", 20))
 	model.layout()
 
 	if got := model.composer.Height(); got != maxComposerHeight {
 		t.Fatalf("expected composer height to clamp to %d, got %d", maxComposerHeight, got)
-	}
-	if got := model.viewport.Height(); got < 3 {
-		t.Fatalf("expected viewport height floor, got %d", got)
 	}
 }
