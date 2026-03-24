@@ -57,12 +57,11 @@ func (b *Backend) Name() string {
 func (b *Backend) Bootstrap() backend.Bootstrap {
 	return backend.Bootstrap{
 		Entries: []ionsession.Entry{
-			{Role: ionsession.System, Content: "Canto Agent Backend (Gemini)"},
+			{Role: ionsession.System, Content: "Ion · Canto Engine · Gemini 2.0 Pro"},
 		},
 		Status: "Initializing Canto runtime...",
 	}
 }
-
 func (b *Backend) Session() ionsession.AgentSession {
 	return b
 }
@@ -89,7 +88,7 @@ func (b *Backend) Open(ctx context.Context) error {
 
 	modelName := os.Getenv("ION_MODEL")
 	if modelName == "" {
-		modelName = "gemini-2.0-flash"
+		modelName = "gemini-2.0-pro-exp-02-05"
 	}
 
 	// Initialize Canto store (SQLite) from ionStore if possible

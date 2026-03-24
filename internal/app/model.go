@@ -417,16 +417,20 @@ func (m Model) View() tea.View {
 
 	progress := m.progressLine()
 	separator := m.lineStyle.Render(strings.Repeat("─", max(0, m.width)))
-	status := m.dimStyle.PaddingLeft(2).Render(m.statusLine())
+	status := m.statusLine()
 
+	// Bottom UI layout:
+	// [ progress ]
+	// [ composer ]
+	// [ separator]
+	// [ status   ]
 	content := lipgloss.JoinVertical(
 		lipgloss.Left,
 		b.String(),
-		separator,
 		lipgloss.NewStyle().PaddingLeft(2).Render(progress),
 		lipgloss.NewStyle().PaddingLeft(1).Render(m.composer.View()),
 		separator,
-		status,
+		lipgloss.NewStyle().PaddingLeft(2).Render(status),
 	)
 
 	return tea.NewView(content)
@@ -512,21 +516,31 @@ func (m Model) progressLine() string {
 		}
 
 		if m.pending != nil && m.pending.Content != "" {
-			return m.assistantStyle.Render("• Streaming assistant response...")
+			return m.assistantStyle.Render("· Streaming assistant response...")
 		}
-		return m.assistantStyle.Render(fmt.Sprintf("• Waiting on %s backend...", m.backend.Name()))
+		return m.assistantStyle.Render(fmt.Sprintf("· Waiting on %s backend...", m.backend.Name()))
 	}
-	return m.dimStyle.Render("• Ready")
+	return m.dimStyle.Render("· Ready")
 }
 
 func (m Model) statusLine() string {
-	return fmt.Sprintf(
-		"%s • backend=%s • %s • lines=%d",
-		m.status,
-		m.backend.Name(),
-		m.sendKey+" send",
-		m.composer.LineCount(),
-	)
+	modelName := os.Getenv("ION_MODEL")
+	if modelName == "" {
+		modelName = "gemini-2.0-pro-exp-02-05"
+	}
+
+	var segments []string
+	segments = append(segments, modelName)
+	if m.branch != "" {
+		segments = append(segments, m.branch)
+	}
+	segments = append(segments, m.backend.Name())
+	
+	if m.composer.Value() != "" {
+		segments = append(segments, fmt.Sprintf("draft:%d", m.composer.LineCount()))
+	}
+
+	return m.dimStyle.Render(strings.Join(segments, " · "))
 }
 
 func currentBranch() string {
