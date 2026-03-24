@@ -60,12 +60,18 @@ func (b *Backend) Name() string {
 	return "native"
 }
 
+func (b *Backend) Provider() string {
+	return "gemini"
+}
+
+func (b *Backend) Model() string {
+	return os.Getenv("ION_MODEL")
+}
+
 func (b *Backend) Bootstrap() backend.Bootstrap {
 	return backend.Bootstrap{
-		Entries: []session.Entry{
-			{Role: session.System, Content: "Native Ion Session (Gemini)"},
-		},
-		Status: "Initializing API client...",
+		Entries: []session.Entry{},
+		Status:  "Ready",
 	}
 }
 
@@ -87,15 +93,15 @@ func (b *Backend) Open(ctx context.Context) error {
 		return err
 	}
 	b.client = client
-	
+
 	modelName := os.Getenv("ION_MODEL")
 	if modelName == "" {
-		modelName = "gemini-2.0-pro-exp-02-05"
+		modelName = "openrouter minimax/minimax-m2.7"
 	}
-	
+
 	b.model = client.GenerativeModel(modelName)
 	b.cs = b.model.StartChat()
-	
+
 	b.events <- session.StatusChanged{Status: fmt.Sprintf("Connected to %s", modelName)}
 	return nil
 }
@@ -134,7 +140,7 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 				}
 			}
 		}
-		
+
 		b.events <- session.AssistantMessage{Message: ""} // Commit
 		b.events <- session.StatusChanged{Status: "Ready"}
 		b.events <- session.TurnFinished{}

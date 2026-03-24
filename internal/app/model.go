@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -26,11 +27,19 @@ const (
 
 type streamClosedMsg struct{}
 
+type toolMode int
+
+const (
+	modeRead toolMode = iota
+	modeWrite
+)
+
 type Model struct {
 	width    int
 	height   int
 	ready    bool
 	thinking bool
+	mode     toolMode
 
 	backend backend.Backend
 	session session.AgentSession
@@ -42,7 +51,7 @@ type Model struct {
 
 	composer textarea.Model
 
-	lastToolUseID string
+	lastToolUseID   string
 	pendingApproval *session.ApprovalRequest
 
 	status  string
@@ -58,11 +67,13 @@ type Model struct {
 	agentStyle     lipgloss.Style
 	dimStyle       lipgloss.Style
 	lineStyle      lipgloss.Style
+	cyanStyle      lipgloss.Style
+	warnStyle      lipgloss.Style
 }
 
 func New(b backend.Backend, s storage.Session) Model {
 	ta := textarea.New()
-	ta.Placeholder = "Type a message... (ctrl+s to send)"
+	ta.Placeholder = "Type a message... (Enter to send)"
 	ta.Prompt = "› "
 	ta.ShowLineNumbers = false
 	ta.SetHeight(minComposerHeight)
@@ -70,7 +81,7 @@ func New(b backend.Backend, s storage.Session) Model {
 	ta.MaxHeight = maxComposerHeight
 
 	cwd, _ := os.Getwd()
-	
+
 	// Load existing entries for initial flush
 	var entries []session.Entry
 	if s != nil {
@@ -93,7 +104,7 @@ func New(b backend.Backend, s storage.Session) Model {
 		status:   boot.Status,
 		workdir:  cwd,
 		branch:   currentBranch(),
-		sendKey:  "ctrl+s",
+		sendKey:  "enter",
 		headerStyle: lipgloss.NewStyle().
 			Bold(true).
 			Foreground(lipgloss.Color("5")).
@@ -117,7 +128,11 @@ func New(b backend.Backend, s storage.Session) Model {
 		dimStyle: lipgloss.NewStyle().
 			Faint(true),
 		lineStyle: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("8")),
+			Foreground(lipgloss.Color("6")),
+		cyanStyle: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("6")),
+		warnStyle: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("3")),
 	}
 	return m
 }
@@ -126,7 +141,7 @@ func (m Model) Init() tea.Cmd {
 	// On init, flush the header and any existing history to Plane A.
 	header := m.headerStyle.Render("ion")
 	subtitle := m.dimStyle.PaddingLeft(2).Render(fmt.Sprintf("%s  •  %s", m.workdir, m.branch))
-	
+
 	var history []string
 	history = append(history, header, subtitle, "")
 	for _, entry := range m.entries {
@@ -198,7 +213,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.Message != "" {
 				m.pending.Content = msg.Message
 			}
-			
+
 			// Flush finalized assistant response to Plane A
 			cmd = tea.Println(m.renderEntry(*m.pending) + "\n")
 
@@ -238,7 +253,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				TS: time.Now().Unix(),
 			})
 		}
-		
+
 		// Create a placeholder tool entry to show in Plane B while it runs
 		m.pending = &session.Entry{
 			Role:  session.Tool,
@@ -340,17 +355,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "ctrl+c":
 			return m, tea.Quit
+		case "shift+enter":
+			// Shift+Enter inserts a newline in the composer
+			var cmd tea.Cmd
+			m.composer, cmd = m.composer.Update(msg)
+			if m.ready {
+				m.layout()
+			}
+			return m, cmd
 		case m.sendKey:
 			text := strings.TrimSpace(m.composer.Value())
 			if text == "" || m.thinking {
 				return m, nil
 			}
-			
+
 			userEntry := session.Entry{
 				Role:    session.User,
 				Content: text,
 			}
-			
+
 			// Flush user input to Plane A immediately
 			flushCmd := tea.Println(m.renderEntry(userEntry) + "\n")
 
@@ -362,9 +385,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				})
 			}
 			m.composer.Reset()
-			m.status = fmt.Sprintf("[%s] turn in flight", m.backend.Name())
+			m.status = "Turn in flight"
 			m.layout()
-			
+
 			if strings.HasPrefix(text, "/") {
 				cmd := m.handleCommand(text)
 				return m, tea.Batch(flushCmd, cmd)
@@ -377,18 +400,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				approved := msg.String() == "y"
 				reqID := m.pendingApproval.RequestID
 				description := m.pendingApproval.Description
-				
+
 				m.pendingApproval = nil
 				m.status = "Processing approval..."
-				
+
 				systemEntry := session.Entry{
 					Role:    session.System,
 					Content: fmt.Sprintf("Host %s: %s", ifthen(approved, "approved", "denied"), description),
 				}
-				
+
 				m.session.Approve(context.Background(), reqID, approved)
 				return m, tea.Println(m.renderEntry(systemEntry) + "\n")
 			}
+		case "shift+tab":
+			if m.mode == modeWrite {
+				m.mode = modeRead
+			} else {
+				m.mode = modeWrite
+			}
+			return m, nil
 		}
 	}
 
@@ -420,22 +450,23 @@ func (m Model) View() tea.View {
 	status := m.statusLine()
 
 	// Bottom UI layout:
-	// [ progress ]
-	// [ composer ]
-	// [ separator]
-	// [ status   ]
+	// [ progress  ]
+	// [ separator ]
+	// [ composer  ]
+	// [ separator ]
+	// [ status    ]
 	content := lipgloss.JoinVertical(
 		lipgloss.Left,
 		b.String(),
-		lipgloss.NewStyle().PaddingLeft(2).Render(progress),
+		progress,
+		separator,
 		lipgloss.NewStyle().PaddingLeft(1).Render(m.composer.View()),
 		separator,
-		lipgloss.NewStyle().PaddingLeft(2).Render(status),
+		status,
 	)
 
 	return tea.NewView(content)
 }
-
 func (m *Model) handleCommand(input string) tea.Cmd {
 	fields := strings.Fields(input)
 	if len(fields) == 0 {
@@ -500,7 +531,7 @@ func (m Model) renderEntry(entry session.Entry) string {
 		if label == "" {
 			label = "agent"
 		}
-		return m.agentStyle.Render("🤖 " + label) + "\n" + m.dimStyle.PaddingLeft(4).Render(entry.Content)
+		return m.agentStyle.Render("🤖 "+label) + "\n" + m.dimStyle.PaddingLeft(4).Render(entry.Content)
 	case session.System:
 		return m.systemStyle.Render(entry.Content)
 	default:
@@ -512,35 +543,48 @@ func (m Model) progressLine() string {
 	if m.thinking {
 		// Check for active child agent
 		if m.pending != nil && m.pending.Role == session.Agent {
-			return m.agentStyle.Render(fmt.Sprintf("🤖 Agent %s is working...", m.pending.Title))
+			return m.agentStyle.Render(fmt.Sprintf("  🤖 Agent %s is working...", m.pending.Title))
 		}
 
 		if m.pending != nil && m.pending.Content != "" {
-			return m.assistantStyle.Render("· Streaming assistant response...")
+			return m.cyanStyle.Render("  · Streaming assistant response...")
 		}
-		return m.assistantStyle.Render(fmt.Sprintf("· Waiting on %s backend...", m.backend.Name()))
+		return m.cyanStyle.Render(fmt.Sprintf("  · Waiting on %s backend...", m.backend.Name()))
 	}
-	return m.dimStyle.Render("· Ready")
+	return m.dimStyle.Render("  · Ready")
 }
 
 func (m Model) statusLine() string {
 	modelName := os.Getenv("ION_MODEL")
 	if modelName == "" {
-		modelName = "gemini-2.0-pro-exp-02-05"
+		modelName = "openrouter minimax/minimax-m2.7"
 	}
+
+	sep := m.dimStyle.Render(" · ")
 
 	var segments []string
-	segments = append(segments, modelName)
-	if m.branch != "" {
-		segments = append(segments, m.branch)
-	}
-	segments = append(segments, m.backend.Name())
-	
-	if m.composer.Value() != "" {
-		segments = append(segments, fmt.Sprintf("draft:%d", m.composer.LineCount()))
+
+	// Mode indicator: [WRITE] yellow, [READ] cyan
+	if m.mode == modeWrite {
+		segments = append(segments, m.warnStyle.Render("[WRITE]"))
+	} else {
+		segments = append(segments, m.cyanStyle.Render("[READ]"))
 	}
 
-	return m.dimStyle.Render(strings.Join(segments, " · "))
+	segments = append(segments, modelName)
+
+	dirName := "./" + filepath.Base(m.workdir)
+	segments = append(segments, dirName)
+
+	if m.branch != "" {
+		segments = append(segments, m.cyanStyle.Render(m.branch))
+	}
+
+	if m.composer.Value() != "" {
+		segments = append(segments, m.dimStyle.Render(fmt.Sprintf("draft:%d", m.composer.LineCount())))
+	}
+
+	return "  " + strings.Join(segments, sep)
 }
 
 func currentBranch() string {

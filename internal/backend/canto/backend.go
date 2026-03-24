@@ -5,15 +5,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"charm.land/catwalk/pkg/catwalk"
 	"github.com/nijaru/canto/agent"
 	ccontext "github.com/nijaru/canto/context"
+	"github.com/nijaru/canto/hook"
 	"github.com/nijaru/canto/llm"
 	"github.com/nijaru/canto/llm/providers/gemini"
 	"github.com/nijaru/canto/memory"
-	"github.com/nijaru/canto/hook"
 	"github.com/nijaru/canto/runtime"
 	"github.com/nijaru/canto/session"
 	"github.com/nijaru/canto/tool"
@@ -37,16 +38,16 @@ type Backend struct {
 	mu     sync.Mutex
 	cancel context.CancelFunc
 
-	policy   *backend.PolicyEngine
-	approver *tools.ApprovalManager
+	policy     *backend.PolicyEngine
+	approver   *tools.ApprovalManager
 	mcpClients []*mcp.Client
 }
 
 func New() *Backend {
 	return &Backend{
-		events:   make(chan ionsession.Event, 100),
-		policy:   backend.NewPolicyEngine(),
-		approver: tools.NewApprovalManager(),
+		events:     make(chan ionsession.Event, 100),
+		policy:     backend.NewPolicyEngine(),
+		approver:   tools.NewApprovalManager(),
 		mcpClients: make([]*mcp.Client, 0),
 	}
 }
@@ -54,12 +55,32 @@ func (b *Backend) Name() string {
 	return "canto"
 }
 
+func (b *Backend) Provider() string {
+	m := os.Getenv("ION_MODEL")
+	if m == "" {
+		m = "openrouter minimax/minimax-m2.7"
+	}
+	if i := strings.IndexByte(m, ' '); i > 0 {
+		return m[:i]
+	}
+	return m
+}
+
+func (b *Backend) Model() string {
+	m := os.Getenv("ION_MODEL")
+	if m == "" {
+		m = "openrouter minimax/minimax-m2.7"
+	}
+	if i := strings.IndexByte(m, ' '); i > 0 {
+		return strings.TrimSpace(m[i+1:])
+	}
+	return m
+}
+
 func (b *Backend) Bootstrap() backend.Bootstrap {
 	return backend.Bootstrap{
-		Entries: []ionsession.Entry{
-			{Role: ionsession.System, Content: "Ion · Canto Engine · Gemini 2.0 Pro"},
-		},
-		Status: "Initializing Canto runtime...",
+		Entries: []ionsession.Entry{},
+		Status:  "Ready",
 	}
 }
 func (b *Backend) Session() ionsession.AgentSession {
@@ -88,7 +109,7 @@ func (b *Backend) Open(ctx context.Context) error {
 
 	modelName := os.Getenv("ION_MODEL")
 	if modelName == "" {
-		modelName = "gemini-2.0-pro-exp-02-05"
+		modelName = "openrouter minimax/minimax-m2.7"
 	}
 
 	// Initialize Canto store (SQLite) from ionStore if possible
@@ -135,7 +156,7 @@ func (b *Backend) Open(ctx context.Context) error {
 		"- memorize: save important codebase insights or patterns for future sessions.\n" +
 		"- system: 'bash' for running any shell command.\n" +
 		"- verify: run verification commands (test, lint) and report results to the host."
-	
+
 	cwd := b.Meta()["cwd"]
 	if cwd == "" {
 		cwd, _ = os.Getwd()
@@ -248,7 +269,7 @@ func (b *Backend) Open(ctx context.Context) error {
 
 	b.events <- ionsession.StatusChanged{Status: fmt.Sprintf("Connected to %s via Canto", modelName)}
 	return nil
-	}
+}
 func (b *Backend) Resume(ctx context.Context, sessionID string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()

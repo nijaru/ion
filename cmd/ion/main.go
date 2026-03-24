@@ -72,7 +72,7 @@ func main() {
 		// Open new session
 		modelName := os.Getenv("ION_MODEL")
 		if modelName == "" {
-			modelName = "gemini-2.0-pro-exp-02-05"
+			modelName = "openrouter minimax/minimax-m2.7"
 		}
 		
 		sess, err = store.OpenSession(ctx, cwd, modelName, currentBranch())

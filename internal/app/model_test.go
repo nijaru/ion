@@ -16,7 +16,9 @@ type stubBackend struct {
 	sess *stubSession
 }
 
-func (b stubBackend) Name() string { return "stub" }
+func (b stubBackend) Name() string     { return "stub" }
+func (b stubBackend) Provider() string { return "stub" }
+func (b stubBackend) Model() string    { return "stub-model" }
 
 func (b stubBackend) Bootstrap() backend.Bootstrap {
 	return backend.Bootstrap{
@@ -35,18 +37,18 @@ type stubSession struct {
 	events chan session.Event
 }
 
-func (s *stubSession) Open(ctx context.Context) error                    { return nil }
-func (s *stubSession) Resume(ctx context.Context, id string) error       { return nil }
-func (s *stubSession) SubmitTurn(ctx context.Context, turn string) error { return nil }
-func (s *stubSession) CancelTurn(ctx context.Context) error              { return nil }
-func (s *stubSession) Close() error                                      { return nil }
-func (s *stubSession) Events() <-chan session.Event                      { return s.events }
+func (s *stubSession) Open(ctx context.Context) error                        { return nil }
+func (s *stubSession) Resume(ctx context.Context, id string) error           { return nil }
+func (s *stubSession) SubmitTurn(ctx context.Context, turn string) error     { return nil }
+func (s *stubSession) CancelTurn(ctx context.Context) error                  { return nil }
+func (s *stubSession) Close() error                                          { return nil }
+func (s *stubSession) Events() <-chan session.Event                          { return s.events }
 func (s *stubSession) Approve(ctx context.Context, id string, ok bool) error { return nil }
 func (s *stubSession) RegisterMCPServer(ctx context.Context, cmd string, args ...string) error {
 	return nil
 }
-func (s *stubSession) ID() string                                        { return "stub" }
-func (s *stubSession) Meta() map[string]string                           { return nil }
+func (s *stubSession) ID() string              { return "stub" }
+func (s *stubSession) Meta() map[string]string { return nil }
 
 func readyModel(t *testing.T) Model {
 	t.Helper()
@@ -89,18 +91,18 @@ func TestModelStreamsAndCommitsPendingEntry(t *testing.T) {
 func TestToolEntryFlushesToTranscript(t *testing.T) {
 	model := readyModel(t)
 	updated, _ := model.Update(session.ToolCallStarted{
-		ToolName:  "bash",
-		Args:      "ls",
+		ToolName: "bash",
+		Args:     "ls",
 	})
 	model = updated.(Model)
 
 	if model.pending == nil || model.pending.Role != session.Tool {
 		t.Fatalf("expected pending tool entry")
 	}
-	
+
 	updated, cmd := model.Update(session.ToolResult{
-		ToolName:  "bash",
-		Result:    "ok",
+		ToolName: "bash",
+		Result:   "ok",
 	})
 	model = updated.(Model)
 
@@ -114,7 +116,7 @@ func TestToolEntryFlushesToTranscript(t *testing.T) {
 
 func TestLayoutClampsComposerHeight(t *testing.T) {
 	model := readyModel(t)
-	
+
 	// Initial height should be min (1)
 	model.layout()
 	if got := model.composer.Height(); got != minComposerHeight {

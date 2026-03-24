@@ -11,7 +11,7 @@ require (
 	github.com/bmatcuk/doublestar/v4 v4.10.0
 	github.com/go-json-experiment/json v0.0.0-20260214004413-d219187c3433
 	github.com/google/generative-ai-go v0.20.1
-	github.com/nijaru/canto v0.0.0-20260323093414-e8289219c041
+	github.com/nijaru/canto v0.0.0-20260323094313-74b6ba8f25c4
 	github.com/oklog/ulid/v2 v2.1.1
 	github.com/sabhiram/go-gitignore v0.0.0-20210923224102-525f6e181f06
 	google.golang.org/api v0.271.0

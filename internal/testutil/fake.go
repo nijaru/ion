@@ -57,6 +57,14 @@ func (b *Backend) Name() string {
 	return "fake"
 }
 
+func (b *Backend) Provider() string {
+	return "fake"
+}
+
+func (b *Backend) Model() string {
+	return "fake-model"
+}
+
 func (b *Backend) Bootstrap() backend.Bootstrap {
 	return backend.Bootstrap{
 		Entries: []session.Entry{
@@ -98,25 +106,25 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 	go func() {
 		b.events <- session.TurnStarted{}
 		b.events <- session.StatusChanged{Status: "[fake] planning reply"}
-		
+
 		time.Sleep(120 * time.Millisecond)
 		b.events <- session.AssistantDelta{Delta: fmt.Sprintf("Reviewing %q in fake mode so we can exercise a streamed host loop.", input)}
-		
+
 		time.Sleep(160 * time.Millisecond)
 		b.events <- session.AssistantDelta{Delta: "\n\nThis backend is intentionally emitting multiple event types because ion will eventually need transcript text, tool output, progress, and completion state from either ACP or a native agent runtime."}
-		
+
 		time.Sleep(140 * time.Millisecond)
 		b.events <- session.ToolCallStarted{ToolName: "bash", Args: "git status --short"}
-		
+
 		time.Sleep(100 * time.Millisecond)
 		b.events <- session.ToolResult{
-			ToolName:  "bash",
-			Result:    "✓ fake tool result: working tree checked for rewrite branch cleanliness",
+			ToolName: "bash",
+			Result:   "✓ fake tool result: working tree checked for rewrite branch cleanliness",
 		}
-		
+
 		time.Sleep(160 * time.Millisecond)
 		b.events <- session.AssistantDelta{Delta: "\n\nThat means the UI loop is already much closer to a real agent host than a one-shot echo demo."}
-		
+
 		time.Sleep(160 * time.Millisecond)
 		b.events <- session.AssistantMessage{Message: ""} // Signal end of message
 		b.events <- session.StatusChanged{Status: "[fake] turn complete"}

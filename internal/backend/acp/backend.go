@@ -24,12 +24,18 @@ func (b *Backend) Name() string {
 	return "acp"
 }
 
+func (b *Backend) Provider() string {
+	return "acp"
+}
+
+func (b *Backend) Model() string {
+	return ""
+}
+
 func (b *Backend) Bootstrap() backend.Bootstrap {
 	return backend.Bootstrap{
-		Entries: []session.Entry{
-			{Role: session.System, Content: "External Agent Session (ACP)"},
-		},
-		Status: "Ready to connect to external agent...",
+		Entries: []session.Entry{},
+		Status:  "Ready",
 	}
 }
 

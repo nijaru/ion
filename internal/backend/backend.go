@@ -12,6 +12,8 @@ type Bootstrap struct {
 
 type Backend interface {
 	Name() string
+	Provider() string
+	Model() string
 	Bootstrap() Bootstrap
 	Session() session.AgentSession
 	SetStore(storage.Store)
