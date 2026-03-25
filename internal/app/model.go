@@ -141,6 +141,7 @@ func New(b backend.Backend, s storage.Session) Model {
 
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
+		tea.Printf("%s\n", m.headerLine()),
 		textarea.Blink,
 		m.spinner.Tick,
 		m.composer.Focus(),

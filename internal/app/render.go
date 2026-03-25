@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -231,6 +232,26 @@ func (m Model) progressLine() string {
 	default:
 		return m.st.dim.Render("  · Ready")
 	}
+}
+
+// headerLine returns the startup banner printed to scrollback at launch.
+func (m Model) headerLine() string {
+	sep := m.st.dim.Render(" · ")
+
+	home, _ := os.UserHomeDir()
+	dir := m.workdir
+	if home != "" && strings.HasPrefix(dir, home) {
+		dir = "~" + dir[len(home):]
+	}
+
+	parts := []string{
+		m.st.cyan.Render("ion") + m.st.dim.Render(" v0.0.0"),
+		m.st.dim.Render(dir),
+	}
+	if m.branch != "" {
+		parts = append(parts, m.st.dim.Render(m.branch))
+	}
+	return strings.Join(parts, sep)
 }
 
 // statusLine renders the bottom info bar.
