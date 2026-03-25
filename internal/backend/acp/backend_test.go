@@ -2,82 +2,256 @@ package acp
 
 import (
 	"context"
-	"strings"
+	"io"
 	"testing"
 	"time"
 
+	acp "github.com/coder/acp-go-sdk"
 	"github.com/nijaru/ion/internal/session"
 )
 
-func TestACPBackend(t *testing.T) {
-	// Simple mock agent that echoes input as status and then finishes
-	mockAgentScript := `
-while read line; do
-  # Very simplistic JSON parsing for the submit type
-  if [[ "$line" == *"submit"* ]]; then
-    echo '{"type": "turn_started", "data": {}}'
-    echo '{"type": "status_changed", "data": {"status": "Mock processing..."}}'
-    echo '{"type": "assistant_delta", "data": {"delta": "Echo: "}}'
-    echo '{"type": "assistant_delta", "data": {"delta": "result"}}'
-    echo '{"type": "turn_finished", "data": {}}'
-  fi
-done
-`
-	t.Setenv("ION_ACP_COMMAND", mockAgentScript)
+// mockAgent is a minimal ACP agent-side implementation for tests.
+type mockAgent struct {
+	conn *acp.AgentSideConnection
+}
 
-	b := New()
-	sess := b.Session()
+func (a *mockAgent) SetConn(c *acp.AgentSideConnection) { a.conn = c }
 
-	if err := sess.Open(context.Background()); err != nil {
-		t.Fatalf("failed to open session: %v", err)
+func (a *mockAgent) Authenticate(
+	_ context.Context,
+	_ acp.AuthenticateRequest,
+) (acp.AuthenticateResponse, error) {
+	return acp.AuthenticateResponse{}, nil
+}
+
+func (a *mockAgent) Initialize(
+	_ context.Context,
+	_ acp.InitializeRequest,
+) (acp.InitializeResponse, error) {
+	return acp.InitializeResponse{ProtocolVersion: acp.ProtocolVersionNumber}, nil
+}
+
+func (a *mockAgent) Cancel(_ context.Context, _ acp.CancelNotification) error { return nil }
+
+func (a *mockAgent) NewSession(
+	_ context.Context,
+	_ acp.NewSessionRequest,
+) (acp.NewSessionResponse, error) {
+	return acp.NewSessionResponse{SessionId: "test-session"}, nil
+}
+
+func (a *mockAgent) Prompt(_ context.Context, _ acp.PromptRequest) (acp.PromptResponse, error) {
+	return acp.PromptResponse{StopReason: acp.StopReasonEndTurn}, nil
+}
+
+func (a *mockAgent) SetSessionMode(
+	_ context.Context,
+	_ acp.SetSessionModeRequest,
+) (acp.SetSessionModeResponse, error) {
+	return acp.SetSessionModeResponse{}, nil
+}
+
+// newTestPair creates a connected client+agent pair over in-process pipes.
+// Returns the ion Session (client side) and the agent-side connection for sending notifications.
+func newTestPair(t *testing.T) (*Session, *acp.AgentSideConnection) {
+	t.Helper()
+
+	clientRead, agentWrite := io.Pipe()
+	agentRead, clientWrite := io.Pipe()
+
+	agent := &mockAgent{}
+	agentConn := acp.NewAgentSideConnection(agent, agentWrite, agentRead)
+	agent.SetConn(agentConn)
+
+	client := newSession()
+	client.conn = acp.NewClientSideConnection(client, clientWrite, clientRead)
+	client.sessionID = "test-session"
+
+	ctx := context.Background()
+	go func() {
+		_, _ = client.conn.Initialize(ctx, acp.InitializeRequest{
+			ProtocolVersion: acp.ProtocolVersionNumber,
+		})
+		_, _ = client.conn.NewSession(ctx, acp.NewSessionRequest{Cwd: "/tmp"})
+	}()
+
+	t.Cleanup(func() {
+		_ = clientRead.Close()
+		_ = clientWrite.Close()
+		_ = agentRead.Close()
+		_ = agentWrite.Close()
+	})
+
+	return client, agentConn
+}
+
+// drainOne reads one event from the channel or fails the test after timeout.
+func drainOne(t *testing.T, ch <-chan session.Event, timeout time.Duration) session.Event {
+	t.Helper()
+	select {
+	case ev := <-ch:
+		return ev
+	case <-time.After(timeout):
+		t.Fatal("timed out waiting for session event")
+		return nil
 	}
-	defer sess.Close()
+}
 
-	err := sess.SubmitTurn(context.Background(), "hello")
-	if err != nil {
-		t.Fatalf("failed to submit turn: %v", err)
+func TestACPSessionUpdateTextChunk(t *testing.T) {
+	client, agentConn := newTestPair(t)
+
+	ctx := context.Background()
+	if err := agentConn.SessionUpdate(ctx, acp.SessionNotification{
+		SessionId: "test-session",
+		Update:    acp.UpdateAgentMessageText("hello"),
+	}); err != nil {
+		t.Fatalf("SessionUpdate: %v", err)
 	}
 
-	// Collect events
-	var events []session.Event
-	timeout := time.After(2 * time.Second)
-	done := false
+	ev := drainOne(t, client.events, 500*time.Millisecond)
+	delta, ok := ev.(session.AssistantDelta)
+	if !ok {
+		t.Fatalf("expected AssistantDelta, got %T", ev)
+	}
+	if delta.Delta != "hello" {
+		t.Errorf("expected delta 'hello', got %q", delta.Delta)
+	}
+}
 
-	for !done {
-		select {
-		case ev, ok := <-sess.Events():
-			if !ok {
-				done = true
-				break
-			}
-			t.Logf("Received event: %#v", ev)
-			events = append(events, ev)
-			if _, ok := ev.(session.TurnFinished); ok {
-				done = true
-			}
-		case <-timeout:
-			t.Fatalf("timed out waiting for events")
+func TestACPSessionUpdateThought(t *testing.T) {
+	client, agentConn := newTestPair(t)
+
+	ctx := context.Background()
+	if err := agentConn.SessionUpdate(ctx, acp.SessionNotification{
+		SessionId: "test-session",
+		Update:    acp.UpdateAgentThoughtText("thinking..."),
+	}); err != nil {
+		t.Fatalf("SessionUpdate: %v", err)
+	}
+
+	ev := drainOne(t, client.events, 500*time.Millisecond)
+	delta, ok := ev.(session.ThinkingDelta)
+	if !ok {
+		t.Fatalf("expected ThinkingDelta, got %T", ev)
+	}
+	if delta.Delta != "thinking..." {
+		t.Errorf("expected 'thinking...', got %q", delta.Delta)
+	}
+}
+
+func TestACPSessionUpdateToolCall(t *testing.T) {
+	client, agentConn := newTestPair(t)
+
+	ctx := context.Background()
+	if err := agentConn.SessionUpdate(ctx, acp.SessionNotification{
+		SessionId: "test-session",
+		Update:    acp.StartToolCall("call-1", "Read file.go"),
+	}); err != nil {
+		t.Fatalf("SessionUpdate: %v", err)
+	}
+
+	ev := drainOne(t, client.events, 500*time.Millisecond)
+	tc, ok := ev.(session.ToolCallStarted)
+	if !ok {
+		t.Fatalf("expected ToolCallStarted, got %T", ev)
+	}
+	if tc.ToolName != "Read file.go" {
+		t.Errorf("expected ToolName 'Read file.go', got %q", tc.ToolName)
+	}
+}
+
+func TestACPSessionUpdateToolCompletion(t *testing.T) {
+	client, agentConn := newTestPair(t)
+
+	ctx := context.Background()
+	// Send tool start then completion
+	if err := agentConn.SessionUpdate(ctx, acp.SessionNotification{
+		SessionId: "test-session",
+		Update:    acp.StartToolCall("call-1", "Do something"),
+	}); err != nil {
+		t.Fatalf("StartToolCall: %v", err)
+	}
+	drainOne(t, client.events, 500*time.Millisecond) // consume ToolCallStarted
+
+	if err := agentConn.SessionUpdate(ctx, acp.SessionNotification{
+		SessionId: "test-session",
+		Update:    acp.UpdateToolCall("call-1", acp.WithUpdateStatus(acp.ToolCallStatusCompleted)),
+	}); err != nil {
+		t.Fatalf("UpdateToolCall: %v", err)
+	}
+
+	ev := drainOne(t, client.events, 500*time.Millisecond)
+	if _, ok := ev.(session.ToolResult); !ok {
+		t.Fatalf("expected ToolResult, got %T", ev)
+	}
+}
+
+func TestACPApprovalBridge(t *testing.T) {
+	client, agentConn := newTestPair(t)
+
+	// Simulate agent calling RequestPermission (agent → client RPC via SDK)
+	resultCh := make(chan bool, 1)
+	go func() {
+		resp, err := agentConn.RequestPermission(
+			context.Background(),
+			acp.RequestPermissionRequest{
+				SessionId: "test-session",
+				ToolCall: acp.RequestPermissionToolCall{
+					ToolCallId: "call-1",
+				},
+				Options: []acp.PermissionOption{
+					{Kind: acp.PermissionOptionKindAllowOnce, OptionId: "allow", Name: "Allow"},
+					{Kind: acp.PermissionOptionKindRejectOnce, OptionId: "reject", Name: "Reject"},
+				},
+			},
+		)
+		if err != nil {
+			t.Logf("RequestPermission error: %v", err)
+			resultCh <- false
+			return
 		}
+		resultCh <- resp.Outcome.Selected != nil && resp.Outcome.Selected.OptionId == "allow"
+	}()
+
+	// Wait for ApprovalRequest to arrive
+	ev := drainOne(t, client.events, 500*time.Millisecond)
+	req, ok := ev.(session.ApprovalRequest)
+	if !ok {
+		t.Fatalf("expected ApprovalRequest, got %T", ev)
 	}
 
-	// Verify events
-	foundStatus := false
-	var fullText strings.Builder
-	for _, ev := range events {
-		switch e := ev.(type) {
-		case session.StatusChanged:
-			if e.Status == "Mock processing..." {
-				foundStatus = true
-			}
-		case session.AssistantDelta:
-			fullText.WriteString(e.Delta)
+	// Approve it
+	if err := client.Approve(context.Background(), req.RequestID, true); err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+
+	select {
+	case approved := <-resultCh:
+		if !approved {
+			t.Error("expected approved=true")
 		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for approval response")
+	}
+}
+
+func TestACPFullTurn(t *testing.T) {
+	// Verifies TurnStarted → TurnFinished lifecycle via the real Prompt RPC.
+	// Event mapping is covered by the individual TestACPSessionUpdate* tests.
+	client, _ := newTestPair(t)
+	ctx := context.Background()
+
+	if err := client.SubmitTurn(ctx, "hello"); err != nil {
+		t.Fatalf("SubmitTurn: %v", err)
 	}
 
-	if !foundStatus {
-		t.Error("StatusChanged event not found")
+	ev1 := drainOne(t, client.events, 500*time.Millisecond)
+	if _, ok := ev1.(session.TurnStarted); !ok {
+		t.Fatalf("expected TurnStarted, got %T", ev1)
 	}
-	if fullText.String() != "Echo: result" {
-		t.Errorf("expected 'Echo: result', got %q", fullText.String())
+
+	ev2 := drainOne(t, client.events, 500*time.Millisecond)
+	if _, ok := ev2.(session.TurnFinished); !ok {
+		t.Fatalf("expected TurnFinished, got %T", ev2)
 	}
 }
