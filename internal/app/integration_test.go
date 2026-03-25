@@ -10,9 +10,9 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/nijaru/ion/internal/testutil"
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
+	"github.com/nijaru/ion/internal/testutil"
 )
 
 func TestIntegrationFullLoop(t *testing.T) {
@@ -42,11 +42,11 @@ func TestIntegrationFullLoop(t *testing.T) {
 
 	// 3. Setup Model
 	model := New(b, sess)
-	
+
 	// 4. Submit a turn
 	model.composer.SetValue("hi")
 	// simulate ctrl+s (m.sendKey)
-	updated, _ := model.Update(model.sendKeyMsg())
+	updated, _ := model.Update(sendKeyMsg())
 	model = updated.(Model)
 
 	// Wait for async backend script to finish
@@ -70,7 +70,7 @@ func TestIntegrationFullLoop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to resume session: %v", err)
 	}
-	
+
 	storedEntries, err := resumed.Entries(context.Background())
 	if err != nil {
 		t.Fatalf("failed to read stored entries: %v", err)
@@ -106,7 +106,13 @@ func TestMultiplexedSwarms(t *testing.T) {
 	b := testutil.New()
 	b.SetScript([]testutil.ScriptStep{
 		{Event: session.TurnStarted{}, Delay: 0},
-		{Event: session.StatusChanged{Base: session.Base{AgentID: "Explorer"}, Status: "Mapping codebase..."}, Delay: 10 * time.Millisecond},
+		{
+			Event: session.StatusChanged{
+				Base:   session.Base{AgentID: "Explorer"},
+				Status: "Mapping codebase...",
+			},
+			Delay: 10 * time.Millisecond,
+		},
 		{Event: session.ToolCallStarted{
 			Base:     session.Base{AgentID: "Tester"},
 			ToolName: "verify",
@@ -124,7 +130,7 @@ func TestMultiplexedSwarms(t *testing.T) {
 	})
 
 	model := New(b, sess)
-	
+
 	// Manually trigger turn
 	b.SubmitTurn(context.Background(), "status check")
 
@@ -162,8 +168,7 @@ func TestMultiplexedSwarms(t *testing.T) {
 	}
 }
 
-// helper to simulate the send key message
-func (m Model) sendKeyMsg() any {
-	// In Bubble Tea v2, KeyPressMsg is a type alias for Key, which uses Text.
-	return tea.KeyPressMsg{Text: m.sendKey}
+// sendKeyMsg returns the Enter key press message used to submit a turn.
+func sendKeyMsg() tea.KeyPressMsg {
+	return tea.KeyPressMsg{Code: tea.KeyEnter}
 }

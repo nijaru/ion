@@ -15,4 +15,5 @@ type Entry struct {
 	Title     string
 	Content   string
 	Reasoning string
+	IsError   bool
 }
