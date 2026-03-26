@@ -69,11 +69,7 @@ func (b *Backend) Provider() string {
 	if b.cfg != nil && b.cfg.Provider != "" {
 		return b.cfg.Provider
 	}
-	m := os.Getenv("ION_MODEL")
-	if i := strings.IndexByte(m, ' '); i > 0 {
-		return m[:i]
-	}
-	return m
+	return os.Getenv("ION_PROVIDER")
 }
 
 func (b *Backend) Model() string {
