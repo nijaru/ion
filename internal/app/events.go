@@ -103,11 +103,16 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.relayoutComposer()
 
 		if m.storage != nil {
-			m.storage.Append(context.Background(), storage.User{
+			if err := m.storage.Append(context.Background(), storage.User{
 				Type:    "user",
 				Content: text,
 				TS:      now(),
-			})
+			}); err != nil {
+				return m, tea.Batch(
+					tea.Printf("%s\n", m.renderEntry(userEntry)),
+					persistErrorCmd("persist user input", err),
+				)
+			}
 		}
 
 		if strings.HasPrefix(text, "/") {
@@ -192,11 +197,13 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 	case session.StatusChanged:
 		m.status = msg.Status
 		if m.storage != nil {
-			m.storage.Append(context.Background(), storage.Status{
+			if err := m.storage.Append(context.Background(), storage.Status{
 				Type:   "status",
 				Status: msg.Status,
 				TS:     now(),
-			})
+			}); err != nil {
+				return m, persistErrorCmd("persist status", err)
+			}
 		}
 		return m, m.awaitSessionEvent()
 
@@ -205,13 +212,15 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		m.tokensReceived += msg.Output
 		m.totalCost += msg.Cost
 		if m.storage != nil {
-			m.storage.Append(context.Background(), storage.TokenUsage{
+			if err := m.storage.Append(context.Background(), storage.TokenUsage{
 				Type:   "token_usage",
 				Input:  msg.Input,
 				Output: msg.Output,
 				Cost:   msg.Cost,
 				TS:     now(),
-			})
+			}); err != nil {
+				return m, persistErrorCmd("persist token usage", err)
+			}
 		}
 		return m, m.awaitSessionEvent()
 
@@ -262,11 +271,16 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 					Type: "text",
 					Text: &entry.Content,
 				})
-				m.storage.Append(context.Background(), storage.Assistant{
+				if err := m.storage.Append(context.Background(), storage.Assistant{
 					Type:    "assistant",
 					Content: blocks,
 					TS:      now(),
-				})
+				}); err != nil {
+					return m, tea.Batch(
+						tea.Printf("%s\n", m.renderEntry(entry)),
+						persistErrorCmd("persist assistant response", err),
+					)
+				}
 			}
 			return m, tea.Batch(
 				tea.Printf("%s\n", m.renderEntry(entry)),
@@ -279,7 +293,7 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		m.progress = stateWorking
 		m.lastToolUseID = session.ShortID()
 		if m.storage != nil {
-			m.storage.Append(context.Background(), storage.ToolUse{
+			if err := m.storage.Append(context.Background(), storage.ToolUse{
 				Type: "tool_use",
 				ID:   m.lastToolUseID,
 				Name: msg.ToolName,
@@ -287,7 +301,9 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 					"args": msg.Args,
 				},
 				TS: now(),
-			})
+			}); err != nil {
+				return m, persistErrorCmd("persist tool use", err)
+			}
 		}
 		m.pending = &session.Entry{
 			Role:  session.Tool,
@@ -309,13 +325,18 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 			m.pending = nil
 
 			if m.storage != nil {
-				m.storage.Append(context.Background(), storage.ToolResult{
+				if err := m.storage.Append(context.Background(), storage.ToolResult{
 					Type:      "tool_result",
 					ToolUseID: m.lastToolUseID,
 					Content:   msg.Result,
 					IsError:   msg.Error != nil,
 					TS:        now(),
-				})
+				}); err != nil {
+					return m, tea.Batch(
+						tea.Printf("%s\n", m.renderEntry(entry)),
+						persistErrorCmd("persist tool result", err),
+					)
+				}
 			}
 			return m, tea.Batch(
 				tea.Printf("%s\n", m.renderEntry(entry)),
@@ -334,13 +355,15 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 			IsError: !msg.Passed,
 		}
 		if m.storage != nil {
-			m.storage.Append(context.Background(), storage.ToolResult{
+			if err := m.storage.Append(context.Background(), storage.ToolResult{
 				Type:      "tool_result",
 				ToolUseID: m.lastToolUseID,
 				Content:   content,
 				IsError:   !msg.Passed,
 				TS:        now(),
-			})
+			}); err != nil {
+				return m, persistErrorCmd("persist verification result", err)
+			}
 		}
 		return m, tea.Batch(
 			tea.Printf("%s\n", m.renderEntry(entry)),
@@ -410,6 +433,12 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 	}
 
 	return m, m.awaitSessionEvent()
+}
+
+func persistErrorCmd(action string, err error) tea.Cmd {
+	return func() tea.Msg {
+		return session.Error{Err: fmt.Errorf("%s: %w", action, err)}
+	}
 }
 
 // Ensure textarea.Blink is referenced (avoids unused import if Focus() is the only use).

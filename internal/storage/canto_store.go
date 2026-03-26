@@ -189,8 +189,17 @@ func (s *cantoStore) CoreStore() *memory.CoreStore {
 }
 
 func (s *cantoStore) UpdateSession(ctx context.Context, si SessionInfo) error {
-	_, err := s.db.ExecContext(ctx, "UPDATE session_meta SET updated_at = ?, last_preview = ? WHERE id = ?",
-		time.Now().Unix(), si.LastPreview, si.ID)
+	_, err := s.db.ExecContext(
+		ctx,
+		`UPDATE session_meta
+		 SET updated_at = ?,
+		     last_preview = CASE WHEN ? != '' THEN ? ELSE last_preview END
+		 WHERE id = ?`,
+		time.Now().Unix(),
+		si.LastPreview,
+		si.LastPreview,
+		si.ID,
+	)
 	return err
 }
 
@@ -214,8 +223,12 @@ func (s *cantoStore) SaveKnowledge(ctx context.Context, item KnowledgeItem) erro
 func (s *cantoStore) SearchKnowledge(ctx context.Context, cwd, query string, limit int) ([]KnowledgeItem, error) {
 	// Note: Canto's SearchKnowledge currently doesn't filter by CWD in its core table,
 	// so we might need to filter manually if necessary, or update Canto.
-	// For now, we search globally across the store.
-	items, err := s.memory.SearchKnowledge(ctx, query, limit)
+	// Fetch a little extra and filter locally so workspace-specific recall stays scoped.
+	searchLimit := limit
+	if searchLimit > 0 && cwd != "" {
+		searchLimit *= 5
+	}
+	items, err := s.memory.SearchKnowledge(ctx, query, searchLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -233,14 +246,19 @@ func (s *cantoStore) SearchKnowledge(ctx context.Context, cwd, query string, lim
 		if pathStr, ok := item.Metadata["path"].(string); ok {
 			ki.Path = pathStr
 		}
+		if cwd != "" && ki.CWD != "" && ki.CWD != cwd {
+			continue
+		}
 		res = append(res, ki)
+		if limit > 0 && len(res) >= limit {
+			break
+		}
 	}
 	return res, nil
 }
 
 func (s *cantoStore) DeleteKnowledge(ctx context.Context, id string) error {
-	_, err := s.db.ExecContext(ctx, "DELETE FROM knowledge WHERE id = ?", id)
-	return err
+	return fmt.Errorf("knowledge deletion is not supported by the canto store")
 }
 
 type cantoSession struct {
@@ -261,24 +279,16 @@ func (s *cantoSession) Meta() Metadata {
 }
 
 func (s *cantoSession) Append(ctx context.Context, event any) error {
-	// Map ion storage entries to Canto events if possible, or just ignore if CantoBackend is already saving them
-	// Actually, when using CantoBackend, it will save its own events to the same SQLite store.
-	// This Append method is used by the UI model to persist User inputs and Assistant responses
-	// when NOT using Canto (e.g. in the old Native backend).
-
-	// If we are using Canto, the CantoBackend will handle Appending to its own session.
-	// But the UI still calls this.
-
 	var preview string
+	var err error
 	switch e := event.(type) {
 	case User:
 		preview = e.Content
-		// We could save this to Canto store as a User message event
 		ev := session.NewEvent(s.id, session.MessageAdded, llm.Message{
 			Role:    llm.RoleUser,
 			Content: e.Content,
 		})
-		s.store.canto.Save(ctx, ev)
+		err = s.store.canto.Save(ctx, ev)
 	case Assistant:
 		var content strings.Builder
 		var reasoning strings.Builder
@@ -296,40 +306,42 @@ func (s *cantoSession) Append(ctx context.Context, event any) error {
 			Content:   preview,
 			Reasoning: reasoning.String(),
 		})
-		s.store.canto.Save(ctx, ev)
+		err = s.store.canto.Save(ctx, ev)
 	case ToolUse:
 		ev := session.NewEvent(s.id, session.ToolStarted, map[string]any{
 			"id":   e.ID,
 			"tool": e.Name,
 			"args": e.Input,
 		})
-		s.store.canto.Save(ctx, ev)
+		err = s.store.canto.Save(ctx, ev)
 	case ToolResult:
 		ev := session.NewEvent(s.id, session.ToolCompleted, map[string]any{
 			"tool_use_id": e.ToolUseID,
 			"output":      e.Content,
 			"is_error":    e.IsError,
 		})
-		s.store.canto.Save(ctx, ev)
+		err = s.store.canto.Save(ctx, ev)
 	case Status:
 		ev := session.NewEvent(s.id, session.EventType("status_changed"), map[string]any{
 			"status": e.Status,
 		})
-		s.store.canto.Save(ctx, ev)
+		err = s.store.canto.Save(ctx, ev)
 	case TokenUsage:
 		ev := session.NewEvent(s.id, session.EventType("token_usage"), map[string]any{
 			"input":  e.Input,
 			"output": e.Output,
 			"cost":   e.Cost,
 		})
-		s.store.canto.Save(ctx, ev)
+		err = s.store.canto.Save(ctx, ev)
+	default:
+		return nil
 	}
 
-	if preview != "" {
-		s.store.UpdateSession(ctx, SessionInfo{ID: s.id, LastPreview: preview})
+	if err != nil {
+		return err
 	}
 
-	return nil
+	return s.store.UpdateSession(ctx, SessionInfo{ID: s.id, LastPreview: preview})
 }
 
 func (s *cantoSession) LastStatus(ctx context.Context) (string, error) {
