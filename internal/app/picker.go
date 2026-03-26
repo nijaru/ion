@@ -64,19 +64,6 @@ func modelItemsForProvider(provider string) ([]pickerItem, error) {
 	return items, nil
 }
 
-func modelBelongsToProvider(provider, model string) (bool, error) {
-	items, err := modelItemsForProvider(provider)
-	if err != nil {
-		return false, err
-	}
-	for _, item := range items {
-		if strings.EqualFold(item.Value, model) || strings.EqualFold(item.Label, model) {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
 func catwalkProvider(provider string) string {
 	switch strings.ToLower(strings.TrimSpace(provider)) {
 	case "claude-pro":
@@ -89,15 +76,6 @@ func catwalkProvider(provider string) string {
 		return string(catwalk.InferenceProviderOpenAI)
 	default:
 		return strings.ToLower(strings.TrimSpace(provider))
-	}
-}
-
-func isACPProvider(provider string) bool {
-	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "claude-pro", "gemini-advanced", "gh-copilot", "chatgpt", "codex":
-		return true
-	default:
-		return false
 	}
 }
 

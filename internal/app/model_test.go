@@ -266,7 +266,45 @@ func TestComposerLayoutReflowsAfterHistoryRecall(t *testing.T) {
 	}
 }
 
-func TestHandleCommandSwitchesRuntime(t *testing.T) {
+func TestHandleCommandUpdatesConfigDirectly(t *testing.T) {
+	tests := []struct {
+		name     string
+		command  string
+		expected string
+	}{
+		{name: "provider", command: "/provider anthropic", expected: "provider = 'anthropic'\nsession_retention_days = 90\n"},
+		{name: "model", command: "/model gpt-4.1", expected: "model = 'gpt-4.1'\nsession_retention_days = 90\n"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+
+			oldSession := &stubSession{events: make(chan session.Event)}
+			oldBackend := stubBackend{sess: oldSession}
+			model := New(oldBackend, nil, "/tmp/test", "main", "dev", nil)
+
+			cmd := model.handleCommand(tc.command)
+			if cmd != nil {
+				t.Fatalf("expected no follow-up command, got %T", cmd)
+			}
+			if model.picker != nil {
+				t.Fatal("expected no picker to open")
+			}
+
+			data, err := os.ReadFile(filepath.Join(home, ".ion", "config.toml"))
+			if err != nil {
+				t.Fatalf("read config: %v", err)
+			}
+			if got := string(data); got != tc.expected {
+				t.Fatalf("config = %q, want %q", got, tc.expected)
+			}
+		})
+	}
+}
+
+func TestPickerCommitSwitchesRuntime(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	cfgDir := filepath.Join(home, ".ion")

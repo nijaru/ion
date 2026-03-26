@@ -29,10 +29,14 @@ func (m *Model) handleCommand(input string) tea.Cmd {
 			return cmdError(fmt.Sprintf("failed to load config: %v", err))
 		}
 		cfg.Model = name
-		if cfg.Provider == "" {
-			return m.openProviderPickerWithConfig(cfg)
+		if err := config.Save(cfg); err != nil {
+			return cmdError(fmt.Sprintf("failed to save config: %v", err))
 		}
-		return m.openModelPickerWithConfig(cfg)
+		m.backend.SetConfig(cfg)
+		if cfg.Provider == "" {
+			return nil
+		}
+		return m.switchRuntimeCommand(cfg, session.Entry{Role: session.System, Content: "Switched model to " + name})
 
 	case "/provider":
 		if len(fields) < 2 {
@@ -44,7 +48,14 @@ func (m *Model) handleCommand(input string) tea.Cmd {
 			return cmdError(fmt.Sprintf("failed to load config: %v", err))
 		}
 		cfg.Provider = name
-		return m.openProviderPickerWithConfig(cfg)
+		if err := config.Save(cfg); err != nil {
+			return cmdError(fmt.Sprintf("failed to save config: %v", err))
+		}
+		m.backend.SetConfig(cfg)
+		if cfg.Model == "" {
+			return nil
+		}
+		return m.switchRuntimeCommand(cfg, session.Entry{Role: session.System, Content: "Switched provider to " + name})
 
 	case "/mcp":
 		if len(fields) < 3 || fields[1] != "add" {
@@ -122,7 +133,7 @@ func (m *Model) handlePickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	case "esc", "ctrl+c":
 		m.picker = nil
 		return *m, nil
-	case "tab", "shift+tab":
+	case "tab":
 		if m.picker.purpose == pickerPurposeProvider {
 			if m.picker.cfg != nil && m.picker.cfg.Provider != "" {
 				return *m, m.openModelPickerWithConfig(m.picker.cfg)
