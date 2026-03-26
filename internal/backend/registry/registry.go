@@ -105,7 +105,7 @@ func fetchFromCatwalk(ctx context.Context, provider, model string) (ModelMetadat
 
 func cachePath() string {
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".ion", "metadata_cache.json")
+	return filepath.Join(home, ".ion", "data", "metadata_cache.json")
 }
 
 func loadCache() {

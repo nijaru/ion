@@ -76,6 +76,9 @@ tk ls
 - Do not let archived Rust docs drive new design decisions on `main`.
 - Use `tk` for all multi-step work.
 - When a user reports a bug, create or update a `tk` task immediately.
+- Ion is `v0.0.0` unstable. There are no backwards guarantees.
+- Do not add fallback, migration, or compatibility paths unless the user explicitly asks for them.
+- Keep runtime state in `~/.ion/state.toml`; reserve `~/.ion/config.toml` for hand-edited user settings.
 
 ## Go Idioms
 

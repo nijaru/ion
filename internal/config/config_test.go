@@ -7,18 +7,18 @@ import (
 	"testing"
 )
 
-func TestLoadReadsConfigFile(t *testing.T) {
+func TestLoadReadsStateFile(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	configDir := filepath.Join(home, ".config", "ion")
-	if err := os.MkdirAll(configDir, 0o755); err != nil {
-		t.Fatalf("mkdir config dir: %v", err)
+	stateDir := filepath.Join(home, ".ion")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("mkdir state dir: %v", err)
 	}
 
-	path := filepath.Join(configDir, "config.toml")
+	path := filepath.Join(stateDir, "state.toml")
 	if err := os.WriteFile(path, []byte(
-		"provider = \"openai\"\nmodel = \"gpt-4o\"\ncontext_limit = 128000\n",
+		"provider = \"openai\"\nmodel = \"gpt-4o\"\ncontext_limit = 128000\ndata_dir = \"/tmp/ion\"\nmodel_cache_ttl_secs = 600\nsession_retention_days = 14\n",
 	), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -37,20 +37,36 @@ func TestLoadReadsConfigFile(t *testing.T) {
 	if cfg.ContextLimit != 128000 {
 		t.Fatalf("context_limit = %d, want %d", cfg.ContextLimit, 128000)
 	}
+	if cfg.DataDir != "/tmp/ion" {
+		t.Fatalf("data_dir = %q, want %q", cfg.DataDir, "/tmp/ion")
+	}
+	if cfg.ModelCacheTTLSeconds != 600 {
+		t.Fatalf("model_cache_ttl_secs = %d, want %d", cfg.ModelCacheTTLSeconds, 600)
+	}
+	if cfg.SessionRetentionDays != 14 {
+		t.Fatalf("session_retention_days = %d, want %d", cfg.SessionRetentionDays, 14)
+	}
 }
 
-func TestLoadFallsBackToLegacyConfigFile(t *testing.T) {
+func TestLoadIgnoresLegacyConfigFile(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	legacyDir := filepath.Join(home, ".ion")
-	if err := os.MkdirAll(legacyDir, 0o755); err != nil {
-		t.Fatalf("mkdir legacy dir: %v", err)
+	stateDir := filepath.Join(home, ".ion")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("mkdir state dir: %v", err)
 	}
 
-	path := filepath.Join(legacyDir, "config.toml")
-	if err := os.WriteFile(path, []byte(
+	statePath := filepath.Join(stateDir, "state.toml")
+	if err := os.WriteFile(statePath, []byte(
 		"provider = \"openrouter\"\nmodel = \"openai/gpt-5.4\"\ncontext_limit = 200000\n",
+	), 0o644); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+
+	legacyPath := filepath.Join(stateDir, "config.toml")
+	if err := os.WriteFile(legacyPath, []byte(
+		"provider = \"chatgpt\"\nmodel = \"gpt-5.3-codex\"\ncontext_limit = 128000\n",
 	), 0o644); err != nil {
 		t.Fatalf("write legacy config: %v", err)
 	}
@@ -90,20 +106,23 @@ func TestLoadAppliesEnvOverrides(t *testing.T) {
 	}
 }
 
-func TestSaveWritesUserConfigPath(t *testing.T) {
+func TestSaveWritesStatePath(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
 	cfg := &Config{
-		Provider:     "openai",
-		Model:        "gpt-4o",
-		ContextLimit: 128000,
+		Provider:             "openai",
+		Model:                "gpt-4o",
+		ContextLimit:         128000,
+		DataDir:              filepath.Join(home, ".ion", "data"),
+		ModelCacheTTLSeconds: 600,
+		SessionRetentionDays: 14,
 	}
 	if err := Save(cfg); err != nil {
 		t.Fatalf("save config: %v", err)
 	}
 
-	path := filepath.Join(home, ".config", "ion", "config.toml")
+	path := filepath.Join(home, ".ion", "state.toml")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read saved config: %v", err)
@@ -115,6 +134,9 @@ func TestSaveWritesUserConfigPath(t *testing.T) {
 		`model =`,
 		`gpt-4o`,
 		`context_limit = 128000`,
+		`data_dir =`,
+		`model_cache_ttl_secs = 600`,
+		`session_retention_days = 14`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("saved config missing %q:\n%s", want, got)
@@ -133,7 +155,7 @@ func TestLoadStateReadsInternalConfig(t *testing.T) {
 
 	path := filepath.Join(stateDir, "state.toml")
 	if err := os.WriteFile(path, []byte(
-		"data_dir = \"/tmp/ion\"\nmodel_cache_ttl_secs = 600\nsession_retention_days = 14\n",
+		"provider = \"chatgpt\"\nmodel = \"gpt-5.3-codex\"\ncontext_limit = 128000\ndata_dir = \"/tmp/ion\"\nmodel_cache_ttl_secs = 600\nsession_retention_days = 14\n",
 	), 0o644); err != nil {
 		t.Fatalf("write state: %v", err)
 	}
@@ -145,6 +167,15 @@ func TestLoadStateReadsInternalConfig(t *testing.T) {
 
 	if state.DataDir != "/tmp/ion" {
 		t.Fatalf("data_dir = %q, want %q", state.DataDir, "/tmp/ion")
+	}
+	if state.Provider != "chatgpt" {
+		t.Fatalf("provider = %q, want %q", state.Provider, "chatgpt")
+	}
+	if state.Model != "gpt-5.3-codex" {
+		t.Fatalf("model = %q, want %q", state.Model, "gpt-5.3-codex")
+	}
+	if state.ContextLimit != 128000 {
+		t.Fatalf("context_limit = %d, want %d", state.ContextLimit, 128000)
 	}
 	if state.ModelCacheTTLSeconds != 600 {
 		t.Fatalf("model_cache_ttl_secs = %d, want %d", state.ModelCacheTTLSeconds, 600)
@@ -159,7 +190,10 @@ func TestSaveStateWritesInternalPath(t *testing.T) {
 	t.Setenv("HOME", home)
 
 	state := &State{
-		DataDir:              filepath.Join(home, ".ion"),
+		Provider:             "chatgpt",
+		Model:                "gpt-5.3-codex",
+		ContextLimit:         128000,
+		DataDir:              filepath.Join(home, ".ion", "data"),
 		ModelCacheTTLSeconds: 600,
 		SessionRetentionDays: 14,
 	}
@@ -175,6 +209,11 @@ func TestSaveStateWritesInternalPath(t *testing.T) {
 	got := string(data)
 	for _, want := range []string{
 		`data_dir =`,
+		`provider =`,
+		`chatgpt`,
+		`model =`,
+		`gpt-5.3-codex`,
+		`context_limit = 128000`,
 		`model_cache_ttl_secs = 600`,
 		`session_retention_days = 14`,
 	} {

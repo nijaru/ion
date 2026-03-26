@@ -38,6 +38,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		}
 		m.ctrlCPending = true
 		m.composer.Reset()
+		m.relayoutComposer()
 		m.escPending = false
 		return m, nil
 
@@ -54,6 +55,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		}
 		if m.escPending {
 			m.composer.Reset()
+			m.relayoutComposer()
 			m.escPending = false
 			return m, nil
 		}
@@ -84,7 +86,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 		userEntry := session.Entry{Role: session.User, Content: text}
 		m.composer.Reset()
-		m.layout()
+		m.relayoutComposer()
 
 		if m.storage != nil {
 			m.storage.Append(context.Background(), storage.User{
@@ -123,6 +125,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 				m.historyIdx--
 			}
 			m.composer.SetValue(m.history[m.historyIdx])
+			m.relayoutComposer()
 			return m, nil
 		}
 		var cmd tea.Cmd
@@ -136,10 +139,12 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			if m.historyIdx < len(m.history)-1 {
 				m.historyIdx++
 				m.composer.SetValue(m.history[m.historyIdx])
+				m.relayoutComposer()
 			} else {
 				m.historyIdx = -1
 				m.composer.SetValue(m.historyDraft)
 				m.historyDraft = ""
+				m.relayoutComposer()
 			}
 			return m, nil
 		}
@@ -159,6 +164,12 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.layout()
 	}
 	return m, cmd
+}
+
+func (m *Model) relayoutComposer() {
+	if m.ready {
+		m.layout()
+	}
 }
 
 // handleSessionEvent processes events from the agent session channel.

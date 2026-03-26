@@ -6,16 +6,14 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/nijaru/ion/internal/app"
 	"github.com/nijaru/ion/internal/backend"
-	"github.com/nijaru/ion/internal/backend/canto"
-	"github.com/nijaru/ion/internal/backend/native"
 	"github.com/nijaru/ion/internal/config"
+	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
 )
 
@@ -29,26 +27,8 @@ func main() {
 		"Continue the most recent session in this directory",
 	)
 	resumeFlag := flag.String("resume", "", "Resume a specific session by ID")
-	backendFlag := flag.String("backend", "canto", "Backend to use (canto, native)")
+	providerFlag := flag.String("provider", "", "Provider to use")
 	flag.Parse()
-
-	// Initialize storage
-	home, _ := os.UserHomeDir()
-	storageRoot := filepath.Join(home, ".ion")
-	store, err := storage.NewCantoStore(storageRoot)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to initialize storage: %v\n", err)
-		os.Exit(1)
-	}
-
-	var b backend.Backend
-	switch *backendFlag {
-	case "native":
-		b = native.New()
-	default:
-		b = canto.New()
-	}
-	b.SetStore(store)
 
 	// Load config
 	cfg, err := config.Load()
@@ -56,14 +36,33 @@ func main() {
 		fmt.Fprintf(os.Stderr, "failed to load config: %v\n", err)
 		os.Exit(1)
 	}
-	b.SetConfig(cfg)
+
+	if *providerFlag != "" {
+		cfg.Provider = *providerFlag
+	}
+
+	if err := resolveStartupConfig(cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(1)
+	}
+
+	if err := config.Save(cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to save state: %v\n", err)
+		os.Exit(1)
+	}
 
 	ctx := context.Background()
 	cwd, _ := os.Getwd()
+	branch := currentBranch()
 
-	var sess storage.Session
+	// Initialize storage from the internal data dir.
+	store, err := storage.NewCantoStore(cfg.DataDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to initialize storage: %v\n", err)
+		os.Exit(1)
+	}
+
 	var sessionID string
-
 	if *resumeFlag != "" {
 		sessionID = *resumeFlag
 	} else if *continueFlag {
@@ -73,46 +72,84 @@ func main() {
 		}
 	}
 
-	if sessionID != "" {
-		sess, err = store.ResumeSession(ctx, sessionID)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "failed to resume session %s: %v\n", sessionID, err)
-			os.Exit(1)
-		}
-		b.SetSession(sess)
-		if err := b.Session().Resume(ctx, sessionID); err != nil {
-			fmt.Fprintf(os.Stderr, "backend resume error: %v\n", err)
-			os.Exit(1)
-		}
-	} else {
-		// Open new session
-		modelName := cfg.Model
-		if cfg.Provider != "" && !strings.Contains(modelName, "/") {
-			modelName = cfg.Provider + " " + cfg.Model
-		}
+	acpCommandOverride := strings.TrimSpace(os.Getenv("ION_ACP_COMMAND"))
 
-		if modelName == "" {
-			fmt.Fprintf(os.Stderr, "ION_MODEL environment variable or config.toml must be set (e.g. 'openrouter minimax/minimax-m2.7')\n")
-			os.Exit(1)
-		}
-
-		sess, err = store.OpenSession(ctx, cwd, modelName, currentBranch())
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "failed to open session: %v\n", err)
-			os.Exit(1)
-		}
-		b.SetSession(sess)
-		if err := b.Session().Open(ctx); err != nil {
-			fmt.Fprintf(os.Stderr, "backend initialization error: %v\n", err)
-			os.Exit(1)
-		}
+	b, sess, err := openRuntime(ctx, store, cwd, branch, cfg, acpCommandOverride, sessionID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to initialize runtime: %v\n", err)
+		os.Exit(1)
 	}
 
-	p := tea.NewProgram(app.New(b, sess, cwd, currentBranch(), version))
+	switcher := func(ctx context.Context, cfg *config.Config) (backend.Backend, session.AgentSession, storage.Session, error) {
+		switchedBackend, switchedSession, err := openRuntime(ctx, store, cwd, currentBranch(), cfg, acpCommandOverride, "")
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		return switchedBackend, switchedBackend.Session(), switchedSession, nil
+	}
+
+	p := tea.NewProgram(app.New(b, sess, cwd, branch, version, switcher))
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "ion error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func openRuntime(ctx context.Context, store storage.Store, cwd, branch string, cfg *config.Config, acpCommandOverride string, sessionID string) (backend.Backend, storage.Session, error) {
+	runtimeCfg := *cfg
+	if err := resolveStartupConfig(&runtimeCfg); err != nil {
+		return nil, nil, err
+	}
+
+	b, err := backendForProvider(runtimeCfg.Provider)
+	if err != nil {
+		return nil, nil, err
+	}
+	b.SetStore(store)
+	b.SetConfig(&runtimeCfg)
+
+	if isACPProvider(runtimeCfg.Provider) {
+		command := strings.TrimSpace(acpCommandOverride)
+		if command == "" {
+			derived, ok := defaultACPCommand(runtimeCfg.Provider)
+			if !ok {
+				return nil, nil, fmt.Errorf("ION_ACP_COMMAND environment variable not set")
+			}
+			command = derived
+		}
+		if err := os.Setenv("ION_ACP_COMMAND", command); err != nil {
+			return nil, nil, fmt.Errorf("failed to set ION_ACP_COMMAND: %w", err)
+		}
+	}
+
+	if sessionID != "" {
+		sess, err := store.ResumeSession(ctx, sessionID)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to resume session %s: %w", sessionID, err)
+		}
+		b.SetSession(sess)
+		if err := b.Session().Resume(ctx, sessionID); err != nil {
+			_ = sess.Close()
+			return nil, nil, fmt.Errorf("backend resume error: %w", err)
+		}
+		return b, sess, nil
+	}
+
+	modelName := sessionModelName(runtimeCfg.Provider, runtimeCfg.Model)
+	if modelName == "" {
+		return nil, nil, fmt.Errorf("provider and model must be set (e.g. provider=\"openrouter\" model=\"openai/gpt-5.4\")")
+	}
+
+	sess, err := store.OpenSession(ctx, cwd, modelName, branch)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to open session: %w", err)
+	}
+	b.SetSession(sess)
+	if err := b.Session().Open(ctx); err != nil {
+		_ = sess.Close()
+		return nil, nil, fmt.Errorf("backend initialization error: %w", err)
+	}
+	return b, sess, nil
 }
 
 func currentBranch() string {

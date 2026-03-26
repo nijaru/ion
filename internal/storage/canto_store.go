@@ -27,7 +27,7 @@ func NewCantoStore(root string) (Store, error) {
 	if err := os.MkdirAll(root, 0755); err != nil {
 		return nil, err
 	}
-	dbPath := filepath.Join(root, "ion.db")
+	dbPath := filepath.Join(root, "sessions.db")
 
 	cStore, err := session.NewSQLiteStore(dbPath)
 	if err != nil {

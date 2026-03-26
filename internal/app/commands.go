@@ -24,24 +24,32 @@ func (m *Model) handleCommand(input string) tea.Cmd {
 			return cmdError("usage: /model <model_name>")
 		}
 		name := strings.Join(fields[1:], " ")
-		cfg, _ := config.Load()
+		cfg, err := config.Load()
+		if err != nil {
+			return cmdError(fmt.Sprintf("failed to load config: %v", err))
+		}
 		cfg.Model = name
-		config.Save(cfg)
-		m.backend.SetConfig(cfg)
+		if err := config.Save(cfg); err != nil {
+			return cmdError(fmt.Sprintf("failed to save config: %v", err))
+		}
 		notice := session.Entry{Role: session.System, Content: "Switched model to " + name}
-		return tea.Printf("%s\n", m.renderEntry(notice))
+		return m.switchRuntimeCommand(cfg, notice)
 
 	case "/provider":
 		if len(fields) < 2 {
 			return cmdError("usage: /provider <provider_name>")
 		}
 		name := fields[1]
-		cfg, _ := config.Load()
+		cfg, err := config.Load()
+		if err != nil {
+			return cmdError(fmt.Sprintf("failed to load config: %v", err))
+		}
 		cfg.Provider = name
-		config.Save(cfg)
-		m.backend.SetConfig(cfg)
+		if err := config.Save(cfg); err != nil {
+			return cmdError(fmt.Sprintf("failed to save config: %v", err))
+		}
 		notice := session.Entry{Role: session.System, Content: "Switched provider to " + name}
-		return tea.Printf("%s\n", m.renderEntry(notice))
+		return m.switchRuntimeCommand(cfg, notice)
 
 	case "/mcp":
 		if len(fields) < 3 || fields[1] != "add" {
@@ -62,6 +70,37 @@ func (m *Model) handleCommand(input string) tea.Cmd {
 
 	default:
 		return cmdError(fmt.Sprintf("unknown command: %s", fields[0]))
+	}
+}
+
+func (m *Model) switchRuntimeCommand(cfg *config.Config, notice session.Entry) tea.Cmd {
+	if m.switcher == nil {
+		m.backend.SetConfig(cfg)
+		return tea.Printf("%s\n", m.renderEntry(notice))
+	}
+
+	oldSession := m.session
+	switcher := m.switcher
+	cfgCopy := *cfg
+
+	return func() tea.Msg {
+		if oldSession != nil {
+			_ = oldSession.CancelTurn(context.Background())
+		}
+		backend, sess, storageSess, err := switcher(context.Background(), &cfgCopy)
+		if err != nil {
+			return session.Error{Err: err}
+		}
+		if oldSession != nil {
+			_ = oldSession.Close()
+		}
+		return runtimeSwitchedMsg{
+			backend: backend,
+			session: sess,
+			storage: storageSess,
+			status:  backend.Bootstrap().Status,
+			notice:  notice.Content,
+		}
 	}
 }
 

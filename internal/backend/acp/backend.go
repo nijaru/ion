@@ -67,7 +67,7 @@ func (b *Backend) Bootstrap() backend.Bootstrap {
 			status = s
 		} else {
 			// New session
-			status = fmt.Sprintf("Connected to %s", b.Provider())
+			status = fmt.Sprintf("Connected to %s via ACP", b.Provider())
 		}
 	}
 	return backend.Bootstrap{

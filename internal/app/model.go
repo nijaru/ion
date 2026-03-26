@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/nijaru/ion/internal/backend"
+	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
 )
@@ -19,6 +20,16 @@ const (
 )
 
 type streamClosedMsg struct{}
+
+type runtimeSwitcher func(context.Context, *config.Config) (backend.Backend, session.AgentSession, storage.Session, error)
+
+type runtimeSwitchedMsg struct {
+	backend backend.Backend
+	session session.AgentSession
+	storage storage.Session
+	status  string
+	notice  string
+}
 
 type toolMode int
 
@@ -47,9 +58,10 @@ type Model struct {
 	ready  bool
 
 	// Backend and session
-	backend backend.Backend
-	session session.AgentSession
-	storage storage.Session
+	backend  backend.Backend
+	session  session.AgentSession
+	storage  storage.Session
+	switcher runtimeSwitcher
 
 	// In-flight state — Plane B content
 	pending   *session.Entry // streaming assistant, active tool, or active agent
@@ -96,7 +108,7 @@ type Model struct {
 	st styles
 }
 
-func New(b backend.Backend, s storage.Session, workdir, branch, version string) Model {
+func New(b backend.Backend, s storage.Session, workdir, branch, version string, switcher runtimeSwitcher) Model {
 	ta := textarea.New()
 	ta.Placeholder = "Type a message..."
 	ta.Prompt = "› "
@@ -117,6 +129,7 @@ func New(b backend.Backend, s storage.Session, workdir, branch, version string) 
 		backend:    b,
 		session:    b.Session(),
 		storage:    s,
+		switcher:   switcher,
 		composer:   ta,
 		spinner:    spt,
 		status:     boot.Status,
@@ -178,6 +191,42 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case streamClosedMsg:
 		return m, nil
+
+	case runtimeSwitchedMsg:
+		m.backend = msg.backend
+		m.session = msg.session
+		m.storage = msg.storage
+		m.status = msg.status
+		if msg.storage != nil {
+			meta := msg.storage.Meta()
+			m.branch = meta.Branch
+		}
+		m.pending = nil
+		m.pendingApproval = nil
+		m.reasonBuf = ""
+		m.streamBuf = ""
+		m.progress = stateReady
+		m.lastError = ""
+		m.thinking = false
+		m.ctrlCPending = false
+		m.escPending = false
+		m.tokensSent = 0
+		m.tokensReceived = 0
+		m.totalCost = 0
+		if msg.storage != nil {
+			if input, output, cost, err := msg.storage.Usage(context.Background()); err == nil {
+				m.tokensSent = input
+				m.tokensReceived = output
+				m.totalCost = cost
+			}
+		}
+		m.lastToolUseID = ""
+		m.historyIdx = -1
+		m.historyDraft = ""
+		return m, tea.Batch(
+			tea.Printf("%s\n", m.renderEntry(session.Entry{Role: session.System, Content: msg.notice})),
+			m.awaitSessionEvent(),
+		)
 
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)

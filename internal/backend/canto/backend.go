@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 
@@ -13,8 +12,11 @@ import (
 	ccontext "github.com/nijaru/canto/context"
 	"github.com/nijaru/canto/hook"
 	"github.com/nijaru/canto/llm"
+	"github.com/nijaru/canto/llm/providers/anthropic"
 	"github.com/nijaru/canto/llm/providers/gemini"
-	"github.com/nijaru/canto/memory"
+	"github.com/nijaru/canto/llm/providers/ollama"
+	"github.com/nijaru/canto/llm/providers/openai"
+	"github.com/nijaru/canto/llm/providers/openrouter"
 	"github.com/nijaru/canto/runtime"
 	"github.com/nijaru/canto/session"
 	"github.com/nijaru/canto/tool"
@@ -104,7 +106,18 @@ func (b *Backend) Bootstrap() backend.Bootstrap {
 			status = s
 		} else {
 			// New session
-			status = fmt.Sprintf("Connected to %s via Canto", b.Model())
+			provider := b.Provider()
+			model := b.Model()
+			switch {
+			case provider != "" && model != "":
+				status = fmt.Sprintf("Connected to %s/%s via Canto", provider, model)
+			case provider != "":
+				status = fmt.Sprintf("Connected to %s via Canto", provider)
+			case model != "":
+				status = fmt.Sprintf("Connected to %s via Canto", model)
+			default:
+				status = "Connected to Canto"
+			}
 		}
 	}
 	return backend.Bootstrap{
@@ -134,12 +147,12 @@ func (b *Backend) Open(ctx context.Context) error {
 
 	if providerName == "" {
 		return fmt.Errorf(
-			"no provider configured: set provider in ~/.config/ion/config.toml or ION_PROVIDER",
+			"no provider configured: set provider in ~/.ion/state.toml or ION_PROVIDER",
 		)
 	}
 	if modelName == "" {
 		return fmt.Errorf(
-			"no model configured: set model in ~/.config/ion/config.toml or ION_MODEL",
+			"no model configured: set model in ~/.ion/state.toml or ION_MODEL",
 		)
 	}
 
@@ -154,37 +167,13 @@ func (b *Backend) Open(ctx context.Context) error {
 	}
 
 	if b.store == nil {
-		home, _ := os.UserHomeDir()
-		dbPath := filepath.Join(home, ".ion", "ion.db")
-		os.MkdirAll(filepath.Dir(dbPath), 0o755)
-
-		store, err := session.NewSQLiteStore(dbPath)
-		if err != nil {
-			return fmt.Errorf("failed to open canto store: %w", err)
-		}
-		b.store = store
+		return fmt.Errorf("ion store not initialized")
 	}
 
-	// TODO(tk-tg21): route to the correct canto provider based on providerName.
-	// Each provider needs its API key env var and the matching canto/llm/providers/* constructor.
-	// e.g. anthropic -> ANTHROPIC_API_KEY -> anthropic.NewProvider(...)
-	//      openai    -> OPENAI_API_KEY    -> openai.NewProvider(...)
-	//      openrouter-> OPENROUTER_API_KEY-> openrouter.NewProvider(...)
-	//      gemini    -> GEMINI_API_KEY    -> gemini.NewProvider(...)
-	// Until this is implemented, only gemini works.
-	apiKey := os.Getenv("GEMINI_API_KEY")
-	if apiKey == "" {
-		apiKey = os.Getenv("GOOGLE_API_KEY")
+	p, err := newProvider(providerName)
+	if err != nil {
+		return err
 	}
-	if apiKey == "" {
-		return fmt.Errorf(
-			"provider routing not yet implemented (tk-tg21): only gemini supported, set GEMINI_API_KEY",
-		)
-	}
-	p := gemini.NewProvider(catwalk.Provider{
-		ID:     "gemini",
-		APIKey: apiKey,
-	})
 
 	// Initialize Agent
 	// TODO: Load instructions from a config or file
@@ -242,26 +231,18 @@ func (b *Backend) Open(ctx context.Context) error {
 
 	coreStore := b.ionStore.CoreStore()
 	if coreStore == nil {
-		// Fallback for legacy stores
-		home, _ := os.UserHomeDir()
-		dbPath := filepath.Join(home, ".ion", "ion.db")
-		os.MkdirAll(filepath.Dir(dbPath), 0o755)
-		coreStore, _ = memory.NewCoreStore(dbPath)
+		return fmt.Errorf("ion core store not initialized")
 	}
 
-	if coreStore != nil {
-		registry.Register(&ctools.RecallKnowledgeTool{Store: coreStore, Limit: 10})
-		registry.Register(&ctools.MemorizeKnowledgeTool{Store: coreStore, SessionID: sid})
-	}
+	registry.Register(&ctools.RecallKnowledgeTool{Store: coreStore, Limit: 10})
+	registry.Register(&ctools.MemorizeKnowledgeTool{Store: coreStore, SessionID: sid})
 
 	// Add context processors
 	requestProcessors := []ccontext.RequestProcessor{
 		NewFileTagProcessor(cwd),
 	}
 	var processors []ccontext.Processor
-	if coreStore != nil {
-		processors = append(processors, ccontext.KnowledgeMemory(coreStore, "", 5))
-	}
+	processors = append(processors, ccontext.KnowledgeMemory(coreStore, "", 5))
 
 	b.agent = agent.New("ion", instructions, modelName, p, registry,
 		agent.WithRequestProcessors(requestProcessors...),
@@ -323,6 +304,56 @@ func (b *Backend) Open(ctx context.Context) error {
 	)
 
 	return nil
+}
+
+func newProvider(providerName string) (llm.Provider, error) {
+	switch strings.ToLower(strings.TrimSpace(providerName)) {
+	case "anthropic":
+		apiKey := os.Getenv("ANTHROPIC_API_KEY")
+		if apiKey == "" {
+			return nil, fmt.Errorf("ANTHROPIC_API_KEY not set")
+		}
+		return anthropic.NewProvider(catwalk.Provider{
+			ID:     "anthropic",
+			APIKey: apiKey,
+		}), nil
+	case "openai":
+		apiKey := os.Getenv("OPENAI_API_KEY")
+		if apiKey == "" {
+			return nil, fmt.Errorf("OPENAI_API_KEY not set")
+		}
+		return openai.NewProvider(catwalk.Provider{
+			ID:     "openai",
+			APIKey: apiKey,
+		}), nil
+	case "openrouter":
+		apiKey := os.Getenv("OPENROUTER_API_KEY")
+		if apiKey == "" {
+			return nil, fmt.Errorf("OPENROUTER_API_KEY not set")
+		}
+		return openrouter.NewProvider(catwalk.Provider{
+			ID:     "openrouter",
+			APIKey: apiKey,
+		}), nil
+	case "gemini":
+		apiKey := os.Getenv("GEMINI_API_KEY")
+		if apiKey == "" {
+			apiKey = os.Getenv("GOOGLE_API_KEY")
+		}
+		if apiKey == "" {
+			return nil, fmt.Errorf("GEMINI_API_KEY or GOOGLE_API_KEY not set")
+		}
+		return gemini.NewProvider(catwalk.Provider{
+			ID:     "gemini",
+			APIKey: apiKey,
+		}), nil
+	case "ollama":
+		return ollama.NewProvider(catwalk.Provider{
+			ID: "ollama",
+		}), nil
+	default:
+		return nil, fmt.Errorf("unsupported canto provider %q", providerName)
+	}
 }
 
 func (b *Backend) Resume(ctx context.Context, sessionID string) error {
