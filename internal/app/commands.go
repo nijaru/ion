@@ -29,14 +29,10 @@ func (m *Model) handleCommand(input string) tea.Cmd {
 			return cmdError(fmt.Sprintf("failed to load config: %v", err))
 		}
 		cfg.Model = name
-		if err := config.Save(cfg); err != nil {
-			return cmdError(fmt.Sprintf("failed to save config: %v", err))
-		}
 		if cfg.Provider == "" {
-			return m.openProviderPickerWithIntent(pickerPurposeProvider, cfg)
+			return m.openProviderPickerWithConfig(cfg)
 		}
-		notice := session.Entry{Role: session.System, Content: "Switched model to " + name}
-		return m.switchRuntimeCommand(cfg, notice)
+		return m.openModelPickerWithConfig(cfg)
 
 	case "/provider":
 		if len(fields) < 2 {
@@ -48,14 +44,7 @@ func (m *Model) handleCommand(input string) tea.Cmd {
 			return cmdError(fmt.Sprintf("failed to load config: %v", err))
 		}
 		cfg.Provider = name
-		if err := config.Save(cfg); err != nil {
-			return cmdError(fmt.Sprintf("failed to save config: %v", err))
-		}
-		if cfg.Model == "" && !isACPProvider(name) {
-			return m.openModelPickerWithConfig(cfg, pickerPurposeProvider)
-		}
-		notice := session.Entry{Role: session.System, Content: "Switched provider to " + name}
-		return m.switchRuntimeCommand(cfg, notice)
+		return m.openProviderPickerWithConfig(cfg)
 
 	case "/mcp":
 		if len(fields) < 3 || fields[1] != "add" {
@@ -84,17 +73,16 @@ func (m *Model) openProviderPicker() tea.Cmd {
 	if err != nil {
 		return cmdError(fmt.Sprintf("failed to load config: %v", err))
 	}
-	return m.openProviderPickerWithIntent(pickerPurposeProvider, cfg)
+	return m.openProviderPickerWithConfig(cfg)
 }
 
-func (m *Model) openProviderPickerWithIntent(intent pickerPurpose, cfg *config.Config) tea.Cmd {
+func (m *Model) openProviderPickerWithConfig(cfg *config.Config) tea.Cmd {
 	items := providerItems()
 	m.picker = &pickerState{
 		title:   "Pick a provider",
 		items:   items,
 		index:   pickerIndex(items, cfg.Provider),
 		purpose: pickerPurposeProvider,
-		intent:  intent,
 		cfg:     cfg,
 	}
 	return nil
@@ -105,12 +93,12 @@ func (m *Model) openModelPicker() tea.Cmd {
 	if err != nil {
 		return cmdError(fmt.Sprintf("failed to load config: %v", err))
 	}
-	return m.openModelPickerWithConfig(cfg, pickerPurposeModel)
+	return m.openModelPickerWithConfig(cfg)
 }
 
-func (m *Model) openModelPickerWithConfig(cfg *config.Config, intent pickerPurpose) tea.Cmd {
+func (m *Model) openModelPickerWithConfig(cfg *config.Config) tea.Cmd {
 	if cfg.Provider == "" {
-		return m.openProviderPickerWithIntent(intent, cfg)
+		return m.openProviderPickerWithConfig(cfg)
 	}
 	items, err := modelItemsForProvider(cfg.Provider)
 	if err != nil {
@@ -124,7 +112,6 @@ func (m *Model) openModelPickerWithConfig(cfg *config.Config, intent pickerPurpo
 		items:   items,
 		index:   pickerIndex(items, cfg.Model),
 		purpose: pickerPurposeModel,
-		intent:  intent,
 		cfg:     cfg,
 	}
 	return nil
@@ -134,6 +121,17 @@ func (m *Model) handlePickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc", "ctrl+c":
 		m.picker = nil
+		return *m, nil
+	case "tab", "shift+tab":
+		if m.picker.purpose == pickerPurposeProvider {
+			if m.picker.cfg != nil && m.picker.cfg.Provider != "" {
+				return *m, m.openModelPickerWithConfig(m.picker.cfg)
+			}
+			return *m, nil
+		}
+		if m.picker.purpose == pickerPurposeModel {
+			return *m, m.openProviderPickerWithConfig(m.picker.cfg)
+		}
 		return *m, nil
 	case "up":
 		if m.picker.index > 0 {
@@ -160,23 +158,16 @@ func (m *Model) commitPickerSelection() (Model, tea.Cmd) {
 
 	selected := m.picker.items[m.picker.index]
 	cfg := *m.picker.cfg
-	intent := m.picker.intent
 
 	switch m.picker.purpose {
 	case pickerPurposeProvider:
 		cfg.Provider = selected.Value
+		m.picker = nil
+		cfg.Model = ""
 		if err := config.Save(&cfg); err != nil {
 			return *m, cmdError(fmt.Sprintf("failed to save config: %v", err))
 		}
-		m.picker = nil
-		if intent == pickerPurposeModel {
-			return *m, m.openModelPickerWithConfig(&cfg, pickerPurposeModel)
-		}
-		if cfg.Model == "" && !isACPProvider(selected.Value) {
-			return *m, m.openModelPickerWithConfig(&cfg, pickerPurposeProvider)
-		}
-		notice := session.Entry{Role: session.System, Content: "Switched provider to " + selected.Value}
-		return *m, m.switchRuntimeCommand(&cfg, notice)
+		return *m, m.openModelPickerWithConfig(&cfg)
 
 	case pickerPurposeModel:
 		cfg.Model = selected.Value

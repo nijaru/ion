@@ -49,7 +49,6 @@ type pickerState struct {
 	items   []pickerItem
 	index   int
 	purpose pickerPurpose
-	intent  pickerPurpose
 	cfg     *config.Config
 }
 

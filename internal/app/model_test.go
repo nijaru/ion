@@ -300,7 +300,16 @@ func TestHandleCommandSwitchesRuntime(t *testing.T) {
 		return newBackend, newBackend.Session(), newStorage, nil
 	})
 
-	cmd := model.handleCommand("/model gpt-4.1")
+	model.picker = &pickerState{
+		title:   "Pick a model for openai",
+		items:   []pickerItem{{Label: "gpt-4.1", Value: "gpt-4.1"}},
+		index:   0,
+		purpose: pickerPurposeModel,
+		cfg:     &config.Config{Provider: "openai"},
+	}
+
+	updated, cmd := model.handlePickerKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated
 	msg := cmd()
 
 	switchedMsg, ok := msg.(runtimeSwitchedMsg)
@@ -308,8 +317,8 @@ func TestHandleCommandSwitchesRuntime(t *testing.T) {
 		t.Fatalf("expected runtimeSwitchedMsg, got %T", msg)
 	}
 
-	updated, _ := model.Update(switchedMsg)
-	model = updated.(Model)
+	next, _ := model.Update(switchedMsg)
+	model = next.(Model)
 
 	if !switched {
 		t.Fatal("expected runtime switch callback to be invoked")
