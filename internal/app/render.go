@@ -235,6 +235,8 @@ func (m Model) progressLine() string {
 }
 
 // headerLine returns the startup banner printed to scrollback at launch.
+// Line 1: "ion v0.0.0"
+// Line 2: "~/path/to/dir · branch"
 func (m Model) headerLine() string {
 	sep := m.st.dim.Render(" · ")
 
@@ -244,14 +246,19 @@ func (m Model) headerLine() string {
 		dir = "~" + dir[len(home):]
 	}
 
-	parts := []string{
-		m.st.cyan.Render("ion") + m.st.dim.Render(" v0.0.0"),
-		m.st.dim.Render(dir),
+	v := m.version
+	if v == "" {
+		v = "dev"
 	}
+	line1 := m.st.cyan.Render("ion") + m.st.dim.Render(" "+v)
+
+	pathParts := []string{m.st.dim.Render(dir)}
 	if m.branch != "" {
-		parts = append(parts, m.st.dim.Render(m.branch))
+		pathParts = append(pathParts, m.st.dim.Render(m.branch))
 	}
-	return strings.Join(parts, sep)
+	line2 := strings.Join(pathParts, sep)
+
+	return line1 + "\n" + line2
 }
 
 // statusLine renders the bottom info bar.

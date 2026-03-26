@@ -58,6 +58,12 @@ type Session interface {
 	// Entries returns all entries stored in the session so far.
 	Entries(ctx context.Context) ([]session.Entry, error)
 
+	// LastStatus returns the most recent status persisted in the session.
+	LastStatus(ctx context.Context) (string, error)
+
+	// Usage returns the total tokens and cost accumulated in the session.
+	Usage(ctx context.Context) (int, int, float64, error)
+
 	// Close finalizes and closes any open file handles for the session.
 	Close() error
 }
@@ -110,6 +116,12 @@ type (
 		TS      int64  `json:"ts"`
 	}
 
+	Status struct {
+		Type   string `json:"type"` // "status"
+		Status string `json:"status"`
+		TS     int64  `json:"ts"`
+	}
+
 	Assistant struct {
 		Type    string  `json:"type"` // "assistant"
 		Content []Block `json:"content"`
@@ -130,6 +142,14 @@ type (
 		Content   string `json:"content"`
 		IsError   bool   `json:"is_error"`
 		TS        int64  `json:"ts"`
+	}
+
+	TokenUsage struct {
+		Type   string  `json:"type"` // "token_usage"
+		Input  int     `json:"input"`
+		Output int     `json:"output"`
+		Cost   float64 `json:"cost"`
+		TS     int64   `json:"ts"`
 	}
 
 	Block struct {

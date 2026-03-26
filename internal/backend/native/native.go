@@ -10,6 +10,8 @@ import (
 	"google.golang.org/api/option"
 
 	"github.com/nijaru/ion/internal/backend"
+	"github.com/nijaru/ion/internal/backend/registry"
+	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
 )
@@ -21,6 +23,37 @@ type Backend struct {
 	cs      *genai.ChatSession
 	storage storage.Store
 	sess    storage.Session
+	cfg     *config.Config
+}
+
+func (b *Backend) SetConfig(cfg *config.Config) {
+	b.cfg = cfg
+}
+
+func (b *Backend) Provider() string {
+	if b.cfg != nil && b.cfg.Provider != "" {
+		return b.cfg.Provider
+	}
+	return "gemini"
+}
+
+func (b *Backend) Model() string {
+	if b.cfg != nil && b.cfg.Model != "" {
+		return b.cfg.Model
+	}
+	return os.Getenv("ION_MODEL")
+}
+
+func (b *Backend) ContextLimit() int {
+	if b.cfg != nil && b.cfg.ContextLimit > 0 {
+		return b.cfg.ContextLimit
+	}
+	provider := b.Provider()
+	model := b.Model()
+	if meta, ok := registry.GetMetadata(context.Background(), provider, model); ok {
+		return meta.ContextLimit
+	}
+	return 0
 }
 
 func (b *Backend) SetStore(s storage.Store) {
@@ -60,23 +93,24 @@ func (b *Backend) Name() string {
 	return "native"
 }
 
-func (b *Backend) Provider() string {
-	return "gemini"
-}
-
-func (b *Backend) Model() string {
-	return os.Getenv("ION_MODEL")
+func (b *Backend) Session() session.AgentSession {
+	return b
 }
 
 func (b *Backend) Bootstrap() backend.Bootstrap {
+	status := "Ready"
+	if b.sess != nil {
+		if s, err := b.sess.LastStatus(context.Background()); err == nil && s != "" {
+			status = s
+		} else {
+			// New session
+			status = fmt.Sprintf("Connected to %s", b.Model())
+		}
+	}
 	return backend.Bootstrap{
 		Entries: []session.Entry{},
-		Status:  "Ready",
+		Status:  status,
 	}
-}
-
-func (b *Backend) Session() session.AgentSession {
-	return b
 }
 
 func (b *Backend) Open(ctx context.Context) error {
@@ -94,15 +128,11 @@ func (b *Backend) Open(ctx context.Context) error {
 	}
 	b.client = client
 
-	modelName := os.Getenv("ION_MODEL")
-	if modelName == "" {
-		modelName = "openrouter minimax/minimax-m2.7"
-	}
+	modelName := b.Model()
 
 	b.model = client.GenerativeModel(modelName)
 	b.cs = b.model.StartChat()
 
-	b.events <- session.StatusChanged{Status: fmt.Sprintf("Connected to %s", modelName)}
 	return nil
 }
 

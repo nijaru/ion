@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/nijaru/ion/internal/backend"
+	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
 )
@@ -15,6 +16,11 @@ type Backend struct {
 	storage storage.Store
 	sess    storage.Session
 	script  []ScriptStep
+	cfg     *config.Config
+}
+
+func (b *Backend) SetConfig(cfg *config.Config) {
+	b.cfg = cfg
 }
 
 type ScriptStep struct {
@@ -58,11 +64,24 @@ func (b *Backend) Name() string {
 }
 
 func (b *Backend) Provider() string {
+	if b.cfg != nil && b.cfg.Provider != "" {
+		return b.cfg.Provider
+	}
 	return "fake"
 }
 
 func (b *Backend) Model() string {
+	if b.cfg != nil && b.cfg.Model != "" {
+		return b.cfg.Model
+	}
 	return "fake-model"
+}
+
+func (b *Backend) ContextLimit() int {
+	if b.cfg != nil {
+		return b.cfg.ContextLimit
+	}
+	return 0
 }
 
 func (b *Backend) Bootstrap() backend.Bootstrap {

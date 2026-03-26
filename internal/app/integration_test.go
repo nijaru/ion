@@ -41,7 +41,7 @@ func TestIntegrationFullLoop(t *testing.T) {
 	})
 
 	// 3. Setup Model
-	model := New(b, sess)
+	model := New(b, sess, "/tmp/test", "main", "dev")
 
 	// 4. Submit a turn
 	model.composer.SetValue("hi")
@@ -129,7 +129,7 @@ func TestMultiplexedSwarms(t *testing.T) {
 		{Event: session.TurnFinished{}, Delay: 0},
 	})
 
-	model := New(b, sess)
+	model := New(b, sess, "/tmp/test", "main", "dev")
 
 	// Manually trigger turn
 	b.SubmitTurn(context.Background(), "status check")

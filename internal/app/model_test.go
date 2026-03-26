@@ -5,9 +5,10 @@ import (
 	"strings"
 	"testing"
 
-	tea "charm.land/bubbletea/v2"
+	"charm.land/bubbletea/v2"
 
 	"github.com/nijaru/ion/internal/backend"
+	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
 )
@@ -16,9 +17,10 @@ type stubBackend struct {
 	sess *stubSession
 }
 
-func (b stubBackend) Name() string     { return "stub" }
-func (b stubBackend) Provider() string { return "stub" }
-func (b stubBackend) Model() string    { return "stub-model" }
+func (b stubBackend) Name() string      { return "stub" }
+func (b stubBackend) Provider() string  { return "stub" }
+func (b stubBackend) Model() string     { return "stub-model" }
+func (b stubBackend) ContextLimit() int { return 0 }
 
 func (b stubBackend) Bootstrap() backend.Bootstrap {
 	return backend.Bootstrap{
@@ -32,6 +34,8 @@ func (b stubBackend) Session() session.AgentSession { return b.sess }
 func (b stubBackend) SetStore(s storage.Store) {}
 
 func (b stubBackend) SetSession(s storage.Session) {}
+
+func (b stubBackend) SetConfig(cfg *config.Config) {}
 
 type stubSession struct {
 	events chan session.Event
@@ -54,7 +58,7 @@ func readyModel(t *testing.T) Model {
 	t.Helper()
 	sess := &stubSession{events: make(chan session.Event)}
 	b := stubBackend{sess: sess}
-	model := New(b, nil)
+	model := New(b, nil, "/tmp/test", "main", "dev")
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	ready, ok := updated.(Model)
 	if !ok {

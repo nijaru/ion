@@ -15,11 +15,19 @@ import (
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/backend/canto"
 	"github.com/nijaru/ion/internal/backend/native"
+	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/storage"
 )
 
+// version is set at build time via -ldflags "-X main.version=vX.Y.Z".
+var version = "dev"
+
 func main() {
-	continueFlag := flag.Bool("continue", false, "Continue the most recent session in this directory")
+	continueFlag := flag.Bool(
+		"continue",
+		false,
+		"Continue the most recent session in this directory",
+	)
 	resumeFlag := flag.String("resume", "", "Resume a specific session by ID")
 	backendFlag := flag.String("backend", "canto", "Backend to use (canto, native)")
 	flag.Parse()
@@ -42,9 +50,17 @@ func main() {
 	}
 	b.SetStore(store)
 
+	// Load config
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to load config: %v\n", err)
+		os.Exit(1)
+	}
+	b.SetConfig(cfg)
+
 	ctx := context.Background()
 	cwd, _ := os.Getwd()
-	
+
 	var sess storage.Session
 	var sessionID string
 
@@ -70,11 +86,16 @@ func main() {
 		}
 	} else {
 		// Open new session
-		modelName := os.Getenv("ION_MODEL")
-		if modelName == "" {
-			modelName = "openrouter minimax/minimax-m2.7"
+		modelName := cfg.Model
+		if cfg.Provider != "" && !strings.Contains(modelName, "/") {
+			modelName = cfg.Provider + " " + cfg.Model
 		}
-		
+
+		if modelName == "" {
+			fmt.Fprintf(os.Stderr, "ION_MODEL environment variable or config.toml must be set (e.g. 'openrouter minimax/minimax-m2.7')\n")
+			os.Exit(1)
+		}
+
 		sess, err = store.OpenSession(ctx, cwd, modelName, currentBranch())
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "failed to open session: %v\n", err)
@@ -87,7 +108,7 @@ func main() {
 		}
 	}
 
-	p := tea.NewProgram(app.New(b, sess))
+	p := tea.NewProgram(app.New(b, sess, cwd, currentBranch(), version))
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "ion error: %v\n", err)
 		os.Exit(1)

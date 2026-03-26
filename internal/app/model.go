@@ -2,9 +2,6 @@ package app
 
 import (
 	"context"
-	"os"
-	"os/exec"
-	"strings"
 	"time"
 
 	"charm.land/bubbles/v2/spinner"
@@ -92,13 +89,14 @@ type Model struct {
 	status  string
 	workdir string
 	branch  string
+	version string
 	mode    toolMode
 
 	// Styles (initialized once in New)
 	st styles
 }
 
-func New(b backend.Backend, s storage.Session) Model {
+func New(b backend.Backend, s storage.Session, workdir, branch, version string) Model {
 	ta := textarea.New()
 	ta.Placeholder = "Type a message..."
 	ta.Prompt = "› "
@@ -122,8 +120,9 @@ func New(b backend.Backend, s storage.Session) Model {
 		composer:   ta,
 		spinner:    spt,
 		status:     boot.Status,
-		workdir:    currentWorkdir(),
-		branch:     currentBranch(),
+		workdir:    workdir,
+		branch:     branch,
+		version:    version,
 		historyIdx: -1,
 		st:         st,
 	}
@@ -140,13 +139,17 @@ func New(b backend.Backend, s storage.Session) Model {
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(
+	cmds := []tea.Cmd{
 		tea.Printf("%s\n", m.headerLine()),
 		textarea.Blink,
 		m.spinner.Tick,
 		m.composer.Focus(),
 		m.awaitSessionEvent(),
-	)
+	}
+	if m.status != "" {
+		cmds = append(cmds, tea.Printf("%s\n", m.st.dim.Render("  "+m.status)))
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m Model) awaitSessionEvent() tea.Cmd {
@@ -207,19 +210,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.layout()
 	}
 	return m, cmd
-}
-
-func currentWorkdir() string {
-	cwd, _ := os.Getwd()
-	return cwd
-}
-
-func currentBranch() string {
-	out, err := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD").Output()
-	if err != nil {
-		return "unknown"
-	}
-	return strings.TrimSpace(string(out))
 }
 
 func ifthen[T any](cond bool, a, b T) T {

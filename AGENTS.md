@@ -16,14 +16,30 @@ ion is a specialized coding application built on top of the **canto** framework.
 | **2** | **Logic** | llm (Provider interface, Token counting, Cost) |
 | **1** | **Transport** | http (API clients, SSE, JSON-RPC) |
 
-## Active Architecture
+## What ion is
+
+A standalone terminal coding agent — same category as Claude Code, OpenCode, pi. Talks directly to LLM APIs, manages its own tools/memory/sessions. **Not a wrapper. Not a bridge.**
+
+**Primary path** (all new features go here first):
+```
+ion TUI → CantoBackend → canto framework → provider API (Anthropic, OpenAI, OpenRouter)
+```
+
+**Secondary path** (subscription access only, best-effort feature parity):
+```
+ion TUI → ACPBackend → ACP JSON-RPC 2.0 → [claude | gemini | gh] CLI
+```
+
+ACP is for users whose subscription ToS prohibits direct API use. It does not drive ion's design. When something is unclear, default to making it work in native mode first.
+
+## Active Components
 
 | Component | Purpose |
 | --------- | ------- |
 | `internal/app` | Bubble Tea v2 host UI: transcript, composer, viewport, and footer. |
 | `AgentSession` | Canonical host-facing boundary (SubmitTurn, Events, Cancel). |
-| `CantoBackend` | The primary agent core powered by the `canto` framework. |
-| `ACPAgentSession` | Future support for external agents (Claude Code, etc.) via protocol. |
+| `CantoBackend` | Primary agent core — canto framework, full feature set. |
+| `ACPBackend` | Subscription bridge — spawns CLI, bridges via ACP JSON-RPC 2.0. |
 | `archive/rust/` | Historical reference only; not active implementation guidance. |
 
 ## Project Structure
@@ -73,22 +89,17 @@ Use the `go-expert` skill for full guidance. Key modern idioms:
 
 ## Reference
 
-**Active design docs:**
+**Start here:**
 
-- `ai/design/go-host-architecture.md`
-- `ai/design/session-interface.md`
-- `ai/design/acp-integration.md`
-- `ai/design/native-ion-agent.md`
-- `ai/design/memory-and-context.md`
-- `ai/design/subagents-swarms-rlm.md`
-- `ai/design/rewrite-roadmap.md`
+- `ai/STATUS.md` — current state, open questions, key file index
+- `ai/DESIGN.md` — architecture overview and event flow
+- `ai/DECISIONS.md` — append-only architectural decision log
 
-**Retained research themes:**
+**Topic specs (`ai/specs/`):**
 
-- memory and context
-- session persistence
-- tools and MCP/ACP integration
-- subagents, swarms, and RLM patterns
+- `subscription-providers.md` — provider table, ToS rationale, backend selection logic
+- `acp-integration.md` — ACP protocol, event mapping, known gaps
+- `config-and-metadata.md` — status line specs, config source of truth, model metadata rules
 
 **Historical Rust docs:**
 

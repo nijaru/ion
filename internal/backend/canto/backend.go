@@ -22,6 +22,8 @@ import (
 	ctools "github.com/nijaru/canto/x/tools"
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/backend/canto/tools"
+	"github.com/nijaru/ion/internal/backend/registry"
+	"github.com/nijaru/ion/internal/config"
 	ionsession "github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
 )
@@ -31,6 +33,7 @@ type Backend struct {
 	store  session.Store
 	agent  *agent.BaseAgent
 	events chan ionsession.Event
+	cfg    *config.Config
 
 	ionStore storage.Store
 	sess     storage.Session
@@ -51,15 +54,20 @@ func New() *Backend {
 		mcpClients: make([]*mcp.Client, 0),
 	}
 }
+
 func (b *Backend) Name() string {
 	return "canto"
 }
 
+func (b *Backend) SetConfig(cfg *config.Config) {
+	b.cfg = cfg
+}
+
 func (b *Backend) Provider() string {
-	m := os.Getenv("ION_MODEL")
-	if m == "" {
-		m = "openrouter minimax/minimax-m2.7"
+	if b.cfg != nil && b.cfg.Provider != "" {
+		return b.cfg.Provider
 	}
+	m := os.Getenv("ION_MODEL")
 	if i := strings.IndexByte(m, ' '); i > 0 {
 		return m[:i]
 	}
@@ -67,22 +75,44 @@ func (b *Backend) Provider() string {
 }
 
 func (b *Backend) Model() string {
-	m := os.Getenv("ION_MODEL")
-	if m == "" {
-		m = "openrouter minimax/minimax-m2.7"
+	if b.cfg != nil && b.cfg.Model != "" {
+		return b.cfg.Model
 	}
+	m := os.Getenv("ION_MODEL")
 	if i := strings.IndexByte(m, ' '); i > 0 {
 		return strings.TrimSpace(m[i+1:])
 	}
 	return m
 }
 
+func (b *Backend) ContextLimit() int {
+	if b.cfg != nil && b.cfg.ContextLimit > 0 {
+		return b.cfg.ContextLimit
+	}
+	provider := b.Provider()
+	model := b.Model()
+	if meta, ok := registry.GetMetadata(context.Background(), provider, model); ok {
+		return meta.ContextLimit
+	}
+	return 0
+}
+
 func (b *Backend) Bootstrap() backend.Bootstrap {
+	status := "Ready"
+	if b.sess != nil {
+		if s, err := b.sess.LastStatus(context.Background()); err == nil && s != "" {
+			status = s
+		} else {
+			// New session
+			status = fmt.Sprintf("Connected to %s via Canto", b.Model())
+		}
+	}
 	return backend.Bootstrap{
 		Entries: []ionsession.Entry{},
-		Status:  "Ready",
+		Status:  status,
 	}
 }
+
 func (b *Backend) Session() ionsession.AgentSession {
 	return b
 }
@@ -99,18 +129,22 @@ func (b *Backend) Open(ctx context.Context) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	apiKey := os.Getenv("GEMINI_API_KEY")
-	if apiKey == "" {
-		apiKey = os.Getenv("GOOGLE_API_KEY")
+	providerName := b.Provider()
+	modelName := b.Model()
+
+	if providerName == "" {
+		return fmt.Errorf(
+			"no provider configured: set provider in ~/.config/ion/config.toml or ION_PROVIDER",
+		)
 	}
-	if apiKey == "" {
-		return fmt.Errorf("GEMINI_API_KEY or GOOGLE_API_KEY not set")
+	if modelName == "" {
+		return fmt.Errorf(
+			"no model configured: set model in ~/.config/ion/config.toml or ION_MODEL",
+		)
 	}
 
-	modelName := os.Getenv("ION_MODEL")
-	if modelName == "" {
-		modelName = "openrouter minimax/minimax-m2.7"
-	}
+	// Pre-fetch metadata for the current model
+	_, _ = registry.GetMetadata(ctx, providerName, modelName)
 
 	// Initialize Canto store (SQLite) from ionStore if possible
 	if b.ionStore != nil {
@@ -122,7 +156,7 @@ func (b *Backend) Open(ctx context.Context) error {
 	if b.store == nil {
 		home, _ := os.UserHomeDir()
 		dbPath := filepath.Join(home, ".ion", "ion.db")
-		os.MkdirAll(filepath.Dir(dbPath), 0755)
+		os.MkdirAll(filepath.Dir(dbPath), 0o755)
 
 		store, err := session.NewSQLiteStore(dbPath)
 		if err != nil {
@@ -131,7 +165,22 @@ func (b *Backend) Open(ctx context.Context) error {
 		b.store = store
 	}
 
-	// Initialize Provider
+	// TODO(tk-tg21): route to the correct canto provider based on providerName.
+	// Each provider needs its API key env var and the matching canto/llm/providers/* constructor.
+	// e.g. anthropic -> ANTHROPIC_API_KEY -> anthropic.NewProvider(...)
+	//      openai    -> OPENAI_API_KEY    -> openai.NewProvider(...)
+	//      openrouter-> OPENROUTER_API_KEY-> openrouter.NewProvider(...)
+	//      gemini    -> GEMINI_API_KEY    -> gemini.NewProvider(...)
+	// Until this is implemented, only gemini works.
+	apiKey := os.Getenv("GEMINI_API_KEY")
+	if apiKey == "" {
+		apiKey = os.Getenv("GOOGLE_API_KEY")
+	}
+	if apiKey == "" {
+		return fmt.Errorf(
+			"provider routing not yet implemented (tk-tg21): only gemini supported, set GEMINI_API_KEY",
+		)
+	}
 	p := gemini.NewProvider(catwalk.Provider{
 		ID:     "gemini",
 		APIKey: apiKey,
@@ -196,7 +245,7 @@ func (b *Backend) Open(ctx context.Context) error {
 		// Fallback for legacy stores
 		home, _ := os.UserHomeDir()
 		dbPath := filepath.Join(home, ".ion", "ion.db")
-		os.MkdirAll(filepath.Dir(dbPath), 0755)
+		os.MkdirAll(filepath.Dir(dbPath), 0o755)
 		coreStore, _ = memory.NewCoreStore(dbPath)
 	}
 
@@ -223,53 +272,59 @@ func (b *Backend) Open(ctx context.Context) error {
 	b.runner = runtime.NewRunner(b.store, b.agent)
 
 	// Register the global Permission Policy Hook
-	b.runner.Hooks.Register(hook.NewFunc("ion-policy", []hook.Event{hook.EventPreToolUse}, func(ctx context.Context, payload *hook.Payload) *hook.Result {
-		toolName, _ := payload.Data["tool"].(string)
-		args, _ := payload.Data["args"].(string)
+	b.runner.Hooks.Register(
+		hook.NewFunc(
+			"ion-policy",
+			[]hook.Event{hook.EventPreToolUse},
+			func(ctx context.Context, payload *hook.Payload) *hook.Result {
+				toolName, _ := payload.Data["tool"].(string)
+				args, _ := payload.Data["args"].(string)
 
-		policy, reason := b.policy.Authorize(ctx, toolName, args)
-		switch policy {
-		case backend.PolicyAllow:
-			return &hook.Result{Action: hook.ActionProceed}
-		case backend.PolicyDeny:
-			return &hook.Result{
-				Action: hook.ActionBlock,
-				Error:  fmt.Errorf("policy denied: %s", reason),
-			}
-		case backend.PolicyAsk:
-			id := ionsession.ShortID()
-			description := fmt.Sprintf("Tool: %s\nArgs: %s\n\n%s", toolName, args, reason)
-
-			// Send approval request to TUI
-			b.events <- ionsession.ApprovalRequest{
-				RequestID:   id,
-				Description: description,
-				ToolName:    toolName,
-				Args:        args,
-			}
-
-			// Wait for approval via ApprovalManager
-			ch := b.approver.Request(id)
-			select {
-			case <-ctx.Done():
-				return &hook.Result{Action: hook.ActionBlock, Error: ctx.Err()}
-			case approved := <-ch:
-				if !approved {
+				policy, reason := b.policy.Authorize(ctx, toolName, args)
+				switch policy {
+				case backend.PolicyAllow:
+					return &hook.Result{Action: hook.ActionProceed}
+				case backend.PolicyDeny:
 					return &hook.Result{
 						Action: hook.ActionBlock,
-						Error:  fmt.Errorf("user denied tool execution"),
+						Error:  fmt.Errorf("policy denied: %s", reason),
 					}
-				}
-				return &hook.Result{Action: hook.ActionProceed}
-			}
-		default:
-			return &hook.Result{Action: hook.ActionProceed}
-		}
-	}))
+				case backend.PolicyAsk:
+					id := ionsession.ShortID()
+					description := fmt.Sprintf("Tool: %s\nArgs: %s\n\n%s", toolName, args, reason)
 
-	b.events <- ionsession.StatusChanged{Status: fmt.Sprintf("Connected to %s via Canto", modelName)}
+					// Send approval request to TUI
+					b.events <- ionsession.ApprovalRequest{
+						RequestID:   id,
+						Description: description,
+						ToolName:    toolName,
+						Args:        args,
+					}
+
+					// Wait for approval via ApprovalManager
+					ch := b.approver.Request(id)
+					select {
+					case <-ctx.Done():
+						return &hook.Result{Action: hook.ActionBlock, Error: ctx.Err()}
+					case approved := <-ch:
+						if !approved {
+							return &hook.Result{
+								Action: hook.ActionBlock,
+								Error:  fmt.Errorf("user denied tool execution"),
+							}
+						}
+						return &hook.Result{Action: hook.ActionProceed}
+					}
+				default:
+					return &hook.Result{Action: hook.ActionProceed}
+				}
+			},
+		),
+	)
+
 	return nil
 }
+
 func (b *Backend) Resume(ctx context.Context, sessionID string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -325,6 +380,13 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 			if chunk.Content != "" {
 				b.events <- ionsession.AssistantDelta{Delta: chunk.Content}
 			}
+			if chunk.Usage != nil {
+				b.events <- ionsession.TokenUsage{
+					Input:  chunk.Usage.InputTokens,
+					Output: chunk.Usage.OutputTokens,
+					Cost:   chunk.Usage.Cost,
+				}
+			}
 		})
 		if err != nil && err != context.Canceled {
 			b.events <- ionsession.Error{Err: err}
@@ -333,6 +395,7 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 
 	return nil
 }
+
 func (b *Backend) translateEvents(ctx context.Context, evCh <-chan session.Event) {
 	for {
 		select {

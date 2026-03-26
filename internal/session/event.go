@@ -89,7 +89,7 @@ type ToolOutputDelta struct {
 
 func (e ToolOutputDelta) isEvent() {}
 
-// VerificationResult fires when an objective function (test, benchmark, 
+// VerificationResult fires when an objective function (test, benchmark,
 // compile check) completes. Essential for RLM loops.
 type VerificationResult struct {
 	Base
@@ -179,3 +179,14 @@ type ChildFailed struct {
 }
 
 func (e ChildFailed) isEvent() {}
+
+// TokenUsage fires when the agent reports its token consumption.
+type TokenUsage struct {
+	Base
+	Input  int     `json:"input"`
+	Output int     `json:"output"`
+	Total  int     `json:"total"`
+	Cost   float64 `json:"cost,omitempty"`
+}
+
+func (e TokenUsage) isEvent() {}

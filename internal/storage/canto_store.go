@@ -23,7 +23,7 @@ type cantoStore struct {
 	db     *sql.DB // Direct access for inputs and index
 }
 
-	func NewCantoStore(root string) (Store, error) {
+func NewCantoStore(root string) (Store, error) {
 	if err := os.MkdirAll(root, 0755); err != nil {
 		return nil, err
 	}
@@ -86,8 +86,8 @@ func (s *cantoStore) init() error {
 }
 func (s *cantoStore) OpenSession(ctx context.Context, cwd, model, branch string) (Session, error) {
 	id := fmt.Sprintf("%d-%s", time.Now().Unix(), ionsession.ShortID())
-	
-	_, err := s.db.ExecContext(ctx, 
+
+	_, err := s.db.ExecContext(ctx,
 		"INSERT INTO session_meta (id, cwd, model, branch, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
 		id, cwd, model, branch, time.Now().Unix(), time.Now().Unix())
 	if err != nil {
@@ -125,7 +125,7 @@ func (s *cantoStore) ResumeSession(ctx context.Context, id string) (Session, err
 }
 
 func (s *cantoStore) ListSessions(ctx context.Context, cwd string) ([]SessionInfo, error) {
-	rows, err := s.db.QueryContext(ctx, 
+	rows, err := s.db.QueryContext(ctx,
 		"SELECT id, model, branch, created_at, updated_at, last_preview FROM session_meta WHERE cwd = ? ORDER BY updated_at DESC", cwd)
 	if err != nil {
 		return nil, err
@@ -189,7 +189,7 @@ func (s *cantoStore) CoreStore() *memory.CoreStore {
 }
 
 func (s *cantoStore) UpdateSession(ctx context.Context, si SessionInfo) error {
-	_, err := s.db.ExecContext(ctx, "UPDATE session_meta SET updated_at = ?, last_preview = ? WHERE id = ?", 
+	_, err := s.db.ExecContext(ctx, "UPDATE session_meta SET updated_at = ?, last_preview = ? WHERE id = ?",
 		time.Now().Unix(), si.LastPreview, si.ID)
 	return err
 }
@@ -242,6 +242,7 @@ func (s *cantoStore) DeleteKnowledge(ctx context.Context, id string) error {
 	_, err := s.db.ExecContext(ctx, "DELETE FROM knowledge WHERE id = ?", id)
 	return err
 }
+
 type cantoSession struct {
 	id    string
 	store *cantoStore
@@ -264,10 +265,10 @@ func (s *cantoSession) Append(ctx context.Context, event any) error {
 	// Actually, when using CantoBackend, it will save its own events to the same SQLite store.
 	// This Append method is used by the UI model to persist User inputs and Assistant responses
 	// when NOT using Canto (e.g. in the old Native backend).
-	
+
 	// If we are using Canto, the CantoBackend will handle Appending to its own session.
 	// But the UI still calls this.
-	
+
 	var preview string
 	switch e := event.(type) {
 	case User:
@@ -310,6 +311,18 @@ func (s *cantoSession) Append(ctx context.Context, event any) error {
 			"is_error":    e.IsError,
 		})
 		s.store.canto.Save(ctx, ev)
+	case Status:
+		ev := session.NewEvent(s.id, session.EventType("status_changed"), map[string]any{
+			"status": e.Status,
+		})
+		s.store.canto.Save(ctx, ev)
+	case TokenUsage:
+		ev := session.NewEvent(s.id, session.EventType("token_usage"), map[string]any{
+			"input":  e.Input,
+			"output": e.Output,
+			"cost":   e.Cost,
+		})
+		s.store.canto.Save(ctx, ev)
 	}
 
 	if preview != "" {
@@ -317,6 +330,26 @@ func (s *cantoSession) Append(ctx context.Context, event any) error {
 	}
 
 	return nil
+}
+
+func (s *cantoSession) LastStatus(ctx context.Context) (string, error) {
+	sess, err := s.store.canto.Load(ctx, s.id)
+	if err != nil {
+		return "", err
+	}
+
+	var lastStatus string
+	for _, ev := range sess.Events() {
+		if ev.Type == session.EventType("status_changed") {
+			var data struct {
+				Status string `json:"status"`
+			}
+			if err := ev.UnmarshalData(&data); err == nil {
+				lastStatus = data.Status
+			}
+		}
+	}
+	return lastStatus, nil
 }
 
 func (s *cantoSession) Entries(ctx context.Context) ([]ionsession.Entry, error) {
@@ -372,6 +405,34 @@ func (s *cantoSession) Entries(ctx context.Context) ([]ionsession.Entry, error) 
 		}
 	}
 	return entries, nil
+}
+
+func (s *cantoSession) Usage(ctx context.Context) (int, int, float64, error) {
+	sess, err := s.store.canto.Load(ctx, s.id)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+
+	var input, output int
+	var cost float64
+
+	for _, ev := range sess.Events() {
+		// Use literal string for TokenUsage event type
+		if ev.Type == "token_usage" {
+			var data struct {
+				Input  int     `json:"input"`
+				Output int     `json:"output"`
+				Cost   float64 `json:"cost"`
+			}
+			if err := ev.UnmarshalData(&data); err == nil {
+				input += data.Input
+				output += data.Output
+				cost += data.Cost
+			}
+		}
+	}
+
+	return input, output, cost, nil
 }
 
 func (s *cantoSession) Close() error {

@@ -15,8 +15,8 @@ import (
 
 	"github.com/nijaru/canto/memory"
 	"github.com/nijaru/ion/internal/session"
-	"sync"
 	_ "modernc.org/sqlite"
+	"sync"
 )
 
 type fileStore struct {
@@ -362,6 +362,8 @@ func (s *fileSession) Append(ctx context.Context, event any) error {
 			}
 		}
 		isMsg = true
+	case TokenUsage:
+		// Just save to log, no preview update
 	}
 
 	if isMsg {
@@ -424,6 +426,73 @@ func (s *fileSession) Entries(ctx context.Context) ([]session.Entry, error) {
 	}
 
 	return entries, scanner.Err()
+}
+
+func (s *fileSession) LastStatus(ctx context.Context) (string, error) {
+	f, err := os.Open(s.path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	var lastStatus string
+	scanner := bufio.NewScanner(f)
+	// Skip meta line
+	if scanner.Scan() {
+		// Meta line skipped
+	}
+
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		var raw map[string]any
+		if err := json.Unmarshal(line, &raw); err != nil {
+			continue
+		}
+
+		if raw["type"] == "status" {
+			var e Status
+			json.Unmarshal(line, &e)
+			lastStatus = e.Status
+		}
+	}
+
+	return lastStatus, scanner.Err()
+}
+
+func (s *fileSession) Usage(ctx context.Context) (int, int, float64, error) {
+	f, err := os.Open(s.path)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	defer f.Close()
+
+	var input, output int
+	var cost float64
+
+	scanner := bufio.NewScanner(f)
+	// Skip meta line
+	if scanner.Scan() {
+		// Meta line skipped
+	}
+
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		var raw map[string]any
+		if err := json.Unmarshal(line, &raw); err != nil {
+			continue
+		}
+
+		if raw["type"] == "token_usage" {
+			var e TokenUsage
+			if err := json.Unmarshal(line, &e); err == nil {
+				input += e.Input
+				output += e.Output
+				cost += e.Cost
+			}
+		}
+	}
+
+	return input, output, cost, scanner.Err()
 }
 
 func (s *fileSession) Close() error {
