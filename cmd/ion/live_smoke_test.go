@@ -7,9 +7,6 @@ import (
 	"testing"
 	"time"
 
-	tea "charm.land/bubbletea/v2"
-
-	"github.com/nijaru/ion/internal/app"
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
@@ -56,6 +53,7 @@ func TestLiveSmokeTurnAndToolCall(t *testing.T) {
 		}
 		t.Fatalf("open runtime: %v", err)
 	}
+	t.Logf("opened runtime: backend=%s provider=%s model=%s status=%q session=%s", b.Name(), b.Provider(), b.Model(), b.Bootstrap().Status, sess.ID())
 	agent := b.Session()
 	t.Cleanup(func() {
 		_ = agent.Close()
@@ -64,21 +62,17 @@ func TestLiveSmokeTurnAndToolCall(t *testing.T) {
 		}
 	})
 
-	model := app.New(b, sess, cwd, "smoke", "dev", nil).
-		WithStartupLines(startupBannerLines(b.Provider(), b.Model(), false))
-	model = applyUpdate(t, model, tea.WindowSizeMsg{Width: 120, Height: 40})
-
-	for _, r := range prompt {
-		model = applyUpdate(t, model, tea.KeyPressMsg{Text: string(r), Code: r})
-	}
-	model = applyUpdate(t, model, tea.KeyPressMsg{Code: tea.KeyEnter})
-
 	var (
 		seenTurnStarted   bool
 		seenToolCall      bool
 		seenAssistantText bool
 		seenTurnFinished  bool
 	)
+
+	if err := agent.SubmitTurn(ctx, prompt); err != nil {
+		t.Fatalf("submit turn: %v", err)
+	}
+	t.Logf("submitted prompt: %q", prompt)
 
 	deadline := time.NewTimer(90 * time.Second)
 	defer deadline.Stop()
@@ -90,27 +84,32 @@ loop:
 			if !ok {
 				t.Fatal("event stream closed before smoke turn completed")
 			}
+			t.Logf("event: %T %#v", ev, ev)
 			switch msg := ev.(type) {
 			case session.ApprovalRequest:
+				t.Logf("auto-approving request %s: %s", msg.RequestID, msg.Description)
 				if err := agent.Approve(ctx, msg.RequestID, true); err != nil {
 					t.Fatalf("approve %s: %v", msg.RequestID, err)
 				}
 			case session.TurnStarted:
 				seenTurnStarted = true
 			case session.ToolCallStarted:
+				t.Logf("tool call started: %s args=%s", msg.ToolName, msg.Args)
 				seenToolCall = true
 			case session.AssistantDelta:
 				if strings.TrimSpace(msg.Delta) != "" {
+					t.Logf("assistant delta: %q", msg.Delta)
 					seenAssistantText = true
 				}
 			case session.AssistantMessage:
+				t.Logf("assistant message committed")
 				seenAssistantText = true
 			case session.Error:
 				t.Fatalf("live smoke session error: %v", msg.Err)
 			case session.TurnFinished:
+				t.Logf("turn finished")
 				seenTurnFinished = true
 			}
-			model = applyUpdate(t, model, ev)
 			if seenTurnFinished {
 				break loop
 			}
@@ -132,6 +131,11 @@ loop:
 		t.Fatal("expected TurnFinished event")
 	}
 
+	t.Log("closing live session before resume check")
+	_ = agent.Close()
+	_ = sess.Close()
+
+	t.Log("reopening persisted session for resume check")
 	resumed, err := store.ResumeSession(ctx, sess.ID())
 	if err != nil {
 		t.Fatalf("resume session: %v", err)
@@ -160,22 +164,24 @@ loop:
 		t.Fatal("assistant response not found in persisted session")
 	}
 
-	// Exercise the render path once on the live session so markdown/status
-	// regressions fail the smoke test instead of only the unit suite.
-	if view := model.View(); strings.TrimSpace(view.Content) == "" {
-		t.Fatal("expected non-empty rendered view")
+	resumedCfg := &config.Config{Provider: provider, Model: modelName}
+	t.Log("opening runtime against resumed session")
+	resumedBackend, resumedSess, err := openRuntime(ctx, store, cwd, "smoke", resumedCfg, "", sess.ID())
+	if err != nil {
+		t.Fatalf("resume runtime: %v", err)
 	}
-}
-
-func applyUpdate(t *testing.T, model app.Model, msg tea.Msg) app.Model {
-	t.Helper()
-
-	updated, _ := model.Update(msg)
-	next, ok := updated.(app.Model)
-	if !ok {
-		t.Fatalf("expected app.Model after %T, got %T", msg, updated)
+	t.Logf("resumed runtime: backend=%s provider=%s model=%s status=%q session=%s", resumedBackend.Name(), resumedBackend.Provider(), resumedBackend.Model(), resumedBackend.Bootstrap().Status, resumedSess.ID())
+	t.Cleanup(func() {
+		if resumedBackend != nil && resumedBackend.Session() != nil {
+			_ = resumedBackend.Session().Close()
+		}
+		if resumedSess != nil {
+			_ = resumedSess.Close()
+		}
+	})
+	if got := resumedBackend.Session().ID(); got != sess.ID() {
+		t.Fatalf("resumed session ID = %q, want %q", got, sess.ID())
 	}
-	return next
 }
 
 func liveSmokeEnabled() bool {

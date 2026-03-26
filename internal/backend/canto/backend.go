@@ -40,8 +40,9 @@ type Backend struct {
 	ionStore storage.Store
 	sess     storage.Session
 
-	mu     sync.Mutex
-	cancel context.CancelFunc
+	mu        sync.Mutex
+	cancel    context.CancelFunc
+	closeOnce sync.Once
 
 	policy     *backend.PolicyEngine
 	approver   *tools.ApprovalManager
@@ -354,12 +355,11 @@ func newProvider(providerName string) (llm.Provider, error) {
 
 func (b *Backend) Resume(ctx context.Context, sessionID string) error {
 	b.mu.Lock()
-	defer b.mu.Unlock()
+	needOpen := b.runner == nil
+	b.mu.Unlock()
 
-	if b.runner == nil {
-		if err := b.Open(ctx); err != nil {
-			return err
-		}
+	if needOpen {
+		return b.Open(ctx)
 	}
 
 	// In Canto, Runner.Subscribe will load the session if not present.
@@ -584,17 +584,19 @@ func (b *Backend) RegisterMCPServer(ctx context.Context, command string, args ..
 }
 
 func (b *Backend) Close() error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	b.closeOnce.Do(func() {
+		b.mu.Lock()
+		defer b.mu.Unlock()
 
-	for _, client := range b.mcpClients {
-		client.Close()
-	}
+		for _, client := range b.mcpClients {
+			client.Close()
+		}
 
-	if b.runner != nil {
-		b.runner.Close()
-	}
-	close(b.events)
+		if b.runner != nil {
+			b.runner.Close()
+		}
+		close(b.events)
+	})
 	return nil
 }
 
