@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -8,6 +9,11 @@ import (
 	"github.com/nijaru/ion/internal/backend/acp"
 	"github.com/nijaru/ion/internal/backend/canto"
 	"github.com/nijaru/ion/internal/config"
+)
+
+var (
+	errNoProviderConfigured = errors.New("no provider configured: set provider in ~/.ion/config.toml, use /provider, pass --provider, or use ION_PROVIDER")
+	errNoModelConfigured    = errors.New("no model configured: set model in ~/.ion/config.toml, use /model, or use ION_MODEL")
 )
 
 var acpProviders = map[string]string{
@@ -30,25 +36,16 @@ func resolveStartupConfig(cfg *config.Config) error {
 	cfg.Provider = strings.ToLower(strings.TrimSpace(cfg.Provider))
 	cfg.Model = strings.TrimSpace(cfg.Model)
 
-	switch {
-	case cfg.Provider == "" && cfg.Model == "":
-		cfg.Provider = config.DefaultProvider
-		cfg.Model = config.DefaultModel
-	case cfg.Provider == "":
-		cfg.Provider = config.DefaultProvider
+	if cfg.Provider == "" {
+		return errNoProviderConfigured
 	}
 
 	if isACPProvider(cfg.Provider) {
 		return nil
 	}
 
-	if cfg.Provider == config.DefaultProvider && cfg.Model == "" {
-		cfg.Model = config.DefaultModel
-		return nil
-	}
-
 	if cfg.Model == "" {
-		return fmt.Errorf("no model configured: set model in ~/.ion/state.toml or ION_MODEL")
+		return errNoModelConfigured
 	}
 
 	return nil

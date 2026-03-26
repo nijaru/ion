@@ -78,7 +78,9 @@ tk ls
 - When a user reports a bug, create or update a `tk` task immediately.
 - Ion is `v0.0.0` unstable. There are no backwards guarantees.
 - Do not add fallback, migration, or compatibility paths unless the user explicitly asks for them.
-- Keep runtime state in `~/.ion/state.toml`; reserve `~/.ion/config.toml` for hand-edited user settings.
+- Keep user-editable settings in `~/.ion/config.toml`.
+- Do not persist provider/model automatically at startup; only user edits and explicit TUI actions should write them.
+- Prefer hardcoded defaults for ion-owned behavior. Add a separate state file only if we discover machine-owned values that truly need persistence.
 
 ## Go Idioms
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -41,22 +42,18 @@ func main() {
 		cfg.Provider = *providerFlag
 	}
 
-	if err := resolveStartupConfig(cfg); err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
-		os.Exit(1)
-	}
-
-	if err := config.Save(cfg); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to save state: %v\n", err)
-		os.Exit(1)
-	}
-
 	ctx := context.Background()
 	cwd, _ := os.Getwd()
 	branch := currentBranch()
 
+	dataDir, err := config.DefaultDataDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to resolve data dir: %v\n", err)
+		os.Exit(1)
+	}
+
 	// Initialize storage from the internal data dir.
-	store, err := storage.NewCantoStore(cfg.DataDir)
+	store, err := storage.NewCantoStore(dataDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to initialize storage: %v\n", err)
 		os.Exit(1)
@@ -98,6 +95,11 @@ func main() {
 func openRuntime(ctx context.Context, store storage.Store, cwd, branch string, cfg *config.Config, acpCommandOverride string, sessionID string) (backend.Backend, storage.Session, error) {
 	runtimeCfg := *cfg
 	if err := resolveStartupConfig(&runtimeCfg); err != nil {
+		if errors.Is(err, errNoProviderConfigured) || errors.Is(err, errNoModelConfigured) {
+			b := backend.NewUnconfigured(&runtimeCfg, err)
+			b.SetStore(store)
+			return b, nil, nil
+		}
 		return nil, nil, err
 	}
 

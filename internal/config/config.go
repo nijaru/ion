@@ -1,25 +1,47 @@
 package config
 
 import (
+	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 const (
-	DefaultProvider = "openrouter"
-	DefaultModel    = "openai/gpt-5.4"
+	DefaultSessionRetentionDays = 90
+	defaultModelCacheTTLSeconds = 3600
 )
 
-type Config = State
+type Config struct {
+	Provider             string `toml:"provider,omitempty"`
+	Model                string `toml:"model,omitempty"`
+	ContextLimit         int    `toml:"context_limit,omitempty"`
+	SessionRetentionDays int    `toml:"session_retention_days,omitempty"`
+}
 
 func DefaultConfigPath() (string, error) {
-	return DefaultStatePath()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".ion", "config.toml"), nil
 }
 
 func Load() (*Config, error) {
-	cfg, err := LoadState()
+	cfg := defaultConfig()
+
+	path, err := DefaultConfigPath()
 	if err != nil {
 		return nil, err
+	}
+	if data, err := os.ReadFile(path); err != nil {
+		if !os.IsNotExist(err) {
+			return nil, err
+		}
+	} else if err := toml.Unmarshal(data, cfg); err != nil {
+		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
 	if override := os.Getenv("ION_MODEL"); override != "" {
@@ -37,12 +59,40 @@ func Load() (*Config, error) {
 
 	cfg.Provider = strings.ToLower(strings.TrimSpace(cfg.Provider))
 	cfg.Model = strings.TrimSpace(cfg.Model)
+	if cfg.ContextLimit < 0 {
+		cfg.ContextLimit = 0
+	}
+	if cfg.SessionRetentionDays <= 0 {
+		cfg.SessionRetentionDays = DefaultSessionRetentionDays
+	}
 
 	return cfg, nil
 }
 
 func Save(cfg *Config) error {
-	return SaveState(cfg)
+	path, err := DefaultConfigPath()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+
+	out := *cfg
+	out.Provider = strings.ToLower(strings.TrimSpace(out.Provider))
+	out.Model = strings.TrimSpace(out.Model)
+	if out.ContextLimit < 0 {
+		out.ContextLimit = 0
+	}
+	if out.SessionRetentionDays <= 0 {
+		out.SessionRetentionDays = DefaultSessionRetentionDays
+	}
+
+	data, err := toml.Marshal(&out)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o644)
 }
 
 func splitProviderModel(value string) (string, string, bool) {
@@ -58,4 +108,22 @@ func splitProviderModel(value string) (string, string, bool) {
 	}
 
 	return provider, model, true
+}
+
+func DefaultDataDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".ion", "data"), nil
+}
+
+func DefaultModelCacheTTLSeconds() int {
+	return defaultModelCacheTTLSeconds
+}
+
+func defaultConfig() *Config {
+	return &Config{
+		SessionRetentionDays: DefaultSessionRetentionDays,
+	}
 }

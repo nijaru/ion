@@ -147,12 +147,12 @@ func (b *Backend) Open(ctx context.Context) error {
 
 	if providerName == "" {
 		return fmt.Errorf(
-			"no provider configured: set provider in ~/.ion/state.toml or ION_PROVIDER",
+			"no provider configured: set provider in ~/.ion/config.toml or use ION_PROVIDER",
 		)
 	}
 	if modelName == "" {
 		return fmt.Errorf(
-			"no model configured: set model in ~/.ion/state.toml or ION_MODEL",
+			"no model configured: set model in ~/.ion/config.toml or use ION_MODEL",
 		)
 	}
 

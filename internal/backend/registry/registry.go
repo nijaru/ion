@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"charm.land/catwalk/pkg/catwalk"
+	"github.com/nijaru/ion/internal/config"
 )
 
 type ModelMetadata struct {
@@ -104,8 +105,12 @@ func fetchFromCatwalk(ctx context.Context, provider, model string) (ModelMetadat
 }
 
 func cachePath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".ion", "data", "metadata_cache.json")
+	dataDir, err := config.DefaultDataDir()
+	if err != nil {
+		home, _ := os.UserHomeDir()
+		return filepath.Join(home, ".ion", "data", "metadata_cache.json")
+	}
+	return filepath.Join(dataDir, "metadata_cache.json")
 }
 
 func loadCache() {

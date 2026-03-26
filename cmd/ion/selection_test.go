@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"testing"
 
 	"github.com/nijaru/ion/internal/config"
+	"github.com/nijaru/ion/internal/storage"
 )
 
 func TestBackendForProvider(t *testing.T) {
@@ -59,16 +61,10 @@ func TestDefaultACPCommand(t *testing.T) {
 }
 
 func TestResolveStartupConfig(t *testing.T) {
-	t.Run("defaults to openrouter", func(t *testing.T) {
+	t.Run("requires provider", func(t *testing.T) {
 		cfg := &config.Config{}
-		if err := resolveStartupConfig(cfg); err != nil {
-			t.Fatalf("resolveStartupConfig returned error: %v", err)
-		}
-		if cfg.Provider != config.DefaultProvider {
-			t.Fatalf("provider = %q, want %q", cfg.Provider, config.DefaultProvider)
-		}
-		if cfg.Model != config.DefaultModel {
-			t.Fatalf("model = %q, want %q", cfg.Model, config.DefaultModel)
+		if err := resolveStartupConfig(cfg); err != errNoProviderConfigured {
+			t.Fatalf("resolveStartupConfig error = %v, want %v", err, errNoProviderConfigured)
 		}
 	})
 
@@ -88,6 +84,40 @@ func TestResolveStartupConfig(t *testing.T) {
 			t.Fatal("resolveStartupConfig returned nil error for api provider without model")
 		}
 	})
+}
+
+func TestOpenRuntimeReturnsUnconfiguredBackendWhenSettingsMissing(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	dataDir, err := config.DefaultDataDir()
+	if err != nil {
+		t.Fatalf("default data dir: %v", err)
+	}
+
+	store, err := storage.NewCantoStore(dataDir)
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+
+	b, sess, err := openRuntime(context.Background(), store, "/tmp/test", "main", &config.Config{}, "", "")
+	if err != nil {
+		t.Fatalf("openRuntime returned error: %v", err)
+	}
+	if got := b.Name(); got != "unconfigured" {
+		t.Fatalf("backend name = %q, want %q", got, "unconfigured")
+	}
+	if sess != nil {
+		t.Fatalf("storage session = %#v, want nil", sess)
+	}
+
+	msgErr := b.Session().SubmitTurn(context.Background(), "hello")
+	if msgErr != errNoProviderConfigured {
+		t.Fatalf("submit error = %v, want %v", msgErr, errNoProviderConfigured)
+	}
+
+	if _, ok := <-b.Session().Events(); !ok {
+		t.Fatal("expected unconfigured session event channel to stay open")
+	}
 }
 
 func TestSessionModelName(t *testing.T) {

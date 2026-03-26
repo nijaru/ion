@@ -275,9 +275,7 @@ func TestHandleCommandSwitchesRuntime(t *testing.T) {
 		switched = true
 
 		resolved := *cfg
-		if resolved.Provider == "" {
-			resolved.Provider = config.DefaultProvider
-		}
+		resolved.Provider = "openai"
 
 		newStorage := &stubStorageSession{
 			id:     "switched-session",
@@ -306,8 +304,8 @@ func TestHandleCommandSwitchesRuntime(t *testing.T) {
 	if !switched {
 		t.Fatal("expected runtime switch callback to be invoked")
 	}
-	if got := model.backend.Provider(); got != config.DefaultProvider {
-		t.Fatalf("backend provider = %q, want %q", got, config.DefaultProvider)
+	if got := model.backend.Provider(); got != "openai" {
+		t.Fatalf("backend provider = %q, want %q", got, "openai")
 	}
 	if got := model.backend.Model(); got != "gpt-4.1" {
 		t.Fatalf("backend model = %q, want %q", got, "gpt-4.1")
