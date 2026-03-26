@@ -67,7 +67,18 @@ func (b *Backend) Bootstrap() backend.Bootstrap {
 			status = s
 		} else {
 			// New session
-			status = fmt.Sprintf("Connected to %s via ACP", b.Provider())
+			provider := b.Provider()
+			model := b.Model()
+			switch {
+			case provider != "" && model != "":
+				status = fmt.Sprintf("Connected to %s/%s via ACP", provider, model)
+			case provider != "":
+				status = fmt.Sprintf("Connected to %s via ACP", provider)
+			case model != "":
+				status = fmt.Sprintf("Connected to %s via ACP", model)
+			default:
+				status = "Connected to ACP"
+			}
 		}
 	}
 	return backend.Bootstrap{

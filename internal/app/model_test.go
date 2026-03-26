@@ -286,8 +286,8 @@ func TestHandleCommandUpdatesConfigDirectly(t *testing.T) {
 			model := New(oldBackend, nil, "/tmp/test", "main", "dev", nil)
 
 			cmd := model.handleCommand(tc.command)
-			if cmd != nil {
-				t.Fatalf("expected no follow-up command, got %T", cmd)
+			if cmd == nil {
+				t.Fatal("expected transcript notice command")
 			}
 			if model.picker != nil {
 				t.Fatal("expected no picker to open")

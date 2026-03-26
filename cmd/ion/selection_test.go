@@ -68,20 +68,61 @@ func TestResolveStartupConfig(t *testing.T) {
 		}
 	})
 
-	t.Run("subscription provider keeps model optional", func(t *testing.T) {
+	t.Run("subscription provider requires model", func(t *testing.T) {
 		cfg := &config.Config{Provider: "claude-pro"}
-		if err := resolveStartupConfig(cfg); err != nil {
-			t.Fatalf("resolveStartupConfig returned error: %v", err)
-		}
-		if cfg.Model != "" {
-			t.Fatalf("model = %q, want empty", cfg.Model)
+		if err := resolveStartupConfig(cfg); err != errNoModelConfigured {
+			t.Fatalf("resolveStartupConfig error = %v, want %v", err, errNoModelConfigured)
 		}
 	})
 
 	t.Run("api provider requires model", func(t *testing.T) {
 		cfg := &config.Config{Provider: "anthropic"}
-		if err := resolveStartupConfig(cfg); err == nil {
-			t.Fatal("resolveStartupConfig returned nil error for api provider without model")
+		if err := resolveStartupConfig(cfg); err != errNoModelConfigured {
+			t.Fatalf("resolveStartupConfig error = %v, want %v", err, errNoModelConfigured)
+		}
+	})
+}
+
+func TestStartupBannerLines(t *testing.T) {
+	t.Run("fresh native", func(t *testing.T) {
+		got := startupBannerLines("openai", "gpt-4.1", false)
+		want := []string{"ion · native · provider=openai · model=gpt-4.1"}
+		if len(got) != len(want) {
+			t.Fatalf("len(startupBannerLines) = %d, want %d", len(got), len(want))
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("startupBannerLines[%d] = %q, want %q", i, got[i], want[i])
+			}
+		}
+	})
+
+	t.Run("resumed acp", func(t *testing.T) {
+		got := startupBannerLines("chatgpt", "gpt-5.4", true)
+		want := []string{
+			"--- resumed ---",
+			"ion · acp · provider=chatgpt · model=gpt-5.4",
+		}
+		if len(got) != len(want) {
+			t.Fatalf("len(startupBannerLines) = %d, want %d", len(got), len(want))
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("startupBannerLines[%d] = %q, want %q", i, got[i], want[i])
+			}
+		}
+	})
+
+	t.Run("missing model", func(t *testing.T) {
+		got := startupBannerLines("anthropic", "", false)
+		want := []string{"ion · native · provider=anthropic · model=no model set"}
+		if len(got) != len(want) {
+			t.Fatalf("len(startupBannerLines) = %d, want %d", len(got), len(want))
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("startupBannerLines[%d] = %q, want %q", i, got[i], want[i])
+			}
 		}
 	})
 }
@@ -113,6 +154,36 @@ func TestOpenRuntimeReturnsUnconfiguredBackendWhenSettingsMissing(t *testing.T) 
 	msgErr := b.Session().SubmitTurn(context.Background(), "hello")
 	if msgErr != errNoProviderConfigured {
 		t.Fatalf("submit error = %v, want %v", msgErr, errNoProviderConfigured)
+	}
+}
+
+func TestOpenRuntimeReturnsUnconfiguredBackendWhenModelMissing(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	dataDir, err := config.DefaultDataDir()
+	if err != nil {
+		t.Fatalf("default data dir: %v", err)
+	}
+
+	store, err := storage.NewCantoStore(dataDir)
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+
+	b, sess, err := openRuntime(context.Background(), store, "/tmp/test", "main", &config.Config{Provider: "claude-pro"}, "", "")
+	if err != nil {
+		t.Fatalf("openRuntime returned error: %v", err)
+	}
+	if got := b.Name(); got != "unconfigured" {
+		t.Fatalf("backend name = %q, want %q", got, "unconfigured")
+	}
+	if sess != nil {
+		t.Fatalf("storage session = %#v, want nil", sess)
+	}
+
+	msgErr := b.Session().SubmitTurn(context.Background(), "hello")
+	if msgErr != errNoModelConfigured {
+		t.Fatalf("submit error = %v, want %v", msgErr, errNoModelConfigured)
 	}
 }
 

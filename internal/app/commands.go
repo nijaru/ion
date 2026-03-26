@@ -34,7 +34,7 @@ func (m *Model) handleCommand(input string) tea.Cmd {
 		}
 		m.backend.SetConfig(cfg)
 		if cfg.Provider == "" {
-			return nil
+			return tea.Printf("%s\n", m.renderEntry(session.Entry{Role: session.System, Content: "Set model to " + name}))
 		}
 		return m.switchRuntimeCommand(cfg, session.Entry{Role: session.System, Content: "Switched model to " + name})
 
@@ -53,7 +53,7 @@ func (m *Model) handleCommand(input string) tea.Cmd {
 		}
 		m.backend.SetConfig(cfg)
 		if cfg.Model == "" {
-			return nil
+			return tea.Printf("%s\n", m.renderEntry(session.Entry{Role: session.System, Content: "Set provider to " + name}))
 		}
 		return m.switchRuntimeCommand(cfg, session.Entry{Role: session.System, Content: "Switched provider to " + name})
 
@@ -178,7 +178,8 @@ func (m *Model) commitPickerSelection() (Model, tea.Cmd) {
 		if err := config.Save(&cfg); err != nil {
 			return *m, cmdError(fmt.Sprintf("failed to save config: %v", err))
 		}
-		return *m, m.openModelPickerWithConfig(&cfg)
+		m.openModelPickerWithConfig(&cfg)
+		return *m, tea.Printf("%s\n", m.renderEntry(session.Entry{Role: session.System, Content: "Set provider to " + selected.Value}))
 
 	case pickerPurposeModel:
 		cfg.Model = selected.Value

@@ -122,11 +122,12 @@ type Model struct {
 	lastToolUseID string
 
 	// Workspace metadata
-	status  string
-	workdir string
-	branch  string
-	version string
-	mode    toolMode
+	status       string
+	workdir      string
+	branch       string
+	version      string
+	mode         toolMode
+	startupLines []string
 
 	// Styles (initialized once in New)
 	st styles
@@ -175,16 +176,27 @@ func New(b backend.Backend, s storage.Session, workdir, branch, version string, 
 	return m
 }
 
+func (m Model) WithStartupLines(lines []string) Model {
+	m.startupLines = append([]string(nil), lines...)
+	return m
+}
+
 func (m Model) Init() tea.Cmd {
+	printCmds := make([]tea.Cmd, 0, len(m.startupLines)+2)
+	for _, line := range m.startupLines {
+		printCmds = append(printCmds, tea.Printf("%s\n", line))
+	}
+	printCmds = append(printCmds, tea.Printf("%s\n", m.headerLine()))
+	if m.status != "" {
+		printCmds = append(printCmds, tea.Printf("%s\n", m.st.dim.Render("  "+m.status)))
+	}
+
 	cmds := []tea.Cmd{
-		tea.Printf("%s\n", m.headerLine()),
+		tea.Sequence(printCmds...),
 		textarea.Blink,
 		m.spinner.Tick,
 		m.composer.Focus(),
 		m.awaitSessionEvent(),
-	}
-	if m.status != "" {
-		cmds = append(cmds, tea.Printf("%s\n", m.st.dim.Render("  "+m.status)))
 	}
 	return tea.Batch(cmds...)
 }

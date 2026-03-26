@@ -77,6 +77,7 @@ func main() {
 		os.Exit(1)
 	}
 
+	startupLines := startupBannerLines(b.Provider(), b.Model(), sessionID != "")
 	switcher := func(ctx context.Context, cfg *config.Config) (backend.Backend, session.AgentSession, storage.Session, error) {
 		switchedBackend, switchedSession, err := openRuntime(ctx, store, cwd, currentBranch(), cfg, acpCommandOverride, "")
 		if err != nil {
@@ -85,7 +86,7 @@ func main() {
 		return switchedBackend, switchedBackend.Session(), switchedSession, nil
 	}
 
-	p := tea.NewProgram(app.New(b, sess, cwd, branch, version, switcher))
+	p := tea.NewProgram(app.New(b, sess, cwd, branch, version, switcher).WithStartupLines(startupLines))
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "ion error: %v\n", err)
 		os.Exit(1)

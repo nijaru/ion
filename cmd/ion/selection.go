@@ -12,8 +12,8 @@ import (
 )
 
 var (
-	errNoProviderConfigured = errors.New("no provider configured: set provider in ~/.ion/config.toml, use /provider, pass --provider, or use ION_PROVIDER")
-	errNoModelConfigured    = errors.New("no model configured: set model in ~/.ion/config.toml, use /model, or use ION_MODEL")
+	errNoProviderConfigured = errors.New("no provider set: set provider in ~/.ion/config.toml, use /provider, pass --provider, or use ION_PROVIDER")
+	errNoModelConfigured    = errors.New("no model set: set model in ~/.ion/config.toml, use /model, or use ION_MODEL")
 )
 
 var acpProviders = map[string]string{
@@ -38,10 +38,6 @@ func resolveStartupConfig(cfg *config.Config) error {
 
 	if cfg.Provider == "" {
 		return errNoProviderConfigured
-	}
-
-	if isACPProvider(cfg.Provider) {
-		return nil
 	}
 
 	if cfg.Model == "" {
