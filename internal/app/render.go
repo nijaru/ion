@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/nijaru/ion/internal/session"
 )
 
@@ -216,22 +217,24 @@ func (m Model) renderEntry(e session.Entry) string {
 
 // progressLine renders the single-line progress indicator between Plane B and the composer.
 func (m Model) progressLine() string {
+	var line string
 	switch m.progress {
 	case stateIonizing:
-		return m.st.cyan.Render("  " + m.spinner.View() + " Ionizing...")
+		line = m.st.cyan.Render("  " + m.spinner.View() + " Ionizing...")
 	case stateStreaming:
-		return m.st.cyan.Render("  " + m.spinner.View() + " Streaming...")
+		line = m.st.cyan.Render("  " + m.spinner.View() + " Streaming...")
 	case stateWorking:
-		return m.st.cyan.Render("  " + m.spinner.View() + " Working...")
+		line = m.st.cyan.Render("  " + m.spinner.View() + " Working...")
 	case stateApproval:
-		return m.st.warn.Render("  ⚠ Approval required")
+		line = m.st.warn.Render("  ⚠ Approval required")
 	case stateCancelled:
-		return m.st.dim.Render("  · Cancelled")
+		line = m.st.dim.Render("  · Cancelled")
 	case stateError:
-		return m.st.warn.Render("  ✗ Error: " + m.lastError)
+		line = m.st.warn.Render("  ✗ Error: " + strings.NewReplacer("\n", " ", "\r", " ").Replace(m.lastError))
 	default:
-		return m.st.dim.Render("  · Ready")
+		line = m.st.dim.Render("  · Ready")
 	}
+	return fitLine(line, m.width)
 }
 
 // headerLine returns the startup banner printed to scrollback at launch.
@@ -270,19 +273,20 @@ func (m Model) statusLine() string {
 		m.st.modeRead.Render("[READ]"),
 	)
 
-	provider := m.backend.Provider()
-	model := m.backend.Model()
-
-	var segments []string
-	segments = append(segments, modeLabel)
-	if provider != "" {
-		segments = append(segments, m.st.dim.Render(provider))
+	provider := ""
+	if value := m.backend.Provider(); value != "" {
+		provider = m.st.dim.Render(value)
 	}
-	if model != "" {
-		segments = append(segments, m.st.dim.Render(model))
+	model := ""
+	if value := m.backend.Model(); value != "" {
+		model = m.st.dim.Render(value)
+	}
+	dir := m.st.dim.Render("./" + filepath.Base(m.workdir))
+	branch := ""
+	if m.branch != "" {
+		branch = m.st.cyan.Render(m.branch)
 	}
 
-	// Token usage
 	total := m.tokensSent + m.tokensReceived
 	limit := m.backend.ContextLimit()
 	var usage string
@@ -294,20 +298,26 @@ func (m Model) statusLine() string {
 	} else {
 		usage = "0 tokens"
 	}
-	segments = append(segments, usage)
 
+	cost := ""
 	if m.totalCost > 0 {
-		segments = append(segments, fmt.Sprintf("$%.3f", m.totalCost))
+		cost = fmt.Sprintf("$%.3f", m.totalCost)
 	}
 
-	if m.width > 80 {
-		segments = append(segments, "./"+filepath.Base(m.workdir))
+	candidates := [][]string{
+		{modeLabel, provider, model, usage, cost, dir, branch},
+		{modeLabel, provider, model, usage, cost, branch},
+		{modeLabel, provider, model, usage, cost},
+		{modeLabel, model, usage, cost},
 	}
-	if m.width > 60 && m.branch != "" {
-		segments = append(segments, m.st.cyan.Render(m.branch))
+	for _, segments := range candidates {
+		line := joinLineSegments(sep, segments...)
+		if lipgloss.Width(line) <= m.width {
+			return line
+		}
 	}
 
-	return "  " + strings.Join(segments, sep)
+	return fitLine(joinLineSegments(sep, modeLabel, model, usage, cost), m.width)
 }
 
 // layout recomputes widget dimensions based on current terminal size.
@@ -324,4 +334,24 @@ func clamp(v, low, high int) int {
 		return high
 	}
 	return v
+}
+
+func joinLineSegments(sep string, segments ...string) string {
+	filtered := make([]string, 0, len(segments))
+	for _, segment := range segments {
+		if segment != "" {
+			filtered = append(filtered, segment)
+		}
+	}
+	return "  " + strings.Join(filtered, sep)
+}
+
+func fitLine(line string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if lipgloss.Width(line) <= width {
+		return line
+	}
+	return ansi.Truncate(line, width, "…")
 }
