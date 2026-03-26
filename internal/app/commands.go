@@ -21,7 +21,7 @@ func (m *Model) handleCommand(input string) tea.Cmd {
 	switch fields[0] {
 	case "/model":
 		if len(fields) < 2 {
-			return cmdError("usage: /model <model_name>")
+			return m.openModelPicker()
 		}
 		name := strings.Join(fields[1:], " ")
 		cfg, err := config.Load()
@@ -32,12 +32,15 @@ func (m *Model) handleCommand(input string) tea.Cmd {
 		if err := config.Save(cfg); err != nil {
 			return cmdError(fmt.Sprintf("failed to save config: %v", err))
 		}
+		if cfg.Provider == "" {
+			return m.openProviderPickerWithIntent(pickerPurposeProvider, cfg)
+		}
 		notice := session.Entry{Role: session.System, Content: "Switched model to " + name}
 		return m.switchRuntimeCommand(cfg, notice)
 
 	case "/provider":
 		if len(fields) < 2 {
-			return cmdError("usage: /provider <provider_name>")
+			return m.openProviderPicker()
 		}
 		name := fields[1]
 		cfg, err := config.Load()
@@ -47,6 +50,9 @@ func (m *Model) handleCommand(input string) tea.Cmd {
 		cfg.Provider = name
 		if err := config.Save(cfg); err != nil {
 			return cmdError(fmt.Sprintf("failed to save config: %v", err))
+		}
+		if cfg.Model == "" && !isACPProvider(name) {
+			return m.openModelPickerWithConfig(cfg, pickerPurposeProvider)
 		}
 		notice := session.Entry{Role: session.System, Content: "Switched provider to " + name}
 		return m.switchRuntimeCommand(cfg, notice)
@@ -70,6 +76,119 @@ func (m *Model) handleCommand(input string) tea.Cmd {
 
 	default:
 		return cmdError(fmt.Sprintf("unknown command: %s", fields[0]))
+	}
+}
+
+func (m *Model) openProviderPicker() tea.Cmd {
+	cfg, err := config.Load()
+	if err != nil {
+		return cmdError(fmt.Sprintf("failed to load config: %v", err))
+	}
+	return m.openProviderPickerWithIntent(pickerPurposeProvider, cfg)
+}
+
+func (m *Model) openProviderPickerWithIntent(intent pickerPurpose, cfg *config.Config) tea.Cmd {
+	items := providerItems()
+	m.picker = &pickerState{
+		title:   "Pick a provider",
+		items:   items,
+		index:   pickerIndex(items, cfg.Provider),
+		purpose: pickerPurposeProvider,
+		intent:  intent,
+		cfg:     cfg,
+	}
+	return nil
+}
+
+func (m *Model) openModelPicker() tea.Cmd {
+	cfg, err := config.Load()
+	if err != nil {
+		return cmdError(fmt.Sprintf("failed to load config: %v", err))
+	}
+	return m.openModelPickerWithConfig(cfg, pickerPurposeModel)
+}
+
+func (m *Model) openModelPickerWithConfig(cfg *config.Config, intent pickerPurpose) tea.Cmd {
+	if cfg.Provider == "" {
+		return m.openProviderPickerWithIntent(intent, cfg)
+	}
+	items, err := modelItemsForProvider(cfg.Provider)
+	if err != nil {
+		return cmdError(fmt.Sprintf("failed to list models for %s: %v", cfg.Provider, err))
+	}
+	if len(items) == 0 {
+		return cmdError(fmt.Sprintf("no models available for provider %s", cfg.Provider))
+	}
+	m.picker = &pickerState{
+		title:   "Pick a model for " + cfg.Provider,
+		items:   items,
+		index:   pickerIndex(items, cfg.Model),
+		purpose: pickerPurposeModel,
+		intent:  intent,
+		cfg:     cfg,
+	}
+	return nil
+}
+
+func (m *Model) handlePickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "ctrl+c":
+		m.picker = nil
+		return *m, nil
+	case "up":
+		if m.picker.index > 0 {
+			m.picker.index--
+		}
+		return *m, nil
+	case "down":
+		if m.picker.index < len(m.picker.items)-1 {
+			m.picker.index++
+		}
+		return *m, nil
+	case "enter":
+		return m.commitPickerSelection()
+	default:
+		return *m, nil
+	}
+}
+
+func (m *Model) commitPickerSelection() (Model, tea.Cmd) {
+	if m.picker == nil || len(m.picker.items) == 0 {
+		m.picker = nil
+		return *m, nil
+	}
+
+	selected := m.picker.items[m.picker.index]
+	cfg := *m.picker.cfg
+	intent := m.picker.intent
+
+	switch m.picker.purpose {
+	case pickerPurposeProvider:
+		cfg.Provider = selected.Value
+		if err := config.Save(&cfg); err != nil {
+			return *m, cmdError(fmt.Sprintf("failed to save config: %v", err))
+		}
+		m.picker = nil
+		if intent == pickerPurposeModel {
+			return *m, m.openModelPickerWithConfig(&cfg, pickerPurposeModel)
+		}
+		if cfg.Model == "" && !isACPProvider(selected.Value) {
+			return *m, m.openModelPickerWithConfig(&cfg, pickerPurposeProvider)
+		}
+		notice := session.Entry{Role: session.System, Content: "Switched provider to " + selected.Value}
+		return *m, m.switchRuntimeCommand(&cfg, notice)
+
+	case pickerPurposeModel:
+		cfg.Model = selected.Value
+		if err := config.Save(&cfg); err != nil {
+			return *m, cmdError(fmt.Sprintf("failed to save config: %v", err))
+		}
+		m.picker = nil
+		notice := session.Entry{Role: session.System, Content: "Switched model to " + selected.Value}
+		return *m, m.switchRuntimeCommand(&cfg, notice)
+	default:
+		m.picker = nil
+		return *m, nil
 	}
 }
 

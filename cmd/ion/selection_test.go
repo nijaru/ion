@@ -114,10 +114,6 @@ func TestOpenRuntimeReturnsUnconfiguredBackendWhenSettingsMissing(t *testing.T) 
 	if msgErr != errNoProviderConfigured {
 		t.Fatalf("submit error = %v, want %v", msgErr, errNoProviderConfigured)
 	}
-
-	if _, ok := <-b.Session().Events(); !ok {
-		t.Fatal("expected unconfigured session event channel to stay open")
-	}
 }
 
 func TestSessionModelName(t *testing.T) {

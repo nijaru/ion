@@ -31,6 +31,28 @@ type runtimeSwitchedMsg struct {
 	notice  string
 }
 
+type pickerPurpose int
+
+const (
+	pickerPurposeProvider pickerPurpose = iota
+	pickerPurposeModel
+)
+
+type pickerItem struct {
+	Label  string
+	Value  string
+	Detail string
+}
+
+type pickerState struct {
+	title   string
+	items   []pickerItem
+	index   int
+	purpose pickerPurpose
+	intent  pickerPurpose
+	cfg     *config.Config
+}
+
 type toolMode int
 
 const (
@@ -70,6 +92,9 @@ type Model struct {
 
 	// Approval
 	pendingApproval *session.ApprovalRequest
+
+	// Selection overlay
+	picker *pickerState
 
 	// Progress and status
 	progress  progressState
@@ -196,6 +221,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.backend = msg.backend
 		m.session = msg.session
 		m.storage = msg.storage
+		m.picker = nil
 		m.status = msg.status
 		if msg.storage != nil {
 			meta := msg.storage.Meta()

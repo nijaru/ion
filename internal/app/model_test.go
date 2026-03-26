@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -265,7 +267,15 @@ func TestComposerLayoutReflowsAfterHistoryRecall(t *testing.T) {
 }
 
 func TestHandleCommandSwitchesRuntime(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cfgDir := filepath.Join(home, ".ion")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.toml"), []byte("provider = \"openai\"\n"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	oldSession := &stubSession{events: make(chan session.Event)}
 	oldBackend := stubBackend{sess: oldSession}

@@ -29,6 +29,12 @@ func (m Model) View() tea.View {
 		b.WriteString(planeB)
 	}
 
+	// Selection overlay
+	if m.picker != nil {
+		b.WriteString(m.renderPicker())
+		b.WriteString("\n")
+	}
+
 	// Progress line
 	b.WriteString(m.progressLine())
 	b.WriteString("\n")
@@ -90,6 +96,57 @@ func (m Model) renderPlaneB() string {
 		b.WriteString("\n")
 	}
 
+	return b.String()
+}
+
+func (m Model) renderPicker() string {
+	if m.picker == nil || len(m.picker.items) == 0 {
+		return ""
+	}
+
+	const maxVisible = 8
+	start := 0
+	if len(m.picker.items) > maxVisible {
+		start = m.picker.index - maxVisible/2
+		if start < 0 {
+			start = 0
+		}
+		if end := start + maxVisible; end > len(m.picker.items) {
+			start = len(m.picker.items) - maxVisible
+		}
+	}
+	end := start + maxVisible
+	if end > len(m.picker.items) {
+		end = len(m.picker.items)
+	}
+
+	var b strings.Builder
+	b.WriteString("\n")
+	b.WriteString(m.st.cyan.PaddingLeft(2).Render(m.picker.title))
+	b.WriteString("\n")
+	b.WriteString(m.st.dim.PaddingLeft(2).Render("↑/↓ navigate · enter select · esc cancel"))
+	b.WriteString("\n")
+	if start > 0 {
+		b.WriteString(m.st.dim.PaddingLeft(2).Render("..."))
+		b.WriteString("\n")
+	}
+	for i := start; i < end; i++ {
+		item := m.picker.items[i]
+		line := item.Label
+		if item.Detail != "" {
+			line += " · " + item.Detail
+		}
+		if i == m.picker.index {
+			b.WriteString(m.st.cyan.PaddingLeft(2).Render("› " + line))
+		} else {
+			b.WriteString(m.st.dim.PaddingLeft(2).Render("  " + line))
+		}
+		b.WriteString("\n")
+	}
+	if end < len(m.picker.items) {
+		b.WriteString(m.st.dim.PaddingLeft(2).Render("..."))
+		b.WriteString("\n")
+	}
 	return b.String()
 }
 

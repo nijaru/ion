@@ -14,6 +14,10 @@ import (
 
 // handleKey processes keyboard input.
 func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
+	if m.picker != nil {
+		return m.handlePickerKey(msg)
+	}
+
 	// Approval gate: y/n consumed before any other handling
 	if m.pendingApproval != nil {
 		switch msg.String() {
@@ -32,6 +36,16 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	}
 
 	switch msg.String() {
+	case "ctrl+p":
+		m.ctrlCPending = false
+		m.escPending = false
+		return m, m.openProviderPicker()
+
+	case "ctrl+m":
+		m.ctrlCPending = false
+		m.escPending = false
+		return m, m.openModelPicker()
+
 	case "ctrl+c":
 		if m.ctrlCPending || m.composer.Value() == "" {
 			return m, tea.Quit
