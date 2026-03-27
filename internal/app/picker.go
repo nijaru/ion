@@ -59,10 +59,11 @@ func modelItemsForProvider(provider string) ([]pickerItem, error) {
 
 	var items []pickerItem
 	for _, model := range models {
+		metrics := modelMetrics(model)
 		items = append(items, pickerItem{
-			Label:  model.ID,
-			Value:  model.ID,
-			Detail: modelDetail(model),
+			Label:   model.ID,
+			Value:   model.ID,
+			Metrics: metrics,
 		})
 	}
 
@@ -145,22 +146,25 @@ func hasEnv(name string) bool {
 	return strings.TrimSpace(os.Getenv(name)) != ""
 }
 
-func modelDetail(meta registry.ModelMetadata) string {
-	var parts []string
+func modelMetrics(meta registry.ModelMetadata) *pickerMetrics {
+	metrics := &pickerMetrics{}
 	if meta.ContextLimit > 0 {
 		if meta.ContextLimit >= 1000 {
-			parts = append(parts, fmt.Sprintf("%dk ctx", meta.ContextLimit/1000))
+			metrics.Context = fmt.Sprintf("%dk", meta.ContextLimit/1000)
 		} else {
-			parts = append(parts, fmt.Sprintf("%d ctx", meta.ContextLimit))
+			metrics.Context = fmt.Sprintf("%d", meta.ContextLimit)
 		}
 	}
-	if meta.InputPrice > 0 || meta.OutputPrice > 0 {
-		parts = append(parts, fmt.Sprintf("$%.4f/$%.4f", meta.InputPrice, meta.OutputPrice))
+	if meta.InputPrice > 0 {
+		metrics.Input = fmt.Sprintf("$%.4f", meta.InputPrice)
 	}
-	if len(parts) == 0 {
-		return ""
+	if meta.OutputPrice > 0 {
+		metrics.Output = fmt.Sprintf("$%.4f", meta.OutputPrice)
 	}
-	return strings.Join(parts, " • ")
+	if metrics.Context == "" && metrics.Input == "" && metrics.Output == "" {
+		return nil
+	}
+	return metrics
 }
 
 func catwalkProvider(provider string) string {
@@ -206,12 +210,7 @@ func refreshPickerFilter(m *Model) {
 	if query == "" {
 		m.picker.filtered = append([]pickerItem(nil), m.picker.items...)
 	} else {
-		filtered := make([]pickerItem, 0, len(m.picker.items))
-		for _, item := range m.picker.items {
-			if pickerMatches(query, item) {
-				filtered = append(filtered, item)
-			}
-		}
+		filtered := rankedPickerItems(m.picker.items, query)
 		m.picker.filtered = filtered
 	}
 	if len(m.picker.filtered) == 0 {
@@ -233,22 +232,127 @@ func pickerDisplayItems(p *pickerState) []pickerItem {
 	return p.items
 }
 
-func pickerMatches(query string, item pickerItem) bool {
-	candidate := strings.ToLower(strings.Join([]string{item.Label, item.Value, item.Detail, item.Group}, " "))
-	q := strings.ToLower(strings.TrimSpace(query))
+type pickerSearchField struct {
+	value  string
+	weight int
+}
+
+type rankedPickerItem struct {
+	item  pickerItem
+	score int
+	index int
+}
+
+func rankedPickerItems(items []pickerItem, query string) []pickerItem {
+	ranked := make([]rankedPickerItem, 0, len(items))
+	for i, item := range items {
+		score, ok := pickerSearchScore(query, pickerSearchFields(item)...)
+		if !ok {
+			continue
+		}
+		ranked = append(ranked, rankedPickerItem{
+			item:  item,
+			score: score,
+			index: i,
+		})
+	}
+	slices.SortFunc(ranked, func(a, b rankedPickerItem) int {
+		if a.score != b.score {
+			return a.score - b.score
+		}
+		if cmp := strings.Compare(strings.ToLower(a.item.Label), strings.ToLower(b.item.Label)); cmp != 0 {
+			return cmp
+		}
+		if cmp := strings.Compare(strings.ToLower(a.item.Value), strings.ToLower(b.item.Value)); cmp != 0 {
+			return cmp
+		}
+		return a.index - b.index
+	})
+	filtered := make([]pickerItem, 0, len(ranked))
+	for _, item := range ranked {
+		filtered = append(filtered, item.item)
+	}
+	return filtered
+}
+
+func pickerSearchFields(item pickerItem) []pickerSearchField {
+	fields := []pickerSearchField{
+		{value: item.Label, weight: 0},
+		{value: item.Value, weight: 5},
+		{value: item.Detail, weight: 10},
+		{value: item.Group, weight: 20},
+	}
+	if item.Metrics != nil {
+		fields = append(fields,
+			pickerSearchField{value: item.Metrics.Context, weight: 30},
+			pickerSearchField{value: item.Metrics.Input, weight: 31},
+			pickerSearchField{value: item.Metrics.Output, weight: 32},
+		)
+	}
+	return fields
+}
+
+func pickerSearchScore(query string, fields ...pickerSearchField) (int, bool) {
+	q := normalizeSearchQuery(query)
 	if q == "" {
-		return true
+		return 0, true
 	}
-	if strings.Contains(candidate, q) {
-		return true
+
+	best := int(^uint(0) >> 1)
+	matched := false
+	for _, field := range fields {
+		score, ok := searchFieldScore(q, field.value)
+		if !ok {
+			continue
+		}
+		score += field.weight
+		if score < best {
+			best = score
+			matched = true
+		}
 	}
+	return best, matched
+}
+
+func searchFieldScore(query, candidate string) (int, bool) {
+	q := normalizeSearchQuery(query)
+	c := normalizeSearchQuery(candidate)
+	if q == "" {
+		return 0, true
+	}
+	if c == "" {
+		return 0, false
+	}
+	switch {
+	case c == q:
+		return 0, true
+	case strings.HasPrefix(c, q):
+		return 100 + len(c) - len(q), true
+	case strings.Contains(c, q):
+		idx := strings.Index(c, q)
+		return 200 + idx*2 + len(c) - len(q), true
+	default:
+		if score, ok := subsequenceScore(q, c); ok {
+			return 300 + score, true
+		}
+		return 0, false
+	}
+}
+
+func subsequenceScore(query, candidate string) (int, bool) {
 	idx := 0
-	for _, r := range q {
+	gaps := 0
+	for _, r := range query {
 		next := strings.IndexRune(candidate[idx:], r)
 		if next < 0 {
-			return false
+			return 0, false
 		}
+		gaps += next
 		idx += next + utf8.RuneLen(r)
 	}
-	return true
+	return gaps*4 + len(candidate) - idx, true
+}
+
+func normalizeSearchQuery(s string) string {
+	return strings.ToLower(strings.TrimSpace(s))
 }

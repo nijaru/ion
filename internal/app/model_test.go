@@ -874,8 +874,11 @@ func TestModelItemsUseInjectedModelLister(t *testing.T) {
 	if items[0].Label != "a-model" || items[1].Label != "b-model" {
 		t.Fatalf("items not sorted by label: %#v", items)
 	}
-	if !strings.Contains(items[0].Detail, "128k ctx") || !strings.Contains(items[0].Detail, "$0.1000/$0.2000") {
-		t.Fatalf("unexpected model detail: %q", items[0].Detail)
+	if items[0].Metrics == nil {
+		t.Fatal("expected model metrics")
+	}
+	if items[0].Metrics.Context != "128k" || items[0].Metrics.Input != "$0.1000" || items[0].Metrics.Output != "$0.2000" {
+		t.Fatalf("unexpected model metrics: %#v", items[0].Metrics)
 	}
 }
 
@@ -903,6 +906,126 @@ func TestPickerFilteringMatchesTypedQuery(t *testing.T) {
 	}
 	if got := pickerDisplayItems(model.picker)[0].Label; got != "OpenRouter" {
 		t.Fatalf("filtered label = %q, want OpenRouter", got)
+	}
+}
+
+func TestPickerFilteringRanksClosestMatchesFirst(t *testing.T) {
+	model := readyModel(t)
+	model.picker = &pickerState{
+		title: "Pick a model for openrouter",
+		items: []pickerItem{
+			{Label: "z-ai/glm-5-turbo", Value: "z-ai/glm-5-turbo"},
+			{Label: "z-ai/glm-5", Value: "z-ai/glm-5"},
+			{Label: "z-ai/glm-4.5", Value: "z-ai/glm-4.5"},
+		},
+		filtered: []pickerItem{
+			{Label: "z-ai/glm-5-turbo", Value: "z-ai/glm-5-turbo"},
+			{Label: "z-ai/glm-5", Value: "z-ai/glm-5"},
+			{Label: "z-ai/glm-4.5", Value: "z-ai/glm-4.5"},
+		},
+		purpose: pickerPurposeModel,
+	}
+
+	for _, r := range []rune("glm-5") {
+		model, _ = model.handlePickerKey(tea.KeyPressMsg{Text: string(r), Code: r})
+	}
+
+	items := pickerDisplayItems(model.picker)
+	if len(items) != 3 {
+		t.Fatalf("filtered items = %d, want 3", len(items))
+	}
+	if items[0].Label != "z-ai/glm-5" {
+		t.Fatalf("top match = %q, want z-ai/glm-5", items[0].Label)
+	}
+	if items[1].Label != "z-ai/glm-5-turbo" {
+		t.Fatalf("second match = %q, want z-ai/glm-5-turbo", items[1].Label)
+	}
+}
+
+func TestModelPickerRendersSeparatePriceColumns(t *testing.T) {
+	model := readyModel(t)
+	model.picker = &pickerState{
+		title: "Pick a model for openrouter",
+		items: []pickerItem{
+			{
+				Label: "z-ai/glm-5",
+				Value: "z-ai/glm-5",
+				Metrics: &pickerMetrics{
+					Context: "80k",
+					Input:   "$0.7200",
+					Output:  "$2.3000",
+				},
+			},
+			{
+				Label: "z-ai/glm-5-turbo",
+				Value: "z-ai/glm-5-turbo",
+				Metrics: &pickerMetrics{
+					Context: "202k",
+					Input:   "$1.2000",
+					Output:  "$4.0000",
+				},
+			},
+		},
+		filtered: []pickerItem{
+			{
+				Label: "z-ai/glm-5",
+				Value: "z-ai/glm-5",
+				Metrics: &pickerMetrics{
+					Context: "80k",
+					Input:   "$0.7200",
+					Output:  "$2.3000",
+				},
+			},
+			{
+				Label: "z-ai/glm-5-turbo",
+				Value: "z-ai/glm-5-turbo",
+				Metrics: &pickerMetrics{
+					Context: "202k",
+					Input:   "$1.2000",
+					Output:  "$4.0000",
+				},
+			},
+		},
+		purpose: pickerPurposeModel,
+	}
+
+	rendered := ansi.Strip(model.renderPicker())
+	if strings.Contains(rendered, "$0.7200/$2.3000") {
+		t.Fatalf("rendered picker still uses slash price column: %q", rendered)
+	}
+	if !strings.Contains(rendered, "in $0.7200") || !strings.Contains(rendered, "out $2.3000") {
+		t.Fatalf("rendered picker missing split price columns: %q", rendered)
+	}
+
+	var rowA, rowB string
+	for _, line := range strings.Split(rendered, "\n") {
+		switch {
+		case strings.Contains(line, "z-ai/glm-5-turbo"):
+			rowA = line
+		case strings.Contains(line, "z-ai/glm-5") && !strings.Contains(line, "turbo"):
+			rowB = line
+		}
+	}
+	if rowA == "" || rowB == "" {
+		t.Fatalf("did not find model rows in rendered picker: %q", rendered)
+	}
+	ctxA := strings.Index(rowA, "• ctx")
+	ctxB := strings.Index(rowB, "• ctx")
+	inA := strings.Index(rowA, "• in ")
+	inB := strings.Index(rowB, "• in ")
+	outA := strings.Index(rowA, "• out ")
+	outB := strings.Index(rowB, "• out ")
+	if ctxA < 0 || ctxB < 0 || inA < 0 || inB < 0 || outA < 0 || outB < 0 {
+		t.Fatalf("missing detail columns in rendered picker: %q", rendered)
+	}
+	if gotA, gotB := lipgloss.Width(rowA[:ctxA]), lipgloss.Width(rowB[:ctxB]); gotA != gotB {
+		t.Fatalf("ctx column not aligned: rowA=%d rowB=%d\n%s", gotA, gotB, rendered)
+	}
+	if gotA, gotB := lipgloss.Width(rowA[:inA]), lipgloss.Width(rowB[:inB]); gotA != gotB {
+		t.Fatalf("input column not aligned: rowA=%d rowB=%d\n%s", gotA, gotB, rendered)
+	}
+	if gotA, gotB := lipgloss.Width(rowA[:outA]), lipgloss.Width(rowB[:outB]); gotA != gotB {
+		t.Fatalf("output column not aligned: rowA=%d rowB=%d\n%s", gotA, gotB, rendered)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -93,13 +94,7 @@ func (m *Model) refreshSessionPickerFilter() {
 	if query == "" {
 		m.sessionPicker.filtered = append([]sessionPickerItem(nil), m.sessionPicker.items...)
 	} else {
-		filtered := make([]sessionPickerItem, 0, len(m.sessionPicker.items))
-		for _, item := range m.sessionPicker.items {
-			if sessionPickerMatches(query, item.info, m.workdir) {
-				filtered = append(filtered, item)
-			}
-		}
-		m.sessionPicker.filtered = filtered
+		m.sessionPicker.filtered = rankedSessionPickerItems(m.sessionPicker.items, query, m.workdir)
 	}
 	if len(m.sessionPicker.filtered) == 0 {
 		m.sessionPicker.index = 0
@@ -108,30 +103,6 @@ func (m *Model) refreshSessionPickerFilter() {
 	if m.sessionPicker.index >= len(m.sessionPicker.filtered) {
 		m.sessionPicker.index = len(m.sessionPicker.filtered) - 1
 	}
-}
-
-func sessionPickerMatches(query string, info storage.SessionInfo, cwd string) bool {
-	candidate := strings.ToLower(strings.Join([]string{
-		info.ID,
-		info.LastPreview,
-		cwd,
-	}, " "))
-	q := strings.ToLower(strings.TrimSpace(query))
-	if q == "" {
-		return true
-	}
-	if strings.Contains(candidate, q) {
-		return true
-	}
-	idx := 0
-	for _, r := range q {
-		next := strings.IndexRune(candidate[idx:], r)
-		if next < 0 {
-			return false
-		}
-		idx += next + utf8.RuneLen(r)
-	}
-	return true
 }
 
 func (m Model) renderSessionPicker() string {
@@ -147,7 +118,7 @@ func (m Model) renderSessionPicker() string {
 		b.WriteString(m.st.dim.PaddingLeft(2).Render("workspace: " + filepath.Base(m.workdir)))
 		b.WriteString("\n")
 	}
-	b.WriteString(m.st.dim.PaddingLeft(2).Render("filter: " + m.sessionPicker.query))
+	b.WriteString(m.st.dim.PaddingLeft(2).Render("search: " + m.sessionPicker.query))
 	b.WriteString("\n")
 	if m.sessionPicker.err != "" {
 		b.WriteString(m.st.warn.PaddingLeft(2).Render(m.sessionPicker.err))
@@ -196,9 +167,47 @@ func (m Model) renderSessionPicker() string {
 		b.WriteString(m.st.dim.PaddingLeft(2).Render("..."))
 		b.WriteString("\n")
 	}
-	b.WriteString(m.st.dim.PaddingLeft(2).Render("type to filter • enter select • esc cancel"))
+	b.WriteString(m.st.dim.PaddingLeft(2).Render("type to search • enter select • esc cancel"))
 	b.WriteString("\n")
 	return b.String()
+}
+
+func rankedSessionPickerItems(items []sessionPickerItem, query, cwd string) []sessionPickerItem {
+	type rankedItem struct {
+		item  sessionPickerItem
+		score int
+		index int
+	}
+
+	ranked := make([]rankedItem, 0, len(items))
+	for i, item := range items {
+		score, ok := pickerSearchScore(query,
+			pickerSearchField{value: item.info.ID, weight: 0},
+			pickerSearchField{value: item.info.LastPreview, weight: 5},
+			pickerSearchField{value: filepath.Base(cwd), weight: 10},
+			pickerSearchField{value: cwd, weight: 12},
+		)
+		if !ok {
+			continue
+		}
+		ranked = append(ranked, rankedItem{item: item, score: score, index: i})
+	}
+
+	slices.SortFunc(ranked, func(a, b rankedItem) int {
+		if a.score != b.score {
+			return a.score - b.score
+		}
+		if cmp := strings.Compare(strings.ToLower(a.item.info.LastPreview), strings.ToLower(b.item.info.LastPreview)); cmp != 0 {
+			return cmp
+		}
+		return a.index - b.index
+	})
+
+	filtered := make([]sessionPickerItem, 0, len(ranked))
+	for _, item := range ranked {
+		filtered = append(filtered, item.item)
+	}
+	return filtered
 }
 
 func sessionPickerLine(cwd string, info storage.SessionInfo) (string, string) {

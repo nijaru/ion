@@ -86,11 +86,18 @@ const (
 )
 
 type pickerItem struct {
-	Label  string
-	Value  string
-	Detail string
-	Group  string
-	Tone   pickerTone
+	Label   string
+	Value   string
+	Detail  string
+	Group   string
+	Tone    pickerTone
+	Metrics *pickerMetrics
+}
+
+type pickerMetrics struct {
+	Context string
+	Input   string
+	Output  string
 }
 
 type pickerTone int

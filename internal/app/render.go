@@ -125,15 +125,25 @@ func (m Model) renderPicker() string {
 		end = len(items)
 	}
 
+	metricWidths := pickerMetricWidths{}
+	for _, item := range items[start:end] {
+		if item.Metrics == nil {
+			continue
+		}
+		metricWidths.Context = max(metricWidths.Context, lipgloss.Width(item.Metrics.Context))
+		metricWidths.Input = max(metricWidths.Input, lipgloss.Width(item.Metrics.Input))
+		metricWidths.Output = max(metricWidths.Output, lipgloss.Width(item.Metrics.Output))
+	}
+
 	var b strings.Builder
 	b.WriteString("\n")
 	b.WriteString(m.st.cyan.PaddingLeft(2).Render(m.picker.title))
 	b.WriteString("\n")
 	if m.picker.query != "" {
-		b.WriteString(m.st.dim.PaddingLeft(2).Render("filter: " + m.picker.query))
+		b.WriteString(m.st.dim.PaddingLeft(2).Render("search: " + m.picker.query))
 		b.WriteString("\n")
 	}
-	b.WriteString(m.st.dim.PaddingLeft(2).Render("type to filter • ↑/↓ navigate • enter select • esc cancel"))
+	b.WriteString(m.st.dim.PaddingLeft(2).Render("type to search • ↑/↓ navigate • enter select • esc cancel"))
 	b.WriteString("\n")
 	if len(items) == 0 {
 		b.WriteString(m.st.dim.PaddingLeft(2).Render("No matching items"))
@@ -158,9 +168,9 @@ func (m Model) renderPicker() string {
 			lastGroup = item.Group
 		}
 		if i == m.picker.index {
-			b.WriteString(m.renderPickerLine("› ", item, labelWidth, m.st.cyan))
+			b.WriteString(m.renderPickerLine("› ", item, labelWidth, metricWidths, m.st.cyan))
 		} else {
-			b.WriteString(m.renderPickerLine("  ", item, labelWidth, lipgloss.NewStyle()))
+			b.WriteString(m.renderPickerLine("  ", item, labelWidth, metricWidths, lipgloss.NewStyle()))
 		}
 		b.WriteString("\n")
 	}
@@ -171,18 +181,55 @@ func (m Model) renderPicker() string {
 	return b.String()
 }
 
-func (m Model) renderPickerLine(prefix string, item pickerItem, labelWidth int, labelStyle lipgloss.Style) string {
+type pickerMetricWidths struct {
+	Context int
+	Input   int
+	Output  int
+}
+
+func (m Model) renderPickerLine(prefix string, item pickerItem, labelWidth int, metricWidths pickerMetricWidths, labelStyle lipgloss.Style) string {
 	var b strings.Builder
 	b.WriteString(strings.Repeat(" ", 2))
 	label := prefix + item.Label + strings.Repeat(" ", max(0, labelWidth-lipgloss.Width(item.Label)))
 	b.WriteString(labelStyle.Render(label))
-	if item.Detail != "" {
+	if item.Metrics != nil {
+		detail := m.renderPickerMetrics(*item.Metrics, metricWidths)
+		if detail != "" {
+			b.WriteString(" ")
+			b.WriteString(m.st.dim.Render("•"))
+			b.WriteString(" ")
+			b.WriteString(detail)
+		}
+	} else if item.Detail != "" {
 		b.WriteString(" ")
 		b.WriteString(m.st.dim.Render("•"))
 		b.WriteString(" ")
 		b.WriteString(m.renderPickerDetail(item.Detail, item.Tone))
 	}
 	return b.String()
+}
+
+func (m Model) renderPickerMetrics(metrics pickerMetrics, widths pickerMetricWidths) string {
+	var parts []string
+	if widths.Context > 0 {
+		parts = append(parts, m.renderPickerMetric("ctx", metrics.Context, widths.Context))
+	}
+	if widths.Input > 0 {
+		parts = append(parts, m.renderPickerMetric("in", metrics.Input, widths.Input))
+	}
+	if widths.Output > 0 {
+		parts = append(parts, m.renderPickerMetric("out", metrics.Output, widths.Output))
+	}
+	return strings.Join(parts, " "+m.st.dim.Render("•")+" ")
+}
+
+func (m Model) renderPickerMetric(label, value string, width int) string {
+	shown := strings.TrimSpace(value)
+	if shown == "" {
+		shown = "—"
+	}
+	pad := strings.Repeat(" ", max(0, width-lipgloss.Width(shown)))
+	return m.st.dim.Render(label + " " + pad + shown)
 }
 
 func (m Model) renderPickerDetail(detail string, tone pickerTone) string {
