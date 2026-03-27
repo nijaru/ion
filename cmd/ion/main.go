@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"charm.land/lipgloss/v2"
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/nijaru/ion/internal/app"
@@ -193,9 +194,11 @@ func printStartup(out *os.File, startupLines []string, workspaceLine string, ent
 		return
 	}
 	var lines []string
-	lines = append(lines, startupLines...)
+	for _, line := range startupLines {
+		lines = append(lines, styleStartupLine(line))
+	}
 	if workspaceLine != "" {
-		lines = append(lines, workspaceLine)
+		lines = append(lines, startupWorkspaceStyle().Render(workspaceLine))
 	}
 	if strings.TrimSpace(status) != "" && !isConfigurationStatus(status) {
 		lines = append(lines, "")
@@ -253,4 +256,39 @@ func isConfigurationStatus(status string) bool {
 	return strings.HasPrefix(lower, "no provider configured") ||
 		strings.HasPrefix(lower, "no model configured") ||
 		strings.HasPrefix(lower, "provider and model are required")
+}
+
+func styleStartupLine(line string) string {
+	if strings.TrimSpace(line) == "--- resumed ---" {
+		return startupMetaStyle().Render(line)
+	}
+	parts := strings.Split(line, " • ")
+	if len(parts) == 0 {
+		return line
+	}
+	if len(parts) >= 1 && strings.HasPrefix(parts[0], "ion ") {
+		first := strings.TrimPrefix(parts[0], "ion ")
+		parts[0] = startupNameStyle().Render("ion") + " " + startupVersionStyle().Render(first)
+	}
+	for i := 1; i < len(parts); i++ {
+		parts[i] = startupMetaStyle().Render(parts[i])
+	}
+	sep := startupMetaStyle().Render(" • ")
+	return strings.Join(parts, sep)
+}
+
+func startupNameStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
+}
+
+func startupVersionStyle() lipgloss.Style {
+	return lipgloss.NewStyle()
+}
+
+func startupMetaStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Faint(true)
+}
+
+func startupWorkspaceStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Faint(true)
 }
