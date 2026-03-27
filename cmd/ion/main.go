@@ -95,7 +95,7 @@ func main() {
 		return switchedBackend, switchedBackend.Session(), switchedSession, nil
 	}
 
-	reserveInlineRows(os.Stdout, 6)
+	reserveInlineRows(os.Stdout, 1)
 	p := tea.NewProgram(app.New(b, sess, store, cwd, branch, version, switcher).WithStartupLines(startupLines).WithStartupEntries(startupEntries))
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "ion error: %v\n", err)
