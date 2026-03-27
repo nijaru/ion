@@ -36,6 +36,7 @@ type Backend struct {
 	agent  *agent.BaseAgent
 	events chan ionsession.Event
 	cfg    *config.Config
+	llm    llm.Provider
 
 	ionStore storage.Store
 	sess     storage.Session
@@ -57,6 +58,8 @@ func New() *Backend {
 		mcpClients: make([]*mcp.Client, 0),
 	}
 }
+
+var providerFactory = newProvider
 
 func (b *Backend) Name() string {
 	return "canto"
@@ -167,10 +170,11 @@ func (b *Backend) Open(ctx context.Context) error {
 		return fmt.Errorf("ion store not initialized")
 	}
 
-	p, err := newProvider(providerName)
+	p, err := providerFactory(providerName)
 	if err != nil {
 		return err
 	}
+	b.llm = p
 
 	// Initialize Agent
 	// TODO: Load instructions from a config or file

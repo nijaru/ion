@@ -144,6 +144,10 @@ func openRuntime(ctx context.Context, store storage.Store, cwd, branch string, c
 			_ = sess.Close()
 			return nil, nil, fmt.Errorf("backend resume error: %w", err)
 		}
+		if err := syncSessionMetadata(ctx, store, sessionID, sessionModelName(runtimeCfg.Provider, runtimeCfg.Model), branch); err != nil {
+			_ = sess.Close()
+			return nil, nil, fmt.Errorf("failed to update resumed session metadata: %w", err)
+		}
 		return b, sess, nil
 	}
 
@@ -162,6 +166,17 @@ func openRuntime(ctx context.Context, store storage.Store, cwd, branch string, c
 		return nil, nil, fmt.Errorf("backend initialization error: %w", err)
 	}
 	return b, sess, nil
+}
+
+func syncSessionMetadata(ctx context.Context, store storage.Store, sessionID, modelName, branch string) error {
+	if store == nil || sessionID == "" {
+		return nil
+	}
+	return store.UpdateSession(ctx, storage.SessionInfo{
+		ID:     sessionID,
+		Model:  modelName,
+		Branch: branch,
+	})
 }
 
 func currentBranch() string {

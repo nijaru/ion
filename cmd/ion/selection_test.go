@@ -4,9 +4,53 @@ import (
 	"context"
 	"testing"
 
+	"github.com/nijaru/canto/memory"
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/storage"
 )
+
+type metadataStore struct {
+	updated storage.SessionInfo
+}
+
+func (s *metadataStore) OpenSession(ctx context.Context, cwd, model, branch string) (storage.Session, error) {
+	return nil, nil
+}
+
+func (s *metadataStore) ResumeSession(ctx context.Context, id string) (storage.Session, error) {
+	return nil, nil
+}
+
+func (s *metadataStore) ListSessions(ctx context.Context, cwd string) ([]storage.SessionInfo, error) {
+	return nil, nil
+}
+
+func (s *metadataStore) GetRecentSession(ctx context.Context, cwd string) (*storage.SessionInfo, error) {
+	return nil, nil
+}
+
+func (s *metadataStore) AddInput(ctx context.Context, cwd, content string) error { return nil }
+
+func (s *metadataStore) GetInputs(ctx context.Context, cwd string, limit int) ([]string, error) {
+	return nil, nil
+}
+
+func (s *metadataStore) UpdateSession(ctx context.Context, si storage.SessionInfo) error {
+	s.updated = si
+	return nil
+}
+
+func (s *metadataStore) SaveKnowledge(ctx context.Context, item storage.KnowledgeItem) error {
+	return nil
+}
+
+func (s *metadataStore) SearchKnowledge(ctx context.Context, cwd, query string, limit int) ([]storage.KnowledgeItem, error) {
+	return nil, nil
+}
+
+func (s *metadataStore) DeleteKnowledge(ctx context.Context, id string) error { return nil }
+
+func (s *metadataStore) CoreStore() *memory.CoreStore { return nil }
 
 func TestBackendForProvider(t *testing.T) {
 	cases := []struct {
@@ -193,5 +237,23 @@ func TestSessionModelName(t *testing.T) {
 	}
 	if got := sessionModelName("claude-pro", ""); got != "claude-pro" {
 		t.Fatalf("sessionModelName() = %q, want %q", got, "claude-pro")
+	}
+}
+
+func TestSyncSessionMetadata(t *testing.T) {
+	store := &metadataStore{}
+
+	if err := syncSessionMetadata(context.Background(), store, "sess-123", "openrouter/deepseek/deepseek-v3.2", "feature/handoff"); err != nil {
+		t.Fatalf("syncSessionMetadata returned error: %v", err)
+	}
+
+	if got := store.updated.ID; got != "sess-123" {
+		t.Fatalf("updated session ID = %q, want %q", got, "sess-123")
+	}
+	if got := store.updated.Model; got != "openrouter/deepseek/deepseek-v3.2" {
+		t.Fatalf("updated model = %q, want %q", got, "openrouter/deepseek/deepseek-v3.2")
+	}
+	if got := store.updated.Branch; got != "feature/handoff" {
+		t.Fatalf("updated branch = %q, want %q", got, "feature/handoff")
 	}
 }

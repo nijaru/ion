@@ -193,9 +193,15 @@ func (s *cantoStore) UpdateSession(ctx context.Context, si SessionInfo) error {
 		ctx,
 		`UPDATE session_meta
 		 SET updated_at = ?,
+		     model = CASE WHEN ? != '' THEN ? ELSE model END,
+		     branch = CASE WHEN ? != '' THEN ? ELSE branch END,
 		     last_preview = CASE WHEN ? != '' THEN ? ELSE last_preview END
 		 WHERE id = ?`,
 		time.Now().Unix(),
+		si.Model,
+		si.Model,
+		si.Branch,
+		si.Branch,
 		si.LastPreview,
 		si.LastPreview,
 		si.ID,
@@ -315,12 +321,27 @@ func (s *cantoSession) Append(ctx context.Context, event any) error {
 		})
 		err = s.store.canto.Save(ctx, ev)
 	case ToolResult:
-		ev := session.NewEvent(s.id, session.ToolCompleted, map[string]any{
+		completed := session.NewEvent(s.id, session.ToolCompleted, map[string]any{
 			"tool_use_id": e.ToolUseID,
 			"output":      e.Content,
 			"is_error":    e.IsError,
 		})
-		err = s.store.canto.Save(ctx, ev)
+		if err = s.store.canto.Save(ctx, completed); err != nil {
+			break
+		}
+		toolName, lookupErr := s.toolNameForUseID(ctx, e.ToolUseID)
+		if lookupErr != nil {
+			err = lookupErr
+			break
+		}
+		preview = e.Content
+		msg := llm.Message{
+			Role:    llm.RoleTool,
+			Content: e.Content,
+			Name:    toolName,
+			ToolID:  e.ToolUseID,
+		}
+		err = s.store.canto.Save(ctx, session.NewEvent(s.id, session.MessageAdded, msg))
 	case Status:
 		ev := session.NewEvent(s.id, session.EventType("status_changed"), map[string]any{
 			"status": e.Status,
@@ -342,6 +363,33 @@ func (s *cantoSession) Append(ctx context.Context, event any) error {
 	}
 
 	return s.store.UpdateSession(ctx, SessionInfo{ID: s.id, LastPreview: preview})
+}
+
+func (s *cantoSession) toolNameForUseID(ctx context.Context, toolUseID string) (string, error) {
+	if toolUseID == "" {
+		return "", nil
+	}
+	sess, err := s.store.canto.Load(ctx, s.id)
+	if err != nil {
+		return "", err
+	}
+	for i := len(sess.Events()) - 1; i >= 0; i-- {
+		ev := sess.Events()[i]
+		if ev.Type != session.ToolStarted {
+			continue
+		}
+		var data struct {
+			ID   string `json:"id"`
+			Tool string `json:"tool"`
+		}
+		if err := ev.UnmarshalData(&data); err != nil {
+			return "", err
+		}
+		if data.ID == toolUseID {
+			return data.Tool, nil
+		}
+	}
+	return "", nil
 }
 
 func (s *cantoSession) LastStatus(ctx context.Context) (string, error) {
@@ -370,50 +418,41 @@ func (s *cantoSession) Entries(ctx context.Context) ([]ionsession.Entry, error) 
 		return nil, err
 	}
 
-	var entries []ionsession.Entry
-	for _, ev := range sess.Events() {
-		switch ev.Type {
-		case session.MessageAdded:
-			var msg llm.Message
-			if err := ev.UnmarshalData(&msg); err == nil {
-				role := ionsession.Assistant
-				if msg.Role == llm.RoleUser {
-					role = ionsession.User
-				}
-				entries = append(entries, ionsession.Entry{
-					Role:      role,
-					Content:   msg.Content,
-					Reasoning: msg.Reasoning,
-				})
+	history, err := sess.EffectiveEntries()
+	if err != nil {
+		return nil, err
+	}
+
+	entries := make([]ionsession.Entry, 0, len(history))
+	for _, entry := range history {
+		msg := entry.Message
+		switch msg.Role {
+		case llm.RoleUser:
+			entries = append(entries, ionsession.Entry{
+				Role:    ionsession.User,
+				Content: msg.Content,
+			})
+		case llm.RoleAssistant:
+			entries = append(entries, ionsession.Entry{
+				Role:      ionsession.Assistant,
+				Content:   msg.Content,
+				Reasoning: msg.Reasoning,
+			})
+		case llm.RoleTool:
+			title := msg.Name
+			if title == "" {
+				title = "tool"
 			}
-		case session.ToolStarted:
-			var data struct {
-				Tool string `json:"tool"`
-				Args any    `json:"args"`
-			}
-			if err := ev.UnmarshalData(&data); err == nil {
-				argsStr := ""
-				if s, ok := data.Args.(string); ok {
-					argsStr = s
-				} else if m, ok := data.Args.(map[string]any); ok {
-					if a, ok := m["args"].(string); ok {
-						argsStr = a
-					}
-				}
-				entries = append(entries, ionsession.Entry{
-					Role:  ionsession.Tool,
-					Title: fmt.Sprintf("%s(%s)", data.Tool, argsStr),
-				})
-			}
-		case session.ToolCompleted:
-			var data struct {
-				Output string `json:"output"`
-			}
-			if err := ev.UnmarshalData(&data); err == nil {
-				if len(entries) > 0 && entries[len(entries)-1].Role == ionsession.Tool {
-					entries[len(entries)-1].Content = data.Output
-				}
-			}
+			entries = append(entries, ionsession.Entry{
+				Role:    ionsession.Tool,
+				Title:   title,
+				Content: msg.Content,
+			})
+		case llm.RoleSystem, llm.RoleDeveloper:
+			entries = append(entries, ionsession.Entry{
+				Role:    ionsession.System,
+				Content: msg.Content,
+			})
 		}
 	}
 	return entries, nil
