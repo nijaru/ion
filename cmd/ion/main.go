@@ -78,6 +78,15 @@ func main() {
 	}
 
 	startupLines := startupBannerLines(b.Provider(), b.Model(), sessionID != "")
+	var startupEntries []session.Entry
+	if sess != nil {
+		entries, err := sess.Entries(ctx)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to load startup history: %v\n", err)
+		} else {
+			startupEntries = entries
+		}
+	}
 	switcher := func(ctx context.Context, cfg *config.Config, sessionID string) (backend.Backend, session.AgentSession, storage.Session, error) {
 		switchedBackend, switchedSession, err := openRuntime(ctx, store, cwd, currentBranch(), cfg, acpCommandOverride, sessionID)
 		if err != nil {
@@ -86,7 +95,7 @@ func main() {
 		return switchedBackend, switchedBackend.Session(), switchedSession, nil
 	}
 
-	p := tea.NewProgram(app.New(b, sess, cwd, branch, version, switcher).WithStartupLines(startupLines))
+	p := tea.NewProgram(app.New(b, sess, store, cwd, branch, version, switcher).WithStartupLines(startupLines).WithStartupEntries(startupEntries))
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "ion error: %v\n", err)
 		os.Exit(1)

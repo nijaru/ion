@@ -19,6 +19,11 @@ func (m *Model) handleCommand(input string) tea.Cmd {
 	}
 
 	switch fields[0] {
+	case "/resume":
+		if len(fields) < 2 {
+			return m.openSessionPicker()
+		}
+		return m.resumeStoredSessionByID(fields[1])
 	case "/model":
 		if len(fields) < 2 {
 			return m.openModelPicker()
@@ -36,7 +41,7 @@ func (m *Model) handleCommand(input string) tea.Cmd {
 		if cfg.Provider == "" {
 			return tea.Printf("%s\n", m.renderEntry(session.Entry{Role: session.System, Content: "Set model to " + name}))
 		}
-		return m.switchRuntimeCommand(cfg, session.Entry{Role: session.System, Content: "Switched model to " + name})
+		return m.switchRuntimeCommand(cfg, session.Entry{Role: session.System, Content: "Switched model to " + name}, m.session.ID())
 
 	case "/provider":
 		if len(fields) < 2 {
@@ -55,7 +60,7 @@ func (m *Model) handleCommand(input string) tea.Cmd {
 		if cfg.Model == "" {
 			return tea.Printf("%s\n", m.renderEntry(session.Entry{Role: session.System, Content: "Set provider to " + name}))
 		}
-		return m.switchRuntimeCommand(cfg, session.Entry{Role: session.System, Content: "Switched provider to " + name})
+		return m.switchRuntimeCommand(cfg, session.Entry{Role: session.System, Content: "Switched provider to " + name}, m.session.ID())
 
 	case "/mcp":
 		if len(fields) < 3 || fields[1] != "add" {
@@ -188,23 +193,44 @@ func (m *Model) commitPickerSelection() (Model, tea.Cmd) {
 		}
 		m.picker = nil
 		notice := session.Entry{Role: session.System, Content: "Switched model to " + selected.Value}
-		return *m, m.switchRuntimeCommand(&cfg, notice)
+		return *m, m.switchRuntimeCommand(&cfg, notice, m.session.ID())
 	default:
 		m.picker = nil
 		return *m, nil
 	}
 }
 
-func (m *Model) switchRuntimeCommand(cfg *config.Config, notice session.Entry) tea.Cmd {
+func (m *Model) resumeStoredSessionByID(sessionID string) tea.Cmd {
+	if m.store == nil {
+		return cmdError("session store not available")
+	}
+
+	resumed, err := m.store.ResumeSession(context.Background(), sessionID)
+	if err != nil {
+		return cmdError(fmt.Sprintf("failed to resume session %s: %v", sessionID, err))
+	}
+
+	meta := resumed.Meta()
+	provider, model := splitStoredSessionModel(meta.Model)
+	if provider == "" || model == "" {
+		return cmdError(fmt.Sprintf("session %s is missing provider/model metadata", sessionID))
+	}
+
+	cfg := &config.Config{Provider: provider, Model: model}
+	notice := session.Entry{Role: session.System, Content: "Resumed session " + sessionID}
+	return m.switchRuntimeCommand(cfg, notice, sessionID)
+}
+
+func (m *Model) switchRuntimeCommand(cfg *config.Config, notice session.Entry, sessionID string) tea.Cmd {
 	if m.switcher == nil {
 		m.backend.SetConfig(cfg)
 		return tea.Printf("%s\n", m.renderEntry(notice))
 	}
 
 	oldSession := m.session
-	sessionID := ""
-	if oldSession != nil {
-		sessionID = oldSession.ID()
+	switchID := sessionID
+	if switchID == "" && oldSession != nil {
+		switchID = oldSession.ID()
 	}
 	switcher := m.switcher
 	cfgCopy := *cfg
@@ -213,7 +239,7 @@ func (m *Model) switchRuntimeCommand(cfg *config.Config, notice session.Entry) t
 		if oldSession != nil {
 			_ = oldSession.CancelTurn(context.Background())
 		}
-		backend, sess, storageSess, err := switcher(context.Background(), &cfgCopy, sessionID)
+		backend, sess, storageSess, err := switcher(context.Background(), &cfgCopy, switchID)
 		if err != nil {
 			return session.Error{Err: err}
 		}
@@ -228,6 +254,18 @@ func (m *Model) switchRuntimeCommand(cfg *config.Config, notice session.Entry) t
 			notice:  notice.Content,
 		}
 	}
+}
+
+func splitStoredSessionModel(value string) (string, string) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", ""
+	}
+	provider, model, ok := strings.Cut(value, "/")
+	if !ok {
+		return "", value
+	}
+	return strings.TrimSpace(provider), strings.TrimSpace(model)
 }
 
 // cmdError returns a Cmd that emits a session.Error with the given message.

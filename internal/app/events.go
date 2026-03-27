@@ -14,6 +14,9 @@ import (
 
 // handleKey processes keyboard input.
 func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
+	if m.sessionPicker != nil {
+		return m.handleSessionPickerKey(msg)
+	}
 	if m.picker != nil {
 		return m.handlePickerKey(msg)
 	}

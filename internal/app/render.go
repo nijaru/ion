@@ -30,7 +30,10 @@ func (m Model) View() tea.View {
 	}
 
 	// Selection overlay
-	if m.picker != nil {
+	if m.sessionPicker != nil {
+		b.WriteString(m.renderSessionPicker())
+		b.WriteString("\n")
+	} else if m.picker != nil {
 		b.WriteString(m.renderPicker())
 		b.WriteString("\n")
 	}

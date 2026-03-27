@@ -31,6 +31,18 @@ type runtimeSwitchedMsg struct {
 	notice  string
 }
 
+type sessionPickerItem struct {
+	info storage.SessionInfo
+}
+
+type sessionPickerState struct {
+	items    []sessionPickerItem
+	filtered []sessionPickerItem
+	index    int
+	query    string
+	err      string
+}
+
 type pickerPurpose int
 
 const (
@@ -82,6 +94,7 @@ type Model struct {
 	backend  backend.Backend
 	session  session.AgentSession
 	storage  storage.Session
+	store    storage.Store
 	switcher runtimeSwitcher
 
 	// In-flight state — Plane B content
@@ -93,7 +106,8 @@ type Model struct {
 	pendingApproval *session.ApprovalRequest
 
 	// Selection overlay
-	picker *pickerState
+	picker       *pickerState
+	sessionPicker *sessionPickerState
 
 	// Progress and status
 	progress  progressState
@@ -128,12 +142,13 @@ type Model struct {
 	version      string
 	mode         toolMode
 	startupLines []string
+	startupEntries []session.Entry
 
 	// Styles (initialized once in New)
 	st styles
 }
 
-func New(b backend.Backend, s storage.Session, workdir, branch, version string, switcher runtimeSwitcher) Model {
+func New(b backend.Backend, s storage.Session, store storage.Store, workdir, branch, version string, switcher runtimeSwitcher) Model {
 	ta := textarea.New()
 	ta.Placeholder = "Type a message..."
 	ta.Prompt = "› "
@@ -154,6 +169,7 @@ func New(b backend.Backend, s storage.Session, workdir, branch, version string, 
 		backend:    b,
 		session:    b.Session(),
 		storage:    s,
+		store:      store,
 		switcher:   switcher,
 		composer:   ta,
 		spinner:    spt,
@@ -181,14 +197,28 @@ func (m Model) WithStartupLines(lines []string) Model {
 	return m
 }
 
-func (m Model) Init() tea.Cmd {
-	printCmds := make([]tea.Cmd, 0, len(m.startupLines)+2)
-	for _, line := range m.startupLines {
-		printCmds = append(printCmds, tea.Printf("%s\n", line))
-	}
-	printCmds = append(printCmds, tea.Printf("%s\n", m.headerLine()))
+func (m Model) WithStartupEntries(entries []session.Entry) Model {
+	m.startupEntries = append([]session.Entry(nil), entries...)
+	return m
+}
+
+func (m Model) startupPrintLines() []string {
+	lines := make([]string, 0, len(m.startupLines)+len(m.startupEntries)+2)
+	lines = append(lines, m.startupLines...)
+	lines = append(lines, m.headerLine())
 	if m.status != "" {
-		printCmds = append(printCmds, tea.Printf("%s\n", m.st.dim.Render("  "+m.status)))
+		lines = append(lines, m.st.dim.Render("  "+m.status))
+	}
+	for _, entry := range m.startupEntries {
+		lines = append(lines, m.renderEntry(entry))
+	}
+	return lines
+}
+
+func (m Model) Init() tea.Cmd {
+	printCmds := make([]tea.Cmd, 0, len(m.startupPrintLines()))
+	for _, line := range m.startupPrintLines() {
+		printCmds = append(printCmds, tea.Printf("%s\n", line))
 	}
 
 	cmds := []tea.Cmd{
@@ -233,6 +263,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.session = msg.session
 		m.storage = msg.storage
 		m.picker = nil
+		m.sessionPicker = nil
 		m.status = msg.status
 		if msg.storage != nil {
 			meta := msg.storage.Meta()

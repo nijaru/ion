@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -116,7 +117,7 @@ func readyModel(t *testing.T) Model {
 	t.Helper()
 	sess := &stubSession{events: make(chan session.Event)}
 	b := stubBackend{sess: sess}
-	model := New(b, nil, "/tmp/test", "main", "dev", nil)
+	model := New(b, nil, nil, "/tmp/test", "main", "dev", nil)
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	ready, ok := updated.(Model)
 	if !ok {
@@ -283,7 +284,7 @@ func TestHandleCommandUpdatesConfigDirectly(t *testing.T) {
 
 			oldSession := &stubSession{events: make(chan session.Event)}
 			oldBackend := stubBackend{sess: oldSession}
-			model := New(oldBackend, nil, "/tmp/test", "main", "dev", nil)
+			model := New(oldBackend, nil, nil, "/tmp/test", "main", "dev", nil)
 
 			cmd := model.handleCommand(tc.command)
 			if cmd == nil {
@@ -320,7 +321,7 @@ func TestPickerCommitSwitchesRuntime(t *testing.T) {
 
 	switched := false
 	observedSessionID := ""
-	model := New(oldBackend, nil, "/tmp/test", "main", "dev", func(ctx context.Context, cfg *config.Config, sessionID string) (backend.Backend, session.AgentSession, storage.Session, error) {
+	model := New(oldBackend, nil, nil, "/tmp/test", "main", "dev", func(ctx context.Context, cfg *config.Config, sessionID string) (backend.Backend, session.AgentSession, storage.Session, error) {
 		switched = true
 		observedSessionID = sessionID
 
@@ -380,5 +381,99 @@ func TestPickerCommitSwitchesRuntime(t *testing.T) {
 	}
 	if got := model.branch; got != "feature/switch" {
 		t.Fatalf("branch = %q, want %q", got, "feature/switch")
+	}
+}
+
+func TestStartupPrintLinesIncludesReplayHistory(t *testing.T) {
+	model := readyModel(t)
+	model.startupLines = []string{"line-1", "line-2"}
+	model.status = "ready"
+	model.startupEntries = []session.Entry{
+		{Role: session.User, Content: "hello"},
+		{Role: session.Assistant, Content: "world"},
+	}
+
+	lines := model.startupPrintLines()
+	want := []string{
+		"line-1",
+		"line-2",
+		model.headerLine(),
+		model.st.dim.Render("  ready"),
+		model.renderEntry(session.Entry{Role: session.User, Content: "hello"}),
+		model.renderEntry(session.Entry{Role: session.Assistant, Content: "world"}),
+	}
+
+	if len(lines) != len(want) {
+		t.Fatalf("startup lines length = %d, want %d", len(lines), len(want))
+	}
+	for i := range want {
+		if lines[i] != want[i] {
+			t.Fatalf("startup line %d = %q, want %q", i, lines[i], want[i])
+		}
+	}
+}
+
+func TestSessionPickerScopesToWorkspace(t *testing.T) {
+	tmpRoot := filepath.Join(t.TempDir(), ".ion")
+	store, err := storage.NewCantoStore(tmpRoot)
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+
+	cwd := "/tmp/workspace-a"
+	other := "/tmp/workspace-b"
+
+	sessionA, err := store.OpenSession(context.Background(), cwd, "openrouter/deepseek/deepseek-v3.2", "main")
+	if err != nil {
+		t.Fatalf("open workspace session: %v", err)
+	}
+	if err := sessionA.Append(context.Background(), storage.User{Type: "user", Content: "plan the feature", TS: now()}); err != nil {
+		t.Fatalf("append workspace session: %v", err)
+	}
+
+	sessionB, err := store.OpenSession(context.Background(), other, "openrouter/minimax/minimax-m2.7", "main")
+	if err != nil {
+		t.Fatalf("open other session: %v", err)
+	}
+	if err := sessionB.Append(context.Background(), storage.User{Type: "user", Content: "other workspace", TS: now()}); err != nil {
+		t.Fatalf("append other session: %v", err)
+	}
+
+	model := New(stubBackend{sess: &stubSession{events: make(chan session.Event)}}, nil, store, cwd, "main", "dev", nil)
+	if cmd := model.openSessionPicker(); cmd != nil {
+		t.Fatalf("expected no command from openSessionPicker, got %T", cmd)
+	}
+	if model.sessionPicker == nil {
+		t.Fatal("expected session picker state")
+	}
+	if got := len(model.sessionPicker.items); got != 1 {
+		t.Fatalf("session picker items = %d, want 1", got)
+	}
+	if got := model.sessionPicker.items[0].info.ID; got != sessionA.ID() {
+		t.Fatalf("session picker showed %q, want %q", got, sessionA.ID())
+	}
+}
+
+func TestSessionPickerLineUsesPreviewAndMetadata(t *testing.T) {
+	info := storage.SessionInfo{
+		ID:          "session-123",
+		Model:       "openrouter/deepseek/deepseek-v3.2",
+		Branch:      "main",
+		LastPreview: "refactor the picker overlay",
+		UpdatedAt:   time.Now().Add(-2 * time.Hour),
+	}
+
+	label, detail := sessionPickerLine("/tmp/workspace-a", info)
+	if label != "refactor the picker overlay" {
+		t.Fatalf("label = %q, want preview text", label)
+	}
+	if !strings.Contains(detail, "openrouter/deepseek/deepseek-v3.2") {
+		t.Fatalf("detail %q missing model", detail)
+	}
+	if !strings.Contains(detail, "main") {
+		t.Fatalf("detail %q missing branch", detail)
+	}
+	if !strings.Contains(detail, "ago") {
+		t.Fatalf("detail %q missing age", detail)
 	}
 }
