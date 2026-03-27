@@ -93,6 +93,35 @@ func (m *Model) handleCommand(input string) tea.Cmd {
 		}
 		return m.switchRuntimeCommand(cfg, session.Entry{Role: session.System, Content: "Started fresh session"}, "", false)
 
+	case "/cost":
+		inputTokens, outputTokens, totalCost := m.tokensSent, m.tokensReceived, m.totalCost
+		if m.storage != nil {
+			input, output, cost, err := m.storage.Usage(context.Background())
+			if err != nil {
+				return cmdError(fmt.Sprintf("failed to load session usage: %v", err))
+			}
+			inputTokens = input
+			outputTokens = output
+			totalCost = cost
+		}
+		if totalCost <= 0 {
+			return func() tea.Msg {
+				return sessionCostMsg{notice: "No API cost tracked for this session"}
+			}
+		}
+		totalTokens := inputTokens + outputTokens
+		return func() tea.Msg {
+			return sessionCostMsg{
+				notice: fmt.Sprintf(
+					"Session cost\ninput tokens: %d\noutput tokens: %d\ntotal tokens: %d\ncost: $%.6f",
+					inputTokens,
+					outputTokens,
+					totalTokens,
+					totalCost,
+				),
+			}
+		}
+
 	case "/compact":
 		compactor, ok := m.backend.(backend.Compactor)
 		if !ok {

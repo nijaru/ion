@@ -104,6 +104,9 @@ type stubStorageSession struct {
 	closed    bool
 	appends   []any
 	appendErr error
+	usageIn   int
+	usageOut  int
+	usageCost float64
 }
 
 func (s *stubStorageSession) ID() string { return s.id }
@@ -128,7 +131,7 @@ func (s *stubStorageSession) Entries(ctx context.Context) ([]session.Entry, erro
 func (s *stubStorageSession) LastStatus(ctx context.Context) (string, error) { return "", nil }
 
 func (s *stubStorageSession) Usage(ctx context.Context) (int, int, float64, error) {
-	return 0, 0, 0, nil
+	return s.usageIn, s.usageOut, s.usageCost, nil
 }
 
 func (s *stubStorageSession) Close() error {
@@ -501,6 +504,50 @@ func TestClearCommandFallsBackToActiveRuntimeConfig(t *testing.T) {
 	msg := model.handleCommand("/clear")()
 	if _, ok := msg.(runtimeSwitchedMsg); !ok {
 		t.Fatalf("expected runtimeSwitchedMsg, got %T", msg)
+	}
+}
+
+func TestCostCommandReportsSessionTotals(t *testing.T) {
+	model := New(
+		stubBackend{sess: &stubSession{events: make(chan session.Event)}},
+		&stubStorageSession{usageIn: 1200, usageOut: 300, usageCost: 0.012345},
+		nil,
+		"/tmp/test",
+		"main",
+		"dev",
+		nil,
+	)
+
+	msg := model.handleCommand("/cost")()
+	costMsg, ok := msg.(sessionCostMsg)
+	if !ok {
+		t.Fatalf("expected sessionCostMsg, got %T", msg)
+	}
+	for _, want := range []string{"input tokens: 1200", "output tokens: 300", "total tokens: 1500", "cost: $0.012345"} {
+		if !strings.Contains(costMsg.notice, want) {
+			t.Fatalf("cost notice missing %q: %q", want, costMsg.notice)
+		}
+	}
+}
+
+func TestCostCommandReportsMissingCost(t *testing.T) {
+	model := New(
+		stubBackend{sess: &stubSession{events: make(chan session.Event)}},
+		&stubStorageSession{},
+		nil,
+		"/tmp/test",
+		"main",
+		"dev",
+		nil,
+	)
+
+	msg := model.handleCommand("/cost")()
+	costMsg, ok := msg.(sessionCostMsg)
+	if !ok {
+		t.Fatalf("expected sessionCostMsg, got %T", msg)
+	}
+	if costMsg.notice != "No API cost tracked for this session" {
+		t.Fatalf("cost notice = %q", costMsg.notice)
 	}
 }
 
