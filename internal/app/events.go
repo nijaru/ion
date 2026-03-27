@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/nijaru/ion/internal/session"
@@ -457,6 +456,3 @@ func (m Model) submitText(text string) (Model, tea.Cmd) {
 	m.session.SubmitTurn(context.Background(), text)
 	return m, tea.Printf("%s\n", m.renderEntry(userEntry))
 }
-
-// Ensure textarea.Blink is referenced (avoids unused import if Focus() is the only use).
-var _ = textarea.Blink

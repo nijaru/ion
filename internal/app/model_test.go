@@ -701,6 +701,41 @@ func TestPickerFilteringMatchesTypedQuery(t *testing.T) {
 	}
 }
 
+func TestPickerFilteringAcceptsSpaceInput(t *testing.T) {
+	model := readyModel(t)
+	model.picker = &pickerState{
+		title: "Pick a provider",
+		items: []pickerItem{
+			{Label: "alpha", Value: "alpha", Detail: "API key missing"},
+			{Label: "beta", Value: "beta", Detail: "API key set"},
+		},
+		filtered: []pickerItem{
+			{Label: "alpha", Value: "alpha", Detail: "API key missing"},
+			{Label: "beta", Value: "beta", Detail: "API key set"},
+		},
+		purpose: pickerPurposeProvider,
+	}
+
+	for _, key := range []tea.KeyPressMsg{
+		{Text: "A", Code: 'A'},
+		{Text: "P", Code: 'P'},
+		{Text: "I", Code: 'I'},
+		{Text: " ", Code: tea.KeySpace},
+		{Text: "k", Code: 'k'},
+		{Text: "e", Code: 'e'},
+		{Text: "y", Code: 'y'},
+	} {
+		model, _ = model.handlePickerKey(key)
+	}
+
+	if got := model.picker.query; got != "API key" {
+		t.Fatalf("picker query = %q, want %q", got, "API key")
+	}
+	if got := len(pickerDisplayItems(model.picker)); got != 2 {
+		t.Fatalf("filtered items = %d, want 2", got)
+	}
+}
+
 func TestQueuedFollowUpSubmitsAfterTurnFinished(t *testing.T) {
 	sess := &stubSession{events: make(chan session.Event)}
 	model := readyModel(t)
@@ -995,6 +1030,42 @@ func TestSessionPickerScopesToWorkspace(t *testing.T) {
 	}
 	if got := model.sessionPicker.items[0].info.ID; got != sessionA.ID() {
 		t.Fatalf("session picker showed %q, want %q", got, sessionA.ID())
+	}
+}
+
+func TestSessionPickerFilteringAcceptsSpaceInput(t *testing.T) {
+	model := readyModel(t)
+	model.sessionPicker = &sessionPickerState{
+		items: []sessionPickerItem{
+			{info: storage.SessionInfo{ID: "a", LastPreview: "fix startup"}},
+			{info: storage.SessionInfo{ID: "b", LastPreview: "other"}},
+		},
+		filtered: []sessionPickerItem{
+			{info: storage.SessionInfo{ID: "a", LastPreview: "fix startup"}},
+			{info: storage.SessionInfo{ID: "b", LastPreview: "other"}},
+		},
+	}
+
+	for _, key := range []tea.KeyPressMsg{
+		{Text: "f", Code: 'f'},
+		{Text: "i", Code: 'i'},
+		{Text: "x", Code: 'x'},
+		{Text: " ", Code: tea.KeySpace},
+		{Text: "s", Code: 's'},
+		{Text: "t", Code: 't'},
+	} {
+		next, _ := model.handleSessionPickerKey(key)
+		model = next
+	}
+
+	if got := model.sessionPicker.query; got != "fix st" {
+		t.Fatalf("session picker query = %q, want %q", got, "fix st")
+	}
+	if got := len(model.sessionPicker.filtered); got != 1 {
+		t.Fatalf("filtered sessions = %d, want 1", got)
+	}
+	if got := model.sessionPicker.filtered[0].info.ID; got != "a" {
+		t.Fatalf("filtered session id = %q, want %q", got, "a")
 	}
 }
 

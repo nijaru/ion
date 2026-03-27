@@ -1,9 +1,6 @@
 package main
 
-import (
-	"fmt"
-	"strings"
-)
+import "strings"
 
 func startupBannerLines(provider, model string, resumed bool) []string {
 	provider = strings.TrimSpace(provider)
@@ -15,17 +12,14 @@ func startupBannerLines(provider, model string, resumed bool) []string {
 		runtimeLabel = "acp"
 	}
 
-	providerLabel := provider
-	if providerLabel == "" {
-		providerLabel = "unset"
+	segments := []string{"ion", runtimeLabel}
+	if provider != "" {
+		segments = append(segments, "provider="+provider)
 	}
-
-	modelLabel := model
-	if modelLabel == "" {
-		modelLabel = "unset"
+	if model != "" {
+		segments = append(segments, "model="+model)
 	}
-
-	line := fmt.Sprintf("ion · %s · provider=%s · model=%s", runtimeLabel, providerLabel, modelLabel)
+	line := strings.Join(segments, " · ")
 	if resumed {
 		return []string{"--- resumed ---", line}
 	}

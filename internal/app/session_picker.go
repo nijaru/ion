@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
-	"unicode/utf8"
 	"time"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -77,8 +77,8 @@ func (m Model) handleSessionPickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.sessionPicker = nil
 		return m, m.resumeStoredSessionByID(selected.info.ID)
 	default:
-		if len(msg.String()) == 1 {
-			m.sessionPicker.query += msg.String()
+		if msg.Text != "" {
+			m.sessionPicker.query += msg.Text
 			m.refreshSessionPickerFilter()
 		}
 		return m, nil
@@ -147,7 +147,7 @@ func (m Model) renderSessionPicker() string {
 		b.WriteString(m.st.dim.PaddingLeft(2).Render("workspace: " + filepath.Base(m.workdir)))
 		b.WriteString("\n")
 	}
-	b.WriteString(m.st.dim.PaddingLeft(2).Render("filter: "+m.sessionPicker.query))
+	b.WriteString(m.st.dim.PaddingLeft(2).Render("filter: " + m.sessionPicker.query))
 	b.WriteString("\n")
 	if m.sessionPicker.err != "" {
 		b.WriteString(m.st.warn.PaddingLeft(2).Render(m.sessionPicker.err))

@@ -23,7 +23,7 @@ func (m Model) View() tea.View {
 	startup := m.renderStartupBlock()
 	if startup != "" {
 		b.WriteString(startup)
-		b.WriteString("\n\n")
+		b.WriteString("\n")
 	} else {
 		// Blank line separates scrollback from dynamic area.
 		b.WriteString("\n")

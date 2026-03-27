@@ -266,8 +266,8 @@ func (m *Model) handlePickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	case "enter":
 		return m.commitPickerSelection()
 	default:
-		if len(msg.String()) == 1 {
-			m.picker.query += msg.String()
+		if msg.Text != "" {
+			m.picker.query += msg.Text
 			refreshPickerFilter(m)
 			return *m, nil
 		}
