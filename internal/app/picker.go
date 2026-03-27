@@ -107,7 +107,7 @@ func modelDetail(meta registry.ModelMetadata) string {
 	if len(parts) == 0 {
 		return ""
 	}
-	return strings.Join(parts, " · ")
+	return strings.Join(parts, " • ")
 }
 
 func catwalkProvider(provider string) string {
@@ -136,12 +136,12 @@ func pickerWindow(title string, items []pickerItem, selected int) string {
 		}
 		line := prefix + item.Label
 		if item.Detail != "" {
-			line += " · " + item.Detail
+			line += " • " + item.Detail
 		}
 		b.WriteString(line)
 		b.WriteString("\n")
 	}
-	b.WriteString("esc cancel · enter select")
+	b.WriteString("esc cancel • enter select")
 	return b.String()
 }
 

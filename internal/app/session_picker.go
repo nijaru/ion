@@ -183,7 +183,7 @@ func (m Model) renderSessionPicker() string {
 		item := m.sessionPicker.filtered[i]
 		line, detail := sessionPickerLine(m.workdir, item.info)
 		if detail != "" {
-			line += " · " + detail
+			line += " • " + detail
 		}
 		if i == m.sessionPicker.index {
 			b.WriteString(m.st.cyan.PaddingLeft(2).Render("› " + line))
@@ -196,7 +196,7 @@ func (m Model) renderSessionPicker() string {
 		b.WriteString(m.st.dim.PaddingLeft(2).Render("..."))
 		b.WriteString("\n")
 	}
-	b.WriteString(m.st.dim.PaddingLeft(2).Render("type to filter · enter select · esc cancel"))
+	b.WriteString(m.st.dim.PaddingLeft(2).Render("type to filter • enter select • esc cancel"))
 	b.WriteString("\n")
 	return b.String()
 }
@@ -212,7 +212,7 @@ func sessionPickerLine(cwd string, info storage.SessionInfo) (string, string) {
 	if age := humanizeSessionAge(time.Since(info.UpdatedAt)); age != "" {
 		detailParts = append(detailParts, age)
 	}
-	detail := strings.Join(detailParts, " · ")
+	detail := strings.Join(detailParts, " • ")
 	if detail == "" && cwd != "" {
 		detail = filepath.Base(cwd)
 	}

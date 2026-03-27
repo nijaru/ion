@@ -44,6 +44,9 @@ func (m Model) View() tea.View {
 		b.WriteString("\n")
 	}
 
+	// Blank line separates the startup/messages area from the progress line.
+	b.WriteString("\n")
+
 	// Progress line
 	b.WriteString(m.progressLine())
 	b.WriteString("\n")
@@ -138,7 +141,7 @@ func (m Model) renderPicker() string {
 		b.WriteString(m.st.dim.PaddingLeft(2).Render("filter: " + m.picker.query))
 		b.WriteString("\n")
 	}
-	b.WriteString(m.st.dim.PaddingLeft(2).Render("type to filter · ↑/↓ navigate · enter select · esc cancel"))
+	b.WriteString(m.st.dim.PaddingLeft(2).Render("type to filter • ↑/↓ navigate • enter select • esc cancel"))
 	b.WriteString("\n")
 	if len(items) == 0 {
 		b.WriteString(m.st.dim.PaddingLeft(2).Render("No matching items"))
@@ -153,7 +156,7 @@ func (m Model) renderPicker() string {
 		item := items[i]
 		line := item.Label
 		if item.Detail != "" {
-			line += " · " + item.Detail
+			line += " • " + item.Detail
 		}
 		if i == m.picker.index {
 			b.WriteString(m.st.cyan.PaddingLeft(2).Render("› " + line))
@@ -316,20 +319,18 @@ func (m Model) progressLine() string {
 	case stateApproval:
 		line = m.st.warn.Render("  ⚠ Approval required")
 	case stateCancelled:
-		line = m.st.dim.Render("  · Cancelled")
+		line = m.st.dim.Render("  • Cancelled")
 	case stateError:
 		line = m.st.warn.Render("  ✗ Error: " + strings.NewReplacer("\n", " ", "\r", " ").Replace(m.lastError))
 	default:
-		line = m.st.dim.Render("  · Ready")
+		line = m.st.dim.Render("  • Ready")
 	}
 	return fitLine(line, m.width)
 }
 
-// headerLine returns the startup banner printed to scrollback at launch.
-// Line 1: "ion v0.0.0"
-// Line 2: "~/path/to/dir · branch"
+// headerLine returns the workspace line shown below the startup banner.
 func (m Model) headerLine() string {
-	sep := m.st.dim.Render(" · ")
+	sep := m.st.dim.Render(" • ")
 
 	home, _ := os.UserHomeDir()
 	dir := m.workdir
@@ -337,24 +338,16 @@ func (m Model) headerLine() string {
 		dir = "~" + dir[len(home):]
 	}
 
-	v := m.version
-	if v == "" {
-		v = "dev"
-	}
-	line1 := m.st.cyan.Render("ion") + m.st.dim.Render(" "+v)
-
 	pathParts := []string{m.st.dim.Render(dir)}
 	if m.branch != "" {
 		pathParts = append(pathParts, m.st.dim.Render(m.branch))
 	}
-	line2 := strings.Join(pathParts, sep)
-
-	return line1 + "\n" + line2
+	return strings.Join(pathParts, sep)
 }
 
 // statusLine renders the bottom info bar.
 func (m Model) statusLine() string {
-	sep := m.st.cyan.Render(" · ")
+	sep := m.st.cyan.Render(" • ")
 
 	modeLabel := ifthen(m.mode == modeWrite,
 		m.st.modeWrite.Render("[WRITE]"),

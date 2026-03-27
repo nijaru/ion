@@ -129,8 +129,8 @@ func TestResolveStartupConfig(t *testing.T) {
 
 func TestStartupBannerLines(t *testing.T) {
 	t.Run("fresh native", func(t *testing.T) {
-		got := startupBannerLines("openai", "gpt-4.1", false)
-		want := []string{"ion · native · provider=openai · model=gpt-4.1"}
+		got := startupBannerLines("v0.0.0", "openai", "gpt-4.1", false)
+		want := []string{"ion v0.0.0 • native • openai • gpt-4.1"}
 		if len(got) != len(want) {
 			t.Fatalf("len(startupBannerLines) = %d, want %d", len(got), len(want))
 		}
@@ -142,10 +142,10 @@ func TestStartupBannerLines(t *testing.T) {
 	})
 
 	t.Run("resumed acp", func(t *testing.T) {
-		got := startupBannerLines("chatgpt", "gpt-5.4", true)
+		got := startupBannerLines("v0.0.0", "chatgpt", "gpt-5.4", true)
 		want := []string{
 			"--- resumed ---",
-			"ion · acp · provider=chatgpt · model=gpt-5.4",
+			"ion v0.0.0 • acp • chatgpt • gpt-5.4",
 		}
 		if len(got) != len(want) {
 			t.Fatalf("len(startupBannerLines) = %d, want %d", len(got), len(want))
@@ -158,8 +158,8 @@ func TestStartupBannerLines(t *testing.T) {
 	})
 
 	t.Run("missing model", func(t *testing.T) {
-		got := startupBannerLines("anthropic", "", false)
-		want := []string{"ion · native · provider=anthropic"}
+		got := startupBannerLines("v0.0.0", "anthropic", "", false)
+		want := []string{"ion v0.0.0 • native • anthropic"}
 		if len(got) != len(want) {
 			t.Fatalf("len(startupBannerLines) = %d, want %d", len(got), len(want))
 		}
@@ -171,8 +171,8 @@ func TestStartupBannerLines(t *testing.T) {
 	})
 
 	t.Run("missing provider and model", func(t *testing.T) {
-		got := startupBannerLines("", "", false)
-		want := []string{"ion"}
+		got := startupBannerLines("v0.0.0", "", "", false)
+		want := []string{"ion v0.0.0 • native"}
 		if len(got) != len(want) {
 			t.Fatalf("len(startupBannerLines) = %d, want %d", len(got), len(want))
 		}

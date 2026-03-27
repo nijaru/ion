@@ -77,7 +77,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	startupLines := startupBannerLines(b.Provider(), b.Model(), sessionID != "")
+	startupLines := startupBannerLines(version, b.Provider(), b.Model(), sessionID != "")
 	var startupEntries []session.Entry
 	if sess != nil {
 		entries, err := sess.Entries(ctx)
