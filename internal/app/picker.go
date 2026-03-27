@@ -17,15 +17,11 @@ var listModels = registry.ListModels
 
 func providerItems() []pickerItem {
 	return []pickerItem{
-		{Label: "Anthropic", Value: "anthropic", Detail: providerDetail("anthropic"), Group: "Native APIs"},
-		{Label: "OpenAI", Value: "openai", Detail: providerDetail("openai"), Group: "Native APIs"},
-		{Label: "OpenRouter", Value: "openrouter", Detail: providerDetail("openrouter"), Group: "Native APIs"},
-		{Label: "Gemini", Value: "gemini", Detail: providerDetail("gemini"), Group: "Native APIs"},
-		{Label: "Claude Pro", Value: "claude-pro", Detail: providerDetail("claude-pro"), Group: "Subscriptions"},
-		{Label: "ChatGPT", Value: "chatgpt", Detail: providerDetail("chatgpt"), Group: "Subscriptions"},
-		{Label: "Codex CLI", Value: "codex", Detail: providerDetail("codex"), Group: "Subscriptions"},
-		{Label: "Gemini CLI", Value: "gemini-advanced", Detail: providerDetail("gemini-advanced"), Group: "Subscriptions"},
-		{Label: "GitHub Copilot", Value: "gh-copilot", Detail: providerDetail("gh-copilot"), Group: "Subscriptions"},
+		providerItem("Anthropic", "anthropic"),
+		providerItem("OpenAI", "openai"),
+		providerItem("OpenRouter", "openrouter"),
+		providerItem("Gemini", "gemini"),
+		providerItem("Ollama", "ollama"),
 	}
 }
 
@@ -69,31 +65,41 @@ func modelItemsForProvider(provider string) ([]pickerItem, error) {
 	return items, nil
 }
 
-func providerDetail(provider string) string {
-	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "claude-pro", "gemini-advanced", "gh-copilot", "chatgpt", "codex":
-		return "Subscription • ACP"
-	case "anthropic":
-		return "Native API • " + keyDetail("ANTHROPIC_API_KEY")
-	case "openai":
-		return "Native API • " + keyDetail("OPENAI_API_KEY")
-	case "openrouter":
-		return "Native API • " + keyDetail("OPENROUTER_API_KEY")
-	case "gemini":
-		if os.Getenv("GEMINI_API_KEY") != "" || os.Getenv("GOOGLE_API_KEY") != "" {
-			return "Native API • API key set"
-		}
-		return "Native API • API key missing"
-	default:
-		return ""
+func providerItem(label, value string) pickerItem {
+	detail, tone := providerDetail(value)
+	return pickerItem{
+		Label:  label,
+		Value:  value,
+		Detail: detail,
+		Tone:   tone,
 	}
 }
 
-func keyDetail(env string) string {
-	if strings.TrimSpace(os.Getenv(env)) != "" {
-		return "API key set"
+func providerDetail(provider string) (string, pickerTone) {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "anthropic":
+		return keyDetail("ANTHROPIC_API_KEY")
+	case "openai":
+		return keyDetail("OPENAI_API_KEY")
+	case "openrouter":
+		return keyDetail("OPENROUTER_API_KEY")
+	case "gemini":
+		if os.Getenv("GEMINI_API_KEY") != "" || os.Getenv("GOOGLE_API_KEY") != "" {
+			return "Ready", pickerToneReady
+		}
+		return "Missing • set GEMINI_API_KEY or GOOGLE_API_KEY", pickerToneWarn
+	case "ollama":
+		return "Local", pickerToneDefault
+	default:
+		return "", pickerToneDefault
 	}
-	return "API key missing"
+}
+
+func keyDetail(env string) (string, pickerTone) {
+	if strings.TrimSpace(os.Getenv(env)) != "" {
+		return "Ready", pickerToneReady
+	}
+	return "Missing • set " + env, pickerToneWarn
 }
 
 func modelDetail(meta registry.ModelMetadata) string {

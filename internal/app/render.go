@@ -157,14 +157,10 @@ func (m Model) renderPicker() string {
 			b.WriteString("\n")
 			lastGroup = item.Group
 		}
-		line := item.Label + strings.Repeat(" ", max(0, labelWidth-lipgloss.Width(item.Label)))
-		if item.Detail != "" {
-			line += " • " + item.Detail
-		}
 		if i == m.picker.index {
-			b.WriteString(m.st.cyan.PaddingLeft(2).Render("› " + line))
+			b.WriteString(m.renderPickerLine("› ", item, labelWidth, m.st.cyan))
 		} else {
-			b.WriteString(m.st.dim.PaddingLeft(2).Render("  " + line))
+			b.WriteString(m.renderPickerLine("  ", item, labelWidth, m.st.dim))
 		}
 		b.WriteString("\n")
 	}
@@ -173,6 +169,34 @@ func (m Model) renderPicker() string {
 		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+func (m Model) renderPickerLine(prefix string, item pickerItem, labelWidth int, labelStyle lipgloss.Style) string {
+	var b strings.Builder
+	b.WriteString(strings.Repeat(" ", 2))
+	b.WriteString(labelStyle.Render(prefix + item.Label))
+	padding := max(0, labelWidth-lipgloss.Width(item.Label))
+	if padding > 0 {
+		b.WriteString(strings.Repeat(" ", padding))
+	}
+	if item.Detail != "" {
+		b.WriteString(" ")
+		b.WriteString(m.st.dim.Render("•"))
+		b.WriteString(" ")
+		b.WriteString(m.renderPickerDetail(item.Detail, item.Tone))
+	}
+	return b.String()
+}
+
+func (m Model) renderPickerDetail(detail string, tone pickerTone) string {
+	switch tone {
+	case pickerToneReady:
+		return m.st.tool.Render(detail)
+	case pickerToneWarn:
+		return m.st.warn.Render(detail)
+	default:
+		return m.st.dim.Render(detail)
+	}
 }
 
 // renderPendingEntry renders an in-flight entry for Plane B.

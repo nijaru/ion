@@ -625,13 +625,9 @@ func TestProviderItemsShowConfiguredStatus(t *testing.T) {
 	items := providerItems()
 
 	for label, wantDetail := range map[string]string{
-		"Anthropic":       "Native API • API key missing",
-		"OpenRouter":      "Native API • API key set",
-		"Claude Pro":      "Subscription • ACP",
-		"Gemini CLI":      "Subscription • ACP",
-		"GitHub Copilot":  "Subscription • ACP",
-		"ChatGPT":         "Subscription • ACP",
-		"Codex CLI":       "Subscription • ACP",
+		"Anthropic":  "Missing • set ANTHROPIC_API_KEY",
+		"OpenRouter": "Ready",
+		"Ollama":     "Local",
 	} {
 		found := false
 		for _, item := range items {
@@ -682,12 +678,12 @@ func TestPickerFilteringMatchesTypedQuery(t *testing.T) {
 	model.picker = &pickerState{
 		title: "Pick a provider",
 		items: []pickerItem{
-			{Label: "anthropic", Value: "anthropic", Detail: "API key missing"},
-			{Label: "openrouter", Value: "openrouter", Detail: "API key set"},
+			{Label: "Anthropic", Value: "anthropic", Detail: "Missing • set ANTHROPIC_API_KEY"},
+			{Label: "OpenRouter", Value: "openrouter", Detail: "Ready"},
 		},
 		filtered: []pickerItem{
-			{Label: "anthropic", Value: "anthropic", Detail: "API key missing"},
-			{Label: "openrouter", Value: "openrouter", Detail: "API key set"},
+			{Label: "Anthropic", Value: "anthropic", Detail: "Missing • set ANTHROPIC_API_KEY"},
+			{Label: "OpenRouter", Value: "openrouter", Detail: "Ready"},
 		},
 		purpose: pickerPurposeProvider,
 	}
@@ -699,8 +695,8 @@ func TestPickerFilteringMatchesTypedQuery(t *testing.T) {
 	if got := len(pickerDisplayItems(model.picker)); got != 1 {
 		t.Fatalf("filtered items = %d, want 1", got)
 	}
-	if got := pickerDisplayItems(model.picker)[0].Label; got != "openrouter" {
-		t.Fatalf("filtered label = %q, want openrouter", got)
+	if got := pickerDisplayItems(model.picker)[0].Label; got != "OpenRouter" {
+		t.Fatalf("filtered label = %q, want OpenRouter", got)
 	}
 }
 
@@ -709,33 +705,35 @@ func TestPickerFilteringAcceptsSpaceInput(t *testing.T) {
 	model.picker = &pickerState{
 		title: "Pick a provider",
 		items: []pickerItem{
-			{Label: "alpha", Value: "alpha", Detail: "API key missing"},
-			{Label: "beta", Value: "beta", Detail: "API key set"},
+			{Label: "alpha", Value: "alpha", Detail: "Missing • set ALPHA_API_KEY"},
+			{Label: "beta", Value: "beta", Detail: "Ready"},
 		},
 		filtered: []pickerItem{
-			{Label: "alpha", Value: "alpha", Detail: "API key missing"},
-			{Label: "beta", Value: "beta", Detail: "API key set"},
+			{Label: "alpha", Value: "alpha", Detail: "Missing • set ALPHA_API_KEY"},
+			{Label: "beta", Value: "beta", Detail: "Ready"},
 		},
 		purpose: pickerPurposeProvider,
 	}
 
 	for _, key := range []tea.KeyPressMsg{
-		{Text: "A", Code: 'A'},
-		{Text: "P", Code: 'P'},
-		{Text: "I", Code: 'I'},
-		{Text: " ", Code: tea.KeySpace},
-		{Text: "k", Code: 'k'},
+		{Text: "s", Code: 's'},
 		{Text: "e", Code: 'e'},
-		{Text: "y", Code: 'y'},
+		{Text: "t", Code: 't'},
+		{Text: " ", Code: tea.KeySpace},
+		{Text: "A", Code: 'A'},
+		{Text: "L", Code: 'L'},
+		{Text: "P", Code: 'P'},
+		{Text: "H", Code: 'H'},
+		{Text: "A", Code: 'A'},
 	} {
 		model, _ = model.handlePickerKey(key)
 	}
 
-	if got := model.picker.query; got != "API key" {
-		t.Fatalf("picker query = %q, want %q", got, "API key")
+	if got := model.picker.query; got != "set ALPHA" {
+		t.Fatalf("picker query = %q, want %q", got, "set ALPHA")
 	}
-	if got := len(pickerDisplayItems(model.picker)); got != 2 {
-		t.Fatalf("filtered items = %d, want 2", got)
+	if got := len(pickerDisplayItems(model.picker)); got != 1 {
+		t.Fatalf("filtered items = %d, want 1", got)
 	}
 }
 
@@ -1021,23 +1019,16 @@ func TestProgressLineShowsConfigurationWarning(t *testing.T) {
 
 func TestProviderItemsGroupNativeBeforeSubscriptions(t *testing.T) {
 	items := providerItems()
-	if len(items) < 2 {
-		t.Fatalf("provider items = %d, want at least 2", len(items))
+	if len(items) != 5 {
+		t.Fatalf("provider items = %d, want 5", len(items))
 	}
-	if items[0].Group != "Native APIs" {
-		t.Fatalf("first group = %q, want %q", items[0].Group, "Native APIs")
-	}
-	foundSubscription := false
 	for _, item := range items {
-		if item.Group == "Subscriptions" {
-			foundSubscription = true
-		}
-		if foundSubscription && item.Group == "Native APIs" {
-			t.Fatalf("native provider %q appears after subscriptions", item.Label)
+		if item.Group != "" {
+			t.Fatalf("provider %q should not have a picker group, got %q", item.Label, item.Group)
 		}
 	}
-	if !foundSubscription {
-		t.Fatal("expected subscription providers in picker")
+	if got := items[len(items)-1].Label; got != "Ollama" {
+		t.Fatalf("last provider = %q, want %q", got, "Ollama")
 	}
 }
 

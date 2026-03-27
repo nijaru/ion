@@ -75,7 +75,16 @@ type pickerItem struct {
 	Value  string
 	Detail string
 	Group  string
+	Tone   pickerTone
 }
+
+type pickerTone int
+
+const (
+	pickerToneDefault pickerTone = iota
+	pickerToneReady
+	pickerToneWarn
+)
 
 type pickerState struct {
 	title    string
