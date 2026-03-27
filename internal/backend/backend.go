@@ -1,6 +1,8 @@
 package backend
 
 import (
+	"context"
+
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
@@ -21,4 +23,8 @@ type Backend interface {
 	SetStore(storage.Store)
 	SetSession(storage.Session)
 	SetConfig(*config.Config)
+}
+
+type Compactor interface {
+	Compact(context.Context) (bool, error)
 }

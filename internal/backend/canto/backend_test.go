@@ -6,12 +6,44 @@ import (
 	"testing"
 	"time"
 
+	"charm.land/catwalk/pkg/catwalk"
 	"github.com/nijaru/canto/llm"
+	csession "github.com/nijaru/canto/session"
 	ctesting "github.com/nijaru/canto/x/testing"
 	"github.com/nijaru/ion/internal/config"
 	ionsession "github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
 )
+
+type compactProvider struct {
+	id string
+}
+
+func (p *compactProvider) ID() string { return p.id }
+
+func (p *compactProvider) Generate(ctx context.Context, req *llm.Request) (*llm.Response, error) {
+	return &llm.Response{Content: "condensed summary"}, nil
+}
+
+func (p *compactProvider) Stream(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+	return nil, nil
+}
+
+func (p *compactProvider) Models(ctx context.Context) ([]catwalk.Model, error) {
+	return nil, nil
+}
+
+func (p *compactProvider) CountTokens(ctx context.Context, model string, messages []llm.Message) (int, error) {
+	return 10_000, nil
+}
+
+func (p *compactProvider) Cost(ctx context.Context, model string, usage llm.Usage) float64 { return 0 }
+
+func (p *compactProvider) Capabilities(model string) llm.Capabilities {
+	return llm.DefaultCapabilities()
+}
+
+func (p *compactProvider) IsTransient(err error) bool { return false }
 
 func TestProviderAndModelFallBackToEnv(t *testing.T) {
 	t.Setenv("ION_PROVIDER", "anthropic")
@@ -171,6 +203,95 @@ func TestCrossProviderHandoffPreservesPromptTruth(t *testing.T) {
 	}
 }
 
+func TestCompactUsesManualCompactionHelper(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	root := t.TempDir()
+	store, err := storage.NewCantoStore(root)
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+
+	storageSession, err := store.OpenSession(ctx, "/tmp/ion-compact", "openai/model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	for _, msg := range []storage.Assistant{
+		{Type: "assistant", Content: []storage.Block{{Type: "text", Text: textPtr(strings.Repeat("alpha ", 60))}}},
+		{Type: "assistant", Content: []storage.Block{{Type: "text", Text: textPtr(strings.Repeat("beta ", 60))}}},
+		{Type: "assistant", Content: []storage.Block{{Type: "text", Text: textPtr(strings.Repeat("gamma ", 60))}}},
+		{Type: "assistant", Content: []storage.Block{{Type: "text", Text: textPtr("recent answer")}}},
+	} {
+		if err := storageSession.Append(ctx, msg); err != nil {
+			t.Fatalf("append history: %v", err)
+		}
+	}
+	if err := storageSession.Append(ctx, storage.User{Type: "user", Content: "recent question"}); err != nil {
+		t.Fatalf("append recent user: %v", err)
+	}
+
+	oldFactory := providerFactory
+	providerFactory = func(providerName string) (llm.Provider, error) {
+		if providerName == "openai" {
+			return &compactProvider{id: "openai"}, nil
+		}
+		return oldFactory(providerName)
+	}
+	defer func() { providerFactory = oldFactory }()
+
+	b := New()
+	b.SetStore(store)
+	b.SetSession(storageSession)
+	b.SetConfig(&config.Config{Provider: "openai", Model: "model-a", ContextLimit: 100})
+	if err := b.Open(ctx); err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer func() { _ = b.Close() }()
+
+	compacted, err := b.Compact(ctx)
+	if err != nil {
+		t.Fatalf("compact: %v", err)
+	}
+	if !compacted {
+		t.Fatal("expected compacted=true")
+	}
+
+	resumed, err := store.ResumeSession(ctx, storageSession.ID())
+	if err != nil {
+		t.Fatalf("resume compacted session: %v", err)
+	}
+	entries, err := resumed.Entries(ctx)
+	if err != nil {
+		t.Fatalf("entries: %v", err)
+	}
+	if !entryExists(entries, ionsession.System, "<conversation_summary>") {
+		t.Fatalf("expected compacted effective history to include conversation summary, got %#v", entries)
+	}
+
+	cantoStore, ok := store.(interface{ Canto() *csession.SQLiteStore })
+	if !ok {
+		t.Fatal("expected canto-backed store")
+	}
+	sess, err := cantoStore.Canto().Load(ctx, storageSession.ID())
+	if err != nil {
+		t.Fatalf("load canto session: %v", err)
+	}
+	var compactionEvents int
+	sess.ForEachEvent(func(e csession.Event) bool {
+		if e.Type == csession.CompactionTriggered {
+			compactionEvents++
+		}
+		return true
+	})
+	if compactionEvents == 0 {
+		t.Fatal("expected at least one durable compaction event")
+	}
+}
+
 func waitForTurnFinished(t *testing.T, events <-chan ionsession.Event) {
 	t.Helper()
 
@@ -210,3 +331,5 @@ func entryExists(entries []ionsession.Entry, role ionsession.Role, content strin
 	}
 	return false
 }
+
+func textPtr(s string) *string { return &s }

@@ -31,6 +31,10 @@ type runtimeSwitchedMsg struct {
 	notice  string
 }
 
+type sessionCompactedMsg struct {
+	notice string
+}
+
 type sessionPickerItem struct {
 	info storage.SessionInfo
 }
@@ -294,6 +298,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(
 			tea.Printf("%s\n", m.renderEntry(session.Entry{Role: session.System, Content: msg.notice})),
 			m.awaitSessionEvent(),
+		)
+
+	case sessionCompactedMsg:
+		return m, tea.Printf(
+			"%s\n",
+			m.renderEntry(session.Entry{Role: session.System, Content: msg.notice}),
 		)
 
 	case tea.KeyPressMsg:

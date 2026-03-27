@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -585,6 +586,51 @@ func (b *Backend) RegisterMCPServer(ctx context.Context, command string, args ..
 	b.mcpClients = append(b.mcpClients, client)
 	b.events <- ionsession.StatusChanged{Status: fmt.Sprintf("Registered %d MCP tools from %s", len(tools), command)}
 	return nil
+}
+
+func (b *Backend) Compact(ctx context.Context) (bool, error) {
+	b.mu.Lock()
+	store := b.store
+	provider := b.llm
+	sessionID := b.ID()
+	model := b.Model()
+	maxTokens := b.ContextLimit()
+	b.mu.Unlock()
+
+	if store == nil {
+		return false, fmt.Errorf("backend store not initialized")
+	}
+	if provider == nil {
+		return false, fmt.Errorf("backend provider not initialized")
+	}
+	if sessionID == "" {
+		return false, fmt.Errorf("session not initialized")
+	}
+	if model == "" {
+		return false, fmt.Errorf("model not configured")
+	}
+	if maxTokens <= 0 {
+		return false, fmt.Errorf("context limit unavailable for model %s", model)
+	}
+
+	sess, err := store.Load(ctx, sessionID)
+	if err != nil {
+		return false, err
+	}
+
+	dataDir, err := config.DefaultDataDir()
+	if err != nil {
+		return false, err
+	}
+
+	result, err := ccontext.CompactSession(ctx, provider, model, sess, ccontext.CompactOptions{
+		MaxTokens:  maxTokens,
+		OffloadDir: filepath.Join(dataDir, "artifacts"),
+	})
+	if err != nil {
+		return false, err
+	}
+	return result.Compacted, nil
 }
 
 func (b *Backend) Close() error {

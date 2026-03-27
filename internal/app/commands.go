@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/session"
 )
@@ -74,6 +75,22 @@ func (m *Model) handleCommand(input string) tea.Cmd {
 				return session.Error{Err: err}
 			}
 			return nil
+		}
+
+	case "/compact":
+		compactor, ok := m.backend.(backend.Compactor)
+		if !ok {
+			return cmdError("current backend does not support /compact")
+		}
+		return func() tea.Msg {
+			compacted, err := compactor.Compact(context.Background())
+			if err != nil {
+				return session.Error{Err: err}
+			}
+			if compacted {
+				return sessionCompactedMsg{notice: "Compacted current session context"}
+			}
+			return sessionCompactedMsg{notice: "Session is already within compaction limits"}
 		}
 
 	case "/exit", "/quit":

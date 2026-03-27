@@ -27,6 +27,13 @@ type stubBackend struct {
 	contextLimit int
 }
 
+type compactBackend struct {
+	stubBackend
+	compacted bool
+	err       error
+	called    bool
+}
+
 func (b stubBackend) Name() string { return "stub" }
 func (b stubBackend) Provider() string {
 	if b.provider != "" {
@@ -61,6 +68,11 @@ func (b stubBackend) SetStore(s storage.Store) {}
 func (b stubBackend) SetSession(s storage.Session) {}
 
 func (b stubBackend) SetConfig(cfg *config.Config) {}
+
+func (b *compactBackend) Compact(ctx context.Context) (bool, error) {
+	b.called = true
+	return b.compacted, b.err
+}
 
 type stubSession struct {
 	events chan session.Event
@@ -355,6 +367,61 @@ func TestHandleCommandUpdatesConfigDirectly(t *testing.T) {
 				t.Fatalf("config = %q, want %q", got, tc.expected)
 			}
 		})
+	}
+}
+
+func TestCompactCommandUsesBackendCompactor(t *testing.T) {
+	backend := &compactBackend{
+		stubBackend: stubBackend{sess: &stubSession{events: make(chan session.Event)}},
+		compacted:   true,
+	}
+	model := New(backend, nil, nil, "/tmp/test", "main", "dev", nil)
+
+	cmd := model.handleCommand("/compact")
+	if cmd == nil {
+		t.Fatal("expected /compact command to return a cmd")
+	}
+
+	msg := cmd()
+	compacted, ok := msg.(sessionCompactedMsg)
+	if !ok {
+		t.Fatalf("expected sessionCompactedMsg, got %T", msg)
+	}
+	if !backend.called {
+		t.Fatal("expected backend compactor to be called")
+	}
+	if compacted.notice != "Compacted current session context" {
+		t.Fatalf("compact notice = %q", compacted.notice)
+	}
+}
+
+func TestCompactCommandReportsNoOp(t *testing.T) {
+	backend := &compactBackend{
+		stubBackend: stubBackend{sess: &stubSession{events: make(chan session.Event)}},
+		compacted:   false,
+	}
+	model := New(backend, nil, nil, "/tmp/test", "main", "dev", nil)
+
+	msg := model.handleCommand("/compact")()
+	compacted, ok := msg.(sessionCompactedMsg)
+	if !ok {
+		t.Fatalf("expected sessionCompactedMsg, got %T", msg)
+	}
+	if compacted.notice != "Session is already within compaction limits" {
+		t.Fatalf("compact no-op notice = %q", compacted.notice)
+	}
+}
+
+func TestCompactCommandErrorsWhenBackendUnsupported(t *testing.T) {
+	model := New(stubBackend{sess: &stubSession{events: make(chan session.Event)}}, nil, nil, "/tmp/test", "main", "dev", nil)
+
+	msg := model.handleCommand("/compact")()
+	errMsg, ok := msg.(session.Error)
+	if !ok {
+		t.Fatalf("expected session.Error, got %T", msg)
+	}
+	if errMsg.Err == nil || errMsg.Err.Error() != "current backend does not support /compact" {
+		t.Fatalf("unexpected /compact error: %v", errMsg.Err)
 	}
 }
 
