@@ -564,12 +564,14 @@ func TestComposerLayoutReflowsAfterHistoryRecall(t *testing.T) {
 
 func TestHandleCommandUpdatesConfigDirectly(t *testing.T) {
 	tests := []struct {
-		name     string
-		command  string
-		expected string
+		name        string
+		command     string
+		expected    string
+		wantPicker  bool
+		wantCommand bool
 	}{
-		{name: "provider", command: "/provider anthropic", expected: "provider = 'anthropic'\nsession_retention_days = 90\n"},
-		{name: "model", command: "/model gpt-4.1", expected: "model = 'gpt-4.1'\nsession_retention_days = 90\n"},
+		{name: "provider", command: "/provider anthropic", expected: "provider = 'anthropic'\nsession_retention_days = 90\n", wantPicker: true},
+		{name: "model", command: "/model gpt-4.1", expected: "model = 'gpt-4.1'\nsession_retention_days = 90\n", wantCommand: true},
 	}
 
 	for _, tc := range tests {
@@ -577,15 +579,29 @@ func TestHandleCommandUpdatesConfigDirectly(t *testing.T) {
 			home := t.TempDir()
 			t.Setenv("HOME", home)
 
+			oldListModels := listModels
+			if tc.name == "provider" {
+				listModels = func(ctx context.Context, provider string) ([]registry.ModelMetadata, error) {
+					return []registry.ModelMetadata{{ID: "anthropic-model"}}, nil
+				}
+			}
+			t.Cleanup(func() { listModels = oldListModels })
+
 			oldSession := &stubSession{events: make(chan session.Event)}
 			oldBackend := stubBackend{sess: oldSession}
 			model := New(oldBackend, nil, nil, "/tmp/test", "main", "dev", nil)
 
 			cmd := model.handleCommand(tc.command)
-			if cmd == nil {
-				t.Fatal("expected direct config command to print a notice")
+			if tc.wantCommand && cmd == nil {
+				t.Fatal("expected direct config command to return a cmd")
 			}
-			if model.picker != nil {
+			if !tc.wantCommand && cmd != nil {
+				t.Fatalf("expected no cmd, got %T", cmd)
+			}
+			if tc.wantPicker && model.picker == nil {
+				t.Fatal("expected picker to open")
+			}
+			if !tc.wantPicker && model.picker != nil {
 				t.Fatal("expected no picker to open")
 			}
 

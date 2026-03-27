@@ -62,15 +62,13 @@ func (m *Model) handleCommand(input string) tea.Cmd {
 			return cmdError(fmt.Sprintf("failed to load config: %v", err))
 		}
 		cfg.Provider = name
+		cfg.Model = ""
 		if err := config.Save(cfg); err != nil {
 			return cmdError(fmt.Sprintf("failed to save config: %v", err))
 		}
 		m.backend.SetConfig(cfg)
-		if cfg.Model == "" {
-			m.status = noModelConfiguredStatus()
-			return m.printEntries(session.Entry{Role: session.System, Content: "Provider set to " + providerDisplayName(name)})
-		}
-		return m.switchRuntimeCommand(cfg, session.Entry{Role: session.System, Content: "Provider set to " + providerDisplayName(name)}, m.session.ID(), false)
+		m.status = noModelConfiguredStatus()
+		return m.openModelPickerWithConfig(cfg)
 
 	case "/mcp":
 		if len(fields) < 3 || fields[1] != "add" {
@@ -211,7 +209,7 @@ func helpText() string {
 		"ion commands",
 		"",
 		"  /resume [id]     resume a recent session or pick one",
-		"  /provider [name] set provider directly or open the picker",
+		"  /provider [name] set provider and choose a model",
 		"  /model [name]    set model directly or open the picker",
 		"  /compact         compact the current session",
 		"  /clear           start a fresh session with the current provider/model",
@@ -301,8 +299,7 @@ func (m *Model) commitPickerSelection() (Model, tea.Cmd) {
 		m.backend.SetConfig(&cfg)
 		m.status = noModelConfiguredStatus()
 		m.picker = nil
-		m.openModelPickerWithConfig(&cfg)
-		return *m, m.printEntries(session.Entry{Role: session.System, Content: "Provider set to " + selected.Label})
+		return *m, m.openModelPickerWithConfig(&cfg)
 
 	case pickerPurposeModel:
 		cfg.Model = selected.Value
