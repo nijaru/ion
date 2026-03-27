@@ -16,22 +16,17 @@ import (
 var listModels = registry.ListModels
 
 func providerItems() []pickerItem {
-	items := []pickerItem{
-		{Label: "anthropic", Value: "anthropic", Detail: providerDetail("anthropic")},
-		{Label: "openai", Value: "openai", Detail: providerDetail("openai")},
-		{Label: "openrouter", Value: "openrouter", Detail: providerDetail("openrouter")},
-		{Label: "gemini", Value: "gemini", Detail: providerDetail("gemini")},
-		{Label: "claude-pro", Value: "claude-pro", Detail: "ACP"},
-		{Label: "gemini-advanced", Value: "gemini-advanced", Detail: "ACP"},
-		{Label: "gh-copilot", Value: "gh-copilot", Detail: "ACP"},
-		{Label: "chatgpt", Value: "chatgpt", Detail: "ACP"},
-		{Label: "codex", Value: "codex", Detail: "ACP"},
+	return []pickerItem{
+		{Label: "Anthropic", Value: "anthropic", Detail: providerDetail("anthropic"), Group: "Native APIs"},
+		{Label: "OpenAI", Value: "openai", Detail: providerDetail("openai"), Group: "Native APIs"},
+		{Label: "OpenRouter", Value: "openrouter", Detail: providerDetail("openrouter"), Group: "Native APIs"},
+		{Label: "Gemini", Value: "gemini", Detail: providerDetail("gemini"), Group: "Native APIs"},
+		{Label: "Claude Pro", Value: "claude-pro", Detail: providerDetail("claude-pro"), Group: "Subscriptions"},
+		{Label: "ChatGPT", Value: "chatgpt", Detail: providerDetail("chatgpt"), Group: "Subscriptions"},
+		{Label: "Codex CLI", Value: "codex", Detail: providerDetail("codex"), Group: "Subscriptions"},
+		{Label: "Gemini CLI", Value: "gemini-advanced", Detail: providerDetail("gemini-advanced"), Group: "Subscriptions"},
+		{Label: "GitHub Copilot", Value: "gh-copilot", Detail: providerDetail("gh-copilot"), Group: "Subscriptions"},
 	}
-
-	slices.SortFunc(items, func(a, b pickerItem) int {
-		return strings.Compare(a.Label, b.Label)
-	})
-	return items
 }
 
 func pickerIndex(items []pickerItem, value string) int {
@@ -41,6 +36,15 @@ func pickerIndex(items []pickerItem, value string) int {
 		}
 	}
 	return 0
+}
+
+func providerDisplayName(value string) string {
+	for _, item := range providerItems() {
+		if strings.EqualFold(item.Value, value) || strings.EqualFold(item.Label, value) {
+			return item.Label
+		}
+	}
+	return value
 }
 
 func modelItemsForProvider(provider string) ([]pickerItem, error) {
@@ -68,20 +72,20 @@ func modelItemsForProvider(provider string) ([]pickerItem, error) {
 func providerDetail(provider string) string {
 	switch strings.ToLower(strings.TrimSpace(provider)) {
 	case "claude-pro", "gemini-advanced", "gh-copilot", "chatgpt", "codex":
-		return "ACP"
+		return "Subscription • ACP"
 	case "anthropic":
-		return keyDetail("ANTHROPIC_API_KEY")
+		return "Native API • " + keyDetail("ANTHROPIC_API_KEY")
 	case "openai":
-		return keyDetail("OPENAI_API_KEY")
+		return "Native API • " + keyDetail("OPENAI_API_KEY")
 	case "openrouter":
-		return keyDetail("OPENROUTER_API_KEY")
+		return "Native API • " + keyDetail("OPENROUTER_API_KEY")
 	case "gemini":
 		if os.Getenv("GEMINI_API_KEY") != "" || os.Getenv("GOOGLE_API_KEY") != "" {
-			return "API key set"
+			return "Native API • API key set"
 		}
-		return "API key missing"
+		return "Native API • API key missing"
 	default:
-		return "API key"
+		return ""
 	}
 }
 
@@ -181,7 +185,7 @@ func pickerDisplayItems(p *pickerState) []pickerItem {
 }
 
 func pickerMatches(query string, item pickerItem) bool {
-	candidate := strings.ToLower(strings.Join([]string{item.Label, item.Value, item.Detail}, " "))
+	candidate := strings.ToLower(strings.Join([]string{item.Label, item.Value, item.Detail, item.Group}, " "))
 	q := strings.ToLower(strings.TrimSpace(query))
 	if q == "" {
 		return true

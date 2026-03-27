@@ -377,7 +377,7 @@ func TestHandleCommandUpdatesConfigDirectly(t *testing.T) {
 
 			cmd := model.handleCommand(tc.command)
 			if cmd == nil {
-				t.Fatal("expected transcript notice command")
+				t.Fatal("expected direct config command to print a notice")
 			}
 			if model.picker != nil {
 				t.Fatal("expected no picker to open")
@@ -389,6 +389,9 @@ func TestHandleCommandUpdatesConfigDirectly(t *testing.T) {
 			}
 			if got := string(data); got != tc.expected {
 				t.Fatalf("config = %q, want %q", got, tc.expected)
+			}
+			if model.status == "" {
+				t.Fatal("expected status to be updated after direct config command")
 			}
 		})
 	}
@@ -622,13 +625,13 @@ func TestProviderItemsShowConfiguredStatus(t *testing.T) {
 	items := providerItems()
 
 	for label, wantDetail := range map[string]string{
-		"anthropic":       "API key missing",
-		"openrouter":      "API key set",
-		"claude-pro":      "ACP",
-		"gemini-advanced": "ACP",
-		"gh-copilot":      "ACP",
-		"chatgpt":         "ACP",
-		"codex":           "ACP",
+		"Anthropic":       "Native API • API key missing",
+		"OpenRouter":      "Native API • API key set",
+		"Claude Pro":      "Subscription • ACP",
+		"Gemini CLI":      "Subscription • ACP",
+		"GitHub Copilot":  "Subscription • ACP",
+		"ChatGPT":         "Subscription • ACP",
+		"Codex CLI":       "Subscription • ACP",
 	} {
 		found := false
 		for _, item := range items {
@@ -752,7 +755,7 @@ func TestQueuedFollowUpSubmitsAfterTurnFinished(t *testing.T) {
 		t.Fatalf("composer = %q, want cleared after queueing", got)
 	}
 	if cmd == nil {
-		t.Fatal("expected queue notice command")
+		t.Fatal("expected queue notice cmd")
 	}
 
 	updated, cmd = model.Update(session.TurnFinished{})
@@ -764,7 +767,7 @@ func TestQueuedFollowUpSubmitsAfterTurnFinished(t *testing.T) {
 	next, nextCmd := model.Update(msg)
 	model = next.(Model)
 	if nextCmd == nil {
-		t.Fatal("expected submit turn command after queued turn message")
+		t.Fatal("expected queued turn submission command")
 	}
 	if len(sess.submits) != 1 || sess.submits[0] != "follow up" {
 		t.Fatalf("submits = %#v, want queued follow up", sess.submits)
@@ -896,12 +899,14 @@ func TestRuntimeSwitchShowsStatusOnResume(t *testing.T) {
 	model.session = &stubSession{events: make(chan session.Event)}
 
 	updated, cmd := model.Update(runtimeSwitchedMsg{
-		backend:    stubBackend{sess: &stubSession{events: make(chan session.Event)}},
-		session:    &stubSession{events: make(chan session.Event)},
-		storage:    &stubStorageSession{id: "session-1", branch: "main"},
-		status:     "Connected to openai/gpt-4.1 via Canto",
-		notice:     "Resumed session session-1",
-		showStatus: true,
+		backend:       stubBackend{sess: &stubSession{events: make(chan session.Event)}},
+		session:       &stubSession{events: make(chan session.Event)},
+		storage:       &stubStorageSession{id: "session-1", branch: "main"},
+		printLines:    []string{"--- resumed ---", "ion v0.0.0 • native • openai • gpt-4.1", "~/tmp/test • main"},
+		replayEntries: []session.Entry{{Role: session.User, Content: "hello"}},
+		status:        "Connected to openai/gpt-4.1 via Canto",
+		notice:        "Resumed session session-1",
+		showStatus:    true,
 	})
 	model = updated.(Model)
 
@@ -989,6 +994,50 @@ func TestStartupPrintLinesIncludesReplayHistory(t *testing.T) {
 		if lines[i] != want[i] {
 			t.Fatalf("startup line %d = %q, want %q", i, lines[i], want[i])
 		}
+	}
+}
+
+func TestStartupPrintLinesOmitsConfigurationWarning(t *testing.T) {
+	model := readyModel(t)
+	model.status = noProviderConfiguredStatus()
+
+	lines := model.startupPrintLines()
+	for _, line := range lines {
+		if strings.Contains(line, "No provider configured") {
+			t.Fatalf("startup lines should not include config warning: %#v", lines)
+		}
+	}
+}
+
+func TestProgressLineShowsConfigurationWarning(t *testing.T) {
+	model := readyModel(t)
+	model.status = noModelConfiguredStatus()
+
+	line := ansi.Strip(model.progressLine())
+	if !strings.Contains(line, "No model configured") {
+		t.Fatalf("progress line missing config warning: %q", line)
+	}
+}
+
+func TestProviderItemsGroupNativeBeforeSubscriptions(t *testing.T) {
+	items := providerItems()
+	if len(items) < 2 {
+		t.Fatalf("provider items = %d, want at least 2", len(items))
+	}
+	if items[0].Group != "Native APIs" {
+		t.Fatalf("first group = %q, want %q", items[0].Group, "Native APIs")
+	}
+	foundSubscription := false
+	for _, item := range items {
+		if item.Group == "Subscriptions" {
+			foundSubscription = true
+		}
+		if foundSubscription && item.Group == "Native APIs" {
+			t.Fatalf("native provider %q appears after subscriptions", item.Label)
+		}
+	}
+	if !foundSubscription {
+		t.Fatal("expected subscription providers in picker")
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -19,15 +20,6 @@ func (m Model) View() tea.View {
 	}
 
 	var b strings.Builder
-
-	startup := m.renderStartupBlock()
-	if startup != "" {
-		b.WriteString(startup)
-		b.WriteString("\n")
-	} else {
-		// Blank line separates scrollback from dynamic area.
-		b.WriteString("\n")
-	}
 
 	// Plane B — ephemeral in-flight content
 	planeB := m.renderPlaneB()
@@ -51,16 +43,8 @@ func (m Model) View() tea.View {
 	b.WriteString(m.progressLine())
 	b.WriteString("\n")
 
-	// Top separator
-	b.WriteString(m.st.sep.Render(strings.Repeat("─", max(0, m.width))))
-	b.WriteString("\n")
-
 	// Composer
-	b.WriteString(lipgloss.NewStyle().PaddingLeft(1).Render(m.composer.View()))
-	b.WriteString("\n")
-
-	// Bottom separator
-	b.WriteString(m.st.sep.Render(strings.Repeat("─", max(0, m.width))))
+	b.WriteString(m.composer.View())
 	b.WriteString("\n")
 
 	// Status line
@@ -80,7 +64,7 @@ func (m Model) renderPlaneB() string {
 
 	// Thinking/reasoning (dimmed, shown while generating)
 	if m.reasonBuf != "" {
-		b.WriteString(m.st.dim.Render("  • Thinking..."))
+		b.WriteString(m.st.dim.Render("• Thinking..."))
 		b.WriteString("\n")
 		for _, line := range strings.Split(m.reasonBuf, "\n") {
 			b.WriteString(m.st.dim.PaddingLeft(4).Render(line))
@@ -152,9 +136,20 @@ func (m Model) renderPicker() string {
 		b.WriteString(m.st.dim.PaddingLeft(2).Render("..."))
 		b.WriteString("\n")
 	}
+	labelWidth := 0
+	for _, item := range items[start:end] {
+		labelWidth = max(labelWidth, lipgloss.Width(item.Label))
+	}
+	lastGroup := ""
 	for i := start; i < end; i++ {
 		item := items[i]
-		line := item.Label
+		if item.Group != "" && item.Group != lastGroup {
+			b.WriteString("\n")
+			b.WriteString(m.st.dim.PaddingLeft(2).Render(item.Group))
+			b.WriteString("\n")
+			lastGroup = item.Group
+		}
+		line := item.Label + strings.Repeat(" ", max(0, labelWidth-lipgloss.Width(item.Label)))
 		if item.Detail != "" {
 			line += " • " + item.Detail
 		}
@@ -238,11 +233,11 @@ func (m Model) renderEntry(e session.Entry) string {
 		}
 		rendered := m.renderMarkdownContent(e.Content)
 		if rendered == "" {
-			b.WriteString(m.st.assistant.Render("• "))
+			b.WriteString(m.st.agent.Render("• "))
 			return b.String()
 		}
 		lines := strings.Split(rendered, "\n")
-		b.WriteString(m.st.assistant.Render("• "))
+		b.WriteString(m.st.agent.Render("• "))
 		b.WriteString(lines[0])
 		for _, line := range lines[1:] {
 			b.WriteString("\n")
@@ -299,7 +294,7 @@ func (m Model) renderEntry(e session.Entry) string {
 		return b.String()
 
 	case session.System:
-		return m.st.system.Render("  " + e.Content)
+		return m.st.system.Render("• " + e.Content)
 
 	default:
 		return e.Content
@@ -311,25 +306,33 @@ func (m Model) progressLine() string {
 	var line string
 	switch m.progress {
 	case stateIonizing:
-		line = m.st.cyan.Render("  " + m.spinner.View() + " Ionizing...")
+		line = m.st.cyan.Render(m.spinner.View() + " Ionizing...")
 	case stateStreaming:
-		line = m.st.cyan.Render("  " + m.spinner.View() + " Streaming...")
+		line = m.st.cyan.Render(m.spinner.View() + " Streaming...")
 	case stateWorking:
-		line = m.st.cyan.Render("  " + m.spinner.View() + " Working...")
+		line = m.st.cyan.Render(m.spinner.View() + " Working...")
 	case stateApproval:
-		line = m.st.warn.Render("  ⚠ Approval required")
+		line = m.st.warn.Render("⚠ Approval required")
 	case stateCancelled:
-		line = m.st.dim.Render("  • Cancelled")
+		line = m.st.dim.Render("• Cancelled")
 	case stateError:
-		line = m.st.warn.Render("  ✗ Error: " + strings.NewReplacer("\n", " ", "\r", " ").Replace(m.lastError))
+		line = m.st.warn.Render("✗ Error: " + strings.NewReplacer("\n", " ", "\r", " ").Replace(m.lastError))
 	default:
-		line = m.st.dim.Render("  • Ready")
+		if isConfigurationStatus(m.status) {
+			line = m.st.warn.Render("• " + strings.TrimSpace(m.status))
+		} else {
+			line = m.st.dim.Render("• Ready")
+		}
 	}
 	return fitLine(line, m.width)
 }
 
 // headerLine returns the workspace line shown below the startup banner.
 func (m Model) headerLine() string {
+	return m.headerLineFor(m.branch)
+}
+
+func (m Model) headerLineFor(branch string) string {
 	sep := m.st.dim.Render(" • ")
 
 	home, _ := os.UserHomeDir()
@@ -339,8 +342,8 @@ func (m Model) headerLine() string {
 	}
 
 	pathParts := []string{m.st.dim.Render(dir)}
-	if m.branch != "" {
-		pathParts = append(pathParts, m.st.dim.Render(m.branch))
+	if branch != "" {
+		pathParts = append(pathParts, m.st.dim.Render(branch))
 	}
 	return strings.Join(pathParts, sep)
 }
@@ -422,7 +425,11 @@ func joinLineSegments(sep string, segments ...string) string {
 			filtered = append(filtered, segment)
 		}
 	}
-	return "  " + strings.Join(filtered, sep)
+	if len(filtered) == 0 {
+		return ""
+	}
+	filtered = slices.Clip(filtered)
+	return strings.Join(filtered, sep)
 }
 
 func fitLine(line string, width int) string {

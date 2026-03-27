@@ -33,7 +33,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			label := ifthen(approved, "Approved", "Denied")
 			notice := session.Entry{Role: session.System, Content: label + ": " + desc}
 			m.session.Approve(context.Background(), reqID, approved)
-			return m, tea.Printf("%s\n", m.renderEntry(notice))
+			return m, printEntriesCmd(m, notice)
 		}
 	}
 
@@ -99,7 +99,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			m.queuedTurn = text
 			m.composer.Reset()
 			m.relayoutComposer()
-			return m, tea.Printf("%s\n", m.renderEntry(session.Entry{Role: session.System, Content: "Queued follow-up"}))
+			return m, printEntriesCmd(m, session.Entry{Role: session.System, Content: "Queued follow-up"})
 		}
 
 		return m.submitText(text)
@@ -259,16 +259,13 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 					Content: blocks,
 					TS:      now(),
 				}); err != nil {
-					return m, tea.Batch(
-						tea.Printf("%s\n", m.renderEntry(entry)),
+					return m, tea.Sequence(
+						printEntriesCmd(m, entry),
 						persistErrorCmd("persist assistant response", err),
 					)
 				}
 			}
-			return m, tea.Batch(
-				tea.Printf("%s\n", m.renderEntry(entry)),
-				m.awaitSessionEvent(),
-			)
+			return m, tea.Sequence(printEntriesCmd(m, entry), m.awaitSessionEvent())
 		}
 		return m, m.awaitSessionEvent()
 
@@ -315,16 +312,13 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 					IsError:   msg.Error != nil,
 					TS:        now(),
 				}); err != nil {
-					return m, tea.Batch(
-						tea.Printf("%s\n", m.renderEntry(entry)),
+					return m, tea.Sequence(
+						printEntriesCmd(m, entry),
 						persistErrorCmd("persist tool result", err),
 					)
 				}
 			}
-			return m, tea.Batch(
-				tea.Printf("%s\n", m.renderEntry(entry)),
-				m.awaitSessionEvent(),
-			)
+			return m, tea.Sequence(printEntriesCmd(m, entry), m.awaitSessionEvent())
 		}
 		return m, m.awaitSessionEvent()
 
@@ -348,10 +342,7 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 				return m, persistErrorCmd("persist verification result", err)
 			}
 		}
-		return m, tea.Batch(
-			tea.Printf("%s\n", m.renderEntry(entry)),
-			m.awaitSessionEvent(),
-		)
+		return m, tea.Sequence(printEntriesCmd(m, entry), m.awaitSessionEvent())
 
 	case session.ApprovalRequest:
 		m.pendingApproval = &msg
@@ -384,10 +375,7 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 			m.pending.Content = msg.Result
 			entry := *m.pending
 			m.pending = nil
-			return m, tea.Batch(
-				tea.Printf("%s\n", m.renderEntry(entry)),
-				m.awaitSessionEvent(),
-			)
+			return m, tea.Sequence(printEntriesCmd(m, entry), m.awaitSessionEvent())
 		}
 		return m, m.awaitSessionEvent()
 
@@ -397,10 +385,7 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 			m.pending.IsError = true
 			entry := *m.pending
 			m.pending = nil
-			return m, tea.Batch(
-				tea.Printf("%s\n", m.renderEntry(entry)),
-				m.awaitSessionEvent(),
-			)
+			return m, tea.Sequence(printEntriesCmd(m, entry), m.awaitSessionEvent())
 		}
 		return m, m.awaitSessionEvent()
 
@@ -439,8 +424,8 @@ func (m Model) submitText(text string) (Model, tea.Cmd) {
 			Content: text,
 			TS:      now(),
 		}); err != nil {
-			return m, tea.Batch(
-				tea.Printf("%s\n", m.renderEntry(userEntry)),
+			return m, tea.Sequence(
+				printEntriesCmd(m, userEntry),
 				persistErrorCmd("persist user input", err),
 			)
 		}
@@ -448,11 +433,11 @@ func (m Model) submitText(text string) (Model, tea.Cmd) {
 
 	if strings.HasPrefix(text, "/") {
 		cmd := m.handleCommand(text)
-		return m, tea.Batch(tea.Printf("%s\n", m.renderEntry(userEntry)), cmd)
+		return m, tea.Sequence(printEntriesCmd(m, userEntry), cmd)
 	}
 
 	m.progress = stateIonizing
 	m.thinking = true
 	m.session.SubmitTurn(context.Background(), text)
-	return m, tea.Printf("%s\n", m.renderEntry(userEntry))
+	return m, printEntriesCmd(m, userEntry)
 }

@@ -28,6 +28,8 @@ type runtimeSwitchedMsg struct {
 	backend    backend.Backend
 	session    session.AgentSession
 	storage    storage.Session
+	printLines  []string
+	replayEntries []session.Entry
 	status     string
 	notice     string
 	showStatus bool
@@ -72,6 +74,7 @@ type pickerItem struct {
 	Label  string
 	Value  string
 	Detail string
+	Group  string
 }
 
 type pickerState struct {
@@ -227,7 +230,7 @@ func (m Model) startupPrintLines() []string {
 	lines := make([]string, 0, len(m.startupLines)+len(m.startupEntries)+2)
 	lines = append(lines, m.startupLines...)
 	lines = append(lines, m.headerLine())
-	if m.status != "" {
+	if m.status != "" && !isConfigurationStatus(m.status) {
 		lines = append(lines, "")
 		lines = append(lines, m.renderStartupStatus(m.status))
 	}
@@ -251,11 +254,50 @@ func (m Model) renderStartupStatus(status string) string {
 		return ""
 	}
 
-	lower := strings.ToLower(trimmed)
-	if strings.HasPrefix(lower, "no ") || strings.HasPrefix(lower, "provider ") || strings.HasPrefix(lower, "model ") || strings.HasPrefix(lower, "configure") || strings.Contains(lower, "required") {
+	if isConfigurationStatus(trimmed) {
 		return m.st.warn.Render("• " + trimmed)
 	}
-	return m.st.dim.Render("  " + trimmed)
+	return m.st.dim.Render(trimmed)
+}
+
+func isConfigurationStatus(status string) bool {
+	trimmed := strings.TrimSpace(status)
+	if trimmed == "" {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	return trimmed == noProviderConfiguredStatus() ||
+		trimmed == noModelConfiguredStatus() ||
+		strings.HasPrefix(lower, "provider and model are required")
+}
+
+func noProviderConfiguredStatus() string {
+	return "No provider configured. Use /provider or Ctrl+P. Set ION_PROVIDER for scripts."
+}
+
+func noModelConfiguredStatus() string {
+	return "No model configured. Use /model or Ctrl+M. Set ION_MODEL for scripts."
+}
+
+func (m Model) runtimeHeaderLine(b backend.Backend) string {
+	version := strings.TrimSpace(m.version)
+	if version == "" {
+		version = "v0.0.0"
+	}
+	runtimeLabel := "native"
+	if b != nil && b.Name() == "acp" {
+		runtimeLabel = "acp"
+	}
+	segments := []string{"ion " + version, runtimeLabel}
+	if b != nil {
+		if provider := strings.TrimSpace(b.Provider()); provider != "" {
+			segments = append(segments, provider)
+		}
+		if model := strings.TrimSpace(b.Model()); model != "" {
+			segments = append(segments, model)
+		}
+	}
+	return strings.Join(segments, " • ")
 }
 
 func (m Model) Init() tea.Cmd {
@@ -265,7 +307,18 @@ func (m Model) Init() tea.Cmd {
 		m.composer.Focus(),
 		m.awaitSessionEvent(),
 	}
+	if cmd := m.printStartupScrollback(); cmd != nil {
+		cmds = append([]tea.Cmd{cmd}, cmds...)
+	}
 	return tea.Batch(cmds...)
+}
+
+func (m Model) printStartupScrollback() tea.Cmd {
+	lines := m.startupPrintLines()
+	if len(lines) == 0 {
+		return nil
+	}
+	return printLinesCmd(lines...)
 }
 
 func (m Model) awaitSessionEvent() tea.Cmd {
@@ -328,32 +381,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.lastToolUseID = ""
 		m.historyIdx = -1
 		m.historyDraft = ""
-		cmds := []tea.Cmd{
-			tea.Printf("%s\n", m.renderEntry(session.Entry{Role: session.System, Content: msg.notice})),
-			m.awaitSessionEvent(),
+		cmds := []tea.Cmd{m.awaitSessionEvent()}
+		if len(msg.printLines) > 0 {
+			cmds = append([]tea.Cmd{printLinesCmd(msg.printLines...)}, cmds...)
 		}
-		if msg.showStatus && strings.TrimSpace(msg.status) != "" {
-			cmds = append(cmds, tea.Printf("%s\n", m.renderEntry(session.Entry{Role: session.System, Content: msg.status})))
+		if len(msg.replayEntries) > 0 {
+			cmds = append([]tea.Cmd{printEntriesCmd(m, msg.replayEntries...)}, cmds...)
 		}
-		return m, tea.Batch(cmds...)
+		if strings.TrimSpace(msg.notice) != "" {
+			cmds = append(cmds, printEntriesCmd(m, session.Entry{Role: session.System, Content: msg.notice}))
+		}
+		if msg.showStatus && strings.TrimSpace(msg.status) != "" && !isConfigurationStatus(msg.status) {
+			cmds = append(cmds, printEntriesCmd(m, session.Entry{Role: session.System, Content: msg.status}))
+		}
+		return m, tea.Sequence(cmds...)
 
 	case sessionCompactedMsg:
-		return m, tea.Printf(
-			"%s\n",
-			m.renderEntry(session.Entry{Role: session.System, Content: msg.notice}),
-		)
+		return m, printEntriesCmd(m, session.Entry{Role: session.System, Content: msg.notice})
 
 	case sessionCostMsg:
-		return m, tea.Printf(
-			"%s\n",
-			m.renderEntry(session.Entry{Role: session.System, Content: msg.notice}),
-		)
+		return m, printEntriesCmd(m, session.Entry{Role: session.System, Content: msg.notice})
 
 	case sessionHelpMsg:
-		return m, tea.Printf(
-			"%s\n",
-			m.renderEntry(session.Entry{Role: session.System, Content: msg.notice}),
-		)
+		return m, printEntriesCmd(m, session.Entry{Role: session.System, Content: msg.notice})
 
 	case queuedTurnMsg:
 		next, cmd := m.submitText(msg.text)
@@ -400,3 +450,25 @@ func ifthen[T any](cond bool, a, b T) T {
 }
 
 func now() int64 { return time.Now().Unix() }
+
+func printLinesCmd(lines ...string) tea.Cmd {
+	filtered := make([]string, 0, len(lines))
+	for _, line := range lines {
+		filtered = append(filtered, line)
+	}
+	if len(filtered) == 0 {
+		return nil
+	}
+	return tea.Printf("%s\n", strings.Join(filtered, "\n"))
+}
+
+func printEntriesCmd(m Model, entries ...session.Entry) tea.Cmd {
+	if len(entries) == 0 {
+		return nil
+	}
+	lines := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		lines = append(lines, m.renderEntry(entry))
+	}
+	return printLinesCmd(lines...)
+}

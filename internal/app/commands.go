@@ -11,6 +11,7 @@ import (
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/session"
+	"github.com/nijaru/ion/internal/storage"
 )
 
 // handleCommand dispatches a slash command entered by the user.
@@ -46,9 +47,10 @@ func (m *Model) handleCommand(input string) tea.Cmd {
 		}
 		m.backend.SetConfig(cfg)
 		if cfg.Provider == "" {
-			return tea.Printf("%s\n", m.renderEntry(session.Entry{Role: session.System, Content: "Set model to " + name}))
+			m.status = noProviderConfiguredStatus()
+			return printEntriesCmd(*m, session.Entry{Role: session.System, Content: "Model set to " + name})
 		}
-		return m.switchRuntimeCommand(cfg, session.Entry{Role: session.System, Content: "Switched model to " + name}, m.session.ID(), true)
+		return m.switchRuntimeCommand(cfg, session.Entry{Role: session.System, Content: "Model set to " + name}, m.session.ID(), false)
 
 	case "/provider":
 		if len(fields) < 2 {
@@ -65,9 +67,10 @@ func (m *Model) handleCommand(input string) tea.Cmd {
 		}
 		m.backend.SetConfig(cfg)
 		if cfg.Model == "" {
-			return tea.Printf("%s\n", m.renderEntry(session.Entry{Role: session.System, Content: "Set provider to " + name}))
+			m.status = noModelConfiguredStatus()
+			return printEntriesCmd(*m, session.Entry{Role: session.System, Content: "Provider set to " + providerDisplayName(name)})
 		}
-		return m.switchRuntimeCommand(cfg, session.Entry{Role: session.System, Content: "Switched provider to " + name}, m.session.ID(), true)
+		return m.switchRuntimeCommand(cfg, session.Entry{Role: session.System, Content: "Provider set to " + providerDisplayName(name)}, m.session.ID(), false)
 
 	case "/mcp":
 		if len(fields) < 3 || fields[1] != "add" {
@@ -288,13 +291,15 @@ func (m *Model) commitPickerSelection() (Model, tea.Cmd) {
 	switch m.picker.purpose {
 	case pickerPurposeProvider:
 		cfg.Provider = selected.Value
-		m.picker = nil
 		cfg.Model = ""
 		if err := config.Save(&cfg); err != nil {
 			return *m, cmdError(fmt.Sprintf("failed to save config: %v", err))
 		}
+		m.backend.SetConfig(&cfg)
+		m.status = noModelConfiguredStatus()
+		m.picker = nil
 		m.openModelPickerWithConfig(&cfg)
-		return *m, tea.Printf("%s\n", m.renderEntry(session.Entry{Role: session.System, Content: "Set provider to " + selected.Value}))
+		return *m, printEntriesCmd(*m, session.Entry{Role: session.System, Content: "Provider set to " + selected.Label})
 
 	case pickerPurposeModel:
 		cfg.Model = selected.Value
@@ -302,8 +307,8 @@ func (m *Model) commitPickerSelection() (Model, tea.Cmd) {
 			return *m, cmdError(fmt.Sprintf("failed to save config: %v", err))
 		}
 		m.picker = nil
-		notice := session.Entry{Role: session.System, Content: "Switched model to " + selected.Value}
-		return *m, m.switchRuntimeCommand(&cfg, notice, m.session.ID(), true)
+		notice := session.Entry{Role: session.System, Content: "Model set to " + selected.Value}
+		return *m, m.switchRuntimeCommand(&cfg, notice, m.session.ID(), false)
 	default:
 		m.picker = nil
 		return *m, nil
@@ -331,13 +336,13 @@ func (m *Model) resumeStoredSessionByID(sessionID string) tea.Cmd {
 
 	cfg := &config.Config{Provider: provider, Model: model}
 	notice := session.Entry{Role: session.System, Content: "Resumed session " + sessionID}
-	return m.switchRuntimeCommand(cfg, notice, sessionID, true)
+	return m.resumeRuntimeCommand(cfg, notice, sessionID)
 }
 
 func (m *Model) switchRuntimeCommand(cfg *config.Config, notice session.Entry, sessionID string, preserveSession bool) tea.Cmd {
 	if m.switcher == nil {
 		m.backend.SetConfig(cfg)
-		return tea.Printf("%s\n", m.renderEntry(notice))
+		return printEntriesCmd(*m, notice)
 	}
 
 	oldSession := m.session
@@ -368,6 +373,60 @@ func (m *Model) switchRuntimeCommand(cfg *config.Config, notice session.Entry, s
 			showStatus: preserveSession,
 		}
 	}
+}
+
+func (m *Model) resumeRuntimeCommand(cfg *config.Config, notice session.Entry, sessionID string) tea.Cmd {
+	if m.switcher == nil {
+		m.backend.SetConfig(cfg)
+		return printEntriesCmd(*m, notice)
+	}
+	switcher := m.switcher
+	cfgCopy := *cfg
+	return func() tea.Msg {
+		oldSession := m.session
+		if oldSession != nil {
+			_ = oldSession.CancelTurn(context.Background())
+		}
+		backend, sess, storageSess, err := switcher(context.Background(), &cfgCopy, sessionID)
+		if err != nil {
+			return session.Error{Err: err}
+		}
+		if oldSession != nil {
+			_ = oldSession.Close()
+		}
+		var entries []session.Entry
+		resumeBranch := currentBranchName(m.branch, storageSess)
+		if storageSess != nil {
+			entries, err = storageSess.Entries(context.Background())
+			if err != nil {
+				return session.Error{Err: fmt.Errorf("load session transcript: %w", err)}
+			}
+		}
+		printLines := []string{"--- resumed ---", m.runtimeHeaderLine(backend)}
+		if header := m.headerLineFor(resumeBranch); header != "" {
+			printLines = append(printLines, header)
+		}
+		return runtimeSwitchedMsg{
+			backend:       backend,
+			session:       sess,
+			storage:       storageSess,
+			printLines:    printLines,
+			replayEntries: entries,
+			status:        backend.Bootstrap().Status,
+			notice:        notice.Content,
+			showStatus:    true,
+		}
+	}
+}
+
+func currentBranchName(fallback string, sess storage.Session) string {
+	if sess == nil {
+		return fallback
+	}
+	if branch := strings.TrimSpace(sess.Meta().Branch); branch != "" {
+		return branch
+	}
+	return fallback
 }
 
 func splitStoredSessionModel(value string) (string, string) {
