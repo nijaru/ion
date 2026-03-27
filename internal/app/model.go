@@ -25,11 +25,12 @@ type streamClosedMsg struct{}
 type runtimeSwitcher func(context.Context, *config.Config, string) (backend.Backend, session.AgentSession, storage.Session, error)
 
 type runtimeSwitchedMsg struct {
-	backend backend.Backend
-	session session.AgentSession
-	storage storage.Session
-	status  string
-	notice  string
+	backend    backend.Backend
+	session    session.AgentSession
+	storage    storage.Session
+	status     string
+	notice     string
+	showStatus bool
 }
 
 type sessionCompactedMsg struct {
@@ -327,10 +328,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.lastToolUseID = ""
 		m.historyIdx = -1
 		m.historyDraft = ""
-		return m, tea.Batch(
+		cmds := []tea.Cmd{
 			tea.Printf("%s\n", m.renderEntry(session.Entry{Role: session.System, Content: msg.notice})),
 			m.awaitSessionEvent(),
-		)
+		}
+		if msg.showStatus && strings.TrimSpace(msg.status) != "" {
+			cmds = append(cmds, tea.Printf("%s\n", m.renderEntry(session.Entry{Role: session.System, Content: msg.status})))
+		}
+		return m, tea.Batch(cmds...)
 
 	case sessionCompactedMsg:
 		return m, tea.Printf(

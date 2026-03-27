@@ -172,7 +172,7 @@ func TestStartupBannerLines(t *testing.T) {
 
 	t.Run("missing provider and model", func(t *testing.T) {
 		got := startupBannerLines("", "", false)
-		want := []string{"ion · native"}
+		want := []string{"ion"}
 		if len(got) != len(want) {
 			t.Fatalf("len(startupBannerLines) = %d, want %d", len(got), len(want))
 		}

@@ -360,11 +360,12 @@ func (m *Model) switchRuntimeCommand(cfg *config.Config, notice session.Entry, s
 			_ = oldSession.Close()
 		}
 		return runtimeSwitchedMsg{
-			backend: backend,
-			session: sess,
-			storage: storageSess,
-			status:  backend.Bootstrap().Status,
-			notice:  notice.Content,
+			backend:    backend,
+			session:    sess,
+			storage:    storageSess,
+			status:     backend.Bootstrap().Status,
+			notice:     notice.Content,
+			showStatus: preserveSession,
 		}
 	}
 }

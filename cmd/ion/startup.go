@@ -12,7 +12,10 @@ func startupBannerLines(provider, model string, resumed bool) []string {
 		runtimeLabel = "acp"
 	}
 
-	segments := []string{"ion", runtimeLabel}
+	segments := []string{"ion"}
+	if provider != "" || model != "" || runtimeLabel == "acp" {
+		segments = append(segments, runtimeLabel)
+	}
 	if provider != "" {
 		segments = append(segments, "provider="+provider)
 	}

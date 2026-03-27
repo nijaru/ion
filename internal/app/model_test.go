@@ -891,6 +891,28 @@ func TestRuntimeSwitchKeepsNoticesOutOfTranscriptStorage(t *testing.T) {
 	}
 }
 
+func TestRuntimeSwitchShowsStatusOnResume(t *testing.T) {
+	model := readyModel(t)
+	model.session = &stubSession{events: make(chan session.Event)}
+
+	updated, cmd := model.Update(runtimeSwitchedMsg{
+		backend:    stubBackend{sess: &stubSession{events: make(chan session.Event)}},
+		session:    &stubSession{events: make(chan session.Event)},
+		storage:    &stubStorageSession{id: "session-1", branch: "main"},
+		status:     "Connected to openai/gpt-4.1 via Canto",
+		notice:     "Resumed session session-1",
+		showStatus: true,
+	})
+	model = updated.(Model)
+
+	if model.status != "Connected to openai/gpt-4.1 via Canto" {
+		t.Fatalf("status = %q", model.status)
+	}
+	if cmd == nil {
+		t.Fatal("expected command batch for runtime switch")
+	}
+}
+
 func TestResumeStoredSessionClosesInspectionSession(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
