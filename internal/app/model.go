@@ -236,6 +236,14 @@ func (m Model) startupPrintLines() []string {
 	return lines
 }
 
+func (m Model) renderStartupBlock() string {
+	lines := m.startupPrintLines()
+	if len(lines) == 0 {
+		return ""
+	}
+	return strings.Join(lines, "\n")
+}
+
 func (m Model) renderStartupStatus(status string) string {
 	trimmed := strings.TrimSpace(status)
 	if trimmed == "" {
@@ -250,13 +258,7 @@ func (m Model) renderStartupStatus(status string) string {
 }
 
 func (m Model) Init() tea.Cmd {
-	printCmds := make([]tea.Cmd, 0, len(m.startupPrintLines()))
-	for _, line := range m.startupPrintLines() {
-		printCmds = append(printCmds, tea.Printf("%s\n", line))
-	}
-
 	cmds := []tea.Cmd{
-		tea.Sequence(printCmds...),
 		textarea.Blink,
 		m.spinner.Tick,
 		m.composer.Focus(),
