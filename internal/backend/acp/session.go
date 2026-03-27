@@ -40,12 +40,13 @@ type Session struct {
 	storage storage.Session
 	policy  *backend.PolicyEngine
 
-	conn      *acp.ClientSideConnection
-	sessionID string
-	cmd       *exec.Cmd
-	cancel    context.CancelFunc
-	closeOnce sync.Once
-	mu        sync.Mutex
+	conn            *acp.ClientSideConnection
+	sessionID       string
+	cmd             *exec.Cmd
+	cancel          context.CancelFunc
+	closeOnce       sync.Once
+	mu              sync.Mutex
+	resumeSessionID string
 
 	// Pending approval requests: requestID → response channel
 	pendingApprovals map[string]chan bool
@@ -75,7 +76,9 @@ func (s *Session) Open(ctx context.Context) error {
 	s.cancel = cancel
 
 	cmd := exec.CommandContext(ctx, "bash", "-c", command)
+	cmd.Env = acpCommandEnv(s.resumeSessionID)
 	s.cmd = cmd
+	s.resumeSessionID = ""
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -126,7 +129,9 @@ func (s *Session) Open(ctx context.Context) error {
 }
 
 func (s *Session) Resume(ctx context.Context, sessionID string) error {
-	// TODO: pass sessionID to agent via Initialize metadata once ACP defines session continuity.
+	s.mu.Lock()
+	s.resumeSessionID = sessionID
+	s.mu.Unlock()
 	return s.Open(ctx)
 }
 
@@ -221,6 +226,14 @@ func (s *Session) Approve(ctx context.Context, requestID string, approved bool) 
 
 func (s *Session) RegisterMCPServer(ctx context.Context, command string, args ...string) error {
 	return fmt.Errorf("MCP server registration not yet supported for ACP agents")
+}
+
+func acpCommandEnv(sessionID string) []string {
+	env := os.Environ()
+	if sessionID != "" {
+		env = append(env, "ION_ACP_SESSION_ID="+sessionID)
+	}
+	return env
 }
 
 // SessionUpdate implements acp.Client — translates ACP notifications to session.Event.

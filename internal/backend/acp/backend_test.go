@@ -255,3 +255,18 @@ func TestACPFullTurn(t *testing.T) {
 		t.Fatalf("expected TurnFinished, got %T", ev2)
 	}
 }
+
+func TestACPCommandEnvIncludesResumeSessionID(t *testing.T) {
+	env := acpCommandEnv("session-123")
+
+	found := false
+	for _, value := range env {
+		if value == "ION_ACP_SESSION_ID=session-123" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected resume session ID in env, got %v", env)
+	}
+}
