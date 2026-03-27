@@ -464,14 +464,15 @@ func TestPersistSystemNoteAppendsToSessionStorage(t *testing.T) {
 		return newBackend, newBackend.Session(), newStorage, nil
 	})
 
-	model.storage = newStorage
-	cmd := model.persistSystemNote("Switched model to gpt-4.1")
-	if cmd == nil {
-		t.Fatal("expected system note command")
-	}
-	if msg := cmd(); msg != nil {
-		t.Fatalf("expected nil message from persisted note, got %T", msg)
-	}
+	next, _ := model.Update(runtimeSwitchedMsg{
+		backend:       testutil.New(),
+		session:       testutil.New(),
+		storage:       newStorage,
+		status:        "ready",
+		notice:        "Switched model to gpt-4.1",
+		persistNotice: true,
+	})
+	model = next.(Model)
 
 	if len(newStorage.appends) == 0 {
 		t.Fatal("expected system note to be appended to session storage")
