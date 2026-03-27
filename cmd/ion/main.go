@@ -95,6 +95,10 @@ func main() {
 		return switchedBackend, switchedBackend.Session(), switchedSession, nil
 	}
 
+	// Reserve a line before the inline TUI attaches so the shell command that
+	// launched ion remains visible in terminal scrollback while ion is running.
+	fmt.Println()
+
 	p := tea.NewProgram(app.New(b, sess, store, cwd, branch, version, switcher).WithStartupLines(startupLines).WithStartupEntries(startupEntries))
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "ion error: %v\n", err)
