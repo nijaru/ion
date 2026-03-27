@@ -217,7 +217,19 @@ func (m Model) renderEntry(e session.Entry) string {
 			b.WriteString(m.st.dim.PaddingLeft(4).Render(e.Reasoning))
 			b.WriteString("\n")
 		}
-		b.WriteString(m.st.assistant.Render("• " + e.Content))
+		rendered := m.renderMarkdownContent(e.Content)
+		if rendered == "" {
+			b.WriteString(m.st.assistant.Render("• "))
+			return b.String()
+		}
+		lines := strings.Split(rendered, "\n")
+		b.WriteString(m.st.assistant.Render("• "))
+		b.WriteString(lines[0])
+		for _, line := range lines[1:] {
+			b.WriteString("\n")
+			b.WriteString("  ")
+			b.WriteString(line)
+		}
 		return b.String()
 
 	case session.Tool:

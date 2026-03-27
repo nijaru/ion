@@ -10,6 +10,7 @@ import (
 
 	"charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/config"
@@ -409,6 +410,28 @@ func TestStartupPrintLinesIncludesReplayHistory(t *testing.T) {
 	for i := range want {
 		if lines[i] != want[i] {
 			t.Fatalf("startup line %d = %q, want %q", i, lines[i], want[i])
+		}
+	}
+}
+
+func TestAssistantEntryRendersMarkdown(t *testing.T) {
+	model := readyModel(t)
+	model.width = 80
+
+	rendered := ansi.Strip(model.renderEntry(session.Entry{
+		Role: session.Assistant,
+		Content: "# Heading\n\n- first item\n- second item\n\n| Name | Value |\n|------|-------|\n| foo  | 123   |\n\n```go\nfmt.Println(\"hi\")\n```",
+	}))
+
+	if strings.Contains(rendered, "```") {
+		t.Fatalf("expected code fences to be rendered away, got %q", rendered)
+	}
+	if strings.Contains(rendered, "# Heading") {
+		t.Fatalf("expected heading marker to be rendered away, got %q", rendered)
+	}
+	for _, want := range []string{"Heading", "first item", "second item", "foo", "123", "fmt.Println(\"hi\")"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered markdown missing %q: %q", want, rendered)
 		}
 	}
 }
