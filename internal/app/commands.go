@@ -9,7 +9,6 @@ import (
 
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/session"
-	"github.com/nijaru/ion/internal/storage"
 )
 
 // handleCommand dispatches a slash command entered by the user.
@@ -40,18 +39,9 @@ func (m *Model) handleCommand(input string) tea.Cmd {
 		}
 		m.backend.SetConfig(cfg)
 		if cfg.Provider == "" {
-			if m.storage != nil {
-				if err := m.storage.Append(context.Background(), storage.System{
-					Type:    "system",
-					Content: "Set model to " + name,
-					TS:      now(),
-				}); err != nil {
-					return cmdError(fmt.Sprintf("persist model change: %v", err))
-				}
-			}
 			return tea.Printf("%s\n", m.renderEntry(session.Entry{Role: session.System, Content: "Set model to " + name}))
 		}
-		return m.switchRuntimeCommand(cfg, session.Entry{Role: session.System, Content: "Switched model to " + name}, m.session.ID(), true)
+		return m.switchRuntimeCommand(cfg, session.Entry{Role: session.System, Content: "Switched model to " + name}, m.session.ID())
 
 	case "/provider":
 		if len(fields) < 2 {
@@ -68,18 +58,9 @@ func (m *Model) handleCommand(input string) tea.Cmd {
 		}
 		m.backend.SetConfig(cfg)
 		if cfg.Model == "" {
-			if m.storage != nil {
-				if err := m.storage.Append(context.Background(), storage.System{
-					Type:    "system",
-					Content: "Set provider to " + name,
-					TS:      now(),
-				}); err != nil {
-					return cmdError(fmt.Sprintf("persist provider change: %v", err))
-				}
-			}
 			return tea.Printf("%s\n", m.renderEntry(session.Entry{Role: session.System, Content: "Set provider to " + name}))
 		}
-		return m.switchRuntimeCommand(cfg, session.Entry{Role: session.System, Content: "Switched provider to " + name}, m.session.ID(), true)
+		return m.switchRuntimeCommand(cfg, session.Entry{Role: session.System, Content: "Switched provider to " + name}, m.session.ID())
 
 	case "/mcp":
 		if len(fields) < 3 || fields[1] != "add" {
@@ -212,7 +193,7 @@ func (m *Model) commitPickerSelection() (Model, tea.Cmd) {
 		}
 		m.picker = nil
 		notice := session.Entry{Role: session.System, Content: "Switched model to " + selected.Value}
-		return *m, m.switchRuntimeCommand(&cfg, notice, m.session.ID(), true)
+		return *m, m.switchRuntimeCommand(&cfg, notice, m.session.ID())
 	default:
 		m.picker = nil
 		return *m, nil
@@ -240,10 +221,10 @@ func (m *Model) resumeStoredSessionByID(sessionID string) tea.Cmd {
 
 	cfg := &config.Config{Provider: provider, Model: model}
 	notice := session.Entry{Role: session.System, Content: "Resumed session " + sessionID}
-	return m.switchRuntimeCommand(cfg, notice, sessionID, true)
+	return m.switchRuntimeCommand(cfg, notice, sessionID)
 }
 
-func (m *Model) switchRuntimeCommand(cfg *config.Config, notice session.Entry, sessionID string, persistNotice bool) tea.Cmd {
+func (m *Model) switchRuntimeCommand(cfg *config.Config, notice session.Entry, sessionID string) tea.Cmd {
 	if m.switcher == nil {
 		m.backend.SetConfig(cfg)
 		return tea.Printf("%s\n", m.renderEntry(notice))
@@ -269,12 +250,11 @@ func (m *Model) switchRuntimeCommand(cfg *config.Config, notice session.Entry, s
 			_ = oldSession.Close()
 		}
 		return runtimeSwitchedMsg{
-			backend:       backend,
-			session:       sess,
-			storage:       storageSess,
-			status:        backend.Bootstrap().Status,
-			notice:        notice.Content,
-			persistNotice: persistNotice,
+			backend: backend,
+			session: sess,
+			storage: storageSess,
+			status:  backend.Bootstrap().Status,
+			notice:  notice.Content,
 		}
 	}
 }

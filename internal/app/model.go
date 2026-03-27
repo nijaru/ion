@@ -24,12 +24,11 @@ type streamClosedMsg struct{}
 type runtimeSwitcher func(context.Context, *config.Config, string) (backend.Backend, session.AgentSession, storage.Session, error)
 
 type runtimeSwitchedMsg struct {
-	backend       backend.Backend
-	session       session.AgentSession
-	storage       storage.Session
-	status        string
-	notice        string
-	persistNotice bool
+	backend backend.Backend
+	session session.AgentSession
+	storage storage.Session
+	status  string
+	notice  string
 }
 
 type sessionPickerItem struct {
@@ -292,19 +291,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.lastToolUseID = ""
 		m.historyIdx = -1
 		m.historyDraft = ""
-		if msg.persistNotice && m.storage != nil {
-			if err := m.storage.Append(context.Background(), storage.System{
-				Type:    "system",
-				Content: msg.notice,
-				TS:      now(),
-			}); err != nil {
-				return m, tea.Batch(
-					tea.Printf("%s\n", m.renderEntry(session.Entry{Role: session.System, Content: msg.notice})),
-					persistErrorCmd("persist runtime switch notice", err),
-					m.awaitSessionEvent(),
-				)
-			}
-		}
 		return m, tea.Batch(
 			tea.Printf("%s\n", m.renderEntry(session.Entry{Role: session.System, Content: msg.notice})),
 			m.awaitSessionEvent(),

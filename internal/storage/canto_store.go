@@ -289,12 +289,6 @@ func (s *cantoSession) Append(ctx context.Context, event any) error {
 			Content: e.Content,
 		})
 		err = s.store.canto.Save(ctx, ev)
-	case System:
-		ev := session.NewEvent(s.id, session.EventType("system"), map[string]any{
-			"content": e.Content,
-			"ts":      e.TS,
-		})
-		err = s.store.canto.Save(ctx, ev)
 	case Assistant:
 		var content strings.Builder
 		var reasoning strings.Builder
@@ -383,11 +377,8 @@ func (s *cantoSession) Entries(ctx context.Context) ([]ionsession.Entry, error) 
 			var msg llm.Message
 			if err := ev.UnmarshalData(&msg); err == nil {
 				role := ionsession.Assistant
-				switch msg.Role {
-				case llm.RoleUser:
+				if msg.Role == llm.RoleUser {
 					role = ionsession.User
-				case llm.RoleSystem:
-					role = ionsession.System
 				}
 				entries = append(entries, ionsession.Entry{
 					Role:      role,
@@ -422,11 +413,6 @@ func (s *cantoSession) Entries(ctx context.Context) ([]ionsession.Entry, error) 
 				if len(entries) > 0 && entries[len(entries)-1].Role == ionsession.Tool {
 					entries[len(entries)-1].Content = data.Output
 				}
-			}
-		case session.EventType("system"):
-			var e System
-			if err := ev.UnmarshalData(&e); err == nil {
-				entries = append(entries, ionsession.Entry{Role: ionsession.System, Content: e.Content})
 			}
 		}
 	}

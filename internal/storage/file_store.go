@@ -354,9 +354,6 @@ func (s *fileSession) Append(ctx context.Context, event any) error {
 	case User:
 		preview = e.Content
 		touchIndex = true
-	case System:
-		// Keep runtime notices in the session log without changing the preview.
-		touchIndex = true
 	case Assistant:
 		for _, b := range e.Content {
 			if b.Type == "text" && b.Text != nil {
@@ -403,10 +400,6 @@ func (s *fileSession) Entries(ctx context.Context) ([]session.Entry, error) {
 			var e User
 			json.Unmarshal(line, &e)
 			entries = append(entries, session.Entry{Role: session.User, Content: e.Content})
-		case "system":
-			var e System
-			json.Unmarshal(line, &e)
-			entries = append(entries, session.Entry{Role: session.System, Content: e.Content})
 		case "assistant":
 			var e Assistant
 			json.Unmarshal(line, &e)

@@ -437,7 +437,7 @@ func TestPickerCommitSwitchesRuntime(t *testing.T) {
 	}
 }
 
-func TestPersistSystemNoteAppendsToSessionStorage(t *testing.T) {
+func TestRuntimeSwitchKeepsNoticesOutOfTranscriptStorage(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	cfgDir := filepath.Join(home, ".ion")
@@ -465,24 +465,16 @@ func TestPersistSystemNoteAppendsToSessionStorage(t *testing.T) {
 	})
 
 	next, _ := model.Update(runtimeSwitchedMsg{
-		backend:       testutil.New(),
-		session:       testutil.New(),
-		storage:       newStorage,
-		status:        "ready",
-		notice:        "Switched model to gpt-4.1",
-		persistNotice: true,
+		backend: testutil.New(),
+		session: testutil.New(),
+		storage: newStorage,
+		status:  "ready",
+		notice:  "Switched model to gpt-4.1",
 	})
 	model = next.(Model)
 
-	if len(newStorage.appends) == 0 {
-		t.Fatal("expected system note to be appended to session storage")
-	}
-	note, ok := newStorage.appends[len(newStorage.appends)-1].(storage.System)
-	if !ok {
-		t.Fatalf("expected storage.System note, got %T", newStorage.appends[len(newStorage.appends)-1])
-	}
-	if note.Content != "Switched model to gpt-4.1" {
-		t.Fatalf("system note = %q, want %q", note.Content, "Switched model to gpt-4.1")
+	if len(newStorage.appends) != 0 {
+		t.Fatalf("expected runtime switch notice to stay out of transcript storage, got %d appends", len(newStorage.appends))
 	}
 }
 
