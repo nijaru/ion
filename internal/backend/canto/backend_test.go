@@ -2,6 +2,8 @@ package canto
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -289,6 +291,63 @@ func TestCompactUsesManualCompactionHelper(t *testing.T) {
 	})
 	if compactionEvents == 0 {
 		t.Fatal("expected at least one durable compaction event")
+	}
+}
+
+func TestOpenLoadsLayeredProjectInstructions(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir .git: %v", err)
+	}
+	nested := filepath.Join(root, "pkg", "feature")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatalf("mkdir nested: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("root instruction"), 0o644); err != nil {
+		t.Fatalf("write root AGENTS: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "pkg", "AGENTS.md"), []byte("pkg instruction"), 0o644); err != nil {
+		t.Fatalf("write pkg AGENTS: %v", err)
+	}
+
+	ctx := context.Background()
+	store, err := storage.NewCantoStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	storageSession, err := store.OpenSession(ctx, nested, "openai/model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	oldFactory := providerFactory
+	providerFactory = func(providerName string) (llm.Provider, error) {
+		if providerName == "openai" {
+			return &compactProvider{id: "openai"}, nil
+		}
+		return oldFactory(providerName)
+	}
+	defer func() { providerFactory = oldFactory }()
+
+	b := New()
+	b.SetStore(store)
+	b.SetSession(storageSession)
+	b.SetConfig(&config.Config{Provider: "openai", Model: "model-a", ContextLimit: 100})
+	if err := b.Open(ctx); err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer func() { _ = b.Close() }()
+
+	if !strings.Contains(b.agent.Instructions, "root instruction") {
+		t.Fatalf("instructions missing root layer: %q", b.agent.Instructions)
+	}
+	if !strings.Contains(b.agent.Instructions, "pkg instruction") {
+		t.Fatalf("instructions missing nested layer: %q", b.agent.Instructions)
+	}
+	if !strings.Contains(b.agent.Instructions, "## Project Instructions") {
+		t.Fatalf("instructions missing project section: %q", b.agent.Instructions)
 	}
 }
 

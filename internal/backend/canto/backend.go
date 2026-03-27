@@ -177,9 +177,12 @@ func (b *Backend) Open(ctx context.Context) error {
 	}
 	b.llm = p
 
-	// Initialize Agent
-	// TODO: Load instructions from a config or file
-	instructions := "You are ion, an elite AI coding assistant built on the Canto framework.\n\n" +
+	cwd := b.Meta()["cwd"]
+	if cwd == "" {
+		cwd, _ = os.Getwd()
+	}
+
+	baseInstructions := "You are ion, an elite AI coding assistant built on the Canto framework.\n\n" +
 		"CORE PRINCIPLES:\n" +
 		"1. Be concise, professional, and thorough.\n" +
 		"2. Explore before acting. Use 'list', 'read', and 'glob' to understand the codebase context.\n" +
@@ -197,9 +200,9 @@ func (b *Backend) Open(ctx context.Context) error {
 		"- system: 'bash' for running any shell command.\n" +
 		"- verify: run verification commands (test, lint) and report results to the host."
 
-	cwd := b.Meta()["cwd"]
-	if cwd == "" {
-		cwd, _ = os.Getwd()
+	instructions, err := backend.BuildInstructions(baseInstructions, cwd)
+	if err != nil {
+		return err
 	}
 
 	registry := tool.NewRegistry()
