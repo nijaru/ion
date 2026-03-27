@@ -122,6 +122,12 @@ type (
 		TS     int64  `json:"ts"`
 	}
 
+	System struct {
+		Type    string `json:"type"` // "system"
+		Content string `json:"content"`
+		TS      int64  `json:"ts"`
+	}
+
 	Assistant struct {
 		Type    string  `json:"type"` // "assistant"
 		Content []Block `json:"content"`

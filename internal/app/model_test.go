@@ -12,6 +12,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/nijaru/canto/memory"
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/session"
@@ -85,9 +86,12 @@ func (s *stubSession) ID() string              { return "stub" }
 func (s *stubSession) Meta() map[string]string { return nil }
 
 type stubStorageSession struct {
-	id     string
-	model  string
-	branch string
+	id        string
+	model     string
+	branch    string
+	closed    bool
+	appends   []any
+	appendErr error
 }
 
 func (s *stubStorageSession) ID() string { return s.id }
@@ -100,7 +104,10 @@ func (s *stubStorageSession) Meta() storage.Metadata {
 	}
 }
 
-func (s *stubStorageSession) Append(ctx context.Context, event any) error { return nil }
+func (s *stubStorageSession) Append(ctx context.Context, event any) error {
+	s.appends = append(s.appends, event)
+	return s.appendErr
+}
 
 func (s *stubStorageSession) Entries(ctx context.Context) ([]session.Entry, error) {
 	return nil, nil
@@ -112,7 +119,52 @@ func (s *stubStorageSession) Usage(ctx context.Context) (int, int, float64, erro
 	return 0, 0, 0, nil
 }
 
-func (s *stubStorageSession) Close() error { return nil }
+func (s *stubStorageSession) Close() error {
+	s.closed = true
+	return nil
+}
+
+type resumeOnlyStore struct {
+	resumed storage.Session
+}
+
+func (s *resumeOnlyStore) OpenSession(ctx context.Context, cwd, model, branch string) (storage.Session, error) {
+	return nil, nil
+}
+
+func (s *resumeOnlyStore) ResumeSession(ctx context.Context, id string) (storage.Session, error) {
+	return s.resumed, nil
+}
+
+func (s *resumeOnlyStore) ListSessions(ctx context.Context, cwd string) ([]storage.SessionInfo, error) {
+	return nil, nil
+}
+
+func (s *resumeOnlyStore) GetRecentSession(ctx context.Context, cwd string) (*storage.SessionInfo, error) {
+	return nil, nil
+}
+
+func (s *resumeOnlyStore) AddInput(ctx context.Context, cwd, content string) error { return nil }
+
+func (s *resumeOnlyStore) GetInputs(ctx context.Context, cwd string, limit int) ([]string, error) {
+	return nil, nil
+}
+
+func (s *resumeOnlyStore) UpdateSession(ctx context.Context, si storage.SessionInfo) error {
+	return nil
+}
+
+func (s *resumeOnlyStore) SaveKnowledge(ctx context.Context, item storage.KnowledgeItem) error {
+	return nil
+}
+
+func (s *resumeOnlyStore) SearchKnowledge(ctx context.Context, cwd, query string, limit int) ([]storage.KnowledgeItem, error) {
+	return nil, nil
+}
+
+func (s *resumeOnlyStore) DeleteKnowledge(ctx context.Context, id string) error { return nil }
+
+func (s *resumeOnlyStore) CoreStore() *memory.CoreStore { return nil }
 
 func readyModel(t *testing.T) Model {
 	t.Helper()
@@ -385,6 +437,103 @@ func TestPickerCommitSwitchesRuntime(t *testing.T) {
 	}
 }
 
+func TestPersistSystemNoteAppendsToSessionStorage(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cfgDir := filepath.Join(home, ".ion")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.toml"), []byte("provider = \"openai\"\nmodel = \"gpt-4.1\"\n"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	oldSession := &stubSession{events: make(chan session.Event)}
+	oldBackend := stubBackend{sess: oldSession}
+
+	newStorage := &stubStorageSession{
+		id:     oldSession.ID(),
+		model:  "openai/gpt-4.1",
+		branch: "feature/switch",
+	}
+	model := New(oldBackend, nil, nil, "/tmp/test", "main", "dev", func(ctx context.Context, cfg *config.Config, sessionID string) (backend.Backend, session.AgentSession, storage.Session, error) {
+		resolved := *cfg
+		newBackend := testutil.New()
+		newBackend.SetConfig(&resolved)
+		newBackend.SetSession(newStorage)
+		return newBackend, newBackend.Session(), newStorage, nil
+	})
+
+	model.storage = newStorage
+	cmd := model.persistSystemNote("Switched model to gpt-4.1")
+	if cmd == nil {
+		t.Fatal("expected system note command")
+	}
+	if msg := cmd(); msg != nil {
+		t.Fatalf("expected nil message from persisted note, got %T", msg)
+	}
+
+	if len(newStorage.appends) == 0 {
+		t.Fatal("expected system note to be appended to session storage")
+	}
+	note, ok := newStorage.appends[len(newStorage.appends)-1].(storage.System)
+	if !ok {
+		t.Fatalf("expected storage.System note, got %T", newStorage.appends[len(newStorage.appends)-1])
+	}
+	if note.Content != "Switched model to gpt-4.1" {
+		t.Fatalf("system note = %q, want %q", note.Content, "Switched model to gpt-4.1")
+	}
+}
+
+func TestResumeStoredSessionClosesInspectionSession(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfgDir := filepath.Join(home, ".ion")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.toml"), []byte("provider = \"openai\"\nmodel = \"gpt-4.1\"\n"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	tempSession := &stubStorageSession{
+		id:     "session-1",
+		model:  "openai/gpt-4.1",
+		branch: "main",
+	}
+
+	model := New(
+		stubBackend{sess: &stubSession{events: make(chan session.Event)}},
+		nil,
+		&resumeOnlyStore{resumed: tempSession},
+		"/tmp/test",
+		"main",
+		"dev",
+		func(ctx context.Context, cfg *config.Config, sessionID string) (backend.Backend, session.AgentSession, storage.Session, error) {
+			newBackend := testutil.New()
+			opened := &stubStorageSession{
+				id:     sessionID,
+				model:  cfg.Provider + "/" + cfg.Model,
+				branch: "feature/resume",
+			}
+			newBackend.SetConfig(cfg)
+			newBackend.SetSession(opened)
+			return newBackend, newBackend.Session(), opened, nil
+		},
+	)
+
+	cmd := model.resumeStoredSessionByID("session-1")
+	msg := cmd()
+
+	if _, ok := msg.(runtimeSwitchedMsg); !ok {
+		t.Fatalf("expected runtimeSwitchedMsg, got %T", msg)
+	}
+	if !tempSession.closed {
+		t.Fatal("expected temporary inspection session to be closed after reading metadata")
+	}
+}
+
 func TestStartupPrintLinesIncludesReplayHistory(t *testing.T) {
 	model := readyModel(t)
 	model.startupLines = []string{"line-1", "line-2"}
@@ -419,7 +568,7 @@ func TestAssistantEntryRendersMarkdown(t *testing.T) {
 	model.width = 80
 
 	rendered := ansi.Strip(model.renderEntry(session.Entry{
-		Role: session.Assistant,
+		Role:    session.Assistant,
 		Content: "# Heading\n\n- first item\n- second item\n\n| Name | Value |\n|------|-------|\n| foo  | 123   |\n\n```go\nfmt.Println(\"hi\")\n```",
 	}))
 
