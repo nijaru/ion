@@ -551,6 +551,51 @@ func TestCostCommandReportsMissingCost(t *testing.T) {
 	}
 }
 
+func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
+	model := New(
+		stubBackend{sess: &stubSession{events: make(chan session.Event)}},
+		nil,
+		nil,
+		"/tmp/test",
+		"main",
+		"dev",
+		nil,
+	)
+
+	msg := model.handleCommand("/help")()
+	helpMsg, ok := msg.(sessionHelpMsg)
+	if !ok {
+		t.Fatalf("expected sessionHelpMsg, got %T", msg)
+	}
+
+	for _, want := range []string{
+		"/resume [id]",
+		"/provider [name]",
+		"/model [name]",
+		"/compact",
+		"/clear",
+		"/cost",
+		"/mcp add <cmd>",
+		"/quit, /exit",
+		"/help",
+		"Ctrl+P",
+		"Ctrl+M",
+		"Tab",
+		"Shift+Tab",
+		"Esc",
+		"Up / Down",
+		"Enter",
+		"Ctrl+C",
+	} {
+		if !strings.Contains(helpMsg.notice, want) {
+			t.Fatalf("help notice missing %q: %q", want, helpMsg.notice)
+		}
+	}
+	if strings.Contains(helpMsg.notice, "/tree") {
+		t.Fatalf("help notice should not advertise /tree yet: %q", helpMsg.notice)
+	}
+}
+
 func TestPickerCommitSwitchesRuntime(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

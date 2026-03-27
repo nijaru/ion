@@ -39,6 +39,10 @@ type sessionCostMsg struct {
 	notice string
 }
 
+type sessionHelpMsg struct {
+	notice string
+}
+
 type sessionPickerItem struct {
 	info storage.SessionInfo
 }
@@ -311,6 +315,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		)
 
 	case sessionCostMsg:
+		return m, tea.Printf(
+			"%s\n",
+			m.renderEntry(session.Entry{Role: session.System, Content: msg.notice}),
+		)
+
+	case sessionHelpMsg:
 		return m, tea.Printf(
 			"%s\n",
 			m.renderEntry(session.Entry{Role: session.System, Content: msg.notice}),

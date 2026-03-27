@@ -20,6 +20,11 @@ func (m *Model) handleCommand(input string) tea.Cmd {
 	}
 
 	switch fields[0] {
+	case "/help":
+		return func() tea.Msg {
+			return sessionHelpMsg{notice: helpText()}
+		}
+
 	case "/resume":
 		if len(fields) < 2 {
 			return m.openSessionPicker()
@@ -193,6 +198,33 @@ func (m *Model) openModelPickerWithConfig(cfg *config.Config) tea.Cmd {
 		cfg:     cfg,
 	}
 	return nil
+}
+
+func helpText() string {
+	return strings.Join([]string{
+		"ion commands",
+		"",
+		"  /resume [id]     resume a recent session or pick one",
+		"  /provider [name] set provider directly or open the picker",
+		"  /model [name]    set model directly or open the picker",
+		"  /compact         compact the current session",
+		"  /clear           start a fresh session with the current provider/model",
+		"  /cost            show aggregate session usage",
+		"  /mcp add <cmd>   register an MCP server",
+		"  /quit, /exit     leave ion",
+		"  /help            show this help",
+		"",
+		"keys",
+		"",
+		"  Ctrl+P           provider picker",
+		"  Ctrl+M           model picker",
+		"  Tab              swap provider/model pickers",
+		"  Shift+Tab        toggle read/write mode",
+		"  Esc              cancel turn or clear composer",
+		"  Up / Down        command history",
+		"  Enter            send message",
+		"  Ctrl+C           clear composer, or quit if empty",
+	}, "\n")
 }
 
 func (m *Model) handlePickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
