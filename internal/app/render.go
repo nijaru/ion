@@ -43,8 +43,16 @@ func (m Model) View() tea.View {
 	b.WriteString(m.progressLine())
 	b.WriteString("\n")
 
+	// Top separator
+	b.WriteString(m.st.sep.Render(strings.Repeat("─", max(0, m.width))))
+	b.WriteString("\n")
+
 	// Composer
 	b.WriteString(m.composer.View())
+	b.WriteString("\n")
+
+	// Bottom separator
+	b.WriteString(m.st.sep.Render(strings.Repeat("─", max(0, m.width))))
 	b.WriteString("\n")
 
 	// Status line

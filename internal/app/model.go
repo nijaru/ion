@@ -301,16 +301,16 @@ func (m Model) runtimeHeaderLine(b backend.Backend) string {
 }
 
 func (m Model) Init() tea.Cmd {
-	cmds := []tea.Cmd{
+	initCmd := tea.Batch(
 		textarea.Blink,
 		m.spinner.Tick,
 		m.composer.Focus(),
 		m.awaitSessionEvent(),
-	}
+	)
 	if cmd := m.printStartupScrollback(); cmd != nil {
-		cmds = append([]tea.Cmd{cmd}, cmds...)
+		return tea.Sequence(cmd, initCmd)
 	}
-	return tea.Batch(cmds...)
+	return initCmd
 }
 
 func (m Model) printStartupScrollback() tea.Cmd {

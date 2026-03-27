@@ -95,6 +95,7 @@ func main() {
 		return switchedBackend, switchedBackend.Session(), switchedSession, nil
 	}
 
+	reserveInlineRows(os.Stdout, 6)
 	p := tea.NewProgram(app.New(b, sess, store, cwd, branch, version, switcher).WithStartupLines(startupLines).WithStartupEntries(startupEntries))
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "ion error: %v\n", err)
@@ -185,4 +186,11 @@ func currentBranch() string {
 		return "unknown"
 	}
 	return strings.TrimSpace(string(out))
+}
+
+func reserveInlineRows(out *os.File, rows int) {
+	if out == nil || rows <= 0 {
+		return
+	}
+	_, _ = fmt.Fprint(out, strings.Repeat("\n", rows))
 }
