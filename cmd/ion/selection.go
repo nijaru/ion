@@ -12,8 +12,8 @@ import (
 )
 
 var (
-	errNoProviderConfigured = errors.New("no provider set: set provider in ~/.ion/config.toml, use /provider, pass --provider, or use ION_PROVIDER")
-	errNoModelConfigured    = errors.New("no model set: set model in ~/.ion/config.toml, use /model, or use ION_MODEL")
+	errNoProviderConfigured = errors.New("No provider configured. Use /provider or Ctrl+P. Set ION_PROVIDER for scripts.")
+	errNoModelConfigured    = errors.New("No model configured. Use /model or Ctrl+M. Set ION_MODEL for scripts.")
 )
 
 var acpProviders = map[string]string{

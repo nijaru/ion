@@ -47,7 +47,7 @@ func (b *UnconfiguredBackend) ContextLimit() int {
 }
 
 func (b *UnconfiguredBackend) Bootstrap() Bootstrap {
-	status := "Configure a provider and model in ~/.ion/config.toml or use /provider and /model."
+	status := "Provider and model are required. Use /provider or Ctrl+P, then /model or Ctrl+M."
 	if b.session.reason != nil {
 		status = b.session.reason.Error()
 	}

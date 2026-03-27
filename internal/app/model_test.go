@@ -919,7 +919,8 @@ func TestStartupPrintLinesIncludesReplayHistory(t *testing.T) {
 		"line-1",
 		"line-2",
 		model.headerLine(),
-		model.st.dim.Render("  ready"),
+		"",
+		model.renderStartupStatus("ready"),
 		model.renderEntry(session.Entry{Role: session.User, Content: "hello"}),
 		model.renderEntry(session.Entry{Role: session.Assistant, Content: "world"}),
 	}

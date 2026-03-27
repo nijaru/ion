@@ -159,7 +159,7 @@ func TestStartupBannerLines(t *testing.T) {
 
 	t.Run("missing model", func(t *testing.T) {
 		got := startupBannerLines("anthropic", "", false)
-		want := []string{"ion · native · provider=anthropic · model=no model set"}
+		want := []string{"ion · native · provider=anthropic · model=unset"}
 		if len(got) != len(want) {
 			t.Fatalf("len(startupBannerLines) = %d, want %d", len(got), len(want))
 		}

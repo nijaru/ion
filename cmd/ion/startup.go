@@ -11,20 +11,18 @@ func startupBannerLines(provider, model string, resumed bool) []string {
 
 	runtimeLabel := "native"
 	switch {
-	case provider == "":
-		runtimeLabel = "no provider set"
 	case isACPProvider(provider):
 		runtimeLabel = "acp"
 	}
 
 	providerLabel := provider
 	if providerLabel == "" {
-		providerLabel = "no provider set"
+		providerLabel = "unset"
 	}
 
 	modelLabel := model
 	if modelLabel == "" {
-		modelLabel = "no model set"
+		modelLabel = "unset"
 	}
 
 	line := fmt.Sprintf("ion · %s · provider=%s · model=%s", runtimeLabel, providerLabel, modelLabel)

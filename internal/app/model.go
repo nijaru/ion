@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"charm.land/bubbles/v2/spinner"
@@ -226,12 +227,26 @@ func (m Model) startupPrintLines() []string {
 	lines = append(lines, m.startupLines...)
 	lines = append(lines, m.headerLine())
 	if m.status != "" {
-		lines = append(lines, m.st.dim.Render("  "+m.status))
+		lines = append(lines, "")
+		lines = append(lines, m.renderStartupStatus(m.status))
 	}
 	for _, entry := range m.startupEntries {
 		lines = append(lines, m.renderEntry(entry))
 	}
 	return lines
+}
+
+func (m Model) renderStartupStatus(status string) string {
+	trimmed := strings.TrimSpace(status)
+	if trimmed == "" {
+		return ""
+	}
+
+	lower := strings.ToLower(trimmed)
+	if strings.HasPrefix(lower, "no ") || strings.HasPrefix(lower, "provider ") || strings.HasPrefix(lower, "model ") || strings.HasPrefix(lower, "configure") || strings.Contains(lower, "required") {
+		return m.st.warn.Render("• " + trimmed)
+	}
+	return m.st.dim.Render("  " + trimmed)
 }
 
 func (m Model) Init() tea.Cmd {

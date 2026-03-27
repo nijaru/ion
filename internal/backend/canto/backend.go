@@ -147,14 +147,10 @@ func (b *Backend) Open(ctx context.Context) error {
 	modelName := b.Model()
 
 	if providerName == "" {
-		return fmt.Errorf(
-			"no provider configured: set provider in ~/.ion/config.toml or use ION_PROVIDER",
-		)
+		return fmt.Errorf("No provider configured. Use /provider or Ctrl+P. Set ION_PROVIDER for scripts.")
 	}
 	if modelName == "" {
-		return fmt.Errorf(
-			"no model configured: set model in ~/.ion/config.toml or use ION_MODEL",
-		)
+		return fmt.Errorf("No model configured. Use /model or Ctrl+M. Set ION_MODEL for scripts.")
 	}
 
 	// Pre-fetch metadata for the current model
