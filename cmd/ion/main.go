@@ -95,8 +95,8 @@ func main() {
 		return switchedBackend, switchedBackend.Session(), switchedSession, nil
 	}
 
-	reserveInlineRows(os.Stdout, 1)
-	p := tea.NewProgram(app.New(b, sess, store, cwd, branch, version, switcher).WithStartupLines(startupLines).WithStartupEntries(startupEntries))
+	printStartup(os.Stdout, startupLines, workspaceHeader(cwd, branch), startupEntries, b.Bootstrap().Status)
+	p := tea.NewProgram(app.New(b, sess, store, cwd, branch, version, switcher))
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "ion error: %v\n", err)
 		os.Exit(1)
@@ -188,9 +188,69 @@ func currentBranch() string {
 	return strings.TrimSpace(string(out))
 }
 
-func reserveInlineRows(out *os.File, rows int) {
-	if out == nil || rows <= 0 {
+func printStartup(out *os.File, startupLines []string, workspaceLine string, entries []session.Entry, status string) {
+	if out == nil {
 		return
 	}
-	_, _ = fmt.Fprint(out, strings.Repeat("\n", rows))
+	var lines []string
+	lines = append(lines, startupLines...)
+	if workspaceLine != "" {
+		lines = append(lines, workspaceLine)
+	}
+	if strings.TrimSpace(status) != "" && !isConfigurationStatus(status) {
+		lines = append(lines, "")
+		lines = append(lines, status)
+	}
+	for _, entry := range entries {
+		lines = append(lines, renderStartupEntry(entry))
+	}
+	if len(lines) == 0 {
+		return
+	}
+	_, _ = fmt.Fprintln(out, strings.Join(lines, "\n"))
+}
+
+func workspaceHeader(cwd, branch string) string {
+	home, _ := os.UserHomeDir()
+	dir := cwd
+	if home != "" && strings.HasPrefix(dir, home) {
+		dir = "~" + dir[len(home):]
+	}
+	parts := []string{dir}
+	if strings.TrimSpace(branch) != "" {
+		parts = append(parts, branch)
+	}
+	return strings.Join(parts, " • ")
+}
+
+func renderStartupEntry(entry session.Entry) string {
+	switch entry.Role {
+	case session.User:
+		return "› " + entry.Content
+	case session.System:
+		return "• " + entry.Content
+	case session.Tool:
+		if entry.Title != "" {
+			if entry.Content == "" {
+				return "• " + entry.Title
+			}
+			return "• " + entry.Title + "\n" + entry.Content
+		}
+		return "• " + entry.Content
+	case session.Agent, session.Assistant:
+		return entry.Content
+	default:
+		return entry.Content
+	}
+}
+
+func isConfigurationStatus(status string) bool {
+	trimmed := strings.TrimSpace(status)
+	if trimmed == "" {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	return strings.HasPrefix(lower, "no provider configured") ||
+		strings.HasPrefix(lower, "no model configured") ||
+		strings.HasPrefix(lower, "provider and model are required")
 }
