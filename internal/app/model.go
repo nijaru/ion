@@ -22,17 +22,32 @@ const (
 
 type streamClosedMsg struct{}
 
+type clearPendingMsg struct {
+	action pendingAction
+}
+
+type pendingAction int
+
+const (
+	pendingActionNone pendingAction = iota
+	pendingActionQuitCtrlC
+	pendingActionQuitCtrlD
+	pendingActionClearEsc
+)
+
+const pendingActionTimeout = 1500 * time.Millisecond
+
 type runtimeSwitcher func(context.Context, *config.Config, string) (backend.Backend, session.AgentSession, storage.Session, error)
 
 type runtimeSwitchedMsg struct {
-	backend    backend.Backend
-	session    session.AgentSession
-	storage    storage.Session
-	printLines  []string
+	backend       backend.Backend
+	session       session.AgentSession
+	storage       storage.Session
+	printLines    []string
 	replayEntries []session.Entry
-	status     string
-	notice     string
-	showStatus bool
+	status        string
+	notice        string
+	showStatus    bool
 }
 
 type sessionCompactedMsg struct {
@@ -82,7 +97,6 @@ type pickerTone int
 
 const (
 	pickerToneDefault pickerTone = iota
-	pickerToneReady
 	pickerToneWarn
 )
 
@@ -162,20 +176,22 @@ type Model struct {
 	historyDraft string
 
 	// Double-tap tracking
-	escPending   bool
-	ctrlCPending bool
+	escPending    bool
+	ctrlCPending  bool
+	pendingAction pendingAction
 
 	// Storage correlation
 	lastToolUseID string
 
 	// Workspace metadata
-	status         string
-	workdir        string
-	branch         string
-	version        string
-	mode           toolMode
-	startupLines   []string
-	startupEntries []session.Entry
+	status            string
+	workdir           string
+	branch            string
+	version           string
+	mode              toolMode
+	printedTranscript bool
+	startupLines      []string
+	startupEntries    []session.Entry
 
 	// Styles (initialized once in New)
 	st styles
@@ -189,6 +205,11 @@ func New(b backend.Backend, s storage.Session, store storage.Store, workdir, bra
 	ta.SetHeight(minComposerHeight)
 	ta.SetWidth(80)
 	ta.MaxHeight = maxComposerHeight
+	ta.Focus()
+	taStyles := ta.Styles()
+	taStyles.Focused.CursorLine = taStyles.Focused.CursorLine.UnsetBackground()
+	taStyles.Blurred.CursorLine = taStyles.Blurred.CursorLine.UnsetBackground()
+	ta.SetStyles(taStyles)
 
 	st := newStyles()
 
@@ -232,6 +253,11 @@ func (m Model) WithStartupLines(lines []string) Model {
 
 func (m Model) WithStartupEntries(entries []session.Entry) Model {
 	m.startupEntries = append([]session.Entry(nil), entries...)
+	return m
+}
+
+func (m Model) WithPrintedTranscript(v bool) Model {
+	m.printedTranscript = v
 	return m
 }
 
@@ -313,7 +339,6 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		textarea.Blink,
 		m.spinner.Tick,
-		m.composer.Focus(),
 		m.awaitSessionEvent(),
 	)
 }
@@ -343,6 +368,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case streamClosedMsg:
+		return m, nil
+
+	case clearPendingMsg:
+		if msg.action == m.pendingAction {
+			m.clearPendingAction()
+		}
 		return m, nil
 
 	case runtimeSwitchedMsg:
@@ -383,24 +414,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append([]tea.Cmd{printLinesCmd(msg.printLines...)}, cmds...)
 		}
 		if len(msg.replayEntries) > 0 {
-			cmds = append([]tea.Cmd{printEntriesCmd(m, msg.replayEntries...)}, cmds...)
+			cmds = append([]tea.Cmd{m.printEntries(msg.replayEntries...)}, cmds...)
 		}
 		if strings.TrimSpace(msg.notice) != "" {
-			cmds = append(cmds, printEntriesCmd(m, session.Entry{Role: session.System, Content: msg.notice}))
+			cmds = append(cmds, m.printEntries(session.Entry{Role: session.System, Content: msg.notice}))
 		}
 		if msg.showStatus && strings.TrimSpace(msg.status) != "" && !isConfigurationStatus(msg.status) {
-			cmds = append(cmds, printEntriesCmd(m, session.Entry{Role: session.System, Content: msg.status}))
+			cmds = append(cmds, m.printEntries(session.Entry{Role: session.System, Content: msg.status}))
 		}
 		return m, tea.Sequence(cmds...)
 
 	case sessionCompactedMsg:
-		return m, printEntriesCmd(m, session.Entry{Role: session.System, Content: msg.notice})
+		return m, m.printEntries(session.Entry{Role: session.System, Content: msg.notice})
 
 	case sessionCostMsg:
-		return m, printEntriesCmd(m, session.Entry{Role: session.System, Content: msg.notice})
+		return m, m.printEntries(session.Entry{Role: session.System, Content: msg.notice})
 
 	case sessionHelpMsg:
-		return m, printEntriesCmd(m, session.Entry{Role: session.System, Content: msg.notice})
+		return m, m.printEntries(session.Entry{Role: session.System, Content: msg.notice})
 
 	case queuedTurnMsg:
 		next, cmd := m.submitText(msg.text)
@@ -468,4 +499,56 @@ func printEntriesCmd(m Model, entries ...session.Entry) tea.Cmd {
 		lines = append(lines, m.renderEntry(entry))
 	}
 	return printLinesCmd(lines...)
+}
+
+func (m *Model) printEntries(entries ...session.Entry) tea.Cmd {
+	if len(entries) == 0 {
+		return nil
+	}
+	lines := make([]string, 0, len(entries)+1)
+	if !m.printedTranscript {
+		lines = append(lines, "")
+		m.printedTranscript = true
+	}
+	for _, entry := range entries {
+		lines = append(lines, m.renderEntry(entry))
+	}
+	return printLinesCmd(lines...)
+}
+
+func (m *Model) clearPendingAction() {
+	m.escPending = false
+	m.ctrlCPending = false
+	m.pendingAction = pendingActionNone
+}
+
+func (m *Model) armPendingAction(action pendingAction) tea.Cmd {
+	m.pendingAction = action
+	switch action {
+	case pendingActionClearEsc:
+		m.escPending = true
+		m.ctrlCPending = false
+	case pendingActionQuitCtrlC, pendingActionQuitCtrlD:
+		m.ctrlCPending = true
+		m.escPending = false
+	default:
+		m.clearPendingAction()
+		return nil
+	}
+	return tea.Tick(pendingActionTimeout, func(time.Time) tea.Msg {
+		return clearPendingMsg{action: action}
+	})
+}
+
+func (m Model) pendingActionStatus() string {
+	switch m.pendingAction {
+	case pendingActionQuitCtrlC:
+		return "Press Ctrl+C again to quit"
+	case pendingActionQuitCtrlD:
+		return "Press Ctrl+D again to quit"
+	case pendingActionClearEsc:
+		return "Press Esc again to clear input"
+	default:
+		return ""
+	}
 }

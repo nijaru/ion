@@ -49,7 +49,7 @@ func (m Model) handleSessionPickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	}
 
 	switch msg.String() {
-	case "esc", "ctrl+c":
+	case "esc", "ctrl+c", "ctrl+d":
 		m.sessionPicker = nil
 		return m, nil
 	case "backspace":

@@ -24,9 +24,10 @@ type ModelMetadata struct {
 }
 
 var (
-	registryCache map[string]ModelMetadata
-	registryMu    sync.RWMutex
-	registryOnce  sync.Once
+	registryCache   map[string]ModelMetadata
+	registryMu      sync.RWMutex
+	registryOnce    sync.Once
+	metadataFetcher = fetchMetadata
 )
 
 func initRegistry() {
@@ -51,7 +52,7 @@ func GetMetadata(ctx context.Context, provider, model string) (ModelMetadata, bo
 	}
 
 	// Try fetching from catwalk
-	fetched, err := fetchFromCatwalk(ctx, provider, model)
+	fetched, err := metadataFetcher(ctx, provider, model)
 	if err == nil {
 		registryMu.Lock()
 		registryCache[key] = fetched
@@ -74,6 +75,27 @@ func GetMetadata(ctx context.Context, provider, model string) (ModelMetadata, bo
 	}
 
 	return ModelMetadata{}, false
+}
+
+func fetchMetadata(ctx context.Context, provider, model string) (ModelMetadata, error) {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "openrouter":
+		models, err := fetchOpenRouterModels(ctx)
+		if err != nil {
+			return ModelMetadata{}, err
+		}
+		for _, meta := range models {
+			if strings.EqualFold(meta.ID, model) {
+				return meta, nil
+			}
+		}
+		return ModelMetadata{}, fmt.Errorf("model %s not found for provider %s", model, provider)
+	default:
+		if strings.TrimSpace(os.Getenv("CATWALK_URL")) == "" {
+			return ModelMetadata{}, fmt.Errorf("no live metadata catalog configured for provider %s", provider)
+		}
+		return fetchFromCatwalk(ctx, provider, model)
+	}
 }
 
 func fetchFromCatwalk(ctx context.Context, provider, model string) (ModelMetadata, error) {

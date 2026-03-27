@@ -48,7 +48,7 @@ func (m *Model) handleCommand(input string) tea.Cmd {
 		m.backend.SetConfig(cfg)
 		if cfg.Provider == "" {
 			m.status = noProviderConfiguredStatus()
-			return printEntriesCmd(*m, session.Entry{Role: session.System, Content: "Model set to " + name})
+			return m.printEntries(session.Entry{Role: session.System, Content: "Model set to " + name})
 		}
 		return m.switchRuntimeCommand(cfg, session.Entry{Role: session.System, Content: "Model set to " + name}, m.session.ID(), false)
 
@@ -68,7 +68,7 @@ func (m *Model) handleCommand(input string) tea.Cmd {
 		m.backend.SetConfig(cfg)
 		if cfg.Model == "" {
 			m.status = noModelConfiguredStatus()
-			return printEntriesCmd(*m, session.Entry{Role: session.System, Content: "Provider set to " + providerDisplayName(name)})
+			return m.printEntries(session.Entry{Role: session.System, Content: "Provider set to " + providerDisplayName(name)})
 		}
 		return m.switchRuntimeCommand(cfg, session.Entry{Role: session.System, Content: "Provider set to " + providerDisplayName(name)}, m.session.ID(), false)
 
@@ -226,16 +226,19 @@ func helpText() string {
 		"  Ctrl+M           model picker",
 		"  Tab              swap provider/model pickers",
 		"  Shift+Tab        toggle read/write mode",
-		"  Esc              cancel turn or clear composer",
+		"  Esc              cancel turn, or clear composer on double-tap",
 		"  Up / Down        command history",
 		"  Enter            send message",
-		"  Ctrl+C           clear composer, or quit if empty",
+		"  Shift+Enter      insert newline",
+		"  Alt+Enter        insert newline",
+		"  Ctrl+C           clear composer, or quit on double-tap when empty",
+		"  Ctrl+D           quit on double-tap when empty",
 	}, "\n")
 }
 
 func (m *Model) handlePickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	switch msg.String() {
-	case "esc", "ctrl+c":
+	case "esc", "ctrl+c", "ctrl+d":
 		m.picker = nil
 		return *m, nil
 	case "backspace":
@@ -299,7 +302,7 @@ func (m *Model) commitPickerSelection() (Model, tea.Cmd) {
 		m.status = noModelConfiguredStatus()
 		m.picker = nil
 		m.openModelPickerWithConfig(&cfg)
-		return *m, printEntriesCmd(*m, session.Entry{Role: session.System, Content: "Provider set to " + selected.Label})
+		return *m, m.printEntries(session.Entry{Role: session.System, Content: "Provider set to " + selected.Label})
 
 	case pickerPurposeModel:
 		cfg.Model = selected.Value
@@ -342,7 +345,7 @@ func (m *Model) resumeStoredSessionByID(sessionID string) tea.Cmd {
 func (m *Model) switchRuntimeCommand(cfg *config.Config, notice session.Entry, sessionID string, preserveSession bool) tea.Cmd {
 	if m.switcher == nil {
 		m.backend.SetConfig(cfg)
-		return printEntriesCmd(*m, notice)
+		return m.printEntries(notice)
 	}
 
 	oldSession := m.session
@@ -378,7 +381,7 @@ func (m *Model) switchRuntimeCommand(cfg *config.Config, notice session.Entry, s
 func (m *Model) resumeRuntimeCommand(cfg *config.Config, notice session.Entry, sessionID string) tea.Cmd {
 	if m.switcher == nil {
 		m.backend.SetConfig(cfg)
-		return printEntriesCmd(*m, notice)
+		return m.printEntries(notice)
 	}
 	switcher := m.switcher
 	cfgCopy := *cfg

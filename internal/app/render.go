@@ -160,7 +160,7 @@ func (m Model) renderPicker() string {
 		if i == m.picker.index {
 			b.WriteString(m.renderPickerLine("› ", item, labelWidth, m.st.cyan))
 		} else {
-			b.WriteString(m.renderPickerLine("  ", item, labelWidth, m.st.dim))
+			b.WriteString(m.renderPickerLine("  ", item, labelWidth, lipgloss.NewStyle()))
 		}
 		b.WriteString("\n")
 	}
@@ -174,11 +174,8 @@ func (m Model) renderPicker() string {
 func (m Model) renderPickerLine(prefix string, item pickerItem, labelWidth int, labelStyle lipgloss.Style) string {
 	var b strings.Builder
 	b.WriteString(strings.Repeat(" ", 2))
-	b.WriteString(labelStyle.Render(prefix + item.Label))
-	padding := max(0, labelWidth-lipgloss.Width(item.Label))
-	if padding > 0 {
-		b.WriteString(strings.Repeat(" ", padding))
-	}
+	label := prefix + item.Label + strings.Repeat(" ", max(0, labelWidth-lipgloss.Width(item.Label)))
+	b.WriteString(labelStyle.Render(label))
 	if item.Detail != "" {
 		b.WriteString(" ")
 		b.WriteString(m.st.dim.Render("•"))
@@ -190,10 +187,12 @@ func (m Model) renderPickerLine(prefix string, item pickerItem, labelWidth int, 
 
 func (m Model) renderPickerDetail(detail string, tone pickerTone) string {
 	switch tone {
-	case pickerToneReady:
-		return m.st.tool.Render(detail)
 	case pickerToneWarn:
-		return m.st.warn.Render(detail)
+		prefix, suffix, ok := strings.Cut(detail, " • ")
+		if !ok {
+			return m.st.warn.Render(detail)
+		}
+		return m.st.warn.Render(prefix) + " " + m.st.dim.Render("• "+suffix)
 	default:
 		return m.st.dim.Render(detail)
 	}
@@ -253,7 +252,7 @@ func (m Model) renderPendingEntry(e session.Entry) string {
 func (m Model) renderEntry(e session.Entry) string {
 	switch e.Role {
 	case session.User:
-		return m.st.user.Render("› " + e.Content)
+		return m.st.user.Render("• " + e.Content)
 
 	case session.Assistant:
 		var b strings.Builder
@@ -382,6 +381,10 @@ func (m Model) headerLineFor(branch string) string {
 
 // statusLine renders the bottom info bar.
 func (m Model) statusLine() string {
+	if hint := strings.TrimSpace(m.pendingActionStatus()); hint != "" {
+		return fitLine(m.st.warn.Render(hint), m.width)
+	}
+
 	sep := m.st.cyan.Render(" • ")
 
 	modeLabel := ifthen(m.mode == modeWrite,

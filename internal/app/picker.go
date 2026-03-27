@@ -16,13 +16,20 @@ import (
 var listModels = registry.ListModels
 
 func providerItems() []pickerItem {
-	return []pickerItem{
+	items := []pickerItem{
 		providerItem("Anthropic", "anthropic"),
+		providerItem("Gemini", "gemini"),
 		providerItem("OpenAI", "openai"),
 		providerItem("OpenRouter", "openrouter"),
-		providerItem("Gemini", "gemini"),
 		providerItem("Ollama", "ollama"),
 	}
+	slices.SortFunc(items, func(a, b pickerItem) int {
+		if rankA, rankB := providerSortRank(a.Value), providerSortRank(b.Value); rankA != rankB {
+			return rankA - rankB
+		}
+		return strings.Compare(a.Label, b.Label)
+	})
+	return items
 }
 
 func pickerIndex(items []pickerItem, value string) int {
@@ -85,7 +92,7 @@ func providerDetail(provider string) (string, pickerTone) {
 		return keyDetail("OPENROUTER_API_KEY")
 	case "gemini":
 		if os.Getenv("GEMINI_API_KEY") != "" || os.Getenv("GOOGLE_API_KEY") != "" {
-			return "Ready", pickerToneReady
+			return "Ready", pickerToneDefault
 		}
 		return "Missing • set GEMINI_API_KEY or GOOGLE_API_KEY", pickerToneWarn
 	case "ollama":
@@ -95,11 +102,47 @@ func providerDetail(provider string) (string, pickerTone) {
 	}
 }
 
+func providerSortRank(provider string) int {
+	isLocal := strings.EqualFold(strings.TrimSpace(provider), "ollama")
+	isSet := providerCredentialSet(provider)
+	switch {
+	case isSet && !isLocal:
+		return 0
+	case isSet && isLocal:
+		return 1
+	case !isSet && !isLocal:
+		return 2
+	default:
+		return 3
+	}
+}
+
+func providerCredentialSet(provider string) bool {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "anthropic":
+		return hasEnv("ANTHROPIC_API_KEY")
+	case "openai":
+		return hasEnv("OPENAI_API_KEY")
+	case "openrouter":
+		return hasEnv("OPENROUTER_API_KEY")
+	case "gemini":
+		return hasEnv("GEMINI_API_KEY") || hasEnv("GOOGLE_API_KEY")
+	case "ollama":
+		return true
+	default:
+		return false
+	}
+}
+
 func keyDetail(env string) (string, pickerTone) {
-	if strings.TrimSpace(os.Getenv(env)) != "" {
-		return "Ready", pickerToneReady
+	if hasEnv(env) {
+		return "Ready", pickerToneDefault
 	}
 	return "Missing • set " + env, pickerToneWarn
+}
+
+func hasEnv(name string) bool {
+	return strings.TrimSpace(os.Getenv(name)) != ""
 }
 
 func modelDetail(meta registry.ModelMetadata) string {

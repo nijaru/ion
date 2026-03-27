@@ -11,7 +11,14 @@ import (
 	"github.com/nijaru/ion/internal/storage"
 )
 
-// handleKey processes keyboard input.
+// handleKey is the source of truth for core TUI hotkey semantics.
+//
+// Keep these aligned with the intended inline-agent UX:
+//   - Enter sends; Shift+Enter and Alt+Enter insert a newline.
+//   - Esc cancels an in-flight turn; when idle, double-tap Esc clears input.
+//   - Ctrl+C clears non-empty input; when idle and empty, double-tap quits.
+//   - Ctrl+D never clears input; when idle and empty, double-tap quits.
+//   - Ctrl+C and Ctrl+D do not cancel running turns.
 func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	if m.sessionPicker != nil {
 		return m.handleSessionPickerKey(msg)
@@ -33,30 +40,46 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			label := ifthen(approved, "Approved", "Denied")
 			notice := session.Entry{Role: session.System, Content: label + ": " + desc}
 			m.session.Approve(context.Background(), reqID, approved)
-			return m, printEntriesCmd(m, notice)
+			return m, m.printEntries(notice)
 		}
 	}
 
 	switch msg.String() {
 	case "ctrl+p":
-		m.ctrlCPending = false
-		m.escPending = false
+		m.clearPendingAction()
 		return m, m.openProviderPicker()
 
 	case "ctrl+m":
-		m.ctrlCPending = false
-		m.escPending = false
+		m.clearPendingAction()
 		return m, m.openModelPicker()
 
 	case "ctrl+c":
-		if m.ctrlCPending || m.composer.Value() == "" {
+		m.escPending = false
+		if m.composer.Value() != "" {
+			m.clearPendingAction()
+			m.composer.Reset()
+			m.relayoutComposer()
+			return m, nil
+		}
+		if m.thinking {
+			m.clearPendingAction()
+			return m, nil
+		}
+		if m.ctrlCPending {
 			return m, tea.Quit
 		}
-		m.ctrlCPending = true
-		m.composer.Reset()
-		m.relayoutComposer()
+		return m, m.armPendingAction(pendingActionQuitCtrlC)
+
+	case "ctrl+d":
 		m.escPending = false
-		return m, nil
+		if m.composer.Value() != "" || m.thinking {
+			m.clearPendingAction()
+			return m, nil
+		}
+		if m.ctrlCPending {
+			return m, tea.Quit
+		}
+		return m, m.armPendingAction(pendingActionQuitCtrlD)
 
 	case "esc":
 		m.ctrlCPending = false
@@ -67,20 +90,23 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			m.pending = nil
 			m.streamBuf = ""
 			m.reasonBuf = ""
+			m.clearPendingAction()
+			return m, nil
+		}
+		if m.composer.Value() == "" {
+			m.clearPendingAction()
 			return m, nil
 		}
 		if m.escPending {
 			m.composer.Reset()
 			m.relayoutComposer()
-			m.escPending = false
+			m.clearPendingAction()
 			return m, nil
 		}
-		m.escPending = true
-		return m, nil
+		return m, m.armPendingAction(pendingActionClearEsc)
 
 	case "shift+tab":
-		m.ctrlCPending = false
-		m.escPending = false
+		m.clearPendingAction()
 		if m.mode == modeWrite {
 			m.mode = modeRead
 		} else {
@@ -89,8 +115,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m, nil
 
 	case "enter":
-		m.ctrlCPending = false
-		m.escPending = false
+		m.clearPendingAction()
 		text := strings.TrimSpace(m.composer.Value())
 		if text == "" {
 			return m, nil
@@ -99,22 +124,20 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			m.queuedTurn = text
 			m.composer.Reset()
 			m.relayoutComposer()
-			return m, printEntriesCmd(m, session.Entry{Role: session.System, Content: "Queued follow-up"})
+			return m, m.printEntries(session.Entry{Role: session.System, Content: "Queued follow-up"})
 		}
 
 		return m.submitText(text)
 
-	case "shift+enter":
-		m.ctrlCPending = false
-		m.escPending = false
+	case "shift+enter", "alt+enter":
+		m.clearPendingAction()
 		var cmd tea.Cmd
 		m.composer, cmd = m.composer.Update(msg)
 		m.layout()
 		return m, cmd
 
 	case "up":
-		m.ctrlCPending = false
-		m.escPending = false
+		m.clearPendingAction()
 		if m.composer.Line() == 0 && len(m.history) > 0 {
 			if m.historyIdx == -1 {
 				m.historyDraft = m.composer.Value()
@@ -131,8 +154,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m, cmd
 
 	case "down":
-		m.ctrlCPending = false
-		m.escPending = false
+		m.clearPendingAction()
 		if m.historyIdx != -1 {
 			if m.historyIdx < len(m.history)-1 {
 				m.historyIdx++
@@ -151,8 +173,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m, cmd
 
 	default:
-		m.ctrlCPending = false
-		m.escPending = false
+		m.clearPendingAction()
 	}
 
 	// Pass all other keys to textarea (Ctrl+A/E/W/U/K, Alt+B/F, etc.)
@@ -260,12 +281,12 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 					TS:      now(),
 				}); err != nil {
 					return m, tea.Sequence(
-						printEntriesCmd(m, entry),
+						m.printEntries(entry),
 						persistErrorCmd("persist assistant response", err),
 					)
 				}
 			}
-			return m, tea.Sequence(printEntriesCmd(m, entry), m.awaitSessionEvent())
+			return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
 		}
 		return m, m.awaitSessionEvent()
 
@@ -313,12 +334,12 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 					TS:        now(),
 				}); err != nil {
 					return m, tea.Sequence(
-						printEntriesCmd(m, entry),
+						m.printEntries(entry),
 						persistErrorCmd("persist tool result", err),
 					)
 				}
 			}
-			return m, tea.Sequence(printEntriesCmd(m, entry), m.awaitSessionEvent())
+			return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
 		}
 		return m, m.awaitSessionEvent()
 
@@ -342,7 +363,7 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 				return m, persistErrorCmd("persist verification result", err)
 			}
 		}
-		return m, tea.Sequence(printEntriesCmd(m, entry), m.awaitSessionEvent())
+		return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
 
 	case session.ApprovalRequest:
 		m.pendingApproval = &msg
@@ -375,7 +396,7 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 			m.pending.Content = msg.Result
 			entry := *m.pending
 			m.pending = nil
-			return m, tea.Sequence(printEntriesCmd(m, entry), m.awaitSessionEvent())
+			return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
 		}
 		return m, m.awaitSessionEvent()
 
@@ -385,7 +406,7 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 			m.pending.IsError = true
 			entry := *m.pending
 			m.pending = nil
-			return m, tea.Sequence(printEntriesCmd(m, entry), m.awaitSessionEvent())
+			return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
 		}
 		return m, m.awaitSessionEvent()
 
@@ -425,7 +446,7 @@ func (m Model) submitText(text string) (Model, tea.Cmd) {
 			TS:      now(),
 		}); err != nil {
 			return m, tea.Sequence(
-				printEntriesCmd(m, userEntry),
+				m.printEntries(userEntry),
 				persistErrorCmd("persist user input", err),
 			)
 		}
@@ -433,11 +454,11 @@ func (m Model) submitText(text string) (Model, tea.Cmd) {
 
 	if strings.HasPrefix(text, "/") {
 		cmd := m.handleCommand(text)
-		return m, tea.Sequence(printEntriesCmd(m, userEntry), cmd)
+		return m, tea.Sequence(m.printEntries(userEntry), cmd)
 	}
 
 	m.progress = stateIonizing
 	m.thinking = true
 	m.session.SubmitTurn(context.Background(), text)
-	return m, printEntriesCmd(m, userEntry)
+	return m, m.printEntries(userEntry)
 }

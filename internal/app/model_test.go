@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -78,6 +79,7 @@ func (b *compactBackend) Compact(ctx context.Context) (bool, error) {
 type stubSession struct {
 	events  chan session.Event
 	submits []string
+	cancels int
 }
 
 func (s *stubSession) Open(ctx context.Context) error              { return nil }
@@ -86,7 +88,10 @@ func (s *stubSession) SubmitTurn(ctx context.Context, turn string) error {
 	s.submits = append(s.submits, turn)
 	return nil
 }
-func (s *stubSession) CancelTurn(ctx context.Context) error { return nil }
+func (s *stubSession) CancelTurn(ctx context.Context) error {
+	s.cancels++
+	return nil
+}
 func (s *stubSession) Close() error {
 	if s.events != nil {
 		close(s.events)
@@ -338,6 +343,207 @@ func TestComposerLayoutResetsAfterClear(t *testing.T) {
 	}
 	if got := model.composer.Height(); got != minComposerHeight {
 		t.Fatalf("expected composer height to reset to %d, got %d", minComposerHeight, got)
+	}
+}
+
+func TestComposerAcceptsTypedText(t *testing.T) {
+	model := readyModel(t)
+
+	for _, key := range []tea.KeyPressMsg{
+		{Text: "/", Code: '/'},
+		{Text: "h", Code: 'h'},
+		{Text: "e", Code: 'e'},
+		{Text: "l", Code: 'l'},
+		{Text: "p", Code: 'p'},
+	} {
+		updated, _ := model.Update(key)
+		model = updated.(Model)
+	}
+
+	if got := model.composer.Value(); got != "/help" {
+		t.Fatalf("composer = %q, want %q", got, "/help")
+	}
+}
+
+func TestEnterSubmitsSlashCommandFromComposer(t *testing.T) {
+	model := readyModel(t)
+	model.composer.SetValue("/help")
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(Model)
+
+	if got := model.composer.Value(); got != "" {
+		t.Fatalf("composer = %q, want cleared after submit", got)
+	}
+	if cmd == nil {
+		t.Fatal("expected slash command print command")
+	}
+}
+
+func TestCtrlCDoubleTapQuitsOnlyWhenIdleAndEmpty(t *testing.T) {
+	model := readyModel(t)
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("first ctrl+c should arm quit timeout")
+	}
+	if !model.ctrlCPending {
+		t.Fatal("expected ctrlCPending after first ctrl+c")
+	}
+	if line := ansi.Strip(model.statusLine()); !strings.Contains(line, "Press Ctrl+C again to quit") {
+		t.Fatalf("status line = %q, want ctrl+c hint", line)
+	}
+
+	updated, cmd = model.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("second ctrl+c should quit")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatalf("second ctrl+c cmd = %T, want tea.QuitMsg", cmd())
+	}
+}
+
+func TestCtrlCClearsComposerWithoutArmingQuit(t *testing.T) {
+	model := readyModel(t)
+	model.composer.SetValue("draft")
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	model = updated.(Model)
+	if cmd != nil {
+		t.Fatal("ctrl+c with text should clear, not quit")
+	}
+	if got := model.composer.Value(); got != "" {
+		t.Fatalf("composer = %q, want cleared", got)
+	}
+	if model.ctrlCPending {
+		t.Fatal("ctrlCPending should remain false after clearing composer")
+	}
+}
+
+func TestCtrlCIgnoredWhileRunning(t *testing.T) {
+	sess := &stubSession{events: make(chan session.Event)}
+	model := readyModel(t)
+	model.session = sess
+	model.thinking = true
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	model = updated.(Model)
+	if cmd != nil {
+		t.Fatal("ctrl+c while running should not quit")
+	}
+	if model.ctrlCPending {
+		t.Fatal("ctrlCPending should remain false while running")
+	}
+	if sess.cancels != 0 {
+		t.Fatalf("cancel count = %d, want 0", sess.cancels)
+	}
+}
+
+func TestCtrlDDoubleTapQuitsOnlyWhenIdleAndEmpty(t *testing.T) {
+	model := readyModel(t)
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("first ctrl+d should arm quit timeout")
+	}
+	if !model.ctrlCPending {
+		t.Fatal("expected ctrlCPending after first ctrl+d")
+	}
+	if line := ansi.Strip(model.statusLine()); !strings.Contains(line, "Press Ctrl+D again to quit") {
+		t.Fatalf("status line = %q, want ctrl+d hint", line)
+	}
+
+	updated, cmd = model.Update(tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("second ctrl+d should quit")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatalf("second ctrl+d cmd = %T, want tea.QuitMsg", cmd())
+	}
+}
+
+func TestEscCancelsRunningTurn(t *testing.T) {
+	sess := &stubSession{events: make(chan session.Event)}
+	model := readyModel(t)
+	model.session = sess
+	model.thinking = true
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	model = updated.(Model)
+	if cmd != nil {
+		t.Fatal("esc while running should not print or quit")
+	}
+	if sess.cancels != 1 {
+		t.Fatalf("cancel count = %d, want 1", sess.cancels)
+	}
+	if model.thinking {
+		t.Fatal("thinking should be false after esc cancel")
+	}
+}
+
+func TestEscDoubleTapClearsComposer(t *testing.T) {
+	model := readyModel(t)
+	model.composer.SetValue("draft")
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("first esc should arm clear timeout")
+	}
+	if !model.escPending {
+		t.Fatal("expected escPending after first esc")
+	}
+	if line := ansi.Strip(model.statusLine()); !strings.Contains(line, "Press Esc again to clear input") {
+		t.Fatalf("status line = %q, want esc hint", line)
+	}
+	if got := model.composer.Value(); got != "draft" {
+		t.Fatalf("composer = %q, want unchanged", got)
+	}
+
+	updated, cmd = model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	model = updated.(Model)
+	if cmd != nil {
+		t.Fatal("second esc should clear without extra cmd")
+	}
+	if got := model.composer.Value(); got != "" {
+		t.Fatalf("composer = %q, want cleared", got)
+	}
+}
+
+func TestPendingActionTimeoutClearsStatusHint(t *testing.T) {
+	model := readyModel(t)
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("expected timeout cmd after first ctrl+c")
+	}
+
+	updated, _ = model.Update(clearPendingMsg{action: pendingActionQuitCtrlC})
+	model = updated.(Model)
+	if model.ctrlCPending || model.pendingAction != pendingActionNone {
+		t.Fatal("pending action should clear after timeout")
+	}
+	if line := ansi.Strip(model.statusLine()); strings.Contains(line, "Press Ctrl+C again to quit") {
+		t.Fatalf("status line should clear timeout hint, got %q", line)
+	}
+}
+
+func TestProviderItemsSortSetAPIsThenLocalThenUnset(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "test")
+	t.Setenv("GOOGLE_API_KEY", "test")
+	items := providerItems()
+	got := make([]string, 0, len(items))
+	for _, item := range items {
+		got = append(got, item.Label)
+	}
+	want := []string{"Gemini", "OpenRouter", "Ollama", "Anthropic", "OpenAI"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("provider order = %#v, want %#v", got, want)
 	}
 }
 
@@ -1017,7 +1223,7 @@ func TestProgressLineShowsConfigurationWarning(t *testing.T) {
 	}
 }
 
-func TestProviderItemsGroupNativeBeforeSubscriptions(t *testing.T) {
+func TestProviderItemsHaveNoGroups(t *testing.T) {
 	items := providerItems()
 	if len(items) != 5 {
 		t.Fatalf("provider items = %d, want 5", len(items))
@@ -1027,8 +1233,23 @@ func TestProviderItemsGroupNativeBeforeSubscriptions(t *testing.T) {
 			t.Fatalf("provider %q should not have a picker group, got %q", item.Label, item.Group)
 		}
 	}
-	if got := items[len(items)-1].Label; got != "Ollama" {
-		t.Fatalf("last provider = %q, want %q", got, "Ollama")
+}
+
+func TestCommittedUserEntryUsesTranscriptBullet(t *testing.T) {
+	model := readyModel(t)
+	rendered := ansi.Strip(model.renderEntry(session.Entry{Role: session.User, Content: "/model"}))
+	if !strings.HasPrefix(rendered, "• /model") {
+		t.Fatalf("rendered user entry = %q, want transcript bullet prefix", rendered)
+	}
+}
+
+func TestTextareaStylesDoNotHighlightCursorLine(t *testing.T) {
+	model := readyModel(t)
+	model.composer.SetValue("draft")
+
+	rendered := model.composer.View()
+	if strings.Contains(rendered, "[48;") {
+		t.Fatalf("textarea view still includes background-color escape codes: %q", rendered)
 	}
 }
 

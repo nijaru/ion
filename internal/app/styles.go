@@ -20,11 +20,11 @@ type styles struct {
 
 func newStyles() styles {
 	return styles{
-		user:      lipgloss.NewStyle().Bold(true).PaddingLeft(2),
-		assistant: lipgloss.NewStyle().Foreground(lipgloss.Color("6")).PaddingLeft(2),
-		system:    lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Faint(true).PaddingLeft(2),
-		tool:      lipgloss.NewStyle().Foreground(lipgloss.Color("10")).PaddingLeft(2),
-		agent:     lipgloss.NewStyle().Foreground(lipgloss.Color("13")).PaddingLeft(2),
+		user:      lipgloss.NewStyle().Bold(true),
+		assistant: lipgloss.NewStyle().Foreground(lipgloss.Color("6")),
+		system:    lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Faint(true),
+		tool:      lipgloss.NewStyle().Foreground(lipgloss.Color("10")),
+		agent:     lipgloss.NewStyle().Foreground(lipgloss.Color("13")),
 		dim:       lipgloss.NewStyle().Faint(true),
 		cyan:      lipgloss.NewStyle().Foreground(lipgloss.Color("6")),
 		warn:      lipgloss.NewStyle().Foreground(lipgloss.Color("3")),

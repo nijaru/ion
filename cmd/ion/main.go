@@ -9,8 +9,8 @@ import (
 	"os/exec"
 	"strings"
 
-	"charm.land/lipgloss/v2"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/nijaru/ion/internal/app"
 	"github.com/nijaru/ion/internal/backend"
@@ -97,7 +97,8 @@ func main() {
 	}
 
 	printStartup(os.Stdout, startupLines, workspaceHeader(cwd, branch), startupEntries, b.Bootstrap().Status)
-	p := tea.NewProgram(app.New(b, sess, store, cwd, branch, version, switcher))
+	model := app.New(b, sess, store, cwd, branch, version, switcher).WithPrintedTranscript(len(startupEntries) > 0)
+	p := tea.NewProgram(model)
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "ion error: %v\n", err)
 		os.Exit(1)
@@ -203,6 +204,9 @@ func printStartup(out *os.File, startupLines []string, workspaceLine string, ent
 	if strings.TrimSpace(status) != "" && !isConfigurationStatus(status) {
 		lines = append(lines, "")
 		lines = append(lines, status)
+	}
+	if len(entries) > 0 {
+		lines = append(lines, "")
 	}
 	for _, entry := range entries {
 		lines = append(lines, renderStartupEntry(entry))
