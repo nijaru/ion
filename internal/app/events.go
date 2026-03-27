@@ -93,40 +93,17 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.ctrlCPending = false
 		m.escPending = false
 		text := strings.TrimSpace(m.composer.Value())
-		if text == "" || m.thinking {
+		if text == "" {
 			return m, nil
 		}
-
-		m.history = append(m.history, text)
-		m.historyIdx = -1
-		m.historyDraft = ""
-
-		userEntry := session.Entry{Role: session.User, Content: text}
-		m.composer.Reset()
-		m.relayoutComposer()
-
-		if m.storage != nil {
-			if err := m.storage.Append(context.Background(), storage.User{
-				Type:    "user",
-				Content: text,
-				TS:      now(),
-			}); err != nil {
-				return m, tea.Batch(
-					tea.Printf("%s\n", m.renderEntry(userEntry)),
-					persistErrorCmd("persist user input", err),
-				)
-			}
+		if m.thinking {
+			m.queuedTurn = text
+			m.composer.Reset()
+			m.relayoutComposer()
+			return m, tea.Printf("%s\n", m.renderEntry(session.Entry{Role: session.System, Content: "Queued follow-up"}))
 		}
 
-		if strings.HasPrefix(text, "/") {
-			cmd := m.handleCommand(text)
-			return m, tea.Batch(tea.Printf("%s\n", m.renderEntry(userEntry)), cmd)
-		}
-
-		m.progress = stateIonizing
-		m.thinking = true
-		m.session.SubmitTurn(context.Background(), text)
-		return m, tea.Printf("%s\n", m.renderEntry(userEntry))
+		return m.submitText(text)
 
 	case "shift+enter":
 		m.ctrlCPending = false
@@ -236,6 +213,10 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 	case session.TurnFinished:
 		m.thinking = false
 		m.progress = stateReady
+		if queued := strings.TrimSpace(m.queuedTurn); queued != "" {
+			m.queuedTurn = ""
+			return m, func() tea.Msg { return queuedTurnMsg{text: queued} }
+		}
 		return m, m.awaitSessionEvent()
 
 	case session.ThinkingDelta:
@@ -442,6 +423,39 @@ func persistErrorCmd(action string, err error) tea.Cmd {
 	return func() tea.Msg {
 		return session.Error{Err: fmt.Errorf("%s: %w", action, err)}
 	}
+}
+
+func (m Model) submitText(text string) (Model, tea.Cmd) {
+	m.history = append(m.history, text)
+	m.historyIdx = -1
+	m.historyDraft = ""
+
+	userEntry := session.Entry{Role: session.User, Content: text}
+	m.composer.Reset()
+	m.relayoutComposer()
+
+	if m.storage != nil {
+		if err := m.storage.Append(context.Background(), storage.User{
+			Type:    "user",
+			Content: text,
+			TS:      now(),
+		}); err != nil {
+			return m, tea.Batch(
+				tea.Printf("%s\n", m.renderEntry(userEntry)),
+				persistErrorCmd("persist user input", err),
+			)
+		}
+	}
+
+	if strings.HasPrefix(text, "/") {
+		cmd := m.handleCommand(text)
+		return m, tea.Batch(tea.Printf("%s\n", m.renderEntry(userEntry)), cmd)
+	}
+
+	m.progress = stateIonizing
+	m.thinking = true
+	m.session.SubmitTurn(context.Background(), text)
+	return m, tea.Printf("%s\n", m.renderEntry(userEntry))
 }
 
 // Ensure textarea.Blink is referenced (avoids unused import if Focus() is the only use).

@@ -103,38 +103,48 @@ func (m Model) renderPlaneB() string {
 }
 
 func (m Model) renderPicker() string {
-	if m.picker == nil || len(m.picker.items) == 0 {
+	items := pickerDisplayItems(m.picker)
+	if m.picker == nil {
 		return ""
 	}
 
 	const maxVisible = 8
 	start := 0
-	if len(m.picker.items) > maxVisible {
+	if len(items) > maxVisible {
 		start = m.picker.index - maxVisible/2
 		if start < 0 {
 			start = 0
 		}
-		if end := start + maxVisible; end > len(m.picker.items) {
-			start = len(m.picker.items) - maxVisible
+		if end := start + maxVisible; end > len(items) {
+			start = len(items) - maxVisible
 		}
 	}
 	end := start + maxVisible
-	if end > len(m.picker.items) {
-		end = len(m.picker.items)
+	if end > len(items) {
+		end = len(items)
 	}
 
 	var b strings.Builder
 	b.WriteString("\n")
 	b.WriteString(m.st.cyan.PaddingLeft(2).Render(m.picker.title))
 	b.WriteString("\n")
-	b.WriteString(m.st.dim.PaddingLeft(2).Render("↑/↓ navigate · enter select · esc cancel"))
+	if m.picker.query != "" {
+		b.WriteString(m.st.dim.PaddingLeft(2).Render("filter: " + m.picker.query))
+		b.WriteString("\n")
+	}
+	b.WriteString(m.st.dim.PaddingLeft(2).Render("type to filter · ↑/↓ navigate · enter select · esc cancel"))
 	b.WriteString("\n")
+	if len(items) == 0 {
+		b.WriteString(m.st.dim.PaddingLeft(2).Render("No matching items"))
+		b.WriteString("\n")
+		return b.String()
+	}
 	if start > 0 {
 		b.WriteString(m.st.dim.PaddingLeft(2).Render("..."))
 		b.WriteString("\n")
 	}
 	for i := start; i < end; i++ {
-		item := m.picker.items[i]
+		item := items[i]
 		line := item.Label
 		if item.Detail != "" {
 			line += " · " + item.Detail
@@ -146,7 +156,7 @@ func (m Model) renderPicker() string {
 		}
 		b.WriteString("\n")
 	}
-	if end < len(m.picker.items) {
+	if end < len(items) {
 		b.WriteString(m.st.dim.PaddingLeft(2).Render("..."))
 		b.WriteString("\n")
 	}
@@ -338,7 +348,7 @@ func (m Model) headerLine() string {
 
 // statusLine renders the bottom info bar.
 func (m Model) statusLine() string {
-	sep := m.st.dim.Render(" · ")
+	sep := m.st.cyan.Render(" · ")
 
 	modeLabel := ifthen(m.mode == modeWrite,
 		m.st.modeWrite.Render("[WRITE]"),
@@ -351,7 +361,7 @@ func (m Model) statusLine() string {
 	}
 	model := ""
 	if value := m.backend.Model(); value != "" {
-		model = m.st.dim.Render(value)
+		model = value
 	}
 	dir := m.st.dim.Render("./" + filepath.Base(m.workdir))
 	branch := ""
@@ -362,13 +372,11 @@ func (m Model) statusLine() string {
 	total := m.tokensSent + m.tokensReceived
 	limit := m.backend.ContextLimit()
 	var usage string
-	if limit > 0 {
+	if total > 0 && limit > 0 {
 		pct := (total * 100) / limit
-		usage = fmt.Sprintf("%dk/%dk (%d%%)", total/1000, limit/1000, pct)
+		usage = m.st.cyan.Render(fmt.Sprintf("%dk/%dk (%d%%)", total/1000, limit/1000, pct))
 	} else if total > 0 {
 		usage = fmt.Sprintf("%dk tokens", total/1000)
-	} else {
-		usage = "0 tokens"
 	}
 
 	cost := ""

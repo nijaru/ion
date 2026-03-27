@@ -43,6 +43,10 @@ type sessionHelpMsg struct {
 	notice string
 }
 
+type queuedTurnMsg struct {
+	text string
+}
+
 type sessionPickerItem struct {
 	info storage.SessionInfo
 }
@@ -69,11 +73,13 @@ type pickerItem struct {
 }
 
 type pickerState struct {
-	title   string
-	items   []pickerItem
-	index   int
-	purpose pickerPurpose
-	cfg     *config.Config
+	title    string
+	items    []pickerItem
+	filtered []pickerItem
+	index    int
+	query    string
+	purpose  pickerPurpose
+	cfg      *config.Config
 }
 
 type toolMode int
@@ -110,9 +116,10 @@ type Model struct {
 	switcher runtimeSwitcher
 
 	// In-flight state — Plane B content
-	pending   *session.Entry // streaming assistant, active tool, or active agent
-	reasonBuf string         // accumulates ThinkingDelta
-	streamBuf string         // accumulates AssistantDelta (mirrors pending.Content)
+	pending    *session.Entry // streaming assistant, active tool, or active agent
+	reasonBuf  string         // accumulates ThinkingDelta
+	streamBuf  string         // accumulates AssistantDelta (mirrors pending.Content)
+	queuedTurn string
 
 	// Approval
 	pendingApproval *session.ApprovalRequest
@@ -325,6 +332,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			"%s\n",
 			m.renderEntry(session.Entry{Role: session.System, Content: msg.notice}),
 		)
+
+	case queuedTurnMsg:
+		next, cmd := m.submitText(msg.text)
+		return next, cmd
 
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)

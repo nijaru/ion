@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -162,11 +163,12 @@ func (m *Model) openProviderPicker() tea.Cmd {
 func (m *Model) openProviderPickerWithConfig(cfg *config.Config) tea.Cmd {
 	items := providerItems()
 	m.picker = &pickerState{
-		title:   "Pick a provider",
-		items:   items,
-		index:   pickerIndex(items, cfg.Provider),
-		purpose: pickerPurposeProvider,
-		cfg:     cfg,
+		title:    "Pick a provider",
+		items:    items,
+		filtered: append([]pickerItem(nil), items...),
+		index:    pickerIndex(items, cfg.Provider),
+		purpose:  pickerPurposeProvider,
+		cfg:      cfg,
 	}
 	return nil
 }
@@ -191,11 +193,12 @@ func (m *Model) openModelPickerWithConfig(cfg *config.Config) tea.Cmd {
 		return cmdError(fmt.Sprintf("no models available for provider %s", cfg.Provider))
 	}
 	m.picker = &pickerState{
-		title:   "Pick a model for " + cfg.Provider,
-		items:   items,
-		index:   pickerIndex(items, cfg.Model),
-		purpose: pickerPurposeModel,
-		cfg:     cfg,
+		title:    "Pick a model for " + cfg.Provider,
+		items:    items,
+		filtered: append([]pickerItem(nil), items...),
+		index:    pickerIndex(items, cfg.Model),
+		purpose:  pickerPurposeModel,
+		cfg:      cfg,
 	}
 	return nil
 }
@@ -232,6 +235,13 @@ func (m *Model) handlePickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	case "esc", "ctrl+c":
 		m.picker = nil
 		return *m, nil
+	case "backspace":
+		if len(m.picker.query) > 0 {
+			_, size := utf8.DecodeLastRuneInString(m.picker.query)
+			m.picker.query = m.picker.query[:len(m.picker.query)-size]
+			refreshPickerFilter(m)
+		}
+		return *m, nil
 	case "tab":
 		if m.picker.purpose == pickerPurposeProvider {
 			if m.picker.cfg != nil && m.picker.cfg.Provider != "" {
@@ -249,24 +259,30 @@ func (m *Model) handlePickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		}
 		return *m, nil
 	case "down":
-		if m.picker.index < len(m.picker.items)-1 {
+		if m.picker.index < len(pickerDisplayItems(m.picker))-1 {
 			m.picker.index++
 		}
 		return *m, nil
 	case "enter":
 		return m.commitPickerSelection()
 	default:
+		if len(msg.String()) == 1 {
+			m.picker.query += msg.String()
+			refreshPickerFilter(m)
+			return *m, nil
+		}
 		return *m, nil
 	}
 }
 
 func (m *Model) commitPickerSelection() (Model, tea.Cmd) {
-	if m.picker == nil || len(m.picker.items) == 0 {
+	items := pickerDisplayItems(m.picker)
+	if m.picker == nil || len(items) == 0 {
 		m.picker = nil
 		return *m, nil
 	}
 
-	selected := m.picker.items[m.picker.index]
+	selected := items[m.picker.index]
 	cfg := *m.picker.cfg
 
 	switch m.picker.purpose {

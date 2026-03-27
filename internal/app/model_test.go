@@ -14,6 +14,7 @@ import (
 
 	"github.com/nijaru/canto/memory"
 	"github.com/nijaru/ion/internal/backend"
+	"github.com/nijaru/ion/internal/backend/registry"
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
@@ -75,13 +76,17 @@ func (b *compactBackend) Compact(ctx context.Context) (bool, error) {
 }
 
 type stubSession struct {
-	events chan session.Event
+	events  chan session.Event
+	submits []string
 }
 
-func (s *stubSession) Open(ctx context.Context) error                    { return nil }
-func (s *stubSession) Resume(ctx context.Context, id string) error       { return nil }
-func (s *stubSession) SubmitTurn(ctx context.Context, turn string) error { return nil }
-func (s *stubSession) CancelTurn(ctx context.Context) error              { return nil }
+func (s *stubSession) Open(ctx context.Context) error              { return nil }
+func (s *stubSession) Resume(ctx context.Context, id string) error { return nil }
+func (s *stubSession) SubmitTurn(ctx context.Context, turn string) error {
+	s.submits = append(s.submits, turn)
+	return nil
+}
+func (s *stubSession) CancelTurn(ctx context.Context) error { return nil }
 func (s *stubSession) Close() error {
 	if s.events != nil {
 		close(s.events)
@@ -301,6 +306,22 @@ func TestStatusLineFitsWidthAfterResize(t *testing.T) {
 
 	if got := lipgloss.Width(model.statusLine()); got > model.width {
 		t.Fatalf("expected status line width <= %d, got %d: %q", model.width, got, model.statusLine())
+	}
+}
+
+func TestStatusLineHidesZeroUsageBeforeFirstTurn(t *testing.T) {
+	model := readyModel(t)
+	model.tokensSent = 0
+	model.tokensReceived = 0
+	model.totalCost = 0
+	model.backend = stubBackend{sess: &stubSession{events: make(chan session.Event)}}
+
+	line := ansi.Strip(model.statusLine())
+	if strings.Contains(line, "0 tokens") {
+		t.Fatalf("status line should hide zero usage, got %q", line)
+	}
+	if strings.Contains(line, "k/") {
+		t.Fatalf("status line should not show context usage without turns, got %q", line)
 	}
 }
 
@@ -593,6 +614,125 @@ func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 	}
 	if strings.Contains(helpMsg.notice, "/tree") {
 		t.Fatalf("help notice should not advertise /tree yet: %q", helpMsg.notice)
+	}
+}
+
+func TestProviderItemsShowConfiguredStatus(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "test-key")
+	items := providerItems()
+
+	for label, wantDetail := range map[string]string{
+		"anthropic":       "API key missing",
+		"openrouter":      "API key set",
+		"claude-pro":      "ACP",
+		"gemini-advanced": "ACP",
+		"gh-copilot":      "ACP",
+		"chatgpt":         "ACP",
+		"codex":           "ACP",
+	} {
+		found := false
+		for _, item := range items {
+			if item.Label != label {
+				continue
+			}
+			found = true
+			if item.Detail != wantDetail {
+				t.Fatalf("provider %q detail = %q, want %q", item.Label, item.Detail, wantDetail)
+			}
+		}
+		if !found {
+			t.Fatalf("provider %q not found", label)
+		}
+	}
+}
+
+func TestModelItemsUseInjectedModelLister(t *testing.T) {
+	oldListModels := listModels
+	listModels = func(ctx context.Context, provider string) ([]registry.ModelMetadata, error) {
+		if provider != "openrouter" {
+			t.Fatalf("provider = %q, want openrouter", provider)
+		}
+		return []registry.ModelMetadata{
+			{ID: "b-model", ContextLimit: 64000, InputPrice: 1.23, OutputPrice: 4.56},
+			{ID: "a-model", ContextLimit: 128000, InputPrice: 0.1, OutputPrice: 0.2},
+		}, nil
+	}
+	defer func() { listModels = oldListModels }()
+
+	items, err := modelItemsForProvider("openrouter")
+	if err != nil {
+		t.Fatalf("modelItemsForProvider: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("items len = %d, want 2", len(items))
+	}
+	if items[0].Label != "a-model" || items[1].Label != "b-model" {
+		t.Fatalf("items not sorted by label: %#v", items)
+	}
+	if !strings.Contains(items[0].Detail, "128k ctx") || !strings.Contains(items[0].Detail, "$0.1000/$0.2000") {
+		t.Fatalf("unexpected model detail: %q", items[0].Detail)
+	}
+}
+
+func TestPickerFilteringMatchesTypedQuery(t *testing.T) {
+	model := readyModel(t)
+	model.picker = &pickerState{
+		title: "Pick a provider",
+		items: []pickerItem{
+			{Label: "anthropic", Value: "anthropic", Detail: "API key missing"},
+			{Label: "openrouter", Value: "openrouter", Detail: "API key set"},
+		},
+		filtered: []pickerItem{
+			{Label: "anthropic", Value: "anthropic", Detail: "API key missing"},
+			{Label: "openrouter", Value: "openrouter", Detail: "API key set"},
+		},
+		purpose: pickerPurposeProvider,
+	}
+
+	for _, r := range []rune("router") {
+		model, _ = model.handlePickerKey(tea.KeyPressMsg{Text: string(r), Code: r})
+	}
+
+	if got := len(pickerDisplayItems(model.picker)); got != 1 {
+		t.Fatalf("filtered items = %d, want 1", got)
+	}
+	if got := pickerDisplayItems(model.picker)[0].Label; got != "openrouter" {
+		t.Fatalf("filtered label = %q, want openrouter", got)
+	}
+}
+
+func TestQueuedFollowUpSubmitsAfterTurnFinished(t *testing.T) {
+	sess := &stubSession{events: make(chan session.Event)}
+	model := readyModel(t)
+	model.session = sess
+	model.composer.SetValue("follow up")
+	model.thinking = true
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(Model)
+	if model.queuedTurn != "follow up" {
+		t.Fatalf("queuedTurn = %q, want queued follow up", model.queuedTurn)
+	}
+	if got := model.composer.Value(); got != "" {
+		t.Fatalf("composer = %q, want cleared after queueing", got)
+	}
+	if cmd == nil {
+		t.Fatal("expected queue notice command")
+	}
+
+	updated, cmd = model.Update(session.TurnFinished{})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("expected queued turn command after finish")
+	}
+	msg := cmd()
+	next, nextCmd := model.Update(msg)
+	model = next.(Model)
+	if nextCmd == nil {
+		t.Fatal("expected submit turn command after queued turn message")
+	}
+	if len(sess.submits) != 1 || sess.submits[0] != "follow up" {
+		t.Fatalf("submits = %#v, want queued follow up", sess.submits)
 	}
 }
 
