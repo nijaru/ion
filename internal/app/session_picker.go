@@ -113,8 +113,6 @@ func (m *Model) refreshSessionPickerFilter() {
 func sessionPickerMatches(query string, info storage.SessionInfo, cwd string) bool {
 	candidate := strings.ToLower(strings.Join([]string{
 		info.ID,
-		info.Model,
-		info.Branch,
 		info.LastPreview,
 		cwd,
 	}, " "))
@@ -206,20 +204,11 @@ func (m Model) renderSessionPicker() string {
 func sessionPickerLine(cwd string, info storage.SessionInfo) (string, string) {
 	label := strings.TrimSpace(info.LastPreview)
 	if label == "" {
-		label = info.Model
-	}
-	if label == "" {
 		label = info.ID
 	}
 	label = truncateRunes(label, 72)
 
 	var detailParts []string
-	if info.Model != "" && info.Model != label {
-		detailParts = append(detailParts, info.Model)
-	}
-	if info.Branch != "" {
-		detailParts = append(detailParts, info.Branch)
-	}
 	if age := humanizeSessionAge(time.Since(info.UpdatedAt)); age != "" {
 		detailParts = append(detailParts, age)
 	}

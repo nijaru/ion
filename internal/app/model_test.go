@@ -454,11 +454,9 @@ func TestSessionPickerScopesToWorkspace(t *testing.T) {
 	}
 }
 
-func TestSessionPickerLineUsesPreviewAndMetadata(t *testing.T) {
+func TestSessionPickerLineUsesPreviewAndAge(t *testing.T) {
 	info := storage.SessionInfo{
 		ID:          "session-123",
-		Model:       "openrouter/deepseek/deepseek-v3.2",
-		Branch:      "main",
 		LastPreview: "refactor the picker overlay",
 		UpdatedAt:   time.Now().Add(-2 * time.Hour),
 	}
@@ -466,12 +464,6 @@ func TestSessionPickerLineUsesPreviewAndMetadata(t *testing.T) {
 	label, detail := sessionPickerLine("/tmp/workspace-a", info)
 	if label != "refactor the picker overlay" {
 		t.Fatalf("label = %q, want preview text", label)
-	}
-	if !strings.Contains(detail, "openrouter/deepseek/deepseek-v3.2") {
-		t.Fatalf("detail %q missing model", detail)
-	}
-	if !strings.Contains(detail, "main") {
-		t.Fatalf("detail %q missing branch", detail)
 	}
 	if !strings.Contains(detail, "ago") {
 		t.Fatalf("detail %q missing age", detail)
