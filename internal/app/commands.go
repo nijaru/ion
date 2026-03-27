@@ -42,7 +42,7 @@ func (m *Model) handleCommand(input string) tea.Cmd {
 		if cfg.Provider == "" {
 			return tea.Printf("%s\n", m.renderEntry(session.Entry{Role: session.System, Content: "Set model to " + name}))
 		}
-		return m.switchRuntimeCommand(cfg, session.Entry{Role: session.System, Content: "Switched model to " + name}, m.session.ID())
+		return m.switchRuntimeCommand(cfg, session.Entry{Role: session.System, Content: "Switched model to " + name}, m.session.ID(), true)
 
 	case "/provider":
 		if len(fields) < 2 {
@@ -61,7 +61,7 @@ func (m *Model) handleCommand(input string) tea.Cmd {
 		if cfg.Model == "" {
 			return tea.Printf("%s\n", m.renderEntry(session.Entry{Role: session.System, Content: "Set provider to " + name}))
 		}
-		return m.switchRuntimeCommand(cfg, session.Entry{Role: session.System, Content: "Switched provider to " + name}, m.session.ID())
+		return m.switchRuntimeCommand(cfg, session.Entry{Role: session.System, Content: "Switched provider to " + name}, m.session.ID(), true)
 
 	case "/mcp":
 		if len(fields) < 3 || fields[1] != "add" {
@@ -76,6 +76,22 @@ func (m *Model) handleCommand(input string) tea.Cmd {
 			}
 			return nil
 		}
+
+	case "/clear":
+		cfg, err := config.Load()
+		if err != nil {
+			return cmdError(fmt.Sprintf("failed to load config: %v", err))
+		}
+		if cfg.Provider == "" {
+			cfg.Provider = m.backend.Provider()
+		}
+		if cfg.Model == "" {
+			cfg.Model = m.backend.Model()
+		}
+		if cfg.Provider == "" || cfg.Model == "" {
+			return cmdError("cannot /clear without an active provider and model")
+		}
+		return m.switchRuntimeCommand(cfg, session.Entry{Role: session.System, Content: "Started fresh session"}, "", false)
 
 	case "/compact":
 		compactor, ok := m.backend.(backend.Compactor)
@@ -210,7 +226,7 @@ func (m *Model) commitPickerSelection() (Model, tea.Cmd) {
 		}
 		m.picker = nil
 		notice := session.Entry{Role: session.System, Content: "Switched model to " + selected.Value}
-		return *m, m.switchRuntimeCommand(&cfg, notice, m.session.ID())
+		return *m, m.switchRuntimeCommand(&cfg, notice, m.session.ID(), true)
 	default:
 		m.picker = nil
 		return *m, nil
@@ -238,10 +254,10 @@ func (m *Model) resumeStoredSessionByID(sessionID string) tea.Cmd {
 
 	cfg := &config.Config{Provider: provider, Model: model}
 	notice := session.Entry{Role: session.System, Content: "Resumed session " + sessionID}
-	return m.switchRuntimeCommand(cfg, notice, sessionID)
+	return m.switchRuntimeCommand(cfg, notice, sessionID, true)
 }
 
-func (m *Model) switchRuntimeCommand(cfg *config.Config, notice session.Entry, sessionID string) tea.Cmd {
+func (m *Model) switchRuntimeCommand(cfg *config.Config, notice session.Entry, sessionID string, preserveSession bool) tea.Cmd {
 	if m.switcher == nil {
 		m.backend.SetConfig(cfg)
 		return tea.Printf("%s\n", m.renderEntry(notice))
@@ -249,7 +265,7 @@ func (m *Model) switchRuntimeCommand(cfg *config.Config, notice session.Entry, s
 
 	oldSession := m.session
 	switchID := sessionID
-	if switchID == "" && oldSession != nil {
+	if preserveSession && switchID == "" && oldSession != nil {
 		switchID = oldSession.ID()
 	}
 	switcher := m.switcher

@@ -425,6 +425,85 @@ func TestCompactCommandErrorsWhenBackendUnsupported(t *testing.T) {
 	}
 }
 
+func TestClearCommandStartsFreshSession(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cfgDir := filepath.Join(home, ".ion")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.toml"), []byte("provider = \"openai\"\nmodel = \"gpt-4.1\"\n"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	oldSession := &stubSession{events: make(chan session.Event)}
+	oldBackend := stubBackend{sess: oldSession, provider: "openai", model: "gpt-4.1"}
+
+	var observedSessionID string
+	model := New(oldBackend, nil, nil, "/tmp/test", "main", "dev", func(ctx context.Context, cfg *config.Config, sessionID string) (backend.Backend, session.AgentSession, storage.Session, error) {
+		observedSessionID = sessionID
+		newStorage := &stubStorageSession{
+			id:     "fresh-session",
+			model:  cfg.Provider + "/" + cfg.Model,
+			branch: "main",
+		}
+		newBackend := testutil.New()
+		newBackend.SetConfig(cfg)
+		newBackend.SetSession(newStorage)
+		return newBackend, newBackend.Session(), newStorage, nil
+	})
+
+	cmd := model.handleCommand("/clear")
+	if cmd == nil {
+		t.Fatal("expected /clear command to return a cmd")
+	}
+	msg := cmd()
+	switched, ok := msg.(runtimeSwitchedMsg)
+	if !ok {
+		t.Fatalf("expected runtimeSwitchedMsg, got %T", msg)
+	}
+	if observedSessionID != "" {
+		t.Fatalf("session ID passed to clear switcher = %q, want empty for fresh session", observedSessionID)
+	}
+	if switched.notice != "Started fresh session" {
+		t.Fatalf("clear notice = %q", switched.notice)
+	}
+}
+
+func TestClearCommandFallsBackToActiveRuntimeConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cfgDir := filepath.Join(home, ".ion")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.toml"), []byte("session_retention_days = 90\n"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	oldSession := &stubSession{events: make(chan session.Event)}
+	oldBackend := stubBackend{sess: oldSession, provider: "openrouter", model: "deepseek/deepseek-v3.2"}
+
+	model := New(oldBackend, nil, nil, "/tmp/test", "main", "dev", func(ctx context.Context, cfg *config.Config, sessionID string) (backend.Backend, session.AgentSession, storage.Session, error) {
+		if cfg.Provider != "openrouter" {
+			t.Fatalf("provider = %q, want openrouter", cfg.Provider)
+		}
+		if cfg.Model != "deepseek/deepseek-v3.2" {
+			t.Fatalf("model = %q, want deepseek/deepseek-v3.2", cfg.Model)
+		}
+		newStorage := &stubStorageSession{id: "fresh-session"}
+		newBackend := testutil.New()
+		newBackend.SetConfig(cfg)
+		newBackend.SetSession(newStorage)
+		return newBackend, newBackend.Session(), newStorage, nil
+	})
+
+	msg := model.handleCommand("/clear")()
+	if _, ok := msg.(runtimeSwitchedMsg); !ok {
+		t.Fatalf("expected runtimeSwitchedMsg, got %T", msg)
+	}
+}
+
 func TestPickerCommitSwitchesRuntime(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
