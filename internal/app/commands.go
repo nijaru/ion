@@ -202,6 +202,10 @@ func (m *Model) switchRuntimeCommand(cfg *config.Config, notice session.Entry) t
 	}
 
 	oldSession := m.session
+	sessionID := ""
+	if oldSession != nil {
+		sessionID = oldSession.ID()
+	}
 	switcher := m.switcher
 	cfgCopy := *cfg
 
@@ -209,7 +213,7 @@ func (m *Model) switchRuntimeCommand(cfg *config.Config, notice session.Entry) t
 		if oldSession != nil {
 			_ = oldSession.CancelTurn(context.Background())
 		}
-		backend, sess, storageSess, err := switcher(context.Background(), &cfgCopy)
+		backend, sess, storageSess, err := switcher(context.Background(), &cfgCopy, sessionID)
 		if err != nil {
 			return session.Error{Err: err}
 		}

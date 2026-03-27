@@ -21,7 +21,7 @@ const (
 
 type streamClosedMsg struct{}
 
-type runtimeSwitcher func(context.Context, *config.Config) (backend.Backend, session.AgentSession, storage.Session, error)
+type runtimeSwitcher func(context.Context, *config.Config, string) (backend.Backend, session.AgentSession, storage.Session, error)
 
 type runtimeSwitchedMsg struct {
 	backend backend.Backend

@@ -319,14 +319,16 @@ func TestPickerCommitSwitchesRuntime(t *testing.T) {
 	oldBackend := stubBackend{sess: oldSession}
 
 	switched := false
-	model := New(oldBackend, nil, "/tmp/test", "main", "dev", func(ctx context.Context, cfg *config.Config) (backend.Backend, session.AgentSession, storage.Session, error) {
+	observedSessionID := ""
+	model := New(oldBackend, nil, "/tmp/test", "main", "dev", func(ctx context.Context, cfg *config.Config, sessionID string) (backend.Backend, session.AgentSession, storage.Session, error) {
 		switched = true
+		observedSessionID = sessionID
 
 		resolved := *cfg
 		resolved.Provider = "openai"
 
 		newStorage := &stubStorageSession{
-			id:     "switched-session",
+			id:     sessionID,
 			model:  resolved.Model,
 			branch: "feature/switch",
 		}
@@ -361,17 +363,20 @@ func TestPickerCommitSwitchesRuntime(t *testing.T) {
 	if !switched {
 		t.Fatal("expected runtime switch callback to be invoked")
 	}
+	if observedSessionID != oldSession.ID() {
+		t.Fatalf("session ID passed to switcher = %q, want %q", observedSessionID, oldSession.ID())
+	}
 	if got := model.backend.Provider(); got != "openai" {
 		t.Fatalf("backend provider = %q, want %q", got, "openai")
 	}
 	if got := model.backend.Model(); got != "gpt-4.1" {
 		t.Fatalf("backend model = %q, want %q", got, "gpt-4.1")
 	}
-	if got := model.session.ID(); got != "switched-session" {
-		t.Fatalf("session ID = %q, want %q", got, "switched-session")
+	if got := model.session.ID(); got != oldSession.ID() {
+		t.Fatalf("session ID = %q, want %q", got, oldSession.ID())
 	}
-	if got := model.storage.ID(); got != "switched-session" {
-		t.Fatalf("storage session ID = %q, want %q", got, "switched-session")
+	if got := model.storage.ID(); got != oldSession.ID() {
+		t.Fatalf("storage session ID = %q, want %q", got, oldSession.ID())
 	}
 	if got := model.branch; got != "feature/switch" {
 		t.Fatalf("branch = %q, want %q", got, "feature/switch")

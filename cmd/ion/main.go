@@ -78,8 +78,8 @@ func main() {
 	}
 
 	startupLines := startupBannerLines(b.Provider(), b.Model(), sessionID != "")
-	switcher := func(ctx context.Context, cfg *config.Config) (backend.Backend, session.AgentSession, storage.Session, error) {
-		switchedBackend, switchedSession, err := openRuntime(ctx, store, cwd, currentBranch(), cfg, acpCommandOverride, "")
+	switcher := func(ctx context.Context, cfg *config.Config, sessionID string) (backend.Backend, session.AgentSession, storage.Session, error) {
+		switchedBackend, switchedSession, err := openRuntime(ctx, store, cwd, currentBranch(), cfg, acpCommandOverride, sessionID)
 		if err != nil {
 			return nil, nil, nil, err
 		}
