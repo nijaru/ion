@@ -292,7 +292,7 @@ func newProvider(cfg *config.Config) (llm.Provider, error) {
 	base := catwalk.Provider{
 		ID:             catwalk.InferenceProvider(def.ID),
 		APIKey:         resolvedAPIKey(cfg, def),
-		APIEndpoint:    providers.ResolvedEndpoint(cfg),
+		APIEndpoint:    providers.ResolvedEndpointContext(context.Background(), cfg),
 		DefaultHeaders: providers.ResolvedHeaders(cfg),
 	}
 
@@ -303,6 +303,9 @@ func newProvider(cfg *config.Config) (llm.Provider, error) {
 		}
 		return anthropic.NewProvider(base), nil
 	case providers.FamilyOpenAI:
+		if def.ID == "local-api" && base.APIEndpoint == "" {
+			return nil, fmt.Errorf("Local API is not running")
+		}
 		if def.AuthKind != providers.AuthLocal && base.APIKey == "" {
 			return nil, fmt.Errorf("%s not set", missingAuthDetail(cfg, def))
 		}

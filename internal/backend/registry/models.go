@@ -110,9 +110,15 @@ func fetchModels(ctx context.Context, provider string, cfg *config.Config) ([]Mo
 			return fetchOpenAICompatibleModels(ctx, provider, providers.ResolvedEndpoint(cfg), "", nil)
 		}
 		return ollamaFetcher(ctx)
+	case "local-api":
+		endpoint := providers.ResolvedEndpointContext(ctx, cfg)
+		if endpoint == "" {
+			return nil, fmt.Errorf("Local API is not running")
+		}
+		return fetchOpenAICompatibleModels(ctx, provider, endpoint, "", nil)
 	default:
 		if def, ok := providers.Lookup(provider); ok && def.Family == providers.FamilyOpenAI {
-			endpoint := providers.ResolvedEndpoint(cfg)
+			endpoint := providers.ResolvedEndpointContext(ctx, cfg)
 			if endpoint == "" {
 				return nil, fmt.Errorf("provider %s has no configured endpoint", provider)
 			}
@@ -507,7 +513,7 @@ func providerCacheKey(cfg *config.Config) string {
 		return ""
 	}
 	provider := providers.ResolveID(cfg.Provider)
-	endpoint := providers.ResolvedEndpoint(cfg)
+	endpoint := providers.ResolvedEndpointContext(context.Background(), cfg)
 	authEnv := providers.ResolvedAuthEnvVar(cfg)
 	return strings.Join([]string{
 		provider,

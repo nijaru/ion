@@ -603,6 +603,7 @@ func TestProviderItemsSortSetAPIsThenLocalThenUnset(t *testing.T) {
 		"Gemini",
 		"OpenRouter",
 		"Ollama",
+		"Local API",
 		"Anthropic",
 		"Cerebras",
 		"DeepSeek",
@@ -1615,12 +1616,70 @@ func TestProviderItemsUseCatalogGroups(t *testing.T) {
 	}
 }
 
+func TestProviderItemsPreferReadyProvidersBeforeUnsetOnes(t *testing.T) {
+	for _, name := range []string{
+		"ANTHROPIC_API_KEY",
+		"OPENAI_API_KEY",
+		"OPENROUTER_API_KEY",
+		"GEMINI_API_KEY",
+		"GOOGLE_API_KEY",
+		"HF_TOKEN",
+		"TOGETHER_API_KEY",
+		"DEEPSEEK_API_KEY",
+		"GROQ_API_KEY",
+		"FIREWORKS_API_KEY",
+		"MISTRAL_API_KEY",
+		"MOONSHOT_API_KEY",
+		"CEREBRAS_API_KEY",
+		"ZAI_API_KEY",
+		"XAI_API_KEY",
+		"OPENAI_COMPATIBLE_API_KEY",
+	} {
+		t.Setenv(name, "")
+	}
+	t.Setenv("OPENROUTER_API_KEY", "test")
+	t.Setenv("GOOGLE_API_KEY", "test")
+
+	items := providerItems(&config.Config{})
+	indexOf := func(value string) int {
+		for i, item := range items {
+			if item.Value == value {
+				return i
+			}
+		}
+		return -1
+	}
+
+	if indexOf("gemini") == -1 || indexOf("openrouter") == -1 || indexOf("local-api") == -1 {
+		t.Fatalf("expected ready providers and Local API to appear in picker: %#v", items)
+	}
+	if indexOf("anthropic") == -1 {
+		t.Fatalf("expected anthropic in picker")
+	}
+	if indexOf("gemini") > indexOf("anthropic") || indexOf("openrouter") > indexOf("anthropic") {
+		t.Fatalf("ready remote providers should sort before unset direct providers")
+	}
+	if indexOf("local-api") > indexOf("anthropic") {
+		t.Fatalf("Local API should sort ahead of unset direct providers")
+	}
+}
+
 func TestProviderItemsHideCustomEndpointByDefault(t *testing.T) {
 	items := providerItems(&config.Config{})
 	for _, item := range items {
-		if item.Value == "openai-compatible" || item.Value == "local-openai" {
+		if item.Value == "openai-compatible" {
 			t.Fatalf("custom endpoint entry %q should be hidden by default", item.Value)
 		}
+	}
+	foundLocal := false
+	for _, item := range items {
+		if item.Value == "local-api" && item.Label == "Local API" {
+			foundLocal = true
+			break
+		}
+	}
+	if !foundLocal {
+		t.Fatalf("Local API should always be visible")
 	}
 
 	items = providerItems(&config.Config{Provider: "openai-compatible", Endpoint: "https://example.com/v1"})
@@ -1635,19 +1694,19 @@ func TestProviderItemsHideCustomEndpointByDefault(t *testing.T) {
 		t.Fatalf("custom endpoint entry should be shown when configured")
 	}
 
-	items = providerItems(&config.Config{Provider: "local-openai"})
+	items = providerItems(&config.Config{Provider: "local-api", Endpoint: "http://127.0.0.1:1/v1"})
 	found = false
 	for _, item := range items {
-		if item.Value == "local-openai" && item.Label == "Custom" {
-			if item.Detail != "127.0.0.1:1234" {
-				t.Fatalf("local-openai detail = %q, want %q", item.Detail, "127.0.0.1:1234")
+		if item.Value == "local-api" && item.Label == "Local API" {
+			if item.Detail != "Not running" {
+				t.Fatalf("local-api detail = %q, want %q", item.Detail, "Not running")
 			}
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Fatalf("local-openai should render as Custom when active")
+		t.Fatalf("local-api should render when active")
 	}
 }
 
@@ -1671,8 +1730,8 @@ func TestRenderPickerKeepsDetailColumnStableAcrossScroll(t *testing.T) {
 			{Label: "xAI", Value: "xai", Detail: "Ready", Group: "Direct APIs"},
 			{Label: "Z.ai", Value: "zai", Detail: "Ready", Group: "Direct APIs"},
 			{Label: "Ollama", Value: "ollama", Detail: "Ready", Group: "Local"},
-			{Label: "Custom", Value: "local-openai", Detail: "127.0.0.1:1234", Group: "Custom Endpoints"},
-			{Label: "Custom", Value: "openai-compatible", Detail: "Set endpoint", Group: "Custom Endpoints"},
+			{Label: "Local API", Value: "local-api", Detail: "Not running", Group: "Local"},
+			{Label: "Custom API", Value: "openai-compatible", Detail: "Set endpoint", Group: "Custom Endpoints"},
 			{Label: "Anthropic", Value: "anthropic", Detail: "Set ANTHROPIC_API_KEY", Group: "Direct APIs"},
 		},
 	}

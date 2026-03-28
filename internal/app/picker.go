@@ -89,7 +89,7 @@ func buildProviderItem(cfg *config.Config, def providers.Definition) pickerItem 
 }
 
 func providerDetail(cfg *config.Config, def providers.Definition) (string, pickerTone) {
-	detail, ready := providers.CredentialState(cfgForProvider(cfg, def.ID), def)
+	detail, ready := providers.CredentialStateContext(context.Background(), cfgForProvider(cfg, def.ID), def)
 	if ready || !strings.HasPrefix(detail, "Set ") {
 		return detail, pickerToneDefault
 	}
@@ -109,7 +109,7 @@ func providerCredentialSet(provider string) bool {
 	if !ok {
 		return false
 	}
-	_, ready := providers.CredentialState(cfgForProvider(nil, def.ID), def)
+	_, ready := providers.CredentialStateContext(context.Background(), cfgForProvider(nil, def.ID), def)
 	return ready
 }
 

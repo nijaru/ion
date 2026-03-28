@@ -451,7 +451,7 @@ func (m Model) progressLine() string {
 	case stateApproval:
 		line = m.st.warn.Render("⚠ Approval required")
 	case stateCancelled:
-		line = m.st.dim.Render("• Cancelled")
+		line = m.st.warn.Render("⚠ Canceled")
 	case stateError:
 		line = m.st.warn.Render("× Error: " + strings.NewReplacer("\n", " ", "\r", " ").Replace(m.lastError))
 	default:

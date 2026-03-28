@@ -10,6 +10,7 @@ import (
 
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/config"
+	"github.com/nijaru/ion/internal/providers"
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
 )
@@ -294,6 +295,11 @@ func (m *Model) commitPickerSelection() (Model, tea.Cmd) {
 
 	switch m.picker.purpose {
 	case pickerPurposeProvider:
+		if def, ok := providers.Lookup(selected.Value); ok && def.ID == "local-api" {
+			if _, ready := providers.CredentialStateContext(context.Background(), cfgForProvider(&cfg, def.ID), def); !ready {
+				return *m, cmdError("Local API is not running")
+			}
+		}
 		if strings.EqualFold(cfg.Provider, selected.Value) {
 			m.picker = nil
 			return *m, m.openModelPickerWithConfig(&cfg)

@@ -1,11 +1,17 @@
 package providers
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"net/url"
 	"os"
 	"slices"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/nijaru/ion/internal/config"
 )
@@ -60,6 +66,20 @@ type Definition struct {
 	Aliases                []string
 	ACPCommand             string
 }
+
+type localProbeResult struct {
+	endpoint string
+	ready    bool
+	checked  time.Time
+}
+
+var (
+	localProbeMu    sync.RWMutex
+	localProbeCache = map[string]localProbeResult{}
+)
+
+const localProbeTTL = 5 * time.Second
+const localProbeTimeout = 300 * time.Millisecond
 
 func All() []Definition {
 	return slices.Clone(definitions)
@@ -126,6 +146,10 @@ func DefaultACPCommand(id string) (string, bool) {
 }
 
 func ResolvedEndpoint(cfg *config.Config) string {
+	return ResolvedEndpointContext(context.Background(), cfg)
+}
+
+func ResolvedEndpointContext(ctx context.Context, cfg *config.Config) string {
 	if cfg == nil {
 		return ""
 	}
@@ -134,6 +158,12 @@ func ResolvedEndpoint(cfg *config.Config) string {
 	}
 	def, ok := Lookup(cfg.Provider)
 	if !ok {
+		return ""
+	}
+	if def.ID == "local-api" {
+		if endpoint, ok := ProbeLocalAPI(ctx, cfg); ok {
+			return endpoint
+		}
 		return ""
 	}
 	return strings.TrimSpace(def.DefaultEndpoint)
@@ -174,12 +204,18 @@ func ResolvedHeaders(cfg *config.Config) map[string]string {
 }
 
 func CredentialState(cfg *config.Config, def Definition) (string, bool) {
+	return CredentialStateContext(context.Background(), cfg, def)
+}
+
+func CredentialStateContext(ctx context.Context, cfg *config.Config, def Definition) (string, bool) {
 	if def.Runtime == RuntimeACP {
 		return "Subscription", true
 	}
-	if def.ID == "local-openai" {
-		endpoint := ResolvedEndpoint(cfg)
-		return summarizeEndpoint(endpoint), false
+	if def.ID == "local-api" {
+		if endpoint, ok := ProbeLocalAPI(ctx, cfg); ok {
+			return "Ready at " + summarizeEndpoint(endpoint), true
+		}
+		return "Not running", false
 	}
 	if def.AuthKind == AuthLocal {
 		return "Ready", true
@@ -230,7 +266,7 @@ func SortRank(cfg *config.Config, def Definition) int {
 		return 0
 	case ready && isLocal:
 		return 1
-	case !ready && !isLocal:
+	case !ready && isLocal:
 		return 2
 	default:
 		return 3
@@ -252,11 +288,8 @@ func ShowInPicker(cfg *config.Config, def Definition) bool {
 	if def.Runtime != RuntimeNative {
 		return false
 	}
-	if def.ID == "local-openai" {
-		if cfg == nil {
-			return false
-		}
-		return ResolveID(cfg.Provider) == def.ID || strings.TrimSpace(cfg.Endpoint) != ""
+	if def.ID == "local-api" {
+		return true
 	}
 	if def.Kind != KindCustom {
 		return true
@@ -317,6 +350,110 @@ func summarizeEndpoint(raw string) string {
 	return u.Host
 }
 
+func ProbeLocalAPI(ctx context.Context, cfg *config.Config) (string, bool) {
+	for _, endpoint := range localAPIProbeTargets(cfg) {
+		if endpoint == "" {
+			continue
+		}
+		if cached, ok := localProbeCached(endpoint); ok {
+			if cached.ready {
+				return cached.endpoint, true
+			}
+			continue
+		}
+		ready := probeOpenAICompatibleEndpoint(ctx, endpoint)
+		storeLocalProbe(endpoint, ready)
+		if ready {
+			return endpoint, true
+		}
+	}
+	return "", false
+}
+
+func localAPIProbeTargets(cfg *config.Config) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, 4)
+	add := func(raw string) {
+		value := strings.TrimSpace(raw)
+		if value == "" {
+			return
+		}
+		value = strings.TrimRight(value, "/")
+		if _, ok := seen[value]; ok {
+			return
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+
+	if cfg != nil && strings.EqualFold(strings.TrimSpace(cfg.Provider), "local-api") {
+		add(cfg.Endpoint)
+	}
+	add("http://127.0.0.1:1234/v1")
+	add("http://127.0.0.1:8000/v1")
+	add("http://127.0.0.1:8080/v1")
+	return out
+}
+
+func localProbeCached(endpoint string) (localProbeResult, bool) {
+	localProbeMu.RLock()
+	defer localProbeMu.RUnlock()
+	result, ok := localProbeCache[endpoint]
+	if !ok {
+		return localProbeResult{}, false
+	}
+	if time.Since(result.checked) > localProbeTTL {
+		return localProbeResult{}, false
+	}
+	return result, true
+}
+
+func storeLocalProbe(endpoint string, ready bool) {
+	if !ready {
+		return
+	}
+	localProbeMu.Lock()
+	defer localProbeMu.Unlock()
+	localProbeCache[endpoint] = localProbeResult{
+		endpoint: endpoint,
+		ready:    ready,
+		checked:  time.Now(),
+	}
+}
+
+func probeOpenAICompatibleEndpoint(ctx context.Context, endpoint string) bool {
+	reqCtx := ctx
+	if _, ok := reqCtx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		reqCtx, cancel = context.WithTimeout(reqCtx, localProbeTimeout)
+		defer cancel()
+	}
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, strings.TrimRight(endpoint, "/")+"/models", nil)
+	if err != nil {
+		return false
+	}
+	req.Header.Set("User-Agent", "ion/0.0.0")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return false
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return false
+	}
+	var payload struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	return json.Unmarshal(body, &payload) == nil
+}
+
 var definitions = []Definition{
 	{ID: "anthropic", DisplayName: "Anthropic", Kind: KindDirect, Family: FamilyAnthropic, AuthKind: AuthAPIKey, DefaultEnvVar: "ANTHROPIC_API_KEY", SupportsModelListing: true, Runtime: RuntimeNative},
 	{ID: "openai", DisplayName: "OpenAI", Kind: KindDirect, Family: FamilyOpenAI, AuthKind: AuthAPIKey, DefaultEnvVar: "OPENAI_API_KEY", DefaultEndpoint: "https://api.openai.com/v1", SupportsModelListing: true, Runtime: RuntimeNative},
@@ -333,8 +470,8 @@ var definitions = []Definition{
 	{ID: "moonshot", DisplayName: "Moonshot AI", Kind: KindDirect, Family: FamilyOpenAI, AuthKind: AuthAPIKey, DefaultEnvVar: "MOONSHOT_API_KEY", DefaultEndpoint: "https://api.moonshot.ai/v1", SupportsModelListing: false, Runtime: RuntimeNative},
 	{ID: "cerebras", DisplayName: "Cerebras", Kind: KindDirect, Family: FamilyOpenAI, AuthKind: AuthAPIKey, DefaultEnvVar: "CEREBRAS_API_KEY", DefaultEndpoint: "https://api.cerebras.ai/v1", SupportsModelListing: true, Runtime: RuntimeNative},
 	{ID: "zai", DisplayName: "Z.ai", Kind: KindDirect, Family: FamilyOpenAI, AuthKind: AuthAPIKey, DefaultEnvVar: "ZAI_API_KEY", SupportsModelListing: false, Runtime: RuntimeNative, Aliases: []string{"z-ai"}},
-	{ID: "openai-compatible", DisplayName: "Custom", Kind: KindCustom, Family: FamilyOpenAI, AuthKind: AuthAPIKey, DefaultEnvVar: "OPENAI_COMPATIBLE_API_KEY", SupportsModelListing: true, SupportsCustomEndpoint: true, Runtime: RuntimeNative},
-	{ID: "local-openai", DisplayName: "Custom", Kind: KindCustom, Family: FamilyOpenAI, AuthKind: AuthLocal, DefaultEndpoint: "http://127.0.0.1:1234/v1", SupportsModelListing: true, SupportsCustomEndpoint: true, Runtime: RuntimeNative},
+	{ID: "openai-compatible", DisplayName: "Custom API", Kind: KindCustom, Family: FamilyOpenAI, AuthKind: AuthAPIKey, DefaultEnvVar: "OPENAI_COMPATIBLE_API_KEY", SupportsModelListing: true, SupportsCustomEndpoint: true, Runtime: RuntimeNative},
+	{ID: "local-api", DisplayName: "Local API", Kind: KindLocal, Family: FamilyOpenAI, AuthKind: AuthLocal, SupportsModelListing: true, SupportsCustomEndpoint: true, Runtime: RuntimeNative},
 	{ID: "claude-pro", DisplayName: "Claude Code", Kind: KindSubscription, Family: FamilyACP, AuthKind: AuthACP, Runtime: RuntimeACP, ACPCommand: "claude --acp"},
 	{ID: "gemini-advanced", DisplayName: "Gemini CLI", Kind: KindSubscription, Family: FamilyACP, AuthKind: AuthACP, Runtime: RuntimeACP, ACPCommand: "gemini --acp"},
 	{ID: "gh-copilot", DisplayName: "GitHub Copilot", Kind: KindSubscription, Family: FamilyACP, AuthKind: AuthACP, Runtime: RuntimeACP, ACPCommand: "gh copilot --acp"},

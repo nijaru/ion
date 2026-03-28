@@ -62,7 +62,7 @@ func TestBackendForProvider(t *testing.T) {
 		{name: "canto anthropic", provider: "anthropic", want: "canto"},
 		{name: "canto together", provider: "together", want: "canto"},
 		{name: "canto custom openai", provider: "openai-compatible", want: "canto"},
-		{name: "canto local openai", provider: "local-openai", want: "canto"},
+		{name: "canto local api", provider: "local-api", want: "canto"},
 		{name: "acp claude", provider: "claude-pro", want: "acp"},
 		{name: "acp gemini", provider: "gemini-advanced", want: "acp"},
 		{name: "acp github", provider: "gh-copilot", want: "acp"},
@@ -132,7 +132,7 @@ func TestResolveStartupConfig(t *testing.T) {
 	t.Run("custom endpoint provider requires endpoint", func(t *testing.T) {
 		cfg := &config.Config{Provider: "openai-compatible", Model: "test-model"}
 		err := resolveStartupConfig(cfg)
-		if err == nil || err.Error() != "Custom requires endpoint configuration" {
+		if err == nil || err.Error() != "Custom API requires endpoint configuration" {
 			t.Fatalf("resolveStartupConfig error = %v", err)
 		}
 	})
