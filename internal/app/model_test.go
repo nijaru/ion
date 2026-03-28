@@ -997,6 +997,34 @@ func TestModelItemsUseInjectedModelLister(t *testing.T) {
 	}
 }
 
+func TestModelItemsTreatZeroPricesAsFreeSearchTerm(t *testing.T) {
+	oldListModelsForConfig := listModelsForConfig
+	listModelsForConfig = func(ctx context.Context, cfg *config.Config) ([]registry.ModelMetadata, error) {
+		return []registry.ModelMetadata{
+			{ID: "vendor/model-free", ContextLimit: 128000, InputPrice: 0, OutputPrice: 0},
+			{ID: "vendor/model-paid", ContextLimit: 128000, InputPrice: 0.1, OutputPrice: 0.2},
+		}, nil
+	}
+	defer func() { listModelsForConfig = oldListModelsForConfig }()
+
+	items, err := modelItemsForProvider(&config.Config{Provider: "openrouter"})
+	if err != nil {
+		t.Fatalf("modelItemsForProvider: %v", err)
+	}
+
+	filtered := rankedPickerItems(items, "free")
+	got := make([]string, 0, len(filtered))
+	for _, item := range filtered {
+		got = append(got, item.Label)
+	}
+	if !slices.Contains(got, "vendor/model-free") {
+		t.Fatalf("expected zero-priced model to match free query, got %v", got)
+	}
+	if slices.Contains(got, "vendor/model-paid") {
+		t.Fatalf("did not expect paid model to match free query, got %v", got)
+	}
+}
+
 func TestPickerFilteringMatchesTypedQuery(t *testing.T) {
 	model := readyModel(t)
 	model.picker = &pickerState{
@@ -1810,7 +1838,7 @@ func TestRenderPickerHighlightsSelectedMetricColumns(t *testing.T) {
 	}
 	widths := pickerMetricWidths{Context: 7, Input: 5, Output: 5}
 
-	selected := model.renderPickerLine("› ", item, lipgloss.Width(item.Label), widths, model.st.cyan, lipgloss.NewStyle())
+	selected := model.renderPickerLine("› ", item, lipgloss.Width(item.Label), widths, model.st.cyan, model.st.cyan)
 	unselected := model.renderPickerLine("  ", item, lipgloss.Width(item.Label), widths, lipgloss.NewStyle(), model.st.dim)
 
 	if ansi.Strip(selected) == ansi.Strip(unselected) {
@@ -1818,6 +1846,9 @@ func TestRenderPickerHighlightsSelectedMetricColumns(t *testing.T) {
 	}
 	if strings.Contains(selected, model.st.dim.Render("80k"+strings.Repeat(" ", widths.Context-lipgloss.Width("80k")))) {
 		t.Fatalf("selected metric columns should not be dimmed: %q", selected)
+	}
+	if !strings.Contains(selected, model.st.cyan.Render("80k"+strings.Repeat(" ", widths.Context-lipgloss.Width("80k")))) {
+		t.Fatalf("selected metric columns should be highlighted: %q", selected)
 	}
 	if !strings.Contains(unselected, model.st.dim.Render("80k"+strings.Repeat(" ", widths.Context-lipgloss.Width("80k")))) {
 		t.Fatalf("unselected metric columns should stay dimmed: %q", unselected)
@@ -1853,6 +1884,14 @@ func TestCommittedUserEntryUsesTranscriptPrompt(t *testing.T) {
 	rendered := ansi.Strip(model.renderEntry(session.Entry{Role: session.User, Content: "/model"}))
 	if !strings.HasPrefix(rendered, "› /model") {
 		t.Fatalf("rendered user entry = %q, want transcript prompt prefix", rendered)
+	}
+}
+
+func TestSystemErrorEntryUsesErrorSymbol(t *testing.T) {
+	model := readyModel(t)
+	rendered := ansi.Strip(model.renderEntry(session.Entry{Role: session.System, Content: "Error: too many requests"}))
+	if !strings.HasPrefix(rendered, "× Error: too many requests") {
+		t.Fatalf("rendered system error entry = %q", rendered)
 	}
 }
 

@@ -182,7 +182,7 @@ func (m Model) renderPicker() string {
 			lastGroup = item.Group
 		}
 		if i == m.picker.index {
-			b.WriteString(m.renderPickerLine("› ", item, labelWidth, metricWidths, m.st.cyan, lipgloss.NewStyle()))
+			b.WriteString(m.renderPickerLine("› ", item, labelWidth, metricWidths, m.st.cyan, m.st.cyan))
 		} else {
 			b.WriteString(m.renderPickerLine("  ", item, labelWidth, metricWidths, lipgloss.NewStyle(), m.st.dim))
 		}
@@ -418,7 +418,7 @@ func (m Model) renderEntry(e session.Entry) string {
 
 	case session.System:
 		if strings.HasPrefix(e.Content, "Error: ") {
-			return m.st.warn.Faint(true).Render("• " + e.Content)
+			return m.st.warn.Faint(true).Render("× " + e.Content)
 		}
 		return m.st.system.Render("• " + e.Content)
 

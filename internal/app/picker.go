@@ -70,11 +70,15 @@ func modelItemsForProvider(cfg *config.Config) ([]pickerItem, error) {
 	var items []pickerItem
 	for _, model := range models {
 		metrics := modelMetrics(model)
+		search := pickerSearchIndex(model.ID, model.ID, "", "", metrics)
+		if model.InputPrice == 0 && model.OutputPrice == 0 {
+			search = append(search, pickerSearchField{value: "free", weight: 12})
+		}
 		items = append(items, pickerItem{
 			Label:   model.ID,
 			Value:   model.ID,
 			Metrics: metrics,
-			Search:  pickerSearchIndex(model.ID, model.ID, "", "", metrics),
+			Search:  search,
 		})
 	}
 	return items, nil
