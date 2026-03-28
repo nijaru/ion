@@ -111,14 +111,14 @@ func TestCrossProviderHandoffPreservesPromptTruth(t *testing.T) {
 	})
 
 	oldFactory := providerFactory
-	providerFactory = func(providerName string) (llm.Provider, error) {
-		switch providerName {
+	providerFactory = func(cfg *config.Config) (llm.Provider, error) {
+		switch cfg.Provider {
 		case "openai":
 			return firstProvider, nil
 		case "openrouter":
 			return secondProvider, nil
 		default:
-			return oldFactory(providerName)
+			return oldFactory(cfg)
 		}
 	}
 	defer func() {
@@ -237,11 +237,11 @@ func TestCompactUsesManualCompactionHelper(t *testing.T) {
 	}
 
 	oldFactory := providerFactory
-	providerFactory = func(providerName string) (llm.Provider, error) {
-		if providerName == "openai" {
+	providerFactory = func(cfg *config.Config) (llm.Provider, error) {
+		if cfg.Provider == "openai" {
 			return &compactProvider{id: "openai"}, nil
 		}
-		return oldFactory(providerName)
+		return oldFactory(cfg)
 	}
 	defer func() { providerFactory = oldFactory }()
 
@@ -323,11 +323,11 @@ func TestOpenLoadsLayeredProjectInstructions(t *testing.T) {
 	}
 
 	oldFactory := providerFactory
-	providerFactory = func(providerName string) (llm.Provider, error) {
-		if providerName == "openai" {
+	providerFactory = func(cfg *config.Config) (llm.Provider, error) {
+		if cfg.Provider == "openai" {
 			return &compactProvider{id: "openai"}, nil
 		}
-		return oldFactory(providerName)
+		return oldFactory(cfg)
 	}
 	defer func() { providerFactory = oldFactory }()
 

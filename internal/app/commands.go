@@ -165,7 +165,7 @@ func (m *Model) openProviderPicker() tea.Cmd {
 }
 
 func (m *Model) openProviderPickerWithConfig(cfg *config.Config) tea.Cmd {
-	items := providerItems()
+	items := providerItems(cfg)
 	m.picker = &pickerState{
 		title:    "Pick a provider",
 		items:    items,
@@ -189,7 +189,7 @@ func (m *Model) openModelPickerWithConfig(cfg *config.Config) tea.Cmd {
 	if cfg.Provider == "" {
 		return m.openProviderPickerWithConfig(cfg)
 	}
-	items, err := modelItemsForProvider(cfg.Provider)
+	items, err := modelItemsForProvider(cfg)
 	if err != nil {
 		return cmdError(fmt.Sprintf("failed to list models for %s: %v", cfg.Provider, err))
 	}

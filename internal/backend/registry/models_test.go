@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+
+	"github.com/nijaru/ion/internal/config"
 )
 
 func TestListModelsCachesProviderModels(t *testing.T) {
@@ -20,7 +22,7 @@ func TestListModelsCachesProviderModels(t *testing.T) {
 	defer func() { providerCatalogFetcher = oldFetcher }()
 
 	var calls int
-	providerCatalogFetcher = func(ctx context.Context, provider string) ([]ModelMetadata, error) {
+	providerCatalogFetcher = func(ctx context.Context, provider string, cfg *config.Config) ([]ModelMetadata, error) {
 		calls++
 		if provider != "openrouter" {
 			t.Fatalf("provider = %q, want openrouter", provider)
@@ -79,7 +81,7 @@ func TestFetchModelsUsesDirectFetcherForNativeProviders(t *testing.T) {
 			}
 			defer func() { *tc.target = original }()
 
-			models, err := fetchModels(context.Background(), tc.provider)
+			models, err := fetchModels(context.Background(), tc.provider, &config.Config{Provider: tc.provider})
 			if err != nil {
 				t.Fatalf("fetchModels(%q): %v", tc.provider, err)
 			}
@@ -108,7 +110,7 @@ func TestFetchModelsUsesCatwalkOnlyWhenConfigured(t *testing.T) {
 		return []ModelMetadata{{ID: "mystery-model"}}, nil
 	}
 
-	models, err := fetchModels(context.Background(), "mystery")
+	models, err := fetchModels(context.Background(), "mystery", &config.Config{Provider: "mystery"})
 	if err != nil {
 		t.Fatalf("fetchModels fallback: %v", err)
 	}
@@ -123,7 +125,7 @@ func TestFetchModelsUsesCatwalkOnlyWhenConfigured(t *testing.T) {
 func TestFetchModelsRejectsUnknownProviderWithoutCatalog(t *testing.T) {
 	t.Setenv("CATWALK_URL", "")
 
-	_, err := fetchModels(context.Background(), "mystery")
+	_, err := fetchModels(context.Background(), "mystery", &config.Config{Provider: "mystery"})
 	if err == nil {
 		t.Fatal("expected unknown provider without configured catalog to fail")
 	}

@@ -9,6 +9,7 @@ import (
 	"github.com/nijaru/ion/internal/backend/acp"
 	"github.com/nijaru/ion/internal/backend/canto"
 	"github.com/nijaru/ion/internal/config"
+	"github.com/nijaru/ion/internal/providers"
 )
 
 var (
@@ -16,28 +17,21 @@ var (
 	errNoModelConfigured    = errors.New("No model configured. Use /model or Ctrl+M. Set ION_MODEL for scripts.")
 )
 
-var acpProviders = map[string]string{
-	"claude-pro":      "claude --acp",
-	"gemini-advanced": "gemini --acp",
-	"gh-copilot":      "gh copilot --acp",
-	"chatgpt":         "codex --acp",
-	"codex":           "codex --acp",
-}
-
-var cantoProviders = map[string]struct{}{
-	"anthropic":  {},
-	"openai":     {},
-	"openrouter": {},
-	"gemini":     {},
-	"ollama":     {},
-}
-
 func resolveStartupConfig(cfg *config.Config) error {
-	cfg.Provider = strings.ToLower(strings.TrimSpace(cfg.Provider))
+	cfg.Provider = providers.ResolveID(cfg.Provider)
 	cfg.Model = strings.TrimSpace(cfg.Model)
+	cfg.Endpoint = strings.TrimSpace(cfg.Endpoint)
+	cfg.AuthEnvVar = strings.TrimSpace(cfg.AuthEnvVar)
 
 	if cfg.Provider == "" {
 		return errNoProviderConfigured
+	}
+	def, ok := providers.Lookup(cfg.Provider)
+	if !ok {
+		return fmt.Errorf("unsupported provider %q", cfg.Provider)
+	}
+	if providers.RequiresEndpoint(cfg) && providers.ResolvedEndpoint(cfg) == "" {
+		return fmt.Errorf("%s requires endpoint configuration", def.DisplayName)
 	}
 
 	if cfg.Model == "" {
@@ -48,15 +42,19 @@ func resolveStartupConfig(cfg *config.Config) error {
 }
 
 func backendForProvider(provider string) (backend.Backend, error) {
-	provider = strings.ToLower(strings.TrimSpace(provider))
+	provider = providers.ResolveID(provider)
 	if provider == "" {
 		return nil, fmt.Errorf("no provider configured")
 	}
 
-	if _, ok := acpProviders[provider]; ok {
+	def, ok := providers.Lookup(provider)
+	if !ok {
+		return nil, fmt.Errorf("unsupported provider %q", provider)
+	}
+	if def.Runtime == providers.RuntimeACP {
 		return acp.New(), nil
 	}
-	if _, ok := cantoProviders[provider]; ok {
+	if def.Runtime == providers.RuntimeNative {
 		return canto.New(), nil
 	}
 
@@ -64,18 +62,11 @@ func backendForProvider(provider string) (backend.Backend, error) {
 }
 
 func isACPProvider(provider string) bool {
-	provider = strings.ToLower(strings.TrimSpace(provider))
-	_, ok := acpProviders[provider]
-	return ok
+	return providers.IsACP(provider)
 }
 
 func defaultACPCommand(provider string) (string, bool) {
-	provider = strings.ToLower(strings.TrimSpace(provider))
-	command, ok := acpProviders[provider]
-	if !ok || command == "" {
-		return "", false
-	}
-	return command, true
+	return providers.DefaultACPCommand(provider)
 }
 
 func sessionModelName(provider, model string) string {

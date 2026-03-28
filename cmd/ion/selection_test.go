@@ -60,6 +60,9 @@ func TestBackendForProvider(t *testing.T) {
 	}{
 		{name: "canto openrouter", provider: "openrouter", want: "canto"},
 		{name: "canto anthropic", provider: "anthropic", want: "canto"},
+		{name: "canto together", provider: "together", want: "canto"},
+		{name: "canto custom openai", provider: "openai-compatible", want: "canto"},
+		{name: "canto local openai", provider: "local-openai", want: "canto"},
 		{name: "acp claude", provider: "claude-pro", want: "acp"},
 		{name: "acp gemini", provider: "gemini-advanced", want: "acp"},
 		{name: "acp github", provider: "gh-copilot", want: "acp"},
@@ -123,6 +126,21 @@ func TestResolveStartupConfig(t *testing.T) {
 		cfg := &config.Config{Provider: "anthropic"}
 		if err := resolveStartupConfig(cfg); err != errNoModelConfigured {
 			t.Fatalf("resolveStartupConfig error = %v, want %v", err, errNoModelConfigured)
+		}
+	})
+
+	t.Run("custom endpoint provider requires endpoint", func(t *testing.T) {
+		cfg := &config.Config{Provider: "openai-compatible", Model: "test-model"}
+		err := resolveStartupConfig(cfg)
+		if err == nil || err.Error() != "Custom OpenAI-Compatible requires endpoint configuration" {
+			t.Fatalf("resolveStartupConfig error = %v", err)
+		}
+	})
+
+	t.Run("custom endpoint provider accepts endpoint override", func(t *testing.T) {
+		cfg := &config.Config{Provider: "openai-compatible", Model: "test-model", Endpoint: "https://example.com/v1"}
+		if err := resolveStartupConfig(cfg); err != nil {
+			t.Fatalf("resolveStartupConfig error = %v", err)
 		}
 	})
 }

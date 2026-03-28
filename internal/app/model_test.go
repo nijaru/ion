@@ -562,14 +562,52 @@ func TestPendingActionTimeoutClearsStatusHint(t *testing.T) {
 }
 
 func TestProviderItemsSortSetAPIsThenLocalThenUnset(t *testing.T) {
+	for _, name := range []string{
+		"ANTHROPIC_API_KEY",
+		"OPENAI_API_KEY",
+		"OPENROUTER_API_KEY",
+		"GEMINI_API_KEY",
+		"GOOGLE_API_KEY",
+		"HF_TOKEN",
+		"TOGETHER_API_KEY",
+		"DEEPSEEK_API_KEY",
+		"GROQ_API_KEY",
+		"FIREWORKS_API_KEY",
+		"MISTRAL_API_KEY",
+		"MOONSHOT_API_KEY",
+		"CEREBRAS_API_KEY",
+		"ZAI_API_KEY",
+		"XAI_API_KEY",
+		"OPENAI_COMPATIBLE_API_KEY",
+	} {
+		t.Setenv(name, "")
+	}
 	t.Setenv("OPENROUTER_API_KEY", "test")
 	t.Setenv("GOOGLE_API_KEY", "test")
-	items := providerItems()
+	items := providerItems(&config.Config{})
 	got := make([]string, 0, len(items))
 	for _, item := range items {
 		got = append(got, item.Label)
 	}
-	want := []string{"Gemini", "OpenRouter", "Ollama", "Anthropic", "OpenAI"}
+	want := []string{
+		"Gemini",
+		"OpenRouter",
+		"Local OpenAI-Compatible",
+		"Ollama",
+		"Custom OpenAI-Compatible",
+		"Anthropic",
+		"Cerebras",
+		"DeepSeek",
+		"Fireworks AI",
+		"Groq",
+		"Mistral",
+		"Moonshot AI",
+		"OpenAI",
+		"Z.ai",
+		"xAI",
+		"Hugging Face",
+		"Together AI",
+	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("provider order = %#v, want %#v", got, want)
 	}
@@ -607,13 +645,13 @@ func TestHandleCommandUpdatesConfigDirectly(t *testing.T) {
 			home := t.TempDir()
 			t.Setenv("HOME", home)
 
-			oldListModels := listModels
+			oldListModelsForConfig := listModelsForConfig
 			if tc.name == "provider" {
-				listModels = func(ctx context.Context, provider string) ([]registry.ModelMetadata, error) {
+				listModelsForConfig = func(ctx context.Context, cfg *config.Config) ([]registry.ModelMetadata, error) {
 					return []registry.ModelMetadata{{ID: "anthropic-model"}}, nil
 				}
 			}
-			t.Cleanup(func() { listModels = oldListModels })
+			t.Cleanup(func() { listModelsForConfig = oldListModelsForConfig })
 
 			oldSession := &stubSession{events: make(chan session.Event)}
 			oldBackend := stubBackend{sess: oldSession}
@@ -872,7 +910,7 @@ func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 
 func TestProviderItemsShowConfiguredStatus(t *testing.T) {
 	t.Setenv("OPENROUTER_API_KEY", "test-key")
-	items := providerItems()
+	items := providerItems(&config.Config{})
 
 	for label, wantDetail := range map[string]string{
 		"Anthropic":  "Missing • set ANTHROPIC_API_KEY",
@@ -896,19 +934,19 @@ func TestProviderItemsShowConfiguredStatus(t *testing.T) {
 }
 
 func TestModelItemsUseInjectedModelLister(t *testing.T) {
-	oldListModels := listModels
-	listModels = func(ctx context.Context, provider string) ([]registry.ModelMetadata, error) {
-		if provider != "openrouter" {
-			t.Fatalf("provider = %q, want openrouter", provider)
+	oldListModelsForConfig := listModelsForConfig
+	listModelsForConfig = func(ctx context.Context, cfg *config.Config) ([]registry.ModelMetadata, error) {
+		if cfg.Provider != "openrouter" {
+			t.Fatalf("provider = %q, want openrouter", cfg.Provider)
 		}
 		return []registry.ModelMetadata{
 			{ID: "b-model", ContextLimit: 64000, InputPrice: 1.23, OutputPrice: 4.56},
 			{ID: "a-model", ContextLimit: 128000, InputPrice: 0.1, OutputPrice: 0.2},
 		}, nil
 	}
-	defer func() { listModels = oldListModels }()
+	defer func() { listModelsForConfig = oldListModelsForConfig }()
 
-	items, err := modelItemsForProvider("openrouter")
+	items, err := modelItemsForProvider(&config.Config{Provider: "openrouter"})
 	if err != nil {
 		t.Fatalf("modelItemsForProvider: %v", err)
 	}
@@ -1270,9 +1308,9 @@ func TestProviderPickerSelectingCurrentProviderOpensModelPickerWithoutClearingMo
 
 	model.picker = &pickerState{
 		title:    "Pick a provider",
-		items:    providerItems(),
-		filtered: providerItems(),
-		index:    pickerIndex(providerItems(), "openrouter"),
+		items:    providerItems(&config.Config{}),
+		filtered: providerItems(&config.Config{}),
+		index:    pickerIndex(providerItems(&config.Config{}), "openrouter"),
 		purpose:  pickerPurposeProvider,
 		cfg:      &config.Config{Provider: "openrouter", Model: "z-ai/glm-5"},
 	}
@@ -1557,14 +1595,14 @@ func TestProgressLineHidesBootstrapConnectedStatus(t *testing.T) {
 	}
 }
 
-func TestProviderItemsHaveNoGroups(t *testing.T) {
-	items := providerItems()
-	if len(items) != 5 {
-		t.Fatalf("provider items = %d, want 5", len(items))
+func TestProviderItemsUseCatalogGroups(t *testing.T) {
+	items := providerItems(&config.Config{})
+	if len(items) < 10 {
+		t.Fatalf("provider items = %d, want broad catalog", len(items))
 	}
 	for _, item := range items {
-		if item.Group != "" {
-			t.Fatalf("provider %q should not have a picker group, got %q", item.Label, item.Group)
+		if item.Group == "" {
+			t.Fatalf("provider %q should have a picker group", item.Label)
 		}
 	}
 }

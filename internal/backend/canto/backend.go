@@ -28,6 +28,7 @@ import (
 	"github.com/nijaru/ion/internal/backend/canto/tools"
 	"github.com/nijaru/ion/internal/backend/registry"
 	"github.com/nijaru/ion/internal/config"
+	"github.com/nijaru/ion/internal/providers"
 	ionsession "github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
 )
@@ -158,7 +159,7 @@ func (b *Backend) Open(ctx context.Context) error {
 		return fmt.Errorf("ion store not initialized")
 	}
 
-	p, err := providerFactory(providerName)
+	p, err := providerFactory(b.cfg)
 	if err != nil {
 		return err
 	}
@@ -280,54 +281,77 @@ func (b *Backend) Open(ctx context.Context) error {
 	return nil
 }
 
-func newProvider(providerName string) (llm.Provider, error) {
-	switch strings.ToLower(strings.TrimSpace(providerName)) {
-	case "anthropic":
-		apiKey := os.Getenv("ANTHROPIC_API_KEY")
-		if apiKey == "" {
-			return nil, fmt.Errorf("ANTHROPIC_API_KEY not set")
-		}
-		return anthropic.NewProvider(catwalk.Provider{
-			ID:     "anthropic",
-			APIKey: apiKey,
-		}), nil
-	case "openai":
-		apiKey := os.Getenv("OPENAI_API_KEY")
-		if apiKey == "" {
-			return nil, fmt.Errorf("OPENAI_API_KEY not set")
-		}
-		return openai.NewProvider(catwalk.Provider{
-			ID:     "openai",
-			APIKey: apiKey,
-		}), nil
-	case "openrouter":
-		apiKey := os.Getenv("OPENROUTER_API_KEY")
-		if apiKey == "" {
-			return nil, fmt.Errorf("OPENROUTER_API_KEY not set")
-		}
-		return openrouter.NewProvider(catwalk.Provider{
-			ID:     "openrouter",
-			APIKey: apiKey,
-		}), nil
-	case "gemini":
-		apiKey := os.Getenv("GEMINI_API_KEY")
-		if apiKey == "" {
-			apiKey = os.Getenv("GOOGLE_API_KEY")
-		}
-		if apiKey == "" {
-			return nil, fmt.Errorf("GEMINI_API_KEY or GOOGLE_API_KEY not set")
-		}
-		return gemini.NewProvider(catwalk.Provider{
-			ID:     "gemini",
-			APIKey: apiKey,
-		}), nil
-	case "ollama":
-		return ollama.NewProvider(catwalk.Provider{
-			ID: "ollama",
-		}), nil
-	default:
-		return nil, fmt.Errorf("unsupported canto provider %q", providerName)
+func newProvider(cfg *config.Config) (llm.Provider, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("provider config not set")
 	}
+	def, ok := providers.Lookup(cfg.Provider)
+	if !ok {
+		return nil, fmt.Errorf("unsupported canto provider %q", cfg.Provider)
+	}
+	base := catwalk.Provider{
+		ID:             catwalk.InferenceProvider(def.ID),
+		APIKey:         resolvedAPIKey(cfg, def),
+		APIEndpoint:    providers.ResolvedEndpoint(cfg),
+		DefaultHeaders: providers.ResolvedHeaders(cfg),
+	}
+
+	switch def.Family {
+	case providers.FamilyAnthropic:
+		if base.APIKey == "" {
+			return nil, fmt.Errorf("%s not set", missingAuthDetail(cfg, def))
+		}
+		return anthropic.NewProvider(base), nil
+	case providers.FamilyOpenAI:
+		if def.AuthKind != providers.AuthLocal && base.APIKey == "" {
+			return nil, fmt.Errorf("%s not set", missingAuthDetail(cfg, def))
+		}
+		return openai.NewProvider(base), nil
+	case providers.FamilyOpenRouter:
+		if base.APIKey == "" {
+			return nil, fmt.Errorf("%s not set", missingAuthDetail(cfg, def))
+		}
+		return openrouter.NewProvider(base), nil
+	case providers.FamilyGemini:
+		if base.APIKey == "" {
+			return nil, fmt.Errorf("%s not set", missingAuthDetail(cfg, def))
+		}
+		return gemini.NewProvider(base), nil
+	case providers.FamilyOllama:
+		return ollama.NewProvider(base), nil
+	default:
+		return nil, fmt.Errorf("unsupported provider family %q", def.Family)
+	}
+}
+
+func resolvedAPIKey(cfg *config.Config, def providers.Definition) string {
+	if def.AuthKind == providers.AuthLocal {
+		return ""
+	}
+	names := []string{}
+	if override := strings.TrimSpace(cfg.AuthEnvVar); override != "" {
+		names = append(names, override)
+	}
+	if def.DefaultEnvVar != "" {
+		names = append(names, def.DefaultEnvVar)
+	}
+	names = append(names, def.AlternateEnvVars...)
+	for _, name := range names {
+		if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func missingAuthDetail(cfg *config.Config, def providers.Definition) string {
+	if override := strings.TrimSpace(cfg.AuthEnvVar); override != "" {
+		return override
+	}
+	if def.DefaultEnvVar != "" {
+		return def.DefaultEnvVar
+	}
+	return "provider credentials"
 }
 
 func (b *Backend) Resume(ctx context.Context, sessionID string) error {

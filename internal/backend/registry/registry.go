@@ -12,6 +12,7 @@ import (
 
 	"charm.land/catwalk/pkg/catwalk"
 	"github.com/nijaru/ion/internal/config"
+	"github.com/nijaru/ion/internal/providers"
 )
 
 type ModelMetadata struct {
@@ -78,9 +79,8 @@ func GetMetadata(ctx context.Context, provider, model string) (ModelMetadata, bo
 }
 
 func fetchMetadata(ctx context.Context, provider, model string) (ModelMetadata, error) {
-	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "anthropic", "openai", "openrouter", "gemini", "ollama":
-		models, err := ListModels(ctx, provider)
+	if def, ok := providers.Lookup(provider); ok && def.Runtime == providers.RuntimeNative {
+		models, err := ListModelsForConfig(ctx, &config.Config{Provider: provider})
 		if err != nil {
 			return ModelMetadata{}, err
 		}
@@ -90,12 +90,11 @@ func fetchMetadata(ctx context.Context, provider, model string) (ModelMetadata, 
 			}
 		}
 		return ModelMetadata{}, fmt.Errorf("model %s not found for provider %s", model, provider)
-	default:
-		if strings.TrimSpace(os.Getenv("CATWALK_URL")) == "" {
-			return ModelMetadata{}, fmt.Errorf("no live metadata catalog configured for provider %s", provider)
-		}
-		return fetchFromCatwalk(ctx, provider, model)
 	}
+	if strings.TrimSpace(os.Getenv("CATWALK_URL")) == "" {
+		return ModelMetadata{}, fmt.Errorf("no live metadata catalog configured for provider %s", provider)
+	}
+	return fetchFromCatwalk(ctx, provider, model)
 }
 
 func fetchFromCatwalk(ctx context.Context, provider, model string) (ModelMetadata, error) {

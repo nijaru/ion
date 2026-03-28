@@ -3,29 +3,29 @@ package app
 import (
 	"context"
 	"fmt"
-	"os"
 	"slices"
 	"strings"
 	"unicode/utf8"
 
-	"charm.land/catwalk/pkg/catwalk"
-
 	"github.com/nijaru/ion/internal/backend/registry"
+	"github.com/nijaru/ion/internal/config"
+	"github.com/nijaru/ion/internal/providers"
 )
 
 var listModels = registry.ListModels
+var listModelsForConfig = registry.ListModelsForConfig
 
-func providerItems() []pickerItem {
-	items := []pickerItem{
-		providerItem("Anthropic", "anthropic"),
-		providerItem("Gemini", "gemini"),
-		providerItem("OpenAI", "openai"),
-		providerItem("OpenRouter", "openrouter"),
-		providerItem("Ollama", "ollama"),
+func providerItems(cfg *config.Config) []pickerItem {
+	items := make([]pickerItem, 0, len(providers.Native()))
+	for _, def := range providers.Native() {
+		items = append(items, buildProviderItem(cfg, def))
 	}
 	slices.SortFunc(items, func(a, b pickerItem) int {
 		if rankA, rankB := providerSortRank(a.Value), providerSortRank(b.Value); rankA != rankB {
 			return rankA - rankB
+		}
+		if cmp := strings.Compare(a.Group, b.Group); cmp != 0 {
+			return cmp
 		}
 		return strings.Compare(a.Label, b.Label)
 	})
@@ -42,17 +42,11 @@ func pickerIndex(items []pickerItem, value string) int {
 }
 
 func providerDisplayName(value string) string {
-	for _, item := range providerItems() {
-		if strings.EqualFold(item.Value, value) || strings.EqualFold(item.Label, value) {
-			return item.Label
-		}
-	}
-	return value
+	return providers.DisplayName(value)
 }
 
-func modelItemsForProvider(provider string) ([]pickerItem, error) {
-	resolved := catwalkProvider(provider)
-	models, err := listModels(context.Background(), resolved)
+func modelItemsForProvider(cfg *config.Config) ([]pickerItem, error) {
+	models, err := listModelsForConfig(context.Background(), cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -75,77 +69,45 @@ func modelItemsForProvider(provider string) ([]pickerItem, error) {
 }
 
 func providerItem(label, value string) pickerItem {
-	detail, tone := providerDetail(value)
+	def, _ := providers.Lookup(value)
+	return buildProviderItem(nil, def)
+}
+
+func buildProviderItem(cfg *config.Config, def providers.Definition) pickerItem {
+	detail, tone := providerDetail(cfg, def)
 	return pickerItem{
-		Label:  label,
-		Value:  value,
+		Label:  def.DisplayName,
+		Value:  def.ID,
 		Detail: detail,
+		Group:  providers.GroupName(def),
 		Tone:   tone,
-		Search: pickerSearchIndex(label, value, detail, "", nil),
+		Search: pickerSearchIndex(def.DisplayName, def.ID, detail, providers.GroupName(def), nil),
 	}
 }
 
-func providerDetail(provider string) (string, pickerTone) {
-	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "anthropic":
-		return keyDetail("ANTHROPIC_API_KEY")
-	case "openai":
-		return keyDetail("OPENAI_API_KEY")
-	case "openrouter":
-		return keyDetail("OPENROUTER_API_KEY")
-	case "gemini":
-		if os.Getenv("GEMINI_API_KEY") != "" || os.Getenv("GOOGLE_API_KEY") != "" {
-			return "Ready", pickerToneDefault
-		}
-		return "Missing • set GEMINI_API_KEY or GOOGLE_API_KEY", pickerToneWarn
-	case "ollama":
-		return "Local", pickerToneDefault
-	default:
-		return "", pickerToneDefault
+func providerDetail(cfg *config.Config, def providers.Definition) (string, pickerTone) {
+	detail, ready := providers.CredentialState(cfgForProvider(cfg, def.ID), def)
+	if ready || detail == "Local" {
+		return detail, pickerToneDefault
 	}
+	return detail, pickerToneWarn
 }
 
 func providerSortRank(provider string) int {
-	isLocal := strings.EqualFold(strings.TrimSpace(provider), "ollama")
-	isSet := providerCredentialSet(provider)
-	switch {
-	case isSet && !isLocal:
-		return 0
-	case isSet && isLocal:
-		return 1
-	case !isSet && !isLocal:
-		return 2
-	default:
-		return 3
+	def, ok := providers.Lookup(provider)
+	if !ok {
+		return 99
 	}
+	return providers.SortRank(cfgForProvider(nil, def.ID), def)
 }
 
 func providerCredentialSet(provider string) bool {
-	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "anthropic":
-		return hasEnv("ANTHROPIC_API_KEY")
-	case "openai":
-		return hasEnv("OPENAI_API_KEY")
-	case "openrouter":
-		return hasEnv("OPENROUTER_API_KEY")
-	case "gemini":
-		return hasEnv("GEMINI_API_KEY") || hasEnv("GOOGLE_API_KEY")
-	case "ollama":
-		return true
-	default:
+	def, ok := providers.Lookup(provider)
+	if !ok {
 		return false
 	}
-}
-
-func keyDetail(env string) (string, pickerTone) {
-	if hasEnv(env) {
-		return "Ready", pickerToneDefault
-	}
-	return "Missing • set " + env, pickerToneWarn
-}
-
-func hasEnv(name string) bool {
-	return strings.TrimSpace(os.Getenv(name)) != ""
+	_, ready := providers.CredentialState(cfgForProvider(nil, def.ID), def)
+	return ready
 }
 
 func modelMetrics(meta registry.ModelMetadata) *pickerMetrics {
@@ -169,21 +131,6 @@ func modelMetrics(meta registry.ModelMetadata) *pickerMetrics {
 	return metrics
 }
 
-func catwalkProvider(provider string) string {
-	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "claude-pro":
-		return string(catwalk.InferenceProviderAnthropic)
-	case "gemini-advanced":
-		return string(catwalk.InferenceProviderGemini)
-	case "gh-copilot":
-		return string(catwalk.InferenceProviderCopilot)
-	case "chatgpt", "codex":
-		return string(catwalk.InferenceProviderOpenAI)
-	default:
-		return strings.ToLower(strings.TrimSpace(provider))
-	}
-}
-
 func pickerWindow(title string, items []pickerItem, selected int) string {
 	var b strings.Builder
 	b.WriteString(title)
@@ -202,6 +149,15 @@ func pickerWindow(title string, items []pickerItem, selected int) string {
 	}
 	b.WriteString("Esc cancel • Enter select")
 	return b.String()
+}
+
+func cfgForProvider(cfg *config.Config, provider string) *config.Config {
+	if cfg == nil {
+		return &config.Config{Provider: provider}
+	}
+	copy := *cfg
+	copy.Provider = provider
+	return &copy
 }
 
 func refreshPickerFilter(m *Model) {

@@ -17,6 +17,7 @@ import (
 
 	"charm.land/catwalk/pkg/catwalk"
 	"github.com/nijaru/ion/internal/config"
+	"github.com/nijaru/ion/internal/providers"
 )
 
 type providerModelsCache struct {
@@ -38,9 +39,13 @@ var (
 )
 
 func ListModels(ctx context.Context, provider string) ([]ModelMetadata, error) {
+	return ListModelsForConfig(ctx, &config.Config{Provider: provider})
+}
+
+func ListModelsForConfig(ctx context.Context, cfg *config.Config) ([]ModelMetadata, error) {
 	providerModelsOnce.Do(initProviderModelsCache)
 
-	key := strings.ToLower(strings.TrimSpace(provider))
+	key := providerCacheKey(cfg)
 	providerModelsMu.RLock()
 	cached, ok := providerModelsCacheMap[key]
 	providerModelsMu.RUnlock()
@@ -48,7 +53,7 @@ func ListModels(ctx context.Context, provider string) ([]ModelMetadata, error) {
 		return append([]ModelMetadata(nil), cached.Models...), nil
 	}
 
-	fetched, err := providerCatalogFetcher(ctx, provider)
+	fetched, err := providerCatalogFetcher(ctx, cfg.Provider, cfg)
 	if err == nil {
 		slices.SortFunc(fetched, func(a, b ModelMetadata) int {
 			return strings.Compare(strings.ToLower(a.ID), strings.ToLower(b.ID))
@@ -77,8 +82,9 @@ func initProviderModelsCache() {
 	loadProviderModelsCache()
 }
 
-func fetchModels(ctx context.Context, provider string) ([]ModelMetadata, error) {
-	switch strings.ToLower(strings.TrimSpace(provider)) {
+func fetchModels(ctx context.Context, provider string, cfg *config.Config) ([]ModelMetadata, error) {
+	provider = providers.ResolveID(provider)
+	switch provider {
 	case "anthropic":
 		return anthropicFetcher(ctx)
 	case "openai":
@@ -88,8 +94,18 @@ func fetchModels(ctx context.Context, provider string) ([]ModelMetadata, error) 
 	case "gemini":
 		return geminiFetcher(ctx)
 	case "ollama":
+		if endpoint := providers.ResolvedEndpoint(cfg); endpoint != "" && endpoint != "http://localhost:11434/v1" {
+			return fetchOpenAICompatibleModels(ctx, provider, providers.ResolvedEndpoint(cfg), "", nil)
+		}
 		return ollamaFetcher(ctx)
 	default:
+		if def, ok := providers.Lookup(provider); ok && def.Family == providers.FamilyOpenAI {
+			endpoint := providers.ResolvedEndpoint(cfg)
+			if endpoint == "" {
+				return nil, fmt.Errorf("provider %s has no configured endpoint", provider)
+			}
+			return fetchOpenAICompatibleModels(ctx, provider, endpoint, resolvedAuthToken(cfg, def), providers.ResolvedHeaders(cfg))
+		}
 		if strings.TrimSpace(os.Getenv("CATWALK_URL")) == "" {
 			return nil, fmt.Errorf("no live model catalog configured for provider %s", provider)
 		}
@@ -347,6 +363,35 @@ func fetchOllamaModels(ctx context.Context) ([]ModelMetadata, error) {
 	return sortModels(models), nil
 }
 
+func fetchOpenAICompatibleModels(ctx context.Context, provider, endpoint, token string, extraHeaders map[string]string) ([]ModelMetadata, error) {
+	headers := make(map[string]string, len(extraHeaders)+1)
+	for k, v := range extraHeaders {
+		headers[k] = v
+	}
+	if strings.TrimSpace(token) != "" {
+		headers["Authorization"] = "Bearer " + token
+	}
+
+	var payload openAIModelsResponse
+	if err := fetchJSON(ctx, http.MethodGet, strings.TrimRight(endpoint, "/")+"/models", headers, &payload); err != nil {
+		return nil, fmt.Errorf("fetch %s models: %w", provider, err)
+	}
+
+	models := make([]ModelMetadata, 0, len(payload.Data))
+	for _, model := range payload.Data {
+		id := strings.TrimSpace(model.ID)
+		if id == "" {
+			continue
+		}
+		models = append(models, ModelMetadata{
+			ID:        id,
+			Provider:  provider,
+			UpdatedAt: time.Now().Unix(),
+		})
+	}
+	return sortModels(models), nil
+}
+
 func parseMillionCost(raw string) float64 {
 	value, err := strconv.ParseFloat(raw, 64)
 	if err != nil {
@@ -443,4 +488,35 @@ func normalizeOllamaBaseURL(raw string) string {
 		return strings.TrimRight(base, "/")
 	}
 	return "http://" + strings.TrimRight(base, "/")
+}
+
+func providerCacheKey(cfg *config.Config) string {
+	if cfg == nil {
+		return ""
+	}
+	provider := providers.ResolveID(cfg.Provider)
+	endpoint := providers.ResolvedEndpoint(cfg)
+	authEnv := providers.ResolvedAuthEnvVar(cfg)
+	return strings.Join([]string{
+		provider,
+		strings.ToLower(strings.TrimSpace(endpoint)),
+		strings.TrimSpace(authEnv),
+	}, "|")
+}
+
+func resolvedAuthToken(cfg *config.Config, def providers.Definition) string {
+	names := make([]string, 0, 1+len(def.AlternateEnvVars))
+	if override := strings.TrimSpace(cfg.AuthEnvVar); override != "" {
+		names = append(names, override)
+	}
+	if def.DefaultEnvVar != "" {
+		names = append(names, def.DefaultEnvVar)
+	}
+	names = append(names, def.AlternateEnvVars...)
+	for _, name := range names {
+		if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+			return value
+		}
+	}
+	return ""
 }

@@ -18,7 +18,7 @@ func TestLoadReadsConfigFile(t *testing.T) {
 
 	path := filepath.Join(configDir, "config.toml")
 	if err := os.WriteFile(path, []byte(
-		"provider = \"openai\"\nmodel = \"gpt-4o\"\ncontext_limit = 128000\nsession_retention_days = 14\n",
+		"provider = \"openai\"\nmodel = \"gpt-4o\"\nendpoint = \"https://example.com/v1\"\nauth_env_var = \"OPENAI_PROXY_KEY\"\ncontext_limit = 128000\nsession_retention_days = 14\n[extra_headers]\n\"X-Test\" = \"value\"\n",
 	), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -33,6 +33,15 @@ func TestLoadReadsConfigFile(t *testing.T) {
 	}
 	if cfg.Model != "gpt-4o" {
 		t.Fatalf("model = %q, want %q", cfg.Model, "gpt-4o")
+	}
+	if cfg.Endpoint != "https://example.com/v1" {
+		t.Fatalf("endpoint = %q, want %q", cfg.Endpoint, "https://example.com/v1")
+	}
+	if cfg.AuthEnvVar != "OPENAI_PROXY_KEY" {
+		t.Fatalf("auth_env_var = %q, want %q", cfg.AuthEnvVar, "OPENAI_PROXY_KEY")
+	}
+	if got := cfg.ExtraHeaders["X-Test"]; got != "value" {
+		t.Fatalf("extra_headers[X-Test] = %q, want %q", got, "value")
 	}
 	if cfg.ContextLimit != 128000 {
 		t.Fatalf("context_limit = %d, want %d", cfg.ContextLimit, 128000)
@@ -91,6 +100,9 @@ func TestSaveWritesStatePath(t *testing.T) {
 	cfg := &Config{
 		Provider:             "openai",
 		Model:                "gpt-4o",
+		Endpoint:             "https://example.com/v1",
+		AuthEnvVar:           "OPENAI_PROXY_KEY",
+		ExtraHeaders:         map[string]string{"X-Test": "value"},
 		ContextLimit:         128000,
 		SessionRetentionDays: 14,
 	}
@@ -109,6 +121,10 @@ func TestSaveWritesStatePath(t *testing.T) {
 		`openai`,
 		`model =`,
 		`gpt-4o`,
+		`endpoint = 'https://example.com/v1'`,
+		`auth_env_var = 'OPENAI_PROXY_KEY'`,
+		`[extra_headers]`,
+		`X-Test = 'value'`,
 		`context_limit = 128000`,
 		`session_retention_days = 14`,
 	} {

@@ -15,10 +15,13 @@ const (
 )
 
 type Config struct {
-	Provider             string `toml:"provider,omitempty"`
-	Model                string `toml:"model,omitempty"`
-	ContextLimit         int    `toml:"context_limit,omitempty"`
-	SessionRetentionDays int    `toml:"session_retention_days,omitempty"`
+	Provider             string            `toml:"provider,omitempty"`
+	Model                string            `toml:"model,omitempty"`
+	Endpoint             string            `toml:"endpoint,omitempty"`
+	AuthEnvVar           string            `toml:"auth_env_var,omitempty"`
+	ExtraHeaders         map[string]string `toml:"extra_headers,omitempty"`
+	ContextLimit         int               `toml:"context_limit,omitempty"`
+	SessionRetentionDays int               `toml:"session_retention_days,omitempty"`
 }
 
 func DefaultConfigPath() (string, error) {
@@ -59,6 +62,8 @@ func Load() (*Config, error) {
 
 	cfg.Provider = strings.ToLower(strings.TrimSpace(cfg.Provider))
 	cfg.Model = strings.TrimSpace(cfg.Model)
+	cfg.Endpoint = strings.TrimSpace(cfg.Endpoint)
+	cfg.AuthEnvVar = strings.TrimSpace(cfg.AuthEnvVar)
 	if cfg.ContextLimit < 0 {
 		cfg.ContextLimit = 0
 	}
@@ -81,6 +86,8 @@ func Save(cfg *Config) error {
 	out := *cfg
 	out.Provider = strings.ToLower(strings.TrimSpace(out.Provider))
 	out.Model = strings.TrimSpace(out.Model)
+	out.Endpoint = strings.TrimSpace(out.Endpoint)
+	out.AuthEnvVar = strings.TrimSpace(out.AuthEnvVar)
 	if out.ContextLimit < 0 {
 		out.ContextLimit = 0
 	}
