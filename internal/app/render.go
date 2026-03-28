@@ -447,6 +447,8 @@ func (m Model) progressLine() string {
 	default:
 		if status := strings.TrimSpace(m.configurationStatus()); status != "" {
 			line = m.st.warn.Render("• " + status)
+		} else if status := strings.TrimSpace(m.status); !isIdleStatus(status) && !isConfigurationStatus(status) {
+			line = m.st.dim.Render("• " + status)
 		} else {
 			line = m.st.dim.Render("• Ready")
 		}

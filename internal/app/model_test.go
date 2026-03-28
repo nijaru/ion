@@ -1520,6 +1520,43 @@ func TestProgressLineIgnoresStaleConfigurationStatusWhenBackendIsConfigured(t *t
 	}
 }
 
+func TestProgressLineShowsMeaningfulRestoredStatus(t *testing.T) {
+	model := readyModel(t)
+	model.backend = stubBackend{
+		sess:        &stubSession{events: make(chan session.Event)},
+		provider:    "openrouter",
+		providerSet: true,
+		model:       "z-ai/glm-5",
+		modelSet:    true,
+	}
+	model.status = "Running tests"
+
+	line := ansi.Strip(model.progressLine())
+	if !strings.Contains(line, "Running tests") {
+		t.Fatalf("progress line missing restored status: %q", line)
+	}
+}
+
+func TestProgressLineHidesBootstrapConnectedStatus(t *testing.T) {
+	model := readyModel(t)
+	model.backend = stubBackend{
+		sess:        &stubSession{events: make(chan session.Event)},
+		provider:    "openrouter",
+		providerSet: true,
+		model:       "z-ai/glm-5",
+		modelSet:    true,
+	}
+	model.status = "Connected via Canto"
+
+	line := ansi.Strip(model.progressLine())
+	if strings.Contains(line, "Connected via Canto") {
+		t.Fatalf("progress line should suppress bootstrap connection notice: %q", line)
+	}
+	if !strings.Contains(line, "Ready") {
+		t.Fatalf("progress line = %q, want Ready", line)
+	}
+}
+
 func TestProviderItemsHaveNoGroups(t *testing.T) {
 	items := providerItems()
 	if len(items) != 5 {

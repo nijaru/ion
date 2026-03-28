@@ -336,6 +336,19 @@ func (m Model) configurationStatus() string {
 	return ""
 }
 
+func isIdleStatus(status string) bool {
+	trimmed := strings.TrimSpace(status)
+	if trimmed == "" {
+		return true
+	}
+	switch strings.ToLower(trimmed) {
+	case "ready", "connected via canto", "connected via acp":
+		return true
+	default:
+		return false
+	}
+}
+
 func (m Model) runtimeHeaderLine(_ backend.Backend) string {
 	version := strings.TrimSpace(m.version)
 	if version == "" {
