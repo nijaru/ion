@@ -1225,6 +1225,31 @@ func TestPickerCommitSwitchesRuntime(t *testing.T) {
 	}
 }
 
+func TestPickerCommitSameModelIsNoOp(t *testing.T) {
+	model := readyModel(t)
+	model.backend = stubBackend{sess: &stubSession{events: make(chan session.Event)}, provider: "openrouter", model: "z-ai/glm-5"}
+	model.picker = &pickerState{
+		title:   "Pick a model for openrouter",
+		items:   []pickerItem{{Label: "z-ai/glm-5", Value: "z-ai/glm-5"}},
+		index:   0,
+		purpose: pickerPurposeModel,
+		cfg:     &config.Config{Provider: "openrouter", Model: "z-ai/glm-5"},
+	}
+
+	updated, cmd := model.handlePickerKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated
+
+	if cmd != nil {
+		t.Fatalf("expected no command when selecting the active model, got %T", cmd)
+	}
+	if model.picker != nil {
+		t.Fatal("expected picker to close on same-model selection")
+	}
+	if got := model.backend.Model(); got != "z-ai/glm-5" {
+		t.Fatalf("backend model = %q, want z-ai/glm-5", got)
+	}
+}
+
 func TestProviderPickerSelectingCurrentProviderOpensModelPickerWithoutClearingModel(t *testing.T) {
 	model := readyModel(t)
 	model.backend = stubBackend{sess: &stubSession{events: make(chan session.Event)}, provider: "openrouter", model: "z-ai/glm-5"}
@@ -1319,6 +1344,26 @@ func TestRuntimeSwitchKeepsNoticesOutOfTranscriptStorage(t *testing.T) {
 
 	if len(newStorage.appends) != 0 {
 		t.Fatalf("expected runtime switch notice to stay out of transcript storage, got %d appends", len(newStorage.appends))
+	}
+}
+
+func TestSlashModelSameValueIsNoOp(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cfgDir := filepath.Join(home, ".ion")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.toml"), []byte("provider = \"openrouter\"\nmodel = \"z-ai/glm-5\"\n"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	model := readyModel(t)
+	model.backend = stubBackend{sess: &stubSession{events: make(chan session.Event)}, provider: "openrouter", model: "z-ai/glm-5"}
+
+	cmd := model.handleCommand("/model z-ai/glm-5")
+	if cmd != nil {
+		t.Fatalf("expected no-op command for same model, got %T", cmd)
 	}
 }
 

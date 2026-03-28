@@ -22,18 +22,20 @@ type styles struct {
 func newStyles() styles {
 	return styles{
 		user:     lipgloss.NewStyle().Bold(true),
-		agent:    lipgloss.NewStyle().Foreground(lipgloss.Color("6")),
+		agent:    lipgloss.NewStyle(),
 		system:   lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Faint(true),
 		tool:     lipgloss.NewStyle().Foreground(lipgloss.Color("10")),
 		subagent: lipgloss.NewStyle().Foreground(lipgloss.Color("13")),
 		success:  lipgloss.NewStyle().Foreground(lipgloss.Color("2")),
-		dim:       lipgloss.NewStyle().Faint(true),
-		cyan:      lipgloss.NewStyle().Foreground(lipgloss.Color("6")),
-		warn:      lipgloss.NewStyle().Foreground(lipgloss.Color("3")),
-		sep:       lipgloss.NewStyle().Foreground(lipgloss.Color("8")),
-		added:     lipgloss.NewStyle().Foreground(lipgloss.Color("2")),
-		removed:   lipgloss.NewStyle().Foreground(lipgloss.Color("1")),
-		modeRead:  lipgloss.NewStyle().Foreground(lipgloss.Color("6")).Bold(true),
-		modeWrite: lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Bold(true),
+		dim:      lipgloss.NewStyle().Faint(true),
+		cyan:     lipgloss.NewStyle().Foreground(lipgloss.Color("6")),
+		warn:     lipgloss.NewStyle().Foreground(lipgloss.Color("1")),
+		sep:      lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Faint(true),
+		added:    lipgloss.NewStyle().Foreground(lipgloss.Color("2")),
+		removed:  lipgloss.NewStyle().Foreground(lipgloss.Color("1")),
+		modeRead: lipgloss.NewStyle().Foreground(lipgloss.Color("6")).Bold(true),
+		modeWrite: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("3")).
+			Bold(true),
 	}
 }

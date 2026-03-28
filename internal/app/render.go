@@ -356,7 +356,7 @@ func (m Model) renderEntry(e session.Entry) string {
 			b.WriteString(m.st.dim.PaddingLeft(4).Render(e.Reasoning))
 			b.WriteString("\n")
 		}
-		rendered := m.renderMarkdownContent(e.Content)
+		rendered := strings.TrimRight(m.renderMarkdownContent(e.Content), "\n")
 		if rendered == "" {
 			b.WriteString(m.st.agent.Render("• "))
 			return b.String()
@@ -437,7 +437,7 @@ func (m Model) progressLine() string {
 	case stateWorking:
 		line = m.st.cyan.Render(m.spinner.View() + " Working...")
 	case stateComplete:
-		line = m.st.success.Render("✓ Complete")
+		line = m.st.success.Render("✓") + " Complete"
 	case stateApproval:
 		line = m.st.warn.Render("⚠ Approval required")
 	case stateCancelled:
@@ -481,7 +481,7 @@ func (m Model) statusLine() string {
 		return fitLine(m.st.warn.Render(hint), m.width)
 	}
 
-	sep := m.st.cyan.Render(" • ")
+	sep := m.st.sep.Render(" • ")
 
 	modeLabel := ifthen(m.mode == modeWrite,
 		m.st.modeWrite.Render("[WRITE]"),
@@ -494,12 +494,12 @@ func (m Model) statusLine() string {
 	}
 	model := ""
 	if value := m.backend.Model(); value != "" {
-		model = value
+		model = m.st.dim.Render(value)
 	}
 	dir := m.st.dim.Render("./" + filepath.Base(m.workdir))
 	branch := ""
 	if m.branch != "" {
-		branch = m.st.cyan.Render(m.branch)
+		branch = m.st.dim.Render(m.branch)
 	}
 
 	total := m.tokensSent + m.tokensReceived
@@ -507,14 +507,14 @@ func (m Model) statusLine() string {
 	var usage string
 	if total > 0 && limit > 0 {
 		pct := (total * 100) / limit
-		usage = m.st.cyan.Render(fmt.Sprintf("%dk/%dk (%d%%)", total/1000, limit/1000, pct))
+		usage = m.st.dim.Render(fmt.Sprintf("%dk/%dk (%d%%)", total/1000, limit/1000, pct))
 	} else if total > 0 {
-		usage = fmt.Sprintf("%dk tokens", total/1000)
+		usage = m.st.dim.Render(fmt.Sprintf("%dk tokens", total/1000))
 	}
 
 	cost := ""
 	if m.totalCost > 0 {
-		cost = fmt.Sprintf("$%.3f", m.totalCost)
+		cost = m.st.dim.Render(fmt.Sprintf("$%.3f", m.totalCost))
 	}
 
 	candidates := [][]string{

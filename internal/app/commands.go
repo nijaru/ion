@@ -41,6 +41,9 @@ func (m *Model) handleCommand(input string) tea.Cmd {
 		if err != nil {
 			return cmdError(fmt.Sprintf("failed to load config: %v", err))
 		}
+		if strings.EqualFold(strings.TrimSpace(cfg.Model), strings.TrimSpace(name)) {
+			return nil
+		}
 		cfg.Model = name
 		if err := config.Save(cfg); err != nil {
 			return cmdError(fmt.Sprintf("failed to save config: %v", err))
@@ -306,6 +309,10 @@ func (m *Model) commitPickerSelection() (Model, tea.Cmd) {
 		return *m, m.openModelPickerWithConfig(&cfg)
 
 	case pickerPurposeModel:
+		if strings.EqualFold(strings.TrimSpace(cfg.Model), strings.TrimSpace(selected.Value)) {
+			m.picker = nil
+			return *m, nil
+		}
 		cfg.Model = selected.Value
 		if err := config.Save(&cfg); err != nil {
 			return *m, cmdError(fmt.Sprintf("failed to save config: %v", err))
