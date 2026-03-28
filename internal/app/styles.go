@@ -21,7 +21,7 @@ type styles struct {
 
 func newStyles() styles {
 	return styles{
-		user:     lipgloss.NewStyle().Bold(true),
+		user:     lipgloss.NewStyle().Faint(true),
 		agent:    lipgloss.NewStyle(),
 		system:   lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Faint(true),
 		tool:     lipgloss.NewStyle().Foreground(lipgloss.Color("10")),

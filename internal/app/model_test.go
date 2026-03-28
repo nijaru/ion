@@ -1504,11 +1504,11 @@ func TestProviderItemsHaveNoGroups(t *testing.T) {
 	}
 }
 
-func TestCommittedUserEntryUsesTranscriptBullet(t *testing.T) {
+func TestCommittedUserEntryUsesTranscriptPrompt(t *testing.T) {
 	model := readyModel(t)
 	rendered := ansi.Strip(model.renderEntry(session.Entry{Role: session.User, Content: "/model"}))
-	if !strings.HasPrefix(rendered, "• /model") {
-		t.Fatalf("rendered user entry = %q, want transcript bullet prefix", rendered)
+	if !strings.HasPrefix(rendered, "› /model") {
+		t.Fatalf("rendered user entry = %q, want transcript prompt prefix", rendered)
 	}
 }
 

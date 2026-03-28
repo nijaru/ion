@@ -229,7 +229,7 @@ func workspaceHeader(cwd, branch string) string {
 func renderStartupEntry(entry session.Entry) string {
 	switch entry.Role {
 	case session.User:
-		return startupUserStyle().Render("• " + entry.Content)
+		return startupUserStyle().Render("› " + entry.Content)
 	case session.System:
 		return startupSystemStyle().Render("• " + entry.Content)
 	case session.Tool:
@@ -294,7 +294,7 @@ func startupWorkspaceStyle() lipgloss.Style {
 }
 
 func startupUserStyle() lipgloss.Style {
-	return lipgloss.NewStyle().Bold(true)
+	return lipgloss.NewStyle().Faint(true)
 }
 
 func startupSystemStyle() lipgloss.Style {

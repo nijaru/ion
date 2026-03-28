@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"unicode"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -346,7 +347,7 @@ func (m Model) renderPendingEntry(e session.Entry) string {
 func (m Model) renderEntry(e session.Entry) string {
 	switch e.Role {
 	case session.User:
-		return m.st.user.Render("• " + e.Content)
+		return m.st.user.Render("› " + e.Content)
 
 	case session.Agent:
 		var b strings.Builder
@@ -356,7 +357,7 @@ func (m Model) renderEntry(e session.Entry) string {
 			b.WriteString(m.st.dim.PaddingLeft(4).Render(e.Reasoning))
 			b.WriteString("\n")
 		}
-		rendered := strings.TrimRight(m.renderMarkdownContent(e.Content), "\n")
+		rendered := strings.TrimRightFunc(m.renderMarkdownContent(e.Content), unicode.IsSpace)
 		if rendered == "" {
 			b.WriteString(m.st.agent.Render("• "))
 			return b.String()
@@ -368,7 +369,7 @@ func (m Model) renderEntry(e session.Entry) string {
 			b.WriteString("\n")
 			b.WriteString(line)
 		}
-		return b.String()
+		return strings.TrimRightFunc(b.String(), unicode.IsSpace)
 
 	case session.Tool:
 		label := e.Title
@@ -404,7 +405,7 @@ func (m Model) renderEntry(e session.Entry) string {
 			b.WriteString(m.st.dim.PaddingLeft(4).Render(
 				fmt.Sprintf("... (%d more lines)", len(lines)-10)))
 		}
-		return b.String()
+		return strings.TrimRightFunc(b.String(), unicode.IsSpace)
 
 	case session.Subagent:
 		label := e.Title
@@ -415,7 +416,7 @@ func (m Model) renderEntry(e session.Entry) string {
 		b.WriteString(m.st.subagent.Render("↳ " + label))
 		b.WriteString("\n")
 		b.WriteString(m.st.dim.PaddingLeft(4).Render(e.Content))
-		return b.String()
+		return strings.TrimRightFunc(b.String(), unicode.IsSpace)
 
 	case session.System:
 		return m.st.system.Render("• " + e.Content)
