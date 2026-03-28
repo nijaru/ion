@@ -132,6 +132,7 @@ const (
 	stateIonizing
 	stateStreaming
 	stateWorking
+	stateComplete
 	stateApproval
 	stateCancelled
 	stateError

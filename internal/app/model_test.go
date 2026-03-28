@@ -293,6 +293,32 @@ func TestProgressLineFitsWidthAfterResize(t *testing.T) {
 	}
 }
 
+func TestTurnFinishedLeavesProgressComplete(t *testing.T) {
+	model := readyModel(t)
+	model.progress = stateStreaming
+	model.thinking = true
+
+	updated, _ := model.Update(session.TurnFinished{})
+	model = updated.(Model)
+
+	if model.progress != stateComplete {
+		t.Fatalf("progress = %v, want stateComplete", model.progress)
+	}
+	if got := ansi.Strip(model.progressLine()); !strings.Contains(got, "✓ Complete") {
+		t.Fatalf("progress line = %q, want complete state", got)
+	}
+}
+
+func TestErrorProgressLineUsesRedXSymbolCopy(t *testing.T) {
+	model := readyModel(t)
+	model.progress = stateError
+	model.lastError = "backend failed"
+
+	if got := ansi.Strip(model.progressLine()); !strings.Contains(got, "× Error: backend failed") {
+		t.Fatalf("progress line = %q, want red x error copy", got)
+	}
+}
+
 func TestStatusLineFitsWidthAfterResize(t *testing.T) {
 	model := readyModel(t)
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 32, Height: 24})

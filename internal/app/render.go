@@ -436,12 +436,14 @@ func (m Model) progressLine() string {
 		line = m.st.cyan.Render(m.spinner.View() + " Streaming...")
 	case stateWorking:
 		line = m.st.cyan.Render(m.spinner.View() + " Working...")
+	case stateComplete:
+		line = m.st.success.Render("✓ Complete")
 	case stateApproval:
 		line = m.st.warn.Render("⚠ Approval required")
 	case stateCancelled:
 		line = m.st.dim.Render("• Cancelled")
 	case stateError:
-		line = m.st.warn.Render("✗ Error: " + strings.NewReplacer("\n", " ", "\r", " ").Replace(m.lastError))
+		line = m.st.warn.Render("× Error: " + strings.NewReplacer("\n", " ", "\r", " ").Replace(m.lastError))
 	default:
 		if isConfigurationStatus(m.status) {
 			line = m.st.warn.Render("• " + strings.TrimSpace(m.status))

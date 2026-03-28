@@ -232,7 +232,7 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 
 	case session.TurnFinished:
 		m.thinking = false
-		m.progress = stateReady
+		m.progress = stateComplete
 		if queued := strings.TrimSpace(m.queuedTurn); queued != "" {
 			m.queuedTurn = ""
 			return m, func() tea.Msg { return queuedTurnMsg{text: queued} }

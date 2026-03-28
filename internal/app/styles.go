@@ -8,6 +8,7 @@ type styles struct {
 	system    lipgloss.Style
 	tool      lipgloss.Style
 	agent     lipgloss.Style
+	success   lipgloss.Style
 	dim       lipgloss.Style
 	cyan      lipgloss.Style
 	warn      lipgloss.Style
@@ -25,6 +26,7 @@ func newStyles() styles {
 		system:    lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Faint(true),
 		tool:      lipgloss.NewStyle().Foreground(lipgloss.Color("10")),
 		agent:     lipgloss.NewStyle().Foreground(lipgloss.Color("13")),
+		success:   lipgloss.NewStyle().Foreground(lipgloss.Color("2")),
 		dim:       lipgloss.NewStyle().Faint(true),
 		cyan:      lipgloss.NewStyle().Foreground(lipgloss.Color("6")),
 		warn:      lipgloss.NewStyle().Foreground(lipgloss.Color("3")),
