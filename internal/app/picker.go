@@ -53,6 +53,18 @@ func modelItemsForProvider(cfg *config.Config) ([]pickerItem, error) {
 	if err != nil {
 		return nil, err
 	}
+	slices.SortFunc(models, func(a, b registry.ModelMetadata) int {
+		if orgA, orgB := modelOrg(a.ID), modelOrg(b.ID); orgA != orgB {
+			return strings.Compare(orgA, orgB)
+		}
+		if a.Created != b.Created {
+			if a.Created > b.Created {
+				return -1
+			}
+			return 1
+		}
+		return strings.Compare(strings.ToLower(a.ID), strings.ToLower(b.ID))
+	})
 
 	var items []pickerItem
 	for _, model := range models {
@@ -64,11 +76,15 @@ func modelItemsForProvider(cfg *config.Config) ([]pickerItem, error) {
 			Search:  pickerSearchIndex(model.ID, model.ID, "", "", metrics),
 		})
 	}
-
-	slices.SortFunc(items, func(a, b pickerItem) int {
-		return strings.Compare(a.Label, b.Label)
-	})
 	return items, nil
+}
+
+func modelOrg(id string) string {
+	left, _, ok := strings.Cut(strings.ToLower(strings.TrimSpace(id)), "/")
+	if !ok {
+		return ""
+	}
+	return left
 }
 
 func providerItem(label, value string) pickerItem {

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/nijaru/ion/internal/config"
 )
@@ -19,7 +20,12 @@ func TestListModelsCachesProviderModels(t *testing.T) {
 	providerModelsCacheMap = nil
 
 	oldFetcher := providerCatalogFetcher
+	oldModelsDevFetcher := modelsDevFetcher
 	defer func() { providerCatalogFetcher = oldFetcher }()
+	defer func() { modelsDevFetcher = oldModelsDevFetcher }()
+	modelsDevFetcher = func(ctx context.Context) (map[string]int64, error) {
+		return map[string]int64{}, nil
+	}
 
 	var calls int
 	providerCatalogFetcher = func(ctx context.Context, provider string, cfg *config.Config) ([]ModelMetadata, error) {
@@ -147,5 +153,33 @@ func TestNormalizeOllamaBaseURL(t *testing.T) {
 				t.Fatalf("normalizeOllamaBaseURL(%q) = %q, want %q", input, got, want)
 			}
 		})
+	}
+}
+
+func TestSortModelsUsesOrgThenNewest(t *testing.T) {
+	models := []ModelMetadata{
+		{ID: "z-ai/glm-4.5", Created: time.Date(2025, 2, 1, 0, 0, 0, 0, time.UTC).Unix()},
+		{ID: "openai/gpt-4.1", Created: time.Date(2025, 4, 1, 0, 0, 0, 0, time.UTC).Unix()},
+		{ID: "z-ai/glm-5", Created: time.Date(2025, 5, 1, 0, 0, 0, 0, time.UTC).Unix()},
+	}
+	sortModels(models)
+	got := []string{models[0].ID, models[1].ID, models[2].ID}
+	want := []string{"openai/gpt-4.1", "z-ai/glm-5", "z-ai/glm-4.5"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("sortModels order = %#v, want %#v", got, want)
+		}
+	}
+}
+
+func TestInferCreatedFromModelID(t *testing.T) {
+	if got := inferCreatedFromModelID("openai/gpt-4.1"); got != 0 {
+		t.Fatalf("expected no inferred date, got %d", got)
+	}
+	if got := inferCreatedFromModelID("mistralai/mistral-large-2512"); got == 0 {
+		t.Fatal("expected YYMM token to infer a created timestamp")
+	}
+	if got := inferCreatedFromModelID("anthropic/claude-2025-03-25"); got == 0 {
+		t.Fatal("expected YYYY-MM-DD token to infer a created timestamp")
 	}
 }

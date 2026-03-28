@@ -970,8 +970,9 @@ func TestModelItemsUseInjectedModelLister(t *testing.T) {
 			t.Fatalf("provider = %q, want openrouter", cfg.Provider)
 		}
 		return []registry.ModelMetadata{
-			{ID: "b-model", ContextLimit: 64000, InputPrice: 1.23, OutputPrice: 4.56},
-			{ID: "a-model", ContextLimit: 128000, InputPrice: 0.1, OutputPrice: 0.2},
+			{ID: "z-ai/glm-4.5", Created: time.Date(2025, 2, 1, 0, 0, 0, 0, time.UTC).Unix(), ContextLimit: 64000, InputPrice: 1.23, OutputPrice: 4.56},
+			{ID: "openai/gpt-4.1", Created: time.Date(2025, 4, 1, 0, 0, 0, 0, time.UTC).Unix(), ContextLimit: 128000, InputPrice: 0.1, OutputPrice: 0.2},
+			{ID: "z-ai/glm-5", Created: time.Date(2025, 5, 1, 0, 0, 0, 0, time.UTC).Unix(), ContextLimit: 128000, InputPrice: 0.2, OutputPrice: 0.4},
 		}, nil
 	}
 	defer func() { listModelsForConfig = oldListModelsForConfig }()
@@ -980,11 +981,13 @@ func TestModelItemsUseInjectedModelLister(t *testing.T) {
 	if err != nil {
 		t.Fatalf("modelItemsForProvider: %v", err)
 	}
-	if len(items) != 2 {
-		t.Fatalf("items len = %d, want 2", len(items))
+	if len(items) != 3 {
+		t.Fatalf("items len = %d, want 3", len(items))
 	}
-	if items[0].Label != "a-model" || items[1].Label != "b-model" {
-		t.Fatalf("items not sorted by label: %#v", items)
+	wantOrder := []string{"openai/gpt-4.1", "z-ai/glm-5", "z-ai/glm-4.5"}
+	gotOrder := []string{items[0].Label, items[1].Label, items[2].Label}
+	if !slices.Equal(gotOrder, wantOrder) {
+		t.Fatalf("items not sorted by org/newest: got %#v want %#v", gotOrder, wantOrder)
 	}
 	if items[0].Metrics == nil {
 		t.Fatal("expected model metrics")

@@ -25,11 +25,19 @@ type providerModelsCache struct {
 	Models    []ModelMetadata `json:"models"`
 }
 
+type modelsDevCache struct {
+	UpdatedAt int64            `json:"updated_at"`
+	Created   map[string]int64 `json:"created"`
+}
+
 var (
 	providerModelsMu       sync.RWMutex
 	providerModelsOnce     sync.Once
 	providerModelsCacheMap map[string]providerModelsCache
+	modelsDevMu            sync.RWMutex
+	modelsDevMeta          modelsDevCache
 	providerCatalogFetcher = fetchModels
+	modelsDevFetcher       = fetchModelsDevCreated
 	openAIFetcher          = fetchOpenAIModels
 	anthropicFetcher       = fetchAnthropicModels
 	openRouterFetcher      = fetchOpenRouterModels
@@ -39,6 +47,7 @@ var (
 )
 
 const modelListRequestTimeout = 10 * time.Second
+const modelsDevTTL = 24 * time.Hour
 
 func ListModels(ctx context.Context, provider string) ([]ModelMetadata, error) {
 	return ListModelsForConfig(ctx, &config.Config{Provider: provider})
@@ -60,9 +69,8 @@ func ListModelsForConfig(ctx context.Context, cfg *config.Config) ([]ModelMetada
 
 	fetched, err := providerCatalogFetcher(ctx, cfg.Provider, cfg)
 	if err == nil {
-		slices.SortFunc(fetched, func(a, b ModelMetadata) int {
-			return strings.Compare(strings.ToLower(a.ID), strings.ToLower(b.ID))
-		})
+		annotateCreated(ctx, fetched)
+		sortModels(fetched)
 		providerModelsMu.Lock()
 		providerModelsCacheMap[key] = providerModelsCache{
 			UpdatedAt: time.Now().Unix(),
@@ -160,9 +168,8 @@ func fetchModelsFromCatwalk(ctx context.Context, provider string) ([]ModelMetada
 		return nil, fmt.Errorf("no models found for provider %s", provider)
 	}
 
-	slices.SortFunc(models, func(a, b ModelMetadata) int {
-		return strings.Compare(strings.ToLower(a.ID), strings.ToLower(b.ID))
-	})
+	annotateCreated(ctx, models)
+	sortModels(models)
 	return models, nil
 }
 
@@ -250,6 +257,7 @@ func fetchOpenAIModels(ctx context.Context) ([]ModelMetadata, error) {
 			UpdatedAt: time.Now().Unix(),
 		})
 	}
+	annotateCreated(ctx, models)
 	return sortModels(models), nil
 }
 
@@ -280,6 +288,7 @@ func fetchAnthropicModels(ctx context.Context) ([]ModelMetadata, error) {
 			UpdatedAt:    time.Now().Unix(),
 		})
 	}
+	annotateCreated(ctx, models)
 	return sortModels(models), nil
 }
 
@@ -305,6 +314,7 @@ func fetchOpenRouterModels(ctx context.Context) ([]ModelMetadata, error) {
 		})
 	}
 
+	annotateCreated(ctx, models)
 	return sortModels(models), nil
 }
 
@@ -356,6 +366,7 @@ func fetchGeminiModels(ctx context.Context) ([]ModelMetadata, error) {
 		pageToken = payload.NextPageToken
 	}
 
+	annotateCreated(ctx, models)
 	return sortModels(models), nil
 }
 
@@ -378,6 +389,7 @@ func fetchOllamaModels(ctx context.Context) ([]ModelMetadata, error) {
 			UpdatedAt: time.Now().Unix(),
 		})
 	}
+	annotateCreated(ctx, models)
 	return sortModels(models), nil
 }
 
@@ -483,9 +495,215 @@ func fetchJSON(ctx context.Context, method, endpoint string, headers map[string]
 
 func sortModels(models []ModelMetadata) []ModelMetadata {
 	slices.SortFunc(models, func(a, b ModelMetadata) int {
+		if orgA, orgB := modelOrg(a.ID), modelOrg(b.ID); orgA != orgB {
+			return strings.Compare(orgA, orgB)
+		}
+		if a.Created != b.Created {
+			if a.Created > b.Created {
+				return -1
+			}
+			return 1
+		}
 		return strings.Compare(strings.ToLower(a.ID), strings.ToLower(b.ID))
 	})
 	return models
+}
+
+func annotateCreated(ctx context.Context, models []ModelMetadata) {
+	index := modelsDevCreatedIndex(ctx)
+	for i := range models {
+		if models[i].Created <= 0 {
+			models[i].Created = index[strings.ToLower(models[i].ID)]
+		}
+		if models[i].Created <= 0 {
+			models[i].Created = inferCreatedFromModelID(models[i].ID)
+		}
+	}
+}
+
+func modelOrg(id string) string {
+	left, _, ok := strings.Cut(strings.ToLower(strings.TrimSpace(id)), "/")
+	if !ok {
+		return ""
+	}
+	return left
+}
+
+func modelsDevCreatedIndex(ctx context.Context) map[string]int64 {
+	modelsDevMu.RLock()
+	if len(modelsDevMeta.Created) > 0 && time.Since(time.Unix(modelsDevMeta.UpdatedAt, 0)) < modelsDevTTL {
+		index := mapsCloneInt64(modelsDevMeta.Created)
+		modelsDevMu.RUnlock()
+		return index
+	}
+	modelsDevMu.RUnlock()
+
+	created, err := modelsDevFetcher(ctx)
+	if err != nil {
+		modelsDevMu.RLock()
+		index := mapsCloneInt64(modelsDevMeta.Created)
+		modelsDevMu.RUnlock()
+		return index
+	}
+
+	modelsDevMu.Lock()
+	modelsDevMeta = modelsDevCache{
+		UpdatedAt: time.Now().Unix(),
+		Created:   mapsCloneInt64(created),
+	}
+	modelsDevMu.Unlock()
+	return created
+}
+
+type modelsDevProvider struct {
+	Models map[string]modelsDevEntry `json:"models"`
+}
+
+type modelsDevEntry struct {
+	ReleaseDate string `json:"release_date"`
+}
+
+func fetchModelsDevCreated(ctx context.Context) (map[string]int64, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://models.dev/api.json", nil)
+	if err != nil {
+		return nil, fmt.Errorf("build models.dev request: %w", err)
+	}
+	req.Header.Set("User-Agent", "ion/0.0.0")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read models.dev response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("models.dev returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var payload map[string]modelsDevProvider
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, fmt.Errorf("decode models.dev response: %w", err)
+	}
+	out := make(map[string]int64, 1024)
+	for _, provider := range payload {
+		for modelID, entry := range provider.Models {
+			key := strings.ToLower(strings.TrimSpace(modelID))
+			if key == "" {
+				continue
+			}
+			out[key] = parseReleaseDate(entry.ReleaseDate)
+		}
+	}
+	return out, nil
+}
+
+func parseReleaseDate(date string) int64 {
+	value := strings.TrimSpace(date)
+	if value == "" {
+		return 0
+	}
+	t, err := time.Parse("2006-01-02", value)
+	if err != nil {
+		return 0
+	}
+	return t.Unix()
+}
+
+func inferCreatedFromModelID(id string) int64 {
+	value := strings.ToLower(strings.TrimSpace(id))
+	if value == "" {
+		return 0
+	}
+	if ts := scanModelDateSubstrings(value); ts > 0 {
+		return ts
+	}
+	for _, token := range splitModelTokens(value) {
+		if ts := parseModelTokenDate(token); ts > 0 {
+			return ts
+		}
+	}
+	return 0
+}
+
+func scanModelDateSubstrings(value string) int64 {
+	for i := 0; i+10 <= len(value); i++ {
+		if ts := parseModelTokenDate(value[i : i+10]); ts > 0 {
+			return ts
+		}
+	}
+	for i := 0; i+8 <= len(value); i++ {
+		if ts := parseModelTokenDate(value[i : i+8]); ts > 0 {
+			return ts
+		}
+	}
+	for i := 0; i+6 <= len(value); i++ {
+		if ts := parseModelTokenDate(value[i : i+6]); ts > 0 {
+			return ts
+		}
+	}
+	for i := 0; i+4 <= len(value); i++ {
+		if ts := parseModelTokenDate(value[i : i+4]); ts > 0 {
+			return ts
+		}
+	}
+	return 0
+}
+
+func splitModelTokens(value string) []string {
+	return strings.FieldsFunc(value, func(r rune) bool {
+		switch r {
+		case '/', '-', '_', '.', ':':
+			return true
+		default:
+			return false
+		}
+	})
+}
+
+func parseModelTokenDate(token string) int64 {
+	if len(token) == 10 && token[4] == '-' && token[7] == '-' {
+		return parseReleaseDate(token)
+	}
+	if len(token) == 8 && allDigits(token) {
+		t, err := time.Parse("20060102", token)
+		if err == nil {
+			return t.Unix()
+		}
+	}
+	if len(token) == 6 && allDigits(token) {
+		t, err := time.Parse("20060102", "20"+token)
+		if err == nil {
+			return t.Unix()
+		}
+	}
+	if len(token) == 4 && allDigits(token) {
+		t, err := time.Parse("200601", "20"+token[:2]+token[2:])
+		if err == nil {
+			return t.Unix()
+		}
+	}
+	return 0
+}
+
+func allDigits(value string) bool {
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func mapsCloneInt64(src map[string]int64) map[string]int64 {
+	if len(src) == 0 {
+		return map[string]int64{}
+	}
+	dst := make(map[string]int64, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
 }
 
 func supportsGenerationMethod(methods []string, want string) bool {

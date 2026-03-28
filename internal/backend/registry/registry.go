@@ -21,6 +21,7 @@ type ModelMetadata struct {
 	ContextLimit int     `json:"context_limit"`
 	InputPrice   float64 `json:"input_price"`  // per 1M tokens
 	OutputPrice  float64 `json:"output_price"` // per 1M tokens
+	Created      int64   `json:"created"`
 	UpdatedAt    int64   `json:"updated_at"`
 }
 
