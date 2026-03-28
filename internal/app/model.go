@@ -336,9 +336,6 @@ func (m Model) runtimeHeaderLine(b backend.Backend) string {
 		if provider := strings.TrimSpace(b.Provider()); provider != "" {
 			segments = append(segments, provider)
 		}
-		if model := strings.TrimSpace(b.Model()); model != "" {
-			segments = append(segments, model)
-		}
 	}
 	return strings.Join(segments, " • ")
 }

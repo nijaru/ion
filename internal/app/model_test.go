@@ -1304,15 +1304,15 @@ func TestRuntimeSwitchShowsStatusOnResume(t *testing.T) {
 		backend:       stubBackend{sess: &stubSession{events: make(chan session.Event)}},
 		session:       &stubSession{events: make(chan session.Event)},
 		storage:       &stubStorageSession{id: "session-1", branch: "main"},
-		printLines:    []string{"--- resumed ---", "ion v0.0.0 • native • openai • gpt-4.1", "~/tmp/test • main"},
+		printLines:    []string{"--- resumed ---", "ion v0.0.0 • native • openai", "~/tmp/test • main"},
 		replayEntries: []session.Entry{{Role: session.User, Content: "hello"}},
-		status:        "Connected to openai/gpt-4.1 via Canto",
+		status:        "Connected to openai via Canto",
 		notice:        "Resumed session session-1",
 		showStatus:    true,
 	})
 	model = updated.(Model)
 
-	if model.status != "Connected to openai/gpt-4.1 via Canto" {
+	if model.status != "Connected to openai via Canto" {
 		t.Fatalf("status = %q", model.status)
 	}
 	if cmd == nil {

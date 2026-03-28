@@ -108,14 +108,9 @@ func (b *Backend) Bootstrap() backend.Bootstrap {
 		} else {
 			// New session
 			provider := b.Provider()
-			model := b.Model()
 			switch {
-			case provider != "" && model != "":
-				status = fmt.Sprintf("Connected to %s/%s via Canto", provider, model)
 			case provider != "":
 				status = fmt.Sprintf("Connected to %s via Canto", provider)
-			case model != "":
-				status = fmt.Sprintf("Connected to %s via Canto", model)
 			default:
 				status = "Connected to Canto"
 			}
