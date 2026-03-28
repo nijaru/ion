@@ -56,6 +56,26 @@ func (m *Model) handleCommand(input string) tea.Cmd {
 		}
 		return m.switchRuntimeCommand(cfg, session.Entry{Role: session.System, Content: "Model set to " + name}, m.session.ID(), false)
 
+	case "/thinking":
+		if len(fields) < 2 {
+			return m.openThinkingPicker()
+		}
+		level := normalizeThinkingValue(fields[1])
+		cfg, err := config.Load()
+		if err != nil {
+			return cmdError(fmt.Sprintf("failed to load config: %v", err))
+		}
+		if cfg.ReasoningEffort == level {
+			return nil
+		}
+		cfg.ReasoningEffort = level
+		if err := config.Save(cfg); err != nil {
+			return cmdError(fmt.Sprintf("failed to save config: %v", err))
+		}
+		m.backend.SetConfig(cfg)
+		m.reasoningEffort = level
+		return m.printEntries(session.Entry{Role: session.System, Content: "Thinking set to " + thinkingDisplayName(level)})
+
 	case "/provider":
 		if len(fields) < 2 {
 			return m.openProviderPicker()
@@ -215,6 +235,7 @@ func helpText() string {
 		"  /resume [id]     resume a recent session or pick one",
 		"  /provider [name] set provider and choose a model",
 		"  /model [name]    set model directly or open the picker",
+		"  /thinking [lvl]  set thinking: auto, low, medium, high",
 		"  /compact         compact the current session",
 		"  /clear           start a fresh session with the current provider/model",
 		"  /cost            show aggregate session usage",
@@ -226,6 +247,7 @@ func helpText() string {
 		"",
 		"  Ctrl+P           provider picker",
 		"  Ctrl+M           model picker",
+		"  Ctrl+T           thinking picker",
 		"  Tab              swap provider/model pickers",
 		"  Shift+Tab        toggle read/write mode",
 		"  Esc              cancel turn, or clear composer on double-tap",
@@ -236,6 +258,60 @@ func helpText() string {
 		"  Ctrl+C           clear composer, or quit on double-tap when empty",
 		"  Ctrl+D           quit on double-tap when empty",
 	}, "\n")
+}
+
+func (m *Model) openThinkingPicker() tea.Cmd {
+	cfg, err := config.Load()
+	if err != nil {
+		return cmdError(fmt.Sprintf("failed to load config: %v", err))
+	}
+	items := []pickerItem{
+		{Label: "Auto", Value: config.DefaultReasoningEffort, Detail: "Provider default"},
+		{Label: "Low", Value: "low"},
+		{Label: "Medium", Value: "medium"},
+		{Label: "High", Value: "high"},
+	}
+	current := normalizeThinkingValue(cfg.ReasoningEffort)
+	for i := range items {
+		items[i].Search = pickerSearchIndex(items[i].Label, items[i].Value, items[i].Detail, "", nil)
+	}
+	m.picker = &pickerState{
+		title:    "Pick a thinking level",
+		items:    items,
+		filtered: append([]pickerItem(nil), items...),
+		index:    pickerIndex(items, current),
+		purpose:  pickerPurposeThinking,
+		cfg:      cfg,
+	}
+	return nil
+}
+
+func normalizeThinkingValue(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", config.DefaultReasoningEffort:
+		return config.DefaultReasoningEffort
+	case "low":
+		return "low"
+	case "medium", "med":
+		return "medium"
+	case "high":
+		return "high"
+	default:
+		return config.DefaultReasoningEffort
+	}
+}
+
+func thinkingDisplayName(value string) string {
+	switch normalizeThinkingValue(value) {
+	case "low":
+		return "Low"
+	case "medium":
+		return "Medium"
+	case "high":
+		return "High"
+	default:
+		return "Auto"
+	}
 }
 
 func (m *Model) handlePickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
@@ -326,6 +402,20 @@ func (m *Model) commitPickerSelection() (Model, tea.Cmd) {
 		m.picker = nil
 		notice := session.Entry{Role: session.System, Content: "Model set to " + selected.Value}
 		return *m, m.switchRuntimeCommand(&cfg, notice, m.session.ID(), false)
+	case pickerPurposeThinking:
+		level := normalizeThinkingValue(selected.Value)
+		if normalizeThinkingValue(cfg.ReasoningEffort) == level {
+			m.picker = nil
+			return *m, nil
+		}
+		cfg.ReasoningEffort = level
+		if err := config.Save(&cfg); err != nil {
+			return *m, cmdError(fmt.Sprintf("failed to save config: %v", err))
+		}
+		m.backend.SetConfig(&cfg)
+		m.reasoningEffort = level
+		m.picker = nil
+		return *m, m.printEntries(session.Entry{Role: session.System, Content: "Thinking set to " + thinkingDisplayName(level)})
 	default:
 		m.picker = nil
 		return *m, nil

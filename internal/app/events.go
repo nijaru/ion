@@ -54,6 +54,10 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.clearPendingAction()
 		return m, m.openModelPicker()
 
+	case "ctrl+t":
+		m.clearPendingAction()
+		return m, m.openThinkingPicker()
+
 	case "ctrl+c":
 		m.escPending = false
 		if m.composer.Value() != "" {

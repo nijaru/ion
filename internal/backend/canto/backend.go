@@ -215,6 +215,7 @@ func (b *Backend) Open(ctx context.Context) error {
 	// Add context processors
 	requestProcessors := []ccontext.RequestProcessor{
 		NewFileTagProcessor(cwd),
+		reasoningEffortProcessor(b.cfg),
 	}
 	var processors []ccontext.Processor
 	processors = append(processors, ccontext.KnowledgeMemory(coreStore, "", 5))
@@ -279,6 +280,36 @@ func (b *Backend) Open(ctx context.Context) error {
 	)
 
 	return nil
+}
+
+func reasoningEffortProcessor(cfg *config.Config) ccontext.RequestProcessor {
+	return ccontext.RequestProcessorFunc(func(ctx context.Context, p llm.Provider, model string, sess *session.Session, req *llm.Request) error {
+		if cfg == nil {
+			return nil
+		}
+		switch normalizeReasoningEffort(cfg.ReasoningEffort) {
+		case "", config.DefaultReasoningEffort:
+			req.ReasoningEffort = ""
+		default:
+			req.ReasoningEffort = normalizeReasoningEffort(cfg.ReasoningEffort)
+		}
+		return nil
+	})
+}
+
+func normalizeReasoningEffort(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", config.DefaultReasoningEffort:
+		return config.DefaultReasoningEffort
+	case "low":
+		return "low"
+	case "medium", "med":
+		return "medium"
+	case "high":
+		return "high"
+	default:
+		return config.DefaultReasoningEffort
+	}
 }
 
 func newProvider(cfg *config.Config) (llm.Provider, error) {

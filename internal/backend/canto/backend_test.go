@@ -61,6 +61,17 @@ func TestProviderAndModelFallBackToEnv(t *testing.T) {
 	}
 }
 
+func TestReasoningEffortProcessorSetsRequestField(t *testing.T) {
+	req := &llm.Request{}
+	processor := reasoningEffortProcessor(&config.Config{ReasoningEffort: "med"})
+	if err := processor.ApplyRequest(context.Background(), nil, "o3-mini", nil, req); err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if req.ReasoningEffort != "medium" {
+		t.Fatalf("reasoning effort = %q, want %q", req.ReasoningEffort, "medium")
+	}
+}
+
 func TestResumeDoesNotDeadlockWhenBackendNeedsOpen(t *testing.T) {
 	b := New()
 

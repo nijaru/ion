@@ -389,6 +389,17 @@ func TestStatusLineHidesZeroUsageBeforeFirstTurn(t *testing.T) {
 	}
 }
 
+func TestStatusLineIncludesThinkingLevel(t *testing.T) {
+	model := readyModel(t)
+	model.reasoningEffort = "high"
+	model.backend = stubBackend{sess: &stubSession{events: make(chan session.Event)}, provider: "openrouter", model: "o3-mini"}
+
+	line := ansi.Strip(model.statusLine())
+	if !strings.Contains(line, "think=high") {
+		t.Fatalf("status line missing thinking level: %q", line)
+	}
+}
+
 func TestComposerLayoutResetsAfterClear(t *testing.T) {
 	model := readyModel(t)
 	model.composer.SetValue("one\ntwo\nthree")
@@ -658,6 +669,23 @@ func TestComposerLayoutReflowsAfterHistoryRecall(t *testing.T) {
 	}
 }
 
+func TestCtrlTOpensThinkingPicker(t *testing.T) {
+	model := readyModel(t)
+
+	updated, _ := model.Update(tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl})
+	model = updated.(Model)
+
+	if model.picker == nil {
+		t.Fatal("expected thinking picker to open")
+	}
+	if model.picker.purpose != pickerPurposeThinking {
+		t.Fatalf("picker purpose = %v, want thinking", model.picker.purpose)
+	}
+	if got := model.picker.title; got != "Pick a thinking level" {
+		t.Fatalf("picker title = %q", got)
+	}
+}
+
 func TestHandleCommandUpdatesConfigDirectly(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -668,6 +696,7 @@ func TestHandleCommandUpdatesConfigDirectly(t *testing.T) {
 	}{
 		{name: "provider", command: "/provider anthropic", expected: "provider = 'anthropic'\nsession_retention_days = 90\n", wantPicker: true},
 		{name: "model", command: "/model gpt-4.1", expected: "model = 'gpt-4.1'\nsession_retention_days = 90\n", wantCommand: true},
+		{name: "thinking", command: "/thinking high", expected: "reasoning_effort = 'high'\nsession_retention_days = 90\n", wantCommand: true},
 	}
 
 	for _, tc := range tests {
@@ -914,6 +943,7 @@ func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 		"/resume [id]",
 		"/provider [name]",
 		"/model [name]",
+		"/thinking [lvl]",
 		"/compact",
 		"/clear",
 		"/cost",
@@ -922,6 +952,7 @@ func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 		"/help",
 		"Ctrl+P",
 		"Ctrl+M",
+		"Ctrl+T",
 		"Tab",
 		"Shift+Tab",
 		"Esc",

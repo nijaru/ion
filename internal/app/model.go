@@ -84,6 +84,7 @@ type pickerPurpose int
 const (
 	pickerPurposeProvider pickerPurpose = iota
 	pickerPurposeModel
+	pickerPurposeThinking
 )
 
 type pickerItem struct {
@@ -207,6 +208,7 @@ type Model struct {
 
 	// Workspace metadata
 	status            string
+	reasoningEffort   string
 	workdir           string
 	branch            string
 	version           string
@@ -254,6 +256,11 @@ func New(b backend.Backend, s storage.Session, store storage.Store, workdir, bra
 		version:    version,
 		historyIdx: -1,
 		st:         st,
+	}
+	if cfg, err := config.Load(); err == nil {
+		m.reasoningEffort = normalizeThinkingValue(cfg.ReasoningEffort)
+	} else {
+		m.reasoningEffort = config.DefaultReasoningEffort
 	}
 
 	if s != nil {

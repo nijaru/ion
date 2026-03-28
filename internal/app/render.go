@@ -511,6 +511,7 @@ func (m Model) statusLine() string {
 	if value := m.backend.Model(); value != "" {
 		model = m.st.dim.Render(value)
 	}
+	thinking := m.st.dim.Render("think=" + normalizeThinkingValue(m.reasoningEffort))
 	dir := m.st.dim.Render("./" + filepath.Base(m.workdir))
 	branch := ""
 	if m.branch != "" {
@@ -533,10 +534,11 @@ func (m Model) statusLine() string {
 	}
 
 	candidates := [][]string{
-		{modeLabel, provider, model, usage, cost, dir, branch},
-		{modeLabel, provider, model, usage, cost, branch},
-		{modeLabel, provider, model, usage, cost},
-		{modeLabel, model, usage, cost},
+		{modeLabel, provider, model, thinking, usage, cost, dir, branch},
+		{modeLabel, provider, model, thinking, usage, cost, branch},
+		{modeLabel, provider, model, thinking, usage, cost},
+		{modeLabel, model, thinking, usage, cost},
+		{modeLabel, thinking, usage, cost},
 	}
 	for _, segments := range candidates {
 		line := joinLineSegments(sep, segments...)
@@ -545,7 +547,7 @@ func (m Model) statusLine() string {
 		}
 	}
 
-	return fitLine(joinLineSegments(sep, modeLabel, model, usage, cost), m.width)
+	return fitLine(joinLineSegments(sep, modeLabel, thinking, usage, cost), m.width)
 }
 
 // layout recomputes widget dimensions based on current terminal size.

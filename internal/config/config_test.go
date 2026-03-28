@@ -18,7 +18,7 @@ func TestLoadReadsConfigFile(t *testing.T) {
 
 	path := filepath.Join(configDir, "config.toml")
 	if err := os.WriteFile(path, []byte(
-		"provider = \"openai\"\nmodel = \"gpt-4o\"\nendpoint = \"https://example.com/v1\"\nauth_env_var = \"OPENAI_PROXY_KEY\"\ncontext_limit = 128000\nsession_retention_days = 14\n[extra_headers]\n\"X-Test\" = \"value\"\n",
+		"provider = \"openai\"\nmodel = \"gpt-4o\"\nreasoning_effort = \"med\"\nendpoint = \"https://example.com/v1\"\nauth_env_var = \"OPENAI_PROXY_KEY\"\ncontext_limit = 128000\nsession_retention_days = 14\n[extra_headers]\n\"X-Test\" = \"value\"\n",
 	), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -33,6 +33,9 @@ func TestLoadReadsConfigFile(t *testing.T) {
 	}
 	if cfg.Model != "gpt-4o" {
 		t.Fatalf("model = %q, want %q", cfg.Model, "gpt-4o")
+	}
+	if cfg.ReasoningEffort != "medium" {
+		t.Fatalf("reasoning_effort = %q, want %q", cfg.ReasoningEffort, "medium")
 	}
 	if cfg.Endpoint != "https://example.com/v1" {
 		t.Fatalf("endpoint = %q, want %q", cfg.Endpoint, "https://example.com/v1")
@@ -69,6 +72,9 @@ func TestLoadUsesDefaultsWhenConfigMissing(t *testing.T) {
 	if cfg.ContextLimit != 0 {
 		t.Fatalf("context_limit = %d, want %d", cfg.ContextLimit, 0)
 	}
+	if cfg.ReasoningEffort != DefaultReasoningEffort {
+		t.Fatalf("reasoning_effort = %q, want %q", cfg.ReasoningEffort, DefaultReasoningEffort)
+	}
 	if cfg.SessionRetentionDays != DefaultSessionRetentionDays {
 		t.Fatalf("session_retention_days = %d, want %d", cfg.SessionRetentionDays, DefaultSessionRetentionDays)
 	}
@@ -79,6 +85,7 @@ func TestLoadAppliesEnvOverrides(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("ION_MODEL", "openrouter openai/gpt-5.4")
 	t.Setenv("ION_PROVIDER", "anthropic")
+	t.Setenv("ION_REASONING_EFFORT", "high")
 
 	cfg, err := Load()
 	if err != nil {
@@ -91,6 +98,9 @@ func TestLoadAppliesEnvOverrides(t *testing.T) {
 	if cfg.Model != "openai/gpt-5.4" {
 		t.Fatalf("model = %q, want %q", cfg.Model, "openai/gpt-5.4")
 	}
+	if cfg.ReasoningEffort != "high" {
+		t.Fatalf("reasoning_effort = %q, want %q", cfg.ReasoningEffort, "high")
+	}
 }
 
 func TestSaveWritesStatePath(t *testing.T) {
@@ -100,6 +110,7 @@ func TestSaveWritesStatePath(t *testing.T) {
 	cfg := &Config{
 		Provider:             "openai",
 		Model:                "gpt-4o",
+		ReasoningEffort:      "low",
 		Endpoint:             "https://example.com/v1",
 		AuthEnvVar:           "OPENAI_PROXY_KEY",
 		ExtraHeaders:         map[string]string{"X-Test": "value"},
@@ -121,6 +132,7 @@ func TestSaveWritesStatePath(t *testing.T) {
 		`openai`,
 		`model =`,
 		`gpt-4o`,
+		`reasoning_effort = 'low'`,
 		`endpoint = 'https://example.com/v1'`,
 		`auth_env_var = 'OPENAI_PROXY_KEY'`,
 		`[extra_headers]`,
@@ -151,5 +163,20 @@ func TestDefaultDataDirUsesIonDataDir(t *testing.T) {
 func TestDefaultModelCacheTTLSeconds(t *testing.T) {
 	if got := DefaultModelCacheTTLSeconds(); got != 3600 {
 		t.Fatalf("ttl = %d, want %d", got, 3600)
+	}
+}
+
+func TestNormalizeReasoningEffort(t *testing.T) {
+	for input, want := range map[string]string{
+		"":       DefaultReasoningEffort,
+		"auto":   DefaultReasoningEffort,
+		"med":    "medium",
+		"medium": "medium",
+		"LOW":    "low",
+		"weird":  DefaultReasoningEffort,
+	} {
+		if got := normalizeReasoningEffort(input); got != want {
+			t.Fatalf("normalizeReasoningEffort(%q) = %q, want %q", input, got, want)
+		}
 	}
 }

@@ -12,11 +12,13 @@ import (
 const (
 	DefaultSessionRetentionDays = 90
 	defaultModelCacheTTLSeconds = 3600
+	DefaultReasoningEffort      = "auto"
 )
 
 type Config struct {
 	Provider             string            `toml:"provider,omitempty"`
 	Model                string            `toml:"model,omitempty"`
+	ReasoningEffort      string            `toml:"reasoning_effort,omitempty"`
 	Endpoint             string            `toml:"endpoint,omitempty"`
 	AuthEnvVar           string            `toml:"auth_env_var,omitempty"`
 	ExtraHeaders         map[string]string `toml:"extra_headers,omitempty"`
@@ -59,9 +61,13 @@ func Load() (*Config, error) {
 	if override := os.Getenv("ION_PROVIDER"); override != "" {
 		cfg.Provider = override
 	}
+	if override := os.Getenv("ION_REASONING_EFFORT"); override != "" {
+		cfg.ReasoningEffort = override
+	}
 
 	cfg.Provider = strings.ToLower(strings.TrimSpace(cfg.Provider))
 	cfg.Model = strings.TrimSpace(cfg.Model)
+	cfg.ReasoningEffort = normalizeReasoningEffort(cfg.ReasoningEffort)
 	cfg.Endpoint = strings.TrimSpace(cfg.Endpoint)
 	cfg.AuthEnvVar = strings.TrimSpace(cfg.AuthEnvVar)
 	if cfg.ContextLimit < 0 {
@@ -86,6 +92,10 @@ func Save(cfg *Config) error {
 	out := *cfg
 	out.Provider = strings.ToLower(strings.TrimSpace(out.Provider))
 	out.Model = strings.TrimSpace(out.Model)
+	out.ReasoningEffort = normalizeReasoningEffort(out.ReasoningEffort)
+	if out.ReasoningEffort == DefaultReasoningEffort {
+		out.ReasoningEffort = ""
+	}
 	out.Endpoint = strings.TrimSpace(out.Endpoint)
 	out.AuthEnvVar = strings.TrimSpace(out.AuthEnvVar)
 	if out.ContextLimit < 0 {
@@ -132,5 +142,20 @@ func DefaultModelCacheTTLSeconds() int {
 func defaultConfig() *Config {
 	return &Config{
 		SessionRetentionDays: DefaultSessionRetentionDays,
+	}
+}
+
+func normalizeReasoningEffort(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", DefaultReasoningEffort:
+		return DefaultReasoningEffort
+	case "low":
+		return "low"
+	case "medium", "med":
+		return "medium"
+	case "high":
+		return "high"
+	default:
+		return DefaultReasoningEffort
 	}
 }
