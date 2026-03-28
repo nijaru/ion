@@ -145,6 +145,10 @@ func (m Model) renderPicker() string {
 	}
 	b.WriteString(m.st.dim.PaddingLeft(2).Render("Type to search • ↑/↓ navigate • Enter select • Esc cancel"))
 	b.WriteString("\n")
+	if pickerHasMetrics(items) {
+		b.WriteString(m.st.dim.PaddingLeft(2).Render("Model • Context • Input • Output"))
+		b.WriteString("\n")
+	}
 	if len(items) == 0 {
 		b.WriteString(m.st.dim.PaddingLeft(2).Render("No matching items"))
 		b.WriteString("\n")
@@ -212,24 +216,33 @@ func (m Model) renderPickerLine(prefix string, item pickerItem, labelWidth int, 
 func (m Model) renderPickerMetrics(metrics pickerMetrics, widths pickerMetricWidths) string {
 	var parts []string
 	if widths.Context > 0 {
-		parts = append(parts, m.renderPickerMetric("ctx", metrics.Context, widths.Context))
+		parts = append(parts, m.renderPickerMetricValue(metrics.Context, widths.Context))
 	}
 	if widths.Input > 0 {
-		parts = append(parts, m.renderPickerMetric("in", metrics.Input, widths.Input))
+		parts = append(parts, m.renderPickerMetricValue(metrics.Input, widths.Input))
 	}
 	if widths.Output > 0 {
-		parts = append(parts, m.renderPickerMetric("out", metrics.Output, widths.Output))
+		parts = append(parts, m.renderPickerMetricValue(metrics.Output, widths.Output))
 	}
 	return strings.Join(parts, " "+m.st.dim.Render("•")+" ")
 }
 
-func (m Model) renderPickerMetric(label, value string, width int) string {
+func (m Model) renderPickerMetricValue(value string, width int) string {
 	shown := strings.TrimSpace(value)
 	if shown == "" {
 		shown = "—"
 	}
 	pad := strings.Repeat(" ", max(0, width-lipgloss.Width(shown)))
-	return m.st.dim.Render(label + " " + pad + shown)
+	return m.st.dim.Render(pad + shown)
+}
+
+func pickerHasMetrics(items []pickerItem) bool {
+	for _, item := range items {
+		if item.Metrics != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func (m Model) renderPickerDetail(detail string, tone pickerTone) string {

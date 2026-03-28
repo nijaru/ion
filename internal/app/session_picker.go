@@ -115,7 +115,7 @@ func (m Model) renderSessionPicker() string {
 	b.WriteString(m.st.cyan.PaddingLeft(2).Render("Resume a session"))
 	b.WriteString("\n")
 	if m.workdir != "" {
-		b.WriteString(m.st.dim.PaddingLeft(2).Render("workspace: " + filepath.Base(m.workdir)))
+		b.WriteString(m.st.dim.PaddingLeft(2).Render("Workspace: " + filepath.Base(m.workdir)))
 		b.WriteString("\n")
 	}
 	b.WriteString(m.st.dim.PaddingLeft(2).Render("Search: " + m.sessionPicker.query))

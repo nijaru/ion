@@ -158,10 +158,10 @@ func modelMetrics(meta registry.ModelMetadata) *pickerMetrics {
 		}
 	}
 	if meta.InputPrice > 0 {
-		metrics.Input = fmt.Sprintf("$%.4f", meta.InputPrice)
+		metrics.Input = fmt.Sprintf("$%.2f", meta.InputPrice)
 	}
 	if meta.OutputPrice > 0 {
-		metrics.Output = fmt.Sprintf("$%.4f", meta.OutputPrice)
+		metrics.Output = fmt.Sprintf("$%.2f", meta.OutputPrice)
 	}
 	if metrics.Context == "" && metrics.Input == "" && metrics.Output == "" {
 		return nil

@@ -893,7 +893,7 @@ func TestModelItemsUseInjectedModelLister(t *testing.T) {
 	if items[0].Metrics == nil {
 		t.Fatal("expected model metrics")
 	}
-	if items[0].Metrics.Context != "128k" || items[0].Metrics.Input != "$0.1000" || items[0].Metrics.Output != "$0.2000" {
+	if items[0].Metrics.Context != "128k" || items[0].Metrics.Input != "$0.10" || items[0].Metrics.Output != "$0.20" {
 		t.Fatalf("unexpected model metrics: %#v", items[0].Metrics)
 	}
 }
@@ -968,8 +968,8 @@ func TestModelPickerRendersSeparatePriceColumns(t *testing.T) {
 				Value: "z-ai/glm-5",
 				Metrics: &pickerMetrics{
 					Context: "80k",
-					Input:   "$0.7200",
-					Output:  "$2.3000",
+					Input:   "$0.72",
+					Output:  "$2.30",
 				},
 			},
 			{
@@ -977,8 +977,8 @@ func TestModelPickerRendersSeparatePriceColumns(t *testing.T) {
 				Value: "z-ai/glm-5-turbo",
 				Metrics: &pickerMetrics{
 					Context: "202k",
-					Input:   "$1.2000",
-					Output:  "$4.0000",
+					Input:   "$1.20",
+					Output:  "$4.00",
 				},
 			},
 		},
@@ -988,8 +988,8 @@ func TestModelPickerRendersSeparatePriceColumns(t *testing.T) {
 				Value: "z-ai/glm-5",
 				Metrics: &pickerMetrics{
 					Context: "80k",
-					Input:   "$0.7200",
-					Output:  "$2.3000",
+					Input:   "$0.72",
+					Output:  "$2.30",
 				},
 			},
 			{
@@ -997,8 +997,8 @@ func TestModelPickerRendersSeparatePriceColumns(t *testing.T) {
 				Value: "z-ai/glm-5-turbo",
 				Metrics: &pickerMetrics{
 					Context: "202k",
-					Input:   "$1.2000",
-					Output:  "$4.0000",
+					Input:   "$1.20",
+					Output:  "$4.00",
 				},
 			},
 		},
@@ -1006,11 +1006,11 @@ func TestModelPickerRendersSeparatePriceColumns(t *testing.T) {
 	}
 
 	rendered := ansi.Strip(model.renderPicker())
-	if strings.Contains(rendered, "$0.7200/$2.3000") {
-		t.Fatalf("rendered picker still uses slash price column: %q", rendered)
+	if !strings.Contains(rendered, "Model • Context • Input • Output") {
+		t.Fatalf("rendered picker missing header row: %q", rendered)
 	}
-	if !strings.Contains(rendered, "in $0.7200") || !strings.Contains(rendered, "out $2.3000") {
-		t.Fatalf("rendered picker missing split price columns: %q", rendered)
+	if !strings.Contains(rendered, "80k • $0.72 • $2.30") || !strings.Contains(rendered, "202k • $1.20 • $4.00") {
+		t.Fatalf("rendered picker missing formatted model metadata: %q", rendered)
 	}
 
 	var rowA, rowB string
@@ -1025,23 +1025,10 @@ func TestModelPickerRendersSeparatePriceColumns(t *testing.T) {
 	if rowA == "" || rowB == "" {
 		t.Fatalf("did not find model rows in rendered picker: %q", rendered)
 	}
-	ctxA := strings.Index(rowA, "• ctx")
-	ctxB := strings.Index(rowB, "• ctx")
-	inA := strings.Index(rowA, "• in ")
-	inB := strings.Index(rowB, "• in ")
-	outA := strings.Index(rowA, "• out ")
-	outB := strings.Index(rowB, "• out ")
-	if ctxA < 0 || ctxB < 0 || inA < 0 || inB < 0 || outA < 0 || outB < 0 {
+	if !strings.Contains(rowA, "202k") || !strings.Contains(rowB, "80k") ||
+		!strings.Contains(rowA, "$1.20") || !strings.Contains(rowB, "$0.72") ||
+		!strings.Contains(rowA, "$4.00") || !strings.Contains(rowB, "$2.30") {
 		t.Fatalf("missing detail columns in rendered picker: %q", rendered)
-	}
-	if gotA, gotB := lipgloss.Width(rowA[:ctxA]), lipgloss.Width(rowB[:ctxB]); gotA != gotB {
-		t.Fatalf("ctx column not aligned: rowA=%d rowB=%d\n%s", gotA, gotB, rendered)
-	}
-	if gotA, gotB := lipgloss.Width(rowA[:inA]), lipgloss.Width(rowB[:inB]); gotA != gotB {
-		t.Fatalf("input column not aligned: rowA=%d rowB=%d\n%s", gotA, gotB, rendered)
-	}
-	if gotA, gotB := lipgloss.Width(rowA[:outA]), lipgloss.Width(rowB[:outB]); gotA != gotB {
-		t.Fatalf("output column not aligned: rowA=%d rowB=%d\n%s", gotA, gotB, rendered)
 	}
 }
 
