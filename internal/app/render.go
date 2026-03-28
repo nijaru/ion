@@ -445,8 +445,8 @@ func (m Model) progressLine() string {
 	case stateError:
 		line = m.st.warn.Render("× Error: " + strings.NewReplacer("\n", " ", "\r", " ").Replace(m.lastError))
 	default:
-		if isConfigurationStatus(m.status) {
-			line = m.st.warn.Render("• " + strings.TrimSpace(m.status))
+		if status := strings.TrimSpace(m.configurationStatus()); status != "" {
+			line = m.st.warn.Render("• " + status)
 		} else {
 			line = m.st.dim.Render("• Ready")
 		}

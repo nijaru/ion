@@ -26,6 +26,8 @@ type stubBackend struct {
 	sess         *stubSession
 	provider     string
 	model        string
+	providerSet  bool
+	modelSet     bool
 	contextLimit int
 }
 
@@ -38,13 +40,13 @@ type compactBackend struct {
 
 func (b stubBackend) Name() string { return "stub" }
 func (b stubBackend) Provider() string {
-	if b.provider != "" {
+	if b.providerSet || b.provider != "" {
 		return b.provider
 	}
 	return "stub"
 }
 func (b stubBackend) Model() string {
-	if b.model != "" {
+	if b.modelSet || b.model != "" {
 		return b.model
 	}
 	return "stub-model"
@@ -1484,11 +1486,37 @@ func TestStartupPrintLinesOmitsConfigurationWarning(t *testing.T) {
 
 func TestProgressLineShowsConfigurationWarning(t *testing.T) {
 	model := readyModel(t)
-	model.status = noModelConfiguredStatus()
+	model.backend = stubBackend{
+		sess:        &stubSession{events: make(chan session.Event)},
+		provider:    "openrouter",
+		providerSet: true,
+		model:       "",
+		modelSet:    true,
+	}
 
 	line := ansi.Strip(model.progressLine())
 	if !strings.Contains(line, "No model configured") {
 		t.Fatalf("progress line missing config warning: %q", line)
+	}
+}
+
+func TestProgressLineIgnoresStaleConfigurationStatusWhenBackendIsConfigured(t *testing.T) {
+	model := readyModel(t)
+	model.backend = stubBackend{
+		sess:        &stubSession{events: make(chan session.Event)},
+		provider:    "openrouter",
+		providerSet: true,
+		model:       "z-ai/glm-5",
+		modelSet:    true,
+	}
+	model.status = noModelConfiguredStatus()
+
+	line := ansi.Strip(model.progressLine())
+	if strings.Contains(line, "No model configured") {
+		t.Fatalf("progress line should ignore stale config warning when backend is configured: %q", line)
+	}
+	if !strings.Contains(line, "Ready") {
+		t.Fatalf("progress line = %q, want Ready", line)
 	}
 }
 

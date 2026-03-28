@@ -323,6 +323,19 @@ func noModelConfiguredStatus() string {
 	return "No model configured. Use /model or Ctrl+M. Set ION_MODEL for scripts."
 }
 
+func (m Model) configurationStatus() string {
+	if m.backend == nil {
+		return ""
+	}
+	if strings.TrimSpace(m.backend.Provider()) == "" {
+		return noProviderConfiguredStatus()
+	}
+	if strings.TrimSpace(m.backend.Model()) == "" {
+		return noModelConfiguredStatus()
+	}
+	return ""
+}
+
 func (m Model) runtimeHeaderLine(_ backend.Backend) string {
 	version := strings.TrimSpace(m.version)
 	if version == "" {
