@@ -1006,29 +1006,45 @@ func TestModelPickerRendersSeparatePriceColumns(t *testing.T) {
 	}
 
 	rendered := ansi.Strip(model.renderPicker())
-	if !strings.Contains(rendered, "Model • Context • Input • Output") {
+	if !strings.Contains(rendered, "Model") || !strings.Contains(rendered, "Context") || !strings.Contains(rendered, "Input") || !strings.Contains(rendered, "Output") {
 		t.Fatalf("rendered picker missing header row: %q", rendered)
 	}
-	if !strings.Contains(rendered, "80k • $0.72 • $2.30") || !strings.Contains(rendered, "202k • $1.20 • $4.00") {
-		t.Fatalf("rendered picker missing formatted model metadata: %q", rendered)
-	}
-
-	var rowA, rowB string
+	var header, rowA, rowB string
 	for _, line := range strings.Split(rendered, "\n") {
 		switch {
+		case strings.Contains(line, "Model") && strings.Contains(line, "Context") && strings.Contains(line, "Input") && strings.Contains(line, "Output"):
+			header = line
 		case strings.Contains(line, "z-ai/glm-5-turbo"):
 			rowA = line
 		case strings.Contains(line, "z-ai/glm-5") && !strings.Contains(line, "turbo"):
 			rowB = line
 		}
 	}
-	if rowA == "" || rowB == "" {
+	if header == "" || rowA == "" || rowB == "" {
 		t.Fatalf("did not find model rows in rendered picker: %q", rendered)
 	}
 	if !strings.Contains(rowA, "202k") || !strings.Contains(rowB, "80k") ||
 		!strings.Contains(rowA, "$1.20") || !strings.Contains(rowB, "$0.72") ||
 		!strings.Contains(rowA, "$4.00") || !strings.Contains(rowB, "$2.30") {
 		t.Fatalf("missing detail columns in rendered picker: %q", rendered)
+	}
+	headerContext := lipgloss.Width(header[:strings.Index(header, "Context")])
+	rowAContext := lipgloss.Width(rowA[:strings.Index(rowA, "202k")])
+	rowBContext := lipgloss.Width(rowB[:strings.Index(rowB, "80k")])
+	if headerContext != rowAContext || headerContext != rowBContext {
+		t.Fatalf("context column not aligned:\nheader=%q\nrowA=%q\nrowB=%q", header, rowA, rowB)
+	}
+	headerInput := lipgloss.Width(header[:strings.Index(header, "Input")])
+	rowAInput := lipgloss.Width(rowA[:strings.Index(rowA, "$1.20")])
+	rowBInput := lipgloss.Width(rowB[:strings.Index(rowB, "$0.72")])
+	if headerInput != rowAInput || headerInput != rowBInput {
+		t.Fatalf("input column not aligned:\nheader=%q\nrowA=%q\nrowB=%q", header, rowA, rowB)
+	}
+	headerOutput := lipgloss.Width(header[:strings.Index(header, "Output")])
+	rowAOutput := lipgloss.Width(rowA[:strings.Index(rowA, "$4.00")])
+	rowBOutput := lipgloss.Width(rowB[:strings.Index(rowB, "$2.30")])
+	if headerOutput != rowAOutput || headerOutput != rowBOutput {
+		t.Fatalf("output column not aligned:\nheader=%q\nrowA=%q\nrowB=%q", header, rowA, rowB)
 	}
 }
 
