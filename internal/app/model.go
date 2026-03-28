@@ -236,7 +236,7 @@ func New(b backend.Backend, s storage.Session, store storage.Store, workdir, bra
 	st := newStyles()
 
 	spt := spinner.New()
-	spt.Spinner = spinner.Dot
+	spt.Spinner = spinner.MiniDot
 
 	boot := b.Bootstrap()
 
