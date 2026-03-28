@@ -291,6 +291,10 @@ func (m *Model) commitPickerSelection() (Model, tea.Cmd) {
 
 	switch m.picker.purpose {
 	case pickerPurposeProvider:
+		if strings.EqualFold(cfg.Provider, selected.Value) {
+			m.picker = nil
+			return *m, nil
+		}
 		cfg.Provider = selected.Value
 		cfg.Model = ""
 		if err := config.Save(&cfg); err != nil {

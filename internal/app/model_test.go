@@ -1183,6 +1183,34 @@ func TestPickerCommitSwitchesRuntime(t *testing.T) {
 	}
 }
 
+func TestProviderPickerSelectingCurrentProviderDoesNothing(t *testing.T) {
+	model := readyModel(t)
+	model.backend = stubBackend{sess: &stubSession{events: make(chan session.Event)}, provider: "openrouter", model: "z-ai/glm-5"}
+	model.picker = &pickerState{
+		title:    "Pick a provider",
+		items:    providerItems(),
+		filtered: providerItems(),
+		index:    pickerIndex(providerItems(), "openrouter"),
+		purpose:  pickerPurposeProvider,
+		cfg:      &config.Config{Provider: "openrouter", Model: "z-ai/glm-5"},
+	}
+
+	updated, cmd := model.handlePickerKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated
+	if cmd != nil {
+		t.Fatalf("expected no command when selecting the active provider, got %T", cmd)
+	}
+	if model.picker != nil {
+		t.Fatalf("expected provider picker to close, got %#v", model.picker)
+	}
+	if got := model.backend.Provider(); got != "openrouter" {
+		t.Fatalf("backend provider = %q, want openrouter", got)
+	}
+	if got := model.backend.Model(); got != "z-ai/glm-5" {
+		t.Fatalf("backend model = %q, want z-ai/glm-5", got)
+	}
+}
+
 func TestRuntimeSwitchKeepsNoticesOutOfTranscriptStorage(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
