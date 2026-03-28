@@ -182,9 +182,9 @@ func (m Model) renderPicker() string {
 			lastGroup = item.Group
 		}
 		if i == m.picker.index {
-			b.WriteString(m.renderPickerLine("› ", item, labelWidth, metricWidths, m.st.cyan))
+			b.WriteString(m.renderPickerLine("› ", item, labelWidth, metricWidths, m.st.cyan, lipgloss.NewStyle()))
 		} else {
-			b.WriteString(m.renderPickerLine("  ", item, labelWidth, metricWidths, lipgloss.NewStyle()))
+			b.WriteString(m.renderPickerLine("  ", item, labelWidth, metricWidths, lipgloss.NewStyle(), m.st.dim))
 		}
 		b.WriteString("\n")
 	}
@@ -213,13 +213,13 @@ func (m Model) renderPickerHeader(labelWidth int, metricWidths pickerMetricWidth
 	return b.String()
 }
 
-func (m Model) renderPickerLine(prefix string, item pickerItem, labelWidth int, metricWidths pickerMetricWidths, labelStyle lipgloss.Style) string {
+func (m Model) renderPickerLine(prefix string, item pickerItem, labelWidth int, metricWidths pickerMetricWidths, labelStyle, metricStyle lipgloss.Style) string {
 	var b strings.Builder
 	b.WriteString(strings.Repeat(" ", 2))
 	label := prefix + item.Label + strings.Repeat(" ", max(0, labelWidth-lipgloss.Width(item.Label)))
 	b.WriteString(labelStyle.Render(label))
 	if item.Metrics != nil {
-		detail := m.renderPickerMetrics(*item.Metrics, metricWidths)
+		detail := m.renderPickerMetrics(*item.Metrics, metricWidths, metricStyle)
 		if detail != "" {
 			b.WriteString("    ")
 			b.WriteString(detail)
@@ -231,16 +231,16 @@ func (m Model) renderPickerLine(prefix string, item pickerItem, labelWidth int, 
 	return b.String()
 }
 
-func (m Model) renderPickerMetrics(metrics pickerMetrics, widths pickerMetricWidths) string {
+func (m Model) renderPickerMetrics(metrics pickerMetrics, widths pickerMetricWidths, style lipgloss.Style) string {
 	var parts []string
 	if widths.Context > 0 {
-		parts = append(parts, m.renderPickerMetricValue(metrics.Context, widths.Context))
+		parts = append(parts, m.renderPickerMetricValue(metrics.Context, widths.Context, style))
 	}
 	if widths.Input > 0 {
-		parts = append(parts, m.renderPickerMetricValue(metrics.Input, widths.Input))
+		parts = append(parts, m.renderPickerMetricValue(metrics.Input, widths.Input, style))
 	}
 	if widths.Output > 0 {
-		parts = append(parts, m.renderPickerMetricValue(metrics.Output, widths.Output))
+		parts = append(parts, m.renderPickerMetricValue(metrics.Output, widths.Output, style))
 	}
 	return strings.Join(parts, "  ")
 }
@@ -264,13 +264,13 @@ func (m Model) renderPickerMetricHeading(value string, width int) string {
 	return m.st.dim.Render(value + pad)
 }
 
-func (m Model) renderPickerMetricValue(value string, width int) string {
+func (m Model) renderPickerMetricValue(value string, width int, style lipgloss.Style) string {
 	shown := strings.TrimSpace(value)
 	if shown == "" {
 		shown = "—"
 	}
 	pad := strings.Repeat(" ", max(0, width-lipgloss.Width(shown)))
-	return m.st.dim.Render(shown + pad)
+	return style.Render(shown + pad)
 }
 
 func pickerHasMetrics(items []pickerItem) bool {

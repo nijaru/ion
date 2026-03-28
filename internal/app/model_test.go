@@ -1046,14 +1046,19 @@ func TestPickerFilteringRanksClosestMatchesFirst(t *testing.T) {
 	}
 
 	items := pickerDisplayItems(model.picker)
-	if len(items) != 3 {
-		t.Fatalf("filtered items = %d, want 3", len(items))
+	if len(items) != 2 {
+		t.Fatalf("filtered items = %d, want 2", len(items))
 	}
 	if items[0].Label != "z-ai/glm-5" {
 		t.Fatalf("top match = %q, want z-ai/glm-5", items[0].Label)
 	}
 	if items[1].Label != "z-ai/glm-5-turbo" {
 		t.Fatalf("second match = %q, want z-ai/glm-5-turbo", items[1].Label)
+	}
+	for _, item := range items {
+		if item.Label == "z-ai/glm-4.5" {
+			t.Fatalf("unexpected loose match for glm-5 query: %+v", items)
+		}
 	}
 }
 
@@ -1789,6 +1794,57 @@ func TestRenderPickerKeepsDetailColumnStableAcrossScroll(t *testing.T) {
 	}
 	if topCol != bottomCol {
 		t.Fatalf("detail column shifted across scroll: top=%d bottom=%d\nTOP:\n%s\nBOTTOM:\n%s", topCol, bottomCol, top, bottom)
+	}
+}
+
+func TestRenderPickerHighlightsSelectedMetricColumns(t *testing.T) {
+	model := readyModel(t)
+	item := pickerItem{
+		Label: "z-ai/glm-5",
+		Value: "z-ai/glm-5",
+		Metrics: &pickerMetrics{
+			Context: "80k",
+			Input:   "$0.72",
+			Output:  "$2.30",
+		},
+	}
+	widths := pickerMetricWidths{Context: 7, Input: 5, Output: 5}
+
+	selected := model.renderPickerLine("› ", item, lipgloss.Width(item.Label), widths, model.st.cyan, lipgloss.NewStyle())
+	unselected := model.renderPickerLine("  ", item, lipgloss.Width(item.Label), widths, lipgloss.NewStyle(), model.st.dim)
+
+	if ansi.Strip(selected) == ansi.Strip(unselected) {
+		t.Fatalf("expected selected and unselected rows to differ")
+	}
+	if strings.Contains(selected, model.st.dim.Render("80k"+strings.Repeat(" ", widths.Context-lipgloss.Width("80k")))) {
+		t.Fatalf("selected metric columns should not be dimmed: %q", selected)
+	}
+	if !strings.Contains(unselected, model.st.dim.Render("80k"+strings.Repeat(" ", widths.Context-lipgloss.Width("80k")))) {
+		t.Fatalf("unselected metric columns should stay dimmed: %q", unselected)
+	}
+}
+
+func TestRankedPickerItemsRejectsLooseLongSubsequenceMatches(t *testing.T) {
+	items := []pickerItem{
+		{Label: "google/gemini-3-flash-preview", Value: "google/gemini-3-flash-preview"},
+		{Label: "nousresearch/hermes-3-llama-3.1-405b:free", Value: "nousresearch/hermes-3-llama-3.1-405b:free"},
+		{Label: "mistralai/mistral-small-3.1-24b-instruct:free", Value: "mistralai/mistral-small-3.1-24b-instruct:free"},
+	}
+	for i := range items {
+		items[i].Search = pickerSearchIndex(items[i].Label, items[i].Value, "", "", nil)
+	}
+
+	filtered := rankedPickerItems(items, "free")
+	got := make([]string, 0, len(filtered))
+	for _, item := range filtered {
+		got = append(got, item.Label)
+	}
+
+	if slices.Contains(got, "google/gemini-3-flash-preview") {
+		t.Fatalf("expected long loose subsequence match to be rejected, got %v", got)
+	}
+	if !slices.Contains(got, "nousresearch/hermes-3-llama-3.1-405b:free") || !slices.Contains(got, "mistralai/mistral-small-3.1-24b-instruct:free") {
+		t.Fatalf("expected real free matches to remain, got %v", got)
 	}
 }
 

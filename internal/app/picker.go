@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/nijaru/ion/internal/backend/registry"
@@ -310,8 +311,13 @@ func searchFieldScore(query, candidate string) (int, bool) {
 		idx := strings.Index(candidate, query)
 		return 200 + idx*2 + len(candidate) - len(query), true
 	default:
-		if score, ok := subsequenceScore(query, candidate); ok {
-			return 300 + score, true
+		if score, ok := tokenSearchScore(query, candidate); ok {
+			return 260 + score, true
+		}
+		if utf8.RuneCountInString(query) <= 3 {
+			if score, ok := subsequenceScore(query, candidate); ok {
+				return 320 + score, true
+			}
 		}
 		return 0, false
 	}
@@ -350,4 +356,84 @@ func subsequenceScore(query, candidate string) (int, bool) {
 
 func normalizeSearchQuery(s string) string {
 	return strings.ToLower(strings.TrimSpace(s))
+}
+
+func tokenSearchScore(query, candidate string) (int, bool) {
+	tokens := splitSearchTokens(candidate)
+	if len(tokens) == 0 {
+		return 0, false
+	}
+
+	best := int(^uint(0) >> 1)
+	matched := false
+	for idx, token := range tokens {
+		if token == "" {
+			continue
+		}
+		switch {
+		case token == query:
+			if score := idx * 2; score < best {
+				best = score
+				matched = true
+			}
+		case strings.HasPrefix(token, query):
+			if score := 20 + idx*2 + len(token) - len(query); score < best {
+				best = score
+				matched = true
+			}
+		case strings.Contains(token, query):
+			pos := strings.Index(token, query)
+			if score := 40 + idx*2 + pos + len(token) - len(query); score < best {
+				best = score
+				matched = true
+			}
+		}
+	}
+
+	compactQuery := compactSearchToken(query)
+	if compactQuery == "" || compactQuery == query {
+		return best, matched
+	}
+	for idx, token := range tokens {
+		compactToken := compactSearchToken(token)
+		if compactToken == "" {
+			continue
+		}
+		switch {
+		case compactToken == compactQuery:
+			if score := 60 + idx*2; score < best {
+				best = score
+				matched = true
+			}
+		case strings.HasPrefix(compactToken, compactQuery):
+			if score := 80 + idx*2 + len(compactToken) - len(compactQuery); score < best {
+				best = score
+				matched = true
+			}
+		case strings.Contains(compactToken, compactQuery):
+			pos := strings.Index(compactToken, compactQuery)
+			if score := 100 + idx*2 + pos + len(compactToken) - len(compactQuery); score < best {
+				best = score
+				matched = true
+			}
+		}
+	}
+	return best, matched
+}
+
+func splitSearchTokens(s string) []string {
+	return strings.FieldsFunc(s, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+}
+
+func compactSearchToken(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
