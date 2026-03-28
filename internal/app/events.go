@@ -112,11 +112,12 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 	case "shift+tab":
 		m.clearPendingAction()
-		if m.mode == modeWrite {
-			m.mode = modeRead
+		if m.mode == session.ModeWrite {
+			m.mode = session.ModeRead
 		} else {
-			m.mode = modeWrite
+			m.mode = session.ModeWrite
 		}
+		m.session.SetMode(m.mode)
 		return m, nil
 
 	case "enter":
@@ -332,7 +333,7 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		}
 		m.pending = &session.Entry{
 			Role:  session.Tool,
-			Title: fmt.Sprintf("%s(%s)", msg.ToolName, msg.Args),
+			Title: formatToolTitle(msg.ToolName, msg.Args),
 		}
 		return m, m.awaitSessionEvent()
 

@@ -135,6 +135,10 @@ func (s *Session) Resume(ctx context.Context, sessionID string) error {
 	return s.Open(ctx)
 }
 
+func (s *Session) SetMode(mode session.Mode) {
+	s.policy.SetMode(mode)
+}
+
 func (s *Session) Close() error {
 	s.closeOnce.Do(func() {
 		if s.cancel != nil {

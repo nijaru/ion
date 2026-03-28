@@ -120,13 +120,6 @@ type pickerState struct {
 	cfg      *config.Config
 }
 
-type toolMode int
-
-const (
-	modeRead toolMode = iota
-	modeWrite
-)
-
 type progressState int
 
 const (
@@ -212,7 +205,7 @@ type Model struct {
 	workdir           string
 	branch            string
 	version           string
-	mode              toolMode
+	mode              session.Mode
 	printedTranscript bool
 	startupLines      []string
 	startupEntries    []session.Entry
@@ -254,6 +247,7 @@ func New(b backend.Backend, s storage.Session, store storage.Store, workdir, bra
 		workdir:    workdir,
 		branch:     branch,
 		version:    version,
+		mode:       session.ModeWrite,
 		historyIdx: -1,
 		st:         st,
 	}

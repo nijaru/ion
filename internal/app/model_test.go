@@ -107,6 +107,7 @@ func (s *stubSession) Approve(ctx context.Context, id string, ok bool) error { r
 func (s *stubSession) RegisterMCPServer(ctx context.Context, cmd string, args ...string) error {
 	return nil
 }
+func (s *stubSession) SetMode(mode session.Mode) {}
 func (s *stubSession) ID() string              { return "stub" }
 func (s *stubSession) Meta() map[string]string { return nil }
 
@@ -395,8 +396,11 @@ func TestStatusLineIncludesThinkingLevel(t *testing.T) {
 	model.backend = stubBackend{sess: &stubSession{events: make(chan session.Event)}, provider: "openrouter", model: "o3-mini"}
 
 	line := ansi.Strip(model.statusLine())
-	if !strings.Contains(line, "think=high") {
+	if !strings.Contains(line, "high") {
 		t.Fatalf("status line missing thinking level: %q", line)
+	}
+	if strings.Contains(line, "think=") {
+		t.Fatalf("status line should not show the thinking key: %q", line)
 	}
 }
 

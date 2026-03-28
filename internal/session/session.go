@@ -25,6 +25,9 @@ type AgentSession interface {
 	// RegisterMCPServer connects to an MCP server and registers its tools.
 	RegisterMCPServer(ctx context.Context, command string, args ...string) error
 
+	// SetMode updates the session mode (READ/WRITE).
+	SetMode(mode Mode)
+
 	// Close terminates the session and cleans up resources.
 	Close() error
 	// Events returns a read-only channel of typed events emitted by the session.

@@ -2,7 +2,11 @@ package backend
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"sync"
+
+	"github.com/nijaru/ion/internal/session"
 )
 
 // Policy defines how a tool call should be handled.
@@ -31,6 +35,9 @@ type PolicyEngine struct {
 	Categories map[string]ToolCategory
 	// Policies maps categories to their default handling.
 	Policies map[ToolCategory]Policy
+
+	mu   sync.RWMutex
+	mode session.Mode
 }
 
 // NewPolicyEngine creates a default policy engine.
@@ -56,11 +63,23 @@ func NewPolicyEngine() *PolicyEngine {
 			CategoryNetwork:   PolicyAsk,
 			CategorySensitive: PolicyAsk,
 		},
+		mode: session.ModeWrite,
 	}
+}
+
+// SetMode updates the active session mode.
+func (pe *PolicyEngine) SetMode(mode session.Mode) {
+	pe.mu.Lock()
+	defer pe.mu.Unlock()
+	pe.mode = mode
 }
 
 // Authorize checks if a tool call is permitted by the policy.
 func (pe *PolicyEngine) Authorize(ctx context.Context, toolName string, args string) (Policy, string) {
+	pe.mu.RLock()
+	mode := pe.mode
+	pe.mu.RUnlock()
+
 	category, ok := pe.Categories[toolName]
 	if !ok {
 		// Default to Ask for unknown tools
@@ -68,6 +87,31 @@ func (pe *PolicyEngine) Authorize(ctx context.Context, toolName string, args str
 	}
 
 	policy := pe.Policies[category]
+
+	// Enforce READ mode restrictions
+	if mode == session.ModeRead {
+		if category == CategoryWrite || category == CategorySensitive {
+			return PolicyAsk, fmt.Sprintf("Tool %q is restricted in READ mode and requires explicit approval.", toolName)
+		}
+
+		if toolName == "bash" {
+			var input struct {
+				Command string `json:"command"`
+			}
+			if err := json.Unmarshal([]byte(args), &input); err == nil {
+				if !IsSafeBashCommand(input.Command) {
+					return PolicyAsk, fmt.Sprintf("Bash command %q is not considered safe for READ mode and requires explicit approval.", input.Command)
+				}
+				// Safe bash commands are allowed in READ mode
+				return PolicyAllow, ""
+			}
+		}
+
+		if category == CategoryExecute {
+			return PolicyAsk, fmt.Sprintf("Tool %q is restricted in READ mode and requires explicit approval.", toolName)
+		}
+	}
+
 	reason := ""
 	if policy == PolicyAsk {
 		reason = fmt.Sprintf("Tool %q belongs to the %q category, which requires approval.", toolName, category)

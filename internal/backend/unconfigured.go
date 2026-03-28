@@ -113,6 +113,8 @@ func (s *unconfiguredSession) RegisterMCPServer(context.Context, string, ...stri
 	return nil
 }
 
+func (s *unconfiguredSession) SetMode(session.Mode) {}
+
 func (s *unconfiguredSession) Close() error {
 	return nil
 }

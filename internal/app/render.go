@@ -96,9 +96,8 @@ func (m Model) renderPlaneB() string {
 		b.WriteString("\n")
 		desc := m.pendingApproval.Description
 		if m.pendingApproval.ToolName != "" {
-			desc = fmt.Sprintf("%s(%s): %s",
-				m.pendingApproval.ToolName,
-				m.pendingApproval.Args,
+			desc = fmt.Sprintf("%s: %s",
+				formatToolTitle(m.pendingApproval.ToolName, m.pendingApproval.Args),
 				m.pendingApproval.Description)
 		}
 		b.WriteString(m.st.warn.PaddingLeft(2).Render("Approve " + desc + "? (y/n)"))
@@ -309,17 +308,16 @@ func (m Model) renderPendingEntry(e session.Entry) string {
 		if e.Content != "" {
 			b.WriteString("\n")
 			lines := strings.Split(strings.TrimRight(e.Content, "\n"), "\n")
+			const maxLines = 10
 			shown := lines
-			if len(lines) > 10 {
-				shown = lines[:10]
+			if len(lines) > maxLines {
+				shown = lines[len(lines)-maxLines:]
+				b.WriteString(m.st.dim.PaddingLeft(4).Render(
+					fmt.Sprintf("... (%d lines total)", len(lines))))
+				b.WriteString("\n")
 			}
 			for _, l := range shown {
 				b.WriteString(m.st.dim.PaddingLeft(4).Render(l))
-				b.WriteString("\n")
-			}
-			if len(lines) > 10 {
-				b.WriteString(m.st.dim.PaddingLeft(4).Render(
-					fmt.Sprintf("... (%d more lines)", len(lines)-10)))
 				b.WriteString("\n")
 			}
 		}
@@ -498,7 +496,7 @@ func (m Model) statusLine() string {
 
 	sep := m.st.sep.Render(" • ")
 
-	modeLabel := ifthen(m.mode == modeWrite,
+	modeLabel := ifthen(m.mode == session.ModeWrite,
 		m.st.modeWrite.Render("[WRITE]"),
 		m.st.modeRead.Render("[READ]"),
 	)
@@ -511,7 +509,7 @@ func (m Model) statusLine() string {
 	if value := m.backend.Model(); value != "" {
 		model = m.st.dim.Render(value)
 	}
-	thinking := m.st.dim.Render("think=" + normalizeThinkingValue(m.reasoningEffort))
+	thinking := m.st.dim.Render(normalizeThinkingValue(m.reasoningEffort))
 	dir := m.st.dim.Render("./" + filepath.Base(m.workdir))
 	branch := ""
 	if m.branch != "" {
@@ -588,4 +586,32 @@ func fitLine(line string, width int) string {
 		return line
 	}
 	return ansi.Truncate(line, width, "…")
+}
+
+// formatToolTitle attempts to extract the most important argument from a tool call's
+// raw JSON string to create a more readable title (e.g., "read main.go" instead of
+// "read({\"file_path\": \"main.go\"})").
+func formatToolTitle(name, args string) string {
+	args = strings.TrimSpace(args)
+	if args == "" || args == "{}" {
+		return name
+	}
+
+	// Simple heuristic-based extraction to avoid full JSON overhead in the render loop.
+	// Look for common keys: command, file_path, path, pattern.
+	for _, key := range []string{"command", "file_path", "path", "pattern", "query"} {
+		pattern := fmt.Sprintf("\"%s\":", key)
+		if idx := strings.Index(args, pattern); idx != -1 {
+			val := args[idx+len(pattern):]
+			val = strings.TrimSpace(val)
+			if strings.HasPrefix(val, "\"") {
+				val = val[1:]
+				if end := strings.Index(val, "\""); end != -1 {
+					return fmt.Sprintf("%s %s", name, val[:end])
+				}
+			}
+		}
+	}
+
+	return fmt.Sprintf("%s(%s)", name, args)
 }

@@ -590,8 +590,9 @@ func (m Model) renderDiff(content string) string {
 
 // isWriteTool returns true if the tool title looks like a write/edit operation.
 func isWriteTool(title string) bool {
-	for _, prefix := range []string{"write(", "edit(", "create(", "Write(", "Edit("} {
-		if strings.HasPrefix(title, prefix) {
+	lower := strings.ToLower(title)
+	for _, prefix := range []string{"write", "edit", "create"} {
+		if strings.HasPrefix(lower, prefix+" ") || strings.HasPrefix(lower, prefix+"(") {
 			return true
 		}
 	}

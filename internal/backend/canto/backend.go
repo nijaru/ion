@@ -618,6 +618,10 @@ func (b *Backend) RegisterMCPServer(ctx context.Context, command string, args ..
 	return nil
 }
 
+func (b *Backend) SetMode(mode ionsession.Mode) {
+	b.policy.SetMode(mode)
+}
+
 func (b *Backend) Compact(ctx context.Context) (bool, error) {
 	b.mu.Lock()
 	store := b.store
