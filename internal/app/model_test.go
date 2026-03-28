@@ -1183,9 +1183,22 @@ func TestPickerCommitSwitchesRuntime(t *testing.T) {
 	}
 }
 
-func TestProviderPickerSelectingCurrentProviderDoesNothing(t *testing.T) {
+func TestProviderPickerSelectingCurrentProviderOpensModelPickerWithoutClearingModel(t *testing.T) {
 	model := readyModel(t)
 	model.backend = stubBackend{sess: &stubSession{events: make(chan session.Event)}, provider: "openrouter", model: "z-ai/glm-5"}
+	oldListModels := listModels
+	listModels = func(ctx context.Context, provider string) ([]registry.ModelMetadata, error) {
+		if provider != "openrouter" {
+			t.Fatalf("provider = %q, want openrouter", provider)
+		}
+		return []registry.ModelMetadata{
+			{ID: "z-ai/glm-4.5"},
+			{ID: "z-ai/glm-5"},
+			{ID: "z-ai/glm-5-turbo"},
+		}, nil
+	}
+	defer func() { listModels = oldListModels }()
+
 	model.picker = &pickerState{
 		title:    "Pick a provider",
 		items:    providerItems(),
@@ -1198,10 +1211,25 @@ func TestProviderPickerSelectingCurrentProviderDoesNothing(t *testing.T) {
 	updated, cmd := model.handlePickerKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = updated
 	if cmd != nil {
-		t.Fatalf("expected no command when selecting the active provider, got %T", cmd)
+		t.Fatalf("expected no command when reopening model picker, got %T", cmd)
 	}
-	if model.picker != nil {
-		t.Fatalf("expected provider picker to close, got %#v", model.picker)
+	if model.picker == nil {
+		t.Fatal("expected model picker to open")
+	}
+	if model.picker.purpose != pickerPurposeModel {
+		t.Fatalf("picker purpose = %v, want model picker", model.picker.purpose)
+	}
+	if model.picker.cfg == nil {
+		t.Fatal("expected picker config to be preserved")
+	}
+	if got := model.picker.cfg.Provider; got != "openrouter" {
+		t.Fatalf("picker provider = %q, want openrouter", got)
+	}
+	if got := model.picker.cfg.Model; got != "z-ai/glm-5" {
+		t.Fatalf("picker model = %q, want z-ai/glm-5", got)
+	}
+	if got := pickerDisplayItems(model.picker)[model.picker.index].Value; got != "z-ai/glm-5" {
+		t.Fatalf("selected model = %q, want z-ai/glm-5", got)
 	}
 	if got := model.backend.Provider(); got != "openrouter" {
 		t.Fatalf("backend provider = %q, want openrouter", got)
