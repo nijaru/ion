@@ -417,6 +417,9 @@ func (m Model) renderEntry(e session.Entry) string {
 		return strings.TrimRightFunc(b.String(), unicode.IsSpace)
 
 	case session.System:
+		if strings.HasPrefix(e.Content, "Error: ") {
+			return m.st.warn.Faint(true).Render("• " + e.Content)
+		}
 		return m.st.system.Render("• " + e.Content)
 
 	default:

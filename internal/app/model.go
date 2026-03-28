@@ -236,6 +236,7 @@ func New(b backend.Backend, s storage.Session, store storage.Store, workdir, bra
 	st := newStyles()
 
 	spt := spinner.New()
+	spt.Spinner = spinner.Dot
 
 	boot := b.Bootstrap()
 
@@ -349,14 +350,14 @@ func (m Model) configurationStatus() string {
 
 func (m Model) runningProgressParts() []string {
 	parts := []string{}
-	if !m.turnStartedAt.IsZero() {
-		parts = append(parts, fmt.Sprintf("%ds", int(time.Since(m.turnStartedAt).Seconds())))
-	}
 	if m.currentTurnInput > 0 {
 		parts = append(parts, "↑ "+compactCount(m.currentTurnInput))
 	}
 	if m.currentTurnOutput > 0 {
 		parts = append(parts, "↓ "+compactCount(m.currentTurnOutput))
+	}
+	if !m.turnStartedAt.IsZero() {
+		parts = append(parts, fmt.Sprintf("%ds", int(time.Since(m.turnStartedAt).Seconds())))
 	}
 	parts = append(parts, "Esc to cancel")
 	return parts
@@ -364,9 +365,6 @@ func (m Model) runningProgressParts() []string {
 
 func (m Model) completedProgressParts() []string {
 	parts := []string{}
-	if m.lastTurnSummary.Elapsed > 0 {
-		parts = append(parts, fmt.Sprintf("%ds", int(m.lastTurnSummary.Elapsed.Seconds())))
-	}
 	if m.lastTurnSummary.Input > 0 {
 		parts = append(parts, "↑ "+compactCount(m.lastTurnSummary.Input))
 	}
@@ -375,6 +373,9 @@ func (m Model) completedProgressParts() []string {
 	}
 	if m.lastTurnSummary.Cost > 0 {
 		parts = append(parts, fmt.Sprintf("$%.4f", m.lastTurnSummary.Cost))
+	}
+	if m.lastTurnSummary.Elapsed > 0 {
+		parts = append(parts, fmt.Sprintf("%ds", int(m.lastTurnSummary.Elapsed.Seconds())))
 	}
 	return parts
 }

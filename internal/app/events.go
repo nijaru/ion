@@ -279,6 +279,9 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 			m.pending = nil
 			m.streamBuf = ""
 			m.reasonBuf = ""
+			if strings.TrimSpace(entry.Content) == "" && strings.TrimSpace(entry.Reasoning) == "" {
+				return m, m.awaitSessionEvent()
+			}
 
 			if m.storage != nil {
 				blocks := []storage.Block{}
@@ -444,7 +447,8 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 			}
 		}
 		m.turnStartedAt = time.Time{}
-		return m, m.awaitSessionEvent()
+		entry := session.Entry{Role: session.System, Content: "Error: " + msg.Err.Error()}
+		return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
 	}
 
 	return m, m.awaitSessionEvent()

@@ -314,10 +314,13 @@ func TestTurnFinishedLeavesProgressComplete(t *testing.T) {
 	if !strings.Contains(line, "✓ Complete") {
 		t.Fatalf("progress line = %q, want complete state", line)
 	}
-	for _, want := range []string{"3s", "↑ 1.2k", "↓ 300"} {
+	for _, want := range []string{"↑ 1.2k", "↓ 300", "3s"} {
 		if !strings.Contains(line, want) {
 			t.Fatalf("progress line = %q, missing %q", line, want)
 		}
+	}
+	if strings.Index(line, "3s") < strings.Index(line, "↓ 300") {
+		t.Fatalf("progress line = %q, want elapsed time after token counters", line)
 	}
 }
 
@@ -328,6 +331,24 @@ func TestErrorProgressLineUsesRedXSymbolCopy(t *testing.T) {
 
 	if got := ansi.Strip(model.progressLine()); !strings.Contains(got, "× Error: backend failed") {
 		t.Fatalf("progress line = %q, want red x error copy", got)
+	}
+}
+
+func TestRunningProgressLinePutsElapsedAfterTokenCounters(t *testing.T) {
+	model := readyModel(t)
+	model.progress = stateStreaming
+	model.turnStartedAt = time.Now().Add(-2 * time.Second)
+	model.currentTurnInput = 3000
+	model.currentTurnOutput = 84
+
+	line := ansi.Strip(model.progressLine())
+	for _, want := range []string{"Streaming...", "↑ 3.0k", "↓ 84", "2s", "Esc to cancel"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("progress line = %q, missing %q", line, want)
+		}
+	}
+	if strings.Index(line, "2s") < strings.Index(line, "↓ 84") {
+		t.Fatalf("progress line = %q, want elapsed time after token counters", line)
 	}
 }
 
