@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -211,6 +212,9 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		m.tokensSent += msg.Input
 		m.tokensReceived += msg.Output
 		m.totalCost += msg.Cost
+		m.currentTurnInput += msg.Input
+		m.currentTurnOutput += msg.Output
+		m.currentTurnCost += msg.Cost
 		if m.storage != nil {
 			if err := m.storage.Append(context.Background(), storage.TokenUsage{
 				Type:   "token_usage",
@@ -227,12 +231,25 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 	case session.TurnStarted:
 		m.thinking = true
 		m.progress = stateIonizing
+		m.turnStartedAt = time.Now()
+		m.currentTurnInput = 0
+		m.currentTurnOutput = 0
+		m.currentTurnCost = 0
 		m.pending = &session.Entry{Role: session.Agent}
 		return m, m.awaitSessionEvent()
 
 	case session.TurnFinished:
 		m.thinking = false
 		m.progress = stateComplete
+		if !m.turnStartedAt.IsZero() {
+			m.lastTurnSummary = turnSummary{
+				Elapsed: time.Since(m.turnStartedAt),
+				Input:   m.currentTurnInput,
+				Output:  m.currentTurnOutput,
+				Cost:    m.currentTurnCost,
+			}
+		}
+		m.turnStartedAt = time.Time{}
 		if queued := strings.TrimSpace(m.queuedTurn); queued != "" {
 			m.queuedTurn = ""
 			return m, func() tea.Msg { return queuedTurnMsg{text: queued} }
@@ -418,6 +435,15 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		m.thinking = false
 		m.progress = stateError
 		m.lastError = msg.Err.Error()
+		if !m.turnStartedAt.IsZero() {
+			m.lastTurnSummary = turnSummary{
+				Elapsed: time.Since(m.turnStartedAt),
+				Input:   m.currentTurnInput,
+				Output:  m.currentTurnOutput,
+				Cost:    m.currentTurnCost,
+			}
+		}
+		m.turnStartedAt = time.Time{}
 		return m, m.awaitSessionEvent()
 	}
 

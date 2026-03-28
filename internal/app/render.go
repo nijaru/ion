@@ -37,8 +37,12 @@ func (m Model) View() tea.View {
 		b.WriteString("\n")
 	}
 
-	// Blank line separates the startup/messages area from the progress line.
-	b.WriteString("\n")
+	// Keep exactly one visual blank line between committed scrollback and Plane B.
+	// Once transcript rows are printed, the terminal already advanced to the next
+	// line, so we don't add another empty row unless Plane B has in-view content.
+	if planeB != "" || m.sessionPicker != nil || m.picker != nil || !m.printedTranscript {
+		b.WriteString("\n")
+	}
 
 	// Progress line
 	b.WriteString(m.progressLine())
@@ -203,7 +207,7 @@ func (m Model) renderPickerHeader(labelWidth int, metricWidths pickerMetricWidth
 	b.WriteString(m.st.dim.Render("Model" + strings.Repeat(" ", max(0, labelWidth-lipgloss.Width("Model")))))
 	detail := m.renderPickerHeaderMetrics(metricWidths)
 	if detail != "" {
-		b.WriteString("  ")
+		b.WriteString("    ")
 		b.WriteString(detail)
 	}
 	return b.String()
@@ -217,13 +221,11 @@ func (m Model) renderPickerLine(prefix string, item pickerItem, labelWidth int, 
 	if item.Metrics != nil {
 		detail := m.renderPickerMetrics(*item.Metrics, metricWidths)
 		if detail != "" {
-			b.WriteString("  ")
+			b.WriteString("    ")
 			b.WriteString(detail)
 		}
 	} else if item.Detail != "" {
-		b.WriteString(" ")
-		b.WriteString(m.st.dim.Render("•"))
-		b.WriteString(" ")
+		b.WriteString("    ")
 		b.WriteString(m.renderPickerDetail(item.Detail, item.Tone))
 	}
 	return b.String()
@@ -427,13 +429,25 @@ func (m Model) progressLine() string {
 	var line string
 	switch m.progress {
 	case stateIonizing:
-		line = m.st.cyan.Render(m.spinner.View() + " Ionizing...")
+		line = m.spinner.View() + " Ionizing..."
+		if stats := m.runningProgressParts(); len(stats) > 0 {
+			line += " • " + strings.Join(stats, " • ")
+		}
 	case stateStreaming:
-		line = m.st.cyan.Render(m.spinner.View() + " Streaming...")
+		line = m.spinner.View() + " Streaming..."
+		if stats := m.runningProgressParts(); len(stats) > 0 {
+			line += " • " + strings.Join(stats, " • ")
+		}
 	case stateWorking:
-		line = m.st.cyan.Render(m.spinner.View() + " Working...")
+		line = m.spinner.View() + " Working..."
+		if stats := m.runningProgressParts(); len(stats) > 0 {
+			line += " • " + strings.Join(stats, " • ")
+		}
 	case stateComplete:
 		line = m.st.success.Render("✓") + " Complete"
+		if stats := m.completedProgressParts(); len(stats) > 0 {
+			line += " • " + strings.Join(stats, " • ")
+		}
 	case stateApproval:
 		line = m.st.warn.Render("⚠ Approval required")
 	case stateCancelled:
@@ -449,7 +463,7 @@ func (m Model) progressLine() string {
 			line = m.st.dim.Render("• Ready")
 		}
 	}
-	return fitLine(line, m.width)
+	return fitLine(strings.TrimRight(line, " "), m.width)
 }
 
 // headerLine returns the workspace line shown below the startup banner.

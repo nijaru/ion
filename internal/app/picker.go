@@ -24,7 +24,7 @@ func providerItems(cfg *config.Config) []pickerItem {
 		items = append(items, buildProviderItem(cfg, def))
 	}
 	slices.SortFunc(items, func(a, b pickerItem) int {
-		if rankA, rankB := providerSortRank(a.Value), providerSortRank(b.Value); rankA != rankB {
+		if rankA, rankB := providerSortRank(cfg, a.Value), providerSortRank(cfg, b.Value); rankA != rankB {
 			return rankA - rankB
 		}
 		if cmp := strings.Compare(a.Group, b.Group); cmp != 0 {
@@ -90,18 +90,18 @@ func buildProviderItem(cfg *config.Config, def providers.Definition) pickerItem 
 
 func providerDetail(cfg *config.Config, def providers.Definition) (string, pickerTone) {
 	detail, ready := providers.CredentialState(cfgForProvider(cfg, def.ID), def)
-	if ready || detail == "Local" {
+	if ready || !strings.HasPrefix(detail, "Set ") {
 		return detail, pickerToneDefault
 	}
 	return detail, pickerToneWarn
 }
 
-func providerSortRank(provider string) int {
+func providerSortRank(cfg *config.Config, provider string) int {
 	def, ok := providers.Lookup(provider)
 	if !ok {
 		return 99
 	}
-	return providers.SortRank(cfgForProvider(nil, def.ID), def)
+	return providers.SortRank(cfgForProvider(cfg, def.ID), def)
 }
 
 func providerCredentialSet(provider string) bool {

@@ -38,11 +38,16 @@ var (
 	catwalkFetcher         = fetchModelsFromCatwalk
 )
 
+const modelListRequestTimeout = 10 * time.Second
+
 func ListModels(ctx context.Context, provider string) ([]ModelMetadata, error) {
 	return ListModelsForConfig(ctx, &config.Config{Provider: provider})
 }
 
 func ListModelsForConfig(ctx context.Context, cfg *config.Config) ([]ModelMetadata, error) {
+	ctx, cancel := withModelListTimeout(ctx)
+	defer cancel()
+
 	providerModelsOnce.Do(initProviderModelsCache)
 
 	key := providerCacheKey(cfg)
@@ -73,6 +78,13 @@ func ListModelsForConfig(ctx context.Context, cfg *config.Config) ([]ModelMetada
 	}
 
 	return nil, err
+}
+
+func withModelListTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	if _, ok := ctx.Deadline(); ok {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, modelListRequestTimeout)
 }
 
 func initProviderModelsCache() {

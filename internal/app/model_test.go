@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -299,6 +300,9 @@ func TestTurnFinishedLeavesProgressComplete(t *testing.T) {
 	model := readyModel(t)
 	model.progress = stateStreaming
 	model.thinking = true
+	model.turnStartedAt = time.Now().Add(-3 * time.Second)
+	model.currentTurnInput = 1200
+	model.currentTurnOutput = 300
 
 	updated, _ := model.Update(session.TurnFinished{})
 	model = updated.(Model)
@@ -306,8 +310,14 @@ func TestTurnFinishedLeavesProgressComplete(t *testing.T) {
 	if model.progress != stateComplete {
 		t.Fatalf("progress = %v, want stateComplete", model.progress)
 	}
-	if got := ansi.Strip(model.progressLine()); !strings.Contains(got, "✓ Complete") {
-		t.Fatalf("progress line = %q, want complete state", got)
+	line := ansi.Strip(model.progressLine())
+	if !strings.Contains(line, "✓ Complete") {
+		t.Fatalf("progress line = %q, want complete state", line)
+	}
+	for _, want := range []string{"3s", "↑ 1.2k", "↓ 300"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("progress line = %q, missing %q", line, want)
+		}
 	}
 }
 
@@ -592,7 +602,6 @@ func TestProviderItemsSortSetAPIsThenLocalThenUnset(t *testing.T) {
 	want := []string{
 		"Gemini",
 		"OpenRouter",
-		"Local OpenAI",
 		"Ollama",
 		"Anthropic",
 		"Cerebras",
@@ -1609,8 +1618,8 @@ func TestProviderItemsUseCatalogGroups(t *testing.T) {
 func TestProviderItemsHideCustomEndpointByDefault(t *testing.T) {
 	items := providerItems(&config.Config{})
 	for _, item := range items {
-		if item.Value == "openai-compatible" {
-			t.Fatalf("custom endpoint entry should be hidden by default")
+		if item.Value == "openai-compatible" || item.Value == "local-openai" {
+			t.Fatalf("custom endpoint entry %q should be hidden by default", item.Value)
 		}
 	}
 
@@ -1625,6 +1634,30 @@ func TestProviderItemsHideCustomEndpointByDefault(t *testing.T) {
 	if !found {
 		t.Fatalf("custom endpoint entry should be shown when configured")
 	}
+
+	items = providerItems(&config.Config{Provider: "local-openai"})
+	found = false
+	for _, item := range items {
+		if item.Value == "local-openai" && item.Label == "Custom" {
+			if item.Detail != "127.0.0.1:1234" {
+				t.Fatalf("local-openai detail = %q, want %q", item.Detail, "127.0.0.1:1234")
+			}
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("local-openai should render as Custom when active")
+	}
+}
+
+func TestViewDoesNotAddExtraSpacerAfterPrintedTranscript(t *testing.T) {
+	model := readyModel(t)
+	model.printedTranscript = true
+	view := fmt.Sprint(model.View())
+	if strings.HasPrefix(view, "\n\n") || strings.HasPrefix(view, "\n• Ready") {
+		t.Fatalf("view should not add an extra blank spacer after printed transcript: %q", view[:min(len(view), 40)])
+	}
 }
 
 func TestRenderPickerKeepsDetailColumnStableAcrossScroll(t *testing.T) {
@@ -1638,8 +1671,8 @@ func TestRenderPickerKeepsDetailColumnStableAcrossScroll(t *testing.T) {
 			{Label: "xAI", Value: "xai", Detail: "Ready", Group: "Direct APIs"},
 			{Label: "Z.ai", Value: "zai", Detail: "Ready", Group: "Direct APIs"},
 			{Label: "Ollama", Value: "ollama", Detail: "Ready", Group: "Local"},
-			{Label: "Local OpenAI", Value: "local-openai", Detail: "Ready", Group: "Local"},
-			{Label: "Custom OpenAI", Value: "openai-compatible", Detail: "Set endpoint", Group: "Custom Endpoints"},
+			{Label: "Custom", Value: "local-openai", Detail: "127.0.0.1:1234", Group: "Custom Endpoints"},
+			{Label: "Custom", Value: "openai-compatible", Detail: "Set endpoint", Group: "Custom Endpoints"},
 			{Label: "Anthropic", Value: "anthropic", Detail: "Set ANTHROPIC_API_KEY", Group: "Direct APIs"},
 		},
 	}
@@ -1653,7 +1686,14 @@ func TestRenderPickerKeepsDetailColumnStableAcrossScroll(t *testing.T) {
 	findSeparatorColumn := func(rendered, linePrefix string) int {
 		for _, line := range strings.Split(rendered, "\n") {
 			if strings.Contains(line, linePrefix) {
-				return strings.Index(line, " • ")
+				switch {
+				case strings.Contains(line, "Ready"):
+					return strings.Index(line, "Ready")
+				case strings.Contains(line, "Set ANTHROPIC_API_KEY"):
+					return strings.Index(line, "Set ANTHROPIC_API_KEY")
+				default:
+					return -1
+				}
 			}
 		}
 		return -1

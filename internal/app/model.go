@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -138,6 +139,13 @@ const (
 	stateError
 )
 
+type turnSummary struct {
+	Elapsed time.Duration
+	Input   int
+	Output  int
+	Cost    float64
+}
+
 // Model is the Bubble Tea model for the ion TUI.
 // Rendering is in render.go; event handling is in events.go.
 type Model struct {
@@ -166,9 +174,14 @@ type Model struct {
 	sessionPicker *sessionPickerState
 
 	// Progress and status
-	progress  progressState
-	lastError string
-	thinking  bool
+	progress          progressState
+	lastError         string
+	thinking          bool
+	turnStartedAt     time.Time
+	currentTurnInput  int
+	currentTurnOutput int
+	currentTurnCost   float64
+	lastTurnSummary   turnSummary
 
 	// Token / cost tracking
 	tokensSent     int
@@ -223,8 +236,6 @@ func New(b backend.Backend, s storage.Session, store storage.Store, workdir, bra
 	st := newStyles()
 
 	spt := spinner.New()
-	spt.Spinner = spinner.Dot
-	spt.Style = st.cyan
 
 	boot := b.Bootstrap()
 
@@ -334,6 +345,45 @@ func (m Model) configurationStatus() string {
 		return noModelConfiguredStatus()
 	}
 	return ""
+}
+
+func (m Model) runningProgressParts() []string {
+	parts := []string{}
+	if !m.turnStartedAt.IsZero() {
+		parts = append(parts, fmt.Sprintf("%ds", int(time.Since(m.turnStartedAt).Seconds())))
+	}
+	if m.currentTurnInput > 0 {
+		parts = append(parts, "↑ "+compactCount(m.currentTurnInput))
+	}
+	if m.currentTurnOutput > 0 {
+		parts = append(parts, "↓ "+compactCount(m.currentTurnOutput))
+	}
+	parts = append(parts, "Esc to cancel")
+	return parts
+}
+
+func (m Model) completedProgressParts() []string {
+	parts := []string{}
+	if m.lastTurnSummary.Elapsed > 0 {
+		parts = append(parts, fmt.Sprintf("%ds", int(m.lastTurnSummary.Elapsed.Seconds())))
+	}
+	if m.lastTurnSummary.Input > 0 {
+		parts = append(parts, "↑ "+compactCount(m.lastTurnSummary.Input))
+	}
+	if m.lastTurnSummary.Output > 0 {
+		parts = append(parts, "↓ "+compactCount(m.lastTurnSummary.Output))
+	}
+	if m.lastTurnSummary.Cost > 0 {
+		parts = append(parts, fmt.Sprintf("$%.4f", m.lastTurnSummary.Cost))
+	}
+	return parts
+}
+
+func compactCount(n int) string {
+	if n >= 1000 {
+		return fmt.Sprintf("%.1fk", float64(n)/1000.0)
+	}
+	return fmt.Sprintf("%d", n)
 }
 
 func isIdleStatus(status string) bool {

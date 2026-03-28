@@ -2,6 +2,7 @@ package providers
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"slices"
 	"strings"
@@ -176,6 +177,10 @@ func CredentialState(cfg *config.Config, def Definition) (string, bool) {
 	if def.Runtime == RuntimeACP {
 		return "Subscription", true
 	}
+	if def.ID == "local-openai" {
+		endpoint := ResolvedEndpoint(cfg)
+		return summarizeEndpoint(endpoint), false
+	}
 	if def.AuthKind == AuthLocal {
 		return "Ready", true
 	}
@@ -247,6 +252,12 @@ func ShowInPicker(cfg *config.Config, def Definition) bool {
 	if def.Runtime != RuntimeNative {
 		return false
 	}
+	if def.ID == "local-openai" {
+		if cfg == nil {
+			return false
+		}
+		return ResolveID(cfg.Provider) == def.ID || strings.TrimSpace(cfg.Endpoint) != ""
+	}
 	if def.Kind != KindCustom {
 		return true
 	}
@@ -294,6 +305,18 @@ func cloneHeaders(src map[string]string) map[string]string {
 	return dst
 }
 
+func summarizeEndpoint(raw string) string {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return "127.0.0.1:1234"
+	}
+	u, err := url.Parse(value)
+	if err != nil || u.Host == "" {
+		return value
+	}
+	return u.Host
+}
+
 var definitions = []Definition{
 	{ID: "anthropic", DisplayName: "Anthropic", Kind: KindDirect, Family: FamilyAnthropic, AuthKind: AuthAPIKey, DefaultEnvVar: "ANTHROPIC_API_KEY", SupportsModelListing: true, Runtime: RuntimeNative},
 	{ID: "openai", DisplayName: "OpenAI", Kind: KindDirect, Family: FamilyOpenAI, AuthKind: AuthAPIKey, DefaultEnvVar: "OPENAI_API_KEY", DefaultEndpoint: "https://api.openai.com/v1", SupportsModelListing: true, Runtime: RuntimeNative},
@@ -310,8 +333,8 @@ var definitions = []Definition{
 	{ID: "moonshot", DisplayName: "Moonshot AI", Kind: KindDirect, Family: FamilyOpenAI, AuthKind: AuthAPIKey, DefaultEnvVar: "MOONSHOT_API_KEY", DefaultEndpoint: "https://api.moonshot.ai/v1", SupportsModelListing: false, Runtime: RuntimeNative},
 	{ID: "cerebras", DisplayName: "Cerebras", Kind: KindDirect, Family: FamilyOpenAI, AuthKind: AuthAPIKey, DefaultEnvVar: "CEREBRAS_API_KEY", DefaultEndpoint: "https://api.cerebras.ai/v1", SupportsModelListing: true, Runtime: RuntimeNative},
 	{ID: "zai", DisplayName: "Z.ai", Kind: KindDirect, Family: FamilyOpenAI, AuthKind: AuthAPIKey, DefaultEnvVar: "ZAI_API_KEY", SupportsModelListing: false, Runtime: RuntimeNative, Aliases: []string{"z-ai"}},
-	{ID: "openai-compatible", DisplayName: "Custom OpenAI", Kind: KindCustom, Family: FamilyOpenAI, AuthKind: AuthAPIKey, DefaultEnvVar: "OPENAI_COMPATIBLE_API_KEY", SupportsModelListing: true, SupportsCustomEndpoint: true, Runtime: RuntimeNative},
-	{ID: "local-openai", DisplayName: "Local OpenAI", Kind: KindLocal, Family: FamilyOpenAI, AuthKind: AuthLocal, DefaultEndpoint: "http://127.0.0.1:1234/v1", SupportsModelListing: true, SupportsCustomEndpoint: true, Runtime: RuntimeNative},
+	{ID: "openai-compatible", DisplayName: "Custom", Kind: KindCustom, Family: FamilyOpenAI, AuthKind: AuthAPIKey, DefaultEnvVar: "OPENAI_COMPATIBLE_API_KEY", SupportsModelListing: true, SupportsCustomEndpoint: true, Runtime: RuntimeNative},
+	{ID: "local-openai", DisplayName: "Custom", Kind: KindCustom, Family: FamilyOpenAI, AuthKind: AuthLocal, DefaultEndpoint: "http://127.0.0.1:1234/v1", SupportsModelListing: true, SupportsCustomEndpoint: true, Runtime: RuntimeNative},
 	{ID: "claude-pro", DisplayName: "Claude Code", Kind: KindSubscription, Family: FamilyACP, AuthKind: AuthACP, Runtime: RuntimeACP, ACPCommand: "claude --acp"},
 	{ID: "gemini-advanced", DisplayName: "Gemini CLI", Kind: KindSubscription, Family: FamilyACP, AuthKind: AuthACP, Runtime: RuntimeACP, ACPCommand: "gemini --acp"},
 	{ID: "gh-copilot", DisplayName: "GitHub Copilot", Kind: KindSubscription, Family: FamilyACP, AuthKind: AuthACP, Runtime: RuntimeACP, ACPCommand: "gh copilot --acp"},
