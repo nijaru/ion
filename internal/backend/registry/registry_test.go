@@ -32,12 +32,3 @@ func TestGetMetadataUsesInjectedFetcher(t *testing.T) {
 		t.Fatalf("unexpected metadata: %#v", meta)
 	}
 }
-
-func TestFetchModelsRejectsUnsupportedProviderWithoutCatwalkURL(t *testing.T) {
-	t.Setenv("CATWALK_URL", "")
-
-	_, err := fetchModels(context.Background(), "openai")
-	if err == nil {
-		t.Fatal("expected unsupported provider without CATWALK_URL to fail")
-	}
-}

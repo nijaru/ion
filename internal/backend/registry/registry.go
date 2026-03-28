@@ -79,8 +79,8 @@ func GetMetadata(ctx context.Context, provider, model string) (ModelMetadata, bo
 
 func fetchMetadata(ctx context.Context, provider, model string) (ModelMetadata, error) {
 	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "openrouter":
-		models, err := fetchOpenRouterModels(ctx)
+	case "anthropic", "openai", "openrouter", "gemini", "ollama":
+		models, err := ListModels(ctx, provider)
 		if err != nil {
 			return ModelMetadata{}, err
 		}
