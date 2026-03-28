@@ -153,12 +153,14 @@ func fetchModelsFromCatwalk(ctx context.Context, provider string) ([]ModelMetada
 		}
 		for _, m := range p.Models {
 			models = append(models, ModelMetadata{
-				ID:           m.ID,
-				Provider:     p.Name,
-				ContextLimit: int(m.ContextWindow),
-				InputPrice:   m.CostPer1MIn,
-				OutputPrice:  m.CostPer1MOut,
-				UpdatedAt:    time.Now().Unix(),
+				ID:               m.ID,
+				Provider:         p.Name,
+				ContextLimit:     int(m.ContextWindow),
+				InputPrice:       m.CostPer1MIn,
+				OutputPrice:      m.CostPer1MOut,
+				InputPriceKnown:  true,
+				OutputPriceKnown: true,
+				UpdatedAt:        time.Now().Unix(),
 			})
 		}
 		break
@@ -304,13 +306,17 @@ func fetchOpenRouterModels(ctx context.Context) ([]ModelMetadata, error) {
 		if contextLimit == 0 {
 			contextLimit = int(model.TopProvider.ContextLength)
 		}
+		inputPrice, inputKnown := parseMillionCost(model.Pricing.Prompt)
+		outputPrice, outputKnown := parseMillionCost(model.Pricing.Completion)
 		models = append(models, ModelMetadata{
-			ID:           model.ID,
-			Provider:     "openrouter",
-			ContextLimit: contextLimit,
-			InputPrice:   parseMillionCost(model.Pricing.Prompt),
-			OutputPrice:  parseMillionCost(model.Pricing.Completion),
-			UpdatedAt:    time.Now().Unix(),
+			ID:               model.ID,
+			Provider:         "openrouter",
+			ContextLimit:     contextLimit,
+			InputPrice:       inputPrice,
+			OutputPrice:      outputPrice,
+			InputPriceKnown:  inputKnown,
+			OutputPriceKnown: outputKnown,
+			UpdatedAt:        time.Now().Unix(),
 		})
 	}
 
@@ -422,12 +428,16 @@ func fetchOpenAICompatibleModels(ctx context.Context, provider, endpoint, token 
 	return sortModels(models), nil
 }
 
-func parseMillionCost(raw string) float64 {
+func parseMillionCost(raw string) (float64, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, false
+	}
 	value, err := strconv.ParseFloat(raw, 64)
 	if err != nil {
-		return 0
+		return 0, false
 	}
-	return value * 1_000_000
+	return value * 1_000_000, true
 }
 
 func cachedFresh(updatedAt int64) bool {

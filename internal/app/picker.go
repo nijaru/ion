@@ -71,7 +71,7 @@ func modelItemsForProvider(cfg *config.Config) ([]pickerItem, error) {
 	for _, model := range models {
 		metrics := modelMetrics(model)
 		search := pickerSearchIndex(model.ID, model.ID, "", "", metrics)
-		if model.InputPrice == 0 && model.OutputPrice == 0 {
+		if model.InputPriceKnown && model.OutputPriceKnown && model.InputPrice == 0 && model.OutputPrice == 0 {
 			search = append(search, pickerSearchField{value: "free", weight: 12})
 		}
 		items = append(items, pickerItem{
@@ -143,11 +143,19 @@ func modelMetrics(meta registry.ModelMetadata) *pickerMetrics {
 			metrics.Context = fmt.Sprintf("%d", meta.ContextLimit)
 		}
 	}
-	if meta.InputPrice > 0 {
-		metrics.Input = fmt.Sprintf("$%.2f", meta.InputPrice)
+	if meta.InputPriceKnown {
+		if meta.InputPrice == 0 {
+			metrics.Input = "Free"
+		} else {
+			metrics.Input = fmt.Sprintf("$%.2f", meta.InputPrice)
+		}
 	}
-	if meta.OutputPrice > 0 {
-		metrics.Output = fmt.Sprintf("$%.2f", meta.OutputPrice)
+	if meta.OutputPriceKnown {
+		if meta.OutputPrice == 0 {
+			metrics.Output = "Free"
+		} else {
+			metrics.Output = fmt.Sprintf("$%.2f", meta.OutputPrice)
+		}
 	}
 	if metrics.Context == "" && metrics.Input == "" && metrics.Output == "" {
 		return nil

@@ -16,13 +16,15 @@ import (
 )
 
 type ModelMetadata struct {
-	ID           string  `json:"id"`
-	Provider     string  `json:"provider"`
-	ContextLimit int     `json:"context_limit"`
-	InputPrice   float64 `json:"input_price"`  // per 1M tokens
-	OutputPrice  float64 `json:"output_price"` // per 1M tokens
-	Created      int64   `json:"created"`
-	UpdatedAt    int64   `json:"updated_at"`
+	ID               string  `json:"id"`
+	Provider         string  `json:"provider"`
+	ContextLimit     int     `json:"context_limit"`
+	InputPrice       float64 `json:"input_price"`  // per 1M tokens
+	OutputPrice      float64 `json:"output_price"` // per 1M tokens
+	InputPriceKnown  bool    `json:"input_price_known"`
+	OutputPriceKnown bool    `json:"output_price_known"`
+	Created          int64   `json:"created"`
+	UpdatedAt        int64   `json:"updated_at"`
 }
 
 var (
@@ -112,12 +114,14 @@ func fetchFromCatwalk(ctx context.Context, provider, model string) (ModelMetadat
 				// Try to match model by ID or Name
 				if strings.EqualFold(m.ID, model) || strings.EqualFold(m.Name, model) {
 					return ModelMetadata{
-						ID:           m.ID,
-						Provider:     p.Name,
-						ContextLimit: int(m.ContextWindow),
-						InputPrice:   m.CostPer1MIn,
-						OutputPrice:  m.CostPer1MOut,
-						UpdatedAt:    time.Now().Unix(),
+						ID:               m.ID,
+						Provider:         p.Name,
+						ContextLimit:     int(m.ContextWindow),
+						InputPrice:       m.CostPer1MIn,
+						OutputPrice:      m.CostPer1MOut,
+						InputPriceKnown:  true,
+						OutputPriceKnown: true,
+						UpdatedAt:        time.Now().Unix(),
 					}, nil
 				}
 			}

@@ -970,9 +970,9 @@ func TestModelItemsUseInjectedModelLister(t *testing.T) {
 			t.Fatalf("provider = %q, want openrouter", cfg.Provider)
 		}
 		return []registry.ModelMetadata{
-			{ID: "z-ai/glm-4.5", Created: time.Date(2025, 2, 1, 0, 0, 0, 0, time.UTC).Unix(), ContextLimit: 64000, InputPrice: 1.23, OutputPrice: 4.56},
-			{ID: "openai/gpt-4.1", Created: time.Date(2025, 4, 1, 0, 0, 0, 0, time.UTC).Unix(), ContextLimit: 128000, InputPrice: 0.1, OutputPrice: 0.2},
-			{ID: "z-ai/glm-5", Created: time.Date(2025, 5, 1, 0, 0, 0, 0, time.UTC).Unix(), ContextLimit: 128000, InputPrice: 0.2, OutputPrice: 0.4},
+			{ID: "z-ai/glm-4.5", Created: time.Date(2025, 2, 1, 0, 0, 0, 0, time.UTC).Unix(), ContextLimit: 64000, InputPrice: 1.23, OutputPrice: 4.56, InputPriceKnown: true, OutputPriceKnown: true},
+			{ID: "openai/gpt-4.1", Created: time.Date(2025, 4, 1, 0, 0, 0, 0, time.UTC).Unix(), ContextLimit: 128000, InputPrice: 0.1, OutputPrice: 0.2, InputPriceKnown: true, OutputPriceKnown: true},
+			{ID: "z-ai/glm-5", Created: time.Date(2025, 5, 1, 0, 0, 0, 0, time.UTC).Unix(), ContextLimit: 128000, InputPrice: 0.2, OutputPrice: 0.4, InputPriceKnown: true, OutputPriceKnown: true},
 		}, nil
 	}
 	defer func() { listModelsForConfig = oldListModelsForConfig }()
@@ -1001,8 +1001,9 @@ func TestModelItemsTreatZeroPricesAsFreeSearchTerm(t *testing.T) {
 	oldListModelsForConfig := listModelsForConfig
 	listModelsForConfig = func(ctx context.Context, cfg *config.Config) ([]registry.ModelMetadata, error) {
 		return []registry.ModelMetadata{
-			{ID: "vendor/model-free", ContextLimit: 128000, InputPrice: 0, OutputPrice: 0},
-			{ID: "vendor/model-paid", ContextLimit: 128000, InputPrice: 0.1, OutputPrice: 0.2},
+			{ID: "vendor/model-free", ContextLimit: 128000, InputPrice: 0, OutputPrice: 0, InputPriceKnown: true, OutputPriceKnown: true},
+			{ID: "vendor/model-paid", ContextLimit: 128000, InputPrice: 0.1, OutputPrice: 0.2, InputPriceKnown: true, OutputPriceKnown: true},
+			{ID: "vendor/model-unknown", ContextLimit: 128000},
 		}, nil
 	}
 	defer func() { listModelsForConfig = oldListModelsForConfig }()
@@ -1022,6 +1023,32 @@ func TestModelItemsTreatZeroPricesAsFreeSearchTerm(t *testing.T) {
 	}
 	if slices.Contains(got, "vendor/model-paid") {
 		t.Fatalf("did not expect paid model to match free query, got %v", got)
+	}
+	if slices.Contains(got, "vendor/model-unknown") {
+		t.Fatalf("did not expect unknown-priced model to match free query, got %v", got)
+	}
+}
+
+func TestModelMetricsRenderFreeAndUnknownDistinctly(t *testing.T) {
+	free := modelMetrics(registry.ModelMetadata{
+		ContextLimit:     128000,
+		InputPrice:       0,
+		OutputPrice:      0,
+		InputPriceKnown:  true,
+		OutputPriceKnown: true,
+	})
+	if free == nil || free.Input != "Free" || free.Output != "Free" {
+		t.Fatalf("expected free metrics, got %#v", free)
+	}
+
+	unknown := modelMetrics(registry.ModelMetadata{
+		ContextLimit: 128000,
+	})
+	if unknown == nil {
+		t.Fatal("expected context-only metrics")
+	}
+	if unknown.Input != "" || unknown.Output != "" {
+		t.Fatalf("expected unknown pricing to stay blank, got %#v", unknown)
 	}
 }
 
