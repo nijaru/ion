@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"charm.land/catwalk/pkg/catwalk"
 	"github.com/nijaru/canto/agent"
@@ -168,7 +169,7 @@ func (b *Backend) Open(ctx context.Context) error {
 		cwd, _ = os.Getwd()
 	}
 
-	instructions, err := backend.BuildInstructions(baseInstructions(), cwd)
+	instructions, err := backend.BuildInstructions(buildInstructions(cwd, time.Now()), cwd)
 	if err != nil {
 		return err
 	}
