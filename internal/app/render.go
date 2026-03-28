@@ -140,10 +140,10 @@ func (m Model) renderPicker() string {
 	b.WriteString(m.st.cyan.PaddingLeft(2).Render(m.picker.title))
 	b.WriteString("\n")
 	if m.picker.query != "" {
-		b.WriteString(m.st.dim.PaddingLeft(2).Render("search: " + m.picker.query))
+		b.WriteString(m.st.dim.PaddingLeft(2).Render("Search: " + m.picker.query))
 		b.WriteString("\n")
 	}
-	b.WriteString(m.st.dim.PaddingLeft(2).Render("type to search • ↑/↓ navigate • enter select • esc cancel"))
+	b.WriteString(m.st.dim.PaddingLeft(2).Render("Type to search • ↑/↓ navigate • Enter select • Esc cancel"))
 	b.WriteString("\n")
 	if len(items) == 0 {
 		b.WriteString(m.st.dim.PaddingLeft(2).Render("No matching items"))

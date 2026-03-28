@@ -118,7 +118,7 @@ func (m Model) renderSessionPicker() string {
 		b.WriteString(m.st.dim.PaddingLeft(2).Render("workspace: " + filepath.Base(m.workdir)))
 		b.WriteString("\n")
 	}
-	b.WriteString(m.st.dim.PaddingLeft(2).Render("search: " + m.sessionPicker.query))
+	b.WriteString(m.st.dim.PaddingLeft(2).Render("Search: " + m.sessionPicker.query))
 	b.WriteString("\n")
 	if m.sessionPicker.err != "" {
 		b.WriteString(m.st.warn.PaddingLeft(2).Render(m.sessionPicker.err))
@@ -167,7 +167,7 @@ func (m Model) renderSessionPicker() string {
 		b.WriteString(m.st.dim.PaddingLeft(2).Render("..."))
 		b.WriteString("\n")
 	}
-	b.WriteString(m.st.dim.PaddingLeft(2).Render("type to search • enter select • esc cancel"))
+	b.WriteString(m.st.dim.PaddingLeft(2).Render("Type to search • Enter select • Esc cancel"))
 	b.WriteString("\n")
 	return b.String()
 }

@@ -92,6 +92,7 @@ type pickerItem struct {
 	Group   string
 	Tone    pickerTone
 	Metrics *pickerMetrics
+	Search  []pickerSearchField
 }
 
 type pickerMetrics struct {

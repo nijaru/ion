@@ -64,6 +64,7 @@ func modelItemsForProvider(provider string) ([]pickerItem, error) {
 			Label:   model.ID,
 			Value:   model.ID,
 			Metrics: metrics,
+			Search:  pickerSearchIndex(model.ID, model.ID, "", "", metrics),
 		})
 	}
 
@@ -80,6 +81,7 @@ func providerItem(label, value string) pickerItem {
 		Value:  value,
 		Detail: detail,
 		Tone:   tone,
+		Search: pickerSearchIndex(label, value, detail, "", nil),
 	}
 }
 
@@ -198,7 +200,7 @@ func pickerWindow(title string, items []pickerItem, selected int) string {
 		b.WriteString(line)
 		b.WriteString("\n")
 	}
-	b.WriteString("esc cancel • enter select")
+	b.WriteString("Esc cancel • Enter select")
 	return b.String()
 }
 
@@ -276,17 +278,20 @@ func rankedPickerItems(items []pickerItem, query string) []pickerItem {
 }
 
 func pickerSearchFields(item pickerItem) []pickerSearchField {
+	if len(item.Search) > 0 {
+		return item.Search
+	}
 	fields := []pickerSearchField{
-		{value: item.Label, weight: 0},
-		{value: item.Value, weight: 5},
-		{value: item.Detail, weight: 10},
-		{value: item.Group, weight: 20},
+		{value: normalizeSearchQuery(item.Label), weight: 0},
+		{value: normalizeSearchQuery(item.Value), weight: 5},
+		{value: normalizeSearchQuery(item.Detail), weight: 10},
+		{value: normalizeSearchQuery(item.Group), weight: 20},
 	}
 	if item.Metrics != nil {
 		fields = append(fields,
-			pickerSearchField{value: item.Metrics.Context, weight: 30},
-			pickerSearchField{value: item.Metrics.Input, weight: 31},
-			pickerSearchField{value: item.Metrics.Output, weight: 32},
+			pickerSearchField{value: normalizeSearchQuery(item.Metrics.Context), weight: 30},
+			pickerSearchField{value: normalizeSearchQuery(item.Metrics.Input), weight: 31},
+			pickerSearchField{value: normalizeSearchQuery(item.Metrics.Output), weight: 32},
 		)
 	}
 	return fields
@@ -315,28 +320,43 @@ func pickerSearchScore(query string, fields ...pickerSearchField) (int, bool) {
 }
 
 func searchFieldScore(query, candidate string) (int, bool) {
-	q := normalizeSearchQuery(query)
-	c := normalizeSearchQuery(candidate)
-	if q == "" {
+	if query == "" {
 		return 0, true
 	}
-	if c == "" {
+	if candidate == "" {
 		return 0, false
 	}
 	switch {
-	case c == q:
+	case candidate == query:
 		return 0, true
-	case strings.HasPrefix(c, q):
-		return 100 + len(c) - len(q), true
-	case strings.Contains(c, q):
-		idx := strings.Index(c, q)
-		return 200 + idx*2 + len(c) - len(q), true
+	case strings.HasPrefix(candidate, query):
+		return 100 + len(candidate) - len(query), true
+	case strings.Contains(candidate, query):
+		idx := strings.Index(candidate, query)
+		return 200 + idx*2 + len(candidate) - len(query), true
 	default:
-		if score, ok := subsequenceScore(q, c); ok {
+		if score, ok := subsequenceScore(query, candidate); ok {
 			return 300 + score, true
 		}
 		return 0, false
 	}
+}
+
+func pickerSearchIndex(label, value, detail, group string, metrics *pickerMetrics) []pickerSearchField {
+	fields := []pickerSearchField{
+		{value: normalizeSearchQuery(label), weight: 0},
+		{value: normalizeSearchQuery(value), weight: 5},
+		{value: normalizeSearchQuery(detail), weight: 10},
+		{value: normalizeSearchQuery(group), weight: 20},
+	}
+	if metrics != nil {
+		fields = append(fields,
+			pickerSearchField{value: normalizeSearchQuery(metrics.Context), weight: 30},
+			pickerSearchField{value: normalizeSearchQuery(metrics.Input), weight: 31},
+			pickerSearchField{value: normalizeSearchQuery(metrics.Output), weight: 32},
+		)
+	}
+	return fields
 }
 
 func subsequenceScore(query, candidate string) (int, bool) {
