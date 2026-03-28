@@ -405,12 +405,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.lastToolUseID = ""
 		m.historyIdx = -1
 		m.historyDraft = ""
-		cmds := []tea.Cmd{m.awaitSessionEvent()}
+		cmds := make([]tea.Cmd, 0, 5)
 		if len(msg.printLines) > 0 {
-			cmds = append([]tea.Cmd{printLinesCmd(msg.printLines...)}, cmds...)
+			cmds = append(cmds, printLinesCmd(msg.printLines...))
 		}
 		if len(msg.replayEntries) > 0 {
-			cmds = append([]tea.Cmd{m.printEntries(msg.replayEntries...)}, cmds...)
+			cmds = append(cmds, m.printEntries(msg.replayEntries...))
 		}
 		if strings.TrimSpace(msg.notice) != "" {
 			cmds = append(cmds, m.printEntries(session.Entry{Role: session.System, Content: msg.notice}))
@@ -418,6 +418,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.showStatus && strings.TrimSpace(msg.status) != "" && !isConfigurationStatus(msg.status) {
 			cmds = append(cmds, m.printEntries(session.Entry{Role: session.System, Content: msg.status}))
 		}
+		cmds = append(cmds, m.awaitSessionEvent())
 		return m, tea.Sequence(cmds...)
 
 	case sessionCompactedMsg:

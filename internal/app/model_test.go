@@ -1544,6 +1544,19 @@ func TestAgentEntryRendersMarkdown(t *testing.T) {
 	}
 }
 
+func TestAgentEntryDoesNotIndentPlainContinuationLines(t *testing.T) {
+	model := readyModel(t)
+
+	rendered := ansi.Strip(model.renderEntry(session.Entry{
+		Role:    session.Agent,
+		Content: "First line\nSecond line",
+	}))
+
+	if strings.Contains(rendered, "\n  Second line") {
+		t.Fatalf("agent continuation line should not be indented, got %q", rendered)
+	}
+}
+
 func TestSessionPickerScopesToWorkspace(t *testing.T) {
 	tmpRoot := filepath.Join(t.TempDir(), ".ion")
 	store, err := storage.NewCantoStore(tmpRoot)
