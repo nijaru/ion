@@ -203,7 +203,7 @@ func printStartup(out *os.File, startupLines []string, workspaceLine string, ent
 	}
 	if strings.TrimSpace(status) != "" && !isConfigurationStatus(status) {
 		lines = append(lines, "")
-		lines = append(lines, status)
+		lines = append(lines, renderStartupEntry(session.Entry{Role: session.System, Content: status}))
 	}
 	if len(entries) > 0 {
 		lines = append(lines, "")
