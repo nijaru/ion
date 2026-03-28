@@ -161,7 +161,7 @@ func (m Model) renderPicker() string {
 		b.WriteString("\n")
 	}
 	labelWidth := 0
-	for _, item := range items[start:end] {
+	for _, item := range items {
 		labelWidth = max(labelWidth, lipgloss.Width(item.Label))
 	}
 	if pickerHasMetrics(items) {
@@ -283,11 +283,7 @@ func pickerHasMetrics(items []pickerItem) bool {
 func (m Model) renderPickerDetail(detail string, tone pickerTone) string {
 	switch tone {
 	case pickerToneWarn:
-		prefix, suffix, ok := strings.Cut(detail, " • ")
-		if !ok {
-			return m.st.warn.Render(detail)
-		}
-		return m.st.warn.Render(prefix) + " " + m.st.dim.Render("• "+suffix)
+		return m.st.warn.Render(detail)
 	default:
 		return m.st.dim.Render(detail)
 	}

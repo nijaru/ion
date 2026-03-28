@@ -592,9 +592,8 @@ func TestProviderItemsSortSetAPIsThenLocalThenUnset(t *testing.T) {
 	want := []string{
 		"Gemini",
 		"OpenRouter",
-		"Local OpenAI-Compatible",
+		"Local OpenAI",
 		"Ollama",
-		"Custom OpenAI-Compatible",
 		"Anthropic",
 		"Cerebras",
 		"DeepSeek",
@@ -913,9 +912,9 @@ func TestProviderItemsShowConfiguredStatus(t *testing.T) {
 	items := providerItems(&config.Config{})
 
 	for label, wantDetail := range map[string]string{
-		"Anthropic":  "Missing • set ANTHROPIC_API_KEY",
+		"Anthropic":  "Set ANTHROPIC_API_KEY",
 		"OpenRouter": "Ready",
-		"Ollama":     "Local",
+		"Ollama":     "Ready",
 	} {
 		found := false
 		for _, item := range items {
@@ -969,11 +968,11 @@ func TestPickerFilteringMatchesTypedQuery(t *testing.T) {
 	model.picker = &pickerState{
 		title: "Pick a provider",
 		items: []pickerItem{
-			{Label: "Anthropic", Value: "anthropic", Detail: "Missing • set ANTHROPIC_API_KEY"},
+			{Label: "Anthropic", Value: "anthropic", Detail: "Set ANTHROPIC_API_KEY"},
 			{Label: "OpenRouter", Value: "openrouter", Detail: "Ready"},
 		},
 		filtered: []pickerItem{
-			{Label: "Anthropic", Value: "anthropic", Detail: "Missing • set ANTHROPIC_API_KEY"},
+			{Label: "Anthropic", Value: "anthropic", Detail: "Set ANTHROPIC_API_KEY"},
 			{Label: "OpenRouter", Value: "openrouter", Detail: "Ready"},
 		},
 		purpose: pickerPurposeProvider,
@@ -1119,11 +1118,11 @@ func TestPickerFilteringAcceptsSpaceInput(t *testing.T) {
 	model.picker = &pickerState{
 		title: "Pick a provider",
 		items: []pickerItem{
-			{Label: "alpha", Value: "alpha", Detail: "Missing • set ALPHA_API_KEY"},
+			{Label: "alpha", Value: "alpha", Detail: "Set ALPHA_API_KEY"},
 			{Label: "beta", Value: "beta", Detail: "Ready"},
 		},
 		filtered: []pickerItem{
-			{Label: "alpha", Value: "alpha", Detail: "Missing • set ALPHA_API_KEY"},
+			{Label: "alpha", Value: "alpha", Detail: "Set ALPHA_API_KEY"},
 			{Label: "beta", Value: "beta", Detail: "Ready"},
 		},
 		purpose: pickerPurposeProvider,
@@ -1597,13 +1596,76 @@ func TestProgressLineHidesBootstrapConnectedStatus(t *testing.T) {
 
 func TestProviderItemsUseCatalogGroups(t *testing.T) {
 	items := providerItems(&config.Config{})
-	if len(items) < 10 {
+	if len(items) < 9 {
 		t.Fatalf("provider items = %d, want broad catalog", len(items))
 	}
 	for _, item := range items {
 		if item.Group == "" {
 			t.Fatalf("provider %q should have a picker group", item.Label)
 		}
+	}
+}
+
+func TestProviderItemsHideCustomEndpointByDefault(t *testing.T) {
+	items := providerItems(&config.Config{})
+	for _, item := range items {
+		if item.Value == "openai-compatible" {
+			t.Fatalf("custom endpoint entry should be hidden by default")
+		}
+	}
+
+	items = providerItems(&config.Config{Provider: "openai-compatible", Endpoint: "https://example.com/v1"})
+	found := false
+	for _, item := range items {
+		if item.Value == "openai-compatible" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("custom endpoint entry should be shown when configured")
+	}
+}
+
+func TestRenderPickerKeepsDetailColumnStableAcrossScroll(t *testing.T) {
+	model := readyModel(t)
+	model.picker = &pickerState{
+		title: "Pick a provider",
+		items: []pickerItem{
+			{Label: "Much Longer Provider Name", Value: "long", Detail: "Ready", Group: "Direct APIs"},
+			{Label: "OpenAI", Value: "openai", Detail: "Ready", Group: "Direct APIs"},
+			{Label: "Groq", Value: "groq", Detail: "Ready", Group: "Direct APIs"},
+			{Label: "xAI", Value: "xai", Detail: "Ready", Group: "Direct APIs"},
+			{Label: "Z.ai", Value: "zai", Detail: "Ready", Group: "Direct APIs"},
+			{Label: "Ollama", Value: "ollama", Detail: "Ready", Group: "Local"},
+			{Label: "Local OpenAI", Value: "local-openai", Detail: "Ready", Group: "Local"},
+			{Label: "Custom OpenAI", Value: "openai-compatible", Detail: "Set endpoint", Group: "Custom Endpoints"},
+			{Label: "Anthropic", Value: "anthropic", Detail: "Set ANTHROPIC_API_KEY", Group: "Direct APIs"},
+		},
+	}
+	model.picker.filtered = append([]pickerItem(nil), model.picker.items...)
+
+	model.picker.index = 0
+	top := ansi.Strip(model.renderPicker())
+	model.picker.index = len(model.picker.items) - 1
+	bottom := ansi.Strip(model.renderPicker())
+
+	findSeparatorColumn := func(rendered, linePrefix string) int {
+		for _, line := range strings.Split(rendered, "\n") {
+			if strings.Contains(line, linePrefix) {
+				return strings.Index(line, " • ")
+			}
+		}
+		return -1
+	}
+
+	topCol := findSeparatorColumn(top, "› Much Longer Provider Name")
+	bottomCol := findSeparatorColumn(bottom, "› Anthropic")
+	if topCol <= 0 || bottomCol <= 0 {
+		t.Fatalf("failed to find detail separator columns in picker render\nTOP:\n%s\nBOTTOM:\n%s", top, bottom)
+	}
+	if topCol != bottomCol {
+		t.Fatalf("detail column shifted across scroll: top=%d bottom=%d\nTOP:\n%s\nBOTTOM:\n%s", topCol, bottomCol, top, bottom)
 	}
 }
 

@@ -132,7 +132,7 @@ func TestResolveStartupConfig(t *testing.T) {
 	t.Run("custom endpoint provider requires endpoint", func(t *testing.T) {
 		cfg := &config.Config{Provider: "openai-compatible", Model: "test-model"}
 		err := resolveStartupConfig(cfg)
-		if err == nil || err.Error() != "Custom OpenAI-Compatible requires endpoint configuration" {
+		if err == nil || err.Error() != "Custom OpenAI requires endpoint configuration" {
 			t.Fatalf("resolveStartupConfig error = %v", err)
 		}
 	})

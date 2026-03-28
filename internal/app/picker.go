@@ -18,6 +18,9 @@ var listModelsForConfig = registry.ListModelsForConfig
 func providerItems(cfg *config.Config) []pickerItem {
 	items := make([]pickerItem, 0, len(providers.Native()))
 	for _, def := range providers.Native() {
+		if !providers.ShowInPicker(cfg, def) {
+			continue
+		}
 		items = append(items, buildProviderItem(cfg, def))
 	}
 	slices.SortFunc(items, func(a, b pickerItem) int {
