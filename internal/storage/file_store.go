@@ -354,7 +354,7 @@ func (s *fileSession) Append(ctx context.Context, event any) error {
 	case User:
 		preview = e.Content
 		touchIndex = true
-	case Assistant:
+	case Agent:
 		for _, b := range e.Content {
 			if b.Type == "text" && b.Text != nil {
 				preview = *b.Text
@@ -400,8 +400,8 @@ func (s *fileSession) Entries(ctx context.Context) ([]session.Entry, error) {
 			var e User
 			json.Unmarshal(line, &e)
 			entries = append(entries, session.Entry{Role: session.User, Content: e.Content})
-		case "assistant":
-			var e Assistant
+		case "agent":
+			var e Agent
 			json.Unmarshal(line, &e)
 			var content strings.Builder
 			for _, b := range e.Content {
@@ -409,7 +409,7 @@ func (s *fileSession) Entries(ctx context.Context) ([]session.Entry, error) {
 					content.WriteString(*b.Text)
 				}
 			}
-			entries = append(entries, session.Entry{Role: session.Assistant, Content: content.String()})
+			entries = append(entries, session.Entry{Role: session.Agent, Content: content.String()})
 		case "tool_use":
 			var e ToolUse
 			json.Unmarshal(line, &e)

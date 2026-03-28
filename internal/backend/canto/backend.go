@@ -106,14 +106,7 @@ func (b *Backend) Bootstrap() backend.Bootstrap {
 		if s, err := b.sess.LastStatus(context.Background()); err == nil && s != "" {
 			status = s
 		} else {
-			// New session
-			provider := b.Provider()
-			switch {
-			case provider != "":
-				status = fmt.Sprintf("Connected to %s via Canto", provider)
-			default:
-				status = "Connected to Canto"
-			}
+			status = "Connected via Canto"
 		}
 	}
 	return backend.Bootstrap{
@@ -173,7 +166,7 @@ func (b *Backend) Open(ctx context.Context) error {
 		cwd, _ = os.Getwd()
 	}
 
-	baseInstructions := "You are ion, an elite AI coding assistant built on the Canto framework.\n\n" +
+	baseInstructions := "You are ion, an elite AI coding agent built on the Canto framework.\n\n" +
 		"CORE PRINCIPLES:\n" +
 		"1. Be concise, professional, and thorough.\n" +
 		"2. Explore before acting. Use 'list', 'read', and 'glob' to understand the codebase context.\n" +
@@ -404,7 +397,7 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 				b.events <- ionsession.ThinkingDelta{Delta: chunk.Reasoning}
 			}
 			if chunk.Content != "" {
-				b.events <- ionsession.AssistantDelta{Delta: chunk.Content}
+				b.events <- ionsession.AgentDelta{Delta: chunk.Content}
 			}
 			if chunk.Usage != nil {
 				b.events <- ionsession.TokenUsage{
@@ -438,7 +431,7 @@ func (b *Backend) translateEvents(ctx context.Context, evCh <-chan session.Event
 				b.events <- ionsession.StatusChanged{Status: "Thinking..."}
 			case session.TurnCompleted:
 				b.events <- ionsession.TurnFinished{}
-				b.events <- ionsession.AssistantMessage{Message: ""} // Commit
+				b.events <- ionsession.AgentMessage{Message: ""} // Commit
 				b.events <- ionsession.StatusChanged{Status: "Ready"}
 			case session.ToolStarted:
 				var data struct {

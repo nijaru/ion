@@ -38,15 +38,15 @@ type PlanUpdated struct {
 
 func (e PlanUpdated) isEvent() {}
 
-// AssistantDelta is an incremental chunk of assistant output text.
-type AssistantDelta struct {
+// AgentDelta is an incremental chunk of agent output text.
+type AgentDelta struct {
 	Base
 	Delta string `json:"delta"`
 }
 
-func (e AssistantDelta) isEvent() {}
+func (e AgentDelta) isEvent() {}
 
-// ThinkingDelta is an incremental chunk of assistant reasoning/thinking text.
+// ThinkingDelta is an incremental chunk of agent reasoning/thinking text.
 type ThinkingDelta struct {
 	Base
 	Delta string `json:"delta"`
@@ -54,13 +54,13 @@ type ThinkingDelta struct {
 
 func (e ThinkingDelta) isEvent() {}
 
-// AssistantMessage fires when a complete assistant message is committed.
-type AssistantMessage struct {
+// AgentMessage fires when a complete agent message is committed.
+type AgentMessage struct {
 	Base
 	Message string `json:"message"`
 }
 
-func (e AssistantMessage) isEvent() {}
+func (e AgentMessage) isEvent() {}
 
 // ToolCallStarted fires when the agent starts executing a tool.
 type ToolCallStarted struct {
@@ -153,7 +153,7 @@ type ChildStarted struct {
 
 func (e ChildStarted) isEvent() {}
 
-// ChildDelta is an incremental chunk of child assistant output.
+// ChildDelta is an incremental chunk of child subagent output.
 type ChildDelta struct {
 	Base
 	AgentName string `json:"agent_name"`

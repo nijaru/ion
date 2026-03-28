@@ -63,10 +63,10 @@ func TestLiveSmokeTurnAndToolCall(t *testing.T) {
 	})
 
 	var (
-		seenTurnStarted   bool
-		seenToolCall      bool
-		seenAssistantText bool
-		seenTurnFinished  bool
+		seenTurnStarted  bool
+		seenToolCall     bool
+		seenAgentText    bool
+		seenTurnFinished bool
 	)
 
 	if err := agent.SubmitTurn(ctx, prompt); err != nil {
@@ -96,14 +96,14 @@ loop:
 			case session.ToolCallStarted:
 				t.Logf("tool call started: %s args=%s", msg.ToolName, msg.Args)
 				seenToolCall = true
-			case session.AssistantDelta:
+			case session.AgentDelta:
 				if strings.TrimSpace(msg.Delta) != "" {
-					t.Logf("assistant delta: %q", msg.Delta)
-					seenAssistantText = true
+					t.Logf("agent delta: %q", msg.Delta)
+					seenAgentText = true
 				}
-			case session.AssistantMessage:
-				t.Logf("assistant message committed")
-				seenAssistantText = true
+			case session.AgentMessage:
+				t.Logf("agent message committed")
+				seenAgentText = true
 			case session.Error:
 				t.Fatalf("live smoke session error: %v", msg.Err)
 			case session.TurnFinished:
@@ -124,8 +124,8 @@ loop:
 	if !seenToolCall {
 		t.Fatal("expected at least one tool call during live smoke")
 	}
-	if !seenAssistantText {
-		t.Fatal("expected streamed assistant text during live smoke")
+	if !seenAgentText {
+		t.Fatal("expected streamed agent text during live smoke")
 	}
 	if !seenTurnFinished {
 		t.Fatal("expected TurnFinished event")
@@ -147,21 +147,21 @@ loop:
 	}
 
 	foundUser := false
-	foundAssistant := false
+	foundAgent := false
 	for _, entry := range entries {
 		if entry.Role == session.User && entry.Content == prompt {
 			foundUser = true
 		}
-		if entry.Role == session.Assistant && strings.TrimSpace(entry.Content) != "" {
-			foundAssistant = true
+		if entry.Role == session.Agent && strings.TrimSpace(entry.Content) != "" {
+			foundAgent = true
 		}
 	}
 
 	if !foundUser {
 		t.Fatalf("user prompt %q not found in persisted session", prompt)
 	}
-	if !foundAssistant {
-		t.Fatal("assistant response not found in persisted session")
+	if !foundAgent {
+		t.Fatal("agent response not found in persisted session")
 	}
 
 	resumedCfg := &config.Config{Provider: provider, Model: modelName}
@@ -216,12 +216,12 @@ loop:
 		}
 	})
 
-	assistantText, sawTool := runSmokeTurn(ctx, t, switchedBackend.Session(), switchPrompt, false)
+	agentText, sawTool := runSmokeTurn(ctx, t, switchedBackend.Session(), switchPrompt, false)
 	if sawTool {
 		t.Fatal("swap phase should not require a tool call")
 	}
-	if !strings.Contains(strings.ToLower(assistantText), "continued") {
-		t.Fatalf("swap assistant text = %q, want continuation acknowledgment", assistantText)
+	if !strings.Contains(strings.ToLower(agentText), "continued") {
+		t.Fatalf("swap agent text = %q, want continuation acknowledgment", agentText)
 	}
 
 	switchedEntries, err := switchedSess.Entries(ctx)
@@ -273,11 +273,11 @@ func runSmokeTurn(ctx context.Context, t *testing.T, agent session.AgentSession,
 	t.Helper()
 
 	var (
-		seenTurnStarted   bool
-		seenToolCall      bool
-		seenAssistantText bool
-		seenTurnFinished  bool
-		assistantText     strings.Builder
+		seenTurnStarted  bool
+		seenToolCall     bool
+		seenAgentText    bool
+		seenTurnFinished bool
+		agentText        strings.Builder
 	)
 
 	if err := agent.SubmitTurn(ctx, prompt); err != nil {
@@ -306,18 +306,18 @@ func runSmokeTurn(ctx context.Context, t *testing.T, agent session.AgentSession,
 			case session.ToolCallStarted:
 				t.Logf("tool call started: %s args=%s", msg.ToolName, msg.Args)
 				seenToolCall = true
-			case session.AssistantDelta:
+			case session.AgentDelta:
 				if strings.TrimSpace(msg.Delta) != "" {
-					t.Logf("assistant delta: %q", msg.Delta)
-					seenAssistantText = true
-					assistantText.WriteString(msg.Delta)
+					t.Logf("agent delta: %q", msg.Delta)
+					seenAgentText = true
+					agentText.WriteString(msg.Delta)
 				}
-			case session.AssistantMessage:
-				t.Logf("assistant message committed")
-				seenAssistantText = true
+			case session.AgentMessage:
+				t.Logf("agent message committed")
+				seenAgentText = true
 				if msg.Message != "" {
-					assistantText.Reset()
-					assistantText.WriteString(msg.Message)
+					agentText.Reset()
+					agentText.WriteString(msg.Message)
 				}
 			case session.Error:
 				t.Fatalf("live smoke session error: %v", msg.Err)
@@ -332,10 +332,10 @@ func runSmokeTurn(ctx context.Context, t *testing.T, agent session.AgentSession,
 				if requireTool && !seenToolCall {
 					t.Fatal("expected at least one tool call during live smoke")
 				}
-				if !seenAssistantText {
-					t.Fatal("expected streamed assistant text during live smoke")
+				if !seenAgentText {
+					t.Fatal("expected streamed agent text during live smoke")
 				}
-				return assistantText.String(), seenToolCall
+				return agentText.String(), seenToolCall
 			}
 		case <-deadline.C:
 			t.Fatal("timed out waiting for live smoke turn to finish")

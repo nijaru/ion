@@ -209,14 +209,14 @@ func TestModelStreamsAndCommitsPendingEntry(t *testing.T) {
 
 	updated, _ := model.Update(session.TurnStarted{})
 	model = updated.(Model)
-	updated, _ = model.Update(session.AssistantDelta{Delta: "streamed reply"})
+	updated, _ = model.Update(session.AgentDelta{Delta: "streamed reply"})
 	model = updated.(Model)
 
 	if model.pending == nil || model.pending.Content != "streamed reply" {
-		t.Fatalf("expected pending streamed assistant entry, got %#v", model.pending)
+		t.Fatalf("expected pending streamed agent entry, got %#v", model.pending)
 	}
 
-	updated, cmd := model.Update(session.AssistantMessage{})
+	updated, cmd := model.Update(session.AgentMessage{})
 	model = updated.(Model)
 
 	if model.pending != nil {
@@ -1330,15 +1330,15 @@ func TestRuntimeSwitchShowsStatusOnResume(t *testing.T) {
 		backend:       stubBackend{sess: &stubSession{events: make(chan session.Event)}},
 		session:       &stubSession{events: make(chan session.Event)},
 		storage:       &stubStorageSession{id: "session-1", branch: "main"},
-		printLines:    []string{"--- resumed ---", "ion v0.0.0 • native • openai", "~/tmp/test • main"},
+		printLines:    []string{"--- resumed ---", "ion v0.0.0 • native", "~/tmp/test • main"},
 		replayEntries: []session.Entry{{Role: session.User, Content: "hello"}},
-		status:        "Connected to openai via Canto",
+		status:        "Connected via Canto",
 		notice:        "Resumed session session-1",
 		showStatus:    true,
 	})
 	model = updated.(Model)
 
-	if model.status != "Connected to openai via Canto" {
+	if model.status != "Connected via Canto" {
 		t.Fatalf("status = %q", model.status)
 	}
 	if cmd == nil {
@@ -1401,7 +1401,7 @@ func TestStartupPrintLinesIncludesReplayHistory(t *testing.T) {
 	model.status = "ready"
 	model.startupEntries = []session.Entry{
 		{Role: session.User, Content: "hello"},
-		{Role: session.Assistant, Content: "world"},
+		{Role: session.Agent, Content: "world"},
 	}
 
 	lines := model.startupPrintLines()
@@ -1412,7 +1412,7 @@ func TestStartupPrintLinesIncludesReplayHistory(t *testing.T) {
 		"",
 		model.renderStartupStatus("ready"),
 		model.renderEntry(session.Entry{Role: session.User, Content: "hello"}),
-		model.renderEntry(session.Entry{Role: session.Assistant, Content: "world"}),
+		model.renderEntry(session.Entry{Role: session.Agent, Content: "world"}),
 	}
 
 	if len(lines) != len(want) {
@@ -1477,12 +1477,12 @@ func TestTextareaStylesDoNotHighlightCursorLine(t *testing.T) {
 	}
 }
 
-func TestAssistantEntryRendersMarkdown(t *testing.T) {
+func TestAgentEntryRendersMarkdown(t *testing.T) {
 	model := readyModel(t)
 	model.width = 80
 
 	rendered := ansi.Strip(model.renderEntry(session.Entry{
-		Role:    session.Assistant,
+		Role:    session.Agent,
 		Content: "# Heading\n\n- first item\n- second item\n\n| Name | Value |\n|------|-------|\n| foo  | 123   |\n\n```go\nfmt.Println(\"hi\")\n```",
 	}))
 

@@ -109,7 +109,7 @@ func TestCantoStoreEntriesMapToolMessages(t *testing.T) {
 		Content:   "hi there",
 		Reasoning: "reasoning",
 	})); err != nil {
-		t.Fatalf("append assistant: %v", err)
+		t.Fatalf("append agent: %v", err)
 	}
 	if err := cantoSess.Append(ctx, csession.NewEvent(sess.ID(), csession.MessageAdded, llm.Message{
 		Role:    llm.RoleTool,
@@ -129,8 +129,8 @@ func TestCantoStoreEntriesMapToolMessages(t *testing.T) {
 	if entries[0].Role != ionsession.User || entries[0].Content != "hello" {
 		t.Fatalf("user entry = %#v", entries[0])
 	}
-	if entries[1].Role != ionsession.Assistant || entries[1].Content != "hi there" || entries[1].Reasoning != "reasoning" {
-		t.Fatalf("assistant entry = %#v", entries[1])
+	if entries[1].Role != ionsession.Agent || entries[1].Content != "hi there" || entries[1].Reasoning != "reasoning" {
+		t.Fatalf("agent entry = %#v", entries[1])
 	}
 	if entries[2].Role != ionsession.Tool || entries[2].Title != "bash" || entries[2].Content != "tool output" {
 		t.Fatalf("tool entry = %#v", entries[2])
@@ -214,19 +214,19 @@ func TestCantoStoreEntriesUseEffectiveHistoryAfterCompaction(t *testing.T) {
 	if err := cantoSess.Append(ctx, userEvent); err != nil {
 		t.Fatalf("append user: %v", err)
 	}
-	assistantEvent := csession.NewEvent(sess.ID(), csession.MessageAdded, llm.Message{
+	agentEvent := csession.NewEvent(sess.ID(), csession.MessageAdded, llm.Message{
 		Role:    llm.RoleAssistant,
 		Content: "old answer",
 	})
-	if err := cantoSess.Append(ctx, assistantEvent); err != nil {
-		t.Fatalf("append assistant: %v", err)
+	if err := cantoSess.Append(ctx, agentEvent); err != nil {
+		t.Fatalf("append agent: %v", err)
 	}
 	recentEvent := csession.NewEvent(sess.ID(), csession.MessageAdded, llm.Message{
 		Role:    llm.RoleAssistant,
 		Content: "recent answer",
 	})
 	if err := cantoSess.Append(ctx, recentEvent); err != nil {
-		t.Fatalf("append recent assistant: %v", err)
+		t.Fatalf("append recent agent: %v", err)
 	}
 
 	snapshot := csession.CompactionSnapshot{
@@ -251,7 +251,7 @@ func TestCantoStoreEntriesUseEffectiveHistoryAfterCompaction(t *testing.T) {
 	if entries[0].Role != ionsession.System || entries[0].Content != "<conversation_summary>\nsummary\n</conversation_summary>" {
 		t.Fatalf("summary entry = %#v", entries[0])
 	}
-	if entries[1].Role != ionsession.Assistant || entries[1].Content != "recent answer" {
+	if entries[1].Role != ionsession.Agent || entries[1].Content != "recent answer" {
 		t.Fatalf("recent entry = %#v", entries[1])
 	}
 }

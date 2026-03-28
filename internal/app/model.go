@@ -153,9 +153,9 @@ type Model struct {
 	switcher runtimeSwitcher
 
 	// In-flight state — Plane B content
-	pending    *session.Entry // streaming assistant, active tool, or active agent
+	pending    *session.Entry // streaming agent, active tool, or active subagent
 	reasonBuf  string         // accumulates ThinkingDelta
-	streamBuf  string         // accumulates AssistantDelta (mirrors pending.Content)
+	streamBuf  string         // accumulates AgentDelta (mirrors pending.Content)
 	queuedTurn string
 
 	// Approval
@@ -332,13 +332,7 @@ func (m Model) runtimeHeaderLine(b backend.Backend) string {
 	if b != nil && b.Name() == "acp" {
 		runtimeLabel = "acp"
 	}
-	segments := []string{"ion " + version, runtimeLabel}
-	if b != nil {
-		if provider := strings.TrimSpace(b.Provider()); provider != "" {
-			segments = append(segments, provider)
-		}
-	}
-	return strings.Join(segments, " • ")
+	return strings.Join([]string{"ion " + version, runtimeLabel}, " • ")
 }
 
 func (m Model) Init() tea.Cmd {
@@ -451,8 +445,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		session.TurnStarted,
 		session.TurnFinished,
 		session.ThinkingDelta,
-		session.AssistantDelta,
-		session.AssistantMessage,
+		session.AgentDelta,
+		session.AgentMessage,
 		session.ToolCallStarted,
 		session.ToolOutputDelta,
 		session.ToolResult,

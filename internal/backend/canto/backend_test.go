@@ -177,7 +177,7 @@ func TestCrossProviderHandoffPreservesPromptTruth(t *testing.T) {
 		t.Fatal("second provider request missing first user turn")
 	}
 	if !requestHasMessage(req.Messages, llm.RoleAssistant, "first reply") {
-		t.Fatal("second provider request missing first assistant turn")
+		t.Fatal("second provider request missing first agent reply")
 	}
 	if !requestHasMessage(req.Messages, llm.RoleUser, "second question") {
 		t.Fatal("second provider request missing second user turn")
@@ -194,14 +194,14 @@ func TestCrossProviderHandoffPreservesPromptTruth(t *testing.T) {
 	if !entryExists(entries, ionsession.User, "first question") {
 		t.Fatal("persisted entries missing first user turn")
 	}
-	if !entryExists(entries, ionsession.Assistant, "first reply") {
-		t.Fatal("persisted entries missing first assistant turn")
+	if !entryExists(entries, ionsession.Agent, "first reply") {
+		t.Fatal("persisted entries missing first agent turn")
 	}
 	if !entryExists(entries, ionsession.User, "second question") {
 		t.Fatal("persisted entries missing second user turn")
 	}
-	if !entryExists(entries, ionsession.Assistant, "second reply") {
-		t.Fatal("persisted entries missing second assistant turn")
+	if !entryExists(entries, ionsession.Agent, "second reply") {
+		t.Fatal("persisted entries missing second agent turn")
 	}
 }
 
@@ -222,11 +222,11 @@ func TestCompactUsesManualCompactionHelper(t *testing.T) {
 		t.Fatalf("open session: %v", err)
 	}
 
-	for _, msg := range []storage.Assistant{
-		{Type: "assistant", Content: []storage.Block{{Type: "text", Text: textPtr(strings.Repeat("alpha ", 60))}}},
-		{Type: "assistant", Content: []storage.Block{{Type: "text", Text: textPtr(strings.Repeat("beta ", 60))}}},
-		{Type: "assistant", Content: []storage.Block{{Type: "text", Text: textPtr(strings.Repeat("gamma ", 60))}}},
-		{Type: "assistant", Content: []storage.Block{{Type: "text", Text: textPtr("recent answer")}}},
+	for _, msg := range []storage.Agent{
+		{Type: "agent", Content: []storage.Block{{Type: "text", Text: textPtr(strings.Repeat("alpha ", 60))}}},
+		{Type: "agent", Content: []storage.Block{{Type: "text", Text: textPtr(strings.Repeat("beta ", 60))}}},
+		{Type: "agent", Content: []storage.Block{{Type: "text", Text: textPtr(strings.Repeat("gamma ", 60))}}},
+		{Type: "agent", Content: []storage.Block{{Type: "text", Text: textPtr("recent answer")}}},
 	} {
 		if err := storageSession.Append(ctx, msg); err != nil {
 			t.Fatalf("append history: %v", err)

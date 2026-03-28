@@ -243,7 +243,7 @@ func (s *Session) SessionUpdate(ctx context.Context, n acp.SessionNotification) 
 	switch {
 	case update.AgentMessageChunk != nil:
 		if update.AgentMessageChunk.Content.Text != nil {
-			s.events <- session.AssistantDelta{Delta: update.AgentMessageChunk.Content.Text.Text}
+			s.events <- session.AgentDelta{Delta: update.AgentMessageChunk.Content.Text.Text}
 		}
 
 	case update.AgentThoughtChunk != nil:

@@ -130,7 +130,7 @@ func TestResolveStartupConfig(t *testing.T) {
 func TestStartupBannerLines(t *testing.T) {
 	t.Run("fresh native", func(t *testing.T) {
 		got := startupBannerLines("v0.0.0", "openai", "gpt-4.1", false)
-		want := []string{"ion v0.0.0 • native • openai"}
+		want := []string{"ion v0.0.0 • native"}
 		if len(got) != len(want) {
 			t.Fatalf("len(startupBannerLines) = %d, want %d", len(got), len(want))
 		}
@@ -145,7 +145,7 @@ func TestStartupBannerLines(t *testing.T) {
 		got := startupBannerLines("v0.0.0", "chatgpt", "gpt-5.4", true)
 		want := []string{
 			"--- resumed ---",
-			"ion v0.0.0 • acp • chatgpt",
+			"ion v0.0.0 • acp",
 		}
 		if len(got) != len(want) {
 			t.Fatalf("len(startupBannerLines) = %d, want %d", len(got), len(want))
@@ -159,7 +159,7 @@ func TestStartupBannerLines(t *testing.T) {
 
 	t.Run("missing model", func(t *testing.T) {
 		got := startupBannerLines("v0.0.0", "anthropic", "", false)
-		want := []string{"ion v0.0.0 • native • anthropic"}
+		want := []string{"ion v0.0.0 • native"}
 		if len(got) != len(want) {
 			t.Fatalf("len(startupBannerLines) = %d, want %d", len(got), len(want))
 		}

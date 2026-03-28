@@ -295,7 +295,7 @@ func (s *cantoSession) Append(ctx context.Context, event any) error {
 			Content: e.Content,
 		})
 		err = s.store.canto.Save(ctx, ev)
-	case Assistant:
+	case Agent:
 		var content strings.Builder
 		var reasoning strings.Builder
 		for _, b := range e.Content {
@@ -434,7 +434,7 @@ func (s *cantoSession) Entries(ctx context.Context) ([]ionsession.Entry, error) 
 			})
 		case llm.RoleAssistant:
 			entries = append(entries, ionsession.Entry{
-				Role:      ionsession.Assistant,
+				Role:      ionsession.Agent,
 				Content:   msg.Content,
 				Reasoning: msg.Reasoning,
 			})

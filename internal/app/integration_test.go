@@ -34,9 +34,9 @@ func TestIntegrationFullLoop(t *testing.T) {
 	b.SetStore(store)
 	b.SetScript([]testutil.ScriptStep{
 		{Event: session.TurnStarted{}, Delay: 0},
-		{Event: session.AssistantDelta{Delta: "Hello "}, Delay: 10 * time.Millisecond},
-		{Event: session.AssistantDelta{Delta: "world"}, Delay: 10 * time.Millisecond},
-		{Event: session.AssistantMessage{Message: "Hello world"}, Delay: 10 * time.Millisecond},
+		{Event: session.AgentDelta{Delta: "Hello "}, Delay: 10 * time.Millisecond},
+		{Event: session.AgentDelta{Delta: "world"}, Delay: 10 * time.Millisecond},
+		{Event: session.AgentMessage{Message: "Hello world"}, Delay: 10 * time.Millisecond},
 		{Event: session.TurnFinished{}, Delay: 0},
 	})
 
@@ -77,21 +77,21 @@ func TestIntegrationFullLoop(t *testing.T) {
 	}
 
 	foundUser := false
-	foundAsst := false
+	foundAgent := false
 	for _, e := range storedEntries {
 		if e.Role == session.User && e.Content == "hi" {
 			foundUser = true
 		}
-		if e.Role == session.Assistant && e.Content == "Hello world" {
-			foundAsst = true
+		if e.Role == session.Agent && e.Content == "Hello world" {
+			foundAgent = true
 		}
 	}
 
 	if !foundUser {
 		t.Errorf("user message 'hi' not found in storage")
 	}
-	if !foundAsst {
-		t.Errorf("assistant message 'Hello world' not found in storage")
+	if !foundAgent {
+		t.Errorf("agent message 'Hello world' not found in storage")
 	}
 }
 
@@ -125,7 +125,7 @@ func TestMultiplexedSwarms(t *testing.T) {
 			Metric:  "15/15 passed",
 			Output:  "OK",
 		}, Delay: 20 * time.Millisecond},
-		{Event: session.AssistantMessage{Message: "All good."}, Delay: 10 * time.Millisecond},
+		{Event: session.AgentMessage{Message: "All good."}, Delay: 10 * time.Millisecond},
 		{Event: session.TurnFinished{}, Delay: 0},
 	})
 

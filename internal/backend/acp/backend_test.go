@@ -109,9 +109,9 @@ func TestACPSessionUpdateTextChunk(t *testing.T) {
 	}
 
 	ev := drainOne(t, client.events, 500*time.Millisecond)
-	delta, ok := ev.(session.AssistantDelta)
+	delta, ok := ev.(session.AgentDelta)
 	if !ok {
-		t.Fatalf("expected AssistantDelta, got %T", ev)
+		t.Fatalf("expected AgentDelta, got %T", ev)
 	}
 	if delta.Delta != "hello" {
 		t.Errorf("expected delta 'hello', got %q", delta.Delta)

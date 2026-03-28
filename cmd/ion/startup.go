@@ -16,11 +16,7 @@ func startupBannerLines(version, provider, model string, resumed bool) []string 
 		runtimeLabel = "acp"
 	}
 
-	segments := []string{"ion " + version, runtimeLabel}
-	if provider != "" {
-		segments = append(segments, provider)
-	}
-	line := strings.Join(segments, " • ")
+	line := strings.Join([]string{"ion " + version, runtimeLabel}, " • ")
 	if resumed {
 		return []string{"--- resumed ---", line}
 	}

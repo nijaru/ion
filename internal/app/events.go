@@ -227,7 +227,7 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 	case session.TurnStarted:
 		m.thinking = true
 		m.progress = stateIonizing
-		m.pending = &session.Entry{Role: session.Assistant}
+		m.pending = &session.Entry{Role: session.Agent}
 		return m, m.awaitSessionEvent()
 
 	case session.TurnFinished:
@@ -243,17 +243,17 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		m.reasonBuf += msg.Delta
 		return m, m.awaitSessionEvent()
 
-	case session.AssistantDelta:
+	case session.AgentDelta:
 		m.progress = stateStreaming
 		if m.pending == nil {
-			m.pending = &session.Entry{Role: session.Assistant}
+			m.pending = &session.Entry{Role: session.Agent}
 		}
 		m.pending.Content += msg.Delta
 		m.streamBuf = m.pending.Content
 		return m, m.awaitSessionEvent()
 
-	case session.AssistantMessage:
-		if m.pending != nil && m.pending.Role == session.Assistant {
+	case session.AgentMessage:
+		if m.pending != nil && m.pending.Role == session.Agent {
 			if msg.Message != "" {
 				m.pending.Content = msg.Message
 			}
@@ -275,14 +275,14 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 					Type: "text",
 					Text: &entry.Content,
 				})
-				if err := m.storage.Append(context.Background(), storage.Assistant{
-					Type:    "assistant",
+				if err := m.storage.Append(context.Background(), storage.Agent{
+					Type:    "agent",
 					Content: blocks,
 					TS:      now(),
 				}); err != nil {
 					return m, tea.Sequence(
 						m.printEntries(entry),
-						persistErrorCmd("persist assistant response", err),
+						persistErrorCmd("persist agent response", err),
 					)
 				}
 			}
@@ -373,26 +373,26 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 
 	case session.ChildRequested:
 		m.pending = &session.Entry{
-			Role:    session.Agent,
+			Role:    session.Subagent,
 			Title:   msg.AgentName,
 			Content: msg.Query,
 		}
 		return m, m.awaitSessionEvent()
 
 	case session.ChildStarted:
-		if m.pending != nil && m.pending.Role == session.Agent {
+		if m.pending != nil && m.pending.Role == session.Subagent {
 			m.pending.Title = msg.AgentName
 		}
 		return m, m.awaitSessionEvent()
 
 	case session.ChildDelta:
-		if m.pending != nil && m.pending.Role == session.Agent {
+		if m.pending != nil && m.pending.Role == session.Subagent {
 			m.pending.Content += msg.Delta
 		}
 		return m, m.awaitSessionEvent()
 
 	case session.ChildCompleted:
-		if m.pending != nil && m.pending.Role == session.Agent {
+		if m.pending != nil && m.pending.Role == session.Subagent {
 			m.pending.Content = msg.Result
 			entry := *m.pending
 			m.pending = nil
@@ -401,7 +401,7 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		return m, m.awaitSessionEvent()
 
 	case session.ChildFailed:
-		if m.pending != nil && m.pending.Role == session.Agent {
+		if m.pending != nil && m.pending.Role == session.Subagent {
 			m.pending.Content = "ERROR: " + msg.Error
 			m.pending.IsError = true
 			entry := *m.pending

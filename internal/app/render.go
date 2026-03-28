@@ -80,7 +80,7 @@ func (m Model) renderPlaneB() string {
 		}
 	}
 
-	// Active in-flight entry (streaming assistant, tool, or agent)
+	// Active in-flight entry (streaming agent, tool, or agent)
 	if m.pending != nil {
 		b.WriteString(m.renderPendingEntry(*m.pending))
 		b.WriteString("\n")
@@ -295,11 +295,11 @@ func (m Model) renderPickerDetail(detail string, tone pickerTone) string {
 // renderPendingEntry renders an in-flight entry for Plane B.
 func (m Model) renderPendingEntry(e session.Entry) string {
 	switch e.Role {
-	case session.Assistant:
+	case session.Agent:
 		if e.Content == "" {
 			return m.st.dim.PaddingLeft(2).Render("• ...")
 		}
-		return m.st.assistant.Render("• " + e.Content)
+		return m.st.agent.Render("• " + e.Content)
 	case session.Tool:
 		label := e.Title
 		if label == "" {
@@ -325,13 +325,13 @@ func (m Model) renderPendingEntry(e session.Entry) string {
 			}
 		}
 		return b.String()
-	case session.Agent:
+	case session.Subagent:
 		label := e.Title
 		if label == "" {
-			label = "agent"
+			label = "subagent"
 		}
 		var b strings.Builder
-		b.WriteString(m.st.agent.Render("↳ " + label))
+		b.WriteString(m.st.subagent.Render("↳ " + label))
 		if e.Content != "" {
 			b.WriteString("\n")
 			b.WriteString(m.st.dim.PaddingLeft(4).Render(e.Content))
@@ -348,7 +348,7 @@ func (m Model) renderEntry(e session.Entry) string {
 	case session.User:
 		return m.st.user.Render("• " + e.Content)
 
-	case session.Assistant:
+	case session.Agent:
 		var b strings.Builder
 		if e.Reasoning != "" {
 			b.WriteString(m.st.system.Render("• Thinking"))
@@ -407,13 +407,13 @@ func (m Model) renderEntry(e session.Entry) string {
 		}
 		return b.String()
 
-	case session.Agent:
+	case session.Subagent:
 		label := e.Title
 		if label == "" {
-			label = "agent"
+			label = "subagent"
 		}
 		var b strings.Builder
-		b.WriteString(m.st.agent.Render("↳ " + label))
+		b.WriteString(m.st.subagent.Render("↳ " + label))
 		b.WriteString("\n")
 		b.WriteString(m.st.dim.PaddingLeft(4).Render(e.Content))
 		return b.String()

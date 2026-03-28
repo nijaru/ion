@@ -89,7 +89,7 @@ func (b *Backend) Bootstrap() backend.Bootstrap {
 		Entries: []session.Entry{
 			{Role: session.System, Content: "ion-go rewrite branch"},
 			{
-				Role:    session.Assistant,
+				Role:    session.Agent,
 				Content: "This host is now shaped around streamed backend events, tool output, and a stable transcript/composer loop so we can judge Bubble Tea by real behavior instead of setup speed.",
 			},
 		},
@@ -127,10 +127,10 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 		b.events <- session.StatusChanged{Status: "[fake] planning reply"}
 
 		time.Sleep(120 * time.Millisecond)
-		b.events <- session.AssistantDelta{Delta: fmt.Sprintf("Reviewing %q in fake mode so we can exercise a streamed host loop.", input)}
+		b.events <- session.AgentDelta{Delta: fmt.Sprintf("Reviewing %q in fake mode so we can exercise a streamed host loop.", input)}
 
 		time.Sleep(160 * time.Millisecond)
-		b.events <- session.AssistantDelta{Delta: "\n\nThis backend is intentionally emitting multiple event types because ion will eventually need transcript text, tool output, progress, and completion state from either ACP or a native agent runtime."}
+		b.events <- session.AgentDelta{Delta: "\n\nThis backend is intentionally emitting multiple event types because ion will eventually need transcript text, tool output, progress, and completion state from either ACP or a native agent runtime."}
 
 		time.Sleep(140 * time.Millisecond)
 		b.events <- session.ToolCallStarted{ToolName: "bash", Args: "git status --short"}
@@ -142,10 +142,10 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 		}
 
 		time.Sleep(160 * time.Millisecond)
-		b.events <- session.AssistantDelta{Delta: "\n\nThat means the UI loop is already much closer to a real agent host than a one-shot echo demo."}
+		b.events <- session.AgentDelta{Delta: "\n\nThat means the UI loop is already much closer to a real agent host than a one-shot echo demo."}
 
 		time.Sleep(160 * time.Millisecond)
-		b.events <- session.AssistantMessage{Message: ""} // Signal end of message
+		b.events <- session.AgentMessage{Message: ""} // Signal end of message
 		b.events <- session.StatusChanged{Status: "[fake] turn complete"}
 		b.events <- session.TurnFinished{}
 	}()

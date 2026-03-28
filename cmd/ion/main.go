@@ -233,19 +233,19 @@ func workspaceHeader(cwd, branch string) string {
 func renderStartupEntry(entry session.Entry) string {
 	switch entry.Role {
 	case session.User:
-		return "› " + entry.Content
+		return startupUserStyle().Render("• " + entry.Content)
 	case session.System:
-		return "• " + entry.Content
+		return startupSystemStyle().Render("• " + entry.Content)
 	case session.Tool:
 		if entry.Title != "" {
 			if entry.Content == "" {
-				return "• " + entry.Title
+				return startupToolStyle().Render("• " + entry.Title)
 			}
-			return "• " + entry.Title + "\n" + entry.Content
+			return startupToolStyle().Render("• "+entry.Title) + "\n" + entry.Content
 		}
-		return "• " + entry.Content
-	case session.Agent, session.Assistant:
-		return entry.Content
+		return startupToolStyle().Render("• " + entry.Content)
+	case session.Agent, session.Subagent:
+		return startupAgentStyle().Render(entry.Content)
 	default:
 		return entry.Content
 	}
@@ -295,4 +295,20 @@ func startupMetaStyle() lipgloss.Style {
 
 func startupWorkspaceStyle() lipgloss.Style {
 	return lipgloss.NewStyle().Faint(true)
+}
+
+func startupUserStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Bold(true)
+}
+
+func startupSystemStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Faint(true)
+}
+
+func startupToolStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
+}
+
+func startupAgentStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
 }

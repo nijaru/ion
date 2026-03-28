@@ -122,8 +122,8 @@ type (
 		TS     int64  `json:"ts"`
 	}
 
-	Assistant struct {
-		Type    string  `json:"type"` // "assistant"
+	Agent struct {
+		Type    string  `json:"type"` // "agent"
 		Content []Block `json:"content"`
 		TS      int64   `json:"ts"`
 	}

@@ -2,7 +2,6 @@ package acp
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/backend/registry"
@@ -66,14 +65,7 @@ func (b *Backend) Bootstrap() backend.Bootstrap {
 		if s, err := b.sess.LastStatus(context.Background()); err == nil && s != "" {
 			status = s
 		} else {
-			// New session
-			provider := b.Provider()
-			switch {
-			case provider != "":
-				status = fmt.Sprintf("Connected to %s via ACP", provider)
-			default:
-				status = "Connected to ACP"
-			}
+			status = "Connected via ACP"
 		}
 	}
 	return backend.Bootstrap{
