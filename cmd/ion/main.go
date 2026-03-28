@@ -96,7 +96,7 @@ func main() {
 		return switchedBackend, switchedBackend.Session(), switchedSession, nil
 	}
 
-	printStartup(os.Stdout, startupLines, workspaceHeader(cwd, branch), startupEntries, b.Bootstrap().Status)
+	printStartup(os.Stdout, startupLines, workspaceHeader(cwd, branch), startupEntries)
 	model := app.New(b, sess, store, cwd, branch, version, switcher).WithPrintedTranscript(len(startupEntries) > 0)
 	p := tea.NewProgram(model)
 	if _, err := p.Run(); err != nil {
@@ -190,7 +190,7 @@ func currentBranch() string {
 	return strings.TrimSpace(string(out))
 }
 
-func printStartup(out *os.File, startupLines []string, workspaceLine string, entries []session.Entry, status string) {
+func printStartup(out *os.File, startupLines []string, workspaceLine string, entries []session.Entry) {
 	if out == nil {
 		return
 	}
@@ -200,10 +200,6 @@ func printStartup(out *os.File, startupLines []string, workspaceLine string, ent
 	}
 	if workspaceLine != "" {
 		lines = append(lines, startupWorkspaceStyle().Render(workspaceLine))
-	}
-	if strings.TrimSpace(status) != "" && !isConfigurationStatus(status) {
-		lines = append(lines, "")
-		lines = append(lines, renderStartupEntry(session.Entry{Role: session.System, Content: status}))
 	}
 	if len(entries) > 0 {
 		lines = append(lines, "")

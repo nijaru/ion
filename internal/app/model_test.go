@@ -1330,11 +1330,11 @@ func TestRuntimeSwitchShowsStatusOnResume(t *testing.T) {
 		backend:       stubBackend{sess: &stubSession{events: make(chan session.Event)}},
 		session:       &stubSession{events: make(chan session.Event)},
 		storage:       &stubStorageSession{id: "session-1", branch: "main"},
-		printLines:    []string{"--- resumed ---", "ion v0.0.0 • native", "~/tmp/test • main"},
+		printLines:    []string{"--- resumed ---", "ion v0.0.0", "~/tmp/test • main"},
 		replayEntries: []session.Entry{{Role: session.User, Content: "hello"}},
 		status:        "Connected via Canto",
 		notice:        "Resumed session session-1",
-		showStatus:    true,
+		showStatus:    false,
 	})
 	model = updated.(Model)
 

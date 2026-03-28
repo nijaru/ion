@@ -323,16 +323,12 @@ func noModelConfiguredStatus() string {
 	return "No model configured. Use /model or Ctrl+M. Set ION_MODEL for scripts."
 }
 
-func (m Model) runtimeHeaderLine(b backend.Backend) string {
+func (m Model) runtimeHeaderLine(_ backend.Backend) string {
 	version := strings.TrimSpace(m.version)
 	if version == "" {
 		version = "v0.0.0"
 	}
-	runtimeLabel := "native"
-	if b != nil && b.Name() == "acp" {
-		runtimeLabel = "acp"
-	}
-	return strings.Join([]string{"ion " + version, runtimeLabel}, " • ")
+	return "ion " + version
 }
 
 func (m Model) Init() tea.Cmd {

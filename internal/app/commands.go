@@ -418,7 +418,7 @@ func (m *Model) resumeRuntimeCommand(cfg *config.Config, notice session.Entry, s
 			replayEntries: entries,
 			status:        backend.Bootstrap().Status,
 			notice:        notice.Content,
-			showStatus:    true,
+			showStatus:    false,
 		}
 	}
 }
