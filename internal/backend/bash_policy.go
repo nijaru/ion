@@ -5,7 +5,7 @@ import (
 )
 
 var safePrefixes = []string{
-	// Filesystem (read-only)
+	// Filesystem (read-only, structural)
 	"ls",
 	"find",
 	"tree",
@@ -14,12 +14,6 @@ var safePrefixes = []string{
 	"du",
 	"df",
 	"wc",
-	// Reading
-	"cat",
-	"head",
-	"tail",
-	"less",
-	"bat",
 	// Search
 	"grep",
 	"rg",
@@ -62,7 +56,6 @@ var safePrefixes = []string{
 	"whoami",
 	"hostname",
 	"date",
-	"printenv",
 	"which",
 	"type",
 	// Misc read-only
@@ -123,17 +116,56 @@ func IsSafeBashCommand(command string) bool {
 
 func splitCommandChain(command string) []string {
 	var segments []string
-	for _, p1 := range strings.Split(command, "&&") {
-		for _, p2 := range strings.Split(p1, "||") {
-			for _, p3 := range strings.Split(p2, ";") {
-				for _, p4 := range strings.Split(p3, "|") {
-					trimmed := strings.TrimSpace(p4)
-					if trimmed != "" {
-						segments = append(segments, trimmed)
-					}
+	var current strings.Builder
+	inQuote := false
+	var quoteChar rune
+
+	runes := []rune(command)
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
+		if (r == '"' || r == '\'') && (i == 0 || runes[i-1] != '\\') {
+			if inQuote {
+				if r == quoteChar {
+					inQuote = false
 				}
+			} else {
+				inQuote = true
+				quoteChar = r
 			}
 		}
+
+		if !inQuote {
+			// Check for operators: &&, ||, ;, |
+			isOp := false
+			opLen := 0
+			if r == ';' || r == '|' {
+				isOp = true
+				opLen = 1
+				// Check for ||
+				if r == '|' && i+1 < len(runes) && runes[i+1] == '|' {
+					opLen = 2
+				}
+			} else if r == '&' && i+1 < len(runes) && runes[i+1] == '&' {
+				isOp = true
+				opLen = 2
+			}
+
+			if isOp {
+				segment := strings.TrimSpace(current.String())
+				if segment != "" {
+					segments = append(segments, segment)
+				}
+				current.Reset()
+				i += opLen - 1 // Skip extra op chars
+				continue
+			}
+		}
+		current.WriteRune(r)
+	}
+
+	final := strings.TrimSpace(current.String())
+	if final != "" {
+		segments = append(segments, final)
 	}
 	return segments
 }

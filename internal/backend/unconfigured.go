@@ -76,7 +76,7 @@ type unconfiguredSession struct {
 
 func newUnconfiguredSession(reason error) *unconfiguredSession {
 	return &unconfiguredSession{
-		events: make(chan session.Event, 1),
+		events: make(chan session.Event, 10),
 		reason: reason,
 	}
 }

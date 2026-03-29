@@ -14,17 +14,17 @@ import (
 	"github.com/nijaru/ion/internal/storage"
 )
 
-func (m *Model) openSessionPicker() tea.Cmd {
+func (m Model) openSessionPicker() (Model, tea.Cmd) {
 	m.picker = nil
 	if m.store == nil {
 		m.sessionPicker = &sessionPickerState{err: "session store not available"}
-		return nil
+		return m, nil
 	}
 
 	sessions, err := m.store.ListSessions(context.Background(), m.workdir)
 	if err != nil {
 		m.sessionPicker = &sessionPickerState{err: fmt.Sprintf("failed to list sessions: %v", err)}
-		return nil
+		return m, nil
 	}
 
 	items := make([]sessionPickerItem, 0, len(sessions))
@@ -41,7 +41,7 @@ func (m *Model) openSessionPicker() tea.Cmd {
 		state.err = "no recent sessions in this workspace"
 	}
 	m.sessionPicker = state
-	return nil
+	return m, nil
 }
 
 func (m Model) handleSessionPickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
@@ -86,7 +86,7 @@ func (m Model) handleSessionPickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	}
 }
 
-func (m *Model) refreshSessionPickerFilter() {
+func (m Model) refreshSessionPickerFilter() {
 	if m.sessionPicker == nil {
 		return
 	}

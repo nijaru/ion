@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nijaru/canto/llm"
@@ -21,6 +22,9 @@ type cantoStore struct {
 	canto  *session.SQLiteStore
 	memory *memory.CoreStore
 	db     *sql.DB // Direct access for inputs and index
+
+	mu        sync.Mutex
+	toolNames map[string]string // Cache for tool use ID -> tool name
 }
 
 func NewCantoStore(root string) (Store, error) {
@@ -29,32 +33,52 @@ func NewCantoStore(root string) (Store, error) {
 	}
 	dbPath := filepath.Join(root, "sessions.db")
 
-	cStore, err := session.NewSQLiteStore(dbPath)
+	// Ensure all connections use WAL and busy_timeout
+	dsn := dbPath + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)"
+
+	cStore, err := session.NewSQLiteStore(dsn)
 	if err != nil {
 		return nil, err
 	}
 
-	mStore, err := memory.NewCoreStore(dbPath)
+	mStore, err := memory.NewCoreStore(dsn)
 	if err != nil {
 		return nil, err
 	}
 
-	db, err := sql.Open("sqlite", dbPath+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
 	}
 
 	s := &cantoStore{
-		dbPath: dbPath,
-		canto:  cStore,
-		memory: mStore,
-		db:     db,
+		dbPath:    dbPath,
+		canto:     cStore,
+		memory:    mStore,
+		db:        db,
+		toolNames: make(map[string]string),
 	}
 	if err := s.init(); err != nil {
 		return nil, err
 	}
 
 	return s, nil
+}
+
+func (s *cantoStore) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var errs []error
+	if err := s.db.Close(); err != nil {
+		errs = append(errs, err)
+	}
+	// Note: session.SQLiteStore and memory.CoreStore do not currently have Close()
+	// but we should check if they do in the future.
+	if len(errs) > 0 {
+		return fmt.Errorf("close errors: %v", errs)
+	}
+	return nil
 }
 
 func (s *cantoStore) init() error {
@@ -314,6 +338,10 @@ func (s *cantoSession) Append(ctx context.Context, event any) error {
 		})
 		err = s.store.canto.Save(ctx, ev)
 	case ToolUse:
+		s.store.mu.Lock()
+		s.store.toolNames[e.ID] = e.Name
+		s.store.mu.Unlock()
+
 		ev := session.NewEvent(s.id, session.ToolStarted, map[string]any{
 			"id":   e.ID,
 			"tool": e.Name,
@@ -362,13 +390,24 @@ func (s *cantoSession) Append(ctx context.Context, event any) error {
 		return err
 	}
 
-	return s.store.UpdateSession(ctx, SessionInfo{ID: s.id, LastPreview: preview})
+	if preview != "" {
+		return s.store.UpdateSession(ctx, SessionInfo{ID: s.id, LastPreview: preview})
+	}
+	return nil
 }
 
 func (s *cantoSession) toolNameForUseID(ctx context.Context, toolUseID string) (string, error) {
 	if toolUseID == "" {
 		return "", nil
 	}
+
+	s.store.mu.Lock()
+	name, ok := s.store.toolNames[toolUseID]
+	s.store.mu.Unlock()
+	if ok {
+		return name, nil
+	}
+
 	sess, err := s.store.canto.Load(ctx, s.id)
 	if err != nil {
 		return "", err
@@ -386,6 +425,9 @@ func (s *cantoSession) toolNameForUseID(ctx context.Context, toolUseID string) (
 			return "", err
 		}
 		if data.ID == toolUseID {
+			s.store.mu.Lock()
+			s.store.toolNames[data.ID] = data.Tool
+			s.store.mu.Unlock()
 			return data.Tool, nil
 		}
 	}

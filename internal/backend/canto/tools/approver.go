@@ -30,6 +30,12 @@ func (m *ApprovalManager) Request(id string) chan bool {
 	return ch
 }
 
+func (m *ApprovalManager) Remove(id string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.requests, id)
+}
+
 func (m *ApprovalManager) Approve(id string, approved bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -56,6 +62,7 @@ func (t *ApprovingTool) Execute(ctx context.Context, args string) (string, error
 
 	// Wait for approval
 	ch := t.Manager.Request(id)
+	defer t.Manager.Remove(id)
 	select {
 	case <-ctx.Done():
 		return "", ctx.Err()

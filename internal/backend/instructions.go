@@ -101,7 +101,7 @@ func dirsFromRoot(root, cwd string) []string {
 }
 
 func instructionLayerForDir(dir string) ([]InstructionLayer, error) {
-	for _, name := range []string{"AGENTS.md", "CLAUDE.md"} {
+	for _, name := range []string{"AGENTS.md", "GEMINI.md", "CLAUDE.md"} {
 		path := filepath.Join(dir, name)
 		data, err := os.ReadFile(path)
 		if err != nil {

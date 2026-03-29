@@ -20,6 +20,24 @@ func NewFileTool(cwd string) *FileTool {
 	return &FileTool{cwd: cwd}
 }
 
+// resolvePath securely joins the target path to cwd and ensures it does not escape.
+func (t *FileTool) resolvePath(target string) (string, error) {
+	absPath, err := filepath.Abs(filepath.Join(t.cwd, target))
+	if err != nil {
+		return "", err
+	}
+	
+	absCwd, err := filepath.Abs(t.cwd)
+	if err != nil {
+		return "", err
+	}
+
+	if !strings.HasPrefix(absPath, absCwd+string(filepath.Separator)) && absPath != absCwd {
+		return "", fmt.Errorf("path escapes workspace: %s", target)
+	}
+	return absPath, nil
+}
+
 // Read tool (formerly read_file)
 type Read struct {
 	FileTool
@@ -60,7 +78,11 @@ func (r *Read) Execute(ctx context.Context, args string) (string, error) {
 		return "", err
 	}
 
-	absPath := filepath.Join(r.cwd, input.FilePath)
+	absPath, err := r.resolvePath(input.FilePath)
+	if err != nil {
+		return "", err
+	}
+
 	content, err := os.ReadFile(absPath)
 	if err != nil {
 		return "", err
@@ -116,7 +138,11 @@ func (w *Write) Execute(ctx context.Context, args string) (string, error) {
 		return "", err
 	}
 
-	absPath := filepath.Join(w.cwd, input.FilePath)
+	absPath, err := w.resolvePath(input.FilePath)
+	if err != nil {
+		return "", err
+	}
+
 	if err := os.MkdirAll(filepath.Dir(absPath), 0755); err != nil {
 		return "", err
 	}
@@ -172,7 +198,11 @@ func (e *Edit) Execute(ctx context.Context, args string) (string, error) {
 		return "", err
 	}
 
-	absPath := filepath.Join(e.cwd, input.FilePath)
+	absPath, err := e.resolvePath(input.FilePath)
+	if err != nil {
+		return "", err
+	}
+
 	content, err := os.ReadFile(absPath)
 	if err != nil {
 		return "", err
@@ -265,7 +295,10 @@ func (m *MultiEdit) Execute(ctx context.Context, args string) (string, error) {
 	contents := make(map[string]string)
 	originals := make(map[string]string)
 	for _, edit := range input.Edits {
-		absPath := filepath.Join(m.cwd, edit.FilePath)
+		absPath, err := m.resolvePath(edit.FilePath)
+		if err != nil {
+			return "", err
+		}
 		
 		// Load file if not already loaded
 		if _, ok := contents[absPath]; !ok {
@@ -295,18 +328,42 @@ func (m *MultiEdit) Execute(ctx context.Context, args string) (string, error) {
 		}
 	}
 
-	// Second pass: write all modified files and generate aggregate diff
+	// Second pass: write all modified files to temp files and generate aggregate diff
 	var diffs strings.Builder
+	type renameOp struct {
+		from, to string
+	}
+	var renames []renameOp
+	var writeErrs []error
+
 	for absPath, content := range contents {
-		if err := os.WriteFile(absPath, []byte(content), 0644); err != nil {
-			return "", fmt.Errorf("failed to write %s: %w", absPath, err)
+		tmpPath := absPath + ".tmp"
+		if err := os.WriteFile(tmpPath, []byte(content), 0644); err != nil {
+			writeErrs = append(writeErrs, fmt.Errorf("failed to write temp %s: %w", tmpPath, err))
+			break
 		}
-		
+		renames = append(renames, renameOp{from: tmpPath, to: absPath})
+
 		relPath, _ := filepath.Rel(m.cwd, absPath)
 		diff := udiff.Unified("a/"+relPath, "b/"+relPath, originals[absPath], content)
 		if diff != "" {
 			diffs.WriteString(diff)
 			diffs.WriteString("\n")
+		}
+	}
+
+	// Clean up temp files if any write failed
+	if len(writeErrs) > 0 {
+		for _, op := range renames {
+			_ = os.Remove(op.from)
+		}
+		return "", fmt.Errorf("multi_edit aborted: %v", writeErrs)
+	}
+
+	// Final pass: atomic renames
+	for _, op := range renames {
+		if err := os.Rename(op.from, op.to); err != nil {
+			return "", fmt.Errorf("failed to finalize %s: %w", op.to, err)
 		}
 	}
 
@@ -344,7 +401,11 @@ func (l *List) Execute(ctx context.Context, args string) (string, error) {
 		input.Path = "."
 	}
 
-	absPath := filepath.Join(l.cwd, input.Path)
+	absPath, err := l.resolvePath(input.Path)
+	if err != nil {
+		return "", err
+	}
+
 	entries, err := os.ReadDir(absPath)
 	if err != nil {
 		return "", err

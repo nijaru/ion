@@ -34,15 +34,19 @@ func NewScanner(cwd string, store Store) *Scanner {
 	}
 }
 
-// Scan workspace and return details of all files that need indexing.
-func (s *Scanner) Scan(ctx context.Context) ([]FileInfo, error) {
-	var files []FileInfo
-	
+// Scan workspace and call fn for each file found.
+func (s *Scanner) Scan(ctx context.Context, fn func(FileInfo) error) error {
 	ignorer := s.loadGitignore()
 
-	err := filepath.WalkDir(s.CWD, func(path string, d fs.DirEntry, err error) error {
+	return filepath.WalkDir(s.CWD, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
 		}
 
 		rel, _ := filepath.Rel(s.CWD, path)
@@ -72,17 +76,13 @@ func (s *Scanner) Scan(ctx context.Context) ([]FileInfo, error) {
 		// Calculate hash for change detection
 		hash, _ := s.hashFile(path)
 		
-		files = append(files, FileInfo{
+		return fn(FileInfo{
 			Path:      rel,
 			Hash:      hash,
 			Size:      info.Size(),
 			UpdatedAt: info.ModTime(),
 		})
-
-		return nil
 	})
-
-	return files, err
 }
 
 func (s *Scanner) loadGitignore() *ignore.GitIgnore {

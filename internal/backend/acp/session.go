@@ -7,8 +7,10 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	acp "github.com/coder/acp-go-sdk"
 	"github.com/nijaru/ion/internal/backend"
@@ -43,6 +45,7 @@ type Session struct {
 	conn            *acp.ClientSideConnection
 	sessionID       string
 	cmd             *exec.Cmd
+	ctx             context.Context
 	cancel          context.CancelFunc
 	closeOnce       sync.Once
 	mu              sync.Mutex
@@ -73,6 +76,7 @@ func (s *Session) Open(ctx context.Context) error {
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
+	s.ctx = ctx
 	s.cancel = cancel
 
 	cmd := exec.CommandContext(ctx, "bash", "-c", command)
@@ -144,6 +148,17 @@ func (s *Session) Close() error {
 		if s.cancel != nil {
 			s.cancel()
 		}
+
+		// Cleanup terminals
+		s.mu.Lock()
+		for id, t := range s.terminals {
+			if t.cmd != nil && t.cmd.Process != nil {
+				_ = t.cmd.Process.Kill()
+			}
+			delete(s.terminals, id)
+		}
+		s.mu.Unlock()
+
 		close(s.events)
 	})
 	return nil
@@ -344,11 +359,37 @@ func (s *Session) RequestPermission(
 	}
 }
 
+// validatePath ensures the given path is within the workspace CWD.
+func (s *Session) validatePath(path string) error {
+	m := s.Meta()
+	if m == nil || m["cwd"] == "" {
+		return fmt.Errorf("session CWD not available for validation")
+	}
+	cwd := m["cwd"]
+
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	absCwd, err := filepath.Abs(cwd)
+	if err != nil {
+		return err
+	}
+
+	if !strings.HasPrefix(absPath, absCwd+string(filepath.Separator)) && absPath != absCwd {
+		return fmt.Errorf("path escapes workspace: %s", path)
+	}
+	return nil
+}
+
 // ReadTextFile implements acp.Client.
 func (s *Session) ReadTextFile(
 	_ context.Context,
 	p acp.ReadTextFileRequest,
 ) (acp.ReadTextFileResponse, error) {
+	if err := s.validatePath(p.Path); err != nil {
+		return acp.ReadTextFileResponse{}, err
+	}
 	data, err := os.ReadFile(p.Path)
 	if err != nil {
 		return acp.ReadTextFileResponse{}, fmt.Errorf("read %s: %w", p.Path, err)
@@ -361,6 +402,9 @@ func (s *Session) WriteTextFile(
 	_ context.Context,
 	p acp.WriteTextFileRequest,
 ) (acp.WriteTextFileResponse, error) {
+	if err := s.validatePath(p.Path); err != nil {
+		return acp.WriteTextFileResponse{}, err
+	}
 	if err := os.WriteFile(p.Path, []byte(p.Content), 0o644); err != nil {
 		return acp.WriteTextFileResponse{}, fmt.Errorf("write %s: %w", p.Path, err)
 	}
@@ -369,10 +413,10 @@ func (s *Session) WriteTextFile(
 
 // CreateTerminal implements acp.Client — spawns a command and streams its output into a buffer.
 func (s *Session) CreateTerminal(
-	ctx context.Context,
+	_ context.Context,
 	p acp.CreateTerminalRequest,
 ) (acp.CreateTerminalResponse, error) {
-	cmd := exec.CommandContext(ctx, p.Command, p.Args...)
+	cmd := exec.CommandContext(s.ctx, p.Command, p.Args...)
 	if p.Cwd != nil {
 		cmd.Dir = *p.Cwd
 	}
@@ -475,6 +519,19 @@ func (s *Session) KillTerminalCommand(
 	}
 	if t.cmd != nil && t.cmd.Process != nil {
 		_ = t.cmd.Process.Signal(os.Interrupt)
+		// Escalation to SIGKILL after 2s if still running
+		go func() {
+			select {
+			case <-t.done:
+				return
+			case <-time.After(2 * time.Second):
+				t.mu.Lock()
+				if t.exitCode == nil && t.cmd.Process != nil {
+					_ = t.cmd.Process.Kill()
+				}
+				t.mu.Unlock()
+			}
+		}()
 	}
 	return acp.KillTerminalCommandResponse{}, nil
 }

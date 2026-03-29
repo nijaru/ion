@@ -424,7 +424,7 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 	// Subscribe to framework events and translate them to ion UI events.
 	// Use the background context for the subscription to avoid it being
 	// cancelled when the submission command context ends.
-	evCh, err := b.runner.Subscribe(turnCtx, sessionID)
+	evCh, _, err := b.runner.Subscribe(turnCtx, sessionID)
 	if err != nil {
 		cancel()
 		return err
@@ -459,116 +459,107 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 }
 
 func (b *Backend) translateEvents(ctx context.Context, evCh <-chan session.Event) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case ev, ok := <-evCh:
-			if !ok {
-				return
+	for ev := range evCh {
+		switch ev.Type {
+		case session.TurnStarted:
+			b.events <- ionsession.TurnStarted{}
+			b.events <- ionsession.StatusChanged{Status: "Thinking..."}
+		case session.TurnCompleted:
+			b.events <- ionsession.TurnFinished{}
+			b.events <- ionsession.AgentMessage{Message: ""} // Commit
+			b.events <- ionsession.StatusChanged{Status: "Ready"}
+		case session.ToolStarted:
+			var data struct {
+				Tool string `json:"tool"`
+				ID   string `json:"id"`
+				Args string `json:"args"`
+			}
+			if err := ev.UnmarshalData(&data); err == nil {
+				b.events <- ionsession.ToolCallStarted{
+					ToolName: data.Tool,
+					Args:     data.Args,
+				}
+				b.events <- ionsession.StatusChanged{Status: fmt.Sprintf("Running %s...", data.Tool)}
+			}
+		case session.ToolCompleted:
+			var data struct {
+				Tool   string `json:"tool"`
+				ID     string `json:"id"`
+				Output string `json:"output"`
+				Error  string `json:"error,omitempty"`
+			}
+			if err := ev.UnmarshalData(&data); err == nil {
+				var execErr error
+				if data.Error != "" {
+					execErr = fmt.Errorf("%s", data.Error)
+				}
+				b.events <- ionsession.ToolResult{
+					ToolName: data.Tool,
+					Result:   data.Output,
+					Error:    execErr,
+				}
+			}
+		case session.ToolOutputDelta:
+			var data struct {
+				Delta string `json:"delta"`
+			}
+			if err := ev.UnmarshalData(&data); err == nil {
+				b.events <- ionsession.ToolOutputDelta{Delta: data.Delta}
+			}
+		case session.ChildRequested:
+			var data session.ChildRequestedData
+			if err := ev.UnmarshalData(&data); err == nil {
+				b.events <- ionsession.ChildRequested{
+					AgentName: data.AgentID,
+					Query:     data.Task,
+				}
+				b.events <- ionsession.StatusChanged{Status: fmt.Sprintf("Requesting child agent %s...", data.AgentID)}
+			}
+		case session.ChildStarted:
+			var data session.ChildStartedData
+			if err := ev.UnmarshalData(&data); err == nil {
+				b.events <- ionsession.ChildStarted{
+					AgentName: data.AgentID,
+					SessionID: data.ChildSessionID,
+				}
+				b.events <- ionsession.StatusChanged{Status: fmt.Sprintf("Child agent %s started (%s)", data.AgentID, data.ChildSessionID)}
 			}
 
-			switch ev.Type {
-			case session.TurnStarted:
-				b.events <- ionsession.TurnStarted{}
-				b.events <- ionsession.StatusChanged{Status: "Thinking..."}
-			case session.TurnCompleted:
-				b.events <- ionsession.TurnFinished{}
-				b.events <- ionsession.AgentMessage{Message: ""} // Commit
+		case session.ChildProgressed:
+			var data session.ChildProgressedData
+			if err := ev.UnmarshalData(&data); err == nil {
+				b.events <- ionsession.ChildDelta{
+					AgentName: data.ChildID,
+					Delta:     data.Message,
+				}
+				b.events <- ionsession.StatusChanged{Status: fmt.Sprintf("Child agent %s: %s", data.ChildID, data.Message)}
+			}
+		case session.ChildCompleted:
+			var data session.ChildCompletedData
+			if err := ev.UnmarshalData(&data); err == nil {
+				b.events <- ionsession.ChildCompleted{
+					AgentName: data.ChildID,
+					Result:    data.Summary,
+				}
 				b.events <- ionsession.StatusChanged{Status: "Ready"}
-			case session.ToolStarted:
-				var data struct {
-					Tool string `json:"tool"`
-					ID   string `json:"id"`
-					Args string `json:"args"`
+			}
+		case session.ChildFailed:
+			var data session.ChildFailedData
+			if err := ev.UnmarshalData(&data); err == nil {
+				b.events <- ionsession.ChildFailed{
+					AgentName: data.ChildID,
+					Error:     data.Error,
 				}
-				if err := ev.UnmarshalData(&data); err == nil {
-					b.events <- ionsession.ToolCallStarted{
-						ToolName: data.Tool,
-						Args:     data.Args,
-					}
-					b.events <- ionsession.StatusChanged{Status: fmt.Sprintf("Running %s...", data.Tool)}
+				b.events <- ionsession.StatusChanged{Status: "Ready"}
+			}
+		case session.ChildCanceled:
+			var data session.ChildCanceledData
+			if err := ev.UnmarshalData(&data); err == nil {
+				b.events <- ionsession.ChildFailed{
+					AgentName: data.ChildID,
+					Error:     "Canceled: " + data.Reason,
 				}
-			case session.ToolCompleted:
-				var data struct {
-					Tool   string `json:"tool"`
-					ID     string `json:"id"`
-					Output string `json:"output"`
-					Error  string `json:"error,omitempty"`
-				}
-				if err := ev.UnmarshalData(&data); err == nil {
-					var execErr error
-					if data.Error != "" {
-						execErr = fmt.Errorf("%s", data.Error)
-					}
-					b.events <- ionsession.ToolResult{
-						ToolName: data.Tool,
-						Result:   data.Output,
-						Error:    execErr,
-					}
-				}
-			case session.ToolOutputDelta:
-				var data struct {
-					Delta string `json:"delta"`
-				}
-				if err := ev.UnmarshalData(&data); err == nil {
-					b.events <- ionsession.ToolOutputDelta{Delta: data.Delta}
-				}
-			case session.ChildRequested:
-				var data session.ChildRequestedData
-				if err := ev.UnmarshalData(&data); err == nil {
-					b.events <- ionsession.ChildRequested{
-						AgentName: data.AgentID,
-						Query:     data.Task,
-					}
-					b.events <- ionsession.StatusChanged{Status: fmt.Sprintf("Requesting child agent %s...", data.AgentID)}
-				}
-			case session.ChildStarted:
-				var data session.ChildStartedData
-				if err := ev.UnmarshalData(&data); err == nil {
-					b.events <- ionsession.ChildStarted{
-						AgentName: data.AgentID,
-						SessionID: data.ChildSessionID,
-					}
-					b.events <- ionsession.StatusChanged{Status: fmt.Sprintf("Child agent %s started (%s)", data.AgentID, data.ChildSessionID)}
-				}
-
-			case session.ChildProgressed:
-				var data session.ChildProgressedData
-				if err := ev.UnmarshalData(&data); err == nil {
-					b.events <- ionsession.ChildDelta{
-						AgentName: data.ChildID,
-						Delta:     data.Message,
-					}
-					b.events <- ionsession.StatusChanged{Status: fmt.Sprintf("Child agent %s: %s", data.ChildID, data.Message)}
-				}
-			case session.ChildCompleted:
-				var data session.ChildCompletedData
-				if err := ev.UnmarshalData(&data); err == nil {
-					b.events <- ionsession.ChildCompleted{
-						AgentName: data.ChildID,
-						Result:    data.Summary,
-					}
-					b.events <- ionsession.StatusChanged{Status: "Ready"}
-				}
-			case session.ChildFailed:
-				var data session.ChildFailedData
-				if err := ev.UnmarshalData(&data); err == nil {
-					b.events <- ionsession.ChildFailed{
-						AgentName: data.ChildID,
-						Error:     data.Error,
-					}
-					b.events <- ionsession.StatusChanged{Status: "Ready"}
-				}
-			case session.ChildCanceled:
-				var data session.ChildCanceledData
-				if err := ev.UnmarshalData(&data); err == nil {
-					b.events <- ionsession.ChildFailed{
-						AgentName: data.ChildID,
-						Error:     "Canceled: " + data.Reason,
-					}
-					b.events <- ionsession.StatusChanged{Status: "Ready"}
-				}
+				b.events <- ionsession.StatusChanged{Status: "Ready"}
 			}
 		}
 	}

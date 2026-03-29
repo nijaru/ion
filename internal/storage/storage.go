@@ -42,6 +42,9 @@ type Store interface {
 
 	// CoreStore returns the underlying Canto memory store.
 	CoreStore() *memory.CoreStore
+
+	// Close finalizes and closes any open storage resources.
+	Close() error
 }
 
 // Session handles appending events to a specific session's storage.

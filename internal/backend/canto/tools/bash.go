@@ -2,14 +2,18 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os/exec"
 	"strings"
 	"sync"
+	"syscall"
 
 	"github.com/go-json-experiment/json"
 	"github.com/nijaru/canto/llm"
 )
+
+const maxOutputSize = 1024 * 1024 // 1MB
 
 type Bash struct {
 	cwd string
@@ -50,28 +54,52 @@ func (b *Bash) ExecuteStreaming(ctx context.Context, args string, emit func(stri
 	
 	cmd := exec.CommandContext(ctx, "bash", "-c", input.Command)
 	cmd.Dir = b.cwd
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
-	stdout, _ := cmd.StdoutPipe()
-	stderr, _ := cmd.StderrPipe()
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return "", fmt.Errorf("stdout pipe: %w", err)
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return "", fmt.Errorf("stderr pipe: %w", err)
+	}
 
 	if err := cmd.Start(); err != nil {
 		return "", err
 	}
+
+	// Ensure process group is killed on exit to prevent orphan leaks
+	defer func() {
+		if cmd.Process != nil {
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		}
+	}()
 
 	var output strings.Builder
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	wg.Add(2)
 	
+	limitExceeded := false
+
 	// Helper to handle pipe output and emit deltas
 	handlePipe := func(r io.Reader) {
 		defer wg.Done()
-		buf := make([]byte, 1024)
+		buf := make([]byte, 4096)
 		for {
 			n, err := r.Read(buf)
 			if n > 0 {
-				chunk := string(buf[:n])
 				mu.Lock()
+				if output.Len() >= maxOutputSize {
+					if !limitExceeded {
+						limitExceeded = true
+						output.WriteString("\n... [Output truncated: exceeded 1MB limit] ...\n")
+					}
+					mu.Unlock()
+					continue
+				}
+				chunk := string(buf[:n])
 				output.WriteString(chunk)
 				if emit != nil {
 					_ = emit(chunk)
@@ -87,7 +115,7 @@ func (b *Bash) ExecuteStreaming(ctx context.Context, args string, emit func(stri
 	go handlePipe(stdout)
 	go handlePipe(stderr)
 
-	err := cmd.Wait()
+	err = cmd.Wait()
 	wg.Wait()
 	res := output.String()
 	

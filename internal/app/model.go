@@ -410,6 +410,7 @@ func (m Model) runtimeHeaderLine(_ backend.Backend) string {
 }
 
 func (m Model) Init() tea.Cmd {
+	m.session.SetMode(m.mode)
 	return tea.Batch(
 		textarea.Blink,
 		m.spinner.Tick,

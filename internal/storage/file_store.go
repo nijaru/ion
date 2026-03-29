@@ -3,9 +3,7 @@ package storage
 import (
 	"bufio"
 	"context"
-	"crypto/rand"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -67,8 +65,9 @@ func (s *fileStore) OpenSession(ctx context.Context, cwd, model, branch string) 
 	}
 
 	// Initial index entry
-	if err := s.updateIndex(dir, id, fileName, model, branch, meta.CreatedAt, 0, ""); err != nil {
-		// Log error but continue
+	if err := s.updateIndex(dir, id, fileName, model, branch, meta.CreatedAt, time.Now().Unix(), ""); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("initial index update: %w", err)
 	}
 
 	return &fileSession{
@@ -219,6 +218,30 @@ func (s *fileStore) CoreStore() *memory.CoreStore {
 	return nil
 }
 
+func (s *fileStore) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var errs []error
+	for dir, db := range s.dbs {
+		if err := db.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("index db %s: %w", dir, err))
+		}
+		delete(s.dbs, dir)
+	}
+	for dir, db := range s.inputs {
+		if err := db.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("input db %s: %w", dir, err))
+		}
+		delete(s.inputs, dir)
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("close errors: %v", errs)
+	}
+	return nil
+}
+
 func (s *fileStore) dirFor(cwd string) string {
 	encoded := strings.ReplaceAll(cwd, string(filepath.Separator), "-")
 	if encoded == "" {
@@ -256,7 +279,8 @@ func (s *fileStore) openIndexDB(dir string) (*sql.DB, error) {
 		return nil, err
 	}
 
-	db, err := sql.Open("sqlite", filepath.Join(dir, "index.db"))
+	dsn := filepath.Join(dir, "index.db") + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)"
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
 	}
@@ -296,7 +320,8 @@ func (s *fileStore) openInputDB(dir string) (*sql.DB, error) {
 		return nil, err
 	}
 
-	db, err := sql.Open("sqlite", filepath.Join(dir, "input.db"))
+	dsn := filepath.Join(dir, "input.db") + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)"
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
 	}
@@ -368,7 +393,9 @@ func (s *fileSession) Append(ctx context.Context, event any) error {
 
 	if touchIndex {
 		dir := filepath.Dir(s.path)
-		s.store.updateIndex(dir, s.meta.ID, filepath.Base(s.path), s.meta.Model, s.meta.Branch, s.meta.CreatedAt, time.Now().Unix(), preview)
+		if err := s.store.updateIndex(dir, s.meta.ID, filepath.Base(s.path), s.meta.Model, s.meta.Branch, s.meta.CreatedAt, time.Now().Unix(), preview); err != nil {
+			return fmt.Errorf("update index: %w", err)
+		}
 	}
 
 	return nil
@@ -497,12 +524,4 @@ func (s *fileSession) Usage(ctx context.Context) (int, int, float64, error) {
 
 func (s *fileSession) Close() error {
 	return s.f.Close()
-}
-
-func shortID() string {
-	b := make([]byte, 4)
-	if _, err := rand.Read(b); err != nil {
-		return "abcd"
-	}
-	return hex.EncodeToString(b)
 }
