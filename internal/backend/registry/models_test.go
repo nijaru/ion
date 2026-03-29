@@ -3,6 +3,8 @@ package registry
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sync"
@@ -101,41 +103,34 @@ func TestFetchModelsUsesDirectFetcherForNativeProviders(t *testing.T) {
 	}
 }
 
-func TestFetchModelsUsesCatwalkOnlyWhenConfigured(t *testing.T) {
-	t.Setenv("CATWALK_URL", "https://catalog.example")
-
-	original := catwalkFetcher
-	defer func() { catwalkFetcher = original }()
-
-	called := false
-	catwalkFetcher = func(ctx context.Context, provider string) ([]ModelMetadata, error) {
-		called = true
-		if provider != "mystery" {
-			t.Fatalf("provider = %q, want mystery", provider)
+func TestFetchModelsUsesConfiguredOpenAICompatibleEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/models" {
+			t.Fatalf("path = %q, want /models", r.URL.Path)
 		}
-		return []ModelMetadata{{ID: "mystery-model"}}, nil
-	}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"custom/model-a"},{"id":"custom/model-b"}]}`))
+	}))
+	defer server.Close()
 
-	models, err := fetchModels(context.Background(), "mystery", &config.Config{Provider: "mystery"})
+	models, err := fetchModels(context.Background(), "openai-compatible", &config.Config{
+		Provider: "openai-compatible",
+		Endpoint: server.URL,
+	})
 	if err != nil {
-		t.Fatalf("fetchModels fallback: %v", err)
+		t.Fatalf("fetchModels custom endpoint: %v", err)
 	}
-	if !called {
-		t.Fatal("expected catwalk fallback to be called")
-	}
-	if len(models) != 1 || models[0].ID != "mystery-model" {
+	if len(models) != 2 {
 		t.Fatalf("models = %#v", models)
 	}
 }
 
 func TestFetchModelsRejectsUnknownProviderWithoutCatalog(t *testing.T) {
-	t.Setenv("CATWALK_URL", "")
-
 	_, err := fetchModels(context.Background(), "mystery", &config.Config{Provider: "mystery"})
 	if err == nil {
 		t.Fatal("expected unknown provider without configured catalog to fail")
 	}
-	if got := err.Error(); got != "no live model catalog configured for provider mystery" {
+	if got := err.Error(); got != "no model listing available for provider mystery" {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

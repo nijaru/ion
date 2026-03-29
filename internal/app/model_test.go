@@ -14,7 +14,6 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/nijaru/canto/memory"
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/backend/registry"
 	"github.com/nijaru/ion/internal/config"
@@ -183,17 +182,7 @@ func (s *resumeOnlyStore) UpdateSession(ctx context.Context, si storage.SessionI
 	return nil
 }
 
-func (s *resumeOnlyStore) SaveKnowledge(ctx context.Context, item storage.KnowledgeItem) error {
-	return nil
-}
-
-func (s *resumeOnlyStore) SearchKnowledge(ctx context.Context, cwd, query string, limit int) ([]storage.KnowledgeItem, error) {
-	return nil, nil
-}
-
-func (s *resumeOnlyStore) DeleteKnowledge(ctx context.Context, id string) error { return nil }
-
-func (s *resumeOnlyStore) CoreStore() *memory.CoreStore { return nil }
+func (s *resumeOnlyStore) Close() error { return nil }
 
 func readyModel(t *testing.T) Model {
 	t.Helper()
@@ -720,7 +709,7 @@ func TestHandleCommandUpdatesConfigDirectly(t *testing.T) {
 			oldBackend := stubBackend{sess: oldSession}
 			model := New(oldBackend, nil, nil, "/tmp/test", "main", "dev", nil)
 
-			cmd := model.handleCommand(tc.command)
+			model, cmd := model.handleCommand(tc.command)
 			if tc.wantCommand && cmd == nil {
 				t.Fatal("expected direct config command to return a cmd")
 			}
@@ -755,7 +744,7 @@ func TestCompactCommandUsesBackendCompactor(t *testing.T) {
 	}
 	model := New(backend, nil, nil, "/tmp/test", "main", "dev", nil)
 
-	cmd := model.handleCommand("/compact")
+	_, cmd := model.handleCommand("/compact")
 	if cmd == nil {
 		t.Fatal("expected /compact command to return a cmd")
 	}
@@ -780,7 +769,8 @@ func TestCompactCommandReportsNoOp(t *testing.T) {
 	}
 	model := New(backend, nil, nil, "/tmp/test", "main", "dev", nil)
 
-	msg := model.handleCommand("/compact")()
+	_, cmd := model.handleCommand("/compact")
+	msg := cmd()
 	compacted, ok := msg.(sessionCompactedMsg)
 	if !ok {
 		t.Fatalf("expected sessionCompactedMsg, got %T", msg)
@@ -793,7 +783,8 @@ func TestCompactCommandReportsNoOp(t *testing.T) {
 func TestCompactCommandErrorsWhenBackendUnsupported(t *testing.T) {
 	model := New(stubBackend{sess: &stubSession{events: make(chan session.Event)}}, nil, nil, "/tmp/test", "main", "dev", nil)
 
-	msg := model.handleCommand("/compact")()
+	_, cmd := model.handleCommand("/compact")
+	msg := cmd()
 	errMsg, ok := msg.(session.Error)
 	if !ok {
 		t.Fatalf("expected session.Error, got %T", msg)
@@ -831,7 +822,7 @@ func TestClearCommandStartsFreshSession(t *testing.T) {
 		return newBackend, newBackend.Session(), newStorage, nil
 	})
 
-	cmd := model.handleCommand("/clear")
+	model, cmd := model.handleCommand("/clear")
 	if cmd == nil {
 		t.Fatal("expected /clear command to return a cmd")
 	}
@@ -876,7 +867,8 @@ func TestClearCommandFallsBackToActiveRuntimeConfig(t *testing.T) {
 		return newBackend, newBackend.Session(), newStorage, nil
 	})
 
-	msg := model.handleCommand("/clear")()
+	_, cmd := model.handleCommand("/clear")
+	msg := cmd()
 	if _, ok := msg.(runtimeSwitchedMsg); !ok {
 		t.Fatalf("expected runtimeSwitchedMsg, got %T", msg)
 	}
@@ -893,7 +885,8 @@ func TestCostCommandReportsSessionTotals(t *testing.T) {
 		nil,
 	)
 
-	msg := model.handleCommand("/cost")()
+	_, cmd := model.handleCommand("/cost")
+	msg := cmd()
 	costMsg, ok := msg.(sessionCostMsg)
 	if !ok {
 		t.Fatalf("expected sessionCostMsg, got %T", msg)
@@ -916,7 +909,8 @@ func TestCostCommandReportsMissingCost(t *testing.T) {
 		nil,
 	)
 
-	msg := model.handleCommand("/cost")()
+	_, cmd := model.handleCommand("/cost")
+	msg := cmd()
 	costMsg, ok := msg.(sessionCostMsg)
 	if !ok {
 		t.Fatalf("expected sessionCostMsg, got %T", msg)
@@ -937,7 +931,8 @@ func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 		nil,
 	)
 
-	msg := model.handleCommand("/help")()
+	_, cmd := model.handleCommand("/help")
+	msg := cmd()
 	helpMsg, ok := msg.(sessionHelpMsg)
 	if !ok {
 		t.Fatalf("expected sessionHelpMsg, got %T", msg)
@@ -1529,7 +1524,7 @@ func TestSlashModelSameValueIsNoOp(t *testing.T) {
 	model := readyModel(t)
 	model.backend = stubBackend{sess: &stubSession{events: make(chan session.Event)}, provider: "openrouter", model: "z-ai/glm-5"}
 
-	cmd := model.handleCommand("/model z-ai/glm-5")
+	model, cmd := model.handleCommand("/model z-ai/glm-5")
 	if cmd != nil {
 		t.Fatalf("expected no-op command for same model, got %T", cmd)
 	}
@@ -2029,7 +2024,8 @@ func TestSessionPickerScopesToWorkspace(t *testing.T) {
 	}
 
 	model := New(stubBackend{sess: &stubSession{events: make(chan session.Event)}}, nil, store, cwd, "main", "dev", nil)
-	if cmd := model.openSessionPicker(); cmd != nil {
+	model, cmd := model.openSessionPicker()
+	if cmd != nil {
 		t.Fatalf("expected no command from openSessionPicker, got %T", cmd)
 	}
 	if model.sessionPicker == nil {

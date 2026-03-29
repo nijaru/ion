@@ -9,16 +9,12 @@ import (
 	"sync"
 	"time"
 
-	"charm.land/catwalk/pkg/catwalk"
 	"github.com/nijaru/canto/agent"
 	ccontext "github.com/nijaru/canto/context"
 	"github.com/nijaru/canto/hook"
 	"github.com/nijaru/canto/llm"
-	"github.com/nijaru/canto/llm/providers/anthropic"
-	"github.com/nijaru/canto/llm/providers/gemini"
-	"github.com/nijaru/canto/llm/providers/ollama"
-	"github.com/nijaru/canto/llm/providers/openai"
-	"github.com/nijaru/canto/llm/providers/openrouter"
+	cproviders "github.com/nijaru/canto/llm/providers"
+	"github.com/nijaru/canto/memory"
 	"github.com/nijaru/canto/runtime"
 	"github.com/nijaru/canto/session"
 	"github.com/nijaru/canto/tool"
@@ -43,6 +39,8 @@ type Backend struct {
 
 	ionStore storage.Store
 	sess     storage.Session
+	memory   *memory.Manager
+	tools    *tool.Registry
 
 	mu        sync.Mutex
 	cancel    context.CancelFunc
@@ -63,6 +61,10 @@ func New() *Backend {
 }
 
 var providerFactory = newProvider
+
+type coreStoreProvider interface {
+	CoreStore() *memory.CoreStore
+}
 
 func (b *Backend) Name() string {
 	return "canto"
@@ -145,21 +147,28 @@ func (b *Backend) Open(ctx context.Context) error {
 		return fmt.Errorf("No model configured. Use /model or Ctrl+M. Set ION_MODEL for scripts.")
 	}
 
-	// Pre-fetch metadata for the current model
-	_, _ = registry.GetMetadata(ctx, providerName, modelName)
-
 	// Initialize Canto store (SQLite) from ionStore if possible
 	if b.ionStore != nil {
 		if cs, ok := b.ionStore.(interface{ Canto() *session.SQLiteStore }); ok {
 			b.store = cs.Canto()
+		}
+		if cs, ok := b.ionStore.(coreStoreProvider); ok {
+			coreStore := cs.CoreStore()
+			if coreStore == nil {
+				return fmt.Errorf("ion memory store not initialized")
+			}
+			b.memory = memory.NewManager(coreStore)
 		}
 	}
 
 	if b.store == nil {
 		return fmt.Errorf("ion store not initialized")
 	}
+	if b.memory == nil {
+		return fmt.Errorf("ion memory manager not initialized")
+	}
 
-	p, err := providerFactory(b.cfg)
+	p, err := providerFactory(ctx, b.cfg)
 	if err != nil {
 		return err
 	}
@@ -176,6 +185,7 @@ func (b *Backend) Open(ctx context.Context) error {
 	}
 
 	registry := tool.NewRegistry()
+	b.tools = registry
 
 	// Use standard tools; approvals are now handled globally by a PreToolUse hook.
 	registry.Register(tools.NewBash(cwd))
@@ -198,88 +208,88 @@ func (b *Backend) Open(ctx context.Context) error {
 		},
 	})
 
-	// Register Canto native memory tools
-	sid := b.ID()
-	if sid == "" {
-		sid = "default"
-	}
-
-	coreStore := b.ionStore.CoreStore()
-	if coreStore == nil {
-		return fmt.Errorf("ion core store not initialized")
-	}
-
-	registry.Register(&ctools.RecallKnowledgeTool{Store: coreStore, Limit: 10})
-	registry.Register(&ctools.MemorizeKnowledgeTool{Store: coreStore, SessionID: sid})
+	workspaceNamespace := memory.Namespace{Scope: memory.ScopeWorkspace, ID: cwd}
+	registry.Register(&ctools.RecallTool{
+		Retriever:  b.memory,
+		Namespaces: []memory.Namespace{workspaceNamespace},
+		Roles:      []memory.Role{memory.RoleCore, memory.RoleSemantic, memory.RoleEpisodic},
+		Limit:      10,
+	})
+	registry.Register(&ctools.RememberTool{
+		Writer:    b.memory,
+		Namespace: workspaceNamespace,
+		Role:      memory.RoleSemantic,
+	})
 
 	// Add context processors
 	requestProcessors := []ccontext.RequestProcessor{
+		ccontext.MemoryPrompt(b.memory, ccontext.MemoryPromptOptions{
+			Namespaces: []memory.Namespace{workspaceNamespace},
+			Roles:      []memory.Role{memory.RoleCore, memory.RoleSemantic, memory.RoleEpisodic},
+			Limit:      5,
+		}),
 		NewFileTagProcessor(cwd),
 		reasoningEffortProcessor(b.cfg),
 	}
-	var processors []ccontext.Processor
-	processors = append(processors, ccontext.KnowledgeMemory(coreStore, "", 5))
 
 	b.agent = agent.New("ion", instructions, modelName, p, registry,
+		agent.WithHooks(policyHook(b)),
 		agent.WithRequestProcessors(requestProcessors...),
-		agent.WithProcessors(processors...),
 	)
 
 	// Initialize Runner
 	b.runner = runtime.NewRunner(b.store, b.agent)
 
-	// Register the global Permission Policy Hook
-	b.runner.Hooks.Register(
-		hook.NewFunc(
-			"ion-policy",
-			[]hook.Event{hook.EventPreToolUse},
-			func(ctx context.Context, payload *hook.Payload) *hook.Result {
-				toolName, _ := payload.Data["tool"].(string)
-				args, _ := payload.Data["args"].(string)
+	return nil
+}
 
-				policy, reason := b.policy.Authorize(ctx, toolName, args)
-				switch policy {
-				case backend.PolicyAllow:
-					return &hook.Result{Action: hook.ActionProceed}
-				case backend.PolicyDeny:
-					return &hook.Result{
-						Action: hook.ActionBlock,
-						Error:  fmt.Errorf("policy denied: %s", reason),
-					}
-				case backend.PolicyAsk:
-					id := ionsession.ShortID()
-					description := fmt.Sprintf("Tool: %s\nArgs: %s\n\n%s", toolName, args, reason)
+func policyHook(b *Backend) hook.Hook {
+	return hook.NewFunc(
+		"ion-policy",
+		[]hook.Event{hook.EventPreToolUse},
+		func(ctx context.Context, payload *hook.Payload) *hook.Result {
+			toolName, _ := payload.Data["tool"].(string)
+			args, _ := payload.Data["args"].(string)
 
-					// Send approval request to TUI
-					b.events <- ionsession.ApprovalRequest{
-						RequestID:   id,
-						Description: description,
-						ToolName:    toolName,
-						Args:        args,
-					}
+			policy, reason := b.policy.Authorize(ctx, toolName, args)
+			switch policy {
+			case backend.PolicyAllow:
+				return &hook.Result{Action: hook.ActionProceed}
+			case backend.PolicyDeny:
+				return &hook.Result{
+					Action: hook.ActionBlock,
+					Error:  fmt.Errorf("policy denied: %s", reason),
+				}
+			case backend.PolicyAsk:
+				id := ionsession.ShortID()
+				description := fmt.Sprintf("Tool: %s\nArgs: %s\n\n%s", toolName, args, reason)
 
-					// Wait for approval via ApprovalManager
-					ch := b.approver.Request(id)
-					select {
-					case <-ctx.Done():
-						return &hook.Result{Action: hook.ActionBlock, Error: ctx.Err()}
-					case approved := <-ch:
-						if !approved {
-							return &hook.Result{
-								Action: hook.ActionBlock,
-								Error:  fmt.Errorf("user denied tool execution"),
-							}
+				b.events <- ionsession.ApprovalRequest{
+					RequestID:   id,
+					Description: description,
+					ToolName:    toolName,
+					Args:        args,
+				}
+
+				ch := b.approver.Request(id)
+				defer b.approver.Remove(id)
+				select {
+				case <-ctx.Done():
+					return &hook.Result{Action: hook.ActionBlock, Error: ctx.Err()}
+				case approved := <-ch:
+					if !approved {
+						return &hook.Result{
+							Action: hook.ActionBlock,
+							Error:  fmt.Errorf("user denied tool execution"),
 						}
-						return &hook.Result{Action: hook.ActionProceed}
 					}
-				default:
 					return &hook.Result{Action: hook.ActionProceed}
 				}
-			},
-		),
+			default:
+				return &hook.Result{Action: hook.ActionProceed}
+			}
+		},
 	)
-
-	return nil
 }
 
 func reasoningEffortProcessor(cfg *config.Config) ccontext.RequestProcessor {
@@ -312,7 +322,7 @@ func normalizeReasoningEffort(value string) string {
 	}
 }
 
-func newProvider(cfg *config.Config) (llm.Provider, error) {
+func newProvider(ctx context.Context, cfg *config.Config) (llm.Provider, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("provider config not set")
 	}
@@ -320,41 +330,87 @@ func newProvider(cfg *config.Config) (llm.Provider, error) {
 	if !ok {
 		return nil, fmt.Errorf("unsupported canto provider %q", cfg.Provider)
 	}
-	base := catwalk.Provider{
-		ID:             catwalk.InferenceProvider(def.ID),
-		APIKey:         resolvedAPIKey(cfg, def),
-		APIEndpoint:    providers.ResolvedEndpointContext(context.Background(), cfg),
-		DefaultHeaders: providers.ResolvedHeaders(cfg),
-	}
-
+	models := providerModels(ctx, cfg)
+	apiKey := resolvedAPIKey(cfg, def)
+	endpoint := providers.ResolvedEndpointContext(ctx, cfg)
 	switch def.Family {
 	case providers.FamilyAnthropic:
-		if base.APIKey == "" {
+		if apiKey == "" {
 			return nil, fmt.Errorf("%s not set", missingAuthDetail(cfg, def))
 		}
-		return anthropic.NewProvider(base), nil
+		return cproviders.NewAnthropic(cproviders.Config{
+			APIKey:   apiKey,
+			Endpoint: endpoint,
+			Headers:  providers.ResolvedHeaders(cfg),
+			Models:   models,
+		}), nil
 	case providers.FamilyOpenAI:
-		if def.ID == "local-api" && base.APIEndpoint == "" {
-			return nil, fmt.Errorf("Local API is not running")
-		}
-		if def.AuthKind != providers.AuthLocal && base.APIKey == "" {
+		if def.AuthKind != providers.AuthLocal && apiKey == "" {
 			return nil, fmt.Errorf("%s not set", missingAuthDetail(cfg, def))
 		}
-		return openai.NewProvider(base), nil
+		if def.ID == "openai" {
+			return cproviders.NewOpenAI(cproviders.Config{
+				APIKey:   apiKey,
+				Endpoint: endpoint,
+				Headers:  providers.ResolvedHeaders(cfg),
+				Models:   models,
+			}), nil
+		}
+		return cproviders.NewOpenAICompatible(cproviders.OpenAICompatibleConfig{
+			ID:        def.ID,
+			APIKey:    apiKey,
+			Endpoint:  endpoint,
+			Headers:   providers.ResolvedHeaders(cfg),
+			Models:    models,
+			ModelCaps: nil,
+		})
 	case providers.FamilyOpenRouter:
-		if base.APIKey == "" {
+		if apiKey == "" {
 			return nil, fmt.Errorf("%s not set", missingAuthDetail(cfg, def))
 		}
-		return openrouter.NewProvider(base), nil
+		return cproviders.NewOpenRouter(cproviders.Config{
+			APIKey:   apiKey,
+			Endpoint: endpoint,
+			Headers:  providers.ResolvedHeaders(cfg),
+			Models:   models,
+		}), nil
 	case providers.FamilyGemini:
-		if base.APIKey == "" {
+		if apiKey == "" {
 			return nil, fmt.Errorf("%s not set", missingAuthDetail(cfg, def))
 		}
-		return gemini.NewProvider(base), nil
+		return cproviders.NewGemini(cproviders.Config{
+			APIKey:   apiKey,
+			Endpoint: endpoint,
+			Headers:  providers.ResolvedHeaders(cfg),
+			Models:   models,
+		}), nil
 	case providers.FamilyOllama:
-		return ollama.NewProvider(base), nil
+		return cproviders.NewOllama(cproviders.Config{
+			APIKey:   apiKey,
+			Endpoint: endpoint,
+			Headers:  providers.ResolvedHeaders(cfg),
+			Models:   models,
+		}), nil
 	default:
 		return nil, fmt.Errorf("unsupported provider family %q", def.Family)
+	}
+}
+
+func providerModels(ctx context.Context, cfg *config.Config) []llm.Model {
+	if cfg == nil || strings.TrimSpace(cfg.Provider) == "" || strings.TrimSpace(cfg.Model) == "" {
+		return nil
+	}
+	meta, ok := registry.GetMetadata(ctx, cfg.Provider, cfg.Model)
+	if !ok {
+		return []llm.Model{{ID: cfg.Model}}
+	}
+	return []llm.Model{
+		{
+			ID:            cfg.Model,
+			ContextWindow: meta.ContextLimit,
+			CostPer1MIn:   meta.InputPrice,
+			CostPer1MOut:  meta.OutputPrice,
+		},
 	}
 }
 
@@ -397,7 +453,7 @@ func (b *Backend) Resume(ctx context.Context, sessionID string) error {
 		return b.Open(ctx)
 	}
 
-	// In Canto, Runner.Subscribe will load the session if not present.
+	// In Canto, Runner.Watch will load the session if not present.
 	// We don't need explicit Resume logic for the agent itself yet.
 	return nil
 }
@@ -410,27 +466,26 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 		return fmt.Errorf("backend not initialized")
 	}
 
-	sessionID := b.ID()
-	if sessionID == "" {
-		// Fallback for standalone mode without ion storage
-		sessionID = "default"
-	}
+		sessionID := b.ID()
+		if sessionID == "" {
+			sessionID = "default"
+		}
 
 	// Create a sub-context for the turn and store its cancel function.
 	// This allows CancelTurn to interrupt the in-flight generation.
 	turnCtx, cancel := context.WithCancel(context.Background())
 	b.cancel = cancel
 
-	// Subscribe to framework events and translate them to ion UI events.
-	// Use the background context for the subscription to avoid it being
-	// cancelled when the submission command context ends.
-	evCh, _, err := b.runner.Subscribe(turnCtx, sessionID)
+	sub, err := b.runner.Watch(turnCtx, sessionID)
 	if err != nil {
 		cancel()
 		return err
 	}
 
-	go b.translateEvents(turnCtx, evCh)
+	go func() {
+		defer sub.Close()
+		b.translateEvents(turnCtx, sub.Events())
+	}()
 
 	// Run the agent turn with streaming
 	go func() {
@@ -585,7 +640,7 @@ func (b *Backend) RegisterMCPServer(ctx context.Context, command string, args ..
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	if b.agent == nil {
+	if b.agent == nil || b.tools == nil {
 		return fmt.Errorf("backend not initialized")
 	}
 
@@ -601,7 +656,7 @@ func (b *Backend) RegisterMCPServer(ctx context.Context, command string, args ..
 	}
 
 	for _, t := range tools {
-		b.agent.Tools.Register(t)
+		b.tools.Register(t)
 	}
 
 	b.mcpClients = append(b.mcpClients, client)
@@ -667,6 +722,9 @@ func (b *Backend) Close() error {
 			client.Close()
 		}
 
+		if b.memory != nil {
+			_ = b.memory.Close()
+		}
 		if b.runner != nil {
 			b.runner.Close()
 		}

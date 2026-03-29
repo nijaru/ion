@@ -20,6 +20,7 @@ var safePrefixes = []string{
 	"ag",
 	"fd",
 	"fzf",
+	"cat",
 	// Git (read-only subcommands)
 	"git status",
 	"git log",

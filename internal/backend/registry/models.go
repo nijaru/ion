@@ -15,7 +15,6 @@ import (
 	"sync"
 	"time"
 
-	"charm.land/catwalk/pkg/catwalk"
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/providers"
 )
@@ -43,7 +42,6 @@ var (
 	openRouterFetcher      = fetchOpenRouterModels
 	geminiFetcher          = fetchGeminiModels
 	ollamaFetcher          = fetchOllamaModels
-	catwalkFetcher         = fetchModelsFromCatwalk
 )
 
 const modelListRequestTimeout = 10 * time.Second
@@ -125,54 +123,16 @@ func fetchModels(ctx context.Context, provider string, cfg *config.Config) ([]Mo
 		}
 		return fetchOpenAICompatibleModels(ctx, provider, endpoint, "", nil)
 	default:
-		if def, ok := providers.Lookup(provider); ok && def.Family == providers.FamilyOpenAI {
-			endpoint := providers.ResolvedEndpointContext(ctx, cfg)
-			if endpoint == "" {
-				return nil, fmt.Errorf("provider %s has no configured endpoint", provider)
-			}
-			return fetchOpenAICompatibleModels(ctx, provider, endpoint, resolvedAuthToken(cfg, def), providers.ResolvedHeaders(cfg))
+		def, ok := providers.Lookup(provider)
+		if !ok || def.Family != providers.FamilyOpenAI {
+			return nil, fmt.Errorf("no model listing available for provider %s", provider)
 		}
-		if strings.TrimSpace(os.Getenv("CATWALK_URL")) == "" {
-			return nil, fmt.Errorf("no live model catalog configured for provider %s", provider)
+		endpoint := providers.ResolvedEndpointContext(ctx, cfg)
+		if endpoint == "" {
+			return nil, fmt.Errorf("provider %s has no configured endpoint", provider)
 		}
-		return catwalkFetcher(ctx, provider)
+		return fetchOpenAICompatibleModels(ctx, provider, endpoint, resolvedAuthToken(cfg, def), providers.ResolvedHeaders(cfg))
 	}
-}
-
-func fetchModelsFromCatwalk(ctx context.Context, provider string) ([]ModelMetadata, error) {
-	client := catwalk.New()
-	providers, err := client.GetProviders(ctx, "")
-	if err != nil {
-		return nil, err
-	}
-
-	var models []ModelMetadata
-	for _, p := range providers {
-		if !strings.EqualFold(p.Name, provider) && !strings.EqualFold(string(p.ID), provider) {
-			continue
-		}
-		for _, m := range p.Models {
-			models = append(models, ModelMetadata{
-				ID:               m.ID,
-				Provider:         p.Name,
-				ContextLimit:     int(m.ContextWindow),
-				InputPrice:       m.CostPer1MIn,
-				OutputPrice:      m.CostPer1MOut,
-				InputPriceKnown:  true,
-				OutputPriceKnown: true,
-				UpdatedAt:        time.Now().Unix(),
-			})
-		}
-		break
-	}
-
-	if len(models) == 0 {
-		return nil, fmt.Errorf("no models found for provider %s", provider)
-	}
-
-	annotateCreated(ctx, models)
-	sortModels(models)
-	return models, nil
 }
 
 type openRouterModelsResponse struct {

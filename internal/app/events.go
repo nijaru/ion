@@ -202,15 +202,14 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 	switch msg := ev.(type) {
 	case session.StatusChanged:
 		m.status = msg.Status
-		var persistCmd tea.Cmd
-		if m.storage != nil {
-			persistCmd = m.persistCmd("persist status", storage.Status{
-				Type:   "status",
-				Status: msg.Status,
-				TS:     now(),
-			})
+		if err := m.persistEntry("persist status", storage.Status{
+			Type:   "status",
+			Status: msg.Status,
+			TS:     now(),
+		}); err != nil {
+			return m, persistErrorCmd("persist status", err)
 		}
-		return m, tea.Sequence(persistCmd, m.awaitSessionEvent())
+		return m, m.awaitSessionEvent()
 
 	case session.TokenUsage:
 		m.tokensSent += msg.Input
@@ -219,17 +218,16 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		m.currentTurnInput += msg.Input
 		m.currentTurnOutput += msg.Output
 		m.currentTurnCost += msg.Cost
-		var persistCmd tea.Cmd
-		if m.storage != nil {
-			persistCmd = m.persistCmd("persist token usage", storage.TokenUsage{
-				Type:   "token_usage",
-				Input:  msg.Input,
-				Output: msg.Output,
-				Cost:   msg.Cost,
-				TS:     now(),
-			})
+		if err := m.persistEntry("persist token usage", storage.TokenUsage{
+			Type:   "token_usage",
+			Input:  msg.Input,
+			Output: msg.Output,
+			Cost:   msg.Cost,
+			TS:     now(),
+		}); err != nil {
+			return m, persistErrorCmd("persist token usage", err)
 		}
-		return m, tea.Sequence(persistCmd, m.awaitSessionEvent())
+		return m, m.awaitSessionEvent()
 
 	case session.TurnStarted:
 		m.thinking = true
@@ -286,24 +284,23 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 				return m, m.awaitSessionEvent()
 			}
 
-			if m.storage != nil {
-				blocks := []storage.Block{}
-				if entry.Reasoning != "" {
-					blocks = append(blocks, storage.Block{
-						Type:     "thinking",
-						Thinking: &entry.Reasoning,
-					})
-				}
+			blocks := []storage.Block{}
+			if entry.Reasoning != "" {
 				blocks = append(blocks, storage.Block{
-					Type: "text",
-					Text: &entry.Content,
+					Type:     "thinking",
+					Thinking: &entry.Reasoning,
 				})
-				persistCmd := m.persistCmd("persist agent response", storage.Agent{
-					Type:    "agent",
-					Content: blocks,
-					TS:      now(),
-				})
-				return m, tea.Sequence(m.printEntries(entry), persistCmd, m.awaitSessionEvent())
+			}
+			blocks = append(blocks, storage.Block{
+				Type: "text",
+				Text: &entry.Content,
+			})
+			if err := m.persistEntry("persist agent response", storage.Agent{
+				Type:    "agent",
+				Content: blocks,
+				TS:      now(),
+			}); err != nil {
+				return m, tea.Sequence(m.printEntries(entry), persistErrorCmd("persist agent response", err))
 			}
 			return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
 		}
@@ -312,23 +309,22 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 	case session.ToolCallStarted:
 		m.progress = stateWorking
 		m.lastToolUseID = session.ShortID()
-		var persistCmd tea.Cmd
-		if m.storage != nil {
-			persistCmd = m.persistCmd("persist tool use", storage.ToolUse{
-				Type: "tool_use",
-				ID:   m.lastToolUseID,
-				Name: msg.ToolName,
-				Input: map[string]string{
-					"args": msg.Args,
-				},
-				TS: now(),
-			})
-		}
 		m.pending = &session.Entry{
 			Role:  session.Tool,
 			Title: formatToolTitle(msg.ToolName, msg.Args),
 		}
-		return m, tea.Sequence(persistCmd, m.awaitSessionEvent())
+		if err := m.persistEntry("persist tool use", storage.ToolUse{
+			Type: "tool_use",
+			ID:   m.lastToolUseID,
+			Name: msg.ToolName,
+			Input: map[string]string{
+				"args": msg.Args,
+			},
+			TS: now(),
+		}); err != nil {
+			return m, persistErrorCmd("persist tool use", err)
+		}
+		return m, m.awaitSessionEvent()
 
 	case session.ToolOutputDelta:
 		if m.pending != nil && m.pending.Role == session.Tool {
@@ -343,17 +339,16 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 			entry := *m.pending
 			m.pending = nil
 
-			var persistCmd tea.Cmd
-			if m.storage != nil {
-				persistCmd = m.persistCmd("persist tool result", storage.ToolResult{
-					Type:      "tool_result",
-					ToolUseID: m.lastToolUseID,
-					Content:   msg.Result,
-					IsError:   msg.Error != nil,
-					TS:        now(),
-				})
+			if err := m.persistEntry("persist tool result", storage.ToolResult{
+				Type:      "tool_result",
+				ToolUseID: m.lastToolUseID,
+				Content:   msg.Result,
+				IsError:   msg.Error != nil,
+				TS:        now(),
+			}); err != nil {
+				return m, tea.Sequence(m.printEntries(entry), persistErrorCmd("persist tool result", err))
 			}
-			return m, tea.Sequence(m.printEntries(entry), persistCmd, m.awaitSessionEvent())
+			return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
 		}
 		return m, m.awaitSessionEvent()
 
@@ -366,17 +361,16 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 			Content: content,
 			IsError: !msg.Passed,
 		}
-		var persistCmd tea.Cmd
-		if m.storage != nil {
-			persistCmd = m.persistCmd("persist verification result", storage.ToolResult{
-				Type:      "tool_result",
-				ToolUseID: m.lastToolUseID,
-				Content:   content,
-				IsError:   !msg.Passed,
-				TS:        now(),
-			})
+		if err := m.persistEntry("persist verification result", storage.ToolResult{
+			Type:      "tool_result",
+			ToolUseID: m.lastToolUseID,
+			Content:   content,
+			IsError:   !msg.Passed,
+			TS:        now(),
+		}); err != nil {
+			return m, tea.Sequence(m.printEntries(entry), persistErrorCmd("persist verification result", err))
 		}
-		return m, tea.Sequence(m.printEntries(entry), persistCmd, m.awaitSessionEvent())
+		return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
 
 	case session.ApprovalRequest:
 		m.pendingApproval = &msg
@@ -453,16 +447,14 @@ func persistErrorCmd(action string, err error) tea.Cmd {
 	}
 }
 
-func (m Model) persistCmd(action string, entry any) tea.Cmd {
+func (m Model) persistEntry(action string, entry any) error {
 	if m.storage == nil {
 		return nil
 	}
-	return func() tea.Msg {
-		if err := m.storage.Append(context.Background(), entry); err != nil {
-			return session.Error{Err: fmt.Errorf("%s: %w", action, err)}
-		}
-		return nil
+	if err := m.storage.Append(context.Background(), entry); err != nil {
+		return fmt.Errorf("%s: %w", action, err)
 	}
+	return nil
 }
 
 func (m Model) submitText(text string) (Model, tea.Cmd) {
@@ -474,22 +466,21 @@ func (m Model) submitText(text string) (Model, tea.Cmd) {
 	m.composer.Reset()
 	m.relayoutComposer()
 
-	var persistCmd tea.Cmd
-	if m.storage != nil {
-		persistCmd = m.persistCmd("persist user input", storage.User{
-			Type:    "user",
-			Content: text,
-			TS:      now(),
-		})
+	if err := m.persistEntry("persist user input", storage.User{
+		Type:    "user",
+		Content: text,
+		TS:      now(),
+	}); err != nil {
+		return m, persistErrorCmd("persist user input", err)
 	}
 
 	if strings.HasPrefix(text, "/") {
 		m, cmd := m.handleCommand(text)
-		return m, tea.Sequence(m.printEntries(userEntry), persistCmd, cmd)
+		return m, tea.Sequence(m.printEntries(userEntry), cmd)
 	}
 
 	m.progress = stateIonizing
 	m.thinking = true
 	m.session.SubmitTurn(context.Background(), text)
-	return m, tea.Sequence(m.printEntries(userEntry), persistCmd)
+	return m, m.printEntries(userEntry)
 }

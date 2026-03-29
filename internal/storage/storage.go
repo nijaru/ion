@@ -4,7 +4,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/nijaru/canto/memory"
 	"github.com/nijaru/ion/internal/session"
 )
 
@@ -30,18 +29,6 @@ type Store interface {
 
 	// UpdateSession updates the session's index metadata.
 	UpdateSession(ctx context.Context, si SessionInfo) error
-
-	// SaveKnowledge persists a knowledge item for cross-session recall.
-	SaveKnowledge(ctx context.Context, item KnowledgeItem) error
-
-	// SearchKnowledge finds items matching the query for the given directory.
-	SearchKnowledge(ctx context.Context, cwd, query string, limit int) ([]KnowledgeItem, error)
-
-	// DeleteKnowledge removes a specific item by ID.
-	DeleteKnowledge(ctx context.Context, id string) error
-
-	// CoreStore returns the underlying Canto memory store.
-	CoreStore() *memory.CoreStore
 
 	// Close finalizes and closes any open storage resources.
 	Close() error
@@ -89,17 +76,6 @@ type SessionInfo struct {
 	UpdatedAt    time.Time `json:"updated_at"`
 	MessageCount int       `json:"message_count"`
 	LastPreview  string    `json:"last_preview"`
-}
-
-// KnowledgeItem represents a piece of information stored in long-term memory.
-// It can be a code fragment, a file summary, or a cross-session insight.
-type KnowledgeItem struct {
-	ID        string         `json:"id"`
-	CWD       string         `json:"cwd"`
-	Path      string         `json:"path,omitzero"`
-	Content   string         `json:"content"`
-	Metadata  map[string]any `json:"metadata,omitzero"`
-	UpdatedAt time.Time      `json:"updated_at"`
 }
 
 // JSONL entry types as defined in ai/design/session-storage.md

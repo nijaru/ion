@@ -1,20 +1,15 @@
 package tools
 
 import (
-	"bufio"
 	"context"
 	"fmt"
-	"io/fs"
 	"os"
 	"os/exec"
-	"path/filepath"
-	"regexp"
 	"strings"
 
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/go-json-experiment/json"
 	"github.com/nijaru/canto/llm"
-	ignore "github.com/sabhiram/go-gitignore"
 )
 
 type SearchTool struct {
@@ -33,7 +28,7 @@ type Grep struct {
 func (g *Grep) Spec() llm.Spec {
 	return llm.Spec{
 		Name:        "grep",
-		Description: "Search for a regex pattern in files. Uses ripgrep if available, falling back to a Go-native search that respects .gitignore.",
+		Description: "Search for a regex pattern in files using ripgrep.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -71,87 +66,7 @@ func (g *Grep) Execute(ctx context.Context, args string) (string, error) {
 	if err == nil {
 		return string(output), nil
 	}
-
-	// Fallback to Go-native implementation that respects .gitignore
-	return g.nativeGrep(input.Pattern, input.Path)
-}
-
-func (g *Grep) nativeGrep(pattern, root string) (string, error) {
-	re, err := regexp.Compile(pattern)
-	if err != nil {
-		return "", fmt.Errorf("invalid regex: %w", err)
-	}
-
-	absRoot := filepath.Join(g.cwd, root)
-	
-	// Load .gitignore if present
-	var ignorer *ignore.GitIgnore
-	if gitignore, err := os.ReadFile(filepath.Join(g.cwd, ".gitignore")); err == nil {
-		ignorer = ignore.CompileIgnoreLines(strings.Split(string(gitignore), "\n")...)
-	}
-
-	var res strings.Builder
-	count := 0
-	maxResults := 100
-
-	err = filepath.WalkDir(absRoot, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || count >= maxResults {
-			return err
-		}
-
-		rel, _ := filepath.Rel(g.cwd, path)
-		if ignorer != nil && ignorer.MatchesPath(rel) {
-			if d.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-
-		if d.IsDir() {
-			if d.Name() == ".git" {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-
-		f, err := os.Open(path)
-		if err != nil {
-			return nil
-		}
-		defer f.Close()
-
-		scanner := bufio.NewScanner(f)
-		lineNum := 1
-		fileHeaderPrinted := false
-
-		for scanner.Scan() {
-			line := scanner.Text()
-			if re.MatchString(line) {
-				if !fileHeaderPrinted {
-					res.WriteString(fmt.Sprintf("\n%s\n", rel))
-					fileHeaderPrinted = true
-				}
-				res.WriteString(fmt.Sprintf("%d:%s\n", lineNum, line))
-				count++
-				if count >= maxResults {
-					break
-				}
-			}
-			lineNum++
-		}
-
-		return nil
-	})
-
-	if err != nil && err != filepath.SkipDir {
-		return "", err
-	}
-
-	if res.Len() == 0 {
-		return "No matches found.", nil
-	}
-
-	return res.String(), nil
+	return "", fmt.Errorf("rg search failed: %w", err)
 }
 
 // Glob tool

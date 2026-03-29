@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nijaru/canto/memory"
 	"github.com/nijaru/ion/internal/session"
 	_ "modernc.org/sqlite"
 	"sync"
@@ -196,25 +195,6 @@ func (s *fileStore) GetInputs(ctx context.Context, cwd string, limit int) ([]str
 
 func (s *fileStore) UpdateSession(ctx context.Context, si SessionInfo) error {
 	// Not fully implemented as we need to resolve the directory for the ID
-	return nil
-}
-
-func (s *fileStore) SaveKnowledge(ctx context.Context, item KnowledgeItem) error {
-	// No-op for fileStore
-	return nil
-}
-
-func (s *fileStore) SearchKnowledge(ctx context.Context, cwd, query string, limit int) ([]KnowledgeItem, error) {
-	// No-op for fileStore
-	return nil, nil
-}
-
-func (s *fileStore) DeleteKnowledge(ctx context.Context, id string) error {
-	// No-op for fileStore
-	return nil
-}
-
-func (s *fileStore) CoreStore() *memory.CoreStore {
 	return nil
 }
 

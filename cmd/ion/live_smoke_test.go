@@ -245,11 +245,11 @@ func liveSmokeEnabled() bool {
 	return value == "1" || strings.EqualFold(value, "true") || strings.EqualFold(value, "yes")
 }
 
-func smokeEnv(name, fallback string) string {
+func smokeEnv(name, defaultValue string) string {
 	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
 		return value
 	}
-	return fallback
+	return defaultValue
 }
 
 func isLiveSmokeUnavailable(err error) bool {

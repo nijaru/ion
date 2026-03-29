@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"charm.land/catwalk/pkg/catwalk"
 	"github.com/nijaru/canto/llm"
 	csession "github.com/nijaru/canto/session"
 	ctesting "github.com/nijaru/canto/x/testing"
@@ -31,7 +30,7 @@ func (p *compactProvider) Stream(ctx context.Context, req *llm.Request) (llm.Str
 	return nil, nil
 }
 
-func (p *compactProvider) Models(ctx context.Context) ([]catwalk.Model, error) {
+func (p *compactProvider) Models(ctx context.Context) ([]llm.Model, error) {
 	return nil, nil
 }
 
@@ -47,7 +46,7 @@ func (p *compactProvider) Capabilities(model string) llm.Capabilities {
 
 func (p *compactProvider) IsTransient(err error) bool { return false }
 
-func TestProviderAndModelFallBackToEnv(t *testing.T) {
+func TestProviderAndModelLoadFromEnv(t *testing.T) {
 	t.Setenv("ION_PROVIDER", "anthropic")
 	t.Setenv("ION_MODEL", "claude-sonnet-4-5")
 
@@ -122,14 +121,14 @@ func TestCrossProviderHandoffPreservesPromptTruth(t *testing.T) {
 	})
 
 	oldFactory := providerFactory
-	providerFactory = func(cfg *config.Config) (llm.Provider, error) {
+	providerFactory = func(ctx context.Context, cfg *config.Config) (llm.Provider, error) {
 		switch cfg.Provider {
 		case "openai":
 			return firstProvider, nil
 		case "openrouter":
 			return secondProvider, nil
 		default:
-			return oldFactory(cfg)
+			return oldFactory(ctx, cfg)
 		}
 	}
 	defer func() {
@@ -248,11 +247,11 @@ func TestCompactUsesManualCompactionHelper(t *testing.T) {
 	}
 
 	oldFactory := providerFactory
-	providerFactory = func(cfg *config.Config) (llm.Provider, error) {
+	providerFactory = func(ctx context.Context, cfg *config.Config) (llm.Provider, error) {
 		if cfg.Provider == "openai" {
 			return &compactProvider{id: "openai"}, nil
 		}
-		return oldFactory(cfg)
+		return oldFactory(ctx, cfg)
 	}
 	defer func() { providerFactory = oldFactory }()
 
@@ -294,12 +293,11 @@ func TestCompactUsesManualCompactionHelper(t *testing.T) {
 		t.Fatalf("load canto session: %v", err)
 	}
 	var compactionEvents int
-	sess.ForEachEvent(func(e csession.Event) bool {
+	for _, e := range sess.Events() {
 		if e.Type == csession.CompactionTriggered {
 			compactionEvents++
 		}
-		return true
-	})
+	}
 	if compactionEvents == 0 {
 		t.Fatal("expected at least one durable compaction event")
 	}
@@ -334,11 +332,11 @@ func TestOpenLoadsLayeredProjectInstructions(t *testing.T) {
 	}
 
 	oldFactory := providerFactory
-	providerFactory = func(cfg *config.Config) (llm.Provider, error) {
+	providerFactory = func(ctx context.Context, cfg *config.Config) (llm.Provider, error) {
 		if cfg.Provider == "openai" {
 			return &compactProvider{id: "openai"}, nil
 		}
-		return oldFactory(cfg)
+		return oldFactory(ctx, cfg)
 	}
 	defer func() { providerFactory = oldFactory }()
 
@@ -351,14 +349,14 @@ func TestOpenLoadsLayeredProjectInstructions(t *testing.T) {
 	}
 	defer func() { _ = b.Close() }()
 
-	if !strings.Contains(b.agent.Instructions, "root instruction") {
-		t.Fatalf("instructions missing root layer: %q", b.agent.Instructions)
+	if !strings.Contains(b.agent.Instructions(), "root instruction") {
+		t.Fatalf("instructions missing root layer: %q", b.agent.Instructions())
 	}
-	if !strings.Contains(b.agent.Instructions, "pkg instruction") {
-		t.Fatalf("instructions missing nested layer: %q", b.agent.Instructions)
+	if !strings.Contains(b.agent.Instructions(), "pkg instruction") {
+		t.Fatalf("instructions missing nested layer: %q", b.agent.Instructions())
 	}
-	if !strings.Contains(b.agent.Instructions, "## Project Instructions") {
-		t.Fatalf("instructions missing project section: %q", b.agent.Instructions)
+	if !strings.Contains(b.agent.Instructions(), "## Project Instructions") {
+		t.Fatalf("instructions missing project section: %q", b.agent.Instructions())
 	}
 }
 

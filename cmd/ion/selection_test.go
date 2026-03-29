@@ -4,7 +4,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/nijaru/canto/memory"
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/storage"
 )
@@ -40,17 +39,7 @@ func (s *metadataStore) UpdateSession(ctx context.Context, si storage.SessionInf
 	return nil
 }
 
-func (s *metadataStore) SaveKnowledge(ctx context.Context, item storage.KnowledgeItem) error {
-	return nil
-}
-
-func (s *metadataStore) SearchKnowledge(ctx context.Context, cwd, query string, limit int) ([]storage.KnowledgeItem, error) {
-	return nil, nil
-}
-
-func (s *metadataStore) DeleteKnowledge(ctx context.Context, id string) error { return nil }
-
-func (s *metadataStore) CoreStore() *memory.CoreStore { return nil }
+func (s *metadataStore) Close() error { return nil }
 
 func TestBackendForProvider(t *testing.T) {
 	cases := []struct {

@@ -70,11 +70,15 @@ func (s *cantoStore) Close() error {
 	defer s.mu.Unlock()
 
 	var errs []error
+	if err := s.canto.Close(); err != nil {
+		errs = append(errs, err)
+	}
+	if err := s.memory.Close(); err != nil {
+		errs = append(errs, err)
+	}
 	if err := s.db.Close(); err != nil {
 		errs = append(errs, err)
 	}
-	// Note: session.SQLiteStore and memory.CoreStore do not currently have Close()
-	// but we should check if they do in the future.
 	if len(errs) > 0 {
 		return fmt.Errorf("close errors: %v", errs)
 	}
@@ -233,64 +237,6 @@ func (s *cantoStore) UpdateSession(ctx context.Context, si SessionInfo) error {
 	return err
 }
 
-func (s *cantoStore) SaveKnowledge(ctx context.Context, item KnowledgeItem) error {
-	metadata := item.Metadata
-	if metadata == nil {
-		metadata = make(map[string]any)
-	}
-	metadata["cwd"] = item.CWD
-	if item.Path != "" {
-		metadata["path"] = item.Path
-	}
-
-	return s.memory.SaveKnowledge(ctx, &memory.KnowledgeItem{
-		ID:       item.ID,
-		Content:  item.Content,
-		Metadata: metadata,
-	})
-}
-
-func (s *cantoStore) SearchKnowledge(ctx context.Context, cwd, query string, limit int) ([]KnowledgeItem, error) {
-	// Note: Canto's SearchKnowledge currently doesn't filter by CWD in its core table,
-	// so we might need to filter manually if necessary, or update Canto.
-	// Fetch a little extra and filter locally so workspace-specific recall stays scoped.
-	searchLimit := limit
-	if searchLimit > 0 && cwd != "" {
-		searchLimit *= 5
-	}
-	items, err := s.memory.SearchKnowledge(ctx, query, searchLimit)
-	if err != nil {
-		return nil, err
-	}
-
-	res := make([]KnowledgeItem, 0, len(items))
-	for _, item := range items {
-		ki := KnowledgeItem{
-			ID:       item.ID,
-			Content:  item.Content,
-			Metadata: item.Metadata,
-		}
-		if cwdStr, ok := item.Metadata["cwd"].(string); ok {
-			ki.CWD = cwdStr
-		}
-		if pathStr, ok := item.Metadata["path"].(string); ok {
-			ki.Path = pathStr
-		}
-		if cwd != "" && ki.CWD != "" && ki.CWD != cwd {
-			continue
-		}
-		res = append(res, ki)
-		if limit > 0 && len(res) >= limit {
-			break
-		}
-	}
-	return res, nil
-}
-
-func (s *cantoStore) DeleteKnowledge(ctx context.Context, id string) error {
-	return fmt.Errorf("knowledge deletion is not supported by the canto store")
-}
-
 type cantoSession struct {
 	id    string
 	store *cantoStore
@@ -390,10 +336,7 @@ func (s *cantoSession) Append(ctx context.Context, event any) error {
 		return err
 	}
 
-	if preview != "" {
-		return s.store.UpdateSession(ctx, SessionInfo{ID: s.id, LastPreview: preview})
-	}
-	return nil
+	return s.store.UpdateSession(ctx, SessionInfo{ID: s.id, LastPreview: preview})
 }
 
 func (s *cantoSession) toolNameForUseID(ctx context.Context, toolUseID string) (string, error) {

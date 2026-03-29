@@ -526,14 +526,14 @@ func (m Model) resumeRuntimeCommand(cfg *config.Config, notice session.Entry, se
 	}
 }
 
-func currentBranchName(fallback string, sess storage.Session) string {
+func currentBranchName(defaultBranch string, sess storage.Session) string {
 	if sess == nil {
-		return fallback
+		return defaultBranch
 	}
 	if branch := strings.TrimSpace(sess.Meta().Branch); branch != "" {
 		return branch
 	}
-	return fallback
+	return defaultBranch
 }
 
 func splitStoredSessionModel(value string) (string, string) {
@@ -556,7 +556,7 @@ func cmdError(msg string) tea.Cmd {
 }
 
 // renderDiff colorizes diff-format output.
-// Falls back to plain output if the content doesn't look like a unified diff.
+// Uses plain output if the content doesn't look like a unified diff.
 func (m Model) renderDiff(content string) string {
 	lines := strings.Split(content, "\n")
 	hasDiffMarkers := false

@@ -10,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"charm.land/catwalk/pkg/catwalk"
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/providers"
 )
@@ -55,7 +54,6 @@ func GetMetadata(ctx context.Context, provider, model string) (ModelMetadata, bo
 		return meta, true
 	}
 
-	// Try fetching from catwalk
 	fetched, err := metadataFetcher(ctx, provider, model)
 	if err == nil {
 		registryMu.Lock()
@@ -63,19 +61,6 @@ func GetMetadata(ctx context.Context, provider, model string) (ModelMetadata, bo
 		saveCache()
 		registryMu.Unlock()
 		return fetched, true
-	}
-
-	// Fallback to cache even if stale
-	if ok {
-		return meta, true
-	}
-
-	// Fallback to built-in defaults
-	if meta, ok := builtInMetadata[model]; ok {
-		return meta, true
-	}
-	if meta, ok := builtInMetadata[strings.ToLower(provider)]; ok {
-		return meta, true
 	}
 
 	return ModelMetadata{}, false
@@ -94,40 +79,7 @@ func fetchMetadata(ctx context.Context, provider, model string) (ModelMetadata, 
 		}
 		return ModelMetadata{}, fmt.Errorf("model %s not found for provider %s", model, provider)
 	}
-	if strings.TrimSpace(os.Getenv("CATWALK_URL")) == "" {
-		return ModelMetadata{}, fmt.Errorf("no live metadata catalog configured for provider %s", provider)
-	}
-	return fetchFromCatwalk(ctx, provider, model)
-}
-
-func fetchFromCatwalk(ctx context.Context, provider, model string) (ModelMetadata, error) {
-	client := catwalk.New()
-	providers, err := client.GetProviders(ctx, "")
-	if err != nil {
-		return ModelMetadata{}, err
-	}
-
-	for _, p := range providers {
-		// Try to match provider by ID or Name
-		if strings.EqualFold(p.Name, provider) || strings.EqualFold(string(p.ID), provider) {
-			for _, m := range p.Models {
-				// Try to match model by ID or Name
-				if strings.EqualFold(m.ID, model) || strings.EqualFold(m.Name, model) {
-					return ModelMetadata{
-						ID:               m.ID,
-						Provider:         p.Name,
-						ContextLimit:     int(m.ContextWindow),
-						InputPrice:       m.CostPer1MIn,
-						OutputPrice:      m.CostPer1MOut,
-						InputPriceKnown:  true,
-						OutputPriceKnown: true,
-						UpdatedAt:        time.Now().Unix(),
-					}, nil
-				}
-			}
-		}
-	}
-	return ModelMetadata{}, fmt.Errorf("model %s not found for provider %s", model, provider)
+	return ModelMetadata{}, fmt.Errorf("no live metadata catalog configured for provider %s", provider)
 }
 
 func cachePath() string {
@@ -155,19 +107,4 @@ func saveCache() {
 	path := cachePath()
 	_ = os.MkdirAll(filepath.Dir(path), 0755)
 	_ = os.WriteFile(path, data, 0644)
-}
-
-var builtInMetadata = map[string]ModelMetadata{
-	"gemini": {
-		ContextLimit: 1_000_000,
-	},
-	"claude": {
-		ContextLimit: 200_000,
-	},
-	"gpt-4": {
-		ContextLimit: 128_000,
-	},
-	"minimax-m2.7": {
-		ContextLimit: 200_000,
-	},
 }

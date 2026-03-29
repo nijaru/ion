@@ -245,7 +245,7 @@ func (m Model) renderMarkdownTable(table *tableast.Table, source []byte, depth i
 		total += w + 3
 	}
 	if m.width > 0 && total > max(24, m.width-4) {
-		return renderMarkdownTableFallback(indent, headers, rows)
+		return renderMarkdownTablePlain(indent, headers, rows)
 	}
 
 	borderTop := indent + "┌" + joinWidths(widths, "┬", "─") + "┐"
@@ -296,7 +296,7 @@ func renderTableInline(node ast.Node, source []byte) string {
 	return b.String()
 }
 
-func renderMarkdownTableFallback(indent string, headers []string, rows []markdownTableRow) []string {
+func renderMarkdownTablePlain(indent string, headers []string, rows []markdownTableRow) []string {
 	var lines []string
 	for _, r := range rows {
 		for i, header := range headers {
