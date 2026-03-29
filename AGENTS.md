@@ -76,7 +76,7 @@ tk ls
 - Do not let archived Rust docs drive new design decisions on `main`.
 - Use `tk` for all multi-step work.
 - When a user reports a bug, create or update a `tk` task immediately.
-- If a fix requires touching `../canto`, keep it framework-level and applicable to every canto consumer. Do not bake ion-specific assumptions into canto.
+- If a fix requires touching canto, treat `github.com/nijaru/canto` as the source of truth. Keep framework fixes upstreamable and do not depend on a sibling checkout or bake ion-specific assumptions into canto.
 - Ion is `v0.0.0` unstable. There are no backwards guarantees.
 - Do not add fallback, migration, or compatibility paths unless the user explicitly asks for them.
 - Keep user-editable settings in `~/.ion/config.toml`.

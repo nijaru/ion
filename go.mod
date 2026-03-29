@@ -11,7 +11,7 @@ require (
 	github.com/charmbracelet/x/ansi v0.11.6
 	github.com/coder/acp-go-sdk v0.6.3
 	github.com/go-json-experiment/json v0.0.0-20260214004413-d219187c3433
-	github.com/nijaru/canto v0.0.0-20260327104559-b587da3d6272
+	github.com/nijaru/canto v0.0.0-20260329154506-9b908387846b
 	github.com/oklog/ulid/v2 v2.1.1
 	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/sabhiram/go-gitignore v0.0.0-20210923224102-525f6e181f06
@@ -70,5 +70,3 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
-
-replace github.com/nijaru/canto => ../canto
