@@ -331,10 +331,11 @@ func TestOpenLoadsLayeredProjectInstructions(t *testing.T) {
 		t.Fatalf("open session: %v", err)
 	}
 
+	mockProvider := ctesting.NewMockProvider("openai", ctesting.Step{Content: "ok"})
 	oldFactory := providerFactory
 	providerFactory = func(ctx context.Context, cfg *config.Config) (llm.Provider, error) {
 		if cfg.Provider == "openai" {
-			return &compactProvider{id: "openai"}, nil
+			return mockProvider, nil
 		}
 		return oldFactory(ctx, cfg)
 	}
@@ -349,14 +350,24 @@ func TestOpenLoadsLayeredProjectInstructions(t *testing.T) {
 	}
 	defer func() { _ = b.Close() }()
 
-	if !strings.Contains(b.agent.Instructions(), "root instruction") {
-		t.Fatalf("instructions missing root layer: %q", b.agent.Instructions())
+	if err := b.SubmitTurn(ctx, "load instructions"); err != nil {
+		t.Fatalf("submit turn: %v", err)
 	}
-	if !strings.Contains(b.agent.Instructions(), "pkg instruction") {
-		t.Fatalf("instructions missing nested layer: %q", b.agent.Instructions())
+	waitForTurnFinished(t, b.Events())
+
+	calls := mockProvider.Calls()
+	if len(calls) != 1 {
+		t.Fatalf("provider calls = %d, want 1", len(calls))
 	}
-	if !strings.Contains(b.agent.Instructions(), "## Project Instructions") {
-		t.Fatalf("instructions missing project section: %q", b.agent.Instructions())
+	req := calls[0]
+	if !requestHasMessage(req.Messages, llm.RoleSystem, "root instruction") {
+		t.Fatalf("provider request missing root instruction: %#v", req.Messages)
+	}
+	if !requestHasMessage(req.Messages, llm.RoleSystem, "pkg instruction") {
+		t.Fatalf("provider request missing nested layer: %#v", req.Messages)
+	}
+	if !requestHasMessage(req.Messages, llm.RoleSystem, "## Project Instructions") {
+		t.Fatalf("provider request missing project section: %#v", req.Messages)
 	}
 }
 
