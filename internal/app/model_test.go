@@ -342,6 +342,17 @@ func TestRunningProgressLinePutsElapsedAfterTokenCounters(t *testing.T) {
 	}
 }
 
+func TestRunningProgressLineUsesCyanSpinner(t *testing.T) {
+	model := readyModel(t)
+	model.progress = stateStreaming
+
+	line := model.progressLine()
+	want := model.st.cyan.Render(model.spinner.Spinner.Frames[0])
+	if !strings.Contains(line, want) {
+		t.Fatalf("progress line = %q, want cyan spinner %q", line, want)
+	}
+}
+
 func TestStatusLineFitsWidthAfterResize(t *testing.T) {
 	model := readyModel(t)
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 32, Height: 24})
