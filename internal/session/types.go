@@ -22,5 +22,6 @@ type Mode int
 
 const (
 	ModeRead Mode = iota
-	ModeWrite
+	ModeEdit
+	ModeYolo
 )

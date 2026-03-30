@@ -28,7 +28,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m.handlePickerKey(msg)
 	}
 
-	// Approval gate: y/n consumed before any other handling
+	// Approval gate: y/n/a consumed before any other handling
 	if m.pendingApproval != nil {
 		switch msg.String() {
 		case "y", "n":
@@ -41,6 +41,16 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			label := ifthen(approved, "Approved", "Denied")
 			notice := session.Entry{Role: session.System, Content: label + ": " + desc}
 			m.session.Approve(context.Background(), reqID, approved)
+			return m, m.printEntries(notice)
+		case "a":
+			reqID := m.pendingApproval.RequestID
+			desc := m.pendingApproval.Description
+			m.pendingApproval = nil
+			m.progress = stateReady
+
+			m.session.SetAutoApprove(true)
+			notice := session.Entry{Role: session.System, Content: "Always: " + desc}
+			m.session.Approve(context.Background(), reqID, true)
 			return m, m.printEntries(notice)
 		}
 	}
@@ -112,12 +122,16 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 	case "shift+tab":
 		m.clearPendingAction()
-		if m.mode == session.ModeWrite {
+		switch m.mode {
+		case session.ModeRead:
+			m.mode = session.ModeEdit
+		case session.ModeEdit:
+			m.mode = session.ModeYolo
+		default:
 			m.mode = session.ModeRead
-		} else {
-			m.mode = session.ModeWrite
 		}
 		m.session.SetMode(m.mode)
+		m.session.SetAutoApprove(m.mode == session.ModeYolo)
 		return m, nil
 
 	case "enter":
@@ -130,7 +144,9 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			m.queuedTurn = text
 			m.composer.Reset()
 			m.relayoutComposer()
-			return m, m.printEntries(session.Entry{Role: session.System, Content: "Queued follow-up"})
+			return m, m.printEntries(
+				session.Entry{Role: session.System, Content: "Queued follow-up"},
+			)
 		}
 
 		return m.submitText(text)

@@ -214,7 +214,13 @@ type Model struct {
 	st styles
 }
 
-func New(b backend.Backend, s storage.Session, store storage.Store, workdir, branch, version string, switcher runtimeSwitcher) Model {
+func New(
+	b backend.Backend,
+	s storage.Session,
+	store storage.Store,
+	workdir, branch, version string,
+	switcher runtimeSwitcher,
+) Model {
 	ta := textarea.New()
 	ta.Placeholder = "Type a message..."
 	ta.Prompt = "› "
@@ -248,7 +254,7 @@ func New(b backend.Backend, s storage.Session, store storage.Store, workdir, bra
 		workdir:    workdir,
 		branch:     branch,
 		version:    version,
-		mode:       session.ModeWrite,
+		mode:       initialMode(boot),
 		historyIdx: -1,
 		st:         st,
 	}
@@ -412,6 +418,7 @@ func (m Model) runtimeHeaderLine(_ backend.Backend) string {
 
 func (m Model) Init() tea.Cmd {
 	m.session.SetMode(m.mode)
+	m.session.SetAutoApprove(m.mode == session.ModeYolo)
 	return tea.Batch(
 		textarea.Blink,
 		m.spinner.Tick,
@@ -555,6 +562,18 @@ func ifthen[T any](cond bool, a, b T) T {
 }
 
 func now() int64 { return time.Now().Unix() }
+
+func initialMode(_ backend.Bootstrap) session.Mode {
+	if cfg, err := config.Load(); err == nil {
+		switch config.ResolveDefaultMode(cfg.DefaultMode) {
+		case "read":
+			return session.ModeRead
+		case "yolo":
+			return session.ModeYolo
+		}
+	}
+	return session.ModeEdit
+}
 
 func printLinesCmd(lines ...string) tea.Cmd {
 	filtered := make([]string, 0, len(lines))

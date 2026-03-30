@@ -19,6 +19,7 @@ type Config struct {
 	Provider             string            `toml:"provider,omitempty"`
 	Model                string            `toml:"model,omitempty"`
 	ReasoningEffort      string            `toml:"reasoning_effort,omitempty"`
+	DefaultMode          string            `toml:"default_mode,omitempty"`
 	Endpoint             string            `toml:"endpoint,omitempty"`
 	AuthEnvVar           string            `toml:"auth_env_var,omitempty"`
 	ExtraHeaders         map[string]string `toml:"extra_headers,omitempty"`
@@ -157,5 +158,18 @@ func normalizeReasoningEffort(value string) string {
 		return "high"
 	default:
 		return DefaultReasoningEffort
+	}
+}
+
+func ResolveDefaultMode(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "read", "r":
+		return "read"
+	case "edit", "e", "write", "w":
+		return "edit"
+	case "yolo", "y":
+		return "yolo"
+	default:
+		return "edit"
 	}
 }

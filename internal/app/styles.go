@@ -3,20 +3,21 @@ package app
 import "charm.land/lipgloss/v2"
 
 type styles struct {
-	user      lipgloss.Style
-	agent     lipgloss.Style
-	system    lipgloss.Style
-	tool      lipgloss.Style
-	subagent  lipgloss.Style
-	success   lipgloss.Style
-	dim       lipgloss.Style
-	cyan      lipgloss.Style
-	warn      lipgloss.Style
-	sep       lipgloss.Style
-	added     lipgloss.Style
-	removed   lipgloss.Style
-	modeRead  lipgloss.Style
-	modeWrite lipgloss.Style
+	user     lipgloss.Style
+	agent    lipgloss.Style
+	system   lipgloss.Style
+	tool     lipgloss.Style
+	subagent lipgloss.Style
+	success  lipgloss.Style
+	dim      lipgloss.Style
+	cyan     lipgloss.Style
+	warn     lipgloss.Style
+	sep      lipgloss.Style
+	added    lipgloss.Style
+	removed  lipgloss.Style
+	modeRead lipgloss.Style
+	modeEdit lipgloss.Style
+	modeYolo lipgloss.Style
 }
 
 func newStyles() styles {
@@ -34,8 +35,11 @@ func newStyles() styles {
 		added:    lipgloss.NewStyle().Foreground(lipgloss.Color("2")),
 		removed:  lipgloss.NewStyle().Foreground(lipgloss.Color("1")),
 		modeRead: lipgloss.NewStyle().Foreground(lipgloss.Color("6")).Bold(true),
-		modeWrite: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("3")).
+		modeEdit: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("2")).
+			Bold(true),
+		modeYolo: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("1")).
 			Bold(true),
 	}
 }

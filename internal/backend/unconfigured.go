@@ -115,6 +115,8 @@ func (s *unconfiguredSession) RegisterMCPServer(context.Context, string, ...stri
 
 func (s *unconfiguredSession) SetMode(session.Mode) {}
 
+func (s *unconfiguredSession) SetAutoApprove(bool) {}
+
 func (s *unconfiguredSession) Close() error {
 	return nil
 }

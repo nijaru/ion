@@ -52,9 +52,16 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		m.backend.SetConfig(cfg)
 		if cfg.Provider == "" {
 			m.status = noProviderConfiguredStatus()
-			return m, m.printEntries(session.Entry{Role: session.System, Content: "Model set to " + name})
+			return m, m.printEntries(
+				session.Entry{Role: session.System, Content: "Model set to " + name},
+			)
 		}
-		return m, m.switchRuntimeCommand(cfg, session.Entry{Role: session.System, Content: "Model set to " + name}, m.session.ID(), false)
+		return m, m.switchRuntimeCommand(
+			cfg,
+			session.Entry{Role: session.System, Content: "Model set to " + name},
+			m.session.ID(),
+			false,
+		)
 
 	case "/thinking":
 		if len(fields) < 2 {
@@ -74,7 +81,12 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		}
 		m.backend.SetConfig(cfg)
 		m.reasoningEffort = level
-		return m, m.printEntries(session.Entry{Role: session.System, Content: "Thinking set to " + thinkingDisplayName(level)})
+		return m, m.printEntries(
+			session.Entry{
+				Role:    session.System,
+				Content: "Thinking set to " + thinkingDisplayName(level),
+			},
+		)
 
 	case "/provider":
 		if len(fields) < 2 {
@@ -108,6 +120,41 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 			return nil
 		}
 
+	case "/yolo":
+		if m.mode == session.ModeYolo {
+			m.mode = session.ModeEdit
+			m.session.SetMode(m.mode)
+			m.session.SetAutoApprove(false)
+			return m, m.printEntries(session.Entry{Role: session.System, Content: "Mode: EDIT"})
+		}
+		m.mode = session.ModeYolo
+		m.session.SetMode(m.mode)
+		m.session.SetAutoApprove(true)
+		return m, m.printEntries(session.Entry{Role: session.System, Content: "Mode: YOLO"})
+
+	case "/mode":
+		if len(fields) < 2 {
+			modeName := modeDisplayName(m.mode)
+			return m, m.printEntries(
+				session.Entry{Role: session.System, Content: "Current mode: " + modeName},
+			)
+		}
+		switch strings.ToLower(fields[1]) {
+		case "read", "r":
+			m.mode = session.ModeRead
+		case "edit", "e", "write", "w":
+			m.mode = session.ModeEdit
+		case "yolo", "y":
+			m.mode = session.ModeYolo
+		default:
+			return m, cmdError("usage: /mode [read|edit|yolo]")
+		}
+		m.session.SetMode(m.mode)
+		m.session.SetAutoApprove(m.mode == session.ModeYolo)
+		return m, m.printEntries(
+			session.Entry{Role: session.System, Content: "Mode: " + modeDisplayName(m.mode)},
+		)
+
 	case "/clear":
 		cfg, err := config.Load()
 		if err != nil {
@@ -122,7 +169,12 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		if cfg.Provider == "" || cfg.Model == "" {
 			return m, cmdError("cannot /clear without an active provider and model")
 		}
-		return m, m.switchRuntimeCommand(cfg, session.Entry{Role: session.System, Content: "Started fresh session"}, "", false)
+		return m, m.switchRuntimeCommand(
+			cfg,
+			session.Entry{Role: session.System, Content: "Started fresh session"},
+			"",
+			false,
+		)
 
 	case "/cost":
 		inputTokens, outputTokens, totalCost := m.tokensSent, m.tokensReceived, m.totalCost
@@ -236,6 +288,8 @@ func helpText() string {
 		"  /provider [name] set provider and choose a model",
 		"  /model [name]    set model directly or open the picker",
 		"  /thinking [lvl]  set thinking: auto, low, medium, high",
+		"  /yolo            toggle YOLO mode (auto-approve all)",
+		"  /mode [mode]     set mode: read, edit, yolo",
 		"  /compact         compact the current session",
 		"  /clear           start a fresh session with the current provider/model",
 		"  /cost            show aggregate session usage",
@@ -249,7 +303,7 @@ func helpText() string {
 		"  Ctrl+M           model picker",
 		"  Ctrl+T           thinking picker",
 		"  Tab              swap provider/model pickers",
-		"  Shift+Tab        toggle read/write mode",
+		"  Shift+Tab        cycle READ → EDIT → YOLO",
 		"  Esc              cancel turn, or clear composer on double-tap",
 		"  Up / Down        command history",
 		"  Enter            send message",
@@ -257,6 +311,12 @@ func helpText() string {
 		"  Alt+Enter        insert newline",
 		"  Ctrl+C           clear composer, or quit on double-tap when empty",
 		"  Ctrl+D           quit on double-tap when empty",
+		"",
+		"approval",
+		"",
+		"  y                approve the tool call",
+		"  n                deny the tool call",
+		"  a                approve and auto-approve all remaining this session",
 	}, "\n")
 }
 
@@ -273,7 +333,13 @@ func (m Model) openThinkingPicker() (Model, tea.Cmd) {
 	}
 	current := normalizeThinkingValue(cfg.ReasoningEffort)
 	for i := range items {
-		items[i].Search = pickerSearchIndex(items[i].Label, items[i].Value, items[i].Detail, "", nil)
+		items[i].Search = pickerSearchIndex(
+			items[i].Label,
+			items[i].Value,
+			items[i].Detail,
+			"",
+			nil,
+		)
 	}
 	m.picker = &pickerState{
 		title:    "Pick a thinking level",
@@ -415,7 +481,12 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 		m.backend.SetConfig(&cfg)
 		m.reasoningEffort = level
 		m.picker = nil
-		return m, m.printEntries(session.Entry{Role: session.System, Content: "Thinking set to " + thinkingDisplayName(level)})
+		return m, m.printEntries(
+			session.Entry{
+				Role:    session.System,
+				Content: "Thinking set to " + thinkingDisplayName(level),
+			},
+		)
 	default:
 		m.picker = nil
 		return m, nil
@@ -446,7 +517,12 @@ func (m Model) resumeStoredSessionByID(sessionID string) tea.Cmd {
 	return m.resumeRuntimeCommand(cfg, notice, sessionID)
 }
 
-func (m Model) switchRuntimeCommand(cfg *config.Config, notice session.Entry, sessionID string, preserveSession bool) tea.Cmd {
+func (m Model) switchRuntimeCommand(
+	cfg *config.Config,
+	notice session.Entry,
+	sessionID string,
+	preserveSession bool,
+) tea.Cmd {
 	if m.switcher == nil {
 		m.backend.SetConfig(cfg)
 		return m.printEntries(notice)
@@ -482,7 +558,11 @@ func (m Model) switchRuntimeCommand(cfg *config.Config, notice session.Entry, se
 	}
 }
 
-func (m Model) resumeRuntimeCommand(cfg *config.Config, notice session.Entry, sessionID string) tea.Cmd {
+func (m Model) resumeRuntimeCommand(
+	cfg *config.Config,
+	notice session.Entry,
+	sessionID string,
+) tea.Cmd {
 	if m.switcher == nil {
 		m.backend.SetConfig(cfg)
 		return m.printEntries(notice)
@@ -597,4 +677,17 @@ func isWriteTool(title string) bool {
 		}
 	}
 	return false
+}
+
+func modeDisplayName(mode session.Mode) string {
+	switch mode {
+	case session.ModeRead:
+		return "READ"
+	case session.ModeEdit:
+		return "EDIT"
+	case session.ModeYolo:
+		return "YOLO"
+	default:
+		return "EDIT"
+	}
 }

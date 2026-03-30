@@ -297,18 +297,20 @@ func policyHook(b *Backend) hook.Hook {
 }
 
 func reasoningEffortProcessor(cfg *config.Config) ccontext.RequestProcessor {
-	return ccontext.RequestProcessorFunc(func(ctx context.Context, p llm.Provider, model string, sess *session.Session, req *llm.Request) error {
-		if cfg == nil {
+	return ccontext.RequestProcessorFunc(
+		func(ctx context.Context, p llm.Provider, model string, sess *session.Session, req *llm.Request) error {
+			if cfg == nil {
+				return nil
+			}
+			switch normalizeReasoningEffort(cfg.ReasoningEffort) {
+			case "", config.DefaultReasoningEffort:
+				req.ReasoningEffort = ""
+			default:
+				req.ReasoningEffort = normalizeReasoningEffort(cfg.ReasoningEffort)
+			}
 			return nil
-		}
-		switch normalizeReasoningEffort(cfg.ReasoningEffort) {
-		case "", config.DefaultReasoningEffort:
-			req.ReasoningEffort = ""
-		default:
-			req.ReasoningEffort = normalizeReasoningEffort(cfg.ReasoningEffort)
-		}
-		return nil
-	})
+		},
+	)
 }
 
 func normalizeReasoningEffort(value string) string {
@@ -670,6 +672,10 @@ func (b *Backend) RegisterMCPServer(ctx context.Context, command string, args ..
 
 func (b *Backend) SetMode(mode ionsession.Mode) {
 	b.policy.SetMode(mode)
+}
+
+func (b *Backend) SetAutoApprove(enabled bool) {
+	b.policy.SetAutoApprove(enabled)
 }
 
 func (b *Backend) Compact(ctx context.Context) (bool, error) {

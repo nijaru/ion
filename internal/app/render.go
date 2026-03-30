@@ -100,7 +100,7 @@ func (m Model) renderPlaneB() string {
 				formatToolTitle(m.pendingApproval.ToolName, m.pendingApproval.Args),
 				m.pendingApproval.Description)
 		}
-		b.WriteString(m.st.warn.PaddingLeft(2).Render("Approve " + desc + "? (y/n)"))
+		b.WriteString(m.st.warn.PaddingLeft(2).Render("Approve " + desc + "? (y/n/a)"))
 		b.WriteString("\n")
 	}
 
@@ -152,7 +152,9 @@ func (m Model) renderPicker() string {
 		b.WriteString(m.st.dim.PaddingLeft(2).Render("Search: " + m.picker.query))
 		b.WriteString("\n")
 	}
-	b.WriteString(m.st.dim.PaddingLeft(2).Render("Type to search • ↑/↓ navigate • Enter select • Esc cancel"))
+	b.WriteString(
+		m.st.dim.PaddingLeft(2).Render("Type to search • ↑/↓ navigate • Enter select • Esc cancel"),
+	)
 	b.WriteString("\n")
 	if len(items) == 0 {
 		b.WriteString(m.st.dim.PaddingLeft(2).Render("No matching items"))
@@ -181,7 +183,9 @@ func (m Model) renderPicker() string {
 			lastGroup = item.Group
 		}
 		if i == m.picker.index {
-			b.WriteString(m.renderPickerLine("› ", item, labelWidth, metricWidths, m.st.cyan, m.st.cyan))
+			b.WriteString(
+				m.renderPickerLine("› ", item, labelWidth, metricWidths, m.st.cyan, m.st.cyan),
+			)
 		} else {
 			b.WriteString(m.renderPickerLine("  ", item, labelWidth, metricWidths, lipgloss.NewStyle(), m.st.dim))
 		}
@@ -203,7 +207,9 @@ type pickerMetricWidths struct {
 func (m Model) renderPickerHeader(labelWidth int, metricWidths pickerMetricWidths) string {
 	var b strings.Builder
 	b.WriteString(strings.Repeat(" ", 4))
-	b.WriteString(m.st.dim.Render("Model" + strings.Repeat(" ", max(0, labelWidth-lipgloss.Width("Model")))))
+	b.WriteString(
+		m.st.dim.Render("Model" + strings.Repeat(" ", max(0, labelWidth-lipgloss.Width("Model")))),
+	)
 	detail := m.renderPickerHeaderMetrics(metricWidths)
 	if detail != "" {
 		b.WriteString("    ")
@@ -212,10 +218,19 @@ func (m Model) renderPickerHeader(labelWidth int, metricWidths pickerMetricWidth
 	return b.String()
 }
 
-func (m Model) renderPickerLine(prefix string, item pickerItem, labelWidth int, metricWidths pickerMetricWidths, labelStyle, metricStyle lipgloss.Style) string {
+func (m Model) renderPickerLine(
+	prefix string,
+	item pickerItem,
+	labelWidth int,
+	metricWidths pickerMetricWidths,
+	labelStyle, metricStyle lipgloss.Style,
+) string {
 	var b strings.Builder
 	b.WriteString(strings.Repeat(" ", 2))
-	label := prefix + item.Label + strings.Repeat(" ", max(0, labelWidth-lipgloss.Width(item.Label)))
+	label := prefix + item.Label + strings.Repeat(
+		" ",
+		max(0, labelWidth-lipgloss.Width(item.Label)),
+	)
 	b.WriteString(labelStyle.Render(label))
 	if item.Metrics != nil {
 		detail := m.renderPickerMetrics(*item.Metrics, metricWidths, metricStyle)
@@ -230,7 +245,11 @@ func (m Model) renderPickerLine(prefix string, item pickerItem, labelWidth int, 
 	return b.String()
 }
 
-func (m Model) renderPickerMetrics(metrics pickerMetrics, widths pickerMetricWidths, style lipgloss.Style) string {
+func (m Model) renderPickerMetrics(
+	metrics pickerMetrics,
+	widths pickerMetricWidths,
+	style lipgloss.Style,
+) string {
 	var parts []string
 	if widths.Context > 0 {
 		parts = append(parts, m.renderPickerMetricValue(metrics.Context, widths.Context, style))
@@ -454,7 +473,9 @@ func (m Model) progressLine() string {
 	case stateCancelled:
 		line = m.st.warn.Render("⚠ Canceled")
 	case stateError:
-		line = m.st.warn.Render("× Error: " + strings.NewReplacer("\n", " ", "\r", " ").Replace(m.lastError))
+		line = m.st.warn.Render(
+			"× Error: " + strings.NewReplacer("\n", " ", "\r", " ").Replace(m.lastError),
+		)
 	default:
 		if status := strings.TrimSpace(m.configurationStatus()); status != "" {
 			line = m.st.warn.Render("• " + status)
@@ -496,10 +517,15 @@ func (m Model) statusLine() string {
 
 	sep := m.st.sep.Render(" • ")
 
-	modeLabel := ifthen(m.mode == session.ModeWrite,
-		m.st.modeWrite.Render("[WRITE]"),
-		m.st.modeRead.Render("[READ]"),
-	)
+	var modeLabel string
+	switch m.mode {
+	case session.ModeRead:
+		modeLabel = m.st.modeRead.Render("[READ]")
+	case session.ModeEdit:
+		modeLabel = m.st.modeEdit.Render("[EDIT]")
+	case session.ModeYolo:
+		modeLabel = m.st.modeYolo.Render("[YOLO]")
+	}
 
 	provider := ""
 	if value := m.backend.Provider(); value != "" {
