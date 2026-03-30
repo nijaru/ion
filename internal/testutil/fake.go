@@ -166,8 +166,9 @@ func (b *Backend) RegisterMCPServer(ctx context.Context, command string, args ..
 
 func (b *Backend) SetMode(session.Mode) {}
 
-func (b *Backend) Close() error {
+func (b *Backend) SetAutoApprove(bool) {}
 
+func (b *Backend) Close() error {
 	close(b.events)
 	return nil
 }

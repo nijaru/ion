@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"charm.land/bubbletea/v2"
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
@@ -45,12 +45,14 @@ func (b stubBackend) Provider() string {
 	}
 	return "stub"
 }
+
 func (b stubBackend) Model() string {
 	if b.modelSet || b.model != "" {
 		return b.model
 	}
 	return "stub-model"
 }
+
 func (b stubBackend) ContextLimit() int {
 	if b.contextLimit != 0 {
 		return b.contextLimit
@@ -90,10 +92,12 @@ func (s *stubSession) SubmitTurn(ctx context.Context, turn string) error {
 	s.submits = append(s.submits, turn)
 	return nil
 }
+
 func (s *stubSession) CancelTurn(ctx context.Context) error {
 	s.cancels++
 	return nil
 }
+
 func (s *stubSession) Close() error {
 	if s.events != nil {
 		close(s.events)
@@ -107,6 +111,8 @@ func (s *stubSession) RegisterMCPServer(ctx context.Context, cmd string, args ..
 	return nil
 }
 func (s *stubSession) SetMode(mode session.Mode) {}
+
+func (s *stubSession) SetAutoApprove(bool)     {}
 func (s *stubSession) ID() string              { return "stub" }
 func (s *stubSession) Meta() map[string]string { return nil }
 
@@ -156,7 +162,10 @@ type resumeOnlyStore struct {
 	resumed storage.Session
 }
 
-func (s *resumeOnlyStore) OpenSession(ctx context.Context, cwd, model, branch string) (storage.Session, error) {
+func (s *resumeOnlyStore) OpenSession(
+	ctx context.Context,
+	cwd, model, branch string,
+) (storage.Session, error) {
 	return nil, nil
 }
 
@@ -164,11 +173,17 @@ func (s *resumeOnlyStore) ResumeSession(ctx context.Context, id string) (storage
 	return s.resumed, nil
 }
 
-func (s *resumeOnlyStore) ListSessions(ctx context.Context, cwd string) ([]storage.SessionInfo, error) {
+func (s *resumeOnlyStore) ListSessions(
+	ctx context.Context,
+	cwd string,
+) ([]storage.SessionInfo, error) {
 	return nil, nil
 }
 
-func (s *resumeOnlyStore) GetRecentSession(ctx context.Context, cwd string) (*storage.SessionInfo, error) {
+func (s *resumeOnlyStore) GetRecentSession(
+	ctx context.Context,
+	cwd string,
+) (*storage.SessionInfo, error) {
 	return nil, nil
 }
 
@@ -282,7 +297,12 @@ func TestProgressLineFitsWidthAfterResize(t *testing.T) {
 	model.lastError = strings.Repeat("connection refused while reconnecting to the backend ", 3)
 
 	if got := lipgloss.Width(model.progressLine()); got > model.width {
-		t.Fatalf("expected progress line width <= %d, got %d: %q", model.width, got, model.progressLine())
+		t.Fatalf(
+			"expected progress line width <= %d, got %d: %q",
+			model.width,
+			got,
+			model.progressLine(),
+		)
 	}
 }
 
@@ -370,7 +390,12 @@ func TestStatusLineFitsWidthAfterResize(t *testing.T) {
 	model.branch = "feature/resize-persistence"
 
 	if got := lipgloss.Width(model.statusLine()); got > model.width {
-		t.Fatalf("expected status line width <= %d, got %d: %q", model.width, got, model.statusLine())
+		t.Fatalf(
+			"expected status line width <= %d, got %d: %q",
+			model.width,
+			got,
+			model.statusLine(),
+		)
 	}
 }
 
@@ -393,7 +418,11 @@ func TestStatusLineHidesZeroUsageBeforeFirstTurn(t *testing.T) {
 func TestStatusLineIncludesThinkingLevel(t *testing.T) {
 	model := readyModel(t)
 	model.reasoningEffort = "high"
-	model.backend = stubBackend{sess: &stubSession{events: make(chan session.Event)}, provider: "openrouter", model: "o3-mini"}
+	model.backend = stubBackend{
+		sess:     &stubSession{events: make(chan session.Event)},
+		provider: "openrouter",
+		model:    "o3-mini",
+	}
 
 	line := ansi.Strip(model.statusLine())
 	if !strings.Contains(line, "high") {
@@ -465,7 +494,10 @@ func TestCtrlCDoubleTapQuitsOnlyWhenIdleAndEmpty(t *testing.T) {
 	if !model.ctrlCPending {
 		t.Fatal("expected ctrlCPending after first ctrl+c")
 	}
-	if line := ansi.Strip(model.statusLine()); !strings.Contains(line, "Press Ctrl+C again to quit") {
+	if line := ansi.Strip(model.statusLine()); !strings.Contains(
+		line,
+		"Press Ctrl+C again to quit",
+	) {
 		t.Fatalf("status line = %q, want ctrl+c hint", line)
 	}
 
@@ -526,7 +558,10 @@ func TestCtrlDDoubleTapQuitsOnlyWhenIdleAndEmpty(t *testing.T) {
 	if !model.ctrlCPending {
 		t.Fatal("expected ctrlCPending after first ctrl+d")
 	}
-	if line := ansi.Strip(model.statusLine()); !strings.Contains(line, "Press Ctrl+D again to quit") {
+	if line := ansi.Strip(model.statusLine()); !strings.Contains(
+		line,
+		"Press Ctrl+D again to quit",
+	) {
 		t.Fatalf("status line = %q, want ctrl+d hint", line)
 	}
 
@@ -571,7 +606,10 @@ func TestEscDoubleTapClearsComposer(t *testing.T) {
 	if !model.escPending {
 		t.Fatal("expected escPending after first esc")
 	}
-	if line := ansi.Strip(model.statusLine()); !strings.Contains(line, "Press Esc again to clear input") {
+	if line := ansi.Strip(model.statusLine()); !strings.Contains(
+		line,
+		"Press Esc again to clear input",
+	) {
 		t.Fatalf("status line = %q, want esc hint", line)
 	}
 	if got := model.composer.Value(); got != "draft" {
@@ -602,7 +640,10 @@ func TestPendingActionTimeoutClearsStatusHint(t *testing.T) {
 	if model.ctrlCPending || model.pendingAction != pendingActionNone {
 		t.Fatal("pending action should clear after timeout")
 	}
-	if line := ansi.Strip(model.statusLine()); strings.Contains(line, "Press Ctrl+C again to quit") {
+	if line := ansi.Strip(model.statusLine()); strings.Contains(
+		line,
+		"Press Ctrl+C again to quit",
+	) {
 		t.Fatalf("status line should clear timeout hint, got %q", line)
 	}
 }
@@ -698,9 +739,24 @@ func TestHandleCommandUpdatesConfigDirectly(t *testing.T) {
 		wantPicker  bool
 		wantCommand bool
 	}{
-		{name: "provider", command: "/provider anthropic", expected: "provider = 'anthropic'\nsession_retention_days = 90\n", wantPicker: true},
-		{name: "model", command: "/model gpt-4.1", expected: "model = 'gpt-4.1'\nsession_retention_days = 90\n", wantCommand: true},
-		{name: "thinking", command: "/thinking high", expected: "reasoning_effort = 'high'\nsession_retention_days = 90\n", wantCommand: true},
+		{
+			name:       "provider",
+			command:    "/provider anthropic",
+			expected:   "provider = 'anthropic'\nsession_retention_days = 90\n",
+			wantPicker: true,
+		},
+		{
+			name:        "model",
+			command:     "/model gpt-4.1",
+			expected:    "model = 'gpt-4.1'\nsession_retention_days = 90\n",
+			wantCommand: true,
+		},
+		{
+			name:        "thinking",
+			command:     "/thinking high",
+			expected:    "reasoning_effort = 'high'\nsession_retention_days = 90\n",
+			wantCommand: true,
+		},
 	}
 
 	for _, tc := range tests {
@@ -792,7 +848,15 @@ func TestCompactCommandReportsNoOp(t *testing.T) {
 }
 
 func TestCompactCommandErrorsWhenBackendUnsupported(t *testing.T) {
-	model := New(stubBackend{sess: &stubSession{events: make(chan session.Event)}}, nil, nil, "/tmp/test", "main", "dev", nil)
+	model := New(
+		stubBackend{sess: &stubSession{events: make(chan session.Event)}},
+		nil,
+		nil,
+		"/tmp/test",
+		"main",
+		"dev",
+		nil,
+	)
 
 	_, cmd := model.handleCommand("/compact")
 	msg := cmd()
@@ -820,18 +884,26 @@ func TestClearCommandStartsFreshSession(t *testing.T) {
 	oldBackend := stubBackend{sess: oldSession, provider: "openai", model: "gpt-4.1"}
 
 	var observedSessionID string
-	model := New(oldBackend, nil, nil, "/tmp/test", "main", "dev", func(ctx context.Context, cfg *config.Config, sessionID string) (backend.Backend, session.AgentSession, storage.Session, error) {
-		observedSessionID = sessionID
-		newStorage := &stubStorageSession{
-			id:     "fresh-session",
-			model:  cfg.Provider + "/" + cfg.Model,
-			branch: "main",
-		}
-		newBackend := testutil.New()
-		newBackend.SetConfig(cfg)
-		newBackend.SetSession(newStorage)
-		return newBackend, newBackend.Session(), newStorage, nil
-	})
+	model := New(
+		oldBackend,
+		nil,
+		nil,
+		"/tmp/test",
+		"main",
+		"dev",
+		func(ctx context.Context, cfg *config.Config, sessionID string) (backend.Backend, session.AgentSession, storage.Session, error) {
+			observedSessionID = sessionID
+			newStorage := &stubStorageSession{
+				id:     "fresh-session",
+				model:  cfg.Provider + "/" + cfg.Model,
+				branch: "main",
+			}
+			newBackend := testutil.New()
+			newBackend.SetConfig(cfg)
+			newBackend.SetSession(newStorage)
+			return newBackend, newBackend.Session(), newStorage, nil
+		},
+	)
 
 	model, cmd := model.handleCommand("/clear")
 	if cmd == nil {
@@ -843,7 +915,10 @@ func TestClearCommandStartsFreshSession(t *testing.T) {
 		t.Fatalf("expected runtimeSwitchedMsg, got %T", msg)
 	}
 	if observedSessionID != "" {
-		t.Fatalf("session ID passed to clear switcher = %q, want empty for fresh session", observedSessionID)
+		t.Fatalf(
+			"session ID passed to clear switcher = %q, want empty for fresh session",
+			observedSessionID,
+		)
 	}
 	if switched.notice != "Started fresh session" {
 		t.Fatalf("clear notice = %q", switched.notice)
@@ -862,21 +937,33 @@ func TestClearCommandFallsBackToActiveRuntimeConfig(t *testing.T) {
 	}
 
 	oldSession := &stubSession{events: make(chan session.Event)}
-	oldBackend := stubBackend{sess: oldSession, provider: "openrouter", model: "deepseek/deepseek-v3.2"}
+	oldBackend := stubBackend{
+		sess:     oldSession,
+		provider: "openrouter",
+		model:    "deepseek/deepseek-v3.2",
+	}
 
-	model := New(oldBackend, nil, nil, "/tmp/test", "main", "dev", func(ctx context.Context, cfg *config.Config, sessionID string) (backend.Backend, session.AgentSession, storage.Session, error) {
-		if cfg.Provider != "openrouter" {
-			t.Fatalf("provider = %q, want openrouter", cfg.Provider)
-		}
-		if cfg.Model != "deepseek/deepseek-v3.2" {
-			t.Fatalf("model = %q, want deepseek/deepseek-v3.2", cfg.Model)
-		}
-		newStorage := &stubStorageSession{id: "fresh-session"}
-		newBackend := testutil.New()
-		newBackend.SetConfig(cfg)
-		newBackend.SetSession(newStorage)
-		return newBackend, newBackend.Session(), newStorage, nil
-	})
+	model := New(
+		oldBackend,
+		nil,
+		nil,
+		"/tmp/test",
+		"main",
+		"dev",
+		func(ctx context.Context, cfg *config.Config, sessionID string) (backend.Backend, session.AgentSession, storage.Session, error) {
+			if cfg.Provider != "openrouter" {
+				t.Fatalf("provider = %q, want openrouter", cfg.Provider)
+			}
+			if cfg.Model != "deepseek/deepseek-v3.2" {
+				t.Fatalf("model = %q, want deepseek/deepseek-v3.2", cfg.Model)
+			}
+			newStorage := &stubStorageSession{id: "fresh-session"}
+			newBackend := testutil.New()
+			newBackend.SetConfig(cfg)
+			newBackend.SetSession(newStorage)
+			return newBackend, newBackend.Session(), newStorage, nil
+		},
+	)
 
 	_, cmd := model.handleCommand("/clear")
 	msg := cmd()
@@ -1011,9 +1098,33 @@ func TestModelItemsUseInjectedModelLister(t *testing.T) {
 			t.Fatalf("provider = %q, want openrouter", cfg.Provider)
 		}
 		return []registry.ModelMetadata{
-			{ID: "z-ai/glm-4.5", Created: time.Date(2025, 2, 1, 0, 0, 0, 0, time.UTC).Unix(), ContextLimit: 64000, InputPrice: 1.23, OutputPrice: 4.56, InputPriceKnown: true, OutputPriceKnown: true},
-			{ID: "openai/gpt-4.1", Created: time.Date(2025, 4, 1, 0, 0, 0, 0, time.UTC).Unix(), ContextLimit: 128000, InputPrice: 0.1, OutputPrice: 0.2, InputPriceKnown: true, OutputPriceKnown: true},
-			{ID: "z-ai/glm-5", Created: time.Date(2025, 5, 1, 0, 0, 0, 0, time.UTC).Unix(), ContextLimit: 128000, InputPrice: 0.2, OutputPrice: 0.4, InputPriceKnown: true, OutputPriceKnown: true},
+			{
+				ID:               "z-ai/glm-4.5",
+				Created:          time.Date(2025, 2, 1, 0, 0, 0, 0, time.UTC).Unix(),
+				ContextLimit:     64000,
+				InputPrice:       1.23,
+				OutputPrice:      4.56,
+				InputPriceKnown:  true,
+				OutputPriceKnown: true,
+			},
+			{
+				ID:               "openai/gpt-4.1",
+				Created:          time.Date(2025, 4, 1, 0, 0, 0, 0, time.UTC).Unix(),
+				ContextLimit:     128000,
+				InputPrice:       0.1,
+				OutputPrice:      0.2,
+				InputPriceKnown:  true,
+				OutputPriceKnown: true,
+			},
+			{
+				ID:               "z-ai/glm-5",
+				Created:          time.Date(2025, 5, 1, 0, 0, 0, 0, time.UTC).Unix(),
+				ContextLimit:     128000,
+				InputPrice:       0.2,
+				OutputPrice:      0.4,
+				InputPriceKnown:  true,
+				OutputPriceKnown: true,
+			},
 		}, nil
 	}
 	defer func() { listModelsForConfig = oldListModelsForConfig }()
@@ -1033,7 +1144,8 @@ func TestModelItemsUseInjectedModelLister(t *testing.T) {
 	if items[0].Metrics == nil {
 		t.Fatal("expected model metrics")
 	}
-	if items[0].Metrics.Context != "128k" || items[0].Metrics.Input != "$0.10" || items[0].Metrics.Output != "$0.20" {
+	if items[0].Metrics.Context != "128k" || items[0].Metrics.Input != "$0.10" ||
+		items[0].Metrics.Output != "$0.20" {
 		t.Fatalf("unexpected model metrics: %#v", items[0].Metrics)
 	}
 }
@@ -1042,8 +1154,22 @@ func TestModelItemsTreatZeroPricesAsFreeSearchTerm(t *testing.T) {
 	oldListModelsForConfig := listModelsForConfig
 	listModelsForConfig = func(ctx context.Context, cfg *config.Config) ([]registry.ModelMetadata, error) {
 		return []registry.ModelMetadata{
-			{ID: "vendor/model-free", ContextLimit: 128000, InputPrice: 0, OutputPrice: 0, InputPriceKnown: true, OutputPriceKnown: true},
-			{ID: "vendor/model-paid", ContextLimit: 128000, InputPrice: 0.1, OutputPrice: 0.2, InputPriceKnown: true, OutputPriceKnown: true},
+			{
+				ID:               "vendor/model-free",
+				ContextLimit:     128000,
+				InputPrice:       0,
+				OutputPrice:      0,
+				InputPriceKnown:  true,
+				OutputPriceKnown: true,
+			},
+			{
+				ID:               "vendor/model-paid",
+				ContextLimit:     128000,
+				InputPrice:       0.1,
+				OutputPrice:      0.2,
+				InputPriceKnown:  true,
+				OutputPriceKnown: true,
+			},
 			{ID: "vendor/model-unknown", ContextLimit: 128000},
 		}, nil
 	}
@@ -1206,7 +1332,9 @@ func TestModelPickerRendersSeparatePriceColumns(t *testing.T) {
 	}
 
 	rendered := ansi.Strip(model.renderPicker())
-	if !strings.Contains(rendered, "Model") || !strings.Contains(rendered, "Context") || !strings.Contains(rendered, "Input") || !strings.Contains(rendered, "Output") {
+	if !strings.Contains(rendered, "Model") || !strings.Contains(rendered, "Context") ||
+		!strings.Contains(rendered, "Input") ||
+		!strings.Contains(rendered, "Output") {
 		t.Fatalf("rendered picker missing header row: %q", rendered)
 	}
 	var header, rowA, rowB string
@@ -1336,25 +1464,33 @@ func TestPickerCommitSwitchesRuntime(t *testing.T) {
 
 	switched := false
 	observedSessionID := ""
-	model := New(oldBackend, nil, nil, "/tmp/test", "main", "dev", func(ctx context.Context, cfg *config.Config, sessionID string) (backend.Backend, session.AgentSession, storage.Session, error) {
-		switched = true
-		observedSessionID = sessionID
+	model := New(
+		oldBackend,
+		nil,
+		nil,
+		"/tmp/test",
+		"main",
+		"dev",
+		func(ctx context.Context, cfg *config.Config, sessionID string) (backend.Backend, session.AgentSession, storage.Session, error) {
+			switched = true
+			observedSessionID = sessionID
 
-		resolved := *cfg
-		resolved.Provider = "openai"
+			resolved := *cfg
+			resolved.Provider = "openai"
 
-		newStorage := &stubStorageSession{
-			id:     sessionID,
-			model:  resolved.Model,
-			branch: "feature/switch",
-		}
+			newStorage := &stubStorageSession{
+				id:     sessionID,
+				model:  resolved.Model,
+				branch: "feature/switch",
+			}
 
-		newBackend := testutil.New()
-		newBackend.SetConfig(&resolved)
-		newBackend.SetSession(newStorage)
+			newBackend := testutil.New()
+			newBackend.SetConfig(&resolved)
+			newBackend.SetSession(newStorage)
 
-		return newBackend, newBackend.Session(), newStorage, nil
-	})
+			return newBackend, newBackend.Session(), newStorage, nil
+		},
+	)
 
 	model.picker = &pickerState{
 		title:   "Pick a model for openai",
@@ -1401,7 +1537,11 @@ func TestPickerCommitSwitchesRuntime(t *testing.T) {
 
 func TestPickerCommitSameModelIsNoOp(t *testing.T) {
 	model := readyModel(t)
-	model.backend = stubBackend{sess: &stubSession{events: make(chan session.Event)}, provider: "openrouter", model: "z-ai/glm-5"}
+	model.backend = stubBackend{
+		sess:     &stubSession{events: make(chan session.Event)},
+		provider: "openrouter",
+		model:    "z-ai/glm-5",
+	}
 	model.picker = &pickerState{
 		title:   "Pick a model for openrouter",
 		items:   []pickerItem{{Label: "z-ai/glm-5", Value: "z-ai/glm-5"}},
@@ -1426,7 +1566,11 @@ func TestPickerCommitSameModelIsNoOp(t *testing.T) {
 
 func TestProviderPickerSelectingCurrentProviderOpensModelPickerWithoutClearingModel(t *testing.T) {
 	model := readyModel(t)
-	model.backend = stubBackend{sess: &stubSession{events: make(chan session.Event)}, provider: "openrouter", model: "z-ai/glm-5"}
+	model.backend = stubBackend{
+		sess:     &stubSession{events: make(chan session.Event)},
+		provider: "openrouter",
+		model:    "z-ai/glm-5",
+	}
 	oldListModels := listModels
 	listModels = func(ctx context.Context, provider string) ([]registry.ModelMetadata, error) {
 		if provider != "openrouter" {
@@ -1499,13 +1643,21 @@ func TestRuntimeSwitchKeepsNoticesOutOfTranscriptStorage(t *testing.T) {
 		model:  "openai/gpt-4.1",
 		branch: "feature/switch",
 	}
-	model := New(oldBackend, nil, nil, "/tmp/test", "main", "dev", func(ctx context.Context, cfg *config.Config, sessionID string) (backend.Backend, session.AgentSession, storage.Session, error) {
-		resolved := *cfg
-		newBackend := testutil.New()
-		newBackend.SetConfig(&resolved)
-		newBackend.SetSession(newStorage)
-		return newBackend, newBackend.Session(), newStorage, nil
-	})
+	model := New(
+		oldBackend,
+		nil,
+		nil,
+		"/tmp/test",
+		"main",
+		"dev",
+		func(ctx context.Context, cfg *config.Config, sessionID string) (backend.Backend, session.AgentSession, storage.Session, error) {
+			resolved := *cfg
+			newBackend := testutil.New()
+			newBackend.SetConfig(&resolved)
+			newBackend.SetSession(newStorage)
+			return newBackend, newBackend.Session(), newStorage, nil
+		},
+	)
 
 	next, _ := model.Update(runtimeSwitchedMsg{
 		backend: testutil.New(),
@@ -1517,7 +1669,10 @@ func TestRuntimeSwitchKeepsNoticesOutOfTranscriptStorage(t *testing.T) {
 	model = next.(Model)
 
 	if len(newStorage.appends) != 0 {
-		t.Fatalf("expected runtime switch notice to stay out of transcript storage, got %d appends", len(newStorage.appends))
+		t.Fatalf(
+			"expected runtime switch notice to stay out of transcript storage, got %d appends",
+			len(newStorage.appends),
+		)
 	}
 }
 
@@ -1533,7 +1688,11 @@ func TestSlashModelSameValueIsNoOp(t *testing.T) {
 	}
 
 	model := readyModel(t)
-	model.backend = stubBackend{sess: &stubSession{events: make(chan session.Event)}, provider: "openrouter", model: "z-ai/glm-5"}
+	model.backend = stubBackend{
+		sess:     &stubSession{events: make(chan session.Event)},
+		provider: "openrouter",
+		model:    "z-ai/glm-5",
+	}
 
 	model, cmd := model.handleCommand("/model z-ai/glm-5")
 	if cmd != nil {
@@ -1685,7 +1844,10 @@ func TestProgressLineIgnoresStaleConfigurationStatusWhenBackendIsConfigured(t *t
 
 	line := ansi.Strip(model.progressLine())
 	if strings.Contains(line, "No model configured") {
-		t.Fatalf("progress line should ignore stale config warning when backend is configured: %q", line)
+		t.Fatalf(
+			"progress line should ignore stale config warning when backend is configured: %q",
+			line,
+		)
 	}
 	if !strings.Contains(line, "Ready") {
 		t.Fatalf("progress line = %q, want Ready", line)
@@ -1807,7 +1969,9 @@ func TestProviderItemsHideCustomEndpointByDefault(t *testing.T) {
 		t.Fatalf("Local API should always be visible")
 	}
 
-	items = providerItems(&config.Config{Provider: "openai-compatible", Endpoint: "https://example.com/v1"})
+	items = providerItems(
+		&config.Config{Provider: "openai-compatible", Endpoint: "https://example.com/v1"},
+	)
 	found := false
 	for _, item := range items {
 		if item.Value == "openai-compatible" {
@@ -1840,7 +2004,10 @@ func TestViewDoesNotAddExtraSpacerAfterPrintedTranscript(t *testing.T) {
 	model.printedTranscript = true
 	view := fmt.Sprint(model.View())
 	if strings.HasPrefix(view, "\n\n") || strings.HasPrefix(view, "\n• Ready") {
-		t.Fatalf("view should not add an extra blank spacer after printed transcript: %q", view[:min(len(view), 40)])
+		t.Fatalf(
+			"view should not add an extra blank spacer after printed transcript: %q",
+			view[:min(len(view), 40)],
+		)
 	}
 }
 
@@ -1849,15 +2016,30 @@ func TestRenderPickerKeepsDetailColumnStableAcrossScroll(t *testing.T) {
 	model.picker = &pickerState{
 		title: "Pick a provider",
 		items: []pickerItem{
-			{Label: "Much Longer Provider Name", Value: "long", Detail: "Ready", Group: "Direct APIs"},
+			{
+				Label:  "Much Longer Provider Name",
+				Value:  "long",
+				Detail: "Ready",
+				Group:  "Direct APIs",
+			},
 			{Label: "OpenAI", Value: "openai", Detail: "Ready", Group: "Direct APIs"},
 			{Label: "Groq", Value: "groq", Detail: "Ready", Group: "Direct APIs"},
 			{Label: "xAI", Value: "xai", Detail: "Ready", Group: "Direct APIs"},
 			{Label: "Z.ai", Value: "zai", Detail: "Ready", Group: "Direct APIs"},
 			{Label: "Ollama", Value: "ollama", Detail: "Ready", Group: "Local"},
 			{Label: "Local API", Value: "local-api", Detail: "Not running", Group: "Local"},
-			{Label: "Custom API", Value: "openai-compatible", Detail: "Set endpoint", Group: "Custom Endpoints"},
-			{Label: "Anthropic", Value: "anthropic", Detail: "Set ANTHROPIC_API_KEY", Group: "Direct APIs"},
+			{
+				Label:  "Custom API",
+				Value:  "openai-compatible",
+				Detail: "Set endpoint",
+				Group:  "Custom Endpoints",
+			},
+			{
+				Label:  "Anthropic",
+				Value:  "anthropic",
+				Detail: "Set ANTHROPIC_API_KEY",
+				Group:  "Direct APIs",
+			},
 		},
 	}
 	model.picker.filtered = append([]pickerItem(nil), model.picker.items...)
@@ -1886,10 +2068,20 @@ func TestRenderPickerKeepsDetailColumnStableAcrossScroll(t *testing.T) {
 	topCol := findSeparatorColumn(top, "› Much Longer Provider Name")
 	bottomCol := findSeparatorColumn(bottom, "› Anthropic")
 	if topCol <= 0 || bottomCol <= 0 {
-		t.Fatalf("failed to find detail separator columns in picker render\nTOP:\n%s\nBOTTOM:\n%s", top, bottom)
+		t.Fatalf(
+			"failed to find detail separator columns in picker render\nTOP:\n%s\nBOTTOM:\n%s",
+			top,
+			bottom,
+		)
 	}
 	if topCol != bottomCol {
-		t.Fatalf("detail column shifted across scroll: top=%d bottom=%d\nTOP:\n%s\nBOTTOM:\n%s", topCol, bottomCol, top, bottom)
+		t.Fatalf(
+			"detail column shifted across scroll: top=%d bottom=%d\nTOP:\n%s\nBOTTOM:\n%s",
+			topCol,
+			bottomCol,
+			top,
+			bottom,
+		)
 	}
 }
 
@@ -1906,19 +2098,42 @@ func TestRenderPickerHighlightsSelectedMetricColumns(t *testing.T) {
 	}
 	widths := pickerMetricWidths{Context: 7, Input: 5, Output: 5}
 
-	selected := model.renderPickerLine("› ", item, lipgloss.Width(item.Label), widths, model.st.cyan, model.st.cyan)
-	unselected := model.renderPickerLine("  ", item, lipgloss.Width(item.Label), widths, lipgloss.NewStyle(), model.st.dim)
+	selected := model.renderPickerLine(
+		"› ",
+		item,
+		lipgloss.Width(item.Label),
+		widths,
+		model.st.cyan,
+		model.st.cyan,
+	)
+	unselected := model.renderPickerLine(
+		"  ",
+		item,
+		lipgloss.Width(item.Label),
+		widths,
+		lipgloss.NewStyle(),
+		model.st.dim,
+	)
 
 	if ansi.Strip(selected) == ansi.Strip(unselected) {
 		t.Fatalf("expected selected and unselected rows to differ")
 	}
-	if strings.Contains(selected, model.st.dim.Render("80k"+strings.Repeat(" ", widths.Context-lipgloss.Width("80k")))) {
+	if strings.Contains(
+		selected,
+		model.st.dim.Render("80k"+strings.Repeat(" ", widths.Context-lipgloss.Width("80k"))),
+	) {
 		t.Fatalf("selected metric columns should not be dimmed: %q", selected)
 	}
-	if !strings.Contains(selected, model.st.cyan.Render("80k"+strings.Repeat(" ", widths.Context-lipgloss.Width("80k")))) {
+	if !strings.Contains(
+		selected,
+		model.st.cyan.Render("80k"+strings.Repeat(" ", widths.Context-lipgloss.Width("80k"))),
+	) {
 		t.Fatalf("selected metric columns should be highlighted: %q", selected)
 	}
-	if !strings.Contains(unselected, model.st.dim.Render("80k"+strings.Repeat(" ", widths.Context-lipgloss.Width("80k")))) {
+	if !strings.Contains(
+		unselected,
+		model.st.dim.Render("80k"+strings.Repeat(" ", widths.Context-lipgloss.Width("80k"))),
+	) {
 		t.Fatalf("unselected metric columns should stay dimmed: %q", unselected)
 	}
 }
@@ -1926,8 +2141,14 @@ func TestRenderPickerHighlightsSelectedMetricColumns(t *testing.T) {
 func TestRankedPickerItemsRejectsLooseLongSubsequenceMatches(t *testing.T) {
 	items := []pickerItem{
 		{Label: "google/gemini-3-flash-preview", Value: "google/gemini-3-flash-preview"},
-		{Label: "nousresearch/hermes-3-llama-3.1-405b:free", Value: "nousresearch/hermes-3-llama-3.1-405b:free"},
-		{Label: "mistralai/mistral-small-3.1-24b-instruct:free", Value: "mistralai/mistral-small-3.1-24b-instruct:free"},
+		{
+			Label: "nousresearch/hermes-3-llama-3.1-405b:free",
+			Value: "nousresearch/hermes-3-llama-3.1-405b:free",
+		},
+		{
+			Label: "mistralai/mistral-small-3.1-24b-instruct:free",
+			Value: "mistralai/mistral-small-3.1-24b-instruct:free",
+		},
 	}
 	for i := range items {
 		items[i].Search = pickerSearchIndex(items[i].Label, items[i].Value, "", "", nil)
@@ -1942,7 +2163,8 @@ func TestRankedPickerItemsRejectsLooseLongSubsequenceMatches(t *testing.T) {
 	if slices.Contains(got, "google/gemini-3-flash-preview") {
 		t.Fatalf("expected long loose subsequence match to be rejected, got %v", got)
 	}
-	if !slices.Contains(got, "nousresearch/hermes-3-llama-3.1-405b:free") || !slices.Contains(got, "mistralai/mistral-small-3.1-24b-instruct:free") {
+	if !slices.Contains(got, "nousresearch/hermes-3-llama-3.1-405b:free") ||
+		!slices.Contains(got, "mistralai/mistral-small-3.1-24b-instruct:free") {
 		t.Fatalf("expected real free matches to remain, got %v", got)
 	}
 }
@@ -1957,7 +2179,9 @@ func TestCommittedUserEntryUsesTranscriptPrompt(t *testing.T) {
 
 func TestSystemErrorEntryUsesErrorSymbol(t *testing.T) {
 	model := readyModel(t)
-	rendered := ansi.Strip(model.renderEntry(session.Entry{Role: session.System, Content: "Error: too many requests"}))
+	rendered := ansi.Strip(
+		model.renderEntry(session.Entry{Role: session.System, Content: "Error: too many requests"}),
+	)
 	if !strings.HasPrefix(rendered, "× Error: too many requests") {
 		t.Fatalf("rendered system error entry = %q", rendered)
 	}
@@ -2018,7 +2242,12 @@ func TestSessionPickerScopesToWorkspace(t *testing.T) {
 	cwd := "/tmp/workspace-a"
 	other := "/tmp/workspace-b"
 
-	sessionA, err := store.OpenSession(context.Background(), cwd, "openrouter/deepseek/deepseek-v3.2", "main")
+	sessionA, err := store.OpenSession(
+		context.Background(),
+		cwd,
+		"openrouter/deepseek/deepseek-v3.2",
+		"main",
+	)
 	if err != nil {
 		t.Fatalf("open workspace session: %v", err)
 	}
@@ -2026,7 +2255,12 @@ func TestSessionPickerScopesToWorkspace(t *testing.T) {
 		t.Fatalf("append workspace session: %v", err)
 	}
 
-	sessionB, err := store.OpenSession(context.Background(), other, "openrouter/minimax/minimax-m2.7", "main")
+	sessionB, err := store.OpenSession(
+		context.Background(),
+		other,
+		"openrouter/minimax/minimax-m2.7",
+		"main",
+	)
 	if err != nil {
 		t.Fatalf("open other session: %v", err)
 	}
@@ -2034,7 +2268,15 @@ func TestSessionPickerScopesToWorkspace(t *testing.T) {
 		t.Fatalf("append other session: %v", err)
 	}
 
-	model := New(stubBackend{sess: &stubSession{events: make(chan session.Event)}}, nil, store, cwd, "main", "dev", nil)
+	model := New(
+		stubBackend{sess: &stubSession{events: make(chan session.Event)}},
+		nil,
+		store,
+		cwd,
+		"main",
+		"dev",
+		nil,
+	)
 	model, cmd := model.openSessionPicker()
 	if cmd != nil {
 		t.Fatalf("expected no command from openSessionPicker, got %T", cmd)

@@ -143,6 +143,10 @@ func (s *Session) SetMode(mode session.Mode) {
 	s.policy.SetMode(mode)
 }
 
+func (s *Session) SetAutoApprove(enabled bool) {
+	s.policy.SetAutoApprove(enabled)
+}
+
 func (s *Session) Close() error {
 	s.closeOnce.Do(func() {
 		if s.cancel != nil {

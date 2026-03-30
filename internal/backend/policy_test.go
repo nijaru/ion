@@ -18,17 +18,74 @@ func TestPolicyEngine(t *testing.T) {
 		args     string
 		expected Policy
 	}{
-		{"Write mode: Read tool Allowed", session.ModeWrite, "read", `{"file_path": "file.txt"}`, PolicyAllow},
-		{"Write mode: Write tool Asked", session.ModeWrite, "write", `{"file_path": "file.txt"}`, PolicyAsk},
-		{"Write mode: Bash tool Asked", session.ModeWrite, "bash", `{"command": "ls -la"}`, PolicyAsk},
+		{
+			"EDIT mode: Read tool Allowed",
+			session.ModeEdit,
+			"read",
+			`{"file_path": "file.txt"}`,
+			PolicyAllow,
+		},
+		{
+			"EDIT mode: Write tool Asked",
+			session.ModeEdit,
+			"write",
+			`{"file_path": "file.txt"}`,
+			PolicyAsk,
+		},
+		{
+			"EDIT mode: Bash tool Asked",
+			session.ModeEdit,
+			"bash",
+			`{"command": "ls -la"}`,
+			PolicyAsk,
+		},
+		{"EDIT mode: Sensitive tool Asked", session.ModeEdit, "mcp", `{}`, PolicyAsk},
 
-		{"Read mode: Read tool Allowed", session.ModeRead, "read", `{"file_path": "file.txt"}`, PolicyAllow},
-		{"Read mode: Write tool Asked (Restricted)", session.ModeRead, "write", `{"file_path": "file.txt"}`, PolicyAsk},
-		{"Read mode: Safe Bash Allowed", session.ModeRead, "bash", `{"command": "ls -la"}`, PolicyAllow},
-		{"Read mode: Unsafe Bash Asked", session.ModeRead, "bash", `{"command": "rm -rf /"}`, PolicyAsk},
-		{"Read mode: Complex Safe Bash Allowed", session.ModeRead, "bash", `{"command": "git status && ls"}`, PolicyAllow},
-		{"Read mode: Complex Unsafe Bash Asked", session.ModeRead, "bash", `{"command": "ls && rm -rf /"}`, PolicyAsk},
-		{"Read mode: Redirection Asked", session.ModeRead, "bash", `{"command": "ls > out.txt"}`, PolicyAsk},
+		{
+			"READ mode: Read tool Allowed",
+			session.ModeRead,
+			"read",
+			`{"file_path": "file.txt"}`,
+			PolicyAllow,
+		},
+		{
+			"READ mode: Write tool Denied",
+			session.ModeRead,
+			"write",
+			`{"file_path": "file.txt"}`,
+			PolicyDeny,
+		},
+		{
+			"READ mode: Bash tool Denied",
+			session.ModeRead,
+			"bash",
+			`{"command": "ls -la"}`,
+			PolicyDeny,
+		},
+		{"READ mode: Sensitive tool Asked", session.ModeRead, "mcp", `{}`, PolicyAsk},
+
+		{
+			"YOLO mode: Read tool Allowed",
+			session.ModeYolo,
+			"read",
+			`{"file_path": "file.txt"}`,
+			PolicyAllow,
+		},
+		{
+			"YOLO mode: Write tool Allowed",
+			session.ModeYolo,
+			"write",
+			`{"file_path": "file.txt"}`,
+			PolicyAllow,
+		},
+		{
+			"YOLO mode: Bash tool Allowed",
+			session.ModeYolo,
+			"bash",
+			`{"command": "rm -rf /"}`,
+			PolicyAllow,
+		},
+		{"YOLO mode: Sensitive tool Allowed", session.ModeYolo, "mcp", `{}`, PolicyAllow},
 	}
 
 	for _, tt := range tests {
@@ -36,7 +93,13 @@ func TestPolicyEngine(t *testing.T) {
 			pe.SetMode(tt.mode)
 			policy, _ := pe.Authorize(ctx, tt.tool, tt.args)
 			if policy != tt.expected {
-				t.Errorf("Authorize(%q, mode=%v) = %v; want %v", tt.tool, tt.mode, policy, tt.expected)
+				t.Errorf(
+					"Authorize(%q, mode=%v) = %v; want %v",
+					tt.tool,
+					tt.mode,
+					policy,
+					tt.expected,
+				)
 			}
 		})
 	}
