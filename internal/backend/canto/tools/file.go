@@ -26,7 +26,7 @@ func (t *FileTool) resolvePath(target string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	
+
 	absCwd, err := filepath.Abs(t.cwd)
 	if err != nil {
 		return "", err
@@ -167,7 +167,7 @@ func (e *Edit) Spec() llm.Spec {
 			"properties": map[string]any{
 				"file_path": map[string]any{
 					"type":        "string",
-					"description": "The absolute path to the file to modify",
+					"description": "Relative path to the file to modify.",
 				},
 				"old_string": map[string]any{
 					"type":        "string",
@@ -299,7 +299,7 @@ func (m *MultiEdit) Execute(ctx context.Context, args string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		
+
 		// Load file if not already loaded
 		if _, ok := contents[absPath]; !ok {
 			content, err := os.ReadFile(absPath)
