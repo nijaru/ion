@@ -36,8 +36,9 @@ type PolicyEngine struct {
 	// Policies maps categories to their default handling.
 	Policies map[ToolCategory]Policy
 
-	mu   sync.RWMutex
-	mode session.Mode
+	mu          sync.RWMutex
+	mode        session.Mode
+	autoApprove bool
 }
 
 // NewPolicyEngine creates a default policy engine.
@@ -77,15 +78,34 @@ func (pe *PolicyEngine) SetMode(mode session.Mode) {
 	pe.mode = mode
 }
 
+// SetAutoApprove toggles auto-approval for all tool categories.
+// When enabled, Authorize always returns PolicyAllow.
+func (pe *PolicyEngine) SetAutoApprove(enabled bool) {
+	pe.mu.Lock()
+	defer pe.mu.Unlock()
+	pe.autoApprove = enabled
+}
+
+// AutoApprove returns whether auto-approval is enabled.
+func (pe *PolicyEngine) AutoApprove() bool {
+	pe.mu.RLock()
+	defer pe.mu.RUnlock()
+	return pe.autoApprove
+}
+
 // Authorize checks if a tool call is permitted by the policy.
 func (pe *PolicyEngine) Authorize(ctx context.Context, toolName string, args string) (Policy, string) {
 	pe.mu.RLock()
 	mode := pe.mode
+	auto := pe.autoApprove
 	pe.mu.RUnlock()
+
+	if auto {
+		return PolicyAllow, ""
+	}
 
 	category, ok := pe.Categories[toolName]
 	if !ok {
-		// Default to Ask for unknown tools
 		return PolicyAsk, fmt.Sprintf("Unknown tool %q requested.", toolName)
 	}
 
