@@ -220,6 +220,10 @@ func (b *Backend) Open(ctx context.Context) error {
 		Namespace: workspaceNamespace,
 		Role:      memory.RoleSemantic,
 	})
+	registry.Register(tools.NewCompact(
+		b.store, b.llm,
+		b.Model, b.ContextLimit, b.ID,
+	))
 
 	// Add context processors
 	requestProcessors := []ccontext.RequestProcessor{
@@ -466,10 +470,10 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 		return fmt.Errorf("backend not initialized")
 	}
 
-		sessionID := b.ID()
-		if sessionID == "" {
-			sessionID = "default"
-		}
+	sessionID := b.ID()
+	if sessionID == "" {
+		sessionID = "default"
+	}
 
 	// Create a sub-context for the turn and store its cancel function.
 	// This allows CancelTurn to interrupt the in-flight generation.
