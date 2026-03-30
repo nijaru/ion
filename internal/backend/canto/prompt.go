@@ -20,6 +20,7 @@ func baseInstructions() string {
 		promptSection{title: "Core Mandates", body: coreMandatesInstructions()},
 		promptSection{title: "Workflow", body: workflowInstructions()},
 		promptSection{title: "Tool and Approval Policy", body: toolPolicyInstructions()},
+		promptSection{title: "Context Management", body: contextManagementInstructions()},
 		promptSection{title: "Response Style", body: responseStyleInstructions()},
 	)
 }
@@ -88,6 +89,14 @@ func responseStyleInstructions() string {
 	return strings.Join([]string{
 		"- Communicate with the user in normal responses, not through code comments or command output.",
 		"- Keep responses concise, factual, and non-marketing.",
+	}, "\n")
+}
+
+func contextManagementInstructions() string {
+	return strings.Join([]string{
+		"- Use the `compact` tool when switching topics, after completing a multi-step task, or when earlier conversation context is no longer relevant.",
+		"- Do not compact mid-task — only when the current work is done and you are about to start something new.",
+		"- Provide a brief message describing what to preserve when compacting (key decisions, file paths, current state).",
 	}, "\n")
 }
 

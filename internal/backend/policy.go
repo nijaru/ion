@@ -50,6 +50,7 @@ func NewPolicyEngine() *PolicyEngine {
 			"list":            CategoryRead,
 			"recall_memory":   CategoryRead,
 			"remember_memory": CategoryRead,
+			"compact":         CategoryRead,
 			"write":           CategoryWrite,
 			"edit":            CategoryWrite,
 			"multi_edit":      CategoryWrite,
