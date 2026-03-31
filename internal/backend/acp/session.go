@@ -147,6 +147,10 @@ func (s *Session) SetAutoApprove(enabled bool) {
 	s.policy.SetAutoApprove(enabled)
 }
 
+func (s *Session) AllowCategory(toolName string) {
+	s.policy.AllowCategoryOf(toolName)
+}
+
 func (s *Session) Close() error {
 	s.closeOnce.Do(func() {
 		if s.cancel != nil {

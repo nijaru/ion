@@ -85,6 +85,15 @@ func (pe *PolicyEngine) SetAutoApprove(enabled bool) {
 	pe.autoApprove = enabled
 }
 
+// AllowCategoryOf sets the policy for the category of the given tool to PolicyAllow.
+func (pe *PolicyEngine) AllowCategoryOf(toolName string) {
+	pe.mu.Lock()
+	defer pe.mu.Unlock()
+	if cat, ok := pe.Categories[toolName]; ok {
+		pe.Policies[cat] = PolicyAllow
+	}
+}
+
 // AutoApprove returns whether auto-approval is enabled.
 func (pe *PolicyEngine) AutoApprove() bool {
 	pe.mu.RLock()
@@ -101,6 +110,10 @@ func (pe *PolicyEngine) Authorize(
 	pe.mu.RLock()
 	mode := pe.mode
 	auto := pe.autoApprove
+	policies := make(map[ToolCategory]Policy)
+	for k, v := range pe.Policies {
+		policies[k] = v
+	}
 	pe.mu.RUnlock()
 
 	if auto {
@@ -110,6 +123,11 @@ func (pe *PolicyEngine) Authorize(
 	category, ok := pe.Categories[toolName]
 	if !ok {
 		return PolicyAsk, fmt.Sprintf("Unknown tool %q requested.", toolName)
+	}
+
+	// Check for category override
+	if p, ok := policies[category]; ok && p == PolicyAllow {
+		return PolicyAllow, ""
 	}
 
 	switch mode {

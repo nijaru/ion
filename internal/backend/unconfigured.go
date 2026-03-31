@@ -117,6 +117,8 @@ func (s *unconfiguredSession) SetMode(session.Mode) {}
 
 func (s *unconfiguredSession) SetAutoApprove(bool) {}
 
+func (s *unconfiguredSession) AllowCategory(string) {}
+
 func (s *unconfiguredSession) Close() error {
 	return nil
 }
