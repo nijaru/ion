@@ -49,9 +49,9 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		if err := config.Save(cfg); err != nil {
 			return m, cmdError(fmt.Sprintf("failed to save config: %v", err))
 		}
-		m.backend.SetConfig(cfg)
+		m.Model.Backend.SetConfig(cfg)
 		if cfg.Provider == "" {
-			m.status = noProviderConfiguredStatus()
+			m.Progress.Status = noProviderConfiguredStatus()
 			return m, m.printEntries(
 				session.Entry{Role: session.System, Content: "Model set to " + name},
 			)
@@ -59,7 +59,7 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		return m, m.switchRuntimeCommand(
 			cfg,
 			session.Entry{Role: session.System, Content: "Model set to " + name},
-			m.session.ID(),
+			m.Model.Session.ID(),
 			false,
 		)
 
@@ -79,8 +79,8 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		if err := config.Save(cfg); err != nil {
 			return m, cmdError(fmt.Sprintf("failed to save config: %v", err))
 		}
-		m.backend.SetConfig(cfg)
-		m.reasoningEffort = level
+		m.Model.Backend.SetConfig(cfg)
+		m.Progress.ReasoningEffort = level
 		return m, m.printEntries(
 			session.Entry{
 				Role:    session.System,
@@ -102,8 +102,8 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		if err := config.Save(cfg); err != nil {
 			return m, cmdError(fmt.Sprintf("failed to save config: %v", err))
 		}
-		m.backend.SetConfig(cfg)
-		m.status = noModelConfiguredStatus()
+		m.Model.Backend.SetConfig(cfg)
+		m.Progress.Status = noModelConfiguredStatus()
 		return m.openModelPickerWithConfig(cfg)
 
 	case "/mcp":
@@ -112,7 +112,7 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		}
 		mcpCmd := fields[2]
 		mcpArgs := fields[3:]
-		sess := m.session
+		sess := m.Model.Session
 		return m, func() tea.Msg {
 			if err := sess.RegisterMCPServer(context.Background(), mcpCmd, mcpArgs...); err != nil {
 				return session.Error{Err: err}
@@ -121,38 +121,38 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		}
 
 	case "/yolo":
-		if m.mode == session.ModeYolo {
-			m.mode = session.ModeEdit
-			m.session.SetMode(m.mode)
-			m.session.SetAutoApprove(false)
+		if m.Mode == session.ModeYolo {
+			m.Mode = session.ModeEdit
+			m.Model.Session.SetMode(m.Mode)
+			m.Model.Session.SetAutoApprove(false)
 			return m, m.printEntries(session.Entry{Role: session.System, Content: "Mode: EDIT"})
 		}
-		m.mode = session.ModeYolo
-		m.session.SetMode(m.mode)
-		m.session.SetAutoApprove(true)
+		m.Mode = session.ModeYolo
+		m.Model.Session.SetMode(m.Mode)
+		m.Model.Session.SetAutoApprove(true)
 		return m, m.printEntries(session.Entry{Role: session.System, Content: "Mode: YOLO"})
 
 	case "/mode":
 		if len(fields) < 2 {
-			modeName := modeDisplayName(m.mode)
+			modeName := modeDisplayName(m.Mode)
 			return m, m.printEntries(
 				session.Entry{Role: session.System, Content: "Current mode: " + modeName},
 			)
 		}
 		switch strings.ToLower(fields[1]) {
 		case "read", "r":
-			m.mode = session.ModeRead
+			m.Mode = session.ModeRead
 		case "edit", "e", "write", "w":
-			m.mode = session.ModeEdit
+			m.Mode = session.ModeEdit
 		case "yolo", "y":
-			m.mode = session.ModeYolo
+			m.Mode = session.ModeYolo
 		default:
 			return m, cmdError("usage: /mode [read|edit|yolo]")
 		}
-		m.session.SetMode(m.mode)
-		m.session.SetAutoApprove(m.mode == session.ModeYolo)
+		m.Model.Session.SetMode(m.Mode)
+		m.Model.Session.SetAutoApprove(m.Mode == session.ModeYolo)
 		return m, m.printEntries(
-			session.Entry{Role: session.System, Content: "Mode: " + modeDisplayName(m.mode)},
+			session.Entry{Role: session.System, Content: "Mode: " + modeDisplayName(m.Mode)},
 		)
 
 	case "/clear":
@@ -161,10 +161,10 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 			return m, cmdError(fmt.Sprintf("failed to load config: %v", err))
 		}
 		if cfg.Provider == "" {
-			cfg.Provider = m.backend.Provider()
+			cfg.Provider = m.Model.Backend.Provider()
 		}
 		if cfg.Model == "" {
-			cfg.Model = m.backend.Model()
+			cfg.Model = m.Model.Backend.Model()
 		}
 		if cfg.Provider == "" || cfg.Model == "" {
 			return m, cmdError("cannot /clear without an active provider and model")
@@ -177,9 +177,9 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		)
 
 	case "/cost":
-		inputTokens, outputTokens, totalCost := m.tokensSent, m.tokensReceived, m.totalCost
-		if m.storage != nil {
-			input, output, cost, err := m.storage.Usage(context.Background())
+		inputTokens, outputTokens, totalCost := m.Progress.TokensSent, m.Progress.TokensReceived, m.Progress.TotalCost
+		if m.Model.Storage != nil {
+			input, output, cost, err := m.Model.Storage.Usage(context.Background())
 			if err != nil {
 				return m, cmdError(fmt.Sprintf("failed to load session usage: %v", err))
 			}
@@ -206,7 +206,7 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		}
 
 	case "/compact":
-		compactor, ok := m.backend.(backend.Compactor)
+		compactor, ok := m.Model.Backend.(backend.Compactor)
 		if !ok {
 			return m, cmdError("current backend does not support /compact")
 		}
@@ -239,7 +239,7 @@ func (m Model) openProviderPicker() (Model, tea.Cmd) {
 
 func (m Model) openProviderPickerWithConfig(cfg *config.Config) (Model, tea.Cmd) {
 	items := providerItems(cfg)
-	m.picker = &pickerState{
+	m.Picker.Overlay = &pickerOverlayState{
 		title:    "Pick a provider",
 		items:    items,
 		filtered: append([]pickerItem(nil), items...),
@@ -269,7 +269,7 @@ func (m Model) openModelPickerWithConfig(cfg *config.Config) (Model, tea.Cmd) {
 	if len(items) == 0 {
 		return m, cmdError(fmt.Sprintf("no models available for provider %s", cfg.Provider))
 	}
-	m.picker = &pickerState{
+	m.Picker.Overlay = &pickerOverlayState{
 		title:    "Pick a model for " + cfg.Provider,
 		items:    items,
 		filtered: append([]pickerItem(nil), items...),
@@ -341,7 +341,7 @@ func (m Model) openThinkingPicker() (Model, tea.Cmd) {
 			nil,
 		)
 	}
-	m.picker = &pickerState{
+	m.Picker.Overlay = &pickerOverlayState{
 		title:    "Pick a thinking level",
 		items:    items,
 		filtered: append([]pickerItem(nil), items...),
@@ -383,41 +383,41 @@ func thinkingDisplayName(value string) string {
 func (m Model) handlePickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc", "ctrl+c", "ctrl+d":
-		m.picker = nil
+		m.Picker.Overlay = nil
 		return m, nil
 	case "backspace":
-		if len(m.picker.query) > 0 {
-			_, size := utf8.DecodeLastRuneInString(m.picker.query)
-			m.picker.query = m.picker.query[:len(m.picker.query)-size]
+		if len(m.Picker.Overlay.query) > 0 {
+			_, size := utf8.DecodeLastRuneInString(m.Picker.Overlay.query)
+			m.Picker.Overlay.query = m.Picker.Overlay.query[:len(m.Picker.Overlay.query)-size]
 			refreshPickerFilter(&m)
 		}
 		return m, nil
 	case "tab":
-		if m.picker.purpose == pickerPurposeProvider {
-			if m.picker.cfg != nil && m.picker.cfg.Provider != "" {
-				return m.openModelPickerWithConfig(m.picker.cfg)
+		if m.Picker.Overlay.purpose == pickerPurposeProvider {
+			if m.Picker.Overlay.cfg != nil && m.Picker.Overlay.cfg.Provider != "" {
+				return m.openModelPickerWithConfig(m.Picker.Overlay.cfg)
 			}
 			return m, nil
 		}
-		if m.picker.purpose == pickerPurposeModel {
-			return m.openProviderPickerWithConfig(m.picker.cfg)
+		if m.Picker.Overlay.purpose == pickerPurposeModel {
+			return m.openProviderPickerWithConfig(m.Picker.Overlay.cfg)
 		}
 		return m, nil
 	case "up":
-		if m.picker.index > 0 {
-			m.picker.index--
+		if m.Picker.Overlay.index > 0 {
+			m.Picker.Overlay.index--
 		}
 		return m, nil
 	case "down":
-		if m.picker.index < len(pickerDisplayItems(m.picker))-1 {
-			m.picker.index++
+		if m.Picker.Overlay.index < len(pickerDisplayItems(m.Picker.Overlay))-1 {
+			m.Picker.Overlay.index++
 		}
 		return m, nil
 	case "enter":
 		return m.commitPickerSelection()
 	default:
 		if msg.Text != "" {
-			m.picker.query += msg.Text
+			m.Picker.Overlay.query += msg.Text
 			refreshPickerFilter(&m)
 			return m, nil
 		}
@@ -426,16 +426,19 @@ func (m Model) handlePickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 }
 
 func (m Model) commitPickerSelection() (Model, tea.Cmd) {
-	items := pickerDisplayItems(m.picker)
-	if m.picker == nil || len(items) == 0 {
-		m.picker = nil
+	if m.Picker.Overlay == nil {
+		return m, nil
+	}
+	items := pickerDisplayItems(m.Picker.Overlay)
+	if len(items) == 0 {
+		m.Picker.Overlay = nil
 		return m, nil
 	}
 
-	selected := items[m.picker.index]
-	cfg := *m.picker.cfg
+	selected := items[m.Picker.Overlay.index]
+	cfg := *m.Picker.Overlay.cfg
 
-	switch m.picker.purpose {
+	switch m.Picker.Overlay.purpose {
 	case pickerPurposeProvider:
 		if def, ok := providers.Lookup(selected.Value); ok && def.ID == "local-api" {
 			if _, ready := providers.CredentialStateContext(context.Background(), cfgForProvider(&cfg, def.ID), def); !ready {
@@ -443,7 +446,7 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 			}
 		}
 		if strings.EqualFold(cfg.Provider, selected.Value) {
-			m.picker = nil
+			m.Picker.Overlay = nil
 			return m.openModelPickerWithConfig(&cfg)
 		}
 		cfg.Provider = selected.Value
@@ -451,36 +454,36 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 		if err := config.Save(&cfg); err != nil {
 			return m, cmdError(fmt.Sprintf("failed to save config: %v", err))
 		}
-		m.backend.SetConfig(&cfg)
-		m.status = noModelConfiguredStatus()
-		m.picker = nil
+		m.Model.Backend.SetConfig(&cfg)
+		m.Progress.Status = noModelConfiguredStatus()
+		m.Picker.Overlay = nil
 		return m.openModelPickerWithConfig(&cfg)
 
 	case pickerPurposeModel:
 		if strings.EqualFold(strings.TrimSpace(cfg.Model), strings.TrimSpace(selected.Value)) {
-			m.picker = nil
+			m.Picker.Overlay = nil
 			return m, nil
 		}
 		cfg.Model = selected.Value
 		if err := config.Save(&cfg); err != nil {
 			return m, cmdError(fmt.Sprintf("failed to save config: %v", err))
 		}
-		m.picker = nil
+		m.Picker.Overlay = nil
 		notice := session.Entry{Role: session.System, Content: "Model set to " + selected.Value}
-		return m, m.switchRuntimeCommand(&cfg, notice, m.session.ID(), false)
+		return m, m.switchRuntimeCommand(&cfg, notice, m.Model.Session.ID(), false)
 	case pickerPurposeThinking:
 		level := normalizeThinkingValue(selected.Value)
 		if normalizeThinkingValue(cfg.ReasoningEffort) == level {
-			m.picker = nil
+			m.Picker.Overlay = nil
 			return m, nil
 		}
 		cfg.ReasoningEffort = level
 		if err := config.Save(&cfg); err != nil {
 			return m, cmdError(fmt.Sprintf("failed to save config: %v", err))
 		}
-		m.backend.SetConfig(&cfg)
-		m.reasoningEffort = level
-		m.picker = nil
+		m.Model.Backend.SetConfig(&cfg)
+		m.Progress.ReasoningEffort = level
+		m.Picker.Overlay = nil
 		return m, m.printEntries(
 			session.Entry{
 				Role:    session.System,
@@ -488,17 +491,17 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 			},
 		)
 	default:
-		m.picker = nil
+		m.Picker.Overlay = nil
 		return m, nil
 	}
 }
 
 func (m Model) resumeStoredSessionByID(sessionID string) tea.Cmd {
-	if m.store == nil {
+	if m.Model.Store == nil {
 		return cmdError("session store not available")
 	}
 
-	resumed, err := m.store.ResumeSession(context.Background(), sessionID)
+	resumed, err := m.Model.Store.ResumeSession(context.Background(), sessionID)
 	if err != nil {
 		return cmdError(fmt.Sprintf("failed to resume session %s: %v", sessionID, err))
 	}
@@ -523,17 +526,17 @@ func (m Model) switchRuntimeCommand(
 	sessionID string,
 	preserveSession bool,
 ) tea.Cmd {
-	if m.switcher == nil {
-		m.backend.SetConfig(cfg)
+	if m.Model.Switcher == nil {
+		m.Model.Backend.SetConfig(cfg)
 		return m.printEntries(notice)
 	}
 
-	oldSession := m.session
+	oldSession := m.Model.Session
 	switchID := sessionID
 	if preserveSession && switchID == "" && oldSession != nil {
 		switchID = oldSession.ID()
 	}
-	switcher := m.switcher
+	switcher := m.Model.Switcher
 	cfgCopy := *cfg
 
 	return func() tea.Msg {
@@ -563,14 +566,14 @@ func (m Model) resumeRuntimeCommand(
 	notice session.Entry,
 	sessionID string,
 ) tea.Cmd {
-	if m.switcher == nil {
-		m.backend.SetConfig(cfg)
+	if m.Model.Switcher == nil {
+		m.Model.Backend.SetConfig(cfg)
 		return m.printEntries(notice)
 	}
-	switcher := m.switcher
+	switcher := m.Model.Switcher
 	cfgCopy := *cfg
 	return func() tea.Msg {
-		oldSession := m.session
+		oldSession := m.Model.Session
 		if oldSession != nil {
 			_ = oldSession.CancelTurn(context.Background())
 		}
@@ -582,7 +585,7 @@ func (m Model) resumeRuntimeCommand(
 			_ = oldSession.Close()
 		}
 		var entries []session.Entry
-		resumeBranch := currentBranchName(m.branch, storageSess)
+		resumeBranch := currentBranchName(m.App.Branch, storageSess)
 		if storageSess != nil {
 			entries, err = storageSess.Entries(context.Background())
 			if err != nil {

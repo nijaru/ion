@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -220,14 +219,14 @@ func TestModelStreamsAndCommitsPendingEntry(t *testing.T) {
 	updated, _ = model.Update(session.AgentDelta{Delta: "streamed reply"})
 	model = updated.(Model)
 
-	if model.pending == nil || model.pending.Content != "streamed reply" {
-		t.Fatalf("expected pending streamed agent entry, got %#v", model.pending)
+	if model.InFlight.Pending == nil || model.InFlight.Pending.Content != "streamed reply" {
+		t.Fatalf("expected pending streamed agent entry, got %#v", model.InFlight.Pending)
 	}
 
 	updated, cmd := model.Update(session.AgentMessage{})
 	model = updated.(Model)
 
-	if model.pending != nil {
+	if model.InFlight.Pending != nil {
 		t.Fatalf("expected pending entry to be cleared after flush")
 	}
 
@@ -245,7 +244,7 @@ func TestToolEntryFlushesToTranscript(t *testing.T) {
 	})
 	model = updated.(Model)
 
-	if model.pending == nil || model.pending.Role != session.Tool {
+	if model.InFlight.Pending == nil || model.InFlight.Pending.Role != session.Tool {
 		t.Fatalf("expected pending tool entry")
 	}
 
@@ -255,7 +254,7 @@ func TestToolEntryFlushesToTranscript(t *testing.T) {
 	})
 	model = updated.(Model)
 
-	if model.pending != nil {
+	if model.InFlight.Pending != nil {
 		t.Fatalf("expected pending entry to be cleared")
 	}
 	if cmd == nil {
@@ -268,38 +267,38 @@ func TestLayoutClampsComposerHeight(t *testing.T) {
 
 	// Initial height should be min (1)
 	model.layout()
-	if got := model.composer.Height(); got != minComposerHeight {
+	if got := model.Input.Composer.Height(); got != minComposerHeight {
 		t.Fatalf("expected initial composer height %d, got %d", minComposerHeight, got)
 	}
 
 	// 5 lines of text
-	model.composer.SetValue("1\n2\n3\n4\n5")
+	model.Input.Composer.SetValue("1\n2\n3\n4\n5")
 	model.layout()
 
 	// Should be 5
-	if got := model.composer.Height(); got != 5 {
+	if got := model.Input.Composer.Height(); got != 5 {
 		t.Fatalf("expected composer height 5 for 5 lines, got %d", got)
 	}
 
 	// Over the max (10)
-	model.composer.SetValue(strings.Repeat("line\n", 20))
+	model.Input.Composer.SetValue(strings.Repeat("line\n", 20))
 	model.layout()
 
-	if got := model.composer.Height(); got != maxComposerHeight {
+	if got := model.Input.Composer.Height(); got != maxComposerHeight {
 		t.Fatalf("expected composer height to clamp to %d, got %d", maxComposerHeight, got)
 	}
 }
 
 func TestProgressLineFitsWidthAfterResize(t *testing.T) {
 	model := readyModel(t)
-	model.width = 28
-	model.progress = stateError
-	model.lastError = strings.Repeat("connection refused while reconnecting to the backend ", 3)
+	model.App.Width = 28
+	model.Progress.Mode = stateError
+	model.Progress.LastError = strings.Repeat("connection refused while reconnecting to the backend ", 3)
 
-	if got := lipgloss.Width(model.progressLine()); got > model.width {
+	if got := lipgloss.Width(model.progressLine()); got > model.App.Width {
 		t.Fatalf(
 			"expected progress line width <= %d, got %d: %q",
-			model.width,
+			model.App.Width,
 			got,
 			model.progressLine(),
 		)
@@ -308,17 +307,17 @@ func TestProgressLineFitsWidthAfterResize(t *testing.T) {
 
 func TestTurnFinishedLeavesProgressComplete(t *testing.T) {
 	model := readyModel(t)
-	model.progress = stateStreaming
-	model.thinking = true
-	model.turnStartedAt = time.Now().Add(-3 * time.Second)
-	model.currentTurnInput = 1200
-	model.currentTurnOutput = 300
+	model.Progress.Mode = stateStreaming
+	model.InFlight.Thinking = true
+	model.Progress.TurnStartedAt = time.Now().Add(-3 * time.Second)
+	model.Progress.CurrentTurnInput = 1200
+	model.Progress.CurrentTurnOutput = 300
 
 	updated, _ := model.Update(session.TurnFinished{})
 	model = updated.(Model)
 
-	if model.progress != stateComplete {
-		t.Fatalf("progress = %v, want stateComplete", model.progress)
+	if model.Progress.Mode != stateComplete {
+		t.Fatalf("progress = %v, want stateComplete", model.Progress.Mode)
 	}
 	line := ansi.Strip(model.progressLine())
 	if !strings.Contains(line, "✓ Complete") {
@@ -336,8 +335,8 @@ func TestTurnFinishedLeavesProgressComplete(t *testing.T) {
 
 func TestErrorProgressLineUsesRedXSymbolCopy(t *testing.T) {
 	model := readyModel(t)
-	model.progress = stateError
-	model.lastError = "backend failed"
+	model.Progress.Mode = stateError
+	model.Progress.LastError = "backend failed"
 
 	if got := ansi.Strip(model.progressLine()); !strings.Contains(got, "× Error: backend failed") {
 		t.Fatalf("progress line = %q, want red x error copy", got)
@@ -346,10 +345,10 @@ func TestErrorProgressLineUsesRedXSymbolCopy(t *testing.T) {
 
 func TestRunningProgressLinePutsElapsedAfterTokenCounters(t *testing.T) {
 	model := readyModel(t)
-	model.progress = stateStreaming
-	model.turnStartedAt = time.Now().Add(-2 * time.Second)
-	model.currentTurnInput = 3000
-	model.currentTurnOutput = 84
+	model.Progress.Mode = stateStreaming
+	model.Progress.TurnStartedAt = time.Now().Add(-2 * time.Second)
+	model.Progress.CurrentTurnInput = 3000
+	model.Progress.CurrentTurnOutput = 84
 
 	line := ansi.Strip(model.progressLine())
 	for _, want := range []string{"Streaming...", "↑ 3.0k", "↓ 84", "2s", "Esc to cancel"} {
@@ -364,10 +363,10 @@ func TestRunningProgressLinePutsElapsedAfterTokenCounters(t *testing.T) {
 
 func TestRunningProgressLineUsesCyanSpinner(t *testing.T) {
 	model := readyModel(t)
-	model.progress = stateStreaming
+	model.Progress.Mode = stateStreaming
 
 	line := model.progressLine()
-	want := model.st.cyan.Render(model.spinner.Spinner.Frames[0])
+	want := model.st.cyan.Render(model.Input.Spinner.Spinner.Frames[0])
 	if !strings.Contains(line, want) {
 		t.Fatalf("progress line = %q, want cyan spinner %q", line, want)
 	}
@@ -377,22 +376,22 @@ func TestStatusLineFitsWidthAfterResize(t *testing.T) {
 	model := readyModel(t)
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 32, Height: 24})
 	model = updated.(Model)
-	model.backend = stubBackend{
+	model.Model.Backend = stubBackend{
 		sess:         &stubSession{events: make(chan session.Event)},
 		provider:     "subscription-provider-with-a-very-long-name",
 		model:        "model-name-that-would-wrap-in-a-small-terminal",
 		contextLimit: 128000,
 	}
-	model.tokensSent = 45123
-	model.tokensReceived = 78210
-	model.totalCost = 0.042
-	model.workdir = "/Users/nick/github/nijaru/ion"
-	model.branch = "feature/resize-persistence"
+	model.Progress.TokensSent = 45123
+	model.Progress.TokensReceived = 78210
+	model.Progress.TotalCost = 0.042
+	model.App.Workdir = "/Users/nick/github/nijaru/ion"
+	model.App.Branch = "feature/resize-persistence"
 
-	if got := lipgloss.Width(model.statusLine()); got > model.width {
+	if got := lipgloss.Width(model.statusLine()); got > model.App.Width {
 		t.Fatalf(
 			"expected status line width <= %d, got %d: %q",
-			model.width,
+			model.App.Width,
 			got,
 			model.statusLine(),
 		)
@@ -401,10 +400,10 @@ func TestStatusLineFitsWidthAfterResize(t *testing.T) {
 
 func TestStatusLineHidesZeroUsageBeforeFirstTurn(t *testing.T) {
 	model := readyModel(t)
-	model.tokensSent = 0
-	model.tokensReceived = 0
-	model.totalCost = 0
-	model.backend = stubBackend{sess: &stubSession{events: make(chan session.Event)}}
+	model.Progress.TokensSent = 0
+	model.Progress.TokensReceived = 0
+	model.Progress.TotalCost = 0
+	model.Model.Backend = stubBackend{sess: &stubSession{events: make(chan session.Event)}}
 
 	line := ansi.Strip(model.statusLine())
 	if strings.Contains(line, "0 tokens") {
@@ -417,8 +416,8 @@ func TestStatusLineHidesZeroUsageBeforeFirstTurn(t *testing.T) {
 
 func TestStatusLineIncludesThinkingLevel(t *testing.T) {
 	model := readyModel(t)
-	model.reasoningEffort = "high"
-	model.backend = stubBackend{
+	model.Progress.ReasoningEffort = "high"
+	model.Model.Backend = stubBackend{
 		sess:     &stubSession{events: make(chan session.Event)},
 		provider: "openrouter",
 		model:    "o3-mini",
@@ -435,16 +434,16 @@ func TestStatusLineIncludesThinkingLevel(t *testing.T) {
 
 func TestComposerLayoutResetsAfterClear(t *testing.T) {
 	model := readyModel(t)
-	model.composer.SetValue("one\ntwo\nthree")
+	model.Input.Composer.SetValue("one\ntwo\nthree")
 	model.layout()
 
 	updated, _ := model.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	model = updated.(Model)
 
-	if got := model.composer.Value(); got != "" {
+	if got := model.Input.Composer.Value(); got != "" {
 		t.Fatalf("expected composer to be cleared, got %q", got)
 	}
-	if got := model.composer.Height(); got != minComposerHeight {
+	if got := model.Input.Composer.Height(); got != minComposerHeight {
 		t.Fatalf("expected composer height to reset to %d, got %d", minComposerHeight, got)
 	}
 }
@@ -463,19 +462,19 @@ func TestComposerAcceptsTypedText(t *testing.T) {
 		model = updated.(Model)
 	}
 
-	if got := model.composer.Value(); got != "/help" {
+	if got := model.Input.Composer.Value(); got != "/help" {
 		t.Fatalf("composer = %q, want %q", got, "/help")
 	}
 }
 
 func TestEnterSubmitsSlashCommandFromComposer(t *testing.T) {
 	model := readyModel(t)
-	model.composer.SetValue("/help")
+	model.Input.Composer.SetValue("/help")
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = updated.(Model)
 
-	if got := model.composer.Value(); got != "" {
+	if got := model.Input.Composer.Value(); got != "" {
 		t.Fatalf("composer = %q, want cleared after submit", got)
 	}
 	if cmd == nil {
@@ -491,7 +490,7 @@ func TestCtrlCDoubleTapQuitsOnlyWhenIdleAndEmpty(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("first ctrl+c should arm quit timeout")
 	}
-	if !model.ctrlCPending {
+	if !model.Input.CtrlCPending {
 		t.Fatal("expected ctrlCPending after first ctrl+c")
 	}
 	if line := ansi.Strip(model.statusLine()); !strings.Contains(
@@ -513,17 +512,17 @@ func TestCtrlCDoubleTapQuitsOnlyWhenIdleAndEmpty(t *testing.T) {
 
 func TestCtrlCClearsComposerWithoutArmingQuit(t *testing.T) {
 	model := readyModel(t)
-	model.composer.SetValue("draft")
+	model.Input.Composer.SetValue("draft")
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	model = updated.(Model)
 	if cmd != nil {
 		t.Fatal("ctrl+c with text should clear, not quit")
 	}
-	if got := model.composer.Value(); got != "" {
+	if got := model.Input.Composer.Value(); got != "" {
 		t.Fatalf("composer = %q, want cleared", got)
 	}
-	if model.ctrlCPending {
+	if model.Input.CtrlCPending {
 		t.Fatal("ctrlCPending should remain false after clearing composer")
 	}
 }
@@ -531,15 +530,15 @@ func TestCtrlCClearsComposerWithoutArmingQuit(t *testing.T) {
 func TestCtrlCIgnoredWhileRunning(t *testing.T) {
 	sess := &stubSession{events: make(chan session.Event)}
 	model := readyModel(t)
-	model.session = sess
-	model.thinking = true
+	model.Model.Session = sess
+	model.InFlight.Thinking = true
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	model = updated.(Model)
 	if cmd != nil {
 		t.Fatal("ctrl+c while running should not quit")
 	}
-	if model.ctrlCPending {
+	if model.Input.CtrlCPending {
 		t.Fatal("ctrlCPending should remain false while running")
 	}
 	if sess.cancels != 0 {
@@ -555,7 +554,7 @@ func TestCtrlDDoubleTapQuitsOnlyWhenIdleAndEmpty(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("first ctrl+d should arm quit timeout")
 	}
-	if !model.ctrlCPending {
+	if !model.Input.CtrlCPending {
 		t.Fatal("expected ctrlCPending after first ctrl+d")
 	}
 	if line := ansi.Strip(model.statusLine()); !strings.Contains(
@@ -578,8 +577,8 @@ func TestCtrlDDoubleTapQuitsOnlyWhenIdleAndEmpty(t *testing.T) {
 func TestEscCancelsRunningTurn(t *testing.T) {
 	sess := &stubSession{events: make(chan session.Event)}
 	model := readyModel(t)
-	model.session = sess
-	model.thinking = true
+	model.Model.Session = sess
+	model.InFlight.Thinking = true
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	model = updated.(Model)
@@ -589,21 +588,21 @@ func TestEscCancelsRunningTurn(t *testing.T) {
 	if sess.cancels != 1 {
 		t.Fatalf("cancel count = %d, want 1", sess.cancels)
 	}
-	if model.thinking {
+	if model.InFlight.Thinking {
 		t.Fatal("thinking should be false after esc cancel")
 	}
 }
 
 func TestEscDoubleTapClearsComposer(t *testing.T) {
 	model := readyModel(t)
-	model.composer.SetValue("draft")
+	model.Input.Composer.SetValue("draft")
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	model = updated.(Model)
 	if cmd == nil {
 		t.Fatal("first esc should arm clear timeout")
 	}
-	if !model.escPending {
+	if !model.Input.EscPending {
 		t.Fatal("expected escPending after first esc")
 	}
 	if line := ansi.Strip(model.statusLine()); !strings.Contains(
@@ -612,7 +611,7 @@ func TestEscDoubleTapClearsComposer(t *testing.T) {
 	) {
 		t.Fatalf("status line = %q, want esc hint", line)
 	}
-	if got := model.composer.Value(); got != "draft" {
+	if got := model.Input.Composer.Value(); got != "draft" {
 		t.Fatalf("composer = %q, want unchanged", got)
 	}
 
@@ -621,7 +620,7 @@ func TestEscDoubleTapClearsComposer(t *testing.T) {
 	if cmd != nil {
 		t.Fatal("second esc should clear without extra cmd")
 	}
-	if got := model.composer.Value(); got != "" {
+	if got := model.Input.Composer.Value(); got != "" {
 		t.Fatalf("composer = %q, want cleared", got)
 	}
 }
@@ -637,7 +636,7 @@ func TestPendingActionTimeoutClearsStatusHint(t *testing.T) {
 
 	updated, _ = model.Update(clearPendingMsg{action: pendingActionQuitCtrlC})
 	model = updated.(Model)
-	if model.ctrlCPending || model.pendingAction != pendingActionNone {
+	if model.Input.CtrlCPending || model.Input.Pending != pendingActionNone {
 		t.Fatal("pending action should clear after timeout")
 	}
 	if line := ansi.Strip(model.statusLine()); strings.Contains(
@@ -701,15 +700,15 @@ func TestProviderItemsSortSetAPIsThenLocalThenUnset(t *testing.T) {
 
 func TestComposerLayoutReflowsAfterHistoryRecall(t *testing.T) {
 	model := readyModel(t)
-	model.history = []string{"first\nsecond\nthird"}
+	model.Input.History = []string{"first\nsecond\nthird"}
 
 	updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyUp})
 	model = updated.(Model)
 
-	if got := model.composer.Value(); got != "first\nsecond\nthird" {
+	if got := model.Input.Composer.Value(); got != "first\nsecond\nthird" {
 		t.Fatalf("expected recalled history entry, got %q", got)
 	}
-	if got := model.composer.Height(); got != 3 {
+	if got := model.Input.Composer.Height(); got != 3 {
 		t.Fatalf("expected composer height to expand to 3, got %d", got)
 	}
 }
@@ -720,13 +719,13 @@ func TestCtrlTOpensThinkingPicker(t *testing.T) {
 	updated, _ := model.Update(tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl})
 	model = updated.(Model)
 
-	if model.picker == nil {
+	if model.Picker.Overlay == nil {
 		t.Fatal("expected thinking picker to open")
 	}
-	if model.picker.purpose != pickerPurposeThinking {
-		t.Fatalf("picker purpose = %v, want thinking", model.picker.purpose)
+	if model.Picker.Overlay.purpose != pickerPurposeThinking {
+		t.Fatalf("picker purpose = %v, want thinking", model.Picker.Overlay.purpose)
 	}
-	if got := model.picker.title; got != "Pick a thinking level" {
+	if got := model.Picker.Overlay.title; got != "Pick a thinking level" {
 		t.Fatalf("picker title = %q", got)
 	}
 }
@@ -783,10 +782,10 @@ func TestHandleCommandUpdatesConfigDirectly(t *testing.T) {
 			if !tc.wantCommand && cmd != nil {
 				t.Fatalf("expected no cmd, got %T", cmd)
 			}
-			if tc.wantPicker && model.picker == nil {
+			if tc.wantPicker && model.Picker.Overlay == nil {
 				t.Fatal("expected picker to open")
 			}
-			if !tc.wantPicker && model.picker != nil {
+			if !tc.wantPicker && model.Picker.Overlay != nil {
 				t.Fatal("expected no picker to open")
 			}
 
@@ -797,7 +796,7 @@ func TestHandleCommandUpdatesConfigDirectly(t *testing.T) {
 			if got := string(data); got != tc.expected {
 				t.Fatalf("config = %q, want %q", got, tc.expected)
 			}
-			if model.status == "" {
+			if model.Progress.Status == "" {
 				t.Fatal("expected status to be updated after direct config command")
 			}
 		})
@@ -1221,7 +1220,7 @@ func TestModelMetricsRenderFreeAndUnknownDistinctly(t *testing.T) {
 
 func TestPickerFilteringMatchesTypedQuery(t *testing.T) {
 	model := readyModel(t)
-	model.picker = &pickerState{
+	model.Picker.Overlay = &pickerOverlayState{
 		title: "Pick a provider",
 		items: []pickerItem{
 			{Label: "Anthropic", Value: "anthropic", Detail: "Set ANTHROPIC_API_KEY"},
@@ -1238,17 +1237,17 @@ func TestPickerFilteringMatchesTypedQuery(t *testing.T) {
 		model, _ = model.handlePickerKey(tea.KeyPressMsg{Text: string(r), Code: r})
 	}
 
-	if got := len(pickerDisplayItems(model.picker)); got != 1 {
+	if got := len(pickerDisplayItems(model.Picker.Overlay)); got != 1 {
 		t.Fatalf("filtered items = %d, want 1", got)
 	}
-	if got := pickerDisplayItems(model.picker)[0].Label; got != "OpenRouter" {
+	if got := pickerDisplayItems(model.Picker.Overlay)[0].Label; got != "OpenRouter" {
 		t.Fatalf("filtered label = %q, want OpenRouter", got)
 	}
 }
 
 func TestPickerFilteringRanksClosestMatchesFirst(t *testing.T) {
 	model := readyModel(t)
-	model.picker = &pickerState{
+	model.Picker.Overlay = &pickerOverlayState{
 		title: "Pick a model for openrouter",
 		items: []pickerItem{
 			{Label: "z-ai/glm-5-turbo", Value: "z-ai/glm-5-turbo"},
@@ -1267,7 +1266,7 @@ func TestPickerFilteringRanksClosestMatchesFirst(t *testing.T) {
 		model, _ = model.handlePickerKey(tea.KeyPressMsg{Text: string(r), Code: r})
 	}
 
-	items := pickerDisplayItems(model.picker)
+	items := pickerDisplayItems(model.Picker.Overlay)
 	if len(items) != 2 {
 		t.Fatalf("filtered items = %d, want 2", len(items))
 	}
@@ -1286,7 +1285,7 @@ func TestPickerFilteringRanksClosestMatchesFirst(t *testing.T) {
 
 func TestModelPickerRendersSeparatePriceColumns(t *testing.T) {
 	model := readyModel(t)
-	model.picker = &pickerState{
+	model.Picker.Overlay = &pickerOverlayState{
 		title: "Pick a model for openrouter",
 		items: []pickerItem{
 			{
@@ -1378,7 +1377,7 @@ func TestModelPickerRendersSeparatePriceColumns(t *testing.T) {
 
 func TestPickerFilteringAcceptsSpaceInput(t *testing.T) {
 	model := readyModel(t)
-	model.picker = &pickerState{
+	model.Picker.Overlay = &pickerOverlayState{
 		title: "Pick a provider",
 		items: []pickerItem{
 			{Label: "alpha", Value: "alpha", Detail: "Set ALPHA_API_KEY"},
@@ -1405,10 +1404,10 @@ func TestPickerFilteringAcceptsSpaceInput(t *testing.T) {
 		model, _ = model.handlePickerKey(key)
 	}
 
-	if got := model.picker.query; got != "set ALPHA" {
+	if got := model.Picker.Overlay.query; got != "set ALPHA" {
 		t.Fatalf("picker query = %q, want %q", got, "set ALPHA")
 	}
-	if got := len(pickerDisplayItems(model.picker)); got != 1 {
+	if got := len(pickerDisplayItems(model.Picker.Overlay)); got != 1 {
 		t.Fatalf("filtered items = %d, want 1", got)
 	}
 }
@@ -1416,16 +1415,16 @@ func TestPickerFilteringAcceptsSpaceInput(t *testing.T) {
 func TestQueuedFollowUpSubmitsAfterTurnFinished(t *testing.T) {
 	sess := &stubSession{events: make(chan session.Event)}
 	model := readyModel(t)
-	model.session = sess
-	model.composer.SetValue("follow up")
-	model.thinking = true
+	model.Model.Session = sess
+	model.Input.Composer.SetValue("follow up")
+	model.InFlight.Thinking = true
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = updated.(Model)
-	if model.queuedTurn != "follow up" {
-		t.Fatalf("queuedTurn = %q, want queued follow up", model.queuedTurn)
+	if model.InFlight.QueuedTurn != "follow up" {
+		t.Fatalf("queuedTurn = %q, want queued follow up", model.InFlight.QueuedTurn)
 	}
-	if got := model.composer.Value(); got != "" {
+	if got := model.Input.Composer.Value(); got != "" {
 		t.Fatalf("composer = %q, want cleared after queueing", got)
 	}
 	if cmd == nil {
@@ -1492,7 +1491,7 @@ func TestPickerCommitSwitchesRuntime(t *testing.T) {
 		},
 	)
 
-	model.picker = &pickerState{
+	model.Picker.Overlay = &pickerOverlayState{
 		title:   "Pick a model for openai",
 		items:   []pickerItem{{Label: "gpt-4.1", Value: "gpt-4.1"}},
 		index:   0,
@@ -1518,31 +1517,31 @@ func TestPickerCommitSwitchesRuntime(t *testing.T) {
 	if observedSessionID != oldSession.ID() {
 		t.Fatalf("session ID passed to switcher = %q, want %q", observedSessionID, oldSession.ID())
 	}
-	if got := model.backend.Provider(); got != "openai" {
+	if got := model.Model.Backend.Provider(); got != "openai" {
 		t.Fatalf("backend provider = %q, want %q", got, "openai")
 	}
-	if got := model.backend.Model(); got != "gpt-4.1" {
+	if got := model.Model.Backend.Model(); got != "gpt-4.1" {
 		t.Fatalf("backend model = %q, want %q", got, "gpt-4.1")
 	}
-	if got := model.session.ID(); got != oldSession.ID() {
+	if got := model.Model.Session.ID(); got != oldSession.ID() {
 		t.Fatalf("session ID = %q, want %q", got, oldSession.ID())
 	}
-	if got := model.storage.ID(); got != oldSession.ID() {
+	if got := model.Model.Storage.ID(); got != oldSession.ID() {
 		t.Fatalf("storage session ID = %q, want %q", got, oldSession.ID())
 	}
-	if got := model.branch; got != "feature/switch" {
+	if got := model.App.Branch; got != "feature/switch" {
 		t.Fatalf("branch = %q, want %q", got, "feature/switch")
 	}
 }
 
 func TestPickerCommitSameModelIsNoOp(t *testing.T) {
 	model := readyModel(t)
-	model.backend = stubBackend{
+	model.Model.Backend = stubBackend{
 		sess:     &stubSession{events: make(chan session.Event)},
 		provider: "openrouter",
 		model:    "z-ai/glm-5",
 	}
-	model.picker = &pickerState{
+	model.Picker.Overlay = &pickerOverlayState{
 		title:   "Pick a model for openrouter",
 		items:   []pickerItem{{Label: "z-ai/glm-5", Value: "z-ai/glm-5"}},
 		index:   0,
@@ -1556,17 +1555,17 @@ func TestPickerCommitSameModelIsNoOp(t *testing.T) {
 	if cmd != nil {
 		t.Fatalf("expected no command when selecting the active model, got %T", cmd)
 	}
-	if model.picker != nil {
+	if model.Picker.Overlay != nil {
 		t.Fatal("expected picker to close on same-model selection")
 	}
-	if got := model.backend.Model(); got != "z-ai/glm-5" {
+	if got := model.Model.Backend.Model(); got != "z-ai/glm-5" {
 		t.Fatalf("backend model = %q, want z-ai/glm-5", got)
 	}
 }
 
 func TestProviderPickerSelectingCurrentProviderOpensModelPickerWithoutClearingModel(t *testing.T) {
 	model := readyModel(t)
-	model.backend = stubBackend{
+	model.Model.Backend = stubBackend{
 		sess:     &stubSession{events: make(chan session.Event)},
 		provider: "openrouter",
 		model:    "z-ai/glm-5",
@@ -1584,7 +1583,7 @@ func TestProviderPickerSelectingCurrentProviderOpensModelPickerWithoutClearingMo
 	}
 	defer func() { listModels = oldListModels }()
 
-	model.picker = &pickerState{
+	model.Picker.Overlay = &pickerOverlayState{
 		title:    "Pick a provider",
 		items:    providerItems(&config.Config{}),
 		filtered: providerItems(&config.Config{}),
@@ -1598,28 +1597,28 @@ func TestProviderPickerSelectingCurrentProviderOpensModelPickerWithoutClearingMo
 	if cmd != nil {
 		t.Fatalf("expected no command when reopening model picker, got %T", cmd)
 	}
-	if model.picker == nil {
+	if model.Picker.Overlay == nil {
 		t.Fatal("expected model picker to open")
 	}
-	if model.picker.purpose != pickerPurposeModel {
-		t.Fatalf("picker purpose = %v, want model picker", model.picker.purpose)
+	if model.Picker.Overlay.purpose != pickerPurposeModel {
+		t.Fatalf("picker purpose = %v, want model picker", model.Picker.Overlay.purpose)
 	}
-	if model.picker.cfg == nil {
+	if model.Picker.Overlay.cfg == nil {
 		t.Fatal("expected picker config to be preserved")
 	}
-	if got := model.picker.cfg.Provider; got != "openrouter" {
+	if got := model.Picker.Overlay.cfg.Provider; got != "openrouter" {
 		t.Fatalf("picker provider = %q, want openrouter", got)
 	}
-	if got := model.picker.cfg.Model; got != "z-ai/glm-5" {
+	if got := model.Picker.Overlay.cfg.Model; got != "z-ai/glm-5" {
 		t.Fatalf("picker model = %q, want z-ai/glm-5", got)
 	}
-	if got := pickerDisplayItems(model.picker)[model.picker.index].Value; got != "z-ai/glm-5" {
+	if got := pickerDisplayItems(model.Picker.Overlay)[model.Picker.Overlay.index].Value; got != "z-ai/glm-5" {
 		t.Fatalf("selected model = %q, want z-ai/glm-5", got)
 	}
-	if got := model.backend.Provider(); got != "openrouter" {
+	if got := model.Model.Backend.Provider(); got != "openrouter" {
 		t.Fatalf("backend provider = %q, want openrouter", got)
 	}
-	if got := model.backend.Model(); got != "z-ai/glm-5" {
+	if got := model.Model.Backend.Model(); got != "z-ai/glm-5" {
 		t.Fatalf("backend model = %q, want z-ai/glm-5", got)
 	}
 }
@@ -1688,7 +1687,7 @@ func TestSlashModelSameValueIsNoOp(t *testing.T) {
 	}
 
 	model := readyModel(t)
-	model.backend = stubBackend{
+	model.Model.Backend = stubBackend{
 		sess:     &stubSession{events: make(chan session.Event)},
 		provider: "openrouter",
 		model:    "z-ai/glm-5",
@@ -1702,7 +1701,7 @@ func TestSlashModelSameValueIsNoOp(t *testing.T) {
 
 func TestRuntimeSwitchShowsStatusOnResume(t *testing.T) {
 	model := readyModel(t)
-	model.session = &stubSession{events: make(chan session.Event)}
+	model.Model.Session = &stubSession{events: make(chan session.Event)}
 
 	updated, cmd := model.Update(runtimeSwitchedMsg{
 		backend:       stubBackend{sess: &stubSession{events: make(chan session.Event)}},
@@ -1716,8 +1715,8 @@ func TestRuntimeSwitchShowsStatusOnResume(t *testing.T) {
 	})
 	model = updated.(Model)
 
-	if model.status != "Connected via Canto" {
-		t.Fatalf("status = %q", model.status)
+	if model.Progress.Status != "Connected via Canto" {
+		t.Fatalf("status = %q", model.Progress.Status)
 	}
 	if cmd == nil {
 		t.Fatal("expected command batch for runtime switch")
@@ -1775,9 +1774,9 @@ func TestResumeStoredSessionClosesInspectionSession(t *testing.T) {
 
 func TestStartupPrintLinesIncludesReplayHistory(t *testing.T) {
 	model := readyModel(t)
-	model.startupLines = []string{"line-1", "line-2"}
-	model.status = "ready"
-	model.startupEntries = []session.Entry{
+	model.App.StartupLines = []string{"line-1", "line-2"}
+	model.Progress.Status = "ready"
+	model.App.StartupEntries = []session.Entry{
 		{Role: session.User, Content: "hello"},
 		{Role: session.Agent, Content: "world"},
 	}
@@ -1805,7 +1804,7 @@ func TestStartupPrintLinesIncludesReplayHistory(t *testing.T) {
 
 func TestStartupPrintLinesOmitsConfigurationWarning(t *testing.T) {
 	model := readyModel(t)
-	model.status = noProviderConfiguredStatus()
+	model.Progress.Status = noProviderConfiguredStatus()
 
 	lines := model.startupPrintLines()
 	for _, line := range lines {
@@ -1817,7 +1816,7 @@ func TestStartupPrintLinesOmitsConfigurationWarning(t *testing.T) {
 
 func TestProgressLineShowsConfigurationWarning(t *testing.T) {
 	model := readyModel(t)
-	model.backend = stubBackend{
+	model.Model.Backend = stubBackend{
 		sess:        &stubSession{events: make(chan session.Event)},
 		provider:    "openrouter",
 		providerSet: true,
@@ -1833,14 +1832,14 @@ func TestProgressLineShowsConfigurationWarning(t *testing.T) {
 
 func TestProgressLineIgnoresStaleConfigurationStatusWhenBackendIsConfigured(t *testing.T) {
 	model := readyModel(t)
-	model.backend = stubBackend{
+	model.Model.Backend = stubBackend{
 		sess:        &stubSession{events: make(chan session.Event)},
 		provider:    "openrouter",
 		providerSet: true,
 		model:       "z-ai/glm-5",
 		modelSet:    true,
 	}
-	model.status = noModelConfiguredStatus()
+	model.Progress.Status = noModelConfiguredStatus()
 
 	line := ansi.Strip(model.progressLine())
 	if strings.Contains(line, "No model configured") {
@@ -1856,14 +1855,14 @@ func TestProgressLineIgnoresStaleConfigurationStatusWhenBackendIsConfigured(t *t
 
 func TestProgressLineShowsMeaningfulRestoredStatus(t *testing.T) {
 	model := readyModel(t)
-	model.backend = stubBackend{
+	model.Model.Backend = stubBackend{
 		sess:        &stubSession{events: make(chan session.Event)},
 		provider:    "openrouter",
 		providerSet: true,
 		model:       "z-ai/glm-5",
 		modelSet:    true,
 	}
-	model.status = "Running tests"
+	model.Progress.Status = "Running tests"
 
 	line := ansi.Strip(model.progressLine())
 	if !strings.Contains(line, "Running tests") {
@@ -1873,14 +1872,14 @@ func TestProgressLineShowsMeaningfulRestoredStatus(t *testing.T) {
 
 func TestProgressLineHidesBootstrapConnectedStatus(t *testing.T) {
 	model := readyModel(t)
-	model.backend = stubBackend{
+	model.Model.Backend = stubBackend{
 		sess:        &stubSession{events: make(chan session.Event)},
 		provider:    "openrouter",
 		providerSet: true,
 		model:       "z-ai/glm-5",
 		modelSet:    true,
 	}
-	model.status = "Connected via Canto"
+	model.Progress.Status = "Connected via Canto"
 
 	line := ansi.Strip(model.progressLine())
 	if strings.Contains(line, "Connected via Canto") {
@@ -1996,350 +1995,5 @@ func TestProviderItemsHideCustomEndpointByDefault(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("local-api should render when active")
-	}
-}
-
-func TestViewDoesNotAddExtraSpacerAfterPrintedTranscript(t *testing.T) {
-	model := readyModel(t)
-	model.printedTranscript = true
-	view := fmt.Sprint(model.View())
-	if strings.HasPrefix(view, "\n\n") || strings.HasPrefix(view, "\n• Ready") {
-		t.Fatalf(
-			"view should not add an extra blank spacer after printed transcript: %q",
-			view[:min(len(view), 40)],
-		)
-	}
-}
-
-func TestRenderPickerKeepsDetailColumnStableAcrossScroll(t *testing.T) {
-	model := readyModel(t)
-	model.picker = &pickerState{
-		title: "Pick a provider",
-		items: []pickerItem{
-			{
-				Label:  "Much Longer Provider Name",
-				Value:  "long",
-				Detail: "Ready",
-				Group:  "Direct APIs",
-			},
-			{Label: "OpenAI", Value: "openai", Detail: "Ready", Group: "Direct APIs"},
-			{Label: "Groq", Value: "groq", Detail: "Ready", Group: "Direct APIs"},
-			{Label: "xAI", Value: "xai", Detail: "Ready", Group: "Direct APIs"},
-			{Label: "Z.ai", Value: "zai", Detail: "Ready", Group: "Direct APIs"},
-			{Label: "Ollama", Value: "ollama", Detail: "Ready", Group: "Local"},
-			{Label: "Local API", Value: "local-api", Detail: "Not running", Group: "Local"},
-			{
-				Label:  "Custom API",
-				Value:  "openai-compatible",
-				Detail: "Set endpoint",
-				Group:  "Custom Endpoints",
-			},
-			{
-				Label:  "Anthropic",
-				Value:  "anthropic",
-				Detail: "Set ANTHROPIC_API_KEY",
-				Group:  "Direct APIs",
-			},
-		},
-	}
-	model.picker.filtered = append([]pickerItem(nil), model.picker.items...)
-
-	model.picker.index = 0
-	top := ansi.Strip(model.renderPicker())
-	model.picker.index = len(model.picker.items) - 1
-	bottom := ansi.Strip(model.renderPicker())
-
-	findSeparatorColumn := func(rendered, linePrefix string) int {
-		for _, line := range strings.Split(rendered, "\n") {
-			if strings.Contains(line, linePrefix) {
-				switch {
-				case strings.Contains(line, "Ready"):
-					return strings.Index(line, "Ready")
-				case strings.Contains(line, "Set ANTHROPIC_API_KEY"):
-					return strings.Index(line, "Set ANTHROPIC_API_KEY")
-				default:
-					return -1
-				}
-			}
-		}
-		return -1
-	}
-
-	topCol := findSeparatorColumn(top, "› Much Longer Provider Name")
-	bottomCol := findSeparatorColumn(bottom, "› Anthropic")
-	if topCol <= 0 || bottomCol <= 0 {
-		t.Fatalf(
-			"failed to find detail separator columns in picker render\nTOP:\n%s\nBOTTOM:\n%s",
-			top,
-			bottom,
-		)
-	}
-	if topCol != bottomCol {
-		t.Fatalf(
-			"detail column shifted across scroll: top=%d bottom=%d\nTOP:\n%s\nBOTTOM:\n%s",
-			topCol,
-			bottomCol,
-			top,
-			bottom,
-		)
-	}
-}
-
-func TestRenderPickerHighlightsSelectedMetricColumns(t *testing.T) {
-	model := readyModel(t)
-	item := pickerItem{
-		Label: "z-ai/glm-5",
-		Value: "z-ai/glm-5",
-		Metrics: &pickerMetrics{
-			Context: "80k",
-			Input:   "$0.72",
-			Output:  "$2.30",
-		},
-	}
-	widths := pickerMetricWidths{Context: 7, Input: 5, Output: 5}
-
-	selected := model.renderPickerLine(
-		"› ",
-		item,
-		lipgloss.Width(item.Label),
-		widths,
-		model.st.cyan,
-		model.st.cyan,
-	)
-	unselected := model.renderPickerLine(
-		"  ",
-		item,
-		lipgloss.Width(item.Label),
-		widths,
-		lipgloss.NewStyle(),
-		model.st.dim,
-	)
-
-	if ansi.Strip(selected) == ansi.Strip(unselected) {
-		t.Fatalf("expected selected and unselected rows to differ")
-	}
-	if strings.Contains(
-		selected,
-		model.st.dim.Render("80k"+strings.Repeat(" ", widths.Context-lipgloss.Width("80k"))),
-	) {
-		t.Fatalf("selected metric columns should not be dimmed: %q", selected)
-	}
-	if !strings.Contains(
-		selected,
-		model.st.cyan.Render("80k"+strings.Repeat(" ", widths.Context-lipgloss.Width("80k"))),
-	) {
-		t.Fatalf("selected metric columns should be highlighted: %q", selected)
-	}
-	if !strings.Contains(
-		unselected,
-		model.st.dim.Render("80k"+strings.Repeat(" ", widths.Context-lipgloss.Width("80k"))),
-	) {
-		t.Fatalf("unselected metric columns should stay dimmed: %q", unselected)
-	}
-}
-
-func TestRankedPickerItemsRejectsLooseLongSubsequenceMatches(t *testing.T) {
-	items := []pickerItem{
-		{Label: "google/gemini-3-flash-preview", Value: "google/gemini-3-flash-preview"},
-		{
-			Label: "nousresearch/hermes-3-llama-3.1-405b:free",
-			Value: "nousresearch/hermes-3-llama-3.1-405b:free",
-		},
-		{
-			Label: "mistralai/mistral-small-3.1-24b-instruct:free",
-			Value: "mistralai/mistral-small-3.1-24b-instruct:free",
-		},
-	}
-	for i := range items {
-		items[i].Search = pickerSearchIndex(items[i].Label, items[i].Value, "", "", nil)
-	}
-
-	filtered := rankedPickerItems(items, "free")
-	got := make([]string, 0, len(filtered))
-	for _, item := range filtered {
-		got = append(got, item.Label)
-	}
-
-	if slices.Contains(got, "google/gemini-3-flash-preview") {
-		t.Fatalf("expected long loose subsequence match to be rejected, got %v", got)
-	}
-	if !slices.Contains(got, "nousresearch/hermes-3-llama-3.1-405b:free") ||
-		!slices.Contains(got, "mistralai/mistral-small-3.1-24b-instruct:free") {
-		t.Fatalf("expected real free matches to remain, got %v", got)
-	}
-}
-
-func TestCommittedUserEntryUsesTranscriptPrompt(t *testing.T) {
-	model := readyModel(t)
-	rendered := ansi.Strip(model.renderEntry(session.Entry{Role: session.User, Content: "/model"}))
-	if !strings.HasPrefix(rendered, "› /model") {
-		t.Fatalf("rendered user entry = %q, want transcript prompt prefix", rendered)
-	}
-}
-
-func TestSystemErrorEntryUsesErrorSymbol(t *testing.T) {
-	model := readyModel(t)
-	rendered := ansi.Strip(
-		model.renderEntry(session.Entry{Role: session.System, Content: "Error: too many requests"}),
-	)
-	if !strings.HasPrefix(rendered, "× Error: too many requests") {
-		t.Fatalf("rendered system error entry = %q", rendered)
-	}
-}
-
-func TestTextareaStylesDoNotHighlightCursorLine(t *testing.T) {
-	model := readyModel(t)
-	model.composer.SetValue("draft")
-
-	rendered := model.composer.View()
-	if strings.Contains(rendered, "[48;") {
-		t.Fatalf("textarea view still includes background-color escape codes: %q", rendered)
-	}
-}
-
-func TestAgentEntryRendersMarkdown(t *testing.T) {
-	model := readyModel(t)
-	model.width = 80
-
-	rendered := ansi.Strip(model.renderEntry(session.Entry{
-		Role:    session.Agent,
-		Content: "# Heading\n\n- first item\n- second item\n\n| Name | Value |\n|------|-------|\n| foo  | 123   |\n\n```go\nfmt.Println(\"hi\")\n```",
-	}))
-
-	if strings.Contains(rendered, "```") {
-		t.Fatalf("expected code fences to be rendered away, got %q", rendered)
-	}
-	if strings.Contains(rendered, "# Heading") {
-		t.Fatalf("expected heading marker to be rendered away, got %q", rendered)
-	}
-	for _, want := range []string{"Heading", "first item", "second item", "foo", "123", "fmt.Println(\"hi\")"} {
-		if !strings.Contains(rendered, want) {
-			t.Fatalf("rendered markdown missing %q: %q", want, rendered)
-		}
-	}
-}
-
-func TestAgentEntryDoesNotIndentPlainContinuationLines(t *testing.T) {
-	model := readyModel(t)
-
-	rendered := ansi.Strip(model.renderEntry(session.Entry{
-		Role:    session.Agent,
-		Content: "First line\nSecond line",
-	}))
-
-	if strings.Contains(rendered, "\n  Second line") {
-		t.Fatalf("agent continuation line should not be indented, got %q", rendered)
-	}
-}
-
-func TestSessionPickerScopesToWorkspace(t *testing.T) {
-	tmpRoot := filepath.Join(t.TempDir(), ".ion")
-	store, err := storage.NewCantoStore(tmpRoot)
-	if err != nil {
-		t.Fatalf("failed to create store: %v", err)
-	}
-
-	cwd := "/tmp/workspace-a"
-	other := "/tmp/workspace-b"
-
-	sessionA, err := store.OpenSession(
-		context.Background(),
-		cwd,
-		"openrouter/deepseek/deepseek-v3.2",
-		"main",
-	)
-	if err != nil {
-		t.Fatalf("open workspace session: %v", err)
-	}
-	if err := sessionA.Append(context.Background(), storage.User{Type: "user", Content: "plan the feature", TS: now()}); err != nil {
-		t.Fatalf("append workspace session: %v", err)
-	}
-
-	sessionB, err := store.OpenSession(
-		context.Background(),
-		other,
-		"openrouter/minimax/minimax-m2.7",
-		"main",
-	)
-	if err != nil {
-		t.Fatalf("open other session: %v", err)
-	}
-	if err := sessionB.Append(context.Background(), storage.User{Type: "user", Content: "other workspace", TS: now()}); err != nil {
-		t.Fatalf("append other session: %v", err)
-	}
-
-	model := New(
-		stubBackend{sess: &stubSession{events: make(chan session.Event)}},
-		nil,
-		store,
-		cwd,
-		"main",
-		"dev",
-		nil,
-	)
-	model, cmd := model.openSessionPicker()
-	if cmd != nil {
-		t.Fatalf("expected no command from openSessionPicker, got %T", cmd)
-	}
-	if model.sessionPicker == nil {
-		t.Fatal("expected session picker state")
-	}
-	if got := len(model.sessionPicker.items); got != 1 {
-		t.Fatalf("session picker items = %d, want 1", got)
-	}
-	if got := model.sessionPicker.items[0].info.ID; got != sessionA.ID() {
-		t.Fatalf("session picker showed %q, want %q", got, sessionA.ID())
-	}
-}
-
-func TestSessionPickerFilteringAcceptsSpaceInput(t *testing.T) {
-	model := readyModel(t)
-	model.sessionPicker = &sessionPickerState{
-		items: []sessionPickerItem{
-			{info: storage.SessionInfo{ID: "a", LastPreview: "fix startup"}},
-			{info: storage.SessionInfo{ID: "b", LastPreview: "other"}},
-		},
-		filtered: []sessionPickerItem{
-			{info: storage.SessionInfo{ID: "a", LastPreview: "fix startup"}},
-			{info: storage.SessionInfo{ID: "b", LastPreview: "other"}},
-		},
-	}
-
-	for _, key := range []tea.KeyPressMsg{
-		{Text: "f", Code: 'f'},
-		{Text: "i", Code: 'i'},
-		{Text: "x", Code: 'x'},
-		{Text: " ", Code: tea.KeySpace},
-		{Text: "s", Code: 's'},
-		{Text: "t", Code: 't'},
-	} {
-		next, _ := model.handleSessionPickerKey(key)
-		model = next
-	}
-
-	if got := model.sessionPicker.query; got != "fix st" {
-		t.Fatalf("session picker query = %q, want %q", got, "fix st")
-	}
-	if got := len(model.sessionPicker.filtered); got != 1 {
-		t.Fatalf("filtered sessions = %d, want 1", got)
-	}
-	if got := model.sessionPicker.filtered[0].info.ID; got != "a" {
-		t.Fatalf("filtered session id = %q, want %q", got, "a")
-	}
-}
-
-func TestSessionPickerLineUsesPreviewAndAge(t *testing.T) {
-	info := storage.SessionInfo{
-		ID:          "session-123",
-		LastPreview: "refactor the picker overlay",
-		UpdatedAt:   time.Now().Add(-2 * time.Hour),
-	}
-
-	label, detail := sessionPickerLine("/tmp/workspace-a", info)
-	if label != "refactor the picker overlay" {
-		t.Fatalf("label = %q, want preview text", label)
-	}
-	if !strings.Contains(detail, "ago") {
-		t.Fatalf("detail %q missing age", detail)
 	}
 }

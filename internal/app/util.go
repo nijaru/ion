@@ -60,9 +60,9 @@ func (m *Model) printEntries(entries ...session.Entry) tea.Cmd {
 		return nil
 	}
 	lines := make([]string, 0, len(entries)+1)
-	if !m.printedTranscript {
+	if !m.App.PrintedTranscript {
 		lines = append(lines, "")
-		m.printedTranscript = true
+		m.App.PrintedTranscript = true
 	}
 	for _, entry := range entries {
 		lines = append(lines, m.renderEntry(entry))
@@ -71,20 +71,20 @@ func (m *Model) printEntries(entries ...session.Entry) tea.Cmd {
 }
 
 func (m *Model) clearPendingAction() {
-	m.escPending = false
-	m.ctrlCPending = false
-	m.pendingAction = pendingActionNone
+	m.Input.EscPending = false
+	m.Input.CtrlCPending = false
+	m.Input.Pending = pendingActionNone
 }
 
 func (m *Model) armPendingAction(action pendingAction) tea.Cmd {
-	m.pendingAction = action
+	m.Input.Pending = action
 	switch action {
 	case pendingActionClearEsc:
-		m.escPending = true
-		m.ctrlCPending = false
+		m.Input.EscPending = true
+		m.Input.CtrlCPending = false
 	case pendingActionQuitCtrlC, pendingActionQuitCtrlD:
-		m.ctrlCPending = true
-		m.escPending = false
+		m.Input.CtrlCPending = true
+		m.Input.EscPending = false
 	default:
 		m.clearPendingAction()
 		return nil
@@ -95,7 +95,7 @@ func (m *Model) armPendingAction(action pendingAction) tea.Cmd {
 }
 
 func (m Model) pendingActionStatus() string {
-	switch m.pendingAction {
+	switch m.Input.Pending {
 	case pendingActionQuitCtrlC:
 		return "Press Ctrl+C again to quit"
 	case pendingActionQuitCtrlD:
@@ -106,6 +106,7 @@ func (m Model) pendingActionStatus() string {
 		return ""
 	}
 }
+
 
 func isConfigurationStatus(status string) bool {
 	trimmed := strings.TrimSpace(status)

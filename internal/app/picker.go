@@ -193,26 +193,26 @@ func cfgForProvider(cfg *config.Config, provider string) *config.Config {
 }
 
 func refreshPickerFilter(m *Model) {
-	if m.picker == nil {
+	if m.Picker.Overlay == nil {
 		return
 	}
-	query := strings.TrimSpace(m.picker.query)
+	query := strings.TrimSpace(m.Picker.Overlay.query)
 	if query == "" {
-		m.picker.filtered = append([]pickerItem(nil), m.picker.items...)
+		m.Picker.Overlay.filtered = append([]pickerItem(nil), m.Picker.Overlay.items...)
 	} else {
-		filtered := rankedPickerItems(m.picker.items, query)
-		m.picker.filtered = filtered
+		filtered := rankedPickerItems(m.Picker.Overlay.items, query)
+		m.Picker.Overlay.filtered = filtered
 	}
-	if len(m.picker.filtered) == 0 {
-		m.picker.index = 0
+	if len(m.Picker.Overlay.filtered) == 0 {
+		m.Picker.Overlay.index = 0
 		return
 	}
-	if m.picker.index >= len(m.picker.filtered) {
-		m.picker.index = len(m.picker.filtered) - 1
+	if m.Picker.Overlay.index >= len(m.Picker.Overlay.filtered) {
+		m.Picker.Overlay.index = len(m.Picker.Overlay.filtered) - 1
 	}
 }
 
-func pickerDisplayItems(p *pickerState) []pickerItem {
+func pickerDisplayItems(p *pickerOverlayState) []pickerItem {
 	if p == nil {
 		return nil
 	}

@@ -15,15 +15,15 @@ import (
 )
 
 func (m Model) openSessionPicker() (Model, tea.Cmd) {
-	m.picker = nil
-	if m.store == nil {
-		m.sessionPicker = &sessionPickerState{err: "session store not available"}
+	m.Picker.Overlay = nil
+	if m.Model.Store == nil {
+		m.Picker.Session = &sessionPickerState{err: "session store not available"}
 		return m, nil
 	}
 
-	sessions, err := m.store.ListSessions(context.Background(), m.workdir)
+	sessions, err := m.Model.Store.ListSessions(context.Background(), m.App.Workdir)
 	if err != nil {
-		m.sessionPicker = &sessionPickerState{err: fmt.Sprintf("failed to list sessions: %v", err)}
+		m.Picker.Session = &sessionPickerState{err: fmt.Sprintf("failed to list sessions: %v", err)}
 		return m, nil
 	}
 
@@ -40,46 +40,46 @@ func (m Model) openSessionPicker() (Model, tea.Cmd) {
 	if len(items) == 0 {
 		state.err = "no recent sessions in this workspace"
 	}
-	m.sessionPicker = state
+	m.Picker.Session = state
 	return m, nil
 }
 
 func (m Model) handleSessionPickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
-	if m.sessionPicker == nil {
+	if m.Picker.Session == nil {
 		return m, nil
 	}
 
 	switch msg.String() {
 	case "esc", "ctrl+c", "ctrl+d":
-		m.sessionPicker = nil
+		m.Picker.Session = nil
 		return m, nil
 	case "backspace":
-		if len(m.sessionPicker.query) > 0 {
-			_, size := utf8.DecodeLastRuneInString(m.sessionPicker.query)
-			m.sessionPicker.query = m.sessionPicker.query[:len(m.sessionPicker.query)-size]
+		if len(m.Picker.Session.query) > 0 {
+			_, size := utf8.DecodeLastRuneInString(m.Picker.Session.query)
+			m.Picker.Session.query = m.Picker.Session.query[:len(m.Picker.Session.query)-size]
 			m.refreshSessionPickerFilter()
 		}
 		return m, nil
 	case "up":
-		if m.sessionPicker.index > 0 {
-			m.sessionPicker.index--
+		if m.Picker.Session.index > 0 {
+			m.Picker.Session.index--
 		}
 		return m, nil
 	case "down":
-		if m.sessionPicker.index < len(m.sessionPicker.filtered)-1 {
-			m.sessionPicker.index++
+		if m.Picker.Session.index < len(m.Picker.Session.filtered)-1 {
+			m.Picker.Session.index++
 		}
 		return m, nil
 	case "enter":
-		if len(m.sessionPicker.filtered) == 0 {
+		if len(m.Picker.Session.filtered) == 0 {
 			return m, nil
 		}
-		selected := m.sessionPicker.filtered[m.sessionPicker.index]
-		m.sessionPicker = nil
+		selected := m.Picker.Session.filtered[m.Picker.Session.index]
+		m.Picker.Session = nil
 		return m, m.resumeStoredSessionByID(selected.info.ID)
 	default:
 		if msg.Text != "" {
-			m.sessionPicker.query += msg.Text
+			m.Picker.Session.query += msg.Text
 			m.refreshSessionPickerFilter()
 		}
 		return m, nil
@@ -87,26 +87,26 @@ func (m Model) handleSessionPickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 }
 
 func (m Model) refreshSessionPickerFilter() {
-	if m.sessionPicker == nil {
+	if m.Picker.Session == nil {
 		return
 	}
-	query := strings.TrimSpace(m.sessionPicker.query)
+	query := strings.TrimSpace(m.Picker.Session.query)
 	if query == "" {
-		m.sessionPicker.filtered = append([]sessionPickerItem(nil), m.sessionPicker.items...)
+		m.Picker.Session.filtered = append([]sessionPickerItem(nil), m.Picker.Session.items...)
 	} else {
-		m.sessionPicker.filtered = rankedSessionPickerItems(m.sessionPicker.items, query, m.workdir)
+		m.Picker.Session.filtered = rankedSessionPickerItems(m.Picker.Session.items, query, m.App.Workdir)
 	}
-	if len(m.sessionPicker.filtered) == 0 {
-		m.sessionPicker.index = 0
+	if len(m.Picker.Session.filtered) == 0 {
+		m.Picker.Session.index = 0
 		return
 	}
-	if m.sessionPicker.index >= len(m.sessionPicker.filtered) {
-		m.sessionPicker.index = len(m.sessionPicker.filtered) - 1
+	if m.Picker.Session.index >= len(m.Picker.Session.filtered) {
+		m.Picker.Session.index = len(m.Picker.Session.filtered) - 1
 	}
 }
 
 func (m Model) renderSessionPicker() string {
-	if m.sessionPicker == nil {
+	if m.Picker.Session == nil {
 		return ""
 	}
 
@@ -114,17 +114,17 @@ func (m Model) renderSessionPicker() string {
 	b.WriteString("\n")
 	b.WriteString(m.st.cyan.PaddingLeft(2).Render("Resume a session"))
 	b.WriteString("\n")
-	if m.workdir != "" {
-		b.WriteString(m.st.dim.PaddingLeft(2).Render("Workspace: " + filepath.Base(m.workdir)))
+	if m.App.Workdir != "" {
+		b.WriteString(m.st.dim.PaddingLeft(2).Render("Workspace: " + filepath.Base(m.App.Workdir)))
 		b.WriteString("\n")
 	}
-	b.WriteString(m.st.dim.PaddingLeft(2).Render("Search: " + m.sessionPicker.query))
+	b.WriteString(m.st.dim.PaddingLeft(2).Render("Search: " + m.Picker.Session.query))
 	b.WriteString("\n")
-	if m.sessionPicker.err != "" {
-		b.WriteString(m.st.warn.PaddingLeft(2).Render(m.sessionPicker.err))
+	if m.Picker.Session.err != "" {
+		b.WriteString(m.st.warn.PaddingLeft(2).Render(m.Picker.Session.err))
 		b.WriteString("\n")
 	}
-	if len(m.sessionPicker.filtered) == 0 {
+	if len(m.Picker.Session.filtered) == 0 {
 		b.WriteString(m.st.dim.PaddingLeft(2).Render("No matching sessions"))
 		b.WriteString("\n")
 		return b.String()
@@ -132,18 +132,18 @@ func (m Model) renderSessionPicker() string {
 
 	const maxVisible = 8
 	start := 0
-	if len(m.sessionPicker.filtered) > maxVisible {
-		start = m.sessionPicker.index - maxVisible/2
+	if len(m.Picker.Session.filtered) > maxVisible {
+		start = m.Picker.Session.index - maxVisible/2
 		if start < 0 {
 			start = 0
 		}
-		if end := start + maxVisible; end > len(m.sessionPicker.filtered) {
-			start = len(m.sessionPicker.filtered) - maxVisible
+		if end := start + maxVisible; end > len(m.Picker.Session.filtered) {
+			start = len(m.Picker.Session.filtered) - maxVisible
 		}
 	}
 	end := start + maxVisible
-	if end > len(m.sessionPicker.filtered) {
-		end = len(m.sessionPicker.filtered)
+	if end > len(m.Picker.Session.filtered) {
+		end = len(m.Picker.Session.filtered)
 	}
 
 	if start > 0 {
@@ -151,19 +151,19 @@ func (m Model) renderSessionPicker() string {
 		b.WriteString("\n")
 	}
 	for i := start; i < end; i++ {
-		item := m.sessionPicker.filtered[i]
-		line, detail := sessionPickerLine(m.workdir, item.info)
+		item := m.Picker.Session.filtered[i]
+		line, detail := sessionPickerLine(m.App.Workdir, item.info)
 		if detail != "" {
 			line += " • " + detail
 		}
-		if i == m.sessionPicker.index {
+		if i == m.Picker.Session.index {
 			b.WriteString(m.st.cyan.PaddingLeft(2).Render("› " + line))
 		} else {
 			b.WriteString(m.st.dim.PaddingLeft(2).Render("  " + line))
 		}
 		b.WriteString("\n")
 	}
-	if end < len(m.sessionPicker.filtered) {
+	if end < len(m.Picker.Session.filtered) {
 		b.WriteString(m.st.dim.PaddingLeft(2).Render("..."))
 		b.WriteString("\n")
 	}
@@ -171,6 +171,7 @@ func (m Model) renderSessionPicker() string {
 	b.WriteString("\n")
 	return b.String()
 }
+
 
 func rankedSessionPickerItems(items []sessionPickerItem, query, cwd string) []sessionPickerItem {
 	type rankedItem struct {
