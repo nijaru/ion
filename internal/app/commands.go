@@ -635,50 +635,6 @@ func cmdError(msg string) tea.Cmd {
 	}
 }
 
-// renderDiff colorizes diff-format output.
-// Uses plain output if the content doesn't look like a unified diff.
-func (m Model) renderDiff(content string) string {
-	lines := strings.Split(content, "\n")
-	hasDiffMarkers := false
-	for _, l := range lines {
-		if strings.HasPrefix(l, "--- ") || strings.HasPrefix(l, "+++ ") ||
-			strings.HasPrefix(l, "@@ ") {
-			hasDiffMarkers = true
-			break
-		}
-	}
-	if !hasDiffMarkers {
-		return content
-	}
-
-	var b strings.Builder
-	for _, l := range lines {
-		switch {
-		case strings.HasPrefix(l, "+") && !strings.HasPrefix(l, "+++"):
-			b.WriteString(m.st.added.Render(l))
-		case strings.HasPrefix(l, "-") && !strings.HasPrefix(l, "---"):
-			b.WriteString(m.st.removed.Render(l))
-		case strings.HasPrefix(l, "@@ "):
-			b.WriteString(m.st.cyan.Render(l))
-		default:
-			b.WriteString(m.st.dim.Render(l))
-		}
-		b.WriteString("\n")
-	}
-	return b.String()
-}
-
-// isWriteTool returns true if the tool title looks like a write/edit operation.
-func isWriteTool(title string) bool {
-	lower := strings.ToLower(title)
-	for _, prefix := range []string{"write", "edit", "create"} {
-		if strings.HasPrefix(lower, prefix+" ") || strings.HasPrefix(lower, prefix+"(") {
-			return true
-		}
-	}
-	return false
-}
-
 func modeDisplayName(mode session.Mode) string {
 	switch mode {
 	case session.ModeRead:
