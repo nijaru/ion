@@ -16,36 +16,36 @@ type Viewport struct{}
 // renderPlaneB renders all ephemeral in-flight content.
 // Returns empty string when there is nothing active.
 func (m Model) renderPlaneB() string {
-	if m.pending == nil && m.pendingApproval == nil && m.reasonBuf == "" {
+	if m.InFlight.Pending == nil && m.Approval.Pending == nil && m.InFlight.ReasonBuf == "" {
 		return ""
 	}
 
 	var b strings.Builder
 
 	// Thinking/reasoning (dimmed, shown while generating)
-	if m.reasonBuf != "" {
+	if m.InFlight.ReasonBuf != "" {
 		b.WriteString(m.st.dim.Render("• Thinking..."))
 		b.WriteString("\n")
-		for _, line := range strings.Split(m.reasonBuf, "\n") {
+		for _, line := range strings.Split(m.InFlight.ReasonBuf, "\n") {
 			b.WriteString(m.st.dim.PaddingLeft(4).Render(line))
 			b.WriteString("\n")
 		}
 	}
 
 	// Active in-flight entry (streaming agent, tool, or agent)
-	if m.pending != nil {
-		b.WriteString(m.renderPendingEntry(*m.pending))
+	if m.InFlight.Pending != nil {
+		b.WriteString(m.renderPendingEntry(*m.InFlight.Pending))
 		b.WriteString("\n")
 	}
 
 	// Approval prompt
-	if m.pendingApproval != nil {
+	if m.Approval.Pending != nil {
 		b.WriteString("\n")
-		desc := m.pendingApproval.Description
-		if m.pendingApproval.ToolName != "" {
+		desc := m.Approval.Pending.Description
+		if m.Approval.Pending.ToolName != "" {
 			desc = fmt.Sprintf("%s: %s",
-				FormatToolTitle(m.pendingApproval.ToolName, m.pendingApproval.Args),
-				m.pendingApproval.Description)
+				FormatToolTitle(m.Approval.Pending.ToolName, m.Approval.Pending.Args),
+				m.Approval.Pending.Description)
 		}
 		b.WriteString(m.st.warn.PaddingLeft(2).Render("Approve " + desc + "? (y/n/a)"))
 		b.WriteString("\n")
@@ -192,19 +192,19 @@ func (m Model) renderEntry(e session.Entry) string {
 // progressLine renders the single-line progress indicator between Plane B and the composer.
 func (m Model) progressLine() string {
 	var line string
-	switch m.progress {
+	switch m.Progress.Mode {
 	case stateIonizing:
-		line = m.spinner.View() + " Ionizing..."
+		line = m.Input.Spinner.View() + " Ionizing..."
 		if stats := m.runningProgressParts(); len(stats) > 0 {
 			line += " • " + strings.Join(stats, " • ")
 		}
 	case stateStreaming:
-		line = m.spinner.View() + " Streaming..."
+		line = m.Input.Spinner.View() + " Streaming..."
 		if stats := m.runningProgressParts(); len(stats) > 0 {
 			line += " • " + strings.Join(stats, " • ")
 		}
 	case stateWorking:
-		line = m.spinner.View() + " Working..."
+		line = m.Input.Spinner.View() + " Working..."
 		if stats := m.runningProgressParts(); len(stats) > 0 {
 			line += " • " + strings.Join(stats, " • ")
 		}
@@ -219,18 +219,18 @@ func (m Model) progressLine() string {
 		line = m.st.warn.Render("⚠ Canceled")
 	case stateError:
 		line = m.st.warn.Render(
-			"× Error: " + strings.NewReplacer("\n", " ", "\r", " ").Replace(m.lastError),
+			"× Error: " + strings.NewReplacer("\n", " ", "\r", " ").Replace(m.Progress.LastError),
 		)
 	default:
 		if status := strings.TrimSpace(m.configurationStatus()); status != "" {
 			line = m.st.warn.Render("• " + status)
-		} else if status := strings.TrimSpace(m.status); !isIdleStatus(status) && !isConfigurationStatus(status) {
+		} else if status := strings.TrimSpace(m.Progress.Status); !isIdleStatus(status) && !isConfigurationStatus(status) {
 			line = m.st.dim.Render("• " + status)
 		} else {
 			line = m.st.dim.Render("• Ready")
 		}
 	}
-	return fitLine(strings.TrimRight(line, " "), m.width)
+	return fitLine(strings.TrimRight(line, " "), m.App.Width)
 }
 
 // renderDiff colorizes diff-format output.

@@ -88,7 +88,7 @@ func (m Model) renderMarkdownNode(node ast.Node, source []byte, depth int) []str
 			lines = append(lines, m.renderMarkdownTable(n, source, depth)...)
 			lines = append(lines, "")
 		case *ast.ThematicBreak:
-			lines = append(lines, strings.Repeat("─", max(8, m.width-2)))
+			lines = append(lines, strings.Repeat("─", max(8, m.App.Width-2)))
 			lines = append(lines, "")
 		default:
 			if child.HasChildren() {
@@ -244,7 +244,7 @@ func (m Model) renderMarkdownTable(table *tableast.Table, source []byte, depth i
 	for _, w := range widths {
 		total += w + 3
 	}
-	if m.width > 0 && total > max(24, m.width-4) {
+	if m.App.Width > 0 && total > max(24, m.App.Width-4) {
 		return renderMarkdownTablePlain(indent, headers, rows)
 	}
 

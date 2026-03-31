@@ -18,7 +18,7 @@ type Broker struct{}
 
 func (m Model) awaitSessionEvent() tea.Cmd {
 	return func() tea.Msg {
-		ev, ok := <-m.session.Events()
+		ev, ok := <-m.Model.Session.Events()
 		if !ok {
 			return streamClosedMsg{}
 		}
@@ -30,7 +30,7 @@ func (m Model) awaitSessionEvent() tea.Cmd {
 func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 	switch msg := ev.(type) {
 	case session.StatusChanged:
-		m.status = msg.Status
+		m.Progress.Status = msg.Status
 		if err := m.persistEntry("persist status", storage.Status{
 			Type:   "status",
 			Status: msg.Status,
@@ -41,12 +41,12 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		return m, m.awaitSessionEvent()
 
 	case session.TokenUsage:
-		m.tokensSent += msg.Input
-		m.tokensReceived += msg.Output
-		m.totalCost += msg.Cost
-		m.currentTurnInput += msg.Input
-		m.currentTurnOutput += msg.Output
-		m.currentTurnCost += msg.Cost
+		m.Progress.TokensSent += msg.Input
+		m.Progress.TokensReceived += msg.Output
+		m.Progress.TotalCost += msg.Cost
+		m.Progress.CurrentTurnInput += msg.Input
+		m.Progress.CurrentTurnOutput += msg.Output
+		m.Progress.CurrentTurnCost += msg.Cost
 		if err := m.persistEntry("persist token usage", storage.TokenUsage{
 			Type:   "token_usage",
 			Input:  msg.Input,
@@ -59,56 +59,56 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		return m, m.awaitSessionEvent()
 
 	case session.TurnStarted:
-		m.thinking = true
-		m.progress = stateIonizing
-		m.turnStartedAt = time.Now()
-		m.currentTurnInput = 0
-		m.currentTurnOutput = 0
-		m.currentTurnCost = 0
-		m.pending = &session.Entry{Role: session.Agent}
+		m.InFlight.Thinking = true
+		m.Progress.Mode = stateIonizing
+		m.Progress.TurnStartedAt = time.Now()
+		m.Progress.CurrentTurnInput = 0
+		m.Progress.CurrentTurnOutput = 0
+		m.Progress.CurrentTurnCost = 0
+		m.InFlight.Pending = &session.Entry{Role: session.Agent}
 		return m, m.awaitSessionEvent()
 
 	case session.TurnFinished:
-		m.thinking = false
-		m.progress = stateComplete
-		if !m.turnStartedAt.IsZero() {
-			m.lastTurnSummary = turnSummary{
-				Elapsed: time.Since(m.turnStartedAt),
-				Input:   m.currentTurnInput,
-				Output:  m.currentTurnOutput,
-				Cost:    m.currentTurnCost,
+		m.InFlight.Thinking = false
+		m.Progress.Mode = stateComplete
+		if !m.Progress.TurnStartedAt.IsZero() {
+			m.Progress.LastTurnSummary = turnSummary{
+				Elapsed: time.Since(m.Progress.TurnStartedAt),
+				Input:   m.Progress.CurrentTurnInput,
+				Output:  m.Progress.CurrentTurnOutput,
+				Cost:    m.Progress.CurrentTurnCost,
 			}
 		}
-		m.turnStartedAt = time.Time{}
-		if queued := strings.TrimSpace(m.queuedTurn); queued != "" {
-			m.queuedTurn = ""
+		m.Progress.TurnStartedAt = time.Time{}
+		if queued := strings.TrimSpace(m.InFlight.QueuedTurn); queued != "" {
+			m.InFlight.QueuedTurn = ""
 			return m, func() tea.Msg { return queuedTurnMsg{text: queued} }
 		}
 		return m, m.awaitSessionEvent()
 
 	case session.ThinkingDelta:
-		m.reasonBuf += msg.Delta
+		m.InFlight.ReasonBuf += msg.Delta
 		return m, m.awaitSessionEvent()
 
 	case session.AgentDelta:
-		m.progress = stateStreaming
-		if m.pending == nil {
-			m.pending = &session.Entry{Role: session.Agent}
+		m.Progress.Mode = stateStreaming
+		if m.InFlight.Pending == nil {
+			m.InFlight.Pending = &session.Entry{Role: session.Agent}
 		}
-		m.pending.Content += msg.Delta
-		m.streamBuf = m.pending.Content
+		m.InFlight.Pending.Content += msg.Delta
+		m.InFlight.StreamBuf = m.InFlight.Pending.Content
 		return m, m.awaitSessionEvent()
 
 	case session.AgentMessage:
-		if m.pending != nil && m.pending.Role == session.Agent {
+		if m.InFlight.Pending != nil && m.InFlight.Pending.Role == session.Agent {
 			if msg.Message != "" {
-				m.pending.Content = msg.Message
+				m.InFlight.Pending.Content = msg.Message
 			}
-			m.pending.Reasoning = m.reasonBuf
-			entry := *m.pending
-			m.pending = nil
-			m.streamBuf = ""
-			m.reasonBuf = ""
+			m.InFlight.Pending.Reasoning = m.InFlight.ReasonBuf
+			entry := *m.InFlight.Pending
+			m.InFlight.Pending = nil
+			m.InFlight.StreamBuf = ""
+			m.InFlight.ReasonBuf = ""
 			if strings.TrimSpace(entry.Content) == "" && strings.TrimSpace(entry.Reasoning) == "" {
 				return m, m.awaitSessionEvent()
 			}
@@ -136,15 +136,15 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		return m, m.awaitSessionEvent()
 
 	case session.ToolCallStarted:
-		m.progress = stateWorking
-		m.lastToolUseID = session.ShortID()
-		m.pending = &session.Entry{
+		m.Progress.Mode = stateWorking
+		m.Progress.LastToolUseID = session.ShortID()
+		m.InFlight.Pending = &session.Entry{
 			Role:  session.Tool,
 			Title: FormatToolTitle(msg.ToolName, msg.Args),
 		}
 		if err := m.persistEntry("persist tool use", storage.ToolUse{
 			Type: "tool_use",
-			ID:   m.lastToolUseID,
+			ID:   m.Progress.LastToolUseID,
 			Name: msg.ToolName,
 			Input: map[string]string{
 				"args": msg.Args,
@@ -156,21 +156,21 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		return m, m.awaitSessionEvent()
 
 	case session.ToolOutputDelta:
-		if m.pending != nil && m.pending.Role == session.Tool {
-			m.pending.Content += msg.Delta
+		if m.InFlight.Pending != nil && m.InFlight.Pending.Role == session.Tool {
+			m.InFlight.Pending.Content += msg.Delta
 		}
 		return m, m.awaitSessionEvent()
 
 	case session.ToolResult:
-		if m.pending != nil && m.pending.Role == session.Tool {
-			m.pending.Content = msg.Result
-			m.pending.IsError = msg.Error != nil
-			entry := *m.pending
-			m.pending = nil
+		if m.InFlight.Pending != nil && m.InFlight.Pending.Role == session.Tool {
+			m.InFlight.Pending.Content = msg.Result
+			m.InFlight.Pending.IsError = msg.Error != nil
+			entry := *m.InFlight.Pending
+			m.InFlight.Pending = nil
 
 			if err := m.persistEntry("persist tool result", storage.ToolResult{
 				Type:      "tool_result",
-				ToolUseID: m.lastToolUseID,
+				ToolUseID: m.Progress.LastToolUseID,
 				Content:   msg.Result,
 				IsError:   msg.Error != nil,
 				TS:        now(),
@@ -192,7 +192,7 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		}
 		if err := m.persistEntry("persist verification result", storage.ToolResult{
 			Type:      "tool_result",
-			ToolUseID: m.lastToolUseID,
+			ToolUseID: m.Progress.LastToolUseID,
 			Content:   content,
 			IsError:   !msg.Passed,
 			TS:        now(),
@@ -202,13 +202,13 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
 
 	case session.ApprovalRequest:
-		m.pendingApproval = &msg
-		m.progress = stateApproval
-		m.thinking = false
+		m.Approval.Pending = &msg
+		m.Progress.Mode = stateApproval
+		m.InFlight.Thinking = false
 		return m, m.awaitSessionEvent()
 
 	case session.ChildRequested:
-		m.pending = &session.Entry{
+		m.InFlight.Pending = &session.Entry{
 			Role:    session.Subagent,
 			Title:   msg.AgentName,
 			Content: msg.Query,
@@ -216,53 +216,53 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		return m, m.awaitSessionEvent()
 
 	case session.ChildStarted:
-		if m.pending != nil && m.pending.Role == session.Subagent {
-			m.pending.Title = msg.AgentName
+		if m.InFlight.Pending != nil && m.InFlight.Pending.Role == session.Subagent {
+			m.InFlight.Pending.Title = msg.AgentName
 		}
 		return m, m.awaitSessionEvent()
 
 	case session.ChildDelta:
-		if m.pending != nil && m.pending.Role == session.Subagent {
-			m.pending.Content += msg.Delta
+		if m.InFlight.Pending != nil && m.InFlight.Pending.Role == session.Subagent {
+			m.InFlight.Pending.Content += msg.Delta
 		}
 		return m, m.awaitSessionEvent()
 
 	case session.ChildCompleted:
-		if m.pending != nil && m.pending.Role == session.Subagent {
-			m.pending.Content = msg.Result
-			entry := *m.pending
-			m.pending = nil
+		if m.InFlight.Pending != nil && m.InFlight.Pending.Role == session.Subagent {
+			m.InFlight.Pending.Content = msg.Result
+			entry := *m.InFlight.Pending
+			m.InFlight.Pending = nil
 			return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
 		}
 		return m, m.awaitSessionEvent()
 
 	case session.ChildFailed:
-		if m.pending != nil && m.pending.Role == session.Subagent {
-			m.pending.Content = "ERROR: " + msg.Error
-			m.pending.IsError = true
-			entry := *m.pending
-			m.pending = nil
+		if m.InFlight.Pending != nil && m.InFlight.Pending.Role == session.Subagent {
+			m.InFlight.Pending.Content = "ERROR: " + msg.Error
+			m.InFlight.Pending.IsError = true
+			entry := *m.InFlight.Pending
+			m.InFlight.Pending = nil
 			return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
 		}
 		return m, m.awaitSessionEvent()
 
 	case session.Error:
-		m.pending = nil
-		m.pendingApproval = nil
-		m.streamBuf = ""
-		m.reasonBuf = ""
-		m.thinking = false
-		m.progress = stateError
-		m.lastError = msg.Err.Error()
-		if !m.turnStartedAt.IsZero() {
-			m.lastTurnSummary = turnSummary{
-				Elapsed: time.Since(m.turnStartedAt),
-				Input:   m.currentTurnInput,
-				Output:  m.currentTurnOutput,
-				Cost:    m.currentTurnCost,
+		m.InFlight.Pending = nil
+		m.Approval.Pending = nil
+		m.InFlight.StreamBuf = ""
+		m.InFlight.ReasonBuf = ""
+		m.InFlight.Thinking = false
+		m.Progress.Mode = stateError
+		m.Progress.LastError = msg.Err.Error()
+		if !m.Progress.TurnStartedAt.IsZero() {
+			m.Progress.LastTurnSummary = turnSummary{
+				Elapsed: time.Since(m.Progress.TurnStartedAt),
+				Input:   m.Progress.CurrentTurnInput,
+				Output:  m.Progress.CurrentTurnOutput,
+				Cost:    m.Progress.CurrentTurnCost,
 			}
 		}
-		m.turnStartedAt = time.Time{}
+		m.Progress.TurnStartedAt = time.Time{}
 		entry := session.Entry{Role: session.System, Content: "Error: " + msg.Err.Error()}
 		return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
 	}
@@ -277,22 +277,22 @@ func persistErrorCmd(action string, err error) tea.Cmd {
 }
 
 func (m Model) persistEntry(action string, entry any) error {
-	if m.storage == nil {
+	if m.Model.Storage == nil {
 		return nil
 	}
-	if err := m.storage.Append(context.Background(), entry); err != nil {
+	if err := m.Model.Storage.Append(context.Background(), entry); err != nil {
 		return fmt.Errorf("%s: %w", action, err)
 	}
 	return nil
 }
 
 func (m Model) submitText(text string) (Model, tea.Cmd) {
-	m.history = append(m.history, text)
-	m.historyIdx = -1
-	m.historyDraft = ""
+	m.Input.History = append(m.Input.History, text)
+	m.Input.HistoryIdx = -1
+	m.Input.HistoryDraft = ""
 
 	userEntry := session.Entry{Role: session.User, Content: text}
-	m.composer.Reset()
+	m.Input.Composer.Reset()
 	m.relayoutComposer()
 
 	if err := m.persistEntry("persist user input", storage.User{
@@ -308,8 +308,9 @@ func (m Model) submitText(text string) (Model, tea.Cmd) {
 		return m, tea.Sequence(m.printEntries(userEntry), cmd)
 	}
 
-	m.progress = stateIonizing
-	m.thinking = true
-	m.session.SubmitTurn(context.Background(), text)
+	m.Progress.Mode = stateIonizing
+	m.InFlight.Thinking = true
+	m.Model.Session.SubmitTurn(context.Background(), text)
 	return m, m.printEntries(userEntry)
 }
+

@@ -8,7 +8,7 @@ import (
 )
 
 func (m Model) View() tea.View {
-	if !m.ready {
+	if !m.App.Ready {
 		return tea.NewView("loading...")
 	}
 
@@ -21,10 +21,10 @@ func (m Model) View() tea.View {
 	}
 
 	// Selection overlay
-	if m.sessionPicker != nil {
+	if m.Picker.Session != nil {
 		b.WriteString(m.renderSessionPicker())
 		b.WriteString("\n")
-	} else if m.picker != nil {
+	} else if m.Picker.Overlay != nil {
 		b.WriteString(m.renderPicker())
 		b.WriteString("\n")
 	}
@@ -32,7 +32,7 @@ func (m Model) View() tea.View {
 	// Keep exactly one visual blank line between committed scrollback and Plane B.
 	// Once transcript rows are printed, the terminal already advanced to the next
 	// line, so we don't add another empty row unless Plane B has in-view content.
-	if planeB != "" || m.sessionPicker != nil || m.picker != nil || !m.printedTranscript {
+	if planeB != "" || m.Picker.Session != nil || m.Picker.Overlay != nil || !m.App.PrintedTranscript {
 		b.WriteString("\n")
 	}
 
@@ -41,15 +41,15 @@ func (m Model) View() tea.View {
 	b.WriteString("\n")
 
 	// Top separator
-	b.WriteString(m.st.sep.Render(strings.Repeat("─", max(0, m.width))))
+	b.WriteString(m.st.sep.Render(strings.Repeat("─", max(0, m.App.Width))))
 	b.WriteString("\n")
 
 	// Composer
-	b.WriteString(m.composer.View())
+	b.WriteString(m.Input.Composer.View())
 	b.WriteString("\n")
 
 	// Bottom separator
-	b.WriteString(m.st.sep.Render(strings.Repeat("─", max(0, m.width))))
+	b.WriteString(m.st.sep.Render(strings.Repeat("─", max(0, m.App.Width))))
 	b.WriteString("\n")
 
 	// Status line
@@ -59,15 +59,15 @@ func (m Model) View() tea.View {
 }
 
 func (m Model) renderPicker() string {
-	items := pickerDisplayItems(m.picker)
-	if m.picker == nil {
+	if m.Picker.Overlay == nil {
 		return ""
 	}
+	items := pickerDisplayItems(m.Picker.Overlay)
 
 	const maxVisible = 8
 	start := 0
 	if len(items) > maxVisible {
-		start = m.picker.index - maxVisible/2
+		start = m.Picker.Overlay.index - maxVisible/2
 		if start < 0 {
 			start = 0
 		}
@@ -97,10 +97,10 @@ func (m Model) renderPicker() string {
 
 	var b strings.Builder
 	b.WriteString("\n")
-	b.WriteString(m.st.cyan.PaddingLeft(2).Render(m.picker.title))
+	b.WriteString(m.st.cyan.PaddingLeft(2).Render(m.Picker.Overlay.title))
 	b.WriteString("\n")
-	if m.picker.query != "" {
-		b.WriteString(m.st.dim.PaddingLeft(2).Render("Search: " + m.picker.query))
+	if m.Picker.Overlay.query != "" {
+		b.WriteString(m.st.dim.PaddingLeft(2).Render("Search: " + m.Picker.Overlay.query))
 		b.WriteString("\n")
 	}
 	b.WriteString(
@@ -133,7 +133,7 @@ func (m Model) renderPicker() string {
 			b.WriteString("\n")
 			lastGroup = item.Group
 		}
-		if i == m.picker.index {
+		if i == m.Picker.Overlay.index {
 			b.WriteString(
 				m.renderPickerLine("› ", item, labelWidth, metricWidths, m.st.cyan, m.st.cyan),
 			)
@@ -148,6 +148,7 @@ func (m Model) renderPicker() string {
 	}
 	return b.String()
 }
+
 
 type pickerMetricWidths struct {
 	Context int

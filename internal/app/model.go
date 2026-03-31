@@ -110,7 +110,7 @@ const (
 	pickerToneWarn
 )
 
-type pickerState struct {
+type pickerOverlayState struct {
 	title    string
 	items    []pickerItem
 	filtered []pickerItem
@@ -120,10 +120,10 @@ type pickerState struct {
 	cfg      *config.Config
 }
 
-type progressState int
+type progressMode int
 
 const (
-	stateReady progressState = iota
+	stateReady progressMode = iota
 	stateIonizing
 	stateStreaming
 	stateWorking
@@ -140,74 +140,87 @@ type turnSummary struct {
 	Cost    float64
 }
 
+// AppState holds general application and workspace metadata.
+type AppState struct {
+	Width             int
+	Height            int
+	Ready             bool
+	Workdir           string
+	Branch            string
+	Version           string
+	PrintedTranscript bool
+	StartupLines      []string
+	StartupEntries    []session.Entry
+}
+
+// ModelState holds the core backend, session, and storage handles.
+type ModelState struct {
+	Backend  backend.Backend
+	Session  session.AgentSession
+	Storage  storage.Session
+	Store    storage.Store
+	Switcher runtimeSwitcher
+}
+
+// InFlightState holds data for the currently active turn or streaming response.
+type InFlightState struct {
+	Pending    *session.Entry // streaming agent, active tool, or active subagent
+	ReasonBuf  string         // accumulates ThinkingDelta
+	StreamBuf  string         // accumulates AgentDelta (mirrors pending.Content)
+	QueuedTurn string
+	Thinking   bool
+}
+
+// ApprovalState holds pending approval requests.
+type ApprovalState struct {
+	Pending *session.ApprovalRequest
+}
+
+// PickerState holds state for the various overlay pickers.
+type PickerState struct {
+	Overlay *pickerOverlayState
+	Session *sessionPickerState
+}
+
+// ProgressState holds turn-level metrics and overall progress status.
+type ProgressState struct {
+	Mode              progressMode
+	LastError         string
+	Status            string
+	ReasoningEffort   string
+	TurnStartedAt     time.Time
+	CurrentTurnInput  int
+	CurrentTurnOutput int
+	CurrentTurnCost   float64
+	LastTurnSummary   turnSummary
+	TokensSent        int
+	TokensReceived    int
+	TotalCost         float64
+	LastToolUseID     string
+}
+
+// InputState holds state for the composer, history, and double-tap tracking.
+type InputState struct {
+	Composer     textarea.Model
+	Spinner      spinner.Model
+	History      []string
+	HistoryIdx   int
+	HistoryDraft string
+	EscPending   bool
+	CtrlCPending bool
+	Pending      pendingAction
+}
+
 // Model is the Bubble Tea model for the ion TUI.
 type Model struct {
-	width  int
-	height int
-	ready  bool
-
-	// Backend and session
-	backend  backend.Backend
-	session  session.AgentSession
-	storage  storage.Session
-	store    storage.Store
-	switcher runtimeSwitcher
-
-	// In-flight state — Plane B content
-	pending    *session.Entry // streaming agent, active tool, or active subagent
-	reasonBuf  string         // accumulates ThinkingDelta
-	streamBuf  string         // accumulates AgentDelta (mirrors pending.Content)
-	queuedTurn string
-
-	// Approval
-	pendingApproval *session.ApprovalRequest
-
-	// Selection overlay
-	picker        *pickerState
-	sessionPicker *sessionPickerState
-
-	// Progress and status
-	progress          progressState
-	lastError         string
-	thinking          bool
-	turnStartedAt     time.Time
-	currentTurnInput  int
-	currentTurnOutput int
-	currentTurnCost   float64
-	lastTurnSummary   turnSummary
-
-	// Token / cost tracking
-	tokensSent     int
-	tokensReceived int
-	totalCost      float64
-
-	// Composer
-	composer textarea.Model
-	spinner  spinner.Model
-
-	// Input history
-	history      []string
-	historyIdx   int
-	historyDraft string
-
-	// Double-tap tracking
-	escPending    bool
-	ctrlCPending  bool
-	pendingAction pendingAction
-
-	// Storage correlation
-	lastToolUseID string
-
-	// Workspace metadata
-	status            string
-	reasoningEffort   string
-	workdir           string
-	branch            string
-	version           string
-	mode              session.Mode
-	printedTranscript bool
-	startupLines      []string
-	startupEntries    []session.Entry
+	App      AppState
+	Model    ModelState
+	InFlight InFlightState
+	Approval ApprovalState
+	Picker   PickerState
+	Progress ProgressState
+	Input    InputState
+	Mode     session.Mode
 
 	// Styles (initialized once in New)
 	st styles
@@ -242,32 +255,41 @@ func New(
 	boot := b.Bootstrap()
 
 	m := Model{
-		backend:    b,
-		session:    b.Session(),
-		storage:    s,
-		store:      store,
-		switcher:   switcher,
-		composer:   ta,
-		spinner:    spt,
-		status:     boot.Status,
-		workdir:    workdir,
-		branch:     branch,
-		version:    version,
-		mode:       initialMode(boot),
-		historyIdx: -1,
-		st:         st,
+		App: AppState{
+			Workdir: workdir,
+			Branch:  branch,
+			Version: version,
+		},
+		Model: ModelState{
+			Backend:  b,
+			Session:  b.Session(),
+			Storage:  s,
+			Store:    store,
+			Switcher: switcher,
+		},
+		Progress: ProgressState{
+			Status: boot.Status,
+		},
+		Input: InputState{
+			Composer:   ta,
+			Spinner:    spt,
+			HistoryIdx: -1,
+		},
+		Mode: initialMode(boot),
+		st:   st,
 	}
+
 	if cfg, err := config.Load(); err == nil {
-		m.reasoningEffort = normalizeThinkingValue(cfg.ReasoningEffort)
+		m.Progress.ReasoningEffort = normalizeThinkingValue(cfg.ReasoningEffort)
 	} else {
-		m.reasoningEffort = config.DefaultReasoningEffort
+		m.Progress.ReasoningEffort = config.DefaultReasoningEffort
 	}
 
 	if s != nil {
 		if input, output, cost, err := s.Usage(context.Background()); err == nil {
-			m.tokensSent = input
-			m.tokensReceived = output
-			m.totalCost = cost
+			m.Progress.TokensSent = input
+			m.Progress.TokensReceived = output
+			m.Progress.TotalCost = cost
 		}
 	}
 
@@ -275,29 +297,29 @@ func New(
 }
 
 func (m Model) WithStartupLines(lines []string) Model {
-	m.startupLines = append([]string(nil), lines...)
+	m.App.StartupLines = append([]string(nil), lines...)
 	return m
 }
 
 func (m Model) WithStartupEntries(entries []session.Entry) Model {
-	m.startupEntries = append([]session.Entry(nil), entries...)
+	m.App.StartupEntries = append([]session.Entry(nil), entries...)
 	return m
 }
 
 func (m Model) WithPrintedTranscript(v bool) Model {
-	m.printedTranscript = v
+	m.App.PrintedTranscript = v
 	return m
 }
 
 func (m Model) startupPrintLines() []string {
-	lines := make([]string, 0, len(m.startupLines)+len(m.startupEntries)+2)
-	lines = append(lines, m.startupLines...)
+	lines := make([]string, 0, len(m.App.StartupLines)+len(m.App.StartupEntries)+2)
+	lines = append(lines, m.App.StartupLines...)
 	lines = append(lines, m.headerLine())
-	if m.status != "" && !isConfigurationStatus(m.status) {
+	if m.Progress.Status != "" && !isConfigurationStatus(m.Progress.Status) {
 		lines = append(lines, "")
-		lines = append(lines, m.renderStartupStatus(m.status))
+		lines = append(lines, m.renderStartupStatus(m.Progress.Status))
 	}
-	for _, entry := range m.startupEntries {
+	for _, entry := range m.App.StartupEntries {
 		lines = append(lines, m.renderEntry(entry))
 	}
 	return lines
@@ -324,13 +346,13 @@ func (m Model) renderStartupStatus(status string) string {
 }
 
 func (m Model) configurationStatus() string {
-	if m.backend == nil {
+	if m.Model.Backend == nil {
 		return ""
 	}
-	if strings.TrimSpace(m.backend.Provider()) == "" {
+	if strings.TrimSpace(m.Model.Backend.Provider()) == "" {
 		return noProviderConfiguredStatus()
 	}
-	if strings.TrimSpace(m.backend.Model()) == "" {
+	if strings.TrimSpace(m.Model.Backend.Model()) == "" {
 		return noModelConfiguredStatus()
 	}
 	return ""
@@ -338,14 +360,14 @@ func (m Model) configurationStatus() string {
 
 func (m Model) runningProgressParts() []string {
 	parts := []string{}
-	if m.currentTurnInput > 0 {
-		parts = append(parts, "↑ "+compactCount(m.currentTurnInput))
+	if m.Progress.CurrentTurnInput > 0 {
+		parts = append(parts, "↑ "+compactCount(m.Progress.CurrentTurnInput))
 	}
-	if m.currentTurnOutput > 0 {
-		parts = append(parts, "↓ "+compactCount(m.currentTurnOutput))
+	if m.Progress.CurrentTurnOutput > 0 {
+		parts = append(parts, "↓ "+compactCount(m.Progress.CurrentTurnOutput))
 	}
-	if !m.turnStartedAt.IsZero() {
-		parts = append(parts, fmt.Sprintf("%ds", int(time.Since(m.turnStartedAt).Seconds())))
+	if !m.Progress.TurnStartedAt.IsZero() {
+		parts = append(parts, fmt.Sprintf("%ds", int(time.Since(m.Progress.TurnStartedAt).Seconds())))
 	}
 	parts = append(parts, "Esc to cancel")
 	return parts
@@ -353,23 +375,23 @@ func (m Model) runningProgressParts() []string {
 
 func (m Model) completedProgressParts() []string {
 	parts := []string{}
-	if m.lastTurnSummary.Input > 0 {
-		parts = append(parts, "↑ "+compactCount(m.lastTurnSummary.Input))
+	if m.Progress.LastTurnSummary.Input > 0 {
+		parts = append(parts, "↑ "+compactCount(m.Progress.LastTurnSummary.Input))
 	}
-	if m.lastTurnSummary.Output > 0 {
-		parts = append(parts, "↓ "+compactCount(m.lastTurnSummary.Output))
+	if m.Progress.LastTurnSummary.Output > 0 {
+		parts = append(parts, "↓ "+compactCount(m.Progress.LastTurnSummary.Output))
 	}
-	if m.lastTurnSummary.Cost > 0 {
-		parts = append(parts, fmt.Sprintf("$%.4f", m.lastTurnSummary.Cost))
+	if m.Progress.LastTurnSummary.Cost > 0 {
+		parts = append(parts, fmt.Sprintf("$%.4f", m.Progress.LastTurnSummary.Cost))
 	}
-	if m.lastTurnSummary.Elapsed > 0 {
-		parts = append(parts, fmt.Sprintf("%ds", int(m.lastTurnSummary.Elapsed.Seconds())))
+	if m.Progress.LastTurnSummary.Elapsed > 0 {
+		parts = append(parts, fmt.Sprintf("%ds", int(m.Progress.LastTurnSummary.Elapsed.Seconds())))
 	}
 	return parts
 }
 
 func (m Model) runtimeHeaderLine(_ backend.Backend) string {
-	version := strings.TrimSpace(m.version)
+	version := strings.TrimSpace(m.App.Version)
 	if version == "" {
 		version = "v0.0.0"
 	}
@@ -377,11 +399,11 @@ func (m Model) runtimeHeaderLine(_ backend.Backend) string {
 }
 
 func (m Model) Init() tea.Cmd {
-	m.session.SetMode(m.mode)
-	m.session.SetAutoApprove(m.mode == session.ModeYolo)
+	m.Model.Session.SetMode(m.Mode)
+	m.Model.Session.SetAutoApprove(m.Mode == session.ModeYolo)
 	return tea.Batch(
 		textarea.Blink,
-		m.spinner.Tick,
+		m.Input.Spinner.Tick,
 		m.awaitSessionEvent(),
 	)
 }
@@ -390,13 +412,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case spinner.TickMsg:
 		var cmd tea.Cmd
-		m.spinner, cmd = m.spinner.Update(msg)
+		m.Input.Spinner, cmd = m.Input.Spinner.Update(msg)
 		return m, cmd
 
 	case tea.WindowSizeMsg:
-		m.ready = true
-		m.width = msg.Width
-		m.height = msg.Height
+		m.App.Ready = true
+		m.App.Width = msg.Width
+		m.App.Height = msg.Height
 		m.layout()
 		return m, nil
 
@@ -404,44 +426,44 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case clearPendingMsg:
-		if msg.action == m.pendingAction {
+		if msg.action == m.Input.Pending {
 			m.clearPendingAction()
 		}
 		return m, nil
 
 	case runtimeSwitchedMsg:
-		m.backend = msg.backend
-		m.session = msg.session
-		m.storage = msg.storage
-		m.picker = nil
-		m.sessionPicker = nil
-		m.status = msg.status
+		m.Model.Backend = msg.backend
+		m.Model.Session = msg.session
+		m.Model.Storage = msg.storage
+		m.Picker.Overlay = nil
+		m.Picker.Session = nil
+		m.Progress.Status = msg.status
 		if msg.storage != nil {
 			meta := msg.storage.Meta()
-			m.branch = meta.Branch
+			m.App.Branch = meta.Branch
 		}
-		m.pending = nil
-		m.pendingApproval = nil
-		m.reasonBuf = ""
-		m.streamBuf = ""
-		m.progress = stateReady
-		m.lastError = ""
-		m.thinking = false
-		m.ctrlCPending = false
-		m.escPending = false
-		m.tokensSent = 0
-		m.tokensReceived = 0
-		m.totalCost = 0
+		m.InFlight.Pending = nil
+		m.Approval.Pending = nil
+		m.InFlight.ReasonBuf = ""
+		m.InFlight.StreamBuf = ""
+		m.Progress.Mode = stateReady
+		m.Progress.LastError = ""
+		m.InFlight.Thinking = false
+		m.Input.CtrlCPending = false
+		m.Input.EscPending = false
+		m.Progress.TokensSent = 0
+		m.Progress.TokensReceived = 0
+		m.Progress.TotalCost = 0
 		if msg.storage != nil {
 			if input, output, cost, err := msg.storage.Usage(context.Background()); err == nil {
-				m.tokensSent = input
-				m.tokensReceived = output
-				m.totalCost = cost
+				m.Progress.TokensSent = input
+				m.Progress.TokensReceived = output
+				m.Progress.TotalCost = cost
 			}
 		}
-		m.lastToolUseID = ""
-		m.historyIdx = -1
-		m.historyDraft = ""
+		m.Progress.LastToolUseID = ""
+		m.Input.HistoryIdx = -1
+		m.Input.HistoryDraft = ""
 		cmds := make([]tea.Cmd, 0, 5)
 		if len(msg.printLines) > 0 {
 			cmds = append(cmds, printLinesCmd(msg.printLines...))
@@ -497,9 +519,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// Pass remaining messages to composer
 	var cmd tea.Cmd
-	m.composer, cmd = m.composer.Update(msg)
-	if m.ready {
+	m.Input.Composer, cmd = m.Input.Composer.Update(msg)
+	if m.App.Ready {
 		m.layout()
 	}
 	return m, cmd
 }
+

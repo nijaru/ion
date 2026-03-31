@@ -11,36 +11,37 @@ import (
 
 // handleKey is the source of truth for core TUI hotkey semantics.
 func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
-	if m.sessionPicker != nil {
+	if m.Picker.Session != nil {
 		return m.handleSessionPickerKey(msg)
 	}
-	if m.picker != nil {
+	if m.Picker.Overlay != nil {
 		return m.handlePickerKey(msg)
 	}
 
 	// Approval gate: y/n/a consumed before any other handling
-	if m.pendingApproval != nil {
+	if m.Approval.Pending != nil {
 		switch msg.String() {
 		case "y", "n":
 			approved := msg.String() == "y"
-			reqID := m.pendingApproval.RequestID
-			desc := m.pendingApproval.Description
-			m.pendingApproval = nil
-			m.progress = stateReady
+			reqID := m.Approval.Pending.RequestID
+			desc := m.Approval.Pending.Description
+			m.Approval.Pending = nil
+			m.Progress.Mode = stateReady
 
 			label := ifthen(approved, "Approved", "Denied")
 			notice := session.Entry{Role: session.System, Content: label + ": " + desc}
-			m.session.Approve(context.Background(), reqID, approved)
+			m.Model.Session.Approve(context.Background(), reqID, approved)
 			return m, m.printEntries(notice)
 		case "a":
-			reqID := m.pendingApproval.RequestID
-			desc := m.pendingApproval.Description
-			m.pendingApproval = nil
-			m.progress = stateReady
+			reqID := m.Approval.Pending.RequestID
+			toolName := m.Approval.Pending.ToolName
+			desc := m.Approval.Pending.Description
+			m.Approval.Pending = nil
+			m.Progress.Mode = stateReady
 
-			m.session.SetAutoApprove(true)
+			m.Model.Session.AllowCategory(toolName)
 			notice := session.Entry{Role: session.System, Content: "Always: " + desc}
-			m.session.Approve(context.Background(), reqID, true)
+			m.Model.Session.Approve(context.Background(), reqID, true)
 			return m, m.printEntries(notice)
 		}
 	}
@@ -59,51 +60,51 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m.openThinkingPicker()
 
 	case "ctrl+c":
-		m.escPending = false
-		if m.composer.Value() != "" {
+		m.Input.EscPending = false
+		if m.Input.Composer.Value() != "" {
 			m.clearPendingAction()
-			m.composer.Reset()
+			m.Input.Composer.Reset()
 			m.relayoutComposer()
 			return m, nil
 		}
-		if m.thinking {
+		if m.InFlight.Thinking {
 			m.clearPendingAction()
 			return m, nil
 		}
-		if m.ctrlCPending {
+		if m.Input.CtrlCPending {
 			return m, tea.Quit
 		}
 		return m, m.armPendingAction(pendingActionQuitCtrlC)
 
 	case "ctrl+d":
-		m.escPending = false
-		if m.composer.Value() != "" || m.thinking {
+		m.Input.EscPending = false
+		if m.Input.Composer.Value() != "" || m.InFlight.Thinking {
 			m.clearPendingAction()
 			return m, nil
 		}
-		if m.ctrlCPending {
+		if m.Input.CtrlCPending {
 			return m, tea.Quit
 		}
 		return m, m.armPendingAction(pendingActionQuitCtrlD)
 
 	case "esc":
-		m.ctrlCPending = false
-		if m.thinking {
-			m.session.CancelTurn(context.Background())
-			m.thinking = false
-			m.progress = stateCancelled
-			m.pending = nil
-			m.streamBuf = ""
-			m.reasonBuf = ""
+		m.Input.CtrlCPending = false
+		if m.InFlight.Thinking {
+			m.Model.Session.CancelTurn(context.Background())
+			m.InFlight.Thinking = false
+			m.Progress.Mode = stateCancelled
+			m.InFlight.Pending = nil
+			m.InFlight.StreamBuf = ""
+			m.InFlight.ReasonBuf = ""
 			m.clearPendingAction()
 			return m, nil
 		}
-		if m.composer.Value() == "" {
+		if m.Input.Composer.Value() == "" {
 			m.clearPendingAction()
 			return m, nil
 		}
-		if m.escPending {
-			m.composer.Reset()
+		if m.Input.EscPending {
+			m.Input.Composer.Reset()
 			m.relayoutComposer()
 			m.clearPendingAction()
 			return m, nil
@@ -112,27 +113,27 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 	case "shift+tab":
 		m.clearPendingAction()
-		switch m.mode {
+		switch m.Mode {
 		case session.ModeRead:
-			m.mode = session.ModeEdit
+			m.Mode = session.ModeEdit
 		case session.ModeEdit:
-			m.mode = session.ModeYolo
+			m.Mode = session.ModeYolo
 		default:
-			m.mode = session.ModeRead
+			m.Mode = session.ModeRead
 		}
-		m.session.SetMode(m.mode)
-		m.session.SetAutoApprove(m.mode == session.ModeYolo)
+		m.Model.Session.SetMode(m.Mode)
+		m.Model.Session.SetAutoApprove(m.Mode == session.ModeYolo)
 		return m, nil
 
 	case "enter":
 		m.clearPendingAction()
-		text := strings.TrimSpace(m.composer.Value())
+		text := strings.TrimSpace(m.Input.Composer.Value())
 		if text == "" {
 			return m, nil
 		}
-		if m.thinking {
-			m.queuedTurn = text
-			m.composer.Reset()
+		if m.InFlight.Thinking {
+			m.InFlight.QueuedTurn = text
+			m.Input.Composer.Reset()
 			m.relayoutComposer()
 			return m, m.printEntries(
 				session.Entry{Role: session.System, Content: "Queued follow-up"},
@@ -144,44 +145,44 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	case "shift+enter", "alt+enter":
 		m.clearPendingAction()
 		var cmd tea.Cmd
-		m.composer, cmd = m.composer.Update(msg)
+		m.Input.Composer, cmd = m.Input.Composer.Update(msg)
 		m.layout()
 		return m, cmd
 
 	case "up":
 		m.clearPendingAction()
-		if m.composer.Line() == 0 && len(m.history) > 0 {
-			if m.historyIdx == -1 {
-				m.historyDraft = m.composer.Value()
-				m.historyIdx = len(m.history) - 1
-			} else if m.historyIdx > 0 {
-				m.historyIdx--
+		if m.Input.Composer.Line() == 0 && len(m.Input.History) > 0 {
+			if m.Input.HistoryIdx == -1 {
+				m.Input.HistoryDraft = m.Input.Composer.Value()
+				m.Input.HistoryIdx = len(m.Input.History) - 1
+			} else if m.Input.HistoryIdx > 0 {
+				m.Input.HistoryIdx--
 			}
-			m.composer.SetValue(m.history[m.historyIdx])
+			m.Input.Composer.SetValue(m.Input.History[m.Input.HistoryIdx])
 			m.relayoutComposer()
 			return m, nil
 		}
 		var cmd tea.Cmd
-		m.composer, cmd = m.composer.Update(msg)
+		m.Input.Composer, cmd = m.Input.Composer.Update(msg)
 		return m, cmd
 
 	case "down":
 		m.clearPendingAction()
-		if m.historyIdx != -1 {
-			if m.historyIdx < len(m.history)-1 {
-				m.historyIdx++
-				m.composer.SetValue(m.history[m.historyIdx])
+		if m.Input.HistoryIdx != -1 {
+			if m.Input.HistoryIdx < len(m.Input.History)-1 {
+				m.Input.HistoryIdx++
+				m.Input.Composer.SetValue(m.Input.History[m.Input.HistoryIdx])
 				m.relayoutComposer()
 			} else {
-				m.historyIdx = -1
-				m.composer.SetValue(m.historyDraft)
-				m.historyDraft = ""
+				m.Input.HistoryIdx = -1
+				m.Input.Composer.SetValue(m.Input.HistoryDraft)
+				m.Input.HistoryDraft = ""
 				m.relayoutComposer()
 			}
 			return m, nil
 		}
 		var cmd tea.Cmd
-		m.composer, cmd = m.composer.Update(msg)
+		m.Input.Composer, cmd = m.Input.Composer.Update(msg)
 		return m, cmd
 
 	default:
@@ -190,15 +191,16 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 	// Pass all other keys to textarea (Ctrl+A/E/W/U/K, Alt+B/F, etc.)
 	var cmd tea.Cmd
-	m.composer, cmd = m.composer.Update(msg)
-	if m.ready {
+	m.Input.Composer, cmd = m.Input.Composer.Update(msg)
+	if m.App.Ready {
 		m.layout()
 	}
 	return m, cmd
 }
 
 func (m *Model) relayoutComposer() {
-	if m.ready {
+	if m.App.Ready {
 		m.layout()
 	}
 }
+

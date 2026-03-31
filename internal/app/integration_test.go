@@ -44,7 +44,7 @@ func TestIntegrationFullLoop(t *testing.T) {
 	model := New(b, sess, store, "/tmp/test", "main", "dev", nil)
 
 	// 4. Submit a turn
-	model.composer.SetValue("hi")
+	model.Input.Composer.SetValue("hi")
 	// simulate ctrl+s (m.sendKey)
 	updated, _ := model.Update(sendKeyMsg())
 	model = updated.(Model)
