@@ -678,6 +678,10 @@ func (b *Backend) SetAutoApprove(enabled bool) {
 	b.policy.SetAutoApprove(enabled)
 }
 
+func (b *Backend) AllowCategory(toolName string) {
+	b.policy.AllowCategoryOf(toolName)
+}
+
 func (b *Backend) Compact(ctx context.Context) (bool, error) {
 	b.mu.Lock()
 	store := b.store
