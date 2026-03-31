@@ -1,0 +1,103 @@
+# Status and Config
+
+## Scope
+
+Current source of truth for:
+
+- progress line behavior
+- status line behavior
+- user-editable runtime config
+- model metadata display rules
+
+This file replaces the older mixed `config-and-metadata.md` note as the active spec.
+
+## Progress line
+
+The progress line is a live state surface, not a transcript surface.
+
+Current responsibilities:
+
+- configuration warnings
+- running state
+- completion state
+- error state
+- cancellation state
+- short per-turn stats
+
+Current direction:
+
+- one-line only
+- spinner while running
+- semantic color only for success, error, warning
+- keep token/time stats compact
+- do not dump reasoning traces by default
+
+Related tasks:
+
+- `tk-i207`
+- `tk-gmhw`
+- `tk-kz3k`
+
+## Status line
+
+Current shape:
+
+`[MODE] • provider • model • usage • cwd • branch`
+
+Rules:
+
+- left-aligned, no balanced/right-aligned layout tricks
+- mode is the main visual anchor
+- metadata stays secondary/dim
+- provider/model are live runtime truth, not startup-banner truth
+- reasoning effort may appear only when it is a real runtime setting
+
+Keep the status line compact. Do not turn it into a dense settings/control bar unless there is a strong usability reason.
+
+## User config
+
+User-facing config lives in:
+
+- `~/.ion/config.toml`
+
+Current important fields:
+
+- `provider`
+- `model`
+- `endpoint`
+- `auth_env_var`
+- `extra_headers`
+- `reasoning_effort`
+
+Rules:
+
+- ion should not invent provider/model defaults on startup
+- explicit user actions may update config
+- env vars remain startup overrides, not persistent writes
+- keep user config small
+
+## Model metadata display
+
+Current picker display rules:
+
+- `Free` for known zero cost
+- `—` for unknown cost
+- `$X.XX` for known paid USD cost
+
+Do not localize provider-model prices by user locale.
+Use canonical USD display in the picker.
+
+## Model discovery
+
+Model discovery is covered in:
+
+- `ai/specs/model-catalog-strategy.md`
+
+Do not duplicate provider-fetch policy here.
+
+## Important files
+
+- `internal/app/render.go`
+- `internal/app/model.go`
+- `internal/config/config.go`
+- `internal/backend/registry/`
