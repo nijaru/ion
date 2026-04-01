@@ -64,6 +64,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		if m.Input.Composer.Value() != "" {
 			m.clearPendingAction()
 			m.Input.Composer.Reset()
+			m.PasteMarkers = make(map[string]pasteMarker)
 			m.relayoutComposer()
 			return m, nil
 		}
@@ -90,6 +91,13 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	case "esc":
 		m.Input.CtrlCPending = false
 		if m.InFlight.Thinking {
+			if len(m.InFlight.QueuedTurns) > 0 {
+				last := m.InFlight.QueuedTurns[len(m.InFlight.QueuedTurns)-1]
+				m.InFlight.QueuedTurns = m.InFlight.QueuedTurns[:len(m.InFlight.QueuedTurns)-1]
+				m.Input.Composer.SetValue(last)
+				m.relayoutComposer()
+				return m, nil
+			}
 			m.Model.Session.CancelTurn(context.Background())
 			m.InFlight.Thinking = false
 			m.Progress.Mode = stateCancelled
@@ -105,6 +113,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		}
 		if m.Input.EscPending {
 			m.Input.Composer.Reset()
+			m.PasteMarkers = make(map[string]pasteMarker)
 			m.relayoutComposer()
 			m.clearPendingAction()
 			return m, nil
@@ -132,8 +141,9 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.InFlight.Thinking {
-			m.InFlight.QueuedTurn = text
+			m.InFlight.QueuedTurns = append(m.InFlight.QueuedTurns, text)
 			m.Input.Composer.Reset()
+			m.PasteMarkers = make(map[string]pasteMarker)
 			m.relayoutComposer()
 			return m, m.printEntries(
 				session.Entry{Role: session.System, Content: "Queued follow-up"},
@@ -203,4 +213,3 @@ func (m *Model) relayoutComposer() {
 		m.layout()
 	}
 }
-

@@ -1421,8 +1421,8 @@ func TestQueuedFollowUpSubmitsAfterTurnFinished(t *testing.T) {
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = updated.(Model)
-	if model.InFlight.QueuedTurn != "follow up" {
-		t.Fatalf("queuedTurn = %q, want queued follow up", model.InFlight.QueuedTurn)
+	if len(model.InFlight.QueuedTurns) != 1 || model.InFlight.QueuedTurns[0] != "follow up" {
+		t.Fatalf("queuedTurns = %v, want [follow up]", model.InFlight.QueuedTurns)
 	}
 	if got := model.Input.Composer.Value(); got != "" {
 		t.Fatalf("composer = %q, want cleared after queueing", got)

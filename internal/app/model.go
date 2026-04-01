@@ -164,11 +164,11 @@ type ModelState struct {
 
 // InFlightState holds data for the currently active turn or streaming response.
 type InFlightState struct {
-	Pending    *session.Entry // streaming agent, active tool, or active subagent
-	ReasonBuf  string         // accumulates ThinkingDelta
-	StreamBuf  string         // accumulates AgentDelta (mirrors pending.Content)
-	QueuedTurn string
-	Thinking   bool
+	Pending     *session.Entry // streaming agent, active tool, or active subagent
+	ReasonBuf   string         // accumulates ThinkingDelta
+	StreamBuf   string         // accumulates AgentDelta (mirrors pending.Content)
+	QueuedTurns []string       // follow-up turns queued during agent work
+	Thinking    bool
 }
 
 // ApprovalState holds pending approval requests.
@@ -211,6 +211,12 @@ type InputState struct {
 	Pending      pendingAction
 }
 
+// pasteMarker stores original content for a collapsed large paste.
+type pasteMarker struct {
+	placeholder string // what's shown in textarea, e.g. "[paste #1 +123 lines]"
+	content     string // original paste content
+}
+
 // Model is the Bubble Tea model for the ion TUI.
 type Model struct {
 	App      AppState
@@ -221,6 +227,11 @@ type Model struct {
 	Progress ProgressState
 	Input    InputState
 	Mode     session.Mode
+
+	// PasteMarkers stores original content for collapsed large pastes.
+	// Key is the placeholder text (e.g. "[paste #1 +123 lines]").
+	PasteMarkers map[string]pasteMarker
+	pasteSeq     int // next paste marker ID
 
 	// Styles (initialized once in New)
 	st styles
@@ -275,8 +286,9 @@ func New(
 			Spinner:    spt,
 			HistoryIdx: -1,
 		},
-		Mode: initialMode(boot),
-		st:   st,
+		Mode:         initialMode(boot),
+		PasteMarkers: make(map[string]pasteMarker),
+		st:           st,
 	}
 
 	if cfg, err := config.Load(); err == nil {
@@ -493,6 +505,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		next, cmd := m.submitText(msg.text)
 		return next, cmd
 
+	case tea.PasteMsg:
+		return m.handlePaste(msg)
+
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 
@@ -525,4 +540,3 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	return m, cmd
 }
-
