@@ -230,6 +230,9 @@ func (m Model) progressLine() string {
 			line = m.st.dim.Render("• Ready")
 		}
 	}
+	if n := len(m.InFlight.QueuedTurns); n > 0 {
+		line += m.st.dim.Render(fmt.Sprintf(" • %d queued", n))
+	}
 	return fitLine(strings.TrimRight(line, " "), m.App.Width)
 }
 

@@ -80,8 +80,9 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 			}
 		}
 		m.Progress.TurnStartedAt = time.Time{}
-		if queued := strings.TrimSpace(m.InFlight.QueuedTurn); queued != "" {
-			m.InFlight.QueuedTurn = ""
+		if len(m.InFlight.QueuedTurns) > 0 {
+			queued := m.InFlight.QueuedTurns[0]
+			m.InFlight.QueuedTurns = m.InFlight.QueuedTurns[1:]
 			return m, func() tea.Msg { return queuedTurnMsg{text: queued} }
 		}
 		return m, m.awaitSessionEvent()
@@ -287,6 +288,10 @@ func (m Model) persistEntry(action string, entry any) error {
 }
 
 func (m Model) submitText(text string) (Model, tea.Cmd) {
+	// Expand any paste marker placeholders to their original content.
+	text = m.expandMarkers(text)
+	m.PasteMarkers = make(map[string]pasteMarker)
+
 	m.Input.History = append(m.Input.History, text)
 	m.Input.HistoryIdx = -1
 	m.Input.HistoryDraft = ""
@@ -313,4 +318,3 @@ func (m Model) submitText(text string) (Model, tea.Cmd) {
 	m.Model.Session.SubmitTurn(context.Background(), text)
 	return m, m.printEntries(userEntry)
 }
-

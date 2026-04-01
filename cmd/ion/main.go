@@ -5,9 +5,11 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -30,6 +32,9 @@ func main() {
 	)
 	resumeFlag := flag.String("resume", "", "Resume a specific session by ID")
 	providerFlag := flag.String("provider", "", "Provider to use")
+	printFlag := flag.Bool("print", false, "Print response and exit (use with --prompt or stdin)")
+	promptFlag := flag.String("prompt", "", "Prompt to send in print mode")
+	timeoutFlag := flag.Duration("timeout", 5*time.Minute, "Timeout for print mode")
 	flag.Parse()
 
 	// Load config
@@ -76,6 +81,33 @@ func main() {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to initialize runtime: %v\n", err)
 		os.Exit(1)
+	}
+
+	// Print mode: run a single turn and exit
+	if *printFlag {
+		prompt := *promptFlag
+		if prompt == "" && isStdinPipe() {
+			data, err := io.ReadAll(os.Stdin)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "failed to read stdin: %v\n", err)
+				os.Exit(1)
+			}
+			prompt = string(data)
+		}
+		if prompt == "" {
+			fmt.Fprintf(os.Stderr, "print mode requires --prompt or stdin pipe\n")
+			os.Exit(1)
+		}
+		agent := b.Session()
+		if agent == nil {
+			fmt.Fprintf(os.Stderr, "print mode requires a configured provider and model\n")
+			os.Exit(1)
+		}
+		if err := runPrintModeWithTimeout(ctx, agent, prompt, *timeoutFlag); err != nil {
+			fmt.Fprintf(os.Stderr, "print mode error: %v\n", err)
+			os.Exit(1)
+		}
+		return
 	}
 
 	startupLines := startupBannerLines(version, b.Provider(), b.Model(), sessionID != "")

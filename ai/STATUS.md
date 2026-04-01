@@ -12,15 +12,17 @@ Fast, lightweight terminal coding agent.
 4. **`tk-k4hv`** — Complete 3-mode system (READ/EDIT/YOLO) integration with the new `canto/safety` engine.
 
 ## Completed (Recent)
+- [x] **Modularize Ion TUI (`tk-2b79`)** — Componentized `internal/app/model.go` into `Viewport`, `Input`, `Broker`, `Picker`, and `Progress`.
+- [x] **Approval UX overhaul (`tk-k4hv`)** — Redesigned 3-mode system (READ/EDIT/YOLO) and category-scoped auto-approval ("Always" key) implemented.
 - [x] **Architecture Review** — SOTA alignment with Claude Code and Pi-mono. Defined Layer 3 (Canto) and Layer 4 (Ion) boundaries.
-- [x] **Approval UX Spec (`tk-k4hv`)** — 3-mode design (READ/EDIT/YOLO) documented.
+- [x] **Approval UX Spec** — 3-mode design (READ/EDIT/YOLO) documented.
 - [x] **Agent Compaction Tool (`tk-pw3s`)** — `compact` tool implemented in Ion.
 - [x] **Canto Migration Complete** — Pinned to `github.com/nijaru/canto`.
 
 ## Active Tasks
-- `tk-2b79` [p2 active] Modularize Ion TUI (Viewport, Input, Broker refactored)
-- `tk-k4hv` [p2 active] Approval UX overhaul + `/yolo`
+- `tk-f1cn` [p2 active] Canto/Ion Architectural Alignment: Move PolicyEngine to canto/safety
 - `tk-8s0h` [p2 open] Sandbox support
+- `tk-y8aj` [p3 open] Compare Claude Code architecture with ion/canto
 - `tk-k8g4` [p3 open] Model selector: add hotkey and UI for favorites
 
 ## Blockers
