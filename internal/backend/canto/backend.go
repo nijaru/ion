@@ -658,6 +658,15 @@ func (b *Backend) translateEvents(ctx context.Context, evCh <-chan session.Event
 				}
 				b.events <- ionsession.StatusChanged{Status: "Ready"}
 			}
+		case session.ChildBlocked:
+			var data session.ChildBlockedData
+			if err := ev.UnmarshalData(&data); err == nil {
+				b.events <- ionsession.ChildBlocked{
+					AgentName: data.ChildID,
+					Reason:    data.Reason,
+				}
+				b.events <- ionsession.StatusChanged{Status: fmt.Sprintf("Child agent %s blocked", data.ChildID)}
+			}
 		case session.ChildFailed:
 			var data session.ChildFailedData
 			if err := ev.UnmarshalData(&data); err == nil {

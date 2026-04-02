@@ -171,6 +171,15 @@ type ChildCompleted struct {
 
 func (e ChildCompleted) isEvent() {}
 
+// ChildBlocked fires when the child execution cannot continue without input or approval.
+type ChildBlocked struct {
+	Base
+	AgentName string `json:"agent_name"`
+	Reason    string `json:"reason"`
+}
+
+func (e ChildBlocked) isEvent() {}
+
 // ChildFailed fires when the child execution fails.
 type ChildFailed struct {
 	Base
