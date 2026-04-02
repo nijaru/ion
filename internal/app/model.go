@@ -138,6 +138,7 @@ const (
 	stateComplete
 	stateApproval
 	stateCancelled
+	stateBlocked
 	stateError
 )
 

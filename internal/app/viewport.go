@@ -217,6 +217,8 @@ func (m Model) progressLine() string {
 		line = m.st.warn.Render("⚠ Approval required")
 	case stateCancelled:
 		line = m.st.warn.Render("⚠ Canceled")
+	case stateBlocked:
+		line = m.st.warn.Render("⚠ Subagent blocked")
 	case stateError:
 		line = m.st.warn.Render(
 			"× Error: " + strings.NewReplacer("\n", " ", "\r", " ").Replace(m.Progress.LastError),

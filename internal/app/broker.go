@@ -243,6 +243,8 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 			m.InFlight.Pending.Content = "BLOCKED: " + msg.Reason
 			entry := *m.InFlight.Pending
 			entry.IsError = false
+			m.Progress.Mode = stateBlocked
+			m.InFlight.Thinking = false
 			return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
 		}
 		return m, m.awaitSessionEvent()
