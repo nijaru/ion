@@ -88,6 +88,7 @@ Product ladder:
 TUI surface:
 - `tk-7kga` — core inline stability
 - `tk-k8g4` — model selector: primary/fast presets and favorites UI
+- `tk-gopd` — external editor handoff
 - `tk-i207` — status line and context presentation
 - `tk-4ywr` — session titles and lightweight summaries
 - `tk-gmhw` — transcript verbosity controls

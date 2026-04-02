@@ -22,10 +22,11 @@ Design rule:
 2. **`tk-7kga`** — Stabilize inline agent loop and TUI
 3. **`tk-4ft8`** — Canto Context Governor
 4. **`tk-k8g4`** — Model selector: primary/fast presets and favorites UI
-5. **`tk-4ywr`** — Sessions: lightweight titles and summaries
-6. **`tk-5vrj`** — Subagents: runtime semantics and lifecycle
-7. **`tk-arhu`** — Subagents: inline Plane B presentation
-8. **`tk-pwsl`** — Swarm mode: alternate-screen operator view
+5. **`tk-gopd`** — TUI: external editor handoff
+6. **`tk-4ywr`** — Sessions: lightweight titles and summaries
+7. **`tk-5vrj`** — Subagents: runtime semantics and lifecycle
+8. **`tk-arhu`** — Subagents: inline Plane B presentation
+9. **`tk-pwsl`** — Swarm mode: alternate-screen operator view
 
 ## Completed (Recent)
 - [x] **Modularize Ion TUI (`tk-2b79`)** — Componentized `internal/app/model.go` into `Viewport`, `Input`, `Broker`, `Picker`, and `Progress`.

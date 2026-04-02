@@ -21,6 +21,10 @@ Source of truth for inline TUI key semantics.
 - `Shift+Tab`: cycle picker scope in reverse when a picker is open
 - `Esc`, `Ctrl+C`, `Ctrl+D`: close an open picker
 
+## Editor handoff
+- `Ctrl+X`, then `Ctrl+E`: open the current composer buffer in the external editor
+- Prefer a readline-style leader sequence for editor handoff instead of a single extra global chord
+
 ## Slash Commands
 - `/...`: built-in ion command surface for stateful actions
 - `//...`: user-defined command or skill aliases
