@@ -509,19 +509,19 @@ Append-only history of architectural and design decisions for `ion`.
 
 ---
 
-## 2026-04-02 — TUI: use a readline-style leader for external editor handoff
+## 2026-04-02 — TUI: use `Ctrl+X` for external editor handoff
 
-**Context:** Composer-to-editor handoff is a core workflow, and it needs a binding that is familiar, terminal-compatible, and distinct from the main model toggle. `Ctrl+P` is already reserved for the primary/fast swap.
+**Context:** Composer-to-editor handoff is a core workflow, and it needs a binding that is familiar, terminal-compatible, and distinct from the main model toggle. `Ctrl+P` is already reserved for the primary/fast swap, and we do not want to chase full readline parity.
 
-**Decision:** Use a readline-style `Ctrl+X` then `Ctrl+E` sequence for opening the current composer buffer in the external editor. Keep this separate from the model toggle and from slash-command selection surfaces.
+**Decision:** Use `Ctrl+X` as the external editor handoff chord. Keep this separate from the model toggle and from slash-command selection surfaces.
 
 **Rationale:**
 
-1. **Terminal-native:** The sequence is familiar to users coming from readline and shell editing.
-2. **Low collision pressure:** It avoids spending another single-stroke chord.
+1. **Terminal-native enough:** `Ctrl+X` is a familiar control chord and does not fight the existing safety keys.
+2. **Low collision pressure:** It avoids spending a more important chord on a rare workflow.
 3. **Good separation:** Model switching and editor handoff are different workflows and should not share the same binding.
 
-**Tradeoffs:** It is a two-step sequence, so it is slightly slower than a single key, but editor handoff is less frequent than primary/fast swapping.
+**Tradeoffs:** It is a single extra global chord, so it must stay reserved for editor handoff and nothing else.
 
 ---
 

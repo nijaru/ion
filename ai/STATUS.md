@@ -22,7 +22,7 @@ Design rule:
 2. **`tk-7kga`** — Stabilize inline agent loop and TUI
 3. **`tk-4ft8`** — Canto Context Governor
 4. **`tk-k8g4`** — Model selector: primary/fast presets and favorites UI
-5. **`tk-gopd`** — TUI: external editor handoff
+5. **`tk-gopd`** — TUI: external editor handoff (`Ctrl+X`)
 6. **`tk-4ywr`** — Sessions: lightweight titles and summaries
 7. **`tk-5vrj`** — Subagents: runtime semantics and lifecycle
 8. **`tk-arhu`** — Subagents: inline Plane B presentation

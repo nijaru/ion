@@ -22,8 +22,8 @@ Source of truth for inline TUI key semantics.
 - `Esc`, `Ctrl+C`, `Ctrl+D`: close an open picker
 
 ## Editor handoff
-- `Ctrl+X`, then `Ctrl+E`: open the current composer buffer in the external editor
-- Prefer a readline-style leader sequence for editor handoff instead of a single extra global chord
+- `Ctrl+X`: open the current composer buffer in the external editor
+- Keep editor handoff as a single dedicated chord if we want a hotkey; do not chase full readline parity
 
 ## Slash Commands
 - `/...`: built-in ion command surface for stateful actions
