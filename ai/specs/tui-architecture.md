@@ -105,10 +105,14 @@ Current picker surfaces:
 
 Rules:
 
-- provider picker is catalog-driven
-- provider picker shows native providers only
+- the model picker should privilege `primary` and `fast` presets at the top
+- full model search remains fuzzy
+- provider scope is catalog-driven
+- provider scope shows native providers only
 - `Local API` is always visible
 - `Custom API` is hidden unless configured or active
+- `summary` stays config-only
+- `fast` / `primary` are the only UI-exposed presets
 
 ## Hotkey source of truth
 

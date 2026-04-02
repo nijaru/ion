@@ -15,10 +15,29 @@ Source of truth for inline TUI key semantics.
 - `Ctrl+C` and `Ctrl+D` do not cancel running turns.
 
 ## Pickers
-- `Ctrl+P`: open provider picker
-- `Ctrl+M`: open model picker
-- `Tab`: swap provider/model picker when a picker is open
+- `Ctrl+P`: toggle the primary/fast model preset
+- `Ctrl+T`: open thinking controls
+- `Tab`: cycle picker scope when a picker is open
+- `Shift+Tab`: cycle picker scope in reverse when a picker is open
 - `Esc`, `Ctrl+C`, `Ctrl+D`: close an open picker
+
+## Slash Commands
+- `/...`: built-in ion command surface for stateful actions
+- `//...`: user-defined command or skill aliases
+- `/model`: fuzzy model selection and preset management
+- `/provider`: fuzzy provider selection
+- `/thinking`: explicit thinking budget control
+- Prefer slash commands for explicit configuration, switching, and other actions that benefit from text discoverability
+
+## Design direction (not implemented yet)
+- Avoid function keys as primary bindings. They are available in many terminals, but they are a weak default on macOS laptops and less reliable through terminal/multiplexer stacks.
+- Avoid using `Option` / `Alt` as the primary modifier family. Claude Code uses it, but only after terminal-specific setup; that is too fragile for ion's default cross-platform TUI path.
+- Avoid adding more global `Ctrl+<letter>` bindings unless the action is truly core. The composer intentionally preserves common terminal editing keys.
+- Target state:
+  - `primary` and `fast` are the only UI-exposed model presets
+  - `summary` stays config-only
+  - `Ctrl+P` is the fast model swap accelerator
+  - fuzzy slash commands own the full model/provider selection surface
 
 ## Mode
 - `Shift+Tab`: toggle read/write mode

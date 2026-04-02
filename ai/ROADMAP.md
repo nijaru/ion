@@ -26,6 +26,11 @@
 
 ## Active roadmap
 
+Execution rule:
+- Pi is a rough benchmark for maturity, not a hard parity gate.
+- The real gate for advanced orchestration is a stable, feature-complete single-agent inline experience.
+- The core solo agent is the product. Subagents, swarm mode, ACP, and other orchestration surfaces are wrappers around that base.
+
 ### 1. Provider validation
 
 Goal:
@@ -33,12 +38,18 @@ Goal:
 
 Tracked by:
 - `tk-ekao`
+- `tk-a4m1`
 
 Includes:
 - auth/env reality
 - endpoint defaults
 - `/models` behavior
 - manual-entry fallbacks where live listing is weak
+- auth-mode classification:
+  - API key providers
+  - subscription/OAuth providers
+  - CLI bridge providers
+  - custom OpenAI-compatible endpoints
 
 ### 2. Instruction and skills surface
 
@@ -52,9 +63,36 @@ Tracked by:
 ### 3. Session navigation and agent breadth
 
 Tracked by:
+- `tk-7kga` — stabilize inline agent loop and TUI
+- `tk-4ft8` — context governor / compaction robustness (overflow recovery wired; proactive trigger still under review)
+- `tk-4ywr` — session titles and lightweight summaries for picker/resume UX
 - `tk-0dwv` — session tree navigation
-- `tk-wz8y` — sub-agent spawning
+- `tk-5vrj` — subagents: runtime semantics and lifecycle
+- `tk-arhu` — subagents: inline Plane B presentation
+- `tk-pwsl` — swarm mode: alternate-screen operator view
 - `tk-st4q` — ion as an ACP agent
+
+Order:
+- first stabilize the inline single-agent loop
+- then land the remaining runtime primitives that make that path trustworthy
+- then build subagent runtime semantics
+- then add inline subagent presentation
+- then consider swarm mode later as a dedicated operator view
+
+Product ladder:
+- solo agent
+- dependent runtime features
+- orchestration wrappers
+
+TUI surface:
+- `tk-7kga` — core inline stability
+- `tk-y64w` — terminal-safe runtime picker hotkeys
+- `tk-i207` — status line and context presentation
+- `tk-4ywr` — session titles and lightweight summaries
+- `tk-k8g4` — model selector usability and favorites
+- `tk-gmhw` — transcript verbosity controls
+- `tk-arhu` — inline child presentation
+- `tk-pwsl` — swarm/operator view later
 
 ### 4. Footer and settings restraint
 
@@ -64,12 +102,32 @@ Goal:
 Tracked by:
 - `tk-i207`
 
+### 5. Pi + Claude guardrails for ion
+
+Goal:
+- keep Pi and Claude Code findings grounded in idiomatic Go and Bubble Tea v2
+- adopt only the portable UX and orchestration patterns
+- avoid React/JSX-shaped abstractions or framework mimicry
+
+Documented in:
+- `ai/design/cross-pollination.md`
+- `ai/plans/ion-go-bubbletea-guardrails-2026-04-01.md`
+
+Includes:
+- command dispatch timing
+- queued input during long operations
+- overlay/modal boundaries
+- one app-state partition per lifecycle concern
+- clear progress/status surfaces
+
 ## Explicitly lower priority
 
 - token usage color bands
 - git diff stats in footer
 - AskUser UI
 - tab completion
+- request cache continuity
+- swarm mode
 - canto upstreaming tasks
 
 These are real tasks, but they are not on the critical path.

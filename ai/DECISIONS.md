@@ -4,6 +4,92 @@ Append-only history of architectural and design decisions for `ion`.
 
 ---
 
+## 2026-04-02 — Runtime: Retry transient provider failures silently before surfacing the final error
+
+**Context:** Native LLM providers can fail transiently with rate limits or short-lived transport issues. The inline TUI should stay clean and avoid duplicating the same failure in both the transcript and the progress surface.
+
+**Decision:** Wrap native providers in canto's retry layer so transient generation and streaming failures retry automatically with exponential backoff. Only the final failure is surfaced to ion if all attempts are exhausted.
+
+**Rationale:**
+
+1. **Better default behavior:** Most transient failures clear on their own and should not require user intervention.
+2. **Cleaner UI:** Silent retries avoid noisy duplicate error presentation in Plane B and scrollback.
+3. **Simple boundary:** Ion gets a stable provider surface; canto owns the retry mechanics.
+
+**Tradeoffs:** Retries add a small delay before final failure and can make repeated transient provider issues less visible unless they exhaust the retry budget.
+
+---
+
+## 2026-04-02 — Commands: built-in actions use `/`, user-defined aliases use `//`
+
+**Context:** ion needs a textual control plane for explicit runtime actions, and the user wants a clear place for custom slash commands and skills. Hotkeys are a poor fit for everything, especially as the UI grows and more actions become stateful or discoverable-by-name rather than discoverable-by-key.
+
+**Decision:** Use `/foo` for built-in ion commands and user-facing runtime actions. Reserve `//foo` for user-defined command or skill aliases. Keep hotkeys sparse and use them mainly to open modal surfaces rather than to encode every action directly.
+
+**Rationale:** This keeps the command model explicit and searchable, avoids hotkey sprawl, and leaves room for user extension without colliding with built-in commands. It also aligns with the broader terminal-agent pattern where typed commands are the primary control plane and hotkeys are accelerators.
+
+---
+
+## 2026-04-02 — Models: expose `primary` and `fast`, keep `summary` internal
+
+**Context:** ion needs a simple model-preset model that works for daily use, subagents, and cheap transforms like summarization without exposing every provider-specific raw model in the TUI.
+
+**Decision:** Use `primary` and `fast` as the only UI-visible model presets. Keep `summary` config-only for compaction, titles, and other cheap transforms. Make `Ctrl+P` the quick toggle between `primary` and `fast`, and keep full model/provider selection behind fuzzy slash commands.
+
+**Rationale:** `primary` / `fast` is clearer than `primary` / `deep`, avoids confusion with thinking budget, and gives the agent a stable preset vocabulary. `summary` is an implementation concern, not a daily workflow preset. The quick toggle stays ergonomic while the full selection surface remains discoverable and text-driven.
+
+**Tradeoffs:** This reduces the number of UI-exposed choices, but it simplifies the mental model and leaves room for provider-specific defaults to be resolved deterministically from the model catalog.
+
+---
+
+## 2026-04-01 — Planning: Use Pi as a maturity benchmark, not a hard parity gate
+
+**Context:** Recent planning around Pi, Claude Code, subagents, and swarm mode risked sounding like ion should chase literal feature parity before moving forward. At the same time, the team explicitly wants advanced orchestration work to wait until the single-agent inline path feels stable and feature-complete.
+
+**Decision:** Treat Pi as a rough benchmark for maturity, not as a hard gate. The actual prerequisite for subagents and swarm-oriented features is a trustworthy inline single-agent loop and TUI in ion itself.
+
+**Rationale:**
+
+1. **Right gate:** Stability and clarity in ion's own core loop matter more than matching another tool's feature list.
+2. **Better sequencing:** This keeps work ordered as inline stability first, then subagent runtime, then inline subagent UI, then swarm mode later.
+3. **Less cargo-culting:** Benchmarking against Pi is useful for taste and completeness, but it should not force timing or architecture decisions.
+
+**Tradeoffs:** Some Pi-adjacent features may land later than they would in a literal parity chase, but the base product stays cleaner and more reliable.
+
+---
+
+## 2026-04-01 — TUI: Keep inline chat primary and reserve alternate-screen for swarm orchestration
+
+**Context:** ion needs to support subagents and eventually a richer orchestration view, but the current product is still centered on direct inline chat. Competing TUIs often push subagent activity directly into transcript history, which adds noise and makes the conversation harder to scan.
+
+**Decision:** Keep inline mode as the primary chat experience. Render active subagent activity as ephemeral Plane B state, and reserve a future alternate-screen view for explicit swarm or operator workflows rather than general chat.
+
+**Rationale:**
+
+1. **Inline remains the right default:** Most ion use is still direct user-to-agent interaction.
+2. **Transcript should stay durable and readable:** Start/completion/failure events can be committed, while live child deltas should stay ephemeral.
+3. **Swarm supervision wants a different layout:** Once users are managing multiple workers, tasks, retries, and handoffs, the product shifts from chat to orchestration and benefits from a dedicated view.
+
+**Tradeoffs:** Some detailed child execution information will be less visible in scrollback by default, but the transcript stays cleaner and the future dashboard has a clearer role.
+
+---
+
+## 2026-04-01 — Architecture: Treat Pi and Claude Code as product references, not implementation templates
+
+**Context:** Pi and Claude Code both contain strong ideas for coding-agent UX and runtime behavior, but both come from architectures that are not native to ion's Go + Bubble Tea v2 codebase. Earlier planning notes risked reading like a backlog of literal imports.
+
+**Decision:** Use Pi and Claude Code as reference material for product behavior and framework boundaries, but only adopt patterns that map cleanly to ion's existing `Model`/`Msg`/`Cmd` architecture or to reusable primitives in `canto`.
+
+**Rationale:**
+
+1. **Language fit:** Go and Bubble Tea want explicit state, message-driven transitions, and small concrete types rather than JSX, reconcilers, or generalized component frameworks.
+2. **Boundary clarity:** Reusable runtime ideas belong in `canto`; terminal UX behavior belongs in `ion`.
+3. **Complexity control:** New layers should be justified by a concrete ion problem, not by symmetry with another tool's internals.
+
+**Tradeoffs:** Some ideas that look attractive in competitor systems will stay deferred or rejected until ion hits a real need that warrants them.
+
+---
+
 ## 2026-03-17 — Framework: Adopt canto as the core engine
 
 **Context:** The initial `ion` rewrite used a direct, Gemini-specific backend. This was difficult to maintain and lacked support for tool output streaming, multi-agent coordination, and robust session persistence.
@@ -362,6 +448,16 @@ Append-only history of architectural and design decisions for `ion`.
 **Decision:** Remove both helpers from `model.go`. Change `app.New()` to accept `workdir, branch, version string`. `main.go` supplies all three. Version is set via `-ldflags "-X main.version=vX.Y.Z"` at build time, defaulting to `"dev"`.
 
 **Rationale:** Workspace metadata is startup context, not TUI logic. Derived once in main.go and passed in. Improves testability — tests can pass explicit values without touching the filesystem.
+
+---
+
+## 2026-04-02 — TUI: avoid function keys and retire `Ctrl+M` as the long-term model binding
+
+**Context:** ion currently uses `Ctrl+P` for the provider picker, `Ctrl+M` for the model picker, and `Ctrl+T` for the thinking picker. That works mechanically today, but `Ctrl+M` is a poor terminal binding because it is carriage return / Enter. Adding more direct hotkeys for `fast` / `deep` model lanes would also increase conflict pressure against standard terminal editing keys.
+
+**Decision:** Do not add function keys or more direct `Ctrl+<letter>` bindings for model speed lanes. Treat `Ctrl+M` as temporary. The target design is a single runtime picker entrypoint with provider, model, and favorites scopes; `fast` and `deep` should be pinned favorites or presets inside that picker rather than dedicated global hotkeys.
+
+**Rationale:** Terminal portability matters more than mnemonic purity. macOS and Linux terminals generally support function keys, but they are awkward on laptop keyboards, weaker through tmux/SSH stacks, and a poor default for a core workflow. A single runtime picker keeps the global keymap small, preserves more composer editing behavior, and maps well to Bubble Tea's modal overlay model.
 
 ---
 

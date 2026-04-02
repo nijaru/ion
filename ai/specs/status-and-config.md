@@ -36,7 +36,6 @@ Related tasks:
 
 - `tk-i207`
 - `tk-gmhw`
-- `tk-kz3k`
 
 ## Status line
 
@@ -86,6 +85,21 @@ Current picker display rules:
 
 Do not localize provider-model prices by user locale.
 Use canonical USD display in the picker.
+
+## Model presets
+
+Current direction:
+
+- `primary` and `fast` are the UI-visible presets
+- `summary` is config-only and used for cheap transforms like compaction and titles
+- a preset may carry its own default reasoning level
+- if a preset is not explicitly configured, ion should resolve a deterministic provider default from the live model catalog
+
+Model naming rules:
+
+- prefer `primary` over `deep`
+- prefer `fast` over `cheap` in the UI
+- use `summary` for internal cheap transforms, not `cheap`
 
 ## Model discovery
 

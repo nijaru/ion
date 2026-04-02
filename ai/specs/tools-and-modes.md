@@ -188,6 +188,9 @@ Tracked by: `tk-8fe3`, `tk-yp24`
 
 ### Retry behavior
 
-Provider failures surface immediately with no retry policy.
+Transient provider failures are retried automatically with exponential
+backoff before surfacing to the UI. Ion keeps the retry loop silent unless
+all attempts fail, in which case only the final error is shown once in the
+status surface and transcript.
 
 Tracked by: `tk-kz3k`

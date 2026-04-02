@@ -42,7 +42,8 @@ These are not shipped ion features yet:
 
 - skill registry
 - skill activation or selection UX
-- skill-aware slash commands
+- built-in slash command registry beyond the core actions
+- user-defined slash command or skill aliases
 - skill-specific prompt injection from user-facing ion config
 - skill-specific tool bundles or runtime capabilities
 
@@ -72,8 +73,23 @@ If ion adds skills, they should be treated as a distinct surface:
 3. project instructions
 4. optional skills
 5. task/mode reminders
+6. built-in slash commands
+7. user-defined `//` command or skill aliases
 
 Do not collapse skills into the same bucket as `AGENTS.md`.
+
+Command syntax direction:
+
+- `/foo` is for built-in ion actions and user-facing runtime commands
+- `//foo` is reserved for user-defined command or skill aliases
+- keep the command surface textual and discoverable; do not bury stateful actions only behind hotkeys
+
+Model preset direction:
+
+- `primary` is the default daily driver
+- `fast` is the cheaper/faster preset exposed in the UI
+- `summary` is internal/config-only and used for compaction, titles, and other cheap transforms
+- the UI should not expose every raw model; fuzzy slash commands can reach them when needed
 
 ## Open work
 
