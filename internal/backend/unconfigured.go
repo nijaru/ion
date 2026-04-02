@@ -47,7 +47,7 @@ func (b *UnconfiguredBackend) ContextLimit() int {
 }
 
 func (b *UnconfiguredBackend) Bootstrap() Bootstrap {
-	status := "Provider and model are required. Use /provider, then /model or Ctrl+M."
+	status := "Provider and model are required. Use /provider, then /model."
 	if b.session.reason != nil {
 		status = b.session.reason.Error()
 	}

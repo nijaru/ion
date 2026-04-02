@@ -339,7 +339,6 @@ func helpText() string {
 		"keys",
 		"",
 		"  Ctrl+P           toggle primary/fast preset",
-		"  Ctrl+M           model picker",
 		"  Ctrl+T           thinking picker",
 		"  Tab              swap provider/model pickers",
 		"  Shift+Tab        cycle READ → EDIT → YOLO",

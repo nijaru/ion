@@ -58,19 +58,19 @@ Append-only history of architectural and design decisions for `ion`.
 
 ---
 
-## 2026-04-02 — Hotkeys: keep `Ctrl+M` as the explicit model picker
+## 2026-04-02 — Hotkeys: use `Ctrl+P` for primary/fast and `/model` for explicit selection
 
-**Context:** `Ctrl+P` handles primary/fast swapping, but ion still benefits from a direct picker for explicit model selection. The picker is a frequent action and deserves a dedicated binding.
+**Context:** The primary user action is swapping between `primary` and `fast`, not hopping into a separate explicit model picker. A direct model hotkey adds another global chord without enough daily value to justify it.
 
-**Decision:** Keep `Ctrl+M` as the explicit model picker. `Ctrl+P` handles the primary/fast swap, `/model` remains the textual model-selection surface, and `/primary` / `/fast` are the explicit preset-switch commands.
+**Decision:** Keep `Ctrl+P` as the primary/fast swap. Do not reserve a separate model hotkey. `/model` remains the explicit model-selection surface, and the picker work should focus on provider/model/favorites scopes invoked from the textual command path or from the picker flow itself.
 
 **Rationale:**
 
-1. **Enough separation:** One toggle, one picker, one text command path is simple and usable.
-2. **Fast selection path:** Users who know the model they want still get a direct picker without typing.
-3. **Direct action:** A dedicated picker is easier to use than routing every explicit selection through text commands.
+1. **Common case wins:** primary/fast swapping is the highest-frequency model action.
+2. **Smaller keymap:** removing the dedicated model key frees a global chord for no loss of core functionality.
+3. **Textual explicitness:** `/model` is still the explicit, discoverable path for full model selection.
 
-**Tradeoffs:** `Ctrl+M` is not perfectly terminal-pure, but it remains a practical high-frequency binding while the rest of the control plane stays slash-command driven.
+**Tradeoffs:** Explicit model selection takes a text command or picker invocation instead of a hotkey, but that is acceptable because it is not the primary daily operation.
 
 ---
 
@@ -499,11 +499,11 @@ Append-only history of architectural and design decisions for `ion`.
 
 ---
 
-## 2026-04-02 — TUI: avoid function keys and keep `Ctrl+M` as the explicit model picker
+## 2026-04-02 — TUI: avoid function keys and keep model selection on slash commands
 
-**Context:** ion currently uses `Ctrl+P` for the primary/fast swap, `Ctrl+M` for explicit model selection, and `Ctrl+T` for thinking. Function keys and extra direct hotkeys for model speed lanes add conflict pressure against standard terminal editing keys without improving the core flow.
+**Context:** ion currently uses `Ctrl+P` for the primary/fast swap and `Ctrl+T` for thinking. Function keys and extra direct hotkeys for model lanes add conflict pressure against standard terminal editing keys without improving the core flow.
 
-**Decision:** Do not add function keys or more direct `Ctrl+<letter>` bindings for model speed lanes. Keep `Ctrl+M` as the explicit model picker. The model picker should own provider, model, and favorites scopes; `primary` and `fast` are the UI-visible presets, with any additional presets remaining config-only or picker-local.
+**Decision:** Do not add function keys or more direct `Ctrl+<letter>` bindings for model speed lanes. Keep explicit model selection on `/model`. The model picker should own provider, model, and favorites scopes; `primary` and `fast` are the UI-visible presets, with any additional presets remaining config-only or picker-local.
 
 **Rationale:** Terminal portability matters, but the more important point is reducing the global keymap. A single runtime picker keeps the control surface small, preserves more composer editing behavior, and maps well to Bubble Tea's modal overlay model.
 
@@ -539,15 +539,15 @@ Append-only history of architectural and design decisions for `ion`.
 
 ---
 
-## 2026-03-25 — TUI: Picker overlays needed for model/provider/session discovery
+## 2026-03-25 — TUI: picker overlays needed for provider/session discovery
 
-**Context:** ion has `/model` and `/provider` slash commands, but users must know the exact name to type. OpenRouter has 200+ models. Without a picker, model/provider selection is inaccessible.
+**Context:** ion has `/model` and `/provider` slash commands, but users must know the exact name to type. OpenRouter has 200+ models. Without a picker, explicit provider/model selection is inaccessible.
 
-**Decision:** Add three picker overlays: Ctrl+P (provider), Ctrl+M (model with fuzzy search), and a session picker for `/resume`. Each is a modal overlay rendered in Plane B; ESC dismisses, Enter selects. OpenRouter model list is fetched from the API and cached locally.
+**Decision:** Add picker overlays for provider selection and `/resume`, rendered in Plane B with ESC to dismiss and Enter to select. Explicit model selection stays on `/model` and the picker flow it opens, with fuzzy search inside the picker rather than a separate global model hotkey.
 
-**Rationale:** This is the gap between "technically works" and "actually usable." Claude Code, OpenCode, and pi all have model/provider selectors. Without it, ion is a CLI-only workflow.
+**Rationale:** This is the gap between "technically works" and "actually usable." Claude Code, OpenCode, and pi all have selection surfaces. Without it, ion is a CLI-only workflow.
 
-**Tradeoffs:** Subscription users on OpenAI/GitHub get slower iteration on features until OAuth is confirmed and the canto path is implemented.
+**Tradeoffs:** Selection is text-led rather than hotkey-led, but the control surface stays smaller and the picker implementation stays reusable.
 
 ---
 

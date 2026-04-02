@@ -146,7 +146,7 @@ func (b *Backend) Open(ctx context.Context) error {
 		)
 	}
 	if modelName == "" {
-		return fmt.Errorf("No model configured. Use /model or Ctrl+M. Set ION_MODEL for scripts.")
+		return fmt.Errorf("No model configured. Use /model. Set ION_MODEL for scripts.")
 	}
 
 	// Initialize Canto store (SQLite) from ionStore if possible

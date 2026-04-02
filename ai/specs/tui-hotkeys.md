@@ -16,7 +16,6 @@ Source of truth for inline TUI key semantics.
 
 ## Pickers
 - `Ctrl+P`: toggle the primary/fast model preset
-- `Ctrl+M`: open the model picker
 - `Ctrl+T`: open thinking controls
 - `Tab`: cycle picker scope when a picker is open
 - `Shift+Tab`: cycle picker scope in reverse when a picker is open
