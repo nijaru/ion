@@ -29,6 +29,10 @@ func (m Model) statusLine() string {
 	case session.ModeYolo:
 		modeLabel = m.st.modeYolo.Render("[YOLO]")
 	}
+	presetLabel := ""
+	if m.activePreset() == presetFast {
+		presetLabel = m.st.dim.Render("[FAST]")
+	}
 
 	provider := ""
 	if value := m.Model.Backend.Provider(); value != "" {
@@ -61,11 +65,11 @@ func (m Model) statusLine() string {
 	}
 
 	candidates := [][]string{
-		{modeLabel, provider, model, thinking, usage, cost, dir, branch},
-		{modeLabel, provider, model, thinking, usage, cost, branch},
-		{modeLabel, provider, model, thinking, usage, cost},
-		{modeLabel, model, thinking, usage, cost},
-		{modeLabel, thinking, usage, cost},
+		{modeLabel, presetLabel, provider, model, thinking, usage, cost, dir, branch},
+		{modeLabel, presetLabel, provider, model, thinking, usage, cost, branch},
+		{modeLabel, presetLabel, provider, model, thinking, usage, cost},
+		{modeLabel, presetLabel, model, thinking, usage, cost},
+		{modeLabel, presetLabel, thinking, usage, cost},
 	}
 	for _, segments := range candidates {
 		line := joinLineSegments(sep, segments...)

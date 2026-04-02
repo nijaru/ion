@@ -18,7 +18,7 @@ func TestLoadReadsConfigFile(t *testing.T) {
 
 	path := filepath.Join(configDir, "config.toml")
 	if err := os.WriteFile(path, []byte(
-		"provider = \"openai\"\nmodel = \"gpt-4o\"\nreasoning_effort = \"med\"\nendpoint = \"https://example.com/v1\"\nauth_env_var = \"OPENAI_PROXY_KEY\"\ncontext_limit = 128000\nsession_retention_days = 14\n[extra_headers]\n\"X-Test\" = \"value\"\n",
+		"provider = \"openai\"\nmodel = \"gpt-4o\"\nreasoning_effort = \"med\"\nfast_model = \"gpt-4.1-mini\"\nfast_reasoning_effort = \"low\"\nsummary_model = \"gpt-4o-mini\"\nsummary_reasoning_effort = \"low\"\nendpoint = \"https://example.com/v1\"\nauth_env_var = \"OPENAI_PROXY_KEY\"\ncontext_limit = 128000\nsession_retention_days = 14\n[extra_headers]\n\"X-Test\" = \"value\"\n",
 	), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -36,6 +36,18 @@ func TestLoadReadsConfigFile(t *testing.T) {
 	}
 	if cfg.ReasoningEffort != "medium" {
 		t.Fatalf("reasoning_effort = %q, want %q", cfg.ReasoningEffort, "medium")
+	}
+	if cfg.FastModel != "gpt-4.1-mini" {
+		t.Fatalf("fast_model = %q, want %q", cfg.FastModel, "gpt-4.1-mini")
+	}
+	if cfg.FastReasoningEffort != "low" {
+		t.Fatalf("fast_reasoning_effort = %q, want %q", cfg.FastReasoningEffort, "low")
+	}
+	if cfg.SummaryModel != "gpt-4o-mini" {
+		t.Fatalf("summary_model = %q, want %q", cfg.SummaryModel, "gpt-4o-mini")
+	}
+	if cfg.SummaryReasoningEffort != "low" {
+		t.Fatalf("summary_reasoning_effort = %q, want %q", cfg.SummaryReasoningEffort, "low")
 	}
 	if cfg.Endpoint != "https://example.com/v1" {
 		t.Fatalf("endpoint = %q, want %q", cfg.Endpoint, "https://example.com/v1")
@@ -108,14 +120,18 @@ func TestSaveWritesStatePath(t *testing.T) {
 	t.Setenv("HOME", home)
 
 	cfg := &Config{
-		Provider:             "openai",
-		Model:                "gpt-4o",
-		ReasoningEffort:      "low",
-		Endpoint:             "https://example.com/v1",
-		AuthEnvVar:           "OPENAI_PROXY_KEY",
-		ExtraHeaders:         map[string]string{"X-Test": "value"},
-		ContextLimit:         128000,
-		SessionRetentionDays: 14,
+		Provider:               "openai",
+		Model:                  "gpt-4o",
+		ReasoningEffort:        "low",
+		FastModel:              "gpt-4.1-mini",
+		FastReasoningEffort:    "low",
+		SummaryModel:           "gpt-4o-mini",
+		SummaryReasoningEffort: "low",
+		Endpoint:               "https://example.com/v1",
+		AuthEnvVar:             "OPENAI_PROXY_KEY",
+		ExtraHeaders:           map[string]string{"X-Test": "value"},
+		ContextLimit:           128000,
+		SessionRetentionDays:   14,
 	}
 	if err := Save(cfg); err != nil {
 		t.Fatalf("save config: %v", err)
@@ -132,6 +148,11 @@ func TestSaveWritesStatePath(t *testing.T) {
 		`openai`,
 		`model =`,
 		`gpt-4o`,
+		`fast_model =`,
+		`gpt-4.1-mini`,
+		`fast_reasoning_effort =`,
+		`summary_model =`,
+		`gpt-4o-mini`,
 		`reasoning_effort = 'low'`,
 		`endpoint = 'https://example.com/v1'`,
 		`auth_env_var = 'OPENAI_PROXY_KEY'`,

@@ -38,12 +38,21 @@ const (
 
 const pendingActionTimeout = 1500 * time.Millisecond
 
+type modelPreset string
+
+const (
+	presetPrimary modelPreset = "primary"
+	presetFast    modelPreset = "fast"
+)
+
 type runtimeSwitcher func(context.Context, *config.Config, string) (backend.Backend, session.AgentSession, storage.Session, error)
 
 type runtimeSwitchedMsg struct {
+	cfg           *config.Config
 	backend       backend.Backend
 	session       session.AgentSession
 	storage       storage.Session
+	preset        modelPreset
 	printLines    []string
 	replayEntries []session.Entry
 	status        string
@@ -148,6 +157,7 @@ type AppState struct {
 	Workdir           string
 	Branch            string
 	Version           string
+	ActivePreset      modelPreset
 	PrintedTranscript bool
 	StartupLines      []string
 	StartupEntries    []session.Entry
@@ -267,9 +277,10 @@ func New(
 
 	m := Model{
 		App: AppState{
-			Workdir: workdir,
-			Branch:  branch,
-			Version: version,
+			Workdir:      workdir,
+			Branch:       branch,
+			Version:      version,
+			ActivePreset: presetPrimary,
 		},
 		Model: ModelState{
 			Backend:  b,
@@ -444,12 +455,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case runtimeSwitchedMsg:
+		if msg.preset == "" {
+			m.App.ActivePreset = presetPrimary
+		} else {
+			m.App.ActivePreset = msg.preset
+		}
 		m.Model.Backend = msg.backend
 		m.Model.Session = msg.session
 		m.Model.Storage = msg.storage
 		m.Picker.Overlay = nil
 		m.Picker.Session = nil
 		m.Progress.Status = msg.status
+		if msg.cfg != nil {
+			m.Progress.ReasoningEffort = normalizeThinkingValue(msg.cfg.ReasoningEffort)
+		}
 		if msg.storage != nil {
 			meta := msg.storage.Meta()
 			m.App.Branch = meta.Branch

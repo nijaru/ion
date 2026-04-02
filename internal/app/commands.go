@@ -28,6 +28,18 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 			return sessionHelpMsg{notice: helpText()}
 		}
 
+	case "/primary":
+		if len(fields) != 1 {
+			return m, cmdError("usage: /primary")
+		}
+		return m.switchPresetCommand(presetPrimary)
+
+	case "/fast":
+		if len(fields) != 1 {
+			return m, cmdError("usage: /fast")
+		}
+		return m.switchPresetCommand(presetFast)
+
 	case "/resume":
 		if len(fields) < 2 {
 			return m.openSessionPicker()
@@ -42,22 +54,31 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		if err != nil {
 			return m, cmdError(fmt.Sprintf("failed to load config: %v", err))
 		}
-		if strings.EqualFold(strings.TrimSpace(cfg.Model), strings.TrimSpace(name)) {
+		currentCfg, err := m.runtimeConfigForActivePreset(cfg)
+		if err != nil {
+			return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
+		}
+		if currentCfg.Provider != "" && strings.EqualFold(strings.TrimSpace(currentCfg.Model), strings.TrimSpace(name)) {
 			return m, nil
 		}
-		cfg.Model = name
-		if err := config.Save(cfg); err != nil {
+		updated := m.updateModelForActivePreset(cfg, name)
+		runtimeCfg, err := m.runtimeConfigForActivePreset(updated)
+		if err != nil {
+			return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
+		}
+		if err := config.Save(updated); err != nil {
 			return m, cmdError(fmt.Sprintf("failed to save config: %v", err))
 		}
-		m.Model.Backend.SetConfig(cfg)
-		if cfg.Provider == "" {
+		m.Model.Backend.SetConfig(runtimeCfg)
+		if runtimeCfg.Provider == "" {
 			m.Progress.Status = noProviderConfiguredStatus()
 			return m, m.printEntries(
 				session.Entry{Role: session.System, Content: "Model set to " + name},
 			)
 		}
 		return m, m.switchRuntimeCommand(
-			cfg,
+			runtimeCfg,
+			m.activePreset(),
 			session.Entry{Role: session.System, Content: "Model set to " + name},
 			m.Model.Session.ID(),
 			false,
@@ -72,14 +93,22 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		if err != nil {
 			return m, cmdError(fmt.Sprintf("failed to load config: %v", err))
 		}
-		if cfg.ReasoningEffort == level {
+		currentCfg, err := m.runtimeConfigForActivePreset(cfg)
+		if err != nil {
+			return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
+		}
+		if currentCfg.Provider != "" && normalizeThinkingValue(currentCfg.ReasoningEffort) == level {
 			return m, nil
 		}
-		cfg.ReasoningEffort = level
-		if err := config.Save(cfg); err != nil {
+		updated := m.updateThinkingForActivePreset(cfg, level)
+		runtimeCfg, err := m.runtimeConfigForActivePreset(updated)
+		if err != nil {
+			return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
+		}
+		if err := config.Save(updated); err != nil {
 			return m, cmdError(fmt.Sprintf("failed to save config: %v", err))
 		}
-		m.Model.Backend.SetConfig(cfg)
+		m.Model.Backend.SetConfig(runtimeCfg)
 		m.Progress.ReasoningEffort = level
 		return m, m.printEntries(
 			session.Entry{
@@ -97,14 +126,13 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		if err != nil {
 			return m, cmdError(fmt.Sprintf("failed to load config: %v", err))
 		}
-		cfg.Provider = name
-		cfg.Model = ""
-		if err := config.Save(cfg); err != nil {
+		updated := m.updateProviderForActivePreset(cfg, name)
+		if err := config.Save(updated); err != nil {
 			return m, cmdError(fmt.Sprintf("failed to save config: %v", err))
 		}
-		m.Model.Backend.SetConfig(cfg)
+		m.Model.Backend.SetConfig(updated)
 		m.Progress.Status = noModelConfiguredStatus()
-		return m.openModelPickerWithConfig(cfg)
+		return m.openModelPickerWithConfig(updated)
 
 	case "/mcp":
 		if len(fields) < 3 || fields[1] != "add" {
@@ -160,17 +188,22 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		if err != nil {
 			return m, cmdError(fmt.Sprintf("failed to load config: %v", err))
 		}
-		if cfg.Provider == "" {
-			cfg.Provider = m.Model.Backend.Provider()
+		runtimeCfg, err := m.runtimeConfigForActivePreset(cfg)
+		if err != nil {
+			return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
 		}
-		if cfg.Model == "" {
-			cfg.Model = m.Model.Backend.Model()
+		if runtimeCfg.Provider == "" {
+			runtimeCfg.Provider = m.Model.Backend.Provider()
 		}
-		if cfg.Provider == "" || cfg.Model == "" {
+		if runtimeCfg.Model == "" {
+			runtimeCfg.Model = m.Model.Backend.Model()
+		}
+		if runtimeCfg.Provider == "" || runtimeCfg.Model == "" {
 			return m, cmdError("cannot /clear without an active provider and model")
 		}
 		return m, m.switchRuntimeCommand(
-			cfg,
+			runtimeCfg,
+			m.activePreset(),
 			session.Entry{Role: session.System, Content: "Started fresh session"},
 			"",
 			false,
@@ -255,7 +288,11 @@ func (m Model) openModelPicker() (Model, tea.Cmd) {
 	if err != nil {
 		return m, cmdError(fmt.Sprintf("failed to load config: %v", err))
 	}
-	return m.openModelPickerWithConfig(cfg)
+	runtimeCfg, err := m.runtimeConfigForActivePreset(cfg)
+	if err != nil {
+		return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
+	}
+	return m.openModelPickerWithConfig(runtimeCfg)
 }
 
 func (m Model) openModelPickerWithConfig(cfg *config.Config) (Model, tea.Cmd) {
@@ -270,7 +307,7 @@ func (m Model) openModelPickerWithConfig(cfg *config.Config) (Model, tea.Cmd) {
 		return m, cmdError(fmt.Sprintf("no models available for provider %s", cfg.Provider))
 	}
 	m.Picker.Overlay = &pickerOverlayState{
-		title:    "Pick a model for " + cfg.Provider,
+		title:    "Pick a " + m.activePresetTitle() + " model for " + cfg.Provider,
 		items:    items,
 		filtered: append([]pickerItem(nil), items...),
 		index:    pickerIndex(items, cfg.Model),
@@ -285,6 +322,8 @@ func helpText() string {
 		"ion commands",
 		"",
 		"  /resume [id]     resume a recent session or pick one",
+		"  /primary         switch to the primary model preset",
+		"  /fast            switch to the fast model preset",
 		"  /provider [name] set provider and choose a model",
 		"  /model [name]    set model directly or open the picker",
 		"  /thinking [lvl]  set thinking: auto, low, medium, high",
@@ -299,7 +338,7 @@ func helpText() string {
 		"",
 		"keys",
 		"",
-		"  Ctrl+P           provider picker",
+		"  Ctrl+P           toggle primary/fast preset",
 		"  Ctrl+M           model picker",
 		"  Ctrl+T           thinking picker",
 		"  Tab              swap provider/model pickers",
@@ -325,13 +364,16 @@ func (m Model) openThinkingPicker() (Model, tea.Cmd) {
 	if err != nil {
 		return m, cmdError(fmt.Sprintf("failed to load config: %v", err))
 	}
+	runtimeCfg, err := m.runtimeConfigForActivePreset(cfg)
+	if err != nil {
+		return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
+	}
 	items := []pickerItem{
 		{Label: "Auto", Value: config.DefaultReasoningEffort, Detail: "Provider default"},
 		{Label: "Low", Value: "low"},
 		{Label: "Medium", Value: "medium"},
 		{Label: "High", Value: "high"},
 	}
-	current := normalizeThinkingValue(cfg.ReasoningEffort)
 	for i := range items {
 		items[i].Search = pickerSearchIndex(
 			items[i].Label,
@@ -342,10 +384,10 @@ func (m Model) openThinkingPicker() (Model, tea.Cmd) {
 		)
 	}
 	m.Picker.Overlay = &pickerOverlayState{
-		title:    "Pick a thinking level",
+		title:    "Pick a " + m.activePresetTitle() + " thinking level",
 		items:    items,
 		filtered: append([]pickerItem(nil), items...),
-		index:    pickerIndex(items, current),
+		index:    pickerIndex(items, normalizeThinkingValue(runtimeCfg.ReasoningEffort)),
 		purpose:  pickerPurposeThinking,
 		cfg:      cfg,
 	}
@@ -395,7 +437,11 @@ func (m Model) handlePickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	case "tab":
 		if m.Picker.Overlay.purpose == pickerPurposeProvider {
 			if m.Picker.Overlay.cfg != nil && m.Picker.Overlay.cfg.Provider != "" {
-				return m.openModelPickerWithConfig(m.Picker.Overlay.cfg)
+				runtimeCfg, err := m.runtimeConfigForActivePreset(m.Picker.Overlay.cfg)
+				if err != nil {
+					return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
+				}
+				return m.openModelPickerWithConfig(runtimeCfg)
 			}
 			return m, nil
 		}
@@ -449,39 +495,54 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 			m.Picker.Overlay = nil
 			return m.openModelPickerWithConfig(&cfg)
 		}
-		cfg.Provider = selected.Value
-		cfg.Model = ""
-		if err := config.Save(&cfg); err != nil {
+		updated := m.updateProviderForActivePreset(&cfg, selected.Value)
+		if err := config.Save(updated); err != nil {
 			return m, cmdError(fmt.Sprintf("failed to save config: %v", err))
 		}
-		m.Model.Backend.SetConfig(&cfg)
+		m.Model.Backend.SetConfig(updated)
 		m.Progress.Status = noModelConfiguredStatus()
 		m.Picker.Overlay = nil
-		return m.openModelPickerWithConfig(&cfg)
+		return m.openModelPickerWithConfig(updated)
 
 	case pickerPurposeModel:
-		if strings.EqualFold(strings.TrimSpace(cfg.Model), strings.TrimSpace(selected.Value)) {
+		currentCfg, err := m.runtimeConfigForActivePreset(&cfg)
+		if err != nil {
+			return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
+		}
+		if currentCfg.Provider != "" && strings.EqualFold(strings.TrimSpace(currentCfg.Model), strings.TrimSpace(selected.Value)) {
 			m.Picker.Overlay = nil
 			return m, nil
 		}
-		cfg.Model = selected.Value
-		if err := config.Save(&cfg); err != nil {
+		updated := m.updateModelForActivePreset(&cfg, selected.Value)
+		runtimeCfg, err := m.runtimeConfigForActivePreset(updated)
+		if err != nil {
+			return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
+		}
+		if err := config.Save(updated); err != nil {
 			return m, cmdError(fmt.Sprintf("failed to save config: %v", err))
 		}
 		m.Picker.Overlay = nil
 		notice := session.Entry{Role: session.System, Content: "Model set to " + selected.Value}
-		return m, m.switchRuntimeCommand(&cfg, notice, m.Model.Session.ID(), false)
+		return m, m.switchRuntimeCommand(runtimeCfg, m.activePreset(), notice, m.Model.Session.ID(), false)
 	case pickerPurposeThinking:
 		level := normalizeThinkingValue(selected.Value)
-		if normalizeThinkingValue(cfg.ReasoningEffort) == level {
+		currentCfg, err := m.runtimeConfigForActivePreset(&cfg)
+		if err != nil {
+			return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
+		}
+		if currentCfg.Provider != "" && normalizeThinkingValue(currentCfg.ReasoningEffort) == level {
 			m.Picker.Overlay = nil
 			return m, nil
 		}
-		cfg.ReasoningEffort = level
-		if err := config.Save(&cfg); err != nil {
+		updated := m.updateThinkingForActivePreset(&cfg, level)
+		runtimeCfg, err := m.runtimeConfigForActivePreset(updated)
+		if err != nil {
+			return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
+		}
+		if err := config.Save(updated); err != nil {
 			return m, cmdError(fmt.Sprintf("failed to save config: %v", err))
 		}
-		m.Model.Backend.SetConfig(&cfg)
+		m.Model.Backend.SetConfig(runtimeCfg)
 		m.Progress.ReasoningEffort = level
 		m.Picker.Overlay = nil
 		return m, m.printEntries(
@@ -520,14 +581,30 @@ func (m Model) resumeStoredSessionByID(sessionID string) tea.Cmd {
 	return m.resumeRuntimeCommand(cfg, notice, sessionID)
 }
 
+func (m Model) switchPresetCommand(preset modelPreset) (Model, tea.Cmd) {
+	cfg, err := config.Load()
+	if err != nil {
+		return m, cmdError(fmt.Sprintf("failed to load config: %v", err))
+	}
+	runtimeCfg, err := m.runtimeConfigForPreset(cfg, preset)
+	if err != nil {
+		return m, cmdError(fmt.Sprintf("failed to resolve %s preset: %v", preset, err))
+	}
+	notice := session.Entry{Role: session.System, Content: "Switched to " + preset.String()}
+	return m, m.switchRuntimeCommand(runtimeCfg, preset, notice, m.Model.Session.ID(), false)
+}
+
 func (m Model) switchRuntimeCommand(
 	cfg *config.Config,
+	preset modelPreset,
 	notice session.Entry,
 	sessionID string,
 	preserveSession bool,
 ) tea.Cmd {
 	if m.Model.Switcher == nil {
 		m.Model.Backend.SetConfig(cfg)
+		m.App.ActivePreset = preset
+		m.Progress.ReasoningEffort = normalizeThinkingValue(cfg.ReasoningEffort)
 		return m.printEntries(notice)
 	}
 
@@ -551,6 +628,8 @@ func (m Model) switchRuntimeCommand(
 			_ = oldSession.Close()
 		}
 		return runtimeSwitchedMsg{
+			cfg:        &cfgCopy,
+			preset:     preset,
 			backend:    backend,
 			session:    sess,
 			storage:    storageSess,
@@ -568,6 +647,8 @@ func (m Model) resumeRuntimeCommand(
 ) tea.Cmd {
 	if m.Model.Switcher == nil {
 		m.Model.Backend.SetConfig(cfg)
+		m.App.ActivePreset = presetPrimary
+		m.Progress.ReasoningEffort = normalizeThinkingValue(cfg.ReasoningEffort)
 		return m.printEntries(notice)
 	}
 	switcher := m.Model.Switcher
@@ -597,6 +678,8 @@ func (m Model) resumeRuntimeCommand(
 			printLines = append(printLines, header)
 		}
 		return runtimeSwitchedMsg{
+			cfg:           &cfgCopy,
+			preset:        presetPrimary,
 			backend:       backend,
 			session:       sess,
 			storage:       storageSess,

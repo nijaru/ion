@@ -731,8 +731,100 @@ func TestCtrlTOpensThinkingPicker(t *testing.T) {
 	if model.Picker.Overlay.purpose != pickerPurposeThinking {
 		t.Fatalf("picker purpose = %v, want thinking", model.Picker.Overlay.purpose)
 	}
-	if got := model.Picker.Overlay.title; got != "Pick a thinking level" {
+	if got := model.Picker.Overlay.title; got != "Pick a primary thinking level" {
 		t.Fatalf("picker title = %q", got)
+	}
+}
+
+func TestCtrlPTogglesPrimaryAndFastPreset(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cfgDir := filepath.Join(home, ".ion")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.toml"), []byte(
+		"provider = \"openai\"\nmodel = \"gpt-4.1\"\nreasoning_effort = \"auto\"\n",
+	), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	oldSession := &stubSession{events: make(chan session.Event)}
+	oldBackend := stubBackend{sess: oldSession, provider: "openai", model: "gpt-4.1"}
+
+	oldListModelsForConfig := registry.ListModelsForConfigHook
+	registry.ListModelsForConfigHook = func(ctx context.Context, cfg *config.Config) ([]registry.ModelMetadata, error) {
+		if cfg.Provider != "openai" {
+			t.Fatalf("provider = %q, want openai", cfg.Provider)
+		}
+		return []registry.ModelMetadata{
+			{ID: "gpt-4.1"},
+			{ID: "gpt-4.1-mini"},
+		}, nil
+	}
+	t.Cleanup(func() { registry.ListModelsForConfigHook = oldListModelsForConfig })
+
+	var observedModels []string
+	model := New(
+		oldBackend,
+		nil,
+		nil,
+		"/tmp/test",
+		"main",
+		"dev",
+		func(ctx context.Context, cfg *config.Config, sessionID string) (backend.Backend, session.AgentSession, storage.Session, error) {
+			observedModels = append(observedModels, cfg.Model)
+			resolved := *cfg
+			newBackend := testutil.New()
+			newBackend.SetConfig(&resolved)
+			newStorage := &stubStorageSession{id: sessionID, model: cfg.Provider + "/" + cfg.Model, branch: "main"}
+			newBackend.SetSession(newStorage)
+			return newBackend, newBackend.Session(), newStorage, nil
+		},
+	)
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("expected ctrl+p to return a switch command")
+	}
+	msg := cmd()
+	switched, ok := msg.(runtimeSwitchedMsg)
+	if !ok {
+		t.Fatalf("expected runtimeSwitchedMsg, got %T", msg)
+	}
+	next, _ := model.Update(switched)
+	model = next.(Model)
+	if model.App.ActivePreset != presetFast {
+		t.Fatalf("active preset = %q, want fast", model.App.ActivePreset)
+	}
+	if got := model.Model.Backend.Model(); got != "gpt-4.1-mini" {
+		t.Fatalf("fast model = %q, want gpt-4.1-mini", got)
+	}
+	if got := model.Progress.ReasoningEffort; got != "low" {
+		t.Fatalf("fast reasoning = %q, want low", got)
+	}
+
+	updated, cmd = model.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("expected ctrl+p to switch back to primary")
+	}
+	msg = cmd()
+	switched, ok = msg.(runtimeSwitchedMsg)
+	if !ok {
+		t.Fatalf("expected runtimeSwitchedMsg, got %T", msg)
+	}
+	next, _ = model.Update(switched)
+	model = next.(Model)
+	if model.App.ActivePreset != presetPrimary {
+		t.Fatalf("active preset = %q, want primary", model.App.ActivePreset)
+	}
+	if got := model.Model.Backend.Model(); got != "gpt-4.1" {
+		t.Fatalf("primary model = %q, want gpt-4.1", got)
+	}
+	if !slices.Equal(observedModels, []string{"gpt-4.1-mini", "gpt-4.1"}) {
+		t.Fatalf("switched models = %#v, want fast then primary", observedModels)
 	}
 }
 
@@ -1043,6 +1135,8 @@ func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 
 	for _, want := range []string{
 		"/resume [id]",
+		"/primary",
+		"/fast",
 		"/provider [name]",
 		"/model [name]",
 		"/thinking [lvl]",

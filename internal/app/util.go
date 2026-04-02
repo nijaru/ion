@@ -107,7 +107,6 @@ func (m Model) pendingActionStatus() string {
 	}
 }
 
-
 func isConfigurationStatus(status string) bool {
 	trimmed := strings.TrimSpace(status)
 	if trimmed == "" {
@@ -120,7 +119,7 @@ func isConfigurationStatus(status string) bool {
 }
 
 func noProviderConfiguredStatus() string {
-	return "No provider configured. Use /provider or Ctrl+P. Set ION_PROVIDER for scripts."
+	return "No provider configured. Use /provider. Set ION_PROVIDER for scripts."
 }
 
 func noModelConfiguredStatus() string {
