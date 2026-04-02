@@ -499,13 +499,13 @@ Append-only history of architectural and design decisions for `ion`.
 
 ---
 
-## 2026-04-02 — TUI: avoid function keys and keep model selection on slash commands
+## 2026-04-02 — TUI: avoid function keys and keep thinking on `/thinking`
 
-**Context:** ion currently uses `Ctrl+P` for the primary/fast swap and `Ctrl+T` for thinking. Function keys and extra direct hotkeys for model lanes add conflict pressure against standard terminal editing keys without improving the core flow.
+**Context:** ion currently uses `Ctrl+P` for the primary/fast swap. Function keys and extra direct hotkeys for model lanes add conflict pressure against standard terminal editing keys without improving the core flow. Thinking is not a high-frequency enough action to justify a dedicated hotkey right now.
 
-**Decision:** Do not add function keys or more direct `Ctrl+<letter>` bindings for model speed lanes. Keep explicit model selection on `/model`. The model picker should own provider, model, and favorites scopes; `primary` and `fast` are the UI-visible presets, with any additional presets remaining config-only or picker-local.
+**Decision:** Do not add function keys or more direct `Ctrl+<letter>` bindings for model speed lanes. Keep explicit thinking control on `/thinking`. The model picker should own provider, model, and favorites scopes; `primary` and `fast` are the UI-visible presets, with any additional presets remaining config-only or picker-local.
 
-**Rationale:** Terminal portability matters, but the more important point is reducing the global keymap. A single runtime picker keeps the control surface small, preserves more composer editing behavior, and maps well to Bubble Tea's modal overlay model.
+**Rationale:** Terminal portability matters, but the more important point is reducing the global keymap. A smaller control surface keeps more composer editing behavior available and maps well to Bubble Tea's modal overlay model.
 
 ---
 

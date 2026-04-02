@@ -71,7 +71,6 @@ func (m *Model) printEntries(entries ...session.Entry) tea.Cmd {
 }
 
 func (m *Model) clearPendingAction() {
-	m.Input.EscPending = false
 	m.Input.CtrlCPending = false
 	m.Input.Pending = pendingActionNone
 }
@@ -79,12 +78,8 @@ func (m *Model) clearPendingAction() {
 func (m *Model) armPendingAction(action pendingAction) tea.Cmd {
 	m.Input.Pending = action
 	switch action {
-	case pendingActionClearEsc:
-		m.Input.EscPending = true
-		m.Input.CtrlCPending = false
 	case pendingActionQuitCtrlC, pendingActionQuitCtrlD:
 		m.Input.CtrlCPending = true
-		m.Input.EscPending = false
 	default:
 		m.clearPendingAction()
 		return nil
@@ -100,8 +95,6 @@ func (m Model) pendingActionStatus() string {
 		return "Press Ctrl+C again to quit"
 	case pendingActionQuitCtrlD:
 		return "Press Ctrl+D again to quit"
-	case pendingActionClearEsc:
-		return "Press Esc again to clear input"
 	default:
 		return ""
 	}

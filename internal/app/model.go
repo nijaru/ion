@@ -33,7 +33,6 @@ const (
 	pendingActionNone pendingAction = iota
 	pendingActionQuitCtrlC
 	pendingActionQuitCtrlD
-	pendingActionClearEsc
 )
 
 const pendingActionTimeout = 1500 * time.Millisecond
@@ -216,7 +215,6 @@ type InputState struct {
 	History      []string
 	HistoryIdx   int
 	HistoryDraft string
-	EscPending   bool
 	CtrlCPending bool
 	Pending      pendingAction
 }
@@ -480,18 +478,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.InFlight.StreamBuf = ""
 		m.Progress.Mode = stateReady
 		m.Progress.LastError = ""
-		m.Progress.LastTurnSummary = turnSummary{}
-		m.InFlight.Thinking = false
-		m.Input.CtrlCPending = false
-		m.Input.EscPending = false
-		m.Progress.TokensSent = 0
+			m.Progress.LastTurnSummary = turnSummary{}
+			m.InFlight.Thinking = false
+			m.Input.CtrlCPending = false
+			m.Progress.TokensSent = 0
 		m.Progress.TokensReceived = 0
-		m.Progress.TotalCost = 0
-		if msg.storage != nil {
-			if input, output, cost, err := msg.storage.Usage(context.Background()); err == nil {
-				m.Progress.TokensSent = input
-				m.Progress.TokensReceived = output
-				m.Progress.TotalCost = cost
+			m.Progress.TotalCost = 0
+			if msg.storage != nil {
+				if input, output, cost, err := msg.storage.Usage(context.Background()); err == nil {
+					m.Progress.TokensSent = input
+					m.Progress.TokensReceived = output
+					m.Progress.TotalCost = cost
 			}
 		}
 		m.Progress.LastToolUseID = ""

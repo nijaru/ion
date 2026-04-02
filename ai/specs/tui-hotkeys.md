@@ -9,14 +9,13 @@ Source of truth for inline TUI key semantics.
 - `Up` / `Down`: history only when the cursor is at the start/end boundary where recall makes sense
 
 ## Safety
-- `Esc`: if a turn is running, cancel it. If idle with non-empty input, double-tap to clear input.
+- `Esc`: cancel a running turn. Otherwise it does nothing.
 - `Ctrl+C`: if input is non-empty, clear it. If idle and input is empty, double-tap to quit.
 - `Ctrl+D`: if idle and input is empty, double-tap to quit. Never clear input.
 - `Ctrl+C` and `Ctrl+D` do not cancel running turns.
 
 ## Pickers
 - `Ctrl+P`: toggle the primary/fast model preset
-- `Ctrl+T`: open thinking controls
 - `Tab`: cycle picker scope when a picker is open
 - `Shift+Tab`: cycle picker scope in reverse when a picker is open
 - `Esc`, `Ctrl+C`, `Ctrl+D`: close an open picker
@@ -40,6 +39,7 @@ Source of truth for inline TUI key semantics.
   - `primary` and `fast` are the only UI-exposed model presets
   - `summary` stays config-only
   - `Ctrl+P` is the fast model swap accelerator
+  - `/thinking` stays textual for now
   - fuzzy slash commands own the full model/provider selection surface
 
 ## Mode
