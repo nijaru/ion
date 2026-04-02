@@ -34,6 +34,7 @@ Source of truth for inline TUI key semantics.
 
 ## Binding principles
 - Avoid function keys as primary bindings. They are available in many terminals, but they are a weak default on macOS laptops and less reliable through terminal/multiplexer stacks.
+- Avoid relying on `Ctrl+Shift+<letter>` as a primary binding family. Some terminals can distinguish it, but legacy terminal handling often collapses it with the plain `Ctrl+<letter>` chord.
 - Avoid using `Option` / `Alt` as the primary modifier family. Claude Code uses it, but only after terminal-specific setup; that is too fragile for ion's default cross-platform TUI path.
 - Avoid adding more global `Ctrl+<letter>` bindings unless the action is truly core. The composer intentionally preserves common terminal editing keys.
 - Desired state:
