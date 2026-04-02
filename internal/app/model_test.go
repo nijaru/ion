@@ -1515,6 +1515,69 @@ func TestPickerFilteringAcceptsSpaceInput(t *testing.T) {
 	}
 }
 
+func TestModelPickerScopesBetweenFavoritesAndCatalog(t *testing.T) {
+	oldListModelsForConfig := listModelsForConfig
+	listModelsForConfig = func(ctx context.Context, cfg *config.Config) ([]registry.ModelMetadata, error) {
+		if cfg.Provider != "openrouter" {
+			t.Fatalf("provider = %q, want openrouter", cfg.Provider)
+		}
+		return []registry.ModelMetadata{
+			{ID: "vendor/model-a"},
+			{ID: "vendor/model-b"},
+			{ID: "vendor/model-c"},
+		}, nil
+	}
+	defer func() { listModelsForConfig = oldListModelsForConfig }()
+
+	model := readyModel(t)
+	updated, cmd := model.openModelPickerWithConfig(&config.Config{
+		Provider:  "openrouter",
+		Model:     "vendor/model-b",
+		FastModel: "vendor/model-a",
+	})
+	model = updated
+	if cmd != nil {
+		t.Fatalf("openModelPickerWithConfig returned unexpected command %T", cmd)
+	}
+	if model.Picker.Overlay == nil {
+		t.Fatal("expected model picker overlay")
+	}
+	if model.Picker.Overlay.scope != pickerScopeFavorites {
+		t.Fatalf("scope = %v, want favorites", model.Picker.Overlay.scope)
+	}
+	items := pickerDisplayItems(model.Picker.Overlay)
+	if len(items) != 2 {
+		t.Fatalf("favorites item count = %d, want 2", len(items))
+	}
+	if items[0].Group != "Primary" || items[1].Group != "Fast" {
+		t.Fatalf("favorites groups = [%q %q], want [Primary Fast]", items[0].Group, items[1].Group)
+	}
+	if items[0].Value != "vendor/model-b" || items[1].Value != "vendor/model-a" {
+		t.Fatalf("favorites values = [%q %q], want [vendor/model-b vendor/model-a]", items[0].Value, items[1].Value)
+	}
+
+	selected := items[model.Picker.Overlay.index].Value
+	model, _ = model.switchModelPickerScope(1)
+	if model.Picker.Overlay.scope != pickerScopeCatalog {
+		t.Fatalf("scope after tab = %v, want catalog", model.Picker.Overlay.scope)
+	}
+	items = pickerDisplayItems(model.Picker.Overlay)
+	if len(items) <= 2 {
+		t.Fatalf("catalog item count = %d, want a larger catalog scope", len(items))
+	}
+	if got := items[model.Picker.Overlay.index].Value; got != selected {
+		t.Fatalf("selected item after scope switch = %q, want %q", got, selected)
+	}
+
+	rendered := ansi.Strip(model.renderPicker())
+	if !strings.Contains(rendered, "Scope:") || !strings.Contains(rendered, "Favorites") || !strings.Contains(rendered, "All models") {
+		t.Fatalf("rendered picker missing scope tabs: %q", rendered)
+	}
+	if !strings.Contains(rendered, "Primary") || !strings.Contains(rendered, "Fast") {
+		t.Fatalf("rendered picker missing favorite group labels: %q", rendered)
+	}
+}
+
 func TestQueuedFollowUpSubmitsAfterTurnFinished(t *testing.T) {
 	sess := &stubSession{events: make(chan session.Event)}
 	model := readyModel(t)
