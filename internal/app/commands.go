@@ -307,26 +307,15 @@ func (m Model) openModelPickerWithConfig(cfg *config.Config) (Model, tea.Cmd) {
 		return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
 	}
 	favorites := m.modelPickerFavoriteItems(cfg, items)
-	scopeItems := map[pickerScope][]pickerItem{
-		pickerScopeCatalog: m.modelPickerCatalogItems(items, favorites),
-	}
-	if len(favorites) > 0 {
-		scopeItems[pickerScopeFavorites] = favorites
-	}
-	scope := pickerScopeCatalog
-	if len(scopeItems[pickerScopeFavorites]) > 0 {
-		scope = pickerScopeFavorites
-	}
-	scopeList := scopeItems[scope]
+	catalog := m.modelPickerCatalogItems(items, favorites)
+	combined := append(clonePickerItems(favorites), catalog...)
 	m.Picker.Overlay = &pickerOverlayState{
-		title:      "Pick a " + m.activePresetTitle() + " model for " + cfg.Provider,
-		items:      clonePickerItems(scopeList),
-		filtered:   clonePickerItems(scopeList),
-		index:      pickerIndex(scopeList, runtimeCfg.Model),
-		purpose:    pickerPurposeModel,
-		scope:      scope,
-		scopeItems: scopeItems,
-		cfg:        cfg,
+		title:    "Pick a " + m.activePresetTitle() + " model for " + cfg.Provider,
+		items:    combined,
+		filtered: clonePickerItems(combined),
+		index:    pickerIndex(combined, runtimeCfg.Model),
+		purpose:  pickerPurposeModel,
+		cfg:      cfg,
 	}
 	return m, nil
 }
@@ -354,7 +343,8 @@ func helpText() string {
 		"",
 		"  Ctrl+M           toggle primary/fast preset",
 		"  Ctrl+T           thinking picker",
-		"  Tab              cycle picker scope",
+		"  Tab              swap provider/model pickers",
+		"  1 / 2            select favorite model in the model picker",
 		"  Shift+Tab        cycle READ → EDIT → YOLO",
 		"  Esc              cancel running turn",
 		"  Up / Down        command history",
@@ -429,19 +419,22 @@ func (m Model) modelPickerFavoriteItems(cfg *config.Config, all []pickerItem) []
 		return nil
 	case primaryModel != "" && strings.EqualFold(primaryModel, fastModel):
 		item := m.modelPickerFavoriteItem(all, primaryModel)
-		item.Group = "Primary / Fast"
+		item.Group = "Favorites"
+		item.Detail = "Primary / Fast"
 		return []pickerItem{item}
 	}
 
 	favorites := make([]pickerItem, 0, 2)
 	if primaryModel != "" {
 		item := m.modelPickerFavoriteItem(all, primaryModel)
-		item.Group = "Primary"
+		item.Group = "Favorites"
+		item.Detail = "Primary"
 		favorites = append(favorites, item)
 	}
 	if fastModel != "" {
 		item := m.modelPickerFavoriteItem(all, fastModel)
-		item.Group = "Fast"
+		item.Group = "Favorites"
+		item.Detail = "Fast"
 		favorites = append(favorites, item)
 	}
 	return favorites
@@ -463,7 +456,6 @@ func (m Model) modelPickerCatalogItems(all, favorites []pickerItem) []pickerItem
 			continue
 		}
 		seen[key] = struct{}{}
-		catalog = append(catalog, item)
 	}
 	for _, item := range all {
 		if item.Value == "" {
@@ -473,6 +465,7 @@ func (m Model) modelPickerCatalogItems(all, favorites []pickerItem) []pickerItem
 		if _, ok := seen[key]; ok {
 			continue
 		}
+		item.Group = "All models"
 		catalog = append(catalog, item)
 	}
 	return catalog
@@ -490,64 +483,46 @@ func (m Model) modelPickerFavoriteItem(all []pickerItem, model string) pickerIte
 	}
 }
 
-func (m Model) switchModelPickerScope(delta int) (Model, tea.Cmd) {
+func (m Model) selectModelPickerFavorite(index int) (Model, tea.Cmd) {
 	if m.Picker.Overlay == nil || m.Picker.Overlay.purpose != pickerPurposeModel {
 		return m, nil
 	}
-	if len(m.Picker.Overlay.scopeItems) == 0 {
+	if m.Picker.Overlay.query != "" {
 		return m, nil
 	}
-
-	available := make([]pickerScope, 0, 2)
-	if len(m.Picker.Overlay.scopeItems[pickerScopeFavorites]) > 0 {
-		available = append(available, pickerScopeFavorites)
-	}
-	if len(m.Picker.Overlay.scopeItems[pickerScopeCatalog]) > 0 {
-		available = append(available, pickerScopeCatalog)
-	}
-	if len(available) <= 1 {
-		return m, nil
-	}
-
-	currentIdx := slicesIndex(available, m.Picker.Overlay.scope)
-	if currentIdx < 0 {
-		currentIdx = 0
-	}
-	nextIdx := (currentIdx + delta) % len(available)
-	if nextIdx < 0 {
-		nextIdx += len(available)
-	}
-
-	selectedValue := ""
-	if items := pickerDisplayItems(m.Picker.Overlay); len(items) > 0 {
-		selectedValue = items[m.Picker.Overlay.index].Value
-	}
-
-	m.Picker.Overlay.scope = available[nextIdx]
-	m.Picker.Overlay.items = clonePickerItems(m.Picker.Overlay.scopeItems[m.Picker.Overlay.scope])
-	refreshPickerFilter(&m)
-
-	items := pickerDisplayItems(m.Picker.Overlay)
-	switch {
-	case selectedValue != "":
-		if idx := pickerIndex(items, selectedValue); idx < len(items) && strings.EqualFold(items[idx].Value, selectedValue) {
-			m.Picker.Overlay.index = idx
-			return m, nil
+	favorites := 0
+	for i, item := range m.Picker.Overlay.items {
+		if item.Group != "Favorites" {
+			continue
 		}
-	}
-	if len(items) > 0 {
-		m.Picker.Overlay.index = 0
+		if favorites == index {
+			m.Picker.Overlay.index = i
+			return m.commitPickerSelection()
+		}
+		favorites++
 	}
 	return m, nil
 }
 
-func slicesIndex[T comparable](values []T, target T) int {
-	for i, value := range values {
-		if value == target {
-			return i
-		}
+func (m Model) modelPickerFavoritesFromOverlay() []pickerItem {
+	if m.Picker.Overlay == nil || len(m.Picker.Overlay.items) == 0 {
+		return nil
 	}
-	return -1
+	favorites := make([]pickerItem, 0, 2)
+	for _, item := range m.Picker.Overlay.items {
+		if item.Group != "Favorites" {
+			continue
+		}
+		favorites = append(favorites, item)
+	}
+	return favorites
+}
+
+func togglePreset(p modelPreset) modelPreset {
+	if p == presetFast {
+		return presetPrimary
+	}
+	return presetFast
 }
 
 func normalizeThinkingValue(value string) string {
@@ -602,12 +577,22 @@ func (m Model) handlePickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.Picker.Overlay.purpose == pickerPurposeModel {
-			return m.switchModelPickerScope(1)
+			return m.openProviderPickerWithConfig(m.Picker.Overlay.cfg)
 		}
 		return m, nil
-	case "shift+tab":
+	case "ctrl+m":
 		if m.Picker.Overlay.purpose == pickerPurposeModel {
-			return m.switchModelPickerScope(-1)
+			return m.switchPresetCommand(togglePreset(m.activePreset()))
+		}
+		return m, nil
+	case "1":
+		if m.Picker.Overlay.purpose == pickerPurposeModel && m.Picker.Overlay.query == "" {
+			return m.selectModelPickerFavorite(0)
+		}
+		return m, nil
+	case "2":
+		if m.Picker.Overlay.purpose == pickerPurposeModel && m.Picker.Overlay.query == "" {
+			return m.selectModelPickerFavorite(1)
 		}
 		return m, nil
 	case "up":

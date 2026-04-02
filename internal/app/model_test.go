@@ -1515,7 +1515,7 @@ func TestPickerFilteringAcceptsSpaceInput(t *testing.T) {
 	}
 }
 
-func TestModelPickerScopesBetweenFavoritesAndCatalog(t *testing.T) {
+func TestModelPickerListsFavoritesAtTop(t *testing.T) {
 	oldListModelsForConfig := listModelsForConfig
 	listModelsForConfig = func(ctx context.Context, cfg *config.Config) ([]registry.ModelMetadata, error) {
 		if cfg.Provider != "openrouter" {
@@ -1542,39 +1542,110 @@ func TestModelPickerScopesBetweenFavoritesAndCatalog(t *testing.T) {
 	if model.Picker.Overlay == nil {
 		t.Fatal("expected model picker overlay")
 	}
-	if model.Picker.Overlay.scope != pickerScopeFavorites {
-		t.Fatalf("scope = %v, want favorites", model.Picker.Overlay.scope)
-	}
 	items := pickerDisplayItems(model.Picker.Overlay)
-	if len(items) != 2 {
-		t.Fatalf("favorites item count = %d, want 2", len(items))
+	if len(items) != 3 {
+		t.Fatalf("item count = %d, want 3", len(items))
 	}
-	if items[0].Group != "Primary" || items[1].Group != "Fast" {
-		t.Fatalf("favorites groups = [%q %q], want [Primary Fast]", items[0].Group, items[1].Group)
+	if items[0].Group != "Favorites" || items[1].Group != "Favorites" {
+		t.Fatalf("favorites groups = [%q %q], want [Favorites Favorites]", items[0].Group, items[1].Group)
+	}
+	if items[0].Detail != "Primary" || items[1].Detail != "Fast" {
+		t.Fatalf("favorites details = [%q %q], want [Primary Fast]", items[0].Detail, items[1].Detail)
 	}
 	if items[0].Value != "vendor/model-b" || items[1].Value != "vendor/model-a" {
 		t.Fatalf("favorites values = [%q %q], want [vendor/model-b vendor/model-a]", items[0].Value, items[1].Value)
 	}
-
-	selected := items[model.Picker.Overlay.index].Value
-	model, _ = model.switchModelPickerScope(1)
-	if model.Picker.Overlay.scope != pickerScopeCatalog {
-		t.Fatalf("scope after tab = %v, want catalog", model.Picker.Overlay.scope)
-	}
-	items = pickerDisplayItems(model.Picker.Overlay)
-	if len(items) <= 2 {
-		t.Fatalf("catalog item count = %d, want a larger catalog scope", len(items))
-	}
-	if got := items[model.Picker.Overlay.index].Value; got != selected {
-		t.Fatalf("selected item after scope switch = %q, want %q", got, selected)
+	if items[2].Group != "All models" {
+		t.Fatalf("catalog group = %q, want All models", items[2].Group)
 	}
 
 	rendered := ansi.Strip(model.renderPicker())
-	if !strings.Contains(rendered, "Scope:") || !strings.Contains(rendered, "Favorites") || !strings.Contains(rendered, "All models") {
-		t.Fatalf("rendered picker missing scope tabs: %q", rendered)
+	if !strings.Contains(rendered, "Favorites") || !strings.Contains(rendered, "All models") {
+		t.Fatalf("rendered picker missing model groups: %q", rendered)
 	}
 	if !strings.Contains(rendered, "Primary") || !strings.Contains(rendered, "Fast") {
 		t.Fatalf("rendered picker missing favorite group labels: %q", rendered)
+	}
+}
+
+func TestModelPickerFavoriteShortcutSelectsPrimary(t *testing.T) {
+	oldListModelsForConfig := listModelsForConfig
+	listModelsForConfig = func(ctx context.Context, cfg *config.Config) ([]registry.ModelMetadata, error) {
+		if cfg.Provider != "openrouter" {
+			t.Fatalf("provider = %q, want openrouter", cfg.Provider)
+		}
+		return []registry.ModelMetadata{
+			{ID: "vendor/model-a"},
+			{ID: "vendor/model-b"},
+			{ID: "vendor/model-c"},
+		}, nil
+	}
+	defer func() { listModelsForConfig = oldListModelsForConfig }()
+
+	model := readyModel(t)
+	model.Model.Backend = stubBackend{
+		sess:     &stubSession{events: make(chan session.Event)},
+		provider: "openrouter",
+		model:    "vendor/model-b",
+	}
+	model.Picker.Overlay = &pickerOverlayState{
+		title: "Pick a model for openrouter",
+		items: []pickerItem{
+			{Label: "vendor/model-b", Value: "vendor/model-b", Group: "Favorites", Detail: "Primary"},
+			{Label: "vendor/model-a", Value: "vendor/model-a", Group: "Favorites", Detail: "Fast"},
+			{Label: "vendor/model-c", Value: "vendor/model-c", Group: "All models"},
+		},
+		filtered: []pickerItem{
+			{Label: "vendor/model-b", Value: "vendor/model-b", Group: "Favorites", Detail: "Primary"},
+			{Label: "vendor/model-a", Value: "vendor/model-a", Group: "Favorites", Detail: "Fast"},
+			{Label: "vendor/model-c", Value: "vendor/model-c", Group: "All models"},
+		},
+		index:   0,
+		purpose: pickerPurposeModel,
+		cfg:     &config.Config{Provider: "openrouter"},
+	}
+
+	updated, cmd := model.handlePickerKey(tea.KeyPressMsg{Text: "1", Code: '1'})
+	model = updated
+	if cmd == nil {
+		t.Fatal("expected favorite shortcut to return a command")
+	}
+	msg := cmd()
+	next, _ := model.Update(msg)
+	model = next.(Model)
+
+	if model.Picker.Overlay != nil {
+		t.Fatal("expected picker to close after favorite selection")
+	}
+	if got := model.Model.Backend.Model(); got != "vendor/model-b" {
+		t.Fatalf("backend model = %q, want vendor/model-b", got)
+	}
+}
+
+func TestModelPickerTabReturnsToProviderPicker(t *testing.T) {
+	model := readyModel(t)
+	model.Picker.Overlay = &pickerOverlayState{
+		title: "Pick a model for openrouter",
+		items: []pickerItem{
+			{Label: "vendor/model-b", Value: "vendor/model-b", Group: "Favorites", Detail: "Primary"},
+			{Label: "vendor/model-a", Value: "vendor/model-a", Group: "Favorites", Detail: "Fast"},
+		},
+		filtered: []pickerItem{
+			{Label: "vendor/model-b", Value: "vendor/model-b", Group: "Favorites", Detail: "Primary"},
+			{Label: "vendor/model-a", Value: "vendor/model-a", Group: "Favorites", Detail: "Fast"},
+		},
+		purpose: pickerPurposeModel,
+		cfg:     &config.Config{Provider: "openrouter"},
+	}
+
+	updated, _ := model.handlePickerKey(tea.KeyPressMsg{Code: tea.KeyTab})
+	model = updated
+
+	if model.Picker.Overlay == nil {
+		t.Fatal("expected provider picker to open")
+	}
+	if model.Picker.Overlay.purpose != pickerPurposeProvider {
+		t.Fatalf("picker purpose = %v, want provider picker", model.Picker.Overlay.purpose)
 	}
 }
 

@@ -16,10 +16,10 @@ Source of truth for inline TUI key semantics.
 - `Ctrl+C` and `Ctrl+D` do not cancel running turns.
 
 ## Pickers
-- `Ctrl+M`: toggle the primary/fast model preset
+- `Ctrl+M`: toggle the primary/fast model preset; when the model picker is open, it switches which preset slot will be updated
 - `Ctrl+T`: open thinking controls
-- `Tab`: cycle picker scope when a picker is open; the model picker uses Favorites / All models scopes
-- `Shift+Tab`: cycle picker scope in reverse when a picker is open
+- `Tab`: swap between the provider picker and the model picker
+- `1` / `2`: select the first or second favorite in the model picker when search is empty
 - `Esc`, `Ctrl+C`, `Ctrl+D`: close an open picker
 
 ## Slash Commands
@@ -40,8 +40,10 @@ Source of truth for inline TUI key semantics.
 - Desired state:
   - `primary` and `fast` are the only UI-exposed model presets
   - `summary` stays config-only
-  - `Ctrl+M` is the fast model swap accelerator
+  - `Ctrl+M` toggles the active preset slot
   - `Ctrl+T` opens thinking controls
+  - the model picker keeps Favorites at the top and uses direct favorite shortcuts inside the picker
+  - `Tab` swaps provider/model pickers
   - fuzzy slash commands own the full model/provider selection surface
 
 ## Mode
