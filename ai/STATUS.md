@@ -24,7 +24,7 @@ Design rule:
 1. **`tk-f1cn`** — Canto/Ion Architectural Alignment: PolicyEngine Migration
 2. **`tk-7kga`** — Stabilize inline agent loop and TUI
 3. **`tk-4ft8`** — Canto Context Governor
-4. **`tk-di6d`** — Model selector: provider/model tabs and favorite shortcuts
+4. **`tk-di6d`** — Model selector: provider/model tabs and favorites-at-top layout
 5. **`tk-4ywr`** — Sessions: lightweight titles and summaries
 6. **`tk-5vrj`** — Subagents: runtime semantics and lifecycle
 7. **`tk-arhu`** — Subagents: inline Plane B presentation
@@ -36,7 +36,7 @@ Design rule:
 - [x] **Architecture Review** — SOTA alignment with Claude Code and Pi-mono. Defined Layer 3 (Canto) and Layer 4 (Ion) boundaries.
 - [x] **Pi + Claude guardrails (`tk-y8aj`)** — Captured the ion-actionable patterns and the non-goals so future redesigns stay Go/Bubble Tea idiomatic.
 - [x] **TUI hotkeys and model presets (`tk-y64w`)** — Primary/fast toggle, explicit `/primary` and `/fast` commands, and fast/summary config slots wired through the TUI.
-- [x] **TUI model selector favorites (`tk-k8g4`)** — Initial model-selector scope-tab pass was superseded by the current provider/model picker with favorites at the top and direct favorite shortcuts.
+- [x] **TUI model selector favorites (`tk-k8g4`)** — Initial model-selector scope-tab pass was superseded by the current provider/model picker with favorites at the top.
 - [x] **Approval UX Spec** — 3-mode design (READ/EDIT/YOLO) documented.
 - [x] **Agent Compaction Tool (`tk-pw3s`)** — `compact` tool implemented in Ion.
 - [x] **RPC/print mode (`tk-r1wx`)** — One-shot query mode and JSONL-friendly scripting surface implemented.
@@ -54,7 +54,7 @@ Design rule:
 - `tk-4ywr` [p3 open] Sessions: lightweight titles and summaries (storage + picker wiring done; terminal title later if needed)
 - `tk-5vrj` [p3 open] Subagents: runtime semantics and lifecycle
 - `tk-kz3k` [p2 done] Runtime: define retry behavior for provider errors
-- `tk-di6d` [p3 open] Model selector: provider/model tabs and favorite shortcuts
+- `tk-di6d` [p3 open] Model selector: provider/model tabs and favorites-at-top layout
 - `tk-arhu` [p4 open] Subagents: inline Plane B presentation
 - `tk-pwsl` [p4 open] Swarm mode: alternate-screen operator view
 

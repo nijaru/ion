@@ -112,7 +112,6 @@ Model picker rules:
 
 - the model picker keeps `Favorites` at the top of the list
 - `Favorites` surfaces the current primary and fast preset models
-- `1` / `2` can select the first or second favorite when the picker is open and not filtering
 - `Tab` swaps between provider and model pickers
 
 ## Model discovery

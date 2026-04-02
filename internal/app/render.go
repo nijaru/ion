@@ -151,9 +151,6 @@ func (m Model) renderPicker() string {
 
 func (m Model) renderPickerHelpText() string {
 	if m.Picker.Overlay != nil && m.Picker.Overlay.purpose == pickerPurposeModel {
-		if len(m.modelPickerFavoritesFromOverlay()) > 0 {
-			return "Type to search • 1/2 favorites • Tab swap provider/model • ↑/↓ navigate • Enter select • Esc cancel"
-		}
 		return "Type to search • Tab swap provider/model • ↑/↓ navigate • Enter select • Esc cancel"
 	}
 	return "Type to search • ↑/↓ navigate • Enter select • Esc cancel"
