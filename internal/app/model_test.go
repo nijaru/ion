@@ -585,6 +585,7 @@ func TestEscCancelsRunningTurn(t *testing.T) {
 	model := readyModel(t)
 	model.Model.Session = sess
 	model.InFlight.Thinking = true
+	model.Input.Composer.SetValue("draft")
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	model = updated.(Model)
@@ -597,37 +598,8 @@ func TestEscCancelsRunningTurn(t *testing.T) {
 	if model.InFlight.Thinking {
 		t.Fatal("thinking should be false after esc cancel")
 	}
-}
-
-func TestEscDoubleTapClearsComposer(t *testing.T) {
-	model := readyModel(t)
-	model.Input.Composer.SetValue("draft")
-
-	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
-	model = updated.(Model)
-	if cmd == nil {
-		t.Fatal("first esc should arm clear timeout")
-	}
-	if !model.Input.EscPending {
-		t.Fatal("expected escPending after first esc")
-	}
-	if line := ansi.Strip(model.statusLine()); !strings.Contains(
-		line,
-		"Press Esc again to clear input",
-	) {
-		t.Fatalf("status line = %q, want esc hint", line)
-	}
 	if got := model.Input.Composer.Value(); got != "draft" {
 		t.Fatalf("composer = %q, want unchanged", got)
-	}
-
-	updated, cmd = model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
-	model = updated.(Model)
-	if cmd != nil {
-		t.Fatal("second esc should clear without extra cmd")
-	}
-	if got := model.Input.Composer.Value(); got != "" {
-		t.Fatalf("composer = %q, want cleared", got)
 	}
 }
 
@@ -719,20 +691,14 @@ func TestComposerLayoutReflowsAfterHistoryRecall(t *testing.T) {
 	}
 }
 
-func TestCtrlTOpensThinkingPicker(t *testing.T) {
+func TestCtrlTIsNotBoundToThinkingPicker(t *testing.T) {
 	model := readyModel(t)
 
 	updated, _ := model.Update(tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl})
 	model = updated.(Model)
 
-	if model.Picker.Overlay == nil {
-		t.Fatal("expected thinking picker to open")
-	}
-	if model.Picker.Overlay.purpose != pickerPurposeThinking {
-		t.Fatalf("picker purpose = %v, want thinking", model.Picker.Overlay.purpose)
-	}
-	if got := model.Picker.Overlay.title; got != "Pick a primary thinking level" {
-		t.Fatalf("picker title = %q", got)
+	if model.Picker.Overlay != nil {
+		t.Fatal("ctrl+t should not open a thinking picker")
 	}
 }
 
@@ -1147,7 +1113,6 @@ func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 		"/quit, /exit",
 		"/help",
 		"Ctrl+P",
-		"Ctrl+T",
 		"Tab",
 		"Shift+Tab",
 		"Esc",
