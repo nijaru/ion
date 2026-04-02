@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 
-	ccontext "github.com/nijaru/canto/context"
+	"github.com/nijaru/canto/governor"
 	"github.com/nijaru/canto/llm"
 	"github.com/nijaru/canto/session"
 	"github.com/nijaru/ion/internal/config"
@@ -80,7 +80,7 @@ func (c *Compact) Execute(ctx context.Context, args string) (string, error) {
 		return "", fmt.Errorf("compact: data dir: %w", err)
 	}
 
-	result, err := ccontext.CompactSession(ctx, c.Provider, model, sess, ccontext.CompactOptions{
+	result, err := governor.CompactSession(ctx, c.Provider, model, sess, governor.CompactOptions{
 		MaxTokens:  maxTokens,
 		OffloadDir: filepath.Join(dataDir, "artifacts"),
 		Message:    input.Message,

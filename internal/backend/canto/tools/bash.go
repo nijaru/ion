@@ -16,11 +16,12 @@ import (
 const maxOutputSize = 1024 * 1024 // 1MB
 
 type Bash struct {
-	cwd string
+	cwd    string
+	sandbox SandboxMode
 }
 
 func NewBash(cwd string) *Bash {
-	return &Bash{cwd: cwd}
+	return &Bash{cwd: cwd, sandbox: resolveSandboxMode()}
 }
 
 func (b *Bash) Spec() llm.Spec {
@@ -51,9 +52,17 @@ func (b *Bash) ExecuteStreaming(ctx context.Context, args string, emit func(stri
 	if err := json.Unmarshal([]byte(args), &input); err != nil {
 		return "", err
 	}
-	
-	cmd := exec.CommandContext(ctx, "bash", "-c", input.Command)
-	cmd.Dir = b.cwd
+
+	plan, err := planSandboxedBash(b.cwd, input.Command, b.sandbox)
+	if err != nil {
+		return "", err
+	}
+	if plan.cleanup != nil {
+		defer func() { _ = plan.cleanup() }()
+	}
+
+	cmd := exec.CommandContext(ctx, plan.name, plan.args...)
+	cmd.Dir = plan.dir
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	stdout, err := cmd.StdoutPipe()

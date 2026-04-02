@@ -92,6 +92,7 @@ func (s *cantoStore) init() error {
                         cwd TEXT,
                         model TEXT,
                         branch TEXT,
+                        name TEXT,
                         created_at INTEGER,
                         updated_at INTEGER,
                         last_preview TEXT
@@ -110,14 +111,17 @@ func (s *cantoStore) init() error {
 			return err
 		}
 	}
+	if err := s.ensureColumn("session_meta", "name TEXT"); err != nil {
+		return err
+	}
 	return nil
 }
 func (s *cantoStore) OpenSession(ctx context.Context, cwd, model, branch string) (Session, error) {
 	id := fmt.Sprintf("%d-%s", time.Now().Unix(), ionsession.ShortID())
 
 	_, err := s.db.ExecContext(ctx,
-		"INSERT INTO session_meta (id, cwd, model, branch, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-		id, cwd, model, branch, time.Now().Unix(), time.Now().Unix())
+		"INSERT INTO session_meta (id, cwd, model, branch, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+		id, cwd, model, branch, "", time.Now().Unix(), time.Now().Unix())
 	if err != nil {
 		return nil, err
 	}
@@ -154,7 +158,7 @@ func (s *cantoStore) ResumeSession(ctx context.Context, id string) (Session, err
 
 func (s *cantoStore) ListSessions(ctx context.Context, cwd string) ([]SessionInfo, error) {
 	rows, err := s.db.QueryContext(ctx,
-		"SELECT id, model, branch, created_at, updated_at, last_preview FROM session_meta WHERE cwd = ? ORDER BY updated_at DESC", cwd)
+		"SELECT id, model, branch, created_at, updated_at, name, last_preview FROM session_meta WHERE cwd = ? ORDER BY updated_at DESC", cwd)
 	if err != nil {
 		return nil, err
 	}
@@ -165,11 +169,12 @@ func (s *cantoStore) ListSessions(ctx context.Context, cwd string) ([]SessionInf
 		var si SessionInfo
 		var ca, ua int64
 		var preview sql.NullString
-		if err := rows.Scan(&si.ID, &si.Model, &si.Branch, &ca, &ua, &preview); err != nil {
+		if err := rows.Scan(&si.ID, &si.Model, &si.Branch, &ca, &ua, &si.Title, &preview); err != nil {
 			return nil, err
 		}
 		si.CreatedAt = time.Unix(ca, 0)
 		si.UpdatedAt = time.Unix(ua, 0)
+		si.Summary = preview.String
 		si.LastPreview = preview.String
 		// Note: MessageCount not easily available without querying events table
 		sessions = append(sessions, si)
@@ -223,6 +228,7 @@ func (s *cantoStore) UpdateSession(ctx context.Context, si SessionInfo) error {
 		 SET updated_at = ?,
 		     model = CASE WHEN ? != '' THEN ? ELSE model END,
 		     branch = CASE WHEN ? != '' THEN ? ELSE branch END,
+		     name = CASE WHEN (name IS NULL OR name = '') AND ? != '' THEN ? ELSE name END,
 		     last_preview = CASE WHEN ? != '' THEN ? ELSE last_preview END
 		 WHERE id = ?`,
 		time.Now().Unix(),
@@ -230,10 +236,46 @@ func (s *cantoStore) UpdateSession(ctx context.Context, si SessionInfo) error {
 		si.Model,
 		si.Branch,
 		si.Branch,
+		si.Title,
+		si.Title,
 		si.LastPreview,
 		si.LastPreview,
 		si.ID,
 	)
+	return err
+}
+
+func (s *cantoStore) ensureColumn(table, columnDef string) error {
+	parts := strings.Fields(columnDef)
+	if len(parts) == 0 {
+		return nil
+	}
+	columnName := parts[0]
+
+	rows, err := s.db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			cid     int
+			name    string
+			ctype   string
+			notnull int
+			dflt    sql.NullString
+			pk      int
+		)
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return err
+		}
+		if name == columnName {
+			return nil
+		}
+	}
+
+	_, err = s.db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s", table, columnDef))
 	return err
 }
 
@@ -255,11 +297,13 @@ func (s *cantoSession) Meta() Metadata {
 }
 
 func (s *cantoSession) Append(ctx context.Context, event any) error {
+	var title string
 	var preview string
 	var err error
 	switch e := event.(type) {
 	case User:
-		preview = e.Content
+		title = sessionTitle(e.Content)
+		preview = sessionSummary(e.Content)
 		ev := session.NewEvent(s.id, session.MessageAdded, llm.Message{
 			Role:    llm.RoleUser,
 			Content: e.Content,
@@ -276,7 +320,7 @@ func (s *cantoSession) Append(ctx context.Context, event any) error {
 				reasoning.WriteString(*b.Thinking)
 			}
 		}
-		preview = content.String()
+		preview = sessionSummary(content.String())
 		ev := session.NewEvent(s.id, session.MessageAdded, llm.Message{
 			Role:      llm.RoleAssistant,
 			Content:   preview,
@@ -308,7 +352,7 @@ func (s *cantoSession) Append(ctx context.Context, event any) error {
 			err = lookupErr
 			break
 		}
-		preview = e.Content
+		preview = sessionSummary(e.Content)
 		msg := llm.Message{
 			Role:    llm.RoleTool,
 			Content: e.Content,
@@ -319,6 +363,13 @@ func (s *cantoSession) Append(ctx context.Context, event any) error {
 	case Status:
 		ev := session.NewEvent(s.id, session.EventType("status_changed"), map[string]any{
 			"status": e.Status,
+		})
+		err = s.store.canto.Save(ctx, ev)
+	case System:
+		preview = ""
+		ev := session.NewEvent(s.id, session.MessageAdded, llm.Message{
+			Role:    llm.RoleSystem,
+			Content: e.Content,
 		})
 		err = s.store.canto.Save(ctx, ev)
 	case TokenUsage:
@@ -336,7 +387,7 @@ func (s *cantoSession) Append(ctx context.Context, event any) error {
 		return err
 	}
 
-	return s.store.UpdateSession(ctx, SessionInfo{ID: s.id, LastPreview: preview})
+	return s.store.UpdateSession(ctx, SessionInfo{ID: s.id, Title: title, Summary: preview, LastPreview: preview})
 }
 
 func (s *cantoSession) toolNameForUseID(ctx context.Context, toolUseID string) (string, error) {

@@ -11,6 +11,7 @@ import (
 
 	"github.com/nijaru/canto/agent"
 	ccontext "github.com/nijaru/canto/context"
+	"github.com/nijaru/canto/governor"
 	"github.com/nijaru/canto/hook"
 	"github.com/nijaru/canto/llm"
 	cproviders "github.com/nijaru/canto/llm/providers"
@@ -37,10 +38,11 @@ type Backend struct {
 	cfg    *config.Config
 	llm    llm.Provider
 
-	ionStore storage.Store
-	sess     storage.Session
-	memory   *memory.Manager
-	tools    *tool.Registry
+	ionStore   storage.Store
+	sess       storage.Session
+	memory     *memory.Manager
+	tools      *tool.Registry
+	compactLLM llm.Provider
 
 	mu        sync.Mutex
 	cancel    context.CancelFunc
@@ -172,7 +174,19 @@ func (b *Backend) Open(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	b.llm = p
+	if _, ok := p.(*llm.RetryProvider); !ok {
+		p = llm.NewRetryProvider(p)
+	}
+	b.compactLLM = p
+	runtimeProvider := governor.NewRecoveryProvider(p, func(ctx context.Context) error {
+		b.events <- ionsession.StatusChanged{Status: "Compacting context..."}
+		_, err := b.Compact(ctx)
+		if err == nil {
+			b.events <- ionsession.StatusChanged{Status: "Thinking..."}
+		}
+		return err
+	})
+	b.llm = runtimeProvider
 
 	cwd := b.Meta()["cwd"]
 	if cwd == "" {
@@ -221,7 +235,7 @@ func (b *Backend) Open(ctx context.Context) error {
 		Role:      memory.RoleSemantic,
 	})
 	registry.Register(tools.NewCompact(
-		b.store, b.llm,
+		b.store, b.compactLLM,
 		b.Model, b.ContextLimit, b.ID,
 	))
 
@@ -236,7 +250,7 @@ func (b *Backend) Open(ctx context.Context) error {
 		reasoningEffortProcessor(b.cfg),
 	}
 
-	b.agent = agent.New("ion", instructions, modelName, p, registry,
+	b.agent = agent.New("ion", instructions, modelName, runtimeProvider, registry,
 		agent.WithHooks(policyHook(b)),
 		agent.WithRequestProcessors(requestProcessors...),
 	)
@@ -685,7 +699,7 @@ func (b *Backend) AllowCategory(toolName string) {
 func (b *Backend) Compact(ctx context.Context) (bool, error) {
 	b.mu.Lock()
 	store := b.store
-	provider := b.llm
+	provider := b.compactLLM
 	sessionID := b.ID()
 	model := b.Model()
 	maxTokens := b.ContextLimit()
@@ -695,7 +709,7 @@ func (b *Backend) Compact(ctx context.Context) (bool, error) {
 		return false, fmt.Errorf("backend store not initialized")
 	}
 	if provider == nil {
-		return false, fmt.Errorf("backend provider not initialized")
+		return false, fmt.Errorf("backend compaction provider not initialized")
 	}
 	if sessionID == "" {
 		return false, fmt.Errorf("session not initialized")
@@ -717,7 +731,7 @@ func (b *Backend) Compact(ctx context.Context) (bool, error) {
 		return false, err
 	}
 
-	result, err := ccontext.CompactSession(ctx, provider, model, sess, ccontext.CompactOptions{
+	result, err := governor.CompactSession(ctx, provider, model, sess, governor.CompactOptions{
 		MaxTokens:  maxTokens,
 		OffloadDir: filepath.Join(dataDir, "artifacts"),
 	})

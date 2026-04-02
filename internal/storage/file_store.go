@@ -64,7 +64,7 @@ func (s *fileStore) OpenSession(ctx context.Context, cwd, model, branch string) 
 	}
 
 	// Initial index entry
-	if err := s.updateIndex(dir, id, fileName, model, branch, meta.CreatedAt, time.Now().Unix(), ""); err != nil {
+	if err := s.updateIndex(dir, id, fileName, model, branch, meta.CreatedAt, time.Now().Unix(), "", ""); err != nil {
 		f.Close()
 		return nil, fmt.Errorf("initial index update: %w", err)
 	}
@@ -130,7 +130,7 @@ func (s *fileStore) ListSessions(ctx context.Context, cwd string) ([]SessionInfo
 		return nil, err
 	}
 
-	rows, err := db.QueryContext(ctx, "SELECT id, model, branch, created_at, updated_at, message_count, last_preview FROM sessions ORDER BY updated_at DESC")
+	rows, err := db.QueryContext(ctx, "SELECT id, model, branch, created_at, updated_at, message_count, name, last_preview FROM sessions ORDER BY updated_at DESC")
 	if err != nil {
 		return nil, nil
 	}
@@ -140,11 +140,12 @@ func (s *fileStore) ListSessions(ctx context.Context, cwd string) ([]SessionInfo
 	for rows.Next() {
 		var si SessionInfo
 		var ca, ua int64
-		if err := rows.Scan(&si.ID, &si.Model, &si.Branch, &ca, &ua, &si.MessageCount, &si.LastPreview); err != nil {
+		if err := rows.Scan(&si.ID, &si.Model, &si.Branch, &ca, &ua, &si.MessageCount, &si.Title, &si.LastPreview); err != nil {
 			return nil, err
 		}
 		si.CreatedAt = time.Unix(ca, 0)
 		si.UpdatedAt = time.Unix(ua, 0)
+		si.Summary = si.LastPreview
 		sessions = append(sessions, si)
 	}
 	return sessions, nil
@@ -230,20 +231,21 @@ func (s *fileStore) dirFor(cwd string) string {
 	return filepath.Join(s.root, "sessions", encoded)
 }
 
-func (s *fileStore) updateIndex(dir, id, fileName, model, branch string, createdAt, updatedAt int64, preview string) error {
+func (s *fileStore) updateIndex(dir, id, fileName, model, branch string, createdAt, updatedAt int64, title, preview string) error {
 	db, err := s.openIndexDB(dir)
 	if err != nil {
 		return err
 	}
 
 	_, err = db.Exec(`
-		INSERT INTO sessions (id, file_name, model, branch, created_at, updated_at, message_count, last_preview)
-		VALUES (?, ?, ?, ?, ?, ?, 1, ?)
+		INSERT INTO sessions (id, file_name, model, branch, created_at, updated_at, message_count, name, last_preview)
+		VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			updated_at = excluded.updated_at,
 			message_count = sessions.message_count + 1,
+			name = CASE WHEN sessions.name IS NULL OR sessions.name = '' THEN excluded.name ELSE sessions.name END,
 			last_preview = CASE WHEN excluded.last_preview != '' THEN excluded.last_preview ELSE sessions.last_preview END
-	`, id, fileName, model, branch, createdAt, updatedAt, preview)
+	`, id, fileName, model, branch, createdAt, updatedAt, title, preview)
 	return err
 }
 
@@ -352,17 +354,19 @@ func (s *fileSession) Append(ctx context.Context, event any) error {
 	}
 
 	// Update index if this event should affect recency.
+	var title string
 	var preview string
 	var touchIndex bool
 
 	switch e := event.(type) {
 	case User:
-		preview = e.Content
+		title = sessionTitle(e.Content)
+		preview = sessionSummary(e.Content)
 		touchIndex = true
 	case Agent:
 		for _, b := range e.Content {
 			if b.Type == "text" && b.Text != nil {
-				preview = *b.Text
+				preview = sessionSummary(*b.Text)
 				break
 			}
 		}
@@ -373,7 +377,7 @@ func (s *fileSession) Append(ctx context.Context, event any) error {
 
 	if touchIndex {
 		dir := filepath.Dir(s.path)
-		if err := s.store.updateIndex(dir, s.meta.ID, filepath.Base(s.path), s.meta.Model, s.meta.Branch, s.meta.CreatedAt, time.Now().Unix(), preview); err != nil {
+		if err := s.store.updateIndex(dir, s.meta.ID, filepath.Base(s.path), s.meta.Model, s.meta.Branch, s.meta.CreatedAt, time.Now().Unix(), title, preview); err != nil {
 			return fmt.Errorf("update index: %w", err)
 		}
 	}

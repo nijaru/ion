@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/nijaru/ion/internal/session"
@@ -75,6 +76,8 @@ type SessionInfo struct {
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 	MessageCount int       `json:"message_count"`
+	Title        string    `json:"title"`
+	Summary      string    `json:"summary"`
 	LastPreview  string    `json:"last_preview"`
 }
 
@@ -99,6 +102,12 @@ type (
 		Type   string `json:"type"` // "status"
 		Status string `json:"status"`
 		TS     int64  `json:"ts"`
+	}
+
+	System struct {
+		Type    string `json:"type"` // "system"
+		Content string `json:"content"`
+		TS      int64  `json:"ts"`
 	}
 
 	Agent struct {
@@ -137,3 +146,30 @@ type (
 		Thinking *string `json:"thinking,omitempty"`
 	}
 )
+
+func sessionTitle(text string) string {
+	return compactSessionText(text, 72)
+}
+
+func sessionSummary(text string) string {
+	return compactSessionText(text, 120)
+}
+
+func compactSessionText(text string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+	text = strings.NewReplacer("\r", " ", "\n", " ").Replace(text)
+	text = strings.Join(strings.Fields(text), " ")
+	if len(text) <= max {
+		return text
+	}
+	if max <= 1 {
+		return text[:max]
+	}
+	return text[:max-1] + "…"
+}

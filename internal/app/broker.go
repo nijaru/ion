@@ -61,6 +61,7 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 	case session.TurnStarted:
 		m.InFlight.Thinking = true
 		m.Progress.Mode = stateIonizing
+		m.Progress.LastError = ""
 		m.Progress.TurnStartedAt = time.Now()
 		m.Progress.CurrentTurnInput = 0
 		m.Progress.CurrentTurnOutput = 0
@@ -250,11 +251,13 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 	case session.Error:
 		m.InFlight.Pending = nil
 		m.Approval.Pending = nil
+		m.InFlight.QueuedTurns = nil
 		m.InFlight.StreamBuf = ""
 		m.InFlight.ReasonBuf = ""
 		m.InFlight.Thinking = false
 		m.Progress.Mode = stateError
 		m.Progress.LastError = msg.Err.Error()
+		m.Progress.LastTurnSummary = turnSummary{}
 		if !m.Progress.TurnStartedAt.IsZero() {
 			m.Progress.LastTurnSummary = turnSummary{
 				Elapsed: time.Since(m.Progress.TurnStartedAt),
@@ -265,6 +268,13 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		}
 		m.Progress.TurnStartedAt = time.Time{}
 		entry := session.Entry{Role: session.System, Content: "Error: " + msg.Err.Error()}
+		if err := m.persistEntry("persist session error", storage.System{
+			Type:    "system",
+			Content: entry.Content,
+			TS:      now(),
+		}); err != nil {
+			return m, persistErrorCmd("persist session error", err)
+		}
 		return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
 	}
 
@@ -315,6 +325,9 @@ func (m Model) submitText(text string) (Model, tea.Cmd) {
 
 	m.Progress.Mode = stateIonizing
 	m.InFlight.Thinking = true
-	m.Model.Session.SubmitTurn(context.Background(), text)
+	if err := m.Model.Session.SubmitTurn(context.Background(), text); err != nil {
+		m, errCmd := m.handleSessionEvent(session.Error{Err: err})
+		return m, tea.Batch(m.printEntries(userEntry), errCmd)
+	}
 	return m, m.printEntries(userEntry)
 }

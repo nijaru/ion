@@ -456,10 +456,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.InFlight.Pending = nil
 		m.Approval.Pending = nil
+		m.InFlight.QueuedTurns = nil
 		m.InFlight.ReasonBuf = ""
 		m.InFlight.StreamBuf = ""
 		m.Progress.Mode = stateReady
 		m.Progress.LastError = ""
+		m.Progress.LastTurnSummary = turnSummary{}
 		m.InFlight.Thinking = false
 		m.Input.CtrlCPending = false
 		m.Input.EscPending = false
