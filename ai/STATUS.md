@@ -14,6 +14,9 @@ Provider work to keep in mind:
 - subscription/OAuth providers need explicit treatment
 - `tk-a4m1` exists only as a later evaluation track for ChatGPT subscription support
 
+Deferred idea to remember:
+- `tk-hase` — auto thinking budget mode, analogous to primary/fast model selection
+
 Design rule:
 - v0.0.0 has no compatibility debt; current bindings and config shapes are allowed to change directly if the end-state is better.
 

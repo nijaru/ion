@@ -127,6 +127,7 @@ Includes:
 - AskUser UI
 - tab completion
 - request cache continuity
+- auto thinking budget mode
 - swarm mode
 - canto upstreaming tasks
 
