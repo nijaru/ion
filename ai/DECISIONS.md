@@ -509,19 +509,19 @@ Append-only history of architectural and design decisions for `ion`.
 
 ---
 
-## 2026-04-02 — TUI: use `Ctrl+X` for external editor handoff
+## 2026-04-02 — TUI: defer editor handoff until the workflow is explicitly needed
 
-**Context:** Composer-to-editor handoff is a core workflow, and it needs a binding that is familiar, terminal-compatible, and distinct from the main model toggle. `Ctrl+P` is already reserved for the primary/fast swap, and we do not want to chase full readline parity.
+**Context:** Composer-to-editor handoff is a useful workflow, but it is not part of the current critical path. The present hotkey surface is already carrying the core daily actions, and the user asked to defer the editor binding decision for now.
 
-**Decision:** Use `Ctrl+X` as the external editor handoff chord. Keep this separate from the model toggle and from slash-command selection surfaces.
+**Decision:** Do not allocate a dedicated editor-handoff chord yet. Leave editor handoff as a deferred workflow until ion needs it strongly enough to justify a keybinding and implementation path.
 
 **Rationale:**
 
-1. **Terminal-native enough:** `Ctrl+X` is a familiar control chord and does not fight the existing safety keys.
-2. **Low collision pressure:** It avoids spending a more important chord on a rare workflow.
-3. **Good separation:** Model switching and editor handoff are different workflows and should not share the same binding.
+1. **Keep the active surface small:** The current work is better spent on core agent stability and model switching.
+2. **Avoid premature binding pressure:** Adding a chord before the workflow is settled risks freezing the wrong choice.
+3. **User-driven priority:** The current request is to defer the feature, not to pick the next-best key.
 
-**Tradeoffs:** It is a single extra global chord, so it must stay reserved for editor handoff and nothing else.
+**Tradeoffs:** Users do not have a one-key editor handoff yet, but that is acceptable because the workflow is not currently prioritized.
 
 ---
 
