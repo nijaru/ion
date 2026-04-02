@@ -67,6 +67,7 @@ Tracked by:
 - `tk-7kga` — stabilize inline agent loop and TUI
 - `tk-4ft8` — context governor / compaction robustness (overflow recovery wired; proactive trigger still under review)
 - `tk-di6d` — model selector provider/model tabs and favorites-at-top layout
+- `tk-9pr1` — model selector page navigation
 - `tk-4ywr` — session titles and lightweight summaries for picker/resume UX
 - `tk-0dwv` — session tree navigation
 - `tk-5vrj` — subagents: runtime semantics and lifecycle
@@ -89,6 +90,7 @@ Product ladder:
 TUI surface:
 - `tk-7kga` — core inline stability
 - `tk-di6d` — model selector provider/model tabs and favorites-at-top layout
+- `tk-9pr1` — model selector page navigation
 - `tk-i207` — status line and context presentation
 - `tk-4ywr` — session titles and lightweight summaries
 - `tk-gmhw` — transcript verbosity controls

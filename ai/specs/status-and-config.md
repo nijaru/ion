@@ -113,6 +113,7 @@ Model picker rules:
 - the model picker keeps `Favorites` at the top of the list
 - `Favorites` surfaces the current primary and fast preset models
 - `Tab` swaps between provider and model pickers
+- `PgUp` / `PgDn` page through long provider/model picker lists
 
 ## Model discovery
 

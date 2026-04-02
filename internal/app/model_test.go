@@ -1595,6 +1595,40 @@ func TestModelPickerTabReturnsToProviderPicker(t *testing.T) {
 	}
 }
 
+func TestModelPickerPageKeysJumpByPage(t *testing.T) {
+	model := readyModel(t)
+	items := make([]pickerItem, 12)
+	for i := range items {
+		value := "model-" + string(rune('a'+i))
+		items[i] = pickerItem{
+			Label:  value,
+			Value:  value,
+			Group:  "All models",
+			Search: pickerSearchIndex(value, value, "", "", nil),
+		}
+	}
+	model.Picker.Overlay = &pickerOverlayState{
+		title:    "Pick a model",
+		items:    items,
+		filtered: slices.Clone(items),
+		index:    0,
+		purpose:  pickerPurposeModel,
+		cfg:      &config.Config{Provider: "openrouter"},
+	}
+
+	updated, _ := model.handlePickerKey(tea.KeyPressMsg{Code: tea.KeyPgDown})
+	model = updated
+	if got := model.Picker.Overlay.index; got != pickerPageSize {
+		t.Fatalf("index after pgdown = %d, want %d", got, pickerPageSize)
+	}
+
+	updated, _ = model.handlePickerKey(tea.KeyPressMsg{Code: tea.KeyPgUp})
+	model = updated
+	if got := model.Picker.Overlay.index; got != 0 {
+		t.Fatalf("index after pgup = %d, want 0", got)
+	}
+}
+
 func TestQueuedFollowUpSubmitsAfterTurnFinished(t *testing.T) {
 	sess := &stubSession{events: make(chan session.Event)}
 	model := readyModel(t)

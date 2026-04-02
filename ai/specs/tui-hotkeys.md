@@ -19,6 +19,7 @@ Source of truth for inline TUI key semantics.
 - `Ctrl+M`: toggle the primary/fast model preset; when the model picker is open, it switches which preset slot will be updated
 - `Ctrl+T`: open thinking controls
 - `Tab`: swap between the provider picker and the model picker
+- `PgUp` / `PgDn`: page through long picker lists
 - `Esc`, `Ctrl+C`, `Ctrl+D`: close an open picker
 
 ## Slash Commands
@@ -43,6 +44,7 @@ Source of truth for inline TUI key semantics.
   - `Ctrl+T` opens thinking controls
   - the model picker keeps Favorites at the top of the list
   - `Tab` swaps provider/model pickers
+  - `PgUp` / `PgDn` page through long picker lists
   - fuzzy slash commands own the full model/provider selection surface
 
 ## Mode

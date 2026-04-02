@@ -25,10 +25,11 @@ Design rule:
 2. **`tk-7kga`** — Stabilize inline agent loop and TUI
 3. **`tk-4ft8`** — Canto Context Governor
 4. **`tk-di6d`** — Model selector: provider/model tabs and favorites-at-top layout
-5. **`tk-4ywr`** — Sessions: lightweight titles and summaries
-6. **`tk-5vrj`** — Subagents: runtime semantics and lifecycle
-7. **`tk-arhu`** — Subagents: inline Plane B presentation
-8. **`tk-pwsl`** — Swarm mode: alternate-screen operator view
+5. **`tk-9pr1`** — Model selector: page navigation
+6. **`tk-4ywr`** — Sessions: lightweight titles and summaries
+7. **`tk-5vrj`** — Subagents: runtime semantics and lifecycle
+8. **`tk-arhu`** — Subagents: inline Plane B presentation
+9. **`tk-pwsl`** — Swarm mode: alternate-screen operator view
 
 ## Completed (Recent)
 - [x] **Modularize Ion TUI (`tk-2b79`)** — Componentized `internal/app/model.go` into `Viewport`, `Input`, `Broker`, `Picker`, and `Progress`.
@@ -51,6 +52,7 @@ Design rule:
 - `tk-8s0h` [p2 done] Sandbox support
 - `tk-7kga` [p2 active] Stabilize inline agent loop and TUI
 - `tk-4ft8` [p2 active] Canto Context Governor (overflow recovery wired; proactive threshold trigger still pending if needed)
+- `tk-9pr1` [p3 open] Model selector: page navigation
 - `tk-4ywr` [p3 open] Sessions: lightweight titles and summaries (storage + picker wiring done; terminal title later if needed)
 - `tk-5vrj` [p3 open] Subagents: runtime semantics and lifecycle
 - `tk-kz3k` [p2 done] Runtime: define retry behavior for provider errors
@@ -95,6 +97,7 @@ Research complete (`ai/research/pi-architecture.md`, `ai/design/cross-pollinatio
 ## Topic Files
 - `ai/specs/tools-and-modes.md` — Permission modes spec (authoritative for tk-k4hv)
 - `ai/specs/swarm-mode-and-inline-subagents.md` — Inline subagent rendering, future swarm mode, and session title/summary direction
+- `ai/specs/tui-hotkeys.md` — Current picker/navigation key semantics
 - `ai/research/approval-ux-survey-2026-03-30.md` — Competitor approval UX research
 - `ai/research/pi-architecture.md` — Pi-mono architecture analysis
 - `ai/research/ion-architecture.md` — Ion architecture analysis
