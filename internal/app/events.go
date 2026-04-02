@@ -47,12 +47,16 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	}
 
 	switch msg.String() {
-	case "ctrl+p":
+	case "ctrl+m":
 		m.clearPendingAction()
 		if m.activePreset() == presetFast {
 			return m.switchPresetCommand(presetPrimary)
 		}
 		return m.switchPresetCommand(presetFast)
+
+	case "ctrl+t":
+		m.clearPendingAction()
+		return m.openThinkingPicker()
 
 	case "ctrl+c":
 		if m.Input.Composer.Value() != "" {
@@ -134,7 +138,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.layout()
 		return m, cmd
 
-	case "up":
+	case "up", "ctrl+p":
 		m.clearPendingAction()
 		if m.Input.Composer.Line() == 0 && len(m.Input.History) > 0 {
 			if m.Input.HistoryIdx == -1 {
@@ -151,7 +155,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.Input.Composer, cmd = m.Input.Composer.Update(msg)
 		return m, cmd
 
-	case "down":
+	case "down", "ctrl+n":
 		m.clearPendingAction()
 		if m.Input.HistoryIdx != -1 {
 			if m.Input.HistoryIdx < len(m.Input.History)-1 {
