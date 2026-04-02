@@ -65,7 +65,7 @@ Tracked by:
 
 Tracked by:
 - `tk-7kga` — stabilize inline agent loop and TUI
-- `tk-4ft8` — context governor / compaction robustness (overflow recovery wired; proactive trigger still under review)
+- `tk-4ft8` — context governor / compaction robustness
 - `tk-di6d` — model selector provider/model tabs and favorites-at-top layout
 - `tk-9pr1` — model selector page navigation
 - `tk-4ywr` — session titles and lightweight summaries for picker/resume UX

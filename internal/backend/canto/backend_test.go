@@ -56,6 +56,13 @@ type retryProvider struct {
 	*ctesting.FauxProvider
 }
 
+type proactiveUsageSession struct {
+	id       string
+	meta     storage.Metadata
+	usageIn  int
+	usageOut int
+}
+
 func (p *retryProvider) IsTransient(err error) bool {
 	return errors.Is(err, transientStreamErr)
 }
@@ -73,6 +80,18 @@ func (p *overflowRecoveryProvider) CountTokens(ctx context.Context, model string
 func (p *overflowRecoveryProvider) IsContextOverflow(err error) bool {
 	return errors.Is(err, overflowErr)
 }
+
+func (s *proactiveUsageSession) ID() string                                  { return s.id }
+func (s *proactiveUsageSession) Meta() storage.Metadata                      { return s.meta }
+func (s *proactiveUsageSession) Append(ctx context.Context, event any) error { return nil }
+func (s *proactiveUsageSession) Entries(ctx context.Context) ([]ionsession.Entry, error) {
+	return nil, nil
+}
+func (s *proactiveUsageSession) LastStatus(ctx context.Context) (string, error) { return "", nil }
+func (s *proactiveUsageSession) Usage(ctx context.Context) (int, int, float64, error) {
+	return s.usageIn, s.usageOut, 0, nil
+}
+func (s *proactiveUsageSession) Close() error { return nil }
 
 func TestProviderAndModelLoadFromEnv(t *testing.T) {
 	t.Setenv("ION_PROVIDER", "anthropic")
@@ -481,6 +500,94 @@ func TestOpenRecoversFromContextOverflowByCompacting(t *testing.T) {
 	}
 	if compactionEvents == 0 {
 		t.Fatal("expected at least one durable compaction event")
+	}
+}
+
+func TestSubmitTurnProactivelyCompactsBeforeOverflow(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	root := t.TempDir()
+	store, err := storage.NewCantoStore(root)
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+
+	storageSession, err := store.OpenSession(ctx, "/tmp/ion-proactive", "openai/model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	for _, msg := range []storage.Agent{
+		{Type: "agent", Content: []storage.Block{{Type: "text", Text: textPtr(strings.Repeat("alpha ", 60))}}},
+		{Type: "agent", Content: []storage.Block{{Type: "text", Text: textPtr(strings.Repeat("beta ", 60))}}},
+		{Type: "agent", Content: []storage.Block{{Type: "text", Text: textPtr(strings.Repeat("gamma ", 60))}}},
+		{Type: "agent", Content: []storage.Block{{Type: "text", Text: textPtr("recent answer")}}},
+	} {
+		if err := storageSession.Append(ctx, msg); err != nil {
+			t.Fatalf("append history: %v", err)
+		}
+	}
+	if err := storageSession.Append(ctx, storage.User{Type: "user", Content: "recent question"}); err != nil {
+		t.Fatalf("append recent user: %v", err)
+	}
+
+	provider := &overflowRecoveryProvider{
+		FauxProvider: ctesting.NewMockProvider(
+			"openai",
+			ctesting.Step{Content: "compacted summary"},
+			ctesting.Step{Content: "recovered reply"},
+		),
+	}
+
+	oldFactory := providerFactory
+	providerFactory = func(ctx context.Context, cfg *config.Config) (llm.Provider, error) {
+		if cfg.Provider == "openai" {
+			return provider, nil
+		}
+		return oldFactory(ctx, cfg)
+	}
+	defer func() { providerFactory = oldFactory }()
+
+	b := New()
+	b.SetStore(store)
+	b.SetSession(&proactiveUsageSession{
+		id:       storageSession.ID(),
+		meta:     storage.Metadata{ID: storageSession.ID(), CWD: "/tmp/ion-proactive", Model: "model-a", Branch: "main"},
+		usageIn:  72,
+		usageOut: 8,
+	})
+	b.SetConfig(&config.Config{Provider: "openai", Model: "model-a", ContextLimit: 100})
+	if err := b.Open(ctx); err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer func() { _ = b.Close() }()
+
+	if err := b.SubmitTurn(ctx, "proactive compaction please"); err != nil {
+		t.Fatalf("submit turn: %v", err)
+	}
+	waitForTurnFinished(t, b.Events())
+
+	calls := provider.Calls()
+	if len(calls) != 2 {
+		t.Fatalf("provider calls = %d, want 2 (compact, turn)", len(calls))
+	}
+
+	resumed, err := store.ResumeSession(ctx, storageSession.ID())
+	if err != nil {
+		t.Fatalf("resume session: %v", err)
+	}
+	entries, err := resumed.Entries(ctx)
+	if err != nil {
+		t.Fatalf("entries: %v", err)
+	}
+	if !entryExists(entries, ionsession.System, "<conversation_summary>") {
+		t.Fatalf("expected proactive compaction to add a conversation summary, got %#v", entries)
+	}
+	if !entryExists(entries, ionsession.Agent, "recovered reply") {
+		t.Fatalf("expected final reply after proactive compaction, got %#v", entries)
 	}
 }
 

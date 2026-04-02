@@ -23,13 +23,12 @@ Design rule:
 ## Next Steps
 1. **`tk-f1cn`** — Canto/Ion Architectural Alignment: PolicyEngine Migration
 2. **`tk-7kga`** — Stabilize inline agent loop and TUI
-3. **`tk-4ft8`** — Canto Context Governor
-4. **`tk-di6d`** — Model selector: provider/model tabs and favorites-at-top layout
-5. **`tk-9pr1`** — Model selector: page navigation
-6. **`tk-4ywr`** — Sessions: lightweight titles and summaries
-7. **`tk-5vrj`** — Subagents: runtime semantics and lifecycle
-8. **`tk-arhu`** — Subagents: inline Plane B presentation
-9. **`tk-pwsl`** — Swarm mode: alternate-screen operator view
+3. **`tk-di6d`** — Model selector: provider/model tabs and favorites-at-top layout
+4. **`tk-9pr1`** — Model selector: page navigation
+5. **`tk-4ywr`** — Sessions: lightweight titles and summaries
+6. **`tk-5vrj`** — Subagents: runtime semantics and lifecycle
+7. **`tk-arhu`** — Subagents: inline Plane B presentation
+8. **`tk-pwsl`** — Swarm mode: alternate-screen operator view
 
 ## Completed (Recent)
 - [x] **Modularize Ion TUI (`tk-2b79`)** — Componentized `internal/app/model.go` into `Viewport`, `Input`, `Broker`, `Picker`, and `Progress`.
@@ -43,6 +42,7 @@ Design rule:
 - [x] **RPC/print mode (`tk-r1wx`)** — One-shot query mode and JSONL-friendly scripting surface implemented.
 - [x] **Sandbox support (`tk-8s0h`)** — Opt-in bash sandbox planning added with `off`/`auto`/`seatbelt`/`bubblewrap` modes.
 - [x] **Retry behavior (`tk-kz3k`)** — Native providers retry transient generation and streaming errors automatically before surfacing a final failure.
+- [x] **Canto Context Governor (`tk-4ft8`)** — Runtime now auto-compacts on overflow and proactively compacts before a turn when session usage is near the context limit.
 - [x] **Swarm/UI design note (`tk-vcmo`)** — Documented inline-vs-swarm boundary, subagent transcript rules, and lightweight session title/summary direction.
 - [x] **Planning refresh (`tk-gm5a`)** — Synced `ai/` docs and `tk` priorities to the inline-first, subagents-later dependency order.
 - [x] **Canto Migration Complete** — Pinned to `github.com/nijaru/canto`.
@@ -51,7 +51,6 @@ Design rule:
 - `tk-f1cn` [p2 active] Canto/Ion Architectural Alignment: PolicyEngine Migration
 - `tk-8s0h` [p2 done] Sandbox support
 - `tk-7kga` [p2 active] Stabilize inline agent loop and TUI
-- `tk-4ft8` [p2 active] Canto Context Governor (overflow recovery wired; proactive threshold trigger still pending if needed)
 - `tk-9pr1` [p3 open] Model selector: page navigation
 - `tk-4ywr` [p3 open] Sessions: lightweight titles and summaries (storage + picker wiring done; terminal title later if needed)
 - `tk-5vrj` [p3 open] Subagents: runtime semantics and lifecycle
