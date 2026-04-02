@@ -49,7 +49,10 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+p":
 		m.clearPendingAction()
-		return m.openProviderPicker()
+		if m.activePreset() == presetFast {
+			return m.switchPresetCommand(presetPrimary)
+		}
+		return m.switchPresetCommand(presetFast)
 
 	case "ctrl+m":
 		m.clearPendingAction()

@@ -18,16 +18,18 @@ Provider work to keep in mind:
 1. **`tk-f1cn`** — Canto/Ion Architectural Alignment: PolicyEngine Migration
 2. **`tk-7kga`** — Stabilize inline agent loop and TUI
 3. **`tk-4ft8`** — Canto Context Governor
-4. **`tk-4ywr`** — Sessions: lightweight titles and summaries
-5. **`tk-5vrj`** — Subagents: runtime semantics and lifecycle
-6. **`tk-arhu`** — Subagents: inline Plane B presentation
-7. **`tk-pwsl`** — Swarm mode: alternate-screen operator view
+4. **`tk-k8g4`** — Model selector: primary/fast presets and favorites UI
+5. **`tk-4ywr`** — Sessions: lightweight titles and summaries
+6. **`tk-5vrj`** — Subagents: runtime semantics and lifecycle
+7. **`tk-arhu`** — Subagents: inline Plane B presentation
+8. **`tk-pwsl`** — Swarm mode: alternate-screen operator view
 
 ## Completed (Recent)
 - [x] **Modularize Ion TUI (`tk-2b79`)** — Componentized `internal/app/model.go` into `Viewport`, `Input`, `Broker`, `Picker`, and `Progress`.
 - [x] **Approval UX overhaul (`tk-k4hv`)** — Redesigned 3-mode system (READ/EDIT/YOLO) and category-scoped auto-approval ("Always" key) implemented.
 - [x] **Architecture Review** — SOTA alignment with Claude Code and Pi-mono. Defined Layer 3 (Canto) and Layer 4 (Ion) boundaries.
 - [x] **Pi + Claude guardrails (`tk-y8aj`)** — Captured the ion-actionable patterns and the non-goals so future redesigns stay Go/Bubble Tea idiomatic.
+- [x] **TUI hotkeys and model presets (`tk-y64w`)** — Primary/fast toggle, explicit `/primary` and `/fast` commands, and fast/summary config slots wired through the TUI.
 - [x] **Approval UX Spec** — 3-mode design (READ/EDIT/YOLO) documented.
 - [x] **Agent Compaction Tool (`tk-pw3s`)** — `compact` tool implemented in Ion.
 - [x] **RPC/print mode (`tk-r1wx`)** — One-shot query mode and JSONL-friendly scripting surface implemented.
@@ -43,7 +45,6 @@ Provider work to keep in mind:
 - `tk-7kga` [p2 active] Stabilize inline agent loop and TUI
 - `tk-4ft8` [p2 active] Canto Context Governor (overflow recovery wired; proactive threshold trigger still pending if needed)
 - `tk-4ywr` [p3 open] Sessions: lightweight titles and summaries (storage + picker wiring done; terminal title later if needed)
-- `tk-y64w` [p3 open] TUI: primary/fast model toggle and fuzzy command surface
 - `tk-5vrj` [p3 open] Subagents: runtime semantics and lifecycle
 - `tk-k8g4` [p3 open] Model selector: primary/fast presets and favorites UI
 - `tk-kz3k` [p2 done] Runtime: define retry behavior for provider errors

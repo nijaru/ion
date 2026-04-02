@@ -16,6 +16,7 @@ Source of truth for inline TUI key semantics.
 
 ## Pickers
 - `Ctrl+P`: toggle the primary/fast model preset
+- `Ctrl+M`: open the model picker
 - `Ctrl+T`: open thinking controls
 - `Tab`: cycle picker scope when a picker is open
 - `Shift+Tab`: cycle picker scope in reverse when a picker is open
@@ -24,6 +25,8 @@ Source of truth for inline TUI key semantics.
 ## Slash Commands
 - `/...`: built-in ion command surface for stateful actions
 - `//...`: user-defined command or skill aliases
+- `/primary`: switch to the primary model preset
+- `/fast`: switch to the fast model preset
 - `/model`: fuzzy model selection and preset management
 - `/provider`: fuzzy provider selection
 - `/thinking`: explicit thinking budget control

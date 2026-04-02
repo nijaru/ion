@@ -16,15 +16,19 @@ const (
 )
 
 type Config struct {
-	Provider             string            `toml:"provider,omitempty"`
-	Model                string            `toml:"model,omitempty"`
-	ReasoningEffort      string            `toml:"reasoning_effort,omitempty"`
-	DefaultMode          string            `toml:"default_mode,omitempty"`
-	Endpoint             string            `toml:"endpoint,omitempty"`
-	AuthEnvVar           string            `toml:"auth_env_var,omitempty"`
-	ExtraHeaders         map[string]string `toml:"extra_headers,omitempty"`
-	ContextLimit         int               `toml:"context_limit,omitempty"`
-	SessionRetentionDays int               `toml:"session_retention_days,omitempty"`
+	Provider               string            `toml:"provider,omitempty"`
+	Model                  string            `toml:"model,omitempty"`
+	ReasoningEffort        string            `toml:"reasoning_effort,omitempty"`
+	FastModel              string            `toml:"fast_model,omitempty"`
+	FastReasoningEffort    string            `toml:"fast_reasoning_effort,omitempty"`
+	SummaryModel           string            `toml:"summary_model,omitempty"`
+	SummaryReasoningEffort string            `toml:"summary_reasoning_effort,omitempty"`
+	DefaultMode            string            `toml:"default_mode,omitempty"`
+	Endpoint               string            `toml:"endpoint,omitempty"`
+	AuthEnvVar             string            `toml:"auth_env_var,omitempty"`
+	ExtraHeaders           map[string]string `toml:"extra_headers,omitempty"`
+	ContextLimit           int               `toml:"context_limit,omitempty"`
+	SessionRetentionDays   int               `toml:"session_retention_days,omitempty"`
 }
 
 func DefaultConfigPath() (string, error) {
@@ -69,6 +73,10 @@ func Load() (*Config, error) {
 	cfg.Provider = strings.ToLower(strings.TrimSpace(cfg.Provider))
 	cfg.Model = strings.TrimSpace(cfg.Model)
 	cfg.ReasoningEffort = normalizeReasoningEffort(cfg.ReasoningEffort)
+	cfg.FastModel = strings.TrimSpace(cfg.FastModel)
+	cfg.FastReasoningEffort = normalizeOptionalReasoningEffort(cfg.FastReasoningEffort)
+	cfg.SummaryModel = strings.TrimSpace(cfg.SummaryModel)
+	cfg.SummaryReasoningEffort = normalizeOptionalReasoningEffort(cfg.SummaryReasoningEffort)
 	cfg.Endpoint = strings.TrimSpace(cfg.Endpoint)
 	cfg.AuthEnvVar = strings.TrimSpace(cfg.AuthEnvVar)
 	if cfg.ContextLimit < 0 {
@@ -97,6 +105,10 @@ func Save(cfg *Config) error {
 	if out.ReasoningEffort == DefaultReasoningEffort {
 		out.ReasoningEffort = ""
 	}
+	out.FastModel = strings.TrimSpace(out.FastModel)
+	out.FastReasoningEffort = normalizeOptionalReasoningEffort(out.FastReasoningEffort)
+	out.SummaryModel = strings.TrimSpace(out.SummaryModel)
+	out.SummaryReasoningEffort = normalizeOptionalReasoningEffort(out.SummaryReasoningEffort)
 	out.Endpoint = strings.TrimSpace(out.Endpoint)
 	out.AuthEnvVar = strings.TrimSpace(out.AuthEnvVar)
 	if out.ContextLimit < 0 {
@@ -158,6 +170,21 @@ func normalizeReasoningEffort(value string) string {
 		return "high"
 	default:
 		return DefaultReasoningEffort
+	}
+}
+
+func normalizeOptionalReasoningEffort(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", DefaultReasoningEffort:
+		return ""
+	case "low":
+		return "low"
+	case "medium", "med":
+		return "medium"
+	case "high":
+		return "high"
+	default:
+		return ""
 	}
 }
 

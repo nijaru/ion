@@ -142,7 +142,7 @@ func (b *Backend) Open(ctx context.Context) error {
 
 	if providerName == "" {
 		return fmt.Errorf(
-			"No provider configured. Use /provider or Ctrl+P. Set ION_PROVIDER for scripts.",
+			"No provider configured. Use /provider. Set ION_PROVIDER for scripts.",
 		)
 	}
 	if modelName == "" {

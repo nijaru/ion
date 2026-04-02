@@ -49,6 +49,7 @@ Rules:
 - mode is the main visual anchor
 - metadata stays secondary/dim
 - provider/model are live runtime truth, not startup-banner truth
+- when the fast preset is active, surface it as a compact `[FAST]` marker
 - reasoning effort may appear only when it is a real runtime setting
 
 Keep the status line compact. Do not turn it into a dense settings/control bar unless there is a strong usability reason.
@@ -63,6 +64,10 @@ Current important fields:
 
 - `provider`
 - `model`
+- `fast_model`
+- `fast_reasoning_effort`
+- `summary_model`
+- `summary_reasoning_effort`
 - `endpoint`
 - `auth_env_var`
 - `extra_headers`
@@ -90,8 +95,10 @@ Use canonical USD display in the picker.
 
 Current direction:
 
+- `provider` / `model` / `reasoning_effort` are the primary preset slot
+- `fast_model` / `fast_reasoning_effort` define the fast preset slot
+- `summary_model` / `summary_reasoning_effort` stay config-only and are used for cheap transforms like compaction and titles
 - `primary` and `fast` are the UI-visible presets
-- `summary` is config-only and used for cheap transforms like compaction and titles
 - a preset may carry its own default reasoning level
 - if a preset is not explicitly configured, ion should resolve a deterministic provider default from the live model catalog
 

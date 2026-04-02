@@ -42,6 +42,38 @@ Append-only history of architectural and design decisions for `ion`.
 
 ---
 
+## 2026-04-02 — Commands: add explicit `/primary` and `/fast` preset switches
+
+**Context:** The model preset model now has a runtime toggle (`Ctrl+P`) and a textual control plane. Users still need explicit, discoverable commands for switching between the active model presets without relying on a keybinding.
+
+**Decision:** Add `/primary` and `/fast` as built-in commands that switch the active preset slot. `/model` and `/thinking` continue to mutate whichever preset is active, while the fast slot is persisted through `fast_model` and `fast_reasoning_effort` in config.
+
+**Rationale:**
+
+1. **Discoverability:** Typed commands are easier to remember and script than keyboard state.
+2. **Low ceremony:** `Ctrl+P` remains the quick toggle, while the slash commands provide an explicit control path.
+3. **Clear persistence model:** The primary slot stays anchored by `provider` / `model` / `reasoning_effort`; the fast slot has dedicated fields.
+
+**Tradeoffs:** This adds a little more command surface, but it keeps the model preset system understandable and avoids overloading a single hotkey.
+
+---
+
+## 2026-04-02 — Hotkeys: keep `Ctrl+M` as the explicit model picker
+
+**Context:** The terminal-safe hotkey pass clarified that `Ctrl+P` should toggle primary/fast, but ion still benefits from a direct picker for explicit model selection. The earlier "retire Ctrl+M" brainstorm was too aggressive for the current v0.0.0 ergonomics.
+
+**Decision:** Keep `Ctrl+M` as the explicit model picker. `Ctrl+P` handles the primary/fast swap, `/model` remains the textual model-selection surface, and `/primary` / `/fast` are the explicit preset-switch commands.
+
+**Rationale:**
+
+1. **Enough separation:** One toggle, one picker, one text command path is simple and usable.
+2. **Fast selection path:** Users who know the model they want still get a direct picker without typing.
+3. **Unstable is fine:** This is a v0.0.0 UI; we can keep an efficient hotkey even if it collides with common terminal conventions.
+
+**Tradeoffs:** `Ctrl+M` is not perfectly terminal-pure, but it remains a practical high-frequency binding while the rest of the control plane stays slash-command driven.
+
+---
+
 ## 2026-04-01 — Planning: Use Pi as a maturity benchmark, not a hard parity gate
 
 **Context:** Recent planning around Pi, Claude Code, subagents, and swarm mode risked sounding like ion should chase literal feature parity before moving forward. At the same time, the team explicitly wants advanced orchestration work to wait until the single-agent inline path feels stable and feature-complete.

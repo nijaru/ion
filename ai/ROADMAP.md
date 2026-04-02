@@ -86,10 +86,9 @@ Product ladder:
 
 TUI surface:
 - `tk-7kga` — core inline stability
-- `tk-y64w` — terminal-safe runtime picker hotkeys
+- `tk-k8g4` — model selector: primary/fast presets and favorites UI
 - `tk-i207` — status line and context presentation
 - `tk-4ywr` — session titles and lightweight summaries
-- `tk-k8g4` — model selector usability and favorites
 - `tk-gmhw` — transcript verbosity controls
 - `tk-arhu` — inline child presentation
 - `tk-pwsl` — swarm/operator view later
