@@ -95,13 +95,6 @@ const (
 	pickerPurposeThinking
 )
 
-type pickerScope int
-
-const (
-	pickerScopeFavorites pickerScope = iota
-	pickerScopeCatalog
-)
-
 type pickerItem struct {
 	Label   string
 	Value   string
@@ -126,15 +119,13 @@ const (
 )
 
 type pickerOverlayState struct {
-	title      string
-	items      []pickerItem
-	filtered   []pickerItem
-	index      int
-	query      string
-	purpose    pickerPurpose
-	scope      pickerScope
-	scopeItems map[pickerScope][]pickerItem
-	cfg        *config.Config
+	title    string
+	items    []pickerItem
+	filtered []pickerItem
+	index    int
+	query    string
+	purpose  pickerPurpose
+	cfg      *config.Config
 }
 
 type progressMode int
