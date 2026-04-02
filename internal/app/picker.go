@@ -45,6 +45,15 @@ func pickerIndex(items []pickerItem, value string) int {
 	return 0
 }
 
+func pickerItemByValue(items []pickerItem, value string) (pickerItem, bool) {
+	for _, item := range items {
+		if strings.EqualFold(item.Value, value) || strings.EqualFold(item.Label, value) {
+			return item, true
+		}
+	}
+	return pickerItem{}, false
+}
+
 func providerDisplayName(value string) string {
 	return providers.DisplayName(value)
 }
@@ -82,6 +91,39 @@ func modelItemsForProvider(cfg *config.Config) ([]pickerItem, error) {
 		})
 	}
 	return items, nil
+}
+
+func modelPickerScopeLabel(scope pickerScope) string {
+	switch scope {
+	case pickerScopeFavorites:
+		return "Favorites"
+	case pickerScopeCatalog:
+		return "All models"
+	default:
+		return "All models"
+	}
+}
+
+func modelPickerScopeOrder(scope pickerScope) int {
+	switch scope {
+	case pickerScopeFavorites:
+		return 0
+	case pickerScopeCatalog:
+		return 1
+	default:
+		return 99
+	}
+}
+
+func clonePickerItems(items []pickerItem) []pickerItem {
+	return append([]pickerItem(nil), items...)
+}
+
+func pickerScopeItems(items map[pickerScope][]pickerItem, scope pickerScope) []pickerItem {
+	if len(items) == 0 {
+		return nil
+	}
+	return clonePickerItems(items[scope])
 }
 
 func modelOrg(id string) string {

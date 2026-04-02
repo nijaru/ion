@@ -108,6 +108,12 @@ Model naming rules:
 - prefer `fast` over `cheap` in the UI
 - use `summary` for internal cheap transforms, not `cheap`
 
+Model picker rules:
+
+- the model picker exposes `Favorites` and `All models` scopes
+- `Favorites` surfaces the current primary and fast preset models
+- the catalog view pins those presets at the top so quick swaps stay obvious
+
 ## Model discovery
 
 Model discovery is covered in:

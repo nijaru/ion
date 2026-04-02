@@ -87,7 +87,6 @@ Product ladder:
 
 TUI surface:
 - `tk-7kga` — core inline stability
-- `tk-k8g4` — model selector: primary/fast presets and favorites UI
 - `tk-i207` — status line and context presentation
 - `tk-4ywr` — session titles and lightweight summaries
 - `tk-gmhw` — transcript verbosity controls
@@ -128,7 +127,6 @@ Includes:
 - tab completion
 - request cache continuity
 - auto thinking budget mode
-- swarm mode
 - canto upstreaming tasks
 
 These are real tasks, but they are not on the critical path.

@@ -18,7 +18,7 @@ Source of truth for inline TUI key semantics.
 ## Pickers
 - `Ctrl+M`: toggle the primary/fast model preset
 - `Ctrl+T`: open thinking controls
-- `Tab`: cycle picker scope when a picker is open
+- `Tab`: cycle picker scope when a picker is open; the model picker uses Favorites / All models scopes
 - `Shift+Tab`: cycle picker scope in reverse when a picker is open
 - `Esc`, `Ctrl+C`, `Ctrl+D`: close an open picker
 

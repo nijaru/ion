@@ -95,6 +95,13 @@ const (
 	pickerPurposeThinking
 )
 
+type pickerScope int
+
+const (
+	pickerScopeFavorites pickerScope = iota
+	pickerScopeCatalog
+)
+
 type pickerItem struct {
 	Label   string
 	Value   string
@@ -119,13 +126,15 @@ const (
 )
 
 type pickerOverlayState struct {
-	title    string
-	items    []pickerItem
-	filtered []pickerItem
-	index    int
-	query    string
-	purpose  pickerPurpose
-	cfg      *config.Config
+	title      string
+	items      []pickerItem
+	filtered   []pickerItem
+	index      int
+	query      string
+	purpose    pickerPurpose
+	scope      pickerScope
+	scopeItems map[pickerScope][]pickerItem
+	cfg        *config.Config
 }
 
 type progressMode int
@@ -478,17 +487,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.InFlight.StreamBuf = ""
 		m.Progress.Mode = stateReady
 		m.Progress.LastError = ""
-			m.Progress.LastTurnSummary = turnSummary{}
-			m.InFlight.Thinking = false
-			m.Input.CtrlCPending = false
-			m.Progress.TokensSent = 0
+		m.Progress.LastTurnSummary = turnSummary{}
+		m.InFlight.Thinking = false
+		m.Input.CtrlCPending = false
+		m.Progress.TokensSent = 0
 		m.Progress.TokensReceived = 0
-			m.Progress.TotalCost = 0
-			if msg.storage != nil {
-				if input, output, cost, err := msg.storage.Usage(context.Background()); err == nil {
-					m.Progress.TokensSent = input
-					m.Progress.TokensReceived = output
-					m.Progress.TotalCost = cost
+		m.Progress.TotalCost = 0
+		if msg.storage != nil {
+			if input, output, cost, err := msg.storage.Usage(context.Background()); err == nil {
+				m.Progress.TokensSent = input
+				m.Progress.TokensReceived = output
+				m.Progress.TotalCost = cost
 			}
 		}
 		m.Progress.LastToolUseID = ""

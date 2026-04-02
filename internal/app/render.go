@@ -103,8 +103,12 @@ func (m Model) renderPicker() string {
 		b.WriteString(m.st.dim.PaddingLeft(2).Render("Search: " + m.Picker.Overlay.query))
 		b.WriteString("\n")
 	}
+	if m.Picker.Overlay.purpose == pickerPurposeModel && len(m.Picker.Overlay.scopeItems) > 0 {
+		b.WriteString(m.renderPickerScopeTabs())
+		b.WriteString("\n")
+	}
 	b.WriteString(
-		m.st.dim.PaddingLeft(2).Render("Type to search • ↑/↓ navigate • Enter select • Esc cancel"),
+		m.st.dim.PaddingLeft(2).Render(m.renderPickerHelpText()),
 	)
 	b.WriteString("\n")
 	if len(items) == 0 {
@@ -149,6 +153,42 @@ func (m Model) renderPicker() string {
 	return b.String()
 }
 
+func (m Model) renderPickerScopeTabs() string {
+	if m.Picker.Overlay == nil || len(m.Picker.Overlay.scopeItems) == 0 {
+		return ""
+	}
+
+	var parts []string
+	if len(m.Picker.Overlay.scopeItems[pickerScopeFavorites]) > 0 {
+		label := "Favorites"
+		if m.Picker.Overlay.scope == pickerScopeFavorites {
+			label = m.st.cyan.Render("[" + label + "]")
+		} else {
+			label = m.st.dim.Render(label)
+		}
+		parts = append(parts, label)
+	}
+	if len(m.Picker.Overlay.scopeItems[pickerScopeCatalog]) > 0 {
+		label := "All models"
+		if m.Picker.Overlay.scope == pickerScopeCatalog {
+			label = m.st.cyan.Render("[" + label + "]")
+		} else {
+			label = m.st.dim.Render(label)
+		}
+		parts = append(parts, label)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return m.st.dim.PaddingLeft(2).Render("Scope: " + strings.Join(parts, " "))
+}
+
+func (m Model) renderPickerHelpText() string {
+	if m.Picker.Overlay != nil && m.Picker.Overlay.purpose == pickerPurposeModel && len(m.Picker.Overlay.scopeItems) > 0 {
+		return "Type to search • Tab switch scope • ↑/↓ navigate • Enter select • Esc cancel"
+	}
+	return "Type to search • ↑/↓ navigate • Enter select • Esc cancel"
+}
 
 type pickerMetricWidths struct {
 	Context int
