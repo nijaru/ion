@@ -7,6 +7,7 @@ Source of truth for inline TUI key semantics.
 - `Shift+Enter`: insert newline
 - `Alt+Enter`: insert newline
 - `Up` / `Down`: history only when the cursor is at the start/end boundary where recall makes sense
+- `Ctrl+P` / `Ctrl+N`: history with the same boundary-aware behavior as `Up` / `Down`
 
 ## Safety
 - `Esc`: cancel a running turn. Otherwise it does nothing.
@@ -15,7 +16,8 @@ Source of truth for inline TUI key semantics.
 - `Ctrl+C` and `Ctrl+D` do not cancel running turns.
 
 ## Pickers
-- `Ctrl+P`: toggle the primary/fast model preset
+- `Ctrl+M`: toggle the primary/fast model preset
+- `Ctrl+T`: open thinking controls
 - `Tab`: cycle picker scope when a picker is open
 - `Shift+Tab`: cycle picker scope in reverse when a picker is open
 - `Esc`, `Ctrl+C`, `Ctrl+D`: close an open picker
@@ -38,8 +40,8 @@ Source of truth for inline TUI key semantics.
 - Desired state:
   - `primary` and `fast` are the only UI-exposed model presets
   - `summary` stays config-only
-  - `Ctrl+P` is the fast model swap accelerator
-  - `/thinking` stays textual for now
+  - `Ctrl+M` is the fast model swap accelerator
+  - `Ctrl+T` opens thinking controls
   - fuzzy slash commands own the full model/provider selection surface
 
 ## Mode

@@ -691,18 +691,57 @@ func TestComposerLayoutReflowsAfterHistoryRecall(t *testing.T) {
 	}
 }
 
-func TestCtrlTIsNotBoundToThinkingPicker(t *testing.T) {
+func TestCtrlTOpensThinkingPicker(t *testing.T) {
 	model := readyModel(t)
 
 	updated, _ := model.Update(tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl})
 	model = updated.(Model)
 
-	if model.Picker.Overlay != nil {
-		t.Fatal("ctrl+t should not open a thinking picker")
+	if model.Picker.Overlay == nil {
+		t.Fatal("expected thinking picker to open")
+	}
+	if model.Picker.Overlay.purpose != pickerPurposeThinking {
+		t.Fatalf("picker purpose = %v, want thinking", model.Picker.Overlay.purpose)
+	}
+	if got := model.Picker.Overlay.title; got != "Pick a primary thinking level" {
+		t.Fatalf("picker title = %q", got)
 	}
 }
 
-func TestCtrlPTogglesPrimaryAndFastPreset(t *testing.T) {
+func TestCtrlPRecallsHistory(t *testing.T) {
+	model := readyModel(t)
+	model.Input.History = []string{"first", "second"}
+
+	updated, _ := model.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	model = updated.(Model)
+	if got := model.Input.Composer.Value(); got != "second" {
+		t.Fatalf("composer = %q, want latest history entry", got)
+	}
+
+	updated, _ = model.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	model = updated.(Model)
+	if got := model.Input.Composer.Value(); got != "first" {
+		t.Fatalf("composer = %q, want previous history entry", got)
+	}
+}
+
+func TestCtrlNTogglesForwardThroughHistory(t *testing.T) {
+	model := readyModel(t)
+	model.Input.History = []string{"first", "second"}
+
+	updated, _ := model.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	model = updated.(Model)
+	updated, _ = model.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	model = updated.(Model)
+
+	updated, _ = model.Update(tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl})
+	model = updated.(Model)
+	if got := model.Input.Composer.Value(); got != "second" {
+		t.Fatalf("composer = %q, want next history entry", got)
+	}
+}
+
+func TestCtrlMTogglesPrimaryAndFastPreset(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	cfgDir := filepath.Join(home, ".ion")
@@ -749,10 +788,10 @@ func TestCtrlPTogglesPrimaryAndFastPreset(t *testing.T) {
 		},
 	)
 
-	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'm', Mod: tea.ModCtrl})
 	model = updated.(Model)
 	if cmd == nil {
-		t.Fatal("expected ctrl+p to return a switch command")
+		t.Fatal("expected ctrl+m to return a switch command")
 	}
 	msg := cmd()
 	switched, ok := msg.(runtimeSwitchedMsg)
@@ -771,10 +810,10 @@ func TestCtrlPTogglesPrimaryAndFastPreset(t *testing.T) {
 		t.Fatalf("fast reasoning = %q, want low", got)
 	}
 
-	updated, cmd = model.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	updated, cmd = model.Update(tea.KeyPressMsg{Code: 'm', Mod: tea.ModCtrl})
 	model = updated.(Model)
 	if cmd == nil {
-		t.Fatal("expected ctrl+p to switch back to primary")
+		t.Fatal("expected ctrl+m to switch back to primary")
 	}
 	msg = cmd()
 	switched, ok = msg.(runtimeSwitchedMsg)

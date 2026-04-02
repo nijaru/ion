@@ -34,7 +34,7 @@ Append-only history of architectural and design decisions for `ion`.
 
 **Context:** ion needs a simple model-preset model that works for daily use, subagents, and cheap transforms like summarization without exposing every provider-specific raw model in the TUI.
 
-**Decision:** Use `primary` and `fast` as the only UI-visible model presets. Keep `summary` config-only for compaction, titles, and other cheap transforms. Make `Ctrl+P` the quick toggle between `primary` and `fast`, and keep full model/provider selection behind fuzzy slash commands.
+**Decision:** Use `primary` and `fast` as the only UI-visible model presets. Keep `summary` config-only for compaction, titles, and other cheap transforms. Make `Ctrl+M` the quick toggle between `primary` and `fast`, and keep full model/provider selection behind fuzzy slash commands.
 
 **Rationale:** `primary` / `fast` is clearer than `primary` / `deep`, avoids confusion with thinking budget, and gives the agent a stable preset vocabulary. `summary` is an implementation concern, not a daily workflow preset. The quick toggle stays ergonomic while the full selection surface remains discoverable and text-driven.
 
@@ -44,33 +44,33 @@ Append-only history of architectural and design decisions for `ion`.
 
 ## 2026-04-02 — Commands: add explicit `/primary` and `/fast` preset switches
 
-**Context:** The model preset model now has a runtime toggle (`Ctrl+P`) and a textual control plane. Users still need explicit, discoverable commands for switching between the active model presets without relying on a keybinding.
+**Context:** The model preset model now has a runtime toggle (`Ctrl+M`) and a textual control plane. Users still need explicit, discoverable commands for switching between the active model presets without relying on a keybinding.
 
 **Decision:** Add `/primary` and `/fast` as built-in commands that switch the active preset slot. `/model` and `/thinking` continue to mutate whichever preset is active, while the fast slot is persisted through `fast_model` and `fast_reasoning_effort` in config.
 
 **Rationale:**
 
 1. **Discoverability:** Typed commands are easier to remember and script than keyboard state.
-2. **Low ceremony:** `Ctrl+P` remains the quick toggle, while the slash commands provide an explicit control path.
+2. **Low ceremony:** `Ctrl+M` remains the quick toggle, while the slash commands provide an explicit control path.
 3. **Clear persistence model:** The primary slot stays anchored by `provider` / `model` / `reasoning_effort`; the fast slot has dedicated fields.
 
 **Tradeoffs:** This adds a little more command surface, but it keeps the model preset system understandable and avoids overloading a single hotkey.
 
 ---
 
-## 2026-04-02 — Hotkeys: use `Ctrl+P` for primary/fast and `/model` for explicit selection
+## 2026-04-02 — Hotkeys: keep readline-style history and use `Ctrl+M` for primary/fast
 
-**Context:** The primary user action is swapping between `primary` and `fast`, not hopping into a separate explicit model picker. A direct model hotkey adds another global chord without enough daily value to justify it.
+**Context:** `Ctrl+P` and `Ctrl+N` are valuable composer history motions, so ion should not steal them from the text editing layer. The model preset swap still needs a direct hotkey, and `Ctrl+M` / `Ctrl+T` are available app-level chords.
 
-**Decision:** Keep `Ctrl+P` as the primary/fast swap. Do not reserve a separate model hotkey. `/model` remains the explicit model-selection surface, and the picker work should focus on provider/model/favorites scopes invoked from the textual command path or from the picker flow itself.
+**Decision:** Keep `Ctrl+P` / `Ctrl+N` for history behavior at the composer boundary. Use `Ctrl+M` for the primary/fast swap and `Ctrl+T` for thinking controls. `/model` remains the explicit model-selection surface.
 
 **Rationale:**
 
-1. **Common case wins:** primary/fast swapping is the highest-frequency model action.
-2. **Smaller keymap:** removing the dedicated model key frees a global chord for no loss of core functionality.
-3. **Textual explicitness:** `/model` is still the explicit, discoverable path for full model selection.
+1. **Editing UX wins:** history on `Ctrl+P` / `Ctrl+N` is more useful than reserving those chords for app state.
+2. **Common case stays fast:** `Ctrl+M` still gives model swapping a direct chord.
+3. **Clear split:** `Ctrl+M` handles presets, `Ctrl+T` handles thinking, `/model` handles explicit model choice.
 
-**Tradeoffs:** Explicit model selection takes a text command or picker invocation instead of a hotkey, but that is acceptable because it is not the primary daily operation.
+**Tradeoffs:** `Ctrl+M` is not terminal-pure, but it is acceptable in an unstable TUI where the benefit of one-key preset swapping outweighs the collision.
 
 ---
 
@@ -499,11 +499,11 @@ Append-only history of architectural and design decisions for `ion`.
 
 ---
 
-## 2026-04-02 — TUI: avoid function keys and keep thinking on `/thinking`
+## 2026-04-02 — TUI: avoid function keys and keep the keymap small
 
-**Context:** ion currently uses `Ctrl+P` for the primary/fast swap. Function keys and extra direct hotkeys for model lanes add conflict pressure against standard terminal editing keys without improving the core flow. Thinking is not a high-frequency enough action to justify a dedicated hotkey right now.
+**Context:** ion uses `Ctrl+M` for the primary/fast swap and `Ctrl+T` for thinking, while preserving `Ctrl+P` / `Ctrl+N` for history. Function keys and extra direct hotkeys for model lanes add conflict pressure against standard terminal editing keys without improving the core flow.
 
-**Decision:** Do not add function keys or more direct `Ctrl+<letter>` bindings for model speed lanes. Keep explicit thinking control on `/thinking`. The model picker should own provider, model, and favorites scopes; `primary` and `fast` are the UI-visible presets, with any additional presets remaining config-only or picker-local.
+**Decision:** Do not add function keys or more direct `Ctrl+<letter>` bindings beyond the few core actions already chosen. Keep `Ctrl+M` for primary/fast, `Ctrl+T` for thinking, and `/model` for explicit model selection. The model picker should own provider, model, and favorites scopes; `primary` and `fast` are the UI-visible presets, with any additional presets remaining config-only or picker-local.
 
 **Rationale:** Terminal portability matters, but the more important point is reducing the global keymap. A smaller control surface keeps more composer editing behavior available and maps well to Bubble Tea's modal overlay model.
 
