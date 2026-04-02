@@ -30,6 +30,8 @@ import (
 	"github.com/nijaru/ion/internal/storage"
 )
 
+const proactiveCompactThreshold = 0.60
+
 type Backend struct {
 	runner *runtime.Runner
 	store  session.Store
@@ -479,6 +481,17 @@ func (b *Backend) Resume(ctx context.Context, sessionID string) error {
 }
 
 func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
+	if shouldCompact, err := b.shouldProactivelyCompact(ctx); err != nil {
+		return err
+	} else if shouldCompact {
+		b.events <- ionsession.StatusChanged{Status: "Compacting context..."}
+		if compacted, err := b.Compact(ctx); err != nil {
+			b.events <- ionsession.Error{Err: err}
+		} else if compacted {
+			b.events <- ionsession.StatusChanged{Status: "Ready"}
+		}
+	}
+
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -531,6 +544,33 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 	}()
 
 	return nil
+}
+
+func (b *Backend) shouldProactivelyCompact(ctx context.Context) (bool, error) {
+	b.mu.Lock()
+	sess := b.sess
+	store := b.store
+	provider := b.compactLLM
+	sessionID := b.ID()
+	model := b.Model()
+	limit := b.ContextLimit()
+	b.mu.Unlock()
+
+	if sess == nil || store == nil || provider == nil || sessionID == "" || model == "" || limit <= 0 {
+		return false, nil
+	}
+
+	inputTokens, outputTokens, _, err := sess.Usage(ctx)
+	if err != nil {
+		return false, err
+	}
+
+	threshold := int(float64(limit) * proactiveCompactThreshold)
+	if threshold <= 0 {
+		threshold = limit
+	}
+	used := inputTokens + outputTokens
+	return used >= threshold && used < limit, nil
 }
 
 func (b *Backend) translateEvents(ctx context.Context, evCh <-chan session.Event) {
