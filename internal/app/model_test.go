@@ -1712,6 +1712,15 @@ func TestChildBlockedUpdatesPlaneB(t *testing.T) {
 	if model.InFlight.Pending.IsError {
 		t.Fatal("blocked child should not be marked as a hard error")
 	}
+	if model.Progress.Mode != stateBlocked {
+		t.Fatalf("progress mode = %v, want stateBlocked", model.Progress.Mode)
+	}
+	if model.InFlight.Thinking {
+		t.Fatal("blocked child should stop the active thinking spinner")
+	}
+	if got := ansi.Strip(model.progressLine()); !strings.Contains(got, "Subagent blocked") {
+		t.Fatalf("progress line = %q, want blocked state", got)
+	}
 }
 
 func TestQueuedFollowUpSubmitsAfterTurnFinished(t *testing.T) {
