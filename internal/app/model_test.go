@@ -1629,6 +1629,65 @@ func TestModelPickerPageKeysJumpByPage(t *testing.T) {
 	}
 }
 
+func TestChildLifecycleUpdatesPlaneB(t *testing.T) {
+	model := readyModel(t)
+
+	updated, _ := model.handleSessionEvent(session.ChildRequested{
+		AgentName: "worker-1",
+		Query:     "inspect the repo",
+	})
+	model = updated
+	if model.InFlight.Pending == nil || model.InFlight.Pending.Role != session.Subagent {
+		t.Fatalf("pending child after request = %#v, want subagent entry", model.InFlight.Pending)
+	}
+	if model.InFlight.Pending.Title != "worker-1" {
+		t.Fatalf("child title = %q, want worker-1", model.InFlight.Pending.Title)
+	}
+	if model.InFlight.Pending.Content != "inspect the repo" {
+		t.Fatalf("child content = %q, want query", model.InFlight.Pending.Content)
+	}
+
+	updated, _ = model.handleSessionEvent(session.ChildStarted{
+		AgentName: "worker-1",
+	})
+	model = updated
+	if model.InFlight.Pending == nil || model.InFlight.Pending.Title != "worker-1" {
+		t.Fatalf("child title after start = %#v, want worker-1", model.InFlight.Pending)
+	}
+
+	updated, _ = model.handleSessionEvent(session.ChildDelta{
+		Delta: "thinking...\n",
+	})
+	model = updated
+	if model.InFlight.Pending == nil || !strings.Contains(model.InFlight.Pending.Content, "thinking...") {
+		t.Fatalf("child content after delta = %#v, want streamed delta", model.InFlight.Pending)
+	}
+
+	updated, _ = model.handleSessionEvent(session.ChildCompleted{
+		AgentName: "worker-1",
+		Result:    "done",
+	})
+	model = updated
+	if model.InFlight.Pending != nil {
+		t.Fatalf("expected child entry to commit and clear, got %#v", model.InFlight.Pending)
+	}
+
+	updated, _ = model.handleSessionEvent(session.ChildRequested{
+		AgentName: "worker-2",
+		Query:     "recover from failure",
+	})
+	model = updated
+
+	updated, _ = model.handleSessionEvent(session.ChildFailed{
+		AgentName: "worker-2",
+		Error:     "boom",
+	})
+	model = updated
+	if model.InFlight.Pending != nil {
+		t.Fatalf("expected failed child entry to clear, got %#v", model.InFlight.Pending)
+	}
+}
+
 func TestQueuedFollowUpSubmitsAfterTurnFinished(t *testing.T) {
 	sess := &stubSession{events: make(chan session.Event)}
 	model := readyModel(t)
