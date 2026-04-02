@@ -1688,6 +1688,32 @@ func TestChildLifecycleUpdatesPlaneB(t *testing.T) {
 	}
 }
 
+func TestChildBlockedUpdatesPlaneB(t *testing.T) {
+	model := readyModel(t)
+
+	updated, _ := model.handleSessionEvent(session.ChildRequested{
+		AgentName: "worker-3",
+		Query:     "wait for approval",
+	})
+	model = updated
+
+	updated, _ = model.handleSessionEvent(session.ChildBlocked{
+		AgentName: "worker-3",
+		Reason:    "needs approval",
+	})
+	model = updated
+
+	if model.InFlight.Pending == nil || model.InFlight.Pending.Role != session.Subagent {
+		t.Fatalf("pending child after block = %#v, want subagent entry", model.InFlight.Pending)
+	}
+	if got := model.InFlight.Pending.Content; !strings.Contains(got, "BLOCKED: needs approval") {
+		t.Fatalf("child content = %q, want blocked notice", got)
+	}
+	if model.InFlight.Pending.IsError {
+		t.Fatal("blocked child should not be marked as a hard error")
+	}
+}
+
 func TestQueuedFollowUpSubmitsAfterTurnFinished(t *testing.T) {
 	sess := &stubSession{events: make(chan session.Event)}
 	model := readyModel(t)

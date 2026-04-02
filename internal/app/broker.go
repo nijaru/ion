@@ -238,6 +238,15 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		}
 		return m, m.awaitSessionEvent()
 
+	case session.ChildBlocked:
+		if m.InFlight.Pending != nil && m.InFlight.Pending.Role == session.Subagent {
+			m.InFlight.Pending.Content = "BLOCKED: " + msg.Reason
+			entry := *m.InFlight.Pending
+			entry.IsError = false
+			return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
+		}
+		return m, m.awaitSessionEvent()
+
 	case session.ChildFailed:
 		if m.InFlight.Pending != nil && m.InFlight.Pending.Role == session.Subagent {
 			m.InFlight.Pending.Content = "ERROR: " + msg.Error
