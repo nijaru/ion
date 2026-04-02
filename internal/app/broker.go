@@ -215,11 +215,13 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 			Title:   msg.AgentName,
 			Content: msg.Query,
 		}
+		m.Progress.Mode = stateWorking
 		return m, m.awaitSessionEvent()
 
 	case session.ChildStarted:
 		if m.InFlight.Pending != nil && m.InFlight.Pending.Role == session.Subagent {
 			m.InFlight.Pending.Title = msg.AgentName
+			m.Progress.Mode = stateWorking
 		}
 		return m, m.awaitSessionEvent()
 
@@ -234,6 +236,7 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 			m.InFlight.Pending.Content = msg.Result
 			entry := *m.InFlight.Pending
 			m.InFlight.Pending = nil
+			m.Progress.Mode = stateComplete
 			return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
 		}
 		return m, m.awaitSessionEvent()
@@ -255,6 +258,8 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 			m.InFlight.Pending.IsError = true
 			entry := *m.InFlight.Pending
 			m.InFlight.Pending = nil
+			m.Progress.Mode = stateError
+			m.Progress.LastError = "Subagent failed: " + msg.Error
 			return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
 		}
 		return m, m.awaitSessionEvent()
