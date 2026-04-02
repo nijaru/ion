@@ -60,7 +60,7 @@ Append-only history of architectural and design decisions for `ion`.
 
 ## 2026-04-02 — Hotkeys: keep `Ctrl+M` as the explicit model picker
 
-**Context:** The terminal-safe hotkey pass clarified that `Ctrl+P` should toggle primary/fast, but ion still benefits from a direct picker for explicit model selection. The earlier "retire Ctrl+M" brainstorm was too aggressive for the current v0.0.0 ergonomics.
+**Context:** `Ctrl+P` handles primary/fast swapping, but ion still benefits from a direct picker for explicit model selection. The picker is a frequent action and deserves a dedicated binding.
 
 **Decision:** Keep `Ctrl+M` as the explicit model picker. `Ctrl+P` handles the primary/fast swap, `/model` remains the textual model-selection surface, and `/primary` / `/fast` are the explicit preset-switch commands.
 
@@ -68,9 +68,25 @@ Append-only history of architectural and design decisions for `ion`.
 
 1. **Enough separation:** One toggle, one picker, one text command path is simple and usable.
 2. **Fast selection path:** Users who know the model they want still get a direct picker without typing.
-3. **Unstable is fine:** This is a v0.0.0 UI; we can keep an efficient hotkey even if it collides with common terminal conventions.
+3. **Direct action:** A dedicated picker is easier to use than routing every explicit selection through text commands.
 
 **Tradeoffs:** `Ctrl+M` is not perfectly terminal-pure, but it remains a practical high-frequency binding while the rest of the control plane stays slash-command driven.
+
+---
+
+## 2026-04-02 — Versioning: v0.0.0 makes no compatibility promises
+
+**Context:** ion is still unstable dev. Preserving old bindings, config shapes, or implementation quirks because they already exist would freeze the wrong choices into the product.
+
+**Decision:** Treat the current surface as disposable. Choose the final shape for each workflow directly, and replace any binding, preset, or config choice when a better one is identified. Do not add backward-compatibility shims, temporary bindings, or migration paths unless they are explicitly required.
+
+**Rationale:**
+
+1. **Final-shape design:** The v0.0.0 contract is to build the right interface, not to preserve earlier experiments.
+2. **No lock-in:** Early choices should not become architecture by accident.
+3. **Cleaner implementation:** Removing compatibility debt keeps the code and docs aligned with the current product decision.
+
+**Tradeoffs:** Users may need to adjust to changed bindings or config names while the UI is still evolving, but that is acceptable in an unstable release.
 
 ---
 
@@ -483,13 +499,13 @@ Append-only history of architectural and design decisions for `ion`.
 
 ---
 
-## 2026-04-02 — TUI: avoid function keys and retire `Ctrl+M` as the long-term model binding
+## 2026-04-02 — TUI: avoid function keys and keep `Ctrl+M` as the explicit model picker
 
-**Context:** ion currently uses `Ctrl+P` for the provider picker, `Ctrl+M` for the model picker, and `Ctrl+T` for the thinking picker. That works mechanically today, but `Ctrl+M` is a poor terminal binding because it is carriage return / Enter. Adding more direct hotkeys for `fast` / `deep` model lanes would also increase conflict pressure against standard terminal editing keys.
+**Context:** ion currently uses `Ctrl+P` for the primary/fast swap, `Ctrl+M` for explicit model selection, and `Ctrl+T` for thinking. Function keys and extra direct hotkeys for model speed lanes add conflict pressure against standard terminal editing keys without improving the core flow.
 
-**Decision:** Do not add function keys or more direct `Ctrl+<letter>` bindings for model speed lanes. Treat `Ctrl+M` as temporary. The target design is a single runtime picker entrypoint with provider, model, and favorites scopes; `fast` and `deep` should be pinned favorites or presets inside that picker rather than dedicated global hotkeys.
+**Decision:** Do not add function keys or more direct `Ctrl+<letter>` bindings for model speed lanes. Keep `Ctrl+M` as the explicit model picker. The model picker should own provider, model, and favorites scopes; `primary` and `fast` are the UI-visible presets, with any additional presets remaining config-only or picker-local.
 
-**Rationale:** Terminal portability matters more than mnemonic purity. macOS and Linux terminals generally support function keys, but they are awkward on laptop keyboards, weaker through tmux/SSH stacks, and a poor default for a core workflow. A single runtime picker keeps the global keymap small, preserves more composer editing behavior, and maps well to Bubble Tea's modal overlay model.
+**Rationale:** Terminal portability matters, but the more important point is reducing the global keymap. A single runtime picker keeps the control surface small, preserves more composer editing behavior, and maps well to Bubble Tea's modal overlay model.
 
 ---
 

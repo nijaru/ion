@@ -32,11 +32,11 @@ Source of truth for inline TUI key semantics.
 - `/thinking`: explicit thinking budget control
 - Prefer slash commands for explicit configuration, switching, and other actions that benefit from text discoverability
 
-## Design direction (not implemented yet)
+## Binding principles
 - Avoid function keys as primary bindings. They are available in many terminals, but they are a weak default on macOS laptops and less reliable through terminal/multiplexer stacks.
 - Avoid using `Option` / `Alt` as the primary modifier family. Claude Code uses it, but only after terminal-specific setup; that is too fragile for ion's default cross-platform TUI path.
 - Avoid adding more global `Ctrl+<letter>` bindings unless the action is truly core. The composer intentionally preserves common terminal editing keys.
-- Target state:
+- Desired state:
   - `primary` and `fast` are the only UI-exposed model presets
   - `summary` stays config-only
   - `Ctrl+P` is the fast model swap accelerator

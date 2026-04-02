@@ -30,6 +30,7 @@ Execution rule:
 - Pi is a rough benchmark for maturity, not a hard parity gate.
 - The real gate for advanced orchestration is a stable, feature-complete single-agent inline experience.
 - The core solo agent is the product. Subagents, swarm mode, ACP, and other orchestration surfaces are wrappers around that base.
+- v0.0.0 has no compatibility debt. If the final design wants a different binding, preset, or config shape, change it directly.
 
 ### 1. Provider validation
 

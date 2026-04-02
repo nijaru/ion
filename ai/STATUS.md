@@ -14,6 +14,9 @@ Provider work to keep in mind:
 - subscription/OAuth providers need explicit treatment
 - `tk-a4m1` exists only as a later evaluation track for ChatGPT subscription support
 
+Design rule:
+- v0.0.0 has no compatibility debt; current bindings and config shapes are allowed to change directly if the end-state is better.
+
 ## Next Steps
 1. **`tk-f1cn`** — Canto/Ion Architectural Alignment: PolicyEngine Migration
 2. **`tk-7kga`** — Stabilize inline agent loop and TUI
