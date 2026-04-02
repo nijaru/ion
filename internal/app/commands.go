@@ -344,7 +344,6 @@ func helpText() string {
 		"  Ctrl+M           toggle primary/fast preset",
 		"  Ctrl+T           thinking picker",
 		"  Tab              swap provider/model pickers",
-		"  1 / 2            select favorite model in the model picker",
 		"  Shift+Tab        cycle READ → EDIT → YOLO",
 		"  Esc              cancel running turn",
 		"  Up / Down        command history",
@@ -483,41 +482,6 @@ func (m Model) modelPickerFavoriteItem(all []pickerItem, model string) pickerIte
 	}
 }
 
-func (m Model) selectModelPickerFavorite(index int) (Model, tea.Cmd) {
-	if m.Picker.Overlay == nil || m.Picker.Overlay.purpose != pickerPurposeModel {
-		return m, nil
-	}
-	if m.Picker.Overlay.query != "" {
-		return m, nil
-	}
-	favorites := 0
-	for i, item := range m.Picker.Overlay.items {
-		if item.Group != "Favorites" {
-			continue
-		}
-		if favorites == index {
-			m.Picker.Overlay.index = i
-			return m.commitPickerSelection()
-		}
-		favorites++
-	}
-	return m, nil
-}
-
-func (m Model) modelPickerFavoritesFromOverlay() []pickerItem {
-	if m.Picker.Overlay == nil || len(m.Picker.Overlay.items) == 0 {
-		return nil
-	}
-	favorites := make([]pickerItem, 0, 2)
-	for _, item := range m.Picker.Overlay.items {
-		if item.Group != "Favorites" {
-			continue
-		}
-		favorites = append(favorites, item)
-	}
-	return favorites
-}
-
 func togglePreset(p modelPreset) modelPreset {
 	if p == presetFast {
 		return presetPrimary
@@ -583,16 +547,6 @@ func (m Model) handlePickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	case "ctrl+m":
 		if m.Picker.Overlay.purpose == pickerPurposeModel {
 			return m.switchPresetCommand(togglePreset(m.activePreset()))
-		}
-		return m, nil
-	case "1":
-		if m.Picker.Overlay.purpose == pickerPurposeModel && m.Picker.Overlay.query == "" {
-			return m.selectModelPickerFavorite(0)
-		}
-		return m, nil
-	case "2":
-		if m.Picker.Overlay.purpose == pickerPurposeModel && m.Picker.Overlay.query == "" {
-			return m.selectModelPickerFavorite(1)
 		}
 		return m, nil
 	case "up":

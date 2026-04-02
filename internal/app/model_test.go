@@ -1568,60 +1568,6 @@ func TestModelPickerListsFavoritesAtTop(t *testing.T) {
 	}
 }
 
-func TestModelPickerFavoriteShortcutSelectsPrimary(t *testing.T) {
-	oldListModelsForConfig := listModelsForConfig
-	listModelsForConfig = func(ctx context.Context, cfg *config.Config) ([]registry.ModelMetadata, error) {
-		if cfg.Provider != "openrouter" {
-			t.Fatalf("provider = %q, want openrouter", cfg.Provider)
-		}
-		return []registry.ModelMetadata{
-			{ID: "vendor/model-a"},
-			{ID: "vendor/model-b"},
-			{ID: "vendor/model-c"},
-		}, nil
-	}
-	defer func() { listModelsForConfig = oldListModelsForConfig }()
-
-	model := readyModel(t)
-	model.Model.Backend = stubBackend{
-		sess:     &stubSession{events: make(chan session.Event)},
-		provider: "openrouter",
-		model:    "vendor/model-b",
-	}
-	model.Picker.Overlay = &pickerOverlayState{
-		title: "Pick a model for openrouter",
-		items: []pickerItem{
-			{Label: "vendor/model-b", Value: "vendor/model-b", Group: "Favorites", Detail: "Primary"},
-			{Label: "vendor/model-a", Value: "vendor/model-a", Group: "Favorites", Detail: "Fast"},
-			{Label: "vendor/model-c", Value: "vendor/model-c", Group: "All models"},
-		},
-		filtered: []pickerItem{
-			{Label: "vendor/model-b", Value: "vendor/model-b", Group: "Favorites", Detail: "Primary"},
-			{Label: "vendor/model-a", Value: "vendor/model-a", Group: "Favorites", Detail: "Fast"},
-			{Label: "vendor/model-c", Value: "vendor/model-c", Group: "All models"},
-		},
-		index:   0,
-		purpose: pickerPurposeModel,
-		cfg:     &config.Config{Provider: "openrouter"},
-	}
-
-	updated, cmd := model.handlePickerKey(tea.KeyPressMsg{Text: "1", Code: '1'})
-	model = updated
-	if cmd == nil {
-		t.Fatal("expected favorite shortcut to return a command")
-	}
-	msg := cmd()
-	next, _ := model.Update(msg)
-	model = next.(Model)
-
-	if model.Picker.Overlay != nil {
-		t.Fatal("expected picker to close after favorite selection")
-	}
-	if got := model.Model.Backend.Model(); got != "vendor/model-b" {
-		t.Fatalf("backend model = %q, want vendor/model-b", got)
-	}
-}
-
 func TestModelPickerTabReturnsToProviderPicker(t *testing.T) {
 	model := readyModel(t)
 	model.Picker.Overlay = &pickerOverlayState{
