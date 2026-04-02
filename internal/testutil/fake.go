@@ -168,6 +168,8 @@ func (b *Backend) SetMode(session.Mode) {}
 
 func (b *Backend) SetAutoApprove(bool) {}
 
+func (b *Backend) AllowCategory(string) {}
+
 func (b *Backend) Close() error {
 	close(b.events)
 	return nil

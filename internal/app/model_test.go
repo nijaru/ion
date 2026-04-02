@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -80,14 +81,18 @@ func (b *compactBackend) Compact(ctx context.Context) (bool, error) {
 }
 
 type stubSession struct {
-	events  chan session.Event
-	submits []string
-	cancels int
+	events    chan session.Event
+	submits   []string
+	cancels   int
+	submitErr error
 }
 
 func (s *stubSession) Open(ctx context.Context) error              { return nil }
 func (s *stubSession) Resume(ctx context.Context, id string) error { return nil }
 func (s *stubSession) SubmitTurn(ctx context.Context, turn string) error {
+	if s.submitErr != nil {
+		return s.submitErr
+	}
 	s.submits = append(s.submits, turn)
 	return nil
 }
@@ -112,6 +117,7 @@ func (s *stubSession) RegisterMCPServer(ctx context.Context, cmd string, args ..
 func (s *stubSession) SetMode(mode session.Mode) {}
 
 func (s *stubSession) SetAutoApprove(bool)     {}
+func (s *stubSession) AllowCategory(string)    {}
 func (s *stubSession) ID() string              { return "stub" }
 func (s *stubSession) Meta() map[string]string { return nil }
 
@@ -1672,6 +1678,91 @@ func TestRuntimeSwitchKeepsNoticesOutOfTranscriptStorage(t *testing.T) {
 			"expected runtime switch notice to stay out of transcript storage, got %d appends",
 			len(newStorage.appends),
 		)
+	}
+}
+
+func TestRuntimeSwitchClearsQueuedTurns(t *testing.T) {
+	model := readyModel(t)
+	model.InFlight.QueuedTurns = []string{"stale follow up"}
+	model.Progress.LastError = "old error"
+	model.Progress.LastTurnSummary = turnSummary{Elapsed: time.Second, Input: 1, Output: 2, Cost: 3}
+
+	next, _ := model.Update(runtimeSwitchedMsg{
+		backend: stubBackend{sess: &stubSession{events: make(chan session.Event)}},
+		session: &stubSession{events: make(chan session.Event)},
+		storage: &stubStorageSession{id: "session-1", branch: "main"},
+		status:  "ready",
+	})
+	model = next.(Model)
+
+	if len(model.InFlight.QueuedTurns) != 0 {
+		t.Fatalf("queued turns = %v, want cleared on runtime switch", model.InFlight.QueuedTurns)
+	}
+	if model.Progress.LastError != "" {
+		t.Fatalf("last error = %q, want cleared on runtime switch", model.Progress.LastError)
+	}
+	if model.Progress.LastTurnSummary != (turnSummary{}) {
+		t.Fatalf("last turn summary = %#v, want cleared on runtime switch", model.Progress.LastTurnSummary)
+	}
+}
+
+func TestSessionErrorClearsQueuedTurnsAndSetsError(t *testing.T) {
+	model := readyModel(t)
+	model.InFlight.QueuedTurns = []string{"stale follow up"}
+	model.Progress.LastError = "old error"
+
+	next, _ := model.Update(session.Error{Err: errors.New("backend failed")})
+	model = next.(Model)
+
+	if len(model.InFlight.QueuedTurns) != 0 {
+		t.Fatalf("queued turns = %v, want cleared on session error", model.InFlight.QueuedTurns)
+	}
+	if model.Progress.Mode != stateError {
+		t.Fatalf("progress mode = %v, want error", model.Progress.Mode)
+	}
+	if model.Progress.LastError != "backend failed" {
+		t.Fatalf("last error = %q, want backend failed", model.Progress.LastError)
+	}
+}
+
+func TestSubmitTextPropagatesImmediateSessionError(t *testing.T) {
+	sess := &stubSession{
+		events:    make(chan session.Event),
+		submitErr: errors.New("backend unavailable"),
+	}
+	storeSess := &stubStorageSession{id: "stub-session"}
+	model := readyModel(t)
+	model.Model.Session = sess
+	model.Model.Storage = storeSess
+	model.Input.Composer.SetValue("hello")
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(Model)
+
+	if model.Progress.Mode != stateError {
+		t.Fatalf("progress mode = %v, want error", model.Progress.Mode)
+	}
+	if model.Progress.LastError != "backend unavailable" {
+		t.Fatalf("last error = %q, want backend unavailable", model.Progress.LastError)
+	}
+	if !model.Progress.TurnStartedAt.IsZero() {
+		t.Fatalf("turn started at = %v, want zero after immediate submit failure", model.Progress.TurnStartedAt)
+	}
+	if len(sess.submits) != 0 {
+		t.Fatalf("submit count = %d, want 0 after immediate failure", len(sess.submits))
+	}
+	if cmd == nil {
+		t.Fatal("expected follow-up command to render transcript entries")
+	}
+	if len(storeSess.appends) != 2 {
+		t.Fatalf("storage appends = %d, want user + system error entries", len(storeSess.appends))
+	}
+	if got := storeSess.appends[1]; got == nil {
+		t.Fatal("expected persisted system error entry")
+	} else if sys, ok := got.(storage.System); !ok {
+		t.Fatalf("persisted error entry type = %T, want storage.System", got)
+	} else if sys.Content != "Error: backend unavailable" {
+		t.Fatalf("persisted error content = %q, want wrapped backend error", sys.Content)
 	}
 }
 

@@ -2,6 +2,7 @@ package canto
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -45,6 +46,33 @@ func (p *compactProvider) Capabilities(model string) llm.Capabilities {
 }
 
 func (p *compactProvider) IsTransient(err error) bool { return false }
+
+func (p *compactProvider) IsContextOverflow(err error) bool { return false }
+
+var transientStreamErr = errors.New("transient provider failure")
+var overflowErr = errors.New("context_length_exceeded")
+
+type retryProvider struct {
+	*ctesting.FauxProvider
+}
+
+func (p *retryProvider) IsTransient(err error) bool {
+	return errors.Is(err, transientStreamErr)
+}
+
+func (p *retryProvider) IsContextOverflow(err error) bool { return false }
+
+type overflowRecoveryProvider struct {
+	*ctesting.FauxProvider
+}
+
+func (p *overflowRecoveryProvider) CountTokens(ctx context.Context, model string, messages []llm.Message) (int, error) {
+	return 10_000, nil
+}
+
+func (p *overflowRecoveryProvider) IsContextOverflow(err error) bool {
+	return errors.Is(err, overflowErr)
+}
 
 func TestProviderAndModelLoadFromEnv(t *testing.T) {
 	t.Setenv("ION_PROVIDER", "anthropic")
@@ -282,6 +310,159 @@ func TestCompactUsesManualCompactionHelper(t *testing.T) {
 	}
 	if !entryExists(entries, ionsession.System, "<conversation_summary>") {
 		t.Fatalf("expected compacted effective history to include conversation summary, got %#v", entries)
+	}
+
+	cantoStore, ok := store.(interface{ Canto() *csession.SQLiteStore })
+	if !ok {
+		t.Fatal("expected canto-backed store")
+	}
+	sess, err := cantoStore.Canto().Load(ctx, storageSession.ID())
+	if err != nil {
+		t.Fatalf("load canto session: %v", err)
+	}
+	var compactionEvents int
+	for _, e := range sess.Events() {
+		if e.Type == csession.CompactionTriggered {
+			compactionEvents++
+		}
+	}
+	if compactionEvents == 0 {
+		t.Fatal("expected at least one durable compaction event")
+	}
+}
+
+func TestOpenRetriesTransientProviderErrors(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	root := t.TempDir()
+	store, err := storage.NewCantoStore(root)
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+
+	storageSession, err := store.OpenSession(ctx, "/tmp/ion-retry", "openai/model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	provider := &retryProvider{
+		FauxProvider: ctesting.NewMockProvider(
+			"openai",
+			ctesting.Step{Err: transientStreamErr},
+			ctesting.Step{Content: "recovered reply"},
+		),
+	}
+
+	oldFactory := providerFactory
+	providerFactory = func(ctx context.Context, cfg *config.Config) (llm.Provider, error) {
+		if cfg.Provider == "openai" {
+			return provider, nil
+		}
+		return oldFactory(ctx, cfg)
+	}
+	defer func() { providerFactory = oldFactory }()
+
+	b := New()
+	b.SetStore(store)
+	b.SetSession(storageSession)
+	b.SetConfig(&config.Config{Provider: "openai", Model: "model-a", ContextLimit: 100})
+	if err := b.Open(ctx); err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer func() { _ = b.Close() }()
+
+	if err := b.SubmitTurn(ctx, "retry this request"); err != nil {
+		t.Fatalf("submit turn: %v", err)
+	}
+	waitForTurnFinished(t, b.Events())
+
+	calls := provider.Calls()
+	if len(calls) != 2 {
+		t.Fatalf("provider calls = %d, want 2 retries", len(calls))
+	}
+}
+
+func TestOpenRecoversFromContextOverflowByCompacting(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	root := t.TempDir()
+	store, err := storage.NewCantoStore(root)
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+
+	storageSession, err := store.OpenSession(ctx, "/tmp/ion-overflow", "openai/model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	for _, msg := range []storage.Agent{
+		{Type: "agent", Content: []storage.Block{{Type: "text", Text: textPtr(strings.Repeat("alpha ", 60))}}},
+		{Type: "agent", Content: []storage.Block{{Type: "text", Text: textPtr(strings.Repeat("beta ", 60))}}},
+		{Type: "agent", Content: []storage.Block{{Type: "text", Text: textPtr(strings.Repeat("gamma ", 60))}}},
+		{Type: "agent", Content: []storage.Block{{Type: "text", Text: textPtr("recent answer")}}},
+	} {
+		if err := storageSession.Append(ctx, msg); err != nil {
+			t.Fatalf("append history: %v", err)
+		}
+	}
+	if err := storageSession.Append(ctx, storage.User{Type: "user", Content: "recent question"}); err != nil {
+		t.Fatalf("append recent user: %v", err)
+	}
+
+	provider := &overflowRecoveryProvider{
+		FauxProvider: ctesting.NewMockProvider(
+			"openai",
+			ctesting.Step{Err: overflowErr},
+			ctesting.Step{Content: "compacted summary"},
+			ctesting.Step{Content: "recovered reply"},
+		),
+	}
+
+	oldFactory := providerFactory
+	providerFactory = func(ctx context.Context, cfg *config.Config) (llm.Provider, error) {
+		if cfg.Provider == "openai" {
+			return provider, nil
+		}
+		return oldFactory(ctx, cfg)
+	}
+	defer func() { providerFactory = oldFactory }()
+
+	b := New()
+	b.SetStore(store)
+	b.SetSession(storageSession)
+	b.SetConfig(&config.Config{Provider: "openai", Model: "model-a", ContextLimit: 100})
+	if err := b.Open(ctx); err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer func() { _ = b.Close() }()
+
+	if err := b.SubmitTurn(ctx, "overflow recovery please"); err != nil {
+		t.Fatalf("submit turn: %v", err)
+	}
+	waitForTurnFinished(t, b.Events())
+
+	calls := provider.Calls()
+	if len(calls) != 3 {
+		t.Fatalf("provider calls = %d, want 3 (overflow, compact, retry)", len(calls))
+	}
+
+	resumed, err := store.ResumeSession(ctx, storageSession.ID())
+	if err != nil {
+		t.Fatalf("resume compacted session: %v", err)
+	}
+	entries, err := resumed.Entries(ctx)
+	if err != nil {
+		t.Fatalf("entries: %v", err)
+	}
+	if !entryExists(entries, ionsession.System, "<conversation_summary>") {
+		t.Fatalf("expected automatic compaction to add a conversation summary, got %#v", entries)
 	}
 
 	cantoStore, ok := store.(interface{ Canto() *csession.SQLiteStore })

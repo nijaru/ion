@@ -172,7 +172,6 @@ func (m Model) renderSessionPicker() string {
 	return b.String()
 }
 
-
 func rankedSessionPickerItems(items []sessionPickerItem, query, cwd string) []sessionPickerItem {
 	type rankedItem struct {
 		item  sessionPickerItem
@@ -184,6 +183,8 @@ func rankedSessionPickerItems(items []sessionPickerItem, query, cwd string) []se
 	for i, item := range items {
 		score, ok := pickerSearchScore(query,
 			pickerSearchField{value: item.info.ID, weight: 0},
+			pickerSearchField{value: item.info.Title, weight: 3},
+			pickerSearchField{value: item.info.Summary, weight: 4},
 			pickerSearchField{value: item.info.LastPreview, weight: 5},
 			pickerSearchField{value: filepath.Base(cwd), weight: 10},
 			pickerSearchField{value: cwd, weight: 12},
@@ -197,6 +198,12 @@ func rankedSessionPickerItems(items []sessionPickerItem, query, cwd string) []se
 	slices.SortFunc(ranked, func(a, b rankedItem) int {
 		if a.score != b.score {
 			return a.score - b.score
+		}
+		if cmp := strings.Compare(strings.ToLower(a.item.info.Title), strings.ToLower(b.item.info.Title)); cmp != 0 {
+			return cmp
+		}
+		if cmp := strings.Compare(strings.ToLower(a.item.info.Summary), strings.ToLower(b.item.info.Summary)); cmp != 0 {
+			return cmp
 		}
 		if cmp := strings.Compare(strings.ToLower(a.item.info.LastPreview), strings.ToLower(b.item.info.LastPreview)); cmp != 0 {
 			return cmp
@@ -212,13 +219,22 @@ func rankedSessionPickerItems(items []sessionPickerItem, query, cwd string) []se
 }
 
 func sessionPickerLine(cwd string, info storage.SessionInfo) (string, string) {
-	label := strings.TrimSpace(info.LastPreview)
+	label := strings.TrimSpace(info.Title)
+	if label == "" {
+		label = strings.TrimSpace(info.Summary)
+	}
+	if label == "" {
+		label = strings.TrimSpace(info.LastPreview)
+	}
 	if label == "" {
 		label = info.ID
 	}
 	label = truncateRunes(label, 72)
 
 	var detailParts []string
+	if summary := strings.TrimSpace(info.Summary); summary != "" && summary != label {
+		detailParts = append(detailParts, truncateRunes(summary, 72))
+	}
 	if age := humanizeSessionAge(time.Since(info.UpdatedAt)); age != "" {
 		detailParts = append(detailParts, age)
 	}

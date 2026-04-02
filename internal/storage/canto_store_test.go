@@ -43,8 +43,8 @@ func TestCantoStoreAppendUpdatesRecentSession(t *testing.T) {
 
 	time.Sleep(1100 * time.Millisecond)
 
-	if err := first.Append(ctx, Status{Status: "working"}); err != nil {
-		t.Fatalf("append status: %v", err)
+	if err := first.Append(ctx, User{Content: "working"}); err != nil {
+		t.Fatalf("append user: %v", err)
 	}
 
 	recent, err = store.GetRecentSession(ctx, cwd)
@@ -53,6 +53,12 @@ func TestCantoStoreAppendUpdatesRecentSession(t *testing.T) {
 	}
 	if recent.ID != first.ID() {
 		t.Fatalf("recent session after append = %q, want %q", recent.ID, first.ID())
+	}
+	if recent.Title != "working" {
+		t.Fatalf("recent title = %q, want %q", recent.Title, "working")
+	}
+	if recent.Summary != "working" || recent.LastPreview != "working" {
+		t.Fatalf("recent summary = %q / %q, want %q", recent.Summary, recent.LastPreview, "working")
 	}
 }
 
@@ -134,6 +140,36 @@ func TestCantoStoreEntriesMapToolMessages(t *testing.T) {
 	}
 	if entries[2].Role != ionsession.Tool || entries[2].Title != "bash" || entries[2].Content != "tool output" {
 		t.Fatalf("tool entry = %#v", entries[2])
+	}
+}
+
+func TestCantoStoreEntriesMapSystemMessages(t *testing.T) {
+	root := t.TempDir()
+	storeAny, err := NewCantoStore(root)
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	store := storeAny.(*cantoStore)
+
+	ctx := context.Background()
+	sess, err := store.OpenSession(ctx, "/tmp/ion-storage-test", "model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	if err := sess.Append(ctx, System{Content: "Error: backend unavailable"}); err != nil {
+		t.Fatalf("append system: %v", err)
+	}
+
+	entries, err := sess.Entries(ctx)
+	if err != nil {
+		t.Fatalf("entries: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("entries length = %d, want 1", len(entries))
+	}
+	if entries[0].Role != ionsession.System || entries[0].Content != "Error: backend unavailable" {
+		t.Fatalf("system entry = %#v", entries[0])
 	}
 }
 
