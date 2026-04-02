@@ -54,10 +54,6 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		}
 		return m.switchPresetCommand(presetFast)
 
-	case "ctrl+m":
-		m.clearPendingAction()
-		return m.openModelPicker()
-
 	case "ctrl+t":
 		m.clearPendingAction()
 		return m.openThinkingPicker()

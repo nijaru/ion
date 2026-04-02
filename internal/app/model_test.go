@@ -1147,7 +1147,6 @@ func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 		"/quit, /exit",
 		"/help",
 		"Ctrl+P",
-		"Ctrl+M",
 		"Ctrl+T",
 		"Tab",
 		"Shift+Tab",

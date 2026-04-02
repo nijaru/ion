@@ -123,7 +123,7 @@ func noProviderConfiguredStatus() string {
 }
 
 func noModelConfiguredStatus() string {
-	return "No model configured. Use /model or Ctrl+M. Set ION_MODEL for scripts."
+	return "No model configured. Use /model. Set ION_MODEL for scripts."
 }
 
 func compactCount(n int) string {
