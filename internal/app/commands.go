@@ -344,6 +344,7 @@ func helpText() string {
 		"  Ctrl+M           toggle primary/fast preset",
 		"  Ctrl+T           thinking picker",
 		"  Tab              swap provider/model pickers",
+		"  PgUp / PgDn      page through picker lists",
 		"  Shift+Tab        cycle READ → EDIT → YOLO",
 		"  Esc              cancel running turn",
 		"  Up / Down        command history",
@@ -547,6 +548,22 @@ func (m Model) handlePickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	case "ctrl+m":
 		if m.Picker.Overlay.purpose == pickerPurposeModel {
 			return m.switchPresetCommand(togglePreset(m.activePreset()))
+		}
+		return m, nil
+	case "pgup", "pageup":
+		if m.Picker.Overlay.index > 0 {
+			m.Picker.Overlay.index -= pickerPageSize
+			if m.Picker.Overlay.index < 0 {
+				m.Picker.Overlay.index = 0
+			}
+		}
+		return m, nil
+	case "pgdown", "pagedown":
+		if max := len(pickerDisplayItems(m.Picker.Overlay)); max > 0 {
+			m.Picker.Overlay.index += pickerPageSize
+			if m.Picker.Overlay.index >= max {
+				m.Picker.Overlay.index = max - 1
+			}
 		}
 		return m, nil
 	case "up":

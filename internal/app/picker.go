@@ -16,6 +16,8 @@ import (
 var listModels = registry.ListModels
 var listModelsForConfig = registry.ListModelsForConfig
 
+const pickerPageSize = 8
+
 func providerItems(cfg *config.Config) []pickerItem {
 	items := make([]pickerItem, 0, len(providers.Native()))
 	for _, def := range providers.Native() {
