@@ -1671,6 +1671,9 @@ func TestChildLifecycleUpdatesPlaneB(t *testing.T) {
 	if model.InFlight.Pending != nil {
 		t.Fatalf("expected child entry to commit and clear, got %#v", model.InFlight.Pending)
 	}
+	if model.Progress.Mode != stateComplete {
+		t.Fatalf("progress mode after child complete = %v, want stateComplete", model.Progress.Mode)
+	}
 
 	updated, _ = model.handleSessionEvent(session.ChildRequested{
 		AgentName: "worker-2",
@@ -1685,6 +1688,12 @@ func TestChildLifecycleUpdatesPlaneB(t *testing.T) {
 	model = updated
 	if model.InFlight.Pending != nil {
 		t.Fatalf("expected failed child entry to clear, got %#v", model.InFlight.Pending)
+	}
+	if model.Progress.Mode != stateError {
+		t.Fatalf("progress mode after child failure = %v, want stateError", model.Progress.Mode)
+	}
+	if model.Progress.LastError != "Subagent failed: boom" {
+		t.Fatalf("last error after child failure = %q, want subagent error", model.Progress.LastError)
 	}
 }
 
