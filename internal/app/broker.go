@@ -30,7 +30,13 @@ func (m Model) awaitSessionEvent() tea.Cmd {
 func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 	switch msg := ev.(type) {
 	case session.StatusChanged:
-		m.Progress.Status = msg.Status
+		if msg.AgentID == "" {
+			m.Progress.Status = msg.Status
+		} else {
+			if p, ok := m.InFlight.Subagents[msg.AgentID]; ok {
+				p.Status = msg.Status
+			}
+		}
 		if err := m.persistEntry("persist status", storage.Status{
 			Type:   "status",
 			Status: msg.Status,
@@ -89,51 +95,80 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		return m, m.awaitSessionEvent()
 
 	case session.ThinkingDelta:
-		m.InFlight.ReasonBuf += msg.Delta
+		if msg.AgentID == "" {
+			m.InFlight.ReasonBuf += msg.Delta
+		} else {
+			if p, ok := m.InFlight.Subagents[msg.AgentID]; ok {
+				p.Reasoning += msg.Delta
+			}
+		}
 		return m, m.awaitSessionEvent()
 
 	case session.AgentDelta:
-		m.Progress.Mode = stateStreaming
-		if m.InFlight.Pending == nil {
-			m.InFlight.Pending = &session.Entry{Role: session.Agent}
+		if msg.AgentID == "" {
+			m.Progress.Mode = stateStreaming
+			if m.InFlight.Pending == nil {
+				m.InFlight.Pending = &session.Entry{Role: session.Agent}
+			}
+			m.InFlight.Pending.Content += msg.Delta
+			m.InFlight.StreamBuf = m.InFlight.Pending.Content
+		} else {
+			if p, ok := m.InFlight.Subagents[msg.AgentID]; ok {
+				p.Output += msg.Delta
+			}
 		}
-		m.InFlight.Pending.Content += msg.Delta
-		m.InFlight.StreamBuf = m.InFlight.Pending.Content
 		return m, m.awaitSessionEvent()
 
 	case session.AgentMessage:
-		if m.InFlight.Pending != nil && m.InFlight.Pending.Role == session.Agent {
-			if msg.Message != "" {
-				m.InFlight.Pending.Content = msg.Message
-			}
-			m.InFlight.Pending.Reasoning = m.InFlight.ReasonBuf
-			entry := *m.InFlight.Pending
-			m.InFlight.Pending = nil
-			m.InFlight.StreamBuf = ""
-			m.InFlight.ReasonBuf = ""
-			if strings.TrimSpace(entry.Content) == "" && strings.TrimSpace(entry.Reasoning) == "" {
-				return m, m.awaitSessionEvent()
-			}
+		if msg.AgentID == "" {
+			if m.InFlight.Pending != nil && m.InFlight.Pending.Role == session.Agent {
+				if msg.Message != "" {
+					m.InFlight.Pending.Content = msg.Message
+				}
+				m.InFlight.Pending.Reasoning = m.InFlight.ReasonBuf
+				entry := *m.InFlight.Pending
+				m.InFlight.Pending = nil
+				m.InFlight.StreamBuf = ""
+				m.InFlight.ReasonBuf = ""
+				if strings.TrimSpace(entry.Content) == "" && strings.TrimSpace(entry.Reasoning) == "" {
+					return m, m.awaitSessionEvent()
+				}
 
-			blocks := []storage.Block{}
-			if entry.Reasoning != "" {
+				blocks := []storage.Block{}
+				if entry.Reasoning != "" {
+					blocks = append(blocks, storage.Block{
+						Type:     "thinking",
+						Thinking: &entry.Reasoning,
+					})
+				}
 				blocks = append(blocks, storage.Block{
-					Type:     "thinking",
-					Thinking: &entry.Reasoning,
+					Type: "text",
+					Text: &entry.Content,
 				})
+				if err := m.persistEntry("persist agent response", storage.Agent{
+					Type:    "agent",
+					Content: blocks,
+					TS:      now(),
+				}); err != nil {
+					return m, tea.Sequence(m.printEntries(entry), persistErrorCmd("persist agent response", err))
+				}
+				return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
 			}
-			blocks = append(blocks, storage.Block{
-				Type: "text",
-				Text: &entry.Content,
-			})
-			if err := m.persistEntry("persist agent response", storage.Agent{
-				Type:    "agent",
-				Content: blocks,
-				TS:      now(),
-			}); err != nil {
-				return m, tea.Sequence(m.printEntries(entry), persistErrorCmd("persist agent response", err))
+		} else {
+			if p, ok := m.InFlight.Subagents[msg.AgentID]; ok {
+				content := p.Output
+				if msg.Message != "" {
+					content = msg.Message
+				}
+				committed := session.Entry{
+					Role:      session.Subagent,
+					Title:     p.Name,
+					Content:   "Completed: " + content,
+					Reasoning: p.Reasoning,
+				}
+				delete(m.InFlight.Subagents, msg.AgentID)
+				return m, tea.Sequence(m.printEntries(committed), m.awaitSessionEvent())
 			}
-			return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
 		}
 		return m, m.awaitSessionEvent()
 
@@ -210,57 +245,113 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		return m, m.awaitSessionEvent()
 
 	case session.ChildRequested:
-		m.InFlight.Pending = &session.Entry{
-			Role:    session.Subagent,
-			Title:   msg.AgentName,
-			Content: msg.Query,
+		p := &SubagentProgress{
+			ID:     msg.AgentName,
+			Name:   msg.AgentName,
+			Intent: msg.Query,
+			Status: "Requested",
 		}
+		if m.InFlight.Subagents == nil {
+			m.InFlight.Subagents = make(map[string]*SubagentProgress)
+		}
+		m.InFlight.Subagents[msg.AgentName] = p
 		m.Progress.Mode = stateWorking
-		return m, m.awaitSessionEvent()
+
+		// Persist start breadcrumb
+		if err := m.persistEntry("persist subagent start", storage.Subagent{
+			Type:    "subagent",
+			Name:    msg.AgentName,
+			Content: "Started: " + msg.Query,
+			IsError: false,
+			TS:      now(),
+		}); err != nil {
+			return m, tea.Sequence(m.printEntries(session.Entry{
+				Role:    session.Subagent,
+				Title:   p.Name,
+				Content: "Started: " + p.Intent,
+			}), persistErrorCmd("persist subagent start", err))
+		}
+		// We print the started entry immediately to scrollback
+		return m, tea.Sequence(m.printEntries(session.Entry{
+			Role:    session.Subagent,
+			Title:   p.Name,
+			Content: "Started: " + p.Intent,
+		}), m.awaitSessionEvent())
 
 	case session.ChildStarted:
-		if m.InFlight.Pending != nil && m.InFlight.Pending.Role == session.Subagent {
-			m.InFlight.Pending.Title = msg.AgentName
+		if p, ok := m.InFlight.Subagents[msg.AgentName]; ok {
+			p.Status = "Started"
 			m.Progress.Mode = stateWorking
 		}
 		return m, m.awaitSessionEvent()
 
 	case session.ChildDelta:
-		if m.InFlight.Pending != nil && m.InFlight.Pending.Role == session.Subagent {
-			m.InFlight.Pending.Content += msg.Delta
+		if p, ok := m.InFlight.Subagents[msg.AgentName]; ok {
+			p.Output += msg.Delta
 		}
 		return m, m.awaitSessionEvent()
 
 	case session.ChildCompleted:
-		if m.InFlight.Pending != nil && m.InFlight.Pending.Role == session.Subagent {
-			m.InFlight.Pending.Content = msg.Result
-			entry := *m.InFlight.Pending
-			m.InFlight.Pending = nil
+		if p, ok := m.InFlight.Subagents[msg.AgentName]; ok {
+			p.Status = "Completed"
+			p.Output = msg.Result
+			committed := session.Entry{
+				Role:    session.Subagent,
+				Title:   p.Name,
+				Content: "Completed: " + p.Output,
+			}
+			delete(m.InFlight.Subagents, msg.AgentName)
 			m.Progress.Mode = stateComplete
-			return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
+
+			if err := m.persistEntry("persist subagent completion", storage.Subagent{
+				Type:    "subagent",
+				Name:    msg.AgentName,
+				Content: committed.Content,
+				IsError: false,
+				TS:      now(),
+			}); err != nil {
+				return m, tea.Sequence(m.printEntries(committed), persistErrorCmd("persist subagent completion", err))
+			}
+			return m, tea.Sequence(m.printEntries(committed), m.awaitSessionEvent())
 		}
 		return m, m.awaitSessionEvent()
 
 	case session.ChildBlocked:
-		if m.InFlight.Pending != nil && m.InFlight.Pending.Role == session.Subagent {
-			m.InFlight.Pending.Content = "BLOCKED: " + msg.Reason
-			entry := *m.InFlight.Pending
-			entry.IsError = false
+		if p, ok := m.InFlight.Subagents[msg.AgentName]; ok {
+			p.Status = "Blocked"
+			p.Output = "BLOCKED: " + msg.Reason
+			// Note: We don't remove from Subagents on block, as it's still active just waiting
 			m.Progress.Mode = stateBlocked
 			m.InFlight.Thinking = false
-			return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
+			// We keep it in Plane B only, no durable transcript entry yet.
+			return m, m.awaitSessionEvent()
 		}
 		return m, m.awaitSessionEvent()
 
 	case session.ChildFailed:
-		if m.InFlight.Pending != nil && m.InFlight.Pending.Role == session.Subagent {
-			m.InFlight.Pending.Content = "ERROR: " + msg.Error
-			m.InFlight.Pending.IsError = true
-			entry := *m.InFlight.Pending
-			m.InFlight.Pending = nil
+		if p, ok := m.InFlight.Subagents[msg.AgentName]; ok {
+			p.Status = "Failed"
+			p.Output = "ERROR: " + msg.Error
+			committed := session.Entry{
+				Role:    session.Subagent,
+				Title:   p.Name,
+				Content: "Failed: " + msg.Error,
+				IsError: true,
+			}
+			delete(m.InFlight.Subagents, msg.AgentName)
 			m.Progress.Mode = stateError
 			m.Progress.LastError = "Subagent failed: " + msg.Error
-			return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
+
+			if err := m.persistEntry("persist subagent failure", storage.Subagent{
+				Type:    "subagent",
+				Name:    msg.AgentName,
+				Content: committed.Content,
+				IsError: true,
+				TS:      now(),
+			}); err != nil {
+				return m, tea.Sequence(m.printEntries(committed), persistErrorCmd("persist subagent failure", err))
+			}
+			return m, tea.Sequence(m.printEntries(committed), m.awaitSessionEvent())
 		}
 		return m, m.awaitSessionEvent()
 

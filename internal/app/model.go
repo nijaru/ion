@@ -172,12 +172,23 @@ type ModelState struct {
 	Switcher runtimeSwitcher
 }
 
+// SubagentProgress tracks the ephemeral state of a background worker.
+type SubagentProgress struct {
+	ID        string
+	Name      string
+	Intent    string
+	Status    string
+	Output    string
+	Reasoning string
+}
+
 // InFlightState holds data for the currently active turn or streaming response.
 type InFlightState struct {
-	Pending     *session.Entry // streaming agent, active tool, or active subagent
-	ReasonBuf   string         // accumulates ThinkingDelta
-	StreamBuf   string         // accumulates AgentDelta (mirrors pending.Content)
-	QueuedTurns []string       // follow-up turns queued during agent work
+	Pending     *session.Entry               // streaming agent, active tool, or active subagent
+	Subagents   map[string]*SubagentProgress // active child agents by ID
+	ReasonBuf   string                       // accumulates ThinkingDelta
+	StreamBuf   string                       // accumulates AgentDelta (mirrors pending.Content)
+	QueuedTurns []string                     // follow-up turns queued during agent work
 	Thinking    bool
 }
 
@@ -287,6 +298,9 @@ func New(
 			Storage:  s,
 			Store:    store,
 			Switcher: switcher,
+		},
+		InFlight: InFlightState{
+			Subagents: make(map[string]*SubagentProgress),
 		},
 		Progress: ProgressState{
 			Status: boot.Status,
@@ -473,6 +487,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.App.Branch = meta.Branch
 		}
 		m.InFlight.Pending = nil
+		m.InFlight.Subagents = make(map[string]*SubagentProgress)
 		m.Approval.Pending = nil
 		m.InFlight.QueuedTurns = nil
 		m.InFlight.ReasonBuf = ""

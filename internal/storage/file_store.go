@@ -371,6 +371,9 @@ func (s *fileSession) Append(ctx context.Context, event any) error {
 			}
 		}
 		touchIndex = true
+	case Subagent:
+		preview = sessionSummary(e.Content)
+		touchIndex = true
 	case TokenUsage:
 		// Just save to log, no preview update
 	}
@@ -433,6 +436,15 @@ func (s *fileSession) Entries(ctx context.Context) ([]session.Entry, error) {
 			} else {
 				entries = append(entries, session.Entry{Role: session.Tool, Content: e.Content})
 			}
+		case "subagent":
+			var e Subagent
+			json.Unmarshal(line, &e)
+			entries = append(entries, session.Entry{
+				Role:    session.Subagent,
+				Title:   e.Name,
+				Content: e.Content,
+				IsError: e.IsError,
+			})
 		}
 	}
 

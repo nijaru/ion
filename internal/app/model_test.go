@@ -1637,30 +1637,31 @@ func TestChildLifecycleUpdatesPlaneB(t *testing.T) {
 		Query:     "inspect the repo",
 	})
 	model = updated
-	if model.InFlight.Pending == nil || model.InFlight.Pending.Role != session.Subagent {
-		t.Fatalf("pending child after request = %#v, want subagent entry", model.InFlight.Pending)
+	if model.InFlight.Subagents["worker-1"] == nil || model.InFlight.Subagents["worker-1"].Name != "worker-1" {
+		t.Fatalf("pending child after request = %#v, want subagent progress in Subagents map", model.InFlight.Subagents["worker-1"])
 	}
-	if model.InFlight.Pending.Title != "worker-1" {
-		t.Fatalf("child title = %q, want worker-1", model.InFlight.Pending.Title)
+	if model.InFlight.Subagents["worker-1"].Name != "worker-1" {
+		t.Fatalf("child name = %q, want worker-1", model.InFlight.Subagents["worker-1"].Name)
 	}
-	if model.InFlight.Pending.Content != "inspect the repo" {
-		t.Fatalf("child content = %q, want query", model.InFlight.Pending.Content)
+	if model.InFlight.Subagents["worker-1"].Intent != "inspect the repo" {
+		t.Fatalf("child intent = %q, want query", model.InFlight.Subagents["worker-1"].Intent)
 	}
 
 	updated, _ = model.handleSessionEvent(session.ChildStarted{
 		AgentName: "worker-1",
 	})
 	model = updated
-	if model.InFlight.Pending == nil || model.InFlight.Pending.Title != "worker-1" {
-		t.Fatalf("child title after start = %#v, want worker-1", model.InFlight.Pending)
+	if model.InFlight.Subagents["worker-1"] == nil || model.InFlight.Subagents["worker-1"].Status != "Started" {
+		t.Fatalf("child status after start = %q, want Started", model.InFlight.Subagents["worker-1"].Status)
 	}
 
 	updated, _ = model.handleSessionEvent(session.ChildDelta{
-		Delta: "thinking...\n",
+		AgentName: "worker-1",
+		Delta:     "thinking...\n",
 	})
 	model = updated
-	if model.InFlight.Pending == nil || !strings.Contains(model.InFlight.Pending.Content, "thinking...") {
-		t.Fatalf("child content after delta = %#v, want streamed delta", model.InFlight.Pending)
+	if model.InFlight.Subagents["worker-1"] == nil || !strings.Contains(model.InFlight.Subagents["worker-1"].Output, "thinking...") {
+		t.Fatalf("child output after delta = %#v, want streamed delta", model.InFlight.Subagents["worker-1"])
 	}
 
 	updated, _ = model.handleSessionEvent(session.ChildCompleted{
@@ -1668,8 +1669,8 @@ func TestChildLifecycleUpdatesPlaneB(t *testing.T) {
 		Result:    "done",
 	})
 	model = updated
-	if model.InFlight.Pending != nil {
-		t.Fatalf("expected child entry to commit and clear, got %#v", model.InFlight.Pending)
+	if model.InFlight.Subagents["worker-1"] != nil {
+		t.Fatalf("expected child entry to clear, got %#v", model.InFlight.Subagents["worker-1"])
 	}
 	if model.Progress.Mode != stateComplete {
 		t.Fatalf("progress mode after child complete = %v, want stateComplete", model.Progress.Mode)
@@ -1686,8 +1687,8 @@ func TestChildLifecycleUpdatesPlaneB(t *testing.T) {
 		Error:     "boom",
 	})
 	model = updated
-	if model.InFlight.Pending != nil {
-		t.Fatalf("expected failed child entry to clear, got %#v", model.InFlight.Pending)
+	if model.InFlight.Subagents["worker-2"] != nil {
+		t.Fatalf("expected failed child entry to clear, got %#v", model.InFlight.Subagents["worker-2"])
 	}
 	if model.Progress.Mode != stateError {
 		t.Fatalf("progress mode after child failure = %v, want stateError", model.Progress.Mode)
@@ -1712,14 +1713,11 @@ func TestChildBlockedUpdatesPlaneB(t *testing.T) {
 	})
 	model = updated
 
-	if model.InFlight.Pending == nil || model.InFlight.Pending.Role != session.Subagent {
-		t.Fatalf("pending child after block = %#v, want subagent entry", model.InFlight.Pending)
+	if model.InFlight.Subagents["worker-3"] == nil || model.InFlight.Subagents["worker-3"].Name != "worker-3" {
+		t.Fatalf("pending child after block = %#v, want subagent progress in Subagents map", model.InFlight.Subagents["worker-3"])
 	}
-	if got := model.InFlight.Pending.Content; !strings.Contains(got, "BLOCKED: needs approval") {
-		t.Fatalf("child content = %q, want blocked notice", got)
-	}
-	if model.InFlight.Pending.IsError {
-		t.Fatal("blocked child should not be marked as a hard error")
+	if got := model.InFlight.Subagents["worker-3"].Output; !strings.Contains(got, "BLOCKED: needs approval") {
+		t.Fatalf("child output = %q, want blocked notice", got)
 	}
 	if model.Progress.Mode != stateBlocked {
 		t.Fatalf("progress mode = %v, want stateBlocked", model.Progress.Mode)
