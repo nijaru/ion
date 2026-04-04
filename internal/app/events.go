@@ -144,12 +144,15 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			if m.Input.HistoryIdx == -1 {
 				m.Input.HistoryDraft = m.Input.Composer.Value()
 				m.Input.HistoryIdx = len(m.Input.History) - 1
+				m.Input.Composer.SetValue(m.Input.History[m.Input.HistoryIdx])
+				m.relayoutComposer()
+				return m, nil
 			} else if m.Input.HistoryIdx > 0 {
 				m.Input.HistoryIdx--
+				m.Input.Composer.SetValue(m.Input.History[m.Input.HistoryIdx])
+				m.relayoutComposer()
+				return m, nil
 			}
-			m.Input.Composer.SetValue(m.Input.History[m.Input.HistoryIdx])
-			m.relayoutComposer()
-			return m, nil
 		}
 		var cmd tea.Cmd
 		m.Input.Composer, cmd = m.Input.Composer.Update(msg)
@@ -157,18 +160,19 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 	case "down", "ctrl+n":
 		m.clearPendingAction()
-		if m.Input.HistoryIdx != -1 {
+		if m.Input.Composer.Line() == m.Input.Composer.LineCount()-1 && m.Input.HistoryIdx != -1 {
 			if m.Input.HistoryIdx < len(m.Input.History)-1 {
 				m.Input.HistoryIdx++
 				m.Input.Composer.SetValue(m.Input.History[m.Input.HistoryIdx])
 				m.relayoutComposer()
+				return m, nil
 			} else {
 				m.Input.HistoryIdx = -1
 				m.Input.Composer.SetValue(m.Input.HistoryDraft)
 				m.Input.HistoryDraft = ""
 				m.relayoutComposer()
+				return m, nil
 			}
-			return m, nil
 		}
 		var cmd tea.Cmd
 		m.Input.Composer, cmd = m.Input.Composer.Update(msg)

@@ -140,6 +140,14 @@ type (
 		TS     int64   `json:"ts"`
 	}
 
+	Subagent struct {
+		Type    string `json:"type"` // "subagent"
+		Name    string `json:"name"`
+		Content string `json:"content"`
+		IsError bool   `json:"is_error"`
+		TS      int64  `json:"ts"`
+	}
+
 	Block struct {
 		Type     string  `json:"type"` // "text" or "thinking"
 		Text     *string `json:"text,omitempty"`

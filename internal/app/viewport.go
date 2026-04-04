@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -16,7 +17,7 @@ type Viewport struct{}
 // renderPlaneB renders all ephemeral in-flight content.
 // Returns empty string when there is nothing active.
 func (m Model) renderPlaneB() string {
-	if m.InFlight.Pending == nil && m.Approval.Pending == nil && m.InFlight.ReasonBuf == "" {
+	if m.InFlight.Pending == nil && m.Approval.Pending == nil && m.InFlight.ReasonBuf == "" && len(m.InFlight.Subagents) == 0 {
 		return ""
 	}
 
@@ -36,6 +37,29 @@ func (m Model) renderPlaneB() string {
 	if m.InFlight.Pending != nil {
 		b.WriteString(m.renderPendingEntry(*m.InFlight.Pending))
 		b.WriteString("\n")
+	}
+
+	// Active subagents
+	if n := len(m.InFlight.Subagents); n > 0 {
+		// Sort keys for deterministic rendering
+		keys := sortedKeys(m.InFlight.Subagents)
+
+		// Show up to 3 active subagent rows
+		maxVisible := 3
+		shown := 0
+		for _, k := range keys {
+			if shown >= maxVisible {
+				break
+			}
+			p := m.InFlight.Subagents[k]
+			b.WriteString(m.renderSubagentRow(p))
+			b.WriteString("\n")
+			shown++
+		}
+		if n > maxVisible {
+			b.WriteString(m.st.dim.PaddingLeft(2).Render(fmt.Sprintf("+%d more workers", n-maxVisible)))
+			b.WriteString("\n")
+		}
 	}
 
 	// Approval prompt
@@ -127,6 +151,9 @@ func (m Model) renderEntry(e session.Entry) string {
 		b.WriteString(lines[0])
 		for _, line := range lines[1:] {
 			b.WriteString("\n")
+			if strings.TrimSpace(ansi.Strip(line)) != "" {
+				b.WriteString("  ")
+			}
 			b.WriteString(line)
 		}
 		return strings.TrimRightFunc(b.String(), unicode.IsSpace)
@@ -174,8 +201,10 @@ func (m Model) renderEntry(e session.Entry) string {
 		}
 		var b strings.Builder
 		b.WriteString(m.st.subagent.Render("↳ " + label))
-		b.WriteString("\n")
-		b.WriteString(m.st.dim.PaddingLeft(4).Render(e.Content))
+		if e.Content != "" {
+			b.WriteString("\n")
+			b.WriteString(m.st.dim.PaddingLeft(4).Render(e.Content))
+		}
 		return strings.TrimRightFunc(b.String(), unicode.IsSpace)
 
 	case session.System:
@@ -193,18 +222,27 @@ func (m Model) renderEntry(e session.Entry) string {
 func (m Model) progressLine() string {
 	var line string
 	switch m.Progress.Mode {
-	case stateIonizing:
-		line = m.Input.Spinner.View() + " Ionizing..."
-		if stats := m.runningProgressParts(); len(stats) > 0 {
-			line += " • " + strings.Join(stats, " • ")
+	case stateIonizing, stateStreaming, stateWorking:
+		status := m.Progress.Status
+		if isIdleStatus(status) || isConfigurationStatus(status) {
+			switch m.Progress.Mode {
+			case stateIonizing:
+				status = "Ionizing..."
+			case stateStreaming:
+				status = "Streaming..."
+			case stateWorking:
+				if len(m.InFlight.Subagents) > 0 {
+					// Prefer showing wait status for subagents
+					for _, k := range sortedKeys(m.InFlight.Subagents) {
+						status = "Waiting for " + m.InFlight.Subagents[k].Name + "..."
+						break
+					}
+				} else {
+					status = "Working..."
+				}
+			}
 		}
-	case stateStreaming:
-		line = m.Input.Spinner.View() + " Streaming..."
-		if stats := m.runningProgressParts(); len(stats) > 0 {
-			line += " • " + strings.Join(stats, " • ")
-		}
-	case stateWorking:
-		line = m.Input.Spinner.View() + " Working..."
+		line = m.Input.Spinner.View() + " " + status
 		if stats := m.runningProgressParts(); len(stats) > 0 {
 			line += " • " + strings.Join(stats, " • ")
 		}
@@ -339,4 +377,39 @@ func joinLineSegments(sep string, segments ...string) string {
 		return ""
 	}
 	return strings.Join(filtered, sep)
+}
+
+// renderSubagentRow formats a single background worker's status for Plane B.
+func (m Model) renderSubagentRow(p *SubagentProgress) string {
+	intent := p.Intent
+	if len(intent) > 24 {
+		intent = intent[:21] + "..."
+	}
+
+	detail := p.Status
+	if p.Output != "" {
+		lines := strings.Split(strings.TrimSpace(p.Output), "\n")
+		if len(lines) > 0 {
+			last := strings.TrimSpace(lines[len(lines)-1])
+			if last != "" {
+				if len(last) > 32 {
+					last = last[:29] + "..."
+				}
+				detail = fmt.Sprintf("%s: %s", detail, last)
+			}
+		}
+	}
+
+	return m.st.subagent.Render(fmt.Sprintf("↳ %-10s", p.Name)) + " " +
+		m.st.dim.Render(fmt.Sprintf("%-24s", intent)) + " " +
+		m.st.dim.Render(detail)
+}
+
+func sortedKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	return keys
 }

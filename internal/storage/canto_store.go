@@ -327,6 +327,17 @@ func (s *cantoSession) Append(ctx context.Context, event any) error {
 			Reasoning: reasoning.String(),
 		})
 		err = s.store.canto.Save(ctx, ev)
+	case Subagent:
+		preview = sessionSummary(e.Content)
+		content := fmt.Sprintf("Subagent %s: %s", e.Name, e.Content)
+		if e.IsError {
+			content = fmt.Sprintf("Subagent %s: ERROR: %s", e.Name, e.Content)
+		}
+		ev := session.NewEvent(s.id, session.MessageAdded, llm.Message{
+			Role:    llm.RoleSystem,
+			Content: content,
+		})
+		err = s.store.canto.Save(ctx, ev)
 	case ToolUse:
 		s.store.mu.Lock()
 		s.store.toolNames[e.ID] = e.Name
@@ -485,6 +496,26 @@ func (s *cantoSession) Entries(ctx context.Context) ([]ionsession.Entry, error) 
 				Content: msg.Content,
 			})
 		case llm.RoleSystem, llm.RoleDeveloper:
+			// Detect subagent breadcrumbs
+			if strings.HasPrefix(msg.Content, "Subagent ") && strings.Contains(msg.Content, ": ") {
+				parts := strings.SplitN(msg.Content[9:], ": ", 2)
+				if len(parts) == 2 {
+					name := parts[0]
+					content := parts[1]
+					isError := strings.HasPrefix(content, "ERROR: ")
+					if isError {
+						content = content[7:]
+					}
+					entries = append(entries, ionsession.Entry{
+						Role:    ionsession.Subagent,
+						Title:   name,
+						Content: content,
+						IsError: isError,
+					})
+					continue
+				}
+			}
+
 			entries = append(entries, ionsession.Entry{
 				Role:    ionsession.System,
 				Content: msg.Content,
