@@ -129,17 +129,33 @@ func (m Model) renderPendingEntry(e session.Entry) string {
 
 // renderEntry formats a completed entry for tea.Printf scrollback commit.
 func (m Model) renderEntry(e session.Entry) string {
+	thinkingVerbosity := "full"
+	toolVerbosity := "full"
+	if m.Model.Config != nil {
+		if m.Model.Config.ThinkingVerbosity != "" {
+			thinkingVerbosity = m.Model.Config.ThinkingVerbosity
+		}
+		if m.Model.Config.ToolVerbosity != "" {
+			toolVerbosity = m.Model.Config.ToolVerbosity
+		}
+	}
+
 	switch e.Role {
 	case session.User:
 		return m.st.user.Render("› " + e.Content)
 
 	case session.Agent:
 		var b strings.Builder
-		if e.Reasoning != "" {
+		if e.Reasoning != "" && thinkingVerbosity != "hidden" {
 			b.WriteString(m.st.system.Render("• Thinking"))
 			b.WriteString("\n")
-			b.WriteString(m.st.dim.PaddingLeft(4).Render(e.Reasoning))
-			b.WriteString("\n")
+			if thinkingVerbosity == "collapsed" {
+				b.WriteString(m.st.dim.PaddingLeft(4).Render("..."))
+				b.WriteString("\n")
+			} else {
+				b.WriteString(m.st.dim.PaddingLeft(4).Render(e.Reasoning))
+				b.WriteString("\n")
+			}
 		}
 		rendered := strings.TrimRightFunc(m.renderMarkdownContent(e.Content), unicode.IsSpace)
 		if rendered == "" {
@@ -169,7 +185,7 @@ func (m Model) renderEntry(e session.Entry) string {
 		} else {
 			labelStr = m.st.tool.Render("• " + label)
 		}
-		if e.Content == "" {
+		if e.Content == "" || toolVerbosity == "hidden" {
 			return labelStr
 		}
 		content := e.Content
@@ -179,18 +195,23 @@ func (m Model) renderEntry(e session.Entry) string {
 		var b strings.Builder
 		b.WriteString(labelStr)
 		b.WriteString("\n")
-		lines := strings.Split(strings.TrimRight(content, "\n"), "\n")
-		shown := lines
-		if len(lines) > 10 {
-			shown = lines[:10]
-		}
-		for _, l := range shown {
-			b.WriteString(m.st.dim.PaddingLeft(4).Render(l))
+		if toolVerbosity == "collapsed" {
+			b.WriteString(m.st.dim.PaddingLeft(4).Render("..."))
 			b.WriteString("\n")
-		}
-		if len(lines) > 10 {
-			b.WriteString(m.st.dim.PaddingLeft(4).Render(
-				fmt.Sprintf("... (%d more lines)", len(lines)-10)))
+		} else {
+			lines := strings.Split(strings.TrimRight(content, "\n"), "\n")
+			shown := lines
+			if len(lines) > 10 {
+				shown = lines[:10]
+			}
+			for _, l := range shown {
+				b.WriteString(m.st.dim.PaddingLeft(4).Render(l))
+				b.WriteString("\n")
+			}
+			if len(lines) > 10 {
+				b.WriteString(m.st.dim.PaddingLeft(4).Render(
+					fmt.Sprintf("... (%d more lines)", len(lines)-10)))
+			}
 		}
 		return strings.TrimRightFunc(b.String(), unicode.IsSpace)
 

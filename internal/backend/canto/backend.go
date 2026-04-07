@@ -329,6 +329,34 @@ func reasoningEffortProcessor(cfg *config.Config) ccontext.RequestProcessor {
 	)
 }
 
+func reflexionProcessor() ccontext.RequestProcessor {
+	return ccontext.RequestProcessorFunc(
+		func(ctx context.Context, p llm.Provider, model string, sess *session.Session, req *llm.Request) error {
+			if len(req.Messages) == 0 {
+				return nil
+			}
+			lastMsgIdx := len(req.Messages) - 1
+			lastMsg := req.Messages[lastMsgIdx]
+
+			if lastMsg.Role == llm.RoleUser && lastMsg.ToolID != "" {
+				ev, ok := sess.LastEvent()
+				if !ok {
+					return nil
+				}
+				if ev.Type == session.ToolCompleted {
+					var data struct {
+						Error string `json:"error,omitempty"`
+					}
+					if err := ev.UnmarshalData(&data); err == nil && data.Error != "" {
+						req.Messages[lastMsgIdx].Content += "\n\n[System Note: The tool execution failed. Analyze the error carefully. Think step-by-step about what went wrong, and formulate a new plan before your next tool call.]"
+					}
+				}
+			}
+			return nil
+		},
+	)
+}
+
 func normalizeReasoningEffort(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "", config.DefaultReasoningEffort:
@@ -481,21 +509,9 @@ func (b *Backend) Resume(ctx context.Context, sessionID string) error {
 }
 
 func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
-	if shouldCompact, err := b.shouldProactivelyCompact(ctx); err != nil {
-		return err
-	} else if shouldCompact {
-		b.events <- ionsession.StatusChanged{Status: "Compacting context..."}
-		if compacted, err := b.Compact(ctx); err != nil {
-			b.events <- ionsession.Error{Err: err}
-		} else if compacted {
-			b.events <- ionsession.StatusChanged{Status: "Ready"}
-		}
-	}
-
 	b.mu.Lock()
-	defer b.mu.Unlock()
-
 	if b.runner == nil {
+		b.mu.Unlock()
 		return fmt.Errorf("backend not initialized")
 	}
 
@@ -511,9 +527,11 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 
 	sub, err := b.runner.Watch(turnCtx, sessionID)
 	if err != nil {
+		b.mu.Unlock()
 		cancel()
 		return err
 	}
+	b.mu.Unlock()
 
 	go func() {
 		defer sub.Close()
@@ -523,6 +541,17 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 	// Run the agent turn with streaming
 	go func() {
 		defer cancel()
+
+		if shouldCompact, err := b.shouldProactivelyCompact(turnCtx); err == nil && shouldCompact {
+			b.events <- ionsession.StatusChanged{Status: "Compacting context..."}
+			if compacted, err := b.Compact(turnCtx); err != nil {
+				b.events <- ionsession.Error{Err: err}
+				return // Don't proceed if compaction fails
+			} else if compacted {
+				b.events <- ionsession.StatusChanged{Status: "Ready"}
+			}
+		}
+
 		_, err := b.runner.SendStream(turnCtx, sessionID, input, func(chunk *llm.Chunk) {
 			if chunk.Reasoning != "" {
 				b.events <- ionsession.ThinkingDelta{Delta: chunk.Reasoning}

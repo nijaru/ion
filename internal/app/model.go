@@ -170,6 +170,7 @@ type ModelState struct {
 	Storage  storage.Session
 	Store    storage.Store
 	Switcher runtimeSwitcher
+	Config   *config.Config
 }
 
 // SubagentProgress tracks the ephemeral state of a background worker.
@@ -316,6 +317,7 @@ func New(
 	}
 
 	if cfg, err := config.Load(); err == nil {
+		m.Model.Config = cfg
 		m.Progress.ReasoningEffort = normalizeThinkingValue(cfg.ReasoningEffort)
 	} else {
 		m.Progress.ReasoningEffort = config.DefaultReasoningEffort
