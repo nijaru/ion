@@ -1,6 +1,6 @@
 # ion Design
 
-Updated: 2026-04-01
+Updated: 2026-04-06
 
 ## Product boundary
 
@@ -26,14 +26,17 @@ Native runtime drives design. ACP follows where possible.
 
 ## SOTA & Minimalist Goals
 
-`ion` aims for SOTA (State of the Art) capabilities with a minimalist, terminal-first UX:
-- **Safety by Default:** Powered by `canto/safety`, with 3-mode operation (READ/EDIT/YOLO).
-- **Infinite Context:** Managed by a background "Context Governor" in `canto` (Layer 3). Runtime turns auto-recover from context overflow through `governor.RecoveryProvider`, while manual `/compact` uses the non-recovery compaction provider to avoid recursive retries.
-- **Subagent Spawning:** First-class support for child agents via `canto` primitives.
-- **MCP Extensibility:** Integration with MCP servers for rich tool ecosystems.
+`ion` aims for SOTA (State of the Art) capabilities with a minimalist, terminal-first UX. This is driven by 14 core SOTA product requirements mapped to the layers above:
+
+- **Safety by Default & Guardrails (SOTA 9):** Powered by `canto/safety`, with 3-mode operation (READ/EDIT/YOLO) and granular YAML Policy Engine configurations. Includes LLM-as-a-Judge for auto-mode safety checks.
+- **Infinite Context & Compaction (SOTA 6):** Managed by a background "Context Governor" in `canto` (Layer 3). Runtime turns auto-recover from context overflow. Requires non-blocking Compaction UX indicators (spinning icons) and summarization prompts targeting fast models (Haiku/Flash).
+- **Subagent Spawning & Orchestration (SOTA 7):** First-class support for child agents via `canto` primitives. Requires defined Agent Personas ("Scout", "Guard", "Build") and Model Routing policies (Explore = fast, Build = premium).
+- **Memory & Knowledge Base (SOTA 1):** Karpathy-style knowledge base (Wiki compilation) and QMD-style search UX, with background consolidation using sleep-time compute.
+- **Session Durability (SOTA 3):** TUI Branching (visual session rewind, `git log --graph` style), global `/search`, and Cross-Host Sync UX.
+- **MCP Extensibility & Tools (SOTA 2):** Dynamic Tool Loading UX for `search_tools` (when >20 tools exist) and Approval Tier UX mapping to permission models.
 
 Important constraint:
-- Pi is a useful maturity target, not a hard feature-parity gate.
+- Pi and Claude Code are useful maturity targets and references (see cross-pollination), but not hard feature-parity gates.
 - Advanced orchestration work is downstream of a stable, feature-complete single-agent inline loop.
 - The solo agent is the core product; subagents, ACP, and swarm views are wrappers around that core.
 
@@ -41,10 +44,11 @@ Important constraint:
 
 ### Modular Component Design
 
-The TUI is being refactored into isolated sub-models to improve maintainability and testing:
-- **`Viewport`:** Purely for rendering the committed terminal scrollback.
-- **`Input`:** Manages the textarea, history, and status bar.
+The TUI is being refactored into isolated sub-models to improve maintainability and testing, now incorporating SOTA UX requirements:
+- **`Viewport`:** Purely for rendering the committed terminal scrollback, including inline Subagent Plane B presentation.
+- **`Input`:** Manages the textarea, history, and status line (which must reflect Compaction UX and Cost Limit / Reasoning Budgets per SOTA 14).
 - **`Broker`:** A headless component managing the backend connection and event translation.
+- **`UX Streaming` (SOTA 5):** Smoothly reconciles Canto's `iter.Seq2` into Bubbletea, handling transcript verbosity for tools and reasoning.
 
 ## Runtime/session boundary
 
@@ -77,15 +81,13 @@ The provider catalog owns:
 - default endpoints
 - picker visibility and setup hints
 
-Auth model guidance:
+Auth and Model guidance (SOTA 14):
 
 - most providers should stay simple API-key or custom-endpoint entries
 - subscription/OAuth providers should be explicit and provider-specific
 - CLI-bridge providers stay separate from native API providers
 - ChatGPT subscription support, if we ever add it, should be treated as a separate evaluation track rather than assumed to be part of the native API path
-- Claude and Gemini subscription workflows should stay behind official CLI or ACP-style bridges when that is the supported path
-
-Current native coverage is broad. The important remaining work is validation, not another structural refactor.
+- **Model Cascades:** The policy determining when to fall back to a cheaper model (e.g., Flash/Haiku) based on task complexity must be integrated into the provider abstraction.
 
 ## Prompt and instruction layering
 
@@ -93,20 +95,13 @@ Keep these distinct:
 
 1. ion core system prompt
 2. runtime/session context
-3. repo-local instruction files
-4. optional future skills
+3. repo-local instruction files (`AGENTS.md`, `CLAUDE.md`)
+4. **Marketplace Skills (SOTA 8):** First-class runtime/TUI skill integration (`ion skill install`). Includes Self-Extension Nudges within system prompts to use `manage_skill`, and Trust Policies for secure directories.
 5. task/mode reminders
-
-Current repo-local instruction loading supports:
-
-- `AGENTS.md`
-- `CLAUDE.md`
-
-It does not yet support first-class skills.
 
 ## Pi-mono cross-pollination
 
-Pi-mono analysis complete (see `research/pi-architecture.md`, `design/cross-pollination.md`). Key ion-relevant decisions:
+Pi-mono analysis complete (see `research/pi-architecture.md`, `design/cross-pollination.md`). These guardrails align cleanly with the minimalist SOTA UX requirements:
 
 ### TUI improvements to adopt
 - ~~**Bounding-box diff rendering**~~ — Rejected. BT v2 already handles rendering efficiently.
@@ -115,7 +110,7 @@ Pi-mono analysis complete (see `research/pi-architecture.md`, `design/cross-poll
 - ~~**RPC/print mode**~~ — Implemented. `--print` flag with `--prompt` or stdin pipe, auto-approves tool calls, configurable timeout.
 
 ### Patterns to defer or reject
-- Full extension system — overkill for ion's scope
+- Full extension system — overkill for ion's scope (we will rely on Marketplace Skills and MCP instead)
 - Pi packages ecosystem — premature
 - Cursor markers — Bubble Tea textarea handles cursor positioning
 - Configuration cascade — current config is sufficient
@@ -148,7 +143,7 @@ Product ladder:
 ## Current technical debt worth tracking
 
 - `tk-ekao` — provider-by-provider auth and fetch validation
-- `tk-lmhg` — define real skill support instead of conflating it with instruction files
+- `tk-lmhg` — (Superseded by SOTA 8 `tk-g78q`) define real skill support instead of conflating it with instruction files
 - `tk-5t72` — dual storage in `CantoBackend`
 - `tk-9n7h` — reevaluate `internal/backend/registry`
 - `tk-st4q` — clean headless ACP-agent mode

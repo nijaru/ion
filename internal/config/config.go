@@ -29,6 +29,8 @@ type Config struct {
 	ExtraHeaders           map[string]string `toml:"extra_headers,omitempty"`
 	ContextLimit           int               `toml:"context_limit,omitempty"`
 	SessionRetentionDays   int               `toml:"session_retention_days,omitempty"`
+	ToolVerbosity          string            `toml:"tool_verbosity,omitempty"`
+	ThinkingVerbosity      string            `toml:"thinking_verbosity,omitempty"`
 }
 
 func DefaultConfigPath() (string, error) {
@@ -117,6 +119,8 @@ func Save(cfg *Config) error {
 	if out.SessionRetentionDays <= 0 {
 		out.SessionRetentionDays = DefaultSessionRetentionDays
 	}
+	out.ToolVerbosity = strings.TrimSpace(out.ToolVerbosity)
+	out.ThinkingVerbosity = strings.TrimSpace(out.ThinkingVerbosity)
 
 	data, err := toml.Marshal(&out)
 	if err != nil {

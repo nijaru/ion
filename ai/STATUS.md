@@ -3,29 +3,30 @@
 Fast, lightweight terminal coding agent.
 
 ## Current Focus
-Near-term tracks:
 
-- `tk-arhu` / `tk-5vrj` — Verified subagent multiplexing and durable breadcrumbs
-- TUI refinements — Fixed history navigation boundary behavior
+We are integrating the SOTA findings (14 core product epics) with our stable minimalist Pi/Claude-Code architecture.
+
+Near-term tracks (SOTA implementation):
+- Transitioning from architecture design into implementing the Priority 1 SOTA epics tracked in `tk ls`.
+- `tk-arhu` / `tk-5vrj` — Verified subagent multiplexing and durable breadcrumbs (Completed)
+- TUI refinements — Fixed history navigation boundary behavior (Completed)
 
 Everything else is downstream of the solo agent core and now-stable subagent primitives.
 
 Provider work to keep in mind:
 - most providers remain API-key or custom-endpoint integrations
 - subscription/OAuth providers need explicit treatment
-- `tk-a4m1` exists only as a later evaluation track for ChatGPT subscription support
-
-Deferred idea to remember:
-- `tk-hase` — auto thinking budget mode, analogous to primary/fast model selection
+- **Model cascades (SOTA 14):** Enforcing cost limits and routing tasks to cheaper models dynamically.
 
 Design rule:
-- v0.0.0 has no compatibility debt; current bindings and config shapes are allowed to change directly if the end-state is better.
+- v0.0.0 has no compatibility debt; current bindings and config shapes are allowed to change directly if the end-state is better. New SOTA plans supersede older designs where there is conflict.
 
 ## Next Steps
-1. **`tk-pwsl`** — Swarm mode: alternate-screen operator view
-2. **`tk-gmhw`** — TUI: configurable tool/thinking transcript verbosity
-3. **`tk-lmhg`** — Agent: skill support and instruction layering
-4. **`tk-gopd`** — TUI: external editor handoff (DEFERRED)
+1. **SOTA Epic Selection:** Begin implementation of a Priority 1 SOTA task (e.g., `tk-hgp4` UX Streaming, `tk-j3ap` Permission Modes UX, or `tk-8174` Session Branching).
+2. **`tk-pwsl`** — Swarm mode: alternate-screen operator view (Downstream of SOTA loop stability)
+3. **`tk-gopd`** — TUI: external editor handoff (DEFERRED)
+
+*(Note: Older P3 TUI refinement tasks like configurable verbosity, skill layering, and status line context have been subsumed by their respective SOTA epics).*
 
 ## Completed (Recent)
 - [x] **Subagents: runtime semantics and lifecycle (`tk-5vrj`)** — Implemented multiplexed subagent tracking, durable breadcrumbs, and multiplexed event routing in broker.
@@ -44,23 +45,26 @@ Design rule:
 - [x] **Canto Context Governor (`tk-4ft8`)** — Runtime now auto-compacts on overflow and proactively compacts before a turn when session usage is near the context limit.
 
 ## Active Tasks
-- `tk-arhu` [p4 done] Subagents: inline Plane B presentation
+The task tracker (`tk ls`) has been updated to reflect the 14 SOTA epics as the primary active tasks.
+- `tk-hgp4` [p1 open] Agent Loop: UX Streaming & Reflection Prompts
+- `tk-90mp` [p1 open] Streaming: Cost Limits & Model Cascades
+- `tk-j3ap` [p1 open] HITL: Permission Modes UX & Escalation
+- `tk-zbxk` [p1 open] Security: Policy Config & LLM-as-Judge
+- `tk-8174` [p2 open] Session: Cross-Host Sync & TUI Branching
+- `tk-g78q` [p2 open] Skills: Self-Extension Nudges & Marketplace
 - `tk-pwsl` [p4 open] Swarm mode: alternate-screen operator view
-- `tk-gmhw` [p3 open] TUI: configurable tool/thinking transcript verbosity
-- `tk-lmhg` [p3 open] Agent: skill support and instruction layering
-- `tk-i207` [p3 open] Status line: reasoning budget and context presence
-- `tk-0dwv` [p3 open] Core: session tree navigation and branching
+
+*(Tasks `tk-gmhw`, `tk-lmhg`, `tk-i207`, `tk-0dwv`, and `tk-xdx5` have been merged into the SOTA epics above).*
 
 ## Blockers
 - None.
 
 ## Topic Files
-- `ai/specs/tools-and-modes.md` — Permission modes spec (authoritative for tk-k4hv)
-- `ai/specs/swarm-mode-and-inline-subagents.md` — Inline subagent rendering, future swarm mode, and session title/summary direction
-- `ai/specs/tui-hotkeys.md` — Current picker/navigation key semantics
-- `ai/research/approval-ux-survey-2026-03-30.md` — Competitor approval UX research
+- `ai/SOTA-REQUIREMENTS.md` — The 14 core SOTA product responsibilities.
+- `ai/specs/tools-and-modes.md` — Permission modes spec
+- `ai/specs/swarm-mode-and-inline-subagents.md` — Inline subagent rendering, future swarm mode
 - `ai/research/pi-architecture.md` — Pi-mono architecture analysis
 - `ai/research/ion-architecture.md` — Ion architecture analysis
 - `ai/design/cross-pollination.md` — Pi → canto/ion actionable insights
-- `ai/DESIGN.md` — Architecture and event flow
+- `ai/DESIGN.md` — Architecture and event flow (Merged with SOTA)
 - `ai/DECISIONS.md` — Decision log
