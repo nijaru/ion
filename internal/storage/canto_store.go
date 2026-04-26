@@ -323,7 +323,7 @@ func (s *cantoSession) Append(ctx context.Context, event any) error {
 		preview = sessionSummary(content.String())
 		ev := session.NewEvent(s.id, session.MessageAdded, llm.Message{
 			Role:      llm.RoleAssistant,
-			Content:   preview,
+			Content:   content.String(),
 			Reasoning: reasoning.String(),
 		})
 		err = s.store.canto.Save(ctx, ev)
@@ -480,6 +480,23 @@ func (s *cantoSession) Entries(ctx context.Context) ([]ionsession.Entry, error) 
 		return nil, err
 	}
 
+	toolErrors := make(map[string]bool)
+	for _, ev := range sess.Events() {
+		if ev.Type != session.ToolCompleted {
+			continue
+		}
+		var data struct {
+			ToolUseID string `json:"tool_use_id"`
+			IsError   bool   `json:"is_error"`
+		}
+		if err := ev.UnmarshalData(&data); err != nil {
+			return nil, err
+		}
+		if data.ToolUseID != "" {
+			toolErrors[data.ToolUseID] = data.IsError
+		}
+	}
+
 	history, err := sess.EffectiveEntries()
 	if err != nil {
 		return nil, err
@@ -509,6 +526,7 @@ func (s *cantoSession) Entries(ctx context.Context) ([]ionsession.Entry, error) 
 				Role:    ionsession.Tool,
 				Title:   title,
 				Content: msg.Content,
+				IsError: toolErrors[msg.ToolID],
 			})
 		case llm.RoleSystem, llm.RoleDeveloper:
 			// Detect subagent breadcrumbs
