@@ -176,6 +176,34 @@ func TestCloseIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestTranslateEventsCommitsAssistantBeforeTurnFinished(t *testing.T) {
+	b := New()
+	events := make(chan csession.Event, 1)
+	events <- csession.NewTurnCompletedEvent("session-id", csession.TurnCompletedData{})
+	close(events)
+
+	b.translateEvents(t.Context(), events)
+
+	ev1 := receiveEvent(t, b.Events())
+	if _, ok := ev1.(ionsession.AgentMessage); !ok {
+		t.Fatalf("first event = %T, want AgentMessage", ev1)
+	}
+
+	ev2 := receiveEvent(t, b.Events())
+	if _, ok := ev2.(ionsession.TurnFinished); !ok {
+		t.Fatalf("second event = %T, want TurnFinished", ev2)
+	}
+
+	ev3 := receiveEvent(t, b.Events())
+	status, ok := ev3.(ionsession.StatusChanged)
+	if !ok {
+		t.Fatalf("third event = %T, want StatusChanged", ev3)
+	}
+	if status.Status != "Ready" {
+		t.Fatalf("status = %q, want Ready", status.Status)
+	}
+}
+
 func TestCrossProviderHandoffPreservesPromptTruth(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -704,6 +732,21 @@ func waitForTurnFinished(t *testing.T, events <-chan ionsession.Event) {
 		case <-timeout:
 			t.Fatal("timed out waiting for turn to finish")
 		}
+	}
+}
+
+func receiveEvent(t *testing.T, events <-chan ionsession.Event) ionsession.Event {
+	t.Helper()
+
+	select {
+	case ev, ok := <-events:
+		if !ok {
+			t.Fatal("event stream closed")
+		}
+		return ev
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for event")
+		return nil
 	}
 }
 
