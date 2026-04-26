@@ -33,6 +33,7 @@ type Config struct {
 	TelemetryOTLPEndpoint  string            `toml:"telemetry_otlp_endpoint,omitempty"`
 	TelemetryOTLPInsecure  bool              `toml:"telemetry_otlp_insecure,omitempty"`
 	TelemetryOTLPHeaders   map[string]string `toml:"telemetry_otlp_headers,omitempty"`
+	PolicyPath             string            `toml:"policy_path,omitempty"`
 	SessionRetentionDays   int               `toml:"session_retention_days,omitempty"`
 	ToolVerbosity          string            `toml:"tool_verbosity,omitempty"`
 	ThinkingVerbosity      string            `toml:"thinking_verbosity,omitempty"`
@@ -88,6 +89,7 @@ func Load() (*Config, error) {
 	cfg.AuthEnvVar = strings.TrimSpace(cfg.AuthEnvVar)
 	cfg.TelemetryOTLPEndpoint = strings.TrimSpace(cfg.TelemetryOTLPEndpoint)
 	cfg.TelemetryOTLPHeaders = normalizeStringMap(cfg.TelemetryOTLPHeaders)
+	cfg.PolicyPath = expandUserPath(strings.TrimSpace(cfg.PolicyPath))
 	cfg.ToolVerbosity = normalizeVerbosity(cfg.ToolVerbosity)
 	cfg.ThinkingVerbosity = normalizeVerbosity(cfg.ThinkingVerbosity)
 	if cfg.ContextLimit < 0 {
@@ -130,6 +132,7 @@ func Save(cfg *Config) error {
 	out.AuthEnvVar = strings.TrimSpace(out.AuthEnvVar)
 	out.TelemetryOTLPEndpoint = strings.TrimSpace(out.TelemetryOTLPEndpoint)
 	out.TelemetryOTLPHeaders = normalizeStringMap(out.TelemetryOTLPHeaders)
+	out.PolicyPath = expandUserPath(strings.TrimSpace(out.PolicyPath))
 	if out.ContextLimit < 0 {
 		out.ContextLimit = 0
 	}
@@ -179,6 +182,14 @@ func DefaultModelCacheTTLSeconds() int {
 	return defaultModelCacheTTLSeconds
 }
 
+func DefaultPolicyPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".ion", "policy.yaml"), nil
+}
+
 func defaultConfig() *Config {
 	return &Config{
 		SessionRetentionDays: DefaultSessionRetentionDays,
@@ -226,6 +237,21 @@ func normalizeVerbosity(value string) string {
 	default:
 		return ""
 	}
+}
+
+func expandUserPath(path string) string {
+	if path == "~" {
+		if home, err := os.UserHomeDir(); err == nil {
+			return home
+		}
+		return path
+	}
+	if strings.HasPrefix(path, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, strings.TrimPrefix(path, "~/"))
+		}
+	}
+	return path
 }
 
 func normalizeStringMap(values map[string]string) map[string]string {

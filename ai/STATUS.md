@@ -4,7 +4,7 @@ Fast, lightweight terminal coding agent.
 
 ## Current Focus
 
-Ion has been reconciled with the current stabilized Canto surface. The core loop audit, HITL permission-mode hardening, observability exporter slice, workflow topology spec, and first eval regression gate are complete. Current work is moving through the remaining P1 downstream reliability/UX epics.
+Ion has been reconciled with the current stabilized Canto surface. The core loop audit, HITL permission-mode hardening, observability exporter slice, workflow topology spec, first eval regression gate, and deterministic policy config slice are complete. Current work is moving through the remaining P1 downstream reliability/UX epics.
 
 Near-term tracks:
 - `tk-96vy` — Core loop: reliability and resilience audit (Completed)
@@ -12,7 +12,7 @@ Near-term tracks:
 - `tk-wzt6` — Observability: OTel Exporter & Dashboards (Completed)
 - `tk-tyww` — Workflow: Workflow Definitions & Recovery (Completed)
 - `tk-txju` — Eval: Golden Datasets & Regression Gates (Completed)
-- `tk-zbxk` — Security: Policy Config & LLM-as-Judge (Next)
+- `tk-zbxk` — Security: Policy Config & LLM-as-Judge (Deterministic config complete; LLM judge split)
 - `tk-90mp` — Streaming: Cost Limits & Model Cascades (Paused after first budget/trace slices)
 - `tk-fblb` — Migrate Ion to current Canto surface (Completed)
 - `tk-ulfg` — Research: current Pi core loop and feature review (Completed)
@@ -33,10 +33,10 @@ Design rule:
 - Similar agents are references, not feature-parity requirements. Adopt from pi, Claude Code, Codex, OpenCode, Cursor, Droid, Letta, and others only when the idea strengthens Ion's core coding loop or preserves a simple, inspectable UX.
 
 ## Next Steps
-1. Start `tk-zbxk` with deterministic policy config before considering any LLM-as-judge path.
+1. Split LLM-as-judge classifier/circuit-breaker work from `tk-zbxk`; keep deterministic rules as the stable base.
 2. Keep adding focused regressions before broadening any SOTA epic.
 3. Use the current Pi review as a reference for loop contracts and future `/tree`, but keep concrete fixes on the current solo loop.
-4. Resume `tk-90mp` after the P1 observability slice; budget enforcement and routing trace slices are already committed.
+4. Resume `tk-90mp` after the security slice; budget enforcement and routing trace slices are already committed.
 5. Treat older `Canto: contribute ...` tasks as re-triaged: no default grep/glob or preset coding-tool bundles; only concrete reusable extension packages should move upstream.
 
 *(Note: Older P3 TUI refinement tasks like configurable verbosity, skill layering, and status line context have been subsumed by their respective SOTA epics).*
@@ -49,6 +49,7 @@ Design rule:
 - [x] **Observability exporter/dashboard (`tk-wzt6`)** — Added config/env-driven OTLP trace and metric export for Canto telemetry plus a Grafana starter dashboard; `go test ./...` passes.
 - [x] **Workflow topology spec (`tk-tyww`)** — Defined Ion-owned Code Review and Bug Fix workflow DAGs, checkpoint recovery policy, and human-gate rules on top of Canto graph primitives.
 - [x] **Eval golden gate (`tk-txju`)** — Moved prompt quality checks into `evals/golden/prompt_quality.toml`, kept them enforced by `go test ./...`, and documented future eval artifact policy.
+- [x] **Deterministic policy config (`tk-zbxk`)** — Added `policy_path`/`~/.ion/policy.yaml` YAML rules for exact tools and categories across Canto/ACP backends; READ remains non-weakenable and LLM-as-judge is split to a follow-up.
 - [x] **Core loop audit slices (`tk-96vy`)** — Fixed native/ACP commit-before-finish ordering, sticky error/cancel terminal states, cancellation queue clearing, full transcript replay, tool error replay, backend tool ID propagation, interleaved tool tracking, and fail-closed proactive compaction recovery; `go test ./...` passes.
 - [x] **Canto dependency refresh foundation (`tk-fblb`)** — Updated Ion to Canto `f47e7de`; migrated request processors from `canto/context` to `canto/prompt` and hooks from `Hook/NewFunc` to `Handler/FromFunc`; `go test ./...` passes.
 - [x] **Current Pi core-loop review (`tk-ulfg`)** — Added `ai/research/pi-current-core-loop-review-2026-04.md`; Pi remains the strongest loop reference, but core reliability gates `/tree`, compaction polish, and SOTA routing work.
@@ -71,7 +72,7 @@ Design rule:
 
 ## Active Tasks
 See `tk ls` for the full list. Current active priority:
-- `tk-zbxk` — Security: Policy Config & LLM-as-Judge (next)
+- `tk-zbxk` — Security: Policy Config & LLM-as-Judge (closing deterministic slice)
 
 P1 SOTA epics remain important but are downstream of `tk-96vy`:
 - `tk-90mp` — Streaming: Cost Limits & Model Cascades
@@ -94,6 +95,7 @@ P1 SOTA epics remain important but are downstream of `tk-96vy`:
 - `ai/research/pi-current-core-loop-review-2026-04.md` — Current Pi core-loop, `/tree`, compaction, and UX review.
 - `ai/review/canto-research-delta-2026-04-26.md` — Recent Canto ai/ findings that affect Ion sequencing.
 - `ai/specs/tools-and-modes.md` — Permission modes spec
+- `ai/specs/security-policy.md` — YAML policy config and LLM judge deferral boundary
 - `ai/specs/swarm-mode-and-inline-subagents.md` — Inline subagent rendering, future swarm mode
 - `ai/research/pi-architecture.md` — Pi-mono architecture analysis
 - `ai/research/ion-architecture.md` — Ion architecture analysis

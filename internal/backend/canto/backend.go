@@ -78,6 +78,10 @@ func (b *Backend) SetConfig(cfg *config.Config) {
 	b.cfg = cfg
 }
 
+func (b *Backend) SetPolicyConfig(cfg *backend.PolicyConfig) {
+	b.policy.ApplyConfig(cfg)
+}
+
 func (b *Backend) Provider() string {
 	if b.cfg != nil && b.cfg.Provider != "" {
 		return b.cfg.Provider

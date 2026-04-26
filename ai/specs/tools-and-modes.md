@@ -118,11 +118,13 @@ considerations. Ship later.
 ## Config
 
 ```toml
-default_mode = "edit"   # read | edit | yolo
+default_mode = "edit"             # read | edit | yolo
+policy_path = "~/.ion/policy.yaml" # optional; default path when unset
 ```
 
-One field. User-global only — project configs cannot weaken permissions
-(same security model as the Rust era).
+User-global only — project configs cannot weaken permissions (same security
+model as the Rust era). `policy_path` points to YAML rules for exact tools or
+categories; see `ai/specs/security-policy.md` and `docs/security/policy.md`.
 
 ## CLI Flags
 

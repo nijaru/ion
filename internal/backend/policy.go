@@ -3,7 +3,10 @@ package backend
 import (
 	"context"
 	"fmt"
+	"os"
 	"sync"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/nijaru/ion/internal/session"
 )
@@ -34,6 +37,8 @@ type PolicyEngine struct {
 	Categories map[string]ToolCategory
 	// Policies maps categories to their default handling.
 	Policies map[ToolCategory]Policy
+	// ToolPolicies maps exact tool names to explicit handling.
+	ToolPolicies map[string]Policy
 
 	mu          sync.RWMutex
 	mode        session.Mode
@@ -59,14 +64,78 @@ func NewPolicyEngine() *PolicyEngine {
 			"mcp":             CategorySensitive,
 			"subagent":        CategorySensitive,
 		},
-		Policies: map[ToolCategory]Policy{
-			CategoryRead:      PolicyAllow,
-			CategoryWrite:     PolicyAsk,
-			CategoryExecute:   PolicyAsk,
-			CategoryNetwork:   PolicyAsk,
-			CategorySensitive: PolicyAsk,
-		},
-		mode: session.ModeEdit,
+		Policies:     defaultCategoryPolicies(),
+		ToolPolicies: map[string]Policy{},
+		mode:         session.ModeEdit,
+	}
+}
+
+type PolicyConfig struct {
+	Rules []PolicyRule `yaml:"rules"`
+}
+
+type PolicyRule struct {
+	Tool     string       `yaml:"tool"`
+	Category ToolCategory `yaml:"category"`
+	Action   Policy       `yaml:"action"`
+}
+
+func LoadPolicyConfig(path string) (*PolicyConfig, error) {
+	if path == "" {
+		return nil, nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var cfg PolicyConfig
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("parse policy config: %w", err)
+	}
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	return &cfg, nil
+}
+
+func (cfg *PolicyConfig) Validate() error {
+	if cfg == nil {
+		return nil
+	}
+	for i, rule := range cfg.Rules {
+		if rule.Tool == "" && rule.Category == "" {
+			return fmt.Errorf("policy rule %d: tool or category is required", i)
+		}
+		if rule.Tool != "" && rule.Category != "" {
+			return fmt.Errorf("policy rule %d: specify only one of tool or category", i)
+		}
+		if rule.Category != "" && !validCategory(rule.Category) {
+			return fmt.Errorf("policy rule %d: invalid category %q", i, rule.Category)
+		}
+		if !validPolicy(rule.Action) {
+			return fmt.Errorf("policy rule %d: invalid action %q", i, rule.Action)
+		}
+	}
+	return nil
+}
+
+func (pe *PolicyEngine) ApplyConfig(cfg *PolicyConfig) {
+	pe.mu.Lock()
+	defer pe.mu.Unlock()
+	pe.Policies = defaultCategoryPolicies()
+	pe.ToolPolicies = map[string]Policy{}
+	if cfg == nil {
+		return
+	}
+	for _, rule := range cfg.Rules {
+		if rule.Tool != "" {
+			pe.ToolPolicies[rule.Tool] = rule.Action
+			continue
+		}
+		pe.Policies[rule.Category] = rule.Action
 	}
 }
 
@@ -114,6 +183,10 @@ func (pe *PolicyEngine) Authorize(
 	for k, v := range pe.Policies {
 		policies[k] = v
 	}
+	toolPolicies := make(map[string]Policy)
+	for k, v := range pe.ToolPolicies {
+		toolPolicies[k] = v
+	}
 	pe.mu.RUnlock()
 
 	category, ok := pe.Categories[toolName]
@@ -139,21 +212,55 @@ func (pe *PolicyEngine) Authorize(
 		if !ok {
 			return PolicyAsk, fmt.Sprintf("Unknown tool %q requested.", toolName)
 		}
-		switch category {
-		case CategoryRead:
+		if category == CategoryRead {
 			return PolicyAllow, ""
-		case CategorySensitive:
-			return PolicyAsk, fmt.Sprintf("Tool %q requires approval.", toolName)
-		default:
-			if p, ok := policies[category]; ok && p == PolicyAllow {
-				return PolicyAllow, ""
-			}
-			return PolicyAsk, fmt.Sprintf("Tool %q (%s) requires approval.", toolName, category)
 		}
+		if p, ok := toolPolicies[toolName]; ok {
+			return p, fmt.Sprintf("Tool %q policy is %s.", toolName, p)
+		}
+		if p, ok := policies[category]; ok {
+			switch p {
+			case PolicyAllow:
+				return PolicyAllow, ""
+			case PolicyDeny:
+				return PolicyDeny, fmt.Sprintf("Tool %q (%s) is blocked by policy.", toolName, category)
+			case PolicyAsk:
+				return PolicyAsk, fmt.Sprintf("Tool %q (%s) requires approval.", toolName, category)
+			}
+		}
+		return PolicyAsk, fmt.Sprintf("Tool %q (%s) requires approval.", toolName, category)
 
 	case session.ModeYolo:
 		return PolicyAllow, ""
 	}
 
 	return PolicyAsk, ""
+}
+
+func defaultCategoryPolicies() map[ToolCategory]Policy {
+	return map[ToolCategory]Policy{
+		CategoryRead:      PolicyAllow,
+		CategoryWrite:     PolicyAsk,
+		CategoryExecute:   PolicyAsk,
+		CategoryNetwork:   PolicyAsk,
+		CategorySensitive: PolicyAsk,
+	}
+}
+
+func validCategory(category ToolCategory) bool {
+	switch category {
+	case CategoryRead, CategoryWrite, CategoryExecute, CategoryNetwork, CategorySensitive:
+		return true
+	default:
+		return false
+	}
+}
+
+func validPolicy(policy Policy) bool {
+	switch policy {
+	case PolicyAllow, PolicyAsk, PolicyDeny:
+		return true
+	default:
+		return false
+	}
 }
