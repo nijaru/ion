@@ -30,6 +30,9 @@ type Config struct {
 	ContextLimit           int               `toml:"context_limit,omitempty"`
 	MaxSessionCost         float64           `toml:"max_session_cost,omitempty"`
 	MaxTurnCost            float64           `toml:"max_turn_cost,omitempty"`
+	TelemetryOTLPEndpoint  string            `toml:"telemetry_otlp_endpoint,omitempty"`
+	TelemetryOTLPInsecure  bool              `toml:"telemetry_otlp_insecure,omitempty"`
+	TelemetryOTLPHeaders   map[string]string `toml:"telemetry_otlp_headers,omitempty"`
 	SessionRetentionDays   int               `toml:"session_retention_days,omitempty"`
 	ToolVerbosity          string            `toml:"tool_verbosity,omitempty"`
 	ThinkingVerbosity      string            `toml:"thinking_verbosity,omitempty"`
@@ -83,6 +86,8 @@ func Load() (*Config, error) {
 	cfg.SummaryReasoningEffort = normalizeOptionalReasoningEffort(cfg.SummaryReasoningEffort)
 	cfg.Endpoint = strings.TrimSpace(cfg.Endpoint)
 	cfg.AuthEnvVar = strings.TrimSpace(cfg.AuthEnvVar)
+	cfg.TelemetryOTLPEndpoint = strings.TrimSpace(cfg.TelemetryOTLPEndpoint)
+	cfg.TelemetryOTLPHeaders = normalizeStringMap(cfg.TelemetryOTLPHeaders)
 	cfg.ToolVerbosity = normalizeVerbosity(cfg.ToolVerbosity)
 	cfg.ThinkingVerbosity = normalizeVerbosity(cfg.ThinkingVerbosity)
 	if cfg.ContextLimit < 0 {
@@ -123,6 +128,8 @@ func Save(cfg *Config) error {
 	out.SummaryReasoningEffort = normalizeOptionalReasoningEffort(out.SummaryReasoningEffort)
 	out.Endpoint = strings.TrimSpace(out.Endpoint)
 	out.AuthEnvVar = strings.TrimSpace(out.AuthEnvVar)
+	out.TelemetryOTLPEndpoint = strings.TrimSpace(out.TelemetryOTLPEndpoint)
+	out.TelemetryOTLPHeaders = normalizeStringMap(out.TelemetryOTLPHeaders)
 	if out.ContextLimit < 0 {
 		out.ContextLimit = 0
 	}
@@ -219,6 +226,25 @@ func normalizeVerbosity(value string) string {
 	default:
 		return ""
 	}
+}
+
+func normalizeStringMap(values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+	normalized := make(map[string]string, len(values))
+	for key, value := range values {
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if key == "" || value == "" {
+			continue
+		}
+		normalized[key] = value
+	}
+	if len(normalized) == 0 {
+		return nil
+	}
+	return normalized
 }
 
 func ResolveDefaultMode(value string) string {

@@ -18,7 +18,7 @@ func TestLoadReadsConfigFile(t *testing.T) {
 
 	path := filepath.Join(configDir, "config.toml")
 	if err := os.WriteFile(path, []byte(
-		"provider = \"openai\"\nmodel = \"gpt-4o\"\nreasoning_effort = \"med\"\nfast_model = \"gpt-4.1-mini\"\nfast_reasoning_effort = \"low\"\nsummary_model = \"gpt-4o-mini\"\nsummary_reasoning_effort = \"low\"\nendpoint = \"https://example.com/v1\"\nauth_env_var = \"OPENAI_PROXY_KEY\"\ncontext_limit = 128000\nmax_session_cost = 1.25\nmax_turn_cost = 0.10\nsession_retention_days = 14\n[extra_headers]\n\"X-Test\" = \"value\"\n",
+		"provider = \"openai\"\nmodel = \"gpt-4o\"\nreasoning_effort = \"med\"\nfast_model = \"gpt-4.1-mini\"\nfast_reasoning_effort = \"low\"\nsummary_model = \"gpt-4o-mini\"\nsummary_reasoning_effort = \"low\"\nendpoint = \"https://example.com/v1\"\nauth_env_var = \"OPENAI_PROXY_KEY\"\ncontext_limit = 128000\nmax_session_cost = 1.25\nmax_turn_cost = 0.10\ntelemetry_otlp_endpoint = \" localhost:4317 \"\ntelemetry_otlp_insecure = true\nsession_retention_days = 14\n[extra_headers]\n\"X-Test\" = \"value\"\n[telemetry_otlp_headers]\n\"x-api-key\" = \" secret \"\n",
 	), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -69,6 +69,15 @@ func TestLoadReadsConfigFile(t *testing.T) {
 	}
 	if cfg.SessionRetentionDays != 14 {
 		t.Fatalf("session_retention_days = %d, want %d", cfg.SessionRetentionDays, 14)
+	}
+	if cfg.TelemetryOTLPEndpoint != "localhost:4317" {
+		t.Fatalf("telemetry_otlp_endpoint = %q, want localhost:4317", cfg.TelemetryOTLPEndpoint)
+	}
+	if !cfg.TelemetryOTLPInsecure {
+		t.Fatal("telemetry_otlp_insecure = false, want true")
+	}
+	if got := cfg.TelemetryOTLPHeaders["x-api-key"]; got != "secret" {
+		t.Fatalf("telemetry header = %q, want secret", got)
 	}
 }
 
@@ -139,6 +148,9 @@ func TestSaveWritesStatePath(t *testing.T) {
 		ContextLimit:           128000,
 		MaxSessionCost:         1.25,
 		MaxTurnCost:            0.10,
+		TelemetryOTLPEndpoint:  "localhost:4317",
+		TelemetryOTLPInsecure:  true,
+		TelemetryOTLPHeaders:   map[string]string{"x-api-key": "secret"},
 		SessionRetentionDays:   14,
 	}
 	if err := Save(cfg); err != nil {
@@ -169,6 +181,10 @@ func TestSaveWritesStatePath(t *testing.T) {
 		`context_limit = 128000`,
 		`max_session_cost = 1.25`,
 		`max_turn_cost = 0.1`,
+		`telemetry_otlp_endpoint = 'localhost:4317'`,
+		`telemetry_otlp_insecure = true`,
+		`[telemetry_otlp_headers]`,
+		`x-api-key = 'secret'`,
 		`session_retention_days = 14`,
 	} {
 		if !strings.Contains(got, want) {

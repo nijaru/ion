@@ -4,11 +4,13 @@ Fast, lightweight terminal coding agent.
 
 ## Current Focus
 
-Ion has been reconciled with the current stabilized Canto surface. The core loop audit (`tk-96vy`) is complete; current work is moving through the P1 downstream reliability/UX epics, starting with HITL permission-mode hardening.
+Ion has been reconciled with the current stabilized Canto surface. The core loop audit, HITL permission-mode hardening, and observability exporter slice are complete. Current work is moving through the remaining P1 downstream reliability/UX epics.
 
 Near-term tracks:
 - `tk-96vy` — Core loop: reliability and resilience audit (Completed)
-- `tk-j3ap` — HITL: Permission Modes UX & Escalation (Active; policy boundary, CLI startup mode, and ESCALATE.md prompt-surfacing slices completed)
+- `tk-j3ap` — HITL: Permission Modes UX & Escalation (Completed; notifier delivery split to `tk-00km`)
+- `tk-wzt6` — Observability: OTel Exporter & Dashboards (Completed)
+- `tk-tyww` — Workflow: Workflow Definitions & Recovery (Next)
 - `tk-90mp` — Streaming: Cost Limits & Model Cascades (Paused after first budget/trace slices)
 - `tk-fblb` — Migrate Ion to current Canto surface (Completed)
 - `tk-ulfg` — Research: current Pi core loop and feature review (Completed)
@@ -29,10 +31,10 @@ Design rule:
 - Similar agents are references, not feature-parity requirements. Adopt from pi, Claude Code, Codex, OpenCode, Cursor, Droid, Letta, and others only when the idea strengthens Ion's core coding loop or preserves a simple, inspectable UX.
 
 ## Next Steps
-1. Continue `tk-j3ap` into any remaining notifier/audit design after the ESCALATE.md prompt-surfacing slice; do not add Slack/email delivery until credentials and audit semantics are designed.
+1. Start `tk-tyww` with a narrow workflow/recovery design review before adding new orchestration behavior.
 2. Keep adding focused regressions before broadening any SOTA epic.
 3. Use the current Pi review as a reference for loop contracts and future `/tree`, but keep concrete fixes on the current solo loop.
-4. Resume `tk-90mp` after the P1 permission/escalation slice; budget enforcement and routing trace slices are already committed.
+4. Resume `tk-90mp` after the P1 observability slice; budget enforcement and routing trace slices are already committed.
 5. Treat older `Canto: contribute ...` tasks as re-triaged: no default grep/glob or preset coding-tool bundles; only concrete reusable extension packages should move upstream.
 
 *(Note: Older P3 TUI refinement tasks like configurable verbosity, skill layering, and status line context have been subsumed by their respective SOTA epics).*
@@ -41,6 +43,8 @@ Design rule:
 - [x] **Core loop reliability audit (`tk-96vy`)** — Completed final approval/session-switch review; approval bridge failures now surface as session errors and unknown tool result IDs cannot clear another pending tool.
 - [x] **Permission mode startup slice (`tk-j3ap`)** — READ mode is now non-escalating even with stale session approvals; `--mode`/`--yolo` startup selection now applies to TUI and print sessions, with non-interactive approvals limited to YOLO.
 - [x] **ESCALATE.md host slice (`tk-j3ap`)** — Ion now loads root `ESCALATE.md` via Canto's workspace parser and surfaces declared email/Slack channels plus approval timeout in approval prompts.
+- [x] **HITL task closure (`tk-j3ap`)** — Closed the safe host scope and split actual Slack/email delivery into `tk-00km` pending credential, timeout, and audit design.
+- [x] **Observability exporter/dashboard (`tk-wzt6`)** — Added config/env-driven OTLP trace and metric export for Canto telemetry plus a Grafana starter dashboard; `go test ./...` passes.
 - [x] **Core loop audit slices (`tk-96vy`)** — Fixed native/ACP commit-before-finish ordering, sticky error/cancel terminal states, cancellation queue clearing, full transcript replay, tool error replay, backend tool ID propagation, interleaved tool tracking, and fail-closed proactive compaction recovery; `go test ./...` passes.
 - [x] **Canto dependency refresh foundation (`tk-fblb`)** — Updated Ion to Canto `f47e7de`; migrated request processors from `canto/context` to `canto/prompt` and hooks from `Hook/NewFunc` to `Handler/FromFunc`; `go test ./...` passes.
 - [x] **Current Pi core-loop review (`tk-ulfg`)** — Added `ai/research/pi-current-core-loop-review-2026-04.md`; Pi remains the strongest loop reference, but core reliability gates `/tree`, compaction polish, and SOTA routing work.
@@ -63,12 +67,12 @@ Design rule:
 
 ## Active Tasks
 See `tk ls` for the full list. Current active priority:
-- `tk-j3ap` — HITL: Permission Modes UX & Escalation
+- `tk-tyww` — Workflow: Workflow Definitions & Recovery (next)
 
 P1 SOTA epics remain important but are downstream of `tk-96vy`:
 - `tk-90mp` — Streaming: Cost Limits & Model Cascades
 - `tk-j3ap` — HITL: Permission Modes UX & Escalation
-- `tk-wzt6` — Observability: OTel Exporter & Dashboards
+- `tk-wzt6` — Observability: OTel Exporter & Dashboards (Completed)
 - `tk-tyww` — Workflow: Workflow Definitions & Recovery
 - `tk-txju` — Eval: Golden Datasets & Regression Gates
 - `tk-zbxk` — Security: Policy Config & LLM-as-Judge
