@@ -1,79 +1,58 @@
 package canto
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 type promptEvalCase struct {
-	name      string
-	prompt    string
-	required  []string
-	forbidden []string
+	Name      string   `toml:"name"`
+	Required  []string `toml:"required"`
+	Forbidden []string `toml:"forbidden"`
+}
+
+type promptEvalSuite struct {
+	Cases []promptEvalCase `toml:"case"`
 }
 
 func TestPromptQualityEvals(t *testing.T) {
 	combined := buildInstructions("/tmp/project", time.Date(2026, time.March, 27, 0, 0, 0, 0, time.UTC))
-
-	cases := []promptEvalCase{
-		{
-			name:   "concise non-marketing tone",
-			prompt: combined,
-			required: []string{
-				"Keep responses concise, factual, and non-marketing.",
-				"Do not use self-promotional language.",
-			},
-			forbidden: []string{
-				"elite",
-				"best coding agent",
-				"built on the Canto framework",
-				"How can I help you today?",
-			},
-		},
-		{
-			name:   "inspect before editing",
-			prompt: combined,
-			required: []string{
-				"Understand the relevant code, configuration, and tests before making changes.",
-				"1. Inspect the relevant context first.",
-			},
-		},
-		{
-			name:   "verify after editing",
-			prompt: combined,
-			required: []string{
-				"After editing files, run relevant verification commands when feasible.",
-				"4. Verify the result.",
-			},
-		},
-		{
-			name:   "avoid stale model and provider recommendations",
-			prompt: combined,
-			forbidden: []string{
-				"Anthropic:",
-				"OpenAI:",
-				"OpenRouter:",
-				"Gemini:",
-				"Claude 3.7 Sonnet",
-				"GPT-4.1",
-				"provider API",
-			},
-		},
-	}
+	cases := loadPromptEvalCases(t)
 
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			for _, want := range tc.required {
-				if !strings.Contains(tc.prompt, want) {
-					t.Fatalf("prompt missing %q\n%s", want, tc.prompt)
+		t.Run(tc.Name, func(t *testing.T) {
+			for _, want := range tc.Required {
+				if !strings.Contains(combined, want) {
+					t.Fatalf("prompt missing %q\n%s", want, combined)
 				}
 			}
-			for _, bad := range tc.forbidden {
-				if strings.Contains(tc.prompt, bad) {
-					t.Fatalf("prompt unexpectedly contains %q\n%s", bad, tc.prompt)
+			for _, bad := range tc.Forbidden {
+				if strings.Contains(combined, bad) {
+					t.Fatalf("prompt unexpectedly contains %q\n%s", bad, combined)
 				}
 			}
 		})
 	}
+}
+
+func loadPromptEvalCases(t *testing.T) []promptEvalCase {
+	t.Helper()
+	path := filepath.Join("..", "..", "..", "evals", "golden", "prompt_quality.toml")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read prompt eval suite: %v", err)
+	}
+	var suite promptEvalSuite
+	if err := toml.Unmarshal(data, &suite); err != nil {
+		t.Fatalf("parse prompt eval suite: %v", err)
+	}
+	if len(suite.Cases) == 0 {
+		t.Fatal("prompt eval suite has no cases")
+	}
+	return suite.Cases
 }
