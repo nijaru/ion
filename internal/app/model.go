@@ -222,6 +222,7 @@ type ProgressState struct {
 	CurrentTurnOutput int
 	CurrentTurnCost   float64
 	BudgetStopReason  string
+	Compacting        bool
 	LastTurnSummary   turnSummary
 	TokensSent        int
 	TokensReceived    int
@@ -635,7 +636,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Sequence(cmds...)
 
 	case sessionCompactedMsg:
-		return m, m.printEntries(session.Entry{Role: session.System, Content: msg.notice})
+		m.Progress.Compacting = false
+		m.Progress.Status = "Ready"
+		cmds := []tea.Cmd{m.printEntries(session.Entry{Role: session.System, Content: msg.notice})}
+		if len(m.InFlight.QueuedTurns) > 0 {
+			queued := m.InFlight.QueuedTurns[0]
+			m.InFlight.QueuedTurns = m.InFlight.QueuedTurns[1:]
+			cmds = append(cmds, func() tea.Msg { return queuedTurnMsg{text: queued} })
+		}
+		return m, tea.Sequence(cmds...)
 
 	case sessionCostMsg:
 		return m, m.printEntries(session.Entry{Role: session.System, Content: msg.notice})

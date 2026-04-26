@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/nijaru/canto/governor"
 	"github.com/nijaru/canto/llm"
@@ -83,7 +84,7 @@ func (c *Compact) Execute(ctx context.Context, args string) (string, error) {
 	result, err := governor.CompactSession(ctx, c.Provider, model, sess, governor.CompactOptions{
 		MaxTokens:  maxTokens,
 		OffloadDir: filepath.Join(dataDir, "artifacts"),
-		Message:    input.Message,
+		Message:    compactMessage(input.Message),
 	})
 	if err != nil {
 		return "", fmt.Errorf("compact: %w", err)
@@ -101,4 +102,26 @@ func compactSuffix(msg string) string {
 		return ""
 	}
 	return fmt.Sprintf(" Guidance: %s", msg)
+}
+
+const compactGuidance = `Summarize this Ion coding session for reliable continuation.
+
+Preserve:
+- current user goal and immediate next step
+- files, packages, task IDs, commands, and commits that matter
+- decisions, constraints, approvals, denials, and unresolved blockers
+- tool failures, root causes, and verification status
+
+Discard:
+- transient command noise, repeated stack traces, and already-resolved detours
+- generic conversation filler
+
+Write concise structured notes. Prefer exact paths, symbols, and IDs over prose.`
+
+func compactMessage(extra string) string {
+	extra = strings.TrimSpace(extra)
+	if extra == "" {
+		return compactGuidance
+	}
+	return compactGuidance + "\n\nUser guidance:\n" + extra
 }

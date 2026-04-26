@@ -929,6 +929,7 @@ func (b *Backend) Compact(ctx context.Context) (bool, error) {
 	result, err := governor.CompactSession(ctx, provider, model, sess, governor.CompactOptions{
 		MaxTokens:  maxTokens,
 		OffloadDir: filepath.Join(dataDir, "artifacts"),
+		Message:    compactionMessage(""),
 	})
 	if err != nil {
 		return false, err

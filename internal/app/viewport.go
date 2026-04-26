@@ -269,6 +269,13 @@ func (m Model) renderEntry(e session.Entry) string {
 // progressLine renders the single-line progress indicator between Plane B and the composer.
 func (m Model) progressLine() string {
 	var line string
+	if m.Progress.Compacting {
+		line = m.Input.Spinner.View() + " Compacting context..."
+		if n := len(m.InFlight.QueuedTurns); n > 0 {
+			line += m.st.dim.Render(fmt.Sprintf(" • %d queued", n))
+		}
+		return fitLine(strings.TrimRight(line, " "), m.App.Width)
+	}
 	switch m.Progress.Mode {
 	case stateIonizing, stateStreaming, stateWorking:
 		status := m.Progress.Status

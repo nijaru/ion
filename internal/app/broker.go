@@ -32,6 +32,7 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 	case session.StatusChanged:
 		if msg.AgentID == "" {
 			m.Progress.Status = msg.Status
+			m.Progress.Compacting = isCompactingStatus(msg.Status)
 		} else {
 			if p, ok := m.InFlight.Subagents[msg.AgentID]; ok {
 				p.Status = msg.Status
@@ -81,6 +82,7 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 
 	case session.TurnStarted:
 		m.InFlight.Thinking = true
+		m.Progress.Compacting = false
 		m.Progress.Mode = stateIonizing
 		m.Progress.LastError = ""
 		m.Progress.TurnStartedAt = time.Now()
@@ -402,6 +404,7 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		m.InFlight.StreamBuf = ""
 		m.InFlight.ReasonBuf = ""
 		m.InFlight.Thinking = false
+		m.Progress.Compacting = false
 		m.Progress.Mode = stateError
 		m.Progress.LastError = msg.Err.Error()
 		m.Progress.LastTurnSummary = turnSummary{}

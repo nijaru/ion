@@ -20,12 +20,14 @@ import (
 )
 
 type compactProvider struct {
-	id string
+	id          string
+	lastRequest *llm.Request
 }
 
 func (p *compactProvider) ID() string { return p.id }
 
 func (p *compactProvider) Generate(ctx context.Context, req *llm.Request) (*llm.Response, error) {
+	p.lastRequest = req
 	return &llm.Response{Content: "condensed summary"}, nil
 }
 
@@ -486,9 +488,10 @@ func TestCompactUsesManualCompactionHelper(t *testing.T) {
 	}
 
 	oldFactory := providerFactory
+	provider := &compactProvider{id: "openai"}
 	providerFactory = func(ctx context.Context, cfg *config.Config) (llm.Provider, error) {
 		if cfg.Provider == "openai" {
-			return &compactProvider{id: "openai"}, nil
+			return provider, nil
 		}
 		return oldFactory(ctx, cfg)
 	}
@@ -521,6 +524,10 @@ func TestCompactUsesManualCompactionHelper(t *testing.T) {
 	}
 	if !entryExists(entries, ionsession.System, "<conversation_summary>") {
 		t.Fatalf("expected compacted effective history to include conversation summary, got %#v", entries)
+	}
+	if provider.lastRequest == nil || len(provider.lastRequest.Messages) < 2 ||
+		!strings.Contains(provider.lastRequest.Messages[1].Content, "current user goal and immediate next step") {
+		t.Fatalf("summarizer prompt did not include Ion compaction guidance: %#v", provider.lastRequest)
 	}
 
 	cantoStore, ok := store.(interface{ Canto() *csession.SQLiteStore })
