@@ -682,6 +682,76 @@ func TestSubmitTurnProactivelyCompactsBeforeOverflow(t *testing.T) {
 	}
 }
 
+func TestSubmitTurnStopsWhenProactiveCompactionFails(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	root := t.TempDir()
+	store, err := storage.NewCantoStore(root)
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+
+	storageSession, err := store.OpenSession(ctx, "/tmp/ion-proactive-fail", "openai/model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	if err := storageSession.Append(ctx, storage.Agent{
+		Type:    "agent",
+		Content: []storage.Block{{Type: "text", Text: textPtr(strings.Repeat("alpha ", 60))}},
+	}); err != nil {
+		t.Fatalf("append history: %v", err)
+	}
+
+	provider := &overflowRecoveryProvider{
+		FauxProvider: ctesting.NewMockProvider(
+			"openai",
+			ctesting.Step{Err: errors.New("compaction provider failed")},
+			ctesting.Step{Content: "turn should not run"},
+		),
+	}
+
+	oldFactory := providerFactory
+	providerFactory = func(ctx context.Context, cfg *config.Config) (llm.Provider, error) {
+		if cfg.Provider == "openai" {
+			return provider, nil
+		}
+		return oldFactory(ctx, cfg)
+	}
+	defer func() { providerFactory = oldFactory }()
+
+	b := New()
+	b.SetStore(store)
+	b.SetSession(&proactiveUsageSession{
+		id:       storageSession.ID(),
+		meta:     storage.Metadata{ID: storageSession.ID(), CWD: "/tmp/ion-proactive-fail", Model: "model-a", Branch: "main"},
+		usageIn:  72,
+		usageOut: 8,
+	})
+	b.SetConfig(&config.Config{Provider: "openai", Model: "model-a", ContextLimit: 100})
+	if err := b.Open(ctx); err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer func() { _ = b.Close() }()
+
+	if err := b.SubmitTurn(ctx, "do not send this after compaction failure"); err != nil {
+		t.Fatalf("submit turn: %v", err)
+	}
+
+	errEvent := waitForSessionError(t, b.Events())
+	if !strings.Contains(errEvent.Err.Error(), "compaction provider failed") {
+		t.Fatalf("error = %v, want compaction provider failure", errEvent.Err)
+	}
+
+	calls := provider.Calls()
+	if len(calls) != 1 {
+		t.Fatalf("provider calls = %d, want 1 compaction call only", len(calls))
+	}
+}
+
 func TestOpenLoadsLayeredProjectInstructions(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
@@ -768,6 +838,26 @@ func waitForTurnFinished(t *testing.T, events <-chan ionsession.Event) {
 			}
 		case <-timeout:
 			t.Fatal("timed out waiting for turn to finish")
+		}
+	}
+}
+
+func waitForSessionError(t *testing.T, events <-chan ionsession.Event) ionsession.Error {
+	t.Helper()
+
+	timeout := time.After(2 * time.Second)
+	for {
+		select {
+		case ev, ok := <-events:
+			if !ok {
+				t.Fatal("event stream closed before session error")
+			}
+			if msg, ok := ev.(ionsession.Error); ok {
+				return msg
+			}
+		case <-timeout:
+			t.Fatal("timed out waiting for session error")
+			return ionsession.Error{}
 		}
 	}
 }

@@ -543,16 +543,22 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 	go func() {
 		defer cancel()
 
-		if shouldCompact, err := b.shouldProactivelyCompact(turnCtx); err == nil && shouldCompact {
+		shouldCompact, err := b.shouldProactivelyCompact(turnCtx)
+		if err != nil {
+			b.events <- ionsession.Error{Err: err}
+			return
+		}
+		if shouldCompact {
 			b.events <- ionsession.StatusChanged{Status: "Compacting context..."}
 			if compacted, cerr := b.Compact(turnCtx); cerr != nil {
 				b.events <- ionsession.Error{Err: cerr}
+				return
 			} else if compacted {
 				b.events <- ionsession.StatusChanged{Status: "Ready"}
 			}
 		}
 
-		_, err := b.runner.SendStream(turnCtx, sessionID, input, func(chunk *llm.Chunk) {
+		_, err = b.runner.SendStream(turnCtx, sessionID, input, func(chunk *llm.Chunk) {
 			if chunk.Reasoning != "" {
 				b.events <- ionsession.ThinkingDelta{Delta: chunk.Reasoning}
 			}
