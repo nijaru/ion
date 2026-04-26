@@ -81,10 +81,11 @@ func (b *compactBackend) Compact(ctx context.Context) (bool, error) {
 }
 
 type stubSession struct {
-	events    chan session.Event
-	submits   []string
-	cancels   int
-	submitErr error
+	events     chan session.Event
+	submits    []string
+	cancels    int
+	submitErr  error
+	approveErr error
 }
 
 func (s *stubSession) Open(ctx context.Context) error              { return nil }
@@ -109,8 +110,10 @@ func (s *stubSession) Close() error {
 	}
 	return nil
 }
-func (s *stubSession) Events() <-chan session.Event                          { return s.events }
-func (s *stubSession) Approve(ctx context.Context, id string, ok bool) error { return nil }
+func (s *stubSession) Events() <-chan session.Event { return s.events }
+func (s *stubSession) Approve(ctx context.Context, id string, ok bool) error {
+	return s.approveErr
+}
 func (s *stubSession) RegisterMCPServer(ctx context.Context, cmd string, args ...string) error {
 	return nil
 }
@@ -344,6 +347,36 @@ func TestInterleavedToolResultsPreservePendingEntries(t *testing.T) {
 	}
 	if !slices.Equal(resultIDs, []string{"tool-a", "tool-b"}) {
 		t.Fatalf("tool result IDs = %#v, want [tool-a tool-b]", resultIDs)
+	}
+}
+
+func TestApprovalFailureSurfacesSessionError(t *testing.T) {
+	sess := &stubSession{events: make(chan session.Event), approveErr: errors.New("approval bridge failed")}
+	model := readyModel(t)
+	model.Model.Session = sess
+	model.Approval.Pending = &session.ApprovalRequest{
+		RequestID:   "req-1",
+		Description: "run tool",
+		ToolName:    "bash",
+	}
+	model.Progress.Mode = stateApproval
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'y', Text: "y"})
+	model = updated.(Model)
+
+	if model.Approval.Pending != nil {
+		t.Fatal("approval pending should be cleared after approval attempt")
+	}
+	if cmd == nil {
+		t.Fatal("expected error command for failed approval")
+	}
+	msg := cmd()
+	errEvent, ok := msg.(session.Error)
+	if !ok {
+		t.Fatalf("approval failure msg = %T, want session.Error", msg)
+	}
+	if !strings.Contains(errEvent.Err.Error(), "send approval") {
+		t.Fatalf("approval error = %v, want send approval context", errEvent.Err)
 	}
 }
 
