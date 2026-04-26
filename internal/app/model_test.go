@@ -70,6 +70,13 @@ func (b stubBackend) ToolSurface() backend.ToolSurface {
 	}
 }
 
+func (b stubBackend) MemoryView(ctx context.Context, query string) (string, error) {
+	if query == "" {
+		return "workspace/core/project -- summary", nil
+	}
+	return "semantic\nremembered " + query, nil
+}
+
 func (b stubBackend) Bootstrap() backend.Bootstrap {
 	return backend.Bootstrap{
 		Entries: []session.Entry{{Role: session.System, Content: "boot"}},
@@ -1617,6 +1624,7 @@ func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 		"/thinking [lvl]",
 		"/trust [status]",
 		"/tools",
+		"/memory [query]",
 		"/compact",
 		"/clear",
 		"/cost",
@@ -1646,6 +1654,15 @@ func TestToolsCommandReportsToolSurface(t *testing.T) {
 	_, cmd := model.handleCommand("/tools")
 	if cmd == nil {
 		t.Fatal("tools command returned nil cmd")
+	}
+}
+
+func TestMemoryCommandReportsMemoryView(t *testing.T) {
+	model := readyModel(t)
+
+	_, cmd := model.handleCommand("/memory policy")
+	if cmd == nil {
+		t.Fatal("memory command returned nil cmd")
 	}
 }
 

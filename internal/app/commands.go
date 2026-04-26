@@ -214,6 +214,18 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		surface := summarizer.ToolSurface()
 		return m, m.printEntries(session.Entry{Role: session.System, Content: toolSurfaceSummary(surface)})
 
+	case "/memory":
+		explorer, ok := m.Model.Backend.(backend.MemoryExplorer)
+		if !ok {
+			return m, cmdError("memory view unavailable for this backend")
+		}
+		query := strings.TrimSpace(strings.TrimPrefix(input, fields[0]))
+		out, err := explorer.MemoryView(context.Background(), query)
+		if err != nil {
+			return m, cmdError(fmt.Sprintf("failed to load memory: %v", err))
+		}
+		return m, m.printEntries(session.Entry{Role: session.System, Content: out})
+
 	case "/clear":
 		cfg, err := config.Load()
 		if err != nil {
@@ -384,6 +396,7 @@ func helpText() string {
 		"  /mode [mode]     set mode: read, edit, yolo",
 		"  /trust [status]  trust this workspace or show trust status",
 		"  /tools           show tool count and lazy loading status",
+		"  /memory [query]  show workspace memory tree or search memory",
 		"  /compact         compact the current session",
 		"  /clear           start a fresh session with the current provider/model",
 		"  /cost            show aggregate session usage",
