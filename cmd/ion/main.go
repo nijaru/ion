@@ -205,10 +205,15 @@ func startupToolLine(b backend.Backend) string {
 	if surface.Count == 0 {
 		return ""
 	}
-	if surface.LazyEnabled {
-		return fmt.Sprintf("Tools: %d registered; search_tools enabled", surface.Count)
+	sandbox := strings.TrimSpace(surface.Sandbox)
+	sandboxSuffix := ""
+	if sandbox != "" {
+		sandboxSuffix = "; sandbox " + sandbox
 	}
-	return fmt.Sprintf("Tools: %d registered", surface.Count)
+	if surface.LazyEnabled {
+		return fmt.Sprintf("Tools: %d registered; search_tools enabled%s", surface.Count, sandboxSuffix)
+	}
+	return fmt.Sprintf("Tools: %d registered%s", surface.Count, sandboxSuffix)
 }
 
 func openRuntime(ctx context.Context, store storage.Store, cwd, branch string, cfg *config.Config, acpCommandOverride string, sessionID string) (backend.Backend, storage.Session, error) {

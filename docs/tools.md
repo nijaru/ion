@@ -11,8 +11,8 @@ Use:
 ```
 
 to show the registered tool count, whether lazy loading is active, and the
-current tool names. For the native Canto backend, this also reports the active
-bash sandbox posture.
+current tool names. The startup banner and `/tools` both report the active bash
+sandbox posture for the native Canto backend.
 
 Bash sandboxing is configured with:
 
