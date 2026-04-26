@@ -609,8 +609,8 @@ func (b *Backend) translateEvents(ctx context.Context, evCh <-chan session.Event
 			b.events <- ionsession.TurnStarted{}
 			b.events <- ionsession.StatusChanged{Status: "Thinking..."}
 		case session.TurnCompleted:
-			b.events <- ionsession.TurnFinished{}
 			b.events <- ionsession.AgentMessage{Message: ""} // Commit
+			b.events <- ionsession.TurnFinished{}
 			b.events <- ionsession.StatusChanged{Status: "Ready"}
 		case session.ToolStarted:
 			var data struct {
