@@ -17,7 +17,7 @@ type Viewport struct{}
 // renderPlaneB renders all ephemeral in-flight content.
 // Returns empty string when there is nothing active.
 func (m Model) renderPlaneB() string {
-	if m.InFlight.Pending == nil && m.Approval.Pending == nil && m.InFlight.ReasonBuf == "" && len(m.InFlight.Subagents) == 0 {
+	if m.InFlight.Pending == nil && len(m.InFlight.PendingTools) == 0 && m.Approval.Pending == nil && m.InFlight.ReasonBuf == "" && len(m.InFlight.Subagents) == 0 {
 		return ""
 	}
 
@@ -33,9 +33,15 @@ func (m Model) renderPlaneB() string {
 		}
 	}
 
-	// Active in-flight entry (streaming agent, tool, or agent)
-	if m.InFlight.Pending != nil {
+	// Active in-flight assistant entry.
+	if m.InFlight.Pending != nil && m.InFlight.Pending.Role == session.Agent {
 		b.WriteString(m.renderPendingEntry(*m.InFlight.Pending))
+		b.WriteString("\n")
+	}
+
+	// Active in-flight tools. Sort by ID for deterministic rendering.
+	for _, id := range sortedKeys(m.InFlight.PendingTools) {
+		b.WriteString(m.renderPendingEntry(*m.InFlight.PendingTools[id]))
 		b.WriteString("\n")
 	}
 
