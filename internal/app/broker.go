@@ -436,9 +436,7 @@ func persistErrorCmd(action string, err error) tea.Cmd {
 
 func (m Model) pendingToolEntry(toolUseID string) *session.Entry {
 	if toolUseID != "" {
-		if entry := m.InFlight.PendingTools[toolUseID]; entry != nil {
-			return entry
-		}
+		return m.InFlight.PendingTools[toolUseID]
 	}
 	if m.InFlight.Pending != nil && m.InFlight.Pending.Role == session.Tool {
 		return m.InFlight.Pending
