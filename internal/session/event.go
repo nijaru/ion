@@ -65,8 +65,9 @@ func (e AgentMessage) isEvent() {}
 // ToolCallStarted fires when the agent starts executing a tool.
 type ToolCallStarted struct {
 	Base
-	ToolName string `json:"tool_name"`
-	Args     string `json:"args"`
+	ToolUseID string `json:"tool_use_id,omitempty"`
+	ToolName  string `json:"tool_name"`
+	Args      string `json:"args"`
 }
 
 func (e ToolCallStarted) isEvent() {}
@@ -74,9 +75,10 @@ func (e ToolCallStarted) isEvent() {}
 // ToolResult fires when the agent finishes executing a tool.
 type ToolResult struct {
 	Base
-	ToolName string `json:"tool_name"`
-	Result   string `json:"result"`
-	Error    error  `json:"error,omitempty"`
+	ToolUseID string `json:"tool_use_id,omitempty"`
+	ToolName  string `json:"tool_name"`
+	Result    string `json:"result"`
+	Error     error  `json:"error,omitempty"`
 }
 
 func (e ToolResult) isEvent() {}
@@ -84,7 +86,8 @@ func (e ToolResult) isEvent() {}
 // ToolOutputDelta is an incremental chunk of tool output text.
 type ToolOutputDelta struct {
 	Base
-	Delta string `json:"delta"`
+	ToolUseID string `json:"tool_use_id,omitempty"`
+	Delta     string `json:"delta"`
 }
 
 func (e ToolOutputDelta) isEvent() {}

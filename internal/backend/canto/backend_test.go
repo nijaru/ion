@@ -204,6 +204,43 @@ func TestTranslateEventsCommitsAssistantBeforeTurnFinished(t *testing.T) {
 	}
 }
 
+func TestTranslateEventsPreservesToolUseID(t *testing.T) {
+	b := New()
+	events := make(chan csession.Event, 2)
+	events <- csession.NewEvent("session-id", csession.ToolStarted, map[string]string{
+		"id":   "tool-call-1",
+		"tool": "bash",
+		"args": "git status",
+	})
+	events <- csession.NewEvent("session-id", csession.ToolCompleted, map[string]string{
+		"id":     "tool-call-1",
+		"tool":   "bash",
+		"output": "ok",
+	})
+	close(events)
+
+	b.translateEvents(t.Context(), events)
+
+	ev1 := receiveEvent(t, b.Events())
+	started, ok := ev1.(ionsession.ToolCallStarted)
+	if !ok {
+		t.Fatalf("first event = %T, want ToolCallStarted", ev1)
+	}
+	if started.ToolUseID != "tool-call-1" {
+		t.Fatalf("started id = %q, want tool-call-1", started.ToolUseID)
+	}
+	_ = receiveEvent(t, b.Events()) // status
+
+	ev3 := receiveEvent(t, b.Events())
+	result, ok := ev3.(ionsession.ToolResult)
+	if !ok {
+		t.Fatalf("third event = %T, want ToolResult", ev3)
+	}
+	if result.ToolUseID != "tool-call-1" {
+		t.Fatalf("result id = %q, want tool-call-1", result.ToolUseID)
+	}
+}
+
 func TestCrossProviderHandoffPreservesPromptTruth(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

@@ -620,8 +620,9 @@ func (b *Backend) translateEvents(ctx context.Context, evCh <-chan session.Event
 			}
 			if err := ev.UnmarshalData(&data); err == nil {
 				b.events <- ionsession.ToolCallStarted{
-					ToolName: data.Tool,
-					Args:     data.Args,
+					ToolUseID: data.ID,
+					ToolName:  data.Tool,
+					Args:      data.Args,
 				}
 				b.events <- ionsession.StatusChanged{Status: fmt.Sprintf("Running %s...", data.Tool)}
 			}
@@ -638,9 +639,10 @@ func (b *Backend) translateEvents(ctx context.Context, evCh <-chan session.Event
 					execErr = fmt.Errorf("%s", data.Error)
 				}
 				b.events <- ionsession.ToolResult{
-					ToolName: data.Tool,
-					Result:   data.Output,
-					Error:    execErr,
+					ToolUseID: data.ID,
+					ToolName:  data.Tool,
+					Result:    data.Output,
+					Error:     execErr,
 				}
 			}
 		case session.ToolOutputDelta:

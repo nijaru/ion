@@ -243,10 +243,13 @@ func TestModelStreamsAndCommitsPendingEntry(t *testing.T) {
 }
 
 func TestToolEntryFlushesToTranscript(t *testing.T) {
+	storageSess := &stubStorageSession{}
 	model := readyModel(t)
+	model.Model.Storage = storageSess
 	updated, _ := model.Update(session.ToolCallStarted{
-		ToolName: "bash",
-		Args:     "ls",
+		ToolUseID: "tool-call-1",
+		ToolName:  "bash",
+		Args:      "ls",
 	})
 	model = updated.(Model)
 
@@ -265,6 +268,16 @@ func TestToolEntryFlushesToTranscript(t *testing.T) {
 	}
 	if cmd == nil {
 		t.Fatalf("expected tea.Println command for tool result")
+	}
+	var result storage.ToolResult
+	for _, event := range storageSess.appends {
+		if e, ok := event.(storage.ToolResult); ok {
+			result = e
+			break
+		}
+	}
+	if result.ToolUseID != "tool-call-1" {
+		t.Fatalf("tool result id = %q, want tool-call-1", result.ToolUseID)
 	}
 }
 

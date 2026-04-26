@@ -168,6 +168,9 @@ func TestACPSessionUpdateToolCall(t *testing.T) {
 	if tc.ToolName != "Read file.go" {
 		t.Errorf("expected ToolName 'Read file.go', got %q", tc.ToolName)
 	}
+	if tc.ToolUseID != "call-1" {
+		t.Errorf("expected ToolUseID 'call-1', got %q", tc.ToolUseID)
+	}
 }
 
 func TestACPSessionUpdateToolCompletion(t *testing.T) {
@@ -191,8 +194,12 @@ func TestACPSessionUpdateToolCompletion(t *testing.T) {
 	}
 
 	ev := drainOne(t, client.events, 500*time.Millisecond)
-	if _, ok := ev.(session.ToolResult); !ok {
+	result, ok := ev.(session.ToolResult)
+	if !ok {
 		t.Fatalf("expected ToolResult, got %T", ev)
+	}
+	if result.ToolUseID != "call-1" {
+		t.Fatalf("tool result id = %q, want call-1", result.ToolUseID)
 	}
 }
 
