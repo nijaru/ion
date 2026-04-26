@@ -10,14 +10,20 @@ import (
 	"github.com/aymanbagabas/go-udiff"
 	"github.com/go-json-experiment/json"
 	"github.com/nijaru/canto/llm"
+	ionworkspace "github.com/nijaru/ion/internal/workspace"
 )
 
 type FileTool struct {
-	cwd string
+	cwd        string
+	checkpoint *ionworkspace.CheckpointStore
 }
 
 func NewFileTool(cwd string) *FileTool {
-	return &FileTool{cwd: cwd}
+	path, err := ionworkspace.DefaultCheckpointPath()
+	if err != nil {
+		return &FileTool{cwd: cwd}
+	}
+	return &FileTool{cwd: cwd, checkpoint: ionworkspace.NewCheckpointStore(path)}
 }
 
 // resolvePath securely joins the target path to cwd and ensures it does not escape.
@@ -36,6 +42,17 @@ func (t *FileTool) resolvePath(target string) (string, error) {
 		return "", fmt.Errorf("path escapes workspace: %s", target)
 	}
 	return absPath, nil
+}
+
+func (t *FileTool) checkpointPaths(ctx context.Context, paths ...string) (string, error) {
+	if t.checkpoint == nil {
+		return "", nil
+	}
+	cp, err := t.checkpoint.Create(ctx, t.cwd, paths)
+	if err != nil {
+		return "", err
+	}
+	return cp.ID, nil
 }
 
 // Read tool (formerly read_file)
@@ -143,6 +160,11 @@ func (w *Write) Execute(ctx context.Context, args string) (string, error) {
 		return "", err
 	}
 
+	checkpointID, err := w.checkpointPaths(ctx, input.FilePath)
+	if err != nil {
+		return "", err
+	}
+
 	if err := os.MkdirAll(filepath.Dir(absPath), 0755); err != nil {
 		return "", err
 	}
@@ -150,7 +172,7 @@ func (w *Write) Execute(ctx context.Context, args string) (string, error) {
 	if err := os.WriteFile(absPath, []byte(input.Content), 0644); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("Successfully wrote %d bytes to %s", len(input.Content), input.FilePath), nil
+	return appendCheckpointID(fmt.Sprintf("Successfully wrote %d bytes to %s", len(input.Content), input.FilePath), checkpointID), nil
 }
 
 // Edit tool
@@ -225,12 +247,17 @@ func (e *Edit) Execute(ctx context.Context, args string) (string, error) {
 		newContent = strings.Replace(strContent, input.OldString, input.NewString, 1)
 	}
 
+	checkpointID, err := e.checkpointPaths(ctx, input.FilePath)
+	if err != nil {
+		return "", err
+	}
+
 	if err := os.WriteFile(absPath, []byte(newContent), 0644); err != nil {
 		return "", err
 	}
 
 	diff := udiff.Unified("a/"+input.FilePath, "b/"+input.FilePath, strContent, newContent)
-	return fmt.Sprintf("Successfully replaced %d occurrence(s) in %s\n\n%s", count, input.FilePath, diff), nil
+	return appendCheckpointID(fmt.Sprintf("Successfully replaced %d occurrence(s) in %s\n\n%s", count, input.FilePath, diff), checkpointID), nil
 }
 
 // MultiEdit tool
@@ -330,6 +357,19 @@ func (m *MultiEdit) Execute(ctx context.Context, args string) (string, error) {
 
 	// Second pass: write all modified files to temp files and generate aggregate diff
 	var diffs strings.Builder
+	checkpointPaths := make([]string, 0, len(contents))
+	for absPath := range contents {
+		relPath, err := filepath.Rel(m.cwd, absPath)
+		if err != nil {
+			return "", err
+		}
+		checkpointPaths = append(checkpointPaths, relPath)
+	}
+	checkpointID, err := m.checkpointPaths(ctx, checkpointPaths...)
+	if err != nil {
+		return "", err
+	}
+
 	type renameOp struct {
 		from, to string
 	}
@@ -367,7 +407,14 @@ func (m *MultiEdit) Execute(ctx context.Context, args string) (string, error) {
 		}
 	}
 
-	return fmt.Sprintf("Successfully applied %d edit(s) across %d file(s)\n\n%s", len(input.Edits), len(contents), diffs.String()), nil
+	return appendCheckpointID(fmt.Sprintf("Successfully applied %d edit(s) across %d file(s)\n\n%s", len(input.Edits), len(contents), diffs.String()), checkpointID), nil
+}
+
+func appendCheckpointID(message, id string) string {
+	if id == "" {
+		return message
+	}
+	return message + "\nCheckpoint: " + id
 }
 
 // List tool (formerly list_directory)
