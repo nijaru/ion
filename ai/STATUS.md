@@ -13,10 +13,10 @@ Near-term tracks:
 - `tk-tyww` — Workflow: Workflow Definitions & Recovery (Completed)
 - `tk-txju` — Eval: Golden Datasets & Regression Gates (Completed)
 - `tk-zbxk` — Security: Policy Config & LLM-as-Judge (Deterministic config complete; LLM judge split)
-- `tk-r5jr` — Subagent: Agent Personas & Model Routing (Completing)
+- `tk-r5jr` — Subagent: Agent Personas & Model Routing (Completed)
 - `tk-z2cb` — Workspace: Trust UX & Visual Rollback (Trust complete; rewind split)
-- `tk-yf7v` — Tool Execution: Tool Loading UX & Approval Tiers (Completing)
-- `tk-gxfu` — Memory: Karpathy-Style Knowledge Base & Search UX (Completing)
+- `tk-yf7v` — Tool Execution: Tool Loading UX & Approval Tiers (Completed)
+- `tk-gxfu` — Memory: Karpathy-Style Knowledge Base & Search UX (Search UX complete; wiki split)
 - `tk-90mp` — Streaming: Cost Limits & Model Cascades (Paused after first budget/trace slices)
 - `tk-fblb` — Migrate Ion to current Canto surface (Completed)
 - `tk-ulfg` — Research: current Pi core loop and feature review (Completed)
@@ -37,10 +37,10 @@ Design rule:
 - Similar agents are references, not feature-parity requirements. Adopt from pi, Claude Code, Codex, OpenCode, Cursor, Droid, Letta, and others only when the idea strengthens Ion's core coding loop or preserves a simple, inspectable UX.
 
 ## Next Steps
-1. Split LLM-as-judge classifier/circuit-breaker work from `tk-zbxk`; keep deterministic rules as the stable base.
-2. Keep adding focused regressions before broadening any SOTA epic.
+1. Work through the remaining P2 queue: checkpoint rewind semantics, LLM-as-judge circuit breakers, Slack/email notifier delivery, and model cascade enforcement.
+2. Keep deterministic config and explicit commands as the base before adding classifier or optimizer behavior.
 3. Use the current Pi review as a reference for loop contracts and future `/tree`, but keep concrete fixes on the current solo loop.
-4. Resume `tk-90mp` after the security slice; budget enforcement and routing trace slices are already committed.
+4. Resume `tk-90mp`; budget enforcement and routing trace slices are already committed.
 5. Treat older `Canto: contribute ...` tasks as re-triaged: no default grep/glob or preset coding-tool bundles; only concrete reusable extension packages should move upstream.
 
 *(Note: Older P3 TUI refinement tasks like configurable verbosity, skill layering, and status line context have been subsumed by their respective SOTA epics).*
@@ -80,19 +80,16 @@ Design rule:
 
 ## Active Tasks
 See `tk ls` for the full list. Current active priority:
-- `tk-gxfu` — Memory: Karpathy-Style Knowledge Base & Search UX (closing search UX slice)
+- No P1 tasks remain ready. Next ready work is P2.
 
-P1 SOTA epics remain important but are downstream of `tk-96vy`:
+Remaining P2 epics:
+- `tk-8e2x` — Workspace: checkpoint Rewind UI and restore semantics
+- `tk-9lws` — Security: LLM-as-judge classifier and circuit breaker
+- `tk-00km` — HITL: Slack/email notifier delivery and audit
 - `tk-90mp` — Streaming: Cost Limits & Model Cascades
-- `tk-j3ap` — HITL: Permission Modes UX & Escalation
-- `tk-wzt6` — Observability: OTel Exporter & Dashboards (Completed)
-- `tk-tyww` — Workflow: Workflow Definitions & Recovery (Completed)
-- `tk-txju` — Eval: Golden Datasets & Regression Gates (Completed)
-- `tk-zbxk` — Security: Policy Config & LLM-as-Judge
-- `tk-r5jr` — Subagent: Agent Personas & Model Routing
-- `tk-z2cb` — Workspace: Trust UX & Visual Rollback
-- `tk-yf7v` — Tool Execution: Tool Loading UX & Approval Tiers
-- `tk-gxfu` — Memory: Karpathy-Style Knowledge Base & Search UX
+- `tk-g78q` — Skills: Self-Extension Nudges & Marketplace
+- `tk-2wrb` — Context: Compaction UX & Summarization Prompts
+- `tk-8174` — Session: Cross-Host Sync & TUI Branching
 
 ## Blockers
 - None.
