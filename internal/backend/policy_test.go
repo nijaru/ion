@@ -105,6 +105,41 @@ func TestPolicyEngine(t *testing.T) {
 	}
 }
 
+func TestReadModeCannotBeWeakenedBySessionApprovals(t *testing.T) {
+	pe := NewPolicyEngine()
+	ctx := context.Background()
+
+	pe.SetMode(session.ModeEdit)
+	pe.AllowCategoryOf("write")
+
+	policy, _ := pe.Authorize(ctx, "write", `{"file_path":"file.txt"}`)
+	if policy != PolicyAllow {
+		t.Fatalf("EDIT override policy = %v, want allow", policy)
+	}
+
+	pe.SetAutoApprove(true)
+	pe.SetMode(session.ModeRead)
+
+	policy, reason := pe.Authorize(ctx, "write", `{"file_path":"file.txt"}`)
+	if policy != PolicyDeny {
+		t.Fatalf("READ write policy = %v (%q), want deny", policy, reason)
+	}
+	policy, reason = pe.Authorize(ctx, "bash", `{"command":"go test ./..."}`)
+	if policy != PolicyDeny {
+		t.Fatalf("READ bash policy = %v (%q), want deny", policy, reason)
+	}
+}
+
+func TestYoloAllowsUnknownTools(t *testing.T) {
+	pe := NewPolicyEngine()
+	pe.SetMode(session.ModeYolo)
+
+	policy, reason := pe.Authorize(context.Background(), "external_tool", `{}`)
+	if policy != PolicyAllow {
+		t.Fatalf("YOLO unknown tool policy = %v (%q), want allow", policy, reason)
+	}
+}
+
 func TestIsSafeBashCommand(t *testing.T) {
 	tests := []struct {
 		command string
