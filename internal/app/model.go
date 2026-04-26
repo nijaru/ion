@@ -470,6 +470,35 @@ func (m Model) configuredSessionBudgetStopReason() string {
 	return ""
 }
 
+func (m Model) routingDecision(decision, reason, stopReason string) storage.RoutingDecision {
+	provider := ""
+	model := ""
+	if m.Model.Backend != nil {
+		provider = m.Model.Backend.Provider()
+		model = m.Model.Backend.Model()
+	}
+	var maxSessionCost, maxTurnCost float64
+	if m.Model.Config != nil {
+		maxSessionCost = m.Model.Config.MaxSessionCost
+		maxTurnCost = m.Model.Config.MaxTurnCost
+	}
+	return storage.RoutingDecision{
+		Type:           "routing_decision",
+		Decision:       decision,
+		Reason:         reason,
+		ModelSlot:      m.activePreset().String(),
+		Provider:       provider,
+		Model:          model,
+		Reasoning:      normalizeThinkingValue(m.Progress.ReasoningEffort),
+		MaxSessionCost: maxSessionCost,
+		MaxTurnCost:    maxTurnCost,
+		SessionCost:    m.Progress.TotalCost,
+		TurnCost:       m.Progress.CurrentTurnCost,
+		StopReason:     stopReason,
+		TS:             now(),
+	}
+}
+
 func (m Model) runtimeHeaderLine(_ backend.Backend) string {
 	version := strings.TrimSpace(m.App.Version)
 	if version == "" {

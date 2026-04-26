@@ -140,6 +140,22 @@ type (
 		TS     int64   `json:"ts"`
 	}
 
+	RoutingDecision struct {
+		Type           string  `json:"type"` // "routing_decision"
+		Decision       string  `json:"decision"`
+		Reason         string  `json:"reason"`
+		ModelSlot      string  `json:"model_slot"`
+		Provider       string  `json:"provider"`
+		Model          string  `json:"model"`
+		Reasoning      string  `json:"reasoning,omitempty"`
+		MaxSessionCost float64 `json:"max_session_cost,omitempty"`
+		MaxTurnCost    float64 `json:"max_turn_cost,omitempty"`
+		SessionCost    float64 `json:"session_cost,omitempty"`
+		TurnCost       float64 `json:"turn_cost,omitempty"`
+		StopReason     string  `json:"stop_reason,omitempty"`
+		TS             int64   `json:"ts"`
+	}
+
 	Subagent struct {
 		Type    string `json:"type"` // "subagent"
 		Name    string `json:"name"`

@@ -64,6 +64,9 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		}
 		if reason := m.configuredBudgetStopReason(); reason != "" && reason != m.Progress.BudgetStopReason {
 			m.Progress.BudgetStopReason = reason
+			if err := m.persistEntry("persist routing stop", m.routingDecision("stop", "budget_limit", reason)); err != nil {
+				return m, persistErrorCmd("persist routing stop", err)
+			}
 			if m.InFlight.Thinking {
 				if err := m.Model.Session.CancelTurn(context.Background()); err != nil {
 					return m, persistErrorCmd("cancel over-budget turn", err)
@@ -452,6 +455,10 @@ func (m Model) submitText(text string) (Model, tea.Cmd) {
 	if strings.HasPrefix(text, "/") {
 		m, cmd := m.handleCommand(text)
 		return m, tea.Sequence(m.printEntries(userEntry), cmd)
+	}
+
+	if err := m.persistEntry("persist routing decision", m.routingDecision("use_model", "active_preset", "")); err != nil {
+		return m, persistErrorCmd("persist routing decision", err)
 	}
 
 	m.Progress.Mode = stateIonizing
