@@ -6,6 +6,9 @@ Fast, lightweight terminal coding agent.
 
 Ion has been reconciled with the current stabilized Canto surface. The core loop audit, HITL permission-mode hardening, observability exporter slice, workflow topology spec, first eval regression gate, deterministic policy config slice, first executable subagent persona/routing slice, workspace trust slice, tool-loading UX slice, and first memory search UX slice are complete. Current work is moving through the remaining P2 reliability/UX epics.
 
+Current active slice:
+- `tk-8e2x` — Workspace checkpoint/rewind semantics. First substrate landed: mutating native file tools now create durable pre-change checkpoints under `~/.ion/checkpoints` and surface checkpoint IDs in tool results. Restore API exists in `internal/workspace`, but no `/rewind` UI is exposed yet.
+
 Near-term tracks:
 - `tk-96vy` — Core loop: reliability and resilience audit (Completed)
 - `tk-j3ap` — HITL: Permission Modes UX & Escalation (Completed; notifier delivery split to `tk-00km`)
@@ -84,12 +87,14 @@ See `tk ls` for the full list. Current active priority:
 
 Remaining P2 epics:
 - `tk-8e2x` — Workspace: checkpoint Rewind UI and restore semantics
+- `tk-kfno` — Security: OS sandbox hardening for tool execution
 - `tk-9lws` — Security: LLM-as-judge classifier and circuit breaker
 - `tk-00km` — HITL: Slack/email notifier delivery and audit
 - `tk-90mp` — Streaming: Cost Limits & Model Cascades
 - `tk-g78q` — Skills: Self-Extension Nudges & Marketplace
 - `tk-2wrb` — Context: Compaction UX & Summarization Prompts
 - `tk-8174` — Session: Cross-Host Sync & TUI Branching
+- `tk-n0n4` — Privacy: PII detection and redaction pipeline
 
 ## Blockers
 - None.

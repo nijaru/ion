@@ -32,80 +32,99 @@ Execution rule:
 - The core solo agent is the product. Subagents, swarm mode, ACP, and other orchestration surfaces are wrappers around that base.
 - v0.0.0 has no compatibility debt. If the final design wants a different binding, preset, or config shape, change it directly.
 
-### 1. Provider validation
+### 1. Core reliability and rollback
 
 Goal:
-- turn broad structural provider support into validated provider support
+- keep submit/stream/tool/approval/cancel/error/persist/replay boring and resilient
+- make workspace checkpoint and rewind semantics real before exposing destructive restore UX
 
 Tracked by:
-- `tk-ekao`
+- `tk-8e2x`
+- `tk-5t72`
+- `tk-9n7h`
+
+Includes:
+- checkpoint format decision
+- untracked and binary file handling
+- restore conflict behavior
+- before/after audit events
+- explicit TUI confirmation for destructive restore
+- CantoBackend storage and registry cleanup after the current provider/backend surface settles
+
+### 2. Safety and execution boundaries
+
+Goal:
+- keep deterministic policy and OS enforcement ahead of classifier-driven automation
+
+Tracked by:
+- `tk-kfno`
+- `tk-9lws`
+- `tk-n0n4`
+
+Includes:
+- hardened macOS Seatbelt and Linux bubblewrap/Landlock execution boundaries
+- visible sandbox status independent of READ/EDIT/YOLO
+- deterministic policy as the base layer
+- optional model-assisted classification only after fail-closed behavior and audit logging
+- privacy filtering for prompts, logs, traces, tool previews, and approval surfaces
+
+PII note:
+- OpenAI's current public moderation docs document `omni-moderation-latest` for harmful-content classification, not a dedicated PII detector. If OpenAI ships or documents a PII-specific model, treat it as an optional detector behind Ion's own redaction interface, not as the privacy architecture.
+
+### 3. Cost limits and model routing
+
+Goal:
+- handle API/subscription limits and model budgets without turning Ion into an optimizer workbench
+
+Tracked by:
+- `tk-90mp`
 - `tk-a4m1`
 
 Includes:
-- auth/env reality
-- endpoint defaults
-- `/models` behavior
-- manual-entry fallbacks where live listing is weak
-- auth-mode classification:
-  - API key providers
-  - subscription/OAuth providers
-  - CLI bridge providers
-  - custom OpenAI-compatible endpoints
+- budget enforcement
+- model cascade policy
+- routing trace visibility
+- graceful provider quota/rate-limit handling
+- explicit ChatGPT subscription evaluation as a separate bridge path, not a native API assumption
 
-### 2. Instruction and skills surface
+### 4. ACP stabilization
 
 Goal:
-- keep instruction layering clear
-- define whether and how ion should expose first-class skills
+- keep ACP useful for subscription/CLI bridges without letting it drive native Ion design
 
 Tracked by:
-- `tk-lmhg`
+- `tk-o0iw`
+- `tk-2ffy`
+- `tk-6zy3`
+- `tk-st4q`
 
-### 3. Session navigation and agent breadth
+Includes:
+- initial session context at `Open`
+- stderr routing separate from transcript events
+- token usage event mapping where available
+- session continuity/resume decision
+- headless Ion-as-ACP-agent mode after the bridge path is stable
 
-Tracked by:
-- `tk-7kga` — stabilize inline agent loop and TUI
-- `tk-4ft8` — context governor / compaction robustness
-- `tk-di6d` — model selector provider/model tabs and favorites-at-top layout
-- `tk-9pr1` — model selector page navigation
-- `tk-4ywr` — session titles and lightweight summaries for picker/resume UX
-- `tk-0dwv` — session tree navigation
-- `tk-5vrj` — subagents: runtime semantics and lifecycle
-- `tk-arhu` — subagents: inline Plane B presentation
-- `tk-pwsl` — swarm mode: alternate-screen operator view
-- `tk-st4q` — ion as an ACP agent
-
-Order:
-- first stabilize the inline single-agent loop
-- then land the remaining runtime primitives that make that path trustworthy
-- then build subagent runtime semantics
-- then add inline subagent presentation
-- then consider swarm mode later as a dedicated operator view
-
-Product ladder:
-- solo agent
-- dependent runtime features
-- orchestration wrappers
-
-TUI surface:
-- `tk-7kga` — core inline stability
-- `tk-di6d` — model selector provider/model tabs and favorites-at-top layout
-- `tk-9pr1` — model selector page navigation
-- `tk-i207` — status line and context presentation
-- `tk-4ywr` — session titles and lightweight summaries
-- `tk-gmhw` — transcript verbosity controls
-- `tk-arhu` — inline child presentation
-- `tk-pwsl` — swarm/operator view later
-
-### 4. Footer and settings restraint
+### 5. Product depth after the core loop
 
 Goal:
-- keep footer/settings useful without turning ion into a control panel
+- add higher-level UX only after the solo loop remains reliable under normal and failure cases
 
 Tracked by:
-- `tk-i207`
+- `tk-00km`
+- `tk-g78q`
+- `tk-2wrb`
+- `tk-8174`
+- `tk-gopd`
 
-### 5. Pi + Claude guardrails for ion
+Includes:
+- Slack/email HITL notifier delivery and audit
+- skills/self-extension nudges without hiding behavior
+- compaction UX and summarization prompts
+- cross-host sync and TUI branching
+- external editor handoff
+
+### 6. Pi + Claude guardrails for ion
 
 Goal:
 - keep Pi and Claude Code findings grounded in idiomatic Go and Bubble Tea v2

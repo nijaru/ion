@@ -49,3 +49,20 @@ shape is a separate classifier policy after explicit rules and before default
 and disagreement with hard boundaries. It must fail closed to `ask` or `deny`
 depending on mode/category and should emit an audit event before it can become
 default behavior.
+
+## Privacy Redaction
+
+Prompt, trace, log, approval, and tool-preview privacy should use the same
+layering as tool policy:
+
+1. deterministic recognizers for obvious PII and secrets
+2. configurable redaction/obscuring before display or export when the raw value
+   is not needed
+3. optional model-assisted classification only behind an explicit detector
+   interface
+
+Do not make a model call the only privacy boundary. OpenAI's public moderation
+docs currently document `omni-moderation-latest` for harmful-content
+classification; they do not establish a dedicated PII detector for Ion to depend
+on. If a PII-specific model becomes official, evaluate it as one detector in the
+pipeline, with fail-closed behavior and auditability.

@@ -20,13 +20,37 @@ files cannot mark themselves trusted.
 ## Deferred Rollback Work
 
 Visual rollback needs a real checkpoint design, not a weak wrapper around
-`git stash` or `git checkout`. Required decisions before implementation:
+`git stash` or `git checkout`.
 
-- checkpoint format: Canto VFS/CoW vs git-backed snapshot
-- untracked file handling
-- binary file handling
-- restore conflict behavior
-- audit event emitted before and after restore
-- TUI confirmation shape for destructive restore
+Current checkpoint substrate:
 
-Until those are settled, Ion should expose trust UX but not promise rewind.
+- store: `~/.ion/checkpoints/<checkpoint-id>/`
+- manifest: JSON metadata plus per-path entries
+- blobs: content-addressed bytes for regular files
+- created/untracked files: represented as `absent` before-state entries, so restore removes them
+- binary files: stored and restored as bytes with SHA-256 validation
+- directories: recorded as directory entries
+- first producer: native `write`, `edit`, and `multi_edit` tools create pre-change checkpoints and surface checkpoint IDs in tool results
+
+Still deferred before user-facing rewind:
+
+- restore conflict behavior when the current workspace changed after the checkpoint
+- audit events emitted before and after restore
+- TUI command shape and destructive confirmation text
+- bash/external tool checkpoint coverage
+- whether Canto OverlayFS should replace or supplement this path-based durable checkpoint layer
+
+Until those are settled, Ion should expose checkpoint IDs but not promise a
+complete visual rewind workflow.
+
+## Sandbox Boundary
+
+Sandbox enforcement is separate from workspace trust and permission mode:
+
+- trust decides the starting permission posture for a checkout
+- READ/EDIT/YOLO decides approval behavior
+- sandboxing constrains what tool subprocesses can actually touch
+
+The next sandbox slice should harden bash/external tool execution with real OS
+boundaries where available, make the active sandbox visible, and keep YOLO/auto
+behavior from feeling safe unless the enforcement layer is actually active.
