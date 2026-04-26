@@ -12,7 +12,8 @@ import (
 
 // mockAgent is a minimal ACP agent-side implementation for tests.
 type mockAgent struct {
-	conn *acp.AgentSideConnection
+	conn   *acp.AgentSideConnection
+	prompt func(context.Context, acp.PromptRequest) (acp.PromptResponse, error)
 }
 
 func (a *mockAgent) SetConn(c *acp.AgentSideConnection) { a.conn = c }
@@ -40,7 +41,10 @@ func (a *mockAgent) NewSession(
 	return acp.NewSessionResponse{SessionId: "test-session"}, nil
 }
 
-func (a *mockAgent) Prompt(_ context.Context, _ acp.PromptRequest) (acp.PromptResponse, error) {
+func (a *mockAgent) Prompt(ctx context.Context, req acp.PromptRequest) (acp.PromptResponse, error) {
+	if a.prompt != nil {
+		return a.prompt(ctx, req)
+	}
 	return acp.PromptResponse{StopReason: acp.StopReasonEndTurn}, nil
 }
 
@@ -54,6 +58,12 @@ func (a *mockAgent) SetSessionMode(
 // newTestPair creates a connected client+agent pair over in-process pipes.
 // Returns the ion Session (client side) and the agent-side connection for sending notifications.
 func newTestPair(t *testing.T) (*Session, *acp.AgentSideConnection) {
+	t.Helper()
+	client, agent, _ := newTestPairWithAgent(t)
+	return client, agent
+}
+
+func newTestPairWithAgent(t *testing.T) (*Session, *acp.AgentSideConnection, *mockAgent) {
 	t.Helper()
 
 	clientRead, agentWrite := io.Pipe()
@@ -82,7 +92,7 @@ func newTestPair(t *testing.T) (*Session, *acp.AgentSideConnection) {
 		_ = agentWrite.Close()
 	})
 
-	return client, agentConn
+	return client, agentConn, agent
 }
 
 // drainOne reads one event from the channel or fails the test after timeout.
@@ -238,7 +248,16 @@ func TestACPApprovalBridge(t *testing.T) {
 func TestACPFullTurn(t *testing.T) {
 	// Verifies TurnStarted → TurnFinished lifecycle via the real Prompt RPC.
 	// Event mapping is covered by the individual TestACPSessionUpdate* tests.
-	client, _ := newTestPair(t)
+	client, _, agent := newTestPairWithAgent(t)
+	agent.prompt = func(ctx context.Context, _ acp.PromptRequest) (acp.PromptResponse, error) {
+		if err := agent.conn.SessionUpdate(ctx, acp.SessionNotification{
+			SessionId: "test-session",
+			Update:    acp.UpdateAgentMessageText("hello"),
+		}); err != nil {
+			return acp.PromptResponse{}, err
+		}
+		return acp.PromptResponse{StopReason: acp.StopReasonEndTurn}, nil
+	}
 	ctx := context.Background()
 
 	if err := client.SubmitTurn(ctx, "hello"); err != nil {
@@ -251,8 +270,18 @@ func TestACPFullTurn(t *testing.T) {
 	}
 
 	ev2 := drainOne(t, client.events, 500*time.Millisecond)
-	if _, ok := ev2.(session.TurnFinished); !ok {
-		t.Fatalf("expected TurnFinished, got %T", ev2)
+	if _, ok := ev2.(session.AgentDelta); !ok {
+		t.Fatalf("expected AgentDelta, got %T", ev2)
+	}
+
+	ev3 := drainOne(t, client.events, 500*time.Millisecond)
+	if _, ok := ev3.(session.AgentMessage); !ok {
+		t.Fatalf("expected AgentMessage, got %T", ev3)
+	}
+
+	ev4 := drainOne(t, client.events, 500*time.Millisecond)
+	if _, ok := ev4.(session.TurnFinished); !ok {
+		t.Fatalf("expected TurnFinished, got %T", ev4)
 	}
 }
 
