@@ -23,6 +23,7 @@ Provider work to keep in mind:
 
 Design rule:
 - v0.0.0 has no compatibility debt; current bindings and config shapes are allowed to change directly if the end-state is better. New SOTA plans supersede older designs where there is conflict.
+- Do not overfit cost/routing work to DSPy, GEPA, or optimizer-centric designs. Keep Ion closer to pi's simple clever model: explicit presets, inspectable decisions, and only the routing knobs that improve the coding workflow.
 
 ## Next Steps
 1. Finish and review the `tk-90mp` first slice: `max_session_cost` / `max_turn_cost`, TUI visibility, and runtime budget stops.

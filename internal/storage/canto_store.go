@@ -390,6 +390,21 @@ func (s *cantoSession) Append(ctx context.Context, event any) error {
 			"cost":   e.Cost,
 		})
 		err = s.store.canto.Save(ctx, ev)
+	case RoutingDecision:
+		ev := session.NewEvent(s.id, session.EventType("routing_decision"), map[string]any{
+			"decision":         e.Decision,
+			"reason":           e.Reason,
+			"model_slot":       e.ModelSlot,
+			"provider":         e.Provider,
+			"model":            e.Model,
+			"reasoning":        e.Reasoning,
+			"max_session_cost": e.MaxSessionCost,
+			"max_turn_cost":    e.MaxTurnCost,
+			"session_cost":     e.SessionCost,
+			"turn_cost":        e.TurnCost,
+			"stop_reason":      e.StopReason,
+		})
+		err = s.store.canto.Save(ctx, ev)
 	default:
 		return nil
 	}

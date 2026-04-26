@@ -1165,10 +1165,71 @@ func TestCostCommandReportsConfiguredBudgets(t *testing.T) {
 	}
 }
 
+func TestSubmitTextPersistsRoutingDecision(t *testing.T) {
+	sess := &stubSession{events: make(chan session.Event)}
+	storageSess := &stubStorageSession{}
+	model := New(
+		stubBackend{
+			sess:     sess,
+			provider: "openrouter",
+			model:    "anthropic/claude-sonnet-4.5",
+		},
+		storageSess,
+		nil,
+		"/tmp/test",
+		"main",
+		"dev",
+		nil,
+	)
+	model.Model.Config = &config.Config{
+		MaxSessionCost: 0.25,
+		MaxTurnCost:    0.05,
+	}
+	model.Progress.TotalCost = 0.012
+	model.Progress.ReasoningEffort = "medium"
+
+	updated, _ := model.submitText("route this")
+	model = updated
+
+	if len(sess.submits) != 1 {
+		t.Fatalf("submits = %v, want one turn", sess.submits)
+	}
+	var decision storage.RoutingDecision
+	for _, event := range storageSess.appends {
+		if e, ok := event.(storage.RoutingDecision); ok {
+			decision = e
+			break
+		}
+	}
+	if decision.Type == "" {
+		t.Fatalf("missing routing decision in appends: %#v", storageSess.appends)
+	}
+	if decision.Decision != "use_model" || decision.Reason != "active_preset" {
+		t.Fatalf("decision = %q/%q, want use_model/active_preset", decision.Decision, decision.Reason)
+	}
+	if decision.ModelSlot != "primary" {
+		t.Fatalf("model slot = %q, want primary", decision.ModelSlot)
+	}
+	if decision.Provider != "openrouter" {
+		t.Fatalf("provider = %q, want openrouter", decision.Provider)
+	}
+	if decision.Model != "anthropic/claude-sonnet-4.5" {
+		t.Fatalf("model = %q, want anthropic/claude-sonnet-4.5", decision.Model)
+	}
+	if decision.MaxSessionCost != 0.25 || decision.MaxTurnCost != 0.05 {
+		t.Fatalf("budget limits = %f/%f, want 0.25/0.05", decision.MaxSessionCost, decision.MaxTurnCost)
+	}
+	if decision.SessionCost != 0.012 {
+		t.Fatalf("session cost = %f, want 0.012", decision.SessionCost)
+	}
+}
+
 func TestTokenUsageCancelsTurnWhenCostBudgetExceeded(t *testing.T) {
 	sess := &stubSession{events: make(chan session.Event)}
+	storageSess := &stubStorageSession{}
 	model := readyModel(t)
 	model.Model.Session = sess
+	model.Model.Storage = storageSess
 	model.Model.Config = &config.Config{MaxTurnCost: 0.01}
 	model.InFlight.Thinking = true
 	model.Progress.Mode = stateStreaming
@@ -1188,6 +1249,22 @@ func TestTokenUsageCancelsTurnWhenCostBudgetExceeded(t *testing.T) {
 	}
 	if !strings.Contains(model.Progress.BudgetStopReason, "turn cost limit reached") {
 		t.Fatalf("budget stop reason = %q", model.Progress.BudgetStopReason)
+	}
+	var decision storage.RoutingDecision
+	for _, event := range storageSess.appends {
+		if e, ok := event.(storage.RoutingDecision); ok {
+			decision = e
+			break
+		}
+	}
+	if decision.Decision != "stop" {
+		t.Fatalf("routing stop = %#v, want stop decision", decision)
+	}
+	if decision.StopReason != model.Progress.BudgetStopReason {
+		t.Fatalf("stop reason = %q, want %q", decision.StopReason, model.Progress.BudgetStopReason)
+	}
+	if decision.TurnCost != 0.011 {
+		t.Fatalf("turn cost = %f, want 0.011", decision.TurnCost)
 	}
 }
 
@@ -2219,10 +2296,14 @@ func TestSubmitTextPropagatesImmediateSessionError(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected follow-up command to render transcript entries")
 	}
-	if len(storeSess.appends) != 2 {
-		t.Fatalf("storage appends = %d, want user + system error entries", len(storeSess.appends))
+	var got any
+	for _, event := range storeSess.appends {
+		if _, ok := event.(storage.System); ok {
+			got = event
+			break
+		}
 	}
-	if got := storeSess.appends[1]; got == nil {
+	if got == nil {
 		t.Fatal("expected persisted system error entry")
 	} else if sys, ok := got.(storage.System); !ok {
 		t.Fatalf("persisted error entry type = %T, want storage.System", got)
