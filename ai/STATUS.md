@@ -7,9 +7,10 @@ Fast, lightweight terminal coding agent.
 Ion has been reconciled with the current stabilized Canto surface. The core loop audit, HITL permission-mode hardening, observability exporter slice, workflow topology spec, first eval regression gate, deterministic policy config slice, first executable subagent persona/routing slice, workspace trust slice, tool-loading UX slice, and first memory search UX slice are complete. Current work is moving through the remaining P2 reliability/UX epics.
 
 Current active slice:
-- No active slice after completing compaction UX. Next P2 should be chosen from HITL notifier/audit, model cascade enforcement, or cross-host session sync based on core-loop impact.
+- `tk-wqhg` — Permission UX: trust and mode semantics. HITL notifier delivery is paused until the mode/trust matrix is settled because approval prompts and audit copy depend on it.
 
 Near-term tracks:
+- `tk-wqhg` — Permission UX: trust and mode semantics (Active)
 - `tk-2wrb` — Context: Compaction UX & Summarization Prompts (Completed)
 - `tk-96vy` — Core loop: reliability and resilience audit (Completed)
 - `tk-j3ap` — HITL: Permission Modes UX & Escalation (Completed; notifier delivery split to `tk-00km`)
@@ -92,7 +93,7 @@ See `tk ls` for the full list. Current active priority:
 - No P1 tasks remain ready. Next ready work is P2.
 
 Remaining P2 epics:
-- `tk-9lws` — Security: LLM-as-judge classifier and circuit breaker
+- `tk-wqhg` — Permission UX: trust and mode semantics
 - `tk-00km` — HITL: Slack/email notifier delivery and audit
 - `tk-90mp` — Streaming: Cost Limits & Model Cascades
 - `tk-g78q` — Skills: Self-Extension Nudges & Marketplace

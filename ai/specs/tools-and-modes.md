@@ -24,32 +24,69 @@ Supporting infrastructure:
 - `ApprovalManager` — goroutine-safe request/response channels
 - `PolicyEngine` — category-to-policy mapping with mode-awareness
 
-## Permission Modes
+## Permission Modes And Trust
 
 ### Design principles
 
-- Modes are **permission boundaries**, not behavioral hints
-- One semantic jump between each mode
-- The approval prompt is the granularity mechanism — modes are coarse
+- Modes are **permission postures**, not workspace trust decisions
+- Trust answers whether a workspace may leave read-only safety
+- Mode answers how much approval Ion needs once the workspace is trusted
 - Read tools are never gated in any mode
 - Sandbox is orthogonal to permissions (tracked: `tk-kfno`)
 
 ### Mode table
 
-| Category | READ | EDIT | YOLO |
+| Category | READ | EDIT | AUTO |
 |---|---|---|---|
 | Read | auto | auto | auto |
 | Write | **blocked** | prompt | auto |
 | Execute (bash) | **blocked** | prompt | auto |
 | Sensitive (mcp, subagent) | prompt | prompt | auto |
 
+`yolo` remains a command/CLI alias for `auto`; it should not be the displayed
+mode name.
+
+### Trust gate
+
+Trust is user-global workspace eligibility, stored outside project files.
+
+| Workspace trust | Startup behavior | Mode availability |
+|---|---|---|
+| trusted | use requested/configured mode | `read`, `edit`, `auto` |
+| untrusted | force `read` and show a startup notice | `read` only until `/trust` |
+
+`/trust` means: allow normal edit/auto behavior in this workspace. It does not
+auto-approve tools, disable sandboxing, or trust project instructions blindly.
+
+Untrusted workspaces should block attempts to enter `edit` or `auto` with copy
+like: `Trust this workspace first with /trust.`
+
+Config should support a trust policy:
+
+```toml
+workspace_trust = "prompt" # prompt | off | strict
+```
+
+- `prompt`: default; unknown workspaces start in `read`, `/trust` enables normal modes
+- `off`: no trust gate; start in requested/configured mode everywhere
+- `strict`: enterprise posture; unknown workspaces stay `read`, `/trust` may be disabled or admin-managed
+
 ### Mode cycling
 
-`Shift+Tab` cycles: READ → EDIT → YOLO → READ
+`Shift+Tab` toggles only `READ <-> EDIT`.
 
-`/yolo` toggles YOLO on/off (returns to EDIT when toggling off)
+If currently in `AUTO`, `Shift+Tab` drops to `EDIT`. It must never enter
+`AUTO`, because accidental key cycling should not grant unattended execution.
 
-`/mode [read|edit|yolo]` for explicit set
+`AUTO` requires an explicit command or startup flag:
+
+- `/auto`
+- `/yolo` alias
+- `/mode auto`
+- `ion --mode auto`
+- `ion --yolo`
+
+`/mode [read|edit|auto]` is the canonical command shape.
 
 Default startup: EDIT
 
@@ -76,14 +113,17 @@ the agent can work on code but you see and approve each action.
 
 Status line: `[EDIT]` (green)
 
-### YOLO
+### AUTO
 
 Full auto. Every tool auto-approved. No prompts.
 
-Activated via `/yolo` toggle or `/mode yolo`. Use when you trust the
+Activated via `/auto`, `/yolo`, or `/mode auto`. Use when you trust the
 agent's direction and want speed over visibility.
 
-Status line: `[YOLO]` (red)
+Status line: `[AUTO]` (red)
+
+When enabling AUTO, print a short host notice that includes sandbox posture:
+`AUTO mode enabled. Writes and commands run without approval. Sandbox: <state>.`
 
 ### Why not a plan mode?
 
@@ -94,7 +134,7 @@ READ + injects a planning instruction. Not a mode.
 
 ## Approval prompt
 
-When a tool needs approval (EDIT mode only — READ blocks, YOLO
+When a tool needs approval (EDIT mode only — READ blocks, AUTO
 auto-approves):
 
 ```
@@ -108,7 +148,7 @@ auto-approves):
   this session only. Sets category policy to `PolicyAllow` in-memory.
   No config file. No persistence. Resets on next session.
 
-The `a` key handles 90% of approval fatigue without needing YOLO mode.
+The `a` key handles 90% of approval fatigue without needing AUTO mode.
 It's the "I trust edits now, stop asking" escape hatch.
 
 Future: `A` (shift+a) could persist category approvals across sessions
@@ -118,7 +158,8 @@ considerations. Ship later.
 ## Config
 
 ```toml
-default_mode = "edit"             # read | edit | yolo
+default_mode = "edit"             # read | edit | auto
+workspace_trust = "prompt"        # prompt | off | strict
 policy_path = "~/.ion/policy.yaml" # optional; default path when unset
 ```
 
@@ -128,8 +169,27 @@ categories; see `ai/specs/security-policy.md` and `docs/security/policy.md`.
 
 ## CLI Flags
 
-- `--mode read|edit|yolo` — start in the selected permission mode
-- `--yolo` — start in YOLO mode (alias for `--mode yolo`)
+- `--mode read|edit|auto` — start in the selected permission mode
+- `--yolo` — start in AUTO mode (alias for `--mode auto`)
+
+If workspace trust is `prompt` or `strict`, an untrusted workspace still starts
+in `read` unless policy explicitly disables the trust gate.
+
+## Slash Commands During Active Turns
+
+Host-only slash commands should remain available while the agent is in a turn.
+This includes mode, model, provider, settings, cost, tools, and trust status
+commands. Commands that mutate the active backend/model should either apply to
+the next turn or clearly report that the current turn is still using the prior
+runtime.
+
+Minimum command set:
+
+- `/mode read|edit|auto`
+- `/read`, `/edit`, `/auto`, `/yolo`
+- `/model`, `/provider`, `/settings`
+- `/cost`, `/tools`
+- `/trust`, `/trust status`
 
 ## Sandbox
 
@@ -164,7 +224,7 @@ until credentials, delivery semantics, and audit logging are designed.
 Surveyed Claude Code, Codex CLI, Gemini CLI, OpenCode, Pi, Zed, ACP.
 Key findings:
 
-- `yolo` naming converges across Codex and Gemini
+- `yolo` naming converges across Codex and Gemini, but Ion displays AUTO
 - "auto_edit" middle ground (auto edits, prompt bash) is industry
   consensus for daily driving — but we prompt for edits too in EDIT mode
 - "Always allow" at approval time is the biggest UX win beyond modes

@@ -17,6 +17,38 @@ Startup behavior:
 This makes trust state a user decision, not a project-controlled config. Project
 files cannot mark themselves trusted.
 
+## Trust vs Mode
+
+Trust and mode must stay separate:
+
+- trust: persistent user-global decision about whether this checkout can leave
+  read-only safety
+- mode: per-session approval posture once the workspace is eligible
+
+Mode matrix:
+
+| Workspace trust | `read` | `edit` | `auto` |
+|---|---|---|---|
+| untrusted | allowed | blocked until `/trust` | blocked until `/trust` |
+| trusted | allowed | writes/commands prompt | writes/commands auto-approve |
+
+`/trust` means "allow normal edit/auto behavior in this workspace." It does not
+mean auto-approve tools, disable sandboxing, or trust project instructions.
+
+Config should support three postures:
+
+```toml
+workspace_trust = "prompt" # prompt | off | strict
+```
+
+- `prompt`: unknown workspaces start in `read`; `/trust` enables normal modes
+- `off`: no trust gate; personal-machine low-friction behavior
+- `strict`: enterprise posture; unknown workspaces stay `read`, with trust
+  optionally admin-managed
+
+Shift+Tab should only toggle `read <-> edit`; entering `auto` requires an
+explicit slash command or CLI flag.
+
 ## Deferred Rollback Work
 
 Visual rollback needs a real checkpoint design, not a weak wrapper around
@@ -48,9 +80,9 @@ restore command, not a complete visual history browser.
 Sandbox enforcement is separate from workspace trust and permission mode:
 
 - trust decides the starting permission posture for a checkout
-- READ/EDIT/YOLO decides approval behavior
+- READ/EDIT/AUTO decides approval behavior
 - sandboxing constrains what tool subprocesses can actually touch
 
 The next sandbox slice should harden bash/external tool execution with real OS
-boundaries where available, make the active sandbox visible, and keep YOLO/auto
+boundaries where available, make the active sandbox visible, and keep AUTO
 behavior from feeling safe unless the enforcement layer is actually active.
