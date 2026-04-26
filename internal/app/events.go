@@ -91,6 +91,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			m.InFlight.Thinking = false
 			m.Progress.Mode = stateCancelled
 			m.InFlight.Pending = nil
+			m.InFlight.QueuedTurns = nil
 			m.InFlight.StreamBuf = ""
 			m.InFlight.ReasonBuf = ""
 			m.clearPendingAction()

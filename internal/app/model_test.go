@@ -1285,6 +1285,42 @@ func TestTurnFinishedPreservesBudgetCancellation(t *testing.T) {
 	}
 }
 
+func TestTurnFinishedPreservesUserCancellation(t *testing.T) {
+	model := readyModel(t)
+	model.Progress.Mode = stateCancelled
+	model.InFlight.QueuedTurns = []string{"next turn"}
+
+	updated, _ := model.Update(session.TurnFinished{})
+	model = updated.(Model)
+
+	if model.Progress.Mode != stateCancelled {
+		t.Fatalf("progress mode = %v, want stateCancelled", model.Progress.Mode)
+	}
+	if len(model.InFlight.QueuedTurns) != 0 {
+		t.Fatalf("queued turns = %v, want none", model.InFlight.QueuedTurns)
+	}
+}
+
+func TestTurnFinishedPreservesSessionError(t *testing.T) {
+	model := readyModel(t)
+	model.Progress.Mode = stateError
+	model.Progress.LastError = "prompt failed"
+	model.InFlight.QueuedTurns = []string{"next turn"}
+
+	updated, _ := model.Update(session.TurnFinished{})
+	model = updated.(Model)
+
+	if model.Progress.Mode != stateError {
+		t.Fatalf("progress mode = %v, want stateError", model.Progress.Mode)
+	}
+	if model.Progress.LastError != "prompt failed" {
+		t.Fatalf("last error = %q, want prompt failed", model.Progress.LastError)
+	}
+	if len(model.InFlight.QueuedTurns) != 0 {
+		t.Fatalf("queued turns = %v, want none", model.InFlight.QueuedTurns)
+	}
+}
+
 func TestSubmitTextDoesNotBlockOnPriorTurnBudget(t *testing.T) {
 	sess := &stubSession{events: make(chan session.Event)}
 	model := readyModel(t)
@@ -1992,6 +2028,27 @@ func TestQueuedFollowUpSubmitsAfterTurnFinished(t *testing.T) {
 	}
 	if len(sess.submits) != 1 || sess.submits[0] != "follow up" {
 		t.Fatalf("submits = %#v, want queued follow up", sess.submits)
+	}
+}
+
+func TestEscapeCancelClearsQueuedFollowUps(t *testing.T) {
+	sess := &stubSession{events: make(chan session.Event)}
+	model := readyModel(t)
+	model.Model.Session = sess
+	model.InFlight.Thinking = true
+	model.InFlight.QueuedTurns = []string{"queued"}
+
+	updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	model = updated.(Model)
+
+	if sess.cancels != 1 {
+		t.Fatalf("cancels = %d, want 1", sess.cancels)
+	}
+	if model.Progress.Mode != stateCancelled {
+		t.Fatalf("progress mode = %v, want stateCancelled", model.Progress.Mode)
+	}
+	if len(model.InFlight.QueuedTurns) != 0 {
+		t.Fatalf("queued turns = %v, want none", model.InFlight.QueuedTurns)
 	}
 }
 
