@@ -28,3 +28,7 @@ type Backend interface {
 type Compactor interface {
 	Compact(context.Context) (bool, error)
 }
+
+type PolicyConfigurer interface {
+	SetPolicyConfig(*PolicyConfig)
+}

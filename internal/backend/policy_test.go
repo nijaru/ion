@@ -2,6 +2,8 @@ package backend
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/nijaru/ion/internal/session"
@@ -137,6 +139,116 @@ func TestYoloAllowsUnknownTools(t *testing.T) {
 	policy, reason := pe.Authorize(context.Background(), "external_tool", `{}`)
 	if policy != PolicyAllow {
 		t.Fatalf("YOLO unknown tool policy = %v (%q), want allow", policy, reason)
+	}
+}
+
+func TestPolicyConfigAppliesEditModeRules(t *testing.T) {
+	pe := NewPolicyEngine()
+	pe.ApplyConfig(&PolicyConfig{Rules: []PolicyRule{
+		{Tool: "bash", Action: PolicyDeny},
+		{Category: CategoryWrite, Action: PolicyAllow},
+	}})
+	pe.SetMode(session.ModeEdit)
+
+	policy, reason := pe.Authorize(context.Background(), "bash", `{"command":"go test ./..."}`)
+	if policy != PolicyDeny {
+		t.Fatalf("bash policy = %v (%q), want deny", policy, reason)
+	}
+	policy, reason = pe.Authorize(context.Background(), "write", `{"file_path":"file.txt"}`)
+	if policy != PolicyAllow {
+		t.Fatalf("write policy = %v (%q), want allow", policy, reason)
+	}
+}
+
+func TestPolicyConfigCannotWeakenReadMode(t *testing.T) {
+	pe := NewPolicyEngine()
+	pe.ApplyConfig(&PolicyConfig{Rules: []PolicyRule{
+		{Tool: "bash", Action: PolicyAllow},
+		{Category: CategoryWrite, Action: PolicyAllow},
+	}})
+	pe.SetMode(session.ModeRead)
+
+	for _, toolName := range []string{"bash", "write"} {
+		policy, reason := pe.Authorize(context.Background(), toolName, `{}`)
+		if policy != PolicyDeny {
+			t.Fatalf("%s READ policy = %v (%q), want deny", toolName, policy, reason)
+		}
+	}
+}
+
+func TestPolicyConfigCannotGateReadTools(t *testing.T) {
+	pe := NewPolicyEngine()
+	pe.ApplyConfig(&PolicyConfig{Rules: []PolicyRule{
+		{Tool: "read", Action: PolicyDeny},
+		{Category: CategoryRead, Action: PolicyDeny},
+	}})
+	pe.SetMode(session.ModeEdit)
+
+	policy, reason := pe.Authorize(context.Background(), "read", `{"file_path":"file.txt"}`)
+	if policy != PolicyAllow {
+		t.Fatalf("read EDIT policy = %v (%q), want allow", policy, reason)
+	}
+}
+
+func TestPolicyConfigCanDenyCategories(t *testing.T) {
+	pe := NewPolicyEngine()
+	pe.ApplyConfig(&PolicyConfig{Rules: []PolicyRule{
+		{Category: CategoryWrite, Action: PolicyDeny},
+		{Category: CategorySensitive, Action: PolicyDeny},
+	}})
+	pe.SetMode(session.ModeEdit)
+
+	for _, toolName := range []string{"write", "mcp"} {
+		policy, reason := pe.Authorize(context.Background(), toolName, `{}`)
+		if policy != PolicyDeny {
+			t.Fatalf("%s EDIT policy = %v (%q), want deny", toolName, policy, reason)
+		}
+	}
+}
+
+func TestLoadPolicyConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "policy.yaml")
+	if err := os.WriteFile(path, []byte(`rules:
+  - tool: bash
+    action: deny
+  - category: write
+    action: allow
+`), 0o600); err != nil {
+		t.Fatalf("write policy config: %v", err)
+	}
+
+	cfg, err := LoadPolicyConfig(path)
+	if err != nil {
+		t.Fatalf("LoadPolicyConfig returned error: %v", err)
+	}
+	if len(cfg.Rules) != 2 {
+		t.Fatalf("rules len = %d, want 2", len(cfg.Rules))
+	}
+	if cfg.Rules[0].Tool != "bash" || cfg.Rules[0].Action != PolicyDeny {
+		t.Fatalf("first rule = %+v", cfg.Rules[0])
+	}
+	if cfg.Rules[1].Category != CategoryWrite || cfg.Rules[1].Action != PolicyAllow {
+		t.Fatalf("second rule = %+v", cfg.Rules[1])
+	}
+}
+
+func TestPolicyConfigRejectsInvalidRules(t *testing.T) {
+	cases := []struct {
+		name string
+		cfg  *PolicyConfig
+	}{
+		{name: "missing selector", cfg: &PolicyConfig{Rules: []PolicyRule{{Action: PolicyDeny}}}},
+		{name: "two selectors", cfg: &PolicyConfig{Rules: []PolicyRule{{Tool: "bash", Category: CategoryExecute, Action: PolicyDeny}}}},
+		{name: "bad action", cfg: &PolicyConfig{Rules: []PolicyRule{{Tool: "bash", Action: "sometimes"}}}},
+		{name: "bad category", cfg: &PolicyConfig{Rules: []PolicyRule{{Category: "filesystem", Action: PolicyAsk}}}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := tc.cfg.Validate(); err == nil {
+				t.Fatal("Validate returned nil error")
+			}
+		})
 	}
 }
 

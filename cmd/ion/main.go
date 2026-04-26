@@ -181,6 +181,13 @@ func openRuntime(ctx context.Context, store storage.Store, cwd, branch string, c
 	}
 	b.SetStore(store)
 	b.SetConfig(&runtimeCfg)
+	if policyConfig, err := loadPolicyConfig(&runtimeCfg); err != nil {
+		return nil, nil, err
+	} else if policyConfig != nil {
+		if policyBackend, ok := b.(backend.PolicyConfigurer); ok {
+			policyBackend.SetPolicyConfig(policyConfig)
+		}
+	}
 
 	if isACPProvider(runtimeCfg.Provider) {
 		command := strings.TrimSpace(acpCommandOverride)
@@ -228,6 +235,25 @@ func openRuntime(ctx context.Context, store storage.Store, cwd, branch string, c
 		return nil, nil, fmt.Errorf("backend initialization error: %w", err)
 	}
 	return b, sess, nil
+}
+
+func loadPolicyConfig(cfg *config.Config) (*backend.PolicyConfig, error) {
+	if cfg == nil {
+		return nil, nil
+	}
+	path := cfg.PolicyPath
+	if path == "" {
+		defaultPath, err := config.DefaultPolicyPath()
+		if err != nil {
+			return nil, err
+		}
+		path = defaultPath
+	}
+	policyConfig, err := backend.LoadPolicyConfig(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load policy config: %w", err)
+	}
+	return policyConfig, nil
 }
 
 func syncSessionMetadata(ctx context.Context, store storage.Store, sessionID, modelName, branch string) error {

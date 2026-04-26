@@ -29,6 +29,10 @@ func (b *Backend) SetConfig(cfg *config.Config) {
 	b.cfg = cfg
 }
 
+func (b *Backend) SetPolicyConfig(cfg *backend.PolicyConfig) {
+	b.session.policy.ApplyConfig(cfg)
+}
+
 func (b *Backend) Name() string {
 	return "acp"
 }
