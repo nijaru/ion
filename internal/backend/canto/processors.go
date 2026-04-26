@@ -11,7 +11,7 @@ import (
 	"github.com/nijaru/canto/session"
 )
 
-// FileTagProcessor implements canto.context.RequestProcessor to resolve
+// FileTagProcessor implements prompt.RequestProcessor to resolve
 // @file tags within user messages.
 type FileTagProcessor struct {
 	cwd string
@@ -21,7 +21,7 @@ func NewFileTagProcessor(cwd string) *FileTagProcessor {
 	return &FileTagProcessor{cwd: cwd}
 }
 
-// ApplyRequest implements canto.context.RequestProcessor.
+// ApplyRequest implements prompt.RequestProcessor.
 func (f *FileTagProcessor) ApplyRequest(
 	ctx context.Context,
 	p llm.Provider,

@@ -268,6 +268,30 @@ func TestToolEntryFlushesToTranscript(t *testing.T) {
 	}
 }
 
+func TestRenderPendingToolEntryHonorsVerbosity(t *testing.T) {
+	model := readyModel(t)
+	entry := session.Entry{
+		Role:    session.Tool,
+		Title:   "bash",
+		Content: "line 1\nline 2\n",
+	}
+
+	model.Model.Config = &config.Config{ToolVerbosity: "hidden"}
+	if got := ansi.Strip(model.renderPendingEntry(entry)); strings.Contains(got, "line 1") {
+		t.Fatalf("hidden pending tool output rendered content: %q", got)
+	}
+
+	model.Model.Config = &config.Config{ToolVerbosity: "collapsed"}
+	if got := ansi.Strip(model.renderPendingEntry(entry)); !strings.Contains(got, "...") || strings.Contains(got, "line 1") {
+		t.Fatalf("collapsed pending tool output = %q, want ellipsis without content", got)
+	}
+
+	model.Model.Config = &config.Config{ToolVerbosity: "full"}
+	if got := ansi.Strip(model.renderPendingEntry(entry)); !strings.Contains(got, "line 1") || !strings.Contains(got, "line 2") {
+		t.Fatalf("full pending tool output missing content: %q", got)
+	}
+}
+
 func TestLayoutClampsComposerHeight(t *testing.T) {
 	model := readyModel(t)
 

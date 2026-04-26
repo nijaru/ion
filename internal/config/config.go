@@ -81,6 +81,8 @@ func Load() (*Config, error) {
 	cfg.SummaryReasoningEffort = normalizeOptionalReasoningEffort(cfg.SummaryReasoningEffort)
 	cfg.Endpoint = strings.TrimSpace(cfg.Endpoint)
 	cfg.AuthEnvVar = strings.TrimSpace(cfg.AuthEnvVar)
+	cfg.ToolVerbosity = normalizeVerbosity(cfg.ToolVerbosity)
+	cfg.ThinkingVerbosity = normalizeVerbosity(cfg.ThinkingVerbosity)
 	if cfg.ContextLimit < 0 {
 		cfg.ContextLimit = 0
 	}
@@ -119,8 +121,8 @@ func Save(cfg *Config) error {
 	if out.SessionRetentionDays <= 0 {
 		out.SessionRetentionDays = DefaultSessionRetentionDays
 	}
-	out.ToolVerbosity = strings.TrimSpace(out.ToolVerbosity)
-	out.ThinkingVerbosity = strings.TrimSpace(out.ThinkingVerbosity)
+	out.ToolVerbosity = normalizeVerbosity(out.ToolVerbosity)
+	out.ThinkingVerbosity = normalizeVerbosity(out.ThinkingVerbosity)
 
 	data, err := toml.Marshal(&out)
 	if err != nil {
@@ -187,6 +189,19 @@ func normalizeOptionalReasoningEffort(value string) string {
 		return "medium"
 	case "high":
 		return "high"
+	default:
+		return ""
+	}
+}
+
+func normalizeVerbosity(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "full":
+		return "full"
+	case "collapsed":
+		return "collapsed"
+	case "hidden":
+		return "hidden"
 	default:
 		return ""
 	}
