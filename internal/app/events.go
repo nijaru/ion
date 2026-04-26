@@ -30,7 +30,9 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 			label := ifthen(approved, "Approved", "Denied")
 			notice := session.Entry{Role: session.System, Content: label + ": " + desc}
-			m.Model.Session.Approve(context.Background(), reqID, approved)
+			if err := m.Model.Session.Approve(context.Background(), reqID, approved); err != nil {
+				return m, persistErrorCmd("send approval", err)
+			}
 			return m, m.printEntries(notice)
 		case "a":
 			reqID := m.Approval.Pending.RequestID
@@ -41,7 +43,9 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 			m.Model.Session.AllowCategory(toolName)
 			notice := session.Entry{Role: session.System, Content: "Always: " + desc}
-			m.Model.Session.Approve(context.Background(), reqID, true)
+			if err := m.Model.Session.Approve(context.Background(), reqID, true); err != nil {
+				return m, persistErrorCmd("send approval", err)
+			}
 			return m, m.printEntries(notice)
 		}
 	}
