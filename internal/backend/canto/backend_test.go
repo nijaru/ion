@@ -118,6 +118,32 @@ func TestReasoningEffortProcessorSetsRequestField(t *testing.T) {
 	}
 }
 
+func TestReflexionProcessorAddsNoteAfterToolError(t *testing.T) {
+	sess := csession.New("reflexion")
+	if err := sess.Append(context.Background(), csession.NewEvent("reflexion", csession.ToolCompleted, map[string]string{
+		"tool":  "bash",
+		"id":    "toolu_123",
+		"error": "exit status 1",
+	})); err != nil {
+		t.Fatalf("append tool error: %v", err)
+	}
+
+	req := &llm.Request{
+		Messages: []llm.Message{{
+			Role:    llm.RoleUser,
+			ToolID:  "toolu_123",
+			Content: "failed output",
+		}},
+	}
+	processor := reflexionProcessor()
+	if err := processor.ApplyRequest(context.Background(), nil, "model-a", sess, req); err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if !strings.Contains(req.Messages[0].Content, "tool execution failed") {
+		t.Fatalf("reflexion note not appended: %q", req.Messages[0].Content)
+	}
+}
+
 func TestResumeDoesNotDeadlockWhenBackendNeedsOpen(t *testing.T) {
 	b := New()
 

@@ -201,3 +201,17 @@ func TestNormalizeReasoningEffort(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizeVerbosity(t *testing.T) {
+	for input, want := range map[string]string{
+		"":            "",
+		" FULL ":      "full",
+		"collapsed":   "collapsed",
+		"HIDDEN":      "hidden",
+		"unsupported": "",
+	} {
+		if got := normalizeVerbosity(input); got != want {
+			t.Fatalf("normalizeVerbosity(%q) = %q, want %q", input, got, want)
+		}
+	}
+}

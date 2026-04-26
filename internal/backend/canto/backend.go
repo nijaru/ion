@@ -250,6 +250,7 @@ func (b *Backend) Open(ctx context.Context) error {
 		}),
 		NewFileTagProcessor(cwd),
 		reasoningEffortProcessor(b.cfg),
+		reflexionProcessor(),
 	}
 
 	b.agent = agent.New("ion", instructions, modelName, runtimeProvider, registry,
@@ -544,9 +545,8 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 
 		if shouldCompact, err := b.shouldProactivelyCompact(turnCtx); err == nil && shouldCompact {
 			b.events <- ionsession.StatusChanged{Status: "Compacting context..."}
-			if compacted, err := b.Compact(turnCtx); err != nil {
-				b.events <- ionsession.Error{Err: err}
-				return // Don't proceed if compaction fails
+			if compacted, cerr := b.Compact(turnCtx); cerr != nil {
+				b.events <- ionsession.Error{Err: cerr}
 			} else if compacted {
 				b.events <- ionsession.StatusChanged{Status: "Ready"}
 			}

@@ -80,6 +80,8 @@ func (m Model) renderPlaneB() string {
 
 // renderPendingEntry renders an in-flight entry for Plane B.
 func (m Model) renderPendingEntry(e session.Entry) string {
+	toolVerbosity := m.verbosity("tool")
+
 	switch e.Role {
 	case session.Agent:
 		if e.Content == "" {
@@ -93,8 +95,14 @@ func (m Model) renderPendingEntry(e session.Entry) string {
 		}
 		var b strings.Builder
 		b.WriteString(m.st.tool.Render("• " + label))
-		if e.Content != "" {
+		if e.Content == "" || toolVerbosity == "hidden" {
+			return b.String()
+		}
+		b.WriteString("\n")
+		if toolVerbosity == "collapsed" {
+			b.WriteString(m.st.dim.PaddingLeft(4).Render("..."))
 			b.WriteString("\n")
+		} else {
 			lines := strings.Split(strings.TrimRight(e.Content, "\n"), "\n")
 			const maxLines = 10
 			shown := lines
@@ -127,18 +135,27 @@ func (m Model) renderPendingEntry(e session.Entry) string {
 	}
 }
 
-// renderEntry formats a completed entry for tea.Printf scrollback commit.
-func (m Model) renderEntry(e session.Entry) string {
-	thinkingVerbosity := "full"
-	toolVerbosity := "full"
-	if m.Model.Config != nil {
-		if m.Model.Config.ThinkingVerbosity != "" {
-			thinkingVerbosity = m.Model.Config.ThinkingVerbosity
+func (m Model) verbosity(kind string) string {
+	if m.Model.Config == nil {
+		return "full"
+	}
+	switch kind {
+	case "tool":
+		if v := m.Model.Config.ToolVerbosity; v != "" {
+			return v
 		}
-		if m.Model.Config.ToolVerbosity != "" {
-			toolVerbosity = m.Model.Config.ToolVerbosity
+	case "thinking":
+		if v := m.Model.Config.ThinkingVerbosity; v != "" {
+			return v
 		}
 	}
+	return "full"
+}
+
+// renderEntry formats a completed entry for tea.Printf scrollback commit.
+func (m Model) renderEntry(e session.Entry) string {
+	thinkingVerbosity := m.verbosity("thinking")
+	toolVerbosity := m.verbosity("tool")
 
 	switch e.Role {
 	case session.User:
