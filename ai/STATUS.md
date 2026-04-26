@@ -28,7 +28,7 @@ Design rule:
 - Similar agents are references, not feature-parity requirements. Adopt from pi, Claude Code, Codex, OpenCode, Cursor, Droid, Letta, and others only when the idea strengthens Ion's core coding loop or preserves a simple, inspectable UX.
 
 ## Next Steps
-1. Continue `tk-96vy` with tool lifecycle, persistence, and replay semantics.
+1. Continue `tk-96vy` with backend recovery and final replay/approval edge checks.
 2. Add focused regression tests before continuing any SOTA epic work.
 3. Use the current Pi review as a reference for loop contracts and future `/tree`, but keep concrete fixes on the current solo loop.
 4. Resume `tk-90mp` only after the core loop audit is green; budget enforcement and routing trace slices are already committed.
@@ -37,7 +37,7 @@ Design rule:
 *(Note: Older P3 TUI refinement tasks like configurable verbosity, skill layering, and status line context have been subsumed by their respective SOTA epics).*
 
 ## Completed (Recent)
-- [x] **Core loop audit slices (`tk-96vy`)** — Fixed commit-before-finish ordering in native Canto and ACP, preserved error/cancel terminal states, and cleared queued follow-ups on cancellation; `go test ./...` passes.
+- [x] **Core loop audit slices (`tk-96vy`)** — Fixed native/ACP commit-before-finish ordering, sticky error/cancel terminal states, cancellation queue clearing, full transcript replay, tool error replay, backend tool ID propagation, and interleaved tool tracking; `go test ./...` passes.
 - [x] **Canto dependency refresh foundation (`tk-fblb`)** — Updated Ion to Canto `f47e7de`; migrated request processors from `canto/context` to `canto/prompt` and hooks from `Hook/NewFunc` to `Handler/FromFunc`; `go test ./...` passes.
 - [x] **Current Pi core-loop review (`tk-ulfg`)** — Added `ai/research/pi-current-core-loop-review-2026-04.md`; Pi remains the strongest loop reference, but core reliability gates `/tree`, compaction polish, and SOTA routing work.
 - [x] **Subagents: runtime semantics and lifecycle (`tk-5vrj`)** — Implemented multiplexed subagent tracking, durable breadcrumbs, and multiplexed event routing in broker.
