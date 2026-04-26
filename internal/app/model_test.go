@@ -1623,6 +1623,7 @@ func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 		"/model [name]",
 		"/thinking [lvl]",
 		"/trust [status]",
+		"/rewind <id>",
 		"/tools",
 		"/memory [query]",
 		"/compact",
@@ -1692,6 +1693,99 @@ func TestTrustStatusCommandReportsState(t *testing.T) {
 	_, cmd := model.handleCommand("/trust status")
 	if cmd == nil {
 		t.Fatal("trust status command returned nil cmd")
+	}
+}
+
+func TestRewindCommandPreviewsThenRestoresCheckpoint(t *testing.T) {
+	workdir := t.TempDir()
+	store := ionworkspace.NewCheckpointStore(filepath.Join(t.TempDir(), "checkpoints"))
+	if err := os.WriteFile(filepath.Join(workdir, "tracked.txt"), []byte("before"), 0o644); err != nil {
+		t.Fatalf("write tracked: %v", err)
+	}
+	cp, err := store.Create(t.Context(), workdir, []string{"tracked.txt", "created.txt"})
+	if err != nil {
+		t.Fatalf("create checkpoint: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workdir, "tracked.txt"), []byte("after"), 0o644); err != nil {
+		t.Fatalf("modify tracked: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workdir, "created.txt"), []byte("new"), 0o644); err != nil {
+		t.Fatalf("write created: %v", err)
+	}
+
+	model := New(
+		stubBackend{sess: &stubSession{events: make(chan session.Event)}},
+		nil,
+		nil,
+		workdir,
+		"main",
+		"dev",
+		nil,
+	).WithCheckpointStore(store)
+
+	_, cmd := model.handleCommand("/rewind " + cp.ID)
+	if cmd == nil {
+		t.Fatal("preview command returned nil cmd")
+	}
+	data, err := os.ReadFile(filepath.Join(workdir, "tracked.txt"))
+	if err != nil {
+		t.Fatalf("read tracked after preview: %v", err)
+	}
+	if string(data) != "after" {
+		t.Fatalf("preview restored tracked.txt: %q", data)
+	}
+	if _, err := os.Stat(filepath.Join(workdir, "created.txt")); err != nil {
+		t.Fatalf("preview removed created.txt: %v", err)
+	}
+
+	_, cmd = model.handleCommand("/rewind " + cp.ID + " --confirm")
+	if cmd == nil {
+		t.Fatal("confirm command returned nil cmd")
+	}
+	data, err = os.ReadFile(filepath.Join(workdir, "tracked.txt"))
+	if err != nil {
+		t.Fatalf("read tracked after confirm: %v", err)
+	}
+	if string(data) != "before" {
+		t.Fatalf("tracked.txt = %q, want before", data)
+	}
+	if _, err := os.Stat(filepath.Join(workdir, "created.txt")); !os.IsNotExist(err) {
+		t.Fatalf("created.txt still exists or stat failed: %v", err)
+	}
+}
+
+func TestRewindCommandRejectsDifferentWorkspaceCheckpoint(t *testing.T) {
+	workdir := t.TempDir()
+	other := t.TempDir()
+	store := ionworkspace.NewCheckpointStore(filepath.Join(t.TempDir(), "checkpoints"))
+	if err := os.WriteFile(filepath.Join(other, "file.txt"), []byte("before"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	cp, err := store.Create(t.Context(), other, []string{"file.txt"})
+	if err != nil {
+		t.Fatalf("create checkpoint: %v", err)
+	}
+	model := New(
+		stubBackend{sess: &stubSession{events: make(chan session.Event)}},
+		nil,
+		nil,
+		workdir,
+		"main",
+		"dev",
+		nil,
+	).WithCheckpointStore(store)
+
+	_, cmd := model.handleCommand("/rewind " + cp.ID + " --confirm")
+	if cmd == nil {
+		t.Fatal("different workspace command returned nil cmd")
+	}
+	msg := cmd()
+	errMsg, ok := msg.(session.Error)
+	if !ok {
+		t.Fatalf("expected session.Error, got %T", msg)
+	}
+	if !strings.Contains(errMsg.Err.Error(), "different workspace") {
+		t.Fatalf("unexpected error: %v", errMsg.Err)
 	}
 }
 

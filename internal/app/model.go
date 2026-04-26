@@ -168,14 +168,15 @@ type AppState struct {
 
 // ModelState holds the core backend, session, and storage handles.
 type ModelState struct {
-	Backend    backend.Backend
-	Session    session.AgentSession
-	Storage    storage.Session
-	Store      storage.Store
-	Switcher   runtimeSwitcher
-	Config     *config.Config
-	Escalation *workspace.EscalationConfig
-	TrustStore *ionworkspace.TrustStore
+	Backend     backend.Backend
+	Session     session.AgentSession
+	Storage     storage.Session
+	Store       storage.Store
+	Switcher    runtimeSwitcher
+	Config      *config.Config
+	Escalation  *workspace.EscalationConfig
+	TrustStore  *ionworkspace.TrustStore
+	Checkpoints *ionworkspace.CheckpointStore
 }
 
 // SubagentProgress tracks the ephemeral state of a background worker.
@@ -292,6 +293,10 @@ func New(
 	spt.Style = st.cyan
 
 	boot := b.Bootstrap()
+	var checkpoints *ionworkspace.CheckpointStore
+	if checkpointPath, err := ionworkspace.DefaultCheckpointPath(); err == nil {
+		checkpoints = ionworkspace.NewCheckpointStore(checkpointPath)
+	}
 
 	m := Model{
 		App: AppState{
@@ -301,11 +306,12 @@ func New(
 			ActivePreset: presetPrimary,
 		},
 		Model: ModelState{
-			Backend:  b,
-			Session:  b.Session(),
-			Storage:  s,
-			Store:    store,
-			Switcher: switcher,
+			Backend:     b,
+			Session:     b.Session(),
+			Storage:     s,
+			Store:       store,
+			Switcher:    switcher,
+			Checkpoints: checkpoints,
 		},
 		InFlight: InFlightState{
 			Subagents: make(map[string]*SubagentProgress),
@@ -370,6 +376,11 @@ func (m Model) WithEscalation(cfg *workspace.EscalationConfig) Model {
 func (m Model) WithTrust(store *ionworkspace.TrustStore, trusted bool) Model {
 	m.Model.TrustStore = store
 	m.App.TrustedWorkspace = trusted
+	return m
+}
+
+func (m Model) WithCheckpointStore(store *ionworkspace.CheckpointStore) Model {
+	m.Model.Checkpoints = store
 	return m
 }
 

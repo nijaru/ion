@@ -50,6 +50,31 @@ type RestoreReport struct {
 	Removed  []string
 }
 
+type RestoreOptions struct {
+	AllowConflicts bool
+}
+
+type RestorePlan struct {
+	CheckpointID string
+	Conflicts    []RestoreConflict
+	Noops        []string
+}
+
+type RestoreConflict struct {
+	Path    string
+	Action  RestoreAction
+	Current PathState
+	Target  PathState
+}
+
+type RestoreAction string
+
+const (
+	RestoreOverwrite RestoreAction = "overwrite"
+	RestoreRemove    RestoreAction = "remove"
+	RestoreCreate    RestoreAction = "create"
+)
+
 func DefaultCheckpointPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -133,13 +158,69 @@ func (s *CheckpointStore) Load(id string) (Checkpoint, error) {
 	return cp, nil
 }
 
-func (s *CheckpointStore) Restore(ctx context.Context, cp Checkpoint) (RestoreReport, error) {
+func (s *CheckpointStore) AnalyzeRestore(ctx context.Context, cp Checkpoint) (RestorePlan, error) {
 	if err := ctx.Err(); err != nil {
-		return RestoreReport{}, err
+		return RestorePlan{}, err
 	}
 	if strings.TrimSpace(cp.ID) == "" {
-		return RestoreReport{}, fmt.Errorf("checkpoint id is required")
+		return RestorePlan{}, fmt.Errorf("checkpoint id is required")
 	}
+	rootPath, err := normalizePath(cp.Workspace)
+	if err != nil {
+		return RestorePlan{}, err
+	}
+	root, err := os.OpenRoot(rootPath)
+	if err != nil {
+		return RestorePlan{}, fmt.Errorf("open workspace: %w", err)
+	}
+	defer root.Close()
+
+	plan := RestorePlan{CheckpointID: cp.ID}
+	for _, entry := range cp.Entries {
+		if err := ctx.Err(); err != nil {
+			return plan, err
+		}
+		path, err := normalizeCheckpointPath(entry.Path)
+		if err != nil {
+			return plan, err
+		}
+		current, err := currentPathState(root, path)
+		if err != nil {
+			return plan, err
+		}
+		if current == entry.State {
+			if current != PathFile {
+				plan.Noops = append(plan.Noops, path)
+				continue
+			}
+			data, err := root.ReadFile(path)
+			if err != nil {
+				return plan, fmt.Errorf("read current %s: %w", path, err)
+			}
+			if digest(data) == entry.Digest {
+				plan.Noops = append(plan.Noops, path)
+				continue
+			}
+		}
+		plan.Conflicts = append(plan.Conflicts, RestoreConflict{
+			Path:    path,
+			Action:  restoreAction(entry.State),
+			Current: current,
+			Target:  entry.State,
+		})
+	}
+	return plan, nil
+}
+
+func (s *CheckpointStore) Restore(ctx context.Context, cp Checkpoint, opts RestoreOptions) (RestoreReport, error) {
+	plan, err := s.AnalyzeRestore(ctx, cp)
+	if err != nil {
+		return RestoreReport{}, err
+	}
+	if len(plan.Conflicts) > 0 && !opts.AllowConflicts {
+		return RestoreReport{}, fmt.Errorf("restore would change %d path(s); pass confirmation to continue", len(plan.Conflicts))
+	}
+
 	rootPath, err := normalizePath(cp.Workspace)
 	if err != nil {
 		return RestoreReport{}, err
@@ -192,6 +273,34 @@ func (s *CheckpointStore) Restore(ctx context.Context, cp Checkpoint) (RestoreRe
 		}
 	}
 	return report, nil
+}
+
+func currentPathState(root *os.Root, path string) (PathState, error) {
+	info, err := root.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return PathAbsent, nil
+		}
+		return "", fmt.Errorf("stat current %s: %w", path, err)
+	}
+	if info.IsDir() {
+		return PathDir, nil
+	}
+	if info.Mode().IsRegular() {
+		return PathFile, nil
+	}
+	return "", fmt.Errorf("current %s has unsupported file mode %s", path, info.Mode())
+}
+
+func restoreAction(state PathState) RestoreAction {
+	switch state {
+	case PathAbsent:
+		return RestoreRemove
+	case PathDir:
+		return RestoreCreate
+	default:
+		return RestoreOverwrite
+	}
 }
 
 func snapshotPath(ctx context.Context, root *os.Root, path, blobPath string) (CheckpointEntry, error) {

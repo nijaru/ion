@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"unicode/utf8"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/nijaru/ion/internal/providers"
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
+	ionworkspace "github.com/nijaru/ion/internal/workspace"
 )
 
 // handleCommand dispatches a slash command entered by the user.
@@ -203,6 +205,16 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		m.App.TrustedWorkspace = true
 		return m, m.printEntries(session.Entry{Role: session.System, Content: "Workspace trusted"})
 
+	case "/rewind":
+		if len(fields) < 2 || len(fields) > 3 {
+			return m, cmdError("usage: /rewind <checkpoint-id> [--confirm]")
+		}
+		confirmed := len(fields) == 3 && fields[2] == "--confirm"
+		if len(fields) == 3 && !confirmed {
+			return m, cmdError("usage: /rewind <checkpoint-id> [--confirm]")
+		}
+		return m.rewindCheckpointCommand(fields[1], confirmed)
+
 	case "/tools":
 		if len(fields) != 1 {
 			return m, cmdError("usage: /tools")
@@ -324,6 +336,94 @@ func (m Model) costBudgetNotice(inputTokens, outputTokens int, totalCost float64
 	return strings.Join(lines, "\n")
 }
 
+func (m Model) rewindCheckpointCommand(id string, confirmed bool) (Model, tea.Cmd) {
+	if m.Model.Checkpoints == nil {
+		return m, cmdError("checkpoint store is unavailable")
+	}
+	cp, err := m.Model.Checkpoints.Load(id)
+	if err != nil {
+		return m, cmdError(fmt.Sprintf("failed to load checkpoint: %v", err))
+	}
+	if !sameWorkspace(cp.Workspace, m.App.Workdir) {
+		return m, cmdError("checkpoint belongs to a different workspace")
+	}
+	plan, err := m.Model.Checkpoints.AnalyzeRestore(context.Background(), cp)
+	if err != nil {
+		return m, cmdError(fmt.Sprintf("failed to analyze checkpoint: %v", err))
+	}
+	if len(plan.Conflicts) == 0 {
+		return m, m.printEntries(session.Entry{
+			Role:    session.System,
+			Content: fmt.Sprintf("Checkpoint %s already matches this workspace; nothing to rewind.", cp.ID),
+		})
+	}
+	if !confirmed {
+		return m, m.printEntries(session.Entry{
+			Role:    session.System,
+			Content: rewindPreview(cp.ID, plan),
+		})
+	}
+
+	before := session.Entry{
+		Role:    session.System,
+		Content: fmt.Sprintf("Rewind starting: checkpoint %s will restore %d path(s).", cp.ID, len(plan.Conflicts)),
+	}
+	report, err := m.Model.Checkpoints.Restore(
+		context.Background(),
+		cp,
+		ionworkspace.RestoreOptions{AllowConflicts: true},
+	)
+	if err != nil {
+		return m, cmdError(fmt.Sprintf("failed to restore checkpoint: %v", err))
+	}
+	after := session.Entry{Role: session.System, Content: rewindReport(cp.ID, report)}
+	return m, m.printEntries(before, after)
+}
+
+func sameWorkspace(a, b string) bool {
+	aAbs, err := filepath.Abs(a)
+	if err != nil {
+		return false
+	}
+	bAbs, err := filepath.Abs(b)
+	if err != nil {
+		return false
+	}
+	return filepath.Clean(aAbs) == filepath.Clean(bAbs)
+}
+
+func rewindPreview(id string, plan ionworkspace.RestorePlan) string {
+	lines := []string{
+		"Rewind preview: " + id,
+		fmt.Sprintf("%d path(s) would change.", len(plan.Conflicts)),
+		"Run /rewind " + id + " --confirm to restore this checkpoint.",
+		"",
+	}
+	for i, conflict := range plan.Conflicts {
+		if i == 12 {
+			lines = append(lines, fmt.Sprintf("... and %d more", len(plan.Conflicts)-i))
+			break
+		}
+		lines = append(lines, fmt.Sprintf(
+			"- %s %s (current: %s, checkpoint: %s)",
+			conflict.Action,
+			conflict.Path,
+			conflict.Current,
+			conflict.Target,
+		))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func rewindReport(id string, report ionworkspace.RestoreReport) string {
+	lines := []string{
+		"Rewind complete: " + id,
+		fmt.Sprintf("restored: %d", len(report.Restored)),
+		fmt.Sprintf("removed: %d", len(report.Removed)),
+	}
+	return strings.Join(lines, "\n")
+}
+
 func (m Model) openProviderPicker() (Model, tea.Cmd) {
 	cfg, err := config.Load()
 	if err != nil {
@@ -395,6 +495,7 @@ func helpText() string {
 		"  /yolo            toggle YOLO mode (auto-approve all)",
 		"  /mode [mode]     set mode: read, edit, yolo",
 		"  /trust [status]  trust this workspace or show trust status",
+		"  /rewind <id>     preview checkpoint restore; add --confirm to apply",
 		"  /tools           show tool count and lazy loading status",
 		"  /memory [query]  show workspace memory tree or search memory",
 		"  /compact         compact the current session",

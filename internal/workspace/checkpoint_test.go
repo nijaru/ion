@@ -27,9 +27,20 @@ func TestCheckpointRestoreRestoresFilesAndRemovesCreatedPaths(t *testing.T) {
 		t.Fatalf("create new: %v", err)
 	}
 
-	report, err := store.Restore(t.Context(), cp)
+	plan, err := store.AnalyzeRestore(t.Context(), cp)
 	if err != nil {
-		t.Fatalf("Restore: %v", err)
+		t.Fatalf("AnalyzeRestore: %v", err)
+	}
+	if len(plan.Conflicts) != 2 {
+		t.Fatalf("conflicts = %#v, want 2", plan.Conflicts)
+	}
+	if _, err := store.Restore(t.Context(), cp, RestoreOptions{}); err == nil {
+		t.Fatal("Restore without confirmation accepted destructive changes")
+	}
+
+	report, err := store.Restore(t.Context(), cp, RestoreOptions{AllowConflicts: true})
+	if err != nil {
+		t.Fatalf("Restore confirmed: %v", err)
 	}
 	if !slices.Contains(report.Restored, "existing.txt") {
 		t.Fatalf("report restored = %#v, want existing.txt", report.Restored)
@@ -70,7 +81,7 @@ func TestCheckpointRestoreHandlesBinaryAndNestedPaths(t *testing.T) {
 		t.Fatalf("modify binary: %v", err)
 	}
 
-	if _, err := store.Restore(t.Context(), cp); err != nil {
+	if _, err := store.Restore(t.Context(), cp, RestoreOptions{AllowConflicts: true}); err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
 	data, err := os.ReadFile(filepath.Join(nested, "blob.bin"))
