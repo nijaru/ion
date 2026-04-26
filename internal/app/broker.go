@@ -93,11 +93,13 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 
 	case session.TurnFinished:
 		m.InFlight.Thinking = false
-		if m.Progress.BudgetStopReason == "" {
-			m.Progress.Mode = stateComplete
-		} else {
+		if m.Progress.Mode == stateError {
+			m.InFlight.QueuedTurns = nil
+		} else if m.Progress.Mode == stateCancelled || m.Progress.BudgetStopReason != "" {
 			m.Progress.Mode = stateCancelled
 			m.InFlight.QueuedTurns = nil
+		} else {
+			m.Progress.Mode = stateComplete
 		}
 		if !m.Progress.TurnStartedAt.IsZero() {
 			m.Progress.LastTurnSummary = turnSummary{
