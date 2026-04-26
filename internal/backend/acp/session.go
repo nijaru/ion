@@ -290,7 +290,11 @@ func (s *Session) SessionUpdate(ctx context.Context, n acp.SessionNotification) 
 		if tc.RawInput != nil {
 			args = fmt.Sprintf("%v", tc.RawInput)
 		}
-		s.events <- session.ToolCallStarted{ToolName: toolName, Args: args}
+		s.events <- session.ToolCallStarted{
+			ToolUseID: string(tc.ToolCallId),
+			ToolName:  toolName,
+			Args:      args,
+		}
 
 	case update.ToolCallUpdate != nil:
 		tcu := update.ToolCallUpdate
@@ -300,15 +304,19 @@ func (s *Session) SessionUpdate(ctx context.Context, n acp.SessionNotification) 
 			if output == "" && tcu.RawOutput != nil {
 				output = fmt.Sprintf("%v", tcu.RawOutput)
 			}
-			s.events <- session.ToolResult{Result: output}
+			s.events <- session.ToolResult{ToolUseID: string(tcu.ToolCallId), Result: output}
 
 		case tcu.Status != nil && *tcu.Status == acp.ToolCallStatusFailed:
 			output := toolContentText(tcu.Content)
-			s.events <- session.ToolResult{Result: output, Error: fmt.Errorf("tool call failed")}
+			s.events <- session.ToolResult{
+				ToolUseID: string(tcu.ToolCallId),
+				Result:    output,
+				Error:     fmt.Errorf("tool call failed"),
+			}
 
 		default:
 			if delta := toolContentText(tcu.Content); delta != "" {
-				s.events <- session.ToolOutputDelta{Delta: delta}
+				s.events <- session.ToolOutputDelta{ToolUseID: string(tcu.ToolCallId), Delta: delta}
 			}
 		}
 

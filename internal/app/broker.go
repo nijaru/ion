@@ -197,7 +197,10 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 
 	case session.ToolCallStarted:
 		m.Progress.Mode = stateWorking
-		m.Progress.LastToolUseID = session.ShortID()
+		m.Progress.LastToolUseID = msg.ToolUseID
+		if m.Progress.LastToolUseID == "" {
+			m.Progress.LastToolUseID = session.ShortID()
+		}
 		m.InFlight.Pending = &session.Entry{
 			Role:  session.Tool,
 			Title: FormatToolTitle(msg.ToolName, msg.Args),
@@ -228,9 +231,13 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 			entry := *m.InFlight.Pending
 			m.InFlight.Pending = nil
 
+			toolUseID := msg.ToolUseID
+			if toolUseID == "" {
+				toolUseID = m.Progress.LastToolUseID
+			}
 			if err := m.persistEntry("persist tool result", storage.ToolResult{
 				Type:      "tool_result",
-				ToolUseID: m.Progress.LastToolUseID,
+				ToolUseID: toolUseID,
 				Content:   msg.Result,
 				IsError:   msg.Error != nil,
 				TS:        now(),
