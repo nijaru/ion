@@ -21,6 +21,7 @@ import (
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
 	"github.com/nijaru/ion/internal/testutil"
+	ionworkspace "github.com/nijaru/ion/internal/workspace"
 )
 
 type stubBackend struct {
@@ -1606,6 +1607,7 @@ func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 		"/provider [name]",
 		"/model [name]",
 		"/thinking [lvl]",
+		"/trust [status]",
 		"/compact",
 		"/clear",
 		"/cost",
@@ -1626,6 +1628,35 @@ func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 	}
 	if strings.Contains(helpMsg.notice, "/tree") {
 		t.Fatalf("help notice should not advertise /tree yet: %q", helpMsg.notice)
+	}
+}
+
+func TestTrustCommandPersistsWorkspaceTrust(t *testing.T) {
+	trustPath := filepath.Join(t.TempDir(), "trusted.json")
+	model := readyModel(t).WithTrust(ionworkspace.NewTrustStore(trustPath), false)
+
+	model, cmd := model.handleCommand("/trust")
+	if !model.App.TrustedWorkspace {
+		t.Fatal("workspace not marked trusted")
+	}
+	if cmd == nil {
+		t.Fatal("trust command returned nil cmd")
+	}
+	trusted, err := ionworkspace.NewTrustStore(trustPath).IsTrusted(model.App.Workdir)
+	if err != nil {
+		t.Fatalf("IsTrusted returned error: %v", err)
+	}
+	if !trusted {
+		t.Fatal("workspace trust was not persisted")
+	}
+}
+
+func TestTrustStatusCommandReportsState(t *testing.T) {
+	model := readyModel(t).WithTrust(nil, true)
+
+	_, cmd := model.handleCommand("/trust status")
+	if cmd == nil {
+		t.Fatal("trust status command returned nil cmd")
 	}
 }
 
