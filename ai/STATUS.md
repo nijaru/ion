@@ -4,14 +4,15 @@ Fast, lightweight terminal coding agent.
 
 ## Current Focus
 
-Ion has been reconciled with the current stabilized Canto surface. The core loop audit, HITL permission-mode hardening, observability exporter slice, and workflow topology spec are complete. Current work is moving through the remaining P1 downstream reliability/UX epics.
+Ion has been reconciled with the current stabilized Canto surface. The core loop audit, HITL permission-mode hardening, observability exporter slice, workflow topology spec, and first eval regression gate are complete. Current work is moving through the remaining P1 downstream reliability/UX epics.
 
 Near-term tracks:
 - `tk-96vy` — Core loop: reliability and resilience audit (Completed)
 - `tk-j3ap` — HITL: Permission Modes UX & Escalation (Completed; notifier delivery split to `tk-00km`)
 - `tk-wzt6` — Observability: OTel Exporter & Dashboards (Completed)
 - `tk-tyww` — Workflow: Workflow Definitions & Recovery (Completed)
-- `tk-txju` — Eval: Golden Datasets & Regression Gates (Next)
+- `tk-txju` — Eval: Golden Datasets & Regression Gates (Completed)
+- `tk-zbxk` — Security: Policy Config & LLM-as-Judge (Next)
 - `tk-90mp` — Streaming: Cost Limits & Model Cascades (Paused after first budget/trace slices)
 - `tk-fblb` — Migrate Ion to current Canto surface (Completed)
 - `tk-ulfg` — Research: current Pi core loop and feature review (Completed)
@@ -32,7 +33,7 @@ Design rule:
 - Similar agents are references, not feature-parity requirements. Adopt from pi, Claude Code, Codex, OpenCode, Cursor, Droid, Letta, and others only when the idea strengthens Ion's core coding loop or preserves a simple, inspectable UX.
 
 ## Next Steps
-1. Start `tk-txju` with a narrow eval trace/regression-gate design that can reuse Canto eval primitives.
+1. Start `tk-zbxk` with deterministic policy config before considering any LLM-as-judge path.
 2. Keep adding focused regressions before broadening any SOTA epic.
 3. Use the current Pi review as a reference for loop contracts and future `/tree`, but keep concrete fixes on the current solo loop.
 4. Resume `tk-90mp` after the P1 observability slice; budget enforcement and routing trace slices are already committed.
@@ -47,6 +48,7 @@ Design rule:
 - [x] **HITL task closure (`tk-j3ap`)** — Closed the safe host scope and split actual Slack/email delivery into `tk-00km` pending credential, timeout, and audit design.
 - [x] **Observability exporter/dashboard (`tk-wzt6`)** — Added config/env-driven OTLP trace and metric export for Canto telemetry plus a Grafana starter dashboard; `go test ./...` passes.
 - [x] **Workflow topology spec (`tk-tyww`)** — Defined Ion-owned Code Review and Bug Fix workflow DAGs, checkpoint recovery policy, and human-gate rules on top of Canto graph primitives.
+- [x] **Eval golden gate (`tk-txju`)** — Moved prompt quality checks into `evals/golden/prompt_quality.toml`, kept them enforced by `go test ./...`, and documented future eval artifact policy.
 - [x] **Core loop audit slices (`tk-96vy`)** — Fixed native/ACP commit-before-finish ordering, sticky error/cancel terminal states, cancellation queue clearing, full transcript replay, tool error replay, backend tool ID propagation, interleaved tool tracking, and fail-closed proactive compaction recovery; `go test ./...` passes.
 - [x] **Canto dependency refresh foundation (`tk-fblb`)** — Updated Ion to Canto `f47e7de`; migrated request processors from `canto/context` to `canto/prompt` and hooks from `Hook/NewFunc` to `Handler/FromFunc`; `go test ./...` passes.
 - [x] **Current Pi core-loop review (`tk-ulfg`)** — Added `ai/research/pi-current-core-loop-review-2026-04.md`; Pi remains the strongest loop reference, but core reliability gates `/tree`, compaction polish, and SOTA routing work.
@@ -69,14 +71,14 @@ Design rule:
 
 ## Active Tasks
 See `tk ls` for the full list. Current active priority:
-- `tk-txju` — Eval: Golden Datasets & Regression Gates (next)
+- `tk-zbxk` — Security: Policy Config & LLM-as-Judge (next)
 
 P1 SOTA epics remain important but are downstream of `tk-96vy`:
 - `tk-90mp` — Streaming: Cost Limits & Model Cascades
 - `tk-j3ap` — HITL: Permission Modes UX & Escalation
 - `tk-wzt6` — Observability: OTel Exporter & Dashboards (Completed)
 - `tk-tyww` — Workflow: Workflow Definitions & Recovery (Completed)
-- `tk-txju` — Eval: Golden Datasets & Regression Gates
+- `tk-txju` — Eval: Golden Datasets & Regression Gates (Completed)
 - `tk-zbxk` — Security: Policy Config & LLM-as-Judge
 - `tk-r5jr` — Subagent: Agent Personas & Model Routing
 - `tk-z2cb` — Workspace: Trust UX & Visual Rollback

@@ -1,0 +1,38 @@
+[[case]]
+name = "concise non-marketing tone"
+required = [
+  "Keep responses concise, factual, and non-marketing.",
+  "Do not use self-promotional language.",
+]
+forbidden = [
+  "elite",
+  "best coding agent",
+  "built on the Canto framework",
+  "How can I help you today?",
+]
+
+[[case]]
+name = "inspect before editing"
+required = [
+  "Understand the relevant code, configuration, and tests before making changes.",
+  "1. Inspect the relevant context first.",
+]
+
+[[case]]
+name = "verify after editing"
+required = [
+  "After editing files, run relevant verification commands when feasible.",
+  "4. Verify the result.",
+]
+
+[[case]]
+name = "avoid stale model and provider recommendations"
+forbidden = [
+  "Anthropic:",
+  "OpenAI:",
+  "OpenRouter:",
+  "Gemini:",
+  "Claude 3.7 Sonnet",
+  "GPT-4.1",
+  "provider API",
+]
