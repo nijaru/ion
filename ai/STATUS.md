@@ -7,7 +7,7 @@ Fast, lightweight terminal coding agent.
 Ion has been reconciled with the current stabilized Canto surface. The core loop audit, HITL permission-mode hardening, observability exporter slice, workflow topology spec, first eval regression gate, deterministic policy config slice, first executable subagent persona/routing slice, workspace trust slice, tool-loading UX slice, and first memory search UX slice are complete. Current work is moving through the remaining P2 reliability/UX epics.
 
 Current active slice:
-- `tk-kfno` — Security sandbox hardening. First slice makes explicit Seatbelt/bubblewrap modes fail closed when unavailable, surfaces sandbox posture at startup and through `/tools`, and avoids binding missing bubblewrap paths.
+- `tk-9lws` — LLM-as-judge classifier and circuit breaker. Keep it behind deterministic policy: only ambiguous `ask` cases are candidates, classifier failures must fail closed, and reasons must be auditable.
 
 Near-term tracks:
 - `tk-96vy` — Core loop: reliability and resilience audit (Completed)
@@ -49,6 +49,7 @@ Design rule:
 *(Note: Older P3 TUI refinement tasks like configurable verbosity, skill layering, and status line context have been subsumed by their respective SOTA epics).*
 
 ## Completed (Recent)
+- [x] **Sandbox hardening (`tk-kfno`)** — Explicit Seatbelt/bubblewrap modes fail closed when unavailable, bubblewrap planning skips missing platform paths, and sandbox posture is visible at startup and through `/tools`.
 - [x] **Checkpoint rewind (`tk-8e2x`)** — Native file tools create durable pre-change checkpoints; `/rewind <id>` previews restore actions and `/rewind <id> --confirm` restores with transcript start/completion entries.
 - [x] **Core loop reliability audit (`tk-96vy`)** — Completed final approval/session-switch review; approval bridge failures now surface as session errors and unknown tool result IDs cannot clear another pending tool.
 - [x] **Permission mode startup slice (`tk-j3ap`)** — READ mode is now non-escalating even with stale session approvals; `--mode`/`--yolo` startup selection now applies to TUI and print sessions, with non-interactive approvals limited to YOLO.
@@ -87,7 +88,6 @@ See `tk ls` for the full list. Current active priority:
 - No P1 tasks remain ready. Next ready work is P2.
 
 Remaining P2 epics:
-- `tk-kfno` — Security: OS sandbox hardening for tool execution
 - `tk-9lws` — Security: LLM-as-judge classifier and circuit breaker
 - `tk-00km` — HITL: Slack/email notifier delivery and audit
 - `tk-90mp` — Streaming: Cost Limits & Model Cascades
