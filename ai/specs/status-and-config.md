@@ -72,6 +72,8 @@ Current important fields:
 - `auth_env_var`
 - `extra_headers`
 - `reasoning_effort`
+- `policy_path`
+- `subagents_path`
 
 Rules:
 
@@ -98,6 +100,7 @@ Current direction:
 - `provider` / `model` / `reasoning_effort` are the primary preset slot
 - `fast_model` / `fast_reasoning_effort` define the fast preset slot
 - `summary_model` / `summary_reasoning_effort` stay config-only and are used for cheap transforms like compaction and titles
+- subagent personas use `primary` or `fast`; `subagents_path` only changes where persona Markdown files load from
 - `primary` and `fast` are the UI-visible presets
 - a preset may carry its own default reasoning level
 - if a preset is not explicitly configured, ion should resolve a deterministic provider default from the live model catalog

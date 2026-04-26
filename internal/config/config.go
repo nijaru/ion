@@ -34,6 +34,7 @@ type Config struct {
 	TelemetryOTLPInsecure  bool              `toml:"telemetry_otlp_insecure,omitempty"`
 	TelemetryOTLPHeaders   map[string]string `toml:"telemetry_otlp_headers,omitempty"`
 	PolicyPath             string            `toml:"policy_path,omitempty"`
+	SubagentsPath          string            `toml:"subagents_path,omitempty"`
 	SessionRetentionDays   int               `toml:"session_retention_days,omitempty"`
 	ToolVerbosity          string            `toml:"tool_verbosity,omitempty"`
 	ThinkingVerbosity      string            `toml:"thinking_verbosity,omitempty"`
@@ -90,6 +91,7 @@ func Load() (*Config, error) {
 	cfg.TelemetryOTLPEndpoint = strings.TrimSpace(cfg.TelemetryOTLPEndpoint)
 	cfg.TelemetryOTLPHeaders = normalizeStringMap(cfg.TelemetryOTLPHeaders)
 	cfg.PolicyPath = expandUserPath(strings.TrimSpace(cfg.PolicyPath))
+	cfg.SubagentsPath = expandUserPath(strings.TrimSpace(cfg.SubagentsPath))
 	cfg.ToolVerbosity = normalizeVerbosity(cfg.ToolVerbosity)
 	cfg.ThinkingVerbosity = normalizeVerbosity(cfg.ThinkingVerbosity)
 	if cfg.ContextLimit < 0 {
@@ -133,6 +135,7 @@ func Save(cfg *Config) error {
 	out.TelemetryOTLPEndpoint = strings.TrimSpace(out.TelemetryOTLPEndpoint)
 	out.TelemetryOTLPHeaders = normalizeStringMap(out.TelemetryOTLPHeaders)
 	out.PolicyPath = expandUserPath(strings.TrimSpace(out.PolicyPath))
+	out.SubagentsPath = expandUserPath(strings.TrimSpace(out.SubagentsPath))
 	if out.ContextLimit < 0 {
 		out.ContextLimit = 0
 	}
@@ -188,6 +191,14 @@ func DefaultPolicyPath() (string, error) {
 		return "", err
 	}
 	return filepath.Join(home, ".ion", "policy.yaml"), nil
+}
+
+func DefaultSubagentsDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".ion", "agents"), nil
 }
 
 func defaultConfig() *Config {

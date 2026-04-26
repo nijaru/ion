@@ -10,7 +10,9 @@
 - [Canto Research Delta](review/canto-research-delta-2026-04-26.md) — Recent Canto ai/ findings that affect Ion task sequencing
 - [Tools and Modes Spec](specs/tools-and-modes.md) — Permission modes, approval prompt behavior, and ESCALATE.md host UX
 - [Security Policy Spec](specs/security-policy.md) — YAML tool/category policy rules and LLM judge deferral boundary
+- [Subagent Personas and Routing Spec](specs/subagent-personas-and-routing.md) — Built-in personas, YAML frontmatter format, and model-slot policy
 - [Workflows and Recovery Spec](specs/workflows-and-recovery.md) — Ion workflow topology, gates, and checkpoint policy
 - [Evals and Regression Gates Spec](specs/evals-and-regression-gates.md) — Golden datasets, thresholds, and CI policy
 - [Observability Docs](../docs/observability/README.md) — OTLP exporter config and Grafana starter dashboard
 - [Security Policy Docs](../docs/security/policy.md) — User-facing policy_path and ~/.ion/policy.yaml reference
+- [Subagent Docs](../docs/subagents.md) — User-facing subagent personas and ~/.ion/agents reference

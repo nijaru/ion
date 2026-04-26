@@ -18,7 +18,7 @@ func TestLoadReadsConfigFile(t *testing.T) {
 
 	path := filepath.Join(configDir, "config.toml")
 	if err := os.WriteFile(path, []byte(
-		"provider = \"openai\"\nmodel = \"gpt-4o\"\nreasoning_effort = \"med\"\nfast_model = \"gpt-4.1-mini\"\nfast_reasoning_effort = \"low\"\nsummary_model = \"gpt-4o-mini\"\nsummary_reasoning_effort = \"low\"\nendpoint = \"https://example.com/v1\"\nauth_env_var = \"OPENAI_PROXY_KEY\"\ncontext_limit = 128000\nmax_session_cost = 1.25\nmax_turn_cost = 0.10\ntelemetry_otlp_endpoint = \" localhost:4317 \"\ntelemetry_otlp_insecure = true\npolicy_path = \" /tmp/ion-policy.yaml \"\nsession_retention_days = 14\n[extra_headers]\n\"X-Test\" = \"value\"\n[telemetry_otlp_headers]\n\"x-api-key\" = \" secret \"\n",
+		"provider = \"openai\"\nmodel = \"gpt-4o\"\nreasoning_effort = \"med\"\nfast_model = \"gpt-4.1-mini\"\nfast_reasoning_effort = \"low\"\nsummary_model = \"gpt-4o-mini\"\nsummary_reasoning_effort = \"low\"\nendpoint = \"https://example.com/v1\"\nauth_env_var = \"OPENAI_PROXY_KEY\"\ncontext_limit = 128000\nmax_session_cost = 1.25\nmax_turn_cost = 0.10\ntelemetry_otlp_endpoint = \" localhost:4317 \"\ntelemetry_otlp_insecure = true\npolicy_path = \" /tmp/ion-policy.yaml \"\nsubagents_path = \" /tmp/ion-agents \"\nsession_retention_days = 14\n[extra_headers]\n\"X-Test\" = \"value\"\n[telemetry_otlp_headers]\n\"x-api-key\" = \" secret \"\n",
 	), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -82,6 +82,9 @@ func TestLoadReadsConfigFile(t *testing.T) {
 	if cfg.PolicyPath != "/tmp/ion-policy.yaml" {
 		t.Fatalf("policy_path = %q, want /tmp/ion-policy.yaml", cfg.PolicyPath)
 	}
+	if cfg.SubagentsPath != "/tmp/ion-agents" {
+		t.Fatalf("subagents_path = %q, want /tmp/ion-agents", cfg.SubagentsPath)
+	}
 }
 
 func TestLoadUsesDefaultsWhenConfigMissing(t *testing.T) {
@@ -133,7 +136,7 @@ func TestLoadAppliesEnvOverrides(t *testing.T) {
 	}
 }
 
-func TestLoadExpandsPolicyPath(t *testing.T) {
+func TestLoadExpandsUserPaths(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
@@ -142,7 +145,7 @@ func TestLoadExpandsPolicyPath(t *testing.T) {
 		t.Fatalf("mkdir config dir: %v", err)
 	}
 	path := filepath.Join(configDir, "config.toml")
-	if err := os.WriteFile(path, []byte(`policy_path = "~/.ion/work-policy.yaml"`), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("policy_path = \"~/.ion/work-policy.yaml\"\nsubagents_path = \"~/.ion/agents\""), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
@@ -153,6 +156,10 @@ func TestLoadExpandsPolicyPath(t *testing.T) {
 	want := filepath.Join(home, ".ion", "work-policy.yaml")
 	if cfg.PolicyPath != want {
 		t.Fatalf("policy_path = %q, want %q", cfg.PolicyPath, want)
+	}
+	wantAgents := filepath.Join(home, ".ion", "agents")
+	if cfg.SubagentsPath != wantAgents {
+		t.Fatalf("subagents_path = %q, want %q", cfg.SubagentsPath, wantAgents)
 	}
 }
 
@@ -178,6 +185,7 @@ func TestSaveWritesStatePath(t *testing.T) {
 		TelemetryOTLPInsecure:  true,
 		TelemetryOTLPHeaders:   map[string]string{"x-api-key": "secret"},
 		PolicyPath:             "/tmp/ion-policy.yaml",
+		SubagentsPath:          "/tmp/ion-agents",
 		SessionRetentionDays:   14,
 	}
 	if err := Save(cfg); err != nil {
@@ -211,6 +219,7 @@ func TestSaveWritesStatePath(t *testing.T) {
 		`telemetry_otlp_endpoint = 'localhost:4317'`,
 		`telemetry_otlp_insecure = true`,
 		`policy_path = '/tmp/ion-policy.yaml'`,
+		`subagents_path = '/tmp/ion-agents'`,
 		`[telemetry_otlp_headers]`,
 		`x-api-key = 'secret'`,
 		`session_retention_days = 14`,
