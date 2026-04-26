@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -40,9 +42,12 @@ type PolicyEngine struct {
 	// ToolPolicies maps exact tool names to explicit handling.
 	ToolPolicies map[string]Policy
 
-	mu          sync.RWMutex
-	mode        session.Mode
-	autoApprove bool
+	mu                sync.RWMutex
+	mode              session.Mode
+	autoApprove       bool
+	classifier        PolicyClassifier
+	classifierTimeout time.Duration
+	auditSink         PolicyAuditSink
 }
 
 // NewPolicyEngine creates a default policy engine.
@@ -64,9 +69,10 @@ func NewPolicyEngine() *PolicyEngine {
 			"mcp":             CategorySensitive,
 			"subagent":        CategorySensitive,
 		},
-		Policies:     defaultCategoryPolicies(),
-		ToolPolicies: map[string]Policy{},
-		mode:         session.ModeEdit,
+		Policies:          defaultCategoryPolicies(),
+		ToolPolicies:      map[string]Policy{},
+		mode:              session.ModeEdit,
+		classifierTimeout: 2 * time.Second,
 	}
 }
 
@@ -79,6 +85,31 @@ type PolicyRule struct {
 	Category ToolCategory `yaml:"category"`
 	Action   Policy       `yaml:"action"`
 }
+
+type PolicyClassification struct {
+	ToolName string
+	Args     string
+	Category ToolCategory
+}
+
+type PolicyDecision struct {
+	Action Policy
+	Reason string
+}
+
+type PolicyClassifier interface {
+	ClassifyPolicy(context.Context, PolicyClassification) (PolicyDecision, error)
+}
+
+type PolicyAuditEvent struct {
+	ToolName string
+	Category ToolCategory
+	Action   Policy
+	Reason   string
+	Source   string
+}
+
+type PolicyAuditSink func(PolicyAuditEvent)
 
 func LoadPolicyConfig(path string) (*PolicyConfig, error) {
 	if path == "" {
@@ -139,6 +170,21 @@ func (pe *PolicyEngine) ApplyConfig(cfg *PolicyConfig) {
 	}
 }
 
+func (pe *PolicyEngine) SetClassifier(classifier PolicyClassifier, timeout time.Duration) {
+	pe.mu.Lock()
+	defer pe.mu.Unlock()
+	pe.classifier = classifier
+	if timeout > 0 {
+		pe.classifierTimeout = timeout
+	}
+}
+
+func (pe *PolicyEngine) SetAuditSink(sink PolicyAuditSink) {
+	pe.mu.Lock()
+	defer pe.mu.Unlock()
+	pe.auditSink = sink
+}
+
 // SetMode updates the active session mode.
 func (pe *PolicyEngine) SetMode(mode session.Mode) {
 	pe.mu.Lock()
@@ -187,6 +233,9 @@ func (pe *PolicyEngine) Authorize(
 	for k, v := range pe.ToolPolicies {
 		toolPolicies[k] = v
 	}
+	classifier := pe.classifier
+	classifierTimeout := pe.classifierTimeout
+	auditSink := pe.auditSink
 	pe.mu.RUnlock()
 
 	category, ok := pe.Categories[toolName]
@@ -225,16 +274,89 @@ func (pe *PolicyEngine) Authorize(
 			case PolicyDeny:
 				return PolicyDeny, fmt.Sprintf("Tool %q (%s) is blocked by policy.", toolName, category)
 			case PolicyAsk:
-				return PolicyAsk, fmt.Sprintf("Tool %q (%s) requires approval.", toolName, category)
+				return pe.classifyOrAsk(ctx, classifier, classifierTimeout, auditSink, toolName, args, category)
 			}
 		}
-		return PolicyAsk, fmt.Sprintf("Tool %q (%s) requires approval.", toolName, category)
+		return pe.classifyOrAsk(ctx, classifier, classifierTimeout, auditSink, toolName, args, category)
 
 	case session.ModeYolo:
 		return PolicyAllow, ""
 	}
 
 	return PolicyAsk, ""
+}
+
+func (pe *PolicyEngine) classifyOrAsk(
+	ctx context.Context,
+	classifier PolicyClassifier,
+	timeout time.Duration,
+	auditSink PolicyAuditSink,
+	toolName string,
+	args string,
+	category ToolCategory,
+) (Policy, string) {
+	defaultReason := fmt.Sprintf("Tool %q (%s) requires approval.", toolName, category)
+	if classifier == nil {
+		return PolicyAsk, defaultReason
+	}
+	if timeout <= 0 {
+		timeout = 2 * time.Second
+	}
+	classifyCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	decision, err := classifier.ClassifyPolicy(classifyCtx, PolicyClassification{
+		ToolName: toolName,
+		Args:     args,
+		Category: category,
+	})
+	if err != nil {
+		reason := defaultReason + " Classifier unavailable: " + err.Error()
+		auditPolicyDecision(auditSink, toolName, category, PolicyAsk, reason, "classifier_unavailable")
+		return PolicyAsk, reason
+	}
+	if !validPolicy(decision.Action) {
+		reason := defaultReason + " Classifier returned invalid action."
+		auditPolicyDecision(auditSink, toolName, category, PolicyAsk, reason, "classifier_invalid")
+		return PolicyAsk, reason
+	}
+	reason := strings.TrimSpace(decision.Reason)
+	if reason == "" {
+		reason = "classifier decision"
+	}
+	switch decision.Action {
+	case PolicyAllow:
+		reason = "Classifier allowed: " + reason
+		auditPolicyDecision(auditSink, toolName, category, PolicyAllow, reason, "classifier")
+		return PolicyAllow, reason
+	case PolicyDeny:
+		reason = "Classifier denied: " + reason
+		auditPolicyDecision(auditSink, toolName, category, PolicyDeny, reason, "classifier")
+		return PolicyDeny, reason
+	default:
+		reason = "Classifier requested approval: " + reason
+		auditPolicyDecision(auditSink, toolName, category, PolicyAsk, reason, "classifier")
+		return PolicyAsk, reason
+	}
+}
+
+func auditPolicyDecision(
+	sink PolicyAuditSink,
+	toolName string,
+	category ToolCategory,
+	action Policy,
+	reason string,
+	source string,
+) {
+	if sink == nil {
+		return
+	}
+	sink(PolicyAuditEvent{
+		ToolName: toolName,
+		Category: category,
+		Action:   action,
+		Reason:   reason,
+		Source:   source,
+	})
 }
 
 func defaultCategoryPolicies() map[ToolCategory]Policy {

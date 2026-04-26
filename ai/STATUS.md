@@ -7,7 +7,7 @@ Fast, lightweight terminal coding agent.
 Ion has been reconciled with the current stabilized Canto surface. The core loop audit, HITL permission-mode hardening, observability exporter slice, workflow topology spec, first eval regression gate, deterministic policy config slice, first executable subagent persona/routing slice, workspace trust slice, tool-loading UX slice, and first memory search UX slice are complete. Current work is moving through the remaining P2 reliability/UX epics.
 
 Current active slice:
-- `tk-9lws` — LLM-as-judge classifier and circuit breaker. Keep it behind deterministic policy: only ambiguous `ask` cases are candidates, classifier failures must fail closed, and reasons must be auditable.
+- `tk-9lws` — LLM-as-judge classifier and circuit breaker. Optional classifier foundation is in place for EDIT-mode `ask` cases with timeout/error/invalid-action fallback to `ask` plus audit events; real model adapter and durable audit wiring remain.
 
 Near-term tracks:
 - `tk-96vy` — Core loop: reliability and resilience audit (Completed)
@@ -41,7 +41,7 @@ Design rule:
 
 ## Next Steps
 1. Work through the remaining P2 queue: checkpoint rewind semantics, LLM-as-judge circuit breakers, Slack/email notifier delivery, and model cascade enforcement.
-2. Keep deterministic config and explicit commands as the base before adding classifier or optimizer behavior.
+2. Keep deterministic config and explicit commands as the base; only add model-backed classifier behavior after durable audit plumbing and schema validation are wired.
 3. Use the current Pi review as a reference for loop contracts and future `/tree`, but keep concrete fixes on the current solo loop.
 4. Resume `tk-90mp`; budget enforcement and routing trace slices are already committed.
 5. Treat older `Canto: contribute ...` tasks as re-triaged: no default grep/glob or preset coding-tool bundles; only concrete reusable extension packages should move upstream.
@@ -49,6 +49,7 @@ Design rule:
 *(Note: Older P3 TUI refinement tasks like configurable verbosity, skill layering, and status line context have been subsumed by their respective SOTA epics).*
 
 ## Completed (Recent)
+- [x] **Policy classifier foundation (`tk-9lws`)** — Added optional EDIT-mode classifier hook for existing `ask` decisions, with timeout/model-error/invalid-action fallback to `ask`, hard-boundary protection, and auditable policy events.
 - [x] **Sandbox hardening (`tk-kfno`)** — Explicit Seatbelt/bubblewrap modes fail closed when unavailable, bubblewrap planning skips missing platform paths, and sandbox posture is visible at startup and through `/tools`.
 - [x] **Checkpoint rewind (`tk-8e2x`)** — Native file tools create durable pre-change checkpoints; `/rewind <id>` previews restore actions and `/rewind <id> --confirm` restores with transcript start/completion entries.
 - [x] **Core loop reliability audit (`tk-96vy`)** — Completed final approval/session-switch review; approval bridge failures now surface as session errors and unknown tool result IDs cannot clear another pending tool.

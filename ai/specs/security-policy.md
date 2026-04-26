@@ -43,12 +43,21 @@ that READ and EDIT can always inspect the workspace without approval churn.
 
 ## Deferred Work
 
-LLM-as-judge remains deferred behind deterministic policy config. The likely
-shape is a separate classifier policy after explicit rules and before default
-`ask`, with circuit breakers for timeout, parse failure, model unavailability,
-and disagreement with hard boundaries. It must fail closed to `ask` or `deny`
-depending on mode/category and should emit an audit event before it can become
-default behavior.
+LLM-as-judge remains behind deterministic policy config. The current foundation
+adds an optional `PolicyClassifier` hook only for EDIT-mode decisions that would
+already require `ask`; it cannot weaken READ mode, read-tool access, explicit
+allows, or explicit denies.
+
+Classifier circuit breakers are part of the boundary:
+
+- timeout or model unavailability -> `ask`
+- invalid/parse-failed action -> `ask`
+- hard-boundary disagreement -> classifier is not called
+- every classifier outcome/fallback can emit a `PolicyAuditEvent`
+
+Real model-backed adapters are still deferred. Before enabling one by default,
+Ion needs a concrete audit sink wired into durable session/trace storage and a
+small prompt/schema that returns only `allow`, `ask`, or `deny` with a reason.
 
 ## Privacy Redaction
 
