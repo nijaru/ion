@@ -1159,9 +1159,12 @@ func TestCompactCommandUsesBackendCompactor(t *testing.T) {
 	}
 	model := New(backend, nil, nil, "/tmp/test", "main", "dev", nil)
 
-	_, cmd := model.handleCommand("/compact")
+	model, cmd := model.handleCommand("/compact")
 	if cmd == nil {
 		t.Fatal("expected /compact command to return a cmd")
+	}
+	if !model.Progress.Compacting {
+		t.Fatal("expected /compact to mark compaction in progress")
 	}
 
 	msg := cmd()
@@ -1174,6 +1177,45 @@ func TestCompactCommandUsesBackendCompactor(t *testing.T) {
 	}
 	if compacted.notice != "Compacted current session context" {
 		t.Fatalf("compact notice = %q", compacted.notice)
+	}
+}
+
+func TestCompactingStatusShowsProgressLine(t *testing.T) {
+	model := readyModel(t)
+
+	updated, _ := model.Update(session.StatusChanged{Status: "Compacting context..."})
+	model = updated.(Model)
+
+	if !model.Progress.Compacting {
+		t.Fatal("expected compacting status to mark compaction in progress")
+	}
+	line := ansi.Strip(model.progressLine())
+	if !strings.Contains(line, "Compacting context...") {
+		t.Fatalf("progress line = %q, want compaction status", line)
+	}
+
+	updated, _ = model.Update(session.StatusChanged{Status: "Ready"})
+	model = updated.(Model)
+	if model.Progress.Compacting {
+		t.Fatal("expected ready status to clear compaction progress")
+	}
+}
+
+func TestComposerQueuesWhileCompacting(t *testing.T) {
+	model := readyModel(t)
+	model.Progress.Compacting = true
+	model.Input.Composer.SetValue("follow up")
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(Model)
+	if len(model.InFlight.QueuedTurns) != 1 || model.InFlight.QueuedTurns[0] != "follow up" {
+		t.Fatalf("queuedTurns = %v, want [follow up]", model.InFlight.QueuedTurns)
+	}
+	if got := model.Input.Composer.Value(); got != "" {
+		t.Fatalf("composer = %q, want cleared after queueing", got)
+	}
+	if cmd == nil {
+		t.Fatal("expected queue notice cmd")
 	}
 }
 

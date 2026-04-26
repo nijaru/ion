@@ -125,7 +125,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		if text == "" {
 			return m, nil
 		}
-		if m.InFlight.Thinking {
+		if m.InFlight.Thinking || m.Progress.Compacting {
 			m.InFlight.QueuedTurns = append(m.InFlight.QueuedTurns, text)
 			m.Input.Composer.Reset()
 			m.PasteMarkers = make(map[string]pasteMarker)

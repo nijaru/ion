@@ -294,6 +294,8 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		if !ok {
 			return m, cmdError("current backend does not support /compact")
 		}
+		m.Progress.Compacting = true
+		m.Progress.Status = "Compacting context..."
 		return m, func() tea.Msg {
 			compacted, err := compactor.Compact(context.Background())
 			if err != nil {

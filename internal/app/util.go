@@ -165,3 +165,7 @@ func isIdleStatus(status string) bool {
 		return false
 	}
 }
+
+func isCompactingStatus(status string) bool {
+	return strings.Contains(strings.ToLower(strings.TrimSpace(status)), "compacting")
+}

@@ -7,15 +7,17 @@ Fast, lightweight terminal coding agent.
 Ion has been reconciled with the current stabilized Canto surface. The core loop audit, HITL permission-mode hardening, observability exporter slice, workflow topology spec, first eval regression gate, deterministic policy config slice, first executable subagent persona/routing slice, workspace trust slice, tool-loading UX slice, and first memory search UX slice are complete. Current work is moving through the remaining P2 reliability/UX epics.
 
 Current active slice:
-- `tk-9lws` — LLM-as-judge classifier and circuit breaker. Optional classifier foundation is in place for EDIT-mode `ask` cases with timeout/error/invalid-action fallback to `ask` plus audit events; real model adapter and durable audit wiring remain.
+- No active slice after completing compaction UX. Next P2 should be chosen from HITL notifier/audit, model cascade enforcement, or cross-host session sync based on core-loop impact.
 
 Near-term tracks:
+- `tk-2wrb` — Context: Compaction UX & Summarization Prompts (Completed)
 - `tk-96vy` — Core loop: reliability and resilience audit (Completed)
 - `tk-j3ap` — HITL: Permission Modes UX & Escalation (Completed; notifier delivery split to `tk-00km`)
 - `tk-wzt6` — Observability: OTel Exporter & Dashboards (Completed)
 - `tk-tyww` — Workflow: Workflow Definitions & Recovery (Completed)
 - `tk-txju` — Eval: Golden Datasets & Regression Gates (Completed)
 - `tk-zbxk` — Security: Policy Config & LLM-as-Judge (Deterministic config complete; LLM judge split)
+- `tk-9lws` — Security: LLM-as-judge classifier and circuit breaker (Completed foundation; model adapter deferred)
 - `tk-r5jr` — Subagent: Agent Personas & Model Routing (Completed)
 - `tk-z2cb` — Workspace: Trust UX & Visual Rollback (Trust complete; rewind split)
 - `tk-yf7v` — Tool Execution: Tool Loading UX & Approval Tiers (Completed)
@@ -49,6 +51,7 @@ Design rule:
 *(Note: Older P3 TUI refinement tasks like configurable verbosity, skill layering, and status line context have been subsumed by their respective SOTA epics).*
 
 ## Completed (Recent)
+- [x] **Compaction UX slice (`tk-2wrb`)** — Added visible compacting progress, follow-up queueing while manual compaction runs, and Ion summarizer guidance that preserves goals, paths, task IDs, decisions, failures, and verification status.
 - [x] **Policy classifier foundation (`tk-9lws`)** — Added optional EDIT-mode classifier hook for existing `ask` decisions, with timeout/model-error/invalid-action fallback to `ask`, hard-boundary protection, and auditable policy events.
 - [x] **Sandbox hardening (`tk-kfno`)** — Explicit Seatbelt/bubblewrap modes fail closed when unavailable, bubblewrap planning skips missing platform paths, and sandbox posture is visible at startup and through `/tools`.
 - [x] **Checkpoint rewind (`tk-8e2x`)** — Native file tools create durable pre-change checkpoints; `/rewind <id>` previews restore actions and `/rewind <id> --confirm` restores with transcript start/completion entries.
@@ -93,7 +96,6 @@ Remaining P2 epics:
 - `tk-00km` — HITL: Slack/email notifier delivery and audit
 - `tk-90mp` — Streaming: Cost Limits & Model Cascades
 - `tk-g78q` — Skills: Self-Extension Nudges & Marketplace
-- `tk-2wrb` — Context: Compaction UX & Summarization Prompts
 - `tk-8174` — Session: Cross-Host Sync & TUI Branching
 - `tk-n0n4` — Privacy: PII detection and redaction pipeline
 

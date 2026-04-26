@@ -1,7 +1,7 @@
 # Spec: Agent Self-Initiated Compaction Tool
 
-**Task:** `tk-pw3s`
-**Status:** Spec only, not started
+**Task:** `tk-pw3s`, `tk-2wrb`
+**Status:** Implemented tool; UX and summarizer guidance refined.
 
 ## Problem
 
@@ -41,13 +41,21 @@ The agent should **not** compact:
 
 ## User Visibility
 
-When the agent compacts, the transcript shows:
+When the agent or host compacts, the progress line shows:
 
 ```
-♻ Compacted: switching from TUI work to provider layer
+Compacting context...
 ```
 
-No confirmation prompt — the agent makes the call. The user can see the reason and judge if it was appropriate. If the user disagrees, they can say "don't compact without asking" and the agent adjusts behavior for the session.
+The composer remains usable. New turns submitted while compaction is active are queued and sent after compaction completes, matching the normal in-flight turn queue behavior.
+
+When compaction completes, the transcript receives a compact system notice:
+
+```
+Compacted current session context
+```
+
+No confirmation prompt — the agent makes the call. The user can see the result and judge if it was appropriate. If the user disagrees, they can say "don't compact without asking" and the agent adjusts behavior for the session.
 
 ## Guardrails
 
@@ -62,7 +70,7 @@ These are ion-owned defaults, configurable via config.
 
 ## Architecture
 
-This is an **ion-owned tool**, not a canto primitive.
+This is an **ion-owned product surface** on top of Canto primitives.
 
 - **Canto** provides the compaction mechanism (`Summarize`, context truncation)
 - **Ion** provides the policy (the tool definition, guardrails, transcript rendering)
@@ -73,8 +81,9 @@ Implementation touches:
 |-------|--------|
 | Tool registry | Register `compact` tool with the agent's tool set |
 | Tool handler | Validate guardrails, call canto compaction, return summary |
-| System prompt | Add guidance on when to use (and not use) the tool |
-| Transcript | Render compaction event with reason |
+| System prompt | Guidance on when to use (and not use) the tool |
+| Summarizer prompt | Preserve goal, next step, paths, task IDs, commits, decisions, blockers, failures, root causes, and verification status; discard transient command noise and resolved detours |
+| Transcript/status | Render compact progress and completion notice |
 | Config | Guardrail thresholds |
 
 ## Novelty
