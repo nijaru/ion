@@ -23,3 +23,8 @@ Approval tiers remain deliberately small:
 
 Granular persistent rules live in `~/.ion/policy.yaml`; see
 `docs/security/policy.md`.
+
+Native `write`, `edit`, and `multi_edit` create pre-change checkpoints before
+they mutate files. Tool results include the checkpoint ID, which can be previewed
+with `/rewind <checkpoint-id>` and restored with `/rewind <checkpoint-id>
+--confirm`.

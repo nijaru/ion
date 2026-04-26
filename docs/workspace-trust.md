@@ -16,9 +16,17 @@ Commands:
 |---|---|
 | `/trust` | Mark the current workspace trusted |
 | `/trust status` | Show whether the current workspace is trusted |
+| `/rewind <checkpoint-id>` | Preview the paths a checkpoint restore would change |
+| `/rewind <checkpoint-id> --confirm` | Restore the checkpoint after explicit confirmation |
 
 Trust state is keyed by the absolute workspace path. It is user-global, not
 project-local, so a repository cannot mark itself trusted by editing files.
 
-Visual rewind/checkpoint support is not implemented by this trust file. That
-needs a separate checkpoint format with explicit restore semantics.
+Checkpoint state is separate from trust state and lives under:
+
+```text
+~/.ion/checkpoints
+```
+
+Native file edits create pre-change checkpoints. Rewind is intentionally
+two-step: preview first, restore only with `--confirm`.
