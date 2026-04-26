@@ -136,6 +136,10 @@ func toolSurfaceSummary(surface backend.ToolSurface) string {
 		mode = fmt.Sprintf("lazy via search_tools above %d", surface.LazyThreshold)
 	}
 	names := strings.Join(surface.Names, ", ")
+	sandbox := strings.TrimSpace(surface.Sandbox)
+	if sandbox != "" {
+		mode += "; sandbox " + sandbox
+	}
 	if names == "" {
 		return fmt.Sprintf("Tools: %d (%s)", surface.Count, mode)
 	}

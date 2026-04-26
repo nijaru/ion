@@ -11,7 +11,18 @@ Use:
 ```
 
 to show the registered tool count, whether lazy loading is active, and the
-current tool names.
+current tool names. For the native Canto backend, this also reports the active
+bash sandbox posture.
+
+Bash sandboxing is configured with:
+
+```text
+ION_SANDBOX=off|auto|seatbelt|bubblewrap
+```
+
+Explicit `seatbelt` and `bubblewrap` modes fail closed when their backend is
+unavailable. `auto` uses the platform backend when present and reports when it
+falls back to `off`.
 
 Approval tiers remain deliberately small:
 

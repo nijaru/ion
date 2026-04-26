@@ -13,13 +13,17 @@ type SandboxMode string
 const (
 	SandboxOff        SandboxMode = "off"
 	SandboxAuto       SandboxMode = "auto"
-	SandboxSeatbelt    SandboxMode = "seatbelt"
-	SandboxBubblewrap  SandboxMode = "bubblewrap"
+	SandboxSeatbelt   SandboxMode = "seatbelt"
+	SandboxBubblewrap SandboxMode = "bubblewrap"
 )
 
 var (
-	sandboxGOOS     = runtime.GOOS
-	sandboxLookPath  = exec.LookPath
+	sandboxGOOS       = runtime.GOOS
+	sandboxLookPath   = exec.LookPath
+	sandboxPathExists = func(path string) bool {
+		_, err := os.Stat(path)
+		return err == nil
+	}
 )
 
 type sandboxPlan struct {
@@ -44,6 +48,47 @@ func resolveSandboxMode() SandboxMode {
 		return SandboxBubblewrap
 	default:
 		return SandboxAuto
+	}
+}
+
+func SandboxSummary() string {
+	return sandboxSummary(resolveSandboxMode())
+}
+
+func sandboxSummary(mode SandboxMode) string {
+	switch mode {
+	case SandboxOff:
+		return string(SandboxOff)
+	case SandboxSeatbelt:
+		if sandboxGOOS != "darwin" {
+			return "seatbelt unavailable on " + sandboxGOOS
+		}
+		if _, err := sandboxLookPath("sandbox-exec"); err != nil {
+			return "seatbelt unavailable"
+		}
+		return string(SandboxSeatbelt)
+	case SandboxBubblewrap:
+		if sandboxGOOS != "linux" {
+			return "bubblewrap unavailable on " + sandboxGOOS
+		}
+		if _, err := sandboxLookPath("bwrap"); err != nil {
+			return "bubblewrap unavailable"
+		}
+		return string(SandboxBubblewrap)
+	case SandboxAuto:
+		if sandboxGOOS == "darwin" {
+			if _, err := sandboxLookPath("sandbox-exec"); err == nil {
+				return "auto: seatbelt"
+			}
+		}
+		if sandboxGOOS == "linux" {
+			if _, err := sandboxLookPath("bwrap"); err == nil {
+				return "auto: bubblewrap"
+			}
+		}
+		return "auto: off (no backend)"
+	default:
+		return "unsupported: " + string(mode)
 	}
 }
 
@@ -81,6 +126,13 @@ func planSandboxedBash(cwd, command string, mode SandboxMode) (sandboxPlan, erro
 }
 
 func planSeatbeltSandbox(cwd, command string) (sandboxPlan, error) {
+	if sandboxGOOS != "darwin" {
+		return sandboxPlan{}, fmt.Errorf("seatbelt sandbox unsupported on %s", sandboxGOOS)
+	}
+	seatbelt, err := sandboxLookPath("sandbox-exec")
+	if err != nil {
+		return sandboxPlan{}, fmt.Errorf("seatbelt sandbox unavailable: %w", err)
+	}
 	profile, err := os.CreateTemp("", "ion-seatbelt-*.sb")
 	if err != nil {
 		return sandboxPlan{}, fmt.Errorf("create seatbelt profile: %w", err)
@@ -96,7 +148,7 @@ func planSeatbeltSandbox(cwd, command string) (sandboxPlan, error) {
 		return sandboxPlan{}, fmt.Errorf("close seatbelt profile: %w", err)
 	}
 	return sandboxPlan{
-		name: "sandbox-exec",
+		name: seatbelt,
 		args: []string{"-f", profile.Name(), "/bin/bash", "-c", command},
 		dir:  cwd,
 		cleanup: func() error {
@@ -130,6 +182,9 @@ func seatbeltProfile(cwd string) string {
 }
 
 func planBubblewrapSandbox(cwd, command string) (sandboxPlan, error) {
+	if sandboxGOOS != "linux" {
+		return sandboxPlan{}, fmt.Errorf("bubblewrap sandbox unsupported on %s", sandboxGOOS)
+	}
 	bwrap, err := sandboxLookPath("bwrap")
 	if err != nil {
 		return sandboxPlan{}, fmt.Errorf("bubblewrap unavailable: %w", err)
@@ -142,10 +197,11 @@ func planBubblewrapSandbox(cwd, command string) (sandboxPlan, error) {
 		"--ro-bind", "/usr", "/usr",
 		"--ro-bind", "/etc", "/etc",
 		"--bind", "/tmp", "/tmp",
-		"--bind", "/private/tmp", "/private/tmp",
 		"--dev", "/dev",
 		"--proc", "/proc",
-		"/bin/bash", "-c", command,
+	}
+	if sandboxPathExists("/private/tmp") {
+		args = append(args, "--bind", "/private/tmp", "/private/tmp")
 	}
 	if sandboxGOOS == "darwin" {
 		args = append(args,
@@ -153,6 +209,7 @@ func planBubblewrapSandbox(cwd, command string) (sandboxPlan, error) {
 			"--ro-bind", "/Library", "/Library",
 		)
 	}
+	args = append(args, "/bin/bash", "-c", command)
 	return sandboxPlan{
 		name: bwrap,
 		args: args,

@@ -38,6 +38,7 @@ type ToolSurface struct {
 	LazyThreshold int
 	LazyEnabled   bool
 	Names         []string
+	Sandbox       string
 }
 
 type ToolSummarizer interface {

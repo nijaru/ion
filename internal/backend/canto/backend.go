@@ -125,6 +125,7 @@ func (b *Backend) ToolSurface() backend.ToolSurface {
 		LazyThreshold: threshold,
 		LazyEnabled:   len(names) > threshold,
 		Names:         names,
+		Sandbox:       tools.SandboxSummary(),
 	}
 }
 
