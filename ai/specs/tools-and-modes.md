@@ -126,7 +126,17 @@ One field. User-global only — project configs cannot weaken permissions
 
 ## CLI Flags
 
+- `--mode read|edit|yolo` — start in the selected permission mode
 - `--yolo` — start in YOLO mode (alias for `--mode yolo`)
+
+## Escalation
+
+Ion loads `ESCALATE.md` from the workspace root when present, using Canto's
+root-scoped parser. The current host behavior is deliberately narrow:
+approval prompts surface declared email/Slack channels and approval timeout
+metadata so a blocked local run has an explicit handoff path. Automated
+Slack/email delivery is a separate notifier layer and should not be added
+until credentials, delivery semantics, and audit logging are designed.
 
 ## Research
 

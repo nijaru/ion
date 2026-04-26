@@ -79,6 +79,10 @@ func (m Model) renderPlaneB() string {
 		}
 		b.WriteString(m.st.warn.PaddingLeft(2).Render("Approve " + desc + "? (y/n/a)"))
 		b.WriteString("\n")
+		if summary := escalationSummary(m.Model.Escalation); summary != "" {
+			b.WriteString(m.st.dim.PaddingLeft(2).Render("Escalate: " + summary))
+			b.WriteString("\n")
+		}
 	}
 
 	return b.String()
