@@ -2,12 +2,21 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/nijaru/ion/internal/session"
 )
+
+type classifierFunc func(context.Context, PolicyClassification) (PolicyDecision, error)
+
+func (f classifierFunc) ClassifyPolicy(ctx context.Context, req PolicyClassification) (PolicyDecision, error) {
+	return f(ctx, req)
+}
 
 func TestPolicyEngine(t *testing.T) {
 	pe := NewPolicyEngine()
@@ -203,6 +212,100 @@ func TestPolicyConfigCanDenyCategories(t *testing.T) {
 		if policy != PolicyDeny {
 			t.Fatalf("%s EDIT policy = %v (%q), want deny", toolName, policy, reason)
 		}
+	}
+}
+
+func TestPolicyClassifierCanRefineEditAskCases(t *testing.T) {
+	pe := NewPolicyEngine()
+	pe.SetMode(session.ModeEdit)
+	var audit PolicyAuditEvent
+	pe.SetAuditSink(func(event PolicyAuditEvent) {
+		audit = event
+	})
+	pe.SetClassifier(classifierFunc(func(ctx context.Context, req PolicyClassification) (PolicyDecision, error) {
+		if req.ToolName != "bash" || req.Category != CategoryExecute {
+			t.Fatalf("classification = %+v, want bash execute", req)
+		}
+		return PolicyDecision{Action: PolicyDeny, Reason: "destructive command"}, nil
+	}), time.Second)
+
+	policy, reason := pe.Authorize(context.Background(), "bash", `{"command":"rm -rf build"}`)
+	if policy != PolicyDeny {
+		t.Fatalf("policy = %v (%q), want deny", policy, reason)
+	}
+	if !strings.Contains(reason, "destructive command") {
+		t.Fatalf("reason = %q, want classifier reason", reason)
+	}
+	if audit.ToolName != "bash" || audit.Category != CategoryExecute || audit.Action != PolicyDeny || audit.Source != "classifier" {
+		t.Fatalf("audit = %+v, want classifier deny event", audit)
+	}
+}
+
+func TestPolicyClassifierFailuresFailClosedToAsk(t *testing.T) {
+	pe := NewPolicyEngine()
+	pe.SetMode(session.ModeEdit)
+	pe.SetClassifier(classifierFunc(func(ctx context.Context, req PolicyClassification) (PolicyDecision, error) {
+		return PolicyDecision{}, errors.New("model unavailable")
+	}), time.Second)
+
+	policy, reason := pe.Authorize(context.Background(), "write", `{"file_path":"file.txt"}`)
+	if policy != PolicyAsk {
+		t.Fatalf("policy = %v (%q), want ask", policy, reason)
+	}
+	if !strings.Contains(reason, "Classifier unavailable") {
+		t.Fatalf("reason = %q, want classifier failure", reason)
+	}
+}
+
+func TestPolicyClassifierTimeoutFailsClosedToAsk(t *testing.T) {
+	pe := NewPolicyEngine()
+	pe.SetMode(session.ModeEdit)
+	pe.SetClassifier(classifierFunc(func(ctx context.Context, req PolicyClassification) (PolicyDecision, error) {
+		<-ctx.Done()
+		return PolicyDecision{}, ctx.Err()
+	}), time.Nanosecond)
+
+	policy, reason := pe.Authorize(t.Context(), "write", `{"file_path":"file.txt"}`)
+	if policy != PolicyAsk {
+		t.Fatalf("policy = %v (%q), want ask", policy, reason)
+	}
+	if !strings.Contains(reason, "Classifier unavailable") {
+		t.Fatalf("reason = %q, want classifier timeout failure", reason)
+	}
+}
+
+func TestPolicyClassifierInvalidDecisionFailsClosedToAsk(t *testing.T) {
+	pe := NewPolicyEngine()
+	pe.SetMode(session.ModeEdit)
+	pe.SetClassifier(classifierFunc(func(ctx context.Context, req PolicyClassification) (PolicyDecision, error) {
+		return PolicyDecision{Action: "maybe", Reason: "invalid parse"}, nil
+	}), time.Second)
+
+	policy, reason := pe.Authorize(t.Context(), "write", `{"file_path":"file.txt"}`)
+	if policy != PolicyAsk {
+		t.Fatalf("policy = %v (%q), want ask", policy, reason)
+	}
+	if !strings.Contains(reason, "invalid action") {
+		t.Fatalf("reason = %q, want invalid action failure", reason)
+	}
+}
+
+func TestPolicyClassifierCannotWeakenHardBoundaries(t *testing.T) {
+	pe := NewPolicyEngine()
+	pe.SetClassifier(classifierFunc(func(ctx context.Context, req PolicyClassification) (PolicyDecision, error) {
+		return PolicyDecision{Action: PolicyAllow, Reason: "looks safe"}, nil
+	}), time.Second)
+
+	pe.SetMode(session.ModeRead)
+	policy, reason := pe.Authorize(context.Background(), "write", `{"file_path":"file.txt"}`)
+	if policy != PolicyDeny {
+		t.Fatalf("READ write policy = %v (%q), want deny", policy, reason)
+	}
+
+	pe.SetMode(session.ModeEdit)
+	policy, reason = pe.Authorize(context.Background(), "read", `{"file_path":"file.txt"}`)
+	if policy != PolicyAllow {
+		t.Fatalf("read policy = %v (%q), want allow", policy, reason)
 	}
 }
 
