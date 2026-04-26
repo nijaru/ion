@@ -23,8 +23,9 @@ Design rule:
 - v0.0.0 has no compatibility debt; current bindings and config shapes are allowed to change directly if the end-state is better. New SOTA plans supersede older designs where there is conflict.
 
 ## Next Steps
-1. **SOTA Epic Selection:** Begin implementation of a Priority 1 SOTA task (see Active Tasks below).
+1. **SOTA Epic Selection:** Start `tk-90mp` (Streaming: Cost Limits & Model Cascades), with budget/cascade events shaped so future eval/optimizer traces can consume them.
 2. Treat older `Canto: contribute ...` tasks as re-triaged: no default grep/glob or preset coding-tool bundles; only concrete reusable extension packages should move upstream.
+3. Use `ai/review/canto-research-delta-2026-04-26.md` as the current delta from `../canto/ai/`; DSPy/GEPA imply explicit eval traces later, not runtime prompt mutation now.
 
 *(Note: Older P3 TUI refinement tasks like configurable verbosity, skill layering, and status line context have been subsumed by their respective SOTA epics).*
 
@@ -66,6 +67,7 @@ See `tk ls` for the full list. Current P1 open SOTA epics:
 ## Topic Files
 - `ai/SOTA-REQUIREMENTS.md` — The 14 core SOTA product responsibilities.
 - `ai/research/canto-dspy-app-patterns-2026-04.md` — Future Ion patterns from Canto authoring work; DSPy is one reference.
+- `ai/review/canto-research-delta-2026-04-26.md` — Recent Canto ai/ findings that affect Ion sequencing.
 - `ai/specs/tools-and-modes.md` — Permission modes spec
 - `ai/specs/swarm-mode-and-inline-subagents.md` — Inline subagent rendering, future swarm mode
 - `ai/research/pi-architecture.md` — Pi-mono architecture analysis
