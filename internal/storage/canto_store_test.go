@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -221,6 +222,95 @@ func TestCantoStoreAppendPersistsToolResultsIntoEffectiveHistory(t *testing.T) {
 	}
 	if entries[0].Content != "PASSED: 15/15 passed\nOK" {
 		t.Fatalf("tool entry content = %q", entries[0].Content)
+	}
+}
+
+func TestCantoStoreEntriesPreserveFullAgentContent(t *testing.T) {
+	root := t.TempDir()
+	storeAny, err := NewCantoStore(root)
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+
+	ctx := context.Background()
+	sess, err := storeAny.OpenSession(ctx, "/tmp/ion-storage-test", "model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	content := strings.Repeat("full assistant content ", 12)
+	if err := sess.Append(ctx, Agent{
+		Type: "agent",
+		Content: []Block{{
+			Type: "text",
+			Text: &content,
+		}},
+		TS: time.Now().Unix(),
+	}); err != nil {
+		t.Fatalf("append agent: %v", err)
+	}
+
+	entries, err := sess.Entries(ctx)
+	if err != nil {
+		t.Fatalf("entries: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("entries length = %d, want 1", len(entries))
+	}
+	if entries[0].Role != ionsession.Agent {
+		t.Fatalf("agent entry role = %q, want %q", entries[0].Role, ionsession.Agent)
+	}
+	if entries[0].Content != content {
+		t.Fatalf("agent content = %q, want full content %q", entries[0].Content, content)
+	}
+}
+
+func TestCantoStoreEntriesPreserveToolResultErrors(t *testing.T) {
+	root := t.TempDir()
+	storeAny, err := NewCantoStore(root)
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+
+	ctx := context.Background()
+	sess, err := storeAny.OpenSession(ctx, "/tmp/ion-storage-test", "model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	if err := sess.Append(ctx, ToolUse{
+		Type: "tool_use",
+		ID:   "tool-err",
+		Name: "bash",
+		Input: map[string]string{
+			"args": "exit 1",
+		},
+		TS: time.Now().Unix(),
+	}); err != nil {
+		t.Fatalf("append tool use: %v", err)
+	}
+	if err := sess.Append(ctx, ToolResult{
+		Type:      "tool_result",
+		ToolUseID: "tool-err",
+		Content:   "exit status 1",
+		IsError:   true,
+		TS:        time.Now().Unix(),
+	}); err != nil {
+		t.Fatalf("append tool result: %v", err)
+	}
+
+	entries, err := sess.Entries(ctx)
+	if err != nil {
+		t.Fatalf("entries: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("entries length = %d, want 1", len(entries))
+	}
+	if entries[0].Role != ionsession.Tool {
+		t.Fatalf("tool entry role = %q, want %q", entries[0].Role, ionsession.Tool)
+	}
+	if !entries[0].IsError {
+		t.Fatal("tool entry IsError = false, want true")
 	}
 }
 
