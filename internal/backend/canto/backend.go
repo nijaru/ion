@@ -28,6 +28,7 @@ import (
 	"github.com/nijaru/ion/internal/providers"
 	ionsession "github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
+	"github.com/nijaru/ion/internal/subagents"
 )
 
 const proactiveCompactThreshold = 0.60
@@ -244,6 +245,14 @@ func (b *Backend) Open(ctx context.Context) error {
 		b.store, b.compactLLM,
 		b.Model, b.ContextLimit, b.ID,
 	))
+	personas, err := loadSubagentPersonas(b.cfg)
+	if err != nil {
+		return err
+	}
+	if err := validateSubagentPersonaTools(personas, registry); err != nil {
+		return err
+	}
+	registry.Register(NewSubagentTool(b, personas))
 
 	// Add context processors
 	requestProcessors := []prompt.RequestProcessor{
@@ -666,19 +675,19 @@ func (b *Backend) translateEvents(ctx context.Context, evCh <-chan session.Event
 			var data session.ChildRequestedData
 			if err := ev.UnmarshalData(&data); err == nil {
 				b.events <- ionsession.ChildRequested{
-					AgentName: data.AgentID,
+					AgentName: data.ChildID,
 					Query:     data.Task,
 				}
-				b.events <- ionsession.StatusChanged{Status: fmt.Sprintf("Requesting child agent %s...", data.AgentID)}
+				b.events <- ionsession.StatusChanged{Status: fmt.Sprintf("Requesting child agent %s...", data.ChildID)}
 			}
 		case session.ChildStarted:
 			var data session.ChildStartedData
 			if err := ev.UnmarshalData(&data); err == nil {
 				b.events <- ionsession.ChildStarted{
-					AgentName: data.AgentID,
+					AgentName: data.ChildID,
 					SessionID: data.ChildSessionID,
 				}
-				b.events <- ionsession.StatusChanged{Status: fmt.Sprintf("Child agent %s started (%s)", data.AgentID, data.ChildSessionID)}
+				b.events <- ionsession.StatusChanged{Status: fmt.Sprintf("Child agent %s started (%s)", data.ChildID, data.ChildSessionID)}
 			}
 
 		case session.ChildProgressed:
@@ -728,6 +737,36 @@ func (b *Backend) translateEvents(ctx context.Context, evCh <-chan session.Event
 			}
 		}
 	}
+}
+
+func loadSubagentPersonas(cfg *config.Config) ([]subagents.Persona, error) {
+	path := ""
+	if cfg != nil {
+		path = strings.TrimSpace(cfg.SubagentsPath)
+	}
+	if path == "" {
+		defaultPath, err := config.DefaultSubagentsDir()
+		if err != nil {
+			return nil, err
+		}
+		path = defaultPath
+	}
+	custom, err := subagents.LoadDir(path)
+	if err != nil {
+		return nil, fmt.Errorf("load subagent personas: %w", err)
+	}
+	return subagents.Merge(subagents.Builtins(), custom), nil
+}
+
+func validateSubagentPersonaTools(personas []subagents.Persona, registry *tool.Registry) error {
+	for _, persona := range personas {
+		for _, toolName := range persona.Tools {
+			if _, ok := registry.Get(toolName); !ok {
+				return fmt.Errorf("subagent persona %s references unknown tool %q", persona.Name, toolName)
+			}
+		}
+	}
+	return nil
 }
 
 func (b *Backend) CancelTurn(ctx context.Context) error {

@@ -11,10 +11,12 @@ import (
 
 	"github.com/nijaru/canto/llm"
 	csession "github.com/nijaru/canto/session"
+	"github.com/nijaru/canto/tool"
 	ctesting "github.com/nijaru/canto/x/testing"
 	"github.com/nijaru/ion/internal/config"
 	ionsession "github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
+	"github.com/nijaru/ion/internal/subagents"
 )
 
 type compactProvider struct {
@@ -71,6 +73,18 @@ func (p *retryProvider) IsContextOverflow(err error) bool { return false }
 
 type overflowRecoveryProvider struct {
 	*ctesting.FauxProvider
+}
+
+type testTool struct {
+	name string
+}
+
+func (t *testTool) Spec() llm.Spec {
+	return llm.Spec{Name: t.name}
+}
+
+func (t *testTool) Execute(ctx context.Context, args string) (string, error) {
+	return "", nil
 }
 
 func (p *overflowRecoveryProvider) CountTokens(ctx context.Context, model string, messages []llm.Message) (int, error) {
@@ -238,6 +252,93 @@ func TestTranslateEventsPreservesToolUseID(t *testing.T) {
 	}
 	if result.ToolUseID != "tool-call-1" {
 		t.Fatalf("result id = %q, want tool-call-1", result.ToolUseID)
+	}
+}
+
+func TestTranslateEventsUsesChildIDForSubagentRows(t *testing.T) {
+	b := New()
+	events := make(chan csession.Event, 2)
+	events <- csession.NewChildRequestedEvent("session-id", csession.ChildRequestedData{
+		ChildID:        "explorer-123",
+		ChildSessionID: "child-session",
+		Task:           "inspect policy flow",
+		AgentID:        "explorer",
+		Mode:           csession.ChildModeHandoff,
+	})
+	events <- csession.NewChildStartedEvent("session-id", csession.ChildStartedData{
+		ChildID:        "explorer-123",
+		ChildSessionID: "child-session",
+		AgentID:        "explorer",
+	})
+	close(events)
+
+	b.translateEvents(t.Context(), events)
+
+	requested, ok := receiveEvent(t, b.Events()).(ionsession.ChildRequested)
+	if !ok {
+		t.Fatal("first event is not ChildRequested")
+	}
+	if requested.AgentName != "explorer-123" {
+		t.Fatalf("requested agent name = %q, want child id", requested.AgentName)
+	}
+	_ = receiveEvent(t, b.Events()) // request status
+
+	started, ok := receiveEvent(t, b.Events()).(ionsession.ChildStarted)
+	if !ok {
+		t.Fatal("third event is not ChildStarted")
+	}
+	if started.AgentName != "explorer-123" {
+		t.Fatalf("started agent name = %q, want child id", started.AgentName)
+	}
+}
+
+func TestLoadSubagentPersonasMergesCustomAgents(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "explorer.md"), []byte(`---
+name: explorer
+description: Custom explorer.
+model: primary
+tools: [read]
+---
+Custom prompt.
+`), 0o600); err != nil {
+		t.Fatalf("write persona: %v", err)
+	}
+
+	personas, err := loadSubagentPersonas(&config.Config{SubagentsPath: dir})
+	if err != nil {
+		t.Fatalf("loadSubagentPersonas returned error: %v", err)
+	}
+	if len(personas) != 3 {
+		t.Fatalf("persona count = %d, want 3", len(personas))
+	}
+	found := false
+	for _, persona := range personas {
+		if persona.Name == "explorer" {
+			found = true
+			if persona.Description != "Custom explorer." {
+				t.Fatalf("explorer description = %q, want custom", persona.Description)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("explorer persona not found")
+	}
+}
+
+func TestValidateSubagentPersonaToolsFailsClosed(t *testing.T) {
+	registry := tool.NewRegistry()
+	registry.Register(&testTool{name: "read"})
+
+	err := validateSubagentPersonaTools([]subagents.Persona{{
+		Name:        "bad",
+		Description: "bad",
+		ModelSlot:   subagents.ModelSlotFast,
+		Tools:       []string{"read", "missing"},
+		Prompt:      "bad prompt",
+	}}, registry)
+	if err == nil {
+		t.Fatal("validateSubagentPersonaTools returned nil error")
 	}
 }
 
