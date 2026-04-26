@@ -10,12 +10,12 @@ import (
 	"time"
 
 	"github.com/nijaru/canto/agent"
-	ccontext "github.com/nijaru/canto/context"
 	"github.com/nijaru/canto/governor"
 	"github.com/nijaru/canto/hook"
 	"github.com/nijaru/canto/llm"
 	cproviders "github.com/nijaru/canto/llm/providers"
 	"github.com/nijaru/canto/memory"
+	"github.com/nijaru/canto/prompt"
 	"github.com/nijaru/canto/runtime"
 	"github.com/nijaru/canto/session"
 	"github.com/nijaru/canto/tool"
@@ -242,8 +242,8 @@ func (b *Backend) Open(ctx context.Context) error {
 	))
 
 	// Add context processors
-	requestProcessors := []ccontext.RequestProcessor{
-		ccontext.MemoryPrompt(b.memory, ccontext.MemoryPromptOptions{
+	requestProcessors := []prompt.RequestProcessor{
+		prompt.MemoryPrompt(b.memory, prompt.MemoryPromptOptions{
 			Namespaces: []memory.Namespace{workspaceNamespace},
 			Roles:      []memory.Role{memory.RoleCore, memory.RoleSemantic, memory.RoleEpisodic},
 			Limit:      5,
@@ -263,8 +263,8 @@ func (b *Backend) Open(ctx context.Context) error {
 	return nil
 }
 
-func policyHook(b *Backend) hook.Hook {
-	return hook.NewFunc(
+func policyHook(b *Backend) hook.Handler {
+	return hook.FromFunc(
 		"ion-policy",
 		[]hook.Event{hook.EventPreToolUse},
 		func(ctx context.Context, payload *hook.Payload) *hook.Result {
@@ -312,8 +312,8 @@ func policyHook(b *Backend) hook.Hook {
 	)
 }
 
-func reasoningEffortProcessor(cfg *config.Config) ccontext.RequestProcessor {
-	return ccontext.RequestProcessorFunc(
+func reasoningEffortProcessor(cfg *config.Config) prompt.RequestProcessor {
+	return prompt.RequestProcessorFunc(
 		func(ctx context.Context, p llm.Provider, model string, sess *session.Session, req *llm.Request) error {
 			if cfg == nil {
 				return nil
@@ -329,8 +329,8 @@ func reasoningEffortProcessor(cfg *config.Config) ccontext.RequestProcessor {
 	)
 }
 
-func reflexionProcessor() ccontext.RequestProcessor {
-	return ccontext.RequestProcessorFunc(
+func reflexionProcessor() prompt.RequestProcessor {
+	return prompt.RequestProcessorFunc(
 		func(ctx context.Context, p llm.Provider, model string, sess *session.Session, req *llm.Request) error {
 			if len(req.Messages) == 0 {
 				return nil

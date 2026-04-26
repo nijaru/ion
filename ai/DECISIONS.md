@@ -4,6 +4,22 @@ Append-only history of architectural and design decisions for `ion`.
 
 ---
 
+## 2026-04-26 — Canto boundary: primitives in Canto, product tools in Ion
+
+**Context:** Canto completed a pre-Ion stabilization pass and removed the old `canto/context` package while renaming governance APIs. It also settled on exposing primitives rather than preset coding-tool bundles.
+
+**Decision:** Update Ion to Canto `f47e7de` and treat Canto as the source of truth for prompt, hook, approval, safety, session, memory, provider, and governor primitives. Keep Ion-owned product tools in `internal/backend/canto/tools`, including shell, file, grep, glob, verify, compact, and the TUI approval request bridge.
+
+**Rationale:**
+
+1. **Clear ownership:** Canto should not own Ion's UX-specific tool mix or approval prompts.
+2. **Current API alignment:** Ion now uses `prompt.RequestProcessor` / `prompt.MemoryPrompt` and `hook.Handler` / `hook.FromFunc`.
+3. **No preset drift:** Grep/glob are valid Ion tools, but no longer evidence that Canto should ship default grep/glob primitives.
+
+**Tradeoffs:** Some older `Canto: contribute ...` tasks need re-triage. File/verify/approval helpers may still become reusable extension packages, but only after Ion integration exposes concrete shared needs.
+
+---
+
 ## 2026-04-02 — Runtime: Retry transient provider failures silently before surfacing the final error
 
 **Context:** Native LLM providers can fail transiently with rate limits or short-lived transport issues. The inline TUI should stay clean and avoid duplicating the same failure in both the transcript and the progress surface.

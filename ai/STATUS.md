@@ -4,9 +4,10 @@ Fast, lightweight terminal coding agent.
 
 ## Current Focus
 
-We are integrating the SOTA findings (14 core product epics) with our stable minimalist Pi/Claude-Code architecture.
+Ion has been reconciled with the current stabilized Canto surface. Next work can return to Priority 1 SOTA epic selection.
 
 Near-term tracks (SOTA implementation):
+- `tk-fblb` — Migrate Ion to current Canto surface (Completed)
 - Transitioning from architecture design into implementing the Priority 1 SOTA epics tracked in `tk ls`.
 - `tk-arhu` / `tk-5vrj` — Verified subagent multiplexing and durable breadcrumbs (Completed)
 - TUI refinements — Fixed history navigation boundary behavior (Completed)
@@ -22,13 +23,13 @@ Design rule:
 - v0.0.0 has no compatibility debt; current bindings and config shapes are allowed to change directly if the end-state is better. New SOTA plans supersede older designs where there is conflict.
 
 ## Next Steps
-1. **SOTA Epic Selection:** Begin implementation of a Priority 1 SOTA task (e.g., `tk-hgp4` UX Streaming, `tk-j3ap` Permission Modes UX, or `tk-8174` Session Branching).
-2. **`tk-pwsl`** — Swarm mode: alternate-screen operator view (Downstream of SOTA loop stability)
-3. **`tk-gopd`** — TUI: external editor handoff (DEFERRED)
+1. **SOTA Epic Selection:** Begin implementation of a Priority 1 SOTA task (see Active Tasks below).
+2. Treat older `Canto: contribute ...` tasks as re-triaged: no default grep/glob or preset coding-tool bundles; only concrete reusable extension packages should move upstream.
 
 *(Note: Older P3 TUI refinement tasks like configurable verbosity, skill layering, and status line context have been subsumed by their respective SOTA epics).*
 
 ## Completed (Recent)
+- [x] **Canto dependency refresh foundation (`tk-fblb`)** — Updated Ion to Canto `f47e7de`; migrated request processors from `canto/context` to `canto/prompt` and hooks from `Hook/NewFunc` to `Handler/FromFunc`; `go test ./...` passes.
 - [x] **Subagents: runtime semantics and lifecycle (`tk-5vrj`)** — Implemented multiplexed subagent tracking, durable breadcrumbs, and multiplexed event routing in broker.
 - [x] **Subagents: inline Plane B presentation (`tk-arhu`)** — Compact worker rows, collapse rules, and parent waiting states implemented in viewport.
 - [x] **TUI: boundary-respecting history navigation** — `Up`/`Down`/`Ctrl+P`/`Ctrl+N` now only trigger history navigation at the top/bottom of the multiline composer.
@@ -43,24 +44,28 @@ Design rule:
 - [x] **Sandbox support (`tk-8s0h`)** — Opt-in bash sandbox planning added with `off`/`auto`/`seatbelt`/`bubblewrap` modes.
 - [x] **Retry behavior (`tk-kz3k`)** — Native providers retry transient generation and streaming errors automatically before surfacing a final failure.
 - [x] **Canto Context Governor (`tk-4ft8`)** — Runtime now auto-compacts on overflow and proactively compacts before a turn when session usage is near the context limit.
+- [x] **Agent Loop: UX Streaming & Reflection Prompts (`tk-hgp4`)** — Background compaction, configurable tool/thinking verbosity, reflexion processor for failed tool calls.
+- [x] **Review fixes (`tk-uzoz`, `tk-c0ci`, `tk-l9ag`)** — Registered reflexionProcessor, fixed compaction-failure hang, unified Plane A/B verbosity, added normalizeVerbosity validation.
 
 ## Active Tasks
-The task tracker (`tk ls`) has been updated to reflect the 14 SOTA epics as the primary active tasks.
-- `tk-hgp4` [p1 open] Agent Loop: UX Streaming & Reflection Prompts
-- `tk-90mp` [p1 open] Streaming: Cost Limits & Model Cascades
-- `tk-j3ap` [p1 open] HITL: Permission Modes UX & Escalation
-- `tk-zbxk` [p1 open] Security: Policy Config & LLM-as-Judge
-- `tk-8174` [p2 open] Session: Cross-Host Sync & TUI Branching
-- `tk-g78q` [p2 open] Skills: Self-Extension Nudges & Marketplace
-- `tk-pwsl` [p4 open] Swarm mode: alternate-screen operator view
-
-*(Tasks `tk-gmhw`, `tk-lmhg`, `tk-i207`, `tk-0dwv`, and `tk-xdx5` have been merged into the SOTA epics above).*
+See `tk ls` for the full list. Current P1 open SOTA epics:
+- `tk-90mp` — Streaming: Cost Limits & Model Cascades
+- `tk-j3ap` — HITL: Permission Modes UX & Escalation
+- `tk-wzt6` — Observability: OTel Exporter & Dashboards
+- `tk-tyww` — Workflow: Workflow Definitions & Recovery
+- `tk-txju` — Eval: Golden Datasets & Regression Gates
+- `tk-zbxk` — Security: Policy Config & LLM-as-Judge
+- `tk-r5jr` — Subagent: Agent Personas & Model Routing
+- `tk-z2cb` — Workspace: Trust UX & Visual Rollback
+- `tk-yf7v` — Tool Execution: Tool Loading UX & Approval Tiers
+- `tk-gxfu` — Memory: Karpathy-Style Knowledge Base & Search UX
 
 ## Blockers
 - None.
 
 ## Topic Files
 - `ai/SOTA-REQUIREMENTS.md` — The 14 core SOTA product responsibilities.
+- `ai/research/canto-dspy-app-patterns-2026-04.md` — Future Ion patterns from Canto authoring work; DSPy is one reference.
 - `ai/specs/tools-and-modes.md` — Permission modes spec
 - `ai/specs/swarm-mode-and-inline-subagents.md` — Inline subagent rendering, future swarm mode
 - `ai/research/pi-architecture.md` — Pi-mono architecture analysis

@@ -1,6 +1,6 @@
 # ion Design
 
-Updated: 2026-04-06
+Updated: 2026-04-26
 
 ## Product boundary
 
@@ -20,7 +20,7 @@ Native runtime drives design. ACP follows where possible.
 | Layer | Responsibility | Component |
 | --- | --- | --- |
 | **4** | **Application** | `ion` (TUI, Workspace logic, UX Policy, Model Pickers) |
-| **3** | **Framework** | `canto` (Agent loop, `safety` engine, `x/tools` library, Context Governor, Session Log) |
+| **3** | **Framework** | `canto` (Agent loop, prompt pipeline, approval/safety primitives, Context Governor, Session Log) |
 | **2** | **Logic** | `llm` (Provider abstraction, Token counting, Cost calculation) |
 | **1** | **Transport** | `http` (API clients, JSON-RPC, SSE) |
 
@@ -28,7 +28,7 @@ Native runtime drives design. ACP follows where possible.
 
 `ion` aims for SOTA (State of the Art) capabilities with a minimalist, terminal-first UX. This is driven by 14 core SOTA product requirements mapped to the layers above:
 
-- **Safety by Default & Guardrails (SOTA 9):** Powered by `canto/safety`, with 3-mode operation (READ/EDIT/YOLO) and granular YAML Policy Engine configurations. Includes LLM-as-a-Judge for auto-mode safety checks.
+- **Safety by Default & Guardrails (SOTA 9):** Ion owns the user-facing READ/EDIT/YOLO policy engine and TUI approval bridge; Canto provides reusable approval/safety primitives. Includes LLM-as-a-Judge for future auto-mode safety checks.
 - **Infinite Context & Compaction (SOTA 6):** Managed by a background "Context Governor" in `canto` (Layer 3). Runtime turns auto-recover from context overflow. Requires non-blocking Compaction UX indicators (spinning icons) and summarization prompts targeting fast models (Haiku/Flash).
 - **Subagent Spawning & Orchestration (SOTA 7):** First-class support for child agents via `canto` primitives. Requires defined Agent Personas ("Scout", "Guard", "Build") and Model Routing policies (Explore = fast, Build = premium).
 - **Memory & Knowledge Base (SOTA 1):** Karpathy-style knowledge base (Wiki compilation) and QMD-style search UX, with background consolidation using sleep-time compute.
@@ -61,6 +61,14 @@ Current limitation:
 - host/runtime contracts still depend on ion-owned `internal/` packages
 
 Session metadata now carries a cheap `Title` plus a one-line `Summary`; the resume picker uses `Title -> Summary -> LastPreview` and treats `LastPreview` as fallback, not the primary label.
+
+Current Canto integration boundary:
+
+- Ion depends on Canto `f47e7de` or newer current surface.
+- Request processors use `canto/prompt` (`prompt.RequestProcessor`, `prompt.MemoryPrompt`).
+- Hooks use `hook.Handler` and `hook.FromFunc`.
+- Ion deliberately owns product tools in `internal/backend/canto/tools`: shell, file read/write/edit/list, grep, glob, verify, compact, and the host approval request bridge.
+- Canto does not provide default grep/glob tools or preset coding-tool bundles; those should remain Ion product choices unless a concrete reusable extension package is designed later.
 
 Implication:
 
