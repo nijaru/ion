@@ -8,6 +8,7 @@ Ion has been reconciled with the current stabilized Canto surface. Current work 
 
 Near-term tracks:
 - `tk-96vy` — Core loop: reliability and resilience audit (Active)
+- `tk-ulfg` — Research: current Pi core loop and feature review (Active)
 - `tk-90mp` — Streaming: Cost Limits & Model Cascades (Paused after first budget/trace slices)
 - `tk-fblb` — Migrate Ion to current Canto surface (Completed)
 - `tk-arhu` / `tk-5vrj` — Verified subagent multiplexing and durable breadcrumbs (Completed)
@@ -29,8 +30,9 @@ Design rule:
 ## Next Steps
 1. Audit/fix core loop ordering, cancellation, immediate error, queued-turn, tool lifecycle, persistence, and replay semantics under `tk-96vy`.
 2. Add focused regression tests before continuing any SOTA epic work.
-3. Resume `tk-90mp` only after the core loop audit is green; budget enforcement and routing trace slices are already committed.
-4. Treat older `Canto: contribute ...` tasks as re-triaged: no default grep/glob or preset coding-tool bundles; only concrete reusable extension packages should move upstream.
+3. Use the current Pi review as a reference for loop contracts and future `/tree`, but keep the first concrete fix on Ion event ordering.
+4. Resume `tk-90mp` only after the core loop audit is green; budget enforcement and routing trace slices are already committed.
+5. Treat older `Canto: contribute ...` tasks as re-triaged: no default grep/glob or preset coding-tool bundles; only concrete reusable extension packages should move upstream.
 
 *(Note: Older P3 TUI refinement tasks like configurable verbosity, skill layering, and status line context have been subsumed by their respective SOTA epics).*
 
@@ -75,6 +77,7 @@ P1 SOTA epics remain important but are downstream of `tk-96vy`:
 ## Topic Files
 - `ai/SOTA-REQUIREMENTS.md` — The 14 core SOTA product responsibilities.
 - `ai/research/canto-dspy-app-patterns-2026-04.md` — Future Ion patterns from Canto authoring work; DSPy is one reference.
+- `ai/research/pi-current-core-loop-review-2026-04.md` — Current Pi core-loop, `/tree`, compaction, and UX review.
 - `ai/review/canto-research-delta-2026-04-26.md` — Recent Canto ai/ findings that affect Ion sequencing.
 - `ai/specs/tools-and-modes.md` — Permission modes spec
 - `ai/specs/swarm-mode-and-inline-subagents.md` — Inline subagent rendering, future swarm mode
