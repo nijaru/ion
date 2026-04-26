@@ -19,6 +19,7 @@ import (
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
+	"github.com/nijaru/ion/internal/telemetry"
 )
 
 // version is set at build time via -ldflags "-X main.version=vX.Y.Z".
@@ -49,6 +50,16 @@ func main() {
 	if *providerFlag != "" {
 		cfg.Provider = *providerFlag
 	}
+	shutdownTelemetry, err := telemetry.Setup(context.Background(), cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to initialize telemetry: %v\n", err)
+		os.Exit(1)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = shutdownTelemetry(ctx)
+	}()
 	mode, err := startupMode(cfg, *modeFlag, *yoloFlag)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
