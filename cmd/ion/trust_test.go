@@ -4,6 +4,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nijaru/ion/internal/backend"
 )
 
 func TestLoadWorkspaceTrustReportsUntrusted(t *testing.T) {
@@ -19,5 +21,24 @@ func TestLoadWorkspaceTrustReportsUntrusted(t *testing.T) {
 	}
 	if !strings.Contains(notice, "READ mode") {
 		t.Fatalf("notice = %q, want READ mode warning", notice)
+	}
+}
+
+type toolSummaryBackend struct {
+	backend.Backend
+	surface backend.ToolSurface
+}
+
+func (b toolSummaryBackend) ToolSurface() backend.ToolSurface {
+	return b.surface
+}
+
+func TestStartupToolLineReportsLazyTools(t *testing.T) {
+	line := startupToolLine(toolSummaryBackend{surface: backend.ToolSurface{
+		Count:       25,
+		LazyEnabled: true,
+	}})
+	if !strings.Contains(line, "search_tools enabled") {
+		t.Fatalf("line = %q, want search_tools notice", line)
 	}
 }

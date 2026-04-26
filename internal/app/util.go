@@ -127,6 +127,21 @@ func noModelConfiguredStatus() string {
 	return "No model configured. Use /model. Set ION_MODEL for scripts."
 }
 
+func toolSurfaceSummary(surface backend.ToolSurface) string {
+	if surface.Count == 0 {
+		return "No tools registered"
+	}
+	mode := "eager"
+	if surface.LazyEnabled {
+		mode = fmt.Sprintf("lazy via search_tools above %d", surface.LazyThreshold)
+	}
+	names := strings.Join(surface.Names, ", ")
+	if names == "" {
+		return fmt.Sprintf("Tools: %d (%s)", surface.Count, mode)
+	}
+	return fmt.Sprintf("Tools: %d (%s)\n%s", surface.Count, mode, names)
+}
+
 func compactCount(n int) string {
 	if n >= 1000 {
 		return fmt.Sprintf("%.1fk", float64(n)/1000.0)

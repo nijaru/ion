@@ -203,6 +203,17 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		m.App.TrustedWorkspace = true
 		return m, m.printEntries(session.Entry{Role: session.System, Content: "Workspace trusted"})
 
+	case "/tools":
+		if len(fields) != 1 {
+			return m, cmdError("usage: /tools")
+		}
+		summarizer, ok := m.Model.Backend.(backend.ToolSummarizer)
+		if !ok {
+			return m, cmdError("tool summary unavailable for this backend")
+		}
+		surface := summarizer.ToolSurface()
+		return m, m.printEntries(session.Entry{Role: session.System, Content: toolSurfaceSummary(surface)})
+
 	case "/clear":
 		cfg, err := config.Load()
 		if err != nil {
@@ -372,6 +383,7 @@ func helpText() string {
 		"  /yolo            toggle YOLO mode (auto-approve all)",
 		"  /mode [mode]     set mode: read, edit, yolo",
 		"  /trust [status]  trust this workspace or show trust status",
+		"  /tools           show tool count and lazy loading status",
 		"  /compact         compact the current session",
 		"  /clear           start a fresh session with the current provider/model",
 		"  /cost            show aggregate session usage",

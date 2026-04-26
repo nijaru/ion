@@ -113,6 +113,20 @@ func (b *Backend) ContextLimit() int {
 	return 0
 }
 
+func (b *Backend) ToolSurface() backend.ToolSurface {
+	if b.tools == nil {
+		return backend.ToolSurface{}
+	}
+	names := b.tools.Names()
+	threshold := prompt.DefaultLazyThreshold
+	return backend.ToolSurface{
+		Count:         len(names),
+		LazyThreshold: threshold,
+		LazyEnabled:   len(names) > threshold,
+		Names:         names,
+	}
+}
+
 func (b *Backend) Bootstrap() backend.Bootstrap {
 	status := "Ready"
 	if b.sess != nil {
