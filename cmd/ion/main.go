@@ -32,6 +32,8 @@ func main() {
 	)
 	resumeFlag := flag.String("resume", "", "Resume a specific session by ID")
 	providerFlag := flag.String("provider", "", "Provider to use")
+	modeFlag := flag.String("mode", "", "Permission mode: read, edit, or yolo")
+	yoloFlag := flag.Bool("yolo", false, "Start in YOLO mode (alias for --mode yolo)")
 	printFlag := flag.Bool("print", false, "Print response and exit (use with --prompt or stdin)")
 	promptFlag := flag.String("prompt", "", "Prompt to send in print mode")
 	timeoutFlag := flag.Duration("timeout", 5*time.Minute, "Timeout for print mode")
@@ -46,6 +48,11 @@ func main() {
 
 	if *providerFlag != "" {
 		cfg.Provider = *providerFlag
+	}
+	mode, err := startupMode(cfg, *modeFlag, *yoloFlag)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(2)
 	}
 
 	ctx := context.Background()
@@ -103,7 +110,8 @@ func main() {
 			fmt.Fprintf(os.Stderr, "print mode requires a configured provider and model\n")
 			os.Exit(1)
 		}
-		if err := runPrintModeWithTimeout(ctx, agent, prompt, *timeoutFlag); err != nil {
+		configureSessionMode(agent, mode)
+		if err := runPrintModeWithTimeout(ctx, agent, prompt, *timeoutFlag, mode == session.ModeYolo); err != nil {
 			fmt.Fprintf(os.Stderr, "print mode error: %v\n", err)
 			os.Exit(1)
 		}
@@ -129,7 +137,9 @@ func main() {
 	}
 
 	printStartup(os.Stdout, startupLines, workspaceHeader(cwd, branch), startupEntries)
-	model := app.New(b, sess, store, cwd, branch, version, switcher).WithPrintedTranscript(len(startupEntries) > 0)
+	model := app.New(b, sess, store, cwd, branch, version, switcher).
+		WithMode(mode).
+		WithPrintedTranscript(len(startupEntries) > 0)
 	p := tea.NewProgram(model)
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "ion error: %v\n", err)

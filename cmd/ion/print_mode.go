@@ -11,10 +11,7 @@ import (
 )
 
 // runPrintMode submits a single turn and prints the response to stdout.
-// It auto-approves all tool calls and exits after the turn completes.
-func runPrintMode(ctx context.Context, agent session.AgentSession, prompt string) error {
-	agent.SetAutoApprove(true)
-
+func runPrintMode(ctx context.Context, agent session.AgentSession, prompt string, approveRequests bool) error {
 	if err := agent.SubmitTurn(ctx, prompt); err != nil {
 		return fmt.Errorf("submit turn: %w", err)
 	}
@@ -33,7 +30,12 @@ func runPrintMode(ctx context.Context, agent session.AgentSession, prompt string
 			}
 			switch msg := ev.(type) {
 			case session.ApprovalRequest:
-				agent.Approve(ctx, msg.RequestID, true)
+				if !approveRequests {
+					return fmt.Errorf("approval required for %s", msg.ToolName)
+				}
+				if err := agent.Approve(ctx, msg.RequestID, true); err != nil {
+					return fmt.Errorf("approve %s: %w", msg.ToolName, err)
+				}
 			case session.AgentDelta:
 				agentText.WriteString(msg.Delta)
 			case session.AgentMessage:
@@ -57,11 +59,11 @@ func runPrintMode(ctx context.Context, agent session.AgentSession, prompt string
 }
 
 // runPrintModeWithTimeout wraps runPrintMode with a configurable timeout.
-func runPrintModeWithTimeout(ctx context.Context, agent session.AgentSession, prompt string, timeout time.Duration) error {
+func runPrintModeWithTimeout(ctx context.Context, agent session.AgentSession, prompt string, timeout time.Duration, approveRequests bool) error {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	return runPrintMode(ctx, agent, prompt)
+	return runPrintMode(ctx, agent, prompt, approveRequests)
 }
 
 // isStdinPipe returns true if stdin is a pipe (not a terminal).

@@ -351,6 +351,12 @@ func (m Model) WithPrintedTranscript(v bool) Model {
 	return m
 }
 
+func (m Model) WithMode(mode session.Mode) Model {
+	m.Mode = mode
+	configureModelSessionMode(m.Model.Session, mode)
+	return m
+}
+
 func (m Model) startupPrintLines() []string {
 	lines := make([]string, 0, len(m.App.StartupLines)+len(m.App.StartupEntries)+2)
 	lines = append(lines, m.App.StartupLines...)
@@ -509,8 +515,7 @@ func (m Model) runtimeHeaderLine(_ backend.Backend) string {
 }
 
 func (m Model) Init() tea.Cmd {
-	m.Model.Session.SetMode(m.Mode)
-	m.Model.Session.SetAutoApprove(m.Mode == session.ModeYolo)
+	configureModelSessionMode(m.Model.Session, m.Mode)
 	return tea.Batch(
 		textarea.Blink,
 		m.Input.Spinner.Tick,
