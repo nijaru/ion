@@ -350,6 +350,35 @@ func TestInterleavedToolResultsPreservePendingEntries(t *testing.T) {
 	}
 }
 
+func TestUnknownToolResultIDDoesNotClearAnotherPendingTool(t *testing.T) {
+	storageSess := &stubStorageSession{}
+	model := readyModel(t)
+	model.Model.Storage = storageSess
+
+	updated, _ := model.Update(session.ToolCallStarted{
+		ToolUseID: "tool-a",
+		ToolName:  "bash",
+		Args:      "first",
+	})
+	model = updated.(Model)
+
+	updated, _ = model.Update(session.ToolResult{
+		ToolUseID: "missing-tool",
+		ToolName:  "bash",
+		Result:    "wrong result",
+	})
+	model = updated.(Model)
+
+	if _, ok := model.InFlight.PendingTools["tool-a"]; !ok {
+		t.Fatal("known pending tool was cleared by unknown tool result")
+	}
+	for _, event := range storageSess.appends {
+		if result, ok := event.(storage.ToolResult); ok && result.ToolUseID == "missing-tool" {
+			t.Fatal("unknown tool result was persisted")
+		}
+	}
+}
+
 func TestApprovalFailureSurfacesSessionError(t *testing.T) {
 	sess := &stubSession{events: make(chan session.Event), approveErr: errors.New("approval bridge failed")}
 	model := readyModel(t)
