@@ -281,6 +281,72 @@ func TestToolEntryFlushesToTranscript(t *testing.T) {
 	}
 }
 
+func TestInterleavedToolResultsPreservePendingEntries(t *testing.T) {
+	storageSess := &stubStorageSession{}
+	model := readyModel(t)
+	model.Model.Storage = storageSess
+
+	updated, _ := model.Update(session.ToolCallStarted{
+		ToolUseID: "tool-a",
+		ToolName:  "bash",
+		Args:      "first",
+	})
+	model = updated.(Model)
+
+	updated, _ = model.Update(session.ToolCallStarted{
+		ToolUseID: "tool-b",
+		ToolName:  "bash",
+		Args:      "second",
+	})
+	model = updated.(Model)
+
+	updated, _ = model.Update(session.ToolOutputDelta{ToolUseID: "tool-a", Delta: "a partial"})
+	model = updated.(Model)
+	updated, _ = model.Update(session.ToolOutputDelta{ToolUseID: "tool-b", Delta: "b partial"})
+	model = updated.(Model)
+
+	if got := model.InFlight.PendingTools["tool-a"].Content; got != "a partial" {
+		t.Fatalf("tool-a pending content = %q, want a partial", got)
+	}
+	if got := model.InFlight.PendingTools["tool-b"].Content; got != "b partial" {
+		t.Fatalf("tool-b pending content = %q, want b partial", got)
+	}
+
+	updated, _ = model.Update(session.ToolResult{
+		ToolUseID: "tool-a",
+		ToolName:  "bash",
+		Result:    "a done",
+	})
+	model = updated.(Model)
+
+	if _, ok := model.InFlight.PendingTools["tool-a"]; ok {
+		t.Fatal("tool-a pending entry still present after result")
+	}
+	if got := model.InFlight.PendingTools["tool-b"].Content; got != "b partial" {
+		t.Fatalf("tool-b pending content = %q, want b partial", got)
+	}
+
+	updated, _ = model.Update(session.ToolResult{
+		ToolUseID: "tool-b",
+		ToolName:  "bash",
+		Result:    "b done",
+	})
+	model = updated.(Model)
+
+	if len(model.InFlight.PendingTools) != 0 {
+		t.Fatalf("pending tools = %#v, want none", model.InFlight.PendingTools)
+	}
+	var resultIDs []string
+	for _, event := range storageSess.appends {
+		if e, ok := event.(storage.ToolResult); ok {
+			resultIDs = append(resultIDs, e.ToolUseID)
+		}
+	}
+	if !slices.Equal(resultIDs, []string{"tool-a", "tool-b"}) {
+		t.Fatalf("tool result IDs = %#v, want [tool-a tool-b]", resultIDs)
+	}
+}
+
 func TestRenderPendingToolEntryHonorsVerbosity(t *testing.T) {
 	model := readyModel(t)
 	entry := session.Entry{

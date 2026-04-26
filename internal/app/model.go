@@ -185,12 +185,13 @@ type SubagentProgress struct {
 
 // InFlightState holds data for the currently active turn or streaming response.
 type InFlightState struct {
-	Pending     *session.Entry               // streaming agent, active tool, or active subagent
-	Subagents   map[string]*SubagentProgress // active child agents by ID
-	ReasonBuf   string                       // accumulates ThinkingDelta
-	StreamBuf   string                       // accumulates AgentDelta (mirrors pending.Content)
-	QueuedTurns []string                     // follow-up turns queued during agent work
-	Thinking    bool
+	Pending      *session.Entry               // streaming agent, active tool, or active subagent
+	PendingTools map[string]*session.Entry    // active tool calls by backend tool ID
+	Subagents    map[string]*SubagentProgress // active child agents by ID
+	ReasonBuf    string                       // accumulates ThinkingDelta
+	StreamBuf    string                       // accumulates AgentDelta (mirrors pending.Content)
+	QueuedTurns  []string                     // follow-up turns queued during agent work
+	Thinking     bool
 }
 
 // ApprovalState holds pending approval requests.
@@ -561,6 +562,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.App.Branch = meta.Branch
 		}
 		m.InFlight.Pending = nil
+		m.InFlight.PendingTools = nil
 		m.InFlight.Subagents = make(map[string]*SubagentProgress)
 		m.Approval.Pending = nil
 		m.InFlight.QueuedTurns = nil

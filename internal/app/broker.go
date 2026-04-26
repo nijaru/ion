@@ -89,6 +89,7 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		m.Progress.CurrentTurnCost = 0
 		m.Progress.BudgetStopReason = ""
 		m.InFlight.Pending = &session.Entry{Role: session.Agent}
+		m.InFlight.PendingTools = nil
 		return m, m.awaitSessionEvent()
 
 	case session.TurnFinished:
@@ -201,9 +202,17 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		if m.Progress.LastToolUseID == "" {
 			m.Progress.LastToolUseID = session.ShortID()
 		}
-		m.InFlight.Pending = &session.Entry{
+		entry := &session.Entry{
 			Role:  session.Tool,
 			Title: FormatToolTitle(msg.ToolName, msg.Args),
+		}
+		if m.InFlight.PendingTools == nil {
+			m.InFlight.PendingTools = make(map[string]*session.Entry)
+		}
+		m.InFlight.PendingTools[m.Progress.LastToolUseID] = entry
+		if m.InFlight.Pending == nil || m.InFlight.Pending.Role == session.Tool ||
+			(m.InFlight.Pending.Role == session.Agent && m.InFlight.Pending.Content == "" && m.InFlight.ReasonBuf == "") {
+			m.InFlight.Pending = entry
 		}
 		if err := m.persistEntry("persist tool use", storage.ToolUse{
 			Type: "tool_use",
@@ -219,22 +228,22 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		return m, m.awaitSessionEvent()
 
 	case session.ToolOutputDelta:
-		if m.InFlight.Pending != nil && m.InFlight.Pending.Role == session.Tool {
-			m.InFlight.Pending.Content += msg.Delta
+		if entry := m.pendingToolEntry(msg.ToolUseID); entry != nil {
+			entry.Content += msg.Delta
 		}
 		return m, m.awaitSessionEvent()
 
 	case session.ToolResult:
-		if m.InFlight.Pending != nil && m.InFlight.Pending.Role == session.Tool {
-			m.InFlight.Pending.Content = msg.Result
-			m.InFlight.Pending.IsError = msg.Error != nil
-			entry := *m.InFlight.Pending
-			m.InFlight.Pending = nil
+		toolUseID := msg.ToolUseID
+		if toolUseID == "" {
+			toolUseID = m.Progress.LastToolUseID
+		}
+		if pending := m.pendingToolEntry(toolUseID); pending != nil {
+			pending.Content = msg.Result
+			pending.IsError = msg.Error != nil
+			entry := *pending
+			m.clearPendingTool(toolUseID, pending)
 
-			toolUseID := msg.ToolUseID
-			if toolUseID == "" {
-				toolUseID = m.Progress.LastToolUseID
-			}
 			if err := m.persistEntry("persist tool result", storage.ToolResult{
 				Type:      "tool_result",
 				ToolUseID: toolUseID,
@@ -387,6 +396,7 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 
 	case session.Error:
 		m.InFlight.Pending = nil
+		m.InFlight.PendingTools = nil
 		m.Approval.Pending = nil
 		m.InFlight.QueuedTurns = nil
 		m.InFlight.StreamBuf = ""
@@ -421,6 +431,34 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 func persistErrorCmd(action string, err error) tea.Cmd {
 	return func() tea.Msg {
 		return session.Error{Err: fmt.Errorf("%s: %w", action, err)}
+	}
+}
+
+func (m Model) pendingToolEntry(toolUseID string) *session.Entry {
+	if toolUseID != "" {
+		if entry := m.InFlight.PendingTools[toolUseID]; entry != nil {
+			return entry
+		}
+	}
+	if m.InFlight.Pending != nil && m.InFlight.Pending.Role == session.Tool {
+		return m.InFlight.Pending
+	}
+	return nil
+}
+
+func (m *Model) clearPendingTool(toolUseID string, entry *session.Entry) {
+	if toolUseID != "" {
+		delete(m.InFlight.PendingTools, toolUseID)
+	}
+	if len(m.InFlight.PendingTools) == 0 {
+		m.InFlight.PendingTools = nil
+	}
+	if m.InFlight.Pending == entry {
+		m.InFlight.Pending = nil
+		for _, id := range sortedKeys(m.InFlight.PendingTools) {
+			m.InFlight.Pending = m.InFlight.PendingTools[id]
+			break
+		}
 	}
 }
 
