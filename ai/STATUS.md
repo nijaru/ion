@@ -8,9 +8,9 @@ Ion has been reconciled with the current stabilized Canto surface. Current work 
 
 Near-term tracks:
 - `tk-96vy` — Core loop: reliability and resilience audit (Active)
-- `tk-ulfg` — Research: current Pi core loop and feature review (Active)
 - `tk-90mp` — Streaming: Cost Limits & Model Cascades (Paused after first budget/trace slices)
 - `tk-fblb` — Migrate Ion to current Canto surface (Completed)
+- `tk-ulfg` — Research: current Pi core loop and feature review (Completed)
 - `tk-arhu` / `tk-5vrj` — Verified subagent multiplexing and durable breadcrumbs (Completed)
 - TUI refinements — Fixed history navigation boundary behavior (Completed)
 
@@ -38,6 +38,7 @@ Design rule:
 
 ## Completed (Recent)
 - [x] **Canto dependency refresh foundation (`tk-fblb`)** — Updated Ion to Canto `f47e7de`; migrated request processors from `canto/context` to `canto/prompt` and hooks from `Hook/NewFunc` to `Handler/FromFunc`; `go test ./...` passes.
+- [x] **Current Pi core-loop review (`tk-ulfg`)** — Added `ai/research/pi-current-core-loop-review-2026-04.md`; Pi remains the strongest loop reference, but core reliability gates `/tree`, compaction polish, and SOTA routing work.
 - [x] **Subagents: runtime semantics and lifecycle (`tk-5vrj`)** — Implemented multiplexed subagent tracking, durable breadcrumbs, and multiplexed event routing in broker.
 - [x] **Subagents: inline Plane B presentation (`tk-arhu`)** — Compact worker rows, collapse rules, and parent waiting states implemented in viewport.
 - [x] **TUI: boundary-respecting history navigation** — `Up`/`Down`/`Ctrl+P`/`Ctrl+N` now only trigger history navigation at the top/bottom of the multiline composer.
