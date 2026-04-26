@@ -214,6 +214,7 @@ type ProgressState struct {
 	CurrentTurnInput  int
 	CurrentTurnOutput int
 	CurrentTurnCost   float64
+	BudgetStopReason  string
 	LastTurnSummary   turnSummary
 	TokensSent        int
 	TokensReceived    int
@@ -407,6 +408,9 @@ func (m Model) runningProgressParts() []string {
 	if !m.Progress.TurnStartedAt.IsZero() {
 		parts = append(parts, fmt.Sprintf("%ds", int(time.Since(m.Progress.TurnStartedAt).Seconds())))
 	}
+	if m.Model.Config != nil && m.Model.Config.MaxTurnCost > 0 {
+		parts = append(parts, fmt.Sprintf("$%.4f/$%.4f", m.Progress.CurrentTurnCost, m.Model.Config.MaxTurnCost))
+	}
 	parts = append(parts, "Esc to cancel")
 	return parts
 }
@@ -426,6 +430,44 @@ func (m Model) completedProgressParts() []string {
 		parts = append(parts, fmt.Sprintf("%ds", int(m.Progress.LastTurnSummary.Elapsed.Seconds())))
 	}
 	return parts
+}
+
+func (m Model) costBudgetLabel(cost float64) string {
+	if m.Model.Config == nil || m.Model.Config.MaxSessionCost <= 0 {
+		if cost <= 0 {
+			return ""
+		}
+		return fmt.Sprintf("$%.3f", cost)
+	}
+	return fmt.Sprintf("$%.3f/$%.3f", cost, m.Model.Config.MaxSessionCost)
+}
+
+func (m Model) configuredBudgetStopReason() string {
+	if m.Model.Config == nil {
+		return ""
+	}
+	if m.Model.Config.MaxTurnCost > 0 && m.Progress.CurrentTurnCost >= m.Model.Config.MaxTurnCost {
+		return fmt.Sprintf(
+			"turn cost limit reached ($%.6f / $%.6f)",
+			m.Progress.CurrentTurnCost,
+			m.Model.Config.MaxTurnCost,
+		)
+	}
+	return m.configuredSessionBudgetStopReason()
+}
+
+func (m Model) configuredSessionBudgetStopReason() string {
+	if m.Model.Config == nil {
+		return ""
+	}
+	if m.Model.Config.MaxSessionCost > 0 && m.Progress.TotalCost >= m.Model.Config.MaxSessionCost {
+		return fmt.Sprintf(
+			"session cost limit reached ($%.6f / $%.6f)",
+			m.Progress.TotalCost,
+			m.Model.Config.MaxSessionCost,
+		)
+	}
+	return ""
 }
 
 func (m Model) runtimeHeaderLine(_ backend.Backend) string {
@@ -478,6 +520,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.Model.Backend = msg.backend
 		m.Model.Session = msg.session
 		m.Model.Storage = msg.storage
+		m.Model.Config = msg.cfg
 		m.Picker.Overlay = nil
 		m.Picker.Session = nil
 		m.Progress.Status = msg.status

@@ -4,11 +4,12 @@ Fast, lightweight terminal coding agent.
 
 ## Current Focus
 
-Ion has been reconciled with the current stabilized Canto surface. Next work can return to Priority 1 SOTA epic selection.
+Ion has been reconciled with the current stabilized Canto surface. Current work is the first `tk-90mp` slice: explicit USD cost budgets before deeper model-cascade routing.
 
 Near-term tracks (SOTA implementation):
-- `tk-fblb` — Migrate Ion to current Canto surface (Completed)
+- `tk-90mp` — Streaming: Cost Limits & Model Cascades (Active)
 - Transitioning from architecture design into implementing the Priority 1 SOTA epics tracked in `tk ls`.
+- `tk-fblb` — Migrate Ion to current Canto surface (Completed)
 - `tk-arhu` / `tk-5vrj` — Verified subagent multiplexing and durable breadcrumbs (Completed)
 - TUI refinements — Fixed history navigation boundary behavior (Completed)
 
@@ -17,15 +18,17 @@ Everything else is downstream of the solo agent core and now-stable subagent pri
 Provider work to keep in mind:
 - most providers remain API-key or custom-endpoint integrations
 - subscription/OAuth providers need explicit treatment
+- OpenAI ChatGPT subscription support for third-party apps was raised; verify from official sources before design depends on it.
 - **Model cascades (SOTA 14):** Enforcing cost limits and routing tasks to cheaper models dynamically.
 
 Design rule:
 - v0.0.0 has no compatibility debt; current bindings and config shapes are allowed to change directly if the end-state is better. New SOTA plans supersede older designs where there is conflict.
 
 ## Next Steps
-1. **SOTA Epic Selection:** Start `tk-90mp` (Streaming: Cost Limits & Model Cascades), with budget/cascade events shaped so future eval/optimizer traces can consume them.
-2. Treat older `Canto: contribute ...` tasks as re-triaged: no default grep/glob or preset coding-tool bundles; only concrete reusable extension packages should move upstream.
-3. Use `ai/review/canto-research-delta-2026-04-26.md` as the current delta from `../canto/ai/`; DSPy/GEPA imply explicit eval traces later, not runtime prompt mutation now.
+1. Finish and review the `tk-90mp` first slice: `max_session_cost` / `max_turn_cost`, TUI visibility, and runtime budget stops.
+2. Follow with cascade policy design: provider/model slot trace data, escalation/stop reasons, and API vs subscription limit handling.
+3. Treat older `Canto: contribute ...` tasks as re-triaged: no default grep/glob or preset coding-tool bundles; only concrete reusable extension packages should move upstream.
+4. Use `ai/review/canto-research-delta-2026-04-26.md` as the current delta from `../canto/ai/`; DSPy/GEPA imply explicit eval traces later, not runtime prompt mutation now.
 
 *(Note: Older P3 TUI refinement tasks like configurable verbosity, skill layering, and status line context have been subsumed by their respective SOTA epics).*
 

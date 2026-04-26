@@ -28,6 +28,8 @@ type Config struct {
 	AuthEnvVar             string            `toml:"auth_env_var,omitempty"`
 	ExtraHeaders           map[string]string `toml:"extra_headers,omitempty"`
 	ContextLimit           int               `toml:"context_limit,omitempty"`
+	MaxSessionCost         float64           `toml:"max_session_cost,omitempty"`
+	MaxTurnCost            float64           `toml:"max_turn_cost,omitempty"`
 	SessionRetentionDays   int               `toml:"session_retention_days,omitempty"`
 	ToolVerbosity          string            `toml:"tool_verbosity,omitempty"`
 	ThinkingVerbosity      string            `toml:"thinking_verbosity,omitempty"`
@@ -86,6 +88,12 @@ func Load() (*Config, error) {
 	if cfg.ContextLimit < 0 {
 		cfg.ContextLimit = 0
 	}
+	if cfg.MaxSessionCost < 0 {
+		cfg.MaxSessionCost = 0
+	}
+	if cfg.MaxTurnCost < 0 {
+		cfg.MaxTurnCost = 0
+	}
 	if cfg.SessionRetentionDays <= 0 {
 		cfg.SessionRetentionDays = DefaultSessionRetentionDays
 	}
@@ -117,6 +125,12 @@ func Save(cfg *Config) error {
 	out.AuthEnvVar = strings.TrimSpace(out.AuthEnvVar)
 	if out.ContextLimit < 0 {
 		out.ContextLimit = 0
+	}
+	if out.MaxSessionCost < 0 {
+		out.MaxSessionCost = 0
+	}
+	if out.MaxTurnCost < 0 {
+		out.MaxTurnCost = 0
 	}
 	if out.SessionRetentionDays <= 0 {
 		out.SessionRetentionDays = DefaultSessionRetentionDays

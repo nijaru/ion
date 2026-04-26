@@ -444,6 +444,17 @@ func TestStatusLineHidesZeroUsageBeforeFirstTurn(t *testing.T) {
 	}
 }
 
+func TestStatusLineShowsConfiguredSessionCostBudget(t *testing.T) {
+	model := readyModel(t)
+	model.Model.Config = &config.Config{MaxSessionCost: 0.25}
+	model.Progress.TotalCost = 0.075
+
+	line := ansi.Strip(model.statusLine())
+	if !strings.Contains(line, "$0.075/$0.250") {
+		t.Fatalf("status line missing cost budget: %q", line)
+	}
+}
+
 func TestStatusLineIncludesThinkingLevel(t *testing.T) {
 	model := readyModel(t)
 	model.Progress.ReasoningEffort = "high"
@@ -1119,6 +1130,124 @@ func TestCostCommandReportsSessionTotals(t *testing.T) {
 		if !strings.Contains(costMsg.notice, want) {
 			t.Fatalf("cost notice missing %q: %q", want, costMsg.notice)
 		}
+	}
+}
+
+func TestCostCommandReportsConfiguredBudgets(t *testing.T) {
+	model := New(
+		stubBackend{sess: &stubSession{events: make(chan session.Event)}},
+		&stubStorageSession{usageIn: 1200, usageOut: 300, usageCost: 0.012345},
+		nil,
+		"/tmp/test",
+		"main",
+		"dev",
+		nil,
+	)
+	model.Model.Config = &config.Config{
+		MaxSessionCost: 0.050000,
+		MaxTurnCost:    0.010000,
+	}
+
+	_, cmd := model.handleCommand("/cost")
+	msg := cmd()
+	costMsg, ok := msg.(sessionCostMsg)
+	if !ok {
+		t.Fatalf("expected sessionCostMsg, got %T", msg)
+	}
+	for _, want := range []string{
+		"session limit: $0.050000",
+		"session remaining: $0.037655",
+		"turn limit: $0.010000",
+	} {
+		if !strings.Contains(costMsg.notice, want) {
+			t.Fatalf("cost notice missing %q: %q", want, costMsg.notice)
+		}
+	}
+}
+
+func TestTokenUsageCancelsTurnWhenCostBudgetExceeded(t *testing.T) {
+	sess := &stubSession{events: make(chan session.Event)}
+	model := readyModel(t)
+	model.Model.Session = sess
+	model.Model.Config = &config.Config{MaxTurnCost: 0.01}
+	model.InFlight.Thinking = true
+	model.Progress.Mode = stateStreaming
+
+	updated, _ := model.handleSessionEvent(session.TokenUsage{
+		Input:  1000,
+		Output: 100,
+		Cost:   0.011,
+	})
+	model = updated
+
+	if sess.cancels != 1 {
+		t.Fatalf("cancels = %d, want 1", sess.cancels)
+	}
+	if model.Progress.Mode != stateCancelled {
+		t.Fatalf("progress mode = %v, want stateCancelled", model.Progress.Mode)
+	}
+	if !strings.Contains(model.Progress.BudgetStopReason, "turn cost limit reached") {
+		t.Fatalf("budget stop reason = %q", model.Progress.BudgetStopReason)
+	}
+}
+
+func TestTurnFinishedPreservesBudgetCancellation(t *testing.T) {
+	model := readyModel(t)
+	model.Progress.Mode = stateCancelled
+	model.Progress.BudgetStopReason = "turn cost limit reached ($0.011000 / $0.010000)"
+	model.InFlight.QueuedTurns = []string{"next turn"}
+
+	updated, _ := model.Update(session.TurnFinished{})
+	model = updated.(Model)
+
+	if model.Progress.Mode != stateCancelled {
+		t.Fatalf("progress mode = %v, want stateCancelled", model.Progress.Mode)
+	}
+	if len(model.InFlight.QueuedTurns) != 0 {
+		t.Fatalf("queued turns = %v, want none", model.InFlight.QueuedTurns)
+	}
+}
+
+func TestSubmitTextDoesNotBlockOnPriorTurnBudget(t *testing.T) {
+	sess := &stubSession{events: make(chan session.Event)}
+	model := readyModel(t)
+	model.Model.Session = sess
+	model.Model.Config = &config.Config{MaxTurnCost: 0.01}
+	model.Progress.CurrentTurnCost = 0.011
+
+	updated, _ := model.submitText("try again smaller")
+	model = updated
+
+	if len(sess.submits) != 1 {
+		t.Fatalf("submitted turns = %v, want one", sess.submits)
+	}
+	if sess.submits[0] != "try again smaller" {
+		t.Fatalf("submitted turn = %q, want retry text", sess.submits[0])
+	}
+}
+
+func TestSubmitTextBlocksWhenSessionBudgetAlreadyExceeded(t *testing.T) {
+	sess := &stubSession{events: make(chan session.Event)}
+	model := readyModel(t)
+	model.Model.Session = sess
+	model.Model.Config = &config.Config{MaxSessionCost: 0.05}
+	model.Progress.TotalCost = 0.05
+
+	updated, cmd := model.submitText("do work")
+	model = updated
+	msg := cmd()
+	errMsg, ok := msg.(session.Error)
+	if !ok {
+		t.Fatalf("expected session.Error, got %T", msg)
+	}
+	if !strings.Contains(errMsg.Err.Error(), "session cost limit reached") {
+		t.Fatalf("error = %v", errMsg.Err)
+	}
+	if len(sess.submits) != 0 {
+		t.Fatalf("submitted turns = %v, want none", sess.submits)
+	}
+	if len(model.Input.History) != 0 {
+		t.Fatalf("history = %v, want empty", model.Input.History)
 	}
 }
 

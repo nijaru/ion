@@ -221,21 +221,17 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 			totalCost = cost
 		}
 		if totalCost <= 0 {
+			if m.Model.Config != nil && (m.Model.Config.MaxSessionCost > 0 || m.Model.Config.MaxTurnCost > 0) {
+				return m, func() tea.Msg {
+					return sessionCostMsg{notice: m.costBudgetNotice(inputTokens, outputTokens, totalCost)}
+				}
+			}
 			return m, func() tea.Msg {
 				return sessionCostMsg{notice: "No API cost tracked for this session"}
 			}
 		}
-		totalTokens := inputTokens + outputTokens
 		return m, func() tea.Msg {
-			return sessionCostMsg{
-				notice: fmt.Sprintf(
-					"Session cost\ninput tokens: %d\noutput tokens: %d\ntotal tokens: %d\ncost: $%.6f",
-					inputTokens,
-					outputTokens,
-					totalTokens,
-					totalCost,
-				),
-			}
+			return sessionCostMsg{notice: m.costBudgetNotice(inputTokens, outputTokens, totalCost)}
 		}
 
 	case "/compact":
@@ -260,6 +256,29 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 	default:
 		return m, cmdError(fmt.Sprintf("unknown command: %s", fields[0]))
 	}
+}
+
+func (m Model) costBudgetNotice(inputTokens, outputTokens int, totalCost float64) string {
+	totalTokens := inputTokens + outputTokens
+	lines := []string{
+		"Session cost",
+		fmt.Sprintf("input tokens: %d", inputTokens),
+		fmt.Sprintf("output tokens: %d", outputTokens),
+		fmt.Sprintf("total tokens: %d", totalTokens),
+		fmt.Sprintf("cost: $%.6f", totalCost),
+	}
+	if m.Model.Config != nil && m.Model.Config.MaxSessionCost > 0 {
+		lines = append(lines, fmt.Sprintf("session limit: $%.6f", m.Model.Config.MaxSessionCost))
+		remaining := m.Model.Config.MaxSessionCost - totalCost
+		if remaining < 0 {
+			remaining = 0
+		}
+		lines = append(lines, fmt.Sprintf("session remaining: $%.6f", remaining))
+	}
+	if m.Model.Config != nil && m.Model.Config.MaxTurnCost > 0 {
+		lines = append(lines, fmt.Sprintf("turn limit: $%.6f", m.Model.Config.MaxTurnCost))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m Model) openProviderPicker() (Model, tea.Cmd) {

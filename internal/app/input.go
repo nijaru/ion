@@ -60,8 +60,8 @@ func (m Model) statusLine() string {
 	}
 
 	cost := ""
-	if m.Progress.TotalCost > 0 {
-		cost = m.st.dim.Render(fmt.Sprintf("$%.3f", m.Progress.TotalCost))
+	if label := m.costBudgetLabel(m.Progress.TotalCost); label != "" {
+		cost = m.st.dim.Render(label)
 	}
 
 	candidates := [][]string{
