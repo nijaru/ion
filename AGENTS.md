@@ -74,6 +74,9 @@ tk ls
 - Treat Go as the active implementation language.
 - Treat `archive/rust/` as read-only reference unless explicitly migrating something out of it.
 - Do not let archived Rust docs drive new design decisions on `main`.
+- Core agent loop stability is the first product priority. Before expanding SOTA features, model routing, subagents, workflows, evals, memory, or provider experiments, make sure the submit -> stream -> tool -> approval -> cancel -> error -> persist/replay loop is reliable and covered by tests.
+- Advanced ideas from pi, Claude Code, Codex, OpenCode, Cursor, Droid, Letta, and similar agents are references, not mandates. Adopt them only when they simplify Ion or clearly improve the core coding workflow.
+- Prefer simple, inspectable UX over hidden automation. Pi's success with a small clever surface is an explicit design constraint, but Ion may add SOTA capabilities when they preserve that simplicity.
 - Use `tk` for all multi-step work.
 - When a user reports a bug, create or update a `tk` task immediately.
 - If a fix requires touching canto, treat `github.com/nijaru/canto` as the source of truth. Keep framework fixes upstreamable and do not depend on a sibling checkout or bake ion-specific assumptions into canto.

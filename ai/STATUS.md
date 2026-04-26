@@ -4,16 +4,16 @@ Fast, lightweight terminal coding agent.
 
 ## Current Focus
 
-Ion has been reconciled with the current stabilized Canto surface. Current work is the first `tk-90mp` slice: explicit USD cost budgets before deeper model-cascade routing.
+Ion has been reconciled with the current stabilized Canto surface. Current work is `tk-96vy`: stabilize and audit the core agent loop before expanding SOTA features.
 
-Near-term tracks (SOTA implementation):
-- `tk-90mp` — Streaming: Cost Limits & Model Cascades (Active)
-- Transitioning from architecture design into implementing the Priority 1 SOTA epics tracked in `tk ls`.
+Near-term tracks:
+- `tk-96vy` — Core loop: reliability and resilience audit (Active)
+- `tk-90mp` — Streaming: Cost Limits & Model Cascades (Paused after first budget/trace slices)
 - `tk-fblb` — Migrate Ion to current Canto surface (Completed)
 - `tk-arhu` / `tk-5vrj` — Verified subagent multiplexing and durable breadcrumbs (Completed)
 - TUI refinements — Fixed history navigation boundary behavior (Completed)
 
-Everything else is downstream of the solo agent core and now-stable subagent primitives.
+Everything else is downstream of the solo agent core. SOTA epics are important, but they do not outrank a reliable submit/stream/tool/approval/cancel/error/persist/replay loop.
 
 Provider work to keep in mind:
 - most providers remain API-key or custom-endpoint integrations
@@ -24,12 +24,13 @@ Provider work to keep in mind:
 Design rule:
 - v0.0.0 has no compatibility debt; current bindings and config shapes are allowed to change directly if the end-state is better. New SOTA plans supersede older designs where there is conflict.
 - Do not overfit cost/routing work to DSPy, GEPA, or optimizer-centric designs. Keep Ion closer to pi's simple clever model: explicit presets, inspectable decisions, and only the routing knobs that improve the coding workflow.
+- Similar agents are references, not feature-parity requirements. Adopt from pi, Claude Code, Codex, OpenCode, Cursor, Droid, Letta, and others only when the idea strengthens Ion's core coding loop or preserves a simple, inspectable UX.
 
 ## Next Steps
-1. Finish and review the `tk-90mp` first slice: `max_session_cost` / `max_turn_cost`, TUI visibility, and runtime budget stops.
-2. Follow with cascade policy design: provider/model slot trace data, escalation/stop reasons, and API vs subscription limit handling.
-3. Treat older `Canto: contribute ...` tasks as re-triaged: no default grep/glob or preset coding-tool bundles; only concrete reusable extension packages should move upstream.
-4. Use `ai/review/canto-research-delta-2026-04-26.md` as the current delta from `../canto/ai/`; DSPy/GEPA imply explicit eval traces later, not runtime prompt mutation now.
+1. Audit/fix core loop ordering, cancellation, immediate error, queued-turn, tool lifecycle, persistence, and replay semantics under `tk-96vy`.
+2. Add focused regression tests before continuing any SOTA epic work.
+3. Resume `tk-90mp` only after the core loop audit is green; budget enforcement and routing trace slices are already committed.
+4. Treat older `Canto: contribute ...` tasks as re-triaged: no default grep/glob or preset coding-tool bundles; only concrete reusable extension packages should move upstream.
 
 *(Note: Older P3 TUI refinement tasks like configurable verbosity, skill layering, and status line context have been subsumed by their respective SOTA epics).*
 
@@ -53,7 +54,10 @@ Design rule:
 - [x] **Review fixes (`tk-uzoz`, `tk-c0ci`, `tk-l9ag`)** — Registered reflexionProcessor, fixed compaction-failure hang, unified Plane A/B verbosity, added normalizeVerbosity validation.
 
 ## Active Tasks
-See `tk ls` for the full list. Current P1 open SOTA epics:
+See `tk ls` for the full list. Current active priority:
+- `tk-96vy` — Core loop: reliability and resilience audit
+
+P1 SOTA epics remain important but are downstream of `tk-96vy`:
 - `tk-90mp` — Streaming: Cost Limits & Model Cascades
 - `tk-j3ap` — HITL: Permission Modes UX & Escalation
 - `tk-wzt6` — Observability: OTel Exporter & Dashboards
