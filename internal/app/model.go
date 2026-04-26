@@ -15,6 +15,7 @@ import (
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
+	ionworkspace "github.com/nijaru/ion/internal/workspace"
 )
 
 const (
@@ -162,6 +163,7 @@ type AppState struct {
 	PrintedTranscript bool
 	StartupLines      []string
 	StartupEntries    []session.Entry
+	TrustedWorkspace  bool
 }
 
 // ModelState holds the core backend, session, and storage handles.
@@ -173,6 +175,7 @@ type ModelState struct {
 	Switcher   runtimeSwitcher
 	Config     *config.Config
 	Escalation *workspace.EscalationConfig
+	TrustStore *ionworkspace.TrustStore
 }
 
 // SubagentProgress tracks the ephemeral state of a background worker.
@@ -361,6 +364,12 @@ func (m Model) WithMode(mode session.Mode) Model {
 
 func (m Model) WithEscalation(cfg *workspace.EscalationConfig) Model {
 	m.Model.Escalation = cfg
+	return m
+}
+
+func (m Model) WithTrust(store *ionworkspace.TrustStore, trusted bool) Model {
+	m.Model.TrustStore = store
+	m.App.TrustedWorkspace = trusted
 	return m
 }
 

@@ -4,7 +4,7 @@ Fast, lightweight terminal coding agent.
 
 ## Current Focus
 
-Ion has been reconciled with the current stabilized Canto surface. The core loop audit, HITL permission-mode hardening, observability exporter slice, workflow topology spec, first eval regression gate, deterministic policy config slice, and first executable subagent persona/routing slice are complete. Current work is moving through the remaining P1 downstream reliability/UX epics.
+Ion has been reconciled with the current stabilized Canto surface. The core loop audit, HITL permission-mode hardening, observability exporter slice, workflow topology spec, first eval regression gate, deterministic policy config slice, first executable subagent persona/routing slice, and workspace trust slice are complete. Current work is moving through the remaining P1 downstream reliability/UX epics.
 
 Near-term tracks:
 - `tk-96vy` — Core loop: reliability and resilience audit (Completed)
@@ -14,6 +14,7 @@ Near-term tracks:
 - `tk-txju` — Eval: Golden Datasets & Regression Gates (Completed)
 - `tk-zbxk` — Security: Policy Config & LLM-as-Judge (Deterministic config complete; LLM judge split)
 - `tk-r5jr` — Subagent: Agent Personas & Model Routing (Completing)
+- `tk-z2cb` — Workspace: Trust UX & Visual Rollback (Trust complete; rewind split)
 - `tk-90mp` — Streaming: Cost Limits & Model Cascades (Paused after first budget/trace slices)
 - `tk-fblb` — Migrate Ion to current Canto surface (Completed)
 - `tk-ulfg` — Research: current Pi core loop and feature review (Completed)
@@ -52,6 +53,7 @@ Design rule:
 - [x] **Eval golden gate (`tk-txju`)** — Moved prompt quality checks into `evals/golden/prompt_quality.toml`, kept them enforced by `go test ./...`, and documented future eval artifact policy.
 - [x] **Deterministic policy config (`tk-zbxk`)** — Added `policy_path`/`~/.ion/policy.yaml` YAML rules for exact tools and categories across Canto/ACP backends; READ remains non-weakenable and LLM-as-judge is split to a follow-up.
 - [x] **Subagent personas and model routing (`tk-r5jr`)** — Registered the native `subagent` tool with built-in explorer/reviewer/worker personas, global YAML-frontmatter overrides, fast/primary model-slot routing, and scoped child tool registries.
+- [x] **Workspace trust (`tk-z2cb`)** — Added user-global trusted workspace state, startup downgrade to READ for untrusted checkouts, `/trust`, and docs; visual rewind is split pending checkpoint semantics.
 - [x] **Core loop audit slices (`tk-96vy`)** — Fixed native/ACP commit-before-finish ordering, sticky error/cancel terminal states, cancellation queue clearing, full transcript replay, tool error replay, backend tool ID propagation, interleaved tool tracking, and fail-closed proactive compaction recovery; `go test ./...` passes.
 - [x] **Canto dependency refresh foundation (`tk-fblb`)** — Updated Ion to Canto `f47e7de`; migrated request processors from `canto/context` to `canto/prompt` and hooks from `Hook/NewFunc` to `Handler/FromFunc`; `go test ./...` passes.
 - [x] **Current Pi core-loop review (`tk-ulfg`)** — Added `ai/research/pi-current-core-loop-review-2026-04.md`; Pi remains the strongest loop reference, but core reliability gates `/tree`, compaction polish, and SOTA routing work.
@@ -74,7 +76,7 @@ Design rule:
 
 ## Active Tasks
 See `tk ls` for the full list. Current active priority:
-- `tk-r5jr` — Subagent: Agent Personas & Model Routing (closing executable slice)
+- `tk-z2cb` — Workspace: Trust UX & Visual Rollback (closing trust slice)
 
 P1 SOTA epics remain important but are downstream of `tk-96vy`:
 - `tk-90mp` — Streaming: Cost Limits & Model Cascades
@@ -99,6 +101,7 @@ P1 SOTA epics remain important but are downstream of `tk-96vy`:
 - `ai/specs/tools-and-modes.md` — Permission modes spec
 - `ai/specs/security-policy.md` — YAML policy config and LLM judge deferral boundary
 - `ai/specs/subagent-personas-and-routing.md` — Subagent personas, YAML frontmatter, and model routing
+- `ai/specs/workspace-trust-and-rollback.md` — Workspace trust state and rollback deferral boundary
 - `ai/specs/swarm-mode-and-inline-subagents.md` — Inline subagent rendering, future swarm mode
 - `ai/research/pi-architecture.md` — Pi-mono architecture analysis
 - `ai/research/ion-architecture.md` — Ion architecture analysis

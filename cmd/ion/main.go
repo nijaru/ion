@@ -20,6 +20,7 @@ import (
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
 	"github.com/nijaru/ion/internal/telemetry"
+	ionworkspace "github.com/nijaru/ion/internal/workspace"
 )
 
 // version is set at build time via -ldflags "-X main.version=vX.Y.Z".
@@ -69,6 +70,14 @@ func main() {
 	ctx := context.Background()
 	cwd, _ := os.Getwd()
 	branch := currentBranch()
+	trustStore, trusted, trustNotice, err := loadWorkspaceTrust(cwd)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to load workspace trust: %v\n", err)
+		os.Exit(1)
+	}
+	if !trusted && mode != session.ModeRead {
+		mode = session.ModeRead
+	}
 	escalation, err := loadEscalationConfig(cwd)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to load ESCALATE.md: %v\n", err)
@@ -135,6 +144,9 @@ func main() {
 	}
 
 	startupLines := startupBannerLines(version, b.Provider(), b.Model(), sessionID != "")
+	if trustNotice != "" {
+		startupLines = append(startupLines, trustNotice)
+	}
 	var startupEntries []session.Entry
 	if sess != nil {
 		entries, err := sess.Entries(ctx)
@@ -156,12 +168,29 @@ func main() {
 	model := app.New(b, sess, store, cwd, branch, version, switcher).
 		WithMode(mode).
 		WithEscalation(escalation).
+		WithTrust(trustStore, trusted).
 		WithPrintedTranscript(len(startupEntries) > 0)
 	p := tea.NewProgram(model)
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "ion error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func loadWorkspaceTrust(cwd string) (*ionworkspace.TrustStore, bool, string, error) {
+	path, err := ionworkspace.DefaultTrustPath()
+	if err != nil {
+		return nil, false, "", err
+	}
+	store := ionworkspace.NewTrustStore(path)
+	trusted, err := store.IsTrusted(cwd)
+	if err != nil {
+		return nil, false, "", err
+	}
+	if trusted {
+		return store, true, "Workspace trusted", nil
+	}
+	return store, false, "Workspace not trusted; starting in READ mode. Run /trust to remember this workspace.", nil
 }
 
 func openRuntime(ctx context.Context, store storage.Store, cwd, branch string, cfg *config.Config, acpCommandOverride string, sessionID string) (backend.Backend, storage.Session, error) {

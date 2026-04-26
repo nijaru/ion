@@ -183,6 +183,26 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 			session.Entry{Role: session.System, Content: "Mode: " + modeDisplayName(m.Mode)},
 		)
 
+	case "/trust":
+		if len(fields) > 1 && fields[1] != "status" {
+			return m, cmdError("usage: /trust [status]")
+		}
+		if len(fields) > 1 && fields[1] == "status" {
+			status := "not trusted"
+			if m.App.TrustedWorkspace {
+				status = "trusted"
+			}
+			return m, m.printEntries(session.Entry{Role: session.System, Content: "Workspace trust: " + status})
+		}
+		if m.Model.TrustStore == nil {
+			return m, cmdError("workspace trust store is unavailable")
+		}
+		if err := m.Model.TrustStore.Trust(m.App.Workdir); err != nil {
+			return m, cmdError(fmt.Sprintf("failed to trust workspace: %v", err))
+		}
+		m.App.TrustedWorkspace = true
+		return m, m.printEntries(session.Entry{Role: session.System, Content: "Workspace trusted"})
+
 	case "/clear":
 		cfg, err := config.Load()
 		if err != nil {
@@ -351,6 +371,7 @@ func helpText() string {
 		"  /thinking [lvl]  set thinking: auto, low, medium, high",
 		"  /yolo            toggle YOLO mode (auto-approve all)",
 		"  /mode [mode]     set mode: read, edit, yolo",
+		"  /trust [status]  trust this workspace or show trust status",
 		"  /compact         compact the current session",
 		"  /clear           start a fresh session with the current provider/model",
 		"  /cost            show aggregate session usage",
