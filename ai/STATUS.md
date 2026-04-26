@@ -7,7 +7,7 @@ Fast, lightweight terminal coding agent.
 Ion has been reconciled with the current stabilized Canto surface. The core loop audit, HITL permission-mode hardening, observability exporter slice, workflow topology spec, first eval regression gate, deterministic policy config slice, first executable subagent persona/routing slice, workspace trust slice, tool-loading UX slice, and first memory search UX slice are complete. Current work is moving through the remaining P2 reliability/UX epics.
 
 Current active slice:
-- `tk-8e2x` — Workspace checkpoint/rewind semantics. Mutating native file tools create durable pre-change checkpoints under `~/.ion/checkpoints` and surface checkpoint IDs in tool results. `/rewind <id>` previews destructive restore actions, and `/rewind <id> --confirm` applies them with restore start/completion transcript entries.
+- `tk-kfno` — Security sandbox hardening. First slice makes explicit Seatbelt/bubblewrap modes fail closed when unavailable, surfaces sandbox posture through `/tools`, and avoids binding missing bubblewrap paths.
 
 Near-term tracks:
 - `tk-96vy` — Core loop: reliability and resilience audit (Completed)
@@ -49,6 +49,7 @@ Design rule:
 *(Note: Older P3 TUI refinement tasks like configurable verbosity, skill layering, and status line context have been subsumed by their respective SOTA epics).*
 
 ## Completed (Recent)
+- [x] **Checkpoint rewind (`tk-8e2x`)** — Native file tools create durable pre-change checkpoints; `/rewind <id>` previews restore actions and `/rewind <id> --confirm` restores with transcript start/completion entries.
 - [x] **Core loop reliability audit (`tk-96vy`)** — Completed final approval/session-switch review; approval bridge failures now surface as session errors and unknown tool result IDs cannot clear another pending tool.
 - [x] **Permission mode startup slice (`tk-j3ap`)** — READ mode is now non-escalating even with stale session approvals; `--mode`/`--yolo` startup selection now applies to TUI and print sessions, with non-interactive approvals limited to YOLO.
 - [x] **ESCALATE.md host slice (`tk-j3ap`)** — Ion now loads root `ESCALATE.md` via Canto's workspace parser and surfaces declared email/Slack channels plus approval timeout in approval prompts.
@@ -86,7 +87,6 @@ See `tk ls` for the full list. Current active priority:
 - No P1 tasks remain ready. Next ready work is P2.
 
 Remaining P2 epics:
-- `tk-8e2x` — Workspace: checkpoint Rewind UI and restore semantics
 - `tk-kfno` — Security: OS sandbox hardening for tool execution
 - `tk-9lws` — Security: LLM-as-judge classifier and circuit breaker
 - `tk-00km` — HITL: Slack/email notifier delivery and audit

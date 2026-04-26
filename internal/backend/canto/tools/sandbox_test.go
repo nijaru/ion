@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -23,6 +24,20 @@ func TestPlanSandboxedBashOffUsesPlainBash(t *testing.T) {
 }
 
 func TestPlanSeatbeltSandboxBuildsProfile(t *testing.T) {
+	prevGOOS := sandboxGOOS
+	prevLookPath := sandboxLookPath
+	sandboxGOOS = "darwin"
+	sandboxLookPath = func(name string) (string, error) {
+		if name != "sandbox-exec" {
+			t.Fatalf("lookPath called with %q, want sandbox-exec", name)
+		}
+		return "/usr/bin/sandbox-exec", nil
+	}
+	defer func() {
+		sandboxGOOS = prevGOOS
+		sandboxLookPath = prevLookPath
+	}()
+
 	plan, err := planSeatbeltSandbox("/Users/nick/github/nijaru/ion", "go test ./...")
 	if err != nil {
 		t.Fatalf("planSeatbeltSandbox error = %v", err)
@@ -32,8 +47,8 @@ func TestPlanSeatbeltSandboxBuildsProfile(t *testing.T) {
 			_ = plan.cleanup()
 		})
 	}
-	if plan.name != "sandbox-exec" {
-		t.Fatalf("plan name = %q, want sandbox-exec", plan.name)
+	if plan.name != "/usr/bin/sandbox-exec" {
+		t.Fatalf("plan name = %q, want /usr/bin/sandbox-exec", plan.name)
 	}
 	if len(plan.args) < 4 {
 		t.Fatalf("plan args too short: %#v", plan.args)
@@ -73,14 +88,15 @@ func TestPlanSandboxedBashAutoPrefersDarwinSeatbeltWhenAvailable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("planSandboxedBash(auto darwin) error = %v", err)
 	}
-	if plan.name != "sandbox-exec" {
-		t.Fatalf("plan name = %q, want sandbox-exec", plan.name)
+	if plan.name != "/usr/bin/sandbox-exec" {
+		t.Fatalf("plan name = %q, want /usr/bin/sandbox-exec", plan.name)
 	}
 }
 
 func TestPlanSandboxedBashAutoPrefersLinuxBubblewrapWhenAvailable(t *testing.T) {
 	prevGOOS := sandboxGOOS
 	prevLookPath := sandboxLookPath
+	prevPathExists := sandboxPathExists
 	sandboxGOOS = "linux"
 	sandboxLookPath = func(name string) (string, error) {
 		if name != "bwrap" {
@@ -88,9 +104,13 @@ func TestPlanSandboxedBashAutoPrefersLinuxBubblewrapWhenAvailable(t *testing.T) 
 		}
 		return "/usr/bin/bwrap", nil
 	}
+	sandboxPathExists = func(path string) bool {
+		return path != "/private/tmp"
+	}
 	defer func() {
 		sandboxGOOS = prevGOOS
 		sandboxLookPath = prevLookPath
+		sandboxPathExists = prevPathExists
 	}()
 
 	plan, err := planSandboxedBash("/tmp/workspace", "pwd", SandboxAuto)
@@ -102,5 +122,54 @@ func TestPlanSandboxedBashAutoPrefersLinuxBubblewrapWhenAvailable(t *testing.T) 
 	}
 	if !strings.Contains(strings.Join(plan.args, " "), "--unshare-net") {
 		t.Fatalf("expected bubblewrap args, got %#v", plan.args)
+	}
+	if strings.Contains(strings.Join(plan.args, " "), "/private/tmp") {
+		t.Fatalf("did not expect missing /private/tmp bind, got %#v", plan.args)
+	}
+}
+
+func TestExplicitSeatbeltFailsClosedWhenUnavailable(t *testing.T) {
+	prevGOOS := sandboxGOOS
+	prevLookPath := sandboxLookPath
+	sandboxGOOS = "darwin"
+	sandboxLookPath = func(name string) (string, error) {
+		return "", errors.New("missing")
+	}
+	defer func() {
+		sandboxGOOS = prevGOOS
+		sandboxLookPath = prevLookPath
+	}()
+
+	if _, err := planSandboxedBash("/tmp/workspace", "pwd", SandboxSeatbelt); err == nil {
+		t.Fatal("explicit seatbelt mode fell back instead of failing")
+	}
+}
+
+func TestExplicitBubblewrapFailsClosedOnUnsupportedPlatform(t *testing.T) {
+	prevGOOS := sandboxGOOS
+	sandboxGOOS = "darwin"
+	defer func() {
+		sandboxGOOS = prevGOOS
+	}()
+
+	if _, err := planSandboxedBash("/tmp/workspace", "pwd", SandboxBubblewrap); err == nil {
+		t.Fatal("explicit bubblewrap mode ran on unsupported platform")
+	}
+}
+
+func TestSandboxSummaryReportsAutoFallback(t *testing.T) {
+	prevGOOS := sandboxGOOS
+	prevLookPath := sandboxLookPath
+	sandboxGOOS = "linux"
+	sandboxLookPath = func(name string) (string, error) {
+		return "", errors.New("missing")
+	}
+	defer func() {
+		sandboxGOOS = prevGOOS
+		sandboxLookPath = prevLookPath
+	}()
+
+	if got := sandboxSummary(SandboxAuto); got != "auto: off (no backend)" {
+		t.Fatalf("summary = %q, want auto fallback", got)
 	}
 }

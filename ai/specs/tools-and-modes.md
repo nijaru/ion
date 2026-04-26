@@ -32,7 +32,7 @@ Supporting infrastructure:
 - One semantic jump between each mode
 - The approval prompt is the granularity mechanism — modes are coarse
 - Read tools are never gated in any mode
-- Sandbox is orthogonal to permissions (tracked: `tk-8s0h`)
+- Sandbox is orthogonal to permissions (tracked: `tk-kfno`)
 
 ### Mode table
 
@@ -131,6 +131,24 @@ categories; see `ai/specs/security-policy.md` and `docs/security/policy.md`.
 - `--mode read|edit|yolo` — start in the selected permission mode
 - `--yolo` — start in YOLO mode (alias for `--mode yolo`)
 
+## Sandbox
+
+Bash sandboxing is configured outside the approval modes:
+
+```text
+ION_SANDBOX=off|auto|seatbelt|bubblewrap
+```
+
+Current behavior:
+
+- `off`: plain bash
+- `auto`: use macOS Seatbelt or Linux bubblewrap when available; otherwise
+  visibly report fallback to `off`
+- `seatbelt`: require `sandbox-exec`; fail closed if unavailable
+- `bubblewrap`: require `bwrap`; fail closed if unavailable
+
+`/tools` reports the active sandbox posture for the native backend.
+
 ## Escalation
 
 Ion loads `ESCALATE.md` from the workspace root when present, using Canto's
@@ -149,7 +167,7 @@ Key findings:
 - "auto_edit" middle ground (auto edits, prompt bash) is industry
   consensus for daily driving — but we prompt for edits too in EDIT mode
 - "Always allow" at approval time is the biggest UX win beyond modes
-- Sandbox is orthogonal to approval (tracked separately: `tk-8s0h`)
+- Sandbox is orthogonal to approval (tracked separately: `tk-kfno`)
 - Read tools are never gated in any agent
 
 Full details: `ai/research/approval-ux-survey-2026-03-30.md`
