@@ -18,7 +18,7 @@ func TestLoadReadsConfigFile(t *testing.T) {
 
 	path := filepath.Join(configDir, "config.toml")
 	if err := os.WriteFile(path, []byte(
-		"provider = \"openai\"\nmodel = \"gpt-4o\"\nreasoning_effort = \"med\"\nfast_model = \"gpt-4.1-mini\"\nfast_reasoning_effort = \"low\"\nsummary_model = \"gpt-4o-mini\"\nsummary_reasoning_effort = \"low\"\nendpoint = \"https://example.com/v1\"\nauth_env_var = \"OPENAI_PROXY_KEY\"\ncontext_limit = 128000\nsession_retention_days = 14\n[extra_headers]\n\"X-Test\" = \"value\"\n",
+		"provider = \"openai\"\nmodel = \"gpt-4o\"\nreasoning_effort = \"med\"\nfast_model = \"gpt-4.1-mini\"\nfast_reasoning_effort = \"low\"\nsummary_model = \"gpt-4o-mini\"\nsummary_reasoning_effort = \"low\"\nendpoint = \"https://example.com/v1\"\nauth_env_var = \"OPENAI_PROXY_KEY\"\ncontext_limit = 128000\nmax_session_cost = 1.25\nmax_turn_cost = 0.10\nsession_retention_days = 14\n[extra_headers]\n\"X-Test\" = \"value\"\n",
 	), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -60,6 +60,12 @@ func TestLoadReadsConfigFile(t *testing.T) {
 	}
 	if cfg.ContextLimit != 128000 {
 		t.Fatalf("context_limit = %d, want %d", cfg.ContextLimit, 128000)
+	}
+	if cfg.MaxSessionCost != 1.25 {
+		t.Fatalf("max_session_cost = %f, want %f", cfg.MaxSessionCost, 1.25)
+	}
+	if cfg.MaxTurnCost != 0.10 {
+		t.Fatalf("max_turn_cost = %f, want %f", cfg.MaxTurnCost, 0.10)
 	}
 	if cfg.SessionRetentionDays != 14 {
 		t.Fatalf("session_retention_days = %d, want %d", cfg.SessionRetentionDays, 14)
@@ -131,6 +137,8 @@ func TestSaveWritesStatePath(t *testing.T) {
 		AuthEnvVar:             "OPENAI_PROXY_KEY",
 		ExtraHeaders:           map[string]string{"X-Test": "value"},
 		ContextLimit:           128000,
+		MaxSessionCost:         1.25,
+		MaxTurnCost:            0.10,
 		SessionRetentionDays:   14,
 	}
 	if err := Save(cfg); err != nil {
@@ -159,11 +167,38 @@ func TestSaveWritesStatePath(t *testing.T) {
 		`[extra_headers]`,
 		`X-Test = 'value'`,
 		`context_limit = 128000`,
+		`max_session_cost = 1.25`,
+		`max_turn_cost = 0.1`,
 		`session_retention_days = 14`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("saved config missing %q:\n%s", want, got)
 		}
+	}
+}
+
+func TestLoadClampsNegativeCostLimits(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	configDir := filepath.Join(home, ".ion")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	path := filepath.Join(configDir, "config.toml")
+	if err := os.WriteFile(path, []byte("max_session_cost = -1\nmax_turn_cost = -0.5\n"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.MaxSessionCost != 0 {
+		t.Fatalf("max_session_cost = %f, want 0", cfg.MaxSessionCost)
+	}
+	if cfg.MaxTurnCost != 0 {
+		t.Fatalf("max_turn_cost = %f, want 0", cfg.MaxTurnCost)
 	}
 }
 

@@ -62,6 +62,18 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		}); err != nil {
 			return m, persistErrorCmd("persist token usage", err)
 		}
+		if reason := m.configuredBudgetStopReason(); reason != "" && reason != m.Progress.BudgetStopReason {
+			m.Progress.BudgetStopReason = reason
+			if m.InFlight.Thinking {
+				if err := m.Model.Session.CancelTurn(context.Background()); err != nil {
+					return m, persistErrorCmd("cancel over-budget turn", err)
+				}
+				m.InFlight.Thinking = false
+				m.Progress.Mode = stateCancelled
+				entry := session.Entry{Role: session.System, Content: "Canceled: " + reason}
+				return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
+			}
+		}
 		return m, m.awaitSessionEvent()
 
 	case session.TurnStarted:
@@ -72,12 +84,18 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		m.Progress.CurrentTurnInput = 0
 		m.Progress.CurrentTurnOutput = 0
 		m.Progress.CurrentTurnCost = 0
+		m.Progress.BudgetStopReason = ""
 		m.InFlight.Pending = &session.Entry{Role: session.Agent}
 		return m, m.awaitSessionEvent()
 
 	case session.TurnFinished:
 		m.InFlight.Thinking = false
-		m.Progress.Mode = stateComplete
+		if m.Progress.BudgetStopReason == "" {
+			m.Progress.Mode = stateComplete
+		} else {
+			m.Progress.Mode = stateCancelled
+			m.InFlight.QueuedTurns = nil
+		}
 		if !m.Progress.TurnStartedAt.IsZero() {
 			m.Progress.LastTurnSummary = turnSummary{
 				Elapsed: time.Since(m.Progress.TurnStartedAt),
@@ -408,6 +426,12 @@ func (m Model) submitText(text string) (Model, tea.Cmd) {
 	// Expand any paste marker placeholders to their original content.
 	text = m.expandMarkers(text)
 	m.PasteMarkers = make(map[string]pasteMarker)
+
+	if !strings.HasPrefix(text, "/") {
+		if reason := m.configuredSessionBudgetStopReason(); reason != "" {
+			return m, cmdError(reason)
+		}
+	}
 
 	m.Input.History = append(m.Input.History, text)
 	m.Input.HistoryIdx = -1
