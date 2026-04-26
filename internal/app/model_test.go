@@ -13,6 +13,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/nijaru/canto/workspace"
 
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/backend/registry"
@@ -432,6 +433,33 @@ func TestApprovalFailureSurfacesSessionError(t *testing.T) {
 	}
 	if !strings.Contains(errEvent.Err.Error(), "send approval") {
 		t.Fatalf("approval error = %v, want send approval context", errEvent.Err)
+	}
+}
+
+func TestApprovalPromptRendersEscalationChannels(t *testing.T) {
+	model := readyModel(t).WithEscalation(&workspace.EscalationConfig{
+		Channels: []workspace.EscalationChannel{
+			{Type: "email", Address: "ops@example.com"},
+			{Type: "slack", Channel: "#ai-alerts"},
+		},
+		Approval: workspace.EscalationApproval{Timeout: 30 * time.Minute},
+	})
+	model.Approval.Pending = &session.ApprovalRequest{
+		RequestID:   "req-1",
+		ToolName:    "bash",
+		Args:        `{"command":"deploy"}`,
+		Description: "Tool: bash",
+	}
+
+	planeB := ansi.Strip(model.renderPlaneB())
+	for _, want := range []string{
+		"Escalate: email ops@example.com",
+		"slack #ai-alerts",
+		"approval timeout 30m",
+	} {
+		if !strings.Contains(planeB, want) {
+			t.Fatalf("renderPlaneB missing %q:\n%s", want, planeB)
+		}
 	}
 }
 

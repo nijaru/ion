@@ -10,6 +10,7 @@ import (
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/nijaru/canto/workspace"
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/session"
@@ -165,12 +166,13 @@ type AppState struct {
 
 // ModelState holds the core backend, session, and storage handles.
 type ModelState struct {
-	Backend  backend.Backend
-	Session  session.AgentSession
-	Storage  storage.Session
-	Store    storage.Store
-	Switcher runtimeSwitcher
-	Config   *config.Config
+	Backend    backend.Backend
+	Session    session.AgentSession
+	Storage    storage.Session
+	Store      storage.Store
+	Switcher   runtimeSwitcher
+	Config     *config.Config
+	Escalation *workspace.EscalationConfig
 }
 
 // SubagentProgress tracks the ephemeral state of a background worker.
@@ -354,6 +356,11 @@ func (m Model) WithPrintedTranscript(v bool) Model {
 func (m Model) WithMode(mode session.Mode) Model {
 	m.Mode = mode
 	configureModelSessionMode(m.Model.Session, mode)
+	return m
+}
+
+func (m Model) WithEscalation(cfg *workspace.EscalationConfig) Model {
+	m.Model.Escalation = cfg
 	return m
 }
 

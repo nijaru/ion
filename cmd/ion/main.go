@@ -58,6 +58,11 @@ func main() {
 	ctx := context.Background()
 	cwd, _ := os.Getwd()
 	branch := currentBranch()
+	escalation, err := loadEscalationConfig(cwd)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to load ESCALATE.md: %v\n", err)
+		os.Exit(1)
+	}
 
 	dataDir, err := config.DefaultDataDir()
 	if err != nil {
@@ -139,6 +144,7 @@ func main() {
 	printStartup(os.Stdout, startupLines, workspaceHeader(cwd, branch), startupEntries)
 	model := app.New(b, sess, store, cwd, branch, version, switcher).
 		WithMode(mode).
+		WithEscalation(escalation).
 		WithPrintedTranscript(len(startupEntries) > 0)
 	p := tea.NewProgram(model)
 	if _, err := p.Run(); err != nil {
