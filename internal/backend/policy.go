@@ -116,22 +116,13 @@ func (pe *PolicyEngine) Authorize(
 	}
 	pe.mu.RUnlock()
 
-	if auto {
-		return PolicyAllow, ""
-	}
-
 	category, ok := pe.Categories[toolName]
-	if !ok {
-		return PolicyAsk, fmt.Sprintf("Unknown tool %q requested.", toolName)
-	}
-
-	// Check for category override
-	if p, ok := policies[category]; ok && p == PolicyAllow {
-		return PolicyAllow, ""
-	}
 
 	switch mode {
 	case session.ModeRead:
+		if !ok {
+			return PolicyAsk, fmt.Sprintf("Unknown tool %q requested.", toolName)
+		}
 		switch category {
 		case CategoryRead:
 			return PolicyAllow, ""
@@ -142,12 +133,21 @@ func (pe *PolicyEngine) Authorize(
 		}
 
 	case session.ModeEdit:
+		if auto {
+			return PolicyAllow, ""
+		}
+		if !ok {
+			return PolicyAsk, fmt.Sprintf("Unknown tool %q requested.", toolName)
+		}
 		switch category {
 		case CategoryRead:
 			return PolicyAllow, ""
 		case CategorySensitive:
 			return PolicyAsk, fmt.Sprintf("Tool %q requires approval.", toolName)
 		default:
+			if p, ok := policies[category]; ok && p == PolicyAllow {
+				return PolicyAllow, ""
+			}
 			return PolicyAsk, fmt.Sprintf("Tool %q (%s) requires approval.", toolName, category)
 		}
 
