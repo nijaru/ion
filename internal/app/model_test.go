@@ -62,6 +62,14 @@ func (b stubBackend) ContextLimit() int {
 	return 0
 }
 
+func (b stubBackend) ToolSurface() backend.ToolSurface {
+	return backend.ToolSurface{
+		Count:         2,
+		LazyThreshold: 20,
+		Names:         []string{"read", "write"},
+	}
+}
+
 func (b stubBackend) Bootstrap() backend.Bootstrap {
 	return backend.Bootstrap{
 		Entries: []session.Entry{{Role: session.System, Content: "boot"}},
@@ -1608,6 +1616,7 @@ func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 		"/model [name]",
 		"/thinking [lvl]",
 		"/trust [status]",
+		"/tools",
 		"/compact",
 		"/clear",
 		"/cost",
@@ -1628,6 +1637,15 @@ func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 	}
 	if strings.Contains(helpMsg.notice, "/tree") {
 		t.Fatalf("help notice should not advertise /tree yet: %q", helpMsg.notice)
+	}
+}
+
+func TestToolsCommandReportsToolSurface(t *testing.T) {
+	model := readyModel(t)
+
+	_, cmd := model.handleCommand("/tools")
+	if cmd == nil {
+		t.Fatal("tools command returned nil cmd")
 	}
 }
 

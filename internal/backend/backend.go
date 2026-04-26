@@ -32,3 +32,14 @@ type Compactor interface {
 type PolicyConfigurer interface {
 	SetPolicyConfig(*PolicyConfig)
 }
+
+type ToolSurface struct {
+	Count         int
+	LazyThreshold int
+	LazyEnabled   bool
+	Names         []string
+}
+
+type ToolSummarizer interface {
+	ToolSurface() ToolSurface
+}

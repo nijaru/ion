@@ -12,9 +12,11 @@
 - [Security Policy Spec](specs/security-policy.md) — YAML tool/category policy rules and LLM judge deferral boundary
 - [Subagent Personas and Routing Spec](specs/subagent-personas-and-routing.md) — Built-in personas, YAML frontmatter format, and model-slot policy
 - [Workspace Trust and Rollback Spec](specs/workspace-trust-and-rollback.md) — Persistent trust state and rollback deferral boundary
+- [Tool Loading and Approval Tiers Spec](specs/tool-loading-and-approval-tiers.md) — search_tools UX and permission-tier policy
 - [Workflows and Recovery Spec](specs/workflows-and-recovery.md) — Ion workflow topology, gates, and checkpoint policy
 - [Evals and Regression Gates Spec](specs/evals-and-regression-gates.md) — Golden datasets, thresholds, and CI policy
 - [Observability Docs](../docs/observability/README.md) — OTLP exporter config and Grafana starter dashboard
 - [Security Policy Docs](../docs/security/policy.md) — User-facing policy_path and ~/.ion/policy.yaml reference
 - [Subagent Docs](../docs/subagents.md) — User-facing subagent personas and ~/.ion/agents reference
 - [Workspace Trust Docs](../docs/workspace-trust.md) — User-facing /trust behavior and trust storage
+- [Tool Docs](../docs/tools.md) — User-facing /tools, lazy loading, and approval mode summary

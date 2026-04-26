@@ -147,6 +147,9 @@ func main() {
 	if trustNotice != "" {
 		startupLines = append(startupLines, trustNotice)
 	}
+	if toolLine := startupToolLine(b); toolLine != "" {
+		startupLines = append(startupLines, toolLine)
+	}
 	var startupEntries []session.Entry
 	if sess != nil {
 		entries, err := sess.Entries(ctx)
@@ -191,6 +194,21 @@ func loadWorkspaceTrust(cwd string) (*ionworkspace.TrustStore, bool, string, err
 		return store, true, "Workspace trusted", nil
 	}
 	return store, false, "Workspace not trusted; starting in READ mode. Run /trust to remember this workspace.", nil
+}
+
+func startupToolLine(b backend.Backend) string {
+	summarizer, ok := b.(backend.ToolSummarizer)
+	if !ok {
+		return ""
+	}
+	surface := summarizer.ToolSurface()
+	if surface.Count == 0 {
+		return ""
+	}
+	if surface.LazyEnabled {
+		return fmt.Sprintf("Tools: %d registered; search_tools enabled", surface.Count)
+	}
+	return fmt.Sprintf("Tools: %d registered", surface.Count)
 }
 
 func openRuntime(ctx context.Context, store storage.Store, cwd, branch string, cfg *config.Config, acpCommandOverride string, sessionID string) (backend.Backend, storage.Session, error) {
