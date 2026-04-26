@@ -4,11 +4,11 @@ Fast, lightweight terminal coding agent.
 
 ## Current Focus
 
-Ion has been reconciled with the current stabilized Canto surface. The core loop audit (`tk-96vy`) is complete; current work is moving through the P1 downstream reliability/UX epics.
+Ion has been reconciled with the current stabilized Canto surface. The core loop audit (`tk-96vy`) is complete; current work is moving through the P1 downstream reliability/UX epics, starting with HITL permission-mode hardening.
 
 Near-term tracks:
 - `tk-96vy` — Core loop: reliability and resilience audit (Completed)
-- `tk-j3ap` — HITL: Permission Modes UX & Escalation (Next)
+- `tk-j3ap` — HITL: Permission Modes UX & Escalation (Active; policy boundary and CLI startup mode slices completed)
 - `tk-90mp` — Streaming: Cost Limits & Model Cascades (Paused after first budget/trace slices)
 - `tk-fblb` — Migrate Ion to current Canto surface (Completed)
 - `tk-ulfg` — Research: current Pi core loop and feature review (Completed)
@@ -29,7 +29,7 @@ Design rule:
 - Similar agents are references, not feature-parity requirements. Adopt from pi, Claude Code, Codex, OpenCode, Cursor, Droid, Letta, and others only when the idea strengthens Ion's core coding loop or preserves a simple, inspectable UX.
 
 ## Next Steps
-1. Start `tk-j3ap` with focused permission-mode and escalation checks that build on the now-stable loop.
+1. Continue `tk-j3ap` into escalation policy/source-of-truth work after the startup-mode slice.
 2. Keep adding focused regressions before broadening any SOTA epic.
 3. Use the current Pi review as a reference for loop contracts and future `/tree`, but keep concrete fixes on the current solo loop.
 4. Resume `tk-90mp` after the P1 permission/escalation slice; budget enforcement and routing trace slices are already committed.
@@ -39,6 +39,7 @@ Design rule:
 
 ## Completed (Recent)
 - [x] **Core loop reliability audit (`tk-96vy`)** — Completed final approval/session-switch review; approval bridge failures now surface as session errors and unknown tool result IDs cannot clear another pending tool.
+- [x] **Permission mode startup slice (`tk-j3ap`)** — READ mode is now non-escalating even with stale session approvals; `--mode`/`--yolo` startup selection now applies to TUI and print sessions, with non-interactive approvals limited to YOLO.
 - [x] **Core loop audit slices (`tk-96vy`)** — Fixed native/ACP commit-before-finish ordering, sticky error/cancel terminal states, cancellation queue clearing, full transcript replay, tool error replay, backend tool ID propagation, interleaved tool tracking, and fail-closed proactive compaction recovery; `go test ./...` passes.
 - [x] **Canto dependency refresh foundation (`tk-fblb`)** — Updated Ion to Canto `f47e7de`; migrated request processors from `canto/context` to `canto/prompt` and hooks from `Hook/NewFunc` to `Handler/FromFunc`; `go test ./...` passes.
 - [x] **Current Pi core-loop review (`tk-ulfg`)** — Added `ai/research/pi-current-core-loop-review-2026-04.md`; Pi remains the strongest loop reference, but core reliability gates `/tree`, compaction polish, and SOTA routing work.

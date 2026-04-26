@@ -33,6 +33,14 @@ func initialMode(_ backend.Bootstrap) session.Mode {
 	return session.ModeEdit
 }
 
+func configureModelSessionMode(agent session.AgentSession, mode session.Mode) {
+	if agent == nil {
+		return
+	}
+	agent.SetMode(mode)
+	agent.SetAutoApprove(mode == session.ModeYolo)
+}
+
 func printLinesCmd(lines ...string) tea.Cmd {
 	filtered := make([]string, 0, len(lines))
 	for _, line := range lines {

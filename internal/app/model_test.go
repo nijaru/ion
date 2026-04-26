@@ -81,11 +81,13 @@ func (b *compactBackend) Compact(ctx context.Context) (bool, error) {
 }
 
 type stubSession struct {
-	events     chan session.Event
-	submits    []string
-	cancels    int
-	submitErr  error
-	approveErr error
+	events      chan session.Event
+	submits     []string
+	cancels     int
+	submitErr   error
+	approveErr  error
+	mode        session.Mode
+	autoApprove bool
 }
 
 func (s *stubSession) Open(ctx context.Context) error              { return nil }
@@ -117,12 +119,12 @@ func (s *stubSession) Approve(ctx context.Context, id string, ok bool) error {
 func (s *stubSession) RegisterMCPServer(ctx context.Context, cmd string, args ...string) error {
 	return nil
 }
-func (s *stubSession) SetMode(mode session.Mode) {}
+func (s *stubSession) SetMode(mode session.Mode) { s.mode = mode }
 
-func (s *stubSession) SetAutoApprove(bool)     {}
-func (s *stubSession) AllowCategory(string)    {}
-func (s *stubSession) ID() string              { return "stub" }
-func (s *stubSession) Meta() map[string]string { return nil }
+func (s *stubSession) SetAutoApprove(enabled bool) { s.autoApprove = enabled }
+func (s *stubSession) AllowCategory(string)        {}
+func (s *stubSession) ID() string                  { return "stub" }
+func (s *stubSession) Meta() map[string]string     { return nil }
 
 type stubStorageSession struct {
 	id        string
@@ -218,6 +220,30 @@ func readyModel(t *testing.T) Model {
 		t.Fatalf("expected Model after window size update")
 	}
 	return ready
+}
+
+func TestWithModeConfiguresSessionPolicy(t *testing.T) {
+	sess := &stubSession{events: make(chan session.Event)}
+	model := New(stubBackend{sess: sess}, nil, nil, "/tmp/test", "main", "dev", nil).
+		WithMode(session.ModeYolo)
+
+	if model.Mode != session.ModeYolo {
+		t.Fatalf("model mode = %v, want yolo", model.Mode)
+	}
+	if sess.mode != session.ModeYolo {
+		t.Fatalf("session mode = %v, want yolo", sess.mode)
+	}
+	if !sess.autoApprove {
+		t.Fatal("session auto approval was not enabled for yolo mode")
+	}
+
+	model = model.WithMode(session.ModeRead)
+	if sess.mode != session.ModeRead {
+		t.Fatalf("session mode = %v, want read", sess.mode)
+	}
+	if sess.autoApprove {
+		t.Fatal("session auto approval stayed enabled outside yolo mode")
+	}
 }
 
 func TestModelStreamsAndCommitsPendingEntry(t *testing.T) {
