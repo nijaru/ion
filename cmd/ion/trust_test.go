@@ -37,8 +37,12 @@ func TestStartupToolLineReportsLazyTools(t *testing.T) {
 	line := startupToolLine(toolSummaryBackend{surface: backend.ToolSurface{
 		Count:       25,
 		LazyEnabled: true,
+		Sandbox:     "auto: bubblewrap",
 	}})
 	if !strings.Contains(line, "search_tools enabled") {
 		t.Fatalf("line = %q, want search_tools notice", line)
+	}
+	if !strings.Contains(line, "sandbox auto: bubblewrap") {
+		t.Fatalf("line = %q, want sandbox notice", line)
 	}
 }

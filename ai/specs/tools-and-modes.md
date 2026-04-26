@@ -147,7 +147,8 @@ Current behavior:
 - `seatbelt`: require `sandbox-exec`; fail closed if unavailable
 - `bubblewrap`: require `bwrap`; fail closed if unavailable
 
-`/tools` reports the active sandbox posture for the native backend.
+The startup banner and `/tools` report the active sandbox posture for the native
+backend.
 
 ## Escalation
 

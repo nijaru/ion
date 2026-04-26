@@ -7,7 +7,7 @@ Fast, lightweight terminal coding agent.
 Ion has been reconciled with the current stabilized Canto surface. The core loop audit, HITL permission-mode hardening, observability exporter slice, workflow topology spec, first eval regression gate, deterministic policy config slice, first executable subagent persona/routing slice, workspace trust slice, tool-loading UX slice, and first memory search UX slice are complete. Current work is moving through the remaining P2 reliability/UX epics.
 
 Current active slice:
-- `tk-kfno` — Security sandbox hardening. First slice makes explicit Seatbelt/bubblewrap modes fail closed when unavailable, surfaces sandbox posture through `/tools`, and avoids binding missing bubblewrap paths.
+- `tk-kfno` — Security sandbox hardening. First slice makes explicit Seatbelt/bubblewrap modes fail closed when unavailable, surfaces sandbox posture at startup and through `/tools`, and avoids binding missing bubblewrap paths.
 
 Near-term tracks:
 - `tk-96vy` — Core loop: reliability and resilience audit (Completed)
