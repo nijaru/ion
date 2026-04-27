@@ -11,6 +11,8 @@
 - [Core Agent Reference Delta](research/core-agent-reference-delta-2026-04-27.md) — Focused Pi/Codex CLI and loop deltas after Gate 2 stabilization
 - [Thinking Effort Provider Survey](research/thinking-effort-provider-survey-2026-04.md) — Provider reasoning controls and Ion capability-model recommendation
 - [Canto Research Delta](review/canto-research-delta-2026-04-26.md) — Recent Canto ai/ findings that affect Ion task sequencing
+- [Core Loop Contract](review/core-loop-contract.md) — Native Canto/Ion loop invariants for history, events, terminal states, replay, and CLI
+- [Core Loop Review](review/core-loop-review.md) — Focused contract review after resume/tool-call failures
 - [Tools and Modes Spec](specs/tools-and-modes.md) — Permission modes, approval prompt behavior, and ESCALATE.md host UX
 - [Status and Config Spec](specs/status-and-config.md) — Status line, model picker metadata, and global config/state/trust layout
 - [Security Policy Spec](specs/security-policy.md) — YAML tool/category policy rules and LLM judge deferral boundary

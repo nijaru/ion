@@ -4,14 +4,16 @@ Fast, lightweight terminal coding agent.
 
 ## Current Focus
 
-Ion is back in core-loop stabilization. Gate 1 is green; do not expand into ACP, sandboxing, routing, or SOTA work until the core-loop contract and TUI baseline gates are also covered.
+Ion is back in core-loop stabilization. The core loop contract is now explicit; do not expand into ACP, sandboxing, routing, or SOTA work until resume-after-tool-call, cancellation/error replay, and scriptable smoke coverage stay green.
 
 Current active blockers:
 - `tk-mmcs` — Keep the Pi/Codex/Claude core parity plan, roadmap, and task queue synchronized while the loop is stabilized.
+- `tk-md7n` — Enforce the native core-loop contract and keep follow-up tests focused on real corrupt-history failure shapes.
 
 Next core-parity work:
-- run a short Pi/Codex reference review (`tk-ekw5`) against the now-stable core loop before choosing the next polish slice. Native loop Gate 2 has deterministic coverage and a live Fedora/local-api tool-call smoke.
+- keep `tk-md7n` centered on the native loop contract: no invalid provider history, no duplicate transcript persistence, durable terminal states, readable replay, and successful follow-up turns after resume.
 - use the scriptable print CLI (`ion -p "prompt"`, `ion -p --json "prompt"`, `ion --print "prompt" --json`, and piped stdin) as the automated Fedora/local-api smoke surface before TUI-only checks.
+- run a short Pi/Codex reference review (`tk-ekw5`) only after the current contract pass is green.
 
 Captured lower-priority polish:
 - `tk-c037` — TUI: question-mark help shortcut (completed)
@@ -23,7 +25,7 @@ Captured lower-priority polish:
 - `tk-tilu` — Show thinking state without dumping hidden reasoning (completed)
 
 Near-term tracks after the active blocker:
-- core loop contract tests: resumed new turn, tool-only assistant turns, cancellation/error persistence, retry status, provider-limit recovery
+- core loop contract tests: resumed new turn after tool calls, tool-only assistant turns, cancellation/error persistence, retry status, provider-limit recovery
 - noninteractive prompt mode is now scriptable with text/JSON output and should be used as the automated local-api/Fedora smoke surface
 - TUI baseline: compact routine tool output, slash command autocomplete/help, thinking state display
 - config/provider hygiene: no placeholder favorites, custom endpoint isolation, clear state/config/trust ownership
@@ -166,6 +168,8 @@ P4 follow-ups:
 - `ai/research/pi-current-core-loop-review-2026-04.md` — Current Pi core-loop, `/tree`, compaction, and UX review.
 - `ai/research/core-agent-reference-delta-2026-04-27.md` — Focused Pi/Codex CLI and loop deltas after Gate 2 stabilization.
 - `ai/review/canto-research-delta-2026-04-26.md` — Recent Canto ai/ findings that affect Ion sequencing.
+- `ai/review/core-loop-contract.md` — Native Canto/Ion core-loop invariants for provider history, events, persistence, replay, approvals, and print CLI.
+- `ai/review/core-loop-review.md` — Focused contract review after resume/tool-call failures.
 - `ai/specs/tools-and-modes.md` — Permission modes spec
 - `ai/specs/status-and-config.md` — Status line, model picker metadata, and config/state/trust layout
 - `ai/specs/security-policy.md` — YAML policy config and LLM judge deferral boundary
