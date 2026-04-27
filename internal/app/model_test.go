@@ -535,6 +535,34 @@ func TestApprovalPromptRendersEscalationChannels(t *testing.T) {
 	}
 }
 
+func TestApprovalRequestRedactsSensitiveDisplayFields(t *testing.T) {
+	model := readyModel(t)
+	req := session.ApprovalRequest{
+		RequestID:   "req-1",
+		ToolName:    "bash",
+		Args:        `{"command":"curl -H 'Authorization: Bearer abc.def-123' https://example.test"}`,
+		Description: "Email jane.doe@example.com with api_key=sk-test1234567890",
+	}
+
+	updated, _ := model.Update(req)
+	model = updated.(Model)
+
+	if model.Approval.Pending == nil {
+		t.Fatal("expected pending approval")
+	}
+	for _, leaked := range []string{"abc.def-123", "jane.doe@example.com", "sk-test1234567890"} {
+		if strings.Contains(model.Approval.Pending.Description, leaked) ||
+			strings.Contains(model.Approval.Pending.Args, leaked) {
+			t.Fatalf("approval leaked %q: %#v", leaked, model.Approval.Pending)
+		}
+	}
+	for _, want := range []string{"[redacted-secret]", "[redacted-email]"} {
+		if !strings.Contains(model.Approval.Pending.Description+model.Approval.Pending.Args, want) {
+			t.Fatalf("approval missing %q: %#v", want, model.Approval.Pending)
+		}
+	}
+}
+
 func TestApprovalNotificationSendsSlackWebhookAndAudits(t *testing.T) {
 	var payload string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -582,6 +610,27 @@ func TestApprovalNotificationSendsSlackWebhookAndAudits(t *testing.T) {
 	for _, want := range []string{"Ion approval requested", "Workspace: /repo", "Tool: bash", `{\"command\":\"deploy\"}`} {
 		if !strings.Contains(payload, want) {
 			t.Fatalf("payload missing %q: %s", want, payload)
+		}
+	}
+}
+
+func TestApprovalNotificationRedactsSensitiveContent(t *testing.T) {
+	req := session.ApprovalRequest{
+		RequestID:   "req-1",
+		ToolName:    "bash",
+		Args:        `{"command":"curl -H 'Authorization: Bearer abc.def-123' https://example.test"}`,
+		Description: "Email jane.doe@example.com with token=sk-test1234567890",
+	}
+
+	got := approvalNotificationText(req, "/repo", "slack #ai-alerts")
+	for _, leaked := range []string{"abc.def-123", "jane.doe@example.com", "sk-test1234567890"} {
+		if strings.Contains(got, leaked) {
+			t.Fatalf("notification leaked %q: %s", leaked, got)
+		}
+	}
+	for _, want := range []string{"[redacted-secret]", "[redacted-email]"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("notification missing %q: %s", want, got)
 		}
 	}
 }

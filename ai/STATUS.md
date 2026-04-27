@@ -7,7 +7,7 @@ Fast, lightweight terminal coding agent.
 Ion has been reconciled with the current stabilized Canto surface. The core loop audit, HITL permission-mode hardening, observability exporter slice, workflow topology spec, first eval regression gate, deterministic policy config slice, first executable subagent persona/routing slice, workspace trust slice, tool-loading UX slice, and first memory search UX slice are complete. Current work is moving through the remaining P2 reliability/UX epics.
 
 Current active slice:
-- Core-loop P2 queue is clear. `tk-90mp` and `tk-zz5i` are complete; next work should be selected from P3 based on concrete risk, not speculative SOTA expansion.
+- `tk-n0n4` — Privacy: first deterministic redaction slice covers approval prompts and Slack/email approval notifications. Continue only where redaction reduces real exposure in prompts, logs, traces, or tool previews.
 
 Captured lower-priority polish:
 - `tk-5cqs` — Slash commands: autocomplete and command surface review (P3)
@@ -65,6 +65,7 @@ Design rule:
 - [x] **Settings storage split (`tk-8188`)** — Stable config now stays in `~/.ion/config.toml`, mutable provider/model/thinking/active-preset state lives in `~/.ion/state.toml`, and both files use atomic temp-file replacement.
 - [x] **Core-loop smoke suite (`tk-zz5i`)** — Added deterministic app-level smoke coverage for submit/stream/tool persistence and replay, approval, cancel, retry-status persistence, and provider-limit stop traces.
 - [x] **Cost/limit resilience (`tk-90mp`)** — Budget enforcement, routing decision traces, provider-limit classification, Fedora local-api smoke, and transport-only endless retry are complete; richer model cascades are deferred until a concrete policy is needed.
+- [x] **Privacy approval-surface redaction (`tk-n0n4`)** — Added deterministic redaction for obvious secrets/PII and applied it to approval prompt descriptions/args plus Slack/email approval notification text.
 - [x] **Thinking control Ion slice (`tk-hase`)** — Ion preserves `auto/off/minimal/low/medium/high/xhigh/max`, exposes common named levels in `/thinking`, and only sends named effort when Canto reports support; richer provider translation is split to `tk-369n`.
 - [x] **Transport-only endless retry (`tk-90mp`)** — Canto `f71205f` added transport-only endless retry; Ion wires `retry_until_cancelled` to that path so disconnects can retry until Ctrl+C while rate/quota/server failures stay bounded and readable.
 - [x] **Retry-until-cancel resilience slice (`tk-lm25`)** — Canto now supports retry-until-context-cancel and raw transport transient classification; Ion defaults `retry_until_cancelled` on, emits visible retry status, and persists those status events without transcript spam.

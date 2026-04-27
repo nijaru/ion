@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/nijaru/ion/internal/privacy"
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
 )
@@ -280,6 +281,7 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
 
 	case session.ApprovalRequest:
+		msg = redactApprovalRequest(msg)
 		m.Approval.Pending = &msg
 		m.Progress.Mode = stateApproval
 		m.InFlight.Thinking = false
@@ -439,6 +441,12 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 	}
 
 	return m, m.awaitSessionEvent()
+}
+
+func redactApprovalRequest(req session.ApprovalRequest) session.ApprovalRequest {
+	req.Description = privacy.Redact(req.Description)
+	req.Args = privacy.Redact(req.Args)
+	return req
 }
 
 func persistErrorCmd(action string, err error) tea.Cmd {
