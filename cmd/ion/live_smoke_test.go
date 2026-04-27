@@ -17,6 +17,11 @@ func TestLiveSmokeTurnAndToolCall(t *testing.T) {
 		t.Skip("set ION_LIVE_SMOKE=1 to run live smoke coverage")
 	}
 
+	baseCfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
@@ -45,8 +50,13 @@ func TestLiveSmokeTurnAndToolCall(t *testing.T) {
 		t.Fatalf("cwd: %v", err)
 	}
 
-	cfg := &config.Config{Provider: provider, Model: modelName}
-	b, sess, err := openRuntime(ctx, store, cwd, "smoke", cfg, "", "")
+	cfg := *baseCfg
+	cfg.Provider = provider
+	cfg.Model = modelName
+	if endpoint := strings.TrimSpace(os.Getenv("ION_SMOKE_ENDPOINT")); endpoint != "" {
+		cfg.Endpoint = endpoint
+	}
+	b, sess, err := openRuntime(ctx, store, cwd, "smoke", &cfg, "", "")
 	if err != nil {
 		if isLiveSmokeUnavailable(err) {
 			t.Skipf("live smoke unavailable: %v", err)
@@ -164,9 +174,9 @@ loop:
 		t.Fatal("agent response not found in persisted session")
 	}
 
-	resumedCfg := &config.Config{Provider: provider, Model: modelName}
+	resumedCfg := cfg
 	t.Log("opening runtime against resumed session")
-	resumedBackend, resumedSess, err := openRuntime(ctx, store, cwd, "smoke", resumedCfg, "", sess.ID())
+	resumedBackend, resumedSess, err := openRuntime(ctx, store, cwd, "smoke", &resumedCfg, "", sess.ID())
 	if err != nil {
 		t.Fatalf("resume runtime: %v", err)
 	}
@@ -201,9 +211,11 @@ loop:
 	_ = resumedBackend.Session().Close()
 	_ = resumedSess.Close()
 
-	switchCfg := &config.Config{Provider: switchProvider, Model: switchModel}
+	switchCfg := cfg
+	switchCfg.Provider = switchProvider
+	switchCfg.Model = switchModel
 	t.Logf("opening switched runtime: provider=%s model=%s", switchProvider, switchModel)
-	switchedBackend, switchedSess, err := openRuntime(ctx, store, cwd, "smoke", switchCfg, "", sess.ID())
+	switchedBackend, switchedSess, err := openRuntime(ctx, store, cwd, "smoke", &switchCfg, "", sess.ID())
 	if err != nil {
 		t.Fatalf("open switched runtime: %v", err)
 	}

@@ -10,8 +10,8 @@ Current active blockers:
 - `tk-mmcs` — Keep the Pi/Codex/Claude core parity plan, roadmap, and task queue synchronized while the loop is stabilized.
 
 Next core-parity work:
-- `tk-0j7y` — continue Gate 2 loop coverage: resumed tool-session invariants and any remaining native-loop persistence gaps. User cancellation, provider-limit errors, retry status, and error-turn token usage now have real-store resume coverage.
-- use the now-scriptable print CLI (`ion -p "prompt"`, `ion -p --json "prompt"`, `ion --print "prompt" --json`, and piped stdin) as the automated Fedora/local-api smoke surface before TUI-only checks.
+- run a short Pi/Codex reference review (`tk-ekw5`) against the now-stable core loop before choosing the next polish slice. Native loop Gate 2 has deterministic coverage and a live Fedora/local-api tool-call smoke.
+- use the scriptable print CLI (`ion -p "prompt"`, `ion -p --json "prompt"`, `ion --print "prompt" --json`, and piped stdin) as the automated Fedora/local-api smoke surface before TUI-only checks.
 
 Captured lower-priority polish:
 - `tk-c037` — TUI: question-mark help shortcut (completed)
@@ -97,6 +97,7 @@ Design rule:
 - [x] **Prompt CLI stdin support (`tk-a028`)** — Print mode now uses piped stdin as the prompt when no prompt or `-` is supplied, and appends non-empty stdin as a `<stdin>` context block when a prompt is also present. Verified with `go test ./...` and live local-api JSON stdin smokes.
 - [x] **Cancel durability slice (`tk-0j7y`)** — Esc cancellation now persists and replays a `Canceled by user` system entry instead of only mutating live UI state. Verified with `go test ./...`.
 - [x] **Error/retry resume coverage (`tk-0j7y`)** — Added real-store resume tests for provider-limit terminal errors, token usage after errors, and retry status recovery through `LastStatus`. Verified with `go test ./...`.
+- [x] **Live Fedora/local-api tool smoke (`tk-0j7y`)** — Live smoke now preserves configured local-api endpoints while isolating session data in temp HOME; Fedora `qwen3.6:27b-uncensored` completed bash tool approval, persisted, and reopened the session. Verified with `ION_LIVE_SMOKE=1 ... go test ./cmd/ion -run TestLiveSmokeTurnAndToolCall -count=1 -v`.
 - [x] **Thinking control Ion slice (`tk-hase`)** — Ion preserves `auto/off/minimal/low/medium/high/xhigh/max`, exposes common named levels in `/thinking`, and only sends named effort when Canto reports support; richer provider translation is split to `tk-369n`.
 - [x] **Transport-only endless retry (`tk-90mp`)** — Canto `f71205f` added transport-only endless retry; Ion wires `retry_until_cancelled` to that path so disconnects can retry until Ctrl+C while rate/quota/server failures stay bounded and readable.
 - [x] **Retry-until-cancel resilience slice (`tk-lm25`)** — Canto now supports retry-until-context-cancel and raw transport transient classification; Ion defaults `retry_until_cancelled` on, emits visible retry status, and persists those status events without transcript spam.
