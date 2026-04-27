@@ -378,6 +378,8 @@ func (s *fileSession) Append(ctx context.Context, event any) error {
 		// Just save to log, no preview update
 	case RoutingDecision:
 		// Just save to log, no preview update
+	case EscalationNotification:
+		// Just save to log, no preview update
 	}
 
 	if touchIndex {

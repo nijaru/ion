@@ -156,6 +156,16 @@ type (
 		TS             int64   `json:"ts"`
 	}
 
+	EscalationNotification struct {
+		Type      string `json:"type"` // "escalation_notification"
+		RequestID string `json:"request_id"`
+		Channel   string `json:"channel"`
+		Target    string `json:"target"`
+		Status    string `json:"status"` // "sent", "failed", "skipped"
+		Detail    string `json:"detail,omitempty"`
+		TS        int64  `json:"ts"`
+	}
+
 	Subagent struct {
 		Type    string `json:"type"` // "subagent"
 		Name    string `json:"name"`

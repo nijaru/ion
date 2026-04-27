@@ -283,6 +283,9 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		m.Approval.Pending = &msg
 		m.Progress.Mode = stateApproval
 		m.InFlight.Thinking = false
+		if notify := m.approvalNotificationCmd(msg); notify != nil {
+			return m, tea.Batch(notify, m.awaitSessionEvent())
+		}
 		return m, m.awaitSessionEvent()
 
 	case session.ChildRequested:

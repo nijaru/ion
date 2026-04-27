@@ -213,11 +213,23 @@ backend.
 ## Escalation
 
 Ion loads `ESCALATE.md` from the workspace root when present, using Canto's
-root-scoped parser. The current host behavior is deliberately narrow:
-approval prompts surface declared email/Slack channels and approval timeout
-metadata so a blocked local run has an explicit handoff path. Automated
-Slack/email delivery is a separate notifier layer and should not be added
-until credentials, delivery semantics, and audit logging are designed.
+root-scoped parser. Approval prompts surface declared email/Slack channels and
+approval timeout metadata so a blocked local run has an explicit handoff path.
+
+First notifier delivery slice:
+
+- Slack channels send through an incoming webhook URL read from the channel's
+  `webhook_env` metadata value, or `ION_SLACK_WEBHOOK_URL` when unset.
+- Email channels send through SMTP only when `ION_SMTP_ADDR` and
+  `ION_SMTP_FROM` are set; optional auth uses `ION_SMTP_USERNAME` and
+  `ION_SMTP_PASSWORD`. Channel metadata can override env names with
+  `smtp_addr_env`, `from_env`, `smtp_user_env`, and `smtp_pass_env`.
+- Missing credentials are audited as `skipped`, not surfaced as user-facing
+  approval errors.
+- Delivery failures are audited as `failed` and printed as system notices; they
+  must not block the local approval prompt.
+- Every attempted channel writes an `escalation_notification` audit record with
+  request id, channel, target, status, detail, and timestamp.
 
 ## Research
 

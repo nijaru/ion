@@ -8,7 +8,7 @@ Ion has been reconciled with the current stabilized Canto surface. The core loop
 
 Current active slice:
 - `tk-90mp` — Streaming: Cost Limits & Model Cascades. Provider limit classification is now implemented; continue with any remaining budget/cascade behavior only when it strengthens the core loop.
-- `tk-00km` — HITL notifier delivery and audit. Resume after budget/rate-limit behavior is stable.
+- `tk-00km` — HITL notifier delivery and audit. First Slack/SMTP delivery and audit slice is in progress.
 - `tk-a5ds` — Config UX umbrella. P3 tracking bucket; do not let polish outrank core loop reliability.
 - `tk-8188` — Settings storage split. P3 design follow-up; current code still stores selected provider/model in config, but the target layout separates stable config from mutable runtime state.
 
@@ -63,6 +63,7 @@ Design rule:
 *(Note: Older P3 TUI refinement tasks like configurable verbosity, skill layering, and status line context have been subsumed by their respective SOTA epics).*
 
 ## Completed (Recent)
+- [x] **HITL notifier delivery slice (`tk-00km`)** — Approval requests now attempt Slack webhook and SMTP email notification when ESCALATE.md channels and credentials are configured, while auditing sent/failed/skipped outcomes without blocking the local approval prompt.
 - [x] **Provider-limit resilience slice (`tk-90mp`)** — Rate/quota/context/capacity provider failures now get readable UI prefixes while preserving raw provider text and append durable `routing_decision` stop traces. Verified with `go test ./...` and Fedora `local-api` smoke against `qwen3.6:27b-uncensored`.
 - [x] **Compaction UX slice (`tk-2wrb`)** — Added visible compacting progress, follow-up queueing while manual compaction runs, and Ion summarizer guidance that preserves goals, paths, task IDs, decisions, failures, and verification status.
 - [x] **Policy classifier foundation (`tk-9lws`)** — Added optional EDIT-mode classifier hook for existing `ask` decisions, with timeout/model-error/invalid-action fallback to `ask`, hard-boundary protection, and auditable policy events.

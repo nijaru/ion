@@ -3,6 +3,9 @@ package app
 import (
 	"context"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -519,6 +522,83 @@ func TestApprovalPromptRendersEscalationChannels(t *testing.T) {
 		if !strings.Contains(planeB, want) {
 			t.Fatalf("renderPlaneB missing %q:\n%s", want, planeB)
 		}
+	}
+}
+
+func TestApprovalNotificationSendsSlackWebhookAndAudits(t *testing.T) {
+	var payload string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s, want POST", r.Method)
+		}
+		data, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read body: %v", err)
+		}
+		payload = string(data)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	t.Setenv("ION_TEST_SLACK_WEBHOOK", server.URL)
+	req := session.ApprovalRequest{
+		RequestID:   "req-1",
+		ToolName:    "bash",
+		Args:        `{"command":"deploy"}`,
+		Description: "Tool: bash",
+	}
+	results := deliverApprovalNotifications(t.Context(), &workspace.EscalationConfig{
+		Channels: []workspace.EscalationChannel{
+			{
+				Type:    "slack",
+				Channel: "#ai-alerts",
+				Metadata: map[string]string{
+					"webhook_env": "ION_TEST_SLACK_WEBHOOK",
+				},
+			},
+		},
+	}, req, "/repo")
+
+	if len(results) != 1 {
+		t.Fatalf("results = %d, want 1", len(results))
+	}
+	result := results[0]
+	if result.record.Status != "sent" || result.record.Channel != "slack" {
+		t.Fatalf("record = %#v, want sent slack", result.record)
+	}
+	if !strings.Contains(result.notice, "Escalation notification sent: slack #ai-alerts") {
+		t.Fatalf("notice = %q, want sent notice", result.notice)
+	}
+	for _, want := range []string{"Ion approval requested", "Workspace: /repo", "Tool: bash", `{\"command\":\"deploy\"}`} {
+		if !strings.Contains(payload, want) {
+			t.Fatalf("payload missing %q: %s", want, payload)
+		}
+	}
+}
+
+func TestApprovalNotificationAuditsMissingCredentials(t *testing.T) {
+	t.Setenv("ION_SLACK_WEBHOOK_URL", "")
+	req := session.ApprovalRequest{
+		RequestID:   "req-1",
+		ToolName:    "bash",
+		Description: "Tool: bash",
+	}
+	results := deliverApprovalNotifications(t.Context(), &workspace.EscalationConfig{
+		Channels: []workspace.EscalationChannel{{Type: "slack", Channel: "#ai-alerts"}},
+	}, req, "/repo")
+
+	if len(results) != 1 {
+		t.Fatalf("results = %d, want 1", len(results))
+	}
+	result := results[0]
+	if result.record.Status != "skipped" {
+		t.Fatalf("status = %q, want skipped", result.record.Status)
+	}
+	if !strings.Contains(result.record.Detail, "ION_SLACK_WEBHOOK_URL") {
+		t.Fatalf("detail = %q, want missing env var", result.record.Detail)
+	}
+	if result.notice != "" {
+		t.Fatalf("notice = %q, want quiet skipped notification", result.notice)
 	}
 }
 
