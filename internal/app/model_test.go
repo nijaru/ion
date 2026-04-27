@@ -676,6 +676,50 @@ func TestRenderPendingToolEntryHonorsVerbosity(t *testing.T) {
 	}
 }
 
+func TestRenderRoutineToolEntryCompactsByDefault(t *testing.T) {
+	model := readyModel(t)
+	entry := session.Entry{
+		Role:    session.Tool,
+		Title:   "read",
+		Content: "line 1\nline 2\nline 3\n",
+	}
+
+	got := ansi.Strip(model.renderEntry(entry))
+	if !strings.Contains(got, "... (3 lines)") || strings.Contains(got, "line 1") {
+		t.Fatalf("routine tool render = %q, want compact summary", got)
+	}
+}
+
+func TestRenderRoutineToolEntryCanShowFullOutput(t *testing.T) {
+	model := readyModel(t)
+	model.Model.Config = &config.Config{ToolVerbosity: "full"}
+	entry := session.Entry{
+		Role:    session.Tool,
+		Title:   "read",
+		Content: "line 1\nline 2\n",
+	}
+
+	got := ansi.Strip(model.renderEntry(entry))
+	if !strings.Contains(got, "line 1") || !strings.Contains(got, "line 2") {
+		t.Fatalf("full routine tool render = %q, want original content", got)
+	}
+}
+
+func TestRenderRoutineToolEntryPreservesErrors(t *testing.T) {
+	model := readyModel(t)
+	entry := session.Entry{
+		Role:    session.Tool,
+		Title:   "grep",
+		Content: "grep failed\npattern missing\n",
+		IsError: true,
+	}
+
+	got := ansi.Strip(model.renderEntry(entry))
+	if !strings.Contains(got, "grep failed") || strings.Contains(got, "... (2 lines)") {
+		t.Fatalf("error routine tool render = %q, want full error content", got)
+	}
+}
+
 func TestLayoutClampsComposerHeight(t *testing.T) {
 	model := readyModel(t)
 

@@ -10,7 +10,7 @@ Current active blockers:
 - `tk-mmcs` — Keep the Pi/Codex/Claude core parity plan, roadmap, and task queue synchronized while the loop is stabilized.
 
 Next core-parity work:
-- `tk-kvqv` — Routine tool output collapse/detail path. Slash command autocomplete now has a picker foundation; routine tool display is the next TUI baseline polish area.
+- `tk-tilu` — Show thinking state without dumping hidden reasoning. Routine tool display now has compact defaults and an explicit full-output path.
 - CLI testing surface now supports `ion -p "prompt"` and `ion -p "prompt" --json` for Pi-style Fedora/local-api smoke tests.
 
 Captured lower-priority polish:
@@ -20,7 +20,6 @@ Captured lower-priority polish:
 - `tk-j6gh` — TUI startup copy polish (completed)
 - `tk-5gtk` — CLI continue/resume separator handling (completed)
 - `tk-ekw5` — Compare Pi/Codex UX references after core loop is stable; local repos are `/Users/nick/github/openai/codex` and `/Users/nick/github/badlogic/pi-mono`. Claude Code and `/Users/nick/github/ultraworkers/claw-code` are also useful product references when the comparison is relevant.
-- `tk-kvqv` — Collapse routine tool output by default (P3)
 - `tk-tilu` — Show thinking state without dumping hidden reasoning (P3)
 
 Near-term tracks after the active blocker:
@@ -91,6 +90,7 @@ Design rule:
 - [x] **Provider/model picker hygiene (`tk-9n7h`)** — Removed catalog-inferred fast preset selection, kept configured preset rows explicit, scoped endpoint/auth/header overrides to the active custom/local provider, and preserved non-listing provider manual-model behavior. Verified with `go test ./...` and Fedora/local-api JSON print smoke.
 - [x] **Slash command picker completion (`tk-5cqs`)** — Ambiguous Tab completion now opens a searchable command picker and inserts the selected command into the composer without transcript spam; help copy explains slash completion and configured fast preset behavior. Verified with `go test ./...`.
 - [x] **Prompt CLI ergonomics (`tk-vxet`)** — Added `-p` as the primary prompt-taking print shortcut, `--json` as output sugar, and positional prompt support when `--print` is set. Verified with `go test ./...`, `go run ./... -p "reply with the single word ok" --json --timeout 30s`, and `go run ./... --print "reply with the single word ok" --json --timeout 30s`.
+- [x] **Routine tool output compaction (`tk-kvqv`)** — Live completed `list`/`read`/`glob`/`grep` entries now render compact line-count summaries by default, `tool_verbosity = "full"` preserves detail, and error output stays expanded. Verified with `go test ./...` and Fedora/local-api `ion -p ... --json` smoke.
 - [x] **Thinking control Ion slice (`tk-hase`)** — Ion preserves `auto/off/minimal/low/medium/high/xhigh/max`, exposes common named levels in `/thinking`, and only sends named effort when Canto reports support; richer provider translation is split to `tk-369n`.
 - [x] **Transport-only endless retry (`tk-90mp`)** — Canto `f71205f` added transport-only endless retry; Ion wires `retry_until_cancelled` to that path so disconnects can retry until Ctrl+C while rate/quota/server failures stay bounded and readable.
 - [x] **Retry-until-cancel resilience slice (`tk-lm25`)** — Canto now supports retry-until-context-cancel and raw transport transient classification; Ion defaults `retry_until_cancelled` on, emits visible retry status, and persists those status events without transcript spam.
@@ -143,7 +143,6 @@ Remaining P2 work:
 
 P3 follow-ups:
 - `tk-369n` — Canto typed thinking capabilities and provider translation
-- `tk-kvqv` — Collapse routine tool output by default
 - `tk-tilu` — Show thinking state without exposing hidden reasoning
 - `tk-vxet` — Noninteractive prompt mode for automated agent-loop testing (completed JSON/text foundation; keep extending with fixtures as Gate 2 grows)
 - `tk-st4q` — ACP agent/headless mode after bridge correctness
