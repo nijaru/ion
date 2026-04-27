@@ -23,8 +23,8 @@ type printResult struct {
 
 func resolvePrintFlags(
 	printFlag bool,
+	printShort bool,
 	promptLong string,
-	promptShort string,
 	args []string,
 	output string,
 	jsonOutput bool,
@@ -41,17 +41,9 @@ func resolvePrintFlags(
 	}
 
 	promptLong = strings.TrimSpace(promptLong)
-	promptShort = strings.TrimSpace(promptShort)
-	if promptLong != "" && promptShort != "" {
-		return false, "", "", fmt.Errorf("use either -p or --prompt, not both")
-	}
+	prompt := promptLong
 
-	prompt := promptShort
-	if prompt == "" {
-		prompt = promptLong
-	}
-
-	printRequested := printFlag || prompt != "" || jsonOutput
+	printRequested := printFlag || printShort || prompt != "" || jsonOutput
 	if printRequested && prompt == "" && len(args) > 0 {
 		prompt = strings.Join(args, " ")
 	}

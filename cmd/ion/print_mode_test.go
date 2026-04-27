@@ -59,8 +59,8 @@ func TestConfigureSessionMode(t *testing.T) {
 	}
 }
 
-func TestResolvePrintFlagsSupportsShortPrompt(t *testing.T) {
-	requested, prompt, output, err := resolvePrintFlags(false, "", "hello", nil, "text", false)
+func TestResolvePrintFlagsSupportsShortPrintWithPositionalPrompt(t *testing.T) {
+	requested, prompt, output, err := resolvePrintFlags(false, true, "", []string{"hello"}, "text", false)
 	if err != nil {
 		t.Fatalf("resolve print flags: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestResolvePrintFlagsSupportsShortPrompt(t *testing.T) {
 }
 
 func TestResolvePrintFlagsSupportsJSONShortcut(t *testing.T) {
-	requested, prompt, output, err := resolvePrintFlags(false, "", "hello", nil, "text", true)
+	requested, prompt, output, err := resolvePrintFlags(false, false, "hello", nil, "text", true)
 	if err != nil {
 		t.Fatalf("resolve print flags: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestResolvePrintFlagsSupportsJSONShortcut(t *testing.T) {
 }
 
 func TestResolvePrintFlagsUsesPositionalPromptInPrintMode(t *testing.T) {
-	requested, prompt, output, err := resolvePrintFlags(true, "", "", []string{"hello", "world"}, "", false)
+	requested, prompt, output, err := resolvePrintFlags(true, false, "", []string{"hello", "world"}, "", false)
 	if err != nil {
 		t.Fatalf("resolve print flags: %v", err)
 	}
@@ -89,15 +89,8 @@ func TestResolvePrintFlagsUsesPositionalPromptInPrintMode(t *testing.T) {
 	}
 }
 
-func TestResolvePrintFlagsRejectsAmbiguousPromptFlags(t *testing.T) {
-	_, _, _, err := resolvePrintFlags(false, "long", "short", nil, "text", false)
-	if err == nil || !strings.Contains(err.Error(), "either -p or --prompt") {
-		t.Fatalf("resolve print flags error = %v", err)
-	}
-}
-
 func TestResolvePrintFlagsRejectsUnexpectedArguments(t *testing.T) {
-	_, _, _, err := resolvePrintFlags(false, "", "", []string{"hello"}, "text", false)
+	_, _, _, err := resolvePrintFlags(false, false, "", []string{"hello"}, "text", false)
 	if err == nil || !strings.Contains(err.Error(), "unexpected arguments") {
 		t.Fatalf("resolve print flags error = %v", err)
 	}
@@ -122,7 +115,18 @@ func TestNormalizeFlagArgsAllowsFlagsAfterPositionalPrompt(t *testing.T) {
 
 func TestNormalizeFlagArgsKeepsPromptValuesWithFlags(t *testing.T) {
 	got, openResumePicker := normalizeFlagArgs([]string{"-p", "reply with ok", "--json"})
-	want := []string{"-p", "reply with ok", "--json"}
+	want := []string{"-p", "--json", "--", "reply with ok"}
+	if openResumePicker {
+		t.Fatal("normalizeFlagArgs opened resume picker")
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("normalizeFlagArgs = %#v, want %#v", got, want)
+	}
+}
+
+func TestNormalizeFlagArgsAllowsShortPrintBeforeOtherFlags(t *testing.T) {
+	got, openResumePicker := normalizeFlagArgs([]string{"-p", "--json", "reply with ok"})
+	want := []string{"-p", "--json", "--", "reply with ok"}
 	if openResumePicker {
 		t.Fatal("normalizeFlagArgs opened resume picker")
 	}
