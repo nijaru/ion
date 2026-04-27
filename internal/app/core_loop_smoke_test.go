@@ -199,6 +199,39 @@ func TestCoreLoopSmokeProviderLimitErrorPersistsStopTrace(t *testing.T) {
 	}
 }
 
+func TestCoreLoopSmokeProviderLimitErrorPersistsForResume(t *testing.T) {
+	model, _, store, stored := newCoreLoopSmokeModel(t)
+
+	updated, _ := model.Update(session.TurnStarted{})
+	model = updated.(Model)
+	updated, _ = model.Update(session.TokenUsage{Input: 20, Output: 3, Cost: 0.02})
+	model = updated.(Model)
+	updated, _ = model.Update(session.Error{Err: errors.New("status 429: rate limit exceeded")})
+	model = updated.(Model)
+
+	if model.Progress.Mode != stateError {
+		t.Fatalf("progress mode = %v, want error", model.Progress.Mode)
+	}
+
+	resumed, err := store.ResumeSession(context.Background(), stored.ID())
+	if err != nil {
+		t.Fatalf("resume session: %v", err)
+	}
+	entries, err := resumed.Entries(context.Background())
+	if err != nil {
+		t.Fatalf("entries: %v", err)
+	}
+	requireEntry(t, entries, session.System, "Error: API rate limit")
+
+	input, output, cost, err := resumed.Usage(context.Background())
+	if err != nil {
+		t.Fatalf("usage: %v", err)
+	}
+	if input != 20 || output != 3 || cost != 0.02 {
+		t.Fatalf("usage = %d/%d/%f, want 20/3/0.02", input, output, cost)
+	}
+}
+
 func TestCoreLoopSmokeRetryStatusPersists(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	stored := &stubStorageSession{}
@@ -229,6 +262,30 @@ func TestCoreLoopSmokeRetryStatusPersists(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("missing retry status persistence in %#v", stored.appends)
+	}
+}
+
+func TestCoreLoopSmokeRetryStatusPersistsForResume(t *testing.T) {
+	model, _, store, stored := newCoreLoopSmokeModel(t)
+
+	status := "Network error. Retrying in 2s... Ctrl+C stops."
+	updated, _ := model.Update(session.StatusChanged{Status: status})
+	model = updated.(Model)
+
+	if model.Progress.Status != status {
+		t.Fatalf("status = %q, want retry status", model.Progress.Status)
+	}
+
+	resumed, err := store.ResumeSession(context.Background(), stored.ID())
+	if err != nil {
+		t.Fatalf("resume session: %v", err)
+	}
+	got, err := resumed.LastStatus(context.Background())
+	if err != nil {
+		t.Fatalf("last status: %v", err)
+	}
+	if got != status {
+		t.Fatalf("last status = %q, want %q", got, status)
 	}
 }
 
