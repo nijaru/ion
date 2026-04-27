@@ -27,7 +27,7 @@ func (m Model) statusLine() string {
 	case session.ModeEdit:
 		modeLabel = m.st.modeEdit.Render("[EDIT]")
 	case session.ModeYolo:
-		modeLabel = m.st.modeYolo.Render("[YOLO]")
+		modeLabel = m.st.modeYolo.Render("[AUTO]")
 	}
 	presetLabel := ""
 	if m.activePreset() == presetFast {

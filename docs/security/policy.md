@@ -53,6 +53,6 @@ Policy rules refine EDIT mode. They do not weaken READ mode.
 |---|---|
 | READ | Read tools are allowed; write and execute tools are denied; sensitive tools ask |
 | EDIT | Read tools are allowed; exact tool and category rules decide the rest |
-| YOLO | All tools are allowed |
+| AUTO | All tools are allowed |
 
 Missing policy files are ignored so a default Ion install starts without setup.

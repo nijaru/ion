@@ -30,7 +30,7 @@ Approval tiers remain deliberately small:
 |---|---|
 | READ | read tools allowed; write/execute blocked; sensitive asks |
 | EDIT | read tools allowed; write/execute/sensitive follow policy |
-| YOLO | all tools allowed |
+| AUTO | all tools allowed |
 
 Granular persistent rules live in `~/.ion/policy.yaml`; see
 `docs/security/policy.md`.

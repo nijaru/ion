@@ -27,6 +27,11 @@ type cantoStore struct {
 	toolNames map[string]string // Cache for tool use ID -> tool name
 }
 
+const (
+	ionSystemEvent   session.EventType = "ion_system"
+	ionSubagentEvent session.EventType = "ion_subagent"
+)
+
 func NewCantoStore(root string) (Store, error) {
 	if err := os.MkdirAll(root, 0755); err != nil {
 		return nil, err
@@ -329,14 +334,7 @@ func (s *cantoSession) Append(ctx context.Context, event any) error {
 		err = s.store.canto.Save(ctx, ev)
 	case Subagent:
 		preview = sessionSummary(e.Content)
-		content := fmt.Sprintf("Subagent %s: %s", e.Name, e.Content)
-		if e.IsError {
-			content = fmt.Sprintf("Subagent %s: ERROR: %s", e.Name, e.Content)
-		}
-		ev := session.NewEvent(s.id, session.MessageAdded, llm.Message{
-			Role:    llm.RoleSystem,
-			Content: content,
-		})
+		ev := session.NewEvent(s.id, ionSubagentEvent, e)
 		err = s.store.canto.Save(ctx, ev)
 	case ToolUse:
 		s.store.mu.Lock()
@@ -378,10 +376,7 @@ func (s *cantoSession) Append(ctx context.Context, event any) error {
 		err = s.store.canto.Save(ctx, ev)
 	case System:
 		preview = ""
-		ev := session.NewEvent(s.id, session.MessageAdded, llm.Message{
-			Role:    llm.RoleSystem,
-			Content: e.Content,
-		})
+		ev := session.NewEvent(s.id, ionSystemEvent, e)
 		err = s.store.canto.Save(ctx, ev)
 	case TokenUsage:
 		ev := session.NewEvent(s.id, session.EventType("token_usage"), map[string]any{
@@ -504,6 +499,10 @@ func (s *cantoSession) Entries(ctx context.Context) ([]ionsession.Entry, error) 
 
 	entries := make([]ionsession.Entry, 0, len(history))
 	for _, entry := range history {
+		if display, ok := displayContextEntry(entry); ok {
+			entries = append(entries, display)
+			continue
+		}
 		msg := entry.Message
 		switch msg.Role {
 		case llm.RoleUser:
@@ -529,33 +528,58 @@ func (s *cantoSession) Entries(ctx context.Context) ([]ionsession.Entry, error) 
 				IsError: toolErrors[msg.ToolID],
 			})
 		case llm.RoleSystem, llm.RoleDeveloper:
-			// Detect subagent breadcrumbs
-			if strings.HasPrefix(msg.Content, "Subagent ") && strings.Contains(msg.Content, ": ") {
-				parts := strings.SplitN(msg.Content[9:], ": ", 2)
-				if len(parts) == 2 {
-					name := parts[0]
-					content := parts[1]
-					isError := strings.HasPrefix(content, "ERROR: ")
-					if isError {
-						content = content[7:]
-					}
-					entries = append(entries, ionsession.Entry{
-						Role:    ionsession.Subagent,
-						Title:   name,
-						Content: content,
-						IsError: isError,
-					})
-					continue
-				}
-			}
-
 			entries = append(entries, ionsession.Entry{
 				Role:    ionsession.System,
 				Content: msg.Content,
 			})
 		}
 	}
+	entries = append(entries, s.displayEntries(sess.Events())...)
 	return entries, nil
+}
+
+func displayContextEntry(entry session.HistoryEntry) (ionsession.Entry, bool) {
+	if entry.EventType != session.ContextAdded {
+		return ionsession.Entry{}, false
+	}
+	switch entry.ContextKind {
+	case session.ContextKindSummary, session.ContextKindWorkingSet, session.ContextKindBootstrap:
+		return ionsession.Entry{
+			Role:    ionsession.System,
+			Content: entry.Message.Content,
+		}, true
+	default:
+		return ionsession.Entry{}, false
+	}
+}
+
+func (s *cantoSession) displayEntries(events []session.Event) []ionsession.Entry {
+	entries := make([]ionsession.Entry, 0)
+	for _, ev := range events {
+		switch ev.Type {
+		case ionSystemEvent:
+			var data System
+			if err := ev.UnmarshalData(&data); err != nil {
+				continue
+			}
+			entries = append(entries, ionsession.Entry{
+				Role:    ionsession.System,
+				Content: data.Content,
+			})
+		case ionSubagentEvent:
+			var data Subagent
+			if err := ev.UnmarshalData(&data); err != nil {
+				continue
+			}
+			entries = append(entries, ionsession.Entry{
+				Role:    ionsession.Subagent,
+				Title:   data.Name,
+				Content: data.Content,
+				IsError: data.IsError,
+			})
+		}
+	}
+	return entries
 }
 
 func (s *cantoSession) Usage(ctx context.Context) (int, int, float64, error) {

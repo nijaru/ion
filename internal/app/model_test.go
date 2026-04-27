@@ -245,13 +245,13 @@ func TestWithModeConfiguresSessionPolicy(t *testing.T) {
 		WithMode(session.ModeYolo)
 
 	if model.Mode != session.ModeYolo {
-		t.Fatalf("model mode = %v, want yolo", model.Mode)
+		t.Fatalf("model mode = %v, want auto", model.Mode)
 	}
 	if sess.mode != session.ModeYolo {
-		t.Fatalf("session mode = %v, want yolo", sess.mode)
+		t.Fatalf("session mode = %v, want auto", sess.mode)
 	}
 	if !sess.autoApprove {
-		t.Fatal("session auto approval was not enabled for yolo mode")
+		t.Fatal("session auto approval was not enabled for auto mode")
 	}
 
 	model = model.WithMode(session.ModeRead)
@@ -259,7 +259,50 @@ func TestWithModeConfiguresSessionPolicy(t *testing.T) {
 		t.Fatalf("session mode = %v, want read", sess.mode)
 	}
 	if sess.autoApprove {
-		t.Fatal("session auto approval stayed enabled outside yolo mode")
+		t.Fatal("session auto approval stayed enabled outside auto mode")
+	}
+}
+
+func TestShiftTabTogglesReadAndEditOnly(t *testing.T) {
+	model := readyModel(t).WithTrust(nil, true, "prompt")
+	model.Mode = session.ModeRead
+
+	updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
+	model = updated.(Model)
+	if model.Mode != session.ModeEdit {
+		t.Fatalf("mode = %v, want edit", model.Mode)
+	}
+
+	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
+	model = updated.(Model)
+	if model.Mode != session.ModeRead {
+		t.Fatalf("mode = %v, want read", model.Mode)
+	}
+
+	model.Mode = session.ModeYolo
+	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
+	model = updated.(Model)
+	if model.Mode != session.ModeEdit {
+		t.Fatalf("auto Shift+Tab mode = %v, want edit", model.Mode)
+	}
+}
+
+func TestUntrustedWorkspaceBlocksEditAndAutoModes(t *testing.T) {
+	model := readyModel(t).WithTrust(nil, false, "prompt")
+	model.Mode = session.ModeRead
+
+	updated, cmd := model.handleCommand("/mode auto")
+	model = updated
+	if model.Mode != session.ModeRead {
+		t.Fatalf("mode changed before command execution = %v", model.Mode)
+	}
+	if cmd == nil {
+		t.Fatal("expected untrusted edit command to return an error command")
+	}
+	msg := cmd()
+	errMsg, ok := msg.(session.Error)
+	if !ok || !strings.Contains(errMsg.Err.Error(), "Trust this workspace first") {
+		t.Fatalf("message = %#v, want trust error", msg)
 	}
 }
 
@@ -1664,6 +1707,9 @@ func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 		"/provider [name]",
 		"/model [name]",
 		"/thinking [lvl]",
+		"/read",
+		"/edit",
+		"/auto, /yolo",
 		"/trust [status]",
 		"/rewind <id>",
 		"/tools",
@@ -1691,6 +1737,34 @@ func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 	}
 }
 
+func TestTabCompletesSlashCommands(t *testing.T) {
+	model := readyModel(t)
+	model.Input.Composer.SetValue("/think")
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	model = updated.(Model)
+	if cmd != nil {
+		t.Fatalf("unexpected autocomplete cmd %T", cmd)
+	}
+	if got := model.Input.Composer.Value(); got != "/thinking " {
+		t.Fatalf("composer = %q, want /thinking autocomplete", got)
+	}
+}
+
+func TestTabListsAmbiguousSlashCommands(t *testing.T) {
+	model := readyModel(t)
+	model.Input.Composer.SetValue("/m")
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("expected ambiguous autocomplete to print matches")
+	}
+	if got := model.Input.Composer.Value(); got != "/m" {
+		t.Fatalf("composer = %q, want unchanged ambiguous prefix", got)
+	}
+}
+
 func TestToolsCommandReportsToolSurface(t *testing.T) {
 	model := readyModel(t)
 
@@ -1711,11 +1785,15 @@ func TestMemoryCommandReportsMemoryView(t *testing.T) {
 
 func TestTrustCommandPersistsWorkspaceTrust(t *testing.T) {
 	trustPath := filepath.Join(t.TempDir(), "trusted.json")
-	model := readyModel(t).WithTrust(ionworkspace.NewTrustStore(trustPath), false)
+	model := readyModel(t).WithTrust(ionworkspace.NewTrustStore(trustPath), false, "prompt")
+	model.Mode = session.ModeRead
 
 	model, cmd := model.handleCommand("/trust")
 	if !model.App.TrustedWorkspace {
 		t.Fatal("workspace not marked trusted")
+	}
+	if model.Mode != session.ModeEdit {
+		t.Fatalf("mode = %v, want edit after trust", model.Mode)
 	}
 	if cmd == nil {
 		t.Fatal("trust command returned nil cmd")
@@ -1726,6 +1804,21 @@ func TestTrustCommandPersistsWorkspaceTrust(t *testing.T) {
 	}
 	if !trusted {
 		t.Fatal("workspace trust was not persisted")
+	}
+}
+
+func TestTrustCommandRespectsStrictPolicy(t *testing.T) {
+	trustPath := filepath.Join(t.TempDir(), "trusted.json")
+	model := readyModel(t).WithTrust(ionworkspace.NewTrustStore(trustPath), false, "strict")
+
+	_, cmd := model.handleCommand("/trust")
+	if cmd == nil {
+		t.Fatal("strict trust command returned nil cmd")
+	}
+	msg := cmd()
+	errMsg, ok := msg.(session.Error)
+	if !ok || !strings.Contains(errMsg.Err.Error(), "workspace trust is strict") {
+		t.Fatalf("message = %#v, want strict trust error", msg)
 	}
 }
 
@@ -2178,7 +2271,7 @@ func TestPickerFilteringAcceptsSpaceInput(t *testing.T) {
 	}
 }
 
-func TestModelPickerListsFavoritesAtTop(t *testing.T) {
+func TestModelPickerListsConfiguredPresetsAtTop(t *testing.T) {
 	oldListModelsForConfig := listModelsForConfig
 	listModelsForConfig = func(ctx context.Context, cfg *config.Config) ([]registry.ModelMetadata, error) {
 		if cfg.Provider != "openrouter" {
@@ -2209,25 +2302,56 @@ func TestModelPickerListsFavoritesAtTop(t *testing.T) {
 	if len(items) != 3 {
 		t.Fatalf("item count = %d, want 3", len(items))
 	}
-	if items[0].Group != "Favorites" || items[1].Group != "Favorites" {
-		t.Fatalf("favorites groups = [%q %q], want [Favorites Favorites]", items[0].Group, items[1].Group)
-	}
-	if items[0].Detail != "Primary" || items[1].Detail != "Fast" {
-		t.Fatalf("favorites details = [%q %q], want [Primary Fast]", items[0].Detail, items[1].Detail)
+	if items[0].Group != "Configured presets" || items[1].Group != "Configured presets" {
+		t.Fatalf("configured groups = [%q %q], want [Configured presets Configured presets]", items[0].Group, items[1].Group)
 	}
 	if items[0].Value != "vendor/model-b" || items[1].Value != "vendor/model-a" {
-		t.Fatalf("favorites values = [%q %q], want [vendor/model-b vendor/model-a]", items[0].Value, items[1].Value)
+		t.Fatalf("configured values = [%q %q], want [vendor/model-b vendor/model-a]", items[0].Value, items[1].Value)
 	}
 	if items[2].Group != "All models" {
 		t.Fatalf("catalog group = %q, want All models", items[2].Group)
 	}
 
 	rendered := ansi.Strip(model.renderPicker())
-	if !strings.Contains(rendered, "Favorites") || !strings.Contains(rendered, "All models") {
+	if !strings.Contains(rendered, "Configured presets") || !strings.Contains(rendered, "All models") {
 		t.Fatalf("rendered picker missing model groups: %q", rendered)
 	}
-	if !strings.Contains(rendered, "Primary") || !strings.Contains(rendered, "Fast") {
-		t.Fatalf("rendered picker missing favorite group labels: %q", rendered)
+}
+
+func TestModelPickerDoesNotPromoteResolvedFastDefault(t *testing.T) {
+	oldListModelsForConfig := listModelsForConfig
+	listModelsForConfig = func(ctx context.Context, cfg *config.Config) ([]registry.ModelMetadata, error) {
+		return []registry.ModelMetadata{
+			{ID: "google/gemini-2.0-flash-lite-001"},
+			{ID: "vendor/model-c"},
+		}, nil
+	}
+	defer func() { listModelsForConfig = oldListModelsForConfig }()
+
+	model := readyModel(t)
+	updated, cmd := model.openModelPickerWithConfig(&config.Config{
+		Provider: "openrouter",
+		Model:    "vendor/model-b",
+	})
+	model = updated
+	if cmd != nil {
+		t.Fatalf("openModelPickerWithConfig returned unexpected command %T", cmd)
+	}
+	items := pickerDisplayItems(model.Picker.Overlay)
+	if len(items) != 3 {
+		t.Fatalf("item count = %d, want 3", len(items))
+	}
+	if items[0].Value != "vendor/model-b" || items[0].Group != "Configured presets" {
+		t.Fatalf("configured primary row = %#v, want stale configured model first", items[0])
+	}
+	if items[0].Metrics == nil || items[0].Metrics.Context != "—" ||
+		items[0].Metrics.Input != "—" || items[0].Metrics.Output != "—" {
+		t.Fatalf("missing metadata metrics = %#v, want explicit unknown columns", items[0].Metrics)
+	}
+	for _, item := range items {
+		if item.Value == "google/gemini-2.0-flash-lite-001" && item.Group == "Configured presets" {
+			t.Fatalf("resolved fast default should not appear as configured preset: %#v", item)
+		}
 	}
 }
 
@@ -2236,12 +2360,12 @@ func TestModelPickerTabReturnsToProviderPicker(t *testing.T) {
 	model.Picker.Overlay = &pickerOverlayState{
 		title: "Pick a model for openrouter",
 		items: []pickerItem{
-			{Label: "vendor/model-b", Value: "vendor/model-b", Group: "Favorites", Detail: "Primary"},
-			{Label: "vendor/model-a", Value: "vendor/model-a", Group: "Favorites", Detail: "Fast"},
+			{Label: "vendor/model-b", Value: "vendor/model-b", Group: "Configured presets"},
+			{Label: "vendor/model-a", Value: "vendor/model-a", Group: "Configured presets"},
 		},
 		filtered: []pickerItem{
-			{Label: "vendor/model-b", Value: "vendor/model-b", Group: "Favorites", Detail: "Primary"},
-			{Label: "vendor/model-a", Value: "vendor/model-a", Group: "Favorites", Detail: "Fast"},
+			{Label: "vendor/model-b", Value: "vendor/model-b", Group: "Configured presets"},
+			{Label: "vendor/model-a", Value: "vendor/model-a", Group: "Configured presets"},
 		},
 		purpose: pickerPurposeModel,
 		cfg:     &config.Config{Provider: "openrouter"},
@@ -2428,6 +2552,24 @@ func TestQueuedFollowUpSubmitsAfterTurnFinished(t *testing.T) {
 	}
 }
 
+func TestModeSlashCommandRunsDuringTurn(t *testing.T) {
+	model := readyModel(t).WithTrust(nil, true, "prompt")
+	model.InFlight.Thinking = true
+	model.Input.Composer.SetValue("/mode read")
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(Model)
+	if model.Mode != session.ModeRead {
+		t.Fatalf("mode = %v, want read", model.Mode)
+	}
+	if len(model.InFlight.QueuedTurns) != 0 {
+		t.Fatalf("queued turns = %v, want none for host command", model.InFlight.QueuedTurns)
+	}
+	if cmd == nil {
+		t.Fatal("expected mode command notice")
+	}
+}
+
 func TestEscapeCancelClearsQueuedFollowUps(t *testing.T) {
 	sess := &stubSession{events: make(chan session.Event)}
 	model := readyModel(t)
@@ -2572,10 +2714,10 @@ func TestProviderPickerSelectingCurrentProviderOpensModelPickerWithoutClearingMo
 		provider: "openrouter",
 		model:    "z-ai/glm-5",
 	}
-	oldListModels := listModels
-	listModels = func(ctx context.Context, provider string) ([]registry.ModelMetadata, error) {
-		if provider != "openrouter" {
-			t.Fatalf("provider = %q, want openrouter", provider)
+	oldListModelsForConfig := listModelsForConfig
+	listModelsForConfig = func(ctx context.Context, cfg *config.Config) ([]registry.ModelMetadata, error) {
+		if cfg.Provider != "openrouter" {
+			t.Fatalf("provider = %q, want openrouter", cfg.Provider)
 		}
 		return []registry.ModelMetadata{
 			{ID: "z-ai/glm-4.5"},
@@ -2583,7 +2725,7 @@ func TestProviderPickerSelectingCurrentProviderOpensModelPickerWithoutClearingMo
 			{ID: "z-ai/glm-5-turbo"},
 		}, nil
 	}
-	defer func() { listModels = oldListModels }()
+	defer func() { listModelsForConfig = oldListModelsForConfig }()
 
 	model.Picker.Overlay = &pickerOverlayState{
 		title:    "Pick a provider",
@@ -2622,6 +2764,59 @@ func TestProviderPickerSelectingCurrentProviderOpensModelPickerWithoutClearingMo
 	}
 	if got := model.Model.Backend.Model(); got != "z-ai/glm-5" {
 		t.Fatalf("backend model = %q, want z-ai/glm-5", got)
+	}
+}
+
+func TestModelPickerRejectsProviderWithoutModelListing(t *testing.T) {
+	model := readyModel(t)
+
+	updated, cmd := model.openModelPickerWithConfig(&config.Config{Provider: "zai"})
+	model = updated
+	if model.Picker.Overlay != nil {
+		t.Fatal("expected no model picker for provider without listing support")
+	}
+	if cmd == nil {
+		t.Fatal("expected model picker error command")
+	}
+	msg := cmd()
+	errMsg, ok := msg.(session.Error)
+	if !ok || !strings.Contains(errMsg.Err.Error(), "Set a model with /model <id>") {
+		t.Fatalf("message = %#v, want manual model entry notice", msg)
+	}
+}
+
+func TestProviderPickerSelectingNonListingProviderClearsStaleError(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	model := readyModel(t)
+	model.Progress.Mode = stateError
+	model.Progress.LastError = "failed to list models for zai"
+	model.Picker.Overlay = &pickerOverlayState{
+		title:    "Pick a provider",
+		items:    providerItems(&config.Config{}),
+		filtered: providerItems(&config.Config{}),
+		index:    pickerIndex(providerItems(&config.Config{}), "zai"),
+		purpose:  pickerPurposeProvider,
+		cfg:      &config.Config{Provider: "openrouter", Model: "vendor/model-b"},
+	}
+
+	updated, cmd := model.handlePickerKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated
+	if cmd == nil {
+		t.Fatal("expected non-listing provider selection notice")
+	}
+	if model.Progress.Mode == stateError || model.Progress.LastError != "" {
+		t.Fatalf("stale error not cleared: mode=%v err=%q", model.Progress.Mode, model.Progress.LastError)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.Provider != "zai" {
+		t.Fatalf("config provider = %q, want zai", cfg.Provider)
+	}
+	if cfg.Model != "" {
+		t.Fatalf("config model = %q, want cleared model", cfg.Model)
 	}
 }
 

@@ -151,7 +151,7 @@ func (m Model) renderPicker() string {
 
 func (m Model) renderPickerHelpText() string {
 	if m.Picker.Overlay != nil && m.Picker.Overlay.purpose == pickerPurposeModel {
-		return "Type to search • Tab swap provider/model • PgUp/PgDn page • ↑/↓ navigate • Enter select • Esc cancel"
+		return "Type to search • Ctrl+M swap primary/fast • Tab swap provider/model • PgUp/PgDn page • ↑/↓ navigate • Enter select • Esc cancel"
 	}
 	return "Type to search • PgUp/PgDn page • ↑/↓ navigate • Enter select • Esc cancel"
 }

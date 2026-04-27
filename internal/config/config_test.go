@@ -18,7 +18,7 @@ func TestLoadReadsConfigFile(t *testing.T) {
 
 	path := filepath.Join(configDir, "config.toml")
 	if err := os.WriteFile(path, []byte(
-		"provider = \"openai\"\nmodel = \"gpt-4o\"\nreasoning_effort = \"med\"\nfast_model = \"gpt-4.1-mini\"\nfast_reasoning_effort = \"low\"\nsummary_model = \"gpt-4o-mini\"\nsummary_reasoning_effort = \"low\"\nendpoint = \"https://example.com/v1\"\nauth_env_var = \"OPENAI_PROXY_KEY\"\ncontext_limit = 128000\nmax_session_cost = 1.25\nmax_turn_cost = 0.10\ntelemetry_otlp_endpoint = \" localhost:4317 \"\ntelemetry_otlp_insecure = true\npolicy_path = \" /tmp/ion-policy.yaml \"\nsubagents_path = \" /tmp/ion-agents \"\nsession_retention_days = 14\n[extra_headers]\n\"X-Test\" = \"value\"\n[telemetry_otlp_headers]\n\"x-api-key\" = \" secret \"\n",
+		"provider = \"openai\"\nmodel = \"gpt-4o\"\nreasoning_effort = \"med\"\nfast_model = \"gpt-4.1-mini\"\nfast_reasoning_effort = \"low\"\nsummary_model = \"gpt-4o-mini\"\nsummary_reasoning_effort = \"low\"\nendpoint = \"https://example.com/v1\"\nauth_env_var = \"OPENAI_PROXY_KEY\"\ncontext_limit = 128000\nmax_session_cost = 1.25\nmax_turn_cost = 0.10\nworkspace_trust = \"off\"\ntelemetry_otlp_endpoint = \" localhost:4317 \"\ntelemetry_otlp_insecure = true\npolicy_path = \" /tmp/ion-policy.yaml \"\nsubagents_path = \" /tmp/ion-agents \"\nsession_retention_days = 14\n[extra_headers]\n\"X-Test\" = \"value\"\n[telemetry_otlp_headers]\n\"x-api-key\" = \" secret \"\n",
 	), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -67,6 +67,9 @@ func TestLoadReadsConfigFile(t *testing.T) {
 	if cfg.MaxTurnCost != 0.10 {
 		t.Fatalf("max_turn_cost = %f, want %f", cfg.MaxTurnCost, 0.10)
 	}
+	if cfg.WorkspaceTrust != "off" {
+		t.Fatalf("workspace_trust = %q, want off", cfg.WorkspaceTrust)
+	}
 	if cfg.SessionRetentionDays != 14 {
 		t.Fatalf("session_retention_days = %d, want %d", cfg.SessionRetentionDays, 14)
 	}
@@ -110,6 +113,9 @@ func TestLoadUsesDefaultsWhenConfigMissing(t *testing.T) {
 	}
 	if cfg.SessionRetentionDays != DefaultSessionRetentionDays {
 		t.Fatalf("session_retention_days = %d, want %d", cfg.SessionRetentionDays, DefaultSessionRetentionDays)
+	}
+	if cfg.WorkspaceTrust != "prompt" {
+		t.Fatalf("workspace_trust = %q, want prompt", cfg.WorkspaceTrust)
 	}
 }
 
@@ -181,6 +187,7 @@ func TestSaveWritesStatePath(t *testing.T) {
 		ContextLimit:           128000,
 		MaxSessionCost:         1.25,
 		MaxTurnCost:            0.10,
+		WorkspaceTrust:         "strict",
 		TelemetryOTLPEndpoint:  "localhost:4317",
 		TelemetryOTLPInsecure:  true,
 		TelemetryOTLPHeaders:   map[string]string{"x-api-key": "secret"},
@@ -216,6 +223,7 @@ func TestSaveWritesStatePath(t *testing.T) {
 		`context_limit = 128000`,
 		`max_session_cost = 1.25`,
 		`max_turn_cost = 0.1`,
+		`workspace_trust = 'strict'`,
 		`telemetry_otlp_endpoint = 'localhost:4317'`,
 		`telemetry_otlp_insecure = true`,
 		`policy_path = '/tmp/ion-policy.yaml'`,

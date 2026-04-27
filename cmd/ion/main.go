@@ -34,8 +34,8 @@ func main() {
 	)
 	resumeFlag := flag.String("resume", "", "Resume a specific session by ID")
 	providerFlag := flag.String("provider", "", "Provider to use")
-	modeFlag := flag.String("mode", "", "Permission mode: read, edit, or yolo")
-	yoloFlag := flag.Bool("yolo", false, "Start in YOLO mode (alias for --mode yolo)")
+	modeFlag := flag.String("mode", "", "Permission mode: read, edit, or auto")
+	yoloFlag := flag.Bool("yolo", false, "Start in AUTO mode (alias for --mode auto)")
 	printFlag := flag.Bool("print", false, "Print response and exit (use with --prompt or stdin)")
 	promptFlag := flag.String("prompt", "", "Prompt to send in print mode")
 	timeoutFlag := flag.Duration("timeout", 5*time.Minute, "Timeout for print mode")
@@ -70,7 +70,7 @@ func main() {
 	ctx := context.Background()
 	cwd, _ := os.Getwd()
 	branch := currentBranch()
-	trustStore, trusted, trustNotice, err := loadWorkspaceTrust(cwd)
+	trustStore, trusted, trustNotice, err := loadWorkspaceTrust(cwd, cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to load workspace trust: %v\n", err)
 		os.Exit(1)
@@ -171,7 +171,7 @@ func main() {
 	model := app.New(b, sess, store, cwd, branch, version, switcher).
 		WithMode(mode).
 		WithEscalation(escalation).
-		WithTrust(trustStore, trusted).
+		WithTrust(trustStore, trusted, cfg.WorkspaceTrust).
 		WithPrintedTranscript(len(startupEntries) > 0)
 	p := tea.NewProgram(model)
 	if _, err := p.Run(); err != nil {
@@ -180,7 +180,10 @@ func main() {
 	}
 }
 
-func loadWorkspaceTrust(cwd string) (*ionworkspace.TrustStore, bool, string, error) {
+func loadWorkspaceTrust(cwd string, cfg *config.Config) (*ionworkspace.TrustStore, bool, string, error) {
+	if cfg != nil && config.ResolveWorkspaceTrust(cfg.WorkspaceTrust) == "off" {
+		return nil, true, "", nil
+	}
 	path, err := ionworkspace.DefaultTrustPath()
 	if err != nil {
 		return nil, false, "", err
@@ -205,15 +208,15 @@ func startupToolLine(b backend.Backend) string {
 	if surface.Count == 0 {
 		return ""
 	}
-	sandbox := strings.TrimSpace(surface.Sandbox)
-	sandboxSuffix := ""
-	if sandbox != "" {
-		sandboxSuffix = "; sandbox " + sandbox
-	}
+	parts := []string{fmt.Sprintf("Tools %d registered", surface.Count)}
 	if surface.LazyEnabled {
-		return fmt.Sprintf("Tools: %d registered; search_tools enabled%s", surface.Count, sandboxSuffix)
+		parts = append(parts, "Search tools enabled")
 	}
-	return fmt.Sprintf("Tools: %d registered%s", surface.Count, sandboxSuffix)
+	sandbox := strings.TrimSpace(surface.Sandbox)
+	if sandbox != "" {
+		parts = append(parts, "Sandbox "+sandbox)
+	}
+	return strings.Join(parts, " • ")
 }
 
 func openRuntime(ctx context.Context, store storage.Store, cwd, branch string, cfg *config.Config, acpCommandOverride string, sessionID string) (backend.Backend, storage.Session, error) {

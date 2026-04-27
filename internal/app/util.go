@@ -26,7 +26,7 @@ func initialMode(_ backend.Bootstrap) session.Mode {
 		switch config.ResolveDefaultMode(cfg.DefaultMode) {
 		case "read":
 			return session.ModeRead
-		case "yolo":
+		case "auto":
 			return session.ModeYolo
 		}
 	}
@@ -76,6 +76,45 @@ func (m *Model) printEntries(entries ...session.Entry) tea.Cmd {
 		lines = append(lines, m.renderEntry(entry))
 	}
 	return printLinesCmd(lines...)
+}
+
+func (m *Model) printHelp(content string) tea.Cmd {
+	content = strings.TrimRight(content, "\n")
+	if content == "" {
+		return nil
+	}
+	lines := make([]string, 0, strings.Count(content, "\n")+2)
+	if !m.App.PrintedTranscript {
+		lines = append(lines, "")
+		m.App.PrintedTranscript = true
+	}
+	for i, line := range strings.Split(content, "\n") {
+		switch {
+		case i == 0:
+			lines = append(lines, m.st.cyan.Render(line))
+		case isHelpSectionLine(line):
+			lines = append(lines, m.st.cyan.Render(line))
+		default:
+			lines = append(lines, line)
+		}
+	}
+	return printLinesCmd(lines...)
+}
+
+func isHelpSectionLine(line string) bool {
+	switch strings.TrimSpace(line) {
+	case "keys", "approval":
+		return true
+	default:
+		return false
+	}
+}
+
+func (m *Model) clearProgressError() {
+	if m.Progress.Mode == stateError {
+		m.Progress.Mode = stateReady
+	}
+	m.Progress.LastError = ""
 }
 
 func (m *Model) clearPendingAction() {

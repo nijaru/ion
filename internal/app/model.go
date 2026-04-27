@@ -164,6 +164,7 @@ type AppState struct {
 	StartupLines      []string
 	StartupEntries    []session.Entry
 	TrustedWorkspace  bool
+	WorkspaceTrust    string
 }
 
 // ModelState holds the core backend, session, and storage handles.
@@ -374,9 +375,12 @@ func (m Model) WithEscalation(cfg *workspace.EscalationConfig) Model {
 	return m
 }
 
-func (m Model) WithTrust(store *ionworkspace.TrustStore, trusted bool) Model {
+func (m Model) WithTrust(store *ionworkspace.TrustStore, trusted bool, policy ...string) Model {
 	m.Model.TrustStore = store
 	m.App.TrustedWorkspace = trusted
+	if len(policy) > 0 {
+		m.App.WorkspaceTrust = config.ResolveWorkspaceTrust(policy[0])
+	}
 	return m
 }
 
@@ -587,6 +591,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.Picker.Overlay = nil
 		m.Picker.Session = nil
 		m.Progress.Status = msg.status
+		m.clearProgressError()
 		if msg.cfg != nil {
 			m.Progress.ReasoningEffort = normalizeThinkingValue(msg.cfg.ReasoningEffort)
 		}
@@ -602,7 +607,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.InFlight.ReasonBuf = ""
 		m.InFlight.StreamBuf = ""
 		m.Progress.Mode = stateReady
-		m.Progress.LastError = ""
 		m.Progress.LastTurnSummary = turnSummary{}
 		m.InFlight.Thinking = false
 		m.Input.CtrlCPending = false
@@ -650,7 +654,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.printEntries(session.Entry{Role: session.System, Content: msg.notice})
 
 	case sessionHelpMsg:
-		return m, m.printEntries(session.Entry{Role: session.System, Content: msg.notice})
+		return m, m.printHelp(msg.notice)
 
 	case queuedTurnMsg:
 		next, cmd := m.submitText(msg.text)
