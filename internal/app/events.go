@@ -97,16 +97,8 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 	case "esc":
 		if m.InFlight.Thinking {
-			m.Model.Session.CancelTurn(context.Background())
-			m.InFlight.Thinking = false
-			m.Progress.Mode = stateCancelled
-			m.InFlight.Pending = nil
-			m.InFlight.PendingTools = nil
-			m.InFlight.QueuedTurns = nil
-			m.InFlight.StreamBuf = ""
-			m.InFlight.ReasonBuf = ""
 			m.clearPendingAction()
-			return m, nil
+			return m.cancelRunningTurn("Canceled by user")
 		}
 		m.clearPendingAction()
 		return m, nil

@@ -136,6 +136,32 @@ func TestCoreLoopSmokeApprovalAndCancel(t *testing.T) {
 	}
 }
 
+func TestCoreLoopSmokeCancelPersistsTerminalEntry(t *testing.T) {
+	model, sess, store, stored := newCoreLoopSmokeModel(t)
+
+	updated, _ := model.Update(session.TurnStarted{})
+	model = updated.(Model)
+	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	model = updated.(Model)
+
+	if sess.cancels != 1 {
+		t.Fatalf("cancels = %d, want 1", sess.cancels)
+	}
+	if model.Progress.Mode != stateCancelled {
+		t.Fatalf("progress mode = %v, want cancelled", model.Progress.Mode)
+	}
+
+	resumed, err := store.ResumeSession(context.Background(), stored.ID())
+	if err != nil {
+		t.Fatalf("resume session: %v", err)
+	}
+	entries, err := resumed.Entries(context.Background())
+	if err != nil {
+		t.Fatalf("entries: %v", err)
+	}
+	requireEntry(t, entries, session.System, "Canceled by user")
+}
+
 func TestCoreLoopSmokeProviderLimitErrorPersistsStopTrace(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	stored := &stubStorageSession{}
