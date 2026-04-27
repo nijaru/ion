@@ -10,10 +10,9 @@ Current active blockers:
 - `tk-mmcs` — Keep the Pi/Codex/Claude core parity plan, roadmap, and task queue synchronized while the loop is stabilized.
 
 Next core-parity work:
-- `tk-5cqs` — Slash command surface and autocomplete. This is the next core usability layer after the resume/model-history and provider/model hygiene fixes.
+- `tk-kvqv` — Routine tool output collapse/detail path. Slash command autocomplete now has a picker foundation; routine tool display is the next TUI baseline polish area.
 
 Captured lower-priority polish:
-- `tk-5cqs` — Slash commands: autocomplete and command surface review (P3)
 - `tk-c037` — TUI: question-mark help shortcut (completed)
 - `tk-hase` — Thinking UI/config slice (completed; Canto capability follow-up split to `tk-369n`)
 - `tk-n0n4` — Privacy display redaction slice completed; remaining privacy work is P4 until a concrete leak blocks a release.
@@ -89,6 +88,7 @@ Design rule:
 - [x] **Dual transcript persistence fix (`tk-5t72`)** — Canto now owns model-visible user/assistant/tool transcript persistence; Ion only live-renders those events and keeps UI-local metadata/status/usage writes. Verified with `go test ./...`, a Fedora/local-api print smoke, SQLite event inspection, and `--continue` on the new session.
 - [x] **Resume transcript rendering (`tk-izo7`)** — Canto commit `927e482` filters invalid assistant rows from effective history, Ion imports that pseudo-version, replay/live transcript entries use shared spacing, the resumed marker appears after the startup header, backend close waits for turn goroutines, and routine tool replay is compact by default. Verified with Canto `go test ./...`, Ion `go test ./...`, `go run ./... --continue --print --timeout 30s --prompt hi`, and `go run ./... --continue --print --output json --timeout 30s --prompt "reply with the single word ok"` against the live local-api session.
 - [x] **Provider/model picker hygiene (`tk-9n7h`)** — Removed catalog-inferred fast preset selection, kept configured preset rows explicit, scoped endpoint/auth/header overrides to the active custom/local provider, and preserved non-listing provider manual-model behavior. Verified with `go test ./...` and Fedora/local-api JSON print smoke.
+- [x] **Slash command picker completion (`tk-5cqs`)** — Ambiguous Tab completion now opens a searchable command picker and inserts the selected command into the composer without transcript spam; help copy explains slash completion and configured fast preset behavior. Verified with `go test ./...`.
 - [x] **Thinking control Ion slice (`tk-hase`)** — Ion preserves `auto/off/minimal/low/medium/high/xhigh/max`, exposes common named levels in `/thinking`, and only sends named effort when Canto reports support; richer provider translation is split to `tk-369n`.
 - [x] **Transport-only endless retry (`tk-90mp`)** — Canto `f71205f` added transport-only endless retry; Ion wires `retry_until_cancelled` to that path so disconnects can retry until Ctrl+C while rate/quota/server failures stay bounded and readable.
 - [x] **Retry-until-cancel resilience slice (`tk-lm25`)** — Canto now supports retry-until-context-cancel and raw transport transient classification; Ion defaults `retry_until_cancelled` on, emits visible retry status, and persists those status events without transcript spam.
@@ -141,7 +141,6 @@ Remaining P2 work:
 
 P3 follow-ups:
 - `tk-369n` — Canto typed thinking capabilities and provider translation
-- `tk-5cqs` — Slash command surface review
 - `tk-kvqv` — Collapse routine tool output by default
 - `tk-tilu` — Show thinking state without exposing hidden reasoning
 - `tk-vxet` — Noninteractive prompt mode for automated agent-loop testing (completed JSON/text foundation; keep extending with fixtures as Gate 2 grows)
