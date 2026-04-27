@@ -720,6 +720,51 @@ func TestRenderRoutineToolEntryPreservesErrors(t *testing.T) {
 	}
 }
 
+func TestRenderThinkingEntryCollapsesByDefault(t *testing.T) {
+	model := readyModel(t)
+	entry := session.Entry{
+		Role:      session.Agent,
+		Reasoning: "private chain of thought",
+		Content:   "answer",
+	}
+
+	got := ansi.Strip(model.renderEntry(entry))
+	if !strings.Contains(got, "Thinking") || !strings.Contains(got, "...") {
+		t.Fatalf("thinking render = %q, want collapsed thinking marker", got)
+	}
+	if strings.Contains(got, "private chain of thought") {
+		t.Fatalf("thinking render leaked reasoning: %q", got)
+	}
+}
+
+func TestRenderThinkingEntryCanShowFullReasoning(t *testing.T) {
+	model := readyModel(t)
+	model.Model.Config = &config.Config{ThinkingVerbosity: "full"}
+	entry := session.Entry{
+		Role:      session.Agent,
+		Reasoning: "visible reasoning",
+		Content:   "answer",
+	}
+
+	got := ansi.Strip(model.renderEntry(entry))
+	if !strings.Contains(got, "visible reasoning") {
+		t.Fatalf("full thinking render = %q, want reasoning text", got)
+	}
+}
+
+func TestRenderPlaneBThinkingCollapsesByDefault(t *testing.T) {
+	model := readyModel(t)
+	model.InFlight.ReasonBuf = "private chain of thought"
+
+	got := ansi.Strip(model.renderPlaneB())
+	if !strings.Contains(got, "Thinking...") || !strings.Contains(got, "...") {
+		t.Fatalf("plane b thinking = %q, want collapsed thinking marker", got)
+	}
+	if strings.Contains(got, "private chain of thought") {
+		t.Fatalf("plane b thinking leaked reasoning: %q", got)
+	}
+}
+
 func TestLayoutClampsComposerHeight(t *testing.T) {
 	model := readyModel(t)
 

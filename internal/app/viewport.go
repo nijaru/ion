@@ -28,8 +28,16 @@ func (m Model) renderPlaneB() string {
 	if m.InFlight.ReasonBuf != "" {
 		b.WriteString(m.st.dim.Render("• Thinking..."))
 		b.WriteString("\n")
-		for _, line := range strings.Split(m.InFlight.ReasonBuf, "\n") {
-			b.WriteString(m.st.dim.PaddingLeft(4).Render(line))
+		switch m.verbosity("thinking") {
+		case "full":
+			for _, line := range strings.Split(m.InFlight.ReasonBuf, "\n") {
+				b.WriteString(m.st.dim.PaddingLeft(4).Render(line))
+				b.WriteString("\n")
+			}
+		case "hidden":
+			return b.String()
+		default:
+			b.WriteString(m.st.dim.PaddingLeft(4).Render("..."))
 			b.WriteString("\n")
 		}
 	}
@@ -159,6 +167,7 @@ func (m Model) verbosity(kind string) string {
 		if v := m.Model.Config.ThinkingVerbosity; v != "" {
 			return v
 		}
+		return "collapsed"
 	}
 	return "full"
 }
