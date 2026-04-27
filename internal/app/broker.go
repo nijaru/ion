@@ -406,7 +406,14 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		m.InFlight.Thinking = false
 		m.Progress.Compacting = false
 		m.Progress.Mode = stateError
-		m.Progress.LastError = msg.Err.Error()
+		displayErr := msg.Err.Error()
+		if limit, ok := classifyProviderLimitError(msg.Err); ok {
+			displayErr = limit.display()
+			if err := m.persistEntry("persist routing stop", m.routingDecision("stop", limit.reason, limit.raw)); err != nil {
+				return m, persistErrorCmd("persist routing stop", err)
+			}
+		}
+		m.Progress.LastError = displayErr
 		m.Progress.LastTurnSummary = turnSummary{}
 		if !m.Progress.TurnStartedAt.IsZero() {
 			m.Progress.LastTurnSummary = turnSummary{
@@ -417,7 +424,7 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 			}
 		}
 		m.Progress.TurnStartedAt = time.Time{}
-		entry := session.Entry{Role: session.System, Content: "Error: " + msg.Err.Error()}
+		entry := session.Entry{Role: session.System, Content: "Error: " + displayErr}
 		if err := m.persistEntry("persist session error", storage.System{
 			Type:    "system",
 			Content: entry.Content,
