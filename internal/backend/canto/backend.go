@@ -80,6 +80,7 @@ func (b *Backend) SetConfig(cfg *config.Config) {
 	b.cfg = cfg
 	if retry, ok := b.compactLLM.(*llm.RetryProvider); ok {
 		retry.Config.RetryForever = cfg.RetryUntilCancelledEnabled()
+		retry.Config.RetryForeverTransportOnly = true
 	}
 }
 
@@ -305,6 +306,7 @@ func configureRetryProvider(
 	}
 	retry := llm.NewRetryProvider(p)
 	retry.Config.RetryForever = cfg.RetryUntilCancelledEnabled()
+	retry.Config.RetryForeverTransportOnly = true
 	retry.Config.OnRetry = func(event llm.RetryEvent) {
 		events <- ionsession.StatusChanged{Status: retryStatus(event)}
 	}
@@ -316,13 +318,18 @@ func retryStatus(event llm.RetryEvent) string {
 	if delay <= 0 {
 		delay = event.Delay
 	}
+	kind := "Provider error"
+	if llm.IsTransientTransportError(event.Err) {
+		kind = "Network error"
+	}
 	if delay > 0 {
 		return fmt.Sprintf(
-			"Network/provider error. Retrying in %s... Ctrl+C stops.",
+			"%s. Retrying in %s... Ctrl+C stops.",
+			kind,
 			delay,
 		)
 	}
-	return "Network/provider error. Retrying... Ctrl+C stops."
+	return kind + ". Retrying... Ctrl+C stops."
 }
 
 func (b *Backend) MemoryView(ctx context.Context, query string) (string, error) {

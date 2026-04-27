@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -724,6 +725,9 @@ func TestConfigureRetryProviderUsesUntilCancelledSetting(t *testing.T) {
 	if !retry.Config.RetryForever {
 		t.Fatal("RetryForever = false, want true")
 	}
+	if !retry.Config.RetryForeverTransportOnly {
+		t.Fatal("RetryForeverTransportOnly = false, want true")
+	}
 
 	retry.Config.OnRetry(llm.RetryEvent{
 		Attempt: 1,
@@ -740,11 +744,25 @@ func TestConfigureRetryProviderUsesUntilCancelledSetting(t *testing.T) {
 		if !strings.Contains(status.Status, "Retrying in 2s") {
 			t.Fatalf("status = %q, want retry delay", status.Status)
 		}
+		if !strings.Contains(status.Status, "Provider error") {
+			t.Fatalf("status = %q, want provider error label", status.Status)
+		}
 		if !strings.Contains(status.Status, "Ctrl+C stops") {
 			t.Fatalf("status = %q, want cancel hint", status.Status)
 		}
 	default:
 		t.Fatal("expected retry status event")
+	}
+}
+
+func TestRetryStatusLabelsTransportErrors(t *testing.T) {
+	status := retryStatus(llm.RetryEvent{
+		Attempt: 1,
+		Delay:   time.Second,
+		Err:     syscall.ECONNRESET,
+	})
+	if !strings.Contains(status, "Network error") {
+		t.Fatalf("status = %q, want network error label", status)
 	}
 }
 

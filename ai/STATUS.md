@@ -7,7 +7,7 @@ Fast, lightweight terminal coding agent.
 Ion has been reconciled with the current stabilized Canto surface. The core loop audit, HITL permission-mode hardening, observability exporter slice, workflow topology spec, first eval regression gate, deterministic policy config slice, first executable subagent persona/routing slice, workspace trust slice, tool-loading UX slice, and first memory search UX slice are complete. Current work is moving through the remaining P2 reliability/UX epics.
 
 Current active slice:
-- `tk-90mp` — Streaming: Cost Limits & Model Cascades. Provider limit classification is now implemented; continue with any remaining budget/cascade behavior only when it strengthens the core loop.
+- `tk-90mp` — Streaming: Cost Limits & Model Cascades. Provider limit classification is implemented; retry-until-cancel now applies only to transport/network failures while provider/rate/server transients remain bounded.
 - `tk-hase` — Thinking: provider-compatible levels and UI settings. Current implementation preserves the wider named vocabulary and avoids sending thinking params unless Canto reports named reasoning support; remaining work is richer Canto capability metadata and budget-backed provider mapping.
 
 Captured lower-priority polish:
@@ -63,6 +63,7 @@ Design rule:
 ## Completed (Recent)
 - [x] **Config UX cleanup (`tk-a5ds`)** — Fixed confusing provider/model picker state, moved mutable selections to state, added focused `/settings`, improved help readability, and left broader slash-command review in `tk-5cqs`.
 - [x] **Settings storage split (`tk-8188`)** — Stable config now stays in `~/.ion/config.toml`, mutable provider/model/thinking/active-preset state lives in `~/.ion/state.toml`, and both files use atomic temp-file replacement.
+- [x] **Transport-only endless retry (`tk-90mp`)** — Canto `f71205f` added transport-only endless retry; Ion wires `retry_until_cancelled` to that path so disconnects can retry until Ctrl+C while rate/quota/server failures stay bounded and readable.
 - [x] **Retry-until-cancel resilience slice (`tk-lm25`)** — Canto now supports retry-until-context-cancel and raw transport transient classification; Ion defaults `retry_until_cancelled` on, emits visible retry status, and persists those status events without transcript spam.
 - [x] **HITL notifier delivery slice (`tk-00km`)** — Approval requests now attempt Slack webhook and SMTP email notification when ESCALATE.md channels and credentials are configured, while auditing sent/failed/skipped outcomes without blocking the local approval prompt.
 - [x] **Provider-limit resilience slice (`tk-90mp`)** — Rate/quota/context/capacity provider failures now get readable UI prefixes while preserving raw provider text and append durable `routing_decision` stop traces. Verified with `go test ./...` and Fedora `local-api` smoke against `qwen3.6:27b-uncensored`.
