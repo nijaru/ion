@@ -20,6 +20,22 @@ Append-only history of architectural and design decisions for `ion`.
 
 ---
 
+## 2026-04-27 — Model presets: fast is explicit, not inferred
+
+**Context:** The model picker could make provider-listed models look like user-configured favorites because the fast preset resolver inferred a cheap model when `fast_model` was unset.
+
+**Decision:** Ion must not pick a fast model by listing provider catalogs when `fast_model` is unset. The primary and fast rows in the model picker represent explicitly configured preset slots only. Summary work can use configured fast when present, otherwise it falls back to primary with low reasoning.
+
+**Rationale:**
+
+1. **No fabricated state:** The picker should show what the user selected, not silently promoted catalog guesses.
+2. **Clear preset semantics:** `primary` and `fast` are explicit slots.
+3. **Simple UX:** This matches the Pi-style target better than implicit routing behavior in the core model selector.
+
+**Tradeoffs:** Users need to configure a fast model before `/fast` or `Ctrl+M` can switch runtime slots.
+
+---
+
 ## 2026-04-27 — Runtime: retry transient network/provider failures until user cancellation
 
 **Context:** Bounded retry was too weak for real agent sessions during provider/network outages. Users can interrupt a stuck turn, while transient disconnects, 429s, and provider-capacity failures often resolve without changing the prompt.

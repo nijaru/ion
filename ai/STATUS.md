@@ -11,6 +11,7 @@ Current active blockers:
 
 Next core-parity work:
 - `tk-9n7h` — Provider/model picker correctness. This is the next P2 product hygiene task after the resume/model-history blocker.
+- Current slice: remove implicit catalog-derived fast model selection so only explicitly configured primary/fast models appear as configured presets.
 
 Captured lower-priority polish:
 - `tk-5cqs` — Slash commands: autocomplete and command surface review (P3)
@@ -69,9 +70,9 @@ Design rule:
 - Similar agents are references, not feature-parity requirements. Adopt from pi, Claude Code, Codex, OpenCode, Cursor, Droid, Letta, and others only when the idea strengthens Ion's core coding loop or preserves a simple, inspectable UX.
 
 ## Next Steps
-1. Commit the Ion Gate 1 stabilization set: fixed Canto dependency, lazy sessions, shared replay rendering, compact routine tool replay, backend close hardening, and JSON print-mode smoke support.
+1. Continue `tk-9n7h` provider/model picker cleanup: verify explicit primary/fast semantics, non-listing providers, and custom/local endpoint isolation.
 2. Continue Gate 2 coverage: cancellation/error persistence, retry status, provider-limit recovery, and resumed tool-session invariants.
-3. Start `tk-9n7h` provider/model picker cleanup once the Gate 1 commit is in place.
+3. Keep slash autocomplete and routine tool display behind provider/core hygiene unless they block normal testing.
 
 *(Note: Older P3 TUI refinement tasks like configurable verbosity, skill layering, and status line context have been subsumed by their respective SOTA epics).*
 
