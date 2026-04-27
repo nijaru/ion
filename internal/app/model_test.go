@@ -1791,6 +1791,7 @@ func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 		"/edit",
 		"/auto, /yolo",
 		"/trust [status]",
+		"/settings",
 		"/rewind <id>",
 		"/tools",
 		"/memory [query]",
@@ -1842,6 +1843,78 @@ func TestTabListsAmbiguousSlashCommands(t *testing.T) {
 	}
 	if got := model.Input.Composer.Value(); got != "/m" {
 		t.Fatalf("composer = %q, want unchanged ambiguous prefix", got)
+	}
+}
+
+func TestSettingsCommandShowsCommonSettings(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	configDir := filepath.Join(home, ".ion")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(configDir, "config.toml"),
+		[]byte("tool_verbosity = \"collapsed\"\nthinking_verbosity = \"hidden\"\nretry_until_cancelled = false\n"),
+		0o644,
+	); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	model := readyModel(t)
+	cfg, err := config.LoadStable()
+	if err != nil {
+		t.Fatalf("load stable config: %v", err)
+	}
+	got := model.settingsSummary(cfg)
+	for _, want := range []string{
+		"retry network errors: off",
+		"tool display: collapsed",
+		"thinking display: hidden",
+		"/settings retry on|off",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("settings missing %q: %q", want, got)
+		}
+	}
+}
+
+func TestSettingsCommandUpdatesStableConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	configDir := filepath.Join(home, ".ion")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(configDir, "state.toml"),
+		[]byte("provider = \"local-api\"\nmodel = \"qwen3.6:27b\"\n"),
+		0o644,
+	); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+
+	model := readyModel(t)
+	model.Model.Config = &config.Config{}
+	model, cmd := model.handleCommand("/settings retry off")
+	if cmd == nil {
+		t.Fatal("expected settings command")
+	}
+	_ = cmd()
+
+	data, err := os.ReadFile(filepath.Join(configDir, "config.toml"))
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	got := string(data)
+	if !strings.Contains(got, "retry_until_cancelled = false") {
+		t.Fatalf("config missing retry setting:\n%s", got)
+	}
+	if strings.Contains(got, "local-api") || strings.Contains(got, "qwen3.6:27b") {
+		t.Fatalf("settings command leaked mutable state into config:\n%s", got)
+	}
+	if model.Model.Config == nil || model.Model.Config.RetryUntilCancelledEnabled() {
+		t.Fatal("model config retry setting was not updated")
 	}
 }
 

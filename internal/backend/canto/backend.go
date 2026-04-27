@@ -78,6 +78,9 @@ func (b *Backend) Name() string {
 
 func (b *Backend) SetConfig(cfg *config.Config) {
 	b.cfg = cfg
+	if retry, ok := b.compactLLM.(*llm.RetryProvider); ok {
+		retry.Config.RetryForever = cfg.RetryUntilCancelledEnabled()
+	}
 }
 
 func (b *Backend) SetPolicyConfig(cfg *backend.PolicyConfig) {

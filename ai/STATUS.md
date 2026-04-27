@@ -8,8 +8,8 @@ Ion has been reconciled with the current stabilized Canto surface. The core loop
 
 Current active slice:
 - `tk-90mp` — Streaming: Cost Limits & Model Cascades. Provider limit classification is now implemented; continue with any remaining budget/cascade behavior only when it strengthens the core loop.
-- `tk-a5ds` — Config UX umbrella. P3 tracking bucket; do not let polish outrank core loop reliability.
-- `tk-8188` — Settings storage split. First state-file slice is in progress: TUI provider/model/thinking changes now write to `~/.ion/state.toml` while stable endpoint settings stay in `~/.ion/config.toml`.
+- `tk-a5ds` — Config UX umbrella. Current slice adds a narrow `/settings` surface for common toggles without turning it into a config editor.
+- `tk-8188` — Settings storage split. First state-file slice is complete: TUI provider/model/thinking changes now write to `~/.ion/state.toml` while stable endpoint settings stay in `~/.ion/config.toml`.
 - `tk-hase` — Thinking: provider-compatible levels and UI settings. P3 design follow-up; current provider survey says capability-filtered named levels in the TUI, config-only numeric budgets, and no reasoning params for unknown custom endpoints.
 
 Captured lower-priority polish:
