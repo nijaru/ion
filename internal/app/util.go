@@ -91,9 +91,9 @@ func (m *Model) printHelp(content string) tea.Cmd {
 	for i, line := range strings.Split(content, "\n") {
 		switch {
 		case i == 0:
-			lines = append(lines, m.st.cyan.Render(line))
+			lines = append(lines, m.st.cyan.Bold(true).Render(line))
 		case isHelpSectionLine(line):
-			lines = append(lines, m.st.cyan.Render(line))
+			lines = append(lines, m.st.cyan.Bold(true).Render(line))
 		default:
 			lines = append(lines, line)
 		}
@@ -103,7 +103,7 @@ func (m *Model) printHelp(content string) tea.Cmd {
 
 func isHelpSectionLine(line string) bool {
 	switch strings.TrimSpace(line) {
-	case "keys", "approval":
+	case "commands", "keys", "approval":
 		return true
 	default:
 		return false

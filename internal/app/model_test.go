@@ -1818,6 +1818,14 @@ func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 	}
 }
 
+func TestHelpSectionDetectionIncludesCommands(t *testing.T) {
+	for _, line := range []string{"commands", "keys", "approval"} {
+		if !isHelpSectionLine(line) {
+			t.Fatalf("isHelpSectionLine(%q) = false, want true", line)
+		}
+	}
+}
+
 func TestTabCompletesSlashCommands(t *testing.T) {
 	model := readyModel(t)
 	model.Input.Composer.SetValue("/think")
