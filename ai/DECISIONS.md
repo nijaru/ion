@@ -708,3 +708,15 @@ Append-only history of architectural and design decisions for `ion`.
 4. **Idiomatic Go**: Leveraging separate files within the `app` package follows standard Go project organization.
 
 **Tracked by:** `tk-2b79`
+
+---
+
+## 2026-04-26 — Config UX: separate configured presets from mutable state
+
+**Context:** The model picker labeled primary/fast preset slots as `Favorites`, so stale `~/.ion/config.toml` values and resolver-provided fast defaults looked like user-selected favorites. This made placeholder models like `vendor/model-b` appear intentional and put preset labels in the same visual columns as context and price metadata.
+
+**Decision:** The picker top section is `Configured presets`, not `Favorites`. It surfaces only explicitly configured primary/fast models, never resolver fallback defaults. Missing catalog metadata renders unknown context/input/output columns instead of placing `Primary` or `Fast` where numeric metadata belongs.
+
+**Config direction:** Keep global files under `~/.ion/`. Stable preferences and endpoint definitions belong in `config.toml`; mutable runtime choices such as selected provider/model/preset/thinking move toward `state.toml`; trust stays isolated in `trusted_workspaces.json`.
+
+**Tracked by:** `tk-a5ds`, `tk-8188`

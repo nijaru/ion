@@ -82,9 +82,12 @@ tk ls
 - If a fix requires touching canto, treat `github.com/nijaru/canto` as the source of truth. Keep framework fixes upstreamable and do not depend on a sibling checkout or bake ion-specific assumptions into canto.
 - Ion is `v0.0.0` unstable. There are no backwards guarantees.
 - Do not add fallback, migration, or compatibility paths unless the user explicitly asks for them.
-- Keep user-editable settings in `~/.ion/config.toml`.
-- Do not persist provider/model automatically at startup; only user edits and explicit TUI actions should write them.
-- Prefer hardcoded defaults for ion-owned behavior. Add a separate state file only if we discover machine-owned values that truly need persistence.
+- Keep global Ion files under `~/.ion/`.
+- Stable user-editable settings belong in `~/.ion/config.toml`: defaults, custom endpoints, policy/subagent paths, cost limits, verbosity.
+- Mutable runtime choices belong in `~/.ion/state.toml`: selected provider/model/preset/thinking and recent picker state. Current code still stores provider/model in config; move toward the split when touching settings.
+- Workspace trust belongs in `~/.ion/trusted_workspaces.json`, separate from config and state.
+- Do not persist provider/model automatically at startup; only user edits and explicit TUI actions should write settings/state.
+- Prefer hardcoded defaults for ion-owned behavior. Add persistent state only when the value is machine-owned and genuinely needs to survive sessions.
 
 ## Go Idioms
 

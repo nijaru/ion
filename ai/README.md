@@ -9,6 +9,7 @@
 - [Current Pi Core Loop Review](research/pi-current-core-loop-review-2026-04.md) — Current Pi `/tree`, loop, compaction, and UX lessons for Canto/Ion
 - [Canto Research Delta](review/canto-research-delta-2026-04-26.md) — Recent Canto ai/ findings that affect Ion task sequencing
 - [Tools and Modes Spec](specs/tools-and-modes.md) — Permission modes, approval prompt behavior, and ESCALATE.md host UX
+- [Status and Config Spec](specs/status-and-config.md) — Status line, model picker metadata, and global config/state/trust layout
 - [Security Policy Spec](specs/security-policy.md) — YAML tool/category policy rules and LLM judge deferral boundary
 - [Subagent Personas and Routing Spec](specs/subagent-personas-and-routing.md) — Built-in personas, YAML frontmatter format, and model-slot policy
 - [Workspace Trust and Rollback Spec](specs/workspace-trust-and-rollback.md) — Persistent trust state and rollback deferral boundary

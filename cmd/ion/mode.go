@@ -14,10 +14,10 @@ func modeFromName(value string) (session.Mode, error) {
 		return session.ModeRead, nil
 	case "", "edit", "e", "write", "w":
 		return session.ModeEdit, nil
-	case "yolo", "y":
+	case "auto", "a", "yolo", "y":
 		return session.ModeYolo, nil
 	default:
-		return session.ModeEdit, fmt.Errorf("invalid mode %q (want read, edit, or yolo)", value)
+		return session.ModeEdit, fmt.Errorf("invalid mode %q (want read, edit, or auto)", value)
 	}
 }
 

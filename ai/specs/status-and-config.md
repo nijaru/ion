@@ -54,33 +54,68 @@ Rules:
 
 Keep the status line compact. Do not turn it into a dense settings/control bar unless there is a strong usability reason.
 
-## User config
+## Config, State, and Trust
 
-User-facing config lives in:
+Global Ion files live under `~/.ion/`.
 
-- `~/.ion/config.toml`
+| File | Owner | Purpose |
+| --- | --- | --- |
+| `~/.ion/config.toml` | user | Stable preferences: defaults, custom endpoints, policy/subagent paths, cost limits, verbosity. |
+| `~/.ion/state.toml` | ion | Mutable runtime choices: selected provider/model/preset/thinking, recent pickers, UI state. |
+| `~/.ion/trusted_workspaces.json` | user/ion | Workspace trust decisions. Separate from config so security state is auditable. |
+| `~/.ion/policy.yaml` | user/admin | Optional durable tool policy rules. |
+| `~/.ion/data/` | ion | Sessions, caches, model metadata, checkpoints. |
 
-Current important fields:
+Current implementation still stores selected provider/model in `config.toml`.
+Target direction: move volatile selections to `state.toml` and keep
+`config.toml` for stable defaults and explicit provider definitions.
 
-- `provider`
-- `model`
-- `fast_model`
-- `fast_reasoning_effort`
+Stable config fields:
+
+- `default_provider`
+- `default_model`
+- `default_reasoning_effort`
+- `fast_default_model`
+- `fast_default_reasoning_effort`
 - `summary_model`
 - `summary_reasoning_effort`
 - `endpoint`
 - `auth_env_var`
 - `extra_headers`
-- `reasoning_effort`
 - `policy_path`
 - `subagents_path`
+- `workspace_trust`
+- `tool_verbosity`
+- `thinking_verbosity`
+
+Mutable state fields:
+
+- `provider`
+- `model`
+- `reasoning_effort`
+- `active_preset`
+- `recent_models`
+- `recent_providers`
+
+Current local endpoint config shape:
+
+```toml
+provider = "local-api"
+model = "qwen3.6:27b-uncensored"
+endpoint = "http://fedora:8080/v1"
+reasoning_effort = "auto"
+```
+
+Use `local-api` for no-auth OpenAI-compatible servers such as llama.cpp.
+Use `openai-compatible` when a custom endpoint requires an API key/token.
 
 Rules:
 
 - ion should not invent provider/model defaults on startup
-- explicit user actions may update config
+- explicit user actions may update state
 - env vars remain startup overrides, not persistent writes
-- keep user config small
+- keep stable config small
+- do not write trust into config
 
 ## Model metadata display
 
@@ -113,8 +148,10 @@ Model naming rules:
 
 Model picker rules:
 
-- the model picker keeps `Favorites` at the top of the list
-- `Favorites` surfaces the current primary and fast preset models
+- the model picker keeps `Configured presets` at the top of the list
+- `Configured presets` surfaces only explicitly configured primary and fast models
+- resolver fallback defaults must not appear as user favorites or configured presets
+- missing catalog metadata renders unknown context/input/output columns, not preset labels in metric columns
 - `Tab` swaps between provider and model pickers
 - `PgUp` / `PgDn` page through long provider/model picker lists
 

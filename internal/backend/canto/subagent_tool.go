@@ -9,6 +9,7 @@ import (
 	"github.com/go-json-experiment/json"
 	"github.com/nijaru/canto/agent"
 	"github.com/nijaru/canto/llm"
+	"github.com/nijaru/canto/prompt"
 	"github.com/nijaru/canto/runtime"
 	csession "github.com/nijaru/canto/session"
 	"github.com/nijaru/ion/internal/backend/registry"
@@ -122,9 +123,13 @@ func (b *Backend) newChildAgent(ctx context.Context, persona subagents.Persona) 
 	}
 
 	instructions := strings.TrimSpace(b.agent.Instructions()) + "\n\n## Subagent Persona: " + persona.Name + "\n" + persona.Prompt
+	requestProcessors := []prompt.RequestProcessor{
+		reasoningEffortProcessor(runtimeCfg),
+		reflexionProcessor(),
+	}
 	return agent.New(persona.Name, instructions, runtimeCfg.Model, b.llm, scopedTools,
 		agent.WithHooks(policyHook(b)),
-		agent.WithRequestProcessors(reasoningEffortProcessor(runtimeCfg), reflexionProcessor()),
+		agent.WithRequestProcessors(requestProcessors...),
 	), nil
 }
 

@@ -63,7 +63,7 @@ Tracked by:
 
 Includes:
 - hardened macOS Seatbelt and Linux bubblewrap/Landlock execution boundaries
-- visible sandbox status independent of READ/EDIT/YOLO
+- visible sandbox status independent of READ/EDIT/AUTO
 - deterministic policy as the base layer
 - optional model-assisted classification only after fail-closed behavior and audit logging
 - privacy filtering for prompts, logs, traces, tool previews, and approval surfaces

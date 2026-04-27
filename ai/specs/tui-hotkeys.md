@@ -42,13 +42,13 @@ Source of truth for inline TUI key semantics.
   - `summary` stays config-only
   - `Ctrl+M` toggles the active preset slot
   - `Ctrl+T` opens thinking controls
-  - the model picker keeps Favorites at the top of the list
+  - the model picker keeps Configured presets at the top of the list
   - `Tab` swaps provider/model pickers
   - `PgUp` / `PgDn` page through long picker lists
   - fuzzy slash commands own the full model/provider selection surface
 
 ## Mode
-- `Shift+Tab`: toggle read/write mode
+- `Shift+Tab`: toggle READ/EDIT mode. AUTO requires an explicit slash command or startup flag.
 
 ## Transcript / Plane B
 - Startup header prints once to native scrollback.

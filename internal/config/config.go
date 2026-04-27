@@ -30,6 +30,7 @@ type Config struct {
 	ContextLimit           int               `toml:"context_limit,omitempty"`
 	MaxSessionCost         float64           `toml:"max_session_cost,omitempty"`
 	MaxTurnCost            float64           `toml:"max_turn_cost,omitempty"`
+	WorkspaceTrust         string            `toml:"workspace_trust,omitempty"`
 	TelemetryOTLPEndpoint  string            `toml:"telemetry_otlp_endpoint,omitempty"`
 	TelemetryOTLPInsecure  bool              `toml:"telemetry_otlp_insecure,omitempty"`
 	TelemetryOTLPHeaders   map[string]string `toml:"telemetry_otlp_headers,omitempty"`
@@ -92,6 +93,7 @@ func Load() (*Config, error) {
 	cfg.TelemetryOTLPHeaders = normalizeStringMap(cfg.TelemetryOTLPHeaders)
 	cfg.PolicyPath = expandUserPath(strings.TrimSpace(cfg.PolicyPath))
 	cfg.SubagentsPath = expandUserPath(strings.TrimSpace(cfg.SubagentsPath))
+	cfg.WorkspaceTrust = ResolveWorkspaceTrust(cfg.WorkspaceTrust)
 	cfg.ToolVerbosity = normalizeVerbosity(cfg.ToolVerbosity)
 	cfg.ThinkingVerbosity = normalizeVerbosity(cfg.ThinkingVerbosity)
 	if cfg.ContextLimit < 0 {
@@ -136,6 +138,10 @@ func Save(cfg *Config) error {
 	out.TelemetryOTLPHeaders = normalizeStringMap(out.TelemetryOTLPHeaders)
 	out.PolicyPath = expandUserPath(strings.TrimSpace(out.PolicyPath))
 	out.SubagentsPath = expandUserPath(strings.TrimSpace(out.SubagentsPath))
+	out.WorkspaceTrust = ResolveWorkspaceTrust(out.WorkspaceTrust)
+	if out.WorkspaceTrust == "prompt" {
+		out.WorkspaceTrust = ""
+	}
 	if out.ContextLimit < 0 {
 		out.ContextLimit = 0
 	}
@@ -290,9 +296,20 @@ func ResolveDefaultMode(value string) string {
 		return "read"
 	case "edit", "e", "write", "w":
 		return "edit"
-	case "yolo", "y":
-		return "yolo"
+	case "auto", "a", "yolo", "y":
+		return "auto"
 	default:
 		return "edit"
+	}
+}
+
+func ResolveWorkspaceTrust(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "off", "false", "disabled":
+		return "off"
+	case "strict":
+		return "strict"
+	default:
+		return "prompt"
 	}
 }

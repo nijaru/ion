@@ -85,3 +85,15 @@ func (m Model) updateThinkingForActivePreset(cfg *config.Config, effort string) 
 	}
 	return &updated
 }
+
+func (m Model) configuredModelForActivePreset(cfg *config.Config) string {
+	if cfg == nil {
+		return ""
+	}
+	switch m.activePreset() {
+	case presetFast:
+		return strings.TrimSpace(cfg.FastModel)
+	default:
+		return strings.TrimSpace(cfg.Model)
+	}
+}

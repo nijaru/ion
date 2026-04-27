@@ -48,10 +48,10 @@ func TestConfigureSessionMode(t *testing.T) {
 
 	configureSessionMode(sess, session.ModeYolo)
 	if sess.mode != session.ModeYolo {
-		t.Fatalf("mode = %v, want yolo", sess.mode)
+		t.Fatalf("mode = %v, want auto", sess.mode)
 	}
 	if !sess.autoApprove {
-		t.Fatal("yolo mode did not enable auto approval")
+		t.Fatal("auto mode did not enable auto approval")
 	}
 }
 

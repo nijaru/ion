@@ -89,6 +89,12 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		}
 		return m, m.armPendingAction(pendingActionQuitCtrlD)
 
+	case "?":
+		if strings.TrimSpace(m.Input.Composer.Value()) == "" {
+			m.clearPendingAction()
+			return m, m.printHelp(helpText())
+		}
+
 	case "esc":
 		if m.InFlight.Thinking {
 			m.Model.Session.CancelTurn(context.Background())
@@ -109,21 +115,29 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.clearPendingAction()
 		switch m.Mode {
 		case session.ModeRead:
-			m.Mode = session.ModeEdit
+			next, cmd := m.setModeCommand(session.ModeEdit)
+			return next, cmd
 		case session.ModeEdit:
-			m.Mode = session.ModeYolo
+			next, cmd := m.setModeCommand(session.ModeRead)
+			return next, cmd
 		default:
-			m.Mode = session.ModeRead
+			next, cmd := m.setModeCommand(session.ModeEdit)
+			return next, cmd
 		}
-		m.Model.Session.SetMode(m.Mode)
-		m.Model.Session.SetAutoApprove(m.Mode == session.ModeYolo)
-		return m, nil
+
+	case "tab":
+		if next, cmd, ok := m.completeSlashCommand(); ok {
+			return next, cmd
+		}
 
 	case "enter":
 		m.clearPendingAction()
 		text := strings.TrimSpace(m.Input.Composer.Value())
 		if text == "" {
 			return m, nil
+		}
+		if strings.HasPrefix(text, "/") && commandAllowedDuringTurn(text) {
+			return m.submitText(text)
 		}
 		if m.InFlight.Thinking || m.Progress.Compacting {
 			m.InFlight.QueuedTurns = append(m.InFlight.QueuedTurns, text)
@@ -195,6 +209,61 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.layout()
 	}
 	return m, cmd
+}
+
+func (m Model) completeSlashCommand() (Model, tea.Cmd, bool) {
+	text := m.Input.Composer.Value()
+	if !strings.HasPrefix(text, "/") || strings.ContainsAny(text, " \t\r\n") {
+		return m, nil, false
+	}
+
+	matches := matchingSlashCommands(text)
+	switch len(matches) {
+	case 0:
+		return m, nil, true
+	case 1:
+		m.Input.Composer.SetValue(matches[0] + " ")
+		m.relayoutComposer()
+		return m, nil, true
+	}
+
+	prefix := commonPrefix(matches)
+	if prefix != "" && prefix != text {
+		m.Input.Composer.SetValue(prefix)
+		m.relayoutComposer()
+		return m, nil, true
+	}
+
+	return m, m.printEntries(session.Entry{
+		Role:    session.System,
+		Content: "Commands: " + strings.Join(matches, " "),
+	}), true
+}
+
+func matchingSlashCommands(prefix string) []string {
+	var matches []string
+	for _, command := range slashCommands() {
+		if strings.HasPrefix(command, prefix) {
+			matches = append(matches, command)
+		}
+	}
+	return matches
+}
+
+func commonPrefix(values []string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	prefix := values[0]
+	for _, value := range values[1:] {
+		for !strings.HasPrefix(value, prefix) {
+			prefix = prefix[:len(prefix)-1]
+			if prefix == "" {
+				return ""
+			}
+		}
+	}
+	return prefix
 }
 
 func (m *Model) relayoutComposer() {

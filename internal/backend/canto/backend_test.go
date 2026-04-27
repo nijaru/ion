@@ -160,6 +160,60 @@ func TestReflexionProcessorAddsNoteAfterToolError(t *testing.T) {
 	}
 }
 
+func TestLocalAPIRequestsKeepSystemMessagesLeading(t *testing.T) {
+	ctx := context.Background()
+	store, err := storage.NewCantoStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	storageSession, err := store.OpenSession(ctx, "/tmp/ion-local-api", "local-api/model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	provider := llm.NewFauxProvider("local-api", llm.FauxStep{Content: "ok"})
+	oldFactory := providerFactory
+	providerFactory = func(ctx context.Context, cfg *config.Config) (llm.Provider, error) {
+		return provider, nil
+	}
+	defer func() { providerFactory = oldFactory }()
+
+	b := New()
+	b.SetStore(store)
+	b.SetSession(storageSession)
+	b.SetConfig(&config.Config{Provider: "local-api", Model: "model-a", Endpoint: "http://localhost:8080/v1"})
+	if err := b.Open(ctx); err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer func() { _ = b.Close() }()
+
+	if err := b.SubmitTurn(ctx, "hi"); err != nil {
+		t.Fatalf("submit turn: %v", err)
+	}
+	waitForTurnFinished(t, b.Events())
+
+	calls := provider.Calls()
+	if len(calls) != 1 {
+		t.Fatalf("provider calls = %d, want 1", len(calls))
+	}
+	roles := make([]llm.Role, 0, len(calls[0].Messages))
+	for _, msg := range calls[0].Messages {
+		roles = append(roles, msg.Role)
+	}
+	firstNonSystem := len(roles)
+	for i, role := range roles {
+		if role != llm.RoleSystem {
+			firstNonSystem = i
+			break
+		}
+	}
+	for _, role := range roles[firstNonSystem:] {
+		if role == llm.RoleSystem {
+			t.Fatalf("local-api request has non-leading system messages: %#v", roles)
+		}
+	}
+}
+
 func TestResumeDoesNotDeadlockWhenBackendNeedsOpen(t *testing.T) {
 	b := New()
 

@@ -6,13 +6,14 @@ import (
 	"testing"
 
 	"github.com/nijaru/ion/internal/backend"
+	"github.com/nijaru/ion/internal/config"
 )
 
 func TestLoadWorkspaceTrustReportsUntrusted(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	_, trusted, notice, err := loadWorkspaceTrust(filepath.Join(home, "repo"))
+	_, trusted, notice, err := loadWorkspaceTrust(filepath.Join(home, "repo"), &config.Config{})
 	if err != nil {
 		t.Fatalf("loadWorkspaceTrust returned error: %v", err)
 	}
@@ -21,6 +22,25 @@ func TestLoadWorkspaceTrustReportsUntrusted(t *testing.T) {
 	}
 	if !strings.Contains(notice, "READ mode") {
 		t.Fatalf("notice = %q, want READ mode warning", notice)
+	}
+}
+
+func TestLoadWorkspaceTrustCanBeDisabled(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	store, trusted, notice, err := loadWorkspaceTrust(filepath.Join(home, "repo"), &config.Config{WorkspaceTrust: "off"})
+	if err != nil {
+		t.Fatalf("loadWorkspaceTrust returned error: %v", err)
+	}
+	if store != nil {
+		t.Fatal("disabled trust should not create a trust store")
+	}
+	if !trusted {
+		t.Fatal("workspace trust off should treat workspace as eligible")
+	}
+	if notice != "" {
+		t.Fatalf("notice = %q, want empty", notice)
 	}
 }
 
@@ -39,10 +59,10 @@ func TestStartupToolLineReportsLazyTools(t *testing.T) {
 		LazyEnabled: true,
 		Sandbox:     "auto: bubblewrap",
 	}})
-	if !strings.Contains(line, "search_tools enabled") {
-		t.Fatalf("line = %q, want search_tools notice", line)
+	if !strings.Contains(line, "Search tools enabled") {
+		t.Fatalf("line = %q, want search tools notice", line)
 	}
-	if !strings.Contains(line, "sandbox auto: bubblewrap") {
+	if !strings.Contains(line, "Sandbox auto: bubblewrap") {
 		t.Fatalf("line = %q, want sandbox notice", line)
 	}
 }

@@ -28,7 +28,7 @@ Native runtime drives design. ACP follows where possible.
 
 `ion` aims for SOTA (State of the Art) capabilities with a minimalist, terminal-first UX. This is driven by 14 core SOTA product requirements mapped to the layers above:
 
-- **Safety by Default & Guardrails (SOTA 9):** Ion owns the user-facing READ/EDIT/YOLO policy engine and TUI approval bridge; Canto provides reusable approval/safety primitives. Includes LLM-as-a-Judge for future auto-mode safety checks.
+- **Safety by Default & Guardrails (SOTA 9):** Ion owns the user-facing READ/EDIT/AUTO policy engine and TUI approval bridge; Canto provides reusable approval/safety primitives. Includes LLM-as-a-Judge for future auto-mode safety checks.
 - **Infinite Context & Compaction (SOTA 6):** Managed by a background "Context Governor" in `canto` (Layer 3). Runtime turns auto-recover from context overflow. Requires non-blocking Compaction UX indicators (spinning icons) and summarization prompts targeting fast models (Haiku/Flash).
 - **Subagent Spawning & Orchestration (SOTA 7):** First-class support for child agents via `canto` primitives. Requires defined Agent Personas ("Scout", "Guard", "Build") and Model Routing policies (Explore = fast, Build = premium).
 - **Memory & Knowledge Base (SOTA 1):** Karpathy-style knowledge base (Wiki compilation) and QMD-style search UX, with background consolidation using sleep-time compute.

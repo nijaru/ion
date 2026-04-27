@@ -27,7 +27,7 @@ Rule selectors are mutually exclusive. `action` is one of `allow`, `ask`, or
 
 ## Precedence
 
-1. YOLO mode allows everything.
+1. AUTO mode allows everything.
 2. READ mode is a hard boundary:
    - read tools allow
    - write and execute tools deny

@@ -7,10 +7,21 @@ Fast, lightweight terminal coding agent.
 Ion has been reconciled with the current stabilized Canto surface. The core loop audit, HITL permission-mode hardening, observability exporter slice, workflow topology spec, first eval regression gate, deterministic policy config slice, first executable subagent persona/routing slice, workspace trust slice, tool-loading UX slice, and first memory search UX slice are complete. Current work is moving through the remaining P2 reliability/UX epics.
 
 Current active slice:
-- `tk-wqhg` — Permission UX: trust and mode semantics. HITL notifier delivery is paused until the mode/trust matrix is settled because approval prompts and audit copy depend on it.
+- `tk-90mp` — Streaming: Cost Limits & Model Cascades. Next core-loop resilience slice after the mode/provider/local-api fixes.
+- `tk-00km` — HITL notifier delivery and audit. Resume after budget/rate-limit behavior is stable.
+- `tk-a5ds` — Config UX umbrella. P3 tracking bucket; do not let polish outrank core loop reliability.
+- `tk-8188` — Settings storage split. P3 design follow-up; current code still stores selected provider/model in config, but the target layout separates stable config from mutable runtime state.
+
+Captured lower-priority polish:
+- `tk-5cqs` — Slash commands: autocomplete and command surface review (P3)
+- `tk-c037` — TUI: question-mark help shortcut (completed)
 
 Near-term tracks:
-- `tk-wqhg` — Permission UX: trust and mode semantics (Active)
+- `tk-wqhg` — Permission UX: trust and mode semantics (Completed)
+- `tk-0kip` — Provider/model picker: non-listing providers and preset clarity (Completed)
+- `tk-hs3m` — Local API: keep system messages template-compatible (Completed through Canto context primitive integration)
+- `tk-a5ds` — Config UX umbrella (Active/P3)
+- `tk-8188` — Settings storage: split stable config from mutable state (Active/P3 design follow-up)
 - `tk-2wrb` — Context: Compaction UX & Summarization Prompts (Completed)
 - `tk-96vy` — Core loop: reliability and resilience audit (Completed)
 - `tk-j3ap` — HITL: Permission Modes UX & Escalation (Completed; notifier delivery split to `tk-00km`)
@@ -23,7 +34,7 @@ Near-term tracks:
 - `tk-z2cb` — Workspace: Trust UX & Visual Rollback (Trust complete; rewind split)
 - `tk-yf7v` — Tool Execution: Tool Loading UX & Approval Tiers (Completed)
 - `tk-gxfu` — Memory: Karpathy-Style Knowledge Base & Search UX (Search UX complete; wiki split)
-- `tk-90mp` — Streaming: Cost Limits & Model Cascades (Paused after first budget/trace slices)
+- `tk-90mp` — Streaming: Cost Limits & Model Cascades (Next P2)
 - `tk-fblb` — Migrate Ion to current Canto surface (Completed)
 - `tk-ulfg` — Research: current Pi core loop and feature review (Completed)
 - `tk-arhu` / `tk-5vrj` — Verified subagent multiplexing and durable breadcrumbs (Completed)
@@ -43,10 +54,10 @@ Design rule:
 - Similar agents are references, not feature-parity requirements. Adopt from pi, Claude Code, Codex, OpenCode, Cursor, Droid, Letta, and others only when the idea strengthens Ion's core coding loop or preserves a simple, inspectable UX.
 
 ## Next Steps
-1. Work through the remaining P2 queue: checkpoint rewind semantics, LLM-as-judge circuit breakers, Slack/email notifier delivery, and model cascade enforcement.
-2. Keep deterministic config and explicit commands as the base; only add model-backed classifier behavior after durable audit plumbing and schema validation are wired.
-3. Use the current Pi review as a reference for loop contracts and future `/tree`, but keep concrete fixes on the current solo loop.
-4. Resume `tk-90mp`; budget enforcement and routing trace slices are already committed.
+1. Resume `tk-90mp`: budget enforcement, rate-limit/quota behavior, and routing trace slices are the next core-loop resilience work.
+2. Return to `tk-00km` after budget/rate-limit semantics are settled; approval prompts/audit copy now have the updated mode/trust matrix.
+3. Keep `tk-a5ds`, `tk-8188`, and `tk-5cqs` as tracked UX/config polish rather than core-loop blockers.
+4. Keep `tk-a5ds`, `tk-5cqs`, and `tk-c037` as tracked UX polish unless a concrete bug blocks normal use.
 5. Treat older `Canto: contribute ...` tasks as re-triaged: no default grep/glob or preset coding-tool bundles; only concrete reusable extension packages should move upstream.
 
 *(Note: Older P3 TUI refinement tasks like configurable verbosity, skill layering, and status line context have been subsumed by their respective SOTA epics).*
@@ -57,7 +68,7 @@ Design rule:
 - [x] **Sandbox hardening (`tk-kfno`)** — Explicit Seatbelt/bubblewrap modes fail closed when unavailable, bubblewrap planning skips missing platform paths, and sandbox posture is visible at startup and through `/tools`.
 - [x] **Checkpoint rewind (`tk-8e2x`)** — Native file tools create durable pre-change checkpoints; `/rewind <id>` previews restore actions and `/rewind <id> --confirm` restores with transcript start/completion entries.
 - [x] **Core loop reliability audit (`tk-96vy`)** — Completed final approval/session-switch review; approval bridge failures now surface as session errors and unknown tool result IDs cannot clear another pending tool.
-- [x] **Permission mode startup slice (`tk-j3ap`)** — READ mode is now non-escalating even with stale session approvals; `--mode`/`--yolo` startup selection now applies to TUI and print sessions, with non-interactive approvals limited to YOLO.
+- [x] **Permission mode startup slice (`tk-j3ap`)** — READ mode is now non-escalating even with stale session approvals; `--mode auto`/`--yolo` startup selection now applies to TUI and print sessions, with non-interactive approvals limited to AUTO.
 - [x] **ESCALATE.md host slice (`tk-j3ap`)** — Ion now loads root `ESCALATE.md` via Canto's workspace parser and surfaces declared email/Slack channels plus approval timeout in approval prompts.
 - [x] **HITL task closure (`tk-j3ap`)** — Closed the safe host scope and split actual Slack/email delivery into `tk-00km` pending credential, timeout, and audit design.
 - [x] **Observability exporter/dashboard (`tk-wzt6`)** — Added config/env-driven OTLP trace and metric export for Canto telemetry plus a Grafana starter dashboard; `go test ./...` passes.
@@ -66,7 +77,7 @@ Design rule:
 - [x] **Deterministic policy config (`tk-zbxk`)** — Added `policy_path`/`~/.ion/policy.yaml` YAML rules for exact tools and categories across Canto/ACP backends; READ remains non-weakenable and LLM-as-judge is split to a follow-up.
 - [x] **Subagent personas and model routing (`tk-r5jr`)** — Registered the native `subagent` tool with built-in explorer/reviewer/worker personas, global YAML-frontmatter overrides, fast/primary model-slot routing, and scoped child tool registries.
 - [x] **Workspace trust (`tk-z2cb`)** — Added user-global trusted workspace state, startup downgrade to READ for untrusted checkouts, `/trust`, and docs; visual rewind is split pending checkpoint semantics.
-- [x] **Tool loading UX (`tk-yf7v`)** — Surfaced Canto lazy-tool state in startup and `/tools`; kept approval tiers to READ/EDIT/YOLO plus policy rules instead of adding redundant modes.
+- [x] **Tool loading UX (`tk-yf7v`)** — Surfaced Canto lazy-tool state in startup and `/tools`; kept approval tiers to READ/EDIT/AUTO plus policy rules instead of adding redundant modes.
 - [x] **Memory search UX (`tk-gxfu`)** — Added `/memory` tree/search over Canto workspace memory and documented wiki/collection-management deferral.
 - [x] **Core loop audit slices (`tk-96vy`)** — Fixed native/ACP commit-before-finish ordering, sticky error/cancel terminal states, cancellation queue clearing, full transcript replay, tool error replay, backend tool ID propagation, interleaved tool tracking, and fail-closed proactive compaction recovery; `go test ./...` passes.
 - [x] **Canto dependency refresh foundation (`tk-fblb`)** — Updated Ion to Canto `f47e7de`; migrated request processors from `canto/context` to `canto/prompt` and hooks from `Hook/NewFunc` to `Handler/FromFunc`; `go test ./...` passes.
@@ -75,11 +86,11 @@ Design rule:
 - [x] **Subagents: inline Plane B presentation (`tk-arhu`)** — Compact worker rows, collapse rules, and parent waiting states implemented in viewport.
 - [x] **TUI: boundary-respecting history navigation** — `Up`/`Down`/`Ctrl+P`/`Ctrl+N` now only trigger history navigation at the top/bottom of the multiline composer.
 - [x] **Stabilize inline agent loop and TUI (`tk-7kga`)** — Verified streaming, tool lifecycle, approval flow, and error presentation with new tests.
-- [x] **Model selector: provider/model tabs (`tk-di6d`)** — Provider/model picker with favorites at the top.
+- [x] **Model selector: provider/model tabs (`tk-di6d`)** — Provider/model picker with configured presets at the top.
 - [x] **Model selector: page navigation (`tk-9pr1`)** — PgUp/PgDn support in picker.
 - [x] **Sessions: lightweight titles and summaries (`tk-4ywr`)** — Metadata-based titles and summaries implemented in storage and picker.
 - [x] **Modularize Ion TUI (`tk-2b79`)** — Componentized `internal/app/model.go` into `Viewport`, `Input`, `Broker`, `Picker`, and `Progress`.
-- [x] **Approval UX overhaul (`tk-k4hv`)** — Redesigned 3-mode system (READ/EDIT/YOLO) and category-scoped auto-approval ("Always" key) implemented.
+- [x] **Approval UX overhaul (`tk-k4hv`)** — Redesigned 3-mode system (READ/EDIT/AUTO) and category-scoped auto-approval ("Always" key) implemented.
 - [x] **Agent Compaction Tool (`tk-pw3s`)** — `compact` tool implemented in Ion.
 - [x] **RPC/print mode (`tk-r1wx`)** — One-shot query mode and JSONL-friendly scripting surface implemented.
 - [x] **Sandbox support (`tk-8s0h`)** — Opt-in bash sandbox planning added with `off`/`auto`/`seatbelt`/`bubblewrap` modes.
@@ -94,6 +105,8 @@ See `tk ls` for the full list. Current active priority:
 
 Remaining P2 epics:
 - `tk-wqhg` — Permission UX: trust and mode semantics
+- `tk-a5ds` — Config UX: model presets, local endpoints, help, autocomplete
+- `tk-8188` — Settings storage: split stable config from mutable state
 - `tk-00km` — HITL: Slack/email notifier delivery and audit
 - `tk-90mp` — Streaming: Cost Limits & Model Cascades
 - `tk-g78q` — Skills: Self-Extension Nudges & Marketplace
@@ -109,6 +122,7 @@ Remaining P2 epics:
 - `ai/research/pi-current-core-loop-review-2026-04.md` — Current Pi core-loop, `/tree`, compaction, and UX review.
 - `ai/review/canto-research-delta-2026-04-26.md` — Recent Canto ai/ findings that affect Ion sequencing.
 - `ai/specs/tools-and-modes.md` — Permission modes spec
+- `ai/specs/status-and-config.md` — Status line, model picker metadata, and config/state/trust layout
 - `ai/specs/security-policy.md` — YAML policy config and LLM judge deferral boundary
 - `ai/specs/subagent-personas-and-routing.md` — Subagent personas, YAML frontmatter, and model routing
 - `ai/specs/workspace-trust-and-rollback.md` — Workspace trust state and rollback deferral boundary

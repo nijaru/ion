@@ -6,7 +6,7 @@ Ion's native Canto backend already uses Canto `prompt.NewLazyTools`, which
 switches to `search_tools` once the registry exceeds Canto's lazy threshold
 (currently 20 tools). Ion now exposes that state to the user:
 
-- startup line: `Tools: N registered; search_tools enabled`
+- startup line: `Tools N registered • Search tools enabled • Sandbox <mode>`
 - slash command: `/tools`
 
 This keeps the core loop simple while confirming whether MCP-heavy sessions are
@@ -18,7 +18,7 @@ Ion is intentionally staying with three visible modes:
 
 - READ
 - EDIT
-- YOLO
+- AUTO
 
 Extra Claude-style tiers are represented by policy config and per-session
 category approvals rather than more modes. The current product rule is:

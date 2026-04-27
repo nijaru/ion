@@ -33,14 +33,14 @@ func TestStartupMode(t *testing.T) {
 			want:     session.ModeEdit,
 		},
 		{
-			name:     "yolo flag aliases yolo mode",
+			name:     "yolo flag aliases auto mode",
 			cfg:      &config.Config{DefaultMode: "read"},
 			yoloFlag: true,
 			want:     session.ModeYolo,
 		},
 		{
-			name:     "yolo agrees with yolo mode flag",
-			modeFlag: "yolo",
+			name:     "yolo agrees with auto mode flag",
+			modeFlag: "auto",
 			yoloFlag: true,
 			want:     session.ModeYolo,
 		},

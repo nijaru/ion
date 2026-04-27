@@ -150,17 +150,14 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 			return nil
 		}
 
-	case "/yolo":
-		if m.Mode == session.ModeYolo {
-			m.Mode = session.ModeEdit
-			m.Model.Session.SetMode(m.Mode)
-			m.Model.Session.SetAutoApprove(false)
-			return m, m.printEntries(session.Entry{Role: session.System, Content: "Mode: EDIT"})
-		}
-		m.Mode = session.ModeYolo
-		m.Model.Session.SetMode(m.Mode)
-		m.Model.Session.SetAutoApprove(true)
-		return m, m.printEntries(session.Entry{Role: session.System, Content: "Mode: YOLO"})
+	case "/read":
+		return m.setModeCommand(session.ModeRead)
+
+	case "/edit":
+		return m.setModeCommand(session.ModeEdit)
+
+	case "/auto", "/yolo":
+		return m.setModeCommand(session.ModeYolo)
 
 	case "/mode":
 		if len(fields) < 2 {
@@ -171,19 +168,14 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		}
 		switch strings.ToLower(fields[1]) {
 		case "read", "r":
-			m.Mode = session.ModeRead
+			return m.setModeCommand(session.ModeRead)
 		case "edit", "e", "write", "w":
-			m.Mode = session.ModeEdit
-		case "yolo", "y":
-			m.Mode = session.ModeYolo
+			return m.setModeCommand(session.ModeEdit)
+		case "auto", "a", "yolo", "y":
+			return m.setModeCommand(session.ModeYolo)
 		default:
-			return m, cmdError("usage: /mode [read|edit|yolo]")
+			return m, cmdError("usage: /mode [read|edit|auto]")
 		}
-		m.Model.Session.SetMode(m.Mode)
-		m.Model.Session.SetAutoApprove(m.Mode == session.ModeYolo)
-		return m, m.printEntries(
-			session.Entry{Role: session.System, Content: "Mode: " + modeDisplayName(m.Mode)},
-		)
 
 	case "/trust":
 		if len(fields) > 1 && fields[1] != "status" {
@@ -199,11 +191,17 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		if m.Model.TrustStore == nil {
 			return m, cmdError("workspace trust store is unavailable")
 		}
+		if m.App.WorkspaceTrust == "strict" {
+			return m, cmdError("workspace trust is strict; trust must be managed outside this session")
+		}
 		if err := m.Model.TrustStore.Trust(m.App.Workdir); err != nil {
 			return m, cmdError(fmt.Sprintf("failed to trust workspace: %v", err))
 		}
 		m.App.TrustedWorkspace = true
-		return m, m.printEntries(session.Entry{Role: session.System, Content: "Workspace trusted"})
+		m.Mode = session.ModeEdit
+		m.Model.Session.SetMode(m.Mode)
+		m.Model.Session.SetAutoApprove(false)
+		return m, m.printEntries(session.Entry{Role: session.System, Content: "Workspace trusted. Mode: EDIT"})
 
 	case "/rewind":
 		if len(fields) < 2 || len(fields) > 3 {
@@ -436,6 +434,7 @@ func (m Model) openProviderPicker() (Model, tea.Cmd) {
 
 func (m Model) openProviderPickerWithConfig(cfg *config.Config) (Model, tea.Cmd) {
 	items := providerItems(cfg)
+	m.clearProgressError()
 	m.Picker.Overlay = &pickerOverlayState{
 		title:    "Pick a provider",
 		items:    items,
@@ -459,6 +458,9 @@ func (m Model) openModelPickerWithConfig(cfg *config.Config) (Model, tea.Cmd) {
 	if cfg.Provider == "" {
 		return m.openProviderPickerWithConfig(cfg)
 	}
+	if !providers.SupportsModelListing(cfg) {
+		return m, cmdError(providerModelEntryNotice(cfg.Provider))
+	}
 	items, err := modelItemsForProvider(cfg)
 	if err != nil {
 		return m, cmdError(fmt.Sprintf("failed to list models for %s: %v", cfg.Provider, err))
@@ -466,18 +468,15 @@ func (m Model) openModelPickerWithConfig(cfg *config.Config) (Model, tea.Cmd) {
 	if len(items) == 0 {
 		return m, cmdError(fmt.Sprintf("no models available for provider %s", cfg.Provider))
 	}
-	runtimeCfg, err := m.runtimeConfigForActivePreset(cfg)
-	if err != nil {
-		return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
-	}
 	favorites := m.modelPickerFavoriteItems(cfg, items)
 	catalog := m.modelPickerCatalogItems(items, favorites)
 	combined := append(clonePickerItems(favorites), catalog...)
+	m.clearProgressError()
 	m.Picker.Overlay = &pickerOverlayState{
 		title:    "Pick a " + m.activePresetTitle() + " model for " + cfg.Provider,
 		items:    combined,
 		filtered: clonePickerItems(combined),
-		index:    pickerIndex(combined, runtimeCfg.Model),
+		index:    pickerIndex(combined, m.configuredModelForActivePreset(cfg)),
 		purpose:  pickerPurposeModel,
 		cfg:      cfg,
 	}
@@ -494,8 +493,10 @@ func helpText() string {
 		"  /provider [name] set provider and choose a model",
 		"  /model [name]    set model directly or open the picker",
 		"  /thinking [lvl]  set thinking: auto, low, medium, high",
-		"  /yolo            toggle YOLO mode (auto-approve all)",
-		"  /mode [mode]     set mode: read, edit, yolo",
+		"  /read            switch to READ mode",
+		"  /edit            switch to EDIT mode",
+		"  /auto, /yolo     switch to AUTO mode",
+		"  /mode [mode]     set mode: read, edit, auto",
 		"  /trust [status]  trust this workspace or show trust status",
 		"  /rewind <id>     preview checkpoint restore; add --confirm to apply",
 		"  /tools           show tool count and lazy loading status",
@@ -513,7 +514,7 @@ func helpText() string {
 		"  Ctrl+T           thinking picker",
 		"  Tab              swap provider/model pickers",
 		"  PgUp / PgDn      page through picker lists",
-		"  Shift+Tab        cycle READ → EDIT → YOLO",
+		"  Shift+Tab        toggle READ <-> EDIT",
 		"  Esc              cancel running turn",
 		"  Up / Down        command history",
 		"  Ctrl+P / Ctrl+N  command history",
@@ -529,6 +530,33 @@ func helpText() string {
 		"  n                deny the tool call",
 		"  a                approve and auto-approve all remaining this session",
 	}, "\n")
+}
+
+func slashCommands() []string {
+	return []string{
+		"/resume",
+		"/primary",
+		"/fast",
+		"/provider",
+		"/model",
+		"/thinking",
+		"/read",
+		"/edit",
+		"/auto",
+		"/yolo",
+		"/mode",
+		"/trust",
+		"/rewind",
+		"/tools",
+		"/memory",
+		"/compact",
+		"/clear",
+		"/cost",
+		"/mcp",
+		"/quit",
+		"/exit",
+		"/help",
+	}
 }
 
 func (m Model) openThinkingPicker() (Model, tea.Cmd) {
@@ -571,38 +599,26 @@ func (m Model) modelPickerFavoriteItems(cfg *config.Config, all []pickerItem) []
 		return nil
 	}
 
-	primaryCfg, err := m.runtimeConfigForPreset(cfg, presetPrimary)
-	if err != nil {
-		return nil
-	}
-	fastCfg, err := m.runtimeConfigForPreset(cfg, presetFast)
-	if err != nil {
-		return nil
-	}
-
-	primaryModel := strings.TrimSpace(primaryCfg.Model)
-	fastModel := strings.TrimSpace(fastCfg.Model)
+	primaryModel := strings.TrimSpace(cfg.Model)
+	fastModel := strings.TrimSpace(cfg.FastModel)
 	switch {
 	case primaryModel == "" && fastModel == "":
 		return nil
 	case primaryModel != "" && strings.EqualFold(primaryModel, fastModel):
 		item := m.modelPickerFavoriteItem(all, primaryModel)
-		item.Group = "Favorites"
-		item.Detail = "Primary / Fast"
+		item.Group = "Configured presets"
 		return []pickerItem{item}
 	}
 
 	favorites := make([]pickerItem, 0, 2)
 	if primaryModel != "" {
 		item := m.modelPickerFavoriteItem(all, primaryModel)
-		item.Group = "Favorites"
-		item.Detail = "Primary"
+		item.Group = "Configured presets"
 		favorites = append(favorites, item)
 	}
 	if fastModel != "" {
 		item := m.modelPickerFavoriteItem(all, fastModel)
-		item.Group = "Favorites"
-		item.Detail = "Fast"
+		item.Group = "Configured presets"
 		favorites = append(favorites, item)
 	}
 	return favorites
@@ -644,10 +660,12 @@ func (m Model) modelPickerFavoriteItem(all []pickerItem, model string) pickerIte
 		return item
 	}
 	return pickerItem{
-		Label:  model,
-		Value:  model,
-		Detail: "Configured preset",
-		Tone:   pickerToneWarn,
+		Label:   model,
+		Value:   model,
+		Detail:  "metadata unavailable",
+		Tone:    pickerToneWarn,
+		Metrics: &pickerMetrics{Context: "—", Input: "—", Output: "—"},
+		Search:  pickerSearchIndex(model, model, "metadata unavailable", "Configured presets", &pickerMetrics{Context: "—", Input: "—", Output: "—"}),
 	}
 }
 
@@ -715,7 +733,8 @@ func (m Model) handlePickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m, nil
 	case "ctrl+m":
 		if m.Picker.Overlay.purpose == pickerPurposeModel {
-			return m.switchPresetCommand(togglePreset(m.activePreset()))
+			m.App.ActivePreset = togglePreset(m.activePreset())
+			return m.openModelPickerWithConfig(m.Picker.Overlay.cfg)
 		}
 		return m, nil
 	case "pgup", "pageup":
@@ -785,8 +804,16 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 			return m, cmdError(fmt.Sprintf("failed to save config: %v", err))
 		}
 		m.Model.Backend.SetConfig(updated)
+		m.Model.Config = updated
+		m.clearProgressError()
 		m.Progress.Status = noModelConfiguredStatus()
 		m.Picker.Overlay = nil
+		if !providers.SupportsModelListing(updated) {
+			return m, m.printEntries(session.Entry{
+				Role:    session.System,
+				Content: providerModelEntryNotice(updated.Provider),
+			})
+		}
 		return m.openModelPickerWithConfig(updated)
 
 	case pickerPurposeModel:
@@ -842,6 +869,27 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 	}
 }
 
+func commandAllowedDuringTurn(input string) bool {
+	fields := strings.Fields(input)
+	if len(fields) == 0 {
+		return false
+	}
+	switch fields[0] {
+	case "/help", "/mode", "/read", "/edit", "/auto", "/yolo", "/cost", "/tools", "/trust", "/thinking":
+		return true
+	default:
+		return false
+	}
+}
+
+func providerModelEntryNotice(provider string) string {
+	display := providerDisplayName(provider)
+	if strings.TrimSpace(display) == "" {
+		display = provider
+	}
+	return display + " does not provide a model list. Set a model with /model <id>."
+}
+
 func (m Model) resumeStoredSessionByID(sessionID string) tea.Cmd {
 	if m.Model.Store == nil {
 		return cmdError("session store not available")
@@ -864,6 +912,33 @@ func (m Model) resumeStoredSessionByID(sessionID string) tea.Cmd {
 	cfg := &config.Config{Provider: provider, Model: model}
 	notice := session.Entry{Role: session.System, Content: "Resumed session " + sessionID}
 	return m.resumeRuntimeCommand(cfg, notice, sessionID)
+}
+
+func (m Model) setModeCommand(mode session.Mode) (Model, tea.Cmd) {
+	if m.trustGateActive() && !m.App.TrustedWorkspace && mode != session.ModeRead {
+		return m, cmdError("Trust this workspace first with /trust.")
+	}
+	m.Mode = mode
+	m.Model.Session.SetMode(m.Mode)
+	m.Model.Session.SetAutoApprove(m.Mode == session.ModeYolo)
+	notice := "Mode: " + modeDisplayName(m.Mode)
+	if m.Mode == session.ModeYolo {
+		if summarizer, ok := m.Model.Backend.(backend.ToolSummarizer); ok {
+			if sandbox := strings.TrimSpace(summarizer.ToolSurface().Sandbox); sandbox != "" {
+				notice += "\nSandbox: " + sandbox
+			}
+		}
+	}
+	return m, m.printEntries(session.Entry{Role: session.System, Content: notice})
+}
+
+func (m Model) trustGateActive() bool {
+	switch m.App.WorkspaceTrust {
+	case "prompt", "strict":
+		return true
+	default:
+		return false
+	}
 }
 
 func (m Model) switchPresetCommand(preset modelPreset) (Model, tea.Cmd) {
@@ -1013,7 +1088,7 @@ func modeDisplayName(mode session.Mode) string {
 	case session.ModeEdit:
 		return "EDIT"
 	case session.ModeYolo:
-		return "YOLO"
+		return "AUTO"
 	default:
 		return "EDIT"
 	}
