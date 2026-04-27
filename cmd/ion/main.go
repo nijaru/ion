@@ -38,7 +38,7 @@ func main() {
 	yoloFlag := flag.Bool("yolo", false, "Start in AUTO mode (alias for --mode auto)")
 	printFlag := flag.Bool("print", false, "Print response and exit (use with --prompt or stdin)")
 	promptFlag := flag.String("prompt", "", "Prompt to send in print mode")
-	promptShortFlag := flag.String("p", "", "Prompt to send and print response (implies --print)")
+	printShortFlag := flag.Bool("p", false, "Print response and exit (alias for --print)")
 	outputFlag := flag.String("output", "text", "Print mode output: text or json")
 	jsonFlag := flag.Bool("json", false, "Emit JSON in print mode")
 	timeoutFlag := flag.Duration("timeout", 5*time.Minute, "Timeout for print mode")
@@ -124,8 +124,8 @@ func main() {
 
 	printRequested, prompt, output, err := resolvePrintFlags(
 		*printFlag,
+		*printShortFlag,
 		*promptFlag,
-		*promptShortFlag,
 		flag.Args(),
 		*outputFlag,
 		*jsonFlag,
@@ -288,7 +288,7 @@ func ionKnownFlag(name string) bool {
 
 func ionFlagNeedsValue(name string) bool {
 	switch name {
-	case "resume", "provider", "mode", "prompt", "p", "output", "timeout":
+	case "resume", "provider", "mode", "prompt", "output", "timeout":
 		return true
 	default:
 		return false
