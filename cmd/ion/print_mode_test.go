@@ -58,6 +58,50 @@ func TestConfigureSessionMode(t *testing.T) {
 	}
 }
 
+func TestResolvePrintFlagsSupportsShortPrompt(t *testing.T) {
+	requested, prompt, output, err := resolvePrintFlags(false, "", "hello", nil, "text", false)
+	if err != nil {
+		t.Fatalf("resolve print flags: %v", err)
+	}
+	if !requested || prompt != "hello" || output != "text" {
+		t.Fatalf("requested=%v prompt=%q output=%q, want print hello text", requested, prompt, output)
+	}
+}
+
+func TestResolvePrintFlagsSupportsJSONShortcut(t *testing.T) {
+	requested, prompt, output, err := resolvePrintFlags(false, "", "hello", nil, "text", true)
+	if err != nil {
+		t.Fatalf("resolve print flags: %v", err)
+	}
+	if !requested || prompt != "hello" || output != "json" {
+		t.Fatalf("requested=%v prompt=%q output=%q, want print hello json", requested, prompt, output)
+	}
+}
+
+func TestResolvePrintFlagsUsesPositionalPromptInPrintMode(t *testing.T) {
+	requested, prompt, output, err := resolvePrintFlags(true, "", "", []string{"hello", "world"}, "", false)
+	if err != nil {
+		t.Fatalf("resolve print flags: %v", err)
+	}
+	if !requested || prompt != "hello world" || output != "text" {
+		t.Fatalf("requested=%v prompt=%q output=%q, want joined positional prompt", requested, prompt, output)
+	}
+}
+
+func TestResolvePrintFlagsRejectsAmbiguousPromptFlags(t *testing.T) {
+	_, _, _, err := resolvePrintFlags(false, "long", "short", nil, "text", false)
+	if err == nil || !strings.Contains(err.Error(), "either -p or --prompt") {
+		t.Fatalf("resolve print flags error = %v", err)
+	}
+}
+
+func TestResolvePrintFlagsRejectsUnexpectedArguments(t *testing.T) {
+	_, _, _, err := resolvePrintFlags(false, "", "", []string{"hello"}, "text", false)
+	if err == nil || !strings.Contains(err.Error(), "unexpected arguments") {
+		t.Fatalf("resolve print flags error = %v", err)
+	}
+}
+
 func TestPrintModeRejectsApprovalWhenNotAutoApproved(t *testing.T) {
 	sess := &printSession{events: make(chan session.Event, 1)}
 	sess.events <- session.ApprovalRequest{RequestID: "req-1", ToolName: "bash"}

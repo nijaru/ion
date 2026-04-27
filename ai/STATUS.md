@@ -11,6 +11,7 @@ Current active blockers:
 
 Next core-parity work:
 - `tk-kvqv` — Routine tool output collapse/detail path. Slash command autocomplete now has a picker foundation; routine tool display is the next TUI baseline polish area.
+- CLI testing surface now supports `ion -p "prompt"` and `ion -p "prompt" --json` for Pi-style Fedora/local-api smoke tests.
 
 Captured lower-priority polish:
 - `tk-c037` — TUI: question-mark help shortcut (completed)
@@ -89,6 +90,7 @@ Design rule:
 - [x] **Resume transcript rendering (`tk-izo7`)** — Canto commit `927e482` filters invalid assistant rows from effective history, Ion imports that pseudo-version, replay/live transcript entries use shared spacing, the resumed marker appears after the startup header, backend close waits for turn goroutines, and routine tool replay is compact by default. Verified with Canto `go test ./...`, Ion `go test ./...`, `go run ./... --continue --print --timeout 30s --prompt hi`, and `go run ./... --continue --print --output json --timeout 30s --prompt "reply with the single word ok"` against the live local-api session.
 - [x] **Provider/model picker hygiene (`tk-9n7h`)** — Removed catalog-inferred fast preset selection, kept configured preset rows explicit, scoped endpoint/auth/header overrides to the active custom/local provider, and preserved non-listing provider manual-model behavior. Verified with `go test ./...` and Fedora/local-api JSON print smoke.
 - [x] **Slash command picker completion (`tk-5cqs`)** — Ambiguous Tab completion now opens a searchable command picker and inserts the selected command into the composer without transcript spam; help copy explains slash completion and configured fast preset behavior. Verified with `go test ./...`.
+- [x] **Prompt CLI ergonomics (`tk-vxet`)** — Added `-p` as the primary prompt-taking print shortcut, `--json` as output sugar, and positional prompt support when `--print` is set. Verified with `go test ./...`, `go run ./... -p "reply with the single word ok" --json --timeout 30s`, and `go run ./... --print "reply with the single word ok" --json --timeout 30s`.
 - [x] **Thinking control Ion slice (`tk-hase`)** — Ion preserves `auto/off/minimal/low/medium/high/xhigh/max`, exposes common named levels in `/thinking`, and only sends named effort when Canto reports support; richer provider translation is split to `tk-369n`.
 - [x] **Transport-only endless retry (`tk-90mp`)** — Canto `f71205f` added transport-only endless retry; Ion wires `retry_until_cancelled` to that path so disconnects can retry until Ctrl+C while rate/quota/server failures stay bounded and readable.
 - [x] **Retry-until-cancel resilience slice (`tk-lm25`)** — Canto now supports retry-until-context-cancel and raw transport transient classification; Ion defaults `retry_until_cancelled` on, emits visible retry status, and persists those status events without transcript spam.
