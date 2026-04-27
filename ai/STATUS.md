@@ -4,16 +4,15 @@ Fast, lightweight terminal coding agent.
 
 ## Current Focus
 
-Ion is back in core-loop stabilization. The core loop contract is now explicit; do not expand into ACP, sandboxing, routing, or SOTA work until resume-after-tool-call, cancellation/error replay, and scriptable smoke coverage stay green.
+Ion's native core-loop contract is green by deterministic tests and live Fedora/local-api smokes. Keep this gate green while moving on to narrow Pi/Codex parity polish.
 
 Current active blockers:
 - `tk-mmcs` — Keep the Pi/Codex/Claude core parity plan, roadmap, and task queue synchronized while the loop is stabilized.
-- `tk-md7n` — Enforce the native core-loop contract and keep follow-up tests focused on real corrupt-history failure shapes.
 
 Next core-parity work:
-- keep `tk-md7n` centered on the native loop contract: no invalid provider history, no duplicate transcript persistence, durable terminal states, readable replay, and successful follow-up turns after resume.
-- use the scriptable print CLI (`ion -p "prompt"`, `ion -p --json "prompt"`, `ion --print "prompt" --json`, and piped stdin) as the automated Fedora/local-api smoke surface before TUI-only checks.
-- run a short Pi/Codex reference review (`tk-ekw5`) only after the current contract pass is green.
+- use the scriptable print CLI (`ion -p "prompt"`, `ion -p --json "prompt"`, `ion --print "prompt" --json`, `--resume <id> -p`, and piped stdin) as the automated Fedora/local-api smoke surface before TUI-only checks.
+- run a short Pi/Codex reference review (`tk-ekw5`) against the now-green contract before choosing the next polish slice.
+- keep ACP, sandboxing, broader policy, thinking expansion, privacy, routing, and subagents behind native-loop regression safety.
 
 Captured lower-priority polish:
 - `tk-c037` — TUI: question-mark help shortcut (completed)
@@ -25,7 +24,7 @@ Captured lower-priority polish:
 - `tk-tilu` — Show thinking state without dumping hidden reasoning (completed)
 
 Near-term tracks after the active blocker:
-- core loop contract tests: resumed new turn after tool calls, tool-only assistant turns, cancellation/error persistence, retry status, provider-limit recovery
+- core loop contract tests: keep resumed new turn after tool calls, tool-only assistant turns, cancellation/error persistence, retry status, provider-limit recovery green
 - noninteractive prompt mode is now scriptable with text/JSON output and should be used as the automated local-api/Fedora smoke surface
 - TUI baseline: compact routine tool output, slash command autocomplete/help, thinking state display
 - config/provider hygiene: no placeholder favorites, custom endpoint isolation, clear state/config/trust ownership
@@ -70,9 +69,9 @@ Design rule:
 - Similar agents are references, not feature-parity requirements. Adopt from pi, Claude Code, Codex, OpenCode, Cursor, Droid, Letta, and others only when the idea strengthens Ion's core coding loop or preserves a simple, inspectable UX.
 
 ## Next Steps
-1. Continue `tk-9n7h` provider/model picker cleanup: verify explicit primary/fast semantics, non-listing providers, and custom/local endpoint isolation.
-2. Continue Gate 2 coverage: cancellation/error persistence, retry status, provider-limit recovery, and resumed tool-session invariants.
-3. Keep slash autocomplete and routine tool display behind provider/core hygiene unless they block normal testing.
+1. Continue `tk-mmcs`: choose the next narrow Pi/Codex parity polish slice against the now-green native-loop contract.
+2. Use Fedora/local-api `ion -p` and `--resume ... -p` smokes before and after any core-loop-adjacent change.
+3. Keep ACP, sandboxing, thinking expansion, privacy, routing, and subagents behind native-loop regression safety unless they directly block testing.
 
 *(Note: Older P3 TUI refinement tasks like configurable verbosity, skill layering, and status line context have been subsumed by their respective SOTA epics).*
 
@@ -100,6 +99,7 @@ Design rule:
 - [x] **Cancel durability slice (`tk-0j7y`)** — Esc cancellation now persists and replays a `Canceled by user` system entry instead of only mutating live UI state. Verified with `go test ./...`.
 - [x] **Error/retry resume coverage (`tk-0j7y`)** — Added real-store resume tests for provider-limit terminal errors, token usage after errors, and retry status recovery through `LastStatus`. Verified with `go test ./...`.
 - [x] **Live Fedora/local-api tool smoke (`tk-0j7y`)** — Live smoke now preserves configured local-api endpoints while isolating session data in temp HOME; Fedora `qwen3.6:27b-uncensored` completed bash tool approval, persisted, and reopened the session. Verified with `ION_LIVE_SMOKE=1 ... go test ./cmd/ion -run TestLiveSmokeTurnAndToolCall -count=1 -v`.
+- [x] **Core-loop contract pass (`tk-md7n`)** — Added deterministic resumed-tool follow-up provider-history coverage, verified Canto write/projection safeguards, and passed Fedora/local-api live `TestLiveSmokeTurnAndToolCall` plus direct `ion -p` / `--resume ... -p` smokes.
 - [x] **Thinking control Ion slice (`tk-hase`)** — Ion preserves `auto/off/minimal/low/medium/high/xhigh/max`, exposes common named levels in `/thinking`, and only sends named effort when Canto reports support; richer provider translation is split to `tk-369n`.
 - [x] **Transport-only endless retry (`tk-90mp`)** — Canto `f71205f` added transport-only endless retry; Ion wires `retry_until_cancelled` to that path so disconnects can retry until Ctrl+C while rate/quota/server failures stay bounded and readable.
 - [x] **Retry-until-cancel resilience slice (`tk-lm25`)** — Canto now supports retry-until-context-cancel and raw transport transient classification; Ion defaults `retry_until_cancelled` on, emits visible retry status, and persists those status events without transcript spam.

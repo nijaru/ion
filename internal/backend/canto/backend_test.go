@@ -559,6 +559,125 @@ func TestCrossProviderHandoffPreservesPromptTruth(t *testing.T) {
 	}
 }
 
+func TestResumedToolSessionSendsValidFollowUpHistory(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	root := t.TempDir()
+	store, err := storage.NewCantoStore(root)
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+
+	call := llm.Call{ID: "tool-call-1", Type: "function"}
+	call.Function.Name = "bash"
+	call.Function.Arguments = `{"command":"echo ion-smoke"}`
+	provider := ctesting.NewMockProvider("local-api",
+		ctesting.Step{Calls: []llm.Call{call}},
+		ctesting.Step{Content: "done"},
+		ctesting.Step{Content: "continued"},
+	)
+
+	oldFactory := providerFactory
+	providerFactory = func(ctx context.Context, cfg *config.Config) (llm.Provider, error) {
+		if cfg.Provider == "local-api" {
+			return provider, nil
+		}
+		return oldFactory(ctx, cfg)
+	}
+	defer func() { providerFactory = oldFactory }()
+
+	cwd := t.TempDir()
+	storageSession, err := store.OpenSession(ctx, cwd, "local-api/model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	first := New()
+	first.SetStore(store)
+	first.SetSession(storageSession)
+	first.SetConfig(&config.Config{Provider: "local-api", Model: "model-a", Endpoint: "http://localhost:8080/v1"})
+	first.SetMode(ionsession.ModeYolo)
+	if err := first.Open(ctx); err != nil {
+		t.Fatalf("open first backend: %v", err)
+	}
+	defer func() { _ = first.Close() }()
+
+	if err := first.SubmitTurn(ctx, "run the smoke command"); err != nil {
+		t.Fatalf("submit first turn: %v", err)
+	}
+	waitForTurnFinished(t, first.Events())
+	if err := first.Close(); err != nil {
+		t.Fatalf("close first backend: %v", err)
+	}
+
+	resumedSession, err := store.ResumeSession(ctx, storageSession.ID())
+	if err != nil {
+		t.Fatalf("resume session: %v", err)
+	}
+
+	second := New()
+	second.SetStore(store)
+	second.SetSession(resumedSession)
+	second.SetConfig(&config.Config{Provider: "local-api", Model: "model-a", Endpoint: "http://localhost:8080/v1"})
+	second.SetMode(ionsession.ModeYolo)
+	if err := second.Resume(ctx, storageSession.ID()); err != nil {
+		t.Fatalf("resume backend: %v", err)
+	}
+	defer func() { _ = second.Close() }()
+
+	if err := second.SubmitTurn(ctx, "reply continued if the earlier tool result said ion-smoke"); err != nil {
+		t.Fatalf("submit follow-up turn: %v", err)
+	}
+	waitForTurnFinished(t, second.Events())
+
+	calls := provider.Calls()
+	if len(calls) != 3 {
+		t.Fatalf("provider calls = %d, want 3", len(calls))
+	}
+	req := calls[2]
+	if !requestHasMessage(req.Messages, llm.RoleUser, "run the smoke command") {
+		t.Fatal("follow-up request missing first user turn")
+	}
+	if !requestHasMessage(req.Messages, llm.RoleAssistant, "done") {
+		t.Fatal("follow-up request missing post-tool assistant reply")
+	}
+	if !requestHasMessage(req.Messages, llm.RoleUser, "reply continued") {
+		t.Fatal("follow-up request missing new user turn")
+	}
+
+	var (
+		foundToolCall   bool
+		foundToolResult bool
+	)
+	for _, msg := range req.Messages {
+		if msg.Role == llm.RoleAssistant && len(msg.Calls) == 1 &&
+			msg.Calls[0].ID == "tool-call-1" &&
+			msg.Calls[0].Function.Name == "bash" {
+			foundToolCall = true
+		}
+		if msg.Role == llm.RoleTool &&
+			msg.ToolID == "tool-call-1" &&
+			msg.Name == "bash" &&
+			strings.Contains(msg.Content, "ion-smoke") {
+			foundToolResult = true
+		}
+		if msg.Role == llm.RoleAssistant &&
+			strings.TrimSpace(msg.Content) == "" &&
+			msg.Reasoning == "" &&
+			len(msg.ThinkingBlocks) == 0 &&
+			len(msg.Calls) == 0 {
+			t.Fatalf("follow-up request contains empty assistant message: %#v", req.Messages)
+		}
+	}
+	if !foundToolCall {
+		t.Fatalf("follow-up request missing assistant tool call: %#v", req.Messages)
+	}
+	if !foundToolResult {
+		t.Fatalf("follow-up request missing matching tool result: %#v", req.Messages)
+	}
+}
+
 func TestCompactUsesManualCompactionHelper(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
