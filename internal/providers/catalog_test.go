@@ -84,3 +84,34 @@ func TestCredentialStateContextReportsLocalAPINotRunning(t *testing.T) {
 		t.Fatalf("detail = %q, want %q", detail, "Not running")
 	}
 }
+
+func TestResolvedEndpointDoesNotLeakCustomEndpointToDefaultProviders(t *testing.T) {
+	cfg := &config.Config{
+		Provider: "openrouter",
+		Endpoint: "http://fedora:8080/v1",
+	}
+	if got := ResolvedEndpoint(cfg); got != "https://openrouter.ai/api/v1" {
+		t.Fatalf("resolved endpoint = %q, want OpenRouter default", got)
+	}
+
+	cfg.Provider = "local-api"
+	if got := ResolvedEndpoint(cfg); got != "http://fedora:8080/v1" {
+		t.Fatalf("local-api endpoint = %q, want configured endpoint", got)
+	}
+}
+
+func TestShowInPickerDoesNotTreatEndpointAsCustomProviderSelection(t *testing.T) {
+	custom := MustLookup("openai-compatible")
+	cfg := &config.Config{
+		Provider: "local-api",
+		Endpoint: "http://fedora:8080/v1",
+	}
+	if ShowInPicker(cfg, custom) {
+		t.Fatal("custom provider should stay hidden when endpoint belongs to local-api")
+	}
+
+	cfg.Provider = "openai-compatible"
+	if !ShowInPicker(cfg, custom) {
+		t.Fatal("custom provider should show when it is the active provider")
+	}
+}

@@ -203,7 +203,13 @@ func cfgForProvider(cfg *config.Config, provider string) *config.Config {
 		return &config.Config{Provider: provider}
 	}
 	copy := *cfg
-	copy.Provider = provider
+	activeProvider := providers.ResolveID(copy.Provider)
+	copy.Provider = providers.ResolveID(provider)
+	if activeProvider != copy.Provider {
+		copy.Endpoint = ""
+		copy.AuthEnvVar = ""
+		copy.ExtraHeaders = nil
+	}
 	return &copy
 }
 
