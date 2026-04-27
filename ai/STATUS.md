@@ -12,8 +12,9 @@ Current active blockers:
 
 Next core-parity work:
 - use `ai/design/native-core-loop-architecture.md` as the target design for the Canto/Ion refactor.
-- audit Canto write/projection paths first; fix Canto upstream when the framework owns the bug, then import the new revision into Ion.
-- refactor Ion's Canto backend, storage/replay projection, app lifecycle, and print CLI against the design before returning to feature polish.
+- use `ai/review/core-loop-ai-corpus-synthesis-2026-04-27.md` as the cross-repo ai/ synthesis and pre-implementation gate list.
+- use `ai/review/canto-core-loop-contract-audit-2026-04-27.md` to decide whether any Canto work is proof-only, framework bug fix, Ion adapter misuse, or deferred.
+- refactor Ion's Canto backend, storage/replay projection, app lifecycle, and print CLI against the dedicated design files before returning to feature polish.
 - use the scriptable print CLI (`ion -p "prompt"`, `ion -p --json "prompt"`, `ion --print "prompt" --json`, `--resume <id> -p`, and piped stdin) as the automated Fedora/local-api smoke surface before TUI-only checks.
 - keep ACP, sandboxing, broader policy, thinking expansion, privacy, routing, and subagents behind native-loop regression safety.
 
@@ -72,10 +73,11 @@ Design rule:
 - Similar agents are references, not feature-parity requirements. Adopt from pi, Claude Code, Codex, OpenCode, Cursor, Droid, Letta, and others only when the idea strengthens Ion's core coding loop or preserves a simple, inspectable UX.
 
 ## Next Steps
-1. Continue `tk-s6p4`: audit Canto write/projection paths against `ai/design/native-core-loop-architecture.md`.
-2. Refactor Ion's native backend spine so turn lifecycle, event watching, stream callbacks, and display translation have explicit ownership.
-3. Use Fedora/local-api `ion -p` and `--resume ... -p` smokes before and after any core-loop-adjacent change.
-4. Keep ACP, sandboxing, thinking expansion, privacy, routing, and subagents behind native-loop regression safety unless they directly block testing.
+1. Review the four gate docs: Canto contract audit, backend spine, display projection, and app/CLI lifecycle.
+2. Resolve the remaining pre-code decision: keep/rewrite/remove the interrupted Canto test scratch after deciding whether Gap 1 is proof-only or a framework behavior change.
+3. Start implementation only after that decision, beginning with Canto proof/fix if needed, then Ion backend spine.
+4. Use Fedora/local-api `ion -p` and `--resume ... -p` smokes before and after any core-loop-adjacent change.
+5. Keep ACP, sandboxing, thinking expansion, privacy, routing, and subagents behind native-loop regression safety unless they directly block testing.
 
 *(Note: Older P3 TUI refinement tasks like configurable verbosity, skill layering, and status line context have been subsumed by their respective SOTA epics).*
 
@@ -173,6 +175,11 @@ P4 follow-ups:
 - `ai/research/pi-current-core-loop-review-2026-04.md` — Current Pi core-loop, `/tree`, compaction, and UX review.
 - `ai/research/core-agent-reference-delta-2026-04-27.md` — Focused Pi/Codex CLI and loop deltas; reference only until Gate 2 is truly stable.
 - `ai/design/native-core-loop-architecture.md` — Target Canto/Ion native loop ownership, invariants, refactor sequence, and smoke matrix.
+- `ai/review/core-loop-ai-corpus-synthesis-2026-04-27.md` — Cross-repo ai/ synthesis and pre-implementation gates for the native loop refactor.
+- `ai/review/canto-core-loop-contract-audit-2026-04-27.md` — Canto-owned contract gaps and allowed framework work before Ion refactor.
+- `ai/design/ion-native-backend-spine-2026-04-27.md` — Refactor target for CantoBackend turn phases, event translation, cancel/close semantics.
+- `ai/design/ion-display-projection-2026-04-27.md` — Storage/replay projection contract for Canto effective history plus Ion display-only events.
+- `ai/design/ion-app-cli-lifecycle-2026-04-27.md` — Command, startup/resume, runtime switch, progress/error, and print CLI lifecycle design.
 - `ai/review/canto-research-delta-2026-04-26.md` — Recent Canto ai/ findings that affect Ion sequencing.
 - `ai/review/core-loop-contract.md` — Native Canto/Ion core-loop invariants for provider history, events, persistence, replay, approvals, and print CLI.
 - `ai/review/core-loop-review.md` — Focused contract review after resume/tool-call failures.

@@ -72,6 +72,7 @@ Current design target:
 - Ion owns input classification, command UX, product policy, display projection, and CLI/TUI rendering.
 - The native backend adapter should be a small spine: ensure/select session, subscribe, submit via `Runner.SendStream`, translate events, and stop cleanly.
 - Storage/replay should consume Canto `EffectiveEntries`, merge only Ion display events, and render replay with the live renderer.
+- Pre-implementation gates are now tracked in `ai/review/core-loop-ai-corpus-synthesis-2026-04-27.md`; do not start more code changes until Canto contract audit, Ion adapter design, storage/replay design, and app/CLI lifecycle design are written.
 
 References:
 
@@ -129,8 +130,12 @@ Exit criteria:
 ## Immediate Work Order
 
 1. Treat `tk-s6p4` as the active blocker and keep `tk-mmcs` synchronized.
-2. Audit Canto write/projection paths against the native core-loop design; fix framework-owned bugs in Canto first, push, then import into Ion.
-3. Refactor Ion's native backend spine around explicit lifecycle phases.
-4. Refactor storage/replay projection until live and resumed transcript rendering share one model without duplicate model-visible entries.
+2. Review `ai/review/canto-core-loop-contract-audit-2026-04-27.md` and decide which Canto gaps require proof/fix before Ion refactor.
+3. Review `ai/design/ion-native-backend-spine-2026-04-27.md`, `ai/design/ion-display-projection-2026-04-27.md`, and `ai/design/ion-app-cli-lifecycle-2026-04-27.md` as the concrete implementation target.
+4. Then implement the refactor in the same order: Canto contract gaps, Ion backend spine, storage/replay projection, app/CLI lifecycle.
 5. Extend deterministic and Fedora/local-api print CLI smoke coverage around cancellation/error persistence, retry status, provider-limit recovery, tool errors, and resumed follow-up turns.
 6. Only then resume TUI polish such as startup header readability, slash autocomplete, thinking display, and routine tool output.
+
+Documentation hygiene follow-up:
+
+- `tk-xrgc` tracks deduplicating and reorganizing `./ai` and `../canto/ai`. This is needed for future agent efficiency, but it stays behind the core-loop design/refactor unless stale docs actively block implementation.
