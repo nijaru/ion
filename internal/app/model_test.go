@@ -1075,6 +1075,14 @@ func TestCtrlTOpensThinkingPicker(t *testing.T) {
 	if got := model.Picker.Overlay.title; got != "Pick a primary thinking level" {
 		t.Fatalf("picker title = %q", got)
 	}
+	var values []string
+	for _, item := range model.Picker.Overlay.items {
+		values = append(values, item.Value)
+	}
+	want := []string{"auto", "off", "minimal", "low", "medium", "high", "xhigh"}
+	if !slices.Equal(values, want) {
+		t.Fatalf("thinking picker values = %#v, want %#v", values, want)
+	}
 }
 
 func TestCtrlPRecallsHistory(t *testing.T) {

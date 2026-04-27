@@ -206,12 +206,20 @@ func normalizeOptionalReasoning(value, fallback string) string {
 		return fallback
 	case "auto":
 		return fallback
+	case "off", "none", "disabled":
+		return "off"
+	case "minimal", "min":
+		return "minimal"
 	case "low":
 		return "low"
 	case "medium", "med":
 		return "medium"
 	case "high":
 		return "high"
+	case "xhigh", "extra-high", "extra_high", "extra high":
+		return "xhigh"
+	case "max", "maximum":
+		return "max"
 	default:
 		return fallback
 	}
@@ -223,12 +231,20 @@ func normalizeRequiredReasoning(value, fallback string) string {
 		return fallback
 	case "auto":
 		return fallback
+	case "off", "none", "disabled":
+		return "off"
+	case "minimal", "min":
+		return "minimal"
 	case "low":
 		return "low"
 	case "medium", "med":
 		return "medium"
 	case "high":
 		return "high"
+	case "xhigh", "extra-high", "extra_high", "extra high":
+		return "xhigh"
+	case "max", "maximum":
+		return "max"
 	default:
 		return fallback
 	}

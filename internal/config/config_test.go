@@ -518,9 +518,13 @@ func TestNormalizeReasoningEffort(t *testing.T) {
 	for input, want := range map[string]string{
 		"":       DefaultReasoningEffort,
 		"auto":   DefaultReasoningEffort,
+		"none":   "off",
+		"MIN":    "minimal",
 		"med":    "medium",
 		"medium": "medium",
 		"LOW":    "low",
+		"xhigh":  "xhigh",
+		"max":    "max",
 		"weird":  DefaultReasoningEffort,
 	} {
 		if got := normalizeReasoningEffort(input); got != want {
