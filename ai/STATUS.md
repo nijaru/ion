@@ -10,9 +10,7 @@ Current active blockers:
 - `tk-mmcs` — Keep the Pi/Codex/Claude core parity plan, roadmap, and task queue synchronized while the loop is stabilized.
 
 Next core-parity work:
-- `tk-9n7h` — Provider/model picker correctness. This is the next P2 product hygiene task after the resume/model-history blocker.
-- Current slice: remove implicit catalog-derived fast model selection so only explicitly configured primary/fast models appear as configured presets.
-- Current slice: keep endpoint/auth/header overrides scoped to the active custom/local provider so Fedora/local-api config does not contaminate OpenRouter, Z.ai, or other provider rows.
+- `tk-5cqs` — Slash command surface and autocomplete. This is the next core usability layer after the resume/model-history and provider/model hygiene fixes.
 
 Captured lower-priority polish:
 - `tk-5cqs` — Slash commands: autocomplete and command surface review (P3)
@@ -90,6 +88,7 @@ Design rule:
 - [x] **Session picker null-name fix (`tk-0s5a`)** — Session listing tolerates legacy rows with `NULL` names.
 - [x] **Dual transcript persistence fix (`tk-5t72`)** — Canto now owns model-visible user/assistant/tool transcript persistence; Ion only live-renders those events and keeps UI-local metadata/status/usage writes. Verified with `go test ./...`, a Fedora/local-api print smoke, SQLite event inspection, and `--continue` on the new session.
 - [x] **Resume transcript rendering (`tk-izo7`)** — Canto commit `927e482` filters invalid assistant rows from effective history, Ion imports that pseudo-version, replay/live transcript entries use shared spacing, the resumed marker appears after the startup header, backend close waits for turn goroutines, and routine tool replay is compact by default. Verified with Canto `go test ./...`, Ion `go test ./...`, `go run ./... --continue --print --timeout 30s --prompt hi`, and `go run ./... --continue --print --output json --timeout 30s --prompt "reply with the single word ok"` against the live local-api session.
+- [x] **Provider/model picker hygiene (`tk-9n7h`)** — Removed catalog-inferred fast preset selection, kept configured preset rows explicit, scoped endpoint/auth/header overrides to the active custom/local provider, and preserved non-listing provider manual-model behavior. Verified with `go test ./...` and Fedora/local-api JSON print smoke.
 - [x] **Thinking control Ion slice (`tk-hase`)** — Ion preserves `auto/off/minimal/low/medium/high/xhigh/max`, exposes common named levels in `/thinking`, and only sends named effort when Canto reports support; richer provider translation is split to `tk-369n`.
 - [x] **Transport-only endless retry (`tk-90mp`)** — Canto `f71205f` added transport-only endless retry; Ion wires `retry_until_cancelled` to that path so disconnects can retry until Ctrl+C while rate/quota/server failures stay bounded and readable.
 - [x] **Retry-until-cancel resilience slice (`tk-lm25`)** — Canto now supports retry-until-context-cancel and raw transport transient classification; Ion defaults `retry_until_cancelled` on, emits visible retry status, and persists those status events without transcript spam.
@@ -136,7 +135,6 @@ See `tk ls` for the full list. Current active priority:
 - `tk-mmcs` — Core parity plan and task queue hygiene
 
 Remaining P2 work:
-- `tk-9n7h` — Provider/model picker correctness
 - `tk-o0iw` — ACP: Add initial session context at `Open()`
 - `tk-2ffy` — ACP: Filter/log stderr separately instead of emitting `session.Error`
 - `tk-6zy3` — ACP: Add `token_usage` event mapping
