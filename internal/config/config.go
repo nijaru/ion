@@ -70,6 +70,21 @@ func DefaultStatePath() (string, error) {
 }
 
 func Load() (*Config, error) {
+	cfg, err := LoadStable()
+	if err != nil {
+		return nil, err
+	}
+	state, err := LoadState()
+	if err != nil {
+		return nil, err
+	}
+	applyState(cfg, state)
+	applyEnvOverrides(cfg)
+	normalizeConfig(cfg)
+	return cfg, nil
+}
+
+func LoadStable() (*Config, error) {
 	cfg := defaultConfig()
 
 	path, err := DefaultConfigPath()
@@ -83,13 +98,11 @@ func Load() (*Config, error) {
 	} else if err := toml.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
+	normalizeConfig(cfg)
+	return cfg, nil
+}
 
-	state, err := LoadState()
-	if err != nil {
-		return nil, err
-	}
-	applyState(cfg, state)
-
+func applyEnvOverrides(cfg *Config) {
 	if override := os.Getenv("ION_MODEL"); override != "" {
 		if provider, model, ok := splitProviderModel(override); ok {
 			cfg.Provider = provider
@@ -105,7 +118,9 @@ func Load() (*Config, error) {
 	if override := os.Getenv("ION_REASONING_EFFORT"); override != "" {
 		cfg.ReasoningEffort = override
 	}
+}
 
+func normalizeConfig(cfg *Config) {
 	cfg.Provider = strings.ToLower(strings.TrimSpace(cfg.Provider))
 	cfg.Model = strings.TrimSpace(cfg.Model)
 	cfg.ReasoningEffort = normalizeReasoningEffort(cfg.ReasoningEffort)
@@ -134,8 +149,10 @@ func Load() (*Config, error) {
 	if cfg.SessionRetentionDays <= 0 {
 		cfg.SessionRetentionDays = DefaultSessionRetentionDays
 	}
+}
 
-	return cfg, nil
+func NormalizeVerbosity(value string) string {
+	return normalizeVerbosity(value)
 }
 
 func LoadState() (*State, error) {

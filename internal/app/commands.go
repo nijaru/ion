@@ -136,6 +136,9 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		m.Progress.Status = noModelConfiguredStatus()
 		return m.openModelPickerWithConfig(updated)
 
+	case "/settings":
+		return m.handleSettingsCommand(fields)
+
 	case "/mcp":
 		if len(fields) < 3 || fields[1] != "add" {
 			return m, cmdError("usage: /mcp add <command> [args...]")
@@ -498,6 +501,7 @@ func helpText() string {
 		"  /auto, /yolo     switch to AUTO mode",
 		"  /mode [mode]     set mode: read, edit, auto",
 		"  /trust [status]  trust this workspace or show trust status",
+		"  /settings        show or change common settings",
 		"  /rewind <id>     preview checkpoint restore; add --confirm to apply",
 		"  /tools           show tool count and lazy loading status",
 		"  /memory [query]  show workspace memory tree or search memory",
@@ -532,6 +536,110 @@ func helpText() string {
 	}, "\n")
 }
 
+func (m Model) handleSettingsCommand(fields []string) (Model, tea.Cmd) {
+	cfg, err := config.LoadStable()
+	if err != nil {
+		return m, cmdError(fmt.Sprintf("failed to load config: %v", err))
+	}
+	if len(fields) == 1 {
+		return m, m.printEntries(session.Entry{
+			Role:    session.System,
+			Content: m.settingsSummary(cfg),
+		})
+	}
+	if len(fields) != 3 {
+		return m, cmdError("usage: /settings [retry on|off|tool full|collapsed|hidden|thinking full|collapsed|hidden]")
+	}
+
+	updated := *cfg
+	key := strings.ToLower(strings.TrimSpace(fields[1]))
+	value := strings.ToLower(strings.TrimSpace(fields[2]))
+	var notice string
+
+	switch key {
+	case "retry":
+		enabled, ok := parseOnOff(value)
+		if !ok {
+			return m, cmdError("usage: /settings retry on|off")
+		}
+		updated.RetryUntilCancelled = &enabled
+		if enabled {
+			notice = "Retry network errors: on"
+		} else {
+			notice = "Retry network errors: off"
+		}
+	case "tool", "tools":
+		verbosity := config.NormalizeVerbosity(value)
+		if verbosity == "" {
+			return m, cmdError("usage: /settings tool full|collapsed|hidden")
+		}
+		updated.ToolVerbosity = verbosity
+		notice = "Tool display: " + verbosity
+	case "thinking":
+		verbosity := config.NormalizeVerbosity(value)
+		if verbosity == "" {
+			return m, cmdError("usage: /settings thinking full|collapsed|hidden")
+		}
+		updated.ThinkingVerbosity = verbosity
+		notice = "Thinking display: " + verbosity
+	default:
+		return m, cmdError("usage: /settings [retry|tool|thinking] ...")
+	}
+
+	if err := config.Save(&updated); err != nil {
+		return m, cmdError(fmt.Sprintf("failed to save config: %v", err))
+	}
+	m.Model.Config = &updated
+	m.Model.Backend.SetConfig(&updated)
+	return m, m.printEntries(session.Entry{Role: session.System, Content: notice})
+}
+
+func (m Model) settingsSummary(cfg *config.Config) string {
+	if cfg == nil {
+		cfg = &config.Config{}
+	}
+	return strings.Join([]string{
+		"settings",
+		"",
+		"  retry network errors: " + onOff(cfg.RetryUntilCancelledEnabled()),
+		"  tool display: " + displayVerbosity(cfg.ToolVerbosity),
+		"  thinking display: " + displayVerbosity(cfg.ThinkingVerbosity),
+		"  thinking level: " + normalizeThinkingValue(cfg.ReasoningEffort),
+		"",
+		"commands",
+		"",
+		"  /settings retry on|off",
+		"  /settings tool full|collapsed|hidden",
+		"  /settings thinking full|collapsed|hidden",
+		"  /thinking auto|low|medium|high",
+	}, "\n")
+}
+
+func parseOnOff(value string) (bool, bool) {
+	switch value {
+	case "on", "true", "yes":
+		return true, true
+	case "off", "false", "no":
+		return false, true
+	default:
+		return false, false
+	}
+}
+
+func onOff(enabled bool) string {
+	if enabled {
+		return "on"
+	}
+	return "off"
+}
+
+func displayVerbosity(value string) string {
+	if normalized := config.NormalizeVerbosity(value); normalized != "" {
+		return normalized
+	}
+	return "full"
+}
+
 func slashCommands() []string {
 	return []string{
 		"/resume",
@@ -546,6 +654,7 @@ func slashCommands() []string {
 		"/yolo",
 		"/mode",
 		"/trust",
+		"/settings",
 		"/rewind",
 		"/tools",
 		"/memory",
@@ -875,7 +984,7 @@ func commandAllowedDuringTurn(input string) bool {
 		return false
 	}
 	switch fields[0] {
-	case "/help", "/mode", "/read", "/edit", "/auto", "/yolo", "/cost", "/tools", "/trust", "/thinking":
+	case "/help", "/mode", "/read", "/edit", "/auto", "/yolo", "/cost", "/tools", "/trust", "/thinking", "/settings":
 		return true
 	default:
 		return false
