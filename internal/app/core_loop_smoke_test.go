@@ -45,6 +45,33 @@ func TestCoreLoopSmokeSubmitStreamToolPersistReplay(t *testing.T) {
 	if model.Progress.LastTurnSummary.Input != 12 || model.Progress.LastTurnSummary.Output != 4 {
 		t.Fatalf("last usage = %d/%d, want 12/4", model.Progress.LastTurnSummary.Input, model.Progress.LastTurnSummary.Output)
 	}
+	for _, event := range []any{
+		storage.User{Type: "user", Content: "run smoke"},
+		storage.ToolUse{
+			Type: "tool_use",
+			ID:   "tool-1",
+			Name: "bash",
+			Input: map[string]string{
+				"args": "echo smoke",
+			},
+		},
+		storage.ToolResult{
+			Type:      "tool_result",
+			ToolUseID: "tool-1",
+			Content:   "smoke\n",
+		},
+		storage.Agent{
+			Type: "agent",
+			Content: []storage.Block{{
+				Type: "text",
+				Text: newString("done"),
+			}},
+		},
+	} {
+		if err := stored.Append(context.Background(), event); err != nil {
+			t.Fatalf("append canonical event %T: %v", event, err)
+		}
+	}
 
 	resumed, err := store.ResumeSession(context.Background(), stored.ID())
 	if err != nil {
@@ -208,26 +235,10 @@ func TestCoreLoopSmokeToolPreviewRedactsSensitiveArgs(t *testing.T) {
 	if !strings.Contains(model.InFlight.Pending.Title, "[redacted-secret]") {
 		t.Fatalf("tool preview missing redaction marker: %q", model.InFlight.Pending.Title)
 	}
-
-	var found bool
 	for _, appended := range stored.appends {
-		use, ok := appended.(storage.ToolUse)
-		if !ok {
-			continue
+		if _, ok := appended.(storage.ToolUse); ok {
+			t.Fatalf("tool start should not be app-persisted: %#v", stored.appends)
 		}
-		input, ok := use.Input.(map[string]string)
-		if !ok {
-			t.Fatalf("tool input = %T, want map[string]string", use.Input)
-		}
-		if strings.Contains(input["args"], "abc.def-123") {
-			t.Fatalf("stored tool args leaked token: %#v", use)
-		}
-		if strings.Contains(input["args"], "[redacted-secret]") {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("missing redacted stored tool args in %#v", stored.appends)
 	}
 }
 
@@ -254,6 +265,10 @@ func newCoreLoopSmokeModel(t *testing.T) (Model, *stubSession, storage.Store, st
 		nil,
 	)
 	return model, sess, store, stored
+}
+
+func newString(s string) *string {
+	return &s
 }
 
 func requireEntry(t *testing.T, entries []session.Entry, role session.Role, content string) {

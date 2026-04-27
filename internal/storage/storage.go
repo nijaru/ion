@@ -81,6 +81,15 @@ type SessionInfo struct {
 	LastPreview  string    `json:"last_preview"`
 }
 
+func IsConversationSessionInfo(info SessionInfo) bool {
+	title := strings.TrimSpace(info.Title)
+	if strings.HasPrefix(title, "/") {
+		return false
+	}
+	preview := strings.TrimSpace(info.LastPreview)
+	return preview != "" && !strings.HasPrefix(preview, "/")
+}
+
 // JSONL entry types as defined in ai/design/session-storage.md
 type (
 	Meta struct {

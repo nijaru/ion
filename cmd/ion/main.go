@@ -38,8 +38,10 @@ func main() {
 	yoloFlag := flag.Bool("yolo", false, "Start in AUTO mode (alias for --mode auto)")
 	printFlag := flag.Bool("print", false, "Print response and exit (use with --prompt or stdin)")
 	promptFlag := flag.String("prompt", "", "Prompt to send in print mode")
+	outputFlag := flag.String("output", "text", "Print mode output: text or json")
 	timeoutFlag := flag.Duration("timeout", 5*time.Minute, "Timeout for print mode")
-	if err := flag.CommandLine.Parse(normalizeFlagArgs(os.Args[1:])); err != nil {
+	args, openResumePicker := normalizeFlagArgs(os.Args[1:])
+	if err := flag.CommandLine.Parse(args); err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(2)
 	}
@@ -104,7 +106,7 @@ func main() {
 	if *resumeFlag != "" {
 		sessionID = *resumeFlag
 	} else if *continueFlag {
-		recent, err := store.GetRecentSession(ctx, cwd)
+		recent, err := recentSessionForContinue(ctx, store, cwd)
 		if err == nil && recent != nil {
 			sessionID = recent.ID
 		}
@@ -139,7 +141,15 @@ func main() {
 			os.Exit(1)
 		}
 		configureSessionMode(agent, mode)
-		if err := runPrintModeWithTimeout(ctx, agent, prompt, *timeoutFlag, mode == session.ModeYolo); err != nil {
+		if err := runPrintModeWithTimeout(
+			ctx,
+			os.Stdout,
+			agent,
+			prompt,
+			*timeoutFlag,
+			mode == session.ModeYolo,
+			*outputFlag,
+		); err != nil {
 			fmt.Fprintf(os.Stderr, "print mode error: %v\n", err)
 			os.Exit(1)
 		}
@@ -170,12 +180,21 @@ func main() {
 		return switchedBackend, switchedBackend.Session(), switchedSession, nil
 	}
 
-	printStartup(os.Stdout, startupLines, workspaceHeader(cwd, branch), startupEntries)
 	model := app.New(b, sess, store, cwd, branch, version, switcher).
 		WithMode(mode).
 		WithEscalation(escalation).
-		WithTrust(trustStore, trusted, cfg.WorkspaceTrust).
-		WithPrintedTranscript(len(startupEntries) > 0)
+		WithTrust(trustStore, trusted, cfg.WorkspaceTrust)
+	if openResumePicker {
+		model = model.WithSessionPicker()
+	}
+	printStartup(
+		os.Stdout,
+		startupLines,
+		workspaceHeader(cwd, branch),
+		sessionID != "",
+		model.RenderEntries(startupEntries...),
+	)
+	model = model.WithPrintedTranscript(len(startupEntries) > 0)
 	p := tea.NewProgram(model)
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "ion error: %v\n", err)
@@ -183,11 +202,40 @@ func main() {
 	}
 }
 
-func normalizeFlagArgs(args []string) []string {
+func normalizeFlagArgs(args []string) ([]string, bool) {
 	if len(args) > 1 && args[0] == "--" && strings.HasPrefix(args[1], "-") {
-		return append([]string(nil), args[1:]...)
+		args = args[1:]
 	}
-	return args
+	normalized := make([]string, 0, len(args))
+	openResumePicker := false
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg != "-resume" && arg != "--resume" {
+			normalized = append(normalized, arg)
+			continue
+		}
+		if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+			normalized = append(normalized, arg, args[i+1])
+			i++
+			continue
+		}
+		openResumePicker = true
+	}
+	return normalized, openResumePicker
+}
+
+func recentSessionForContinue(ctx context.Context, store storage.Store, cwd string) (*storage.SessionInfo, error) {
+	sessions, err := store.ListSessions(ctx, cwd)
+	if err != nil {
+		return nil, err
+	}
+	for i := range sessions {
+		if !storage.IsConversationSessionInfo(sessions[i]) {
+			continue
+		}
+		return &sessions[i], nil
+	}
+	return nil, nil
 }
 
 func loadWorkspaceTrust(cwd string, cfg *config.Config) (*ionworkspace.TrustStore, bool, string, error) {
@@ -290,10 +338,7 @@ func openRuntime(ctx context.Context, store storage.Store, cwd, branch string, c
 		return nil, nil, fmt.Errorf("provider and model must be set (e.g. provider=\"openrouter\" model=\"openai/gpt-5.4\")")
 	}
 
-	sess, err := store.OpenSession(ctx, cwd, modelName, branch)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to open session: %w", err)
-	}
+	sess := storage.NewLazySession(store, cwd, modelName, branch)
 	b.SetSession(sess)
 	if err := b.Session().Open(ctx); err != nil {
 		_ = sess.Close()
@@ -340,7 +385,13 @@ func currentBranch() string {
 	return strings.TrimSpace(string(out))
 }
 
-func printStartup(out *os.File, startupLines []string, workspaceLine string, entries []session.Entry) {
+func printStartup(
+	out io.Writer,
+	startupLines []string,
+	workspaceLine string,
+	resumed bool,
+	renderedEntries []string,
+) {
 	if out == nil {
 		return
 	}
@@ -351,12 +402,13 @@ func printStartup(out *os.File, startupLines []string, workspaceLine string, ent
 	if workspaceLine != "" {
 		lines = append(lines, startupWorkspaceStyle().Render(workspaceLine))
 	}
-	if len(entries) > 0 {
+	if resumed {
+		lines = append(lines, "", startupMetaStyle().Render("--- resumed ---"))
+	}
+	if len(renderedEntries) > 0 {
 		lines = append(lines, "")
 	}
-	for _, entry := range entries {
-		lines = append(lines, renderStartupEntry(entry))
-	}
+	lines = append(lines, renderedEntries...)
 	if len(lines) == 0 {
 		return
 	}
@@ -374,27 +426,6 @@ func workspaceHeader(cwd, branch string) string {
 		parts = append(parts, branch)
 	}
 	return strings.Join(parts, " • ")
-}
-
-func renderStartupEntry(entry session.Entry) string {
-	switch entry.Role {
-	case session.User:
-		return startupUserStyle().Render("› " + entry.Content)
-	case session.System:
-		return startupSystemStyle().Render("• " + entry.Content)
-	case session.Tool:
-		if entry.Title != "" {
-			if entry.Content == "" {
-				return startupToolStyle().Render("• " + entry.Title)
-			}
-			return startupToolStyle().Render("• "+entry.Title) + "\n" + entry.Content
-		}
-		return startupToolStyle().Render("• " + entry.Content)
-	case session.Agent, session.Subagent:
-		return startupAgentStyle().Render(entry.Content)
-	default:
-		return entry.Content
-	}
 }
 
 func isConfigurationStatus(status string) bool {
@@ -441,20 +472,4 @@ func startupMetaStyle() lipgloss.Style {
 
 func startupWorkspaceStyle() lipgloss.Style {
 	return lipgloss.NewStyle().Faint(true)
-}
-
-func startupUserStyle() lipgloss.Style {
-	return lipgloss.NewStyle().Faint(true)
-}
-
-func startupSystemStyle() lipgloss.Style {
-	return lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Faint(true)
-}
-
-func startupToolStyle() lipgloss.Style {
-	return lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
-}
-
-func startupAgentStyle() lipgloss.Style {
-	return lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
 }

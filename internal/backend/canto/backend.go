@@ -51,6 +51,7 @@ type Backend struct {
 	mu        sync.Mutex
 	cancel    context.CancelFunc
 	closeOnce sync.Once
+	wg        sync.WaitGroup
 
 	policy     *backend.PolicyEngine
 	approver   *tools.ApprovalManager
@@ -652,10 +653,31 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 		b.mu.Unlock()
 		return fmt.Errorf("backend not initialized")
 	}
+	if lazy, ok := b.sess.(interface {
+		Ensure(context.Context) (storage.Session, error)
+	}); ok {
+		sess, err := lazy.Ensure(ctx)
+		if err != nil {
+			b.mu.Unlock()
+			return fmt.Errorf("open session: %w", err)
+		}
+		b.sess = sess
+	}
 
 	sessionID := b.ID()
 	if sessionID == "" {
 		sessionID = "default"
+	}
+	if b.ionStore != nil {
+		if err := b.ionStore.UpdateSession(ctx, storage.SessionInfo{
+			ID:          sessionID,
+			Model:       b.Model(),
+			LastPreview: input,
+			Title:       input,
+		}); err != nil {
+			b.mu.Unlock()
+			return fmt.Errorf("update session metadata: %w", err)
+		}
 	}
 
 	// Create a sub-context for the turn and store its cancel function.
@@ -671,13 +693,17 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 	}
 	b.mu.Unlock()
 
+	b.wg.Add(1)
 	go func() {
+		defer b.wg.Done()
 		defer sub.Close()
 		b.translateEvents(turnCtx, sub.Events())
 	}()
 
 	// Run the agent turn with streaming
+	b.wg.Add(1)
 	go func() {
+		defer b.wg.Done()
 		defer cancel()
 
 		shouldCompact, err := b.shouldProactivelyCompact(turnCtx)
@@ -998,18 +1024,26 @@ func (b *Backend) Compact(ctx context.Context) (bool, error) {
 func (b *Backend) Close() error {
 	b.closeOnce.Do(func() {
 		b.mu.Lock()
-		defer b.mu.Unlock()
+		cancel := b.cancel
+		clients := append([]*mcp.Client(nil), b.mcpClients...)
+		memory := b.memory
+		runner := b.runner
+		b.mu.Unlock()
 
-		for _, client := range b.mcpClients {
+		if cancel != nil {
+			cancel()
+		}
+		for _, client := range clients {
 			client.Close()
 		}
 
-		if b.memory != nil {
-			_ = b.memory.Close()
+		if memory != nil {
+			_ = memory.Close()
 		}
-		if b.runner != nil {
-			b.runner.Close()
+		if runner != nil {
+			runner.Close()
 		}
+		b.wg.Wait()
 		close(b.events)
 	})
 	return nil

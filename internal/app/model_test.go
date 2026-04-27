@@ -371,15 +371,10 @@ func TestToolEntryFlushesToTranscript(t *testing.T) {
 	if cmd == nil {
 		t.Fatalf("expected tea.Println command for tool result")
 	}
-	var result storage.ToolResult
 	for _, event := range storageSess.appends {
-		if e, ok := event.(storage.ToolResult); ok {
-			result = e
-			break
+		if _, ok := event.(storage.ToolResult); ok {
+			t.Fatalf("tool result should not be app-persisted: %#v", storageSess.appends)
 		}
-	}
-	if result.ToolUseID != "tool-call-1" {
-		t.Fatalf("tool result id = %q, want tool-call-1", result.ToolUseID)
 	}
 }
 
@@ -438,14 +433,10 @@ func TestInterleavedToolResultsPreservePendingEntries(t *testing.T) {
 	if len(model.InFlight.PendingTools) != 0 {
 		t.Fatalf("pending tools = %#v, want none", model.InFlight.PendingTools)
 	}
-	var resultIDs []string
 	for _, event := range storageSess.appends {
-		if e, ok := event.(storage.ToolResult); ok {
-			resultIDs = append(resultIDs, e.ToolUseID)
+		if _, ok := event.(storage.ToolResult); ok {
+			t.Fatalf("tool results should not be app-persisted: %#v", storageSess.appends)
 		}
-	}
-	if !slices.Equal(resultIDs, []string{"tool-a", "tool-b"}) {
-		t.Fatalf("tool result IDs = %#v, want [tool-a tool-b]", resultIDs)
 	}
 }
 
@@ -1691,6 +1682,26 @@ func TestSubmitTextPersistsRoutingDecision(t *testing.T) {
 	}
 	if decision.SessionCost != 0.012 {
 		t.Fatalf("session cost = %f, want 0.012", decision.SessionCost)
+	}
+}
+
+func TestSubmitTextDoesNotPersistSlashCommand(t *testing.T) {
+	storageSess := &stubStorageSession{}
+	model := New(
+		stubBackend{sess: &stubSession{events: make(chan session.Event)}},
+		storageSess,
+		nil,
+		"/tmp/test",
+		"main",
+		"dev",
+		nil,
+	)
+
+	updated, _ := model.submitText("/help")
+	model = updated
+
+	if len(storageSess.appends) != 0 {
+		t.Fatalf("slash command appended %d entries, want 0", len(storageSess.appends))
 	}
 }
 
@@ -3389,7 +3400,9 @@ func TestStartupPrintLinesIncludesReplayHistory(t *testing.T) {
 		model.headerLine(),
 		"",
 		model.renderStartupStatus("ready"),
+		"",
 		model.renderEntry(session.Entry{Role: session.User, Content: "hello"}),
+		"",
 		model.renderEntry(session.Entry{Role: session.Agent, Content: "world"}),
 	}
 

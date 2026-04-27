@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/nijaru/ion/internal/session"
@@ -81,5 +84,50 @@ func TestPrintModeApprovesWhenAutoApproved(t *testing.T) {
 	}
 	if !sess.approved {
 		t.Fatal("approval was not sent")
+	}
+}
+
+func TestPrintModeWritesTextOutput(t *testing.T) {
+	sess := &printSession{events: make(chan session.Event, 3)}
+	sess.events <- session.AgentDelta{Delta: "hello"}
+	sess.events <- session.AgentDelta{Delta: " world"}
+	sess.events <- session.TurnFinished{}
+
+	var out bytes.Buffer
+	if err := runPrintModeWithWriter(context.Background(), &out, sess, "hello", false, "text"); err != nil {
+		t.Fatalf("runPrintMode returned error: %v", err)
+	}
+	if got := out.String(); got != "hello world\n" {
+		t.Fatalf("text output = %q, want hello world newline", got)
+	}
+}
+
+func TestPrintModeWritesJSONOutput(t *testing.T) {
+	sess := &printSession{events: make(chan session.Event, 4)}
+	sess.events <- session.ToolCallStarted{ToolName: "read"}
+	sess.events <- session.TokenUsage{Input: 12, Output: 3, Cost: 0.25}
+	sess.events <- session.AgentMessage{Message: "done"}
+	sess.events <- session.TurnFinished{}
+
+	var out bytes.Buffer
+	if err := runPrintModeWithWriter(context.Background(), &out, sess, "hello", false, "json"); err != nil {
+		t.Fatalf("runPrintMode returned error: %v", err)
+	}
+
+	var result printResult
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatalf("decode json output %q: %v", out.String(), err)
+	}
+	if result.SessionID != "print-test" || result.Response != "done" ||
+		result.InputTokens != 12 || result.OutputTokens != 3 || result.Cost != 0.25 ||
+		len(result.ToolCalls) != 1 || result.ToolCalls[0] != "read" {
+		t.Fatalf("json result = %#v", result)
+	}
+}
+
+func TestPrintModeRejectsUnknownOutput(t *testing.T) {
+	err := writePrintResult(&bytes.Buffer{}, printResult{Response: "x"}, "xml")
+	if err == nil || !strings.Contains(err.Error(), "unsupported print output") {
+		t.Fatalf("writePrintResult error = %v", err)
 	}
 }

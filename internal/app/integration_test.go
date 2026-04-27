@@ -65,7 +65,9 @@ func TestIntegrationFullLoop(t *testing.T) {
 		}
 	}
 
-	// 5. Verify storage has the entries
+	// 5. Verify the app did not create transcript duplicates. The test backend
+	// only emits UI events; the Canto backend owns durable user/assistant
+	// transcript persistence in production.
 	resumed, err := store.ResumeSession(context.Background(), sess.ID())
 	if err != nil {
 		t.Fatalf("failed to resume session: %v", err)
@@ -76,22 +78,10 @@ func TestIntegrationFullLoop(t *testing.T) {
 		t.Fatalf("failed to read stored entries: %v", err)
 	}
 
-	foundUser := false
-	foundAgent := false
 	for _, e := range storedEntries {
-		if e.Role == session.User && e.Content == "hi" {
-			foundUser = true
+		if e.Role == session.User || e.Role == session.Agent {
+			t.Fatalf("test backend should not create transcript entries through app persistence: %#v", storedEntries)
 		}
-		if e.Role == session.Agent && e.Content == "Hello world" {
-			foundAgent = true
-		}
-	}
-
-	if !foundUser {
-		t.Errorf("user message 'hi' not found in storage")
-	}
-	if !foundAgent {
-		t.Errorf("agent message 'Hello world' not found in storage")
 	}
 }
 
@@ -215,21 +205,14 @@ func TestMultiplexedSwarms(t *testing.T) {
 		}
 	}
 
-	// Verify entries from storage
+	// Verification results are live UI output here. The durable tool facts come
+	// from Canto's tool execution path, not from this app event handler.
 	resumed, _ := store.ResumeSession(context.Background(), sess.ID())
 	storedEntries, _ := resumed.Entries(context.Background())
-
-	foundVerify := false
 	for _, e := range storedEntries {
 		if e.Role == session.Tool && strings.Contains(e.Title, "verify") {
-			foundVerify = true
-			if !strings.Contains(e.Content, "PASSED: 15/15 passed") {
-				t.Errorf("unexpected verification content: %q", e.Content)
-			}
+			t.Fatalf("verification result should not be app-persisted: %#v", storedEntries)
 		}
-	}
-	if !foundVerify {
-		t.Error("verification result not found in storage")
 	}
 }
 
