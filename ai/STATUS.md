@@ -8,7 +8,6 @@ Ion has been reconciled with the current stabilized Canto surface. The core loop
 
 Current active slice:
 - `tk-90mp` — Streaming: Cost Limits & Model Cascades. Provider limit classification is now implemented; continue with any remaining budget/cascade behavior only when it strengthens the core loop.
-- `tk-a5ds` — Config UX umbrella. Current slice adds a narrow `/settings` surface for common toggles without turning it into a config editor.
 - `tk-hase` — Thinking: provider-compatible levels and UI settings. P3 design follow-up; current provider survey says capability-filtered named levels in the TUI, config-only numeric budgets, and no reasoning params for unknown custom endpoints.
 
 Captured lower-priority polish:
@@ -62,6 +61,7 @@ Design rule:
 *(Note: Older P3 TUI refinement tasks like configurable verbosity, skill layering, and status line context have been subsumed by their respective SOTA epics).*
 
 ## Completed (Recent)
+- [x] **Config UX cleanup (`tk-a5ds`)** — Fixed confusing provider/model picker state, moved mutable selections to state, added focused `/settings`, improved help readability, and left broader slash-command review in `tk-5cqs`.
 - [x] **Settings storage split (`tk-8188`)** — Stable config now stays in `~/.ion/config.toml`, mutable provider/model/thinking/active-preset state lives in `~/.ion/state.toml`, and both files use atomic temp-file replacement.
 - [x] **Retry-until-cancel resilience slice (`tk-lm25`)** — Canto now supports retry-until-context-cancel and raw transport transient classification; Ion defaults `retry_until_cancelled` on, emits visible retry status, and persists those status events without transcript spam.
 - [x] **HITL notifier delivery slice (`tk-00km`)** — Approval requests now attempt Slack webhook and SMTP email notification when ESCALATE.md channels and credentials are configured, while auditing sent/failed/skipped outcomes without blocking the local approval prompt.
