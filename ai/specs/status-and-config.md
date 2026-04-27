@@ -66,9 +66,9 @@ Global Ion files live under `~/.ion/`.
 | `~/.ion/policy.yaml` | user/admin | Optional durable tool policy rules. |
 | `~/.ion/data/` | ion | Sessions, caches, model metadata, checkpoints. |
 
-Current implementation still stores selected provider/model in `config.toml`.
-Target direction: move volatile selections to `state.toml` and keep
-`config.toml` for stable defaults and explicit provider definitions.
+Current implementation loads stable defaults from `config.toml`, overlays
+mutable selections from `state.toml`, and writes provider/model/thinking
+changes from the TUI to `state.toml`.
 
 Stable config fields:
 
@@ -117,10 +117,14 @@ Mutable state fields:
 Current local endpoint config shape:
 
 ```toml
+endpoint = "http://fedora:8080/v1"
+```
+
+Current local endpoint state shape:
+
+```toml
 provider = "local-api"
 model = "qwen3.6:27b-uncensored"
-endpoint = "http://fedora:8080/v1"
-reasoning_effort = "auto"
 ```
 
 Use `local-api` for no-auth OpenAI-compatible servers such as llama.cpp.

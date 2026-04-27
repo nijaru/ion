@@ -1202,7 +1202,7 @@ func TestCtrlMTogglesPrimaryAndFastPreset(t *testing.T) {
 	}
 }
 
-func TestHandleCommandUpdatesConfigDirectly(t *testing.T) {
+func TestHandleCommandUpdatesStateDirectly(t *testing.T) {
 	tests := []struct {
 		name        string
 		command     string
@@ -1213,19 +1213,19 @@ func TestHandleCommandUpdatesConfigDirectly(t *testing.T) {
 		{
 			name:       "provider",
 			command:    "/provider anthropic",
-			expected:   "provider = 'anthropic'\nsession_retention_days = 90\n",
+			expected:   "provider = 'anthropic'\nmodel = ''\n",
 			wantPicker: true,
 		},
 		{
 			name:        "model",
 			command:     "/model gpt-4.1",
-			expected:    "model = 'gpt-4.1'\nsession_retention_days = 90\n",
+			expected:    "model = 'gpt-4.1'\n",
 			wantCommand: true,
 		},
 		{
 			name:        "thinking",
 			command:     "/thinking high",
-			expected:    "reasoning_effort = 'high'\nsession_retention_days = 90\n",
+			expected:    "reasoning_effort = 'high'\n",
 			wantCommand: true,
 		},
 	}
@@ -1261,12 +1261,12 @@ func TestHandleCommandUpdatesConfigDirectly(t *testing.T) {
 				t.Fatal("expected no picker to open")
 			}
 
-			data, err := os.ReadFile(filepath.Join(home, ".ion", "config.toml"))
+			data, err := os.ReadFile(filepath.Join(home, ".ion", "state.toml"))
 			if err != nil {
-				t.Fatalf("read config: %v", err)
+				t.Fatalf("read state: %v", err)
 			}
 			if got := string(data); got != tc.expected {
-				t.Fatalf("config = %q, want %q", got, tc.expected)
+				t.Fatalf("state = %q, want %q", got, tc.expected)
 			}
 			if model.Progress.Status == "" {
 				t.Fatal("expected status to be updated after direct config command")

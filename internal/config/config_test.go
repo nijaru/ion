@@ -125,6 +125,80 @@ func TestLoadUsesDefaultsWhenConfigMissing(t *testing.T) {
 	}
 }
 
+func TestLoadAppliesMutableState(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	configDir := filepath.Join(home, ".ion")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	configPath := filepath.Join(configDir, "config.toml")
+	if err := os.WriteFile(configPath, []byte(
+		"provider = \"openrouter\"\nmodel = \"default/model\"\nendpoint = \"https://example.com/v1\"\n",
+	), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	statePath := filepath.Join(configDir, "state.toml")
+	if err := os.WriteFile(statePath, []byte(
+		"provider = \"local-api\"\nmodel = \"qwen3.6:27b\"\nreasoning_effort = \"high\"\n",
+	), 0o644); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.Provider != "local-api" {
+		t.Fatalf("provider = %q, want local-api", cfg.Provider)
+	}
+	if cfg.Model != "qwen3.6:27b" {
+		t.Fatalf("model = %q, want qwen3.6:27b", cfg.Model)
+	}
+	if cfg.ReasoningEffort != "high" {
+		t.Fatalf("reasoning_effort = %q, want high", cfg.ReasoningEffort)
+	}
+	if cfg.Endpoint != "https://example.com/v1" {
+		t.Fatalf("endpoint = %q, want stable config endpoint", cfg.Endpoint)
+	}
+}
+
+func TestLoadStateCanClearConfiguredModel(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	configDir := filepath.Join(home, ".ion")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(configDir, "config.toml"),
+		[]byte("provider = \"openrouter\"\nmodel = \"vendor/model-b\"\n"),
+		0o644,
+	); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(configDir, "state.toml"),
+		[]byte("provider = \"local-api\"\nmodel = \"\"\n"),
+		0o644,
+	); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.Provider != "local-api" {
+		t.Fatalf("provider = %q, want local-api", cfg.Provider)
+	}
+	if cfg.Model != "" {
+		t.Fatalf("model = %q, want empty", cfg.Model)
+	}
+}
+
 func TestLoadAppliesEnvOverrides(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -243,6 +317,52 @@ func TestSaveWritesStatePath(t *testing.T) {
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("saved config missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestSaveStateWritesOnlyMutableFields(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := &Config{
+		Provider:             "local-api",
+		Model:                "qwen3.6:27b",
+		ReasoningEffort:      "auto",
+		Endpoint:             "http://fedora:8080/v1",
+		PolicyPath:           "/tmp/policy.yaml",
+		WorkspaceTrust:       "strict",
+		ToolVerbosity:        "collapsed",
+		MaxSessionCost:       1.25,
+		SessionRetentionDays: 14,
+	}
+	if err := SaveState(cfg); err != nil {
+		t.Fatalf("save state: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".ion", "state.toml"))
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	got := string(data)
+	for _, want := range []string{
+		`provider = 'local-api'`,
+		`model = 'qwen3.6:27b'`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("saved state missing %q:\n%s", want, got)
+		}
+	}
+	for _, notWant := range []string{
+		`endpoint`,
+		`policy_path`,
+		`workspace_trust`,
+		`tool_verbosity`,
+		`max_session_cost`,
+		`session_retention_days`,
+		`reasoning_effort`,
+	} {
+		if strings.Contains(got, notWant) {
+			t.Fatalf("saved state should not include %q:\n%s", notWant, got)
 		}
 	}
 }

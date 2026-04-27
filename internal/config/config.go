@@ -42,12 +42,31 @@ type Config struct {
 	ThinkingVerbosity      string            `toml:"thinking_verbosity,omitempty"`
 }
 
+type State struct {
+	Provider               *string `toml:"provider,omitempty"`
+	Model                  *string `toml:"model,omitempty"`
+	ReasoningEffort        *string `toml:"reasoning_effort,omitempty"`
+	FastModel              *string `toml:"fast_model,omitempty"`
+	FastReasoningEffort    *string `toml:"fast_reasoning_effort,omitempty"`
+	SummaryModel           *string `toml:"summary_model,omitempty"`
+	SummaryReasoningEffort *string `toml:"summary_reasoning_effort,omitempty"`
+	ActivePreset           *string `toml:"active_preset,omitempty"`
+}
+
 func DefaultConfigPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
 	return filepath.Join(home, ".ion", "config.toml"), nil
+}
+
+func DefaultStatePath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".ion", "state.toml"), nil
 }
 
 func Load() (*Config, error) {
@@ -64,6 +83,12 @@ func Load() (*Config, error) {
 	} else if err := toml.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
+
+	state, err := LoadState()
+	if err != nil {
+		return nil, err
+	}
+	applyState(cfg, state)
 
 	if override := os.Getenv("ION_MODEL"); override != "" {
 		if provider, model, ok := splitProviderModel(override); ok {
@@ -111,6 +136,38 @@ func Load() (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func LoadState() (*State, error) {
+	state := &State{}
+	path, err := DefaultStatePath()
+	if err != nil {
+		return nil, err
+	}
+	if data, err := os.ReadFile(path); err != nil {
+		if !os.IsNotExist(err) {
+			return nil, err
+		}
+	} else if err := toml.Unmarshal(data, state); err != nil {
+		return nil, fmt.Errorf("failed to parse state: %w", err)
+	}
+	return state, nil
+}
+
+func SaveState(cfg *Config) error {
+	path, err := DefaultStatePath()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	state := stateFromConfig(cfg)
+	data, err := toml.Marshal(state)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o644)
 }
 
 func Save(cfg *Config) error {
@@ -163,6 +220,66 @@ func Save(cfg *Config) error {
 		return err
 	}
 	return os.WriteFile(path, data, 0o644)
+}
+
+func applyState(cfg *Config, state *State) {
+	if cfg == nil || state == nil {
+		return
+	}
+	if state.Provider != nil {
+		cfg.Provider = strings.ToLower(strings.TrimSpace(*state.Provider))
+	}
+	if state.Model != nil {
+		cfg.Model = strings.TrimSpace(*state.Model)
+	}
+	if state.ReasoningEffort != nil {
+		cfg.ReasoningEffort = normalizeReasoningEffort(*state.ReasoningEffort)
+	}
+	if state.FastModel != nil {
+		cfg.FastModel = strings.TrimSpace(*state.FastModel)
+	}
+	if state.FastReasoningEffort != nil {
+		cfg.FastReasoningEffort = normalizeOptionalReasoningEffort(*state.FastReasoningEffort)
+	}
+	if state.SummaryModel != nil {
+		cfg.SummaryModel = strings.TrimSpace(*state.SummaryModel)
+	}
+	if state.SummaryReasoningEffort != nil {
+		cfg.SummaryReasoningEffort = normalizeOptionalReasoningEffort(*state.SummaryReasoningEffort)
+	}
+}
+
+func stateFromConfig(cfg *Config) *State {
+	if cfg == nil {
+		return &State{}
+	}
+	provider := strings.ToLower(strings.TrimSpace(cfg.Provider))
+	model := strings.TrimSpace(cfg.Model)
+	reasoning := normalizeOptionalReasoningEffort(cfg.ReasoningEffort)
+	fastModel := strings.TrimSpace(cfg.FastModel)
+	fastReasoning := normalizeOptionalReasoningEffort(cfg.FastReasoningEffort)
+	summaryModel := strings.TrimSpace(cfg.SummaryModel)
+	summaryReasoning := normalizeOptionalReasoningEffort(cfg.SummaryReasoningEffort)
+	modelPtr := optionalString(model)
+	if modelPtr == nil && provider != "" {
+		modelPtr = &model
+	}
+	return &State{
+		Provider:               optionalString(provider),
+		Model:                  modelPtr,
+		ReasoningEffort:        optionalString(reasoning),
+		FastModel:              optionalString(fastModel),
+		FastReasoningEffort:    optionalString(fastReasoning),
+		SummaryModel:           optionalString(summaryModel),
+		SummaryReasoningEffort: optionalString(summaryReasoning),
+	}
+}
+
+func optionalString(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
 }
 
 func splitProviderModel(value string) (string, string, bool) {

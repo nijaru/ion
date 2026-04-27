@@ -68,8 +68,8 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		if err != nil {
 			return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
 		}
-		if err := config.Save(updated); err != nil {
-			return m, cmdError(fmt.Sprintf("failed to save config: %v", err))
+		if err := config.SaveState(updated); err != nil {
+			return m, cmdError(fmt.Sprintf("failed to save state: %v", err))
 		}
 		m.Model.Backend.SetConfig(runtimeCfg)
 		if runtimeCfg.Provider == "" {
@@ -107,8 +107,8 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		if err != nil {
 			return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
 		}
-		if err := config.Save(updated); err != nil {
-			return m, cmdError(fmt.Sprintf("failed to save config: %v", err))
+		if err := config.SaveState(updated); err != nil {
+			return m, cmdError(fmt.Sprintf("failed to save state: %v", err))
 		}
 		m.Model.Backend.SetConfig(runtimeCfg)
 		m.Progress.ReasoningEffort = level
@@ -129,8 +129,8 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 			return m, cmdError(fmt.Sprintf("failed to load config: %v", err))
 		}
 		updated := m.updateProviderForActivePreset(cfg, name)
-		if err := config.Save(updated); err != nil {
-			return m, cmdError(fmt.Sprintf("failed to save config: %v", err))
+		if err := config.SaveState(updated); err != nil {
+			return m, cmdError(fmt.Sprintf("failed to save state: %v", err))
 		}
 		m.Model.Backend.SetConfig(updated)
 		m.Progress.Status = noModelConfiguredStatus()
@@ -800,8 +800,8 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 			return m.openModelPickerWithConfig(&cfg)
 		}
 		updated := m.updateProviderForActivePreset(&cfg, selected.Value)
-		if err := config.Save(updated); err != nil {
-			return m, cmdError(fmt.Sprintf("failed to save config: %v", err))
+		if err := config.SaveState(updated); err != nil {
+			return m, cmdError(fmt.Sprintf("failed to save state: %v", err))
 		}
 		m.Model.Backend.SetConfig(updated)
 		m.Model.Config = updated
@@ -830,8 +830,8 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 		if err != nil {
 			return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
 		}
-		if err := config.Save(updated); err != nil {
-			return m, cmdError(fmt.Sprintf("failed to save config: %v", err))
+		if err := config.SaveState(updated); err != nil {
+			return m, cmdError(fmt.Sprintf("failed to save state: %v", err))
 		}
 		m.Picker.Overlay = nil
 		notice := session.Entry{Role: session.System, Content: "Model set to " + selected.Value}
@@ -851,8 +851,8 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 		if err != nil {
 			return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
 		}
-		if err := config.Save(updated); err != nil {
-			return m, cmdError(fmt.Sprintf("failed to save config: %v", err))
+		if err := config.SaveState(updated); err != nil {
+			return m, cmdError(fmt.Sprintf("failed to save state: %v", err))
 		}
 		m.Model.Backend.SetConfig(runtimeCfg)
 		m.Progress.ReasoningEffort = level
