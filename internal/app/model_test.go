@@ -1176,25 +1176,13 @@ func TestCtrlMTogglesPrimaryAndFastPreset(t *testing.T) {
 		t.Fatalf("mkdir config dir: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(cfgDir, "config.toml"), []byte(
-		"provider = \"openai\"\nmodel = \"gpt-4.1\"\nreasoning_effort = \"auto\"\n",
+		"provider = \"openai\"\nmodel = \"gpt-4.1\"\nreasoning_effort = \"auto\"\nfast_model = \"gpt-4.1-mini\"\n",
 	), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
 	oldSession := &stubSession{events: make(chan session.Event)}
 	oldBackend := stubBackend{sess: oldSession, provider: "openai", model: "gpt-4.1"}
-
-	oldListModelsForConfig := registry.ListModelsForConfigHook
-	registry.ListModelsForConfigHook = func(ctx context.Context, cfg *config.Config) ([]registry.ModelMetadata, error) {
-		if cfg.Provider != "openai" {
-			t.Fatalf("provider = %q, want openai", cfg.Provider)
-		}
-		return []registry.ModelMetadata{
-			{ID: "gpt-4.1"},
-			{ID: "gpt-4.1-mini"},
-		}, nil
-	}
-	t.Cleanup(func() { registry.ListModelsForConfigHook = oldListModelsForConfig })
 
 	var observedModels []string
 	model := New(
