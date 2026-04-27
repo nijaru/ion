@@ -200,6 +200,7 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		return m, m.awaitSessionEvent()
 
 	case session.ToolCallStarted:
+		redactedArgs := privacy.Redact(msg.Args)
 		m.Progress.Mode = stateWorking
 		m.Progress.LastToolUseID = msg.ToolUseID
 		if m.Progress.LastToolUseID == "" {
@@ -207,7 +208,7 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		}
 		entry := &session.Entry{
 			Role:  session.Tool,
-			Title: FormatToolTitle(msg.ToolName, msg.Args),
+			Title: FormatToolTitle(msg.ToolName, redactedArgs),
 		}
 		if m.InFlight.PendingTools == nil {
 			m.InFlight.PendingTools = make(map[string]*session.Entry)
@@ -222,7 +223,7 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 			ID:   m.Progress.LastToolUseID,
 			Name: msg.ToolName,
 			Input: map[string]string{
-				"args": msg.Args,
+				"args": redactedArgs,
 			},
 			TS: now(),
 		}); err != nil {
