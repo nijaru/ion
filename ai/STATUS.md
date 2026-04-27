@@ -7,7 +7,7 @@ Fast, lightweight terminal coding agent.
 Ion has been reconciled with the current stabilized Canto surface. The core loop audit, HITL permission-mode hardening, observability exporter slice, workflow topology spec, first eval regression gate, deterministic policy config slice, first executable subagent persona/routing slice, workspace trust slice, tool-loading UX slice, and first memory search UX slice are complete. Current work is moving through the remaining P2 reliability/UX epics.
 
 Current active slice:
-- `tk-90mp` — Streaming: Cost Limits & Model Cascades. Provider limit classification is implemented; retry-until-cancel now applies only to transport/network failures while provider/rate/server transients remain bounded.
+- Core-loop P2 queue is clear. `tk-90mp` and `tk-zz5i` are complete; next work should be selected from P3 based on concrete risk, not speculative SOTA expansion.
 
 Captured lower-priority polish:
 - `tk-5cqs` — Slash commands: autocomplete and command surface review (P3)
@@ -15,7 +15,7 @@ Captured lower-priority polish:
 - `tk-hase` — Thinking UI/config slice (completed; Canto capability follow-up split to `tk-369n`)
 
 Near-term tracks:
-- `tk-zz5i` — Core loop: scripted resilience smoke suite (Next P2 after `tk-90mp`)
+- `tk-zz5i` — Core loop: scripted resilience smoke suite (Completed)
 - `tk-wqhg` — Permission UX: trust and mode semantics (Completed)
 - `tk-0kip` — Provider/model picker: non-listing providers and preset clarity (Completed)
 - `tk-hs3m` — Local API: keep system messages template-compatible (Completed through Canto context primitive integration)
@@ -53,9 +53,9 @@ Design rule:
 - Similar agents are references, not feature-parity requirements. Adopt from pi, Claude Code, Codex, OpenCode, Cursor, Droid, Letta, and others only when the idea strengthens Ion's core coding loop or preserves a simple, inspectable UX.
 
 ## Next Steps
-1. Finish `tk-90mp` by deciding whether any budget/cascade behavior remains core-loop critical; close it if the remaining work is speculative routing.
-2. Start `tk-zz5i`: build a scripted resilience smoke suite for submit, stream, tools, approvals, cancel, retry, provider-limit errors, persistence, and replay.
-3. Keep `tk-369n`, `tk-n0n4`, ACP bridge tasks, and slash-command polish behind that smoke-suite work unless a concrete bug blocks normal use.
+1. Pick the next P3 by risk: privacy redaction (`tk-n0n4`) or ACP bridge correctness (`tk-o0iw`/`tk-2ffy`/`tk-6zy3`) outrank marketplace, branching, and cosmetic TUI work.
+2. Keep `tk-369n` scoped to Canto capability metadata; do not add more Ion-side thinking enum guesses.
+3. Keep slash-command polish (`tk-5cqs`) focused on concrete discoverability bugs.
 4. Treat older `Canto: contribute ...` tasks as re-triaged: no default grep/glob or preset coding-tool bundles; only concrete reusable extension packages should move upstream.
 
 *(Note: Older P3 TUI refinement tasks like configurable verbosity, skill layering, and status line context have been subsumed by their respective SOTA epics).*
@@ -63,6 +63,8 @@ Design rule:
 ## Completed (Recent)
 - [x] **Config UX cleanup (`tk-a5ds`)** — Fixed confusing provider/model picker state, moved mutable selections to state, added focused `/settings`, improved help readability, and left broader slash-command review in `tk-5cqs`.
 - [x] **Settings storage split (`tk-8188`)** — Stable config now stays in `~/.ion/config.toml`, mutable provider/model/thinking/active-preset state lives in `~/.ion/state.toml`, and both files use atomic temp-file replacement.
+- [x] **Core-loop smoke suite (`tk-zz5i`)** — Added deterministic app-level smoke coverage for submit/stream/tool persistence and replay, approval, cancel, retry-status persistence, and provider-limit stop traces.
+- [x] **Cost/limit resilience (`tk-90mp`)** — Budget enforcement, routing decision traces, provider-limit classification, Fedora local-api smoke, and transport-only endless retry are complete; richer model cascades are deferred until a concrete policy is needed.
 - [x] **Thinking control Ion slice (`tk-hase`)** — Ion preserves `auto/off/minimal/low/medium/high/xhigh/max`, exposes common named levels in `/thinking`, and only sends named effort when Canto reports support; richer provider translation is split to `tk-369n`.
 - [x] **Transport-only endless retry (`tk-90mp`)** — Canto `f71205f` added transport-only endless retry; Ion wires `retry_until_cancelled` to that path so disconnects can retry until Ctrl+C while rate/quota/server failures stay bounded and readable.
 - [x] **Retry-until-cancel resilience slice (`tk-lm25`)** — Canto now supports retry-until-context-cancel and raw transport transient classification; Ion defaults `retry_until_cancelled` on, emits visible retry status, and persists those status events without transcript spam.
@@ -109,13 +111,12 @@ See `tk ls` for the full list. Current active priority:
 - No P1 tasks remain ready. Next ready work is P2.
 
 Remaining P2 work:
-- `tk-90mp` — Streaming: Cost Limits & Model Cascades
-- `tk-zz5i` — Core loop: scripted resilience smoke suite
+- None.
 
 P3 follow-ups:
-- `tk-369n` — Canto typed thinking capabilities and provider translation
 - `tk-n0n4` — Privacy: PII detection and redaction pipeline
 - `tk-st4q`, `tk-2ffy`, `tk-o0iw`, `tk-6zy3` — ACP bridge correctness
+- `tk-369n` — Canto typed thinking capabilities and provider translation
 - `tk-5cqs` — Slash command surface review
 - `tk-g78q`, `tk-8174` — Skills marketplace and cross-host branching after the solo loop is proven
 

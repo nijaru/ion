@@ -106,8 +106,15 @@ type stubSession struct {
 	cancels     int
 	submitErr   error
 	approveErr  error
+	approvals   []stubApproval
+	allowed     []string
 	mode        session.Mode
 	autoApprove bool
+}
+
+type stubApproval struct {
+	id string
+	ok bool
 }
 
 func (s *stubSession) Open(ctx context.Context) error              { return nil }
@@ -134,6 +141,7 @@ func (s *stubSession) Close() error {
 }
 func (s *stubSession) Events() <-chan session.Event { return s.events }
 func (s *stubSession) Approve(ctx context.Context, id string, ok bool) error {
+	s.approvals = append(s.approvals, stubApproval{id: id, ok: ok})
 	return s.approveErr
 }
 func (s *stubSession) RegisterMCPServer(ctx context.Context, cmd string, args ...string) error {
@@ -142,9 +150,11 @@ func (s *stubSession) RegisterMCPServer(ctx context.Context, cmd string, args ..
 func (s *stubSession) SetMode(mode session.Mode) { s.mode = mode }
 
 func (s *stubSession) SetAutoApprove(enabled bool) { s.autoApprove = enabled }
-func (s *stubSession) AllowCategory(string)        {}
-func (s *stubSession) ID() string                  { return "stub" }
-func (s *stubSession) Meta() map[string]string     { return nil }
+func (s *stubSession) AllowCategory(category string) {
+	s.allowed = append(s.allowed, category)
+}
+func (s *stubSession) ID() string              { return "stub" }
+func (s *stubSession) Meta() map[string]string { return nil }
 
 type stubStorageSession struct {
 	id        string

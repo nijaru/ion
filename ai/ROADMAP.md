@@ -39,14 +39,11 @@ Goal:
 - prove the native solo loop with a repeatable smoke suite before expanding orchestration
 
 Tracked by:
-- `tk-90mp`
-- `tk-zz5i`
 - `tk-5t72`
 - `tk-9n7h`
 
 Includes:
-- budget and provider-limit behavior that directly protects the loop
-- scripted submit/stream/tool/approval/cancel/retry/error/persist/replay smoke coverage
+- preserve deterministic submit/stream/tool/approval/cancel/retry/error/persist/replay smoke coverage
 - CantoBackend storage and registry cleanup after the current provider/backend surface settles
 - checkpoint/rewind follow-up only where it improves reliability or rollback confidence
 
