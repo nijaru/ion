@@ -164,6 +164,7 @@ P4 follow-ups:
 - `ai/SOTA-REQUIREMENTS.md` — The 14 core SOTA product responsibilities.
 - `ai/research/canto-dspy-app-patterns-2026-04.md` — Future Ion patterns from Canto authoring work; DSPy is one reference.
 - `ai/research/pi-current-core-loop-review-2026-04.md` — Current Pi core-loop, `/tree`, compaction, and UX review.
+- `ai/research/core-agent-reference-delta-2026-04-27.md` — Focused Pi/Codex CLI and loop deltas after Gate 2 stabilization.
 - `ai/review/canto-research-delta-2026-04-26.md` — Recent Canto ai/ findings that affect Ion sequencing.
 - `ai/specs/tools-and-modes.md` — Permission modes spec
 - `ai/specs/status-and-config.md` — Status line, model picker metadata, and config/state/trust layout
