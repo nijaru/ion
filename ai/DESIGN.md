@@ -1,6 +1,6 @@
 # ion Design
 
-Updated: 2026-04-26
+Updated: 2026-04-27
 
 ## Product boundary
 
@@ -96,6 +96,34 @@ Auth and Model guidance (SOTA 14):
 - CLI-bridge providers stay separate from native API providers
 - ChatGPT subscription support, if we ever add it, should be treated as a separate evaluation track rather than assumed to be part of the native API path
 - **Model Cascades:** The policy determining when to fall back to a cheaper model (e.g., Flash/Haiku) based on task complexity must be integrated into the provider abstraction.
+
+### Thinking and reasoning controls
+
+Thinking controls are capability-driven, not a universal enum.
+
+Ion owns:
+
+- user-facing thinking selection (`auto`, `off`, `low`, `medium`, `high`, `xhigh`, `max`)
+- capability-filtered picker/status UX
+- stable config for custom model capability overrides
+- mutable state for the currently selected level
+
+Canto/provider adapters own:
+
+- translating Ion levels to native provider request fields
+- model-specific fallback when a selected level is unsupported
+- numeric thinking budgets for budget-based APIs
+- provider-specific reasoning content handling
+
+Rules:
+
+- `auto` means send no override and use provider/model default.
+- Unknown OpenAI-compatible/custom endpoints send no reasoning parameter unless config declares a model capability override.
+- Raw numeric thinking budgets are config-only until there is evidence they need a frequent runtime control.
+- `max` is not portable; expose it only for models that explicitly support it.
+- If model switching invalidates the selected level, use the highest supported level at or below the selection and show a short notice.
+
+Detailed survey: `ai/research/thinking-effort-provider-survey-2026-04.md`.
 
 ## Prompt and instruction layering
 

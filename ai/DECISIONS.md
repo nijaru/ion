@@ -4,6 +4,22 @@ Append-only history of architectural and design decisions for `ion`.
 
 ---
 
+## 2026-04-27 — Thinking controls: capability-filtered UI, provider translation in Canto
+
+**Context:** Current model APIs do not share one reasoning-control shape. OpenAI exposes model-specific named efforts, Anthropic mixes adaptive effort and older numeric budgets, Gemini splits named levels and budgets by generation, and Qwen/DeepSeek/local endpoints may be binary, model-mode based, or custom.
+
+**Decision:** Ion will expose one small user vocabulary (`auto`, `off`, `low`, `medium`, `high`, `xhigh`, `max`) filtered by the active model's capabilities. Canto/provider adapters translate that selection into native request fields: named effort, numeric budget, boolean thinking, or no parameter.
+
+**Rationale:**
+
+1. **Avoid invalid requests:** Unknown/custom endpoints must not receive speculative reasoning parameters.
+2. **Simple UX:** Users choose a level, not provider-specific token budgets.
+3. **Correct boundary:** Ion owns the picker/state/display; Canto owns provider request translation and reasoning-content semantics.
+
+**Tradeoffs:** This requires richer model capability metadata before the picker can be perfect. Until then, `auto` is the safe default and raw numeric budgets stay config-only.
+
+---
+
 ## 2026-04-26 — Canto boundary: primitives in Canto, product tools in Ion
 
 **Context:** Canto completed a pre-Ion stabilization pass and removed the old `canto/context` package while renaming governance APIs. It also settled on exposing primitives rather than preset coding-tool bundles.
