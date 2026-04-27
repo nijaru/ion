@@ -137,13 +137,13 @@ func main() {
 
 	// Print mode: run a single turn and exit
 	if printRequested {
-		if prompt == "" && isStdinPipe() {
+		if isStdinPipe() {
 			data, err := io.ReadAll(os.Stdin)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "failed to read stdin: %v\n", err)
 				os.Exit(1)
 			}
-			prompt = string(data)
+			prompt = promptWithStdinContext(prompt, string(data))
 		}
 		if prompt == "" {
 			fmt.Fprintf(os.Stderr, "print mode requires --prompt or stdin pipe\n")

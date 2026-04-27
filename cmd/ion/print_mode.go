@@ -146,6 +146,24 @@ func writePrintResult(w io.Writer, result printResult, output string) error {
 	}
 }
 
+func promptWithStdinContext(prompt, stdinText string) string {
+	if prompt == "-" {
+		return stdinText
+	}
+	if prompt == "" {
+		return stdinText
+	}
+	if strings.TrimSpace(stdinText) == "" {
+		return prompt
+	}
+	combined := prompt + "\n\n<stdin>\n" + stdinText
+	if !strings.HasSuffix(combined, "\n") {
+		combined += "\n"
+	}
+	combined += "</stdin>"
+	return combined
+}
+
 // runPrintModeWithTimeout wraps runPrintMode with a configurable timeout.
 func runPrintModeWithTimeout(
 	ctx context.Context,
