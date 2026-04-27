@@ -153,12 +153,12 @@ func ResolvedEndpointContext(ctx context.Context, cfg *config.Config) string {
 	if cfg == nil {
 		return ""
 	}
-	if endpoint := strings.TrimSpace(cfg.Endpoint); endpoint != "" {
-		return endpoint
-	}
 	def, ok := Lookup(cfg.Provider)
 	if !ok {
 		return ""
+	}
+	if endpoint := strings.TrimSpace(cfg.Endpoint); endpoint != "" && def.SupportsCustomEndpoint {
+		return endpoint
 	}
 	if def.ID == "local-api" {
 		if endpoint, ok := ProbeLocalAPI(ctx, cfg); ok {
@@ -297,7 +297,7 @@ func ShowInPicker(cfg *config.Config, def Definition) bool {
 	if cfg == nil {
 		return false
 	}
-	return ResolveID(cfg.Provider) == def.ID || strings.TrimSpace(cfg.Endpoint) != ""
+	return ResolveID(cfg.Provider) == def.ID
 }
 
 func SupportsModelListing(cfg *config.Config) bool {

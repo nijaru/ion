@@ -3585,6 +3585,13 @@ func TestProviderItemsHideCustomEndpointByDefault(t *testing.T) {
 	}
 
 	items = providerItems(&config.Config{Provider: "local-api", Endpoint: "http://127.0.0.1:1/v1"})
+	for _, item := range items {
+		if item.Value == "openai-compatible" {
+			t.Fatalf("custom endpoint entry should stay hidden when endpoint belongs to local-api")
+		}
+	}
+
+	items = providerItems(&config.Config{Provider: "local-api", Endpoint: "http://127.0.0.1:1/v1"})
 	found = false
 	for _, item := range items {
 		if item.Value == "local-api" && item.Label == "Local API" {

@@ -12,6 +12,7 @@ Current active blockers:
 Next core-parity work:
 - `tk-9n7h` — Provider/model picker correctness. This is the next P2 product hygiene task after the resume/model-history blocker.
 - Current slice: remove implicit catalog-derived fast model selection so only explicitly configured primary/fast models appear as configured presets.
+- Current slice: keep endpoint/auth/header overrides scoped to the active custom/local provider so Fedora/local-api config does not contaminate OpenRouter, Z.ai, or other provider rows.
 
 Captured lower-priority polish:
 - `tk-5cqs` — Slash commands: autocomplete and command surface review (P3)
