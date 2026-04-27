@@ -234,10 +234,7 @@ func (m Model) completeSlashCommand() (Model, tea.Cmd, bool) {
 		return m, nil, true
 	}
 
-	return m, m.printEntries(session.Entry{
-		Role:    session.System,
-		Content: "Commands: " + strings.Join(matches, " "),
-	}), true
+	return m.openCommandPicker(text), nil, true
 }
 
 func matchingSlashCommands(prefix string) []string {
@@ -264,6 +261,21 @@ func commonPrefix(values []string) string {
 		}
 	}
 	return prefix
+}
+
+func (m Model) openCommandPicker(prefix string) Model {
+	items := slashCommandItems()
+	query := strings.TrimPrefix(strings.TrimSpace(prefix), "/")
+	m.Picker.Overlay = &pickerOverlayState{
+		title:    "Pick a command",
+		items:    items,
+		filtered: clonePickerItems(items),
+		index:    0,
+		query:    query,
+		purpose:  pickerPurposeCommand,
+	}
+	refreshPickerFilter(&m)
+	return m
 }
 
 func (m *Model) relayoutComposer() {

@@ -1939,11 +1939,40 @@ func TestTabListsAmbiguousSlashCommands(t *testing.T) {
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	model = updated.(Model)
-	if cmd == nil {
-		t.Fatal("expected ambiguous autocomplete to print matches")
+	if cmd != nil {
+		t.Fatalf("unexpected ambiguous autocomplete command %T", cmd)
 	}
 	if got := model.Input.Composer.Value(); got != "/m" {
 		t.Fatalf("composer = %q, want unchanged ambiguous prefix", got)
+	}
+	if model.Picker.Overlay == nil {
+		t.Fatal("expected slash command picker")
+	}
+	if model.Picker.Overlay.purpose != pickerPurposeCommand {
+		t.Fatalf("picker purpose = %v, want command picker", model.Picker.Overlay.purpose)
+	}
+	if got := model.Picker.Overlay.query; got != "m" {
+		t.Fatalf("picker query = %q, want m", got)
+	}
+	if len(pickerDisplayItems(model.Picker.Overlay)) < 2 {
+		t.Fatalf("ambiguous command picker items = %#v, want multiple matches", pickerDisplayItems(model.Picker.Overlay))
+	}
+}
+
+func TestCommandPickerInsertsSelectedCommand(t *testing.T) {
+	model := readyModel(t)
+	model = model.openCommandPicker("mode")
+
+	updated, cmd := model.handlePickerKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated
+	if cmd != nil {
+		t.Fatalf("unexpected command picker cmd %T", cmd)
+	}
+	if got := model.Input.Composer.Value(); got != "/mode " {
+		t.Fatalf("composer = %q, want /mode insertion", got)
+	}
+	if model.Picker.Overlay != nil {
+		t.Fatal("expected command picker to close")
 	}
 }
 
