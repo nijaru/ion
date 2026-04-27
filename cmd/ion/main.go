@@ -38,7 +38,9 @@ func main() {
 	yoloFlag := flag.Bool("yolo", false, "Start in AUTO mode (alias for --mode auto)")
 	printFlag := flag.Bool("print", false, "Print response and exit (use with --prompt or stdin)")
 	promptFlag := flag.String("prompt", "", "Prompt to send in print mode")
+	promptShortFlag := flag.String("p", "", "Prompt to send and print response (implies --print)")
 	outputFlag := flag.String("output", "text", "Print mode output: text or json")
+	jsonFlag := flag.Bool("json", false, "Emit JSON in print mode")
 	timeoutFlag := flag.Duration("timeout", 5*time.Minute, "Timeout for print mode")
 	args, openResumePicker := normalizeFlagArgs(os.Args[1:])
 	if err := flag.CommandLine.Parse(args); err != nil {
@@ -120,9 +122,21 @@ func main() {
 		os.Exit(1)
 	}
 
+	printRequested, prompt, output, err := resolvePrintFlags(
+		*printFlag,
+		*promptFlag,
+		*promptShortFlag,
+		flag.Args(),
+		*outputFlag,
+		*jsonFlag,
+	)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(2)
+	}
+
 	// Print mode: run a single turn and exit
-	if *printFlag {
-		prompt := *promptFlag
+	if printRequested {
 		if prompt == "" && isStdinPipe() {
 			data, err := io.ReadAll(os.Stdin)
 			if err != nil {
@@ -148,7 +162,7 @@ func main() {
 			prompt,
 			*timeoutFlag,
 			mode == session.ModeYolo,
-			*outputFlag,
+			output,
 		); err != nil {
 			fmt.Fprintf(os.Stderr, "print mode error: %v\n", err)
 			os.Exit(1)

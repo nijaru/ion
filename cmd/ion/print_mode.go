@@ -21,6 +21,47 @@ type printResult struct {
 	ToolCalls    []string `json:"tool_calls,omitempty"`
 }
 
+func resolvePrintFlags(
+	printFlag bool,
+	promptLong string,
+	promptShort string,
+	args []string,
+	output string,
+	jsonOutput bool,
+) (bool, string, string, error) {
+	output = strings.ToLower(strings.TrimSpace(output))
+	if output == "" {
+		output = "text"
+	}
+	if jsonOutput {
+		if output != "text" && output != "json" {
+			return false, "", "", fmt.Errorf("unsupported print output %q (want text or json)", output)
+		}
+		output = "json"
+	}
+
+	promptLong = strings.TrimSpace(promptLong)
+	promptShort = strings.TrimSpace(promptShort)
+	if promptLong != "" && promptShort != "" {
+		return false, "", "", fmt.Errorf("use either -p or --prompt, not both")
+	}
+
+	prompt := promptShort
+	if prompt == "" {
+		prompt = promptLong
+	}
+
+	printRequested := printFlag || prompt != "" || jsonOutput
+	if printRequested && prompt == "" && len(args) > 0 {
+		prompt = strings.Join(args, " ")
+	}
+	if !printRequested && len(args) > 0 {
+		return false, "", "", fmt.Errorf("unexpected arguments: %s", strings.Join(args, " "))
+	}
+
+	return printRequested, prompt, output, nil
+}
+
 // runPrintMode submits a single turn and prints the response to stdout.
 func runPrintMode(ctx context.Context, agent session.AgentSession, prompt string, approveRequests bool) error {
 	return runPrintModeWithWriter(ctx, os.Stdout, agent, prompt, approveRequests, "text")
