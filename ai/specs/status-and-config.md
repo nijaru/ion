@@ -137,6 +137,8 @@ Rules:
 - env vars remain startup overrides, not persistent writes
 - keep stable config small
 - do not write trust into config
+- writes to `config.toml` and `state.toml` must use atomic temp-file +
+  rename replacement, not direct in-place writes
 - `/settings` is a narrow UI surface for regularly toggled settings only:
   retry network errors, tool display verbosity, and thinking display verbosity.
   Model choice stays in `/model`; thinking level stays in `/thinking`.
