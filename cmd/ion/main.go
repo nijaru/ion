@@ -39,7 +39,10 @@ func main() {
 	printFlag := flag.Bool("print", false, "Print response and exit (use with --prompt or stdin)")
 	promptFlag := flag.String("prompt", "", "Prompt to send in print mode")
 	timeoutFlag := flag.Duration("timeout", 5*time.Minute, "Timeout for print mode")
-	flag.Parse()
+	if err := flag.CommandLine.Parse(normalizeFlagArgs(os.Args[1:])); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(2)
+	}
 
 	// Load config
 	cfg, err := config.Load()
@@ -180,6 +183,13 @@ func main() {
 	}
 }
 
+func normalizeFlagArgs(args []string) []string {
+	if len(args) > 1 && args[0] == "--" && strings.HasPrefix(args[1], "-") {
+		return append([]string(nil), args[1:]...)
+	}
+	return args
+}
+
 func loadWorkspaceTrust(cwd string, cfg *config.Config) (*ionworkspace.TrustStore, bool, string, error) {
 	if cfg != nil && config.ResolveWorkspaceTrust(cfg.WorkspaceTrust) == "off" {
 		return nil, true, "", nil
@@ -194,9 +204,9 @@ func loadWorkspaceTrust(cwd string, cfg *config.Config) (*ionworkspace.TrustStor
 		return nil, false, "", err
 	}
 	if trusted {
-		return store, true, "Workspace trusted", nil
+		return store, true, "Workspace is trusted.", nil
 	}
-	return store, false, "Workspace not trusted; starting in READ mode. Run /trust to remember this workspace.", nil
+	return store, false, "Workspace is not trusted. Starting in READ mode. Run /trust to remember this workspace.", nil
 }
 
 func startupToolLine(b backend.Backend) string {
@@ -208,7 +218,7 @@ func startupToolLine(b backend.Backend) string {
 	if surface.Count == 0 {
 		return ""
 	}
-	parts := []string{fmt.Sprintf("Tools %d registered", surface.Count)}
+	parts := []string{fmt.Sprintf("%d tools registered", surface.Count)}
 	if surface.LazyEnabled {
 		parts = append(parts, "Search tools enabled")
 	}

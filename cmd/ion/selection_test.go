@@ -96,6 +96,18 @@ func TestDefaultACPCommand(t *testing.T) {
 	}
 }
 
+func TestNormalizeFlagArgsAcceptsLeadingSeparator(t *testing.T) {
+	got := normalizeFlagArgs([]string{"--", "--continue"})
+	if len(got) != 1 || got[0] != "--continue" {
+		t.Fatalf("normalizeFlagArgs = %#v, want --continue", got)
+	}
+
+	plain := normalizeFlagArgs([]string{"--continue"})
+	if len(plain) != 1 || plain[0] != "--continue" {
+		t.Fatalf("normalizeFlagArgs plain = %#v, want unchanged", plain)
+	}
+}
+
 func TestResolveStartupConfig(t *testing.T) {
 	t.Run("requires provider", func(t *testing.T) {
 		cfg := &config.Config{}

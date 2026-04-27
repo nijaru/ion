@@ -7,12 +7,17 @@ Fast, lightweight terminal coding agent.
 Ion has been reconciled with the current stabilized Canto surface. The core loop audit, HITL permission-mode hardening, observability exporter slice, workflow topology spec, first eval regression gate, deterministic policy config slice, first executable subagent persona/routing slice, workspace trust slice, tool-loading UX slice, and first memory search UX slice are complete. Current work is moving through the remaining P2 reliability/UX epics.
 
 Current active slice:
-- `tk-n0n4` — Privacy: deterministic redaction now covers approval prompts, Slack/email approval notifications, and tool-call previews. Continue only where redaction reduces real exposure without hiding data required for user control.
+- `tk-ify2` / `tk-5gtk` — Fedora/local-api replay failure fixed upstream in Canto, and Ion now accepts `go run ./cmd/ion -- --continue` as a forgiving alias for `go run ./cmd/ion --continue`.
 
 Captured lower-priority polish:
 - `tk-5cqs` — Slash commands: autocomplete and command surface review (P3)
 - `tk-c037` — TUI: question-mark help shortcut (completed)
 - `tk-hase` — Thinking UI/config slice (completed; Canto capability follow-up split to `tk-369n`)
+- `tk-n0n4` — Privacy display redaction slice completed; remaining privacy work is P4 until a concrete leak blocks a release.
+- `tk-j6gh` — TUI startup copy polish (completed)
+- `tk-5gtk` — CLI continue/resume separator handling (completed)
+- `tk-kvqv` — Collapse routine tool output by default (P3)
+- `tk-tilu` — Show thinking state without dumping hidden reasoning (P3)
 
 Near-term tracks:
 - `tk-zz5i` — Core loop: scripted resilience smoke suite (Completed)
@@ -53,10 +58,10 @@ Design rule:
 - Similar agents are references, not feature-parity requirements. Adopt from pi, Claude Code, Codex, OpenCode, Cursor, Droid, Letta, and others only when the idea strengthens Ion's core coding loop or preserves a simple, inspectable UX.
 
 ## Next Steps
-1. Pick the next P3 by risk: privacy redaction (`tk-n0n4`) or ACP bridge correctness (`tk-o0iw`/`tk-2ffy`/`tk-6zy3`) outrank marketplace, branching, and cosmetic TUI work.
-2. Keep `tk-369n` scoped to Canto capability metadata; do not add more Ion-side thinking enum guesses.
-3. Keep slash-command polish (`tk-5cqs`) focused on concrete discoverability bugs.
-4. Treat older `Canto: contribute ...` tasks as re-triaged: no default grep/glob or preset coding-tool bundles; only concrete reusable extension packages should move upstream.
+1. Start `tk-9n7h`: review provider registry/model-picker correctness after the config/state/provider changes.
+2. Then do `tk-5t72`: audit CantoBackend storage/session ownership and remove ambiguity where it affects core reliability. The Fedora replay bug exposed duplicate/ambiguous storage events, so this remains high leverage.
+3. Then handle ACP bridge correctness in order: `tk-o0iw`, `tk-2ffy`, `tk-6zy3`.
+4. Keep privacy (`tk-n0n4`), skills, branching, thinking capability work, slash-command polish, and collapsed tool-output UX behind those unless a concrete bug blocks normal use.
 
 *(Note: Older P3 TUI refinement tasks like configurable verbosity, skill layering, and status line context have been subsumed by their respective SOTA epics).*
 
@@ -66,6 +71,9 @@ Design rule:
 - [x] **Core-loop smoke suite (`tk-zz5i`)** — Added deterministic app-level smoke coverage for submit/stream/tool persistence and replay, approval, cancel, retry-status persistence, and provider-limit stop traces.
 - [x] **Cost/limit resilience (`tk-90mp`)** — Budget enforcement, routing decision traces, provider-limit classification, Fedora local-api smoke, and transport-only endless retry are complete; richer model cascades are deferred until a concrete policy is needed.
 - [x] **Privacy display-surface redaction (`tk-n0n4`)** — Added deterministic redaction for obvious secrets/PII and applied it to approval prompt descriptions/args, Slack/email approval notification text, and tool-call preview args.
+- [x] **Startup copy polish (`tk-j6gh`)** — Startup now says `Workspace is not trusted. Starting in READ mode...` and `%d tools registered`.
+- [x] **Empty assistant replay fix (`tk-ify2`)** — Fedora/local-api rejected replay after a tool turn because Canto persisted an assistant message with `content=""` and no `tool_calls`; Canto `192bfdf` skips those empty messages while preserving usage.
+- [x] **Continue CLI separator fix (`tk-5gtk`)** — Correct command is `ion --continue` or `go run ./cmd/ion --continue`; Ion also accepts a leading `--` before flags to avoid silent fresh sessions.
 - [x] **Thinking control Ion slice (`tk-hase`)** — Ion preserves `auto/off/minimal/low/medium/high/xhigh/max`, exposes common named levels in `/thinking`, and only sends named effort when Canto reports support; richer provider translation is split to `tk-369n`.
 - [x] **Transport-only endless retry (`tk-90mp`)** — Canto `f71205f` added transport-only endless retry; Ion wires `retry_until_cancelled` to that path so disconnects can retry until Ctrl+C while rate/quota/server failures stay bounded and readable.
 - [x] **Retry-until-cancel resilience slice (`tk-lm25`)** — Canto now supports retry-until-context-cancel and raw transport transient classification; Ion defaults `retry_until_cancelled` on, emits visible retry status, and persists those status events without transcript spam.
@@ -112,14 +120,22 @@ See `tk ls` for the full list. Current active priority:
 - No P1 tasks remain ready. Next ready work is P2.
 
 Remaining P2 work:
-- None.
+- `tk-9n7h` — Evaluate provider registry/model-picker correctness after provider/config rollout
+- `tk-5t72` — Audit dual storage in CantoBackend
+- `tk-o0iw` — ACP: Add initial session context at `Open()`
+- `tk-2ffy` — ACP: Filter/log stderr separately instead of emitting `session.Error`
+- `tk-6zy3` — ACP: Add `token_usage` event mapping
 
 P3 follow-ups:
-- `tk-n0n4` — Privacy: PII detection and redaction pipeline
-- `tk-st4q`, `tk-2ffy`, `tk-o0iw`, `tk-6zy3` — ACP bridge correctness
 - `tk-369n` — Canto typed thinking capabilities and provider translation
 - `tk-5cqs` — Slash command surface review
+- `tk-kvqv` — Collapse routine tool output by default
+- `tk-tilu` — Show thinking state without exposing hidden reasoning
+- `tk-st4q` — ACP agent/headless mode after bridge correctness
 - `tk-g78q`, `tk-8174` — Skills marketplace and cross-host branching after the solo loop is proven
+
+P4 follow-ups:
+- `tk-n0n4` — Privacy: continue only for concrete leak surfaces or before broader logging/telemetry expansion
 
 ## Blockers
 - None.

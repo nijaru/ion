@@ -39,12 +39,14 @@ Goal:
 - prove the native solo loop with a repeatable smoke suite before expanding orchestration
 
 Tracked by:
-- `tk-5t72`
 - `tk-9n7h`
+- `tk-5t72`
 
 Includes:
 - preserve deterministic submit/stream/tool/approval/cancel/retry/error/persist/replay smoke coverage
+- provider registry/model-picker correctness after provider/config changes
 - CantoBackend storage and registry cleanup after the current provider/backend surface settles
+- keep provider-visible replay free of invalid transcript events, including empty assistant messages after tool-only/no-op model steps
 - checkpoint/rewind follow-up only where it improves reliability or rollback confidence
 
 ### 2. Safety and execution boundaries
@@ -59,6 +61,10 @@ Includes:
 - deterministic policy and existing sandbox posture remain the base layer
 - privacy filtering for prompts, logs, traces, tool previews, and approval surfaces
 - optional model-assisted classification only after fail-closed behavior and audit logging
+
+Priority:
+- Current deterministic approval/tool-preview redaction is enough for now.
+- Further privacy work is not on the critical path unless a concrete leak surface appears or telemetry/logging expands.
 
 PII note:
 - OpenAI's current public moderation docs document `omni-moderation-latest` for harmful-content classification, not a dedicated PII detector. If OpenAI ships or documents a PII-specific model, treat it as an optional detector behind Ion's own redaction interface, not as the privacy architecture.
@@ -88,14 +94,13 @@ Tracked by:
 - `tk-o0iw`
 - `tk-2ffy`
 - `tk-6zy3`
-- `tk-st4q`
 
 Includes:
 - initial session context at `Open`
 - stderr routing separate from transcript events
 - token usage event mapping where available
 - session continuity/resume decision
-- headless Ion-as-ACP-agent mode after the bridge path is stable
+- headless Ion-as-ACP-agent mode stays P3 until the bridge path is stable
 
 ### 5. Product depth after the core loop
 
