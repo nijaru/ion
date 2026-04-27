@@ -367,6 +367,64 @@ func TestSaveStateWritesOnlyMutableFields(t *testing.T) {
 	}
 }
 
+func TestSaveUsesAtomicReplace(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	if err := Save(&Config{Provider: "openai", Model: "gpt-4o"}); err != nil {
+		t.Fatalf("first save config: %v", err)
+	}
+	if err := Save(&Config{Provider: "anthropic", Model: "claude-sonnet-4-5"}); err != nil {
+		t.Fatalf("second save config: %v", err)
+	}
+	path := filepath.Join(home, ".ion", "config.toml")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	got := string(data)
+	if strings.Contains(got, "gpt-4o") {
+		t.Fatalf("config kept stale model after replace:\n%s", got)
+	}
+	if !strings.Contains(got, "claude-sonnet-4-5") {
+		t.Fatalf("config missing replacement model:\n%s", got)
+	}
+	if matches, err := filepath.Glob(filepath.Join(home, ".ion", ".config.toml.tmp-*")); err != nil {
+		t.Fatalf("glob temp config: %v", err)
+	} else if len(matches) != 0 {
+		t.Fatalf("temporary config files left behind: %v", matches)
+	}
+}
+
+func TestSaveStateUsesAtomicReplace(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	if err := SaveState(&Config{Provider: "openai", Model: "gpt-4o"}); err != nil {
+		t.Fatalf("first save state: %v", err)
+	}
+	if err := SaveState(&Config{Provider: "local-api", Model: "qwen3.6:27b"}); err != nil {
+		t.Fatalf("second save state: %v", err)
+	}
+	path := filepath.Join(home, ".ion", "state.toml")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	got := string(data)
+	if strings.Contains(got, "gpt-4o") {
+		t.Fatalf("state kept stale model after replace:\n%s", got)
+	}
+	if !strings.Contains(got, "qwen3.6:27b") {
+		t.Fatalf("state missing replacement model:\n%s", got)
+	}
+	if matches, err := filepath.Glob(filepath.Join(home, ".ion", ".state.toml.tmp-*")); err != nil {
+		t.Fatalf("glob temp state: %v", err)
+	} else if len(matches) != 0 {
+		t.Fatalf("temporary state files left behind: %v", matches)
+	}
+}
+
 func TestLoadClampsNegativeCostLimits(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
