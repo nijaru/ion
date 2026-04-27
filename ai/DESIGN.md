@@ -54,6 +54,13 @@ The TUI is being refactored into isolated sub-models to improve maintainability 
 
 The TUI consumes backend interfaces. That separation is real inside the repo.
 
+The native core-loop design is defined in `ai/design/native-core-loop-architecture.md`. Its boundary is stricter than older feature plans:
+
+- Canto owns model-visible session history, effective provider projections, agent/tool execution, and terminal turn events.
+- Ion owns input classification, command UX, policy decisions, display projection, settings/state, and TUI/CLI rendering.
+- Ion must call Canto's canonical turn path for normal model turns; it must not duplicate user, assistant, or tool transcript persistence.
+- Feature work that touches ACP, subagents, sandboxing, routing, privacy, skills, or richer thinking controls stays downstream of this loop contract unless it directly fixes a core-loop bug.
+
 Current limitation:
 
 - ion is not yet a clean reusable external runtime library

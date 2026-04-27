@@ -8,8 +8,9 @@
 - [SOTA Requirements](SOTA-REQUIREMENTS.md) — The 14 core product responsibilities for Ion
 - [Canto Authoring App Patterns](research/canto-dspy-app-patterns-2026-04.md) — Future Ion patterns from Canto authoring work; DSPy is one reference
 - [Current Pi Core Loop Review](research/pi-current-core-loop-review-2026-04.md) — Current Pi `/tree`, loop, compaction, and UX lessons for Canto/Ion
-- [Core Agent Reference Delta](research/core-agent-reference-delta-2026-04-27.md) — Focused Pi/Codex CLI and loop deltas after Gate 2 stabilization
+- [Core Agent Reference Delta](research/core-agent-reference-delta-2026-04-27.md) — Focused Pi/Codex CLI and loop deltas; reference only until Gate 2 is truly stable
 - [Thinking Effort Provider Survey](research/thinking-effort-provider-survey-2026-04.md) — Provider reasoning controls and Ion capability-model recommendation
+- [Native Core Loop Architecture](design/native-core-loop-architecture.md) — Target Canto/Ion loop ownership, invariants, and refactor sequence
 - [Canto Research Delta](review/canto-research-delta-2026-04-26.md) — Recent Canto ai/ findings that affect Ion task sequencing
 - [Core Loop Contract](review/core-loop-contract.md) — Native Canto/Ion loop invariants for history, events, terminal states, replay, and CLI
 - [Core Loop Review](review/core-loop-review.md) — Focused contract review after resume/tool-call failures

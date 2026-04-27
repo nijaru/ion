@@ -1,0 +1,136 @@
+# Ion v0 Core Parity Plan
+
+## Goal
+
+Make Ion reliable enough that normal coding-agent use is boring: submit a turn, stream output, run tools, cancel cleanly, survive provider/network failures, persist state, resume later, and keep going without transcript or provider-history corruption.
+
+Pi is the simple core-loop floor. Codex is the richer open-source CLI/TUI reference. Claude Code is a public behavior reference for command, approval, and workflow expectations. Ion should not clone any of them; it should reach their core reliability bar while keeping the Go/Bubble Tea + Canto split clean.
+
+## Current Truth
+
+Ion Gate 1 is green for the resume/model-history failure that was blocking normal testing:
+
+- Canto commit `927e482` filters empty/no-payload assistant rows from effective model history, including legacy rows and snapshots.
+- Ion imports that Canto pseudo-version through normal `go.mod` resolution.
+- `--continue --print` can resume the previously corrupted local-api session and accept a new user turn.
+- Replay/live transcript spacing now shares the app renderer, and routine `list`/`read` display is compact by default.
+
+Ion is still not broadly core-stable. The next gate is a top-down design/refactor against `ai/design/native-core-loop-architecture.md`, then deterministic coverage for cancellation, retries, provider-limit failures, session lifecycle, and TUI command/display polish.
+
+## Priority Gates
+
+### Gate 0: Planning And Queue Hygiene
+
+Status: active, ongoing
+
+Exit criteria:
+
+- `ai/STATUS.md`, `ai/ROADMAP.md`, and `tk ready` agree on the active blocker.
+- Provider/model picker, ACP, thinking, privacy, skills, approvals, sandboxing, modes, and routing work are blocked or deferred until the core loop passes the gates below.
+- Any user-reported bug gets a `tk` task or a log entry before implementation continues.
+
+### Gate 1: Session Replay And Model History
+
+Status: complete (`tk-izo7`)
+
+Progress:
+
+- Canto effective-history filtering is committed and pushed as `927e482`, then imported by Ion.
+- Ion replay spacing/resumed marker placement is implemented and covered by Ion tests.
+- Ion backend close now cancels/waits for turn goroutines before closing the public event stream.
+- Live Fedora/local-api resume/new-turn smoke passed through Ion's normal dependency path.
+
+Exit criteria:
+
+- `--continue` and `/resume` restore the selected transcript with the same renderer used for live messages.
+- Restored messages have readable spacing and no raw full routine `list`/`read` dumps by default.
+- Empty/no-payload assistant messages are omitted from Canto effective model history, including legacy rows and projection snapshots.
+- A resumed session can accept a new user message after a tool turn without provider-history errors.
+- Tests cover both future clean sessions and legacy corrupted sessions.
+
+Ownership:
+
+- Canto owns durable event projection and model-visible history.
+- Ion owns display compaction, transcript spacing, and startup/resume placement.
+
+### Gate 2: Core Agent Loop Contract
+
+Status: active (`tk-s6p4`)
+
+Exit criteria:
+
+- Ordered lifecycle is tested: user commit, assistant/tool events, terminal turn state.
+- Tool calls preserve deterministic approval/finalization order while allowing safe internal concurrency.
+- Tool failures become durable tool-result/error entries, not ambiguous loop panics.
+- Cancellation, retry-until-cancelled, budget stops, immediate provider errors, and provider-limit errors all leave the session resumable.
+- `go test ./...` covers these cases with deterministic fake providers/tools and at least one local-api smoke path when available.
+- Noninteractive prompt mode is reliable enough for automated local-api/Fedora smoke tests, so core loop regressions do not depend on manual TUI testing.
+
+Current design target:
+
+- Canto owns append-only model-visible transcript, effective provider history, agent/tool execution, and terminal turn events.
+- Ion owns input classification, command UX, product policy, display projection, and CLI/TUI rendering.
+- The native backend adapter should be a small spine: ensure/select session, subscribe, submit via `Runner.SendStream`, translate events, and stop cleanly.
+- Storage/replay should consume Canto `EffectiveEntries`, merge only Ion display events, and render replay with the live renderer.
+
+References:
+
+- Pi: lifecycle events, explicit streaming state, ordered tool finalization.
+- Codex: robust interrupt/exit behavior, transcript/composer state separation, sandbox/approval clarity.
+- Claude Code: immediate local commands during active work and visible command/control surfaces.
+
+### Gate 3: TUI Baseline
+
+Status: next after Gate 1/2
+
+Exit criteria:
+
+- Composer remains responsive during streaming, retry, compaction, and queued follow-up states.
+- Slash commands have basic autocomplete and clear help text.
+- Local commands that should work during an active turn are allowlisted and do not create model sessions.
+- Routine tool output is compact by default, with an explicit path to inspect details.
+- Thinking is shown as a small state such as `Thinking...` when available; hidden reasoning is not dumped.
+
+### Gate 4: Config, Provider, And Session Hygiene
+
+Status: after Gate 1/2, before broader provider features
+
+Exit criteria:
+
+- `~/.ion/config.toml`, `~/.ion/state.toml`, `~/.ion/trusted_workspaces.json`, and `~/.ion/ion.db` have clear ownership.
+- Startup never invents placeholder favorites or persists provider/model choices implicitly.
+- Custom OpenAI-compatible endpoints can be selected without contaminating unrelated provider presets.
+- `--continue`, `--resume <id>`, and bare `--resume` behave predictably.
+- Provider errors clear when the state changes and do not stick in the progress surface.
+
+### Gate 5: Safety And Execution Boundary
+
+Status: after core loop is green
+
+Exit criteria:
+
+- READ, EDIT, and AUTO semantics are documented in the UI and enforced in Canto/Ion boundaries.
+- Trust controls workspace write posture without duplicating read-only flags.
+- Sandbox remains opt-in/visible until platform support is reliable; failure modes are explicit.
+- Policy and approval behavior is deterministic before classifier/LLM-as-judge ideas are expanded.
+
+## Deferred Until Gates Pass
+
+- approvals, sandboxing, and permission-mode polish beyond the minimum needed not to break the core loop
+- ACP bridge polish and headless ACP agent mode
+- ChatGPT subscription bridge evaluation
+- typed thinking capability matrix beyond the minimal UI
+- privacy redaction expansion beyond concrete leak surfaces
+- skills marketplace/self-extension
+- cross-host sync and branching
+- swarm/alternate-screen orchestration
+- model cascades or optimizer-style routing beyond current retry/budget basics
+
+## Immediate Work Order
+
+1. Treat `tk-s6p4` as the active blocker and keep `tk-mmcs` synchronized.
+2. Audit Canto write/projection paths against the native core-loop design; fix framework-owned bugs in Canto first, push, then import into Ion.
+3. Refactor Ion's native backend spine around explicit lifecycle phases.
+4. Refactor storage/replay projection until live and resumed transcript rendering share one model without duplicate model-visible entries.
+5. Extend deterministic and Fedora/local-api print CLI smoke coverage around cancellation/error persistence, retry status, provider-limit recovery, tool errors, and resumed follow-up turns.
+6. Only then resume TUI polish such as startup header readability, slash autocomplete, thinking display, and routine tool output.

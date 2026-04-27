@@ -4,14 +4,17 @@ Fast, lightweight terminal coding agent.
 
 ## Current Focus
 
-Ion's native core-loop contract is green by deterministic tests and live Fedora/local-api smokes. Keep this gate green while moving on to narrow Pi/Codex parity polish.
+Ion's native core loop is back in design/refactor mode. The previous resume/tool-history failure class is fixed and covered, but the broader loop is not yet proven stable enough to resume feature polish.
 
 Current active blockers:
+- `tk-s6p4` — Native core loop design/refactor and broader smoke matrix. Active P1 implementation blocker.
 - `tk-mmcs` — Keep the Pi/Codex/Claude core parity plan, roadmap, and task queue synchronized while the loop is stabilized.
 
 Next core-parity work:
+- use `ai/design/native-core-loop-architecture.md` as the target design for the Canto/Ion refactor.
+- audit Canto write/projection paths first; fix Canto upstream when the framework owns the bug, then import the new revision into Ion.
+- refactor Ion's Canto backend, storage/replay projection, app lifecycle, and print CLI against the design before returning to feature polish.
 - use the scriptable print CLI (`ion -p "prompt"`, `ion -p --json "prompt"`, `ion --print "prompt" --json`, `--resume <id> -p`, and piped stdin) as the automated Fedora/local-api smoke surface before TUI-only checks.
-- run a short Pi/Codex reference review (`tk-ekw5`) against the now-green contract before choosing the next polish slice.
 - keep ACP, sandboxing, broader policy, thinking expansion, privacy, routing, and subagents behind native-loop regression safety.
 
 Captured lower-priority polish:
@@ -69,9 +72,10 @@ Design rule:
 - Similar agents are references, not feature-parity requirements. Adopt from pi, Claude Code, Codex, OpenCode, Cursor, Droid, Letta, and others only when the idea strengthens Ion's core coding loop or preserves a simple, inspectable UX.
 
 ## Next Steps
-1. Continue `tk-mmcs`: choose the next narrow Pi/Codex parity polish slice against the now-green native-loop contract.
-2. Use Fedora/local-api `ion -p` and `--resume ... -p` smokes before and after any core-loop-adjacent change.
-3. Keep ACP, sandboxing, thinking expansion, privacy, routing, and subagents behind native-loop regression safety unless they directly block testing.
+1. Continue `tk-s6p4`: audit Canto write/projection paths against `ai/design/native-core-loop-architecture.md`.
+2. Refactor Ion's native backend spine so turn lifecycle, event watching, stream callbacks, and display translation have explicit ownership.
+3. Use Fedora/local-api `ion -p` and `--resume ... -p` smokes before and after any core-loop-adjacent change.
+4. Keep ACP, sandboxing, thinking expansion, privacy, routing, and subagents behind native-loop regression safety unless they directly block testing.
 
 *(Note: Older P3 TUI refinement tasks like configurable verbosity, skill layering, and status line context have been subsumed by their respective SOTA epics).*
 
@@ -143,6 +147,7 @@ Design rule:
 
 ## Active Tasks
 See `tk ls` for the full list. Current active priority:
+- `tk-s6p4` — Core loop design/refactor and broader live/deterministic smoke matrix
 - `tk-mmcs` — Core parity plan and task queue hygiene
 
 Remaining P2 work:
@@ -160,13 +165,14 @@ P4 follow-ups:
 - `tk-n0n4` — Privacy: continue only for concrete leak surfaces or before broader logging/telemetry expansion
 
 ## Blockers
-- None for Gate 1. Core-loop reliability work remains active under Gate 2.
+- `tk-s6p4` is the active blocker before polish or feature expansion.
 
 ## Topic Files
 - `ai/SOTA-REQUIREMENTS.md` — The 14 core SOTA product responsibilities.
 - `ai/research/canto-dspy-app-patterns-2026-04.md` — Future Ion patterns from Canto authoring work; DSPy is one reference.
 - `ai/research/pi-current-core-loop-review-2026-04.md` — Current Pi core-loop, `/tree`, compaction, and UX review.
-- `ai/research/core-agent-reference-delta-2026-04-27.md` — Focused Pi/Codex CLI and loop deltas after Gate 2 stabilization.
+- `ai/research/core-agent-reference-delta-2026-04-27.md` — Focused Pi/Codex CLI and loop deltas; reference only until Gate 2 is truly stable.
+- `ai/design/native-core-loop-architecture.md` — Target Canto/Ion native loop ownership, invariants, refactor sequence, and smoke matrix.
 - `ai/review/canto-research-delta-2026-04-26.md` — Recent Canto ai/ findings that affect Ion sequencing.
 - `ai/review/core-loop-contract.md` — Native Canto/Ion core-loop invariants for provider history, events, persistence, replay, approvals, and print CLI.
 - `ai/review/core-loop-review.md` — Focused contract review after resume/tool-call failures.
