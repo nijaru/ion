@@ -14,6 +14,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/nijaru/canto/workspace"
+	"github.com/nijaru/ion/internal/privacy"
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
 )
@@ -221,10 +222,10 @@ func approvalNotificationText(req session.ApprovalRequest, workdir, target strin
 		"Target: " + target,
 		"Workspace: " + workdir,
 		"Tool: " + req.ToolName,
-		"Request: " + req.Description,
+		"Request: " + privacy.Redact(req.Description),
 	}
 	if strings.TrimSpace(req.Args) != "" {
-		parts = append(parts, "Args: "+req.Args)
+		parts = append(parts, "Args: "+privacy.Redact(req.Args))
 	}
 	return strings.Join(parts, "\n")
 }
