@@ -426,12 +426,20 @@ func normalizeReasoningEffort(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "", DefaultReasoningEffort:
 		return DefaultReasoningEffort
+	case "off", "none", "disabled":
+		return "off"
+	case "minimal", "min":
+		return "minimal"
 	case "low":
 		return "low"
 	case "medium", "med":
 		return "medium"
 	case "high":
 		return "high"
+	case "xhigh", "extra-high", "extra_high", "extra high":
+		return "xhigh"
+	case "max", "maximum":
+		return "max"
 	default:
 		return DefaultReasoningEffort
 	}
@@ -441,12 +449,20 @@ func normalizeOptionalReasoningEffort(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "", DefaultReasoningEffort:
 		return ""
+	case "off", "none", "disabled":
+		return "off"
+	case "minimal", "min":
+		return "minimal"
 	case "low":
 		return "low"
 	case "medium", "med":
 		return "medium"
 	case "high":
 		return "high"
+	case "xhigh", "extra-high", "extra_high", "extra high":
+		return "xhigh"
+	case "max", "maximum":
+		return "max"
 	default:
 		return ""
 	}

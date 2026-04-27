@@ -495,7 +495,7 @@ func helpText() string {
 		"  /fast            switch to the fast model preset",
 		"  /provider [name] set provider and choose a model",
 		"  /model [name]    set model directly or open the picker",
-		"  /thinking [lvl]  set thinking: auto, low, medium, high",
+		"  /thinking [lvl]  set thinking: auto, off, minimal, low, medium, high, xhigh",
 		"  /read            switch to READ mode",
 		"  /edit            switch to EDIT mode",
 		"  /auto, /yolo     switch to AUTO mode",
@@ -611,7 +611,7 @@ func (m Model) settingsSummary(cfg *config.Config) string {
 		"  /settings retry on|off",
 		"  /settings tool full|collapsed|hidden",
 		"  /settings thinking full|collapsed|hidden",
-		"  /thinking auto|low|medium|high",
+		"  /thinking auto|off|minimal|low|medium|high|xhigh",
 	}, "\n")
 }
 
@@ -679,9 +679,12 @@ func (m Model) openThinkingPicker() (Model, tea.Cmd) {
 	}
 	items := []pickerItem{
 		{Label: "Auto", Value: config.DefaultReasoningEffort, Detail: "Provider default"},
+		{Label: "Off", Value: "off"},
+		{Label: "Minimal", Value: "minimal"},
 		{Label: "Low", Value: "low"},
 		{Label: "Medium", Value: "medium"},
 		{Label: "High", Value: "high"},
+		{Label: "XHigh", Value: "xhigh"},
 	}
 	for i := range items {
 		items[i].Search = pickerSearchIndex(
@@ -789,12 +792,20 @@ func normalizeThinkingValue(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "", config.DefaultReasoningEffort:
 		return config.DefaultReasoningEffort
+	case "off", "none", "disabled":
+		return "off"
+	case "minimal", "min":
+		return "minimal"
 	case "low":
 		return "low"
 	case "medium", "med":
 		return "medium"
 	case "high":
 		return "high"
+	case "xhigh", "extra-high", "extra_high", "extra high":
+		return "xhigh"
+	case "max", "maximum":
+		return "max"
 	default:
 		return config.DefaultReasoningEffort
 	}
@@ -802,12 +813,20 @@ func normalizeThinkingValue(value string) string {
 
 func thinkingDisplayName(value string) string {
 	switch normalizeThinkingValue(value) {
+	case "off":
+		return "Off"
+	case "minimal":
+		return "Minimal"
 	case "low":
 		return "Low"
 	case "medium":
 		return "Medium"
 	case "high":
 		return "High"
+	case "xhigh":
+		return "XHigh"
+	case "max":
+		return "Max"
 	default:
 		return "Auto"
 	}

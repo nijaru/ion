@@ -53,6 +53,17 @@ func (p *compactProvider) IsTransient(err error) bool { return false }
 
 func (p *compactProvider) IsContextOverflow(err error) bool { return false }
 
+type reasoningCapProvider struct {
+	compactProvider
+	reasoningEffort bool
+}
+
+func (p *reasoningCapProvider) Capabilities(model string) llm.Capabilities {
+	caps := llm.DefaultCapabilities()
+	caps.ReasoningEffort = p.reasoningEffort
+	return caps
+}
+
 var transientStreamErr = errors.New("transient provider failure")
 var overflowErr = errors.New("context_length_exceeded")
 
@@ -126,11 +137,48 @@ func TestProviderAndModelLoadFromEnv(t *testing.T) {
 func TestReasoningEffortProcessorSetsRequestField(t *testing.T) {
 	req := &llm.Request{}
 	processor := reasoningEffortProcessor(&config.Config{ReasoningEffort: "med"})
-	if err := processor.ApplyRequest(context.Background(), nil, "o3-mini", nil, req); err != nil {
+	provider := &reasoningCapProvider{reasoningEffort: true}
+	if err := processor.ApplyRequest(context.Background(), provider, "o3-mini", nil, req); err != nil {
 		t.Fatalf("process: %v", err)
 	}
 	if req.ReasoningEffort != "medium" {
 		t.Fatalf("reasoning effort = %q, want %q", req.ReasoningEffort, "medium")
+	}
+}
+
+func TestReasoningEffortProcessorRespectsCapabilities(t *testing.T) {
+	req := &llm.Request{}
+	processor := reasoningEffortProcessor(&config.Config{ReasoningEffort: "high"})
+	provider := &reasoningCapProvider{}
+	if err := processor.ApplyRequest(context.Background(), provider, "local-model", nil, req); err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if req.ReasoningEffort != "" {
+		t.Fatalf("reasoning effort = %q, want empty for unsupported provider", req.ReasoningEffort)
+	}
+}
+
+func TestReasoningEffortProcessorMapsOffToNone(t *testing.T) {
+	req := &llm.Request{}
+	processor := reasoningEffortProcessor(&config.Config{ReasoningEffort: "off"})
+	provider := &reasoningCapProvider{reasoningEffort: true}
+	if err := processor.ApplyRequest(context.Background(), provider, "gpt-5.2", nil, req); err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if req.ReasoningEffort != "none" {
+		t.Fatalf("reasoning effort = %q, want none", req.ReasoningEffort)
+	}
+}
+
+func TestReasoningEffortProcessorDoesNotSendMaxYet(t *testing.T) {
+	req := &llm.Request{}
+	processor := reasoningEffortProcessor(&config.Config{ReasoningEffort: "max"})
+	provider := &reasoningCapProvider{reasoningEffort: true}
+	if err := processor.ApplyRequest(context.Background(), provider, "model", nil, req); err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if req.ReasoningEffort != "" {
+		t.Fatalf("reasoning effort = %q, want empty until provider-specific max mapping exists", req.ReasoningEffort)
 	}
 }
 

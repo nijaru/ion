@@ -103,7 +103,7 @@ Thinking controls are capability-driven, not a universal enum.
 
 Ion owns:
 
-- user-facing thinking selection (`auto`, `off`, `low`, `medium`, `high`, `xhigh`, `max`)
+- user-facing thinking selection (`auto`, `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`)
 - capability-filtered picker/status UX
 - stable config for custom model capability overrides
 - mutable state for the currently selected level
@@ -122,6 +122,11 @@ Rules:
 - Raw numeric thinking budgets are config-only until there is evidence they need a frequent runtime control.
 - `max` is not portable; expose it only for models that explicitly support it.
 - If model switching invalidates the selected level, use the highest supported level at or below the selection and show a short notice.
+
+Implementation note:
+
+- Current Ion code preserves the full vocabulary in config/state, exposes common named-effort levels in `/thinking`, and forwards only when Canto reports named `ReasoningEffort` support.
+- Full capability-filtered pickers and budget-backed Anthropic/Gemini/Qwen mappings require richer Canto model capability metadata.
 
 Detailed survey: `ai/research/thinking-effort-provider-survey-2026-04.md`.
 

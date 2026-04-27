@@ -24,7 +24,7 @@ Append-only history of architectural and design decisions for `ion`.
 
 **Context:** Current model APIs do not share one reasoning-control shape. OpenAI exposes model-specific named efforts, Anthropic mixes adaptive effort and older numeric budgets, Gemini splits named levels and budgets by generation, and Qwen/DeepSeek/local endpoints may be binary, model-mode based, or custom.
 
-**Decision:** Ion will expose one small user vocabulary (`auto`, `off`, `low`, `medium`, `high`, `xhigh`, `max`) filtered by the active model's capabilities. Canto/provider adapters translate that selection into native request fields: named effort, numeric budget, boolean thinking, or no parameter.
+**Decision:** Ion will expose one small user vocabulary (`auto`, `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`) filtered by the active model's capabilities. Canto/provider adapters translate that selection into native request fields: named effort, numeric budget, boolean thinking, or no parameter.
 
 **Rationale:**
 

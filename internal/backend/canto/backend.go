@@ -429,12 +429,24 @@ func reasoningEffortProcessor(cfg *config.Config) prompt.RequestProcessor {
 			if cfg == nil {
 				return nil
 			}
-			switch normalizeReasoningEffort(cfg.ReasoningEffort) {
-			case "", config.DefaultReasoningEffort:
+			effort := normalizeReasoningEffort(cfg.ReasoningEffort)
+			if effort == "" || effort == config.DefaultReasoningEffort {
 				req.ReasoningEffort = ""
-			default:
-				req.ReasoningEffort = normalizeReasoningEffort(cfg.ReasoningEffort)
+				return nil
 			}
+			if p == nil || !p.Capabilities(model).ReasoningEffort {
+				req.ReasoningEffort = ""
+				return nil
+			}
+			if effort == "off" {
+				req.ReasoningEffort = "none"
+				return nil
+			}
+			if effort == "max" {
+				req.ReasoningEffort = ""
+				return nil
+			}
+			req.ReasoningEffort = effort
 			return nil
 		},
 	)
@@ -472,12 +484,20 @@ func normalizeReasoningEffort(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "", config.DefaultReasoningEffort:
 		return config.DefaultReasoningEffort
+	case "off", "none", "disabled":
+		return "off"
+	case "minimal", "min":
+		return "minimal"
 	case "low":
 		return "low"
 	case "medium", "med":
 		return "medium"
 	case "high":
 		return "high"
+	case "xhigh", "extra-high", "extra_high", "extra high":
+		return "xhigh"
+	case "max", "maximum":
+		return "max"
 	default:
 		return config.DefaultReasoningEffort
 	}

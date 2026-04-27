@@ -8,7 +8,7 @@ Ion has been reconciled with the current stabilized Canto surface. The core loop
 
 Current active slice:
 - `tk-90mp` — Streaming: Cost Limits & Model Cascades. Provider limit classification is now implemented; continue with any remaining budget/cascade behavior only when it strengthens the core loop.
-- `tk-hase` — Thinking: provider-compatible levels and UI settings. P3 design follow-up; current provider survey says capability-filtered named levels in the TUI, config-only numeric budgets, and no reasoning params for unknown custom endpoints.
+- `tk-hase` — Thinking: provider-compatible levels and UI settings. Current implementation preserves the wider named vocabulary and avoids sending thinking params unless Canto reports named reasoning support; remaining work is richer Canto capability metadata and budget-backed provider mapping.
 
 Captured lower-priority polish:
 - `tk-5cqs` — Slash commands: autocomplete and command surface review (P3)
@@ -18,8 +18,8 @@ Near-term tracks:
 - `tk-wqhg` — Permission UX: trust and mode semantics (Completed)
 - `tk-0kip` — Provider/model picker: non-listing providers and preset clarity (Completed)
 - `tk-hs3m` — Local API: keep system messages template-compatible (Completed through Canto context primitive integration)
-- `tk-a5ds` — Config UX umbrella (Active/P3)
-- `tk-8188` — Settings storage: split stable config from mutable state (Active/P3 design follow-up)
+- `tk-a5ds` — Config UX umbrella (Completed)
+- `tk-8188` — Settings storage: split stable config from mutable state (Completed)
 - `tk-2wrb` — Context: Compaction UX & Summarization Prompts (Completed)
 - `tk-96vy` — Core loop: reliability and resilience audit (Completed)
 - `tk-j3ap` — HITL: Permission Modes UX & Escalation (Completed; notifier delivery split to `tk-00km`)
@@ -52,10 +52,10 @@ Design rule:
 - Similar agents are references, not feature-parity requirements. Adopt from pi, Claude Code, Codex, OpenCode, Cursor, Droid, Letta, and others only when the idea strengthens Ion's core coding loop or preserves a simple, inspectable UX.
 
 ## Next Steps
-1. Resume `tk-90mp`: budget enforcement, rate-limit/quota behavior, and routing trace slices are the next core-loop resilience work.
-2. Return to `tk-00km` after budget/rate-limit semantics are settled; approval prompts/audit copy now have the updated mode/trust matrix.
-3. Keep `tk-a5ds`, `tk-8188`, and `tk-5cqs` as tracked UX/config polish rather than core-loop blockers.
-4. Keep `tk-a5ds`, `tk-5cqs`, and `tk-c037` as tracked UX polish unless a concrete bug blocks normal use.
+1. Resume `tk-90mp`: budget enforcement and routing trace slices are the next core-loop resilience work.
+2. Keep `tk-hase` open only for Canto capability metadata and provider translation, not more Ion-side enum guessing.
+3. Return to `tk-00km` after budget/rate-limit semantics are settled; approval prompts/audit copy now have the updated mode/trust matrix.
+4. Keep `tk-5cqs` as tracked UX polish unless a concrete slash-command bug blocks normal use.
 5. Treat older `Canto: contribute ...` tasks as re-triaged: no default grep/glob or preset coding-tool bundles; only concrete reusable extension packages should move upstream.
 
 *(Note: Older P3 TUI refinement tasks like configurable verbosity, skill layering, and status line context have been subsumed by their respective SOTA epics).*
