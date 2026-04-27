@@ -657,6 +657,49 @@ func TestOpenRetriesTransientProviderErrors(t *testing.T) {
 	}
 }
 
+func TestConfigureRetryProviderUsesUntilCancelledSetting(t *testing.T) {
+	events := make(chan ionsession.Event, 1)
+	retryUntilCancelled := true
+	provider := &retryProvider{
+		FauxProvider: ctesting.NewMockProvider("openai"),
+	}
+
+	wrapped := configureRetryProvider(
+		provider,
+		&config.Config{RetryUntilCancelled: &retryUntilCancelled},
+		events,
+	)
+	retry, ok := wrapped.(*llm.RetryProvider)
+	if !ok {
+		t.Fatalf("wrapped provider = %T, want *llm.RetryProvider", wrapped)
+	}
+	if !retry.Config.RetryForever {
+		t.Fatal("RetryForever = false, want true")
+	}
+
+	retry.Config.OnRetry(llm.RetryEvent{
+		Attempt: 1,
+		Delay:   2 * time.Second,
+		Err:     transientStreamErr,
+	})
+
+	select {
+	case ev := <-events:
+		status, ok := ev.(ionsession.StatusChanged)
+		if !ok {
+			t.Fatalf("event = %T, want StatusChanged", ev)
+		}
+		if !strings.Contains(status.Status, "Retrying in 2s") {
+			t.Fatalf("status = %q, want retry delay", status.Status)
+		}
+		if !strings.Contains(status.Status, "Ctrl+C stops") {
+			t.Fatalf("status = %q, want cancel hint", status.Status)
+		}
+	default:
+		t.Fatal("expected retry status event")
+	}
+}
+
 func TestOpenRecoversFromContextOverflowByCompacting(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 

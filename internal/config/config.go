@@ -30,6 +30,7 @@ type Config struct {
 	ContextLimit           int               `toml:"context_limit,omitempty"`
 	MaxSessionCost         float64           `toml:"max_session_cost,omitempty"`
 	MaxTurnCost            float64           `toml:"max_turn_cost,omitempty"`
+	RetryUntilCancelled    *bool             `toml:"retry_until_cancelled,omitempty"`
 	WorkspaceTrust         string            `toml:"workspace_trust,omitempty"`
 	TelemetryOTLPEndpoint  string            `toml:"telemetry_otlp_endpoint,omitempty"`
 	TelemetryOTLPInsecure  bool              `toml:"telemetry_otlp_insecure,omitempty"`
@@ -211,6 +212,10 @@ func defaultConfig() *Config {
 	return &Config{
 		SessionRetentionDays: DefaultSessionRetentionDays,
 	}
+}
+
+func (c *Config) RetryUntilCancelledEnabled() bool {
+	return c == nil || c.RetryUntilCancelled == nil || *c.RetryUntilCancelled
 }
 
 func normalizeReasoningEffort(value string) string {

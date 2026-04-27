@@ -198,9 +198,7 @@ func (b *Backend) Open(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if _, ok := p.(*llm.RetryProvider); !ok {
-		p = llm.NewRetryProvider(p)
-	}
+	p = configureRetryProvider(p, b.cfg, b.events)
 	b.compactLLM = p
 	runtimeProvider := governor.NewRecoveryProvider(p, func(ctx context.Context) error {
 		b.events <- ionsession.StatusChanged{Status: "Compacting context..."}
@@ -292,6 +290,36 @@ func (b *Backend) Open(ctx context.Context) error {
 	b.runner = runtime.NewRunner(b.store, b.agent)
 
 	return nil
+}
+
+func configureRetryProvider(
+	p llm.Provider,
+	cfg *config.Config,
+	events chan<- ionsession.Event,
+) llm.Provider {
+	if retry, ok := p.(*llm.RetryProvider); ok {
+		return retry
+	}
+	retry := llm.NewRetryProvider(p)
+	retry.Config.RetryForever = cfg.RetryUntilCancelledEnabled()
+	retry.Config.OnRetry = func(event llm.RetryEvent) {
+		events <- ionsession.StatusChanged{Status: retryStatus(event)}
+	}
+	return retry
+}
+
+func retryStatus(event llm.RetryEvent) string {
+	delay := event.Delay.Round(time.Second)
+	if delay <= 0 {
+		delay = event.Delay
+	}
+	if delay > 0 {
+		return fmt.Sprintf(
+			"Network/provider error. Retrying in %s... Ctrl+C stops.",
+			delay,
+		)
+	}
+	return "Network/provider error. Retrying... Ctrl+C stops."
 }
 
 func (b *Backend) MemoryView(ctx context.Context, query string) (string, error) {
