@@ -400,6 +400,15 @@ func (s *cantoSession) Append(ctx context.Context, event any) error {
 			"stop_reason":      e.StopReason,
 		})
 		err = s.store.canto.Save(ctx, ev)
+	case EscalationNotification:
+		ev := session.NewEvent(s.id, session.EventType("escalation_notification"), map[string]any{
+			"request_id": e.RequestID,
+			"channel":    e.Channel,
+			"target":     e.Target,
+			"status":     e.Status,
+			"detail":     e.Detail,
+		})
+		err = s.store.canto.Save(ctx, ev)
 	default:
 		return nil
 	}
