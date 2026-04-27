@@ -8,13 +8,14 @@ Ion has been reconciled with the current stabilized Canto surface. The core loop
 
 Current active slice:
 - `tk-90mp` — Streaming: Cost Limits & Model Cascades. Provider limit classification is implemented; retry-until-cancel now applies only to transport/network failures while provider/rate/server transients remain bounded.
-- `tk-hase` — Thinking: provider-compatible levels and UI settings. Current implementation preserves the wider named vocabulary and avoids sending thinking params unless Canto reports named reasoning support; remaining work is richer Canto capability metadata and budget-backed provider mapping.
 
 Captured lower-priority polish:
 - `tk-5cqs` — Slash commands: autocomplete and command surface review (P3)
 - `tk-c037` — TUI: question-mark help shortcut (completed)
+- `tk-hase` — Thinking UI/config slice (completed; Canto capability follow-up split to `tk-369n`)
 
 Near-term tracks:
+- `tk-zz5i` — Core loop: scripted resilience smoke suite (Next P2 after `tk-90mp`)
 - `tk-wqhg` — Permission UX: trust and mode semantics (Completed)
 - `tk-0kip` — Provider/model picker: non-listing providers and preset clarity (Completed)
 - `tk-hs3m` — Local API: keep system messages template-compatible (Completed through Canto context primitive integration)
@@ -32,7 +33,7 @@ Near-term tracks:
 - `tk-z2cb` — Workspace: Trust UX & Visual Rollback (Trust complete; rewind split)
 - `tk-yf7v` — Tool Execution: Tool Loading UX & Approval Tiers (Completed)
 - `tk-gxfu` — Memory: Karpathy-Style Knowledge Base & Search UX (Search UX complete; wiki split)
-- `tk-90mp` — Streaming: Cost Limits & Model Cascades (Next P2)
+- `tk-90mp` — Streaming: Cost Limits & Model Cascades (Active P2)
 - `tk-fblb` — Migrate Ion to current Canto surface (Completed)
 - `tk-ulfg` — Research: current Pi core loop and feature review (Completed)
 - `tk-arhu` / `tk-5vrj` — Verified subagent multiplexing and durable breadcrumbs (Completed)
@@ -52,17 +53,17 @@ Design rule:
 - Similar agents are references, not feature-parity requirements. Adopt from pi, Claude Code, Codex, OpenCode, Cursor, Droid, Letta, and others only when the idea strengthens Ion's core coding loop or preserves a simple, inspectable UX.
 
 ## Next Steps
-1. Resume `tk-90mp`: budget enforcement and routing trace slices are the next core-loop resilience work.
-2. Keep `tk-hase` open only for Canto capability metadata and provider translation, not more Ion-side enum guessing.
-3. Return to `tk-00km` after budget/rate-limit semantics are settled; approval prompts/audit copy now have the updated mode/trust matrix.
-4. Keep `tk-5cqs` as tracked UX polish unless a concrete slash-command bug blocks normal use.
-5. Treat older `Canto: contribute ...` tasks as re-triaged: no default grep/glob or preset coding-tool bundles; only concrete reusable extension packages should move upstream.
+1. Finish `tk-90mp` by deciding whether any budget/cascade behavior remains core-loop critical; close it if the remaining work is speculative routing.
+2. Start `tk-zz5i`: build a scripted resilience smoke suite for submit, stream, tools, approvals, cancel, retry, provider-limit errors, persistence, and replay.
+3. Keep `tk-369n`, `tk-n0n4`, ACP bridge tasks, and slash-command polish behind that smoke-suite work unless a concrete bug blocks normal use.
+4. Treat older `Canto: contribute ...` tasks as re-triaged: no default grep/glob or preset coding-tool bundles; only concrete reusable extension packages should move upstream.
 
 *(Note: Older P3 TUI refinement tasks like configurable verbosity, skill layering, and status line context have been subsumed by their respective SOTA epics).*
 
 ## Completed (Recent)
 - [x] **Config UX cleanup (`tk-a5ds`)** — Fixed confusing provider/model picker state, moved mutable selections to state, added focused `/settings`, improved help readability, and left broader slash-command review in `tk-5cqs`.
 - [x] **Settings storage split (`tk-8188`)** — Stable config now stays in `~/.ion/config.toml`, mutable provider/model/thinking/active-preset state lives in `~/.ion/state.toml`, and both files use atomic temp-file replacement.
+- [x] **Thinking control Ion slice (`tk-hase`)** — Ion preserves `auto/off/minimal/low/medium/high/xhigh/max`, exposes common named levels in `/thinking`, and only sends named effort when Canto reports support; richer provider translation is split to `tk-369n`.
 - [x] **Transport-only endless retry (`tk-90mp`)** — Canto `f71205f` added transport-only endless retry; Ion wires `retry_until_cancelled` to that path so disconnects can retry until Ctrl+C while rate/quota/server failures stay bounded and readable.
 - [x] **Retry-until-cancel resilience slice (`tk-lm25`)** — Canto now supports retry-until-context-cancel and raw transport transient classification; Ion defaults `retry_until_cancelled` on, emits visible retry status, and persists those status events without transcript spam.
 - [x] **HITL notifier delivery slice (`tk-00km`)** — Approval requests now attempt Slack webhook and SMTP email notification when ESCALATE.md channels and credentials are configured, while auditing sent/failed/skipped outcomes without blocking the local approval prompt.
@@ -107,15 +108,16 @@ Design rule:
 See `tk ls` for the full list. Current active priority:
 - No P1 tasks remain ready. Next ready work is P2.
 
-Remaining P2 epics:
-- `tk-wqhg` — Permission UX: trust and mode semantics
-- `tk-a5ds` — Config UX: model presets, local endpoints, help, autocomplete
-- `tk-8188` — Settings storage: split stable config from mutable state
-- `tk-00km` — HITL: Slack/email notifier delivery and audit
+Remaining P2 work:
 - `tk-90mp` — Streaming: Cost Limits & Model Cascades
-- `tk-g78q` — Skills: Self-Extension Nudges & Marketplace
-- `tk-8174` — Session: Cross-Host Sync & TUI Branching
+- `tk-zz5i` — Core loop: scripted resilience smoke suite
+
+P3 follow-ups:
+- `tk-369n` — Canto typed thinking capabilities and provider translation
 - `tk-n0n4` — Privacy: PII detection and redaction pipeline
+- `tk-st4q`, `tk-2ffy`, `tk-o0iw`, `tk-6zy3` — ACP bridge correctness
+- `tk-5cqs` — Slash command surface review
+- `tk-g78q`, `tk-8174` — Skills marketplace and cross-host branching after the solo loop is proven
 
 ## Blockers
 - None.

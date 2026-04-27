@@ -36,20 +36,19 @@ Execution rule:
 
 Goal:
 - keep submit/stream/tool/approval/cancel/error/persist/replay boring and resilient
-- make workspace checkpoint and rewind semantics real before exposing destructive restore UX
+- prove the native solo loop with a repeatable smoke suite before expanding orchestration
 
 Tracked by:
-- `tk-8e2x`
+- `tk-90mp`
+- `tk-zz5i`
 - `tk-5t72`
 - `tk-9n7h`
 
 Includes:
-- checkpoint format decision
-- untracked and binary file handling
-- restore conflict behavior
-- before/after audit events
-- explicit TUI confirmation for destructive restore
+- budget and provider-limit behavior that directly protects the loop
+- scripted submit/stream/tool/approval/cancel/retry/error/persist/replay smoke coverage
 - CantoBackend storage and registry cleanup after the current provider/backend surface settles
+- checkpoint/rewind follow-up only where it improves reliability or rollback confidence
 
 ### 2. Safety and execution boundaries
 
@@ -57,16 +56,12 @@ Goal:
 - keep deterministic policy and OS enforcement ahead of classifier-driven automation
 
 Tracked by:
-- `tk-kfno`
-- `tk-9lws`
 - `tk-n0n4`
 
 Includes:
-- hardened macOS Seatbelt and Linux bubblewrap/Landlock execution boundaries
-- visible sandbox status independent of READ/EDIT/AUTO
-- deterministic policy as the base layer
-- optional model-assisted classification only after fail-closed behavior and audit logging
+- deterministic policy and existing sandbox posture remain the base layer
 - privacy filtering for prompts, logs, traces, tool previews, and approval surfaces
+- optional model-assisted classification only after fail-closed behavior and audit logging
 
 PII note:
 - OpenAI's current public moderation docs document `omni-moderation-latest` for harmful-content classification, not a dedicated PII detector. If OpenAI ships or documents a PII-specific model, treat it as an optional detector behind Ion's own redaction interface, not as the privacy architecture.
@@ -82,7 +77,7 @@ Tracked by:
 
 Includes:
 - budget enforcement
-- model cascade policy
+- only simple, inspectable model cascade policy where it clearly improves reliability or cost control
 - routing trace visibility
 - graceful provider quota/rate-limit handling
 - explicit ChatGPT subscription evaluation as a separate bridge path, not a native API assumption
@@ -113,16 +108,18 @@ Goal:
 Tracked by:
 - `tk-00km`
 - `tk-g78q`
-- `tk-2wrb`
 - `tk-8174`
 - `tk-gopd`
+- `tk-369n`
+- `tk-5cqs`
 
 Includes:
 - Slack/email HITL notifier delivery and audit
 - skills/self-extension nudges without hiding behavior
-- compaction UX and summarization prompts
 - cross-host sync and TUI branching
 - external editor handoff
+- typed thinking capabilities and provider translation
+- slash command surface review
 
 ### 6. Pi + Claude guardrails for ion
 
