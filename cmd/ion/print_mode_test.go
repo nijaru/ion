@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -99,6 +100,45 @@ func TestResolvePrintFlagsRejectsUnexpectedArguments(t *testing.T) {
 	_, _, _, err := resolvePrintFlags(false, "", "", []string{"hello"}, "text", false)
 	if err == nil || !strings.Contains(err.Error(), "unexpected arguments") {
 		t.Fatalf("resolve print flags error = %v", err)
+	}
+}
+
+func TestNormalizeFlagArgsAllowsFlagsAfterPositionalPrompt(t *testing.T) {
+	got, openResumePicker := normalizeFlagArgs([]string{
+		"--print",
+		"reply with ok",
+		"--json",
+		"--timeout",
+		"30s",
+	})
+	want := []string{"--print", "--json", "--timeout", "30s", "--", "reply with ok"}
+	if openResumePicker {
+		t.Fatal("normalizeFlagArgs opened resume picker")
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("normalizeFlagArgs = %#v, want %#v", got, want)
+	}
+}
+
+func TestNormalizeFlagArgsKeepsPromptValuesWithFlags(t *testing.T) {
+	got, openResumePicker := normalizeFlagArgs([]string{"-p", "reply with ok", "--json"})
+	want := []string{"-p", "reply with ok", "--json"}
+	if openResumePicker {
+		t.Fatal("normalizeFlagArgs opened resume picker")
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("normalizeFlagArgs = %#v, want %#v", got, want)
+	}
+}
+
+func TestNormalizeFlagArgsSupportsBareResumePickerWithInterspersedFlags(t *testing.T) {
+	got, openResumePicker := normalizeFlagArgs([]string{"--resume", "--print", "hello", "--json"})
+	want := []string{"--print", "--json", "--", "hello"}
+	if !openResumePicker {
+		t.Fatal("normalizeFlagArgs did not open resume picker")
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("normalizeFlagArgs = %#v, want %#v", got, want)
 	}
 }
 
