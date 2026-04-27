@@ -1090,15 +1090,15 @@ func TestCtrlDDoubleTapQuitsOnlyWhenIdleAndEmpty(t *testing.T) {
 
 func TestEscCancelsRunningTurn(t *testing.T) {
 	sess := &stubSession{events: make(chan session.Event)}
-	model := readyModel(t)
-	model.Model.Session = sess
+	stored := &stubStorageSession{}
+	model := New(stubBackend{sess: sess}, stored, nil, "/tmp/test", "main", "dev", nil)
 	model.InFlight.Thinking = true
 	model.Input.Composer.SetValue("draft")
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	model = updated.(Model)
-	if cmd != nil {
-		t.Fatal("esc while running should not print or quit")
+	if cmd == nil {
+		t.Fatal("esc while running should print durable cancellation")
 	}
 	if sess.cancels != 1 {
 		t.Fatalf("cancel count = %d, want 1", sess.cancels)
@@ -1108,6 +1108,13 @@ func TestEscCancelsRunningTurn(t *testing.T) {
 	}
 	if got := model.Input.Composer.Value(); got != "draft" {
 		t.Fatalf("composer = %q, want unchanged", got)
+	}
+	if len(stored.appends) != 1 {
+		t.Fatalf("appends = %#v, want one cancellation entry", stored.appends)
+	}
+	system, ok := stored.appends[0].(storage.System)
+	if !ok || system.Content != "Canceled by user" {
+		t.Fatalf("append = %#v, want cancellation system entry", stored.appends[0])
 	}
 }
 
@@ -2944,8 +2951,8 @@ func TestModeSlashCommandRunsDuringTurn(t *testing.T) {
 
 func TestEscapeCancelClearsQueuedFollowUps(t *testing.T) {
 	sess := &stubSession{events: make(chan session.Event)}
-	model := readyModel(t)
-	model.Model.Session = sess
+	stored := &stubStorageSession{}
+	model := New(stubBackend{sess: sess}, stored, nil, "/tmp/test", "main", "dev", nil)
 	model.InFlight.Thinking = true
 	model.InFlight.QueuedTurns = []string{"queued"}
 

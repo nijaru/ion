@@ -10,7 +10,7 @@ Current active blockers:
 - `tk-mmcs` — Keep the Pi/Codex/Claude core parity plan, roadmap, and task queue synchronized while the loop is stabilized.
 
 Next core-parity work:
-- continue Gate 2 loop coverage: cancellation/error persistence, retry status, provider-limit recovery, and resumed tool-session invariants.
+- `tk-0j7y` — continue Gate 2 loop coverage: error persistence, retry status recovery, provider-limit recovery, and resumed tool-session invariants. User cancellation durability is now covered.
 - use the now-scriptable print CLI (`ion -p "prompt"`, `ion -p --json "prompt"`, `ion --print "prompt" --json`, and piped stdin) as the automated Fedora/local-api smoke surface before TUI-only checks.
 
 Captured lower-priority polish:
@@ -95,6 +95,7 @@ Design rule:
 - [x] **Prompt CLI ergonomics (`tk-v1ou`)** — Ion now normalizes known CLI flags before parsing so `ion --print "prompt" --json --timeout 30s` behaves like users expect instead of treating trailing flags as prompt text. Verified with tests and Fedora/local-api smokes.
 - [x] **Prompt CLI `-p` alignment (`tk-cfse`)** — `-p` now means print mode, matching Pi-style usage while preserving `ion -p "prompt"` through the positional prompt path; `ion -p --json "prompt"` works naturally. Verified with `go test ./...` and live local-api JSON smokes.
 - [x] **Prompt CLI stdin support (`tk-a028`)** — Print mode now uses piped stdin as the prompt when no prompt or `-` is supplied, and appends non-empty stdin as a `<stdin>` context block when a prompt is also present. Verified with `go test ./...` and live local-api JSON stdin smokes.
+- [x] **Cancel durability slice (`tk-0j7y`)** — Esc cancellation now persists and replays a `Canceled by user` system entry instead of only mutating live UI state. Verified with `go test ./...`.
 - [x] **Thinking control Ion slice (`tk-hase`)** — Ion preserves `auto/off/minimal/low/medium/high/xhigh/max`, exposes common named levels in `/thinking`, and only sends named effort when Canto reports support; richer provider translation is split to `tk-369n`.
 - [x] **Transport-only endless retry (`tk-90mp`)** — Canto `f71205f` added transport-only endless retry; Ion wires `retry_until_cancelled` to that path so disconnects can retry until Ctrl+C while rate/quota/server failures stay bounded and readable.
 - [x] **Retry-until-cancel resilience slice (`tk-lm25`)** — Canto now supports retry-until-context-cancel and raw transport transient classification; Ion defaults `retry_until_cancelled` on, emits visible retry status, and persists those status events without transcript spam.

@@ -435,6 +435,28 @@ func (m *Model) clearPendingTool(toolUseID string, entry *session.Entry) {
 	}
 }
 
+func (m Model) cancelRunningTurn(reason string) (Model, tea.Cmd) {
+	if err := m.Model.Session.CancelTurn(context.Background()); err != nil {
+		return m, persistErrorCmd("cancel turn", err)
+	}
+	m.InFlight.Thinking = false
+	m.Progress.Mode = stateCancelled
+	m.InFlight.Pending = nil
+	m.InFlight.PendingTools = nil
+	m.InFlight.QueuedTurns = nil
+	m.InFlight.StreamBuf = ""
+	m.InFlight.ReasonBuf = ""
+	entry := session.Entry{Role: session.System, Content: reason}
+	if err := m.persistEntry("persist cancellation", storage.System{
+		Type:    "system",
+		Content: entry.Content,
+		TS:      now(),
+	}); err != nil {
+		return m, persistErrorCmd("persist cancellation", err)
+	}
+	return m, m.printEntries(entry)
+}
+
 func (m Model) persistEntry(action string, entry any) error {
 	if m.Model.Storage == nil {
 		return nil
