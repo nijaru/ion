@@ -7,6 +7,7 @@ import (
 	"unicode"
 
 	"github.com/charmbracelet/x/ansi"
+	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/session"
 )
 
@@ -216,6 +217,9 @@ func (m Model) renderEntry(e session.Entry) string {
 			return labelStr
 		}
 		content := e.Content
+		if shouldCompactRoutineTool(e, m.Model.Config) {
+			content = summarizeRoutineToolOutput(content)
+		}
 		if isWriteTool(e.Title) {
 			content = m.renderDiff(content)
 		}
@@ -264,6 +268,36 @@ func (m Model) renderEntry(e session.Entry) string {
 	default:
 		return e.Content
 	}
+}
+
+func shouldCompactRoutineTool(e session.Entry, cfg *config.Config) bool {
+	if e.Role != session.Tool || e.IsError {
+		return false
+	}
+	if cfg != nil && cfg.ToolVerbosity == "full" {
+		return false
+	}
+	switch strings.TrimSpace(strings.ToLower(e.Title)) {
+	case "list", "read", "glob", "grep":
+		return true
+	default:
+		return false
+	}
+}
+
+func summarizeRoutineToolOutput(content string) string {
+	trimmed := strings.TrimSpace(content)
+	if strings.HasPrefix(trimmed, "... (") && strings.HasSuffix(trimmed, ")") {
+		return trimmed
+	}
+	lines := strings.Split(strings.TrimRight(content, "\n"), "\n")
+	if len(lines) == 1 {
+		if strings.TrimSpace(lines[0]) == "" {
+			return ""
+		}
+		return "... (1 line)"
+	}
+	return fmt.Sprintf("... (%d lines)", len(lines))
 }
 
 // progressLine renders the single-line progress indicator between Plane B and the composer.
