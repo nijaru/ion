@@ -193,6 +193,18 @@ loop:
 		t.Fatalf("resumed session ID = %q, want %q", got, sess.ID())
 	}
 
+	resumePrompt := smokeEnv(
+		"ION_SMOKE_RESUME_PROMPT",
+		"Reply with the single word continued if the earlier session included the exact text ion-smoke, otherwise reply with the single word fresh.",
+	)
+	agentText, sawTool := runSmokeTurn(ctx, t, resumedBackend.Session(), resumePrompt, false)
+	if sawTool {
+		t.Fatal("resume follow-up should not require a tool call")
+	}
+	if !strings.Contains(strings.ToLower(agentText), "continued") {
+		t.Fatalf("resume follow-up agent text = %q, want continuation acknowledgment", agentText)
+	}
+
 	switchProvider := strings.TrimSpace(os.Getenv("ION_SMOKE_SWITCH_PROVIDER"))
 	switchModel := strings.TrimSpace(os.Getenv("ION_SMOKE_SWITCH_MODEL"))
 	if switchProvider == "" && switchModel == "" {
@@ -228,7 +240,7 @@ loop:
 		}
 	})
 
-	agentText, sawTool := runSmokeTurn(ctx, t, switchedBackend.Session(), switchPrompt, false)
+	agentText, sawTool = runSmokeTurn(ctx, t, switchedBackend.Session(), switchPrompt, false)
 	if sawTool {
 		t.Fatal("swap phase should not require a tool call")
 	}
