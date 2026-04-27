@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -10,13 +12,47 @@ import (
 	"github.com/nijaru/ion/internal/session"
 )
 
+type printResult struct {
+	SessionID    string   `json:"session_id,omitempty"`
+	Response     string   `json:"response"`
+	InputTokens  int      `json:"input_tokens,omitempty"`
+	OutputTokens int      `json:"output_tokens,omitempty"`
+	Cost         float64  `json:"cost,omitempty"`
+	ToolCalls    []string `json:"tool_calls,omitempty"`
+}
+
 // runPrintMode submits a single turn and prints the response to stdout.
 func runPrintMode(ctx context.Context, agent session.AgentSession, prompt string, approveRequests bool) error {
+	return runPrintModeWithWriter(ctx, os.Stdout, agent, prompt, approveRequests, "text")
+}
+
+func runPrintModeWithWriter(
+	ctx context.Context,
+	w io.Writer,
+	agent session.AgentSession,
+	prompt string,
+	approveRequests bool,
+	output string,
+) error {
+	result, err := runPromptTurn(ctx, agent, prompt, approveRequests)
+	if err != nil {
+		return err
+	}
+	return writePrintResult(w, result, output)
+}
+
+func runPromptTurn(
+	ctx context.Context,
+	agent session.AgentSession,
+	prompt string,
+	approveRequests bool,
+) (printResult, error) {
 	if err := agent.SubmitTurn(ctx, prompt); err != nil {
-		return fmt.Errorf("submit turn: %w", err)
+		return printResult{}, fmt.Errorf("submit turn: %w", err)
 	}
 
 	var agentText strings.Builder
+	result := printResult{SessionID: agent.ID()}
 	seenTurnFinished := false
 
 	for {
@@ -24,18 +60,20 @@ func runPrintMode(ctx context.Context, agent session.AgentSession, prompt string
 		case ev, ok := <-agent.Events():
 			if !ok {
 				if agentText.Len() > 0 {
-					fmt.Println(agentText.String())
+					result.Response = agentText.String()
 				}
-				return nil
+				return result, nil
 			}
 			switch msg := ev.(type) {
 			case session.ApprovalRequest:
 				if !approveRequests {
-					return fmt.Errorf("approval required for %s", msg.ToolName)
+					return printResult{}, fmt.Errorf("approval required for %s", msg.ToolName)
 				}
 				if err := agent.Approve(ctx, msg.RequestID, true); err != nil {
-					return fmt.Errorf("approve %s: %w", msg.ToolName, err)
+					return printResult{}, fmt.Errorf("approve %s: %w", msg.ToolName, err)
 				}
+			case session.ToolCallStarted:
+				result.ToolCalls = append(result.ToolCalls, msg.ToolName)
 			case session.AgentDelta:
 				agentText.WriteString(msg.Delta)
 			case session.AgentMessage:
@@ -43,27 +81,52 @@ func runPrintMode(ctx context.Context, agent session.AgentSession, prompt string
 					agentText.Reset()
 					agentText.WriteString(msg.Message)
 				}
+			case session.TokenUsage:
+				result.InputTokens += msg.Input
+				result.OutputTokens += msg.Output
+				result.Cost += msg.Cost
 			case session.Error:
-				return fmt.Errorf("session error: %w", msg.Err)
+				return printResult{}, fmt.Errorf("session error: %w", msg.Err)
 			case session.TurnFinished:
 				seenTurnFinished = true
 			}
 			if seenTurnFinished {
-				fmt.Println(agentText.String())
-				return nil
+				result.Response = agentText.String()
+				return result, nil
 			}
 		case <-ctx.Done():
-			return ctx.Err()
+			return printResult{}, ctx.Err()
 		}
 	}
 }
 
+func writePrintResult(w io.Writer, result printResult, output string) error {
+	switch strings.ToLower(strings.TrimSpace(output)) {
+	case "", "text":
+		_, err := fmt.Fprintln(w, result.Response)
+		return err
+	case "json":
+		enc := json.NewEncoder(w)
+		return enc.Encode(result)
+	default:
+		return fmt.Errorf("unsupported print output %q (want text or json)", output)
+	}
+}
+
 // runPrintModeWithTimeout wraps runPrintMode with a configurable timeout.
-func runPrintModeWithTimeout(ctx context.Context, agent session.AgentSession, prompt string, timeout time.Duration, approveRequests bool) error {
+func runPrintModeWithTimeout(
+	ctx context.Context,
+	w io.Writer,
+	agent session.AgentSession,
+	prompt string,
+	timeout time.Duration,
+	approveRequests bool,
+	output string,
+) error {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	return runPrintMode(ctx, agent, prompt, approveRequests)
+	return runPrintModeWithWriter(ctx, w, agent, prompt, approveRequests, output)
 }
 
 // isStdinPipe returns true if stdin is a pipe (not a terminal).

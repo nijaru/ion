@@ -82,7 +82,7 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 			runtimeCfg,
 			m.activePreset(),
 			session.Entry{Role: session.System, Content: "Model set to " + name},
-			m.Model.Session.ID(),
+			m.currentMaterializedSessionID(),
 			false,
 		)
 
@@ -966,7 +966,7 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 		}
 		m.Picker.Overlay = nil
 		notice := session.Entry{Role: session.System, Content: "Model set to " + selected.Value}
-		return m, m.switchRuntimeCommand(runtimeCfg, m.activePreset(), notice, m.Model.Session.ID(), false)
+		return m, m.switchRuntimeCommand(runtimeCfg, m.activePreset(), notice, m.currentMaterializedSessionID(), false)
 	case pickerPurposeThinking:
 		level := normalizeThinkingValue(selected.Value)
 		currentCfg, err := m.runtimeConfigForActivePreset(&cfg)
@@ -1082,7 +1082,20 @@ func (m Model) switchPresetCommand(preset modelPreset) (Model, tea.Cmd) {
 		return m, cmdError(fmt.Sprintf("failed to resolve %s preset: %v", preset, err))
 	}
 	notice := session.Entry{Role: session.System, Content: "Switched to " + preset.String()}
-	return m, m.switchRuntimeCommand(runtimeCfg, preset, notice, m.Model.Session.ID(), false)
+	return m, m.switchRuntimeCommand(runtimeCfg, preset, notice, m.currentMaterializedSessionID(), false)
+}
+
+func (m Model) currentMaterializedSessionID() string {
+	if m.Model.Session == nil {
+		return ""
+	}
+	if m.Model.Storage == nil {
+		return m.Model.Session.ID()
+	}
+	if !storage.IsMaterialized(m.Model.Storage) {
+		return ""
+	}
+	return m.Model.Session.ID()
 }
 
 func (m Model) switchRuntimeCommand(

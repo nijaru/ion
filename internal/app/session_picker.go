@@ -29,6 +29,9 @@ func (m Model) openSessionPicker() (Model, tea.Cmd) {
 
 	items := make([]sessionPickerItem, 0, len(sessions))
 	for _, info := range sessions {
+		if !storage.IsConversationSessionInfo(info) {
+			continue
+		}
 		items = append(items, sessionPickerItem{info: info})
 	}
 

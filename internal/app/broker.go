@@ -161,24 +161,6 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 					return m, m.awaitSessionEvent()
 				}
 
-				blocks := []storage.Block{}
-				if entry.Reasoning != "" {
-					blocks = append(blocks, storage.Block{
-						Type:     "thinking",
-						Thinking: &entry.Reasoning,
-					})
-				}
-				blocks = append(blocks, storage.Block{
-					Type: "text",
-					Text: &entry.Content,
-				})
-				if err := m.persistEntry("persist agent response", storage.Agent{
-					Type:    "agent",
-					Content: blocks,
-					TS:      now(),
-				}); err != nil {
-					return m, tea.Sequence(m.printEntries(entry), persistErrorCmd("persist agent response", err))
-				}
 				return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
 			}
 		} else {
@@ -218,17 +200,6 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 			(m.InFlight.Pending.Role == session.Agent && m.InFlight.Pending.Content == "" && m.InFlight.ReasonBuf == "") {
 			m.InFlight.Pending = entry
 		}
-		if err := m.persistEntry("persist tool use", storage.ToolUse{
-			Type: "tool_use",
-			ID:   m.Progress.LastToolUseID,
-			Name: msg.ToolName,
-			Input: map[string]string{
-				"args": redactedArgs,
-			},
-			TS: now(),
-		}); err != nil {
-			return m, persistErrorCmd("persist tool use", err)
-		}
 		return m, m.awaitSessionEvent()
 
 	case session.ToolOutputDelta:
@@ -248,15 +219,6 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 			entry := *pending
 			m.clearPendingTool(toolUseID, pending)
 
-			if err := m.persistEntry("persist tool result", storage.ToolResult{
-				Type:      "tool_result",
-				ToolUseID: toolUseID,
-				Content:   msg.Result,
-				IsError:   msg.Error != nil,
-				TS:        now(),
-			}); err != nil {
-				return m, tea.Sequence(m.printEntries(entry), persistErrorCmd("persist tool result", err))
-			}
 			return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
 		}
 		return m, m.awaitSessionEvent()
@@ -269,15 +231,6 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 			Title:   "verify: " + msg.Command,
 			Content: content,
 			IsError: !msg.Passed,
-		}
-		if err := m.persistEntry("persist verification result", storage.ToolResult{
-			Type:      "tool_result",
-			ToolUseID: m.Progress.LastToolUseID,
-			Content:   content,
-			IsError:   !msg.Passed,
-			TS:        now(),
-		}); err != nil {
-			return m, tea.Sequence(m.printEntries(entry), persistErrorCmd("persist verification result", err))
 		}
 		return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
 
@@ -510,14 +463,6 @@ func (m Model) submitText(text string) (Model, tea.Cmd) {
 	userEntry := session.Entry{Role: session.User, Content: text}
 	m.Input.Composer.Reset()
 	m.relayoutComposer()
-
-	if err := m.persistEntry("persist user input", storage.User{
-		Type:    "user",
-		Content: text,
-		TS:      now(),
-	}); err != nil {
-		return m, persistErrorCmd("persist user input", err)
-	}
 
 	if strings.HasPrefix(text, "/") {
 		m, cmd := m.handleCommand(text)

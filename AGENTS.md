@@ -18,19 +18,19 @@ ion is a specialized coding application built on top of the **canto** framework.
 
 ## What ion is
 
-A standalone terminal coding agent — same category as Claude Code, OpenCode, pi. Talks directly to LLM APIs, manages its own tools/memory/sessions. **Not a wrapper. Not a bridge.**
+A standalone terminal coding agent — same category as Claude Code, Codex, pi. Talks directly to LLM APIs, manages its own tools/memory/sessions. **Not a wrapper. Not a bridge.**
 
 **Primary path** (all new features go here first):
 ```
 ion TUI → CantoBackend → canto framework → provider API (Anthropic, OpenAI, OpenRouter)
 ```
 
-**Secondary path** (subscription access only, best-effort feature parity):
+**Secondary path** (CLI/subscription compatibility, best-effort feature parity):
 ```
 ion TUI → ACPBackend → ACP JSON-RPC 2.0 → [claude | gemini | gh] CLI
 ```
 
-ACP is for users whose subscription ToS prohibits direct API use. It does not drive ion's design. When something is unclear, default to making it work in native mode first.
+ACP is for CLI-backed providers and subscription-style access. It does not drive ion's design. When something is unclear, make native mode work first, then bridge the same product behavior to ACP where it fits.
 
 ## Active Components
 
@@ -39,7 +39,7 @@ ACP is for users whose subscription ToS prohibits direct API use. It does not dr
 | `internal/app` | Bubble Tea v2 host UI: transcript, composer, viewport, and footer. |
 | `AgentSession` | Canonical host-facing boundary (SubmitTurn, Events, Cancel). |
 | `CantoBackend` | Primary agent core — canto framework, full feature set. |
-| `ACPBackend` | Subscription bridge — spawns CLI, bridges via ACP JSON-RPC 2.0. |
+| `ACPBackend` | CLI/subscription bridge — spawns CLI, bridges via ACP JSON-RPC 2.0. |
 | `archive/rust/` | Historical reference only; not active implementation guidance. |
 
 ## Project Structure
@@ -63,10 +63,10 @@ go test ./...
 go run ./cmd/ion
 
 tk ls
- tk ready
- tk show <id>
- tk log <id> "finding"
- tk done <id>
+tk ready
+tk show <id>
+tk log <id> "finding"
+tk done <id>
 ```
 
 ## Rules
@@ -76,15 +76,17 @@ tk ls
 - Do not let archived Rust docs drive new design decisions on `main`.
 - Core agent loop stability is the first product priority. Before expanding SOTA features, model routing, subagents, workflows, evals, memory, or provider experiments, make sure the submit -> stream -> tool -> approval -> cancel -> error -> persist/replay loop is reliable and covered by tests.
 - Advanced ideas from pi, Claude Code, Codex, OpenCode, Cursor, Droid, Letta, and similar agents are references, not mandates. Adopt them only when they simplify Ion or clearly improve the core coding workflow.
+- For core-loop and TUI planning/review, compare against local references when useful: `/Users/nick/github/badlogic/pi-mono` as the simple reliable baseline, `/Users/nick/github/openai/codex` as the richer open-source CLI/session/tooling baseline, and Claude Code / Claude-like implementations as product references. Use references to clarify behavior, not to copy features wholesale.
 - Prefer simple, inspectable UX over hidden automation. Pi's success with a small clever surface is an explicit design constraint, but Ion may add SOTA capabilities when they preserve that simplicity.
 - Use `tk` for all multi-step work.
 - When a user reports a bug, create or update a `tk` task immediately.
 - If a fix requires touching canto, treat `github.com/nijaru/canto` as the source of truth. Keep framework fixes upstreamable and do not depend on a sibling checkout or bake ion-specific assumptions into canto.
 - Ion is `v0.0.0` unstable. There are no backwards guarantees.
 - Do not add fallback, migration, or compatibility paths unless the user explicitly asks for them.
+- Do not commit unless the user asks for a commit. Keep coherent changes staged or unstaged for review instead of committing by default.
 - Keep global Ion files under `~/.ion/`.
 - Stable user-editable settings belong in `~/.ion/config.toml`: defaults, custom endpoints, policy/subagent paths, cost limits, verbosity.
-- Mutable runtime choices belong in `~/.ion/state.toml`: selected provider/model/preset/thinking and recent picker state. Current code still stores provider/model in config; move toward the split when touching settings.
+- Mutable runtime choices belong in `~/.ion/state.toml`: selected provider/model/preset/thinking and recent picker state.
 - Workspace trust belongs in `~/.ion/trusted_workspaces.json`, separate from config and state.
 - Do not persist provider/model automatically at startup; only user edits and explicit TUI actions should write settings/state.
 - Prefer hardcoded defaults for ion-owned behavior. Add persistent state only when the value is machine-owned and genuinely needs to survive sessions.
@@ -111,7 +113,7 @@ Use the `go-expert` skill for full guidance. Key modern idioms:
 
 - `subscription-providers.md` — provider table, ToS rationale, backend selection logic
 - `acp-integration.md` — ACP protocol, event mapping, known gaps
-- `config-and-metadata.md` — status line specs, config source of truth, model metadata rules
+- `status-and-config.md` — status line specs, config source of truth, model metadata rules
 
 **Historical Rust docs:**
 

@@ -4,6 +4,22 @@ Append-only history of architectural and design decisions for `ion`.
 
 ---
 
+## 2026-04-27 — Planning: core parity gates feature work
+
+**Context:** Live resumed-session testing showed that Ion still had a core loop failure: invalid empty assistant history could reach the provider after resume, causing the next user turn to fail. The roadmap and task queue had drifted toward provider and feature work while the loop was not actually stable.
+
+**Decision:** Treat Pi/Codex/Claude parity as a staged reliability baseline, not a feature checklist. Gate provider polish, ACP, subscriptions, thinking expansion, privacy expansion, skills, branching, and routing work behind the native solo loop: submit, stream, tool, approval, cancel, error, persist, replay, and resumed-new-turn.
+
+**Rationale:**
+
+1. **Core first:** A coding agent with broken resume/model-history behavior is not usable, regardless of later features.
+2. **Boundary clarity:** Canto owns model-visible history and event projection; Ion owns TUI rendering, command UX, and product policy.
+3. **Reference discipline:** Pi sets the simple loop floor, Codex informs richer CLI/TUI behavior, and Claude Code informs public UX expectations without dictating implementation.
+
+**Tradeoffs:** Some important work, such as provider picker cleanup and ACP bridge polish, waits until the resumed native loop is proven.
+
+---
+
 ## 2026-04-27 — Runtime: retry transient network/provider failures until user cancellation
 
 **Context:** Bounded retry was too weak for real agent sessions during provider/network outages. Users can interrupt a stuck turn, while transient disconnects, 429s, and provider-capacity failures often resolve without changing the prompt.

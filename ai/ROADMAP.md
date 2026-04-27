@@ -6,7 +6,7 @@
 
 - canto is the native runtime
 - SQLite-backed session persistence is in place
-- streaming turns, tool calls, cancellation, and resume work
+- streaming turns, tool calls, cancellation, and resume exist; resume/new-turn correctness is proven for the former empty-assistant corruption path
 - layered project instructions are implemented
 
 ### TUI
@@ -27,29 +27,94 @@
 ## Active roadmap
 
 Execution rule:
-- Pi is a rough benchmark for maturity, not a hard parity gate.
-- The real gate for advanced orchestration is a stable, feature-complete single-agent inline experience.
-- The core solo agent is the product. Subagents, swarm mode, ACP, and other orchestration surfaces are wrappers around that base.
+- The core solo agent is the product.
+- Pi is the minimum taste/reliability floor for the loop; Codex is the richer open-source CLI/TUI reference; Claude Code is a public behavior reference.
+- Advanced orchestration, ACP, subscription bridges, skills, privacy expansion, model cascades, and swarm mode are blocked behind a stable single-agent inline loop.
 - v0.0.0 has no compatibility debt. If the final design wants a different binding, preset, or config shape, change it directly.
 
-### 1. Core reliability and rollback
+### 0. Core parity plan and queue hygiene
+
+Goal:
+- keep planning, tasks, and implementation sequenced around the core loop instead of scattered feature work
+
+Tracked by:
+- `tk-mmcs`
+
+Includes:
+- maintain `ai/PLAN.md` as the active v0 parity plan
+- keep `tk ready` aligned with `ai/STATUS.md`
+- reopen tasks when live evidence disproves completion
+- use Pi/Codex/Claude references to define behavior expectations, not implementation templates
+
+### 1. Core session replay and model history
 
 Goal:
 - keep submit/stream/tool/approval/cancel/error/persist/replay boring and resilient
-- prove the native solo loop with a repeatable smoke suite before expanding orchestration
+- prove restored sessions can continue without poisoning provider history
+
+Status:
+- complete for the empty-assistant resume blocker; keep regression coverage current as Gate 2 expands
 
 Tracked by:
-- `tk-9n7h`
+- `tk-izo7`
 - `tk-5t72`
 
 Includes:
-- preserve deterministic submit/stream/tool/approval/cancel/retry/error/persist/replay smoke coverage
-- provider registry/model-picker correctness after provider/config changes
-- CantoBackend storage and registry cleanup after the current provider/backend surface settles
 - keep provider-visible replay free of invalid transcript events, including empty assistant messages after tool-only/no-op model steps
+- make `--continue`, bare `--resume`, `/resume`, and resumed-new-turn behavior deterministic
+- render restored transcript with the same visual rules as live transcript
+- compact routine `list`/`read` output without hiding semantically important tool failures
+- add tests for legacy corrupted rows and future clean sessions
+
+### 2. Core loop contract
+
+Goal:
+- prove the native solo loop with a repeatable smoke suite before expanding orchestration
+
+Tracked by:
+- `tk-zz5i`
+- follow-up tasks split from `tk-96vy` as bugs are found
+
+Includes:
+- preserve deterministic submit/stream/tool/approval/cancel/retry/error/persist/replay smoke coverage
+- event ordering: message/tool terminal events before turn terminal events
+- cancellation, immediate backend errors, provider-limit errors, and retry-until-cancelled remain resumable
+- tool failure conversion and ordering match Canto lifecycle events
 - checkpoint/rewind follow-up only where it improves reliability or rollback confidence
 
-### 2. Safety and execution boundaries
+### 3. TUI baseline
+
+Goal:
+- make the normal interface feel coherent before adding deeper product layers
+
+Tracked by:
+- `tk-5cqs`
+- `tk-kvqv`
+- `tk-tilu`
+
+Includes:
+- slash command autocomplete and clear `/help`
+- commands/settings/model changes that work during active turns where appropriate
+- routine tool output collapsed by default with explicit detail access
+- thinking/progress state shown without dumping hidden reasoning
+- readable transcript spacing for live and replayed entries
+
+### 4. Config, provider, and session hygiene
+
+Goal:
+- remove confusing state/config/provider behavior after the core loop is safe
+
+Tracked by:
+- `tk-9n7h`
+
+Includes:
+- provider registry/model-picker correctness after provider/config changes
+- no placeholder favorites or implicit provider/model persistence at startup
+- clear primary/fast selection semantics
+- custom endpoint isolation for local OpenAI-compatible servers
+- provider errors clear on state changes
+
+### 5. Safety and execution boundaries
 
 Goal:
 - keep deterministic policy and OS enforcement ahead of classifier-driven automation
@@ -59,17 +124,11 @@ Tracked by:
 
 Includes:
 - deterministic policy and existing sandbox posture remain the base layer
-- privacy filtering for prompts, logs, traces, tool previews, and approval surfaces
+- READ/EDIT/AUTO semantics stay small and obvious
+- privacy filtering continues only for concrete leak surfaces or broader telemetry/logging
 - optional model-assisted classification only after fail-closed behavior and audit logging
 
-Priority:
-- Current deterministic approval/tool-preview redaction is enough for now.
-- Further privacy work is not on the critical path unless a concrete leak surface appears or telemetry/logging expands.
-
-PII note:
-- OpenAI's current public moderation docs document `omni-moderation-latest` for harmful-content classification, not a dedicated PII detector. If OpenAI ships or documents a PII-specific model, treat it as an optional detector behind Ion's own redaction interface, not as the privacy architecture.
-
-### 3. Cost limits and model routing
+### 6. Cost, limits, and subscription paths
 
 Goal:
 - handle API/subscription limits and model budgets without turning Ion into an optimizer workbench
@@ -85,7 +144,7 @@ Includes:
 - graceful provider quota/rate-limit handling
 - explicit ChatGPT subscription evaluation as a separate bridge path, not a native API assumption
 
-### 4. ACP stabilization
+### 7. ACP stabilization
 
 Goal:
 - keep ACP useful for subscription/CLI bridges without letting it drive native Ion design
@@ -102,35 +161,33 @@ Includes:
 - session continuity/resume decision
 - headless Ion-as-ACP-agent mode stays P3 until the bridge path is stable
 
-### 5. Product depth after the core loop
+### 8. Product depth after the core loop
 
 Goal:
 - add higher-level UX only after the solo loop remains reliable under normal and failure cases
 
 Tracked by:
-- `tk-00km`
 - `tk-g78q`
 - `tk-8174`
 - `tk-gopd`
 - `tk-369n`
-- `tk-5cqs`
 
 Includes:
-- Slack/email HITL notifier delivery and audit
 - skills/self-extension nudges without hiding behavior
 - cross-host sync and TUI branching
 - external editor handoff
 - typed thinking capabilities and provider translation
-- slash command surface review
 
-### 6. Pi + Claude guardrails for ion
+### 9. Pi + Claude + Codex guardrails for Ion
 
 Goal:
-- keep Pi and Claude Code findings grounded in idiomatic Go and Bubble Tea v2
+- keep Pi, Codex, and Claude Code findings grounded in idiomatic Go and Bubble Tea v2
 - adopt only the portable UX and orchestration patterns
 - avoid React/JSX-shaped abstractions or framework mimicry
 
 Documented in:
+- `ai/PLAN.md`
+- `ai/research/pi-current-core-loop-review-2026-04.md`
 - `ai/design/cross-pollination.md`
 - `ai/plans/ion-go-bubbletea-guardrails-2026-04-01.md`
 
@@ -146,7 +203,7 @@ Includes:
 - token usage color bands
 - git diff stats in footer
 - AskUser UI
-- tab completion
+- broad tab completion beyond slash command baseline
 - request cache continuity
 - auto thinking budget mode
 - canto upstreaming tasks

@@ -4,10 +4,13 @@ Fast, lightweight terminal coding agent.
 
 ## Current Focus
 
-Ion has been reconciled with the current stabilized Canto surface. The core loop audit, HITL permission-mode hardening, observability exporter slice, workflow topology spec, first eval regression gate, deterministic policy config slice, first executable subagent persona/routing slice, workspace trust slice, tool-loading UX slice, and first memory search UX slice are complete. Current work is moving through the remaining P2 reliability/UX epics.
+Ion is back in core-loop stabilization. Gate 1 is green; do not expand into ACP, sandboxing, routing, or SOTA work until the core-loop contract and TUI baseline gates are also covered.
 
-Current active slice:
-- `tk-ify2` / `tk-5gtk` — Fedora/local-api replay failure fixed upstream in Canto, and Ion now accepts `go run ./cmd/ion -- --continue` as a forgiving alias for `go run ./cmd/ion --continue`.
+Current active blockers:
+- `tk-mmcs` — Keep the Pi/Codex/Claude core parity plan, roadmap, and task queue synchronized while the loop is stabilized.
+
+Next core-parity work:
+- `tk-9n7h` — Provider/model picker correctness. This is the next P2 product hygiene task after the resume/model-history blocker.
 
 Captured lower-priority polish:
 - `tk-5cqs` — Slash commands: autocomplete and command surface review (P3)
@@ -16,10 +19,18 @@ Captured lower-priority polish:
 - `tk-n0n4` — Privacy display redaction slice completed; remaining privacy work is P4 until a concrete leak blocks a release.
 - `tk-j6gh` — TUI startup copy polish (completed)
 - `tk-5gtk` — CLI continue/resume separator handling (completed)
+- `tk-ekw5` — Compare Pi/Codex UX references after core loop is stable; local repos are `/Users/nick/github/openai/codex` and `/Users/nick/github/badlogic/pi-mono`. Claude Code and `/Users/nick/github/ultraworkers/claw-code` are also useful product references when the comparison is relevant.
 - `tk-kvqv` — Collapse routine tool output by default (P3)
 - `tk-tilu` — Show thinking state without dumping hidden reasoning (P3)
 
-Near-term tracks:
+Near-term tracks after the active blocker:
+- core loop contract tests: resumed new turn, tool-only assistant turns, cancellation/error persistence, retry status, provider-limit recovery
+- noninteractive prompt mode is now scriptable with text/JSON output and should be used as the automated local-api/Fedora smoke surface
+- TUI baseline: compact routine tool output, slash command autocomplete/help, thinking state display
+- config/provider hygiene: no placeholder favorites, custom endpoint isolation, clear state/config/trust ownership
+- approvals, sandboxing, trust, modes, and broader safety polish are secondary to Pi-style core loop parity
+
+Previously completed tracks that need regression coverage kept current:
 - `tk-zz5i` — Core loop: scripted resilience smoke suite (Completed)
 - `tk-wqhg` — Permission UX: trust and mode semantics (Completed)
 - `tk-0kip` — Provider/model picker: non-listing providers and preset clarity (Completed)
@@ -58,10 +69,9 @@ Design rule:
 - Similar agents are references, not feature-parity requirements. Adopt from pi, Claude Code, Codex, OpenCode, Cursor, Droid, Letta, and others only when the idea strengthens Ion's core coding loop or preserves a simple, inspectable UX.
 
 ## Next Steps
-1. Start `tk-9n7h`: review provider registry/model-picker correctness after the config/state/provider changes.
-2. Then do `tk-5t72`: audit CantoBackend storage/session ownership and remove ambiguity where it affects core reliability. The Fedora replay bug exposed duplicate/ambiguous storage events, so this remains high leverage.
-3. Then handle ACP bridge correctness in order: `tk-o0iw`, `tk-2ffy`, `tk-6zy3`.
-4. Keep privacy (`tk-n0n4`), skills, branching, thinking capability work, slash-command polish, and collapsed tool-output UX behind those unless a concrete bug blocks normal use.
+1. Commit the Ion Gate 1 stabilization set: fixed Canto dependency, lazy sessions, shared replay rendering, compact routine tool replay, backend close hardening, and JSON print-mode smoke support.
+2. Continue Gate 2 coverage: cancellation/error persistence, retry status, provider-limit recovery, and resumed tool-session invariants.
+3. Start `tk-9n7h` provider/model picker cleanup once the Gate 1 commit is in place.
 
 *(Note: Older P3 TUI refinement tasks like configurable verbosity, skill layering, and status line context have been subsumed by their respective SOTA epics).*
 
@@ -74,6 +84,10 @@ Design rule:
 - [x] **Startup copy polish (`tk-j6gh`)** — Startup now says `Workspace is not trusted. Starting in READ mode...` and `%d tools registered`.
 - [x] **Empty assistant replay fix (`tk-ify2`)** — Fedora/local-api rejected replay after a tool turn because Canto persisted an assistant message with `content=""` and no `tool_calls`; Canto `192bfdf` skips those empty messages while preserving usage.
 - [x] **Continue CLI separator fix (`tk-5gtk`)** — Correct command is `ion --continue` or `go run ./cmd/ion --continue`; Ion also accepts a leading `--` before flags to avoid silent fresh sessions.
+- [x] **Session lifecycle correction (`tk-8o7r`)** — Startup now uses a lazy storage session, slash commands do not persist to durable conversation storage, `--resume` without an ID opens the picker, and `--continue` skips old empty/slash-only sessions.
+- [x] **Session picker null-name fix (`tk-0s5a`)** — Session listing tolerates legacy rows with `NULL` names.
+- [x] **Dual transcript persistence fix (`tk-5t72`)** — Canto now owns model-visible user/assistant/tool transcript persistence; Ion only live-renders those events and keeps UI-local metadata/status/usage writes. Verified with `go test ./...`, a Fedora/local-api print smoke, SQLite event inspection, and `--continue` on the new session.
+- [x] **Resume transcript rendering (`tk-izo7`)** — Canto commit `927e482` filters invalid assistant rows from effective history, Ion imports that pseudo-version, replay/live transcript entries use shared spacing, the resumed marker appears after the startup header, backend close waits for turn goroutines, and routine tool replay is compact by default. Verified with Canto `go test ./...`, Ion `go test ./...`, `go run ./... --continue --print --timeout 30s --prompt hi`, and `go run ./... --continue --print --output json --timeout 30s --prompt "reply with the single word ok"` against the live local-api session.
 - [x] **Thinking control Ion slice (`tk-hase`)** — Ion preserves `auto/off/minimal/low/medium/high/xhigh/max`, exposes common named levels in `/thinking`, and only sends named effort when Canto reports support; richer provider translation is split to `tk-369n`.
 - [x] **Transport-only endless retry (`tk-90mp`)** — Canto `f71205f` added transport-only endless retry; Ion wires `retry_until_cancelled` to that path so disconnects can retry until Ctrl+C while rate/quota/server failures stay bounded and readable.
 - [x] **Retry-until-cancel resilience slice (`tk-lm25`)** — Canto now supports retry-until-context-cancel and raw transport transient classification; Ion defaults `retry_until_cancelled` on, emits visible retry status, and persists those status events without transcript spam.
@@ -117,11 +131,10 @@ Design rule:
 
 ## Active Tasks
 See `tk ls` for the full list. Current active priority:
-- No P1 tasks remain ready. Next ready work is P2.
+- `tk-mmcs` — Core parity plan and task queue hygiene
 
 Remaining P2 work:
-- `tk-9n7h` — Evaluate provider registry/model-picker correctness after provider/config rollout
-- `tk-5t72` — Audit dual storage in CantoBackend
+- `tk-9n7h` — Provider/model picker correctness
 - `tk-o0iw` — ACP: Add initial session context at `Open()`
 - `tk-2ffy` — ACP: Filter/log stderr separately instead of emitting `session.Error`
 - `tk-6zy3` — ACP: Add `token_usage` event mapping
@@ -131,6 +144,7 @@ P3 follow-ups:
 - `tk-5cqs` — Slash command surface review
 - `tk-kvqv` — Collapse routine tool output by default
 - `tk-tilu` — Show thinking state without exposing hidden reasoning
+- `tk-vxet` — Noninteractive prompt mode for automated agent-loop testing (completed JSON/text foundation; keep extending with fixtures as Gate 2 grows)
 - `tk-st4q` — ACP agent/headless mode after bridge correctness
 - `tk-g78q`, `tk-8174` — Skills marketplace and cross-host branching after the solo loop is proven
 
@@ -138,7 +152,7 @@ P4 follow-ups:
 - `tk-n0n4` — Privacy: continue only for concrete leak surfaces or before broader logging/telemetry expansion
 
 ## Blockers
-- None.
+- None for Gate 1. Core-loop reliability work remains active under Gate 2.
 
 ## Topic Files
 - `ai/SOTA-REQUIREMENTS.md` — The 14 core SOTA product responsibilities.

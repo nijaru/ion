@@ -56,25 +56,28 @@ func printEntriesCmd(m Model, entries ...session.Entry) tea.Cmd {
 	if len(entries) == 0 {
 		return nil
 	}
-	lines := make([]string, 0, len(entries))
-	for _, entry := range entries {
+	return printLinesCmd(m.RenderEntries(entries...)...)
+}
+
+func (m Model) RenderEntries(entries ...session.Entry) []string {
+	lines := make([]string, 0, len(entries)*2)
+	for i, entry := range entries {
+		if i > 0 {
+			lines = append(lines, "")
+		}
 		lines = append(lines, m.renderEntry(entry))
 	}
-	return printLinesCmd(lines...)
+	return lines
 }
 
 func (m *Model) printEntries(entries ...session.Entry) tea.Cmd {
 	if len(entries) == 0 {
 		return nil
 	}
-	lines := make([]string, 0, len(entries)+1)
-	if !m.App.PrintedTranscript {
-		lines = append(lines, "")
-		m.App.PrintedTranscript = true
-	}
-	for _, entry := range entries {
-		lines = append(lines, m.renderEntry(entry))
-	}
+	lines := make([]string, 0, len(entries)*2+1)
+	lines = append(lines, "")
+	m.App.PrintedTranscript = true
+	lines = append(lines, m.RenderEntries(entries...)...)
 	return printLinesCmd(lines...)
 }
 

@@ -368,6 +368,11 @@ func (m Model) WithPrintedTranscript(v bool) Model {
 	return m
 }
 
+func (m Model) WithSessionPicker() Model {
+	m, _ = m.openSessionPicker()
+	return m
+}
+
 func (m Model) WithMode(mode session.Mode) Model {
 	m.Mode = mode
 	configureModelSessionMode(m.Model.Session, mode)
@@ -401,8 +406,9 @@ func (m Model) startupPrintLines() []string {
 		lines = append(lines, "")
 		lines = append(lines, m.renderStartupStatus(m.Progress.Status))
 	}
-	for _, entry := range m.App.StartupEntries {
-		lines = append(lines, m.renderEntry(entry))
+	if len(m.App.StartupEntries) > 0 {
+		lines = append(lines, "")
+		lines = append(lines, m.RenderEntries(m.App.StartupEntries...)...)
 	}
 	return lines
 }

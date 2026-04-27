@@ -173,10 +173,12 @@ func (s *cantoStore) ListSessions(ctx context.Context, cwd string) ([]SessionInf
 	for rows.Next() {
 		var si SessionInfo
 		var ca, ua int64
+		var title sql.NullString
 		var preview sql.NullString
-		if err := rows.Scan(&si.ID, &si.Model, &si.Branch, &ca, &ua, &si.Title, &preview); err != nil {
+		if err := rows.Scan(&si.ID, &si.Model, &si.Branch, &ca, &ua, &title, &preview); err != nil {
 			return nil, err
 		}
+		si.Title = title.String
 		si.CreatedAt = time.Unix(ca, 0)
 		si.UpdatedAt = time.Unix(ua, 0)
 		si.Summary = preview.String
@@ -544,7 +546,45 @@ func (s *cantoSession) Entries(ctx context.Context) ([]ionsession.Entry, error) 
 		}
 	}
 	entries = append(entries, s.displayEntries(sess.Events())...)
-	return entries, nil
+	return normalizeDisplayEntries(entries), nil
+}
+
+func normalizeDisplayEntries(entries []ionsession.Entry) []ionsession.Entry {
+	normalized := make([]ionsession.Entry, 0, len(entries))
+	for _, entry := range entries {
+		entry = compactRoutineToolEntry(entry)
+		if entry.Role == ionsession.Agent {
+			if strings.TrimSpace(entry.Content) == "" && strings.TrimSpace(entry.Reasoning) == "" {
+				continue
+			}
+		}
+		normalized = append(normalized, entry)
+	}
+	return normalized
+}
+
+func compactRoutineToolEntry(entry ionsession.Entry) ionsession.Entry {
+	if entry.Role != ionsession.Tool || strings.TrimSpace(entry.Content) == "" {
+		return entry
+	}
+	switch strings.TrimSpace(strings.ToLower(entry.Title)) {
+	case "list", "read", "glob", "grep":
+	default:
+		return entry
+	}
+	entry.Content = summarizedToolOutput(entry.Content)
+	return entry
+}
+
+func summarizedToolOutput(content string) string {
+	lines := strings.Split(strings.TrimRight(content, "\n"), "\n")
+	if len(lines) == 1 {
+		if strings.TrimSpace(lines[0]) == "" {
+			return ""
+		}
+		return "... (1 line)"
+	}
+	return fmt.Sprintf("... (%d lines)", len(lines))
 }
 
 func displayContextEntry(entry session.HistoryEntry) (ionsession.Entry, bool) {

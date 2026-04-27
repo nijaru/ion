@@ -1,6 +1,7 @@
 # AI Memory Index
 
 - [Status](STATUS.md) — Current phase, active focus, and blockers
+- [Active Plan](PLAN.md) — v0 core parity plan and priority gates
 - [Design](DESIGN.md) — Application architecture, TUI components, and SOTA policy
 - [Roadmap](ROADMAP.md) — Active roadmap, sequencing, and lower-priority work
 - [Sprint Index](SPRINTS.md) — Historical sprint index

@@ -1,15 +1,19 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/storage"
 )
 
 type metadataStore struct {
-	updated storage.SessionInfo
+	updated  storage.SessionInfo
+	sessions []storage.SessionInfo
 }
 
 func (s *metadataStore) OpenSession(ctx context.Context, cwd, model, branch string) (storage.Session, error) {
@@ -21,7 +25,7 @@ func (s *metadataStore) ResumeSession(ctx context.Context, id string) (storage.S
 }
 
 func (s *metadataStore) ListSessions(ctx context.Context, cwd string) ([]storage.SessionInfo, error) {
-	return nil, nil
+	return s.sessions, nil
 }
 
 func (s *metadataStore) GetRecentSession(ctx context.Context, cwd string) (*storage.SessionInfo, error) {
@@ -97,14 +101,55 @@ func TestDefaultACPCommand(t *testing.T) {
 }
 
 func TestNormalizeFlagArgsAcceptsLeadingSeparator(t *testing.T) {
-	got := normalizeFlagArgs([]string{"--", "--continue"})
+	got, picker := normalizeFlagArgs([]string{"--", "--continue"})
+	if picker {
+		t.Fatal("normalizeFlagArgs opened picker for continue")
+	}
 	if len(got) != 1 || got[0] != "--continue" {
 		t.Fatalf("normalizeFlagArgs = %#v, want --continue", got)
 	}
 
-	plain := normalizeFlagArgs([]string{"--continue"})
+	plain, picker := normalizeFlagArgs([]string{"--continue"})
+	if picker {
+		t.Fatal("normalizeFlagArgs opened picker for plain continue")
+	}
 	if len(plain) != 1 || plain[0] != "--continue" {
 		t.Fatalf("normalizeFlagArgs plain = %#v, want unchanged", plain)
+	}
+}
+
+func TestNormalizeFlagArgsOpensPickerForResumeWithoutID(t *testing.T) {
+	got, picker := normalizeFlagArgs([]string{"--resume"})
+	if !picker {
+		t.Fatal("normalizeFlagArgs did not request resume picker")
+	}
+	if len(got) != 0 {
+		t.Fatalf("normalizeFlagArgs = %#v, want empty args", got)
+	}
+
+	withID, picker := normalizeFlagArgs([]string{"--resume", "session-1"})
+	if picker {
+		t.Fatal("normalizeFlagArgs opened picker for explicit session id")
+	}
+	if len(withID) != 2 || withID[0] != "--resume" || withID[1] != "session-1" {
+		t.Fatalf("normalizeFlagArgs explicit = %#v, want resume session-1", withID)
+	}
+}
+
+func TestRecentSessionForContinueSkipsEmptyAndSlashOnlySessions(t *testing.T) {
+	store := &metadataStore{sessions: []storage.SessionInfo{
+		{ID: "empty"},
+		{ID: "slash", LastPreview: "/resume"},
+		{ID: "slash-title", Title: "/model", LastPreview: "hi"},
+		{ID: "real", LastPreview: "hello"},
+	}}
+
+	recent, err := recentSessionForContinue(context.Background(), store, "/tmp/test")
+	if err != nil {
+		t.Fatalf("recent session: %v", err)
+	}
+	if recent == nil || recent.ID != "real" {
+		t.Fatalf("recent = %#v, want real", recent)
 	}
 }
 
@@ -162,10 +207,7 @@ func TestStartupBannerLines(t *testing.T) {
 
 	t.Run("resumed acp", func(t *testing.T) {
 		got := startupBannerLines("v0.0.0", "chatgpt", "gpt-5.4", true)
-		want := []string{
-			"--- resumed ---",
-			"ion v0.0.0",
-		}
+		want := []string{"ion v0.0.0"}
 		if len(got) != len(want) {
 			t.Fatalf("len(startupBannerLines) = %d, want %d", len(got), len(want))
 		}
@@ -201,6 +243,31 @@ func TestStartupBannerLines(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestPrintStartupPlacesResumeMarkerAfterHeaderBeforeTranscript(t *testing.T) {
+	var buf bytes.Buffer
+	printStartup(
+		&buf,
+		[]string{"ion v0.0.0", "13 tools registered"},
+		"~/repo • main",
+		true,
+		[]string{"› hi", "", "• hello"},
+	)
+
+	out := ansi.Strip(buf.String())
+	workspaceIdx := strings.Index(out, "~/repo")
+	resumedIdx := strings.Index(out, "--- resumed ---")
+	transcriptIdx := strings.Index(out, "› hi")
+	if workspaceIdx < 0 || resumedIdx < 0 || transcriptIdx < 0 {
+		t.Fatalf("startup output missing expected parts: %q", out)
+	}
+	if !(workspaceIdx < resumedIdx && resumedIdx < transcriptIdx) {
+		t.Fatalf("resume marker order is wrong: %q", out)
+	}
+	if !strings.Contains(out, "--- resumed ---\n\n› hi\n\n• hello") {
+		t.Fatalf("startup output should separate resumed marker and transcript entries: %q", out)
+	}
 }
 
 func TestOpenRuntimeReturnsUnconfiguredBackendWhenSettingsMissing(t *testing.T) {
