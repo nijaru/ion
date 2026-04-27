@@ -509,6 +509,93 @@ func (m Model) configuredSessionBudgetStopReason() string {
 	return ""
 }
 
+type providerLimitError struct {
+	reason string
+	label  string
+	raw    string
+}
+
+func classifyProviderLimitError(err error) (providerLimitError, bool) {
+	if err == nil {
+		return providerLimitError{}, false
+	}
+	raw := strings.TrimSpace(err.Error())
+	if raw == "" {
+		return providerLimitError{}, false
+	}
+	lower := strings.ToLower(raw)
+	for _, marker := range []string{
+		"context_length_exceeded",
+		"context length",
+		"maximum context",
+		"max context",
+		"token limit",
+		"too many tokens",
+	} {
+		if strings.Contains(lower, marker) {
+			return providerLimitError{
+				reason: "context_limit",
+				label:  "API context limit",
+				raw:    raw,
+			}, true
+		}
+	}
+	for _, marker := range []string{
+		"insufficient_quota",
+		"usage limit",
+		"quota",
+		"billing",
+		"credit",
+		"credits",
+		"balance",
+		"spend limit",
+	} {
+		if strings.Contains(lower, marker) {
+			return providerLimitError{
+				reason: "quota_limit",
+				label:  "API quota or usage limit",
+				raw:    raw,
+			}, true
+		}
+	}
+	for _, marker := range []string{
+		"status code: 429",
+		" 429 ",
+		"too many requests",
+		"rate limit",
+		"rate_limit",
+		"requests per",
+		"tokens per",
+	} {
+		if strings.Contains(lower, marker) {
+			return providerLimitError{
+				reason: "rate_limit",
+				label:  "API rate limit",
+				raw:    raw,
+			}, true
+		}
+	}
+	for _, marker := range []string{
+		"resource_exhausted",
+		"overloaded",
+		"capacity",
+		"temporarily unavailable",
+	} {
+		if strings.Contains(lower, marker) {
+			return providerLimitError{
+				reason: "provider_capacity",
+				label:  "Provider capacity limit",
+				raw:    raw,
+			}, true
+		}
+	}
+	return providerLimitError{}, false
+}
+
+func (e providerLimitError) display() string {
+	return e.label + ": " + e.raw
+}
+
 func (m Model) routingDecision(decision, reason, stopReason string) storage.RoutingDecision {
 	provider := ""
 	model := ""

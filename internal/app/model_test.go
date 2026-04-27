@@ -2916,6 +2916,66 @@ func TestSessionErrorClearsQueuedTurnsAndSetsError(t *testing.T) {
 	}
 }
 
+func TestSessionErrorClassifiesProviderRateLimit(t *testing.T) {
+	storageSess := &stubStorageSession{}
+	model := readyModel(t)
+	model.Model.Storage = storageSess
+
+	err := errors.New("error, status code: 429 Too Many Requests: rate limit exceeded")
+	next, _ := model.Update(session.Error{Err: err})
+	model = next.(Model)
+
+	if !strings.HasPrefix(model.Progress.LastError, "API rate limit: ") {
+		t.Fatalf("last error = %q, want API rate limit prefix", model.Progress.LastError)
+	}
+	if !strings.Contains(model.Progress.LastError, err.Error()) {
+		t.Fatalf("last error = %q, want raw provider error", model.Progress.LastError)
+	}
+	var decision storage.RoutingDecision
+	var sys storage.System
+	for _, event := range storageSess.appends {
+		switch e := event.(type) {
+		case storage.RoutingDecision:
+			decision = e
+		case storage.System:
+			sys = e
+		}
+	}
+	if decision.Decision != "stop" || decision.Reason != "rate_limit" {
+		t.Fatalf("routing decision = %#v, want stop/rate_limit", decision)
+	}
+	if decision.StopReason != err.Error() {
+		t.Fatalf("stop reason = %q, want raw provider error", decision.StopReason)
+	}
+	if !strings.Contains(sys.Content, "API rate limit: "+err.Error()) {
+		t.Fatalf("system error = %q, want classified raw error", sys.Content)
+	}
+}
+
+func TestSessionErrorClassifiesProviderQuotaLimit(t *testing.T) {
+	storageSess := &stubStorageSession{}
+	model := readyModel(t)
+	model.Model.Storage = storageSess
+
+	err := errors.New("insufficient_quota: billing hard limit has been reached")
+	next, _ := model.Update(session.Error{Err: err})
+	model = next.(Model)
+
+	if !strings.HasPrefix(model.Progress.LastError, "API quota or usage limit: ") {
+		t.Fatalf("last error = %q, want quota limit prefix", model.Progress.LastError)
+	}
+	var decision storage.RoutingDecision
+	for _, event := range storageSess.appends {
+		if e, ok := event.(storage.RoutingDecision); ok {
+			decision = e
+			break
+		}
+	}
+	if decision.Decision != "stop" || decision.Reason != "quota_limit" {
+		t.Fatalf("routing decision = %#v, want stop/quota_limit", decision)
+	}
+}
+
 func TestSubmitTextPropagatesImmediateSessionError(t *testing.T) {
 	sess := &stubSession{
 		events:    make(chan session.Event),
