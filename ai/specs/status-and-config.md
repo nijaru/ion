@@ -125,6 +125,7 @@ Current local endpoint state shape:
 ```toml
 provider = "local-api"
 model = "qwen3.6:27b-uncensored"
+active_preset = "primary"
 ```
 
 Use `local-api` for no-auth OpenAI-compatible servers such as llama.cpp.

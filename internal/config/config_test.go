@@ -367,6 +367,50 @@ func TestSaveStateWritesOnlyMutableFields(t *testing.T) {
 	}
 }
 
+func TestSaveStatePreservesActivePreset(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	if err := SaveActivePreset("fast"); err != nil {
+		t.Fatalf("save active preset: %v", err)
+	}
+	if err := SaveState(&Config{Provider: "openai", Model: "gpt-4o"}); err != nil {
+		t.Fatalf("save state: %v", err)
+	}
+	state, err := LoadState()
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	if state.ActivePreset == nil || *state.ActivePreset != "fast" {
+		t.Fatalf("active_preset = %#v, want fast", state.ActivePreset)
+	}
+}
+
+func TestSaveActivePresetUpdatesState(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	if err := SaveState(&Config{Provider: "openai", Model: "gpt-4o"}); err != nil {
+		t.Fatalf("save state: %v", err)
+	}
+	if err := SaveActivePreset("fast"); err != nil {
+		t.Fatalf("save active preset: %v", err)
+	}
+	state, err := LoadState()
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	if state.Provider == nil || *state.Provider != "openai" {
+		t.Fatalf("provider = %#v, want openai", state.Provider)
+	}
+	if state.Model == nil || *state.Model != "gpt-4o" {
+		t.Fatalf("model = %#v, want gpt-4o", state.Model)
+	}
+	if state.ActivePreset == nil || *state.ActivePreset != "fast" {
+		t.Fatalf("active_preset = %#v, want fast", state.ActivePreset)
+	}
+}
+
 func TestSaveUsesAtomicReplace(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

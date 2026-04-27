@@ -36,6 +36,13 @@ func (m Model) activePresetTitle() string {
 	}
 }
 
+func modelPresetFromString(value string) modelPreset {
+	if config.NormalizeActivePreset(value) == string(presetFast) {
+		return presetFast
+	}
+	return presetPrimary
+}
+
 func (m Model) runtimeConfigForPreset(cfg *config.Config, preset modelPreset) (*config.Config, error) {
 	return registry.ResolveRuntimeConfig(context.Background(), cfg, registry.Preset(preset))
 }

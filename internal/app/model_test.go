@@ -1172,6 +1172,13 @@ func TestCtrlMTogglesPrimaryAndFastPreset(t *testing.T) {
 	if model.App.ActivePreset != presetFast {
 		t.Fatalf("active preset = %q, want fast", model.App.ActivePreset)
 	}
+	state, err := config.LoadState()
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	if state.ActivePreset == nil || *state.ActivePreset != "fast" {
+		t.Fatalf("state active_preset = %#v, want fast", state.ActivePreset)
+	}
 	if got := model.Model.Backend.Model(); got != "gpt-4.1-mini" {
 		t.Fatalf("fast model = %q, want gpt-4.1-mini", got)
 	}
@@ -1194,11 +1201,31 @@ func TestCtrlMTogglesPrimaryAndFastPreset(t *testing.T) {
 	if model.App.ActivePreset != presetPrimary {
 		t.Fatalf("active preset = %q, want primary", model.App.ActivePreset)
 	}
+	state, err = config.LoadState()
+	if err != nil {
+		t.Fatalf("load state after primary switch: %v", err)
+	}
+	if state.ActivePreset == nil || *state.ActivePreset != "primary" {
+		t.Fatalf("state active_preset = %#v, want primary", state.ActivePreset)
+	}
 	if got := model.Model.Backend.Model(); got != "gpt-4.1" {
 		t.Fatalf("primary model = %q, want gpt-4.1", got)
 	}
 	if !slices.Equal(observedModels, []string{"gpt-4.1-mini", "gpt-4.1"}) {
 		t.Fatalf("switched models = %#v, want fast then primary", observedModels)
+	}
+}
+
+func TestNewRestoresActivePresetFromState(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := config.SaveActivePreset("fast"); err != nil {
+		t.Fatalf("save active preset: %v", err)
+	}
+
+	model := readyModel(t)
+	if model.App.ActivePreset != presetFast {
+		t.Fatalf("active preset = %q, want fast", model.App.ActivePreset)
 	}
 }
 
