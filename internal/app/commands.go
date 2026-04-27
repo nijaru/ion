@@ -641,31 +641,67 @@ func displayVerbosity(value string) string {
 }
 
 func slashCommands() []string {
-	return []string{
-		"/resume",
-		"/primary",
-		"/fast",
-		"/provider",
-		"/model",
-		"/thinking",
-		"/read",
-		"/edit",
-		"/auto",
-		"/yolo",
-		"/mode",
-		"/trust",
-		"/settings",
-		"/rewind",
-		"/tools",
-		"/memory",
-		"/compact",
-		"/clear",
-		"/cost",
-		"/mcp",
-		"/quit",
-		"/exit",
-		"/help",
+	commands := slashCommandCatalog()
+	out := make([]string, 0, len(commands))
+	for _, command := range commands {
+		out = append(out, command.name)
 	}
+	return out
+}
+
+type slashCommandInfo struct {
+	name   string
+	detail string
+}
+
+func slashCommandCatalog() []slashCommandInfo {
+	return []slashCommandInfo{
+		{name: "/resume", detail: "resume a recent session"},
+		{name: "/primary", detail: "switch to primary preset"},
+		{name: "/fast", detail: "switch to fast preset"},
+		{name: "/provider", detail: "choose provider"},
+		{name: "/model", detail: "choose model"},
+		{name: "/thinking", detail: "choose thinking level"},
+		{name: "/read", detail: "READ mode"},
+		{name: "/edit", detail: "EDIT mode"},
+		{name: "/auto", detail: "AUTO mode"},
+		{name: "/yolo", detail: "AUTO mode alias"},
+		{name: "/mode", detail: "set read/edit/auto"},
+		{name: "/trust", detail: "workspace trust"},
+		{name: "/settings", detail: "common settings"},
+		{name: "/rewind", detail: "restore checkpoint"},
+		{name: "/tools", detail: "tool status"},
+		{name: "/memory", detail: "memory search"},
+		{name: "/compact", detail: "compact session"},
+		{name: "/clear", detail: "fresh session"},
+		{name: "/cost", detail: "session usage"},
+		{name: "/mcp", detail: "register MCP server"},
+		{name: "/quit", detail: "quit"},
+		{name: "/exit", detail: "quit"},
+		{name: "/help", detail: "show help"},
+	}
+}
+
+func slashCommandItems() []pickerItem {
+	commands := slashCommandCatalog()
+	items := make([]pickerItem, 0, len(commands))
+	for _, command := range commands {
+		search := pickerSearchIndex(
+			command.name,
+			strings.TrimPrefix(command.name, "/"),
+			command.detail,
+			"Commands",
+			nil,
+		)
+		items = append(items, pickerItem{
+			Label:  command.name,
+			Value:  command.name,
+			Detail: command.detail,
+			Group:  "Commands",
+			Search: search,
+		})
+	}
+	return items
 }
 
 func (m Model) openThinkingPicker() (Model, tea.Cmd) {
@@ -917,7 +953,10 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 	}
 
 	selected := items[m.Picker.Overlay.index]
-	cfg := *m.Picker.Overlay.cfg
+	var cfg config.Config
+	if m.Picker.Overlay.cfg != nil {
+		cfg = *m.Picker.Overlay.cfg
+	}
 
 	switch m.Picker.Overlay.purpose {
 	case pickerPurposeProvider:
@@ -994,6 +1033,11 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 				Content: "Thinking set to " + thinkingDisplayName(level),
 			},
 		)
+	case pickerPurposeCommand:
+		m.Input.Composer.SetValue(selected.Value + " ")
+		m.relayoutComposer()
+		m.Picker.Overlay = nil
+		return m, nil
 	default:
 		m.Picker.Overlay = nil
 		return m, nil

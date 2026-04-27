@@ -95,6 +95,7 @@ const (
 	pickerPurposeProvider pickerPurpose = iota
 	pickerPurposeModel
 	pickerPurposeThinking
+	pickerPurposeCommand
 )
 
 type pickerItem struct {
