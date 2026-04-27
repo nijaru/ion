@@ -179,6 +179,58 @@ func TestCoreLoopSmokeRetryStatusPersists(t *testing.T) {
 	}
 }
 
+func TestCoreLoopSmokeToolPreviewRedactsSensitiveArgs(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	stored := &stubStorageSession{}
+	model := New(
+		stubBackend{sess: &stubSession{events: make(chan session.Event)}, provider: "fake", model: "model"},
+		stored,
+		nil,
+		"/tmp/ion-smoke",
+		"main",
+		"dev",
+		nil,
+	)
+
+	updated, _ := model.Update(session.ToolCallStarted{
+		ToolUseID: "tool-1",
+		ToolName:  "bash",
+		Args:      `curl -H "Authorization: Bearer abc.def-123" https://example.test`,
+	})
+	model = updated.(Model)
+
+	if model.InFlight.Pending == nil {
+		t.Fatal("expected pending tool preview")
+	}
+	if strings.Contains(model.InFlight.Pending.Title, "abc.def-123") {
+		t.Fatalf("tool preview leaked token: %q", model.InFlight.Pending.Title)
+	}
+	if !strings.Contains(model.InFlight.Pending.Title, "[redacted-secret]") {
+		t.Fatalf("tool preview missing redaction marker: %q", model.InFlight.Pending.Title)
+	}
+
+	var found bool
+	for _, appended := range stored.appends {
+		use, ok := appended.(storage.ToolUse)
+		if !ok {
+			continue
+		}
+		input, ok := use.Input.(map[string]string)
+		if !ok {
+			t.Fatalf("tool input = %T, want map[string]string", use.Input)
+		}
+		if strings.Contains(input["args"], "abc.def-123") {
+			t.Fatalf("stored tool args leaked token: %#v", use)
+		}
+		if strings.Contains(input["args"], "[redacted-secret]") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("missing redacted stored tool args in %#v", stored.appends)
+	}
+}
+
 func newCoreLoopSmokeModel(t *testing.T) (Model, *stubSession, storage.Store, storage.Session) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
