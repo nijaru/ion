@@ -10,7 +10,7 @@ Current active blockers:
 - `tk-mmcs` — Keep the Pi/Codex/Claude core parity plan, roadmap, and task queue synchronized while the loop is stabilized.
 
 Next core-parity work:
-- tighten CLI prompt ergonomics against Pi/Codex/Claude expectations: flags should work before or after `-p`/positional prompts, JSON output should be unambiguous, and this path should remain the automated Fedora/local-api smoke surface.
+- `tk-v1ou` — tighten CLI prompt ergonomics against Pi/Codex/Claude expectations: flags should work before or after `-p`/positional prompts, JSON output should be unambiguous, and this path should remain the automated Fedora/local-api smoke surface.
 - continue Gate 2 loop coverage: cancellation/error persistence, retry status, provider-limit recovery, and resumed tool-session invariants.
 
 Captured lower-priority polish:
@@ -92,6 +92,7 @@ Design rule:
 - [x] **Prompt CLI ergonomics (`tk-vxet`)** — Added `-p` as the primary prompt-taking print shortcut, `--json` as output sugar, and positional prompt support when `--print` is set. Verified with `go test ./...`, `go run ./... -p "reply with the single word ok" --json --timeout 30s`, and `go run ./... --print "reply with the single word ok" --json --timeout 30s`.
 - [x] **Routine tool output compaction (`tk-kvqv`)** — Live completed `list`/`read`/`glob`/`grep` entries now render compact line-count summaries by default, `tool_verbosity = "full"` preserves detail, and error output stays expanded. Verified with `go test ./...` and Fedora/local-api `ion -p ... --json` smoke.
 - [x] **Thinking display compaction (`tk-tilu`)** — Completed and in-flight thinking now defaults to a compact `Thinking...` marker/ellipsis instead of dumping reasoning text; `thinking_verbosity = "full"` opts into detail and `hidden` suppresses it. Verified with `go test ./...` and Fedora/local-api `ion -p ... --json` smoke.
+- [x] **Prompt CLI ergonomics (`tk-v1ou`)** — Ion now normalizes known CLI flags before parsing so `ion --print "prompt" --json --timeout 30s` behaves like users expect instead of treating trailing flags as prompt text. Verified with tests and Fedora/local-api smokes.
 - [x] **Thinking control Ion slice (`tk-hase`)** — Ion preserves `auto/off/minimal/low/medium/high/xhigh/max`, exposes common named levels in `/thinking`, and only sends named effort when Canto reports support; richer provider translation is split to `tk-369n`.
 - [x] **Transport-only endless retry (`tk-90mp`)** — Canto `f71205f` added transport-only endless retry; Ion wires `retry_until_cancelled` to that path so disconnects can retry until Ctrl+C while rate/quota/server failures stay bounded and readable.
 - [x] **Retry-until-cancel resilience slice (`tk-lm25`)** — Canto now supports retry-until-context-cancel and raw transport transient classification; Ion defaults `retry_until_cancelled` on, emits visible retry status, and persists those status events without transcript spam.
