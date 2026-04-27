@@ -219,3 +219,32 @@ func TestPrintModeRejectsUnknownOutput(t *testing.T) {
 		t.Fatalf("writePrintResult error = %v", err)
 	}
 }
+
+func TestPromptWithStdinContextReadsStdinWhenPromptMissing(t *testing.T) {
+	got := promptWithStdinContext("", "prompt from stdin\n")
+	if got != "prompt from stdin\n" {
+		t.Fatalf("promptWithStdinContext = %q, want stdin prompt", got)
+	}
+}
+
+func TestPromptWithStdinContextReadsStdinForDashPrompt(t *testing.T) {
+	got := promptWithStdinContext("-", "prompt from stdin\n")
+	if got != "prompt from stdin\n" {
+		t.Fatalf("promptWithStdinContext = %q, want stdin prompt", got)
+	}
+}
+
+func TestPromptWithStdinContextAppendsNonEmptyStdin(t *testing.T) {
+	got := promptWithStdinContext("summarize", "tool output\n")
+	want := "summarize\n\n<stdin>\ntool output\n</stdin>"
+	if got != want {
+		t.Fatalf("promptWithStdinContext = %q, want %q", got, want)
+	}
+}
+
+func TestPromptWithStdinContextIgnoresEmptyStdinWithPrompt(t *testing.T) {
+	got := promptWithStdinContext("summarize", "\n\t ")
+	if got != "summarize" {
+		t.Fatalf("promptWithStdinContext = %q, want original prompt", got)
+	}
+}
