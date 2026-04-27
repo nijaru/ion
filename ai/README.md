@@ -7,6 +7,7 @@
 - [SOTA Requirements](SOTA-REQUIREMENTS.md) — The 14 core product responsibilities for Ion
 - [Canto Authoring App Patterns](research/canto-dspy-app-patterns-2026-04.md) — Future Ion patterns from Canto authoring work; DSPy is one reference
 - [Current Pi Core Loop Review](research/pi-current-core-loop-review-2026-04.md) — Current Pi `/tree`, loop, compaction, and UX lessons for Canto/Ion
+- [Thinking Effort Provider Survey](research/thinking-effort-provider-survey-2026-04.md) — Provider reasoning controls and Ion capability-model recommendation
 - [Canto Research Delta](review/canto-research-delta-2026-04-26.md) — Recent Canto ai/ findings that affect Ion task sequencing
 - [Tools and Modes Spec](specs/tools-and-modes.md) — Permission modes, approval prompt behavior, and ESCALATE.md host UX
 - [Status and Config Spec](specs/status-and-config.md) — Status line, model picker metadata, and global config/state/trust layout

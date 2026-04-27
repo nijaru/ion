@@ -88,6 +88,22 @@ Stable config fields:
 - `tool_verbosity`
 - `thinking_verbosity`
 
+Thinking capability overrides are stable config, not mutable state. Unknown
+custom endpoints should default to sending no thinking/reasoning parameter.
+When a custom model needs provider-specific controls, define a per-model
+capability override rather than hardcoding assumptions from its provider name:
+
+```toml
+[model_capabilities."local-api:qwen3.6:27b"]
+thinking = "budget" # none | effort | budget | boolean
+levels = ["off", "low", "medium", "high"]
+default = "auto"
+budgets = { low = 1024, medium = 4096, high = 8192 }
+```
+
+Raw numeric budgets are config-only unless repeated user behavior proves they
+need a first-class TUI control.
+
 Mutable state fields:
 
 - `provider`
@@ -138,6 +154,9 @@ Current direction:
 - subagent personas use `primary` or `fast`; `subagents_path` only changes where persona Markdown files load from
 - `primary` and `fast` are the UI-visible presets
 - a preset may carry its own default reasoning level
+- reasoning/thinking levels must be filtered by selected model capability;
+  unsupported values should fall back to the highest supported level at or
+  below the selected value, with a short visible notice
 - if a preset is not explicitly configured, ion should resolve a deterministic provider default from the live model catalog
 
 Model naming rules:

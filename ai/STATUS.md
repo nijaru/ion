@@ -11,6 +11,7 @@ Current active slice:
 - `tk-00km` — HITL notifier delivery and audit. First Slack/SMTP delivery and audit slice is in progress.
 - `tk-a5ds` — Config UX umbrella. P3 tracking bucket; do not let polish outrank core loop reliability.
 - `tk-8188` — Settings storage split. P3 design follow-up; current code still stores selected provider/model in config, but the target layout separates stable config from mutable runtime state.
+- `tk-hase` — Thinking: provider-compatible levels and UI settings. P3 design follow-up; current provider survey says capability-filtered named levels in the TUI, config-only numeric budgets, and no reasoning params for unknown custom endpoints.
 
 Captured lower-priority polish:
 - `tk-5cqs` — Slash commands: autocomplete and command surface review (P3)
