@@ -64,6 +64,7 @@ Design rule:
 *(Note: Older P3 TUI refinement tasks like configurable verbosity, skill layering, and status line context have been subsumed by their respective SOTA epics).*
 
 ## Completed (Recent)
+- [x] **Retry-until-cancel resilience slice (`tk-lm25`)** — Canto now supports retry-until-context-cancel and raw transport transient classification; Ion defaults `retry_until_cancelled` on, emits visible retry status, and persists those status events without transcript spam.
 - [x] **HITL notifier delivery slice (`tk-00km`)** — Approval requests now attempt Slack webhook and SMTP email notification when ESCALATE.md channels and credentials are configured, while auditing sent/failed/skipped outcomes without blocking the local approval prompt.
 - [x] **Provider-limit resilience slice (`tk-90mp`)** — Rate/quota/context/capacity provider failures now get readable UI prefixes while preserving raw provider text and append durable `routing_decision` stop traces. Verified with `go test ./...` and Fedora `local-api` smoke against `qwen3.6:27b-uncensored`.
 - [x] **Compaction UX slice (`tk-2wrb`)** — Added visible compacting progress, follow-up queueing while manual compaction runs, and Ion summarizer guidance that preserves goals, paths, task IDs, decisions, failures, and verification status.

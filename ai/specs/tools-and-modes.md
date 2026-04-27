@@ -291,9 +291,17 @@ Tracked by: `tk-8fe3`, `tk-yp24`
 
 ### Retry behavior
 
-Transient provider failures are retried automatically with exponential
-backoff before surfacing to the UI. Ion keeps the retry loop silent unless
-all attempts fail, in which case only the final error is shown once in the
-status surface and transcript.
+Transient provider/network failures retry automatically with exponential
+backoff. By default `retry_until_cancelled = true`, so retryable network,
+rate-limit, and provider-capacity failures continue until the user interrupts.
+Ion surfaces the retry in the progress/status line and persists the status
+event; it does not spam transcript history with each attempt.
 
-Tracked by: `tk-kz3k`
+When `retry_until_cancelled = false`, Ion uses Canto's bounded internal retry
+budget before surfacing the final error once in the status surface and
+transcript.
+
+Terminal provider errors are not retried: auth failures, invalid models, bad
+endpoint config, quota/billing exhaustion, and context-limit failures.
+
+Tracked by: `tk-kz3k`, `tk-lm25`

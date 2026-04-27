@@ -4,6 +4,22 @@ Append-only history of architectural and design decisions for `ion`.
 
 ---
 
+## 2026-04-27 — Runtime: retry transient network/provider failures until user cancellation
+
+**Context:** Bounded retry was too weak for real agent sessions during provider/network outages. Users can interrupt a stuck turn, while transient disconnects, 429s, and provider-capacity failures often resolve without changing the prompt.
+
+**Decision:** Default Ion to `retry_until_cancelled = true` for transient provider/network failures. Canto owns retry mechanics and transport classification; Ion owns the user setting, visible retry status, and persisted status events. Setting `retry_until_cancelled = false` keeps Canto's bounded retry budget.
+
+**Rationale:**
+
+1. **Reliable core loop:** A long-running agent should survive temporary network/provider disruption without user babysitting.
+2. **Clear stop condition:** The user cancels with the normal interrupt path.
+3. **Low config burden:** One boolean setting is enough; intervals and profiles stay internal.
+
+**Tradeoffs:** A bad transient classifier could retry too long, so terminal failures such as auth errors, invalid model, bad endpoint config, quota/billing exhaustion, and context limits must remain non-retry.
+
+---
+
 ## 2026-04-27 — Thinking controls: capability-filtered UI, provider translation in Canto
 
 **Context:** Current model APIs do not share one reasoning-control shape. OpenAI exposes model-specific named efforts, Anthropic mixes adaptive effort and older numeric budgets, Gemini splits named levels and budgets by generation, and Qwen/DeepSeek/local endpoints may be binary, model-mode based, or custom.
