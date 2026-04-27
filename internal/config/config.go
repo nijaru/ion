@@ -179,7 +179,37 @@ func SaveState(cfg *Config) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
+	current, err := LoadState()
+	if err != nil {
+		return err
+	}
 	state := stateFromConfig(cfg)
+	state.ActivePreset = current.ActivePreset
+	data, err := toml.Marshal(state)
+	if err != nil {
+		return err
+	}
+	return writeFileAtomic(path, data, 0o644)
+}
+
+func SaveActivePreset(preset string) error {
+	path, err := DefaultStatePath()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	state, err := LoadState()
+	if err != nil {
+		return err
+	}
+	normalized := normalizeActivePreset(preset)
+	if normalized == "" {
+		state.ActivePreset = nil
+	} else {
+		state.ActivePreset = &normalized
+	}
 	data, err := toml.Marshal(state)
 	if err != nil {
 		return err
@@ -322,6 +352,21 @@ func optionalString(value string) *string {
 		return nil
 	}
 	return &value
+}
+
+func NormalizeActivePreset(value string) string {
+	return normalizeActivePreset(value)
+}
+
+func normalizeActivePreset(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "primary":
+		return "primary"
+	case "fast":
+		return "fast"
+	default:
+		return ""
+	}
 }
 
 func splitProviderModel(value string) (string, string, bool) {

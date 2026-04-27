@@ -331,6 +331,10 @@ func New(
 		st:           st,
 	}
 
+	if state, err := config.LoadState(); err == nil && state.ActivePreset != nil {
+		m.App.ActivePreset = modelPresetFromString(*state.ActivePreset)
+	}
+
 	if cfg, err := config.Load(); err == nil {
 		m.Model.Config = cfg
 		m.Progress.ReasoningEffort = normalizeThinkingValue(cfg.ReasoningEffort)

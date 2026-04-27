@@ -843,6 +843,9 @@ func (m Model) handlePickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	case "ctrl+m":
 		if m.Picker.Overlay.purpose == pickerPurposeModel {
 			m.App.ActivePreset = togglePreset(m.activePreset())
+			if err := config.SaveActivePreset(m.App.ActivePreset.String()); err != nil {
+				return m, cmdError(fmt.Sprintf("failed to save state: %v", err))
+			}
 			return m.openModelPickerWithConfig(m.Picker.Overlay.cfg)
 		}
 		return m, nil
@@ -1071,6 +1074,9 @@ func (m Model) switchRuntimeCommand(
 	preserveSession bool,
 ) tea.Cmd {
 	if m.Model.Switcher == nil {
+		if err := config.SaveActivePreset(preset.String()); err != nil {
+			return persistErrorCmd("save active preset", err)
+		}
 		m.Model.Backend.SetConfig(cfg)
 		m.App.ActivePreset = preset
 		m.Progress.ReasoningEffort = normalizeThinkingValue(cfg.ReasoningEffort)
@@ -1092,6 +1098,9 @@ func (m Model) switchRuntimeCommand(
 		backend, sess, storageSess, err := switcher(context.Background(), &cfgCopy, switchID)
 		if err != nil {
 			return session.Error{Err: err}
+		}
+		if err := config.SaveActivePreset(preset.String()); err != nil {
+			return session.Error{Err: fmt.Errorf("save active preset: %w", err)}
 		}
 		if oldSession != nil {
 			_ = oldSession.Close()
