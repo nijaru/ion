@@ -23,7 +23,7 @@ Use this as the scan-first checklist for `tk-s6p4`. `Reviewed` means the area ha
 | Tool failure durability | Reviewed/refactored | Canto `a5878ab`; Ion maps `ToolCompletedData.Error` to live/replay error display. | Errored routine tool output stays expanded in Ion replay. |
 | Cancellation terminal events | Reviewed/refactored | Canto `c22da5e`; Ion suppresses wrapped context-canceled provider error. | Canceled streaming and non-streaming turns persist `TurnCompleted`. |
 | Serial queue wait vs execution context | Reviewed/refactored | Canto `595380a`; Ion imported and full suite passed. | Fixed wait-timeout context canceling active turns or later executing with expired contexts. |
-| Provider request construction / system-message ordering | Partially reviewed | Fedora/local-api system-message issue fixed via Canto context primitive integration. | Needs a final provider-history shape pass after Ion lifecycle is settled. |
+| Provider request construction / system-message ordering | Reviewed/refactored | Fedora/local-api system-message issue fixed via Canto context primitives; Ion request-shape tests exclude display-only events. | Provider-visible history stays in Canto; Ion status/system display rows stay local. |
 | Retry classification/runtime retry loop | Partially reviewed | Transport-only retry-until-cancel path exists; OpenRouter 429 only proved status path. | Live validation remains provider/environment blocked. |
 | Compaction primitives | Partially reviewed | Proactive/manual compaction paths have deterministic Ion coverage. | Keep enabled as core resilience, but avoid P2 compaction UX until core loop gate is green. |
 | Memory/workflow/subagent primitives | Deferred | Disabled in Ion via `CoreLoopOnly`. | Re-enable only after native loop gate is green. |
@@ -51,14 +51,14 @@ Use this as the scan-first checklist for `tk-s6p4`. `Reviewed` means the area ha
 | Startup/resume rendering | Reviewed/refactored | Resumed marker after launch header; replay entries use shared renderer spacing. | Header visual polish is P3. |
 | Startup/continue/resume materialization | Reviewed/refactored | Real-store `openRuntime` tests cover fresh lazy startup, invalid-provider startup, and invalid-provider explicit resume. | Local session selection no longer depends on provider config being immediately usable. |
 | App queued follow-up lifecycle | Reviewed/refactored | Queued follow-up after `TurnFinished` covered. | Keep in regression set while reviewing command paths. |
+| Provider-history shape after tool turns | Reviewed/refactored | Resumed tool follow-up asserts assistant tool-call before matching tool-result, no empty assistant rows, and durable prior/new user turns. | Covers the provider-history failure class that previously broke Fedora/local-api. |
 | Trust/mode/approval UX | Partially reviewed | Basic mode/trust paths covered; `CoreLoopOnly` keeps advanced surfaces down. | Secondary to stable submit/stream/tool/cancel/error/persist/replay. |
 | Live local-api/OpenRouter validation | Blocked/partial | Fedora off; OpenRouter DeepSeek hit 402, Minimax hit 429. | Deterministic tests are the proof path until a live provider is available. |
 
 ## Current Gaps
 
-1. Provider-history shape pass after compaction and tool turns: confirm no provider request can include empty assistant, misordered tool result, or display-only Ion system rows.
-2. ACP bridge P2s: stderr filtering, initial session context, token usage mapping. Keep behind native-loop gate unless ACP blocks tests.
-3. Live smoke when Fedora or a funded model is available: tool call, persist, resume, follow-up turn, and `ion -p --resume <id>`.
+1. ACP bridge P2s: stderr filtering, initial session context, token usage mapping. Keep behind native-loop gate unless ACP blocks tests.
+2. Live smoke when Fedora or a funded model is available: tool call, persist, resume, follow-up turn, and `ion -p --resume <id>`.
 
 ## Latest Verification
 

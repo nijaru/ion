@@ -24,6 +24,7 @@ Fast, lightweight terminal coding agent.
 - Print CLI preflight and settlement are covered enough to act as the automation surface.
 - Startup/resume/continue selection now has real-store coverage for fresh lazy startup, invalid-provider startup, and explicit resume when the active provider config is invalid.
 - Slash commands now stay local during active turns instead of being queued as model follow-up prompts.
+- Provider-history shape coverage now asserts display-only Ion events are excluded from provider requests and resumed tool results follow matching assistant tool calls.
 - Deterministic tests and race-focused backend tests have covered several previously broken terminal, cancel, duplicate-watch, and follow-up-turn paths.
 - Live validation is currently provider/environment limited: Fedora is off and OpenRouter free/DeepSeek paths have hit provider/account limits. Deterministic tests remain the active proof path until a live provider is intentionally available.
 
@@ -31,8 +32,8 @@ Fast, lightweight terminal coding agent.
 
 Continue `tk-s6p4` from the tracker, in this order:
 
-1. Run a provider-history shape pass after tool turns and compaction.
-2. Add or tighten deterministic tests for any gap found before re-enabling P2/P3 surfaces.
+1. Run race-focused checks for the completed native-loop slices.
+2. Reassess whether `tk-s6p4` can close or needs a final live smoke when a funded/local provider is available.
 
 ## Active Tasks
 
