@@ -38,6 +38,7 @@ Classify Canto-side responsibilities before Ion refactors against them. This is 
 | Terminal cancellation durability | Fixed in Canto `c22da5e`; streaming and non-streaming canceled turns append `TurnCompleted` with `context.WithoutCancel(ctx)`. |
 | Tool event payload stability | Partially resolved; Ion now uses Canto typed accessors for started/completed events and preserves `ToolOutputDelta` IDs. |
 | Tool error state | Fixed in Canto `a5878ab`; failed tool completions include structured `Error` text, imported by Ion for live and replay display. |
+| Queue wait vs execution context | Fixed in Canto `595380a`; local queue wait timeout no longer cancels active turns, queued pre-start timeouts do not execute later with expired contexts, and those failures persist `TurnCompleted` error data. |
 
 ## Gap Classification
 
@@ -72,11 +73,13 @@ Design requirement:
 
 - Provider error, context overflow after recovery exhaustion, max-step stop, budget stop, tool error, and cancellation each leave a durable terminal shape.
 - `TurnCompleted` with error/stop reason should occur before adapter emits final ready/complete state where possible.
+- Local queue wait timeout is not an execution timeout; it must not cancel an active provider stream and must settle a queued-but-not-started turn durably.
 
 Pre-code proof needed:
 
 - Audit agent loop defers and runtime runner error paths.
 - Add or identify tests that assert terminal events survive provider errors.
+- Added Canto runtime tests for active wait-timeout separation and queued pre-start timeout terminal durability.
 
 ### Gap 3: Tool Event Payload Stability
 

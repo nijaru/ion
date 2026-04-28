@@ -40,13 +40,14 @@ Current implementation posture:
 - The unconfigured backend now fails `SubmitTurn` synchronously without also queueing a backend error event, preventing duplicate startup/configuration errors.
 - ACP prompt completion no longer emits an empty assistant commit; the lifecycle test now asserts start-to-finish settlement without relying on asynchronous session-update ordering.
 - The TUI now flushes a non-empty pending streamed assistant entry on `TurnFinished` when no committed `AgentMessage` arrives, making the app robust to stream-only backend completion.
+- Canto `595380a` is imported; the local serial queue now separates wait timeout from execution context, so queued-turn wait deadlines cannot cancel active model turns or later execute with an expired context. Pre-start queue timeouts now persist a `TurnCompleted` error.
 - Live Fedora/local-api smoke is currently deferred because Fedora is off. OpenRouter `deepseek/deepseek-v4-flash` smoke proved first-turn submit/stream/approval/bash-tool/tool-result/assistant-commit/persist/reopen, but the resumed follow-up hit provider `402 Payment Required`; `deepseek/deepseek-v4-pro` one-shot print also hit 402. Treat full live follow-up validation as provider/account-blocked until Fedora is back or another funded live model is selected.
 
 Next core-parity work:
 - use `ai/design/native-core-loop-architecture.md` as the target design for the Canto/Ion refactor.
 - use `ai/review/core-loop-ai-corpus-synthesis-2026-04-27.md` as the cross-repo ai/ synthesis and pre-implementation gate list.
 - use `ai/review/canto-core-loop-contract-audit-2026-04-27.md` to decide whether any Canto work is proof-only, framework bug fix, Ion adapter misuse, or deferred.
-- continue the storage/replay and lifecycle pass by checking that compatibility append paths, real-store replay, and resumed follow-up turns cannot create duplicate or empty model-visible rows.
+- continue the core-loop code review by checking Ion's CantoBackend goroutine/cancel/error ownership against the now-fixed Canto queue contract, then real-store replay and resumed follow-up turns.
 - use the scriptable print CLI (`ion -p "prompt"`, `ion -p --json "prompt"`, `ion --print "prompt" --json`, `--resume <id> -p`, and piped stdin) as the automated Fedora/local-api smoke surface before TUI-only checks.
 - keep ACP, sandboxing, broader policy, thinking expansion, privacy, routing, and subagents behind native-loop regression safety.
 
