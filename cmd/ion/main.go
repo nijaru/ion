@@ -393,12 +393,17 @@ func startupToolLine(b backend.Backend) string {
 func openRuntime(ctx context.Context, store storage.Store, cwd, branch string, cfg *config.Config, acpCommandOverride string, sessionID string) (backend.Backend, storage.Session, error) {
 	runtimeCfg := *cfg
 	if err := resolveStartupConfig(&runtimeCfg); err != nil {
-		if errors.Is(err, errNoProviderConfigured) || errors.Is(err, errNoModelConfigured) {
-			b := backend.NewUnconfigured(&runtimeCfg, err)
-			b.SetStore(store)
+		b := backend.NewUnconfigured(&runtimeCfg, err)
+		b.SetStore(store)
+		if sessionID == "" {
 			return b, nil, nil
 		}
-		return nil, nil, err
+		sess, resumeErr := store.ResumeSession(ctx, sessionID)
+		if resumeErr != nil {
+			return nil, nil, fmt.Errorf("failed to resume session %s: %w", sessionID, resumeErr)
+		}
+		b.SetSession(sess)
+		return b, sess, nil
 	}
 
 	b, err := backendForProvider(runtimeCfg.Provider)

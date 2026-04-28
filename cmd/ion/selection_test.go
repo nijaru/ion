@@ -330,6 +330,141 @@ func TestOpenRuntimeReturnsUnconfiguredBackendWhenModelMissing(t *testing.T) {
 	}
 }
 
+func TestOpenRuntimeReturnsUnconfiguredBackendForInvalidProviderConfig(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	dataDir, err := config.DefaultDataDir()
+	if err != nil {
+		t.Fatalf("default data dir: %v", err)
+	}
+
+	store, err := storage.NewCantoStore(dataDir)
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	defer store.Close()
+
+	cfg := &config.Config{Provider: "local-api", Model: "qwen-test"}
+	b, sess, err := openRuntime(context.Background(), store, "/tmp/test", "main", cfg, "", "")
+	if err != nil {
+		t.Fatalf("openRuntime returned error: %v", err)
+	}
+	if got := b.Name(); got != "unconfigured" {
+		t.Fatalf("backend name = %q, want %q", got, "unconfigured")
+	}
+	if sess != nil {
+		t.Fatalf("storage session = %#v, want nil", sess)
+	}
+	sessions, err := store.ListSessions(context.Background(), "/tmp/test")
+	if err != nil {
+		t.Fatalf("list sessions: %v", err)
+	}
+	if len(sessions) != 0 {
+		t.Fatalf("sessions = %#v, want none before a model-visible turn", sessions)
+	}
+
+	err = b.Session().SubmitTurn(context.Background(), "hello")
+	if err == nil || !strings.Contains(err.Error(), "Local API requires endpoint configuration") {
+		t.Fatalf("submit error = %v, want endpoint configuration error", err)
+	}
+}
+
+func TestOpenRuntimeResumeWithInvalidProviderConfigLoadsExistingSessionOnly(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	dataDir, err := config.DefaultDataDir()
+	if err != nil {
+		t.Fatalf("default data dir: %v", err)
+	}
+
+	store, err := storage.NewCantoStore(dataDir)
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	defer store.Close()
+
+	ctx := context.Background()
+	seed, err := store.OpenSession(ctx, "/tmp/test", "local-api/qwen-test", "main")
+	if err != nil {
+		t.Fatalf("open seed session: %v", err)
+	}
+	seedID := seed.ID()
+	if err := seed.Append(ctx, storage.System{Type: "system", Content: "seeded", TS: 1}); err != nil {
+		t.Fatalf("append seed event: %v", err)
+	}
+	if err := seed.Close(); err != nil {
+		t.Fatalf("close seed session: %v", err)
+	}
+
+	cfg := &config.Config{Provider: "local-api", Model: "qwen-test"}
+	b, sess, err := openRuntime(ctx, store, "/tmp/test", "feature/resume", cfg, "", seedID)
+	if err != nil {
+		t.Fatalf("openRuntime returned error: %v", err)
+	}
+	defer sess.Close()
+	if got := b.Name(); got != "unconfigured" {
+		t.Fatalf("backend name = %q, want %q", got, "unconfigured")
+	}
+	if sess == nil {
+		t.Fatal("storage session = nil, want resumed session")
+	}
+	if got := sess.ID(); got != seedID {
+		t.Fatalf("storage session ID = %q, want %q", got, seedID)
+	}
+	if got := b.Session().ID(); got != seedID {
+		t.Fatalf("agent session ID = %q, want %q", got, seedID)
+	}
+	if got := b.Session().Meta()["cwd"]; got != "/tmp/test" {
+		t.Fatalf("agent cwd meta = %q, want /tmp/test", got)
+	}
+
+	sessions, err := store.ListSessions(ctx, "/tmp/test")
+	if err != nil {
+		t.Fatalf("list sessions: %v", err)
+	}
+	if len(sessions) != 1 || sessions[0].ID != seedID {
+		t.Fatalf("sessions = %#v, want only resumed seed session", sessions)
+	}
+}
+
+func TestOpenRuntimeWithLazySessionDoesNotCreateRecentSession(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	dataDir, err := config.DefaultDataDir()
+	if err != nil {
+		t.Fatalf("default data dir: %v", err)
+	}
+
+	store, err := storage.NewCantoStore(dataDir)
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	defer store.Close()
+
+	cfg := &config.Config{Provider: "ollama", Model: "qwen-test"}
+	b, sess, err := openRuntime(context.Background(), store, "/tmp/test", "main", cfg, "", "")
+	if err != nil {
+		t.Fatalf("openRuntime returned error: %v", err)
+	}
+	defer closeRuntimeHandles(b.Session(), sess, nil)
+	if b.Name() != "canto" {
+		t.Fatalf("backend name = %q, want canto", b.Name())
+	}
+	if sess == nil {
+		t.Fatal("storage session = nil, want lazy session")
+	}
+	if storage.IsMaterialized(sess) {
+		t.Fatal("fresh runtime materialized session before a model-visible turn")
+	}
+	sessions, err := store.ListSessions(context.Background(), "/tmp/test")
+	if err != nil {
+		t.Fatalf("list sessions: %v", err)
+	}
+	if len(sessions) != 0 {
+		t.Fatalf("sessions = %#v, want none before a model-visible turn", sessions)
+	}
+}
+
 func TestSessionModelName(t *testing.T) {
 	if got := sessionModelName("openrouter", "openai/gpt-5.4"); got != "openrouter/openai/gpt-5.4" {
 		t.Fatalf("sessionModelName() = %q, want %q", got, "openrouter/openai/gpt-5.4")
