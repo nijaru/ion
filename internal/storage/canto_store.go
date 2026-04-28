@@ -317,21 +317,15 @@ func (s *cantoSession) Append(ctx context.Context, event any) error {
 		})
 		err = s.store.canto.Save(ctx, ev)
 	case Agent:
-		var content strings.Builder
-		var reasoning strings.Builder
-		for _, b := range e.Content {
-			if b.Type == "text" && b.Text != nil {
-				content.WriteString(*b.Text)
-			}
-			if b.Type == "thinking" && b.Thinking != nil {
-				reasoning.WriteString(*b.Thinking)
-			}
+		content, reasoning := agentMessagePayload(e)
+		if !hasAgentMessagePayload(content, reasoning) {
+			return nil
 		}
-		preview = sessionSummary(content.String())
+		preview = sessionSummary(content)
 		ev := session.NewEvent(s.id, session.MessageAdded, llm.Message{
 			Role:      llm.RoleAssistant,
-			Content:   content.String(),
-			Reasoning: reasoning.String(),
+			Content:   content,
+			Reasoning: reasoning,
 		})
 		err = s.store.canto.Save(ctx, ev)
 	case Subagent:
