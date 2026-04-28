@@ -94,10 +94,6 @@ func (s *unconfiguredSession) SubmitTurn(context.Context, string) error {
 	if err == nil {
 		err = fmt.Errorf("ion is not configured yet")
 	}
-	select {
-	case s.events <- session.Error{Err: err}:
-	default:
-	}
 	return err
 }
 

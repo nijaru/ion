@@ -36,6 +36,8 @@ Current implementation posture:
 - Bare `--resume` is rejected in print mode unless a session ID is supplied, preventing `ion --resume -p ...` from accidentally starting a fresh run when no picker can be shown.
 - Canto backend pre-send failures from proactive usage checks or proactive compaction now emit `TurnFinished` after the visible error, so the TUI cannot hang awaiting terminal settlement.
 - App-local errors from slash commands, config/state writes, and approval-send failures now use a local UI error path instead of backend `session.Error`, so they do not wait for nonexistent backend terminal events or materialize durable transcript state.
+- The unconfigured backend now fails `SubmitTurn` synchronously without also queueing a backend error event, preventing duplicate startup/configuration errors.
+- ACP prompt completion no longer emits an empty assistant commit; the lifecycle test now asserts start-to-finish settlement without relying on asynchronous session-update ordering.
 - Live Fedora/local-api smoke is currently deferred because Fedora is off. If a live provider is needed before Fedora returns, use OpenRouter with `deepseek/deepseek-v4-pro` or `deepseek/deepseek-v4-flash`, but keep deterministic code review as the active focus.
 
 Next core-parity work:

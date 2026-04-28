@@ -276,19 +276,16 @@ func TestACPFullTurn(t *testing.T) {
 		t.Fatalf("expected TurnStarted, got %T", ev1)
 	}
 
-	ev2 := drainOne(t, client.events, 500*time.Millisecond)
-	if _, ok := ev2.(session.AgentDelta); !ok {
-		t.Fatalf("expected AgentDelta, got %T", ev2)
-	}
-
-	ev3 := drainOne(t, client.events, 500*time.Millisecond)
-	if _, ok := ev3.(session.AgentMessage); !ok {
-		t.Fatalf("expected AgentMessage, got %T", ev3)
-	}
-
-	ev4 := drainOne(t, client.events, 500*time.Millisecond)
-	if _, ok := ev4.(session.TurnFinished); !ok {
-		t.Fatalf("expected TurnFinished, got %T", ev4)
+	deadline := time.After(500 * time.Millisecond)
+	for {
+		select {
+		case ev := <-client.events:
+			if _, ok := ev.(session.TurnFinished); ok {
+				return
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for TurnFinished")
+		}
 	}
 }
 

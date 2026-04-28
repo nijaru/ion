@@ -214,8 +214,6 @@ func (s *Session) SubmitTurn(ctx context.Context, input string) error {
 		})
 		if err != nil {
 			s.events <- session.Error{Err: fmt.Errorf("prompt: %w", err)}
-		} else {
-			s.events <- session.AgentMessage{Message: ""}
 		}
 		s.events <- session.TurnFinished{}
 	}()
