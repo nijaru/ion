@@ -42,6 +42,7 @@ ACP, subagents, sandboxing, policy classifiers, escalation notifiers, tree navig
 
 - `TurnStarted` precedes turn-visible streaming/tool/status events.
 - Assistant commit is emitted before `TurnFinished`.
+- Ion must render committed assistant messages even when no streamed assistant row is pending.
 - Tool call started precedes matching tool output/result.
 - Tool results preserve the ID needed to match pending UI entries and provider history.
 - Streaming tool output deltas preserve the tool-use ID needed to attach interleaved output to the right pending row.

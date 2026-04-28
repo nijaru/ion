@@ -393,6 +393,67 @@ func TestToolEntryFlushesToTranscript(t *testing.T) {
 	}
 }
 
+func TestAgentMessagePrintsWithoutPendingStream(t *testing.T) {
+	storageSess := &stubStorageSession{}
+	model := readyModel(t)
+	model.Model.Storage = storageSess
+
+	updated, cmd := model.Update(session.AgentMessage{Message: "done"})
+	model = updated.(Model)
+
+	if cmd == nil {
+		t.Fatal("expected print command for committed assistant message")
+	}
+	if !model.App.PrintedTranscript {
+		t.Fatal("committed assistant message did not mark transcript printed")
+	}
+	for _, event := range storageSess.appends {
+		if _, ok := event.(storage.Agent); ok {
+			t.Fatalf("agent message should not be app-persisted: %#v", storageSess.appends)
+		}
+	}
+}
+
+func TestAgentMessageAfterToolResultPrintsFinalAnswer(t *testing.T) {
+	storageSess := &stubStorageSession{}
+	model := readyModel(t)
+	model.Model.Storage = storageSess
+
+	updated, _ := model.Update(session.TurnStarted{})
+	model = updated.(Model)
+	updated, _ = model.Update(session.ToolCallStarted{
+		ToolUseID: "tool-call-1",
+		ToolName:  "bash",
+		Args:      "echo ok",
+	})
+	model = updated.(Model)
+	updated, _ = model.Update(session.ToolResult{
+		ToolUseID: "tool-call-1",
+		ToolName:  "bash",
+		Result:    "ok\n",
+	})
+	model = updated.(Model)
+
+	model.App.PrintedTranscript = false
+	updated, cmd := model.Update(session.AgentMessage{Message: "done"})
+	model = updated.(Model)
+
+	if cmd == nil {
+		t.Fatal("expected print command for final assistant message after tool result")
+	}
+	if !model.App.PrintedTranscript {
+		t.Fatal("final assistant message after tool result did not mark transcript printed")
+	}
+	if model.InFlight.Pending != nil {
+		t.Fatalf("pending entry = %#v, want none", model.InFlight.Pending)
+	}
+	for _, event := range storageSess.appends {
+		if _, ok := event.(storage.Agent); ok {
+			t.Fatalf("agent message should not be app-persisted: %#v", storageSess.appends)
+		}
+	}
+}
+
 func TestInterleavedToolResultsPreservePendingEntries(t *testing.T) {
 	storageSess := &stubStorageSession{}
 	model := readyModel(t)

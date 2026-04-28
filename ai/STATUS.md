@@ -30,6 +30,7 @@ Current implementation posture:
 - TUI runtime `/resume` now prints the resumed marker after the runtime/workspace header and before replay entries, matching startup resume ordering.
 - Print CLI validation now happens before runtime/storage initialization, so invalid print args or `ion -p` without a prompt/stdin fail without opening an agent runtime.
 - Canto backend submit metadata now preserves provider-qualified model names (`provider/model`) when updating session recency, so `/resume <id>` keeps working for local/custom providers whose model IDs do not contain a provider slash.
+- Live assistant commits now render even when no streamed assistant row is pending, including final answers after a tool result clears the pending tool row.
 - Live Fedora/local-api smoke is currently deferred because Fedora is off. If a live provider is needed before Fedora returns, use OpenRouter with `deepseek/deepseek-v4-pro` or `deepseek/deepseek-v4-flash`, but keep deterministic code review as the active focus.
 
 Next core-parity work:
