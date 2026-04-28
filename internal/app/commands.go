@@ -108,7 +108,7 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		if err != nil {
 			return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
 		}
-		if err := config.SaveState(updated); err != nil {
+		if err := config.SaveReasoningState(m.activePreset().String(), level); err != nil {
 			return m, cmdError(fmt.Sprintf("failed to save state: %v", err))
 		}
 		m.Model.Backend.SetConfig(runtimeCfg)
@@ -1141,7 +1141,7 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 		if err != nil {
 			return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
 		}
-		if err := config.SaveState(updated); err != nil {
+		if err := config.SaveReasoningState(m.activePreset().String(), level); err != nil {
 			return m, cmdError(fmt.Sprintf("failed to save state: %v", err))
 		}
 		m.Model.Backend.SetConfig(runtimeCfg)
