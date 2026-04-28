@@ -35,6 +35,7 @@ Current implementation posture:
 - Immediate `SubmitTurn` failures now use a non-waiting error path and ordered user/error printing; backend terminal errors still wait for `TurnFinished`.
 - Bare `--resume` is rejected in print mode unless a session ID is supplied, preventing `ion --resume -p ...` from accidentally starting a fresh run when no picker can be shown.
 - Canto backend pre-send failures from proactive usage checks or proactive compaction now emit `TurnFinished` after the visible error, so the TUI cannot hang awaiting terminal settlement.
+- App-local errors from slash commands, config/state writes, and approval-send failures now use a local UI error path instead of backend `session.Error`, so they do not wait for nonexistent backend terminal events or materialize durable transcript state.
 - Live Fedora/local-api smoke is currently deferred because Fedora is off. If a live provider is needed before Fedora returns, use OpenRouter with `deepseek/deepseek-v4-pro` or `deepseek/deepseek-v4-flash`, but keep deterministic code review as the active focus.
 
 Next core-parity work:

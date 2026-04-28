@@ -17,6 +17,10 @@ import (
 // It translates backend events into Ion TUI messages.
 type Broker struct{}
 
+type localErrorMsg struct {
+	err error
+}
+
 func (m Model) awaitSessionEvent() tea.Cmd {
 	return func() tea.Msg {
 		ev, ok := <-m.Model.Session.Events()
@@ -408,12 +412,14 @@ func (m Model) handleSessionError(err error, awaitTerminal bool) (Model, tea.Cmd
 	}
 	m.Progress.TurnStartedAt = time.Time{}
 	entry := session.Entry{Role: session.System, Content: "Error: " + displayErr}
-	if err := m.persistEntry("persist session error", storage.System{
-		Type:    "system",
-		Content: entry.Content,
-		TS:      now(),
-	}); err != nil {
-		return m, persistErrorCmd("persist session error", err)
+	if awaitTerminal {
+		if err := m.persistEntry("persist session error", storage.System{
+			Type:    "system",
+			Content: entry.Content,
+			TS:      now(),
+		}); err != nil {
+			return m, persistErrorCmd("persist session error", err)
+		}
 	}
 	printErr := m.printEntries(entry)
 	if !awaitTerminal {
@@ -430,7 +436,7 @@ func redactApprovalRequest(req session.ApprovalRequest) session.ApprovalRequest 
 
 func persistErrorCmd(action string, err error) tea.Cmd {
 	return func() tea.Msg {
-		return session.Error{Err: fmt.Errorf("%s: %w", action, err)}
+		return localErrorMsg{err: fmt.Errorf("%s: %w", action, err)}
 	}
 }
 
