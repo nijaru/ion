@@ -373,45 +373,53 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		return m, m.awaitSessionEvent()
 
 	case session.Error:
-		m.InFlight.Pending = nil
-		m.InFlight.PendingTools = nil
-		m.Approval.Pending = nil
-		m.InFlight.QueuedTurns = nil
-		m.InFlight.StreamBuf = ""
-		m.InFlight.ReasonBuf = ""
-		m.InFlight.Thinking = false
-		m.Progress.Compacting = false
-		m.Progress.Mode = stateError
-		displayErr := msg.Err.Error()
-		if limit, ok := classifyProviderLimitError(msg.Err); ok {
-			displayErr = limit.display()
-			if err := m.persistEntry("persist routing stop", m.routingDecision("stop", limit.reason, limit.raw)); err != nil {
-				return m, persistErrorCmd("persist routing stop", err)
-			}
-		}
-		m.Progress.LastError = displayErr
-		m.Progress.LastTurnSummary = turnSummary{}
-		if !m.Progress.TurnStartedAt.IsZero() {
-			m.Progress.LastTurnSummary = turnSummary{
-				Elapsed: time.Since(m.Progress.TurnStartedAt),
-				Input:   m.Progress.CurrentTurnInput,
-				Output:  m.Progress.CurrentTurnOutput,
-				Cost:    m.Progress.CurrentTurnCost,
-			}
-		}
-		m.Progress.TurnStartedAt = time.Time{}
-		entry := session.Entry{Role: session.System, Content: "Error: " + displayErr}
-		if err := m.persistEntry("persist session error", storage.System{
-			Type:    "system",
-			Content: entry.Content,
-			TS:      now(),
-		}); err != nil {
-			return m, persistErrorCmd("persist session error", err)
-		}
-		return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
+		return m.handleSessionError(msg.Err, true)
 	}
 
 	return m, m.awaitSessionEvent()
+}
+
+func (m Model) handleSessionError(err error, awaitTerminal bool) (Model, tea.Cmd) {
+	m.InFlight.Pending = nil
+	m.InFlight.PendingTools = nil
+	m.Approval.Pending = nil
+	m.InFlight.QueuedTurns = nil
+	m.InFlight.StreamBuf = ""
+	m.InFlight.ReasonBuf = ""
+	m.InFlight.Thinking = false
+	m.Progress.Compacting = false
+	m.Progress.Mode = stateError
+	displayErr := err.Error()
+	if limit, ok := classifyProviderLimitError(err); ok {
+		displayErr = limit.display()
+		if err := m.persistEntry("persist routing stop", m.routingDecision("stop", limit.reason, limit.raw)); err != nil {
+			return m, persistErrorCmd("persist routing stop", err)
+		}
+	}
+	m.Progress.LastError = displayErr
+	m.Progress.LastTurnSummary = turnSummary{}
+	if !m.Progress.TurnStartedAt.IsZero() {
+		m.Progress.LastTurnSummary = turnSummary{
+			Elapsed: time.Since(m.Progress.TurnStartedAt),
+			Input:   m.Progress.CurrentTurnInput,
+			Output:  m.Progress.CurrentTurnOutput,
+			Cost:    m.Progress.CurrentTurnCost,
+		}
+	}
+	m.Progress.TurnStartedAt = time.Time{}
+	entry := session.Entry{Role: session.System, Content: "Error: " + displayErr}
+	if err := m.persistEntry("persist session error", storage.System{
+		Type:    "system",
+		Content: entry.Content,
+		TS:      now(),
+	}); err != nil {
+		return m, persistErrorCmd("persist session error", err)
+	}
+	printErr := m.printEntries(entry)
+	if !awaitTerminal {
+		return m, printErr
+	}
+	return m, tea.Sequence(printErr, m.awaitSessionEvent())
 }
 
 func redactApprovalRequest(req session.ApprovalRequest) session.ApprovalRequest {
@@ -515,8 +523,8 @@ func (m Model) submitText(text string) (Model, tea.Cmd) {
 	m.Progress.Mode = stateIonizing
 	m.InFlight.Thinking = true
 	if err := m.Model.Session.SubmitTurn(context.Background(), text); err != nil {
-		m, errCmd := m.handleSessionEvent(session.Error{Err: err})
-		return m, tea.Batch(m.printEntries(userEntry), errCmd)
+		m, errCmd := m.handleSessionError(err, false)
+		return m, tea.Sequence(m.printEntries(userEntry), errCmd)
 	}
 	return m, m.printEntries(userEntry)
 }
