@@ -321,7 +321,9 @@ func TestUntrustedWorkspaceBlocksEditAndAutoModes(t *testing.T) {
 }
 
 func TestModelStreamsAndCommitsPendingEntry(t *testing.T) {
+	storageSess := &stubStorageSession{}
 	model := readyModel(t)
+	model.Model.Storage = storageSess
 
 	updated, _ := model.Update(session.TurnStarted{})
 	model = updated.(Model)
@@ -342,6 +344,11 @@ func TestModelStreamsAndCommitsPendingEntry(t *testing.T) {
 	// Verify that a Println command was returned
 	if cmd == nil {
 		t.Fatalf("expected tea.Println command after finalizing message")
+	}
+	for _, event := range storageSess.appends {
+		if _, ok := event.(storage.Agent); ok {
+			t.Fatalf("agent message should not be app-persisted: %#v", storageSess.appends)
+		}
 	}
 }
 
@@ -1796,6 +1803,33 @@ func TestSubmitTextDoesNotPersistSlashCommand(t *testing.T) {
 
 	if len(storageSess.appends) != 0 {
 		t.Fatalf("slash command appended %d entries, want 0", len(storageSess.appends))
+	}
+}
+
+func TestSubmitTextDoesNotPersistModelVisibleTranscript(t *testing.T) {
+	storageSess := &stubStorageSession{}
+	sess := &stubSession{events: make(chan session.Event)}
+	model := New(
+		stubBackend{sess: sess},
+		storageSess,
+		nil,
+		"/tmp/test",
+		"main",
+		"dev",
+		nil,
+	)
+
+	updated, _ := model.submitText("hello")
+	model = updated
+
+	if len(sess.submits) != 1 || sess.submits[0] != "hello" {
+		t.Fatalf("submitted turns = %#v, want hello", sess.submits)
+	}
+	for _, event := range storageSess.appends {
+		switch event.(type) {
+		case storage.User, storage.Agent, storage.ToolUse, storage.ToolResult:
+			t.Fatalf("model-visible event should not be app-persisted: %#v", storageSess.appends)
+		}
 	}
 }
 
