@@ -675,7 +675,7 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 	if b.ionStore != nil {
 		if err := b.ionStore.UpdateSession(ctx, storage.SessionInfo{
 			ID:          sessionID,
-			Model:       b.Model(),
+			Model:       storageModelName(b.Provider(), b.Model()),
 			LastPreview: input,
 			Title:       input,
 		}); err != nil {
@@ -746,6 +746,18 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 	}()
 
 	return nil
+}
+
+func storageModelName(provider, model string) string {
+	provider = strings.TrimSpace(provider)
+	model = strings.TrimSpace(model)
+	if provider == "" {
+		return model
+	}
+	if model == "" {
+		return provider
+	}
+	return provider + "/" + model
 }
 
 func (b *Backend) shouldProactivelyCompact(ctx context.Context) (bool, error) {
