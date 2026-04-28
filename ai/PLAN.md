@@ -26,7 +26,10 @@ Ion Gate 1 is green for the resume/model-history failure that was blocking norma
 - Ion print CLI fails closed if the event stream closes before `TurnFinished`.
 - Ion app distinguishes immediate submit failures from backend terminal errors, avoiding a wait for terminal events that cannot arrive.
 - Ion print CLI rejects bare `--resume` without a session ID because print mode cannot open the resume picker.
-- Live Fedora/local-api smoke is currently deferred because Fedora is off; deterministic review remains the active proof path.
+- Ion Canto backend pre-send usage/compaction failures now emit terminal settlement after the visible error.
+- Ion app-local errors no longer use backend `session.Error`, so slash/config/approval-send failures do not wait for terminal events or materialize durable transcript state.
+- The unconfigured backend fails synchronously only, ACP no longer emits empty assistant commits, and the TUI flushes non-empty stream-only assistant turns on `TurnFinished`.
+- Live Fedora/local-api smoke is currently deferred because Fedora is off. OpenRouter DeepSeek smokes are provider/account-blocked by `402 Payment Required` after partial success; deterministic review and race tests remain the active proof path.
 
 Ion is still not broadly core-stable. The next gate is a top-down design/refactor against `ai/design/native-core-loop-architecture.md`, then deterministic coverage for cancellation, retries, provider-limit failures, session lifecycle, and TUI command/display polish.
 
