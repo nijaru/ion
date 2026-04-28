@@ -82,6 +82,7 @@ After any terminal state, the session can be resumed and can accept a new user t
 - Invalid print arguments and missing prompt/stdin must fail before runtime/storage initialization.
 - Text output returns the final assistant response.
 - JSON output is stable enough for smoke tests.
+- Event stream closure before `TurnFinished` is a failed smoke, not a successful partial response.
 - Piped stdin works as prompt input, and prompt-plus-stdin appends a `<stdin>` context block.
 
 ### 8. Runtime Switches Are Atomic Enough For UX

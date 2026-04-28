@@ -238,6 +238,17 @@ func TestPrintModeCancelsTurnOnTimeout(t *testing.T) {
 	}
 }
 
+func TestPrintModeErrorsWhenEventStreamClosesBeforeTurnFinished(t *testing.T) {
+	sess := &printSession{events: make(chan session.Event, 1)}
+	sess.events <- session.AgentDelta{Delta: "partial"}
+	close(sess.events)
+
+	_, err := runPromptTurn(context.Background(), sess, "hello", false)
+	if err == nil || !strings.Contains(err.Error(), "event stream closed before turn finished") {
+		t.Fatalf("runPromptTurn error = %v, want early stream close error", err)
+	}
+}
+
 func TestCloseRuntimeHandlesClosesPrintAgent(t *testing.T) {
 	sess := &printSession{}
 
