@@ -3494,10 +3494,8 @@ func TestRuntimeSwitchClosesNewRuntimeWhenStateSaveFails(t *testing.T) {
 		"",
 		false,
 	)
-	msg := cmd()
-	errMsg, ok := msg.(session.Error)
-	if !ok || !strings.Contains(errMsg.Err.Error(), "save active preset") {
-		t.Fatalf("switch msg = %#v, want save active preset error", msg)
+	if err := localErrorFromMsg(t, cmd()); !strings.Contains(err.Error(), "save active preset") {
+		t.Fatalf("switch error = %v, want save active preset error", err)
 	}
 	if oldSession.closed {
 		t.Fatal("old session was closed after failed switch")
@@ -3792,10 +3790,8 @@ func TestResumeRuntimeCommandClosesNewRuntimeWhenReplayFails(t *testing.T) {
 		session.Entry{Role: session.System, Content: "Resumed"},
 		"session-1",
 	)
-	msg := cmd()
-	errMsg, ok := msg.(session.Error)
-	if !ok || !strings.Contains(errMsg.Err.Error(), "load session transcript") {
-		t.Fatalf("resume msg = %#v, want transcript load error", msg)
+	if err := localErrorFromMsg(t, cmd()); !strings.Contains(err.Error(), "load session transcript") {
+		t.Fatalf("resume error = %v, want transcript load error", err)
 	}
 	if oldSession.closed {
 		t.Fatal("old session was closed after failed resume")
