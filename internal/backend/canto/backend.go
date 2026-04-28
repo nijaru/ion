@@ -778,11 +778,22 @@ func (b *Backend) shouldProactivelyCompact(ctx context.Context) (bool, error) {
 func (b *Backend) translateEvents(ctx context.Context, evCh <-chan session.Event) {
 	for ev := range evCh {
 		switch ev.Type {
+		case session.MessageAdded:
+			var msg llm.Message
+			if err := ev.UnmarshalData(&msg); err != nil {
+				continue
+			}
+			if msg.Role == llm.RoleAssistant &&
+				(strings.TrimSpace(msg.Content) != "" || strings.TrimSpace(msg.Reasoning) != "") {
+				b.events <- ionsession.AgentMessage{
+					Message:   msg.Content,
+					Reasoning: msg.Reasoning,
+				}
+			}
 		case session.TurnStarted:
 			b.events <- ionsession.TurnStarted{}
 			b.events <- ionsession.StatusChanged{Status: "Thinking..."}
 		case session.TurnCompleted:
-			b.events <- ionsession.AgentMessage{Message: ""} // Commit
 			b.events <- ionsession.TurnFinished{}
 			b.events <- ionsession.StatusChanged{Status: "Ready"}
 		case session.ToolStarted:
