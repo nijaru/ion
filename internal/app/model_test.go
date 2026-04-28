@@ -1564,9 +1564,6 @@ func TestHandleCommandUpdatesStateDirectly(t *testing.T) {
 }
 
 func TestCompactCommandUsesBackendCompactor(t *testing.T) {
-	if features.CoreLoopOnly {
-		t.Skip("advanced /compact command is disabled during P1 core loop stabilization")
-	}
 	backend := &compactBackend{
 		stubBackend: stubBackend{sess: &stubSession{events: make(chan session.Event)}},
 		compacted:   true,
@@ -1634,9 +1631,6 @@ func TestComposerQueuesWhileCompacting(t *testing.T) {
 }
 
 func TestCompactCommandReportsNoOp(t *testing.T) {
-	if features.CoreLoopOnly {
-		t.Skip("advanced /compact command is disabled during P1 core loop stabilization")
-	}
 	backend := &compactBackend{
 		stubBackend: stubBackend{sess: &stubSession{events: make(chan session.Event)}},
 		compacted:   false,
@@ -1655,9 +1649,6 @@ func TestCompactCommandReportsNoOp(t *testing.T) {
 }
 
 func TestCompactCommandErrorsWhenBackendUnsupported(t *testing.T) {
-	if features.CoreLoopOnly {
-		t.Skip("advanced /compact command is disabled during P1 core loop stabilization")
-	}
 	model := New(
 		stubBackend{sess: &stubSession{events: make(chan session.Event)}},
 		nil,
@@ -1670,12 +1661,9 @@ func TestCompactCommandErrorsWhenBackendUnsupported(t *testing.T) {
 
 	_, cmd := model.handleCommand("/compact")
 	msg := cmd()
-	errMsg, ok := msg.(session.Error)
-	if !ok {
-		t.Fatalf("expected session.Error, got %T", msg)
-	}
-	if errMsg.Err == nil || errMsg.Err.Error() != "current backend does not support /compact" {
-		t.Fatalf("unexpected /compact error: %v", errMsg.Err)
+	err := localErrorFromMsg(t, msg)
+	if err.Error() != "current backend does not support /compact" {
+		t.Fatalf("unexpected /compact error: %v", err)
 	}
 }
 
@@ -2179,6 +2167,7 @@ func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 		"/settings",
 		"/tools",
 		"/clear",
+		"/compact",
 		"/cost",
 		"/quit, /exit",
 		"/help",
@@ -2187,7 +2176,6 @@ func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 		wantCommands = append(wantCommands,
 			"/rewind <id>",
 			"/memory [query]",
-			"/compact",
 			"/mcp add <cmd>",
 		)
 	}
@@ -2206,7 +2194,7 @@ func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 		}
 	}
 	if features.CoreLoopOnly {
-		for _, disabled := range []string{"/rewind <id>", "/memory [query]", "/compact", "/mcp add <cmd>"} {
+		for _, disabled := range []string{"/rewind <id>", "/memory [query]", "/mcp add <cmd>"} {
 			if strings.Contains(helpMsg.notice, disabled) {
 				t.Fatalf("help notice should not advertise disabled command %q: %q", disabled, helpMsg.notice)
 			}
@@ -2226,7 +2214,6 @@ func TestCoreLoopOnlyDisablesAdvancedCommands(t *testing.T) {
 		"/mcp add server",
 		"/rewind cp-1",
 		"/memory policy",
-		"/compact",
 	} {
 		t.Run(input, func(t *testing.T) {
 			_, cmd := model.handleCommand(input)

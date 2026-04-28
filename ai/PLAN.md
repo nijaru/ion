@@ -133,10 +133,10 @@ Exit criteria:
 
 ## Immediate Work Order
 
-1. Decide the `CoreLoopOnly` exit policy: keep it on briefly, or reopen only table-stakes surfaces needed for CLI/session parity.
+1. Keep `CoreLoopOnly` on as the default freeze, but reopen table-stakes reliability/session surfaces one at a time. `/compact` is reopened because context survival is part of reliable long-session operation.
 2. Audit the current CLI surface against Pi/Codex conventions: `-p`, stdin, JSON, resume/continue, exit codes, and scriptable smoke behavior.
 3. Audit session UX gaps that remain after the stable core: resume picker clarity, transcript inspection, help/readability, and startup header formatting.
 4. Promote table-stakes items into focused tasks before reopening deferred P2/P3 codepaths.
-5. Re-run full/race tests and Fedora/local-api live smoke after any native-loop or CLI/session behavior change.
+5. Re-run full/race tests and Fedora/local-api live smoke after any native-loop or CLI/session behavior change. Prefer Fedora `local-api` / `qwen3.6:27b`; use OpenRouter `deepseek/deepseek-v4-flash` or `deepseek/deepseek-v4-pro` only when local testing is unavailable or a separate-provider check is needed.
 
 No more broad `ai/` corpus passes by default. Use the existing context docs as an index, then read source. Reopen `ai/` only for a specific subsystem decision or when docs conflict with code.

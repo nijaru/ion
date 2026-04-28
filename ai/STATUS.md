@@ -11,7 +11,7 @@ Fast, lightweight terminal coding agent.
 ## Current Truth
 
 - The native core-loop gate passed on 2026-04-28. ACP, sandbox polish, approvals polish, privacy expansion, thinking expansion, skills, routing, branching, and other P2/P3 work stay deferred until table-stakes CLI/session UX is intentionally reopened.
-- Ion is still running with `features.CoreLoopOnly`; treat that as the next deliberate product decision, not as an accidental permanent state.
+- Ion is still running with `features.CoreLoopOnly`, but `/compact` is intentionally reopened as a table-stakes reliability command. ACP, memory commands, MCP registration, rewind/checkpoint polish, privacy expansion, subagents, routing, and other advanced surfaces stay gated.
 - Canto owns provider-visible transcript, effective history, agent/tool execution, retry, queueing, terminal events, and compaction primitives.
 - Ion owns input classification, TUI/CLI lifecycle, display projection, local status/error rows, trust/mode UX, and provider/config selection.
 - Keep Canto and Ion split, but treat Ion as Canto's acceptance test during stabilization. Canto public-framework expansion is deferred until Ion's native minimal loop is stable.
@@ -33,13 +33,15 @@ Fast, lightweight terminal coding agent.
 - Final gate bundle passed: `go test -race ./cmd/ion ./internal/app ./internal/backend/canto ./internal/backend/canto/tools -count=1`, Fedora endpoint discovery for `qwen3.6:27b`, and live smoke against `local-api` / `qwen3.6:27b`.
 - CLI parity started under `tk-mmcs`: `-c` now aliases `--continue`, and `-r` now aliases `--resume` with the same picker/print-mode rules as the long form. Focused CLI tests and `go test ./... -count=1` are green.
 - Scriptable model selection now has non-persistent `--model`/`-m` and `--thinking` overrides. Full tests and a live Fedora/local-api print smoke with explicit provider/model/thinking flags passed.
+- `/compact` is available again while `CoreLoopOnly` remains on. Focused app coverage and `go test ./... -count=1` pass after reopening it.
+- Preferred live-smoke order: use Fedora local-api first when available (`http://fedora:8080/v1`, `qwen3.6:27b`). If Fedora is down and live model evidence is needed, use OpenRouter with `deepseek/deepseek-v4-flash` for cheap smoke or `deepseek/deepseek-v4-pro` only when the heavier model is useful.
 
 ## Next Action
 
 Continue `tk-mmcs` as the parity/table-stakes track:
 
 1. Continue auditing the CLI surface against Pi/Codex conventions: exit codes, resume/continue print behavior, and JSON shape.
-2. Decide the next small slice for `CoreLoopOnly`: keep it on briefly, or reopen only the table-stakes surfaces needed for CLI/session UX.
+2. Keep `CoreLoopOnly` on while reopening only table-stakes reliability/session surfaces such as compaction.
 3. Keep ACP, privacy, subagents, skills, routing, and advanced thinking behind explicit later tasks.
 
 Do not run another broad `ai/` pass by default. The next work is source review and targeted docs only when the code review exposes a design question.
