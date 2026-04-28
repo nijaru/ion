@@ -888,6 +888,20 @@ func TestProgressLineFitsWidthAfterResize(t *testing.T) {
 	}
 }
 
+func TestViewSeparatesPrintedTranscriptFromProgress(t *testing.T) {
+	model := readyModel(t)
+	model.App.PrintedTranscript = true
+	model.Progress.Mode = stateReady
+
+	view := model.View().Content
+	if !strings.HasPrefix(view, "\n") {
+		t.Fatalf("view = %q, want blank line before progress after printed transcript", view)
+	}
+	if !strings.Contains(ansi.Strip(view), "\n• Ready\n") {
+		t.Fatalf("view = %q, want ready progress after separator newline", view)
+	}
+}
+
 func TestTurnFinishedLeavesProgressComplete(t *testing.T) {
 	model := readyModel(t)
 	model.Progress.Mode = stateStreaming
