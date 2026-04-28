@@ -152,7 +152,7 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		sess := m.Model.Session
 		return m, func() tea.Msg {
 			if err := sess.RegisterMCPServer(context.Background(), mcpCmd, mcpArgs...); err != nil {
-				return session.Error{Err: err}
+				return localErrorMsg{err: err}
 			}
 			return nil
 		}
@@ -313,7 +313,7 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		return m, func() tea.Msg {
 			compacted, err := compactor.Compact(context.Background())
 			if err != nil {
-				return session.Error{Err: err}
+				return localErrorMsg{err: err}
 			}
 			if compacted {
 				return sessionCompactedMsg{notice: "Compacted current session context"}
@@ -1198,11 +1198,11 @@ func (m Model) switchRuntimeCommand(
 		}
 		backend, sess, storageSess, err := switcher(context.Background(), &cfgCopy, switchID)
 		if err != nil {
-			return session.Error{Err: err}
+			return localErrorMsg{err: err}
 		}
 		if err := config.SaveActivePreset(preset.String()); err != nil {
 			closeSwitchedRuntime(sess, storageSess)
-			return session.Error{Err: fmt.Errorf("save active preset: %w", err)}
+			return localErrorMsg{err: fmt.Errorf("save active preset: %w", err)}
 		}
 		if oldSession != nil {
 			_ = oldSession.Close()
@@ -1240,7 +1240,7 @@ func (m Model) resumeRuntimeCommand(
 		}
 		backend, sess, storageSess, err := switcher(context.Background(), &cfgCopy, sessionID)
 		if err != nil {
-			return session.Error{Err: err}
+			return localErrorMsg{err: err}
 		}
 		var entries []session.Entry
 		resumeBranch := currentBranchName(m.App.Branch, storageSess)
@@ -1248,7 +1248,7 @@ func (m Model) resumeRuntimeCommand(
 			entries, err = storageSess.Entries(context.Background())
 			if err != nil {
 				closeSwitchedRuntime(sess, storageSess)
-				return session.Error{Err: fmt.Errorf("load session transcript: %w", err)}
+				return localErrorMsg{err: fmt.Errorf("load session transcript: %w", err)}
 			}
 		}
 		if oldSession != nil {

@@ -36,6 +36,7 @@ Current implementation posture:
 - Bare `--resume` is rejected in print mode unless a session ID is supplied, preventing `ion --resume -p ...` from accidentally starting a fresh run when no picker can be shown.
 - Canto backend pre-send failures from proactive usage checks or proactive compaction now emit `TurnFinished` after the visible error, so the TUI cannot hang awaiting terminal settlement.
 - App-local errors from slash commands, config/state writes, and approval-send failures now use a local UI error path instead of backend `session.Error`, so they do not wait for nonexistent backend terminal events or materialize durable transcript state.
+- Async local/runtime-control failures from `/mcp`, `/compact`, model switching, active-preset save, resume open, and replay loading also use the local UI error path instead of backend terminal events.
 - The unconfigured backend now fails `SubmitTurn` synchronously without also queueing a backend error event, preventing duplicate startup/configuration errors.
 - ACP prompt completion no longer emits an empty assistant commit; the lifecycle test now asserts start-to-finish settlement without relying on asynchronous session-update ordering.
 - The TUI now flushes a non-empty pending streamed assistant entry on `TurnFinished` when no committed `AgentMessage` arrives, making the app robust to stream-only backend completion.
