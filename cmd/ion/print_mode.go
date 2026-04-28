@@ -92,10 +92,7 @@ func runPromptTurn(
 		select {
 		case ev, ok := <-agent.Events():
 			if !ok {
-				if agentText.Len() > 0 {
-					result.Response = agentText.String()
-				}
-				return result, nil
+				return printResult{}, fmt.Errorf("event stream closed before turn finished")
 			}
 			switch msg := ev.(type) {
 			case session.ApprovalRequest:
