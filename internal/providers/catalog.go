@@ -173,12 +173,12 @@ func ResolvedAuthEnvVar(cfg *config.Config) string {
 	if cfg == nil {
 		return ""
 	}
-	if envVar := strings.TrimSpace(cfg.AuthEnvVar); envVar != "" {
-		return envVar
-	}
 	def, ok := Lookup(cfg.Provider)
 	if !ok {
 		return ""
+	}
+	if envVar := strings.TrimSpace(cfg.AuthEnvVar); envVar != "" && def.SupportsCustomEndpoint {
+		return envVar
 	}
 	return def.DefaultEnvVar
 }
@@ -189,16 +189,18 @@ func ResolvedHeaders(cfg *config.Config) map[string]string {
 		return cloneHeaders(cfg.ExtraHeaders)
 	}
 	headers := cloneHeaders(def.DefaultHeaders)
-	for k, v := range cfg.ExtraHeaders {
-		key := strings.TrimSpace(k)
-		value := strings.TrimSpace(v)
-		if key == "" || value == "" {
-			continue
+	if def.SupportsCustomEndpoint {
+		for k, v := range cfg.ExtraHeaders {
+			key := strings.TrimSpace(k)
+			value := strings.TrimSpace(v)
+			if key == "" || value == "" {
+				continue
+			}
+			if headers == nil {
+				headers = make(map[string]string)
+			}
+			headers[key] = value
 		}
-		if headers == nil {
-			headers = make(map[string]string)
-		}
-		headers[key] = value
 	}
 	return headers
 }
