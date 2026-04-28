@@ -999,19 +999,13 @@ func TestCompactUsesManualCompactionHelper(t *testing.T) {
 		t.Fatalf("open session: %v", err)
 	}
 
-	for _, msg := range []storage.Agent{
-		{Type: "agent", Content: []storage.Block{{Type: "text", Text: textPtr(strings.Repeat("alpha ", 60))}}},
-		{Type: "agent", Content: []storage.Block{{Type: "text", Text: textPtr(strings.Repeat("beta ", 60))}}},
-		{Type: "agent", Content: []storage.Block{{Type: "text", Text: textPtr(strings.Repeat("gamma ", 60))}}},
-		{Type: "agent", Content: []storage.Block{{Type: "text", Text: textPtr("recent answer")}}},
-	} {
-		if err := storageSession.Append(ctx, msg); err != nil {
-			t.Fatalf("append history: %v", err)
-		}
-	}
-	if err := storageSession.Append(ctx, storage.User{Type: "user", Content: "recent question"}); err != nil {
-		t.Fatalf("append recent user: %v", err)
-	}
+	appendCantoHistory(t, ctx, store, storageSession.ID(),
+		llm.Message{Role: llm.RoleAssistant, Content: strings.Repeat("alpha ", 60)},
+		llm.Message{Role: llm.RoleAssistant, Content: strings.Repeat("beta ", 60)},
+		llm.Message{Role: llm.RoleAssistant, Content: strings.Repeat("gamma ", 60)},
+		llm.Message{Role: llm.RoleAssistant, Content: "recent answer"},
+		llm.Message{Role: llm.RoleUser, Content: "recent question"},
+	)
 
 	oldFactory := providerFactory
 	provider := &compactProvider{id: "openai"}
@@ -1290,19 +1284,13 @@ func TestOpenRecoversFromContextOverflowByCompacting(t *testing.T) {
 		t.Fatalf("open session: %v", err)
 	}
 
-	for _, msg := range []storage.Agent{
-		{Type: "agent", Content: []storage.Block{{Type: "text", Text: textPtr(strings.Repeat("alpha ", 60))}}},
-		{Type: "agent", Content: []storage.Block{{Type: "text", Text: textPtr(strings.Repeat("beta ", 60))}}},
-		{Type: "agent", Content: []storage.Block{{Type: "text", Text: textPtr(strings.Repeat("gamma ", 60))}}},
-		{Type: "agent", Content: []storage.Block{{Type: "text", Text: textPtr("recent answer")}}},
-	} {
-		if err := storageSession.Append(ctx, msg); err != nil {
-			t.Fatalf("append history: %v", err)
-		}
-	}
-	if err := storageSession.Append(ctx, storage.User{Type: "user", Content: "recent question"}); err != nil {
-		t.Fatalf("append recent user: %v", err)
-	}
+	appendCantoHistory(t, ctx, store, storageSession.ID(),
+		llm.Message{Role: llm.RoleAssistant, Content: strings.Repeat("alpha ", 60)},
+		llm.Message{Role: llm.RoleAssistant, Content: strings.Repeat("beta ", 60)},
+		llm.Message{Role: llm.RoleAssistant, Content: strings.Repeat("gamma ", 60)},
+		llm.Message{Role: llm.RoleAssistant, Content: "recent answer"},
+		llm.Message{Role: llm.RoleUser, Content: "recent question"},
+	)
 
 	provider := &overflowRecoveryProvider{
 		FauxProvider: ctesting.NewMockProvider(
@@ -1389,19 +1377,13 @@ func TestSubmitTurnProactivelyCompactsBeforeOverflow(t *testing.T) {
 		t.Fatalf("open session: %v", err)
 	}
 
-	for _, msg := range []storage.Agent{
-		{Type: "agent", Content: []storage.Block{{Type: "text", Text: textPtr(strings.Repeat("alpha ", 60))}}},
-		{Type: "agent", Content: []storage.Block{{Type: "text", Text: textPtr(strings.Repeat("beta ", 60))}}},
-		{Type: "agent", Content: []storage.Block{{Type: "text", Text: textPtr(strings.Repeat("gamma ", 60))}}},
-		{Type: "agent", Content: []storage.Block{{Type: "text", Text: textPtr("recent answer")}}},
-	} {
-		if err := storageSession.Append(ctx, msg); err != nil {
-			t.Fatalf("append history: %v", err)
-		}
-	}
-	if err := storageSession.Append(ctx, storage.User{Type: "user", Content: "recent question"}); err != nil {
-		t.Fatalf("append recent user: %v", err)
-	}
+	appendCantoHistory(t, ctx, store, storageSession.ID(),
+		llm.Message{Role: llm.RoleAssistant, Content: strings.Repeat("alpha ", 60)},
+		llm.Message{Role: llm.RoleAssistant, Content: strings.Repeat("beta ", 60)},
+		llm.Message{Role: llm.RoleAssistant, Content: strings.Repeat("gamma ", 60)},
+		llm.Message{Role: llm.RoleAssistant, Content: "recent answer"},
+		llm.Message{Role: llm.RoleUser, Content: "recent question"},
+	)
 
 	provider := &overflowRecoveryProvider{
 		FauxProvider: ctesting.NewMockProvider(
@@ -1477,12 +1459,9 @@ func TestSubmitTurnStopsWhenProactiveCompactionFails(t *testing.T) {
 		t.Fatalf("open session: %v", err)
 	}
 
-	if err := storageSession.Append(ctx, storage.Agent{
-		Type:    "agent",
-		Content: []storage.Block{{Type: "text", Text: textPtr(strings.Repeat("alpha ", 60))}},
-	}); err != nil {
-		t.Fatalf("append history: %v", err)
-	}
+	appendCantoHistory(t, ctx, store, storageSession.ID(),
+		llm.Message{Role: llm.RoleAssistant, Content: strings.Repeat("alpha ", 60)},
+	)
 
 	provider := &overflowRecoveryProvider{
 		FauxProvider: ctesting.NewMockProvider(
@@ -1693,4 +1672,24 @@ func entryExists(entries []ionsession.Entry, role ionsession.Role, content strin
 	return false
 }
 
-func textPtr(s string) *string { return &s }
+func appendCantoHistory(
+	t *testing.T,
+	ctx context.Context,
+	store storage.Store,
+	sessionID string,
+	messages ...llm.Message,
+) {
+	t.Helper()
+	cantoStore, ok := store.(interface{ Canto() *csession.SQLiteStore })
+	if !ok {
+		t.Fatalf("store %T does not expose Canto history", store)
+	}
+	for _, msg := range messages {
+		if err := cantoStore.Canto().Save(
+			ctx,
+			csession.NewEvent(sessionID, csession.MessageAdded, msg),
+		); err != nil {
+			t.Fatalf("append canto history: %v", err)
+		}
+	}
+}

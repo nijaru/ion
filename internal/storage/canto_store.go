@@ -23,8 +23,7 @@ type cantoStore struct {
 	memory *memory.CoreStore
 	db     *sql.DB // Direct access for inputs and index
 
-	mu        sync.Mutex
-	toolNames map[string]string // Cache for tool use ID -> tool name
+	mu sync.Mutex
 }
 
 const (
@@ -57,11 +56,10 @@ func NewCantoStore(root string) (Store, error) {
 	}
 
 	s := &cantoStore{
-		dbPath:    dbPath,
-		canto:     cStore,
-		memory:    mStore,
-		db:        db,
-		toolNames: make(map[string]string),
+		dbPath: dbPath,
+		canto:  cStore,
+		memory: mStore,
+		db:     db,
 	}
 	if err := s.init(); err != nil {
 		return nil, err
@@ -309,62 +307,21 @@ func (s *cantoSession) Append(ctx context.Context, event any) error {
 	var err error
 	switch e := event.(type) {
 	case User:
-		title = sessionTitle(e.Content)
-		preview = sessionSummary(e.Content)
-		ev := session.NewEvent(s.id, session.MessageAdded, llm.Message{
-			Role:    llm.RoleUser,
-			Content: e.Content,
-		})
-		err = s.store.canto.Save(ctx, ev)
+		return modelVisibleAppendError(event)
 	case Agent:
 		content, reasoning := agentMessagePayload(e)
 		if !hasAgentMessagePayload(content, reasoning) {
 			return nil
 		}
-		preview = sessionSummary(content)
-		ev := session.NewEvent(s.id, session.MessageAdded, llm.Message{
-			Role:      llm.RoleAssistant,
-			Content:   content,
-			Reasoning: reasoning,
-		})
-		err = s.store.canto.Save(ctx, ev)
+		return modelVisibleAppendError(event)
 	case Subagent:
 		preview = sessionSummary(e.Content)
 		ev := session.NewEvent(s.id, ionSubagentEvent, e)
 		err = s.store.canto.Save(ctx, ev)
 	case ToolUse:
-		s.store.mu.Lock()
-		s.store.toolNames[e.ID] = e.Name
-		s.store.mu.Unlock()
-
-		ev := session.NewEvent(s.id, session.ToolStarted, map[string]any{
-			"id":   e.ID,
-			"tool": e.Name,
-			"args": e.Input,
-		})
-		err = s.store.canto.Save(ctx, ev)
+		return modelVisibleAppendError(event)
 	case ToolResult:
-		completed := session.NewEvent(s.id, session.ToolCompleted, map[string]any{
-			"tool_use_id": e.ToolUseID,
-			"output":      e.Content,
-			"is_error":    e.IsError,
-		})
-		if err = s.store.canto.Save(ctx, completed); err != nil {
-			break
-		}
-		toolName, lookupErr := s.toolNameForUseID(ctx, e.ToolUseID)
-		if lookupErr != nil {
-			err = lookupErr
-			break
-		}
-		preview = sessionSummary(e.Content)
-		msg := llm.Message{
-			Role:    llm.RoleTool,
-			Content: e.Content,
-			Name:    toolName,
-			ToolID:  e.ToolUseID,
-		}
-		err = s.store.canto.Save(ctx, session.NewEvent(s.id, session.MessageAdded, msg))
+		return modelVisibleAppendError(event)
 	case Status:
 		ev := session.NewEvent(s.id, session.EventType("status_changed"), map[string]any{
 			"status": e.Status,
@@ -416,42 +373,11 @@ func (s *cantoSession) Append(ctx context.Context, event any) error {
 	return s.store.UpdateSession(ctx, SessionInfo{ID: s.id, Title: title, Summary: preview, LastPreview: preview})
 }
 
-func (s *cantoSession) toolNameForUseID(ctx context.Context, toolUseID string) (string, error) {
-	if toolUseID == "" {
-		return "", nil
-	}
-
-	s.store.mu.Lock()
-	name, ok := s.store.toolNames[toolUseID]
-	s.store.mu.Unlock()
-	if ok {
-		return name, nil
-	}
-
-	sess, err := s.store.canto.Load(ctx, s.id)
-	if err != nil {
-		return "", err
-	}
-	for i := len(sess.Events()) - 1; i >= 0; i-- {
-		ev := sess.Events()[i]
-		if ev.Type != session.ToolStarted {
-			continue
-		}
-		var data struct {
-			ID   string `json:"id"`
-			Tool string `json:"tool"`
-		}
-		if err := ev.UnmarshalData(&data); err != nil {
-			return "", err
-		}
-		if data.ID == toolUseID {
-			s.store.mu.Lock()
-			s.store.toolNames[data.ID] = data.Tool
-			s.store.mu.Unlock()
-			return data.Tool, nil
-		}
-	}
-	return "", nil
+func modelVisibleAppendError(event any) error {
+	return fmt.Errorf(
+		"canto storage cannot append model-visible %T events; use the Canto runner",
+		event,
+	)
 }
 
 func (s *cantoSession) LastStatus(ctx context.Context) (string, error) {
