@@ -2236,6 +2236,26 @@ func TestHelpSectionDetectionIncludesCommands(t *testing.T) {
 	}
 }
 
+func TestRenderHelpLineStylesLabelsWithoutChangingText(t *testing.T) {
+	model := readyModel(t)
+	line := "  /resume [id]     resume a recent session or pick one"
+
+	got := ansi.Strip(model.renderHelpLine(1, line))
+	if got != line {
+		t.Fatalf("renderHelpLine = %q, want %q", got, line)
+	}
+}
+
+func TestSplitHelpDetail(t *testing.T) {
+	key, sep, detail, ok := splitHelpDetail("  Ctrl+P / Ctrl+N  command history")
+	if !ok {
+		t.Fatal("splitHelpDetail did not split help row")
+	}
+	if key != "Ctrl+P / Ctrl+N" || sep != "  " || detail != "command history" {
+		t.Fatalf("key=%q sep=%q detail=%q", key, sep, detail)
+	}
+}
+
 func TestTabCompletesSlashCommands(t *testing.T) {
 	model := readyModel(t)
 	model.Input.Composer.SetValue("/think")
