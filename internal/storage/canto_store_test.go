@@ -472,6 +472,52 @@ func TestCantoStoreEntriesPreserveToolResultErrors(t *testing.T) {
 	}
 }
 
+func TestCantoStoreEntriesPreserveCantoToolCompletedErrors(t *testing.T) {
+	root := t.TempDir()
+	storeAny, err := NewCantoStore(root)
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	store := storeAny.(*cantoStore)
+
+	ctx := context.Background()
+	sess, err := store.OpenSession(ctx, "/tmp/ion-storage-test", "model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	if err := store.canto.Save(ctx, csession.NewEvent(sess.ID(), csession.MessageAdded, llm.Message{
+		Role:    llm.RoleTool,
+		ToolID:  "tool-err",
+		Name:    "bash",
+		Content: "exit status 1",
+	})); err != nil {
+		t.Fatalf("save tool message: %v", err)
+	}
+	if err := store.canto.Save(ctx, csession.NewToolCompletedEvent(sess.ID(), csession.ToolCompletedData{
+		Tool:   "bash",
+		ID:     "tool-err",
+		Output: "exit status 1",
+		Error:  "exit status 1",
+	})); err != nil {
+		t.Fatalf("save tool completed: %v", err)
+	}
+
+	entries, err := sess.Entries(ctx)
+	if err != nil {
+		t.Fatalf("entries: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("entries length = %d, want 1", len(entries))
+	}
+	if entries[0].Role != ionsession.Tool {
+		t.Fatalf("tool entry role = %q, want %q", entries[0].Role, ionsession.Tool)
+	}
+	if !entries[0].IsError {
+		t.Fatal("tool entry IsError = false, want true")
+	}
+}
+
 func TestCantoStoreEntriesUseEffectiveHistoryAfterCompaction(t *testing.T) {
 	root := t.TempDir()
 	storeAny, err := NewCantoStore(root)

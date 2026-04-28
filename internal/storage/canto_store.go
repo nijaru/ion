@@ -493,13 +493,19 @@ func (s *cantoSession) Entries(ctx context.Context) ([]ionsession.Entry, error) 
 		}
 		var data struct {
 			ToolUseID string `json:"tool_use_id"`
+			ID        string `json:"id"`
 			IsError   bool   `json:"is_error"`
+			Error     string `json:"error"`
 		}
 		if err := ev.UnmarshalData(&data); err != nil {
 			return nil, err
 		}
-		if data.ToolUseID != "" {
-			toolErrors[data.ToolUseID] = data.IsError
+		toolUseID := data.ToolUseID
+		if toolUseID == "" {
+			toolUseID = data.ID
+		}
+		if toolUseID != "" {
+			toolErrors[toolUseID] = data.IsError || strings.TrimSpace(data.Error) != ""
 		}
 	}
 

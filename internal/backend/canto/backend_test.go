@@ -518,6 +518,32 @@ func TestTranslateEventsPreservesToolOutputDeltaID(t *testing.T) {
 	}
 }
 
+func TestTranslateEventsPreservesToolCompletedError(t *testing.T) {
+	b := New()
+	events := make(chan csession.Event, 1)
+	events <- csession.NewToolCompletedEvent("session-id", csession.ToolCompletedData{
+		ID:     "tool-call-1",
+		Tool:   "bash",
+		Output: "partial output\nError: exit status 1",
+		Error:  "exit status 1",
+	})
+	close(events)
+
+	b.translateEvents(t.Context(), events)
+
+	ev := receiveEvent(t, b.Events())
+	result, ok := ev.(ionsession.ToolResult)
+	if !ok {
+		t.Fatalf("event = %T, want ToolResult", ev)
+	}
+	if result.Error == nil || result.Error.Error() != "exit status 1" {
+		t.Fatalf("tool result error = %v, want exit status 1", result.Error)
+	}
+	if result.Result != "partial output\nError: exit status 1" {
+		t.Fatalf("tool result output = %q", result.Result)
+	}
+}
+
 func TestTranslateEventsUsesChildIDForSubagentRows(t *testing.T) {
 	b := New()
 	events := make(chan csession.Event, 2)
