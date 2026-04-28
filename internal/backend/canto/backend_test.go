@@ -1418,6 +1418,12 @@ func TestOpenRecoversFromContextOverflowByCompacting(t *testing.T) {
 	if len(calls) != 3 {
 		t.Fatalf("provider calls = %d, want 3 (overflow, compact, retry)", len(calls))
 	}
+	if !requestContains(calls[2], "<conversation_summary>") {
+		t.Fatalf("retry request was not rebuilt from compacted history: %#v", calls[2].Messages)
+	}
+	if requestContains(calls[2], strings.Repeat("alpha ", 20)) {
+		t.Fatalf("retry request still contains pre-compaction history: %#v", calls[2].Messages)
+	}
 
 	resumed, err := store.ResumeSession(ctx, storageSession.ID())
 	if err != nil {
@@ -1448,6 +1454,18 @@ func TestOpenRecoversFromContextOverflowByCompacting(t *testing.T) {
 	if compactionEvents == 0 {
 		t.Fatal("expected at least one durable compaction event")
 	}
+}
+
+func requestContains(req *llm.Request, needle string) bool {
+	if req == nil {
+		return false
+	}
+	for _, msg := range req.Messages {
+		if strings.Contains(msg.Content, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestSubmitTurnProactivelyCompactsBeforeOverflow(t *testing.T) {
