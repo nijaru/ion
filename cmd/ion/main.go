@@ -103,6 +103,10 @@ func main() {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(2)
 	}
+	if err := validatePrintSelection(printRequested, openResumePicker); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(2)
+	}
 	if printRequested {
 		if isStdinPipe() {
 			data, err := io.ReadAll(os.Stdin)
@@ -236,6 +240,13 @@ func closeRuntimeHandles(agent session.AgentSession, sess storage.Session, store
 		errs = append(errs, store.Close())
 	}
 	return errors.Join(errs...)
+}
+
+func validatePrintSelection(printRequested, openResumePicker bool) error {
+	if printRequested && openResumePicker {
+		return fmt.Errorf("--resume requires a session ID in print mode")
+	}
+	return nil
 }
 
 func normalizeFlagArgs(args []string) ([]string, bool) {

@@ -154,6 +154,19 @@ func TestNormalizeFlagArgsSupportsBareResumePickerWithInterspersedFlags(t *testi
 	}
 }
 
+func TestValidatePrintSelectionRejectsBareResumeInPrintMode(t *testing.T) {
+	err := validatePrintSelection(true, true)
+	if err == nil || !strings.Contains(err.Error(), "--resume requires a session ID in print mode") {
+		t.Fatalf("validatePrintSelection error = %v", err)
+	}
+	if err := validatePrintSelection(false, true); err != nil {
+		t.Fatalf("TUI resume picker should be valid: %v", err)
+	}
+	if err := validatePrintSelection(true, false); err != nil {
+		t.Fatalf("explicit print session should be valid: %v", err)
+	}
+}
+
 func TestPrintModeRejectsApprovalWhenNotAutoApproved(t *testing.T) {
 	sess := &printSession{events: make(chan session.Event, 1)}
 	sess.events <- session.ApprovalRequest{RequestID: "req-1", ToolName: "bash"}
