@@ -1305,10 +1305,10 @@ func splitStoredSessionModel(value string) (string, string) {
 	return strings.TrimSpace(provider), strings.TrimSpace(model)
 }
 
-// cmdError returns a Cmd that emits a session.Error with the given message.
+// cmdError returns a Cmd that emits a local UI error with the given message.
 func cmdError(msg string) tea.Cmd {
 	return func() tea.Msg {
-		return session.Error{Err: fmt.Errorf("%s", msg)}
+		return localErrorMsg{err: fmt.Errorf("%s", msg)}
 	}
 }
 

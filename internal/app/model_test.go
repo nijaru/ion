@@ -119,6 +119,15 @@ type stubApproval struct {
 	ok bool
 }
 
+func localErrorFromMsg(t *testing.T, msg tea.Msg) error {
+	t.Helper()
+	errMsg, ok := msg.(localErrorMsg)
+	if !ok {
+		t.Fatalf("message = %T, want localErrorMsg", msg)
+	}
+	return errMsg.err
+}
+
 func (s *stubSession) Open(ctx context.Context) error              { return nil }
 func (s *stubSession) Resume(ctx context.Context, id string) error { return nil }
 func (s *stubSession) SubmitTurn(ctx context.Context, turn string) error {
@@ -320,10 +329,9 @@ func TestUntrustedWorkspaceBlocksEditAndAutoModes(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected untrusted edit command to return an error command")
 	}
-	msg := cmd()
-	errMsg, ok := msg.(session.Error)
-	if !ok || !strings.Contains(errMsg.Err.Error(), "Trust this workspace first") {
-		t.Fatalf("message = %#v, want trust error", msg)
+	err := localErrorFromMsg(t, cmd())
+	if !strings.Contains(err.Error(), "Trust this workspace first") {
+		t.Fatalf("error = %v, want trust error", err)
 	}
 }
 
@@ -545,7 +553,7 @@ func TestUnknownToolResultIDDoesNotClearAnotherPendingTool(t *testing.T) {
 	}
 }
 
-func TestApprovalFailureSurfacesSessionError(t *testing.T) {
+func TestApprovalFailureSurfacesLocalError(t *testing.T) {
 	sess := &stubSession{events: make(chan session.Event), approveErr: errors.New("approval bridge failed")}
 	model := readyModel(t)
 	model.Model.Session = sess
@@ -565,13 +573,9 @@ func TestApprovalFailureSurfacesSessionError(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected error command for failed approval")
 	}
-	msg := cmd()
-	errEvent, ok := msg.(session.Error)
-	if !ok {
-		t.Fatalf("approval failure msg = %T, want session.Error", msg)
-	}
-	if !strings.Contains(errEvent.Err.Error(), "send approval") {
-		t.Fatalf("approval error = %v, want send approval context", errEvent.Err)
+	err := localErrorFromMsg(t, cmd())
+	if !strings.Contains(err.Error(), "send approval") {
+		t.Fatalf("approval error = %v, want send approval context", err)
 	}
 }
 
@@ -1872,6 +1876,18 @@ func TestSubmitTextDoesNotPersistSlashCommand(t *testing.T) {
 	if len(storageSess.appends) != 0 {
 		t.Fatalf("slash command appended %d entries, want 0", len(storageSess.appends))
 	}
+
+	updated, cmd := model.handleCommand("/nope")
+	model = updated
+	if cmd == nil {
+		t.Fatal("expected unknown slash command error")
+	}
+	if err := localErrorFromMsg(t, cmd()); !strings.Contains(err.Error(), "unknown command") {
+		t.Fatalf("unknown slash error = %v", err)
+	}
+	if len(storageSess.appends) != 0 {
+		t.Fatalf("slash command error appended %d entries, want 0", len(storageSess.appends))
+	}
 }
 
 func TestSubmitTextDoesNotPersistModelVisibleTranscript(t *testing.T) {
@@ -2025,13 +2041,9 @@ func TestSubmitTextBlocksWhenSessionBudgetAlreadyExceeded(t *testing.T) {
 
 	updated, cmd := model.submitText("do work")
 	model = updated
-	msg := cmd()
-	errMsg, ok := msg.(session.Error)
-	if !ok {
-		t.Fatalf("expected session.Error, got %T", msg)
-	}
-	if !strings.Contains(errMsg.Err.Error(), "session cost limit reached") {
-		t.Fatalf("error = %v", errMsg.Err)
+	err := localErrorFromMsg(t, cmd())
+	if !strings.Contains(err.Error(), "session cost limit reached") {
+		t.Fatalf("error = %v", err)
 	}
 	if len(sess.submits) != 0 {
 		t.Fatalf("submitted turns = %v, want none", sess.submits)
@@ -2149,13 +2161,9 @@ func TestCoreLoopOnlyDisablesAdvancedCommands(t *testing.T) {
 			if cmd == nil {
 				t.Fatalf("%s returned nil cmd", input)
 			}
-			msg := cmd()
-			errMsg, ok := msg.(session.Error)
-			if !ok {
-				t.Fatalf("%s returned %T, want session.Error", input, msg)
-			}
-			if errMsg.Err == nil || !strings.Contains(errMsg.Err.Error(), "disabled while Ion stabilizes the P1 core agent loop") {
-				t.Fatalf("%s error = %v", input, errMsg.Err)
+			err := localErrorFromMsg(t, cmd())
+			if !strings.Contains(err.Error(), "disabled while Ion stabilizes the P1 core agent loop") {
+				t.Fatalf("%s error = %v", input, err)
 			}
 		})
 	}
@@ -2351,10 +2359,9 @@ func TestTrustCommandRespectsStrictPolicy(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("strict trust command returned nil cmd")
 	}
-	msg := cmd()
-	errMsg, ok := msg.(session.Error)
-	if !ok || !strings.Contains(errMsg.Err.Error(), "workspace trust is strict") {
-		t.Fatalf("message = %#v, want strict trust error", msg)
+	err := localErrorFromMsg(t, cmd())
+	if !strings.Contains(err.Error(), "workspace trust is strict") {
+		t.Fatalf("error = %v, want strict trust error", err)
 	}
 }
 
@@ -3320,10 +3327,9 @@ func TestModelPickerRejectsProviderWithoutModelListing(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected model picker error command")
 	}
-	msg := cmd()
-	errMsg, ok := msg.(session.Error)
-	if !ok || !strings.Contains(errMsg.Err.Error(), "Set a model with /model <id>") {
-		t.Fatalf("message = %#v, want manual model entry notice", msg)
+	err := localErrorFromMsg(t, cmd())
+	if !strings.Contains(err.Error(), "Set a model with /model <id>") {
+		t.Fatalf("error = %v, want manual model entry notice", err)
 	}
 }
 
@@ -3558,7 +3564,7 @@ func TestSessionErrorClassifiesProviderQuotaLimit(t *testing.T) {
 	}
 }
 
-func TestSubmitTextPropagatesImmediateSessionError(t *testing.T) {
+func TestSubmitTextPropagatesImmediateSubmitErrorWithoutPersistence(t *testing.T) {
 	sess := &stubSession{
 		events:    make(chan session.Event),
 		submitErr: errors.New("backend unavailable"),
@@ -3587,19 +3593,10 @@ func TestSubmitTextPropagatesImmediateSessionError(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected follow-up command to render transcript entries")
 	}
-	var got any
 	for _, event := range storeSess.appends {
-		if _, ok := event.(storage.System); ok {
-			got = event
-			break
+		if sys, ok := event.(storage.System); ok {
+			t.Fatalf("immediate submit error persisted system entry %#v; local errors should not materialize transcript state", sys)
 		}
-	}
-	if got == nil {
-		t.Fatal("expected persisted system error entry")
-	} else if sys, ok := got.(storage.System); !ok {
-		t.Fatalf("persisted error entry type = %T, want storage.System", got)
-	} else if sys.Content != "Error: backend unavailable" {
-		t.Fatalf("persisted error content = %q, want wrapped backend error", sys.Content)
 	}
 }
 
