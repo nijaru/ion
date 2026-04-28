@@ -34,6 +34,7 @@ Fast, lightweight terminal coding agent.
 - CLI parity started under `tk-mmcs`: `-c` now aliases `--continue`, and `-r` now aliases `--resume` with the same picker/print-mode rules as the long form. Focused CLI tests and `go test ./... -count=1` are green.
 - Scriptable model selection now has non-persistent `--model`/`-m` and `--thinking` overrides. Full tests and a live Fedora/local-api print smoke with explicit provider/model/thinking flags passed.
 - `/compact` is available again while `CoreLoopOnly` remains on. Focused app coverage and `go test ./... -count=1` pass after reopening it.
+- CLI session/error handling is tighter: invalid `--output` values fail before runtime/model execution, and explicit `--continue`/`-c` now errors when no conversation session exists instead of silently starting fresh. Full tests and Fedora text/JSON/continue print smokes pass.
 - Preferred live-smoke order: use Fedora local-api first when available (`http://fedora:8080/v1`, `qwen3.6:27b`). If Fedora is down and live model evidence is needed, use OpenRouter with `deepseek/deepseek-v4-flash` for cheap smoke or `deepseek/deepseek-v4-pro` only when the heavier model is useful.
 
 ## Next Action
