@@ -28,12 +28,13 @@ Fast, lightweight terminal coding agent.
 - Ion overflow recovery now uses Canto runtime-level recovery instead of provider-level request retry, so context-overflow compaction rebuilds the provider-visible prompt before retrying. Focused overflow coverage, full Ion tests, Fedora live smoke, and Canto prompt/LLM/governor/runtime gates are green after this patch.
 - The native backend/CLI core loop is now materially stable by deterministic and live-smoke evidence. `tk-s6p4` should stay open for the next gate: TUI/replay polish and any remaining manual terminal bugs, especially spacing and resumed transcript presentation.
 - TUI shell spacing now keeps a blank row between already-printed transcript/replay rows and the live progress/composer shell. Focused app tests and `go test ./... -count=1` are green after the patch.
+- The direct `/provider <name>` command now clears stale progress errors the same way provider-picker selection already did, so old model-listing/provider errors do not remain visible after a provider state change.
 
 ## Next Action
 
 Continue `tk-s6p4` as a comprehensive audit, not as bug slices:
 
-1. Continue the TUI/replay gate under `tk-s6p4`: stale progress/error presentation, resumed transcript presentation in the actual terminal, and compact routine tool display.
+1. Continue the TUI/replay gate under `tk-s6p4`: resumed transcript presentation in the actual terminal and compact routine tool display.
 2. Keep backend/CLI regressions covered while fixing the TUI shell; re-run full Ion gates and Fedora live smoke after any native-loop changes.
 3. Keep picker/help/provider UX, permissions/trust polish, ACP, privacy, subagents, skills, and routing behind the stable TUI/replay gate unless a bug directly corrupts core state.
 

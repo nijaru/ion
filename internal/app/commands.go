@@ -134,6 +134,8 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 			return m, cmdError(fmt.Sprintf("failed to save state: %v", err))
 		}
 		m.Model.Backend.SetConfig(updated)
+		m.Model.Config = updated
+		m.clearProgressError()
 		m.Progress.Status = noModelConfiguredStatus()
 		return m.openModelPickerWithConfig(updated)
 
