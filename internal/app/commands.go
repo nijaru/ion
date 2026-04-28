@@ -11,6 +11,7 @@ import (
 
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/config"
+	"github.com/nijaru/ion/internal/features"
 	"github.com/nijaru/ion/internal/providers"
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
@@ -140,6 +141,9 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		return m.handleSettingsCommand(fields)
 
 	case "/mcp":
+		if features.CoreLoopOnly {
+			return m, cmdError(features.Disabled("/mcp"))
+		}
 		if len(fields) < 3 || fields[1] != "add" {
 			return m, cmdError("usage: /mcp add <command> [args...]")
 		}
@@ -207,6 +211,9 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		return m, m.printEntries(session.Entry{Role: session.System, Content: "Workspace trusted. Mode: EDIT"})
 
 	case "/rewind":
+		if features.CoreLoopOnly {
+			return m, cmdError(features.Disabled("/rewind"))
+		}
 		if len(fields) < 2 || len(fields) > 3 {
 			return m, cmdError("usage: /rewind <checkpoint-id> [--confirm]")
 		}
@@ -228,6 +235,9 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		return m, m.printEntries(session.Entry{Role: session.System, Content: toolSurfaceSummary(surface)})
 
 	case "/memory":
+		if features.CoreLoopOnly {
+			return m, cmdError(features.Disabled("/memory"))
+		}
 		explorer, ok := m.Model.Backend.(backend.MemoryExplorer)
 		if !ok {
 			return m, cmdError("memory view unavailable for this backend")
@@ -291,6 +301,9 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		}
 
 	case "/compact":
+		if features.CoreLoopOnly {
+			return m, cmdError(features.Disabled("/compact"))
+		}
 		compactor, ok := m.Model.Backend.(backend.Compactor)
 		if !ok {
 			return m, cmdError("current backend does not support /compact")
@@ -487,7 +500,7 @@ func (m Model) openModelPickerWithConfig(cfg *config.Config) (Model, tea.Cmd) {
 }
 
 func helpText() string {
-	return strings.Join([]string{
+	lines := []string{
 		"ion commands",
 		"",
 		"  /resume [id]     resume a recent session or pick one",
@@ -502,15 +515,21 @@ func helpText() string {
 		"  /mode [mode]     set mode: read, edit, auto",
 		"  /trust [status]  trust this workspace or show trust status",
 		"  /settings        show or change common settings",
-		"  /rewind <id>     preview checkpoint restore; add --confirm to apply",
 		"  /tools           show tool count and lazy loading status",
-		"  /memory [query]  show workspace memory tree or search memory",
-		"  /compact         compact the current session",
 		"  /clear           start a fresh session with the current provider/model",
 		"  /cost            show aggregate session usage",
-		"  /mcp add <cmd>   register an MCP server",
 		"  /quit, /exit     leave ion",
 		"  /help            show this help",
+	}
+	if !features.CoreLoopOnly {
+		lines = append(lines,
+			"  /rewind <id>     preview checkpoint restore; add --confirm to apply",
+			"  /memory [query]  show workspace memory tree or search memory",
+			"  /compact         compact the current session",
+			"  /mcp add <cmd>   register an MCP server",
+		)
+	}
+	lines = append(lines,
 		"",
 		"keys",
 		"",
@@ -533,7 +552,8 @@ func helpText() string {
 		"  y                approve the tool call",
 		"  n                deny the tool call",
 		"  a                approve and auto-approve all remaining this session",
-	}, "\n")
+	)
+	return strings.Join(lines, "\n")
 }
 
 func (m Model) handleSettingsCommand(fields []string) (Model, tea.Cmd) {
@@ -655,7 +675,7 @@ type slashCommandInfo struct {
 }
 
 func slashCommandCatalog() []slashCommandInfo {
-	return []slashCommandInfo{
+	commands := []slashCommandInfo{
 		{name: "/resume", detail: "resume a recent session"},
 		{name: "/primary", detail: "switch to primary preset"},
 		{name: "/fast", detail: "switch to fast preset"},
@@ -669,17 +689,22 @@ func slashCommandCatalog() []slashCommandInfo {
 		{name: "/mode", detail: "set read/edit/auto"},
 		{name: "/trust", detail: "workspace trust"},
 		{name: "/settings", detail: "common settings"},
-		{name: "/rewind", detail: "restore checkpoint"},
 		{name: "/tools", detail: "tool status"},
-		{name: "/memory", detail: "memory search"},
-		{name: "/compact", detail: "compact session"},
 		{name: "/clear", detail: "fresh session"},
 		{name: "/cost", detail: "session usage"},
-		{name: "/mcp", detail: "register MCP server"},
 		{name: "/quit", detail: "quit"},
 		{name: "/exit", detail: "quit"},
 		{name: "/help", detail: "show help"},
 	}
+	if !features.CoreLoopOnly {
+		commands = append(commands,
+			slashCommandInfo{name: "/rewind", detail: "restore checkpoint"},
+			slashCommandInfo{name: "/memory", detail: "memory search"},
+			slashCommandInfo{name: "/compact", detail: "compact session"},
+			slashCommandInfo{name: "/mcp", detail: "register MCP server"},
+		)
+	}
+	return commands
 }
 
 func slashCommandItems() []pickerItem {

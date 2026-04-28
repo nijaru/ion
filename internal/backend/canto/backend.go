@@ -25,6 +25,7 @@ import (
 	"github.com/nijaru/ion/internal/backend/canto/tools"
 	"github.com/nijaru/ion/internal/backend/registry"
 	"github.com/nijaru/ion/internal/config"
+	"github.com/nijaru/ion/internal/features"
 	"github.com/nijaru/ion/internal/providers"
 	ionsession "github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
@@ -250,40 +251,43 @@ func (b *Backend) Open(ctx context.Context) error {
 	})
 
 	workspaceNamespace := memory.Namespace{Scope: memory.ScopeWorkspace, ID: cwd}
-	registry.Register(&ctools.RecallTool{
-		Retriever:  b.memory,
-		Namespaces: []memory.Namespace{workspaceNamespace},
-		Roles:      []memory.Role{memory.RoleCore, memory.RoleSemantic, memory.RoleEpisodic},
-		Limit:      10,
-	})
-	registry.Register(&ctools.RememberTool{
-		Writer:    b.memory,
-		Namespace: workspaceNamespace,
-		Role:      memory.RoleSemantic,
-	})
-	registry.Register(tools.NewCompact(
-		b.store, b.compactLLM,
-		b.Model, b.ContextLimit, b.ID,
-	))
-	personas, err := loadSubagentPersonas(b.cfg)
-	if err != nil {
-		return err
-	}
-	if err := validateSubagentPersonaTools(personas, registry); err != nil {
-		return err
-	}
-	registry.Register(NewSubagentTool(b, personas))
-
-	// Add context processors
 	requestProcessors := []prompt.RequestProcessor{
-		prompt.MemoryPrompt(b.memory, prompt.MemoryPromptOptions{
-			Namespaces: []memory.Namespace{workspaceNamespace},
-			Roles:      []memory.Role{memory.RoleCore, memory.RoleSemantic, memory.RoleEpisodic},
-			Limit:      5,
-		}),
 		NewFileTagProcessor(cwd),
 		reasoningEffortProcessor(b.cfg),
-		reflexionProcessor(),
+	}
+
+	if !features.CoreLoopOnly {
+		registry.Register(&ctools.RecallTool{
+			Retriever:  b.memory,
+			Namespaces: []memory.Namespace{workspaceNamespace},
+			Roles:      []memory.Role{memory.RoleCore, memory.RoleSemantic, memory.RoleEpisodic},
+			Limit:      10,
+		})
+		registry.Register(&ctools.RememberTool{
+			Writer:    b.memory,
+			Namespace: workspaceNamespace,
+			Role:      memory.RoleSemantic,
+		})
+		registry.Register(tools.NewCompact(
+			b.store, b.compactLLM,
+			b.Model, b.ContextLimit, b.ID,
+		))
+		personas, err := loadSubagentPersonas(b.cfg)
+		if err != nil {
+			return err
+		}
+		if err := validateSubagentPersonaTools(personas, registry); err != nil {
+			return err
+		}
+		registry.Register(NewSubagentTool(b, personas))
+		requestProcessors = append(requestProcessors,
+			prompt.MemoryPrompt(b.memory, prompt.MemoryPromptOptions{
+				Namespaces: []memory.Namespace{workspaceNamespace},
+				Roles:      []memory.Role{memory.RoleCore, memory.RoleSemantic, memory.RoleEpisodic},
+				Limit:      5,
+			}),
+			reflexionProcessor(),
+		)
 	}
 
 	b.agent = agent.New("ion", instructions, modelName, runtimeProvider, registry,
