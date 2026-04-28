@@ -44,13 +44,14 @@ Current implementation posture:
 - Ion's CantoBackend now rejects overlapping `SubmitTurn` calls while a turn is active. This prevents programmatic/direct callers from opening multiple Canto watchers on the same session and duplicating translated events; the watcher now exits on Canto `TurnCompleted`.
 - Storage replay now interleaves Ion display-only events with Canto effective history by raw event order, so earlier cancellation/error/system rows no longer resume after later model turns. Compaction snapshot entries remain preserved.
 - CantoBackend now clears active-turn state before emitting `TurnFinished` from Canto `TurnCompleted`, so queued follow-ups and immediate programmatic follow-up turns do not race the `SendStream` goroutine.
+- Canto-backed storage now rejects non-empty model-visible `storage.User`, `storage.Agent`, `storage.ToolUse`, and `storage.ToolResult` appends. Canto remains the only writer for provider-visible history; Ion storage appends are limited to UI-local/status/usage/routing display state. Compatibility empty-agent appends still no-op before lazy materialization.
 - Live Fedora/local-api smoke is currently deferred because Fedora is off. OpenRouter `deepseek/deepseek-v4-flash` smoke proved first-turn submit/stream/approval/bash-tool/tool-result/assistant-commit/persist/reopen, but the resumed follow-up hit provider `402 Payment Required`; `deepseek/deepseek-v4-pro` one-shot print also hit 402. Treat full live follow-up validation as provider/account-blocked until Fedora is back or another funded live model is selected.
 
 Next core-parity work:
 - use `ai/design/native-core-loop-architecture.md` as the target design for the Canto/Ion refactor.
 - use `ai/review/core-loop-ai-corpus-synthesis-2026-04-27.md` as the cross-repo ai/ synthesis and pre-implementation gate list.
 - use `ai/review/canto-core-loop-contract-audit-2026-04-27.md` to decide whether any Canto work is proof-only, framework bug fix, Ion adapter misuse, or deferred.
-- continue the core-loop code review with print-mode settlement and any remaining app/backend handoff races now that Canto queue semantics, Ion's single-active-turn adapter guard, terminal active-state clearing, and display-only replay ordering are covered.
+- continue the core-loop code review with command/session lifecycle, app/backend handoff races, and print-mode settlement now that Canto queue semantics, Ion's single-active-turn adapter guard, terminal active-state clearing, display-only replay ordering, and single-writer storage boundaries are covered.
 - use the scriptable print CLI (`ion -p "prompt"`, `ion -p --json "prompt"`, `ion --print "prompt" --json`, `--resume <id> -p`, and piped stdin) as the automated Fedora/local-api smoke surface before TUI-only checks.
 - keep ACP, sandboxing, broader policy, thinking expansion, privacy, routing, and subagents behind native-loop regression safety.
 
@@ -109,9 +110,9 @@ Design rule:
 - Similar agents are references, not feature-parity requirements. Adopt from pi, Claude Code, Codex, OpenCode, Cursor, Droid, Letta, and others only when the idea strengthens Ion's core coding loop or preserves a simple, inspectable UX.
 
 ## Next Steps
-1. Continue the Ion refactor slice against `ai/design/ion-display-projection-2026-04-27.md`, focusing on real-store replay, resumed follow-up turns, and duplicate rows across Canto effective history plus Ion display-only events.
-2. Extend deterministic tests around provider error replay, cancellation replay, compatibility append no-ops, and duplicate transcript prevention while CoreLoopOnly is enabled.
-3. Recheck Fedora/local-api reachability before the next local live smoke; use OpenRouter DeepSeek only when deterministic tests cannot cover the behavior.
+1. Continue the core-loop code review against `ai/design/ion-app-cli-lifecycle-2026-04-27.md`, focusing on slash/local command lifecycle, resume/continue materialization, runtime switch error handling, and print-mode settlement.
+2. Extend deterministic tests for any remaining lifecycle branch that can leave stale progress/error state, create a session too early, or accept a follow-up before backend terminal settlement is durable.
+3. Recheck Fedora/local-api reachability before the next local live smoke; use OpenRouter only when deterministic tests cannot cover the behavior and a funded model is available.
 4. Use `ion -p` and `--resume ... -p` smokes before and after any core-loop-adjacent change once a live provider is intentionally selected.
 5. Keep ACP, sandboxing, thinking expansion, privacy, routing, and subagents behind native-loop regression safety unless they directly block testing.
 

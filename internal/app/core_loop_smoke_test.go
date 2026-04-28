@@ -9,6 +9,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/nijaru/canto/llm"
+	csession "github.com/nijaru/canto/session"
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
 )
@@ -45,33 +47,15 @@ func TestCoreLoopSmokeSubmitStreamToolPersistReplay(t *testing.T) {
 	if model.Progress.LastTurnSummary.Input != 12 || model.Progress.LastTurnSummary.Output != 4 {
 		t.Fatalf("last usage = %d/%d, want 12/4", model.Progress.LastTurnSummary.Input, model.Progress.LastTurnSummary.Output)
 	}
-	for _, event := range []any{
-		storage.User{Type: "user", Content: "run smoke"},
-		storage.ToolUse{
-			Type: "tool_use",
-			ID:   "tool-1",
-			Name: "bash",
-			Input: map[string]string{
-				"args": "echo smoke",
-			},
-		},
-		storage.ToolResult{
-			Type:      "tool_result",
-			ToolUseID: "tool-1",
-			Content:   "smoke\n",
-		},
-		storage.Agent{
-			Type: "agent",
-			Content: []storage.Block{{
-				Type: "text",
-				Text: newString("done"),
-			}},
-		},
-	} {
-		if err := stored.Append(context.Background(), event); err != nil {
-			t.Fatalf("append canonical event %T: %v", event, err)
-		}
-	}
+	toolCall := llm.Call{ID: "tool-1", Type: "function"}
+	toolCall.Function.Name = "bash"
+	toolCall.Function.Arguments = `{"args":"echo smoke"}`
+	appendCantoHistory(t, context.Background(), store, stored.ID(),
+		llm.Message{Role: llm.RoleUser, Content: "run smoke"},
+		llm.Message{Role: llm.RoleAssistant, Calls: []llm.Call{toolCall}},
+		llm.Message{Role: llm.RoleTool, ToolID: "tool-1", Name: "bash", Content: "smoke\n"},
+		llm.Message{Role: llm.RoleAssistant, Content: "done"},
+	)
 
 	resumed, err := store.ResumeSession(context.Background(), stored.ID())
 	if err != nil {
@@ -350,10 +334,6 @@ func newCoreLoopSmokeModel(t *testing.T) (Model, *stubSession, storage.Store, st
 	return model, sess, store, stored
 }
 
-func newString(s string) *string {
-	return &s
-}
-
 func requireEntry(t *testing.T, entries []session.Entry, role session.Role, content string) {
 	t.Helper()
 	for _, entry := range entries {
@@ -362,4 +342,26 @@ func requireEntry(t *testing.T, entries []session.Entry, role session.Role, cont
 		}
 	}
 	t.Fatalf("missing %s entry containing %q in %#v", role, content, entries)
+}
+
+func appendCantoHistory(
+	t *testing.T,
+	ctx context.Context,
+	store storage.Store,
+	sessionID string,
+	messages ...llm.Message,
+) {
+	t.Helper()
+	cantoStore, ok := store.(interface{ Canto() *csession.SQLiteStore })
+	if !ok {
+		t.Fatalf("store %T does not expose Canto history", store)
+	}
+	for _, msg := range messages {
+		if err := cantoStore.Canto().Save(
+			ctx,
+			csession.NewEvent(sessionID, csession.MessageAdded, msg),
+		); err != nil {
+			t.Fatalf("append canto history: %v", err)
+		}
+	}
 }
