@@ -166,6 +166,20 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 
 				return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
 			}
+			entry := session.Entry{
+				Role:      session.Agent,
+				Content:   msg.Message,
+				Reasoning: m.InFlight.ReasonBuf,
+			}
+			if msg.Reasoning != "" {
+				entry.Reasoning = msg.Reasoning
+			}
+			m.InFlight.StreamBuf = ""
+			m.InFlight.ReasonBuf = ""
+			if strings.TrimSpace(entry.Content) == "" && strings.TrimSpace(entry.Reasoning) == "" {
+				return m, m.awaitSessionEvent()
+			}
+			return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
 		} else {
 			if p, ok := m.InFlight.Subagents[msg.AgentID]; ok {
 				content := p.Output
