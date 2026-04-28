@@ -916,6 +916,31 @@ func TestTurnFinishedLeavesProgressComplete(t *testing.T) {
 	}
 }
 
+func TestTurnFinishedCommitsPendingStreamWhenNoAgentMessageArrives(t *testing.T) {
+	model := readyModel(t)
+	model.Progress.Mode = stateStreaming
+	model.InFlight.Pending = &session.Entry{Role: session.Agent, Content: "streamed answer"}
+	model.InFlight.StreamBuf = "streamed answer"
+	model.InFlight.ReasonBuf = "brief reasoning"
+	model.InFlight.Thinking = true
+
+	updated, cmd := model.Update(session.TurnFinished{})
+	model = updated.(Model)
+
+	if model.InFlight.Pending != nil {
+		t.Fatalf("pending agent entry = %#v, want flushed", model.InFlight.Pending)
+	}
+	if model.InFlight.StreamBuf != "" || model.InFlight.ReasonBuf != "" {
+		t.Fatalf("stream buffers = %q/%q, want cleared", model.InFlight.StreamBuf, model.InFlight.ReasonBuf)
+	}
+	if model.Progress.Mode != stateComplete {
+		t.Fatalf("progress = %v, want complete", model.Progress.Mode)
+	}
+	if cmd == nil {
+		t.Fatal("expected print command for flushed pending stream")
+	}
+}
+
 func TestErrorProgressLineUsesRedXSymbolCopy(t *testing.T) {
 	model := readyModel(t)
 	model.Progress.Mode = stateError
