@@ -570,7 +570,7 @@ func normalizeDisplayEntries(entries []ionsession.Entry) []ionsession.Entry {
 }
 
 func compactRoutineToolEntry(entry ionsession.Entry) ionsession.Entry {
-	if entry.Role != ionsession.Tool || strings.TrimSpace(entry.Content) == "" {
+	if entry.Role != ionsession.Tool || entry.IsError || strings.TrimSpace(entry.Content) == "" {
 		return entry
 	}
 	switch strings.TrimSpace(strings.ToLower(entry.Title)) {
