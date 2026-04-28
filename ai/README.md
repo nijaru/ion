@@ -17,7 +17,7 @@
 - [Canto Research Delta](review/canto-research-delta-2026-04-26.md) — Recent Canto ai/ findings that affect Ion task sequencing
 - [Core Loop AI Corpus Synthesis](review/core-loop-ai-corpus-synthesis-2026-04-27.md) — Cross-repo ai/ synthesis and pre-implementation gates for the native loop refactor
 - [Canto Core Loop Contract Audit](review/canto-core-loop-contract-audit-2026-04-27.md) — Canto-owned contract gaps and allowed framework work before Ion refactor
-- [Core Loop Contract](review/core-loop-contract.md) — Native Canto/Ion loop invariants for history, events, terminal states, replay, and CLI
+- [Core Loop Contract](review/core-loop-contract.md) — Native Canto/Ion loop invariants for history, storage no-ops, terminal states, replay, and CLI
 - [Core Loop Review](review/core-loop-review.md) — Focused contract review after resume/tool-call failures
 - [Tools and Modes Spec](specs/tools-and-modes.md) — Permission modes, approval prompt behavior, and ESCALATE.md host UX
 - [Status and Config Spec](specs/status-and-config.md) — Status line, model picker metadata, and global config/state/trust layout

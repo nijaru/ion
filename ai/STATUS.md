@@ -26,13 +26,14 @@ Current implementation posture:
 - Print mode now explicitly closes the agent session, storage session, and store after a one-shot run before returning or exiting on error, so repeated scriptable smoke runs do not rely on skipped `os.Exit` defers.
 - Runtime switch/resume failure cleanup is hardened: if state save or replay loading fails after opening a new runtime, Ion closes the new session/storage handles and keeps the old runtime open until the switch is fully validated.
 - Replay display compaction now leaves errored routine tool output expanded, so resumed `list`/`read`/`grep`/`glob` failures keep their diagnostic text instead of collapsing to a line count.
+- Canto-backed storage compatibility now treats empty `storage.Agent` appends as a no-op before lazy session materialization, while preserving reasoning-only assistant entries. This prevents Ion-side compatibility callers from creating invalid assistant rows outside the live Canto agent path.
 - Live Fedora/local-api smoke is currently deferred because Fedora is off. If a live provider is needed before Fedora returns, use OpenRouter with `deepseek/deepseek-v4-pro` or `deepseek/deepseek-v4-flash`, but keep deterministic code review as the active focus.
 
 Next core-parity work:
 - use `ai/design/native-core-loop-architecture.md` as the target design for the Canto/Ion refactor.
 - use `ai/review/core-loop-ai-corpus-synthesis-2026-04-27.md` as the cross-repo ai/ synthesis and pre-implementation gate list.
 - use `ai/review/canto-core-loop-contract-audit-2026-04-27.md` to decide whether any Canto work is proof-only, framework bug fix, Ion adapter misuse, or deferred.
-- continue the app/CLI lifecycle pass by hardening runtime switch and resume failure cleanup: newly opened runtime handles must close if state save or replay loading fails, and the old runtime should not be closed until the new runtime is fully validated.
+- continue the storage/replay and lifecycle pass by checking that compatibility append paths, real-store replay, and resumed follow-up turns cannot create duplicate or empty model-visible rows.
 - use the scriptable print CLI (`ion -p "prompt"`, `ion -p --json "prompt"`, `ion --print "prompt" --json`, `--resume <id> -p`, and piped stdin) as the automated Fedora/local-api smoke surface before TUI-only checks.
 - keep ACP, sandboxing, broader policy, thinking expansion, privacy, routing, and subagents behind native-loop regression safety.
 
@@ -91,8 +92,8 @@ Design rule:
 - Similar agents are references, not feature-parity requirements. Adopt from pi, Claude Code, Codex, OpenCode, Cursor, Droid, Letta, and others only when the idea strengthens Ion's core coding loop or preserves a simple, inspectable UX.
 
 ## Next Steps
-1. Continue the Ion refactor slice against `ai/design/ion-display-projection-2026-04-27.md`, focusing on real-store replay and duplicate rows across Canto effective history plus Ion display-only events.
-2. Extend deterministic tests around resumed follow-up turns, provider error replay, cancellation replay, and duplicate transcript prevention while CoreLoopOnly is enabled.
+1. Continue the Ion refactor slice against `ai/design/ion-display-projection-2026-04-27.md`, focusing on real-store replay, resumed follow-up turns, and duplicate rows across Canto effective history plus Ion display-only events.
+2. Extend deterministic tests around provider error replay, cancellation replay, compatibility append no-ops, and duplicate transcript prevention while CoreLoopOnly is enabled.
 3. Recheck Fedora/local-api reachability before the next local live smoke; use OpenRouter DeepSeek only when deterministic tests cannot cover the behavior.
 4. Use `ion -p` and `--resume ... -p` smokes before and after any core-loop-adjacent change once a live provider is intentionally selected.
 5. Keep ACP, sandboxing, thinking expansion, privacy, routing, and subagents behind native-loop regression safety unless they directly block testing.

@@ -35,6 +35,7 @@ ACP, subagents, sandboxing, policy classifiers, escalation notifiers, tree navig
 - Ion must not persist duplicate model-visible user/assistant/tool transcript events.
 - Ion may persist UI-local system/status/routing/subagent metadata only when it is intentionally not part of the provider-visible transcript.
 - Slash commands and local UI changes must not create or mutate model-visible transcript history.
+- Ion compatibility append paths must treat empty assistant display events as no-ops before lazy session materialization; they may preserve reasoning-only assistant payloads.
 
 ### 3. Event Ordering Is Stable
 
@@ -97,6 +98,7 @@ After any terminal state, the session can be resumed and can accept a new user t
 - Canto projection tests for legacy/snapshot/post-snapshot invalid assistant rows.
 - Ion tests for no duplicate model-visible transcript persistence.
 - Ion real-store replay tests for success, cancellation, provider error, retry status, and tool result history.
+- Ion storage tests for empty assistant append no-ops, reasoning-only assistant preservation, and lazy-session non-materialization on no-op appends.
 - Ion backend tests for assistant-before-turn-finished and tool ID propagation.
 - Ion app lifecycle tests for runtime switch/resume failure cleanup.
 - Live/local smoke for one real tool call, approval, persistence, resume, and follow-up turn.

@@ -131,6 +131,36 @@ func TestLazySessionDoesNotAppearUntilAppend(t *testing.T) {
 	}
 }
 
+func TestLazySessionSkipsEmptyAgentAppend(t *testing.T) {
+	root := t.TempDir()
+	store, err := NewCantoStore(root)
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+
+	ctx := context.Background()
+	cwd := "/tmp/ion-storage-test"
+	lazy := NewLazySession(store, cwd, "model-a", "main")
+	if err := lazy.Append(ctx, Agent{
+		Type:    "agent",
+		Content: []Block{},
+		TS:      time.Now().Unix(),
+	}); err != nil {
+		t.Fatalf("append empty agent: %v", err)
+	}
+
+	if IsMaterialized(lazy) {
+		t.Fatal("lazy session materialized after empty agent append")
+	}
+	recent, err := store.GetRecentSession(ctx, cwd)
+	if err != nil {
+		t.Fatalf("recent after empty append: %v", err)
+	}
+	if recent != nil {
+		t.Fatalf("recent after empty append = %#v, want nil", recent)
+	}
+}
+
 func TestCantoStoreAppendReturnsPersistenceErrors(t *testing.T) {
 	root := t.TempDir()
 	storeAny, err := NewCantoStore(root)
@@ -256,6 +286,91 @@ func TestCantoStoreEntriesSummarizeRoutineToolOutput(t *testing.T) {
 	}
 	if entries[1].Role != ionsession.Tool || entries[1].Title != "read" || entries[1].Content != "... (3 lines)" {
 		t.Fatalf("read entry = %#v", entries[1])
+	}
+}
+
+func TestCantoStoreAppendSkipsEmptyAgentMessages(t *testing.T) {
+	root := t.TempDir()
+	storeAny, err := NewCantoStore(root)
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	store := storeAny.(*cantoStore)
+
+	ctx := context.Background()
+	sess, err := store.OpenSession(ctx, "/tmp/ion-storage-test", "model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	if err := sess.Append(ctx, Agent{
+		Type:    "agent",
+		Content: []Block{},
+		TS:      time.Now().Unix(),
+	}); err != nil {
+		t.Fatalf("append empty agent: %v", err)
+	}
+
+	cantoSess, err := store.canto.Load(ctx, sess.ID())
+	if err != nil {
+		t.Fatalf("load canto session: %v", err)
+	}
+	for _, ev := range cantoSess.Events() {
+		if ev.Type != csession.MessageAdded {
+			continue
+		}
+		var msg llm.Message
+		if err := ev.UnmarshalData(&msg); err != nil {
+			t.Fatalf("unmarshal message: %v", err)
+		}
+		if msg.Role == llm.RoleAssistant {
+			t.Fatalf("empty assistant message was appended: %#v", msg)
+		}
+	}
+
+	entries, err := sess.Entries(ctx)
+	if err != nil {
+		t.Fatalf("entries: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("entries = %#v, want none", entries)
+	}
+}
+
+func TestCantoStoreAppendPreservesReasoningOnlyAgentMessages(t *testing.T) {
+	root := t.TempDir()
+	storeAny, err := NewCantoStore(root)
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+
+	ctx := context.Background()
+	sess, err := storeAny.OpenSession(ctx, "/tmp/ion-storage-test", "model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	reasoning := "thinking through it"
+	if err := sess.Append(ctx, Agent{
+		Type: "agent",
+		Content: []Block{{
+			Type:     "thinking",
+			Thinking: &reasoning,
+		}},
+		TS: time.Now().Unix(),
+	}); err != nil {
+		t.Fatalf("append reasoning-only agent: %v", err)
+	}
+
+	entries, err := sess.Entries(ctx)
+	if err != nil {
+		t.Fatalf("entries: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("entries length = %d, want 1", len(entries))
+	}
+	if entries[0].Role != ionsession.Agent || entries[0].Content != "" || entries[0].Reasoning != reasoning {
+		t.Fatalf("reasoning-only agent entry = %#v", entries[0])
 	}
 }
 

@@ -190,6 +190,33 @@ type (
 	}
 )
 
+func agentMessagePayload(e Agent) (string, string) {
+	var content strings.Builder
+	var reasoning strings.Builder
+	for _, b := range e.Content {
+		if b.Type == "text" && b.Text != nil {
+			content.WriteString(*b.Text)
+		}
+		if b.Type == "thinking" && b.Thinking != nil {
+			reasoning.WriteString(*b.Thinking)
+		}
+	}
+	return content.String(), reasoning.String()
+}
+
+func hasAgentMessagePayload(content, reasoning string) bool {
+	return strings.TrimSpace(content) != "" || strings.TrimSpace(reasoning) != ""
+}
+
+func isNoopAppendEvent(event any) bool {
+	e, ok := event.(Agent)
+	if !ok {
+		return false
+	}
+	content, reasoning := agentMessagePayload(e)
+	return !hasAgentMessagePayload(content, reasoning)
+}
+
 func sessionTitle(text string) string {
 	return compactSessionText(text, 72)
 }
