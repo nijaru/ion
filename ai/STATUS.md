@@ -32,6 +32,7 @@ Current implementation posture:
 - Canto backend submit metadata now preserves provider-qualified model names (`provider/model`) when updating session recency, so `/resume <id>` keeps working for local/custom providers whose model IDs do not contain a provider slash.
 - Live assistant commits now render even when no streamed assistant row is pending, including final answers after a tool result clears the pending tool row.
 - Print mode now treats event-stream closure before `TurnFinished` as an error instead of returning a partial response as a successful smoke.
+- Immediate `SubmitTurn` failures now use a non-waiting error path and ordered user/error printing; backend terminal errors still wait for `TurnFinished`.
 - Live Fedora/local-api smoke is currently deferred because Fedora is off. If a live provider is needed before Fedora returns, use OpenRouter with `deepseek/deepseek-v4-pro` or `deepseek/deepseek-v4-flash`, but keep deterministic code review as the active focus.
 
 Next core-parity work:

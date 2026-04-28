@@ -58,6 +58,7 @@ Every turn ends in exactly one durable terminal shape:
 - provider limit/budget stop: durable stop/error entry plus routing/status metadata
 - tool error: tool-result error state, not provider-history corruption
 - compaction failure: visible error, no hidden retry loop that mutates history unpredictably
+- immediate submit failure: ordered user/error display without waiting for a backend terminal event
 
 After any terminal state, the session can be resumed and can accept a new user turn without sending invalid provider history.
 

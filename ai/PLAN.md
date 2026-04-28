@@ -24,6 +24,7 @@ Ion Gate 1 is green for the resume/model-history failure that was blocking norma
 - Ion Canto backend submit metadata preserves provider-qualified model names during recency updates.
 - Ion live transcript rendering preserves committed assistant messages even without prior streaming deltas or after tool-result pending rows are cleared.
 - Ion print CLI fails closed if the event stream closes before `TurnFinished`.
+- Ion app distinguishes immediate submit failures from backend terminal errors, avoiding a wait for terminal events that cannot arrive.
 - Live Fedora/local-api smoke is currently deferred because Fedora is off; deterministic review remains the active proof path.
 
 Ion is still not broadly core-stable. The next gate is a top-down design/refactor against `ai/design/native-core-loop-architecture.md`, then deterministic coverage for cancellation, retries, provider-limit failures, session lifecycle, and TUI command/display polish.
