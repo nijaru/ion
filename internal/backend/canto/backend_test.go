@@ -951,20 +951,20 @@ func TestResumedToolSessionSendsValidFollowUpHistory(t *testing.T) {
 	}
 
 	var (
-		foundToolCall   bool
-		foundToolResult bool
+		toolCallIndex   = -1
+		toolResultIndex = -1
 	)
-	for _, msg := range req.Messages {
+	for i, msg := range req.Messages {
 		if msg.Role == llm.RoleAssistant && len(msg.Calls) == 1 &&
 			msg.Calls[0].ID == "tool-call-1" &&
 			msg.Calls[0].Function.Name == "bash" {
-			foundToolCall = true
+			toolCallIndex = i
 		}
 		if msg.Role == llm.RoleTool &&
 			msg.ToolID == "tool-call-1" &&
 			msg.Name == "bash" &&
 			strings.Contains(msg.Content, "ion-smoke") {
-			foundToolResult = true
+			toolResultIndex = i
 		}
 		if msg.Role == llm.RoleAssistant &&
 			strings.TrimSpace(msg.Content) == "" &&
@@ -974,11 +974,92 @@ func TestResumedToolSessionSendsValidFollowUpHistory(t *testing.T) {
 			t.Fatalf("follow-up request contains empty assistant message: %#v", req.Messages)
 		}
 	}
-	if !foundToolCall {
+	if toolCallIndex < 0 {
 		t.Fatalf("follow-up request missing assistant tool call: %#v", req.Messages)
 	}
-	if !foundToolResult {
+	if toolResultIndex < 0 {
 		t.Fatalf("follow-up request missing matching tool result: %#v", req.Messages)
+	}
+	if toolResultIndex < toolCallIndex {
+		t.Fatalf("tool result appears before tool call: call=%d result=%d messages=%#v", toolCallIndex, toolResultIndex, req.Messages)
+	}
+}
+
+func TestProviderHistoryExcludesIonDisplayOnlyEvents(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	store, err := storage.NewCantoStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+
+	cwd := t.TempDir()
+	storageSession, err := store.OpenSession(ctx, cwd, "local-api/model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	if err := storageSession.Append(ctx, storage.System{
+		Type:    "system",
+		Content: "UI-only resumed marker must not reach provider",
+		TS:      time.Now().Unix(),
+	}); err != nil {
+		t.Fatalf("append display system: %v", err)
+	}
+	if err := storageSession.Append(ctx, storage.Status{
+		Type:   "status",
+		Status: "UI-only retry status must not reach provider",
+		TS:     time.Now().Unix(),
+	}); err != nil {
+		t.Fatalf("append display status: %v", err)
+	}
+	appendCantoHistory(t, ctx, store, storageSession.ID(),
+		llm.Message{Role: llm.RoleUser, Content: "prior user"},
+		llm.Message{Role: llm.RoleAssistant, Content: "prior assistant"},
+	)
+
+	provider := ctesting.NewMockProvider("local-api", ctesting.Step{Content: "next"})
+	oldFactory := providerFactory
+	providerFactory = func(ctx context.Context, cfg *config.Config) (llm.Provider, error) {
+		if cfg.Provider == "local-api" {
+			return provider, nil
+		}
+		return oldFactory(ctx, cfg)
+	}
+	defer func() { providerFactory = oldFactory }()
+
+	b := New()
+	b.SetStore(store)
+	b.SetSession(storageSession)
+	b.SetConfig(&config.Config{Provider: "local-api", Model: "model-a", Endpoint: "http://localhost:8080/v1"})
+	if err := b.Open(ctx); err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer func() { _ = b.Close() }()
+
+	if err := b.SubmitTurn(ctx, "new user"); err != nil {
+		t.Fatalf("submit turn: %v", err)
+	}
+	waitForTurnFinished(t, b.Events())
+
+	calls := provider.Calls()
+	if len(calls) != 1 {
+		t.Fatalf("provider calls = %d, want 1", len(calls))
+	}
+	req := calls[0]
+	for _, msg := range req.Messages {
+		if strings.Contains(msg.Content, "UI-only") {
+			t.Fatalf("provider request contains display-only event: %#v", req.Messages)
+		}
+	}
+	if !requestHasMessage(req.Messages, llm.RoleUser, "prior user") {
+		t.Fatalf("provider request missing prior user: %#v", req.Messages)
+	}
+	if !requestHasMessage(req.Messages, llm.RoleAssistant, "prior assistant") {
+		t.Fatalf("provider request missing prior assistant: %#v", req.Messages)
+	}
+	if !requestHasMessage(req.Messages, llm.RoleUser, "new user") {
+		t.Fatalf("provider request missing new user: %#v", req.Messages)
 	}
 }
 
