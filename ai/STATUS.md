@@ -36,13 +36,14 @@ Fast, lightweight terminal coding agent.
 - `/compact` is available again while `CoreLoopOnly` remains on. Focused app coverage and `go test ./... -count=1` pass after reopening it.
 - CLI session/error handling is tighter: invalid `--output` values fail before runtime/model execution, and explicit `--continue`/`-c` now errors when no conversation session exists instead of silently starting fresh. Full tests and Fedora text/JSON/continue print smokes pass.
 - CLI tool automation now works in untrusted workspaces when the user explicitly asks for it: print-mode `--yolo` / `--mode auto` stays auto for that invocation, while interactive TUI startup still downgrades untrusted workspaces to READ. Fedora JSON tool smoke returned `tool_calls=["bash"]` and `response="done"`.
+- Startup header readability improved: the trust notice now says `Workspace: not trusted. READ mode active. Run /trust to enable edits.`, tool metadata is labeled as `Tools: N registered`, and startup metadata uses readable gray/warning/ok color rather than faint-only styling.
 - Preferred live-smoke order: use Fedora local-api first when available (`http://fedora:8080/v1`, `qwen3.6:27b`). If Fedora is down and live model evidence is needed, use OpenRouter with `deepseek/deepseek-v4-flash` for cheap smoke or `deepseek/deepseek-v4-pro` only when the heavier model is useful.
 
 ## Next Action
 
 Continue `tk-mmcs` as the parity/table-stakes track:
 
-1. Continue auditing the CLI surface against Pi/Codex conventions: exit codes, resume/continue print behavior, and JSON shape.
+1. Continue post-core TUI shell work: `/help` readability and remaining resume/transcript display issues.
 2. Keep `CoreLoopOnly` on while reopening only table-stakes reliability/session surfaces such as compaction.
 3. Keep ACP, privacy, subagents, skills, routing, and advanced thinking behind explicit later tasks.
 
