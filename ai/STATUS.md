@@ -38,7 +38,8 @@ Current implementation posture:
 - App-local errors from slash commands, config/state writes, and approval-send failures now use a local UI error path instead of backend `session.Error`, so they do not wait for nonexistent backend terminal events or materialize durable transcript state.
 - The unconfigured backend now fails `SubmitTurn` synchronously without also queueing a backend error event, preventing duplicate startup/configuration errors.
 - ACP prompt completion no longer emits an empty assistant commit; the lifecycle test now asserts start-to-finish settlement without relying on asynchronous session-update ordering.
-- Live Fedora/local-api smoke is currently deferred because Fedora is off. If a live provider is needed before Fedora returns, use OpenRouter with `deepseek/deepseek-v4-pro` or `deepseek/deepseek-v4-flash`, but keep deterministic code review as the active focus.
+- The TUI now flushes a non-empty pending streamed assistant entry on `TurnFinished` when no committed `AgentMessage` arrives, making the app robust to stream-only backend completion.
+- Live Fedora/local-api smoke is currently deferred because Fedora is off. OpenRouter `deepseek/deepseek-v4-flash` smoke proved first-turn submit/stream/approval/bash-tool/tool-result/assistant-commit/persist/reopen, but the resumed follow-up hit provider `402 Payment Required`; treat full live follow-up validation as provider/account-blocked until Fedora is back or another funded live model is selected.
 
 Next core-parity work:
 - use `ai/design/native-core-loop-architecture.md` as the target design for the Canto/Ion refactor.

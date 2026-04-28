@@ -101,6 +101,20 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 
 	case session.TurnFinished:
 		m.InFlight.Thinking = false
+		var cmds []tea.Cmd
+		if m.InFlight.Pending != nil && m.InFlight.Pending.Role == session.Agent &&
+			(strings.TrimSpace(m.InFlight.Pending.Content) != "" ||
+				strings.TrimSpace(m.InFlight.Pending.Reasoning) != "" ||
+				strings.TrimSpace(m.InFlight.ReasonBuf) != "") {
+			if strings.TrimSpace(m.InFlight.Pending.Reasoning) == "" {
+				m.InFlight.Pending.Reasoning = m.InFlight.ReasonBuf
+			}
+			entry := *m.InFlight.Pending
+			m.InFlight.Pending = nil
+			m.InFlight.StreamBuf = ""
+			m.InFlight.ReasonBuf = ""
+			cmds = append(cmds, m.printEntries(entry))
+		}
 		if m.Progress.Mode == stateError {
 			m.InFlight.QueuedTurns = nil
 		} else if m.Progress.Mode == stateCancelled || m.Progress.BudgetStopReason != "" {
@@ -121,9 +135,11 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		if len(m.InFlight.QueuedTurns) > 0 {
 			queued := m.InFlight.QueuedTurns[0]
 			m.InFlight.QueuedTurns = m.InFlight.QueuedTurns[1:]
-			return m, func() tea.Msg { return queuedTurnMsg{text: queued} }
+			cmds = append(cmds, func() tea.Msg { return queuedTurnMsg{text: queued} })
+			return m, tea.Sequence(cmds...)
 		}
-		return m, m.awaitSessionEvent()
+		cmds = append(cmds, m.awaitSessionEvent())
+		return m, tea.Sequence(cmds...)
 
 	case session.ThinkingDelta:
 		if msg.AgentID == "" {
