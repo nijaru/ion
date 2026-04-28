@@ -447,6 +447,47 @@ func TestCantoStoreEntriesMapSystemMessages(t *testing.T) {
 	}
 }
 
+func TestCantoStoreEntriesInterleaveSystemMessagesWithHistory(t *testing.T) {
+	root := t.TempDir()
+	storeAny, err := NewCantoStore(root)
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+
+	ctx := context.Background()
+	sess, err := storeAny.OpenSession(ctx, "/tmp/ion-storage-test", "model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	if err := sess.Append(ctx, User{Content: "first turn"}); err != nil {
+		t.Fatalf("append first user: %v", err)
+	}
+	if err := sess.Append(ctx, System{Content: "Canceled by user"}); err != nil {
+		t.Fatalf("append system: %v", err)
+	}
+	if err := sess.Append(ctx, User{Content: "second turn"}); err != nil {
+		t.Fatalf("append second user: %v", err)
+	}
+
+	entries, err := sess.Entries(ctx)
+	if err != nil {
+		t.Fatalf("entries: %v", err)
+	}
+	if len(entries) != 3 {
+		t.Fatalf("entries length = %d, want 3", len(entries))
+	}
+	if entries[0].Role != ionsession.User || entries[0].Content != "first turn" {
+		t.Fatalf("first entry = %#v", entries[0])
+	}
+	if entries[1].Role != ionsession.System || entries[1].Content != "Canceled by user" {
+		t.Fatalf("second entry = %#v", entries[1])
+	}
+	if entries[2].Role != ionsession.User || entries[2].Content != "second turn" {
+		t.Fatalf("third entry = %#v", entries[2])
+	}
+}
+
 func TestCantoStoreAppendPersistsToolResultsIntoEffectiveHistory(t *testing.T) {
 	root := t.TempDir()
 	storeAny, err := NewCantoStore(root)
