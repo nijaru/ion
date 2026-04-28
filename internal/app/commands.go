@@ -1254,10 +1254,11 @@ func (m Model) resumeRuntimeCommand(
 		if oldSession != nil {
 			_ = oldSession.Close()
 		}
-		printLines := []string{"--- resumed ---", m.runtimeHeaderLine(backend)}
+		printLines := []string{m.runtimeHeaderLine(backend)}
 		if header := m.headerLineFor(resumeBranch); header != "" {
 			printLines = append(printLines, header)
 		}
+		printLines = append(printLines, "", "--- resumed ---")
 		return runtimeSwitchedMsg{
 			cfg:           &cfgCopy,
 			preset:        presetPrimary,

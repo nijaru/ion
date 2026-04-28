@@ -3574,7 +3574,7 @@ func TestRuntimeSwitchShowsStatusOnResume(t *testing.T) {
 		backend:       stubBackend{sess: &stubSession{events: make(chan session.Event)}},
 		session:       &stubSession{events: make(chan session.Event)},
 		storage:       &stubStorageSession{id: "session-1", branch: "main"},
-		printLines:    []string{"--- resumed ---", "ion v0.0.0", "~/tmp/test • main"},
+		printLines:    []string{"ion v0.0.0", "~/tmp/test • main", "", "--- resumed ---"},
 		replayEntries: []session.Entry{{Role: session.User, Content: "hello"}},
 		status:        "Connected via Canto",
 		notice:        "Resumed session session-1",
@@ -3636,6 +3636,50 @@ func TestResumeStoredSessionClosesInspectionSession(t *testing.T) {
 	}
 	if !tempSession.closed {
 		t.Fatal("expected temporary inspection session to be closed after reading metadata")
+	}
+}
+
+func TestResumeRuntimeCommandPrintsMarkerAfterHeader(t *testing.T) {
+	newSession := &stubSession{events: make(chan session.Event)}
+	newStorage := &stubStorageSession{
+		id:      "session-1",
+		model:   "openai/gpt-4.1",
+		branch:  "feature/resume",
+		entries: []session.Entry{{Role: session.User, Content: "hello"}},
+	}
+	model := New(
+		stubBackend{sess: &stubSession{events: make(chan session.Event)}},
+		nil,
+		nil,
+		"/tmp/test",
+		"main",
+		"dev",
+		func(ctx context.Context, cfg *config.Config, sessionID string) (backend.Backend, session.AgentSession, storage.Session, error) {
+			return stubBackend{sess: newSession}, newSession, newStorage, nil
+		},
+	)
+
+	cmd := model.resumeRuntimeCommand(
+		&config.Config{Provider: "openai", Model: "gpt-4.1"},
+		session.Entry{Role: session.System, Content: "Resumed"},
+		"session-1",
+	)
+	msg := cmd()
+	switched, ok := msg.(runtimeSwitchedMsg)
+	if !ok {
+		t.Fatalf("expected runtimeSwitchedMsg, got %T", msg)
+	}
+
+	got := make([]string, 0, len(switched.printLines))
+	for _, line := range switched.printLines {
+		got = append(got, ansi.Strip(line))
+	}
+	want := []string{"ion dev", "/tmp/test • feature/resume", "", "--- resumed ---"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("print lines = %#v, want %#v", got, want)
+	}
+	if len(switched.replayEntries) != 1 || switched.replayEntries[0].Content != "hello" {
+		t.Fatalf("replay entries = %#v", switched.replayEntries)
 	}
 }
 

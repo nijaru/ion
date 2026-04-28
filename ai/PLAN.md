@@ -19,6 +19,7 @@ Ion Gate 1 is green for the resume/model-history failure that was blocking norma
 - Ion app lifecycle now closes newly opened runtime handles on switch/resume post-open failure and keeps the old runtime open until replay/state validation succeeds.
 - Ion replay compacts routine successful tool output by default but preserves full errored routine output for debugging after resume.
 - Ion's Canto-backed storage compatibility API now skips empty assistant appends before lazy session materialization, while preserving reasoning-only assistant rows.
+- Ion TUI `/resume` runtime switches now place `--- resumed ---` after the launch header and before restored transcript rows.
 - Live Fedora/local-api smoke is currently deferred because Fedora is off; deterministic review remains the active proof path.
 
 Ion is still not broadly core-stable. The next gate is a top-down design/refactor against `ai/design/native-core-loop-architecture.md`, then deterministic coverage for cancellation, retries, provider-limit failures, session lifecycle, and TUI command/display polish.

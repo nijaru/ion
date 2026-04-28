@@ -62,6 +62,7 @@ After any terminal state, the session can be resumed and can accept a new user t
 ### 5. Replay Equals Live
 
 - `--continue`, `--resume <id>`, and `/resume` must use the same display-entry renderer as live transcript entries.
+- Resume markers must appear after the launch/runtime header and before restored transcript rows.
 - Resume replay must not duplicate user, assistant, tool, system, status, or subagent entries.
 - Routine tool display compaction is a UI transform only; provider-visible history keeps the real result.
 - Restored transcript spacing must remain readable and equivalent to live transcript spacing.
