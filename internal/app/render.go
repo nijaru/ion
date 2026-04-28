@@ -29,12 +29,9 @@ func (m Model) View() tea.View {
 		b.WriteString("\n")
 	}
 
-	// Keep exactly one visual blank line between committed scrollback and Plane B.
-	// Once transcript rows are printed, the terminal already advanced to the next
-	// line, so we don't add another empty row unless Plane B has in-view content.
-	if planeB != "" || m.Picker.Session != nil || m.Picker.Overlay != nil || !m.App.PrintedTranscript {
-		b.WriteString("\n")
-	}
+	// Keep the live status/composer shell visually separated from committed
+	// scrollback, including replayed transcript rows printed before View runs.
+	b.WriteString("\n")
 
 	// Progress line
 	b.WriteString(m.progressLine())
