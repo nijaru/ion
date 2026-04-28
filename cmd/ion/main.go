@@ -34,7 +34,9 @@ func main() {
 		false,
 		"Continue the most recent session in this directory",
 	)
+	continueShortFlag := flag.Bool("c", false, "Continue the most recent session in this directory")
 	resumeFlag := flag.String("resume", "", "Resume a specific session by ID")
+	resumeShortFlag := flag.String("r", "", "Resume a specific session by ID")
 	providerFlag := flag.String("provider", "", "Provider to use")
 	modeFlag := flag.String("mode", "", "Permission mode: read, edit, or auto")
 	yoloFlag := flag.Bool("yolo", false, "Start in AUTO mode (alias for --mode auto)")
@@ -146,7 +148,9 @@ func main() {
 	var sessionID string
 	if *resumeFlag != "" {
 		sessionID = *resumeFlag
-	} else if *continueFlag {
+	} else if *resumeShortFlag != "" {
+		sessionID = *resumeShortFlag
+	} else if *continueFlag || *continueShortFlag {
 		recent, err := recentSessionForContinue(ctx, store, cwd)
 		if err == nil && recent != nil {
 			sessionID = recent.ID
@@ -285,7 +289,7 @@ func normalizeFlagArgs(args []string) ([]string, bool) {
 			continue
 		}
 		switch {
-		case name == "resume" && !hasInlineValue:
+		case (name == "resume" || name == "r") && !hasInlineValue:
 			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
 				flagArgs = append(flagArgs, arg, args[i+1])
 				i++
@@ -329,7 +333,7 @@ func ionFlagName(arg string) (string, bool, bool) {
 
 func ionKnownFlag(name string) bool {
 	switch name {
-	case "continue", "resume", "provider", "mode", "yolo", "print", "prompt", "p", "output", "json", "timeout":
+	case "continue", "c", "resume", "r", "provider", "mode", "yolo", "print", "prompt", "p", "output", "json", "timeout":
 		return true
 	default:
 		return false
@@ -338,7 +342,7 @@ func ionKnownFlag(name string) bool {
 
 func ionFlagNeedsValue(name string) bool {
 	switch name {
-	case "resume", "provider", "mode", "prompt", "output", "timeout":
+	case "resume", "r", "provider", "mode", "prompt", "output", "timeout":
 		return true
 	default:
 		return false
