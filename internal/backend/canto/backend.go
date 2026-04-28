@@ -740,9 +740,6 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 				}
 			}
 		})
-		if err != nil && err != context.Canceled {
-			b.events <- ionsession.Error{Err: err}
-		}
 	}()
 
 	return nil
@@ -794,6 +791,11 @@ func (b *Backend) translateEvents(ctx context.Context, evCh <-chan session.Event
 			b.events <- ionsession.TurnStarted{}
 			b.events <- ionsession.StatusChanged{Status: "Thinking..."}
 		case session.TurnCompleted:
+			if data, ok, err := ev.TurnCompletedData(); err == nil && ok && data.Error != "" {
+				b.events <- ionsession.Error{Err: fmt.Errorf("%s", data.Error)}
+				b.events <- ionsession.TurnFinished{}
+				continue
+			}
 			b.events <- ionsession.TurnFinished{}
 			b.events <- ionsession.StatusChanged{Status: "Ready"}
 		case session.ToolStarted:

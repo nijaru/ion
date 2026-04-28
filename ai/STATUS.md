@@ -17,6 +17,7 @@ Current implementation posture:
 - Automatic context recovery/proactive compaction remains enabled because it is part of core loop resilience, not feature polish.
 - Canto `52206f2` is imported; write-side assistant payload validation now trims content/reasoning, so whitespace-only assistant rows should not be created by future non-streaming/streaming turns.
 - Ion no longer treats `TurnCompleted` as an empty assistant commit signal. The Canto adapter now commits assistant display rows from real `MessageAdded` assistant events and uses `TurnCompleted` only for terminal state.
+- Provider errors now translate from Canto `TurnCompleted` error data into one Ion `Error` followed by `TurnFinished`, avoiding the old race between terminal replay and the goroutine's returned `SendStream` error.
 - Live Fedora/local-api smoke is currently blocked from this process: `curl http://fedora:8080/v1/models` timed out after 10s, and `ion -p ... --timeout 60s` hit `context deadline exceeded`.
 
 Next core-parity work:
@@ -82,7 +83,7 @@ Design rule:
 - Similar agents are references, not feature-parity requirements. Adopt from pi, Claude Code, Codex, OpenCode, Cursor, Droid, Letta, and others only when the idea strengthens Ion's core coding loop or preserves a simple, inspectable UX.
 
 ## Next Steps
-1. Continue the Ion refactor slice against `ai/design/ion-native-backend-spine-2026-04-27.md`, focusing on terminal error ordering and backend reuse after provider errors/cancel.
+1. Continue the Ion refactor slice against `ai/design/ion-native-backend-spine-2026-04-27.md`, focusing on cancel/close settling and backend reuse after cancellation.
 2. Confirm event translation and storage/replay only consume Canto effective history for model-visible transcript entries.
 3. Extend deterministic tests around resumed follow-up turns, provider error replay, cancellation replay, and duplicate transcript prevention while CoreLoopOnly is enabled.
 4. Use Fedora/local-api `ion -p` and `--resume ... -p` smokes before and after any core-loop-adjacent change.
