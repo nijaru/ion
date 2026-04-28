@@ -44,6 +44,11 @@ type compactBackend struct {
 	called    bool
 }
 
+type configCaptureBackend struct {
+	stubBackend
+	cfg *config.Config
+}
+
 func (b stubBackend) Name() string { return "stub" }
 func (b stubBackend) Provider() string {
 	if b.providerSet || b.provider != "" {
@@ -95,6 +100,15 @@ func (b stubBackend) SetStore(s storage.Store) {}
 func (b stubBackend) SetSession(s storage.Session) {}
 
 func (b stubBackend) SetConfig(cfg *config.Config) {}
+
+func (b *configCaptureBackend) SetConfig(cfg *config.Config) {
+	if cfg == nil {
+		b.cfg = nil
+		return
+	}
+	copied := *cfg
+	b.cfg = &copied
+}
 
 func (b *compactBackend) Compact(ctx context.Context) (bool, error) {
 	b.called = true
@@ -2551,7 +2565,9 @@ func TestSettingsCommandUpdatesStableConfig(t *testing.T) {
 		t.Fatalf("write state: %v", err)
 	}
 
-	model := readyModel(t)
+	sess := &stubSession{events: make(chan session.Event)}
+	capture := &configCaptureBackend{stubBackend: stubBackend{sess: sess}}
+	model := New(capture, nil, nil, "/tmp/test", "main", "dev", nil)
 	model.Model.Config = &config.Config{}
 	model, cmd := model.handleCommand("/settings retry off")
 	if cmd == nil {
@@ -2572,6 +2588,12 @@ func TestSettingsCommandUpdatesStableConfig(t *testing.T) {
 	}
 	if model.Model.Config == nil || model.Model.Config.RetryUntilCancelledEnabled() {
 		t.Fatal("model config retry setting was not updated")
+	}
+	if model.Model.Config.Provider != "local-api" || model.Model.Config.Model != "qwen3.6:27b" {
+		t.Fatalf("runtime config = %s/%s, want state-backed local-api/qwen3.6:27b", model.Model.Config.Provider, model.Model.Config.Model)
+	}
+	if capture.cfg == nil || capture.cfg.Provider != "local-api" || capture.cfg.Model != "qwen3.6:27b" {
+		t.Fatalf("backend config = %#v, want state-backed provider/model", capture.cfg)
 	}
 }
 
