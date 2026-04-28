@@ -63,7 +63,9 @@ func (b *UnconfiguredBackend) Session() session.AgentSession {
 
 func (b *UnconfiguredBackend) SetStore(storage.Store) {}
 
-func (b *UnconfiguredBackend) SetSession(storage.Session) {}
+func (b *UnconfiguredBackend) SetSession(s storage.Session) {
+	b.session.setStorage(s)
+}
 
 func (b *UnconfiguredBackend) SetConfig(cfg *config.Config) {
 	b.cfg = cfg
@@ -72,12 +74,28 @@ func (b *UnconfiguredBackend) SetConfig(cfg *config.Config) {
 type unconfiguredSession struct {
 	events chan session.Event
 	reason error
+	id     string
+	meta   map[string]string
 }
 
 func newUnconfiguredSession(reason error) *unconfiguredSession {
 	return &unconfiguredSession{
 		events: make(chan session.Event, 10),
 		reason: reason,
+		meta:   map[string]string{},
+	}
+}
+
+func (s *unconfiguredSession) setStorage(storageSession storage.Session) {
+	if storageSession == nil {
+		return
+	}
+	s.id = storageSession.ID()
+	meta := storageSession.Meta()
+	s.meta = map[string]string{
+		"model":  meta.Model,
+		"branch": meta.Branch,
+		"cwd":    meta.CWD,
 	}
 }
 
@@ -124,9 +142,9 @@ func (s *unconfiguredSession) Events() <-chan session.Event {
 }
 
 func (s *unconfiguredSession) ID() string {
-	return ""
+	return s.id
 }
 
 func (s *unconfiguredSession) Meta() map[string]string {
-	return map[string]string{}
+	return s.meta
 }

@@ -22,6 +22,7 @@ Fast, lightweight terminal coding agent.
 - Ion storage rejects non-empty model-visible user/assistant/tool appends; Canto is the single provider-history writer.
 - Replay/live transcript rendering share spacing and routine successful tool output compacts as a UI transform only.
 - Print CLI preflight and settlement are covered enough to act as the automation surface.
+- Startup/resume/continue selection now has real-store coverage for fresh lazy startup, invalid-provider startup, and explicit resume when the active provider config is invalid.
 - Deterministic tests and race-focused backend tests have covered several previously broken terminal, cancel, duplicate-watch, and follow-up-turn paths.
 - Live validation is currently provider/environment limited: Fedora is off and OpenRouter free/DeepSeek paths have hit provider/account limits. Deterministic tests remain the active proof path until a live provider is intentionally available.
 
@@ -29,10 +30,9 @@ Fast, lightweight terminal coding agent.
 
 Continue `tk-s6p4` from the tracker, in this order:
 
-1. Audit `cmd/ion` startup, `--continue`, bare `--resume`, and `--resume <id>` against real stores.
-2. Review slash/local command and runtime-switch behavior during active turns.
-3. Run a provider-history shape pass after tool turns and compaction.
-4. Add or tighten deterministic tests for any gap found before re-enabling P2/P3 surfaces.
+1. Review slash/local command and runtime-switch behavior during active turns.
+2. Run a provider-history shape pass after tool turns and compaction.
+3. Add or tighten deterministic tests for any gap found before re-enabling P2/P3 surfaces.
 
 ## Active Tasks
 

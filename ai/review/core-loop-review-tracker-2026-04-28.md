@@ -48,21 +48,20 @@ Use this as the scan-first checklist for `tk-s6p4`. `Reviewed` means the area ha
 | Provider/model metadata preservation | Reviewed/refactored | Submit metadata preserves provider-qualified model names. | Keeps `/resume <id>` working for local/custom providers. |
 | ACP prompt completion | Reviewed/refactored | ACP no longer emits empty assistant commit after prompt completion. | ACP remains secondary and still has P2 follow-ups. |
 | Startup/resume rendering | Reviewed/refactored | Resumed marker after launch header; replay entries use shared renderer spacing. | Header visual polish is P3. |
+| Startup/continue/resume materialization | Reviewed/refactored | Real-store `openRuntime` tests cover fresh lazy startup, invalid-provider startup, and invalid-provider explicit resume. | Local session selection no longer depends on provider config being immediately usable. |
 | App queued follow-up lifecycle | Reviewed/refactored | Queued follow-up after `TurnFinished` covered. | Keep in regression set while reviewing command paths. |
 | Trust/mode/approval UX | Partially reviewed | Basic mode/trust paths covered; `CoreLoopOnly` keeps advanced surfaces down. | Secondary to stable submit/stream/tool/cancel/error/persist/replay. |
 | Live local-api/OpenRouter validation | Blocked/partial | Fedora off; OpenRouter DeepSeek hit 402, Minimax hit 429. | Deterministic tests are the proof path until a live provider is available. |
 
 ## Current Gaps
 
-1. Final pass over `cmd/ion` startup/continue/resume selection with real stores: prove `--continue` and bare `--resume` do not create sessions until a print/TUI prompt submits.
-2. Final pass over Ion app command/runtime switch paths while a turn is active: confirm cancel/queue/notice behavior is deliberate for every allowed local command.
-3. Provider-history shape pass after compaction and tool turns: confirm no provider request can include empty assistant, misordered tool result, or display-only Ion system rows.
-4. ACP bridge P2s: stderr filtering, initial session context, token usage mapping. Keep behind native-loop gate unless ACP blocks tests.
-5. Live smoke when Fedora or a funded model is available: tool call, persist, resume, follow-up turn, and `ion -p --resume <id>`.
+1. Final pass over Ion app command/runtime switch paths while a turn is active: confirm cancel/queue/notice behavior is deliberate for every allowed local command.
+2. Provider-history shape pass after compaction and tool turns: confirm no provider request can include empty assistant, misordered tool result, or display-only Ion system rows.
+3. ACP bridge P2s: stderr filtering, initial session context, token usage mapping. Keep behind native-loop gate unless ACP blocks tests.
+4. Live smoke when Fedora or a funded model is available: tool call, persist, resume, follow-up turn, and `ion -p --resume <id>`.
 
 ## Latest Verification
 
 - `go test ./... -count=1`
 - `go test -race ./cmd/ion ./internal/app -count=1`
 - `go test -race ./internal/backend/canto` focused submit/cancel/provider-error paths after the single-active-turn guard.
-
