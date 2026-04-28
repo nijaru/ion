@@ -800,44 +800,32 @@ func (b *Backend) translateEvents(ctx context.Context, evCh <-chan session.Event
 			b.events <- ionsession.TurnFinished{}
 			b.events <- ionsession.StatusChanged{Status: "Ready"}
 		case session.ToolStarted:
-			var data struct {
-				Tool string `json:"tool"`
-				ID   string `json:"id"`
-				Args string `json:"args"`
-			}
-			if err := ev.UnmarshalData(&data); err == nil {
+			if data, ok, err := ev.ToolStartedData(); err == nil && ok {
 				b.events <- ionsession.ToolCallStarted{
 					ToolUseID: data.ID,
 					ToolName:  data.Tool,
-					Args:      data.Args,
+					Args:      data.Arguments,
 				}
 				b.events <- ionsession.StatusChanged{Status: fmt.Sprintf("Running %s...", data.Tool)}
 			}
 		case session.ToolCompleted:
-			var data struct {
-				Tool   string `json:"tool"`
-				ID     string `json:"id"`
-				Output string `json:"output"`
-				Error  string `json:"error,omitempty"`
-			}
-			if err := ev.UnmarshalData(&data); err == nil {
-				var execErr error
-				if data.Error != "" {
-					execErr = fmt.Errorf("%s", data.Error)
-				}
+			if data, ok, err := ev.ToolCompletedData(); err == nil && ok {
 				b.events <- ionsession.ToolResult{
 					ToolUseID: data.ID,
 					ToolName:  data.Tool,
 					Result:    data.Output,
-					Error:     execErr,
 				}
 			}
 		case session.ToolOutputDelta:
 			var data struct {
+				ID    string `json:"id"`
 				Delta string `json:"delta"`
 			}
 			if err := ev.UnmarshalData(&data); err == nil {
-				b.events <- ionsession.ToolOutputDelta{Delta: data.Delta}
+				b.events <- ionsession.ToolOutputDelta{
+					ToolUseID: data.ID,
+					Delta:     data.Delta,
+				}
 			}
 		case session.ChildRequested:
 			var data session.ChildRequestedData
