@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -168,6 +169,45 @@ func TestNormalizeFlagArgsOpensPickerForResumeWithoutID(t *testing.T) {
 	}
 	if len(shortWithID) != 2 || shortWithID[0] != "-r" || shortWithID[1] != "session-1" {
 		t.Fatalf("normalizeFlagArgs short explicit = %#v, want -r session-1", shortWithID)
+	}
+}
+
+func TestNormalizeFlagArgsKeepsModelAndThinkingValues(t *testing.T) {
+	got, picker := normalizeFlagArgs([]string{"-p", "--model", "local-model", "--thinking", "high", "hello"})
+	want := []string{"-p", "--model", "local-model", "--thinking", "high", "--", "hello"}
+	if picker {
+		t.Fatal("normalizeFlagArgs opened picker")
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("normalizeFlagArgs = %#v, want %#v", got, want)
+	}
+
+	short, picker := normalizeFlagArgs([]string{"-p", "-m", "local-model", "hello"})
+	shortWant := []string{"-p", "-m", "local-model", "--", "hello"}
+	if picker {
+		t.Fatal("normalizeFlagArgs opened picker for short model")
+	}
+	if !slices.Equal(short, shortWant) {
+		t.Fatalf("normalizeFlagArgs short = %#v, want %#v", short, shortWant)
+	}
+}
+
+func TestApplyCLIConfigOverrides(t *testing.T) {
+	cfg := &config.Config{}
+	applyCLIConfigOverrides(cfg, "", "openai/gpt-4.1", "high")
+	if cfg.Provider != "openai" || cfg.Model != "gpt-4.1" || cfg.ReasoningEffort != "high" {
+		t.Fatalf("cfg = %#v, want openai/gpt-4.1 high", cfg)
+	}
+
+	cfg = &config.Config{Provider: "openrouter"}
+	applyCLIConfigOverrides(cfg, "", "openai/gpt-4.1", "")
+	if cfg.Provider != "openrouter" || cfg.Model != "openai/gpt-4.1" {
+		t.Fatalf("cfg = %#v, want openrouter with slash model preserved", cfg)
+	}
+
+	applyCLIConfigOverrides(cfg, "local-api", "qwen3.6:27b", "")
+	if cfg.Provider != "local-api" || cfg.Model != "qwen3.6:27b" {
+		t.Fatalf("cfg = %#v, want local-api qwen model", cfg)
 	}
 }
 
