@@ -33,10 +33,10 @@ func resolvePrintFlags(
 	if output == "" {
 		output = "text"
 	}
+	if output != "text" && output != "json" {
+		return false, "", "", fmt.Errorf("unsupported print output %q (want text or json)", output)
+	}
 	if jsonOutput {
-		if output != "text" && output != "json" {
-			return false, "", "", fmt.Errorf("unsupported print output %q (want text or json)", output)
-		}
 		output = "json"
 	}
 

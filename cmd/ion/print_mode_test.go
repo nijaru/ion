@@ -104,6 +104,13 @@ func TestResolvePrintFlagsRejectsUnexpectedArguments(t *testing.T) {
 	}
 }
 
+func TestResolvePrintFlagsRejectsUnsupportedOutputBeforePrint(t *testing.T) {
+	_, _, _, err := resolvePrintFlags(true, false, "hello", nil, "xml", false)
+	if err == nil || !strings.Contains(err.Error(), `unsupported print output "xml"`) {
+		t.Fatalf("resolve print flags error = %v", err)
+	}
+}
+
 func TestNormalizeFlagArgsAllowsFlagsAfterPositionalPrompt(t *testing.T) {
 	got, openResumePicker := normalizeFlagArgs([]string{
 		"--print",
