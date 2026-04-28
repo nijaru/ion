@@ -5,7 +5,7 @@ Fast, lightweight terminal coding agent.
 **Phase:** P1 native core-loop gate passed; moving to table-stakes parity  
 **Focus:** Pi/Codex-style CLI automation and session UX gaps without reopening deferred P2/P3 feature work.  
 **Active blocker:** `tk-mmcs` — core parity plan and task queue hygiene.  
-**Queue hygiene:** `tk-mmcs` keeps Pi/Codex/Claude parity planning aligned; `tk-xrgc` keeps `ai/` readable.
+**Queue hygiene:** `tk-mmcs` keeps Pi/Codex/Claude parity planning aligned; deferred ACP/P3/P4 tasks are blocked behind it so `tk ready` stays focused.
 **Updated:** 2026-04-28
 
 ## Current Truth
@@ -48,16 +48,16 @@ Fast, lightweight terminal coding agent.
 
 Continue `tk-mmcs` as the parity/table-stakes track:
 
-1. Continue post-core TUI shell work: remaining resume/transcript display issues and session/session-browser polish.
+1. Continue `tk-594o` source review for provider/model/session state ownership, startup persistence behavior, and transcript inspection/config commands.
 2. Keep `CoreLoopOnly` on while reopening only table-stakes reliability/session surfaces such as compaction.
-3. Keep ACP, privacy, subagents, skills, routing, and advanced thinking behind explicit later tasks.
+3. Keep ACP, privacy, subagents, skills, routing, and advanced thinking blocked behind `tk-mmcs`.
 
 Do not run another broad `ai/` pass by default. The next work is source review and targeted docs only when the code review exposes a design question.
 
 ## Active Tasks
 
 - `tk-mmcs` — P1 core parity plan and task queue hygiene.
-- `tk-ltt1` — P2 session browser and resume polish.
+- `tk-594o` — P2 config/session state hygiene review.
 - `tk-xrgc` — P3 AI context dedupe/reorganization; active only because stale docs were blocking agent focus.
 
 Everything else is downstream of the solo native loop.
