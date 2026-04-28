@@ -857,6 +857,90 @@ func TestOpenRetriesTransientProviderErrors(t *testing.T) {
 	}
 }
 
+func TestSubmitTurnProviderErrorLeavesBackendReusable(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	root := t.TempDir()
+	store, err := storage.NewCantoStore(root)
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	storageSession, err := store.OpenSession(ctx, "/tmp/ion-provider-error", "openai/model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	providerErr := errors.New("provider unavailable")
+	provider := ctesting.NewMockProvider(
+		"openai",
+		ctesting.Step{Err: providerErr},
+		ctesting.Step{Content: "recovered reply"},
+	)
+
+	oldFactory := providerFactory
+	providerFactory = func(ctx context.Context, cfg *config.Config) (llm.Provider, error) {
+		if cfg.Provider == "openai" {
+			return provider, nil
+		}
+		return oldFactory(ctx, cfg)
+	}
+	defer func() { providerFactory = oldFactory }()
+
+	b := New()
+	b.SetStore(store)
+	b.SetSession(storageSession)
+	b.SetConfig(&config.Config{Provider: "openai", Model: "model-a"})
+	if err := b.Open(ctx); err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer func() { _ = b.Close() }()
+
+	if err := b.SubmitTurn(ctx, "first turn fails"); err != nil {
+		t.Fatalf("submit failing turn: %v", err)
+	}
+	errEvent := waitForSessionError(t, b.Events())
+	if !strings.Contains(errEvent.Err.Error(), providerErr.Error()) {
+		t.Fatalf("error = %v, want provider error", errEvent.Err)
+	}
+	waitForTurnFinished(t, b.Events())
+
+	if err := b.SubmitTurn(ctx, "second turn recovers"); err != nil {
+		t.Fatalf("submit recovery turn: %v", err)
+	}
+	waitForTurnFinished(t, b.Events())
+
+	calls := provider.Calls()
+	if len(calls) != 2 {
+		t.Fatalf("provider calls = %d, want 2", len(calls))
+	}
+
+	cantoStore, ok := store.(interface{ Canto() *csession.SQLiteStore })
+	if !ok {
+		t.Fatal("expected canto-backed store")
+	}
+	cantoSess, err := cantoStore.Canto().Load(ctx, storageSession.ID())
+	if err != nil {
+		t.Fatalf("load canto session: %v", err)
+	}
+	var terminalErrorFound bool
+	for _, ev := range cantoSess.Events() {
+		if ev.Type != csession.TurnCompleted {
+			continue
+		}
+		data, ok, err := ev.TurnCompletedData()
+		if err != nil {
+			t.Fatalf("decode turn completed: %v", err)
+		}
+		if ok && strings.Contains(data.Error, providerErr.Error()) {
+			terminalErrorFound = true
+		}
+	}
+	if !terminalErrorFound {
+		t.Fatalf("missing durable provider error terminal event")
+	}
+}
+
 func TestConfigureRetryProviderUsesUntilCancelledSetting(t *testing.T) {
 	events := make(chan ionsession.Event, 1)
 	retryUntilCancelled := true
