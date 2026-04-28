@@ -24,7 +24,7 @@ Current implementation posture:
 - Canto `c22da5e` is imported; canceled streaming and non-streaming turns now persist terminal `TurnCompleted` events upstream, and Ion print/backend paths cancel in-flight work on timeout or refused approval without surfacing wrapped `context canceled` as provider failure.
 - Canto `a5878ab` is imported; failed tool completions now carry structured error text, and Ion preserves that error marker in both live tool results and resumed effective-history display entries.
 - Print mode now explicitly closes the agent session, storage session, and store after a one-shot run before returning or exiting on error, so repeated scriptable smoke runs do not rely on skipped `os.Exit` defers.
-- Live Fedora/local-api smoke is currently blocked from this process: `curl http://fedora:8080/v1/models` timed out after 10s, and `ion -p ... --timeout 60s` hit `context deadline exceeded`.
+- Live Fedora/local-api smoke is currently deferred because Fedora is off. If a live provider is needed before Fedora returns, use OpenRouter with `deepseek/deepseek-v4-pro` or `deepseek/deepseek-v4-flash`, but keep deterministic code review as the active focus.
 
 Next core-parity work:
 - use `ai/design/native-core-loop-architecture.md` as the target design for the Canto/Ion refactor.
@@ -91,8 +91,8 @@ Design rule:
 ## Next Steps
 1. Continue the Ion refactor slice against `ai/design/ion-display-projection-2026-04-27.md`, focusing on real-store replay and duplicate rows across Canto effective history plus Ion display-only events.
 2. Extend deterministic tests around resumed follow-up turns, provider error replay, cancellation replay, and duplicate transcript prevention while CoreLoopOnly is enabled.
-3. Recheck Fedora/local-api reachability before the next live smoke.
-4. Use Fedora/local-api `ion -p` and `--resume ... -p` smokes before and after any core-loop-adjacent change.
+3. Recheck Fedora/local-api reachability before the next local live smoke; use OpenRouter DeepSeek only when deterministic tests cannot cover the behavior.
+4. Use `ion -p` and `--resume ... -p` smokes before and after any core-loop-adjacent change once a live provider is intentionally selected.
 5. Keep ACP, sandboxing, thinking expansion, privacy, routing, and subagents behind native-loop regression safety unless they directly block testing.
 
 *(Note: Older P3 TUI refinement tasks like configurable verbosity, skill layering, and status line context have been subsumed by their respective SOTA epics).*
