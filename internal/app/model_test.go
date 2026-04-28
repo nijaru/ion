@@ -1826,7 +1826,7 @@ func TestSessionInfoNoticeReportsCurrentSession(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Session",
-		"id: stub",
+		"id: sess-1",
 		"provider: openrouter",
 		"model: minimax/minimax-m2.5:free",
 		"mode: READ",
@@ -1838,6 +1838,53 @@ func TestSessionInfoNoticeReportsCurrentSession(t *testing.T) {
 		if !strings.Contains(notice, want) {
 			t.Fatalf("session notice missing %q: %q", want, notice)
 		}
+	}
+}
+
+func TestSessionInfoNoticeDoesNotMaterializeLazySession(t *testing.T) {
+	store, err := storage.NewCantoStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	lazy := storage.NewLazySession(store, "/tmp/test", "openai/model-a", "main")
+	model := New(
+		stubBackend{
+			sess:     &stubSession{events: make(chan session.Event)},
+			provider: "openai",
+			model:    "model-a",
+		},
+		lazy,
+		store,
+		"/tmp/test",
+		"main",
+		"dev",
+		nil,
+	)
+
+	notice, err := model.sessionInfoNotice()
+	if err != nil {
+		t.Fatalf("sessionInfoNotice returned error: %v", err)
+	}
+	if storage.IsMaterialized(lazy) {
+		t.Fatal("session info materialized lazy session")
+	}
+	for _, want := range []string{
+		"id: none",
+		"provider: openai",
+		"model: model-a",
+		"messages: user 0, assistant 0, tools 0, total 0",
+		"tokens: input 0, output 0, total 0",
+	} {
+		if !strings.Contains(notice, want) {
+			t.Fatalf("session notice missing %q: %q", want, notice)
+		}
+	}
+	recent, err := store.GetRecentSession(context.Background(), "/tmp/test")
+	if err != nil {
+		t.Fatalf("recent session: %v", err)
+	}
+	if recent != nil {
+		t.Fatalf("recent session after session info = %#v, want nil", recent)
 	}
 }
 

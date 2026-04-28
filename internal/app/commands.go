@@ -360,11 +360,12 @@ func (m Model) costBudgetNotice(inputTokens, outputTokens int, totalCost float64
 
 func (m Model) sessionInfoNotice() (string, error) {
 	sessionID := ""
-	if m.Model.Session != nil {
+	if m.Model.Storage != nil {
+		if storage.IsMaterialized(m.Model.Storage) {
+			sessionID = strings.TrimSpace(m.Model.Storage.ID())
+		}
+	} else if m.Model.Session != nil {
 		sessionID = strings.TrimSpace(m.Model.Session.ID())
-	}
-	if sessionID == "" && m.Model.Storage != nil {
-		sessionID = strings.TrimSpace(m.Model.Storage.ID())
 	}
 	if sessionID == "" {
 		sessionID = "none"
