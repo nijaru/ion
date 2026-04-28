@@ -405,9 +405,9 @@ func loadWorkspaceTrust(cwd string, cfg *config.Config) (*ionworkspace.TrustStor
 		return nil, false, "", err
 	}
 	if trusted {
-		return store, true, "Workspace is trusted.", nil
+		return store, true, "Workspace: trusted.", nil
 	}
-	return store, false, "Workspace is not trusted. Starting in READ mode. Run /trust to remember this workspace.", nil
+	return store, false, "Workspace: not trusted. READ mode active. Run /trust to enable edits.", nil
 }
 
 func applyWorkspaceTrustModeGate(
@@ -434,7 +434,7 @@ func startupToolLine(b backend.Backend) string {
 	if surface.Count == 0 {
 		return ""
 	}
-	parts := []string{fmt.Sprintf("%d tools registered", surface.Count)}
+	parts := []string{fmt.Sprintf("Tools: %d registered", surface.Count)}
 	if surface.LazyEnabled {
 		parts = append(parts, "Search tools enabled")
 	}
@@ -615,8 +615,15 @@ func isConfigurationStatus(status string) bool {
 }
 
 func styleStartupLine(line string) string {
-	if strings.TrimSpace(line) == "--- resumed ---" {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "--- resumed ---" {
 		return startupMetaStyle().Render(line)
+	}
+	if strings.HasPrefix(trimmed, "Workspace: not trusted.") {
+		return startupWarnStyle().Render(line)
+	}
+	if strings.HasPrefix(trimmed, "Workspace: trusted.") {
+		return startupOKStyle().Render(line)
 	}
 	parts := strings.Split(line, " • ")
 	if len(parts) == 0 {
@@ -642,9 +649,17 @@ func startupVersionStyle() lipgloss.Style {
 }
 
 func startupMetaStyle() lipgloss.Style {
-	return lipgloss.NewStyle().Faint(true)
+	return lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 }
 
 func startupWorkspaceStyle() lipgloss.Style {
-	return lipgloss.NewStyle().Faint(true)
+	return startupMetaStyle()
+}
+
+func startupWarnStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
+}
+
+func startupOKStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
 }

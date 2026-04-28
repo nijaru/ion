@@ -20,10 +20,10 @@ func TestLoadWorkspaceTrustReportsUntrusted(t *testing.T) {
 	if trusted {
 		t.Fatal("workspace starts trusted")
 	}
-	if !strings.Contains(notice, "READ mode") {
+	if !strings.Contains(notice, "READ mode active") {
 		t.Fatalf("notice = %q, want READ mode warning", notice)
 	}
-	if !strings.Contains(notice, "Workspace is not trusted.") {
+	if !strings.Contains(notice, "Workspace: not trusted.") {
 		t.Fatalf("notice = %q, want grammatical trust warning", notice)
 	}
 }
@@ -65,7 +65,7 @@ func TestStartupToolLineReportsLazyTools(t *testing.T) {
 	if !strings.Contains(line, "Search tools enabled") {
 		t.Fatalf("line = %q, want search tools notice", line)
 	}
-	if !strings.Contains(line, "25 tools registered") {
+	if !strings.Contains(line, "Tools: 25 registered") {
 		t.Fatalf("line = %q, want grammatical tool count", line)
 	}
 	if !strings.Contains(line, "Sandbox auto: bubblewrap") {
