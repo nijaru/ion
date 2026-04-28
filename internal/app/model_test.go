@@ -3177,6 +3177,46 @@ func TestModeSlashCommandRunsDuringTurn(t *testing.T) {
 	}
 }
 
+func TestSlashCommandOpensProviderPickerDuringTurn(t *testing.T) {
+	model := readyModel(t)
+	model.InFlight.Thinking = true
+	model.Input.Composer.SetValue("/provider")
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(Model)
+
+	if len(model.InFlight.QueuedTurns) != 0 {
+		t.Fatalf("queued turns = %v, want none for slash command", model.InFlight.QueuedTurns)
+	}
+	if model.Picker.Overlay == nil || model.Picker.Overlay.purpose != pickerPurposeProvider {
+		t.Fatalf("picker = %#v, want provider picker", model.Picker.Overlay)
+	}
+	if cmd == nil {
+		t.Fatal("expected slash command transcript print")
+	}
+}
+
+func TestUnknownSlashCommandDuringTurnStaysLocal(t *testing.T) {
+	sess := &stubSession{events: make(chan session.Event)}
+	model := readyModel(t)
+	model.Model.Session = sess
+	model.InFlight.Thinking = true
+	model.Input.Composer.SetValue("/definitely-not-a-command")
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(Model)
+
+	if len(model.InFlight.QueuedTurns) != 0 {
+		t.Fatalf("queued turns = %v, want none for slash command", model.InFlight.QueuedTurns)
+	}
+	if len(sess.submits) != 0 {
+		t.Fatalf("submits = %v, want no model submit for slash command", sess.submits)
+	}
+	if cmd == nil {
+		t.Fatal("expected local slash error command")
+	}
+}
+
 func TestEscapeCancelClearsQueuedFollowUps(t *testing.T) {
 	sess := &stubSession{events: make(chan session.Event)}
 	stored := &stubStorageSession{}

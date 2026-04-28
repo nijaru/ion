@@ -44,6 +44,7 @@ Use this as the scan-first checklist for `tk-s6p4`. `Reviewed` means the area ha
 | Print CLI settlement | Reviewed/refactored | Event-stream close before `TurnFinished` is an error; print closes runtime handles. | `ion -p` is the automation surface. |
 | TUI shutdown cleanup | Reviewed/refactored | `063e7a5`; TUI closes agent session, storage session, and store after Bubble Tea exits. | Matches print-mode cleanup. |
 | Slash/local command persistence | Reviewed/refactored | Slash errors use local UI error path; real-store `/help` lazy-session regression passes. | Slash commands do not create model-visible transcript or recent session rows. |
+| Slash/local commands during active turns | Reviewed/refactored | Slash commands now bypass follow-up queueing during active turns; provider picker and unknown-command regressions pass. | Slash-like input must never be sent to the model as a queued follow-up. |
 | Runtime switch/resume failure cleanup | Reviewed/refactored | Switch/resume closes newly opened handles on save/replay failure and preserves old runtime. | Needs final command-path review, but root leak class has coverage. |
 | Provider/model metadata preservation | Reviewed/refactored | Submit metadata preserves provider-qualified model names. | Keeps `/resume <id>` working for local/custom providers. |
 | ACP prompt completion | Reviewed/refactored | ACP no longer emits empty assistant commit after prompt completion. | ACP remains secondary and still has P2 follow-ups. |
@@ -55,10 +56,9 @@ Use this as the scan-first checklist for `tk-s6p4`. `Reviewed` means the area ha
 
 ## Current Gaps
 
-1. Final pass over Ion app command/runtime switch paths while a turn is active: confirm cancel/queue/notice behavior is deliberate for every allowed local command.
-2. Provider-history shape pass after compaction and tool turns: confirm no provider request can include empty assistant, misordered tool result, or display-only Ion system rows.
-3. ACP bridge P2s: stderr filtering, initial session context, token usage mapping. Keep behind native-loop gate unless ACP blocks tests.
-4. Live smoke when Fedora or a funded model is available: tool call, persist, resume, follow-up turn, and `ion -p --resume <id>`.
+1. Provider-history shape pass after compaction and tool turns: confirm no provider request can include empty assistant, misordered tool result, or display-only Ion system rows.
+2. ACP bridge P2s: stderr filtering, initial session context, token usage mapping. Keep behind native-loop gate unless ACP blocks tests.
+3. Live smoke when Fedora or a funded model is available: tool call, persist, resume, follow-up turn, and `ion -p --resume <id>`.
 
 ## Latest Verification
 

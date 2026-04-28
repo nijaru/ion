@@ -128,7 +128,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		if text == "" {
 			return m, nil
 		}
-		if strings.HasPrefix(text, "/") && commandAllowedDuringTurn(text) {
+		if strings.HasPrefix(text, "/") {
 			return m.submitText(text)
 		}
 		if m.InFlight.Thinking || m.Progress.Compacting {

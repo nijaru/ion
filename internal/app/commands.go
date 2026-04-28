@@ -1069,19 +1069,6 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 	}
 }
 
-func commandAllowedDuringTurn(input string) bool {
-	fields := strings.Fields(input)
-	if len(fields) == 0 {
-		return false
-	}
-	switch fields[0] {
-	case "/help", "/mode", "/read", "/edit", "/auto", "/yolo", "/cost", "/tools", "/trust", "/thinking", "/settings":
-		return true
-	default:
-		return false
-	}
-}
-
 func providerModelEntryNotice(provider string) string {
 	display := providerDisplayName(provider)
 	if strings.TrimSpace(display) == "" {
