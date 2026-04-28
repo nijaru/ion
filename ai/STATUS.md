@@ -21,6 +21,7 @@ Current implementation posture:
 - Canceled Canto terminal events no longer become Ion provider errors; `context canceled` settles as `TurnFinished` so the app's user-cancelled state is preserved.
 - App-level duplicate-persistence guards now assert normal submit, assistant commit, and tool display paths do not append model-visible `storage.User`, `storage.Agent`, `storage.ToolUse`, or `storage.ToolResult` rows through Ion storage.
 - Tool lifecycle translation now uses Canto typed event accessors where available and preserves `ToolOutputDelta` IDs, so streaming tool output can remain attached to the correct tool call.
+- Canto `c22da5e` is imported; canceled streaming and non-streaming turns now persist terminal `TurnCompleted` events upstream, and Ion print/backend paths cancel in-flight work on timeout or refused approval without surfacing wrapped `context canceled` as provider failure.
 - Live Fedora/local-api smoke is currently blocked from this process: `curl http://fedora:8080/v1/models` timed out after 10s, and `ion -p ... --timeout 60s` hit `context deadline exceeded`.
 
 Next core-parity work:

@@ -684,15 +684,17 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 		}
 	}
 
-	// Create a sub-context for the turn and store its cancel function.
-	// This allows CancelTurn to interrupt the in-flight generation.
-	turnCtx, cancel := context.WithCancel(context.Background())
+	// Create a caller-bound context for execution, but keep the event watch
+	// alive until execution settles so terminal Canto events still reach Ion.
+	turnCtx, cancel := context.WithCancel(ctx)
+	watchCtx, stopWatch := context.WithCancel(context.Background())
 	b.cancel = cancel
 
-	sub, err := b.runner.Watch(turnCtx, sessionID)
+	sub, err := b.runner.Watch(watchCtx, sessionID)
 	if err != nil {
 		b.mu.Unlock()
 		cancel()
+		stopWatch()
 		return err
 	}
 	b.mu.Unlock()
@@ -701,7 +703,7 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 	go func() {
 		defer b.wg.Done()
 		defer sub.Close()
-		b.translateEvents(turnCtx, sub.Events())
+		b.translateEvents(watchCtx, sub.Events())
 	}()
 
 	// Run the agent turn with streaming
@@ -709,6 +711,7 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 	go func() {
 		defer b.wg.Done()
 		defer cancel()
+		defer stopWatch()
 
 		shouldCompact, err := b.shouldProactivelyCompact(turnCtx)
 		if err != nil {
@@ -792,7 +795,7 @@ func (b *Backend) translateEvents(ctx context.Context, evCh <-chan session.Event
 			b.events <- ionsession.StatusChanged{Status: "Thinking..."}
 		case session.TurnCompleted:
 			if data, ok, err := ev.TurnCompletedData(); err == nil && ok &&
-				data.Error != "" && data.Error != context.Canceled.Error() {
+				data.Error != "" && !isCancellationTerminal(data.Error) {
 				b.events <- ionsession.Error{Err: fmt.Errorf("%s", data.Error)}
 				b.events <- ionsession.TurnFinished{}
 				continue
@@ -893,6 +896,10 @@ func (b *Backend) translateEvents(ctx context.Context, evCh <-chan session.Event
 			}
 		}
 	}
+}
+
+func isCancellationTerminal(errText string) bool {
+	return strings.Contains(errText, context.Canceled.Error())
 }
 
 func loadSubagentPersonas(cfg *config.Config) ([]subagents.Persona, error) {

@@ -89,6 +89,31 @@ type overflowRecoveryProvider struct {
 	*ctesting.FauxProvider
 }
 
+type blockingStreamProvider struct {
+	compactProvider
+	streamCtx chan context.Context
+}
+
+type contextBlockingStream struct {
+	ctx context.Context
+}
+
+func (p *blockingStreamProvider) Stream(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+	p.streamCtx <- ctx
+	return &contextBlockingStream{ctx: ctx}, nil
+}
+
+func (s *contextBlockingStream) Next() (*llm.Chunk, bool) {
+	<-s.ctx.Done()
+	return nil, false
+}
+
+func (s *contextBlockingStream) Err() error {
+	return s.ctx.Err()
+}
+
+func (s *contextBlockingStream) Close() error { return nil }
+
 type testTool struct {
 	name string
 }
@@ -261,6 +286,57 @@ func TestLocalAPIRequestsKeepSystemMessagesLeading(t *testing.T) {
 			t.Fatalf("local-api request has non-leading system messages: %#v", roles)
 		}
 	}
+}
+
+func TestSubmitTurnUsesCallerContext(t *testing.T) {
+	ctx := t.Context()
+	store, err := storage.NewCantoStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	storageSession, err := store.OpenSession(ctx, "/tmp/ion-context", "local-api/model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	provider := &blockingStreamProvider{
+		compactProvider: compactProvider{id: "local-api"},
+		streamCtx:       make(chan context.Context, 1),
+	}
+	oldFactory := providerFactory
+	providerFactory = func(ctx context.Context, cfg *config.Config) (llm.Provider, error) {
+		return provider, nil
+	}
+	defer func() { providerFactory = oldFactory }()
+
+	b := New()
+	b.SetStore(store)
+	b.SetSession(storageSession)
+	b.SetConfig(&config.Config{Provider: "local-api", Model: "model-a", Endpoint: "http://localhost:8080/v1"})
+	if err := b.Open(ctx); err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer func() { _ = b.Close() }()
+
+	turnCtx, cancel := context.WithCancel(ctx)
+	if err := b.SubmitTurn(turnCtx, "hi"); err != nil {
+		t.Fatalf("submit turn: %v", err)
+	}
+
+	var streamCtx context.Context
+	select {
+	case streamCtx = <-provider.streamCtx:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for provider stream")
+	}
+
+	cancel()
+	select {
+	case <-streamCtx.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("provider stream context was not canceled")
+	}
+	waitForTurnFinished(t, b.Events())
 }
 
 func TestResumeDoesNotDeadlockWhenBackendNeedsOpen(t *testing.T) {
