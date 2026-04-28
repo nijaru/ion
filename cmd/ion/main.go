@@ -81,6 +81,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(2)
 	}
+	explicitModeRequested := strings.TrimSpace(*modeFlag) != "" || *yoloFlag
 
 	ctx := context.Background()
 	cwd, _ := os.Getwd()
@@ -89,9 +90,6 @@ func main() {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to load workspace trust: %v\n", err)
 		os.Exit(1)
-	}
-	if !trusted && mode != session.ModeRead {
-		mode = session.ModeRead
 	}
 	var escalation *workspace.EscalationConfig
 	if !features.CoreLoopOnly {
@@ -114,6 +112,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(2)
 	}
+	mode = applyWorkspaceTrustModeGate(mode, trusted, printRequested, explicitModeRequested)
 	if err := validatePrintSelection(printRequested, openResumePicker); err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(2)
@@ -409,6 +408,21 @@ func loadWorkspaceTrust(cwd string, cfg *config.Config) (*ionworkspace.TrustStor
 		return store, true, "Workspace is trusted.", nil
 	}
 	return store, false, "Workspace is not trusted. Starting in READ mode. Run /trust to remember this workspace.", nil
+}
+
+func applyWorkspaceTrustModeGate(
+	mode session.Mode,
+	trusted bool,
+	printRequested bool,
+	explicitModeRequested bool,
+) session.Mode {
+	if trusted || mode == session.ModeRead {
+		return mode
+	}
+	if printRequested && explicitModeRequested {
+		return mode
+	}
+	return session.ModeRead
 }
 
 func startupToolLine(b backend.Backend) string {
