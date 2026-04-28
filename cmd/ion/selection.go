@@ -14,8 +14,8 @@ import (
 )
 
 var (
-	errNoProviderConfigured = errors.New("No provider configured. Use /provider or Ctrl+P. Set ION_PROVIDER for scripts.")
-	errNoModelConfigured    = errors.New("No model configured. Use /model or Ctrl+M. Set ION_MODEL for scripts.")
+	errNoProviderConfigured = errors.New("No provider configured. Use /provider. Set ION_PROVIDER or --provider for scripts.")
+	errNoModelConfigured    = errors.New("No model configured. Use /model. Set ION_MODEL or --model for scripts.")
 )
 
 func resolveStartupConfig(cfg *config.Config) error {
