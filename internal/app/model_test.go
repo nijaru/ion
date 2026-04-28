@@ -111,6 +111,7 @@ type stubSession struct {
 	allowed     []string
 	mode        session.Mode
 	autoApprove bool
+	closed      bool
 }
 
 type stubApproval struct {
@@ -134,6 +135,7 @@ func (s *stubSession) CancelTurn(ctx context.Context) error {
 }
 
 func (s *stubSession) Close() error {
+	s.closed = true
 	if s.events != nil {
 		close(s.events)
 		s.events = nil
@@ -158,15 +160,17 @@ func (s *stubSession) ID() string              { return "stub" }
 func (s *stubSession) Meta() map[string]string { return nil }
 
 type stubStorageSession struct {
-	id        string
-	model     string
-	branch    string
-	closed    bool
-	appends   []any
-	appendErr error
-	usageIn   int
-	usageOut  int
-	usageCost float64
+	id         string
+	model      string
+	branch     string
+	closed     bool
+	appends    []any
+	appendErr  error
+	usageIn    int
+	usageOut   int
+	usageCost  float64
+	entries    []session.Entry
+	entriesErr error
 }
 
 func (s *stubStorageSession) ID() string { return s.id }
@@ -185,7 +189,10 @@ func (s *stubStorageSession) Append(ctx context.Context, event any) error {
 }
 
 func (s *stubStorageSession) Entries(ctx context.Context) ([]session.Entry, error) {
-	return nil, nil
+	if s.entriesErr != nil {
+		return nil, s.entriesErr
+	}
+	return append([]session.Entry(nil), s.entries...), nil
 }
 
 func (s *stubStorageSession) LastStatus(ctx context.Context) (string, error) { return "", nil }
@@ -3371,6 +3378,46 @@ func TestRuntimeSwitchClearsQueuedTurns(t *testing.T) {
 	}
 }
 
+func TestRuntimeSwitchClosesNewRuntimeWhenStateSaveFails(t *testing.T) {
+	t.Setenv("HOME", "/dev/null")
+	oldSession := &stubSession{events: make(chan session.Event)}
+	newSession := &stubSession{events: make(chan session.Event)}
+	newStorage := &stubStorageSession{id: "new-session", branch: "main"}
+	model := New(
+		stubBackend{sess: oldSession},
+		nil,
+		nil,
+		"/tmp/test",
+		"main",
+		"dev",
+		func(ctx context.Context, cfg *config.Config, sessionID string) (backend.Backend, session.AgentSession, storage.Session, error) {
+			return stubBackend{sess: newSession}, newSession, newStorage, nil
+		},
+	)
+
+	cmd := model.switchRuntimeCommand(
+		&config.Config{Provider: "openai", Model: "gpt-4.1"},
+		presetFast,
+		session.Entry{Role: session.System, Content: "Switched"},
+		"",
+		false,
+	)
+	msg := cmd()
+	errMsg, ok := msg.(session.Error)
+	if !ok || !strings.Contains(errMsg.Err.Error(), "save active preset") {
+		t.Fatalf("switch msg = %#v, want save active preset error", msg)
+	}
+	if oldSession.closed {
+		t.Fatal("old session was closed after failed switch")
+	}
+	if !newSession.closed {
+		t.Fatal("new session was not closed after failed switch")
+	}
+	if !newStorage.closed {
+		t.Fatal("new storage was not closed after failed switch")
+	}
+}
+
 func TestSessionErrorClearsQueuedTurnsAndSetsError(t *testing.T) {
 	model := readyModel(t)
 	model.InFlight.QueuedTurns = []string{"stale follow up"}
@@ -3589,6 +3636,48 @@ func TestResumeStoredSessionClosesInspectionSession(t *testing.T) {
 	}
 	if !tempSession.closed {
 		t.Fatal("expected temporary inspection session to be closed after reading metadata")
+	}
+}
+
+func TestResumeRuntimeCommandClosesNewRuntimeWhenReplayFails(t *testing.T) {
+	oldSession := &stubSession{events: make(chan session.Event)}
+	newSession := &stubSession{events: make(chan session.Event)}
+	newStorage := &stubStorageSession{
+		id:         "session-1",
+		model:      "openai/gpt-4.1",
+		branch:     "main",
+		entriesErr: errors.New("bad replay"),
+	}
+	model := New(
+		stubBackend{sess: oldSession},
+		nil,
+		nil,
+		"/tmp/test",
+		"main",
+		"dev",
+		func(ctx context.Context, cfg *config.Config, sessionID string) (backend.Backend, session.AgentSession, storage.Session, error) {
+			return stubBackend{sess: newSession}, newSession, newStorage, nil
+		},
+	)
+
+	cmd := model.resumeRuntimeCommand(
+		&config.Config{Provider: "openai", Model: "gpt-4.1"},
+		session.Entry{Role: session.System, Content: "Resumed"},
+		"session-1",
+	)
+	msg := cmd()
+	errMsg, ok := msg.(session.Error)
+	if !ok || !strings.Contains(errMsg.Err.Error(), "load session transcript") {
+		t.Fatalf("resume msg = %#v, want transcript load error", msg)
+	}
+	if oldSession.closed {
+		t.Fatal("old session was closed after failed resume")
+	}
+	if !newSession.closed {
+		t.Fatal("new session was not closed after failed resume")
+	}
+	if !newStorage.closed {
+		t.Fatal("new storage was not closed after failed resume")
 	}
 }
 
