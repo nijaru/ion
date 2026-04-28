@@ -714,7 +714,7 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 	go func() {
 		defer b.wg.Done()
 		defer sub.Close()
-		b.translateEvents(watchCtx, sub.Events())
+		b.translateEvents(watchCtx, sub.Events(), turnID)
 	}()
 
 	// Run the agent turn with streaming
@@ -727,6 +727,7 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 		shouldCompact, err := b.shouldProactivelyCompact(turnCtx)
 		if err != nil {
 			b.events <- ionsession.Error{Err: err}
+			b.finishTurn(turnID)
 			b.events <- ionsession.TurnFinished{}
 			stopWatch()
 			return
@@ -735,6 +736,7 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 			b.events <- ionsession.StatusChanged{Status: "Compacting context..."}
 			if compacted, cerr := b.Compact(turnCtx); cerr != nil {
 				b.events <- ionsession.Error{Err: cerr}
+				b.finishTurn(turnID)
 				b.events <- ionsession.TurnFinished{}
 				stopWatch()
 				return
@@ -811,7 +813,7 @@ func (b *Backend) shouldProactivelyCompact(ctx context.Context) (bool, error) {
 	return used >= threshold && used < limit, nil
 }
 
-func (b *Backend) translateEvents(ctx context.Context, evCh <-chan session.Event) {
+func (b *Backend) translateEvents(ctx context.Context, evCh <-chan session.Event, turnID uint64) {
 	for ev := range evCh {
 		switch ev.Type {
 		case session.MessageAdded:
@@ -833,9 +835,11 @@ func (b *Backend) translateEvents(ctx context.Context, evCh <-chan session.Event
 			if data, ok, err := ev.TurnCompletedData(); err == nil && ok &&
 				data.Error != "" && !isCancellationTerminal(data.Error) {
 				b.events <- ionsession.Error{Err: fmt.Errorf("%s", data.Error)}
+				b.finishTurn(turnID)
 				b.events <- ionsession.TurnFinished{}
 				return
 			}
+			b.finishTurn(turnID)
 			b.events <- ionsession.TurnFinished{}
 			b.events <- ionsession.StatusChanged{Status: "Ready"}
 			return
