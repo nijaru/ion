@@ -36,6 +36,7 @@ ACP, subagents, sandboxing, policy classifiers, escalation notifiers, tree navig
 - Ion may persist UI-local system/status/routing/subagent metadata only when it is intentionally not part of the provider-visible transcript.
 - Slash commands and local UI changes must not create or mutate model-visible transcript history.
 - Ion compatibility append paths must treat empty assistant display events as no-ops before lazy session materialization; they may preserve reasoning-only assistant payloads.
+- Session metadata used by resume must keep provider-qualified model identity; recency updates must not replace `provider/model` with a bare model ID.
 
 ### 3. Event Ordering Is Stable
 
