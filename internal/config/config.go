@@ -172,34 +172,31 @@ func LoadState() (*State, error) {
 }
 
 func SaveState(cfg *Config) error {
-	path, err := DefaultStatePath()
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
 	current, err := LoadState()
 	if err != nil {
 		return err
 	}
 	state := stateFromConfig(cfg)
 	state.ActivePreset = current.ActivePreset
-	data, err := toml.Marshal(state)
+	return saveState(state)
+}
+
+func SaveReasoningState(preset, effort string) error {
+	state, err := LoadState()
 	if err != nil {
 		return err
 	}
-	return writeFileAtomic(path, data, 0o644)
+	normalized := normalizeOptionalReasoningEffort(effort)
+	switch normalizeActivePreset(preset) {
+	case "fast":
+		state.FastReasoningEffort = optionalString(normalized)
+	default:
+		state.ReasoningEffort = optionalString(normalized)
+	}
+	return saveState(state)
 }
 
 func SaveActivePreset(preset string) error {
-	path, err := DefaultStatePath()
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
 	state, err := LoadState()
 	if err != nil {
 		return err
@@ -209,6 +206,17 @@ func SaveActivePreset(preset string) error {
 		state.ActivePreset = nil
 	} else {
 		state.ActivePreset = &normalized
+	}
+	return saveState(state)
+}
+
+func saveState(state *State) error {
+	path, err := DefaultStatePath()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
 	}
 	data, err := toml.Marshal(state)
 	if err != nil {

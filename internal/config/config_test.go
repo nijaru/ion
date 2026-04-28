@@ -411,6 +411,62 @@ func TestSaveActivePresetUpdatesState(t *testing.T) {
 	}
 }
 
+func TestSaveReasoningStatePreservesSelectedModels(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	if err := SaveState(&Config{
+		Provider:            "openrouter",
+		Model:               "model-a",
+		FastModel:           "model-b",
+		FastReasoningEffort: "low",
+	}); err != nil {
+		t.Fatalf("save state: %v", err)
+	}
+	if err := SaveReasoningState("primary", "high"); err != nil {
+		t.Fatalf("save reasoning: %v", err)
+	}
+	state, err := LoadState()
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	if state.Provider == nil || *state.Provider != "openrouter" {
+		t.Fatalf("provider = %#v, want openrouter", state.Provider)
+	}
+	if state.Model == nil || *state.Model != "model-a" {
+		t.Fatalf("model = %#v, want model-a", state.Model)
+	}
+	if state.FastModel == nil || *state.FastModel != "model-b" {
+		t.Fatalf("fast_model = %#v, want model-b", state.FastModel)
+	}
+	if state.FastReasoningEffort == nil || *state.FastReasoningEffort != "low" {
+		t.Fatalf("fast reasoning = %#v, want low", state.FastReasoningEffort)
+	}
+	if state.ReasoningEffort == nil || *state.ReasoningEffort != "high" {
+		t.Fatalf("reasoning = %#v, want high", state.ReasoningEffort)
+	}
+}
+
+func TestSaveReasoningStateDoesNotFreezeConfiguredModel(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	if err := SaveReasoningState("primary", "high"); err != nil {
+		t.Fatalf("save reasoning: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".ion", "state.toml"))
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	got := string(data)
+	if strings.Contains(got, "provider") || strings.Contains(got, "model") {
+		t.Fatalf("reasoning state should not freeze provider/model:\n%s", got)
+	}
+	if !strings.Contains(got, "reasoning_effort = 'high'") {
+		t.Fatalf("state missing reasoning effort:\n%s", got)
+	}
+}
+
 func TestSaveUsesAtomicReplace(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
