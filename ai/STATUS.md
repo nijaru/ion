@@ -15,6 +15,7 @@ Current implementation posture:
 - Default Canto backend registration is narrowed to core native tools plus file-tag and thinking request processors.
 - Advanced command/tool surfaces are hidden or blocked: MCP registration, manual `/compact`, `/memory`, `/rewind`, recall/remember tools, subagent tool, memory prompt injection, and reflexion prompt processor.
 - Automatic context recovery/proactive compaction remains enabled because it is part of core loop resilience, not feature polish.
+- Canto `52206f2` is imported; write-side assistant payload validation now trims content/reasoning, so whitespace-only assistant rows should not be created by future non-streaming/streaming turns.
 
 Next core-parity work:
 - use `ai/design/native-core-loop-architecture.md` as the target design for the Canto/Ion refactor.
@@ -79,9 +80,9 @@ Design rule:
 - Similar agents are references, not feature-parity requirements. Adopt from pi, Claude Code, Codex, OpenCode, Cursor, Droid, Letta, and others only when the idea strengthens Ion's core coding loop or preserves a simple, inspectable UX.
 
 ## Next Steps
-1. Commit the CoreLoopOnly gate slice after deterministic tests pass.
-2. Resolve the remaining Canto decision: keep/rewrite/remove the interrupted Canto test scratch after deciding whether Gap 1 is proof-only or a framework behavior change.
-3. Implement the next core slice in order: Canto proof/fix if needed, then Ion backend spine, storage/replay projection, and app/CLI lifecycle.
+1. Start the next Ion refactor slice against `ai/design/ion-native-backend-spine-2026-04-27.md`.
+2. Confirm event translation and storage/replay only consume Canto effective history for model-visible transcript entries.
+3. Extend deterministic tests around resumed follow-up turns, provider error replay, cancellation replay, and duplicate transcript prevention while CoreLoopOnly is enabled.
 4. Use Fedora/local-api `ion -p` and `--resume ... -p` smokes before and after any core-loop-adjacent change.
 5. Keep ACP, sandboxing, thinking expansion, privacy, routing, and subagents behind native-loop regression safety unless they directly block testing.
 
@@ -100,6 +101,7 @@ Design rule:
 - [x] **Session picker null-name fix (`tk-0s5a`)** — Session listing tolerates legacy rows with `NULL` names.
 - [x] **Dual transcript persistence fix (`tk-5t72`)** — Canto now owns model-visible user/assistant/tool transcript persistence; Ion only live-renders those events and keeps UI-local metadata/status/usage writes. Verified with `go test ./...`, a Fedora/local-api print smoke, SQLite event inspection, and `--continue` on the new session.
 - [x] **Resume transcript rendering (`tk-izo7`)** — Canto commit `927e482` filters invalid assistant rows from effective history, Ion imports that pseudo-version, replay/live transcript entries use shared spacing, the resumed marker appears after the startup header, backend close waits for turn goroutines, and routine tool replay is compact by default. Verified with Canto `go test ./...`, Ion `go test ./...`, `go run ./... --continue --print --timeout 30s --prompt hi`, and `go run ./... --continue --print --output json --timeout 30s --prompt "reply with the single word ok"` against the live local-api session.
+- [x] **Canto write-side assistant validation (`tk-s6p4`)** — Canto commit `52206f2` aligns write-side assistant payload checks with projection sanitation: whitespace-only assistant payloads are not appended, reasoning-only payloads remain valid, and provider errors leave durable `TurnCompleted` error data. Ion imports the pseudo-version and `go test ./...` passes.
 - [x] **Provider/model picker hygiene (`tk-9n7h`)** — Removed catalog-inferred fast preset selection, kept configured preset rows explicit, scoped endpoint/auth/header overrides to the active custom/local provider, and preserved non-listing provider manual-model behavior. Verified with `go test ./...` and Fedora/local-api JSON print smoke.
 - [x] **Slash command picker completion (`tk-5cqs`)** — Ambiguous Tab completion now opens a searchable command picker and inserts the selected command into the composer without transcript spam; help copy explains slash completion and configured fast preset behavior. Verified with `go test ./...`.
 - [x] **Prompt CLI ergonomics (`tk-vxet`)** — Added `-p` as the primary prompt-taking print shortcut, `--json` as output sugar, and positional prompt support when `--print` is set. Verified with `go test ./...`, `go run ./... -p "reply with the single word ok" --json --timeout 30s`, and `go run ./... --print "reply with the single word ok" --json --timeout 30s`.

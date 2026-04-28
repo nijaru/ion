@@ -11,6 +11,7 @@ Pi is the simple core-loop floor. Codex is the richer open-source CLI/TUI refere
 Ion Gate 1 is green for the resume/model-history failure that was blocking normal testing:
 
 - Canto commit `927e482` filters empty/no-payload assistant rows from effective model history, including legacy rows and snapshots.
+- Canto commit `52206f2` also fixes the write-side assistant payload predicate so future whitespace-only assistant rows are not durably appended.
 - Ion imports that Canto pseudo-version through normal `go.mod` resolution.
 - `--continue --print` can resume the previously corrupted local-api session and accept a new user turn.
 - Replay/live transcript spacing now shares the app renderer, and routine `list`/`read` display is compact by default.
@@ -140,11 +141,9 @@ Exit criteria:
 
 1. Treat `tk-s6p4` as the active blocker and keep `tk-mmcs` synchronized.
 2. Keep the CoreLoopOnly gate in place until Gate 2 is proven by deterministic tests plus live local-api smoke.
-3. Review `ai/review/canto-core-loop-contract-audit-2026-04-27.md` and decide which Canto gaps require proof/fix before Ion refactor.
-4. Review `ai/design/ion-native-backend-spine-2026-04-27.md`, `ai/design/ion-display-projection-2026-04-27.md`, and `ai/design/ion-app-cli-lifecycle-2026-04-27.md` as the concrete implementation target.
-5. Then implement the refactor in the same order: Canto contract gaps, Ion backend spine, storage/replay projection, app/CLI lifecycle.
-6. Extend deterministic and Fedora/local-api print CLI smoke coverage around cancellation/error persistence, retry status, provider-limit recovery, tool errors, and resumed follow-up turns.
-7. Only then resume TUI polish such as startup header readability, slash autocomplete, thinking display, and routine tool output.
+3. Implement the Ion refactor in order: backend spine, storage/replay projection, app/CLI lifecycle.
+4. Extend deterministic and Fedora/local-api print CLI smoke coverage around cancellation/error persistence, retry status, provider-limit recovery, tool errors, and resumed follow-up turns.
+5. Only then resume TUI polish such as startup header readability, slash autocomplete, thinking display, and routine tool output.
 
 Documentation hygiene follow-up:
 
