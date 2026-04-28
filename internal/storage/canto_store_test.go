@@ -472,6 +472,56 @@ func TestCantoStoreEntriesPreserveToolResultErrors(t *testing.T) {
 	}
 }
 
+func TestCantoStoreEntriesDoNotCompactRoutineToolErrors(t *testing.T) {
+	root := t.TempDir()
+	storeAny, err := NewCantoStore(root)
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+
+	ctx := context.Background()
+	sess, err := storeAny.OpenSession(ctx, "/tmp/ion-storage-test", "model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	if err := sess.Append(ctx, ToolUse{
+		Type: "tool_use",
+		ID:   "tool-list-error",
+		Name: "list",
+		Input: map[string]string{
+			"path": ".",
+		},
+		TS: time.Now().Unix(),
+	}); err != nil {
+		t.Fatalf("append tool use: %v", err)
+	}
+	fullError := "permission denied\nError: exit status 1"
+	if err := sess.Append(ctx, ToolResult{
+		Type:      "tool_result",
+		ToolUseID: "tool-list-error",
+		Content:   fullError,
+		IsError:   true,
+		TS:        time.Now().Unix(),
+	}); err != nil {
+		t.Fatalf("append tool result: %v", err)
+	}
+
+	entries, err := sess.Entries(ctx)
+	if err != nil {
+		t.Fatalf("entries: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("entries length = %d, want 1", len(entries))
+	}
+	if entries[0].Content != fullError {
+		t.Fatalf("tool error content = %q, want full error", entries[0].Content)
+	}
+	if !entries[0].IsError {
+		t.Fatal("tool entry IsError = false, want true")
+	}
+}
+
 func TestCantoStoreEntriesPreserveCantoToolCompletedErrors(t *testing.T) {
 	root := t.TempDir()
 	storeAny, err := NewCantoStore(root)

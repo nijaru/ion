@@ -17,6 +17,7 @@ Ion Gate 1 is green for the resume/model-history failure that was blocking norma
 - Ion imports that Canto pseudo-version through normal `go.mod` resolution.
 - Ion's native adapter now treats Canto `MessageAdded` assistant rows as the only assistant commit signal, preserves tool output IDs, binds turn execution to the caller context, keeps the watch alive until terminal events arrive, and closes one-shot print handles explicitly.
 - Ion app lifecycle now closes newly opened runtime handles on switch/resume post-open failure and keeps the old runtime open until replay/state validation succeeds.
+- Ion replay compacts routine successful tool output by default but preserves full errored routine output for debugging after resume.
 - Live Fedora/local-api smoke is currently deferred because Fedora is off; deterministic review remains the active proof path.
 
 Ion is still not broadly core-stable. The next gate is a top-down design/refactor against `ai/design/native-core-loop-architecture.md`, then deterministic coverage for cancellation, retries, provider-limit failures, session lifecycle, and TUI command/display polish.

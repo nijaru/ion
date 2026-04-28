@@ -25,6 +25,7 @@ Current implementation posture:
 - Canto `a5878ab` is imported; failed tool completions now carry structured error text, and Ion preserves that error marker in both live tool results and resumed effective-history display entries.
 - Print mode now explicitly closes the agent session, storage session, and store after a one-shot run before returning or exiting on error, so repeated scriptable smoke runs do not rely on skipped `os.Exit` defers.
 - Runtime switch/resume failure cleanup is hardened: if state save or replay loading fails after opening a new runtime, Ion closes the new session/storage handles and keeps the old runtime open until the switch is fully validated.
+- Replay display compaction now leaves errored routine tool output expanded, so resumed `list`/`read`/`grep`/`glob` failures keep their diagnostic text instead of collapsing to a line count.
 - Live Fedora/local-api smoke is currently deferred because Fedora is off. If a live provider is needed before Fedora returns, use OpenRouter with `deepseek/deepseek-v4-pro` or `deepseek/deepseek-v4-flash`, but keep deterministic code review as the active focus.
 
 Next core-parity work:
