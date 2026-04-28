@@ -16,6 +16,7 @@ import (
 type metadataStore struct {
 	updated  storage.SessionInfo
 	sessions []storage.SessionInfo
+	listErr  error
 }
 
 func (s *metadataStore) OpenSession(ctx context.Context, cwd, model, branch string) (storage.Session, error) {
@@ -27,6 +28,9 @@ func (s *metadataStore) ResumeSession(ctx context.Context, id string) (storage.S
 }
 
 func (s *metadataStore) ListSessions(ctx context.Context, cwd string) ([]storage.SessionInfo, error) {
+	if s.listErr != nil {
+		return nil, s.listErr
+	}
 	return s.sessions, nil
 }
 
@@ -225,6 +229,59 @@ func TestRecentSessionForContinueSkipsEmptyAndSlashOnlySessions(t *testing.T) {
 	}
 	if recent == nil || recent.ID != "real" {
 		t.Fatalf("recent = %#v, want real", recent)
+	}
+}
+
+func TestStartupSessionIDContinuesConversationSession(t *testing.T) {
+	store := &metadataStore{sessions: []storage.SessionInfo{
+		{ID: "empty"},
+		{ID: "real", LastPreview: "hello"},
+	}}
+
+	id, err := startupSessionID(context.Background(), store, "/tmp/test", "", "", true)
+	if err != nil {
+		t.Fatalf("startupSessionID returned error: %v", err)
+	}
+	if id != "real" {
+		t.Fatalf("session ID = %q, want real", id)
+	}
+}
+
+func TestStartupSessionIDRejectsMissingContinueSession(t *testing.T) {
+	store := &metadataStore{}
+
+	id, err := startupSessionID(context.Background(), store, "/tmp/test", "", "", true)
+	if err == nil || !strings.Contains(err.Error(), "no conversation session to continue") {
+		t.Fatalf("startupSessionID id=%q error=%v, want missing continue error", id, err)
+	}
+}
+
+func TestStartupSessionIDPropagatesContinueLookupError(t *testing.T) {
+	store := &metadataStore{listErr: os.ErrPermission}
+
+	id, err := startupSessionID(context.Background(), store, "/tmp/test", "", "", true)
+	if err == nil || !strings.Contains(err.Error(), "failed to find recent session") {
+		t.Fatalf("startupSessionID id=%q error=%v, want lookup error", id, err)
+	}
+}
+
+func TestStartupSessionIDPrefersExplicitResume(t *testing.T) {
+	store := &metadataStore{sessions: []storage.SessionInfo{{ID: "recent", LastPreview: "hello"}}}
+
+	id, err := startupSessionID(context.Background(), store, "/tmp/test", "explicit", "", true)
+	if err != nil {
+		t.Fatalf("startupSessionID returned error: %v", err)
+	}
+	if id != "explicit" {
+		t.Fatalf("session ID = %q, want explicit", id)
+	}
+
+	id, err = startupSessionID(context.Background(), store, "/tmp/test", "", "short", true)
+	if err != nil {
+		t.Fatalf("startupSessionID short returned error: %v", err)
+	}
+	if id != "short" {
+		t.Fatalf("session ID = %q, want short", id)
 	}
 }
 

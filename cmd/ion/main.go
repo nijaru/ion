@@ -146,16 +146,17 @@ func main() {
 		os.Exit(1)
 	}
 
-	var sessionID string
-	if *resumeFlag != "" {
-		sessionID = *resumeFlag
-	} else if *resumeShortFlag != "" {
-		sessionID = *resumeShortFlag
-	} else if *continueFlag || *continueShortFlag {
-		recent, err := recentSessionForContinue(ctx, store, cwd)
-		if err == nil && recent != nil {
-			sessionID = recent.ID
-		}
+	sessionID, err := startupSessionID(
+		ctx,
+		store,
+		cwd,
+		*resumeFlag,
+		*resumeShortFlag,
+		*continueFlag || *continueShortFlag,
+	)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(1)
 	}
 
 	acpCommandOverride := strings.TrimSpace(os.Getenv("ION_ACP_COMMAND"))
@@ -362,6 +363,33 @@ func recentSessionForContinue(ctx context.Context, store storage.Store, cwd stri
 		return &sessions[i], nil
 	}
 	return nil, nil
+}
+
+func startupSessionID(
+	ctx context.Context,
+	store storage.Store,
+	cwd string,
+	resumeID string,
+	resumeShortID string,
+	continueRequested bool,
+) (string, error) {
+	if resumeID != "" {
+		return resumeID, nil
+	}
+	if resumeShortID != "" {
+		return resumeShortID, nil
+	}
+	if !continueRequested {
+		return "", nil
+	}
+	recent, err := recentSessionForContinue(ctx, store, cwd)
+	if err != nil {
+		return "", fmt.Errorf("failed to find recent session: %w", err)
+	}
+	if recent == nil {
+		return "", fmt.Errorf("no conversation session to continue in this directory")
+	}
+	return recent.ID, nil
 }
 
 func loadWorkspaceTrust(cwd string, cfg *config.Config) (*ionworkspace.TrustStore, bool, string, error) {
