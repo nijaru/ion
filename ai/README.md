@@ -9,9 +9,9 @@ Start here, in order. Root files are intentionally short; detailed progress belo
 - [DESIGN.md](DESIGN.md) — current Ion/Canto architecture and ownership boundaries
 - [DECISIONS.md](DECISIONS.md) — stable principles plus recent decision log
 
-## Active Core Loop
+## Core Loop Evidence
 
-- [Core Loop Review Tracker](review/core-loop-review-tracker-2026-04-28.md) — single scan-first matrix of reviewed/refactored/pending Canto and Ion core-loop areas
+- [Core Loop Review Tracker](review/core-loop-review-tracker-2026-04-28.md) — completed scan-first matrix of reviewed/refactored Canto and Ion core-loop areas
 - [Core Minimal Agent Reset](design/core-minimal-agent-reset-2026-04-28.md) — phased reset plan: minimal core agent, stable TUI, then advanced features
 - [Native Core Loop Architecture](design/native-core-loop-architecture.md) — target ownership, invariants, refactor sequence, and smoke matrix
 - [Ion Native Backend Spine](design/ion-native-backend-spine-2026-04-27.md) — backend adapter turn phases, event translation, cancel/close semantics

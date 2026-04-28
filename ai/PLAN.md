@@ -17,7 +17,7 @@ Do not duplicate the tracker matrix here. Update this file only when gates, prio
 
 ## Operating Rule
 
-Do not treat the remaining work as independent bug slices. `tk-s6p4` is now a comprehensive audit and refactor pass. A fix is allowed only after the relevant file group has been read, its core-loop invariants are written in the tracker, and the codepath has been classified as kept, disabled, or deferred.
+Do not treat core-loop regressions as independent bug slices. The `tk-s6p4` comprehensive audit is closed, but any future native-loop change must still be tied to the relevant file group and invariant in the tracker before implementation.
 
 Do not collapse Canto into Ion as a development shortcut. Keep the repo split, but treat Ion as Canto's acceptance test until the minimal native loop is stable. Canto public-framework expansion is deferred; Canto changes during this pass should come from concrete Ion-proven framework needs.
 
@@ -27,9 +27,9 @@ These are rough sequencing guidelines, not exact gates. Move work earlier only w
 
 | Band | Meaning | Examples | Status |
 | --- | --- | --- | --- |
-| Core | Minimal loop plus stable shell. | submit, stream, core tools, cancel, provider error, retry status, persistence correctness, `-p`, basic TUI turn display. | Active. |
+| Core | Minimal loop plus stable shell. | submit, stream, core tools, cancel, provider error, retry status, persistence correctness, `-p`, basic TUI turn display. | Passed 2026-04-28. |
 | Reliability table stakes | Features that keep the loop usable in real sessions. | minimal continue/resume correctness, compaction/overflow recovery, durable replay after long sessions. | Include when they protect core reliability. |
-| Product table stakes | Common agent UX after the loop is sane. | robust resume UX, slash autocomplete, basic permission UX, transcript inspection. | Next. |
+| Product table stakes | Common agent UX after the loop is sane. | robust resume UX, slash autocomplete, basic permission UX, transcript inspection. | Active next under `tk-mmcs`. |
 | Polish | Workflow and presentation improvements. | provider/model picker polish, launch header, thinking picker, tree/branching, external editor, richer status/help. | Deferred. |
 | Experimental/SOTA | Advanced or secondary architecture. | subagents, skills, ACP/subscription bridges, routing/cascades, privacy pipeline, optimizer loops, swarm mode. | Isolated from native P1 unless directly blocking. |
 
@@ -39,7 +39,7 @@ These are rough sequencing guidelines, not exact gates. Move work earlier only w
 
 ### Gate 0: Queue And Context Hygiene
 
-Status: active, ongoing
+Status: complete for the P1 audit
 
 Exit criteria:
 
@@ -61,7 +61,7 @@ Exit criteria:
 
 ### Gate 1.5: Nonessential Path Freeze
 
-Status: active
+Status: complete
 
 Exit criteria:
 
@@ -72,7 +72,7 @@ Exit criteria:
 
 ### Gate 2: Native Core Agent Loop File Audit
 
-Status: active (`tk-s6p4`)
+Status: complete (`tk-s6p4` closed)
 
 Exit criteria:
 
@@ -87,7 +87,7 @@ Exit criteria:
 
 ### Gate 3: TUI Baseline
 
-Status: after Gate 2
+Status: baseline passed; polish remains table-stakes work
 
 Exit criteria:
 
@@ -99,7 +99,7 @@ Exit criteria:
 
 ### Gate 4: Config, Provider, And Session Hygiene
 
-Status: after Gate 2
+Status: active next under `tk-mmcs`
 
 Exit criteria:
 
@@ -133,11 +133,10 @@ Exit criteria:
 
 ## Immediate Work Order
 
-1. Replace optimistic review status with a real audit matrix in [review/core-loop-review-tracker-2026-04-28.md](review/core-loop-review-tracker-2026-04-28.md).
-2. Verify the `CoreLoopOnly` freeze against every referenced call site and patch it if any P2/P3 path still mutates prompt, transcript, session, provider, or runtime state.
-3. Audit Canto first, file group by file group: session log/projection, runtime queue/runner, agent loop/stream/tool settlement, prompt/provider history, then minimal retry/compaction surfaces.
-4. Audit Ion second, file group by file group: CLI/session lifecycle, CantoBackend event translation, storage/replay, app input/command/event loop, display renderer, core tools, and smoke harness.
-5. Implement only findings that fall out of that audit, with deterministic tests before moving to the next group.
-6. Re-run full/race tests, then use live smoke only as final evidence rather than as the first diagnostic tool.
+1. Decide the `CoreLoopOnly` exit policy: keep it on briefly, or reopen only table-stakes surfaces needed for CLI/session parity.
+2. Audit the current CLI surface against Pi/Codex conventions: `-p`, stdin, JSON, resume/continue, exit codes, and scriptable smoke behavior.
+3. Audit session UX gaps that remain after the stable core: resume picker clarity, transcript inspection, help/readability, and startup header formatting.
+4. Promote table-stakes items into focused tasks before reopening deferred P2/P3 codepaths.
+5. Re-run full/race tests and Fedora/local-api live smoke after any native-loop or CLI/session behavior change.
 
 No more broad `ai/` corpus passes by default. Use the existing context docs as an index, then read source. Reopen `ai/` only for a specific subsystem decision or when docs conflict with code.

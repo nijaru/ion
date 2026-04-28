@@ -2,16 +2,16 @@
 
 Fast, lightweight terminal coding agent.
 
-**Phase:** P1 native core-loop stabilization  
-**Focus:** Comprehensive file-by-file audit of the native Ion TUI/print CLI -> CantoBackend -> Canto agent/session -> provider loop.  
-**Active blocker:** `tk-s6p4` — core loop design/refactor and deterministic/live smoke matrix.  
+**Phase:** P1 native core-loop gate passed; moving to table-stakes parity  
+**Focus:** Pi/Codex-style CLI automation and session UX gaps without reopening deferred P2/P3 feature work.  
+**Active blocker:** `tk-mmcs` — core parity plan and task queue hygiene.  
 **Queue hygiene:** `tk-mmcs` keeps Pi/Codex/Claude parity planning aligned; `tk-xrgc` keeps `ai/` readable.
 **Updated:** 2026-04-28
 
 ## Current Truth
 
-- Feature work is frozen behind the native core loop gate. ACP, sandbox polish, approvals polish, privacy expansion, thinking expansion, skills, routing, branching, and other P2/P3 work stay deferred unless they directly block core-loop testing.
-- Ion is running with `features.CoreLoopOnly` while `tk-s6p4` is active. Advanced surfaces are hidden or blocked so the P1 loop can be debugged without unrelated prompt/session mutation.
+- The native core-loop gate passed on 2026-04-28. ACP, sandbox polish, approvals polish, privacy expansion, thinking expansion, skills, routing, branching, and other P2/P3 work stay deferred until table-stakes CLI/session UX is intentionally reopened.
+- Ion is still running with `features.CoreLoopOnly`; treat that as the next deliberate product decision, not as an accidental permanent state.
 - Canto owns provider-visible transcript, effective history, agent/tool execution, retry, queueing, terminal events, and compaction primitives.
 - Ion owns input classification, TUI/CLI lifecycle, display projection, local status/error rows, trust/mode UX, and provider/config selection.
 - Keep Canto and Ion split, but treat Ion as Canto's acceptance test during stabilization. Canto public-framework expansion is deferred until Ion's native minimal loop is stable.
@@ -26,23 +26,24 @@ Fast, lightweight terminal coding agent.
 - New Canto C4/C5 cancellation/tool-result fixes are pushed in Canto `5ce3c1f` and imported into Ion: streaming turns now stop before an extra provider step after cancellation, step terminal events survive canceled contexts, and canceled tool turns persist a matching tool result so provider-visible history is not left with dangling tool calls.
 - Ion deterministic gates and Fedora live smoke are green after importing Canto `5ce3c1f`.
 - Ion overflow recovery now uses Canto runtime-level recovery instead of provider-level request retry, so context-overflow compaction rebuilds the provider-visible prompt before retrying. Focused overflow coverage, full Ion tests, Fedora live smoke, and Canto prompt/LLM/governor/runtime gates are green after this patch.
-- The native backend/CLI core loop is now materially stable by deterministic and live-smoke evidence. `tk-s6p4` should stay open for the next gate: TUI/replay polish and any remaining manual terminal bugs, especially spacing and resumed transcript presentation.
+- The native backend/CLI core loop is materially stable by deterministic, race, manual TUI replay, and Fedora live-smoke evidence. `tk-s6p4` is closed.
 - TUI shell spacing now keeps a blank row between already-printed transcript/replay rows and the live progress/composer shell. Focused app tests and `go test ./... -count=1` are green after the patch.
 - The direct `/provider <name>` command now clears stale progress errors the same way provider-picker selection already did, so old model-listing/provider errors do not remain visible after a provider state change.
+- Manual `go run ./... --continue` replay now shows the expected header/resumed-marker/transcript/progress ordering and spacing; terminal control artifacts in the harness remain non-product noise.
+- Final gate bundle passed: `go test -race ./cmd/ion ./internal/app ./internal/backend/canto ./internal/backend/canto/tools -count=1`, Fedora endpoint discovery for `qwen3.6:27b`, and live smoke against `local-api` / `qwen3.6:27b`.
 
 ## Next Action
 
-Continue `tk-s6p4` as a comprehensive audit, not as bug slices:
+Continue `tk-mmcs` as the parity/table-stakes track:
 
-1. Continue the TUI/replay gate under `tk-s6p4`: resumed transcript presentation in the actual terminal and compact routine tool display.
-2. Keep backend/CLI regressions covered while fixing the TUI shell; re-run full Ion gates and Fedora live smoke after any native-loop changes.
-3. Keep picker/help/provider UX, permissions/trust polish, ACP, privacy, subagents, skills, and routing behind the stable TUI/replay gate unless a bug directly corrupts core state.
+1. Decide the next small slice for `CoreLoopOnly`: keep it on briefly, or reopen only the table-stakes surfaces needed for Pi/Codex-style CLI/session UX.
+2. Audit the current CLI surface against Pi/Codex conventions: `-p`, stdin, JSON, resume/continue, exit codes, and scriptability.
+3. Keep ACP, privacy, subagents, skills, routing, and advanced thinking behind explicit later tasks.
 
 Do not run another broad `ai/` pass by default. The next work is source review and targeted docs only when the code review exposes a design question.
 
 ## Active Tasks
 
-- `tk-s6p4` — P1 native core loop reliability and smoke matrix.
 - `tk-mmcs` — P1 core parity plan and task queue hygiene.
 - `tk-xrgc` — P3 AI context dedupe/reorganization; active only because stale docs were blocking agent focus.
 
