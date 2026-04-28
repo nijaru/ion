@@ -100,6 +100,28 @@ func TestResolvedEndpointDoesNotLeakCustomEndpointToDefaultProviders(t *testing.
 	}
 }
 
+func TestCustomAuthAndHeadersDoNotLeakToDefaultProviders(t *testing.T) {
+	cfg := &config.Config{
+		Provider:     "openrouter",
+		AuthEnvVar:   "LOCAL_API_KEY",
+		ExtraHeaders: map[string]string{"X-Local": "1"},
+	}
+	if got := ResolvedAuthEnvVar(cfg); got != "OPENROUTER_API_KEY" {
+		t.Fatalf("auth env = %q, want OpenRouter default", got)
+	}
+	if got := ResolvedHeaders(cfg); len(got) != 0 {
+		t.Fatalf("headers = %#v, want none", got)
+	}
+
+	cfg.Provider = "local-api"
+	if got := ResolvedAuthEnvVar(cfg); got != "LOCAL_API_KEY" {
+		t.Fatalf("local auth env = %q, want configured override", got)
+	}
+	if got := ResolvedHeaders(cfg); got["X-Local"] != "1" {
+		t.Fatalf("local headers = %#v, want configured header", got)
+	}
+}
+
 func TestResolvedEndpointIncludesZAIEndpoint(t *testing.T) {
 	cfg := &config.Config{Provider: "zai"}
 	if got := ResolvedEndpoint(cfg); got != "https://api.z.ai/api/paas/v4" {
