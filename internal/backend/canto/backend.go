@@ -49,10 +49,12 @@ type Backend struct {
 	tools      *tool.Registry
 	compactLLM llm.Provider
 
-	mu        sync.Mutex
-	cancel    context.CancelFunc
-	closeOnce sync.Once
-	wg        sync.WaitGroup
+	mu         sync.Mutex
+	cancel     context.CancelFunc
+	turnSeq    uint64
+	turnActive bool
+	closeOnce  sync.Once
+	wg         sync.WaitGroup
 
 	policy     *backend.PolicyEngine
 	approver   *tools.ApprovalManager
@@ -657,6 +659,10 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 		b.mu.Unlock()
 		return fmt.Errorf("backend not initialized")
 	}
+	if b.turnActive {
+		b.mu.Unlock()
+		return fmt.Errorf("turn already in progress")
+	}
 	if lazy, ok := b.sess.(interface {
 		Ensure(context.Context) (storage.Session, error)
 	}); ok {
@@ -688,10 +694,15 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 	// alive until execution settles so terminal Canto events still reach Ion.
 	turnCtx, cancel := context.WithCancel(ctx)
 	watchCtx, stopWatch := context.WithCancel(context.Background())
+	b.turnSeq++
+	turnID := b.turnSeq
+	b.turnActive = true
 	b.cancel = cancel
 
 	sub, err := b.runner.Watch(watchCtx, sessionID)
 	if err != nil {
+		b.turnActive = false
+		b.cancel = nil
 		b.mu.Unlock()
 		cancel()
 		stopWatch()
@@ -710,13 +721,14 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 	b.wg.Add(1)
 	go func() {
 		defer b.wg.Done()
+		defer b.finishTurn(turnID)
 		defer cancel()
-		defer stopWatch()
 
 		shouldCompact, err := b.shouldProactivelyCompact(turnCtx)
 		if err != nil {
 			b.events <- ionsession.Error{Err: err}
 			b.events <- ionsession.TurnFinished{}
+			stopWatch()
 			return
 		}
 		if shouldCompact {
@@ -724,6 +736,7 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 			if compacted, cerr := b.Compact(turnCtx); cerr != nil {
 				b.events <- ionsession.Error{Err: cerr}
 				b.events <- ionsession.TurnFinished{}
+				stopWatch()
 				return
 			} else if compacted {
 				b.events <- ionsession.StatusChanged{Status: "Ready"}
@@ -748,6 +761,15 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 	}()
 
 	return nil
+}
+
+func (b *Backend) finishTurn(turnID uint64) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.turnSeq == turnID {
+		b.turnActive = false
+		b.cancel = nil
+	}
 }
 
 func storageModelName(provider, model string) string {
@@ -812,10 +834,11 @@ func (b *Backend) translateEvents(ctx context.Context, evCh <-chan session.Event
 				data.Error != "" && !isCancellationTerminal(data.Error) {
 				b.events <- ionsession.Error{Err: fmt.Errorf("%s", data.Error)}
 				b.events <- ionsession.TurnFinished{}
-				continue
+				return
 			}
 			b.events <- ionsession.TurnFinished{}
 			b.events <- ionsession.StatusChanged{Status: "Ready"}
+			return
 		case session.ToolStarted:
 			if data, ok, err := ev.ToolStartedData(); err == nil && ok {
 				b.events <- ionsession.ToolCallStarted{

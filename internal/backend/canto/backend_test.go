@@ -384,6 +384,57 @@ func TestSubmitTurnUsesCallerContext(t *testing.T) {
 	waitForTurnFinished(t, b.Events())
 }
 
+func TestSubmitTurnRejectsConcurrentTurn(t *testing.T) {
+	ctx := t.Context()
+	store, err := storage.NewCantoStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	storageSession, err := store.OpenSession(ctx, "/tmp/ion-concurrent", "local-api/model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	provider := &blockingStreamProvider{
+		compactProvider: compactProvider{id: "local-api"},
+		streamCtx:       make(chan context.Context, 1),
+	}
+	oldFactory := providerFactory
+	providerFactory = func(ctx context.Context, cfg *config.Config) (llm.Provider, error) {
+		return provider, nil
+	}
+	defer func() { providerFactory = oldFactory }()
+
+	b := New()
+	b.SetStore(store)
+	b.SetSession(storageSession)
+	b.SetConfig(&config.Config{Provider: "local-api", Model: "model-a", Endpoint: "http://localhost:8080/v1"})
+	if err := b.Open(ctx); err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer func() { _ = b.Close() }()
+
+	turnCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	if err := b.SubmitTurn(turnCtx, "first"); err != nil {
+		t.Fatalf("submit first turn: %v", err)
+	}
+
+	select {
+	case <-provider.streamCtx:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for provider stream")
+	}
+
+	err = b.SubmitTurn(ctx, "second")
+	if err == nil || !strings.Contains(err.Error(), "turn already in progress") {
+		t.Fatalf("second SubmitTurn error = %v, want turn already in progress", err)
+	}
+
+	cancel()
+	waitForTurnFinished(t, b.Events())
+}
+
 func TestResumeDoesNotDeadlockWhenBackendNeedsOpen(t *testing.T) {
 	b := New()
 
