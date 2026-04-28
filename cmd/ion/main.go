@@ -222,8 +222,17 @@ func main() {
 	)
 	model = model.WithPrintedTranscript(len(startupEntries) > 0)
 	p := tea.NewProgram(model)
-	if _, err := p.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "ion error: %v\n", err)
+	_, runErr := p.Run()
+	closeErr := closeRuntimeHandles(b.Session(), sess, store)
+	if runErr != nil {
+		if closeErr != nil {
+			fmt.Fprintf(os.Stderr, "failed to close runtime: %v\n", closeErr)
+		}
+		fmt.Fprintf(os.Stderr, "ion error: %v\n", runErr)
+		os.Exit(1)
+	}
+	if closeErr != nil {
+		fmt.Fprintf(os.Stderr, "failed to close runtime: %v\n", closeErr)
 		os.Exit(1)
 	}
 }
