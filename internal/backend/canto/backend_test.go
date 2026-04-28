@@ -295,17 +295,26 @@ func TestCloseIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestTranslateEventsCommitsAssistantBeforeTurnFinished(t *testing.T) {
+func TestTranslateEventsCommitsAssistantFromMessageAdded(t *testing.T) {
 	b := New()
-	events := make(chan csession.Event, 1)
+	events := make(chan csession.Event, 2)
+	events <- csession.NewEvent("session-id", csession.MessageAdded, llm.Message{
+		Role:      llm.RoleAssistant,
+		Content:   "done",
+		Reasoning: "brief reasoning",
+	})
 	events <- csession.NewTurnCompletedEvent("session-id", csession.TurnCompletedData{})
 	close(events)
 
 	b.translateEvents(t.Context(), events)
 
 	ev1 := receiveEvent(t, b.Events())
-	if _, ok := ev1.(ionsession.AgentMessage); !ok {
+	committed, ok := ev1.(ionsession.AgentMessage)
+	if !ok {
 		t.Fatalf("first event = %T, want AgentMessage", ev1)
+	}
+	if committed.Message != "done" || committed.Reasoning != "brief reasoning" {
+		t.Fatalf("committed message = %#v", committed)
 	}
 
 	ev2 := receiveEvent(t, b.Events())
@@ -317,6 +326,29 @@ func TestTranslateEventsCommitsAssistantBeforeTurnFinished(t *testing.T) {
 	status, ok := ev3.(ionsession.StatusChanged)
 	if !ok {
 		t.Fatalf("third event = %T, want StatusChanged", ev3)
+	}
+	if status.Status != "Ready" {
+		t.Fatalf("status = %q, want Ready", status.Status)
+	}
+}
+
+func TestTranslateEventsTurnCompletedDoesNotEmitEmptyAssistant(t *testing.T) {
+	b := New()
+	events := make(chan csession.Event, 1)
+	events <- csession.NewTurnCompletedEvent("session-id", csession.TurnCompletedData{})
+	close(events)
+
+	b.translateEvents(t.Context(), events)
+
+	ev1 := receiveEvent(t, b.Events())
+	if _, ok := ev1.(ionsession.TurnFinished); !ok {
+		t.Fatalf("first event = %T, want TurnFinished", ev1)
+	}
+
+	ev2 := receiveEvent(t, b.Events())
+	status, ok := ev2.(ionsession.StatusChanged)
+	if !ok {
+		t.Fatalf("second event = %T, want StatusChanged", ev2)
 	}
 	if status.Status != "Ready" {
 		t.Fatalf("status = %q, want Ready", status.Status)

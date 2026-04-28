@@ -57,7 +57,8 @@ func (e ThinkingDelta) isEvent() {}
 // AgentMessage fires when a complete agent message is committed.
 type AgentMessage struct {
 	Base
-	Message string `json:"message"`
+	Message   string `json:"message"`
+	Reasoning string `json:"reasoning,omitempty"`
 }
 
 func (e AgentMessage) isEvent() {}

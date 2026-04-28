@@ -153,6 +153,9 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 					m.InFlight.Pending.Content = msg.Message
 				}
 				m.InFlight.Pending.Reasoning = m.InFlight.ReasonBuf
+				if msg.Reasoning != "" {
+					m.InFlight.Pending.Reasoning = msg.Reasoning
+				}
 				entry := *m.InFlight.Pending
 				m.InFlight.Pending = nil
 				m.InFlight.StreamBuf = ""
