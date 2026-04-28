@@ -21,6 +21,7 @@ import (
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/backend/registry"
 	"github.com/nijaru/ion/internal/config"
+	"github.com/nijaru/ion/internal/features"
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
 	"github.com/nijaru/ion/internal/testutil"
@@ -1445,6 +1446,9 @@ func TestHandleCommandUpdatesStateDirectly(t *testing.T) {
 }
 
 func TestCompactCommandUsesBackendCompactor(t *testing.T) {
+	if features.CoreLoopOnly {
+		t.Skip("advanced /compact command is disabled during P1 core loop stabilization")
+	}
 	backend := &compactBackend{
 		stubBackend: stubBackend{sess: &stubSession{events: make(chan session.Event)}},
 		compacted:   true,
@@ -1512,6 +1516,9 @@ func TestComposerQueuesWhileCompacting(t *testing.T) {
 }
 
 func TestCompactCommandReportsNoOp(t *testing.T) {
+	if features.CoreLoopOnly {
+		t.Skip("advanced /compact command is disabled during P1 core loop stabilization")
+	}
 	backend := &compactBackend{
 		stubBackend: stubBackend{sess: &stubSession{events: make(chan session.Event)}},
 		compacted:   false,
@@ -1530,6 +1537,9 @@ func TestCompactCommandReportsNoOp(t *testing.T) {
 }
 
 func TestCompactCommandErrorsWhenBackendUnsupported(t *testing.T) {
+	if features.CoreLoopOnly {
+		t.Skip("advanced /compact command is disabled during P1 core loop stabilization")
+	}
 	model := New(
 		stubBackend{sess: &stubSession{events: make(chan session.Event)}},
 		nil,
@@ -1969,7 +1979,7 @@ func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 		t.Fatalf("expected sessionHelpMsg, got %T", msg)
 	}
 
-	for _, want := range []string{
+	wantCommands := []string{
 		"/resume [id]",
 		"/primary",
 		"/fast",
@@ -1981,15 +1991,21 @@ func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 		"/auto, /yolo",
 		"/trust [status]",
 		"/settings",
-		"/rewind <id>",
 		"/tools",
-		"/memory [query]",
-		"/compact",
 		"/clear",
 		"/cost",
-		"/mcp add <cmd>",
 		"/quit, /exit",
 		"/help",
+	}
+	if !features.CoreLoopOnly {
+		wantCommands = append(wantCommands,
+			"/rewind <id>",
+			"/memory [query]",
+			"/compact",
+			"/mcp add <cmd>",
+		)
+	}
+	wantCommands = append(wantCommands,
 		"Ctrl+P",
 		"Tab",
 		"Shift+Tab",
@@ -1997,13 +2013,49 @@ func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 		"Up / Down",
 		"Enter",
 		"Ctrl+C",
-	} {
+	)
+	for _, want := range wantCommands {
 		if !strings.Contains(helpMsg.notice, want) {
 			t.Fatalf("help notice missing %q: %q", want, helpMsg.notice)
 		}
 	}
+	if features.CoreLoopOnly {
+		for _, disabled := range []string{"/rewind <id>", "/memory [query]", "/compact", "/mcp add <cmd>"} {
+			if strings.Contains(helpMsg.notice, disabled) {
+				t.Fatalf("help notice should not advertise disabled command %q: %q", disabled, helpMsg.notice)
+			}
+		}
+	}
 	if strings.Contains(helpMsg.notice, "/tree") {
 		t.Fatalf("help notice should not advertise /tree yet: %q", helpMsg.notice)
+	}
+}
+
+func TestCoreLoopOnlyDisablesAdvancedCommands(t *testing.T) {
+	if !features.CoreLoopOnly {
+		t.Skip("advanced commands are enabled")
+	}
+	model := readyModel(t)
+	for _, input := range []string{
+		"/mcp add server",
+		"/rewind cp-1",
+		"/memory policy",
+		"/compact",
+	} {
+		t.Run(input, func(t *testing.T) {
+			_, cmd := model.handleCommand(input)
+			if cmd == nil {
+				t.Fatalf("%s returned nil cmd", input)
+			}
+			msg := cmd()
+			errMsg, ok := msg.(session.Error)
+			if !ok {
+				t.Fatalf("%s returned %T, want session.Error", input, msg)
+			}
+			if errMsg.Err == nil || !strings.Contains(errMsg.Err.Error(), "disabled while Ion stabilizes the P1 core agent loop") {
+				t.Fatalf("%s error = %v", input, errMsg.Err)
+			}
+		})
 	}
 }
 
@@ -2031,14 +2083,14 @@ func TestTabCompletesSlashCommands(t *testing.T) {
 
 func TestTabListsAmbiguousSlashCommands(t *testing.T) {
 	model := readyModel(t)
-	model.Input.Composer.SetValue("/m")
+	model.Input.Composer.SetValue("/t")
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	model = updated.(Model)
 	if cmd != nil {
 		t.Fatalf("unexpected ambiguous autocomplete command %T", cmd)
 	}
-	if got := model.Input.Composer.Value(); got != "/m" {
+	if got := model.Input.Composer.Value(); got != "/t" {
 		t.Fatalf("composer = %q, want unchanged ambiguous prefix", got)
 	}
 	if model.Picker.Overlay == nil {
@@ -2047,8 +2099,8 @@ func TestTabListsAmbiguousSlashCommands(t *testing.T) {
 	if model.Picker.Overlay.purpose != pickerPurposeCommand {
 		t.Fatalf("picker purpose = %v, want command picker", model.Picker.Overlay.purpose)
 	}
-	if got := model.Picker.Overlay.query; got != "m" {
-		t.Fatalf("picker query = %q, want m", got)
+	if got := model.Picker.Overlay.query; got != "t" {
+		t.Fatalf("picker query = %q, want t", got)
 	}
 	if len(pickerDisplayItems(model.Picker.Overlay)) < 2 {
 		t.Fatalf("ambiguous command picker items = %#v, want multiple matches", pickerDisplayItems(model.Picker.Overlay))
@@ -2154,6 +2206,9 @@ func TestToolsCommandReportsToolSurface(t *testing.T) {
 }
 
 func TestMemoryCommandReportsMemoryView(t *testing.T) {
+	if features.CoreLoopOnly {
+		t.Skip("advanced /memory command is disabled during P1 core loop stabilization")
+	}
 	model := readyModel(t)
 
 	_, cmd := model.handleCommand("/memory policy")
@@ -2211,6 +2266,9 @@ func TestTrustStatusCommandReportsState(t *testing.T) {
 }
 
 func TestRewindCommandPreviewsThenRestoresCheckpoint(t *testing.T) {
+	if features.CoreLoopOnly {
+		t.Skip("advanced /rewind command is disabled during P1 core loop stabilization")
+	}
 	workdir := t.TempDir()
 	store := ionworkspace.NewCheckpointStore(filepath.Join(t.TempDir(), "checkpoints"))
 	if err := os.WriteFile(filepath.Join(workdir, "tracked.txt"), []byte("before"), 0o644); err != nil {
@@ -2269,6 +2327,9 @@ func TestRewindCommandPreviewsThenRestoresCheckpoint(t *testing.T) {
 }
 
 func TestRewindCommandRejectsDifferentWorkspaceCheckpoint(t *testing.T) {
+	if features.CoreLoopOnly {
+		t.Skip("advanced /rewind command is disabled during P1 core loop stabilization")
+	}
 	workdir := t.TempDir()
 	other := t.TempDir()
 	store := ionworkspace.NewCheckpointStore(filepath.Join(t.TempDir(), "checkpoints"))

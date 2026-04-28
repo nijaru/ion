@@ -17,6 +17,8 @@ Ion Gate 1 is green for the resume/model-history failure that was blocking norma
 
 Ion is still not broadly core-stable. The next gate is a top-down design/refactor against `ai/design/native-core-loop-architecture.md`, then deterministic coverage for cancellation, retries, provider-limit failures, session lifecycle, and TUI command/display polish.
 
+While Gate 2 is active, Ion runs with a temporary CoreLoopOnly gate. Advanced surfaces are disabled in startup registration and slash command UX so the P1 loop can be debugged without memory prompting, subagents, MCP registration, manual compaction, rewind, or reflexion prompt mutation changing the shape of a turn.
+
 ## Priority Gates
 
 ### Gate 0: Planning And Queue Hygiene
@@ -56,6 +58,13 @@ Ownership:
 ### Gate 2: Core Agent Loop Contract
 
 Status: active (`tk-s6p4`)
+
+Current scope freeze:
+
+- Default native tool registration is narrowed to bash, read/write/edit/multiedit, list, grep, glob, and verify.
+- Advanced commands are blocked and hidden from help/completion: `/mcp`, `/compact`, `/memory`, and `/rewind`.
+- Memory recall/remember tools, the memory prompt processor, subagent tool, and reflexion processor are disabled by `features.CoreLoopOnly`.
+- Automatic context overflow recovery and proactive compaction stay enabled because resumable long-running sessions are part of the core loop contract.
 
 Exit criteria:
 
@@ -130,11 +139,12 @@ Exit criteria:
 ## Immediate Work Order
 
 1. Treat `tk-s6p4` as the active blocker and keep `tk-mmcs` synchronized.
-2. Review `ai/review/canto-core-loop-contract-audit-2026-04-27.md` and decide which Canto gaps require proof/fix before Ion refactor.
-3. Review `ai/design/ion-native-backend-spine-2026-04-27.md`, `ai/design/ion-display-projection-2026-04-27.md`, and `ai/design/ion-app-cli-lifecycle-2026-04-27.md` as the concrete implementation target.
-4. Then implement the refactor in the same order: Canto contract gaps, Ion backend spine, storage/replay projection, app/CLI lifecycle.
-5. Extend deterministic and Fedora/local-api print CLI smoke coverage around cancellation/error persistence, retry status, provider-limit recovery, tool errors, and resumed follow-up turns.
-6. Only then resume TUI polish such as startup header readability, slash autocomplete, thinking display, and routine tool output.
+2. Keep the CoreLoopOnly gate in place until Gate 2 is proven by deterministic tests plus live local-api smoke.
+3. Review `ai/review/canto-core-loop-contract-audit-2026-04-27.md` and decide which Canto gaps require proof/fix before Ion refactor.
+4. Review `ai/design/ion-native-backend-spine-2026-04-27.md`, `ai/design/ion-display-projection-2026-04-27.md`, and `ai/design/ion-app-cli-lifecycle-2026-04-27.md` as the concrete implementation target.
+5. Then implement the refactor in the same order: Canto contract gaps, Ion backend spine, storage/replay projection, app/CLI lifecycle.
+6. Extend deterministic and Fedora/local-api print CLI smoke coverage around cancellation/error persistence, retry status, provider-limit recovery, tool errors, and resumed follow-up turns.
+7. Only then resume TUI polish such as startup header readability, slash autocomplete, thinking display, and routine tool output.
 
 Documentation hygiene follow-up:
 

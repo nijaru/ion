@@ -10,6 +10,12 @@ Current active blockers:
 - `tk-s6p4` — Native core loop design/refactor and broader smoke matrix. Active P1 implementation blocker.
 - `tk-mmcs` — Keep the Pi/Codex/Claude core parity plan, roadmap, and task queue synchronized while the loop is stabilized.
 
+Current implementation posture:
+- Ion now runs with a temporary `features.CoreLoopOnly` gate enabled while `tk-s6p4` is active.
+- Default Canto backend registration is narrowed to core native tools plus file-tag and thinking request processors.
+- Advanced command/tool surfaces are hidden or blocked: MCP registration, manual `/compact`, `/memory`, `/rewind`, recall/remember tools, subagent tool, memory prompt injection, and reflexion prompt processor.
+- Automatic context recovery/proactive compaction remains enabled because it is part of core loop resilience, not feature polish.
+
 Next core-parity work:
 - use `ai/design/native-core-loop-architecture.md` as the target design for the Canto/Ion refactor.
 - use `ai/review/core-loop-ai-corpus-synthesis-2026-04-27.md` as the cross-repo ai/ synthesis and pre-implementation gate list.
@@ -73,9 +79,9 @@ Design rule:
 - Similar agents are references, not feature-parity requirements. Adopt from pi, Claude Code, Codex, OpenCode, Cursor, Droid, Letta, and others only when the idea strengthens Ion's core coding loop or preserves a simple, inspectable UX.
 
 ## Next Steps
-1. Review the four gate docs: Canto contract audit, backend spine, display projection, and app/CLI lifecycle.
-2. Resolve the remaining pre-code decision: keep/rewrite/remove the interrupted Canto test scratch after deciding whether Gap 1 is proof-only or a framework behavior change.
-3. Start implementation only after that decision, beginning with Canto proof/fix if needed, then Ion backend spine.
+1. Commit the CoreLoopOnly gate slice after deterministic tests pass.
+2. Resolve the remaining Canto decision: keep/rewrite/remove the interrupted Canto test scratch after deciding whether Gap 1 is proof-only or a framework behavior change.
+3. Implement the next core slice in order: Canto proof/fix if needed, then Ion backend spine, storage/replay projection, and app/CLI lifecycle.
 4. Use Fedora/local-api `ion -p` and `--resume ... -p` smokes before and after any core-loop-adjacent change.
 5. Keep ACP, sandboxing, thinking expansion, privacy, routing, and subagents behind native-loop regression safety unless they directly block testing.
 
