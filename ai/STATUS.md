@@ -20,6 +20,7 @@ Current implementation posture:
 - Provider errors now translate from Canto `TurnCompleted` error data into one Ion `Error` followed by `TurnFinished`, avoiding the old race between terminal replay and the goroutine's returned `SendStream` error.
 - Canceled Canto terminal events no longer become Ion provider errors; `context canceled` settles as `TurnFinished` so the app's user-cancelled state is preserved.
 - App-level duplicate-persistence guards now assert normal submit, assistant commit, and tool display paths do not append model-visible `storage.User`, `storage.Agent`, `storage.ToolUse`, or `storage.ToolResult` rows through Ion storage.
+- Tool lifecycle translation now uses Canto typed event accessors where available and preserves `ToolOutputDelta` IDs, so streaming tool output can remain attached to the correct tool call.
 - Live Fedora/local-api smoke is currently blocked from this process: `curl http://fedora:8080/v1/models` timed out after 10s, and `ion -p ... --timeout 60s` hit `context deadline exceeded`.
 
 Next core-parity work:

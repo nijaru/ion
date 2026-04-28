@@ -383,15 +383,15 @@ func TestTranslateEventsSuppressesCanceledTerminalError(t *testing.T) {
 func TestTranslateEventsPreservesToolUseID(t *testing.T) {
 	b := New()
 	events := make(chan csession.Event, 2)
-	events <- csession.NewEvent("session-id", csession.ToolStarted, map[string]string{
-		"id":   "tool-call-1",
-		"tool": "bash",
-		"args": "git status",
+	events <- csession.NewToolStartedEvent("session-id", csession.ToolStartedData{
+		ID:        "tool-call-1",
+		Tool:      "bash",
+		Arguments: "git status",
 	})
-	events <- csession.NewEvent("session-id", csession.ToolCompleted, map[string]string{
-		"id":     "tool-call-1",
-		"tool":   "bash",
-		"output": "ok",
+	events <- csession.NewToolCompletedEvent("session-id", csession.ToolCompletedData{
+		ID:     "tool-call-1",
+		Tool:   "bash",
+		Output: "ok",
 	})
 	close(events)
 
@@ -414,6 +414,31 @@ func TestTranslateEventsPreservesToolUseID(t *testing.T) {
 	}
 	if result.ToolUseID != "tool-call-1" {
 		t.Fatalf("result id = %q, want tool-call-1", result.ToolUseID)
+	}
+}
+
+func TestTranslateEventsPreservesToolOutputDeltaID(t *testing.T) {
+	b := New()
+	events := make(chan csession.Event, 1)
+	events <- csession.NewEvent("session-id", csession.ToolOutputDelta, map[string]string{
+		"id":    "tool-call-1",
+		"tool":  "bash",
+		"delta": "partial output",
+	})
+	close(events)
+
+	b.translateEvents(t.Context(), events)
+
+	ev := receiveEvent(t, b.Events())
+	delta, ok := ev.(ionsession.ToolOutputDelta)
+	if !ok {
+		t.Fatalf("event = %T, want ToolOutputDelta", ev)
+	}
+	if delta.ToolUseID != "tool-call-1" {
+		t.Fatalf("delta id = %q, want tool-call-1", delta.ToolUseID)
+	}
+	if delta.Delta != "partial output" {
+		t.Fatalf("delta = %q, want partial output", delta.Delta)
 	}
 }
 
