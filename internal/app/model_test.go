@@ -2313,6 +2313,66 @@ func TestCommandPickerInsertsSelectedCommand(t *testing.T) {
 	}
 }
 
+func TestTabCompletesFileReference(t *testing.T) {
+	workdir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workdir, "README.md"), []byte("readme"), 0o644); err != nil {
+		t.Fatalf("write README: %v", err)
+	}
+	model := readyModel(t)
+	model.App.Workdir = workdir
+	model.Input.Composer.SetValue("read @REA")
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	model = updated.(Model)
+	if cmd != nil {
+		t.Fatalf("unexpected file completion cmd %T", cmd)
+	}
+	if got := model.Input.Composer.Value(); got != "read @README.md " {
+		t.Fatalf("composer = %q, want completed file reference", got)
+	}
+}
+
+func TestTabCompletesDirectoryReferenceWithoutTrailingSpace(t *testing.T) {
+	workdir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(workdir, "internal"), 0o755); err != nil {
+		t.Fatalf("mkdir internal: %v", err)
+	}
+	model := readyModel(t)
+	model.App.Workdir = workdir
+	model.Input.Composer.SetValue("@int")
+
+	updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	model = updated.(Model)
+	if got := model.Input.Composer.Value(); got != "@internal/" {
+		t.Fatalf("composer = %q, want completed directory reference", got)
+	}
+}
+
+func TestTabFileReferenceKeepsCommonPrefixForAmbiguousMatches(t *testing.T) {
+	workdir := t.TempDir()
+	for _, name := range []string{"README.md", "RELEASE.md"} {
+		if err := os.WriteFile(filepath.Join(workdir, name), []byte(name), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	model := readyModel(t)
+	model.App.Workdir = workdir
+	model.Input.Composer.SetValue("@RE")
+
+	updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	model = updated.(Model)
+	if got := model.Input.Composer.Value(); got != "@RE" {
+		t.Fatalf("composer = %q, want unchanged ambiguous reference", got)
+	}
+}
+
+func TestMatchingWorkspaceFileReferencesRejectsEscapes(t *testing.T) {
+	workdir := t.TempDir()
+	if matches := matchingWorkspaceFileReferences(workdir, "../"); len(matches) != 0 {
+		t.Fatalf("matches = %#v, want none for workspace escape", matches)
+	}
+}
+
 func TestSettingsCommandShowsCommonSettings(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

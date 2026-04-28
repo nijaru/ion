@@ -534,7 +534,7 @@ func helpText() string {
 		"",
 		"  Ctrl+M           toggle configured primary/fast preset",
 		"  Ctrl+T           thinking picker",
-		"  Tab              complete slash commands; swap provider/model pickers",
+		"  Tab              complete slash commands and @file refs; swap provider/model pickers",
 		"  PgUp / PgDn      page through picker lists",
 		"  Shift+Tab        toggle READ <-> EDIT",
 		"  Esc              cancel running turn",

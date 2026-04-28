@@ -2,6 +2,9 @@ package app
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -121,6 +124,9 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		if next, cmd, ok := m.completeSlashCommand(); ok {
 			return next, cmd
 		}
+		if next, cmd, ok := m.completeFileReference(); ok {
+			return next, cmd
+		}
 
 	case "enter":
 		m.clearPendingAction()
@@ -227,6 +233,90 @@ func (m Model) completeSlashCommand() (Model, tea.Cmd, bool) {
 	}
 
 	return m.openCommandPicker(text), nil, true
+}
+
+func (m Model) completeFileReference() (Model, tea.Cmd, bool) {
+	text := m.Input.Composer.Value()
+	start := lastTokenStart(text)
+	token := text[start:]
+	if !strings.HasPrefix(token, "@") {
+		return m, nil, false
+	}
+
+	matches := matchingWorkspaceFileReferences(m.App.Workdir, strings.TrimPrefix(token, "@"))
+	switch len(matches) {
+	case 0:
+		return m, nil, true
+	case 1:
+		completion := matches[0].reference
+		if !matches[0].isDir {
+			completion += " "
+		}
+		m.Input.Composer.SetValue(text[:start] + completion)
+		m.relayoutComposer()
+		return m, nil, true
+	}
+
+	values := make([]string, 0, len(matches))
+	for _, match := range matches {
+		values = append(values, match.reference)
+	}
+	if prefix := commonPrefix(values); prefix != "" && prefix != token {
+		m.Input.Composer.SetValue(text[:start] + prefix)
+		m.relayoutComposer()
+	}
+	return m, nil, true
+}
+
+func lastTokenStart(text string) int {
+	idx := strings.LastIndexAny(text, " \t\r\n")
+	if idx < 0 {
+		return 0
+	}
+	return idx + 1
+}
+
+type fileReferenceMatch struct {
+	reference string
+	isDir     bool
+}
+
+func matchingWorkspaceFileReferences(workdir, query string) []fileReferenceMatch {
+	workdir = filepath.Clean(workdir)
+	dirPart, base := filepath.Split(filepath.FromSlash(query))
+	dirPart = filepath.Clean(dirPart)
+	if dirPart == "." {
+		dirPart = ""
+	}
+	dir := filepath.Join(workdir, dirPart)
+	rel, err := filepath.Rel(workdir, dir)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return nil
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	matches := make([]fileReferenceMatch, 0, len(entries))
+	for _, entry := range entries {
+		name := entry.Name()
+		if strings.HasPrefix(name, ".") || !strings.HasPrefix(name, base) {
+			continue
+		}
+		ref := filepath.ToSlash(filepath.Join(dirPart, name))
+		if entry.IsDir() {
+			ref += "/"
+		}
+		matches = append(matches, fileReferenceMatch{
+			reference: "@" + ref,
+			isDir:     entry.IsDir(),
+		})
+	}
+	slices.SortFunc(matches, func(a, b fileReferenceMatch) int {
+		return strings.Compare(a.reference, b.reference)
+	})
+	return matches
 }
 
 func matchingSlashCommands(prefix string) []string {
