@@ -1,37 +1,58 @@
 # AI Memory Index
 
-- [Status](STATUS.md) — Current phase, active focus, and blockers
-- [Active Plan](PLAN.md) — v0 core parity plan and priority gates
-- [Design](DESIGN.md) — Application architecture, TUI components, and SOTA policy
-- [Roadmap](ROADMAP.md) — Active roadmap, sequencing, and lower-priority work
-- [Sprint Index](SPRINTS.md) — Historical sprint index
-- [SOTA Requirements](SOTA-REQUIREMENTS.md) — The 14 core product responsibilities for Ion
-- [Canto Authoring App Patterns](research/canto-dspy-app-patterns-2026-04.md) — Future Ion patterns from Canto authoring work; DSPy is one reference
-- [Current Pi Core Loop Review](research/pi-current-core-loop-review-2026-04.md) — Current Pi `/tree`, loop, compaction, and UX lessons for Canto/Ion
-- [Core Agent Reference Delta](research/core-agent-reference-delta-2026-04-27.md) — Focused Pi/Codex CLI and loop deltas; reference only until Gate 2 is truly stable
-- [Thinking Effort Provider Survey](research/thinking-effort-provider-survey-2026-04.md) — Provider reasoning controls and Ion capability-model recommendation
-- [Native Core Loop Architecture](design/native-core-loop-architecture.md) — Target Canto/Ion loop ownership, invariants, and refactor sequence
-- [Ion Native Backend Spine](design/ion-native-backend-spine-2026-04-27.md) — Refactor target for CantoBackend turn phases, event translation, cancel/close semantics
-- [Ion Display Projection](design/ion-display-projection-2026-04-27.md) — Storage/replay projection contract for Canto effective history plus Ion display-only events
-- [Ion App and CLI Lifecycle](design/ion-app-cli-lifecycle-2026-04-27.md) — Command, startup/resume, runtime switch, progress/error, and print CLI lifecycle design
-- [Canto Research Delta](review/canto-research-delta-2026-04-26.md) — Recent Canto ai/ findings that affect Ion task sequencing
-- [Core Loop AI Corpus Synthesis](review/core-loop-ai-corpus-synthesis-2026-04-27.md) — Cross-repo ai/ synthesis and pre-implementation gates for the native loop refactor
-- [Canto Core Loop Contract Audit](review/canto-core-loop-contract-audit-2026-04-27.md) — Canto terminal, queue, tool, and history contracts before Ion refactor
-- [Core Loop Review Tracker](review/core-loop-review-tracker-2026-04-28.md) — Scan-first matrix of reviewed/refactored Canto and Ion core-loop areas
-- [Core Loop Contract](review/core-loop-contract.md) — Native Canto/Ion loop invariants for history, storage no-ops, terminal states, replay, and CLI
-- [Core Loop Review](review/core-loop-review.md) — Focused contract review after resume/tool-call failures
-- [Tools and Modes Spec](specs/tools-and-modes.md) — Permission modes, approval prompt behavior, and ESCALATE.md host UX
-- [Status and Config Spec](specs/status-and-config.md) — Status line, model picker metadata, and global config/state/trust layout
-- [Security Policy Spec](specs/security-policy.md) — YAML tool/category policy rules and LLM judge deferral boundary
-- [Subagent Personas and Routing Spec](specs/subagent-personas-and-routing.md) — Built-in personas, YAML frontmatter format, and model-slot policy
-- [Workspace Trust and Rollback Spec](specs/workspace-trust-and-rollback.md) — Persistent trust state and rollback deferral boundary
-- [Tool Loading and Approval Tiers Spec](specs/tool-loading-and-approval-tiers.md) — search_tools UX and permission-tier policy
-- [Memory Search and Wiki Spec](specs/memory-search-and-wiki.md) — /memory UX, current Canto memory surface, and wiki deferral
-- [Workflows and Recovery Spec](specs/workflows-and-recovery.md) — Ion workflow topology, gates, and checkpoint policy
-- [Evals and Regression Gates Spec](specs/evals-and-regression-gates.md) — Golden datasets, thresholds, and CI policy
-- [Observability Docs](../docs/observability/README.md) — OTLP exporter config and Grafana starter dashboard
-- [Security Policy Docs](../docs/security/policy.md) — User-facing policy_path and ~/.ion/policy.yaml reference
-- [Subagent Docs](../docs/subagents.md) — User-facing subagent personas and ~/.ion/agents reference
-- [Workspace Trust Docs](../docs/workspace-trust.md) — User-facing /trust behavior and trust storage
-- [Tool Docs](../docs/tools.md) — User-facing /tools, lazy loading, and approval mode summary
-- [Memory Docs](../docs/memory.md) — User-facing /memory and recall/remember behavior
+Start here, in order. Root files are intentionally short; detailed progress belongs in the linked tracker or task logs.
+
+## Start Here
+
+- [STATUS.md](STATUS.md) — current phase, active blocker, and next action
+- [PLAN.md](PLAN.md) — core-loop stabilization gates and deferrals
+- [DESIGN.md](DESIGN.md) — current Ion/Canto architecture and ownership boundaries
+- [DECISIONS.md](DECISIONS.md) — stable principles plus recent decision log
+
+## Active Core Loop
+
+- [Core Loop Review Tracker](review/core-loop-review-tracker-2026-04-28.md) — single scan-first matrix of reviewed/refactored/pending Canto and Ion core-loop areas
+- [Native Core Loop Architecture](design/native-core-loop-architecture.md) — target ownership, invariants, refactor sequence, and smoke matrix
+- [Ion Native Backend Spine](design/ion-native-backend-spine-2026-04-27.md) — backend adapter turn phases, event translation, cancel/close semantics
+- [Ion Display Projection](design/ion-display-projection-2026-04-27.md) — Canto effective history plus Ion display-only event projection
+- [Ion App and CLI Lifecycle](design/ion-app-cli-lifecycle-2026-04-27.md) — startup, resume, slash commands, runtime switch, progress/error, and print CLI lifecycle
+
+## Reference Research
+
+- [Current Pi Core Loop Review](research/pi-current-core-loop-review-2026-04.md) — Pi `/tree`, loop, compaction, and UX lessons
+- [Core Agent Reference Delta](research/core-agent-reference-delta-2026-04-27.md) — Pi/Codex CLI and loop deltas; reference only until Gate 2 is stable
+- [Canto Research Delta](review/canto-research-delta-2026-04-26.md) — Canto ai/ findings that affect Ion sequencing
+- [Core Loop AI Corpus Synthesis](review/core-loop-ai-corpus-synthesis-2026-04-27.md) — cross-repo ai/ synthesis and pre-implementation gates
+- [Canto Core Loop Contract Audit](review/canto-core-loop-contract-audit-2026-04-27.md) — Canto terminal, queue, tool, and history contract audit
+
+## Deferred Specs
+
+These are not active until the P1 native core loop is stable.
+
+- [Roadmap](ROADMAP.md) — broader roadmap and lower-priority sequencing
+- [SOTA Requirements](SOTA-REQUIREMENTS.md) — long-term product responsibilities
+- [Status and Config Spec](specs/status-and-config.md)
+- [Tools and Modes Spec](specs/tools-and-modes.md)
+- [Security Policy Spec](specs/security-policy.md)
+- [Subagent Personas and Routing Spec](specs/subagent-personas-and-routing.md)
+- [Workspace Trust and Rollback Spec](specs/workspace-trust-and-rollback.md)
+- [Tool Loading and Approval Tiers Spec](specs/tool-loading-and-approval-tiers.md)
+- [Memory Search and Wiki Spec](specs/memory-search-and-wiki.md)
+- [Workflows and Recovery Spec](specs/workflows-and-recovery.md)
+- [Evals and Regression Gates Spec](specs/evals-and-regression-gates.md)
+
+## Historical Review
+
+Older review docs remain useful for context but should not be updated as active trackers.
+
+- [Core Loop Contract](review/core-loop-contract.md)
+- [Core Loop Review](review/core-loop-review.md)
+
+## User-Facing Docs
+
+- [Observability Docs](../docs/observability/README.md)
+- [Security Policy Docs](../docs/security/policy.md)
+- [Subagent Docs](../docs/subagents.md)
+- [Workspace Trust Docs](../docs/workspace-trust.md)
+- [Tool Docs](../docs/tools.md)
+- [Memory Docs](../docs/memory.md)
