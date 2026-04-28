@@ -77,6 +77,7 @@ After any terminal state, the session can be resumed and can accept a new user t
 ### 7. Print CLI Exercises The Same Loop
 
 - `ion -p`, `ion --print`, `--continue -p`, and `--resume <id> -p` use the native Canto loop.
+- Invalid print arguments and missing prompt/stdin must fail before runtime/storage initialization.
 - Text output returns the final assistant response.
 - JSON output is stable enough for smoke tests.
 - Piped stdin works as prompt input, and prompt-plus-stdin appends a `<stdin>` context block.

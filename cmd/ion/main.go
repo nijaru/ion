@@ -91,6 +91,33 @@ func main() {
 		os.Exit(1)
 	}
 
+	printRequested, prompt, output, err := resolvePrintFlags(
+		*printFlag,
+		*printShortFlag,
+		*promptFlag,
+		flag.Args(),
+		*outputFlag,
+		*jsonFlag,
+	)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(2)
+	}
+	if printRequested {
+		if isStdinPipe() {
+			data, err := io.ReadAll(os.Stdin)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "failed to read stdin: %v\n", err)
+				os.Exit(1)
+			}
+			prompt = promptWithStdinContext(prompt, string(data))
+		}
+		if prompt == "" {
+			fmt.Fprintf(os.Stderr, "print mode requires --prompt or stdin pipe\n")
+			os.Exit(1)
+		}
+	}
+
 	dataDir, err := config.DefaultDataDir()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to resolve data dir: %v\n", err)
@@ -122,33 +149,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	printRequested, prompt, output, err := resolvePrintFlags(
-		*printFlag,
-		*printShortFlag,
-		*promptFlag,
-		flag.Args(),
-		*outputFlag,
-		*jsonFlag,
-	)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
-		os.Exit(2)
-	}
-
 	// Print mode: run a single turn and exit
 	if printRequested {
-		if isStdinPipe() {
-			data, err := io.ReadAll(os.Stdin)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "failed to read stdin: %v\n", err)
-				os.Exit(1)
-			}
-			prompt = promptWithStdinContext(prompt, string(data))
-		}
-		if prompt == "" {
-			fmt.Fprintf(os.Stderr, "print mode requires --prompt or stdin pipe\n")
-			os.Exit(1)
-		}
 		agent := b.Session()
 		if agent == nil {
 			fmt.Fprintf(os.Stderr, "print mode requires a configured provider and model\n")

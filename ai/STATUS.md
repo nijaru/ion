@@ -28,6 +28,7 @@ Current implementation posture:
 - Replay display compaction now leaves errored routine tool output expanded, so resumed `list`/`read`/`grep`/`glob` failures keep their diagnostic text instead of collapsing to a line count.
 - Canto-backed storage compatibility now treats empty `storage.Agent` appends as a no-op before lazy session materialization, while preserving reasoning-only assistant entries. This prevents Ion-side compatibility callers from creating invalid assistant rows outside the live Canto agent path.
 - TUI runtime `/resume` now prints the resumed marker after the runtime/workspace header and before replay entries, matching startup resume ordering.
+- Print CLI validation now happens before runtime/storage initialization, so invalid print args or `ion -p` without a prompt/stdin fail without opening an agent runtime.
 - Live Fedora/local-api smoke is currently deferred because Fedora is off. If a live provider is needed before Fedora returns, use OpenRouter with `deepseek/deepseek-v4-pro` or `deepseek/deepseek-v4-flash`, but keep deterministic code review as the active focus.
 
 Next core-parity work:
