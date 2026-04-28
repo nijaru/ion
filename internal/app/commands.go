@@ -1201,6 +1201,7 @@ func (m Model) switchRuntimeCommand(
 			return session.Error{Err: err}
 		}
 		if err := config.SaveActivePreset(preset.String()); err != nil {
+			closeSwitchedRuntime(sess, storageSess)
 			return session.Error{Err: fmt.Errorf("save active preset: %w", err)}
 		}
 		if oldSession != nil {
@@ -1241,16 +1242,17 @@ func (m Model) resumeRuntimeCommand(
 		if err != nil {
 			return session.Error{Err: err}
 		}
-		if oldSession != nil {
-			_ = oldSession.Close()
-		}
 		var entries []session.Entry
 		resumeBranch := currentBranchName(m.App.Branch, storageSess)
 		if storageSess != nil {
 			entries, err = storageSess.Entries(context.Background())
 			if err != nil {
+				closeSwitchedRuntime(sess, storageSess)
 				return session.Error{Err: fmt.Errorf("load session transcript: %w", err)}
 			}
+		}
+		if oldSession != nil {
+			_ = oldSession.Close()
 		}
 		printLines := []string{"--- resumed ---", m.runtimeHeaderLine(backend)}
 		if header := m.headerLineFor(resumeBranch); header != "" {
@@ -1268,6 +1270,15 @@ func (m Model) resumeRuntimeCommand(
 			notice:        notice.Content,
 			showStatus:    false,
 		}
+	}
+}
+
+func closeSwitchedRuntime(sess session.AgentSession, storageSess storage.Session) {
+	if sess != nil {
+		_ = sess.Close()
+	}
+	if storageSess != nil {
+		_ = storageSess.Close()
 	}
 }
 

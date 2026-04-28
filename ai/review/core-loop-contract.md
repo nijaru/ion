@@ -26,6 +26,7 @@ ACP, subagents, sandboxing, policy classifiers, escalation notifiers, tree navig
   - tool calls
 - Canto effective history must also sanitize invalid legacy/snapshot/imported rows before any provider request.
 - Tool result messages must reference the matching assistant tool-call ID and retain tool name where available.
+- Failed tool completions must carry structured error state as well as provider-visible output, so replay can preserve error UI without parsing text.
 - System/developer/context entries must stay in provider-compatible positions after projection.
 
 ### 2. Canto Owns Model-Visible Transcript Persistence
@@ -41,6 +42,7 @@ ACP, subagents, sandboxing, policy classifiers, escalation notifiers, tree navig
 - Assistant commit is emitted before `TurnFinished`.
 - Tool call started precedes matching tool output/result.
 - Tool results preserve the ID needed to match pending UI entries and provider history.
+- Streaming tool output deltas preserve the tool-use ID needed to attach interleaved output to the right pending row.
 - Terminal status events must not race ahead of durable message/tool/error persistence.
 
 ### 4. Terminal States Are Durable And Resumable
@@ -77,6 +79,12 @@ After any terminal state, the session can be resumed and can accept a new user t
 - JSON output is stable enough for smoke tests.
 - Piped stdin works as prompt input, and prompt-plus-stdin appends a `<stdin>` context block.
 
+### 8. Runtime Switches Are Atomic Enough For UX
+
+- Newly opened runtime/session handles must close if state save, replay loading, or validation fails before the switch is committed to the model.
+- The previous runtime should remain open until the new runtime is fully validated.
+- Runtime switch notices and replay rows stay display-only; they must not become model-visible transcript.
+
 ## Open Questions
 
 - Thinking block ordering belongs in the contract once Canto has typed provider capability translation.
@@ -90,4 +98,5 @@ After any terminal state, the session can be resumed and can accept a new user t
 - Ion tests for no duplicate model-visible transcript persistence.
 - Ion real-store replay tests for success, cancellation, provider error, retry status, and tool result history.
 - Ion backend tests for assistant-before-turn-finished and tool ID propagation.
+- Ion app lifecycle tests for runtime switch/resume failure cleanup.
 - Live/local smoke for one real tool call, approval, persistence, resume, and follow-up turn.

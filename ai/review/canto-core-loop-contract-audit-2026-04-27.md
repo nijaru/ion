@@ -30,6 +30,15 @@ Classify Canto-side responsibilities before Ion refactors against them. This is 
 | Assistant payload validation | Needs write/projection alignment proof | Projection validation trims content/reasoning; write-side behavior must be audited against that exact rule. |
 | Tool event payload schema | Needs audit | Ion currently decodes raw event payloads manually. Canto should expose or document stable event data fields enough for adapters to avoid schema drift. |
 
+## Implementation Progress
+
+| Gap | Resolution |
+| --- | --- |
+| Write-side assistant payload validation | Fixed in Canto `52206f2`; write-side predicate trims content/reasoning and preserves reasoning-only payloads. |
+| Terminal cancellation durability | Fixed in Canto `c22da5e`; streaming and non-streaming canceled turns append `TurnCompleted` with `context.WithoutCancel(ctx)`. |
+| Tool event payload stability | Partially resolved; Ion now uses Canto typed accessors for started/completed events and preserves `ToolOutputDelta` IDs. |
+| Tool error state | Fixed in Canto `a5878ab`; failed tool completions include structured `Error` text, imported by Ion for live and replay display. |
+
 ## Gap Classification
 
 ### Gap 1: Write-Side Assistant Payload Validation

@@ -24,13 +24,14 @@ Current implementation posture:
 - Canto `c22da5e` is imported; canceled streaming and non-streaming turns now persist terminal `TurnCompleted` events upstream, and Ion print/backend paths cancel in-flight work on timeout or refused approval without surfacing wrapped `context canceled` as provider failure.
 - Canto `a5878ab` is imported; failed tool completions now carry structured error text, and Ion preserves that error marker in both live tool results and resumed effective-history display entries.
 - Print mode now explicitly closes the agent session, storage session, and store after a one-shot run before returning or exiting on error, so repeated scriptable smoke runs do not rely on skipped `os.Exit` defers.
+- Runtime switch/resume failure cleanup is hardened: if state save or replay loading fails after opening a new runtime, Ion closes the new session/storage handles and keeps the old runtime open until the switch is fully validated.
 - Live Fedora/local-api smoke is currently deferred because Fedora is off. If a live provider is needed before Fedora returns, use OpenRouter with `deepseek/deepseek-v4-pro` or `deepseek/deepseek-v4-flash`, but keep deterministic code review as the active focus.
 
 Next core-parity work:
 - use `ai/design/native-core-loop-architecture.md` as the target design for the Canto/Ion refactor.
 - use `ai/review/core-loop-ai-corpus-synthesis-2026-04-27.md` as the cross-repo ai/ synthesis and pre-implementation gate list.
 - use `ai/review/canto-core-loop-contract-audit-2026-04-27.md` to decide whether any Canto work is proof-only, framework bug fix, Ion adapter misuse, or deferred.
-- refactor Ion's Canto backend, storage/replay projection, app lifecycle, and print CLI against the dedicated design files before returning to feature polish.
+- continue the app/CLI lifecycle pass by hardening runtime switch and resume failure cleanup: newly opened runtime handles must close if state save or replay loading fails, and the old runtime should not be closed until the new runtime is fully validated.
 - use the scriptable print CLI (`ion -p "prompt"`, `ion -p --json "prompt"`, `ion --print "prompt" --json`, `--resume <id> -p`, and piped stdin) as the automated Fedora/local-api smoke surface before TUI-only checks.
 - keep ACP, sandboxing, broader policy, thinking expansion, privacy, routing, and subagents behind native-loop regression safety.
 

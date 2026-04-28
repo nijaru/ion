@@ -12,9 +12,12 @@ Ion Gate 1 is green for the resume/model-history failure that was blocking norma
 
 - Canto commit `927e482` filters empty/no-payload assistant rows from effective model history, including legacy rows and snapshots.
 - Canto commit `52206f2` also fixes the write-side assistant payload predicate so future whitespace-only assistant rows are not durably appended.
+- Canto commit `c22da5e` makes canceled streaming and non-streaming turns persist terminal `TurnCompleted` events even after the caller context is canceled.
+- Canto commit `a5878ab` adds structured error text to failed tool completion events, so Ion can render and replay failed tool results without text heuristics.
 - Ion imports that Canto pseudo-version through normal `go.mod` resolution.
-- `--continue --print` can resume the previously corrupted local-api session and accept a new user turn.
-- Replay/live transcript spacing now shares the app renderer, and routine `list`/`read` display is compact by default.
+- Ion's native adapter now treats Canto `MessageAdded` assistant rows as the only assistant commit signal, preserves tool output IDs, binds turn execution to the caller context, keeps the watch alive until terminal events arrive, and closes one-shot print handles explicitly.
+- Ion app lifecycle now closes newly opened runtime handles on switch/resume post-open failure and keeps the old runtime open until replay/state validation succeeds.
+- Live Fedora/local-api smoke is currently deferred because Fedora is off; deterministic review remains the active proof path.
 
 Ion is still not broadly core-stable. The next gate is a top-down design/refactor against `ai/design/native-core-loop-architecture.md`, then deterministic coverage for cancellation, retries, provider-limit failures, session lifecycle, and TUI command/display polish.
 
@@ -142,7 +145,7 @@ Exit criteria:
 1. Treat `tk-s6p4` as the active blocker and keep `tk-mmcs` synchronized.
 2. Keep the CoreLoopOnly gate in place until Gate 2 is proven by deterministic tests plus live local-api smoke.
 3. Implement the Ion refactor in order: backend spine, storage/replay projection, app/CLI lifecycle.
-4. Extend deterministic and Fedora/local-api print CLI smoke coverage around cancellation/error persistence, retry status, provider-limit recovery, tool errors, and resumed follow-up turns.
+4. Extend deterministic and print CLI smoke coverage around cancellation/error persistence, retry status, provider-limit recovery, tool errors, runtime switch cleanup, and resumed follow-up turns.
 5. Only then resume TUI polish such as startup header readability, slash autocomplete, thinking display, and routine tool output.
 
 Documentation hygiene follow-up:
