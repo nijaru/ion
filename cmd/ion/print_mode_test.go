@@ -17,6 +17,7 @@ type printSession struct {
 	autoApprove bool
 	approved    bool
 	cancelled   int
+	closed      int
 }
 
 func (s *printSession) Open(ctx context.Context) error              { return nil }
@@ -38,10 +39,13 @@ func (s *printSession) RegisterMCPServer(ctx context.Context, cmd string, args .
 func (s *printSession) SetMode(mode session.Mode)     { s.mode = mode }
 func (s *printSession) SetAutoApprove(enabled bool)   { s.autoApprove = enabled }
 func (s *printSession) AllowCategory(toolName string) {}
-func (s *printSession) Close() error                  { return nil }
-func (s *printSession) Events() <-chan session.Event  { return s.events }
-func (s *printSession) ID() string                    { return "print-test" }
-func (s *printSession) Meta() map[string]string       { return nil }
+func (s *printSession) Close() error {
+	s.closed++
+	return nil
+}
+func (s *printSession) Events() <-chan session.Event { return s.events }
+func (s *printSession) ID() string                   { return "print-test" }
+func (s *printSession) Meta() map[string]string      { return nil }
 
 func TestConfigureSessionMode(t *testing.T) {
 	sess := &printSession{}
@@ -231,6 +235,17 @@ func TestPrintModeCancelsTurnOnTimeout(t *testing.T) {
 	}
 	if sess.cancelled != 1 {
 		t.Fatalf("cancelled = %d, want 1", sess.cancelled)
+	}
+}
+
+func TestCloseRuntimeHandlesClosesPrintAgent(t *testing.T) {
+	sess := &printSession{}
+
+	if err := closeRuntimeHandles(sess, nil, nil); err != nil {
+		t.Fatalf("closeRuntimeHandles: %v", err)
+	}
+	if sess.closed != 1 {
+		t.Fatalf("closed = %d, want 1", sess.closed)
 	}
 }
 

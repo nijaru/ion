@@ -155,7 +155,7 @@ func main() {
 			os.Exit(1)
 		}
 		configureSessionMode(agent, mode)
-		if err := runPrintModeWithTimeout(
+		runErr := runPrintModeWithTimeout(
 			ctx,
 			os.Stdout,
 			agent,
@@ -163,8 +163,14 @@ func main() {
 			*timeoutFlag,
 			mode == session.ModeYolo,
 			output,
-		); err != nil {
-			fmt.Fprintf(os.Stderr, "print mode error: %v\n", err)
+		)
+		closeErr := closeRuntimeHandles(agent, sess, store)
+		if runErr != nil {
+			fmt.Fprintf(os.Stderr, "print mode error: %v\n", runErr)
+			os.Exit(1)
+		}
+		if closeErr != nil {
+			fmt.Fprintf(os.Stderr, "failed to close runtime: %v\n", closeErr)
 			os.Exit(1)
 		}
 		return
@@ -214,6 +220,20 @@ func main() {
 		fmt.Fprintf(os.Stderr, "ion error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func closeRuntimeHandles(agent session.AgentSession, sess storage.Session, store storage.Store) error {
+	var errs []error
+	if agent != nil {
+		errs = append(errs, agent.Close())
+	}
+	if sess != nil {
+		errs = append(errs, sess.Close())
+	}
+	if store != nil {
+		errs = append(errs, store.Close())
+	}
+	return errors.Join(errs...)
 }
 
 func normalizeFlagArgs(args []string) ([]string, bool) {
