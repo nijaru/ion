@@ -1794,6 +1794,53 @@ func TestCostCommandReportsSessionTotals(t *testing.T) {
 	}
 }
 
+func TestSessionInfoNoticeReportsCurrentSession(t *testing.T) {
+	model := New(
+		stubBackend{
+			sess:     &stubSession{events: make(chan session.Event)},
+			provider: "openrouter",
+			model:    "minimax/minimax-m2.5:free",
+		},
+		&stubStorageSession{
+			id:        "sess-1",
+			usageIn:   1200,
+			usageOut:  300,
+			usageCost: 0.012345,
+			entries: []session.Entry{
+				{Role: session.User, Content: "hi"},
+				{Role: session.Agent, Content: "hello"},
+				{Role: session.Tool, Title: "bash"},
+			},
+		},
+		nil,
+		"/tmp/test",
+		"main",
+		"dev",
+		nil,
+	)
+	model.Mode = session.ModeRead
+
+	notice, err := model.sessionInfoNotice()
+	if err != nil {
+		t.Fatalf("sessionInfoNotice returned error: %v", err)
+	}
+	for _, want := range []string{
+		"Session",
+		"id: stub",
+		"provider: openrouter",
+		"model: minimax/minimax-m2.5:free",
+		"mode: READ",
+		"branch: main",
+		"messages: user 1, assistant 1, tools 1, total 3",
+		"tokens: input 1200, output 300, total 1500",
+		"cost: $0.012345",
+	} {
+		if !strings.Contains(notice, want) {
+			t.Fatalf("session notice missing %q: %q", want, notice)
+		}
+	}
+}
+
 func TestCostCommandReportsConfiguredBudgets(t *testing.T) {
 	model := New(
 		stubBackend{sess: &stubSession{events: make(chan session.Event)}},

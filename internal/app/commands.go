@@ -302,6 +302,13 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 			return sessionCostMsg{notice: m.costBudgetNotice(inputTokens, outputTokens, totalCost)}
 		}
 
+	case "/session":
+		notice, err := m.sessionInfoNotice()
+		if err != nil {
+			return m, cmdError(err.Error())
+		}
+		return m, m.printEntries(session.Entry{Role: session.System, Content: notice})
+
 	case "/compact":
 		compactor, ok := m.Model.Backend.(backend.Compactor)
 		if !ok {
@@ -349,6 +356,88 @@ func (m Model) costBudgetNotice(inputTokens, outputTokens int, totalCost float64
 		lines = append(lines, fmt.Sprintf("turn limit: $%.6f", m.Model.Config.MaxTurnCost))
 	}
 	return strings.Join(lines, "\n")
+}
+
+func (m Model) sessionInfoNotice() (string, error) {
+	sessionID := ""
+	if m.Model.Session != nil {
+		sessionID = strings.TrimSpace(m.Model.Session.ID())
+	}
+	if sessionID == "" && m.Model.Storage != nil {
+		sessionID = strings.TrimSpace(m.Model.Storage.ID())
+	}
+	if sessionID == "" {
+		sessionID = "none"
+	}
+
+	provider := strings.TrimSpace(m.Model.Backend.Provider())
+	model := strings.TrimSpace(m.Model.Backend.Model())
+	if provider == "" {
+		provider = "unknown"
+	}
+	if model == "" {
+		model = "unknown"
+	}
+
+	inputTokens, outputTokens, totalCost := m.Progress.TokensSent, m.Progress.TokensReceived, m.Progress.TotalCost
+	var entries []session.Entry
+	if m.Model.Storage != nil {
+		input, output, cost, err := m.Model.Storage.Usage(context.Background())
+		if err != nil {
+			return "", fmt.Errorf("failed to load session usage: %v", err)
+		}
+		inputTokens = input
+		outputTokens = output
+		totalCost = cost
+		loaded, err := m.Model.Storage.Entries(context.Background())
+		if err != nil {
+			return "", fmt.Errorf("failed to load session entries: %v", err)
+		}
+		entries = loaded
+	}
+
+	counts := sessionEntryCounts(entries)
+	lines := []string{
+		"Session",
+		"id: " + sessionID,
+		"provider: " + provider,
+		"model: " + model,
+		"mode: " + modeDisplayName(m.Mode),
+	}
+	if branch := strings.TrimSpace(m.App.Branch); branch != "" {
+		lines = append(lines, "branch: "+branch)
+	}
+	lines = append(lines,
+		fmt.Sprintf("messages: user %d, assistant %d, tools %d, total %d",
+			counts.user, counts.agent, counts.tool, counts.total),
+		fmt.Sprintf("tokens: input %d, output %d, total %d",
+			inputTokens, outputTokens, inputTokens+outputTokens),
+		fmt.Sprintf("cost: $%.6f", totalCost),
+	)
+	return strings.Join(lines, "\n"), nil
+}
+
+type sessionCounts struct {
+	user  int
+	agent int
+	tool  int
+	total int
+}
+
+func sessionEntryCounts(entries []session.Entry) sessionCounts {
+	var counts sessionCounts
+	for _, entry := range entries {
+		counts.total++
+		switch entry.Role {
+		case session.User:
+			counts.user++
+		case session.Agent:
+			counts.agent++
+		case session.Tool:
+			counts.tool++
+		}
+	}
+	return counts
 }
 
 func (m Model) rewindCheckpointCommand(id string, confirmed bool) (Model, tea.Cmd) {
@@ -517,6 +606,7 @@ func helpText() string {
 		"  /tools           show tool count and lazy loading status",
 		"  /clear           start a fresh session with the current provider/model",
 		"  /cost            show aggregate session usage",
+		"  /session         show current session info",
 		"  /compact         compact the current session",
 		"  /quit, /exit     leave ion",
 		"  /help            show this help",
@@ -691,6 +781,7 @@ func slashCommandCatalog() []slashCommandInfo {
 		{name: "/tools", detail: "tool status"},
 		{name: "/clear", detail: "fresh session"},
 		{name: "/cost", detail: "session usage"},
+		{name: "/session", detail: "current session info"},
 		{name: "/compact", detail: "compact session"},
 		{name: "/quit", detail: "quit"},
 		{name: "/exit", detail: "quit"},
