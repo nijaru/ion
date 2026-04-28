@@ -208,15 +208,7 @@ func (b *Backend) Open(ctx context.Context) error {
 	}
 	p = configureRetryProvider(p, b.cfg, b.events)
 	b.compactLLM = p
-	runtimeProvider := governor.NewRecoveryProvider(p, func(ctx context.Context) error {
-		b.events <- ionsession.StatusChanged{Status: "Compacting context..."}
-		_, err := b.Compact(ctx)
-		if err == nil {
-			b.events <- ionsession.StatusChanged{Status: "Thinking..."}
-		}
-		return err
-	})
-	b.llm = runtimeProvider
+	b.llm = p
 
 	cwd := b.Meta()["cwd"]
 	if cwd == "" {
@@ -294,13 +286,24 @@ func (b *Backend) Open(ctx context.Context) error {
 		)
 	}
 
-	b.agent = agent.New("ion", instructions, modelName, runtimeProvider, registry,
+	b.agent = agent.New("ion", instructions, modelName, p, registry,
 		agent.WithHooks(policyHook(b)),
 		agent.WithRequestProcessors(requestProcessors...),
 	)
 
 	// Initialize Runner
-	b.runner = runtime.NewRunner(b.store, b.agent)
+	b.runner = runtime.NewRunner(
+		b.store,
+		b.agent,
+		runtime.WithOverflowRecovery(p.IsContextOverflow, func(ctx context.Context, sess *session.Session) error {
+			b.events <- ionsession.StatusChanged{Status: "Compacting context..."}
+			_, err := b.compactSession(ctx, sess)
+			if err == nil {
+				b.events <- ionsession.StatusChanged{Status: "Thinking..."}
+			}
+			return err
+		}, 1),
+	)
 
 	return nil
 }
@@ -762,6 +765,12 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 				}
 			}
 		})
+		if err != nil && isContextOverflowTerminal(err.Error()) && b.turnActiveFor(turnID) {
+			b.events <- ionsession.Error{Err: err}
+			b.finishTurn(turnID)
+			b.events <- ionsession.TurnFinished{}
+			stopWatch()
+		}
 	}()
 
 	return nil
@@ -774,6 +783,12 @@ func (b *Backend) finishTurn(turnID uint64) {
 		b.turnActive = false
 		b.cancel = nil
 	}
+}
+
+func (b *Backend) turnActiveFor(turnID uint64) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.turnSeq == turnID && b.turnActive
 }
 
 func storageModelName(provider, model string) string {
@@ -836,6 +851,9 @@ func (b *Backend) translateEvents(ctx context.Context, evCh <-chan session.Event
 		case session.TurnCompleted:
 			if data, ok, err := ev.TurnCompletedData(); err == nil && ok &&
 				data.Error != "" && !isCancellationTerminal(data.Error) {
+				if isContextOverflowTerminal(data.Error) {
+					continue
+				}
 				b.events <- ionsession.Error{Err: fmt.Errorf("%s", data.Error)}
 				b.finishTurn(turnID)
 				b.events <- ionsession.TurnFinished{}
@@ -950,6 +968,12 @@ func isCancellationTerminal(errText string) bool {
 	return strings.Contains(errText, context.Canceled.Error())
 }
 
+func isContextOverflowTerminal(errText string) bool {
+	errText = strings.ToLower(errText)
+	return strings.Contains(errText, "context_length_exceeded") ||
+		(strings.Contains(errText, "context") && strings.Contains(errText, "token"))
+}
+
 func loadSubagentPersonas(cfg *config.Config) ([]subagents.Persona, error) {
 	path := ""
 	if cfg != nil {
@@ -1042,32 +1066,39 @@ func (b *Backend) AllowCategory(toolName string) {
 
 func (b *Backend) Compact(ctx context.Context) (bool, error) {
 	b.mu.Lock()
-	store := b.store
-	provider := b.compactLLM
 	sessionID := b.ID()
-	model := b.Model()
-	maxTokens := b.ContextLimit()
+	store := b.store
 	b.mu.Unlock()
 
 	if store == nil {
 		return false, fmt.Errorf("backend store not initialized")
 	}
-	if provider == nil {
-		return false, fmt.Errorf("backend compaction provider not initialized")
-	}
 	if sessionID == "" {
 		return false, fmt.Errorf("session not initialized")
+	}
+
+	sess, err := store.Load(ctx, sessionID)
+	if err != nil {
+		return false, err
+	}
+	return b.compactSession(ctx, sess)
+}
+
+func (b *Backend) compactSession(ctx context.Context, sess *session.Session) (bool, error) {
+	b.mu.Lock()
+	provider := b.compactLLM
+	model := b.Model()
+	maxTokens := b.ContextLimit()
+	b.mu.Unlock()
+
+	if provider == nil {
+		return false, fmt.Errorf("backend compaction provider not initialized")
 	}
 	if model == "" {
 		return false, fmt.Errorf("model not configured")
 	}
 	if maxTokens <= 0 {
 		return false, fmt.Errorf("context limit unavailable for model %s", model)
-	}
-
-	sess, err := store.Load(ctx, sessionID)
-	if err != nil {
-		return false, err
 	}
 
 	dataDir, err := config.DefaultDataDir()

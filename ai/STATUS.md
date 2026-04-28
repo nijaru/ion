@@ -25,17 +25,17 @@ Fast, lightweight terminal coding agent.
 - Fedora live smoke is green against `local-api` / `qwen3.6:27b`: tool call, approval, persistence, resume, and follow-up turn all completed without provider-history errors.
 - New Canto C4/C5 cancellation/tool-result fixes are pushed in Canto `5ce3c1f` and imported into Ion: streaming turns now stop before an extra provider step after cancellation, step terminal events survive canceled contexts, and canceled tool turns persist a matching tool result so provider-visible history is not left with dangling tool calls.
 - Ion deterministic gates and Fedora live smoke are green after importing Canto `5ce3c1f`.
-- This is meaningful progress, not completion. C3/C6/C7 still need the remaining file-by-file review before `tk-s6p4` can close.
+- Ion overflow recovery now uses Canto runtime-level recovery instead of provider-level request retry, so context-overflow compaction rebuilds the provider-visible prompt before retrying. Focused overflow coverage, full Ion tests, and Fedora live smoke are green after this patch.
+- This is meaningful progress, not completion. C6/C7 need one more pass for final reviewed marking before `tk-s6p4` can close, then the next focus is deferred TUI/replay polish.
 
 ## Next Action
 
 Continue `tk-s6p4` as a comprehensive audit, not as bug slices:
 
-1. Commit and push Ion's Canto `5ce3c1f` import.
-2. Finish Canto C3/C6/C7 audit: runtime bootstrap/HITL, provider-visible prompt construction, retry/compaction surfaces.
-3. Patch any findings upstream first, then import the exact Canto revision into Ion.
-4. Re-run Ion deterministic gates and Fedora live smoke after each Canto import or native-loop patch.
-5. Only after C3-C7 are reviewed should the work shift to the deferred TUI spacing/picker/help polish.
+1. Commit and push the Ion overflow-recovery patch.
+2. Finish final C6/C7 review marking and run any missing narrow tests.
+3. Re-run Canto/Ion gates if another framework or native-loop patch lands.
+4. Only after C3-C7 are reviewed should the work shift to the deferred TUI spacing/picker/help polish.
 
 Do not run another broad `ai/` pass by default. The next work is source review and targeted docs only when the code review exposes a design question.
 
