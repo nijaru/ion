@@ -75,3 +75,49 @@ func TestStartupMode(t *testing.T) {
 		})
 	}
 }
+
+func TestApplyWorkspaceTrustModeGate(t *testing.T) {
+	cases := []struct {
+		name                  string
+		mode                  session.Mode
+		trusted               bool
+		printRequested        bool
+		explicitModeRequested bool
+		want                  session.Mode
+	}{
+		{
+			name: "trusted keeps auto",
+			mode: session.ModeYolo, trusted: true,
+			want: session.ModeYolo,
+		},
+		{
+			name: "untrusted interactive auto downgrades",
+			mode: session.ModeYolo,
+			want: session.ModeRead,
+		},
+		{
+			name: "untrusted implicit print edit downgrades",
+			mode: session.ModeEdit, printRequested: true,
+			want: session.ModeRead,
+		},
+		{
+			name: "untrusted explicit print auto is allowed for this invocation",
+			mode: session.ModeYolo, printRequested: true, explicitModeRequested: true,
+			want: session.ModeYolo,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := applyWorkspaceTrustModeGate(
+				tc.mode,
+				tc.trusted,
+				tc.printRequested,
+				tc.explicitModeRequested,
+			)
+			if got != tc.want {
+				t.Fatalf("mode = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
