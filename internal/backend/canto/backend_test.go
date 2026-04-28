@@ -1448,6 +1448,7 @@ func TestSubmitTurnStopsWhenProactiveCompactionFails(t *testing.T) {
 	if !strings.Contains(errEvent.Err.Error(), "compaction provider failed") {
 		t.Fatalf("error = %v, want compaction provider failure", errEvent.Err)
 	}
+	waitForTurnFinishedAfterError(t, b.Events())
 
 	calls := provider.Calls()
 	if len(calls) != 1 {
@@ -1561,6 +1562,25 @@ func waitForSessionError(t *testing.T, events <-chan ionsession.Event) ionsessio
 		case <-timeout:
 			t.Fatal("timed out waiting for session error")
 			return ionsession.Error{}
+		}
+	}
+}
+
+func waitForTurnFinishedAfterError(t *testing.T, events <-chan ionsession.Event) {
+	t.Helper()
+
+	timeout := time.After(2 * time.Second)
+	for {
+		select {
+		case ev, ok := <-events:
+			if !ok {
+				t.Fatal("event stream closed before turn finished")
+			}
+			if _, ok := ev.(ionsession.TurnFinished); ok {
+				return
+			}
+		case <-timeout:
+			t.Fatal("timed out waiting for turn to finish after session error")
 		}
 	}
 }

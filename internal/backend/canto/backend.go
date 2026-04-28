@@ -716,12 +716,14 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 		shouldCompact, err := b.shouldProactivelyCompact(turnCtx)
 		if err != nil {
 			b.events <- ionsession.Error{Err: err}
+			b.events <- ionsession.TurnFinished{}
 			return
 		}
 		if shouldCompact {
 			b.events <- ionsession.StatusChanged{Status: "Compacting context..."}
 			if compacted, cerr := b.Compact(turnCtx); cerr != nil {
 				b.events <- ionsession.Error{Err: cerr}
+				b.events <- ionsession.TurnFinished{}
 				return
 			} else if compacted {
 				b.events <- ionsession.StatusChanged{Status: "Ready"}
