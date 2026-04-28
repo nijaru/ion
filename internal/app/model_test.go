@@ -3480,6 +3480,36 @@ func TestProviderPickerSelectingNonListingProviderClearsStaleError(t *testing.T)
 	}
 }
 
+func TestProviderCommandClearsStaleError(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	oldListModelsForConfig := listModelsForConfig
+	listModelsForConfig = func(ctx context.Context, cfg *config.Config) ([]registry.ModelMetadata, error) {
+		if cfg.Provider != "anthropic" {
+			t.Fatalf("provider = %q, want anthropic", cfg.Provider)
+		}
+		return []registry.ModelMetadata{{ID: "claude-test"}}, nil
+	}
+	t.Cleanup(func() { listModelsForConfig = oldListModelsForConfig })
+
+	model := readyModel(t)
+	model.Progress.Mode = stateError
+	model.Progress.LastError = "failed to list models for zai"
+
+	updated, cmd := model.handleCommand("/provider anthropic")
+	model = updated
+
+	if cmd != nil {
+		t.Fatalf("expected provider command to open picker without command, got %T", cmd)
+	}
+	if model.Progress.Mode == stateError || model.Progress.LastError != "" {
+		t.Fatalf("stale error not cleared: mode=%v err=%q", model.Progress.Mode, model.Progress.LastError)
+	}
+	if model.Picker.Overlay == nil || model.Picker.Overlay.purpose != pickerPurposeModel {
+		t.Fatalf("picker = %#v, want model picker", model.Picker.Overlay)
+	}
+}
+
 func TestRuntimeSwitchKeepsNoticesOutOfTranscriptStorage(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
