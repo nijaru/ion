@@ -127,6 +127,14 @@ func TestNormalizeFlagArgsAcceptsLeadingSeparator(t *testing.T) {
 	if len(plain) != 1 || plain[0] != "--continue" {
 		t.Fatalf("normalizeFlagArgs plain = %#v, want unchanged", plain)
 	}
+
+	short, picker := normalizeFlagArgs([]string{"-c"})
+	if picker {
+		t.Fatal("normalizeFlagArgs opened picker for short continue")
+	}
+	if len(short) != 1 || short[0] != "-c" {
+		t.Fatalf("normalizeFlagArgs short = %#v, want -c", short)
+	}
 }
 
 func TestNormalizeFlagArgsOpensPickerForResumeWithoutID(t *testing.T) {
@@ -144,6 +152,22 @@ func TestNormalizeFlagArgsOpensPickerForResumeWithoutID(t *testing.T) {
 	}
 	if len(withID) != 2 || withID[0] != "--resume" || withID[1] != "session-1" {
 		t.Fatalf("normalizeFlagArgs explicit = %#v, want resume session-1", withID)
+	}
+
+	short, picker := normalizeFlagArgs([]string{"-r"})
+	if !picker {
+		t.Fatal("normalizeFlagArgs did not request resume picker for -r")
+	}
+	if len(short) != 0 {
+		t.Fatalf("normalizeFlagArgs short = %#v, want empty args", short)
+	}
+
+	shortWithID, picker := normalizeFlagArgs([]string{"-r", "session-1"})
+	if picker {
+		t.Fatal("normalizeFlagArgs opened picker for explicit short session id")
+	}
+	if len(shortWithID) != 2 || shortWithID[0] != "-r" || shortWithID[1] != "session-1" {
+		t.Fatalf("normalizeFlagArgs short explicit = %#v, want -r session-1", shortWithID)
 	}
 }
 

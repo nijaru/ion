@@ -154,6 +154,17 @@ func TestNormalizeFlagArgsSupportsBareResumePickerWithInterspersedFlags(t *testi
 	}
 }
 
+func TestNormalizeFlagArgsSupportsBareShortResumePickerWithInterspersedFlags(t *testing.T) {
+	got, openResumePicker := normalizeFlagArgs([]string{"-r", "-p", "hello", "--json"})
+	want := []string{"-p", "--json", "--", "hello"}
+	if !openResumePicker {
+		t.Fatal("normalizeFlagArgs did not open resume picker")
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("normalizeFlagArgs = %#v, want %#v", got, want)
+	}
+}
+
 func TestValidatePrintSelectionRejectsBareResumeInPrintMode(t *testing.T) {
 	err := validatePrintSelection(true, true)
 	if err == nil || !strings.Contains(err.Error(), "--resume requires a session ID in print mode") {

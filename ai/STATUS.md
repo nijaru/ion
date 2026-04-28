@@ -31,13 +31,14 @@ Fast, lightweight terminal coding agent.
 - The direct `/provider <name>` command now clears stale progress errors the same way provider-picker selection already did, so old model-listing/provider errors do not remain visible after a provider state change.
 - Manual `go run ./... --continue` replay now shows the expected header/resumed-marker/transcript/progress ordering and spacing; terminal control artifacts in the harness remain non-product noise.
 - Final gate bundle passed: `go test -race ./cmd/ion ./internal/app ./internal/backend/canto ./internal/backend/canto/tools -count=1`, Fedora endpoint discovery for `qwen3.6:27b`, and live smoke against `local-api` / `qwen3.6:27b`.
+- CLI parity started under `tk-mmcs`: `-c` now aliases `--continue`, and `-r` now aliases `--resume` with the same picker/print-mode rules as the long form. Focused CLI tests and `go test ./... -count=1` are green.
 
 ## Next Action
 
 Continue `tk-mmcs` as the parity/table-stakes track:
 
-1. Decide the next small slice for `CoreLoopOnly`: keep it on briefly, or reopen only the table-stakes surfaces needed for Pi/Codex-style CLI/session UX.
-2. Audit the current CLI surface against Pi/Codex conventions: `-p`, stdin, JSON, resume/continue, exit codes, and scriptability.
+1. Continue auditing the current CLI surface against Pi/Codex conventions: `-p`, stdin, JSON, resume/continue, exit codes, and scriptability.
+2. Decide the next small slice for `CoreLoopOnly`: keep it on briefly, or reopen only the table-stakes surfaces needed for CLI/session UX.
 3. Keep ACP, privacy, subagents, skills, routing, and advanced thinking behind explicit later tasks.
 
 Do not run another broad `ai/` pass by default. The next work is source review and targeted docs only when the code review exposes a design question.
