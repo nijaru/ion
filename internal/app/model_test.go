@@ -2373,6 +2373,42 @@ func TestMatchingWorkspaceFileReferencesRejectsEscapes(t *testing.T) {
 	}
 }
 
+func TestSessionPickerLineShowsUsefulMetadata(t *testing.T) {
+	info := storage.SessionInfo{
+		ID:          "sess-1",
+		Model:       "local-api/qwen3.6:27b",
+		Branch:      "main",
+		UpdatedAt:   time.Now().Add(-2 * time.Hour),
+		Title:       "Fix resume",
+		LastPreview: "resume follow-up worked",
+	}
+
+	label, detail := sessionPickerLine("/tmp/ion", info)
+	if label != "Fix resume" {
+		t.Fatalf("label = %q, want title", label)
+	}
+	for _, want := range []string{"resume follow-up worked", "local-api/qwen3.6:27b", "main", "2h ago"} {
+		if !strings.Contains(detail, want) {
+			t.Fatalf("detail = %q, want %q", detail, want)
+		}
+	}
+}
+
+func TestSessionPickerLineOmitsMissingAge(t *testing.T) {
+	info := storage.SessionInfo{
+		ID:          "sess-1",
+		LastPreview: "hello",
+	}
+
+	label, detail := sessionPickerLine("/tmp/ion", info)
+	if label != "hello" {
+		t.Fatalf("label = %q, want preview", label)
+	}
+	if strings.Contains(detail, "ago") || strings.Contains(detail, "h0m0s") {
+		t.Fatalf("detail = %q, want no age for zero timestamp", detail)
+	}
+}
+
 func TestSettingsCommandShowsCommonSettings(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

@@ -118,10 +118,18 @@ func (m Model) renderSessionPicker() string {
 	b.WriteString(m.st.cyan.PaddingLeft(2).Render("Resume a session"))
 	b.WriteString("\n")
 	if m.App.Workdir != "" {
-		b.WriteString(m.st.dim.PaddingLeft(2).Render("Workspace: " + filepath.Base(m.App.Workdir)))
+		workspace := "Workspace: " + filepath.Base(m.App.Workdir)
+		if total := len(m.Picker.Session.items); total > 0 {
+			workspace += fmt.Sprintf(" • %d sessions", total)
+		}
+		b.WriteString(m.st.dim.PaddingLeft(2).Render(workspace))
 		b.WriteString("\n")
 	}
-	b.WriteString(m.st.dim.PaddingLeft(2).Render("Search: " + m.Picker.Session.query))
+	search := m.Picker.Session.query
+	if search == "" {
+		search = "(type to filter)"
+	}
+	b.WriteString(m.st.dim.PaddingLeft(2).Render("Search: " + search))
 	b.WriteString("\n")
 	if m.Picker.Session.err != "" {
 		b.WriteString(m.st.warn.PaddingLeft(2).Render(m.Picker.Session.err))
@@ -222,23 +230,34 @@ func rankedSessionPickerItems(items []sessionPickerItem, query, cwd string) []se
 }
 
 func sessionPickerLine(cwd string, info storage.SessionInfo) (string, string) {
-	label := strings.TrimSpace(info.Title)
+	title := strings.TrimSpace(info.Title)
+	summary := strings.TrimSpace(info.Summary)
+	preview := strings.TrimSpace(info.LastPreview)
+
+	label := title
 	if label == "" {
-		label = strings.TrimSpace(info.Summary)
+		label = preview
 	}
 	if label == "" {
-		label = strings.TrimSpace(info.LastPreview)
+		label = summary
 	}
 	if label == "" {
 		label = info.ID
 	}
-	label = truncateRunes(label, 72)
+	labelSource := label
+	label = truncateRunes(label, 64)
 
 	var detailParts []string
-	if summary := strings.TrimSpace(info.Summary); summary != "" && summary != label {
-		detailParts = append(detailParts, truncateRunes(summary, 72))
+	if title != "" && preview != "" && preview != labelSource {
+		detailParts = append(detailParts, truncateRunes(preview, 64))
 	}
-	if age := humanizeSessionAge(time.Since(info.UpdatedAt)); age != "" {
+	if model := strings.TrimSpace(info.Model); model != "" {
+		detailParts = append(detailParts, model)
+	}
+	if branch := strings.TrimSpace(info.Branch); branch != "" {
+		detailParts = append(detailParts, branch)
+	}
+	if age := sessionAgeLabel(info.UpdatedAt); age != "" {
 		detailParts = append(detailParts, age)
 	}
 	detail := strings.Join(detailParts, " • ")
@@ -246,6 +265,13 @@ func sessionPickerLine(cwd string, info storage.SessionInfo) (string, string) {
 		detail = filepath.Base(cwd)
 	}
 	return label, detail
+}
+
+func sessionAgeLabel(updatedAt time.Time) string {
+	if updatedAt.IsZero() {
+		return ""
+	}
+	return humanizeSessionAge(time.Since(updatedAt))
 }
 
 func humanizeSessionAge(d time.Duration) string {

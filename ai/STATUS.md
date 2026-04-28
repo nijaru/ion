@@ -39,7 +39,8 @@ Fast, lightweight terminal coding agent.
 - Startup header readability improved: the trust notice now says `Workspace: not trusted. READ mode active. Run /trust to enable edits.`, tool metadata is labeled as `Tools: N registered`, and startup metadata uses readable gray/warning/ok color rather than faint-only styling.
 - `/help` readability improved: help output now starts on its own separated block, section headers stay highlighted, command/key labels are styled separately, and descriptions remain normal contrast.
 - Tab completion now covers both slash commands and current-token `@file` references. File completion stays workspace-bound, completes directories with a trailing slash, files with a trailing space, and rejects `..` escapes.
-- Preferred live-smoke order: use Fedora local-api first when available (`http://fedora:8080/v1`, `qwen3.6:27b`). If Fedora is down and live model evidence is needed, use OpenRouter with `deepseek/deepseek-v4-flash` for cheap smoke or `deepseek/deepseek-v4-pro` only when the heavier model is useful.
+- Session browser polish started: `/resume` rows now show session count, a search hint, stable title/preview labels, and useful preview/model/branch/age metadata without bogus ages for missing timestamps.
+- Preferred live-smoke order: use Fedora local-api first when available (`http://fedora:8080/v1`, `qwen3.6:27b`). Fedora is temporarily down by user request; while it is down, use OpenRouter cheap/free models for live checks: `minimax/minimax-m2.5:free` when available, `deepseek/deepseek-v4-flash` for cheap checks, or `deepseek/deepseek-v4-pro` only when a stronger separate-provider check is useful.
 
 ## Next Action
 
@@ -54,6 +55,7 @@ Do not run another broad `ai/` pass by default. The next work is source review a
 ## Active Tasks
 
 - `tk-mmcs` — P1 core parity plan and task queue hygiene.
+- `tk-ltt1` — P2 session browser and resume polish.
 - `tk-xrgc` — P3 AI context dedupe/reorganization; active only because stale docs were blocking agent focus.
 
 Everything else is downstream of the solo native loop.
