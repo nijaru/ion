@@ -791,7 +791,8 @@ func (b *Backend) translateEvents(ctx context.Context, evCh <-chan session.Event
 			b.events <- ionsession.TurnStarted{}
 			b.events <- ionsession.StatusChanged{Status: "Thinking..."}
 		case session.TurnCompleted:
-			if data, ok, err := ev.TurnCompletedData(); err == nil && ok && data.Error != "" {
+			if data, ok, err := ev.TurnCompletedData(); err == nil && ok &&
+				data.Error != "" && data.Error != context.Canceled.Error() {
 				b.events <- ionsession.Error{Err: fmt.Errorf("%s", data.Error)}
 				b.events <- ionsession.TurnFinished{}
 				continue

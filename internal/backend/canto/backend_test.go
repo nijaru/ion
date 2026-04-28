@@ -355,6 +355,31 @@ func TestTranslateEventsTurnCompletedDoesNotEmitEmptyAssistant(t *testing.T) {
 	}
 }
 
+func TestTranslateEventsSuppressesCanceledTerminalError(t *testing.T) {
+	b := New()
+	events := make(chan csession.Event, 1)
+	events <- csession.NewTurnCompletedEvent("session-id", csession.TurnCompletedData{
+		Error: context.Canceled.Error(),
+	})
+	close(events)
+
+	b.translateEvents(t.Context(), events)
+
+	ev1 := receiveEvent(t, b.Events())
+	if _, ok := ev1.(ionsession.TurnFinished); !ok {
+		t.Fatalf("first event = %T, want TurnFinished", ev1)
+	}
+
+	ev2 := receiveEvent(t, b.Events())
+	status, ok := ev2.(ionsession.StatusChanged)
+	if !ok {
+		t.Fatalf("second event = %T, want StatusChanged", ev2)
+	}
+	if status.Status != "Ready" {
+		t.Fatalf("status = %q, want Ready", status.Status)
+	}
+}
+
 func TestTranslateEventsPreservesToolUseID(t *testing.T) {
 	b := New()
 	events := make(chan csession.Event, 2)
