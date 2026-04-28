@@ -291,6 +291,9 @@ func TestResolveStartupConfig(t *testing.T) {
 		if err := resolveStartupConfig(cfg); err != errNoProviderConfigured {
 			t.Fatalf("resolveStartupConfig error = %v, want %v", err, errNoProviderConfigured)
 		}
+		if strings.Contains(errNoProviderConfigured.Error(), "Ctrl+") {
+			t.Fatalf("provider error mentions stale hotkey: %v", errNoProviderConfigured)
+		}
 	})
 
 	t.Run("subscription provider requires model", func(t *testing.T) {
@@ -304,6 +307,9 @@ func TestResolveStartupConfig(t *testing.T) {
 		cfg := &config.Config{Provider: "anthropic"}
 		if err := resolveStartupConfig(cfg); err != errNoModelConfigured {
 			t.Fatalf("resolveStartupConfig error = %v, want %v", err, errNoModelConfigured)
+		}
+		if strings.Contains(errNoModelConfigured.Error(), "Ctrl+") {
+			t.Fatalf("model error mentions stale hotkey: %v", errNoModelConfigured)
 		}
 	})
 
