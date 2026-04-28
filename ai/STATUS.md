@@ -46,6 +46,7 @@ Current implementation posture:
 - CantoBackend now clears active-turn state before emitting `TurnFinished` from Canto `TurnCompleted`, so queued follow-ups and immediate programmatic follow-up turns do not race the `SendStream` goroutine.
 - Canto-backed storage now rejects non-empty model-visible `storage.User`, `storage.Agent`, `storage.ToolUse`, and `storage.ToolResult` appends. Canto remains the only writer for provider-visible history; Ion storage appends are limited to UI-local/status/usage/routing display state. Compatibility empty-agent appends still no-op before lazy materialization.
 - TUI shutdown now uses the same explicit close path as print mode, closing the agent session, storage session, and store after the Bubble Tea program exits so runtime/session handles settle consistently outside one-shot CLI runs.
+- Slash command lifecycle now has a real Canto-store regression asserting `/help` before the first model turn does not materialize a lazy session or create a recent session row.
 - Live Fedora/local-api smoke is currently deferred because Fedora is off. OpenRouter `deepseek/deepseek-v4-flash` smoke proved first-turn submit/stream/approval/bash-tool/tool-result/assistant-commit/persist/reopen, but the resumed follow-up hit provider `402 Payment Required`; `deepseek/deepseek-v4-pro` one-shot print also hit 402. Treat full live follow-up validation as provider/account-blocked until Fedora is back or another funded live model is selected.
 
 Next core-parity work:
