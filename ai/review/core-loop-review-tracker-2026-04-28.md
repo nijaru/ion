@@ -53,7 +53,7 @@ Use this as the scan-first checklist for `tk-s6p4`. `Reviewed` means the area ha
 | App queued follow-up lifecycle | Reviewed/refactored | Queued follow-up after `TurnFinished` covered. | Keep in regression set while reviewing command paths. |
 | Provider-history shape after tool turns | Reviewed/refactored | Resumed tool follow-up asserts assistant tool-call before matching tool-result, no empty assistant rows, and durable prior/new user turns. | Covers the provider-history failure class that previously broke Fedora/local-api. |
 | Trust/mode/approval UX | Partially reviewed | Basic mode/trust paths covered; `CoreLoopOnly` keeps advanced surfaces down. | Secondary to stable submit/stream/tool/cancel/error/persist/replay. |
-| Live local-api/OpenRouter validation | Blocked/partial | Fedora off; OpenRouter DeepSeek hit 402, Minimax hit 429. | Deterministic tests are the proof path until a live provider is available. |
+| Live local-api/OpenRouter validation | Blocked/partial | Fedora off; OpenRouter DeepSeek hit 402; Minimax free model entered retry/response wait and hit the 90s smoke deadline. | Deterministic tests are the proof path until a live provider is available. |
 
 ## Current Gaps
 
@@ -63,5 +63,5 @@ Use this as the scan-first checklist for `tk-s6p4`. `Reviewed` means the area ha
 ## Latest Verification
 
 - `go test ./... -count=1`
-- `go test -race ./cmd/ion ./internal/app -count=1`
-- `go test -race ./internal/backend/canto` focused submit/cancel/provider-error paths after the single-active-turn guard.
+- `go test -race ./cmd/ion ./internal/app ./internal/backend/canto -count=1`
+- `ION_LIVE_SMOKE=1 ION_SMOKE_PROVIDER=openrouter ION_SMOKE_MODEL='minimax/minimax-m2.5:free' go test ./cmd/ion -run TestLiveSmokeTurnAndToolCall -count=1 -v` opened runtime and started the turn, then timed out at the 90s live-smoke deadline after provider retry status.

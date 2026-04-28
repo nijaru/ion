@@ -26,7 +26,7 @@ Fast, lightweight terminal coding agent.
 - Slash commands now stay local during active turns instead of being queued as model follow-up prompts.
 - Provider-history shape coverage now asserts display-only Ion events are excluded from provider requests and resumed tool results follow matching assistant tool calls.
 - Deterministic tests and race-focused backend tests have covered several previously broken terminal, cancel, duplicate-watch, and follow-up-turn paths.
-- Live validation is currently provider/environment limited: Fedora is off and OpenRouter free/DeepSeek paths have hit provider/account limits. Deterministic tests remain the active proof path until a live provider is intentionally available.
+- Live validation is currently provider/environment limited: Fedora is off, OpenRouter DeepSeek hit 402, and OpenRouter Minimax free opened the runtime but timed out at the live-smoke deadline after provider retry status. Deterministic tests remain the active proof path until a live provider is intentionally available.
 
 ## Next Action
 
