@@ -16,6 +16,7 @@ type printSession struct {
 	mode        session.Mode
 	autoApprove bool
 	approved    bool
+	cancelled   int
 }
 
 func (s *printSession) Open(ctx context.Context) error              { return nil }
@@ -23,7 +24,10 @@ func (s *printSession) Resume(ctx context.Context, id string) error { return nil
 func (s *printSession) SubmitTurn(ctx context.Context, turn string) error {
 	return nil
 }
-func (s *printSession) CancelTurn(ctx context.Context) error { return nil }
+func (s *printSession) CancelTurn(ctx context.Context) error {
+	s.cancelled++
+	return nil
+}
 func (s *printSession) Approve(ctx context.Context, requestID string, approved bool) error {
 	s.approved = approved
 	return nil
@@ -160,6 +164,9 @@ func TestPrintModeRejectsApprovalWhenNotAutoApproved(t *testing.T) {
 	if sess.approved {
 		t.Fatal("approval was sent despite approveRequests=false")
 	}
+	if sess.cancelled != 1 {
+		t.Fatalf("cancelled = %d, want 1", sess.cancelled)
+	}
 }
 
 func TestPrintModeApprovesWhenAutoApproved(t *testing.T) {
@@ -210,6 +217,20 @@ func TestPrintModeWritesJSONOutput(t *testing.T) {
 		result.InputTokens != 12 || result.OutputTokens != 3 || result.Cost != 0.25 ||
 		len(result.ToolCalls) != 1 || result.ToolCalls[0] != "read" {
 		t.Fatalf("json result = %#v", result)
+	}
+}
+
+func TestPrintModeCancelsTurnOnTimeout(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	sess := &printSession{events: make(chan session.Event)}
+
+	_, err := runPromptTurn(ctx, sess, "hello", false)
+	if err == nil || !strings.Contains(err.Error(), "context canceled") {
+		t.Fatalf("runPromptTurn error = %v, want context canceled", err)
+	}
+	if sess.cancelled != 1 {
+		t.Fatalf("cancelled = %d, want 1", sess.cancelled)
 	}
 }
 

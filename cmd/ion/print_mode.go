@@ -100,9 +100,11 @@ func runPromptTurn(
 			switch msg := ev.(type) {
 			case session.ApprovalRequest:
 				if !approveRequests {
+					cancelPrintTurn(agent)
 					return printResult{}, fmt.Errorf("approval required for %s", msg.ToolName)
 				}
 				if err := agent.Approve(ctx, msg.RequestID, true); err != nil {
+					cancelPrintTurn(agent)
 					return printResult{}, fmt.Errorf("approve %s: %w", msg.ToolName, err)
 				}
 			case session.ToolCallStarted:
@@ -128,9 +130,16 @@ func runPromptTurn(
 				return result, nil
 			}
 		case <-ctx.Done():
+			cancelPrintTurn(agent)
 			return printResult{}, ctx.Err()
 		}
 	}
+}
+
+func cancelPrintTurn(agent session.AgentSession) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_ = agent.CancelTurn(ctx)
 }
 
 func writePrintResult(w io.Writer, result printResult, output string) error {
