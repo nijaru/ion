@@ -42,6 +42,42 @@ func resolveStartupConfig(cfg *config.Config) error {
 	return nil
 }
 
+func applyCLIConfigOverrides(cfg *config.Config, providerOverride, modelOverride, thinkingOverride string) {
+	if cfg == nil {
+		return
+	}
+	if strings.TrimSpace(providerOverride) != "" {
+		cfg.Provider = providers.ResolveID(providerOverride)
+	}
+	if model := strings.TrimSpace(modelOverride); model != "" {
+		if cfg.Provider == "" {
+			if provider, rest, ok := strings.Cut(model, "/"); ok {
+				resolved := providers.ResolveID(provider)
+				if _, exists := providers.Lookup(resolved); exists {
+					cfg.Provider = resolved
+					cfg.Model = strings.TrimSpace(rest)
+					model = ""
+				}
+			}
+		}
+		if model != "" {
+			cfg.Model = model
+		}
+	}
+	if strings.TrimSpace(thinkingOverride) != "" {
+		cfg.ReasoningEffort = thinkingOverride
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
 func backendForProvider(provider string) (backend.Backend, error) {
 	provider = providers.ResolveID(provider)
 	if provider == "" {

@@ -32,12 +32,13 @@ Fast, lightweight terminal coding agent.
 - Manual `go run ./... --continue` replay now shows the expected header/resumed-marker/transcript/progress ordering and spacing; terminal control artifacts in the harness remain non-product noise.
 - Final gate bundle passed: `go test -race ./cmd/ion ./internal/app ./internal/backend/canto ./internal/backend/canto/tools -count=1`, Fedora endpoint discovery for `qwen3.6:27b`, and live smoke against `local-api` / `qwen3.6:27b`.
 - CLI parity started under `tk-mmcs`: `-c` now aliases `--continue`, and `-r` now aliases `--resume` with the same picker/print-mode rules as the long form. Focused CLI tests and `go test ./... -count=1` are green.
+- Scriptable model selection now has non-persistent `--model`/`-m` and `--thinking` overrides. Full tests and a live Fedora/local-api print smoke with explicit provider/model/thinking flags passed.
 
 ## Next Action
 
 Continue `tk-mmcs` as the parity/table-stakes track:
 
-1. Continue auditing the current CLI surface against Pi/Codex conventions: `-p`, stdin, JSON, resume/continue, exit codes, and scriptability.
+1. Continue auditing the CLI surface against Pi/Codex conventions: exit codes, resume/continue print behavior, and JSON shape.
 2. Decide the next small slice for `CoreLoopOnly`: keep it on briefly, or reopen only the table-stakes surfaces needed for CLI/session UX.
 3. Keep ACP, privacy, subagents, skills, routing, and advanced thinking behind explicit later tasks.
 

@@ -38,6 +38,9 @@ func main() {
 	resumeFlag := flag.String("resume", "", "Resume a specific session by ID")
 	resumeShortFlag := flag.String("r", "", "Resume a specific session by ID")
 	providerFlag := flag.String("provider", "", "Provider to use")
+	modelFlag := flag.String("model", "", "Model to use")
+	modelShortFlag := flag.String("m", "", "Model to use")
+	thinkingFlag := flag.String("thinking", "", "Thinking effort: auto, off, minimal, low, medium, high, xhigh")
 	modeFlag := flag.String("mode", "", "Permission mode: read, edit, or auto")
 	yoloFlag := flag.Bool("yolo", false, "Start in AUTO mode (alias for --mode auto)")
 	printFlag := flag.Bool("print", false, "Print response and exit (use with --prompt or stdin)")
@@ -59,9 +62,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if *providerFlag != "" {
-		cfg.Provider = *providerFlag
-	}
+	applyCLIConfigOverrides(cfg, *providerFlag, firstNonEmpty(*modelFlag, *modelShortFlag), *thinkingFlag)
 	shutdownTelemetry := func(context.Context) error { return nil }
 	if !features.CoreLoopOnly {
 		shutdownTelemetry, err = telemetry.Setup(context.Background(), cfg)
@@ -333,7 +334,7 @@ func ionFlagName(arg string) (string, bool, bool) {
 
 func ionKnownFlag(name string) bool {
 	switch name {
-	case "continue", "c", "resume", "r", "provider", "mode", "yolo", "print", "prompt", "p", "output", "json", "timeout":
+	case "continue", "c", "resume", "r", "provider", "model", "m", "thinking", "mode", "yolo", "print", "prompt", "p", "output", "json", "timeout":
 		return true
 	default:
 		return false
@@ -342,7 +343,7 @@ func ionKnownFlag(name string) bool {
 
 func ionFlagNeedsValue(name string) bool {
 	switch name {
-	case "resume", "r", "provider", "mode", "prompt", "output", "timeout":
+	case "resume", "r", "provider", "model", "m", "thinking", "mode", "prompt", "output", "timeout":
 		return true
 	default:
 		return false
