@@ -1915,6 +1915,39 @@ func TestSubmitTextDoesNotPersistSlashCommand(t *testing.T) {
 	}
 }
 
+func TestSlashCommandBeforeTurnDoesNotMaterializeLazySession(t *testing.T) {
+	store, err := storage.NewCantoStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	lazy := storage.NewLazySession(store, "/tmp/test", "openai/model-a", "main")
+	model := New(
+		stubBackend{sess: &stubSession{events: make(chan session.Event)}},
+		lazy,
+		store,
+		"/tmp/test",
+		"main",
+		"dev",
+		nil,
+	)
+
+	updated, cmd := model.submitText("/help")
+	model = updated
+	if cmd == nil {
+		t.Fatal("expected /help command")
+	}
+	if storage.IsMaterialized(lazy) {
+		t.Fatal("slash command materialized lazy session")
+	}
+	recent, err := store.GetRecentSession(context.Background(), "/tmp/test")
+	if err != nil {
+		t.Fatalf("recent session: %v", err)
+	}
+	if recent != nil {
+		t.Fatalf("recent session after slash command = %#v, want nil", recent)
+	}
+}
+
 func TestSubmitTextDoesNotPersistModelVisibleTranscript(t *testing.T) {
 	storageSess := &stubStorageSession{}
 	sess := &stubSession{events: make(chan session.Event)}
