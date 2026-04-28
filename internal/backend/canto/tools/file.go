@@ -94,6 +94,12 @@ func (r *Read) Execute(ctx context.Context, args string) (string, error) {
 	if err := json.Unmarshal([]byte(args), &input); err != nil {
 		return "", err
 	}
+	if input.Offset < 0 {
+		return "", fmt.Errorf("offset must be non-negative")
+	}
+	if input.Limit < 0 {
+		return "", fmt.Errorf("limit must be non-negative")
+	}
 
 	absPath, err := r.resolvePath(input.FilePath)
 	if err != nil {
@@ -219,6 +225,9 @@ func (e *Edit) Execute(ctx context.Context, args string) (string, error) {
 	if err := json.Unmarshal([]byte(args), &input); err != nil {
 		return "", err
 	}
+	if err := validateEditStrings(input.OldString, input.NewString); err != nil {
+		return "", err
+	}
 
 	absPath, err := e.resolvePath(input.FilePath)
 	if err != nil {
@@ -317,11 +326,17 @@ func (m *MultiEdit) Execute(ctx context.Context, args string) (string, error) {
 	if err := json.Unmarshal([]byte(args), &input); err != nil {
 		return "", err
 	}
+	if len(input.Edits) == 0 {
+		return "", fmt.Errorf("edits must contain at least one operation")
+	}
 
 	// First pass: validate all edits and track original content
 	contents := make(map[string]string)
 	originals := make(map[string]string)
 	for _, edit := range input.Edits {
+		if err := validateEditStrings(edit.OldString, edit.NewString); err != nil {
+			return "", fmt.Errorf("%s: %w", edit.FilePath, err)
+		}
 		absPath, err := m.resolvePath(edit.FilePath)
 		if err != nil {
 			return "", err
@@ -410,6 +425,16 @@ func (m *MultiEdit) Execute(ctx context.Context, args string) (string, error) {
 	return appendCheckpointID(fmt.Sprintf("Successfully applied %d edit(s) across %d file(s)\n\n%s", len(input.Edits), len(contents), diffs.String()), checkpointID), nil
 }
 
+func validateEditStrings(oldString, newString string) error {
+	if oldString == "" {
+		return fmt.Errorf("old_string must not be empty")
+	}
+	if oldString == newString {
+		return fmt.Errorf("new_string must differ from old_string")
+	}
+	return nil
+}
+
 func appendCheckpointID(message, id string) string {
 	if id == "" {
 		return message
@@ -442,8 +467,9 @@ func (l *List) Execute(ctx context.Context, args string) (string, error) {
 	var input struct {
 		Path string `json:"path"`
 	}
-	// Default path to "." if not provided or unmarshal fails
-	_ = json.Unmarshal([]byte(args), &input)
+	if err := json.Unmarshal([]byte(args), &input); err != nil {
+		return "", err
+	}
 	if input.Path == "" {
 		input.Path = "."
 	}

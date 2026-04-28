@@ -15,6 +15,26 @@ Pi is the simple core-loop floor. Codex is the richer open-source CLI/session re
 
 Do not duplicate the tracker matrix here. Update this file only when gates, priorities, or ownership change.
 
+## Operating Rule
+
+Do not treat the remaining work as independent bug slices. `tk-s6p4` is now a comprehensive audit and refactor pass. A fix is allowed only after the relevant file group has been read, its core-loop invariants are written in the tracker, and the codepath has been classified as kept, disabled, or deferred.
+
+Do not collapse Canto into Ion as a development shortcut. Keep the repo split, but treat Ion as Canto's acceptance test until the minimal native loop is stable. Canto public-framework expansion is deferred; Canto changes during this pass should come from concrete Ion-proven framework needs.
+
+## Priority Bands
+
+These are rough sequencing guidelines, not exact gates. Move work earlier only when it protects the core loop from corruption, wedging, or unusable context growth.
+
+| Band | Meaning | Examples | Status |
+| --- | --- | --- | --- |
+| Core | Minimal loop plus stable shell. | submit, stream, core tools, cancel, provider error, retry status, persistence correctness, `-p`, basic TUI turn display. | Active. |
+| Reliability table stakes | Features that keep the loop usable in real sessions. | minimal continue/resume correctness, compaction/overflow recovery, durable replay after long sessions. | Include when they protect core reliability. |
+| Product table stakes | Common agent UX after the loop is sane. | robust resume UX, slash autocomplete, basic permission UX, transcript inspection. | Next. |
+| Polish | Workflow and presentation improvements. | provider/model picker polish, launch header, thinking picker, tree/branching, external editor, richer status/help. | Deferred. |
+| Experimental/SOTA | Advanced or secondary architecture. | subagents, skills, ACP/subscription bridges, routing/cascades, privacy pipeline, optimizer loops, swarm mode. | Isolated from native P1 unless directly blocking. |
+
+`continue`, `resume`, and compaction straddle bands: minimal correctness is part of reliability; polished UX and controls wait.
+
 ## Gates
 
 ### Gate 0: Queue And Context Hygiene
@@ -39,18 +59,31 @@ Exit criteria:
 - Canto write paths do not create future whitespace-only assistant rows.
 - Resumed sessions can accept a new user turn after a tool turn without provider-history errors.
 
-### Gate 2: Native Core Agent Loop
+### Gate 1.5: Nonessential Path Freeze
+
+Status: active
+
+Exit criteria:
+
+- `features.CoreLoopOnly` is verified against actual call sites, not assumed.
+- ACP, MCP, memory/workflows, subagents, reflexion, model-routing experiments, privacy expansion, skills, branching, and advanced thinking expansion are disabled, hidden, or bypassed unless needed for the basic native loop. Compaction stays in the reliability review when it protects context survival.
+- Remaining active paths are named explicitly: CLI/TUI startup, print mode, CantoBackend, Canto session/history/projection, Canto agent/tool loop, core tools, display replay, cancel/error/retry terminal states, and durable session lifecycle.
+- Any active nonessential path is either removed from the core path or documented as a blocker in `tk-s6p4`.
+
+### Gate 2: Native Core Agent Loop File Audit
 
 Status: active (`tk-s6p4`)
 
 Exit criteria:
 
+- Canto session, runtime, agent, prompt, provider, tool, and minimal governor files in the tracker have been reviewed file by file.
+- Ion command/startup, print, CantoBackend, storage, app loop, renderer, core tools, config boundary, and smoke harness files in the tracker have been reviewed file by file.
 - User, assistant, tool, and terminal events are ordered and durable.
 - Tool calls preserve deterministic approval/finalization order.
 - Tool failures become durable tool-result/error entries.
-- Cancellation, retry-until-cancelled, budget stops, immediate provider errors, and provider-limit errors leave sessions resumable.
+- Cancellation, retry-until-cancelled, immediate provider errors, and provider-limit errors leave sessions resumable.
 - `ion -p` and `--resume <id> -p` are reliable enough for automated smoke tests.
-- Deterministic tests cover the contract; a live local-api smoke is run when a live provider is intentionally available.
+- Deterministic tests cover the contract; a live local-api or funded-provider smoke is run when a live provider is intentionally available.
 
 ### Gate 3: TUI Baseline
 
@@ -100,9 +133,11 @@ Exit criteria:
 
 ## Immediate Work Order
 
-1. Continue `tk-s6p4` from the core-loop review tracker.
-2. Audit startup/resume/continue materialization with real stores.
-3. Audit local command and runtime-switch behavior during active turns.
-4. Run a provider-history shape pass after compaction and tool turns.
-5. Extend deterministic tests for each concrete gap.
-6. Re-run full tests, then use a live provider smoke only when a suitable provider is available.
+1. Replace optimistic review status with a real audit matrix in [review/core-loop-review-tracker-2026-04-28.md](review/core-loop-review-tracker-2026-04-28.md).
+2. Verify the `CoreLoopOnly` freeze against every referenced call site and patch it if any P2/P3 path still mutates prompt, transcript, session, provider, or runtime state.
+3. Audit Canto first, file group by file group: session log/projection, runtime queue/runner, agent loop/stream/tool settlement, prompt/provider history, then minimal retry/compaction surfaces.
+4. Audit Ion second, file group by file group: CLI/session lifecycle, CantoBackend event translation, storage/replay, app input/command/event loop, display renderer, core tools, and smoke harness.
+5. Implement only findings that fall out of that audit, with deterministic tests before moving to the next group.
+6. Re-run full/race tests, then use live smoke only as final evidence rather than as the first diagnostic tool.
+
+No more broad `ai/` corpus passes by default. Use the existing context docs as an index, then read source. Reopen `ai/` only for a specific subsystem decision or when docs conflict with code.

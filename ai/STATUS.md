@@ -3,7 +3,7 @@
 Fast, lightweight terminal coding agent.
 
 **Phase:** P1 native core-loop stabilization  
-**Focus:** Review and harden the native Ion TUI/print CLI -> CantoBackend -> Canto agent/session -> provider loop.  
+**Focus:** Comprehensive file-by-file audit of the native Ion TUI/print CLI -> CantoBackend -> Canto agent/session -> provider loop.  
 **Active blocker:** `tk-s6p4` — core loop design/refactor and deterministic/live smoke matrix.  
 **Queue hygiene:** `tk-mmcs` keeps Pi/Codex/Claude parity planning aligned; `tk-xrgc` keeps `ai/` readable.
 **Updated:** 2026-04-28
@@ -14,26 +14,27 @@ Fast, lightweight terminal coding agent.
 - Ion is running with `features.CoreLoopOnly` while `tk-s6p4` is active. Advanced surfaces are hidden or blocked so the P1 loop can be debugged without unrelated prompt/session mutation.
 - Canto owns provider-visible transcript, effective history, agent/tool execution, retry, queueing, terminal events, and compaction primitives.
 - Ion owns input classification, TUI/CLI lifecycle, display projection, local status/error rows, trust/mode UX, and provider/config selection.
+- Keep Canto and Ion split, but treat Ion as Canto's acceptance test during stabilization. Canto public-framework expansion is deferred until Ion's native minimal loop is stable.
 - The detailed reviewed/refactored/pending matrix is tracked in [review/core-loop-review-tracker-2026-04-28.md](review/core-loop-review-tracker-2026-04-28.md). Do not duplicate that matrix here.
 
-## Verified Recently
+## Recent Evidence, Not Completion
 
-- Canto-side invalid assistant projection/write validation has been imported into Ion.
-- Ion storage rejects non-empty model-visible user/assistant/tool appends; Canto is the single provider-history writer.
-- Replay/live transcript rendering share spacing and routine successful tool output compacts as a UI transform only.
-- Print CLI preflight and settlement are covered enough to act as the automation surface.
-- Startup/resume/continue selection now has real-store coverage for fresh lazy startup, invalid-provider startup, and explicit resume when the active provider config is invalid.
-- Slash commands now stay local during active turns instead of being queued as model follow-up prompts.
-- Provider-history shape coverage now asserts display-only Ion events are excluded from provider requests and resumed tool results follow matching assistant tool calls.
-- Deterministic tests and race-focused backend tests have covered several previously broken terminal, cancel, duplicate-watch, and follow-up-turn paths.
-- Live validation is currently provider/environment limited: Fedora is off, OpenRouter DeepSeek hit 402, and OpenRouter Minimax free opened the runtime but timed out at the live-smoke deadline after provider retry status. Deterministic tests remain the active proof path until a live provider is intentionally available.
+- Canto has two pushed session-history fixes in the active Ion dependency: invalid empty assistant writes are rejected at write boundaries, and raw `LastAssistantMessage` now skips legacy invalid assistant rows during turn finalization.
+- Ion has reviewed/patched native-path slices for feature freeze enforcement, CLI startup/resume/print lifecycle, backend event translation, storage/replay projection, app turn lifecycle, transcript replay rendering, core tools, provider startup state, and deferred-surface isolation.
+- Deterministic gates are green after importing Canto `d37beda`: focused native package tests plus `go test ./...`.
+- Fedora live smoke is green against `local-api` / `qwen3.6:27b`: tool call, approval, persistence, resume, and follow-up turn all completed without provider-history errors.
+- This is meaningful progress, not completion. Canto runtime/agent/tool internals still need the remaining C3-C7 file-by-file review before `tk-s6p4` can close.
 
 ## Next Action
 
-Continue `tk-s6p4` from the tracker, in this order:
+Continue `tk-s6p4` as a comprehensive audit, not as bug slices:
 
-1. Run race-focused checks for the completed native-loop slices.
-2. Reassess whether `tk-s6p4` can close or needs a final live smoke when a funded/local provider is available.
+1. Finish Canto C3-C7 audit: runtime queue/runner, agent streaming/non-streaming exits, tool execution lifecycle, provider-visible prompt construction, retry/compaction surfaces.
+2. Patch any Canto findings upstream first, push, and import the exact revision into Ion.
+3. Re-run Ion deterministic gates and Fedora live smoke after each Canto import or native-loop patch.
+4. Only after C3-C7 are reviewed should the work shift to the deferred TUI spacing/picker/help polish.
+
+Do not run another broad `ai/` pass by default. The next work is source review and targeted docs only when the code review exposes a design question.
 
 ## Active Tasks
 

@@ -63,12 +63,12 @@ func (v *Verify) Execute(ctx context.Context, args string) (string, error) {
 		return "", err
 	}
 
-	// Ensure process group is killed on exit to prevent orphan leaks
-	defer func() {
+	stopKill := context.AfterFunc(ctx, func() {
 		if cmd.Process != nil {
 			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		}
-	}()
+	})
+	defer stopKill()
 
 	var output strings.Builder
 	var mu sync.Mutex

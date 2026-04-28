@@ -9,6 +9,7 @@ import (
 	"github.com/nijaru/ion/internal/backend/acp"
 	"github.com/nijaru/ion/internal/backend/canto"
 	"github.com/nijaru/ion/internal/config"
+	"github.com/nijaru/ion/internal/features"
 	"github.com/nijaru/ion/internal/providers"
 )
 
@@ -52,6 +53,9 @@ func backendForProvider(provider string) (backend.Backend, error) {
 		return nil, fmt.Errorf("unsupported provider %q", provider)
 	}
 	if def.Runtime == providers.RuntimeACP {
+		if features.CoreLoopOnly {
+			return nil, fmt.Errorf("%s", features.Disabled("ACP providers"))
+		}
 		return acp.New(), nil
 	}
 	if def.Runtime == providers.RuntimeNative {

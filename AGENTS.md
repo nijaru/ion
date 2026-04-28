@@ -16,6 +16,15 @@ ion is a specialized coding application built on top of the **canto** framework.
 | **2** | **Logic** | llm (Provider interface, Token counting, Cost) |
 | **1** | **Transport** | http (API clients, SSE, JSON-RPC) |
 
+Current stabilization policy:
+
+- Keep the Canto/Ion split. Do not permanently merge Canto into Ion as a shortcut.
+- Treat Ion as the acceptance test for Canto until Ion's native minimal agent loop is stable.
+- Do not expand Canto as a public/general framework while Ion exposes core-loop bugs.
+- Fix framework-owned defects in Canto first, then import the exact Canto revision into Ion.
+- Prefer targeted rewrites of broken modules over bug-slice patching or whole-repo rewrites.
+- If a module acts as a second agent loop, second transcript writer, hidden session materializer, or unbounded feature host inside the native path, redesign that module from the desired final shape.
+
 ## What ion is
 
 A standalone terminal coding agent — same category as Claude Code, Codex, pi. Talks directly to LLM APIs, manages its own tools/memory/sessions. **Not a wrapper. Not a bridge.**
@@ -75,12 +84,16 @@ tk done <id>
 - Treat `archive/rust/` as read-only reference unless explicitly migrating something out of it.
 - Do not let archived Rust docs drive new design decisions on `main`.
 - Core agent loop stability is the first product priority. Before expanding SOTA features, model routing, subagents, workflows, evals, memory, or provider experiments, make sure the submit -> stream -> tool -> approval -> cancel -> error -> persist/replay loop is reliable and covered by tests.
+- Work from the high-level core-loop design down to code. Do not keep fixing isolated bug slices unless the file group has been reviewed against the active audit plan.
+- Use priority bands as guidance, not rigid tiers: core loop first; reliability table stakes such as minimal resume/continue and compaction when they protect context survival; product table stakes next; polish later; experimental/SOTA ideas last.
 - Advanced ideas from pi, Claude Code, Codex, OpenCode, Cursor, Droid, Letta, and similar agents are references, not mandates. Adopt them only when they simplify Ion or clearly improve the core coding workflow.
 - For core-loop and TUI planning/review, compare against local references when useful: `/Users/nick/github/badlogic/pi-mono` as the simple reliable baseline, `/Users/nick/github/openai/codex` as the richer open-source CLI/session/tooling baseline, and Claude Code / Claude-like implementations as product references. Use references to clarify behavior, not to copy features wholesale.
 - Prefer simple, inspectable UX over hidden automation. Pi's success with a small clever surface is an explicit design constraint, but Ion may add SOTA capabilities when they preserve that simplicity.
 - Use `tk` for all multi-step work.
 - When a user reports a bug, create or update a `tk` task immediately.
 - If a fix requires touching canto, treat `github.com/nijaru/canto` as the source of truth. Keep framework fixes upstreamable and do not depend on a sibling checkout or bake ion-specific assumptions into canto.
+- During core-loop stabilization, develop Canto and Ion as tightly coupled local workstreams: audit/fix Canto-owned contracts in `../canto`, run Canto tests, commit/push coherent Canto fixes when requested/appropriate, then update Ion's Canto dependency and re-run Ion tests.
+- Do not do another broad `ai/` sweep unless a specific subsystem points to stale or conflicting context. Use `ai/STATUS.md`, `ai/PLAN.md`, and the active core-loop reset/audit docs, then move to source review.
 - Ion is `v0.0.0` unstable. There are no backwards guarantees.
 - Do not add fallback, migration, or compatibility paths unless the user explicitly asks for them.
 - Do not commit unless the user asks for a commit. Keep coherent changes staged or unstaged for review instead of committing by default.

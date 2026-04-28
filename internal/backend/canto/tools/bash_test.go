@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestBash_Spec(t *testing.T) {
@@ -15,6 +16,22 @@ func TestBash_Spec(t *testing.T) {
 	}
 	if spec.Parameters == nil {
 		t.Error("expected parameters, got nil")
+	}
+}
+
+func TestBashCancellationKillsProcessGroup(t *testing.T) {
+	tmpDir := t.TempDir()
+	b := NewBash(tmpDir)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := b.Execute(ctx, `{"command":"sleep 10 & wait"}`)
+	if err == nil {
+		t.Fatal("expected canceled command to fail")
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("canceled command took %s, want prompt process-group cleanup", elapsed)
 	}
 }
 

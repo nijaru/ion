@@ -254,8 +254,10 @@ func (b *Backend) Open(ctx context.Context) error {
 
 	workspaceNamespace := memory.Namespace{Scope: memory.ScopeWorkspace, ID: cwd}
 	requestProcessors := []prompt.RequestProcessor{
-		NewFileTagProcessor(cwd),
 		reasoningEffortProcessor(b.cfg),
+	}
+	if !features.CoreLoopOnly {
+		requestProcessors = append(requestProcessors, NewFileTagProcessor(cwd))
 	}
 
 	if !features.CoreLoopOnly {
@@ -408,6 +410,8 @@ func policyHook(b *Backend) hook.Handler {
 			case backend.PolicyAsk:
 				id := ionsession.ShortID()
 				description := fmt.Sprintf("Tool: %s\nArgs: %s\n\n%s", toolName, args, reason)
+				ch := b.approver.Request(id)
+				defer b.approver.Remove(id)
 
 				b.events <- ionsession.ApprovalRequest{
 					RequestID:   id,
@@ -416,8 +420,6 @@ func policyHook(b *Backend) hook.Handler {
 					Args:        args,
 				}
 
-				ch := b.approver.Request(id)
-				defer b.approver.Remove(id)
 				select {
 				case <-ctx.Done():
 					return &hook.Result{Action: hook.ActionBlock, Error: ctx.Err()}
@@ -995,6 +997,10 @@ func (b *Backend) Approve(ctx context.Context, requestID string, approved bool) 
 }
 
 func (b *Backend) RegisterMCPServer(ctx context.Context, command string, args ...string) error {
+	if features.CoreLoopOnly {
+		return fmt.Errorf("%s", features.Disabled("MCP registration"))
+	}
+
 	b.mu.Lock()
 	defer b.mu.Unlock()
 

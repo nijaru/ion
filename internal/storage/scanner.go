@@ -75,7 +75,7 @@ func (s *Scanner) Scan(ctx context.Context, fn func(FileInfo) error) error {
 
 		// Calculate hash for change detection
 		hash, _ := s.hashFile(path)
-		
+
 		return fn(FileInfo{
 			Path:      rel,
 			Hash:      hash,

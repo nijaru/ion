@@ -1,67 +1,185 @@
 ---
 date: 2026-04-28
-summary: Review/refactor coverage tracker for the native Canto/Ion core loop.
+summary: Comprehensive audit tracker for the native Canto/Ion core loop.
 status: active
 ---
 
-# Core Loop Review Tracker
+# Core Loop Audit Tracker
 
-Use this as the scan-first checklist for `tk-s6p4`. `Reviewed` means the area had code review plus deterministic proof. `Refactored` means code changed to enforce the target contract. `Pending` means the area still needs a focused pass before P2/P3 feature work resumes.
+This is the single scan-first tracker for `tk-s6p4`. It replaces the earlier optimistic reviewed/refactored matrix.
 
-## Target Contract
+Prior bug fixes are evidence only. They do not prove the whole loop is stable. Do not mark an area reviewed until the files named here have been read file by file, the kept/disabled/deferred codepaths are known, and the relevant invariants/tests are recorded.
 
-- Canto owns provider-visible history, effective projection, agent execution, tool lifecycle events, queueing, retries, terminal durability, and compaction primitives.
-- Ion owns input classification, TUI/CLI lifecycle, display projection, local status/error rows, mode/trust UX, and provider/config selection.
-- Native path is the active product path. ACP remains secondary until the native loop is stable.
+## Core Definition
 
-## Canto Coverage
+The audit is limited to the native loop:
 
-| Area | State | Evidence | Notes |
-| --- | --- | --- | --- |
-| Session effective history projection | Reviewed/refactored | Canto filters invalid empty assistant rows; Ion imports projection sanitation fixes. | Projection is legacy/corrupt-history defense, not the only guard. |
-| Assistant write-side validation | Reviewed/refactored | Canto `52206f2`; `go test ./...` in Canto and Ion passed after import. | Whitespace-only assistant payloads are rejected; reasoning/thinking-only payloads preserved. |
-| Tool failure durability | Reviewed/refactored | Canto `a5878ab`; Ion maps `ToolCompletedData.Error` to live/replay error display. | Errored routine tool output stays expanded in Ion replay. |
-| Cancellation terminal events | Reviewed/refactored | Canto `c22da5e`; Ion suppresses wrapped context-canceled provider error. | Canceled streaming and non-streaming turns persist `TurnCompleted`. |
-| Serial queue wait vs execution context | Reviewed/refactored | Canto `595380a`; Ion imported and full suite passed. | Fixed wait-timeout context canceling active turns or later executing with expired contexts. |
-| Provider request construction / system-message ordering | Reviewed/refactored | Fedora/local-api system-message issue fixed via Canto context primitives; Ion request-shape tests exclude display-only events. | Provider-visible history stays in Canto; Ion status/system display rows stay local. |
-| Retry classification/runtime retry loop | Partially reviewed | Transport-only retry-until-cancel path exists; OpenRouter 429 only proved status path. | Live validation remains provider/environment blocked. |
-| Compaction primitives | Partially reviewed | Proactive/manual compaction paths have deterministic Ion coverage. | Keep enabled as core resilience, but avoid P2 compaction UX until core loop gate is green. |
-| Memory/workflow/subagent primitives | Deferred | Disabled in Ion via `CoreLoopOnly`. | Re-enable only after native loop gate is green. |
+```text
+Ion CLI/TUI -> CantoBackend -> Canto session/runtime/agent/tools -> provider API
+```
 
-## Ion Coverage
+Required behavior:
 
-| Area | State | Evidence | Notes |
-| --- | --- | --- | --- |
-| CantoBackend assistant commit translation | Reviewed/refactored | `TurnCompleted` no longer creates empty assistant display commit; assistant rows come from real Canto `MessageAdded`. | Prevents empty assistant replay/provider-history bugs. |
-| CantoBackend terminal error ordering | Reviewed/refactored | Provider errors translate to one `Error` then `TurnFinished`. | Avoids racing `SendStream` returned errors. |
-| CantoBackend cancellation handling | Reviewed/refactored | `context canceled` terminal events settle as `TurnFinished`, not provider error. | Preserves user-cancel state. |
-| CantoBackend single active turn | Reviewed/refactored | Overlapping `SubmitTurn` rejected; watcher exits on `TurnCompleted`; race-focused backend tests passed. | Prevents duplicate watchers and duplicate translated events. |
-| CantoBackend terminal active-state clearing | Reviewed/refactored | Active state clears before emitting `TurnFinished`; full suite passed. | Queued/immediate follow-up turns no longer race terminal settlement. |
-| Ion storage model-visible writes | Reviewed/refactored | `1b0e3e1`; storage rejects non-empty `User`/`Agent`/`ToolUse`/`ToolResult` appends. | Canto is now the only provider-history writer. |
-| Display replay ordering | Reviewed/refactored | Ion display-only events interleave with Canto effective history by raw event order. | Fixes cancel/error/system rows replaying after later turns. |
-| Routine tool display compaction | Reviewed/refactored | Routine success output collapses; error output remains expanded. | UI transform only, not provider-history mutation. |
-| Print CLI preflight | Reviewed/refactored | Invalid print args and missing prompt/stdin fail before runtime/storage init. | Prevents no-prompt `-p` from creating sessions. |
-| Print CLI settlement | Reviewed/refactored | Event-stream close before `TurnFinished` is an error; print closes runtime handles. | `ion -p` is the automation surface. |
-| TUI shutdown cleanup | Reviewed/refactored | `063e7a5`; TUI closes agent session, storage session, and store after Bubble Tea exits. | Matches print-mode cleanup. |
-| Slash/local command persistence | Reviewed/refactored | Slash errors use local UI error path; real-store `/help` lazy-session regression passes. | Slash commands do not create model-visible transcript or recent session rows. |
-| Slash/local commands during active turns | Reviewed/refactored | Slash commands now bypass follow-up queueing during active turns; provider picker and unknown-command regressions pass. | Slash-like input must never be sent to the model as a queued follow-up. |
-| Runtime switch/resume failure cleanup | Reviewed/refactored | Switch/resume closes newly opened handles on save/replay failure and preserves old runtime. | Needs final command-path review, but root leak class has coverage. |
-| Provider/model metadata preservation | Reviewed/refactored | Submit metadata preserves provider-qualified model names. | Keeps `/resume <id>` working for local/custom providers. |
-| ACP prompt completion | Reviewed/refactored | ACP no longer emits empty assistant commit after prompt completion. | ACP remains secondary and still has P2 follow-ups. |
-| Startup/resume rendering | Reviewed/refactored | Resumed marker after launch header; replay entries use shared renderer spacing. | Header visual polish is P3. |
-| Startup/continue/resume materialization | Reviewed/refactored | Real-store `openRuntime` tests cover fresh lazy startup, invalid-provider startup, and invalid-provider explicit resume. | Local session selection no longer depends on provider config being immediately usable. |
-| App queued follow-up lifecycle | Reviewed/refactored | Queued follow-up after `TurnFinished` covered. | Keep in regression set while reviewing command paths. |
-| Provider-history shape after tool turns | Reviewed/refactored | Resumed tool follow-up asserts assistant tool-call before matching tool-result, no empty assistant rows, and durable prior/new user turns. | Covers the provider-history failure class that previously broke Fedora/local-api. |
-| Trust/mode/approval UX | Partially reviewed | Basic mode/trust paths covered; `CoreLoopOnly` keeps advanced surfaces down. | Secondary to stable submit/stream/tool/cancel/error/persist/replay. |
-| Live local-api/OpenRouter validation | Blocked/partial | Fedora off; OpenRouter DeepSeek hit 402; Minimax free model entered retry/response wait and hit the 90s smoke deadline. | Deterministic tests are the proof path until a live provider is available. |
+- submit a user turn
+- stream assistant output
+- run a tool and persist tool call/result state
+- handle approval decisions where currently active
+- cancel without corrupting state
+- surface provider/network errors without wedging the UI
+- retry transient failures without hiding terminal failures
+- persist and resume
+- accept a follow-up turn after resume
+- render replay with the same display rules as live transcript
 
-## Current Gaps
+## Split And Rewrite Policy
 
-1. ACP bridge P2s: stderr filtering, initial session context, token usage mapping. Keep behind native-loop gate unless ACP blocks tests.
-2. Live smoke when Fedora or a funded model is available: tool call, persist, resume, follow-up turn, and `ion -p --resume <id>`.
+- Keep Canto and Ion as separate repos.
+- Do not merge Canto into Ion for speed.
+- Treat Ion as Canto's acceptance test during core-loop stabilization.
+- Defer Canto public-framework/SOTA expansion until Ion's minimal native loop is stable.
+- Rewrite/refactor targeted modules when a file group violates the desired final shape; do not keep layering symptom fixes over a flawed module.
+- Use `ai/` as an index now. Do not do more broad context passes unless a specific file group needs a design source.
 
-## Latest Verification
+## Freeze Policy
 
-- `go test ./... -count=1`
-- `go test -race ./cmd/ion ./internal/app ./internal/backend/canto -count=1`
-- `ION_LIVE_SMOKE=1 ION_SMOKE_PROVIDER=openrouter ION_SMOKE_MODEL='minimax/minimax-m2.5:free' go test ./cmd/ion -run TestLiveSmokeTurnAndToolCall -count=1 -v` opened runtime and started the turn, then timed out at the 90s live-smoke deadline after provider retry status.
+`features.CoreLoopOnly` is on, but it must be verified against actual call sites.
+
+Keep active for the audit:
+
+- Canto session event log, projection, effective history, subscriptions, and SQLite store.
+- Canto runtime queue/runner, agent loop, provider call path, tool execution, terminal events, and minimal retry.
+- Ion `cmd/ion` startup, print mode, resume/continue, and smoke harness.
+- Ion `CantoBackend`, app input/event/render loop, storage/replay, core coding tools, and local command routing needed to drive the loop.
+
+Disable, hide, or bypass until Gate 2 is green:
+
+- ACP bridge behavior beyond ensuring it is not on the native path.
+- MCP, memory/workflows, subagents, reflexion, branching, skills, model cascades/routing, privacy expansion, advanced thinking expansion, and sandbox/approval polish.
+- Provider picker/config polish except where bad provider state blocks startup, resume, or print smoke.
+- Compaction controls/polish unless compaction directly affects context survival, provider-history validity, or resumability.
+
+## Priority Bands
+
+These bands guide sequencing; they are not exact feature tiers.
+
+| Band | Scope | Audit Policy |
+| --- | --- | --- |
+| Core | Minimal agent loop plus stable shell: submit, stream, core tools, cancel, provider error, retry status, no transcript corruption, print CLI, basic TUI display. | Active now. |
+| Reliability table stakes | Continue/resume correctness, compaction/overflow recovery, durable replay in long sessions. | Include when it protects core reliability; defer UX polish. |
+| Product table stakes | Robust resume UX, slash autocomplete, basic permission UX, transcript inspection. | Plan next. |
+| Polish | Picker/header/help/status/thinking/tree/editor polish. | Defer. |
+| Experimental/SOTA | ACP/subscriptions, subagents, skills, routing, privacy pipeline, optimizer loops, swarm. | Disable or isolate from native P1 unless directly blocking. |
+ 
+`continue`, `resume`, and compaction straddle bands. Their minimal correctness belongs in the reliability audit; their UI/control polish waits.
+
+## Audit Standard
+
+For each row:
+
+- Read the named files, not just tests or prior commits.
+- State the core-loop invariants in the notes.
+- Classify codepaths as kept, disabled, or deferred.
+- Record findings in `tk-s6p4` before editing.
+- Add or update deterministic tests for each bug fixed.
+- Run the smallest relevant test first, then the broader package/full suite.
+
+Status values:
+
+- `pending` — not yet reviewed file by file.
+- `in_review` — currently being read; no broad stability claims allowed.
+- `finding` — reviewed enough to identify a concrete defect or overactive nonessential path.
+- `patched` — defect fixed with focused tests, but group may still need review.
+- `reviewed` — file group reviewed against invariants with tests or explicit no-change rationale.
+
+## Canto Audit Order
+
+| Order | Area | Files | Status | Evidence To Date | Next Check |
+| --- | --- | --- | --- | --- | --- |
+| C1 | Session event model and message payload validity | `../canto/session/event.go`, `message.go`, `codec.go`, `history.go`, `projection.go` | reviewed | Write-side empty assistant rejection is pushed in Canto `5576f4d`; projection/effective history sanitizes raw, snapshot, and post-snapshot invalid assistant rows while preserving content, reasoning, thinking-block-only, and tool-call-only assistants. Projection snapshots build from sanitized effective entries. | Continue C2/C3; no extra compatibility/migration path needed. |
+| C2 | Session store, subscription, and replay ordering | `../canto/session/session.go`, `sqlite.go`, `jsonl.go`, `rebuilder.go`, `replayer.go`, `subscription.go`, `writethrough.go` | patched | SQLite/JSONL public Save paths reject invalid assistant writes. Replayer intentionally allows legacy rows so effective projection can sanitize old logs. Canto `d37beda` now makes raw `LastAssistantMessage` skip legacy invalid assistant rows, preventing turn finalization from reading a row that provider history omits. Session/store tests are green. | Continue runtime/agent C3-C5 review; revisit write-through drain semantics only if an active runtime path depends on it for P1 durability. |
+| C3 | Runtime queue and runner lifecycle | `../canto/runtime/runner.go`, `coordinator.go`, `coordinator_exec.go`, `options.go`, `bootstrap.go`, `hitl.go` | pending | Queue wait vs execution context root cause fixed in Canto `595380a`. | Review all queue, cancel, timeout, close, and terminal-event paths. |
+| C4 | Agent turn loop and streaming commits | `../canto/agent/agent.go`, `loop.go`, `stream.go`, `message.go`, `turnstate.go`, `turnstop.go`, `escalation.go` | pending | Empty assistant and canceled terminal-event fixes exist. | Verify every streaming/non-streaming exit writes exactly one durable terminal state and no blank assistant payload. |
+| C5 | Tool execution lifecycle | `../canto/agent/tools.go`, `../canto/tool/tool.go`, `func.go`, `registry.go`, `metadata.go`, `search.go` | pending | Tool failure durability fixed in Canto `a5878ab`. | Verify tool call/result IDs, failed tool semantics, approval/refusal path, and provider-visible ordering. |
+| C6 | Prompt and provider-visible history construction | `../canto/prompt/**/*.go`, `../canto/llm/**/*.go` | pending | Fedora system-message and display-only history issues have targeted coverage. | Verify system/developer ordering, tool-result pairing, reasoning/thinking preservation, and provider request shape. |
+| C7 | Retry, compaction, and budget surfaces that remain active | `../canto/governor/queue.go`, `guard.go`, `recovery.go`, `summarizer.go`, `manual.go`, `offloader.go` | pending | Ion has tests around proactive failure settlement. | Decide what is core now versus deferred; disable nonessential mutation during the audit. |
+
+## Ion Audit Order
+
+| Order | Area | Files | Status | Evidence To Date | Next Check |
+| --- | --- | --- | --- | --- | --- |
+| I1 | Feature freeze enforcement | `internal/features/features.go`, all `features.CoreLoopOnly` call sites | patched | ACP providers, telemetry startup, advanced slash commands, memory/subagent/MCP/reflexion processors, and manual `/compact` are gated. `@file` prompt expansion was still active and is now gated because it silently mutates user prompts during the core-loop audit. Proactive/overflow compaction remains active as reliability work. | Run focused backend/app/CLI tests, then mark reviewed if no remaining deferred path can mutate prompt, provider history, runtime state, or session state. |
+| I2 | CLI startup, resume, continue, and print lifecycle | `cmd/ion/main.go`, `startup.go`, `selection.go`, `print_mode.go`, `mode.go`, `escalation.go`, `live_smoke_test.go` | patched | Startup/resume/print paths have tests for lazy session materialization, bare `--resume`, invalid config resume, print prompts/stdin/JSON/approval/timeout, and resumed marker order. External policy config and escalation config were still loaded during `CoreLoopOnly`; both are now gated. | Re-run full CLI/backend/storage/app gates, then mark reviewed if no startup dependency can create or block sessions before a real turn. |
+| I3 | Backend contract and Canto event translation | `internal/backend/backend.go`, `unconfigured.go`, `internal/backend/canto/backend.go`, `compaction.go`, `processors.go`, `prompt.go` | patched | Event translation has focused tests for active-turn clearing, canceled terminal suppression, tool IDs/errors/output deltas, provider error recovery, retry status, proactive/overflow compaction, and valid resumed tool history. Direct MCP registration was only UI-gated and is now backend-gated. | Continue reviewing SendStream synchronous-error handling and display-only write boundaries in I4 before marking reviewed. |
+| I4 | Storage, lazy session, and replay projection | `internal/storage/canto_store.go`, `lazy_session.go`, `scanner.go`, `storage.go`, `file_store.go`, `internal/session/*.go` | patched | Canto-backed storage rejects model-visible appends, lazy sessions do not materialize before non-noop appends, display-only rows interleave by raw event order, legacy empty assistants are fixture-injected below public write APIs, and routine successful tools compact only as display projection. Store list/input scans now return `rows.Err()` instead of silently dropping errors. | Continue I5 app-loop review, then re-run full storage/app gates before marking reviewed. |
+| I5 | App input, commands, and turn lifecycle | `internal/app/model.go`, `events.go`, `broker.go`, `commands.go`, `input.go`, `session_picker.go`, `picker.go`, `presets.go` | patched | Slash commands stay local during active turns, queued follow-ups/cancel/session errors/runtime switches have focused tests, and slash commands before first turn do not materialize lazy sessions. `submitText` persisted routing metadata before `SubmitTurn` succeeded; that now happens only after accepted submission. | Continue I6 rendering/replay audit, then run full app and core-loop smoke tests before marking reviewed. |
+| I6 | Transcript rendering and replay formatting | `internal/app/render.go`, `viewport.go`, `markdown.go`, `styles.go`, `history_test.go`, `stabilization_test.go` | reviewed | Startup replay and live transcript share `RenderEntries`/`renderEntry`; resumed marker order and replay blank lines have focused tests. Routine successful tool display is compacted only as a UI transform; tool errors and full verbosity preserve output. Manual TUI spacing remains deferred visual polish, not provider-history state. | Carry the known visual spacing issues into the TUI shell pass after backend/CLI gates are green. |
+| I7 | Core tool implementations and approval boundary | `internal/backend/canto/tools/bash.go`, `file.go`, `search.go`, `approver.go`, `sandbox.go`, `verify.go`, `internal/backend/bash_policy.go`, `policy.go` | reviewed | Tool boundary review patched model-argument validation gaps: `read` accepted negative offsets, `list` ignored malformed JSON, `grep`/`glob` could address paths outside the workspace, and edit tools accepted empty/no-op replacement strings. Bash/verify cancellation now kills the command process group during cancellation, and approval requests are registered before they are published to the UI. Sandbox/approval UX polish remains deferred. | Re-run full CLI/backend/storage/app gates and keep later permission polish out of P1 unless a core turn blocks on it. |
+| I8 | Config/provider state that affects core loop startup | `internal/config/config.go`, `internal/providers/catalog.go`, `internal/backend/registry/*.go` | reviewed | Config/state separation has focused tests; invalid provider config opens an unconfigured backend without creating sessions; custom endpoints no longer leak to default providers. `zai` had no default endpoint and is now wired to Z.AI's documented OpenAI-compatible endpoint so provider/model commands do not fail with "no configured endpoint" for that provider. Picker/favorites polish stays deferred. | Re-run provider/registry and full gates; defer remaining picker UX bugs until TUI/product-table-stakes pass. |
+| I9 | Non-native/deferred packages | `internal/backend/acp/*.go`, `internal/privacy/*.go`, `internal/subagents/*.go`, `internal/telemetry/*.go`, workspace rollback/checkpoint code | reviewed | ACP backend construction is disabled through provider resolution while `CoreLoopOnly` is enabled. Telemetry startup is skipped. MCP, memory, manual compact, subagent, and rewind commands are hidden/blocked; backend-level MCP registration is also blocked. Privacy redaction remains a display-only transform for approval/tool text, and checkpoints remain active only as write-tool rollback metadata. | Keep these isolated; do not expand ACP/privacy/subagent/checkpoint UX before the native loop gate is closed. |
+
+## Known Slice Evidence
+
+These are useful regressions, not a substitute for the audit above:
+
+- Canto rejects or filters empty assistant payloads and preserves reasoning/tool-call-only assistant payloads.
+- Canto persists terminal events for cancellation and tool failures.
+- Canto queue wait-timeout no longer cancels active execution context.
+- Ion rejects duplicate active `CantoBackend` submits and avoids duplicate Watch streams.
+- Ion storage no longer accepts model-visible transcript writes from app display code.
+- Ion print mode fails invalid no-prompt invocations before runtime/session creation.
+- Ion slash commands stay local during active turns and `/help` before first model turn does not materialize a session.
+- Ion replay ordering/spacing has targeted coverage.
+
+## Current Blockers
+
+1. The implementation has not yet been audited file by file; broad stability claims are not allowed.
+2. The live smoke harness can wedge on provider retry/timeouts instead of producing a clean pass/fail signal.
+3. Some P2/P3 code may still be reachable despite `CoreLoopOnly`; this must be verified before deeper loop review.
+
+## Phase 0 Freeze Findings
+
+| Finding | Action |
+| --- | --- |
+| ACP providers were still reachable from normal provider resolution. | Gate ACP backend creation while `CoreLoopOnly` is enabled. ACP remains T4/secondary bridge work. |
+| Proactive and overflow compaction are active in the native backend. | Keep in the reliability audit because context survival matters, but do not expand compaction UX/control work during the core-loop pass. |
+| Telemetry setup ran during process startup. | Disable telemetry initialization while `CoreLoopOnly` is enabled so T1 startup cannot fail on observability config/network issues. |
+| `@file` prompt expansion was active in the native request processor stack. | Gate it while `CoreLoopOnly` is enabled; the read tool is the explicit core path for file content. |
+| External policy and escalation config loaded on startup. | Gate both during `CoreLoopOnly`; default mode policy remains active, but optional config files cannot block the minimal loop. |
+| MCP registration could still be invoked directly through the session interface. | Add a backend-level `CoreLoopOnly` guard so deferred tool-surface mutation is blocked below the slash-command layer. |
+
+## Tool Boundary Findings
+
+| Finding | Action |
+| --- | --- |
+| `read` accepted negative `offset`/`limit`, which could panic on a model-supplied range. | Reject negative range values at the tool boundary. |
+| `list` swallowed malformed JSON and silently listed the workspace root. | Return JSON parse errors; only an omitted path defaults to `.`. |
+| `grep` accepted caller paths without workspace containment checks. | Resolve search paths under the workspace before invoking `rg`. |
+| `glob` ran against `os.DirFS` without rejecting `..` or absolute patterns. | Reject glob patterns that can escape the workspace. |
+| `edit`/`multi_edit` accepted empty or no-op replacement strings. | Reject empty `old_string`, identical replacement strings, and empty edit batches before reading or writing files. |
+| Bash/verify cancellation relied on process cleanup after `Wait`, which can leave child processes alive while pipes stay open. | Register a context cancellation hook that kills the command process group while the command is still active. |
+| Approval events were published before the backend registered the pending approval channel. | Register the approval wait channel first so an immediate UI approval cannot be dropped. |
+
+## Provider Startup Findings
+
+| Finding | Action |
+| --- | --- |
+| `zai` was configured as a native OpenAI-family provider without any default endpoint. | Set the default endpoint to Z.AI's documented OpenAI-compatible base URL, `https://api.z.ai/api/paas/v4`. |
+
+## Deferred TUI Findings
+
+- Manual TUI output on 2026-04-28 showed incorrect vertical spacing in both continued sessions and fresh live turns. `--continue` placed the resumed transcript with awkward spacing around the resumed marker/restored message, and a new live turn showed excessive blank space between the user prompt and assistant response. Carry this into I6 / Phase 5; do not pull it ahead of the Canto/core-runtime audit.
+
+## Verification Log
+
+- Preferred live smoke target is Fedora local-api with `qwen3.6` when the endpoint is running; it is the free/local validation path.
+- OpenRouter fallback models are `deepseek/deepseek-v4-flash` for cheap smoke and `deepseek/deepseek-v4-pro` only when the discounted higher-quality path is worth the cost.
+- Live smoke should run after deterministic gates, not as the first diagnostic, so provider/network noise does not mask local loop bugs.
+- Latest deterministic gates should be rerun after importing Canto `5576f4d`.
+- `go test ./internal/backend/canto/tools -count=1` passed after I7 boundary validation fixes.
+- `go test ./internal/backend/canto ./internal/backend/canto/tools ./internal/backend -count=1` passed after the approval registration fix.
+- `go test ./internal/providers ./internal/backend/registry -count=1` passed after adding the Z.AI provider endpoint.
+- Full deterministic gate passed after I7: `go test ./cmd/ion ./internal/backend/canto ./internal/backend/canto/tools ./internal/storage ./internal/app -count=1 && go test ./... -count=1`.
+- Canto `d37beda` was pushed and imported into Ion after full Canto gates passed: `go test ./session -count=1`, `go test ./runtime ./agent ./tool ./prompt ./llm ./governor -count=1`, and `go test ./... -count=1`.
+- Ion deterministic gates passed after importing Canto `d37beda`: focused native packages plus `go test ./... -count=1`.
+- Fedora live smoke passed against `local-api` / `qwen3.6:27b` at `http://fedora:8080/v1`: bash tool call, approval, persistence, resume, and follow-up turn.
+- Race-focused native gate passed: `go test -race ./cmd/ion ./internal/app ./internal/backend/canto ./internal/backend/canto/tools -count=1`.

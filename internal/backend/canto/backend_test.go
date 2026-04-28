@@ -751,6 +751,15 @@ func TestValidateSubagentPersonaToolsFailsClosed(t *testing.T) {
 	}
 }
 
+func TestRegisterMCPServerDisabledDuringCoreLoopStabilization(t *testing.T) {
+	b := New()
+
+	err := b.RegisterMCPServer(t.Context(), "server")
+	if err == nil || !strings.Contains(err.Error(), "MCP registration is disabled") {
+		t.Fatalf("RegisterMCPServer error = %v, want disabled error", err)
+	}
+}
+
 func TestCrossProviderHandoffPreservesPromptTruth(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

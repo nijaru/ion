@@ -16,7 +16,7 @@ import (
 const maxOutputSize = 1024 * 1024 // 1MB
 
 type Bash struct {
-	cwd    string
+	cwd     string
 	sandbox SandboxMode
 }
 
@@ -78,18 +78,18 @@ func (b *Bash) ExecuteStreaming(ctx context.Context, args string, emit func(stri
 		return "", err
 	}
 
-	// Ensure process group is killed on exit to prevent orphan leaks
-	defer func() {
+	stopKill := context.AfterFunc(ctx, func() {
 		if cmd.Process != nil {
 			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		}
-	}()
+	})
+	defer stopKill()
 
 	var output strings.Builder
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	wg.Add(2)
-	
+
 	limitExceeded := false
 
 	// Helper to handle pipe output and emit deltas
@@ -127,7 +127,7 @@ func (b *Bash) ExecuteStreaming(ctx context.Context, args string, emit func(stri
 	err = cmd.Wait()
 	wg.Wait()
 	res := output.String()
-	
+
 	if err != nil {
 		if res == "" {
 			return "", err

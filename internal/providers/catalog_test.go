@@ -100,6 +100,13 @@ func TestResolvedEndpointDoesNotLeakCustomEndpointToDefaultProviders(t *testing.
 	}
 }
 
+func TestResolvedEndpointIncludesZAIEndpoint(t *testing.T) {
+	cfg := &config.Config{Provider: "zai"}
+	if got := ResolvedEndpoint(cfg); got != "https://api.z.ai/api/paas/v4" {
+		t.Fatalf("zai endpoint = %q, want Z.AI OpenAI-compatible endpoint", got)
+	}
+}
+
 func TestShowInPickerDoesNotTreatEndpointAsCustomProviderSelection(t *testing.T) {
 	custom := MustLookup("openai-compatible")
 	cfg := &config.Config{

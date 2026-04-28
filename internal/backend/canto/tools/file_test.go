@@ -65,6 +65,15 @@ func TestFileTools(t *testing.T) {
 		if res != "line 2" {
 			t.Errorf("expected line 2, got %q", res)
 		}
+
+		negativeOffsetArgs, _ := json.Marshal(map[string]any{
+			"file_path": filePath,
+			"offset":    -1,
+			"limit":     1,
+		})
+		if _, err := r.Execute(context.Background(), string(negativeOffsetArgs)); err == nil {
+			t.Fatal("expected negative offset to fail")
+		}
 	})
 
 	t.Run("Edit", func(t *testing.T) {
@@ -116,6 +125,24 @@ func TestFileTools(t *testing.T) {
 		if string(newContent) != "bb\nbb" {
 			t.Errorf("unexpected content: %q", string(newContent))
 		}
+
+		emptyOldArgs, _ := json.Marshal(map[string]any{
+			"file_path":  filePath,
+			"old_string": "",
+			"new_string": "x",
+		})
+		if _, err := e.Execute(context.Background(), string(emptyOldArgs)); err == nil {
+			t.Fatal("expected empty old_string to fail")
+		}
+
+		noopArgs, _ := json.Marshal(map[string]any{
+			"file_path":  filePath,
+			"old_string": "bb",
+			"new_string": "bb",
+		})
+		if _, err := e.Execute(context.Background(), string(noopArgs)); err == nil {
+			t.Fatal("expected no-op edit to fail")
+		}
 	})
 
 	t.Run("MultiEdit", func(t *testing.T) {
@@ -165,6 +192,24 @@ func TestFileTools(t *testing.T) {
 		if !strings.Contains(res, "--- a/file2.txt") || !strings.Contains(res, "-bar") || !strings.Contains(res, "+baz") {
 			t.Errorf("diff for f2 missing in result: %q", res)
 		}
+
+		emptyArgs, _ := json.Marshal(map[string]any{"edits": []map[string]any{}})
+		if _, err := m.Execute(context.Background(), string(emptyArgs)); err == nil {
+			t.Fatal("expected empty multi_edit to fail")
+		}
+
+		badArgs, _ := json.Marshal(map[string]any{
+			"edits": []map[string]any{
+				{
+					"file_path":  f1,
+					"old_string": "",
+					"new_string": "x",
+				},
+			},
+		})
+		if _, err := m.Execute(context.Background(), string(badArgs)); err == nil {
+			t.Fatal("expected multi_edit with empty old_string to fail")
+		}
 	})
 
 	t.Run("List", func(t *testing.T) {
@@ -183,6 +228,10 @@ func TestFileTools(t *testing.T) {
 		}
 		if !strings.Contains(res, "file.txt") {
 			t.Errorf("expected list to contain file.txt, got %q", res)
+		}
+
+		if _, err := l.Execute(context.Background(), `{"path":`); err == nil {
+			t.Fatal("expected invalid list JSON to fail")
 		}
 	})
 }
