@@ -87,21 +87,49 @@ func (m *Model) printHelp(content string) tea.Cmd {
 		return nil
 	}
 	lines := make([]string, 0, strings.Count(content, "\n")+2)
-	if !m.App.PrintedTranscript {
-		lines = append(lines, "")
-		m.App.PrintedTranscript = true
-	}
+	lines = append(lines, "")
+	m.App.PrintedTranscript = true
 	for i, line := range strings.Split(content, "\n") {
-		switch {
-		case i == 0:
-			lines = append(lines, m.st.cyan.Bold(true).Render(line))
-		case isHelpSectionLine(line):
-			lines = append(lines, m.st.cyan.Bold(true).Render(line))
-		default:
-			lines = append(lines, line)
-		}
+		lines = append(lines, m.renderHelpLine(i, line))
 	}
 	return printLinesCmd(lines...)
+}
+
+func (m Model) renderHelpLine(index int, line string) string {
+	if index == 0 || isHelpSectionLine(line) {
+		return m.st.cyan.Bold(true).Render(line)
+	}
+	if key, sep, detail, ok := splitHelpDetail(line); ok {
+		return "  " + m.st.cyan.Render(key) + sep + detail
+	}
+	return line
+}
+
+func splitHelpDetail(line string) (string, string, string, bool) {
+	if !strings.HasPrefix(line, "  ") {
+		return "", "", "", false
+	}
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return "", "", "", false
+	}
+	rest := strings.TrimLeft(line, " ")
+	for i := 0; i < len(rest)-1; i++ {
+		if rest[i] == ' ' && rest[i+1] == ' ' {
+			key := strings.TrimSpace(rest[:i])
+			j := i
+			for j < len(rest) && rest[j] == ' ' {
+				j++
+			}
+			sep := rest[i:j]
+			detail := strings.TrimSpace(rest[j:])
+			if key == "" || detail == "" {
+				return "", "", "", false
+			}
+			return key, sep, detail, true
+		}
+	}
+	return "", "", "", false
 }
 
 func isHelpSectionLine(line string) bool {
