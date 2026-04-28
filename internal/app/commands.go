@@ -699,8 +699,12 @@ func (m Model) handleSettingsCommand(fields []string) (Model, tea.Cmd) {
 	if err := config.Save(&updated); err != nil {
 		return m, cmdError(fmt.Sprintf("failed to save config: %v", err))
 	}
-	m.Model.Config = &updated
-	m.Model.Backend.SetConfig(&updated)
+	runtimeCfg, err := config.Load()
+	if err != nil {
+		return m, cmdError(fmt.Sprintf("failed to reload runtime config: %v", err))
+	}
+	m.Model.Config = runtimeCfg
+	m.Model.Backend.SetConfig(runtimeCfg)
 	return m, m.printEntries(session.Entry{Role: session.System, Content: notice})
 }
 
