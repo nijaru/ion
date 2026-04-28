@@ -509,44 +509,80 @@ func (s *cantoSession) Entries(ctx context.Context) ([]ionsession.Entry, error) 
 	}
 
 	entries := make([]ionsession.Entry, 0, len(history))
+	effectiveByEventID := make(map[string]session.HistoryEntry, len(history))
 	for _, entry := range history {
-		if display, ok := displayContextEntry(entry); ok {
-			entries = append(entries, display)
+		if entry.EventID == "" {
+			if display, ok := displayHistoryEntry(entry, toolErrors); ok {
+				entries = append(entries, display)
+			}
 			continue
 		}
-		msg := entry.Message
-		switch msg.Role {
-		case llm.RoleUser:
-			entries = append(entries, ionsession.Entry{
-				Role:    ionsession.User,
-				Content: msg.Content,
-			})
-		case llm.RoleAssistant:
-			entries = append(entries, ionsession.Entry{
-				Role:      ionsession.Agent,
-				Content:   msg.Content,
-				Reasoning: msg.Reasoning,
-			})
-		case llm.RoleTool:
-			title := msg.Name
-			if title == "" {
-				title = "tool"
+		effectiveByEventID[entry.EventID] = entry
+	}
+
+	seenEffective := make(map[string]bool, len(effectiveByEventID))
+	for _, ev := range sess.Events() {
+		if entry, ok := effectiveByEventID[ev.ID.String()]; ok {
+			if display, ok := displayHistoryEntry(entry, toolErrors); ok {
+				entries = append(entries, display)
 			}
-			entries = append(entries, ionsession.Entry{
-				Role:    ionsession.Tool,
-				Title:   title,
-				Content: msg.Content,
-				IsError: toolErrors[msg.ToolID],
-			})
-		case llm.RoleSystem, llm.RoleDeveloper:
-			entries = append(entries, ionsession.Entry{
-				Role:    ionsession.System,
-				Content: msg.Content,
-			})
+			seenEffective[entry.EventID] = true
+			continue
+		}
+		if display, ok := displayEventEntry(ev); ok {
+			entries = append(entries, display)
 		}
 	}
-	entries = append(entries, s.displayEntries(sess.Events())...)
+	for _, entry := range history {
+		if entry.EventID == "" || seenEffective[entry.EventID] {
+			continue
+		}
+		if display, ok := displayHistoryEntry(entry, toolErrors); ok {
+			entries = append(entries, display)
+		}
+	}
 	return normalizeDisplayEntries(entries), nil
+}
+
+func displayHistoryEntry(
+	entry session.HistoryEntry,
+	toolErrors map[string]bool,
+) (ionsession.Entry, bool) {
+	if display, ok := displayContextEntry(entry); ok {
+		return display, true
+	}
+	msg := entry.Message
+	switch msg.Role {
+	case llm.RoleUser:
+		return ionsession.Entry{
+			Role:    ionsession.User,
+			Content: msg.Content,
+		}, true
+	case llm.RoleAssistant:
+		return ionsession.Entry{
+			Role:      ionsession.Agent,
+			Content:   msg.Content,
+			Reasoning: msg.Reasoning,
+		}, true
+	case llm.RoleTool:
+		title := msg.Name
+		if title == "" {
+			title = "tool"
+		}
+		return ionsession.Entry{
+			Role:    ionsession.Tool,
+			Title:   title,
+			Content: msg.Content,
+			IsError: toolErrors[msg.ToolID],
+		}, true
+	case llm.RoleSystem, llm.RoleDeveloper:
+		return ionsession.Entry{
+			Role:    ionsession.System,
+			Content: msg.Content,
+		}, true
+	default:
+		return ionsession.Entry{}, false
+	}
 }
 
 func normalizeDisplayEntries(entries []ionsession.Entry) []ionsession.Entry {
@@ -602,33 +638,31 @@ func displayContextEntry(entry session.HistoryEntry) (ionsession.Entry, bool) {
 	}
 }
 
-func (s *cantoSession) displayEntries(events []session.Event) []ionsession.Entry {
-	entries := make([]ionsession.Entry, 0)
-	for _, ev := range events {
-		switch ev.Type {
-		case ionSystemEvent:
-			var data System
-			if err := ev.UnmarshalData(&data); err != nil {
-				continue
-			}
-			entries = append(entries, ionsession.Entry{
-				Role:    ionsession.System,
-				Content: data.Content,
-			})
-		case ionSubagentEvent:
-			var data Subagent
-			if err := ev.UnmarshalData(&data); err != nil {
-				continue
-			}
-			entries = append(entries, ionsession.Entry{
-				Role:    ionsession.Subagent,
-				Title:   data.Name,
-				Content: data.Content,
-				IsError: data.IsError,
-			})
+func displayEventEntry(ev session.Event) (ionsession.Entry, bool) {
+	switch ev.Type {
+	case ionSystemEvent:
+		var data System
+		if err := ev.UnmarshalData(&data); err != nil {
+			return ionsession.Entry{}, false
 		}
+		return ionsession.Entry{
+			Role:    ionsession.System,
+			Content: data.Content,
+		}, true
+	case ionSubagentEvent:
+		var data Subagent
+		if err := ev.UnmarshalData(&data); err != nil {
+			return ionsession.Entry{}, false
+		}
+		return ionsession.Entry{
+			Role:    ionsession.Subagent,
+			Title:   data.Name,
+			Content: data.Content,
+			IsError: data.IsError,
+		}, true
+	default:
+		return ionsession.Entry{}, false
 	}
-	return entries
 }
 
 func (s *cantoSession) Usage(ctx context.Context) (int, int, float64, error) {
