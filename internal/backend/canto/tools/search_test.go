@@ -34,19 +34,27 @@ func TestSearchTools(t *testing.T) {
 		if strings.Contains(res, ".git") {
 			t.Error("expected .git directory to be ignored")
 		}
+
+		if _, err := g.Execute(context.Background(), `{"pattern":"search","path":".."}`); err == nil {
+			t.Fatal("expected grep path outside workspace to fail")
+		}
 	})
 
 	t.Run("Glob", func(t *testing.T) {
 		gl := &Glob{SearchTool: *NewSearchTool(tmpDir)}
-		
+
 		args := `{"pattern": "**/*.go"}`
 		res, err := gl.Execute(context.Background(), args)
 		if err != nil {
 			t.Fatalf("glob failed: %v", err)
 		}
-		
+
 		if strings.TrimSpace(res) != "match1.go" {
 			t.Errorf("expected match1.go, got %q", res)
+		}
+
+		if _, err := gl.Execute(context.Background(), `{"pattern":"../*.go"}`); err == nil {
+			t.Fatal("expected glob pattern outside workspace to fail")
 		}
 	})
 }

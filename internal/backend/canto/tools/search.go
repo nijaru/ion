@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/bmatcuk/doublestar/v4"
@@ -18,6 +19,41 @@ type SearchTool struct {
 
 func NewSearchTool(cwd string) *SearchTool {
 	return &SearchTool{cwd: cwd}
+}
+
+func (t *SearchTool) resolvePath(target string) (string, error) {
+	if target == "" {
+		target = "."
+	}
+	absPath, err := filepath.Abs(filepath.Join(t.cwd, target))
+	if err != nil {
+		return "", err
+	}
+	absCwd, err := filepath.Abs(t.cwd)
+	if err != nil {
+		return "", err
+	}
+	if !strings.HasPrefix(absPath, absCwd+string(filepath.Separator)) && absPath != absCwd {
+		return "", fmt.Errorf("path escapes workspace: %s", target)
+	}
+	return absPath, nil
+}
+
+func validateGlobPattern(pattern string) error {
+	if strings.TrimSpace(pattern) == "" {
+		return fmt.Errorf("pattern is required")
+	}
+	if filepath.IsAbs(pattern) {
+		return fmt.Errorf("pattern escapes workspace: %s", pattern)
+	}
+	for _, part := range strings.FieldsFunc(pattern, func(r rune) bool {
+		return r == '/' || r == '\\'
+	}) {
+		if part == ".." {
+			return fmt.Errorf("pattern escapes workspace: %s", pattern)
+		}
+	}
+	return nil
 }
 
 // Grep tool
@@ -58,9 +94,13 @@ func (g *Grep) Execute(ctx context.Context, args string) (string, error) {
 	if input.Path == "" {
 		input.Path = "."
 	}
+	searchPath, err := g.resolvePath(input.Path)
+	if err != nil {
+		return "", err
+	}
 
 	// Try ripgrep first as it's the fastest
-	cmd := exec.CommandContext(ctx, "rg", "--max-count", "100", "--heading", "--line-number", "--color", "never", input.Pattern, input.Path)
+	cmd := exec.CommandContext(ctx, "rg", "--max-count", "100", "--heading", "--line-number", "--color", "never", input.Pattern, searchPath)
 	cmd.Dir = g.cwd
 	output, err := cmd.CombinedOutput()
 	if err == nil {
@@ -96,6 +136,9 @@ func (g *Glob) Execute(ctx context.Context, args string) (string, error) {
 		Pattern string `json:"pattern"`
 	}
 	if err := json.Unmarshal([]byte(args), &input); err != nil {
+		return "", err
+	}
+	if err := validateGlobPattern(input.Pattern); err != nil {
 		return "", err
 	}
 

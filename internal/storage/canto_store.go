@@ -184,6 +184,9 @@ func (s *cantoStore) ListSessions(ctx context.Context, cwd string) ([]SessionInf
 		// Note: MessageCount not easily available without querying events table
 		sessions = append(sessions, si)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return sessions, nil
 }
 
@@ -214,6 +217,9 @@ func (s *cantoStore) GetInputs(ctx context.Context, cwd string, limit int) ([]st
 			return nil, err
 		}
 		inputs = append(inputs, content)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return inputs, nil
 }

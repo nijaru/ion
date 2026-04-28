@@ -538,15 +538,14 @@ func (m Model) submitText(text string) (Model, tea.Cmd) {
 		return m, tea.Sequence(m.printEntries(userEntry), cmd)
 	}
 
-	if err := m.persistEntry("persist routing decision", m.routingDecision("use_model", "active_preset", "")); err != nil {
-		return m, persistErrorCmd("persist routing decision", err)
-	}
-
 	m.Progress.Mode = stateIonizing
 	m.InFlight.Thinking = true
 	if err := m.Model.Session.SubmitTurn(context.Background(), text); err != nil {
 		m, errCmd := m.handleSessionError(err, false)
 		return m, tea.Sequence(m.printEntries(userEntry), errCmd)
+	}
+	if err := m.persistEntry("persist routing decision", m.routingDecision("use_model", "active_preset", "")); err != nil {
+		return m, persistErrorCmd("persist routing decision", err)
 	}
 	return m, m.printEntries(userEntry)
 }

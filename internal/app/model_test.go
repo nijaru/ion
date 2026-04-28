@@ -3690,6 +3690,9 @@ func TestSubmitTextPropagatesImmediateSubmitErrorWithoutPersistence(t *testing.T
 		t.Fatal("expected follow-up command to render transcript entries")
 	}
 	for _, event := range storeSess.appends {
+		if _, ok := event.(storage.RoutingDecision); ok {
+			t.Fatalf("immediate submit error persisted routing decision %#v; failed submissions should not materialize session state", event)
+		}
 		if sys, ok := event.(storage.System); ok {
 			t.Fatalf("immediate submit error persisted system entry %#v; local errors should not materialize transcript state", sys)
 		}

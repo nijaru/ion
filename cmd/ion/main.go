@@ -14,9 +14,11 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/nijaru/canto/workspace"
 	"github.com/nijaru/ion/internal/app"
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/config"
+	"github.com/nijaru/ion/internal/features"
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
 	"github.com/nijaru/ion/internal/telemetry"
@@ -58,10 +60,13 @@ func main() {
 	if *providerFlag != "" {
 		cfg.Provider = *providerFlag
 	}
-	shutdownTelemetry, err := telemetry.Setup(context.Background(), cfg)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to initialize telemetry: %v\n", err)
-		os.Exit(1)
+	shutdownTelemetry := func(context.Context) error { return nil }
+	if !features.CoreLoopOnly {
+		shutdownTelemetry, err = telemetry.Setup(context.Background(), cfg)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to initialize telemetry: %v\n", err)
+			os.Exit(1)
+		}
 	}
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -85,10 +90,13 @@ func main() {
 	if !trusted && mode != session.ModeRead {
 		mode = session.ModeRead
 	}
-	escalation, err := loadEscalationConfig(cwd)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to load ESCALATE.md: %v\n", err)
-		os.Exit(1)
+	var escalation *workspace.EscalationConfig
+	if !features.CoreLoopOnly {
+		escalation, err = loadEscalationConfig(cwd)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to load ESCALATE.md: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
 	printRequested, prompt, output, err := resolvePrintFlags(
@@ -412,11 +420,13 @@ func openRuntime(ctx context.Context, store storage.Store, cwd, branch string, c
 	}
 	b.SetStore(store)
 	b.SetConfig(&runtimeCfg)
-	if policyConfig, err := loadPolicyConfig(&runtimeCfg); err != nil {
-		return nil, nil, err
-	} else if policyConfig != nil {
-		if policyBackend, ok := b.(backend.PolicyConfigurer); ok {
-			policyBackend.SetPolicyConfig(policyConfig)
+	if !features.CoreLoopOnly {
+		if policyConfig, err := loadPolicyConfig(&runtimeCfg); err != nil {
+			return nil, nil, err
+		} else if policyConfig != nil {
+			if policyBackend, ok := b.(backend.PolicyConfigurer); ok {
+				policyBackend.SetPolicyConfig(policyConfig)
+			}
 		}
 	}
 

@@ -24,6 +24,30 @@ func appendCantoMessage(
 	}
 }
 
+func appendLegacyCantoMessage(
+	t *testing.T,
+	store *cantoStore,
+	ctx context.Context,
+	sessionID string,
+	msg llm.Message,
+) {
+	t.Helper()
+	event := csession.NewEvent(sessionID, csession.MessageAdded, msg)
+	if _, err := store.db.ExecContext(
+		ctx,
+		"INSERT INTO events (id, session_id, type, timestamp, data, metadata, cost) VALUES (?, ?, ?, ?, ?, ?, ?)",
+		event.ID.String(),
+		event.SessionID,
+		string(event.Type),
+		event.Timestamp.Format(time.RFC3339Nano),
+		event.Data,
+		nil,
+		event.Cost,
+	); err != nil {
+		t.Fatalf("append legacy canto message: %v", err)
+	}
+}
+
 func TestCantoStoreAppendUpdatesRecentSession(t *testing.T) {
 	root := t.TempDir()
 	storeAny, err := NewCantoStore(root)
@@ -404,7 +428,7 @@ func TestCantoStoreEntriesDropEmptyAgentMessages(t *testing.T) {
 		}
 	}
 	appendMessage(llm.RoleUser, "first")
-	appendMessage(llm.RoleAssistant, "")
+	appendLegacyCantoMessage(t, store, ctx, sess.ID(), llm.Message{Role: llm.RoleAssistant})
 	appendMessage(llm.RoleAssistant, "same")
 
 	entries, err := sess.Entries(ctx)

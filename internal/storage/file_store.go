@@ -132,7 +132,7 @@ func (s *fileStore) ListSessions(ctx context.Context, cwd string) ([]SessionInfo
 
 	rows, err := db.QueryContext(ctx, "SELECT id, model, branch, created_at, updated_at, message_count, name, last_preview FROM sessions ORDER BY updated_at DESC")
 	if err != nil {
-		return nil, nil
+		return nil, err
 	}
 	defer rows.Close()
 
@@ -147,6 +147,9 @@ func (s *fileStore) ListSessions(ctx context.Context, cwd string) ([]SessionInfo
 		si.UpdatedAt = time.Unix(ua, 0)
 		si.Summary = si.LastPreview
 		sessions = append(sessions, si)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return sessions, nil
 }
@@ -190,6 +193,9 @@ func (s *fileStore) GetInputs(ctx context.Context, cwd string, limit int) ([]str
 			return nil, err
 		}
 		inputs = append(inputs, content)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return inputs, nil
 }
