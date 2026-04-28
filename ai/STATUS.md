@@ -40,13 +40,15 @@ Fast, lightweight terminal coding agent.
 - `/help` readability improved: help output now starts on its own separated block, section headers stay highlighted, command/key labels are styled separately, and descriptions remain normal contrast.
 - Tab completion now covers both slash commands and current-token `@file` references. File completion stays workspace-bound, completes directories with a trailing slash, files with a trailing space, and rejects `..` escapes.
 - Session browser polish started: `/resume` rows now show session count, a search hint, stable title/preview labels, and useful preview/model/branch/age metadata without bogus ages for missing timestamps.
+- Session UX now includes a Pi-like `/session` command that reports the current session id, provider/model, mode, branch, message counts, token totals, and cost without sending a model turn. Focused app command tests and `go test ./... -count=1 -timeout 120s` are green.
 - Preferred live-smoke order: use Fedora local-api first when available (`http://fedora:8080/v1`, `qwen3.6:27b`). Fedora is temporarily down by user request; while it is down, use OpenRouter cheap/free models for live checks: `minimax/minimax-m2.5:free` when available, `deepseek/deepseek-v4-flash` for cheap checks, or `deepseek/deepseek-v4-pro` only when a stronger separate-provider check is useful.
+- Current OpenRouter fallback evidence: `minimax/minimax-m2.5:free` returned `ok` with a 120s print-mode timeout; a 45s Minimax attempt timed out, and `deepseek/deepseek-v4-flash` returned OpenRouter `402 Payment Required`.
 
 ## Next Action
 
 Continue `tk-mmcs` as the parity/table-stakes track:
 
-1. Continue post-core TUI shell work: remaining resume/transcript display issues and session browser polish.
+1. Continue post-core TUI shell work: remaining resume/transcript display issues and session/session-browser polish.
 2. Keep `CoreLoopOnly` on while reopening only table-stakes reliability/session surfaces such as compaction.
 3. Keep ACP, privacy, subagents, skills, routing, and advanced thinking behind explicit later tasks.
 
