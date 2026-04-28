@@ -813,10 +813,15 @@ func (b *Backend) translateEvents(ctx context.Context, evCh <-chan session.Event
 			}
 		case session.ToolCompleted:
 			if data, ok, err := ev.ToolCompletedData(); err == nil && ok {
+				var execErr error
+				if data.Error != "" {
+					execErr = fmt.Errorf("%s", data.Error)
+				}
 				b.events <- ionsession.ToolResult{
 					ToolUseID: data.ID,
 					ToolName:  data.Tool,
 					Result:    data.Output,
+					Error:     execErr,
 				}
 			}
 		case session.ToolOutputDelta:
