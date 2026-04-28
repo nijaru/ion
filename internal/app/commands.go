@@ -303,9 +303,6 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		}
 
 	case "/compact":
-		if features.CoreLoopOnly {
-			return m, cmdError(features.Disabled("/compact"))
-		}
 		compactor, ok := m.Model.Backend.(backend.Compactor)
 		if !ok {
 			return m, cmdError("current backend does not support /compact")
@@ -520,6 +517,7 @@ func helpText() string {
 		"  /tools           show tool count and lazy loading status",
 		"  /clear           start a fresh session with the current provider/model",
 		"  /cost            show aggregate session usage",
+		"  /compact         compact the current session",
 		"  /quit, /exit     leave ion",
 		"  /help            show this help",
 	}
@@ -527,7 +525,6 @@ func helpText() string {
 		lines = append(lines,
 			"  /rewind <id>     preview checkpoint restore; add --confirm to apply",
 			"  /memory [query]  show workspace memory tree or search memory",
-			"  /compact         compact the current session",
 			"  /mcp add <cmd>   register an MCP server",
 		)
 	}
@@ -694,6 +691,7 @@ func slashCommandCatalog() []slashCommandInfo {
 		{name: "/tools", detail: "tool status"},
 		{name: "/clear", detail: "fresh session"},
 		{name: "/cost", detail: "session usage"},
+		{name: "/compact", detail: "compact session"},
 		{name: "/quit", detail: "quit"},
 		{name: "/exit", detail: "quit"},
 		{name: "/help", detail: "show help"},
@@ -702,7 +700,6 @@ func slashCommandCatalog() []slashCommandInfo {
 		commands = append(commands,
 			slashCommandInfo{name: "/rewind", detail: "restore checkpoint"},
 			slashCommandInfo{name: "/memory", detail: "memory search"},
-			slashCommandInfo{name: "/compact", detail: "compact session"},
 			slashCommandInfo{name: "/mcp", detail: "register MCP server"},
 		)
 	}
