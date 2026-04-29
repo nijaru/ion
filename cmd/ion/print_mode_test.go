@@ -250,8 +250,9 @@ func TestPrintModeRejectsApprovalWhenNotAutoApproved(t *testing.T) {
 }
 
 func TestPrintModeApprovesWhenAutoApproved(t *testing.T) {
-	sess := &printSession{events: make(chan session.Event, 2)}
+	sess := &printSession{events: make(chan session.Event, 3)}
 	sess.events <- session.ApprovalRequest{RequestID: "req-1", ToolName: "bash"}
+	sess.events <- session.AgentMessage{Message: "done"}
 	sess.events <- session.TurnFinished{}
 
 	if err := runPrintMode(context.Background(), sess, "hello", true); err != nil {
@@ -341,6 +342,16 @@ func TestPrintModeErrorsWhenEventStreamClosesBeforeTurnFinished(t *testing.T) {
 	_, err := runPromptTurn(context.Background(), sess, "hello", false)
 	if err == nil || !strings.Contains(err.Error(), "event stream closed before turn finished") {
 		t.Fatalf("runPromptTurn error = %v, want early stream close error", err)
+	}
+}
+
+func TestPrintModeErrorsWhenTurnFinishesWithoutAssistantResponse(t *testing.T) {
+	sess := &printSession{events: make(chan session.Event, 1)}
+	sess.events <- session.TurnFinished{}
+
+	_, err := runPromptTurn(context.Background(), sess, "hello", false)
+	if err == nil || !strings.Contains(err.Error(), "turn finished without assistant response") {
+		t.Fatalf("runPromptTurn error = %v, want empty response error", err)
 	}
 }
 
