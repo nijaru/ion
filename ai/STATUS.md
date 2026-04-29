@@ -52,6 +52,7 @@ Fast, lightweight terminal coding agent.
 - TUI transcript shell pass `tk-x1ee` is closed for the current reliability scope. Startup/resume replay already uses shared `RenderEntries` spacing coverage; persisted error rows now render at normal warning contrast instead of faint warning contrast. Focused TUI replay/spacing tests and full Ion tests are green.
 - Session browser pass `tk-puh3` is closed for the current reliability scope. `/resume` source review found older sessions could render raw Go duration labels like `192h0m0s`; age labels now stay human-readable in day units. Focused session picker/resume tests and full Ion tests are green.
 - Safety boundary pass `tk-e8g7` is closed for the current deterministic scope. `/edit`, `/mode auto`, Shift+Tab, `/read`, startup print-mode trust overrides, and `/trust` backend mode/auto-approval behavior now have focused regression coverage. Focused mode/trust/policy tests and full Ion tests are green.
+- TUI status/progress pass `tk-y968` is closed for the current deterministic scope. A new model-visible turn now clears stale provider errors immediately at submit time instead of waiting for a later `TurnStarted` event. Focused status/progress tests and full Ion tests are green.
 - Preferred live-smoke order: use Fedora local-api first when available (`http://fedora:8080/v1`, `qwen3.6:27b`). Fedora is temporarily down by user request; while it is down, use OpenRouter cheap/free models for live checks: `minimax/minimax-m2.5:free` when available, `deepseek/deepseek-v4-flash` for cheap checks, or `deepseek/deepseek-v4-pro` only when a stronger separate-provider check is useful.
 - Current OpenRouter fallback evidence: `minimax/minimax-m2.5:free` returned `ok` with a 120s print-mode timeout; a 45s Minimax attempt timed out, and `deepseek/deepseek-v4-flash` returned OpenRouter `402 Payment Required`.
 
@@ -59,7 +60,7 @@ Fast, lightweight terminal coding agent.
 
 Continue `tk-mmcs` as the parity/table-stakes track:
 
-1. Select the next source-reviewed table-stakes reliability slice under `tk-mmcs`; likely candidates are the next TUI status/progress edge or a cheap print-mode smoke pass, not ACP or experimental features.
+1. Select the next source-reviewed table-stakes reliability slice under `tk-mmcs`; likely candidates are a cheap print-mode smoke pass or one narrowly scoped TUI/session UX edge, not ACP or experimental features.
 2. Keep `CoreLoopOnly` on while reopening only reliability/session surfaces required by Pi/Codex-style parity.
 3. Keep ACP, privacy, subagents, skills, routing, and advanced thinking blocked behind `tk-mmcs`.
 

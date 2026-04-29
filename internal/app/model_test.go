@@ -4045,6 +4045,28 @@ func TestSubmitTextPropagatesImmediateSubmitErrorWithoutPersistence(t *testing.T
 	}
 }
 
+func TestSubmitTextClearsStaleErrorImmediately(t *testing.T) {
+	sess := &stubSession{events: make(chan session.Event)}
+	model := readyModel(t)
+	model.Model.Session = sess
+	model.Progress.Mode = stateError
+	model.Progress.LastError = "old provider error"
+	model.Input.Composer.SetValue("try again")
+
+	updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(Model)
+
+	if model.Progress.Mode != stateIonizing {
+		t.Fatalf("progress mode = %v, want ionizing", model.Progress.Mode)
+	}
+	if model.Progress.LastError != "" {
+		t.Fatalf("last error = %q, want cleared", model.Progress.LastError)
+	}
+	if len(sess.submits) != 1 || sess.submits[0] != "try again" {
+		t.Fatalf("submits = %v, want try again", sess.submits)
+	}
+}
+
 func TestSlashModelSameValueIsNoOp(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
