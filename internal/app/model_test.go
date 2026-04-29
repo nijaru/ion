@@ -2537,6 +2537,16 @@ func TestSessionPickerLineOmitsMissingAge(t *testing.T) {
 	}
 }
 
+func TestSessionAgeLabelUsesDaysForOlderSessions(t *testing.T) {
+	got := humanizeSessionAge(8*24*time.Hour + 3*time.Hour)
+	if got != "8d ago" {
+		t.Fatalf("age label = %q, want 8d ago", got)
+	}
+	if strings.Contains(got, "h0m0s") {
+		t.Fatalf("age label leaked raw duration: %q", got)
+	}
+}
+
 func TestSettingsCommandShowsCommonSettings(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
