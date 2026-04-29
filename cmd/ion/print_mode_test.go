@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -18,11 +19,15 @@ type printSession struct {
 	approved    bool
 	cancelled   int
 	closed      int
+	submitErr   error
 }
 
 func (s *printSession) Open(ctx context.Context) error              { return nil }
 func (s *printSession) Resume(ctx context.Context, id string) error { return nil }
 func (s *printSession) SubmitTurn(ctx context.Context, turn string) error {
+	if s.submitErr != nil {
+		return s.submitErr
+	}
 	return nil
 }
 func (s *printSession) CancelTurn(ctx context.Context) error {
@@ -266,6 +271,25 @@ func TestPrintModeCancelsTurnOnTimeout(t *testing.T) {
 	}
 	if sess.cancelled != 1 {
 		t.Fatalf("cancelled = %d, want 1", sess.cancelled)
+	}
+}
+
+func TestPrintModeReturnsSubmitError(t *testing.T) {
+	sess := &printSession{submitErr: errors.New("provider unavailable")}
+
+	_, err := runPromptTurn(context.Background(), sess, "hello", false)
+	if err == nil || !strings.Contains(err.Error(), "submit turn: provider unavailable") {
+		t.Fatalf("runPromptTurn error = %v, want submit error", err)
+	}
+}
+
+func TestPrintModeReturnsSessionError(t *testing.T) {
+	sess := &printSession{events: make(chan session.Event, 1)}
+	sess.events <- session.Error{Err: errors.New("rate limited")}
+
+	_, err := runPromptTurn(context.Background(), sess, "hello", false)
+	if err == nil || !strings.Contains(err.Error(), "session error: rate limited") {
+		t.Fatalf("runPromptTurn error = %v, want session error", err)
 	}
 }
 
