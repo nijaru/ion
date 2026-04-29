@@ -47,6 +47,7 @@ Fast, lightweight terminal coding agent.
 - Startup config error copy now matches the current command surface: no-provider/no-model errors point to `/provider`, `/model`, env vars, and CLI flags instead of stale `Ctrl+P`/`Ctrl+M` picker guidance. Focused cmd tests and `go test ./... -count=1 -timeout 120s` are green.
 - Startup resume/continue now uses stored session provider/model metadata by default, matching `/resume`; explicit `--provider`/`--model` still override. Focused startup metadata tests, `go test ./... -count=1 -timeout 120s`, and OpenRouter Minimax free print smoke are green.
 - Provider-only overrides are safer: `--provider` and `ION_PROVIDER` now clear stale model state when switching providers unless an explicit model override is present, while `ION_PROVIDER` still takes precedence over provider embedded in `ION_MODEL`. Focused cmd/config tests, `go test ./... -count=1 -timeout 120s`, and OpenRouter Minimax free smoke are green.
+- Compaction reliability pass `tk-ymdv` is closed. Ion no longer tells the model to use an unavailable `compact` tool while `CoreLoopOnly` hides it, successful `/compact` clears stale progress errors, and Ion imports Canto `a2dfd3e` so compacted working-set snapshots recognize Ion's real coding tool names and `file_path` arguments. Focused compaction/backend/storage/app tests, full Ion tests, full Canto tests, and OpenRouter Minimax free smoke are green.
 - Preferred live-smoke order: use Fedora local-api first when available (`http://fedora:8080/v1`, `qwen3.6:27b`). Fedora is temporarily down by user request; while it is down, use OpenRouter cheap/free models for live checks: `minimax/minimax-m2.5:free` when available, `deepseek/deepseek-v4-flash` for cheap checks, or `deepseek/deepseek-v4-pro` only when a stronger separate-provider check is useful.
 - Current OpenRouter fallback evidence: `minimax/minimax-m2.5:free` returned `ok` with a 120s print-mode timeout; a 45s Minimax attempt timed out, and `deepseek/deepseek-v4-flash` returned OpenRouter `402 Payment Required`.
 
@@ -54,7 +55,7 @@ Fast, lightweight terminal coding agent.
 
 Continue `tk-mmcs` as the parity/table-stakes track:
 
-1. Work `tk-ymdv` for compaction/replay reliability, because context survival and resumable compacted history are part of the native loop rather than feature polish.
+1. Continue the table-stakes parity pass under `tk-mmcs` by selecting the next source-reviewed reliability slice from sessions/config/CLI/TUI, not ACP or experimental features.
 2. Keep `CoreLoopOnly` on while reopening only reliability/session surfaces required by Pi/Codex-style parity.
 3. Keep ACP, privacy, subagents, skills, routing, and advanced thinking blocked behind `tk-mmcs`.
 
@@ -63,7 +64,6 @@ Do not run another broad `ai/` pass by default. The next work is source review a
 ## Active Tasks
 
 - `tk-mmcs` — P1 core parity plan and task queue hygiene.
-- `tk-ymdv` — P2 compaction reliability and resume hygiene review under the table-stakes track.
 - `tk-xrgc` — P3 AI context dedupe/reorganization; active only because stale docs were blocking agent focus.
 
 Everything else is downstream of the solo native loop.
