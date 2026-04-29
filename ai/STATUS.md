@@ -54,7 +54,7 @@ Fast, lightweight terminal coding agent.
 - Safety boundary pass `tk-e8g7` is closed for the current deterministic scope. `/edit`, `/mode auto`, Shift+Tab, `/read`, startup print-mode trust overrides, and `/trust` backend mode/auto-approval behavior now have focused regression coverage. Focused mode/trust/policy tests and full Ion tests are green.
 - TUI status/progress pass `tk-y968` is closed for the current deterministic scope. A new model-visible turn now clears stale provider errors immediately at submit time instead of waiting for a later `TurnStarted` event. Focused status/progress tests and full Ion tests are green.
 - Preferred live-smoke order: use Fedora local-api first when available (`http://fedora:8080/v1`, `qwen3.6:27b`). Fedora is temporarily down by user request; while it is down, use OpenRouter cheap/free models for live checks: `minimax/minimax-m2.5:free` when available, `deepseek/deepseek-v4-flash` for cheap checks, or `deepseek/deepseek-v4-pro` only when a stronger separate-provider check is useful.
-- Current OpenRouter fallback evidence: `minimax/minimax-m2.5:free` returned `ok` with a 120s print-mode timeout; a 45s Minimax attempt timed out, and `deepseek/deepseek-v4-flash` returned OpenRouter `402 Payment Required`.
+- Current OpenRouter fallback evidence: `minimax/minimax-m2.5:free` returned `ok` with a 120s print-mode timeout after the latest safety/help/status slices; a 45s Minimax attempt previously timed out, and `deepseek/deepseek-v4-flash` returned OpenRouter `402 Payment Required`.
 
 ## Next Action
 
