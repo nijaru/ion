@@ -38,6 +38,7 @@ func TestBaseInstructionsAvoidStaleBrandingAndRuntimeSpecifics(t *testing.T) {
 		"Always prefer modern Go",
 		"go test ./...",
 		"high-fidelity verification loop",
+		"`compact` tool",
 		"## Runtime Context",
 		"Platform:",
 		"Working directory:",

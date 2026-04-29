@@ -1662,6 +1662,26 @@ func TestCompactCommandReportsNoOp(t *testing.T) {
 	}
 }
 
+func TestCompactCompletionClearsStaleErrorState(t *testing.T) {
+	model := readyModel(t)
+	model.Progress.Mode = stateError
+	model.Progress.LastError = "stale provider error"
+	model.Progress.Compacting = true
+
+	updated, _ := model.Update(sessionCompactedMsg{notice: "Compacted current session context"})
+	model = updated.(Model)
+
+	if model.Progress.Compacting {
+		t.Fatal("expected compaction progress to clear")
+	}
+	if model.Progress.Mode == stateError || model.Progress.LastError != "" {
+		t.Fatalf(
+			"progress error state = (%v, %q), want cleared",
+			model.Progress.Mode, model.Progress.LastError,
+		)
+	}
+}
+
 func TestCompactCommandErrorsWhenBackendUnsupported(t *testing.T) {
 	model := New(
 		stubBackend{sess: &stubSession{events: make(chan session.Event)}},

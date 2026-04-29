@@ -94,9 +94,9 @@ func responseStyleInstructions() string {
 
 func contextManagementInstructions() string {
 	return strings.Join([]string{
-		"- Use the `compact` tool when switching topics, after completing a multi-step task, or when earlier conversation context is no longer relevant.",
-		"- Do not compact mid-task — only when the current work is done and you are about to start something new.",
-		"- Provide a brief message describing what to preserve when compacting (key decisions, file paths, current state).",
+		"- The host may compact older conversation context when a session grows long or reaches provider limits.",
+		"- Treat compaction summaries as authoritative continuation notes, but verify important details against files before editing.",
+		"- Keep responses concise enough that long sessions stay usable.",
 	}, "\n")
 }
 

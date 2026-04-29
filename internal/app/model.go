@@ -740,6 +740,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case sessionCompactedMsg:
 		m.Progress.Compacting = false
 		m.Progress.Status = "Ready"
+		m.clearProgressError()
 		cmds := []tea.Cmd{m.printEntries(session.Entry{Role: session.System, Content: msg.notice})}
 		if len(m.InFlight.QueuedTurns) > 0 {
 			queued := m.InFlight.QueuedTurns[0]
