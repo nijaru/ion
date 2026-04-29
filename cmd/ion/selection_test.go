@@ -213,6 +213,12 @@ func TestApplyCLIConfigOverrides(t *testing.T) {
 	if cfg.Provider != "local-api" || cfg.Model != "qwen3.6:27b" {
 		t.Fatalf("cfg = %#v, want local-api qwen model", cfg)
 	}
+
+	cfg = &config.Config{Provider: "openrouter", Model: "openai/gpt-5.4"}
+	applyCLIConfigOverrides(cfg, "local-api", "", "")
+	if cfg.Provider != "local-api" || cfg.Model != "" {
+		t.Fatalf("cfg = %#v, want provider-only override to clear stale model", cfg)
+	}
 }
 
 func TestRecentSessionForContinueSkipsEmptyAndSlashOnlySessions(t *testing.T) {

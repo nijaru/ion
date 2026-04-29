@@ -164,6 +164,59 @@ func TestLoadAppliesMutableState(t *testing.T) {
 	}
 }
 
+func TestLoadProviderEnvOverrideClearsStaleModel(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("ION_PROVIDER", "local-api")
+
+	configDir := filepath.Join(home, ".ion")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(configDir, "state.toml"),
+		[]byte("provider = \"openrouter\"\nmodel = \"openai/gpt-5.4\"\n"),
+		0o644,
+	); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.Provider != "local-api" || cfg.Model != "" {
+		t.Fatalf("cfg = %#v, want provider override with no stale model", cfg)
+	}
+}
+
+func TestLoadProviderEnvOverrideKeepsExplicitModel(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("ION_PROVIDER", "local-api")
+	t.Setenv("ION_MODEL", "qwen3.6:27b")
+
+	configDir := filepath.Join(home, ".ion")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(configDir, "state.toml"),
+		[]byte("provider = \"openrouter\"\nmodel = \"openai/gpt-5.4\"\n"),
+		0o644,
+	); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.Provider != "local-api" || cfg.Model != "qwen3.6:27b" {
+		t.Fatalf("cfg = %#v, want explicit provider/model override", cfg)
+	}
+}
+
 func TestLoadStateCanClearConfiguredModel(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
