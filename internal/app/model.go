@@ -29,6 +29,8 @@ type clearPendingMsg struct {
 	action pendingAction
 }
 
+type deferredEnterMsg struct{}
+
 type pendingAction int
 
 const (
@@ -234,13 +236,17 @@ type ProgressState struct {
 
 // InputState holds state for the composer, history, and double-tap tracking.
 type InputState struct {
-	Composer     textarea.Model
-	Spinner      spinner.Model
-	History      []string
-	HistoryIdx   int
-	HistoryDraft string
-	CtrlCPending bool
-	Pending      pendingAction
+	Composer       textarea.Model
+	Spinner        spinner.Model
+	History        []string
+	HistoryIdx     int
+	HistoryDraft   string
+	CtrlCPending   bool
+	Pending        pendingAction
+	PrintHoldUntil time.Time
+	PrintHoldDelay time.Duration
+	DelayNextEnter bool
+	DeferredEnter  bool
 }
 
 // pasteMarker stores original content for a collapsed large paste.
@@ -675,6 +681,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.clearPendingAction()
 		}
 		return m, nil
+
+	case deferredEnterMsg:
+		if !m.Input.DeferredEnter {
+			return m, nil
+		}
+		if m.printHoldActive() {
+			return m, m.scheduleDeferredEnter()
+		}
+		m.Input.DeferredEnter = false
+		m.Input.PrintHoldDelay = 0
+		return m.submitComposer()
 
 	case runtimeSwitchedMsg:
 		if msg.preset == "" {

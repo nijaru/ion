@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -129,25 +130,19 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		}
 
 	case "enter":
-		m.clearPendingAction()
-		text := strings.TrimSpace(m.Input.Composer.Value())
-		if text == "" {
-			return m, nil
+		if m.Input.DelayNextEnter {
+			m.clearPendingAction()
+			m.Input.DelayNextEnter = false
+			m.Input.DeferredEnter = true
+			m.Input.PrintHoldUntil = time.Now().Add(m.Input.PrintHoldDelay)
+			return m, m.scheduleDeferredEnter()
 		}
-		if strings.HasPrefix(text, "/") {
-			return m.submitText(text)
+		if m.printHoldActive() {
+			m.clearPendingAction()
+			m.Input.DeferredEnter = true
+			return m, m.scheduleDeferredEnter()
 		}
-		if m.InFlight.Thinking || m.Progress.Compacting {
-			m.InFlight.QueuedTurns = append(m.InFlight.QueuedTurns, text)
-			m.Input.Composer.Reset()
-			m.PasteMarkers = make(map[string]pasteMarker)
-			m.relayoutComposer()
-			return m, m.printEntries(
-				session.Entry{Role: session.System, Content: "Queued follow-up"},
-			)
-		}
-
-		return m.submitText(text)
+		return m.submitComposer()
 
 	case "shift+enter", "alt+enter":
 		m.clearPendingAction()
@@ -207,6 +202,28 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.layout()
 	}
 	return m, cmd
+}
+
+func (m Model) submitComposer() (Model, tea.Cmd) {
+	m.clearPendingAction()
+	text := strings.TrimSpace(m.Input.Composer.Value())
+	if text == "" {
+		return m, nil
+	}
+	if strings.HasPrefix(text, "/") {
+		return m.submitText(text)
+	}
+	if m.InFlight.Thinking || m.Progress.Compacting {
+		m.InFlight.QueuedTurns = append(m.InFlight.QueuedTurns, text)
+		m.Input.Composer.Reset()
+		m.PasteMarkers = make(map[string]pasteMarker)
+		m.relayoutComposer()
+		return m, m.printEntries(
+			session.Entry{Role: session.System, Content: "Queued follow-up"},
+		)
+	}
+
+	return m.submitText(text)
 }
 
 func (m Model) completeSlashCommand() (Model, tea.Cmd, bool) {

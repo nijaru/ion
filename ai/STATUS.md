@@ -6,7 +6,7 @@ Fast, lightweight terminal coding agent.
 **Focus:** Reliability features that sit directly on the native loop: CLI automation, sessions, compaction, replay, and config/session state hygiene.  
 **Active blocker:** `tk-mmcs` — core parity plan and task queue hygiene.  
 **Queue hygiene:** `tk-mmcs` keeps Pi/Codex/Claude parity planning aligned; deferred ACP/P3/P4 tasks are blocked behind it so `tk ready` stays focused.
-**Updated:** 2026-04-28
+**Updated:** 2026-04-29
 
 ## Current Truth
 
@@ -58,6 +58,7 @@ Fast, lightweight terminal coding agent.
 - Backend provider/tool error pass `tk-stc6` is closed for the current deterministic scope. CantoBackend now has full-loop coverage proving a failed bash tool result remains provider-visible after the tool call and through a follow-up user turn. Focused backend tests and full Ion tests are green.
 - CLI print empty-response pass `tk-sab6` is closed. Fedora explicit `--resume -p` exposed one provider turn that completed with token usage but no assistant message, causing empty stdout with exit 0. Print mode now treats a completed turn without non-empty assistant response as an error; focused print tests, full Ion tests, and Fedora text/resume/JSON tool smokes are green.
 - TUI tmux smoke pass `tk-l2kk` is closed. Fedora TUI launch, `?` help, `/session`, live turn, `--continue` replay, and resumed follow-up were exercised by reading captured tmux terminal text. This is now recorded in `AGENTS.md` as the preferred TUI smoke method, with screenshots reserved only for visual issues that text capture cannot judge. The core TUI turn/replay path looked healthy: no duplicate replay, resumed marker ordering was correct, entry spacing was readable, and follow-up returned `continued`. One TUI bug is now tracked separately as `tk-z3qq`: rapid local commands can interleave long scrollback output.
+- TUI long-scrollback ordering pass `tk-z3qq` is closed. Long inline print blocks are now split into ordered smaller Bubble Tea print chunks, and the next Enter after a large local print is briefly deferred so rapid `?` then `/session` cannot interleave help and session output. Focused app tests, full Ion tests, and tmux text capture of the original repro are green.
 - Preferred live-smoke order: use Fedora local-api first when available (`http://fedora:8080/v1`, currently advertising `qwen3.6:27b-uncensored`). OpenRouter remains fallback only: `minimax/minimax-m2.5:free` when available, `deepseek/deepseek-v4-flash` for cheap checks, or `deepseek/deepseek-v4-pro` only when a stronger separate-provider check is useful.
 - Current Fedora evidence: `/v1/models` returned `qwen3.6:27b-uncensored`; `TestLiveSmokeTurnAndToolCall` passed with tool call, persisted resume, and follow-up `continued`; direct `ion -p` text smoke returned `ok`; explicit `--resume <id> -p` returned `resumed`; direct JSON tool smoke returned `response="done"` with `tool_calls=["bash"]`.
 - Current OpenRouter fallback evidence: `minimax/minimax-m2.5:free` returned `ok` with a 120s print-mode timeout after the latest CLI print slice; a 45s Minimax attempt previously timed out, and `deepseek/deepseek-v4-flash` returned OpenRouter `402 Payment Required`.
@@ -66,7 +67,7 @@ Fast, lightweight terminal coding agent.
 
 Continue `tk-mmcs` as the parity/table-stakes track:
 
-1. Work `tk-z3qq` next unless a core-loop regression appears: serialize or otherwise fix long local-command scrollback output so rapid `/help` then `/session` cannot interleave lines.
+1. Continue TUI table-stakes hardening under `tk-mmcs`: review the next transcript/local-command surface with tmux text capture, then return to live turn/resume smoke if any core-loop behavior changes.
 2. Keep `CoreLoopOnly` on while reopening only reliability/session surfaces required by Pi/Codex-style parity.
 3. Keep ACP, privacy, subagents, skills, routing, and advanced thinking blocked behind `tk-mmcs`.
 
@@ -75,7 +76,6 @@ Do not run another broad `ai/` pass by default. The next work is source review a
 ## Active Tasks
 
 - `tk-mmcs` — P1 core parity plan and task queue hygiene.
-- `tk-z3qq` — P2 TUI scrollback print ordering bug found by tmux smoke.
 - `tk-xrgc` — P3 AI context dedupe/reorganization; active only because stale docs were blocking agent focus.
 
 Everything else is downstream of the solo native loop.
