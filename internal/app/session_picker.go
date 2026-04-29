@@ -288,7 +288,7 @@ func humanizeSessionAge(d time.Duration) string {
 	case d < 7*24*time.Hour:
 		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
 	default:
-		return d.Round(24 * time.Hour).String()
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
 	}
 }
 
