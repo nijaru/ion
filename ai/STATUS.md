@@ -37,7 +37,7 @@ Fast, lightweight terminal coding agent.
 - CLI session/error handling is tighter: invalid `--output` values fail before runtime/model execution, and explicit `--continue`/`-c` now errors when no conversation session exists instead of silently starting fresh. Full tests and Fedora text/JSON/continue print smokes pass.
 - CLI tool automation now works in untrusted workspaces when the user explicitly asks for it: print-mode `--yolo` / `--mode auto` stays auto for that invocation, while interactive TUI startup still downgrades untrusted workspaces to READ. Fedora JSON tool smoke returned `tool_calls=["bash"]` and `response="done"`.
 - Startup header readability improved: the trust notice now says `Workspace: not trusted. READ mode active. Run /trust to enable edits.`, tool metadata is labeled as `Tools: N registered`, and startup metadata uses readable gray/warning/ok color rather than faint-only styling.
-- `/help` readability improved: help output now starts on its own separated block, section headers stay highlighted, command/key labels are styled separately, and descriptions remain normal contrast.
+- `/help` readability improved: help output now starts on its own separated block, section headers stay highlighted, command/key labels are styled separately, descriptions remain normal contrast, and approval key copy now matches the actual per-tool-category allow behavior.
 - Tab completion now covers both slash commands and current-token `@file` references. File completion stays workspace-bound, completes directories with a trailing slash, files with a trailing space, and rejects `..` escapes.
 - Session browser polish started: `/resume` rows now show session count, a search hint, stable title/preview labels, and useful preview/model/branch/age metadata without bogus ages for missing timestamps.
 - Session UX now includes a Pi-like `/session` command that reports durable session id, provider/model, mode, branch, message counts, token totals, and cost without sending a model turn. It reports `id: none` for lazy pre-turn sessions and has regression coverage that it does not materialize a session row. Focused app command tests and `go test ./... -count=1 -timeout 120s` are green.
@@ -59,7 +59,7 @@ Fast, lightweight terminal coding agent.
 
 Continue `tk-mmcs` as the parity/table-stakes track:
 
-1. Select the next source-reviewed table-stakes reliability slice under `tk-mmcs`; likely candidates are launch header/help readability or the next TUI status/progress edge, not ACP or experimental features.
+1. Select the next source-reviewed table-stakes reliability slice under `tk-mmcs`; likely candidates are the next TUI status/progress edge or a cheap print-mode smoke pass, not ACP or experimental features.
 2. Keep `CoreLoopOnly` on while reopening only reliability/session surfaces required by Pi/Codex-style parity.
 3. Keep ACP, privacy, subagents, skills, routing, and advanced thinking blocked behind `tk-mmcs`.
 

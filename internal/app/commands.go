@@ -641,7 +641,7 @@ func helpText() string {
 		"",
 		"  y                approve the tool call",
 		"  n                deny the tool call",
-		"  a                approve and auto-approve all remaining this session",
+		"  a                approve and allow this tool category for the session",
 	)
 	return strings.Join(lines, "\n")
 }
