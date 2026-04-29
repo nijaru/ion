@@ -2378,6 +2378,81 @@ func TestCostCommandReportsMissingCost(t *testing.T) {
 	}
 }
 
+func TestBusyTurnBlocksRuntimeChangingCommands(t *testing.T) {
+	commands := []string{
+		"/primary",
+		"/fast",
+		"/resume session-1",
+		"/model model-b",
+		"/provider local-api",
+		"/thinking high",
+		"/settings retry on",
+		"/clear",
+		"/compact",
+	}
+
+	for _, command := range commands {
+		t.Run(command, func(t *testing.T) {
+			model := readyModel(t)
+			model.InFlight.Thinking = true
+
+			_, cmd := model.handleCommand(command)
+			if cmd == nil {
+				t.Fatal("expected busy command to return an error")
+			}
+			err := localErrorFromMsg(t, cmd())
+			if !strings.Contains(err.Error(), "Finish or cancel the current turn") {
+				t.Fatalf("error = %v, want busy-turn guard", err)
+			}
+		})
+	}
+}
+
+func TestBusyTurnAllowsReadOnlyLocalCommands(t *testing.T) {
+	model := readyModel(t)
+	model.InFlight.Thinking = true
+
+	for _, command := range []string{"/help", "/session", "/cost", "/tools", "/mode"} {
+		t.Run(command, func(t *testing.T) {
+			_, cmd := model.handleCommand(command)
+			if cmd == nil {
+				t.Fatal("expected local command output")
+			}
+			if _, ok := cmd().(localErrorMsg); ok {
+				t.Fatalf("%s should remain available while a turn is active", command)
+			}
+		})
+	}
+}
+
+func TestBusyTurnBlocksRuntimeChangingPickerSelection(t *testing.T) {
+	model := readyModel(t)
+	model.InFlight.Thinking = true
+	model.Picker.Overlay = &pickerOverlayState{
+		items: []pickerItem{
+			{Label: "model-b", Value: "model-b"},
+		},
+		filtered: []pickerItem{
+			{Label: "model-b", Value: "model-b"},
+		},
+		purpose: pickerPurposeModel,
+		cfg:     &config.Config{Provider: "local-api", Model: "model-a"},
+	}
+
+	updated, cmd := model.commitPickerSelection()
+	model = updated
+	if model.Picker.Overlay != nil {
+		t.Fatal("expected busy picker selection to close overlay")
+	}
+	if cmd == nil {
+		t.Fatal("expected busy picker selection to return an error")
+	}
+	err := localErrorFromMsg(t, cmd())
+	if !strings.Contains(err.Error(), "Finish or cancel the current turn") {
+		t.Fatalf("error = %v, want busy-turn guard", err)
+	}
+}
+
 func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 	model := New(
 		stubBackend{sess: &stubSession{events: make(chan session.Event)}},

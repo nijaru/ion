@@ -24,8 +24,12 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 	if len(fields) == 0 {
 		return m, nil
 	}
+	command := fields[0]
+	if m.commandRequiresIdle(fields) && m.localCommandBusy() {
+		return m, cmdError("Finish or cancel the current turn before " + command + ".")
+	}
 
-	switch fields[0] {
+	switch command {
 	case "/help":
 		return m, func() tea.Msg {
 			return sessionHelpMsg{notice: helpText()}
@@ -244,7 +248,7 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		if !ok {
 			return m, cmdError("memory view unavailable for this backend")
 		}
-		query := strings.TrimSpace(strings.TrimPrefix(input, fields[0]))
+		query := strings.TrimSpace(strings.TrimPrefix(input, command))
 		out, err := explorer.MemoryView(context.Background(), query)
 		if err != nil {
 			return m, cmdError(fmt.Sprintf("failed to load memory: %v", err))
@@ -338,6 +342,31 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 
 	default:
 		return m, cmdError(fmt.Sprintf("unknown command: %s", fields[0]))
+	}
+}
+
+func (m Model) localCommandBusy() bool {
+	return m.InFlight.Thinking || m.Progress.Compacting || m.Approval.Pending != nil
+}
+
+func (m Model) commandRequiresIdle(fields []string) bool {
+	command := fields[0]
+	switch command {
+	case "/primary", "/fast", "/resume", "/clear", "/compact", "/rewind":
+		return true
+	case "/model", "/provider", "/thinking", "/settings":
+		return len(fields) > 1
+	default:
+		return false
+	}
+}
+
+func pickerSelectionRequiresIdle(purpose pickerPurpose) bool {
+	switch purpose {
+	case pickerPurposeProvider, pickerPurposeModel, pickerPurposeThinking:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -1082,6 +1111,10 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 	var cfg config.Config
 	if m.Picker.Overlay.cfg != nil {
 		cfg = *m.Picker.Overlay.cfg
+	}
+	if m.localCommandBusy() && pickerSelectionRequiresIdle(m.Picker.Overlay.purpose) {
+		m.Picker.Overlay = nil
+		return m, cmdError("Finish or cancel the current turn before changing runtime settings.")
 	}
 
 	switch m.Picker.Overlay.purpose {
