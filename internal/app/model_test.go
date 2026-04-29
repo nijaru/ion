@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -1703,6 +1704,37 @@ func TestCompactCommandReportsNoOp(t *testing.T) {
 	}
 	if compacted.notice != "Session is already within compaction limits" {
 		t.Fatalf("compact no-op notice = %q", compacted.notice)
+	}
+}
+
+func TestCompactCommandDoesNotMaterializeLazySession(t *testing.T) {
+	store, err := storage.NewCantoStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	lazy := storage.NewLazySession(store, "/tmp/test", "openai/model-a", "main")
+	backend := &compactBackend{
+		stubBackend: stubBackend{sess: &stubSession{events: make(chan session.Event)}},
+		compacted:   true,
+	}
+	model := New(backend, lazy, store, "/tmp/test", "main", "dev", nil)
+
+	model, cmd := model.handleCommand("/compact")
+	if cmd == nil {
+		t.Fatal("expected /compact command to return a notice")
+	}
+	if model.Progress.Compacting {
+		t.Fatal("lazy /compact should not mark compaction in progress")
+	}
+	if backend.called {
+		t.Fatal("lazy /compact called backend compactor before a session existed")
+	}
+	if storage.IsMaterialized(lazy) {
+		t.Fatal("lazy /compact materialized a session")
+	}
+	out := cmd()
+	if got := ansi.Strip(fmt.Sprint(out)); !strings.Contains(got, "No active session to compact yet") {
+		t.Fatalf("compact notice = %q, want no active session notice", got)
 	}
 }
 

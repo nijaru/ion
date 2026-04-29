@@ -310,6 +310,12 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		return m, m.printEntries(session.Entry{Role: session.System, Content: notice})
 
 	case "/compact":
+		if m.Model.Storage != nil && !storage.IsMaterialized(m.Model.Storage) {
+			return m, m.printEntries(session.Entry{
+				Role:    session.System,
+				Content: "No active session to compact yet",
+			})
+		}
 		compactor, ok := m.Model.Backend.(backend.Compactor)
 		if !ok {
 			return m, cmdError("current backend does not support /compact")
