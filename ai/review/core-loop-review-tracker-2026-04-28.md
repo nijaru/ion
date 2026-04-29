@@ -40,6 +40,10 @@ The current product target is:
 
 Do not start P2/P3 UI features until A1-A5 are green after the latest code changes. A6 can fix presentation defects that hide or confuse the core loop.
 
+## Active Sequence Log
+
+- 2026-04-29 — A1 native event ownership patched in Ion: `AgentMessage` now marks the assistant transcript committed for the active turn, and late assistant/thinking deltas are ignored so streamed deltas cannot recreate pending state or be committed again on `TurnFinished`. Focused app/backend tests, full Ion tests, focused race gate, and OpenRouter Minimax fallback smoke passed. Fedora was unreachable for the local live smoke.
+
 ## Core Definition
 
 The audit is limited to the native loop:
