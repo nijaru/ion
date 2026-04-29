@@ -21,6 +21,14 @@ func ifthen[T any](cond bool, a, b T) T {
 
 func now() int64 { return time.Now().Unix() }
 
+const (
+	printSubmitHoldThreshold = 12
+	printChunkLines          = 36
+	printSubmitHoldBase      = 150 * time.Millisecond
+	printSubmitHoldPerLine   = 15 * time.Millisecond
+	printSubmitHoldMax       = 1 * time.Second
+)
+
 func initialMode(_ backend.Bootstrap) session.Mode {
 	if cfg, err := config.Load(); err == nil {
 		switch config.ResolveDefaultMode(cfg.DefaultMode) {
@@ -42,14 +50,25 @@ func configureModelSessionMode(agent session.AgentSession, mode session.Mode) {
 }
 
 func printLinesCmd(lines ...string) tea.Cmd {
-	filtered := make([]string, 0, len(lines))
+	filtered := make([]string, 0, physicalLineCount(lines))
 	for _, line := range lines {
-		filtered = append(filtered, line)
+		filtered = append(filtered, strings.Split(line, "\n")...)
 	}
 	if len(filtered) == 0 {
 		return nil
 	}
-	return tea.Printf("%s\n", strings.Join(filtered, "\n"))
+	if len(filtered) <= printChunkLines {
+		return tea.Printf("%s\n", strings.Join(filtered, "\n"))
+	}
+	cmds := make([]tea.Cmd, 0, (len(filtered)+printChunkLines-1)/printChunkLines)
+	for start := 0; start < len(filtered); start += printChunkLines {
+		end := start + printChunkLines
+		if end > len(filtered) {
+			end = len(filtered)
+		}
+		cmds = append(cmds, tea.Printf("%s\n", strings.Join(filtered[start:end], "\n")))
+	}
+	return tea.Sequence(cmds...)
 }
 
 func printEntriesCmd(m Model, entries ...session.Entry) tea.Cmd {
@@ -78,6 +97,12 @@ func (m *Model) printEntries(entries ...session.Entry) tea.Cmd {
 	lines = append(lines, "")
 	m.App.PrintedTranscript = true
 	lines = append(lines, m.RenderEntries(entries...)...)
+	physicalLines := physicalLineCount(lines)
+	if physicalLines >= printSubmitHoldThreshold {
+		lines = append(lines, "")
+		physicalLines++
+	}
+	m.holdEnterForLargePrint(physicalLines)
 	return printLinesCmd(lines...)
 }
 
@@ -92,7 +117,49 @@ func (m *Model) printHelp(content string) tea.Cmd {
 	for i, line := range strings.Split(content, "\n") {
 		lines = append(lines, m.renderHelpLine(i, line))
 	}
+	physicalLines := physicalLineCount(lines)
+	if physicalLines >= printSubmitHoldThreshold {
+		lines = append(lines, "")
+		physicalLines++
+	}
+	m.holdEnterForLargePrint(physicalLines)
 	return printLinesCmd(lines...)
+}
+
+func physicalLineCount(lines []string) int {
+	count := 0
+	for _, line := range lines {
+		count += strings.Count(line, "\n") + 1
+	}
+	return count
+}
+
+func (m *Model) holdEnterForLargePrint(lines int) {
+	if lines < printSubmitHoldThreshold {
+		return
+	}
+	delay := printSubmitHoldBase + time.Duration(lines)*printSubmitHoldPerLine
+	if delay > printSubmitHoldMax {
+		delay = printSubmitHoldMax
+	}
+	if delay > m.Input.PrintHoldDelay {
+		m.Input.PrintHoldDelay = delay
+	}
+	m.Input.DelayNextEnter = true
+}
+
+func (m Model) printHoldActive() bool {
+	return time.Now().Before(m.Input.PrintHoldUntil)
+}
+
+func (m Model) scheduleDeferredEnter() tea.Cmd {
+	delay := time.Until(m.Input.PrintHoldUntil)
+	if delay < 10*time.Millisecond {
+		delay = 10 * time.Millisecond
+	}
+	return tea.Tick(delay, func(time.Time) tea.Msg {
+		return deferredEnterMsg{}
+	})
 }
 
 func (m Model) renderHelpLine(index int, line string) string {

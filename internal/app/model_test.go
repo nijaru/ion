@@ -1174,6 +1174,45 @@ func TestEnterSubmitsSlashCommandFromComposer(t *testing.T) {
 	}
 }
 
+func TestEnterDuringLargePrintHoldDefersSubmission(t *testing.T) {
+	model := readyModel(t)
+	model.Input.Composer.SetValue("/session")
+	model.holdEnterForLargePrint(40)
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(Model)
+
+	if !model.Input.DeferredEnter {
+		t.Fatal("expected Enter to be deferred while large print is flushing")
+	}
+	if got := model.Input.Composer.Value(); got != "/session" {
+		t.Fatalf("composer = %q, want deferred command to remain editable", got)
+	}
+	if cmd == nil {
+		t.Fatal("expected deferred Enter timer command")
+	}
+}
+
+func TestDeferredEnterSubmitsAfterPrintHold(t *testing.T) {
+	model := readyModel(t)
+	model.Input.Composer.SetValue("/session")
+	model.Input.DeferredEnter = true
+	model.Input.PrintHoldUntil = time.Now().Add(-time.Millisecond)
+
+	updated, cmd := model.Update(deferredEnterMsg{})
+	model = updated.(Model)
+
+	if model.Input.DeferredEnter {
+		t.Fatal("expected deferred Enter state to clear after submit")
+	}
+	if got := model.Input.Composer.Value(); got != "" {
+		t.Fatalf("composer = %q, want cleared after deferred submit", got)
+	}
+	if cmd == nil {
+		t.Fatal("expected deferred slash command print command")
+	}
+}
+
 func TestCtrlCDoubleTapQuitsOnlyWhenIdleAndEmpty(t *testing.T) {
 	model := readyModel(t)
 
