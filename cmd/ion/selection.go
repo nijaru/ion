@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/features"
 	"github.com/nijaru/ion/internal/providers"
+	"github.com/nijaru/ion/internal/storage"
 )
 
 var (
@@ -78,6 +80,26 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
+func applySessionConfigFromMetadata(ctx context.Context, store storage.Store, sessionID string, cfg *config.Config) error {
+	if store == nil || cfg == nil || strings.TrimSpace(sessionID) == "" {
+		return nil
+	}
+	sess, err := store.ResumeSession(ctx, sessionID)
+	if err != nil {
+		return fmt.Errorf("failed to inspect session %s metadata: %w", sessionID, err)
+	}
+	defer func() {
+		_ = sess.Close()
+	}()
+	provider, model := splitSessionModelName(sess.Meta().Model)
+	if provider == "" {
+		return nil
+	}
+	cfg.Provider = provider
+	cfg.Model = model
+	return nil
+}
+
 func backendForProvider(provider string) (backend.Backend, error) {
 	provider = providers.ResolveID(provider)
 	if provider == "" {
@@ -107,6 +129,18 @@ func isACPProvider(provider string) bool {
 
 func defaultACPCommand(provider string) (string, bool) {
 	return providers.DefaultACPCommand(provider)
+}
+
+func splitSessionModelName(value string) (string, string) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", ""
+	}
+	provider, model, ok := strings.Cut(value, "/")
+	if !ok {
+		return strings.TrimSpace(value), ""
+	}
+	return strings.TrimSpace(provider), strings.TrimSpace(model)
 }
 
 func sessionModelName(provider, model string) string {

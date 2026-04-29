@@ -677,6 +677,52 @@ func TestSessionModelName(t *testing.T) {
 	}
 }
 
+func TestApplySessionConfigFromMetadata(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	dataDir, err := config.DefaultDataDir()
+	if err != nil {
+		t.Fatalf("default data dir: %v", err)
+	}
+	store, err := storage.NewCantoStore(dataDir)
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	defer store.Close()
+
+	ctx := context.Background()
+	seed, err := store.OpenSession(ctx, "/tmp/test", "openrouter/openai/gpt-5.4", "main")
+	if err != nil {
+		t.Fatalf("open seed session: %v", err)
+	}
+	seedID := seed.ID()
+	if err := seed.Close(); err != nil {
+		t.Fatalf("close seed session: %v", err)
+	}
+
+	cfg := &config.Config{Provider: "local-api", Model: "qwen3.6:27b", ReasoningEffort: "high"}
+	if err := applySessionConfigFromMetadata(ctx, store, seedID, cfg); err != nil {
+		t.Fatalf("apply session config: %v", err)
+	}
+	if cfg.Provider != "openrouter" || cfg.Model != "openai/gpt-5.4" {
+		t.Fatalf("cfg provider/model = %s/%s, want openrouter/openai/gpt-5.4", cfg.Provider, cfg.Model)
+	}
+	if cfg.ReasoningEffort != "high" {
+		t.Fatalf("reasoning effort = %q, want high", cfg.ReasoningEffort)
+	}
+}
+
+func TestSplitSessionModelName(t *testing.T) {
+	provider, model := splitSessionModelName("openrouter/openai/gpt-5.4")
+	if provider != "openrouter" || model != "openai/gpt-5.4" {
+		t.Fatalf("split openrouter model = %q/%q", provider, model)
+	}
+	provider, model = splitSessionModelName("claude-pro")
+	if provider != "claude-pro" || model != "" {
+		t.Fatalf("split subscription model = %q/%q", provider, model)
+	}
+}
+
 func TestSyncSessionMetadata(t *testing.T) {
 	store := &metadataStore{}
 
