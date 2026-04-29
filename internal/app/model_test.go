@@ -441,6 +441,46 @@ func TestPlaneBHidesPendingAgentText(t *testing.T) {
 	}
 }
 
+func TestLateAgentDeltaAfterCommitIsIgnored(t *testing.T) {
+	model := readyModel(t)
+
+	updated, _ := model.Update(session.TurnStarted{})
+	model = updated.(Model)
+	updated, _ = model.Update(session.AgentDelta{Delta: "partial"})
+	model = updated.(Model)
+	updated, cmd := model.Update(session.AgentMessage{Message: "final"})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("expected committed assistant print command")
+	}
+	if !model.InFlight.AgentCommitted {
+		t.Fatal("agent commit marker was not set")
+	}
+
+	updated, _ = model.Update(session.AgentDelta{Delta: "late"})
+	model = updated.(Model)
+	if model.InFlight.Pending != nil || model.InFlight.StreamBuf != "" {
+		t.Fatalf("late delta recreated pending stream: pending=%#v stream=%q", model.InFlight.Pending, model.InFlight.StreamBuf)
+	}
+
+	updated, _ = model.Update(session.ThinkingDelta{Delta: "late thinking"})
+	model = updated.(Model)
+	if model.InFlight.ReasonBuf != "" {
+		t.Fatalf("late thinking buffer = %q, want ignored", model.InFlight.ReasonBuf)
+	}
+
+	updated, _ = model.Update(session.TurnFinished{})
+	model = updated.(Model)
+	if model.InFlight.Pending != nil || model.InFlight.StreamBuf != "" || model.InFlight.ReasonBuf != "" {
+		t.Fatalf(
+			"turn finish left pending stream: pending=%#v stream=%q reason=%q",
+			model.InFlight.Pending,
+			model.InFlight.StreamBuf,
+			model.InFlight.ReasonBuf,
+		)
+	}
+}
+
 func TestToolEntryFlushesToTranscript(t *testing.T) {
 	storageSess := &stubStorageSession{}
 	model := readyModel(t)

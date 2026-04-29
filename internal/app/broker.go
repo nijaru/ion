@@ -97,12 +97,14 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		m.Progress.BudgetStopReason = ""
 		m.InFlight.Pending = &session.Entry{Role: session.Agent}
 		m.InFlight.PendingTools = nil
+		m.InFlight.AgentCommitted = false
 		return m, m.awaitSessionEvent()
 
 	case session.TurnFinished:
 		m.InFlight.Thinking = false
 		var cmds []tea.Cmd
-		if m.InFlight.Pending != nil && m.InFlight.Pending.Role == session.Agent &&
+		if !m.InFlight.AgentCommitted &&
+			m.InFlight.Pending != nil && m.InFlight.Pending.Role == session.Agent &&
 			(strings.TrimSpace(m.InFlight.Pending.Content) != "" ||
 				strings.TrimSpace(m.InFlight.Pending.Reasoning) != "" ||
 				strings.TrimSpace(m.InFlight.ReasonBuf) != "") {
@@ -114,6 +116,11 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 			m.InFlight.StreamBuf = ""
 			m.InFlight.ReasonBuf = ""
 			cmds = append(cmds, m.printEntries(entry))
+		}
+		if m.InFlight.AgentCommitted {
+			m.InFlight.Pending = nil
+			m.InFlight.StreamBuf = ""
+			m.InFlight.ReasonBuf = ""
 		}
 		if m.Progress.Mode == stateError {
 			m.InFlight.QueuedTurns = nil
@@ -142,6 +149,9 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		return m, tea.Sequence(cmds...)
 
 	case session.ThinkingDelta:
+		if msg.AgentID == "" && m.InFlight.AgentCommitted {
+			return m, m.awaitSessionEvent()
+		}
 		if msg.AgentID == "" {
 			m.InFlight.ReasonBuf += msg.Delta
 		} else {
@@ -152,6 +162,9 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		return m, m.awaitSessionEvent()
 
 	case session.AgentDelta:
+		if msg.AgentID == "" && m.InFlight.AgentCommitted {
+			return m, m.awaitSessionEvent()
+		}
 		if msg.AgentID == "" {
 			m.Progress.Mode = stateStreaming
 			if m.InFlight.Pending == nil {
@@ -184,6 +197,7 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 					return m, m.awaitSessionEvent()
 				}
 
+				m.InFlight.AgentCommitted = true
 				return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
 			}
 			entry := session.Entry{
@@ -199,6 +213,7 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 			if strings.TrimSpace(entry.Content) == "" && strings.TrimSpace(entry.Reasoning) == "" {
 				return m, m.awaitSessionEvent()
 			}
+			m.InFlight.AgentCommitted = true
 			return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
 		} else {
 			if p, ok := m.InFlight.Subagents[msg.AgentID]; ok {
@@ -407,6 +422,7 @@ func (m Model) handleSessionError(err error, awaitTerminal bool) (Model, tea.Cmd
 	m.InFlight.StreamBuf = ""
 	m.InFlight.ReasonBuf = ""
 	m.InFlight.Thinking = false
+	m.InFlight.AgentCommitted = false
 	m.Progress.Compacting = false
 	m.Progress.Mode = stateError
 	displayErr := err.Error()
@@ -493,6 +509,7 @@ func (m Model) cancelRunningTurn(reason string) (Model, tea.Cmd) {
 	m.InFlight.QueuedTurns = nil
 	m.InFlight.StreamBuf = ""
 	m.InFlight.ReasonBuf = ""
+	m.InFlight.AgentCommitted = false
 	entry := session.Entry{Role: session.System, Content: reason}
 	if err := m.persistEntry("persist cancellation", storage.System{
 		Type:    "system",
