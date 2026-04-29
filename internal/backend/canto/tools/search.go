@@ -25,11 +25,15 @@ func (t *SearchTool) resolvePath(target string) (string, error) {
 	if target == "" {
 		target = "."
 	}
-	absPath, err := filepath.Abs(filepath.Join(t.cwd, target))
+	absCwd, err := filepath.Abs(t.cwd)
 	if err != nil {
 		return "", err
 	}
-	absCwd, err := filepath.Abs(t.cwd)
+	candidate := target
+	if !filepath.IsAbs(candidate) {
+		candidate = filepath.Join(absCwd, candidate)
+	}
+	absPath, err := filepath.Abs(candidate)
 	if err != nil {
 		return "", err
 	}

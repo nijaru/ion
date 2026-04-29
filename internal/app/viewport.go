@@ -18,7 +18,8 @@ type Viewport struct{}
 // renderPlaneB renders all ephemeral in-flight content.
 // Returns empty string when there is nothing active.
 func (m Model) renderPlaneB() string {
-	if m.InFlight.Pending == nil && len(m.InFlight.PendingTools) == 0 && m.Approval.Pending == nil && m.InFlight.ReasonBuf == "" && len(m.InFlight.Subagents) == 0 {
+	hasPendingTool := m.InFlight.Pending != nil && m.InFlight.Pending.Role == session.Tool
+	if !hasPendingTool && len(m.InFlight.PendingTools) == 0 && m.Approval.Pending == nil && m.InFlight.ReasonBuf == "" && len(m.InFlight.Subagents) == 0 {
 		return ""
 	}
 
@@ -42,15 +43,13 @@ func (m Model) renderPlaneB() string {
 		}
 	}
 
-	// Active in-flight assistant entry.
-	if m.InFlight.Pending != nil && m.InFlight.Pending.Role == session.Agent {
-		b.WriteString(m.renderPendingEntry(*m.InFlight.Pending))
-		b.WriteString("\n")
-	}
-
 	// Active in-flight tools. Sort by ID for deterministic rendering.
 	for _, id := range sortedKeys(m.InFlight.PendingTools) {
 		b.WriteString(m.renderPendingEntry(*m.InFlight.PendingTools[id]))
+		b.WriteString("\n")
+	}
+	if hasPendingTool && len(m.InFlight.PendingTools) == 0 {
+		b.WriteString(m.renderPendingEntry(*m.InFlight.Pending))
 		b.WriteString("\n")
 	}
 
@@ -199,16 +198,8 @@ func (m Model) renderEntry(e session.Entry) string {
 			b.WriteString(m.st.agent.Render("• "))
 			return b.String()
 		}
-		lines := strings.Split(rendered, "\n")
 		b.WriteString(m.st.agent.Render("• "))
-		b.WriteString(lines[0])
-		for _, line := range lines[1:] {
-			b.WriteString("\n")
-			if strings.TrimSpace(ansi.Strip(line)) != "" {
-				b.WriteString("  ")
-			}
-			b.WriteString(line)
-		}
+		b.WriteString(rendered)
 		return strings.TrimRightFunc(b.String(), unicode.IsSpace)
 
 	case session.Tool:
@@ -245,12 +236,12 @@ func (m Model) renderEntry(e session.Entry) string {
 				shown = lines[:10]
 			}
 			for _, l := range shown {
-				b.WriteString(m.st.dim.PaddingLeft(4).Render(l))
+				b.WriteString(m.st.dim.Render("  " + l))
 				b.WriteString("\n")
 			}
 			if len(lines) > 10 {
-				b.WriteString(m.st.dim.PaddingLeft(4).Render(
-					fmt.Sprintf("... (%d more lines)", len(lines)-10)))
+				b.WriteString(m.st.dim.Render(
+					fmt.Sprintf("  ... (%d more lines)", len(lines)-10)))
 			}
 		}
 		return strings.TrimRightFunc(b.String(), unicode.IsSpace)
@@ -286,8 +277,8 @@ func shouldCompactRoutineTool(e session.Entry, cfg *config.Config) bool {
 	if cfg != nil && cfg.ToolVerbosity == "full" {
 		return false
 	}
-	switch strings.TrimSpace(strings.ToLower(e.Title)) {
-	case "list", "read", "glob", "grep":
+	switch toolTitleVerb(e.Title) {
+	case "list", "read", "find", "glob", "search", "grep":
 		return true
 	default:
 		return false
@@ -412,21 +403,33 @@ func (m Model) renderDiff(content string) string {
 
 // isWriteTool returns true if the tool title looks like a write/edit operation.
 func isWriteTool(title string) bool {
-	lower := strings.ToLower(title)
+	lower := toolTitleVerb(title)
 	for _, prefix := range []string{"write", "edit", "create"} {
-		if strings.HasPrefix(lower, prefix+" ") || strings.HasPrefix(lower, prefix+"(") {
+		if lower == prefix {
 			return true
 		}
 	}
 	return false
 }
 
+func toolTitleVerb(title string) string {
+	title = strings.TrimSpace(strings.ToLower(title))
+	if title == "" {
+		return ""
+	}
+	if idx := strings.IndexAny(title, " ("); idx >= 0 {
+		return strings.TrimSpace(title[:idx])
+	}
+	return title
+}
+
 // FormatToolTitle attempts to extract the most important argument from a tool call's
 // raw JSON string to create a more readable title.
 func FormatToolTitle(name, args string) string {
 	args = strings.TrimSpace(args)
+	displayName := toolDisplayName(name)
 	if args == "" || args == "{}" {
-		return name
+		return displayName
 	}
 
 	// Simple heuristic-based extraction to avoid full JSON overhead in the render loop.
@@ -438,13 +441,48 @@ func FormatToolTitle(name, args string) string {
 			if strings.HasPrefix(val, "\"") {
 				val = val[1:]
 				if end := strings.Index(val, "\""); end != -1 {
-					return fmt.Sprintf("%s %s", name, val[:end])
+					return fmt.Sprintf("%s %s", displayName, val[:end])
 				}
 			}
 		}
 	}
 
-	return fmt.Sprintf("%s(%s)", name, args)
+	if !strings.HasPrefix(args, "{") && !strings.HasPrefix(args, "[") {
+		return fmt.Sprintf("%s %s", displayName, args)
+	}
+	if strings.Contains(args, "[redacted-secret]") {
+		return fmt.Sprintf("%s %s", displayName, args)
+	}
+
+	return displayName
+}
+
+func toolDisplayName(name string) string {
+	switch strings.TrimSpace(strings.ToLower(name)) {
+	case "read":
+		return "Read"
+	case "write":
+		return "Write"
+	case "edit":
+		return "Edit"
+	case "multi_edit":
+		return "Edit"
+	case "list":
+		return "List"
+	case "grep":
+		return "Search"
+	case "glob":
+		return "Find"
+	case "bash":
+		return "Bash"
+	case "verify":
+		return "Verify"
+	default:
+		if strings.TrimSpace(name) == "" {
+			return "Tool"
+		}
+		return name
+	}
 }
 
 func fitLine(line string, width int) string {

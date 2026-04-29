@@ -7,9 +7,13 @@ import (
 
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/config"
+	"github.com/nijaru/ion/internal/features"
 )
 
 func TestLoadWorkspaceTrustReportsUntrusted(t *testing.T) {
+	if features.CoreLoopOnly {
+		t.Skip("workspace trust is disabled during CoreLoopOnly stabilization")
+	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 

@@ -35,6 +35,11 @@ func TestSearchTools(t *testing.T) {
 			t.Error("expected .git directory to be ignored")
 		}
 
+		absArgs := `{"pattern":"search","path":"` + filepath.ToSlash(tmpDir) + `"}`
+		if _, err := g.Execute(context.Background(), absArgs); err != nil {
+			t.Fatalf("grep with absolute workspace path failed: %v", err)
+		}
+
 		if _, err := g.Execute(context.Background(), `{"pattern":"search","path":".."}`); err == nil {
 			t.Fatal("expected grep path outside workspace to fail")
 		}

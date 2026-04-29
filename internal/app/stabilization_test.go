@@ -112,7 +112,7 @@ func TestRenderEntry(t *testing.T) {
 		Content: "Line 1\n\nLine 2\n\nLine 3",
 	}
 	rendered := m.renderEntry(entry)
-	expected := "• Line 1\n\n  Line 2\n\n  Line 3"
+	expected := "• Line 1\n\nLine 2\n\nLine 3"
 	// Strip ansi for comparison if needed, but here we expect plain text + bullet
 	if ansi.Strip(rendered) != expected {
 		t.Errorf("expected:\n%q\ngot:\n%q", expected, ansi.Strip(rendered))

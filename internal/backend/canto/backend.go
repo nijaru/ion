@@ -286,10 +286,13 @@ func (b *Backend) Open(ctx context.Context) error {
 		)
 	}
 
-	b.agent = agent.New("ion", instructions, modelName, p, registry,
-		agent.WithHooks(policyHook(b)),
+	agentOptions := []agent.Option{
 		agent.WithRequestProcessors(requestProcessors...),
-	)
+	}
+	if !features.CoreLoopOnly {
+		agentOptions = append(agentOptions, agent.WithHooks(policyHook(b)))
+	}
+	b.agent = agent.New("ion", instructions, modelName, p, registry, agentOptions...)
 
 	// Initialize Runner
 	b.runner = runtime.NewRunner(

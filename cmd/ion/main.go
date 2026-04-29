@@ -408,6 +408,9 @@ func startupSessionID(
 }
 
 func loadWorkspaceTrust(cwd string, cfg *config.Config) (*ionworkspace.TrustStore, bool, string, error) {
+	if features.CoreLoopOnly {
+		return nil, true, "", nil
+	}
 	if cfg != nil && config.ResolveWorkspaceTrust(cfg.WorkspaceTrust) == "off" {
 		return nil, true, "", nil
 	}
@@ -432,6 +435,9 @@ func applyWorkspaceTrustModeGate(
 	printRequested bool,
 	explicitModeRequested bool,
 ) session.Mode {
+	if features.CoreLoopOnly {
+		return mode
+	}
 	if trusted || mode == session.ModeRead {
 		return mode
 	}
