@@ -331,11 +331,46 @@ func TestShiftTabTogglesReadAndEditOnly(t *testing.T) {
 	}
 }
 
+func TestShiftTabRequiresWorkspaceTrustForEdit(t *testing.T) {
+	model := readyModel(t).WithTrust(nil, false, "prompt")
+	model.Mode = session.ModeRead
+	sess := model.Model.Session.(*stubSession)
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
+	model = updated.(Model)
+	if model.Mode != session.ModeRead {
+		t.Fatalf("mode = %v, want read", model.Mode)
+	}
+	if sess.mode != session.ModeRead {
+		t.Fatalf("session mode = %v, want read", sess.mode)
+	}
+	if cmd == nil {
+		t.Fatal("expected Shift+Tab edit attempt to return a trust error")
+	}
+	err := localErrorFromMsg(t, cmd())
+	if !strings.Contains(err.Error(), "Trust this workspace first") {
+		t.Fatalf("error = %v, want trust error", err)
+	}
+}
+
 func TestUntrustedWorkspaceBlocksEditAndAutoModes(t *testing.T) {
 	model := readyModel(t).WithTrust(nil, false, "prompt")
 	model.Mode = session.ModeRead
 
-	updated, cmd := model.handleCommand("/mode auto")
+	updated, cmd := model.handleCommand("/edit")
+	model = updated
+	if model.Mode != session.ModeRead {
+		t.Fatalf("mode after /edit = %v, want read", model.Mode)
+	}
+	if cmd == nil {
+		t.Fatal("expected untrusted edit command to return an error command")
+	}
+	err := localErrorFromMsg(t, cmd())
+	if !strings.Contains(err.Error(), "Trust this workspace first") {
+		t.Fatalf("/edit error = %v, want trust error", err)
+	}
+
+	updated, cmd = model.handleCommand("/mode auto")
 	model = updated
 	if model.Mode != session.ModeRead {
 		t.Fatalf("mode changed before command execution = %v", model.Mode)
@@ -343,9 +378,18 @@ func TestUntrustedWorkspaceBlocksEditAndAutoModes(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected untrusted edit command to return an error command")
 	}
-	err := localErrorFromMsg(t, cmd())
+	err = localErrorFromMsg(t, cmd())
 	if !strings.Contains(err.Error(), "Trust this workspace first") {
 		t.Fatalf("error = %v, want trust error", err)
+	}
+
+	updated, cmd = model.handleCommand("/read")
+	model = updated
+	if model.Mode != session.ModeRead {
+		t.Fatalf("mode after /read = %v, want read", model.Mode)
+	}
+	if cmd == nil {
+		t.Fatal("expected /read command to return a notice")
 	}
 }
 
@@ -2652,6 +2696,8 @@ func TestTrustCommandPersistsWorkspaceTrust(t *testing.T) {
 	trustPath := filepath.Join(t.TempDir(), "trusted.json")
 	model := readyModel(t).WithTrust(ionworkspace.NewTrustStore(trustPath), false, "prompt")
 	model.Mode = session.ModeRead
+	sess := model.Model.Session.(*stubSession)
+	sess.autoApprove = true
 
 	model, cmd := model.handleCommand("/trust")
 	if !model.App.TrustedWorkspace {
@@ -2669,6 +2715,12 @@ func TestTrustCommandPersistsWorkspaceTrust(t *testing.T) {
 	}
 	if !trusted {
 		t.Fatal("workspace trust was not persisted")
+	}
+	if sess.mode != session.ModeEdit {
+		t.Fatalf("session mode = %v, want edit after trust", sess.mode)
+	}
+	if sess.autoApprove {
+		t.Fatal("session auto approval stayed enabled after trusting into edit mode")
 	}
 }
 

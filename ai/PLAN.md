@@ -110,7 +110,7 @@ Exit criteria:
 
 ### Gate 5: Safety And Execution Boundary
 
-Status: after the native loop is green
+Status: deterministic modes/trust/approval boundary covered for the current native path; sandbox polish remains deferred
 
 Exit criteria:
 
