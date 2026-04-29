@@ -62,7 +62,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	applyCLIConfigOverrides(cfg, *providerFlag, firstNonEmpty(*modelFlag, *modelShortFlag), *thinkingFlag)
+	providerOverride := strings.TrimSpace(*providerFlag)
+	modelOverride := firstNonEmpty(*modelFlag, *modelShortFlag)
+	applyCLIConfigOverrides(cfg, providerOverride, modelOverride, *thinkingFlag)
 	shutdownTelemetry := func(context.Context) error { return nil }
 	if !features.CoreLoopOnly {
 		shutdownTelemetry, err = telemetry.Setup(context.Background(), cfg)
@@ -156,6 +158,12 @@ func main() {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)
+	}
+	if sessionID != "" && providerOverride == "" && strings.TrimSpace(modelOverride) == "" {
+		if err := applySessionConfigFromMetadata(ctx, store, sessionID, cfg); err != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", err)
+			os.Exit(1)
+		}
 	}
 
 	acpCommandOverride := strings.TrimSpace(os.Getenv("ION_ACP_COMMAND"))
