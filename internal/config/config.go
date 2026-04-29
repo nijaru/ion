@@ -103,17 +103,26 @@ func LoadStable() (*Config, error) {
 }
 
 func applyEnvOverrides(cfg *Config) {
-	if override := os.Getenv("ION_MODEL"); override != "" {
+	providerOverride := os.Getenv("ION_PROVIDER")
+	modelOverride := os.Getenv("ION_MODEL")
+
+	if strings.TrimSpace(providerOverride) != "" {
+		provider := strings.ToLower(strings.TrimSpace(providerOverride))
+		if provider != strings.ToLower(strings.TrimSpace(cfg.Provider)) && strings.TrimSpace(modelOverride) == "" {
+			cfg.Model = ""
+		}
+		cfg.Provider = provider
+	}
+
+	if override := modelOverride; override != "" {
 		if provider, model, ok := splitProviderModel(override); ok {
-			cfg.Provider = provider
+			if strings.TrimSpace(providerOverride) == "" {
+				cfg.Provider = provider
+			}
 			cfg.Model = model
 		} else {
 			cfg.Model = override
 		}
-	}
-
-	if override := os.Getenv("ION_PROVIDER"); override != "" {
-		cfg.Provider = override
 	}
 	if override := os.Getenv("ION_REASONING_EFFORT"); override != "" {
 		cfg.ReasoningEffort = override

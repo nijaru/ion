@@ -49,7 +49,11 @@ func applyCLIConfigOverrides(cfg *config.Config, providerOverride, modelOverride
 		return
 	}
 	if strings.TrimSpace(providerOverride) != "" {
-		cfg.Provider = providers.ResolveID(providerOverride)
+		provider := providers.ResolveID(providerOverride)
+		if provider != providers.ResolveID(cfg.Provider) && strings.TrimSpace(modelOverride) == "" {
+			cfg.Model = ""
+		}
+		cfg.Provider = provider
 	}
 	if model := strings.TrimSpace(modelOverride); model != "" {
 		if cfg.Provider == "" {
