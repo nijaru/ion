@@ -2359,6 +2359,7 @@ func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 		"Up / Down",
 		"Enter",
 		"Ctrl+C",
+		"approve and allow this tool category",
 	)
 	for _, want := range wantCommands {
 		if !strings.Contains(helpMsg.notice, want) {
