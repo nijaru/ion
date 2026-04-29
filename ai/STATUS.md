@@ -2,8 +2,8 @@
 
 Fast, lightweight terminal coding agent.
 
-**Phase:** P1 native core-loop gate passed; moving to table-stakes parity  
-**Focus:** Pi/Codex-style CLI automation and session UX gaps without reopening deferred P2/P3 feature work.  
+**Phase:** P1 native core-loop gate passed; table-stakes parity hardening  
+**Focus:** Reliability features that sit directly on the native loop: CLI automation, sessions, compaction, replay, and config/session state hygiene.  
 **Active blocker:** `tk-mmcs` — core parity plan and task queue hygiene.  
 **Queue hygiene:** `tk-mmcs` keeps Pi/Codex/Claude parity planning aligned; deferred ACP/P3/P4 tasks are blocked behind it so `tk ready` stays focused.
 **Updated:** 2026-04-28
@@ -41,7 +41,7 @@ Fast, lightweight terminal coding agent.
 - Tab completion now covers both slash commands and current-token `@file` references. File completion stays workspace-bound, completes directories with a trailing slash, files with a trailing space, and rejects `..` escapes.
 - Session browser polish started: `/resume` rows now show session count, a search hint, stable title/preview labels, and useful preview/model/branch/age metadata without bogus ages for missing timestamps.
 - Session UX now includes a Pi-like `/session` command that reports durable session id, provider/model, mode, branch, message counts, token totals, and cost without sending a model turn. It reports `id: none` for lazy pre-turn sessions and has regression coverage that it does not materialize a session row. Focused app command tests and `go test ./... -count=1 -timeout 120s` are green.
-- Config/session state hygiene pass is active under `tk-594o`. First bug fixed: `/settings` writes stable config, then reloads merged runtime config before updating the active backend, so `state.toml` provider/model selections remain active and do not leak into `config.toml`. Focused settings tests and `go test ./... -count=1 -timeout 120s` are green.
+- Config/session state hygiene pass `tk-594o` is closed. `/settings` writes stable config, then reloads merged runtime config before updating the active backend, so `state.toml` provider/model selections remain active and do not leak into `config.toml`. Focused settings tests and `go test ./... -count=1 -timeout 120s` are green.
 - Provider override scoping is tightened: custom `auth_env_var` and `extra_headers` now apply only to providers that support custom endpoints, so local/custom endpoint settings do not leak into OpenRouter/default-provider runtime config. Provider/backend focused tests and `go test ./... -count=1 -timeout 120s` are green.
 - Thinking state persistence is narrowed: `/thinking` and the thinking picker update only reasoning-effort fields in `state.toml`, preserving existing selected provider/model without freezing config defaults into mutable state. Focused app/config tests and `go test ./... -count=1 -timeout 120s` are green.
 - Startup config error copy now matches the current command surface: no-provider/no-model errors point to `/provider`, `/model`, env vars, and CLI flags instead of stale `Ctrl+P`/`Ctrl+M` picker guidance. Focused cmd tests and `go test ./... -count=1 -timeout 120s` are green.
@@ -54,8 +54,8 @@ Fast, lightweight terminal coding agent.
 
 Continue `tk-mmcs` as the parity/table-stakes track:
 
-1. Continue `tk-594o` source review for provider/model/session state ownership, startup persistence behavior, and transcript inspection/config commands.
-2. Keep `CoreLoopOnly` on while reopening only table-stakes reliability/session surfaces such as compaction.
+1. Work `tk-ymdv` for compaction/replay reliability, because context survival and resumable compacted history are part of the native loop rather than feature polish.
+2. Keep `CoreLoopOnly` on while reopening only reliability/session surfaces required by Pi/Codex-style parity.
 3. Keep ACP, privacy, subagents, skills, routing, and advanced thinking blocked behind `tk-mmcs`.
 
 Do not run another broad `ai/` pass by default. The next work is source review and targeted docs only when the code review exposes a design question.
@@ -63,7 +63,7 @@ Do not run another broad `ai/` pass by default. The next work is source review a
 ## Active Tasks
 
 - `tk-mmcs` — P1 core parity plan and task queue hygiene.
-- `tk-594o` — P2 config/session state hygiene review.
+- `tk-ymdv` — P2 compaction reliability and resume hygiene review under the table-stakes track.
 - `tk-xrgc` — P3 AI context dedupe/reorganization; active only because stale docs were blocking agent focus.
 
 Everything else is downstream of the solo native loop.
