@@ -56,8 +56,9 @@ Fast, lightweight terminal coding agent.
 - CLI print exit/error pass `tk-iqzq` is closed. `--prompt` now rejects extra positional args instead of silently ignoring them, and unknown flag-like args before print mode are left for the standard flag parser to reject while dash-prefixed prompts still work after `-p`/`--print`/`--json`. Focused print/flag tests, full Ion tests, behavioral pre-model error checks, and OpenRouter Minimax free smoke are green.
 - Session lifecycle pass `tk-xojo` is closed for the current local-command scope. `/compact` now returns a local "No active session to compact yet" notice when storage is still lazy, without setting compacting state, calling the backend compactor, or materializing a durable session. Focused lazy/session command tests and full Ion tests are green.
 - Backend provider/tool error pass `tk-stc6` is closed for the current deterministic scope. CantoBackend now has full-loop coverage proving a failed bash tool result remains provider-visible after the tool call and through a follow-up user turn. Focused backend tests and full Ion tests are green.
+- CLI print empty-response pass `tk-sab6` is active. Fedora explicit `--resume -p` exposed one provider turn that completed with token usage but no assistant message, causing empty stdout with exit 0. Print mode now treats a completed turn without non-empty assistant response as an error; focused print tests, full Ion tests, and Fedora text/resume/JSON tool smokes are green.
 - Preferred live-smoke order: use Fedora local-api first when available (`http://fedora:8080/v1`, currently advertising `qwen3.6:27b-uncensored`). OpenRouter remains fallback only: `minimax/minimax-m2.5:free` when available, `deepseek/deepseek-v4-flash` for cheap checks, or `deepseek/deepseek-v4-pro` only when a stronger separate-provider check is useful.
-- Current Fedora evidence: `/v1/models` returned `qwen3.6:27b-uncensored`; `TestLiveSmokeTurnAndToolCall` passed with tool call, persisted resume, and follow-up `continued`; direct `ion -p` text smoke returned `ok`; direct JSON tool smoke returned `response="done"` with `tool_calls=["bash"]`.
+- Current Fedora evidence: `/v1/models` returned `qwen3.6:27b-uncensored`; `TestLiveSmokeTurnAndToolCall` passed with tool call, persisted resume, and follow-up `continued`; direct `ion -p` text smoke returned `ok`; explicit `--resume <id> -p` returned `resumed`; direct JSON tool smoke returned `response="done"` with `tool_calls=["bash"]`.
 - Current OpenRouter fallback evidence: `minimax/minimax-m2.5:free` returned `ok` with a 120s print-mode timeout after the latest CLI print slice; a 45s Minimax attempt previously timed out, and `deepseek/deepseek-v4-flash` returned OpenRouter `402 Payment Required`.
 
 ## Next Action
@@ -73,6 +74,7 @@ Do not run another broad `ai/` pass by default. The next work is source review a
 ## Active Tasks
 
 - `tk-mmcs` — P1 core parity plan and task queue hygiene.
+- `tk-sab6` — P2 CLI print empty-response guard exposed by Fedora resume smoke.
 - `tk-xrgc` — P3 AI context dedupe/reorganization; active only because stale docs were blocking agent focus.
 
 Everything else is downstream of the solo native loop.

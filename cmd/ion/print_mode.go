@@ -127,6 +127,9 @@ func runPromptTurn(
 			}
 			if seenTurnFinished {
 				result.Response = agentText.String()
+				if strings.TrimSpace(result.Response) == "" {
+					return printResult{}, fmt.Errorf("turn finished without assistant response")
+				}
 				return result, nil
 			}
 		case <-ctx.Done():
