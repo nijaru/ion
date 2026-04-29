@@ -55,6 +55,7 @@ Fast, lightweight terminal coding agent.
 - TUI status/progress pass `tk-y968` is closed for the current deterministic scope. A new model-visible turn now clears stale provider errors immediately at submit time instead of waiting for a later `TurnStarted` event. Focused status/progress tests and full Ion tests are green.
 - CLI print exit/error pass `tk-iqzq` is closed. `--prompt` now rejects extra positional args instead of silently ignoring them, and unknown flag-like args before print mode are left for the standard flag parser to reject while dash-prefixed prompts still work after `-p`/`--print`/`--json`. Focused print/flag tests, full Ion tests, behavioral pre-model error checks, and OpenRouter Minimax free smoke are green.
 - Session lifecycle pass `tk-xojo` is closed for the current local-command scope. `/compact` now returns a local "No active session to compact yet" notice when storage is still lazy, without setting compacting state, calling the backend compactor, or materializing a durable session. Focused lazy/session command tests and full Ion tests are green.
+- Backend provider/tool error pass `tk-stc6` is closed for the current deterministic scope. CantoBackend now has full-loop coverage proving a failed bash tool result remains provider-visible after the tool call and through a follow-up user turn. Focused backend tests and full Ion tests are green.
 - Preferred live-smoke order: use Fedora local-api first when available (`http://fedora:8080/v1`, `qwen3.6:27b`). Fedora is temporarily down by user request; while it is down, use OpenRouter cheap/free models for live checks: `minimax/minimax-m2.5:free` when available, `deepseek/deepseek-v4-flash` for cheap checks, or `deepseek/deepseek-v4-pro` only when a stronger separate-provider check is useful.
 - Current OpenRouter fallback evidence: `minimax/minimax-m2.5:free` returned `ok` with a 120s print-mode timeout after the latest CLI print slice; a 45s Minimax attempt previously timed out, and `deepseek/deepseek-v4-flash` returned OpenRouter `402 Payment Required`.
 
@@ -62,7 +63,7 @@ Fast, lightweight terminal coding agent.
 
 Continue `tk-mmcs` as the parity/table-stakes track:
 
-1. Select the next source-reviewed table-stakes reliability slice under `tk-mmcs`; likely candidates are deterministic provider/tool error coverage or one narrow TUI/session UX edge, not ACP or experimental features.
+1. Select the next source-reviewed table-stakes reliability slice under `tk-mmcs`; likely candidates are one narrow TUI/session UX edge or final race/live smoke verification, not ACP or experimental features.
 2. Keep `CoreLoopOnly` on while reopening only reliability/session surfaces required by Pi/Codex-style parity.
 3. Keep ACP, privacy, subagents, skills, routing, and advanced thinking blocked behind `tk-mmcs`.
 

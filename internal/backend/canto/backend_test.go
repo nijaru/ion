@@ -994,6 +994,77 @@ func TestResumedToolSessionSendsValidFollowUpHistory(t *testing.T) {
 	}
 }
 
+func TestSubmitTurnToolFailurePersistsForFollowUp(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	root := t.TempDir()
+	store, err := storage.NewCantoStore(root)
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+
+	call := llm.Call{ID: "tool-call-fail", Type: "function"}
+	call.Function.Name = "bash"
+	call.Function.Arguments = `{"command":"exit 7"}`
+	provider := ctesting.NewMockProvider("local-api",
+		ctesting.Step{Calls: []llm.Call{call}},
+		ctesting.Step{Content: "handled tool failure"},
+		ctesting.Step{Content: "continued"},
+	)
+
+	oldFactory := providerFactory
+	providerFactory = func(ctx context.Context, cfg *config.Config) (llm.Provider, error) {
+		if cfg.Provider == "local-api" {
+			return provider, nil
+		}
+		return oldFactory(ctx, cfg)
+	}
+	defer func() { providerFactory = oldFactory }()
+
+	cwd := t.TempDir()
+	storageSession, err := store.OpenSession(ctx, cwd, "local-api/model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	b := New()
+	b.SetStore(store)
+	b.SetSession(storageSession)
+	b.SetConfig(&config.Config{Provider: "local-api", Model: "model-a", Endpoint: "http://localhost:8080/v1"})
+	b.SetMode(ionsession.ModeYolo)
+	if err := b.Open(ctx); err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer func() { _ = b.Close() }()
+
+	if err := b.SubmitTurn(ctx, "run a failing command"); err != nil {
+		t.Fatalf("submit first turn: %v", err)
+	}
+	waitForTurnFinished(t, b.Events())
+
+	if err := b.SubmitTurn(ctx, "can you continue after that failure?"); err != nil {
+		t.Fatalf("submit follow-up turn: %v", err)
+	}
+	waitForTurnFinished(t, b.Events())
+
+	calls := provider.Calls()
+	if len(calls) != 3 {
+		t.Fatalf("provider calls = %d, want 3", len(calls))
+	}
+	postToolRequest := calls[1]
+	if !requestHasMessage(postToolRequest.Messages, llm.RoleTool, "exit status 7") {
+		t.Fatalf("post-tool request missing failed tool result: %#v", postToolRequest.Messages)
+	}
+	followUpRequest := calls[2]
+	if !requestHasMessage(followUpRequest.Messages, llm.RoleAssistant, "handled tool failure") {
+		t.Fatalf("follow-up request missing post-tool assistant reply: %#v", followUpRequest.Messages)
+	}
+	if !requestHasMessage(followUpRequest.Messages, llm.RoleTool, "exit status 7") {
+		t.Fatalf("follow-up request missing failed tool result: %#v", followUpRequest.Messages)
+	}
+}
+
 func TestProviderHistoryExcludesIonDisplayOnlyEvents(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
