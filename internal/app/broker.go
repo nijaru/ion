@@ -539,6 +539,7 @@ func (m Model) submitText(text string) (Model, tea.Cmd) {
 	}
 
 	m.Progress.Mode = stateIonizing
+	m.Progress.LastError = ""
 	m.InFlight.Thinking = true
 	if err := m.Model.Session.SubmitTurn(context.Background(), text); err != nil {
 		m, errCmd := m.handleSessionError(err, false)
