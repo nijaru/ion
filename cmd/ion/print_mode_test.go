@@ -109,6 +109,13 @@ func TestResolvePrintFlagsRejectsUnexpectedArguments(t *testing.T) {
 	}
 }
 
+func TestResolvePrintFlagsRejectsPromptWithExtraArguments(t *testing.T) {
+	_, _, _, err := resolvePrintFlags(false, false, "hello", []string{"ignored"}, "text", false)
+	if err == nil || !strings.Contains(err.Error(), "unexpected arguments after --prompt") {
+		t.Fatalf("resolve print flags error = %v", err)
+	}
+}
+
 func TestResolvePrintFlagsRejectsUnsupportedOutputBeforePrint(t *testing.T) {
 	_, _, _, err := resolvePrintFlags(true, false, "hello", nil, "xml", false)
 	if err == nil || !strings.Contains(err.Error(), `unsupported print output "xml"`) {
@@ -147,6 +154,39 @@ func TestNormalizeFlagArgsKeepsPromptValuesWithFlags(t *testing.T) {
 func TestNormalizeFlagArgsAllowsShortPrintBeforeOtherFlags(t *testing.T) {
 	got, openResumePicker := normalizeFlagArgs([]string{"-p", "--json", "reply with ok"})
 	want := []string{"-p", "--json", "--", "reply with ok"}
+	if openResumePicker {
+		t.Fatal("normalizeFlagArgs opened resume picker")
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("normalizeFlagArgs = %#v, want %#v", got, want)
+	}
+}
+
+func TestNormalizeFlagArgsKeepsUnknownFlagBeforePrintForParser(t *testing.T) {
+	got, openResumePicker := normalizeFlagArgs([]string{"--bad", "-p", "reply with ok"})
+	want := []string{"--bad", "-p", "--", "reply with ok"}
+	if openResumePicker {
+		t.Fatal("normalizeFlagArgs opened resume picker")
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("normalizeFlagArgs = %#v, want %#v", got, want)
+	}
+}
+
+func TestNormalizeFlagArgsAllowsDashPromptAfterPrint(t *testing.T) {
+	got, openResumePicker := normalizeFlagArgs([]string{"-p", "--literal-prompt"})
+	want := []string{"-p", "--", "--literal-prompt"}
+	if openResumePicker {
+		t.Fatal("normalizeFlagArgs opened resume picker")
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("normalizeFlagArgs = %#v, want %#v", got, want)
+	}
+}
+
+func TestNormalizeFlagArgsKeepsUnknownFlagAfterPromptForParser(t *testing.T) {
+	got, openResumePicker := normalizeFlagArgs([]string{"--prompt", "hello", "--bad"})
+	want := []string{"--prompt", "hello", "--bad"}
 	if openResumePicker {
 		t.Fatal("normalizeFlagArgs opened resume picker")
 	}

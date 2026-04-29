@@ -286,6 +286,7 @@ func normalizeFlagArgs(args []string) ([]string, bool) {
 	flagArgs := make([]string, 0, len(args))
 	positionals := make([]string, 0, len(args))
 	openResumePicker := false
+	allowFlagLikePositionals := false
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if arg == "--" {
@@ -294,8 +295,15 @@ func normalizeFlagArgs(args []string) ([]string, bool) {
 		}
 		name, hasInlineValue, isKnown := ionFlagName(arg)
 		if !isKnown {
+			if strings.HasPrefix(arg, "-") && arg != "-" && !allowFlagLikePositionals {
+				flagArgs = append(flagArgs, arg)
+				continue
+			}
 			positionals = append(positionals, arg)
 			continue
+		}
+		if name == "print" || name == "p" || name == "json" {
+			allowFlagLikePositionals = true
 		}
 		switch {
 		case (name == "resume" || name == "r") && !hasInlineValue:

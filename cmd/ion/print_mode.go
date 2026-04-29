@@ -47,6 +47,9 @@ func resolvePrintFlags(
 	if printRequested && prompt == "" && len(args) > 0 {
 		prompt = strings.Join(args, " ")
 	}
+	if printRequested && prompt != "" && len(args) > 0 && promptLong != "" {
+		return false, "", "", fmt.Errorf("unexpected arguments after --prompt: %s", strings.Join(args, " "))
+	}
 	if !printRequested && len(args) > 0 {
 		return false, "", "", fmt.Errorf("unexpected arguments: %s", strings.Join(args, " "))
 	}
