@@ -270,7 +270,7 @@ func (m Model) renderEntry(e session.Entry) string {
 
 	case session.System:
 		if strings.HasPrefix(e.Content, "Error: ") {
-			return m.st.warn.Faint(true).Render("× " + e.Content)
+			return m.st.warn.Render("× " + e.Content)
 		}
 		return m.st.system.Render("• " + e.Content)
 
