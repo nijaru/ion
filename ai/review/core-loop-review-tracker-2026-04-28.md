@@ -1,14 +1,44 @@
 ---
 date: 2026-04-28
-summary: Completed audit tracker for the native Canto/Ion core loop.
-status: resolved
+summary: Active audit tracker for the native Canto/Ion core loop.
+status: active
 ---
 
 # Core Loop Audit Tracker
 
-This is the completed scan-first tracker for `tk-s6p4`. It replaces the earlier optimistic reviewed/refactored matrix.
+This is the active scan-first tracker for `tk-mmcs`. It replaces the earlier optimistic reviewed/refactored matrix and prevents future work from drifting into isolated bug slices.
 
-Future native-loop changes should still use this file as the invariant checklist before editing. Do not reopen deferred feature work just because the P1 audit closed.
+The previous `tk-s6p4` audit produced useful evidence, but live TUI failures on 2026-04-29 reopened the P1 gate. Treat older `reviewed` rows as prior evidence, not permission to skip the current subsystem pass. Do not reopen deferred feature work just because one slice is green.
+
+## Current Operating Mode
+
+Work from subsystem review to implementation:
+
+1. Pick the next subsystem in the active sequence below.
+2. Read the named files end to end and state the invariant being checked.
+3. Log findings under `tk-mmcs` before editing.
+4. Patch only defects or simplifications needed for that subsystem invariant.
+5. Verify with focused tests, full tests, race gate when the native loop changed, and Fedora/local-api live smoke when the behavior is user-visible.
+6. Only then move to the next subsystem.
+
+The current product target is:
+
+- **Core agent:** Pi-like minimal loop first.
+- **TUI shell:** minimal Claude Code/Droid-style presentation on top of the stable loop.
+- **Deferred:** trust/permissions/sandbox polish, ACP/subscription backends, privacy expansion, subagents, skills, routing, and advanced thinking controls.
+
+## Active Review Sequence
+
+| Seq | Subsystem | Why It Is Next | Files | Exit Evidence |
+| --- | --- | --- | --- | --- |
+| A1 | Native event ownership | Recent duplicate assistant output proved live/committed ownership can still drift. | `internal/backend/canto/backend.go`, `internal/app/broker.go`, `internal/app/viewport.go`, `internal/app/util.go`, `internal/session/event.go` | One event owner for assistant/tool/terminal states; focused app/backend tests; tmux TUI turn with tool use. |
+| A2 | Canto provider-visible history | Every resume/follow-up bug becomes provider-history corruption if this is wrong. | `../canto/session/*`, `../canto/runtime/*`, `../canto/agent/*`, `../canto/prompt/*` | Empty/no-payload assistant impossible on writes; tool call/result ordering preserved; Canto tests plus Ion resume/follow-up smoke. |
+| A3 | Ion storage and lazy lifecycle | Startup, slash commands, resume, and display-only rows must not materialize or corrupt sessions. | `internal/storage/*`, `cmd/ion/*.go`, `internal/app/commands.go`, `internal/app/model.go` | Slash/local commands before first model turn stay local; resume/continue accept follow-up; no duplicate model-visible rows. |
+| A4 | Core tool boundary | Tool calls are the minimum useful coding-agent behavior and must be boring. | `internal/backend/canto/tools/*`, `internal/backend/canto/backend.go`, `internal/backend/policy.go` | Read/list/search/bash/verify deterministic tests; absolute/relative path containment; cancellation leaves no orphan process. |
+| A5 | CLI smoke harness | CLI is the automation surface for proving the loop repeatedly. | `cmd/ion/print_mode.go`, `cmd/ion/main.go`, `cmd/ion/live_smoke_test.go` | `-p`, stdin, JSON, resume, tool call, timeout/error exit codes covered and live-smoked. |
+| A6 | Minimal TUI baseline | TUI becomes priority only after the loop is not corrupting state. | `internal/app/render.go`, `viewport.go`, `events.go`, `input.go`, `commands.go` | Single separator, no duplicates, compact tools, queued/steering behavior defined, tmux captures clean. |
+
+Do not start P2/P3 UI features until A1-A5 are green after the latest code changes. A6 can fix presentation defects that hide or confuse the core loop.
 
 ## Core Definition
 
@@ -79,7 +109,7 @@ For each row:
 - Read the named files, not just tests or prior commits.
 - State the core-loop invariants in the notes.
 - Classify codepaths as kept, disabled, or deferred.
-- Record findings in `tk-s6p4` before editing.
+- Record findings in `tk-mmcs` before editing.
 - Add or update deterministic tests for each bug fixed.
 - Run the smallest relevant test first, then the broader package/full suite.
 

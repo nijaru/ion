@@ -71,15 +71,17 @@ Fast, lightweight terminal coding agent.
 
 Continue `tk-mmcs` as the P1 stabilization track:
 
-1. Continue `tk-mmcs` with core-loop source review and live smoke whenever the native path changes.
-2. Keep `tk-rg23` and `tk-zxgq` as next TUI usability tasks after P1 correctness: tool/thinking display controls and steering-vs-queue UX.
-3. Keep ACP, privacy, subagents, skills, routing, advanced thinking, and safety polish blocked behind `tk-mmcs`.
+1. Work the active review sequence in [review/core-loop-review-tracker-2026-04-28.md](review/core-loop-review-tracker-2026-04-28.md), starting with A1 native event ownership.
+2. Do not pick isolated bug slices unless they fall out of the active subsystem review and are logged under `tk-mmcs`.
+3. Keep `tk-rg23` and `tk-zxgq` as next TUI usability tasks after P1 correctness: tool/thinking display controls and steering-vs-queue UX.
+4. Keep ACP, privacy, subagents, skills, routing, advanced thinking, and safety polish blocked behind `tk-mmcs`.
 
 Do not run another broad `ai/` pass by default. The next work is source review and targeted docs only when the code review exposes a design question.
 
 ## Active Tasks
 
 - `tk-mmcs` — P1 core parity plan and task queue hygiene.
-- `tk-xrgc` — P3 AI context dedupe/reorganization; active only because stale docs were blocking agent focus.
+- `tk-rg23` — P2 tool/thinking display controls; deferred until A1-A5 stay green.
+- `tk-zxgq` — P2 busy-input steering vs queue setting; deferred until A1-A5 stay green.
 
 Everything else is downstream of the solo native loop.

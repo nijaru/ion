@@ -17,7 +17,7 @@ Do not duplicate the tracker matrix here. Update this file only when gates, prio
 
 ## Operating Rule
 
-Do not treat core-loop regressions as independent bug slices. The `tk-s6p4` comprehensive audit is closed, but any future native-loop change must still be tied to the relevant file group and invariant in the tracker before implementation.
+Do not treat core-loop regressions as independent bug slices. The `tk-s6p4` comprehensive audit produced useful evidence, but the P1 gate is reopened under `tk-mmcs`. Every native-loop change must be tied to the active subsystem sequence and invariant in the tracker before implementation.
 
 Do not collapse Canto into Ion as a development shortcut. Keep the repo split, but treat Ion as Canto's acceptance test until the minimal native loop is stable. Canto public-framework expansion is deferred; Canto changes during this pass should come from concrete Ion-proven framework needs.
 
@@ -133,10 +133,11 @@ Exit criteria:
 
 ## Immediate Work Order
 
-1. Keep `CoreLoopOnly` on as the default freeze, but make it a true minimal-agent path: no trust downgrade, no approval/policy hook, no ACP/subagent/privacy/routing detours. `/compact` stays open because context survival is reliability work.
-2. Fix current P1 correctness before UI polish: absolute path normalization, tool execution/result durability, resume/follow-up, and provider-history validity.
-3. Then tighten the TUI shell to a minimal Claude Code/Droid-like presentation: one separator between committed entries, compact routine tools by default, readable markdown, and tmux text capture as the primary visual check.
-4. Promote table-stakes items into focused tasks before reopening deferred P2/P3 codepaths.
-5. Re-run full/race tests and Fedora/local-api live smoke after any native-loop or CLI/session behavior change. Prefer Fedora `local-api` / `qwen3.6:27b`; use OpenRouter `minimax/minimax-m2.5:free`, `deepseek/deepseek-v4-flash`, or `deepseek/deepseek-v4-pro` only when local testing is unavailable or a separate-provider check is needed.
+1. Follow the active sequence in [review/core-loop-review-tracker-2026-04-28.md](review/core-loop-review-tracker-2026-04-28.md): A1 native event ownership, A2 provider-visible history, A3 storage/lazy lifecycle, A4 core tools, A5 CLI harness, A6 minimal TUI baseline.
+2. Keep `CoreLoopOnly` on as the default freeze, but make it a true minimal-agent path: no trust downgrade, no approval/policy hook, no ACP/subagent/privacy/routing detours. `/compact` stays open because context survival is reliability work.
+3. Fix P1 correctness before UI polish: event ownership, tool execution/result durability, resume/follow-up, provider-history validity, and automation coverage.
+4. Then tighten the TUI shell to a minimal Claude Code/Droid-like presentation: one separator between committed entries, compact routine tools by default, readable markdown, and tmux text capture as the primary visual check.
+5. Promote table-stakes items into focused tasks before reopening deferred P2/P3 codepaths.
+6. Re-run full/race tests and Fedora/local-api live smoke after any native-loop or CLI/session behavior change. Prefer Fedora `local-api` / `qwen3.6:27b`; use OpenRouter `minimax/minimax-m2.5:free`, `deepseek/deepseek-v4-flash`, or `deepseek/deepseek-v4-pro` only when local testing is unavailable or a separate-provider check is needed.
 
 No more broad `ai/` corpus passes by default. Use the existing context docs as an index, then read source. Reopen `ai/` only for a specific subsystem decision or when docs conflict with code.
