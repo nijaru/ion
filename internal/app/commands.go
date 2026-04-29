@@ -191,6 +191,9 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		}
 
 	case "/trust":
+		if features.CoreLoopOnly {
+			return m, cmdError(features.Disabled("/trust"))
+		}
 		if len(fields) > 1 && fields[1] != "status" {
 			return m, cmdError("usage: /trust [status]")
 		}
@@ -637,7 +640,6 @@ func helpText() string {
 		"  /edit            switch to EDIT mode",
 		"  /auto, /yolo     switch to AUTO mode",
 		"  /mode [mode]     set mode: read, edit, auto",
-		"  /trust [status]  trust this workspace or show trust status",
 		"  /settings        show or change common settings",
 		"  /tools           show tool count and lazy loading status",
 		"  /clear           start a fresh session with the current provider/model",
@@ -649,6 +651,7 @@ func helpText() string {
 	}
 	if !features.CoreLoopOnly {
 		lines = append(lines,
+			"  /trust [status]  trust this workspace or show trust status",
 			"  /rewind <id>     preview checkpoint restore; add --confirm to apply",
 			"  /memory [query]  show workspace memory tree or search memory",
 			"  /mcp add <cmd>   register an MCP server",
@@ -816,7 +819,6 @@ func slashCommandCatalog() []slashCommandInfo {
 		{name: "/auto", detail: "AUTO mode"},
 		{name: "/yolo", detail: "AUTO mode alias"},
 		{name: "/mode", detail: "set read/edit/auto"},
-		{name: "/trust", detail: "workspace trust"},
 		{name: "/settings", detail: "common settings"},
 		{name: "/tools", detail: "tool status"},
 		{name: "/clear", detail: "fresh session"},
@@ -829,6 +831,7 @@ func slashCommandCatalog() []slashCommandInfo {
 	}
 	if !features.CoreLoopOnly {
 		commands = append(commands,
+			slashCommandInfo{name: "/trust", detail: "workspace trust"},
 			slashCommandInfo{name: "/rewind", detail: "restore checkpoint"},
 			slashCommandInfo{name: "/memory", detail: "memory search"},
 			slashCommandInfo{name: "/mcp", detail: "register MCP server"},
@@ -1254,6 +1257,9 @@ func (m Model) setModeCommand(mode session.Mode) (Model, tea.Cmd) {
 }
 
 func (m Model) trustGateActive() bool {
+	if features.CoreLoopOnly {
+		return false
+	}
 	switch m.App.WorkspaceTrust {
 	case "prompt", "strict":
 		return true

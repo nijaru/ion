@@ -2,16 +2,16 @@
 
 Fast, lightweight terminal coding agent.
 
-**Phase:** P1 native core-loop gate passed; table-stakes parity hardening  
-**Focus:** Reliability features that sit directly on the native loop: CLI automation, sessions, compaction, replay, and config/session state hygiene.  
-**Active blocker:** `tk-mmcs` — core parity plan and task queue hygiene.  
+**Phase:** P1 native core-loop stabilization reopened
+**Focus:** Keep the native loop Pi-simple first: submit, stream, run tools, persist, resume, continue, and recover without permissions/trust/polish code changing the outcome.
+**Active blocker:** `tk-mmcs` — core parity plan and task queue hygiene.
 **Queue hygiene:** `tk-mmcs` keeps Pi/Codex/Claude parity planning aligned; deferred ACP/P3/P4 tasks are blocked behind it so `tk ready` stays focused.
 **Updated:** 2026-04-29
 
 ## Current Truth
 
-- The native core-loop gate passed on 2026-04-28. ACP, sandbox polish, approvals polish, privacy expansion, thinking expansion, skills, routing, branching, and other P2/P3 work stay deferred until table-stakes CLI/session UX is intentionally reopened.
-- Ion is still running with `features.CoreLoopOnly`, but `/compact` is intentionally reopened as a table-stakes reliability command. ACP, memory commands, MCP registration, rewind/checkpoint polish, privacy expansion, subagents, routing, and other advanced surfaces stay gated.
+- The native loop has strong validated slices, but it is not declared complete. Live TUI use still exposed active P1/P2 defects: absolute path tool handling, transcript spacing, busy-turn input behavior, and overactive trust/permission gates.
+- Ion is still running with `features.CoreLoopOnly`. In this mode the P1 path should behave like a minimal Pi-style agent: no workspace trust downgrade and no policy approval hook in the native tool loop. ACP, memory commands, MCP registration, rewind/checkpoint polish, privacy expansion, subagents, routing, and other advanced surfaces stay gated. `/compact` remains available because context survival is reliability work.
 - Canto owns provider-visible transcript, effective history, agent/tool execution, retry, queueing, terminal events, and compaction primitives.
 - Ion owns input classification, TUI/CLI lifecycle, display projection, local status/error rows, trust/mode UX, and provider/config selection.
 - Keep Canto and Ion split, but treat Ion as Canto's acceptance test during stabilization. Canto public-framework expansion is deferred until Ion's native minimal loop is stable.
@@ -26,7 +26,7 @@ Fast, lightweight terminal coding agent.
 - New Canto C4/C5 cancellation/tool-result fixes are pushed in Canto `5ce3c1f` and imported into Ion: streaming turns now stop before an extra provider step after cancellation, step terminal events survive canceled contexts, and canceled tool turns persist a matching tool result so provider-visible history is not left with dangling tool calls.
 - Ion deterministic gates and Fedora live smoke are green after importing Canto `5ce3c1f`.
 - Ion overflow recovery now uses Canto runtime-level recovery instead of provider-level request retry, so context-overflow compaction rebuilds the provider-visible prompt before retrying. Focused overflow coverage, full Ion tests, Fedora live smoke, and Canto prompt/LLM/governor/runtime gates are green after this patch.
-- The native backend/CLI core loop is materially stable by deterministic, race, manual TUI replay, and Fedora live-smoke evidence. `tk-s6p4` is closed.
+- The native backend/CLI core loop has substantial deterministic, race, manual TUI replay, and Fedora live-smoke coverage, but current live TUI reports mean the core is still under stabilization rather than finished.
 - TUI shell spacing now keeps a blank row between already-printed transcript/replay rows and the live progress/composer shell. Focused app tests and `go test ./... -count=1` are green after the patch.
 - The direct `/provider <name>` command now clears stale progress errors the same way provider-picker selection already did, so old model-listing/provider errors do not remain visible after a provider state change.
 - Manual `go run ./... --continue` replay now shows the expected header/resumed-marker/transcript/progress ordering and spacing; terminal control artifacts in the harness remain non-product noise.
@@ -60,17 +60,20 @@ Fast, lightweight terminal coding agent.
 - TUI tmux smoke pass `tk-l2kk` is closed. Fedora TUI launch, `?` help, `/session`, live turn, `--continue` replay, and resumed follow-up were exercised by reading captured tmux terminal text. This is now recorded in `AGENTS.md` as the preferred TUI smoke method, with screenshots reserved only for visual issues that text capture cannot judge. The core TUI turn/replay path looked healthy: no duplicate replay, resumed marker ordering was correct, entry spacing was readable, and follow-up returned `continued`. One TUI bug is now tracked separately as `tk-z3qq`: rapid local commands can interleave long scrollback output.
 - TUI long-scrollback ordering pass `tk-z3qq` is closed. Long inline print blocks are now split into ordered smaller Bubble Tea print chunks, and the next Enter after a large local print is briefly deferred so rapid `?` then `/session` cannot interleave help and session output. Focused app tests, full Ion tests, and tmux text capture of the original repro are green.
 - Active-turn slash command pass `tk-4od3` is closed. Opening provider/model/thinking pickers or read-only local commands during a running turn remains allowed, but direct runtime/config mutations and picker commits are blocked until the turn finishes or is canceled so backend config/session switching cannot race active events. Focused app tests and full Ion tests are green.
+- CoreLoopOnly now behaves more like the intended minimal Pi-style P1 path: startup does not trust-downgrade untrusted workspaces, `/trust` is hidden/disabled while frozen, app mode changes are not trust-gated, and CantoBackend omits the policy approval hook. Fedora print smoke without `--yolo` executed bash and returned `tool_calls=["bash"]`.
+- Absolute workspace paths now resolve correctly in file/search tools: `/Users/nick/github/nijaru/ion/AGENTS.md` no longer becomes a double-prefixed path. Focused tool tests, full Ion tests, and tmux TUI absolute-read smoke are green.
+- TUI assistant rendering now commits final assistant markdown once instead of rendering stale streamed Plane B content plus final scrollback. Plane B keeps tool/thinking/subagent/approval state; progress line carries streaming state. Focused app tests, full Ion tests, race gate, and tmux TUI smoke are green.
 - Preferred live-smoke order: use Fedora local-api first when available (`http://fedora:8080/v1`, currently advertising `qwen3.6:27b-uncensored`). OpenRouter remains fallback only: `minimax/minimax-m2.5:free` when available, `deepseek/deepseek-v4-flash` for cheap checks, or `deepseek/deepseek-v4-pro` only when a stronger separate-provider check is useful.
 - Current Fedora evidence: `/v1/models` returned `qwen3.6:27b-uncensored`; `TestLiveSmokeTurnAndToolCall` passed with tool call, persisted resume, and follow-up `continued`; direct `ion -p` text smoke returned `ok`; explicit `--resume <id> -p` returned `resumed`; direct JSON tool smoke returned `response="done"` with `tool_calls=["bash"]`.
 - Current OpenRouter fallback evidence: `minimax/minimax-m2.5:free` returned `ok` with a 120s print-mode timeout after the latest CLI print slice; a 45s Minimax attempt previously timed out, and `deepseek/deepseek-v4-flash` returned OpenRouter `402 Payment Required`.
 
 ## Next Action
 
-Continue `tk-mmcs` as the parity/table-stakes track:
+Continue `tk-mmcs` as the P1 stabilization track:
 
-1. Continue TUI table-stakes hardening under `tk-mmcs`: review the next transcript/local-command surface with tmux text capture, then return to live turn/resume smoke if any core-loop behavior changes.
-2. Keep `CoreLoopOnly` on while reopening only reliability/session surfaces required by Pi/Codex-style parity.
-3. Keep ACP, privacy, subagents, skills, routing, and advanced thinking blocked behind `tk-mmcs`.
+1. Continue `tk-mmcs` with core-loop source review and live smoke whenever the native path changes.
+2. Keep `tk-rg23` and `tk-zxgq` as next TUI usability tasks after P1 correctness: tool/thinking display controls and steering-vs-queue UX.
+3. Keep ACP, privacy, subagents, skills, routing, advanced thinking, and safety polish blocked behind `tk-mmcs`.
 
 Do not run another broad `ai/` pass by default. The next work is source review and targeted docs only when the code review exposes a design question.
 

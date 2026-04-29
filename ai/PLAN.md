@@ -27,7 +27,7 @@ These are rough sequencing guidelines, not exact gates. Move work earlier only w
 
 | Band | Meaning | Examples | Status |
 | --- | --- | --- | --- |
-| Core | Minimal loop plus stable shell. | submit, stream, core tools, cancel, provider error, retry status, persistence correctness, `-p`, basic TUI turn display. | Passed 2026-04-28. |
+| Core | Minimal loop plus stable shell. | submit, stream, core tools, cancel, provider error, retry status, persistence correctness, `-p`, basic TUI turn display. | Active: validated slices exist, but live TUI defects reopened the gate. |
 | Reliability table stakes | Features that keep the loop usable in real sessions. | minimal continue/resume correctness, compaction/overflow recovery, durable replay after long sessions. | Include when they protect core reliability. |
 | Product table stakes | Common agent UX after the loop is sane. | robust resume UX, slash autocomplete, basic permission UX, transcript inspection. | Active next under `tk-mmcs`. |
 | Polish | Workflow and presentation improvements. | provider/model picker polish, launch header, thinking picker, tree/branching, external editor, richer status/help. | Deferred. |
@@ -72,7 +72,7 @@ Exit criteria:
 
 ### Gate 2: Native Core Agent Loop File Audit
 
-Status: complete (`tk-s6p4` closed)
+Status: reopened under `tk-mmcs` for current live TUI/core defects
 
 Exit criteria:
 
@@ -87,7 +87,7 @@ Exit criteria:
 
 ### Gate 3: TUI Baseline
 
-Status: baseline passed; polish remains table-stakes work
+Status: active after core correctness fixes; UI should be minimal like Claude Code/Droid while the loop remains Pi-simple
 
 Exit criteria:
 
@@ -110,7 +110,7 @@ Exit criteria:
 
 ### Gate 5: Safety And Execution Boundary
 
-Status: deterministic modes/trust/approval boundary covered for the current native path; sandbox polish remains deferred
+Status: deferred behind P1. While `CoreLoopOnly` is active, trust downgrade and policy approval hooks must not affect the native loop.
 
 Exit criteria:
 
@@ -133,10 +133,10 @@ Exit criteria:
 
 ## Immediate Work Order
 
-1. Keep `CoreLoopOnly` on as the default freeze, but reopen table-stakes reliability/session surfaces one at a time. `/compact` is reopened because context survival is part of reliable long-session operation.
-2. Audit the current CLI surface against Pi/Codex conventions: `-p`, stdin, JSON, resume/continue, exit codes, and scriptable smoke behavior.
-3. Audit session UX gaps that remain after the stable core: resume picker clarity, transcript inspection, help/readability, and startup header formatting.
+1. Keep `CoreLoopOnly` on as the default freeze, but make it a true minimal-agent path: no trust downgrade, no approval/policy hook, no ACP/subagent/privacy/routing detours. `/compact` stays open because context survival is reliability work.
+2. Fix current P1 correctness before UI polish: absolute path normalization, tool execution/result durability, resume/follow-up, and provider-history validity.
+3. Then tighten the TUI shell to a minimal Claude Code/Droid-like presentation: one separator between committed entries, compact routine tools by default, readable markdown, and tmux text capture as the primary visual check.
 4. Promote table-stakes items into focused tasks before reopening deferred P2/P3 codepaths.
-5. Re-run full/race tests and Fedora/local-api live smoke after any native-loop or CLI/session behavior change. Prefer Fedora `local-api` / `qwen3.6:27b`; use OpenRouter `deepseek/deepseek-v4-flash` or `deepseek/deepseek-v4-pro` only when local testing is unavailable or a separate-provider check is needed.
+5. Re-run full/race tests and Fedora/local-api live smoke after any native-loop or CLI/session behavior change. Prefer Fedora `local-api` / `qwen3.6:27b`; use OpenRouter `minimax/minimax-m2.5:free`, `deepseek/deepseek-v4-flash`, or `deepseek/deepseek-v4-pro` only when local testing is unavailable or a separate-provider check is needed.
 
 No more broad `ai/` corpus passes by default. Use the existing context docs as an index, then read source. Reopen `ai/` only for a specific subsystem decision or when docs conflict with code.

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -73,6 +74,24 @@ func TestFileTools(t *testing.T) {
 		})
 		if _, err := r.Execute(context.Background(), string(negativeOffsetArgs)); err == nil {
 			t.Fatal("expected negative offset to fail")
+		}
+
+		absArgs, _ := json.Marshal(map[string]any{"file_path": filepath.Join(tmpDir, filePath)})
+		res, err = r.Execute(context.Background(), string(absArgs))
+		if err != nil {
+			t.Fatalf("read with absolute in-workspace path failed: %v", err)
+		}
+		if res != content {
+			t.Errorf("absolute read expected %q, got %q", content, res)
+		}
+
+		outside := filepath.Join(t.TempDir(), "outside.txt")
+		if err := os.WriteFile(outside, []byte("outside"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		outsideArgs, _ := json.Marshal(map[string]any{"file_path": outside})
+		if _, err := r.Execute(context.Background(), string(outsideArgs)); err == nil {
+			t.Fatal("expected absolute path outside workspace to fail")
 		}
 	})
 
@@ -232,6 +251,11 @@ func TestFileTools(t *testing.T) {
 
 		if _, err := l.Execute(context.Background(), `{"path":`); err == nil {
 			t.Fatal("expected invalid list JSON to fail")
+		}
+
+		absArgs := `{"path":` + strconv.Quote(tmpDir) + `}`
+		if _, err := l.Execute(context.Background(), absArgs); err != nil {
+			t.Fatalf("list with absolute workspace path failed: %v", err)
 		}
 	})
 }

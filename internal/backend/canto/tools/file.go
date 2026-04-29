@@ -28,12 +28,16 @@ func NewFileTool(cwd string) *FileTool {
 
 // resolvePath securely joins the target path to cwd and ensures it does not escape.
 func (t *FileTool) resolvePath(target string) (string, error) {
-	absPath, err := filepath.Abs(filepath.Join(t.cwd, target))
+	absCwd, err := filepath.Abs(t.cwd)
 	if err != nil {
 		return "", err
 	}
 
-	absCwd, err := filepath.Abs(t.cwd)
+	candidate := target
+	if !filepath.IsAbs(candidate) {
+		candidate = filepath.Join(absCwd, candidate)
+	}
+	absPath, err := filepath.Abs(candidate)
 	if err != nil {
 		return "", err
 	}
@@ -44,11 +48,35 @@ func (t *FileTool) resolvePath(target string) (string, error) {
 	return absPath, nil
 }
 
+func (t *FileTool) relativePath(target string) (string, error) {
+	absPath, err := t.resolvePath(target)
+	if err != nil {
+		return "", err
+	}
+	absCwd, err := filepath.Abs(t.cwd)
+	if err != nil {
+		return "", err
+	}
+	relPath, err := filepath.Rel(absCwd, absPath)
+	if err != nil {
+		return "", err
+	}
+	return relPath, nil
+}
+
 func (t *FileTool) checkpointPaths(ctx context.Context, paths ...string) (string, error) {
 	if t.checkpoint == nil {
 		return "", nil
 	}
-	cp, err := t.checkpoint.Create(ctx, t.cwd, paths)
+	relPaths := make([]string, 0, len(paths))
+	for _, path := range paths {
+		relPath, err := t.relativePath(path)
+		if err != nil {
+			return "", err
+		}
+		relPaths = append(relPaths, relPath)
+	}
+	cp, err := t.checkpoint.Create(ctx, t.cwd, relPaths)
 	if err != nil {
 		return "", err
 	}

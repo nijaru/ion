@@ -333,6 +333,9 @@ func TestShiftTabTogglesReadAndEditOnly(t *testing.T) {
 }
 
 func TestShiftTabRequiresWorkspaceTrustForEdit(t *testing.T) {
+	if features.CoreLoopOnly {
+		t.Skip("workspace trust does not gate modes during CoreLoopOnly stabilization")
+	}
 	model := readyModel(t).WithTrust(nil, false, "prompt")
 	model.Mode = session.ModeRead
 	sess := model.Model.Session.(*stubSession)
@@ -355,6 +358,9 @@ func TestShiftTabRequiresWorkspaceTrustForEdit(t *testing.T) {
 }
 
 func TestUntrustedWorkspaceBlocksEditAndAutoModes(t *testing.T) {
+	if features.CoreLoopOnly {
+		t.Skip("workspace trust does not gate modes during CoreLoopOnly stabilization")
+	}
 	model := readyModel(t).WithTrust(nil, false, "prompt")
 	model.Mode = session.ModeRead
 
@@ -423,6 +429,15 @@ func TestModelStreamsAndCommitsPendingEntry(t *testing.T) {
 		if _, ok := event.(storage.Agent); ok {
 			t.Fatalf("agent message should not be app-persisted: %#v", storageSess.appends)
 		}
+	}
+}
+
+func TestPlaneBHidesPendingAgentText(t *testing.T) {
+	model := readyModel(t)
+	model.InFlight.Pending = &session.Entry{Role: session.Agent, Content: "streamed reply"}
+
+	if got := ansi.Strip(model.renderPlaneB()); got != "" {
+		t.Fatalf("plane B = %q, want no live assistant transcript", got)
 	}
 }
 
@@ -842,6 +857,9 @@ func TestRenderRoutineToolEntryCanShowFullOutput(t *testing.T) {
 	if !strings.Contains(got, "line 1") || !strings.Contains(got, "line 2") {
 		t.Fatalf("full routine tool render = %q, want original content", got)
 	}
+	if strings.Contains(got, "\n    line") {
+		t.Fatalf("full routine tool render = %q, want two-space output indentation", got)
+	}
 }
 
 func TestRenderRoutineToolEntryPreservesErrors(t *testing.T) {
@@ -901,6 +919,34 @@ func TestRenderPlaneBThinkingCollapsesByDefault(t *testing.T) {
 	}
 	if strings.Contains(got, "private chain of thought") {
 		t.Fatalf("plane b thinking leaked reasoning: %q", got)
+	}
+}
+
+func TestRenderAgentMarkdownDoesNotIndentContinuationLines(t *testing.T) {
+	model := readyModel(t)
+	entry := session.Entry{
+		Role:    session.Agent,
+		Content: "Read.\n\n- first\n- second",
+	}
+
+	got := ansi.Strip(model.renderEntry(entry))
+	if strings.Contains(got, "\n  - first") || strings.Contains(got, "\n  - second") {
+		t.Fatalf("agent render = %q, want markdown continuation lines unindented", got)
+	}
+	if !strings.Contains(got, "\n- first") || !strings.Contains(got, "\n- second") {
+		t.Fatalf("agent render = %q, want bullet lines preserved", got)
+	}
+}
+
+func TestFormatToolTitleUsesReadableLabels(t *testing.T) {
+	if got := FormatToolTitle("read", `{"file_path":"AGENTS.md"}`); got != "Read AGENTS.md" {
+		t.Fatalf("read title = %q, want readable title", got)
+	}
+	if got := FormatToolTitle("bash", `{"command":"go test ./..."}`); got != "Bash go test ./..." {
+		t.Fatalf("bash title = %q, want readable title", got)
+	}
+	if got := FormatToolTitle("unknown", `{"nested":{"x":1}}`); got != "unknown" {
+		t.Fatalf("fallback title = %q, want tool name only", got)
 	}
 }
 
@@ -2481,7 +2527,6 @@ func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 		"/read",
 		"/edit",
 		"/auto, /yolo",
-		"/trust [status]",
 		"/settings",
 		"/tools",
 		"/clear",
@@ -2492,6 +2537,7 @@ func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 	}
 	if !features.CoreLoopOnly {
 		wantCommands = append(wantCommands,
+			"/trust [status]",
 			"/rewind <id>",
 			"/memory [query]",
 			"/mcp add <cmd>",
@@ -2840,6 +2886,9 @@ func TestMemoryCommandReportsMemoryView(t *testing.T) {
 }
 
 func TestTrustCommandPersistsWorkspaceTrust(t *testing.T) {
+	if features.CoreLoopOnly {
+		t.Skip("workspace trust command is disabled during CoreLoopOnly stabilization")
+	}
 	trustPath := filepath.Join(t.TempDir(), "trusted.json")
 	model := readyModel(t).WithTrust(ionworkspace.NewTrustStore(trustPath), false, "prompt")
 	model.Mode = session.ModeRead
@@ -2872,6 +2921,9 @@ func TestTrustCommandPersistsWorkspaceTrust(t *testing.T) {
 }
 
 func TestTrustCommandRespectsStrictPolicy(t *testing.T) {
+	if features.CoreLoopOnly {
+		t.Skip("workspace trust command is disabled during CoreLoopOnly stabilization")
+	}
 	trustPath := filepath.Join(t.TempDir(), "trusted.json")
 	model := readyModel(t).WithTrust(ionworkspace.NewTrustStore(trustPath), false, "strict")
 
@@ -2886,6 +2938,9 @@ func TestTrustCommandRespectsStrictPolicy(t *testing.T) {
 }
 
 func TestTrustStatusCommandReportsState(t *testing.T) {
+	if features.CoreLoopOnly {
+		t.Skip("workspace trust command is disabled during CoreLoopOnly stabilization")
+	}
 	model := readyModel(t).WithTrust(nil, true)
 
 	_, cmd := model.handleCommand("/trust status")
