@@ -29,10 +29,6 @@ func (m Model) View() tea.View {
 		b.WriteString("\n")
 	}
 
-	// Keep the live status/composer shell visually separated from committed
-	// scrollback, including replayed transcript rows printed before View runs.
-	b.WriteString("\n")
-
 	// Progress line
 	b.WriteString(m.progressLine())
 	b.WriteString("\n")

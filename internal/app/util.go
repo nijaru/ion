@@ -79,11 +79,8 @@ func printEntriesCmd(m Model, entries ...session.Entry) tea.Cmd {
 }
 
 func (m Model) RenderEntries(entries ...session.Entry) []string {
-	lines := make([]string, 0, len(entries)*2)
-	for i, entry := range entries {
-		if i > 0 {
-			lines = append(lines, "")
-		}
+	lines := make([]string, 0, len(entries))
+	for _, entry := range entries {
 		lines = append(lines, m.renderEntry(entry))
 	}
 	return lines
@@ -93,10 +90,7 @@ func (m *Model) printEntries(entries ...session.Entry) tea.Cmd {
 	if len(entries) == 0 {
 		return nil
 	}
-	lines := make([]string, 0, len(entries)*2+1)
-	if m.App.PrintedTranscript {
-		lines = append(lines, "")
-	}
+	lines := make([]string, 0, len(entries))
 	m.App.PrintedTranscript = true
 	lines = append(lines, m.RenderEntries(entries...)...)
 	physicalLines := physicalLineCount(lines)
@@ -109,10 +103,7 @@ func (m *Model) printHelp(content string) tea.Cmd {
 	if content == "" {
 		return nil
 	}
-	lines := make([]string, 0, strings.Count(content, "\n")+2)
-	if m.App.PrintedTranscript {
-		lines = append(lines, "")
-	}
+	lines := make([]string, 0, strings.Count(content, "\n")+1)
 	m.App.PrintedTranscript = true
 	for i, line := range strings.Split(content, "\n") {
 		lines = append(lines, m.renderHelpLine(i, line))

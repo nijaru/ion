@@ -918,8 +918,8 @@ func TestRenderEntriesCanExpandReplayedRoutineToolOutput(t *testing.T) {
 	if strings.Contains(got, "... (3 lines)") {
 		t.Fatalf("replayed routine tool render = %q, want no compact summary in full mode", got)
 	}
-	if strings.Contains(got, "\n\n\n") {
-		t.Fatalf("replayed routine tool render = %q, want a single blank line between entries", got)
+	if strings.Contains(got, "\n\n") {
+		t.Fatalf("replayed routine tool render = %q, want entries on consecutive lines", got)
 	}
 }
 
@@ -1054,17 +1054,17 @@ func TestProgressLineFitsWidthAfterResize(t *testing.T) {
 	}
 }
 
-func TestViewSeparatesPrintedTranscriptFromProgress(t *testing.T) {
+func TestViewDoesNotInsertBlankLineBeforeProgress(t *testing.T) {
 	model := readyModel(t)
 	model.App.PrintedTranscript = true
 	model.Progress.Mode = stateReady
 
 	view := model.View().Content
-	if !strings.HasPrefix(view, "\n") {
-		t.Fatalf("view = %q, want blank line before progress after printed transcript", view)
+	if strings.HasPrefix(view, "\n") {
+		t.Fatalf("view = %q, want progress immediately after printed transcript newline", view)
 	}
-	if !strings.Contains(ansi.Strip(view), "\n• Ready\n") {
-		t.Fatalf("view = %q, want ready progress after separator newline", view)
+	if !strings.HasPrefix(ansi.Strip(view), "• Ready\n") {
+		t.Fatalf("view = %q, want ready progress first", view)
 	}
 }
 
@@ -4559,7 +4559,6 @@ func TestStartupPrintLinesIncludesReplayHistory(t *testing.T) {
 		model.renderStartupStatus("ready"),
 		"",
 		model.renderEntry(session.Entry{Role: session.User, Content: "hello"}),
-		"",
 		model.renderEntry(session.Entry{Role: session.Agent, Content: "world"}),
 	}
 
