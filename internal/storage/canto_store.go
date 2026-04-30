@@ -412,41 +412,6 @@ func (s *cantoSession) Entries(ctx context.Context) ([]ionsession.Entry, error) 
 		return nil, err
 	}
 
-	toolErrors := make(map[string]bool)
-	toolTitles := make(map[string]string)
-	for _, ev := range sess.Events() {
-		switch ev.Type {
-		case session.ToolStarted:
-			data, ok, err := ev.ToolStartedData()
-			if err != nil {
-				return nil, err
-			}
-			if !ok {
-				continue
-			}
-			if data.ID != "" {
-				toolTitles[data.ID] = formatDisplayToolTitle(data.Tool, data.Arguments)
-			}
-		case session.ToolCompleted:
-			var data struct {
-				ToolUseID string `json:"tool_use_id"`
-				ID        string `json:"id"`
-				IsError   bool   `json:"is_error"`
-				Error     string `json:"error"`
-			}
-			if err := ev.UnmarshalData(&data); err != nil {
-				return nil, err
-			}
-			toolUseID := data.ToolUseID
-			if toolUseID == "" {
-				toolUseID = data.ID
-			}
-			if toolUseID != "" {
-				toolErrors[toolUseID] = data.IsError || strings.TrimSpace(data.Error) != ""
-			}
-		}
-	}
-
 	history, err := sess.EffectiveEntries()
 	if err != nil {
 		return nil, err
@@ -456,7 +421,7 @@ func (s *cantoSession) Entries(ctx context.Context) ([]ionsession.Entry, error) 
 	effectiveByEventID := make(map[string]session.HistoryEntry, len(history))
 	for _, entry := range history {
 		if entry.EventID == "" {
-			if display, ok := displayHistoryEntry(entry, toolErrors, toolTitles); ok {
+			if display, ok := displayHistoryEntry(entry); ok {
 				entries = append(entries, display)
 			}
 			continue
@@ -467,7 +432,7 @@ func (s *cantoSession) Entries(ctx context.Context) ([]ionsession.Entry, error) 
 	seenEffective := make(map[string]bool, len(effectiveByEventID))
 	for _, ev := range sess.Events() {
 		if entry, ok := effectiveByEventID[ev.ID.String()]; ok {
-			if display, ok := displayHistoryEntry(entry, toolErrors, toolTitles); ok {
+			if display, ok := displayHistoryEntry(entry); ok {
 				entries = append(entries, display)
 			}
 			seenEffective[entry.EventID] = true
@@ -481,18 +446,14 @@ func (s *cantoSession) Entries(ctx context.Context) ([]ionsession.Entry, error) 
 		if entry.EventID == "" || seenEffective[entry.EventID] {
 			continue
 		}
-		if display, ok := displayHistoryEntry(entry, toolErrors, toolTitles); ok {
+		if display, ok := displayHistoryEntry(entry); ok {
 			entries = append(entries, display)
 		}
 	}
 	return normalizeDisplayEntries(entries), nil
 }
 
-func displayHistoryEntry(
-	entry session.HistoryEntry,
-	toolErrors map[string]bool,
-	toolTitles map[string]string,
-) (ionsession.Entry, bool) {
+func displayHistoryEntry(entry session.HistoryEntry) (ionsession.Entry, bool) {
 	if display, ok := displayContextEntry(entry); ok {
 		return display, true
 	}
@@ -510,10 +471,17 @@ func displayHistoryEntry(
 			Reasoning: msg.Reasoning,
 		}, true
 	case llm.RoleTool:
-		title := toolTitles[msg.ToolID]
-		if title == "" {
-			title = formatDisplayToolTitle(msg.Name, "")
+		name := msg.Name
+		args := ""
+		isError := false
+		if entry.Tool != nil {
+			if entry.Tool.Name != "" {
+				name = entry.Tool.Name
+			}
+			args = entry.Tool.Arguments
+			isError = entry.Tool.IsError || strings.TrimSpace(entry.Tool.Error) != ""
 		}
+		title := formatDisplayToolTitle(name, args)
 		if title == "" {
 			title = "tool"
 		}
@@ -521,7 +489,7 @@ func displayHistoryEntry(
 			Role:    ionsession.Tool,
 			Title:   title,
 			Content: msg.Content,
-			IsError: toolErrors[msg.ToolID],
+			IsError: isError,
 		}, true
 	case llm.RoleSystem, llm.RoleDeveloper:
 		return ionsession.Entry{
