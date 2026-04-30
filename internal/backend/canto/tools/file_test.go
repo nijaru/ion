@@ -93,6 +93,15 @@ func TestFileTools(t *testing.T) {
 		if _, err := r.Execute(context.Background(), string(outsideArgs)); err == nil {
 			t.Fatal("expected absolute path outside workspace to fail")
 		}
+
+		linkPath := filepath.Join(tmpDir, "outside-link.txt")
+		if err := os.Symlink(outside, linkPath); err != nil {
+			t.Skipf("symlink unavailable: %v", err)
+		}
+		linkArgs, _ := json.Marshal(map[string]any{"file_path": "outside-link.txt"})
+		if _, err := r.Execute(context.Background(), string(linkArgs)); err == nil {
+			t.Fatal("expected symlink escape to fail")
+		}
 	})
 
 	t.Run("Edit", func(t *testing.T) {
@@ -256,6 +265,17 @@ func TestFileTools(t *testing.T) {
 		absArgs := `{"path":` + strconv.Quote(tmpDir) + `}`
 		if _, err := l.Execute(context.Background(), absArgs); err != nil {
 			t.Fatalf("list with absolute workspace path failed: %v", err)
+		}
+
+		outsideDir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(outsideDir, "outside.txt"), []byte("outside"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(outsideDir, filepath.Join(tmpDir, "outside-dir-link")); err != nil {
+			t.Skipf("symlink unavailable: %v", err)
+		}
+		if _, err := l.Execute(context.Background(), `{"path":"outside-dir-link"}`); err == nil {
+			t.Fatal("expected symlink directory escape to fail")
 		}
 	})
 }

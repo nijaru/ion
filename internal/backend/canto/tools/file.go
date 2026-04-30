@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,30 +27,46 @@ func NewFileTool(cwd string) *FileTool {
 	return &FileTool{cwd: cwd, checkpoint: ionworkspace.NewCheckpointStore(path)}
 }
 
-// resolvePath securely joins the target path to cwd and ensures it does not escape.
-func (t *FileTool) resolvePath(target string) (string, error) {
+func (t *FileTool) openRoot() (*os.Root, error) {
 	absCwd, err := filepath.Abs(t.cwd)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-
-	candidate := target
-	if !filepath.IsAbs(candidate) {
-		candidate = filepath.Join(absCwd, candidate)
-	}
-	absPath, err := filepath.Abs(candidate)
-	if err != nil {
-		return "", err
-	}
-
-	if !strings.HasPrefix(absPath, absCwd+string(filepath.Separator)) && absPath != absCwd {
-		return "", fmt.Errorf("path escapes workspace: %s", target)
-	}
-	return absPath, nil
+	return os.OpenRoot(absCwd)
 }
 
 func (t *FileTool) relativePath(target string) (string, error) {
-	absPath, err := t.resolvePath(target)
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return "", fmt.Errorf("path is required")
+	}
+	absCwd, err := filepath.Abs(t.cwd)
+	if err != nil {
+		return "", err
+	}
+
+	if filepath.IsAbs(target) {
+		absPath, err := filepath.Abs(target)
+		if err != nil {
+			return "", err
+		}
+		target, err = filepath.Rel(absCwd, absPath)
+		if err != nil {
+			return "", err
+		}
+	}
+
+	target = filepath.Clean(target)
+	if !filepath.IsLocal(target) {
+		return "", fmt.Errorf("path escapes workspace: %s", target)
+	}
+	return target, nil
+}
+
+// resolvePath returns the lexical absolute path for display/diff metadata only.
+// File operations use os.Root methods so symlinks cannot escape the workspace.
+func (t *FileTool) resolvePath(target string) (string, error) {
+	relPath, err := t.relativePath(target)
 	if err != nil {
 		return "", err
 	}
@@ -57,11 +74,7 @@ func (t *FileTool) relativePath(target string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	relPath, err := filepath.Rel(absCwd, absPath)
-	if err != nil {
-		return "", err
-	}
-	return relPath, nil
+	return filepath.Join(absCwd, relPath), nil
 }
 
 func (t *FileTool) checkpointPaths(ctx context.Context, paths ...string) (string, error) {
@@ -129,12 +142,17 @@ func (r *Read) Execute(ctx context.Context, args string) (string, error) {
 		return "", fmt.Errorf("limit must be non-negative")
 	}
 
-	absPath, err := r.resolvePath(input.FilePath)
+	relPath, err := r.relativePath(input.FilePath)
 	if err != nil {
 		return "", err
 	}
+	root, err := r.openRoot()
+	if err != nil {
+		return "", err
+	}
+	defer root.Close()
 
-	content, err := os.ReadFile(absPath)
+	content, err := root.ReadFile(relPath)
 	if err != nil {
 		return "", err
 	}
@@ -189,21 +207,26 @@ func (w *Write) Execute(ctx context.Context, args string) (string, error) {
 		return "", err
 	}
 
-	absPath, err := w.resolvePath(input.FilePath)
+	relPath, err := w.relativePath(input.FilePath)
 	if err != nil {
 		return "", err
 	}
+	root, err := w.openRoot()
+	if err != nil {
+		return "", err
+	}
+	defer root.Close()
 
 	checkpointID, err := w.checkpointPaths(ctx, input.FilePath)
 	if err != nil {
 		return "", err
 	}
 
-	if err := os.MkdirAll(filepath.Dir(absPath), 0755); err != nil {
+	if err := root.MkdirAll(filepath.Dir(relPath), 0755); err != nil {
 		return "", err
 	}
 
-	if err := os.WriteFile(absPath, []byte(input.Content), 0644); err != nil {
+	if err := root.WriteFile(relPath, []byte(input.Content), 0644); err != nil {
 		return "", err
 	}
 	return appendCheckpointID(fmt.Sprintf("Successfully wrote %d bytes to %s", len(input.Content), input.FilePath), checkpointID), nil
@@ -257,12 +280,17 @@ func (e *Edit) Execute(ctx context.Context, args string) (string, error) {
 		return "", err
 	}
 
-	absPath, err := e.resolvePath(input.FilePath)
+	relPath, err := e.relativePath(input.FilePath)
 	if err != nil {
 		return "", err
 	}
+	root, err := e.openRoot()
+	if err != nil {
+		return "", err
+	}
+	defer root.Close()
 
-	content, err := os.ReadFile(absPath)
+	content, err := root.ReadFile(relPath)
 	if err != nil {
 		return "", err
 	}
@@ -289,7 +317,7 @@ func (e *Edit) Execute(ctx context.Context, args string) (string, error) {
 		return "", err
 	}
 
-	if err := os.WriteFile(absPath, []byte(newContent), 0644); err != nil {
+	if err := root.WriteFile(relPath, []byte(newContent), 0644); err != nil {
 		return "", err
 	}
 
@@ -359,28 +387,34 @@ func (m *MultiEdit) Execute(ctx context.Context, args string) (string, error) {
 	}
 
 	// First pass: validate all edits and track original content
+	root, err := m.openRoot()
+	if err != nil {
+		return "", err
+	}
+	defer root.Close()
+
 	contents := make(map[string]string)
 	originals := make(map[string]string)
 	for _, edit := range input.Edits {
 		if err := validateEditStrings(edit.OldString, edit.NewString); err != nil {
 			return "", fmt.Errorf("%s: %w", edit.FilePath, err)
 		}
-		absPath, err := m.resolvePath(edit.FilePath)
+		relPath, err := m.relativePath(edit.FilePath)
 		if err != nil {
 			return "", err
 		}
 
 		// Load file if not already loaded
-		if _, ok := contents[absPath]; !ok {
-			content, err := os.ReadFile(absPath)
+		if _, ok := contents[relPath]; !ok {
+			content, err := root.ReadFile(relPath)
 			if err != nil {
 				return "", fmt.Errorf("failed to read %s: %w", edit.FilePath, err)
 			}
-			contents[absPath] = string(content)
-			originals[absPath] = string(content)
+			contents[relPath] = string(content)
+			originals[relPath] = string(content)
 		}
 
-		strContent := contents[absPath]
+		strContent := contents[relPath]
 		count := strings.Count(strContent, edit.OldString)
 		if count == 0 {
 			return "", fmt.Errorf("old_string not found in %s", edit.FilePath)
@@ -392,20 +426,16 @@ func (m *MultiEdit) Execute(ctx context.Context, args string) (string, error) {
 
 		// Apply edit to our in-memory copy
 		if edit.ReplaceAll {
-			contents[absPath] = strings.Replace(strContent, edit.OldString, edit.NewString, -1)
+			contents[relPath] = strings.Replace(strContent, edit.OldString, edit.NewString, -1)
 		} else {
-			contents[absPath] = strings.Replace(strContent, edit.OldString, edit.NewString, 1)
+			contents[relPath] = strings.Replace(strContent, edit.OldString, edit.NewString, 1)
 		}
 	}
 
 	// Second pass: write all modified files to temp files and generate aggregate diff
 	var diffs strings.Builder
 	checkpointPaths := make([]string, 0, len(contents))
-	for absPath := range contents {
-		relPath, err := filepath.Rel(m.cwd, absPath)
-		if err != nil {
-			return "", err
-		}
+	for relPath := range contents {
 		checkpointPaths = append(checkpointPaths, relPath)
 	}
 	checkpointID, err := m.checkpointPaths(ctx, checkpointPaths...)
@@ -419,16 +449,15 @@ func (m *MultiEdit) Execute(ctx context.Context, args string) (string, error) {
 	var renames []renameOp
 	var writeErrs []error
 
-	for absPath, content := range contents {
-		tmpPath := absPath + ".tmp"
-		if err := os.WriteFile(tmpPath, []byte(content), 0644); err != nil {
+	for relPath, content := range contents {
+		tmpPath := relPath + ".tmp"
+		if err := root.WriteFile(tmpPath, []byte(content), 0644); err != nil {
 			writeErrs = append(writeErrs, fmt.Errorf("failed to write temp %s: %w", tmpPath, err))
 			break
 		}
-		renames = append(renames, renameOp{from: tmpPath, to: absPath})
+		renames = append(renames, renameOp{from: tmpPath, to: relPath})
 
-		relPath, _ := filepath.Rel(m.cwd, absPath)
-		diff := udiff.Unified("a/"+relPath, "b/"+relPath, originals[absPath], content)
+		diff := udiff.Unified("a/"+relPath, "b/"+relPath, originals[relPath], content)
 		if diff != "" {
 			diffs.WriteString(diff)
 			diffs.WriteString("\n")
@@ -438,14 +467,14 @@ func (m *MultiEdit) Execute(ctx context.Context, args string) (string, error) {
 	// Clean up temp files if any write failed
 	if len(writeErrs) > 0 {
 		for _, op := range renames {
-			_ = os.Remove(op.from)
+			_ = root.Remove(op.from)
 		}
 		return "", fmt.Errorf("multi_edit aborted: %v", writeErrs)
 	}
 
 	// Final pass: atomic renames
 	for _, op := range renames {
-		if err := os.Rename(op.from, op.to); err != nil {
+		if err := root.Rename(op.from, op.to); err != nil {
 			return "", fmt.Errorf("failed to finalize %s: %w", op.to, err)
 		}
 	}
@@ -502,12 +531,17 @@ func (l *List) Execute(ctx context.Context, args string) (string, error) {
 		input.Path = "."
 	}
 
-	absPath, err := l.resolvePath(input.Path)
+	relPath, err := l.relativePath(input.Path)
 	if err != nil {
 		return "", err
 	}
+	root, err := l.openRoot()
+	if err != nil {
+		return "", err
+	}
+	defer root.Close()
 
-	entries, err := os.ReadDir(absPath)
+	entries, err := fs.ReadDir(root.FS(), relPath)
 	if err != nil {
 		return "", err
 	}

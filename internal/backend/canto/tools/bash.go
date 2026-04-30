@@ -52,6 +52,9 @@ func (b *Bash) ExecuteStreaming(ctx context.Context, args string, emit func(stri
 	if err := json.Unmarshal([]byte(args), &input); err != nil {
 		return "", err
 	}
+	if strings.TrimSpace(input.Command) == "" {
+		return "", fmt.Errorf("command is required")
+	}
 
 	plan, err := planSandboxedBash(b.cwd, input.Command, b.sandbox)
 	if err != nil {
@@ -132,7 +135,7 @@ func (b *Bash) ExecuteStreaming(ctx context.Context, args string, emit func(stri
 		if res == "" {
 			return "", err
 		}
-		return res + "\nError: " + err.Error(), nil
+		return res, err
 	}
 
 	return res, nil
