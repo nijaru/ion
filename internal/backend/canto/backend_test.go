@@ -333,6 +333,62 @@ func TestSubmitTurnPreservesProviderInSessionMetadata(t *testing.T) {
 	}
 }
 
+func TestSubmitTurnMaterializesLazySession(t *testing.T) {
+	ctx := context.Background()
+	store, err := storage.NewCantoStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	cwd := "/tmp/ion-lazy-turn"
+	storageSession := storage.NewLazySession(store, cwd, "local-api/model-a", "main")
+
+	provider := llm.NewFauxProvider("local-api", llm.FauxStep{Content: "ok"})
+	oldFactory := providerFactory
+	providerFactory = func(ctx context.Context, cfg *config.Config) (llm.Provider, error) {
+		return provider, nil
+	}
+	defer func() { providerFactory = oldFactory }()
+
+	b := New()
+	b.SetStore(store)
+	b.SetSession(storageSession)
+	b.SetConfig(&config.Config{Provider: "local-api", Model: "model-a", Endpoint: "http://localhost:8080/v1"})
+	if err := b.Open(ctx); err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer func() { _ = b.Close() }()
+
+	if storage.IsMaterialized(storageSession) {
+		t.Fatal("lazy session materialized during backend open")
+	}
+	before, err := store.ListSessions(ctx, cwd)
+	if err != nil {
+		t.Fatalf("list before submit: %v", err)
+	}
+	if len(before) != 0 {
+		t.Fatalf("sessions before submit = %#v, want none", before)
+	}
+
+	if err := b.SubmitTurn(ctx, "hi"); err != nil {
+		t.Fatalf("submit turn: %v", err)
+	}
+	waitForTurnFinished(t, b.Events())
+
+	if !storage.IsMaterialized(storageSession) {
+		t.Fatal("lazy session not materialized by submit")
+	}
+	after, err := store.ListSessions(ctx, cwd)
+	if err != nil {
+		t.Fatalf("list after submit: %v", err)
+	}
+	if len(after) != 1 {
+		t.Fatalf("sessions after submit = %d, want 1", len(after))
+	}
+	if after[0].LastPreview != "hi" {
+		t.Fatalf("last preview = %q, want hi", after[0].LastPreview)
+	}
+}
+
 func TestSubmitTurnUsesCallerContext(t *testing.T) {
 	ctx := t.Context()
 	store, err := storage.NewCantoStore(t.TempDir())
