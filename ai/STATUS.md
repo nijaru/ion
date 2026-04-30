@@ -67,6 +67,7 @@ Fast, lightweight terminal coding agent.
 - A2 Canto provider-visible history now rejects future unmatched tool-result writes and filters legacy orphan/duplicate/late tool rows from effective history. Canto `91a3149` is pushed and imported into Ion; Canto full tests, Ion full tests, native race gate, and OpenRouter Minimax live tool/resume/follow-up smoke are green. Fedora timed out for this live smoke.
 - A3 Ion lazy lifecycle is patched in progress: display-only appends before a real model turn no longer materialize lazy sessions. Native CantoBackend submit still explicitly materializes through `Ensure`, and focused storage/app/backend tests prove pre-turn status/slash display stays local while a real submit creates exactly one durable session.
 - A3 storage surface is narrower: the unused legacy file-store implementation and unused background scanner were removed so native Ion has one session storage path to audit, Canto-backed storage plus lazy materialization.
+- A3 Ion storage/lazy lifecycle is now reviewed. Startup/resume/session-picker/runtime-switch/app command paths hold the lifecycle invariants: slash/local commands do not materialize sessions, session picker filters non-conversation rows, runtime switches preserve only materialized sessions, app storage writes are UI-local only, and CantoStore rejects model-visible appends.
 - Preferred live-smoke order: use Fedora local-api first when available (`http://fedora:8080/v1`, currently advertising `qwen3.6:27b-uncensored`). OpenRouter remains fallback only: `minimax/minimax-m2.5:free` when available, `deepseek/deepseek-v4-flash` for cheap checks, or `deepseek/deepseek-v4-pro` only when a stronger separate-provider check is useful.
 - Current Fedora evidence: `/v1/models` returned `qwen3.6:27b-uncensored`; `TestLiveSmokeTurnAndToolCall` passed with tool call, persisted resume, and follow-up `continued`; direct `ion -p` text smoke returned `ok`; explicit `--resume <id> -p` returned `resumed`; direct JSON tool smoke returned `response="done"` with `tool_calls=["bash"]`.
 - Current OpenRouter fallback evidence: `minimax/minimax-m2.5:free` returned `ok` with a 120s print-mode timeout after the latest CLI print slice; a 45s Minimax attempt previously timed out, and `deepseek/deepseek-v4-flash` returned OpenRouter `402 Payment Required`.
@@ -75,7 +76,7 @@ Fast, lightweight terminal coding agent.
 
 Continue `tk-mmcs` as the P1 stabilization track:
 
-1. Continue the active review sequence in [review/core-loop-review-tracker-2026-04-28.md](review/core-loop-review-tracker-2026-04-28.md); A1 and A2 are committed/pushed, and A3 Ion storage/lazy lifecycle is mid-pass with lazy materialization tightened.
+1. Continue the active review sequence in [review/core-loop-review-tracker-2026-04-28.md](review/core-loop-review-tracker-2026-04-28.md); A1-A3 are committed/pushed/reviewed, and the next subsystem is A4 core tool boundary.
 2. Do not pick isolated bug slices unless they fall out of the active subsystem review and are logged under `tk-mmcs`.
 3. Keep `tk-rg23` and `tk-zxgq` as next TUI usability tasks after P1 correctness: tool/thinking display controls and steering-vs-queue UX.
 4. Keep ACP, privacy, subagents, skills, routing, advanced thinking, and safety polish blocked behind `tk-mmcs`.
