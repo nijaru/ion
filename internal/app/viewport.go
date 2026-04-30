@@ -310,6 +310,22 @@ func summarizeRoutineToolOutput(content string) string {
 	return fmt.Sprintf("... (%d lines)", len(lines))
 }
 
+func (m Model) renderQueuedTurns() string {
+	if len(m.InFlight.QueuedTurns) == 0 {
+		return ""
+	}
+	preview := compactQueuedText(m.InFlight.QueuedTurns[0])
+	label := fmt.Sprintf("• Queued (Ctrl+G edit): %s", preview)
+	if extra := len(m.InFlight.QueuedTurns) - 1; extra > 0 {
+		label += fmt.Sprintf(" • +%d more", extra)
+	}
+	return m.st.dim.Render(fitLine(label, m.App.Width))
+}
+
+func compactQueuedText(text string) string {
+	return strings.Join(strings.Fields(strings.TrimSpace(text)), " ")
+}
+
 // progressLine renders the single-line progress indicator between Plane B and the composer.
 func (m Model) progressLine() string {
 	var line string

@@ -55,6 +55,10 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	}
 
 	switch msg.String() {
+	case "ctrl+g":
+		m.clearPendingAction()
+		return m.recallQueuedTurns()
+
 	case "ctrl+m":
 		m.clearPendingAction()
 		if m.activePreset() == presetFast {
@@ -224,6 +228,22 @@ func (m Model) submitComposer() (Model, tea.Cmd) {
 	}
 
 	return m.submitText(text)
+}
+
+func (m Model) recallQueuedTurns() (Model, tea.Cmd) {
+	if len(m.InFlight.QueuedTurns) == 0 {
+		return m, nil
+	}
+	queued := strings.Join(m.InFlight.QueuedTurns, "\n")
+	m.InFlight.QueuedTurns = nil
+
+	current := strings.TrimSpace(m.Input.Composer.Value())
+	if current != "" {
+		queued = current + "\n" + queued
+	}
+	m.Input.Composer.SetValue(queued)
+	m.relayoutComposer()
+	return m, nil
 }
 
 func (m Model) completeSlashCommand() (Model, tea.Cmd, bool) {

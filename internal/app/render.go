@@ -29,6 +29,11 @@ func (m Model) View() tea.View {
 		b.WriteString("\n")
 	}
 
+	if queued := m.renderQueuedTurns(); queued != "" {
+		b.WriteString(queued)
+		b.WriteString("\n")
+	}
+
 	// Progress line
 	b.WriteString(m.progressLine())
 	b.WriteString("\n")
