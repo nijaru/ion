@@ -20,6 +20,7 @@ Fast, lightweight terminal coding agent.
 ## Recent Evidence, Not Completion
 
 - Canto `773f2ab` is imported: runtime overflow recovery now has focused Canto coverage proving the retry request is rebuilt from compacted durable session history through both the minimal runner contract and normal `agent.New` provider path; `governor.RecoveryProvider` is documented as same-request retry only. Ion focused core tests, full tests, native race gate, and `tencent/hy3-preview:free` live tool/resume/follow-up smoke pass after import.
+- Canto `c7f2fa9` is imported: core Canto packages no longer depend on `github.com/nijaru/canto/x/*`; `x/tracing` was promoted to core `tracing/` because the agent loop uses it every turn. Ion focused core tests, full tests, native race gate, and `tencent/hy3-preview:free` live tool/resume/follow-up smoke pass after import.
 - Canto has two pushed session-history fixes in the active Ion dependency: invalid empty assistant writes are rejected at write boundaries, and raw `LastAssistantMessage` now skips legacy invalid assistant rows during turn finalization.
 - Ion has reviewed/patched native-path slices for feature freeze enforcement, CLI startup/resume/print lifecycle, backend event translation, storage/replay projection, app turn lifecycle, transcript replay rendering, core tools, provider startup state, and deferred-surface isolation.
 - Deterministic gates are green after importing Canto `d37beda`: focused native package tests plus `go test ./...`.
@@ -94,9 +95,9 @@ Fast, lightweight terminal coding agent.
 
 Continue `tk-mmcs` as the P1 stabilization track:
 
-1. Keep `tk-zxgq` deferred behind `tk-z1kk`; do not add `/settings busy-input steer` as UI-only behavior.
-2. Continue Canto `canto-x5po` with C6 non-core quarantine/remaining contract review before declaring the framework side boringly stable.
-3. Keep remaining TUI usability work behind the stable native loop: transcript polish, slash autocomplete, session browser polish, and provider/model UX.
+1. Treat the Canto core-contract audit as closed unless a new Ion smoke exposes a concrete framework-owned failure.
+2. Move the next Ion work back to table-stakes TUI/CLI usability: transcript polish, slash autocomplete, session browser polish, and provider/model UX.
+3. Keep true active-turn steering (`tk-z1kk`) blocked behind `tk-mmcs`; do not add `/settings busy-input steer` as UI-only behavior.
 4. Keep ACP, privacy, subagents, skills, routing, advanced thinking, and safety polish blocked behind `tk-mmcs`.
 
 Do not run another broad `ai/` pass by default. The next work is source review and targeted docs only when the code review exposes a design question.
@@ -104,6 +105,6 @@ Do not run another broad `ai/` pass by default. The next work is source review a
 ## Active Tasks
 
 - `tk-mmcs` — P1 core parity plan and task queue hygiene.
-- `tk-zxgq` — busy-input steering setting, blocked by `tk-z1kk` because true steering needs a Canto boundary-step contract.
+- `tk-z1kk` — boundary-step steering mode, blocked by `tk-mmcs` until it is deliberately prioritized.
 
 Everything else is downstream of the solo native loop.
