@@ -131,7 +131,7 @@ func TestCantoStoreListSessionsToleratesNullName(t *testing.T) {
 	}
 }
 
-func TestLazySessionDoesNotAppearUntilAppend(t *testing.T) {
+func TestLazySessionDoesNotAppearUntilEnsure(t *testing.T) {
 	root := t.TempDir()
 	store, err := NewCantoStore(root)
 	if err != nil {
@@ -156,16 +156,38 @@ func TestLazySessionDoesNotAppearUntilAppend(t *testing.T) {
 	if err := lazy.Append(ctx, System{Content: "local notice"}); err != nil {
 		t.Fatalf("append: %v", err)
 	}
-	if !IsMaterialized(lazy) {
-		t.Fatal("lazy session did not materialize after append")
+	if IsMaterialized(lazy) {
+		t.Fatal("lazy session materialized after display-only append")
 	}
 
 	recent, err = store.GetRecentSession(ctx, cwd)
 	if err != nil {
-		t.Fatalf("recent after append: %v", err)
+		t.Fatalf("recent after display-only append: %v", err)
+	}
+	if recent != nil {
+		t.Fatalf("recent after display-only append = %#v, want nil", recent)
+	}
+
+	created, err := lazy.Ensure(ctx)
+	if err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	if created.ID() != lazy.ID() {
+		t.Fatalf("created ID = %q, want lazy ID %q", created.ID(), lazy.ID())
+	}
+	if !IsMaterialized(lazy) {
+		t.Fatal("lazy session did not materialize after ensure")
+	}
+
+	if err := lazy.Append(ctx, System{Content: "local notice after turn"}); err != nil {
+		t.Fatalf("append after ensure: %v", err)
+	}
+	recent, err = store.GetRecentSession(ctx, cwd)
+	if err != nil {
+		t.Fatalf("recent after ensure: %v", err)
 	}
 	if recent == nil || recent.ID != lazy.ID() {
-		t.Fatalf("recent after append = %#v, want %q", recent, lazy.ID())
+		t.Fatalf("recent after ensure = %#v, want %q", recent, lazy.ID())
 	}
 }
 

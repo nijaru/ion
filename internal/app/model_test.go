@@ -2279,6 +2279,37 @@ func TestSlashCommandBeforeTurnDoesNotMaterializeLazySession(t *testing.T) {
 	}
 }
 
+func TestDisplayOnlyEventBeforeTurnDoesNotMaterializeLazySession(t *testing.T) {
+	store, err := storage.NewCantoStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	lazy := storage.NewLazySession(store, "/tmp/test", "openai/model-a", "main")
+	model := New(
+		stubBackend{sess: &stubSession{events: make(chan session.Event)}},
+		lazy,
+		store,
+		"/tmp/test",
+		"main",
+		"dev",
+		nil,
+	)
+
+	updated, _ := model.handleSessionEvent(session.StatusChanged{Status: "Thinking..."})
+	model = updated
+
+	if storage.IsMaterialized(lazy) {
+		t.Fatal("display-only event materialized lazy session")
+	}
+	recent, err := store.GetRecentSession(context.Background(), "/tmp/test")
+	if err != nil {
+		t.Fatalf("recent session: %v", err)
+	}
+	if recent != nil {
+		t.Fatalf("recent session after display-only event = %#v, want nil", recent)
+	}
+}
+
 func TestSubmitTextDoesNotPersistModelVisibleTranscript(t *testing.T) {
 	storageSess := &stubStorageSession{}
 	sess := &stubSession{events: make(chan session.Event)}

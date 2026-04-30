@@ -66,9 +66,11 @@ func (s *LazySession) Append(ctx context.Context, event any) error {
 	if isNoopAppendEvent(event) {
 		return nil
 	}
-	created, err := s.Ensure(ctx)
-	if err != nil {
-		return err
+	s.mu.Lock()
+	created := s.created
+	s.mu.Unlock()
+	if created == nil {
+		return nil
 	}
 	return created.Append(ctx, event)
 }
