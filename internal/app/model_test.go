@@ -874,13 +874,27 @@ func TestRenderRoutineToolEntryCompactsByDefault(t *testing.T) {
 	model := readyModel(t)
 	entry := session.Entry{
 		Role:    session.Tool,
-		Title:   "read",
+		Title:   "read AGENTS.md",
 		Content: "line 1\nline 2\nline 3\n",
 	}
 
 	got := ansi.Strip(model.renderEntry(entry))
-	if !strings.Contains(got, "... (3 lines)") || strings.Contains(got, "line 1") {
+	if got != "• Read AGENTS.md · 3 lines" {
 		t.Fatalf("routine tool render = %q, want compact summary", got)
+	}
+}
+
+func TestRenderPendingRoutineToolEntryCompactsByDefault(t *testing.T) {
+	model := readyModel(t)
+	entry := session.Entry{
+		Role:    session.Tool,
+		Title:   "read AGENTS.md",
+		Content: "line 1\nline 2\nline 3\n",
+	}
+
+	got := ansi.Strip(model.renderPendingEntry(entry))
+	if got != "• Read AGENTS.md · 3 lines" {
+		t.Fatalf("pending routine tool render = %q, want compact summary", got)
 	}
 }
 
@@ -915,7 +929,7 @@ func TestRenderEntriesCanExpandReplayedRoutineToolOutput(t *testing.T) {
 	if !strings.Contains(got, "line 1\n  line 2\n  line 3") {
 		t.Fatalf("replayed routine tool render = %q, want full content", got)
 	}
-	if strings.Contains(got, "... (3 lines)") {
+	if strings.Contains(got, " · 3 lines") {
 		t.Fatalf("replayed routine tool render = %q, want no compact summary in full mode", got)
 	}
 	if strings.Contains(got, "\n\n") {

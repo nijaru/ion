@@ -107,13 +107,20 @@ func (m Model) renderPendingEntry(e session.Entry) string {
 		}
 		return m.st.agent.Render("• " + e.Content)
 	case session.Tool:
-		label := e.Title
+		label := normalizeToolTitle(e.Title)
 		if label == "" {
 			label = "tool"
 		}
 		var b strings.Builder
-		b.WriteString(m.st.tool.Render("• " + label))
+		labelStr := m.st.tool.Render("• " + label)
+		b.WriteString(labelStr)
 		if e.Content == "" || toolVerbosity == "hidden" {
+			return b.String()
+		}
+		if shouldCompactRoutineTool(e, m.Model.Config) {
+			if summary := routineToolOutputSummary(e.Content); summary != "" {
+				b.WriteString(m.st.dim.Render(" · " + summary))
+			}
 			return b.String()
 		}
 		b.WriteString("\n")
@@ -213,7 +220,7 @@ func (m Model) renderEntry(e session.Entry) string {
 		return strings.TrimRightFunc(b.String(), unicode.IsSpace)
 
 	case session.Tool:
-		label := e.Title
+		label := normalizeToolTitle(e.Title)
 		if label == "" {
 			label = "tool"
 		}
@@ -226,10 +233,13 @@ func (m Model) renderEntry(e session.Entry) string {
 		if e.Content == "" || toolVerbosity == "hidden" {
 			return labelStr
 		}
-		content := e.Content
 		if shouldCompactRoutineTool(e, m.Model.Config) {
-			content = summarizeRoutineToolOutput(content)
+			if summary := routineToolOutputSummary(e.Content); summary != "" {
+				return labelStr + m.st.dim.Render(" · "+summary)
+			}
+			return labelStr
 		}
+		content := e.Content
 		if isWriteTool(e.Title) {
 			content = m.renderDiff(content)
 		}
@@ -295,19 +305,16 @@ func shouldCompactRoutineTool(e session.Entry, cfg *config.Config) bool {
 	}
 }
 
-func summarizeRoutineToolOutput(content string) string {
+func routineToolOutputSummary(content string) string {
 	trimmed := strings.TrimSpace(content)
-	if strings.HasPrefix(trimmed, "... (") && strings.HasSuffix(trimmed, ")") {
-		return trimmed
+	if trimmed == "" {
+		return ""
 	}
 	lines := strings.Split(strings.TrimRight(content, "\n"), "\n")
 	if len(lines) == 1 {
-		if strings.TrimSpace(lines[0]) == "" {
-			return ""
-		}
-		return "... (1 line)"
+		return "1 line"
 	}
-	return fmt.Sprintf("... (%d lines)", len(lines))
+	return fmt.Sprintf("%d lines", len(lines))
 }
 
 func (m Model) renderQueuedTurns() string {
@@ -447,6 +454,26 @@ func toolTitleVerb(title string) string {
 		return strings.TrimSpace(title[:idx])
 	}
 	return title
+}
+
+func normalizeToolTitle(title string) string {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return ""
+	}
+	verb := toolTitleVerb(title)
+	displayName := toolDisplayName(verb)
+	if displayName == "Tool" || displayName == verb || verb == "" {
+		return title
+	}
+	rest := strings.TrimSpace(title[len(verb):])
+	if rest == "" {
+		return displayName
+	}
+	if strings.HasPrefix(rest, "(") {
+		return displayName + rest
+	}
+	return displayName + " " + rest
 }
 
 // FormatToolTitle attempts to extract the most important argument from a tool call's
