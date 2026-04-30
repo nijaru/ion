@@ -11,7 +11,7 @@ require (
 	github.com/charmbracelet/x/ansi v0.11.6
 	github.com/coder/acp-go-sdk v0.6.3
 	github.com/go-json-experiment/json v0.0.0-20260214004413-d219187c3433
-	github.com/nijaru/canto v0.0.0-20260430232128-d3f8084df373
+	github.com/nijaru/canto v0.0.0-20260430233156-9ba6120bb8d9
 	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/yuin/goldmark v1.7.13
 	go.opentelemetry.io/otel v1.43.0
