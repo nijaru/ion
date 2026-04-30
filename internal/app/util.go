@@ -79,8 +79,11 @@ func printEntriesCmd(m Model, entries ...session.Entry) tea.Cmd {
 }
 
 func (m Model) RenderEntries(entries ...session.Entry) []string {
-	lines := make([]string, 0, len(entries))
+	lines := make([]string, 0, len(entries)*2)
 	for _, entry := range entries {
+		if len(lines) > 0 {
+			lines = append(lines, "")
+		}
 		lines = append(lines, m.renderEntry(entry))
 	}
 	return lines

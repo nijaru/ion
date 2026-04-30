@@ -412,6 +412,25 @@ func TestPrintStartupPlacesResumeMarkerAfterHeaderBeforeTranscript(t *testing.T)
 	if !strings.Contains(out, "--- resumed ---\n\n› hi\n\n• hello") {
 		t.Fatalf("startup output should separate resumed marker and transcript entries: %q", out)
 	}
+	if !strings.HasSuffix(out, "• hello\n\n") {
+		t.Fatalf("startup output should leave one blank row before shell: %q", out)
+	}
+}
+
+func TestPrintStartupLeavesBlankRowBeforeFreshShell(t *testing.T) {
+	var buf bytes.Buffer
+	printStartup(
+		&buf,
+		[]string{"ion v0.0.0", "Tools: 9 registered"},
+		"~/repo • main",
+		false,
+		nil,
+	)
+
+	out := ansi.Strip(buf.String())
+	if !strings.HasSuffix(out, "~/repo • main\n\n") {
+		t.Fatalf("fresh startup output should leave one blank row before shell: %q", out)
+	}
 }
 
 func TestOpenRuntimeReturnsUnconfiguredBackendWhenSettingsMissing(t *testing.T) {

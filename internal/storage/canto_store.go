@@ -329,6 +329,9 @@ func (s *cantoSession) Append(ctx context.Context, event any) error {
 	case ToolResult:
 		return modelVisibleAppendError(event)
 	case Status:
+		if !isDurableResumeStatus(e.Status) {
+			return nil
+		}
 		ev := session.NewEvent(s.id, session.EventType("status_changed"), map[string]any{
 			"status": e.Status,
 		})
@@ -398,12 +401,49 @@ func (s *cantoSession) LastStatus(ctx context.Context) (string, error) {
 			var data struct {
 				Status string `json:"status"`
 			}
-			if err := ev.UnmarshalData(&data); err == nil {
-				lastStatus = data.Status
+			if err := ev.UnmarshalData(&data); err != nil {
+				continue
 			}
+			if isDurableResumeStatus(data.Status) {
+				lastStatus = strings.TrimSpace(data.Status)
+			} else {
+				lastStatus = ""
+			}
+			continue
+		}
+		if lastStatus != "" && clearsDurableResumeStatus(ev.Type) {
+			lastStatus = ""
 		}
 	}
 	return lastStatus, nil
+}
+
+func isDurableResumeStatus(status string) bool {
+	status = strings.TrimSpace(status)
+	if status == "" {
+		return false
+	}
+	return strings.Contains(strings.ToLower(status), "retrying")
+}
+
+func clearsDurableResumeStatus(eventType session.EventType) bool {
+	switch eventType {
+	case session.MessageAdded,
+		session.ContextAdded,
+		session.TurnCompleted,
+		session.ToolCompleted,
+		session.ApprovalResolved,
+		session.ApprovalCanceled,
+		session.CompactionTriggered,
+		ionSystemEvent,
+		ionSubagentEvent,
+		session.EventType("token_usage"),
+		session.EventType("routing_decision"),
+		session.EventType("escalation_notification"):
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *cantoSession) Entries(ctx context.Context) ([]ionsession.Entry, error) {

@@ -932,8 +932,9 @@ func TestRenderEntriesCanExpandReplayedRoutineToolOutput(t *testing.T) {
 	if strings.Contains(got, " · 3 lines") {
 		t.Fatalf("replayed routine tool render = %q, want no compact summary in full mode", got)
 	}
-	if strings.Contains(got, "\n\n") {
-		t.Fatalf("replayed routine tool render = %q, want entries on consecutive lines", got)
+	if !strings.Contains(got, "› read file\n\n• Read") ||
+		!strings.Contains(got, "line 3\n\n• done") {
+		t.Fatalf("replayed routine tool render = %q, want one blank row between entries", got)
 	}
 }
 
@@ -4629,7 +4630,7 @@ func TestResumeRuntimeCommandPrintsMarkerAfterHeader(t *testing.T) {
 	for _, line := range switched.printLines {
 		got = append(got, ansi.Strip(line))
 	}
-	want := []string{"ion dev", "/tmp/test • feature/resume", "", "--- resumed ---"}
+	want := []string{"ion dev", "/tmp/test • feature/resume", "", "--- resumed ---", ""}
 	if !slices.Equal(got, want) {
 		t.Fatalf("print lines = %#v, want %#v", got, want)
 	}
@@ -4696,6 +4697,7 @@ func TestStartupPrintLinesIncludesReplayHistory(t *testing.T) {
 		model.renderStartupStatus("ready"),
 		"",
 		model.renderEntry(session.Entry{Role: session.User, Content: "hello"}),
+		"",
 		model.renderEntry(session.Entry{Role: session.Agent, Content: "world"}),
 	}
 

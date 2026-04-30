@@ -88,7 +88,7 @@ func TestCantoStoreAppendUpdatesRecentSession(t *testing.T) {
 
 	time.Sleep(1100 * time.Millisecond)
 
-	if err := first.Append(ctx, Status{Status: "working"}); err != nil {
+	if err := first.Append(ctx, Status{Status: "Network error. Retrying in 2s... Ctrl+C stops."}); err != nil {
 		t.Fatalf("append status: %v", err)
 	}
 
@@ -98,6 +98,86 @@ func TestCantoStoreAppendUpdatesRecentSession(t *testing.T) {
 	}
 	if recent.ID != first.ID() {
 		t.Fatalf("recent session after append = %q, want %q", recent.ID, first.ID())
+	}
+}
+
+func TestCantoStoreLastStatusIgnoresTransientProgress(t *testing.T) {
+	root := t.TempDir()
+	storeAny, err := NewCantoStore(root)
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+
+	ctx := context.Background()
+	sess, err := storeAny.OpenSession(ctx, "/tmp/ion-storage-test", "model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	if err := sess.Append(ctx, Status{Status: "Running read..."}); err != nil {
+		t.Fatalf("append running status: %v", err)
+	}
+
+	got, err := sess.LastStatus(ctx)
+	if err != nil {
+		t.Fatalf("last status: %v", err)
+	}
+	if got != "" {
+		t.Fatalf("last status = %q, want empty", got)
+	}
+}
+
+func TestCantoStoreLastStatusClearsRetryAfterTerminalEvent(t *testing.T) {
+	root := t.TempDir()
+	storeAny, err := NewCantoStore(root)
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+
+	ctx := context.Background()
+	sess, err := storeAny.OpenSession(ctx, "/tmp/ion-storage-test", "model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	status := "Network error. Retrying in 2s... Ctrl+C stops."
+	if err := sess.Append(ctx, Status{Status: status}); err != nil {
+		t.Fatalf("append retry status: %v", err)
+	}
+	if err := sess.Append(ctx, System{Content: "Canceled by user"}); err != nil {
+		t.Fatalf("append terminal system event: %v", err)
+	}
+
+	got, err := sess.LastStatus(ctx)
+	if err != nil {
+		t.Fatalf("last status: %v", err)
+	}
+	if got != "" {
+		t.Fatalf("last status = %q, want empty", got)
+	}
+}
+
+func TestCantoStoreLastStatusKeepsRetryStatus(t *testing.T) {
+	root := t.TempDir()
+	storeAny, err := NewCantoStore(root)
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+
+	ctx := context.Background()
+	sess, err := storeAny.OpenSession(ctx, "/tmp/ion-storage-test", "model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	status := "Network error. Retrying in 2s... Ctrl+C stops."
+	if err := sess.Append(ctx, Status{Status: status}); err != nil {
+		t.Fatalf("append retry status: %v", err)
+	}
+
+	got, err := sess.LastStatus(ctx)
+	if err != nil {
+		t.Fatalf("last status: %v", err)
+	}
+	if got != status {
+		t.Fatalf("last status = %q, want %q", got, status)
 	}
 }
 
@@ -239,7 +319,7 @@ func TestCantoStoreAppendReturnsPersistenceErrors(t *testing.T) {
 		t.Fatalf("close db: %v", err)
 	}
 
-	if err := sess.Append(ctx, Status{Status: "still working"}); err == nil {
+	if err := sess.Append(ctx, Status{Status: "Network error. Retrying in 2s... Ctrl+C stops."}); err == nil {
 		t.Fatal("expected append to return an error when session metadata update fails")
 	}
 }

@@ -609,6 +609,7 @@ func printStartup(
 	if len(lines) == 0 {
 		return
 	}
+	lines = append(lines, "")
 	_, _ = fmt.Fprintln(out, strings.Join(lines, "\n"))
 }
 
