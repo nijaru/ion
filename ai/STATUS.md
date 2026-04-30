@@ -70,6 +70,7 @@ Fast, lightweight terminal coding agent.
 - A3 Ion storage/lazy lifecycle is now reviewed. Startup/resume/session-picker/runtime-switch/app command paths hold the lifecycle invariants: slash/local commands do not materialize sessions, session picker filters non-conversation rows, runtime switches preserve only materialized sessions, app storage writes are UI-local only, and CantoStore rejects model-visible appends.
 - A4 core tool boundary is patched in progress: file tools now use `os.Root` to block symlink escapes, grep no-match is a normal result, glob output is sorted, bash non-zero exits become tool errors with output preserved, and empty grep/bash/verify inputs are rejected. Deterministic full and race gates are green; live tool smoke is next.
 - A4 core tool boundary is now reviewed. OpenRouter Minimax live tool/resume/follow-up smoke passed after the tool changes; Fedora timed out.
+- A5 CLI smoke harness is now reviewed with no code change. Existing coverage covers print flags, stdin prompt composition, text/JSON output, approvals, timeout cancellation, submit/session errors, early stream close, empty assistant completion, startup resume/continue selection, and live tool/resume/follow-up smoke.
 - Preferred live-smoke order: use Fedora local-api first when available (`http://fedora:8080/v1`, currently advertising `qwen3.6:27b-uncensored`). OpenRouter remains fallback only: `minimax/minimax-m2.5:free` when available, `deepseek/deepseek-v4-flash` for cheap checks, or `deepseek/deepseek-v4-pro` only when a stronger separate-provider check is useful.
 - Current Fedora evidence: `/v1/models` returned `qwen3.6:27b-uncensored`; `TestLiveSmokeTurnAndToolCall` passed with tool call, persisted resume, and follow-up `continued`; direct `ion -p` text smoke returned `ok`; explicit `--resume <id> -p` returned `resumed`; direct JSON tool smoke returned `response="done"` with `tool_calls=["bash"]`.
 - Current OpenRouter fallback evidence: `minimax/minimax-m2.5:free` returned `ok` with a 120s print-mode timeout after the latest CLI print slice; a 45s Minimax attempt previously timed out, and `deepseek/deepseek-v4-flash` returned OpenRouter `402 Payment Required`.
@@ -78,7 +79,7 @@ Fast, lightweight terminal coding agent.
 
 Continue `tk-mmcs` as the P1 stabilization track:
 
-1. Continue the active review sequence in [review/core-loop-review-tracker-2026-04-28.md](review/core-loop-review-tracker-2026-04-28.md); A1-A4 are committed/pushed/reviewed after this pass, and the next subsystem is A5 CLI smoke harness.
+1. Continue the active review sequence in [review/core-loop-review-tracker-2026-04-28.md](review/core-loop-review-tracker-2026-04-28.md); A1-A5 are committed/pushed/reviewed after this pass, and the next subsystem is A6 minimal TUI baseline.
 2. Do not pick isolated bug slices unless they fall out of the active subsystem review and are logged under `tk-mmcs`.
 3. Keep `tk-rg23` and `tk-zxgq` as next TUI usability tasks after P1 correctness: tool/thinking display controls and steering-vs-queue UX.
 4. Keep ACP, privacy, subagents, skills, routing, advanced thinking, and safety polish blocked behind `tk-mmcs`.
