@@ -304,7 +304,7 @@ func TestCantoStoreEntriesMapToolMessages(t *testing.T) {
 	}
 }
 
-func TestCantoStoreEntriesSummarizeRoutineToolOutput(t *testing.T) {
+func TestCantoStoreEntriesPreserveRoutineToolOutput(t *testing.T) {
 	root := t.TempDir()
 	storeAny, err := NewCantoStore(root)
 	if err != nil {
@@ -353,7 +353,8 @@ func TestCantoStoreEntriesSummarizeRoutineToolOutput(t *testing.T) {
 	if entries[0].Role != ionsession.User || entries[0].Content != "hello" {
 		t.Fatalf("user entry = %#v", entries[0])
 	}
-	if entries[1].Role != ionsession.Tool || entries[1].Title != "read" || entries[1].Content != "... (3 lines)" {
+	wantContent := strings.Join([]string{"line 1", "line 2", "line 3"}, "\n")
+	if entries[1].Role != ionsession.Tool || entries[1].Title != "read" || entries[1].Content != wantContent {
 		t.Fatalf("read entry = %#v", entries[1])
 	}
 }

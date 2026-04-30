@@ -11,7 +11,7 @@ Start here, in order. Root files are intentionally short; detailed progress belo
 
 ## Core Loop Evidence
 
-- [Core Loop Review Tracker](review/core-loop-review-tracker-2026-04-28.md) — active subsystem sequence for P1 native-loop review and stabilization
+- [Core Loop Review Tracker](review/core-loop-review-tracker-2026-04-28.md) — active A1-A6 subsystem sequence for P1 native-loop stabilization
 - [Core Minimal Agent Reset](design/core-minimal-agent-reset-2026-04-28.md) — phased reset plan: minimal core agent, stable TUI, then advanced features
 - [Native Core Loop Architecture](design/native-core-loop-architecture.md) — target ownership, invariants, refactor sequence, and smoke matrix
 - [Ion Native Backend Spine](design/ion-native-backend-spine-2026-04-27.md) — backend adapter turn phases, event translation, cancel/close semantics
