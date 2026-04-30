@@ -138,6 +138,6 @@ Exit criteria:
 3. Fix P1 correctness before UI polish: event ownership, tool execution/result durability, resume/follow-up, provider-history validity, and automation coverage.
 4. Then tighten the TUI shell to a minimal Claude Code/Droid-like presentation: one separator between committed entries, compact routine tools by default, readable markdown, and tmux text capture as the primary visual check.
 5. Promote table-stakes items into focused tasks before reopening deferred P2/P3 codepaths.
-6. Re-run full/race tests and Fedora/local-api live smoke after any native-loop or CLI/session behavior change. Prefer Fedora `local-api` / `qwen3.6:27b`; use OpenRouter `minimax/minimax-m2.5:free`, `deepseek/deepseek-v4-flash`, or `deepseek/deepseek-v4-pro` only when local testing is unavailable or a separate-provider check is needed.
+6. Re-run full/race tests and Fedora/local-api live smoke after any native-loop or CLI/session behavior change. Prefer Fedora `local-api` / `qwen3.6:27b` when reachable. When local testing is unavailable, use current free OpenRouter targets first (`openrouter/owl-alpha`, `tencent/hy3-preview:free`), then `minimax/minimax-m2.5:free`; use cheap paid models such as `deepseek/deepseek-v4-flash` only when a separate-provider check is useful.
 
 No more broad `ai/` corpus passes by default. Use the existing context docs as an index, then read source. Reopen `ai/` only for a specific subsystem decision or when docs conflict with code.
