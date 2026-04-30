@@ -717,12 +717,12 @@ func (m Model) handleSettingsCommand(fields []string) (Model, tea.Cmd) {
 			notice = "Retry network errors: off"
 		}
 	case "tool", "tools":
-		verbosity := config.NormalizeVerbosity(value)
-		if verbosity == "" {
-			return m, cmdError("usage: /settings tool full|collapsed|hidden")
+		verbosity, ok := parseToolVerbosity(value)
+		if !ok {
+			return m, cmdError("usage: /settings tool auto|full|collapsed|hidden")
 		}
 		updated.ToolVerbosity = verbosity
-		notice = "Tool display: " + verbosity
+		notice = "Tool display: " + displayToolVerbosity(verbosity)
 	case "thinking":
 		verbosity := config.NormalizeVerbosity(value)
 		if verbosity == "" {
@@ -754,14 +754,14 @@ func (m Model) settingsSummary(cfg *config.Config) string {
 		"settings",
 		"",
 		"  retry network errors: " + onOff(cfg.RetryUntilCancelledEnabled()),
-		"  tool display: " + displayVerbosity(cfg.ToolVerbosity),
-		"  thinking display: " + displayVerbosity(cfg.ThinkingVerbosity),
+		"  tool display: " + displayToolVerbosity(cfg.ToolVerbosity),
+		"  thinking display: " + displayThinkingVerbosity(cfg.ThinkingVerbosity),
 		"  thinking level: " + normalizeThinkingValue(cfg.ReasoningEffort),
 		"",
 		"commands",
 		"",
 		"  /settings retry on|off",
-		"  /settings tool full|collapsed|hidden",
+		"  /settings tool auto|full|collapsed|hidden",
 		"  /settings thinking full|collapsed|hidden",
 		"  /thinking auto|off|minimal|low|medium|high|xhigh",
 	}, "\n")
@@ -785,11 +785,26 @@ func onOff(enabled bool) string {
 	return "off"
 }
 
-func displayVerbosity(value string) string {
+func parseToolVerbosity(value string) (string, bool) {
+	if strings.EqualFold(strings.TrimSpace(value), "auto") {
+		return "", true
+	}
+	normalized := config.NormalizeVerbosity(value)
+	return normalized, normalized != ""
+}
+
+func displayToolVerbosity(value string) string {
 	if normalized := config.NormalizeVerbosity(value); normalized != "" {
 		return normalized
 	}
-	return "full"
+	return "auto"
+}
+
+func displayThinkingVerbosity(value string) string {
+	if normalized := config.NormalizeVerbosity(value); normalized != "" {
+		return normalized
+	}
+	return "hidden"
 }
 
 func slashCommands() []string {

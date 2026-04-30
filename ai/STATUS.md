@@ -73,6 +73,7 @@ Fast, lightweight terminal coding agent.
 - A5 CLI smoke harness is now reviewed with no code change. Existing coverage covers print flags, stdin prompt composition, text/JSON output, approvals, timeout cancellation, submit/session errors, early stream close, empty assistant completion, startup resume/continue selection, and live tool/resume/follow-up smoke.
 - A6 minimal TUI baseline found one storage/display boundary violation: Canto replay entries for routine read/list/glob/grep tools were being summarized before they reached the renderer. Storage now preserves full tool output, default TUI rendering still compacts routine tools, and `ToolVerbosity=full` can expand replayed tool output. Focused app/storage tests and full Ion tests are green.
 - A6 transcript spacing is now simplified: `RenderEntries`/`printEntries` do not inject blank rows between transcript entries, and `View()` does not add an extra blank row before the progress/composer shell. Tmux replay capture shows resumed transcript rows on consecutive lines with no duplicate output; live inline mode still leaves one Bubble Tea handoff blank row during active-turn completion, but no transcript duplication. Focused/full/race gates and OpenRouter live tool/resume/follow-up smoke are green.
+- `tk-rg23` display controls are patched in progress: default completed thinking is hidden to keep the transcript clean, in-flight thinking still shows a dim marker, reasoning-only assistant rows render as a safe marker, `/settings` reports default tool display as `auto`, and `/settings tool auto` clears the stable override. Focused app/config/native tests are green.
 - Preferred live-smoke order: use Fedora local-api first when available (`http://fedora:8080/v1`, currently advertising `qwen3.6:27b-uncensored`). OpenRouter remains fallback only: `minimax/minimax-m2.5:free` when available, `deepseek/deepseek-v4-flash` for cheap checks, or `deepseek/deepseek-v4-pro` only when a stronger separate-provider check is useful.
 - Current Fedora evidence: `/v1/models` returned `qwen3.6:27b-uncensored`; `TestLiveSmokeTurnAndToolCall` passed with tool call, persisted resume, and follow-up `continued`; direct `ion -p` text smoke returned `ok`; explicit `--resume <id> -p` returned `resumed`; direct JSON tool smoke returned `response="done"` with `tool_calls=["bash"]`.
 - Current OpenRouter fallback evidence: `minimax/minimax-m2.5:free` returned `ok` with a 120s print-mode timeout after the latest CLI print slice; a 45s Minimax attempt previously timed out, and `deepseek/deepseek-v4-flash` returned OpenRouter `402 Payment Required`.
@@ -81,7 +82,7 @@ Fast, lightweight terminal coding agent.
 
 Continue `tk-mmcs` as the P1 stabilization track:
 
-1. Close out A6 in [review/core-loop-review-tracker-2026-04-28.md](review/core-loop-review-tracker-2026-04-28.md), then move to the next `tk-mmcs` pass: decide whether remaining P1 work exists or whether `tk-rg23` tool/thinking display controls and `tk-zxgq` steering-vs-queue UX become the next table-stakes TUI tasks.
+1. Finish `tk-rg23` verification and commit it, then move to `tk-zxgq` steering-vs-queue UX if no new P1 core-loop issue appears.
 2. Do not pick isolated bug slices unless they fall out of the active subsystem review and are logged under `tk-mmcs`.
 3. Keep `tk-rg23` and `tk-zxgq` as next TUI usability tasks after P1 correctness: tool/thinking display controls and steering-vs-queue UX.
 4. Keep ACP, privacy, subagents, skills, routing, advanced thinking, and safety polish blocked behind `tk-mmcs`.
@@ -91,7 +92,7 @@ Do not run another broad `ai/` pass by default. The next work is source review a
 ## Active Tasks
 
 - `tk-mmcs` — P1 core parity plan and task queue hygiene.
-- `tk-rg23` — P2 tool/thinking display controls; deferred until A1-A5 stay green.
+- `tk-rg23` — P2 tool/thinking display controls; active table-stakes TUI slice.
 - `tk-zxgq` — P2 busy-input steering vs queue setting; deferred until A1-A5 stay green.
 
 Everything else is downstream of the solo native loop.

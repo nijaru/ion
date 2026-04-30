@@ -938,7 +938,7 @@ func TestRenderRoutineToolEntryPreservesErrors(t *testing.T) {
 	}
 }
 
-func TestRenderThinkingEntryCollapsesByDefault(t *testing.T) {
+func TestRenderThinkingEntryHidesReasoningByDefault(t *testing.T) {
 	model := readyModel(t)
 	entry := session.Entry{
 		Role:      session.Agent,
@@ -947,11 +947,45 @@ func TestRenderThinkingEntryCollapsesByDefault(t *testing.T) {
 	}
 
 	got := ansi.Strip(model.renderEntry(entry))
-	if !strings.Contains(got, "Thinking") || !strings.Contains(got, "...") {
-		t.Fatalf("thinking render = %q, want collapsed thinking marker", got)
+	if strings.Contains(got, "Thinking") || strings.Contains(got, "...") {
+		t.Fatalf("thinking render = %q, want answer without thinking marker", got)
 	}
 	if strings.Contains(got, "private chain of thought") {
 		t.Fatalf("thinking render leaked reasoning: %q", got)
+	}
+}
+
+func TestRenderThinkingEntryCanCollapseReasoning(t *testing.T) {
+	model := readyModel(t)
+	model.Model.Config = &config.Config{ThinkingVerbosity: "collapsed"}
+	entry := session.Entry{
+		Role:      session.Agent,
+		Reasoning: "private chain of thought",
+		Content:   "answer",
+	}
+
+	got := ansi.Strip(model.renderEntry(entry))
+	if !strings.Contains(got, "Thinking") || !strings.Contains(got, "...") {
+		t.Fatalf("collapsed thinking render = %q, want thinking marker", got)
+	}
+	if strings.Contains(got, "private chain of thought") {
+		t.Fatalf("collapsed thinking render leaked reasoning: %q", got)
+	}
+}
+
+func TestRenderReasoningOnlyEntryShowsMarkerWhenThinkingHidden(t *testing.T) {
+	model := readyModel(t)
+	entry := session.Entry{
+		Role:      session.Agent,
+		Reasoning: "private chain of thought",
+	}
+
+	got := ansi.Strip(model.renderEntry(entry))
+	if got != "• Thinking" {
+		t.Fatalf("reasoning-only render = %q, want marker", got)
+	}
+	if strings.Contains(got, "private chain of thought") {
+		t.Fatalf("reasoning-only render leaked reasoning: %q", got)
 	}
 }
 
@@ -970,13 +1004,16 @@ func TestRenderThinkingEntryCanShowFullReasoning(t *testing.T) {
 	}
 }
 
-func TestRenderPlaneBThinkingCollapsesByDefault(t *testing.T) {
+func TestRenderPlaneBThinkingHidesReasoningByDefault(t *testing.T) {
 	model := readyModel(t)
 	model.InFlight.ReasonBuf = "private chain of thought"
 
 	got := ansi.Strip(model.renderPlaneB())
-	if !strings.Contains(got, "Thinking...") || !strings.Contains(got, "...") {
-		t.Fatalf("plane b thinking = %q, want collapsed thinking marker", got)
+	if !strings.Contains(got, "Thinking...") {
+		t.Fatalf("plane b thinking = %q, want thinking marker", got)
+	}
+	if strings.Contains(got, "\n    ...") {
+		t.Fatalf("plane b thinking = %q, want no default ellipsis row", got)
 	}
 	if strings.Contains(got, "private chain of thought") {
 		t.Fatalf("plane b thinking leaked reasoning: %q", got)
@@ -2909,6 +2946,20 @@ func TestSettingsCommandShowsCommonSettings(t *testing.T) {
 	}
 }
 
+func TestSettingsCommandShowsDisplayDefaults(t *testing.T) {
+	model := readyModel(t)
+	got := model.settingsSummary(&config.Config{})
+	for _, want := range []string{
+		"tool display: auto",
+		"thinking display: hidden",
+		"/settings tool auto|full|collapsed|hidden",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("settings missing %q: %q", want, got)
+		}
+	}
+}
+
 func TestSettingsCommandUpdatesStableConfig(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -2953,6 +3004,40 @@ func TestSettingsCommandUpdatesStableConfig(t *testing.T) {
 	}
 	if capture.cfg == nil || capture.cfg.Provider != "local-api" || capture.cfg.Model != "qwen3.6:27b" {
 		t.Fatalf("backend config = %#v, want state-backed provider/model", capture.cfg)
+	}
+}
+
+func TestSettingsToolAutoClearsStableOverride(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	configDir := filepath.Join(home, ".ion")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(configDir, "config.toml"),
+		[]byte("tool_verbosity = \"full\"\n"),
+		0o644,
+	); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	model := readyModel(t)
+	model, cmd := model.handleCommand("/settings tool auto")
+	if cmd == nil {
+		t.Fatal("expected settings command")
+	}
+	_ = cmd()
+
+	data, err := os.ReadFile(filepath.Join(configDir, "config.toml"))
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	if strings.Contains(string(data), "tool_verbosity") {
+		t.Fatalf("config kept tool override after auto:\n%s", data)
+	}
+	if model.Model.Config.ToolVerbosity != "" {
+		t.Fatalf("runtime tool verbosity = %q, want auto/empty", model.Model.Config.ToolVerbosity)
 	}
 }
 
