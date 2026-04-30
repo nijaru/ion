@@ -902,6 +902,27 @@ func TestRenderRoutineToolEntryCanShowFullOutput(t *testing.T) {
 	}
 }
 
+func TestRenderEntriesCanExpandReplayedRoutineToolOutput(t *testing.T) {
+	model := readyModel(t)
+	model.Model.Config = &config.Config{ToolVerbosity: "full"}
+	entries := []session.Entry{
+		{Role: session.User, Content: "read file"},
+		{Role: session.Tool, Title: "read", Content: "line 1\nline 2\nline 3"},
+		{Role: session.Agent, Content: "done"},
+	}
+
+	got := ansi.Strip(strings.Join(model.RenderEntries(entries...), "\n"))
+	if !strings.Contains(got, "line 1\n  line 2\n  line 3") {
+		t.Fatalf("replayed routine tool render = %q, want full content", got)
+	}
+	if strings.Contains(got, "... (3 lines)") {
+		t.Fatalf("replayed routine tool render = %q, want no compact summary in full mode", got)
+	}
+	if strings.Contains(got, "\n\n\n") {
+		t.Fatalf("replayed routine tool render = %q, want a single blank line between entries", got)
+	}
+}
+
 func TestRenderRoutineToolEntryPreservesErrors(t *testing.T) {
 	model := readyModel(t)
 	entry := session.Entry{
