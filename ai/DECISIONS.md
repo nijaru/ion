@@ -4,6 +4,22 @@ Append-only history of architectural and design decisions for `ion`.
 
 ---
 
+## 2026-04-30 — Busy input: queue by default, steering only at Canto boundaries
+
+**Context:** Ion now shows busy-turn queued input and lets users recall it into the composer. The remaining request was whether Ion should support a setting that turns busy input into active steering instead of next-turn queueing.
+
+**Decision:** Keep queued follow-up as the default and do not fake steering in the TUI. True active-turn steering may only be added after Canto owns a durable boundary-step event/projection contract. If Canto cannot prove the active loop will make another provider request with valid tool-result ordering, Ion must downgrade the input to a queued follow-up.
+
+**Rationale:**
+
+1. **Provider reality:** An already-sent provider request cannot be mutated.
+2. **History validity:** User text must never be inserted between an assistant tool call and its required tool result.
+3. **Boundary clarity:** Canto owns provider-visible history; Ion owns queue/notice/composer UX.
+
+**Tradeoffs:** This delays `/settings busy-input steer`, but prevents a UI-only feature from becoming another transcript corruption path.
+
+---
+
 ## 2026-04-27 — Planning: core parity gates feature work
 
 **Context:** Live resumed-session testing showed that Ion still had a core loop failure: invalid empty assistant history could reach the provider after resume, causing the next user turn to fail. The roadmap and task queue had drifted toward provider and feature work while the loop was not actually stable.

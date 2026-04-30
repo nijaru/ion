@@ -153,7 +153,7 @@ Pi-mono analysis complete (see `research/pi-architecture.md`, `design/cross-poll
 
 ### TUI improvements to adopt
 - ~~**Bounding-box diff rendering**~~ — Rejected. BT v2 already handles rendering efficiently.
-- ~~**Steering vs follow-up input queuing**~~ — Implemented. Multi-turn queue, escape-to-pop, visual indicator in progress line.
+- **Steering vs follow-up input queuing** — Follow-up queueing is implemented. True steering is deferred until Canto owns a durable boundary-step contract; see `ai/design/active-turn-steering-contract-2026-04-30.md`.
 - ~~**Paste markers**~~ — Implemented. Collapse large pastes (>10 lines or >1000 chars) into markers, expand on submit.
 - ~~**RPC/print mode**~~ — Implemented. `--print` flag with `--prompt` or stdin pipe, auto-approves tool calls, configurable timeout.
 
