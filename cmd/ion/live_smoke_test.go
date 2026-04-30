@@ -4,9 +4,12 @@ import (
 	"context"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/nijaru/canto/llm"
+	cantobackend "github.com/nijaru/ion/internal/backend/canto"
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
@@ -56,6 +59,11 @@ func TestLiveSmokeTurnAndToolCall(t *testing.T) {
 	if endpoint := strings.TrimSpace(os.Getenv("ION_SMOKE_ENDPOINT")); endpoint != "" {
 		cfg.Endpoint = endpoint
 	}
+
+	requests := &liveRequestRecorder{}
+	restoreRequestObserver := cantobackend.SetProviderRequestObserverForTest(requests.record)
+	t.Cleanup(restoreRequestObserver)
+
 	b, sess, err := openRuntime(ctx, store, cwd, "smoke", &cfg, "", "")
 	if err != nil {
 		if isLiveSmokeUnavailable(err) {
@@ -201,8 +209,12 @@ loop:
 	if sawTool {
 		t.Fatal("resume follow-up should not require a tool call")
 	}
+	assertResumeProviderHistory(t, requests, prompt, resumePrompt)
 	if !strings.Contains(strings.ToLower(agentText), "continued") {
-		t.Fatalf("resume follow-up agent text = %q, want continuation acknowledgment", agentText)
+		t.Logf(
+			"resume follow-up agent text = %q, but provider request contained prior tool history; treating as model/provider semantic miss",
+			agentText,
+		)
 	}
 
 	switchProvider := strings.TrimSpace(os.Getenv("ION_SMOKE_SWITCH_PROVIDER"))
@@ -244,8 +256,12 @@ loop:
 	if sawTool {
 		t.Fatal("swap phase should not require a tool call")
 	}
+	assertResumeProviderHistory(t, requests, prompt, switchPrompt)
 	if !strings.Contains(strings.ToLower(agentText), "continued") {
-		t.Fatalf("swap agent text = %q, want continuation acknowledgment", agentText)
+		t.Logf(
+			"swap agent text = %q, but provider request contained prior tool history; treating as model/provider semantic miss",
+			agentText,
+		)
 	}
 
 	switchedEntries, err := switchedSess.Entries(ctx)
@@ -365,4 +381,173 @@ func runSmokeTurn(ctx context.Context, t *testing.T, agent session.AgentSession,
 			t.Fatal("timed out waiting for live smoke turn to finish")
 		}
 	}
+}
+
+type liveRequestRecorder struct {
+	mu       sync.Mutex
+	requests []liveRecordedRequest
+}
+
+type liveRecordedRequest struct {
+	Provider string
+	Model    string
+	Messages []llm.Message
+}
+
+func (r *liveRequestRecorder) record(provider string, req *llm.Request) {
+	if req == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.requests = append(r.requests, liveRecordedRequest{
+		Provider: provider,
+		Model:    req.Model,
+		Messages: req.Messages,
+	})
+}
+
+func (r *liveRequestRecorder) findRequestWithUser(content string) (liveRecordedRequest, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := len(r.requests) - 1; i >= 0; i-- {
+		req := r.requests[i]
+		if messageIndex(req.Messages, llm.RoleUser, content, 0) >= 0 {
+			return req, true
+		}
+	}
+	return liveRecordedRequest{}, false
+}
+
+func (r *liveRequestRecorder) summary() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var b strings.Builder
+	for i, req := range r.requests {
+		if i > 0 {
+			b.WriteString("; ")
+		}
+		b.WriteString(req.Provider)
+		b.WriteString("/")
+		b.WriteString(req.Model)
+		b.WriteString(" roles=")
+		for j, msg := range req.Messages {
+			if j > 0 {
+				b.WriteString(",")
+			}
+			b.WriteString(string(msg.Role))
+			if len(msg.Calls) > 0 {
+				b.WriteString("(tool-call)")
+			}
+			if msg.Role == llm.RoleTool {
+				b.WriteString("(tool-result)")
+			}
+		}
+	}
+	return b.String()
+}
+
+func assertResumeProviderHistory(t *testing.T, requests *liveRequestRecorder, firstPrompt, resumePrompt string) {
+	t.Helper()
+
+	req, ok := requests.findRequestWithUser(resumePrompt)
+	if !ok {
+		t.Fatalf(
+			"resume provider request containing %q was not captured; captured requests: %s",
+			resumePrompt,
+			requests.summary(),
+		)
+	}
+
+	firstUser := messageIndex(req.Messages, llm.RoleUser, firstPrompt, 0)
+	if firstUser < 0 {
+		t.Fatalf("resume provider request missing first user prompt %q; request roles: %s", firstPrompt, requestRoles(req.Messages))
+	}
+
+	toolCall, toolCallID := toolCallIndex(req.Messages, "bash", "echo ion-smoke", firstUser+1)
+	if toolCall < 0 {
+		t.Fatalf("resume provider request missing bash tool call for ion-smoke; request roles: %s", requestRoles(req.Messages))
+	}
+
+	toolResult := toolResultIndex(req.Messages, toolCallID, "ion-smoke", toolCall+1)
+	if toolResult < 0 {
+		t.Fatalf("resume provider request missing matching ion-smoke tool result for %q; request roles: %s", toolCallID, requestRoles(req.Messages))
+	}
+
+	assistant := assistantContentIndex(req.Messages, toolResult+1)
+	if assistant < 0 {
+		t.Fatalf("resume provider request missing final assistant message after tool result; request roles: %s", requestRoles(req.Messages))
+	}
+
+	resumeUser := messageIndex(req.Messages, llm.RoleUser, resumePrompt, assistant+1)
+	if resumeUser < 0 {
+		t.Fatalf("resume provider request missing follow-up prompt after prior history; request roles: %s", requestRoles(req.Messages))
+	}
+	t.Logf(
+		"resume provider request verified: first_user=%d tool_call=%d tool_result=%d assistant=%d resume_user=%d",
+		firstUser,
+		toolCall,
+		toolResult,
+		assistant,
+		resumeUser,
+	)
+}
+
+func messageIndex(messages []llm.Message, role llm.Role, content string, start int) int {
+	for i := max(start, 0); i < len(messages); i++ {
+		if messages[i].Role == role && strings.Contains(messages[i].Content, content) {
+			return i
+		}
+	}
+	return -1
+}
+
+func assistantContentIndex(messages []llm.Message, start int) int {
+	for i := max(start, 0); i < len(messages); i++ {
+		if messages[i].Role == llm.RoleAssistant && strings.TrimSpace(messages[i].Content) != "" {
+			return i
+		}
+	}
+	return -1
+}
+
+func toolCallIndex(messages []llm.Message, name, argNeedle string, start int) (int, string) {
+	for i := max(start, 0); i < len(messages); i++ {
+		if messages[i].Role != llm.RoleAssistant {
+			continue
+		}
+		for _, call := range messages[i].Calls {
+			if call.Function.Name == name && strings.Contains(call.Function.Arguments, argNeedle) {
+				return i, call.ID
+			}
+		}
+	}
+	return -1, ""
+}
+
+func toolResultIndex(messages []llm.Message, toolCallID, contentNeedle string, start int) int {
+	for i := max(start, 0); i < len(messages); i++ {
+		if messages[i].Role != llm.RoleTool {
+			continue
+		}
+		if messages[i].ToolID == toolCallID && strings.Contains(messages[i].Content, contentNeedle) {
+			return i
+		}
+	}
+	return -1
+}
+
+func requestRoles(messages []llm.Message) string {
+	parts := make([]string, 0, len(messages))
+	for _, msg := range messages {
+		part := string(msg.Role)
+		if len(msg.Calls) > 0 {
+			part += "(tool-call)"
+		}
+		if msg.Role == llm.RoleTool {
+			part += "(tool-result)"
+		}
+		parts = append(parts, part)
+	}
+	return strings.Join(parts, ",")
 }

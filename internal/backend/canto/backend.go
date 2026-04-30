@@ -207,6 +207,7 @@ func (b *Backend) Open(ctx context.Context) error {
 		return err
 	}
 	p = configureRetryProvider(p, b.cfg, b.events)
+	p = observeProviderRequests(p)
 	b.compactLLM = p
 	b.llm = p
 
