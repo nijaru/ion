@@ -3853,6 +3853,44 @@ func TestQueuedFollowUpSubmitsAfterTurnFinished(t *testing.T) {
 	}
 }
 
+func TestQueuedFollowUpRendersAboveComposer(t *testing.T) {
+	model := readyModel(t)
+	model.InFlight.QueuedTurns = []string{
+		"what happened?\nplease explain",
+		"second queued turn",
+	}
+
+	view := ansi.Strip(model.View().Content)
+	for _, want := range []string{
+		"Queued (Ctrl+G edit): what happened? please explain",
+		"+1 more",
+		"2 queued",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("view missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestCtrlGRecallsQueuedTurnsIntoComposer(t *testing.T) {
+	model := readyModel(t)
+	model.InFlight.QueuedTurns = []string{"queued one", "queued two"}
+	model.Input.Composer.SetValue("draft")
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'g', Mod: tea.ModCtrl})
+	model = updated.(Model)
+
+	if cmd != nil {
+		t.Fatal("recall queued turns should be local")
+	}
+	if len(model.InFlight.QueuedTurns) != 0 {
+		t.Fatalf("queued turns = %v, want none", model.InFlight.QueuedTurns)
+	}
+	if got := model.Input.Composer.Value(); got != "draft\nqueued one\nqueued two" {
+		t.Fatalf("composer = %q", got)
+	}
+}
+
 func TestModeSlashCommandRunsDuringTurn(t *testing.T) {
 	model := readyModel(t).WithTrust(nil, true, "prompt")
 	model.InFlight.Thinking = true
