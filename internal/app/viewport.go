@@ -155,6 +155,9 @@ func (m Model) renderPendingEntry(e session.Entry) string {
 
 func (m Model) verbosity(kind string) string {
 	if m.Model.Config == nil {
+		if kind == "thinking" {
+			return "hidden"
+		}
 		return "full"
 	}
 	switch kind {
@@ -166,7 +169,7 @@ func (m Model) verbosity(kind string) string {
 		if v := m.Model.Config.ThinkingVerbosity; v != "" {
 			return v
 		}
-		return "collapsed"
+		return "hidden"
 	}
 	return "full"
 }
@@ -195,6 +198,13 @@ func (m Model) renderEntry(e session.Entry) string {
 		}
 		rendered := strings.TrimRightFunc(m.renderMarkdownContent(e.Content), unicode.IsSpace)
 		if rendered == "" {
+			if b.Len() > 0 {
+				return strings.TrimRightFunc(b.String(), unicode.IsSpace)
+			}
+			if e.Reasoning != "" {
+				b.WriteString(m.st.system.Render("• Thinking"))
+				return strings.TrimRightFunc(b.String(), unicode.IsSpace)
+			}
 			b.WriteString(m.st.agent.Render("• "))
 			return b.String()
 		}
