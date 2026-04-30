@@ -43,6 +43,18 @@ func TestSearchTools(t *testing.T) {
 		if _, err := g.Execute(context.Background(), `{"pattern":"search","path":".."}`); err == nil {
 			t.Fatal("expected grep path outside workspace to fail")
 		}
+
+		res, err = g.Execute(context.Background(), `{"pattern":"definitely-not-present"}`)
+		if err != nil {
+			t.Fatalf("grep no-match should not be a tool error: %v", err)
+		}
+		if strings.TrimSpace(res) != "No matches found." {
+			t.Fatalf("grep no-match = %q", res)
+		}
+
+		if _, err := g.Execute(context.Background(), `{"pattern":" "}`); err == nil {
+			t.Fatal("expected empty grep pattern to fail")
+		}
 	})
 
 	t.Run("Glob", func(t *testing.T) {
@@ -60,6 +72,10 @@ func TestSearchTools(t *testing.T) {
 
 		if _, err := gl.Execute(context.Background(), `{"pattern":"../*.go"}`); err == nil {
 			t.Fatal("expected glob pattern outside workspace to fail")
+		}
+
+		if _, err := gl.Execute(context.Background(), `{"pattern":" "}`); err == nil {
+			t.Fatal("expected empty glob pattern to fail")
 		}
 	})
 }

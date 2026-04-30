@@ -45,6 +45,9 @@ func (v *Verify) Execute(ctx context.Context, args string) (string, error) {
 	if err := json.Unmarshal([]byte(args), &input); err != nil {
 		return "", err
 	}
+	if strings.TrimSpace(input.Command) == "" {
+		return "", fmt.Errorf("command is required")
+	}
 
 	cmd := exec.CommandContext(ctx, "bash", "-c", input.Command)
 	cmd.Dir = v.CWD

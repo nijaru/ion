@@ -72,9 +72,17 @@ func TestBash_Execute(t *testing.T) {
 		args := `{"command": "nonexistentcommand"}`
 		res, err := b.Execute(context.Background(), args)
 		t.Logf("res: %q, err: %v", res, err)
-		// bash -c nonexistentcommand usually exits with 127
-		if err == nil && !strings.Contains(res, "nonexistentcommand") {
-			t.Errorf("expected error or error message in result, got: %q err=%v", res, err)
+		if err == nil {
+			t.Fatal("expected non-zero command to return an error")
+		}
+		if !strings.Contains(res, "nonexistentcommand") {
+			t.Errorf("expected command stderr in result, got: %q", res)
+		}
+	})
+
+	t.Run("empty command", func(t *testing.T) {
+		if _, err := b.Execute(context.Background(), `{"command":" "}`); err == nil {
+			t.Fatal("expected empty command to fail")
 		}
 	})
 }

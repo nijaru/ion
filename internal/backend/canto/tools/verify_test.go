@@ -20,3 +20,11 @@ func TestVerifyCancellationKillsProcessGroup(t *testing.T) {
 		t.Fatalf("canceled verification took %s, want prompt process-group cleanup; output=%q", elapsed, out)
 	}
 }
+
+func TestVerifyRejectsEmptyCommand(t *testing.T) {
+	v := &Verify{CWD: t.TempDir()}
+
+	if _, err := v.Execute(context.Background(), `{"command":" "}`); err == nil {
+		t.Fatal("expected empty command to fail")
+	}
+}

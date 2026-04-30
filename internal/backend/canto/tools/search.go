@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/bmatcuk/doublestar/v4"
@@ -94,6 +95,9 @@ func (g *Grep) Execute(ctx context.Context, args string) (string, error) {
 	if err := json.Unmarshal([]byte(args), &input); err != nil {
 		return "", err
 	}
+	if strings.TrimSpace(input.Pattern) == "" {
+		return "", fmt.Errorf("pattern is required")
+	}
 
 	if input.Path == "" {
 		input.Path = "."
@@ -109,6 +113,9 @@ func (g *Grep) Execute(ctx context.Context, args string) (string, error) {
 	output, err := cmd.CombinedOutput()
 	if err == nil {
 		return string(output), nil
+	}
+	if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+		return "No matches found.", nil
 	}
 	return "", fmt.Errorf("rg search failed: %w", err)
 }
@@ -157,5 +164,6 @@ func (g *Glob) Execute(ctx context.Context, args string) (string, error) {
 		return "No matches found.", nil
 	}
 
+	slices.Sort(matches)
 	return strings.Join(matches, "\n"), nil
 }
