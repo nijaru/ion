@@ -446,6 +446,96 @@ func TestCantoStoreEntriesPreserveRoutineToolOutput(t *testing.T) {
 	}
 }
 
+func TestCantoStoreEntriesRecoverToolResultFromLifecycle(t *testing.T) {
+	root := t.TempDir()
+	storeAny, err := NewCantoStore(root)
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	store := storeAny.(*cantoStore)
+
+	ctx := context.Background()
+	sess, err := store.OpenSession(ctx, "/tmp/ion-storage-test", "model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	cantoSess, err := store.canto.Load(ctx, sess.ID())
+	if err != nil {
+		t.Fatalf("load canto session: %v", err)
+	}
+
+	call := assistantToolCall("tool-read", "read")
+	call.Function.Arguments = `{"file_path":"AGENTS.md"}`
+	if err := cantoSess.Append(ctx, csession.NewEvent(sess.ID(), csession.MessageAdded, llm.Message{
+		Role:  llm.RoleAssistant,
+		Calls: []llm.Call{call},
+	})); err != nil {
+		t.Fatalf("append read call: %v", err)
+	}
+	if err := cantoSess.Append(ctx, csession.NewToolStartedEvent(sess.ID(), csession.ToolStartedData{
+		Tool:      "read",
+		ID:        "tool-read",
+		Arguments: `{"file_path":"AGENTS.md"}`,
+	})); err != nil {
+		t.Fatalf("append read start: %v", err)
+	}
+	if err := cantoSess.Append(ctx, csession.NewToolCompletedEvent(sess.ID(), csession.ToolCompletedData{
+		Tool:   "read",
+		ID:     "tool-read",
+		Output: "recovered contents",
+	})); err != nil {
+		t.Fatalf("append read completion: %v", err)
+	}
+
+	entries, err := sess.Entries(ctx)
+	if err != nil {
+		t.Fatalf("entries: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("entries length = %d, want 1: %#v", len(entries), entries)
+	}
+	if entries[0].Role != ionsession.Tool ||
+		entries[0].Title != "Read AGENTS.md" ||
+		entries[0].Content != "recovered contents" {
+		t.Fatalf("recovered tool entry = %#v", entries[0])
+	}
+}
+
+func TestCantoStoreEntriesDropDanglingToolCall(t *testing.T) {
+	root := t.TempDir()
+	storeAny, err := NewCantoStore(root)
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	store := storeAny.(*cantoStore)
+
+	ctx := context.Background()
+	sess, err := store.OpenSession(ctx, "/tmp/ion-storage-test", "model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	appendLegacyCantoMessage(t, store, ctx, sess.ID(), llm.Message{
+		Role:  llm.RoleAssistant,
+		Calls: []llm.Call{assistantToolCall("tool-missing", "read")},
+	})
+	appendCantoMessage(t, store, ctx, sess.ID(), llm.Message{
+		Role:    llm.RoleUser,
+		Content: "next turn",
+	})
+
+	entries, err := sess.Entries(ctx)
+	if err != nil {
+		t.Fatalf("entries: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("entries length = %d, want 1: %#v", len(entries), entries)
+	}
+	if entries[0].Role != ionsession.User || entries[0].Content != "next turn" {
+		t.Fatalf("remaining entry = %#v", entries[0])
+	}
+}
+
 func TestCantoStoreAppendSkipsEmptyAgentMessages(t *testing.T) {
 	root := t.TempDir()
 	storeAny, err := NewCantoStore(root)
