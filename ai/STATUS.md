@@ -6,7 +6,7 @@ Fast, lightweight terminal coding agent.
 **Focus:** Keep the native loop Pi-simple first: submit, stream, run tools, persist, resume, continue, and recover without permissions/trust/polish code changing the outcome.
 **Active blocker:** `tk-mmcs` — core parity plan and task queue hygiene.
 **Queue hygiene:** `tk-mmcs` keeps Pi/Codex/Claude parity planning aligned; deferred ACP/P3/P4 tasks are blocked behind it so `tk ready` stays focused.
-**Updated:** 2026-04-29
+**Updated:** 2026-04-30
 
 ## Current Truth
 
@@ -64,6 +64,7 @@ Fast, lightweight terminal coding agent.
 - Absolute workspace paths now resolve correctly in file/search tools: `/Users/nick/github/nijaru/ion/AGENTS.md` no longer becomes a double-prefixed path. Focused tool tests, full Ion tests, and tmux TUI absolute-read smoke are green.
 - TUI assistant rendering now commits final assistant markdown once instead of rendering stale streamed Plane B content plus final scrollback. Plane B keeps tool/thinking/subagent/approval state; progress line carries streaming state. Focused app tests, full Ion tests, race gate, and tmux TUI smoke are green.
 - A1 native event ownership now has a code-level invariant: once `AgentMessage` commits the assistant transcript for a turn, late assistant/thinking deltas are ignored and cannot recreate pending state or get committed again on `TurnFinished`. Focused app/backend tests, full Ion tests, focused race gate, and OpenRouter Minimax fallback smoke are green; Fedora was unreachable for this live smoke.
+- A2 Canto provider-visible history now rejects future unmatched tool-result writes and filters legacy orphan/duplicate/late tool rows from effective history. Canto `91a3149` is pushed and imported into Ion; Canto full tests, Ion full tests, native race gate, and OpenRouter Minimax live tool/resume/follow-up smoke are green. Fedora timed out for this live smoke.
 - Preferred live-smoke order: use Fedora local-api first when available (`http://fedora:8080/v1`, currently advertising `qwen3.6:27b-uncensored`). OpenRouter remains fallback only: `minimax/minimax-m2.5:free` when available, `deepseek/deepseek-v4-flash` for cheap checks, or `deepseek/deepseek-v4-pro` only when a stronger separate-provider check is useful.
 - Current Fedora evidence: `/v1/models` returned `qwen3.6:27b-uncensored`; `TestLiveSmokeTurnAndToolCall` passed with tool call, persisted resume, and follow-up `continued`; direct `ion -p` text smoke returned `ok`; explicit `--resume <id> -p` returned `resumed`; direct JSON tool smoke returned `response="done"` with `tool_calls=["bash"]`.
 - Current OpenRouter fallback evidence: `minimax/minimax-m2.5:free` returned `ok` with a 120s print-mode timeout after the latest CLI print slice; a 45s Minimax attempt previously timed out, and `deepseek/deepseek-v4-flash` returned OpenRouter `402 Payment Required`.
@@ -72,7 +73,7 @@ Fast, lightweight terminal coding agent.
 
 Continue `tk-mmcs` as the P1 stabilization track:
 
-1. Continue the active review sequence in [review/core-loop-review-tracker-2026-04-28.md](review/core-loop-review-tracker-2026-04-28.md); A1 has a fresh patch and the next subsystem is A2 provider-visible history.
+1. Continue the active review sequence in [review/core-loop-review-tracker-2026-04-28.md](review/core-loop-review-tracker-2026-04-28.md); A1 and A2 have fresh patches and the next subsystem is A3 Ion storage/lazy lifecycle.
 2. Do not pick isolated bug slices unless they fall out of the active subsystem review and are logged under `tk-mmcs`.
 3. Keep `tk-rg23` and `tk-zxgq` as next TUI usability tasks after P1 correctness: tool/thinking display controls and steering-vs-queue UX.
 4. Keep ACP, privacy, subagents, skills, routing, advanced thinking, and safety polish blocked behind `tk-mmcs`.

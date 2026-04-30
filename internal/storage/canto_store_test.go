@@ -48,6 +48,13 @@ func appendLegacyCantoMessage(
 	}
 }
 
+func assistantToolCall(id, name string) llm.Call {
+	call := llm.Call{ID: id, Type: "function"}
+	call.Function.Name = name
+	call.Function.Arguments = `{}`
+	return call
+}
+
 func TestCantoStoreAppendUpdatesRecentSession(t *testing.T) {
 	root := t.TempDir()
 	storeAny, err := NewCantoStore(root)
@@ -244,11 +251,13 @@ func TestCantoStoreEntriesMapToolMessages(t *testing.T) {
 		Role:      llm.RoleAssistant,
 		Content:   "hi there",
 		Reasoning: "reasoning",
+		Calls:     []llm.Call{assistantToolCall("tool-bash", "bash")},
 	})); err != nil {
 		t.Fatalf("append agent: %v", err)
 	}
 	if err := cantoSess.Append(ctx, csession.NewEvent(sess.ID(), csession.MessageAdded, llm.Message{
 		Role:    llm.RoleTool,
+		ToolID:  "tool-bash",
 		Name:    "bash",
 		Content: "tool output",
 	})); err != nil {
@@ -298,7 +307,14 @@ func TestCantoStoreEntriesSummarizeRoutineToolOutput(t *testing.T) {
 		t.Fatalf("append user: %v", err)
 	}
 	if err := cantoSess.Append(ctx, csession.NewEvent(sess.ID(), csession.MessageAdded, llm.Message{
+		Role:  llm.RoleAssistant,
+		Calls: []llm.Call{assistantToolCall("tool-read", "read")},
+	})); err != nil {
+		t.Fatalf("append read call: %v", err)
+	}
+	if err := cantoSess.Append(ctx, csession.NewEvent(sess.ID(), csession.MessageAdded, llm.Message{
 		Role:    llm.RoleTool,
+		ToolID:  "tool-read",
 		Name:    "read",
 		Content: strings.Join([]string{"line 1", "line 2", "line 3"}, "\n"),
 	})); err != nil {
@@ -598,6 +614,10 @@ func TestCantoStoreEntriesPreserveToolResultErrors(t *testing.T) {
 	}
 
 	appendCantoMessage(t, store, ctx, sess.ID(), llm.Message{
+		Role:  llm.RoleAssistant,
+		Calls: []llm.Call{assistantToolCall("tool-err", "bash")},
+	})
+	appendCantoMessage(t, store, ctx, sess.ID(), llm.Message{
 		Role:    llm.RoleTool,
 		ToolID:  "tool-err",
 		Name:    "bash",
@@ -643,6 +663,10 @@ func TestCantoStoreEntriesDoNotCompactRoutineToolErrors(t *testing.T) {
 
 	fullError := "permission denied\nError: exit status 1"
 	appendCantoMessage(t, store, ctx, sess.ID(), llm.Message{
+		Role:  llm.RoleAssistant,
+		Calls: []llm.Call{assistantToolCall("tool-list-error", "list")},
+	})
+	appendCantoMessage(t, store, ctx, sess.ID(), llm.Message{
 		Role:    llm.RoleTool,
 		ToolID:  "tool-list-error",
 		Name:    "list",
@@ -686,6 +710,12 @@ func TestCantoStoreEntriesPreserveCantoToolCompletedErrors(t *testing.T) {
 		t.Fatalf("open session: %v", err)
 	}
 
+	if err := store.canto.Save(ctx, csession.NewEvent(sess.ID(), csession.MessageAdded, llm.Message{
+		Role:  llm.RoleAssistant,
+		Calls: []llm.Call{assistantToolCall("tool-err", "bash")},
+	})); err != nil {
+		t.Fatalf("save assistant tool call: %v", err)
+	}
 	if err := store.canto.Save(ctx, csession.NewEvent(sess.ID(), csession.MessageAdded, llm.Message{
 		Role:    llm.RoleTool,
 		ToolID:  "tool-err",
