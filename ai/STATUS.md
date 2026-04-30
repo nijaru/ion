@@ -19,6 +19,7 @@ Fast, lightweight terminal coding agent.
 
 ## Recent Evidence, Not Completion
 
+- Canto `773f2ab` is imported: runtime overflow recovery now has focused Canto coverage proving the retry request is rebuilt from compacted durable session history through both the minimal runner contract and normal `agent.New` provider path; `governor.RecoveryProvider` is documented as same-request retry only. Ion focused core tests, full tests, native race gate, and `tencent/hy3-preview:free` live tool/resume/follow-up smoke pass after import.
 - Canto has two pushed session-history fixes in the active Ion dependency: invalid empty assistant writes are rejected at write boundaries, and raw `LastAssistantMessage` now skips legacy invalid assistant rows during turn finalization.
 - Ion has reviewed/patched native-path slices for feature freeze enforcement, CLI startup/resume/print lifecycle, backend event translation, storage/replay projection, app turn lifecycle, transcript replay rendering, core tools, provider startup state, and deferred-surface isolation.
 - Deterministic gates are green after importing Canto `d37beda`: focused native package tests plus `go test ./...`.
@@ -94,7 +95,7 @@ Fast, lightweight terminal coding agent.
 Continue `tk-mmcs` as the P1 stabilization track:
 
 1. Keep `tk-zxgq` deferred behind `tk-z1kk`; do not add `/settings busy-input steer` as UI-only behavior.
-2. Continue Canto `canto-x5po` C5 contract audit where Ion still depends on framework guarantees: retry/cancel, overflow recovery, and compaction.
+2. Continue Canto `canto-x5po` with C6 non-core quarantine/remaining contract review before declaring the framework side boringly stable.
 3. Keep remaining TUI usability work behind the stable native loop: transcript polish, slash autocomplete, session browser polish, and provider/model UX.
 4. Keep ACP, privacy, subagents, skills, routing, advanced thinking, and safety polish blocked behind `tk-mmcs`.
 
