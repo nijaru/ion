@@ -79,6 +79,7 @@ Fast, lightweight terminal coding agent.
 - Preferred live-smoke order: use Fedora local-api first when available (`http://fedora:8080/v1`, currently advertising `qwen3.6:27b-uncensored`). OpenRouter remains fallback only: `minimax/minimax-m2.5:free` when available, `deepseek/deepseek-v4-flash` for cheap checks, or `deepseek/deepseek-v4-pro` only when a stronger separate-provider check is useful.
 - Current Fedora evidence: `/v1/models` returned `qwen3.6:27b-uncensored`; `TestLiveSmokeTurnAndToolCall` passed with tool call, persisted resume, and follow-up `continued`; direct `ion -p` text smoke returned `ok`; explicit `--resume <id> -p` returned `resumed`; direct JSON tool smoke returned `response="done"` with `tool_calls=["bash"]`.
 - Current OpenRouter fallback evidence: `minimax/minimax-m2.5:free` returned `ok` with a 120s print-mode timeout after the latest CLI print slice; a 45s Minimax attempt previously timed out, and `deepseek/deepseek-v4-flash` returned OpenRouter `402 Payment Required`.
+- Latest live-smoke attempt after `ade1a63`: Fedora `/v1/models` timed out after 5s, and OpenRouter `minimax/minimax-m2.5:free` emitted provider-retry status before `TestLiveSmokeTurnAndToolCall` timed out waiting for completion. Treat this as provider availability noise unless a later reachable endpoint reproduces a provider-history/tool-loop failure.
 
 ## Next Action
 
