@@ -413,25 +413,37 @@ func (s *cantoSession) Entries(ctx context.Context) ([]ionsession.Entry, error) 
 	}
 
 	toolErrors := make(map[string]bool)
+	toolTitles := make(map[string]string)
 	for _, ev := range sess.Events() {
-		if ev.Type != session.ToolCompleted {
-			continue
-		}
-		var data struct {
-			ToolUseID string `json:"tool_use_id"`
-			ID        string `json:"id"`
-			IsError   bool   `json:"is_error"`
-			Error     string `json:"error"`
-		}
-		if err := ev.UnmarshalData(&data); err != nil {
-			return nil, err
-		}
-		toolUseID := data.ToolUseID
-		if toolUseID == "" {
-			toolUseID = data.ID
-		}
-		if toolUseID != "" {
-			toolErrors[toolUseID] = data.IsError || strings.TrimSpace(data.Error) != ""
+		switch ev.Type {
+		case session.ToolStarted:
+			data, ok, err := ev.ToolStartedData()
+			if err != nil {
+				return nil, err
+			}
+			if !ok {
+				continue
+			}
+			if data.ID != "" {
+				toolTitles[data.ID] = formatDisplayToolTitle(data.Tool, data.Arguments)
+			}
+		case session.ToolCompleted:
+			var data struct {
+				ToolUseID string `json:"tool_use_id"`
+				ID        string `json:"id"`
+				IsError   bool   `json:"is_error"`
+				Error     string `json:"error"`
+			}
+			if err := ev.UnmarshalData(&data); err != nil {
+				return nil, err
+			}
+			toolUseID := data.ToolUseID
+			if toolUseID == "" {
+				toolUseID = data.ID
+			}
+			if toolUseID != "" {
+				toolErrors[toolUseID] = data.IsError || strings.TrimSpace(data.Error) != ""
+			}
 		}
 	}
 
@@ -444,7 +456,7 @@ func (s *cantoSession) Entries(ctx context.Context) ([]ionsession.Entry, error) 
 	effectiveByEventID := make(map[string]session.HistoryEntry, len(history))
 	for _, entry := range history {
 		if entry.EventID == "" {
-			if display, ok := displayHistoryEntry(entry, toolErrors); ok {
+			if display, ok := displayHistoryEntry(entry, toolErrors, toolTitles); ok {
 				entries = append(entries, display)
 			}
 			continue
@@ -455,7 +467,7 @@ func (s *cantoSession) Entries(ctx context.Context) ([]ionsession.Entry, error) 
 	seenEffective := make(map[string]bool, len(effectiveByEventID))
 	for _, ev := range sess.Events() {
 		if entry, ok := effectiveByEventID[ev.ID.String()]; ok {
-			if display, ok := displayHistoryEntry(entry, toolErrors); ok {
+			if display, ok := displayHistoryEntry(entry, toolErrors, toolTitles); ok {
 				entries = append(entries, display)
 			}
 			seenEffective[entry.EventID] = true
@@ -469,7 +481,7 @@ func (s *cantoSession) Entries(ctx context.Context) ([]ionsession.Entry, error) 
 		if entry.EventID == "" || seenEffective[entry.EventID] {
 			continue
 		}
-		if display, ok := displayHistoryEntry(entry, toolErrors); ok {
+		if display, ok := displayHistoryEntry(entry, toolErrors, toolTitles); ok {
 			entries = append(entries, display)
 		}
 	}
@@ -479,6 +491,7 @@ func (s *cantoSession) Entries(ctx context.Context) ([]ionsession.Entry, error) 
 func displayHistoryEntry(
 	entry session.HistoryEntry,
 	toolErrors map[string]bool,
+	toolTitles map[string]string,
 ) (ionsession.Entry, bool) {
 	if display, ok := displayContextEntry(entry); ok {
 		return display, true
@@ -497,7 +510,10 @@ func displayHistoryEntry(
 			Reasoning: msg.Reasoning,
 		}, true
 	case llm.RoleTool:
-		title := msg.Name
+		title := toolTitles[msg.ToolID]
+		if title == "" {
+			title = formatDisplayToolTitle(msg.Name, "")
+		}
 		if title == "" {
 			title = "tool"
 		}
@@ -514,6 +530,50 @@ func displayHistoryEntry(
 		}, true
 	default:
 		return ionsession.Entry{}, false
+	}
+}
+
+func formatDisplayToolTitle(name, args string) string {
+	displayName := displayToolName(name)
+	args = strings.TrimSpace(args)
+	if args == "" || args == "{}" {
+		return displayName
+	}
+	for _, key := range []string{"command", "file_path", "path", "pattern", "query"} {
+		pattern := fmt.Sprintf("\"%s\":", key)
+		if idx := strings.Index(args, pattern); idx >= 0 {
+			val := strings.TrimSpace(args[idx+len(pattern):])
+			if strings.HasPrefix(val, "\"") {
+				val = val[1:]
+				if end := strings.Index(val, "\""); end >= 0 {
+					return strings.TrimSpace(displayName + " " + val[:end])
+				}
+			}
+		}
+	}
+	return displayName
+}
+
+func displayToolName(name string) string {
+	switch strings.TrimSpace(strings.ToLower(name)) {
+	case "read":
+		return "Read"
+	case "write":
+		return "Write"
+	case "edit", "multi_edit":
+		return "Edit"
+	case "list":
+		return "List"
+	case "grep":
+		return "Search"
+	case "glob":
+		return "Find"
+	case "bash":
+		return "Bash"
+	case "verify":
+		return "Verify"
+	default:
+		return strings.TrimSpace(name)
 	}
 }
 

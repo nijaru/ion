@@ -299,7 +299,7 @@ func TestCantoStoreEntriesMapToolMessages(t *testing.T) {
 	if entries[1].Role != ionsession.Agent || entries[1].Content != "hi there" || entries[1].Reasoning != "reasoning" {
 		t.Fatalf("agent entry = %#v", entries[1])
 	}
-	if entries[2].Role != ionsession.Tool || entries[2].Title != "bash" || entries[2].Content != "tool output" {
+	if entries[2].Role != ionsession.Tool || entries[2].Title != "Bash" || entries[2].Content != "tool output" {
 		t.Fatalf("tool entry = %#v", entries[2])
 	}
 }
@@ -334,6 +334,13 @@ func TestCantoStoreEntriesPreserveRoutineToolOutput(t *testing.T) {
 	})); err != nil {
 		t.Fatalf("append read call: %v", err)
 	}
+	if err := cantoSess.Append(ctx, csession.NewToolStartedEvent(sess.ID(), csession.ToolStartedData{
+		Tool:      "read",
+		ID:        "tool-read",
+		Arguments: `{"file_path":"AGENTS.md"}`,
+	})); err != nil {
+		t.Fatalf("append read start: %v", err)
+	}
 	if err := cantoSess.Append(ctx, csession.NewEvent(sess.ID(), csession.MessageAdded, llm.Message{
 		Role:    llm.RoleTool,
 		ToolID:  "tool-read",
@@ -354,7 +361,7 @@ func TestCantoStoreEntriesPreserveRoutineToolOutput(t *testing.T) {
 		t.Fatalf("user entry = %#v", entries[0])
 	}
 	wantContent := strings.Join([]string{"line 1", "line 2", "line 3"}, "\n")
-	if entries[1].Role != ionsession.Tool || entries[1].Title != "read" || entries[1].Content != wantContent {
+	if entries[1].Role != ionsession.Tool || entries[1].Title != "Read AGENTS.md" || entries[1].Content != wantContent {
 		t.Fatalf("read entry = %#v", entries[1])
 	}
 }

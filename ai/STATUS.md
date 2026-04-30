@@ -75,6 +75,7 @@ Fast, lightweight terminal coding agent.
 - A6 transcript spacing is now simplified: `RenderEntries`/`printEntries` do not inject blank rows between transcript entries, and `View()` does not add an extra blank row before the progress/composer shell. Tmux replay capture shows resumed transcript rows on consecutive lines with no duplicate output; live inline mode still leaves one Bubble Tea handoff blank row during active-turn completion, but no transcript duplication. Focused/full/race gates and OpenRouter live tool/resume/follow-up smoke are green.
 - `tk-rg23` display controls are patched in progress: default completed thinking is hidden to keep the transcript clean, in-flight thinking still shows a dim marker, reasoning-only assistant rows render as a safe marker, `/settings` reports default tool display as `auto`, and `/settings tool auto` clears the stable override. Focused app/config/native tests are green.
 - `tk-zxgq` queue UX first slice is committed: busy-turn input still queues as a follow-up, but queued text is visible above the progress/composer shell and `Ctrl+G` recalls queued turns into the composer for editing. The active-turn steering contract is documented in [design/active-turn-steering-contract-2026-04-30.md](design/active-turn-steering-contract-2026-04-30.md): default queueing stays, and true steering waits for a Canto-owned boundary-step event/projection contract.
+- `tk-nwqu` TUI tool-formatting slice is closed: routine read/list/search/glob tools compact in-flight and completed output by default, full output remains available through tool display settings, and resumed replay recovers readable tool titles from Canto `ToolStarted` events when available. Focused renderer/storage/native tests, full Ion tests, and tmux `--continue` replay capture are green.
 - Preferred live-smoke order: use Fedora local-api first when available (`http://fedora:8080/v1`, currently advertising `qwen3.6:27b-uncensored`). OpenRouter remains fallback only: `minimax/minimax-m2.5:free` when available, `deepseek/deepseek-v4-flash` for cheap checks, or `deepseek/deepseek-v4-pro` only when a stronger separate-provider check is useful.
 - Current Fedora evidence: `/v1/models` returned `qwen3.6:27b-uncensored`; `TestLiveSmokeTurnAndToolCall` passed with tool call, persisted resume, and follow-up `continued`; direct `ion -p` text smoke returned `ok`; explicit `--resume <id> -p` returned `resumed`; direct JSON tool smoke returned `response="done"` with `tool_calls=["bash"]`.
 - Current OpenRouter fallback evidence: `minimax/minimax-m2.5:free` returned `ok` with a 120s print-mode timeout after the latest CLI print slice; a 45s Minimax attempt previously timed out, and `deepseek/deepseek-v4-flash` returned OpenRouter `402 Payment Required`.
@@ -83,9 +84,9 @@ Fast, lightweight terminal coding agent.
 
 Continue `tk-mmcs` as the P1 stabilization track:
 
-1. Close `tk-8jz2` after logging the active-turn steering contract, then keep `tk-zxgq` deferred until Canto has a tested boundary-step steering event. Do not add `/settings busy-input steer` as UI-only behavior.
+1. Keep `tk-zxgq` deferred behind `tk-z1kk`; do not add `/settings busy-input steer` as UI-only behavior.
 2. Do not pick isolated bug slices unless they fall out of the active subsystem review and are logged under `tk-mmcs`.
-3. Keep `tk-rg23` and `tk-zxgq` as next TUI usability tasks after P1 correctness: tool/thinking display controls and steering-vs-queue UX.
+3. Keep remaining TUI usability work behind the stable native loop: transcript polish, slash autocomplete, session browser polish, and provider/model UX.
 4. Keep ACP, privacy, subagents, skills, routing, advanced thinking, and safety polish blocked behind `tk-mmcs`.
 
 Do not run another broad `ai/` pass by default. The next work is source review and targeted docs only when the code review exposes a design question.
@@ -93,6 +94,6 @@ Do not run another broad `ai/` pass by default. The next work is source review a
 ## Active Tasks
 
 - `tk-mmcs` — P1 core parity plan and task queue hygiene.
-- `tk-8jz2` — P2 active-turn steering contract; blocks the remaining `tk-zxgq` setting.
+- `tk-zxgq` — busy-input steering setting, blocked by `tk-z1kk` because true steering needs a Canto boundary-step contract.
 
 Everything else is downstream of the solo native loop.
