@@ -248,8 +248,11 @@ func (m Model) recallQueuedTurns() (Model, tea.Cmd) {
 
 func (m Model) completeSlashCommand() (Model, tea.Cmd, bool) {
 	text := m.Input.Composer.Value()
-	if !strings.HasPrefix(text, "/") || strings.ContainsAny(text, " \t\r\n") {
+	if !strings.HasPrefix(text, "/") || strings.ContainsAny(text, "\r\n") {
 		return m, nil, false
+	}
+	if strings.ContainsAny(text, " \t") {
+		return m.completeSlashArgument(text)
 	}
 
 	matches := matchingSlashCommands(text)
@@ -270,6 +273,64 @@ func (m Model) completeSlashCommand() (Model, tea.Cmd, bool) {
 	}
 
 	return m.openCommandPicker(text), nil, true
+}
+
+func (m Model) completeSlashArgument(text string) (Model, tea.Cmd, bool) {
+	fields := strings.Fields(text)
+	if len(fields) == 0 {
+		return m, nil, false
+	}
+	trailingSpace := strings.HasSuffix(text, " ") || strings.HasSuffix(text, "\t")
+	switch fields[0] {
+	case "/thinking":
+		if len(fields) == 1 && trailingSpace {
+			return m, nil, true
+		}
+		if len(fields) == 2 && !trailingSpace {
+			return m.completeLastSlashToken(text, thinkingCompletionValues())
+		}
+	case "/settings":
+		if len(fields) == 1 && trailingSpace {
+			return m, nil, true
+		}
+		if len(fields) == 2 && !trailingSpace {
+			return m.completeLastSlashToken(text, settingsCompletionKeys())
+		}
+		if len(fields) == 2 && trailingSpace {
+			return m, nil, true
+		}
+		if len(fields) == 3 && !trailingSpace {
+			switch normalizeSettingsCompletionKey(fields[1]) {
+			case "retry":
+				return m.completeLastSlashToken(text, []string{"on", "off"})
+			case "tool":
+				return m.completeLastSlashToken(text, []string{"auto", "full", "collapsed", "hidden"})
+			case "thinking":
+				return m.completeLastSlashToken(text, []string{"full", "collapsed", "hidden"})
+			}
+		}
+	}
+	return m, nil, false
+}
+
+func (m Model) completeLastSlashToken(text string, values []string) (Model, tea.Cmd, bool) {
+	start := lastTokenStart(text)
+	prefix := text[start:]
+	matches := matchingValues(prefix, values)
+	switch len(matches) {
+	case 0:
+		return m, nil, true
+	case 1:
+		m.Input.Composer.SetValue(text[:start] + matches[0] + " ")
+		m.relayoutComposer()
+		return m, nil, true
+	default:
+		if common := commonPrefix(matches); common != "" && common != prefix {
+			m.Input.Composer.SetValue(text[:start] + common)
+			m.relayoutComposer()
+		}
+		return m, nil, true
+	}
 }
 
 func (m Model) completeFileReference() (Model, tea.Cmd, bool) {
@@ -364,6 +425,34 @@ func matchingSlashCommands(prefix string) []string {
 		}
 	}
 	return matches
+}
+
+func matchingValues(prefix string, values []string) []string {
+	prefix = strings.ToLower(prefix)
+	var matches []string
+	for _, value := range values {
+		if strings.HasPrefix(value, prefix) {
+			matches = append(matches, value)
+		}
+	}
+	return matches
+}
+
+func thinkingCompletionValues() []string {
+	return []string{"auto", "off", "minimal", "low", "medium", "high", "xhigh"}
+}
+
+func settingsCompletionKeys() []string {
+	return []string{"retry", "tool", "thinking"}
+}
+
+func normalizeSettingsCompletionKey(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "tools":
+		return "tool"
+	default:
+		return strings.ToLower(strings.TrimSpace(value))
+	}
 }
 
 func commonPrefix(values []string) string {
