@@ -3056,9 +3056,6 @@ func TestSettingsCommandShowsCommonSettings(t *testing.T) {
 	}
 	got := model.settingsSummary(cfg)
 	for _, want := range []string{
-		"provider: openrouter",
-		"model: tencent/hy3-preview:free",
-		"preset: primary",
 		"retry network errors: off",
 		"tool display: collapsed",
 		"thinking display: hidden",
@@ -3067,6 +3064,15 @@ func TestSettingsCommandShowsCommonSettings(t *testing.T) {
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("settings missing %q: %q", want, got)
+		}
+	}
+	for _, unwanted := range []string{
+		"provider: openrouter",
+		"model: tencent/hy3-preview:free",
+		"preset: primary",
+	} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("settings should not include runtime identity %q: %q", unwanted, got)
 		}
 	}
 }
