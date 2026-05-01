@@ -64,6 +64,10 @@ func main() {
 
 	providerOverride := strings.TrimSpace(*providerFlag)
 	modelOverride := firstNonEmpty(*modelFlag, *modelShortFlag)
+	explicitRuntimeOverride := providerOverride != "" ||
+		strings.TrimSpace(modelOverride) != "" ||
+		strings.TrimSpace(os.Getenv("ION_PROVIDER")) != "" ||
+		strings.TrimSpace(os.Getenv("ION_MODEL")) != ""
 	applyCLIConfigOverrides(cfg, providerOverride, modelOverride, *thinkingFlag)
 	shutdownTelemetry := func(context.Context) error { return nil }
 	if !features.CoreLoopOnly {
@@ -159,16 +163,21 @@ func main() {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)
 	}
-	if sessionID != "" && providerOverride == "" && strings.TrimSpace(modelOverride) == "" {
+	if sessionID != "" && !explicitRuntimeOverride {
 		if err := applySessionConfigFromMetadata(ctx, store, sessionID, cfg); err != nil {
 			fmt.Fprintf(os.Stderr, "%v\n", err)
 			os.Exit(1)
 		}
 	}
+	runtimeCfg, activePreset, err := startupRuntimeConfig(ctx, cfg, sessionID, explicitRuntimeOverride)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to resolve runtime config: %v\n", err)
+		os.Exit(1)
+	}
 
 	acpCommandOverride := strings.TrimSpace(os.Getenv("ION_ACP_COMMAND"))
 
-	b, sess, err := openRuntime(ctx, store, cwd, branch, cfg, acpCommandOverride, sessionID)
+	b, sess, err := openRuntime(ctx, store, cwd, branch, runtimeCfg, acpCommandOverride, sessionID)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to initialize runtime: %v\n", err)
 		os.Exit(1)
@@ -228,7 +237,8 @@ func main() {
 	}
 
 	model := app.New(b, sess, store, cwd, branch, version, switcher).
-		WithConfig(cfg).
+		WithConfigForRuntime(cfg, runtimeCfg).
+		WithActivePreset(activePreset).
 		WithMode(mode).
 		WithEscalation(escalation).
 		WithTrust(trustStore, trusted, cfg.WorkspaceTrust)

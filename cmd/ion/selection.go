@@ -9,6 +9,7 @@ import (
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/backend/acp"
 	"github.com/nijaru/ion/internal/backend/canto"
+	"github.com/nijaru/ion/internal/backend/registry"
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/features"
 	"github.com/nijaru/ion/internal/providers"
@@ -50,8 +51,11 @@ func applyCLIConfigOverrides(cfg *config.Config, providerOverride, modelOverride
 	}
 	if strings.TrimSpace(providerOverride) != "" {
 		provider := providers.ResolveID(providerOverride)
-		if provider != providers.ResolveID(cfg.Provider) && strings.TrimSpace(modelOverride) == "" {
-			cfg.Model = ""
+		if provider != providers.ResolveID(cfg.Provider) {
+			if strings.TrimSpace(modelOverride) == "" {
+				cfg.Model = ""
+			}
+			clearProviderScopedPresets(cfg)
 		}
 		cfg.Provider = provider
 	}
@@ -73,6 +77,39 @@ func applyCLIConfigOverrides(cfg *config.Config, providerOverride, modelOverride
 	if strings.TrimSpace(thinkingOverride) != "" {
 		cfg.ReasoningEffort = thinkingOverride
 	}
+}
+
+func clearProviderScopedPresets(cfg *config.Config) {
+	cfg.FastModel = ""
+	cfg.FastReasoningEffort = ""
+	cfg.SummaryModel = ""
+	cfg.SummaryReasoningEffort = ""
+}
+
+func startupRuntimeConfig(ctx context.Context, cfg *config.Config, sessionID string, explicitRuntimeOverride bool) (*config.Config, string, error) {
+	preset := "primary"
+	if !explicitRuntimeOverride && strings.TrimSpace(sessionID) == "" {
+		if state, err := config.LoadState(); err == nil && state.ActivePreset != nil {
+			preset = config.NormalizeActivePreset(*state.ActivePreset)
+		}
+	}
+	if preset == "" {
+		preset = "primary"
+	}
+
+	resolved, err := registry.ResolveRuntimeConfig(ctx, cfg, registry.Preset(preset))
+	if err == nil {
+		return resolved, preset, nil
+	}
+	if preset != "fast" {
+		return nil, preset, err
+	}
+
+	resolved, err = registry.ResolveRuntimeConfig(ctx, cfg, registry.PresetPrimary)
+	if err != nil {
+		return nil, "primary", err
+	}
+	return resolved, "primary", nil
 }
 
 func firstNonEmpty(values ...string) string {

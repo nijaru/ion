@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -214,10 +215,122 @@ func TestApplyCLIConfigOverrides(t *testing.T) {
 		t.Fatalf("cfg = %#v, want local-api qwen model", cfg)
 	}
 
-	cfg = &config.Config{Provider: "openrouter", Model: "openai/gpt-5.4"}
+	cfg = &config.Config{
+		Provider:               "openrouter",
+		Model:                  "openai/gpt-5.4",
+		FastModel:              "google/gemini-2.0-flash-lite-001",
+		FastReasoningEffort:    "low",
+		SummaryModel:           "google/gemini-2.0-flash-lite-001",
+		SummaryReasoningEffort: "low",
+	}
 	applyCLIConfigOverrides(cfg, "local-api", "", "")
-	if cfg.Provider != "local-api" || cfg.Model != "" {
-		t.Fatalf("cfg = %#v, want provider-only override to clear stale model", cfg)
+	if cfg.Provider != "local-api" ||
+		cfg.Model != "" ||
+		cfg.FastModel != "" ||
+		cfg.FastReasoningEffort != "" ||
+		cfg.SummaryModel != "" ||
+		cfg.SummaryReasoningEffort != "" {
+		t.Fatalf("cfg = %#v, want provider-only override to clear stale provider-scoped presets", cfg)
+	}
+
+	cfg = &config.Config{
+		Provider:  "local-api",
+		Model:     "qwen3.6:27b",
+		FastModel: "qwen3.6:27b-fast",
+	}
+	applyCLIConfigOverrides(cfg, "openrouter", "tencent/hy3-preview:free", "")
+	if cfg.Provider != "openrouter" ||
+		cfg.Model != "tencent/hy3-preview:free" ||
+		cfg.FastModel != "" {
+		t.Fatalf("cfg = %#v, want explicit provider/model override to clear stale fast preset", cfg)
+	}
+}
+
+func TestStartupRuntimeConfigHonorsPersistedFastPreset(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(filepath.Join(home, ".ion"), 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := config.SaveActivePreset("fast"); err != nil {
+		t.Fatalf("save active preset: %v", err)
+	}
+
+	runtimeCfg, preset, err := startupRuntimeConfig(context.Background(), &config.Config{
+		Provider:            "openai",
+		Model:               "gpt-4.1",
+		ReasoningEffort:     "high",
+		FastModel:           "gpt-4.1-mini",
+		FastReasoningEffort: "low",
+	}, "", false)
+	if err != nil {
+		t.Fatalf("startup runtime config: %v", err)
+	}
+	if preset != "fast" {
+		t.Fatalf("preset = %q, want fast", preset)
+	}
+	if runtimeCfg.Model != "gpt-4.1-mini" || runtimeCfg.ReasoningEffort != "low" {
+		t.Fatalf("runtime cfg = %#v, want fast model and low reasoning", runtimeCfg)
+	}
+}
+
+func TestStartupRuntimeConfigForcesPrimaryForExplicitRuntimeOverride(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(filepath.Join(home, ".ion"), 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := config.SaveActivePreset("fast"); err != nil {
+		t.Fatalf("save active preset: %v", err)
+	}
+
+	runtimeCfg, preset, err := startupRuntimeConfig(context.Background(), &config.Config{
+		Provider:            "openrouter",
+		Model:               "tencent/hy3-preview:free",
+		FastModel:           "google/gemini-2.0-flash-lite-001",
+		FastReasoningEffort: "low",
+	}, "", true)
+	if err != nil {
+		t.Fatalf("startup runtime config: %v", err)
+	}
+	if preset != "primary" {
+		t.Fatalf("preset = %q, want primary", preset)
+	}
+	if runtimeCfg.Model != "tencent/hy3-preview:free" {
+		t.Fatalf("runtime model = %q, want explicit primary model", runtimeCfg.Model)
+	}
+
+	state, err := config.LoadState()
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	if state.ActivePreset == nil || *state.ActivePreset != "fast" {
+		t.Fatalf("active_preset = %#v, want persisted fast unchanged", state.ActivePreset)
+	}
+}
+
+func TestStartupRuntimeConfigFallsBackWhenPersistedFastIsNotConfigured(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(filepath.Join(home, ".ion"), 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := config.SaveActivePreset("fast"); err != nil {
+		t.Fatalf("save active preset: %v", err)
+	}
+
+	runtimeCfg, preset, err := startupRuntimeConfig(context.Background(), &config.Config{
+		Provider: "openai",
+		Model:    "gpt-4.1",
+	}, "", false)
+	if err != nil {
+		t.Fatalf("startup runtime config: %v", err)
+	}
+	if preset != "primary" {
+		t.Fatalf("preset = %q, want primary fallback", preset)
+	}
+	if runtimeCfg.Model != "gpt-4.1" {
+		t.Fatalf("runtime model = %q, want primary model", runtimeCfg.Model)
 	}
 }
 

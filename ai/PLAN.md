@@ -11,6 +11,7 @@ Pi is the simple core-loop floor. Codex is the richer open-source CLI/session re
 - Current phase and next action: [STATUS.md](STATUS.md)
 - Detailed reviewed/refactored/pending matrix: [review/core-loop-review-tracker-2026-04-28.md](review/core-loop-review-tracker-2026-04-28.md)
 - Target architecture: [design/native-core-loop-architecture.md](design/native-core-loop-architecture.md)
+- Next-phase roadmap: [design/roadmap-2026-05-01.md](design/roadmap-2026-05-01.md)
 - Task state and issue log: `tk`
 
 Do not duplicate the tracker matrix here. Update this file only when gates, priorities, or ownership change.
@@ -20,6 +21,8 @@ Do not duplicate the tracker matrix here. Update this file only when gates, prio
 Do not treat core-loop regressions as independent bug slices. The `tk-s6p4` comprehensive audit produced useful evidence, but the P1 gate is reopened under `tk-mmcs`. Every native-loop change must be tied to the active subsystem sequence and invariant in the tracker before implementation.
 
 Do not collapse Canto into Ion as a development shortcut. Keep the repo split, but treat Ion as Canto's acceptance test until the minimal native loop is stable. Canto public-framework expansion is deferred; Canto changes during this pass should come from concrete Ion-proven framework needs.
+
+The 2026-05-01 roadmap reframes the work into phases: I0 stabilization closeout, I1 Pi-level core parity, I2 minimal polished TUI, I3 safety/product table stakes, I4 advanced surfaces, and I5 eval-driven optimization. Use those phases to classify new work instead of reopening broad framework or SOTA discussions during the native-loop pass.
 
 ## Priority Bands
 

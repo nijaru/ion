@@ -6,7 +6,7 @@ Fast, lightweight terminal coding agent.
 **Focus:** Keep the native loop Pi-simple first: submit, stream, run tools, persist, resume, continue, and recover without permissions/trust/polish code changing the outcome.
 **Active blocker:** `tk-mmcs` — core parity plan and task queue hygiene.
 **Queue hygiene:** `tk-mmcs` keeps Pi/Codex/Claude parity planning aligned; deferred ACP/P3/P4 tasks are blocked behind it so `tk ready` stays focused.
-**Updated:** 2026-04-30
+**Updated:** 2026-05-01
 
 ## Current Truth
 
@@ -15,6 +15,7 @@ Fast, lightweight terminal coding agent.
 - Canto owns provider-visible transcript, effective history, agent/tool execution, retry, queueing, terminal events, and compaction primitives.
 - Ion owns input classification, TUI/CLI lifecycle, display projection, local status/error rows, trust/mode UX, and provider/config selection.
 - Keep Canto and Ion split, but treat Ion as Canto's acceptance test during stabilization. Canto public-framework expansion is deferred until Ion's native minimal loop is stable.
+- The next-phase roadmap is now summarized in [design/roadmap-2026-05-01.md](design/roadmap-2026-05-01.md): Ion finishes the minimal native agent, then TUI/CLI table stakes, then safety/product table stakes, then advanced framework/SOTA surfaces.
 - The detailed reviewed/refactored/pending matrix is tracked in [review/core-loop-review-tracker-2026-04-28.md](review/core-loop-review-tracker-2026-04-28.md). Do not duplicate that matrix here.
 
 ## Recent Evidence, Not Completion
@@ -92,6 +93,7 @@ Fast, lightweight terminal coding agent.
 - Latest deterministic evidence: request-capture smoke hardening is covered by `go test ./... -count=1 -timeout 300s` and `go test -race ./cmd/ion ./internal/app ./internal/backend/canto ./internal/backend/canto/tools ./internal/storage -count=1 -timeout 300s`.
 - Canto `d3f8084` is imported: tool-boundary failures such as hook blocks, approval denials, ambiguous replay, and panics now become model-visible tool observations where possible; panics also record durable `ToolCompleted` error data. The same Canto slice fixed a runtime scheduler race. Ion focused core tests, full tests, native race gate, and `tencent/hy3-preview:free` live tool/resume/follow-up smoke are green after import.
 - Canto `9ba6120` is imported: provider preparation now validates neutral requests before capability rewriting, `ValidateRequest` rejects invalid roles, empty assistants, and orphan tool results, `Request.Clone` copies structured-output response formats, and retry test counters are race-clean. Ion focused core tests, full tests, native race gate, and `tencent/hy3-preview:free` live tool/resume/follow-up smoke are green after import.
+- `tk-vbja` is fixed: explicit CLI/env runtime overrides now start visibly as the primary preset, keep persisted `active_preset` unchanged, and clear stale provider-scoped fast/summary presets when switching providers. Focused cmd/app tests, full Ion tests, native race gate, tmux `/model` override smoke, and `tencent/hy3-preview:free` live tool/resume/follow-up smoke are green.
 
 ## Next Action
 
@@ -101,6 +103,7 @@ Continue `tk-mmcs` as the P1 stabilization track:
 2. Move the next Ion work back to table-stakes TUI/CLI usability: transcript polish, slash autocomplete, session browser polish, and provider/model UX.
 3. Keep true active-turn steering (`tk-z1kk`) blocked behind `tk-mmcs`; do not add `/settings busy-input steer` as UI-only behavior.
 4. Keep ACP, privacy, subagents, skills, routing, advanced thinking, and safety polish blocked behind `tk-mmcs`.
+5. Use [design/roadmap-2026-05-01.md](design/roadmap-2026-05-01.md) as the sequencing source when deciding whether a newly discovered issue is I0/I1 core, I2 TUI/CLI, I3 safety/product, or later SOTA work.
 
 Do not run another broad `ai/` pass by default. The next work is source review and targeted docs only when the code review exposes a design question.
 

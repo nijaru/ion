@@ -4,6 +4,16 @@ Append-only history of architectural and design decisions for `ion`.
 
 ---
 
+## 2026-05-01 — Roadmap: stable native agent, then TUI, then advanced framework surfaces
+
+**Context:** Recent work kept jumping between Canto framework concerns, Ion core-loop bugs, TUI polish, safety modes, filesystem/sandbox ideas, and SOTA optimization research.
+
+**Decision:** Sequence the work explicitly: Ion I0/I1 finishes the minimal native coding agent and Pi-level scripting/resume/compact loop; I2 handles the minimal polished TUI/CLI shell; I3 restores safety/product table stakes; I4/I5 carry advanced surfaces such as ACP, subscription bridges, subagents, skills, privacy, routing, sandbox/workspace platforms, and DSPy/GEPA-style optimization. Canto stays mechanism-focused and only reopens core-contract work when Ion exposes a concrete framework-owned failure.
+
+**Rationale:** This keeps good ideas from becoming accidental priorities. Mesa, Archil, BranchFS, OpenHands, OpenAI Agents SDK, DSPy, and GEPA are useful references, but none should displace the core Ion loop.
+
+---
+
 ## 2026-04-30 — Busy input: queue by default, steering only at Canto boundaries
 
 **Context:** Ion now shows busy-turn queued input and lets users recall it into the composer. The remaining request was whether Ion should support a setting that turns busy input into active steering instead of next-turn queueing.

@@ -14,6 +14,7 @@ Start here, in order. Root files are intentionally short; detailed progress belo
 - [Core Loop Review Tracker](review/core-loop-review-tracker-2026-04-28.md) — active A1-A6 subsystem sequence for P1 native-loop stabilization
 - [Core Minimal Agent Reset](design/core-minimal-agent-reset-2026-04-28.md) — phased reset plan: minimal core agent, stable TUI, then advanced features
 - [Active-Turn Steering Contract](design/active-turn-steering-contract-2026-04-30.md) — safe boundary for queued busy input and future steering mode
+- [Ion Roadmap 2026-05-01](design/roadmap-2026-05-01.md) — current next-phase roadmap: stable native agent, TUI/CLI table stakes, then deferred SOTA
 - [Native Core Loop Architecture](design/native-core-loop-architecture.md) — target ownership, invariants, refactor sequence, and smoke matrix
 - [Ion Native Backend Spine](design/ion-native-backend-spine-2026-04-27.md) — backend adapter turn phases, event translation, cancel/close semantics
 - [Ion Display Projection](design/ion-display-projection-2026-04-27.md) — Canto effective history plus Ion display-only event projection

@@ -1747,6 +1747,40 @@ func TestNewRestoresActivePresetFromState(t *testing.T) {
 	}
 }
 
+func TestWithConfigForRuntimeKeepsAppConfigAndAppliesRuntimeConfig(t *testing.T) {
+	sess := &stubSession{events: make(chan session.Event)}
+	capture := &configCaptureBackend{stubBackend: stubBackend{sess: sess}}
+	model := New(capture, nil, nil, "/tmp/test", "main", "dev", nil).
+		WithConfigForRuntime(
+			&config.Config{
+				Provider:            "openai",
+				Model:               "gpt-4.1",
+				ReasoningEffort:     "high",
+				FastModel:           "gpt-4.1-mini",
+				FastReasoningEffort: "low",
+			},
+			&config.Config{
+				Provider:        "openai",
+				Model:           "gpt-4.1-mini",
+				ReasoningEffort: "low",
+			},
+		).
+		WithActivePreset("fast")
+
+	if model.App.ActivePreset != presetFast {
+		t.Fatalf("active preset = %q, want fast", model.App.ActivePreset)
+	}
+	if model.Model.Config == nil || model.Model.Config.Model != "gpt-4.1" || model.Model.Config.FastModel != "gpt-4.1-mini" {
+		t.Fatalf("app config = %#v, want full preset config", model.Model.Config)
+	}
+	if capture.cfg == nil || capture.cfg.Model != "gpt-4.1-mini" || capture.cfg.ReasoningEffort != "low" {
+		t.Fatalf("backend cfg = %#v, want resolved fast runtime config", capture.cfg)
+	}
+	if model.Progress.ReasoningEffort != "low" {
+		t.Fatalf("progress reasoning = %q, want low", model.Progress.ReasoningEffort)
+	}
+}
+
 func TestHandleCommandUpdatesStateDirectly(t *testing.T) {
 	tests := []struct {
 		name        string
