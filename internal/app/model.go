@@ -378,15 +378,28 @@ func (m Model) WithPrintedTranscript(v bool) Model {
 }
 
 func (m Model) WithConfig(cfg *config.Config) Model {
+	return m.WithConfigForRuntime(cfg, cfg)
+}
+
+func (m Model) WithConfigForRuntime(cfg, runtimeCfg *config.Config) Model {
 	if cfg == nil {
 		return m
 	}
 	copied := *cfg
 	m.Model.Config = &copied
-	m.Progress.ReasoningEffort = normalizeThinkingValue(copied.ReasoningEffort)
-	if m.Model.Backend != nil {
-		m.Model.Backend.SetConfig(&copied)
+	backendCfg := copied
+	if runtimeCfg != nil {
+		backendCfg = *runtimeCfg
 	}
+	m.Progress.ReasoningEffort = normalizeThinkingValue(backendCfg.ReasoningEffort)
+	if m.Model.Backend != nil {
+		m.Model.Backend.SetConfig(&backendCfg)
+	}
+	return m
+}
+
+func (m Model) WithActivePreset(value string) Model {
+	m.App.ActivePreset = modelPresetFromString(value)
 	return m
 }
 
