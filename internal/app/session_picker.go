@@ -167,11 +167,15 @@ func (m Model) renderSessionPicker() string {
 		if detail != "" {
 			line += " • " + detail
 		}
-		if i == m.Picker.Session.index {
-			b.WriteString(m.st.cyan.PaddingLeft(2).Render("› " + line))
-		} else {
-			b.WriteString(m.st.dim.PaddingLeft(2).Render("  " + line))
+		selected := i == m.Picker.Session.index
+		prefix := "  "
+		style := m.st.dim
+		if selected {
+			prefix = "› "
+			style = m.st.cyan
 		}
+		content := fitLine(prefix+line, max(0, m.App.Width-2))
+		b.WriteString(style.PaddingLeft(2).Render(content))
 		b.WriteString("\n")
 	}
 	if end < len(m.Picker.Session.filtered) {

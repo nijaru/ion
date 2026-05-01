@@ -2820,6 +2820,35 @@ func TestTabCompletesSlashCommands(t *testing.T) {
 	}
 }
 
+func TestTabCompletesKnownSlashArguments(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "thinking level", input: "/thinking hi", want: "/thinking high "},
+		{name: "settings key", input: "/settings r", want: "/settings retry "},
+		{name: "settings retry value", input: "/settings retry of", want: "/settings retry off "},
+		{name: "settings tool value", input: "/settings tool co", want: "/settings tool collapsed "},
+		{name: "settings thinking value", input: "/settings thinking h", want: "/settings thinking hidden "},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			model := readyModel(t)
+			model.Input.Composer.SetValue(tc.input)
+
+			updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+			model = updated.(Model)
+			if cmd != nil {
+				t.Fatalf("unexpected autocomplete cmd %T", cmd)
+			}
+			if got := model.Input.Composer.Value(); got != tc.want {
+				t.Fatalf("composer = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestTabListsAmbiguousSlashCommands(t *testing.T) {
 	model := readyModel(t)
 	model.Input.Composer.SetValue("/t")
@@ -2959,6 +2988,32 @@ func TestSessionPickerLineOmitsMissingAge(t *testing.T) {
 	}
 }
 
+func TestSessionPickerRowsFitTerminalWidth(t *testing.T) {
+	model := readyModel(t)
+	model.App.Width = 80
+	model.Picker.Session = &sessionPickerState{
+		items: []sessionPickerItem{{
+			info: storage.SessionInfo{
+				ID:          "sess-1",
+				Model:       "local-api/qwen3.6:27b-uncensored",
+				Branch:      "feature/very-long-session-picker-branch-name",
+				UpdatedAt:   time.Now().Add(-48 * time.Hour),
+				Title:       "hi, read /Users/nick/github/nijaru/ion/AGENTS.md and summarize the important parts",
+				LastPreview: "use the read tool on /Users/nick/github/nijaru/ion/AGENTS.md, then tell me the current priorities",
+			},
+		}},
+		index: 0,
+	}
+	model.Picker.Session.filtered = model.Picker.Session.items
+
+	out := ansi.Strip(model.renderSessionPicker())
+	for _, line := range strings.Split(out, "\n") {
+		if ansi.StringWidth(line) > model.App.Width {
+			t.Fatalf("session picker line width = %d, want <= %d: %q", ansi.StringWidth(line), model.App.Width, line)
+		}
+	}
+}
+
 func TestSessionAgeLabelUsesDaysForOlderSessions(t *testing.T) {
 	got := humanizeSessionAge(8*24*time.Hour + 3*time.Hour)
 	if got != "8d ago" {
@@ -2985,15 +3040,29 @@ func TestSettingsCommandShowsCommonSettings(t *testing.T) {
 	}
 
 	model := readyModel(t)
+	model.Model.Backend = stubBackend{
+		sess:     &stubSession{events: make(chan session.Event)},
+		provider: "openrouter",
+		model:    "tencent/hy3-preview:free",
+	}
+	model.Model.Config = &config.Config{
+		Provider:        "openrouter",
+		Model:           "tencent/hy3-preview:free",
+		ReasoningEffort: "high",
+	}
 	cfg, err := config.LoadStable()
 	if err != nil {
 		t.Fatalf("load stable config: %v", err)
 	}
 	got := model.settingsSummary(cfg)
 	for _, want := range []string{
+		"provider: openrouter",
+		"model: tencent/hy3-preview:free",
+		"preset: primary",
 		"retry network errors: off",
 		"tool display: collapsed",
 		"thinking display: hidden",
+		"thinking level: high",
 		"/settings retry on|off",
 	} {
 		if !strings.Contains(got, want) {

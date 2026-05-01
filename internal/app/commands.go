@@ -754,13 +754,30 @@ func (m Model) settingsSummary(cfg *config.Config) string {
 	if cfg == nil {
 		cfg = &config.Config{}
 	}
+	runtimeCfg := cfg
+	if m.Model.Config != nil {
+		runtimeCfg = m.Model.Config
+	}
+	provider := strings.TrimSpace(runtimeCfg.Provider)
+	model := strings.TrimSpace(runtimeCfg.Model)
+	if m.Model.Backend != nil {
+		if backendProvider := strings.TrimSpace(m.Model.Backend.Provider()); backendProvider != "" {
+			provider = backendProvider
+		}
+		if backendModel := strings.TrimSpace(m.Model.Backend.Model()); backendModel != "" {
+			model = backendModel
+		}
+	}
 	return strings.Join([]string{
 		"settings",
 		"",
+		"  provider: " + settingsValue(provider),
+		"  model: " + settingsValue(model),
+		"  preset: " + m.activePresetTitle(),
 		"  retry network errors: " + onOff(cfg.RetryUntilCancelledEnabled()),
 		"  tool display: " + displayToolVerbosity(cfg.ToolVerbosity),
 		"  thinking display: " + displayThinkingVerbosity(cfg.ThinkingVerbosity),
-		"  thinking level: " + normalizeThinkingValue(cfg.ReasoningEffort),
+		"  thinking level: " + normalizeThinkingValue(runtimeCfg.ReasoningEffort),
 		"",
 		"commands",
 		"",
@@ -769,6 +786,13 @@ func (m Model) settingsSummary(cfg *config.Config) string {
 		"  /settings thinking full|collapsed|hidden",
 		"  /thinking auto|off|minimal|low|medium|high|xhigh",
 	}, "\n")
+}
+
+func settingsValue(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "unknown"
+	}
+	return value
 }
 
 func parseOnOff(value string) (bool, bool) {
