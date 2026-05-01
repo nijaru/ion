@@ -114,6 +114,33 @@ func (s *contextBlockingStream) Err() error {
 
 func (s *contextBlockingStream) Close() error { return nil }
 
+type lateSuccessStreamProvider struct {
+	compactProvider
+	streamCtx chan context.Context
+}
+
+type lateSuccessStream struct {
+	ctx  context.Context
+	sent bool
+}
+
+func (p *lateSuccessStreamProvider) Stream(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+	p.streamCtx <- ctx
+	return &lateSuccessStream{ctx: ctx}, nil
+}
+
+func (s *lateSuccessStream) Next() (*llm.Chunk, bool) {
+	if s.sent {
+		return nil, false
+	}
+	<-s.ctx.Done()
+	s.sent = true
+	return &llm.Chunk{Content: "late answer"}, true
+}
+
+func (s *lateSuccessStream) Err() error   { return nil }
+func (s *lateSuccessStream) Close() error { return nil }
+
 type testTool struct {
 	name string
 }
@@ -438,6 +465,72 @@ func TestSubmitTurnUsesCallerContext(t *testing.T) {
 		t.Fatal("provider stream context was not canceled")
 	}
 	waitForTurnFinished(t, b.Events())
+}
+
+func TestSubmitTurnCancelSuppressesLateAssistant(t *testing.T) {
+	ctx := t.Context()
+	store, err := storage.NewCantoStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	storageSession, err := store.OpenSession(ctx, "/tmp/ion-late-cancel", "local-api/model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	provider := &lateSuccessStreamProvider{
+		compactProvider: compactProvider{id: "local-api"},
+		streamCtx:       make(chan context.Context, 1),
+	}
+	oldFactory := providerFactory
+	providerFactory = func(ctx context.Context, cfg *config.Config) (llm.Provider, error) {
+		return provider, nil
+	}
+	defer func() { providerFactory = oldFactory }()
+
+	b := New()
+	b.SetStore(store)
+	b.SetSession(storageSession)
+	b.SetConfig(&config.Config{Provider: "local-api", Model: "model-a", Endpoint: "http://localhost:8080/v1"})
+	if err := b.Open(ctx); err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer func() { _ = b.Close() }()
+
+	if err := b.SubmitTurn(ctx, "hi"); err != nil {
+		t.Fatalf("submit turn: %v", err)
+	}
+	select {
+	case <-provider.streamCtx:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for provider stream")
+	}
+	if err := b.CancelTurn(ctx); err != nil {
+		t.Fatalf("cancel turn: %v", err)
+	}
+
+	for {
+		select {
+		case ev := <-b.Events():
+			switch msg := ev.(type) {
+			case ionsession.AgentMessage:
+				t.Fatalf("late assistant reached Ion after cancel: %#v", msg)
+			case ionsession.TurnFinished:
+				entries, err := storageSession.Entries(ctx)
+				if err != nil {
+					t.Fatalf("load entries: %v", err)
+				}
+				for _, entry := range entries {
+					if entry.Role == ionsession.Agent {
+						t.Fatalf("late assistant persisted after cancel: %#v", entry)
+					}
+				}
+				return
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for canceled turn")
+		}
+	}
 }
 
 func TestSubmitTurnRejectsConcurrentTurn(t *testing.T) {
