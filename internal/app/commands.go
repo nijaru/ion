@@ -57,7 +57,7 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 			return m.openModelPicker()
 		}
 		name := strings.Join(fields[1:], " ")
-		cfg, err := config.Load()
+		cfg, err := m.commandConfig()
 		if err != nil {
 			return m, cmdError(fmt.Sprintf("failed to load config: %v", err))
 		}
@@ -85,6 +85,7 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		}
 		return m, m.switchRuntimeCommand(
 			runtimeCfg,
+			updated,
 			m.activePreset(),
 			session.Entry{Role: session.System, Content: "Model set to " + name},
 			m.currentMaterializedSessionID(),
@@ -96,7 +97,7 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 			return m.openThinkingPicker()
 		}
 		level := normalizeThinkingValue(fields[1])
-		cfg, err := config.Load()
+		cfg, err := m.commandConfig()
 		if err != nil {
 			return m, cmdError(fmt.Sprintf("failed to load config: %v", err))
 		}
@@ -116,6 +117,7 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 			return m, cmdError(fmt.Sprintf("failed to save state: %v", err))
 		}
 		m.Model.Backend.SetConfig(runtimeCfg)
+		m.Model.Config = updated
 		m.Progress.ReasoningEffort = level
 		return m, m.printEntries(
 			session.Entry{
@@ -129,7 +131,7 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 			return m.openProviderPicker()
 		}
 		name := fields[1]
-		cfg, err := config.Load()
+		cfg, err := m.commandConfig()
 		if err != nil {
 			return m, cmdError(fmt.Sprintf("failed to load config: %v", err))
 		}
@@ -259,7 +261,7 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		return m, m.printEntries(session.Entry{Role: session.System, Content: out})
 
 	case "/clear":
-		cfg, err := config.Load()
+		cfg, err := m.commandConfig()
 		if err != nil {
 			return m, cmdError(fmt.Sprintf("failed to load config: %v", err))
 		}
@@ -278,6 +280,7 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		}
 		return m, m.switchRuntimeCommand(
 			runtimeCfg,
+			cfg,
 			m.activePreset(),
 			session.Entry{Role: session.System, Content: "Started fresh session"},
 			"",
@@ -568,7 +571,7 @@ func rewindReport(id string, report ionworkspace.RestoreReport) string {
 }
 
 func (m Model) openProviderPicker() (Model, tea.Cmd) {
-	cfg, err := config.Load()
+	cfg, err := m.commandConfig()
 	if err != nil {
 		return m, cmdError(fmt.Sprintf("failed to load config: %v", err))
 	}
@@ -590,7 +593,7 @@ func (m Model) openProviderPickerWithConfig(cfg *config.Config) (Model, tea.Cmd)
 }
 
 func (m Model) openModelPicker() (Model, tea.Cmd) {
-	cfg, err := config.Load()
+	cfg, err := m.commandConfig()
 	if err != nil {
 		return m, cmdError(fmt.Sprintf("failed to load config: %v", err))
 	}
@@ -741,6 +744,7 @@ func (m Model) handleSettingsCommand(fields []string) (Model, tea.Cmd) {
 	if err != nil {
 		return m, cmdError(fmt.Sprintf("failed to reload runtime config: %v", err))
 	}
+	mergeRuntimeSelection(runtimeCfg, m.Model.Config)
 	m.Model.Config = runtimeCfg
 	m.Model.Backend.SetConfig(runtimeCfg)
 	return m, m.printEntries(session.Entry{Role: session.System, Content: notice})
@@ -878,7 +882,7 @@ func slashCommandItems() []pickerItem {
 }
 
 func (m Model) openThinkingPicker() (Model, tea.Cmd) {
-	cfg, err := config.Load()
+	cfg, err := m.commandConfig()
 	if err != nil {
 		return m, cmdError(fmt.Sprintf("failed to load config: %v", err))
 	}
@@ -1182,7 +1186,14 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 		}
 		m.Picker.Overlay = nil
 		notice := session.Entry{Role: session.System, Content: "Model set to " + selected.Value}
-		return m, m.switchRuntimeCommand(runtimeCfg, m.activePreset(), notice, m.currentMaterializedSessionID(), false)
+		return m, m.switchRuntimeCommand(
+			runtimeCfg,
+			updated,
+			m.activePreset(),
+			notice,
+			m.currentMaterializedSessionID(),
+			false,
+		)
 	case pickerPurposeThinking:
 		level := normalizeThinkingValue(selected.Value)
 		currentCfg, err := m.runtimeConfigForActivePreset(&cfg)
@@ -1284,7 +1295,7 @@ func (m Model) trustGateActive() bool {
 }
 
 func (m Model) switchPresetCommand(preset modelPreset) (Model, tea.Cmd) {
-	cfg, err := config.Load()
+	cfg, err := m.commandConfig()
 	if err != nil {
 		return m, cmdError(fmt.Sprintf("failed to load config: %v", err))
 	}
@@ -1293,7 +1304,7 @@ func (m Model) switchPresetCommand(preset modelPreset) (Model, tea.Cmd) {
 		return m, cmdError(fmt.Sprintf("failed to resolve %s preset: %v", preset, err))
 	}
 	notice := session.Entry{Role: session.System, Content: "Switched to " + preset.String()}
-	return m, m.switchRuntimeCommand(runtimeCfg, preset, notice, m.currentMaterializedSessionID(), false)
+	return m, m.switchRuntimeCommand(runtimeCfg, cfg, preset, notice, m.currentMaterializedSessionID(), false)
 }
 
 func (m Model) currentMaterializedSessionID() string {
@@ -1311,6 +1322,7 @@ func (m Model) currentMaterializedSessionID() string {
 
 func (m Model) switchRuntimeCommand(
 	cfg *config.Config,
+	appCfg *config.Config,
 	preset modelPreset,
 	notice session.Entry,
 	sessionID string,
@@ -1333,6 +1345,10 @@ func (m Model) switchRuntimeCommand(
 	}
 	switcher := m.Model.Switcher
 	cfgCopy := *cfg
+	appCfgCopy := cfgCopy
+	if appCfg != nil {
+		appCfgCopy = *appCfg
+	}
 
 	return func() tea.Msg {
 		if oldSession != nil {
@@ -1350,7 +1366,8 @@ func (m Model) switchRuntimeCommand(
 			_ = oldSession.Close()
 		}
 		return runtimeSwitchedMsg{
-			cfg:        &cfgCopy,
+			cfg:        &appCfgCopy,
+			reasoning:  cfgCopy.ReasoningEffort,
 			preset:     preset,
 			backend:    backend,
 			session:    sess,

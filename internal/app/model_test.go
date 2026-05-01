@@ -3022,6 +3022,61 @@ func TestSettingsCommandUpdatesStableConfig(t *testing.T) {
 	}
 }
 
+func TestSettingsCommandPreservesRuntimeSelection(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	configDir := filepath.Join(home, ".ion")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(configDir, "state.toml"),
+		[]byte("provider = \"local-api\"\nmodel = \"qwen3.6:27b\"\n"),
+		0o644,
+	); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+
+	sess := &stubSession{events: make(chan session.Event)}
+	capture := &configCaptureBackend{stubBackend: stubBackend{sess: sess}}
+	model := New(capture, nil, nil, "/tmp/test", "main", "dev", nil).
+		WithConfig(&config.Config{
+			Provider: "openrouter",
+			Model:    "tencent/hy3-preview:free",
+		})
+	model, cmd := model.handleCommand("/settings tool collapsed")
+	if cmd == nil {
+		t.Fatal("expected settings command")
+	}
+	_ = cmd()
+
+	data, err := os.ReadFile(filepath.Join(configDir, "config.toml"))
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	got := string(data)
+	if !strings.Contains(got, "tool_verbosity = 'collapsed'") {
+		t.Fatalf("config missing tool verbosity:\n%s", got)
+	}
+	if strings.Contains(got, "tencent/hy3-preview:free") {
+		t.Fatalf("settings command leaked runtime model into stable config:\n%s", got)
+	}
+	if model.Model.Config == nil {
+		t.Fatal("model config missing")
+	}
+	if model.Model.Config.Provider != "openrouter" ||
+		model.Model.Config.Model != "tencent/hy3-preview:free" ||
+		model.Model.Config.ToolVerbosity != "collapsed" {
+		t.Fatalf("runtime config = %#v, want runtime selection plus updated setting", model.Model.Config)
+	}
+	if capture.cfg == nil ||
+		capture.cfg.Provider != "openrouter" ||
+		capture.cfg.Model != "tencent/hy3-preview:free" ||
+		capture.cfg.ToolVerbosity != "collapsed" {
+		t.Fatalf("backend config = %#v, want runtime selection plus updated setting", capture.cfg)
+	}
+}
+
 func TestSettingsToolAutoClearsStableOverride(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -3668,6 +3723,62 @@ func TestModelPickerDoesNotPromoteResolvedFastDefault(t *testing.T) {
 		if item.Value == "google/gemini-2.0-flash-lite-001" && item.Group == "Configured presets" {
 			t.Fatalf("resolved fast default should not appear as configured preset: %#v", item)
 		}
+	}
+}
+
+func TestModelPickerUsesRuntimeConfigOverPersistedState(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cfgDir := filepath.Join(home, ".ion")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(cfgDir, "state.toml"),
+		[]byte("provider = \"local-api\"\nmodel = \"qwen3.6:27b\"\n"),
+		0o644,
+	); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+
+	oldListModelsForConfig := listModelsForConfig
+	listModelsForConfig = func(ctx context.Context, cfg *config.Config) ([]registry.ModelMetadata, error) {
+		if cfg.Provider != "openrouter" {
+			t.Fatalf("provider = %q, want openrouter", cfg.Provider)
+		}
+		if cfg.Model != "tencent/hy3-preview:free" {
+			t.Fatalf("model = %q, want runtime CLI override", cfg.Model)
+		}
+		return []registry.ModelMetadata{
+			{ID: "anthropic/claude-sonnet-4.5"},
+			{ID: "tencent/hy3-preview:free"},
+		}, nil
+	}
+	defer func() { listModelsForConfig = oldListModelsForConfig }()
+
+	model := readyModel(t).WithConfig(&config.Config{
+		Provider: "openrouter",
+		Model:    "tencent/hy3-preview:free",
+	})
+	updated, cmd := model.openModelPicker()
+	model = updated
+	if cmd != nil {
+		t.Fatalf("openModelPicker returned unexpected command %T", cmd)
+	}
+	if model.Picker.Overlay == nil {
+		t.Fatal("expected model picker overlay")
+	}
+	if !strings.Contains(model.Picker.Overlay.title, "openrouter") {
+		t.Fatalf("picker title = %q, want active runtime provider", model.Picker.Overlay.title)
+	}
+	if got := model.Picker.Overlay.cfg.Provider; got != "openrouter" {
+		t.Fatalf("picker config provider = %q, want openrouter", got)
+	}
+	if got := model.Picker.Overlay.cfg.Model; got != "tencent/hy3-preview:free" {
+		t.Fatalf("picker config model = %q, want runtime model", got)
+	}
+	if got := pickerDisplayItems(model.Picker.Overlay)[model.Picker.Overlay.index].Value; got != "tencent/hy3-preview:free" {
+		t.Fatalf("selected model = %q, want runtime model", got)
 	}
 }
 
@@ -4339,6 +4450,7 @@ func TestRuntimeSwitchClosesNewRuntimeWhenStateSaveFails(t *testing.T) {
 
 	cmd := model.switchRuntimeCommand(
 		&config.Config{Provider: "openai", Model: "gpt-4.1"},
+		&config.Config{Provider: "openai", Model: "gpt-4.1"},
 		presetFast,
 		session.Entry{Role: session.System, Content: "Switched"},
 		"",
@@ -4519,6 +4631,72 @@ func TestSlashModelSameValueIsNoOp(t *testing.T) {
 	model, cmd := model.handleCommand("/model z-ai/glm-5")
 	if cmd != nil {
 		t.Fatalf("expected no-op command for same model, got %T", cmd)
+	}
+}
+
+func TestSlashModelUsesRuntimeConfigOverPersistedState(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cfgDir := filepath.Join(home, ".ion")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(cfgDir, "state.toml"),
+		[]byte("provider = \"local-api\"\nmodel = \"qwen3.6:27b\"\n"),
+		0o644,
+	); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+
+	oldSession := &stubSession{events: make(chan session.Event)}
+	var observed *config.Config
+	model := New(
+		stubBackend{sess: oldSession, provider: "openrouter", model: "tencent/hy3-preview:free"},
+		nil,
+		nil,
+		"/tmp/test",
+		"main",
+		"dev",
+		func(ctx context.Context, cfg *config.Config, sessionID string) (backend.Backend, session.AgentSession, storage.Session, error) {
+			copied := *cfg
+			observed = &copied
+			newBackend := testutil.New()
+			newBackend.SetConfig(&copied)
+			return newBackend, newBackend.Session(), nil, nil
+		},
+	).WithConfig(&config.Config{
+		Provider: "openrouter",
+		Model:    "tencent/hy3-preview:free",
+	})
+
+	model, cmd := model.handleCommand("/model anthropic/claude-sonnet-4.5")
+	if cmd == nil {
+		t.Fatal("expected runtime switch command")
+	}
+	msg := cmd()
+	switched, ok := msg.(runtimeSwitchedMsg)
+	if !ok {
+		t.Fatalf("expected runtimeSwitchedMsg, got %T", msg)
+	}
+	next, _ := model.Update(switched)
+	model = next.(Model)
+
+	if observed == nil || observed.Provider != "openrouter" || observed.Model != "anthropic/claude-sonnet-4.5" {
+		t.Fatalf("switcher config = %#v, want active openrouter provider", observed)
+	}
+	if model.Model.Config == nil ||
+		model.Model.Config.Provider != "openrouter" ||
+		model.Model.Config.Model != "anthropic/claude-sonnet-4.5" {
+		t.Fatalf("app config = %#v, want updated openrouter model", model.Model.Config)
+	}
+	state, err := config.LoadState()
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	if state.Provider == nil || *state.Provider != "openrouter" ||
+		state.Model == nil || *state.Model != "anthropic/claude-sonnet-4.5" {
+		t.Fatalf("state = %#v, want explicit slash command selection persisted", state)
 	}
 }
 
