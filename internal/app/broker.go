@@ -89,6 +89,7 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		m.InFlight.Thinking = true
 		m.Progress.Compacting = false
 		m.Progress.Mode = stateIonizing
+		m.Progress.Status = ""
 		m.Progress.LastError = ""
 		m.Progress.TurnStartedAt = time.Now()
 		m.Progress.CurrentTurnInput = 0
@@ -270,6 +271,10 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 			pending.IsError = msg.Error != nil
 			entry := *pending
 			m.clearPendingTool(toolUseID, pending)
+			if len(m.InFlight.PendingTools) == 0 {
+				m.Progress.Mode = stateIonizing
+				m.Progress.Status = ""
+			}
 
 			return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
 		}
@@ -556,6 +561,7 @@ func (m Model) submitText(text string) (Model, tea.Cmd) {
 	}
 
 	m.Progress.Mode = stateIonizing
+	m.Progress.Status = ""
 	m.Progress.LastError = ""
 	m.InFlight.Thinking = true
 	if err := m.Model.Session.SubmitTurn(context.Background(), text); err != nil {

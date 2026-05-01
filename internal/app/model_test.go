@@ -495,6 +495,7 @@ func TestToolEntryFlushesToTranscript(t *testing.T) {
 	if model.InFlight.Pending == nil || model.InFlight.Pending.Role != session.Tool {
 		t.Fatalf("expected pending tool entry")
 	}
+	model.Progress.Status = "Running bash..."
 
 	updated, cmd := model.Update(session.ToolResult{
 		ToolName: "bash",
@@ -507,6 +508,12 @@ func TestToolEntryFlushesToTranscript(t *testing.T) {
 	}
 	if cmd == nil {
 		t.Fatalf("expected tea.Println command for tool result")
+	}
+	if model.Progress.Mode != stateIonizing {
+		t.Fatalf("progress mode = %v, want ionizing after tool completion", model.Progress.Mode)
+	}
+	if model.Progress.Status != "" {
+		t.Fatalf("status = %q, want cleared after tool completion", model.Progress.Status)
 	}
 	for _, event := range storageSess.appends {
 		if _, ok := event.(storage.ToolResult); ok {
@@ -4628,6 +4635,7 @@ func TestSubmitTextClearsStaleErrorImmediately(t *testing.T) {
 	model.Model.Session = sess
 	model.Progress.Mode = stateError
 	model.Progress.LastError = "old provider error"
+	model.Progress.Status = "Running bash..."
 	model.Input.Composer.SetValue("try again")
 
 	updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -4639,8 +4647,23 @@ func TestSubmitTextClearsStaleErrorImmediately(t *testing.T) {
 	if model.Progress.LastError != "" {
 		t.Fatalf("last error = %q, want cleared", model.Progress.LastError)
 	}
+	if model.Progress.Status != "" {
+		t.Fatalf("status = %q, want cleared", model.Progress.Status)
+	}
 	if len(sess.submits) != 1 || sess.submits[0] != "try again" {
 		t.Fatalf("submits = %v, want try again", sess.submits)
+	}
+}
+
+func TestTurnStartedClearsStaleToolStatus(t *testing.T) {
+	model := readyModel(t)
+	model.Progress.Status = "Running bash..."
+
+	updated, _ := model.Update(session.TurnStarted{})
+	model = updated.(Model)
+
+	if model.Progress.Status != "" {
+		t.Fatalf("status = %q, want cleared", model.Progress.Status)
 	}
 }
 
