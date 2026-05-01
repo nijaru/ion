@@ -52,6 +52,7 @@ type runtimeSwitcher func(context.Context, *config.Config, string) (backend.Back
 
 type runtimeSwitchedMsg struct {
 	cfg           *config.Config
+	reasoning     string
 	backend       backend.Backend
 	session       session.AgentSession
 	storage       storage.Session
@@ -373,6 +374,19 @@ func (m Model) WithStartupEntries(entries []session.Entry) Model {
 
 func (m Model) WithPrintedTranscript(v bool) Model {
 	m.App.PrintedTranscript = v
+	return m
+}
+
+func (m Model) WithConfig(cfg *config.Config) Model {
+	if cfg == nil {
+		return m
+	}
+	copied := *cfg
+	m.Model.Config = &copied
+	m.Progress.ReasoningEffort = normalizeThinkingValue(copied.ReasoningEffort)
+	if m.Model.Backend != nil {
+		m.Model.Backend.SetConfig(&copied)
+	}
 	return m
 }
 
@@ -708,7 +722,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.Picker.Session = nil
 		m.Progress.Status = msg.status
 		m.clearProgressError()
-		if msg.cfg != nil {
+		if msg.reasoning != "" {
+			m.Progress.ReasoningEffort = normalizeThinkingValue(msg.reasoning)
+		} else if msg.cfg != nil {
 			m.Progress.ReasoningEffort = normalizeThinkingValue(msg.cfg.ReasoningEffort)
 		}
 		if msg.storage != nil {

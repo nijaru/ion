@@ -228,6 +228,7 @@ func main() {
 	}
 
 	model := app.New(b, sess, store, cwd, branch, version, switcher).
+		WithConfig(cfg).
 		WithMode(mode).
 		WithEscalation(escalation).
 		WithTrust(trustStore, trusted, cfg.WorkspaceTrust)

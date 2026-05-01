@@ -51,6 +51,39 @@ func (m Model) runtimeConfigForActivePreset(cfg *config.Config) (*config.Config,
 	return m.runtimeConfigForPreset(cfg, m.activePreset())
 }
 
+func (m Model) commandConfig() (*config.Config, error) {
+	if m.Model.Config != nil {
+		copied := *m.Model.Config
+		return &copied, nil
+	}
+	return config.Load()
+}
+
+func mergeRuntimeSelection(dst, runtime *config.Config) {
+	if dst == nil || runtime == nil {
+		return
+	}
+	if strings.TrimSpace(runtime.Provider) != "" {
+		dst.Provider = runtime.Provider
+		dst.Model = runtime.Model
+	}
+	if strings.TrimSpace(runtime.ReasoningEffort) != "" {
+		dst.ReasoningEffort = runtime.ReasoningEffort
+	}
+	if strings.TrimSpace(runtime.FastModel) != "" {
+		dst.FastModel = runtime.FastModel
+	}
+	if strings.TrimSpace(runtime.FastReasoningEffort) != "" {
+		dst.FastReasoningEffort = runtime.FastReasoningEffort
+	}
+	if strings.TrimSpace(runtime.SummaryModel) != "" {
+		dst.SummaryModel = runtime.SummaryModel
+	}
+	if strings.TrimSpace(runtime.SummaryReasoningEffort) != "" {
+		dst.SummaryReasoningEffort = runtime.SummaryReasoningEffort
+	}
+}
+
 func (m Model) updateProviderForActivePreset(cfg *config.Config, provider string) *config.Config {
 	if cfg == nil {
 		cfg = &config.Config{}
