@@ -4,14 +4,16 @@
 
 ion supports layered project instructions.
 
-ion exposes a read-only local `/skills [query]` browser for installed
-`~/.ion/skills` bundles. It also supports an opt-in model-visible
-`read_skill(name)` tool behind `skill_tools = "read"`. The default eight-tool
-coding surface is unchanged and no skill inventory is added to the prompt.
-Marketplace install, skill activation, `manage_skill`, and self-extension are
-still deferred. The design target is explicit-install, progressive-disclosure
-skills on top of Canto's general skill primitives, not always-on prompt bloat or
-an ungated self-extension tool.
+ion exposes read-only local `/skills [query]` and `ion skill list [query]`
+browsers for installed `~/.ion/skills` bundles. It supports safe local
+`ion skill install <path>` preview plus `ion skill install --confirm <path>`
+install. It also supports an opt-in model-visible `read_skill(name)` tool behind
+`skill_tools = "read"`. The default eight-tool coding surface is unchanged and
+no skill inventory is added to the prompt. Marketplace install, skill
+activation, `manage_skill`, and self-extension are still deferred. The design
+target is explicit-install, progressive-disclosure skills on top of Canto's
+general skill primitives, not always-on prompt bloat or an ungated
+self-extension tool.
 
 ## What is implemented
 
@@ -45,12 +47,27 @@ Important limitation:
 
 ### Local skills browser
 
-`/skills [query]` lists locally installed skill metadata from `~/.ion/skills`.
-It is a host command only:
+`/skills [query]` and `ion skill list [query]` list locally installed skill
+metadata from `~/.ion/skills`. They are host commands only:
 
 - no skill inventory is added to the model prompt
 - no skill body is injected
 - no marketplace fetch or install is performed
+
+### Safe local skill install
+
+`ion skill install <path>` validates and previews a local skill bundle without
+installing it. `ion skill install --confirm <path>` stages the bundle, validates
+the staged `SKILL.md`, then installs into `~/.ion/skills/<name>`.
+
+Install boundaries:
+
+- source must be a local directory or `SKILL.md`
+- remote URLs are rejected
+- symlinks and special files are rejected
+- `.git` directories are skipped
+- existing installed skill names are not overwritten
+- fetched scripts are never run during install
 
 ### Opt-in read_skill tool
 
@@ -73,7 +90,6 @@ These are not shipped ion features yet:
 
 - skill registry
 - skill activation or selection UX
-- CLI skill commands
 - built-in slash command registry beyond the core actions
 - user-defined slash command or skill aliases
 - skill-specific prompt injection from user-facing ion config
@@ -171,10 +187,10 @@ Model preset direction:
 
 ## Open work
 
-- Add CLI list/search if the TUI browser proves useful.
-- Add safe install staging before any marketplace integration.
 - Gate `manage_skill` separately; neither `read_skill` nor `manage_skill`
   belongs in the default eight-tool coding surface.
+- Add marketplace integration only after source display, staging, trust prompts,
+  and rollback behavior are explicit.
 
 ## Relevant files
 

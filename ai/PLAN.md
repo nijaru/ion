@@ -129,9 +129,14 @@ ACP bridge correctness is no longer the active blocker.
     - Done - first slice: `skill_tools = "read"` opt-in registers
       `read_skill(name)` without adding a prompt inventory or changing the
       default eight-tool surface.
-    - Next - safe skill install staging for local/curated sources.
-    - Later - gated `manage_skill`, marketplace workflow, and
-      self-extension nudges after write-policy and undo behavior are explicit.
+    - Done - safe local install/list CLI: preview by default, explicit
+      `--confirm`, staging before install, no remote fetch, no script
+      execution, no overwrite.
+    - Next - evaluate whether `manage_skill` has enough safety/design clarity
+      for an implementation slice; otherwise leave it deferred and advance the
+      next I4 ready task.
+    - Later - marketplace workflow and self-extension nudges after
+      write-policy and undo behavior are explicit.
 
 ## I5+ Deferred Work
 

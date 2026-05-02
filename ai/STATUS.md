@@ -73,10 +73,17 @@ Fast, lightweight terminal coding agent.
   registered only when `skill_tools` enables skill tools. Gates passed before
   commit: focused config/skills/backend/tool tests, `go test ./...`, and the
   native race subset.
+- Safe local skill install is committed as `e5a5f9f`: `ion skill install
+  <path>` previews and validates, `ion skill install --confirm <path>` stages
+  then installs regular-file bundles into `~/.ion/skills/<name>`, and
+  `ion skill list [query]` mirrors `/skills`. It rejects remote sources,
+  symlinks/special files, and overwrites. Gates passed: focused cmd/skills
+  tests, `go test ./...`, native race subset, and `git diff --check`.
 
 ## Next Action
 
-1. Continue `tk-hfgh` with safe skill install staging and keep
-   `manage_skill`/marketplace/self-extension behind later explicit gates.
+1. Continue `tk-hfgh` by deciding whether the next slice should be gated
+   `manage_skill` design/tests or closing the current skills increment and
+   moving to the next ready I4 task.
 2. Keep one green slice per commit and avoid reopening Canto unless Ion tests
    expose a framework defect.

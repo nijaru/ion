@@ -168,8 +168,10 @@ Skills specifically are not another project-instruction layer. Canto can own
 agentskills-compatible registry, routing, and reusable read/manage primitives.
 Ion owns `/skills`, install staging, trust prompts, whether a skill is enabled,
 and whether skill tools are exposed to the model. The current `/skills` command
-is read-only local discovery and the base prompt must not include a skill
-inventory by default. `read_skill(name)` exists only behind the opt-in
-`skill_tools = "read"` gate; it reads installed local skill bodies by explicit
-name and stays out of the default eight-tool surface. `manage_skill`,
-marketplace install, and self-extension remain separate write-policy work.
+and `ion skill list [query]` are read-only local discovery surfaces; `ion skill
+install <path>` previews and `ion skill install --confirm <path>` stages and
+installs local bundles. The base prompt must not include a skill inventory by
+default. `read_skill(name)` exists only behind the opt-in `skill_tools = "read"`
+gate; it reads installed local skill bodies by explicit name and stays out of
+the default eight-tool surface. `manage_skill`, marketplace install, and
+self-extension remain separate write-policy work.

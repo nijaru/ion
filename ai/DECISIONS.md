@@ -21,6 +21,14 @@ Distilled architectural principles plus recent decision log.
 
 ## Recent Log
 
+### 2026-05-02 - skill install is explicit local staging
+
+Ion supports `ion skill install <path>` as validation/preview and
+`ion skill install --confirm <path>` as the install action. Installs are local
+only, stage before rename, validate through agentskills, reject symlinks/special
+files and overwrites, and never run fetched scripts. Remote marketplace install
+remains deferred.
+
 ### 2026-05-02 - read_skill is opt-in progressive disclosure
 
 Ion exposes `read_skill(name)` only when `skill_tools = "read"` is enabled. It
