@@ -75,7 +75,8 @@ Active next scope:
   mode-filtered)
 - restore workspace trust gating around mode changes (`prompt`/`strict` start
   unknown workspaces in READ; `off` disables the gate)
-- keep sandbox reporting clear in startup, footer, and `/tools`
+- keep sandbox reporting clear in startup, footer, and `/tools` (sandbox posture
+  is now cached in app state and displayed in all three surfaces)
 - avoid advanced LLM-judge, escalation, privacy, ACP, subagents, or routing work
   during I3 unless a core safety defect requires it
 

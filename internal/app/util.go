@@ -48,6 +48,14 @@ func configureModelSessionMode(agent session.AgentSession, mode session.Mode) {
 	agent.SetAutoApprove(mode == session.ModeYolo)
 }
 
+func backendSandboxSummary(b backend.Backend) string {
+	summarizer, ok := b.(backend.ToolSummarizer)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(summarizer.ToolSurface().Sandbox)
+}
+
 func printLinesCmd(lines ...string) tea.Cmd {
 	filtered := make([]string, 0, physicalLineCount(lines))
 	for _, line := range lines {

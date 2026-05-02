@@ -164,6 +164,7 @@ type AppState struct {
 	Branch            string
 	Version           string
 	ActivePreset      modelPreset
+	Sandbox           string
 	PrintedTranscript bool
 	StartupLines      []string
 	StartupEntries    []session.Entry
@@ -343,6 +344,7 @@ func New(
 	if state, err := config.LoadState(); err == nil && state.ActivePreset != nil {
 		m.App.ActivePreset = modelPresetFromString(*state.ActivePreset)
 	}
+	m.App.Sandbox = backendSandboxSummary(b)
 
 	if cfg, err := config.Load(); err == nil {
 		m.Model.Config = cfg
@@ -737,6 +739,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.Model.Session = msg.session
 		m.Model.Storage = msg.storage
 		m.Model.Config = msg.cfg
+		m.App.Sandbox = backendSandboxSummary(msg.backend)
 		m.Picker.Overlay = nil
 		m.Picker.Session = nil
 		m.Progress.Status = msg.status

@@ -64,7 +64,7 @@ func (c slashCommandInfo) available() bool {
 }
 
 func deferredFeatureMessage(feature string) string {
-	return feature + " is deferred while Ion stabilizes the native agent loop"
+	return feature + " is deferred until its roadmap phase"
 }
 
 func slashCommandDefinitions() []slashCommandInfo {

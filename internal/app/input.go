@@ -43,6 +43,10 @@ func (m Model) statusLine() string {
 		model = m.st.dim.Render(value)
 	}
 	thinking := m.st.dim.Render(normalizeThinkingValue(m.Progress.ReasoningEffort))
+	sandbox := ""
+	if value := strings.TrimSpace(m.App.Sandbox); value != "" {
+		sandbox = m.st.dim.Render("sandbox " + value)
+	}
 	dir := m.st.dim.Render("./" + filepath.Base(m.App.Workdir))
 	branch := ""
 	if m.App.Branch != "" {
@@ -65,10 +69,10 @@ func (m Model) statusLine() string {
 	}
 
 	candidates := [][]string{
-		{modeLabel, presetLabel, provider, model, thinking, usage, cost, dir, branch},
-		{modeLabel, presetLabel, provider, model, thinking, usage, cost, branch},
-		{modeLabel, presetLabel, provider, model, thinking, usage, cost},
-		{modeLabel, presetLabel, model, thinking, usage, cost},
+		{modeLabel, presetLabel, provider, model, thinking, sandbox, usage, cost, dir, branch},
+		{modeLabel, presetLabel, provider, model, thinking, sandbox, usage, cost, branch},
+		{modeLabel, presetLabel, provider, model, thinking, sandbox, usage, cost},
+		{modeLabel, presetLabel, model, thinking, sandbox, usage, cost},
 		{modeLabel, presetLabel, thinking, usage, cost},
 	}
 	for _, segments := range candidates {

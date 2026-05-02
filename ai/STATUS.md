@@ -89,11 +89,19 @@ Fast, lightweight terminal coding agent.
   `go test ./... -count=1 -timeout 300s`, the native race subset, and a tmux
   text capture for unknown-workspace startup, blocked `/mode auto`, `/trust`,
   and post-trust `/tools`.
+- Sandbox posture is now cached in app state and shown in startup, `/tools`, and
+  the footer/status line. Deferred feature copy no longer references native-loop
+  stabilization as an active phase.
+- Latest sandbox/status gates passed:
+  `go test ./cmd/ion ./internal/app ./internal/backend/canto -count=1 -timeout 180s`,
+  `go test ./... -count=1 -timeout 300s`, the native race subset, and a tmux
+  text capture with `ION_SANDBOX=auto`.
 
 ## Next Action
 
-1. Finish `tk-4570` by reviewing sandbox display and stale safety wording.
-2. Verify strict trust and sandbox status in TUI/CLI smoke if code changes.
+1. Close `tk-4570` after committing the sandbox/status slice.
+2. Pick the next narrow roadmap item from `tk ready` or open an I4 task if I3
+   has no remaining concrete blocker.
 3. Keep the scope narrow: mode/trust/sandbox/policy table stakes only, not ACP,
    subagents, routing, skills, privacy, or advanced safety research.
 
