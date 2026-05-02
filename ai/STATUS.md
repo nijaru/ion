@@ -3,9 +3,9 @@
 Fast, lightweight terminal coding agent.
 
 **Phase:** I4 advanced integrations
-**Focus:** I4 request-cache follow-up
+**Focus:** I4 request-cache continuity closed
 **Active umbrella:** none - `tk-mmcs` is closed
-**Active task:** none - next ready item is `tk-aiiz` request cache continuity
+**Active task:** none - next ready item is `tk-a4m1` ChatGPT subscription path
 **Updated:** 2026-05-02
 
 ## Current Truth
@@ -104,10 +104,16 @@ Fast, lightweight terminal coding agent.
 - `tk-n0n4` is closed. Provider-visible prompt/history redaction remains
   explicit/future, not default, because silent redaction would change task
   content.
+- `tk-aiiz` is closed. Canto `62dc906` deep-clones request tool parameters and
+  response schemas through `llm.Request.Clone()`, and Ion imports that revision
+  so provider-history capture uses the framework clone instead of a local
+  shallow clone. Gates passed: Canto `go test ./llm`, Canto `go test ./...`,
+  Ion focused `./internal/backend/canto`, Ion `go test ./...`, Ion native race
+  subset, and `git diff --check`.
 
 ## Next Action
 
-1. Start `tk-aiiz` and define the narrow request-cache continuity risk before
-   changing runtime/provider behavior.
+1. Start `tk-a4m1` and evaluate the ChatGPT subscription integration path as a
+   research/design slice before any implementation.
 2. Keep one green slice per commit and avoid reopening Canto unless Ion tests
    expose a framework defect.

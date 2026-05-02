@@ -9,8 +9,8 @@ green native baseline. Canto stays closed unless Ion evidence proves a
 framework-owned defect.
 
 Active umbrella: none. `tk-mmcs` is closed.
-Active task: none. Next ready task is `tk-aiiz` - protect request cache
-continuity.
+Active task: none. Next ready task is `tk-a4m1` - evaluate ChatGPT
+subscription integration path.
 
 ## Phases
 
@@ -155,9 +155,16 @@ ACP bridge correctness is no longer the active blocker.
       log redaction
     - provider-visible prompt/history redaction remains explicit/future because
       silent mutation would change the task content
-16. Next - `tk-aiiz` - protect request cache continuity:
+16. Done - `tk-aiiz` - protect request cache continuity:
     - identify where provider request cache headers/metadata are composed
     - protect continuity without adding prompt/KV cache machinery
+    - outcome: Canto owns the request deep-clone primitive, including tool
+      parameter schemas and response schemas; Ion provider-history capture now
+      uses that framework clone and imports Canto `62dc906`
+17. Next - `tk-a4m1` - evaluate ChatGPT subscription integration path:
+    - research current technical and ToS boundaries before implementation
+    - keep native API providers and ACP host integration as the current product
+      baselines unless evaluation proves a clean supported path
 
 ## I5+ Deferred Work
 

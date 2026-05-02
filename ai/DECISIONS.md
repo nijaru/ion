@@ -21,6 +21,14 @@ Distilled architectural principles plus recent decision log.
 
 ## Recent Log
 
+### 2026-05-02 - Canto owns request cloning
+
+Provider-history capture, provider-specific request preparation, and future
+cache-continuity checks should use Canto's `llm.Request.Clone()` rather than
+Ion-local clone helpers. Canto now deep-clones tool parameter schemas,
+response-format schemas, cache controls, messages, thinking blocks, and tool
+calls. Ion should not add prompt/KV cache machinery in this slice.
+
 ### 2026-05-02 - ripgo is promising but not Ion-ready
 
 `tk-03hf` measured local ripgo against Ion's current ripgrep-backed search.
