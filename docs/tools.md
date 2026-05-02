@@ -34,6 +34,12 @@ Explicit `seatbelt` and `bubblewrap` modes fail closed when their backend is
 unavailable. `auto` uses the platform backend when present and reports when it
 falls back to `off`.
 
+Background bash is planned as a same-tool extension rather than new default
+tools: `bash` will eventually support foreground runs, background job starts,
+job output reads, and job kills with the same policy and sandbox posture. Until
+that lands, long-running commands should still be run carefully with explicit
+timeouts or in a user-managed terminal.
+
 Approval tiers remain deliberately small:
 
 | Mode | Behavior |

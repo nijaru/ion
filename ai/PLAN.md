@@ -93,8 +93,10 @@ ACP bridge correctness is no longer the active blocker.
 
 1. Done - `tk-h9u6` - evaluate merged edit `edits[]` surface; keep the current
    split until local edit eval evidence proves a merged tool is better.
-2. Next - `tk-90ft` - background bash monitor workflow.
-3. Later - subagents/context forking, boundary-step steering, and typed
+2. Done - `tk-90ft` - background bash monitor workflow design; keep one
+   model-visible `bash` tool and add explicit background job actions later.
+3. Next - subagents/context forking or boundary-step steering.
+4. Later - typed
    thinking/provider translation.
 
 ## I5+ Deferred Work

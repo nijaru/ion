@@ -113,6 +113,48 @@ Supporting infrastructure:
 
 ## Permission Modes And Trust
 
+## Background Bash Monitor
+
+Background bash is an I4 table-stakes workflow for dev servers, file watchers,
+and long-running test loops. The design target is useful Claude-like behavior
+without growing the default model-visible tool count.
+
+Direction:
+
+- Keep one model-visible `bash` tool. Do not add separate default
+  `bash_output`, `bash_kill`, or `monitor` tools unless evals show models fail
+  with the unified shape.
+- Extend `bash` with an explicit action shape:
+  - `run` starts a command; `background: true` returns a live job id instead of
+    blocking for command completion.
+  - `output` reads buffered stdout/stderr for a job id with optional tail limits.
+  - `kill` terminates a job id and its process group.
+- Keep ordinary foreground `bash` simple and compatible with the current command
+  field. Background mode should be opt-in and obvious in the tool description.
+- Job state is live session state. Transcript rows record job ids and retrieved
+  output, but Ion does not promise that background processes survive app exit or
+  restart in the first implementation.
+- Background process execution uses the same workspace, policy category, and
+  sandbox posture as foreground `bash`.
+- `Session.Close()` must kill any remaining background process groups.
+- TUI display stays compact by default:
+  - `Bash(npm run dev) · background job bash-1`
+  - `Bash(output bash-1) · 42 lines`
+  - `Bash(kill bash-1)`
+
+Implementation should stay Ion-owned first. Canto only needs a new framework
+primitive if multiple tools need durable async task handles or if tool progress
+needs to outlive the hosting process.
+
+Acceptance criteria before implementation is considered done:
+
+- starting, polling, and killing a background command are covered by tool tests
+- cancellation of a foreground turn does not orphan background jobs
+- closing the session kills remaining jobs
+- sandbox failures fail closed before job registration
+- TUI/replay rows use the shared tool display formatter and do not dump routine
+  output by default
+
 ### Design principles
 
 - Modes are **permission postures**, not workspace trust decisions

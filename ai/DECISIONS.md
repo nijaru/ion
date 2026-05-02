@@ -21,6 +21,14 @@ Distilled architectural principles plus recent decision log.
 
 ## Recent Log
 
+### 2026-05-02 - Background bash stays one tool
+
+Ion should add background command monitoring as an extension of `bash`, not as
+separate default `bash_output`, `bash_kill`, and `monitor` tools. Foreground
+commands remain simple. Background mode is explicit, returns live session job
+ids, uses the same policy/sandbox posture, and does not promise process
+survival across app restart in the first implementation.
+
 ### 2026-05-02 - Edit surface stays split after I2 evaluation
 
 Pi's merged `edit(path, edits[])` is the best future simplification candidate,

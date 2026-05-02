@@ -128,12 +128,15 @@ Fast, lightweight terminal coding agent.
   reliability.
 - Latest edit-surface doc sanity check passed: no stale old-phase language
   remains in the canonical tool docs.
+- Background bash design is captured in `ai/specs/tools-and-modes.md` and
+  `docs/tools.md`: extend the existing `bash` tool with explicit foreground,
+  background, output, and kill actions rather than adding more default tools.
 
 ## Next Action
 
-1. Commit the completed `tk-h9u6` docs/spec slice.
-2. Start `tk-90ft` background bash monitor workflow unless a higher-value I4
-   task appears first.
+1. Commit the completed `tk-90ft` docs/spec slice.
+2. Start `tk-700w` subagent context forking unless boundary-step steering is
+   judged higher leverage first.
 3. Keep native Canto/Ion loop behavior as the acceptance baseline while adding
    advanced integrations.
 4. Continue one green slice per commit.
