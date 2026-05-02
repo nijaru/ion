@@ -9,7 +9,7 @@ import (
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/extension"
-	tableast "github.com/yuin/goldmark/extension/ast"
+	extensionast "github.com/yuin/goldmark/extension/ast"
 	"github.com/yuin/goldmark/parser"
 	"github.com/yuin/goldmark/text"
 )
@@ -84,7 +84,7 @@ func (m Model) renderMarkdownNode(node ast.Node, source []byte, depth int) []str
 		case *ast.CodeBlock:
 			lines = append(lines, m.renderMarkdownCodeBlock(n.Text(source), depth)...)
 			lines = append(lines, "")
-		case *tableast.Table:
+		case *extensionast.Table:
 			lines = append(lines, m.renderMarkdownTable(n, source, depth)...)
 			lines = append(lines, "")
 		case *ast.ThematicBreak:
@@ -117,6 +117,8 @@ func (m Model) renderMarkdownInline(node ast.Node, source []byte) string {
 			if text != "" {
 				b.WriteString(m.st.cyan.Render(text))
 			}
+		case *ast.AutoLink:
+			b.Write(n.URL(source))
 		case *ast.Emphasis:
 			text := strings.TrimSpace(m.renderMarkdownInline(n, source))
 			if text != "" {
@@ -135,6 +137,17 @@ func (m Model) renderMarkdownInline(node ast.Node, source []byte) string {
 			text := strings.TrimSpace(m.renderMarkdownInline(n, source))
 			if text != "" {
 				b.WriteString(text)
+			}
+		case *extensionast.Strikethrough:
+			text := strings.TrimSpace(m.renderMarkdownInline(n, source))
+			if text != "" {
+				b.WriteString(text)
+			}
+		case *extensionast.TaskCheckBox:
+			if n.IsChecked {
+				b.WriteString("[x] ")
+			} else {
+				b.WriteString("[ ] ")
 			}
 		case *ast.RawHTML:
 			continue
@@ -191,17 +204,17 @@ func (m Model) renderMarkdownCodeBlock(content []byte, depth int) []string {
 	return out
 }
 
-func (m Model) renderMarkdownTable(table *tableast.Table, source []byte, depth int) []string {
+func (m Model) renderMarkdownTable(table *extensionast.Table, source []byte, depth int) []string {
 	var headers []string
 	rows := make([]markdownTableRow, 0, 4)
 	alignments := table.Alignments
 
 	for child := table.FirstChild(); child != nil; child = child.NextSibling() {
 		switch n := child.(type) {
-		case *tableast.TableHeader:
+		case *extensionast.TableHeader:
 			headers = renderTableCells(n, source)
-		case *tableast.TableRow:
-		rows = append(rows, markdownTableRow{cells: renderTableCells(n, source)})
+		case *extensionast.TableRow:
+			rows = append(rows, markdownTableRow{cells: renderTableCells(n, source)})
 		}
 	}
 	if len(headers) == 0 && len(rows) > 0 {
@@ -219,10 +232,10 @@ func (m Model) renderMarkdownTable(table *tableast.Table, source []byte, depth i
 		}
 	}
 	if len(alignments) < cols {
-		expanded := make([]tableast.Alignment, cols)
+		expanded := make([]extensionast.Alignment, cols)
 		copy(expanded, alignments)
 		for i := len(alignments); i < cols; i++ {
-			expanded[i] = tableast.AlignNone
+			expanded[i] = extensionast.AlignNone
 		}
 		alignments = expanded
 	}
@@ -287,6 +300,20 @@ func renderTableInline(node ast.Node, source []byte) string {
 			}
 		case *ast.String:
 			b.Write(n.Value)
+		case *ast.CodeSpan:
+			b.WriteString(strings.TrimSpace(renderTableInline(n, source)))
+		case *ast.AutoLink:
+			b.Write(n.URL(source))
+		case *ast.Emphasis, *ast.Link, *ast.Image, *extensionast.Strikethrough:
+			if child.HasChildren() {
+				b.WriteString(renderTableInline(child, source))
+			}
+		case *extensionast.TaskCheckBox:
+			if n.IsChecked {
+				b.WriteString("[x] ")
+			} else {
+				b.WriteString("[ ] ")
+			}
 		default:
 			if child.HasChildren() {
 				b.WriteString(renderTableInline(child, source))
@@ -314,7 +341,7 @@ func renderMarkdownTablePlain(indent string, headers []string, rows []markdownTa
 	return normalizeMarkdownLines(lines)
 }
 
-func renderTableRow(cells []string, widths []int, aligns []tableast.Alignment, header bool) string {
+func renderTableRow(cells []string, widths []int, aligns []extensionast.Alignment, header bool) string {
 	parts := make([]string, len(widths))
 	for i := range widths {
 		value := ""
@@ -329,7 +356,7 @@ func renderTableRow(cells []string, widths []int, aligns []tableast.Alignment, h
 	return " " + strings.Join(parts, " │ ") + " "
 }
 
-func padTableCell(value string, width int, align tableast.Alignment) string {
+func padTableCell(value string, width int, align extensionast.Alignment) string {
 	if width <= 0 {
 		return value
 	}
@@ -339,9 +366,9 @@ func padTableCell(value string, width int, align tableast.Alignment) string {
 	}
 	pad := width - visible
 	switch align {
-	case tableast.AlignRight:
+	case extensionast.AlignRight:
 		return strings.Repeat(" ", pad) + value
-	case tableast.AlignCenter:
+	case extensionast.AlignCenter:
 		left := pad / 2
 		right := pad - left
 		return strings.Repeat(" ", left) + value + strings.Repeat(" ", right)
