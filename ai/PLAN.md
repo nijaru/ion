@@ -9,8 +9,8 @@ green native baseline. Canto stays closed unless Ion evidence proves a
 framework-owned defect.
 
 Active umbrella: none. `tk-mmcs` is closed.
-Active task: none. Next ready task is `tk-n0n4` - privacy PII detection and
-redaction pipeline.
+Active task: none. Next ready task is `tk-aiiz` - protect request cache
+continuity.
 
 ## Phases
 
@@ -148,9 +148,16 @@ ACP bridge correctness is no longer the active blocker.
       truncation, and large-repo latency before considering replacement
     - outcome: keep rg baseline; ripgo is faster in one small benchmark but
       failed `.git` exclusion parity and lacks a CLI `rg --files` equivalent
-15. Next - `tk-n0n4` - privacy PII detection and redaction pipeline:
-    - define the narrow first slice and keep it off the core prompt/tool hot
-      path unless explicitly enabled
+15. Done - `tk-n0n4` - privacy PII detection and redaction pipeline:
+    - deterministic redaction covers approval/TUI display surfaces from earlier
+      slices
+    - current closeout adds ACP headless host-display redaction and ACP stderr
+      log redaction
+    - provider-visible prompt/history redaction remains explicit/future because
+      silent mutation would change the task content
+16. Next - `tk-aiiz` - protect request cache continuity:
+    - identify where provider request cache headers/metadata are composed
+    - protect continuity without adding prompt/KV cache machinery
 
 ## I5+ Deferred Work
 

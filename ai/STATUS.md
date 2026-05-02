@@ -3,9 +3,9 @@
 Fast, lightweight terminal coding agent.
 
 **Phase:** I4 advanced integrations
-**Focus:** I4 tool/search follow-up
+**Focus:** I4 request-cache follow-up
 **Active umbrella:** none - `tk-mmcs` is closed
-**Active task:** none - next ready item is `tk-n0n4` privacy pipeline
+**Active task:** none - next ready item is `tk-aiiz` request cache continuity
 **Updated:** 2026-05-02
 
 ## Current Truth
@@ -95,11 +95,19 @@ Fast, lightweight terminal coding agent.
   CLI flags include `.git/config` in a fixture where Ion excludes `.git/**`,
   and there is no CLI `rg --files` equivalent for current `glob`.
 - `tk-03hf` is closed. Current decision: keep ripgrep-backed Ion tools.
+- `tk-n0n4` closeout commits:
+  - `f069150` redacts ACP headless tool start/raw input, output deltas, and
+    tool-result display payloads before sending them to external ACP hosts.
+  - `c1298cf` redacts ACP stderr debug logs before appending to disk.
+  Latest gates passed: focused cmd/acp/privacy tests, `go test ./...`, native
+  race subset, and `git diff --check`.
+- `tk-n0n4` is closed. Provider-visible prompt/history redaction remains
+  explicit/future, not default, because silent redaction would change task
+  content.
 
 ## Next Action
 
-1. Continue the next ready I4 task: `tk-n0n4` privacy PII detection/redaction
-   pipeline. Keep it scoped so it does not enter the core prompt/tool hot path
-   by default.
+1. Start `tk-aiiz` and define the narrow request-cache continuity risk before
+   changing runtime/provider behavior.
 2. Keep one green slice per commit and avoid reopening Canto unless Ion tests
    expose a framework defect.

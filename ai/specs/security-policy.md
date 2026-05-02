@@ -75,3 +75,17 @@ docs currently document `omni-moderation-latest` for harmful-content
 classification; they do not establish a dedicated PII detector for Ion to depend
 on. If a PII-specific model becomes official, evaluate it as one detector in the
 pipeline, with fail-closed behavior and auditability.
+
+Implemented deterministic surfaces:
+
+- approval descriptions and args shown in the TUI
+- approval notification text
+- live tool preview titles
+- ACP headless tool start raw input/title, streamed tool-output display, and
+  tool-result display sent to external ACP hosts
+- ACP stderr debug logs when `ION_ACP_STDERR_LOG` is enabled
+
+Provider-visible prompt/history redaction is not enabled by default. Redacting
+the actual prompt or tool observation can change the task the model is solving.
+Future prompt/export/cache privacy should therefore be explicit, scoped, and
+auditable rather than silently mutating core agent history.
