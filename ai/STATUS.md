@@ -5,7 +5,7 @@ Fast, lightweight terminal coding agent.
 **Phase:** I4 advanced integrations
 **Focus:** I4 tool/search follow-up
 **Active umbrella:** none - `tk-mmcs` is closed
-**Active task:** none - next ready item is `tk-03hf` ripgo benchmark
+**Active task:** none - next ready item is `tk-n0n4` privacy pipeline
 **Updated:** 2026-05-02
 
 ## Current Truth
@@ -89,10 +89,17 @@ Fast, lightweight terminal coding agent.
 - `tk-exeg` is closed as a design/spec task. No `manage_skill` code is exposed
   yet; host-owned `ion skill install --confirm` remains the only skill mutation
   path.
+- `tk-03hf` evidence is captured in
+  `ai/research/tool-surface-sota-2026-05.md`. ripgo is faster on one warmed
+  Ion grep benchmark, but it is not semantically ready to replace rg: closest
+  CLI flags include `.git/config` in a fixture where Ion excludes `.git/**`,
+  and there is no CLI `rg --files` equivalent for current `glob`.
+- `tk-03hf` is closed. Current decision: keep ripgrep-backed Ion tools.
 
 ## Next Action
 
-1. Start `tk-03hf` and benchmark whether ripgo can match current ripgrep-backed
-   search semantics before any replacement work.
+1. Continue the next ready I4 task: `tk-n0n4` privacy PII detection/redaction
+   pipeline. Keep it scoped so it does not enter the core prompt/tool hot path
+   by default.
 2. Keep one green slice per commit and avoid reopening Canto unless Ion tests
    expose a framework defect.

@@ -21,6 +21,15 @@ Distilled architectural principles plus recent decision log.
 
 ## Recent Log
 
+### 2026-05-02 - ripgo is promising but not Ion-ready
+
+`tk-03hf` measured local ripgo against Ion's current ripgrep-backed search.
+ripgo was faster on a small Ion `internal/` grep benchmark, but the closest CLI
+flags still searched `.git/config` in a fixture where Ion's `rg --glob
+'!.git/**'` path excludes it, and ripgo CLI lacks the `rg --files` surface Ion
+uses for `glob`. Keep ripgrep as the baseline until ripgo has semantic parity
+tests and direct `walk`/`ignore` integration for file listing.
+
 ### 2026-05-02 - manage_skill is a protected write surface
 
 Future `manage_skill` is not a normal default tool. It requires

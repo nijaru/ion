@@ -9,8 +9,8 @@ green native baseline. Canto stays closed unless Ion evidence proves a
 framework-owned defect.
 
 Active umbrella: none. `tk-mmcs` is closed.
-Active task: none. Next ready task is `tk-03hf` - benchmark ripgo search engine
-replacement.
+Active task: none. Next ready task is `tk-n0n4` - privacy PII detection and
+redaction pipeline.
 
 ## Phases
 
@@ -142,10 +142,15 @@ ACP bridge correctness is no longer the active blocker.
       is boring
     - outcome: spec captured in `ai/specs/instructions-and-skills.md`;
       code implementation is a later slice, not part of this design gate
-14. Next - `tk-03hf` - benchmark ripgo search engine replacement:
+14. Done - `tk-03hf` - benchmark ripgo search engine replacement:
     - compare current ripgrep-backed behavior against ripgo on semantics first
     - include ignored files, hidden files, `.git` exclusion, cancellation,
       truncation, and large-repo latency before considering replacement
+    - outcome: keep rg baseline; ripgo is faster in one small benchmark but
+      failed `.git` exclusion parity and lacks a CLI `rg --files` equivalent
+15. Next - `tk-n0n4` - privacy PII detection and redaction pipeline:
+    - define the narrow first slice and keep it off the core prompt/tool hot
+      path unless explicitly enabled
 
 ## I5+ Deferred Work
 
