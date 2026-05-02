@@ -2,199 +2,48 @@
 
 Fast, lightweight terminal coding agent.
 
-**Phase:** I4 advanced integrations
-**Focus:** Reopen deferred integrations from the stable I0-I3 baseline.
-**Active umbrella:** none - `tk-mmcs` is closed.
-**Active task:** none - next I4 item pending.
+**Phase:** I4 advanced integrations  
+**Focus:** portable sessions and other table-stakes advanced workflow pieces  
+**Active umbrella:** none - `tk-mmcs` is closed  
+**Active task:** `tk-4lty` - Session: cross-host export/import bundle  
 **Updated:** 2026-05-02
 
 ## Current Truth
 
-- Ion has one native baseline path. The old global stabilization split is gone.
-- Current P1 tools are `bash`, `read`, `write`, `edit`, `multi_edit`, `list`,
-  `grep`, and `glob`; `verify` is not registered by default.
-- Canto owns provider-visible history, durable events, turn execution, retry,
-  cancellation settlement, and compaction primitives.
-- Ion owns TUI/CLI UX, commands, settings/state, display projection, product
-  tools, provider selection, and safety/trust policy.
-- Canto is clean and remains framework-focused. Ion is the active repo unless a
-  test or smoke proves a Canto-owned defect.
+- Ion has one native baseline path. There is no global stabilization mode.
+- I0-I3 are complete: dirty baseline, native boundary refactor, shell polish,
+  and safety/trust/sandbox table stakes are green.
+- Canto owns durable events, provider-visible history, agent/tool lifecycle,
+  reasoning capability translation, and compaction primitives.
+- Ion owns TUI/CLI UX, commands, settings/state, product tools, provider
+  selection, display projection, safety/trust policy, and session bundle UX.
+- Current default tool surface is `bash`, `read`, `write`, `edit`,
+  `multi_edit`, `list`, `grep`, and `glob`; `verify` is not registered by
+  default.
+- Canto is closed unless Ion evidence proves a framework-owned defect.
 
 ## Latest Evidence
 
-- Source/docs dirty baseline committed as `a571cef`:
-  `feat(stabilization): close native shell baseline`.
-- Gates before that commit passed:
-  `go test ./... -count=1 -timeout 300s` and the native race subset.
-- A concrete backend watcher bug was fixed during closeout:
-  `TestCrossProviderHandoffPreservesPromptTruth` previously timed out because a
-  `translateEvents` goroutine could wait forever on an unstopped watch. Focused
-  backend tests and the full suite now pass.
-- Prompt-budget and tool-surface research have been distilled into specs and
-  decisions. Research files remain evidence, not canonical behavior.
-- AI context cleanup is committed in Ion and Canto. Ion root `ai/` now uses the
-  five canonical files, and Canto feedback intake is folded into its tracker.
-- App shell boundary refactor is complete: command catalog, settings,
-  session/cost, rewind, picker, and runtime switching helpers are split out of
-  `internal/app/commands.go`.
-- Latest app-shell gates passed:
-  `go test ./internal/app -count=1 -timeout 120s`,
+- `tk-4lty` now has a storage-level portable bundle plus CLI surface:
+  `--export-session <file>` and `--import-session <file>`.
+- The bundle format is versioned JSON and includes Ion `session_meta`, Canto
+  event envelopes, Canto ancestry metadata, per-session event checksums, a
+  whole-bundle checksum, and explicit conflict detection.
+- Canto `7dec159` exposes portable event JSON helpers and ancestry import
+  primitives; Ion imports that revision.
+- Latest bundle gates passed:
+  `go test ./cmd/ion ./internal/storage -count=1 -timeout 180s`,
   `go test ./... -count=1 -timeout 300s`, and
   `go test -race ./cmd/ion ./internal/app ./internal/backend/canto ./internal/backend/canto/tools ./internal/storage -count=1 -timeout 300s`.
-- CLI/config boundary refactor is complete: flag registration and normalization
-  live in `cmd/ion/flags.go`, runtime selection in `cmd/ion/selection.go`, and
-  backend/session opening in `cmd/ion/runtime.go`.
-- Latest CLI/config gates passed:
-  `go test ./cmd/ion ./internal/config -count=1 -timeout 180s`,
-  `go test ./... -count=1 -timeout 300s`, and the native race subset.
-- File tools are split by responsibility: common workspace/checkpoint helpers
-  remain in `file.go`, with read/write/edit/list implementations in focused
-  files.
-- Latest file-tool gates passed:
-  `go test ./internal/backend/canto/tools -count=1 -timeout 180s`,
-  `go test ./... -count=1 -timeout 300s`, and the native race subset.
-- CantoBackend lifecycle responsibilities are split out of the previous
-  monolithic `internal/backend/canto/backend.go`: metadata, lifecycle,
-  providers/retry, turns/cancel, event translation, compaction, policy, memory,
-  reasoning, and deferred surfaces now live in focused package files.
-- Latest backend-lifecycle gates passed:
-  `go test ./internal/backend/canto -count=1 -timeout 180s`,
-  `go test ./... -count=1 -timeout 300s`, and the native race subset.
-- Markdown rendering now preserves GFM task checkboxes, autolinks,
-  strikethrough content, and inline code/autolinks inside rendered tables.
-- Latest markdown gates passed:
-  `go test ./internal/app -count=1 -timeout 180s`,
-  `go test ./... -count=1 -timeout 300s`, and the native race subset.
-- Edit-surface design is distilled into `ai/specs/tools-and-modes.md` and
-  `ai/DECISIONS.md`: keep `write`, `edit`, and `multi_edit` for the current I4
-  surface; a Pi-style merged `edit(edits[])` remains a candidate only after
-  local edit eval evidence.
-- I2 final shell sweep passed against Fedora `local-api/qwen3.6:27b-uncensored`:
-  live request-history smoke verified tool call, persisted resume, and follow-up
-  provider history; tmux text capture covered fresh launch, `/tools`,
-  `/settings`, `/session`, queued input, bash display, `--continue`, and resumed
-  follow-up.
-- Read mode now hides unavailable write/execute tools from provider-visible
-  tool specs and from `ToolSurface()` summaries while policy still denies any
-  direct write/execute call that reaches execution.
-- Latest read-mode gates passed:
-  `go test ./cmd/ion ./internal/backend ./internal/backend/canto -count=1 -timeout 180s`,
-  `go test ./... -count=1 -timeout 300s`, the native race subset, and a tmux
-  text capture for `--mode read` startup plus `/tools`.
-- Workspace trust gating is restored for I3: `workspace_trust=prompt|strict`
-  starts unknown workspaces in READ mode, `/trust` is available for prompt-mode
-  trust, strict mode stays externally managed, and `workspace_trust=off`
-  disables the gate.
-- Latest trust-gate gates passed:
-  `go test ./cmd/ion ./internal/app ./internal/workspace -count=1 -timeout 180s`,
-  `go test ./... -count=1 -timeout 300s`, the native race subset, and a tmux
-  text capture for unknown-workspace startup, blocked `/mode auto`, `/trust`,
-  and post-trust `/tools`.
-- Sandbox posture is now cached in app state and shown in startup, `/tools`, and
-  the footer/status line. Deferred feature copy no longer references native-loop
-  stabilization as an active phase.
-- Latest sandbox/status gates passed:
-  `go test ./cmd/ion ./internal/app ./internal/backend/canto -count=1 -timeout 180s`,
-  `go test ./... -count=1 -timeout 300s`, the native race subset, and a tmux
-  text capture with `ION_SANDBOX=auto`.
-- `tk-mmcs` is closed. Final Fedora `local-api/qwen3.6:27b-uncensored` live
-  smoke passed with a real bash tool call, persisted resume, follow-up returning
-  `continued`, and provider request capture verifying prior user, tool call,
-  tool result, assistant, and resume history order.
-- ACP agent stderr is separated from the user-visible session stream. It is
-  suppressed by default and can be redirected to a debug file with
-  `ION_ACP_STDERR_LOG`.
-- Latest ACP stderr gates passed:
-  `go test ./internal/backend/acp -count=1 -timeout 180s`,
-  `go test ./... -count=1 -timeout 300s`, and the native race subset.
-- ACP `session/new` now sends an explicit Ion `_meta.ion` context payload with
-  cwd, branch, model, Ion session id, resume hint, and project instruction text
-  when present; the request also sends ACP's required explicit empty
-  `mcpServers` list.
-- Latest ACP context gates passed:
-  `go test ./internal/backend/acp -count=1 -timeout 180s`,
-  `go test ./... -count=1 -timeout 300s`, the native race subset, and
-  `go test -race ./internal/backend/acp -count=1 -timeout 180s`.
-- ACP token usage extension metadata now maps to `session.TokenUsage` from
-  `_meta.tokenUsage`, `_meta.token_usage`, `_meta._tokenUsage`, and
-  `_meta.usage` payloads on session notifications or update payloads.
-- Latest ACP token-usage gates passed:
-  `go test ./internal/backend/acp -count=1 -timeout 180s`,
-  `go test ./... -count=1 -timeout 300s`, the native race subset, and
-  `go test -race ./internal/backend/acp -count=1 -timeout 180s`.
-- Post-I2 merged edit evaluation is closed: keep `write`, `edit`, and
-  `multi_edit` for I4; only replace `edit` + `multi_edit` with a Pi-style
-  merged `edit(edits[])` after local edit eval evidence proves equal or better
-  reliability.
-- Latest edit-surface doc sanity check passed: no stale old-phase language
-  remains in the canonical tool docs.
-- Background bash design is captured in `ai/specs/tools-and-modes.md` and
-  `docs/tools.md`: extend the existing `bash` tool with explicit foreground,
-  background, output, and kill actions rather than adding more default tools.
-- `tk-700w` is closed. Subagent direction is clarified in
-  `ai/specs/subagent-personas-and-routing.md`
-  and `docs/subagents.md`: implementation pieces exist, but default
-  registration waits for explicit `summary`/`fork`/`none` context modes and
-  child-session ownership tests.
-- `tk-z1kk` and `tk-zxgq` are closed. Boundary-step steering is implemented as
-  an opt-in native mode:
-  `busy_input = "steer"` accepts busy input only while tools are active and
-  falls back to queued follow-up otherwise. Accepted steering is consumed by a
-  CantoBackend prompt mutator as non-transcript steering context before the next
-  provider request. Backend tests cover the app-independent boundary too: active
-  turn without an active tool still queues, and a slow bash tool call accepts
-  steering that appears in the next provider request.
-- Latest steering gates passed:
-  `go test ./internal/backend/canto ./internal/app ./internal/config ./internal/session -count=1 -timeout 180s`,
-  `go test ./... -count=1 -timeout 300s`, and
-  `go test -race ./cmd/ion ./internal/app ./internal/backend/canto ./internal/backend/canto/tools ./internal/storage -count=1 -timeout 300s`.
-- `tk-369n` is closed. Canto `8f92ed7` adds typed reasoning capability
-  metadata, drops unsupported effort/budget controls during request
-  preparation, stops generic OpenAI-compatible endpoints from inheriting OpenAI
-  reasoning params, and gives OpenAI/Anthropic model caps structured effort or
-  budget metadata. Ion imports that revision and filters `/thinking` request
-  fields through `SupportsReasoningEffort`.
-- Latest typed-thinking gates passed:
-  `go test ./internal/backend/canto ./cmd/ion ./internal/config -count=1 -timeout 180s`,
-  `go test ./... -count=1 -timeout 300s`, and
-  `go test -race ./cmd/ion ./internal/app ./internal/backend/canto ./internal/backend/canto/tools ./internal/storage -count=1 -timeout 300s`.
-- `tk-t818` is closed. Ion's tools were audited against Canto's stable
-  `coding` primitives. Decision: keep Ion-owned model-visible wrappers because
-  they carry product-specific names, line-numbered reads, ripgrep-backed
-  `grep`/`glob`, checkpoints, sandbox/mode integration, compact TUI display,
-  and edit recovery errors. Canto's primitives remain framework substrate, not
-  a direct replacement for the Ion tool surface.
-- `tk-g78q` is implemented as a safe first slice: `/skills [query]` lists local
-  `~/.ion/skills` metadata through `internal/skills` without prompt injection,
-  activation, marketplace install, or model-visible `read_skill`/`manage_skill`
-  tools. Skills stay explicit-install and progressive-disclosure.
-- Latest skills gates passed:
-  `go test ./internal/skills ./internal/app ./internal/config -count=1 -timeout 180s`,
-  `go test ./... -count=1 -timeout 300s`, and the native race subset.
-- Follow-up `tk-hfgh` tracks safe install staging, model-visible `read_skill`,
-  gated `manage_skill`, and self-extension nudges after explicit trust/write
-  policy gates exist.
-- `tk-8174` local branching is implemented: `/fork [label]` requires a
-  materialized session, calls Ion storage `ForkSession`, uses Canto
-  `ForkWithOptions`/ancestry metadata, indexes the child in Ion session
-  metadata, and switches the TUI into the forked session. `/tree` reads the
-  same lineage/child metadata and prints the current session tree.
-- Cross-host transfer is split into `tk-4lty` so it can use a versioned
-  export/import bundle with integrity and conflict handling instead of raw
-  SQLite sync.
-- Latest session-branching focused gates passed:
-  `go test ./internal/storage ./internal/app -count=1 -timeout 180s`,
-  `go test ./... -count=1 -timeout 300s`, and the native race subset.
+- Recent I4 completed slices: boundary-step steering, typed thinking
+  capability filtering, Canto coding primitive audit, local `/skills` browser,
+  local `/fork` and `/tree` session branching.
 
 ## Next Action
 
-1. Commit the completed local session branch/tree slice.
-2. Continue with `tk-4lty` cross-host export/import or the next ready P3 item.
-3. Add a tmux/live check later if steering is promoted beyond opt-in settings.
-4. Keep native Canto/Ion loop behavior as the acceptance baseline while adding
-   advanced integrations.
-5. Continue one green slice per commit.
-
-## Active Tasks
-
-- none
+1. Finish `tk-4lty`: run a real file-level export/import smoke using the CLI,
+   update task logs, then close the task if the smoke is clean.
+2. Continue the I4 queue with the next ready P3 item:
+   `TUI: external editor handoff` or `ACP: Implement ion as an ACP agent`.
+3. Keep one green slice per commit and avoid reopening Canto unless Ion tests
+   expose a framework defect.

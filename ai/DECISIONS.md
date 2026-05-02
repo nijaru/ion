@@ -21,6 +21,15 @@ Distilled architectural principles plus recent decision log.
 
 ## Recent Log
 
+### 2026-05-02 - Cross-host sessions use portable bundles
+
+Ion should not expose raw SQLite sync as the product surface for moving
+sessions between machines. Cross-host transfer uses a versioned JSON bundle
+that preserves Ion session metadata, Canto event envelopes, Canto ancestry
+metadata, per-session event checksums, a whole-bundle checksum, and explicit
+import conflicts. Canto owns portable event/ancestry primitives; Ion owns the
+CLI/TUI import/export workflow.
+
 ### 2026-05-02 - Session branching uses Canto lineage
 
 Ion should not invent a second session tree. Local branching uses Canto

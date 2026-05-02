@@ -117,12 +117,16 @@ Persistent user-editable settings live in `~/.ion/config.toml`.
 Mutable runtime choices live in `~/.ion/state.toml`.
 Workspace trust lives in `~/.ion/trusted_workspaces.json`.
 Durable sessions live in Ion storage backed by Canto session events.
-Local branching uses Canto's session lineage primitives. Ion exposes the first
-product surface as `/fork [label]`: it branches a materialized session, indexes
-the child in Ion session metadata, then switches the TUI into the forked
-session. `/tree` renders the current lineage and immediate children from the
-same ancestry metadata. Cross-host transfer is a separate export/import bundle
-layer, not raw SQLite file sync as a product surface.
+Local branching uses Canto's session lineage primitives. Ion exposes `/fork
+[label]`: it branches a materialized session, indexes the child in Ion session
+metadata, then switches the TUI into the forked session. `/tree` renders the
+current lineage and immediate children from the same ancestry metadata.
+
+Cross-host transfer uses a versioned export/import bundle, not raw SQLite file
+sync. The bundle contains Ion session metadata, Canto event envelopes, ancestry
+metadata, per-session event checksums, a whole-bundle checksum, and explicit
+import conflict behavior. The scriptable surface is `--export-session <file>`
+with `--resume <id>` or `--continue`, plus `--import-session <file>`.
 
 Startup must not silently persist provider/model choices. Explicit CLI/env
 overrides affect the current process. TUI settings and picker actions persist
