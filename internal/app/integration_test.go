@@ -183,14 +183,14 @@ func TestMultiplexedSwarms(t *testing.T) {
 		},
 		{Event: session.ToolCallStarted{
 			Base:     session.Base{AgentID: "Tester"},
-			ToolName: "verify",
+			ToolName: "bash",
 			Args:     "go test ./...",
 		}, Delay: 10 * time.Millisecond},
 		{Event: session.ToolResult{
 			Base:      session.Base{AgentID: "Tester"},
-			ToolName:  "verify",
-			ToolUseID: "verify-1",
-			Result:    "Verification PASSED: go test ./...\n\nOutput:\nOK",
+			ToolName:  "bash",
+			ToolUseID: "bash-1",
+			Result:    "OK",
 		}, Delay: 20 * time.Millisecond},
 		{Event: session.AgentMessage{Message: "All good."}, Delay: 10 * time.Millisecond},
 		{Event: session.TurnFinished{}, Delay: 0},
@@ -222,8 +222,8 @@ func TestMultiplexedSwarms(t *testing.T) {
 	resumed, _ := store.ResumeSession(context.Background(), sess.ID())
 	storedEntries, _ := resumed.Entries(context.Background())
 	for _, e := range storedEntries {
-		if e.Role == session.Tool && strings.Contains(e.Title, "verify") {
-			t.Fatalf("verification result should not be app-persisted: %#v", storedEntries)
+		if e.Role == session.Tool && strings.Contains(e.Title, "bash") {
+			t.Fatalf("live tool result should not be app-persisted: %#v", storedEntries)
 		}
 	}
 }

@@ -399,7 +399,7 @@ func isReadLikeTool(title string) bool {
 
 func isBashLikeTool(title string) bool {
 	switch toolTitleVerb(title) {
-	case "bash", "verify":
+	case "bash":
 		return true
 	default:
 		return false

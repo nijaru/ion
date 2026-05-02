@@ -1027,7 +1027,7 @@ func TestCantoStoreRejectsModelVisibleAppends(t *testing.T) {
 	cases := []any{
 		User{Type: "user", Content: "user"},
 		Agent{Type: "agent", Content: []Block{{Type: "text", Text: &content}}},
-		ToolUse{Type: "tool_use", ID: "tool-123", Name: "verify"},
+		ToolUse{Type: "tool_use", ID: "tool-123", Name: "bash"},
 		ToolResult{Type: "tool_result", ToolUseID: "tool-123", Content: "ok"},
 	}
 	for _, event := range cases {

@@ -1477,17 +1477,17 @@ func TestViewRendersProgressWithoutLeadingSeparator(t *testing.T) {
 func TestViewAddsBlankLineBetweenActiveContentAndShell(t *testing.T) {
 	model := readyModel(t)
 	model.Progress.Mode = stateWorking
-	model.Progress.Status = "Running verify..."
+	model.Progress.Status = "Running bash..."
 	model.InFlight.PendingTools = map[string]*session.Entry{
-		"verify-1": {
+		"bash-1": {
 			Role:  session.Tool,
-			Title: "Verify(go test ./...)",
+			Title: "Bash(go test ./...)",
 		},
 	}
 
 	view := ansi.Strip(model.View().Content)
-	if !strings.Contains(view, "• Verify(go test ./...)\n\n") ||
-		!strings.Contains(view, "Running verify...") {
+	if !strings.Contains(view, "• Bash(go test ./...)\n\n") ||
+		!strings.Contains(view, "Running bash...") {
 		t.Fatalf("view = %q, want one blank row between active tool and shell progress", view)
 	}
 }

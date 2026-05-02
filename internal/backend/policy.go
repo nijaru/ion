@@ -66,7 +66,6 @@ func NewPolicyEngine() *PolicyEngine {
 			"edit":            CategoryWrite,
 			"multi_edit":      CategoryWrite,
 			"bash":            CategoryExecute,
-			"verify":          CategoryExecute,
 			"mcp":             CategorySensitive,
 			"subagent":        CategorySensitive,
 		},
