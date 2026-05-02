@@ -16,10 +16,12 @@ import (
 	"github.com/nijaru/ion/internal/config"
 )
 
-type Kind string
-type Family string
-type AuthKind string
-type Runtime string
+type (
+	Kind     string
+	Family   string
+	AuthKind string
+	Runtime  string
+)
 
 const (
 	KindDirect       Kind = "direct"
@@ -78,8 +80,10 @@ var (
 	localProbeCache = map[string]localProbeResult{}
 )
 
-const localProbeTTL = 5 * time.Second
-const localProbeTimeout = 300 * time.Millisecond
+const (
+	localProbeTTL     = 5 * time.Second
+	localProbeTimeout = 300 * time.Millisecond
+)
 
 func All() []Definition {
 	return slices.Clone(definitions)
@@ -209,7 +213,11 @@ func CredentialState(cfg *config.Config, def Definition) (string, bool) {
 	return CredentialStateContext(context.Background(), cfg, def)
 }
 
-func CredentialStateContext(ctx context.Context, cfg *config.Config, def Definition) (string, bool) {
+func CredentialStateContext(
+	ctx context.Context,
+	cfg *config.Config,
+	def Definition,
+) (string, bool) {
 	if def.Runtime == RuntimeACP {
 		return "Subscription", true
 	}
@@ -222,7 +230,8 @@ func CredentialStateContext(ctx context.Context, cfg *config.Config, def Definit
 	if def.AuthKind == AuthLocal {
 		return "Ready", true
 	}
-	if def.Kind == KindCustom && def.DefaultEndpoint == "" && strings.TrimSpace(cfg.Endpoint) == "" {
+	if def.Kind == KindCustom && def.DefaultEndpoint == "" &&
+		strings.TrimSpace(cfg.Endpoint) == "" {
 		return "Set endpoint", false
 	}
 	for _, envVar := range authEnvVars(cfg, def) {
@@ -430,7 +439,12 @@ func probeOpenAICompatibleEndpoint(ctx context.Context, endpoint string) bool {
 		reqCtx, cancel = context.WithTimeout(reqCtx, localProbeTimeout)
 		defer cancel()
 	}
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, strings.TrimRight(endpoint, "/")+"/models", nil)
+	req, err := http.NewRequestWithContext(
+		reqCtx,
+		http.MethodGet,
+		strings.TrimRight(endpoint, "/")+"/models",
+		nil,
+	)
 	if err != nil {
 		return false
 	}
@@ -457,26 +471,233 @@ func probeOpenAICompatibleEndpoint(ctx context.Context, endpoint string) bool {
 }
 
 var definitions = []Definition{
-	{ID: "anthropic", DisplayName: "Anthropic", Kind: KindDirect, Family: FamilyAnthropic, AuthKind: AuthAPIKey, DefaultEnvVar: "ANTHROPIC_API_KEY", SupportsModelListing: true, Runtime: RuntimeNative},
-	{ID: "openai", DisplayName: "OpenAI", Kind: KindDirect, Family: FamilyOpenAI, AuthKind: AuthAPIKey, DefaultEnvVar: "OPENAI_API_KEY", DefaultEndpoint: "https://api.openai.com/v1", SupportsModelListing: true, Runtime: RuntimeNative},
-	{ID: "openrouter", DisplayName: "OpenRouter", Kind: KindRouter, Family: FamilyOpenRouter, AuthKind: AuthAPIKey, DefaultEnvVar: "OPENROUTER_API_KEY", DefaultEndpoint: "https://openrouter.ai/api/v1", SupportsModelListing: true, Runtime: RuntimeNative},
-	{ID: "gemini", DisplayName: "Gemini", Kind: KindDirect, Family: FamilyGemini, AuthKind: AuthAPIKey, DefaultEnvVar: "GEMINI_API_KEY", AlternateEnvVars: []string{"GOOGLE_API_KEY"}, SupportsModelListing: true, Runtime: RuntimeNative},
-	{ID: "ollama", DisplayName: "Ollama", Kind: KindLocal, Family: FamilyOllama, AuthKind: AuthLocal, DefaultEndpoint: "http://localhost:11434/v1", SupportsModelListing: true, SupportsCustomEndpoint: true, Runtime: RuntimeNative},
-	{ID: "huggingface", DisplayName: "Hugging Face", Kind: KindRouter, Family: FamilyOpenAI, AuthKind: AuthToken, DefaultEnvVar: "HF_TOKEN", DefaultEndpoint: "https://router.huggingface.co/v1", SupportsModelListing: false, Runtime: RuntimeNative},
-	{ID: "together", DisplayName: "Together AI", Kind: KindRouter, Family: FamilyOpenAI, AuthKind: AuthAPIKey, DefaultEnvVar: "TOGETHER_API_KEY", DefaultEndpoint: "https://api.together.xyz/v1", SupportsModelListing: true, Runtime: RuntimeNative},
-	{ID: "deepseek", DisplayName: "DeepSeek", Kind: KindDirect, Family: FamilyOpenAI, AuthKind: AuthAPIKey, DefaultEnvVar: "DEEPSEEK_API_KEY", DefaultEndpoint: "https://api.deepseek.com/v1", SupportsModelListing: true, Runtime: RuntimeNative},
-	{ID: "groq", DisplayName: "Groq", Kind: KindDirect, Family: FamilyOpenAI, AuthKind: AuthAPIKey, DefaultEnvVar: "GROQ_API_KEY", DefaultEndpoint: "https://api.groq.com/openai/v1", SupportsModelListing: true, Runtime: RuntimeNative},
-	{ID: "fireworks", DisplayName: "Fireworks AI", Kind: KindDirect, Family: FamilyOpenAI, AuthKind: AuthAPIKey, DefaultEnvVar: "FIREWORKS_API_KEY", DefaultEndpoint: "https://api.fireworks.ai/inference/v1", SupportsModelListing: true, Runtime: RuntimeNative},
-	{ID: "mistral", DisplayName: "Mistral", Kind: KindDirect, Family: FamilyOpenAI, AuthKind: AuthAPIKey, DefaultEnvVar: "MISTRAL_API_KEY", DefaultEndpoint: "https://api.mistral.ai/v1", SupportsModelListing: true, Runtime: RuntimeNative},
-	{ID: "xai", DisplayName: "xAI", Kind: KindDirect, Family: FamilyOpenAI, AuthKind: AuthAPIKey, DefaultEnvVar: "XAI_API_KEY", DefaultEndpoint: "https://api.x.ai/v1", SupportsModelListing: true, Runtime: RuntimeNative},
-	{ID: "moonshot", DisplayName: "Moonshot AI", Kind: KindDirect, Family: FamilyOpenAI, AuthKind: AuthAPIKey, DefaultEnvVar: "MOONSHOT_API_KEY", DefaultEndpoint: "https://api.moonshot.ai/v1", SupportsModelListing: false, Runtime: RuntimeNative},
-	{ID: "cerebras", DisplayName: "Cerebras", Kind: KindDirect, Family: FamilyOpenAI, AuthKind: AuthAPIKey, DefaultEnvVar: "CEREBRAS_API_KEY", DefaultEndpoint: "https://api.cerebras.ai/v1", SupportsModelListing: true, Runtime: RuntimeNative},
-	{ID: "zai", DisplayName: "Z.ai", Kind: KindDirect, Family: FamilyOpenAI, AuthKind: AuthAPIKey, DefaultEnvVar: "ZAI_API_KEY", DefaultEndpoint: "https://api.z.ai/api/paas/v4", SupportsModelListing: false, Runtime: RuntimeNative, Aliases: []string{"z-ai"}},
-	{ID: "openai-compatible", DisplayName: "Custom API", Kind: KindCustom, Family: FamilyOpenAI, AuthKind: AuthAPIKey, DefaultEnvVar: "OPENAI_COMPATIBLE_API_KEY", SupportsModelListing: true, SupportsCustomEndpoint: true, Runtime: RuntimeNative},
-	{ID: "local-api", DisplayName: "Local API", Kind: KindLocal, Family: FamilyOpenAI, AuthKind: AuthLocal, SupportsModelListing: true, SupportsCustomEndpoint: true, Runtime: RuntimeNative},
-	{ID: "claude-pro", DisplayName: "Claude Code", Kind: KindSubscription, Family: FamilyACP, AuthKind: AuthACP, Runtime: RuntimeACP, ACPCommand: "claude --acp"},
-	{ID: "gemini-advanced", DisplayName: "Gemini CLI", Kind: KindSubscription, Family: FamilyACP, AuthKind: AuthACP, Runtime: RuntimeACP, ACPCommand: "gemini --acp"},
-	{ID: "gh-copilot", DisplayName: "GitHub Copilot", Kind: KindSubscription, Family: FamilyACP, AuthKind: AuthACP, Runtime: RuntimeACP, ACPCommand: "gh copilot --acp"},
-	{ID: "chatgpt", DisplayName: "ChatGPT", Kind: KindSubscription, Family: FamilyACP, AuthKind: AuthACP, Runtime: RuntimeACP, ACPCommand: "codex --acp"},
-	{ID: "codex", DisplayName: "Codex CLI", Kind: KindSubscription, Family: FamilyACP, AuthKind: AuthACP, Runtime: RuntimeACP, ACPCommand: "codex --acp"},
+	{
+		ID:                   "anthropic",
+		DisplayName:          "Anthropic",
+		Kind:                 KindDirect,
+		Family:               FamilyAnthropic,
+		AuthKind:             AuthAPIKey,
+		DefaultEnvVar:        "ANTHROPIC_API_KEY",
+		SupportsModelListing: true,
+		Runtime:              RuntimeNative,
+	},
+	{
+		ID:                   "openai",
+		DisplayName:          "OpenAI",
+		Kind:                 KindDirect,
+		Family:               FamilyOpenAI,
+		AuthKind:             AuthAPIKey,
+		DefaultEnvVar:        "OPENAI_API_KEY",
+		DefaultEndpoint:      "https://api.openai.com/v1",
+		SupportsModelListing: true,
+		Runtime:              RuntimeNative,
+	},
+	{
+		ID:                   "openrouter",
+		DisplayName:          "OpenRouter",
+		Kind:                 KindRouter,
+		Family:               FamilyOpenRouter,
+		AuthKind:             AuthAPIKey,
+		DefaultEnvVar:        "OPENROUTER_API_KEY",
+		DefaultEndpoint:      "https://openrouter.ai/api/v1",
+		SupportsModelListing: true,
+		Runtime:              RuntimeNative,
+	},
+	{
+		ID:                   "gemini",
+		DisplayName:          "Gemini",
+		Kind:                 KindDirect,
+		Family:               FamilyGemini,
+		AuthKind:             AuthAPIKey,
+		DefaultEnvVar:        "GEMINI_API_KEY",
+		AlternateEnvVars:     []string{"GOOGLE_API_KEY"},
+		SupportsModelListing: true,
+		Runtime:              RuntimeNative,
+	},
+	{
+		ID:                     "ollama",
+		DisplayName:            "Ollama",
+		Kind:                   KindLocal,
+		Family:                 FamilyOllama,
+		AuthKind:               AuthLocal,
+		DefaultEndpoint:        "http://localhost:11434/v1",
+		SupportsModelListing:   true,
+		SupportsCustomEndpoint: true,
+		Runtime:                RuntimeNative,
+	},
+	{
+		ID:                   "huggingface",
+		DisplayName:          "Hugging Face",
+		Kind:                 KindRouter,
+		Family:               FamilyOpenAI,
+		AuthKind:             AuthToken,
+		DefaultEnvVar:        "HF_TOKEN",
+		DefaultEndpoint:      "https://router.huggingface.co/v1",
+		SupportsModelListing: false,
+		Runtime:              RuntimeNative,
+	},
+	{
+		ID:                   "together",
+		DisplayName:          "Together AI",
+		Kind:                 KindRouter,
+		Family:               FamilyOpenAI,
+		AuthKind:             AuthAPIKey,
+		DefaultEnvVar:        "TOGETHER_API_KEY",
+		DefaultEndpoint:      "https://api.together.xyz/v1",
+		SupportsModelListing: true,
+		Runtime:              RuntimeNative,
+	},
+	{
+		ID:                   "deepseek",
+		DisplayName:          "DeepSeek",
+		Kind:                 KindDirect,
+		Family:               FamilyOpenAI,
+		AuthKind:             AuthAPIKey,
+		DefaultEnvVar:        "DEEPSEEK_API_KEY",
+		DefaultEndpoint:      "https://api.deepseek.com/v1",
+		SupportsModelListing: true,
+		Runtime:              RuntimeNative,
+	},
+	{
+		ID:                   "groq",
+		DisplayName:          "Groq",
+		Kind:                 KindDirect,
+		Family:               FamilyOpenAI,
+		AuthKind:             AuthAPIKey,
+		DefaultEnvVar:        "GROQ_API_KEY",
+		DefaultEndpoint:      "https://api.groq.com/openai/v1",
+		SupportsModelListing: true,
+		Runtime:              RuntimeNative,
+	},
+	{
+		ID:                   "fireworks",
+		DisplayName:          "Fireworks AI",
+		Kind:                 KindDirect,
+		Family:               FamilyOpenAI,
+		AuthKind:             AuthAPIKey,
+		DefaultEnvVar:        "FIREWORKS_API_KEY",
+		DefaultEndpoint:      "https://api.fireworks.ai/inference/v1",
+		SupportsModelListing: true,
+		Runtime:              RuntimeNative,
+	},
+	{
+		ID:                   "mistral",
+		DisplayName:          "Mistral",
+		Kind:                 KindDirect,
+		Family:               FamilyOpenAI,
+		AuthKind:             AuthAPIKey,
+		DefaultEnvVar:        "MISTRAL_API_KEY",
+		DefaultEndpoint:      "https://api.mistral.ai/v1",
+		SupportsModelListing: true,
+		Runtime:              RuntimeNative,
+	},
+	{
+		ID:                   "xai",
+		DisplayName:          "xAI",
+		Kind:                 KindDirect,
+		Family:               FamilyOpenAI,
+		AuthKind:             AuthAPIKey,
+		DefaultEnvVar:        "XAI_API_KEY",
+		DefaultEndpoint:      "https://api.x.ai/v1",
+		SupportsModelListing: true,
+		Runtime:              RuntimeNative,
+	},
+	{
+		ID:                   "moonshot",
+		DisplayName:          "Moonshot AI",
+		Kind:                 KindDirect,
+		Family:               FamilyOpenAI,
+		AuthKind:             AuthAPIKey,
+		DefaultEnvVar:        "MOONSHOT_API_KEY",
+		DefaultEndpoint:      "https://api.moonshot.ai/v1",
+		SupportsModelListing: false,
+		Runtime:              RuntimeNative,
+	},
+	{
+		ID:                   "cerebras",
+		DisplayName:          "Cerebras",
+		Kind:                 KindDirect,
+		Family:               FamilyOpenAI,
+		AuthKind:             AuthAPIKey,
+		DefaultEnvVar:        "CEREBRAS_API_KEY",
+		DefaultEndpoint:      "https://api.cerebras.ai/v1",
+		SupportsModelListing: true,
+		Runtime:              RuntimeNative,
+	},
+	{
+		ID:                   "zai",
+		DisplayName:          "Z.ai",
+		Kind:                 KindDirect,
+		Family:               FamilyOpenAI,
+		AuthKind:             AuthAPIKey,
+		DefaultEnvVar:        "ZAI_API_KEY",
+		DefaultEndpoint:      "https://api.z.ai/api/paas/v4",
+		SupportsModelListing: false,
+		Runtime:              RuntimeNative,
+		Aliases:              []string{"z-ai"},
+	},
+	{
+		ID:                     "openai-compatible",
+		DisplayName:            "Custom API",
+		Kind:                   KindCustom,
+		Family:                 FamilyOpenAI,
+		AuthKind:               AuthAPIKey,
+		DefaultEnvVar:          "OPENAI_COMPATIBLE_API_KEY",
+		SupportsModelListing:   true,
+		SupportsCustomEndpoint: true,
+		Runtime:                RuntimeNative,
+	},
+	{
+		ID:                     "local-api",
+		DisplayName:            "Local API",
+		Kind:                   KindLocal,
+		Family:                 FamilyOpenAI,
+		AuthKind:               AuthLocal,
+		SupportsModelListing:   true,
+		SupportsCustomEndpoint: true,
+		Runtime:                RuntimeNative,
+	},
+	{
+		ID:          "claude-pro",
+		DisplayName: "Claude Code",
+		Kind:        KindSubscription,
+		Family:      FamilyACP,
+		AuthKind:    AuthACP,
+		Runtime:     RuntimeACP,
+		ACPCommand:  "claude --acp",
+	},
+	{
+		ID:          "gemini-advanced",
+		DisplayName: "Gemini CLI",
+		Kind:        KindSubscription,
+		Family:      FamilyACP,
+		AuthKind:    AuthACP,
+		Runtime:     RuntimeACP,
+		ACPCommand:  "gemini --acp",
+	},
+	{
+		ID:          "gh-copilot",
+		DisplayName: "GitHub Copilot",
+		Kind:        KindSubscription,
+		Family:      FamilyACP,
+		AuthKind:    AuthACP,
+		Runtime:     RuntimeACP,
+		ACPCommand:  "gh copilot --acp",
+	},
+	{
+		ID:          "chatgpt",
+		DisplayName: "ChatGPT",
+		Kind:        KindSubscription,
+		Family:      FamilyACP,
+		AuthKind:    AuthACP,
+		Runtime:     RuntimeACP,
+	},
+	{
+		ID:          "codex",
+		DisplayName: "Codex CLI",
+		Kind:        KindSubscription,
+		Family:      FamilyACP,
+		AuthKind:    AuthACP,
+		Runtime:     RuntimeACP,
+	},
 }

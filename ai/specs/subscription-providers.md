@@ -1,6 +1,6 @@
 # Subscription Providers (ACP)
 
-Updated: 2026-03-26
+Updated: 2026-05-02
 
 ACP support is a **secondary feature**. Ion's primary path is native ion + canto + direct API. Read `ai/DESIGN.md` first.
 
@@ -30,12 +30,26 @@ API key users don't need ACP at all — canto calls the provider API directly.
 | `claude-pro`      | acp     | `claude --acp`     | Confirmed ACP                 |
 | `gemini-advanced` | acp     | `gemini --acp`     | Confirmed ACP                 |
 | `gh-copilot`      | acp     | `gh copilot --acp` | Likely OAuth-ok, verify first |
-| `chatgpt`         | acp     | `codex --acp`      | Likely OAuth-ok, verify first |
-| `codex`           | acp     | `codex --acp`      | CLI agent, verify separately  |
+| `chatgpt`         | deferred | —                 | Official Codex surfaces only  |
+| `codex`           | deferred | —                 | App-server/MCP, not ACP       |
 
-**gh-copilot / chatgpt**: OpenAI and GitHub appear to be supportive of coding tools (OpenCode, ion, etc.) using OAuth for subscription access — but this is unverified. Use ACP as the default for now; it's safe and respects ToS regardless. If OAuth is confirmed, these could route via canto directly (simpler, more features). Do not implement the OAuth path until verified.
+**gh-copilot**: GitHub appears to support coding-tool OAuth access through
+official GitHub/Copilot surfaces, but Ion should still verify the current
+protocol and terms before exposing this.
 
-**codex**: The local `codex` CLI is the ACP bridge for ChatGPT-style OpenAI subscription access in the current Go implementation. Keep it behind ACP unless and until a native OAuth/API path is verified.
+**chatgpt / codex**: Do not treat Codex as ACP. Current official OpenAI
+surfaces are Codex CLI/IDE/app/web with ChatGPT sign-in or API-key sign-in, plus
+Codex app-server and MCP surfaces. There is no supported `codex --acp` command
+in the current CLI. Ion must not scrape or reuse ChatGPT OAuth tokens directly.
+
+Future ChatGPT-subscription support, if it is worth doing, should be a separate
+Codex app-server adapter or host integration that controls Codex through its
+documented protocol. That would be a secondary compatibility bridge, not
+Ion's native Canto backend and not an Apps SDK integration.
+
+The OpenAI Apps SDK is for building apps inside ChatGPT and public app/plugin
+distribution. It does not provide a model-provider backend that lets Ion spend a
+user's ChatGPT subscription from Ion's own loop.
 
 ---
 
@@ -61,7 +75,9 @@ model = "claude-sonnet-4-5"
 
 Provider resolution order: `~/.ion/config.toml` → `ION_PROVIDER` env → `--provider` flag.
 
-`ION_ACP_COMMAND` overrides the derived CLI command for custom installs. Does not change backend selection logic.
+`ION_ACP_COMMAND` overrides the derived CLI command for custom installs. It
+does not change backend selection logic and should not be used to point Ion at
+Codex unless Ion has a Codex app-server adapter.
 
 Model is required for both subscription and API providers. Ion never lets the CLI choose the model implicitly.
 
@@ -82,6 +98,32 @@ Known gaps (tracked in tasks):
 - `tk-2ffy` — agent stderr goes to `os.Stderr`, not session log
 
 Session continuity/resume is still a known ACP gap, but it is not currently tracked as a standalone task.
+
+## ChatGPT / Codex evaluation snapshot
+
+Current evidence:
+
+- OpenAI's Codex CLI docs say Codex CLI runs locally and first-run auth prompts
+  for either a ChatGPT account or an API key:
+  <https://developers.openai.com/codex/cli>.
+- OpenAI's help center says ChatGPT Plus, Pro, Business, Edu, and Enterprise
+  plans include Codex, with plan-specific data controls:
+  <https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan>.
+- OpenAI's Codex changelog documents ChatGPT sign-in model availability and
+  app-server login/device-code work, which confirms the protocol is Codex
+  app-server specific rather than ACP:
+  <https://developers.openai.com/codex/changelog>.
+- OpenAI's Apps SDK docs describe ChatGPT apps/plugins and Codex plugin
+  distribution, not third-party CLI backend access to a ChatGPT subscription:
+  <https://developers.openai.com/apps-sdk>.
+
+Ion decision:
+
+- Keep `chatgpt` and `codex` catalog entries hidden/deferred.
+- Do not derive a default command for them.
+- Prefer native OpenAI API keys for Ion's Canto path.
+- Treat Codex app-server integration as a later bridge evaluation, only after
+  current I4 table-stakes work is done.
 
 ---
 

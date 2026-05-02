@@ -3,9 +3,9 @@
 Fast, lightweight terminal coding agent.
 
 **Phase:** I4 advanced integrations
-**Focus:** I4 request-cache continuity closed
+**Focus:** I4 ChatGPT subscription path closed
 **Active umbrella:** none - `tk-mmcs` is closed
-**Active task:** none - next ready item is `tk-a4m1` ChatGPT subscription path
+**Active task:** none - next ready item is `tk-pwsl` swarm operator view
 **Updated:** 2026-05-02
 
 ## Current Truth
@@ -110,10 +110,15 @@ Fast, lightweight terminal coding agent.
   shallow clone. Gates passed: Canto `go test ./llm`, Canto `go test ./...`,
   Ion focused `./internal/backend/canto`, Ion `go test ./...`, Ion native race
   subset, and `git diff --check`.
+- `tk-a4m1` is closed. Current official OpenAI path is Codex CLI/IDE/app/web
+  with ChatGPT sign-in or API-key sign-in, plus Codex app-server/MCP surfaces.
+  There is no supported `codex --acp` command in the current CLI, so Ion no
+  longer derives a default command for `chatgpt` or `codex` catalog entries.
+  Canonical details are in `ai/specs/subscription-providers.md`.
 
 ## Next Action
 
-1. Start `tk-a4m1` and evaluate the ChatGPT subscription integration path as a
-   research/design slice before any implementation.
+1. Start `tk-pwsl` and decide whether swarm/operator view is still relevant to
+   the current product roadmap before implementation.
 2. Keep one green slice per commit and avoid reopening Canto unless Ion tests
    expose a framework defect.

@@ -21,6 +21,15 @@ Distilled architectural principles plus recent decision log.
 
 ## Recent Log
 
+### 2026-05-02 - ChatGPT subscription is not ACP
+
+Current OpenAI Codex surfaces support ChatGPT-plan sign-in through Codex
+CLI/IDE/app/web and expose Codex-specific app-server/MCP protocols. There is
+no supported `codex --acp` bridge in the current CLI. Ion keeps `chatgpt` and
+`codex` hidden/deferred, derives no default command for them, and must not
+scrape ChatGPT OAuth tokens. Future support would be a Codex app-server adapter,
+not Ion's native Canto backend.
+
 ### 2026-05-02 - Canto owns request cloning
 
 Provider-history capture, provider-specific request preparation, and future

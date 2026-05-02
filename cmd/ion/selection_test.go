@@ -114,8 +114,8 @@ func TestDefaultACPCommand(t *testing.T) {
 		{provider: "claude-pro", want: "claude --acp", ok: true},
 		{provider: "gemini-advanced", want: "gemini --acp", ok: true},
 		{provider: "gh-copilot", want: "gh copilot --acp", ok: true},
-		{provider: "chatgpt", want: "codex --acp", ok: true},
-		{provider: "codex", want: "codex --acp", ok: true},
+		{provider: "chatgpt", want: "", ok: false},
+		{provider: "codex", want: "", ok: false},
 	}
 
 	for _, tc := range cases {

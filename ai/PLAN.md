@@ -9,8 +9,7 @@ green native baseline. Canto stays closed unless Ion evidence proves a
 framework-owned defect.
 
 Active umbrella: none. `tk-mmcs` is closed.
-Active task: none. Next ready task is `tk-a4m1` - evaluate ChatGPT
-subscription integration path.
+Active task: none. Next ready task is `tk-pwsl` - swarm-mode operator view.
 
 ## Phases
 
@@ -161,10 +160,16 @@ ACP bridge correctness is no longer the active blocker.
     - outcome: Canto owns the request deep-clone primitive, including tool
       parameter schemas and response schemas; Ion provider-history capture now
       uses that framework clone and imports Canto `62dc906`
-17. Next - `tk-a4m1` - evaluate ChatGPT subscription integration path:
+17. Done - `tk-a4m1` - evaluate ChatGPT subscription integration path:
     - research current technical and ToS boundaries before implementation
     - keep native API providers and ACP host integration as the current product
       baselines unless evaluation proves a clean supported path
+    - outcome: keep ChatGPT/Codex hidden and deferred; no default
+      `codex --acp` command; future support would be a Codex app-server bridge
+      after a separate design pass
+18. Next - `tk-pwsl` - swarm mode alternate-screen operator view:
+    - re-evaluate product fit before implementation
+    - keep it out of the main TUI until subagent/swarm primitives are stable
 
 ## I5+ Deferred Work
 
