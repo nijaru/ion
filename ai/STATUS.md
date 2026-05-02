@@ -2,10 +2,10 @@
 
 Fast, lightweight terminal coding agent.
 
-**Phase:** I1 behavior-preserving Ion refactors
-**Focus:** Refactor the product shell from the full design while preserving the native baseline.
+**Phase:** I2 minimal shell polish
+**Focus:** Polish daily-use TUI/CLI shell behavior on top of the cleaned native baseline.
 **Active umbrella:** `tk-mmcs` - core parity plan and queue hygiene.
-**Active task:** `tk-eyvq` - refactor CantoBackend lifecycle files.
+**Active task:** choose/start the next I2 shell polish child under `tk-mmcs`.
 **Updated:** 2026-05-02
 
 ## Current Truth
@@ -53,15 +53,21 @@ Fast, lightweight terminal coding agent.
 - Latest file-tool gates passed:
   `go test ./internal/backend/canto/tools -count=1 -timeout 180s`,
   `go test ./... -count=1 -timeout 300s`, and the native race subset.
+- CantoBackend lifecycle responsibilities are split out of the previous
+  monolithic `internal/backend/canto/backend.go`: metadata, lifecycle,
+  providers/retry, turns/cancel, event translation, compaction, policy, memory,
+  reasoning, and deferred surfaces now live in focused package files.
+- Latest backend-lifecycle gates passed:
+  `go test ./internal/backend/canto -count=1 -timeout 180s`,
+  `go test ./... -count=1 -timeout 300s`, and the native race subset.
 
 ## Next Action
 
-1. Start `tk-eyvq` and split `internal/backend/canto/backend.go` by lifecycle.
-2. Preserve backend behavior and keep Canto framework assumptions out of Ion.
-3. Run focused backend tests, then full deterministic and race gates for the
-   slice.
+1. Mark `tk-eyvq` complete after committing the backend split.
+2. Start the first I2 shell polish task under `tk-mmcs`.
+3. Prioritize tmux-visible issues: transcript/progress spacing, compact tool
+   output defaults, queued input recall, and slash/session command clarity.
 
 ## Active Tasks
 
 - `tk-mmcs` - core parity plan and task queue hygiene.
-- `tk-eyvq` - refactor CantoBackend lifecycle files.
