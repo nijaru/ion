@@ -24,6 +24,10 @@ import (
 var version = "v0.0.0"
 
 func main() {
+	if handled, code := runTopLevelCommand(os.Args[1:], os.Stdout, os.Stderr); handled {
+		os.Exit(code)
+	}
+
 	cli := registerCLIFlags()
 	args, openResumePicker := normalizeFlagArgs(os.Args[1:])
 	if err := flag.CommandLine.Parse(args); err != nil {
