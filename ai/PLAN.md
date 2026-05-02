@@ -9,7 +9,7 @@ green native baseline. Canto stays closed unless Ion evidence proves a
 framework-owned defect.
 
 Active umbrella: none. `tk-mmcs` is closed.
-Active task: `tk-lggk` - TUI: AskUser tool - interactive question prompt.
+Active task: `tk-ritc` - Evaluate collapsing internal/storage wrapper into canto.
 
 ## Phases
 
@@ -202,7 +202,12 @@ ACP bridge correctness is no longer the active blocker.
 23. Done - `tk-lya7` - TUI: Token usage color by percentage (green/yellow/red):
     - context usage keeps the same text but renders green below 50%, yellow at
       50-79%, and red at 80%+
-24. Next - `tk-lggk` - TUI: AskUser tool - interactive question prompt.
+24. Done - `tk-lggk` - TUI: AskUser tool - interactive question prompt:
+    - no Ion-only `ask_user` tool added
+    - models can ask normal assistant questions today
+    - future implementation belongs behind a Canto elicitation/pause-resume
+      primitive with explicit TUI/CLI/ACP behavior
+25. Next - `tk-ritc` - Evaluate collapsing internal/storage wrapper into canto.
 
 ## I5+ Deferred Work
 

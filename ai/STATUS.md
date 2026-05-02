@@ -5,7 +5,7 @@ Fast, lightweight terminal coding agent.
 **Phase:** I4 advanced integrations
 **Focus:** I4 advanced integrations closeout
 **Active umbrella:** none - `tk-mmcs` is closed
-**Active task:** `tk-lggk` - TUI: AskUser tool - interactive question prompt
+**Active task:** `tk-ritc` - Evaluate collapsing internal/storage wrapper into canto
 **Updated:** 2026-05-02
 
 ## Current Truth
@@ -151,10 +151,15 @@ Fast, lightweight terminal coding agent.
   segment now renders green below 50%, yellow from 50% through 79%, and red at
   80%+. Focused status-line tests, `go test ./...`, and the native race subset
   passed.
+- `tk-lggk` is closed as a design decision. Ion should not add an Ion-only
+  default `ask_user` tool; models can ask ordinary assistant questions today.
+  A future blocking interaction tool belongs behind a Canto elicitation
+  primitive with explicit TUI, CLI, ACP, cancellation, resume, and
+  noninteractive behavior.
 
 ## Next Action
 
-1. Start `tk-lggk` and decide the smallest host-owned AskUser interaction that
-   does not add another agent loop or transcript writer.
+1. Start `tk-ritc` and evaluate whether `internal/storage` should remain an Ion
+   projection wrapper over Canto or collapse further into Canto primitives.
 2. Keep one green slice per commit and avoid reopening Canto unless Ion tests
    expose a framework defect.

@@ -92,6 +92,9 @@ Rules:
   heredocs, and shell patching are not the recommended path for ordinary edits.
 - Model-visible tool output is bounded with explicit truncation markers.
 - Display policy lives in Ion renderers, not in provider-visible history.
+- Open-ended user questions remain normal assistant messages for now. A future
+  `ask_user` tool should wait for a Canto-level elicitation primitive so it can
+  pause/resume safely across TUI, CLI, ACP, and noninteractive hosts.
 
 Canonical behavior lives in `ai/specs/tools-and-modes.md` and
 `ai/specs/system-prompt.md`.

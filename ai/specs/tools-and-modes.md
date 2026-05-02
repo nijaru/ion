@@ -119,6 +119,7 @@ Deferred or hidden surfaces:
 | model-visible `compact` tool | Deferred; `/compact` host command remains available for context survival |
 | MCP tools | Deferred behind the native-loop stabilization gate |
 | `subagent` | Opt-in I4 surface via `subagent_tools = "on"`; not default |
+| `ask_user` | Deferred until Canto owns a general elicitation/pause-resume primitive |
 | `verify` | Not default; normal verification goes through `bash` |
 
 Supporting infrastructure:
@@ -130,6 +131,10 @@ Supporting infrastructure:
 - Prompt/tool budget is measured separately in
   `ai/research/prompt-budget-2026-05.md`; do not add model-visible tools without
   re-running the budget report.
+- Open-ended user elicitation should not be an Ion-only model-visible tool.
+  Models can ask normal assistant questions today. A future `ask_user` surface
+  needs a Canto-level interaction primitive that can pause/resume safely and
+  fail clearly in noninteractive hosts.
 
 ## Permission Modes And Trust
 

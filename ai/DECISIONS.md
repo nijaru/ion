@@ -21,6 +21,14 @@ Distilled architectural principles plus recent decision log.
 
 ## Recent Log
 
+### 2026-05-02 - AskUser waits for framework elicitation
+
+Ion should not add an Ion-only `ask_user` tool to the default surface. Models
+can ask ordinary assistant questions today, and a blocking interaction tool
+would need clear behavior for TUI, CLI print mode, ACP hosts, cancellation,
+resume, and noninteractive failure. Reopen this as a Canto elicitation
+primitive plus Ion TUI renderer, not as a local one-off tool.
+
 ### 2026-05-02 - Subagent is opt-in, not default
 
 Ion keeps the default model-visible coding surface at eight tools.
