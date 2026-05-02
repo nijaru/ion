@@ -9,7 +9,7 @@ green native baseline. Canto stays closed unless Ion evidence proves a
 framework-owned defect.
 
 Active umbrella: none. `tk-mmcs` is closed.
-Active task: `tk-w5uj` - TUI: Status bar shows git diff stats (+N/-N).
+Active task: `tk-lya7` - TUI: Token usage color by percentage (green/yellow/red).
 
 ## Phases
 
@@ -195,7 +195,11 @@ ACP bridge correctness is no longer the active blocker.
     - cached the Goldmark/GFM renderer instead of rebuilding it for each
       markdown render
     - focused app tests passed
-22. Next - `tk-w5uj` - TUI: Status bar shows git diff stats (+N/-N).
+22. Done - `tk-w5uj` - TUI: Status bar shows git diff stats (+N/-N):
+    - status line shows best-effort cached `+N/-M` workspace diff stats
+    - stats load on startup and refresh after completed turns, not on every
+      render
+23. Next - `tk-lya7` - TUI: Token usage color by percentage (green/yellow/red).
 
 ## I5+ Deferred Work
 

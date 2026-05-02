@@ -52,6 +52,10 @@ func (m Model) statusLine() string {
 	if m.App.Branch != "" {
 		branch = m.st.dim.Render(m.App.Branch)
 	}
+	gitDiff := ""
+	if value := strings.TrimSpace(m.App.GitDiff); value != "" {
+		gitDiff = m.st.dim.Render(value)
+	}
 
 	total := m.Progress.TokensSent + m.Progress.TokensReceived
 	limit := m.Model.Backend.ContextLimit()
@@ -69,8 +73,20 @@ func (m Model) statusLine() string {
 	}
 
 	candidates := [][]string{
-		{modeLabel, presetLabel, provider, model, thinking, sandbox, usage, cost, dir, branch},
-		{modeLabel, presetLabel, provider, model, thinking, sandbox, usage, cost, branch},
+		{
+			modeLabel,
+			presetLabel,
+			provider,
+			model,
+			thinking,
+			sandbox,
+			usage,
+			cost,
+			dir,
+			branch,
+			gitDiff,
+		},
+		{modeLabel, presetLabel, provider, model, thinking, sandbox, usage, cost, branch, gitDiff},
 		{modeLabel, presetLabel, provider, model, thinking, sandbox, usage, cost},
 		{modeLabel, presetLabel, model, thinking, sandbox, usage, cost},
 		{modeLabel, presetLabel, thinking, usage, cost},
@@ -87,7 +103,9 @@ func (m Model) statusLine() string {
 
 func (m *Model) layout() {
 	m.Input.Composer.SetWidth(max(20, m.App.Width-4))
-	m.Input.Composer.SetHeight(clamp(m.Input.Composer.LineCount(), minComposerHeight, maxComposerHeight))
+	m.Input.Composer.SetHeight(
+		clamp(m.Input.Composer.LineCount(), minComposerHeight, maxComposerHeight),
+	)
 }
 
 func (m Model) headerLine() string {

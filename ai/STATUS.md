@@ -5,7 +5,7 @@ Fast, lightweight terminal coding agent.
 **Phase:** I4 advanced integrations
 **Focus:** I4 advanced integrations closeout
 **Active umbrella:** none - `tk-mmcs` is closed
-**Active task:** `tk-w5uj` - TUI: Status bar shows git diff stats (+N/-N)
+**Active task:** `tk-lya7` - TUI: Token usage color by percentage (green/yellow/red)
 **Updated:** 2026-05-02
 
 ## Current Truth
@@ -143,10 +143,14 @@ Fast, lightweight terminal coding agent.
 - `tk-6prx` is implemented. Markdown rendering now reuses a cached
   Goldmark/GFM renderer instead of rebuilding it for every render. Focused app
   tests passed.
+- `tk-w5uj` is implemented. The footer/status line now shows cached git diff
+  stats like `+42/-11` from `git diff --shortstat HEAD --`; stats load at TUI
+  startup and refresh after completed turns rather than shelling out during
+  render. Focused app tests passed.
 
 ## Next Action
 
-1. Start `tk-w5uj` and add footer git diff stats without noisy shelling or
-   transcript coupling.
+1. Start `tk-lya7` and color token-usage status by context percentage without
+   changing status-line content.
 2. Keep one green slice per commit and avoid reopening Canto unless Ion tests
    expose a framework defect.

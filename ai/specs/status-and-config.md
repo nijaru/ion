@@ -41,7 +41,7 @@ Related tasks:
 
 Current shape:
 
-`[MODE] • provider • model • usage • cwd • branch`
+`[MODE] • provider • model • usage • cwd • branch • +N/-M`
 
 Rules:
 
@@ -51,6 +51,8 @@ Rules:
 - provider/model are live runtime truth, not startup-banner truth
 - when the fast preset is active, surface it as a compact `[FAST]` marker
 - reasoning effort may appear only when it is a real runtime setting
+- git diff stats are best-effort cached workspace metadata from
+  `git diff --shortstat HEAD --`; they do not shell out during every render
 
 Keep the status line compact. Do not turn it into a dense settings/control bar unless there is a strong usability reason.
 

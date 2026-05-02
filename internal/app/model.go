@@ -76,6 +76,11 @@ type sessionHelpMsg struct {
 	notice string
 }
 
+type gitDiffStatsMsg struct {
+	workdir string
+	stats   string
+}
+
 type queuedTurnMsg struct {
 	text string
 }
@@ -162,6 +167,7 @@ type AppState struct {
 	Ready             bool
 	Workdir           string
 	Branch            string
+	GitDiff           string
 	Version           string
 	ActivePreset      modelPreset
 	Sandbox           string
@@ -692,6 +698,7 @@ func (m Model) Init() tea.Cmd {
 		textarea.Blink,
 		m.Input.Spinner.Tick,
 		m.awaitSessionEvent(),
+		loadGitDiffStats(m.App.Workdir),
 	)
 }
 
@@ -810,6 +817,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case sessionHelpMsg:
 		return m, m.printHelp(msg.notice)
+
+	case gitDiffStatsMsg:
+		if msg.workdir == m.App.Workdir {
+			m.App.GitDiff = msg.stats
+		}
+		return m, nil
 
 	case externalEditorFinishedMsg:
 		return m.handleExternalEditorFinished(msg)
