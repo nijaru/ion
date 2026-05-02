@@ -95,8 +95,11 @@ ACP bridge correctness is no longer the active blocker.
    split until local edit eval evidence proves a merged tool is better.
 2. Done - `tk-90ft` - background bash monitor workflow design; keep one
    model-visible `bash` tool and add explicit background job actions later.
-3. Next - subagents/context forking or boundary-step steering.
-4. Later - typed
+3. Done - `tk-700w` - define subagent context forking direction; keep default
+   registration blocked until explicit `summary`/`fork`/`none` context modes
+   and child-session ownership tests exist.
+4. Next - `tk-z1kk` - implement boundary-step steering mode.
+5. Later - typed
    thinking/provider translation.
 
 ## I5+ Deferred Work

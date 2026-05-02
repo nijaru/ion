@@ -21,6 +21,14 @@ Distilled architectural principles plus recent decision log.
 
 ## Recent Log
 
+### 2026-05-02 - Subagents need explicit context modes
+
+Ion should not register the `subagent` tool by default until child context
+transfer is explicit and tested. The future schema should distinguish compact
+summary context, forked parent-history snapshots, and no inherited context.
+Canto should own reusable child-session/history-snapshot primitives; Ion should
+own personas, tool exposure, display, and product policy.
+
 ### 2026-05-02 - Background bash stays one tool
 
 Ion should add background command monitoring as an extension of `bash`, not as

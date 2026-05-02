@@ -5,7 +5,7 @@ Fast, lightweight terminal coding agent.
 **Phase:** I4 advanced integrations
 **Focus:** Reopen deferred integrations from the stable I0-I3 baseline.
 **Active umbrella:** none - `tk-mmcs` is closed.
-**Active task:** none - choose the next I4 task.
+**Active task:** none - start `tk-z1kk` next.
 **Updated:** 2026-05-02
 
 ## Current Truth
@@ -131,12 +131,17 @@ Fast, lightweight terminal coding agent.
 - Background bash design is captured in `ai/specs/tools-and-modes.md` and
   `docs/tools.md`: extend the existing `bash` tool with explicit foreground,
   background, output, and kill actions rather than adding more default tools.
+- `tk-700w` is closed. Subagent direction is clarified in
+  `ai/specs/subagent-personas-and-routing.md`
+  and `docs/subagents.md`: implementation pieces exist, but default
+  registration waits for explicit `summary`/`fork`/`none` context modes and
+  child-session ownership tests.
 
 ## Next Action
 
-1. Commit the completed `tk-90ft` docs/spec slice.
-2. Start `tk-700w` subagent context forking unless boundary-step steering is
-   judged higher leverage first.
+1. Start `tk-z1kk` boundary-step steering as the next integration blocker.
+2. Review whether the work belongs in Canto primitives, Ion TUI behavior, or
+   both before editing code.
 3. Keep native Canto/Ion loop behavior as the acceptance baseline while adding
    advanced integrations.
 4. Continue one green slice per commit.

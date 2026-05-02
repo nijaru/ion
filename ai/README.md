@@ -5,6 +5,7 @@
 - [DESIGN.md](DESIGN.md) - product architecture, Ion/Canto ownership, and deferred layers
 - [DECISIONS.md](DECISIONS.md) - distilled principles plus recent decision log
 - [Tools and Modes](specs/tools-and-modes.md) - canonical native tool surface and mode behavior
+- [Subagent Personas](specs/subagent-personas-and-routing.md) - deferred personas, context modes, and child-session gates
 - [System Prompt](specs/system-prompt.md) - prompt-budget and model-facing tool guidance
 - [Status and Config](specs/status-and-config.md) - config, state, status line, and model metadata rules
 - [TUI Architecture](specs/tui-architecture.md) - TUI shell and rendering expectations
