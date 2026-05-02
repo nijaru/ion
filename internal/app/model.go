@@ -811,6 +811,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case sessionHelpMsg:
 		return m, m.printHelp(msg.notice)
 
+	case externalEditorFinishedMsg:
+		return m.handleExternalEditorFinished(msg)
+
 	case approvalNotificationMsg:
 		return m.handleApprovalNotification(msg)
 

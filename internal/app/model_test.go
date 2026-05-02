@@ -2047,6 +2047,72 @@ func TestCtrlTOpensThinkingPicker(t *testing.T) {
 	}
 }
 
+func TestExternalEditorFinishedUpdatesComposer(t *testing.T) {
+	model := readyModel(t)
+	model.Input.Composer.SetValue("[paste #1 +12 lines]")
+	model.PasteMarkers["[paste #1 +12 lines]"] = pasteMarker{
+		placeholder: "[paste #1 +12 lines]",
+		content:     "expanded paste",
+	}
+
+	updated, cmd := model.handleExternalEditorFinished(externalEditorFinishedMsg{
+		content: "edited\nmessage",
+	})
+
+	if cmd != nil {
+		t.Fatal("editor finish should not emit a command on success")
+	}
+	if got := updated.Input.Composer.Value(); got != "edited\nmessage" {
+		t.Fatalf("composer = %q, want edited content", got)
+	}
+	if len(updated.PasteMarkers) != 0 {
+		t.Fatalf("paste markers = %#v, want cleared", updated.PasteMarkers)
+	}
+	if got := updated.Input.Composer.Height(); got != 2 {
+		t.Fatalf("composer height = %d, want 2", got)
+	}
+}
+
+func TestExternalEditorUsesVisualBeforeEditor(t *testing.T) {
+	t.Setenv("VISUAL", "code --wait")
+	t.Setenv("EDITOR", "vim")
+
+	if got := externalEditor(); got != "code --wait" {
+		t.Fatalf("external editor = %q, want VISUAL", got)
+	}
+}
+
+func TestWriteExternalEditorBuffer(t *testing.T) {
+	path, err := writeExternalEditorBuffer("draft")
+	if err != nil {
+		t.Fatalf("write editor buffer: %v", err)
+	}
+	defer os.Remove(path)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read editor buffer: %v", err)
+	}
+	if string(data) != "draft" {
+		t.Fatalf("buffer = %q, want draft", data)
+	}
+}
+
+func TestCtrlXControlTextDoesNotEnterComposerWhileBusy(t *testing.T) {
+	model := readyModel(t)
+	model.InFlight.Thinking = true
+	model.Input.Composer.SetValue("draft")
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Text: "\x18", Code: 'x', Mod: tea.ModCtrl})
+	model = updated.(Model)
+
+	if cmd == nil {
+		t.Fatal("busy editor handoff should print a notice")
+	}
+	if got := model.Input.Composer.Value(); got != "draft" {
+		t.Fatalf("composer = %q, want draft without control character", got)
+	}
+}
+
 func TestCtrlPRecallsHistory(t *testing.T) {
 	model := readyModel(t)
 	model.Input.History = []string{"first", "second"}
@@ -3187,6 +3253,7 @@ func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 	}
 	wantCommands = append(wantCommands,
 		"Ctrl+P",
+		"Ctrl+X",
 		"Tab",
 		"Shift+Tab",
 		"Esc",

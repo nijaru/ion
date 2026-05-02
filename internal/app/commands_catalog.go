@@ -17,6 +17,7 @@ func helpText() string {
 		"",
 		"  Ctrl+M           toggle configured primary/fast preset",
 		"  Ctrl+T           thinking picker",
+		"  Ctrl+X           open composer in external editor",
 		"  Tab              complete slash commands and @file refs; swap provider/model pickers",
 		"  PgUp / PgDn      page through picker lists",
 		"  Shift+Tab        toggle READ <-> EDIT",
