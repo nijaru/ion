@@ -3170,6 +3170,7 @@ func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 		"/resume [id]",
 		"/session",
 		"/fork [label]",
+		"/tree",
 		"/compact",
 		"/provider [name]",
 		"/model [name]",
@@ -3211,9 +3212,6 @@ func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 			)
 		}
 	}
-	if strings.Contains(helpMsg.notice, "/tree") {
-		t.Fatalf("help notice should not advertise /tree yet: %q", helpMsg.notice)
-	}
 	for _, hidden := range []string{"/read", "/edit", "/auto, /yolo"} {
 		if strings.Contains(helpMsg.notice, hidden) {
 			t.Fatalf(
@@ -3234,6 +3232,19 @@ func TestForkCommandRequiresMaterializedSession(t *testing.T) {
 	}
 	err := localErrorFromMsg(t, cmd())
 	if !strings.Contains(err.Error(), "No active session to fork yet") {
+		t.Fatalf("error = %v, want no active session", err)
+	}
+}
+
+func TestTreeCommandRequiresMaterializedSession(t *testing.T) {
+	model := readyModel(t)
+
+	_, cmd := model.handleCommand("/tree")
+	if cmd == nil {
+		t.Fatal("expected /tree command to return an error")
+	}
+	err := localErrorFromMsg(t, cmd())
+	if !strings.Contains(err.Error(), "No active session tree yet") {
 		t.Fatalf("error = %v, want no active session", err)
 	}
 }

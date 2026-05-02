@@ -120,7 +120,9 @@ Durable sessions live in Ion storage backed by Canto session events.
 Local branching uses Canto's session lineage primitives. Ion exposes the first
 product surface as `/fork [label]`: it branches a materialized session, indexes
 the child in Ion session metadata, then switches the TUI into the forked
-session. Cross-host transfer and a tree browser are separate follow-up layers.
+session. `/tree` renders the current lineage and immediate children from the
+same ancestry metadata. Cross-host transfer is a separate export/import bundle
+layer, not raw SQLite file sync as a product surface.
 
 Startup must not silently persist provider/model choices. Explicit CLI/env
 overrides affect the current process. TUI settings and picker actions persist

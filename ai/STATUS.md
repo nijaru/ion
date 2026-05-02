@@ -5,7 +5,7 @@ Fast, lightweight terminal coding agent.
 **Phase:** I4 advanced integrations
 **Focus:** Reopen deferred integrations from the stable I0-I3 baseline.
 **Active umbrella:** none - `tk-mmcs` is closed.
-**Active task:** `tk-8174` - Session: Cross-Host Sync & TUI Branching
+**Active task:** none - next I4 item pending.
 **Updated:** 2026-05-02
 
 ## Current Truth
@@ -174,18 +174,22 @@ Fast, lightweight terminal coding agent.
 - Follow-up `tk-hfgh` tracks safe install staging, model-visible `read_skill`,
   gated `manage_skill`, and self-extension nudges after explicit trust/write
   policy gates exist.
-- `tk-8174` first slice is implemented locally: `/fork [label]` requires a
+- `tk-8174` local branching is implemented: `/fork [label]` requires a
   materialized session, calls Ion storage `ForkSession`, uses Canto
   `ForkWithOptions`/ancestry metadata, indexes the child in Ion session
-  metadata, and switches the TUI into the forked session.
-- Latest fork-focused gates passed:
+  metadata, and switches the TUI into the forked session. `/tree` reads the
+  same lineage/child metadata and prints the current session tree.
+- Cross-host transfer is split into `tk-4lty` so it can use a versioned
+  export/import bundle with integrity and conflict handling instead of raw
+  SQLite sync.
+- Latest session-branching focused gates passed:
   `go test ./internal/storage ./internal/app -count=1 -timeout 180s`,
   `go test ./... -count=1 -timeout 300s`, and the native race subset.
 
 ## Next Action
 
-1. Finish the `tk-8174` local fork slice with full/race verification and commit.
-2. Continue `tk-8174` with export/import transfer or tree/lineage browser.
+1. Commit the completed local session branch/tree slice.
+2. Continue with `tk-4lty` cross-host export/import or the next ready P3 item.
 3. Add a tmux/live check later if steering is promoted beyond opt-in settings.
 4. Keep native Canto/Ion loop behavior as the acceptance baseline while adding
    advanced integrations.
@@ -193,4 +197,4 @@ Fast, lightweight terminal coding agent.
 
 ## Active Tasks
 
-- `tk-8174` - session branching and cross-host transfer
+- none

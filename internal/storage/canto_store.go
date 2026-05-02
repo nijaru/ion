@@ -253,6 +253,47 @@ func (s *cantoStore) sessionInfo(ctx context.Context, id string) (SessionInfo, e
 	return si, nil
 }
 
+func (s *cantoStore) SessionTree(ctx context.Context, sessionID string) (SessionTree, error) {
+	current, err := s.sessionInfo(ctx, sessionID)
+	if err != nil {
+		return SessionTree{}, err
+	}
+	lineageRecords, err := s.canto.Lineage(ctx, sessionID)
+	if err != nil {
+		return SessionTree{}, err
+	}
+	childrenRecords, err := s.canto.Children(ctx, sessionID)
+	if err != nil {
+		return SessionTree{}, err
+	}
+	tree := SessionTree{Current: current}
+	tree.Lineage = make([]SessionInfo, 0, len(lineageRecords))
+	for _, record := range lineageRecords {
+		tree.Lineage = append(tree.Lineage, s.sessionInfoFromAncestry(ctx, record))
+	}
+	tree.Children = make([]SessionInfo, 0, len(childrenRecords))
+	for _, record := range childrenRecords {
+		tree.Children = append(tree.Children, s.sessionInfoFromAncestry(ctx, record))
+	}
+	return tree, nil
+}
+
+func (s *cantoStore) sessionInfoFromAncestry(
+	ctx context.Context,
+	record session.SessionAncestry,
+) SessionInfo {
+	info, err := s.sessionInfo(ctx, record.SessionID)
+	if err == nil {
+		return info
+	}
+	return SessionInfo{
+		ID:        record.SessionID,
+		Title:     record.BranchLabel,
+		CreatedAt: record.CreatedAt,
+		UpdatedAt: record.CreatedAt,
+	}
+}
+
 func (s *cantoStore) ListSessions(ctx context.Context, cwd string) ([]SessionInfo, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
