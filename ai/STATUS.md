@@ -158,6 +158,12 @@ Fast, lightweight terminal coding agent.
   `go test ./internal/backend/canto ./cmd/ion ./internal/config -count=1 -timeout 180s`,
   `go test ./... -count=1 -timeout 300s`, and
   `go test -race ./cmd/ion ./internal/app ./internal/backend/canto ./internal/backend/canto/tools ./internal/storage -count=1 -timeout 300s`.
+- `tk-t818` is closed. Ion's tools were audited against Canto's stable
+  `coding` primitives. Decision: keep Ion-owned model-visible wrappers because
+  they carry product-specific names, line-numbered reads, ripgrep-backed
+  `grep`/`glob`, checkpoints, sandbox/mode integration, compact TUI display,
+  and edit recovery errors. Canto's primitives remain framework substrate, not
+  a direct replacement for the Ion tool surface.
 
 ## Next Action
 

@@ -31,6 +31,26 @@ Durable tool-surface decisions:
   advanced tools such as `rg`, `fd`, or `ast-grep` when the typed tools are not
   enough.
 
+### Canto coding primitive adoption
+
+Current decision after `tk-t818`: keep Ion's model-visible tool wrappers
+Ion-owned for now, while continuing to use Canto's lower-level framework
+contracts for agent loop, tool lifecycle, approvals, and provider history.
+
+| Area | Canto primitive | Ion decision |
+|---|---|---|
+| `read` | `coding.ReadFileTool` | Keep Ion wrapper: tool name is shorter, output has stable line numbers, offset/limit, BOM/CRLF display cleanup, and Ion display compaction. |
+| `write` | `coding.WriteFileTool` | Keep Ion wrapper: Ion needs checkpoints, TUI diff/display policy, and product-specific success output. |
+| `edit` / `multi_edit` | `coding.EditTool`, `coding.MultiEditTool` | Keep Ion wrapper: Ion has `old_string`/`new_string`, CRLF/BOM matching, `replace_all`, `expected_replacements`, line-numbered ambiguity/count errors, checkpoints, and unified diff output. |
+| `list` | `coding.ListDirTool` | Keep Ion wrapper: model-facing name/output are already tuned and mode-filtered with the rest of the read tool set. |
+| `grep` / `glob` | no stable Canto primitive | Keep Ion-owned ripgrep-backed tools; revisit ripgo only after benchmark/eval evidence. |
+| `bash` | `coding.ShellTool` / `coding.Executor` | Keep Ion wrapper: Ion owns shell name, sandbox posture, process-group cancellation, streaming deltas, output truncation markers, and future background-job UX. |
+| `execute_code` | `coding.CodeExecutionTool` | Do not add by default. Python/code execution is not a core coding-agent edit path and should stay behind explicit future eval/safety work. |
+
+Adoption rule: use Canto coding primitives when the primitive is a substrate
+that preserves Ion's model-facing schema, policy/display hooks, checkpoints,
+and test coverage. Do not replace Ion's wrappers merely to reduce local code.
+
 ### Edit surface design
 
 Current recommendation after the post-I2 evaluation:

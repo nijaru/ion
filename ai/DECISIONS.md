@@ -21,6 +21,14 @@ Distilled architectural principles plus recent decision log.
 
 ## Recent Log
 
+### 2026-05-02 - Ion keeps product tool wrappers
+
+Canto's stable `coding` tools are useful framework primitives, but Ion should
+not directly expose them as its default model-facing tools. Ion wrappers own
+short tool names, line-numbered reads, ripgrep search, checkpoints, sandbox and
+mode policy, compact display, and recovery-focused edit errors. Adopt Canto
+pieces only where they preserve that product contract.
+
 ### 2026-05-02 - Thinking controls are capability-filtered
 
 Ion does not send reasoning/thinking request fields based on provider names.

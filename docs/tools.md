@@ -70,6 +70,12 @@ Native `write`, `edit`, and `multi_edit` remain separate. A merged
 Pi-style `edit(edits[])` surface is a future candidate, but it should only
 replace the split after a local edit eval proves equal or better reliability.
 
+Ion keeps its model-visible tool wrappers rather than directly exposing
+Canto's stable `coding` package tools. Canto remains the framework substrate;
+Ion's wrappers own product-level names, line-numbered reads, ripgrep search,
+checkpoints, sandbox/status integration, compact TUI display, and edit error
+messages tuned for coding-agent recovery.
+
 Native `write`, `edit`, and `multi_edit` create pre-change checkpoints before
 they mutate files. Checkpoints are kept as recovery metadata, but `/rewind`
 polish is deferred and should not be treated as part of the default

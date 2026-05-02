@@ -104,6 +104,9 @@ ACP bridge correctness is no longer the active blocker.
 5. Done - `tk-369n` - typed thinking/provider translation foundation:
    Canto exposes structured reasoning capabilities and Ion filters request
    fields through those capabilities.
+6. Done - `tk-t818` - Canto coding primitive adoption audit. Keep Ion-owned
+   model-facing wrappers; adopt Canto pieces only where they preserve Ion's
+   product tool contract.
 
 ## I5+ Deferred Work
 
