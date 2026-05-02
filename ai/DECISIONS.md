@@ -23,6 +23,16 @@ Distilled architectural principles plus recent decision log.
 
 ## Recent Log
 
+### 2026-05-02 - Flue and Mendral constrain, not expand, the core pass
+
+Flue's applicable lesson is the simple headless shape: runtime, session,
+scoped tools/commands, environment, and durable events. Mendral's applicable
+lesson is that long-lived harness state should stay outside disposable
+execution and tool access should route through a small interface. These are
+constraints for simplifying Ion's default native loop, not permission to add
+remote sandboxes, memory namespaces, or multi-agent features before the core is
+boring.
+
 ### 2026-05-02 - Flue validates the harness boundary
 
 Flue is not a TUI replacement for Ion, but its headless programmable shape is a

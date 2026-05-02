@@ -2,19 +2,18 @@
 
 Fast, lightweight terminal coding agent.
 
-**Phase:** I4.5 harness boundary refactor
-**Focus:** Canto-first harness facade review, then Ion runtime boundary cleanup
-**Active external prerequisite:** Canto `canto-2vxb`
-**Active task:** `tk-ezms` - Ion runtime boundary alignment
+**Phase:** Minimal core consolidation
+**Focus:** Make the native coding loop boring before more harness or advanced work
+**Active task:** `tk-g5sf` - Ion minimal core consolidation pass
+**Blocked next task:** `tk-ezms` - Ion runtime boundary alignment
 **Updated:** 2026-05-02
 
 ## Current Truth
 
 - Ion has one native baseline path. There is no global stabilization mode.
-- I0-I4 are complete enough to pause feature expansion: dirty baseline, native
-  boundary refactor, shell polish, safety/trust/sandbox table stakes, ACP
-  correctness, skills read/install, session branching/export, subagent gating,
-  and related advanced slices are green or intentionally deferred.
+- Recent work added or restored many useful surfaces, but the project should
+  not treat that breadth as evidence that the minimal core is finished. The
+  current blocker is to simplify and harden the default native path first.
 - Canto owns durable events, provider-visible history, agent/tool lifecycle,
   reasoning capability translation, and compaction primitives.
 - Ion owns TUI/CLI UX, commands, settings/state, product tools, provider
@@ -28,9 +27,11 @@ Fast, lightweight terminal coding agent.
 - `read_skill` is implemented behind the opt-in `skill_tools = "read"` config
   gate. It is not part of the default eight-tool surface and does not add skill
   inventories to the prompt.
-- Canto is reopened only for the focused `canto-2vxb` harness facade review,
-  not for broad SOTA expansion. Ion implementation waits for that framework
-  direction before another runtime refactor.
+- Flue and Mendral are applicable as boundary checks, not as feature requests:
+  keep the runtime/session/tool boundary explicit, keep state outside
+  disposable execution, and preserve a small model-visible tool surface.
+- Canto `canto-2vxb` and Ion `tk-ezms` remain useful, but they wait behind the
+  minimal-core pass so the refactor is grounded in the actual default path.
 
 ## Latest Evidence
 
@@ -168,9 +169,10 @@ Fast, lightweight terminal coding agent.
 
 ## Next Action
 
-1. Finish Canto `canto-2vxb`: review Flue/Pi/OpenAI/Mendral against Canto's
-   current authoring/runtime surface and name the exact facade/refactor target.
-2. Return to Ion `tk-ezms` and align `CantoBackend` to that facade in small
-   behavior-preserving slices.
+1. Execute `tk-g5sf`: audit the default native hot path from startup through
+   replay, identify stale/default-off clutter, and remove or relocate only what
+   simplifies the minimal core.
+2. Re-run deterministic, race, tmux, and Fedora live gates for the minimal
+   path before returning to Canto `canto-2vxb` or Ion `tk-ezms`.
 3. Keep one green slice per commit; do not expand the model-facing tool surface
-   or add new product features during the harness pass.
+   or add new product features during this pass.

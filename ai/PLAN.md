@@ -4,13 +4,18 @@ Updated: 2026-05-02
 
 ## Current Focus
 
-I0-I4 are complete enough to pause feature expansion. The next priority is a
-harness-architecture refactor pass informed by Flue, Pi, OpenAI Agents SDK, and
-Mendral: make Canto's headless harness facade clearer first, then align Ion's
-runtime boundary to it.
+The active priority is not more feature parity. It is a minimal-core
+consolidation pass: make the default native coding loop clean, small, and
+boringly reliable before continuing broad harness or advanced-agent work.
 
-Active external prerequisite: Canto `canto-2vxb` - Flue/Pi harness facade review.
-Active Ion task: `tk-ezms` - align runtime boundary to Canto harness facade.
+Active task: `tk-g5sf` - Ion minimal core consolidation pass.
+Blocked next task: `tk-ezms` - align runtime boundary to Canto harness facade.
+
+Flue, Pi, OpenAI Agents SDK, and Mendral stay in the plan as architecture
+constraints, not implementation scope. They are useful because they clarify
+where the harness boundary belongs; they do not justify adding new tools,
+remote sandboxes, memory namespaces, or multi-agent features before the default
+core is solid.
 
 ## Phases
 
@@ -19,9 +24,10 @@ Active Ion task: `tk-ezms` - align runtime boundary to Canto harness facade.
 | I0 | Close dirty baseline and clean AI context | Done |
 | I1 | Refactor native core boundaries without behavior drift | Done |
 | I2 | Polish minimal TUI/CLI shell for daily use | Done |
-| I3 | Restore safety, trust, sandbox, and policy table stakes | Done |
-| I4 | Add advanced agent features: subagents, memory, skills, routing, ACP | Done |
-| I4.5 | Refactor around a clear headless harness boundary | Active |
+| I3 | Restore safety, trust, sandbox, and policy table stakes | Implemented, not active |
+| I4 | Add advanced agent features: subagents, memory, skills, routing, ACP | Implemented/deferred, not active |
+| C0 | Minimal native core consolidation | Active |
+| C1 | Refactor around a clear headless harness boundary | Blocked by C0 |
 | I5 | Add eval-driven optimization and SOTA experiments | Deferred |
 
 ## I0: Dirty Baseline And Context Hygiene
@@ -215,9 +221,48 @@ ACP bridge correctness is no longer the active blocker.
     - Ion keeps cwd/branch/model indexes, input history, lazy materialization,
       TUI replay projection, and portable bundle UX
 
-## I4.5: Harness Boundary Refactor
+## C0: Minimal Native Core Consolidation
 
 Status: active.
+
+Goal: make the default path easy to explain and hard to break:
+
+```text
+TUI/CLI input -> AgentSession -> CantoBackend adapter -> Canto runner
+-> eight core tools -> Canto events -> Ion display/storage projection
+```
+
+Work in this order:
+
+1. Map the hot path in source: `cmd/ion` startup, runtime construction,
+   `internal/backend/canto` open/submit/cancel/event translation, tool
+   registration, storage/replay projection, and TUI progress/transcript
+   rendering.
+2. Remove or relocate stale/default-off clutter that can confuse the default
+   path, starting with dead model-visible tool code, duplicate render paths,
+   stale command/test references, and optional feature hooks that run even when
+   their feature is not visible.
+3. Keep advanced surfaces behind explicit boundaries: ACP host mode,
+   subagents, skill tools, memory, sandbox/trust, routing, and steering must
+   not shape the default loop unless the user opts in.
+4. Re-run the core gates: focused package tests, `go test ./...`, native race
+   subset, tmux smoke for fresh/turn/tool/continue/follow-up, and Fedora
+   live smoke with provider-history capture.
+
+Acceptance:
+
+- The default model-visible tool list is exactly the intended eight tools.
+- There is one provider-visible history owner and one transcript display
+  projection.
+- Optional features are either absent from the default request or rejected at
+  their owning boundary.
+- No global stabilization flag, compatibility branch, or second loop remains.
+- The hot path is documented enough that the next refactor can be mechanical,
+  not speculative.
+
+## C1: Harness Boundary Refactor
+
+Status: blocked by C0.
 
 Motivation: Flue is not a TUI replacement, but its `init -> agent -> session`
 shape, Pi's small core, OpenAI's model-native harness direction, and Mendral's

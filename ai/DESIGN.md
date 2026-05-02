@@ -49,7 +49,9 @@ or another transcript writer.
 Flue, Pi, OpenAI Agents SDK, and the Mendral sandbox split all point at the
 same shape: the harness is the deterministic runtime around the model, and the
 TUI is only one host for that runtime. Ion should not copy Flue's TypeScript or
-deployment model, but it should copy the clarity of the boundary:
+deployment model, and it should not copy Mendral's multi-user backend before
+the local agent is stable. These references are applicable only where they
+simplify Ion's core boundary:
 
 ```text
 host shell -> agent runtime -> session -> tools/sandbox/env -> durable events
@@ -57,6 +59,9 @@ host shell -> agent runtime -> session -> tools/sandbox/env -> durable events
 
 For Ion this means:
 
+- The default local coding loop remains the product baseline. Any harness
+  refactor must make that path smaller and easier to test, not introduce a new
+  feature layer.
 - `CantoBackend` should become a thin product adapter over a clearer Canto
   harness facade, not a second framework hidden inside Ion.
 - Ion's TUI/CLI should consume runtime events and send host decisions; it
@@ -72,6 +77,14 @@ For Ion this means:
 - Approval, future elicitation, cancellation, and active-turn steering should
   converge on one typed interrupt/pause-resume boundary so TUI, CLI, ACP, and
   headless hosts stay consistent.
+
+What does not follow:
+
+- Do not add a remote sandbox, virtual filesystem, memory namespace, or
+  multi-agent runtime as part of the minimal-core pass.
+- Do not expose more default tools because another framework supports them.
+- Do not reshape Ion around a generic hosted-agent platform; Ion is first a
+  local terminal coding agent.
 
 ## Core Runtime Contract
 
@@ -101,6 +114,15 @@ Ion owns:
 Ion must not create a second provider-visible transcript writer. Storage and
 rendering may add display rows, but Canto-derived durable history is the source
 for model requests.
+
+The current refactor target is a minimal core, not a broader harness platform:
+
+```text
+input -> runtime session -> stream/tool events -> durable log -> replay/follow-up
+```
+
+Everything outside that line is opt-in or deferred until the line is boring
+under deterministic, race, tmux, and live-provider gates.
 
 ## Tool Surface
 
