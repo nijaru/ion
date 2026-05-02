@@ -26,6 +26,8 @@ Ion is the ACP **client**. External CLI agents (claude, gemini, gh) are ACP **ag
 - `SessionUpdate` → session.Event mapping (text, thought, tool call/result, plan)
 - `session/new` carries Ion initial context in `_meta.ion`: cwd, branch,
   model, Ion session id, resume hint, and project instruction text when present
+- token usage metadata carried in `_meta.tokenUsage`, `_meta.token_usage`,
+  `_meta._tokenUsage`, or `_meta.usage` maps to `session.TokenUsage`
 - `RequestPermission` → synchronous approval bridge (blocks on `chan bool`)
 - `ReadTextFile` / `WriteTextFile` filesystem bridge
 - Terminal bridge (Create/Output/Wait/Kill/Release)
@@ -34,7 +36,7 @@ Ion is the ACP **client**. External CLI agents (claude, gemini, gh) are ACP **ag
 **Not yet wired:**
 
 - Provider-based backend selection is now implemented in `cmd/ion/main.go`
-- Remaining ACP gaps are session continuity and token usage
+- Remaining ACP gap is session continuity
 
 ---
 
@@ -56,10 +58,6 @@ Ion is the ACP **client**. External CLI agents (claude, gemini, gh) are ACP **ag
 ---
 
 ## Known gaps
-
-| Task    | Description                                                      |
-| ------- | ---------------------------------------------------------------- |
-| tk-6zy3 | No token usage (no standard ACP mechanism)                       |
 
 Session continuity/resume is still an open ACP concern, but it is not currently tracked as a standalone task.
 
@@ -87,7 +85,6 @@ type Client interface {
 
 ## Open questions (figure out as we build)
 
-- **Token usage**: check `_tokenUsage` extension notification per agent.
 - **Session resume**: does `AgentCapabilities.LoadSession` support resume by ID, and is it worth prioritizing before headless mode?
 - **Model passthrough**: can ion pass a preferred model via `SetSessionModel`?
 - **Feature bridging**: which native ion tools (sub-agents, memory) can be exposed as ACP-callable tools? Figure out after those features exist in native mode.

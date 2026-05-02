@@ -339,6 +339,7 @@ func acpStderrWriter() (io.Writer, func() error, error) {
 // SessionUpdate implements acp.Client — translates ACP notifications to session.Event.
 func (s *Session) SessionUpdate(ctx context.Context, n acp.SessionNotification) error {
 	update := n.Update
+	usage, hasUsage := tokenUsageFromNotification(n)
 
 	switch {
 	case update.AgentMessageChunk != nil:
@@ -395,6 +396,10 @@ func (s *Session) SessionUpdate(ctx context.Context, n acp.SessionNotification) 
 		if len(update.Plan.Entries) > 0 {
 			s.events <- session.StatusChanged{Status: update.Plan.Entries[0].Content}
 		}
+	}
+
+	if hasUsage {
+		s.events <- usage
 	}
 
 	return nil

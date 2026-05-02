@@ -3,9 +3,9 @@
 Fast, lightweight terminal coding agent.
 
 **Phase:** I4 advanced integrations
-**Focus:** Reopen deferred integrations from the stable I0-I3 baseline, starting with ACP bridge correctness.
+**Focus:** Reopen deferred integrations from the stable I0-I3 baseline.
 **Active umbrella:** none - `tk-mmcs` is closed.
-**Active task:** `tk-6zy3` - ACP token usage event mapping.
+**Active task:** none - choose the next I4 task.
 **Updated:** 2026-05-02
 
 ## Current Truth
@@ -114,15 +114,24 @@ Fast, lightweight terminal coding agent.
   `go test ./internal/backend/acp -count=1 -timeout 180s`,
   `go test ./... -count=1 -timeout 300s`, the native race subset, and
   `go test -race ./internal/backend/acp -count=1 -timeout 180s`.
+- ACP token usage extension metadata now maps to `session.TokenUsage` from
+  `_meta.tokenUsage`, `_meta.token_usage`, `_meta._tokenUsage`, and
+  `_meta.usage` payloads on session notifications or update payloads.
+- Latest ACP token-usage gates passed:
+  `go test ./internal/backend/acp -count=1 -timeout 180s`,
+  `go test ./... -count=1 -timeout 300s`, the native race subset, and
+  `go test -race ./internal/backend/acp -count=1 -timeout 180s`.
 
 ## Next Action
 
-1. Commit the completed `tk-o0iw` slice.
-2. Start `tk-6zy3` and review ACP token usage extension support.
-3. Keep native Canto/Ion loop behavior as the acceptance baseline while fixing
-   ACP-specific gaps.
+1. Commit the completed `tk-6zy3` slice.
+2. Choose the next I4 task from `tk ready`; current highest-priority options are
+   merged edit evaluation, background bash monitor workflow, subagent context
+   forking, and boundary-step steering.
+3. Keep native Canto/Ion loop behavior as the acceptance baseline while adding
+   advanced integrations.
 4. Continue one green slice per commit.
 
 ## Active Tasks
 
-- `tk-6zy3` - ACP token usage event mapping.
+- none.

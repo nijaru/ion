@@ -207,6 +207,64 @@ func TestACPSessionUpdateToolCompletion(t *testing.T) {
 	}
 }
 
+func TestACPSessionUpdateTokenUsageFromNotificationMeta(t *testing.T) {
+	client, _ := newTestPair(t)
+
+	if err := client.SessionUpdate(context.Background(), acp.SessionNotification{
+		SessionId: "test-session",
+		Meta: map[string]any{
+			"tokenUsage": map[string]any{
+				"inputTokens":  12,
+				"outputTokens": 3,
+				"cost":         0.004,
+			},
+		},
+	}); err != nil {
+		t.Fatalf("SessionUpdate: %v", err)
+	}
+
+	ev := drainOne(t, client.events, 500*time.Millisecond)
+	usage, ok := ev.(session.TokenUsage)
+	if !ok {
+		t.Fatalf("expected TokenUsage, got %T", ev)
+	}
+	if usage.Input != 12 || usage.Output != 3 || usage.Cost != 0.004 {
+		t.Fatalf("usage = %+v, want input 12 output 3 cost 0.004", usage)
+	}
+}
+
+func TestACPSessionUpdateTokenUsageFromUpdateMeta(t *testing.T) {
+	client, agentConn := newTestPair(t)
+
+	update := acp.UpdateAgentMessageText("hello")
+	update.AgentMessageChunk.Meta = map[string]any{
+		"_tokenUsage": map[string]any{
+			"prompt_tokens":     20,
+			"completion_tokens": 5,
+			"cost_usd":          "0.01",
+		},
+	}
+	if err := agentConn.SessionUpdate(context.Background(), acp.SessionNotification{
+		SessionId: "test-session",
+		Update:    update,
+	}); err != nil {
+		t.Fatalf("SessionUpdate: %v", err)
+	}
+
+	ev := drainOne(t, client.events, 500*time.Millisecond)
+	if _, ok := ev.(session.AgentDelta); !ok {
+		t.Fatalf("expected AgentDelta first, got %T", ev)
+	}
+	ev = drainOne(t, client.events, 500*time.Millisecond)
+	usage, ok := ev.(session.TokenUsage)
+	if !ok {
+		t.Fatalf("expected TokenUsage, got %T", ev)
+	}
+	if usage.Input != 20 || usage.Output != 5 || usage.Cost != 0.01 {
+		t.Fatalf("usage = %+v, want input 20 output 5 cost 0.01", usage)
+	}
+}
+
 func TestACPApprovalBridge(t *testing.T) {
 	client, agentConn := newTestPair(t)
 
