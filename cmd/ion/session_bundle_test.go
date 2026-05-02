@@ -4,12 +4,21 @@ import (
 	"bytes"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/nijaru/ion/internal/storage"
 )
+
+func TestMain(m *testing.M) {
+	if os.Getenv("ION_TEST_MAIN") == "1" {
+		main()
+		return
+	}
+	os.Exit(m.Run())
+}
 
 func TestSessionBundleFileExportImport(t *testing.T) {
 	ctx := t.Context()
@@ -72,6 +81,65 @@ func TestSessionBundleFileExportImport(t *testing.T) {
 		storage.ErrSessionBundleConflict,
 	) {
 		t.Fatalf("second import error = %v, want conflict", err)
+	}
+}
+
+func TestSessionBundleCLIImportExportSmoke(t *testing.T) {
+	ctx := t.Context()
+	exportHome := t.TempDir()
+	exportDataDir := filepath.Join(exportHome, ".ion", "data")
+	exportStore, err := storage.NewCantoStore(exportDataDir)
+	if err != nil {
+		t.Fatalf("new export store: %v", err)
+	}
+	sess, err := exportStore.OpenSession(ctx, "/tmp/ion-session-bundle", "model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	if err := sess.Append(ctx, storage.System{Content: "cli portable note"}); err != nil {
+		t.Fatalf("append system note: %v", err)
+	}
+	if err := exportStore.Close(); err != nil {
+		t.Fatalf("close export store: %v", err)
+	}
+
+	bundlePath := filepath.Join(t.TempDir(), "cli-session-bundle.json")
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("test executable: %v", err)
+	}
+	exportCmd := exec.Command(exe, "--resume", sess.ID(), "--export-session", bundlePath)
+	exportCmd.Env = append(os.Environ(), "ION_TEST_MAIN=1", "HOME="+exportHome)
+	if out, err := exportCmd.CombinedOutput(); err != nil {
+		t.Fatalf("export command failed: %v\n%s", err, out)
+	} else if !strings.Contains(string(out), "Exported session "+sess.ID()) {
+		t.Fatalf("export output = %q, want session id", out)
+	}
+
+	importHome := t.TempDir()
+	importCmd := exec.Command(exe, "--import-session", bundlePath)
+	importCmd.Env = append(os.Environ(), "ION_TEST_MAIN=1", "HOME="+importHome)
+	if out, err := importCmd.CombinedOutput(); err != nil {
+		t.Fatalf("import command failed: %v\n%s", err, out)
+	} else if !strings.Contains(string(out), "Imported session "+sess.ID()) {
+		t.Fatalf("import output = %q, want session id", out)
+	}
+
+	importStore, err := storage.NewCantoStore(filepath.Join(importHome, ".ion", "data"))
+	if err != nil {
+		t.Fatalf("new import store: %v", err)
+	}
+	defer importStore.Close()
+	resumed, err := importStore.ResumeSession(ctx, sess.ID())
+	if err != nil {
+		t.Fatalf("resume imported session: %v", err)
+	}
+	entries, err := resumed.Entries(ctx)
+	if err != nil {
+		t.Fatalf("entries: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Content != "cli portable note" {
+		t.Fatalf("entries = %#v, want cli portable note", entries)
 	}
 }
 
