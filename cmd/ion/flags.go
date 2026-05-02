@@ -1,9 +1,123 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"strings"
+	"time"
 )
+
+type cliFlags struct {
+	continueFlag      *bool
+	continueShortFlag *bool
+	resumeFlag        *string
+	resumeShortFlag   *string
+	providerFlag      *string
+	modelFlag         *string
+	modelShortFlag    *string
+	thinkingFlag      *string
+	modeFlag          *string
+	yoloFlag          *bool
+	printFlag         *bool
+	promptFlag        *string
+	printShortFlag    *bool
+	outputFlag        *string
+	jsonFlag          *bool
+	timeoutFlag       *time.Duration
+}
+
+func registerCLIFlags() cliFlags {
+	return cliFlags{
+		continueFlag: flag.Bool(
+			"continue",
+			false,
+			"Continue the most recent session in this directory",
+		),
+		continueShortFlag: flag.Bool(
+			"c",
+			false,
+			"Continue the most recent session in this directory",
+		),
+		resumeFlag:      flag.String("resume", "", "Resume a specific session by ID"),
+		resumeShortFlag: flag.String("r", "", "Resume a specific session by ID"),
+		providerFlag:    flag.String("provider", "", "Provider to use"),
+		modelFlag:       flag.String("model", "", "Model to use"),
+		modelShortFlag:  flag.String("m", "", "Model to use"),
+		thinkingFlag: flag.String(
+			"thinking",
+			"",
+			"Thinking effort: auto, off, minimal, low, medium, high, xhigh",
+		),
+		modeFlag:       flag.String("mode", "", "Permission mode: read, edit, or auto"),
+		yoloFlag:       flag.Bool("yolo", false, "Start in AUTO mode (alias for --mode auto)"),
+		printFlag:      flag.Bool("print", false, "Print response and exit (use with --prompt or stdin)"),
+		promptFlag:     flag.String("prompt", "", "Prompt to send in print mode"),
+		printShortFlag: flag.Bool("p", false, "Print response and exit (alias for --print)"),
+		outputFlag:     flag.String("output", "text", "Print mode output: text or json"),
+		jsonFlag:       flag.Bool("json", false, "Emit JSON in print mode"),
+		timeoutFlag:    flag.Duration("timeout", 5*time.Minute, "Timeout for print mode"),
+	}
+}
+
+func (f cliFlags) continueRequested() bool {
+	return *f.continueFlag || *f.continueShortFlag
+}
+
+func (f cliFlags) resumeID() string {
+	return *f.resumeFlag
+}
+
+func (f cliFlags) resumeShortID() string {
+	return *f.resumeShortFlag
+}
+
+func (f cliFlags) providerOverride() string {
+	return strings.TrimSpace(*f.providerFlag)
+}
+
+func (f cliFlags) modelOverride() string {
+	return firstNonEmpty(*f.modelFlag, *f.modelShortFlag)
+}
+
+func (f cliFlags) thinkingOverride() string {
+	return *f.thinkingFlag
+}
+
+func (f cliFlags) modeOverride() string {
+	return *f.modeFlag
+}
+
+func (f cliFlags) explicitModeRequested() bool {
+	return strings.TrimSpace(*f.modeFlag) != "" || *f.yoloFlag
+}
+
+func (f cliFlags) yolo() bool {
+	return *f.yoloFlag
+}
+
+func (f cliFlags) printRequested() bool {
+	return *f.printFlag
+}
+
+func (f cliFlags) printShortRequested() bool {
+	return *f.printShortFlag
+}
+
+func (f cliFlags) prompt() string {
+	return *f.promptFlag
+}
+
+func (f cliFlags) output() string {
+	return *f.outputFlag
+}
+
+func (f cliFlags) jsonRequested() bool {
+	return *f.jsonFlag
+}
+
+func (f cliFlags) timeout() time.Duration {
+	return *f.timeoutFlag
+}
 
 func validatePrintSelection(printRequested, openResumePicker bool) error {
 	if printRequested && openResumePicker {

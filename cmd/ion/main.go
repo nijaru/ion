@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -25,30 +24,7 @@ import (
 var version = "v0.0.0"
 
 func main() {
-	continueFlag := flag.Bool(
-		"continue",
-		false,
-		"Continue the most recent session in this directory",
-	)
-	continueShortFlag := flag.Bool("c", false, "Continue the most recent session in this directory")
-	resumeFlag := flag.String("resume", "", "Resume a specific session by ID")
-	resumeShortFlag := flag.String("r", "", "Resume a specific session by ID")
-	providerFlag := flag.String("provider", "", "Provider to use")
-	modelFlag := flag.String("model", "", "Model to use")
-	modelShortFlag := flag.String("m", "", "Model to use")
-	thinkingFlag := flag.String(
-		"thinking",
-		"",
-		"Thinking effort: auto, off, minimal, low, medium, high, xhigh",
-	)
-	modeFlag := flag.String("mode", "", "Permission mode: read, edit, or auto")
-	yoloFlag := flag.Bool("yolo", false, "Start in AUTO mode (alias for --mode auto)")
-	printFlag := flag.Bool("print", false, "Print response and exit (use with --prompt or stdin)")
-	promptFlag := flag.String("prompt", "", "Prompt to send in print mode")
-	printShortFlag := flag.Bool("p", false, "Print response and exit (alias for --print)")
-	outputFlag := flag.String("output", "text", "Print mode output: text or json")
-	jsonFlag := flag.Bool("json", false, "Emit JSON in print mode")
-	timeoutFlag := flag.Duration("timeout", 5*time.Minute, "Timeout for print mode")
+	cli := registerCLIFlags()
 	args, openResumePicker := normalizeFlagArgs(os.Args[1:])
 	if err := flag.CommandLine.Parse(args); err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
@@ -62,19 +38,18 @@ func main() {
 		os.Exit(1)
 	}
 
-	providerOverride := strings.TrimSpace(*providerFlag)
-	modelOverride := firstNonEmpty(*modelFlag, *modelShortFlag)
+	providerOverride := cli.providerOverride()
+	modelOverride := cli.modelOverride()
 	explicitRuntimeOverride := providerOverride != "" ||
 		strings.TrimSpace(modelOverride) != "" ||
 		strings.TrimSpace(os.Getenv("ION_PROVIDER")) != "" ||
 		strings.TrimSpace(os.Getenv("ION_MODEL")) != ""
-	applyCLIConfigOverrides(cfg, providerOverride, modelOverride, *thinkingFlag)
-	mode, err := startupMode(cfg, *modeFlag, *yoloFlag)
+	applyCLIConfigOverrides(cfg, providerOverride, modelOverride, cli.thinkingOverride())
+	mode, err := startupMode(cfg, cli.modeOverride(), cli.yolo())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(2)
 	}
-	explicitModeRequested := strings.TrimSpace(*modeFlag) != "" || *yoloFlag
 
 	ctx := context.Background()
 	cwd, _ := os.Getwd()
@@ -86,18 +61,18 @@ func main() {
 	}
 
 	printRequested, prompt, output, err := resolvePrintFlags(
-		*printFlag,
-		*printShortFlag,
-		*promptFlag,
+		cli.printRequested(),
+		cli.printShortRequested(),
+		cli.prompt(),
 		flag.Args(),
-		*outputFlag,
-		*jsonFlag,
+		cli.output(),
+		cli.jsonRequested(),
 	)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(2)
 	}
-	mode = applyWorkspaceTrustModeGate(mode, trusted, printRequested, explicitModeRequested)
+	mode = applyWorkspaceTrustModeGate(mode, trusted, printRequested, cli.explicitModeRequested())
 	if err := validatePrintSelection(printRequested, openResumePicker); err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(2)
@@ -134,9 +109,9 @@ func main() {
 		ctx,
 		store,
 		cwd,
-		*resumeFlag,
-		*resumeShortFlag,
-		*continueFlag || *continueShortFlag,
+		cli.resumeID(),
+		cli.resumeShortID(),
+		cli.continueRequested(),
 	)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
@@ -180,7 +155,7 @@ func main() {
 			os.Stdout,
 			agent,
 			prompt,
-			*timeoutFlag,
+			cli.timeout(),
 			mode == session.ModeYolo,
 			output,
 		)
