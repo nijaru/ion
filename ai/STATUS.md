@@ -66,8 +66,9 @@ Fast, lightweight terminal coding agent.
   `go test ./internal/app -count=1 -timeout 180s`,
   `go test ./... -count=1 -timeout 300s`, and the native race subset.
 - Edit-surface design is distilled into `ai/specs/tools-and-modes.md` and
-  `ai/DECISIONS.md`: keep `write`, `edit`, and `multi_edit` through I2; defer a
-  Pi-style merged `edit(edits[])` until there is eval evidence.
+  `ai/DECISIONS.md`: keep `write`, `edit`, and `multi_edit` for the current I4
+  surface; a Pi-style merged `edit(edits[])` remains a candidate only after
+  local edit eval evidence.
 - I2 final shell sweep passed against Fedora `local-api/qwen3.6:27b-uncensored`:
   live request-history smoke verified tool call, persisted resume, and follow-up
   provider history; tmux text capture covered fresh launch, `/tools`,
@@ -121,13 +122,18 @@ Fast, lightweight terminal coding agent.
   `go test ./internal/backend/acp -count=1 -timeout 180s`,
   `go test ./... -count=1 -timeout 300s`, the native race subset, and
   `go test -race ./internal/backend/acp -count=1 -timeout 180s`.
+- Post-I2 merged edit evaluation is closed: keep `write`, `edit`, and
+  `multi_edit` for I4; only replace `edit` + `multi_edit` with a Pi-style
+  merged `edit(edits[])` after local edit eval evidence proves equal or better
+  reliability.
+- Latest edit-surface doc sanity check passed: no stale old-phase language
+  remains in the canonical tool docs.
 
 ## Next Action
 
-1. Commit the completed `tk-6zy3` slice.
-2. Choose the next I4 task from `tk ready`; current highest-priority options are
-   merged edit evaluation, background bash monitor workflow, subagent context
-   forking, and boundary-step steering.
+1. Commit the completed `tk-h9u6` docs/spec slice.
+2. Start `tk-90ft` background bash monitor workflow unless a higher-value I4
+   task appears first.
 3. Keep native Canto/Ion loop behavior as the acceptance baseline while adding
    advanced integrations.
 4. Continue one green slice per commit.

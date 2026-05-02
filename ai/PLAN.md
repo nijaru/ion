@@ -89,9 +89,13 @@ Start with the highest-priority ready ACP bridge correctness tasks:
 2. Done - `tk-o0iw` - add initial session context at ACP `Open()`.
 3. Done - `tk-6zy3` - map ACP token usage events into Ion usage.
 
-ACP bridge correctness is no longer the active blocker. Next choose between
-merged edit evaluation, background bash monitoring, subagents/context forking,
-and boundary-step steering based on concrete daily-use value.
+ACP bridge correctness is no longer the active blocker.
+
+1. Done - `tk-h9u6` - evaluate merged edit `edits[]` surface; keep the current
+   split until local edit eval evidence proves a merged tool is better.
+2. Next - `tk-90ft` - background bash monitor workflow.
+3. Later - subagents/context forking, boundary-step steering, and typed
+   thinking/provider translation.
 
 ## I5+ Deferred Work
 

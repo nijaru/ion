@@ -1,14 +1,13 @@
 # Tools
 
-During P1 native-loop stabilization, the default model-visible native tool
-surface is deliberately small:
+The default model-visible native tool surface is deliberately small:
 
 ```text
 bash, read, write, edit, multi_edit, list, grep, glob
 ```
 
 Memory, MCP, subagent, model-visible compaction, and rewind/checkpoint control
-surfaces are deferred or hidden while the core loop is being stabilized.
+surfaces are deferred or hidden from the default tool surface.
 `/compact` remains a host command because context survival is reliability work.
 
 Ion uses Canto's lazy tool loading. When the registered tool surface is larger
@@ -61,9 +60,13 @@ Large model-visible tool results are truncated with an explicit marker that
 includes the cutoff and omitted byte count. If the model needs the omitted
 content, it should rerun the tool with a narrower command, path, or line range.
 
+Native `write`, `edit`, and `multi_edit` remain separate. A merged
+Pi-style `edit(edits[])` surface is a future candidate, but it should only
+replace the split after a local edit eval proves equal or better reliability.
+
 Native `write`, `edit`, and `multi_edit` create pre-change checkpoints before
 they mutate files. Checkpoints are kept as recovery metadata, but `/rewind`
-polish is deferred and should not be treated as part of the P1 default
+polish is deferred and should not be treated as part of the default
 model-visible tool surface.
 
 Structured edits require exact `old_string` matches. Use

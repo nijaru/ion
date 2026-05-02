@@ -1,6 +1,6 @@
 # Tools and Modes
 
-## P1 default model-visible tool surface
+## Default model-visible tool surface
 
 | Tool | Category | Purpose |
 |---|---|---|
@@ -13,16 +13,16 @@
 | `multi_edit` | Write | Apply multiple exact replacements atomically |
 | `bash` | Execute | Run shell command (streaming) |
 
-This is the native-loop baseline. Keep it small until the native loop and
-minimal shell are boringly reliable.
+This is the native-loop baseline. Keep it small unless an eval-backed tool
+change clearly improves daily coding reliability.
 
 Durable tool-surface decisions:
 
 - `write` stays separate from targeted edits. Create/overwrite has a different
   risk and display shape than exact replacement.
-- `edit` and `multi_edit` stay separate through P1. A Pi-style merged
-  `edit(edits[])` surface is a deferred evaluation task, not part of the
-  current stabilization bundle.
+- `edit` and `multi_edit` stay separate for now. A Pi-style merged
+  `edit(edits[])` surface remains the best simplification candidate, but it
+  needs a small local edit eval before replacing working tools.
 - Structured edits are the normal edit path. Do not steer models toward Python,
   `sed`, heredocs, or shell patching for routine edits.
 - Keep `grep`, `glob`, and `list` as typed read-only tools instead of collapsing
@@ -33,11 +33,11 @@ Durable tool-surface decisions:
 
 ### Edit surface design
 
-Current recommendation:
+Current recommendation after the post-I2 evaluation:
 
 - Keep `write` separate long-term. Whole-file create/overwrite is a different
   operation from targeted replacement for approval, display, and recovery.
-- Keep `edit` and `multi_edit` as the current I2 surface. Ion's implementation
+- Keep `edit` and `multi_edit` as the current I4 surface. Ion's implementation
   is already hardened around exact replacement, CRLF/BOM-safe matching,
   line-numbered ambiguity/count errors, explicit replacement counts, and
   atomic validation before writes.
@@ -57,12 +57,11 @@ Reference synthesis:
 | Claude-like tools | separate file read/write/edit plus grep/glob/bash classes | Confirms clear permission/display classes are conventional |
 | Codex | `apply_patch` grammar for add/update/move/delete | Useful later for power users; too heavy for default mixed-provider path |
 
-Deferred evaluation:
+Deferred implementation:
 
-- Evaluate replacing `edit` + `multi_edit` with one `edit` tool after I2, not
-  during shell stabilization.
-- Candidate merged schema should preserve a clean break; Ion is `v0.0.0`, so no
-  compatibility shim is needed if the evaluation says merge.
+- Implement a merged tool only after a small local eval shows it is equal or
+  better than the current split. Ion is `v0.0.0`, so no compatibility shim is
+  needed if the eval says merge.
 - Preferred candidate:
 
 ```json
