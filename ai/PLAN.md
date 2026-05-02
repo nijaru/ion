@@ -111,6 +111,9 @@ ACP bridge correctness is no longer the active blocker.
    Keep skills out of the default prompt/toolset; `/skills [query]` lists local
    metadata only; use explicit install, progressive disclosure, and separate
    gates for `read_skill`, `manage_skill`, and marketplace work.
+8. In progress - `tk-8174` - session branching and cross-host transfer. First
+   slice adds `/fork [label]` on Canto lineage; remaining work is export/import
+   transfer and a readable tree/lineage browser.
 
 ## I5+ Deferred Work
 

@@ -169,6 +169,90 @@ func (s *cantoStore) ResumeSession(ctx context.Context, id string) (Session, err
 	}, nil
 }
 
+func (s *cantoStore) ForkSession(
+	ctx context.Context,
+	parentID string,
+	opts ForkOptions,
+) (Session, error) {
+	parent, err := s.sessionInfo(ctx, parentID)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	childID := fmt.Sprintf("%d-%s", now.Unix(), ionsession.ShortID())
+	_, err = s.canto.ForkWithOptions(ctx, parentID, childID, session.ForkOptions{
+		BranchLabel: strings.TrimSpace(opts.Label),
+		ForkReason:  strings.TrimSpace(opts.Reason),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	title := strings.TrimSpace(opts.Label)
+	if title == "" {
+		title = "Fork of " + parent.ID
+	}
+	if _, err := s.db.ExecContext(
+		ctx,
+		`INSERT INTO session_meta
+		 (id, cwd, model, branch, name, created_at, updated_at, last_preview)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		childID,
+		parent.CWD,
+		parent.Model,
+		parent.Branch,
+		title,
+		now.Unix(),
+		now.Unix(),
+		parent.LastPreview,
+	); err != nil {
+		return nil, err
+	}
+
+	return &cantoSession{
+		id:    childID,
+		store: s,
+		meta: Meta{
+			ID:        childID,
+			CWD:       parent.CWD,
+			Model:     parent.Model,
+			Branch:    parent.Branch,
+			CreatedAt: now.Unix(),
+		},
+	}, nil
+}
+
+func (s *cantoStore) sessionInfo(ctx context.Context, id string) (SessionInfo, error) {
+	var si SessionInfo
+	var ca, ua int64
+	var title sql.NullString
+	var preview sql.NullString
+	err := s.db.QueryRowContext(
+		ctx,
+		`SELECT id, cwd, model, branch, created_at, updated_at, name, last_preview
+		 FROM session_meta WHERE id = ?`,
+		id,
+	).Scan(
+		&si.ID,
+		&si.CWD,
+		&si.Model,
+		&si.Branch,
+		&ca,
+		&ua,
+		&title,
+		&preview,
+	)
+	if err != nil {
+		return SessionInfo{}, err
+	}
+	si.CreatedAt = time.Unix(ca, 0)
+	si.UpdatedAt = time.Unix(ua, 0)
+	si.Title = title.String
+	si.Summary = preview.String
+	si.LastPreview = preview.String
+	return si, nil
+}
+
 func (s *cantoStore) ListSessions(ctx context.Context, cwd string) ([]SessionInfo, error) {
 	rows, err := s.db.QueryContext(
 		ctx,

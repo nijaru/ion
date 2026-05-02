@@ -21,6 +21,14 @@ Distilled architectural principles plus recent decision log.
 
 ## Recent Log
 
+### 2026-05-02 - Session branching uses Canto lineage
+
+Ion should not invent a second session tree. Local branching uses Canto
+`BranchSession`/ancestry metadata and Ion only adds product indexing plus TUI
+commands. `/fork [label]` is the first branch surface; cross-host transfer and
+tree browsing build on the same lineage rather than copying transcript display
+rows.
+
 ### 2026-05-02 - Skills are explicit-install progressive disclosure
 
 Ion should not expose skills as always-on prompt text or as default coding

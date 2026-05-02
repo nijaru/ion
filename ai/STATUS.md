@@ -5,7 +5,7 @@ Fast, lightweight terminal coding agent.
 **Phase:** I4 advanced integrations
 **Focus:** Reopen deferred integrations from the stable I0-I3 baseline.
 **Active umbrella:** none - `tk-mmcs` is closed.
-**Active task:** none - next I4 item pending.
+**Active task:** `tk-8174` - Session: Cross-Host Sync & TUI Branching
 **Updated:** 2026-05-02
 
 ## Current Truth
@@ -174,10 +174,18 @@ Fast, lightweight terminal coding agent.
 - Follow-up `tk-hfgh` tracks safe install staging, model-visible `read_skill`,
   gated `manage_skill`, and self-extension nudges after explicit trust/write
   policy gates exist.
+- `tk-8174` first slice is implemented locally: `/fork [label]` requires a
+  materialized session, calls Ion storage `ForkSession`, uses Canto
+  `ForkWithOptions`/ancestry metadata, indexes the child in Ion session
+  metadata, and switches the TUI into the forked session.
+- Latest fork-focused gates passed:
+  `go test ./internal/storage ./internal/app -count=1 -timeout 180s`,
+  `go test ./... -count=1 -timeout 300s`, and the native race subset.
 
 ## Next Action
 
-1. Pick the next ready I4 item from `tk ready`.
+1. Finish the `tk-8174` local fork slice with full/race verification and commit.
+2. Continue `tk-8174` with export/import transfer or tree/lineage browser.
 3. Add a tmux/live check later if steering is promoted beyond opt-in settings.
 4. Keep native Canto/Ion loop behavior as the acceptance baseline while adding
    advanced integrations.
@@ -185,4 +193,4 @@ Fast, lightweight terminal coding agent.
 
 ## Active Tasks
 
-- none
+- `tk-8174` - session branching and cross-host transfer

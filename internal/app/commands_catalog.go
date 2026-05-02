@@ -98,6 +98,13 @@ func slashCommandDefinitions() []slashCommandInfo {
 			helpDetail: "show current session info",
 		},
 		{
+			name:       "/fork",
+			detail:     "fork current session",
+			helpLabel:  "/fork [label]",
+			helpDetail: "branch the current session",
+			idle:       slashCommandIdleAlways,
+		},
+		{
 			name:       "/compact",
 			detail:     "compact session",
 			helpLabel:  "/compact",
