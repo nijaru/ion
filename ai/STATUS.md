@@ -5,7 +5,7 @@ Fast, lightweight terminal coding agent.
 **Phase:** I1 behavior-preserving Ion refactors
 **Focus:** Refactor the product shell from the full design while preserving the native baseline.
 **Active umbrella:** `tk-mmcs` - core parity plan and queue hygiene.
-**Active task:** `tk-e2a5` - clean CLI startup and config boundary.
+**Active task:** `tk-7sna` - split file tools by responsibility.
 **Updated:** 2026-05-02
 
 ## Current Truth
@@ -41,19 +41,24 @@ Fast, lightweight terminal coding agent.
   `go test ./internal/app -count=1 -timeout 120s`,
   `go test ./... -count=1 -timeout 300s`, and
   `go test -race ./cmd/ion ./internal/app ./internal/backend/canto ./internal/backend/canto/tools ./internal/storage -count=1 -timeout 300s`.
+- CLI/config boundary refactor is complete: flag registration and normalization
+  live in `cmd/ion/flags.go`, runtime selection in `cmd/ion/selection.go`, and
+  backend/session opening in `cmd/ion/runtime.go`.
+- Latest CLI/config gates passed:
+  `go test ./cmd/ion ./internal/config -count=1 -timeout 180s`,
+  `go test ./... -count=1 -timeout 300s`, and the native race subset.
 
 ## Next Action
 
-1. Start `tk-e2a5` and review CLI flag parsing, runtime selection, and backend
-   construction boundaries.
-2. Keep behavior unchanged unless a concrete config/startup bug falls out of
-   the review.
-3. Run focused `cmd/ion` and config tests, then full deterministic and race
-   gates for the slice.
+1. Start `tk-7sna` and split `internal/backend/canto/tools/file.go` by tool
+   responsibility.
+2. Preserve model-visible tool semantics and keep shared workspace-safe helpers
+   centralized.
+3. Run focused tool tests, then full deterministic and race gates for the
+   slice.
 
 ## Active Tasks
 
 - `tk-mmcs` - core parity plan and task queue hygiene.
-- `tk-e2a5` - clean CLI startup and config boundary.
 - `tk-eyvq` - refactor CantoBackend lifecycle files.
 - `tk-7sna` - split file tools by responsibility.
