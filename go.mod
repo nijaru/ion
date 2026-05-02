@@ -11,6 +11,7 @@ require (
 	github.com/charmbracelet/x/ansi v0.11.6
 	github.com/coder/acp-go-sdk v0.6.3
 	github.com/go-json-experiment/json v0.0.0-20260214004413-d219187c3433
+	github.com/nijaru/agentskills v0.0.0-20260327104504-1968077cb46d
 	github.com/nijaru/canto v0.0.0-20260502183715-8f92ed790d17
 	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/yuin/goldmark v1.7.13
@@ -50,14 +51,12 @@ require (
 	github.com/modelcontextprotocol/go-sdk v1.4.1 // indirect
 	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
-	github.com/nijaru/agentskills v0.0.0-20260327104504-1968077cb46d // indirect
 	github.com/oklog/ulid/v2 v2.1.1 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/sashabaranov/go-openai v1.41.2 // indirect
 	github.com/segmentio/asm v1.1.3 // indirect
 	github.com/segmentio/encoding v0.5.4 // indirect
-	github.com/tetratelabs/wazero v1.11.0 // indirect
 	github.com/tidwall/gjson v1.18.0 // indirect
 	github.com/tidwall/match v1.2.0 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect

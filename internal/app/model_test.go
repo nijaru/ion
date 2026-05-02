@@ -3177,6 +3177,7 @@ func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 		"/fast",
 		"/settings",
 		"/tools",
+		"/skills [query]",
 		"/cost",
 		"/mode [mode]",
 		"/trust [status]",
