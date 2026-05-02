@@ -21,16 +21,21 @@ func reasoningEffortProcessor(cfg *config.Config) prompt.RequestProcessor {
 				req.ReasoningEffort = ""
 				return nil
 			}
-			if p == nil || !p.Capabilities(model).ReasoningEffort {
+			if effort == "max" {
+				req.ReasoningEffort = ""
+				return nil
+			}
+
+			wireEffort := effort
+			if effort == "off" {
+				wireEffort = "none"
+			}
+			if p == nil || !p.Capabilities(model).SupportsReasoningEffort(wireEffort) {
 				req.ReasoningEffort = ""
 				return nil
 			}
 			if effort == "off" {
-				req.ReasoningEffort = "none"
-				return nil
-			}
-			if effort == "max" {
-				req.ReasoningEffort = ""
+				req.ReasoningEffort = wireEffort
 				return nil
 			}
 			req.ReasoningEffort = effort

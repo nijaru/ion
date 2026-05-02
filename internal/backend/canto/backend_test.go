@@ -73,6 +73,13 @@ type reasoningCapProvider struct {
 func (p *reasoningCapProvider) Capabilities(model string) llm.Capabilities {
 	caps := llm.DefaultCapabilities()
 	caps.ReasoningEffort = p.reasoningEffort
+	if p.reasoningEffort {
+		caps.Reasoning = llm.ReasoningCapabilities{
+			Kind:       llm.ReasoningKindEffort,
+			Efforts:    []string{"minimal", "low", "medium", "high"},
+			CanDisable: true,
+		}
+	}
 	return caps
 }
 
@@ -240,6 +247,18 @@ func TestReasoningEffortProcessorMapsOffToNone(t *testing.T) {
 	}
 	if req.ReasoningEffort != "none" {
 		t.Fatalf("reasoning effort = %q, want none", req.ReasoningEffort)
+	}
+}
+
+func TestReasoningEffortProcessorDropsUnsupportedEffortValue(t *testing.T) {
+	req := &llm.Request{}
+	processor := reasoningEffortProcessor(&config.Config{ReasoningEffort: "xhigh"})
+	provider := &reasoningCapProvider{reasoningEffort: true}
+	if err := processor.ApplyRequest(context.Background(), provider, "model", nil, req); err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if req.ReasoningEffort != "" {
+		t.Fatalf("reasoning effort = %q, want empty for unsupported effort", req.ReasoningEffort)
 	}
 }
 
