@@ -3,6 +3,9 @@ package acp
 import (
 	"context"
 	"io"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -301,5 +304,44 @@ func TestACPCommandEnvIncludesResumeSessionID(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected resume session ID in env, got %v", env)
+	}
+}
+
+func TestACPStderrWriterDefaultsToDiscard(t *testing.T) {
+	t.Setenv("ION_ACP_STDERR_LOG", "")
+
+	w, cleanup, err := acpStderrWriter()
+	if err != nil {
+		t.Fatalf("acpStderrWriter returned error: %v", err)
+	}
+	if _, err := io.WriteString(w, "agent warning\n"); err != nil {
+		t.Fatalf("write stderr: %v", err)
+	}
+	if err := cleanup(); err != nil {
+		t.Fatalf("cleanup stderr: %v", err)
+	}
+}
+
+func TestACPStderrWriterAppendsToDebugLog(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "acp-stderr.log")
+	t.Setenv("ION_ACP_STDERR_LOG", path)
+
+	w, cleanup, err := acpStderrWriter()
+	if err != nil {
+		t.Fatalf("acpStderrWriter returned error: %v", err)
+	}
+	if _, err := io.WriteString(w, "agent warning\n"); err != nil {
+		t.Fatalf("write stderr: %v", err)
+	}
+	if err := cleanup(); err != nil {
+		t.Fatalf("cleanup stderr: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read stderr log: %v", err)
+	}
+	if !strings.Contains(string(data), "agent warning") {
+		t.Fatalf("stderr log = %q, want warning", data)
 	}
 }

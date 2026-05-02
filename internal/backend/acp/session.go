@@ -50,6 +50,7 @@ type Session struct {
 	closeOnce       sync.Once
 	mu              sync.Mutex
 	resumeSessionID string
+	stderrCleanup   func() error
 
 	// Pending approval requests: requestID → response channel
 	pendingApprovals map[string]chan bool
@@ -94,10 +95,17 @@ func (s *Session) Open(ctx context.Context) error {
 		cancel()
 		return fmt.Errorf("stdout pipe: %w", err)
 	}
-	cmd.Stderr = os.Stderr // route agent stderr to ion's stderr, not the event stream
+	stderr, cleanupStderr, err := acpStderrWriter()
+	if err != nil {
+		cancel()
+		return err
+	}
+	s.stderrCleanup = cleanupStderr
+	cmd.Stderr = stderr
 
 	if err := cmd.Start(); err != nil {
 		cancel()
+		_ = cleanupStderr()
 		return fmt.Errorf("start agent: %w", err)
 	}
 
@@ -115,6 +123,7 @@ func (s *Session) Open(ctx context.Context) error {
 	})
 	if err != nil {
 		cancel()
+		_ = cleanupStderr()
 		return fmt.Errorf("acp initialize: %w", err)
 	}
 
@@ -123,6 +132,7 @@ func (s *Session) Open(ctx context.Context) error {
 	})
 	if err != nil {
 		cancel()
+		_ = cleanupStderr()
 		return fmt.Errorf("acp new session: %w", err)
 	}
 	s.sessionID = string(resp.SessionId)
@@ -155,6 +165,10 @@ func (s *Session) Close() error {
 	s.closeOnce.Do(func() {
 		if s.cancel != nil {
 			s.cancel()
+		}
+		if s.stderrCleanup != nil {
+			_ = s.stderrCleanup()
+			s.stderrCleanup = nil
 		}
 
 		// Cleanup terminals
@@ -261,6 +275,18 @@ func acpCommandEnv(sessionID string) []string {
 		env = append(env, "ION_ACP_SESSION_ID="+sessionID)
 	}
 	return env
+}
+
+func acpStderrWriter() (io.Writer, func() error, error) {
+	path := strings.TrimSpace(os.Getenv("ION_ACP_STDERR_LOG"))
+	if path == "" {
+		return io.Discard, func() error { return nil }, nil
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open ACP stderr log: %w", err)
+	}
+	return f, f.Close, nil
 }
 
 // SessionUpdate implements acp.Client — translates ACP notifications to session.Event.
