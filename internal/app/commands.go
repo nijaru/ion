@@ -10,6 +10,7 @@ import (
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/session"
+	ionskills "github.com/nijaru/ion/internal/skills"
 	"github.com/nijaru/ion/internal/storage"
 )
 
@@ -257,6 +258,18 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		out, err := explorer.MemoryView(context.Background(), query)
 		if err != nil {
 			return m, cmdError(fmt.Sprintf("failed to load memory: %v", err))
+		}
+		return m, m.printEntries(session.Entry{Role: session.System, Content: out})
+
+	case "/skills":
+		dir, err := config.DefaultSkillsDir()
+		if err != nil {
+			return m, cmdError(fmt.Sprintf("failed to resolve skills dir: %v", err))
+		}
+		query := strings.TrimSpace(strings.TrimPrefix(input, command))
+		out, err := ionskills.Notice([]string{dir}, query)
+		if err != nil {
+			return m, cmdError(fmt.Sprintf("failed to load skills: %v", err))
 		}
 		return m, m.printEntries(session.Entry{Role: session.System, Content: out})
 

@@ -155,6 +155,12 @@ func slashCommandDefinitions() []slashCommandInfo {
 			helpDetail: "show tool count and lazy loading status",
 		},
 		{
+			name:       "/skills",
+			detail:     "installed skills",
+			helpLabel:  "/skills [query]",
+			helpDetail: "show installed local skills",
+		},
+		{
 			name:       "/cost",
 			detail:     "session usage",
 			helpLabel:  "/cost",

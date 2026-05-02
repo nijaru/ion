@@ -107,9 +107,10 @@ ACP bridge correctness is no longer the active blocker.
 6. Done - `tk-t818` - Canto coding primitive adoption audit. Keep Ion-owned
    model-facing wrappers; adopt Canto pieces only where they preserve Ion's
    product tool contract.
-7. Done - `tk-g78q` - skills and self-extension boundary. Keep skills out of
-   the default prompt/toolset; use explicit install, progressive disclosure,
-   and separate gates for `read_skill`, `manage_skill`, and marketplace work.
+7. Done - `tk-g78q` - skills and self-extension boundary plus local browser.
+   Keep skills out of the default prompt/toolset; `/skills [query]` lists local
+   metadata only; use explicit install, progressive disclosure, and separate
+   gates for `read_skill`, `manage_skill`, and marketplace work.
 
 ## I5+ Deferred Work
 
@@ -119,7 +120,7 @@ for a core bug:
 - ACP bridge polish and Ion-as-ACP-agent mode
 - ChatGPT/subscription bridge evaluation
 - subagents, memory/wiki, workflows, model routing
-- skill implementation beyond the design gate: `/skills`, safe install
+- `tk-hfgh` - skill implementation beyond the local browser: safe install
   staging, model-visible `read_skill`, gated `manage_skill`
 - prompt cache/KV cache experiments
 - ripgo integration or merged edit-tool redesign

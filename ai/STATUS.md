@@ -5,7 +5,7 @@ Fast, lightweight terminal coding agent.
 **Phase:** I4 advanced integrations
 **Focus:** Reopen deferred integrations from the stable I0-I3 baseline.
 **Active umbrella:** none - `tk-mmcs` is closed.
-**Active task:** `tk-g78q` - Skills: Self-Extension Nudges & Marketplace
+**Active task:** none - next I4 item pending.
 **Updated:** 2026-05-02
 
 ## Current Truth
@@ -164,15 +164,20 @@ Fast, lightweight terminal coding agent.
   `grep`/`glob`, checkpoints, sandbox/mode integration, compact TUI display,
   and edit recovery errors. Canto's primitives remain framework substrate, not
   a direct replacement for the Ion tool surface.
-- `tk-g78q` design gate is captured in `ai/specs/instructions-and-skills.md`.
-  Skills stay explicit-install and progressive-disclosure: no default skill
-  inventory in the prompt, no default `read_skill`/`manage_skill` tools, and no
-  marketplace install without staging, validation, and explicit user trust.
+- `tk-g78q` is implemented as a safe first slice: `/skills [query]` lists local
+  `~/.ion/skills` metadata through `internal/skills` without prompt injection,
+  activation, marketplace install, or model-visible `read_skill`/`manage_skill`
+  tools. Skills stay explicit-install and progressive-disclosure.
+- Latest skills gates passed:
+  `go test ./internal/skills ./internal/app ./internal/config -count=1 -timeout 180s`,
+  `go test ./... -count=1 -timeout 300s`, and the native race subset.
+- Follow-up `tk-hfgh` tracks safe install staging, model-visible `read_skill`,
+  gated `manage_skill`, and self-extension nudges after explicit trust/write
+  policy gates exist.
 
 ## Next Action
 
-1. Close `tk-g78q` after docs sanity checks and commit the design boundary.
-2. Pick the next ready I4 item from `tk ready`.
+1. Pick the next ready I4 item from `tk ready`.
 3. Add a tmux/live check later if steering is promoted beyond opt-in settings.
 4. Keep native Canto/Ion loop behavior as the acceptance baseline while adding
    advanced integrations.
@@ -180,4 +185,4 @@ Fast, lightweight terminal coding agent.
 
 ## Active Tasks
 
-- `tk-g78q` - skills and self-extension boundary
+- none

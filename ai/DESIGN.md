@@ -145,5 +145,7 @@ gates.
 Skills specifically are not another project-instruction layer. Canto can own
 agentskills-compatible registry, routing, and `read_skill` / `manage_skill`
 primitives. Ion owns `/skills`, install staging, trust prompts, whether a skill
-is enabled, and whether skill tools are exposed to the model. The base prompt
-must not include a skill inventory by default.
+is enabled, and whether skill tools are exposed to the model. The current
+`/skills` command is read-only local discovery; it does not activate skills or
+inject them into the model prompt. The base prompt must not include a skill
+inventory by default.

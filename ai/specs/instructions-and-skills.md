@@ -4,10 +4,11 @@
 
 ion supports layered project instructions.
 
-ion does not yet expose first-class skills as a product feature. The design
-target is explicit-install, progressive-disclosure skills on top of Canto's
-general skill primitives, not always-on prompt bloat or an ungated
-self-extension tool.
+ion exposes a read-only local `/skills [query]` browser for installed
+`~/.ion/skills` bundles. It does not yet expose model-visible skills,
+marketplace install, skill activation, or self-extension. The design target is
+explicit-install, progressive-disclosure skills on top of Canto's general skill
+primitives, not always-on prompt bloat or an ungated self-extension tool.
 
 ## What is implemented
 
@@ -39,13 +40,23 @@ Important limitation:
 - `GEMINI.md` is not currently loaded
 - no runtime concept of “skill activation” exists
 
+### Local skills browser
+
+`/skills [query]` lists locally installed skill metadata from `~/.ion/skills`.
+It is a host command only:
+
+- no skill inventory is added to the model prompt
+- no skill body is injected
+- no model-visible `read_skill` or `manage_skill` tool is registered
+- no marketplace fetch or install is performed
+
 ## What is not implemented
 
 These are not shipped ion features yet:
 
 - skill registry
 - skill activation or selection UX
-- `/skills` browser or CLI skill commands
+- CLI skill commands
 - built-in slash command registry beyond the core actions
 - user-defined slash command or skill aliases
 - skill-specific prompt injection from user-facing ion config
@@ -145,7 +156,7 @@ Model preset direction:
 ## Open work
 
 - Add a local `/skills` browser and CLI list/search once the command surface
-  reaches I4 skills work.
+- Add CLI list/search if the TUI browser proves useful.
 - Add safe install staging before any marketplace integration.
 - Gate `read_skill` and `manage_skill` separately; neither belongs in the
   default eight-tool coding surface.
@@ -154,5 +165,6 @@ Model preset direction:
 
 - `internal/backend/instructions.go`
 - `internal/backend/canto/prompt.go`
+- `internal/skills/skills.go`
 - `ai/specs/system-prompt.md`
 - `ai/research/skills-progressive-disclosure-sota-2026-04.md`

@@ -621,6 +621,20 @@ func TestDefaultDataDirUsesIonDataDir(t *testing.T) {
 	}
 }
 
+func TestDefaultSkillsDirUsesIonSkillsDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	got, err := DefaultSkillsDir()
+	if err != nil {
+		t.Fatalf("default skills dir: %v", err)
+	}
+	want := filepath.Join(home, ".ion", "skills")
+	if got != want {
+		t.Fatalf("skills dir = %q, want %q", got, want)
+	}
+}
+
 func TestDefaultModelCacheTTLSeconds(t *testing.T) {
 	if got := DefaultModelCacheTTLSeconds(); got != 3600 {
 		t.Fatalf("ttl = %d, want %d", got, 3600)

@@ -442,6 +442,14 @@ func DefaultSubagentsDir() (string, error) {
 	return filepath.Join(home, ".ion", "agents"), nil
 }
 
+func DefaultSkillsDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".ion", "skills"), nil
+}
+
 func defaultConfig() *Config {
 	return &Config{
 		SessionRetentionDays: DefaultSessionRetentionDays,

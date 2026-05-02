@@ -11,7 +11,8 @@ surfaces are deferred or hidden from the default tool surface.
 `/compact` remains a host command because context survival is reliability work.
 Skill tools are also deferred: future `read_skill` and `manage_skill` support
 must be enabled through an explicit skills surface rather than the default
-coding toolset.
+coding toolset. The host-side `/skills [query]` command can list installed
+local skill metadata without injecting those skills into the model prompt.
 
 Ion uses Canto's lazy tool loading. When the registered tool surface is larger
 than the lazy threshold, the model initially sees `search_tools` plus any eager
@@ -82,7 +83,8 @@ messages tuned for coding-agent recovery.
 The same boundary applies to Canto's skill primitives. Canto can provide a
 validated skill registry plus `read_skill` and `manage_skill` primitives, but
 Ion owns install UX, trust policy, prompt exposure, and whether those tools are
-model-visible at all.
+model-visible at all. Ion's current `/skills` command is read-only discovery,
+not activation.
 
 Native `write`, `edit`, and `multi_edit` create pre-change checkpoints before
 they mutate files. Checkpoints are kept as recovery metadata, but `/rewind`

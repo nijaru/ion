@@ -91,10 +91,6 @@ github.com/ncruces/go-strftime v1.0.0 h1:HMFp8mLCTPp341M/ZnA4qaf7ZlsbTc+miZjCLOF
 github.com/ncruces/go-strftime v1.0.0/go.mod h1:Fwc5htZGVVkseilnfgOVb9mKy6w1naJmn9CehxcKcls=
 github.com/nijaru/agentskills v0.0.0-20260327104504-1968077cb46d h1:zf4g9wK8q+c8wRLj5fvbIVSHw45t9A30LAdrv5tOvFk=
 github.com/nijaru/agentskills v0.0.0-20260327104504-1968077cb46d/go.mod h1:+a9vDBa2salNkUtRNdC9qKMjlDuX6JZABlfsk0f9TvE=
-github.com/nijaru/canto v0.0.0-20260430235329-c7f2fa9eb03a h1:HKII5wH1Ptosejt7qTGhluk9ByHlL0BC7amXUTIyFMY=
-github.com/nijaru/canto v0.0.0-20260430235329-c7f2fa9eb03a/go.mod h1:syzdLzecE5wKtBFboJ4+3edhWODCBfIHtW8DaRkRM3A=
-github.com/nijaru/canto v0.0.0-20260501055701-51cec28780ef h1:RCC3tmSqixNMGEg6NQ6ZBeiIPj9B6o1vJ2eyRu6R524=
-github.com/nijaru/canto v0.0.0-20260501055701-51cec28780ef/go.mod h1:syzdLzecE5wKtBFboJ4+3edhWODCBfIHtW8DaRkRM3A=
 github.com/nijaru/canto v0.0.0-20260502183715-8f92ed790d17 h1:jsT4cV4zaoFak66iLvJ+99pc0NKAgrRMM3l8veiveT8=
 github.com/nijaru/canto v0.0.0-20260502183715-8f92ed790d17/go.mod h1:syzdLzecE5wKtBFboJ4+3edhWODCBfIHtW8DaRkRM3A=
 github.com/oklog/ulid/v2 v2.1.1 h1:suPZ4ARWLOJLegGFiZZ1dFAkqzhMjL3J1TzI+5wHz8s=
@@ -118,8 +114,6 @@ github.com/segmentio/encoding v0.5.4 h1:OW1VRern8Nw6ITAtwSZ7Idrl3MXCFwXHPgqESYfv
 github.com/segmentio/encoding v0.5.4/go.mod h1:HS1ZKa3kSN32ZHVZ7ZLPLXWvOVIiZtyJnO1gPH1sKt0=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
-github.com/tetratelabs/wazero v1.11.0 h1:+gKemEuKCTevU4d7ZTzlsvgd1uaToIDtlQlmNbwqYhA=
-github.com/tetratelabs/wazero v1.11.0/go.mod h1:eV28rsN8Q+xwjogd7f4/Pp4xFxO7uOGbLcD/LzB1wiU=
 github.com/tidwall/gjson v1.14.2/go.mod h1:/wbyibRr2FHMks5tjHJ5F8dMZh3AcwJEMf5vlfC0lxk=
 github.com/tidwall/gjson v1.18.0 h1:FIDeeyB800efLX89e5a8Y0BNH+LOngJyGrIWxG2FKQY=
 github.com/tidwall/gjson v1.18.0/go.mod h1:/wbyibRr2FHMks5tjHJ5F8dMZh3AcwJEMf5vlfC0lxk=
