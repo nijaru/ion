@@ -132,7 +132,8 @@ Deferred product layers:
 
 - richer permissions and sandbox UX
 - ACP/subscription polish
-- memory/wiki and skills
+- memory/wiki
+- skills as explicit-install progressive-disclosure modules
 - subagents, routing, and workflow orchestration
 - cross-host sync, branching, rewind, and richer rollback
 - prompt optimization, eval loops, and provider/runtime caching
@@ -140,3 +141,9 @@ Deferred product layers:
 These remain long-term goals. They should be reintroduced by clear boundaries
 after the baseline stays boring under deterministic, race, tmux, and live smoke
 gates.
+
+Skills specifically are not another project-instruction layer. Canto can own
+agentskills-compatible registry, routing, and `read_skill` / `manage_skill`
+primitives. Ion owns `/skills`, install staging, trust prompts, whether a skill
+is enabled, and whether skill tools are exposed to the model. The base prompt
+must not include a skill inventory by default.

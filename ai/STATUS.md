@@ -5,7 +5,7 @@ Fast, lightweight terminal coding agent.
 **Phase:** I4 advanced integrations
 **Focus:** Reopen deferred integrations from the stable I0-I3 baseline.
 **Active umbrella:** none - `tk-mmcs` is closed.
-**Active task:** none - next I4 item pending.
+**Active task:** `tk-g78q` - Skills: Self-Extension Nudges & Marketplace
 **Updated:** 2026-05-02
 
 ## Current Truth
@@ -164,15 +164,20 @@ Fast, lightweight terminal coding agent.
   `grep`/`glob`, checkpoints, sandbox/mode integration, compact TUI display,
   and edit recovery errors. Canto's primitives remain framework substrate, not
   a direct replacement for the Ion tool surface.
+- `tk-g78q` design gate is captured in `ai/specs/instructions-and-skills.md`.
+  Skills stay explicit-install and progressive-disclosure: no default skill
+  inventory in the prompt, no default `read_skill`/`manage_skill` tools, and no
+  marketplace install without staging, validation, and explicit user trust.
 
 ## Next Action
 
-1. Pick the next ready I4 item from `tk ready`.
-2. Add a tmux/live check later if steering is promoted beyond opt-in settings.
-3. Keep native Canto/Ion loop behavior as the acceptance baseline while adding
+1. Close `tk-g78q` after docs sanity checks and commit the design boundary.
+2. Pick the next ready I4 item from `tk ready`.
+3. Add a tmux/live check later if steering is promoted beyond opt-in settings.
+4. Keep native Canto/Ion loop behavior as the acceptance baseline while adding
    advanced integrations.
-4. Continue one green slice per commit.
+5. Continue one green slice per commit.
 
 ## Active Tasks
 
-- none
+- `tk-g78q` - skills and self-extension boundary

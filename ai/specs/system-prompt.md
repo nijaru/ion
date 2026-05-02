@@ -164,6 +164,10 @@ Longer term, if canto/llm supports a richer prompt structure cleanly, keep them 
 
 Do not include skill inventories or skill instructions in the always-on core prompt.
 Only inject those when the runtime actually exposes and activates them.
+If skills become model-visible later, prefer explicit progressive disclosure:
+small host-side discovery, then `read_skill(name)` for the selected skill body.
+Do not expose self-extension or marketplace install behavior from the base
+prompt.
 
 ## Implementation plan
 

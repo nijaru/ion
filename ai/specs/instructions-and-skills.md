@@ -4,7 +4,10 @@
 
 ion supports layered project instructions.
 
-ion does not yet support first-class skills as a product feature.
+ion does not yet expose first-class skills as a product feature. The design
+target is explicit-install, progressive-disclosure skills on top of Canto's
+general skill primitives, not always-on prompt bloat or an ungated
+self-extension tool.
 
 ## What is implemented
 
@@ -42,10 +45,14 @@ These are not shipped ion features yet:
 
 - skill registry
 - skill activation or selection UX
+- `/skills` browser or CLI skill commands
 - built-in slash command registry beyond the core actions
 - user-defined slash command or skill aliases
 - skill-specific prompt injection from user-facing ion config
 - skill-specific tool bundles or runtime capabilities
+- model-visible `read_skill`
+- model-visible `manage_skill`
+- marketplace install/update
 
 ## Why this distinction matters
 
@@ -64,9 +71,29 @@ Project instructions and skills solve different problems.
 - activated deliberately
 - should not be part of the always-on core prompt by default
 
-## Near-term direction
+## Ownership
 
-If ion adds skills, they should be treated as a distinct surface:
+Canto owns framework mechanisms:
+
+- agentskills-compatible registry loading and validation
+- skill metadata, body loading, and optional routing
+- reusable `read_skill` / `manage_skill` primitives
+- tool-scope helpers such as `allowed-tools`
+
+Ion owns product policy:
+
+- where skills live under `~/.ion/skills` and project-local locations
+- whether skills are visible, enabled, or installed
+- slash/CLI commands such as `/skills` and future `ion skill ...`
+- marketplace staging, source display, trust prompts, and install UX
+- whether `read_skill` or `manage_skill` are exposed to the model
+
+Ion should not make skill state part of normal startup unless the user has
+explicitly enabled it.
+
+## Target behavior
+
+Skills are a distinct surface:
 
 1. core prompt
 2. runtime context
@@ -78,11 +105,35 @@ If ion adds skills, they should be treated as a distinct surface:
 
 Do not collapse skills into the same bucket as `AGENTS.md`.
 
+The default prompt must not include a skill inventory. A user with many skills
+should not pay an L1 token cost every session. Discovery should happen through
+an explicit host surface (`/skills`, CLI browse/search) or a bounded Canto
+router once the user enables model-visible skills.
+
 Command syntax direction:
 
 - `/foo` is for built-in ion actions and user-facing runtime commands
 - `//foo` is reserved for user-defined command or skill aliases
 - keep the command surface textual and discoverable; do not bury stateful actions only behind hotkeys
+
+Model-visible tool direction:
+
+- `read_skill(name)` is the first candidate if skills become model-visible.
+- `manage_skill` is not a default tool. It may only be exposed for a trusted
+  user-local skill directory, under write-capable modes, with the same policy
+  and approval posture as file writes.
+- Self-extension nudges are deferred until `manage_skill` is safe, observable,
+  and easy to undo.
+
+Marketplace direction:
+
+- No automatic remote install as a side effect of a model turn.
+- Install into a staging area first, validate with the agentskills parser, show
+  source/path/summary, then require explicit user confirmation.
+- Treat marketplace skills as instructions plus optional local resources, not
+  executable packages.
+- Never run fetched scripts during install.
+- Prefer curated/local sources before broad public registries.
 
 Model preset direction:
 
@@ -93,10 +144,15 @@ Model preset direction:
 
 ## Open work
 
-- `tk-lmhg` — audit current support and define the target UX/runtime model for skills
+- Add a local `/skills` browser and CLI list/search once the command surface
+  reaches I4 skills work.
+- Add safe install staging before any marketplace integration.
+- Gate `read_skill` and `manage_skill` separately; neither belongs in the
+  default eight-tool coding surface.
 
 ## Relevant files
 
 - `internal/backend/instructions.go`
 - `internal/backend/canto/prompt.go`
 - `ai/specs/system-prompt.md`
+- `ai/research/skills-progressive-disclosure-sota-2026-04.md`

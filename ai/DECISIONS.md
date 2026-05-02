@@ -21,6 +21,14 @@ Distilled architectural principles plus recent decision log.
 
 ## Recent Log
 
+### 2026-05-02 - Skills are explicit-install progressive disclosure
+
+Ion should not expose skills as always-on prompt text or as default coding
+tools. Canto owns agentskills-compatible registry, routing, and read/manage
+primitives; Ion owns `/skills`, install staging, trust prompts, and model tool
+exposure. `read_skill` is the first model-visible candidate; `manage_skill` and
+marketplace install require explicit user enablement and write-policy gates.
+
 ### 2026-05-02 - Ion keeps product tool wrappers
 
 Canto's stable `coding` tools are useful framework primitives, but Ion should

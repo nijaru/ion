@@ -9,6 +9,9 @@ bash, read, write, edit, multi_edit, list, grep, glob
 Memory, MCP, subagent, model-visible compaction, and rewind/checkpoint control
 surfaces are deferred or hidden from the default tool surface.
 `/compact` remains a host command because context survival is reliability work.
+Skill tools are also deferred: future `read_skill` and `manage_skill` support
+must be enabled through an explicit skills surface rather than the default
+coding toolset.
 
 Ion uses Canto's lazy tool loading. When the registered tool surface is larger
 than the lazy threshold, the model initially sees `search_tools` plus any eager
@@ -75,6 +78,11 @@ Canto's stable `coding` package tools. Canto remains the framework substrate;
 Ion's wrappers own product-level names, line-numbered reads, ripgrep search,
 checkpoints, sandbox/status integration, compact TUI display, and edit error
 messages tuned for coding-agent recovery.
+
+The same boundary applies to Canto's skill primitives. Canto can provide a
+validated skill registry plus `read_skill` and `manage_skill` primitives, but
+Ion owns install UX, trust policy, prompt exposure, and whether those tools are
+model-visible at all.
 
 Native `write`, `edit`, and `multi_edit` create pre-change checkpoints before
 they mutate files. Checkpoints are kept as recovery metadata, but `/rewind`
