@@ -103,6 +103,7 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 
 	case session.TurnFinished:
 		m.InFlight.Thinking = false
+		assistantCompleted := m.InFlight.AgentCommitted
 		var cmds []tea.Cmd
 		if !m.InFlight.AgentCommitted &&
 			m.InFlight.Pending != nil && m.InFlight.Pending.Role == session.Agent &&
@@ -117,6 +118,7 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 			m.InFlight.StreamBuf = ""
 			m.InFlight.ReasonBuf = ""
 			cmds = append(cmds, m.printEntries(entry))
+			assistantCompleted = true
 		}
 		if m.InFlight.AgentCommitted {
 			m.InFlight.Pending = nil
@@ -128,6 +130,14 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		} else if m.Progress.Mode == stateCancelled || m.Progress.BudgetStopReason != "" {
 			m.Progress.Mode = stateCancelled
 			m.InFlight.QueuedTurns = nil
+		} else if !assistantCompleted {
+			m.Progress.Mode = stateError
+			m.Progress.LastError = "turn finished without assistant response"
+			m.InFlight.QueuedTurns = nil
+			cmds = append(cmds, m.printEntries(session.Entry{
+				Role:    session.System,
+				Content: "Error: turn finished without assistant response",
+			}))
 		} else {
 			m.Progress.Mode = stateComplete
 		}
@@ -243,7 +253,7 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		}
 		entry := &session.Entry{
 			Role:  session.Tool,
-			Title: FormatToolTitle(msg.ToolName, redactedArgs),
+			Title: m.formatToolTitle(msg.ToolName, redactedArgs),
 		}
 		if m.InFlight.PendingTools == nil {
 			m.InFlight.PendingTools = make(map[string]*session.Entry)
@@ -281,15 +291,7 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		return m, m.awaitSessionEvent()
 
 	case session.VerificationResult:
-		status := ifthen(msg.Passed, "PASSED", "FAILED")
-		content := fmt.Sprintf("%s: %s\n%s", status, msg.Metric, msg.Output)
-		entry := session.Entry{
-			Role:    session.Tool,
-			Title:   "verify: " + msg.Command,
-			Content: content,
-			IsError: !msg.Passed,
-		}
-		return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
+		return m, m.awaitSessionEvent()
 
 	case session.ApprovalRequest:
 		msg = redactApprovalRequest(msg)

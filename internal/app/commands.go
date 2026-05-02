@@ -11,7 +11,6 @@ import (
 
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/config"
-	"github.com/nijaru/ion/internal/features"
 	"github.com/nijaru/ion/internal/providers"
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
@@ -25,7 +24,14 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		return m, nil
 	}
 	command := fields[0]
-	if m.commandRequiresIdle(fields) && m.localCommandBusy() {
+	commandInfo, ok := slashCommandDefinition(command)
+	if !ok {
+		return m, cmdError(fmt.Sprintf("unknown command: %s", command))
+	}
+	if !commandInfo.available() {
+		return m, cmdError(deferredFeatureMessage(command))
+	}
+	if m.commandRequiresIdle(commandInfo, fields) && m.localCommandBusy() {
 		return m, cmdError("Finish or cancel the current turn before " + command + ".")
 	}
 
@@ -65,7 +71,8 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		if err != nil {
 			return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
 		}
-		if currentCfg.Provider != "" && strings.EqualFold(strings.TrimSpace(currentCfg.Model), strings.TrimSpace(name)) {
+		if currentCfg.Provider != "" &&
+			strings.EqualFold(strings.TrimSpace(currentCfg.Model), strings.TrimSpace(name)) {
 			return m, nil
 		}
 		updated := m.updateModelForActivePreset(cfg, name)
@@ -105,7 +112,8 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		if err != nil {
 			return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
 		}
-		if currentCfg.Provider != "" && normalizeThinkingValue(currentCfg.ReasoningEffort) == level {
+		if currentCfg.Provider != "" &&
+			normalizeThinkingValue(currentCfg.ReasoningEffort) == level {
 			return m, nil
 		}
 		updated := m.updateThinkingForActivePreset(cfg, level)
@@ -149,9 +157,6 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		return m.handleSettingsCommand(fields)
 
 	case "/mcp":
-		if features.CoreLoopOnly {
-			return m, cmdError(features.Disabled("/mcp"))
-		}
 		if len(fields) < 3 || fields[1] != "add" {
 			return m, cmdError("usage: /mcp add <command> [args...]")
 		}
@@ -193,9 +198,6 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		}
 
 	case "/trust":
-		if features.CoreLoopOnly {
-			return m, cmdError(features.Disabled("/trust"))
-		}
 		if len(fields) > 1 && fields[1] != "status" {
 			return m, cmdError("usage: /trust [status]")
 		}
@@ -204,13 +206,17 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 			if m.App.TrustedWorkspace {
 				status = "trusted"
 			}
-			return m, m.printEntries(session.Entry{Role: session.System, Content: "Workspace trust: " + status})
+			return m, m.printEntries(
+				session.Entry{Role: session.System, Content: "Workspace trust: " + status},
+			)
 		}
 		if m.Model.TrustStore == nil {
 			return m, cmdError("workspace trust store is unavailable")
 		}
 		if m.App.WorkspaceTrust == "strict" {
-			return m, cmdError("workspace trust is strict; trust must be managed outside this session")
+			return m, cmdError(
+				"workspace trust is strict; trust must be managed outside this session",
+			)
 		}
 		if err := m.Model.TrustStore.Trust(m.App.Workdir); err != nil {
 			return m, cmdError(fmt.Sprintf("failed to trust workspace: %v", err))
@@ -219,12 +225,11 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		m.Mode = session.ModeEdit
 		m.Model.Session.SetMode(m.Mode)
 		m.Model.Session.SetAutoApprove(false)
-		return m, m.printEntries(session.Entry{Role: session.System, Content: "Workspace trusted. Mode: EDIT"})
+		return m, m.printEntries(
+			session.Entry{Role: session.System, Content: "Workspace trusted. Mode: EDIT"},
+		)
 
 	case "/rewind":
-		if features.CoreLoopOnly {
-			return m, cmdError(features.Disabled("/rewind"))
-		}
 		if len(fields) < 2 || len(fields) > 3 {
 			return m, cmdError("usage: /rewind <checkpoint-id> [--confirm]")
 		}
@@ -243,12 +248,11 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 			return m, cmdError("tool summary unavailable for this backend")
 		}
 		surface := summarizer.ToolSurface()
-		return m, m.printEntries(session.Entry{Role: session.System, Content: toolSurfaceSummary(surface)})
+		return m, m.printEntries(
+			session.Entry{Role: session.System, Content: toolSurfaceSummary(surface)},
+		)
 
 	case "/memory":
-		if features.CoreLoopOnly {
-			return m, cmdError(features.Disabled("/memory"))
-		}
 		explorer, ok := m.Model.Backend.(backend.MemoryExplorer)
 		if !ok {
 			return m, cmdError("memory view unavailable for this backend")
@@ -260,7 +264,7 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		}
 		return m, m.printEntries(session.Entry{Role: session.System, Content: out})
 
-	case "/clear":
+	case "/new", "/clear":
 		cfg, err := m.commandConfig()
 		if err != nil {
 			return m, cmdError(fmt.Sprintf("failed to load config: %v", err))
@@ -276,13 +280,17 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 			runtimeCfg.Model = m.Model.Backend.Model()
 		}
 		if runtimeCfg.Provider == "" || runtimeCfg.Model == "" {
-			return m, cmdError("cannot /clear without an active provider and model")
+			return m, cmdError("cannot " + command + " without an active provider and model")
+		}
+		notice := "Started new session"
+		if command == "/clear" {
+			notice = "Started fresh session"
 		}
 		return m, m.switchRuntimeCommand(
 			runtimeCfg,
 			cfg,
 			m.activePreset(),
-			session.Entry{Role: session.System, Content: "Started fresh session"},
+			session.Entry{Role: session.System, Content: notice},
 			"",
 			false,
 		)
@@ -299,9 +307,12 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 			totalCost = cost
 		}
 		if totalCost <= 0 {
-			if m.Model.Config != nil && (m.Model.Config.MaxSessionCost > 0 || m.Model.Config.MaxTurnCost > 0) {
+			if m.Model.Config != nil &&
+				(m.Model.Config.MaxSessionCost > 0 || m.Model.Config.MaxTurnCost > 0) {
 				return m, func() tea.Msg {
-					return sessionCostMsg{notice: m.costBudgetNotice(inputTokens, outputTokens, totalCost)}
+					return sessionCostMsg{
+						notice: m.costBudgetNotice(inputTokens, outputTokens, totalCost),
+					}
 				}
 			}
 			return m, func() tea.Msg {
@@ -355,12 +366,11 @@ func (m Model) localCommandBusy() bool {
 	return m.InFlight.Thinking || m.Progress.Compacting || m.Approval.Pending != nil
 }
 
-func (m Model) commandRequiresIdle(fields []string) bool {
-	command := fields[0]
-	switch command {
-	case "/primary", "/fast", "/resume", "/clear", "/compact", "/rewind":
+func (m Model) commandRequiresIdle(command slashCommandInfo, fields []string) bool {
+	switch command.idle {
+	case slashCommandIdleAlways:
 		return true
-	case "/model", "/provider", "/thinking", "/settings":
+	case slashCommandIdleWithArgs:
 		return len(fields) > 1
 	default:
 		return false
@@ -499,8 +509,11 @@ func (m Model) rewindCheckpointCommand(id string, confirmed bool) (Model, tea.Cm
 	}
 	if len(plan.Conflicts) == 0 {
 		return m, m.printEntries(session.Entry{
-			Role:    session.System,
-			Content: fmt.Sprintf("Checkpoint %s already matches this workspace; nothing to rewind.", cp.ID),
+			Role: session.System,
+			Content: fmt.Sprintf(
+				"Checkpoint %s already matches this workspace; nothing to rewind.",
+				cp.ID,
+			),
 		})
 	}
 	if !confirmed {
@@ -511,8 +524,12 @@ func (m Model) rewindCheckpointCommand(id string, confirmed bool) (Model, tea.Cm
 	}
 
 	before := session.Entry{
-		Role:    session.System,
-		Content: fmt.Sprintf("Rewind starting: checkpoint %s will restore %d path(s).", cp.ID, len(plan.Conflicts)),
+		Role: session.System,
+		Content: fmt.Sprintf(
+			"Rewind starting: checkpoint %s will restore %d path(s).",
+			cp.ID,
+			len(plan.Conflicts),
+		),
 	}
 	report, err := m.Model.Checkpoints.Restore(
 		context.Background(),
@@ -633,33 +650,8 @@ func helpText() string {
 	lines := []string{
 		"ion commands",
 		"",
-		"  /resume [id]     resume a recent session or pick one",
-		"  /primary         switch to the primary model preset",
-		"  /fast            switch to the configured fast model preset",
-		"  /provider [name] set provider and choose a model",
-		"  /model [name]    set model directly or open the picker",
-		"  /thinking [lvl]  set thinking: auto, off, minimal, low, medium, high, xhigh",
-		"  /read            switch to READ mode",
-		"  /edit            switch to EDIT mode",
-		"  /auto, /yolo     switch to AUTO mode",
-		"  /mode [mode]     set mode: read, edit, auto",
-		"  /settings        show or change common settings",
-		"  /tools           show tool count and lazy loading status",
-		"  /clear           start a fresh session with the current provider/model",
-		"  /cost            show aggregate session usage",
-		"  /session         show current session info",
-		"  /compact         compact the current session",
-		"  /quit, /exit     leave ion",
-		"  /help            show this help",
 	}
-	if !features.CoreLoopOnly {
-		lines = append(lines,
-			"  /trust [status]  trust this workspace or show trust status",
-			"  /rewind <id>     preview checkpoint restore; add --confirm to apply",
-			"  /memory [query]  show workspace memory tree or search memory",
-			"  /mcp add <cmd>   register an MCP server",
-		)
-	}
+	lines = append(lines, slashCommandHelpLines()...)
 	lines = append(lines,
 		"",
 		"keys",
@@ -677,12 +669,6 @@ func helpText() string {
 		"  Alt+Enter        insert newline",
 		"  Ctrl+C           clear composer, or quit on double-tap when empty",
 		"  Ctrl+D           quit on double-tap when empty",
-		"",
-		"approval",
-		"",
-		"  y                approve the tool call",
-		"  n                deny the tool call",
-		"  a                approve and allow this tool category for the session",
 	)
 	return strings.Join(lines, "\n")
 }
@@ -699,7 +685,9 @@ func (m Model) handleSettingsCommand(fields []string) (Model, tea.Cmd) {
 		})
 	}
 	if len(fields) != 3 {
-		return m, cmdError("usage: /settings [retry on|off|tool full|collapsed|hidden|thinking full|collapsed|hidden]")
+		return m, cmdError(
+			"usage: /settings [retry on|off|tool auto|full|collapsed|hidden|read full|summary|hidden|write diff|summary|hidden|bash full|summary|hidden|thinking full|collapsed|hidden]",
+		)
 	}
 
 	updated := *cfg
@@ -726,6 +714,27 @@ func (m Model) handleSettingsCommand(fields []string) (Model, tea.Cmd) {
 		}
 		updated.ToolVerbosity = verbosity
 		notice = "Tool display: " + displayToolVerbosity(verbosity)
+	case "read":
+		output := config.NormalizeReadOutput(value)
+		if output == "" {
+			return m, cmdError("usage: /settings read full|summary|hidden")
+		}
+		updated.ReadOutput = output
+		notice = "Read output: " + displayReadOutput(output)
+	case "write":
+		output := config.NormalizeWriteOutput(value)
+		if output == "" {
+			return m, cmdError("usage: /settings write diff|summary|hidden")
+		}
+		updated.WriteOutput = output
+		notice = "Write output: " + displayWriteOutput(output)
+	case "bash":
+		output := config.NormalizeBashOutput(value)
+		if output == "" {
+			return m, cmdError("usage: /settings bash full|summary|hidden")
+		}
+		updated.BashOutput = output
+		notice = "Bash output: " + displayBashOutput(output)
 	case "thinking":
 		verbosity := config.NormalizeVerbosity(value)
 		if verbosity == "" {
@@ -734,7 +743,7 @@ func (m Model) handleSettingsCommand(fields []string) (Model, tea.Cmd) {
 		updated.ThinkingVerbosity = verbosity
 		notice = "Thinking display: " + verbosity
 	default:
-		return m, cmdError("usage: /settings [retry|tool|thinking] ...")
+		return m, cmdError("usage: /settings [retry|tool|read|write|bash|thinking] ...")
 	}
 
 	if err := config.Save(&updated); err != nil {
@@ -754,24 +763,24 @@ func (m Model) settingsSummary(cfg *config.Config) string {
 	if cfg == nil {
 		cfg = &config.Config{}
 	}
-	runtimeCfg := cfg
-	if m.Model.Config != nil {
-		runtimeCfg = m.Model.Config
-	}
 	return strings.Join([]string{
 		"settings",
 		"",
 		"  retry network errors: " + onOff(cfg.RetryUntilCancelledEnabled()),
 		"  tool display: " + displayToolVerbosity(cfg.ToolVerbosity),
-		"  thinking display: " + displayThinkingVerbosity(cfg.ThinkingVerbosity),
-		"  thinking level: " + normalizeThinkingValue(runtimeCfg.ReasoningEffort),
+		"  read output: " + displayReadOutput(cfg.ReadOutput),
+		"  write output: " + displayWriteOutput(cfg.WriteOutput),
+		"  bash output: " + displayBashOutput(cfg.BashOutput),
+		"  thinking output: " + displayThinkingVerbosity(cfg.ThinkingVerbosity),
 		"",
 		"commands",
 		"",
 		"  /settings retry on|off",
 		"  /settings tool auto|full|collapsed|hidden",
+		"  /settings read full|summary|hidden",
+		"  /settings write diff|summary|hidden",
+		"  /settings bash full|summary|hidden",
 		"  /settings thinking full|collapsed|hidden",
-		"  /thinking auto|off|minimal|low|medium|high|xhigh",
 	}, "\n")
 }
 
@@ -808,6 +817,27 @@ func displayToolVerbosity(value string) string {
 	return "auto"
 }
 
+func displayReadOutput(value string) string {
+	if normalized := config.NormalizeReadOutput(value); normalized != "" {
+		return normalized
+	}
+	return "summary"
+}
+
+func displayWriteOutput(value string) string {
+	if normalized := config.NormalizeWriteOutput(value); normalized != "" {
+		return normalized
+	}
+	return "summary"
+}
+
+func displayBashOutput(value string) string {
+	if normalized := config.NormalizeBashOutput(value); normalized != "" {
+		return normalized
+	}
+	return "hidden"
+}
+
 func displayThinkingVerbosity(value string) string {
 	if normalized := config.NormalizeVerbosity(value); normalized != "" {
 		return normalized
@@ -825,42 +855,201 @@ func slashCommands() []string {
 }
 
 type slashCommandInfo struct {
-	name   string
-	detail string
+	name       string
+	detail     string
+	helpLabel  string
+	helpDetail string
+	idle       slashCommandIdlePolicy
+	hidden     bool
+	deferred   bool
+}
+
+type slashCommandIdlePolicy int
+
+const (
+	slashCommandIdleNever slashCommandIdlePolicy = iota
+	slashCommandIdleAlways
+	slashCommandIdleWithArgs
+)
+
+func (c slashCommandInfo) available() bool {
+	return !c.deferred
+}
+
+func deferredFeatureMessage(feature string) string {
+	return feature + " is deferred while Ion stabilizes the native agent loop"
+}
+
+func slashCommandDefinitions() []slashCommandInfo {
+	return []slashCommandInfo{
+		{name: "/help", detail: "show help", helpLabel: "/help", helpDetail: "show this help"},
+		{
+			name:       "/new",
+			detail:     "start a new session",
+			helpLabel:  "/new",
+			helpDetail: "start a fresh session",
+			idle:       slashCommandIdleAlways,
+		},
+		{
+			name:       "/clear",
+			detail:     "start a fresh session",
+			helpLabel:  "/clear",
+			helpDetail: "start a fresh session with the current provider/model",
+			idle:       slashCommandIdleAlways,
+		},
+		{
+			name:       "/resume",
+			detail:     "resume a recent session",
+			helpLabel:  "/resume [id]",
+			helpDetail: "resume a recent session or pick one",
+			idle:       slashCommandIdleAlways,
+		},
+		{
+			name:       "/session",
+			detail:     "current session info",
+			helpLabel:  "/session",
+			helpDetail: "show current session info",
+		},
+		{
+			name:       "/compact",
+			detail:     "compact session",
+			helpLabel:  "/compact",
+			helpDetail: "compact the current session",
+			idle:       slashCommandIdleAlways,
+		},
+
+		{
+			name:       "/provider",
+			detail:     "choose provider",
+			helpLabel:  "/provider [name]",
+			helpDetail: "set provider and choose a model",
+			idle:       slashCommandIdleWithArgs,
+		},
+		{
+			name:       "/model",
+			detail:     "choose model",
+			helpLabel:  "/model [name]",
+			helpDetail: "set model directly or open the picker",
+			idle:       slashCommandIdleWithArgs,
+		},
+		{
+			name:       "/thinking",
+			detail:     "choose thinking level",
+			helpLabel:  "/thinking [lvl]",
+			helpDetail: "set thinking: auto, off, minimal, low, medium, high, xhigh",
+			idle:       slashCommandIdleWithArgs,
+		},
+		{
+			name:       "/primary",
+			detail:     "switch to primary preset",
+			helpLabel:  "/primary",
+			helpDetail: "switch to the primary model preset",
+			idle:       slashCommandIdleAlways,
+		},
+		{
+			name:       "/fast",
+			detail:     "switch to fast preset",
+			helpLabel:  "/fast",
+			helpDetail: "switch to the configured fast model preset",
+			idle:       slashCommandIdleAlways,
+		},
+
+		{
+			name:       "/settings",
+			detail:     "common settings",
+			helpLabel:  "/settings",
+			helpDetail: "show or change common settings",
+			idle:       slashCommandIdleWithArgs,
+		},
+		{
+			name:       "/tools",
+			detail:     "tool status",
+			helpLabel:  "/tools",
+			helpDetail: "show tool count and lazy loading status",
+		},
+		{
+			name:       "/cost",
+			detail:     "session usage",
+			helpLabel:  "/cost",
+			helpDetail: "show aggregate session usage",
+		},
+		{
+			name:       "/mode",
+			detail:     "set read/edit/auto",
+			helpLabel:  "/mode [mode]",
+			helpDetail: "set mode: read, edit, auto",
+		},
+		{name: "/read", detail: "READ mode", hidden: true},
+		{name: "/edit", detail: "EDIT mode", hidden: true},
+		{name: "/auto", detail: "AUTO mode", hidden: true},
+		{name: "/yolo", detail: "AUTO mode alias", hidden: true},
+
+		{name: "/quit", detail: "quit", helpLabel: "/quit, /exit", helpDetail: "leave ion"},
+		{name: "/exit", detail: "quit", hidden: true},
+
+		{
+			name:       "/trust",
+			detail:     "workspace trust",
+			helpLabel:  "/trust [status]",
+			helpDetail: "trust this workspace or show trust status",
+			deferred:   true,
+		},
+		{
+			name:       "/rewind",
+			detail:     "restore checkpoint",
+			helpLabel:  "/rewind <id>",
+			helpDetail: "preview checkpoint restore; add --confirm to apply",
+			idle:       slashCommandIdleAlways,
+			deferred:   true,
+		},
+		{
+			name:       "/memory",
+			detail:     "memory search",
+			helpLabel:  "/memory [query]",
+			helpDetail: "show workspace memory tree or search memory",
+			deferred:   true,
+		},
+		{
+			name:       "/mcp",
+			detail:     "register MCP server",
+			helpLabel:  "/mcp add <cmd>",
+			helpDetail: "register an MCP server",
+			deferred:   true,
+		},
+	}
+}
+
+func slashCommandDefinition(name string) (slashCommandInfo, bool) {
+	for _, command := range slashCommandDefinitions() {
+		if command.name == name {
+			return command, true
+		}
+	}
+	return slashCommandInfo{}, false
 }
 
 func slashCommandCatalog() []slashCommandInfo {
-	commands := []slashCommandInfo{
-		{name: "/resume", detail: "resume a recent session"},
-		{name: "/primary", detail: "switch to primary preset"},
-		{name: "/fast", detail: "switch to fast preset"},
-		{name: "/provider", detail: "choose provider"},
-		{name: "/model", detail: "choose model"},
-		{name: "/thinking", detail: "choose thinking level"},
-		{name: "/read", detail: "READ mode"},
-		{name: "/edit", detail: "EDIT mode"},
-		{name: "/auto", detail: "AUTO mode"},
-		{name: "/yolo", detail: "AUTO mode alias"},
-		{name: "/mode", detail: "set read/edit/auto"},
-		{name: "/settings", detail: "common settings"},
-		{name: "/tools", detail: "tool status"},
-		{name: "/clear", detail: "fresh session"},
-		{name: "/cost", detail: "session usage"},
-		{name: "/session", detail: "current session info"},
-		{name: "/compact", detail: "compact session"},
-		{name: "/quit", detail: "quit"},
-		{name: "/exit", detail: "quit"},
-		{name: "/help", detail: "show help"},
-	}
-	if !features.CoreLoopOnly {
-		commands = append(commands,
-			slashCommandInfo{name: "/trust", detail: "workspace trust"},
-			slashCommandInfo{name: "/rewind", detail: "restore checkpoint"},
-			slashCommandInfo{name: "/memory", detail: "memory search"},
-			slashCommandInfo{name: "/mcp", detail: "register MCP server"},
-		)
+	definitions := slashCommandDefinitions()
+	commands := make([]slashCommandInfo, 0, len(definitions))
+	for _, command := range definitions {
+		if command.hidden || !command.available() {
+			continue
+		}
+		commands = append(commands, command)
 	}
 	return commands
+}
+
+func slashCommandHelpLines() []string {
+	commands := slashCommandCatalog()
+	lines := make([]string, 0, len(commands))
+	for _, command := range commands {
+		if command.helpLabel == "" {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("  %-16s %s", command.helpLabel, command.helpDetail))
+	}
+	return lines
 }
 
 func slashCommandItems() []pickerItem {
@@ -994,7 +1183,13 @@ func (m Model) modelPickerFavoriteItem(all []pickerItem, model string) pickerIte
 		Detail:  "metadata unavailable",
 		Tone:    pickerToneWarn,
 		Metrics: &pickerMetrics{Context: "—", Input: "—", Output: "—"},
-		Search:  pickerSearchIndex(model, model, "metadata unavailable", "Configured presets", &pickerMetrics{Context: "—", Input: "—", Output: "—"}),
+		Search: pickerSearchIndex(
+			model,
+			model,
+			"metadata unavailable",
+			"Configured presets",
+			&pickerMetrics{Context: "—", Input: "—", Output: "—"},
+		),
 	}
 }
 
@@ -1176,7 +1371,11 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 		if err != nil {
 			return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
 		}
-		if currentCfg.Provider != "" && strings.EqualFold(strings.TrimSpace(currentCfg.Model), strings.TrimSpace(selected.Value)) {
+		if currentCfg.Provider != "" &&
+			strings.EqualFold(
+				strings.TrimSpace(currentCfg.Model),
+				strings.TrimSpace(selected.Value),
+			) {
 			m.Picker.Overlay = nil
 			return m, nil
 		}
@@ -1204,7 +1403,8 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 		if err != nil {
 			return m, cmdError(fmt.Sprintf("failed to resolve active preset: %v", err))
 		}
-		if currentCfg.Provider != "" && normalizeThinkingValue(currentCfg.ReasoningEffort) == level {
+		if currentCfg.Provider != "" &&
+			normalizeThinkingValue(currentCfg.ReasoningEffort) == level {
 			m.Picker.Overlay = nil
 			return m, nil
 		}
@@ -1287,15 +1487,7 @@ func (m Model) setModeCommand(mode session.Mode) (Model, tea.Cmd) {
 }
 
 func (m Model) trustGateActive() bool {
-	if features.CoreLoopOnly {
-		return false
-	}
-	switch m.App.WorkspaceTrust {
-	case "prompt", "strict":
-		return true
-	default:
-		return false
-	}
+	return false
 }
 
 func (m Model) switchPresetCommand(preset modelPreset) (Model, tea.Cmd) {
@@ -1308,7 +1500,14 @@ func (m Model) switchPresetCommand(preset modelPreset) (Model, tea.Cmd) {
 		return m, cmdError(fmt.Sprintf("failed to resolve %s preset: %v", preset, err))
 	}
 	notice := session.Entry{Role: session.System, Content: "Switched to " + preset.String()}
-	return m, m.switchRuntimeCommand(runtimeCfg, cfg, preset, notice, m.currentMaterializedSessionID(), false)
+	return m, m.switchRuntimeCommand(
+		runtimeCfg,
+		cfg,
+		preset,
+		notice,
+		m.currentMaterializedSessionID(),
+		false,
+	)
 }
 
 func (m Model) currentMaterializedSessionID() string {

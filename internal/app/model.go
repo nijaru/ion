@@ -490,10 +490,16 @@ func (m Model) runningProgressParts() []string {
 		parts = append(parts, "↓ "+compactCount(m.Progress.CurrentTurnOutput))
 	}
 	if !m.Progress.TurnStartedAt.IsZero() {
-		parts = append(parts, fmt.Sprintf("%ds", int(time.Since(m.Progress.TurnStartedAt).Seconds())))
+		parts = append(
+			parts,
+			fmt.Sprintf("%ds", int(time.Since(m.Progress.TurnStartedAt).Seconds())),
+		)
 	}
 	if m.Model.Config != nil && m.Model.Config.MaxTurnCost > 0 {
-		parts = append(parts, fmt.Sprintf("$%.4f/$%.4f", m.Progress.CurrentTurnCost, m.Model.Config.MaxTurnCost))
+		parts = append(
+			parts,
+			fmt.Sprintf("$%.4f/$%.4f", m.Progress.CurrentTurnCost, m.Model.Config.MaxTurnCost),
+		)
 	}
 	parts = append(parts, "Esc to cancel")
 	return parts
@@ -810,6 +816,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case queuedTurnMsg:
 		next, cmd := m.submitText(msg.text)
+		if next.InFlight.Thinking {
+			if cmd == nil {
+				return next, next.awaitSessionEvent()
+			}
+			return next, tea.Sequence(cmd, next.awaitSessionEvent())
+		}
 		return next, cmd
 
 	case tea.PasteMsg:

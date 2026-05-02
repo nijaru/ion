@@ -304,7 +304,16 @@ func (m Model) completeSlashArgument(text string) (Model, tea.Cmd, bool) {
 			case "retry":
 				return m.completeLastSlashToken(text, []string{"on", "off"})
 			case "tool":
-				return m.completeLastSlashToken(text, []string{"auto", "full", "collapsed", "hidden"})
+				return m.completeLastSlashToken(
+					text,
+					[]string{"auto", "full", "collapsed", "hidden"},
+				)
+			case "read":
+				return m.completeLastSlashToken(text, []string{"full", "summary", "hidden"})
+			case "write":
+				return m.completeLastSlashToken(text, []string{"diff", "summary", "hidden"})
+			case "bash":
+				return m.completeLastSlashToken(text, []string{"full", "summary", "hidden"})
 			case "thinking":
 				return m.completeLastSlashToken(text, []string{"full", "collapsed", "hidden"})
 			}
@@ -443,7 +452,7 @@ func thinkingCompletionValues() []string {
 }
 
 func settingsCompletionKeys() []string {
-	return []string{"retry", "tool", "thinking"}
+	return []string{"retry", "tool", "read", "write", "bash", "thinking"}
 }
 
 func normalizeSettingsCompletionKey(value string) string {

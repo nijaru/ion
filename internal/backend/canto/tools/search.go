@@ -1,9 +1,9 @@
 package tools
 
 import (
+	"bufio"
 	"context"
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
@@ -41,7 +41,26 @@ func (t *SearchTool) resolvePath(target string) (string, error) {
 	if !strings.HasPrefix(absPath, absCwd+string(filepath.Separator)) && absPath != absCwd {
 		return "", fmt.Errorf("path escapes workspace: %s", target)
 	}
+	if err := t.rejectSymlinkEscape(absCwd, absPath, target); err != nil {
+		return "", err
+	}
 	return absPath, nil
+}
+
+func (t *SearchTool) rejectSymlinkEscape(absCwd, absPath, target string) error {
+	realCwd, err := filepath.EvalSymlinks(absCwd)
+	if err != nil {
+		realCwd = absCwd
+	}
+	realPath, err := filepath.EvalSymlinks(absPath)
+	if err != nil {
+		return fmt.Errorf("path not found: %s", target)
+	}
+	if realPath != realCwd &&
+		!strings.HasPrefix(realPath, realCwd+string(filepath.Separator)) {
+		return fmt.Errorf("path escapes workspace: %s", target)
+	}
+	return nil
 }
 
 func validateGlobPattern(pattern string) error {
@@ -69,7 +88,7 @@ type Grep struct {
 func (g *Grep) Spec() llm.Spec {
 	return llm.Spec{
 		Name:        "grep",
-		Description: "Search for a regex pattern in files using ripgrep.",
+		Description: "Search file contents with ripgrep. Respects ignore files, includes hidden files, and excludes .git internals.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -107,12 +126,24 @@ func (g *Grep) Execute(ctx context.Context, args string) (string, error) {
 		return "", err
 	}
 
-	// Try ripgrep first as it's the fastest
-	cmd := exec.CommandContext(ctx, "rg", "--max-count", "100", "--heading", "--line-number", "--color", "never", input.Pattern, searchPath)
+	cmd := exec.CommandContext(
+		ctx,
+		"rg",
+		"--max-count", "100",
+		"--heading",
+		"--line-number",
+		"--color", "never",
+		"--hidden",
+		"--no-require-git",
+		"--glob", "!.git/**",
+		"--",
+		input.Pattern,
+		searchPath,
+	)
 	cmd.Dir = g.cwd
 	output, err := cmd.CombinedOutput()
 	if err == nil {
-		return string(output), nil
+		return limitToolOutput(string(output)), nil
 	}
 	if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
 		return "No matches found.", nil
@@ -128,7 +159,7 @@ type Glob struct {
 func (g *Glob) Spec() llm.Spec {
 	return llm.Spec{
 		Name:        "glob",
-		Description: "Search for files matching a glob pattern (supports ** for recursive search).",
+		Description: "Find files matching a glob pattern using ripgrep's ignored-file list. Respects ignore files, includes hidden files, excludes .git internals, and supports ** for recursive search.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -153,9 +184,26 @@ func (g *Glob) Execute(ctx context.Context, args string) (string, error) {
 		return "", err
 	}
 
-	// Use doublestar for robust, recursive globbing
-	fsys := os.DirFS(g.cwd)
-	matches, err := doublestar.Glob(fsys, input.Pattern)
+	cmd := exec.CommandContext(
+		ctx,
+		"rg",
+		"--files",
+		"--hidden",
+		"--no-require-git",
+		"--glob", "!.git/**",
+	)
+	cmd.Dir = g.cwd
+	output, err := cmd.Output()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+			return "No matches found.", nil
+		}
+		if strings.TrimSpace(string(output)) == "" {
+			return "", fmt.Errorf("rg file listing failed: %w", err)
+		}
+	}
+
+	matches, err := globMatches(input.Pattern, string(output))
 	if err != nil {
 		return "", fmt.Errorf("glob failed: %w", err)
 	}
@@ -165,5 +213,28 @@ func (g *Glob) Execute(ctx context.Context, args string) (string, error) {
 	}
 
 	slices.Sort(matches)
-	return strings.Join(matches, "\n"), nil
+	return limitToolOutput(strings.Join(matches, "\n")), nil
+}
+
+func globMatches(pattern, output string) ([]string, error) {
+	var matches []string
+	scanner := bufio.NewScanner(strings.NewReader(output))
+	for scanner.Scan() {
+		path := filepath.ToSlash(strings.TrimSpace(scanner.Text()))
+		if path == "" {
+			continue
+		}
+		path = strings.TrimPrefix(path, "./")
+		matched, err := doublestar.Match(pattern, path)
+		if err != nil {
+			return nil, err
+		}
+		if matched {
+			matches = append(matches, path)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return matches, nil
 }

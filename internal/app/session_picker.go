@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/nijaru/ion/internal/storage"
 )
@@ -163,10 +164,6 @@ func (m Model) renderSessionPicker() string {
 	}
 	for i := start; i < end; i++ {
 		item := m.Picker.Session.filtered[i]
-		line, detail := sessionPickerLine(m.App.Workdir, item.info)
-		if detail != "" {
-			line += " • " + detail
-		}
 		selected := i == m.Picker.Session.index
 		prefix := "  "
 		style := m.st.dim
@@ -174,7 +171,8 @@ func (m Model) renderSessionPicker() string {
 			prefix = "› "
 			style = m.st.cyan
 		}
-		content := fitLine(prefix+line, max(0, m.App.Width-2))
+		contentWidth := max(0, m.App.Width-ansi.StringWidth(prefix)-2)
+		content := prefix + sessionPickerRenderedLine(m.App.Workdir, item.info, contentWidth)
 		b.WriteString(style.PaddingLeft(2).Render(content))
 		b.WriteString("\n")
 	}
@@ -234,6 +232,59 @@ func rankedSessionPickerItems(items []sessionPickerItem, query, cwd string) []se
 }
 
 func sessionPickerLine(cwd string, info storage.SessionInfo) (string, string) {
+	label, preview, metadataParts := sessionPickerParts(cwd, info)
+	detailParts := make([]string, 0, len(metadataParts)+1)
+	if preview != "" {
+		detailParts = append(detailParts, preview)
+	}
+	detailParts = append(detailParts, metadataParts...)
+	return label, strings.Join(detailParts, " • ")
+}
+
+func sessionPickerRenderedLine(cwd string, info storage.SessionInfo, width int) string {
+	label, preview, metadataParts := sessionPickerParts(cwd, info)
+	metadata := fitSessionPickerMetadata(metadataParts, width)
+	lead := label
+	if preview != "" {
+		lead += " • " + preview
+	}
+	if metadata == "" {
+		return fitLine(lead, width)
+	}
+
+	const sep = " • "
+	suffixWidth := ansi.StringWidth(sep) + ansi.StringWidth(metadata)
+	if width <= suffixWidth {
+		return fitLine(metadata, width)
+	}
+	return fitLine(lead, width-suffixWidth) + sep + metadata
+}
+
+func fitSessionPickerMetadata(parts []string, width int) string {
+	if len(parts) == 0 || width <= 0 {
+		return ""
+	}
+	joined := strings.Join(parts, " • ")
+	if ansi.StringWidth(joined) <= width {
+		return joined
+	}
+	if len(parts) == 1 {
+		return fitLine(parts[0], width)
+	}
+
+	const sep = " • "
+	tail := fitSessionPickerMetadata(parts[1:], width)
+	tailWidth := ansi.StringWidth(sep) + ansi.StringWidth(tail)
+	if tail == "" {
+		return fitLine(parts[0], width)
+	}
+	if tailWidth >= width {
+		return tail
+	}
+	return fitLine(parts[0], width-tailWidth) + sep + tail
+}
+
+func sessionPickerParts(cwd string, info storage.SessionInfo) (string, string, []string) {
 	title := strings.TrimSpace(info.Title)
 	summary := strings.TrimSpace(info.Summary)
 	preview := strings.TrimSpace(info.LastPreview)
@@ -251,24 +302,24 @@ func sessionPickerLine(cwd string, info storage.SessionInfo) (string, string) {
 	labelSource := label
 	label = truncateRunes(label, 64)
 
-	var detailParts []string
+	detailPreview := ""
 	if title != "" && preview != "" && preview != labelSource {
-		detailParts = append(detailParts, truncateRunes(preview, 64))
+		detailPreview = truncateRunes(preview, 64)
 	}
+	var metadataParts []string
 	if model := strings.TrimSpace(info.Model); model != "" {
-		detailParts = append(detailParts, model)
+		metadataParts = append(metadataParts, model)
 	}
 	if branch := strings.TrimSpace(info.Branch); branch != "" {
-		detailParts = append(detailParts, branch)
+		metadataParts = append(metadataParts, branch)
 	}
 	if age := sessionAgeLabel(info.UpdatedAt); age != "" {
-		detailParts = append(detailParts, age)
+		metadataParts = append(metadataParts, age)
 	}
-	detail := strings.Join(detailParts, " • ")
-	if detail == "" && cwd != "" {
-		detail = filepath.Base(cwd)
+	if len(metadataParts) == 0 && cwd != "" {
+		metadataParts = append(metadataParts, filepath.Base(cwd))
 	}
-	return label, detail
+	return label, detailPreview, metadataParts
 }
 
 func sessionAgeLabel(updatedAt time.Time) string {

@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/nijaru/ion/internal/config"
-	"github.com/nijaru/ion/internal/features"
 	"github.com/nijaru/ion/internal/session"
 )
 
@@ -78,12 +77,6 @@ func TestStartupMode(t *testing.T) {
 }
 
 func TestApplyWorkspaceTrustModeGate(t *testing.T) {
-	untrustedAutoWant := session.ModeRead
-	untrustedPrintWant := session.ModeRead
-	if features.CoreLoopOnly {
-		untrustedAutoWant = session.ModeYolo
-		untrustedPrintWant = session.ModeEdit
-	}
 	cases := []struct {
 		name                  string
 		mode                  session.Mode
@@ -98,14 +91,14 @@ func TestApplyWorkspaceTrustModeGate(t *testing.T) {
 			want: session.ModeYolo,
 		},
 		{
-			name: "core loop only leaves interactive auto alone",
+			name: "deferred trust leaves interactive auto alone",
 			mode: session.ModeYolo,
-			want: untrustedAutoWant,
+			want: session.ModeYolo,
 		},
 		{
-			name: "core loop only leaves implicit print edit alone",
+			name: "deferred trust leaves implicit print edit alone",
 			mode: session.ModeEdit, printRequested: true,
-			want: untrustedPrintWant,
+			want: session.ModeEdit,
 		},
 		{
 			name: "untrusted explicit print auto is allowed for this invocation",

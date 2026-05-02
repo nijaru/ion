@@ -38,7 +38,7 @@ Categories:
 |---|---|
 | `read` | `read`, `grep`, `glob`, `list`, `recall_memory`, `remember_memory`, `compact` |
 | `write` | `write`, `edit`, `multi_edit` |
-| `execute` | `bash`, `verify` |
+| `execute` | `bash` |
 | `network` | Reserved for network-capable tools |
 | `sensitive` | `mcp`, `subagent` |
 

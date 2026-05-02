@@ -115,7 +115,11 @@ func TestLoadUsesDefaultsWhenConfigMissing(t *testing.T) {
 		t.Fatalf("reasoning_effort = %q, want %q", cfg.ReasoningEffort, DefaultReasoningEffort)
 	}
 	if cfg.SessionRetentionDays != DefaultSessionRetentionDays {
-		t.Fatalf("session_retention_days = %d, want %d", cfg.SessionRetentionDays, DefaultSessionRetentionDays)
+		t.Fatalf(
+			"session_retention_days = %d, want %d",
+			cfg.SessionRetentionDays,
+			DefaultSessionRetentionDays,
+		)
 	}
 	if !cfg.RetryUntilCancelledEnabled() {
 		t.Fatal("retry_until_cancelled = false, want true")
@@ -652,6 +656,62 @@ func TestNormalizeVerbosity(t *testing.T) {
 	} {
 		if got := normalizeVerbosity(input); got != want {
 			t.Fatalf("normalizeVerbosity(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
+func TestNormalizeReadOutput(t *testing.T) {
+	for input, want := range map[string]string{
+		"":            "",
+		"show":        "full",
+		" FULL ":      "full",
+		"single":      "summary",
+		"summary":     "summary",
+		"combined":    "summary",
+		"collapsed":   "summary",
+		"hidden":      "hidden",
+		"unsupported": "",
+	} {
+		if got := normalizeReadOutput(input); got != want {
+			t.Fatalf("normalizeReadOutput(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
+func TestNormalizeWriteOutput(t *testing.T) {
+	for input, want := range map[string]string{
+		"":            "",
+		"show":        "diff",
+		"diff":        "diff",
+		" FULL ":      "diff",
+		"single":      "summary",
+		"summary":     "summary",
+		"call":        "summary",
+		"hidden":      "hidden",
+		"unsupported": "",
+	} {
+		if got := normalizeWriteOutput(input); got != want {
+			t.Fatalf("normalizeWriteOutput(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
+func TestNormalizeBashOutput(t *testing.T) {
+	for input, want := range map[string]string{
+		"":            "",
+		"show":        "full",
+		"verbose":     "full",
+		" FULL ":      "full",
+		"truncated":   "summary",
+		"summary":     "summary",
+		"collapsed":   "summary",
+		"command":     "hidden",
+		"call":        "hidden",
+		"hidden":      "hidden",
+		"unsupported": "",
+	} {
+		if got := normalizeBashOutput(input); got != want {
+			t.Fatalf("normalizeBashOutput(%q) = %q, want %q", input, got, want)
 		}
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/session"
+	"github.com/nijaru/ion/internal/tooldisplay"
 )
 
 // Viewport handles the rendering of Plane A (committed scrollback) and Plane B (ephemeral in-flight content).
@@ -19,7 +20,9 @@ type Viewport struct{}
 // Returns empty string when there is nothing active.
 func (m Model) renderPlaneB() string {
 	hasPendingTool := m.InFlight.Pending != nil && m.InFlight.Pending.Role == session.Tool
-	if !hasPendingTool && len(m.InFlight.PendingTools) == 0 && m.Approval.Pending == nil && m.InFlight.ReasonBuf == "" && len(m.InFlight.Subagents) == 0 {
+	if !hasPendingTool && len(m.InFlight.PendingTools) == 0 && m.Approval.Pending == nil &&
+		m.InFlight.ReasonBuf == "" &&
+		len(m.InFlight.Subagents) == 0 {
 		return ""
 	}
 
@@ -71,7 +74,9 @@ func (m Model) renderPlaneB() string {
 			shown++
 		}
 		if n > maxVisible {
-			b.WriteString(m.st.dim.PaddingLeft(2).Render(fmt.Sprintf("+%d more workers", n-maxVisible)))
+			b.WriteString(
+				m.st.dim.PaddingLeft(2).Render(fmt.Sprintf("+%d more workers", n-maxVisible)),
+			)
 			b.WriteString("\n")
 		}
 	}
@@ -82,7 +87,7 @@ func (m Model) renderPlaneB() string {
 		desc := m.Approval.Pending.Description
 		if m.Approval.Pending.ToolName != "" {
 			desc = fmt.Sprintf("%s: %s",
-				FormatToolTitle(m.Approval.Pending.ToolName, m.Approval.Pending.Args),
+				m.formatToolTitle(m.Approval.Pending.ToolName, m.Approval.Pending.Args),
 				m.Approval.Pending.Description)
 		}
 		b.WriteString(m.st.warn.PaddingLeft(2).Render("Approve " + desc + "? (y/n/a)"))
@@ -107,18 +112,20 @@ func (m Model) renderPendingEntry(e session.Entry) string {
 		}
 		return m.st.agent.Render("• " + e.Content)
 	case session.Tool:
-		label := normalizeToolTitle(e.Title)
+		label := m.normalizeToolTitle(e.Title)
 		if label == "" {
 			label = "tool"
 		}
 		var b strings.Builder
-		labelStr := m.st.tool.Render("• " + label)
-		b.WriteString(labelStr)
-		if e.Content == "" || toolVerbosity == "hidden" {
+		b.WriteString(m.renderToolLabel(label, e.IsError))
+		if e.Content == "" || toolVerbosity == "hidden" || m.toolOutputHidden(e) {
 			return b.String()
 		}
-		if shouldCompactRoutineTool(e, m.Model.Config) {
-			if summary := routineToolOutputSummary(e.Content); summary != "" {
+		if m.shouldSummarizeToolOutput(e) {
+			if isWriteTool(e.Title) {
+				return b.String()
+			}
+			if summary := toolOutputSummary(e); summary != "" {
 				b.WriteString(m.st.dim.Render(" · " + summary))
 			}
 			return b.String()
@@ -193,12 +200,12 @@ func (m Model) renderEntry(e session.Entry) string {
 	case session.Agent:
 		var b strings.Builder
 		if e.Reasoning != "" && thinkingVerbosity != "hidden" {
-			b.WriteString(m.st.system.Render("• Thinking"))
-			b.WriteString("\n")
 			if thinkingVerbosity == "collapsed" {
-				b.WriteString(m.st.dim.PaddingLeft(4).Render("..."))
+				b.WriteString(m.st.system.Render("• Thinking..."))
 				b.WriteString("\n")
 			} else {
+				b.WriteString(m.st.system.Render("• Thinking"))
+				b.WriteString("\n")
 				b.WriteString(m.st.dim.PaddingLeft(4).Render(e.Reasoning))
 				b.WriteString("\n")
 			}
@@ -220,27 +227,25 @@ func (m Model) renderEntry(e session.Entry) string {
 		return strings.TrimRightFunc(b.String(), unicode.IsSpace)
 
 	case session.Tool:
-		label := normalizeToolTitle(e.Title)
+		label := m.normalizeToolTitle(e.Title)
 		if label == "" {
 			label = "tool"
 		}
-		var labelStr string
-		if e.IsError {
-			labelStr = m.st.warn.Render("✗ " + label)
-		} else {
-			labelStr = m.st.tool.Render("• " + label)
-		}
-		if e.Content == "" || toolVerbosity == "hidden" {
+		labelStr := m.renderToolLabel(label, e.IsError)
+		if e.Content == "" || toolVerbosity == "hidden" || m.toolOutputHidden(e) {
 			return labelStr
 		}
-		if shouldCompactRoutineTool(e, m.Model.Config) {
-			if summary := routineToolOutputSummary(e.Content); summary != "" {
+		if m.shouldSummarizeToolOutput(e) {
+			if isWriteTool(e.Title) {
+				return labelStr
+			}
+			if summary := toolOutputSummary(e); summary != "" {
 				return labelStr + m.st.dim.Render(" · "+summary)
 			}
 			return labelStr
 		}
 		content := e.Content
-		if isWriteTool(e.Title) {
+		if m.shouldRenderWriteDiff(e) {
 			content = m.renderDiff(content)
 		}
 		var b strings.Builder
@@ -290,14 +295,101 @@ func (m Model) renderEntry(e session.Entry) string {
 	}
 }
 
-func shouldCompactRoutineTool(e session.Entry, cfg *config.Config) bool {
+func (m Model) renderToolLabel(label string, isError bool) string {
+	if isError {
+		return m.st.warn.Render("✗") + " " + label
+	}
+	return m.st.tool.Render("•") + " " + label
+}
+
+func (m Model) toolOutputHidden(e session.Entry) bool {
+	if e.IsError {
+		return false
+	}
+	switch {
+	case isReadLikeTool(e.Title):
+		return toolReadOutput(m.Model.Config) == "hidden"
+	case isWriteTool(e.Title):
+		return toolWriteOutput(m.Model.Config) == "hidden"
+	case isBashLikeTool(e.Title):
+		return toolBashOutput(m.Model.Config) == "hidden"
+	default:
+		return false
+	}
+}
+
+func (m Model) shouldSummarizeToolOutput(e session.Entry) bool {
 	if e.Role != session.Tool || e.IsError {
 		return false
 	}
-	if cfg != nil && cfg.ToolVerbosity == "full" {
+	if isReadLikeTool(e.Title) {
+		return toolReadOutput(m.Model.Config) == "summary"
+	}
+	if isWriteTool(e.Title) {
+		return toolWriteOutput(m.Model.Config) == "summary"
+	}
+	if isBashLikeTool(e.Title) {
+		return toolBashOutput(m.Model.Config) == "summary"
+	}
+	if m.Model.Config != nil && m.Model.Config.ToolVerbosity == "full" {
 		return false
 	}
-	switch toolTitleVerb(e.Title) {
+	return isReadLikeTool(e.Title)
+}
+
+func (m Model) shouldRenderWriteDiff(e session.Entry) bool {
+	return isWriteTool(e.Title) && toolWriteOutput(m.Model.Config) == "diff"
+}
+
+func toolReadOutput(cfg *config.Config) string {
+	if cfg != nil {
+		if output := config.NormalizeReadOutput(cfg.ReadOutput); output != "" {
+			return output
+		}
+		switch cfg.ToolVerbosity {
+		case "full":
+			return "full"
+		case "hidden":
+			return "hidden"
+		case "collapsed":
+			return "summary"
+		}
+	}
+	return "summary"
+}
+
+func toolWriteOutput(cfg *config.Config) string {
+	if cfg != nil {
+		if output := config.NormalizeWriteOutput(cfg.WriteOutput); output != "" {
+			return output
+		}
+		switch cfg.ToolVerbosity {
+		case "hidden":
+			return "hidden"
+		case "collapsed":
+			return "summary"
+		}
+	}
+	return "summary"
+}
+
+func toolBashOutput(cfg *config.Config) string {
+	if cfg != nil {
+		if output := config.NormalizeBashOutput(cfg.BashOutput); output != "" {
+			return output
+		}
+		switch cfg.ToolVerbosity {
+		case "full":
+			return "full"
+		case "collapsed":
+			return "summary"
+		}
+	}
+	return "hidden"
+}
+
+func isReadLikeTool(title string) bool {
+	switch toolTitleVerb(title) {
 	case "list", "read", "find", "glob", "search", "grep":
 		return true
 	default:
@@ -305,16 +397,42 @@ func shouldCompactRoutineTool(e session.Entry, cfg *config.Config) bool {
 	}
 }
 
-func routineToolOutputSummary(content string) string {
-	trimmed := strings.TrimSpace(content)
+func isBashLikeTool(title string) bool {
+	switch toolTitleVerb(title) {
+	case "bash", "verify":
+		return true
+	default:
+		return false
+	}
+}
+
+func toolOutputSummary(e session.Entry) string {
+	trimmed := strings.TrimSpace(e.Content)
 	if trimmed == "" {
 		return ""
 	}
-	lines := strings.Split(strings.TrimRight(content, "\n"), "\n")
-	if len(lines) == 1 {
-		return "1 line"
+	lines := strings.Split(strings.TrimRight(e.Content, "\n"), "\n")
+	n := len(lines)
+	switch toolTitleVerb(e.Title) {
+	case "list", "find", "glob":
+		if n == 1 {
+			return "1 entry"
+		}
+		return fmt.Sprintf("%d entries", n)
+	case "grep", "search":
+		if strings.TrimSpace(e.Content) == "No matches found." {
+			return "0 matches"
+		}
+		if n == 1 {
+			return "1 match"
+		}
+		return fmt.Sprintf("%d matches", n)
+	default:
+		if n == 1 {
+			return "1 line"
+		}
+		return fmt.Sprintf("%d lines", n)
 	}
-	return fmt.Sprintf("%d lines", len(lines))
 }
 
 func (m Model) renderQueuedTurns() string {
@@ -366,12 +484,12 @@ func (m Model) progressLine() string {
 		}
 		line = m.Input.Spinner.View() + " " + status
 		if stats := m.runningProgressParts(); len(stats) > 0 {
-			line += " • " + strings.Join(stats, " • ")
+			line += m.renderProgressStats(stats)
 		}
 	case stateComplete:
 		line = m.st.success.Render("✓") + " Complete"
 		if stats := m.completedProgressParts(); len(stats) > 0 {
-			line += " • " + strings.Join(stats, " • ")
+			line += m.renderProgressStats(stats)
 		}
 	case stateApproval:
 		line = m.st.warn.Render("⚠ Approval required")
@@ -399,6 +517,18 @@ func (m Model) progressLine() string {
 		line += m.st.dim.Render(fmt.Sprintf(" • %d queued", n))
 	}
 	return fitLine(strings.TrimRight(line, " "), m.App.Width)
+}
+
+func (m Model) renderProgressStats(parts []string) string {
+	if len(parts) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for _, part := range parts {
+		b.WriteString(m.st.dim.Render(" • "))
+		b.WriteString(m.st.dim.Render(part))
+	}
+	return b.String()
 }
 
 // renderDiff colorizes diff-format output.
@@ -456,85 +586,28 @@ func toolTitleVerb(title string) string {
 	return title
 }
 
-func normalizeToolTitle(title string) string {
-	title = strings.TrimSpace(title)
-	if title == "" {
-		return ""
-	}
-	verb := toolTitleVerb(title)
-	displayName := toolDisplayName(verb)
-	if displayName == "Tool" || displayName == verb || verb == "" {
-		return title
-	}
-	rest := strings.TrimSpace(title[len(verb):])
-	if rest == "" {
-		return displayName
-	}
-	if strings.HasPrefix(rest, "(") {
-		return displayName + rest
-	}
-	return displayName + " " + rest
+func (m Model) normalizeToolTitle(title string) string {
+	return tooldisplay.NormalizeTitle(title, m.toolTitleOptions())
 }
 
 // FormatToolTitle attempts to extract the most important argument from a tool call's
 // raw JSON string to create a more readable title.
 func FormatToolTitle(name, args string) string {
-	args = strings.TrimSpace(args)
-	displayName := toolDisplayName(name)
-	if args == "" || args == "{}" {
-		return displayName
-	}
-
-	// Simple heuristic-based extraction to avoid full JSON overhead in the render loop.
-	for _, key := range []string{"command", "file_path", "path", "pattern", "query"} {
-		pattern := fmt.Sprintf("\"%s\":", key)
-		if idx := strings.Index(args, pattern); idx != -1 {
-			val := args[idx+len(pattern):]
-			val = strings.TrimSpace(val)
-			if strings.HasPrefix(val, "\"") {
-				val = val[1:]
-				if end := strings.Index(val, "\""); end != -1 {
-					return fmt.Sprintf("%s %s", displayName, val[:end])
-				}
-			}
-		}
-	}
-
-	if !strings.HasPrefix(args, "{") && !strings.HasPrefix(args, "[") {
-		return fmt.Sprintf("%s %s", displayName, args)
-	}
-	if strings.Contains(args, "[redacted-secret]") {
-		return fmt.Sprintf("%s %s", displayName, args)
-	}
-
-	return displayName
+	return tooldisplay.Title(name, args, tooldisplay.Options{})
 }
 
-func toolDisplayName(name string) string {
-	switch strings.TrimSpace(strings.ToLower(name)) {
-	case "read":
-		return "Read"
-	case "write":
-		return "Write"
-	case "edit":
-		return "Edit"
-	case "multi_edit":
-		return "Edit"
-	case "list":
-		return "List"
-	case "grep":
-		return "Search"
-	case "glob":
-		return "Find"
-	case "bash":
-		return "Bash"
-	case "verify":
-		return "Verify"
-	default:
-		if strings.TrimSpace(name) == "" {
-			return "Tool"
-		}
-		return name
+func (m Model) formatToolTitle(name, args string) string {
+	return tooldisplay.Title(name, args, m.toolTitleOptions())
+}
+
+func (m Model) toolTitleOptions() tooldisplay.Options {
+	width := 0
+	if m.App.Width > 0 {
+		width = max(0, m.App.Width-2)
+	}
+	return tooldisplay.Options{
+		Workdir: m.App.Workdir,
+		Width:   width,
 	}
 }
 

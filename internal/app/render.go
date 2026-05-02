@@ -16,22 +16,30 @@ func (m Model) View() tea.View {
 
 	// Plane B — ephemeral in-flight content
 	planeB := m.renderPlaneB()
+	hasShellLeadIn := false
 	if planeB != "" {
 		b.WriteString(planeB)
+		hasShellLeadIn = true
 	}
 
 	// Selection overlay
 	if m.Picker.Session != nil {
 		b.WriteString(m.renderSessionPicker())
 		b.WriteString("\n")
+		hasShellLeadIn = true
 	} else if m.Picker.Overlay != nil {
 		b.WriteString(m.renderPicker())
+		b.WriteString("\n")
+		hasShellLeadIn = true
+	}
+
+	if hasShellLeadIn && !strings.HasSuffix(b.String(), "\n\n") {
 		b.WriteString("\n")
 	}
 
 	if queued := m.renderQueuedTurns(); queued != "" {
 		b.WriteString(queued)
-		b.WriteString("\n")
+		b.WriteString("\n\n")
 	}
 
 	// Progress line

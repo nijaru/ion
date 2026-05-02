@@ -20,12 +20,10 @@ import (
 	"github.com/nijaru/canto/session"
 	"github.com/nijaru/canto/tool"
 	"github.com/nijaru/canto/tool/mcp"
-	ctools "github.com/nijaru/canto/x/tools"
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/backend/canto/tools"
 	"github.com/nijaru/ion/internal/backend/registry"
 	"github.com/nijaru/ion/internal/config"
-	"github.com/nijaru/ion/internal/features"
 	"github.com/nijaru/ion/internal/providers"
 	ionsession "github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
@@ -51,6 +49,7 @@ type Backend struct {
 
 	mu         sync.Mutex
 	cancel     context.CancelFunc
+	stopWatch  context.CancelFunc
 	turnSeq    uint64
 	turnActive bool
 	closeOnce  sync.Once
@@ -233,65 +232,13 @@ func (b *Backend) Open(ctx context.Context) error {
 	registry.Register(&tools.List{FileTool: *tools.NewFileTool(cwd)})
 	registry.Register(&tools.Grep{SearchTool: *tools.NewSearchTool(cwd)})
 	registry.Register(&tools.Glob{SearchTool: *tools.NewSearchTool(cwd)})
-	registry.Register(&tools.Verify{
-		CWD: cwd,
-		Callback: func(command string, passed bool, metric, output string) {
-			b.events <- ionsession.VerificationResult{
-				Command: command,
-				Passed:  passed,
-				Metric:  metric,
-				Output:  output,
-			}
-		},
-	})
 
-	workspaceNamespace := memory.Namespace{Scope: memory.ScopeWorkspace, ID: cwd}
 	requestProcessors := []prompt.RequestProcessor{
 		reasoningEffortProcessor(b.cfg),
-	}
-	if !features.CoreLoopOnly {
-		requestProcessors = append(requestProcessors, NewFileTagProcessor(cwd))
-	}
-
-	if !features.CoreLoopOnly {
-		registry.Register(&ctools.RecallTool{
-			Retriever:  b.memory,
-			Namespaces: []memory.Namespace{workspaceNamespace},
-			Roles:      []memory.Role{memory.RoleCore, memory.RoleSemantic, memory.RoleEpisodic},
-			Limit:      10,
-		})
-		registry.Register(&ctools.RememberTool{
-			Writer:    b.memory,
-			Namespace: workspaceNamespace,
-			Role:      memory.RoleSemantic,
-		})
-		registry.Register(tools.NewCompact(
-			b.store, b.compactLLM,
-			b.Model, b.ContextLimit, b.ID,
-		))
-		personas, err := loadSubagentPersonas(b.cfg)
-		if err != nil {
-			return err
-		}
-		if err := validateSubagentPersonaTools(personas, registry); err != nil {
-			return err
-		}
-		registry.Register(NewSubagentTool(b, personas))
-		requestProcessors = append(requestProcessors,
-			prompt.MemoryPrompt(b.memory, prompt.MemoryPromptOptions{
-				Namespaces: []memory.Namespace{workspaceNamespace},
-				Roles:      []memory.Role{memory.RoleCore, memory.RoleSemantic, memory.RoleEpisodic},
-				Limit:      5,
-			}),
-			reflexionProcessor(),
-		)
 	}
 
 	agentOptions := []agent.Option{
 		agent.WithRequestProcessors(requestProcessors...),
-	}
-	if !features.CoreLoopOnly {
-		agentOptions = append(agentOptions, agent.WithHooks(policyHook(b)))
 	}
 	b.agent = agent.New("ion", instructions, modelName, p, registry, agentOptions...)
 
@@ -299,14 +246,18 @@ func (b *Backend) Open(ctx context.Context) error {
 	b.runner = runtime.NewRunner(
 		b.store,
 		b.agent,
-		runtime.WithOverflowRecovery(p.IsContextOverflow, func(ctx context.Context, sess *session.Session) error {
-			b.events <- ionsession.StatusChanged{Status: "Compacting context..."}
-			_, err := b.compactSession(ctx, sess)
-			if err == nil {
-				b.events <- ionsession.StatusChanged{Status: "Thinking..."}
-			}
-			return err
-		}, 1),
+		runtime.WithOverflowRecovery(
+			p.IsContextOverflow,
+			func(ctx context.Context, sess *session.Session) error {
+				b.events <- ionsession.StatusChanged{Status: "Compacting context..."}
+				_, err := b.compactSession(ctx, sess)
+				if err == nil {
+					b.events <- ionsession.StatusChanged{Status: "Thinking..."}
+				}
+				return err
+			},
+			1,
+		),
 	)
 
 	return nil
@@ -707,11 +658,13 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 	turnID := b.turnSeq
 	b.turnActive = true
 	b.cancel = cancel
+	b.stopWatch = stopWatch
 
 	sub, err := b.runner.Watch(watchCtx, sessionID)
 	if err != nil {
 		b.turnActive = false
 		b.cancel = nil
+		b.stopWatch = nil
 		b.mu.Unlock()
 		cancel()
 		stopWatch()
@@ -732,13 +685,13 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 		defer b.wg.Done()
 		defer b.finishTurn(turnID)
 		defer cancel()
+		defer stopWatch()
 
 		shouldCompact, err := b.shouldProactivelyCompact(turnCtx)
 		if err != nil {
 			b.events <- ionsession.Error{Err: err}
 			b.finishTurn(turnID)
 			b.events <- ionsession.TurnFinished{}
-			stopWatch()
 			return
 		}
 		if shouldCompact {
@@ -747,7 +700,6 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 				b.events <- ionsession.Error{Err: cerr}
 				b.finishTurn(turnID)
 				b.events <- ionsession.TurnFinished{}
-				stopWatch()
 				return
 			} else if compacted {
 				b.events <- ionsession.StatusChanged{Status: "Ready"}
@@ -773,7 +725,6 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 			b.events <- ionsession.Error{Err: err}
 			b.finishTurn(turnID)
 			b.events <- ionsession.TurnFinished{}
-			stopWatch()
 		}
 	}()
 
@@ -786,6 +737,7 @@ func (b *Backend) finishTurn(turnID uint64) {
 	if b.turnSeq == turnID {
 		b.turnActive = false
 		b.cancel = nil
+		b.stopWatch = nil
 	}
 }
 
@@ -817,7 +769,8 @@ func (b *Backend) shouldProactivelyCompact(ctx context.Context) (bool, error) {
 	limit := b.ContextLimit()
 	b.mu.Unlock()
 
-	if sess == nil || store == nil || provider == nil || sessionID == "" || model == "" || limit <= 0 {
+	if sess == nil || store == nil || provider == nil || sessionID == "" || model == "" ||
+		limit <= 0 {
 		return false, nil
 	}
 
@@ -1001,7 +954,11 @@ func validateSubagentPersonaTools(personas []subagents.Persona, registry *tool.R
 	for _, persona := range personas {
 		for _, toolName := range persona.Tools {
 			if _, ok := registry.Get(toolName); !ok {
-				return fmt.Errorf("subagent persona %s references unknown tool %q", persona.Name, toolName)
+				return fmt.Errorf(
+					"subagent persona %s references unknown tool %q",
+					persona.Name,
+					toolName,
+				)
 			}
 		}
 	}
@@ -1010,11 +967,22 @@ func validateSubagentPersonaTools(personas []subagents.Persona, registry *tool.R
 
 func (b *Backend) CancelTurn(ctx context.Context) error {
 	b.mu.Lock()
-	defer b.mu.Unlock()
+	cancel := b.cancel
+	stopWatch := b.stopWatch
+	active := b.turnActive
+	b.cancel = nil
+	b.stopWatch = nil
+	b.turnActive = false
+	b.mu.Unlock()
 
-	if b.cancel != nil {
-		b.cancel()
-		b.cancel = nil
+	if cancel != nil {
+		cancel()
+	}
+	if stopWatch != nil {
+		stopWatch()
+	}
+	if active {
+		b.events <- ionsession.TurnFinished{}
 	}
 	return nil
 }
@@ -1025,35 +993,7 @@ func (b *Backend) Approve(ctx context.Context, requestID string, approved bool) 
 }
 
 func (b *Backend) RegisterMCPServer(ctx context.Context, command string, args ...string) error {
-	if features.CoreLoopOnly {
-		return fmt.Errorf("%s", features.Disabled("MCP registration"))
-	}
-
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	if b.agent == nil || b.tools == nil {
-		return fmt.Errorf("backend not initialized")
-	}
-
-	client, err := mcp.NewStdioClient(ctx, command, args...)
-	if err != nil {
-		return fmt.Errorf("failed to connect to MCP server: %w", err)
-	}
-
-	tools, err := client.DiscoverTools(ctx)
-	if err != nil {
-		client.Close()
-		return fmt.Errorf("failed to discover tools: %w", err)
-	}
-
-	for _, t := range tools {
-		b.tools.Register(t)
-	}
-
-	b.mcpClients = append(b.mcpClients, client)
-	b.events <- ionsession.StatusChanged{Status: fmt.Sprintf("Registered %d MCP tools from %s", len(tools), command)}
-	return nil
+	return fmt.Errorf("MCP registration is deferred while Ion stabilizes the native agent loop")
 }
 
 func (b *Backend) SetMode(mode ionsession.Mode) {
@@ -1125,6 +1065,7 @@ func (b *Backend) Close() error {
 	b.closeOnce.Do(func() {
 		b.mu.Lock()
 		cancel := b.cancel
+		stopWatch := b.stopWatch
 		clients := append([]*mcp.Client(nil), b.mcpClients...)
 		memory := b.memory
 		runner := b.runner
@@ -1132,6 +1073,9 @@ func (b *Backend) Close() error {
 
 		if cancel != nil {
 			cancel()
+		}
+		if stopWatch != nil {
+			stopWatch()
 		}
 		for _, client := range clients {
 			client.Close()

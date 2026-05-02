@@ -80,7 +80,10 @@ func TestIntegrationFullLoop(t *testing.T) {
 
 	for _, e := range storedEntries {
 		if e.Role == session.User || e.Role == session.Agent {
-			t.Fatalf("test backend should not create transcript entries through app persistence: %#v", storedEntries)
+			t.Fatalf(
+				"test backend should not create transcript entries through app persistence: %#v",
+				storedEntries,
+			)
 		}
 	}
 }
@@ -99,8 +102,18 @@ func TestIntegrationToolApproval(t *testing.T) {
 	reqID := "req-abc"
 	b.SetScript([]testutil.ScriptStep{
 		{Event: session.TurnStarted{}, Delay: 0},
-		{Event: session.ToolCallStarted{ToolName: "bash", Args: "ls"}, Delay: 10 * time.Millisecond},
-		{Event: session.ApprovalRequest{RequestID: reqID, ToolName: "bash", Description: "run ls"}, Delay: 10 * time.Millisecond},
+		{
+			Event: session.ToolCallStarted{ToolName: "bash", Args: "ls"},
+			Delay: 10 * time.Millisecond,
+		},
+		{
+			Event: session.ApprovalRequest{
+				RequestID:   reqID,
+				ToolName:    "bash",
+				Description: "run ls",
+			},
+			Delay: 10 * time.Millisecond,
+		},
 		// We expect the app to call Approve() after receiving ApprovalRequest
 	})
 
@@ -173,12 +186,11 @@ func TestMultiplexedSwarms(t *testing.T) {
 			ToolName: "verify",
 			Args:     "go test ./...",
 		}, Delay: 10 * time.Millisecond},
-		{Event: session.VerificationResult{
-			Base:    session.Base{AgentID: "Tester"},
-			Command: "go test ./...",
-			Passed:  true,
-			Metric:  "15/15 passed",
-			Output:  "OK",
+		{Event: session.ToolResult{
+			Base:      session.Base{AgentID: "Tester"},
+			ToolName:  "verify",
+			ToolUseID: "verify-1",
+			Result:    "Verification PASSED: go test ./...\n\nOutput:\nOK",
 		}, Delay: 20 * time.Millisecond},
 		{Event: session.AgentMessage{Message: "All good."}, Delay: 10 * time.Millisecond},
 		{Event: session.TurnFinished{}, Delay: 0},
@@ -229,8 +241,14 @@ func TestIntegrationSubagentDurability(t *testing.T) {
 
 	b.SetScript([]testutil.ScriptStep{
 		{Event: session.TurnStarted{}, Delay: 0},
-		{Event: session.ChildRequested{AgentName: "worker-1", Query: "task 1"}, Delay: 10 * time.Millisecond},
-		{Event: session.ChildCompleted{AgentName: "worker-1", Result: "result 1"}, Delay: 10 * time.Millisecond},
+		{
+			Event: session.ChildRequested{AgentName: "worker-1", Query: "task 1"},
+			Delay: 10 * time.Millisecond,
+		},
+		{
+			Event: session.ChildCompleted{AgentName: "worker-1", Result: "result 1"},
+			Delay: 10 * time.Millisecond,
+		},
 		{Event: session.TurnFinished{}, Delay: 0},
 	})
 
@@ -264,7 +282,8 @@ loop:
 	for _, e := range entries {
 		if e.Role == session.Subagent && e.Title == "worker-1" {
 			foundSubagent = true
-			if !strings.Contains(e.Content, "Completed: result 1") && !strings.Contains(e.Content, "Started: task 1") {
+			if !strings.Contains(e.Content, "Completed: result 1") &&
+				!strings.Contains(e.Content, "Started: task 1") {
 				t.Errorf("unexpected subagent content: %q", e.Content)
 			}
 		}

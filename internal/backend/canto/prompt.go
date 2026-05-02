@@ -78,8 +78,9 @@ func workflowInstructions() string {
 
 func toolPolicyInstructions() string {
 	return strings.Join([]string{
-		"- Use the available tools to inspect, search, edit, run commands, and verify work.",
-		"- Use shell commands when needed and interpret their output carefully.",
+		"- Use the available tools to inspect, search, edit, and run commands.",
+		"- Interpret shell command output carefully.",
+		"- Read tool output is line-numbered for reference. Do not include those line numbers when editing file content.",
 		"- After editing files, run relevant verification commands when feasible. Prefer project-specific test, lint, build, or type-check commands you find in the repo over generic guesses.",
 		"- Some tools may require host approval. If approval is denied, do not repeat the same blocked action unchanged.",
 	}, "\n")

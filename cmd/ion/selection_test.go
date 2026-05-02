@@ -20,7 +20,10 @@ type metadataStore struct {
 	listErr  error
 }
 
-func (s *metadataStore) OpenSession(ctx context.Context, cwd, model, branch string) (storage.Session, error) {
+func (s *metadataStore) OpenSession(
+	ctx context.Context,
+	cwd, model, branch string,
+) (storage.Session, error) {
 	return nil, nil
 }
 
@@ -28,14 +31,20 @@ func (s *metadataStore) ResumeSession(ctx context.Context, id string) (storage.S
 	return nil, nil
 }
 
-func (s *metadataStore) ListSessions(ctx context.Context, cwd string) ([]storage.SessionInfo, error) {
+func (s *metadataStore) ListSessions(
+	ctx context.Context,
+	cwd string,
+) ([]storage.SessionInfo, error) {
 	if s.listErr != nil {
 		return nil, s.listErr
 	}
 	return s.sessions, nil
 }
 
-func (s *metadataStore) GetRecentSession(ctx context.Context, cwd string) (*storage.SessionInfo, error) {
+func (s *metadataStore) GetRecentSession(
+	ctx context.Context,
+	cwd string,
+) (*storage.SessionInfo, error) {
 	return nil, nil
 }
 
@@ -64,9 +73,9 @@ func TestBackendForProvider(t *testing.T) {
 		{name: "canto together", provider: "together", want: "canto"},
 		{name: "canto custom openai", provider: "openai-compatible", want: "canto"},
 		{name: "canto local api", provider: "local-api", want: "canto"},
-		{name: "acp claude", provider: "claude-pro", wantErr: "ACP providers is disabled"},
-		{name: "acp gemini", provider: "gemini-advanced", wantErr: "ACP providers is disabled"},
-		{name: "acp github", provider: "gh-copilot", wantErr: "ACP providers is disabled"},
+		{name: "acp claude", provider: "claude-pro", wantErr: "ACP providers are deferred"},
+		{name: "acp gemini", provider: "gemini-advanced", wantErr: "ACP providers are deferred"},
+		{name: "acp github", provider: "gh-copilot", wantErr: "ACP providers are deferred"},
 	}
 
 	for _, tc := range cases {
@@ -74,7 +83,12 @@ func TestBackendForProvider(t *testing.T) {
 			b, err := backendForProvider(tc.provider)
 			if tc.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
-					t.Fatalf("backendForProvider(%q) error = %v, want %q", tc.provider, err, tc.wantErr)
+					t.Fatalf(
+						"backendForProvider(%q) error = %v, want %q",
+						tc.provider,
+						err,
+						tc.wantErr,
+					)
 				}
 				if b != nil {
 					t.Fatalf("backendForProvider(%q) backend = %#v, want nil", tc.provider, b)
@@ -178,7 +192,9 @@ func TestNormalizeFlagArgsOpensPickerForResumeWithoutID(t *testing.T) {
 }
 
 func TestNormalizeFlagArgsKeepsModelAndThinkingValues(t *testing.T) {
-	got, picker := normalizeFlagArgs([]string{"-p", "--model", "local-model", "--thinking", "high", "hello"})
+	got, picker := normalizeFlagArgs(
+		[]string{"-p", "--model", "local-model", "--thinking", "high", "hello"},
+	)
 	want := []string{"-p", "--model", "local-model", "--thinking", "high", "--", "hello"}
 	if picker {
 		t.Fatal("normalizeFlagArgs opened picker")
@@ -230,7 +246,10 @@ func TestApplyCLIConfigOverrides(t *testing.T) {
 		cfg.FastReasoningEffort != "" ||
 		cfg.SummaryModel != "" ||
 		cfg.SummaryReasoningEffort != "" {
-		t.Fatalf("cfg = %#v, want provider-only override to clear stale provider-scoped presets", cfg)
+		t.Fatalf(
+			"cfg = %#v, want provider-only override to clear stale provider-scoped presets",
+			cfg,
+		)
 	}
 
 	cfg = &config.Config{
@@ -441,7 +460,11 @@ func TestResolveStartupConfig(t *testing.T) {
 	})
 
 	t.Run("custom endpoint provider accepts endpoint override", func(t *testing.T) {
-		cfg := &config.Config{Provider: "openai-compatible", Model: "test-model", Endpoint: "https://example.com/v1"}
+		cfg := &config.Config{
+			Provider: "openai-compatible",
+			Model:    "test-model",
+			Endpoint: "https://example.com/v1",
+		}
 		if err := resolveStartupConfig(cfg); err != nil {
 			t.Fatalf("resolveStartupConfig error = %v", err)
 		}
@@ -559,7 +582,15 @@ func TestOpenRuntimeReturnsUnconfiguredBackendWhenSettingsMissing(t *testing.T) 
 		t.Fatalf("new store: %v", err)
 	}
 
-	b, sess, err := openRuntime(context.Background(), store, "/tmp/test", "main", &config.Config{}, "", "")
+	b, sess, err := openRuntime(
+		context.Background(),
+		store,
+		"/tmp/test",
+		"main",
+		&config.Config{},
+		"",
+		"",
+	)
 	if err != nil {
 		t.Fatalf("openRuntime returned error: %v", err)
 	}
@@ -589,7 +620,15 @@ func TestOpenRuntimeReturnsUnconfiguredBackendWhenModelMissing(t *testing.T) {
 		t.Fatalf("new store: %v", err)
 	}
 
-	b, sess, err := openRuntime(context.Background(), store, "/tmp/test", "main", &config.Config{Provider: "claude-pro"}, "", "")
+	b, sess, err := openRuntime(
+		context.Background(),
+		store,
+		"/tmp/test",
+		"main",
+		&config.Config{Provider: "claude-pro"},
+		"",
+		"",
+	)
 	if err != nil {
 		t.Fatalf("openRuntime returned error: %v", err)
 	}
@@ -606,7 +645,7 @@ func TestOpenRuntimeReturnsUnconfiguredBackendWhenModelMissing(t *testing.T) {
 	}
 }
 
-func TestOpenRuntimeDisablesACPProvidersDuringCoreLoopStabilization(t *testing.T) {
+func TestOpenRuntimeDefersACPProviders(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	dataDir, err := config.DefaultDataDir()
@@ -623,10 +662,10 @@ func TestOpenRuntimeDisablesACPProvidersDuringCoreLoopStabilization(t *testing.T
 	cfg := &config.Config{Provider: "claude-pro", Model: "sonnet"}
 	b, sess, err := openRuntime(context.Background(), store, "/tmp/test", "main", cfg, "", "")
 	if err == nil {
-		t.Fatal("openRuntime returned nil error, want ACP disabled error")
+		t.Fatal("openRuntime returned nil error, want ACP deferred error")
 	}
-	if !strings.Contains(err.Error(), "ACP providers is disabled while Ion stabilizes the P1 core agent loop") {
-		t.Fatalf("openRuntime error = %v, want ACP disabled error", err)
+	if !strings.Contains(err.Error(), "ACP providers are deferred") {
+		t.Fatalf("openRuntime error = %v, want ACP deferred error", err)
 	}
 	if b != nil {
 		t.Fatalf("backend = %#v, want nil", b)
@@ -636,7 +675,7 @@ func TestOpenRuntimeDisablesACPProvidersDuringCoreLoopStabilization(t *testing.T
 	}
 }
 
-func TestOpenRuntimeIgnoresExternalPolicyConfigDuringCoreLoopStabilization(t *testing.T) {
+func TestOpenRuntimeIgnoresExternalPolicyConfigInNativeBaseline(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	policyPath := t.TempDir() + "/policy.yaml"
@@ -843,7 +882,11 @@ func TestApplySessionConfigFromMetadata(t *testing.T) {
 		t.Fatalf("apply session config: %v", err)
 	}
 	if cfg.Provider != "openrouter" || cfg.Model != "openai/gpt-5.4" {
-		t.Fatalf("cfg provider/model = %s/%s, want openrouter/openai/gpt-5.4", cfg.Provider, cfg.Model)
+		t.Fatalf(
+			"cfg provider/model = %s/%s, want openrouter/openai/gpt-5.4",
+			cfg.Provider,
+			cfg.Model,
+		)
 	}
 	if cfg.ReasoningEffort != "high" {
 		t.Fatalf("reasoning effort = %q, want high", cfg.ReasoningEffort)
