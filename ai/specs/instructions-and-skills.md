@@ -162,11 +162,66 @@ Command syntax direction:
 Model-visible tool direction:
 
 - `read_skill(name)` is implemented behind `skill_tools = "read"`.
-- `manage_skill` is not a default tool. It may only be exposed for a trusted
-  user-local skill directory, under write-capable modes, with the same policy
-  and approval posture as file writes.
+- `manage_skill` is not a default tool. It may only be exposed under
+  `skill_tools = "manage"`, for the trusted user-local skill root, and outside
+  READ mode.
 - Self-extension nudges are deferred until `manage_skill` is safe, observable,
   and easy to undo.
+
+### manage_skill write-gate contract
+
+`manage_skill` is a protected write surface. It is allowed to help the model
+manage local skill bundles, but it must not let the model silently mutate the
+agent's future behavior.
+
+Initial allowed actions:
+
+- `preview_install` - validate a local source path and return the same preview
+  as `ion skill install <path>`.
+- `install_local` - install a previously previewable local source path into
+  `~/.ion/skills/<name>`.
+- `preview_remove` - show which installed local skill would be removed.
+- `remove_local` - move an installed local skill into a timestamped trash path.
+
+Explicitly not in the first `manage_skill` version:
+
+- remote marketplace fetch/install
+- executing fetched scripts or hooks
+- editing an existing `SKILL.md` in place
+- updating/replacing an installed skill without first trashing the old copy
+- writing outside `~/.ion/skills`
+- adding an installed-skill inventory to the default prompt
+
+Exposure gates:
+
+- config must be `skill_tools = "manage"`
+- command mode must be write-capable; READ hides or rejects the tool
+- target root must be the resolved user-local `~/.ion/skills`
+- mutation actions must require an explicit user approval prompt even in AUTO
+  mode; they are not eligible for silent auto-approval
+- tool output must include action, source, target, skill name, and undo path
+  where applicable
+
+Audit and undo:
+
+- every mutation writes an audit entry under `~/.ion/skills/.ion-log/`
+- installs use the existing staging-then-rename path
+- removals move the skill directory to `~/.ion/skills/.trash/<name>-<stamp>`
+  rather than deleting
+- failed installs clean up staging directories
+- a future `restore_local` action may restore from trash, but first version can
+  rely on the logged trash path plus a host command if restore UX is not ready
+
+Approval copy should be short and concrete:
+
+```text
+manage_skill install_local
+source: /path/to/source
+target: ~/.ion/skills/review
+```
+
+If these gates cannot be implemented cleanly, keep `manage_skill` unavailable
+and continue using host-owned `ion skill install --confirm`.
 
 Marketplace direction:
 

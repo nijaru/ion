@@ -21,6 +21,14 @@ Distilled architectural principles plus recent decision log.
 
 ## Recent Log
 
+### 2026-05-02 - manage_skill is a protected write surface
+
+Future `manage_skill` is not a normal default tool. It requires
+`skill_tools = "manage"`, write-capable mode, local `~/.ion/skills` target,
+hard user approval for mutations even in AUTO, mutation audit entries, and
+trash-based removals. If those gates are not present, host-owned
+`ion skill install --confirm` remains the mutation path.
+
 ### 2026-05-02 - skill install is explicit local staging
 
 Ion supports `ion skill install <path>` as validation/preview and

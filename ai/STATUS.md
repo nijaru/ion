@@ -3,9 +3,9 @@
 Fast, lightweight terminal coding agent.
 
 **Phase:** I4 advanced integrations
-**Focus:** I4 skills and self-extension boundary
+**Focus:** I4 tool/search follow-up
 **Active umbrella:** none - `tk-mmcs` is closed
-**Active task:** `tk-hfgh` - safe skill install and gated model-visible tools
+**Active task:** none - next ready item is `tk-03hf` ripgo benchmark
 **Updated:** 2026-05-02
 
 ## Current Truth
@@ -79,11 +79,20 @@ Fast, lightweight terminal coding agent.
   `ion skill list [query]` mirrors `/skills`. It rejects remote sources,
   symlinks/special files, and overwrites. Gates passed: focused cmd/skills
   tests, `go test ./...`, native race subset, and `git diff --check`.
+- `tk-hfgh` is closed. `manage_skill`, marketplace install, and self-extension
+  are intentionally split to `tk-exeg` because write-capable skill mutation
+  needs a clear trust/policy/undo contract before implementation.
+- `tk-exeg` design is captured in `ai/specs/instructions-and-skills.md`:
+  future `manage_skill` is opt-in via `skill_tools = "manage"`, unavailable in
+  READ, hard-approval for mutations even in AUTO, local-root only, audited, and
+  trash-based for removal undo.
+- `tk-exeg` is closed as a design/spec task. No `manage_skill` code is exposed
+  yet; host-owned `ion skill install --confirm` remains the only skill mutation
+  path.
 
 ## Next Action
 
-1. Continue `tk-hfgh` by deciding whether the next slice should be gated
-   `manage_skill` design/tests or closing the current skills increment and
-   moving to the next ready I4 task.
+1. Start `tk-03hf` and benchmark whether ripgo can match current ripgrep-backed
+   search semantics before any replacement work.
 2. Keep one green slice per commit and avoid reopening Canto unless Ion tests
    expose a framework defect.

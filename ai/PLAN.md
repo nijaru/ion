@@ -9,7 +9,8 @@ green native baseline. Canto stays closed unless Ion evidence proves a
 framework-owned defect.
 
 Active umbrella: none. `tk-mmcs` is closed.
-Active task: `tk-hfgh` - safe skill install and gated model-visible tools.
+Active task: none. Next ready task is `tk-03hf` - benchmark ripgo search engine
+replacement.
 
 ## Phases
 
@@ -125,18 +126,26 @@ ACP bridge correctness is no longer the active blocker.
     an ACP stdio server that reuses Ion's existing `AgentSession` runtime
     boundary and maps prompt streaming, tool updates, approvals, cancel, and
     session mode updates to ACP.
-12. Active - `tk-hfgh` - skills beyond local browsing:
+12. Done - `tk-hfgh` - skills beyond local browsing:
     - Done - first slice: `skill_tools = "read"` opt-in registers
       `read_skill(name)` without adding a prompt inventory or changing the
       default eight-tool surface.
     - Done - safe local install/list CLI: preview by default, explicit
       `--confirm`, staging before install, no remote fetch, no script
       execution, no overwrite.
-    - Next - evaluate whether `manage_skill` has enough safety/design clarity
-      for an implementation slice; otherwise leave it deferred and advance the
-      next I4 ready task.
-    - Later - marketplace workflow and self-extension nudges after
-      write-policy and undo behavior are explicit.
+13. Done - `tk-exeg` - `manage_skill` write gate and undo design:
+    - define model-visible actions and non-actions
+    - require explicit opt-in, write-capable mode, trusted root, and user
+      approval for mutation
+    - specify audit/removal/undo behavior before any implementation
+    - leave marketplace and self-extension nudges deferred until the write gate
+      is boring
+    - outcome: spec captured in `ai/specs/instructions-and-skills.md`;
+      code implementation is a later slice, not part of this design gate
+14. Next - `tk-03hf` - benchmark ripgo search engine replacement:
+    - compare current ripgrep-backed behavior against ripgo on semantics first
+    - include ignored files, hidden files, `.git` exclusion, cancellation,
+      truncation, and large-repo latency before considering replacement
 
 ## I5+ Deferred Work
 
