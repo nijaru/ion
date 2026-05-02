@@ -1,6 +1,7 @@
 package skills
 
 import (
+	"fmt"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -12,6 +13,11 @@ type Summary struct {
 	Name         string
 	Description  string
 	AllowedTools []string
+}
+
+type Detail struct {
+	Summary
+	Instructions string
 }
 
 func List(paths ...string) ([]Summary, error) {
@@ -35,6 +41,57 @@ func List(paths ...string) ([]Summary, error) {
 		return strings.Compare(a.Name, b.Name)
 	})
 	return out, nil
+}
+
+func Read(paths []string, name string) (Detail, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return Detail{}, fmt.Errorf("skill name is required")
+	}
+	reg := agentskills.NewRegistry(paths...)
+	if err := reg.Discover(); err != nil {
+		return Detail{}, err
+	}
+	skill, ok := reg.Get(name)
+	if !ok {
+		for _, candidate := range reg.List() {
+			if candidate != nil && strings.EqualFold(candidate.Name, name) {
+				skill = candidate
+				ok = true
+				break
+			}
+		}
+	}
+	if !ok || skill == nil {
+		return Detail{}, fmt.Errorf("skill %q not found", name)
+	}
+	return Detail{
+		Summary: Summary{
+			Name:         skill.Name,
+			Description:  strings.TrimSpace(skill.Description),
+			AllowedTools: append([]string(nil), []string(skill.AllowedTools)...),
+		},
+		Instructions: strings.TrimSpace(skill.Instructions),
+	}, nil
+}
+
+func FormatDetail(detail Detail) string {
+	var b strings.Builder
+	b.WriteString("# ")
+	b.WriteString(detail.Name)
+	if detail.Description != "" {
+		b.WriteString("\n\n")
+		b.WriteString(detail.Description)
+	}
+	if len(detail.AllowedTools) > 0 {
+		b.WriteString("\n\nAllowed tools: ")
+		b.WriteString(strings.Join(detail.AllowedTools, ", "))
+	}
+	if detail.Instructions != "" {
+		b.WriteString("\n\n")
+		b.WriteString(detail.Instructions)
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 func Search(items []Summary, query string) []Summary {

@@ -44,6 +44,7 @@ type Config struct {
 	BashOutput             string            `toml:"bash_output,omitempty"`
 	ThinkingVerbosity      string            `toml:"thinking_verbosity,omitempty"`
 	BusyInput              string            `toml:"busy_input,omitempty"`
+	SkillTools             string            `toml:"skill_tools,omitempty"`
 }
 
 type State struct {
@@ -155,6 +156,7 @@ func normalizeConfig(cfg *Config) {
 	cfg.BashOutput = normalizeBashOutput(cfg.BashOutput)
 	cfg.ThinkingVerbosity = normalizeVerbosity(cfg.ThinkingVerbosity)
 	cfg.BusyInput = normalizeBusyInput(cfg.BusyInput)
+	cfg.SkillTools = normalizeSkillTools(cfg.SkillTools)
 	if cfg.ContextLimit < 0 {
 		cfg.ContextLimit = 0
 	}
@@ -291,6 +293,10 @@ func Save(cfg *Config) error {
 	out.BashOutput = normalizeBashOutput(out.BashOutput)
 	out.ThinkingVerbosity = normalizeVerbosity(out.ThinkingVerbosity)
 	out.BusyInput = normalizeBusyInput(out.BusyInput)
+	out.SkillTools = normalizeSkillTools(out.SkillTools)
+	if out.SkillTools == "off" {
+		out.SkillTools = ""
+	}
 
 	data, err := toml.Marshal(&out)
 	if err != nil {
@@ -467,6 +473,13 @@ func (c *Config) BusyInputMode() string {
 	return "queue"
 }
 
+func (c *Config) SkillToolMode() string {
+	if c == nil {
+		return "off"
+	}
+	return normalizeSkillTools(c.SkillTools)
+}
+
 func normalizeReasoningEffort(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "", DefaultReasoningEffort:
@@ -593,6 +606,17 @@ func normalizeBusyInput(value string) string {
 		return "steer"
 	}
 	return ""
+}
+
+func normalizeSkillTools(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "read", "readonly", "read-only", "read_only":
+		return "read"
+	case "manage", "write", "full":
+		return "manage"
+	default:
+		return "off"
+	}
 }
 
 func expandUserPath(path string) string {

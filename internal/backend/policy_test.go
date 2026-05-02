@@ -14,7 +14,10 @@ import (
 
 type classifierFunc func(context.Context, PolicyClassification) (PolicyDecision, error)
 
-func (f classifierFunc) ClassifyPolicy(ctx context.Context, req PolicyClassification) (PolicyDecision, error) {
+func (f classifierFunc) ClassifyPolicy(
+	ctx context.Context,
+	req PolicyClassification,
+) (PolicyDecision, error) {
 	return f(ctx, req)
 }
 
@@ -143,11 +146,21 @@ func TestReadModeCannotBeWeakenedBySessionApprovals(t *testing.T) {
 
 func TestVisibleToolNamesHidesNonReadToolsInReadMode(t *testing.T) {
 	pe := NewPolicyEngine()
-	names := []string{"bash", "edit", "glob", "grep", "list", "read", "unknown", "write"}
+	names := []string{
+		"bash",
+		"edit",
+		"glob",
+		"grep",
+		"list",
+		"read",
+		"read_skill",
+		"unknown",
+		"write",
+	}
 
 	pe.SetMode(session.ModeRead)
 	got := pe.VisibleToolNames(names)
-	want := []string{"glob", "grep", "list", "read"}
+	want := []string{"glob", "grep", "list", "read", "read_skill"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("READ visible tools = %#v, want %#v", got, want)
 	}
@@ -240,12 +253,15 @@ func TestPolicyClassifierCanRefineEditAskCases(t *testing.T) {
 	pe.SetAuditSink(func(event PolicyAuditEvent) {
 		audit = event
 	})
-	pe.SetClassifier(classifierFunc(func(ctx context.Context, req PolicyClassification) (PolicyDecision, error) {
-		if req.ToolName != "bash" || req.Category != CategoryExecute {
-			t.Fatalf("classification = %+v, want bash execute", req)
-		}
-		return PolicyDecision{Action: PolicyDeny, Reason: "destructive command"}, nil
-	}), time.Second)
+	pe.SetClassifier(
+		classifierFunc(func(ctx context.Context, req PolicyClassification) (PolicyDecision, error) {
+			if req.ToolName != "bash" || req.Category != CategoryExecute {
+				t.Fatalf("classification = %+v, want bash execute", req)
+			}
+			return PolicyDecision{Action: PolicyDeny, Reason: "destructive command"}, nil
+		}),
+		time.Second,
+	)
 
 	policy, reason := pe.Authorize(context.Background(), "bash", `{"command":"rm -rf build"}`)
 	if policy != PolicyDeny {
@@ -254,7 +270,9 @@ func TestPolicyClassifierCanRefineEditAskCases(t *testing.T) {
 	if !strings.Contains(reason, "destructive command") {
 		t.Fatalf("reason = %q, want classifier reason", reason)
 	}
-	if audit.ToolName != "bash" || audit.Category != CategoryExecute || audit.Action != PolicyDeny || audit.Source != "classifier" {
+	if audit.ToolName != "bash" || audit.Category != CategoryExecute ||
+		audit.Action != PolicyDeny ||
+		audit.Source != "classifier" {
 		t.Fatalf("audit = %+v, want classifier deny event", audit)
 	}
 }
@@ -262,9 +280,12 @@ func TestPolicyClassifierCanRefineEditAskCases(t *testing.T) {
 func TestPolicyClassifierFailuresFailClosedToAsk(t *testing.T) {
 	pe := NewPolicyEngine()
 	pe.SetMode(session.ModeEdit)
-	pe.SetClassifier(classifierFunc(func(ctx context.Context, req PolicyClassification) (PolicyDecision, error) {
-		return PolicyDecision{}, errors.New("model unavailable")
-	}), time.Second)
+	pe.SetClassifier(
+		classifierFunc(func(ctx context.Context, req PolicyClassification) (PolicyDecision, error) {
+			return PolicyDecision{}, errors.New("model unavailable")
+		}),
+		time.Second,
+	)
 
 	policy, reason := pe.Authorize(context.Background(), "write", `{"file_path":"file.txt"}`)
 	if policy != PolicyAsk {
@@ -278,10 +299,13 @@ func TestPolicyClassifierFailuresFailClosedToAsk(t *testing.T) {
 func TestPolicyClassifierTimeoutFailsClosedToAsk(t *testing.T) {
 	pe := NewPolicyEngine()
 	pe.SetMode(session.ModeEdit)
-	pe.SetClassifier(classifierFunc(func(ctx context.Context, req PolicyClassification) (PolicyDecision, error) {
-		<-ctx.Done()
-		return PolicyDecision{}, ctx.Err()
-	}), time.Nanosecond)
+	pe.SetClassifier(
+		classifierFunc(func(ctx context.Context, req PolicyClassification) (PolicyDecision, error) {
+			<-ctx.Done()
+			return PolicyDecision{}, ctx.Err()
+		}),
+		time.Nanosecond,
+	)
 
 	policy, reason := pe.Authorize(t.Context(), "write", `{"file_path":"file.txt"}`)
 	if policy != PolicyAsk {
@@ -295,9 +319,12 @@ func TestPolicyClassifierTimeoutFailsClosedToAsk(t *testing.T) {
 func TestPolicyClassifierInvalidDecisionFailsClosedToAsk(t *testing.T) {
 	pe := NewPolicyEngine()
 	pe.SetMode(session.ModeEdit)
-	pe.SetClassifier(classifierFunc(func(ctx context.Context, req PolicyClassification) (PolicyDecision, error) {
-		return PolicyDecision{Action: "maybe", Reason: "invalid parse"}, nil
-	}), time.Second)
+	pe.SetClassifier(
+		classifierFunc(func(ctx context.Context, req PolicyClassification) (PolicyDecision, error) {
+			return PolicyDecision{Action: "maybe", Reason: "invalid parse"}, nil
+		}),
+		time.Second,
+	)
 
 	policy, reason := pe.Authorize(t.Context(), "write", `{"file_path":"file.txt"}`)
 	if policy != PolicyAsk {
@@ -310,9 +337,12 @@ func TestPolicyClassifierInvalidDecisionFailsClosedToAsk(t *testing.T) {
 
 func TestPolicyClassifierCannotWeakenHardBoundaries(t *testing.T) {
 	pe := NewPolicyEngine()
-	pe.SetClassifier(classifierFunc(func(ctx context.Context, req PolicyClassification) (PolicyDecision, error) {
-		return PolicyDecision{Action: PolicyAllow, Reason: "looks safe"}, nil
-	}), time.Second)
+	pe.SetClassifier(
+		classifierFunc(func(ctx context.Context, req PolicyClassification) (PolicyDecision, error) {
+			return PolicyDecision{Action: PolicyAllow, Reason: "looks safe"}, nil
+		}),
+		time.Second,
+	)
 
 	pe.SetMode(session.ModeRead)
 	policy, reason := pe.Authorize(context.Background(), "write", `{"file_path":"file.txt"}`)
@@ -359,9 +389,20 @@ func TestPolicyConfigRejectsInvalidRules(t *testing.T) {
 		cfg  *PolicyConfig
 	}{
 		{name: "missing selector", cfg: &PolicyConfig{Rules: []PolicyRule{{Action: PolicyDeny}}}},
-		{name: "two selectors", cfg: &PolicyConfig{Rules: []PolicyRule{{Tool: "bash", Category: CategoryExecute, Action: PolicyDeny}}}},
-		{name: "bad action", cfg: &PolicyConfig{Rules: []PolicyRule{{Tool: "bash", Action: "sometimes"}}}},
-		{name: "bad category", cfg: &PolicyConfig{Rules: []PolicyRule{{Category: "filesystem", Action: PolicyAsk}}}},
+		{
+			name: "two selectors",
+			cfg: &PolicyConfig{
+				Rules: []PolicyRule{{Tool: "bash", Category: CategoryExecute, Action: PolicyDeny}},
+			},
+		},
+		{
+			name: "bad action",
+			cfg:  &PolicyConfig{Rules: []PolicyRule{{Tool: "bash", Action: "sometimes"}}},
+		},
+		{
+			name: "bad category",
+			cfg:  &PolicyConfig{Rules: []PolicyRule{{Category: "filesystem", Action: PolicyAsk}}},
+		},
 	}
 
 	for _, tc := range cases {
