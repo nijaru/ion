@@ -21,6 +21,28 @@ type SubagentTool struct {
 	personas []subagents.Persona
 }
 
+type subagentContextMode string
+
+const (
+	subagentContextSummary subagentContextMode = "summary"
+	subagentContextFork    subagentContextMode = "fork"
+	subagentContextNone    subagentContextMode = "none"
+)
+
+type subagentInput struct {
+	Agent       string `json:"agent"`
+	Task        string `json:"task"`
+	Context     string `json:"context"`
+	ContextMode string `json:"context_mode"`
+}
+
+type normalizedSubagentInput struct {
+	Agent       string
+	Task        string
+	Context     string
+	ContextMode subagentContextMode
+}
+
 func NewSubagentTool(backend *Backend, personas []subagents.Persona) *SubagentTool {
 	return &SubagentTool{backend: backend, personas: personas}
 }
@@ -47,7 +69,17 @@ func (t *SubagentTool) Spec() llm.Spec {
 				},
 				"context": map[string]any{
 					"type":        "string",
-					"description": "Optional concise context to pass with the task.",
+					"description": "Optional concise context to pass with the task. Not allowed when context_mode is none.",
+				},
+				"context_mode": map[string]any{
+					"type":        "string",
+					"description": "How to seed the child context: summary passes the task plus concise selected context; fork snapshots the current provider-visible parent history plus the task; none sends only the task and persona prompt.",
+					"enum": []string{
+						string(subagentContextSummary),
+						string(subagentContextFork),
+						string(subagentContextNone),
+					},
+					"default": string(subagentContextSummary),
 				},
 			},
 			"required": []string{"agent", "task"},
@@ -56,20 +88,13 @@ func (t *SubagentTool) Spec() llm.Spec {
 }
 
 func (t *SubagentTool) Execute(ctx context.Context, args string) (string, error) {
-	var input struct {
-		Agent   string `json:"agent"`
-		Task    string `json:"task"`
-		Context string `json:"context"`
-	}
-	if err := json.Unmarshal([]byte(args), &input); err != nil {
+	input, err := parseSubagentInput(args)
+	if err != nil {
 		return "", err
 	}
 	persona, ok := subagents.Find(t.personas, input.Agent)
 	if !ok {
 		return "", fmt.Errorf("unknown subagent persona %q", input.Agent)
-	}
-	if strings.TrimSpace(input.Task) == "" {
-		return "", fmt.Errorf("task is required")
 	}
 
 	childAgent, err := t.backend.newChildAgent(ctx, persona)
@@ -77,17 +102,11 @@ func (t *SubagentTool) Execute(ctx context.Context, args string) (string, error)
 		return "", err
 	}
 
-	result, err := t.backend.runner.Delegate(ctx, t.backend.ID(), runtime.ChildSpec{
-		ID:      childID(persona.Name),
-		Agent:   childAgent,
-		Mode:    csession.ChildModeHandoff,
-		Task:    strings.TrimSpace(input.Task),
-		Context: strings.TrimSpace(input.Context),
-		Metadata: map[string]any{
-			"persona":    persona.Name,
-			"model_slot": string(persona.ModelSlot),
-		},
-	})
+	result, err := t.backend.runner.Delegate(
+		ctx,
+		t.backend.ID(),
+		input.childSpec(childID(persona.Name), childAgent, persona),
+	)
 	if err != nil {
 		return "", err
 	}
@@ -100,7 +119,87 @@ func (t *SubagentTool) Execute(ctx context.Context, args string) (string, error)
 	return strings.TrimSpace(result.Summary), nil
 }
 
-func (b *Backend) newChildAgent(ctx context.Context, persona subagents.Persona) (agent.Agent, error) {
+func parseSubagentInput(args string) (normalizedSubagentInput, error) {
+	var input subagentInput
+	if err := json.Unmarshal([]byte(args), &input); err != nil {
+		return normalizedSubagentInput{}, err
+	}
+
+	normalized := normalizedSubagentInput{
+		Agent:   strings.TrimSpace(input.Agent),
+		Task:    strings.TrimSpace(input.Task),
+		Context: strings.TrimSpace(input.Context),
+	}
+	if normalized.Task == "" {
+		return normalizedSubagentInput{}, fmt.Errorf("task is required")
+	}
+
+	switch mode := subagentContextMode(strings.TrimSpace(input.ContextMode)); mode {
+	case "":
+		normalized.ContextMode = subagentContextSummary
+	case subagentContextSummary, subagentContextFork:
+		normalized.ContextMode = mode
+	case subagentContextNone:
+		if normalized.Context != "" {
+			return normalizedSubagentInput{}, fmt.Errorf(
+				"context must be empty when context_mode is %q",
+				subagentContextNone,
+			)
+		}
+		normalized.ContextMode = mode
+	default:
+		return normalizedSubagentInput{}, fmt.Errorf("unsupported context_mode %q", mode)
+	}
+
+	return normalized, nil
+}
+
+func (i normalizedSubagentInput) childSpec(
+	id string,
+	childAgent agent.Agent,
+	persona subagents.Persona,
+) runtime.ChildSpec {
+	spec := runtime.ChildSpec{
+		ID:      id,
+		Agent:   childAgent,
+		Mode:    csession.ChildModeHandoff,
+		Task:    i.Task,
+		Context: i.Context,
+		Metadata: map[string]any{
+			"context_mode": string(i.ContextMode),
+			"persona":      persona.Name,
+			"model_slot":   string(persona.ModelSlot),
+		},
+	}
+
+	switch i.ContextMode {
+	case subagentContextFork:
+		spec.Mode = csession.ChildModeFork
+		spec.InitialMessages = []llm.Message{subagentTaskMessage(i.Task, i.Context)}
+	case subagentContextNone:
+		spec.Mode = csession.ChildModeFresh
+		spec.Context = ""
+		spec.InitialMessages = []llm.Message{subagentTaskMessage(i.Task, "")}
+	}
+
+	return spec
+}
+
+func subagentTaskMessage(task, context string) llm.Message {
+	parts := []string{"Task: " + task}
+	if context != "" {
+		parts = append(parts, "Context: "+context)
+	}
+	return llm.Message{
+		Role:    llm.RoleUser,
+		Content: strings.Join(parts, "\n"),
+	}
+}
+
+func (b *Backend) newChildAgent(
+	ctx context.Context,
+	persona subagents.Persona,
+) (agent.Agent, error) {
 	cfg := b.cfg
 	if cfg == nil {
 		return nil, fmt.Errorf("subagent config is not initialized")
@@ -122,7 +221,9 @@ func (b *Backend) newChildAgent(ctx context.Context, persona subagents.Persona) 
 		return nil, err
 	}
 
-	instructions := strings.TrimSpace(b.agent.Instructions()) + "\n\n## Subagent Persona: " + persona.Name + "\n" + persona.Prompt
+	instructions := strings.TrimSpace(
+		b.agent.Instructions(),
+	) + "\n\n## Subagent Persona: " + persona.Name + "\n" + persona.Prompt
 	requestProcessors := []prompt.RequestProcessor{
 		reasoningEffortProcessor(runtimeCfg),
 		reflexionProcessor(),
