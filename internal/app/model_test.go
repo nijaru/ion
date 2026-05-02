@@ -1204,6 +1204,55 @@ func TestRenderAgentMarkdownDoesNotIndentContinuationLines(t *testing.T) {
 	}
 }
 
+func TestRenderAgentMarkdownPreservesGFMInlineNodes(t *testing.T) {
+	model := readyModel(t)
+	entry := session.Entry{
+		Role: session.Agent,
+		Content: strings.Join([]string{
+			"- [x] keep task markers",
+			"- [ ] keep unchecked markers",
+			"",
+			"See <https://example.com> and ~~old wording~~.",
+		}, "\n"),
+	}
+
+	got := ansi.Strip(model.renderEntry(entry))
+	for _, want := range []string{
+		"- [x] keep task markers",
+		"- [ ] keep unchecked markers",
+		"https://example.com",
+		"old wording",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("agent render = %q, want %q", got, want)
+		}
+	}
+}
+
+func TestRenderAgentMarkdownPreservesTableInlineNodes(t *testing.T) {
+	model := readyModel(t)
+	model.App.Width = 120
+	entry := session.Entry{
+		Role: session.Agent,
+		Content: strings.Join([]string{
+			"| Command | Link | Done |",
+			"| --- | --- | --- |",
+			"| `go test ./...` | <https://example.com> | [x] |",
+		}, "\n"),
+	}
+
+	got := ansi.Strip(model.renderEntry(entry))
+	for _, want := range []string{
+		"go test ./...",
+		"https://example.com",
+		"[x]",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("agent render = %q, want table cell %q", got, want)
+		}
+	}
+}
+
 func TestFormatToolTitleUsesReadableLabels(t *testing.T) {
 	if got := FormatToolTitle("read", `{"file_path":"AGENTS.md"}`); got != "Read(AGENTS.md)" {
 		t.Fatalf("read title = %q, want readable title", got)

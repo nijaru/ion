@@ -5,7 +5,7 @@ Fast, lightweight terminal coding agent.
 **Phase:** I2 minimal shell polish
 **Focus:** Polish daily-use TUI/CLI shell behavior on top of the cleaned native baseline.
 **Active umbrella:** `tk-mmcs` - core parity plan and queue hygiene.
-**Active task:** choose/start the next I2 shell polish child under `tk-mmcs`.
+**Active task:** `tk-dhej` - TUI markdown pretty-printing quality.
 **Updated:** 2026-05-02
 
 ## Current Truth
@@ -60,14 +60,20 @@ Fast, lightweight terminal coding agent.
 - Latest backend-lifecycle gates passed:
   `go test ./internal/backend/canto -count=1 -timeout 180s`,
   `go test ./... -count=1 -timeout 300s`, and the native race subset.
+- Markdown rendering now preserves GFM task checkboxes, autolinks,
+  strikethrough content, and inline code/autolinks inside rendered tables.
+- Latest markdown gates passed:
+  `go test ./internal/app -count=1 -timeout 180s`,
+  `go test ./... -count=1 -timeout 300s`, and the native race subset.
 
 ## Next Action
 
-1. Mark `tk-eyvq` complete after committing the backend split.
-2. Start the first I2 shell polish task under `tk-mmcs`.
+1. Commit and close `tk-dhej`.
+2. Pick the next I2 shell polish slice under `tk-mmcs`.
 3. Prioritize tmux-visible issues: transcript/progress spacing, compact tool
    output defaults, queued input recall, and slash/session command clarity.
 
 ## Active Tasks
 
 - `tk-mmcs` - core parity plan and task queue hygiene.
+- `tk-dhej` - TUI markdown pretty-printing quality.
