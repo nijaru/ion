@@ -59,13 +59,7 @@ func (m Model) statusLine() string {
 
 	total := m.Progress.TokensSent + m.Progress.TokensReceived
 	limit := m.Model.Backend.ContextLimit()
-	var usage string
-	if total > 0 && limit > 0 {
-		pct := (total * 100) / limit
-		usage = m.st.dim.Render(fmt.Sprintf("%dk/%dk (%d%%)", total/1000, limit/1000, pct))
-	} else if total > 0 {
-		usage = m.st.dim.Render(fmt.Sprintf("%dk tokens", total/1000))
-	}
+	usage := m.renderTokenUsage(total, limit)
 
 	cost := ""
 	if label := m.costBudgetLabel(m.Progress.TotalCost); label != "" {
@@ -99,6 +93,26 @@ func (m Model) statusLine() string {
 	}
 
 	return fitLine(joinLineSegments(sep, modeLabel, thinking, usage, cost), m.App.Width)
+}
+
+func (m Model) renderTokenUsage(total, limit int) string {
+	if total <= 0 {
+		return ""
+	}
+	if limit <= 0 {
+		return m.st.dim.Render(fmt.Sprintf("%dk tokens", total/1000))
+	}
+
+	pct := (total * 100) / limit
+	label := fmt.Sprintf("%dk/%dk (%d%%)", total/1000, limit/1000, pct)
+	switch {
+	case pct >= 80:
+		return m.st.warn.Render(label)
+	case pct >= 50:
+		return m.st.caution.Render(label)
+	default:
+		return m.st.success.Render(label)
+	}
 }
 
 func (m *Model) layout() {
