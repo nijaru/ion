@@ -11,6 +11,7 @@ import (
 
 	acp "github.com/coder/acp-go-sdk"
 	"github.com/nijaru/ion/internal/session"
+	"github.com/nijaru/ion/internal/storage"
 )
 
 // mockAgent is a minimal ACP agent-side implementation for tests.
@@ -289,6 +290,69 @@ func TestACPFullTurn(t *testing.T) {
 		case <-deadline:
 			t.Fatal("timed out waiting for TurnFinished")
 		}
+	}
+}
+
+func TestACPSessionRequestIncludesInitialContext(t *testing.T) {
+	cwd := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cwd, "AGENTS.md"), []byte("project instruction"), 0o644); err != nil {
+		t.Fatalf("write AGENTS.md: %v", err)
+	}
+
+	stor := storage.NewLazySession(nil, cwd, "openrouter/model-a", "feature/acp")
+	client := newSession()
+	client.storage = stor
+	client.resumeSessionID = "external-session-123"
+
+	req, err := client.newSessionRequest()
+	if err != nil {
+		t.Fatalf("newSessionRequest: %v", err)
+	}
+
+	if req.Cwd != cwd {
+		t.Fatalf("cwd = %q, want %q", req.Cwd, cwd)
+	}
+	if req.McpServers == nil {
+		t.Fatal("mcpServers must be an explicit empty list")
+	}
+	meta, ok := req.Meta.(ionSessionMeta)
+	if !ok {
+		t.Fatalf("meta = %T, want ionSessionMeta", req.Meta)
+	}
+	if meta.Ion.SessionID != stor.ID() {
+		t.Fatalf("session id = %q, want %q", meta.Ion.SessionID, stor.ID())
+	}
+	if meta.Ion.CWD != cwd {
+		t.Fatalf("meta cwd = %q, want %q", meta.Ion.CWD, cwd)
+	}
+	if meta.Ion.Branch != "feature/acp" {
+		t.Fatalf("branch = %q, want feature/acp", meta.Ion.Branch)
+	}
+	if meta.Ion.Model != "openrouter/model-a" {
+		t.Fatalf("model = %q, want openrouter/model-a", meta.Ion.Model)
+	}
+	if meta.Ion.ResumeSession != "external-session-123" {
+		t.Fatalf("resume session = %q, want external-session-123", meta.Ion.ResumeSession)
+	}
+	if !strings.Contains(meta.Ion.SystemPrompt, "## Project Instructions") ||
+		!strings.Contains(meta.Ion.SystemPrompt, "project instruction") {
+		t.Fatalf("system prompt missing project instructions: %q", meta.Ion.SystemPrompt)
+	}
+}
+
+func TestACPSessionRequestNormalizesRelativeCWD(t *testing.T) {
+	client := newSession()
+	client.storage = storage.NewLazySession(nil, ".", "model-a", "main")
+
+	req, err := client.newSessionRequest()
+	if err != nil {
+		t.Fatalf("newSessionRequest: %v", err)
+	}
+	if !filepath.IsAbs(req.Cwd) {
+		t.Fatalf("cwd = %q, want absolute path", req.Cwd)
+	}
+	if meta := req.Meta.(ionSessionMeta); meta.Ion.CWD != req.Cwd {
+		t.Fatalf("meta cwd = %q, want request cwd %q", meta.Ion.CWD, req.Cwd)
 	}
 }
 

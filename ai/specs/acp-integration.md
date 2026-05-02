@@ -24,15 +24,17 @@ Ion is the ACP **client**. External CLI agents (claude, gemini, gh) are ACP **ag
 **Working:**
 
 - `SessionUpdate` → session.Event mapping (text, thought, tool call/result, plan)
+- `session/new` carries Ion initial context in `_meta.ion`: cwd, branch,
+  model, Ion session id, resume hint, and project instruction text when present
 - `RequestPermission` → synchronous approval bridge (blocks on `chan bool`)
 - `ReadTextFile` / `WriteTextFile` filesystem bridge
 - Terminal bridge (Create/Output/Wait/Kill/Release)
-- 6 tests using in-process Go mock agent
+- Tests using in-process Go mock agent
 
 **Not yet wired:**
 
 - Provider-based backend selection is now implemented in `cmd/ion/main.go`
-- Remaining ACP gaps are session continuity, token usage, initial session context, and stderr routing
+- Remaining ACP gaps are session continuity and token usage
 
 ---
 
@@ -58,8 +60,6 @@ Ion is the ACP **client**. External CLI agents (claude, gemini, gh) are ACP **ag
 | Task    | Description                                                      |
 | ------- | ---------------------------------------------------------------- |
 | tk-6zy3 | No token usage (no standard ACP mechanism)                       |
-| tk-o0iw | No session context sent at open (workdir, branch, system prompt) |
-| tk-2ffy | Agent stderr goes to `os.Stderr`, not routed to session log      |
 
 Session continuity/resume is still an open ACP concern, but it is not currently tracked as a standalone task.
 

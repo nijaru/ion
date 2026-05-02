@@ -113,6 +113,10 @@ func (s *Session) Open(ctx context.Context) error {
 
 	_, err = s.conn.Initialize(ctx, acp.InitializeRequest{
 		ProtocolVersion: acp.ProtocolVersionNumber,
+		ClientInfo: &acp.Implementation{
+			Name:    "ion",
+			Version: "v0.0.0",
+		},
 		ClientCapabilities: acp.ClientCapabilities{
 			Fs: acp.FileSystemCapability{
 				ReadTextFile:  true,
@@ -127,9 +131,13 @@ func (s *Session) Open(ctx context.Context) error {
 		return fmt.Errorf("acp initialize: %w", err)
 	}
 
-	resp, err := s.conn.NewSession(ctx, acp.NewSessionRequest{
-		Cwd: cwdFromStorage(s.storage),
-	})
+	req, err := s.newSessionRequest()
+	if err != nil {
+		cancel()
+		_ = cleanupStderr()
+		return fmt.Errorf("acp session context: %w", err)
+	}
+	resp, err := s.conn.NewSession(ctx, req)
 	if err != nil {
 		cancel()
 		_ = cleanupStderr()
@@ -140,6 +148,45 @@ func (s *Session) Open(ctx context.Context) error {
 	go func() { _ = cmd.Wait() }()
 
 	return nil
+}
+
+type ionSessionMeta struct {
+	Ion ionSessionContext `json:"ion"`
+}
+
+type ionSessionContext struct {
+	SessionID     string `json:"sessionId,omitempty"`
+	CWD           string `json:"cwd"`
+	Branch        string `json:"branch,omitempty"`
+	Model         string `json:"model,omitempty"`
+	SystemPrompt  string `json:"systemPrompt,omitempty"`
+	ResumeSession string `json:"resumeSession,omitempty"`
+}
+
+func (s *Session) newSessionRequest() (acp.NewSessionRequest, error) {
+	cwd := cwdFromStorage(s.storage)
+	instructions, err := backend.BuildInstructions("", cwd)
+	if err != nil {
+		return acp.NewSessionRequest{}, err
+	}
+
+	ctx := ionSessionContext{
+		CWD:           cwd,
+		SystemPrompt:  strings.TrimSpace(instructions),
+		ResumeSession: strings.TrimSpace(s.resumeSessionID),
+	}
+	if s.storage != nil {
+		meta := s.storage.Meta()
+		ctx.SessionID = strings.TrimSpace(meta.ID)
+		ctx.Branch = strings.TrimSpace(meta.Branch)
+		ctx.Model = strings.TrimSpace(meta.Model)
+	}
+
+	return acp.NewSessionRequest{
+		Cwd:        cwd,
+		McpServers: []acp.McpServer{},
+		Meta:       ionSessionMeta{Ion: ctx},
+	}, nil
 }
 
 func (s *Session) Resume(ctx context.Context, sessionID string) error {
@@ -634,11 +681,17 @@ func toolContentText(content []acp.ToolCallContent) string {
 }
 
 func cwdFromStorage(stor storage.Session) string {
+	cwd := ""
 	if stor != nil {
 		if m := stor.Meta(); m.CWD != "" {
-			return m.CWD
+			cwd = m.CWD
 		}
 	}
-	cwd, _ := os.Getwd()
+	if cwd == "" {
+		cwd, _ = os.Getwd()
+	}
+	if abs, err := filepath.Abs(cwd); err == nil {
+		return abs
+	}
 	return cwd
 }

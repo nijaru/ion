@@ -5,7 +5,7 @@ Fast, lightweight terminal coding agent.
 **Phase:** I4 advanced integrations
 **Focus:** Reopen deferred integrations from the stable I0-I3 baseline, starting with ACP bridge correctness.
 **Active umbrella:** none - `tk-mmcs` is closed.
-**Active task:** `tk-2ffy` - ACP stderr separation.
+**Active task:** `tk-6zy3` - ACP token usage event mapping.
 **Updated:** 2026-05-02
 
 ## Current Truth
@@ -106,15 +106,23 @@ Fast, lightweight terminal coding agent.
 - Latest ACP stderr gates passed:
   `go test ./internal/backend/acp -count=1 -timeout 180s`,
   `go test ./... -count=1 -timeout 300s`, and the native race subset.
+- ACP `session/new` now sends an explicit Ion `_meta.ion` context payload with
+  cwd, branch, model, Ion session id, resume hint, and project instruction text
+  when present; the request also sends ACP's required explicit empty
+  `mcpServers` list.
+- Latest ACP context gates passed:
+  `go test ./internal/backend/acp -count=1 -timeout 180s`,
+  `go test ./... -count=1 -timeout 300s`, the native race subset, and
+  `go test -race ./internal/backend/acp -count=1 -timeout 180s`.
 
 ## Next Action
 
-1. Commit and close `tk-2ffy`.
-2. Start the next P2 ACP bridge task from `tk ready`.
+1. Commit the completed `tk-o0iw` slice.
+2. Start `tk-6zy3` and review ACP token usage extension support.
 3. Keep native Canto/Ion loop behavior as the acceptance baseline while fixing
    ACP-specific gaps.
 4. Continue one green slice per commit.
 
 ## Active Tasks
 
-- `tk-2ffy` - ACP stderr separation.
+- `tk-6zy3` - ACP token usage event mapping.

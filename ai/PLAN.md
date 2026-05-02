@@ -84,10 +84,10 @@ Status: complete.
 
 Start with the highest-priority ready ACP bridge correctness tasks:
 
-1. `tk-2ffy` - filter/log ACP stderr separately instead of emitting
+1. Done - `tk-2ffy` - filter/log ACP stderr separately instead of emitting
    `session.Error`.
-2. `tk-o0iw` - add initial session context at ACP `Open()`.
-3. `tk-6zy3` - map ACP token usage events into Ion usage.
+2. Done - `tk-o0iw` - add initial session context at ACP `Open()`.
+3. Active next - `tk-6zy3` - map ACP token usage events into Ion usage.
 
 After ACP bridge correctness, choose between subagents/context forking,
 boundary-step steering, and merged edit-tool evaluation based on concrete
