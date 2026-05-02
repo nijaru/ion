@@ -392,7 +392,7 @@ func (m Model) setModeCommand(mode session.Mode) (Model, tea.Cmd) {
 }
 
 func (m Model) trustGateActive() bool {
-	return false
+	return m.Model.TrustStore != nil && config.ResolveWorkspaceTrust(m.App.WorkspaceTrust) != "off"
 }
 
 // cmdError returns a Cmd that emits a local UI error with the given message.

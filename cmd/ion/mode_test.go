@@ -91,19 +91,19 @@ func TestApplyWorkspaceTrustModeGate(t *testing.T) {
 			want: session.ModeYolo,
 		},
 		{
-			name: "deferred trust leaves interactive auto alone",
+			name: "untrusted interactive auto falls back to read",
 			mode: session.ModeYolo,
-			want: session.ModeYolo,
+			want: session.ModeRead,
 		},
 		{
-			name: "deferred trust leaves implicit print edit alone",
+			name: "untrusted implicit print edit falls back to read",
 			mode: session.ModeEdit, printRequested: true,
-			want: session.ModeEdit,
+			want: session.ModeRead,
 		},
 		{
-			name: "untrusted explicit print auto is allowed for this invocation",
+			name: "untrusted explicit print auto still falls back to read",
 			mode: session.ModeYolo, printRequested: true, explicitModeRequested: true,
-			want: session.ModeYolo,
+			want: session.ModeRead,
 		},
 	}
 
