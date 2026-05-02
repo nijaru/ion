@@ -57,14 +57,14 @@ Graph:
 | `intake` | single agent turn | extract claim, expected behavior, files |
 | `reproduce` | tool/agent loop, max 3 turns | must produce observed failing command/test |
 | `edit` | loop node | blocked until reproduction fails for the claimed reason |
-| `verify` | tool node | rerun reproduction plus focused regression |
+| `verify` | command/check node | rerun reproduction plus focused regression through shell/project commands |
 | `summary` | single agent turn | explain root cause and verification |
 
 Recovery:
 - checkpoint after each node
 - reproduction artifact is projected to a human-readable checklist in the
   workspace or issue when available
-- if `verify` fails, resume enters `edit` with the failing command attached
+- if verification fails, resume enters `edit` with the failing command attached
 
 TUI surface:
 - `/workflow bug`

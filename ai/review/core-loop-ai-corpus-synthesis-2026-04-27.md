@@ -15,13 +15,13 @@ Full inventory pass:
 
 Deep-read pass focused on documents that constrain the native loop:
 
-- Ion: `STATUS.md`, `PLAN.md`, `ROADMAP.md`, `DESIGN.md`, `DECISIONS.md`.
+- Ion: `STATUS.md`, `PLAN.md`, `DESIGN.md`, `DECISIONS.md`.
 - Ion: `review/core-loop-contract.md`, `review/core-loop-review.md`, `review/canto-research-delta-2026-04-26.md`.
-- Ion: `plans/core-loop-stabilization.md`, `specs/testing-models.md`, `specs/tui-architecture.md`, `specs/status-and-config.md`, `specs/tools-and-modes.md`, `specs/system-prompt.md`.
-- Ion: `research/pi-current-core-loop-review-2026-04.md`, `research/core-agent-reference-delta-2026-04-27.md`, `research/pi-architecture.md`, `research/ion-architecture.md`.
+- Ion: `specs/testing-models.md`, `specs/tui-architecture.md`, `specs/status-and-config.md`, `specs/tools-and-modes.md`, `specs/system-prompt.md`.
+- Ion: `research/pi-current-core-loop-review-2026-04.md`, `research/core-agent-reference-delta-2026-04-27.md`.
 - Canto: `STATUS.md`, `PLAN.md`, `DESIGN.md`, `DECISIONS.md`.
 - Canto: `review/canto-ion-roadmap-2026-04.md`, `review/framework-readiness-2026-04-20.md`, `review/test-quality-and-rewrite-gap-2026-04.md`, `review/load-bearing-coverage-audit-2026-04.md`.
-- Canto: `ion-framework-issues.md`, `ion-handoff-2026.md`.
+- Canto: legacy Ion friction files that are now consolidated into `review/ion-feedback-tracker-2026-04-28.md`.
 - Canto: `research/message-boundary-research-2026-04.md`, `research/model-context-contracts-2026-04.md`, `design/model-context-contract-2026-04.md`, `design/identity-first-workspace-and-projections-2026-04.md`.
 - Shared research pair: `agent-loop-orchestration-sota-2026-04.md`, `tool-execution-orchestration-sota-2026-04-04.md`, `session-durability-sota-2026-04.md`.
 

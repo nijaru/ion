@@ -5,7 +5,7 @@
 ## Task 1: Review Architecture & Plans
 **Status:** complete
 **Depends on:** none
-**Criteria:** Review `ai/DESIGN.md`, `ai/ROADMAP.md`, `ai/STATUS.md`, and specifications in `ai/specs/`. Flag any inconsistencies, missing definitions, or outdated assumptions.
+**Criteria:** Review `ai/DESIGN.md`, `ai/PLAN.md`, `ai/STATUS.md`, and specifications in `ai/specs/`. Flag any inconsistencies, missing definitions, or outdated assumptions.
 **Findings:** `GEMINI.md` missing from instruction loader; `tools-and-modes.md` spec lags behind recently implemented read-mode policy.
 
 ## Task 2: Review Core Backend Layer

@@ -1,28 +1,55 @@
 # Tools and Modes
 
-## Built-in tool surface
+## P1 default model-visible tool surface
 
 | Tool | Category | Purpose |
 |---|---|---|
-| `read` | Read | Read file contents |
+| `read` | Read | Read file contents with model-visible line numbers |
 | `grep` | Read | Search file contents |
 | `glob` | Read | Find files by pattern |
 | `list` | Read | List directory contents |
-| `recall_memory` | Read | Recall from session memory |
-| `remember_memory` | Read | Store in session memory |
-| `compact` | Read | Trigger context compaction |
-| `edit` | Write | Edit file with old/new string replacement |
+| `edit` | Write | Edit file with exact old/new string replacement and optional `expected_replacements` |
 | `write` | Write | Write entire file |
-| `multi_edit` | Write | Apply multiple edits atomically |
+| `multi_edit` | Write | Apply multiple exact replacements atomically |
 | `bash` | Execute | Run shell command (streaming) |
-| `verify` | Execute | Run test/benchmark and report results |
-| `mcp` | Sensitive | Call MCP server tool |
-| `subagent` | Sensitive | Spawn child agent |
+
+This is the native-loop baseline. Keep it small until the native loop and
+minimal shell are boringly reliable.
+
+Durable tool-surface decisions:
+
+- `write` stays separate from targeted edits. Create/overwrite has a different
+  risk and display shape than exact replacement.
+- `edit` and `multi_edit` stay separate through P1. A Pi-style merged
+  `edit(edits[])` surface is a deferred evaluation task, not part of the
+  current stabilization bundle.
+- Structured edits are the normal edit path. Do not steer models toward Python,
+  `sed`, heredocs, or shell patching for routine edits.
+- Keep `grep`, `glob`, and `list` as typed read-only tools instead of collapsing
+  ordinary discovery into `bash`.
+- `bash` remains the escape hatch for repo-specific commands, verification, and
+  advanced tools such as `rg`, `fd`, or `ast-grep` when the typed tools are not
+  enough.
+
+Deferred or hidden surfaces:
+
+| Surface | Status |
+|---|---|
+| `recall_memory`, `remember_memory` | Deferred until memory is deliberately reopened |
+| model-visible `compact` tool | Deferred; `/compact` host command remains available for context survival |
+| MCP tools | Deferred behind the native-loop stabilization gate |
+| `subagent` | Deferred P2 surface |
+| `verify` | Not default; normal verification goes through `bash` |
 
 Supporting infrastructure:
 
 - `ApprovalManager` — goroutine-safe request/response channels
 - `PolicyEngine` — category-to-policy mapping with mode-awareness
+- Model-visible tool results are size-bounded with explicit truncation markers;
+  TUI display compaction is separate and must not be the only place truncation is visible.
+- Prompt/tool budget is measured separately in
+  `ai/research/prompt-budget-2026-05.md`; do not add model-visible tools without
+  re-running the budget report.
 
 ## Permission Modes And Trust
 
@@ -40,7 +67,7 @@ Supporting infrastructure:
 |---|---|---|---|
 | Read | auto | auto | auto |
 | Write | **blocked** | prompt | auto |
-| Execute (bash) | **blocked** | prompt | auto |
+| Execute (`bash`) | **blocked** | prompt | auto |
 | Sensitive (mcp, subagent) | prompt | prompt | auto |
 
 `yolo` remains a command/CLI alias for `auto`; it should not be the displayed
@@ -99,8 +126,8 @@ tools (read, grep, glob, list) already cover everything the agent needs
 to understand a codebase. Bash in READ mode would be an escape hatch
 that undermines the mode's guarantee.
 
-MCP/subagent is **prompted** — these calls may be read-only (fetching a
-doc) so the user decides.
+MCP and subagents are deferred during native-loop stabilization. When they are
+reopened, they should remain sensitive surfaces with explicit policy treatment.
 
 Status line: `[READ]` (cyan)
 
@@ -243,7 +270,8 @@ Key findings:
 - Sandbox is orthogonal to approval (tracked separately: `tk-kfno`)
 - Read tools are never gated in any agent
 
-Full details: `ai/research/approval-ux-survey-2026-03-30.md`
+These findings are distilled here; the older survey note has been removed from
+active `ai/` context.
 
 ## Rust reference
 
@@ -283,11 +311,16 @@ Tracked by: `tk-h4bp`, `tk-8fe3`
 
 ### Search tools
 
-`grep` prefers external `rg` with Go-native fallback. `glob` is built
-in. Open question: should ion steer models toward built-in search
-tools? Should ion adopt a stronger native grep?
+`grep`, `glob`, and `list` remain dedicated read-only tools during P1. They
+preserve clearer policy, transcript display, truncation, path containment, and
+replay behavior than raw shell commands.
 
-Tracked by: `tk-8fe3`, `tk-yp24`
+Current baseline is ripgrep semantics. Ripgo remains a deferred benchmarked
+replacement candidate; it should only replace the current behavior after
+matching ignored-file, hidden-file, `.git` exclusion, cancellation, truncation,
+path-containment, and large-repo latency expectations.
+
+Tracked by: `tk-8fe3`, `tk-03hf`
 
 ### Retry behavior
 

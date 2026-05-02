@@ -116,8 +116,8 @@ Goal: stop nonessential code from interfering with the audit.
 
 Work:
 
-- Keep `features.CoreLoopOnly` enabled.
-- Verify every `CoreLoopOnly` call site and add gates where P2/P3 code still mutates prompt/session/runtime/display state.
+- Remove the global stabilization flag and make the native baseline the only path.
+- Verify deferred surfaces are rejected at their owning boundaries where P2/P3 code could mutate prompt/session/runtime/display state.
 - Gate ACP providers and telemetry startup out of the T1 path while the audit is active. Keep compaction as T1.5 and audit it with the core loop because overflow recovery affects agent reliability.
 - Update `ai/STATUS.md`, `ai/PLAN.md`, and `tk-s6p4` to state that prior fixes are evidence, not completion.
 - Do not claim Canto has no Ion issues until the audit is complete; `../canto/ai/review/ion-feedback-tracker-2026-04-28.md` stays the place for confirmed framework findings only.
@@ -240,7 +240,7 @@ Each feature needs an explicit seam and regression gate before it is enabled by 
 
 ## Immediate Next Work
 
-1. Finish Phase 0 by verifying `CoreLoopOnly` call sites and patching missing gates.
+1. Finish Phase 0 by verifying native-baseline boundaries and patching missing gates.
 2. Start Phase 1 with Canto `session` files, recording findings in the audit tracker before edits.
 3. Continue phase-by-phase. Do not switch to picker, ACP, privacy, thinking expansion, or TUI polish until the earlier phase exits.
 

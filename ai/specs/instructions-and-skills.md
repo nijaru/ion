@@ -100,4 +100,3 @@ Model preset direction:
 - `internal/backend/instructions.go`
 - `internal/backend/canto/prompt.go`
 - `ai/specs/system-prompt.md`
-- `ai/plans/archive/system-prompt-refactor-2026-03-27.md`

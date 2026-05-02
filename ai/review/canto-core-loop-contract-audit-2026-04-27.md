@@ -14,7 +14,7 @@ Classify Canto-side responsibilities before Ion refactors against them. This is 
 
 - Canto docs: `ai/DESIGN.md`, `ai/STATUS.md`, `ai/PLAN.md`, `ai/DECISIONS.md`.
 - Canto boundary docs: `research/message-boundary-research-2026-04.md`, `research/model-context-contracts-2026-04.md`, `design/model-context-contract-2026-04.md`.
-- Canto/Ion reviews: `review/canto-ion-roadmap-2026-04.md`, `review/framework-readiness-2026-04-20.md`, `ion-framework-issues.md`.
+- Canto/Ion reviews: `review/canto-ion-roadmap-2026-04.md`, `review/framework-readiness-2026-04-20.md`, `review/ion-feedback-tracker-2026-04-28.md`.
 - Canto code hotspots: `session/rebuilder.go`, `session/history.go`, `agent/loop.go`, `agent/stream.go`, `agent/tools.go`, `runtime/runner.go`.
 - Ion consumer hotspots: `internal/backend/canto/backend.go`, `internal/storage/canto_store.go`.
 

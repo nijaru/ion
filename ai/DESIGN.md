@@ -1,197 +1,140 @@
 # ion Design
 
-Updated: 2026-04-27
+Updated: 2026-05-02
 
-## Product boundary
+## Product Shape
 
-ion is a standalone terminal coding agent.
+Ion is a standalone terminal coding agent in the same category as Pi, Claude
+Code, and Codex. The core product is a fast, reliable solo agent with a minimal
+TUI and scriptable CLI. Advanced capabilities are built around that core, not
+inside it.
 
-- Native runtime is the primary product:
-  - `ion TUI -> CantoBackend -> canto -> provider API`
-- ACP is a secondary bridge for subscription access:
-  - `ion TUI -> ACPBackend -> ACP CLI process`
-- OpenAI ChatGPT subscriptions are a separate platform from the API:
-  - if we ever support them, it should be via a distinct ChatGPT-app style bridge, not by assuming API-style access
+Reference posture:
 
-Native runtime drives design. ACP follows where possible.
+- Pi is the reliability and simplicity floor.
+- Claude Code and Codex are UX, CLI, session, and tool-quality references.
+- Canto is the framework layer; Ion is the product layer.
 
-## Main boundaries
+## Layering
 
-| Layer | Responsibility | Component |
+| Layer | Owner | Responsibility |
 | --- | --- | --- |
-| **4** | **Application** | `ion` (TUI, Workspace logic, UX Policy, Model Pickers) |
-| **3** | **Framework** | `canto` (Agent loop, prompt pipeline, approval/safety primitives, Context Governor, Session Log) |
-| **2** | **Logic** | `llm` (Provider abstraction, Token counting, Cost calculation) |
-| **1** | **Transport** | `http` (API clients, JSON-RPC, SSE) |
+| Product | Ion | TUI, CLI, commands, settings, tool UX, workspace policy, provider choices |
+| Framework | Canto | Agent loop, durable events, provider-visible history, compaction primitives, tool lifecycle |
+| Provider | Canto `llm` | Provider requests, streaming, token/cost accounting, model capabilities |
+| Transport | Provider clients | HTTP/SSE/JSON-RPC details |
 
-## SOTA & Minimalist Goals
+Native mode is primary:
 
-`ion` aims for SOTA (State of the Art) capabilities with a minimalist, terminal-first UX. This is driven by 14 core SOTA product requirements mapped to the layers above:
+```text
+ion TUI/CLI -> CantoBackend -> canto -> provider API
+```
 
-- **Safety by Default & Guardrails (SOTA 9):** Ion owns the user-facing READ/EDIT/AUTO policy engine and TUI approval bridge; Canto provides reusable approval/safety primitives. Includes LLM-as-a-Judge for future auto-mode safety checks.
-- **Infinite Context & Compaction (SOTA 6):** Managed by a background "Context Governor" in `canto` (Layer 3). Runtime turns auto-recover from context overflow. Requires non-blocking Compaction UX indicators (spinning icons) and summarization prompts targeting fast models (Haiku/Flash).
-- **Subagent Spawning & Orchestration (SOTA 7):** First-class support for child agents via `canto` primitives. Requires defined Agent Personas ("Scout", "Guard", "Build") and Model Routing policies (Explore = fast, Build = premium).
-- **Memory & Knowledge Base (SOTA 1):** Karpathy-style knowledge base (Wiki compilation) and QMD-style search UX, with background consolidation using sleep-time compute.
-- **Session Durability (SOTA 3):** TUI Branching (visual session rewind, `git log --graph` style), global `/search`, and Cross-Host Sync UX.
-- **MCP Extensibility & Tools (SOTA 2):** Dynamic Tool Loading UX for `search_tools` (when >20 tools exist) and Approval Tier UX mapping to permission models.
+ACP and subscription bridges are secondary compatibility paths. They must not
+drive Ion's native architecture.
 
-Important constraint:
-- Pi and Claude Code are useful maturity targets and references (see cross-pollination), but not hard feature-parity gates.
-- Advanced orchestration work is downstream of a stable, feature-complete single-agent inline loop.
-- The solo agent is the core product; subagents, ACP, and swarm views are wrappers around that core.
+## Core Runtime Contract
 
-## TUI architecture
+Ion has one native baseline path. There is no global stabilization branch.
 
-### Modular Component Design
+The baseline contract is:
 
-The TUI is being refactored into isolated sub-models to improve maintainability and testing, now incorporating SOTA UX requirements:
-- **`Viewport`:** Purely for rendering the committed terminal scrollback, including inline Subagent Plane B presentation.
-- **`Input`:** Manages the textarea, history, and status line (which must reflect Compaction UX and Cost Limit / Reasoning Budgets per SOTA 14).
-- **`Broker`:** A headless component managing the backend connection and event translation.
-- **`UX Streaming` (SOTA 5):** Smoothly reconciles Canto's `iter.Seq2` into Bubbletea, handling transcript verbosity for tools and reasoning.
+```text
+submit -> stream -> tool call/result -> terminal event -> persist -> replay -> follow-up
+```
 
-## Runtime/session boundary
+Canto owns:
 
-The TUI consumes backend interfaces. That separation is real inside the repo.
-
-The native core-loop design is defined in `ai/design/native-core-loop-architecture.md`. Its boundary is stricter than older feature plans:
-
-- Canto owns model-visible session history, effective provider projections, agent/tool execution, and terminal turn events.
-- Ion owns input classification, command UX, policy decisions, display projection, settings/state, and TUI/CLI rendering.
-- Ion must call Canto's canonical turn path for normal model turns; it must not duplicate user, assistant, or tool transcript persistence.
-- Feature work that touches ACP, subagents, sandboxing, routing, privacy, skills, or richer thinking controls stays downstream of this loop contract unless it directly fixes a core-loop bug.
-
-Current limitation:
-
-- ion is not yet a clean reusable external runtime library
-- bootstrap/orchestration still lives mainly in `cmd/ion/main.go`
-- host/runtime contracts still depend on ion-owned `internal/` packages
-
-Session metadata now carries a cheap `Title` plus a one-line `Summary`; the resume picker uses `Title -> Summary -> LastPreview` and treats `LastPreview` as fallback, not the primary label.
-
-Current Canto integration boundary:
-
-- Ion depends on Canto `f47e7de` or newer current surface.
-- Request processors use `canto/prompt` (`prompt.RequestProcessor`, `prompt.MemoryPrompt`).
-- Hooks use `hook.Handler` and `hook.FromFunc`.
-- Ion deliberately owns product tools in `internal/backend/canto/tools`: shell, file read/write/edit/list, grep, glob, verify, compact, and the host approval request bridge.
-- Canto does not provide default grep/glob tools or preset coding-tool bundles; those should remain Ion product choices unless a concrete reusable extension package is designed later.
-
-Implication:
-
-- a headless `ion --agent` path is more realistic than trying to export the current runtime surface directly
-
-## Provider architecture
-
-Provider behavior is catalog-driven.
-
-The provider catalog owns:
-
-- provider ids
-- display names
-- kind/grouping
-- runtime family
-- auth kind
-- default env vars
-- default endpoints
-- picker visibility and setup hints
-
-Auth and Model guidance (SOTA 14):
-
-- most providers should stay simple API-key or custom-endpoint entries
-- subscription/OAuth providers should be explicit and provider-specific
-- CLI-bridge providers stay separate from native API providers
-- ChatGPT subscription support, if we ever add it, should be treated as a separate evaluation track rather than assumed to be part of the native API path
-- **Model Cascades:** The policy determining when to fall back to a cheaper model (e.g., Flash/Haiku) based on task complexity must be integrated into the provider abstraction.
-
-### Thinking and reasoning controls
-
-Thinking controls are capability-driven, not a universal enum.
+- provider-visible message history and effective-history projection
+- agent turn execution and tool lifecycle events
+- retry, cancellation settlement, queueing, and terminal turn states
+- compaction primitives and context-overflow recovery
 
 Ion owns:
 
-- user-facing thinking selection (`auto`, `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`)
-- capability-filtered picker/status UX
-- stable config for custom model capability overrides
-- mutable state for the currently selected level
+- user input classification and slash/local command dispatch
+- TUI/CLI lifecycle and runtime provider/model selection
+- transcript display projection and compact/full tool rendering
+- local status rows, progress shell, queued input, and footer state
+- workspace trust, modes, and policy UX
 
-Canto/provider adapters own:
+Ion must not create a second provider-visible transcript writer. Storage and
+rendering may add display rows, but Canto-derived durable history is the source
+for model requests.
 
-- translating Ion levels to native provider request fields
-- model-specific fallback when a selected level is unsupported
-- numeric thinking budgets for budget-based APIs
-- provider-specific reasoning content handling
+## Tool Surface
+
+The P1 native tool surface is intentionally small:
+
+```text
+bash, read, write, edit, multi_edit, list, grep, glob
+```
 
 Rules:
 
-- `auto` means send no override and use provider/model default.
-- Unknown OpenAI-compatible/custom endpoints send no reasoning parameter unless config declares a model capability override.
-- Raw numeric thinking budgets are config-only until there is evidence they need a frequent runtime control.
-- `max` is not portable; expose it only for models that explicitly support it.
-- If model switching invalidates the selected level, use the highest supported level at or below the selection and show a short notice.
+- Verification uses `bash`; the old `verify` tool is not registered by default.
+- `grep`, `glob`, and `list` remain dedicated read-only tools for path policy,
+  truncation, display, and approval boundaries.
+- `read` returns model-visible line-numbered content; the TUI remains compact by
+  default.
+- `write`, `edit`, and `multi_edit` are the normal editing path. Python, sed,
+  heredocs, and shell patching are not the recommended path for ordinary edits.
+- Model-visible tool output is bounded with explicit truncation markers.
+- Display policy lives in Ion renderers, not in provider-visible history.
 
-Implementation note:
+Canonical behavior lives in `ai/specs/tools-and-modes.md` and
+`ai/specs/system-prompt.md`.
 
-- Current Ion code preserves the full vocabulary in config/state, exposes common named-effort levels in `/thinking`, and forwards only when Canto reports named `ReasoningEffort` support.
-- Full capability-filtered pickers and budget-backed Anthropic/Gemini/Qwen mappings require richer Canto model capability metadata.
+## TUI And CLI Shell
 
-Detailed survey: `ai/research/thinking-effort-provider-survey-2026-04.md`.
+The TUI should feel closer to Pi, Claude Code, and Codex than to a dashboard:
+flat transcript, compact tool rows, clear progress, minimal settings, and
+predictable slash commands.
 
-## Prompt and instruction layering
+Important boundaries:
 
-Keep these distinct:
+- Live and replayed transcript entries use the same renderer.
+- Routine tools are compact by default; full output is opt-in through settings.
+- Queued follow-up input is visible, recallable, and submitted once.
+- True active-turn steering waits for a Canto boundary-step contract.
+- `/settings` is only durable settings. Provider/model/session identity belongs
+  in footer/status, `/session`, `/provider`, `/model`, and `/thinking`.
 
-1. ion core system prompt
-2. runtime/session context
-3. repo-local instruction files (`AGENTS.md`, `CLAUDE.md`)
-4. **Marketplace Skills (SOTA 8):** First-class runtime/TUI skill integration (`ion skill install`). Includes Self-Extension Nudges within system prompts to use `manage_skill`, and Trust Policies for secure directories.
-5. task/mode reminders
+Scriptable CLI is first-class:
 
-## Pi-mono cross-pollination
+- `-p` / print mode
+- text and JSON output
+- `--continue`
+- `--resume <id>`
+- provider/model/thinking overrides that are process-local unless the user makes
+  an explicit persistent change
 
-Pi-mono analysis complete (see `research/pi-architecture.md`, `design/cross-pollination.md`). These guardrails align cleanly with the minimalist SOTA UX requirements:
+## Sessions, Config, And State
 
-### TUI improvements to adopt
-- ~~**Bounding-box diff rendering**~~ — Rejected. BT v2 already handles rendering efficiently.
-- **Steering vs follow-up input queuing** — Follow-up queueing is implemented. True steering is deferred until Canto owns a durable boundary-step contract; see `ai/design/active-turn-steering-contract-2026-04-30.md`.
-- ~~**Paste markers**~~ — Implemented. Collapse large pastes (>10 lines or >1000 chars) into markers, expand on submit.
-- ~~**RPC/print mode**~~ — Implemented. `--print` flag with `--prompt` or stdin pipe, auto-approves tool calls, configurable timeout.
+Persistent user-editable settings live in `~/.ion/config.toml`.
+Mutable runtime choices live in `~/.ion/state.toml`.
+Workspace trust lives in `~/.ion/trusted_workspaces.json`.
+Durable sessions live in Ion storage backed by Canto session events.
 
-### Patterns to defer or reject
-- Full extension system — overkill for ion's scope (we will rely on Marketplace Skills and MCP instead)
-- Pi packages ecosystem — premature
-- Cursor markers — Bubble Tea textarea handles cursor positioning
-- Configuration cascade — current config is sufficient
+Startup must not silently persist provider/model choices. Explicit CLI/env
+overrides affect the current process. TUI settings and picker actions persist
+only the fields they own.
 
-### Ion guardrails
+## Safety And Advanced Features
 
-Pi and Claude Code are useful references, but ion should stay idiomatic for Go + Bubble Tea v2:
+Safety/trust/sandbox work is important but not allowed to destabilize the core
+loop. Pi ships without most P3 safety surfaces; Ion can be stronger over time,
+but the base agent must be reliable first.
 
-- translate portable ideas into `Model`/`Msg`/`Cmd` boundaries, not JS/React abstractions
-- keep state split by lifecycle concern, not by source-product architecture
-- prefer overlay state and sub-models over a generalized component framework
-- use queued input and progress/status surfaces where they reduce blocking behavior
-- only add diff rendering, extension systems, or new layers when a concrete ion need proves the complexity
-- do not introduce `local-jsx`, DOM, reconciler, or package-ecosystem ideas unless the product shape changes
+Deferred product layers:
 
-Practical ordering:
+- richer permissions and sandbox UX
+- ACP/subscription polish
+- memory/wiki and skills
+- subagents, routing, and workflow orchestration
+- cross-host sync, branching, rewind, and richer rollback
+- prompt optimization, eval loops, and provider/runtime caching
 
-1. stabilize the inline single-agent loop
-2. finish the runtime primitives that make that path reliable
-3. build subagent runtime semantics
-4. add inline subagent presentation
-5. defer alternate-screen swarm orchestration until the previous layers are solid
-
-Product ladder:
-
-1. solo agent
-2. dependent runtime capabilities
-3. orchestration wrappers
-
-## Current technical debt worth tracking
-
-- `tk-ekao` — provider-by-provider auth and fetch validation
-- `tk-lmhg` — (Superseded by SOTA 8 `tk-g78q`) define real skill support instead of conflating it with instruction files
-- `tk-5t72` — dual storage in `CantoBackend`
-- `tk-9n7h` — reevaluate `internal/backend/registry`
-- `tk-st4q` — clean headless ACP-agent mode
+These remain long-term goals. They should be reintroduced by clear boundaries
+after the baseline stays boring under deterministic, race, tmux, and live smoke
+gates.

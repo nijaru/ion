@@ -11,8 +11,8 @@ Built-in personas:
 | Persona | Model slot | Tool scope | Purpose |
 |---|---|---|---|
 | `explorer` | `fast` | read/search/memory recall | cheap isolated context gathering |
-| `reviewer` | `primary` | read/search/verify | correctness and regression review |
-| `worker` | `primary` | edit/shell/verify plus read/search | scoped implementation |
+| `reviewer` | `primary` | read/search/shell | correctness and regression review |
+| `worker` | `primary` | edit/shell plus read/search | scoped implementation |
 
 Custom personas load from global Markdown files with YAML frontmatter:
 

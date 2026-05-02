@@ -82,10 +82,30 @@ Do not mix these layers:
 - Follow existing project conventions and verify dependencies before using them.
 - Make small, targeted changes.
 - Run relevant verification commands after edits when feasible.
-- Use available tools to inspect, edit, search, run commands, and verify.
+- Use available tools to inspect, edit, search, and run commands.
+- Verify with project-specific shell commands when feasible.
 - Do not communicate through comments or command output.
 - Do not revert user changes, commit, or do destructive work unless explicitly asked.
 - Respect approval boundaries when tools are blocked.
+
+## Prompt budget policy
+
+The base prompt should stay Pi-small. The current native baseline is recorded in
+`ai/research/prompt-budget-2026-05.md`: core plus runtime instructions are about
+497 estimated tokens, P1 tool specs are about 961 estimated tokens, and project
+instructions are the largest measured static component.
+
+Rules:
+
+- Do not add long formatting manuals, tool inventories, provider catalogs, or
+  feature explanations to the always-on base prompt.
+- Keep tool guidance short and stable; detailed tool behavior belongs in tool
+  specs and docs, not in the prompt.
+- Re-run `TestPromptPreludeBudgetReport` before adding default model-visible
+  tools or new always-on prompt layers.
+- Do not implement prompt or KV cache machinery during P1 stabilization.
+  Repeated-prefix caching belongs at the provider/runtime boundary unless Ion
+  owns the local inference server.
 
 ## Recommended implementation
 
