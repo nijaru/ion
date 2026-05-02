@@ -22,8 +22,7 @@ Fast, lightweight terminal coding agent.
   secondary host-integration surface around the same `AgentSession` runtime
   boundary, not a second native loop.
 - Current default tool surface is `bash`, `read`, `write`, `edit`,
-  `multi_edit`, `list`, `grep`, and `glob`; `verify` is not registered by
-  default.
+  `multi_edit`, `list`, `grep`, and `glob`; the old `verify` tool is removed.
 - `read_skill` is implemented behind the opt-in `skill_tools = "read"` config
   gate. It is not part of the default eight-tool surface and does not add skill
   inventories to the prompt.

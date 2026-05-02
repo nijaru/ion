@@ -255,11 +255,11 @@ observations include an explicit marker with byte counts and recovery guidance.
 The model-visible `read` result includes cat-style line numbers for edit
 precision. The TUI still summarizes routine read rows by default.
 
-### 2026-05-01 - Verification uses bash by default
+### 2026-05-01 - Verification uses bash
 
-The dedicated `verify` tool is removed from the default native registry.
-Ordinary tests/builds/lints run through `bash`; structured verification is
-deferred until an eval/RLM feature needs it.
+The dedicated `verify` tool is removed. Ordinary tests/builds/lints run
+through `bash`; structured verification is deferred until an eval/RLM feature
+needs it.
 
 ### 2026-05-01 - Roadmap sequencing
 

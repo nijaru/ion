@@ -134,7 +134,7 @@ bash, read, write, edit, multi_edit, list, grep, glob
 
 Rules:
 
-- Verification uses `bash`; the old `verify` tool is not registered by default.
+- Verification uses `bash`; the old `verify` tool is removed.
 - `grep`, `glob`, and `list` remain dedicated read-only tools for path policy,
   truncation, display, and approval boundaries.
 - `read` returns model-visible line-numbered content; the TUI remains compact by

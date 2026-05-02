@@ -120,7 +120,7 @@ Deferred or hidden surfaces:
 | MCP tools | Deferred behind the native-loop stabilization gate |
 | `subagent` | Opt-in I4 surface via `subagent_tools = "on"`; not default |
 | `ask_user` | Deferred until Canto owns a general elicitation/pause-resume primitive |
-| `verify` | Not default; normal verification goes through `bash` |
+| `verify` | Removed; normal verification goes through `bash` |
 
 Supporting infrastructure:
 

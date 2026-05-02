@@ -77,8 +77,6 @@ func Name(name string) string {
 		return "Find"
 	case "bash":
 		return "Bash"
-	case "verify":
-		return "Verify"
 	default:
 		if strings.TrimSpace(name) == "" {
 			return "Tool"
@@ -90,7 +88,7 @@ func Name(name string) string {
 func primaryArg(name, args string) (string, argKind, bool) {
 	tool := strings.ToLower(strings.TrimSpace(name))
 	switch tool {
-	case "bash", "verify":
+	case "bash":
 		return jsonStringArg(args, "command", kindText)
 	case "read", "write", "edit", "multi_edit":
 		return jsonStringArg(args, "file_path", kindPath)
