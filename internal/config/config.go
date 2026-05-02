@@ -45,6 +45,7 @@ type Config struct {
 	ThinkingVerbosity      string            `toml:"thinking_verbosity,omitempty"`
 	BusyInput              string            `toml:"busy_input,omitempty"`
 	SkillTools             string            `toml:"skill_tools,omitempty"`
+	SubagentTools          string            `toml:"subagent_tools,omitempty"`
 }
 
 type State struct {
@@ -157,6 +158,7 @@ func normalizeConfig(cfg *Config) {
 	cfg.ThinkingVerbosity = normalizeVerbosity(cfg.ThinkingVerbosity)
 	cfg.BusyInput = normalizeBusyInput(cfg.BusyInput)
 	cfg.SkillTools = normalizeSkillTools(cfg.SkillTools)
+	cfg.SubagentTools = normalizeSubagentTools(cfg.SubagentTools)
 	if cfg.ContextLimit < 0 {
 		cfg.ContextLimit = 0
 	}
@@ -296,6 +298,10 @@ func Save(cfg *Config) error {
 	out.SkillTools = normalizeSkillTools(out.SkillTools)
 	if out.SkillTools == "off" {
 		out.SkillTools = ""
+	}
+	out.SubagentTools = normalizeSubagentTools(out.SubagentTools)
+	if out.SubagentTools == "off" {
+		out.SubagentTools = ""
 	}
 
 	data, err := toml.Marshal(&out)
@@ -480,6 +486,13 @@ func (c *Config) SkillToolMode() string {
 	return normalizeSkillTools(c.SkillTools)
 }
 
+func (c *Config) SubagentToolMode() string {
+	if c == nil {
+		return "off"
+	}
+	return normalizeSubagentTools(c.SubagentTools)
+}
+
 func normalizeReasoningEffort(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "", DefaultReasoningEffort:
@@ -614,6 +627,15 @@ func normalizeSkillTools(value string) string {
 		return "read"
 	case "manage", "write", "full":
 		return "manage"
+	default:
+		return "off"
+	}
+}
+
+func normalizeSubagentTools(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "on", "true", "enabled", "enable", "subagent", "subagents", "delegate":
+		return "on"
 	default:
 		return "off"
 	}
