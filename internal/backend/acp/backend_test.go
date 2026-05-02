@@ -436,7 +436,7 @@ func TestACPStderrWriterDefaultsToDiscard(t *testing.T) {
 	if err != nil {
 		t.Fatalf("acpStderrWriter returned error: %v", err)
 	}
-	if _, err := io.WriteString(w, "agent warning\n"); err != nil {
+	if _, err := io.WriteString(w, "agent warning token=sk-test1234567890\n"); err != nil {
 		t.Fatalf("write stderr: %v", err)
 	}
 	if err := cleanup(); err != nil {
@@ -452,7 +452,7 @@ func TestACPStderrWriterAppendsToDebugLog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("acpStderrWriter returned error: %v", err)
 	}
-	if _, err := io.WriteString(w, "agent warning\n"); err != nil {
+	if _, err := io.WriteString(w, "agent warning token=sk-test1234567890\n"); err != nil {
 		t.Fatalf("write stderr: %v", err)
 	}
 	if err := cleanup(); err != nil {
@@ -463,7 +463,14 @@ func TestACPStderrWriterAppendsToDebugLog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read stderr log: %v", err)
 	}
-	if !strings.Contains(string(data), "agent warning") {
+	text := string(data)
+	if !strings.Contains(text, "agent warning") {
 		t.Fatalf("stderr log = %q, want warning", data)
+	}
+	if strings.Contains(text, "sk-test1234567890") {
+		t.Fatalf("stderr log leaked token: %q", data)
+	}
+	if !strings.Contains(text, "[redacted-secret]") {
+		t.Fatalf("stderr log missing redaction marker: %q", data)
 	}
 }
