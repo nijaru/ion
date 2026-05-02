@@ -156,6 +156,7 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 			cmds = append(cmds, func() tea.Msg { return queuedTurnMsg{text: queued} })
 			return m, tea.Sequence(cmds...)
 		}
+		cmds = append(cmds, loadGitDiffStats(m.App.Workdir))
 		cmds = append(cmds, m.awaitSessionEvent())
 		return m, tea.Sequence(cmds...)
 
