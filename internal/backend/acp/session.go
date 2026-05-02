@@ -14,6 +14,7 @@ import (
 
 	acp "github.com/coder/acp-go-sdk"
 	"github.com/nijaru/ion/internal/backend"
+	"github.com/nijaru/ion/internal/privacy"
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
 )
@@ -333,7 +334,18 @@ func acpStderrWriter() (io.Writer, func() error, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("open ACP stderr log: %w", err)
 	}
-	return f, f.Close, nil
+	return redactingWriter{dst: f}, f.Close, nil
+}
+
+type redactingWriter struct {
+	dst io.Writer
+}
+
+func (w redactingWriter) Write(p []byte) (int, error) {
+	if _, err := io.WriteString(w.dst, privacy.Redact(string(p))); err != nil {
+		return 0, err
+	}
+	return len(p), nil
 }
 
 // SessionUpdate implements acp.Client — translates ACP notifications to session.Event.
