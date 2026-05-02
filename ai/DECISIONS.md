@@ -21,6 +21,14 @@ Distilled architectural principles plus recent decision log.
 
 ## Recent Log
 
+### 2026-05-02 - Busy steering is tool-boundary only
+
+Queued follow-up stays the default busy-input behavior. Opt-in steering is
+limited to active tool-call boundaries, where Ion can hand text to the native
+backend and the backend can consume it as Canto context before the next
+provider request. Streaming final answers, compaction, ACP, inactive sessions,
+and uncertain cases fall back to queued follow-up.
+
 ### 2026-05-02 - Subagents need explicit context modes
 
 Ion should not register the `subagent` tool by default until child context
@@ -102,8 +110,8 @@ concrete framework-owned failures found by Ion.
 
 ### 2026-04-30 - Busy input queues by default
 
-Queued follow-up remains the default. True active-turn steering waits for a
-Canto boundary-step contract so Ion never inserts user text into invalid
+Queued follow-up remains the default. Active-turn steering is allowed only in
+the opt-in tool-boundary path so Ion never inserts user text into invalid
 provider-visible history.
 
 ### 2026-04-27 - Core parity gates feature work

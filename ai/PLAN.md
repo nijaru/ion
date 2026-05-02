@@ -98,9 +98,10 @@ ACP bridge correctness is no longer the active blocker.
 3. Done - `tk-700w` - define subagent context forking direction; keep default
    registration blocked until explicit `summary`/`fork`/`none` context modes
    and child-session ownership tests exist.
-4. Next - `tk-z1kk` - implement boundary-step steering mode.
-5. Later - typed
-   thinking/provider translation.
+4. Done - `tk-z1kk` - boundary-step steering mode. Queued follow-up remains
+   default; `busy_input = "steer"` steers only during active tool calls and
+   falls back to queue elsewhere. This also closes `tk-zxgq`.
+5. Later - typed thinking/provider translation.
 
 ## I5+ Deferred Work
 

@@ -218,16 +218,39 @@ func (m Model) submitComposer() (Model, tea.Cmd) {
 		return m.submitText(text)
 	}
 	if m.InFlight.Thinking || m.Progress.Compacting {
-		m.InFlight.QueuedTurns = append(m.InFlight.QueuedTurns, text)
-		m.Input.Composer.Reset()
-		m.PasteMarkers = make(map[string]pasteMarker)
-		m.relayoutComposer()
-		return m, m.printEntries(
-			session.Entry{Role: session.System, Content: "Queued follow-up"},
-		)
+		return m.submitBusyInput(text)
 	}
 
 	return m.submitText(text)
+}
+
+func (m Model) submitBusyInput(text string) (Model, tea.Cmd) {
+	if m.Model.Config != nil &&
+		m.Model.Config.BusyInputMode() == "steer" &&
+		m.InFlight.Thinking &&
+		!m.Progress.Compacting &&
+		len(m.InFlight.PendingTools) > 0 {
+		if steering, ok := m.Model.Session.(session.SteeringSession); ok {
+			result, err := steering.SteerTurn(context.Background(), text)
+			if err == nil && result.Outcome == session.SteeringAccepted {
+				m.Input.Composer.Reset()
+				m.PasteMarkers = make(map[string]pasteMarker)
+				m.relayoutComposer()
+				return m, m.printEntries(session.Entry{
+					Role:    session.System,
+					Content: "Steering current turn",
+				})
+			}
+		}
+	}
+
+	m.InFlight.QueuedTurns = append(m.InFlight.QueuedTurns, text)
+	m.Input.Composer.Reset()
+	m.PasteMarkers = make(map[string]pasteMarker)
+	m.relayoutComposer()
+	return m, m.printEntries(
+		session.Entry{Role: session.System, Content: "Queued follow-up"},
+	)
 }
 
 func (m Model) recallQueuedTurns() (Model, tea.Cmd) {
@@ -316,6 +339,8 @@ func (m Model) completeSlashArgument(text string) (Model, tea.Cmd, bool) {
 				return m.completeLastSlashToken(text, []string{"full", "summary", "hidden"})
 			case "thinking":
 				return m.completeLastSlashToken(text, []string{"full", "collapsed", "hidden"})
+			case "busy":
+				return m.completeLastSlashToken(text, []string{"queue", "steer"})
 			}
 		}
 	}
@@ -452,13 +477,15 @@ func thinkingCompletionValues() []string {
 }
 
 func settingsCompletionKeys() []string {
-	return []string{"retry", "tool", "read", "write", "bash", "thinking"}
+	return []string{"retry", "tool", "read", "write", "bash", "thinking", "busy"}
 }
 
 func normalizeSettingsCompletionKey(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "tools":
 		return "tool"
+	case "busy_input":
+		return "busy"
 	default:
 		return strings.ToLower(strings.TrimSpace(value))
 	}

@@ -43,6 +43,7 @@ type Config struct {
 	WriteOutput            string            `toml:"write_output,omitempty"`
 	BashOutput             string            `toml:"bash_output,omitempty"`
 	ThinkingVerbosity      string            `toml:"thinking_verbosity,omitempty"`
+	BusyInput              string            `toml:"busy_input,omitempty"`
 }
 
 type State struct {
@@ -153,6 +154,7 @@ func normalizeConfig(cfg *Config) {
 	cfg.WriteOutput = normalizeWriteOutput(cfg.WriteOutput)
 	cfg.BashOutput = normalizeBashOutput(cfg.BashOutput)
 	cfg.ThinkingVerbosity = normalizeVerbosity(cfg.ThinkingVerbosity)
+	cfg.BusyInput = normalizeBusyInput(cfg.BusyInput)
 	if cfg.ContextLimit < 0 {
 		cfg.ContextLimit = 0
 	}
@@ -288,6 +290,7 @@ func Save(cfg *Config) error {
 	out.WriteOutput = normalizeWriteOutput(out.WriteOutput)
 	out.BashOutput = normalizeBashOutput(out.BashOutput)
 	out.ThinkingVerbosity = normalizeVerbosity(out.ThinkingVerbosity)
+	out.BusyInput = normalizeBusyInput(out.BusyInput)
 
 	data, err := toml.Marshal(&out)
 	if err != nil {
@@ -449,6 +452,13 @@ func (c *Config) RetryUntilCancelledEnabled() bool {
 	return c == nil || c.RetryUntilCancelled == nil || *c.RetryUntilCancelled
 }
 
+func (c *Config) BusyInputMode() string {
+	if c != nil && normalizeBusyInput(c.BusyInput) == "steer" {
+		return "steer"
+	}
+	return "queue"
+}
+
 func normalizeReasoningEffort(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "", DefaultReasoningEffort:
@@ -557,6 +567,24 @@ func normalizeBashOutput(value string) string {
 	default:
 		return ""
 	}
+}
+
+func NormalizeBusyInput(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "queue", "queued", "followup", "follow-up", "follow_up":
+		return "queue"
+	case "steer", "steering":
+		return "steer"
+	default:
+		return ""
+	}
+}
+
+func normalizeBusyInput(value string) string {
+	if NormalizeBusyInput(value) == "steer" {
+		return "steer"
+	}
+	return ""
 }
 
 func expandUserPath(path string) string {

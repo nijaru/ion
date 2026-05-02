@@ -87,7 +87,11 @@ Stable config fields:
 - `retry_until_cancelled`
 - `workspace_trust`
 - `tool_verbosity`
+- `read_output`
+- `write_output`
+- `bash_output`
 - `thinking_verbosity`
+- `busy_input`
 
 Thinking capability overrides are stable config, not mutable state. Unknown
 custom endpoints should default to sending no thinking/reasoning parameter.
@@ -141,8 +145,10 @@ Rules:
 - writes to `config.toml` and `state.toml` must use atomic temp-file +
   rename replacement, not direct in-place writes
 - `/settings` is a narrow UI surface for regularly toggled settings only:
-  retry network errors, tool display verbosity, and thinking display verbosity.
-  Model choice stays in `/model`; thinking level stays in `/thinking`.
+  retry network errors, tool/read/write/bash/thinking display preferences, and
+  busy-input behavior (`queue` by default, `steer` for active tool-boundary
+  steering). Model choice stays in `/model`; thinking level stays in
+  `/thinking`.
 
 ## Model metadata display
 

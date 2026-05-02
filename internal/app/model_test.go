@@ -133,6 +133,13 @@ type stubSession struct {
 	closed      bool
 }
 
+type steeringStubSession struct {
+	stubSession
+	steers []string
+	result session.SteeringResult
+	err    error
+}
+
 type stubApproval struct {
 	id string
 	ok bool
@@ -187,6 +194,20 @@ func (s *stubSession) AllowCategory(category string) {
 }
 func (s *stubSession) ID() string              { return "stub" }
 func (s *stubSession) Meta() map[string]string { return nil }
+
+func (s *steeringStubSession) SteerTurn(
+	ctx context.Context,
+	text string,
+) (session.SteeringResult, error) {
+	s.steers = append(s.steers, text)
+	if s.err != nil {
+		return session.SteeringResult{}, s.err
+	}
+	if s.result.Outcome == "" {
+		return session.SteeringResult{Outcome: session.SteeringAccepted}, nil
+	}
+	return s.result, nil
+}
 
 type stubStorageSession struct {
 	id         string
@@ -3286,6 +3307,11 @@ func TestTabCompletesKnownSlashArguments(t *testing.T) {
 			input: "/settings thinking h",
 			want:  "/settings thinking hidden ",
 		},
+		{
+			name:  "settings busy value",
+			input: "/settings busy st",
+			want:  "/settings busy steer ",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -3545,10 +3571,12 @@ func TestSettingsCommandShowsCommonSettings(t *testing.T) {
 		"write output: summary",
 		"bash output: hidden",
 		"thinking output: hidden",
+		"busy input: queue",
 		"/settings retry on|off",
 		"/settings read full|summary|hidden",
 		"/settings write diff|summary|hidden",
 		"/settings bash full|summary|hidden",
+		"/settings busy queue|steer",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("settings missing %q: %q", want, got)
@@ -3576,6 +3604,7 @@ func TestSettingsCommandShowsDisplayDefaults(t *testing.T) {
 		"write output: summary",
 		"bash output: hidden",
 		"thinking output: hidden",
+		"busy input: queue",
 		"/settings tool auto|full|collapsed|hidden",
 	} {
 		if !strings.Contains(got, want) {
@@ -4510,6 +4539,57 @@ func TestQueuedFollowUpSubmitsAfterTurnFinished(t *testing.T) {
 			"queued follow-up command = %s, want sequence that re-arms session event wait",
 			got,
 		)
+	}
+}
+
+func TestBusyInputSteersDuringActiveToolWhenEnabled(t *testing.T) {
+	sess := &steeringStubSession{
+		stubSession: stubSession{events: make(chan session.Event)},
+	}
+	model := readyModel(t)
+	model.Model.Session = sess
+	model.Model.Config = &config.Config{BusyInput: "steer"}
+	model.Input.Composer.SetValue("use the smaller test")
+	model.InFlight.Thinking = true
+	model.InFlight.PendingTools = map[string]*session.Entry{
+		"call-1": {Role: session.Tool, Title: "bash"},
+	}
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(Model)
+
+	if len(sess.steers) != 1 || sess.steers[0] != "use the smaller test" {
+		t.Fatalf("steers = %#v, want submitted steering", sess.steers)
+	}
+	if len(model.InFlight.QueuedTurns) != 0 {
+		t.Fatalf("queued turns = %v, want none after steering", model.InFlight.QueuedTurns)
+	}
+	if got := model.Input.Composer.Value(); got != "" {
+		t.Fatalf("composer = %q, want cleared after steering", got)
+	}
+	if cmd == nil {
+		t.Fatal("expected steering notice command")
+	}
+}
+
+func TestBusyInputQueuesWhenSteeringHasNoToolBoundary(t *testing.T) {
+	sess := &steeringStubSession{
+		stubSession: stubSession{events: make(chan session.Event)},
+	}
+	model := readyModel(t)
+	model.Model.Session = sess
+	model.Model.Config = &config.Config{BusyInput: "steer"}
+	model.Input.Composer.SetValue("after this")
+	model.InFlight.Thinking = true
+
+	updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(Model)
+
+	if len(sess.steers) != 0 {
+		t.Fatalf("steers = %#v, want no steering without active tools", sess.steers)
+	}
+	if len(model.InFlight.QueuedTurns) != 1 || model.InFlight.QueuedTurns[0] != "after this" {
+		t.Fatalf("queued turns = %#v, want fallback queue", model.InFlight.QueuedTurns)
 	}
 }
 

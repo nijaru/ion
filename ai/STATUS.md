@@ -5,7 +5,7 @@ Fast, lightweight terminal coding agent.
 **Phase:** I4 advanced integrations
 **Focus:** Reopen deferred integrations from the stable I0-I3 baseline.
 **Active umbrella:** none - `tk-mmcs` is closed.
-**Active task:** none - start `tk-z1kk` next.
+**Active task:** none - next I4 item pending.
 **Updated:** 2026-05-02
 
 ## Current Truth
@@ -136,16 +136,27 @@ Fast, lightweight terminal coding agent.
   and `docs/subagents.md`: implementation pieces exist, but default
   registration waits for explicit `summary`/`fork`/`none` context modes and
   child-session ownership tests.
+- `tk-z1kk` and `tk-zxgq` are closed. Boundary-step steering is implemented as
+  an opt-in native mode:
+  `busy_input = "steer"` accepts busy input only while tools are active and
+  falls back to queued follow-up otherwise. Accepted steering is consumed by a
+  CantoBackend prompt mutator as non-transcript steering context before the next
+  provider request. Backend tests cover the app-independent boundary too: active
+  turn without an active tool still queues, and a slow bash tool call accepts
+  steering that appears in the next provider request.
+- Latest steering gates passed:
+  `go test ./internal/backend/canto ./internal/app ./internal/config ./internal/session -count=1 -timeout 180s`,
+  `go test ./... -count=1 -timeout 300s`, and
+  `go test -race ./cmd/ion ./internal/app ./internal/backend/canto ./internal/backend/canto/tools ./internal/storage -count=1 -timeout 300s`.
 
 ## Next Action
 
-1. Start `tk-z1kk` boundary-step steering as the next integration blocker.
-2. Review whether the work belongs in Canto primitives, Ion TUI behavior, or
-   both before editing code.
+1. Pick the next ready I4 item from `tk ready`.
+2. Add a tmux/live check later if steering is promoted beyond opt-in settings.
 3. Keep native Canto/Ion loop behavior as the acceptance baseline while adding
    advanced integrations.
 4. Continue one green slice per commit.
 
 ## Active Tasks
 
-- none.
+- none

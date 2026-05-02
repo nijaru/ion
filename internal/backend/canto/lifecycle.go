@@ -94,9 +94,11 @@ func (b *Backend) Open(ctx context.Context) error {
 		reasoningEffortProcessor(b.cfg),
 		toolVisibilityProcessor(b.policy),
 	}
+	b.steering = newSteeringMutator()
 
 	agentOptions := []agent.Option{
 		agent.WithRequestProcessors(requestProcessors...),
+		agent.WithMutators(b.steering),
 	}
 	b.agent = agent.New("ion", instructions, modelName, p, registry, agentOptions...)
 

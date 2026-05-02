@@ -1,6 +1,6 @@
 ---
 date: 2026-04-30
-summary: Contract for safe busy-turn input, queued follow-ups, and future active-turn steering.
+summary: Contract for safe busy-turn input, queued follow-ups, and active tool-boundary steering.
 status: active
 ---
 
@@ -8,7 +8,9 @@ status: active
 
 ## Decision
 
-Ion keeps **queued follow-up** as the default busy-turn behavior. True **active-turn steering** is allowed only after Canto exposes a durable boundary-step contract.
+Ion keeps **queued follow-up** as the default busy-turn behavior. Opt-in
+**active-turn steering** is available only at active tool boundaries, where the
+backend can safely inject user guidance before the next provider request.
 
 Do not implement steering as a UI-only trick. Ion cannot mutate a provider request after it has been sent, and it must not insert user text into provider-visible history between an assistant tool call and its required tool result.
 
@@ -17,7 +19,7 @@ Do not implement steering as a UI-only trick. Ion cannot mutate a provider reque
 | Term | Meaning | Status |
 | --- | --- | --- |
 | Queued follow-up | User text submitted while a turn is busy; it becomes the next normal user turn after the current turn reaches a terminal state. | Implemented and default. |
-| Boundary steering | User text submitted while a turn is busy; Canto may consume it before the next provider request within the same active loop, after tool-result ordering is valid. | Future backend contract. |
+| Boundary steering | User text submitted while tools are active; the backend consumes it before the next provider request within the same active loop. | Implemented as opt-in `busy_input = "steer"`. |
 | Interrupt and reissue | User text cancels the active turn, persists cancellation, then starts a new normal turn with the user's steering text. | Optional later mode. |
 
 ## Safe Semantics
@@ -37,14 +39,18 @@ This remains the fallback for every ambiguous or unsafe steering case.
 
 Boundary steering can only happen at a provider-call boundary. It is valid when the active agent loop has not ended and Canto is about to build another provider request, such as after tool results have been appended.
 
-The future Canto contract should:
+The implemented native contract:
 
-1. Accept steering text against the active turn.
-2. Persist a non-provider-visible steering event tied to that turn.
-3. Consume pending steering only when provider-visible history is valid.
-4. Convert consumed steering into provider-visible context in Canto, not Ion.
-5. Persist a consumed marker so resume does not apply the same steering twice.
-6. Return `queued` instead of `accepted` if the active loop will not make another provider request.
+1. Ion accepts steering only when the current TUI state has active tool calls.
+2. The Canto backend queues steering text in the active native session.
+3. A Canto prompt mutator consumes queued steering at the next provider request
+   boundary.
+4. The mutator appends non-transcript `ExternalInput` pending/consumed events
+   and a model-visible `ContextAdded` steering block after tool results.
+5. If no safe tool boundary is visible, Ion downgrades to queued follow-up.
+
+This is intentionally narrower than arbitrary mid-stream steering. It does not
+try to steer final assistant streaming, compaction, ACP, or inactive sessions.
 
 ### Interrupt and reissue
 
@@ -71,10 +77,9 @@ The host-facing contract can stay small:
 type SteeringOutcome string
 
 const (
-	SteeringQueued          SteeringOutcome = "queued"
-	SteeringAccepted        SteeringOutcome = "accepted"
-	SteeringUnsupported     SteeringOutcome = "unsupported"
-	SteeringInterruptNeeded SteeringOutcome = "interrupt_needed"
+	SteeringQueued      SteeringOutcome = "queued"
+	SteeringAccepted    SteeringOutcome = "accepted"
+	SteeringUnsupported SteeringOutcome = "unsupported"
 )
 
 type SteeringResult struct {
@@ -87,31 +92,34 @@ type SteeringSession interface {
 }
 ```
 
-Ion should treat `unsupported`, `interrupt_needed`, and uncertain errors as queue-worthy unless the user explicitly asked to cancel/reissue.
+Ion should treat `unsupported` and uncertain errors as queue-worthy unless the
+user explicitly asked to cancel/reissue.
 
 ## Persistence Ownership
 
 | Data | Owner |
 | --- | --- |
 | Pending queued follow-ups in current TUI process | Ion app state |
-| Durable active-turn steering event | Canto |
-| Provider-visible converted steering context | Canto effective history / prompt projection |
+| Pending steering before provider boundary | Ion native backend process state |
+| Consumed active-turn steering event | Canto session `ExternalInput` events |
+| Provider-visible converted steering context | Canto `ContextAdded` projection |
 | Visible queue or steering notice | Ion display projection |
-| Consumed steering marker | Canto |
+| Consumed steering marker | Canto session `ExternalInput` consumed event |
 
-## Tests Before Enabling `/settings busy-input steer`
+## Tests
 
 - Submitting text during streaming of a final assistant response stays queued.
-- Submitting text while tools are running is consumed only after all required tool results are appended.
-- Steering consumed before a second provider step appears exactly once in the next provider request.
-- Resume with pending steering either consumes it once or preserves it as queued; it never disappears silently.
-- Resume with consumed steering does not reapply it.
-- Provider-visible history remains valid across assistant tool calls, tool results, steering context, errors, cancellation, and compaction.
+- Submitting text while tools are active can steer when `busy_input = "steer"`.
+- Steering consumption appends pending/consumed `ExternalInput` events and one
+  `ContextAdded` steering block.
+- Re-running the mutator does not duplicate already consumed steering.
+- Provider-visible history remains valid because steering context is appended
+  only at prompt-build boundaries, after required tool results are present.
 
-## Implementation Order
+## Remaining Work
 
-1. Keep current queued follow-up UI as the default.
-2. Add Canto steering event/projection tests before exposing an Ion setting.
-3. Add `SteerTurn` or equivalent to the native backend only after Canto owns durable semantics.
-4. Add `/settings busy-input queue|steer` only after the native contract is tested.
-5. Consider interrupt/reissue as a separate command or setting later.
+- Add a live/tmux smoke that proves the second provider request sees steering
+  after a real long-running tool call.
+- Decide whether this Ion-owned mutator should move upstream into Canto if a
+  second host needs the same primitive.
+- Consider interrupt/reissue as a separate command or setting later.

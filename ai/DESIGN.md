@@ -96,7 +96,9 @@ Important boundaries:
 - Live and replayed transcript entries use the same renderer.
 - Routine tools are compact by default; full output is opt-in through settings.
 - Queued follow-up input is visible, recallable, and submitted once.
-- True active-turn steering waits for a Canto boundary-step contract.
+- Queued follow-up remains the busy-input default. Opt-in boundary steering is
+  limited to active tool calls and is consumed by the native backend before the
+  next provider request.
 - `/settings` is only durable settings. Provider/model/session identity belongs
   in footer/status, `/session`, `/provider`, `/model`, and `/thinking`.
 

@@ -46,3 +46,20 @@ type AgentSession interface {
 	// Meta returns session metadata.
 	Meta() map[string]string
 }
+
+type SteeringOutcome string
+
+const (
+	SteeringQueued      SteeringOutcome = "queued"
+	SteeringAccepted    SteeringOutcome = "accepted"
+	SteeringUnsupported SteeringOutcome = "unsupported"
+)
+
+type SteeringResult struct {
+	Outcome SteeringOutcome
+	Notice  string
+}
+
+type SteeringSession interface {
+	SteerTurn(ctx context.Context, text string) (SteeringResult, error)
+}
