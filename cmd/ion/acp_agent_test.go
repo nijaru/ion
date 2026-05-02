@@ -3,10 +3,13 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -356,6 +359,27 @@ func TestIonACPAgentSetSessionMode(t *testing.T) {
 	}
 }
 
+func TestACPToolUpdatesRedactSensitivePayloads(t *testing.T) {
+	start := acpToolCallStart(t.TempDir(), ionsession.ToolCallStarted{
+		ToolUseID: "tool-1",
+		ToolName:  "bash",
+		Args:      `{"command":"curl -H 'Authorization: Bearer abc.def-123' https://jane.doe@example.com"}`,
+	})
+	assertACPUpdateRedacted(t, start, []string{"abc.def-123", "jane.doe@example.com"})
+
+	delta := acpToolOutputDelta(ionsession.ToolOutputDelta{
+		ToolUseID: "tool-1",
+		Delta:     "token=sk-test1234567890",
+	})
+	assertACPUpdateRedacted(t, delta, []string{"sk-test1234567890"})
+
+	result := acpToolCallResult(ionsession.ToolResult{
+		ToolUseID: "tool-1",
+		Result:    "email jane.doe@example.com token=sk-test1234567890",
+	})
+	assertACPUpdateRedacted(t, result, []string{"jane.doe@example.com", "sk-test1234567890"})
+}
+
 func TestACPAgentFlagInitializesOverStdio(t *testing.T) {
 	exe, err := os.Executable()
 	if err != nil {
@@ -406,6 +430,23 @@ func TestACPAgentFlagInitializesOverStdio(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		_ = cmd.Process.Kill()
 		t.Fatalf("ion --agent did not exit after stdio closed\nstderr:\n%s", stderr.String())
+	}
+}
+
+func assertACPUpdateRedacted(t *testing.T, update acp.SessionUpdate, leaked []string) {
+	t.Helper()
+	data, err := json.Marshal(update)
+	dump := string(data)
+	if err != nil {
+		dump = fmt.Sprintf("%#v", update)
+	}
+	for _, value := range leaked {
+		if strings.Contains(dump, value) {
+			t.Fatalf("ACP update leaked %q: %s", value, dump)
+		}
+	}
+	if !strings.Contains(dump, "[redacted-") {
+		t.Fatalf("ACP update missing redaction marker: %s", dump)
 	}
 }
 

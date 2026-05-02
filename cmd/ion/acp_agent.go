@@ -12,6 +12,7 @@ import (
 
 	acp "github.com/coder/acp-go-sdk"
 	"github.com/nijaru/ion/internal/config"
+	"github.com/nijaru/ion/internal/privacy"
 	ionsession "github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
 	"github.com/nijaru/ion/internal/tooldisplay"
@@ -356,13 +357,7 @@ func (a *ionACPAgent) forwardEvent(
 	case ionsession.ToolCallStarted:
 		return false, "", a.sessionUpdate(ctx, sessionID, acpToolCallStart(sess.cwd, e))
 	case ionsession.ToolOutputDelta:
-		return false, "", a.sessionUpdate(ctx, sessionID, acp.UpdateToolCall(
-			acp.ToolCallId(e.ToolUseID),
-			acp.WithUpdateStatus(acp.ToolCallStatusInProgress),
-			acp.WithUpdateContent([]acp.ToolCallContent{
-				acp.ToolContent(acp.TextBlock(e.Delta)),
-			}),
-		))
+		return false, "", a.sessionUpdate(ctx, sessionID, acpToolOutputDelta(e))
 	case ionsession.ToolResult:
 		return false, "", a.sessionUpdate(ctx, sessionID, acpToolCallResult(e))
 	case ionsession.ApprovalRequest:
@@ -403,10 +398,11 @@ func (a *ionACPAgent) requestPermission(
 	if a.conn == nil {
 		return sess.agent.Approve(ctx, req.RequestID, false)
 	}
-	title := tooldisplay.Title(req.ToolName, req.Args, tooldisplay.Options{
+	title := privacy.Redact(tooldisplay.Title(req.ToolName, req.Args, tooldisplay.Options{
 		Workdir: sess.cwd,
 		Width:   100,
-	})
+	}))
+	redactedArgs := privacy.Redact(req.Args)
 	kind := acpToolKind(req.ToolName)
 	status := acp.ToolCallStatusPending
 	resp, err := a.conn.RequestPermission(ctx, acp.RequestPermissionRequest{
@@ -416,7 +412,7 @@ func (a *ionACPAgent) requestPermission(
 			Title:      &title,
 			Kind:       &kind,
 			Status:     &status,
-			RawInput:   acpRawInput(req.Args),
+			RawInput:   acpRawInput(redactedArgs),
 			Locations:  acpLocations(req.Args),
 		},
 		Options: []acp.PermissionOption{
@@ -461,16 +457,29 @@ func acpPromptText(blocks []acp.ContentBlock) (string, error) {
 }
 
 func acpToolCallStart(workdir string, e ionsession.ToolCallStarted) acp.SessionUpdate {
+	title := privacy.Redact(tooldisplay.Title(e.ToolName, e.Args, tooldisplay.Options{
+		Workdir: workdir,
+		Width:   100,
+	}))
+	redactedArgs := privacy.Redact(e.Args)
 	return acp.StartToolCall(
 		acp.ToolCallId(e.ToolUseID),
-		tooldisplay.Title(e.ToolName, e.Args, tooldisplay.Options{
-			Workdir: workdir,
-			Width:   100,
-		}),
+		title,
 		acp.WithStartKind(acpToolKind(e.ToolName)),
 		acp.WithStartStatus(acp.ToolCallStatusPending),
-		acp.WithStartRawInput(acpRawInput(e.Args)),
+		acp.WithStartRawInput(acpRawInput(redactedArgs)),
 		acp.WithStartLocations(acpLocations(e.Args)),
+	)
+}
+
+func acpToolOutputDelta(e ionsession.ToolOutputDelta) acp.SessionUpdate {
+	delta := privacy.Redact(e.Delta)
+	return acp.UpdateToolCall(
+		acp.ToolCallId(e.ToolUseID),
+		acp.WithUpdateStatus(acp.ToolCallStatusInProgress),
+		acp.WithUpdateContent([]acp.ToolCallContent{
+			acp.ToolContent(acp.TextBlock(delta)),
+		}),
 	)
 }
 
@@ -483,6 +492,7 @@ func acpToolCallResult(e ionsession.ToolResult) acp.SessionUpdate {
 			output = e.Error.Error()
 		}
 	}
+	output = privacy.Redact(output)
 	return acp.UpdateToolCall(
 		acp.ToolCallId(e.ToolUseID),
 		acp.WithUpdateStatus(status),
