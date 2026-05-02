@@ -26,6 +26,8 @@ Fast, lightweight terminal coding agent.
 - `read_skill` is implemented behind the opt-in `skill_tools = "read"` config
   gate. It is not part of the default eight-tool surface and does not add skill
   inventories to the prompt.
+- Memory remains deferred; the native backend no longer initializes a memory
+  manager on the default hot path.
 - Flue and Mendral are applicable as boundary checks, not as feature requests:
   keep the runtime/session/tool boundary explicit, keep state outside
   disposable execution, and preserve a small model-visible tool surface.

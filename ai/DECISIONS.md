@@ -33,6 +33,13 @@ constraints for simplifying Ion's default native loop, not permission to add
 remote sandboxes, memory namespaces, or multi-agent features before the core is
 boring.
 
+### 2026-05-02 - Memory stays off the default hot path
+
+Workspace memory remains deferred. The default native backend should not
+initialize a memory manager or expose a `/memory` execution path while no
+model-visible memory tool or product memory flow is active. Reintroduce memory
+through a deliberate design slice, not as an always-on dependency of `Open()`.
+
 ### 2026-05-02 - Flue validates the harness boundary
 
 Flue is not a TUI replacement for Ion, but its headless programmable shape is a

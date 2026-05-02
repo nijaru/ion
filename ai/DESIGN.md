@@ -216,7 +216,7 @@ Deferred product layers:
 
 - richer permissions and sandbox UX
 - ACP/subscription polish
-- memory/wiki
+- memory/wiki; no memory manager is initialized on the default hot path
 - skills as explicit-install progressive-disclosure modules
 - routing and workflow orchestration
 - cross-host sync, branching, rewind, and richer rollback

@@ -44,7 +44,3 @@ type ToolSurface struct {
 type ToolSummarizer interface {
 	ToolSurface() ToolSurface
 }
-
-type MemoryExplorer interface {
-	MemoryView(context.Context, string) (string, error)
-}
