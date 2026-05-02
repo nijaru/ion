@@ -5,7 +5,7 @@ Fast, lightweight terminal coding agent.
 **Phase:** I4 advanced integrations
 **Focus:** I4 advanced integrations closeout
 **Active umbrella:** none - `tk-mmcs` is closed
-**Active task:** `tk-6prx` - Markdown: Cache goldmark parser instance
+**Active task:** `tk-w5uj` - TUI: Status bar shows git diff stats (+N/-N)
 **Updated:** 2026-05-02
 
 ## Current Truth
@@ -140,10 +140,13 @@ Fast, lightweight terminal coding agent.
   result to the parent, and preserves parent provider-visible history. Gates
   passed: focused config/subagent/backend tests, `go test ./... -count=1`, and
   the native race subset.
+- `tk-6prx` is implemented. Markdown rendering now reuses a cached
+  Goldmark/GFM renderer instead of rebuilding it for every render. Focused app
+  tests passed.
 
 ## Next Action
 
-1. Start `tk-6prx` and cache the Goldmark parser instance without changing
-   markdown rendering output.
+1. Start `tk-w5uj` and add footer git diff stats without noisy shelling or
+   transcript coupling.
 2. Keep one green slice per commit and avoid reopening Canto unless Ion tests
    expose a framework defect.

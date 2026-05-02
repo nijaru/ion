@@ -9,7 +9,7 @@ green native baseline. Canto stays closed unless Ion evidence proves a
 framework-owned defect.
 
 Active umbrella: none. `tk-mmcs` is closed.
-Active task: `tk-6prx` - Markdown: Cache goldmark parser instance.
+Active task: `tk-w5uj` - TUI: Status bar shows git diff stats (+N/-N).
 
 ## Phases
 
@@ -191,7 +191,11 @@ ACP bridge correctness is no longer the active blocker.
       configured
     - deterministic smoke proves a child result returns to the parent without
       leaking parent prompt context into `none` mode
-21. Next - `tk-6prx` - Markdown: Cache goldmark parser instance.
+21. Done - `tk-6prx` - Markdown: Cache goldmark parser instance:
+    - cached the Goldmark/GFM renderer instead of rebuilding it for each
+      markdown render
+    - focused app tests passed
+22. Next - `tk-w5uj` - TUI: Status bar shows git diff stats (+N/-N).
 
 ## I5+ Deferred Work
 

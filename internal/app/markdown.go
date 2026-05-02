@@ -18,16 +18,17 @@ type markdownTableRow struct {
 	cells []string
 }
 
+var markdownRenderer = goldmark.New(
+	goldmark.WithExtensions(extension.GFM),
+	goldmark.WithParserOptions(parser.WithAutoHeadingID()),
+)
+
 func (m Model) renderMarkdownContent(content string) string {
 	if strings.TrimSpace(content) == "" {
 		return ""
 	}
 
-	md := goldmark.New(
-		goldmark.WithExtensions(extension.GFM),
-		goldmark.WithParserOptions(parser.WithAutoHeadingID()),
-	)
-	doc := md.Parser().Parse(text.NewReader([]byte(content)))
+	doc := markdownRenderer.Parser().Parse(text.NewReader([]byte(content)))
 	lines := m.renderMarkdownNode(doc, []byte(content), 0)
 	lines = normalizeMarkdownLines(lines)
 	return strings.Join(lines, "\n")
