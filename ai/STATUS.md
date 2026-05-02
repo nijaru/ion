@@ -2,10 +2,10 @@
 
 Fast, lightweight terminal coding agent.
 
-**Phase:** I0 design/context cleanup and dirty-bundle closeout
-**Focus:** Clean the source of truth, then refactor Ion from the full product design.
+**Phase:** I1 behavior-preserving Ion refactors
+**Focus:** Refactor the product shell from the full design while preserving the native baseline.
 **Active umbrella:** `tk-mmcs` - core parity plan and queue hygiene.
-**Active task:** `tk-l6cj` - AI context consolidation and dirty bundle closeout.
+**Active task:** `tk-e2a5` - clean CLI startup and config boundary.
 **Updated:** 2026-05-02
 
 ## Current Truth
@@ -32,20 +32,28 @@ Fast, lightweight terminal coding agent.
   backend tests and the full suite now pass.
 - Prompt-budget and tool-surface research have been distilled into specs and
   decisions. Research files remain evidence, not canonical behavior.
+- AI context cleanup is committed in Ion and Canto. Ion root `ai/` now uses the
+  five canonical files, and Canto feedback intake is folded into its tracker.
+- App shell boundary refactor is complete: command catalog, settings,
+  session/cost, rewind, picker, and runtime switching helpers are split out of
+  `internal/app/commands.go`.
+- Latest app-shell gates passed:
+  `go test ./internal/app -count=1 -timeout 120s`,
+  `go test ./... -count=1 -timeout 300s`, and
+  `go test -race ./cmd/ion ./internal/app ./internal/backend/canto ./internal/backend/canto/tools ./internal/storage -count=1 -timeout 300s`.
 
 ## Next Action
 
-1. Finish `ai/` pruning in this pass and commit it as its own green slice.
-2. Lightly prune Canto `ai/` so Ion feedback and Canto framework roadmap stay
-   clear.
-3. Align `tk ready` with the active path.
-4. Start `tk-he9p` app shell boundary refactor.
+1. Start `tk-e2a5` and review CLI flag parsing, runtime selection, and backend
+   construction boundaries.
+2. Keep behavior unchanged unless a concrete config/startup bug falls out of
+   the review.
+3. Run focused `cmd/ion` and config tests, then full deterministic and race
+   gates for the slice.
 
 ## Active Tasks
 
-- `tk-l6cj` - AI context consolidation and dirty bundle closeout.
 - `tk-mmcs` - core parity plan and task queue hygiene.
-- `tk-he9p` - refactor app shell boundary files.
 - `tk-e2a5` - clean CLI startup and config boundary.
 - `tk-eyvq` - refactor CantoBackend lifecycle files.
 - `tk-7sna` - split file tools by responsibility.
