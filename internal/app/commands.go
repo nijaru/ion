@@ -295,6 +295,30 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		notice := session.Entry{Role: session.System, Content: "Forked session " + forked.ID()}
 		return m, m.resumeRuntimeCommand(cfg, notice, forked.ID())
 
+	case "/tree":
+		if len(fields) != 1 {
+			return m, cmdError("usage: /tree")
+		}
+		if m.Model.Storage == nil || !storage.IsMaterialized(m.Model.Storage) {
+			return m, cmdError("No active session tree yet")
+		}
+		sessionID := m.currentMaterializedSessionID()
+		if sessionID == "" {
+			return m, cmdError("No active session tree yet")
+		}
+		reader, ok := m.Model.Store.(storage.SessionTreeReader)
+		if !ok {
+			return m, cmdError("session store does not support tree view")
+		}
+		tree, err := reader.SessionTree(context.Background(), sessionID)
+		if err != nil {
+			return m, cmdError(fmt.Sprintf("failed to load session tree: %v", err))
+		}
+		return m, m.printEntries(session.Entry{
+			Role:    session.System,
+			Content: sessionTreeNotice(tree),
+		})
+
 	case "/skills":
 		dir, err := config.DefaultSkillsDir()
 		if err != nil {

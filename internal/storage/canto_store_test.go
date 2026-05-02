@@ -181,6 +181,20 @@ func TestCantoStoreForkSessionCopiesEventsAndIndexesChild(t *testing.T) {
 	if !found {
 		t.Fatalf("forked session %s missing from ListSessions: %#v", child.ID(), listed)
 	}
+
+	tree, err := store.SessionTree(ctx, child.ID())
+	if err != nil {
+		t.Fatalf("session tree: %v", err)
+	}
+	if len(tree.Lineage) != 2 {
+		t.Fatalf("lineage = %#v, want parent and child", tree.Lineage)
+	}
+	if tree.Lineage[0].ID != parent.ID() || tree.Lineage[1].ID != child.ID() {
+		t.Fatalf("lineage ids = %#v, want parent then child", tree.Lineage)
+	}
+	if tree.Current.ID != child.ID() {
+		t.Fatalf("current = %q, want child", tree.Current.ID)
+	}
 }
 
 func TestCantoStoreLastStatusIgnoresTransientProgress(t *testing.T) {

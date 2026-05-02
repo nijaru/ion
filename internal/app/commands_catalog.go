@@ -105,6 +105,12 @@ func slashCommandDefinitions() []slashCommandInfo {
 			idle:       slashCommandIdleAlways,
 		},
 		{
+			name:       "/tree",
+			detail:     "session tree",
+			helpLabel:  "/tree",
+			helpDetail: "show session lineage and children",
+		},
+		{
 			name:       "/compact",
 			detail:     "compact session",
 			helpLabel:  "/compact",

@@ -44,6 +44,16 @@ type SessionForker interface {
 	ForkSession(ctx context.Context, parentID string, opts ForkOptions) (Session, error)
 }
 
+type SessionTree struct {
+	Current  SessionInfo
+	Lineage  []SessionInfo
+	Children []SessionInfo
+}
+
+type SessionTreeReader interface {
+	SessionTree(ctx context.Context, sessionID string) (SessionTree, error)
+}
+
 // Session handles appending events to a specific session's storage.
 type Session interface {
 	// ID returns the unique session identifier.

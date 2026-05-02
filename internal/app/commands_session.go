@@ -114,3 +114,48 @@ func sessionEntryCounts(entries []session.Entry) sessionCounts {
 	}
 	return counts
 }
+
+func sessionTreeNotice(tree storage.SessionTree) string {
+	currentID := strings.TrimSpace(tree.Current.ID)
+	lines := []string{"Session tree"}
+	if len(tree.Lineage) > 0 {
+		lines = append(lines, "", "lineage:")
+		for _, info := range tree.Lineage {
+			lines = append(lines, "  "+sessionTreeLine(info, currentID))
+		}
+	}
+	if len(tree.Children) > 0 {
+		lines = append(lines, "", "children:")
+		for _, info := range tree.Children {
+			lines = append(lines, "  "+sessionTreeLine(info, currentID))
+		}
+	} else {
+		lines = append(lines, "", "children: none")
+	}
+	return strings.Join(lines, "\n")
+}
+
+func sessionTreeLine(info storage.SessionInfo, currentID string) string {
+	prefix := "- "
+	if info.ID == currentID {
+		prefix = "* "
+	}
+	label := strings.TrimSpace(info.Title)
+	if label == "" {
+		label = strings.TrimSpace(info.LastPreview)
+	}
+	if label == "" {
+		label = info.ID
+	}
+	parts := []string{prefix + info.ID}
+	if label != "" && label != info.ID {
+		parts = append(parts, label)
+	}
+	if branch := strings.TrimSpace(info.Branch); branch != "" {
+		parts = append(parts, branch)
+	}
+	if age := sessionAgeLabel(info.UpdatedAt); age != "" {
+		parts = append(parts, age)
+	}
+	return strings.Join(parts, " - ")
+}
