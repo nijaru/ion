@@ -179,7 +179,6 @@ func slashCommandDefinitions() []slashCommandInfo {
 			detail:     "workspace trust",
 			helpLabel:  "/trust [status]",
 			helpDetail: "trust this workspace or show trust status",
-			deferred:   true,
 		},
 		{
 			name:       "/rewind",

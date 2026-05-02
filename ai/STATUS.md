@@ -80,11 +80,20 @@ Fast, lightweight terminal coding agent.
   `go test ./cmd/ion ./internal/backend ./internal/backend/canto -count=1 -timeout 180s`,
   `go test ./... -count=1 -timeout 300s`, the native race subset, and a tmux
   text capture for `--mode read` startup plus `/tools`.
+- Workspace trust gating is restored for I3: `workspace_trust=prompt|strict`
+  starts unknown workspaces in READ mode, `/trust` is available for prompt-mode
+  trust, strict mode stays externally managed, and `workspace_trust=off`
+  disables the gate.
+- Latest trust-gate gates passed:
+  `go test ./cmd/ion ./internal/app ./internal/workspace -count=1 -timeout 180s`,
+  `go test ./... -count=1 -timeout 300s`, the native race subset, and a tmux
+  text capture for unknown-workspace startup, blocked `/mode auto`, `/trust`,
+  and post-trust `/tools`.
 
 ## Next Action
 
-1. Continue `tk-4570` safety/trust simplification.
-2. Review sandbox/trust startup and footer display against current mode policy.
+1. Finish `tk-4570` by reviewing sandbox display and stale safety wording.
+2. Verify strict trust and sandbox status in TUI/CLI smoke if code changes.
 3. Keep the scope narrow: mode/trust/sandbox/policy table stakes only, not ACP,
    subagents, routing, skills, privacy, or advanced safety research.
 

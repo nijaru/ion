@@ -73,6 +73,8 @@ Active next scope:
 - ensure read mode hides or blocks write/execute tools consistently at the
   right boundary (provider-visible request tools and UI tool summaries are now
   mode-filtered)
+- restore workspace trust gating around mode changes (`prompt`/`strict` start
+  unknown workspaces in READ; `off` disables the gate)
 - keep sandbox reporting clear in startup, footer, and `/tools`
 - avoid advanced LLM-judge, escalation, privacy, ACP, subagents, or routing work
   during I3 unless a core safety defect requires it

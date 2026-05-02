@@ -26,6 +26,7 @@ import (
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
 	"github.com/nijaru/ion/internal/testutil"
+	ionworkspace "github.com/nijaru/ion/internal/workspace"
 )
 
 type stubBackend struct {
@@ -332,7 +333,7 @@ func TestShiftTabTogglesReadAndEditOnly(t *testing.T) {
 	}
 }
 
-func TestShiftTabIgnoresDeferredWorkspaceTrustGate(t *testing.T) {
+func TestShiftTabAllowsModeChangesWhenTrustStoreUnavailable(t *testing.T) {
 	model := readyModel(t).WithTrust(nil, false, "prompt")
 	model.Mode = session.ModeRead
 	sess := model.Model.Session.(*stubSession)
@@ -349,11 +350,11 @@ func TestShiftTabIgnoresDeferredWorkspaceTrustGate(t *testing.T) {
 		t.Fatal("expected Shift+Tab edit attempt to return a mode notice")
 	}
 	if _, ok := cmd().(localErrorMsg); ok {
-		t.Fatal("deferred workspace trust should not block mode changes")
+		t.Fatal("missing workspace trust store should not block mode changes")
 	}
 }
 
-func TestDeferredWorkspaceTrustAllowsEditAndAutoModes(t *testing.T) {
+func TestMissingWorkspaceTrustStoreAllowsEditAndAutoModes(t *testing.T) {
 	model := readyModel(t).WithTrust(nil, false, "prompt")
 	model.Mode = session.ModeRead
 
@@ -366,7 +367,7 @@ func TestDeferredWorkspaceTrustAllowsEditAndAutoModes(t *testing.T) {
 		t.Fatal("expected /edit command to return a notice")
 	}
 	if _, ok := cmd().(localErrorMsg); ok {
-		t.Fatal("deferred workspace trust should not block /edit")
+		t.Fatal("missing workspace trust store should not block /edit")
 	}
 
 	updated, cmd = model.handleCommand("/mode auto")
@@ -378,7 +379,7 @@ func TestDeferredWorkspaceTrustAllowsEditAndAutoModes(t *testing.T) {
 		t.Fatal("expected /mode auto command to return a notice")
 	}
 	if _, ok := cmd().(localErrorMsg); ok {
-		t.Fatal("deferred workspace trust should not block /mode auto")
+		t.Fatal("missing workspace trust store should not block /mode auto")
 	}
 
 	updated, cmd = model.handleCommand("/read")
@@ -388,6 +389,71 @@ func TestDeferredWorkspaceTrustAllowsEditAndAutoModes(t *testing.T) {
 	}
 	if cmd == nil {
 		t.Fatal("expected /read command to return a notice")
+	}
+}
+
+func TestWorkspaceTrustGateBlocksEditAndAutoModes(t *testing.T) {
+	model := readyModel(t).WithTrust(
+		ionworkspace.NewTrustStore(filepath.Join(t.TempDir(), "trusted.json")),
+		false,
+		"prompt",
+	)
+	model.Mode = session.ModeRead
+
+	updated, cmd := model.handleCommand("/edit")
+	model = updated
+	if model.Mode != session.ModeRead {
+		t.Fatalf("mode after blocked /edit = %v, want read", model.Mode)
+	}
+	if cmd == nil {
+		t.Fatal("expected /edit command to return an error")
+	}
+	if _, ok := cmd().(localErrorMsg); !ok {
+		t.Fatal("untrusted workspace should block /edit")
+	}
+
+	updated, cmd = model.handleCommand("/mode auto")
+	model = updated
+	if model.Mode != session.ModeRead {
+		t.Fatalf("mode after blocked /mode auto = %v, want read", model.Mode)
+	}
+	if cmd == nil {
+		t.Fatal("expected /mode auto command to return an error")
+	}
+	if _, ok := cmd().(localErrorMsg); !ok {
+		t.Fatal("untrusted workspace should block /mode auto")
+	}
+}
+
+func TestTrustCommandTrustsWorkspaceAndEnablesEditMode(t *testing.T) {
+	store := ionworkspace.NewTrustStore(filepath.Join(t.TempDir(), "trusted.json"))
+	model := readyModel(t).WithTrust(store, false, "prompt")
+	model.Mode = session.ModeRead
+	sess := model.Model.Session.(*stubSession)
+
+	updated, cmd := model.handleCommand("/trust")
+	model = updated
+	if cmd == nil {
+		t.Fatal("expected /trust command to return a notice")
+	}
+	if msg, ok := cmd().(localErrorMsg); ok {
+		t.Fatalf("/trust should succeed for prompt workspace trust: %v", msg.err)
+	}
+	if !model.App.TrustedWorkspace {
+		t.Fatal("workspace did not become trusted")
+	}
+	if model.Mode != session.ModeEdit {
+		t.Fatalf("mode after /trust = %v, want edit", model.Mode)
+	}
+	if sess.mode != session.ModeEdit {
+		t.Fatalf("session mode after /trust = %v, want edit", sess.mode)
+	}
+	trusted, err := store.IsTrusted(model.App.Workdir)
+	if err != nil {
+		t.Fatalf("load trust state: %v", err)
+	}
+	if !trusted {
+		t.Fatal("trust store did not persist workspace")
 	}
 }
 
@@ -3062,6 +3128,7 @@ func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 		"/tools",
 		"/cost",
 		"/mode [mode]",
+		"/trust [status]",
 		"/quit, /exit",
 	}
 	wantCommands = append(wantCommands,
@@ -3079,7 +3146,6 @@ func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 		}
 	}
 	for _, disabled := range []string{
-		"/trust [status]",
 		"/rewind <id>",
 		"/memory [query]",
 		"/mcp add <cmd>",
@@ -3109,7 +3175,6 @@ func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 func TestDeferredAdvancedCommandsAreDisabled(t *testing.T) {
 	model := readyModel(t)
 	for _, input := range []string{
-		"/trust status",
 		"/mcp add server",
 		"/rewind cp-1",
 		"/memory policy",
