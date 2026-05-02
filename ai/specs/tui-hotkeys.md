@@ -8,6 +8,7 @@ Source of truth for inline TUI key semantics.
 - `Alt+Enter`: insert newline
 - `Up` / `Down`: history only when the cursor is at the start/end boundary where recall makes sense
 - `Ctrl+P` / `Ctrl+N`: history with the same boundary-aware behavior as `Up` / `Down`
+- `Ctrl+X`: open the current composer buffer in `$VISUAL`, `$EDITOR`, or `vi`
 
 ## Safety
 - `Esc`: cancel a running turn. Otherwise it does nothing.

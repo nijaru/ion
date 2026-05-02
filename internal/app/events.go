@@ -54,6 +54,11 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		}
 	}
 
+	if msg.Keystroke() == "ctrl+x" || msg.String() == "\x18" {
+		m.clearPendingAction()
+		return m.openExternalEditor()
+	}
+
 	switch msg.String() {
 	case "ctrl+g":
 		m.clearPendingAction()
