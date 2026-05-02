@@ -21,6 +21,14 @@ Distilled architectural principles plus recent decision log.
 
 ## Recent Log
 
+### 2026-05-02 - Swarm view waits behind subagent context
+
+Ion should not build the alternate-screen swarm/operator view before default
+subagent registration is correct. The current near-term surface is inline
+Plane B subagent progress plus concise durable child breadcrumbs. Full swarm
+mode waits until `summary`, `fork`, and `none` context modes are implemented
+and child-session ownership is tested.
+
 ### 2026-05-02 - ChatGPT subscription is not ACP
 
 Current OpenAI Codex surfaces support ChatGPT-plan sign-in through Codex

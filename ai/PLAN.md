@@ -9,7 +9,8 @@ green native baseline. Canto stays closed unless Ion evidence proves a
 framework-owned defect.
 
 Active umbrella: none. `tk-mmcs` is closed.
-Active task: none. Next ready task is `tk-pwsl` - swarm-mode operator view.
+Active task: `tk-hz8p` - Subagents: implement explicit context modes before
+registration.
 
 ## Phases
 
@@ -167,9 +168,19 @@ ACP bridge correctness is no longer the active blocker.
     - outcome: keep ChatGPT/Codex hidden and deferred; no default
       `codex --acp` command; future support would be a Codex app-server bridge
       after a separate design pass
-18. Next - `tk-pwsl` - swarm mode alternate-screen operator view:
+18. Done - `tk-pwsl` - swarm mode alternate-screen operator view:
     - re-evaluate product fit before implementation
-    - keep it out of the main TUI until subagent/swarm primitives are stable
+    - outcome: keep full alternate-screen swarm mode deferred; current inline
+      Plane B subagent rows are the right near-term surface
+    - prerequisite for future swarm work is `tk-hz8p`
+19. Next - `tk-hz8p` - Subagents: implement explicit context modes before
+    registration:
+    - add model-visible `summary` / `fork` / `none` context selection to the
+      subagent boundary
+    - keep child events out of parent provider-visible history except through
+      the final returned result
+    - cover child replay, parent cancellation, tool-scope allowlists, and
+      context snapshot behavior before default registration
 
 ## I5+ Deferred Work
 
@@ -177,8 +188,8 @@ Do not reopen during the current cleanup/refactor stream unless directly needed
 for a core bug:
 
 - ACP host/client compatibility polish beyond the first headless-agent slice
-- ChatGPT/subscription bridge evaluation
-- subagents, memory/wiki, workflows, model routing
+- ChatGPT/subscription bridge implementation
+- memory/wiki, workflows, model routing
 - prompt cache/KV cache experiments
 - ripgo integration or merged edit-tool redesign
 

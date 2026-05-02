@@ -3,9 +3,9 @@
 Fast, lightweight terminal coding agent.
 
 **Phase:** I4 advanced integrations
-**Focus:** I4 ChatGPT subscription path closed
+**Focus:** subagent context modes before default registration
 **Active umbrella:** none - `tk-mmcs` is closed
-**Active task:** none - next ready item is `tk-pwsl` swarm operator view
+**Active task:** `tk-hz8p` - Subagents: implement explicit context modes before registration
 **Updated:** 2026-05-02
 
 ## Current Truth
@@ -115,10 +115,14 @@ Fast, lightweight terminal coding agent.
   There is no supported `codex --acp` command in the current CLI, so Ion no
   longer derives a default command for `chatgpt` or `codex` catalog entries.
   Canonical details are in `ai/specs/subscription-providers.md`.
+- `tk-pwsl` is closed as a design gate. Ion already has compact inline Plane B
+  subagent progress rows and durable child breadcrumbs, but a full
+  alternate-screen swarm/operator view waits until subagent registration and
+  child-session ownership are stable. The prerequisite is `tk-hz8p`.
 
 ## Next Action
 
-1. Start `tk-pwsl` and decide whether swarm/operator view is still relevant to
-   the current product roadmap before implementation.
+1. Start `tk-hz8p` and implement explicit `summary` / `fork` / `none`
+   subagent context modes before exposing the model-visible `subagent` tool.
 2. Keep one green slice per commit and avoid reopening Canto unless Ion tests
    expose a framework defect.

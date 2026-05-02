@@ -1,6 +1,6 @@
 # Swarm Mode And Inline Subagents
 
-Updated: 2026-04-26
+Updated: 2026-05-02
 
 ## Answer
 
@@ -17,10 +17,14 @@ The near-term direction is:
 - reserve an alternate-screen view for explicit orchestration or mission supervision later
 - do not replace inline chat with a dashboard
 
-Implementation note: the native Canto backend now exposes a synchronous
-`subagent` tool with built-in `explorer`, `reviewer`, and `worker` personas.
-This document remains the target for richer async/swarm UX beyond the current
-inline child-session path.
+Current implementation note: Ion already has inline Plane B subagent progress
+rows, concise durable child breadcrumbs, built-in `explorer`, `reviewer`, and
+`worker` personas, and Canto child-session hook points. The model-visible
+`subagent` tool is still not registered by default because context transfer is
+not explicit enough yet.
+
+The next prerequisite is explicit `summary` / `fork` / `none` context modes for
+child agents. Full alternate-screen swarm mode waits behind that contract.
 
 ## Product Boundary
 
@@ -56,9 +60,22 @@ Swarm mode is higher complexity and wants stable primitives underneath it:
 - retry and failure semantics
 - compact status surfaces in the inline TUI
 
-Until those are stable, the right move is to keep inline mode primary and let the swarm dashboard remain a design target.
+Until those are stable, the right move is to keep inline mode primary and let
+the swarm dashboard remain a design target.
 
 ## Inline Subagent Display
+
+### Current state
+
+Ion's TUI already has a small inline subagent display path:
+
+- live child progress stays in Plane B
+- at most three active rows render before a collapsed `+N more` summary
+- started/completed/failed child events can persist as concise breadcrumbs
+- child deltas stay ephemeral by default
+
+That is enough for the near-term inline product. It is not enough to expose
+subagents by default, because the child context contract is still missing.
 
 ### Where it belongs
 
@@ -266,19 +283,25 @@ Alternatives like `mission mode` or `ops view` can stay open for later naming re
 ### Do now
 
 - keep inline mode primary
-- stabilize the core inline agent loop and TUI before subagents
-- treat subagents as downstream of a feature-complete single-agent path
+- keep the current inline Plane B rows as the normal near-term display surface
+- implement and test explicit child context modes before default registration
 - keep swarm mode as a design target, not an implementation priority
 - keep this document as the target design for later subagent and swarm work
 - design title and summary generation as lightweight session metadata
 
 ### Defer
 
-- implementing inline subagent Plane B rows until child runtime semantics are stable
 - full alternate-screen swarm dashboard
 - spatial task board or mission grid
 - automatic main-agent wakeup on async child completion
 - transcript-level detailed child execution logs
+
+Tracked prerequisite: `tk-hz8p` - Subagents: implement explicit context modes
+before registration.
+
+Closed gate: `tk-pwsl` confirms the alternate-screen operator view is not the
+next implementation slice. Ion should finish context modes and default
+subagent registration before revisiting a full swarm surface.
 
 ## Files To Revisit During Implementation
 

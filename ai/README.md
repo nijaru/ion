@@ -7,6 +7,7 @@
 - [Tools and Modes](specs/tools-and-modes.md) - canonical native tool surface and mode behavior
 - [Instructions and Skills](specs/instructions-and-skills.md) - project instruction layering and deferred skill boundary
 - [Subagent Personas](specs/subagent-personas-and-routing.md) - deferred personas, context modes, and child-session gates
+- [Swarm Mode](specs/swarm-mode-and-inline-subagents.md) - inline subagent display and deferred operator-view boundary
 - [System Prompt](specs/system-prompt.md) - prompt-budget and model-facing tool guidance
 - [Status and Config](specs/status-and-config.md) - config, state, status line, and model metadata rules
 - [TUI Architecture](specs/tui-architecture.md) - TUI shell and rendering expectations

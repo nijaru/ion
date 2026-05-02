@@ -12,6 +12,9 @@ implemented and tested. A child agent that only receives ad hoc user-provided
 context is too easy for the model to misuse: it may assume the child sees the
 parent transcript when it does not.
 
+Active prerequisite: `tk-hz8p` - Subagents: implement explicit context modes
+before registration.
+
 Built-in personas remain the target shape:
 
 | Persona | Model slot | Tool scope | Purpose |
@@ -78,6 +81,11 @@ This intentionally stays small. Ion should not grow many specialized personas
 by default; generic explorer/reviewer/worker cover the useful split without
 forcing a complex delegation UI. More advanced swarms, worktrees, and async
 operator views stay downstream of the reliable inline solo loop.
+
+`tk-pwsl` closed the alternate-screen swarm/operator view as deferred. The
+normal near-term product surface is inline Plane B subagent visibility plus
+explicit context modes; a full operator view should not start until subagent
+registration and child-session ownership are boring.
 
 Near-term inline behavior should be conservative:
 
