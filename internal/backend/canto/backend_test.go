@@ -373,6 +373,20 @@ func TestLocalAPIRequestsKeepSystemMessagesLeading(t *testing.T) {
 	if len(calls) != 1 {
 		t.Fatalf("provider calls = %d, want 1", len(calls))
 	}
+	gotTools := specNames(calls[0].Tools)
+	wantTools := []string{
+		"bash",
+		"edit",
+		"glob",
+		"grep",
+		"list",
+		"multi_edit",
+		"read",
+		"write",
+	}
+	if strings.Join(gotTools, ",") != strings.Join(wantTools, ",") {
+		t.Fatalf("default provider tools = %#v, want %#v", gotTools, wantTools)
+	}
 	roles := make([]llm.Role, 0, len(calls[0].Messages))
 	for _, msg := range calls[0].Messages {
 		roles = append(roles, msg.Role)
@@ -537,8 +551,12 @@ func TestToolSurfaceFiltersReadModeTools(t *testing.T) {
 
 	b.SetMode(ionsession.ModeEdit)
 	surface = b.ToolSurface()
-	if surface.Count != 8 {
-		t.Fatalf("EDIT tool count = %d, want 8", surface.Count)
+	want = []string{"bash", "edit", "glob", "grep", "list", "multi_edit", "read", "write"}
+	if surface.Count != len(want) {
+		t.Fatalf("EDIT tool count = %d, want %d", surface.Count, len(want))
+	}
+	if strings.Join(surface.Names, ",") != strings.Join(want, ",") {
+		t.Fatalf("EDIT tool surface = %#v, want %#v", surface.Names, want)
 	}
 }
 
