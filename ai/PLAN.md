@@ -101,7 +101,9 @@ ACP bridge correctness is no longer the active blocker.
 4. Done - `tk-z1kk` - boundary-step steering mode. Queued follow-up remains
    default; `busy_input = "steer"` steers only during active tool calls and
    falls back to queue elsewhere. This also closes `tk-zxgq`.
-5. Later - typed thinking/provider translation.
+5. Done - `tk-369n` - typed thinking/provider translation foundation:
+   Canto exposes structured reasoning capabilities and Ion filters request
+   fields through those capabilities.
 
 ## I5+ Deferred Work
 

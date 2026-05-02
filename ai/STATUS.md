@@ -148,6 +148,16 @@ Fast, lightweight terminal coding agent.
   `go test ./internal/backend/canto ./internal/app ./internal/config ./internal/session -count=1 -timeout 180s`,
   `go test ./... -count=1 -timeout 300s`, and
   `go test -race ./cmd/ion ./internal/app ./internal/backend/canto ./internal/backend/canto/tools ./internal/storage -count=1 -timeout 300s`.
+- `tk-369n` is closed. Canto `8f92ed7` adds typed reasoning capability
+  metadata, drops unsupported effort/budget controls during request
+  preparation, stops generic OpenAI-compatible endpoints from inheriting OpenAI
+  reasoning params, and gives OpenAI/Anthropic model caps structured effort or
+  budget metadata. Ion imports that revision and filters `/thinking` request
+  fields through `SupportsReasoningEffort`.
+- Latest typed-thinking gates passed:
+  `go test ./internal/backend/canto ./cmd/ion ./internal/config -count=1 -timeout 180s`,
+  `go test ./... -count=1 -timeout 300s`, and
+  `go test -race ./cmd/ion ./internal/app ./internal/backend/canto ./internal/backend/canto/tools ./internal/storage -count=1 -timeout 300s`.
 
 ## Next Action
 

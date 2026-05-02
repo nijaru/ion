@@ -21,6 +21,14 @@ Distilled architectural principles plus recent decision log.
 
 ## Recent Log
 
+### 2026-05-02 - Thinking controls are capability-filtered
+
+Ion does not send reasoning/thinking request fields based on provider names.
+Canto exposes typed model capabilities for named efforts, disable support, and
+budget-backed thinking; Ion filters `/thinking` through those capabilities.
+Unknown or generic OpenAI-compatible endpoints default to no reasoning params
+unless explicitly configured.
+
 ### 2026-05-02 - Busy steering is tool-boundary only
 
 Queued follow-up stays the default busy-input behavior. Opt-in steering is
