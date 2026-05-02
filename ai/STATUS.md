@@ -5,7 +5,7 @@ Fast, lightweight terminal coding agent.
 **Phase:** I1 behavior-preserving Ion refactors
 **Focus:** Refactor the product shell from the full design while preserving the native baseline.
 **Active umbrella:** `tk-mmcs` - core parity plan and queue hygiene.
-**Active task:** `tk-7sna` - split file tools by responsibility.
+**Active task:** `tk-eyvq` - refactor CantoBackend lifecycle files.
 **Updated:** 2026-05-02
 
 ## Current Truth
@@ -47,18 +47,21 @@ Fast, lightweight terminal coding agent.
 - Latest CLI/config gates passed:
   `go test ./cmd/ion ./internal/config -count=1 -timeout 180s`,
   `go test ./... -count=1 -timeout 300s`, and the native race subset.
+- File tools are split by responsibility: common workspace/checkpoint helpers
+  remain in `file.go`, with read/write/edit/list implementations in focused
+  files.
+- Latest file-tool gates passed:
+  `go test ./internal/backend/canto/tools -count=1 -timeout 180s`,
+  `go test ./... -count=1 -timeout 300s`, and the native race subset.
 
 ## Next Action
 
-1. Start `tk-7sna` and split `internal/backend/canto/tools/file.go` by tool
-   responsibility.
-2. Preserve model-visible tool semantics and keep shared workspace-safe helpers
-   centralized.
-3. Run focused tool tests, then full deterministic and race gates for the
+1. Start `tk-eyvq` and split `internal/backend/canto/backend.go` by lifecycle.
+2. Preserve backend behavior and keep Canto framework assumptions out of Ion.
+3. Run focused backend tests, then full deterministic and race gates for the
    slice.
 
 ## Active Tasks
 
 - `tk-mmcs` - core parity plan and task queue hygiene.
 - `tk-eyvq` - refactor CantoBackend lifecycle files.
-- `tk-7sna` - split file tools by responsibility.
