@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"io"
+	"os"
+	"os/exec"
 	"slices"
 	"sync"
 	"testing"
@@ -350,6 +353,59 @@ func TestIonACPAgentSetSessionMode(t *testing.T) {
 	defer fakeSession.mu.Unlock()
 	if fakeSession.mode != ionsession.ModeYolo || !fakeSession.autoApproved {
 		t.Fatalf("mode = %v auto = %v, want yolo auto", fakeSession.mode, fakeSession.autoApproved)
+	}
+}
+
+func TestACPAgentFlagInitializesOverStdio(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("test executable: %v", err)
+	}
+	cmd := exec.Command(exe, "--agent")
+	cmd.Env = append(os.Environ(), "ION_TEST_MAIN=1", "HOME="+t.TempDir())
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatalf("stdin pipe: %v", err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatalf("stdout pipe: %v", err)
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start ion --agent: %v", err)
+	}
+	t.Cleanup(func() {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+	})
+
+	clientConn := acp.NewClientSideConnection(&acpTestClient{}, stdin, stdout)
+	resp, err := clientConn.Initialize(t.Context(), acp.InitializeRequest{
+		ProtocolVersion: acp.ProtocolVersionNumber,
+	})
+	if err != nil {
+		t.Fatalf("initialize ion --agent: %v\nstderr:\n%s", err, stderr.String())
+	}
+	if resp.AgentInfo == nil || resp.AgentInfo.Name != "ion" {
+		t.Fatalf("agent info = %#v, want ion", resp.AgentInfo)
+	}
+
+	_ = stdin.Close()
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("ion --agent wait: %v\nstderr:\n%s", err, stderr.String())
+		}
+	case <-time.After(2 * time.Second):
+		_ = cmd.Process.Kill()
+		t.Fatalf("ion --agent did not exit after stdio closed\nstderr:\n%s", stderr.String())
 	}
 }
 
