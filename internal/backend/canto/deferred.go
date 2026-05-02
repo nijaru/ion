@@ -45,5 +45,5 @@ func validateSubagentPersonaTools(personas []subagents.Persona, registry *tool.R
 }
 
 func (b *Backend) RegisterMCPServer(ctx context.Context, command string, args ...string) error {
-	return fmt.Errorf("MCP registration is deferred while Ion stabilizes the native agent loop")
+	return fmt.Errorf("MCP registration is deferred until the advanced integration phase")
 }

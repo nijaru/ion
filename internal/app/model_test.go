@@ -36,6 +36,7 @@ type stubBackend struct {
 	providerSet  bool
 	modelSet     bool
 	contextLimit int
+	surface      backend.ToolSurface
 }
 
 type compactBackend struct {
@@ -73,6 +74,9 @@ func (b stubBackend) ContextLimit() int {
 }
 
 func (b stubBackend) ToolSurface() backend.ToolSurface {
+	if b.surface.Count != 0 || b.surface.Sandbox != "" || len(b.surface.Names) > 0 {
+		return b.surface
+	}
 	return backend.ToolSurface{
 		Count:         2,
 		LazyThreshold: 20,
@@ -1672,6 +1676,32 @@ func TestStatusLineIncludesThinkingLevel(t *testing.T) {
 	}
 }
 
+func TestStatusLineIncludesSandboxPosture(t *testing.T) {
+	model := New(
+		stubBackend{
+			sess: &stubSession{events: make(chan session.Event)},
+			surface: backend.ToolSurface{
+				Count:   2,
+				Names:   []string{"bash", "read"},
+				Sandbox: "auto: seatbelt",
+			},
+		},
+		nil,
+		nil,
+		"/tmp/test",
+		"main",
+		"dev",
+		nil,
+	)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	model = updated.(Model)
+
+	line := ansi.Strip(model.statusLine())
+	if !strings.Contains(line, "sandbox auto: seatbelt") {
+		t.Fatalf("status line missing sandbox posture: %q", line)
+	}
+}
+
 func TestComposerLayoutResetsAfterClear(t *testing.T) {
 	model := readyModel(t)
 	model.Input.Composer.SetValue("one\ntwo\nthree")
@@ -3187,7 +3217,7 @@ func TestDeferredAdvancedCommandsAreDisabled(t *testing.T) {
 			err := localErrorFromMsg(t, cmd())
 			if !strings.Contains(
 				err.Error(),
-				"deferred while Ion stabilizes the native agent loop",
+				"deferred until its roadmap phase",
 			) {
 				t.Fatalf("%s error = %v", input, err)
 			}

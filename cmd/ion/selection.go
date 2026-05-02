@@ -168,7 +168,7 @@ func backendForProvider(provider string) (backend.Backend, error) {
 	}
 	if def.Runtime == providers.RuntimeACP {
 		return nil, fmt.Errorf(
-			"ACP providers are deferred while Ion stabilizes the native agent loop",
+			"ACP providers are deferred until the advanced integration phase",
 		)
 	}
 	if def.Runtime == providers.RuntimeNative {
