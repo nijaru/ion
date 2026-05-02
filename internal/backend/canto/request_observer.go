@@ -2,7 +2,6 @@ package canto
 
 import (
 	"context"
-	"slices"
 	"sync"
 
 	"github.com/nijaru/canto/llm"
@@ -51,49 +50,25 @@ func notifyProviderRequest(provider string, req *llm.Request) {
 	if observer == nil {
 		return
 	}
-	observer(provider, cloneProviderRequest(req))
+	observer(provider, req.Clone())
 }
 
 type requestObservingProvider struct {
 	llm.Provider
 }
 
-func (p requestObservingProvider) Generate(ctx context.Context, req *llm.Request) (*llm.Response, error) {
+func (p requestObservingProvider) Generate(
+	ctx context.Context,
+	req *llm.Request,
+) (*llm.Response, error) {
 	notifyProviderRequest(p.ID(), req)
 	return p.Provider.Generate(ctx, req)
 }
 
-func (p requestObservingProvider) Stream(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+func (p requestObservingProvider) Stream(
+	ctx context.Context,
+	req *llm.Request,
+) (llm.Stream, error) {
 	notifyProviderRequest(p.ID(), req)
 	return p.Provider.Stream(ctx, req)
-}
-
-func cloneProviderRequest(req *llm.Request) *llm.Request {
-	if req == nil {
-		return nil
-	}
-	cloned := *req
-	cloned.Messages = slices.Clone(req.Messages)
-	for i := range cloned.Messages {
-		cloned.Messages[i].ThinkingBlocks = slices.Clone(req.Messages[i].ThinkingBlocks)
-		cloned.Messages[i].Calls = slices.Clone(req.Messages[i].Calls)
-	}
-	cloned.Tools = slices.Clone(req.Tools)
-	if req.ResponseFormat != nil {
-		format := *req.ResponseFormat
-		format.Schema = cloneStringAnyMap(req.ResponseFormat.Schema)
-		cloned.ResponseFormat = &format
-	}
-	return &cloned
-}
-
-func cloneStringAnyMap(src map[string]any) map[string]any {
-	if len(src) == 0 {
-		return nil
-	}
-	dst := make(map[string]any, len(src))
-	for key, value := range src {
-		dst[key] = value
-	}
-	return dst
 }
