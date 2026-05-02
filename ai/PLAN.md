@@ -4,7 +4,7 @@ Updated: 2026-05-02
 
 ## Current Focus
 
-I1 boundary refactors are complete. Move into I2 shell polish from the cleaned
+I0-I2 are complete. Move into I3 safety/trust table stakes from the cleaned
 architecture. Canto stays closed unless Ion evidence proves a framework-owned
 defect.
 
@@ -16,8 +16,8 @@ Active umbrella: `tk-mmcs`.
 | --- | --- | --- |
 | I0 | Close dirty baseline and clean AI context | Done |
 | I1 | Refactor native core boundaries without behavior drift | Done |
-| I2 | Polish minimal TUI/CLI shell for daily use | Active |
-| I3 | Restore safety, trust, sandbox, and policy table stakes | Deferred |
+| I2 | Polish minimal TUI/CLI shell for daily use | Done |
+| I3 | Restore safety, trust, sandbox, and policy table stakes | Active |
 | I4 | Add advanced agent features: subagents, memory, skills, routing, ACP | Deferred |
 | I5 | Add eval-driven optimization and SOTA experiments | Deferred |
 
@@ -53,7 +53,9 @@ refactor.
 
 ## I2: Minimal Shell Polish
 
-Focus now that I1 slices are green:
+Status: complete.
+
+Covered:
 
 - transcript readability and markdown rendering quality
 - queued input and recall UX
@@ -61,14 +63,27 @@ Focus now that I1 slices are green:
 - `/resume`, `/session`, `/provider`, `/model`, and `/thinking` clarity
 - compact tool display defaults with full-output controls preserved
 
-## I3+ Deferred Work
+## I3: Safety, Trust, Sandbox, And Policy
+
+Active next scope:
+
+- review current mode/trust/sandbox/policy behavior against
+  `ai/specs/tools-and-modes.md`
+- remove stale `CoreLoopOnly` or stabilization-language leftovers from safety
+  paths
+- ensure read mode hides or blocks write/execute tools consistently at the
+  right boundary
+- keep sandbox reporting clear in startup, footer, and `/tools`
+- avoid advanced LLM-judge, escalation, privacy, ACP, subagents, or routing work
+  during I3 unless a core safety defect requires it
+
+## I4+ Deferred Work
 
 Do not reopen during the current cleanup/refactor stream unless directly needed
 for a core bug:
 
 - ACP bridge polish and Ion-as-ACP-agent mode
 - ChatGPT/subscription bridge evaluation
-- broad permissions, trust, policy, and sandbox redesign
 - subagents, memory/wiki, skills, workflows, model routing
 - prompt cache/KV cache experiments
 - ripgo integration or merged edit-tool redesign

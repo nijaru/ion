@@ -2,10 +2,10 @@
 
 Fast, lightweight terminal coding agent.
 
-**Phase:** I2 minimal shell polish
-**Focus:** Polish daily-use TUI/CLI shell behavior on top of the cleaned native baseline.
+**Phase:** I3 safety/trust table stakes
+**Focus:** Restore safety, trust, sandbox, and policy behavior on top of the stable native shell.
 **Active umbrella:** `tk-mmcs` - core parity plan and queue hygiene.
-**Active task:** `tk-wrci` - tools edit-surface research/design.
+**Active task:** choose/start the next I3 safety child under `tk-mmcs`.
 **Updated:** 2026-05-02
 
 ## Current Truth
@@ -68,15 +68,19 @@ Fast, lightweight terminal coding agent.
 - Edit-surface design is distilled into `ai/specs/tools-and-modes.md` and
   `ai/DECISIONS.md`: keep `write`, `edit`, and `multi_edit` through I2; defer a
   Pi-style merged `edit(edits[])` until there is eval evidence.
+- I2 final shell sweep passed against Fedora `local-api/qwen3.6:27b-uncensored`:
+  live request-history smoke verified tool call, persisted resume, and follow-up
+  provider history; tmux text capture covered fresh launch, `/tools`,
+  `/settings`, `/session`, queued input, bash display, `--continue`, and resumed
+  follow-up.
 
 ## Next Action
 
-1. Commit and close `tk-wrci`.
-2. Pick the next I2 shell polish slice under `tk-mmcs`.
-3. Prioritize tmux-visible issues: transcript/progress spacing, compact tool
-   output defaults, queued input recall, and slash/session command clarity.
+1. Commit and close `tk-7mxs`.
+2. Start the first I3 safety/trust task under `tk-mmcs`.
+3. Keep the scope narrow: mode/trust/sandbox/policy table stakes only, not ACP,
+   subagents, routing, skills, privacy, or advanced safety research.
 
 ## Active Tasks
 
 - `tk-mmcs` - core parity plan and task queue hygiene.
-- `tk-wrci` - tools edit-surface research/design.
