@@ -40,11 +40,21 @@ func (p *compactProvider) Models(ctx context.Context) ([]llm.Model, error) {
 	return nil, nil
 }
 
-func (p *compactProvider) CountTokens(ctx context.Context, model string, messages []llm.Message) (int, error) {
+func (p *compactProvider) CountTokens(
+	ctx context.Context,
+	model string,
+	messages []llm.Message,
+) (int, error) {
 	return 10_000, nil
 }
 
-func (p *compactProvider) Cost(ctx context.Context, model string, usage llm.Usage) float64 { return 0 }
+func (p *compactProvider) Cost(
+	ctx context.Context,
+	model string,
+	usage llm.Usage,
+) float64 {
+	return 0
+}
 
 func (p *compactProvider) Capabilities(model string) llm.Capabilities {
 	return llm.DefaultCapabilities()
@@ -65,8 +75,10 @@ func (p *reasoningCapProvider) Capabilities(model string) llm.Capabilities {
 	return caps
 }
 
-var transientStreamErr = errors.New("transient provider failure")
-var overflowErr = errors.New("context_length_exceeded")
+var (
+	transientStreamErr = errors.New("transient provider failure")
+	overflowErr        = errors.New("context_length_exceeded")
+)
 
 type retryProvider struct {
 	*ctesting.FauxProvider
@@ -124,7 +136,10 @@ type lateSuccessStream struct {
 	sent bool
 }
 
-func (p *lateSuccessStreamProvider) Stream(ctx context.Context, req *llm.Request) (llm.Stream, error) {
+func (p *lateSuccessStreamProvider) Stream(
+	ctx context.Context,
+	req *llm.Request,
+) (llm.Stream, error) {
 	p.streamCtx <- ctx
 	return &lateSuccessStream{ctx: ctx}, nil
 }
@@ -153,7 +168,11 @@ func (t *testTool) Execute(ctx context.Context, args string) (string, error) {
 	return "", nil
 }
 
-func (p *overflowRecoveryProvider) CountTokens(ctx context.Context, model string, messages []llm.Message) (int, error) {
+func (p *overflowRecoveryProvider) CountTokens(
+	ctx context.Context,
+	model string,
+	messages []llm.Message,
+) (int, error) {
 	return 10_000, nil
 }
 
@@ -231,7 +250,10 @@ func TestReasoningEffortProcessorDoesNotSendMaxYet(t *testing.T) {
 		t.Fatalf("process: %v", err)
 	}
 	if req.ReasoningEffort != "" {
-		t.Fatalf("reasoning effort = %q, want empty until provider-specific max mapping exists", req.ReasoningEffort)
+		t.Fatalf(
+			"reasoning effort = %q, want empty until provider-specific max mapping exists",
+			req.ReasoningEffort,
+		)
 	}
 }
 
@@ -282,7 +304,13 @@ func TestLocalAPIRequestsKeepSystemMessagesLeading(t *testing.T) {
 	b := New()
 	b.SetStore(store)
 	b.SetSession(storageSession)
-	b.SetConfig(&config.Config{Provider: "local-api", Model: "model-a", Endpoint: "http://localhost:8080/v1"})
+	b.SetConfig(
+		&config.Config{
+			Provider: "local-api",
+			Model:    "model-a",
+			Endpoint: "http://localhost:8080/v1",
+		},
+	)
 	if err := b.Open(ctx); err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
@@ -337,7 +365,13 @@ func TestSubmitTurnPreservesProviderInSessionMetadata(t *testing.T) {
 	b := New()
 	b.SetStore(store)
 	b.SetSession(storageSession)
-	b.SetConfig(&config.Config{Provider: "local-api", Model: "model-a", Endpoint: "http://localhost:8080/v1"})
+	b.SetConfig(
+		&config.Config{
+			Provider: "local-api",
+			Model:    "model-a",
+			Endpoint: "http://localhost:8080/v1",
+		},
+	)
 	if err := b.Open(ctx); err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
@@ -379,7 +413,13 @@ func TestSubmitTurnMaterializesLazySession(t *testing.T) {
 	b := New()
 	b.SetStore(store)
 	b.SetSession(storageSession)
-	b.SetConfig(&config.Config{Provider: "local-api", Model: "model-a", Endpoint: "http://localhost:8080/v1"})
+	b.SetConfig(
+		&config.Config{
+			Provider: "local-api",
+			Model:    "model-a",
+			Endpoint: "http://localhost:8080/v1",
+		},
+	)
 	if err := b.Open(ctx); err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
@@ -440,7 +480,13 @@ func TestSubmitTurnUsesCallerContext(t *testing.T) {
 	b := New()
 	b.SetStore(store)
 	b.SetSession(storageSession)
-	b.SetConfig(&config.Config{Provider: "local-api", Model: "model-a", Endpoint: "http://localhost:8080/v1"})
+	b.SetConfig(
+		&config.Config{
+			Provider: "local-api",
+			Model:    "model-a",
+			Endpoint: "http://localhost:8080/v1",
+		},
+	)
 	if err := b.Open(ctx); err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
@@ -473,7 +519,12 @@ func TestSubmitTurnCancelSuppressesLateAssistant(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new canto store: %v", err)
 	}
-	storageSession, err := store.OpenSession(ctx, "/tmp/ion-late-cancel", "local-api/model-a", "main")
+	storageSession, err := store.OpenSession(
+		ctx,
+		"/tmp/ion-late-cancel",
+		"local-api/model-a",
+		"main",
+	)
 	if err != nil {
 		t.Fatalf("open session: %v", err)
 	}
@@ -491,7 +542,13 @@ func TestSubmitTurnCancelSuppressesLateAssistant(t *testing.T) {
 	b := New()
 	b.SetStore(store)
 	b.SetSession(storageSession)
-	b.SetConfig(&config.Config{Provider: "local-api", Model: "model-a", Endpoint: "http://localhost:8080/v1"})
+	b.SetConfig(
+		&config.Config{
+			Provider: "local-api",
+			Model:    "model-a",
+			Endpoint: "http://localhost:8080/v1",
+		},
+	)
 	if err := b.Open(ctx); err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
@@ -539,7 +596,12 @@ func TestSubmitTurnRejectsConcurrentTurn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new canto store: %v", err)
 	}
-	storageSession, err := store.OpenSession(ctx, "/tmp/ion-concurrent", "local-api/model-a", "main")
+	storageSession, err := store.OpenSession(
+		ctx,
+		"/tmp/ion-concurrent",
+		"local-api/model-a",
+		"main",
+	)
 	if err != nil {
 		t.Fatalf("open session: %v", err)
 	}
@@ -557,7 +619,13 @@ func TestSubmitTurnRejectsConcurrentTurn(t *testing.T) {
 	b := New()
 	b.SetStore(store)
 	b.SetSession(storageSession)
-	b.SetConfig(&config.Config{Provider: "local-api", Model: "model-a", Endpoint: "http://localhost:8080/v1"})
+	b.SetConfig(
+		&config.Config{
+			Provider: "local-api",
+			Model:    "model-a",
+			Endpoint: "http://localhost:8080/v1",
+		},
+	)
 	if err := b.Open(ctx); err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
@@ -900,12 +968,12 @@ func TestValidateSubagentPersonaToolsFailsClosed(t *testing.T) {
 	}
 }
 
-func TestRegisterMCPServerDisabledDuringCoreLoopStabilization(t *testing.T) {
+func TestRegisterMCPServerIsDeferred(t *testing.T) {
 	b := New()
 
 	err := b.RegisterMCPServer(t.Context(), "server")
-	if err == nil || !strings.Contains(err.Error(), "MCP registration is disabled") {
-		t.Fatalf("RegisterMCPServer error = %v, want disabled error", err)
+	if err == nil || !strings.Contains(err.Error(), "MCP registration is deferred") {
+		t.Fatalf("RegisterMCPServer error = %v, want deferred error", err)
 	}
 }
 
@@ -959,6 +1027,9 @@ func TestCrossProviderHandoffPreservesPromptTruth(t *testing.T) {
 		t.Fatalf("submit first turn: %v", err)
 	}
 	waitForTurnFinished(t, first.Events())
+	if err := first.Close(); err != nil {
+		t.Fatalf("close first backend: %v", err)
+	}
 
 	resumedSession, err := store.ResumeSession(ctx, storageSession.ID())
 	if err != nil {
@@ -1058,7 +1129,13 @@ func TestResumedToolSessionSendsValidFollowUpHistory(t *testing.T) {
 	first := New()
 	first.SetStore(store)
 	first.SetSession(storageSession)
-	first.SetConfig(&config.Config{Provider: "local-api", Model: "model-a", Endpoint: "http://localhost:8080/v1"})
+	first.SetConfig(
+		&config.Config{
+			Provider: "local-api",
+			Model:    "model-a",
+			Endpoint: "http://localhost:8080/v1",
+		},
+	)
 	first.SetMode(ionsession.ModeYolo)
 	if err := first.Open(ctx); err != nil {
 		t.Fatalf("open first backend: %v", err)
@@ -1081,7 +1158,13 @@ func TestResumedToolSessionSendsValidFollowUpHistory(t *testing.T) {
 	second := New()
 	second.SetStore(store)
 	second.SetSession(resumedSession)
-	second.SetConfig(&config.Config{Provider: "local-api", Model: "model-a", Endpoint: "http://localhost:8080/v1"})
+	second.SetConfig(
+		&config.Config{
+			Provider: "local-api",
+			Model:    "model-a",
+			Endpoint: "http://localhost:8080/v1",
+		},
+	)
 	second.SetMode(ionsession.ModeYolo)
 	if err := second.Resume(ctx, storageSession.ID()); err != nil {
 		t.Fatalf("resume backend: %v", err)
@@ -1139,7 +1222,12 @@ func TestResumedToolSessionSendsValidFollowUpHistory(t *testing.T) {
 		t.Fatalf("follow-up request missing matching tool result: %#v", req.Messages)
 	}
 	if toolResultIndex < toolCallIndex {
-		t.Fatalf("tool result appears before tool call: call=%d result=%d messages=%#v", toolCallIndex, toolResultIndex, req.Messages)
+		t.Fatalf(
+			"tool result appears before tool call: call=%d result=%d messages=%#v",
+			toolCallIndex,
+			toolResultIndex,
+			req.Messages,
+		)
 	}
 }
 
@@ -1180,7 +1268,13 @@ func TestSubmitTurnToolFailurePersistsForFollowUp(t *testing.T) {
 	b := New()
 	b.SetStore(store)
 	b.SetSession(storageSession)
-	b.SetConfig(&config.Config{Provider: "local-api", Model: "model-a", Endpoint: "http://localhost:8080/v1"})
+	b.SetConfig(
+		&config.Config{
+			Provider: "local-api",
+			Model:    "model-a",
+			Endpoint: "http://localhost:8080/v1",
+		},
+	)
 	b.SetMode(ionsession.ModeYolo)
 	if err := b.Open(ctx); err != nil {
 		t.Fatalf("open backend: %v", err)
@@ -1207,7 +1301,10 @@ func TestSubmitTurnToolFailurePersistsForFollowUp(t *testing.T) {
 	}
 	followUpRequest := calls[2]
 	if !requestHasMessage(followUpRequest.Messages, llm.RoleAssistant, "handled tool failure") {
-		t.Fatalf("follow-up request missing post-tool assistant reply: %#v", followUpRequest.Messages)
+		t.Fatalf(
+			"follow-up request missing post-tool assistant reply: %#v",
+			followUpRequest.Messages,
+		)
 	}
 	if !requestHasMessage(followUpRequest.Messages, llm.RoleTool, "exit status 7") {
 		t.Fatalf("follow-up request missing failed tool result: %#v", followUpRequest.Messages)
@@ -1260,7 +1357,13 @@ func TestProviderHistoryExcludesIonDisplayOnlyEvents(t *testing.T) {
 	b := New()
 	b.SetStore(store)
 	b.SetSession(storageSession)
-	b.SetConfig(&config.Config{Provider: "local-api", Model: "model-a", Endpoint: "http://localhost:8080/v1"})
+	b.SetConfig(
+		&config.Config{
+			Provider: "local-api",
+			Model:    "model-a",
+			Endpoint: "http://localhost:8080/v1",
+		},
+	)
 	if err := b.Open(ctx); err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
@@ -1353,11 +1456,20 @@ func TestCompactUsesManualCompactionHelper(t *testing.T) {
 		t.Fatalf("entries: %v", err)
 	}
 	if !entryExists(entries, ionsession.System, "<conversation_summary>") {
-		t.Fatalf("expected compacted effective history to include conversation summary, got %#v", entries)
+		t.Fatalf(
+			"expected compacted effective history to include conversation summary, got %#v",
+			entries,
+		)
 	}
 	if provider.lastRequest == nil || len(provider.lastRequest.Messages) < 2 ||
-		!strings.Contains(provider.lastRequest.Messages[1].Content, "current user goal and immediate next step") {
-		t.Fatalf("summarizer prompt did not include Ion compaction guidance: %#v", provider.lastRequest)
+		!strings.Contains(
+			provider.lastRequest.Messages[1].Content,
+			"current user goal and immediate next step",
+		) {
+		t.Fatalf(
+			"summarizer prompt did not include Ion compaction guidance: %#v",
+			provider.lastRequest,
+		)
 	}
 
 	cantoStore, ok := store.(interface{ Canto() *csession.SQLiteStore })
@@ -1442,7 +1554,12 @@ func TestSubmitTurnProviderErrorLeavesBackendReusable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new canto store: %v", err)
 	}
-	storageSession, err := store.OpenSession(ctx, "/tmp/ion-provider-error", "openai/model-a", "main")
+	storageSession, err := store.OpenSession(
+		ctx,
+		"/tmp/ion-provider-error",
+		"openai/model-a",
+		"main",
+	)
 	if err != nil {
 		t.Fatalf("open session: %v", err)
 	}
@@ -1733,8 +1850,13 @@ func TestSubmitTurnProactivelyCompactsBeforeOverflow(t *testing.T) {
 	b := New()
 	b.SetStore(store)
 	b.SetSession(&proactiveUsageSession{
-		id:       storageSession.ID(),
-		meta:     storage.Metadata{ID: storageSession.ID(), CWD: "/tmp/ion-proactive", Model: "model-a", Branch: "main"},
+		id: storageSession.ID(),
+		meta: storage.Metadata{
+			ID:     storageSession.ID(),
+			CWD:    "/tmp/ion-proactive",
+			Model:  "model-a",
+			Branch: "main",
+		},
 		usageIn:  72,
 		usageOut: 8,
 	})
@@ -1782,7 +1904,12 @@ func TestSubmitTurnStopsWhenProactiveCompactionFails(t *testing.T) {
 		t.Fatalf("new canto store: %v", err)
 	}
 
-	storageSession, err := store.OpenSession(ctx, "/tmp/ion-proactive-fail", "openai/model-a", "main")
+	storageSession, err := store.OpenSession(
+		ctx,
+		"/tmp/ion-proactive-fail",
+		"openai/model-a",
+		"main",
+	)
 	if err != nil {
 		t.Fatalf("open session: %v", err)
 	}
@@ -1811,8 +1938,13 @@ func TestSubmitTurnStopsWhenProactiveCompactionFails(t *testing.T) {
 	b := New()
 	b.SetStore(store)
 	b.SetSession(&proactiveUsageSession{
-		id:       storageSession.ID(),
-		meta:     storage.Metadata{ID: storageSession.ID(), CWD: "/tmp/ion-proactive-fail", Model: "model-a", Branch: "main"},
+		id: storageSession.ID(),
+		meta: storage.Metadata{
+			ID:     storageSession.ID(),
+			CWD:    "/tmp/ion-proactive-fail",
+			Model:  "model-a",
+			Branch: "main",
+		},
 		usageIn:  72,
 		usageOut: 8,
 	})

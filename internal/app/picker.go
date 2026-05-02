@@ -13,8 +13,10 @@ import (
 	"github.com/nijaru/ion/internal/providers"
 )
 
-var listModels = registry.ListModels
-var listModelsForConfig = registry.ListModelsForConfig
+var (
+	listModels          = registry.ListModels
+	listModelsForConfig = registry.ListModelsForConfig
+)
 
 const pickerPageSize = 8
 
@@ -82,7 +84,8 @@ func modelItemsForProvider(cfg *config.Config) ([]pickerItem, error) {
 	for _, model := range models {
 		metrics := modelMetrics(model)
 		search := pickerSearchIndex(model.ID, model.ID, "", "", metrics)
-		if model.InputPriceKnown && model.OutputPriceKnown && model.InputPrice == 0 && model.OutputPrice == 0 {
+		if model.InputPriceKnown && model.OutputPriceKnown && model.InputPrice == 0 &&
+			model.OutputPrice == 0 {
 			search = append(search, pickerSearchField{value: "free", weight: 12})
 		}
 		items = append(items, pickerItem{
@@ -113,23 +116,31 @@ func providerItem(label, value string) pickerItem {
 }
 
 func buildProviderItem(cfg *config.Config, def providers.Definition) pickerItem {
-	detail, tone := providerDetail(cfg, def)
+	detail, tone, ready := providerDetail(cfg, def)
+	group := providers.GroupName(def)
+	if !ready && strings.HasPrefix(detail, "Set ") {
+		group = "Needs setup"
+	}
 	return pickerItem{
 		Label:  def.DisplayName,
 		Value:  def.ID,
 		Detail: detail,
-		Group:  providers.GroupName(def),
+		Group:  group,
 		Tone:   tone,
-		Search: pickerSearchIndex(def.DisplayName, def.ID, detail, providers.GroupName(def), nil),
+		Search: pickerSearchIndex(def.DisplayName, def.ID, detail, group, nil),
 	}
 }
 
-func providerDetail(cfg *config.Config, def providers.Definition) (string, pickerTone) {
-	detail, ready := providers.CredentialStateContext(context.Background(), cfgForProvider(cfg, def.ID), def)
+func providerDetail(cfg *config.Config, def providers.Definition) (string, pickerTone, bool) {
+	detail, ready := providers.CredentialStateContext(
+		context.Background(),
+		cfgForProvider(cfg, def.ID),
+		def,
+	)
 	if ready || !strings.HasPrefix(detail, "Set ") {
-		return detail, pickerToneDefault
+		return detail, pickerToneDefault, ready
 	}
-	return detail, pickerToneWarn
+	return detail, pickerToneWarn, ready
 }
 
 func providerSortRank(cfg *config.Config, provider string) int {
@@ -137,7 +148,20 @@ func providerSortRank(cfg *config.Config, provider string) int {
 	if !ok {
 		return 99
 	}
-	return providers.SortRank(cfgForProvider(cfg, def.ID), def)
+	rank := providers.SortRank(cfgForProvider(cfg, def.ID), def)
+	if rank != 3 {
+		return rank
+	}
+	switch def.Kind {
+	case providers.KindDirect:
+		return 3
+	case providers.KindRouter:
+		return 4
+	case providers.KindCustom:
+		return 5
+	default:
+		return rank
+	}
 }
 
 func providerCredentialSet(provider string) bool {
@@ -145,7 +169,11 @@ func providerCredentialSet(provider string) bool {
 	if !ok {
 		return false
 	}
-	_, ready := providers.CredentialStateContext(context.Background(), cfgForProvider(nil, def.ID), def)
+	_, ready := providers.CredentialStateContext(
+		context.Background(),
+		cfgForProvider(nil, def.ID),
+		def,
+	)
 	return ready
 }
 
@@ -356,7 +384,10 @@ func searchFieldScore(query, candidate string) (int, bool) {
 	}
 }
 
-func pickerSearchIndex(label, value, detail, group string, metrics *pickerMetrics) []pickerSearchField {
+func pickerSearchIndex(
+	label, value, detail, group string,
+	metrics *pickerMetrics,
+) []pickerSearchField {
 	fields := []pickerSearchField{
 		{value: normalizeSearchQuery(label), weight: 0},
 		{value: normalizeSearchQuery(value), weight: 5},

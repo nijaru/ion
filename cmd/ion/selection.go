@@ -7,18 +7,20 @@ import (
 	"strings"
 
 	"github.com/nijaru/ion/internal/backend"
-	"github.com/nijaru/ion/internal/backend/acp"
 	"github.com/nijaru/ion/internal/backend/canto"
 	"github.com/nijaru/ion/internal/backend/registry"
 	"github.com/nijaru/ion/internal/config"
-	"github.com/nijaru/ion/internal/features"
 	"github.com/nijaru/ion/internal/providers"
 	"github.com/nijaru/ion/internal/storage"
 )
 
 var (
-	errNoProviderConfigured = errors.New("No provider configured. Use /provider. Set ION_PROVIDER or --provider for scripts.")
-	errNoModelConfigured    = errors.New("No model configured. Use /model. Set ION_MODEL or --model for scripts.")
+	errNoProviderConfigured = errors.New(
+		"No provider configured. Use /provider. Set ION_PROVIDER or --provider for scripts.",
+	)
+	errNoModelConfigured = errors.New(
+		"No model configured. Use /model. Set ION_MODEL or --model for scripts.",
+	)
 )
 
 func resolveStartupConfig(cfg *config.Config) error {
@@ -45,7 +47,10 @@ func resolveStartupConfig(cfg *config.Config) error {
 	return nil
 }
 
-func applyCLIConfigOverrides(cfg *config.Config, providerOverride, modelOverride, thinkingOverride string) {
+func applyCLIConfigOverrides(
+	cfg *config.Config,
+	providerOverride, modelOverride, thinkingOverride string,
+) {
 	if cfg == nil {
 		return
 	}
@@ -86,7 +91,12 @@ func clearProviderScopedPresets(cfg *config.Config) {
 	cfg.SummaryReasoningEffort = ""
 }
 
-func startupRuntimeConfig(ctx context.Context, cfg *config.Config, sessionID string, explicitRuntimeOverride bool) (*config.Config, string, error) {
+func startupRuntimeConfig(
+	ctx context.Context,
+	cfg *config.Config,
+	sessionID string,
+	explicitRuntimeOverride bool,
+) (*config.Config, string, error) {
 	preset := "primary"
 	if !explicitRuntimeOverride && strings.TrimSpace(sessionID) == "" {
 		if state, err := config.LoadState(); err == nil && state.ActivePreset != nil {
@@ -121,7 +131,12 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func applySessionConfigFromMetadata(ctx context.Context, store storage.Store, sessionID string, cfg *config.Config) error {
+func applySessionConfigFromMetadata(
+	ctx context.Context,
+	store storage.Store,
+	sessionID string,
+	cfg *config.Config,
+) error {
 	if store == nil || cfg == nil || strings.TrimSpace(sessionID) == "" {
 		return nil
 	}
@@ -152,10 +167,9 @@ func backendForProvider(provider string) (backend.Backend, error) {
 		return nil, fmt.Errorf("unsupported provider %q", provider)
 	}
 	if def.Runtime == providers.RuntimeACP {
-		if features.CoreLoopOnly {
-			return nil, fmt.Errorf("%s", features.Disabled("ACP providers"))
-		}
-		return acp.New(), nil
+		return nil, fmt.Errorf(
+			"ACP providers are deferred while Ion stabilizes the native agent loop",
+		)
 	}
 	if def.Runtime == providers.RuntimeNative {
 		return canto.New(), nil

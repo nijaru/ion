@@ -14,14 +14,11 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
-	"github.com/nijaru/canto/workspace"
 	"github.com/nijaru/ion/internal/app"
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/config"
-	"github.com/nijaru/ion/internal/features"
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
-	"github.com/nijaru/ion/internal/telemetry"
 	ionworkspace "github.com/nijaru/ion/internal/workspace"
 )
 
@@ -40,7 +37,11 @@ func main() {
 	providerFlag := flag.String("provider", "", "Provider to use")
 	modelFlag := flag.String("model", "", "Model to use")
 	modelShortFlag := flag.String("m", "", "Model to use")
-	thinkingFlag := flag.String("thinking", "", "Thinking effort: auto, off, minimal, low, medium, high, xhigh")
+	thinkingFlag := flag.String(
+		"thinking",
+		"",
+		"Thinking effort: auto, off, minimal, low, medium, high, xhigh",
+	)
 	modeFlag := flag.String("mode", "", "Permission mode: read, edit, or auto")
 	yoloFlag := flag.Bool("yolo", false, "Start in AUTO mode (alias for --mode auto)")
 	printFlag := flag.Bool("print", false, "Print response and exit (use with --prompt or stdin)")
@@ -69,19 +70,6 @@ func main() {
 		strings.TrimSpace(os.Getenv("ION_PROVIDER")) != "" ||
 		strings.TrimSpace(os.Getenv("ION_MODEL")) != ""
 	applyCLIConfigOverrides(cfg, providerOverride, modelOverride, *thinkingFlag)
-	shutdownTelemetry := func(context.Context) error { return nil }
-	if !features.CoreLoopOnly {
-		shutdownTelemetry, err = telemetry.Setup(context.Background(), cfg)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "failed to initialize telemetry: %v\n", err)
-			os.Exit(1)
-		}
-	}
-	defer func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = shutdownTelemetry(ctx)
-	}()
 	mode, err := startupMode(cfg, *modeFlag, *yoloFlag)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
@@ -96,14 +84,6 @@ func main() {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to load workspace trust: %v\n", err)
 		os.Exit(1)
-	}
-	var escalation *workspace.EscalationConfig
-	if !features.CoreLoopOnly {
-		escalation, err = loadEscalationConfig(cwd)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "failed to load ESCALATE.md: %v\n", err)
-			os.Exit(1)
-		}
 	}
 
 	printRequested, prompt, output, err := resolvePrintFlags(
@@ -169,7 +149,12 @@ func main() {
 			os.Exit(1)
 		}
 	}
-	runtimeCfg, activePreset, err := startupRuntimeConfig(ctx, cfg, sessionID, explicitRuntimeOverride)
+	runtimeCfg, activePreset, err := startupRuntimeConfig(
+		ctx,
+		cfg,
+		sessionID,
+		explicitRuntimeOverride,
+	)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to resolve runtime config: %v\n", err)
 		os.Exit(1)
@@ -229,7 +214,15 @@ func main() {
 		}
 	}
 	switcher := func(ctx context.Context, cfg *config.Config, sessionID string) (backend.Backend, session.AgentSession, storage.Session, error) {
-		switchedBackend, switchedSession, err := openRuntime(ctx, store, cwd, currentBranch(), cfg, acpCommandOverride, sessionID)
+		switchedBackend, switchedSession, err := openRuntime(
+			ctx,
+			store,
+			cwd,
+			currentBranch(),
+			cfg,
+			acpCommandOverride,
+			sessionID,
+		)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -240,7 +233,6 @@ func main() {
 		WithConfigForRuntime(cfg, runtimeCfg).
 		WithActivePreset(activePreset).
 		WithMode(mode).
-		WithEscalation(escalation).
 		WithTrust(trustStore, trusted, cfg.WorkspaceTrust)
 	if openResumePicker {
 		model = model.WithSessionPicker()
@@ -269,7 +261,11 @@ func main() {
 	}
 }
 
-func closeRuntimeHandles(agent session.AgentSession, sess storage.Session, store storage.Store) error {
+func closeRuntimeHandles(
+	agent session.AgentSession,
+	sess storage.Session,
+	store storage.Store,
+) error {
 	var errs []error
 	if agent != nil {
 		errs = append(errs, agent.Close())
@@ -361,7 +357,22 @@ func ionFlagName(arg string) (string, bool, bool) {
 
 func ionKnownFlag(name string) bool {
 	switch name {
-	case "continue", "c", "resume", "r", "provider", "model", "m", "thinking", "mode", "yolo", "print", "prompt", "p", "output", "json", "timeout":
+	case "continue",
+		"c",
+		"resume",
+		"r",
+		"provider",
+		"model",
+		"m",
+		"thinking",
+		"mode",
+		"yolo",
+		"print",
+		"prompt",
+		"p",
+		"output",
+		"json",
+		"timeout":
 		return true
 	default:
 		return false
@@ -377,7 +388,11 @@ func ionFlagNeedsValue(name string) bool {
 	}
 }
 
-func recentSessionForContinue(ctx context.Context, store storage.Store, cwd string) (*storage.SessionInfo, error) {
+func recentSessionForContinue(
+	ctx context.Context,
+	store storage.Store,
+	cwd string,
+) (*storage.SessionInfo, error) {
 	sessions, err := store.ListSessions(ctx, cwd)
 	if err != nil {
 		return nil, err
@@ -418,26 +433,11 @@ func startupSessionID(
 	return recent.ID, nil
 }
 
-func loadWorkspaceTrust(cwd string, cfg *config.Config) (*ionworkspace.TrustStore, bool, string, error) {
-	if features.CoreLoopOnly {
-		return nil, true, "", nil
-	}
-	if cfg != nil && config.ResolveWorkspaceTrust(cfg.WorkspaceTrust) == "off" {
-		return nil, true, "", nil
-	}
-	path, err := ionworkspace.DefaultTrustPath()
-	if err != nil {
-		return nil, false, "", err
-	}
-	store := ionworkspace.NewTrustStore(path)
-	trusted, err := store.IsTrusted(cwd)
-	if err != nil {
-		return nil, false, "", err
-	}
-	if trusted {
-		return store, true, "Workspace: trusted.", nil
-	}
-	return store, false, "Workspace: not trusted. READ mode active. Run /trust to enable edits.", nil
+func loadWorkspaceTrust(
+	cwd string,
+	cfg *config.Config,
+) (*ionworkspace.TrustStore, bool, string, error) {
+	return nil, true, "", nil
 }
 
 func applyWorkspaceTrustModeGate(
@@ -446,16 +446,7 @@ func applyWorkspaceTrustModeGate(
 	printRequested bool,
 	explicitModeRequested bool,
 ) session.Mode {
-	if features.CoreLoopOnly {
-		return mode
-	}
-	if trusted || mode == session.ModeRead {
-		return mode
-	}
-	if printRequested && explicitModeRequested {
-		return mode
-	}
-	return session.ModeRead
+	return mode
 }
 
 func startupToolLine(b backend.Backend) string {
@@ -478,7 +469,14 @@ func startupToolLine(b backend.Backend) string {
 	return strings.Join(parts, " • ")
 }
 
-func openRuntime(ctx context.Context, store storage.Store, cwd, branch string, cfg *config.Config, acpCommandOverride string, sessionID string) (backend.Backend, storage.Session, error) {
+func openRuntime(
+	ctx context.Context,
+	store storage.Store,
+	cwd, branch string,
+	cfg *config.Config,
+	acpCommandOverride string,
+	sessionID string,
+) (backend.Backend, storage.Session, error) {
 	runtimeCfg := *cfg
 	if err := resolveStartupConfig(&runtimeCfg); err != nil {
 		b := backend.NewUnconfigured(&runtimeCfg, err)
@@ -500,15 +498,6 @@ func openRuntime(ctx context.Context, store storage.Store, cwd, branch string, c
 	}
 	b.SetStore(store)
 	b.SetConfig(&runtimeCfg)
-	if !features.CoreLoopOnly {
-		if policyConfig, err := loadPolicyConfig(&runtimeCfg); err != nil {
-			return nil, nil, err
-		} else if policyConfig != nil {
-			if policyBackend, ok := b.(backend.PolicyConfigurer); ok {
-				policyBackend.SetPolicyConfig(policyConfig)
-			}
-		}
-	}
 
 	if isACPProvider(runtimeCfg.Provider) {
 		command := strings.TrimSpace(acpCommandOverride)
@@ -543,7 +532,9 @@ func openRuntime(ctx context.Context, store storage.Store, cwd, branch string, c
 
 	modelName := sessionModelName(runtimeCfg.Provider, runtimeCfg.Model)
 	if modelName == "" {
-		return nil, nil, fmt.Errorf("provider and model must be set (e.g. provider=\"openrouter\" model=\"openai/gpt-5.4\")")
+		return nil, nil, fmt.Errorf(
+			"provider and model must be set (e.g. provider=\"openrouter\" model=\"openai/gpt-5.4\")",
+		)
 	}
 
 	sess := storage.NewLazySession(store, cwd, modelName, branch)
@@ -574,7 +565,11 @@ func loadPolicyConfig(cfg *config.Config) (*backend.PolicyConfig, error) {
 	return policyConfig, nil
 }
 
-func syncSessionMetadata(ctx context.Context, store storage.Store, sessionID, modelName, branch string) error {
+func syncSessionMetadata(
+	ctx context.Context,
+	store storage.Store,
+	sessionID, modelName, branch string,
+) error {
 	if store == nil || sessionID == "" {
 		return nil
 	}

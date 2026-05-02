@@ -110,7 +110,7 @@ func (v *Verify) Execute(ctx context.Context, args string) (string, error) {
 	wg.Wait()
 
 	passed := err == nil
-	outStr := output.String()
+	outStr := limitToolOutput(output.String())
 	metric := "Exit Code 0"
 	if !passed {
 		metric = fmt.Sprintf("Error: %v", err)

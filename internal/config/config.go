@@ -39,6 +39,9 @@ type Config struct {
 	SubagentsPath          string            `toml:"subagents_path,omitempty"`
 	SessionRetentionDays   int               `toml:"session_retention_days,omitempty"`
 	ToolVerbosity          string            `toml:"tool_verbosity,omitempty"`
+	ReadOutput             string            `toml:"read_output,omitempty"`
+	WriteOutput            string            `toml:"write_output,omitempty"`
+	BashOutput             string            `toml:"bash_output,omitempty"`
 	ThinkingVerbosity      string            `toml:"thinking_verbosity,omitempty"`
 }
 
@@ -108,7 +111,8 @@ func applyEnvOverrides(cfg *Config) {
 
 	if strings.TrimSpace(providerOverride) != "" {
 		provider := strings.ToLower(strings.TrimSpace(providerOverride))
-		if provider != strings.ToLower(strings.TrimSpace(cfg.Provider)) && strings.TrimSpace(modelOverride) == "" {
+		if provider != strings.ToLower(strings.TrimSpace(cfg.Provider)) &&
+			strings.TrimSpace(modelOverride) == "" {
 			cfg.Model = ""
 		}
 		cfg.Provider = provider
@@ -145,6 +149,9 @@ func normalizeConfig(cfg *Config) {
 	cfg.SubagentsPath = expandUserPath(strings.TrimSpace(cfg.SubagentsPath))
 	cfg.WorkspaceTrust = ResolveWorkspaceTrust(cfg.WorkspaceTrust)
 	cfg.ToolVerbosity = normalizeVerbosity(cfg.ToolVerbosity)
+	cfg.ReadOutput = normalizeReadOutput(cfg.ReadOutput)
+	cfg.WriteOutput = normalizeWriteOutput(cfg.WriteOutput)
+	cfg.BashOutput = normalizeBashOutput(cfg.BashOutput)
 	cfg.ThinkingVerbosity = normalizeVerbosity(cfg.ThinkingVerbosity)
 	if cfg.ContextLimit < 0 {
 		cfg.ContextLimit = 0
@@ -277,6 +284,9 @@ func Save(cfg *Config) error {
 		out.SessionRetentionDays = DefaultSessionRetentionDays
 	}
 	out.ToolVerbosity = normalizeVerbosity(out.ToolVerbosity)
+	out.ReadOutput = normalizeReadOutput(out.ReadOutput)
+	out.WriteOutput = normalizeWriteOutput(out.WriteOutput)
+	out.BashOutput = normalizeBashOutput(out.BashOutput)
 	out.ThinkingVerbosity = normalizeVerbosity(out.ThinkingVerbosity)
 
 	data, err := toml.Marshal(&out)
@@ -492,6 +502,57 @@ func normalizeVerbosity(value string) string {
 	case "collapsed":
 		return "collapsed"
 	case "hidden":
+		return "hidden"
+	default:
+		return ""
+	}
+}
+
+func NormalizeReadOutput(value string) string {
+	return normalizeReadOutput(value)
+}
+
+func normalizeReadOutput(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "show", "full":
+		return "full"
+	case "single", "summary", "line", "combined", "grouped", "collapsed":
+		return "summary"
+	case "hidden", "hide", "none":
+		return "hidden"
+	default:
+		return ""
+	}
+}
+
+func NormalizeWriteOutput(value string) string {
+	return normalizeWriteOutput(value)
+}
+
+func normalizeWriteOutput(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "show", "diff", "full":
+		return "diff"
+	case "single", "summary", "call", "collapsed":
+		return "summary"
+	case "hidden", "hide", "none":
+		return "hidden"
+	default:
+		return ""
+	}
+}
+
+func NormalizeBashOutput(value string) string {
+	return normalizeBashOutput(value)
+}
+
+func normalizeBashOutput(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "show", "full", "verbose":
+		return "full"
+	case "truncated", "summary", "collapsed":
+		return "summary"
+	case "hidden", "hide", "none", "command", "call":
 		return "hidden"
 	default:
 		return ""

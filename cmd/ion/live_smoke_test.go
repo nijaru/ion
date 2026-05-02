@@ -34,6 +34,8 @@ func TestLiveSmokeTurnAndToolCall(t *testing.T) {
 		"ION_SMOKE_PROMPT",
 		"Use the bash tool exactly once to run `echo ion-smoke`, then reply with the single word `done`.",
 	)
+	expectedCommand := smokeExpectedToolCommand(t, prompt)
+	expectedOutput := smokeExpectedToolOutput(t, expectedCommand)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	t.Cleanup(cancel)
@@ -71,7 +73,14 @@ func TestLiveSmokeTurnAndToolCall(t *testing.T) {
 		}
 		t.Fatalf("open runtime: %v", err)
 	}
-	t.Logf("opened runtime: backend=%s provider=%s model=%s status=%q session=%s", b.Name(), b.Provider(), b.Model(), b.Bootstrap().Status, sess.ID())
+	t.Logf(
+		"opened runtime: backend=%s provider=%s model=%s status=%q session=%s",
+		b.Name(),
+		b.Provider(),
+		b.Model(),
+		b.Bootstrap().Status,
+		sess.ID(),
+	)
 	agent := b.Session()
 	t.Cleanup(func() {
 		_ = agent.Close()
@@ -184,11 +193,26 @@ loop:
 
 	resumedCfg := cfg
 	t.Log("opening runtime against resumed session")
-	resumedBackend, resumedSess, err := openRuntime(ctx, store, cwd, "smoke", &resumedCfg, "", sess.ID())
+	resumedBackend, resumedSess, err := openRuntime(
+		ctx,
+		store,
+		cwd,
+		"smoke",
+		&resumedCfg,
+		"",
+		sess.ID(),
+	)
 	if err != nil {
 		t.Fatalf("resume runtime: %v", err)
 	}
-	t.Logf("resumed runtime: backend=%s provider=%s model=%s status=%q session=%s", resumedBackend.Name(), resumedBackend.Provider(), resumedBackend.Model(), resumedBackend.Bootstrap().Status, resumedSess.ID())
+	t.Logf(
+		"resumed runtime: backend=%s provider=%s model=%s status=%q session=%s",
+		resumedBackend.Name(),
+		resumedBackend.Provider(),
+		resumedBackend.Model(),
+		resumedBackend.Bootstrap().Status,
+		resumedSess.ID(),
+	)
 	t.Cleanup(func() {
 		if resumedBackend != nil && resumedBackend.Session() != nil {
 			_ = resumedBackend.Session().Close()
@@ -209,7 +233,7 @@ loop:
 	if sawTool {
 		t.Fatal("resume follow-up should not require a tool call")
 	}
-	assertResumeProviderHistory(t, requests, prompt, resumePrompt)
+	assertResumeProviderHistory(t, requests, prompt, resumePrompt, expectedCommand, expectedOutput)
 	if !strings.Contains(strings.ToLower(agentText), "continued") {
 		t.Logf(
 			"resume follow-up agent text = %q, but provider request contained prior tool history; treating as model/provider semantic miss",
@@ -239,7 +263,15 @@ loop:
 	switchCfg.Provider = switchProvider
 	switchCfg.Model = switchModel
 	t.Logf("opening switched runtime: provider=%s model=%s", switchProvider, switchModel)
-	switchedBackend, switchedSess, err := openRuntime(ctx, store, cwd, "smoke", &switchCfg, "", sess.ID())
+	switchedBackend, switchedSess, err := openRuntime(
+		ctx,
+		store,
+		cwd,
+		"smoke",
+		&switchCfg,
+		"",
+		sess.ID(),
+	)
 	if err != nil {
 		t.Fatalf("open switched runtime: %v", err)
 	}
@@ -256,7 +288,7 @@ loop:
 	if sawTool {
 		t.Fatal("swap phase should not require a tool call")
 	}
-	assertResumeProviderHistory(t, requests, prompt, switchPrompt)
+	assertResumeProviderHistory(t, requests, prompt, switchPrompt, expectedCommand, expectedOutput)
 	if !strings.Contains(strings.ToLower(agentText), "continued") {
 		t.Logf(
 			"swap agent text = %q, but provider request contained prior tool history; treating as model/provider semantic miss",
@@ -292,6 +324,54 @@ func smokeEnv(name, defaultValue string) string {
 	return defaultValue
 }
 
+func smokeExpectedToolCommand(t *testing.T, prompt string) string {
+	t.Helper()
+
+	if command := smokeEnv("ION_SMOKE_EXPECTED_COMMAND", ""); command != "" {
+		return command
+	}
+	start := strings.Index(prompt, "`")
+	if start < 0 {
+		t.Fatalf(
+			"smoke prompt %q does not contain a backtick-quoted bash command; set ION_SMOKE_EXPECTED_COMMAND",
+			prompt,
+		)
+	}
+	rest := prompt[start+1:]
+	end := strings.Index(rest, "`")
+	if end < 0 {
+		t.Fatalf(
+			"smoke prompt %q does not contain a closing backtick; set ION_SMOKE_EXPECTED_COMMAND",
+			prompt,
+		)
+	}
+	command := strings.TrimSpace(rest[:end])
+	if command == "" {
+		t.Fatal("smoke prompt contains an empty bash command")
+	}
+	return command
+}
+
+func smokeExpectedToolOutput(t *testing.T, command string) string {
+	t.Helper()
+
+	if output := smokeEnv("ION_SMOKE_EXPECTED_OUTPUT", ""); output != "" {
+		return output
+	}
+	parts := strings.Split(command, ";")
+	for i := len(parts) - 1; i >= 0; i-- {
+		part := strings.TrimSpace(parts[i])
+		if value, ok := strings.CutPrefix(part, "echo "); ok {
+			return strings.Trim(strings.TrimSpace(value), `"'`)
+		}
+	}
+	t.Fatalf(
+		"cannot infer expected output from smoke command %q; set ION_SMOKE_EXPECTED_OUTPUT",
+		command,
+	)
+	return ""
+}
+
 func isLiveSmokeUnavailable(err error) bool {
 	if err == nil {
 		return false
@@ -309,7 +389,13 @@ func isLiveSmokeUnavailable(err error) bool {
 	return false
 }
 
-func runSmokeTurn(ctx context.Context, t *testing.T, agent session.AgentSession, prompt string, requireTool bool) (string, bool) {
+func runSmokeTurn(
+	ctx context.Context,
+	t *testing.T,
+	agent session.AgentSession,
+	prompt string,
+	requireTool bool,
+) (string, bool) {
 	t.Helper()
 
 	var (
@@ -447,7 +533,14 @@ func (r *liveRequestRecorder) summary() string {
 	return b.String()
 }
 
-func assertResumeProviderHistory(t *testing.T, requests *liveRequestRecorder, firstPrompt, resumePrompt string) {
+func assertResumeProviderHistory(
+	t *testing.T,
+	requests *liveRequestRecorder,
+	firstPrompt,
+	resumePrompt,
+	expectedCommand,
+	expectedOutput string,
+) {
 	t.Helper()
 
 	req, ok := requests.findRequestWithUser(resumePrompt)
@@ -461,27 +554,46 @@ func assertResumeProviderHistory(t *testing.T, requests *liveRequestRecorder, fi
 
 	firstUser := messageIndex(req.Messages, llm.RoleUser, firstPrompt, 0)
 	if firstUser < 0 {
-		t.Fatalf("resume provider request missing first user prompt %q; request roles: %s", firstPrompt, requestRoles(req.Messages))
+		t.Fatalf(
+			"resume provider request missing first user prompt %q; request roles: %s",
+			firstPrompt,
+			requestRoles(req.Messages),
+		)
 	}
 
-	toolCall, toolCallID := toolCallIndex(req.Messages, "bash", "echo ion-smoke", firstUser+1)
+	toolCall, toolCallID := toolCallIndex(req.Messages, "bash", expectedCommand, firstUser+1)
 	if toolCall < 0 {
-		t.Fatalf("resume provider request missing bash tool call for ion-smoke; request roles: %s", requestRoles(req.Messages))
+		t.Fatalf(
+			"resume provider request missing bash tool call for %q; request roles: %s",
+			expectedCommand,
+			requestRoles(req.Messages),
+		)
 	}
 
-	toolResult := toolResultIndex(req.Messages, toolCallID, "ion-smoke", toolCall+1)
+	toolResult := toolResultIndex(req.Messages, toolCallID, expectedOutput, toolCall+1)
 	if toolResult < 0 {
-		t.Fatalf("resume provider request missing matching ion-smoke tool result for %q; request roles: %s", toolCallID, requestRoles(req.Messages))
+		t.Fatalf(
+			"resume provider request missing matching %q tool result for %q; request roles: %s",
+			expectedOutput,
+			toolCallID,
+			requestRoles(req.Messages),
+		)
 	}
 
 	assistant := assistantContentIndex(req.Messages, toolResult+1)
 	if assistant < 0 {
-		t.Fatalf("resume provider request missing final assistant message after tool result; request roles: %s", requestRoles(req.Messages))
+		t.Fatalf(
+			"resume provider request missing final assistant message after tool result; request roles: %s",
+			requestRoles(req.Messages),
+		)
 	}
 
 	resumeUser := messageIndex(req.Messages, llm.RoleUser, resumePrompt, assistant+1)
 	if resumeUser < 0 {
-		t.Fatalf("resume provider request missing follow-up prompt after prior history; request roles: %s", requestRoles(req.Messages))
+		t.Fatalf(
+			"resume provider request missing follow-up prompt after prior history; request roles: %s",
+			requestRoles(req.Messages),
+		)
 	}
 	t.Logf(
 		"resume provider request verified: first_user=%d tool_call=%d tool_result=%d assistant=%d resume_user=%d",
@@ -530,7 +642,8 @@ func toolResultIndex(messages []llm.Message, toolCallID, contentNeedle string, s
 		if messages[i].Role != llm.RoleTool {
 			continue
 		}
-		if messages[i].ToolID == toolCallID && strings.Contains(messages[i].Content, contentNeedle) {
+		if messages[i].ToolID == toolCallID &&
+			strings.Contains(messages[i].Content, contentNeedle) {
 			return i
 		}
 	}

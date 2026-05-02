@@ -104,7 +104,7 @@ type Read struct {
 func (r *Read) Spec() llm.Spec {
 	return llm.Spec{
 		Name:        "read",
-		Description: "Read file contents. Returns the full file or a specific line range (use offset/limit for large files).",
+		Description: "Read file contents with line numbers. Returns the full file or a specific line range (use offset/limit for large files).",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -157,19 +157,38 @@ func (r *Read) Execute(ctx context.Context, args string) (string, error) {
 		return "", err
 	}
 
-	lines := strings.Split(string(content), "\n")
-	if input.Limit > 0 {
-		end := input.Offset + input.Limit
-		if end > len(lines) {
-			end = len(lines)
-		}
-		if input.Offset < len(lines) {
-			return strings.Join(lines[input.Offset:end], "\n"), nil
-		}
-		return "", nil
+	return limitToolOutput(numberedLines(string(content), input.Offset, input.Limit)), nil
+}
+
+func numberedLines(content string, offset, limit int) string {
+	if content == "" {
+		return ""
 	}
 
-	return string(content), nil
+	lines := strings.Split(content, "\n")
+	if strings.HasSuffix(content, "\n") && len(lines) > 0 {
+		lines = lines[:len(lines)-1]
+	}
+	if offset >= len(lines) {
+		return ""
+	}
+	end := len(lines)
+	if limit > 0 {
+		end = min(offset+limit, len(lines))
+	}
+
+	var b strings.Builder
+	for i, line := range lines[offset:end] {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		if offset+i == 0 {
+			line = strings.TrimPrefix(line, "\ufeff")
+		}
+		line = strings.TrimSuffix(line, "\r")
+		fmt.Fprintf(&b, "%6d\t%s", offset+i+1, line)
+	}
+	return b.String()
 }
 
 // Write tool (formerly write_file)
@@ -222,14 +241,19 @@ func (w *Write) Execute(ctx context.Context, args string) (string, error) {
 		return "", err
 	}
 
-	if err := root.MkdirAll(filepath.Dir(relPath), 0755); err != nil {
+	if err := root.MkdirAll(filepath.Dir(relPath), 0o755); err != nil {
 		return "", err
 	}
 
-	if err := root.WriteFile(relPath, []byte(input.Content), 0644); err != nil {
+	if err := root.WriteFile(relPath, []byte(input.Content), 0o644); err != nil {
 		return "", err
 	}
-	return appendCheckpointID(fmt.Sprintf("Successfully wrote %d bytes to %s", len(input.Content), input.FilePath), checkpointID), nil
+	return limitToolOutput(
+		appendCheckpointID(
+			fmt.Sprintf("Successfully wrote %d bytes to %s", len(input.Content), input.FilePath),
+			checkpointID,
+		),
+	), nil
 }
 
 // Edit tool
@@ -260,6 +284,10 @@ func (e *Edit) Spec() llm.Spec {
 					"type":        "boolean",
 					"description": "Replace all occurrences (default: false, requires unique match)",
 				},
+				"expected_replacements": map[string]any{
+					"type":        "integer",
+					"description": "Optional exact number of occurrences expected. Use with replace_all for broad replacements.",
+				},
 			},
 			"required": []string{"file_path", "old_string", "new_string"},
 		},
@@ -272,6 +300,7 @@ func (e *Edit) Execute(ctx context.Context, args string) (string, error) {
 		OldString  string `json:"old_string"`
 		NewString  string `json:"new_string"`
 		ReplaceAll bool   `json:"replace_all"`
+		Expected   int    `json:"expected_replacements"`
 	}
 	if err := json.Unmarshal([]byte(args), &input); err != nil {
 		return "", err
@@ -296,20 +325,23 @@ func (e *Edit) Execute(ctx context.Context, args string) (string, error) {
 	}
 
 	strContent := string(content)
-	count := strings.Count(strContent, input.OldString)
-	if count == 0 {
-		return "", fmt.Errorf("old_string not found in file")
-	}
-
-	if !input.ReplaceAll && count > 1 {
-		return "", fmt.Errorf("old_string is not unique in file, found %d occurrences. Use replace_all: true to replace all.", count)
+	oldString, newString := matchEditStrings(strContent, input.OldString, input.NewString)
+	count, err := replacementCount(
+		input.FilePath,
+		strContent,
+		oldString,
+		input.ReplaceAll,
+		input.Expected,
+	)
+	if err != nil {
+		return "", err
 	}
 
 	var newContent string
 	if input.ReplaceAll {
-		newContent = strings.Replace(strContent, input.OldString, input.NewString, -1)
+		newContent = strings.Replace(strContent, oldString, newString, -1)
 	} else {
-		newContent = strings.Replace(strContent, input.OldString, input.NewString, 1)
+		newContent = strings.Replace(strContent, oldString, newString, 1)
 	}
 
 	checkpointID, err := e.checkpointPaths(ctx, input.FilePath)
@@ -317,12 +349,22 @@ func (e *Edit) Execute(ctx context.Context, args string) (string, error) {
 		return "", err
 	}
 
-	if err := root.WriteFile(relPath, []byte(newContent), 0644); err != nil {
+	if err := root.WriteFile(relPath, []byte(newContent), 0o644); err != nil {
 		return "", err
 	}
 
 	diff := udiff.Unified("a/"+input.FilePath, "b/"+input.FilePath, strContent, newContent)
-	return appendCheckpointID(fmt.Sprintf("Successfully replaced %d occurrence(s) in %s\n\n%s", count, input.FilePath, diff), checkpointID), nil
+	return limitToolOutput(
+		appendCheckpointID(
+			fmt.Sprintf(
+				"Successfully replaced %d occurrence(s) in %s\n\n%s",
+				count,
+				input.FilePath,
+				diff,
+			),
+			checkpointID,
+		),
+	), nil
 }
 
 // MultiEdit tool
@@ -335,6 +377,7 @@ type EditOperation struct {
 	OldString  string `json:"old_string"`
 	NewString  string `json:"new_string"`
 	ReplaceAll bool   `json:"replace_all"`
+	Expected   int    `json:"expected_replacements"`
 }
 
 func (m *MultiEdit) Spec() llm.Spec {
@@ -364,6 +407,10 @@ func (m *MultiEdit) Spec() llm.Spec {
 							"replace_all": map[string]any{
 								"type":        "boolean",
 								"description": "Replace all occurrences (default: false, requires unique match).",
+							},
+							"expected_replacements": map[string]any{
+								"type":        "integer",
+								"description": "Optional exact number of occurrences expected. Use with replace_all for broad replacements.",
 							},
 						},
 						"required": []string{"file_path", "old_string", "new_string"},
@@ -415,20 +462,23 @@ func (m *MultiEdit) Execute(ctx context.Context, args string) (string, error) {
 		}
 
 		strContent := contents[relPath]
-		count := strings.Count(strContent, edit.OldString)
-		if count == 0 {
-			return "", fmt.Errorf("old_string not found in %s", edit.FilePath)
-		}
-
-		if !edit.ReplaceAll && count > 1 {
-			return "", fmt.Errorf("old_string is not unique in %s, found %d occurrences. Provide more context.", edit.FilePath, count)
+		oldString, newString := matchEditStrings(strContent, edit.OldString, edit.NewString)
+		_, err = replacementCount(
+			edit.FilePath,
+			strContent,
+			oldString,
+			edit.ReplaceAll,
+			edit.Expected,
+		)
+		if err != nil {
+			return "", err
 		}
 
 		// Apply edit to our in-memory copy
 		if edit.ReplaceAll {
-			contents[relPath] = strings.Replace(strContent, edit.OldString, edit.NewString, -1)
+			contents[relPath] = strings.Replace(strContent, oldString, newString, -1)
 		} else {
-			contents[relPath] = strings.Replace(strContent, edit.OldString, edit.NewString, 1)
+			contents[relPath] = strings.Replace(strContent, oldString, newString, 1)
 		}
 	}
 
@@ -451,7 +501,7 @@ func (m *MultiEdit) Execute(ctx context.Context, args string) (string, error) {
 
 	for relPath, content := range contents {
 		tmpPath := relPath + ".tmp"
-		if err := root.WriteFile(tmpPath, []byte(content), 0644); err != nil {
+		if err := root.WriteFile(tmpPath, []byte(content), 0o644); err != nil {
 			writeErrs = append(writeErrs, fmt.Errorf("failed to write temp %s: %w", tmpPath, err))
 			break
 		}
@@ -479,7 +529,17 @@ func (m *MultiEdit) Execute(ctx context.Context, args string) (string, error) {
 		}
 	}
 
-	return appendCheckpointID(fmt.Sprintf("Successfully applied %d edit(s) across %d file(s)\n\n%s", len(input.Edits), len(contents), diffs.String()), checkpointID), nil
+	return limitToolOutput(
+		appendCheckpointID(
+			fmt.Sprintf(
+				"Successfully applied %d edit(s) across %d file(s)\n\n%s",
+				len(input.Edits),
+				len(contents),
+				diffs.String(),
+			),
+			checkpointID,
+		),
+	), nil
 }
 
 func validateEditStrings(oldString, newString string) error {
@@ -490,6 +550,75 @@ func validateEditStrings(oldString, newString string) error {
 		return fmt.Errorf("new_string must differ from old_string")
 	}
 	return nil
+}
+
+func matchEditStrings(content, oldString, newString string) (string, string) {
+	if strings.Contains(content, "\r\n") && !strings.Contains(oldString, "\r\n") {
+		oldString = strings.ReplaceAll(oldString, "\n", "\r\n")
+		newString = strings.ReplaceAll(newString, "\n", "\r\n")
+	}
+	if strings.HasPrefix(content, "\ufeff"+oldString) && !strings.HasPrefix(oldString, "\ufeff") {
+		oldString = "\ufeff" + oldString
+		newString = "\ufeff" + newString
+	}
+	return oldString, newString
+}
+
+func replacementCount(
+	filePath, content, oldString string,
+	replaceAll bool,
+	expected int,
+) (int, error) {
+	if expected < 0 {
+		return 0, fmt.Errorf("%s: expected_replacements must be non-negative", filePath)
+	}
+	count := strings.Count(content, oldString)
+	lines := occurrenceLineSummary(content, oldString)
+	if count == 0 {
+		return 0, fmt.Errorf("old_string not found in %s", filePath)
+	}
+	if expected > 0 && count != expected {
+		return 0, fmt.Errorf(
+			"old_string expected %d replacement(s) in %s, found %d%s",
+			expected,
+			filePath,
+			count,
+			lines,
+		)
+	}
+	if !replaceAll && count > 1 {
+		return 0, fmt.Errorf(
+			"old_string is not unique in %s, found %d occurrences%s. Provide more context or set replace_all with expected_replacements.",
+			filePath,
+			count,
+			lines,
+		)
+	}
+	return count, nil
+}
+
+func occurrenceLineSummary(content, needle string) string {
+	if needle == "" {
+		return ""
+	}
+	var lines []string
+	lineNumber := 1
+	for _, line := range strings.Split(content, "\n") {
+		remaining := line
+		for {
+			idx := strings.Index(remaining, needle)
+			if idx < 0 {
+				break
+			}
+			lines = append(lines, fmt.Sprintf("%d", lineNumber))
+			remaining = remaining[idx+len(needle):]
+		}
+		lineNumber++
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return " at line(s) " + strings.Join(lines, ", ")
 }
 
 func appendCheckpointID(message, id string) string {
@@ -554,5 +683,5 @@ func (l *List) Execute(ctx context.Context, args string) (string, error) {
 		}
 		res.WriteString(fmt.Sprintf("%s%s\n", e.Name(), suffix))
 	}
-	return res.String(), nil
+	return limitToolOutput(res.String()), nil
 }

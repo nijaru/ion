@@ -45,7 +45,11 @@ func (b *Bash) Execute(ctx context.Context, args string) (string, error) {
 	return b.ExecuteStreaming(ctx, args, nil)
 }
 
-func (b *Bash) ExecuteStreaming(ctx context.Context, args string, emit func(string) error) (string, error) {
+func (b *Bash) ExecuteStreaming(
+	ctx context.Context,
+	args string,
+	emit func(string) error,
+) (string, error) {
 	var input struct {
 		Command string `json:"command"`
 	}
@@ -129,7 +133,7 @@ func (b *Bash) ExecuteStreaming(ctx context.Context, args string, emit func(stri
 
 	err = cmd.Wait()
 	wg.Wait()
-	res := output.String()
+	res := limitToolOutput(output.String())
 
 	if err != nil {
 		if res == "" {

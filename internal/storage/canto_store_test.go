@@ -2,6 +2,8 @@ package storage
 
 import (
 	"context"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -310,7 +312,8 @@ func TestCantoStoreAppendReturnsPersistenceErrors(t *testing.T) {
 	store := storeAny.(*cantoStore)
 
 	ctx := context.Background()
-	sess, err := store.OpenSession(ctx, "/tmp/ion-storage-test", "model-a", "main")
+	workdir := filepath.Join(t.TempDir(), "repo")
+	sess, err := store.OpenSession(ctx, workdir, "model-a", "main")
 	if err != nil {
 		t.Fatalf("open session: %v", err)
 	}
@@ -333,7 +336,8 @@ func TestCantoStoreEntriesMapToolMessages(t *testing.T) {
 	store := storeAny.(*cantoStore)
 
 	ctx := context.Background()
-	sess, err := store.OpenSession(ctx, "/tmp/ion-storage-test", "model-a", "main")
+	workdir := filepath.Join(t.TempDir(), "repo")
+	sess, err := store.OpenSession(ctx, workdir, "model-a", "main")
 	if err != nil {
 		t.Fatalf("open session: %v", err)
 	}
@@ -376,10 +380,12 @@ func TestCantoStoreEntriesMapToolMessages(t *testing.T) {
 	if entries[0].Role != ionsession.User || entries[0].Content != "hello" {
 		t.Fatalf("user entry = %#v", entries[0])
 	}
-	if entries[1].Role != ionsession.Agent || entries[1].Content != "hi there" || entries[1].Reasoning != "reasoning" {
+	if entries[1].Role != ionsession.Agent || entries[1].Content != "hi there" ||
+		entries[1].Reasoning != "reasoning" {
 		t.Fatalf("agent entry = %#v", entries[1])
 	}
-	if entries[2].Role != ionsession.Tool || entries[2].Title != "Bash" || entries[2].Content != "tool output" {
+	if entries[2].Role != ionsession.Tool || entries[2].Title != "Bash" ||
+		entries[2].Content != "tool output" {
 		t.Fatalf("tool entry = %#v", entries[2])
 	}
 }
@@ -393,7 +399,8 @@ func TestCantoStoreEntriesPreserveRoutineToolOutput(t *testing.T) {
 	store := storeAny.(*cantoStore)
 
 	ctx := context.Background()
-	sess, err := store.OpenSession(ctx, "/tmp/ion-storage-test", "model-a", "main")
+	workdir := filepath.Join(t.TempDir(), "repo")
+	sess, err := store.OpenSession(ctx, workdir, "model-a", "main")
 	if err != nil {
 		t.Fatalf("open session: %v", err)
 	}
@@ -417,7 +424,7 @@ func TestCantoStoreEntriesPreserveRoutineToolOutput(t *testing.T) {
 	if err := cantoSess.Append(ctx, csession.NewToolStartedEvent(sess.ID(), csession.ToolStartedData{
 		Tool:      "read",
 		ID:        "tool-read",
-		Arguments: `{"file_path":"AGENTS.md"}`,
+		Arguments: `{"file_path":` + strconv.Quote(filepath.Join(workdir, "AGENTS.md")) + `}`,
 	})); err != nil {
 		t.Fatalf("append read start: %v", err)
 	}
@@ -441,7 +448,8 @@ func TestCantoStoreEntriesPreserveRoutineToolOutput(t *testing.T) {
 		t.Fatalf("user entry = %#v", entries[0])
 	}
 	wantContent := strings.Join([]string{"line 1", "line 2", "line 3"}, "\n")
-	if entries[1].Role != ionsession.Tool || entries[1].Title != "Read AGENTS.md" || entries[1].Content != wantContent {
+	if entries[1].Role != ionsession.Tool || entries[1].Title != "Read(AGENTS.md)" ||
+		entries[1].Content != wantContent {
 		t.Fatalf("read entry = %#v", entries[1])
 	}
 }
@@ -495,7 +503,7 @@ func TestCantoStoreEntriesRecoverToolResultFromLifecycle(t *testing.T) {
 		t.Fatalf("entries length = %d, want 1: %#v", len(entries), entries)
 	}
 	if entries[0].Role != ionsession.Tool ||
-		entries[0].Title != "Read AGENTS.md" ||
+		entries[0].Title != "Read(AGENTS.md)" ||
 		entries[0].Content != "recovered contents" {
 		t.Fatalf("recovered tool entry = %#v", entries[0])
 	}
@@ -611,7 +619,8 @@ func TestCantoStoreEntriesPreserveReasoningOnlyAgentMessages(t *testing.T) {
 	if len(entries) != 1 {
 		t.Fatalf("entries length = %d, want 1", len(entries))
 	}
-	if entries[0].Role != ionsession.Agent || entries[0].Content != "" || entries[0].Reasoning != reasoning {
+	if entries[0].Role != ionsession.Agent || entries[0].Content != "" ||
+		entries[0].Reasoning != reasoning {
 		t.Fatalf("reasoning-only agent entry = %#v", entries[0])
 	}
 }
@@ -993,8 +1002,16 @@ func TestCantoStoreEntriesUseEffectiveHistoryAfterCompaction(t *testing.T) {
 		Strategy:      "summarize",
 		CutoffEventID: recentEvent.ID.String(),
 		Entries: []csession.HistoryEntry{
-			{Message: llm.Message{Role: llm.RoleSystem, Content: "<conversation_summary>\nsummary\n</conversation_summary>"}},
-			{EventID: recentEvent.ID.String(), Message: llm.Message{Role: llm.RoleAssistant, Content: "recent answer"}},
+			{
+				Message: llm.Message{
+					Role:    llm.RoleSystem,
+					Content: "<conversation_summary>\nsummary\n</conversation_summary>",
+				},
+			},
+			{
+				EventID: recentEvent.ID.String(),
+				Message: llm.Message{Role: llm.RoleAssistant, Content: "recent answer"},
+			},
 		},
 	}
 	if err := cantoSess.Append(ctx, csession.NewCompactionEvent(sess.ID(), snapshot)); err != nil {
@@ -1008,7 +1025,8 @@ func TestCantoStoreEntriesUseEffectiveHistoryAfterCompaction(t *testing.T) {
 	if len(entries) != 2 {
 		t.Fatalf("entries length = %d, want 2", len(entries))
 	}
-	if entries[0].Role != ionsession.System || entries[0].Content != "<conversation_summary>\nsummary\n</conversation_summary>" {
+	if entries[0].Role != ionsession.System ||
+		entries[0].Content != "<conversation_summary>\nsummary\n</conversation_summary>" {
 		t.Fatalf("summary entry = %#v", entries[0])
 	}
 	if entries[1].Role != ionsession.Agent || entries[1].Content != "recent answer" {

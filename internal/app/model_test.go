@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -22,11 +23,9 @@ import (
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/backend/registry"
 	"github.com/nijaru/ion/internal/config"
-	"github.com/nijaru/ion/internal/features"
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
 	"github.com/nijaru/ion/internal/testutil"
-	ionworkspace "github.com/nijaru/ion/internal/workspace"
 )
 
 type stubBackend struct {
@@ -171,6 +170,7 @@ func (s *stubSession) Approve(ctx context.Context, id string, ok bool) error {
 	s.approvals = append(s.approvals, stubApproval{id: id, ok: ok})
 	return s.approveErr
 }
+
 func (s *stubSession) RegisterMCPServer(ctx context.Context, cmd string, args ...string) error {
 	return nil
 }
@@ -332,62 +332,53 @@ func TestShiftTabTogglesReadAndEditOnly(t *testing.T) {
 	}
 }
 
-func TestShiftTabRequiresWorkspaceTrustForEdit(t *testing.T) {
-	if features.CoreLoopOnly {
-		t.Skip("workspace trust does not gate modes during CoreLoopOnly stabilization")
-	}
+func TestShiftTabIgnoresDeferredWorkspaceTrustGate(t *testing.T) {
 	model := readyModel(t).WithTrust(nil, false, "prompt")
 	model.Mode = session.ModeRead
 	sess := model.Model.Session.(*stubSession)
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
 	model = updated.(Model)
-	if model.Mode != session.ModeRead {
-		t.Fatalf("mode = %v, want read", model.Mode)
+	if model.Mode != session.ModeEdit {
+		t.Fatalf("mode = %v, want edit", model.Mode)
 	}
-	if sess.mode != session.ModeRead {
-		t.Fatalf("session mode = %v, want read", sess.mode)
+	if sess.mode != session.ModeEdit {
+		t.Fatalf("session mode = %v, want edit", sess.mode)
 	}
 	if cmd == nil {
-		t.Fatal("expected Shift+Tab edit attempt to return a trust error")
+		t.Fatal("expected Shift+Tab edit attempt to return a mode notice")
 	}
-	err := localErrorFromMsg(t, cmd())
-	if !strings.Contains(err.Error(), "Trust this workspace first") {
-		t.Fatalf("error = %v, want trust error", err)
+	if _, ok := cmd().(localErrorMsg); ok {
+		t.Fatal("deferred workspace trust should not block mode changes")
 	}
 }
 
-func TestUntrustedWorkspaceBlocksEditAndAutoModes(t *testing.T) {
-	if features.CoreLoopOnly {
-		t.Skip("workspace trust does not gate modes during CoreLoopOnly stabilization")
-	}
+func TestDeferredWorkspaceTrustAllowsEditAndAutoModes(t *testing.T) {
 	model := readyModel(t).WithTrust(nil, false, "prompt")
 	model.Mode = session.ModeRead
 
 	updated, cmd := model.handleCommand("/edit")
 	model = updated
-	if model.Mode != session.ModeRead {
-		t.Fatalf("mode after /edit = %v, want read", model.Mode)
+	if model.Mode != session.ModeEdit {
+		t.Fatalf("mode after /edit = %v, want edit", model.Mode)
 	}
 	if cmd == nil {
-		t.Fatal("expected untrusted edit command to return an error command")
+		t.Fatal("expected /edit command to return a notice")
 	}
-	err := localErrorFromMsg(t, cmd())
-	if !strings.Contains(err.Error(), "Trust this workspace first") {
-		t.Fatalf("/edit error = %v, want trust error", err)
+	if _, ok := cmd().(localErrorMsg); ok {
+		t.Fatal("deferred workspace trust should not block /edit")
 	}
 
 	updated, cmd = model.handleCommand("/mode auto")
 	model = updated
-	if model.Mode != session.ModeRead {
-		t.Fatalf("mode changed before command execution = %v", model.Mode)
+	if model.Mode != session.ModeYolo {
+		t.Fatalf("mode after /mode auto = %v, want auto", model.Mode)
 	}
 	if cmd == nil {
-		t.Fatal("expected untrusted edit command to return an error command")
+		t.Fatal("expected /mode auto command to return a notice")
 	}
-	err = localErrorFromMsg(t, cmd())
-	if !strings.Contains(err.Error(), "Trust this workspace first") {
-		t.Fatalf("error = %v, want trust error", err)
+	if _, ok := cmd().(localErrorMsg); ok {
+		t.Fatal("deferred workspace trust should not block /mode auto")
 	}
 
 	updated, cmd = model.handleCommand("/read")
@@ -460,7 +451,11 @@ func TestLateAgentDeltaAfterCommitIsIgnored(t *testing.T) {
 	updated, _ = model.Update(session.AgentDelta{Delta: "late"})
 	model = updated.(Model)
 	if model.InFlight.Pending != nil || model.InFlight.StreamBuf != "" {
-		t.Fatalf("late delta recreated pending stream: pending=%#v stream=%q", model.InFlight.Pending, model.InFlight.StreamBuf)
+		t.Fatalf(
+			"late delta recreated pending stream: pending=%#v stream=%q",
+			model.InFlight.Pending,
+			model.InFlight.StreamBuf,
+		)
 	}
 
 	updated, _ = model.Update(session.ThinkingDelta{Delta: "late thinking"})
@@ -471,7 +466,8 @@ func TestLateAgentDeltaAfterCommitIsIgnored(t *testing.T) {
 
 	updated, _ = model.Update(session.TurnFinished{})
 	model = updated.(Model)
-	if model.InFlight.Pending != nil || model.InFlight.StreamBuf != "" || model.InFlight.ReasonBuf != "" {
+	if model.InFlight.Pending != nil || model.InFlight.StreamBuf != "" ||
+		model.InFlight.ReasonBuf != "" {
 		t.Fatalf(
 			"turn finish left pending stream: pending=%#v stream=%q reason=%q",
 			model.InFlight.Pending,
@@ -675,7 +671,10 @@ func TestUnknownToolResultIDDoesNotClearAnotherPendingTool(t *testing.T) {
 }
 
 func TestApprovalFailureSurfacesLocalError(t *testing.T) {
-	sess := &stubSession{events: make(chan session.Event), approveErr: errors.New("approval bridge failed")}
+	sess := &stubSession{
+		events:     make(chan session.Event),
+		approveErr: errors.New("approval bridge failed"),
+	}
 	model := readyModel(t)
 	model.Model.Session = sess
 	model.Approval.Pending = &session.ApprovalRequest{
@@ -857,7 +856,7 @@ func TestRenderPendingToolEntryHonorsVerbosity(t *testing.T) {
 	model := readyModel(t)
 	entry := session.Entry{
 		Role:    session.Tool,
-		Title:   "bash",
+		Title:   "custom_tool",
 		Content: "line 1\nline 2\n",
 	}
 
@@ -867,13 +866,60 @@ func TestRenderPendingToolEntryHonorsVerbosity(t *testing.T) {
 	}
 
 	model.Model.Config = &config.Config{ToolVerbosity: "collapsed"}
-	if got := ansi.Strip(model.renderPendingEntry(entry)); !strings.Contains(got, "...") || strings.Contains(got, "line 1") {
+	if got := ansi.Strip(model.renderPendingEntry(entry)); !strings.Contains(got, "...") ||
+		strings.Contains(got, "line 1") {
 		t.Fatalf("collapsed pending tool output = %q, want ellipsis without content", got)
 	}
 
 	model.Model.Config = &config.Config{ToolVerbosity: "full"}
-	if got := ansi.Strip(model.renderPendingEntry(entry)); !strings.Contains(got, "line 1") || !strings.Contains(got, "line 2") {
+	if got := ansi.Strip(model.renderPendingEntry(entry)); !strings.Contains(got, "line 1") ||
+		!strings.Contains(got, "line 2") {
 		t.Fatalf("full pending tool output missing content: %q", got)
+	}
+}
+
+func TestRenderBashToolHidesOutputByDefault(t *testing.T) {
+	model := readyModel(t)
+	entry := session.Entry{
+		Role:    session.Tool,
+		Title:   "bash go test ./...",
+		Content: "ok github.com/nijaru/ion/internal/app\n",
+	}
+
+	got := ansi.Strip(model.renderEntry(entry))
+	if got != "• Bash(go test ./...)" {
+		t.Fatalf("default bash render = %q, want command only", got)
+	}
+}
+
+func TestRenderBashToolCanShowSummarizedOutput(t *testing.T) {
+	model := readyModel(t)
+	model.Model.Config = &config.Config{BashOutput: "summary"}
+	entry := session.Entry{
+		Role:    session.Tool,
+		Title:   "bash go test ./...",
+		Content: "ok github.com/nijaru/ion/internal/app\nok github.com/nijaru/ion/internal/config\n",
+	}
+
+	got := ansi.Strip(model.renderEntry(entry))
+	if got != "• Bash(go test ./...) · 2 lines" {
+		t.Fatalf("summary bash render = %q, want line count", got)
+	}
+}
+
+func TestRenderBashToolCanShowFullOutput(t *testing.T) {
+	model := readyModel(t)
+	model.Model.Config = &config.Config{BashOutput: "full"}
+	entry := session.Entry{
+		Role:    session.Tool,
+		Title:   "bash go test ./...",
+		Content: "ok github.com/nijaru/ion/internal/app\n",
+	}
+
+	got := ansi.Strip(model.renderEntry(entry))
+	if !strings.Contains(got, "Bash(go test ./...)\n") ||
+		!strings.Contains(got, "ok github.com/nijaru/ion/internal/app") {
+		t.Fatalf("full bash render = %q, want output", got)
 	}
 }
 
@@ -886,7 +932,7 @@ func TestRenderRoutineToolEntryCompactsByDefault(t *testing.T) {
 	}
 
 	got := ansi.Strip(model.renderEntry(entry))
-	if got != "• Read AGENTS.md · 3 lines" {
+	if got != "• Read(AGENTS.md) · 3 lines" {
 		t.Fatalf("routine tool render = %q, want compact summary", got)
 	}
 }
@@ -900,14 +946,67 @@ func TestRenderPendingRoutineToolEntryCompactsByDefault(t *testing.T) {
 	}
 
 	got := ansi.Strip(model.renderPendingEntry(entry))
-	if got != "• Read AGENTS.md · 3 lines" {
+	if got != "• Read(AGENTS.md) · 3 lines" {
 		t.Fatalf("pending routine tool render = %q, want compact summary", got)
+	}
+}
+
+func TestRenderRoutineToolUsesSemanticSummaryMetrics(t *testing.T) {
+	model := readyModel(t)
+	tests := []struct {
+		name  string
+		entry session.Entry
+		want  string
+	}{
+		{
+			name: "list entries",
+			entry: session.Entry{
+				Role:    session.Tool,
+				Title:   "list internal/app",
+				Content: "model.go\nviewport.go\n",
+			},
+			want: "• List(internal/app) · 2 entries",
+		},
+		{
+			name: "glob entries",
+			entry: session.Entry{
+				Role:    session.Tool,
+				Title:   "glob **/*.go",
+				Content: "main.go\ninternal/app/model.go\n",
+			},
+			want: "• Find(**/*.go) · 2 entries",
+		},
+		{
+			name: "grep matches",
+			entry: session.Entry{
+				Role:    session.Tool,
+				Title:   "grep TODO",
+				Content: "file.go\n12:TODO\n",
+			},
+			want: "• Search(TODO) · 2 matches",
+		},
+		{
+			name: "grep no matches",
+			entry: session.Entry{
+				Role:    session.Tool,
+				Title:   "grep missing",
+				Content: "No matches found.",
+			},
+			want: "• Search(missing) · 0 matches",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ansi.Strip(model.renderEntry(tt.entry)); got != tt.want {
+				t.Fatalf("render = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
 func TestRenderRoutineToolEntryCanShowFullOutput(t *testing.T) {
 	model := readyModel(t)
-	model.Model.Config = &config.Config{ToolVerbosity: "full"}
+	model.Model.Config = &config.Config{ReadOutput: "full"}
 	entry := session.Entry{
 		Role:    session.Tool,
 		Title:   "read",
@@ -923,9 +1022,24 @@ func TestRenderRoutineToolEntryCanShowFullOutput(t *testing.T) {
 	}
 }
 
+func TestRenderRoutineToolEntryCanHideReadOutput(t *testing.T) {
+	model := readyModel(t)
+	model.Model.Config = &config.Config{ReadOutput: "hidden"}
+	entry := session.Entry{
+		Role:    session.Tool,
+		Title:   "read AGENTS.md",
+		Content: "line 1\nline 2\n",
+	}
+
+	got := ansi.Strip(model.renderEntry(entry))
+	if got != "• Read(AGENTS.md)" {
+		t.Fatalf("hidden read render = %q, want call only", got)
+	}
+}
+
 func TestRenderEntriesCanExpandReplayedRoutineToolOutput(t *testing.T) {
 	model := readyModel(t)
-	model.Model.Config = &config.Config{ToolVerbosity: "full"}
+	model.Model.Config = &config.Config{ReadOutput: "full"}
 	entries := []session.Entry{
 		{Role: session.User, Content: "read file"},
 		{Role: session.Tool, Title: "read", Content: "line 1\nline 2\nline 3"},
@@ -942,6 +1056,35 @@ func TestRenderEntriesCanExpandReplayedRoutineToolOutput(t *testing.T) {
 	if !strings.Contains(got, "› read file\n\n• Read") ||
 		!strings.Contains(got, "line 3\n\n• done") {
 		t.Fatalf("replayed routine tool render = %q, want one blank row between entries", got)
+	}
+}
+
+func TestRenderWriteToolSummarizesByDefault(t *testing.T) {
+	model := readyModel(t)
+	entry := session.Entry{
+		Role:    session.Tool,
+		Title:   "write hello.md",
+		Content: "Successfully wrote 5 bytes to hello.md\nCheckpoint: 1777656162183207000-c25e58778d2941d5",
+	}
+
+	got := ansi.Strip(model.renderEntry(entry))
+	if got != "• Write(hello.md)" {
+		t.Fatalf("summary write render = %q, want call only", got)
+	}
+}
+
+func TestRenderWriteToolCanShowDiff(t *testing.T) {
+	model := readyModel(t)
+	model.Model.Config = &config.Config{WriteOutput: "diff"}
+	entry := session.Entry{
+		Role:    session.Tool,
+		Title:   "write AGENTS.md",
+		Content: "--- AGENTS.md\n+++ AGENTS.md\n@@\n+line\n",
+	}
+
+	got := ansi.Strip(model.renderEntry(entry))
+	if !strings.Contains(got, "Write(AGENTS.md)\n") || !strings.Contains(got, "+line") {
+		t.Fatalf("diff write render = %q, want expanded content", got)
 	}
 }
 
@@ -987,8 +1130,11 @@ func TestRenderThinkingEntryCanCollapseReasoning(t *testing.T) {
 	}
 
 	got := ansi.Strip(model.renderEntry(entry))
-	if !strings.Contains(got, "Thinking") || !strings.Contains(got, "...") {
-		t.Fatalf("collapsed thinking render = %q, want thinking marker", got)
+	if !strings.Contains(got, "• Thinking...") {
+		t.Fatalf("collapsed thinking render = %q, want one-line thinking marker", got)
+	}
+	if strings.Contains(got, "\n    ...") {
+		t.Fatalf("collapsed thinking render = %q, want no separate ellipsis row", got)
 	}
 	if strings.Contains(got, "private chain of thought") {
 		t.Fatalf("collapsed thinking render leaked reasoning: %q", got)
@@ -1059,14 +1205,72 @@ func TestRenderAgentMarkdownDoesNotIndentContinuationLines(t *testing.T) {
 }
 
 func TestFormatToolTitleUsesReadableLabels(t *testing.T) {
-	if got := FormatToolTitle("read", `{"file_path":"AGENTS.md"}`); got != "Read AGENTS.md" {
+	if got := FormatToolTitle("read", `{"file_path":"AGENTS.md"}`); got != "Read(AGENTS.md)" {
 		t.Fatalf("read title = %q, want readable title", got)
 	}
-	if got := FormatToolTitle("bash", `{"command":"go test ./..."}`); got != "Bash go test ./..." {
+	if got := FormatToolTitle("bash", `{"command":"go test ./..."}`); got != "Bash(go test ./...)" {
 		t.Fatalf("bash title = %q, want readable title", got)
 	}
 	if got := FormatToolTitle("unknown", `{"nested":{"x":1}}`); got != "unknown" {
 		t.Fatalf("fallback title = %q, want tool name only", got)
+	}
+}
+
+func TestToolCallStartedShortensWorkspacePath(t *testing.T) {
+	workdir := "/Users/nick/github/nijaru/ion"
+	model := readyModel(t)
+	model.App.Workdir = workdir
+
+	updated, _ := model.Update(session.ToolCallStarted{
+		ToolUseID: "tool-read",
+		ToolName:  "read",
+		Args:      `{"file_path":` + strconv.Quote(filepath.Join(workdir, "AGENTS.md")) + `}`,
+	})
+	model = updated.(Model)
+
+	got := model.InFlight.PendingTools["tool-read"].Title
+	if got != "Read(AGENTS.md)" {
+		t.Fatalf("tool title = %q, want workspace-relative path", got)
+	}
+}
+
+func TestRenderToolLabelColorsOnlyStatusMarker(t *testing.T) {
+	model := readyModel(t)
+
+	rendered := model.renderEntry(session.Entry{
+		Role:  session.Tool,
+		Title: "bash(sleep 5; echo ion-queued)",
+	})
+	stripped := ansi.Strip(rendered)
+	if stripped != "• Bash(sleep 5; echo ion-queued)" {
+		t.Fatalf("tool label = %q, want call-style label", stripped)
+	}
+	if strings.Contains(rendered, "Bash(sleep 5; echo ion-queued)\x1b") {
+		t.Fatalf("tool label appears styled through the full call text: %q", rendered)
+	}
+}
+
+func TestRenderToolLabelShortensLongWorkspacePath(t *testing.T) {
+	workdir := filepath.Join(t.TempDir(), "repo")
+	model := readyModel(t)
+	model.App.Workdir = workdir
+	model.App.Width = 28
+
+	rendered := model.renderEntry(session.Entry{
+		Role:  session.Tool,
+		Title: "read " + filepath.Join(workdir, "internal", "app", "model_test.go"),
+	})
+	stripped := ansi.Strip(rendered)
+	if ansi.StringWidth(stripped) > model.App.Width {
+		t.Fatalf(
+			"tool label width = %d, want <= %d: %q",
+			ansi.StringWidth(stripped),
+			model.App.Width,
+			stripped,
+		)
+	}
+	if !strings.Contains(stripped, "…/app/model_test.go") {
+		t.Fatalf("tool label = %q, want shortened file suffix", stripped)
 	}
 }
 
@@ -1101,7 +1305,10 @@ func TestProgressLineFitsWidthAfterResize(t *testing.T) {
 	model := readyModel(t)
 	model.App.Width = 28
 	model.Progress.Mode = stateError
-	model.Progress.LastError = strings.Repeat("connection refused while reconnecting to the backend ", 3)
+	model.Progress.LastError = strings.Repeat(
+		"connection refused while reconnecting to the backend ",
+		3,
+	)
 
 	if got := lipgloss.Width(model.progressLine()); got > model.App.Width {
 		t.Fatalf(
@@ -1113,7 +1320,7 @@ func TestProgressLineFitsWidthAfterResize(t *testing.T) {
 	}
 }
 
-func TestViewDoesNotInsertBlankLineBeforeProgress(t *testing.T) {
+func TestViewRendersProgressWithoutLeadingSeparator(t *testing.T) {
 	model := readyModel(t)
 	model.App.PrintedTranscript = true
 	model.Progress.Mode = stateReady
@@ -1123,7 +1330,37 @@ func TestViewDoesNotInsertBlankLineBeforeProgress(t *testing.T) {
 		t.Fatalf("view = %q, want progress immediately after printed transcript newline", view)
 	}
 	if !strings.HasPrefix(ansi.Strip(view), "• Ready\n") {
-		t.Fatalf("view = %q, want ready progress first", view)
+		t.Fatalf("view = %q, want ready progress without leading separator", view)
+	}
+}
+
+func TestViewAddsBlankLineBetweenActiveContentAndShell(t *testing.T) {
+	model := readyModel(t)
+	model.Progress.Mode = stateWorking
+	model.Progress.Status = "Running verify..."
+	model.InFlight.PendingTools = map[string]*session.Entry{
+		"verify-1": {
+			Role:  session.Tool,
+			Title: "Verify(go test ./...)",
+		},
+	}
+
+	view := ansi.Strip(model.View().Content)
+	if !strings.Contains(view, "• Verify(go test ./...)\n\n") ||
+		!strings.Contains(view, "Running verify...") {
+		t.Fatalf("view = %q, want one blank row between active tool and shell progress", view)
+	}
+}
+
+func TestViewAddsBlankLineBetweenQueuedTurnsAndProgress(t *testing.T) {
+	model := readyModel(t)
+	model.Progress.Mode = stateStreaming
+	model.InFlight.QueuedTurns = []string{"what happened?"}
+
+	view := ansi.Strip(model.View().Content)
+	if !strings.Contains(view, "Queued (Ctrl+G edit): what happened?\n\n") ||
+		!strings.Contains(view, "Streaming...") {
+		t.Fatalf("view = %q, want one blank row between queued turn and shell progress", view)
 	}
 }
 
@@ -1131,6 +1368,7 @@ func TestTurnFinishedLeavesProgressComplete(t *testing.T) {
 	model := readyModel(t)
 	model.Progress.Mode = stateStreaming
 	model.InFlight.Thinking = true
+	model.InFlight.AgentCommitted = true
 	model.Progress.TurnStartedAt = time.Now().Add(-3 * time.Second)
 	model.Progress.CurrentTurnInput = 1200
 	model.Progress.CurrentTurnOutput = 300
@@ -1170,13 +1408,42 @@ func TestTurnFinishedCommitsPendingStreamWhenNoAgentMessageArrives(t *testing.T)
 		t.Fatalf("pending agent entry = %#v, want flushed", model.InFlight.Pending)
 	}
 	if model.InFlight.StreamBuf != "" || model.InFlight.ReasonBuf != "" {
-		t.Fatalf("stream buffers = %q/%q, want cleared", model.InFlight.StreamBuf, model.InFlight.ReasonBuf)
+		t.Fatalf(
+			"stream buffers = %q/%q, want cleared",
+			model.InFlight.StreamBuf,
+			model.InFlight.ReasonBuf,
+		)
 	}
 	if model.Progress.Mode != stateComplete {
 		t.Fatalf("progress = %v, want complete", model.Progress.Mode)
 	}
 	if cmd == nil {
 		t.Fatal("expected print command for flushed pending stream")
+	}
+}
+
+func TestTurnFinishedWithoutAssistantResponseShowsError(t *testing.T) {
+	model := readyModel(t)
+	model.Progress.Mode = stateWorking
+	model.Progress.TurnStartedAt = time.Now().Add(-2 * time.Second)
+	model.InFlight.Pending = &session.Entry{Role: session.Agent}
+	model.InFlight.QueuedTurns = []string{"follow-up"}
+	model.InFlight.Thinking = true
+
+	updated, cmd := model.Update(session.TurnFinished{})
+	model = updated.(Model)
+
+	if model.Progress.Mode != stateError {
+		t.Fatalf("progress = %v, want error", model.Progress.Mode)
+	}
+	if model.Progress.LastError != "turn finished without assistant response" {
+		t.Fatalf("last error = %q", model.Progress.LastError)
+	}
+	if len(model.InFlight.QueuedTurns) != 0 {
+		t.Fatalf("queued turns = %#v, want cleared", model.InFlight.QueuedTurns)
+	}
+	if cmd == nil {
+		t.Fatal("expected command to print visible error")
 	}
 }
 
@@ -1676,7 +1943,11 @@ func TestCtrlMTogglesPrimaryAndFastPreset(t *testing.T) {
 			resolved := *cfg
 			newBackend := testutil.New()
 			newBackend.SetConfig(&resolved)
-			newStorage := &stubStorageSession{id: sessionID, model: cfg.Provider + "/" + cfg.Model, branch: "main"}
+			newStorage := &stubStorageSession{
+				id:     sessionID,
+				model:  cfg.Provider + "/" + cfg.Model,
+				branch: "main",
+			}
 			newBackend.SetSession(newStorage)
 			return newBackend, newBackend.Session(), newStorage, nil
 		},
@@ -1777,10 +2048,12 @@ func TestWithConfigForRuntimeKeepsAppConfigAndAppliesRuntimeConfig(t *testing.T)
 	if model.App.ActivePreset != presetFast {
 		t.Fatalf("active preset = %q, want fast", model.App.ActivePreset)
 	}
-	if model.Model.Config == nil || model.Model.Config.Model != "gpt-4.1" || model.Model.Config.FastModel != "gpt-4.1-mini" {
+	if model.Model.Config == nil || model.Model.Config.Model != "gpt-4.1" ||
+		model.Model.Config.FastModel != "gpt-4.1-mini" {
 		t.Fatalf("app config = %#v, want full preset config", model.Model.Config)
 	}
-	if capture.cfg == nil || capture.cfg.Model != "gpt-4.1-mini" || capture.cfg.ReasoningEffort != "low" {
+	if capture.cfg == nil || capture.cfg.Model != "gpt-4.1-mini" ||
+		capture.cfg.ReasoningEffort != "low" {
 		t.Fatalf("backend cfg = %#v, want resolved fast runtime config", capture.cfg)
 	}
 	if model.Progress.ReasoningEffort != "low" {
@@ -1972,7 +2245,10 @@ func TestCompactCommandDoesNotMaterializeLazySession(t *testing.T) {
 		t.Fatal("lazy /compact materialized a session")
 	}
 	out := cmd()
-	if got := ansi.Strip(fmt.Sprint(out)); !strings.Contains(got, "No active session to compact yet") {
+	if got := ansi.Strip(fmt.Sprint(out)); !strings.Contains(
+		got,
+		"No active session to compact yet",
+	) {
 		t.Fatalf("compact notice = %q, want no active session notice", got)
 	}
 }
@@ -2017,58 +2293,68 @@ func TestCompactCommandErrorsWhenBackendUnsupported(t *testing.T) {
 }
 
 func TestClearCommandStartsFreshSession(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	cfgDir := filepath.Join(home, ".ion")
-	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
-		t.Fatalf("mkdir config dir: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(cfgDir, "config.toml"), []byte("provider = \"openai\"\nmodel = \"gpt-4.1\"\n"), 0o644); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-
-	oldSession := &stubSession{events: make(chan session.Event)}
-	oldBackend := stubBackend{sess: oldSession, provider: "openai", model: "gpt-4.1"}
-
-	var observedSessionID string
-	model := New(
-		oldBackend,
-		nil,
-		nil,
-		"/tmp/test",
-		"main",
-		"dev",
-		func(ctx context.Context, cfg *config.Config, sessionID string) (backend.Backend, session.AgentSession, storage.Session, error) {
-			observedSessionID = sessionID
-			newStorage := &stubStorageSession{
-				id:     "fresh-session",
-				model:  cfg.Provider + "/" + cfg.Model,
-				branch: "main",
+	for _, tc := range []struct {
+		command string
+		notice  string
+	}{
+		{command: "/new", notice: "Started new session"},
+		{command: "/clear", notice: "Started fresh session"},
+	} {
+		t.Run(tc.command, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			cfgDir := filepath.Join(home, ".ion")
+			if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+				t.Fatalf("mkdir config dir: %v", err)
 			}
-			newBackend := testutil.New()
-			newBackend.SetConfig(cfg)
-			newBackend.SetSession(newStorage)
-			return newBackend, newBackend.Session(), newStorage, nil
-		},
-	)
+			if err := os.WriteFile(filepath.Join(cfgDir, "config.toml"), []byte("provider = \"openai\"\nmodel = \"gpt-4.1\"\n"), 0o644); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
 
-	model, cmd := model.handleCommand("/clear")
-	if cmd == nil {
-		t.Fatal("expected /clear command to return a cmd")
-	}
-	msg := cmd()
-	switched, ok := msg.(runtimeSwitchedMsg)
-	if !ok {
-		t.Fatalf("expected runtimeSwitchedMsg, got %T", msg)
-	}
-	if observedSessionID != "" {
-		t.Fatalf(
-			"session ID passed to clear switcher = %q, want empty for fresh session",
-			observedSessionID,
-		)
-	}
-	if switched.notice != "Started fresh session" {
-		t.Fatalf("clear notice = %q", switched.notice)
+			oldSession := &stubSession{events: make(chan session.Event)}
+			oldBackend := stubBackend{sess: oldSession, provider: "openai", model: "gpt-4.1"}
+
+			var observedSessionID string
+			model := New(
+				oldBackend,
+				nil,
+				nil,
+				"/tmp/test",
+				"main",
+				"dev",
+				func(ctx context.Context, cfg *config.Config, sessionID string) (backend.Backend, session.AgentSession, storage.Session, error) {
+					observedSessionID = sessionID
+					newStorage := &stubStorageSession{
+						id:     "fresh-session",
+						model:  cfg.Provider + "/" + cfg.Model,
+						branch: "main",
+					}
+					newBackend := testutil.New()
+					newBackend.SetConfig(cfg)
+					newBackend.SetSession(newStorage)
+					return newBackend, newBackend.Session(), newStorage, nil
+				},
+			)
+
+			model, cmd := model.handleCommand(tc.command)
+			if cmd == nil {
+				t.Fatalf("expected %s command to return a cmd", tc.command)
+			}
+			msg := cmd()
+			switched, ok := msg.(runtimeSwitchedMsg)
+			if !ok {
+				t.Fatalf("expected runtimeSwitchedMsg, got %T", msg)
+			}
+			if observedSessionID != "" {
+				t.Fatalf(
+					"session ID passed to fresh-session switcher = %q, want empty",
+					observedSessionID,
+				)
+			}
+			if switched.notice != tc.notice {
+				t.Fatalf("%s notice = %q, want %q", tc.command, switched.notice, tc.notice)
+			}
+		})
 	}
 }
 
@@ -2309,7 +2595,11 @@ func TestSubmitTextPersistsRoutingDecision(t *testing.T) {
 		t.Fatalf("missing routing decision in appends: %#v", storageSess.appends)
 	}
 	if decision.Decision != "use_model" || decision.Reason != "active_preset" {
-		t.Fatalf("decision = %q/%q, want use_model/active_preset", decision.Decision, decision.Reason)
+		t.Fatalf(
+			"decision = %q/%q, want use_model/active_preset",
+			decision.Decision,
+			decision.Reason,
+		)
 	}
 	if decision.ModelSlot != "primary" {
 		t.Fatalf("model slot = %q, want primary", decision.ModelSlot)
@@ -2321,7 +2611,11 @@ func TestSubmitTextPersistsRoutingDecision(t *testing.T) {
 		t.Fatalf("model = %q, want anthropic/claude-sonnet-4.5", decision.Model)
 	}
 	if decision.MaxSessionCost != 0.25 || decision.MaxTurnCost != 0.05 {
-		t.Fatalf("budget limits = %f/%f, want 0.25/0.05", decision.MaxSessionCost, decision.MaxTurnCost)
+		t.Fatalf(
+			"budget limits = %f/%f, want 0.25/0.05",
+			decision.MaxSessionCost,
+			decision.MaxTurnCost,
+		)
 	}
 	if decision.SessionCost != 0.012 {
 		t.Fatalf("session cost = %f, want 0.012", decision.SessionCost)
@@ -2618,6 +2912,7 @@ func TestBusyTurnBlocksRuntimeChangingCommands(t *testing.T) {
 		"/provider local-api",
 		"/thinking high",
 		"/settings retry on",
+		"/new",
 		"/clear",
 		"/compact",
 	}
@@ -2703,30 +2998,22 @@ func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 	}
 
 	wantCommands := []string{
+		"/help",
+		"/new",
+		"/clear",
 		"/resume [id]",
-		"/primary",
-		"/fast",
+		"/session",
+		"/compact",
 		"/provider [name]",
 		"/model [name]",
 		"/thinking [lvl]",
-		"/read",
-		"/edit",
-		"/auto, /yolo",
+		"/primary",
+		"/fast",
 		"/settings",
 		"/tools",
-		"/clear",
-		"/compact",
 		"/cost",
+		"/mode [mode]",
 		"/quit, /exit",
-		"/help",
-	}
-	if !features.CoreLoopOnly {
-		wantCommands = append(wantCommands,
-			"/trust [status]",
-			"/rewind <id>",
-			"/memory [query]",
-			"/mcp add <cmd>",
-		)
 	}
 	wantCommands = append(wantCommands,
 		"Ctrl+P",
@@ -2736,31 +3023,44 @@ func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 		"Up / Down",
 		"Enter",
 		"Ctrl+C",
-		"approve and allow this tool category",
 	)
 	for _, want := range wantCommands {
 		if !strings.Contains(helpMsg.notice, want) {
 			t.Fatalf("help notice missing %q: %q", want, helpMsg.notice)
 		}
 	}
-	if features.CoreLoopOnly {
-		for _, disabled := range []string{"/rewind <id>", "/memory [query]", "/mcp add <cmd>"} {
-			if strings.Contains(helpMsg.notice, disabled) {
-				t.Fatalf("help notice should not advertise disabled command %q: %q", disabled, helpMsg.notice)
-			}
+	for _, disabled := range []string{
+		"/trust [status]",
+		"/rewind <id>",
+		"/memory [query]",
+		"/mcp add <cmd>",
+	} {
+		if strings.Contains(helpMsg.notice, disabled) {
+			t.Fatalf(
+				"help notice should not advertise deferred command %q: %q",
+				disabled,
+				helpMsg.notice,
+			)
 		}
 	}
 	if strings.Contains(helpMsg.notice, "/tree") {
 		t.Fatalf("help notice should not advertise /tree yet: %q", helpMsg.notice)
 	}
+	for _, hidden := range []string{"/read", "/edit", "/auto, /yolo"} {
+		if strings.Contains(helpMsg.notice, hidden) {
+			t.Fatalf(
+				"help notice should not advertise hidden mode alias %q: %q",
+				hidden,
+				helpMsg.notice,
+			)
+		}
+	}
 }
 
-func TestCoreLoopOnlyDisablesAdvancedCommands(t *testing.T) {
-	if !features.CoreLoopOnly {
-		t.Skip("advanced commands are enabled")
-	}
+func TestDeferredAdvancedCommandsAreDisabled(t *testing.T) {
 	model := readyModel(t)
 	for _, input := range []string{
+		"/trust status",
 		"/mcp add server",
 		"/rewind cp-1",
 		"/memory policy",
@@ -2771,7 +3071,10 @@ func TestCoreLoopOnlyDisablesAdvancedCommands(t *testing.T) {
 				t.Fatalf("%s returned nil cmd", input)
 			}
 			err := localErrorFromMsg(t, cmd())
-			if !strings.Contains(err.Error(), "disabled while Ion stabilizes the P1 core agent loop") {
+			if !strings.Contains(
+				err.Error(),
+				"deferred while Ion stabilizes the native agent loop",
+			) {
 				t.Fatalf("%s error = %v", input, err)
 			}
 		})
@@ -2827,10 +3130,18 @@ func TestTabCompletesKnownSlashArguments(t *testing.T) {
 		want  string
 	}{
 		{name: "thinking level", input: "/thinking hi", want: "/thinking high "},
-		{name: "settings key", input: "/settings r", want: "/settings retry "},
+		{name: "settings key", input: "/settings ret", want: "/settings retry "},
 		{name: "settings retry value", input: "/settings retry of", want: "/settings retry off "},
-		{name: "settings tool value", input: "/settings tool co", want: "/settings tool collapsed "},
-		{name: "settings thinking value", input: "/settings thinking h", want: "/settings thinking hidden "},
+		{
+			name:  "settings tool value",
+			input: "/settings tool co",
+			want:  "/settings tool collapsed ",
+		},
+		{
+			name:  "settings thinking value",
+			input: "/settings thinking h",
+			want:  "/settings thinking hidden ",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -2871,7 +3182,27 @@ func TestTabListsAmbiguousSlashCommands(t *testing.T) {
 		t.Fatalf("picker query = %q, want t", got)
 	}
 	if len(pickerDisplayItems(model.Picker.Overlay)) < 2 {
-		t.Fatalf("ambiguous command picker items = %#v, want multiple matches", pickerDisplayItems(model.Picker.Overlay))
+		t.Fatalf(
+			"ambiguous command picker items = %#v, want multiple matches",
+			pickerDisplayItems(model.Picker.Overlay),
+		)
+	}
+}
+
+func TestTabIgnoresHiddenSlashCommandAliases(t *testing.T) {
+	model := readyModel(t)
+	model.Input.Composer.SetValue("/rea")
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	model = updated.(Model)
+	if cmd != nil {
+		t.Fatalf("unexpected autocomplete cmd %T", cmd)
+	}
+	if got := model.Input.Composer.Value(); got != "/rea" {
+		t.Fatalf("composer = %q, want unchanged hidden alias prefix", got)
+	}
+	if model.Picker.Overlay != nil {
+		t.Fatal("hidden alias should not open command picker")
 	}
 }
 
@@ -3009,8 +3340,16 @@ func TestSessionPickerRowsFitTerminalWidth(t *testing.T) {
 	out := ansi.Strip(model.renderSessionPicker())
 	for _, line := range strings.Split(out, "\n") {
 		if ansi.StringWidth(line) > model.App.Width {
-			t.Fatalf("session picker line width = %d, want <= %d: %q", ansi.StringWidth(line), model.App.Width, line)
+			t.Fatalf(
+				"session picker line width = %d, want <= %d: %q",
+				ansi.StringWidth(line),
+				model.App.Width,
+				line,
+			)
 		}
+	}
+	if !strings.Contains(out, "feature/very-long-session-picker-branch-name • 2d ago") {
+		t.Fatalf("session picker should preserve stable metadata and age: %q", out)
 	}
 }
 
@@ -3058,9 +3397,14 @@ func TestSettingsCommandShowsCommonSettings(t *testing.T) {
 	for _, want := range []string{
 		"retry network errors: off",
 		"tool display: collapsed",
-		"thinking display: hidden",
-		"thinking level: high",
+		"read output: summary",
+		"write output: summary",
+		"bash output: hidden",
+		"thinking output: hidden",
 		"/settings retry on|off",
+		"/settings read full|summary|hidden",
+		"/settings write diff|summary|hidden",
+		"/settings bash full|summary|hidden",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("settings missing %q: %q", want, got)
@@ -3070,6 +3414,8 @@ func TestSettingsCommandShowsCommonSettings(t *testing.T) {
 		"provider: openrouter",
 		"model: tencent/hy3-preview:free",
 		"preset: primary",
+		"thinking level: high",
+		"/thinking auto|off|minimal|low|medium|high|xhigh",
 	} {
 		if strings.Contains(got, unwanted) {
 			t.Fatalf("settings should not include runtime identity %q: %q", unwanted, got)
@@ -3082,12 +3428,66 @@ func TestSettingsCommandShowsDisplayDefaults(t *testing.T) {
 	got := model.settingsSummary(&config.Config{})
 	for _, want := range []string{
 		"tool display: auto",
-		"thinking display: hidden",
+		"read output: summary",
+		"write output: summary",
+		"bash output: hidden",
+		"thinking output: hidden",
 		"/settings tool auto|full|collapsed|hidden",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("settings missing %q: %q", want, got)
 		}
+	}
+}
+
+func TestSettingsCommandUpdatesReadAndWriteOutput(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	configDir := filepath.Join(home, ".ion")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+
+	model := readyModel(t)
+	model, cmd := model.handleCommand("/settings read full")
+	if cmd == nil {
+		t.Fatal("expected read setting command")
+	}
+	_ = cmd()
+	model, cmd = model.handleCommand("/settings write summary")
+	if cmd == nil {
+		t.Fatal("expected write setting command")
+	}
+	_ = cmd()
+	model, cmd = model.handleCommand("/settings bash summary")
+	if cmd == nil {
+		t.Fatal("expected bash setting command")
+	}
+	_ = cmd()
+
+	data, err := os.ReadFile(filepath.Join(configDir, "config.toml"))
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	got := string(data)
+	for _, want := range []string{
+		"read_output = 'full'",
+		"write_output = 'summary'",
+		"bash_output = 'summary'",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("config missing %q:\n%s", want, got)
+		}
+	}
+	if model.Model.Config.ReadOutput != "full" ||
+		model.Model.Config.WriteOutput != "summary" ||
+		model.Model.Config.BashOutput != "summary" {
+		t.Fatalf(
+			"runtime config read/write/bash output = %q/%q/%q, want full/summary/summary",
+			model.Model.Config.ReadOutput,
+			model.Model.Config.WriteOutput,
+			model.Model.Config.BashOutput,
+		)
 	}
 }
 
@@ -3131,9 +3531,14 @@ func TestSettingsCommandUpdatesStableConfig(t *testing.T) {
 		t.Fatal("model config retry setting was not updated")
 	}
 	if model.Model.Config.Provider != "local-api" || model.Model.Config.Model != "qwen3.6:27b" {
-		t.Fatalf("runtime config = %s/%s, want state-backed local-api/qwen3.6:27b", model.Model.Config.Provider, model.Model.Config.Model)
+		t.Fatalf(
+			"runtime config = %s/%s, want state-backed local-api/qwen3.6:27b",
+			model.Model.Config.Provider,
+			model.Model.Config.Model,
+		)
 	}
-	if capture.cfg == nil || capture.cfg.Provider != "local-api" || capture.cfg.Model != "qwen3.6:27b" {
+	if capture.cfg == nil || capture.cfg.Provider != "local-api" ||
+		capture.cfg.Model != "qwen3.6:27b" {
 		t.Fatalf("backend config = %#v, want state-backed provider/model", capture.cfg)
 	}
 }
@@ -3183,7 +3588,10 @@ func TestSettingsCommandPreservesRuntimeSelection(t *testing.T) {
 	if model.Model.Config.Provider != "openrouter" ||
 		model.Model.Config.Model != "tencent/hy3-preview:free" ||
 		model.Model.Config.ToolVerbosity != "collapsed" {
-		t.Fatalf("runtime config = %#v, want runtime selection plus updated setting", model.Model.Config)
+		t.Fatalf(
+			"runtime config = %#v, want runtime selection plus updated setting",
+			model.Model.Config,
+		)
 	}
 	if capture.cfg == nil ||
 		capture.cfg.Provider != "openrouter" ||
@@ -3233,181 +3641,6 @@ func TestToolsCommandReportsToolSurface(t *testing.T) {
 	_, cmd := model.handleCommand("/tools")
 	if cmd == nil {
 		t.Fatal("tools command returned nil cmd")
-	}
-}
-
-func TestMemoryCommandReportsMemoryView(t *testing.T) {
-	if features.CoreLoopOnly {
-		t.Skip("advanced /memory command is disabled during P1 core loop stabilization")
-	}
-	model := readyModel(t)
-
-	_, cmd := model.handleCommand("/memory policy")
-	if cmd == nil {
-		t.Fatal("memory command returned nil cmd")
-	}
-}
-
-func TestTrustCommandPersistsWorkspaceTrust(t *testing.T) {
-	if features.CoreLoopOnly {
-		t.Skip("workspace trust command is disabled during CoreLoopOnly stabilization")
-	}
-	trustPath := filepath.Join(t.TempDir(), "trusted.json")
-	model := readyModel(t).WithTrust(ionworkspace.NewTrustStore(trustPath), false, "prompt")
-	model.Mode = session.ModeRead
-	sess := model.Model.Session.(*stubSession)
-	sess.autoApprove = true
-
-	model, cmd := model.handleCommand("/trust")
-	if !model.App.TrustedWorkspace {
-		t.Fatal("workspace not marked trusted")
-	}
-	if model.Mode != session.ModeEdit {
-		t.Fatalf("mode = %v, want edit after trust", model.Mode)
-	}
-	if cmd == nil {
-		t.Fatal("trust command returned nil cmd")
-	}
-	trusted, err := ionworkspace.NewTrustStore(trustPath).IsTrusted(model.App.Workdir)
-	if err != nil {
-		t.Fatalf("IsTrusted returned error: %v", err)
-	}
-	if !trusted {
-		t.Fatal("workspace trust was not persisted")
-	}
-	if sess.mode != session.ModeEdit {
-		t.Fatalf("session mode = %v, want edit after trust", sess.mode)
-	}
-	if sess.autoApprove {
-		t.Fatal("session auto approval stayed enabled after trusting into edit mode")
-	}
-}
-
-func TestTrustCommandRespectsStrictPolicy(t *testing.T) {
-	if features.CoreLoopOnly {
-		t.Skip("workspace trust command is disabled during CoreLoopOnly stabilization")
-	}
-	trustPath := filepath.Join(t.TempDir(), "trusted.json")
-	model := readyModel(t).WithTrust(ionworkspace.NewTrustStore(trustPath), false, "strict")
-
-	_, cmd := model.handleCommand("/trust")
-	if cmd == nil {
-		t.Fatal("strict trust command returned nil cmd")
-	}
-	err := localErrorFromMsg(t, cmd())
-	if !strings.Contains(err.Error(), "workspace trust is strict") {
-		t.Fatalf("error = %v, want strict trust error", err)
-	}
-}
-
-func TestTrustStatusCommandReportsState(t *testing.T) {
-	if features.CoreLoopOnly {
-		t.Skip("workspace trust command is disabled during CoreLoopOnly stabilization")
-	}
-	model := readyModel(t).WithTrust(nil, true)
-
-	_, cmd := model.handleCommand("/trust status")
-	if cmd == nil {
-		t.Fatal("trust status command returned nil cmd")
-	}
-}
-
-func TestRewindCommandPreviewsThenRestoresCheckpoint(t *testing.T) {
-	if features.CoreLoopOnly {
-		t.Skip("advanced /rewind command is disabled during P1 core loop stabilization")
-	}
-	workdir := t.TempDir()
-	store := ionworkspace.NewCheckpointStore(filepath.Join(t.TempDir(), "checkpoints"))
-	if err := os.WriteFile(filepath.Join(workdir, "tracked.txt"), []byte("before"), 0o644); err != nil {
-		t.Fatalf("write tracked: %v", err)
-	}
-	cp, err := store.Create(t.Context(), workdir, []string{"tracked.txt", "created.txt"})
-	if err != nil {
-		t.Fatalf("create checkpoint: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(workdir, "tracked.txt"), []byte("after"), 0o644); err != nil {
-		t.Fatalf("modify tracked: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(workdir, "created.txt"), []byte("new"), 0o644); err != nil {
-		t.Fatalf("write created: %v", err)
-	}
-
-	model := New(
-		stubBackend{sess: &stubSession{events: make(chan session.Event)}},
-		nil,
-		nil,
-		workdir,
-		"main",
-		"dev",
-		nil,
-	).WithCheckpointStore(store)
-
-	_, cmd := model.handleCommand("/rewind " + cp.ID)
-	if cmd == nil {
-		t.Fatal("preview command returned nil cmd")
-	}
-	data, err := os.ReadFile(filepath.Join(workdir, "tracked.txt"))
-	if err != nil {
-		t.Fatalf("read tracked after preview: %v", err)
-	}
-	if string(data) != "after" {
-		t.Fatalf("preview restored tracked.txt: %q", data)
-	}
-	if _, err := os.Stat(filepath.Join(workdir, "created.txt")); err != nil {
-		t.Fatalf("preview removed created.txt: %v", err)
-	}
-
-	_, cmd = model.handleCommand("/rewind " + cp.ID + " --confirm")
-	if cmd == nil {
-		t.Fatal("confirm command returned nil cmd")
-	}
-	data, err = os.ReadFile(filepath.Join(workdir, "tracked.txt"))
-	if err != nil {
-		t.Fatalf("read tracked after confirm: %v", err)
-	}
-	if string(data) != "before" {
-		t.Fatalf("tracked.txt = %q, want before", data)
-	}
-	if _, err := os.Stat(filepath.Join(workdir, "created.txt")); !os.IsNotExist(err) {
-		t.Fatalf("created.txt still exists or stat failed: %v", err)
-	}
-}
-
-func TestRewindCommandRejectsDifferentWorkspaceCheckpoint(t *testing.T) {
-	if features.CoreLoopOnly {
-		t.Skip("advanced /rewind command is disabled during P1 core loop stabilization")
-	}
-	workdir := t.TempDir()
-	other := t.TempDir()
-	store := ionworkspace.NewCheckpointStore(filepath.Join(t.TempDir(), "checkpoints"))
-	if err := os.WriteFile(filepath.Join(other, "file.txt"), []byte("before"), 0o644); err != nil {
-		t.Fatalf("write file: %v", err)
-	}
-	cp, err := store.Create(t.Context(), other, []string{"file.txt"})
-	if err != nil {
-		t.Fatalf("create checkpoint: %v", err)
-	}
-	model := New(
-		stubBackend{sess: &stubSession{events: make(chan session.Event)}},
-		nil,
-		nil,
-		workdir,
-		"main",
-		"dev",
-		nil,
-	).WithCheckpointStore(store)
-
-	_, cmd := model.handleCommand("/rewind " + cp.ID + " --confirm")
-	if cmd == nil {
-		t.Fatal("different workspace command returned nil cmd")
-	}
-	msg := cmd()
-	errMsg, ok := msg.(session.Error)
-	if !ok {
-		t.Fatalf("expected session.Error, got %T", msg)
-	}
-	if !strings.Contains(errMsg.Err.Error(), "different workspace") {
-		t.Fatalf("unexpected error: %v", errMsg.Err)
 	}
 }
 
@@ -3790,17 +4023,26 @@ func TestModelPickerListsConfiguredPresetsAtTop(t *testing.T) {
 		t.Fatalf("item count = %d, want 3", len(items))
 	}
 	if items[0].Group != "Configured presets" || items[1].Group != "Configured presets" {
-		t.Fatalf("configured groups = [%q %q], want [Configured presets Configured presets]", items[0].Group, items[1].Group)
+		t.Fatalf(
+			"configured groups = [%q %q], want [Configured presets Configured presets]",
+			items[0].Group,
+			items[1].Group,
+		)
 	}
 	if items[0].Value != "vendor/model-b" || items[1].Value != "vendor/model-a" {
-		t.Fatalf("configured values = [%q %q], want [vendor/model-b vendor/model-a]", items[0].Value, items[1].Value)
+		t.Fatalf(
+			"configured values = [%q %q], want [vendor/model-b vendor/model-a]",
+			items[0].Value,
+			items[1].Value,
+		)
 	}
 	if items[2].Group != "All models" {
 		t.Fatalf("catalog group = %q, want All models", items[2].Group)
 	}
 
 	rendered := ansi.Strip(model.renderPicker())
-	if !strings.Contains(rendered, "Configured presets") || !strings.Contains(rendered, "All models") {
+	if !strings.Contains(rendered, "Configured presets") ||
+		!strings.Contains(rendered, "All models") {
 		t.Fatalf("rendered picker missing model groups: %q", rendered)
 	}
 }
@@ -3967,8 +4209,12 @@ func TestChildLifecycleUpdatesPlaneB(t *testing.T) {
 		Query:     "inspect the repo",
 	})
 	model = updated
-	if model.InFlight.Subagents["worker-1"] == nil || model.InFlight.Subagents["worker-1"].Name != "worker-1" {
-		t.Fatalf("pending child after request = %#v, want subagent progress in Subagents map", model.InFlight.Subagents["worker-1"])
+	if model.InFlight.Subagents["worker-1"] == nil ||
+		model.InFlight.Subagents["worker-1"].Name != "worker-1" {
+		t.Fatalf(
+			"pending child after request = %#v, want subagent progress in Subagents map",
+			model.InFlight.Subagents["worker-1"],
+		)
 	}
 	if model.InFlight.Subagents["worker-1"].Name != "worker-1" {
 		t.Fatalf("child name = %q, want worker-1", model.InFlight.Subagents["worker-1"].Name)
@@ -3981,8 +4227,12 @@ func TestChildLifecycleUpdatesPlaneB(t *testing.T) {
 		AgentName: "worker-1",
 	})
 	model = updated
-	if model.InFlight.Subagents["worker-1"] == nil || model.InFlight.Subagents["worker-1"].Status != "Started" {
-		t.Fatalf("child status after start = %q, want Started", model.InFlight.Subagents["worker-1"].Status)
+	if model.InFlight.Subagents["worker-1"] == nil ||
+		model.InFlight.Subagents["worker-1"].Status != "Started" {
+		t.Fatalf(
+			"child status after start = %q, want Started",
+			model.InFlight.Subagents["worker-1"].Status,
+		)
 	}
 
 	updated, _ = model.handleSessionEvent(session.ChildDelta{
@@ -3990,8 +4240,12 @@ func TestChildLifecycleUpdatesPlaneB(t *testing.T) {
 		Delta:     "thinking...\n",
 	})
 	model = updated
-	if model.InFlight.Subagents["worker-1"] == nil || !strings.Contains(model.InFlight.Subagents["worker-1"].Output, "thinking...") {
-		t.Fatalf("child output after delta = %#v, want streamed delta", model.InFlight.Subagents["worker-1"])
+	if model.InFlight.Subagents["worker-1"] == nil ||
+		!strings.Contains(model.InFlight.Subagents["worker-1"].Output, "thinking...") {
+		t.Fatalf(
+			"child output after delta = %#v, want streamed delta",
+			model.InFlight.Subagents["worker-1"],
+		)
 	}
 
 	updated, _ = model.handleSessionEvent(session.ChildCompleted{
@@ -4018,13 +4272,19 @@ func TestChildLifecycleUpdatesPlaneB(t *testing.T) {
 	})
 	model = updated
 	if model.InFlight.Subagents["worker-2"] != nil {
-		t.Fatalf("expected failed child entry to clear, got %#v", model.InFlight.Subagents["worker-2"])
+		t.Fatalf(
+			"expected failed child entry to clear, got %#v",
+			model.InFlight.Subagents["worker-2"],
+		)
 	}
 	if model.Progress.Mode != stateError {
 		t.Fatalf("progress mode after child failure = %v, want stateError", model.Progress.Mode)
 	}
 	if model.Progress.LastError != "Subagent failed: boom" {
-		t.Fatalf("last error after child failure = %q, want subagent error", model.Progress.LastError)
+		t.Fatalf(
+			"last error after child failure = %q, want subagent error",
+			model.Progress.LastError,
+		)
 	}
 }
 
@@ -4043,10 +4303,17 @@ func TestChildBlockedUpdatesPlaneB(t *testing.T) {
 	})
 	model = updated
 
-	if model.InFlight.Subagents["worker-3"] == nil || model.InFlight.Subagents["worker-3"].Name != "worker-3" {
-		t.Fatalf("pending child after block = %#v, want subagent progress in Subagents map", model.InFlight.Subagents["worker-3"])
+	if model.InFlight.Subagents["worker-3"] == nil ||
+		model.InFlight.Subagents["worker-3"].Name != "worker-3" {
+		t.Fatalf(
+			"pending child after block = %#v, want subagent progress in Subagents map",
+			model.InFlight.Subagents["worker-3"],
+		)
 	}
-	if got := model.InFlight.Subagents["worker-3"].Output; !strings.Contains(got, "BLOCKED: needs approval") {
+	if got := model.InFlight.Subagents["worker-3"].Output; !strings.Contains(
+		got,
+		"BLOCKED: needs approval",
+	) {
 		t.Fatalf("child output = %q, want blocked notice", got)
 	}
 	if model.Progress.Mode != stateBlocked {
@@ -4079,6 +4346,7 @@ func TestQueuedFollowUpSubmitsAfterTurnFinished(t *testing.T) {
 		t.Fatal("expected queue notice cmd")
 	}
 
+	model.InFlight.AgentCommitted = true
 	updated, cmd = model.Update(session.TurnFinished{})
 	model = updated.(Model)
 	if cmd == nil {
@@ -4092,6 +4360,12 @@ func TestQueuedFollowUpSubmitsAfterTurnFinished(t *testing.T) {
 	}
 	if len(sess.submits) != 1 || sess.submits[0] != "follow up" {
 		t.Fatalf("submits = %#v, want queued follow up", sess.submits)
+	}
+	if got := fmt.Sprintf("%T", nextCmd()); !strings.Contains(got, "sequenceMsg") {
+		t.Fatalf(
+			"queued follow-up command = %s, want sequence that re-arms session event wait",
+			got,
+		)
 	}
 }
 
@@ -4426,7 +4700,11 @@ func TestProviderPickerSelectingNonListingProviderClearsStaleError(t *testing.T)
 		t.Fatal("expected non-listing provider selection notice")
 	}
 	if model.Progress.Mode == stateError || model.Progress.LastError != "" {
-		t.Fatalf("stale error not cleared: mode=%v err=%q", model.Progress.Mode, model.Progress.LastError)
+		t.Fatalf(
+			"stale error not cleared: mode=%v err=%q",
+			model.Progress.Mode,
+			model.Progress.LastError,
+		)
 	}
 	cfg, err := config.Load()
 	if err != nil {
@@ -4463,7 +4741,11 @@ func TestProviderCommandClearsStaleError(t *testing.T) {
 		t.Fatalf("expected provider command to open picker without command, got %T", cmd)
 	}
 	if model.Progress.Mode == stateError || model.Progress.LastError != "" {
-		t.Fatalf("stale error not cleared: mode=%v err=%q", model.Progress.Mode, model.Progress.LastError)
+		t.Fatalf(
+			"stale error not cleared: mode=%v err=%q",
+			model.Progress.Mode,
+			model.Progress.LastError,
+		)
 	}
 	if model.Picker.Overlay == nil || model.Picker.Overlay.purpose != pickerPurposeModel {
 		t.Fatalf("picker = %#v, want model picker", model.Picker.Overlay)
@@ -4543,7 +4825,10 @@ func TestRuntimeSwitchClearsQueuedTurns(t *testing.T) {
 		t.Fatalf("last error = %q, want cleared on runtime switch", model.Progress.LastError)
 	}
 	if model.Progress.LastTurnSummary != (turnSummary{}) {
-		t.Fatalf("last turn summary = %#v, want cleared on runtime switch", model.Progress.LastTurnSummary)
+		t.Fatalf(
+			"last turn summary = %#v, want cleared on runtime switch",
+			model.Progress.LastTurnSummary,
+		)
 	}
 }
 
@@ -4686,7 +4971,10 @@ func TestSubmitTextPropagatesImmediateSubmitErrorWithoutPersistence(t *testing.T
 		t.Fatalf("last error = %q, want backend unavailable", model.Progress.LastError)
 	}
 	if !model.Progress.TurnStartedAt.IsZero() {
-		t.Fatalf("turn started at = %v, want zero after immediate submit failure", model.Progress.TurnStartedAt)
+		t.Fatalf(
+			"turn started at = %v, want zero after immediate submit failure",
+			model.Progress.TurnStartedAt,
+		)
 	}
 	if len(sess.submits) != 0 {
 		t.Fatalf("submit count = %d, want 0 after immediate failure", len(sess.submits))
@@ -4696,10 +4984,16 @@ func TestSubmitTextPropagatesImmediateSubmitErrorWithoutPersistence(t *testing.T
 	}
 	for _, event := range storeSess.appends {
 		if _, ok := event.(storage.RoutingDecision); ok {
-			t.Fatalf("immediate submit error persisted routing decision %#v; failed submissions should not materialize session state", event)
+			t.Fatalf(
+				"immediate submit error persisted routing decision %#v; failed submissions should not materialize session state",
+				event,
+			)
 		}
 		if sys, ok := event.(storage.System); ok {
-			t.Fatalf("immediate submit error persisted system entry %#v; local errors should not materialize transcript state", sys)
+			t.Fatalf(
+				"immediate submit error persisted system entry %#v; local errors should not materialize transcript state",
+				sys,
+			)
 		}
 	}
 }
@@ -4814,7 +5108,8 @@ func TestSlashModelUsesRuntimeConfigOverPersistedState(t *testing.T) {
 	next, _ := model.Update(switched)
 	model = next.(Model)
 
-	if observed == nil || observed.Provider != "openrouter" || observed.Model != "anthropic/claude-sonnet-4.5" {
+	if observed == nil || observed.Provider != "openrouter" ||
+		observed.Model != "anthropic/claude-sonnet-4.5" {
 		t.Fatalf("switcher config = %#v, want active openrouter provider", observed)
 	}
 	if model.Model.Config == nil ||
@@ -4975,7 +5270,10 @@ func TestResumeRuntimeCommandClosesNewRuntimeWhenReplayFails(t *testing.T) {
 		session.Entry{Role: session.System, Content: "Resumed"},
 		"session-1",
 	)
-	if err := localErrorFromMsg(t, cmd()); !strings.Contains(err.Error(), "load session transcript") {
+	if err := localErrorFromMsg(t, cmd()); !strings.Contains(
+		err.Error(),
+		"load session transcript",
+	) {
 		t.Fatalf("resume error = %v, want transcript load error", err)
 	}
 	if oldSession.closed {
@@ -5154,6 +5452,14 @@ func TestProviderItemsPreferReadyProvidersBeforeUnsetOnes(t *testing.T) {
 		}
 		return -1
 	}
+	groupOf := func(value string) string {
+		for _, item := range items {
+			if item.Value == value {
+				return item.Group
+			}
+		}
+		return ""
+	}
 
 	if indexOf("gemini") == -1 || indexOf("openrouter") == -1 || indexOf("local-api") == -1 {
 		t.Fatalf("expected ready providers and Local API to appear in picker: %#v", items)
@@ -5166,6 +5472,9 @@ func TestProviderItemsPreferReadyProvidersBeforeUnsetOnes(t *testing.T) {
 	}
 	if indexOf("local-api") > indexOf("anthropic") {
 		t.Fatalf("Local API should sort ahead of unset direct providers")
+	}
+	if groupOf("anthropic") != "Needs setup" {
+		t.Fatalf("unset direct provider group = %q, want Needs setup", groupOf("anthropic"))
 	}
 }
 

@@ -1,5 +1,8 @@
 # Memory
 
+Memory is deferred during native-loop stabilization. It is not part of the default
+P1 model-visible native tool surface.
+
 Ion uses Canto memory for workspace-scoped recall.
 
 Commands:

@@ -23,7 +23,6 @@ func now() int64 { return time.Now().Unix() }
 
 const (
 	printSubmitHoldThreshold = 12
-	printChunkLines          = 36
 	printSubmitHoldBase      = 150 * time.Millisecond
 	printSubmitHoldPerLine   = 15 * time.Millisecond
 	printSubmitHoldMax       = 1 * time.Second
@@ -57,18 +56,7 @@ func printLinesCmd(lines ...string) tea.Cmd {
 	if len(filtered) == 0 {
 		return nil
 	}
-	if len(filtered) <= printChunkLines {
-		return tea.Printf("%s\n", strings.Join(filtered, "\n"))
-	}
-	cmds := make([]tea.Cmd, 0, (len(filtered)+printChunkLines-1)/printChunkLines)
-	for start := 0; start < len(filtered); start += printChunkLines {
-		end := start + printChunkLines
-		if end > len(filtered) {
-			end = len(filtered)
-		}
-		cmds = append(cmds, tea.Printf("%s\n", strings.Join(filtered[start:end], "\n")))
-	}
-	return tea.Sequence(cmds...)
+	return tea.Printf("%s\n", strings.Join(filtered, "\n"))
 }
 
 func printEntriesCmd(m Model, entries ...session.Entry) tea.Cmd {

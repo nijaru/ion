@@ -7,28 +7,27 @@ import (
 
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/config"
-	"github.com/nijaru/ion/internal/features"
 )
 
-func TestLoadWorkspaceTrustReportsUntrusted(t *testing.T) {
-	if features.CoreLoopOnly {
-		t.Skip("workspace trust is disabled during CoreLoopOnly stabilization")
-	}
+func TestLoadWorkspaceTrustIsDeferred(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	_, trusted, notice, err := loadWorkspaceTrust(filepath.Join(home, "repo"), &config.Config{})
+	store, trusted, notice, err := loadWorkspaceTrust(
+		filepath.Join(home, "repo"),
+		&config.Config{WorkspaceTrust: "strict"},
+	)
 	if err != nil {
 		t.Fatalf("loadWorkspaceTrust returned error: %v", err)
 	}
-	if trusted {
-		t.Fatal("workspace starts trusted")
+	if store != nil {
+		t.Fatal("deferred workspace trust should not create a trust store")
 	}
-	if !strings.Contains(notice, "READ mode active") {
-		t.Fatalf("notice = %q, want READ mode warning", notice)
+	if !trusted {
+		t.Fatal("deferred workspace trust should treat workspace as eligible")
 	}
-	if !strings.Contains(notice, "Workspace: not trusted.") {
-		t.Fatalf("notice = %q, want grammatical trust warning", notice)
+	if notice != "" {
+		t.Fatalf("notice = %q, want empty", notice)
 	}
 }
 
@@ -36,7 +35,10 @@ func TestLoadWorkspaceTrustCanBeDisabled(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	store, trusted, notice, err := loadWorkspaceTrust(filepath.Join(home, "repo"), &config.Config{WorkspaceTrust: "off"})
+	store, trusted, notice, err := loadWorkspaceTrust(
+		filepath.Join(home, "repo"),
+		&config.Config{WorkspaceTrust: "off"},
+	)
 	if err != nil {
 		t.Fatalf("loadWorkspaceTrust returned error: %v", err)
 	}

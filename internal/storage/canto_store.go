@@ -14,6 +14,7 @@ import (
 	"github.com/nijaru/canto/memory"
 	"github.com/nijaru/canto/session"
 	ionsession "github.com/nijaru/ion/internal/session"
+	"github.com/nijaru/ion/internal/tooldisplay"
 	_ "modernc.org/sqlite"
 )
 
@@ -32,7 +33,7 @@ const (
 )
 
 func NewCantoStore(root string) (Store, error) {
-	if err := os.MkdirAll(root, 0755); err != nil {
+	if err := os.MkdirAll(root, 0o755); err != nil {
 		return nil, err
 	}
 	dbPath := filepath.Join(root, "sessions.db")
@@ -119,12 +120,21 @@ func (s *cantoStore) init() error {
 	}
 	return nil
 }
+
 func (s *cantoStore) OpenSession(ctx context.Context, cwd, model, branch string) (Session, error) {
 	id := fmt.Sprintf("%d-%s", time.Now().Unix(), ionsession.ShortID())
 
-	_, err := s.db.ExecContext(ctx,
+	_, err := s.db.ExecContext(
+		ctx,
 		"INSERT INTO session_meta (id, cwd, model, branch, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-		id, cwd, model, branch, "", time.Now().Unix(), time.Now().Unix())
+		id,
+		cwd,
+		model,
+		branch,
+		"",
+		time.Now().Unix(),
+		time.Now().Unix(),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -160,8 +170,11 @@ func (s *cantoStore) ResumeSession(ctx context.Context, id string) (Session, err
 }
 
 func (s *cantoStore) ListSessions(ctx context.Context, cwd string) ([]SessionInfo, error) {
-	rows, err := s.db.QueryContext(ctx,
-		"SELECT id, model, branch, created_at, updated_at, name, last_preview FROM session_meta WHERE cwd = ? ORDER BY updated_at DESC", cwd)
+	rows, err := s.db.QueryContext(
+		ctx,
+		"SELECT id, model, branch, created_at, updated_at, name, last_preview FROM session_meta WHERE cwd = ? ORDER BY updated_at DESC",
+		cwd,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -199,12 +212,23 @@ func (s *cantoStore) GetRecentSession(ctx context.Context, cwd string) (*Session
 }
 
 func (s *cantoStore) AddInput(ctx context.Context, cwd, content string) error {
-	_, err := s.db.ExecContext(ctx, "INSERT INTO inputs (cwd, content, created_at) VALUES (?, ?, ?)", cwd, content, time.Now().Unix())
+	_, err := s.db.ExecContext(
+		ctx,
+		"INSERT INTO inputs (cwd, content, created_at) VALUES (?, ?, ?)",
+		cwd,
+		content,
+		time.Now().Unix(),
+	)
 	return err
 }
 
 func (s *cantoStore) GetInputs(ctx context.Context, cwd string, limit int) ([]string, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT content FROM inputs WHERE cwd = ? ORDER BY created_at DESC LIMIT ?", cwd, limit)
+	rows, err := s.db.QueryContext(
+		ctx,
+		"SELECT content FROM inputs WHERE cwd = ? ORDER BY created_at DESC LIMIT ?",
+		cwd,
+		limit,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -379,7 +403,10 @@ func (s *cantoSession) Append(ctx context.Context, event any) error {
 		return err
 	}
 
-	return s.store.UpdateSession(ctx, SessionInfo{ID: s.id, Title: title, Summary: preview, LastPreview: preview})
+	return s.store.UpdateSession(
+		ctx,
+		SessionInfo{ID: s.id, Title: title, Summary: preview, LastPreview: preview},
+	)
 }
 
 func modelVisibleAppendError(event any) error {
@@ -461,7 +488,7 @@ func (s *cantoSession) Entries(ctx context.Context) ([]ionsession.Entry, error) 
 	effectiveByEventID := make(map[string]session.HistoryEntry, len(history))
 	for _, entry := range history {
 		if entry.EventID == "" {
-			if display, ok := displayHistoryEntry(entry); ok {
+			if display, ok := displayHistoryEntry(s.meta.CWD, entry); ok {
 				entries = append(entries, display)
 			}
 			continue
@@ -472,7 +499,7 @@ func (s *cantoSession) Entries(ctx context.Context) ([]ionsession.Entry, error) 
 	seenEffective := make(map[string]bool, len(effectiveByEventID))
 	for _, ev := range sess.Events() {
 		if entry, ok := effectiveByEventID[ev.ID.String()]; ok {
-			if display, ok := displayHistoryEntry(entry); ok {
+			if display, ok := displayHistoryEntry(s.meta.CWD, entry); ok {
 				entries = append(entries, display)
 			}
 			seenEffective[entry.EventID] = true
@@ -486,14 +513,14 @@ func (s *cantoSession) Entries(ctx context.Context) ([]ionsession.Entry, error) 
 		if entry.EventID == "" || seenEffective[entry.EventID] {
 			continue
 		}
-		if display, ok := displayHistoryEntry(entry); ok {
+		if display, ok := displayHistoryEntry(s.meta.CWD, entry); ok {
 			entries = append(entries, display)
 		}
 	}
 	return normalizeDisplayEntries(entries), nil
 }
 
-func displayHistoryEntry(entry session.HistoryEntry) (ionsession.Entry, bool) {
+func displayHistoryEntry(workdir string, entry session.HistoryEntry) (ionsession.Entry, bool) {
 	if display, ok := displayContextEntry(entry); ok {
 		return display, true
 	}
@@ -521,7 +548,7 @@ func displayHistoryEntry(entry session.HistoryEntry) (ionsession.Entry, bool) {
 			args = entry.Tool.Arguments
 			isError = entry.Tool.IsError || strings.TrimSpace(entry.Tool.Error) != ""
 		}
-		title := formatDisplayToolTitle(name, args)
+		title := tooldisplay.Title(name, args, tooldisplay.Options{Workdir: workdir})
 		if title == "" {
 			title = "tool"
 		}
@@ -538,50 +565,6 @@ func displayHistoryEntry(entry session.HistoryEntry) (ionsession.Entry, bool) {
 		}, true
 	default:
 		return ionsession.Entry{}, false
-	}
-}
-
-func formatDisplayToolTitle(name, args string) string {
-	displayName := displayToolName(name)
-	args = strings.TrimSpace(args)
-	if args == "" || args == "{}" {
-		return displayName
-	}
-	for _, key := range []string{"command", "file_path", "path", "pattern", "query"} {
-		pattern := fmt.Sprintf("\"%s\":", key)
-		if idx := strings.Index(args, pattern); idx >= 0 {
-			val := strings.TrimSpace(args[idx+len(pattern):])
-			if strings.HasPrefix(val, "\"") {
-				val = val[1:]
-				if end := strings.Index(val, "\""); end >= 0 {
-					return strings.TrimSpace(displayName + " " + val[:end])
-				}
-			}
-		}
-	}
-	return displayName
-}
-
-func displayToolName(name string) string {
-	switch strings.TrimSpace(strings.ToLower(name)) {
-	case "read":
-		return "Read"
-	case "write":
-		return "Write"
-	case "edit", "multi_edit":
-		return "Edit"
-	case "list":
-		return "List"
-	case "grep":
-		return "Search"
-	case "glob":
-		return "Find"
-	case "bash":
-		return "Bash"
-	case "verify":
-		return "Verify"
-	default:
-		return strings.TrimSpace(name)
 	}
 }
 

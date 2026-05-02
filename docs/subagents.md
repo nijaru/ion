@@ -1,12 +1,17 @@
 # Subagents
 
-Ion exposes a `subagent` tool for focused delegation. The default personas are:
+Subagents are a deferred P2 surface during native-loop stabilization. They are not
+part of Ion's default P1 native tool surface, and the model should not assume a
+`subagent` tool is available during core-loop stabilization.
+
+In full mode, Ion exposes a `subagent` tool for focused delegation. The default
+personas are:
 
 | Name | Model slot | Tools | Use |
 |---|---|---|---|
 | `explorer` | `fast` | read/search/memory recall | Codebase scouting and context gathering |
-| `reviewer` | `primary` | read/search/verify | Correctness and regression review |
-| `worker` | `primary` | edit/shell/verify plus read/search | Scoped implementation work |
+| `reviewer` | `primary` | read/search/shell | Correctness and regression review |
+| `worker` | `primary` | edit/shell plus read/search | Scoped implementation work |
 
 The `fast` slot resolves from `fast_model` / `fast_reasoning_effort` in
 `~/.ion/config.toml`. If `fast_model` is unset, Ion picks a cheap fast model
