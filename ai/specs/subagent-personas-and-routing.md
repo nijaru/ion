@@ -7,13 +7,14 @@ child-session hook points, but the tool is not registered in the default native
 tool surface. The current product baseline remains the eight coding tools in
 `ai/specs/tools-and-modes.md`.
 
-Do not expose `subagent` by default until the context contract below is
-implemented and tested. A child agent that only receives ad hoc user-provided
-context is too easy for the model to misuse: it may assume the child sees the
-parent transcript when it does not.
+Do not expose `subagent` by default. The context contract below is implemented
+at the tool boundary, but default registration still needs an explicit product
+decision because it would add a ninth model-visible tool. A child agent that
+only receives ad hoc user-provided context is too easy for the model to misuse:
+it may assume the child sees the parent transcript when it does not.
 
-Active prerequisite: `tk-hz8p` - Subagents: implement explicit context modes
-before registration.
+Current follow-up: `tk-29xj` - Subagents: expose gated subagent tool after
+context-mode smoke.
 
 Built-in personas remain the target shape:
 
@@ -40,8 +41,8 @@ Config override: `subagents_path`
 
 ## Context Contract
 
-The next implementation should make context transfer explicit in the tool schema
-instead of relying on prompt convention.
+Context transfer is explicit in the tool schema instead of relying on prompt
+convention.
 
 | Mode | Meaning | Default use |
 | --- | --- | --- |

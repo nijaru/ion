@@ -20,11 +20,12 @@ The near-term direction is:
 Current implementation note: Ion already has inline Plane B subagent progress
 rows, concise durable child breadcrumbs, built-in `explorer`, `reviewer`, and
 `worker` personas, and Canto child-session hook points. The model-visible
-`subagent` tool is still not registered by default because context transfer is
-not explicit enough yet.
+`subagent` tool is still not registered by default because adding a ninth
+model-visible tool needs an explicit opt-in/product decision.
 
-The next prerequisite is explicit `summary` / `fork` / `none` context modes for
-child agents. Full alternate-screen swarm mode waits behind that contract.
+The `summary` / `fork` / `none` context modes now exist at the tool boundary.
+Full alternate-screen swarm mode waits behind gated subagent registration and
+child-session ownership smokes.
 
 ## Product Boundary
 
@@ -284,7 +285,8 @@ Alternatives like `mission mode` or `ops view` can stay open for later naming re
 
 - keep inline mode primary
 - keep the current inline Plane B rows as the normal near-term display surface
-- implement and test explicit child context modes before default registration
+- decide the smallest explicit opt-in path for model-visible subagent
+  registration
 - keep swarm mode as a design target, not an implementation priority
 - keep this document as the target design for later subagent and swarm work
 - design title and summary generation as lightweight session metadata
@@ -296,8 +298,8 @@ Alternatives like `mission mode` or `ops view` can stay open for later naming re
 - automatic main-agent wakeup on async child completion
 - transcript-level detailed child execution logs
 
-Tracked prerequisite: `tk-hz8p` - Subagents: implement explicit context modes
-before registration.
+Tracked prerequisite: `tk-29xj` - Subagents: expose gated subagent tool after
+context-mode smoke.
 
 Closed gate: `tk-pwsl` confirms the alternate-screen operator view is not the
 next implementation slice. Ion should finish context modes and default

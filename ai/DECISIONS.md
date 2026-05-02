@@ -21,6 +21,14 @@ Distilled architectural principles plus recent decision log.
 
 ## Recent Log
 
+### 2026-05-02 - Subagent context modes precede exposure
+
+Ion's `subagent` tool boundary now requires explicit context semantics:
+`summary` handoff, `fork` parent-history snapshot plus task, or `none` fresh
+task-only context. The tool still should not join the default eight-tool
+surface automatically; expose it only through a clear opt-in gate after a
+deterministic execute smoke.
+
 ### 2026-05-02 - Swarm view waits behind subagent context
 
 Ion should not build the alternate-screen swarm/operator view before default

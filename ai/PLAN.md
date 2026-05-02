@@ -9,8 +9,8 @@ green native baseline. Canto stays closed unless Ion evidence proves a
 framework-owned defect.
 
 Active umbrella: none. `tk-mmcs` is closed.
-Active task: `tk-hz8p` - Subagents: implement explicit context modes before
-registration.
+Active task: `tk-29xj` - Subagents: expose gated subagent tool after
+context-mode smoke.
 
 ## Phases
 
@@ -173,14 +173,20 @@ ACP bridge correctness is no longer the active blocker.
     - outcome: keep full alternate-screen swarm mode deferred; current inline
       Plane B subagent rows are the right near-term surface
     - prerequisite for future swarm work is `tk-hz8p`
-19. Next - `tk-hz8p` - Subagents: implement explicit context modes before
+19. Done - `tk-hz8p` - Subagents: implement explicit context modes before
     registration:
-    - add model-visible `summary` / `fork` / `none` context selection to the
+    - added model-visible `summary` / `fork` / `none` context selection to the
       subagent boundary
-    - keep child events out of parent provider-visible history except through
+    - keeps child events out of parent provider-visible history except through
       the final returned result
-    - cover child replay, parent cancellation, tool-scope allowlists, and
-      context snapshot behavior before default registration
+    - covers schema mapping, none-mode context rejection, and fork-mode child
+      provider-visible history when the parent has an in-flight tool call
+20. Next - `tk-29xj` - Subagents: expose gated subagent tool after
+    context-mode smoke:
+    - decide and implement an explicit opt-in registration path
+    - do not add `subagent` to the default eight-tool surface without evidence
+    - include config/visibility boundary tests, tool-scope allowlists, cancel
+      behavior, and a deterministic execute smoke
 
 ## I5+ Deferred Work
 

@@ -3,9 +3,9 @@
 Fast, lightweight terminal coding agent.
 
 **Phase:** I4 advanced integrations
-**Focus:** subagent context modes before default registration
+**Focus:** gated subagent tool exposure decision
 **Active umbrella:** none - `tk-mmcs` is closed
-**Active task:** `tk-hz8p` - Subagents: implement explicit context modes before registration
+**Active task:** `tk-29xj` - Subagents: expose gated subagent tool after context-mode smoke
 **Updated:** 2026-05-02
 
 ## Current Truth
@@ -118,11 +118,21 @@ Fast, lightweight terminal coding agent.
 - `tk-pwsl` is closed as a design gate. Ion already has compact inline Plane B
   subagent progress rows and durable child breadcrumbs, but a full
   alternate-screen swarm/operator view waits until subagent registration and
-  child-session ownership are stable. The prerequisite is `tk-hz8p`.
+  child-session ownership are stable. The next prerequisite is `tk-29xj`.
+- `tk-hz8p` is implemented. The `subagent` tool schema now exposes explicit
+  `context_mode` values: `summary`, `fork`, and `none`. `summary` remains the
+  default handoff shape, `fork` seeds a child from the parent's provider-visible
+  effective history plus the task, and `none` starts fresh with only the task.
+  Tests cover schema, mapping, `none` context rejection, and fork-mode child
+  history with an in-flight parent tool call. Gates passed:
+  `go test ./internal/backend/canto -run 'TestSubagent' -count=1`,
+  `go test ./internal/backend/canto -count=1`, `go test ./... -count=1`, and
+  the native race subset.
 
 ## Next Action
 
-1. Start `tk-hz8p` and implement explicit `summary` / `fork` / `none`
-   subagent context modes before exposing the model-visible `subagent` tool.
+1. Start `tk-29xj` and decide the smallest explicit opt-in path for exposing
+   the model-visible `subagent` tool without changing the default eight-tool
+   surface.
 2. Keep one green slice per commit and avoid reopening Canto unless Ion tests
    expose a framework defect.
