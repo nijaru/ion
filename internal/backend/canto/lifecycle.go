@@ -92,6 +92,7 @@ func (b *Backend) Open(ctx context.Context) error {
 
 	requestProcessors := []prompt.RequestProcessor{
 		reasoningEffortProcessor(b.cfg),
+		toolVisibilityProcessor(b.policy),
 	}
 
 	agentOptions := []agent.Option{

@@ -216,6 +216,24 @@ func (pe *PolicyEngine) AutoApprove() bool {
 	return pe.autoApprove
 }
 
+// VisibleToolNames filters registered tool names to the active mode's
+// model-visible surface.
+func (pe *PolicyEngine) VisibleToolNames(names []string) []string {
+	pe.mu.RLock()
+	defer pe.mu.RUnlock()
+
+	visible := make([]string, 0, len(names))
+	for _, name := range names {
+		if pe.mode == session.ModeRead {
+			if pe.Categories[name] != CategoryRead {
+				continue
+			}
+		}
+		visible = append(visible, name)
+	}
+	return visible
+}
+
 // Authorize checks if a tool call is permitted by the policy.
 func (pe *PolicyEngine) Authorize(
 	ctx context.Context,

@@ -141,6 +141,24 @@ func TestReadModeCannotBeWeakenedBySessionApprovals(t *testing.T) {
 	}
 }
 
+func TestVisibleToolNamesHidesNonReadToolsInReadMode(t *testing.T) {
+	pe := NewPolicyEngine()
+	names := []string{"bash", "edit", "glob", "grep", "list", "read", "unknown", "write"}
+
+	pe.SetMode(session.ModeRead)
+	got := pe.VisibleToolNames(names)
+	want := []string{"glob", "grep", "list", "read"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("READ visible tools = %#v, want %#v", got, want)
+	}
+
+	pe.SetMode(session.ModeEdit)
+	got = pe.VisibleToolNames(names)
+	if strings.Join(got, ",") != strings.Join(names, ",") {
+		t.Fatalf("EDIT visible tools = %#v, want %#v", got, names)
+	}
+}
+
 func TestYoloAllowsUnknownTools(t *testing.T) {
 	pe := NewPolicyEngine()
 	pe.SetMode(session.ModeYolo)
