@@ -2,10 +2,10 @@
 
 Fast, lightweight terminal coding agent.
 
-**Phase:** I3 safety/trust table stakes
-**Focus:** Restore safety, trust, sandbox, and policy behavior on top of the stable native shell.
-**Active umbrella:** `tk-mmcs` - core parity plan and queue hygiene.
-**Active task:** continue I3 safety/trust table-stakes cleanup.
+**Phase:** I4 advanced integrations
+**Focus:** Reopen deferred integrations from the stable I0-I3 baseline, starting with ACP bridge correctness.
+**Active umbrella:** none - `tk-mmcs` is closed.
+**Active task:** start the highest-priority ready ACP bridge task.
 **Updated:** 2026-05-02
 
 ## Current Truth
@@ -96,15 +96,18 @@ Fast, lightweight terminal coding agent.
   `go test ./cmd/ion ./internal/app ./internal/backend/canto -count=1 -timeout 180s`,
   `go test ./... -count=1 -timeout 300s`, the native race subset, and a tmux
   text capture with `ION_SANDBOX=auto`.
+- `tk-mmcs` is closed. Final Fedora `local-api/qwen3.6:27b-uncensored` live
+  smoke passed with a real bash tool call, persisted resume, follow-up returning
+  `continued`, and provider request capture verifying prior user/tool-call/tool-
+  result/assistant/resume history order.
 
 ## Next Action
 
-1. Close `tk-4570` after committing the sandbox/status slice.
-2. Pick the next narrow roadmap item from `tk ready` or open an I4 task if I3
-   has no remaining concrete blocker.
-3. Keep the scope narrow: mode/trust/sandbox/policy table stakes only, not ACP,
-   subagents, routing, skills, privacy, or advanced safety research.
+1. Start the first P2 ACP bridge task from `tk ready`.
+2. Keep native Canto/Ion loop behavior as the acceptance baseline while fixing
+   ACP-specific gaps.
+3. Continue one green slice per commit.
 
 ## Active Tasks
 
-- `tk-mmcs` - core parity plan and task queue hygiene.
+- none yet; next ready P2 tasks are ACP bridge correctness items.

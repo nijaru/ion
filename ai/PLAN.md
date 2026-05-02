@@ -4,11 +4,11 @@ Updated: 2026-05-02
 
 ## Current Focus
 
-I0-I2 are complete. Move into I3 safety/trust table stakes from the cleaned
-architecture. Canto stays closed unless Ion evidence proves a framework-owned
-defect.
+I0-I3 are complete. Move into I4 advanced integrations from the cleaned,
+green native baseline. Canto stays closed unless Ion evidence proves a
+framework-owned defect.
 
-Active umbrella: `tk-mmcs`.
+Active umbrella: none. `tk-mmcs` is closed.
 
 ## Phases
 
@@ -17,8 +17,8 @@ Active umbrella: `tk-mmcs`.
 | I0 | Close dirty baseline and clean AI context | Done |
 | I1 | Refactor native core boundaries without behavior drift | Done |
 | I2 | Polish minimal TUI/CLI shell for daily use | Done |
-| I3 | Restore safety, trust, sandbox, and policy table stakes | Active |
-| I4 | Add advanced agent features: subagents, memory, skills, routing, ACP | Deferred |
+| I3 | Restore safety, trust, sandbox, and policy table stakes | Done |
+| I4 | Add advanced agent features: subagents, memory, skills, routing, ACP | Active |
 | I5 | Add eval-driven optimization and SOTA experiments | Deferred |
 
 ## I0: Dirty Baseline And Context Hygiene
@@ -65,7 +65,7 @@ Covered:
 
 ## I3: Safety, Trust, Sandbox, And Policy
 
-Active next scope:
+Status: complete.
 
 - review current mode/trust/sandbox/policy behavior against
   `ai/specs/tools-and-modes.md`
@@ -80,7 +80,20 @@ Active next scope:
 - avoid advanced LLM-judge, escalation, privacy, ACP, subagents, or routing work
   during I3 unless a core safety defect requires it
 
-## I4+ Deferred Work
+## I4: Advanced Integrations
+
+Start with the highest-priority ready ACP bridge correctness tasks:
+
+1. `tk-2ffy` - filter/log ACP stderr separately instead of emitting
+   `session.Error`.
+2. `tk-o0iw` - add initial session context at ACP `Open()`.
+3. `tk-6zy3` - map ACP token usage events into Ion usage.
+
+After ACP bridge correctness, choose between subagents/context forking,
+boundary-step steering, and merged edit-tool evaluation based on concrete
+daily-use value.
+
+## I5+ Deferred Work
 
 Do not reopen during the current cleanup/refactor stream unless directly needed
 for a core bug:
