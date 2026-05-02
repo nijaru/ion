@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -60,12 +61,16 @@ func (s *cantoStore) ExportSessionBundle(
 			}
 			rawEvents = append(rawEvents, json.RawMessage(raw))
 		}
+		eventChecksum, err := checksumBundleEvents(rawEvents)
+		if err != nil {
+			return SessionBundle{}, fmt.Errorf("checksum events %s: %w", ancestry.SessionID, err)
+		}
 		bundle.Sessions = append(bundle.Sessions, SessionBundleRecord{
 			Info:          info,
 			Ancestry:      ancestry,
 			Events:        rawEvents,
 			EventCount:    len(rawEvents),
-			EventChecksum: checksumBundleEvents(rawEvents),
+			EventChecksum: eventChecksum,
 		})
 	}
 	if err := bundle.seal(); err != nil {
@@ -224,7 +229,12 @@ func prepareSessionBundle(bundle SessionBundle) ([]preparedBundleRecord, error) 
 			return nil, fmt.Errorf("%w: session %s event count mismatch",
 				ErrSessionBundleIntegrity, id)
 		}
-		if got := checksumBundleEvents(record.Events); got != record.EventChecksum {
+		got, err := checksumBundleEvents(record.Events)
+		if err != nil {
+			return nil, fmt.Errorf("%w: checksum session %s events: %v",
+				ErrSessionBundleIntegrity, id, err)
+		}
+		if got != record.EventChecksum {
 			return nil, fmt.Errorf("%w: session %s event checksum mismatch",
 				ErrSessionBundleIntegrity, id)
 		}
@@ -293,13 +303,17 @@ func (b SessionBundle) computeChecksum() (string, error) {
 	return "sha256:" + checksumHex(raw), nil
 }
 
-func checksumBundleEvents(events []json.RawMessage) string {
+func checksumBundleEvents(events []json.RawMessage) (string, error) {
 	h := sha256.New()
 	for _, event := range events {
-		h.Write(event)
+		var compacted bytes.Buffer
+		if err := json.Compact(&compacted, event); err != nil {
+			return "", err
+		}
+		h.Write(compacted.Bytes())
 		h.Write([]byte{'\n'})
 	}
-	return "sha256:" + hex.EncodeToString(h.Sum(nil))
+	return "sha256:" + hex.EncodeToString(h.Sum(nil)), nil
 }
 
 func checksumHex(data []byte) string {
