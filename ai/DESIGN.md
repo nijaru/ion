@@ -143,6 +143,14 @@ metadata, per-session event checksums, a whole-bundle checksum, and explicit
 import conflict behavior. The scriptable surface is `--export-session <file>`
 with `--resume <id>` or `--continue`, plus `--import-session <file>`.
 
+`internal/storage` remains an Ion adapter over Canto rather than collapsing into
+Canto. It owns Ion-specific session indexes (`cwd`, branch, selected model,
+title/preview), input history, TUI display projection, lazy session
+materialization, and the portable bundle product shape. Canto should keep
+absorbing reusable primitives such as durable event JSON, ancestry, and
+effective-history projection, but it should not gain Ion's product metadata or
+TUI replay policy.
+
 Startup must not silently persist provider/model choices. Explicit CLI/env
 overrides affect the current process. TUI settings and picker actions persist
 only the fields they own.

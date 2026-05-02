@@ -3,9 +3,9 @@
 Fast, lightweight terminal coding agent.
 
 **Phase:** I4 advanced integrations
-**Focus:** I4 advanced integrations closeout
+**Focus:** ready queue closed; awaiting next priority
 **Active umbrella:** none - `tk-mmcs` is closed
-**Active task:** `tk-ritc` - Evaluate collapsing internal/storage wrapper into canto
+**Active task:** none
 **Updated:** 2026-05-02
 
 ## Current Truth
@@ -156,10 +156,15 @@ Fast, lightweight terminal coding agent.
   A future blocking interaction tool belongs behind a Canto elicitation
   primitive with explicit TUI, CLI, ACP, cancellation, resume, and
   noninteractive behavior.
+- `tk-ritc` is closed as a design decision. `internal/storage` remains Ion's
+  app adapter over Canto because it owns workspace/session indexes, input
+  history, lazy materialization, TUI replay projection, and portable bundle UX.
+  Canto continues to own reusable durable event, ancestry, and effective-history
+  primitives.
 
 ## Next Action
 
-1. Start `tk-ritc` and evaluate whether `internal/storage` should remain an Ion
-   projection wrapper over Canto or collapse further into Canto primitives.
+1. Run `tk ready` and choose the next product priority. The current ready queue
+   is expected to be empty after `tk-ritc`.
 2. Keep one green slice per commit and avoid reopening Canto unless Ion tests
    expose a framework defect.

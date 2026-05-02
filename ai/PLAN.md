@@ -9,7 +9,7 @@ green native baseline. Canto stays closed unless Ion evidence proves a
 framework-owned defect.
 
 Active umbrella: none. `tk-mmcs` is closed.
-Active task: `tk-ritc` - Evaluate collapsing internal/storage wrapper into canto.
+Active task: none.
 
 ## Phases
 
@@ -207,7 +207,11 @@ ACP bridge correctness is no longer the active blocker.
     - models can ask normal assistant questions today
     - future implementation belongs behind a Canto elicitation/pause-resume
       primitive with explicit TUI/CLI/ACP behavior
-25. Next - `tk-ritc` - Evaluate collapsing internal/storage wrapper into canto.
+25. Done - `tk-ritc` - Evaluate collapsing internal/storage wrapper into canto:
+    - keep `internal/storage` as Ion's app adapter over Canto
+    - Canto owns reusable event, ancestry, and effective-history primitives
+    - Ion keeps cwd/branch/model indexes, input history, lazy materialization,
+      TUI replay projection, and portable bundle UX
 
 ## I5+ Deferred Work
 
@@ -219,6 +223,7 @@ for a core bug:
 - memory/wiki, workflows, model routing
 - prompt cache/KV cache experiments
 - ripgo integration or merged edit-tool redesign
+- Canto elicitation primitive for future `ask_user`
 
 ## Verification Standard
 

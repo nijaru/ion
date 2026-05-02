@@ -21,6 +21,14 @@ Distilled architectural principles plus recent decision log.
 
 ## Recent Log
 
+### 2026-05-02 - Ion keeps its storage adapter
+
+Do not collapse `internal/storage` directly into Canto. Canto owns durable
+events, ancestry, and effective history; Ion still needs an application adapter
+for workspace/session indexes, input history, lazy materialization, TUI replay
+projection, and portable bundle UX. Upstream reusable storage primitives to
+Canto over time, but keep Ion product metadata and display policy in Ion.
+
 ### 2026-05-02 - AskUser waits for framework elicitation
 
 Ion should not add an Ion-only `ask_user` tool to the default surface. Models
