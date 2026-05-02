@@ -114,10 +114,9 @@ ACP bridge correctness is no longer the active blocker.
 8. Done - `tk-8174` - session branching. `/fork [label]` branches on Canto
    lineage and `/tree` shows lineage plus immediate children. Cross-host
    transfer is split into `tk-4lty`.
-9. Active - `tk-4lty` - portable session export/import bundle for cross-host
-   transfer. Storage and CLI support are implemented; finish with a real CLI
-   file-level smoke, task log, and closeout. Do not expose raw SQLite sync as
-   the product surface.
+9. Done - `tk-4lty` - portable session export/import bundle for cross-host
+   transfer. Storage and CLI support are implemented with a subprocess CLI
+   smoke. Raw SQLite sync is not exposed as the product surface.
 
 ## I5+ Deferred Work
 
