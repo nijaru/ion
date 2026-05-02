@@ -31,6 +31,67 @@ Durable tool-surface decisions:
   advanced tools such as `rg`, `fd`, or `ast-grep` when the typed tools are not
   enough.
 
+### Edit surface design
+
+Current recommendation:
+
+- Keep `write` separate long-term. Whole-file create/overwrite is a different
+  operation from targeted replacement for approval, display, and recovery.
+- Keep `edit` and `multi_edit` as the current I2 surface. Ion's implementation
+  is already hardened around exact replacement, CRLF/BOM-safe matching,
+  line-numbered ambiguity/count errors, explicit replacement counts, and
+  atomic validation before writes.
+- Do not make Python, `sed`, heredocs, or shell patching the normal edit path.
+  They are harder for agents to quote correctly, bypass Ion's edit-specific
+  validation/diff display, weaken permission/audit boundaries, and are easier
+  to partially apply.
+- Do not adopt a Codex-style patch grammar as the default Ion edit surface yet.
+  It is powerful and well-specified, but it adds a second model-facing language
+  and depends on grammar/freeform support quality across providers.
+
+Reference synthesis:
+
+| Reference | Edit shape | Takeaway for Ion |
+|---|---|---|
+| Pi | `write` plus one structured `edit(path, edits[])` | Good target for fewer tools and multi-edit preview UX |
+| Claude-like tools | separate file read/write/edit plus grep/glob/bash classes | Confirms clear permission/display classes are conventional |
+| Codex | `apply_patch` grammar for add/update/move/delete | Useful later for power users; too heavy for default mixed-provider path |
+
+Deferred evaluation:
+
+- Evaluate replacing `edit` + `multi_edit` with one `edit` tool after I2, not
+  during shell stabilization.
+- Candidate merged schema should preserve a clean break; Ion is `v0.0.0`, so no
+  compatibility shim is needed if the evaluation says merge.
+- Preferred candidate:
+
+```json
+{
+  "edits": [
+    {
+      "file_path": "path/to/file.go",
+      "old_string": "exact unique text",
+      "new_string": "replacement text",
+      "replace_all": false,
+      "expected_replacements": 1
+    }
+  ]
+}
+```
+
+Acceptance criteria before merging:
+
+- Equal or better edit success on a small local eval set covering single edit,
+  many edits in one file, multi-file edits, duplicate matches, missing matches,
+  overlapping edits, CRLF, BOM, and large files.
+- No partial writes on validation failure or cancellation.
+- Error messages point to the failing edit index, path, replacement count, and
+  line numbers where useful.
+- TUI displays `Edit(path)` with compact success by default and diff expansion
+  on demand.
+- Provider compatibility is verified against at least local-api, OpenRouter, and
+  one OpenAI/Anthropic-family model before making it default.
+
 Deferred or hidden surfaces:
 
 | Surface | Status |

@@ -21,6 +21,14 @@ Distilled architectural principles plus recent decision log.
 
 ## Recent Log
 
+### 2026-05-02 - Edit surface stays split through I2
+
+Pi's merged `edit(path, edits[])` is the best future simplification candidate,
+but Ion should keep `write`, `edit`, and `multi_edit` through I2. Python, `sed`,
+heredocs, and ad hoc shell patches remain non-recommended for ordinary edits.
+A merged edit surface needs eval evidence across single-file, multi-file,
+overlap, duplicate, CRLF/BOM, cancellation, and provider-compatibility cases.
+
 ### 2026-05-02 - AI context becomes design-first
 
 The next Ion work stream starts by pruning `ai/` and rewriting root files around

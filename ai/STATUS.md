@@ -5,7 +5,7 @@ Fast, lightweight terminal coding agent.
 **Phase:** I2 minimal shell polish
 **Focus:** Polish daily-use TUI/CLI shell behavior on top of the cleaned native baseline.
 **Active umbrella:** `tk-mmcs` - core parity plan and queue hygiene.
-**Active task:** `tk-dhej` - TUI markdown pretty-printing quality.
+**Active task:** `tk-wrci` - tools edit-surface research/design.
 **Updated:** 2026-05-02
 
 ## Current Truth
@@ -65,10 +65,13 @@ Fast, lightweight terminal coding agent.
 - Latest markdown gates passed:
   `go test ./internal/app -count=1 -timeout 180s`,
   `go test ./... -count=1 -timeout 300s`, and the native race subset.
+- Edit-surface design is distilled into `ai/specs/tools-and-modes.md` and
+  `ai/DECISIONS.md`: keep `write`, `edit`, and `multi_edit` through I2; defer a
+  Pi-style merged `edit(edits[])` until there is eval evidence.
 
 ## Next Action
 
-1. Commit and close `tk-dhej`.
+1. Commit and close `tk-wrci`.
 2. Pick the next I2 shell polish slice under `tk-mmcs`.
 3. Prioritize tmux-visible issues: transcript/progress spacing, compact tool
    output defaults, queued input recall, and slash/session command clarity.
@@ -76,4 +79,4 @@ Fast, lightweight terminal coding agent.
 ## Active Tasks
 
 - `tk-mmcs` - core parity plan and task queue hygiene.
-- `tk-dhej` - TUI markdown pretty-printing quality.
+- `tk-wrci` - tools edit-surface research/design.
