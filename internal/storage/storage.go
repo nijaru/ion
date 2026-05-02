@@ -35,6 +35,15 @@ type Store interface {
 	Close() error
 }
 
+type ForkOptions struct {
+	Label  string
+	Reason string
+}
+
+type SessionForker interface {
+	ForkSession(ctx context.Context, parentID string, opts ForkOptions) (Session, error)
+}
+
 // Session handles appending events to a specific session's storage.
 type Session interface {
 	// ID returns the unique session identifier.
@@ -71,6 +80,7 @@ type Metadata struct {
 // SessionInfo provides summary information about a session for lists and pickers.
 type SessionInfo struct {
 	ID           string    `json:"id"`
+	CWD          string    `json:"cwd"`
 	Model        string    `json:"model"`
 	Branch       string    `json:"branch"`
 	CreatedAt    time.Time `json:"created_at"`

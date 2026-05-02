@@ -3169,6 +3169,7 @@ func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 		"/clear",
 		"/resume [id]",
 		"/session",
+		"/fork [label]",
 		"/compact",
 		"/provider [name]",
 		"/model [name]",
@@ -3221,6 +3222,19 @@ func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 				helpMsg.notice,
 			)
 		}
+	}
+}
+
+func TestForkCommandRequiresMaterializedSession(t *testing.T) {
+	model := readyModel(t)
+
+	_, cmd := model.handleCommand("/fork experiment")
+	if cmd == nil {
+		t.Fatal("expected /fork command to return an error")
+	}
+	err := localErrorFromMsg(t, cmd())
+	if !strings.Contains(err.Error(), "No active session to fork yet") {
+		t.Fatalf("error = %v, want no active session", err)
 	}
 }
 

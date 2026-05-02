@@ -103,6 +103,86 @@ func TestCantoStoreAppendUpdatesRecentSession(t *testing.T) {
 	}
 }
 
+func TestCantoStoreForkSessionCopiesEventsAndIndexesChild(t *testing.T) {
+	root := t.TempDir()
+	storeAny, err := NewCantoStore(root)
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	store := storeAny.(*cantoStore)
+	ctx := context.Background()
+	cwd := "/tmp/ion-storage-test"
+
+	parent, err := store.OpenSession(ctx, cwd, "openrouter/test-model", "main")
+	if err != nil {
+		t.Fatalf("open parent session: %v", err)
+	}
+	appendCantoMessage(t, store, ctx, parent.ID(), llm.Message{
+		Role:    llm.RoleUser,
+		Content: "debug the flaky test",
+	})
+	if err := store.UpdateSession(ctx, SessionInfo{
+		ID:          parent.ID(),
+		Title:       "debug task",
+		LastPreview: "debug the flaky test",
+	}); err != nil {
+		t.Fatalf("update parent session: %v", err)
+	}
+
+	child, err := store.ForkSession(ctx, parent.ID(), ForkOptions{
+		Label:  "try alternate fix",
+		Reason: "test fork",
+	})
+	if err != nil {
+		t.Fatalf("fork session: %v", err)
+	}
+	if child.ID() == parent.ID() {
+		t.Fatal("fork returned parent session id")
+	}
+	if child.Meta().Model != "openrouter/test-model" {
+		t.Fatalf("child model = %q, want parent model", child.Meta().Model)
+	}
+
+	entries, err := child.Entries(ctx)
+	if err != nil {
+		t.Fatalf("child entries: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Content != "debug the flaky test" {
+		t.Fatalf("child entries = %#v, want copied parent transcript", entries)
+	}
+
+	children, err := store.canto.Children(ctx, parent.ID())
+	if err != nil {
+		t.Fatalf("load Canto children: %v", err)
+	}
+	if len(children) != 1 || children[0].SessionID != child.ID() {
+		t.Fatalf("children = %#v, want child %s", children, child.ID())
+	}
+	if children[0].BranchLabel != "try alternate fix" {
+		t.Fatalf("branch label = %q, want label", children[0].BranchLabel)
+	}
+
+	listed, err := store.ListSessions(ctx, cwd)
+	if err != nil {
+		t.Fatalf("list sessions: %v", err)
+	}
+	var found bool
+	for _, info := range listed {
+		if info.ID == child.ID() {
+			found = true
+			if info.Title != "try alternate fix" {
+				t.Fatalf("child title = %q, want label", info.Title)
+			}
+			if info.LastPreview != "debug the flaky test" {
+				t.Fatalf("child preview = %q, want parent preview", info.LastPreview)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("forked session %s missing from ListSessions: %#v", child.ID(), listed)
+	}
+}
+
 func TestCantoStoreLastStatusIgnoresTransientProgress(t *testing.T) {
 	root := t.TempDir()
 	storeAny, err := NewCantoStore(root)

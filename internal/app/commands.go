@@ -261,6 +261,40 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		}
 		return m, m.printEntries(session.Entry{Role: session.System, Content: out})
 
+	case "/fork":
+		if m.Model.Storage == nil || !storage.IsMaterialized(m.Model.Storage) {
+			return m, cmdError("No active session to fork yet")
+		}
+		parentID := m.currentMaterializedSessionID()
+		if parentID == "" {
+			return m, cmdError("No active session to fork yet")
+		}
+		forker, ok := m.Model.Store.(storage.SessionForker)
+		if !ok {
+			return m, cmdError("session store does not support forking")
+		}
+		label := strings.TrimSpace(strings.TrimPrefix(input, command))
+		forked, err := forker.ForkSession(context.Background(), parentID, storage.ForkOptions{
+			Label:  label,
+			Reason: "user requested /fork",
+		})
+		if err != nil {
+			return m, cmdError(fmt.Sprintf("failed to fork session: %v", err))
+		}
+		defer func() {
+			_ = forked.Close()
+		}()
+		meta := forked.Meta()
+		provider, model := splitStoredSessionModel(meta.Model)
+		if provider == "" || model == "" {
+			return m, cmdError(
+				fmt.Sprintf("forked session %s is missing provider/model metadata", forked.ID()),
+			)
+		}
+		cfg := &config.Config{Provider: provider, Model: model}
+		notice := session.Entry{Role: session.System, Content: "Forked session " + forked.ID()}
+		return m, m.resumeRuntimeCommand(cfg, notice, forked.ID())
+
 	case "/skills":
 		dir, err := config.DefaultSkillsDir()
 		if err != nil {
