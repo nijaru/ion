@@ -24,6 +24,7 @@ type cliFlags struct {
 	outputFlag        *string
 	jsonFlag          *bool
 	timeoutFlag       *time.Duration
+	agentFlag         *bool
 	exportSessionFlag *string
 	importSessionFlag *string
 }
@@ -62,6 +63,7 @@ func registerCLIFlags() cliFlags {
 		outputFlag:     flag.String("output", "text", "Print mode output: text or json"),
 		jsonFlag:       flag.Bool("json", false, "Emit JSON in print mode"),
 		timeoutFlag:    flag.Duration("timeout", 5*time.Minute, "Timeout for print mode"),
+		agentFlag:      flag.Bool("agent", false, "Run as an ACP agent over stdio"),
 		exportSessionFlag: flag.String(
 			"export-session",
 			"",
@@ -133,6 +135,10 @@ func (f cliFlags) jsonRequested() bool {
 
 func (f cliFlags) timeout() time.Duration {
 	return *f.timeoutFlag
+}
+
+func (f cliFlags) agentRequested() bool {
+	return *f.agentFlag
 }
 
 func (f cliFlags) exportSessionPath() string {
@@ -248,6 +254,7 @@ func ionKnownFlag(name string) bool {
 		"output",
 		"json",
 		"timeout",
+		"agent",
 		"export-session",
 		"import-session":
 		return true

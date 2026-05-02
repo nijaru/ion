@@ -54,6 +54,46 @@ func main() {
 	ctx := context.Background()
 	cwd, _ := os.Getwd()
 	branch := currentBranch()
+	acpCommandOverride := strings.TrimSpace(os.Getenv("ION_ACP_COMMAND"))
+
+	dataDir, err := config.DefaultDataDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to resolve data dir: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Initialize storage from the internal data dir.
+	store, err := storage.NewCantoStore(dataDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to initialize storage: %v\n", err)
+		os.Exit(1)
+	}
+	if cli.agentRequested() {
+		runErr := runACPAgent(
+			ctx,
+			os.Stdin,
+			os.Stdout,
+			store,
+			cfg,
+			branch,
+			mode,
+			acpCommandOverride,
+		)
+		closeErr := store.Close()
+		if runErr != nil {
+			if closeErr != nil {
+				fmt.Fprintf(os.Stderr, "failed to close storage: %v\n", closeErr)
+			}
+			fmt.Fprintf(os.Stderr, "ACP agent error: %v\n", runErr)
+			os.Exit(1)
+		}
+		if closeErr != nil {
+			fmt.Fprintf(os.Stderr, "failed to close storage: %v\n", closeErr)
+			os.Exit(1)
+		}
+		return
+	}
+
 	trustStore, trusted, trustNotice, err := loadWorkspaceTrust(cwd, cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to load workspace trust: %v\n", err)
@@ -96,18 +136,6 @@ func main() {
 		}
 	}
 
-	dataDir, err := config.DefaultDataDir()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to resolve data dir: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Initialize storage from the internal data dir.
-	store, err := storage.NewCantoStore(dataDir)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to initialize storage: %v\n", err)
-		os.Exit(1)
-	}
 	if cli.importSessionPath() != "" {
 		imported, err := importSessionBundleFile(ctx, store, cli.importSessionPath())
 		closeErr := store.Close()
@@ -169,8 +197,6 @@ func main() {
 		fmt.Fprintf(os.Stderr, "failed to resolve runtime config: %v\n", err)
 		os.Exit(1)
 	}
-
-	acpCommandOverride := strings.TrimSpace(os.Getenv("ION_ACP_COMMAND"))
 
 	b, sess, err := openRuntime(ctx, store, cwd, branch, runtimeCfg, acpCommandOverride, sessionID)
 	if err != nil {
