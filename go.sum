@@ -93,6 +93,8 @@ github.com/nijaru/agentskills v0.0.0-20260327104504-1968077cb46d h1:zf4g9wK8q+c8
 github.com/nijaru/agentskills v0.0.0-20260327104504-1968077cb46d/go.mod h1:+a9vDBa2salNkUtRNdC9qKMjlDuX6JZABlfsk0f9TvE=
 github.com/nijaru/canto v0.0.0-20260502190806-7dec1599f435 h1:bUibLCOeCWvJrKCNN98zsRTQZ1BtHE21qac6hZA3LnY=
 github.com/nijaru/canto v0.0.0-20260502190806-7dec1599f435/go.mod h1:syzdLzecE5wKtBFboJ4+3edhWODCBfIHtW8DaRkRM3A=
+github.com/nijaru/canto v0.0.0-20260502202031-62dc906890b7 h1:xrvgiD+/xXXGkim3mncTKf6qCnqFP1w3+Gs/ln2d2bI=
+github.com/nijaru/canto v0.0.0-20260502202031-62dc906890b7/go.mod h1:syzdLzecE5wKtBFboJ4+3edhWODCBfIHtW8DaRkRM3A=
 github.com/oklog/ulid/v2 v2.1.1 h1:suPZ4ARWLOJLegGFiZZ1dFAkqzhMjL3J1TzI+5wHz8s=
 github.com/oklog/ulid/v2 v2.1.1/go.mod h1:rcEKHmBBKfef9DhnvX7y1HZBYxjXb0cP5ExxNsTT1QQ=
 github.com/pborman/getopt v0.0.0-20170112200414-7148bc3a4c30/go.mod h1:85jBQOZwpVEaDAr341tbn15RS4fCAsIst0qp7i8ex1o=
