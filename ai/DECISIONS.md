@@ -18,8 +18,20 @@ Distilled architectural principles plus recent decision log.
   must be absent or rejected at their owning boundary.
 - Scriptable CLI behavior is a first-class regression surface.
 - Commit each coherent green slice; do not push without explicit approval.
+- Ion is a host over a harness. Canto should expose the headless runtime
+  facade; Ion should supply product policy and presentation.
 
 ## Recent Log
+
+### 2026-05-02 - Flue validates the harness boundary
+
+Flue is not a TUI replacement for Ion, but its headless programmable shape is a
+useful design signal: agent runtime, session, sandbox/env, tools, skills,
+commands, and persistence should be explicit harness concepts. Ion should first
+drive Canto toward a clearer harness facade, then make `CantoBackend` a thin
+adapter over it. Keep the model-facing tool surface small; route future
+skills/memory/sandbox behavior behind backend capabilities or explicit
+progressive disclosure rather than adding many similar tools.
 
 ### 2026-05-02 - Ion keeps its storage adapter
 

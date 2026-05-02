@@ -4,12 +4,13 @@ Updated: 2026-05-02
 
 ## Current Focus
 
-I0-I3 are complete. Move into I4 advanced integrations from the cleaned,
-green native baseline. Canto stays closed unless Ion evidence proves a
-framework-owned defect.
+I0-I4 are complete enough to pause feature expansion. The next priority is a
+harness-architecture refactor pass informed by Flue, Pi, OpenAI Agents SDK, and
+Mendral: make Canto's headless harness facade clearer first, then align Ion's
+runtime boundary to it.
 
-Active umbrella: none. `tk-mmcs` is closed.
-Active task: none.
+Active external prerequisite: Canto `canto-2vxb` - Flue/Pi harness facade review.
+Active Ion task: `tk-ezms` - align runtime boundary to Canto harness facade.
 
 ## Phases
 
@@ -19,7 +20,8 @@ Active task: none.
 | I1 | Refactor native core boundaries without behavior drift | Done |
 | I2 | Polish minimal TUI/CLI shell for daily use | Done |
 | I3 | Restore safety, trust, sandbox, and policy table stakes | Done |
-| I4 | Add advanced agent features: subagents, memory, skills, routing, ACP | Active |
+| I4 | Add advanced agent features: subagents, memory, skills, routing, ACP | Done |
+| I4.5 | Refactor around a clear headless harness boundary | Active |
 | I5 | Add eval-driven optimization and SOTA experiments | Deferred |
 
 ## I0: Dirty Baseline And Context Hygiene
@@ -212,6 +214,36 @@ ACP bridge correctness is no longer the active blocker.
     - Canto owns reusable event, ancestry, and effective-history primitives
     - Ion keeps cwd/branch/model indexes, input history, lazy materialization,
       TUI replay projection, and portable bundle UX
+
+## I4.5: Harness Boundary Refactor
+
+Status: active.
+
+Motivation: Flue is not a TUI replacement, but its `init -> agent -> session`
+shape, Pi's small core, OpenAI's model-native harness direction, and Mendral's
+harness/sandbox split all reinforce that Ion should be a host over a clear
+runtime facade.
+
+Order:
+
+1. Canto `canto-2vxb` - review and design the framework harness facade:
+   agent/runtime/session/session-env/tool/command/sandbox/interrupt boundaries.
+2. Ion `tk-ezms` - align `CantoBackend` to that facade and keep Ion product
+   policy in Ion.
+3. Ion `tk-0r23` - design future virtual tool namespaces for skills/memory
+   without bloating the model-facing tool surface.
+4. Ion `tk-vv4y` - refresh sandbox/trust design around executor and credential
+   boundaries.
+
+Acceptance:
+
+- Canto exposes one obvious headless harness authoring path for a coding agent,
+  without requiring callers to manually wire every primitive.
+- Ion's native runtime boundary has no duplicated provider-history ownership,
+  no second transcript writer, and no hidden session lifecycle policy.
+- The default eight-tool surface stays stable unless eval evidence justifies a
+  change.
+- TUI/CLI/ACP hosts share the same runtime event and interrupt semantics.
 
 ## I5+ Deferred Work
 

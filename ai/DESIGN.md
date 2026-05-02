@@ -44,6 +44,35 @@ runtime boundary. It must translate prompts, stream updates, tool calls,
 approval requests, cancellation, and modes without creating another agent loop
 or another transcript writer.
 
+## Harness Direction
+
+Flue, Pi, OpenAI Agents SDK, and the Mendral sandbox split all point at the
+same shape: the harness is the deterministic runtime around the model, and the
+TUI is only one host for that runtime. Ion should not copy Flue's TypeScript or
+deployment model, but it should copy the clarity of the boundary:
+
+```text
+host shell -> agent runtime -> session -> tools/sandbox/env -> durable events
+```
+
+For Ion this means:
+
+- `CantoBackend` should become a thin product adapter over a clearer Canto
+  harness facade, not a second framework hidden inside Ion.
+- Ion's TUI/CLI should consume runtime events and send host decisions; it
+  should not own provider-visible history, tool lifecycle semantics, child
+  session ownership, or compaction correctness.
+- Tool execution should be expressed as capabilities over a session
+  environment: shell, read, write, edit, list, search, custom commands, and
+  future remote sandboxes.
+- Tool, skill, memory, and sandbox expansion must preserve a small
+  model-facing surface. If future memory/skills need file-like access, prefer
+  backend path routing or explicit progressive-disclosure tools over adding
+  many near-duplicate tools.
+- Approval, future elicitation, cancellation, and active-turn steering should
+  converge on one typed interrupt/pause-resume boundary so TUI, CLI, ACP, and
+  headless hosts stay consistent.
+
 ## Core Runtime Contract
 
 Ion has one native baseline path. There is no global stabilization branch.

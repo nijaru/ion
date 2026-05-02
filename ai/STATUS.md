@@ -2,17 +2,19 @@
 
 Fast, lightweight terminal coding agent.
 
-**Phase:** I4 advanced integrations
-**Focus:** ready queue closed; awaiting next priority
-**Active umbrella:** none - `tk-mmcs` is closed
-**Active task:** none
+**Phase:** I4.5 harness boundary refactor
+**Focus:** Canto-first harness facade review, then Ion runtime boundary cleanup
+**Active external prerequisite:** Canto `canto-2vxb`
+**Active task:** `tk-ezms` - Ion runtime boundary alignment
 **Updated:** 2026-05-02
 
 ## Current Truth
 
 - Ion has one native baseline path. There is no global stabilization mode.
-- I0-I3 are complete: dirty baseline, native boundary refactor, shell polish,
-  and safety/trust/sandbox table stakes are green.
+- I0-I4 are complete enough to pause feature expansion: dirty baseline, native
+  boundary refactor, shell polish, safety/trust/sandbox table stakes, ACP
+  correctness, skills read/install, session branching/export, subagent gating,
+  and related advanced slices are green or intentionally deferred.
 - Canto owns durable events, provider-visible history, agent/tool lifecycle,
   reasoning capability translation, and compaction primitives.
 - Ion owns TUI/CLI UX, commands, settings/state, product tools, provider
@@ -26,7 +28,9 @@ Fast, lightweight terminal coding agent.
 - `read_skill` is implemented behind the opt-in `skill_tools = "read"` config
   gate. It is not part of the default eight-tool surface and does not add skill
   inventories to the prompt.
-- Canto is closed unless Ion evidence proves a framework-owned defect.
+- Canto is reopened only for the focused `canto-2vxb` harness facade review,
+  not for broad SOTA expansion. Ion implementation waits for that framework
+  direction before another runtime refactor.
 
 ## Latest Evidence
 
@@ -164,7 +168,9 @@ Fast, lightweight terminal coding agent.
 
 ## Next Action
 
-1. Run `tk ready` and choose the next product priority. The current ready queue
-   is expected to be empty after `tk-ritc`.
-2. Keep one green slice per commit and avoid reopening Canto unless Ion tests
-   expose a framework defect.
+1. Finish Canto `canto-2vxb`: review Flue/Pi/OpenAI/Mendral against Canto's
+   current authoring/runtime surface and name the exact facade/refactor target.
+2. Return to Ion `tk-ezms` and align `CantoBackend` to that facade in small
+   behavior-preserving slices.
+3. Keep one green slice per commit; do not expand the model-facing tool surface
+   or add new product features during the harness pass.
