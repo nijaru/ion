@@ -21,6 +21,13 @@ Distilled architectural principles plus recent decision log.
 
 ## Recent Log
 
+### 2026-05-02 - read_skill is opt-in progressive disclosure
+
+Ion exposes `read_skill(name)` only when `skill_tools = "read"` is enabled. It
+does not change the default eight-tool coding surface and does not add a skill
+inventory to the prompt. `manage_skill`, marketplace install, and
+self-extension remain behind later explicit write/trust gates.
+
 ### 2026-05-02 - Ion headless ACP mode is an adapter
 
 `ion --agent` runs Ion as an ACP stdio agent for external hosts, but it is not
@@ -50,7 +57,7 @@ rows.
 Ion should not expose skills as always-on prompt text or as default coding
 tools. Canto owns agentskills-compatible registry, routing, and read/manage
 primitives; Ion owns `/skills`, install staging, trust prompts, and model tool
-exposure. `read_skill` is the first model-visible candidate; `manage_skill` and
+exposure. `read_skill` is opt-in progressive disclosure; `manage_skill` and
 marketplace install require explicit user enablement and write-policy gates.
 
 ### 2026-05-02 - Ion keeps product tool wrappers

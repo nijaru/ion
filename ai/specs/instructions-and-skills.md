@@ -5,10 +5,13 @@
 ion supports layered project instructions.
 
 ion exposes a read-only local `/skills [query]` browser for installed
-`~/.ion/skills` bundles. It does not yet expose model-visible skills,
-marketplace install, skill activation, or self-extension. The design target is
-explicit-install, progressive-disclosure skills on top of Canto's general skill
-primitives, not always-on prompt bloat or an ungated self-extension tool.
+`~/.ion/skills` bundles. It also supports an opt-in model-visible
+`read_skill(name)` tool behind `skill_tools = "read"`. The default eight-tool
+coding surface is unchanged and no skill inventory is added to the prompt.
+Marketplace install, skill activation, `manage_skill`, and self-extension are
+still deferred. The design target is explicit-install, progressive-disclosure
+skills on top of Canto's general skill primitives, not always-on prompt bloat or
+an ungated self-extension tool.
 
 ## What is implemented
 
@@ -47,8 +50,22 @@ It is a host command only:
 
 - no skill inventory is added to the model prompt
 - no skill body is injected
-- no model-visible `read_skill` or `manage_skill` tool is registered
 - no marketplace fetch or install is performed
+
+### Opt-in read_skill tool
+
+`skill_tools = "read"` in `~/.ion/config.toml` registers `read_skill(name)`.
+The tool reads an installed local `SKILL.md` body by explicit name and returns
+the skill name, description, allowed-tools metadata, and instructions. It is a
+read-category tool, so read mode can expose it when the gate is enabled.
+
+Important boundaries:
+
+- default sessions still expose only the eight coding tools
+- no installed skill list is injected into the core prompt
+- the model must know or discover a skill name through an explicit host surface
+  such as `/skills`
+- `manage_skill` is not implemented and is not implied by this gate
 
 ## What is not implemented
 
@@ -61,7 +78,6 @@ These are not shipped ion features yet:
 - user-defined slash command or skill aliases
 - skill-specific prompt injection from user-facing ion config
 - skill-specific tool bundles or runtime capabilities
-- model-visible `read_skill`
 - model-visible `manage_skill`
 - marketplace install/update
 
@@ -129,7 +145,7 @@ Command syntax direction:
 
 Model-visible tool direction:
 
-- `read_skill(name)` is the first candidate if skills become model-visible.
+- `read_skill(name)` is implemented behind `skill_tools = "read"`.
 - `manage_skill` is not a default tool. It may only be exposed for a trusted
   user-local skill directory, under write-capable modes, with the same policy
   and approval posture as file writes.
@@ -155,11 +171,10 @@ Model preset direction:
 
 ## Open work
 
-- Add a local `/skills` browser and CLI list/search once the command surface
 - Add CLI list/search if the TUI browser proves useful.
 - Add safe install staging before any marketplace integration.
-- Gate `read_skill` and `manage_skill` separately; neither belongs in the
-  default eight-tool coding surface.
+- Gate `manage_skill` separately; neither `read_skill` nor `manage_skill`
+  belongs in the default eight-tool coding surface.
 
 ## Relevant files
 

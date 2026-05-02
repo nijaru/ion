@@ -3,9 +3,9 @@
 Fast, lightweight terminal coding agent.
 
 **Phase:** I4 advanced integrations
-**Focus:** I4 advanced integrations after ACP headless-agent closure
+**Focus:** I4 skills and self-extension boundary
 **Active umbrella:** none - `tk-mmcs` is closed
-**Active task:** none - next ready item is `tk-hfgh` skills install/tools
+**Active task:** `tk-hfgh` - safe skill install and gated model-visible tools
 **Updated:** 2026-05-02
 
 ## Current Truth
@@ -23,6 +23,9 @@ Fast, lightweight terminal coding agent.
 - Current default tool surface is `bash`, `read`, `write`, `edit`,
   `multi_edit`, `list`, `grep`, and `glob`; `verify` is not registered by
   default.
+- `read_skill` is implemented behind the opt-in `skill_tools = "read"` config
+  gate. It is not part of the default eight-tool surface and does not add skill
+  inventories to the prompt.
 - Canto is closed unless Ion evidence proves a framework-owned defect.
 
 ## Latest Evidence
@@ -65,10 +68,15 @@ Fast, lightweight terminal coding agent.
   steering, typed thinking capability filtering, Canto coding primitive audit,
   local `/skills` browser, local `/fork`, `/tree`, external editor handoff, and
   ACP headless-agent mode.
+- First `tk-hfgh` slice is committed as `598d1a2`: opt-in `read_skill` reads
+  installed `SKILL.md` bodies by name, is categorized as a read tool, and is
+  registered only when `skill_tools` enables skill tools. Gates passed before
+  commit: focused config/skills/backend/tool tests, `go test ./...`, and the
+  native race subset.
 
 ## Next Action
 
-1. Continue the I4 queue with `tk-hfgh`: safe skill install and gated
-   model-visible skill tools.
+1. Continue `tk-hfgh` with safe skill install staging and keep
+   `manage_skill`/marketplace/self-extension behind later explicit gates.
 2. Keep one green slice per commit and avoid reopening Canto unless Ion tests
    expose a framework defect.

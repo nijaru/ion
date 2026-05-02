@@ -9,6 +9,7 @@ green native baseline. Canto stays closed unless Ion evidence proves a
 framework-owned defect.
 
 Active umbrella: none. `tk-mmcs` is closed.
+Active task: `tk-hfgh` - safe skill install and gated model-visible tools.
 
 ## Phases
 
@@ -124,6 +125,13 @@ ACP bridge correctness is no longer the active blocker.
     an ACP stdio server that reuses Ion's existing `AgentSession` runtime
     boundary and maps prompt streaming, tool updates, approvals, cancel, and
     session mode updates to ACP.
+12. Active - `tk-hfgh` - skills beyond local browsing:
+    - Done - first slice: `skill_tools = "read"` opt-in registers
+      `read_skill(name)` without adding a prompt inventory or changing the
+      default eight-tool surface.
+    - Next - safe skill install staging for local/curated sources.
+    - Later - gated `manage_skill`, marketplace workflow, and
+      self-extension nudges after write-policy and undo behavior are explicit.
 
 ## I5+ Deferred Work
 
@@ -133,8 +141,6 @@ for a core bug:
 - ACP host/client compatibility polish beyond the first headless-agent slice
 - ChatGPT/subscription bridge evaluation
 - subagents, memory/wiki, workflows, model routing
-- `tk-hfgh` - skill implementation beyond the local browser: safe install
-  staging, model-visible `read_skill`, gated `manage_skill`
 - prompt cache/KV cache experiments
 - ripgo integration or merged edit-tool redesign
 
