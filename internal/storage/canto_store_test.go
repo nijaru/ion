@@ -2,6 +2,8 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -194,6 +196,178 @@ func TestCantoStoreForkSessionCopiesEventsAndIndexesChild(t *testing.T) {
 	}
 	if tree.Current.ID != child.ID() {
 		t.Fatalf("current = %q, want child", tree.Current.ID)
+	}
+}
+
+func TestCantoStoreSessionBundleExportsAndImportsLineage(t *testing.T) {
+	exportAny, err := NewCantoStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new export store: %v", err)
+	}
+	exportStore := exportAny.(*cantoStore)
+
+	ctx := context.Background()
+	cwd := "/tmp/ion-storage-test"
+	parent, err := exportStore.OpenSession(ctx, cwd, "openrouter/test-model", "main")
+	if err != nil {
+		t.Fatalf("open parent session: %v", err)
+	}
+	appendCantoMessage(t, exportStore, ctx, parent.ID(), llm.Message{
+		Role:    llm.RoleUser,
+		Content: "debug the flaky test",
+	})
+	if err := exportStore.UpdateSession(ctx, SessionInfo{
+		ID:          parent.ID(),
+		Title:       "debug task",
+		LastPreview: "debug the flaky test",
+	}); err != nil {
+		t.Fatalf("update parent session: %v", err)
+	}
+
+	child, err := exportStore.ForkSession(ctx, parent.ID(), ForkOptions{
+		Label:  "try alternate fix",
+		Reason: "test fork",
+	})
+	if err != nil {
+		t.Fatalf("fork session: %v", err)
+	}
+	appendCantoMessage(t, exportStore, ctx, child.ID(), llm.Message{
+		Role:    llm.RoleAssistant,
+		Content: "alternate fix works",
+	})
+
+	bundle, err := exportStore.ExportSessionBundle(ctx, child.ID())
+	if err != nil {
+		t.Fatalf("export bundle: %v", err)
+	}
+	if bundle.RootSessionID != child.ID() {
+		t.Fatalf("root session = %q, want child %q", bundle.RootSessionID, child.ID())
+	}
+	if len(bundle.Sessions) != 2 {
+		t.Fatalf("bundle sessions = %d, want parent and child", len(bundle.Sessions))
+	}
+	if bundle.Checksum == "" {
+		t.Fatal("bundle checksum is empty")
+	}
+	rawBundle, err := json.Marshal(bundle)
+	if err != nil {
+		t.Fatalf("marshal bundle: %v", err)
+	}
+	var decoded SessionBundle
+	if err := json.Unmarshal(rawBundle, &decoded); err != nil {
+		t.Fatalf("unmarshal bundle: %v", err)
+	}
+
+	importAny, err := NewCantoStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new import store: %v", err)
+	}
+	importStore := importAny.(*cantoStore)
+	imported, err := importStore.ImportSessionBundle(ctx, decoded)
+	if err != nil {
+		t.Fatalf("import bundle: %v", err)
+	}
+	if len(imported) != 2 {
+		t.Fatalf("imported sessions = %d, want 2", len(imported))
+	}
+
+	tree, err := importStore.SessionTree(ctx, child.ID())
+	if err != nil {
+		t.Fatalf("imported tree: %v", err)
+	}
+	if len(tree.Lineage) != 2 ||
+		tree.Lineage[0].ID != parent.ID() ||
+		tree.Lineage[1].ID != child.ID() ||
+		tree.Lineage[1].Title != "try alternate fix" {
+		t.Fatalf("imported lineage = %#v, want parent and child", tree.Lineage)
+	}
+	resumedChild, err := importStore.ResumeSession(ctx, child.ID())
+	if err != nil {
+		t.Fatalf("resume imported child: %v", err)
+	}
+	entries, err := resumedChild.Entries(ctx)
+	if err != nil {
+		t.Fatalf("imported child entries: %v", err)
+	}
+	if len(entries) != 2 ||
+		entries[0].Content != "debug the flaky test" ||
+		entries[1].Content != "alternate fix works" {
+		t.Fatalf("entries = %#v, want exported transcript", entries)
+	}
+
+	if _, err := importStore.ImportSessionBundle(ctx, decoded); !errors.Is(
+		err,
+		ErrSessionBundleConflict,
+	) {
+		t.Fatalf("second import error = %v, want conflict", err)
+	}
+}
+
+func TestCantoStoreSessionBundleRejectsChecksumMismatch(t *testing.T) {
+	storeAny, err := NewCantoStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	store := storeAny.(*cantoStore)
+
+	ctx := context.Background()
+	sess, err := store.OpenSession(ctx, "/tmp/ion-storage-test", "model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	appendCantoMessage(t, store, ctx, sess.ID(), llm.Message{
+		Role:    llm.RoleUser,
+		Content: "hello",
+	})
+	bundle, err := store.ExportSessionBundle(ctx, sess.ID())
+	if err != nil {
+		t.Fatalf("export bundle: %v", err)
+	}
+	bundle.Sessions[0].Info.Title = "tampered"
+
+	importStoreAny, err := NewCantoStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new import store: %v", err)
+	}
+	importStore := importStoreAny.(*cantoStore)
+	if _, err := importStore.ImportSessionBundle(ctx, bundle); !errors.Is(
+		err,
+		ErrSessionBundleIntegrity,
+	) {
+		t.Fatalf("import error = %v, want integrity error", err)
+	}
+}
+
+func TestCantoStoreSessionBundleExportsEmptySession(t *testing.T) {
+	exportAny, err := NewCantoStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new export store: %v", err)
+	}
+	exportStore := exportAny.(*cantoStore)
+
+	ctx := context.Background()
+	sess, err := exportStore.OpenSession(ctx, "/tmp/ion-storage-test", "model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	bundle, err := exportStore.ExportSessionBundle(ctx, sess.ID())
+	if err != nil {
+		t.Fatalf("export empty session: %v", err)
+	}
+	if len(bundle.Sessions) != 1 || len(bundle.Sessions[0].Events) != 0 {
+		t.Fatalf("empty bundle = %#v, want one zero-event session", bundle.Sessions)
+	}
+
+	importAny, err := NewCantoStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new import store: %v", err)
+	}
+	importStore := importAny.(*cantoStore)
+	if _, err := importStore.ImportSessionBundle(ctx, bundle); err != nil {
+		t.Fatalf("import empty session: %v", err)
+	}
+	if _, err := importStore.ResumeSession(ctx, sess.ID()); err != nil {
+		t.Fatalf("resume empty imported session: %v", err)
 	}
 }
 

@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"time"
 
@@ -52,6 +53,40 @@ type SessionTree struct {
 
 type SessionTreeReader interface {
 	SessionTree(ctx context.Context, sessionID string) (SessionTree, error)
+}
+
+type SessionBundle struct {
+	Version       int                   `json:"version"`
+	ExportedAt    time.Time             `json:"exported_at"`
+	RootSessionID string                `json:"root_session_id"`
+	Sessions      []SessionBundleRecord `json:"sessions"`
+	Checksum      string                `json:"checksum"`
+}
+
+type SessionBundleRecord struct {
+	Info          SessionInfo         `json:"info"`
+	Ancestry      SessionAncestryInfo `json:"ancestry"`
+	Events        []json.RawMessage   `json:"events"`
+	EventCount    int                 `json:"event_count"`
+	EventChecksum string              `json:"event_checksum"`
+}
+
+type SessionAncestryInfo struct {
+	SessionID        string    `json:"session_id"`
+	ParentSessionID  string    `json:"parent_session_id,omitempty"`
+	ForkPointEventID string    `json:"fork_point_event_id,omitempty"`
+	BranchLabel      string    `json:"branch_label,omitempty"`
+	ForkReason       string    `json:"fork_reason,omitempty"`
+	Depth            int       `json:"depth"`
+	CreatedAt        time.Time `json:"created_at"`
+}
+
+type SessionBundleExporter interface {
+	ExportSessionBundle(ctx context.Context, sessionID string) (SessionBundle, error)
+}
+
+type SessionBundleImporter interface {
+	ImportSessionBundle(ctx context.Context, bundle SessionBundle) ([]SessionInfo, error)
 }
 
 // Session handles appending events to a specific session's storage.
