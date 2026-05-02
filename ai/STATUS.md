@@ -5,7 +5,7 @@ Fast, lightweight terminal coding agent.
 **Phase:** I4 advanced integrations
 **Focus:** Reopen deferred integrations from the stable I0-I3 baseline, starting with ACP bridge correctness.
 **Active umbrella:** none - `tk-mmcs` is closed.
-**Active task:** start the highest-priority ready ACP bridge task.
+**Active task:** `tk-2ffy` - ACP stderr separation.
 **Updated:** 2026-05-02
 
 ## Current Truth
@@ -98,16 +98,23 @@ Fast, lightweight terminal coding agent.
   text capture with `ION_SANDBOX=auto`.
 - `tk-mmcs` is closed. Final Fedora `local-api/qwen3.6:27b-uncensored` live
   smoke passed with a real bash tool call, persisted resume, follow-up returning
-  `continued`, and provider request capture verifying prior user/tool-call/tool-
-  result/assistant/resume history order.
+  `continued`, and provider request capture verifying prior user, tool call,
+  tool result, assistant, and resume history order.
+- ACP agent stderr is separated from the user-visible session stream. It is
+  suppressed by default and can be redirected to a debug file with
+  `ION_ACP_STDERR_LOG`.
+- Latest ACP stderr gates passed:
+  `go test ./internal/backend/acp -count=1 -timeout 180s`,
+  `go test ./... -count=1 -timeout 300s`, and the native race subset.
 
 ## Next Action
 
-1. Start the first P2 ACP bridge task from `tk ready`.
-2. Keep native Canto/Ion loop behavior as the acceptance baseline while fixing
+1. Commit and close `tk-2ffy`.
+2. Start the next P2 ACP bridge task from `tk ready`.
+3. Keep native Canto/Ion loop behavior as the acceptance baseline while fixing
    ACP-specific gaps.
-3. Continue one green slice per commit.
+4. Continue one green slice per commit.
 
 ## Active Tasks
 
-- none yet; next ready P2 tasks are ACP bridge correctness items.
+- `tk-2ffy` - ACP stderr separation.
