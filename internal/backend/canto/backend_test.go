@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -538,6 +539,53 @@ func TestToolSurfaceFiltersReadModeTools(t *testing.T) {
 	surface = b.ToolSurface()
 	if surface.Count != 8 {
 		t.Fatalf("EDIT tool count = %d, want 8", surface.Count)
+	}
+}
+
+func TestSkillToolSurfaceIsOptIn(t *testing.T) {
+	ctx := context.Background()
+	store, err := storage.NewCantoStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	storageSession, err := store.OpenSession(ctx, t.TempDir(), "local-api/model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	provider := llm.NewFauxProvider("local-api", llm.FauxStep{Content: "ok"})
+	oldFactory := providerFactory
+	providerFactory = func(ctx context.Context, cfg *config.Config) (llm.Provider, error) {
+		return provider, nil
+	}
+	defer func() { providerFactory = oldFactory }()
+
+	b := New()
+	b.SetStore(store)
+	b.SetSession(storageSession)
+	b.SetConfig(&config.Config{
+		Provider:   "local-api",
+		Model:      "model-a",
+		Endpoint:   "http://localhost:8080/v1",
+		SkillTools: "read",
+	})
+	if err := b.Open(ctx); err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer func() { _ = b.Close() }()
+
+	surface := b.ToolSurface()
+	if !slices.Contains(surface.Names, "read_skill") {
+		t.Fatalf("tool surface = %#v, want read_skill", surface.Names)
+	}
+	if surface.Count != 9 {
+		t.Fatalf("EDIT tool count = %d, want 9", surface.Count)
+	}
+
+	b.SetMode(ionsession.ModeRead)
+	surface = b.ToolSurface()
+	if !slices.Contains(surface.Names, "read_skill") {
+		t.Fatalf("READ tool surface = %#v, want read_skill", surface.Names)
 	}
 }
 

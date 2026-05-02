@@ -55,6 +55,7 @@ func NewPolicyEngine() *PolicyEngine {
 	return &PolicyEngine{
 		Categories: map[string]ToolCategory{
 			"read":            CategoryRead,
+			"read_skill":      CategoryRead,
 			"grep":            CategoryRead,
 			"glob":            CategoryRead,
 			"list":            CategoryRead,
@@ -290,12 +291,32 @@ func (pe *PolicyEngine) Authorize(
 			case PolicyAllow:
 				return PolicyAllow, ""
 			case PolicyDeny:
-				return PolicyDeny, fmt.Sprintf("Tool %q (%s) is blocked by policy.", toolName, category)
+				return PolicyDeny, fmt.Sprintf(
+					"Tool %q (%s) is blocked by policy.",
+					toolName,
+					category,
+				)
 			case PolicyAsk:
-				return pe.classifyOrAsk(ctx, classifier, classifierTimeout, auditSink, toolName, args, category)
+				return pe.classifyOrAsk(
+					ctx,
+					classifier,
+					classifierTimeout,
+					auditSink,
+					toolName,
+					args,
+					category,
+				)
 			}
 		}
-		return pe.classifyOrAsk(ctx, classifier, classifierTimeout, auditSink, toolName, args, category)
+		return pe.classifyOrAsk(
+			ctx,
+			classifier,
+			classifierTimeout,
+			auditSink,
+			toolName,
+			args,
+			category,
+		)
 
 	case session.ModeYolo:
 		return PolicyAllow, ""
@@ -329,7 +350,14 @@ func (pe *PolicyEngine) classifyOrAsk(
 	})
 	if err != nil {
 		reason := defaultReason + " Classifier unavailable: " + err.Error()
-		auditPolicyDecision(auditSink, toolName, category, PolicyAsk, reason, "classifier_unavailable")
+		auditPolicyDecision(
+			auditSink,
+			toolName,
+			category,
+			PolicyAsk,
+			reason,
+			"classifier_unavailable",
+		)
 		return PolicyAsk, reason
 	}
 	if !validPolicy(decision.Action) {

@@ -71,6 +71,45 @@ func TestNoticeHandlesMissingDirectory(t *testing.T) {
 	}
 }
 
+func TestReadSkillReturnsInstructions(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, filepath.Join(root, "go-review", "SKILL.md"), `---
+name: go-review
+description: Review Go changes before commit.
+allowed-tools: [read, grep]
+---
+Use focused review findings.
+`)
+
+	detail, err := Read([]string{root}, "GO-REVIEW")
+	if err != nil {
+		t.Fatalf("Read returned error: %v", err)
+	}
+	if detail.Name != "go-review" || detail.Description != "Review Go changes before commit." {
+		t.Fatalf("detail = %#v, want go-review summary", detail)
+	}
+	if detail.Instructions != "Use focused review findings." {
+		t.Fatalf("instructions = %q", detail.Instructions)
+	}
+	formatted := FormatDetail(detail)
+	for _, want := range []string{
+		"# go-review",
+		"Allowed tools: read, grep",
+		"Use focused review findings.",
+	} {
+		if !strings.Contains(formatted, want) {
+			t.Fatalf("formatted skill missing %q:\n%s", want, formatted)
+		}
+	}
+}
+
+func TestReadSkillRejectsMissingSkill(t *testing.T) {
+	_, err := Read([]string{t.TempDir()}, "missing")
+	if err == nil || !strings.Contains(err.Error(), `skill "missing" not found`) {
+		t.Fatalf("Read error = %v, want missing skill", err)
+	}
+}
+
 func writeSkill(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

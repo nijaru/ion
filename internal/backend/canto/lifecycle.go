@@ -15,6 +15,7 @@ import (
 	"github.com/nijaru/canto/tool/mcp"
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/backend/canto/tools"
+	ionconfig "github.com/nijaru/ion/internal/config"
 	ionsession "github.com/nijaru/ion/internal/session"
 )
 
@@ -89,6 +90,13 @@ func (b *Backend) Open(ctx context.Context) error {
 	registry.Register(&tools.List{FileTool: *tools.NewFileTool(cwd)})
 	registry.Register(&tools.Grep{SearchTool: *tools.NewSearchTool(cwd)})
 	registry.Register(&tools.Glob{SearchTool: *tools.NewSearchTool(cwd)})
+	if b.cfg.SkillToolMode() != "off" {
+		skillsDir, err := ionconfig.DefaultSkillsDir()
+		if err != nil {
+			return fmt.Errorf("resolve skills dir: %w", err)
+		}
+		registry.Register(tools.NewReadSkill([]string{skillsDir}))
+	}
 
 	requestProcessors := []prompt.RequestProcessor{
 		reasoningEffortProcessor(b.cfg),
