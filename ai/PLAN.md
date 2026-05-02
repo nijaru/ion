@@ -120,14 +120,17 @@ ACP bridge correctness is no longer the active blocker.
 10. Done - `tk-gopd` - external editor handoff. `Ctrl+X` opens the composer in
     `$VISUAL`, `$EDITOR`, or `vi` through Bubble Tea `ExecProcess` and reloads
     edited content back into the composer.
-11. Open - `tk-st4q` - Ion as an ACP agent in headless mode.
+11. Done - `tk-st4q` - Ion as an ACP agent in headless mode. `--agent` runs
+    an ACP stdio server that reuses Ion's existing `AgentSession` runtime
+    boundary and maps prompt streaming, tool updates, approvals, cancel, and
+    session mode updates to ACP.
 
 ## I5+ Deferred Work
 
 Do not reopen during the current cleanup/refactor stream unless directly needed
 for a core bug:
 
-- ACP bridge polish and Ion-as-ACP-agent mode
+- ACP host/client compatibility polish beyond the first headless-agent slice
 - ChatGPT/subscription bridge evaluation
 - subagents, memory/wiki, workflows, model routing
 - `tk-hfgh` - skill implementation beyond the local browser: safe install

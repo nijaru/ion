@@ -21,6 +21,13 @@ Distilled architectural principles plus recent decision log.
 
 ## Recent Log
 
+### 2026-05-02 - Ion headless ACP mode is an adapter
+
+`ion --agent` runs Ion as an ACP stdio agent for external hosts, but it is not
+a second native loop. It reuses the existing `AgentSession` runtime boundary and
+translates ACP initialize, new/load session, prompt streaming, tool updates,
+approval requests, cancellation, and session mode updates around that boundary.
+
 ### 2026-05-02 - Cross-host sessions use portable bundles
 
 Ion should not expose raw SQLite sync as the product surface for moving

@@ -33,6 +33,17 @@ ion TUI/CLI -> CantoBackend -> canto -> provider API
 ACP and subscription bridges are secondary compatibility paths. They must not
 drive Ion's native architecture.
 
+Ion can also run as an ACP agent:
+
+```text
+external ACP host -> ion --agent -> AgentSession -> CantoBackend -> canto -> provider API
+```
+
+The headless ACP surface is a host-integration adapter around Ion's existing
+runtime boundary. It must translate prompts, stream updates, tool calls,
+approval requests, cancellation, and modes without creating another agent loop
+or another transcript writer.
+
 ## Core Runtime Contract
 
 Ion has one native baseline path. There is no global stabilization branch.
@@ -108,6 +119,7 @@ Scriptable CLI is first-class:
 - text and JSON output
 - `--continue`
 - `--resume <id>`
+- `--agent` for ACP stdio hosts
 - provider/model/thinking overrides that are process-local unless the user makes
   an explicit persistent change
 
