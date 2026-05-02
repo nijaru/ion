@@ -9,7 +9,7 @@ green native baseline. Canto stays closed unless Ion evidence proves a
 framework-owned defect.
 
 Active umbrella: none. `tk-mmcs` is closed.
-Active task: `tk-lya7` - TUI: Token usage color by percentage (green/yellow/red).
+Active task: `tk-lggk` - TUI: AskUser tool - interactive question prompt.
 
 ## Phases
 
@@ -199,7 +199,10 @@ ACP bridge correctness is no longer the active blocker.
     - status line shows best-effort cached `+N/-M` workspace diff stats
     - stats load on startup and refresh after completed turns, not on every
       render
-23. Next - `tk-lya7` - TUI: Token usage color by percentage (green/yellow/red).
+23. Done - `tk-lya7` - TUI: Token usage color by percentage (green/yellow/red):
+    - context usage keeps the same text but renders green below 50%, yellow at
+      50-79%, and red at 80%+
+24. Next - `tk-lggk` - TUI: AskUser tool - interactive question prompt.
 
 ## I5+ Deferred Work
 

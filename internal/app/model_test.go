@@ -1668,6 +1668,38 @@ func TestStatusLineHidesZeroUsageBeforeFirstTurn(t *testing.T) {
 	}
 }
 
+func TestStatusLineColorsTokenUsageByContextPercentage(t *testing.T) {
+	tests := []struct {
+		name  string
+		total int
+		want  string
+	}{
+		{name: "low", total: 49_000, want: "+green"},
+		{name: "mid", total: 50_000, want: "+yellow"},
+		{name: "high", total: 80_000, want: "+red"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			model := readyModel(t)
+			model.Model.Backend = stubBackend{
+				sess:         &stubSession{events: make(chan session.Event)},
+				contextLimit: 100_000,
+			}
+			model.Progress.TokensSent = tt.total
+
+			label := fmt.Sprintf("%dk/100k (%d%%)", tt.total/1000, tt.total/1000)
+			rendered := map[string]string{
+				"+green":  model.st.success.Render(label),
+				"+yellow": model.st.caution.Render(label),
+				"+red":    model.st.warn.Render(label),
+			}[tt.want]
+			if !strings.Contains(model.statusLine(), rendered) {
+				t.Fatalf("status line = %q, want rendered usage %q", model.statusLine(), rendered)
+			}
+		})
+	}
+}
+
 func TestStatusLineShowsConfiguredSessionCostBudget(t *testing.T) {
 	model := readyModel(t)
 	model.Model.Config = &config.Config{MaxSessionCost: 0.25}

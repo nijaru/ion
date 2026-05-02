@@ -5,7 +5,7 @@ Fast, lightweight terminal coding agent.
 **Phase:** I4 advanced integrations
 **Focus:** I4 advanced integrations closeout
 **Active umbrella:** none - `tk-mmcs` is closed
-**Active task:** `tk-lya7` - TUI: Token usage color by percentage (green/yellow/red)
+**Active task:** `tk-lggk` - TUI: AskUser tool - interactive question prompt
 **Updated:** 2026-05-02
 
 ## Current Truth
@@ -147,10 +147,14 @@ Fast, lightweight terminal coding agent.
   stats like `+42/-11` from `git diff --shortstat HEAD --`; stats load at TUI
   startup and refresh after completed turns rather than shelling out during
   render. Focused app tests passed.
+- `tk-lya7` is implemented. Context usage text is unchanged, but the status
+  segment now renders green below 50%, yellow from 50% through 79%, and red at
+  80%+. Focused status-line tests, `go test ./...`, and the native race subset
+  passed.
 
 ## Next Action
 
-1. Start `tk-lya7` and color token-usage status by context percentage without
-   changing status-line content.
+1. Start `tk-lggk` and decide the smallest host-owned AskUser interaction that
+   does not add another agent loop or transcript writer.
 2. Keep one green slice per commit and avoid reopening Canto unless Ion tests
    expose a framework defect.

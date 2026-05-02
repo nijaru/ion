@@ -12,6 +12,7 @@ type styles struct {
 	dim      lipgloss.Style
 	cyan     lipgloss.Style
 	warn     lipgloss.Style
+	caution  lipgloss.Style
 	sep      lipgloss.Style
 	added    lipgloss.Style
 	removed  lipgloss.Style
@@ -31,6 +32,7 @@ func newStyles() styles {
 		dim:      lipgloss.NewStyle().Faint(true),
 		cyan:     lipgloss.NewStyle().Foreground(lipgloss.Color("6")),
 		warn:     lipgloss.NewStyle().Foreground(lipgloss.Color("1")),
+		caution:  lipgloss.NewStyle().Foreground(lipgloss.Color("3")),
 		sep:      lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Faint(true),
 		added:    lipgloss.NewStyle().Foreground(lipgloss.Color("2")),
 		removed:  lipgloss.NewStyle().Foreground(lipgloss.Color("1")),

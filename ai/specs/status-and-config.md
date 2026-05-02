@@ -51,6 +51,8 @@ Rules:
 - provider/model are live runtime truth, not startup-banner truth
 - when the fast preset is active, surface it as a compact `[FAST]` marker
 - reasoning effort may appear only when it is a real runtime setting
+- context usage is color-coded by percentage when the context limit is known:
+  green below 50%, yellow from 50% through 79%, red at 80% and above
 - git diff stats are best-effort cached workspace metadata from
   `git diff --shortstat HEAD --`; they do not shell out during every render
 
