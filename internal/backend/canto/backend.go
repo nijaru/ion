@@ -6,7 +6,6 @@ import (
 
 	"github.com/nijaru/canto/agent"
 	"github.com/nijaru/canto/llm"
-	"github.com/nijaru/canto/memory"
 	"github.com/nijaru/canto/runtime"
 	"github.com/nijaru/canto/session"
 	"github.com/nijaru/canto/tool"
@@ -30,8 +29,6 @@ type Backend struct {
 
 	ionStore   storage.Store
 	sess       storage.Session
-	memory     *memory.Manager
-	coreMemory *memory.CoreStore
 	tools      *tool.Registry
 	compactLLM llm.Provider
 	steering   *steeringMutator

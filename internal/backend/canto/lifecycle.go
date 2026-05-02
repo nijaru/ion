@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/nijaru/canto/agent"
-	"github.com/nijaru/canto/memory"
 	"github.com/nijaru/canto/prompt"
 	"github.com/nijaru/canto/runtime"
 	"github.com/nijaru/canto/session"
@@ -18,10 +17,6 @@ import (
 	ionconfig "github.com/nijaru/ion/internal/config"
 	ionsession "github.com/nijaru/ion/internal/session"
 )
-
-type coreStoreProvider interface {
-	CoreStore() *memory.CoreStore
-}
 
 func (b *Backend) Open(ctx context.Context) error {
 	b.mu.Lock()
@@ -43,21 +38,10 @@ func (b *Backend) Open(ctx context.Context) error {
 		if cs, ok := b.ionStore.(interface{ Canto() *session.SQLiteStore }); ok {
 			b.store = cs.Canto()
 		}
-		if cs, ok := b.ionStore.(coreStoreProvider); ok {
-			coreStore := cs.CoreStore()
-			if coreStore == nil {
-				return fmt.Errorf("ion memory store not initialized")
-			}
-			b.coreMemory = coreStore
-			b.memory = memory.NewManager(coreStore)
-		}
 	}
 
 	if b.store == nil {
 		return fmt.Errorf("ion store not initialized")
-	}
-	if b.memory == nil {
-		return fmt.Errorf("ion memory manager not initialized")
 	}
 
 	p, err := providerFactory(ctx, b.cfg)
@@ -158,7 +142,6 @@ func (b *Backend) Close() error {
 		cancel := b.cancel
 		stopWatch := b.stopWatch
 		clients := append([]*mcp.Client(nil), b.mcpClients...)
-		memory := b.memory
 		runner := b.runner
 		b.mu.Unlock()
 
@@ -172,9 +155,6 @@ func (b *Backend) Close() error {
 			client.Close()
 		}
 
-		if memory != nil {
-			_ = memory.Close()
-		}
 		if runner != nil {
 			runner.Close()
 		}

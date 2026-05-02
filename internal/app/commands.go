@@ -249,18 +249,6 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 			session.Entry{Role: session.System, Content: toolSurfaceSummary(surface)},
 		)
 
-	case "/memory":
-		explorer, ok := m.Model.Backend.(backend.MemoryExplorer)
-		if !ok {
-			return m, cmdError("memory view unavailable for this backend")
-		}
-		query := strings.TrimSpace(strings.TrimPrefix(input, command))
-		out, err := explorer.MemoryView(context.Background(), query)
-		if err != nil {
-			return m, cmdError(fmt.Sprintf("failed to load memory: %v", err))
-		}
-		return m, m.printEntries(session.Entry{Role: session.System, Content: out})
-
 	case "/fork":
 		if m.Model.Storage == nil || !storage.IsMaterialized(m.Model.Storage) {
 			return m, cmdError("No active session to fork yet")
