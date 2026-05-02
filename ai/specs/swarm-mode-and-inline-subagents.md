@@ -20,12 +20,12 @@ The near-term direction is:
 Current implementation note: Ion already has inline Plane B subagent progress
 rows, concise durable child breadcrumbs, built-in `explorer`, `reviewer`, and
 `worker` personas, and Canto child-session hook points. The model-visible
-`subagent` tool is still not registered by default because adding a ninth
-model-visible tool needs an explicit opt-in/product decision.
+`subagent` is not registered by default because adding a ninth model-visible
+tool should be an explicit choice. It is available through
+`subagent_tools = "on"`.
 
 The `summary` / `fork` / `none` context modes now exist at the tool boundary.
-Full alternate-screen swarm mode waits behind gated subagent registration and
-child-session ownership smokes.
+Full alternate-screen swarm mode waits until opt-in subagent usage is boring.
 
 ## Product Boundary
 
@@ -285,8 +285,8 @@ Alternatives like `mission mode` or `ops view` can stay open for later naming re
 
 - keep inline mode primary
 - keep the current inline Plane B rows as the normal near-term display surface
-- decide the smallest explicit opt-in path for model-visible subagent
-  registration
+- keep `subagent_tools = "on"` as the explicit opt-in path for model-visible
+  subagent registration
 - keep swarm mode as a design target, not an implementation priority
 - keep this document as the target design for later subagent and swarm work
 - design title and summary generation as lightweight session metadata
@@ -298,7 +298,7 @@ Alternatives like `mission mode` or `ops view` can stay open for later naming re
 - automatic main-agent wakeup on async child completion
 - transcript-level detailed child execution logs
 
-Tracked prerequisite: `tk-29xj` - Subagents: expose gated subagent tool after
+Closed prerequisite: `tk-29xj` - Subagents: expose gated subagent tool after
 context-mode smoke.
 
 Closed gate: `tk-pwsl` confirms the alternate-screen operator view is not the

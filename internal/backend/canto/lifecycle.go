@@ -97,6 +97,16 @@ func (b *Backend) Open(ctx context.Context) error {
 		}
 		registry.Register(tools.NewReadSkill([]string{skillsDir}))
 	}
+	if b.cfg.SubagentToolMode() == "on" {
+		personas, err := loadSubagentPersonas(b.cfg)
+		if err != nil {
+			return err
+		}
+		if err := validateSubagentPersonaTools(personas, registry); err != nil {
+			return err
+		}
+		registry.Register(NewSubagentTool(b, personas))
+	}
 
 	requestProcessors := []prompt.RequestProcessor{
 		reasoningEffortProcessor(b.cfg),

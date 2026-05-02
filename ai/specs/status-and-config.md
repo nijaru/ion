@@ -84,6 +84,7 @@ Stable config fields:
 - `extra_headers`
 - `policy_path`
 - `subagents_path`
+- `subagent_tools`
 - `retry_until_cancelled`
 - `workspace_trust`
 - `tool_verbosity`

@@ -156,7 +156,7 @@ Deferred product layers:
 - ACP/subscription polish
 - memory/wiki
 - skills as explicit-install progressive-disclosure modules
-- subagents, routing, and workflow orchestration
+- routing and workflow orchestration
 - cross-host sync, branching, rewind, and richer rollback
 - prompt optimization, eval loops, and provider/runtime caching
 
@@ -175,3 +175,11 @@ default. `read_skill(name)` exists only behind the opt-in `skill_tools = "read"`
 gate; it reads installed local skill bodies by explicit name and stays out of
 the default eight-tool surface. `manage_skill`, marketplace install, and
 self-extension remain separate write-policy work.
+
+Subagents follow the same progressive-disclosure rule. The default coding
+surface remains the eight core tools. `subagent_tools = "on"` opts into the
+model-visible `subagent` tool with explicit `summary`, `fork`, and `none`
+context modes, built-in explorer/reviewer/worker personas, mode-aware
+visibility, and the existing sensitive-tool policy boundary. Memory tools,
+background child wakeups, worktrees, subagent communication, and full
+alternate-screen swarm mode remain later work.

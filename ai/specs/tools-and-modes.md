@@ -118,7 +118,7 @@ Deferred or hidden surfaces:
 | `recall_memory`, `remember_memory` | Deferred until memory is deliberately reopened |
 | model-visible `compact` tool | Deferred; `/compact` host command remains available for context survival |
 | MCP tools | Deferred behind the native-loop stabilization gate |
-| `subagent` | Deferred P2 surface |
+| `subagent` | Opt-in I4 surface via `subagent_tools = "on"`; not default |
 | `verify` | Not default; normal verification goes through `bash` |
 
 Supporting infrastructure:
@@ -248,8 +248,9 @@ tools (read, grep, glob, list) already cover everything the agent needs
 to understand a codebase. Bash in READ mode would be an escape hatch
 that undermines the mode's guarantee.
 
-MCP and subagents are deferred during native-loop stabilization. When they are
-reopened, they should remain sensitive surfaces with explicit policy treatment.
+MCP is still deferred. `subagent` is available only through the explicit
+`subagent_tools = "on"` config gate. It remains a sensitive surface: hidden in
+READ mode, prompted in EDIT mode, and auto-approved only in AUTO.
 
 Status line: `[READ]` (cyan)
 
@@ -310,6 +311,7 @@ considerations. Ship later.
 default_mode = "edit"             # read | edit | auto
 workspace_trust = "prompt"        # prompt | off | strict
 policy_path = "~/.ion/policy.yaml" # optional; default path when unset
+subagent_tools = "off"            # off | on; off by default
 ```
 
 User-global only — project configs cannot weaken permissions (same security

@@ -205,7 +205,7 @@ func (b *Backend) newChildAgent(
 		return nil, fmt.Errorf("subagent config is not initialized")
 	}
 	preset := registry.PresetPrimary
-	if persona.ModelSlot == subagents.ModelSlotFast {
+	if persona.ModelSlot == subagents.ModelSlotFast && strings.TrimSpace(cfg.FastModel) != "" {
 		preset = registry.PresetFast
 	}
 	runtimeCfg, err := registry.ResolveRuntimeConfig(ctx, cfg, preset)

@@ -21,6 +21,14 @@ Distilled architectural principles plus recent decision log.
 
 ## Recent Log
 
+### 2026-05-02 - Subagent is opt-in, not default
+
+Ion keeps the default model-visible coding surface at eight tools.
+`subagent_tools = "on"` explicitly registers `subagent` as an advanced ninth
+tool. Built-in personas are constrained to registered Ion tools, READ mode
+hides `subagent`, and fast-slot personas fall back to the primary model when
+no fast model is configured so opt-in usage works with a single-model setup.
+
 ### 2026-05-02 - Subagent context modes precede exposure
 
 Ion's `subagent` tool boundary now requires explicit context semantics:

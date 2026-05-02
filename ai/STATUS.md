@@ -3,9 +3,9 @@
 Fast, lightweight terminal coding agent.
 
 **Phase:** I4 advanced integrations
-**Focus:** gated subagent tool exposure decision
+**Focus:** I4 advanced integrations closeout
 **Active umbrella:** none - `tk-mmcs` is closed
-**Active task:** `tk-29xj` - Subagents: expose gated subagent tool after context-mode smoke
+**Active task:** `tk-6prx` - Markdown: Cache goldmark parser instance
 **Updated:** 2026-05-02
 
 ## Current Truth
@@ -118,7 +118,9 @@ Fast, lightweight terminal coding agent.
 - `tk-pwsl` is closed as a design gate. Ion already has compact inline Plane B
   subagent progress rows and durable child breadcrumbs, but a full
   alternate-screen swarm/operator view waits until subagent registration and
-  child-session ownership are stable. The next prerequisite is `tk-29xj`.
+  child-session ownership are stable. The registration prerequisite is closed
+  by `tk-29xj`; full swarm mode remains deferred until opt-in subagent usage is
+  boring.
 - `tk-hz8p` is implemented. The `subagent` tool schema now exposes explicit
   `context_mode` values: `summary`, `fork`, and `none`. `summary` remains the
   default handoff shape, `fork` seeds a child from the parent's provider-visible
@@ -128,11 +130,20 @@ Fast, lightweight terminal coding agent.
   `go test ./internal/backend/canto -run 'TestSubagent' -count=1`,
   `go test ./internal/backend/canto -count=1`, `go test ./... -count=1`, and
   the native race subset.
+- `tk-29xj` is implemented. `subagent_tools = "on"` is the explicit opt-in
+  gate for the model-visible `subagent` tool; the default surface remains the
+  eight core tools. READ mode hides `subagent`, EDIT prompts through the
+  sensitive-tool policy, and AUTO may run it. Built-in personas now use only
+  registered Ion tools, and fast-slot personas fall back to the primary model
+  when no fast model is configured. A deterministic smoke proves an opted-in
+  `explorer` child runs in `none` mode, receives only the task, returns a tool
+  result to the parent, and preserves parent provider-visible history. Gates
+  passed: focused config/subagent/backend tests, `go test ./... -count=1`, and
+  the native race subset.
 
 ## Next Action
 
-1. Start `tk-29xj` and decide the smallest explicit opt-in path for exposing
-   the model-visible `subagent` tool without changing the default eight-tool
-   surface.
+1. Start `tk-6prx` and cache the Goldmark parser instance without changing
+   markdown rendering output.
 2. Keep one green slice per commit and avoid reopening Canto unless Ion tests
    expose a framework defect.

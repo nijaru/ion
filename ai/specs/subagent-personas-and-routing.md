@@ -8,21 +8,24 @@ tool surface. The current product baseline remains the eight coding tools in
 `ai/specs/tools-and-modes.md`.
 
 Do not expose `subagent` by default. The context contract below is implemented
-at the tool boundary, but default registration still needs an explicit product
-decision because it would add a ninth model-visible tool. A child agent that
-only receives ad hoc user-provided context is too easy for the model to misuse:
-it may assume the child sees the parent transcript when it does not.
+and the model-visible tool is available only through `subagent_tools = "on"`.
+The default eight-tool coding surface remains unchanged.
 
-Current follow-up: `tk-29xj` - Subagents: expose gated subagent tool after
-context-mode smoke.
+The first gated surface keeps this intentionally conservative: no background
+wakeups, no subagent-to-subagent communication, no worktrees, no memory tools,
+and no automatic registration.
 
 Built-in personas remain the target shape:
 
 | Persona | Model slot | Tool scope | Purpose |
 |---|---|---|---|
-| `explorer` | `fast` | read/search/memory recall | cheap isolated context gathering |
+| `explorer` | `fast` | read/search/list | cheap isolated context gathering |
 | `reviewer` | `primary` | read/search/shell | correctness and regression review |
 | `worker` | `primary` | edit/shell plus read/search | scoped implementation |
+
+`fast` is a preference for subagent personas, not a hard requirement. If no
+fast model is configured, fast-slot personas run on the primary model so the
+opt-in `subagent` tool stays usable with a normal single-model setup.
 
 Custom personas load from global Markdown files with YAML frontmatter:
 
@@ -85,8 +88,8 @@ operator views stay downstream of the reliable inline solo loop.
 
 `tk-pwsl` closed the alternate-screen swarm/operator view as deferred. The
 normal near-term product surface is inline Plane B subagent visibility plus
-explicit context modes; a full operator view should not start until subagent
-registration and child-session ownership are boring.
+explicit context modes; a full operator view should not start until opt-in
+subagent usage is boring.
 
 Near-term inline behavior should be conservative:
 

@@ -9,8 +9,7 @@ green native baseline. Canto stays closed unless Ion evidence proves a
 framework-owned defect.
 
 Active umbrella: none. `tk-mmcs` is closed.
-Active task: `tk-29xj` - Subagents: expose gated subagent tool after
-context-mode smoke.
+Active task: `tk-6prx` - Markdown: Cache goldmark parser instance.
 
 ## Phases
 
@@ -181,12 +180,18 @@ ACP bridge correctness is no longer the active blocker.
       the final returned result
     - covers schema mapping, none-mode context rejection, and fork-mode child
       provider-visible history when the parent has an in-flight tool call
-20. Next - `tk-29xj` - Subagents: expose gated subagent tool after
+20. Done - `tk-29xj` - Subagents: expose gated subagent tool after
     context-mode smoke:
-    - decide and implement an explicit opt-in registration path
-    - do not add `subagent` to the default eight-tool surface without evidence
-    - include config/visibility boundary tests, tool-scope allowlists, cancel
-      behavior, and a deterministic execute smoke
+    - `subagent_tools = "on"` is the explicit opt-in registration path
+    - the default tool surface remains the eight core coding tools
+    - READ mode hides `subagent`; EDIT and AUTO use the normal sensitive-tool
+      boundary
+    - built-in personas use only registered Ion tools
+    - fast-slot personas fall back to the primary model when no fast model is
+      configured
+    - deterministic smoke proves a child result returns to the parent without
+      leaking parent prompt context into `none` mode
+21. Next - `tk-6prx` - Markdown: Cache goldmark parser instance.
 
 ## I5+ Deferred Work
 
