@@ -117,6 +117,10 @@ ACP bridge correctness is no longer the active blocker.
 9. Done - `tk-4lty` - portable session export/import bundle for cross-host
    transfer. Storage and CLI support are implemented with a subprocess CLI
    smoke. Raw SQLite sync is not exposed as the product surface.
+10. Done - `tk-gopd` - external editor handoff. `Ctrl+X` opens the composer in
+    `$VISUAL`, `$EDITOR`, or `vi` through Bubble Tea `ExecProcess` and reloads
+    edited content back into the composer.
+11. Open - `tk-st4q` - Ion as an ACP agent in headless mode.
 
 ## I5+ Deferred Work
 

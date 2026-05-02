@@ -3,9 +3,9 @@
 Fast, lightweight terminal coding agent.
 
 **Phase:** I4 advanced integrations  
-**Focus:** I4 advanced workflow pieces after portable-session closeout  
+**Focus:** ACP headless-agent planning/implementation  
 **Active umbrella:** none - `tk-mmcs` is closed  
-**Active task:** none - next ready P3 item pending  
+**Active task:** none - next ready P3 item is `tk-st4q` ACP headless agent  
 **Updated:** 2026-05-02
 
 ## Current Truth
@@ -39,13 +39,21 @@ Fast, lightweight terminal coding agent.
   export via `--resume <id> --export-session <file>`, import via
   `--import-session <file>`, then verify the imported transcript through
   storage.
-- Recent I4 completed slices: boundary-step steering, typed thinking
-  capability filtering, Canto coding primitive audit, local `/skills` browser,
-  local `/fork` and `/tree` session branching.
+- `tk-gopd` is closed. `Ctrl+X` opens the composer buffer in `$VISUAL`,
+  `$EDITOR`, or `vi` through Bubble Tea `ExecProcess`, then reloads edited
+  content into the composer. It is blocked while turns, approvals, or
+  compaction are active.
+- Latest editor-handoff gates passed:
+  `go test ./internal/app -count=1 -timeout 180s`,
+  `go test ./... -count=1 -timeout 300s`, the native race subset, and a tmux
+  smoke that rewrote composer text from `draft` to `edited` through the
+  external editor path.
+- Recent I4 completed slices: portable session bundles, boundary-step
+  steering, typed thinking capability filtering, Canto coding primitive audit,
+  local `/skills` browser, local `/fork`, `/tree`, and external editor handoff.
 
 ## Next Action
 
-1. Continue the I4 queue with the next ready P3 item:
-   `TUI: external editor handoff` or `ACP: Implement ion as an ACP agent`.
+1. Continue the I4 queue with `tk-st4q`: ACP headless agent mode.
 2. Keep one green slice per commit and avoid reopening Canto unless Ion tests
    expose a framework defect.
