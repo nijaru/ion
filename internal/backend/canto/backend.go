@@ -34,14 +34,16 @@ type Backend struct {
 	coreMemory *memory.CoreStore
 	tools      *tool.Registry
 	compactLLM llm.Provider
+	steering   *steeringMutator
 
-	mu         sync.Mutex
-	cancel     context.CancelFunc
-	stopWatch  context.CancelFunc
-	turnSeq    uint64
-	turnActive bool
-	closeOnce  sync.Once
-	wg         sync.WaitGroup
+	mu            sync.Mutex
+	cancel        context.CancelFunc
+	stopWatch     context.CancelFunc
+	turnSeq       uint64
+	turnActive    bool
+	activeToolIDs map[string]struct{}
+	closeOnce     sync.Once
+	wg            sync.WaitGroup
 
 	policy     *backend.PolicyEngine
 	approver   *tools.ApprovalManager
@@ -50,9 +52,10 @@ type Backend struct {
 
 func New() *Backend {
 	return &Backend{
-		events:     make(chan ionsession.Event, 100),
-		policy:     backend.NewPolicyEngine(),
-		approver:   tools.NewApprovalManager(),
-		mcpClients: make([]*mcp.Client, 0),
+		events:        make(chan ionsession.Event, 100),
+		policy:        backend.NewPolicyEngine(),
+		approver:      tools.NewApprovalManager(),
+		mcpClients:    make([]*mcp.Client, 0),
+		activeToolIDs: make(map[string]struct{}),
 	}
 }

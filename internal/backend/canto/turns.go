@@ -53,6 +53,7 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 	b.turnActive = true
 	b.cancel = cancel
 	b.stopWatch = stopWatch
+	b.clearActiveToolsLocked()
 
 	sub, err := b.runner.Watch(watchCtx, sessionID)
 	if err != nil {
@@ -131,6 +132,7 @@ func (b *Backend) finishTurn(turnID uint64) {
 		b.turnActive = false
 		b.cancel = nil
 		b.stopWatch = nil
+		b.clearActiveToolsLocked()
 	}
 }
 
@@ -138,6 +140,29 @@ func (b *Backend) turnActiveFor(turnID uint64) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.turnSeq == turnID && b.turnActive
+}
+
+func (b *Backend) SteerTurn(
+	ctx context.Context,
+	text string,
+) (ionsession.SteeringResult, error) {
+	b.mu.Lock()
+	active := b.turnActive
+	activeTool := len(b.activeToolIDs) > 0
+	sessionID := b.ID()
+	steering := b.steering
+	b.mu.Unlock()
+
+	if !active || !activeTool || steering == nil {
+		return ionsession.SteeringResult{
+			Outcome: ionsession.SteeringQueued,
+			Notice:  "No active provider boundary is available.",
+		}, nil
+	}
+	if sessionID == "" {
+		sessionID = "default"
+	}
+	return steering.Submit(ctx, sessionID, text)
 }
 
 func (b *Backend) CancelTurn(ctx context.Context) error {
@@ -148,6 +173,7 @@ func (b *Backend) CancelTurn(ctx context.Context) error {
 	b.cancel = nil
 	b.stopWatch = nil
 	b.turnActive = false
+	b.clearActiveToolsLocked()
 	b.mu.Unlock()
 
 	if cancel != nil {
@@ -160,4 +186,37 @@ func (b *Backend) CancelTurn(ctx context.Context) error {
 		b.events <- ionsession.TurnFinished{}
 	}
 	return nil
+}
+
+func (b *Backend) markToolActive(turnID uint64, id string) {
+	if id == "" {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.turnSeq != turnID || !b.turnActive {
+		return
+	}
+	if b.activeToolIDs == nil {
+		b.activeToolIDs = make(map[string]struct{})
+	}
+	b.activeToolIDs[id] = struct{}{}
+}
+
+func (b *Backend) markToolComplete(turnID uint64, id string) {
+	if id == "" {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.turnSeq != turnID {
+		return
+	}
+	delete(b.activeToolIDs, id)
+}
+
+func (b *Backend) clearActiveToolsLocked() {
+	for id := range b.activeToolIDs {
+		delete(b.activeToolIDs, id)
+	}
 }

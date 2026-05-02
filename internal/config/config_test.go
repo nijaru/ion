@@ -715,3 +715,28 @@ func TestNormalizeBashOutput(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizeBusyInput(t *testing.T) {
+	for input, want := range map[string]string{
+		"":          "",
+		"queue":     "",
+		"queued":    "",
+		"follow-up": "",
+		" STEER ":   "steer",
+		"steering":  "steer",
+		"unknown":   "",
+	} {
+		if got := normalizeBusyInput(input); got != want {
+			t.Fatalf("normalizeBusyInput(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
+func TestBusyInputModeDefaultsToQueue(t *testing.T) {
+	if got := (&Config{}).BusyInputMode(); got != "queue" {
+		t.Fatalf("busy input mode = %q, want queue", got)
+	}
+	if got := (&Config{BusyInput: "steer"}).BusyInputMode(); got != "steer" {
+		t.Fatalf("busy input mode = %q, want steer", got)
+	}
+}

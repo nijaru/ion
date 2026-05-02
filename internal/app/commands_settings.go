@@ -23,7 +23,7 @@ func (m Model) handleSettingsCommand(fields []string) (Model, tea.Cmd) {
 	}
 	if len(fields) != 3 {
 		return m, cmdError(
-			"usage: /settings [retry on|off|tool auto|full|collapsed|hidden|read full|summary|hidden|write diff|summary|hidden|bash full|summary|hidden|thinking full|collapsed|hidden]",
+			"usage: /settings [retry on|off|tool auto|full|collapsed|hidden|read full|summary|hidden|write diff|summary|hidden|bash full|summary|hidden|thinking full|collapsed|hidden|busy queue|steer]",
 		)
 	}
 
@@ -79,8 +79,19 @@ func (m Model) handleSettingsCommand(fields []string) (Model, tea.Cmd) {
 		}
 		updated.ThinkingVerbosity = verbosity
 		notice = "Thinking display: " + verbosity
+	case "busy", "busy_input":
+		mode := config.NormalizeBusyInput(value)
+		if mode == "" {
+			return m, cmdError("usage: /settings busy queue|steer")
+		}
+		if mode == "queue" {
+			updated.BusyInput = ""
+		} else {
+			updated.BusyInput = mode
+		}
+		notice = "Busy input: " + mode
 	default:
-		return m, cmdError("usage: /settings [retry|tool|read|write|bash|thinking] ...")
+		return m, cmdError("usage: /settings [retry|tool|read|write|bash|thinking|busy] ...")
 	}
 
 	if err := config.Save(&updated); err != nil {
@@ -109,6 +120,7 @@ func (m Model) settingsSummary(cfg *config.Config) string {
 		"  write output: " + displayWriteOutput(cfg.WriteOutput),
 		"  bash output: " + displayBashOutput(cfg.BashOutput),
 		"  thinking output: " + displayThinkingVerbosity(cfg.ThinkingVerbosity),
+		"  busy input: " + cfg.BusyInputMode(),
 		"",
 		"commands",
 		"",
@@ -118,6 +130,7 @@ func (m Model) settingsSummary(cfg *config.Config) string {
 		"  /settings write diff|summary|hidden",
 		"  /settings bash full|summary|hidden",
 		"  /settings thinking full|collapsed|hidden",
+		"  /settings busy queue|steer",
 	}, "\n")
 }
 

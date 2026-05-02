@@ -45,6 +45,7 @@ func (b *Backend) translateEvents(ctx context.Context, evCh <-chan session.Event
 			return
 		case session.ToolStarted:
 			if data, ok, err := ev.ToolStartedData(); err == nil && ok {
+				b.markToolActive(turnID, data.ID)
 				b.events <- ionsession.ToolCallStarted{
 					ToolUseID: data.ID,
 					ToolName:  data.Tool,
@@ -54,6 +55,7 @@ func (b *Backend) translateEvents(ctx context.Context, evCh <-chan session.Event
 			}
 		case session.ToolCompleted:
 			if data, ok, err := ev.ToolCompletedData(); err == nil && ok {
+				b.markToolComplete(turnID, data.ID)
 				var execErr error
 				if data.Error != "" {
 					execErr = fmt.Errorf("%s", data.Error)
