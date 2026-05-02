@@ -77,6 +77,10 @@ func main() {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(2)
 	}
+	if err := validateSessionBundleSelection(cli.exportSessionPath(), cli.importSessionPath()); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(2)
+	}
 	if printRequested {
 		if isStdinPipe() {
 			data, err := io.ReadAll(os.Stdin)
@@ -104,6 +108,20 @@ func main() {
 		fmt.Fprintf(os.Stderr, "failed to initialize storage: %v\n", err)
 		os.Exit(1)
 	}
+	if cli.importSessionPath() != "" {
+		imported, err := importSessionBundleFile(ctx, store, cli.importSessionPath())
+		closeErr := store.Close()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to import session bundle: %v\n", err)
+			os.Exit(1)
+		}
+		if closeErr != nil {
+			fmt.Fprintf(os.Stderr, "failed to close storage: %v\n", closeErr)
+			os.Exit(1)
+		}
+		printSessionBundleImport(os.Stdout, imported)
+		return
+	}
 
 	sessionID, err := startupSessionID(
 		ctx,
@@ -116,6 +134,24 @@ func main() {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)
+	}
+	if cli.exportSessionPath() != "" {
+		if sessionID == "" {
+			fmt.Fprintln(os.Stderr, "--export-session requires --resume <id> or --continue")
+			os.Exit(2)
+		}
+		exported, err := exportSessionBundleFile(ctx, store, sessionID, cli.exportSessionPath())
+		closeErr := store.Close()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to export session bundle: %v\n", err)
+			os.Exit(1)
+		}
+		if closeErr != nil {
+			fmt.Fprintf(os.Stderr, "failed to close storage: %v\n", closeErr)
+			os.Exit(1)
+		}
+		printSessionBundleExport(os.Stdout, exported)
+		return
 	}
 	if sessionID != "" && !explicitRuntimeOverride {
 		if err := applySessionConfigFromMetadata(ctx, store, sessionID, cfg); err != nil {

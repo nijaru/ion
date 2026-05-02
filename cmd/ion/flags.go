@@ -24,6 +24,8 @@ type cliFlags struct {
 	outputFlag        *string
 	jsonFlag          *bool
 	timeoutFlag       *time.Duration
+	exportSessionFlag *string
+	importSessionFlag *string
 }
 
 func registerCLIFlags() cliFlags {
@@ -48,14 +50,28 @@ func registerCLIFlags() cliFlags {
 			"",
 			"Thinking effort: auto, off, minimal, low, medium, high, xhigh",
 		),
-		modeFlag:       flag.String("mode", "", "Permission mode: read, edit, or auto"),
-		yoloFlag:       flag.Bool("yolo", false, "Start in AUTO mode (alias for --mode auto)"),
-		printFlag:      flag.Bool("print", false, "Print response and exit (use with --prompt or stdin)"),
+		modeFlag: flag.String("mode", "", "Permission mode: read, edit, or auto"),
+		yoloFlag: flag.Bool("yolo", false, "Start in AUTO mode (alias for --mode auto)"),
+		printFlag: flag.Bool(
+			"print",
+			false,
+			"Print response and exit (use with --prompt or stdin)",
+		),
 		promptFlag:     flag.String("prompt", "", "Prompt to send in print mode"),
 		printShortFlag: flag.Bool("p", false, "Print response and exit (alias for --print)"),
 		outputFlag:     flag.String("output", "text", "Print mode output: text or json"),
 		jsonFlag:       flag.Bool("json", false, "Emit JSON in print mode"),
 		timeoutFlag:    flag.Duration("timeout", 5*time.Minute, "Timeout for print mode"),
+		exportSessionFlag: flag.String(
+			"export-session",
+			"",
+			"Export the selected session bundle to a JSON file",
+		),
+		importSessionFlag: flag.String(
+			"import-session",
+			"",
+			"Import a session bundle JSON file",
+		),
 	}
 }
 
@@ -119,9 +135,28 @@ func (f cliFlags) timeout() time.Duration {
 	return *f.timeoutFlag
 }
 
+func (f cliFlags) exportSessionPath() string {
+	return strings.TrimSpace(*f.exportSessionFlag)
+}
+
+func (f cliFlags) importSessionPath() string {
+	return strings.TrimSpace(*f.importSessionFlag)
+}
+
+func (f cliFlags) sessionBundleRequested() bool {
+	return f.exportSessionPath() != "" || f.importSessionPath() != ""
+}
+
 func validatePrintSelection(printRequested, openResumePicker bool) error {
 	if printRequested && openResumePicker {
 		return fmt.Errorf("--resume requires a session ID in print mode")
+	}
+	return nil
+}
+
+func validateSessionBundleSelection(exportPath, importPath string) error {
+	if exportPath != "" && importPath != "" {
+		return fmt.Errorf("--export-session and --import-session cannot be used together")
 	}
 	return nil
 }
@@ -212,7 +247,9 @@ func ionKnownFlag(name string) bool {
 		"p",
 		"output",
 		"json",
-		"timeout":
+		"timeout",
+		"export-session",
+		"import-session":
 		return true
 	default:
 		return false
@@ -221,7 +258,18 @@ func ionKnownFlag(name string) bool {
 
 func ionFlagNeedsValue(name string) bool {
 	switch name {
-	case "resume", "r", "provider", "model", "m", "thinking", "mode", "prompt", "output", "timeout":
+	case "resume",
+		"r",
+		"provider",
+		"model",
+		"m",
+		"thinking",
+		"mode",
+		"prompt",
+		"output",
+		"timeout",
+		"export-session",
+		"import-session":
 		return true
 	default:
 		return false
