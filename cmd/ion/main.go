@@ -141,6 +141,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "failed to initialize runtime: %v\n", err)
 		os.Exit(1)
 	}
+	configureSessionMode(b.Session(), mode)
 
 	// Print mode: run a single turn and exit
 	if printRequested {
@@ -149,7 +150,6 @@ func main() {
 			fmt.Fprintf(os.Stderr, "print mode requires a configured provider and model\n")
 			os.Exit(1)
 		}
-		configureSessionMode(agent, mode)
 		runErr := runPrintModeWithTimeout(
 			ctx,
 			os.Stdout,

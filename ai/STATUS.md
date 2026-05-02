@@ -5,7 +5,7 @@ Fast, lightweight terminal coding agent.
 **Phase:** I3 safety/trust table stakes
 **Focus:** Restore safety, trust, sandbox, and policy behavior on top of the stable native shell.
 **Active umbrella:** `tk-mmcs` - core parity plan and queue hygiene.
-**Active task:** choose/start the next I3 safety child under `tk-mmcs`.
+**Active task:** continue I3 safety/trust table-stakes cleanup.
 **Updated:** 2026-05-02
 
 ## Current Truth
@@ -73,11 +73,18 @@ Fast, lightweight terminal coding agent.
   provider history; tmux text capture covered fresh launch, `/tools`,
   `/settings`, `/session`, queued input, bash display, `--continue`, and resumed
   follow-up.
+- Read mode now hides unavailable write/execute tools from provider-visible
+  tool specs and from `ToolSurface()` summaries while policy still denies any
+  direct write/execute call that reaches execution.
+- Latest read-mode gates passed:
+  `go test ./cmd/ion ./internal/backend ./internal/backend/canto -count=1 -timeout 180s`,
+  `go test ./... -count=1 -timeout 300s`, the native race subset, and a tmux
+  text capture for `--mode read` startup plus `/tools`.
 
 ## Next Action
 
-1. Commit and close `tk-7mxs`.
-2. Start the first I3 safety/trust task under `tk-mmcs`.
+1. Continue `tk-4570` safety/trust simplification.
+2. Review sandbox/trust startup and footer display against current mode policy.
 3. Keep the scope narrow: mode/trust/sandbox/policy table stakes only, not ACP,
    subagents, routing, skills, privacy, or advanced safety research.
 

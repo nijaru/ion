@@ -14,6 +14,7 @@ import (
 	csession "github.com/nijaru/canto/session"
 	"github.com/nijaru/canto/tool"
 	ctesting "github.com/nijaru/canto/x/testing"
+	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/config"
 	ionsession "github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
@@ -257,6 +258,33 @@ func TestReasoningEffortProcessorDoesNotSendMaxYet(t *testing.T) {
 	}
 }
 
+func TestToolVisibilityProcessorFiltersReadModeTools(t *testing.T) {
+	policy := backend.NewPolicyEngine()
+	policy.SetMode(ionsession.ModeRead)
+	req := &llm.Request{
+		Tools: []*llm.Spec{
+			{Name: "bash"},
+			{Name: "edit"},
+			{Name: "glob"},
+			{Name: "grep"},
+			{Name: "list"},
+			{Name: "read"},
+			{Name: "write"},
+		},
+	}
+
+	processor := toolVisibilityProcessor(policy)
+	if err := processor.ApplyRequest(context.Background(), nil, "model", nil, req); err != nil {
+		t.Fatalf("process: %v", err)
+	}
+
+	got := specNames(req.Tools)
+	want := []string{"glob", "grep", "list", "read"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("READ request tools = %#v, want %#v", got, want)
+	}
+}
+
 func TestReflexionProcessorAddsNoteAfterToolError(t *testing.T) {
 	sess := csession.New("reflexion")
 	if err := sess.Append(context.Background(), csession.NewEvent("reflexion", csession.ToolCompleted, map[string]string{
@@ -343,6 +371,56 @@ func TestLocalAPIRequestsKeepSystemMessagesLeading(t *testing.T) {
 	}
 }
 
+func TestReadModeProviderRequestHidesUnavailableTools(t *testing.T) {
+	ctx := context.Background()
+	store, err := storage.NewCantoStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	storageSession, err := store.OpenSession(ctx, t.TempDir(), "local-api/model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	provider := llm.NewFauxProvider("local-api", llm.FauxStep{Content: "ok"})
+	oldFactory := providerFactory
+	providerFactory = func(ctx context.Context, cfg *config.Config) (llm.Provider, error) {
+		return provider, nil
+	}
+	defer func() { providerFactory = oldFactory }()
+
+	b := New()
+	b.SetStore(store)
+	b.SetSession(storageSession)
+	b.SetConfig(
+		&config.Config{
+			Provider: "local-api",
+			Model:    "model-a",
+			Endpoint: "http://localhost:8080/v1",
+		},
+	)
+	if err := b.Open(ctx); err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer func() { _ = b.Close() }()
+	b.SetMode(ionsession.ModeRead)
+
+	if err := b.SubmitTurn(ctx, "read only please"); err != nil {
+		t.Fatalf("submit turn: %v", err)
+	}
+	waitForTurnFinished(t, b.Events())
+
+	calls := provider.Calls()
+	if len(calls) != 1 {
+		t.Fatalf("provider calls = %d, want 1", len(calls))
+	}
+	got := specNames(calls[0].Tools)
+	want := []string{"glob", "grep", "list", "read"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("READ provider tools = %#v, want %#v", got, want)
+	}
+}
+
 func TestSubmitTurnPreservesProviderInSessionMetadata(t *testing.T) {
 	ctx := context.Background()
 	store, err := storage.NewCantoStore(t.TempDir())
@@ -391,6 +469,56 @@ func TestSubmitTurnPreservesProviderInSessionMetadata(t *testing.T) {
 	}
 	if sessions[0].Model != "local-api/model-a" {
 		t.Fatalf("session model = %q, want provider-qualified model", sessions[0].Model)
+	}
+}
+
+func TestToolSurfaceFiltersReadModeTools(t *testing.T) {
+	ctx := context.Background()
+	store, err := storage.NewCantoStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	storageSession, err := store.OpenSession(ctx, t.TempDir(), "local-api/model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	provider := llm.NewFauxProvider("local-api", llm.FauxStep{Content: "ok"})
+	oldFactory := providerFactory
+	providerFactory = func(ctx context.Context, cfg *config.Config) (llm.Provider, error) {
+		return provider, nil
+	}
+	defer func() { providerFactory = oldFactory }()
+
+	b := New()
+	b.SetStore(store)
+	b.SetSession(storageSession)
+	b.SetConfig(
+		&config.Config{
+			Provider: "local-api",
+			Model:    "model-a",
+			Endpoint: "http://localhost:8080/v1",
+		},
+	)
+	if err := b.Open(ctx); err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer func() { _ = b.Close() }()
+
+	b.SetMode(ionsession.ModeRead)
+	surface := b.ToolSurface()
+	want := []string{"glob", "grep", "list", "read"}
+	if surface.Count != len(want) {
+		t.Fatalf("READ tool count = %d, want %d", surface.Count, len(want))
+	}
+	if strings.Join(surface.Names, ",") != strings.Join(want, ",") {
+		t.Fatalf("READ tool surface = %#v, want %#v", surface.Names, want)
+	}
+
+	b.SetMode(ionsession.ModeEdit)
+	surface = b.ToolSurface()
+	if surface.Count != 8 {
+		t.Fatalf("EDIT tool count = %d, want 8", surface.Count)
 	}
 }
 
@@ -2121,6 +2249,16 @@ func requestHasMessage(messages []llm.Message, role llm.Role, content string) bo
 		}
 	}
 	return false
+}
+
+func specNames(specs []*llm.Spec) []string {
+	names := make([]string, 0, len(specs))
+	for _, spec := range specs {
+		if spec != nil {
+			names = append(names, spec.Name)
+		}
+	}
+	return names
 }
 
 func entryExists(entries []ionsession.Entry, role ionsession.Role, content string) bool {

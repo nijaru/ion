@@ -65,7 +65,7 @@ func (b *Backend) ToolSurface() backend.ToolSurface {
 	if b.tools == nil {
 		return backend.ToolSurface{}
 	}
-	names := b.tools.Names()
+	names := b.policy.VisibleToolNames(b.tools.Names())
 	threshold := prompt.DefaultLazyThreshold
 	return backend.ToolSurface{
 		Count:         len(names),

@@ -69,10 +69,10 @@ Active next scope:
 
 - review current mode/trust/sandbox/policy behavior against
   `ai/specs/tools-and-modes.md`
-- remove stale `CoreLoopOnly` or stabilization-language leftovers from safety
-  paths
+- remove stale stabilization-language leftovers from safety paths
 - ensure read mode hides or blocks write/execute tools consistently at the
-  right boundary
+  right boundary (provider-visible request tools and UI tool summaries are now
+  mode-filtered)
 - keep sandbox reporting clear in startup, footer, and `/tools`
 - avoid advanced LLM-judge, escalation, privacy, ACP, subagents, or routing work
   during I3 unless a core safety defect requires it
