@@ -1333,15 +1333,6 @@ func TestValidateSubagentPersonaToolsFailsClosed(t *testing.T) {
 	}
 }
 
-func TestRegisterMCPServerIsDeferred(t *testing.T) {
-	b := New()
-
-	err := b.RegisterMCPServer(t.Context(), "server")
-	if err == nil || !strings.Contains(err.Error(), "MCP registration is deferred") {
-		t.Fatalf("RegisterMCPServer error = %v, want deferred error", err)
-	}
-}
-
 func TestCrossProviderHandoffPreservesPromptTruth(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

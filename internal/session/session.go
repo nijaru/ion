@@ -22,9 +22,6 @@ type AgentSession interface {
 	// Approve sends an approval decision back to the agent for a pending request.
 	Approve(ctx context.Context, requestID string, approved bool) error
 
-	// RegisterMCPServer connects to an MCP server and registers its tools.
-	RegisterMCPServer(ctx context.Context, command string, args ...string) error
-
 	// SetMode updates the session mode (READ/EDIT/AUTO).
 	SetMode(mode Mode)
 

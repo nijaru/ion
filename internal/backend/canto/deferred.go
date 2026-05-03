@@ -1,7 +1,6 @@
 package canto
 
 import (
-	"context"
 	"fmt"
 	"strings"
 
@@ -42,8 +41,4 @@ func validateSubagentPersonaTools(personas []subagents.Persona, registry *tool.R
 		}
 	}
 	return nil
-}
-
-func (b *Backend) RegisterMCPServer(ctx context.Context, command string, args ...string) error {
-	return fmt.Errorf("MCP registration is deferred until the advanced integration phase")
 }

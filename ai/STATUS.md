@@ -50,6 +50,8 @@ Fast, lightweight terminal coding agent.
 - Removed unreachable `/mcp` and `/rewind` dispatcher implementations. They
   remain rejected at the deferred command catalog boundary instead of living as
   hidden future-edition code.
+- Removed the unused MCP registration method from the host `AgentSession`
+  boundary and native backend, since no active Ion command can call it.
 - Local command errors now print once to scrollback without leaving the progress
   line in a duplicate `Error` state.
 - Latest gates passed for the shell/command cleanup:

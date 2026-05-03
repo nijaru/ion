@@ -169,10 +169,6 @@ func (s *fakeACPAgentSession) Approve(_ context.Context, _ string, approved bool
 	return nil
 }
 
-func (s *fakeACPAgentSession) RegisterMCPServer(context.Context, string, ...string) error {
-	return nil
-}
-
 func (s *fakeACPAgentSession) SetMode(mode ionsession.Mode) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

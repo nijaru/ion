@@ -55,7 +55,9 @@ command/overflow design instead of re-adding a model-visible tool by default.
 Deferred command catalog entries may exist for roadmap visibility, but the TUI
 should not carry unreachable command bodies. `/mcp` and `/rewind` remain
 deferred at the catalog boundary; their old dispatcher implementations were
-removed instead of preserved as compatibility code.
+removed instead of preserved as compatibility code. Since `/mcp` has no active
+caller, MCP registration is also removed from the host `AgentSession` boundary
+until the feature is deliberately redesigned.
 
 ### 2026-05-02 - Flue validates the harness boundary
 

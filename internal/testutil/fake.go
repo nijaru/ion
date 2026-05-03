@@ -160,10 +160,6 @@ func (b *Backend) Approve(ctx context.Context, requestID string, approved bool) 
 	return nil
 }
 
-func (b *Backend) RegisterMCPServer(ctx context.Context, command string, args ...string) error {
-	return nil
-}
-
 func (b *Backend) SetMode(session.Mode) {}
 
 func (b *Backend) SetAutoApprove(bool) {}

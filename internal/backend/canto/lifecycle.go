@@ -11,7 +11,6 @@ import (
 	"github.com/nijaru/canto/runtime"
 	"github.com/nijaru/canto/session"
 	"github.com/nijaru/canto/tool"
-	"github.com/nijaru/canto/tool/mcp"
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/backend/canto/tools"
 	ionconfig "github.com/nijaru/ion/internal/config"
@@ -141,7 +140,6 @@ func (b *Backend) Close() error {
 		b.mu.Lock()
 		cancel := b.cancel
 		stopWatch := b.stopWatch
-		clients := append([]*mcp.Client(nil), b.mcpClients...)
 		runner := b.runner
 		b.mu.Unlock()
 
@@ -151,10 +149,6 @@ func (b *Backend) Close() error {
 		if stopWatch != nil {
 			stopWatch()
 		}
-		for _, client := range clients {
-			client.Close()
-		}
-
 		if runner != nil {
 			runner.Close()
 		}
