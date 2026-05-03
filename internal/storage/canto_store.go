@@ -625,12 +625,14 @@ func (s *cantoSession) Entries(ctx context.Context) ([]ionsession.Entry, error) 
 	for _, ev := range sess.Events() {
 		if entry, ok := effectiveByEventID[ev.ID.String()]; ok {
 			if display, ok := displayHistoryEntry(s.meta.CWD, entry); ok {
+				display = withEntryTimestamp(display, ev.Timestamp)
 				entries = append(entries, display)
 			}
 			seenEffective[entry.EventID] = true
 			continue
 		}
 		if display, ok := displayEventEntry(ev); ok {
+			display = withEntryTimestamp(display, ev.Timestamp)
 			entries = append(entries, display)
 		}
 	}
@@ -643,6 +645,13 @@ func (s *cantoSession) Entries(ctx context.Context) ([]ionsession.Entry, error) 
 		}
 	}
 	return normalizeDisplayEntries(entries), nil
+}
+
+func withEntryTimestamp(entry ionsession.Entry, timestamp time.Time) ionsession.Entry {
+	if !timestamp.IsZero() {
+		entry.Timestamp = timestamp.UTC()
+	}
+	return entry
 }
 
 func displayHistoryEntry(workdir string, entry session.HistoryEntry) (ionsession.Entry, bool) {

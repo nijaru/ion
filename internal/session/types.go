@@ -1,5 +1,7 @@
 package session
 
+import "time"
+
 type Role string
 
 const (
@@ -12,6 +14,7 @@ const (
 
 type Entry struct {
 	Role      Role
+	Timestamp time.Time
 	Title     string
 	Content   string
 	Reasoning string
