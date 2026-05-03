@@ -151,20 +151,6 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 	case "/settings":
 		return m.handleSettingsCommand(fields)
 
-	case "/mcp":
-		if len(fields) < 3 || fields[1] != "add" {
-			return m, cmdError("usage: /mcp add <command> [args...]")
-		}
-		mcpCmd := fields[2]
-		mcpArgs := fields[3:]
-		sess := m.Model.Session
-		return m, func() tea.Msg {
-			if err := sess.RegisterMCPServer(context.Background(), mcpCmd, mcpArgs...); err != nil {
-				return localErrorMsg{err: err}
-			}
-			return nil
-		}
-
 	case "/read":
 		return m.setModeCommand(session.ModeRead)
 
@@ -223,16 +209,6 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		return m, m.printEntries(
 			session.Entry{Role: session.System, Content: "Workspace trusted. Mode: EDIT"},
 		)
-
-	case "/rewind":
-		if len(fields) < 2 || len(fields) > 3 {
-			return m, cmdError("usage: /rewind <checkpoint-id> [--confirm]")
-		}
-		confirmed := len(fields) == 3 && fields[2] == "--confirm"
-		if len(fields) == 3 && !confirmed {
-			return m, cmdError("usage: /rewind <checkpoint-id> [--confirm]")
-		}
-		return m.rewindCheckpointCommand(fields[1], confirmed)
 
 	case "/tools":
 		if len(fields) != 1 {

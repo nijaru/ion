@@ -47,7 +47,12 @@ Fast, lightweight terminal coding agent.
   progress/composer/footer shell, with one blank row before `Ready`.
 - Removed the stale self-initiated model-visible `compact` tool spec; current
   compaction design is host `/compact` plus overflow recovery.
-- Latest gates passed for the shell print fix:
+- Removed unreachable `/mcp` and `/rewind` dispatcher implementations. They
+  remain rejected at the deferred command catalog boundary instead of living as
+  hidden future-edition code.
+- Local command errors now print once to scrollback without leaving the progress
+  line in a duplicate `Error` state.
+- Latest gates passed for the shell/command cleanup:
   `go test ./internal/app -count=1 -timeout 180s`,
   `go test ./... -count=1 -timeout 300s`, and
   `go test -race ./cmd/ion ./internal/app ./internal/backend/canto ./internal/backend/canto/tools ./internal/storage -count=1 -timeout 300s`.

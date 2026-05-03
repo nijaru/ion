@@ -63,17 +63,18 @@ Current checkpoint substrate:
 - binary files: stored and restored as bytes with SHA-256 validation
 - directories: recorded as directory entries
 - first producer: native `write`, `edit`, and `multi_edit` tools create pre-change checkpoints and surface checkpoint IDs in tool results
-- command: `/rewind <checkpoint-id>` previews destructive restore actions
-- confirmation: `/rewind <checkpoint-id> --confirm` applies the checkpoint and emits restore start/completion transcript entries
+- no active `/rewind` command; the earlier preview/apply implementation was
+  removed from the default TUI path while rollback remains deferred
 
 Still deferred before user-facing rewind:
 
+- command shape and copy for preview/apply
 - richer restore conflict behavior when current state diverged for reasons other than the original tool action
 - bash/external tool checkpoint coverage
 - whether Canto OverlayFS should replace or supplement this path-based durable checkpoint layer
 
 Until those are settled, Ion should treat rewind as an explicit checkpoint
-restore command, not a complete visual history browser.
+restore feature to redesign later, not hidden command code in the minimal core.
 
 ## Sandbox Boundary
 

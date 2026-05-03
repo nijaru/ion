@@ -468,6 +468,18 @@ func (m Model) handleSessionError(err error, awaitTerminal bool) (Model, tea.Cmd
 	return m, tea.Sequence(printErr, m.awaitSessionEvent())
 }
 
+func (m Model) handleLocalError(err error) (Model, tea.Cmd) {
+	if !m.InFlight.Thinking && m.Approval.Pending == nil {
+		m.Progress.Compacting = false
+		if m.Progress.Mode == stateError {
+			m.Progress.Mode = stateReady
+		}
+		m.Progress.LastError = ""
+	}
+	entry := session.Entry{Role: session.System, Content: "Error: " + err.Error()}
+	return m, m.printEntries(entry)
+}
+
 func redactApprovalRequest(req session.ApprovalRequest) session.ApprovalRequest {
 	req.Description = privacy.Redact(req.Description)
 	req.Args = privacy.Redact(req.Args)

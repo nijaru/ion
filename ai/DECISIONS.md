@@ -50,6 +50,13 @@ eight-tool model surface. The old self-initiated `compact` tool spec was
 deleted for the same reason; future compaction work should update the host
 command/overflow design instead of re-adding a model-visible tool by default.
 
+### 2026-05-02 - Deferred commands do not keep hidden implementations
+
+Deferred command catalog entries may exist for roadmap visibility, but the TUI
+should not carry unreachable command bodies. `/mcp` and `/rewind` remain
+deferred at the catalog boundary; their old dispatcher implementations were
+removed instead of preserved as compatibility code.
+
 ### 2026-05-02 - Flue validates the harness boundary
 
 Flue is not a TUI replacement for Ion, but its headless programmable shape is a

@@ -824,7 +824,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleApprovalNotification(msg)
 
 	case localErrorMsg:
-		return m.handleSessionError(msg.err, false)
+		return m.handleLocalError(msg.err)
 
 	case queuedTurnMsg:
 		next, cmd := m.submitText(msg.text)
