@@ -80,20 +80,21 @@ selectors, and editor/runtime configuration.
 
 Target staged policy:
 
-1. Keep default `inherit` behavior while the executor boundary settles.
-2. Add visibility: approval previews and `/tools` should be able to report the
-   environment policy without listing values.
-3. Add explicit modes only after tests and UX are clear:
+1. Default `inherit` behavior remains unchanged.
+2. Approval previews, startup, and `/tools` report the environment policy
+   without listing values.
+3. `inherit_without_provider_keys` is implemented as an explicit local-bash
+   policy:
 
 ```toml
-tool_env = "inherit" # inherit | inherit_without_provider_keys | minimal | allowlist
-tool_env_allow = ["PATH", "HOME", "USER", "SHELL", "TMPDIR", "LANG", "LC_ALL"]
+tool_env = "inherit_without_provider_keys"
 ```
 
-Provider credentials should be denied by default once
-`inherit_without_provider_keys` becomes the normal policy. Use the provider
-catalog as the denylist source (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`,
-`OPENROUTER_API_KEY`, custom `auth_env_var`, and provider alternates).
+This mode inherits the normal developer environment but strips provider
+credential variable names from the provider catalog (`OPENAI_API_KEY`,
+`ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, custom `auth_env_var`, and provider
+alternates). Future modes such as `minimal` and `allowlist` need a separate UX
+and compatibility slice.
 
 Project files cannot weaken the environment policy. Only user-global config can
 change it.

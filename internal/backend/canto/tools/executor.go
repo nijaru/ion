@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -17,17 +18,80 @@ type localCommand struct {
 }
 
 type localExecutor struct {
-	sandbox SandboxMode
+	sandbox     SandboxMode
+	environment EnvironmentPolicy
 }
 
-const executorEnvironmentInherit = "inherit"
+type EnvironmentPolicy struct {
+	mode string
+	deny map[string]struct{}
+}
 
-func ExecutorEnvironmentSummary() string {
+const (
+	executorEnvironmentInherit        = "inherit"
+	executorEnvironmentStripProviders = "inherit_without_provider_keys"
+)
+
+func NewEnvironmentPolicy(mode string, deny []string) EnvironmentPolicy {
+	policy := EnvironmentPolicy{mode: executorEnvironmentInherit}
+	if mode == executorEnvironmentStripProviders {
+		policy.mode = executorEnvironmentStripProviders
+		policy.deny = make(map[string]struct{}, len(deny))
+		for _, key := range deny {
+			key = strings.TrimSpace(key)
+			if key != "" {
+				policy.deny[key] = struct{}{}
+			}
+		}
+	}
+	return policy
+}
+
+func (p EnvironmentPolicy) Summary() string {
+	if p.mode == executorEnvironmentStripProviders {
+		return executorEnvironmentStripProviders
+	}
 	return executorEnvironmentInherit
 }
 
 func newLocalExecutor(sandbox SandboxMode) *localExecutor {
-	return &localExecutor{sandbox: sandbox}
+	return newLocalExecutorWithEnvironment(
+		sandbox,
+		NewEnvironmentPolicy(executorEnvironmentInherit, nil),
+	)
+}
+
+func newLocalExecutorWithEnvironment(
+	sandbox SandboxMode,
+	environment EnvironmentPolicy,
+) *localExecutor {
+	return &localExecutor{sandbox: sandbox, environment: environment}
+}
+
+func (p EnvironmentPolicy) commandEnv() []string {
+	if p.mode != executorEnvironmentStripProviders {
+		return nil
+	}
+	return filterEnvironment(os.Environ(), p.deny)
+}
+
+func filterEnvironment(env []string, deny map[string]struct{}) []string {
+	if len(deny) == 0 {
+		return env
+	}
+	out := make([]string, 0, len(env))
+	for _, item := range env {
+		key, _, ok := strings.Cut(item, "=")
+		if !ok {
+			out = append(out, item)
+			continue
+		}
+		if _, blocked := deny[key]; blocked {
+			continue
+		}
+		out = append(out, item)
+	}
+	return out
 }
 
 func (e *localExecutor) Run(ctx context.Context, request localCommand) (string, error) {
@@ -41,6 +105,7 @@ func (e *localExecutor) Run(ctx context.Context, request localCommand) (string, 
 
 	cmd := exec.CommandContext(ctx, plan.name, plan.args...)
 	cmd.Dir = plan.dir
+	cmd.Env = e.environment.commandEnv()
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	stdout, err := cmd.StdoutPipe()

@@ -564,6 +564,12 @@ func TestToolSurfaceFiltersReadModeTools(t *testing.T) {
 	if strings.Join(surface.Names, ",") != strings.Join(want, ",") {
 		t.Fatalf("EDIT tool surface = %#v, want %#v", surface.Names, want)
 	}
+
+	b.cfg.ToolEnv = "inherit_without_provider_keys"
+	surface = b.ToolSurface()
+	if surface.Environment != "inherit_without_provider_keys" {
+		t.Fatalf("filtered tool environment = %q, want inherit_without_provider_keys", surface.Environment)
+	}
 }
 
 func TestSkillToolSurfaceIsOptIn(t *testing.T) {

@@ -4,7 +4,7 @@ Fast, lightweight terminal coding agent.
 
 **Phase:** Local executor boundary cleanup
 **Focus:** Make execution, sandbox, environment, and secret handling explicit without expanding the default tool surface
-**Active task:** none; next ready task is `tk-kxpa` - implement provider-key env filtering
+**Active task:** none; next ready task is `tk-lux7` - design explicit tool secret injection
 **Updated:** 2026-05-03
 
 ## Current Truth
@@ -54,6 +54,9 @@ Fast, lightweight terminal coding agent.
   posture as `Env inherit` / `env inherit`, and bash approval previews and
   notifications include `Environment: inherit` without listing variable names
   or values.
+- `tk-kxpa` is closed. `tool_env = "inherit_without_provider_keys"` preserves
+  inherited developer env while stripping provider API-key variables from the
+  provider catalog for local bash.
 - Latest C2 gates passed:
   focused command/app/backend/tool tests for environment posture,
   `go test ./... -count=1 -timeout 300s`, and
@@ -242,5 +245,5 @@ Fast, lightweight terminal coding agent.
 
 ## Next Action
 
-1. Start `tk-kxpa`: implement explicit provider-key environment filtering for
-   local bash.
+1. Start `tk-lux7`: design explicit tool-secret injection before adding any
+   model-visible secret field or executor secret implementation.

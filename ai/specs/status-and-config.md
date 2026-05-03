@@ -97,6 +97,7 @@ Stable config fields:
 - `bash_output`
 - `thinking_verbosity`
 - `busy_input`
+- `tool_env`
 
 Thinking capability overrides are stable config, not mutable state. Unknown
 custom endpoints should default to sending no thinking/reasoning parameter.

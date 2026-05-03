@@ -46,6 +46,7 @@ type Config struct {
 	BusyInput              string            `toml:"busy_input,omitempty"`
 	SkillTools             string            `toml:"skill_tools,omitempty"`
 	SubagentTools          string            `toml:"subagent_tools,omitempty"`
+	ToolEnv                string            `toml:"tool_env,omitempty"`
 }
 
 type State struct {
@@ -159,6 +160,7 @@ func normalizeConfig(cfg *Config) {
 	cfg.BusyInput = normalizeBusyInput(cfg.BusyInput)
 	cfg.SkillTools = normalizeSkillTools(cfg.SkillTools)
 	cfg.SubagentTools = normalizeSubagentTools(cfg.SubagentTools)
+	cfg.ToolEnv = normalizeToolEnv(cfg.ToolEnv)
 	if cfg.ContextLimit < 0 {
 		cfg.ContextLimit = 0
 	}
@@ -302,6 +304,10 @@ func Save(cfg *Config) error {
 	out.SubagentTools = normalizeSubagentTools(out.SubagentTools)
 	if out.SubagentTools == "off" {
 		out.SubagentTools = ""
+	}
+	out.ToolEnv = normalizeToolEnv(out.ToolEnv)
+	if out.ToolEnv == "inherit" {
+		out.ToolEnv = ""
 	}
 
 	data, err := toml.Marshal(&out)
@@ -493,6 +499,13 @@ func (c *Config) SubagentToolMode() string {
 	return normalizeSubagentTools(c.SubagentTools)
 }
 
+func (c *Config) ToolEnvMode() string {
+	if c == nil {
+		return "inherit"
+	}
+	return normalizeToolEnv(c.ToolEnv)
+}
+
 func normalizeReasoningEffort(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "", DefaultReasoningEffort:
@@ -638,6 +651,15 @@ func normalizeSubagentTools(value string) string {
 		return "on"
 	default:
 		return "off"
+	}
+}
+
+func normalizeToolEnv(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "inherit_without_provider_keys":
+		return "inherit_without_provider_keys"
+	default:
+		return "inherit"
 	}
 }
 

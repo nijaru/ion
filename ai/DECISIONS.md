@@ -25,13 +25,13 @@ Distilled architectural principles plus recent decision log.
 
 ### 2026-05-03 - Executor env hardening must be explicit
 
-Local bash keeps inheriting Ion's process environment until Ion exposes an
-explicit environment policy. This avoids silently breaking common developer
-commands during executor cleanup. The hardening path is visibility first, then
-explicit modes such as `inherit_without_provider_keys`, `minimal`, and
-`allowlist`. Provider API keys are not tool credentials; future tool secrets
-must be named, approved, redacted, and audited before any model-visible secret
-field exists.
+Local bash keeps inheriting Ion's process environment by default. This avoids
+silently breaking common developer commands during executor cleanup. The first
+explicit hardening mode is `tool_env = "inherit_without_provider_keys"`, which
+preserves inherited env while stripping provider API-key variables from the
+provider catalog. Provider API keys are not tool credentials; future tool
+secrets must be named, approved, redacted, and audited before any
+model-visible secret field exists.
 
 ### 2026-05-03 - Sandbox is an executor boundary
 

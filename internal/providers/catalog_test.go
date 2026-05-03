@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -119,6 +120,25 @@ func TestCustomAuthAndHeadersDoNotLeakToDefaultProviders(t *testing.T) {
 	}
 	if got := ResolvedHeaders(cfg); got["X-Local"] != "1" {
 		t.Fatalf("local headers = %#v, want configured header", got)
+	}
+}
+
+func TestCredentialEnvVarsIncludesCatalogAndCustomAuth(t *testing.T) {
+	got := CredentialEnvVars(&config.Config{AuthEnvVar: "LOCAL_API_KEY"})
+	for _, want := range []string{
+		"LOCAL_API_KEY",
+		"OPENAI_API_KEY",
+		"ANTHROPIC_API_KEY",
+		"OPENROUTER_API_KEY",
+		"GEMINI_API_KEY",
+		"GOOGLE_API_KEY",
+	} {
+		if !slices.Contains(got, want) {
+			t.Fatalf("credential env vars missing %q: %#v", want, got)
+		}
+	}
+	if !slices.IsSorted(got) {
+		t.Fatalf("credential env vars are not sorted: %#v", got)
 	}
 }
 

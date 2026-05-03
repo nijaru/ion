@@ -450,13 +450,12 @@ Current implementation note:
   toolchain, shell, SSH agent, and cloud-profile variables.
 - Environment policy is a staged hardening surface:
   - current default: `inherit`
-  - next visibility slice: show the active environment posture in approval
-    previews and `/tools` without listing values
-  - later explicit modes: `inherit_without_provider_keys`, `minimal`, and
-    `allowlist`
-- Provider credentials are not tool credentials. Once
-  `inherit_without_provider_keys` becomes the normal policy, provider API-key
-  variables from the provider catalog are denied to subprocesses by default.
+  - implemented explicit mode: `inherit_without_provider_keys`
+  - future explicit modes: `minimal` and `allowlist`
+- Provider credentials are not tool credentials. When
+  `tool_env = "inherit_without_provider_keys"`, provider API-key variables from
+  the provider catalog are denied to subprocesses while the rest of the
+  inherited developer environment is preserved.
 - Tool secrets require an explicit named-secret injection path with user
   approval, display/log redaction, and audit records that include names and
   scopes but never values.

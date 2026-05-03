@@ -245,9 +245,10 @@ Sandbox/trust direction:
 - Local bash currently inherits Ion's process environment. Keep that behavior
   until an explicit environment policy is implemented, because silent
   allowlisting would break normal developer commands.
-- Provider credentials are not subprocess credentials. The next hardening
-  target is visible environment posture first, then an explicit
-  `inherit_without_provider_keys` mode based on the provider catalog.
+- Provider credentials are not subprocess credentials. `tool_env =
+  "inherit_without_provider_keys"` is now the explicit hardening path that
+  keeps inherited developer env while stripping provider API-key variables from
+  the provider catalog.
 - Tool credentials require named secret injection, approval, redaction, and
   audit before any model-visible secret field exists.
 - Remote sandboxes or `just_bash`-style executors should plug into the executor

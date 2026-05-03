@@ -87,6 +87,37 @@ func TestBash_Execute(t *testing.T) {
 	})
 }
 
+func TestBashStripsProviderCredentialsWhenConfigured(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "secret")
+	t.Setenv("ION_TEST_VISIBLE", "visible")
+
+	b := NewBashWithEnvironment(
+		t.TempDir(),
+		NewEnvironmentPolicy("inherit_without_provider_keys", []string{"OPENAI_API_KEY"}),
+	)
+	res, err := b.Execute(
+		context.Background(),
+		`{"command":"printf '%s:%s' \"$OPENAI_API_KEY\" \"$ION_TEST_VISIBLE\""}`,
+	)
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	if strings.TrimSpace(res) != ":visible" {
+		t.Fatalf("output = %q, want provider key stripped and normal env preserved", res)
+	}
+}
+
+func TestFilterEnvironmentPreservesNonCredentials(t *testing.T) {
+	got := filterEnvironment(
+		[]string{"OPENAI_API_KEY=secret", "PATH=/bin", "BROKEN", "OPENAI_API_KEY_EXTRA=keep"},
+		map[string]struct{}{"OPENAI_API_KEY": {}},
+	)
+	want := []string{"PATH=/bin", "BROKEN", "OPENAI_API_KEY_EXTRA=keep"}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("env = %#v, want %#v", got, want)
+	}
+}
+
 func TestBash_WorkingDirectory(t *testing.T) {
 	tmpDir := t.TempDir()
 	subdir := "testdir"
