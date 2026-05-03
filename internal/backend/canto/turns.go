@@ -63,28 +63,31 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 
 		shouldCompact, err := b.shouldProactivelyCompact(turnCtx)
 		if err != nil {
-			b.events <- ionsession.Error{Err: err}
+			base := ionsession.BaseNow()
+			b.events <- ionsession.Error{Base: base, Err: err}
 			b.finishTurn(turnID)
-			b.events <- ionsession.TurnFinished{}
+			b.events <- ionsession.TurnFinished{Base: base}
 			return
 		}
 		if shouldCompact {
-			b.events <- ionsession.StatusChanged{Status: "Compacting context..."}
+			b.events <- ionsession.StatusChanged{Base: ionsession.BaseNow(), Status: "Compacting context..."}
 			if compacted, cerr := b.Compact(turnCtx); cerr != nil {
-				b.events <- ionsession.Error{Err: cerr}
+				base := ionsession.BaseNow()
+				b.events <- ionsession.Error{Base: base, Err: cerr}
 				b.finishTurn(turnID)
-				b.events <- ionsession.TurnFinished{}
+				b.events <- ionsession.TurnFinished{Base: base}
 				return
 			} else if compacted {
-				b.events <- ionsession.StatusChanged{Status: "Ready"}
+				b.events <- ionsession.StatusChanged{Base: ionsession.BaseNow(), Status: "Ready"}
 			}
 		}
 
 		runEvents, err := harnessSession.PromptStream(turnCtx, input)
 		if err != nil {
-			b.events <- ionsession.Error{Err: err}
+			base := ionsession.BaseNow()
+			b.events <- ionsession.Error{Base: base, Err: err}
 			b.finishTurn(turnID)
-			b.events <- ionsession.TurnFinished{}
+			b.events <- ionsession.TurnFinished{Base: base}
 			return
 		}
 		for event := range runEvents {
@@ -99,14 +102,16 @@ func (b *Backend) translateRunEvent(ctx context.Context, event cantofw.RunEvent,
 	switch event.Type {
 	case cantofw.RunEventChunk:
 		chunk := event.Chunk
+		base := ionsession.BaseNow()
 		if chunk.Reasoning != "" {
-			b.events <- ionsession.ThinkingDelta{Delta: chunk.Reasoning}
+			b.events <- ionsession.ThinkingDelta{Base: base, Delta: chunk.Reasoning}
 		}
 		if chunk.Content != "" {
-			b.events <- ionsession.AgentDelta{Delta: chunk.Content}
+			b.events <- ionsession.AgentDelta{Base: base, Delta: chunk.Content}
 		}
 		if chunk.Usage != nil {
 			b.events <- ionsession.TokenUsage{
+				Base:   base,
 				Input:  chunk.Usage.InputTokens,
 				Output: chunk.Usage.OutputTokens,
 				Cost:   chunk.Usage.Cost,
@@ -119,9 +124,10 @@ func (b *Backend) translateRunEvent(ctx context.Context, event cantofw.RunEvent,
 			return
 		}
 		if b.turnActiveFor(turnID) {
-			b.events <- ionsession.Error{Err: event.Err}
+			base := ionsession.BaseNow()
+			b.events <- ionsession.Error{Base: base, Err: event.Err}
 			b.finishTurn(turnID)
-			b.events <- ionsession.TurnFinished{}
+			b.events <- ionsession.TurnFinished{Base: base}
 		}
 	case cantofw.RunEventResult:
 	}
@@ -193,7 +199,7 @@ func (b *Backend) CancelTurn(ctx context.Context) error {
 		cancel()
 	}
 	if active {
-		b.events <- ionsession.TurnFinished{}
+		b.events <- ionsession.TurnFinished{Base: ionsession.BaseNow()}
 	}
 	return nil
 }
