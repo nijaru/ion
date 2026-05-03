@@ -124,10 +124,14 @@ func TestCantoStoreForkSessionCopiesEventsAndIndexesChild(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open parent session: %v", err)
 	}
-	appendCantoMessage(t, store, ctx, parent.ID(), llm.Message{
+	parentAt := time.Date(2026, 5, 2, 15, 0, 0, 0, time.UTC)
+	parentEvent := withCantoTimestamp(csession.NewEvent(parent.ID(), csession.MessageAdded, llm.Message{
 		Role:    llm.RoleUser,
 		Content: "debug the flaky test",
-	})
+	}), parentAt)
+	if err := store.canto.Save(ctx, parentEvent); err != nil {
+		t.Fatalf("append parent message: %v", err)
+	}
 	if err := store.UpdateSession(ctx, SessionInfo{
 		ID:          parent.ID(),
 		Title:       "debug task",
@@ -156,6 +160,9 @@ func TestCantoStoreForkSessionCopiesEventsAndIndexesChild(t *testing.T) {
 	}
 	if len(entries) != 1 || entries[0].Content != "debug the flaky test" {
 		t.Fatalf("child entries = %#v, want copied parent transcript", entries)
+	}
+	if !entries[0].Timestamp.Equal(parentAt) {
+		t.Fatalf("child copied timestamp = %s, want %s", entries[0].Timestamp, parentAt)
 	}
 
 	children, err := store.canto.Children(ctx, parent.ID())
@@ -217,10 +224,14 @@ func TestCantoStoreSessionBundleExportsAndImportsLineage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open parent session: %v", err)
 	}
-	appendCantoMessage(t, exportStore, ctx, parent.ID(), llm.Message{
+	parentAt := time.Date(2026, 5, 2, 16, 0, 0, 0, time.UTC)
+	parentEvent := withCantoTimestamp(csession.NewEvent(parent.ID(), csession.MessageAdded, llm.Message{
 		Role:    llm.RoleUser,
 		Content: "debug the flaky test",
-	})
+	}), parentAt)
+	if err := exportStore.canto.Save(ctx, parentEvent); err != nil {
+		t.Fatalf("append parent message: %v", err)
+	}
 	if err := exportStore.UpdateSession(ctx, SessionInfo{
 		ID:          parent.ID(),
 		Title:       "debug task",
@@ -236,10 +247,14 @@ func TestCantoStoreSessionBundleExportsAndImportsLineage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fork session: %v", err)
 	}
-	appendCantoMessage(t, exportStore, ctx, child.ID(), llm.Message{
+	childAt := parentAt.Add(time.Minute)
+	childEvent := withCantoTimestamp(csession.NewEvent(child.ID(), csession.MessageAdded, llm.Message{
 		Role:    llm.RoleAssistant,
 		Content: "alternate fix works",
-	})
+	}), childAt)
+	if err := exportStore.canto.Save(ctx, childEvent); err != nil {
+		t.Fatalf("append child message: %v", err)
+	}
 
 	bundle, err := exportStore.ExportSessionBundle(ctx, child.ID())
 	if err != nil {
@@ -298,6 +313,15 @@ func TestCantoStoreSessionBundleExportsAndImportsLineage(t *testing.T) {
 		entries[0].Content != "debug the flaky test" ||
 		entries[1].Content != "alternate fix works" {
 		t.Fatalf("entries = %#v, want exported transcript", entries)
+	}
+	if !entries[0].Timestamp.Equal(parentAt) || !entries[1].Timestamp.Equal(childAt) {
+		t.Fatalf(
+			"imported timestamps = [%s, %s], want [%s, %s]",
+			entries[0].Timestamp,
+			entries[1].Timestamp,
+			parentAt,
+			childAt,
+		)
 	}
 
 	if _, err := importStore.ImportSessionBundle(ctx, decoded); !errors.Is(
