@@ -4,11 +4,13 @@ Updated: 2026-05-03
 
 ## Current Focus
 
-The active priority is not more feature parity. It is the harness-boundary
-refactor after the minimal-core consolidation pass: make Ion a thin product
-host over one Canto runtime/session stream while keeping product policy in Ion.
+The C2 executor-boundary implementation is closed unless a smoke exposes a
+concrete defect. The active priority is now post-C2 roadmap/task rebaseline,
+then context-survival hardening: internal transcript timestamps, Fedora live
+smoke, and fork/session workflow audit.
 
-Next task: reassess after final C2 smoke.
+Next task: `tk-jwfs` - Ion: preserve transcript timestamps for internal
+consumers.
 
 Flue, Pi, OpenAI Agents SDK, and Mendral stay in the plan as architecture
 constraints, not implementation scope. They are useful because they clarify
@@ -27,7 +29,8 @@ core is solid.
 | I4 | Add advanced agent features: subagents, memory, skills, routing, ACP | Implemented/deferred, not active |
 | C0 | Minimal native core consolidation | Done |
 | C1 | Refactor around a clear headless harness boundary | Done |
-| C2 | Refactor local execution around the executor boundary | Active |
+| C2 | Refactor local execution around the executor boundary | Closeout |
+| C3 | Harden context survival and session workflows | Next |
 | I5 | Add eval-driven optimization and SOTA experiments | Deferred |
 
 ## I0: Dirty Baseline And Context Hygiene
@@ -298,7 +301,7 @@ Order:
 
 ## C2: Local Executor Boundary
 
-Status: active.
+Status: closeout.
 
 Goal: make local tool execution match the design without adding features:
 
@@ -344,6 +347,35 @@ Acceptance:
 - The default eight-tool surface stays stable unless eval evidence justifies a
   change.
 - TUI/CLI/ACP hosts share the same runtime event and interrupt semantics.
+
+## C3: Context Survival And Session Workflows
+
+Status: next.
+
+Goal: preserve enough internal transcript metadata for reliable resume,
+subagent lifecycle, fork audits, and future context summaries without adding
+visible timestamps or provider-visible prompt noise.
+
+Order:
+
+1. Done - `tk-af7j` - roadmap/task rebaseline after C2:
+   - `ai/STATUS.md`, `ai/PLAN.md`, and `tk ready` agree on the real next path
+   - C2 is treated as closeout, not an open-ended refactor stream
+2. Active - `tk-jwfs` - preserve transcript timestamps for internal consumers:
+   - populate Ion transcript/replay projections from Canto durable event
+     timestamps
+   - keep TUI rendering and provider-visible history timestamp-free by default
+3. Next - `tk-jkcl` - final Fedora C2 live smoke:
+   - run local-api `qwen3.6:27b-uncensored` when reachable
+   - require real tool call, persisted resume, provider-history capture, and
+     resumed follow-up
+4. Next - `tk-d2m6` - fork/timestamp audit:
+   - verify `/fork`, `/tree`, export/import bundles, and subagent
+     `context_mode=fork` preserve ancestry plus usable timing metadata
+
+Deferred from C3: worktree-backed forks, richer tree UI, visible transcript
+timestamps, filesystem snapshots, memory injection, routing, and prompt/KV
+cache experiments.
 
 ## I5+ Deferred Work
 

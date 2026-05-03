@@ -193,6 +193,10 @@ Persistent user-editable settings live in `~/.ion/config.toml`.
 Mutable runtime choices live in `~/.ion/state.toml`.
 Workspace trust lives in `~/.ion/trusted_workspaces.json`.
 Durable sessions live in Ion storage backed by Canto session events.
+Canto durable events carry UTC timestamps. Ion preserves those timestamps for
+internal transcript, replay, audit, fork, and future summary consumers, but it
+does not display timestamps in the default TUI transcript and does not inject
+timestamps into provider-visible message history by default.
 Local branching uses Canto's session lineage primitives. Ion exposes `/fork
 [label]`: it branches a materialized session, indexes the child in Ion session
 metadata, then switches the TUI into the forked session. `/tree` renders the

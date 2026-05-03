@@ -23,6 +23,15 @@ Distilled architectural principles plus recent decision log.
 
 ## Recent Log
 
+### 2026-05-03 - Transcript timestamps are internal metadata
+
+Canto durable events already carry UTC timestamps. Ion should preserve those
+timestamps through host-facing transcript and replay projections so future
+resume summaries, subagent lifecycle records, fork audits, and context tools
+can reason about when things happened. Default TUI transcript rendering and
+provider-visible history remain timestamp-free unless a later explicit feature
+adds a visible timeline.
+
 ### 2026-05-03 - Tool secrets are named injections
 
 Tool secrets are not provider credentials and are not raw model-visible values.

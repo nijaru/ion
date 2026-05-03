@@ -2,9 +2,9 @@
 
 Fast, lightweight terminal coding agent.
 
-**Phase:** Local executor boundary cleanup
-**Focus:** Make execution, sandbox, environment, and secret handling explicit without expanding the default tool surface
-**Active task:** none
+**Phase:** C2 closeout and context-survival rebaseline
+**Focus:** Align roadmap/tasks after C2, then preserve internal timestamps before auditing fork/session workflows
+**Active task:** `tk-jwfs` - Ion: preserve transcript timestamps for internal consumers
 **Updated:** 2026-05-03
 
 ## Current Truth
@@ -22,6 +22,18 @@ Fast, lightweight terminal coding agent.
   boundary, not a second native loop.
 - Current default tool surface is `bash`, `read`, `write`, `edit`,
   `multi_edit`, `list`, `grep`, and `glob`; the old `verify` tool is removed.
+- C2 executor-boundary implementation work is closed unless a smoke exposes a
+  concrete defect. The next path is context-survival hardening: internal
+  transcript timestamps, Fedora live smoke when reachable, then fork/timestamp
+  audit.
+- Fork primitives already exist at the session/history level: `/fork [label]`,
+  `/tree`, portable export/import bundles, and opt-in subagent
+  `context_mode=fork`. Worktree/filesystem forks and richer tree UI are future
+  workflow work, not part of the current timestamp pass.
+- Canto durable events already carry UTC timestamps. Ion currently drops them
+  in host-facing transcript/replay projections; `tk-jwfs` is the next
+  implementation slice to preserve them internally without displaying them by
+  default.
 - `read_skill` is implemented behind the opt-in `skill_tools = "read"` config
   gate. It is not part of the default eight-tool surface and does not add skill
   inventories to the prompt.
@@ -253,6 +265,8 @@ Fast, lightweight terminal coding agent.
 
 ## Next Action
 
-1. Run a final C2 smoke when the provider target is available, then reassess
-   whether the next work should be a small C2 implementation slice or a broader
-   Canto/Ion review.
+1. Implement `tk-jwfs`: preserve transcript timestamps for internal consumers
+   while keeping TUI and provider-visible history timestamp-free.
+2. Run `tk-jkcl` Fedora C2 live smoke when local-api is reachable.
+3. Run `tk-d2m6` fork/timestamp audit across `/fork`, `/tree`, export/import,
+   and subagent `context_mode=fork`.
