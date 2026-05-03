@@ -267,7 +267,7 @@ func (s *Session) SubmitTurn(ctx context.Context, input string) error {
 		return fmt.Errorf("not connected")
 	}
 
-	s.events <- session.TurnStarted{}
+	s.events <- session.TurnStarted{Base: session.BaseNow()}
 
 	go func() {
 		_, err := conn.Prompt(ctx, acp.PromptRequest{
@@ -275,9 +275,10 @@ func (s *Session) SubmitTurn(ctx context.Context, input string) error {
 			Prompt:    []acp.ContentBlock{acp.TextBlock(input)},
 		})
 		if err != nil {
-			s.events <- session.Error{Err: fmt.Errorf("prompt: %w", err)}
+			base := session.BaseNow()
+			s.events <- session.Error{Base: base, Err: fmt.Errorf("prompt: %w", err)}
 		}
-		s.events <- session.TurnFinished{}
+		s.events <- session.TurnFinished{Base: session.BaseNow()}
 	}()
 
 	return nil
@@ -352,12 +353,18 @@ func (s *Session) SessionUpdate(ctx context.Context, n acp.SessionNotification) 
 	switch {
 	case update.AgentMessageChunk != nil:
 		if update.AgentMessageChunk.Content.Text != nil {
-			s.events <- session.AgentDelta{Delta: update.AgentMessageChunk.Content.Text.Text}
+			s.events <- session.AgentDelta{
+				Base:  session.BaseNow(),
+				Delta: update.AgentMessageChunk.Content.Text.Text,
+			}
 		}
 
 	case update.AgentThoughtChunk != nil:
 		if update.AgentThoughtChunk.Content.Text != nil {
-			s.events <- session.ThinkingDelta{Delta: update.AgentThoughtChunk.Content.Text.Text}
+			s.events <- session.ThinkingDelta{
+				Base:  session.BaseNow(),
+				Delta: update.AgentThoughtChunk.Content.Text.Text,
+			}
 		}
 
 	case update.ToolCall != nil:
@@ -371,6 +378,7 @@ func (s *Session) SessionUpdate(ctx context.Context, n acp.SessionNotification) 
 			args = fmt.Sprintf("%v", tc.RawInput)
 		}
 		s.events <- session.ToolCallStarted{
+			Base:      session.BaseNow(),
 			ToolUseID: string(tc.ToolCallId),
 			ToolName:  toolName,
 			Args:      args,
@@ -384,11 +392,16 @@ func (s *Session) SessionUpdate(ctx context.Context, n acp.SessionNotification) 
 			if output == "" && tcu.RawOutput != nil {
 				output = fmt.Sprintf("%v", tcu.RawOutput)
 			}
-			s.events <- session.ToolResult{ToolUseID: string(tcu.ToolCallId), Result: output}
+			s.events <- session.ToolResult{
+				Base:      session.BaseNow(),
+				ToolUseID: string(tcu.ToolCallId),
+				Result:    output,
+			}
 
 		case tcu.Status != nil && *tcu.Status == acp.ToolCallStatusFailed:
 			output := toolContentText(tcu.Content)
 			s.events <- session.ToolResult{
+				Base:      session.BaseNow(),
 				ToolUseID: string(tcu.ToolCallId),
 				Result:    output,
 				Error:     fmt.Errorf("tool call failed"),
@@ -396,17 +409,25 @@ func (s *Session) SessionUpdate(ctx context.Context, n acp.SessionNotification) 
 
 		default:
 			if delta := toolContentText(tcu.Content); delta != "" {
-				s.events <- session.ToolOutputDelta{ToolUseID: string(tcu.ToolCallId), Delta: delta}
+				s.events <- session.ToolOutputDelta{
+					Base:      session.BaseNow(),
+					ToolUseID: string(tcu.ToolCallId),
+					Delta:     delta,
+				}
 			}
 		}
 
 	case update.Plan != nil:
 		if len(update.Plan.Entries) > 0 {
-			s.events <- session.StatusChanged{Status: update.Plan.Entries[0].Content}
+			s.events <- session.StatusChanged{
+				Base:   session.BaseNow(),
+				Status: update.Plan.Entries[0].Content,
+			}
 		}
 	}
 
 	if hasUsage {
+		usage.Base = session.BaseNow()
 		s.events <- usage
 	}
 
@@ -445,6 +466,7 @@ func (s *Session) RequestPermission(
 	s.mu.Unlock()
 
 	s.events <- session.ApprovalRequest{
+		Base:        session.BaseNow(),
 		RequestID:   requestID,
 		ToolName:    toolName,
 		Description: toolName,

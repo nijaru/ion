@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/nijaru/canto/llm"
 	"github.com/nijaru/canto/session"
@@ -166,14 +165,7 @@ func (b *Backend) translateEvent(ctx context.Context, ev session.Event, turnID u
 }
 
 func ionEventBase(ev session.Event) ionsession.Base {
-	return ionBaseAt(ev.Timestamp)
-}
-
-func ionBaseAt(timestamp time.Time) ionsession.Base {
-	if timestamp.IsZero() {
-		return ionsession.Base{}
-	}
-	return ionsession.Base{Timestamp: timestamp.UTC()}
+	return ionsession.BaseAt(ev.Timestamp)
 }
 
 func isCancellationTerminal(errText string) bool {

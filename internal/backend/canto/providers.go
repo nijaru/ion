@@ -29,7 +29,7 @@ func configureRetryProvider(
 	retry.Config.RetryForever = cfg.RetryUntilCancelledEnabled()
 	retry.Config.RetryForeverTransportOnly = true
 	retry.Config.OnRetry = func(event llm.RetryEvent) {
-		events <- ionsession.StatusChanged{Status: retryStatus(event)}
+		events <- ionsession.StatusChanged{Base: ionsession.BaseNow(), Status: retryStatus(event)}
 	}
 	return retry
 }

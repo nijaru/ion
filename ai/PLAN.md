@@ -9,7 +9,7 @@ concrete defect. The active priority is now post-C2 roadmap/task rebaseline,
 then context-survival hardening: internal transcript timestamps, Fedora live
 smoke, and fork/session workflow audit.
 
-Next task: `tk-jkcl` - Ion: final Fedora C2 live smoke.
+Next task: `tk-d2m6` - Ion: fork timestamp audit.
 
 Flue, Pi, OpenAI Agents SDK, and Mendral stay in the plan as architecture
 constraints, not implementation scope. They are useful because they clarify
@@ -364,11 +364,13 @@ Order:
    - populate Ion transcript/replay projections from Canto durable event
      timestamps
    - keep TUI rendering and provider-visible history timestamp-free by default
-3. Active - `tk-jkcl` - final Fedora C2 live smoke:
+3. Deferred - `tk-jkcl` - final Fedora C2 live smoke:
    - run local-api `qwen3.6:27b-uncensored` when reachable
    - require real tool call, persisted resume, provider-history capture, and
      resumed follow-up
-4. Next - `tk-d2m6` - fork/timestamp audit:
+   - current state: Fedora times out from this Mac; OpenRouter DeepSeek Flash
+     fallback passed with provider-history capture
+4. Active - `tk-d2m6` - fork/timestamp audit:
    - verify `/fork`, `/tree`, export/import bundles, and subagent
      `context_mode=fork` preserve ancestry plus usable timing metadata
 

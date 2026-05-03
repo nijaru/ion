@@ -3,8 +3,8 @@
 Fast, lightweight terminal coding agent.
 
 **Phase:** C2 closeout and context-survival rebaseline
-**Focus:** Final Fedora live smoke after timestamp preservation, then fork/session workflow audit
-**Active task:** `tk-jkcl` - Ion: final Fedora C2 live smoke
+**Focus:** Audit fork/session workflows now that internal transcript timestamps are preserved
+**Active task:** `tk-d2m6` - Ion: fork timestamp audit
 **Updated:** 2026-05-03
 
 ## Current Truth
@@ -33,6 +33,10 @@ Fast, lightweight terminal coding agent.
 - `tk-jwfs` is closed. Ion now preserves Canto event timestamps through
   host-facing transcript/replay projections while keeping default TUI rendering
   and provider-visible history timestamp-free.
+- Fedora is unreachable from this Mac right now: `fedora` resolves to the
+  Tailscale address, but ICMP has 100% packet loss and
+  `http://fedora:8080/v1/models` times out. `tk-jkcl` is deferred until the
+  host responds. OpenRouter DeepSeek Flash remains the current live gate.
 - `read_skill` is implemented behind the opt-in `skill_tools = "read"` config
   gate. It is not part of the default eight-tool surface and does not add skill
   inventories to the prompt.
@@ -91,6 +95,11 @@ Fast, lightweight terminal coding agent.
   `go test -race ./cmd/ion ./internal/app ./internal/backend/canto ./internal/backend/canto/tools ./internal/storage -count=1 -timeout 300s`,
   and a fresh tmux launch smoke showing the normal startup/progress/footer shell
   without visible timestamps.
+- OpenRouter `deepseek/deepseek-v4-flash` live smoke passed after timestamp
+  changes. It proved a real `bash` tool call, persisted resume,
+  provider-history ordering, and nonzero host timestamps on streamed deltas and
+  token usage. The model answered `fresh`, but provider-history capture
+  verified prior tool history, so this is classified as a model semantic miss.
 - Canto `e880c1c` fixes the harness ownership boundary: `Harness.Close` closes
   the runner and only closes a session store the harness created itself. Ion
   imports that revision.
@@ -270,6 +279,6 @@ Fast, lightweight terminal coding agent.
 
 ## Next Action
 
-1. Run `tk-jkcl` Fedora C2 live smoke when local-api is reachable.
-2. Run `tk-d2m6` fork/timestamp audit across `/fork`, `/tree`, export/import,
+1. Run `tk-d2m6` fork/timestamp audit across `/fork`, `/tree`, export/import,
    and subagent `context_mode=fork`.
+2. Retry `tk-jkcl` Fedora C2 live smoke when local-api is reachable.

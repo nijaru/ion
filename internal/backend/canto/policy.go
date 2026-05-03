@@ -37,6 +37,7 @@ func policyHook(b *Backend) hook.Handler {
 				defer b.approver.Remove(id)
 
 				b.events <- ionsession.ApprovalRequest{
+					Base:        ionsession.BaseNow(),
 					RequestID:   id,
 					Description: description,
 					ToolName:    toolName,

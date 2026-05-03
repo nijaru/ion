@@ -16,6 +16,17 @@ type Base struct {
 	TraceID   string    `json:"trace_id,omitzero"`  // execution branch or task tree
 }
 
+func BaseAt(timestamp time.Time) Base {
+	if timestamp.IsZero() {
+		return Base{}
+	}
+	return Base{Timestamp: timestamp.UTC()}
+}
+
+func BaseNow() Base {
+	return BaseAt(time.Now())
+}
+
 // MetadataLoaded fires when a session's metadata is loaded or created.
 type MetadataLoaded struct {
 	Base
