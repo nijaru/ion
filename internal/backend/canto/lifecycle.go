@@ -125,13 +125,7 @@ func (b *Backend) Open(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	base, ok := harness.Agent.(*agent.BaseAgent)
-	if !ok {
-		return fmt.Errorf("ion harness: unexpected agent type %T", harness.Agent)
-	}
 	b.harness = harness
-	b.runner = harness.Runner
-	b.agent = base
 
 	return nil
 }
@@ -152,15 +146,11 @@ func (b *Backend) Close() error {
 	b.closeOnce.Do(func() {
 		b.mu.Lock()
 		cancel := b.cancel
-		stopWatch := b.stopWatch
 		harness := b.harness
 		b.mu.Unlock()
 
 		if cancel != nil {
 			cancel()
-		}
-		if stopWatch != nil {
-			stopWatch()
 		}
 		if harness != nil {
 			harness.Close()

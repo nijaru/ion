@@ -102,7 +102,12 @@ func (t *SubagentTool) Execute(ctx context.Context, args string) (string, error)
 		return "", err
 	}
 
-	result, err := t.backend.runner.Delegate(
+	harness := t.backend.harness
+	if harness == nil || harness.Runner == nil {
+		return "", fmt.Errorf("subagent runtime is not initialized")
+	}
+
+	result, err := harness.Runner.Delegate(
 		ctx,
 		t.backend.ID(),
 		input.childSpec(childID(persona.Name), childAgent, persona),
@@ -221,9 +226,15 @@ func (b *Backend) newChildAgent(
 		return nil, err
 	}
 
-	instructions := strings.TrimSpace(
-		b.agent.Instructions(),
-	) + "\n\n## Subagent Persona: " + persona.Name + "\n" + persona.Prompt
+	if b.harness == nil || b.harness.Agent == nil {
+		return nil, fmt.Errorf("subagent runtime is not initialized")
+	}
+	parent, ok := b.harness.Agent.(interface{ Instructions() string })
+	if !ok {
+		return nil, fmt.Errorf("subagent parent agent does not expose instructions")
+	}
+	instructions := strings.TrimSpace(parent.Instructions()) +
+		"\n\n## Subagent Persona: " + persona.Name + "\n" + persona.Prompt
 	requestProcessors := []prompt.RequestProcessor{
 		reasoningEffortProcessor(runtimeCfg),
 		reflexionProcessor(),

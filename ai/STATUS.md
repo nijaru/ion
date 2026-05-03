@@ -45,6 +45,9 @@ Fast, lightweight terminal coding agent.
 - Caller-context cancellation now settles the Ion host turn with a single
   `TurnFinished` even when cancellation stops the stream before a durable
   terminal Canto event reaches the host.
+- Removed leftover cached `runner`, `agent`, and `stopWatch` fields from
+  `CantoBackend`; opt-in subagents now use the active harness when they need
+  child delegation or parent instructions.
 - Latest harness-boundary gates passed:
   `go test ./internal/backend/canto -count=1`,
   `go test ./... -count=1 -timeout 300s`, and
