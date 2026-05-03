@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/nijaru/canto/agent"
 	"github.com/nijaru/canto/llm"
@@ -170,10 +171,13 @@ func TestSubagentForkContextUsesProviderVisibleParentSnapshot(t *testing.T) {
 	defer store.Close()
 
 	parent := csession.New("parent-session").WithWriter(store)
-	if err := parent.Append(t.Context(), csession.NewMessage(parent.ID(), llm.Message{
+	parentAt := time.Date(2026, 5, 2, 17, 0, 0, 0, time.UTC)
+	parentEvent := csession.NewMessage(parent.ID(), llm.Message{
 		Role:    llm.RoleUser,
 		Content: "parent fact",
-	})); err != nil {
+	})
+	parentEvent.Timestamp = parentAt
+	if err := parent.Append(t.Context(), parentEvent); err != nil {
 		t.Fatalf("append parent user: %v", err)
 	}
 	call := llm.Call{ID: "subagent-call", Type: "function"}
@@ -202,6 +206,24 @@ func TestSubagentForkContextUsesProviderVisibleParentSnapshot(t *testing.T) {
 	}
 	if result.Status != csession.ChildStatusCompleted {
 		t.Fatalf("child status = %q, want completed", result.Status)
+	}
+	childSession, err := store.Load(t.Context(), result.Ref.SessionID)
+	if err != nil {
+		t.Fatalf("load child session: %v", err)
+	}
+	childEvents := childSession.Events()
+	if len(childEvents) == 0 {
+		t.Fatal("child session has no events")
+	}
+	origin, ok, err := childEvents[0].ForkOrigin()
+	if err != nil {
+		t.Fatalf("decode fork origin: %v", err)
+	}
+	if !ok || origin.EventID != parentEvent.ID.String() {
+		t.Fatalf("child first event origin = %#v, ok=%v, want parent event %s", origin, ok, parentEvent.ID)
+	}
+	if !childEvents[0].Timestamp.Equal(parentAt) {
+		t.Fatalf("child forked timestamp = %s, want %s", childEvents[0].Timestamp, parentAt)
 	}
 
 	messages := child.LastHistory()

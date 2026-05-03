@@ -9,7 +9,8 @@ concrete defect. The active priority is now post-C2 roadmap/task rebaseline,
 then context-survival hardening: internal transcript timestamps, Fedora live
 smoke, and fork/session workflow audit.
 
-Next task: `tk-d2m6` - Ion: fork timestamp audit.
+Next task: none active. Retry deferred Fedora C2 smoke when local-api is
+reachable, then choose the next roadmap slice.
 
 Flue, Pi, OpenAI Agents SDK, and Mendral stay in the plan as architecture
 constraints, not implementation scope. They are useful because they clarify
@@ -370,7 +371,7 @@ Order:
      resumed follow-up
    - current state: Fedora times out from this Mac; OpenRouter DeepSeek Flash
      fallback passed with provider-history capture
-4. Active - `tk-d2m6` - fork/timestamp audit:
+4. Done - `tk-d2m6` - fork/timestamp audit:
    - verify `/fork`, `/tree`, export/import bundles, and subagent
      `context_mode=fork` preserve ancestry plus usable timing metadata
 

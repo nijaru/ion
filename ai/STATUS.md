@@ -3,8 +3,8 @@
 Fast, lightweight terminal coding agent.
 
 **Phase:** C2 closeout and context-survival rebaseline
-**Focus:** Audit fork/session workflows now that internal transcript timestamps are preserved
-**Active task:** `tk-d2m6` - Ion: fork timestamp audit
+**Focus:** Post-C2 timestamp/fork closeout complete; Fedora live smoke deferred until host is reachable
+**Active task:** none
 **Updated:** 2026-05-03
 
 ## Current Truth
@@ -37,6 +37,9 @@ Fast, lightweight terminal coding agent.
   Tailscale address, but ICMP has 100% packet loss and
   `http://fedora:8080/v1/models` times out. `tk-jkcl` is deferred until the
   host responds. OpenRouter DeepSeek Flash remains the current live gate.
+- `tk-d2m6` is closed. Fork/session workflow tests now prove copied fork
+  entries, portable bundle import/export, and subagent `context_mode=fork`
+  preserve Canto ancestry plus usable event timestamps.
 - `read_skill` is implemented behind the opt-in `skill_tools = "read"` config
   gate. It is not part of the default eight-tool surface and does not add skill
   inventories to the prompt.
@@ -100,6 +103,10 @@ Fast, lightweight terminal coding agent.
   provider-history ordering, and nonzero host timestamps on streamed deltas and
   token usage. The model answered `fresh`, but provider-history capture
   verified prior tool history, so this is classified as a model semantic miss.
+- Fork/timestamp audit gates passed:
+  `go test ./internal/storage ./internal/backend/canto -run 'TestCantoStore(ForkSessionCopiesEventsAndIndexesChild|SessionBundleExportsAndImportsLineage)|TestSubagentForkContextUsesProviderVisibleParentSnapshot' -count=1 -timeout 180s`,
+  Canto `go test ./session ./runtime -count=1 -timeout 180s`,
+  Ion `go test ./... -count=1 -timeout 300s`, and the Ion native race subset.
 - Canto `e880c1c` fixes the harness ownership boundary: `Harness.Close` closes
   the runner and only closes a session store the harness created itself. Ion
   imports that revision.
@@ -279,6 +286,6 @@ Fast, lightweight terminal coding agent.
 
 ## Next Action
 
-1. Run `tk-d2m6` fork/timestamp audit across `/fork`, `/tree`, export/import,
-   and subagent `context_mode=fork`.
-2. Retry `tk-jkcl` Fedora C2 live smoke when local-api is reachable.
+1. Retry deferred `tk-jkcl` Fedora C2 live smoke when local-api is reachable.
+2. If no provider target is available, choose the next roadmap slice from
+   `ai/PLAN.md` rather than reopening completed C2 work.
