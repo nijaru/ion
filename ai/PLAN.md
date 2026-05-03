@@ -4,15 +4,16 @@ Updated: 2026-05-03
 
 ## Current Focus
 
-The C2 executor-boundary implementation is closed unless a smoke exposes a
-concrete defect. The active priority is now post-C2 roadmap/task rebaseline,
-then context-survival hardening: internal transcript timestamps, Fedora live
-smoke, and fork/session workflow audit.
+The C2 executor boundary and C3 context-survival work are closed unless a smoke
+exposes a concrete defect. C4 session branching is reviewed: `/tree` and
+current-point `/fork [label]` are good enough for the current shell, and
+`/clone` stays deferred while it would only duplicate `/fork`.
 
-Next task: none active. Retry deferred Fedora C2 smoke when local-api is
-reachable, then move to the command/session workflow slice: `/tree` and `/fork`
-readability, decide whether `/clone` is worth implementing, then background job
-visibility before any `/goal` work.
+Current task: prune `ai/` so future sessions start from root files, canonical
+specs, and a small set of active evidence docs.
+
+Next product wedge after context cleanup: background job visibility design for
+long-running bash/workflow state before any `/goal` command.
 
 Flue, Pi, OpenAI Agents SDK, and Mendral stay in the plan as architecture
 constraints, not implementation scope. They are useful because they clarify
@@ -31,9 +32,9 @@ core is solid.
 | I4 | Add advanced agent features: subagents, memory, skills, routing, ACP | Implemented/deferred, not active |
 | C0 | Minimal native core consolidation | Done |
 | C1 | Refactor around a clear headless harness boundary | Done |
-| C2 | Refactor local execution around the executor boundary | Closeout |
-| C3 | Harden context survival and session workflows | Next |
-| C4 | Tighten command/workflow shell around branching and background jobs | Next after C3 |
+| C2 | Refactor local execution around the executor boundary | Done |
+| C3 | Harden context survival and session workflows | Done; Fedora smoke deferred |
+| C4 | Tighten command/workflow shell around branching and background jobs | Active |
 | I5 | Add eval-driven optimization and SOTA experiments | Deferred |
 
 ## I0: Dirty Baseline And Context Hygiene
@@ -353,7 +354,7 @@ Acceptance:
 
 ## C3: Context Survival And Session Workflows
 
-Status: next.
+Status: done, except deferred Fedora local-api repeat.
 
 Goal: preserve enough internal transcript metadata for reliable resume,
 subagent lifecycle, fork audits, and future context summaries without adding
@@ -384,7 +385,7 @@ cache experiments.
 
 ## C4: Command And Workflow Shell
 
-Status: planned.
+Status: active.
 
 Goal: keep Ion's slash-command surface competitive without turning it into a
 large product control plane. Pi's `/tree`/`/fork`/`/clone`, Codex's
@@ -394,15 +395,15 @@ background job visibility second, durable goals later.
 
 Order:
 
-1. Review `/tree` and `/fork` TUI text capture for readability, targeting, and
-   resume behavior.
-2. Decide whether `/clone` is needed as a distinct command:
+1. Done - review `/tree` and `/fork` TUI text capture for readability,
+   targeting, and resume behavior.
+2. Done - decide whether `/clone` is needed as a distinct command:
    - `/tree` navigates inside the current lineage
    - `/fork [label]` currently duplicates the current materialized session at
      the current point and switches into the labeled child
    - earlier-turn forking needs a selector before it is exposed
    - `/clone` stays deferred while it would only duplicate current `/fork`
-3. Add background job visibility design or implementation only after the
+3. Next - add background job visibility design or implementation only after the
    current `bash` foreground path remains green:
    - command surface: `/tasks` or `/ps`, plus `/stop`
    - model surface: keep one `bash` tool with explicit background actions if

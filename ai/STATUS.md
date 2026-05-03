@@ -3,8 +3,8 @@
 Fast, lightweight terminal coding agent.
 
 **Phase:** C4 shell/session workflow
-**Focus:** C4 `/tree`/`/fork` workflow reviewed; next prune and consolidate `ai/`
-**Active task:** `tk-ygji` — AI: prune and consolidate context source of truth
+**Focus:** `ai/` context pruned; next product wedge is background job visibility before `/goal`
+**Active task:** none
 **Updated:** 2026-05-03
 
 ## Current Truth
@@ -110,9 +110,18 @@ Fast, lightweight terminal coding agent.
   current-point branch/duplicate flow and switches into the labeled child
   session. `/clone` remains deferred because it is not distinct until Ion grows
   an earlier-turn fork selector.
+- `ai/` is pruned back to root source-of-truth files, canonical specs, and a
+  small set of active topic/evidence docs. Old one-off plans, duplicate design
+  docs, completed sprint notes, archive specs, and stale review files were
+  deleted rather than re-archived.
 
 ## Latest Evidence
 
+- AI context prune sanity checks passed: `ai/README.md` link targets resolve,
+  stale deleted-doc references are absent from active `ai/` Markdown, and
+  `tk ready` showed only the active prune task before closeout. The active
+  index now lists root files, canonical specs, and the remaining active topic
+  docs only.
 - C4 session-command slice passed focused app tests,
   `go test ./internal/app -count=1 -timeout 180s`,
   `go test ./... -count=1 -timeout 300s`, and
