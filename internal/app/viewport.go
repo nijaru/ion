@@ -185,7 +185,7 @@ func (m Model) renderLiveAgentContent(content string) string {
 		return m.st.dim.PaddingLeft(2).Render("• ...")
 	}
 
-	width := m.App.Width
+	width := m.shellWidth()
 	if width <= 0 {
 		return m.st.agent.Render("• " + content)
 	}
@@ -489,7 +489,7 @@ func (m Model) renderQueuedTurns() string {
 	if extra := len(m.InFlight.QueuedTurns) - 1; extra > 0 {
 		label += fmt.Sprintf(" • +%d more", extra)
 	}
-	return m.st.dim.Render(fitLine(label, m.App.Width))
+	return m.st.dim.Render(fitLine(label, m.shellWidth()))
 }
 
 func compactQueuedText(text string) string {
@@ -504,7 +504,7 @@ func (m Model) progressLine() string {
 		if n := len(m.InFlight.QueuedTurns); n > 0 {
 			line += m.st.dim.Render(fmt.Sprintf(" • %d queued", n))
 		}
-		return fitLine(strings.TrimRight(line, " "), m.App.Width)
+		return fitLine(strings.TrimRight(line, " "), m.shellWidth())
 	}
 	switch m.Progress.Mode {
 	case stateIonizing, stateStreaming, stateWorking:
@@ -559,7 +559,7 @@ func (m Model) progressLine() string {
 	if n := len(m.InFlight.QueuedTurns); n > 0 {
 		line += m.st.dim.Render(fmt.Sprintf(" • %d queued", n))
 	}
-	return fitLine(strings.TrimRight(line, " "), m.App.Width)
+	return fitLine(strings.TrimRight(line, " "), m.shellWidth())
 }
 
 func (m Model) renderProgressStats(parts []string) string {
@@ -645,8 +645,8 @@ func (m Model) formatToolTitle(name, args string) string {
 
 func (m Model) toolTitleOptions() tooldisplay.Options {
 	width := 0
-	if m.App.Width > 0 {
-		width = max(0, m.App.Width-2)
+	if m.shellWidth() > 0 {
+		width = max(0, m.shellWidth()-2)
 	}
 	return tooldisplay.Options{
 		Workdir: m.App.Workdir,

@@ -14,8 +14,9 @@ import (
 type Input struct{}
 
 func (m Model) statusLine() string {
+	width := m.shellWidth()
 	if hint := strings.TrimSpace(m.pendingActionStatus()); hint != "" {
-		return fitLine(m.st.warn.Render(hint), m.App.Width)
+		return fitLine(m.st.warn.Render(hint), width)
 	}
 
 	sep := m.st.sep.Render(" • ")
@@ -87,12 +88,12 @@ func (m Model) statusLine() string {
 	}
 	for _, segments := range candidates {
 		line := joinLineSegments(sep, segments...)
-		if ansi.StringWidth(line) <= m.App.Width {
+		if ansi.StringWidth(line) <= width {
 			return line
 		}
 	}
 
-	return fitLine(joinLineSegments(sep, modeLabel, thinking, usage, cost), m.App.Width)
+	return fitLine(joinLineSegments(sep, modeLabel, thinking, usage, cost), width)
 }
 
 func (m Model) renderTokenUsage(total, limit int) string {
