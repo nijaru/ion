@@ -4,7 +4,7 @@ Fast, lightweight terminal coding agent.
 
 **Phase:** Local executor boundary cleanup
 **Focus:** Make execution, sandbox, environment, and secret handling explicit without expanding the default tool surface
-**Active task:** none; next ready task is `tk-k5yp` - expose executor environment posture
+**Active task:** none; next ready task is `tk-kxpa` - implement provider-key env filtering
 **Updated:** 2026-05-03
 
 ## Current Truth
@@ -50,10 +50,16 @@ Fast, lightweight terminal coding agent.
   inheritance unchanged until Ion exposes an explicit environment policy.
   Visibility comes first; provider-key stripping and named tool-secret
   injection are future hardening slices.
+- `tk-k5yp` is closed. Startup and `/tools` now expose executor environment
+  posture as `Env inherit` / `env inherit`, and bash approval previews and
+  notifications include `Environment: inherit` without listing variable names
+  or values.
 - Latest C2 gates passed:
-  `go test ./internal/backend/canto/tools -count=1`,
+  focused command/app/backend/tool tests for environment posture,
   `go test ./... -count=1 -timeout 300s`, and
   `go test -race ./cmd/ion ./internal/app ./internal/backend/canto ./internal/backend/canto/tools ./internal/storage -count=1 -timeout 300s`.
+  Tmux `/tools` smoke showed startup `Env inherit` and `/tools` `env inherit`
+  with no environment values.
 
 ## Latest Evidence
 
@@ -236,5 +242,5 @@ Fast, lightweight terminal coding agent.
 
 ## Next Action
 
-1. Start `tk-k5yp`: expose executor environment posture in host surfaces before
-   changing subprocess environment behavior.
+1. Start `tk-kxpa`: implement explicit provider-key environment filtering for
+   local bash.

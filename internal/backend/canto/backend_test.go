@@ -545,6 +545,9 @@ func TestToolSurfaceFiltersReadModeTools(t *testing.T) {
 	if surface.Count != len(want) {
 		t.Fatalf("READ tool count = %d, want %d", surface.Count, len(want))
 	}
+	if surface.Environment != "" {
+		t.Fatalf("READ tool environment = %q, want empty without bash", surface.Environment)
+	}
 	if strings.Join(surface.Names, ",") != strings.Join(want, ",") {
 		t.Fatalf("READ tool surface = %#v, want %#v", surface.Names, want)
 	}
@@ -554,6 +557,9 @@ func TestToolSurfaceFiltersReadModeTools(t *testing.T) {
 	want = []string{"bash", "edit", "glob", "grep", "list", "multi_edit", "read", "write"}
 	if surface.Count != len(want) {
 		t.Fatalf("EDIT tool count = %d, want %d", surface.Count, len(want))
+	}
+	if surface.Environment != "inherit" {
+		t.Fatalf("EDIT tool environment = %q, want inherit", surface.Environment)
 	}
 	if strings.Join(surface.Names, ",") != strings.Join(want, ",") {
 		t.Fatalf("EDIT tool surface = %#v, want %#v", surface.Names, want)

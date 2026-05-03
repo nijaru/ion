@@ -6,6 +6,7 @@ import (
 
 	"github.com/nijaru/canto/hook"
 	"github.com/nijaru/ion/internal/backend"
+	"github.com/nijaru/ion/internal/backend/canto/tools"
 	ionsession "github.com/nijaru/ion/internal/session"
 )
 
@@ -29,6 +30,10 @@ func policyHook(b *Backend) hook.Handler {
 			case backend.PolicyAsk:
 				id := ionsession.ShortID()
 				description := fmt.Sprintf("Tool: %s\nArgs: %s\n\n%s", toolName, args, reason)
+				environment := ""
+				if toolName == "bash" {
+					environment = tools.ExecutorEnvironmentSummary()
+				}
 				ch := b.approver.Request(id)
 				defer b.approver.Remove(id)
 
@@ -37,6 +42,7 @@ func policyHook(b *Backend) hook.Handler {
 					Description: description,
 					ToolName:    toolName,
 					Args:        args,
+					Environment: environment,
 				}
 
 				select {

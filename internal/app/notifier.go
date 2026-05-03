@@ -227,6 +227,9 @@ func approvalNotificationText(req session.ApprovalRequest, workdir, target strin
 	if strings.TrimSpace(req.Args) != "" {
 		parts = append(parts, "Args: "+privacy.Redact(req.Args))
 	}
+	if environment := strings.TrimSpace(req.Environment); environment != "" {
+		parts = append(parts, "Environment: "+environment)
+	}
 	return strings.Join(parts, "\n")
 }
 

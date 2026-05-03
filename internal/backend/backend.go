@@ -39,6 +39,7 @@ type ToolSurface struct {
 	LazyEnabled   bool
 	Names         []string
 	Sandbox       string
+	Environment   string
 }
 
 type ToolSummarizer interface {

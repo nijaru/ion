@@ -3,6 +3,7 @@ package canto
 import (
 	"context"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/nijaru/canto/llm"
@@ -67,12 +68,17 @@ func (b *Backend) ToolSurface() backend.ToolSurface {
 	}
 	names := b.policy.VisibleToolNames(b.tools.Names())
 	threshold := prompt.DefaultLazyThreshold
+	environment := ""
+	if slices.Contains(names, "bash") {
+		environment = tools.ExecutorEnvironmentSummary()
+	}
 	return backend.ToolSurface{
 		Count:         len(names),
 		LazyThreshold: threshold,
 		LazyEnabled:   len(names) > threshold,
 		Names:         names,
 		Sandbox:       tools.SandboxSummary(),
+		Environment:   environment,
 	}
 }
 

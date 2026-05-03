@@ -20,6 +20,12 @@ type localExecutor struct {
 	sandbox SandboxMode
 }
 
+const executorEnvironmentInherit = "inherit"
+
+func ExecutorEnvironmentSummary() string {
+	return executorEnvironmentInherit
+}
+
 func newLocalExecutor(sandbox SandboxMode) *localExecutor {
 	return &localExecutor{sandbox: sandbox}
 }

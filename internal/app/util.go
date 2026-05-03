@@ -274,6 +274,10 @@ func toolSurfaceSummary(surface backend.ToolSurface) string {
 	if sandbox != "" {
 		mode += "; sandbox " + sandbox
 	}
+	environment := strings.TrimSpace(surface.Environment)
+	if environment != "" {
+		mode += "; env " + environment
+	}
 	if names == "" {
 		return fmt.Sprintf("Tools: %d (%s)", surface.Count, mode)
 	}

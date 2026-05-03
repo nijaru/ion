@@ -107,6 +107,7 @@ func TestStartupToolLineReportsLazyTools(t *testing.T) {
 		Count:       25,
 		LazyEnabled: true,
 		Sandbox:     "auto: bubblewrap",
+		Environment: "inherit",
 	}})
 	if !strings.Contains(line, "Search tools enabled") {
 		t.Fatalf("line = %q, want search tools notice", line)
@@ -116,5 +117,8 @@ func TestStartupToolLineReportsLazyTools(t *testing.T) {
 	}
 	if !strings.Contains(line, "Sandbox auto: bubblewrap") {
 		t.Fatalf("line = %q, want sandbox notice", line)
+	}
+	if !strings.Contains(line, "Env inherit") {
+		t.Fatalf("line = %q, want environment notice", line)
 	}
 }

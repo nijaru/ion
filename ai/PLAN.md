@@ -8,7 +8,7 @@ The active priority is not more feature parity. It is the harness-boundary
 refactor after the minimal-core consolidation pass: make Ion a thin product
 host over one Canto runtime/session stream while keeping product policy in Ion.
 
-Next task: `tk-k5yp` - expose executor environment posture.
+Next task: `tk-kxpa` - implement provider-key env filtering.
 
 Flue, Pi, OpenAI Agents SDK, and Mendral stay in the plan as architecture
 constraints, not implementation scope. They are useful because they clarify
@@ -317,12 +317,13 @@ Next slice:
 
 1. Done - `tk-fhds` - design executor environment and secret-injection policy before
    changing subprocess environment behavior.
-2. `tk-k5yp` - expose the active executor environment posture in
+2. Done - `tk-k5yp` - expose the active executor environment posture in
    approval previews and `/tools` without listing values or changing current
    environment inheritance.
-3. Later hardening: add explicit environment modes such as
-   `inherit_without_provider_keys`, `minimal`, and `allowlist`, then add named
-   tool-secret injection with redaction and audit.
+3. `tk-kxpa` - implement provider-key environment filtering as an explicit
+   local bash environment policy.
+4. Later hardening: add `minimal` and `allowlist`, then add named tool-secret
+   injection with redaction and audit.
 
 Acceptance:
 
