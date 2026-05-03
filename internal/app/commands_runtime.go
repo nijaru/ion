@@ -66,7 +66,7 @@ func (m Model) currentMaterializedSessionID() string {
 	if !storage.IsMaterialized(m.Model.Storage) {
 		return ""
 	}
-	return m.Model.Session.ID()
+	return strings.TrimSpace(m.Model.Storage.ID())
 }
 
 func (m Model) switchRuntimeCommand(

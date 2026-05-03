@@ -131,8 +131,8 @@ autocomplete, active-turn availability, and feature visibility.
 Default visible groups:
 
 - session: `/new`, `/clear`, `/resume`, `/session`, `/compact`
-- branching: `/tree`, `/fork`; add `/clone` only when the distinct "duplicate
-  current branch" workflow is implemented
+- branching: `/tree`, `/fork`; add `/clone` only when it becomes distinct from
+  current-point `/fork`
 - runtime: `/provider`, `/model`, `/thinking`, `/primary`, `/fast`
 - display and inspection: `/settings`, `/tools`, `/cost`, `/status`
 - mode: `/mode`; old direct aliases may dispatch but should not dominate help
@@ -148,7 +148,9 @@ Reference posture:
 Ion direction:
 
 - prioritize `/tree` and `/fork` readability before adding new command names
-- add `/clone` only if current-branch duplication is valuable in daily use
+- treat `/fork [label]` as the current-point branch/duplicate flow today
+- add `/clone` only after earlier-turn forking exists and current-point
+  duplication needs a clearer separate command
 - add background task commands before `/goal`
 - keep `/goal` deferred until goals are durable session/workflow metadata with
   status, pause/resume, token/time accounting, and recovery behavior

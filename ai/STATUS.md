@@ -3,8 +3,8 @@
 Fast, lightweight terminal coding agent.
 
 **Phase:** C4 shell/session workflow
-**Focus:** Streaming UX folded into C4; next review `/tree` and `/fork`, then prune `ai/`
-**Active task:** `tk-7z08` — C4: review `/tree` and `/fork` TUI workflow
+**Focus:** C4 `/tree`/`/fork` workflow reviewed; next prune and consolidate `ai/`
+**Active task:** `tk-ygji` — AI: prune and consolidate context source of truth
 **Updated:** 2026-05-03
 
 ## Current Truth
@@ -106,9 +106,21 @@ Fast, lightweight terminal coding agent.
   B as plain wrapped text, incomplete Markdown stays raw while streaming, and
   committed assistant messages still render once through Goldmark/GFM in Plane
   A. `/settings` display changes update runtime state without restart.
+- C4 `/tree` and `/fork` review is complete. `/fork [label]` is the current
+  current-point branch/duplicate flow and switches into the labeled child
+  session. `/clone` remains deferred because it is not distinct until Ion grows
+  an earlier-turn fork selector.
 
 ## Latest Evidence
 
+- C4 session-command slice passed focused app tests,
+  `go test ./internal/app -count=1 -timeout 180s`,
+  `go test ./... -count=1 -timeout 300s`, and
+  `go test -race ./cmd/ion ./internal/app ./internal/backend/canto ./internal/backend/canto/tools ./internal/storage -count=1 -timeout 300s`.
+  Tmux `--continue` smoke verified `/tree`, `/fork smoke branch`, and `/tree`
+  from the forked child. Source review fixed session-command targeting to use
+  the durable materialized storage session ID instead of a potentially stale
+  live agent session ID.
 - Streaming Plane B slice passed
   `go test ./internal/app -count=1 -timeout 180s`,
   `go test ./... -count=1 -timeout 300s`, and

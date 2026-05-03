@@ -183,8 +183,8 @@ Ion's command surface should stay small, conventional, and session-centric.
 Pi, Codex, and Claude Code all point at the same useful split:
 
 - core session control: `/new`, `/clear`, `/resume`, `/session`, `/compact`
-- branch/session workflows: `/tree`, `/fork`, and later `/clone` if the product
-  needs a distinct "duplicate current branch" command
+- branch/session workflows: `/tree`, `/fork`, and later `/clone` only if it
+  becomes meaningfully distinct from current-point `/fork`
 - runtime controls: `/provider`, `/model`, `/thinking`, `/primary`, `/fast`
 - display/inspection: `/settings`, `/tools`, `/cost`, `/status`
 - mode/debug surfaces: `/mode` plus hidden aliases where useful
@@ -192,8 +192,12 @@ Pi, Codex, and Claude Code all point at the same useful split:
 `/tree`, `/fork`, and `/clone` should have distinct meanings:
 
 - `/tree` navigates branches inside the current session lineage.
-- `/fork` creates a new session from a selected earlier turn.
-- `/clone` duplicates the current active branch/session at the current point.
+- `/fork [label]` currently duplicates the materialized session at the current
+  point, creates a labeled child branch, and switches into it.
+- Earlier-turn forking needs a target picker/selector before it is added to the
+  command surface.
+- `/clone` stays deferred unless current-point duplication needs a separate
+  command after earlier-turn `/fork` exists.
 
 Do not add `/goal` yet. Codex's feature-gated `/goal` is a good reference for
 long-running task objectives, but Ion needs durable background task state,

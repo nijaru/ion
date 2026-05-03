@@ -398,8 +398,10 @@ Order:
    resume behavior.
 2. Decide whether `/clone` is needed as a distinct command:
    - `/tree` navigates inside the current lineage
-   - `/fork` creates a new session from a selected earlier turn
-   - `/clone` duplicates the current active branch/session at the current point
+   - `/fork [label]` currently duplicates the current materialized session at
+     the current point and switches into the labeled child
+   - earlier-turn forking needs a selector before it is exposed
+   - `/clone` stays deferred while it would only duplicate current `/fork`
 3. Add background job visibility design or implementation only after the
    current `bash` foreground path remains green:
    - command surface: `/tasks` or `/ps`, plus `/stop`
