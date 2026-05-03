@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	cantofw "github.com/nijaru/canto"
 	"github.com/nijaru/canto/agent"
 	"github.com/nijaru/canto/prompt"
 	"github.com/nijaru/canto/runtime"
@@ -101,12 +102,14 @@ func (b *Backend) Open(ctx context.Context) error {
 		agent.WithRequestProcessors(requestProcessors...),
 		agent.WithMutators(b.steering),
 	}
-	b.agent = agent.New("ion", instructions, modelName, p, registry, agentOptions...)
-
-	b.runner = runtime.NewRunner(
-		b.store,
-		b.agent,
-		runtime.WithOverflowRecovery(
+	harness, err := cantofw.NewHarness("ion").
+		Instructions(instructions).
+		Model(modelName).
+		Provider(p).
+		Registry(registry).
+		SessionStore(b.store).
+		AgentOptions(agentOptions...).
+		RuntimeOptions(runtime.WithOverflowRecovery(
 			p.IsContextOverflow,
 			func(ctx context.Context, sess *session.Session) error {
 				b.events <- ionsession.StatusChanged{Status: "Compacting context..."}
@@ -117,15 +120,25 @@ func (b *Backend) Open(ctx context.Context) error {
 				return err
 			},
 			1,
-		),
-	)
+		)).
+		Build()
+	if err != nil {
+		return err
+	}
+	base, ok := harness.Agent.(*agent.BaseAgent)
+	if !ok {
+		return fmt.Errorf("ion harness: unexpected agent type %T", harness.Agent)
+	}
+	b.harness = harness
+	b.runner = harness.Runner
+	b.agent = base
 
 	return nil
 }
 
 func (b *Backend) Resume(ctx context.Context, sessionID string) error {
 	b.mu.Lock()
-	needOpen := b.runner == nil
+	needOpen := b.harness == nil
 	b.mu.Unlock()
 
 	if needOpen {
@@ -140,7 +153,7 @@ func (b *Backend) Close() error {
 		b.mu.Lock()
 		cancel := b.cancel
 		stopWatch := b.stopWatch
-		runner := b.runner
+		harness := b.harness
 		b.mu.Unlock()
 
 		if cancel != nil {
@@ -149,8 +162,8 @@ func (b *Backend) Close() error {
 		if stopWatch != nil {
 			stopWatch()
 		}
-		if runner != nil {
-			runner.Close()
+		if harness != nil {
+			harness.Close()
 		}
 		b.wg.Wait()
 		close(b.events)

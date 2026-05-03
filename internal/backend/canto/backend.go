@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 
+	cantofw "github.com/nijaru/canto"
 	"github.com/nijaru/canto/agent"
 	"github.com/nijaru/canto/llm"
 	"github.com/nijaru/canto/runtime"
@@ -19,12 +20,13 @@ import (
 const proactiveCompactThreshold = 0.60
 
 type Backend struct {
-	runner *runtime.Runner
-	store  session.Store
-	agent  *agent.BaseAgent
-	events chan ionsession.Event
-	cfg    *config.Config
-	llm    llm.Provider
+	harness *cantofw.Harness
+	runner  *runtime.Runner
+	store   session.Store
+	agent   *agent.BaseAgent
+	events  chan ionsession.Event
+	cfg     *config.Config
+	llm     llm.Provider
 
 	ionStore   storage.Store
 	sess       storage.Session
