@@ -168,6 +168,24 @@ Model-visible tool direction:
 - Self-extension nudges are deferred until `manage_skill` is safe, observable,
   and easy to undo.
 
+### Virtual namespace direction
+
+Skills should eventually fit into a general Ion resource namespace model
+without becoming always-on prompt state. The namespace is host-facing first:
+
+- installed local skills can be represented as `skill://<name>/SKILL.md`
+- host commands such as `/skills` and `ion skill list` remain the discovery
+  path
+- `read_skill(name)` is the current narrow opt-in tool; it can be replaced by
+  an opt-in `read_resource(skill://...)` surface later if multiple namespaces
+  justify one shared read tool
+- skill mutation stays host-owned until `manage_skill` approval, audit, and
+  undo are implemented
+
+Do not make `skill://` URIs readable through the ordinary workspace `read`
+tool. Skills are not repo files; they have different trust, mutation, and
+prompt-budget behavior.
+
 ### manage_skill write-gate contract
 
 `manage_skill` is a protected write surface. It is allowed to help the model

@@ -1,6 +1,6 @@
 # ion Design
 
-Updated: 2026-05-02
+Updated: 2026-05-03
 
 ## Product Shape
 
@@ -74,6 +74,10 @@ For Ion this means:
   model-facing surface. If future memory/skills need file-like access, prefer
   backend path routing or explicit progressive-disclosure tools over adding
   many near-duplicate tools.
+- Virtual resource namespaces are the design direction for future
+  non-workspace context. `workspace://`, `skill://`, `memory://`, and
+  `artifact://` describe capabilities with policy metadata; they do not imply
+  that the default workspace `read` tool can read every URI scheme.
 - Approval, future elicitation, cancellation, and active-turn steering should
   converge on one typed interrupt/pause-resume boundary so TUI, CLI, ACP, and
   headless hosts stay consistent.
@@ -143,6 +147,9 @@ Rules:
   heredocs, and shell patching are not the recommended path for ordinary edits.
 - Model-visible tool output is bounded with explicit truncation markers.
 - Display policy lives in Ion renderers, not in provider-visible history.
+- Future skills, memory, and artifacts use explicit namespaces internally and
+  opt-in narrow tools externally. Do not add default `read_memory`,
+  `search_memory`, `list_skills`, or similar tools.
 - Open-ended user questions remain normal assistant messages for now. A future
   `ask_user` tool should wait for a Canto-level elicitation primitive so it can
   pause/resume safely across TUI, CLI, ACP, and noninteractive hosts.

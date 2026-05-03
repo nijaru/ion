@@ -122,6 +122,55 @@ Deferred or hidden surfaces:
 | `ask_user` | Deferred until Canto owns a general elicitation/pause-resume primitive |
 | `verify` | Removed; normal verification goes through `bash` |
 
+## Virtual Resource Namespaces
+
+Virtual namespaces are a future capability boundary, not a default tool-surface
+expansion. They let Ion route non-workspace resources through one policy and
+display layer without pretending they are ordinary repo files.
+
+Initial namespace model:
+
+| Namespace | Example URI | Capability | Default exposure |
+|---|---|---|---|
+| workspace | `workspace://internal/app/model.go` | read/search/write/execute through the existing eight tools | default |
+| skill | `skill://review/SKILL.md` | read installed skill bodies and metadata | host `/skills`; opt-in `read_skill` |
+| memory | `memory://project/<id>` | search/read/write durable memories | deferred |
+| artifact | `artifact://session/<id>/<name>` | read compaction/offload artifacts | deferred |
+
+Rules:
+
+- Do not add per-namespace tools such as `read_memory`, `search_memory`,
+  `list_skills`, and `read_artifact` by default.
+- Keep workspace file tools scoped to the workspace filesystem. Do not silently
+  overload `read(path)` so `memory://...` or `skill://...` behaves like a real
+  file; that would blur permissions and confuse edit semantics.
+- Namespace resolvers should be host/framework capabilities with explicit
+  policy metadata: readable, searchable, writable, executable, audited,
+  prompt-cost-bearing, and display-safe.
+- If multiple non-workspace namespaces become model-visible, prefer a small
+  opt-in resource surface over many bespoke tools:
+
+```json
+read_resource({"uri": "skill://review/SKILL.md"})
+search_resource({"namespace": "memory", "query": "provider history bug"})
+```
+
+- Do not implement `write_resource` until memory/skill mutation has a clear
+  approval, audit, and undo contract. Until then, mutation stays host-owned
+  through commands such as `ion skill install --confirm`.
+- Progressive disclosure is mandatory: enabling a namespace may expose a
+  narrow tool and short guidance for that namespace, but it must not inject a
+  full inventory into the default prompt.
+
+Ownership:
+
+- Canto may own a generic resource namespace interface if multiple hosts need
+  it: resolver registration, URI parsing, policy metadata, and durable
+  references.
+- Ion owns product choices: which namespaces are mounted, which tools become
+  model-visible, how `/skills` or future `/memory` surfaces display resources,
+  and when mutation requires approval.
+
 Supporting infrastructure:
 
 - `ApprovalManager` — goroutine-safe request/response channels

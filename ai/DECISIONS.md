@@ -23,6 +23,17 @@ Distilled architectural principles plus recent decision log.
 
 ## Recent Log
 
+### 2026-05-03 - Future context uses namespaces, not default tool sprawl
+
+Skills, memory, and artifacts should mount behind explicit resource
+namespaces such as `skill://`, `memory://`, and `artifact://`, but the default
+workspace tools stay scoped to real workspace files. The model-visible default
+surface remains the eight coding tools. Future non-workspace access must be
+progressively disclosed through narrow opt-in tools such as `read_skill` today
+or a later shared `read_resource`/`search_resource` pair if multiple namespaces
+need the same interface. Mutation remains host-owned until approval, audit, and
+undo are designed.
+
 ### 2026-05-03 - Canto harness stores remain host-owned by default
 
 Ion passes a long-lived session store into Canto, so the Canto harness must not

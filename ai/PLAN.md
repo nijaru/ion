@@ -8,7 +8,7 @@ The active priority is not more feature parity. It is the harness-boundary
 refactor after the minimal-core consolidation pass: make Ion a thin product
 host over one Canto runtime/session stream while keeping product policy in Ion.
 
-Next task: `tk-0r23` - design virtual tool namespaces for skills and memory.
+Next task: `tk-vv4y` - refresh sandbox/trust boundary design.
 
 Flue, Pi, OpenAI Agents SDK, and Mendral stay in the plan as architecture
 constraints, not implementation scope. They are useful because they clarify
@@ -281,10 +281,15 @@ Order:
    - Cached runner/agent ownership was removed from `CantoBackend`.
    - OpenRouter DeepSeek Flash live smoke and tmux TUI smoke passed; Fedora
      probe timed out from this machine.
-3. Active next - Ion `tk-0r23` - design future virtual tool namespaces for
-   skills/memory without bloating the model-facing tool surface.
-4. Ion `tk-vv4y` - refresh sandbox/trust design around executor and credential
-   boundaries.
+3. Done - Ion `tk-0r23` - design future virtual tool namespaces for
+   skills/memory without bloating the model-facing tool surface:
+   - non-workspace context mounts behind explicit namespace resolvers such as
+     `skill://`, `memory://`, and `artifact://`
+   - default workspace tools do not read or write those namespaces
+   - model-visible access is opt-in and narrow (`read_skill` today; possible
+     shared `read_resource`/`search_resource` later if evidence justifies it)
+4. Active next - Ion `tk-vv4y` - refresh sandbox/trust design around executor
+   and credential boundaries.
 
 Acceptance:
 

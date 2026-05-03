@@ -4,7 +4,7 @@ Fast, lightweight terminal coding agent.
 
 **Phase:** Harness boundary cleanup
 **Focus:** Keep future skills/memory/sandbox extensions behind explicit capability boundaries
-**Active task:** none; next ready task is `tk-0r23` - virtual tool namespace design
+**Active task:** none; next ready task is `tk-vv4y` - sandbox/trust boundary design
 **Updated:** 2026-05-03
 
 ## Current Truth
@@ -32,8 +32,12 @@ Fast, lightweight terminal coding agent.
   disposable execution, and preserve a small model-visible tool surface.
 - `tk-ezms` is closed. `CantoBackend` now uses the Canto harness facade for
   native turn execution and no longer caches second runtime owners.
-- Next ready work is C1 follow-up design: `tk-0r23` virtual tool namespaces for
-  future skills/memory without expanding the default model-visible surface.
+- `tk-0r23` is closed. Virtual resource namespace direction is now captured in
+  the canonical design/spec files.
+- Current namespace direction: keep the eight workspace tools as default, keep
+  non-workspace resources behind explicit `skill://`, `memory://`, or
+  `artifact://` capability resolvers, and expose them only through host
+  commands or opt-in narrow tools.
 
 ## Latest Evidence
 
@@ -216,10 +220,7 @@ Fast, lightweight terminal coding agent.
 
 ## Next Action
 
-1. Start `tk-0r23`: design future virtual tool namespaces for skills/memory so
-   advanced capabilities can be progressively disclosed without adding default
-   tools.
-2. Then run `tk-vv4y`: refresh sandbox/trust around executor and credential
+1. Start `tk-vv4y`: refresh sandbox/trust around executor and credential
    boundaries.
-3. Keep one green slice per commit; do not expand the model-facing tool surface
+2. Keep one green slice per commit; do not expand the model-facing tool surface
    or add new product features during this pass.
