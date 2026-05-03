@@ -313,10 +313,6 @@ func (s *Session) Approve(ctx context.Context, requestID string, approved bool) 
 	return nil
 }
 
-func (s *Session) RegisterMCPServer(ctx context.Context, command string, args ...string) error {
-	return fmt.Errorf("MCP server registration not yet supported for ACP agents")
-}
-
 func acpCommandEnv(sessionID string) []string {
 	env := os.Environ()
 	if sessionID != "" {

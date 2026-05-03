@@ -123,10 +123,6 @@ func (s *unconfiguredSession) Approve(context.Context, string, bool) error {
 	return nil
 }
 
-func (s *unconfiguredSession) RegisterMCPServer(context.Context, string, ...string) error {
-	return nil
-}
-
 func (s *unconfiguredSession) SetMode(session.Mode) {}
 
 func (s *unconfiguredSession) SetAutoApprove(bool) {}

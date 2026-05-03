@@ -176,9 +176,6 @@ func (s *stubSession) Approve(ctx context.Context, id string, ok bool) error {
 	return s.approveErr
 }
 
-func (s *stubSession) RegisterMCPServer(ctx context.Context, cmd string, args ...string) error {
-	return nil
-}
 func (s *stubSession) SetMode(mode session.Mode) { s.mode = mode }
 
 func (s *stubSession) SetAutoApprove(enabled bool) { s.autoApprove = enabled }

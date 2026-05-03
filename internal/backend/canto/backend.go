@@ -9,7 +9,6 @@ import (
 	"github.com/nijaru/canto/runtime"
 	"github.com/nijaru/canto/session"
 	"github.com/nijaru/canto/tool"
-	"github.com/nijaru/canto/tool/mcp"
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/backend/canto/tools"
 	"github.com/nijaru/ion/internal/config"
@@ -42,9 +41,8 @@ type Backend struct {
 	closeOnce     sync.Once
 	wg            sync.WaitGroup
 
-	policy     *backend.PolicyEngine
-	approver   *tools.ApprovalManager
-	mcpClients []*mcp.Client
+	policy   *backend.PolicyEngine
+	approver *tools.ApprovalManager
 }
 
 func New() *Backend {
@@ -52,7 +50,6 @@ func New() *Backend {
 		events:        make(chan ionsession.Event, 100),
 		policy:        backend.NewPolicyEngine(),
 		approver:      tools.NewApprovalManager(),
-		mcpClients:    make([]*mcp.Client, 0),
 		activeToolIDs: make(map[string]struct{}),
 	}
 }

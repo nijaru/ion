@@ -38,9 +38,6 @@ func (s *printSession) Approve(ctx context.Context, requestID string, approved b
 	s.approved = approved
 	return nil
 }
-func (s *printSession) RegisterMCPServer(ctx context.Context, cmd string, args ...string) error {
-	return nil
-}
 func (s *printSession) SetMode(mode session.Mode)     { s.mode = mode }
 func (s *printSession) SetAutoApprove(enabled bool)   { s.autoApprove = enabled }
 func (s *printSession) AllowCategory(toolName string) {}
