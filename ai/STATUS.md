@@ -45,6 +45,8 @@ Fast, lightweight terminal coding agent.
   with prior tool history in the request.
 - Tmux shell smoke now confirms `/help` and `/tools` print above the
   progress/composer/footer shell, with one blank row before `Ready`.
+- Removed the stale self-initiated model-visible `compact` tool spec; current
+  compaction design is host `/compact` plus overflow recovery.
 - Latest gates passed for the shell print fix:
   `go test ./internal/app -count=1 -timeout 180s`,
   `go test ./... -count=1 -timeout 300s`, and

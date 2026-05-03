@@ -46,7 +46,9 @@ the stale memory/wiki spec was removed rather than kept as future scaffolding.
 Compaction remains core for context survival through proactive overflow
 recovery and the `/compact` host command. The stale model-visible `compact`
 tool implementation was removed so the default tool package matches the actual
-eight-tool model surface.
+eight-tool model surface. The old self-initiated `compact` tool spec was
+deleted for the same reason; future compaction work should update the host
+command/overflow design instead of re-adding a model-visible tool by default.
 
 ### 2026-05-02 - Flue validates the harness boundary
 
