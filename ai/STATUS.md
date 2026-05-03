@@ -2,18 +2,17 @@
 
 Fast, lightweight terminal coding agent.
 
-**Phase:** Minimal core consolidation
-**Focus:** Make the native coding loop boring before more harness or advanced work
-**Active task:** `tk-g5sf` - Ion minimal core consolidation pass
-**Blocked next task:** `tk-ezms` - Ion runtime boundary alignment
+**Phase:** Runtime boundary cleanup
+**Focus:** Make `CantoBackend` a thin product adapter over the native runtime boundary
+**Active task:** `tk-ezms` - Ion runtime boundary alignment
 **Updated:** 2026-05-02
 
 ## Current Truth
 
 - Ion has one native baseline path. There is no global stabilization mode.
-- Recent work added or restored many useful surfaces, but the project should
-  not treat that breadth as evidence that the minimal core is finished. The
-  current blocker is to simplify and harden the default native path first.
+- `tk-g5sf` is closed. The minimal native surface is now simplified enough to
+  move to the next refactor layer without treating advanced features as part of
+  the default core.
 - Canto owns durable events, provider-visible history, agent/tool lifecycle,
   reasoning capability translation, and compaction primitives.
 - Ion owns TUI/CLI UX, commands, settings/state, product tools, provider
@@ -31,12 +30,13 @@ Fast, lightweight terminal coding agent.
 - Flue and Mendral are applicable as boundary checks, not as feature requests:
   keep the runtime/session/tool boundary explicit, keep state outside
   disposable execution, and preserve a small model-visible tool surface.
-- Canto `canto-2vxb` and Ion `tk-ezms` remain useful, but they wait behind the
-  minimal-core pass so the refactor is grounded in the actual default path.
+- Next work is `tk-ezms`: align Ion's runtime boundary to the Canto harness
+  facade. If that exposes missing framework primitives, fix Canto upstream
+  first; otherwise keep the refactor Ion-local.
 
 ## Latest Evidence
 
-- `tk-g5sf` minimal-core cleanup is underway. The default model-visible
+- `tk-g5sf` minimal-core cleanup is closed. The default model-visible
   surface is now exactly eight tools (`bash`, `read`, `write`, `edit`,
   `multi_edit`, `list`, `grep`, `glob`); stale `verify`, model-visible
   `compact`, and memory command/backend hot-path scaffolding have been removed.
