@@ -72,10 +72,6 @@ type sessionCostMsg struct {
 	notice string
 }
 
-type sessionHelpMsg struct {
-	notice string
-}
-
 type gitDiffStatsMsg struct {
 	workdir string
 	stats   string
@@ -814,9 +810,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case sessionCostMsg:
 		return m, m.printEntries(session.Entry{Role: session.System, Content: msg.notice})
-
-	case sessionHelpMsg:
-		return m, m.printHelp(msg.notice)
 
 	case gitDiffStatsMsg:
 		if msg.workdir == m.App.Workdir {

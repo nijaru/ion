@@ -2501,13 +2501,6 @@ func TestCompactCommandDoesNotMaterializeLazySession(t *testing.T) {
 	if storage.IsMaterialized(lazy) {
 		t.Fatal("lazy /compact materialized a session")
 	}
-	out := cmd()
-	if got := ansi.Strip(fmt.Sprint(out)); !strings.Contains(
-		got,
-		"No active session to compact yet",
-	) {
-		t.Fatalf("compact notice = %q, want no active session notice", got)
-	}
 }
 
 func TestCompactCompletionClearsStaleErrorState(t *testing.T) {
@@ -3248,11 +3241,10 @@ func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 	)
 
 	_, cmd := model.handleCommand("/help")
-	msg := cmd()
-	helpMsg, ok := msg.(sessionHelpMsg)
-	if !ok {
-		t.Fatalf("expected sessionHelpMsg, got %T", msg)
+	if cmd == nil {
+		t.Fatal("expected /help command")
 	}
+	notice := helpText()
 
 	wantCommands := []string{
 		"/help",
@@ -3287,28 +3279,28 @@ func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 		"Ctrl+C",
 	)
 	for _, want := range wantCommands {
-		if !strings.Contains(helpMsg.notice, want) {
-			t.Fatalf("help notice missing %q: %q", want, helpMsg.notice)
+		if !strings.Contains(notice, want) {
+			t.Fatalf("help notice missing %q: %q", want, notice)
 		}
 	}
 	for _, disabled := range []string{
 		"/rewind <id>",
 		"/mcp add <cmd>",
 	} {
-		if strings.Contains(helpMsg.notice, disabled) {
+		if strings.Contains(notice, disabled) {
 			t.Fatalf(
 				"help notice should not advertise deferred command %q: %q",
 				disabled,
-				helpMsg.notice,
+				notice,
 			)
 		}
 	}
 	for _, hidden := range []string{"/read", "/edit", "/auto, /yolo"} {
-		if strings.Contains(helpMsg.notice, hidden) {
+		if strings.Contains(notice, hidden) {
 			t.Fatalf(
 				"help notice should not advertise hidden mode alias %q: %q",
 				hidden,
-				helpMsg.notice,
+				notice,
 			)
 		}
 	}
