@@ -290,6 +290,29 @@ func (s *resumeOnlyStore) UpdateSession(ctx context.Context, si storage.SessionI
 
 func (s *resumeOnlyStore) Close() error { return nil }
 
+type forkTreeStore struct {
+	resumeOnlyStore
+	forked     storage.Session
+	forkParent string
+	forkOpts   storage.ForkOptions
+	tree       storage.SessionTree
+}
+
+func (s *forkTreeStore) ForkSession(
+	ctx context.Context,
+	parentID string,
+	opts storage.ForkOptions,
+) (storage.Session, error) {
+	s.forkParent = parentID
+	s.forkOpts = opts
+	return s.forked, nil
+}
+
+func (s *forkTreeStore) SessionTree(ctx context.Context, sessionID string) (storage.SessionTree, error) {
+	s.tree.Current.ID = sessionID
+	return s.tree, nil
+}
+
 func readyModel(t *testing.T) Model {
 	t.Helper()
 	sess := &stubSession{events: make(chan session.Event)}
@@ -3421,6 +3444,107 @@ func TestTreeCommandRequiresMaterializedSession(t *testing.T) {
 	err := localErrorFromMsg(t, cmd())
 	if !strings.Contains(err.Error(), "No active session tree yet") {
 		t.Fatalf("error = %v, want no active session", err)
+	}
+}
+
+func TestForkCommandForksCurrentSessionAndSwitchesRuntime(t *testing.T) {
+	oldSession := &stubSession{events: make(chan session.Event)}
+	parentStorage := &stubStorageSession{
+		id:     "parent-session",
+		model:  "openai/gpt-4.1",
+		branch: "main",
+	}
+	forkedStorage := &stubStorageSession{
+		id:     "child-session",
+		model:  "openai/gpt-4.1",
+		branch: "main",
+	}
+	store := &forkTreeStore{forked: forkedStorage}
+	replayedStorage := &stubStorageSession{
+		id:      "child-session",
+		model:   "openai/gpt-4.1",
+		branch:  "main",
+		entries: []session.Entry{{Role: session.User, Content: "before fork"}},
+	}
+	var observedSessionID string
+	var observedConfig *config.Config
+	model := New(
+		stubBackend{sess: oldSession, provider: "openai", model: "gpt-4.1"},
+		parentStorage,
+		store,
+		"/tmp/test",
+		"main",
+		"dev",
+		func(ctx context.Context, cfg *config.Config, sessionID string) (backend.Backend, session.AgentSession, storage.Session, error) {
+			observedSessionID = sessionID
+			copied := *cfg
+			observedConfig = &copied
+			newSession := &stubSession{events: make(chan session.Event)}
+			return stubBackend{
+				sess:     newSession,
+				provider: cfg.Provider,
+				model:    cfg.Model,
+			}, newSession, replayedStorage, nil
+		},
+	)
+
+	_, cmd := model.handleCommand("/fork try alternate")
+	if cmd == nil {
+		t.Fatal("expected /fork command")
+	}
+	if store.forkParent != "parent-session" {
+		t.Fatalf("fork parent = %q, want parent-session", store.forkParent)
+	}
+	if store.forkOpts.Label != "try alternate" || store.forkOpts.Reason != "user requested /fork" {
+		t.Fatalf("fork opts = %#v, want label and reason", store.forkOpts)
+	}
+	if !forkedStorage.closed {
+		t.Fatal("expected temporary forked session to be closed before runtime switch")
+	}
+
+	msg := cmd()
+	switched, ok := msg.(runtimeSwitchedMsg)
+	if !ok {
+		t.Fatalf("expected runtimeSwitchedMsg, got %T", msg)
+	}
+	if observedSessionID != "child-session" {
+		t.Fatalf("switcher session = %q, want child-session", observedSessionID)
+	}
+	if observedConfig == nil || observedConfig.Provider != "openai" || observedConfig.Model != "gpt-4.1" {
+		t.Fatalf("switcher config = %#v, want openai/gpt-4.1", observedConfig)
+	}
+	if switched.notice != "Forked session child-session" {
+		t.Fatalf("notice = %q, want fork notice", switched.notice)
+	}
+	if len(switched.replayEntries) != 1 || switched.replayEntries[0].Content != "before fork" {
+		t.Fatalf("replay entries = %#v, want child transcript", switched.replayEntries)
+	}
+}
+
+func TestSessionTreeNoticeMarksCurrentAndChildren(t *testing.T) {
+	now := time.Now()
+	got := sessionTreeNotice(storage.SessionTree{
+		Current: storage.SessionInfo{ID: "child-session"},
+		Lineage: []storage.SessionInfo{
+			{ID: "parent-session", Title: "debug task", Branch: "main", UpdatedAt: now},
+			{ID: "child-session", Title: "try alternate", Branch: "main", UpdatedAt: now},
+		},
+		Children: []storage.SessionInfo{
+			{ID: "next-session", Title: "follow-up branch", Branch: "main", UpdatedAt: now},
+		},
+	})
+
+	for _, want := range []string{
+		"Session tree",
+		"lineage:",
+		"- parent-session - debug task - main",
+		"* child-session - try alternate - main",
+		"children:",
+		"- next-session - follow-up branch - main",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("tree notice missing %q:\n%s", want, got)
+		}
 	}
 }
 
