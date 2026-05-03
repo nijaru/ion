@@ -1609,6 +1609,35 @@ func TestViewShellRowsReserveWrapCellAfterResize(t *testing.T) {
 	}
 }
 
+func TestPickerRowsFitShellWidthAfterResize(t *testing.T) {
+	model := readyModel(t)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 40, Height: 24})
+	model = updated.(Model)
+	model.Picker.Overlay = &pickerOverlayState{
+		title: "Pick a command with a long title that must not wrap",
+		query: "this is a long command picker search query that used to wrap",
+		items: []pickerItem{{
+			Label:  "/settings",
+			Detail: "configure display settings with a long explanatory detail",
+			Group:  "Commands",
+		}},
+		filtered: []pickerItem{{
+			Label:  "/settings",
+			Detail: "configure display settings with a long explanatory detail",
+			Group:  "Commands",
+		}},
+		index:   0,
+		purpose: pickerPurposeCommand,
+	}
+
+	out := ansi.Strip(model.renderPicker())
+	for i, line := range strings.Split(out, "\n") {
+		if got := ansi.StringWidth(line); got > model.shellWidth() {
+			t.Fatalf("picker line %d width = %d, want <= %d: %q\n%s", i, got, model.shellWidth(), line, out)
+		}
+	}
+}
+
 func TestViewAddsBlankLineBetweenActiveContentAndShell(t *testing.T) {
 	model := readyModel(t)
 	model.Progress.Mode = stateWorking
@@ -3860,11 +3889,11 @@ func TestSessionPickerRowsFitTerminalWidth(t *testing.T) {
 
 	out := ansi.Strip(model.renderSessionPicker())
 	for _, line := range strings.Split(out, "\n") {
-		if ansi.StringWidth(line) > model.App.Width {
+		if ansi.StringWidth(line) > model.shellWidth() {
 			t.Fatalf(
 				"session picker line width = %d, want <= %d: %q",
 				ansi.StringWidth(line),
-				model.App.Width,
+				model.shellWidth(),
 				line,
 			)
 		}

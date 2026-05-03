@@ -82,6 +82,17 @@ func (m Model) shellSeparator() string {
 	return strings.Repeat("─", width)
 }
 
+func (m Model) shellPaddedLine(style lipgloss.Style, text string) string {
+	width := m.shellWidth()
+	if width <= 0 {
+		return ""
+	}
+	if width <= 2 {
+		return fitLine(style.Render(text), width)
+	}
+	return style.PaddingLeft(2).Render(fitLine(text, width-2))
+}
+
 func (m Model) renderPicker() string {
 	if m.Picker.Overlay == nil {
 		return ""
@@ -121,23 +132,21 @@ func (m Model) renderPicker() string {
 
 	var b strings.Builder
 	b.WriteString("\n")
-	b.WriteString(m.st.cyan.PaddingLeft(2).Render(m.Picker.Overlay.title))
+	b.WriteString(m.shellPaddedLine(m.st.cyan, m.Picker.Overlay.title))
 	b.WriteString("\n")
 	if m.Picker.Overlay.query != "" {
-		b.WriteString(m.st.dim.PaddingLeft(2).Render("Search: " + m.Picker.Overlay.query))
+		b.WriteString(m.shellPaddedLine(m.st.dim, "Search: "+m.Picker.Overlay.query))
 		b.WriteString("\n")
 	}
-	b.WriteString(
-		m.st.dim.PaddingLeft(2).Render(m.renderPickerHelpText()),
-	)
+	b.WriteString(m.shellPaddedLine(m.st.dim, m.renderPickerHelpText()))
 	b.WriteString("\n")
 	if len(items) == 0 {
-		b.WriteString(m.st.dim.PaddingLeft(2).Render("No matching items"))
+		b.WriteString(m.shellPaddedLine(m.st.dim, "No matching items"))
 		b.WriteString("\n")
 		return b.String()
 	}
 	if start > 0 {
-		b.WriteString(m.st.dim.PaddingLeft(2).Render("..."))
+		b.WriteString(m.shellPaddedLine(m.st.dim, "..."))
 		b.WriteString("\n")
 	}
 	labelWidth := 0
@@ -153,7 +162,7 @@ func (m Model) renderPicker() string {
 		item := items[i]
 		if item.Group != "" && item.Group != lastGroup {
 			b.WriteString("\n")
-			b.WriteString(m.st.dim.PaddingLeft(2).Render(item.Group))
+			b.WriteString(m.shellPaddedLine(m.st.dim, item.Group))
 			b.WriteString("\n")
 			lastGroup = item.Group
 		}
@@ -167,7 +176,7 @@ func (m Model) renderPicker() string {
 		b.WriteString("\n")
 	}
 	if end < len(items) {
-		b.WriteString(m.st.dim.PaddingLeft(2).Render("..."))
+		b.WriteString(m.shellPaddedLine(m.st.dim, "..."))
 		b.WriteString("\n")
 	}
 	return b.String()
@@ -227,7 +236,7 @@ func (m Model) renderPickerLine(
 		b.WriteString("    ")
 		b.WriteString(m.renderPickerDetail(item.Detail, item.Tone))
 	}
-	return b.String()
+	return fitLine(b.String(), m.shellWidth())
 }
 
 func (m Model) renderPickerMetrics(

@@ -126,7 +126,9 @@ Fast, lightweight terminal coding agent.
   Tmux `go run ./...` capture at 120 columns, then resize to 84 and 60
   columns, showed a single `Ready` row. The live composer separators are now
   short rules instead of width-filling rows so terminal reflow does not leave
-  stale progress fragments after monitor/window moves.
+  stale progress fragments after monitor/window moves. Follow-up edge pass
+  also tightened command/session picker overlay rows so long search/help text
+  truncates inside the live shell width instead of wrapping during resize.
 - AI context prune sanity checks passed: `ai/README.md` link targets resolve,
   stale deleted-doc references are absent from active `ai/` Markdown, and
   `tk ready` showed only the active prune task before closeout. The active

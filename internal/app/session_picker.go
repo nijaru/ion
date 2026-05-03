@@ -116,28 +116,28 @@ func (m Model) renderSessionPicker() string {
 
 	var b strings.Builder
 	b.WriteString("\n")
-	b.WriteString(m.st.cyan.PaddingLeft(2).Render("Resume a session"))
+	b.WriteString(m.shellPaddedLine(m.st.cyan, "Resume a session"))
 	b.WriteString("\n")
 	if m.App.Workdir != "" {
 		workspace := "Workspace: " + filepath.Base(m.App.Workdir)
 		if total := len(m.Picker.Session.items); total > 0 {
 			workspace += fmt.Sprintf(" • %d sessions", total)
 		}
-		b.WriteString(m.st.dim.PaddingLeft(2).Render(workspace))
+		b.WriteString(m.shellPaddedLine(m.st.dim, workspace))
 		b.WriteString("\n")
 	}
 	search := m.Picker.Session.query
 	if search == "" {
 		search = "(type to filter)"
 	}
-	b.WriteString(m.st.dim.PaddingLeft(2).Render("Search: " + search))
+	b.WriteString(m.shellPaddedLine(m.st.dim, "Search: "+search))
 	b.WriteString("\n")
 	if m.Picker.Session.err != "" {
-		b.WriteString(m.st.warn.PaddingLeft(2).Render(m.Picker.Session.err))
+		b.WriteString(m.shellPaddedLine(m.st.warn, m.Picker.Session.err))
 		b.WriteString("\n")
 	}
 	if len(m.Picker.Session.filtered) == 0 {
-		b.WriteString(m.st.dim.PaddingLeft(2).Render("No matching sessions"))
+		b.WriteString(m.shellPaddedLine(m.st.dim, "No matching sessions"))
 		b.WriteString("\n")
 		return b.String()
 	}
@@ -159,7 +159,7 @@ func (m Model) renderSessionPicker() string {
 	}
 
 	if start > 0 {
-		b.WriteString(m.st.dim.PaddingLeft(2).Render("..."))
+		b.WriteString(m.shellPaddedLine(m.st.dim, "..."))
 		b.WriteString("\n")
 	}
 	for i := start; i < end; i++ {
@@ -171,16 +171,16 @@ func (m Model) renderSessionPicker() string {
 			prefix = "› "
 			style = m.st.cyan
 		}
-		contentWidth := max(0, m.App.Width-ansi.StringWidth(prefix)-2)
+		contentWidth := max(0, m.shellWidth()-ansi.StringWidth(prefix)-2)
 		content := prefix + sessionPickerRenderedLine(m.App.Workdir, item.info, contentWidth)
-		b.WriteString(style.PaddingLeft(2).Render(content))
+		b.WriteString(m.shellPaddedLine(style, content))
 		b.WriteString("\n")
 	}
 	if end < len(m.Picker.Session.filtered) {
-		b.WriteString(m.st.dim.PaddingLeft(2).Render("..."))
+		b.WriteString(m.shellPaddedLine(m.st.dim, "..."))
 		b.WriteString("\n")
 	}
-	b.WriteString(m.st.dim.PaddingLeft(2).Render("Type to search • Enter select • Esc cancel"))
+	b.WriteString(m.shellPaddedLine(m.st.dim, "Type to search • Enter select • Esc cancel"))
 	b.WriteString("\n")
 	return b.String()
 }
