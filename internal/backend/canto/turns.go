@@ -51,7 +51,6 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 	turnID := b.turnSeq
 	b.turnActive = true
 	b.cancel = cancel
-	b.stopWatch = nil
 	b.clearActiveToolsLocked()
 	harnessSession := b.harness.Session(sessionID)
 	b.mu.Unlock()
@@ -134,7 +133,6 @@ func (b *Backend) finishTurn(turnID uint64) {
 	if b.turnSeq == turnID {
 		b.turnActive = false
 		b.cancel = nil
-		b.stopWatch = nil
 		b.clearActiveToolsLocked()
 	}
 }
@@ -147,7 +145,6 @@ func (b *Backend) finishActiveTurn(turnID uint64) {
 	}
 	b.turnActive = false
 	b.cancel = nil
-	b.stopWatch = nil
 	b.clearActiveToolsLocked()
 	b.mu.Unlock()
 
@@ -186,19 +183,14 @@ func (b *Backend) SteerTurn(
 func (b *Backend) CancelTurn(ctx context.Context) error {
 	b.mu.Lock()
 	cancel := b.cancel
-	stopWatch := b.stopWatch
 	active := b.turnActive
 	b.cancel = nil
-	b.stopWatch = nil
 	b.turnActive = false
 	b.clearActiveToolsLocked()
 	b.mu.Unlock()
 
 	if cancel != nil {
 		cancel()
-	}
-	if stopWatch != nil {
-		stopWatch()
 	}
 	if active {
 		b.events <- ionsession.TurnFinished{}
