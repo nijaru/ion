@@ -18,7 +18,7 @@ func TestLoadReadsConfigFile(t *testing.T) {
 
 	path := filepath.Join(configDir, "config.toml")
 	if err := os.WriteFile(path, []byte(
-		"provider = \"openai\"\nmodel = \"gpt-4o\"\nreasoning_effort = \"med\"\nfast_model = \"gpt-4.1-mini\"\nfast_reasoning_effort = \"low\"\nsummary_model = \"gpt-4o-mini\"\nsummary_reasoning_effort = \"low\"\nendpoint = \"https://example.com/v1\"\nauth_env_var = \"OPENAI_PROXY_KEY\"\ncontext_limit = 128000\nmax_session_cost = 1.25\nmax_turn_cost = 0.10\nretry_until_cancelled = false\nworkspace_trust = \"off\"\ntelemetry_otlp_endpoint = \" localhost:4317 \"\ntelemetry_otlp_insecure = true\npolicy_path = \" /tmp/ion-policy.yaml \"\nsubagents_path = \" /tmp/ion-agents \"\nsession_retention_days = 14\nskill_tools = \"readonly\"\nsubagent_tools = \"enabled\"\n[extra_headers]\n\"X-Test\" = \"value\"\n[telemetry_otlp_headers]\n\"x-api-key\" = \" secret \"\n",
+		"provider = \"openai\"\nmodel = \"gpt-4o\"\nreasoning_effort = \"med\"\nfast_model = \"gpt-4.1-mini\"\nfast_reasoning_effort = \"low\"\nsummary_model = \"gpt-4o-mini\"\nsummary_reasoning_effort = \"low\"\nendpoint = \"https://example.com/v1\"\nauth_env_var = \"OPENAI_PROXY_KEY\"\ncontext_limit = 128000\nmax_session_cost = 1.25\nmax_turn_cost = 0.10\nretry_until_cancelled = false\nworkspace_trust = \"off\"\ntelemetry_otlp_endpoint = \" localhost:4317 \"\ntelemetry_otlp_insecure = true\npolicy_path = \" /tmp/ion-policy.yaml \"\nsubagents_path = \" /tmp/ion-agents \"\nsession_retention_days = 14\ntool_env = \"inherit_without_provider_keys\"\nskill_tools = \"readonly\"\nsubagent_tools = \"enabled\"\n[extra_headers]\n\"X-Test\" = \"value\"\n[telemetry_otlp_headers]\n\"x-api-key\" = \" secret \"\n",
 	), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -97,6 +97,9 @@ func TestLoadReadsConfigFile(t *testing.T) {
 	if cfg.SubagentTools != "on" {
 		t.Fatalf("subagent_tools = %q, want on", cfg.SubagentTools)
 	}
+	if cfg.ToolEnvMode() != "inherit_without_provider_keys" {
+		t.Fatalf("tool_env = %q, want inherit_without_provider_keys", cfg.ToolEnvMode())
+	}
 }
 
 func TestLoadUsesDefaultsWhenConfigMissing(t *testing.T) {
@@ -132,6 +135,9 @@ func TestLoadUsesDefaultsWhenConfigMissing(t *testing.T) {
 	}
 	if cfg.WorkspaceTrust != "prompt" {
 		t.Fatalf("workspace_trust = %q, want prompt", cfg.WorkspaceTrust)
+	}
+	if cfg.ToolEnvMode() != "inherit" {
+		t.Fatalf("tool_env = %q, want inherit", cfg.ToolEnvMode())
 	}
 }
 
@@ -339,6 +345,7 @@ func TestSaveWritesStatePath(t *testing.T) {
 		PolicyPath:             "/tmp/ion-policy.yaml",
 		SubagentsPath:          "/tmp/ion-agents",
 		SessionRetentionDays:   14,
+		ToolEnv:                "inherit_without_provider_keys",
 		SubagentTools:          "enabled",
 	}
 	if err := Save(cfg); err != nil {
@@ -379,6 +386,7 @@ func TestSaveWritesStatePath(t *testing.T) {
 		`[telemetry_otlp_headers]`,
 		`x-api-key = 'secret'`,
 		`session_retention_days = 14`,
+		`tool_env = 'inherit_without_provider_keys'`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("saved config missing %q:\n%s", want, got)

@@ -17,9 +17,16 @@ type Bash struct {
 }
 
 func NewBash(cwd string) *Bash {
+	return NewBashWithEnvironment(
+		cwd,
+		NewEnvironmentPolicy(executorEnvironmentInherit, nil),
+	)
+}
+
+func NewBashWithEnvironment(cwd string, environment EnvironmentPolicy) *Bash {
 	return &Bash{
 		cwd:      cwd,
-		executor: newLocalExecutor(resolveSandboxMode()),
+		executor: newLocalExecutorWithEnvironment(resolveSandboxMode(), environment),
 	}
 }
 

@@ -187,6 +187,31 @@ func ResolvedAuthEnvVar(cfg *config.Config) string {
 	return def.DefaultEnvVar
 }
 
+func CredentialEnvVars(cfg *config.Config) []string {
+	seen := map[string]struct{}{}
+	add := func(value string) {
+		envVar := strings.TrimSpace(value)
+		if envVar != "" {
+			seen[envVar] = struct{}{}
+		}
+	}
+	if cfg != nil {
+		add(cfg.AuthEnvVar)
+	}
+	for _, def := range definitions {
+		add(def.DefaultEnvVar)
+		for _, envVar := range def.AlternateEnvVars {
+			add(envVar)
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for envVar := range seen {
+		out = append(out, envVar)
+	}
+	slices.Sort(out)
+	return out
+}
+
 func ResolvedHeaders(cfg *config.Config) map[string]string {
 	def, ok := Lookup(cfg.Provider)
 	if !ok {

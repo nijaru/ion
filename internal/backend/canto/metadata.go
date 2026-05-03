@@ -70,7 +70,7 @@ func (b *Backend) ToolSurface() backend.ToolSurface {
 	threshold := prompt.DefaultLazyThreshold
 	environment := ""
 	if slices.Contains(names, "bash") {
-		environment = tools.ExecutorEnvironmentSummary()
+		environment = b.executorEnvironmentPolicy().Summary()
 	}
 	return backend.ToolSurface{
 		Count:         len(names),

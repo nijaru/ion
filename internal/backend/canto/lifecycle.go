@@ -66,7 +66,7 @@ func (b *Backend) Open(ctx context.Context) error {
 	registry := tool.NewRegistry()
 	b.tools = registry
 
-	registry.Register(tools.NewBash(cwd))
+	registry.Register(tools.NewBashWithEnvironment(cwd, b.executorEnvironmentPolicy()))
 	registry.Register(&tools.Read{FileTool: *tools.NewFileTool(cwd)})
 	registry.Register(&tools.Write{FileTool: *tools.NewFileTool(cwd)})
 	registry.Register(&tools.Edit{FileTool: *tools.NewFileTool(cwd)})
