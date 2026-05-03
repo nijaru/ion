@@ -34,9 +34,7 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 
 	switch command {
 	case "/help":
-		return m, func() tea.Msg {
-			return sessionHelpMsg{notice: helpText()}
-		}
+		return m, m.printHelp(helpText())
 
 	case "/primary":
 		if len(fields) != 1 {

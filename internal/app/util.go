@@ -64,7 +64,18 @@ func printLinesCmd(lines ...string) tea.Cmd {
 	if len(filtered) == 0 {
 		return nil
 	}
-	return tea.Printf("%s\n", strings.Join(filtered, "\n"))
+	if filtered[len(filtered)-1] != "" {
+		filtered = append(filtered, "")
+	}
+	cmds := make([]tea.Cmd, 0, len(filtered))
+	for _, line := range filtered {
+		if line == "" {
+			cmds = append(cmds, tea.Printf("\x1b[0m"))
+			continue
+		}
+		cmds = append(cmds, tea.Printf("%s", line))
+	}
+	return tea.Sequence(cmds...)
 }
 
 func printEntriesCmd(m Model, entries ...session.Entry) tea.Cmd {

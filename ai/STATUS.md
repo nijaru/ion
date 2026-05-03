@@ -36,6 +36,19 @@ Fast, lightweight terminal coding agent.
 
 ## Latest Evidence
 
+- `tk-g5sf` minimal-core cleanup is underway. The default model-visible
+  surface is now exactly eight tools (`bash`, `read`, `write`, `edit`,
+  `multi_edit`, `list`, `grep`, `glob`); stale `verify`, model-visible
+  `compact`, and memory command/backend hot-path scaffolding have been removed.
+- OpenRouter live smoke with `deepseek/deepseek-v4-flash` passed: real `bash`
+  tool call, persisted resume, provider-history capture, and resumed follow-up
+  with prior tool history in the request.
+- Tmux shell smoke now confirms `/help` and `/tools` print above the
+  progress/composer/footer shell, with one blank row before `Ready`.
+- Latest gates passed for the shell print fix:
+  `go test ./internal/app -count=1 -timeout 180s`,
+  `go test ./... -count=1 -timeout 300s`, and
+  `go test -race ./cmd/ion ./internal/app ./internal/backend/canto ./internal/backend/canto/tools ./internal/storage -count=1 -timeout 300s`.
 - `tk-4lty` is closed. It adds a storage-level portable bundle plus CLI surface:
   `--export-session <file>` and `--import-session <file>`.
 - The bundle format is versioned JSON and includes Ion `session_meta`, Canto
