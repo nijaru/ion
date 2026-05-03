@@ -3,7 +3,7 @@
 Fast, lightweight terminal coding agent.
 
 **Phase:** C2 closeout and context-survival rebaseline
-**Focus:** Post-C2 timestamp/fork closeout complete; Fedora live smoke deferred until host is reachable
+**Focus:** Post-C2 timestamp/fork closeout complete; command/fork reference design updated; Fedora live smoke deferred until host is reachable
 **Active task:** none
 **Updated:** 2026-05-03
 
@@ -56,6 +56,12 @@ Fast, lightweight terminal coding agent.
   non-workspace resources behind explicit `skill://`, `memory://`, or
   `artifact://` capability resolvers, and expose them only through host
   commands or opt-in narrow tools.
+- Command-surface direction after fresh Pi/Codex/Claude review: keep Ion small
+  and session-centric. Prioritize `/tree` and `/fork` readability, add `/clone`
+  only if current-branch duplication proves useful, add background job
+  visibility before any `/goal`, and keep `/goal` deferred until goals are real
+  durable workflow metadata with status, pause/resume, token/time accounting,
+  and recovery semantics.
 - Sandbox/trust direction: trust is workspace eligibility, mode is approval
   posture, sandbox is executor enforcement, and provider credentials are not
   subprocess credentials by default.
@@ -89,6 +95,13 @@ Fast, lightweight terminal coding agent.
   real `bash` tool call, persisted resume, resumed follow-up answered
   `continued`, and provider-history ordering was verified as
   `first_user=1 tool_call=2 tool_result=3 assistant=4 resume_user=5`.
+- Command/fork reference pass checked local Pi and Codex source plus current
+  Claude Code docs. Pi has `/tree`, `/fork`, and `/clone` but no `/goal`;
+  Codex has feature-gated `/goal`, `/fork`, and `/side`; Claude documents
+  `/branch` with `/fork` alias and experimental forked subagents. Canonical
+  updates landed in `ai/DESIGN.md`, `ai/PLAN.md`, `ai/DECISIONS.md`,
+  `ai/specs/tui-architecture.md`, `ai/specs/tools-and-modes.md`, and the
+  existing reference delta note.
 
 ## Latest Evidence
 

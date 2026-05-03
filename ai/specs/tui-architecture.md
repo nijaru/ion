@@ -114,6 +114,39 @@ Rules:
 - `summary` stays config-only
 - `fast` / `primary` are the only UI-exposed presets
 
+## Slash command surface
+
+Slash commands are a product control surface, not a general feature inventory.
+The command catalog is the only source for dispatch, help, picker rows,
+autocomplete, active-turn availability, and feature visibility.
+
+Default visible groups:
+
+- session: `/new`, `/clear`, `/resume`, `/session`, `/compact`
+- branching: `/tree`, `/fork`; add `/clone` only when the distinct "duplicate
+  current branch" workflow is implemented
+- runtime: `/provider`, `/model`, `/thinking`, `/primary`, `/fast`
+- display and inspection: `/settings`, `/tools`, `/cost`, `/status`
+- mode: `/mode`; old direct aliases may dispatch but should not dominate help
+
+Reference posture:
+
+- Pi supports `/tree`, `/fork`, and `/clone`; this is the closest fit for Ion's
+  session model.
+- Codex's `/goal` is feature-gated and depends on long-running task state.
+- Claude's `/fork` is now either a branch alias or an experimental forked
+  subagent, depending on configuration.
+
+Ion direction:
+
+- prioritize `/tree` and `/fork` readability before adding new command names
+- add `/clone` only if current-branch duplication is valuable in daily use
+- add background task commands before `/goal`
+- keep `/goal` deferred until goals are durable session/workflow metadata with
+  status, pause/resume, token/time accounting, and recovery behavior
+- keep future `/side` ephemeral and explicit rather than silently polluting the
+  main transcript
+
 ## Hotkey source of truth
 
 See `ai/specs/tui-hotkeys.md`.

@@ -10,7 +10,9 @@ then context-survival hardening: internal transcript timestamps, Fedora live
 smoke, and fork/session workflow audit.
 
 Next task: none active. Retry deferred Fedora C2 smoke when local-api is
-reachable, then choose the next roadmap slice.
+reachable, then move to the command/session workflow slice: `/tree` and `/fork`
+readability, decide whether `/clone` is worth implementing, then background job
+visibility before any `/goal` work.
 
 Flue, Pi, OpenAI Agents SDK, and Mendral stay in the plan as architecture
 constraints, not implementation scope. They are useful because they clarify
@@ -31,6 +33,7 @@ core is solid.
 | C1 | Refactor around a clear headless harness boundary | Done |
 | C2 | Refactor local execution around the executor boundary | Closeout |
 | C3 | Harden context survival and session workflows | Next |
+| C4 | Tighten command/workflow shell around branching and background jobs | Next after C3 |
 | I5 | Add eval-driven optimization and SOTA experiments | Deferred |
 
 ## I0: Dirty Baseline And Context Hygiene
@@ -378,6 +381,42 @@ Order:
 Deferred from C3: worktree-backed forks, richer tree UI, visible transcript
 timestamps, filesystem snapshots, memory injection, routing, and prompt/KV
 cache experiments.
+
+## C4: Command And Workflow Shell
+
+Status: planned.
+
+Goal: keep Ion's slash-command surface competitive without turning it into a
+large product control plane. Pi's `/tree`/`/fork`/`/clone`, Codex's
+feature-gated `/goal` and `/side`, and Claude's `/branch`/`/fork`/`/btw`/tasks
+surface all point at the same order: branch/session workflows first,
+background job visibility second, durable goals later.
+
+Order:
+
+1. Review `/tree` and `/fork` TUI text capture for readability, targeting, and
+   resume behavior.
+2. Decide whether `/clone` is needed as a distinct command:
+   - `/tree` navigates inside the current lineage
+   - `/fork` creates a new session from a selected earlier turn
+   - `/clone` duplicates the current active branch/session at the current point
+3. Add background job visibility design or implementation only after the
+   current `bash` foreground path remains green:
+   - command surface: `/tasks` or `/ps`, plus `/stop`
+   - model surface: keep one `bash` tool with explicit background actions if
+     implementation proceeds
+4. Keep `/goal` deferred until Ion has durable objective metadata, status,
+   pause/resume, token/time accounting, and recovery behavior.
+5. Keep `/side` deferred until ephemeral fork behavior can be implemented
+   without creating another transcript owner.
+
+Acceptance:
+
+- one command catalog still drives dispatch, help, picker rows, autocomplete,
+  active-turn availability, and feature visibility
+- no deferred command leaks into help/completion
+- branch/session commands have distinct user-facing semantics
+- no `/goal` prompt-only placeholder
 
 ## I5+ Deferred Work
 

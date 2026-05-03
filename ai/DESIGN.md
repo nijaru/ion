@@ -177,6 +177,38 @@ Important boundaries:
 - `/settings` is only durable settings. Provider/model/session identity belongs
   in footer/status, `/session`, `/provider`, `/model`, and `/thinking`.
 
+### Command Surface
+
+Ion's command surface should stay small, conventional, and session-centric.
+Pi, Codex, and Claude Code all point at the same useful split:
+
+- core session control: `/new`, `/clear`, `/resume`, `/session`, `/compact`
+- branch/session workflows: `/tree`, `/fork`, and later `/clone` if the product
+  needs a distinct "duplicate current branch" command
+- runtime controls: `/provider`, `/model`, `/thinking`, `/primary`, `/fast`
+- display/inspection: `/settings`, `/tools`, `/cost`, `/status`
+- mode/debug surfaces: `/mode` plus hidden aliases where useful
+
+`/tree`, `/fork`, and `/clone` should have distinct meanings:
+
+- `/tree` navigates branches inside the current session lineage.
+- `/fork` creates a new session from a selected earlier turn.
+- `/clone` duplicates the current active branch/session at the current point.
+
+Do not add `/goal` yet. Codex's feature-gated `/goal` is a good reference for
+long-running task objectives, but Ion needs durable background task state,
+pause/resume status, token/time accounting, and a compact status/progress
+surface before a goal command would be more than prompt text. Background job
+visibility (`/tasks` or `/ps` plus `/stop`) is the prerequisite command layer.
+
+Later `/side` can be an ephemeral fork for quick alternate-path work, closer to
+Codex `/side` and Claude `/btw`/forked subagent behavior. It should not become a
+second transcript writer or a hidden subagent system.
+
+One command catalog remains the source for dispatch, help, picker rows,
+autocomplete, active-turn availability, and feature visibility. Deferred
+commands should not leak into help or completion.
+
 Scriptable CLI is first-class:
 
 - `-p` / print mode

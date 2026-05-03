@@ -20,8 +20,20 @@ Distilled architectural principles plus recent decision log.
 - Commit each coherent green slice; do not push without explicit approval.
 - Ion is a host over a harness. Canto should expose the headless runtime
   facade; Ion should supply product policy and presentation.
+- Session branching and background job visibility come before durable goal
+  commands.
 
 ## Recent Log
+
+### 2026-05-03 - Goal waits behind jobs and workflow state
+
+Pi has no built-in `/goal`; Codex has a feature-gated `/goal` for long-running
+objectives; Claude's newer command surface emphasizes `/branch`/`/fork`,
+`/btw`, and background tasks. Ion should not add a prompt-only `/goal`.
+Branching commands (`/tree`, `/fork`, possible `/clone`) and background job
+visibility (`/tasks` or `/ps`, plus `/stop`) are the next command primitives.
+A future `/goal` needs durable session/workflow metadata, status,
+pause/resume, token/time accounting, and recovery semantics.
 
 ### 2026-05-03 - Transcript timestamps are internal metadata
 

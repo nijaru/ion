@@ -229,6 +229,15 @@ Acceptance criteria before implementation is considered done:
 - TUI/replay rows use the shared tool display formatter and do not dump routine
   output by default
 
+### Relationship to `/goal`
+
+Long-running task goals need background/job substrate first. Codex's `/goal`
+shape is useful as a later reference, but Ion should not add a goal command
+until the product can track objective status, pause/resume, token/time usage,
+and recovery across resume. The first command layer for this area is background
+visibility (`/tasks` or `/ps`) and cancellation (`/stop`), not model-visible
+goal text.
+
 ### Design principles
 
 - Modes are **permission postures**, not workspace trust decisions
