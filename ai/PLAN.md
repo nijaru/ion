@@ -1,15 +1,14 @@
 # Ion Roadmap
 
-Updated: 2026-05-02
+Updated: 2026-05-03
 
 ## Current Focus
 
-The active priority is not more feature parity. It is a minimal-core
-consolidation pass: make the default native coding loop clean, small, and
-boringly reliable before continuing broad harness or advanced-agent work.
+The active priority is not more feature parity. It is the harness-boundary
+refactor after the minimal-core consolidation pass: make Ion a thin product
+host over one Canto runtime/session stream while keeping product policy in Ion.
 
-Active task: `tk-g5sf` - Ion minimal core consolidation pass.
-Blocked next task: `tk-ezms` - align runtime boundary to Canto harness facade.
+Active task: `tk-ezms` - align runtime boundary to Canto harness facade.
 
 Flue, Pi, OpenAI Agents SDK, and Mendral stay in the plan as architecture
 constraints, not implementation scope. They are useful because they clarify
@@ -26,8 +25,8 @@ core is solid.
 | I2 | Polish minimal TUI/CLI shell for daily use | Done |
 | I3 | Restore safety, trust, sandbox, and policy table stakes | Implemented, not active |
 | I4 | Add advanced agent features: subagents, memory, skills, routing, ACP | Implemented/deferred, not active |
-| C0 | Minimal native core consolidation | Active |
-| C1 | Refactor around a clear headless harness boundary | Blocked by C0 |
+| C0 | Minimal native core consolidation | Done |
+| C1 | Refactor around a clear headless harness boundary | Active |
 | I5 | Add eval-driven optimization and SOTA experiments | Deferred |
 
 ## I0: Dirty Baseline And Context Hygiene
@@ -223,7 +222,7 @@ ACP bridge correctness is no longer the active blocker.
 
 ## C0: Minimal Native Core Consolidation
 
-Status: active.
+Status: done.
 
 Goal: make the default path easy to explain and hard to break:
 
@@ -262,7 +261,7 @@ Acceptance:
 
 ## C1: Harness Boundary Refactor
 
-Status: blocked by C0.
+Status: active.
 
 Motivation: Flue is not a TUI replacement, but its `init -> agent -> session`
 shape, Pi's small core, OpenAI's model-native harness direction, and Mendral's
@@ -271,10 +270,16 @@ runtime facade.
 
 Order:
 
-1. Canto `canto-2vxb` - review and design the framework harness facade:
+1. Done - Canto `canto-2vxb` - review and design the framework harness facade:
    agent/runtime/session/session-env/tool/command/sandbox/interrupt boundaries.
-2. Ion `tk-ezms` - align `CantoBackend` to that facade and keep Ion product
-   policy in Ion.
+2. Active - Ion `tk-ezms` - align `CantoBackend` to that facade and keep Ion
+   product policy in Ion:
+   - Canto `e880c1c` imported.
+   - `Open()` constructs a Canto `Harness`.
+   - `SubmitTurn()` consumes the harness `PromptStream` stream instead of
+     maintaining separate watch/send goroutines.
+   - Next: remove or isolate remaining direct runner/agent ownership and smoke
+     the Fedora live path.
 3. Ion `tk-0r23` - design future virtual tool namespaces for skills/memory
    without bloating the model-facing tool surface.
 4. Ion `tk-vv4y` - refresh sandbox/trust design around executor and credential

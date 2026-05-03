@@ -1,7 +1,7 @@
 # AI Context Index
 
-- [STATUS.md](STATUS.md) - current minimal-core phase, active task, latest evidence, and next action
-- [PLAN.md](PLAN.md) - active Ion roadmap, minimal-core consolidation, and harness refactor gate
+- [STATUS.md](STATUS.md) - current harness-boundary phase, active task, latest evidence, and next action
+- [PLAN.md](PLAN.md) - active Ion roadmap, completed minimal-core consolidation, and harness refactor gate
 - [DESIGN.md](DESIGN.md) - product architecture, Ion/Canto ownership, minimal core, and harness boundary
 - [DECISIONS.md](DECISIONS.md) - distilled principles plus recent decision log
 - [Tools and Modes](specs/tools-and-modes.md) - canonical native tool surface and mode behavior

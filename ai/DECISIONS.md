@@ -23,6 +23,14 @@ Distilled architectural principles plus recent decision log.
 
 ## Recent Log
 
+### 2026-05-03 - Canto harness stores remain host-owned by default
+
+Ion passes a long-lived session store into Canto, so the Canto harness must not
+close externally supplied stores on `Harness.Close`. Stores created by
+`Ephemeral()` remain harness-owned. Ion imports Canto `e880c1c` and now drives
+native turns through the harness `PromptStream` stream rather than owning a
+separate watch/send pairing in `CantoBackend`.
+
 ### 2026-05-02 - Flue and Mendral constrain, not expand, the core pass
 
 Flue's applicable lesson is the simple headless shape: runtime, session,

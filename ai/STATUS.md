@@ -5,7 +5,7 @@ Fast, lightweight terminal coding agent.
 **Phase:** Runtime boundary cleanup
 **Focus:** Make `CantoBackend` a thin product adapter over the native runtime boundary
 **Active task:** `tk-ezms` - Ion runtime boundary alignment
-**Updated:** 2026-05-02
+**Updated:** 2026-05-03
 
 ## Current Truth
 
@@ -30,12 +30,25 @@ Fast, lightweight terminal coding agent.
 - Flue and Mendral are applicable as boundary checks, not as feature requests:
   keep the runtime/session/tool boundary explicit, keep state outside
   disposable execution, and preserve a small model-visible tool surface.
-- Next work is `tk-ezms`: align Ion's runtime boundary to the Canto harness
-  facade. If that exposes missing framework primitives, fix Canto upstream
-  first; otherwise keep the refactor Ion-local.
+- Current work is `tk-ezms`: align Ion's runtime boundary to the Canto harness
+  facade. Concrete framework defects are fixed upstream in Canto first, then
+  imported into Ion.
 
 ## Latest Evidence
 
+- Canto `e880c1c` fixes the harness ownership boundary: `Harness.Close` closes
+  the runner and only closes a session store the harness created itself. Ion
+  imports that revision.
+- `CantoBackend` now builds a Canto `Harness` in `Open()` and consumes the
+  harness `PromptStream` event stream in `SubmitTurn()` instead of manually
+  pairing `Runner.Watch` with `SendStream` in separate goroutines.
+- Caller-context cancellation now settles the Ion host turn with a single
+  `TurnFinished` even when cancellation stops the stream before a durable
+  terminal Canto event reaches the host.
+- Latest harness-boundary gates passed:
+  `go test ./internal/backend/canto -count=1`,
+  `go test ./... -count=1 -timeout 300s`, and
+  `go test -race ./cmd/ion ./internal/app ./internal/backend/canto ./internal/backend/canto/tools ./internal/storage -count=1 -timeout 300s`.
 - `tk-g5sf` minimal-core cleanup is closed. The default model-visible
   surface is now exactly eight tools (`bash`, `read`, `write`, `edit`,
   `multi_edit`, `list`, `grep`, `glob`); stale `verify`, model-visible
@@ -192,10 +205,9 @@ Fast, lightweight terminal coding agent.
 
 ## Next Action
 
-1. Execute `tk-g5sf`: audit the default native hot path from startup through
-   replay, identify stale/default-off clutter, and remove or relocate only what
-   simplifies the minimal core.
-2. Re-run deterministic, race, tmux, and Fedora live gates for the minimal
-   path before returning to Canto `canto-2vxb` or Ion `tk-ezms`.
+1. Finish `tk-ezms`: inspect the remaining `CantoBackend` fields and files for
+   direct runner/agent ownership that can be removed or clearly isolated behind
+   subagent/compaction boundaries.
+2. Run a tmux smoke and Fedora live smoke for the harness-backed path.
 3. Keep one green slice per commit; do not expand the model-facing tool surface
    or add new product features during this pass.
