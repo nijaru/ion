@@ -5222,6 +5222,24 @@ func TestSessionErrorClearsQueuedTurnsAndSetsError(t *testing.T) {
 	}
 }
 
+func TestLocalErrorPrintsWithoutProgressError(t *testing.T) {
+	model := readyModel(t)
+
+	next, cmd := model.Update(localErrorMsg{err: errors.New("unknown command")})
+	model = next.(Model)
+
+	if cmd == nil {
+		t.Fatal("expected local error print command")
+	}
+	if model.Progress.Mode == stateError || model.Progress.LastError != "" {
+		t.Fatalf(
+			"progress after local error = %v/%q, want no live error",
+			model.Progress.Mode,
+			model.Progress.LastError,
+		)
+	}
+}
+
 func TestSessionErrorClassifiesProviderRateLimit(t *testing.T) {
 	storageSess := &stubStorageSession{}
 	model := readyModel(t)
