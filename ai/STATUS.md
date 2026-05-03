@@ -66,6 +66,11 @@ Fast, lightweight terminal coding agent.
   `go test -race ./cmd/ion ./internal/app ./internal/backend/canto ./internal/backend/canto/tools ./internal/storage -count=1 -timeout 300s`.
   Tmux `/tools` smoke showed startup `Env inherit` and `/tools` `env inherit`
   with no environment values.
+- Final C2 provider smoke: Fedora `http://fedora:8080/v1/models` timed out
+  from this machine. OpenRouter `deepseek/deepseek-v4-flash` live smoke passed:
+  real `bash` tool call, persisted resume, resumed follow-up answered
+  `continued`, and provider-history ordering was verified as
+  `first_user=1 tool_call=2 tool_result=3 assistant=4 resume_user=5`.
 
 ## Latest Evidence
 
