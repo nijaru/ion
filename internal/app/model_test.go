@@ -74,7 +74,10 @@ func (b stubBackend) ContextLimit() int {
 }
 
 func (b stubBackend) ToolSurface() backend.ToolSurface {
-	if b.surface.Count != 0 || b.surface.Sandbox != "" || len(b.surface.Names) > 0 {
+	if b.surface.Count != 0 ||
+		b.surface.Sandbox != "" ||
+		b.surface.Environment != "" ||
+		len(b.surface.Names) > 0 {
 		return b.surface
 	}
 	return backend.ToolSurface{
@@ -835,6 +838,23 @@ func TestApprovalRequestRedactsSensitiveDisplayFields(t *testing.T) {
 	}
 }
 
+func TestApprovalPromptRendersExecutorEnvironment(t *testing.T) {
+	model := readyModel(t)
+	model.Approval.Pending = &session.ApprovalRequest{
+		RequestID:   "req-1",
+		Description: "run command",
+		ToolName:    "bash",
+		Args:        `{"command":"go test ./..."}`,
+		Environment: "inherit",
+	}
+	model.Progress.Mode = stateApproval
+
+	view := ansi.Strip(model.View().Content)
+	if !strings.Contains(view, "Environment: inherit") {
+		t.Fatalf("view missing environment posture:\n%s", view)
+	}
+}
+
 func TestApprovalNotificationSendsSlackWebhookAndAudits(t *testing.T) {
 	var payload string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -883,6 +903,19 @@ func TestApprovalNotificationSendsSlackWebhookAndAudits(t *testing.T) {
 		if !strings.Contains(payload, want) {
 			t.Fatalf("payload missing %q: %s", want, payload)
 		}
+	}
+}
+
+func TestApprovalNotificationIncludesEnvironment(t *testing.T) {
+	req := session.ApprovalRequest{
+		RequestID:   "req-1",
+		ToolName:    "bash",
+		Description: "Tool: bash",
+		Environment: "inherit",
+	}
+	got := approvalNotificationText(req, "/repo", "slack #ai-alerts")
+	if !strings.Contains(got, "Environment: inherit") {
+		t.Fatalf("notification missing environment posture:\n%s", got)
 	}
 }
 
@@ -3919,6 +3952,18 @@ func TestToolsCommandReportsToolSurface(t *testing.T) {
 	_, cmd := model.handleCommand("/tools")
 	if cmd == nil {
 		t.Fatal("tools command returned nil cmd")
+	}
+}
+
+func TestToolSurfaceSummaryIncludesEnvironment(t *testing.T) {
+	got := toolSurfaceSummary(backend.ToolSurface{
+		Count:       2,
+		Names:       []string{"bash", "read"},
+		Sandbox:     "off",
+		Environment: "inherit",
+	})
+	if !strings.Contains(got, "sandbox off") || !strings.Contains(got, "env inherit") {
+		t.Fatalf("summary = %q, want sandbox and environment posture", got)
 	}
 }
 
