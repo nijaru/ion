@@ -3,8 +3,8 @@
 Fast, lightweight terminal coding agent.
 
 **Phase:** C4 shell/session workflow
-**Focus:** `ai/` context pruned; next product wedge is background job visibility before `/goal`
-**Active task:** none
+**Focus:** minimal harness acceptance and simplification; no speculative commands or feature expansion
+**Active task:** `tk-g34g` — Minimal harness: acceptance review and simplification pass
 **Updated:** 2026-05-03
 
 ## Current Truth
@@ -57,11 +57,10 @@ Fast, lightweight terminal coding agent.
   `artifact://` capability resolvers, and expose them only through host
   commands or opt-in narrow tools.
 - Command-surface direction after fresh Pi/Codex/Claude review: keep Ion small
-  and session-centric. Prioritize `/tree` and `/fork` readability, add `/clone`
-  only if current-branch duplication proves useful, add background job
-  visibility before any `/goal`, and keep `/goal` deferred until goals are real
-  durable workflow metadata with status, pause/resume, token/time accounting,
-  and recovery semantics.
+  and session-centric. `/tree` and current-point `/fork [label]` are enough for
+  now; `/clone`, `/goal`, `/side`, background-job commands, and bash mode are
+  deferred until daily use or reference-agent evidence proves they are worth
+  their maintenance cost.
 - Sandbox/trust direction: trust is workspace eligibility, mode is approval
   posture, sandbox is executor enforcement, and provider credentials are not
   subprocess credentials by default.
@@ -114,6 +113,9 @@ Fast, lightweight terminal coding agent.
   small set of active topic/evidence docs. Old one-off plans, duplicate design
   docs, completed sprint notes, archive specs, and stale review files were
   deleted rather than re-archived.
+- Next priority is not adding commands. Run a minimal-harness acceptance pass:
+  verify the default path is small, reliable, and easy to maintain; remove or
+  document concrete complexity only when it hurts that baseline.
 
 ## Latest Evidence
 

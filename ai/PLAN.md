@@ -9,11 +9,13 @@ exposes a concrete defect. C4 session branching is reviewed: `/tree` and
 current-point `/fork [label]` are good enough for the current shell, and
 `/clone` stays deferred while it would only duplicate `/fork`.
 
-Current task: prune `ai/` so future sessions start from root files, canonical
-specs, and a small set of active evidence docs.
+Current task: `tk-g34g` minimal harness acceptance and simplification pass.
 
-Next product wedge after context cleanup: background job visibility design for
-long-running bash/workflow state before any `/goal` command.
+The next priority is not adding commands. Treat background job commands, bash
+mode, `/goal`, `/side`, richer fork UI, and `/clone` as deferred references
+until daily use or reference-agent evidence proves they are worth the
+maintenance cost. The near-term work is to verify and simplify the default
+native harness path.
 
 Flue, Pi, OpenAI Agents SDK, and Mendral stay in the plan as architecture
 constraints, not implementation scope. They are useful because they clarify
@@ -34,7 +36,7 @@ core is solid.
 | C1 | Refactor around a clear headless harness boundary | Done |
 | C2 | Refactor local execution around the executor boundary | Done |
 | C3 | Harden context survival and session workflows | Done; Fedora smoke deferred |
-| C4 | Tighten command/workflow shell around branching and background jobs | Active |
+| C4 | Tighten command/workflow shell without expanding the surface | Active |
 | I5 | Add eval-driven optimization and SOTA experiments | Deferred |
 
 ## I0: Dirty Baseline And Context Hygiene
@@ -387,11 +389,11 @@ cache experiments.
 
 Status: active.
 
-Goal: keep Ion's slash-command surface competitive without turning it into a
-large product control plane. Pi's `/tree`/`/fork`/`/clone`, Codex's
-feature-gated `/goal` and `/side`, and Claude's `/branch`/`/fork`/`/btw`/tasks
-surface all point at the same order: branch/session workflows first,
-background job visibility second, durable goals later.
+Goal: keep Ion's shell competitive by staying minimal. Pi, Codex, Claude Code,
+and Droid are references for proven workflow patterns, not a backlog to copy.
+Every command or mode adds maintenance cost, help/completion surface, state
+interactions, and test matrix. Add only when the workflow is proven and the
+implementation fits the core harness boundary.
 
 Order:
 
@@ -403,14 +405,24 @@ Order:
      the current point and switches into the labeled child
    - earlier-turn forking needs a selector before it is exposed
    - `/clone` stays deferred while it would only duplicate current `/fork`
-3. Next - add background job visibility design or implementation only after the
-   current `bash` foreground path remains green:
-   - command surface: `/tasks` or `/ps`, plus `/stop`
-   - model surface: keep one `bash` tool with explicit background actions if
-     implementation proceeds
-4. Keep `/goal` deferred until Ion has durable objective metadata, status,
+3. Next - `tk-g34g` minimal harness acceptance:
+   - review default TUI/CLI/native path for unnecessary command or feature
+     surfaces
+   - verify default tools/commands/settings are small and proven
+   - remove or defer speculative scaffolding only when the simplification is
+     concrete and covered by tests
+4. Deferred - background job visibility:
+   - possible command surface: `/tasks` or `/ps`, plus `/stop`
+   - possible model surface: keep one `bash` tool with explicit background
+     actions if implementation proceeds
+   - do not start until there is clear daily-use need
+5. Deferred - bash mode:
+   - low-priority TUI idea for direct shell entry
+   - evaluate against proven agents first; do not implement as a command-surface
+     experiment
+6. Keep `/goal` deferred until Ion has durable objective metadata, status,
    pause/resume, token/time accounting, and recovery behavior.
-5. Keep `/side` deferred until ephemeral fork behavior can be implemented
+7. Keep `/side` deferred until ephemeral fork behavior can be implemented
    without creating another transcript owner.
 
 Acceptance:
