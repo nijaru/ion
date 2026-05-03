@@ -10,6 +10,7 @@
 - [Swarm Mode](specs/swarm-mode-and-inline-subagents.md) - inline subagent display and deferred operator-view boundary
 - [System Prompt](specs/system-prompt.md) - prompt-budget and model-facing tool guidance
 - [Status and Config](specs/status-and-config.md) - config, state, status line, and model metadata rules
+- [Security Policy](specs/security-policy.md) - policy, executor, environment, and secret boundaries
 - [TUI Architecture](specs/tui-architecture.md) - TUI shell and rendering expectations
 - [Core Loop Review Tracker](review/core-loop-review-tracker-2026-04-28.md) - P1 review evidence and remaining notes
 - [Core Loop Contract](review/core-loop-contract.md) - submit/stream/tool/cancel/error/persist/replay invariants

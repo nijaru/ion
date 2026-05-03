@@ -67,8 +67,55 @@ Security responsibilities:
 - remote sandbox providers must return bounded stdout/stderr and an exit status
   through the same tool-result shape as local execution
 
-This is design direction, not a new default feature. The current local `bash`
-implementation remains the active path until an executor refactor is scheduled.
+This is design direction, not a new default feature. The local `bash` executor
+remains the active path; remote executors, environment filtering, and secret
+injection are later hardening slices.
+
+### Environment policy
+
+Current local bash behavior inherits the Ion process environment. Do not change
+that implicitly in a cleanup refactor: common developer commands often depend
+on `PATH`, language/toolchain variables, SSH agent sockets, cloud profile
+selectors, and editor/runtime configuration.
+
+Target staged policy:
+
+1. Keep default `inherit` behavior while the executor boundary settles.
+2. Add visibility: approval previews and `/tools` should be able to report the
+   environment policy without listing values.
+3. Add explicit modes only after tests and UX are clear:
+
+```toml
+tool_env = "inherit" # inherit | inherit_without_provider_keys | minimal | allowlist
+tool_env_allow = ["PATH", "HOME", "USER", "SHELL", "TMPDIR", "LANG", "LC_ALL"]
+```
+
+Provider credentials should be denied by default once
+`inherit_without_provider_keys` becomes the normal policy. Use the provider
+catalog as the denylist source (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`,
+`OPENROUTER_API_KEY`, custom `auth_env_var`, and provider alternates).
+
+Project files cannot weaken the environment policy. Only user-global config can
+change it.
+
+### Tool secrets
+
+Tool secrets are not the same as provider credentials.
+
+Future shape:
+
+- user-global config declares named secrets by source (`env`, keychain, or
+  external command later)
+- tool calls request secret names, not raw values
+- Ion prompts for secret injection with source name, target tool, and scope
+- injected values are registered with the privacy redactor for approval text,
+  tool display, logs, and provider-visible tool results
+- audit records include secret names and scopes, never secret values
+- remote executors receive only requested secret names, materialized on the
+  executor side when possible
+
+Do not expose a model-visible secret field on `bash` until this policy and
+redaction path are implemented.
 
 ## Deferred Work
 

@@ -242,8 +242,14 @@ Sandbox/trust direction:
 - Mode is per-session approval posture.
 - Sandbox is executor enforcement and must stay visible in startup, footer, and
   `/tools`.
-- Provider credentials are not subprocess credentials. Tool credentials require
-  explicit secret injection, redaction, and audit.
+- Local bash currently inherits Ion's process environment. Keep that behavior
+  until an explicit environment policy is implemented, because silent
+  allowlisting would break normal developer commands.
+- Provider credentials are not subprocess credentials. The next hardening
+  target is visible environment posture first, then an explicit
+  `inherit_without_provider_keys` mode based on the provider catalog.
+- Tool credentials require named secret injection, approval, redaction, and
+  audit before any model-visible secret field exists.
 - Remote sandboxes or `just_bash`-style executors should plug into the executor
   boundary without creating another agent loop or transcript writer.
 

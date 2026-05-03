@@ -442,14 +442,27 @@ Rules:
 
 Current implementation note:
 
-- Ion's local `bash` tool still shells out directly and uses `ION_SANDBOX` to
-  plan plain, Seatbelt, or bubblewrap execution.
-- The next implementation hardening should move shell execution behind a local
-  executor object that can later share the same contract with remote/container
-  executors.
-- Environment allowlisting and secret injection are future hardening work.
-  Until then, sandbox posture must stay visible and AUTO must not imply
-  isolation when `Sandbox: off`.
+- Ion's local `bash` tool now delegates process planning/execution to a local
+  executor object. The model-facing `bash` schema remains unchanged.
+- The executor preserves the current subprocess environment behavior for now:
+  local bash inherits Ion's process environment. Do not change this implicitly
+  during cleanup, because common developer commands depend on inherited
+  toolchain, shell, SSH agent, and cloud-profile variables.
+- Environment policy is a staged hardening surface:
+  - current default: `inherit`
+  - next visibility slice: show the active environment posture in approval
+    previews and `/tools` without listing values
+  - later explicit modes: `inherit_without_provider_keys`, `minimal`, and
+    `allowlist`
+- Provider credentials are not tool credentials. Once
+  `inherit_without_provider_keys` becomes the normal policy, provider API-key
+  variables from the provider catalog are denied to subprocesses by default.
+- Tool secrets require an explicit named-secret injection path with user
+  approval, display/log redaction, and audit records that include names and
+  scopes but never values.
+- Do not add a model-visible secret field to `bash` until the explicit
+  injection and redaction path exists. Until then, sandbox posture must stay
+  visible and AUTO must not imply isolation when `Sandbox: off`.
 
 ## Escalation
 

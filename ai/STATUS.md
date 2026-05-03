@@ -2,9 +2,9 @@
 
 Fast, lightweight terminal coding agent.
 
-**Phase:** Harness boundary cleanup
-**Focus:** Keep future skills/memory/sandbox extensions behind explicit capability boundaries
-**Active task:** none; next ready task is `tk-fhds` - executor env and secret policy
+**Phase:** Local executor boundary cleanup
+**Focus:** Make execution, sandbox, environment, and secret handling explicit without expanding the default tool surface
+**Active task:** none; next ready task is `tk-k5yp` - expose executor environment posture
 **Updated:** 2026-05-03
 
 ## Current Truth
@@ -46,6 +46,10 @@ Fast, lightweight terminal coding agent.
 - `tk-2g2e` is closed. Local bash process execution now sits behind an
   Ion-local executor object while preserving the existing model-facing `bash`
   schema and local sandbox behavior.
+- `tk-fhds` is closed. Current design direction keeps local bash environment
+  inheritance unchanged until Ion exposes an explicit environment policy.
+  Visibility comes first; provider-key stripping and named tool-secret
+  injection are future hardening slices.
 - Latest C2 gates passed:
   `go test ./internal/backend/canto/tools -count=1`,
   `go test ./... -count=1 -timeout 300s`, and
@@ -232,5 +236,5 @@ Fast, lightweight terminal coding agent.
 
 ## Next Action
 
-1. Start `tk-fhds`: design executor environment and secret-injection policy
-   before changing subprocess environment behavior.
+1. Start `tk-k5yp`: expose executor environment posture in host surfaces before
+   changing subprocess environment behavior.

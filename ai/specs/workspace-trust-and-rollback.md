@@ -86,15 +86,19 @@ Sandbox enforcement is separate from workspace trust and permission mode:
 
 Boundary direction:
 
-- local shell execution should sit behind an executor object that owns process
+- local shell execution sits behind an executor object that owns process
   start, cancellation, process-group cleanup, streaming, and output limits
 - Seatbelt, bubblewrap, containers, remote sandboxes, and `just_bash`-style
   executors are implementations of that executor boundary, not separate agent
   loops
-- provider credentials are outside the executor environment by default
+- local bash currently inherits Ion's process environment; keep that behavior
+  until environment posture is visible and an explicit policy exists
+- provider credentials are not tool credentials and should move behind a
+  provider-key-stripping environment policy before becoming default-denied
 - tool credentials require explicit secret injection, redaction, and audit
 - AUTO mode is only an approval shortcut; it is not a sandbox guarantee
 
-The next sandbox slice should harden bash/external tool execution with real OS
-boundaries where available, make the active sandbox visible, and keep AUTO
-behavior from feeling safe unless the enforcement layer is actually active.
+The next sandbox slice should expose the active environment posture before
+changing subprocess environment behavior. Later slices can harden local
+execution with provider-key stripping, allowlists, and stronger OS or remote
+boundaries where available.
