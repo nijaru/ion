@@ -103,20 +103,51 @@ change it.
 
 Tool secrets are not the same as provider credentials.
 
-Future shape:
+Design target:
 
-- user-global config declares named secrets by source (`env`, keychain, or
-  external command later)
+- user-global config declares named secrets; project files cannot declare,
+  weaken, or remap secrets
+- supported source for the first implementation: environment variable by name
+- later sources: keychain and external commands, only after the env-source path
+  has audit and redaction coverage
+- each secret has a stable name, source, optional tool allowlist, and optional
+  prompt label
 - tool calls request secret names, not raw values
-- Ion prompts for secret injection with source name, target tool, and scope
-- injected values are registered with the privacy redactor for approval text,
-  tool display, logs, and provider-visible tool results
-- audit records include secret names and scopes, never secret values
-- remote executors receive only requested secret names, materialized on the
-  executor side when possible
+- Ion prompts before injecting a secret into a tool call; AUTO mode may
+  auto-approve the tool itself, but secret injection still requires an explicit
+  approval policy before it can skip prompting
+- approval text shows secret name, source kind, target tool, destination
+  variable name, and scope; it never shows secret values
+- injected values are registered with the privacy redactor before any
+  transcript, approval notification, tool display, durable log, or
+  provider-visible tool result can contain them
+- audit records include secret names, source kind, target tool, destination,
+  scope, and outcome; never values
+- remote executors receive requested secret names and destination metadata, not
+  raw values, when the remote backend can materialize them itself
 
-Do not expose a model-visible secret field on `bash` until this policy and
-redaction path are implemented.
+Candidate user-global config shape:
+
+```toml
+[tool_secrets.deploy_token]
+source = "env"
+env = "DEPLOY_TOKEN"
+tools = ["bash"]
+label = "Deployment token"
+```
+
+Candidate model-visible request shape, only after the policy/redaction/audit
+path exists:
+
+```json
+{
+  "command": "deploy.sh",
+  "secrets": [{"name": "deploy_token", "env": "DEPLOY_TOKEN"}]
+}
+```
+
+Do not expose this `secrets` field on `bash` until the approval, redaction,
+audit, and remote-executor behavior above are implemented.
 
 ## Deferred Work
 

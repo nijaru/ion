@@ -4,7 +4,7 @@ Fast, lightweight terminal coding agent.
 
 **Phase:** Local executor boundary cleanup
 **Focus:** Make execution, sandbox, environment, and secret handling explicit without expanding the default tool surface
-**Active task:** none; next ready task is `tk-lux7` - design explicit tool secret injection
+**Active task:** none
 **Updated:** 2026-05-03
 
 ## Current Truth
@@ -57,6 +57,9 @@ Fast, lightweight terminal coding agent.
 - `tk-kxpa` is closed. `tool_env = "inherit_without_provider_keys"` preserves
   inherited developer env while stripping provider API-key variables from the
   provider catalog for local bash.
+- `tk-lux7` is closed. Tool secrets are specified as named user-global
+  injections with approval, redaction, audit, and remote-executor behavior
+  defined before any model-visible `bash.secrets` field exists.
 - Latest C2 gates passed:
   focused command/app/backend/tool tests for environment posture,
   `go test ./... -count=1 -timeout 300s`, and
@@ -245,5 +248,6 @@ Fast, lightweight terminal coding agent.
 
 ## Next Action
 
-1. Start `tk-lux7`: design explicit tool-secret injection before adding any
-   model-visible secret field or executor secret implementation.
+1. Run a final C2 smoke when the provider target is available, then reassess
+   whether the next work should be a small C2 implementation slice or a broader
+   Canto/Ion review.

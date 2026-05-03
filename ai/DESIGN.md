@@ -251,6 +251,8 @@ Sandbox/trust direction:
   the provider catalog.
 - Tool credentials require named secret injection, approval, redaction, and
   audit before any model-visible secret field exists.
+- Named tool secrets live in user-global config, are requested by name, and
+  must be approved, redacted, and audited before any executor receives them.
 - Remote sandboxes or `just_bash`-style executors should plug into the executor
   boundary without creating another agent loop or transcript writer.
 

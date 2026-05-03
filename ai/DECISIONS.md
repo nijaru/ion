@@ -23,6 +23,15 @@ Distilled architectural principles plus recent decision log.
 
 ## Recent Log
 
+### 2026-05-03 - Tool secrets are named injections
+
+Tool secrets are not provider credentials and are not raw model-visible values.
+The future shape is user-global named secrets, first sourced from environment
+variables, requested by name in tool calls only after implementation, approved
+with source/target/scope visible, registered with the redactor before use, and
+audited by name and scope without values. Do not add a `bash.secrets` field
+until that whole approval/redaction/audit path exists.
+
 ### 2026-05-03 - Executor env hardening must be explicit
 
 Local bash keeps inheriting Ion's process environment by default. This avoids
