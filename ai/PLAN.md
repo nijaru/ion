@@ -8,7 +8,7 @@ The active priority is not more feature parity. It is the harness-boundary
 refactor after the minimal-core consolidation pass: make Ion a thin product
 host over one Canto runtime/session stream while keeping product policy in Ion.
 
-Next task: `tk-vv4y` - refresh sandbox/trust boundary design.
+Next task: local executor boundary implementation.
 
 Flue, Pi, OpenAI Agents SDK, and Mendral stay in the plan as architecture
 constraints, not implementation scope. They are useful because they clarify
@@ -26,7 +26,8 @@ core is solid.
 | I3 | Restore safety, trust, sandbox, and policy table stakes | Implemented, not active |
 | I4 | Add advanced agent features: subagents, memory, skills, routing, ACP | Implemented/deferred, not active |
 | C0 | Minimal native core consolidation | Done |
-| C1 | Refactor around a clear headless harness boundary | Active: follow-up designs |
+| C1 | Refactor around a clear headless harness boundary | Done |
+| C2 | Refactor local execution around the executor boundary | Next |
 | I5 | Add eval-driven optimization and SOTA experiments | Deferred |
 
 ## I0: Dirty Baseline And Context Hygiene
@@ -288,8 +289,39 @@ Order:
    - default workspace tools do not read or write those namespaces
    - model-visible access is opt-in and narrow (`read_skill` today; possible
      shared `read_resource`/`search_resource` later if evidence justifies it)
-4. Active next - Ion `tk-vv4y` - refresh sandbox/trust design around executor
-   and credential boundaries.
+4. Done - Ion `tk-vv4y` - refresh sandbox/trust design around executor and
+   credential boundaries:
+   - trust is workspace eligibility
+   - mode is approval posture
+   - sandbox is executor enforcement
+   - provider credentials stay out of tool subprocesses by default
+
+## C2: Local Executor Boundary
+
+Status: next.
+
+Goal: make local tool execution match the design without adding features:
+
+```text
+tool request -> policy/mode/trust -> executor -> sandbox -> process
+```
+
+First slice:
+
+1. Move local bash process planning/execution behind a small Ion executor
+   object.
+2. Preserve current `bash` schema, sandbox modes, streaming, truncation,
+   cancellation, and process-group cleanup.
+3. Keep provider credentials and environment handling unchanged until a
+   separate secret/env hardening task is explicit.
+
+Acceptance:
+
+- no new model-visible tools
+- no remote sandbox implementation
+- no new permission mode
+- existing bash/sandbox tests still pass
+- focused tool tests, full tests, and native race subset pass
 
 Acceptance:
 

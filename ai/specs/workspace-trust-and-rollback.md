@@ -84,6 +84,17 @@ Sandbox enforcement is separate from workspace trust and permission mode:
 - READ/EDIT/AUTO decides approval behavior
 - sandboxing constrains what tool subprocesses can actually touch
 
+Boundary direction:
+
+- local shell execution should sit behind an executor object that owns process
+  start, cancellation, process-group cleanup, streaming, and output limits
+- Seatbelt, bubblewrap, containers, remote sandboxes, and `just_bash`-style
+  executors are implementations of that executor boundary, not separate agent
+  loops
+- provider credentials are outside the executor environment by default
+- tool credentials require explicit secret injection, redaction, and audit
+- AUTO mode is only an approval shortcut; it is not a sandbox guarantee
+
 The next sandbox slice should harden bash/external tool execution with real OS
 boundaries where available, make the active sandbox visible, and keep AUTO
 behavior from feeling safe unless the enforcement layer is actually active.

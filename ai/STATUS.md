@@ -4,7 +4,7 @@ Fast, lightweight terminal coding agent.
 
 **Phase:** Harness boundary cleanup
 **Focus:** Keep future skills/memory/sandbox extensions behind explicit capability boundaries
-**Active task:** none; next ready task is `tk-vv4y` - sandbox/trust boundary design
+**Active task:** none; C1 follow-up design tasks are closed
 **Updated:** 2026-05-03
 
 ## Current Truth
@@ -38,6 +38,11 @@ Fast, lightweight terminal coding agent.
   non-workspace resources behind explicit `skill://`, `memory://`, or
   `artifact://` capability resolvers, and expose them only through host
   commands or opt-in narrow tools.
+- Sandbox/trust direction: trust is workspace eligibility, mode is approval
+  posture, sandbox is executor enforcement, and provider credentials are not
+  subprocess credentials by default.
+- `tk-vv4y` is closed. Sandbox/trust/credential boundaries are captured in the
+  canonical specs.
 
 ## Latest Evidence
 
@@ -220,7 +225,7 @@ Fast, lightweight terminal coding agent.
 
 ## Next Action
 
-1. Start `tk-vv4y`: refresh sandbox/trust around executor and credential
-   boundaries.
-2. Keep one green slice per commit; do not expand the model-facing tool surface
-   or add new product features during this pass.
+1. Add the next implementation task for the executor boundary so `tk ready`
+   continues to reflect the roadmap.
+2. Start with a behavior-preserving local bash executor refactor; do not add
+   remote sandboxing, new tools, or new permission modes.

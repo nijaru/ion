@@ -6,6 +6,9 @@ Ion owns deterministic tool policy configuration. Canto provides enforcement
 hooks and tool execution primitives; Ion maps tools to user-facing risk
 categories and decides whether a request is allowed, denied, or prompted.
 
+Policy is not sandboxing. A tool may be approved by policy and still fail
+closed at the executor/sandbox boundary.
+
 The startup loader reads a global YAML policy file:
 
 - default: `~/.ion/policy.yaml`
@@ -31,7 +34,8 @@ Rule selectors are mutually exclusive. `action` is one of `allow`, `ask`, or
 2. READ mode is a hard boundary:
    - read tools allow
    - write and execute tools deny
-   - sensitive tools ask
+   - sensitive non-read tools are hidden from provider requests and denied or
+     prompted only if reached through an explicit host path
 3. EDIT mode:
    - read tools allow
    - exact tool rule applies
@@ -40,6 +44,31 @@ Rule selectors are mutually exclusive. `action` is one of `allow`, `ask`, or
 
 Read tools are intentionally ungated. This preserves the core loop invariant
 that READ and EDIT can always inspect the workspace without approval churn.
+
+## Executor And Secrets Boundary
+
+Tool execution should flow through one executor boundary:
+
+```text
+policy decision -> executor -> sandbox -> local process or remote job
+```
+
+Security responsibilities:
+
+- provider API keys stay with provider clients and are not tool environment
+  variables by default
+- subprocess/remote-job credentials require explicit secret injection with
+  source, target, and scope visible to Ion
+- approval previews and transcript/tool display must redact injected secret
+  values
+- executor startup failures fail before a tool call is recorded as running
+- cancellation kills the process group or remote job handle owned by that
+  executor
+- remote sandbox providers must return bounded stdout/stderr and an exit status
+  through the same tool-result shape as local execution
+
+This is design direction, not a new default feature. The current local `bash`
+implementation remains the active path until an executor refactor is scheduled.
 
 ## Deferred Work
 

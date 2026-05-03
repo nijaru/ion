@@ -235,7 +235,8 @@ Acceptance criteria before implementation is considered done:
 - Trust answers whether a workspace may leave read-only safety
 - Mode answers how much approval Ion needs once the workspace is trusted
 - Read tools are never gated in any mode
-- Sandbox is orthogonal to permissions (tracked: `tk-kfno`)
+- Sandbox is orthogonal to permissions. It is an executor capability, not a
+  mode.
 
 ### Mode table
 
@@ -244,7 +245,7 @@ Acceptance criteria before implementation is considered done:
 | Read | auto | auto | auto |
 | Write | **blocked** | prompt | auto |
 | Execute (`bash`) | **blocked** | prompt | auto |
-| Sensitive (mcp, subagent) | prompt | prompt | auto |
+| Sensitive non-read tools | hidden or blocked | prompt | auto |
 
 `yolo` remains a command/CLI alias for `auto`; it should not be the displayed
 mode name.
@@ -415,6 +416,41 @@ Current behavior:
 The startup banner and `/tools` report the active sandbox posture for the native
 backend.
 
+### Executor and credential boundary
+
+The long-term shape is one tool executor boundary:
+
+```text
+tool request -> policy/mode/trust -> executor -> sandbox -> process/remote job
+```
+
+Rules:
+
+- Approval mode decides whether Ion asks before a tool runs.
+- Workspace trust decides whether this checkout may leave READ mode.
+- Sandbox decides what an approved process can touch.
+- The executor owns process start, cancellation, process-group cleanup,
+  stdout/stderr streaming, output limits, background jobs, and future remote
+  execution.
+- Provider credentials are not tool credentials. API keys used to call models
+  must not be injected into tool subprocesses by default.
+- Tool credentials must come through an explicit secret-injection boundary with
+  display/log redaction and an auditable scope.
+- Remote sandboxes, containers, or `just_bash`-style executors should plug in as
+  executor implementations. They must not add another agent loop, another
+  provider-history owner, or another transcript writer.
+
+Current implementation note:
+
+- Ion's local `bash` tool still shells out directly and uses `ION_SANDBOX` to
+  plan plain, Seatbelt, or bubblewrap execution.
+- The next implementation hardening should move shell execution behind a local
+  executor object that can later share the same contract with remote/container
+  executors.
+- Environment allowlisting and secret injection are future hardening work.
+  Until then, sandbox posture must stay visible and AUTO must not imply
+  isolation when `Sandbox: off`.
+
 ## Escalation
 
 Ion loads `ESCALATE.md` from the workspace root when present, using Canto's
@@ -445,7 +481,7 @@ Key findings:
 - "auto_edit" middle ground (auto edits, prompt bash) is industry
   consensus for daily driving — but we prompt for edits too in EDIT mode
 - "Always allow" at approval time is the biggest UX win beyond modes
-- Sandbox is orthogonal to approval (tracked separately: `tk-kfno`)
+- Sandbox is orthogonal to approval and belongs at the executor boundary.
 - Read tools are never gated in any agent
 
 These findings are distilled here; the older survey note has been removed from

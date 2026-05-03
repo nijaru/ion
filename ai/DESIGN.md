@@ -70,6 +70,9 @@ For Ion this means:
 - Tool execution should be expressed as capabilities over a session
   environment: shell, read, write, edit, list, search, custom commands, and
   future remote sandboxes.
+- The executor boundary is where sandboxing, credentials, process lifetime,
+  streaming, and future remote execution belong. Approval mode and workspace
+  trust decide whether execution is allowed; they do not provide isolation.
 - Tool, skill, memory, and sandbox expansion must preserve a small
   model-facing surface. If future memory/skills need file-like access, prefer
   backend path routing or explicit progressive-disclosure tools over adding
@@ -232,6 +235,17 @@ Deferred product layers:
 These remain long-term goals. They should be reintroduced by clear boundaries
 after the baseline stays boring under deterministic, race, tmux, and live smoke
 gates.
+
+Sandbox/trust direction:
+
+- Trust is user-global workspace eligibility, stored outside project files.
+- Mode is per-session approval posture.
+- Sandbox is executor enforcement and must stay visible in startup, footer, and
+  `/tools`.
+- Provider credentials are not subprocess credentials. Tool credentials require
+  explicit secret injection, redaction, and audit.
+- Remote sandboxes or `just_bash`-style executors should plug into the executor
+  boundary without creating another agent loop or transcript writer.
 
 Skills specifically are not another project-instruction layer. Canto can own
 agentskills-compatible registry, routing, and reusable read/manage primitives.

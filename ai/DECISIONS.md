@@ -23,6 +23,15 @@ Distilled architectural principles plus recent decision log.
 
 ## Recent Log
 
+### 2026-05-03 - Sandbox is an executor boundary
+
+Trust, mode, and sandbox stay separate. Trust is user-global workspace
+eligibility; mode is per-session approval posture; sandbox is enforcement in
+the tool executor. Provider credentials must not be subprocess credentials by
+default, and future remote sandboxes or `just_bash`-style executors should plug
+into the executor boundary without becoming another agent loop or transcript
+writer.
+
 ### 2026-05-03 - Future context uses namespaces, not default tool sprawl
 
 Skills, memory, and artifacts should mount behind explicit resource
