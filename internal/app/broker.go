@@ -46,7 +46,7 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		if err := m.persistEntry("persist status", storage.Status{
 			Type:   "status",
 			Status: msg.Status,
-			TS:     now(),
+			TS:     entryUnix(msg.Timestamp),
 		}); err != nil {
 			return m, persistErrorCmd("persist status", err)
 		}
@@ -64,7 +64,7 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 			Input:  msg.Input,
 			Output: msg.Output,
 			Cost:   msg.Cost,
-			TS:     now(),
+			TS:     entryUnix(msg.Timestamp),
 		}); err != nil {
 			return m, persistErrorCmd("persist token usage", err)
 		}
@@ -79,7 +79,11 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 				}
 				m.InFlight.Thinking = false
 				m.Progress.Mode = stateCancelled
-				entry := session.Entry{Role: session.System, Content: "Canceled: " + reason}
+				entry := session.Entry{
+					Role:      session.System,
+					Timestamp: msg.Timestamp,
+					Content:   "Canceled: " + reason,
+				}
 				return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
 			}
 		}
@@ -96,7 +100,7 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		m.Progress.CurrentTurnOutput = 0
 		m.Progress.CurrentTurnCost = 0
 		m.Progress.BudgetStopReason = ""
-		m.InFlight.Pending = &session.Entry{Role: session.Agent}
+		m.InFlight.Pending = &session.Entry{Role: session.Agent, Timestamp: msg.Timestamp}
 		m.InFlight.PendingTools = nil
 		m.InFlight.AgentCommitted = false
 		return m, m.awaitSessionEvent()
@@ -180,7 +184,10 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		if msg.AgentID == "" {
 			m.Progress.Mode = stateStreaming
 			if m.InFlight.Pending == nil {
-				m.InFlight.Pending = &session.Entry{Role: session.Agent}
+				m.InFlight.Pending = &session.Entry{
+					Role:      session.Agent,
+					Timestamp: msg.Timestamp,
+				}
 			}
 			m.InFlight.Pending.Content += msg.Delta
 			m.InFlight.StreamBuf = m.InFlight.Pending.Content
@@ -201,6 +208,7 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 				if msg.Reasoning != "" {
 					m.InFlight.Pending.Reasoning = msg.Reasoning
 				}
+				setEntryTimestamp(m.InFlight.Pending, msg.Timestamp)
 				entry := *m.InFlight.Pending
 				m.InFlight.Pending = nil
 				m.InFlight.StreamBuf = ""
@@ -214,6 +222,7 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 			}
 			entry := session.Entry{
 				Role:      session.Agent,
+				Timestamp: msg.Timestamp,
 				Content:   msg.Message,
 				Reasoning: m.InFlight.ReasonBuf,
 			}
@@ -235,6 +244,7 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 				}
 				committed := session.Entry{
 					Role:      session.Subagent,
+					Timestamp: msg.Timestamp,
 					Title:     p.Name,
 					Content:   "Completed: " + content,
 					Reasoning: p.Reasoning,
@@ -253,8 +263,9 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 			m.Progress.LastToolUseID = session.ShortID()
 		}
 		entry := &session.Entry{
-			Role:  session.Tool,
-			Title: m.formatToolTitle(msg.ToolName, redactedArgs),
+			Role:      session.Tool,
+			Timestamp: msg.Timestamp,
+			Title:     m.formatToolTitle(msg.ToolName, redactedArgs),
 		}
 		if m.InFlight.PendingTools == nil {
 			m.InFlight.PendingTools = make(map[string]*session.Entry)
@@ -280,6 +291,7 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		if pending := m.pendingToolEntry(toolUseID); pending != nil {
 			pending.Content = msg.Result
 			pending.IsError = msg.Error != nil
+			setEntryTimestamp(pending, msg.Timestamp)
 			entry := *pending
 			m.clearPendingTool(toolUseID, pending)
 			if len(m.InFlight.PendingTools) == 0 {
@@ -333,9 +345,10 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		}
 		// We print the started entry immediately to scrollback
 		return m, tea.Sequence(m.printEntries(session.Entry{
-			Role:    session.Subagent,
-			Title:   p.Name,
-			Content: "Started: " + p.Intent,
+			Role:      session.Subagent,
+			Timestamp: msg.Timestamp,
+			Title:     p.Name,
+			Content:   "Started: " + p.Intent,
 		}), m.awaitSessionEvent())
 
 	case session.ChildStarted:
@@ -356,9 +369,10 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 			p.Status = "Completed"
 			p.Output = msg.Result
 			committed := session.Entry{
-				Role:    session.Subagent,
-				Title:   p.Name,
-				Content: "Completed: " + p.Output,
+				Role:      session.Subagent,
+				Timestamp: msg.Timestamp,
+				Title:     p.Name,
+				Content:   "Completed: " + p.Output,
 			}
 			delete(m.InFlight.Subagents, msg.AgentName)
 			m.Progress.Mode = stateComplete
@@ -393,10 +407,11 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 			p.Status = "Failed"
 			p.Output = "ERROR: " + msg.Error
 			committed := session.Entry{
-				Role:    session.Subagent,
-				Title:   p.Name,
-				Content: "Failed: " + msg.Error,
-				IsError: true,
+				Role:      session.Subagent,
+				Timestamp: msg.Timestamp,
+				Title:     p.Name,
+				Content:   "Failed: " + msg.Error,
+				IsError:   true,
 			}
 			delete(m.InFlight.Subagents, msg.AgentName)
 			m.Progress.Mode = stateError
@@ -551,6 +566,19 @@ func (m Model) persistEntry(action string, entry any) error {
 	return nil
 }
 
+func entryUnix(timestamp time.Time) int64 {
+	if timestamp.IsZero() {
+		return now()
+	}
+	return timestamp.UTC().Unix()
+}
+
+func setEntryTimestamp(entry *session.Entry, timestamp time.Time) {
+	if entry != nil && !timestamp.IsZero() {
+		entry.Timestamp = timestamp.UTC()
+	}
+}
+
 func (m Model) submitText(text string) (Model, tea.Cmd) {
 	// Expand any paste marker placeholders to their original content.
 	text = m.expandMarkers(text)
@@ -566,7 +594,11 @@ func (m Model) submitText(text string) (Model, tea.Cmd) {
 	m.Input.HistoryIdx = -1
 	m.Input.HistoryDraft = ""
 
-	userEntry := session.Entry{Role: session.User, Content: text}
+	userEntry := session.Entry{
+		Role:      session.User,
+		Timestamp: time.Now().UTC(),
+		Content:   text,
+	}
 	m.Input.Composer.Reset()
 	m.relayoutComposer()
 

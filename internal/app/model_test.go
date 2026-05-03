@@ -1006,6 +1006,20 @@ func TestRenderBashToolHidesOutputByDefault(t *testing.T) {
 	}
 }
 
+func TestRenderEntryDoesNotDisplayTimestamp(t *testing.T) {
+	model := readyModel(t)
+	entry := session.Entry{
+		Role:      session.User,
+		Timestamp: time.Date(2026, 5, 2, 14, 30, 0, 0, time.UTC),
+		Content:   "hello",
+	}
+
+	got := ansi.Strip(model.renderEntry(entry))
+	if got != "› hello" {
+		t.Fatalf("rendered entry = %q, want no timestamp", got)
+	}
+}
+
 func TestRenderBashToolCanShowSummarizedOutput(t *testing.T) {
 	model := readyModel(t)
 	model.Model.Config = &config.Config{BashOutput: "summary"}

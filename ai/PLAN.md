@@ -9,8 +9,7 @@ concrete defect. The active priority is now post-C2 roadmap/task rebaseline,
 then context-survival hardening: internal transcript timestamps, Fedora live
 smoke, and fork/session workflow audit.
 
-Next task: `tk-jwfs` - Ion: preserve transcript timestamps for internal
-consumers.
+Next task: `tk-jkcl` - Ion: final Fedora C2 live smoke.
 
 Flue, Pi, OpenAI Agents SDK, and Mendral stay in the plan as architecture
 constraints, not implementation scope. They are useful because they clarify
@@ -361,11 +360,11 @@ Order:
 1. Done - `tk-af7j` - roadmap/task rebaseline after C2:
    - `ai/STATUS.md`, `ai/PLAN.md`, and `tk ready` agree on the real next path
    - C2 is treated as closeout, not an open-ended refactor stream
-2. Active - `tk-jwfs` - preserve transcript timestamps for internal consumers:
+2. Done - `tk-jwfs` - preserve transcript timestamps for internal consumers:
    - populate Ion transcript/replay projections from Canto durable event
      timestamps
    - keep TUI rendering and provider-visible history timestamp-free by default
-3. Next - `tk-jkcl` - final Fedora C2 live smoke:
+3. Active - `tk-jkcl` - final Fedora C2 live smoke:
    - run local-api `qwen3.6:27b-uncensored` when reachable
    - require real tool call, persisted resume, provider-history capture, and
      resumed follow-up

@@ -1,5 +1,7 @@
 package session
 
+import "time"
+
 // Event is the base interface for all strongly typed session events.
 // These are decoupled from the host UI (e.g. Bubble Tea) and represent
 // the domain model of a native or ACP agent session.
@@ -9,8 +11,9 @@ type Event interface {
 
 // Base provides common fields for events in a swarm/multi-agent session.
 type Base struct {
-	AgentID string // Identifies the sub-agent or worker (empty for the main agent)
-	TraceID string // Identifies a specific execution branch or task tree
+	Timestamp time.Time `json:"timestamp,omitzero"` // UTC event time, zero when unknown
+	AgentID   string    `json:"agent_id,omitzero"`  // sub-agent/worker, empty for main agent
+	TraceID   string    `json:"trace_id,omitzero"`  // execution branch or task tree
 }
 
 // MetadataLoaded fires when a session's metadata is loaded or created.

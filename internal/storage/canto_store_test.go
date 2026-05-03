@@ -59,6 +59,11 @@ func assistantToolCall(id, name string) llm.Call {
 	return call
 }
 
+func withCantoTimestamp(event csession.Event, timestamp time.Time) csession.Event {
+	event.Timestamp = timestamp.UTC()
+	return event
+}
+
 func TestCantoStoreAppendUpdatesRecentSession(t *testing.T) {
 	root := t.TempDir()
 	storeAny, err := NewCantoStore(root)
@@ -615,26 +620,29 @@ func TestCantoStoreEntriesMapToolMessages(t *testing.T) {
 		t.Fatalf("load canto session: %v", err)
 	}
 
-	if err := cantoSess.Append(ctx, csession.NewEvent(sess.ID(), csession.MessageAdded, llm.Message{
+	userAt := time.Date(2026, 5, 2, 10, 0, 0, 0, time.UTC)
+	agentAt := userAt.Add(time.Minute)
+	toolAt := agentAt.Add(time.Minute)
+	if err := cantoSess.Append(ctx, withCantoTimestamp(csession.NewEvent(sess.ID(), csession.MessageAdded, llm.Message{
 		Role:    llm.RoleUser,
 		Content: "hello",
-	})); err != nil {
+	}), userAt)); err != nil {
 		t.Fatalf("append user: %v", err)
 	}
-	if err := cantoSess.Append(ctx, csession.NewEvent(sess.ID(), csession.MessageAdded, llm.Message{
+	if err := cantoSess.Append(ctx, withCantoTimestamp(csession.NewEvent(sess.ID(), csession.MessageAdded, llm.Message{
 		Role:      llm.RoleAssistant,
 		Content:   "hi there",
 		Reasoning: "reasoning",
 		Calls:     []llm.Call{assistantToolCall("tool-bash", "bash")},
-	})); err != nil {
+	}), agentAt)); err != nil {
 		t.Fatalf("append agent: %v", err)
 	}
-	if err := cantoSess.Append(ctx, csession.NewEvent(sess.ID(), csession.MessageAdded, llm.Message{
+	if err := cantoSess.Append(ctx, withCantoTimestamp(csession.NewEvent(sess.ID(), csession.MessageAdded, llm.Message{
 		Role:    llm.RoleTool,
 		ToolID:  "tool-bash",
 		Name:    "bash",
 		Content: "tool output",
-	})); err != nil {
+	}), toolAt)); err != nil {
 		t.Fatalf("append tool: %v", err)
 	}
 
@@ -648,13 +656,22 @@ func TestCantoStoreEntriesMapToolMessages(t *testing.T) {
 	if entries[0].Role != ionsession.User || entries[0].Content != "hello" {
 		t.Fatalf("user entry = %#v", entries[0])
 	}
+	if !entries[0].Timestamp.Equal(userAt) {
+		t.Fatalf("user timestamp = %s, want %s", entries[0].Timestamp, userAt)
+	}
 	if entries[1].Role != ionsession.Agent || entries[1].Content != "hi there" ||
 		entries[1].Reasoning != "reasoning" {
 		t.Fatalf("agent entry = %#v", entries[1])
 	}
+	if !entries[1].Timestamp.Equal(agentAt) {
+		t.Fatalf("agent timestamp = %s, want %s", entries[1].Timestamp, agentAt)
+	}
 	if entries[2].Role != ionsession.Tool || entries[2].Title != "Bash" ||
 		entries[2].Content != "tool output" {
 		t.Fatalf("tool entry = %#v", entries[2])
+	}
+	if !entries[2].Timestamp.Equal(toolAt) {
+		t.Fatalf("tool timestamp = %s, want %s", entries[2].Timestamp, toolAt)
 	}
 }
 
@@ -755,11 +772,12 @@ func TestCantoStoreEntriesRecoverToolResultFromLifecycle(t *testing.T) {
 	})); err != nil {
 		t.Fatalf("append read start: %v", err)
 	}
-	if err := cantoSess.Append(ctx, csession.NewToolCompletedEvent(sess.ID(), csession.ToolCompletedData{
+	completedAt := time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC)
+	if err := cantoSess.Append(ctx, withCantoTimestamp(csession.NewToolCompletedEvent(sess.ID(), csession.ToolCompletedData{
 		Tool:   "read",
 		ID:     "tool-read",
 		Output: "recovered contents",
-	})); err != nil {
+	}), completedAt)); err != nil {
 		t.Fatalf("append read completion: %v", err)
 	}
 
@@ -774,6 +792,9 @@ func TestCantoStoreEntriesRecoverToolResultFromLifecycle(t *testing.T) {
 		entries[0].Title != "Read(AGENTS.md)" ||
 		entries[0].Content != "recovered contents" {
 		t.Fatalf("recovered tool entry = %#v", entries[0])
+	}
+	if !entries[0].Timestamp.Equal(completedAt) {
+		t.Fatalf("recovered tool timestamp = %s, want %s", entries[0].Timestamp, completedAt)
 	}
 }
 
@@ -1258,10 +1279,11 @@ func TestCantoStoreEntriesUseEffectiveHistoryAfterCompaction(t *testing.T) {
 	if err := cantoSess.Append(ctx, agentEvent); err != nil {
 		t.Fatalf("append agent: %v", err)
 	}
-	recentEvent := csession.NewEvent(sess.ID(), csession.MessageAdded, llm.Message{
+	recentAt := time.Date(2026, 5, 2, 13, 0, 0, 0, time.UTC)
+	recentEvent := withCantoTimestamp(csession.NewEvent(sess.ID(), csession.MessageAdded, llm.Message{
 		Role:    llm.RoleAssistant,
 		Content: "recent answer",
-	})
+	}), recentAt)
 	if err := cantoSess.Append(ctx, recentEvent); err != nil {
 		t.Fatalf("append recent agent: %v", err)
 	}
@@ -1299,5 +1321,8 @@ func TestCantoStoreEntriesUseEffectiveHistoryAfterCompaction(t *testing.T) {
 	}
 	if entries[1].Role != ionsession.Agent || entries[1].Content != "recent answer" {
 		t.Fatalf("recent entry = %#v", entries[1])
+	}
+	if !entries[1].Timestamp.Equal(recentAt) {
+		t.Fatalf("recent entry timestamp = %s, want %s", entries[1].Timestamp, recentAt)
 	}
 }
