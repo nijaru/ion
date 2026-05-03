@@ -2,9 +2,9 @@
 
 Fast, lightweight terminal coding agent.
 
-**Phase:** Runtime boundary cleanup
-**Focus:** Make `CantoBackend` a thin product adapter over the native runtime boundary
-**Active task:** `tk-ezms` - Ion runtime boundary alignment
+**Phase:** Harness boundary cleanup
+**Focus:** Keep future skills/memory/sandbox extensions behind explicit capability boundaries
+**Active task:** none; next ready task is `tk-0r23` - virtual tool namespace design
 **Updated:** 2026-05-03
 
 ## Current Truth
@@ -30,9 +30,10 @@ Fast, lightweight terminal coding agent.
 - Flue and Mendral are applicable as boundary checks, not as feature requests:
   keep the runtime/session/tool boundary explicit, keep state outside
   disposable execution, and preserve a small model-visible tool surface.
-- Current work is `tk-ezms`: align Ion's runtime boundary to the Canto harness
-  facade. Concrete framework defects are fixed upstream in Canto first, then
-  imported into Ion.
+- `tk-ezms` is closed. `CantoBackend` now uses the Canto harness facade for
+  native turn execution and no longer caches second runtime owners.
+- Next ready work is C1 follow-up design: `tk-0r23` virtual tool namespaces for
+  future skills/memory without expanding the default model-visible surface.
 
 ## Latest Evidence
 
@@ -52,6 +53,13 @@ Fast, lightweight terminal coding agent.
   `go test ./internal/backend/canto -count=1`,
   `go test ./... -count=1 -timeout 300s`, and
   `go test -race ./cmd/ion ./internal/app ./internal/backend/canto ./internal/backend/canto/tools ./internal/storage -count=1 -timeout 300s`.
+- Fedora local-api probe timed out from this machine. OpenRouter DeepSeek live
+  smoke passed with `deepseek/deepseek-v4-flash`: real `bash` tool call,
+  persisted resume, provider-history capture, and resumed follow-up request
+  ordering verified.
+- Tmux TUI smoke passed for fresh launch, `/tools`, `/settings`, and a live
+  auto-mode bash turn against OpenRouter DeepSeek Flash with compact
+  `Bash(echo ion-tmux)` display and clean completion shell.
 - `tk-g5sf` minimal-core cleanup is closed. The default model-visible
   surface is now exactly eight tools (`bash`, `read`, `write`, `edit`,
   `multi_edit`, `list`, `grep`, `glob`); stale `verify`, model-visible
@@ -208,9 +216,10 @@ Fast, lightweight terminal coding agent.
 
 ## Next Action
 
-1. Finish `tk-ezms`: inspect the remaining `CantoBackend` fields and files for
-   direct runner/agent ownership that can be removed or clearly isolated behind
-   subagent/compaction boundaries.
-2. Run a tmux smoke and Fedora live smoke for the harness-backed path.
+1. Start `tk-0r23`: design future virtual tool namespaces for skills/memory so
+   advanced capabilities can be progressively disclosed without adding default
+   tools.
+2. Then run `tk-vv4y`: refresh sandbox/trust around executor and credential
+   boundaries.
 3. Keep one green slice per commit; do not expand the model-facing tool surface
    or add new product features during this pass.

@@ -8,7 +8,7 @@ The active priority is not more feature parity. It is the harness-boundary
 refactor after the minimal-core consolidation pass: make Ion a thin product
 host over one Canto runtime/session stream while keeping product policy in Ion.
 
-Active task: `tk-ezms` - align runtime boundary to Canto harness facade.
+Next task: `tk-0r23` - design virtual tool namespaces for skills and memory.
 
 Flue, Pi, OpenAI Agents SDK, and Mendral stay in the plan as architecture
 constraints, not implementation scope. They are useful because they clarify
@@ -26,7 +26,7 @@ core is solid.
 | I3 | Restore safety, trust, sandbox, and policy table stakes | Implemented, not active |
 | I4 | Add advanced agent features: subagents, memory, skills, routing, ACP | Implemented/deferred, not active |
 | C0 | Minimal native core consolidation | Done |
-| C1 | Refactor around a clear headless harness boundary | Active |
+| C1 | Refactor around a clear headless harness boundary | Active: follow-up designs |
 | I5 | Add eval-driven optimization and SOTA experiments | Deferred |
 
 ## I0: Dirty Baseline And Context Hygiene
@@ -272,16 +272,17 @@ Order:
 
 1. Done - Canto `canto-2vxb` - review and design the framework harness facade:
    agent/runtime/session/session-env/tool/command/sandbox/interrupt boundaries.
-2. Active - Ion `tk-ezms` - align `CantoBackend` to that facade and keep Ion
+2. Done - Ion `tk-ezms` - align `CantoBackend` to that facade and keep Ion
    product policy in Ion:
    - Canto `e880c1c` imported.
    - `Open()` constructs a Canto `Harness`.
    - `SubmitTurn()` consumes the harness `PromptStream` stream instead of
      maintaining separate watch/send goroutines.
-   - Next: remove or isolate remaining direct runner/agent ownership and smoke
-     the Fedora live path.
-3. Ion `tk-0r23` - design future virtual tool namespaces for skills/memory
-   without bloating the model-facing tool surface.
+   - Cached runner/agent ownership was removed from `CantoBackend`.
+   - OpenRouter DeepSeek Flash live smoke and tmux TUI smoke passed; Fedora
+     probe timed out from this machine.
+3. Active next - Ion `tk-0r23` - design future virtual tool namespaces for
+   skills/memory without bloating the model-facing tool surface.
 4. Ion `tk-vv4y` - refresh sandbox/trust design around executor and credential
    boundaries.
 
