@@ -47,7 +47,7 @@ func (m Model) View() tea.View {
 	b.WriteString("\n")
 
 	// Top separator
-	b.WriteString(m.st.sep.Render(strings.Repeat("─", max(0, m.App.Width))))
+	b.WriteString(m.st.sep.Render(m.shellSeparator()))
 	b.WriteString("\n")
 
 	// Composer
@@ -55,13 +55,31 @@ func (m Model) View() tea.View {
 	b.WriteString("\n")
 
 	// Bottom separator
-	b.WriteString(m.st.sep.Render(strings.Repeat("─", max(0, m.App.Width))))
+	b.WriteString(m.st.sep.Render(m.shellSeparator()))
 	b.WriteString("\n")
 
 	// Status line
 	b.WriteString(m.statusLine())
 
 	return tea.NewView(b.String())
+}
+
+func (m Model) shellWidth() int {
+	if m.App.Width <= 1 {
+		return max(0, m.App.Width)
+	}
+	// Inline terminal rows that exactly fill the terminal can auto-wrap into an
+	// extra physical row. Keep live shell chrome one cell short so resize redraws
+	// do not leave stale progress/status fragments behind.
+	return m.App.Width - 1
+}
+
+func (m Model) shellSeparator() string {
+	width := min(m.shellWidth(), 24)
+	if width <= 0 {
+		return ""
+	}
+	return strings.Repeat("─", width)
 }
 
 func (m Model) renderPicker() string {

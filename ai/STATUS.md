@@ -119,6 +119,14 @@ Fast, lightweight terminal coding agent.
 
 ## Latest Evidence
 
+- Resize shell fix passed
+  `go test ./internal/app -count=1 -timeout 180s`,
+  `go test ./... -count=1 -timeout 300s`, and
+  `go test -race ./cmd/ion ./internal/app ./internal/backend/canto ./internal/backend/canto/tools ./internal/storage -count=1 -timeout 300s`.
+  Tmux `go run ./...` capture at 120 columns, then resize to 84 and 60
+  columns, showed a single `Ready` row. The live composer separators are now
+  short rules instead of width-filling rows so terminal reflow does not leave
+  stale progress fragments after monitor/window moves.
 - AI context prune sanity checks passed: `ai/README.md` link targets resolve,
   stale deleted-doc references are absent from active `ai/` Markdown, and
   `tk ready` showed only the active prune task before closeout. The active

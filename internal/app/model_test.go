@@ -1558,10 +1558,10 @@ func TestProgressLineFitsWidthAfterResize(t *testing.T) {
 		3,
 	)
 
-	if got := lipgloss.Width(model.progressLine()); got > model.App.Width {
+	if got := lipgloss.Width(model.progressLine()); got > model.shellWidth() {
 		t.Fatalf(
 			"expected progress line width <= %d, got %d: %q",
-			model.App.Width,
+			model.shellWidth(),
 			got,
 			model.progressLine(),
 		)
@@ -1579,6 +1579,33 @@ func TestViewRendersProgressWithoutLeadingSeparator(t *testing.T) {
 	}
 	if !strings.HasPrefix(ansi.Strip(view), "• Ready\n") {
 		t.Fatalf("view = %q, want ready progress without leading separator", view)
+	}
+}
+
+func TestViewShellRowsReserveWrapCellAfterResize(t *testing.T) {
+	model := readyModel(t)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 40, Height: 24})
+	model = updated.(Model)
+	model.Progress.Mode = stateReady
+
+	view := ansi.Strip(model.View().Content)
+	wantWidth := model.shellWidth()
+	for i, line := range strings.Split(view, "\n") {
+		if line == "" {
+			continue
+		}
+		if got := ansi.StringWidth(line); got > wantWidth {
+			t.Fatalf("line %d width = %d, want <= %d: %q\nview:\n%s", i, got, wantWidth, line, view)
+		}
+		if strings.Trim(line, "─") == "" {
+			wantSeparatorWidth := min(wantWidth, 24)
+			if got := ansi.StringWidth(line); got != wantSeparatorWidth {
+				t.Fatalf("separator width = %d, want %d: %q", got, wantSeparatorWidth, line)
+			}
+		}
+	}
+	if count := strings.Count(view, "• Ready"); count != 1 {
+		t.Fatalf("ready row count = %d, want 1:\n%s", count, view)
 	}
 }
 
@@ -1750,10 +1777,10 @@ func TestStatusLineFitsWidthAfterResize(t *testing.T) {
 	model.App.Workdir = "/Users/nick/github/nijaru/ion"
 	model.App.Branch = "feature/resize-persistence"
 
-	if got := lipgloss.Width(model.statusLine()); got > model.App.Width {
+	if got := lipgloss.Width(model.statusLine()); got > model.shellWidth() {
 		t.Fatalf(
 			"expected status line width <= %d, got %d: %q",
-			model.App.Width,
+			model.shellWidth(),
 			got,
 			model.statusLine(),
 		)
