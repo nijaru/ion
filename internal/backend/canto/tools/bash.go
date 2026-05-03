@@ -3,11 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
-	"io"
-	"os/exec"
 	"strings"
-	"sync"
-	"syscall"
 
 	"github.com/go-json-experiment/json"
 	"github.com/nijaru/canto/llm"
@@ -16,12 +12,15 @@ import (
 const maxOutputSize = 1024 * 1024 // 1MB
 
 type Bash struct {
-	cwd     string
-	sandbox SandboxMode
+	cwd      string
+	executor *localExecutor
 }
 
 func NewBash(cwd string) *Bash {
-	return &Bash{cwd: cwd, sandbox: resolveSandboxMode()}
+	return &Bash{
+		cwd:      cwd,
+		executor: newLocalExecutor(resolveSandboxMode()),
+	}
 }
 
 func (b *Bash) Spec() llm.Spec {
@@ -60,87 +59,9 @@ func (b *Bash) ExecuteStreaming(
 		return "", fmt.Errorf("command is required")
 	}
 
-	plan, err := planSandboxedBash(b.cwd, input.Command, b.sandbox)
-	if err != nil {
-		return "", err
-	}
-	if plan.cleanup != nil {
-		defer func() { _ = plan.cleanup() }()
-	}
-
-	cmd := exec.CommandContext(ctx, plan.name, plan.args...)
-	cmd.Dir = plan.dir
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return "", fmt.Errorf("stdout pipe: %w", err)
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return "", fmt.Errorf("stderr pipe: %w", err)
-	}
-
-	if err := cmd.Start(); err != nil {
-		return "", err
-	}
-
-	stopKill := context.AfterFunc(ctx, func() {
-		if cmd.Process != nil {
-			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		}
+	return b.executor.Run(ctx, localCommand{
+		CWD:     b.cwd,
+		Command: input.Command,
+		Emit:    emit,
 	})
-	defer stopKill()
-
-	var output strings.Builder
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-	wg.Add(2)
-
-	limitExceeded := false
-
-	// Helper to handle pipe output and emit deltas
-	handlePipe := func(r io.Reader) {
-		defer wg.Done()
-		buf := make([]byte, 4096)
-		for {
-			n, err := r.Read(buf)
-			if n > 0 {
-				mu.Lock()
-				if output.Len() >= maxOutputSize {
-					if !limitExceeded {
-						limitExceeded = true
-						output.WriteString("\n... [Output truncated: exceeded 1MB limit] ...\n")
-					}
-					mu.Unlock()
-					continue
-				}
-				chunk := string(buf[:n])
-				output.WriteString(chunk)
-				if emit != nil {
-					_ = emit(chunk)
-				}
-				mu.Unlock()
-			}
-			if err != nil {
-				break
-			}
-		}
-	}
-
-	go handlePipe(stdout)
-	go handlePipe(stderr)
-
-	err = cmd.Wait()
-	wg.Wait()
-	res := limitToolOutput(output.String())
-
-	if err != nil {
-		if res == "" {
-			return "", err
-		}
-		return res, err
-	}
-
-	return res, nil
 }

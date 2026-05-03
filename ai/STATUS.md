@@ -4,7 +4,7 @@ Fast, lightweight terminal coding agent.
 
 **Phase:** Harness boundary cleanup
 **Focus:** Keep future skills/memory/sandbox extensions behind explicit capability boundaries
-**Active task:** none; C1 follow-up design tasks are closed
+**Active task:** none; next ready task is `tk-fhds` - executor env and secret policy
 **Updated:** 2026-05-03
 
 ## Current Truth
@@ -43,6 +43,13 @@ Fast, lightweight terminal coding agent.
   subprocess credentials by default.
 - `tk-vv4y` is closed. Sandbox/trust/credential boundaries are captured in the
   canonical specs.
+- `tk-2g2e` is closed. Local bash process execution now sits behind an
+  Ion-local executor object while preserving the existing model-facing `bash`
+  schema and local sandbox behavior.
+- Latest C2 gates passed:
+  `go test ./internal/backend/canto/tools -count=1`,
+  `go test ./... -count=1 -timeout 300s`, and
+  `go test -race ./cmd/ion ./internal/app ./internal/backend/canto ./internal/backend/canto/tools ./internal/storage -count=1 -timeout 300s`.
 
 ## Latest Evidence
 
@@ -225,7 +232,5 @@ Fast, lightweight terminal coding agent.
 
 ## Next Action
 
-1. Add the next implementation task for the executor boundary so `tk ready`
-   continues to reflect the roadmap.
-2. Start with a behavior-preserving local bash executor refactor; do not add
-   remote sandboxing, new tools, or new permission modes.
+1. Start `tk-fhds`: design executor environment and secret-injection policy
+   before changing subprocess environment behavior.

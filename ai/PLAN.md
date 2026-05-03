@@ -8,7 +8,7 @@ The active priority is not more feature parity. It is the harness-boundary
 refactor after the minimal-core consolidation pass: make Ion a thin product
 host over one Canto runtime/session stream while keeping product policy in Ion.
 
-Next task: local executor boundary implementation.
+Next task: `tk-fhds` - executor environment and secret policy.
 
 Flue, Pi, OpenAI Agents SDK, and Mendral stay in the plan as architecture
 constraints, not implementation scope. They are useful because they clarify
@@ -27,7 +27,7 @@ core is solid.
 | I4 | Add advanced agent features: subagents, memory, skills, routing, ACP | Implemented/deferred, not active |
 | C0 | Minimal native core consolidation | Done |
 | C1 | Refactor around a clear headless harness boundary | Done |
-| C2 | Refactor local execution around the executor boundary | Next |
+| C2 | Refactor local execution around the executor boundary | Active |
 | I5 | Add eval-driven optimization and SOTA experiments | Deferred |
 
 ## I0: Dirty Baseline And Context Hygiene
@@ -298,7 +298,7 @@ Order:
 
 ## C2: Local Executor Boundary
 
-Status: next.
+Status: active.
 
 Goal: make local tool execution match the design without adding features:
 
@@ -306,14 +306,19 @@ Goal: make local tool execution match the design without adding features:
 tool request -> policy/mode/trust -> executor -> sandbox -> process
 ```
 
-First slice:
+Completed first slice:
 
-1. Move local bash process planning/execution behind a small Ion executor
+1. Done - move local bash process planning/execution behind a small Ion executor
    object.
-2. Preserve current `bash` schema, sandbox modes, streaming, truncation,
+2. Done - preserve current `bash` schema, sandbox modes, streaming, truncation,
    cancellation, and process-group cleanup.
-3. Keep provider credentials and environment handling unchanged until a
-   separate secret/env hardening task is explicit.
+
+Next slice:
+
+1. `tk-fhds` - design executor environment and secret-injection policy before
+   changing subprocess environment behavior.
+2. Keep provider credentials and environment handling unchanged until that
+   design is explicit.
 
 Acceptance:
 
