@@ -116,7 +116,7 @@ Deferred or hidden surfaces:
 | Surface | Status |
 |---|---|
 | `recall_memory`, `remember_memory` | Deferred until memory is deliberately reopened |
-| model-visible `compact` tool | Deferred; `/compact` host command remains available for context survival |
+| model-visible `compact` tool | Removed; `/compact` host command remains available for context survival |
 | MCP tools | Deferred behind the native-loop stabilization gate |
 | `subagent` | Opt-in I4 surface via `subagent_tools = "on"`; not default |
 | `ask_user` | Deferred until Canto owns a general elicitation/pause-resume primitive |

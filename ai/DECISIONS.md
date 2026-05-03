@@ -41,6 +41,13 @@ model-visible memory tool or product memory flow is active. Reintroduce memory
 through a deliberate design slice, not as an always-on dependency of `Open()`;
 the stale memory/wiki spec was removed rather than kept as future scaffolding.
 
+### 2026-05-02 - Compaction is a host command, not a tool
+
+Compaction remains core for context survival through proactive overflow
+recovery and the `/compact` host command. The stale model-visible `compact`
+tool implementation was removed so the default tool package matches the actual
+eight-tool model surface.
+
 ### 2026-05-02 - Flue validates the harness boundary
 
 Flue is not a TUI replacement for Ion, but its headless programmable shape is a
