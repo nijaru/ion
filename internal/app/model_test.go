@@ -3293,7 +3293,6 @@ func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 	}
 	for _, disabled := range []string{
 		"/rewind <id>",
-		"/memory [query]",
 		"/mcp add <cmd>",
 	} {
 		if strings.Contains(helpMsg.notice, disabled) {
@@ -3346,7 +3345,6 @@ func TestDeferredAdvancedCommandsAreDisabled(t *testing.T) {
 	for _, input := range []string{
 		"/mcp add server",
 		"/rewind cp-1",
-		"/memory policy",
 	} {
 		t.Run(input, func(t *testing.T) {
 			_, cmd := model.handleCommand(input)

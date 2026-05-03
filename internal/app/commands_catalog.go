@@ -209,13 +209,6 @@ func slashCommandDefinitions() []slashCommandInfo {
 			deferred:   true,
 		},
 		{
-			name:       "/memory",
-			detail:     "memory search",
-			helpLabel:  "/memory [query]",
-			helpDetail: "show workspace memory tree or search memory",
-			deferred:   true,
-		},
-		{
 			name:       "/mcp",
 			detail:     "register MCP server",
 			helpLabel:  "/mcp add <cmd>",

@@ -38,7 +38,8 @@ boring.
 Workspace memory remains deferred. The default native backend should not
 initialize a memory manager or expose a `/memory` execution path while no
 model-visible memory tool or product memory flow is active. Reintroduce memory
-through a deliberate design slice, not as an always-on dependency of `Open()`.
+through a deliberate design slice, not as an always-on dependency of `Open()`;
+the stale memory/wiki spec was removed rather than kept as future scaffolding.
 
 ### 2026-05-02 - Flue validates the harness boundary
 
