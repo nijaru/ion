@@ -20,7 +20,9 @@ type Viewport struct{}
 // Returns empty string when there is nothing active.
 func (m Model) renderPlaneB() string {
 	hasPendingTool := m.InFlight.Pending != nil && m.InFlight.Pending.Role == session.Tool
+	hasPendingAgent := m.InFlight.Pending != nil && m.InFlight.Pending.Role == session.Agent
 	if !hasPendingTool && len(m.InFlight.PendingTools) == 0 && m.Approval.Pending == nil &&
+		!hasPendingAgent &&
 		m.InFlight.ReasonBuf == "" &&
 		len(m.InFlight.Subagents) == 0 {
 		return ""
@@ -32,18 +34,24 @@ func (m Model) renderPlaneB() string {
 	if m.InFlight.ReasonBuf != "" {
 		b.WriteString(m.st.dim.Render("• Thinking..."))
 		b.WriteString("\n")
-		switch m.verbosity("thinking") {
+		thinkingVerbosity := m.verbosity("thinking")
+		switch thinkingVerbosity {
 		case "full":
 			for _, line := range strings.Split(m.InFlight.ReasonBuf, "\n") {
 				b.WriteString(m.st.dim.PaddingLeft(4).Render(line))
 				b.WriteString("\n")
 			}
-		case "hidden":
-			return b.String()
 		default:
-			b.WriteString(m.st.dim.PaddingLeft(4).Render("..."))
-			b.WriteString("\n")
+			if thinkingVerbosity != "hidden" {
+				b.WriteString(m.st.dim.PaddingLeft(4).Render("..."))
+				b.WriteString("\n")
+			}
 		}
+	}
+
+	if hasPendingAgent {
+		b.WriteString(m.renderPendingEntry(*m.InFlight.Pending))
+		b.WriteString("\n")
 	}
 
 	// Active in-flight tools. Sort by ID for deterministic rendering.
@@ -114,7 +122,7 @@ func (m Model) renderPendingEntry(e session.Entry) string {
 		if e.Content == "" {
 			return m.st.dim.PaddingLeft(2).Render("• ...")
 		}
-		return m.st.agent.Render("• " + e.Content)
+		return m.renderLiveAgentContent(e.Content)
 	case session.Tool:
 		label := m.normalizeToolTitle(e.Title)
 		if label == "" {
@@ -169,6 +177,39 @@ func (m Model) renderPendingEntry(e session.Entry) string {
 	default:
 		return e.Content
 	}
+}
+
+func (m Model) renderLiveAgentContent(content string) string {
+	content = strings.Trim(content, "\n")
+	if content == "" {
+		return m.st.dim.PaddingLeft(2).Render("• ...")
+	}
+
+	width := m.App.Width
+	if width <= 0 {
+		return m.st.agent.Render("• " + content)
+	}
+
+	prefix := "• "
+	bodyWidth := max(1, width-ansi.StringWidth(prefix))
+	var b strings.Builder
+	for i, line := range strings.Split(content, "\n") {
+		wrapped := ansi.Wordwrap(line, bodyWidth, " \t-")
+		if wrapped == "" {
+			wrapped = line
+		}
+		for j, part := range strings.Split(wrapped, "\n") {
+			if i > 0 || j > 0 {
+				b.WriteString("\n")
+			}
+			if i == 0 && j == 0 {
+				b.WriteString(m.st.agent.Render(prefix + part))
+			} else {
+				b.WriteString(m.st.agent.Render("  " + part))
+			}
+		}
+	}
+	return b.String()
 }
 
 func (m Model) verbosity(kind string) string {
@@ -505,9 +546,7 @@ func (m Model) progressLine() string {
 	case stateBlocked:
 		line = m.st.warn.Render("⚠ Subagent blocked")
 	case stateError:
-		line = m.st.warn.Render(
-			"× Error: " + strings.NewReplacer("\n", " ", "\r", " ").Replace(m.Progress.LastError),
-		)
+		line = m.st.warn.Render("× Error")
 	default:
 		if status := strings.TrimSpace(m.configurationStatus()); status != "" {
 			line = m.st.warn.Render("• " + status)
