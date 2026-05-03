@@ -507,12 +507,60 @@ func TestModelStreamsAndCommitsPendingEntry(t *testing.T) {
 	}
 }
 
-func TestPlaneBHidesPendingAgentText(t *testing.T) {
+func TestPlaneBShowsPendingAgentText(t *testing.T) {
 	model := readyModel(t)
-	model.InFlight.Pending = &session.Entry{Role: session.Agent, Content: "streamed reply"}
+	model.App.Width = 24
+	model.InFlight.Pending = &session.Entry{
+		Role:    session.Agent,
+		Content: "streamed reply with a long tail",
+	}
 
-	if got := ansi.Strip(model.renderPlaneB()); got != "" {
-		t.Fatalf("plane B = %q, want no live assistant transcript", got)
+	got := ansi.Strip(model.renderPlaneB())
+	if !strings.Contains(got, "• streamed reply with") ||
+		!strings.Contains(got, "\n  long tail") {
+		t.Fatalf("plane B = %q, want wrapped live assistant text", got)
+	}
+}
+
+func TestPlaneBShowsPendingAgentTextWithoutMarkdownRendering(t *testing.T) {
+	model := readyModel(t)
+	model.App.Width = 80
+	model.InFlight.Pending = &session.Entry{
+		Role: session.Agent,
+		Content: strings.Join([]string{
+			"Working:",
+			"",
+			"```go",
+			"fmt.Println(\"streaming\")",
+		}, "\n"),
+	}
+
+	got := ansi.Strip(model.renderPlaneB())
+	for _, want := range []string{
+		"• Working:",
+		"  ```go",
+		"  fmt.Println(\"streaming\")",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("plane B = %q, want raw live markdown fragment %q", got, want)
+		}
+	}
+}
+
+func TestPlaneBTrimsLeadingNewlinesFromPendingAgentText(t *testing.T) {
+	model := readyModel(t)
+	model.App.Width = 80
+	model.InFlight.Pending = &session.Entry{
+		Role:    session.Agent,
+		Content: "\n\n- first streamed bullet",
+	}
+
+	got := ansi.Strip(model.renderPlaneB())
+	if strings.HasPrefix(got, "•\n") || strings.HasPrefix(got, "• \n") {
+		t.Fatalf("plane B = %q, want no empty bullet row", got)
+	}
+	if !strings.Contains(got, "• - first streamed bullet") {
+		t.Fatalf("plane B = %q, want leading markdown text on first row", got)
 	}
 }
 
@@ -1624,13 +1672,13 @@ func TestTurnFinishedWithoutAssistantResponseShowsError(t *testing.T) {
 	}
 }
 
-func TestErrorProgressLineUsesRedXSymbolCopy(t *testing.T) {
+func TestErrorProgressLineUsesCompactStateCopy(t *testing.T) {
 	model := readyModel(t)
 	model.Progress.Mode = stateError
 	model.Progress.LastError = "backend failed"
 
-	if got := ansi.Strip(model.progressLine()); !strings.Contains(got, "× Error: backend failed") {
-		t.Fatalf("progress line = %q, want red x error copy", got)
+	if got := ansi.Strip(model.progressLine()); got != "× Error" {
+		t.Fatalf("progress line = %q, want compact error state", got)
 	}
 }
 
@@ -3765,7 +3813,7 @@ func TestSettingsCommandShowsDisplayDefaults(t *testing.T) {
 	}
 }
 
-func TestSettingsCommandUpdatesReadAndWriteOutput(t *testing.T) {
+func TestSettingsCommandUpdatesDisplayOutputs(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	configDir := filepath.Join(home, ".ion")
@@ -3789,6 +3837,11 @@ func TestSettingsCommandUpdatesReadAndWriteOutput(t *testing.T) {
 		t.Fatal("expected bash setting command")
 	}
 	_ = cmd()
+	model, cmd = model.handleCommand("/settings thinking collapsed")
+	if cmd == nil {
+		t.Fatal("expected thinking setting command")
+	}
+	_ = cmd()
 
 	data, err := os.ReadFile(filepath.Join(configDir, "config.toml"))
 	if err != nil {
@@ -3799,6 +3852,7 @@ func TestSettingsCommandUpdatesReadAndWriteOutput(t *testing.T) {
 		"read_output = 'full'",
 		"write_output = 'summary'",
 		"bash_output = 'summary'",
+		"thinking_verbosity = 'collapsed'",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("config missing %q:\n%s", want, got)
@@ -3806,12 +3860,14 @@ func TestSettingsCommandUpdatesReadAndWriteOutput(t *testing.T) {
 	}
 	if model.Model.Config.ReadOutput != "full" ||
 		model.Model.Config.WriteOutput != "summary" ||
-		model.Model.Config.BashOutput != "summary" {
+		model.Model.Config.BashOutput != "summary" ||
+		model.Model.Config.ThinkingVerbosity != "collapsed" {
 		t.Fatalf(
-			"runtime config read/write/bash output = %q/%q/%q, want full/summary/summary",
+			"runtime config read/write/bash/thinking output = %q/%q/%q/%q, want full/summary/summary/collapsed",
 			model.Model.Config.ReadOutput,
 			model.Model.Config.WriteOutput,
 			model.Model.Config.BashOutput,
+			model.Model.Config.ThinkingVerbosity,
 		)
 	}
 }

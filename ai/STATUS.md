@@ -2,9 +2,9 @@
 
 Fast, lightweight terminal coding agent.
 
-**Phase:** C2 closeout and context-survival rebaseline
-**Focus:** Post-C2 timestamp/fork closeout complete; command/fork reference design updated; Fedora live smoke deferred until host is reachable
-**Active task:** none
+**Phase:** C4 shell/session workflow
+**Focus:** Streaming UX folded into C4; next review `/tree` and `/fork`, then prune `ai/`
+**Active task:** `tk-7z08` — C4: review `/tree` and `/fork` TUI workflow
 **Updated:** 2026-05-03
 
 ## Current Truth
@@ -102,9 +102,22 @@ Fast, lightweight terminal coding agent.
   updates landed in `ai/DESIGN.md`, `ai/PLAN.md`, `ai/DECISIONS.md`,
   `ai/specs/tui-architecture.md`, `ai/specs/tools-and-modes.md`, and the
   existing reference delta note.
+- Streaming UX direction is now explicit: assistant deltas render live in Plane
+  B as plain wrapped text, incomplete Markdown stays raw while streaming, and
+  committed assistant messages still render once through Goldmark/GFM in Plane
+  A. `/settings` display changes update runtime state without restart.
 
 ## Latest Evidence
 
+- Streaming Plane B slice passed
+  `go test ./internal/app -count=1 -timeout 180s`,
+  `go test ./... -count=1 -timeout 300s`, and
+  `go test -race ./cmd/ion ./internal/app ./internal/backend/canto ./internal/backend/canto/tools ./internal/storage -count=1 -timeout 300s`.
+  Tmux against OpenRouter DeepSeek Flash showed live assistant text appearing
+  while a long bullet answer streamed. The capture exposed leading-newline
+  padding and duplicate full error copy; both were corrected so live text starts
+  on the first content row and the progress line now uses compact `× Error`
+  state while the transcript row keeps the detailed provider error.
 - `tk-jwfs` timestamp preservation gates passed:
   `go test ./internal/session ./internal/storage ./internal/app ./internal/backend/canto -count=1 -timeout 180s`,
   `go test ./... -count=1 -timeout 300s`,

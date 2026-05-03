@@ -25,13 +25,19 @@ Ephemeral live UI rendered by Bubble Tea.
 
 Includes, in order:
 
-1. in-flight streaming content
+1. in-flight streaming content: thinking marker, live assistant text, active tools
 2. one blank spacer
 3. progress line
 4. top separator
 5. composer
 6. bottom separator
 7. status line
+
+Assistant text streams in Plane B as plain wrapped text. Do not run the full
+Markdown renderer on each token delta; incomplete Markdown fragments like open
+code fences and half-written lists should stay readable while the turn is still
+active. When the assistant message commits to Plane A, render it once through
+the Goldmark/GFM Markdown renderer.
 
 ## Transcript roles and styling
 
@@ -76,18 +82,20 @@ Current gaps:
 
 Current state:
 
-- thinking text can still surface in Plane B
+- assistant text streams live in Plane B as plain wrapped text
 - tool calls are visible in transcript
-- raw tool arguments are too literal
-- output truncation policy is not yet a deliberate user-facing setting
+- committed assistant rows use the Markdown renderer
+- tool and thinking output visibility are runtime settings that update without
+  restarting the TUI
 
 Desired direction:
 
-- default to concise progress-line status for thinking
-- do not dump reasoning traces by default
+- keep thinking hidden by default, with collapsed/full modes available through
+  `/settings thinking full|collapsed|hidden`
 - always show the command/tool being run
-- show only a bounded subset of tool output by default
-- allow configurable verbosity later
+- keep routine tool output compact by default, with full output available
+  through tool/read/write/bash display settings
+- preserve exact provider-visible history; display compaction is UI-only
 
 Tracked by:
 
