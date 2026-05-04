@@ -166,7 +166,7 @@ func slashCommandDefinitions() []slashCommandInfo {
 			name:       "/tools",
 			detail:     "tool status",
 			helpLabel:  "/tools",
-			helpDetail: "show tool count and lazy loading status",
+			helpDetail: "show available tools",
 		},
 		{
 			name:       "/skills",

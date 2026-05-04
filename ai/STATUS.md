@@ -3,9 +3,9 @@
 Fast, lightweight terminal coding agent.
 
 **Phase:** C4 shell/session workflow
-**Focus:** minimal harness acceptance and simplification; no speculative commands or feature expansion
-**Active task:** `tk-g34g` — Minimal harness: acceptance review and simplification pass
-**Updated:** 2026-05-03
+**Focus:** minimal harness accepted; no speculative commands or feature expansion
+**Active task:** none
+**Updated:** 2026-05-04
 
 ## Current Truth
 
@@ -113,12 +113,24 @@ Fast, lightweight terminal coding agent.
   small set of active topic/evidence docs. Old one-off plans, duplicate design
   docs, completed sprint notes, archive specs, and stale review files were
   deleted rather than re-archived.
-- Next priority is not adding commands. Run a minimal-harness acceptance pass:
-  verify the default path is small, reliable, and easy to maintain; remove or
-  document concrete complexity only when it hurts that baseline.
+- `tk-g34g` is closed. Minimal-harness acceptance reviewed the default native
+  path, found no second loop or leaked deferred command surface, and removed
+  internal `/tools` copy that exposed implementation jargon.
+- The only ready task is `tk-er04` bash-mode evaluation, which remains
+  low-priority and should not start unless daily use proves it is worth the
+  extra surface.
 
 ## Latest Evidence
 
+- Minimal-harness acceptance passed
+  `go test ./internal/app -count=1 -timeout 180s`,
+  `go test ./... -count=1 -timeout 300s`, and
+  `go test -race ./cmd/ion ./internal/app ./internal/backend/canto ./internal/backend/canto/tools ./internal/storage -count=1 -timeout 300s`.
+  Source review confirmed the default path uses one Canto harness boundary, the
+  visible command catalog filters deferred commands for help/picker/completion,
+  and the default model-visible tool surface remains the eight core tools.
+  Tmux `/tools` smoke now shows `Tools: 8 (sandbox off; env inherit)` plus the
+  tool names, with no `eager`/lazy implementation jargon in the default UI.
 - Resize shell fix passed
   `go test ./internal/app -count=1 -timeout 180s`,
   `go test ./... -count=1 -timeout 300s`, and

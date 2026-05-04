@@ -265,23 +265,27 @@ func toolSurfaceSummary(surface backend.ToolSurface) string {
 	if surface.Count == 0 {
 		return "No tools registered"
 	}
-	mode := "eager"
+	parts := []string{}
 	if surface.LazyEnabled {
-		mode = fmt.Sprintf("lazy via search_tools above %d", surface.LazyThreshold)
+		parts = append(parts, fmt.Sprintf("search tools enabled above %d", surface.LazyThreshold))
 	}
-	names := strings.Join(surface.Names, ", ")
 	sandbox := strings.TrimSpace(surface.Sandbox)
 	if sandbox != "" {
-		mode += "; sandbox " + sandbox
+		parts = append(parts, "sandbox "+sandbox)
 	}
 	environment := strings.TrimSpace(surface.Environment)
 	if environment != "" {
-		mode += "; env " + environment
+		parts = append(parts, "env "+environment)
 	}
+	suffix := ""
+	if len(parts) > 0 {
+		suffix = " (" + strings.Join(parts, "; ") + ")"
+	}
+	names := strings.Join(surface.Names, ", ")
 	if names == "" {
-		return fmt.Sprintf("Tools: %d (%s)", surface.Count, mode)
+		return fmt.Sprintf("Tools: %d%s", surface.Count, suffix)
 	}
-	return fmt.Sprintf("Tools: %d (%s)\n%s", surface.Count, mode, names)
+	return fmt.Sprintf("Tools: %d%s\n%s", surface.Count, suffix, names)
 }
 
 func compactCount(n int) string {

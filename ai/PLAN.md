@@ -1,6 +1,6 @@
 # Ion Roadmap
 
-Updated: 2026-05-03
+Updated: 2026-05-04
 
 ## Current Focus
 
@@ -9,13 +9,16 @@ exposes a concrete defect. C4 session branching is reviewed: `/tree` and
 current-point `/fork [label]` are good enough for the current shell, and
 `/clone` stays deferred while it would only duplicate `/fork`.
 
-Current task: `tk-g34g` minimal harness acceptance and simplification pass.
+Current task: none. `tk-g34g` minimal harness acceptance and simplification is
+closed.
 
 The next priority is not adding commands. Treat background job commands, bash
 mode, `/goal`, `/side`, richer fork UI, and `/clone` as deferred references
 until daily use or reference-agent evidence proves they are worth the
-maintenance cost. The near-term work is to verify and simplify the default
-native harness path.
+maintenance cost. The default native harness path is now accepted; the next
+real work should come from a concrete daily-use bug, Fedora local-api smoke
+when the host is available, or an explicit decision to resume low-priority
+shell experiments such as bash mode.
 
 Flue, Pi, OpenAI Agents SDK, and Mendral stay in the plan as architecture
 constraints, not implementation scope. They are useful because they clarify
@@ -36,7 +39,7 @@ core is solid.
 | C1 | Refactor around a clear headless harness boundary | Done |
 | C2 | Refactor local execution around the executor boundary | Done |
 | C3 | Harden context survival and session workflows | Done; Fedora smoke deferred |
-| C4 | Tighten command/workflow shell without expanding the surface | Active |
+| C4 | Tighten command/workflow shell without expanding the surface | Done |
 | I5 | Add eval-driven optimization and SOTA experiments | Deferred |
 
 ## I0: Dirty Baseline And Context Hygiene
