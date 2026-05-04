@@ -209,7 +209,7 @@ func (m Model) renderPickerHeader(labelWidth int, metricWidths pickerMetricWidth
 		b.WriteString("    ")
 		b.WriteString(detail)
 	}
-	return b.String()
+	return fitLine(b.String(), m.shellWidth())
 }
 
 func (m Model) renderPickerLine(

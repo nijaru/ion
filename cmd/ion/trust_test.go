@@ -118,7 +118,7 @@ func TestStartupToolLineReportsLazyTools(t *testing.T) {
 	if !strings.Contains(line, "Sandbox auto: bubblewrap") {
 		t.Fatalf("line = %q, want sandbox notice", line)
 	}
-	if !strings.Contains(line, "Env inherit") {
+	if !strings.Contains(line, "Bash env inherited") {
 		t.Fatalf("line = %q, want environment notice", line)
 	}
 }

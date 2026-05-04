@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"strings"
 
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/session"
@@ -44,4 +45,25 @@ type ToolSurface struct {
 
 type ToolSummarizer interface {
 	ToolSurface() ToolSurface
+}
+
+func ToolEnvironmentLabel(value string) string {
+	switch strings.TrimSpace(value) {
+	case "":
+		return ""
+	case "inherit":
+		return "inherited"
+	case "inherit_without_provider_keys":
+		return "inherited without provider keys"
+	default:
+		return strings.TrimSpace(value)
+	}
+}
+
+func ToolEnvironmentSummary(value string) string {
+	label := ToolEnvironmentLabel(value)
+	if label == "" {
+		return ""
+	}
+	return "Bash env " + label
 }

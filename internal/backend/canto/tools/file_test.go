@@ -267,6 +267,9 @@ func TestFileTools(t *testing.T) {
 		f2 := "file2.txt"
 		os.WriteFile(filepath.Join(tmpDir, f1), []byte("hello\nworld"), 0o644)
 		os.WriteFile(filepath.Join(tmpDir, f2), []byte("foo\nbar"), 0o644)
+		if err := os.WriteFile(filepath.Join(tmpDir, f1+".tmp"), []byte("user temp"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 
 		args, _ := json.Marshal(map[string]any{
 			"edits": []map[string]any{
@@ -307,6 +310,16 @@ func TestFileTools(t *testing.T) {
 		if !strings.Contains(res, "--- a/file2.txt") || !strings.Contains(res, "-bar") ||
 			!strings.Contains(res, "+baz") {
 			t.Errorf("diff for f2 missing in result: %q", res)
+		}
+		if strings.Index(res, "--- a/file1.txt") > strings.Index(res, "--- a/file2.txt") {
+			t.Fatalf("multi_edit diff output is not sorted: %q", res)
+		}
+		tempContent, err := os.ReadFile(filepath.Join(tmpDir, f1+".tmp"))
+		if err != nil {
+			t.Fatalf("user temp file missing after multi_edit: %v", err)
+		}
+		if string(tempContent) != "user temp" {
+			t.Fatalf("user temp file = %q, want preserved", tempContent)
 		}
 
 		emptyArgs, _ := json.Marshal(map[string]any{"edits": []map[string]any{}})

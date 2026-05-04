@@ -14,6 +14,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/nijaru/canto/workspace"
+	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/privacy"
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
@@ -228,7 +229,7 @@ func approvalNotificationText(req session.ApprovalRequest, workdir, target strin
 		parts = append(parts, "Args: "+privacy.Redact(req.Args))
 	}
 	if environment := strings.TrimSpace(req.Environment); environment != "" {
-		parts = append(parts, "Environment: "+environment)
+		parts = append(parts, "Bash env: "+backend.ToolEnvironmentLabel(environment))
 	}
 	return strings.Join(parts, "\n")
 }

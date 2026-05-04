@@ -308,7 +308,10 @@ func (s *forkTreeStore) ForkSession(
 	return s.forked, nil
 }
 
-func (s *forkTreeStore) SessionTree(ctx context.Context, sessionID string) (storage.SessionTree, error) {
+func (s *forkTreeStore) SessionTree(
+	ctx context.Context,
+	sessionID string,
+) (storage.SessionTree, error) {
 	s.tree.Current.ID = sessionID
 	return s.tree, nil
 }
@@ -921,7 +924,7 @@ func TestApprovalPromptRendersExecutorEnvironment(t *testing.T) {
 	model.Progress.Mode = stateApproval
 
 	view := ansi.Strip(model.View().Content)
-	if !strings.Contains(view, "Environment: inherit") {
+	if !strings.Contains(view, "Bash env: inherited") {
 		t.Fatalf("view missing environment posture:\n%s", view)
 	}
 }
@@ -985,7 +988,7 @@ func TestApprovalNotificationIncludesEnvironment(t *testing.T) {
 		Environment: "inherit",
 	}
 	got := approvalNotificationText(req, "/repo", "slack #ai-alerts")
-	if !strings.Contains(got, "Environment: inherit") {
+	if !strings.Contains(got, "Bash env: inherited") {
 		t.Fatalf("notification missing environment posture:\n%s", got)
 	}
 }
@@ -1658,7 +1661,14 @@ func TestPickerRowsFitShellWidthAfterResize(t *testing.T) {
 	out := ansi.Strip(model.renderPicker())
 	for i, line := range strings.Split(out, "\n") {
 		if got := ansi.StringWidth(line); got > model.shellWidth() {
-			t.Fatalf("picker line %d width = %d, want <= %d: %q\n%s", i, got, model.shellWidth(), line, out)
+			t.Fatalf(
+				"picker line %d width = %d, want <= %d: %q\n%s",
+				i,
+				got,
+				model.shellWidth(),
+				line,
+				out,
+			)
 		}
 	}
 }
@@ -3592,7 +3602,8 @@ func TestForkCommandForksCurrentSessionAndSwitchesRuntime(t *testing.T) {
 	if observedSessionID != "child-session" {
 		t.Fatalf("switcher session = %q, want child-session", observedSessionID)
 	}
-	if observedConfig == nil || observedConfig.Provider != "openai" || observedConfig.Model != "gpt-4.1" {
+	if observedConfig == nil || observedConfig.Provider != "openai" ||
+		observedConfig.Model != "gpt-4.1" {
 		t.Fatalf("switcher config = %#v, want openai/gpt-4.1", observedConfig)
 	}
 	if switched.notice != "Forked session child-session" {
@@ -4238,7 +4249,7 @@ func TestToolSurfaceSummaryIncludesEnvironment(t *testing.T) {
 		Sandbox:     "off",
 		Environment: "inherit",
 	})
-	if !strings.Contains(got, "sandbox off") || !strings.Contains(got, "env inherit") {
+	if !strings.Contains(got, "sandbox off") || !strings.Contains(got, "bash env inherited") {
 		t.Fatalf("summary = %q, want sandbox and environment posture", got)
 	}
 	if strings.Contains(got, "eager") {
@@ -4565,6 +4576,49 @@ func TestModelPickerRendersSeparatePriceColumns(t *testing.T) {
 	rowBOutput := lipgloss.Width(rowB[:strings.Index(rowB, "$2.30")])
 	if headerOutput != rowAOutput || headerOutput != rowBOutput {
 		t.Fatalf("output column not aligned:\nheader=%q\nrowA=%q\nrowB=%q", header, rowA, rowB)
+	}
+}
+
+func TestModelPickerMetricHeaderFitsShellWidth(t *testing.T) {
+	model := readyModel(t)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 40, Height: 24})
+	model = updated.(Model)
+	longModel := "provider/really-long-model-name-that-must-not-wrap"
+	model.Picker.Overlay = &pickerOverlayState{
+		title: "Pick a model",
+		items: []pickerItem{{
+			Label: longModel,
+			Value: longModel,
+			Metrics: &pickerMetrics{
+				Context: "262k",
+				Input:   "$0.11",
+				Output:  "$0.44",
+			},
+		}},
+		filtered: []pickerItem{{
+			Label: longModel,
+			Value: longModel,
+			Metrics: &pickerMetrics{
+				Context: "262k",
+				Input:   "$0.11",
+				Output:  "$0.44",
+			},
+		}},
+		purpose: pickerPurposeModel,
+	}
+
+	out := ansi.Strip(model.renderPicker())
+	for i, line := range strings.Split(out, "\n") {
+		if got := ansi.StringWidth(line); got > model.shellWidth() {
+			t.Fatalf(
+				"model picker line %d width = %d, want <= %d: %q\n%s",
+				i,
+				got,
+				model.shellWidth(),
+				line,
+				out,
+			)
+		}
 	}
 }
 
