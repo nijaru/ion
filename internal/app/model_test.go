@@ -1590,6 +1590,7 @@ func TestViewShellRowsReserveWrapCellAfterResize(t *testing.T) {
 
 	view := ansi.Strip(model.View().Content)
 	wantWidth := model.shellWidth()
+	separatorCount := 0
 	for i, line := range strings.Split(view, "\n") {
 		if line == "" {
 			continue
@@ -1598,14 +1599,38 @@ func TestViewShellRowsReserveWrapCellAfterResize(t *testing.T) {
 			t.Fatalf("line %d width = %d, want <= %d: %q\nview:\n%s", i, got, wantWidth, line, view)
 		}
 		if strings.Trim(line, "─") == "" {
-			wantSeparatorWidth := min(wantWidth, 24)
-			if got := ansi.StringWidth(line); got != wantSeparatorWidth {
-				t.Fatalf("separator width = %d, want %d: %q", got, wantSeparatorWidth, line)
+			separatorCount++
+			if got := ansi.StringWidth(line); got != wantWidth {
+				t.Fatalf("separator width = %d, want %d: %q", got, wantWidth, line)
 			}
 		}
 	}
+	if separatorCount != 2 {
+		t.Fatalf("separator count = %d, want 2:\n%s", separatorCount, view)
+	}
 	if count := strings.Count(view, "• Ready"); count != 1 {
 		t.Fatalf("ready row count = %d, want 1:\n%s", count, view)
+	}
+}
+
+func TestViewShellSeparatorsUseWideShellWidth(t *testing.T) {
+	model := readyModel(t)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	model = updated.(Model)
+	model.Progress.Mode = stateReady
+
+	view := ansi.Strip(model.View().Content)
+	wantWidth := model.shellWidth()
+	if wantWidth <= 24 {
+		t.Fatalf("test setup shell width = %d, want > 24", wantWidth)
+	}
+	for _, line := range strings.Split(view, "\n") {
+		if line == "" || strings.Trim(line, "─") != "" {
+			continue
+		}
+		if got := ansi.StringWidth(line); got != wantWidth {
+			t.Fatalf("wide separator width = %d, want %d: %q", got, wantWidth, line)
+		}
 	}
 }
 
