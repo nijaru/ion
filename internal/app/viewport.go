@@ -565,10 +565,14 @@ func (m Model) progressLine() string {
 	if n := len(m.InFlight.QueuedTurns); n > 0 {
 		line += m.st.dim.Render(fmt.Sprintf(" • %d queued", n))
 	}
-	if idleReady && m.App.PrintedTranscript && len(m.InFlight.QueuedTurns) == 0 {
+	if idleReady && m.suppressIdleReadyProgress() {
 		return ""
 	}
 	return fitLine(strings.TrimRight(line, " "), m.shellWidth())
+}
+
+func (m Model) suppressIdleReadyProgress() bool {
+	return m.App.PrintedTranscript && len(m.InFlight.QueuedTurns) == 0
 }
 
 func (m Model) renderProgressStats(parts []string) string {
