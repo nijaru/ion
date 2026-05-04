@@ -9,15 +9,15 @@ command/workflow shell are accepted. Ion is on the right track for a minimal,
 well-engineered terminal coding agent: one native harness path, eight default
 tools, compact TUI, scriptable CLI, durable sessions, and small command surface.
 
-Current task: none. Next ready maintenance task is `tk-omw4` app test-file
-splitting.
+Current task: `tk-ywbt` whole UI/UX and codebase simplification review. The
+next work is to turn recent targeted fixes into a coherent refactor sequence,
+not to add more commands or tools.
 
-The next priority is not adding commands. The job now is to package current
-acceptance evidence into repeatable regression gates so future refactors and
-features do not reopen the same core-loop/TUI bugs. Treat background job
-commands, bash mode, `/goal`, `/side`, richer fork UI, and `/clone` as deferred
-references until daily use or reference-agent evidence proves they are worth
-the maintenance cost.
+The next priority is not adding commands. The job now is to review the whole
+TUI/CLI/tool/session experience and simplify the implementation around the
+accepted minimal product. Treat background job commands, bash mode, `/goal`,
+`/side`, richer fork UI, and `/clone` as deferred references until daily use or
+reference-agent evidence proves they are worth the maintenance cost.
 
 Flue, Pi, OpenAI Agents SDK, and Mendral stay in the plan as architecture
 constraints, not implementation scope. They are useful because they clarify
@@ -39,7 +39,7 @@ core is solid.
 | C2 | Refactor local execution around the executor boundary | Done |
 | C3 | Harden context survival and session workflows | Done; Fedora smoke deferred |
 | C4 | Tighten command/workflow shell without expanding the surface | Done |
-| C5 | Codify acceptance gates and small maintainability refactors | Active |
+| C5 | Codify acceptance gates and simplify maintainability hotspots | Active |
 | I5 | Add eval-driven optimization and SOTA experiments | Deferred |
 
 ## I0: Dirty Baseline And Context Hygiene
@@ -71,6 +71,35 @@ Work in this order:
 
 Each slice must preserve behavior unless a concrete bug is found during the
 refactor.
+
+## C5: Review And Simplification
+
+Status: active.
+
+Sequence:
+
+1. `tk-ywbt` - whole UI/UX and codebase simplification review. Keep this as the
+   active umbrella until the near-term refactor path is verified against source.
+2. `tk-245w` - app event reducer and shell-state refactor. Simplify ownership
+   around inline scrollback commits, Plane B rendering, progress state, queued
+   input, and resize behavior.
+3. `tk-omw4` - split oversized `internal/app/model_test.go` by behavior. This
+   is a prerequisite for faster future review; preserve behavior.
+4. `tk-rkmn` - backend/tool/storage responsibility boundary review. Check that
+   UI display policy stays in Ion renderers, model-visible history stays exact,
+   CantoBackend remains an adapter rather than a second framework, and tools
+   stay small and idiomatic.
+5. `tk-hdwz` - print a resume command on exit after the shell/refactor pass,
+   because it is useful UX but should not interrupt structural cleanup.
+
+Acceptance:
+
+- `go test ./... -count=1 -timeout 300s` and the native race subset stay green.
+- `scripts/smoke/tmux-minimal-harness.sh` stays green and captures no duplicate
+  idle progress rows.
+- Any new UI change is judged with tmux text capture, not just unit tests.
+- No new commands, tools, subagents, sandbox modes, memory surfaces, or routing
+  features are added during this phase.
 
 ## I2: Minimal Shell Polish
 

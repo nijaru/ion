@@ -2,9 +2,9 @@
 
 Fast, lightweight terminal coding agent.
 
-**Phase:** C5 regression hardening
-**Focus:** turn accepted minimal harness behavior into repeatable gates before new features
-**Active task:** `tk-yvpb` — TUI duplicate Ready rows after local commands
+**Phase:** C5 review and simplification
+**Focus:** whole-product UI/UX and codebase organization review before new features
+**Active task:** `tk-ywbt` — whole UI/UX and codebase simplification pass
 **Updated:** 2026-05-04
 
 ## Current Truth
@@ -59,6 +59,9 @@ Fast, lightweight terminal coding agent.
   now; `/clone`, `/goal`, `/side`, background-job commands, and bash mode are
   deferred until daily use or reference-agent evidence proves they are worth
   their maintenance cost.
+- Current maintenance sequence is review/refactor first, not feature growth:
+  `tk-ywbt` whole-product review, `tk-245w` app event/shell-state refactor,
+  `tk-omw4` app test split, then `tk-rkmn` backend/tool/storage boundary review.
 - Sandbox/trust direction: trust is workspace eligibility, mode is approval
   posture, sandbox is executor enforcement, and provider credentials are not
   subprocess credentials by default.
