@@ -109,95 +109,13 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		return m.handleTurnFinished()
 
 	case session.ThinkingDelta:
-		if msg.AgentID == "" && m.InFlight.AgentCommitted {
-			return m, m.awaitSessionEvent()
-		}
-		if msg.AgentID == "" {
-			m.InFlight.ReasonBuf += msg.Delta
-		} else {
-			if p, ok := m.InFlight.Subagents[msg.AgentID]; ok {
-				p.Reasoning += msg.Delta
-			}
-		}
-		return m, m.awaitSessionEvent()
+		return m.handleThinkingDelta(msg)
 
 	case session.AgentDelta:
-		if msg.AgentID == "" && m.InFlight.AgentCommitted {
-			return m, m.awaitSessionEvent()
-		}
-		if msg.AgentID == "" {
-			m.Progress.Mode = stateStreaming
-			if m.InFlight.Pending == nil {
-				m.InFlight.Pending = &session.Entry{
-					Role:      session.Agent,
-					Timestamp: msg.Timestamp,
-				}
-			}
-			m.InFlight.Pending.Content += msg.Delta
-			m.InFlight.StreamBuf = m.InFlight.Pending.Content
-		} else {
-			if p, ok := m.InFlight.Subagents[msg.AgentID]; ok {
-				p.Output += msg.Delta
-			}
-		}
-		return m, m.awaitSessionEvent()
+		return m.handleAgentDelta(msg)
 
 	case session.AgentMessage:
-		if msg.AgentID == "" {
-			if m.InFlight.Pending != nil && m.InFlight.Pending.Role == session.Agent {
-				if msg.Message != "" {
-					m.InFlight.Pending.Content = msg.Message
-				}
-				m.InFlight.Pending.Reasoning = m.InFlight.ReasonBuf
-				if msg.Reasoning != "" {
-					m.InFlight.Pending.Reasoning = msg.Reasoning
-				}
-				setEntryTimestamp(m.InFlight.Pending, msg.Timestamp)
-				entry := *m.InFlight.Pending
-				m.InFlight.Pending = nil
-				m.InFlight.StreamBuf = ""
-				m.InFlight.ReasonBuf = ""
-				if strings.TrimSpace(entry.Content) == "" && strings.TrimSpace(entry.Reasoning) == "" {
-					return m, m.awaitSessionEvent()
-				}
-
-				m.InFlight.AgentCommitted = true
-				return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
-			}
-			entry := session.Entry{
-				Role:      session.Agent,
-				Timestamp: msg.Timestamp,
-				Content:   msg.Message,
-				Reasoning: m.InFlight.ReasonBuf,
-			}
-			if msg.Reasoning != "" {
-				entry.Reasoning = msg.Reasoning
-			}
-			m.InFlight.StreamBuf = ""
-			m.InFlight.ReasonBuf = ""
-			if strings.TrimSpace(entry.Content) == "" && strings.TrimSpace(entry.Reasoning) == "" {
-				return m, m.awaitSessionEvent()
-			}
-			m.InFlight.AgentCommitted = true
-			return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
-		} else {
-			if p, ok := m.InFlight.Subagents[msg.AgentID]; ok {
-				content := p.Output
-				if msg.Message != "" {
-					content = msg.Message
-				}
-				committed := session.Entry{
-					Role:      session.Subagent,
-					Timestamp: msg.Timestamp,
-					Title:     p.Name,
-					Content:   "Completed: " + content,
-					Reasoning: p.Reasoning,
-				}
-				delete(m.InFlight.Subagents, msg.AgentID)
-				return m, tea.Sequence(m.printEntries(committed), m.awaitSessionEvent())
-			}
-		}
-		return m, m.awaitSessionEvent()
+		return m.handleAgentMessage(msg)
 
 	case session.ToolCallStarted:
 		redactedArgs := privacy.Redact(msg.Args)
@@ -503,6 +421,100 @@ func (m Model) handleTurnFinished() (Model, tea.Cmd) {
 	cmds = append(cmds, loadGitDiffStats(m.App.Workdir))
 	cmds = append(cmds, m.awaitSessionEvent())
 	return m, tea.Sequence(cmds...)
+}
+
+func (m Model) handleThinkingDelta(msg session.ThinkingDelta) (Model, tea.Cmd) {
+	if msg.AgentID == "" && m.InFlight.AgentCommitted {
+		return m, m.awaitSessionEvent()
+	}
+	if msg.AgentID == "" {
+		m.InFlight.ReasonBuf += msg.Delta
+	} else if p, ok := m.InFlight.Subagents[msg.AgentID]; ok {
+		p.Reasoning += msg.Delta
+	}
+	return m, m.awaitSessionEvent()
+}
+
+func (m Model) handleAgentDelta(msg session.AgentDelta) (Model, tea.Cmd) {
+	if msg.AgentID == "" && m.InFlight.AgentCommitted {
+		return m, m.awaitSessionEvent()
+	}
+	if msg.AgentID == "" {
+		m.Progress.Mode = stateStreaming
+		if m.InFlight.Pending == nil {
+			m.InFlight.Pending = &session.Entry{
+				Role:      session.Agent,
+				Timestamp: msg.Timestamp,
+			}
+		}
+		m.InFlight.Pending.Content += msg.Delta
+		m.InFlight.StreamBuf = m.InFlight.Pending.Content
+	} else if p, ok := m.InFlight.Subagents[msg.AgentID]; ok {
+		p.Output += msg.Delta
+	}
+	return m, m.awaitSessionEvent()
+}
+
+func (m Model) handleAgentMessage(msg session.AgentMessage) (Model, tea.Cmd) {
+	if msg.AgentID != "" {
+		return m.handleSubagentMessage(msg)
+	}
+	if m.InFlight.Pending != nil && m.InFlight.Pending.Role == session.Agent {
+		if msg.Message != "" {
+			m.InFlight.Pending.Content = msg.Message
+		}
+		m.InFlight.Pending.Reasoning = m.InFlight.ReasonBuf
+		if msg.Reasoning != "" {
+			m.InFlight.Pending.Reasoning = msg.Reasoning
+		}
+		setEntryTimestamp(m.InFlight.Pending, msg.Timestamp)
+		entry := *m.InFlight.Pending
+		m.InFlight.Pending = nil
+		m.InFlight.StreamBuf = ""
+		m.InFlight.ReasonBuf = ""
+		if strings.TrimSpace(entry.Content) == "" && strings.TrimSpace(entry.Reasoning) == "" {
+			return m, m.awaitSessionEvent()
+		}
+
+		m.InFlight.AgentCommitted = true
+		return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
+	}
+	entry := session.Entry{
+		Role:      session.Agent,
+		Timestamp: msg.Timestamp,
+		Content:   msg.Message,
+		Reasoning: m.InFlight.ReasonBuf,
+	}
+	if msg.Reasoning != "" {
+		entry.Reasoning = msg.Reasoning
+	}
+	m.InFlight.StreamBuf = ""
+	m.InFlight.ReasonBuf = ""
+	if strings.TrimSpace(entry.Content) == "" && strings.TrimSpace(entry.Reasoning) == "" {
+		return m, m.awaitSessionEvent()
+	}
+	m.InFlight.AgentCommitted = true
+	return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
+}
+
+func (m Model) handleSubagentMessage(msg session.AgentMessage) (Model, tea.Cmd) {
+	p, ok := m.InFlight.Subagents[msg.AgentID]
+	if !ok {
+		return m, m.awaitSessionEvent()
+	}
+	content := p.Output
+	if msg.Message != "" {
+		content = msg.Message
+	}
+	committed := session.Entry{
+		Role:      session.Subagent,
+		Timestamp: msg.Timestamp,
+		Title:     p.Name,
+		Content:   "Completed: " + content,
+		Reasoning: p.Reasoning,
+	}
+	delete(m.InFlight.Subagents, msg.AgentID)
+	return m, tea.Sequence(m.printEntries(committed), m.awaitSessionEvent())
 }
 
 func persistErrorCmd(action string, err error) tea.Cmd {

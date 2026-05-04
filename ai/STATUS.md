@@ -142,6 +142,10 @@ Fast, lightweight terminal coding agent.
 - App event reducer cleanup started: turn-finished settlement is now isolated
   from the large session-event switch. Focused turn-finish tests,
   `go test ./...`, and the native race subset passed.
+- Streaming event cleanup continued: thinking deltas, assistant deltas,
+  assistant messages, and subagent assistant messages now use dedicated handlers
+  instead of large inline switch bodies. Focused app tests, `go test ./...`,
+  and the native race subset passed.
 - TUI separator hotfix restored full-width composer bars while keeping the
   terminal-width-minus-one resize guard. Focused separator/progress tests,
   `go test ./internal/app -count=1 -timeout 180s`,
