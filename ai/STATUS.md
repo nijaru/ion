@@ -4,7 +4,7 @@ Fast, lightweight terminal coding agent.
 
 **Phase:** C5 regression hardening
 **Focus:** turn accepted minimal harness behavior into repeatable gates before new features
-**Active task:** none; next ready task is `tk-omw4`
+**Active task:** none; next ready tasks are `tk-hdwz` and `tk-omw4`
 **Updated:** 2026-05-04
 
 ## Current Truth
@@ -375,5 +375,7 @@ Fast, lightweight terminal coding agent.
 
 1. Start `tk-omw4` to split oversized app tests by behavior without changing
    behavior.
-2. Retry deferred `tk-jkcl` Fedora C2 live smoke only when local-api is
+2. Implement `tk-hdwz` if we want the small session-end resume hint before the
+   larger test split.
+3. Retry deferred `tk-jkcl` Fedora C2 live smoke only when local-api is
    reachable.
