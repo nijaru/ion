@@ -3457,10 +3457,11 @@ func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 	for _, disabled := range []string{
 		"/rewind <id>",
 		"/mcp add <cmd>",
+		"lazy loading",
 	} {
 		if strings.Contains(notice, disabled) {
 			t.Fatalf(
-				"help notice should not advertise deferred command %q: %q",
+				"help notice should not advertise deferred/internal surface %q: %q",
 				disabled,
 				notice,
 			)
@@ -4214,6 +4215,21 @@ func TestToolSurfaceSummaryIncludesEnvironment(t *testing.T) {
 	})
 	if !strings.Contains(got, "sandbox off") || !strings.Contains(got, "env inherit") {
 		t.Fatalf("summary = %q, want sandbox and environment posture", got)
+	}
+	if strings.Contains(got, "eager") {
+		t.Fatalf("summary = %q, want no internal eager/lazy jargon for default tools", got)
+	}
+}
+
+func TestToolSurfaceSummaryReportsLazyWhenEnabled(t *testing.T) {
+	got := toolSurfaceSummary(backend.ToolSurface{
+		Count:         25,
+		Names:         []string{"bash", "read"},
+		LazyEnabled:   true,
+		LazyThreshold: 20,
+	})
+	if !strings.Contains(got, "search tools enabled above 20") {
+		t.Fatalf("summary = %q, want lazy tool notice", got)
 	}
 }
 
