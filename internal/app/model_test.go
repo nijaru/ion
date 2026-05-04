@@ -1571,17 +1571,31 @@ func TestProgressLineFitsWidthAfterResize(t *testing.T) {
 	}
 }
 
-func TestViewRendersProgressWithoutLeadingSeparator(t *testing.T) {
+func TestViewSuppressesIdleReadyAfterPrintedTranscript(t *testing.T) {
 	model := readyModel(t)
 	model.App.PrintedTranscript = true
 	model.Progress.Mode = stateReady
 
-	view := model.View().Content
-	if strings.HasPrefix(view, "\n") {
-		t.Fatalf("view = %q, want progress immediately after printed transcript newline", view)
+	view := ansi.Strip(model.View().Content)
+	if strings.Contains(view, "• Ready") {
+		t.Fatalf("view = %q, want no committed idle ready row after printed transcript", view)
 	}
-	if !strings.HasPrefix(ansi.Strip(view), "• Ready\n") {
-		t.Fatalf("view = %q, want ready progress without leading separator", view)
+	if strings.HasPrefix(view, "\n") {
+		t.Fatalf("view = %q, want shell without leading blank line", view)
+	}
+	if !strings.HasPrefix(view, "─") {
+		t.Fatalf("view = %q, want shell separator first when idle progress is hidden", view)
+	}
+}
+
+func TestViewKeepsTerminalProgressAfterPrintedTranscript(t *testing.T) {
+	model := readyModel(t)
+	model.App.PrintedTranscript = true
+	model.Progress.Mode = stateComplete
+
+	view := ansi.Strip(model.View().Content)
+	if !strings.HasPrefix(view, "✓ Complete\n") {
+		t.Fatalf("view = %q, want terminal progress after printed transcript", view)
 	}
 }
 
