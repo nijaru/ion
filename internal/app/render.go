@@ -75,7 +75,7 @@ func (m Model) shellWidth() int {
 }
 
 func (m Model) shellSeparator() string {
-	width := min(m.shellWidth(), 24)
+	width := m.shellWidth()
 	if width <= 0 {
 		return ""
 	}

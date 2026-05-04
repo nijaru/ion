@@ -118,9 +118,17 @@ Fast, lightweight terminal coding agent.
   deterministic app/CLI tests plus an optional tmux smoke script. `tk-er04`
   bash-mode evaluation remains low-priority and should not start unless daily
   use proves it is worth the extra surface.
+- `tk-l8eo` is closed. The inline shell separators now render at the wrap-safe
+  shell width instead of the accidental 24-column cap.
 
 ## Latest Evidence
 
+- TUI separator hotfix restored full-width composer bars while keeping the
+  terminal-width-minus-one resize guard. Focused separator/progress tests,
+  `go test ./internal/app -count=1 -timeout 180s`,
+  `go test ./... -count=1 -timeout 300s`, the native race subset, and
+  `scripts/smoke/tmux-minimal-harness.sh` passed. A fresh 100-column tmux
+  capture showed one `Ready` row and wrap-safe full-width separators.
 - C5 minimal-harness acceptance now has repeatable gates:
   `TestMinimalHarnessAcceptanceFinalStateAndReplay` covers a fake-backend
   submit/stream/tool/final-render/replay path, print-mode JSON acceptance
