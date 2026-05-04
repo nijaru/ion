@@ -118,52 +118,13 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		return m.handleAgentMessage(msg)
 
 	case session.ToolCallStarted:
-		redactedArgs := privacy.Redact(msg.Args)
-		m.Progress.Mode = stateWorking
-		m.Progress.LastToolUseID = msg.ToolUseID
-		if m.Progress.LastToolUseID == "" {
-			m.Progress.LastToolUseID = session.ShortID()
-		}
-		entry := &session.Entry{
-			Role:      session.Tool,
-			Timestamp: msg.Timestamp,
-			Title:     m.formatToolTitle(msg.ToolName, redactedArgs),
-		}
-		if m.InFlight.PendingTools == nil {
-			m.InFlight.PendingTools = make(map[string]*session.Entry)
-		}
-		m.InFlight.PendingTools[m.Progress.LastToolUseID] = entry
-		if m.InFlight.Pending == nil || m.InFlight.Pending.Role == session.Tool ||
-			(m.InFlight.Pending.Role == session.Agent && m.InFlight.Pending.Content == "" && m.InFlight.ReasonBuf == "") {
-			m.InFlight.Pending = entry
-		}
-		return m, m.awaitSessionEvent()
+		return m.handleToolCallStarted(msg)
 
 	case session.ToolOutputDelta:
-		if entry := m.pendingToolEntry(msg.ToolUseID); entry != nil {
-			entry.Content += msg.Delta
-		}
-		return m, m.awaitSessionEvent()
+		return m.handleToolOutputDelta(msg)
 
 	case session.ToolResult:
-		toolUseID := msg.ToolUseID
-		if toolUseID == "" {
-			toolUseID = m.Progress.LastToolUseID
-		}
-		if pending := m.pendingToolEntry(toolUseID); pending != nil {
-			pending.Content = msg.Result
-			pending.IsError = msg.Error != nil
-			setEntryTimestamp(pending, msg.Timestamp)
-			entry := *pending
-			m.clearPendingTool(toolUseID, pending)
-			if len(m.InFlight.PendingTools) == 0 {
-				m.Progress.Mode = stateIonizing
-				m.Progress.Status = ""
-			}
-
-			return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
-		}
-		return m, m.awaitSessionEvent()
+		return m.handleToolResult(msg)
 
 	case session.VerificationResult:
 		return m, m.awaitSessionEvent()
@@ -515,6 +476,59 @@ func (m Model) handleSubagentMessage(msg session.AgentMessage) (Model, tea.Cmd) 
 	}
 	delete(m.InFlight.Subagents, msg.AgentID)
 	return m, tea.Sequence(m.printEntries(committed), m.awaitSessionEvent())
+}
+
+func (m Model) handleToolCallStarted(msg session.ToolCallStarted) (Model, tea.Cmd) {
+	redactedArgs := privacy.Redact(msg.Args)
+	m.Progress.Mode = stateWorking
+	m.Progress.LastToolUseID = msg.ToolUseID
+	if m.Progress.LastToolUseID == "" {
+		m.Progress.LastToolUseID = session.ShortID()
+	}
+	entry := &session.Entry{
+		Role:      session.Tool,
+		Timestamp: msg.Timestamp,
+		Title:     m.formatToolTitle(msg.ToolName, redactedArgs),
+	}
+	if m.InFlight.PendingTools == nil {
+		m.InFlight.PendingTools = make(map[string]*session.Entry)
+	}
+	m.InFlight.PendingTools[m.Progress.LastToolUseID] = entry
+	if m.InFlight.Pending == nil || m.InFlight.Pending.Role == session.Tool ||
+		(m.InFlight.Pending.Role == session.Agent &&
+			m.InFlight.Pending.Content == "" &&
+			m.InFlight.ReasonBuf == "") {
+		m.InFlight.Pending = entry
+	}
+	return m, m.awaitSessionEvent()
+}
+
+func (m Model) handleToolOutputDelta(msg session.ToolOutputDelta) (Model, tea.Cmd) {
+	if entry := m.pendingToolEntry(msg.ToolUseID); entry != nil {
+		entry.Content += msg.Delta
+	}
+	return m, m.awaitSessionEvent()
+}
+
+func (m Model) handleToolResult(msg session.ToolResult) (Model, tea.Cmd) {
+	toolUseID := msg.ToolUseID
+	if toolUseID == "" {
+		toolUseID = m.Progress.LastToolUseID
+	}
+	if pending := m.pendingToolEntry(toolUseID); pending != nil {
+		pending.Content = msg.Result
+		pending.IsError = msg.Error != nil
+		setEntryTimestamp(pending, msg.Timestamp)
+		entry := *pending
+		m.clearPendingTool(toolUseID, pending)
+		if len(m.InFlight.PendingTools) == 0 {
+			m.Progress.Mode = stateIonizing
+			m.Progress.Status = ""
+		}
+
+		return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
+	}
+	return m, m.awaitSessionEvent()
 }
 
 func persistErrorCmd(action string, err error) tea.Cmd {
