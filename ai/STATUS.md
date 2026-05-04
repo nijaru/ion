@@ -71,9 +71,9 @@ Fast, lightweight terminal coding agent.
   inheritance unchanged until Ion exposes an explicit environment policy.
   Visibility comes first; provider-key stripping and named tool-secret
   injection are future hardening slices.
-- `tk-k5yp` is closed. Startup, `/tools`, approval previews, and notifications
-  expose executor environment posture as `Bash env inherited` without listing
-  variable names or values.
+- `tk-k5yp` is closed. `/tools`, approval previews, and notifications expose
+  executor environment posture without listing variable names or values. The
+  startup shell intentionally omits this low-level detail.
 - `tk-kxpa` is closed. `tool_env = "inherit_without_provider_keys"` preserves
   inherited developer env while stripping provider API-key variables from the
   provider catalog for local bash.
@@ -84,8 +84,8 @@ Fast, lightweight terminal coding agent.
   focused command/app/backend/tool tests for environment posture,
   `go test ./... -count=1 -timeout 300s`, and
   `go test -race ./cmd/ion ./internal/app ./internal/backend/canto ./internal/backend/canto/tools ./internal/storage -count=1 -timeout 300s`.
-  Tmux `/tools` smoke showed startup and `/tools` bash-environment posture
-  with no environment values.
+  Tmux `/tools` smoke showed bash-environment posture in `/tools` with no
+  environment values.
 - Final C2 provider smoke: Fedora `http://fedora:8080/v1/models` timed out
   from this machine. OpenRouter `deepseek/deepseek-v4-flash` live smoke passed:
   real `bash` tool call, persisted resume, resumed follow-up answered
@@ -129,11 +129,11 @@ Fast, lightweight terminal coding agent.
   model-picker metric headers are clamped to shell width, Ion-only storage
   events preserve supplied timestamps, `multi_edit` no longer writes
   predictable user-path `.tmp` files and now emits deterministic diffs, and the
-  executor environment label now reads `Bash env inherited`. Focused tests,
-  `go test ./... -count=1 -timeout 300s`, the native race subset, and
-  `scripts/smoke/tmux-minimal-harness.sh` passed. The smoke capture also
-  exposed the remaining duplicate-`Ready` local-command artifact tracked by
-  `tk-yvpb`.
+  executor environment label is no longer shown in the startup shell. Focused
+  tests, `go test ./... -count=1 -timeout 300s`, the native race subset, and
+  `scripts/smoke/tmux-minimal-harness.sh` passed before the startup-label
+  follow-up. The smoke capture also exposed the remaining duplicate-`Ready`
+  local-command artifact tracked by `tk-yvpb`.
 - TUI separator hotfix restored full-width composer bars while keeping the
   terminal-width-minus-one resize guard. Focused separator/progress tests,
   `go test ./internal/app -count=1 -timeout 180s`,

@@ -81,8 +81,8 @@ selectors, and editor/runtime configuration.
 Target staged policy:
 
 1. Default `inherit` behavior remains unchanged.
-2. Approval previews, startup, and `/tools` report the environment policy
-   without listing values.
+2. Approval previews and `/tools` report the environment policy without
+   listing values; the startup shell omits this diagnostic detail.
 3. `inherit_without_provider_keys` is implemented as an explicit local-bash
    policy:
 
