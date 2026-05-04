@@ -135,6 +135,10 @@ Fast, lightweight terminal coding agent.
   duplicate idle `Ready` rows after local commands are suppressed. Focused
   tests, `go test ./... -count=1 -timeout 300s`, the native race subset, and
   `scripts/smoke/tmux-minimal-harness.sh` passed after the follow-ups.
+- C5 review/refactor started. The first shell-state cleanup extracted the live
+  shell renderer from `View()` and made idle-ready suppression an explicit
+  predicate; focused app tests, `go test ./...`, the native race subset, and
+  tmux smoke passed.
 - TUI separator hotfix restored full-width composer bars while keeping the
   terminal-width-minus-one resize guard. Focused separator/progress tests,
   `go test ./internal/app -count=1 -timeout 180s`,

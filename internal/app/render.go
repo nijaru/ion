@@ -42,6 +42,13 @@ func (m Model) View() tea.View {
 		b.WriteString("\n\n")
 	}
 
+	b.WriteString(m.renderShell())
+	return tea.NewView(b.String())
+}
+
+func (m Model) renderShell() string {
+	var b strings.Builder
+
 	// Progress line
 	if progress := m.progressLine(); progress != "" {
 		b.WriteString(progress)
@@ -63,7 +70,7 @@ func (m Model) View() tea.View {
 	// Status line
 	b.WriteString(m.statusLine())
 
-	return tea.NewView(b.String())
+	return b.String()
 }
 
 func (m Model) shellWidth() int {
