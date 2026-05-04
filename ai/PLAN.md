@@ -9,8 +9,8 @@ command/workflow shell are accepted. Ion is on the right track for a minimal,
 well-engineered terminal coding agent: one native harness path, eight default
 tools, compact TUI, scriptable CLI, durable sessions, and small command surface.
 
-Current task: none. Next ready task is `tk-xh5w` minimal-harness regression
-suite.
+Current task: none. Next ready maintenance task is `tk-omw4` app test-file
+splitting.
 
 The next priority is not adding commands. The job now is to package current
 acceptance evidence into repeatable regression gates so future refactors and
@@ -445,7 +445,7 @@ repeatable regression checks before adding new product surface.
 
 Order:
 
-1. Next - `tk-xh5w` - codify the minimal harness acceptance suite:
+1. Done - `tk-xh5w` - codify the minimal harness acceptance suite:
    - deterministic/fake-backend loop cases for submit, stream, tool,
      cancel/error, persist, resume, queued follow-up, and final rendering
    - scriptable CLI cases for `-p`, JSON, `--continue`, and `--resume <id>`
@@ -457,9 +457,9 @@ Order:
      reachable
 2. Deferred until Fedora is reachable - `tk-jkcl` - final Fedora local-api
    repeat of the live gate.
-3. After `tk-xh5w` - `tk-omw4` - split oversized app tests by behavior without
+3. Next - `tk-omw4` - split oversized app tests by behavior without
    changing behavior.
-4. After `tk-xh5w` - `tk-0gni` - run a local edit-tool eval before deciding
+4. After app-test split - `tk-0gni` - run a local edit-tool eval before deciding
    whether a Pi-style merged edit tool should replace the current split.
 5. Later - `tk-tpxu` - retire resolved core-loop topic docs after the
    regression suite becomes the live evidence source.
@@ -495,6 +495,6 @@ For each code slice:
   `go test -race ./cmd/ion ./internal/app ./internal/backend/canto ./internal/backend/canto/tools ./internal/storage -count=1 -timeout 300s`
 - tmux text capture for TUI-affecting changes
 - Fedora `local-api/qwen3.6:27b-uncensored` live smoke when reachable;
-  OpenRouter DeepSeek Flash is the cheap fallback
+  OpenRouter `deepseek/deepseek-v3.2` is the cheap fallback
 
 Commit each coherent green slice. Do not push unless requested.

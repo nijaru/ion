@@ -4,7 +4,7 @@ Fast, lightweight terminal coding agent.
 
 **Phase:** C5 regression hardening
 **Focus:** turn accepted minimal harness behavior into repeatable gates before new features
-**Active task:** none; next ready task is `tk-xh5w`
+**Active task:** none; next ready task is `tk-omw4`
 **Updated:** 2026-05-04
 
 ## Current Truth
@@ -114,13 +114,22 @@ Fast, lightweight terminal coding agent.
 - `tk-g34g` is closed. Minimal-harness acceptance reviewed the default native
   path, found no second loop or leaked deferred command surface, and removed
   internal `/tools` copy that exposed implementation jargon.
-- The next ready task is `tk-xh5w`: codify the minimal-harness acceptance suite
-  so current reliability evidence becomes repeatable. `tk-er04` bash-mode
-  evaluation remains low-priority and should not start unless daily use proves
-  it is worth the extra surface.
+- `tk-xh5w` is closed. The minimal-harness acceptance suite is now codified in
+  deterministic app/CLI tests plus an optional tmux smoke script. `tk-er04`
+  bash-mode evaluation remains low-priority and should not start unless daily
+  use proves it is worth the extra surface.
 
 ## Latest Evidence
 
+- C5 minimal-harness acceptance now has repeatable gates:
+  `TestMinimalHarnessAcceptanceFinalStateAndReplay` covers a fake-backend
+  submit/stream/tool/final-render/replay path, print-mode JSON acceptance
+  captures streaming deltas/tool calls/token usage, and
+  `scripts/smoke/tmux-minimal-harness.sh` covers fresh launch, `/help`,
+  `/tools`, `/settings`, resize, and optional live tool/resume flow. Focused
+  tests, `go test ./... -count=1 -timeout 300s`, the native race subset, the
+  non-live tmux smoke, and OpenRouter `deepseek/deepseek-v3.2` live smoke all
+  passed. Fedora local-api still timed out from this Mac.
 - Roadmap/task alignment pass found the product is on the right track for a
   minimal but well-engineered core: one native harness path, eight default
   tools, small command surface, compact TUI, and strong deterministic/race/live
@@ -364,6 +373,7 @@ Fast, lightweight terminal coding agent.
 
 ## Next Action
 
-1. Retry deferred `tk-jkcl` Fedora C2 live smoke when local-api is reachable.
-2. If no provider target is available, choose the next roadmap slice from
-   `ai/PLAN.md` rather than reopening completed C2 work.
+1. Start `tk-omw4` to split oversized app tests by behavior without changing
+   behavior.
+2. Retry deferred `tk-jkcl` Fedora C2 live smoke only when local-api is
+   reachable.

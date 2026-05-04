@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/nijaru/canto/llm"
 	csession "github.com/nijaru/canto/session"
@@ -45,7 +46,11 @@ func TestCoreLoopSmokeSubmitStreamToolPersistReplay(t *testing.T) {
 		t.Fatalf("progress mode = %v, want complete", model.Progress.Mode)
 	}
 	if model.Progress.LastTurnSummary.Input != 12 || model.Progress.LastTurnSummary.Output != 4 {
-		t.Fatalf("last usage = %d/%d, want 12/4", model.Progress.LastTurnSummary.Input, model.Progress.LastTurnSummary.Output)
+		t.Fatalf(
+			"last usage = %d/%d, want 12/4",
+			model.Progress.LastTurnSummary.Input,
+			model.Progress.LastTurnSummary.Output,
+		)
 	}
 	toolCall := llm.Call{ID: "tool-1", Type: "function"}
 	toolCall.Function.Name = "bash"
@@ -76,6 +81,81 @@ func TestCoreLoopSmokeSubmitStreamToolPersistReplay(t *testing.T) {
 	if input != 12 || output != 4 || cost != 0.0012 {
 		t.Fatalf("usage = %d/%d/%f, want 12/4/0.0012", input, output, cost)
 	}
+}
+
+func TestMinimalHarnessAcceptanceFinalStateAndReplay(t *testing.T) {
+	model, sess, store, stored := newCoreLoopSmokeModel(t)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 96, Height: 30})
+	model = updated.(Model)
+
+	model.Input.Composer.SetValue("inspect workspace")
+	updated, _ = model.Update(sendKeyMsg())
+	model = updated.(Model)
+
+	if len(sess.submits) != 1 || sess.submits[0] != "inspect workspace" {
+		t.Fatalf("submitted turns = %#v, want inspect workspace", sess.submits)
+	}
+
+	for _, ev := range []session.Event{
+		session.TurnStarted{},
+		session.TokenUsage{Input: 20, Output: 8, Cost: 0.003},
+		session.AgentDelta{Delta: "\n\nReading before tool"},
+		session.ToolCallStarted{ToolUseID: "tool-1", ToolName: "read", Args: "README.md"},
+		session.ToolOutputDelta{ToolUseID: "tool-1", Delta: "# ion\n"},
+		session.ToolResult{ToolUseID: "tool-1", ToolName: "read", Result: "# ion\n"},
+		session.AgentDelta{Delta: " composing final"},
+		session.AgentMessage{Message: "Done with `README.md`."},
+		session.TurnFinished{},
+	} {
+		updated, _ = model.Update(ev)
+		model = updated.(Model)
+	}
+
+	if model.Progress.Mode != stateComplete {
+		t.Fatalf("progress mode = %v, want complete", model.Progress.Mode)
+	}
+	if model.InFlight.Pending != nil ||
+		len(model.InFlight.PendingTools) != 0 ||
+		model.InFlight.StreamBuf != "" ||
+		model.InFlight.ReasonBuf != "" ||
+		len(model.InFlight.QueuedTurns) != 0 {
+		t.Fatalf("in-flight state not cleared: %#v", model.InFlight)
+	}
+	if !model.App.PrintedTranscript {
+		t.Fatal("final assistant message did not mark transcript printed")
+	}
+	view := ansi.Strip(model.View().Content)
+	if !strings.Contains(view, "Complete") {
+		t.Fatalf("view = %q, want complete progress", view)
+	}
+	if strings.Contains(view, "Reading before tool") ||
+		strings.Contains(view, "composing final") {
+		t.Fatalf("view = %q, want no stale streaming text after final commit", view)
+	}
+
+	toolCall := llm.Call{ID: "tool-1", Type: "function"}
+	toolCall.Function.Name = "read"
+	toolCall.Function.Arguments = `{"path":"README.md"}`
+	appendCantoHistory(t, context.Background(), store, stored.ID(),
+		llm.Message{Role: llm.RoleUser, Content: "inspect workspace"},
+		llm.Message{Role: llm.RoleAssistant, Calls: []llm.Call{toolCall}},
+		llm.Message{Role: llm.RoleTool, ToolID: "tool-1", Name: "read", Content: "# ion\n"},
+		llm.Message{Role: llm.RoleAssistant, Content: "Done with `README.md`."},
+	)
+
+	resumed, err := store.ResumeSession(context.Background(), stored.ID())
+	if err != nil {
+		t.Fatalf("resume session: %v", err)
+	}
+	entries, err := resumed.Entries(context.Background())
+	if err != nil {
+		t.Fatalf("entries: %v", err)
+	}
+	requireEntriesInOrder(t, entries, []entryWant{
+		{role: session.User, content: "inspect workspace"},
+		{role: session.Tool, content: "# ion"},
+		{role: session.Agent, content: "Done with `README.md`."},
+	})
 }
 
 func TestCoreLoopSmokeApprovalAndCancel(t *testing.T) {
@@ -150,7 +230,11 @@ func TestCoreLoopSmokeProviderLimitErrorPersistsStopTrace(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	stored := &stubStorageSession{}
 	model := New(
-		stubBackend{sess: &stubSession{events: make(chan session.Event)}, provider: "fake", model: "model"},
+		stubBackend{
+			sess:     &stubSession{events: make(chan session.Event)},
+			provider: "fake",
+			model:    "model",
+		},
 		stored,
 		nil,
 		"/tmp/ion-smoke",
@@ -220,7 +304,11 @@ func TestCoreLoopSmokeRetryStatusPersists(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	stored := &stubStorageSession{}
 	model := New(
-		stubBackend{sess: &stubSession{events: make(chan session.Event)}, provider: "fake", model: "model"},
+		stubBackend{
+			sess:     &stubSession{events: make(chan session.Event)},
+			provider: "fake",
+			model:    "model",
+		},
 		stored,
 		nil,
 		"/tmp/ion-smoke",
@@ -277,7 +365,11 @@ func TestCoreLoopSmokeToolPreviewRedactsSensitiveArgs(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	stored := &stubStorageSession{}
 	model := New(
-		stubBackend{sess: &stubSession{events: make(chan session.Event)}, provider: "fake", model: "model"},
+		stubBackend{
+			sess:     &stubSession{events: make(chan session.Event)},
+			provider: "fake",
+			model:    "model",
+		},
 		stored,
 		nil,
 		"/tmp/ion-smoke",
@@ -342,6 +434,35 @@ func requireEntry(t *testing.T, entries []session.Entry, role session.Role, cont
 		}
 	}
 	t.Fatalf("missing %s entry containing %q in %#v", role, content, entries)
+}
+
+type entryWant struct {
+	role    session.Role
+	content string
+}
+
+func requireEntriesInOrder(t *testing.T, entries []session.Entry, wants []entryWant) {
+	t.Helper()
+	start := 0
+	for _, want := range wants {
+		found := false
+		for i := start; i < len(entries); i++ {
+			if entries[i].Role == want.role && strings.Contains(entries[i].Content, want.content) {
+				start = i + 1
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf(
+				"missing ordered %s entry containing %q after %d in %#v",
+				want.role,
+				want.content,
+				start,
+				entries,
+			)
+		}
+	}
 }
 
 func appendCantoHistory(

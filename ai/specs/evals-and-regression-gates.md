@@ -44,6 +44,7 @@ describe expectations, not duplicate transcript data.
 | Suite | Priority | Gate |
 |---|---:|---|
 | prompt quality | P0 | unit test |
+| minimal harness acceptance | P0 | deterministic app/CLI tests plus optional tmux/live smoke |
 | permission policy | P0 | unit/integration tests over `PolicyEngine` and TUI approvals |
 | tool lifecycle | P0 | fake backend integration tests |
 | bug workflow | P1 | local fixture with reproduce-before-fix check |
@@ -53,6 +54,9 @@ describe expectations, not duplicate transcript data.
 ## CI Policy
 
 - Every PR runs deterministic local gates through `go test ./...`.
+- The minimal harness gate is the product acceptance floor: submit, stream,
+  tool call/result, compact display, final transcript rendering, durable
+  replay, scriptable print mode, and optional tmux/live smoke.
 - LLM judge or external harness gates are opt-in until cost controls exist.
 - Any expensive gate must write JSONL results compatible with Canto `x/eval`.
 - A failed eval blocks prompt/tool/workflow changes the same way a failed unit test

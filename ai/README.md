@@ -10,7 +10,7 @@
 ## Canonical Specs
 
 - [ACP Integration](specs/acp-integration.md) — ACP bridge protocol and gaps.
-- [Evals And Regression Gates](specs/evals-and-regression-gates.md) — test tiers and smoke gates.
+- [Evals And Regression Gates](specs/evals-and-regression-gates.md) — test tiers, minimal-harness acceptance, and smoke gates.
 - [Instructions And Skills](specs/instructions-and-skills.md) — instruction layering and skill boundaries.
 - [Model Catalog Strategy](specs/model-catalog-strategy.md) — provider/model metadata flow.
 - [Provider Support Expansion](specs/provider-support-expansion.md) — provider roadmap.
