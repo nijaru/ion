@@ -139,6 +139,9 @@ Fast, lightweight terminal coding agent.
   shell renderer from `View()` and made idle-ready suppression an explicit
   predicate; focused app tests, `go test ./...`, the native race subset, and
   tmux smoke passed.
+- App event reducer cleanup started: turn-finished settlement is now isolated
+  from the large session-event switch. Focused turn-finish tests,
+  `go test ./...`, and the native race subset passed.
 - TUI separator hotfix restored full-width composer bars while keeping the
   terminal-width-minus-one resize guard. Focused separator/progress tests,
   `go test ./internal/app -count=1 -timeout 180s`,
