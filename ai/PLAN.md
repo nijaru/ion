@@ -4,21 +4,20 @@ Updated: 2026-05-04
 
 ## Current Focus
 
-The C2 executor boundary and C3 context-survival work are closed unless a smoke
-exposes a concrete defect. C4 session branching is reviewed: `/tree` and
-current-point `/fork [label]` are good enough for the current shell, and
-`/clone` stays deferred while it would only duplicate `/fork`.
+The native core, executor boundary, context-survival work, and minimal
+command/workflow shell are accepted. Ion is on the right track for a minimal,
+well-engineered terminal coding agent: one native harness path, eight default
+tools, compact TUI, scriptable CLI, durable sessions, and small command surface.
 
-Current task: none. `tk-g34g` minimal harness acceptance and simplification is
-closed.
+Current task: none. Next ready task is `tk-xh5w` minimal-harness regression
+suite.
 
-The next priority is not adding commands. Treat background job commands, bash
-mode, `/goal`, `/side`, richer fork UI, and `/clone` as deferred references
-until daily use or reference-agent evidence proves they are worth the
-maintenance cost. The default native harness path is now accepted; the next
-real work should come from a concrete daily-use bug, Fedora local-api smoke
-when the host is available, or an explicit decision to resume low-priority
-shell experiments such as bash mode.
+The next priority is not adding commands. The job now is to package current
+acceptance evidence into repeatable regression gates so future refactors and
+features do not reopen the same core-loop/TUI bugs. Treat background job
+commands, bash mode, `/goal`, `/side`, richer fork UI, and `/clone` as deferred
+references until daily use or reference-agent evidence proves they are worth
+the maintenance cost.
 
 Flue, Pi, OpenAI Agents SDK, and Mendral stay in the plan as architecture
 constraints, not implementation scope. They are useful because they clarify
@@ -40,6 +39,7 @@ core is solid.
 | C2 | Refactor local execution around the executor boundary | Done |
 | C3 | Harden context survival and session workflows | Done; Fedora smoke deferred |
 | C4 | Tighten command/workflow shell without expanding the surface | Done |
+| C5 | Codify acceptance gates and small maintainability refactors | Active |
 | I5 | Add eval-driven optimization and SOTA experiments | Deferred |
 
 ## I0: Dirty Baseline And Context Hygiene
@@ -274,7 +274,7 @@ Acceptance:
 
 ## C1: Harness Boundary Refactor
 
-Status: active.
+Status: done.
 
 Motivation: Flue is not a TUI replacement, but its `init -> agent -> session`
 shape, Pi's small core, OpenAI's model-native harness direction, and Mendral's
@@ -310,7 +310,7 @@ Order:
 
 ## C2: Local Executor Boundary
 
-Status: closeout.
+Status: done.
 
 Goal: make local tool execution match the design without adding features:
 
@@ -390,7 +390,7 @@ cache experiments.
 
 ## C4: Command And Workflow Shell
 
-Status: active.
+Status: done.
 
 Goal: keep Ion's shell competitive by staying minimal. Pi, Codex, Claude Code,
 and Droid are references for proven workflow patterns, not a backlog to copy.
@@ -408,7 +408,7 @@ Order:
      the current point and switches into the labeled child
    - earlier-turn forking needs a selector before it is exposed
    - `/clone` stays deferred while it would only duplicate current `/fork`
-3. Next - `tk-g34g` minimal harness acceptance:
+3. Done - `tk-g34g` minimal harness acceptance:
    - review default TUI/CLI/native path for unnecessary command or feature
      surfaces
    - verify default tools/commands/settings are small and proven
@@ -435,6 +435,43 @@ Acceptance:
 - no deferred command leaks into help/completion
 - branch/session commands have distinct user-facing semantics
 - no `/goal` prompt-only placeholder
+
+## C5: Acceptance Gates And Maintainability
+
+Status: active.
+
+Goal: keep the accepted minimal harness boring. Convert manual acceptance into
+repeatable regression checks before adding new product surface.
+
+Order:
+
+1. Next - `tk-xh5w` - codify the minimal harness acceptance suite:
+   - deterministic/fake-backend loop cases for submit, stream, tool,
+     cancel/error, persist, resume, queued follow-up, and final rendering
+   - scriptable CLI cases for `-p`, JSON, `--continue`, and `--resume <id>`
+   - tmux smoke script or documented command set for fresh launch, `/help`,
+     `/tools`, `/settings`, tool turn, resize, `--continue`, and resumed
+     follow-up
+   - live-smoke command remains short and optional, with OpenRouter
+     `deepseek/deepseek-v3.2` as the default fallback and Fedora local-api when
+     reachable
+2. Deferred until Fedora is reachable - `tk-jkcl` - final Fedora local-api
+   repeat of the live gate.
+3. After `tk-xh5w` - `tk-omw4` - split oversized app tests by behavior without
+   changing behavior.
+4. After `tk-xh5w` - `tk-0gni` - run a local edit-tool eval before deciding
+   whether a Pi-style merged edit tool should replace the current split.
+5. Later - `tk-tpxu` - retire resolved core-loop topic docs after the
+   regression suite becomes the live evidence source.
+
+Acceptance:
+
+- `tk ready` points at real engineering work, not low-priority feature ideas.
+- Manual smoke steps that matter are represented by tests or a reproducible
+  script.
+- No new model-visible tools, commands, or safety modes are added during C5.
+- Test/refactor cleanup reduces maintenance cost without changing the accepted
+  product surface.
 
 ## I5+ Deferred Work
 

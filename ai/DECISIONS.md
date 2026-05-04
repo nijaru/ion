@@ -25,6 +25,15 @@ Distilled architectural principles plus recent decision log.
 
 ## Recent Log
 
+### 2026-05-04 - Regression gates before more product surface
+
+The minimal native harness is accepted enough to stop broad redesign churn:
+one Canto-backed native path, eight default tools, compact TUI, scriptable CLI,
+durable sessions, and deferred advanced commands. The next engineering wedge
+is not bash mode, `/goal`, `/clone`, or background tasks. It is turning the
+manual acceptance evidence into repeatable deterministic, CLI, tmux, and live
+smoke gates so later refactors and features have a stable floor.
+
 ### 2026-05-03 - Goal waits behind jobs and workflow state
 
 Pi has no built-in `/goal`; Codex has a feature-gated `/goal` for long-running

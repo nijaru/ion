@@ -2,9 +2,9 @@
 
 Fast, lightweight terminal coding agent.
 
-**Phase:** C4 shell/session workflow
-**Focus:** minimal harness accepted; no speculative commands or feature expansion
-**Active task:** none
+**Phase:** C5 regression hardening
+**Focus:** turn accepted minimal harness behavior into repeatable gates before new features
+**Active task:** none; next ready task is `tk-xh5w`
 **Updated:** 2026-05-04
 
 ## Current Truth
@@ -22,10 +22,8 @@ Fast, lightweight terminal coding agent.
   boundary, not a second native loop.
 - Current default tool surface is `bash`, `read`, `write`, `edit`,
   `multi_edit`, `list`, `grep`, and `glob`; the old `verify` tool is removed.
-- C2 executor-boundary implementation work is closed unless a smoke exposes a
-  concrete defect. The next path is context-survival hardening: internal
-  transcript timestamps, Fedora live smoke when reachable, then fork/timestamp
-  audit.
+- C2 executor-boundary, C3 context-survival, and C4 command/workflow shell work
+  are closed unless a smoke exposes a concrete defect.
 - Fork primitives already exist at the session/history level: `/fork [label]`,
   `/tree`, portable export/import bundles, and opt-in subagent
   `context_mode=fork`. Worktree/filesystem forks and richer tree UI are future
@@ -33,10 +31,10 @@ Fast, lightweight terminal coding agent.
 - `tk-jwfs` is closed. Ion now preserves Canto event timestamps through
   host-facing transcript/replay projections while keeping default TUI rendering
   and provider-visible history timestamp-free.
-- Fedora is unreachable from this Mac right now: `fedora` resolves to the
-  Tailscale address, but ICMP has 100% packet loss and
+- Fedora is unreachable from this Mac right now:
   `http://fedora:8080/v1/models` times out. `tk-jkcl` is deferred until the
-  host responds. OpenRouter DeepSeek Flash remains the current live gate.
+  host responds. OpenRouter `deepseek/deepseek-v3.2` is the current live-smoke
+  harness default; older DeepSeek Flash smokes remain historical evidence.
 - `tk-d2m6` is closed. Fork/session workflow tests now prove copied fork
   entries, portable bundle import/export, and subagent `context_mode=fork`
   preserve Canto ancestry plus usable event timestamps.
@@ -116,12 +114,21 @@ Fast, lightweight terminal coding agent.
 - `tk-g34g` is closed. Minimal-harness acceptance reviewed the default native
   path, found no second loop or leaked deferred command surface, and removed
   internal `/tools` copy that exposed implementation jargon.
-- The only ready task is `tk-er04` bash-mode evaluation, which remains
-  low-priority and should not start unless daily use proves it is worth the
-  extra surface.
+- The next ready task is `tk-xh5w`: codify the minimal-harness acceptance suite
+  so current reliability evidence becomes repeatable. `tk-er04` bash-mode
+  evaluation remains low-priority and should not start unless daily use proves
+  it is worth the extra surface.
 
 ## Latest Evidence
 
+- Roadmap/task alignment pass found the product is on the right track for a
+  minimal but well-engineered core: one native harness path, eight default
+  tools, small command surface, compact TUI, and strong deterministic/race/live
+  coverage. The gap is now regression packaging, not more feature design.
+  Created `tk-xh5w` for the repeatable minimal-harness suite, `tk-omw4` for
+  app test-file splitting after that suite, `tk-0gni` for a future edit-tool
+  eval, and `tk-tpxu` for later resolved-doc pruning. Fedora still timed out
+  on `2026-05-04`.
 - Minimal-harness acceptance passed
   `go test ./internal/app -count=1 -timeout 180s`,
   `go test ./... -count=1 -timeout 300s`, and
