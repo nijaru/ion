@@ -47,6 +47,20 @@ assert_not_contains() {
   fi
 }
 
+assert_line_count_at_most() {
+  local needle="$1"
+  local max="$2"
+  local count
+  capture
+  count="$(grep -Fxc -- "$needle" "$CAPTURE" || true)"
+  if ((count > max)); then
+    echo "too many lines matching $needle: got $count, want <= $max" >&2
+    echo "--- capture ---" >&2
+    cat "$CAPTURE" >&2
+    exit 1
+  fi
+}
+
 wait_contains() {
   local needle="$1"
   local timeout="${2:-20}"
@@ -110,6 +124,7 @@ sleep 0.5
 tmux resize-window -t "$SESSION" -x 60 -y 24
 sleep 0.5
 assert_contains "Type a message"
+assert_line_count_at_most "• Ready" 1
 
 if [[ "$LIVE" == "1" ]]; then
   send_line 'Use the bash tool exactly once to run `echo ion-tmux-smoke`, then reply with the single word done.'

@@ -503,6 +503,7 @@ func compactQueuedText(text string) string {
 // progressLine renders the single-line progress indicator between Plane B and the composer.
 func (m Model) progressLine() string {
 	var line string
+	idleReady := false
 	if m.Progress.Compacting {
 		line = m.Input.Spinner.View() + " Compacting context..."
 		if n := len(m.InFlight.QueuedTurns); n > 0 {
@@ -557,11 +558,15 @@ func (m Model) progressLine() string {
 		} else if status := strings.TrimSpace(m.Progress.Status); !isIdleStatus(status) && !isConfigurationStatus(status) {
 			line = m.st.dim.Render("• " + status)
 		} else {
+			idleReady = true
 			line = m.st.dim.Render("• Ready")
 		}
 	}
 	if n := len(m.InFlight.QueuedTurns); n > 0 {
 		line += m.st.dim.Render(fmt.Sprintf(" • %d queued", n))
+	}
+	if idleReady && m.App.PrintedTranscript && len(m.InFlight.QueuedTurns) == 0 {
+		return ""
 	}
 	return fitLine(strings.TrimRight(line, " "), m.shellWidth())
 }

@@ -43,8 +43,10 @@ func (m Model) View() tea.View {
 	}
 
 	// Progress line
-	b.WriteString(m.progressLine())
-	b.WriteString("\n")
+	if progress := m.progressLine(); progress != "" {
+		b.WriteString(progress)
+		b.WriteString("\n")
+	}
 
 	// Top separator
 	b.WriteString(m.st.sep.Render(m.shellSeparator()))

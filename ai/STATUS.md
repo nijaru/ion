@@ -119,9 +119,8 @@ Fast, lightweight terminal coding agent.
   use proves it is worth the extra surface.
 - `tk-l8eo` is closed. The inline shell separators now render at the wrap-safe
   shell width instead of the accidental 24-column cap.
-- `tk-yvpb` is open. Tmux smoke still shows multiple committed `Ready` rows
-  after local commands; this is the next TUI review finding to fix or
-  explicitly classify.
+- `tk-yvpb` is closed. Idle `Ready` is now suppressed after transcript/local
+  command output, while fresh launch and terminal progress states still render.
 
 ## Latest Evidence
 
@@ -129,11 +128,10 @@ Fast, lightweight terminal coding agent.
   model-picker metric headers are clamped to shell width, Ion-only storage
   events preserve supplied timestamps, `multi_edit` no longer writes
   predictable user-path `.tmp` files and now emits deterministic diffs, and the
-  executor environment label is no longer shown in the startup shell. Focused
+  executor environment label is no longer shown in the startup shell, and
+  duplicate idle `Ready` rows after local commands are suppressed. Focused
   tests, `go test ./... -count=1 -timeout 300s`, the native race subset, and
-  `scripts/smoke/tmux-minimal-harness.sh` passed before the startup-label
-  follow-up. The smoke capture also exposed the remaining duplicate-`Ready`
-  local-command artifact tracked by `tk-yvpb`.
+  `scripts/smoke/tmux-minimal-harness.sh` passed after the follow-ups.
 - TUI separator hotfix restored full-width composer bars while keeping the
   terminal-width-minus-one resize guard. Focused separator/progress tests,
   `go test ./internal/app -count=1 -timeout 180s`,
