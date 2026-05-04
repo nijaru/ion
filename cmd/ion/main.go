@@ -361,7 +361,7 @@ func startupToolLine(b backend.Backend) string {
 	}
 	environment := strings.TrimSpace(surface.Environment)
 	if environment != "" {
-		parts = append(parts, "Env "+environment)
+		parts = append(parts, backend.ToolEnvironmentSummary(environment))
 	}
 	return strings.Join(parts, " • ")
 }

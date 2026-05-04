@@ -2,7 +2,14 @@ package tools
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/aymanbagabas/go-udiff"
@@ -137,7 +144,7 @@ type EditOperation struct {
 func (m *MultiEdit) Spec() llm.Spec {
 	return llm.Spec{
 		Name:        "multi_edit",
-		Description: "Apply multiple targeted text replacements across one or more files in a single atomic operation.",
+		Description: "Apply multiple targeted text replacements across one or more files after validating every operation.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -233,12 +240,8 @@ func (m *MultiEdit) Execute(ctx context.Context, args string) (string, error) {
 		}
 	}
 
-	var diffs strings.Builder
-	checkpointPaths := make([]string, 0, len(contents))
-	for relPath := range contents {
-		checkpointPaths = append(checkpointPaths, relPath)
-	}
-	checkpointID, err := m.checkpointPaths(ctx, checkpointPaths...)
+	paths := sortedMapKeys(contents)
+	checkpointID, err := m.checkpointPaths(ctx, paths...)
 	if err != nil {
 		return "", err
 	}
@@ -249,10 +252,15 @@ func (m *MultiEdit) Execute(ctx context.Context, args string) (string, error) {
 	var renames []renameOp
 	var writeErrs []error
 
-	for relPath, content := range contents {
-		tmpPath := relPath + ".tmp"
-		if err := root.WriteFile(tmpPath, []byte(content), 0o644); err != nil {
-			writeErrs = append(writeErrs, fmt.Errorf("failed to write temp %s: %w", tmpPath, err))
+	var diffs strings.Builder
+	for _, relPath := range paths {
+		content := contents[relPath]
+		tmpPath, err := writeEditTempFile(root, relPath, []byte(content))
+		if err != nil {
+			writeErrs = append(
+				writeErrs,
+				fmt.Errorf("failed to write temp for %s: %w", relPath, err),
+			)
 			break
 		}
 		renames = append(renames, renameOp{from: tmpPath, to: relPath})
@@ -288,6 +296,56 @@ func (m *MultiEdit) Execute(ctx context.Context, args string) (string, error) {
 			checkpointID,
 		),
 	), nil
+}
+
+func sortedMapKeys(values map[string]string) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	return keys
+}
+
+func writeEditTempFile(root *os.Root, relPath string, data []byte) (string, error) {
+	dir := filepath.Dir(relPath)
+	base := filepath.Base(relPath)
+	for attempt := 0; attempt < 16; attempt++ {
+		suffix, err := randomHexSuffix()
+		if err != nil {
+			return "", err
+		}
+		name := "." + base + "." + suffix + ".tmp"
+		if dir != "." {
+			name = filepath.Join(dir, name)
+		}
+		file, err := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		if errors.Is(err, os.ErrExist) {
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		if _, err := file.Write(data); err != nil {
+			_ = file.Close()
+			_ = root.Remove(name)
+			return "", err
+		}
+		if err := file.Close(); err != nil {
+			_ = root.Remove(name)
+			return "", err
+		}
+		return name, nil
+	}
+	return "", fmt.Errorf("could not create temporary file for %s", relPath)
+}
+
+func randomHexSuffix() (string, error) {
+	var buf [8]byte
+	if _, err := io.ReadFull(rand.Reader, buf[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(buf[:]), nil
 }
 
 func validateEditStrings(oldString, newString string) error {

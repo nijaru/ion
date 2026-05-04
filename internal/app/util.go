@@ -275,7 +275,7 @@ func toolSurfaceSummary(surface backend.ToolSurface) string {
 	}
 	environment := strings.TrimSpace(surface.Environment)
 	if environment != "" {
-		parts = append(parts, "env "+environment)
+		parts = append(parts, strings.ToLower(backend.ToolEnvironmentSummary(environment)))
 	}
 	suffix := ""
 	if len(parts) > 0 {

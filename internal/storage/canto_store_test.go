@@ -125,10 +125,13 @@ func TestCantoStoreForkSessionCopiesEventsAndIndexesChild(t *testing.T) {
 		t.Fatalf("open parent session: %v", err)
 	}
 	parentAt := time.Date(2026, 5, 2, 15, 0, 0, 0, time.UTC)
-	parentEvent := withCantoTimestamp(csession.NewEvent(parent.ID(), csession.MessageAdded, llm.Message{
-		Role:    llm.RoleUser,
-		Content: "debug the flaky test",
-	}), parentAt)
+	parentEvent := withCantoTimestamp(
+		csession.NewEvent(parent.ID(), csession.MessageAdded, llm.Message{
+			Role:    llm.RoleUser,
+			Content: "debug the flaky test",
+		}),
+		parentAt,
+	)
 	if err := store.canto.Save(ctx, parentEvent); err != nil {
 		t.Fatalf("append parent message: %v", err)
 	}
@@ -225,10 +228,13 @@ func TestCantoStoreSessionBundleExportsAndImportsLineage(t *testing.T) {
 		t.Fatalf("open parent session: %v", err)
 	}
 	parentAt := time.Date(2026, 5, 2, 16, 0, 0, 0, time.UTC)
-	parentEvent := withCantoTimestamp(csession.NewEvent(parent.ID(), csession.MessageAdded, llm.Message{
-		Role:    llm.RoleUser,
-		Content: "debug the flaky test",
-	}), parentAt)
+	parentEvent := withCantoTimestamp(
+		csession.NewEvent(parent.ID(), csession.MessageAdded, llm.Message{
+			Role:    llm.RoleUser,
+			Content: "debug the flaky test",
+		}),
+		parentAt,
+	)
 	if err := exportStore.canto.Save(ctx, parentEvent); err != nil {
 		t.Fatalf("append parent message: %v", err)
 	}
@@ -248,10 +254,13 @@ func TestCantoStoreSessionBundleExportsAndImportsLineage(t *testing.T) {
 		t.Fatalf("fork session: %v", err)
 	}
 	childAt := parentAt.Add(time.Minute)
-	childEvent := withCantoTimestamp(csession.NewEvent(child.ID(), csession.MessageAdded, llm.Message{
-		Role:    llm.RoleAssistant,
-		Content: "alternate fix works",
-	}), childAt)
+	childEvent := withCantoTimestamp(
+		csession.NewEvent(child.ID(), csession.MessageAdded, llm.Message{
+			Role:    llm.RoleAssistant,
+			Content: "alternate fix works",
+		}),
+		childAt,
+	)
 	if err := exportStore.canto.Save(ctx, childEvent); err != nil {
 		t.Fatalf("append child message: %v", err)
 	}
@@ -597,6 +606,41 @@ func TestLazySessionSkipsEmptyAgentAppend(t *testing.T) {
 	}
 	if recent != nil {
 		t.Fatalf("recent after empty append = %#v, want nil", recent)
+	}
+}
+
+func TestCantoStoreAppendPreservesIonEventTimestamp(t *testing.T) {
+	root := t.TempDir()
+	storeAny, err := NewCantoStore(root)
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	store := storeAny.(*cantoStore)
+
+	ctx := context.Background()
+	sess, err := store.OpenSession(ctx, "/tmp/ion-storage-test", "model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	eventAt := time.Date(2026, 5, 4, 12, 34, 56, 0, time.UTC)
+	if err := sess.Append(ctx, System{
+		Type:    "system",
+		Content: "Paused for review",
+		TS:      eventAt.Unix(),
+	}); err != nil {
+		t.Fatalf("append system: %v", err)
+	}
+
+	entries, err := sess.Entries(ctx)
+	if err != nil {
+		t.Fatalf("entries: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("entries len = %d, want 1: %#v", len(entries), entries)
+	}
+	if !entries[0].Timestamp.Equal(eventAt) {
+		t.Fatalf("system timestamp = %s, want %s", entries[0].Timestamp, eventAt)
 	}
 }
 
@@ -1304,10 +1348,13 @@ func TestCantoStoreEntriesUseEffectiveHistoryAfterCompaction(t *testing.T) {
 		t.Fatalf("append agent: %v", err)
 	}
 	recentAt := time.Date(2026, 5, 2, 13, 0, 0, 0, time.UTC)
-	recentEvent := withCantoTimestamp(csession.NewEvent(sess.ID(), csession.MessageAdded, llm.Message{
-		Role:    llm.RoleAssistant,
-		Content: "recent answer",
-	}), recentAt)
+	recentEvent := withCantoTimestamp(
+		csession.NewEvent(sess.ID(), csession.MessageAdded, llm.Message{
+			Role:    llm.RoleAssistant,
+			Content: "recent answer",
+		}),
+		recentAt,
+	)
 	if err := cantoSess.Append(ctx, recentEvent); err != nil {
 		t.Fatalf("append recent agent: %v", err)
 	}

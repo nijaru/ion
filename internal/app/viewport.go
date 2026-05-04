@@ -7,6 +7,7 @@ import (
 	"unicode"
 
 	"github.com/charmbracelet/x/ansi"
+	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/tooldisplay"
@@ -101,7 +102,10 @@ func (m Model) renderPlaneB() string {
 		b.WriteString(m.st.warn.PaddingLeft(2).Render("Approve " + desc + "? (y/n/a)"))
 		b.WriteString("\n")
 		if environment := strings.TrimSpace(m.Approval.Pending.Environment); environment != "" {
-			b.WriteString(m.st.dim.PaddingLeft(2).Render("Environment: " + environment))
+			b.WriteString(
+				m.st.dim.PaddingLeft(2).
+					Render("Bash env: " + backend.ToolEnvironmentLabel(environment)),
+			)
 			b.WriteString("\n")
 		}
 		if summary := escalationSummary(m.Model.Escalation); summary != "" {

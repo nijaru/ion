@@ -471,7 +471,7 @@ func (s *cantoSession) Append(ctx context.Context, event any) error {
 		return modelVisibleAppendError(event)
 	case Subagent:
 		preview = sessionSummary(e.Content)
-		ev := session.NewEvent(s.id, ionSubagentEvent, e)
+		ev := newStoredEvent(s.id, ionSubagentEvent, e, e.TS)
 		err = s.store.canto.Save(ctx, ev)
 	case ToolUse:
 		return modelVisibleAppendError(event)
@@ -481,23 +481,23 @@ func (s *cantoSession) Append(ctx context.Context, event any) error {
 		if !isDurableResumeStatus(e.Status) {
 			return nil
 		}
-		ev := session.NewEvent(s.id, session.EventType("status_changed"), map[string]any{
+		ev := newStoredEvent(s.id, session.EventType("status_changed"), map[string]any{
 			"status": e.Status,
-		})
+		}, e.TS)
 		err = s.store.canto.Save(ctx, ev)
 	case System:
 		preview = ""
-		ev := session.NewEvent(s.id, ionSystemEvent, e)
+		ev := newStoredEvent(s.id, ionSystemEvent, e, e.TS)
 		err = s.store.canto.Save(ctx, ev)
 	case TokenUsage:
-		ev := session.NewEvent(s.id, session.EventType("token_usage"), map[string]any{
+		ev := newStoredEvent(s.id, session.EventType("token_usage"), map[string]any{
 			"input":  e.Input,
 			"output": e.Output,
 			"cost":   e.Cost,
-		})
+		}, e.TS)
 		err = s.store.canto.Save(ctx, ev)
 	case RoutingDecision:
-		ev := session.NewEvent(s.id, session.EventType("routing_decision"), map[string]any{
+		ev := newStoredEvent(s.id, session.EventType("routing_decision"), map[string]any{
 			"decision":         e.Decision,
 			"reason":           e.Reason,
 			"model_slot":       e.ModelSlot,
@@ -509,16 +509,16 @@ func (s *cantoSession) Append(ctx context.Context, event any) error {
 			"session_cost":     e.SessionCost,
 			"turn_cost":        e.TurnCost,
 			"stop_reason":      e.StopReason,
-		})
+		}, e.TS)
 		err = s.store.canto.Save(ctx, ev)
 	case EscalationNotification:
-		ev := session.NewEvent(s.id, session.EventType("escalation_notification"), map[string]any{
+		ev := newStoredEvent(s.id, session.EventType("escalation_notification"), map[string]any{
 			"request_id": e.RequestID,
 			"channel":    e.Channel,
 			"target":     e.Target,
 			"status":     e.Status,
 			"detail":     e.Detail,
-		})
+		}, e.TS)
 		err = s.store.canto.Save(ctx, ev)
 	default:
 		return nil
@@ -532,6 +532,19 @@ func (s *cantoSession) Append(ctx context.Context, event any) error {
 		ctx,
 		SessionInfo{ID: s.id, Title: title, Summary: preview, LastPreview: preview},
 	)
+}
+
+func newStoredEvent(
+	sessionID string,
+	eventType session.EventType,
+	data any,
+	unixTS int64,
+) session.Event {
+	ev := session.NewEvent(sessionID, eventType, data)
+	if unixTS > 0 {
+		ev.Timestamp = time.Unix(unixTS, 0).UTC()
+	}
+	return ev
 }
 
 func modelVisibleAppendError(event any) error {
