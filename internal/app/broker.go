@@ -106,63 +106,7 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		return m, m.awaitSessionEvent()
 
 	case session.TurnFinished:
-		m.InFlight.Thinking = false
-		assistantCompleted := m.InFlight.AgentCommitted
-		var cmds []tea.Cmd
-		if !m.InFlight.AgentCommitted &&
-			m.InFlight.Pending != nil && m.InFlight.Pending.Role == session.Agent &&
-			(strings.TrimSpace(m.InFlight.Pending.Content) != "" ||
-				strings.TrimSpace(m.InFlight.Pending.Reasoning) != "" ||
-				strings.TrimSpace(m.InFlight.ReasonBuf) != "") {
-			if strings.TrimSpace(m.InFlight.Pending.Reasoning) == "" {
-				m.InFlight.Pending.Reasoning = m.InFlight.ReasonBuf
-			}
-			entry := *m.InFlight.Pending
-			m.InFlight.Pending = nil
-			m.InFlight.StreamBuf = ""
-			m.InFlight.ReasonBuf = ""
-			cmds = append(cmds, m.printEntries(entry))
-			assistantCompleted = true
-		}
-		if m.InFlight.AgentCommitted {
-			m.InFlight.Pending = nil
-			m.InFlight.StreamBuf = ""
-			m.InFlight.ReasonBuf = ""
-		}
-		if m.Progress.Mode == stateError {
-			m.InFlight.QueuedTurns = nil
-		} else if m.Progress.Mode == stateCancelled || m.Progress.BudgetStopReason != "" {
-			m.Progress.Mode = stateCancelled
-			m.InFlight.QueuedTurns = nil
-		} else if !assistantCompleted {
-			m.Progress.Mode = stateError
-			m.Progress.LastError = "turn finished without assistant response"
-			m.InFlight.QueuedTurns = nil
-			cmds = append(cmds, m.printEntries(session.Entry{
-				Role:    session.System,
-				Content: "Error: turn finished without assistant response",
-			}))
-		} else {
-			m.Progress.Mode = stateComplete
-		}
-		if !m.Progress.TurnStartedAt.IsZero() {
-			m.Progress.LastTurnSummary = turnSummary{
-				Elapsed: time.Since(m.Progress.TurnStartedAt),
-				Input:   m.Progress.CurrentTurnInput,
-				Output:  m.Progress.CurrentTurnOutput,
-				Cost:    m.Progress.CurrentTurnCost,
-			}
-		}
-		m.Progress.TurnStartedAt = time.Time{}
-		if len(m.InFlight.QueuedTurns) > 0 {
-			queued := m.InFlight.QueuedTurns[0]
-			m.InFlight.QueuedTurns = m.InFlight.QueuedTurns[1:]
-			cmds = append(cmds, func() tea.Msg { return queuedTurnMsg{text: queued} })
-			return m, tea.Sequence(cmds...)
-		}
-		cmds = append(cmds, loadGitDiffStats(m.App.Workdir))
-		cmds = append(cmds, m.awaitSessionEvent())
-		return m, tea.Sequence(cmds...)
+		return m.handleTurnFinished()
 
 	case session.ThinkingDelta:
 		if msg.AgentID == "" && m.InFlight.AgentCommitted {
@@ -499,6 +443,66 @@ func redactApprovalRequest(req session.ApprovalRequest) session.ApprovalRequest 
 	req.Description = privacy.Redact(req.Description)
 	req.Args = privacy.Redact(req.Args)
 	return req
+}
+
+func (m Model) handleTurnFinished() (Model, tea.Cmd) {
+	m.InFlight.Thinking = false
+	assistantCompleted := m.InFlight.AgentCommitted
+	var cmds []tea.Cmd
+	if !m.InFlight.AgentCommitted &&
+		m.InFlight.Pending != nil && m.InFlight.Pending.Role == session.Agent &&
+		(strings.TrimSpace(m.InFlight.Pending.Content) != "" ||
+			strings.TrimSpace(m.InFlight.Pending.Reasoning) != "" ||
+			strings.TrimSpace(m.InFlight.ReasonBuf) != "") {
+		if strings.TrimSpace(m.InFlight.Pending.Reasoning) == "" {
+			m.InFlight.Pending.Reasoning = m.InFlight.ReasonBuf
+		}
+		entry := *m.InFlight.Pending
+		m.InFlight.Pending = nil
+		m.InFlight.StreamBuf = ""
+		m.InFlight.ReasonBuf = ""
+		cmds = append(cmds, m.printEntries(entry))
+		assistantCompleted = true
+	}
+	if m.InFlight.AgentCommitted {
+		m.InFlight.Pending = nil
+		m.InFlight.StreamBuf = ""
+		m.InFlight.ReasonBuf = ""
+	}
+	if m.Progress.Mode == stateError {
+		m.InFlight.QueuedTurns = nil
+	} else if m.Progress.Mode == stateCancelled || m.Progress.BudgetStopReason != "" {
+		m.Progress.Mode = stateCancelled
+		m.InFlight.QueuedTurns = nil
+	} else if !assistantCompleted {
+		m.Progress.Mode = stateError
+		m.Progress.LastError = "turn finished without assistant response"
+		m.InFlight.QueuedTurns = nil
+		cmds = append(cmds, m.printEntries(session.Entry{
+			Role:    session.System,
+			Content: "Error: turn finished without assistant response",
+		}))
+	} else {
+		m.Progress.Mode = stateComplete
+	}
+	if !m.Progress.TurnStartedAt.IsZero() {
+		m.Progress.LastTurnSummary = turnSummary{
+			Elapsed: time.Since(m.Progress.TurnStartedAt),
+			Input:   m.Progress.CurrentTurnInput,
+			Output:  m.Progress.CurrentTurnOutput,
+			Cost:    m.Progress.CurrentTurnCost,
+		}
+	}
+	m.Progress.TurnStartedAt = time.Time{}
+	if len(m.InFlight.QueuedTurns) > 0 {
+		queued := m.InFlight.QueuedTurns[0]
+		m.InFlight.QueuedTurns = m.InFlight.QueuedTurns[1:]
+		cmds = append(cmds, func() tea.Msg { return queuedTurnMsg{text: queued} })
+		return m, tea.Sequence(cmds...)
+	}
+	cmds = append(cmds, loadGitDiffStats(m.App.Workdir))
+	cmds = append(cmds, m.awaitSessionEvent())
+	return m, tea.Sequence(cmds...)
 }
 
 func persistErrorCmd(action string, err error) tea.Cmd {
