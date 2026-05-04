@@ -86,7 +86,7 @@ send_line() {
 
 start_ion
 assert_contains "ion v0.0.0"
-assert_contains "Bash env inherited"
+assert_not_contains "Bash env inherited"
 assert_not_contains "Env inherit"
 assert_contains "Type a message"
 
