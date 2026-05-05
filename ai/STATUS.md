@@ -2,9 +2,9 @@
 
 Fast, lightweight terminal coding agent.
 
-**Phase:** C5 review and simplification
-**Focus:** C5 codebase architecture review: core loop, TUI, and package organization
-**Active task:** `tk-oqex` - Review core and TUI package architecture
+**Phase:** C5 review closeout
+**Focus:** Codebase audit closed; no ready `tk` task is active
+**Active task:** none
 **Updated:** 2026-05-05
 
 ## Current Truth
@@ -60,10 +60,11 @@ Fast, lightweight terminal coding agent.
   now; `/clone`, `/goal`, `/side`, background-job commands, and bash mode are
   deferred until daily use or reference-agent evidence proves they are worth
   their maintenance cost.
-- Current maintenance sequence is C5 review/refactor, not feature growth:
-  `tk-oqex` reviews package organization and source boundaries across the core
-  agent loop and TUI. `tk-xhfg` remains the live-smoke task with Fedora primary
-  and OpenRouter fallback. `tk-er04` bash-mode evaluation is deferred P4 work.
+- `tk-oqex` is closed. The C5 architecture audit covered `cmd/ion` and every
+  `internal` package, with concrete refactors/fixes committed in small green
+  slices. `tk-xhfg` remains the live-smoke task with Fedora primary and
+  OpenRouter fallback when live-provider proof is needed. `tk-er04` bash-mode
+  evaluation is deferred P4 work.
 - Sandbox/trust direction: trust is workspace eligibility, mode is approval
   posture, sandbox is executor enforcement, and provider credentials are not
   subprocess credentials by default.
@@ -133,8 +134,8 @@ Fast, lightweight terminal coding agent.
   `go test ./... -count=1 -timeout 300s`, the native race subset, and
   `scripts/smoke/tmux-minimal-harness.sh`. No concrete regression was found in
   this closeout gate.
-- `tk-oqex` is active. The first pass corrected the task graph so bash mode is
-  no longer the only ready task, then started package/core/TUI architecture
+- `tk-oqex` began by correcting the task graph so bash mode was no longer the
+  only ready task, then started package/core/TUI architecture
   review from a green focused baseline:
   `go test ./internal/app ./cmd/ion ./internal/backend/canto ./internal/backend/canto/tools ./internal/storage -count=1 -timeout 180s`.
 - First cleanup from `tk-oqex`: removed the unused Canto memory store from
@@ -243,6 +244,11 @@ Fast, lightweight terminal coding agent.
   against malformed `session.Error{Err:nil}` events so the TUI records a
   fallback error instead of panicking. Focused app tests, full `go test ./...`,
   and the native race subset passed.
+- Final `tk-oqex` closeout: package inventory covered `cmd/ion` and all
+  `internal` packages, the last exported panic-only provider helper was
+  removed, and focused provider tests, `go test ./... -count=1 -timeout 300s`,
+  the native race subset, and `scripts/smoke/tmux-minimal-harness.sh` passed.
+  `tk ready` now reports no ready tasks.
 - `tk-xhfg` policy is corrected. Fedora remains the primary live-smoke target,
   but Fedora unavailability should trigger an OpenRouter fallback run rather
   than deferring the gate.
@@ -629,10 +635,8 @@ Fast, lightweight terminal coding agent.
 
 ## Next Action
 
-1. Continue `tk-oqex`: review package organization and source boundaries across
-   `cmd/ion`, `internal/app`, `internal/backend/canto`, tools, storage, and
-   session code. Fix only small concrete defects; create scoped refactor tasks
-   for larger structural issues.
+1. Pick the next product or maintenance wedge explicitly; `tk ready` currently
+   reports no ready tasks after C5 closeout.
 2. Run `tk-xhfg` live smoke when a code slice needs live-provider proof: probe
    Fedora first, then use OpenRouter fallback if Fedora is unavailable.
 3. Keep `tk-er04` bash-mode evaluation deferred unless daily use proves it is

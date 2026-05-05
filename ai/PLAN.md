@@ -9,10 +9,10 @@ command/workflow shell are accepted. Ion is on the right track for a minimal,
 well-engineered terminal coding agent: one native harness path, eight default
 tools, compact TUI, scriptable CLI, durable sessions, and small command surface.
 
-The C5 review/refactor sequence is still the active path. The next work is not
-new surface area: review package organization and the core/TUI source
-boundaries, simplify concrete hotspots, and keep live-provider proof available
-with Fedora primary and OpenRouter fallback.
+The C5 review/refactor sequence is closed. The current tree has no ready `tk`
+task; the next work should be selected deliberately rather than defaulting to
+new surface area. Live-provider proof remains available with Fedora primary and
+OpenRouter fallback when a slice needs it.
 
 The next priority is not adding commands. Treat background job commands, bash
 mode, `/goal`, `/side`, richer fork UI, and `/clone` as deferred references
@@ -39,7 +39,7 @@ core is solid.
 | C2 | Refactor local execution around the executor boundary | Done |
 | C3 | Harden context survival and session workflows | Done; Fedora smoke deferred |
 | C4 | Tighten command/workflow shell without expanding the surface | Done |
-| C5 | Codify acceptance gates and simplify maintainability hotspots | Active review/refactor |
+| C5 | Codify acceptance gates and simplify maintainability hotspots | Done |
 | I5 | Add eval-driven optimization and SOTA experiments | Deferred |
 
 ## I0: Dirty Baseline And Context Hygiene
@@ -74,7 +74,7 @@ refactor.
 
 ## C5: Review And Simplification
 
-Status: active review/refactor.
+Status: complete.
 
 Completed sequence:
 
@@ -98,15 +98,15 @@ Completed sequence:
 9. Done - `tk-tpxu` - retire resolved core-loop topic docs after the regression
    suite became the live evidence source.
 
-Active order:
+Closeout:
 
 1. Done - `tk-ulgm` - roadmap/task rebaseline after C5.
 2. Done - `tk-wm30` - dogfood minimal harness and collect concrete regressions.
-3. Active - `tk-oqex` - review core and TUI package architecture. Inspect
+3. Done - `tk-oqex` - review core and TUI package architecture. Inspected
    package organization, app/TUI boundaries, CLI/runtime split,
-   `CantoBackend` adapter shape, tools, storage, and session ownership. Fix
-   small concrete defects and create scoped follow-up tasks for larger
-   structural issues.
+   `CantoBackend` adapter shape, tools, storage, session ownership, and the
+   remaining internal packages. Concrete defects were fixed in small green
+   slices; no larger structural blocker remains in `tk ready`.
 4. Deferred/live-gate - `tk-xhfg` - Fedora remains the primary live-smoke
    target, but if Fedora is unavailable or times out, run the OpenRouter
    fallback instead of deferring the gate.
@@ -521,7 +521,7 @@ Closeout:
 
 1. Done - `tk-ulgm` - rebaseline roadmap/status/tasks.
 2. Done - `tk-wm30` - dogfood minimal harness and collect regressions.
-3. Active - `tk-oqex` - review core and TUI package architecture.
+3. Done - `tk-oqex` - review core and TUI package architecture.
 4. Deferred/live-gate - `tk-xhfg` - run Fedora primary or OpenRouter fallback
    when live-provider proof is needed.
 5. Deferred/P4 - `tk-er04` - bash-mode evaluation.
