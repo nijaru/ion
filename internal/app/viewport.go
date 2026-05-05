@@ -13,10 +13,6 @@ import (
 	"github.com/nijaru/ion/internal/tooldisplay"
 )
 
-// Viewport handles the rendering of Plane A (committed scrollback) and Plane B (ephemeral in-flight content).
-// Currently, it acts as an extension of the Model receiver, but is planned for componentization.
-type Viewport struct{}
-
 // renderPlaneB renders all ephemeral in-flight content.
 // Returns empty string when there is nothing active.
 func (m Model) renderPlaneB() string {
