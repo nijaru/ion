@@ -567,6 +567,20 @@ func TestSessionErrorClearsQueuedTurnsAndSetsError(t *testing.T) {
 	}
 }
 
+func TestSessionErrorWithoutErrUsesFallbackMessage(t *testing.T) {
+	model := readyModel(t)
+
+	next, _ := model.Update(session.Error{})
+	model = next.(Model)
+
+	if model.Progress.Mode != stateError {
+		t.Fatalf("progress mode = %v, want error", model.Progress.Mode)
+	}
+	if model.Progress.LastError != "session error" {
+		t.Fatalf("last error = %q, want fallback", model.Progress.LastError)
+	}
+}
+
 func TestLocalErrorPrintsWithoutProgressError(t *testing.T) {
 	model := readyModel(t)
 

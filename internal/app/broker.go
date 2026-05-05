@@ -101,7 +101,10 @@ func (m Model) handleSessionError(err error, awaitTerminal bool) (Model, tea.Cmd
 	m.InFlight.AgentCommitted = false
 	m.Progress.Compacting = false
 	m.Progress.Mode = stateError
-	displayErr := err.Error()
+	displayErr := "session error"
+	if err != nil {
+		displayErr = err.Error()
+	}
 	if limit, ok := classifyProviderLimitError(err); ok {
 		displayErr = limit.display()
 		if err := m.persistEntry("persist routing stop", m.routingDecision("stop", limit.reason, limit.raw)); err != nil {
