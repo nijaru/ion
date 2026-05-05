@@ -3,9 +3,9 @@
 Fast, lightweight terminal coding agent.
 
 **Phase:** C5 review and simplification
-**Focus:** whole-product UI/UX and codebase organization review before new features
-**Active task:** none; next ready work is `tk-er04`
-**Updated:** 2026-05-04
+**Focus:** C5 closeout: dogfood minimal harness and rerun live smoke when available
+**Active task:** none; next ready work is `tk-wm30` or `tk-xhfg`
+**Updated:** 2026-05-05
 
 ## Current Truth
 
@@ -59,10 +59,9 @@ Fast, lightweight terminal coding agent.
   now; `/clone`, `/goal`, `/side`, background-job commands, and bash mode are
   deferred until daily use or reference-agent evidence proves they are worth
   their maintenance cost.
-- Current maintenance sequence is review/refactor first, not feature growth:
-  `tk-ywbt` whole-product review, `tk-245w` app event/shell-state refactor,
-  `tk-omw4` app test split, `tk-rkmn` backend/tool/storage boundary review,
-  and `tk-hdwz` resume-hint UX.
+- Current maintenance sequence is C5 closeout, not feature growth:
+  `tk-wm30` dogfood/minimal-harness soak, then `tk-xhfg` Fedora local-api
+  live gate when the host is free. `tk-er04` bash-mode evaluation remains P4.
 - Sandbox/trust direction: trust is workspace eligibility, mode is approval
   posture, sandbox is executor enforcement, and provider credentials are not
   subprocess credentials by default.
@@ -128,6 +127,10 @@ Fast, lightweight terminal coding agent.
 
 ## Latest Evidence
 
+- C5 roadmap/task rebaseline closed after the review/refactor sequence closed.
+  Added `tk-wm30` for dogfood/minimal-harness soak and `tk-xhfg` for the
+  Fedora local-api live gate. `tk-er04` remains low-priority and should not be
+  the default next task.
 - `tk-tpxu` is closed. The durable native-loop contract was folded into
   `ai/specs/evals-and-regression-gates.md`, and resolved core-loop review docs
   were removed from `ai/review/` so future sessions start from canonical specs,
@@ -269,11 +272,8 @@ Fast, lightweight terminal coding agent.
 - Roadmap/task alignment pass found the product is on the right track for a
   minimal but well-engineered core: one native harness path, eight default
   tools, small command surface, compact TUI, and strong deterministic/race/live
-  coverage. The gap is now regression packaging, not more feature design.
-  Created `tk-xh5w` for the repeatable minimal-harness suite, `tk-omw4` for
-  app test-file splitting after that suite, `tk-0gni` for a future edit-tool
-  eval, and `tk-tpxu` for later resolved-doc pruning. Fedora still timed out
-  on `2026-05-04`.
+  coverage. The remaining C5 work is closeout soak and live-smoke refresh, not
+  more feature design.
 - Minimal-harness acceptance passed
   `go test ./internal/app -count=1 -timeout 180s`,
   `go test ./... -count=1 -timeout 300s`, and
@@ -510,9 +510,6 @@ Fast, lightweight terminal coding agent.
 
 ## Next Action
 
-1. Choose the next ready item:
-   `tk-q5qe` for the remaining Ghostty monitor-resize stale-row bug,
-   `tk-txtx` for backend Canto test-file splitting, or `tk-0gni` for the
-   edit-tool eval.
-2. Retry deferred `tk-jkcl` Fedora C2 live smoke only when local-api is
-   reachable.
+1. Start `tk-wm30` dogfood minimal harness and collect only concrete
+   regressions.
+2. Run `tk-xhfg` Fedora local-api live gate when Fedora is free/reachable.

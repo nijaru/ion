@@ -1,6 +1,6 @@
 # Ion Roadmap
 
-Updated: 2026-05-04
+Updated: 2026-05-05
 
 ## Current Focus
 
@@ -9,15 +9,14 @@ command/workflow shell are accepted. Ion is on the right track for a minimal,
 well-engineered terminal coding agent: one native harness path, eight default
 tools, compact TUI, scriptable CLI, durable sessions, and small command surface.
 
-Current task: `tk-ywbt` whole UI/UX and codebase simplification review. The
-next work is to turn recent targeted fixes into a coherent refactor sequence,
-not to add more commands or tools.
+The C5 review/refactor sequence is closed. The next work is closeout, not new
+surface area: dogfood the minimal harness, rerun the Fedora live gate when
+local-api is free, and open only concrete regression tasks found by use.
 
-The next priority is not adding commands. The job now is to review the whole
-TUI/CLI/tool/session experience and simplify the implementation around the
-accepted minimal product. Treat background job commands, bash mode, `/goal`,
-`/side`, richer fork UI, and `/clone` as deferred references until daily use or
-reference-agent evidence proves they are worth the maintenance cost.
+The next priority is not adding commands. Treat background job commands, bash
+mode, `/goal`, `/side`, richer fork UI, and `/clone` as deferred references
+until daily use or reference-agent evidence proves they are worth the
+maintenance cost.
 
 Flue, Pi, OpenAI Agents SDK, and Mendral stay in the plan as architecture
 constraints, not implementation scope. They are useful because they clarify
@@ -39,7 +38,7 @@ core is solid.
 | C2 | Refactor local execution around the executor boundary | Done |
 | C3 | Harden context survival and session workflows | Done; Fedora smoke deferred |
 | C4 | Tighten command/workflow shell without expanding the surface | Done |
-| C5 | Codify acceptance gates and simplify maintainability hotspots | Active |
+| C5 | Codify acceptance gates and simplify maintainability hotspots | Closeout |
 | I5 | Add eval-driven optimization and SOTA experiments | Deferred |
 
 ## I0: Dirty Baseline And Context Hygiene
@@ -74,23 +73,37 @@ refactor.
 
 ## C5: Review And Simplification
 
-Status: active.
+Status: closed; closeout soak active.
 
-Sequence:
+Completed sequence:
 
-1. `tk-ywbt` - whole UI/UX and codebase simplification review. Keep this as the
-   active umbrella until the near-term refactor path is verified against source.
-2. `tk-245w` - app event reducer and shell-state refactor. Simplify ownership
-   around inline scrollback commits, Plane B rendering, progress state, queued
-   input, and resize behavior.
+1. Done - `tk-ywbt` - whole UI/UX and codebase simplification review.
+2. Done - `tk-245w` - app event reducer and shell-state refactor. Simplified
+   ownership around inline scrollback commits, Plane B rendering, progress
+   state, queued input, and resize behavior.
 3. Done - `tk-omw4` - split oversized app tests by behavior. The old mixed
    app model test is now behavior-focused test files plus shared fixtures.
-4. Done - `tk-rkmn` - backend/tool/storage responsibility boundary review. Check that
-   UI display policy stays in Ion renderers, model-visible history stays exact,
-   CantoBackend remains an adapter rather than a second framework, and tools
-   stay small and idiomatic.
+4. Done - `tk-rkmn` - backend/tool/storage responsibility boundary review.
+   Verified UI display policy stays in Ion renderers, model-visible history
+   stays exact, CantoBackend remains an adapter rather than a second framework,
+   and tools stay small and idiomatic.
 5. Done - `tk-hdwz` - print a resume command on exit after the shell/refactor pass,
    because it is useful UX but should not interrupt structural cleanup.
+6. Done - `tk-q5qe` - fix monitor-width shrink stale shell rows and add tmux
+   regression coverage for extra separator-only rows.
+7. Done - `tk-txtx` - split oversized backend/canto tests by behavior.
+8. Done - `tk-0gni` - add deterministic local edit-surface eval and keep the
+   split `write`/`edit`/`multi_edit` surface for now.
+9. Done - `tk-tpxu` - retire resolved core-loop topic docs after the regression
+   suite became the live evidence source.
+
+Closeout order:
+
+1. Done - `tk-ulgm` - roadmap/task rebaseline after C5.
+2. Next - `tk-wm30` - dogfood minimal harness and collect concrete regressions.
+3. Next - `tk-xhfg` - rerun the C5 Fedora local-api live gate when Fedora is free.
+4. `tk-er04` - bash-mode evaluation remains P4 and should not start unless
+   dogfooding proves it is worth the complexity.
 
 Acceptance:
 
@@ -467,7 +480,7 @@ Acceptance:
 
 ## C5: Acceptance Gates And Maintainability
 
-Status: active.
+Status: closeout.
 
 Goal: keep the accepted minimal harness boring. Convert manual acceptance into
 repeatable regression checks before adding new product surface.
@@ -491,10 +504,17 @@ Order:
 4. Done - `tk-rkmn` - review backend/tool/storage responsibility boundaries
    before adding new UX or tool features.
 5. Done - `tk-hdwz` - print a resume command on normal TUI exit.
-6. Next candidates - `tk-q5qe` monitor-resize stale rows, `tk-txtx`
-   backend/canto test-file split, or `tk-0gni` edit-tool eval.
-7. Later - `tk-tpxu` - retire resolved core-loop topic docs after the
-   regression suite becomes the live evidence source.
+6. Done - `tk-q5qe` - fix monitor-resize stale shell rows.
+7. Done - `tk-txtx` - split backend/canto tests by behavior.
+8. Done - `tk-0gni` - add local edit-tool eval; keep split edit/write tools.
+9. Done - `tk-tpxu` - retire resolved core-loop topic docs.
+
+Closeout:
+
+1. Done - `tk-ulgm` - rebaseline roadmap/status/tasks.
+2. Next - `tk-wm30` - dogfood minimal harness and collect regressions.
+3. Next - `tk-xhfg` - rerun Fedora local-api live gate when reachable.
+4. Deferred - `tk-er04` - bash-mode evaluation.
 
 Acceptance:
 
