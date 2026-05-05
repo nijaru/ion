@@ -80,15 +80,8 @@ func printLinesCmd(lines ...string) tea.Cmd {
 	return tea.Sequence(cmds...)
 }
 
-func printBlankLinesCmd(n int) tea.Cmd {
-	if n <= 0 {
-		return nil
-	}
-	cmds := make([]tea.Cmd, 0, n)
-	for range n {
-		cmds = append(cmds, tea.Printf("\x1b[0m"))
-	}
-	return tea.Sequence(cmds...)
+func clearVisibleScreenCmd() tea.Cmd {
+	return tea.Raw(ansi.CursorHomePosition + ansi.EraseEntireScreen)
 }
 
 func printEntriesCmd(m Model, entries ...session.Entry) tea.Cmd {

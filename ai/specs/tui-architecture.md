@@ -39,6 +39,16 @@ code fences and half-written lists should stay readable while the turn is still
 active. When the assistant message commits to Plane A, render it once through
 the Goldmark/GFM Markdown renderer.
 
+### Resize behavior
+
+Inline mode cannot fully own historical scrollback. Full-width shell rows that
+were drawn at a wide terminal size can reflow into extra physical rows when the
+terminal narrows, especially when moving between displays. Ion keeps live shell
+chrome wrap-safe by rendering rows at `terminal_width - 1`, and on width shrink
+it clears and redraws the visible screen instead of printing blank scrollback
+rows. Do not use `tea.Printf`/`tea.Println` for resize cleanup; those commands
+commit unmanaged Plane A scrollback.
+
 ## Transcript roles and styling
 
 Current visible conventions:

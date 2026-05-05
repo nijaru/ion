@@ -130,9 +130,19 @@ Fast, lightweight terminal coding agent.
   shell width instead of the accidental 24-column cap.
 - `tk-yvpb` is closed. Idle `Ready` is now suppressed after transcript/local
   command output, while fresh launch and terminal progress states still render.
+- `tk-zubu` is closed. Wide-to-narrow terminal resize now clears and redraws
+  the visible inline shell instead of printing blank unmanaged scrollback rows.
+  The main shell separators remain wrap-safe full-width (`terminal_width - 1`).
 
 ## Latest Evidence
 
+- `tk-zubu` reproduced the Ghostty/monitor-switch bug in tmux by launching at
+  280 columns and shrinking to 140/100; the pre-fix visible pane had duplicate
+  `Ready` rows and stale separator fragments. The fix removed resize-time
+  blank `tea.Printf` rows, redraws visible screen on width shrink, and expanded
+  tmux smoke to start wide and assert visible-pane resize state. Gates passed:
+  focused resize/app tests, `go test ./internal/app`, `scripts/smoke/tmux-minimal-harness.sh`,
+  `go test ./... -count=1 -timeout 300s`, and the native race subset.
 - `tk-k1fl` imported audited Canto `0c4dd06` after pushing Canto `main`.
   Downstream compatibility cleanup replaced removed Canto test aliases with
   `x/testing.FauxProvider` and removed the obsolete boolean reasoning

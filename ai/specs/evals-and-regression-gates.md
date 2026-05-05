@@ -82,6 +82,10 @@ describe expectations, not duplicate transcript data.
 - The minimal harness gate is the product acceptance floor: submit, stream,
   tool call/result, compact display, final transcript rendering, durable
   replay, scriptable print mode, and optional tmux/live smoke.
+- Tmux smoke should include a wide-to-narrow resize check. Inspect visible pane
+  state for one idle `Ready` row, two shell separators, and no stale progress
+  fragments; full scrollback may retain historical rows because Ion runs in
+  inline mode.
 - LLM judge or external harness gates are opt-in until cost controls exist.
 - Any expensive gate must write JSONL results compatible with Canto `x/eval`.
 - A failed eval blocks prompt/tool/workflow changes the same way a failed unit test
