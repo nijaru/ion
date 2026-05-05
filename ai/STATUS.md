@@ -4,7 +4,7 @@ Fast, lightweight terminal coding agent.
 
 **Phase:** C5 review and simplification
 **Focus:** whole-product UI/UX and codebase organization review before new features
-**Active task:** `tk-rkmn` — backend/tool/storage responsibility boundary review
+**Active task:** none; next ready work is `tk-q5qe`, `tk-txtx`, or `tk-0gni`
 **Updated:** 2026-05-04
 
 ## Current Truth
@@ -61,8 +61,8 @@ Fast, lightweight terminal coding agent.
   their maintenance cost.
 - Current maintenance sequence is review/refactor first, not feature growth:
   `tk-ywbt` whole-product review, `tk-245w` app event/shell-state refactor,
-  `tk-omw4` app test split, and now `tk-rkmn` backend/tool/storage boundary
-  review.
+  `tk-omw4` app test split, `tk-rkmn` backend/tool/storage boundary review,
+  and `tk-hdwz` resume-hint UX.
 - Sandbox/trust direction: trust is workspace eligibility, mode is approval
   posture, sandbox is executor enforcement, and provider credentials are not
   subprocess credentials by default.
@@ -128,6 +128,11 @@ Fast, lightweight terminal coding agent.
 
 ## Latest Evidence
 
+- TUI resume-hint slice added a normal-exit footer that prints
+  `ion --resume <session-id>` for the final active materialized session and
+  skips lazy sessions that never created durable history. Focused app/cmd tests,
+  `go test ./... -count=1 -timeout 300s`, the native race subset, and
+  `scripts/smoke/tmux-minimal-harness.sh` passed.
 - Backend/tool/storage boundary review continued: Canto turn execution and the
   local bash executor now use `sync.WaitGroup.Go` instead of manual `Add` plus
   goroutine wrappers. Focused backend/tool tests,
@@ -479,10 +484,9 @@ Fast, lightweight terminal coding agent.
 
 ## Next Action
 
-1. Continue `tk-rkmn` with a focused backend/tool/storage responsibility
-   review. Fix only concrete local issues; create follow-up tasks for larger
-   refactors.
-2. Implement `tk-hdwz` only after the boundary review, because the resume hint
-   is useful UX but not structural cleanup.
-3. Retry deferred `tk-jkcl` Fedora C2 live smoke only when local-api is
+1. Choose the next ready item:
+   `tk-q5qe` for the remaining Ghostty monitor-resize stale-row bug,
+   `tk-txtx` for backend Canto test-file splitting, or `tk-0gni` for the
+   edit-tool eval.
+2. Retry deferred `tk-jkcl` Fedora C2 live smoke only when local-api is
    reachable.

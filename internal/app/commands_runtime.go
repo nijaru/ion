@@ -69,6 +69,10 @@ func (m Model) currentMaterializedSessionID() string {
 	return strings.TrimSpace(m.Model.Storage.ID())
 }
 
+func (m Model) ResumeSessionID() string {
+	return m.currentMaterializedSessionID()
+}
+
 func (m Model) switchRuntimeCommand(
 	cfg *config.Config,
 	appCfg *config.Config,

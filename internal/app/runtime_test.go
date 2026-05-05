@@ -34,6 +34,24 @@ func TestNewRestoresActivePresetFromState(t *testing.T) {
 	}
 }
 
+func TestResumeSessionIDUsesMaterializedStorage(t *testing.T) {
+	model := readyModel(t)
+	model.Model.Storage = storage.NewLazySession(&resumeOnlyStore{}, "/tmp/test", "stub", "main")
+	if got := model.ResumeSessionID(); got != "" {
+		t.Fatalf("resume session id = %q, want empty for lazy unmaterialized storage", got)
+	}
+
+	model.Model.Storage = &stubStorageSession{id: "session-1"}
+	if got := model.ResumeSessionID(); got != "session-1" {
+		t.Fatalf("resume session id = %q, want materialized storage id", got)
+	}
+
+	model.Model.Session = nil
+	if got := model.ResumeSessionID(); got != "" {
+		t.Fatalf("resume session id = %q, want empty without active session", got)
+	}
+}
+
 func TestWithConfigForRuntimeKeepsAppConfigAndAppliesRuntimeConfig(t *testing.T) {
 	sess := &stubSession{events: make(chan session.Event)}
 	capture := &configCaptureBackend{stubBackend: stubBackend{sess: sess}}
