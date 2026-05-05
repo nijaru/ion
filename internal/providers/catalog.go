@@ -213,6 +213,9 @@ func CredentialEnvVars(cfg *config.Config) []string {
 }
 
 func ResolvedHeaders(cfg *config.Config) map[string]string {
+	if cfg == nil {
+		return nil
+	}
 	def, ok := Lookup(cfg.Provider)
 	if !ok {
 		return cloneHeaders(cfg.ExtraHeaders)
@@ -255,8 +258,12 @@ func CredentialStateContext(
 	if def.AuthKind == AuthLocal {
 		return "Ready", true
 	}
+	endpoint := ""
+	if cfg != nil {
+		endpoint = cfg.Endpoint
+	}
 	if def.Kind == KindCustom && def.DefaultEndpoint == "" &&
-		strings.TrimSpace(cfg.Endpoint) == "" {
+		strings.TrimSpace(endpoint) == "" {
 		return "Set endpoint", false
 	}
 	for _, envVar := range authEnvVars(cfg, def) {
@@ -310,6 +317,9 @@ func SortRank(cfg *config.Config, def Definition) int {
 }
 
 func RequiresEndpoint(cfg *config.Config) bool {
+	if cfg == nil {
+		return false
+	}
 	def, ok := Lookup(cfg.Provider)
 	if !ok {
 		return false
@@ -337,6 +347,9 @@ func ShowInPicker(cfg *config.Config, def Definition) bool {
 }
 
 func SupportsModelListing(cfg *config.Config) bool {
+	if cfg == nil {
+		return false
+	}
 	def, ok := Lookup(cfg.Provider)
 	if !ok {
 		return false
@@ -348,8 +361,10 @@ func SupportsModelListing(cfg *config.Config) bool {
 }
 
 func authEnvVars(cfg *config.Config, def Definition) []string {
-	if override := strings.TrimSpace(cfg.AuthEnvVar); override != "" {
-		return []string{override}
+	if cfg != nil {
+		if override := strings.TrimSpace(cfg.AuthEnvVar); override != "" {
+			return []string{override}
+		}
 	}
 	fields := make([]string, 0, 1+len(def.AlternateEnvVars))
 	if def.DefaultEnvVar != "" {

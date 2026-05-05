@@ -191,3 +191,25 @@ func TestShowInPickerDoesNotTreatEndpointAsCustomProviderSelection(t *testing.T)
 		t.Fatal("custom provider should show when it is the active provider")
 	}
 }
+
+func TestProviderHelpersAcceptNilConfig(t *testing.T) {
+	custom := MustLookup("openai-compatible")
+	if headers := ResolvedHeaders(nil); headers != nil {
+		t.Fatalf("headers = %#v, want nil", headers)
+	}
+	if RequiresEndpoint(nil) {
+		t.Fatal("RequiresEndpoint(nil) = true, want false")
+	}
+	if SupportsModelListing(nil) {
+		t.Fatal("SupportsModelListing(nil) = true, want false")
+	}
+	detail, ready := CredentialStateContext(context.Background(), nil, custom)
+	if ready || detail != "Set endpoint" {
+		t.Fatalf("custom credential state = (%q, %v), want Set endpoint false", detail, ready)
+	}
+	direct := MustLookup("openai")
+	detail, ready = CredentialStateContext(context.Background(), nil, direct)
+	if ready || detail != "Set OPENAI_API_KEY" {
+		t.Fatalf("direct credential state = (%q, %v), want Set OPENAI_API_KEY false", detail, ready)
+	}
+}

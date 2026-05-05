@@ -222,6 +222,10 @@ Fast, lightweight terminal coding agent.
   helpers out of `cmd/ion/acp_agent.go` into `cmd/ion/acp_agent_events.go`, so
   the main ACP agent file owns lifecycle/session orchestration. Focused ACP
   agent tests, full `go test ./...`, and the native race subset passed.
+- Twenty-first finding from `tk-oqex`: normalized provider catalog nil-config
+  handling. Exported provider helpers now consistently return defaults/false
+  instead of panicking when called without config. Focused provider tests, full
+  `go test ./...`, and the native race subset passed.
 - `tk-xhfg` policy is corrected. Fedora remains the primary live-smoke target,
   but Fedora unavailability should trigger an OpenRouter fallback run rather
   than deferring the gate.
