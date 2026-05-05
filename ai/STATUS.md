@@ -128,6 +128,11 @@ Fast, lightweight terminal coding agent.
 
 ## Latest Evidence
 
+- Backend/tool/storage boundary review continued: per-session Canto storage
+  methods (`Append`, `LastStatus`, `Usage`, `Close`) moved from
+  `internal/storage/canto_store.go` into `internal/storage/canto_session.go`.
+  Focused storage tests, `go test ./... -count=1 -timeout 300s`, and the
+  native race subset passed.
 - Backend/tool/storage boundary review started: Canto replay-to-Ion transcript
   projection moved from `internal/storage/canto_store.go` into
   `internal/storage/canto_projection.go`, leaving provider-visible history
