@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	acp "github.com/coder/acp-go-sdk"
 	"github.com/nijaru/ion/internal/backend"
@@ -21,18 +22,42 @@ import (
 
 // terminal tracks a running process created by CreateTerminal.
 type terminal struct {
-	mu       sync.Mutex
-	buf      bytes.Buffer
-	cmd      *exec.Cmd
-	exitCode *int
-	done     chan struct{}
+	mu             sync.Mutex
+	buf            bytes.Buffer
+	cmd            *exec.Cmd
+	exitCode       *int
+	done           chan struct{}
+	outputLimit    int
+	hasOutputLimit bool
+	truncated      bool
 }
 
 // Write implements io.Writer — called from the copy goroutine.
 func (t *terminal) Write(p []byte) (int, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return t.buf.Write(p)
+	n, err := t.buf.Write(p)
+	if t.hasOutputLimit && t.buf.Len() > t.outputLimit {
+		t.truncated = true
+		output := t.buf.String()
+		t.buf.Reset()
+		t.buf.WriteString(trimTerminalOutput(output, t.outputLimit))
+	}
+	return n, err
+}
+
+func trimTerminalOutput(output string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	if len(output) <= limit {
+		return output
+	}
+	start := len(output) - limit
+	for start < len(output) && !utf8.RuneStart(output[start]) {
+		start++
+	}
+	return output[start:]
 }
 
 // Session is ion's ACP client session. It spawns an external agent process,
@@ -571,6 +596,10 @@ func (s *Session) CreateTerminal(
 	}
 
 	t := &terminal{done: make(chan struct{})}
+	if p.OutputByteLimit != nil {
+		t.outputLimit = *p.OutputByteLimit
+		t.hasOutputLimit = true
+	}
 	r, w := io.Pipe()
 	cmd.Stdout = w
 	cmd.Stderr = w
@@ -620,9 +649,11 @@ func (s *Session) TerminalOutput(
 	output := t.buf.String()
 	t.buf.Reset()
 	exitCode := t.exitCode
+	truncated := t.truncated
+	t.truncated = false
 	t.mu.Unlock()
 
-	resp := acp.TerminalOutputResponse{Output: output}
+	resp := acp.TerminalOutputResponse{Output: output, Truncated: truncated}
 	if exitCode != nil {
 		resp.ExitStatus = &acp.TerminalExitStatus{ExitCode: exitCode}
 	}

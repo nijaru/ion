@@ -202,6 +202,10 @@ Fast, lightweight terminal coding agent.
   workspace instead of ion's process cwd, terminal cwd requests use the same
   workspace boundary, and read line/limit fields are honored. Focused ACP tests
   passed, plus full `go test ./...` and the native race subset.
+- Sixteenth finding from `tk-oqex`: fixed ACP terminal output limiting.
+  `outputByteLimit` now bounds retained terminal output at UTF-8 boundaries and
+  `TerminalOutput` reports and clears truncation state. Focused ACP tests, full
+  `go test ./...`, and the native race subset passed.
 - `tk-xhfg` policy is corrected. Fedora remains the primary live-smoke target,
   but Fedora unavailability should trigger an OpenRouter fallback run rather
   than deferring the gate.
