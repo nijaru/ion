@@ -127,6 +127,11 @@ Fast, lightweight terminal coding agent.
 
 ## Latest Evidence
 
+- App test split continued: transcript/tool/thinking/Markdown/tool-title
+  rendering tests moved from `internal/app/model_test.go` into
+  `internal/app/transcript_render_test.go`. Focused render tests,
+  `go test ./internal/app -count=1 -timeout 180s`,
+  `go test ./... -count=1 -timeout 300s`, and the native race subset passed.
 - App test split started: shell layout, progress, picker width, and status-line
   rendering tests moved from `internal/app/model_test.go` into
   `internal/app/shell_render_test.go`. Focused shell-render tests,
