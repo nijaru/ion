@@ -131,11 +131,9 @@ func (e *localExecutor) Run(ctx context.Context, request localCommand) (string, 
 	var output strings.Builder
 	var mu sync.Mutex
 	var wg sync.WaitGroup
-	wg.Add(2)
 
 	limitExceeded := false
 	readPipe := func(r io.Reader) {
-		defer wg.Done()
 		buf := make([]byte, 4096)
 		for {
 			n, err := r.Read(buf)
@@ -162,8 +160,8 @@ func (e *localExecutor) Run(ctx context.Context, request localCommand) (string, 
 		}
 	}
 
-	go readPipe(stdout)
-	go readPipe(stderr)
+	wg.Go(func() { readPipe(stdout) })
+	wg.Go(func() { readPipe(stderr) })
 
 	err = cmd.Wait()
 	wg.Wait()
