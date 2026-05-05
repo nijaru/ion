@@ -2,10 +2,12 @@ package app
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/config"
@@ -321,4 +323,46 @@ func isIdleStatus(status string) bool {
 
 func isCompactingStatus(status string) bool {
 	return strings.Contains(strings.ToLower(strings.TrimSpace(status)), "compacting")
+}
+
+func fitLine(line string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if ansi.StringWidth(line) <= width {
+		return line
+	}
+	return ansi.Truncate(line, width, "…")
+}
+
+func clamp(v, low, high int) int {
+	if v < low {
+		return low
+	}
+	if v > high {
+		return high
+	}
+	return v
+}
+
+func joinLineSegments(sep string, segments ...string) string {
+	filtered := make([]string, 0, len(segments))
+	for _, segment := range segments {
+		if segment != "" {
+			filtered = append(filtered, segment)
+		}
+	}
+	if len(filtered) == 0 {
+		return ""
+	}
+	return strings.Join(filtered, sep)
+}
+
+func sortedKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	return keys
 }
