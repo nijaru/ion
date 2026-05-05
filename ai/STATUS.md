@@ -127,6 +127,11 @@ Fast, lightweight terminal coding agent.
 
 ## Latest Evidence
 
+- App test split continued: streaming, tool settlement, turn-finished, child
+  lifecycle, session-error, and stale-tool-status reducer tests moved from
+  `internal/app/model_test.go` into `internal/app/event_reducer_test.go`.
+  Focused reducer tests, `go test ./internal/app -count=1 -timeout 180s`,
+  `go test ./... -count=1 -timeout 300s`, and the native race subset passed.
 - App test split continued: trust/mode and approval/escalation tests moved
   from `internal/app/model_test.go` into `internal/app/trust_mode_test.go` and
   `internal/app/approval_test.go`. Focused safety/approval tests,
