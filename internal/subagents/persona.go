@@ -109,6 +109,7 @@ func LoadFile(path string) (Persona, error) {
 }
 
 func ParseMarkdown(input string) (Persona, error) {
+	input = strings.ReplaceAll(input, "\r\n", "\n")
 	header, body, ok := strings.Cut(strings.TrimPrefix(input, "\ufeff"), "---\n")
 	if header != "" || !ok {
 		return Persona{}, fmt.Errorf("missing YAML frontmatter")
