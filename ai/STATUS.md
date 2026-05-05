@@ -206,6 +206,11 @@ Fast, lightweight terminal coding agent.
   `outputByteLimit` now bounds retained terminal output at UTF-8 boundaries and
   `TerminalOutput` reports and clears truncation state. Focused ACP tests, full
   `go test ./...`, and the native race subset passed.
+- Seventeenth finding from `tk-oqex`: fixed skill install permission handling.
+  Installed skill bundles now preserve source file and directory permission
+  bits instead of rewriting helper scripts/private resources to generic
+  `0644`/`0755` modes. Focused skills tests, full `go test ./...`, and the
+  native race subset passed.
 - `tk-xhfg` policy is corrected. Fedora remains the primary live-smoke target,
   but Fedora unavailability should trigger an OpenRouter fallback run rather
   than deferring the gate.
