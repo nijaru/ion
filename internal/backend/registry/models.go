@@ -52,6 +52,9 @@ func ListModels(ctx context.Context, provider string) ([]ModelMetadata, error) {
 }
 
 func ListModelsForConfig(ctx context.Context, cfg *config.Config) ([]ModelMetadata, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("model provider config is required")
+	}
 	ctx, cancel := withModelListTimeout(ctx)
 	defer cancel()
 
@@ -712,8 +715,10 @@ func providerCacheKey(cfg *config.Config) string {
 
 func resolvedAuthToken(cfg *config.Config, def providers.Definition) string {
 	names := make([]string, 0, 1+len(def.AlternateEnvVars))
-	if override := strings.TrimSpace(cfg.AuthEnvVar); override != "" {
-		names = append(names, override)
+	if cfg != nil {
+		if override := strings.TrimSpace(cfg.AuthEnvVar); override != "" {
+			names = append(names, override)
+		}
 	}
 	if def.DefaultEnvVar != "" {
 		names = append(names, def.DefaultEnvVar)
