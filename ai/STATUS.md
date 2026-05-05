@@ -127,6 +127,12 @@ Fast, lightweight terminal coding agent.
 
 ## Latest Evidence
 
+- App test split completed for the former oversized app model test: runtime,
+  provider/model switch, resume/startup, and restored-status tests moved into
+  `internal/app/runtime_test.go`; the remaining shared fixtures were renamed
+  to `internal/app/test_helpers_test.go`. Focused runtime tests,
+  `go test ./internal/app -count=1 -timeout 180s`,
+  `go test ./... -count=1 -timeout 300s`, and the native race subset passed.
 - App test split continued: submit, budget, queued follow-up, active-turn
   slash-command, and stale-error submit tests moved from
   `internal/app/model_test.go` into `internal/app/submission_test.go`. Focused
