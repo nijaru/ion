@@ -182,7 +182,11 @@ Fast, lightweight terminal coding agent.
 - Eleventh finding from `tk-oqex`: fixed `multi_edit` permission preservation.
   Temp files now use each original file's permission bits before rename, so
   editing executable files no longer silently rewrites them as `0644`. Focused
-  tool tests are in progress.
+  tool tests, full `go test ./...`, and the native race subset passed.
+- Twelfth finding from `tk-oqex`: fixed process-local resume overrides. Runtime
+  startup can now resume with an explicit provider/model override without
+  rewriting the session's stored model metadata for later `--continue`. Focused
+  CLI tests are in progress.
 - `tk-xhfg` policy is corrected. Fedora remains the primary live-smoke target,
   but Fedora unavailability should trigger an OpenRouter fallback run rather
   than deferring the gate.

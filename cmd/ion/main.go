@@ -199,7 +199,17 @@ func main() {
 		os.Exit(1)
 	}
 
-	b, sess, err := openRuntime(ctx, store, cwd, branch, runtimeCfg, acpCommandOverride, sessionID)
+	persistResumedSessionModel := !(sessionID != "" && explicitRuntimeOverride)
+	b, sess, err := openRuntime(
+		ctx,
+		store,
+		cwd,
+		branch,
+		runtimeCfg,
+		acpCommandOverride,
+		sessionID,
+		persistResumedSessionModel,
+	)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to initialize runtime: %v\n", err)
 		os.Exit(1)
@@ -259,6 +269,7 @@ func main() {
 			cfg,
 			acpCommandOverride,
 			sessionID,
+			true,
 		)
 		if err != nil {
 			return nil, nil, nil, err

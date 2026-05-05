@@ -58,6 +58,7 @@ func (f ionACPRuntimeFactory) Open(
 		resolved,
 		f.acpCommandOverride,
 		sessionID,
+		true,
 	)
 	if err != nil {
 		return nil, nil, err

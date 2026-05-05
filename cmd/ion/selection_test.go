@@ -590,6 +590,7 @@ func TestOpenRuntimeReturnsUnconfiguredBackendWhenSettingsMissing(t *testing.T) 
 		&config.Config{},
 		"",
 		"",
+		true,
 	)
 	if err != nil {
 		t.Fatalf("openRuntime returned error: %v", err)
@@ -628,6 +629,7 @@ func TestOpenRuntimeReturnsUnconfiguredBackendWhenModelMissing(t *testing.T) {
 		&config.Config{Provider: "claude-pro"},
 		"",
 		"",
+		true,
 	)
 	if err != nil {
 		t.Fatalf("openRuntime returned error: %v", err)
@@ -660,7 +662,7 @@ func TestOpenRuntimeDefersACPProviders(t *testing.T) {
 	defer store.Close()
 
 	cfg := &config.Config{Provider: "claude-pro", Model: "sonnet"}
-	b, sess, err := openRuntime(context.Background(), store, "/tmp/test", "main", cfg, "", "")
+	b, sess, err := openRuntime(context.Background(), store, "/tmp/test", "main", cfg, "", "", true)
 	if err == nil {
 		t.Fatal("openRuntime returned nil error, want ACP deferred error")
 	}
@@ -700,7 +702,7 @@ func TestOpenRuntimeIgnoresExternalPolicyConfigInNativeBaseline(t *testing.T) {
 		Endpoint:   "https://example.com/v1",
 		PolicyPath: policyPath,
 	}
-	b, sess, err := openRuntime(context.Background(), store, "/tmp/test", "main", cfg, "", "")
+	b, sess, err := openRuntime(context.Background(), store, "/tmp/test", "main", cfg, "", "", true)
 	if err != nil {
 		t.Fatalf("openRuntime returned error: %v", err)
 	}
@@ -725,7 +727,7 @@ func TestOpenRuntimeReturnsUnconfiguredBackendForInvalidProviderConfig(t *testin
 	defer store.Close()
 
 	cfg := &config.Config{Provider: "local-api", Model: "qwen-test"}
-	b, sess, err := openRuntime(context.Background(), store, "/tmp/test", "main", cfg, "", "")
+	b, sess, err := openRuntime(context.Background(), store, "/tmp/test", "main", cfg, "", "", true)
 	if err != nil {
 		t.Fatalf("openRuntime returned error: %v", err)
 	}
@@ -777,7 +779,7 @@ func TestOpenRuntimeResumeWithInvalidProviderConfigLoadsExistingSessionOnly(t *t
 	}
 
 	cfg := &config.Config{Provider: "local-api", Model: "qwen-test"}
-	b, sess, err := openRuntime(ctx, store, "/tmp/test", "feature/resume", cfg, "", seedID)
+	b, sess, err := openRuntime(ctx, store, "/tmp/test", "feature/resume", cfg, "", seedID, true)
 	if err != nil {
 		t.Fatalf("openRuntime returned error: %v", err)
 	}
@@ -822,7 +824,7 @@ func TestOpenRuntimeWithLazySessionDoesNotCreateRecentSession(t *testing.T) {
 	defer store.Close()
 
 	cfg := &config.Config{Provider: "ollama", Model: "qwen-test"}
-	b, sess, err := openRuntime(context.Background(), store, "/tmp/test", "main", cfg, "", "")
+	b, sess, err := openRuntime(context.Background(), store, "/tmp/test", "main", cfg, "", "", true)
 	if err != nil {
 		t.Fatalf("openRuntime returned error: %v", err)
 	}
@@ -890,6 +892,58 @@ func TestApplySessionConfigFromMetadata(t *testing.T) {
 	}
 	if cfg.ReasoningEffort != "high" {
 		t.Fatalf("reasoning effort = %q, want high", cfg.ReasoningEffort)
+	}
+}
+
+func TestOpenRuntimeResumeCanKeepRuntimeOverrideProcessLocal(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	dataDir, err := config.DefaultDataDir()
+	if err != nil {
+		t.Fatalf("default data dir: %v", err)
+	}
+	store, err := storage.NewCantoStore(dataDir)
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	defer store.Close()
+
+	ctx := context.Background()
+	seed, err := store.OpenSession(ctx, "/tmp/test", "ollama/original-model", "main")
+	if err != nil {
+		t.Fatalf("open seed session: %v", err)
+	}
+	seedID := seed.ID()
+	if err := seed.Close(); err != nil {
+		t.Fatalf("close seed session: %v", err)
+	}
+
+	cfg := &config.Config{Provider: "ollama", Model: "override-model"}
+	b, sess, err := openRuntime(
+		ctx,
+		store,
+		"/tmp/test",
+		"feature/override",
+		cfg,
+		"",
+		seedID,
+		false,
+	)
+	if err != nil {
+		t.Fatalf("open runtime: %v", err)
+	}
+	defer closeRuntimeHandles(b.Session(), sess, nil)
+	if got := b.Model(); got != "override-model" {
+		t.Fatalf("runtime model = %q, want override-model", got)
+	}
+
+	loaded, err := store.ResumeSession(ctx, seedID)
+	if err != nil {
+		t.Fatalf("reload session: %v", err)
+	}
+	defer loaded.Close()
+	if got := loaded.Meta().Model; got != "ollama/original-model" {
+		t.Fatalf("persisted model = %q, want original session model", got)
 	}
 }
 
