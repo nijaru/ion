@@ -158,6 +158,10 @@ Fast, lightweight terminal coding agent.
   viewport file to transcript, in-flight, progress, and generic line helpers.
   Focused `./internal/app` tests, full `go test ./...`, the native race subset,
   and `scripts/smoke/tmux-minimal-harness.sh` passed.
+- Sixth cleanup from `tk-oqex`: extracted queued/progress shell rendering from
+  `internal/app/viewport.go` into `internal/app/progress_render.go` and moved
+  generic line/key helpers to `internal/app/util.go`. Focused `./internal/app`
+  tests passed.
 - `tk-xhfg` policy is corrected. Fedora remains the primary live-smoke target,
   but Fedora unavailability should trigger an OpenRouter fallback run rather
   than deferring the gate.
