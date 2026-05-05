@@ -9,6 +9,31 @@ datasets and thresholds that define whether this product regressed.
 DSPy/GEPA-style optimization belongs downstream of these artifacts. Runtime prompts
 must not mutate themselves during normal Ion use.
 
+## Minimal Harness Contract
+
+The native acceptance floor is the Canto-backed path:
+
+```text
+Ion TUI/CLI -> CantoBackend -> Canto session/runtime/agent/tools -> provider API
+```
+
+Every refactor must preserve these invariants:
+
+- provider-visible history is valid: no empty assistant payloads, no orphan tool
+  results, and no display-only Ion rows in model requests
+- Canto owns model-visible transcript persistence; Ion owns display projection
+- event ordering is stable: turn start, assistant/tool events, terminal state,
+  then ready/follow-up
+- cancel, provider error, tool error, budget/limit stop, and compaction failure
+  leave a resumable session
+- replay equals live for display rows while provider-visible history remains
+  exact
+- approval pauses and resumes a specific pending request without losing
+  in-flight state
+- print mode exercises the same native loop as the TUI
+- runtime switches are atomic enough that failed switches do not corrupt the
+  previous session or provider state
+
 ## Initial Gate
 
 | Dataset | Enforced by | Purpose |

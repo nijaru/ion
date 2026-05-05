@@ -36,6 +36,3 @@
 - [Prompt Budget Baseline](research/prompt-budget-2026-05.md) — measured static prompt size and no-cache decision.
 - [Skills Progressive Disclosure](research/skills-progressive-disclosure-sota-2026-04.md) — evidence behind skill loading policy.
 - [Tool Surface Research](research/tool-surface-sota-2026-05.md) — search/edit/tool-shape reference evidence.
-- [Canto Core Loop Audit](review/canto-core-loop-contract-audit-2026-04-27.md) — Canto contract evidence relevant to Ion.
-- [Core Loop Contract](review/core-loop-contract.md) — submit/stream/tool/cancel/error/persist/replay invariants.
-- [Core Loop Review Tracker](review/core-loop-review-tracker-2026-04-28.md) — remaining native-loop review evidence.

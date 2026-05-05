@@ -128,6 +128,11 @@ Fast, lightweight terminal coding agent.
 
 ## Latest Evidence
 
+- `tk-tpxu` is closed. The durable native-loop contract was folded into
+  `ai/specs/evals-and-regression-gates.md`, and resolved core-loop review docs
+  were removed from `ai/review/` so future sessions start from canonical specs,
+  `ai/DESIGN.md`, `ai/PLAN.md`, and `ai/STATUS.md`. `rg` found no stale refs,
+  and `ai/README.md` links resolve.
 - `tk-0gni` is closed. A deterministic local edit-surface eval now lives at
   `internal/backend/canto/tools/file_edit_eval_test.go`, covering whole-file
   write, targeted edit, CRLF/BOM preservation, multi-file edits, no partial
