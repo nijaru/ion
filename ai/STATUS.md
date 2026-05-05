@@ -128,6 +128,10 @@ Fast, lightweight terminal coding agent.
 
 ## Latest Evidence
 
+- Backend/tool/storage boundary review continued: Canto turn execution and the
+  local bash executor now use `sync.WaitGroup.Go` instead of manual `Add` plus
+  goroutine wrappers. Focused backend/tool tests,
+  `go test ./... -count=1 -timeout 300s`, and the native race subset passed.
 - Backend/tool/storage boundary review continued: per-session Canto storage
   methods (`Append`, `LastStatus`, `Usage`, `Close`) moved from
   `internal/storage/canto_store.go` into `internal/storage/canto_session.go`.

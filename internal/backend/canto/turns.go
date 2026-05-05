@@ -55,9 +55,7 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 	harnessSession := b.harness.Session(sessionID)
 	b.mu.Unlock()
 
-	b.wg.Add(1)
-	go func() {
-		defer b.wg.Done()
+	b.wg.Go(func() {
 		defer b.finishActiveTurn(turnID)
 		defer cancel()
 
@@ -93,7 +91,7 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 		for event := range runEvents {
 			b.translateRunEvent(turnCtx, event, turnID)
 		}
-	}()
+	})
 
 	return nil
 }
