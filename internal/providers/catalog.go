@@ -114,14 +114,6 @@ func Lookup(id string) (Definition, bool) {
 	return Definition{}, false
 }
 
-func MustLookup(id string) Definition {
-	def, ok := Lookup(id)
-	if !ok {
-		panic("unknown provider: " + id)
-	}
-	return def
-}
-
 func ResolveID(id string) string {
 	if def, ok := Lookup(id); ok {
 		return def.ID

@@ -40,6 +40,15 @@ func TestProbeLocalAPIUsesConfiguredEndpoint(t *testing.T) {
 	}
 }
 
+func mustLookup(t *testing.T, id string) Definition {
+	t.Helper()
+	def, ok := Lookup(id)
+	if !ok {
+		t.Fatalf("provider %q not found", id)
+	}
+	return def
+}
+
 func TestCredentialStateContextReportsLocalAPIReadiness(t *testing.T) {
 	localProbeMu.Lock()
 	localProbeCache = map[string]localProbeResult{}
@@ -51,7 +60,7 @@ func TestCredentialStateContextReportsLocalAPIReadiness(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	def := MustLookup("local-api")
+	def := mustLookup(t, "local-api")
 	cfg := &config.Config{
 		Provider: "local-api",
 		Endpoint: srv.URL + "/v1",
@@ -71,7 +80,7 @@ func TestCredentialStateContextReportsLocalAPINotRunning(t *testing.T) {
 	localProbeCache = map[string]localProbeResult{}
 	localProbeMu.Unlock()
 
-	def := MustLookup("local-api")
+	def := mustLookup(t, "local-api")
 	cfg := &config.Config{
 		Provider: "local-api",
 		Endpoint: "http://127.0.0.1:1/v1",
@@ -177,7 +186,7 @@ func TestResolvedEndpointIncludesZAIEndpoint(t *testing.T) {
 }
 
 func TestShowInPickerDoesNotTreatEndpointAsCustomProviderSelection(t *testing.T) {
-	custom := MustLookup("openai-compatible")
+	custom := mustLookup(t, "openai-compatible")
 	cfg := &config.Config{
 		Provider: "local-api",
 		Endpoint: "http://fedora:8080/v1",
@@ -193,7 +202,7 @@ func TestShowInPickerDoesNotTreatEndpointAsCustomProviderSelection(t *testing.T)
 }
 
 func TestProviderHelpersAcceptNilConfig(t *testing.T) {
-	custom := MustLookup("openai-compatible")
+	custom := mustLookup(t, "openai-compatible")
 	if headers := ResolvedHeaders(nil); headers != nil {
 		t.Fatalf("headers = %#v, want nil", headers)
 	}
@@ -207,7 +216,7 @@ func TestProviderHelpersAcceptNilConfig(t *testing.T) {
 	if ready || detail != "Set endpoint" {
 		t.Fatalf("custom credential state = (%q, %v), want Set endpoint false", detail, ready)
 	}
-	direct := MustLookup("openai")
+	direct := mustLookup(t, "openai")
 	detail, ready = CredentialStateContext(context.Background(), nil, direct)
 	if ready || detail != "Set OPENAI_API_KEY" {
 		t.Fatalf("direct credential state = (%q, %v), want Set OPENAI_API_KEY false", detail, ready)
