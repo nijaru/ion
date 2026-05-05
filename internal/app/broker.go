@@ -12,10 +12,6 @@ import (
 	"github.com/nijaru/ion/internal/storage"
 )
 
-// Broker handles the communication between the Ion TUI and the backend.
-// It translates backend events into Ion TUI messages.
-type Broker struct{}
-
 type localErrorMsg struct {
 	err error
 }

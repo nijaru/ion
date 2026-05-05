@@ -10,9 +10,6 @@ import (
 	"github.com/nijaru/ion/internal/session"
 )
 
-// Input handles the user input composer, history, and the bottom status bar.
-type Input struct{}
-
 func (m Model) statusLine() string {
 	width := m.shellWidth()
 	if hint := strings.TrimSpace(m.pendingActionStatus()); hint != "" {

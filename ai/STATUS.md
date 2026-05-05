@@ -150,6 +150,9 @@ Fast, lightweight terminal coding agent.
   turn submission/cancel handling out of `broker.go` into `persistence.go` and
   `submission.go`, leaving the broker focused on session-event reduction.
   Focused `./internal/app` tests passed.
+- Fourth cleanup from `tk-oqex`: removed unused empty TUI component marker
+  types (`Broker`, `Input`, `Viewport`) that only advertised future
+  componentization. Focused `./internal/app` tests passed.
 - `tk-xhfg` policy is corrected. Fedora remains the primary live-smoke target,
   but Fedora unavailability should trigger an OpenRouter fallback run rather
   than deferring the gate.
