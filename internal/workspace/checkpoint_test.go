@@ -80,6 +80,9 @@ func TestCheckpointRestoreHandlesBinaryAndNestedPaths(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(nested, "blob.bin"), []byte("changed"), 0o600); err != nil {
 		t.Fatalf("modify binary: %v", err)
 	}
+	if err := os.Chmod(filepath.Join(nested, "blob.bin"), 0o644); err != nil {
+		t.Fatalf("change binary mode: %v", err)
+	}
 
 	if _, err := store.Restore(t.Context(), cp, RestoreOptions{AllowConflicts: true}); err != nil {
 		t.Fatalf("Restore: %v", err)
@@ -90,6 +93,13 @@ func TestCheckpointRestoreHandlesBinaryAndNestedPaths(t *testing.T) {
 	}
 	if !slices.Equal(data, before) {
 		t.Fatalf("binary content = %#v, want %#v", data, before)
+	}
+	info, err := os.Stat(filepath.Join(nested, "blob.bin"))
+	if err != nil {
+		t.Fatalf("stat restored binary: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("restored mode = %v, want 0600", got)
 	}
 }
 

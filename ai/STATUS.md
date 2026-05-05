@@ -190,7 +190,12 @@ Fast, lightweight terminal coding agent.
 - Thirteenth finding from `tk-oqex`: fixed local-api probe failure caching.
   Failed configured endpoint probes now cache for the same short TTL as
   successes, preventing repeated provider/status timeouts while Fedora/local-api
-  is unavailable. Focused provider tests are in progress.
+  is unavailable. Focused provider tests, full `go test ./...`, and the native
+  race subset passed.
+- Fourteenth finding from `tk-oqex`: fixed checkpoint restore mode handling.
+  Restores now reapply saved file and directory permissions after writing or
+  creating paths, so checkpoint restore cannot leave changed permission bits in
+  place. Focused workspace tests are in progress.
 - `tk-xhfg` policy is corrected. Fedora remains the primary live-smoke target,
   but Fedora unavailability should trigger an OpenRouter fallback run rather
   than deferring the gate.
