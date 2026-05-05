@@ -286,7 +286,7 @@ func main() {
 	)
 	model = model.WithPrintedTranscript(len(startupEntries) > 0)
 	p := tea.NewProgram(model)
-	_, runErr := p.Run()
+	finalModel, runErr := p.Run()
 	closeErr := closeRuntimeHandles(b.Session(), sess, store)
 	if runErr != nil {
 		if closeErr != nil {
@@ -299,6 +299,25 @@ func main() {
 		fmt.Fprintf(os.Stderr, "failed to close runtime: %v\n", closeErr)
 		os.Exit(1)
 	}
+	if sessionID := resumeHintSessionID(finalModel); sessionID != "" {
+		printResumeHint(os.Stdout, sessionID)
+	}
+}
+
+func resumeHintSessionID(model tea.Model) string {
+	appModel, ok := model.(app.Model)
+	if !ok {
+		return ""
+	}
+	return appModel.ResumeSessionID()
+}
+
+func printResumeHint(w io.Writer, sessionID string) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return
+	}
+	fmt.Fprintf(w, "\nResume this session with:\nion --resume %s\n", sessionID)
 }
 
 func loadWorkspaceTrust(
