@@ -9,10 +9,13 @@ command/workflow shell are accepted. Ion is on the right track for a minimal,
 well-engineered terminal coding agent: one native harness path, eight default
 tools, compact TUI, scriptable CLI, durable sessions, and small command surface.
 
-The C5 review/refactor sequence is closed. The current tree has no ready `tk`
-task; the next work should be selected deliberately rather than defaulting to
-new surface area. Live-provider proof remains available with Fedora primary and
-OpenRouter fallback when a slice needs it.
+The C5 review/refactor sequence is closed. Ion now imports the finalized Canto
+Phase 5 audit revision (`0c4dd06`) and the downstream deterministic, race,
+tmux, and OpenRouter live gates are green. The current tree has no standing
+feature task that should start automatically; the next work should be selected
+deliberately rather than defaulting to new surface area. Live-provider proof
+remains available with Fedora primary and OpenRouter fallback when a slice
+needs it.
 
 The next priority is not adding commands. Treat background job commands, bash
 mode, `/goal`, `/side`, richer fork UI, and `/clone` as deferred references
@@ -110,7 +113,10 @@ Closeout:
 4. Deferred/live-gate - `tk-xhfg` - Fedora remains the primary live-smoke
    target, but if Fedora is unavailable or times out, run the OpenRouter
    fallback instead of deferring the gate.
-5. Deferred/P4 - `tk-er04` - bash-mode evaluation remains low priority and
+5. Done - `tk-k1fl` - import audited Canto `0c4dd06` and validate Ion against
+   it with focused tests, full test/build/vet gates, native race subset, tmux
+   smoke, and OpenRouter live smoke.
+6. Deferred/P4 - `tk-er04` - bash-mode evaluation remains low priority and
    should not start unless dogfooding proves it is worth the complexity.
 
 Acceptance:

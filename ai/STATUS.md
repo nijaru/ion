@@ -3,7 +3,7 @@
 Fast, lightweight terminal coding agent.
 
 **Phase:** C5 review closeout
-**Focus:** Codebase audit closed; no ready `tk` task is active
+**Focus:** Codebase audit closed; audited Canto revision imported and validated
 **Active task:** none
 **Updated:** 2026-05-05
 
@@ -15,6 +15,9 @@ Fast, lightweight terminal coding agent.
   the default core.
 - Canto owns durable events, provider-visible history, agent/tool lifecycle,
   reasoning capability translation, and compaction primitives.
+- Ion now imports Canto `0c4dd06` /
+  `v0.0.0-20260505185449-0c4dd06120c5`, the finalized Phase 5 Canto audit
+  revision.
 - Ion owns TUI/CLI UX, commands, settings/state, product tools, provider
   selection, display projection, safety/trust policy, and session bundle UX.
 - Ion can also run as an ACP agent over stdio with `--agent`; this is a
@@ -130,6 +133,15 @@ Fast, lightweight terminal coding agent.
 
 ## Latest Evidence
 
+- `tk-k1fl` imported audited Canto `0c4dd06` after pushing Canto `main`.
+  Downstream compatibility cleanup replaced removed Canto test aliases with
+  `x/testing.FauxProvider` and removed the obsolete boolean reasoning
+  capability test field. Gates passed: focused Canto-boundary Ion tests,
+  `go vet ./...`, `go test ./... -count=1 -timeout 300s`, `go build ./...`,
+  native race subset, `scripts/smoke/tmux-minimal-harness.sh`, and OpenRouter
+  `deepseek/deepseek-v3.2` live smoke. The live smoke proved real `bash` tool
+  call, persisted resume, follow-up `continued`, and provider-history ordering
+  `first_user=1 tool_call=2 tool_result=3 assistant=4 resume_user=5`.
 - `tk-wm30` is closed. C5 dogfood gate passed:
   `go test ./... -count=1 -timeout 300s`, the native race subset, and
   `scripts/smoke/tmux-minimal-harness.sh`. No concrete regression was found in
