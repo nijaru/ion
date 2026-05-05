@@ -195,7 +195,13 @@ Fast, lightweight terminal coding agent.
 - Fourteenth finding from `tk-oqex`: fixed checkpoint restore mode handling.
   Restores now reapply saved file and directory permissions after writing or
   creating paths, so checkpoint restore cannot leave changed permission bits in
-  place. Focused workspace tests are in progress.
+  place. Focused workspace tests, full `go test ./...`, and the native race
+  subset passed.
+- Fifteenth finding from `tk-oqex`: fixed ACP filesystem bridge path handling.
+  ACP read/write requests now resolve relative paths from the session
+  workspace instead of ion's process cwd, terminal cwd requests use the same
+  workspace boundary, and read line/limit fields are honored. Focused ACP tests
+  passed, plus full `go test ./...` and the native race subset.
 - `tk-xhfg` policy is corrected. Fedora remains the primary live-smoke target,
   but Fedora unavailability should trigger an OpenRouter fallback run rather
   than deferring the gate.
