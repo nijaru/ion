@@ -128,6 +128,12 @@ Fast, lightweight terminal coding agent.
 
 ## Latest Evidence
 
+- Backend/tool/storage boundary review started: Canto replay-to-Ion transcript
+  projection moved from `internal/storage/canto_store.go` into
+  `internal/storage/canto_projection.go`, leaving provider-visible history
+  untouched and making the display projection boundary explicit. Focused
+  storage tests, `go test ./... -count=1 -timeout 300s`, and the native race
+  subset passed.
 - App test split completed for the former oversized app model test: runtime,
   provider/model switch, resume/startup, and restored-status tests moved into
   `internal/app/runtime_test.go`; the remaining shared fixtures were renamed
