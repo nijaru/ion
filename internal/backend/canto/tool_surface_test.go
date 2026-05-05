@@ -77,7 +77,10 @@ func TestToolSurfaceFiltersReadModeTools(t *testing.T) {
 	b.cfg.ToolEnv = "inherit_without_provider_keys"
 	surface = b.ToolSurface()
 	if surface.Environment != "inherit_without_provider_keys" {
-		t.Fatalf("filtered tool environment = %q, want inherit_without_provider_keys", surface.Environment)
+		t.Fatalf(
+			"filtered tool environment = %q, want inherit_without_provider_keys",
+			surface.Environment,
+		)
 	}
 }
 
@@ -211,7 +214,7 @@ func TestSubagentToolExecutesWhenOptedIn(t *testing.T) {
 	call := llm.Call{ID: "subagent-call-1", Type: "function"}
 	call.Function.Name = "subagent"
 	call.Function.Arguments = `{"agent":"explorer","task":"inspect README","context_mode":"none"}`
-	provider := ctesting.NewMockProvider("local-api",
+	provider := ctesting.NewFauxProvider("local-api",
 		ctesting.Step{Calls: []llm.Call{call}},
 		ctesting.Step{Content: "child summary"},
 		ctesting.Step{Content: "done"},

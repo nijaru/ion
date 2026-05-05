@@ -32,7 +32,7 @@ func TestOpenRetriesTransientProviderErrors(t *testing.T) {
 	}
 
 	provider := &retryProvider{
-		FauxProvider: ctesting.NewMockProvider(
+		FauxProvider: ctesting.NewFauxProvider(
 			"openai",
 			ctesting.Step{Err: transientStreamErr},
 			ctesting.Step{Content: "recovered reply"},
@@ -72,7 +72,7 @@ func TestConfigureRetryProviderUsesUntilCancelledSetting(t *testing.T) {
 	events := make(chan ionsession.Event, 1)
 	retryUntilCancelled := true
 	provider := &retryProvider{
-		FauxProvider: ctesting.NewMockProvider("openai"),
+		FauxProvider: ctesting.NewFauxProvider("openai"),
 	}
 
 	wrapped := configureRetryProvider(

@@ -220,7 +220,12 @@ func TestSubagentForkContextUsesProviderVisibleParentSnapshot(t *testing.T) {
 		t.Fatalf("decode fork origin: %v", err)
 	}
 	if !ok || origin.EventID != parentEvent.ID.String() {
-		t.Fatalf("child first event origin = %#v, ok=%v, want parent event %s", origin, ok, parentEvent.ID)
+		t.Fatalf(
+			"child first event origin = %#v, ok=%v, want parent event %s",
+			origin,
+			ok,
+			parentEvent.ID,
+		)
 	}
 	if !childEvents[0].Timestamp.Equal(parentAt) {
 		t.Fatalf("child forked timestamp = %s, want %s", childEvents[0].Timestamp, parentAt)

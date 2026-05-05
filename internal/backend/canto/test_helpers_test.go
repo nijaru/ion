@@ -61,7 +61,6 @@ type reasoningCapProvider struct {
 
 func (p *reasoningCapProvider) Capabilities(model string) llm.Capabilities {
 	caps := llm.DefaultCapabilities()
-	caps.ReasoningEffort = p.reasoningEffort
 	if p.reasoningEffort {
 		caps.Reasoning = llm.ReasoningCapabilities{
 			Kind:       llm.ReasoningKindEffort,
