@@ -4,7 +4,7 @@ Fast, lightweight terminal coding agent.
 
 **Phase:** C5 review and simplification
 **Focus:** whole-product UI/UX and codebase organization review before new features
-**Active task:** none; next ready work is `tk-txtx`, `tk-0gni`, or `tk-er04`
+**Active task:** none; next ready work is `tk-0gni` or `tk-er04`
 **Updated:** 2026-05-04
 
 ## Current Truth
@@ -128,6 +128,13 @@ Fast, lightweight terminal coding agent.
 
 ## Latest Evidence
 
+- `tk-txtx` is closed. The former 2,533-line
+  `internal/backend/canto/backend_test.go` was split into behavior-focused
+  test files for config, processors, tool surface, turns, event translation,
+  subagent personas, provider history, compaction, retry, and project
+  instruction loading. Shared fakes/helpers now live in
+  `internal/backend/canto/test_helpers_test.go`. Focused backend/canto tests,
+  `go test ./... -count=1 -timeout 300s`, and the native race subset passed.
 - `tk-q5qe` is closed. Width-shrink resizes now insert a small number of blank
   scrollback rows to push terminal-reflowed full-width shell fragments out of
   the visible pane while keeping active composer separators wrap-safe and
