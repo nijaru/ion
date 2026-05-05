@@ -173,7 +173,12 @@ Fast, lightweight terminal coding agent.
 - Ninth cleanup from `tk-oqex`: removed the unused Canto `FileTagProcessor`.
   It was not registered in the native path, and reviving it as-is would create
   an unbounded prompt-injection path rather than a clean tool/context primitive.
-  Focused backend tests are in progress.
+  Focused backend tests, full `go test ./...`, and the native race subset
+  passed.
+- Tenth finding from `tk-oqex`: fixed `grep` model-visible paths. The tool
+  still validates against the workspace, but now invokes `rg` with relative
+  path arguments so results do not expose long absolute workspace paths. Focused
+  tool tests are in progress.
 - `tk-xhfg` policy is corrected. Fedora remains the primary live-smoke target,
   but Fedora unavailability should trigger an OpenRouter fallback run rather
   than deferring the gate.

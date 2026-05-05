@@ -22,7 +22,7 @@ func NewSearchTool(cwd string) *SearchTool {
 	return &SearchTool{cwd: cwd}
 }
 
-func (t *SearchTool) resolvePath(target string) (string, error) {
+func (t *SearchTool) searchArg(target string) (string, error) {
 	if target == "" {
 		target = "."
 	}
@@ -44,7 +44,14 @@ func (t *SearchTool) resolvePath(target string) (string, error) {
 	if err := t.rejectSymlinkEscape(absCwd, absPath, target); err != nil {
 		return "", err
 	}
-	return absPath, nil
+	if absPath == absCwd {
+		return "", nil
+	}
+	relPath, err := filepath.Rel(absCwd, absPath)
+	if err != nil {
+		return "", err
+	}
+	return relPath, nil
 }
 
 func (t *SearchTool) rejectSymlinkEscape(absCwd, absPath, target string) error {
@@ -118,17 +125,12 @@ func (g *Grep) Execute(ctx context.Context, args string) (string, error) {
 		return "", fmt.Errorf("pattern is required")
 	}
 
-	if input.Path == "" {
-		input.Path = "."
-	}
-	searchPath, err := g.resolvePath(input.Path)
+	searchArg, err := g.searchArg(input.Path)
 	if err != nil {
 		return "", err
 	}
 
-	cmd := exec.CommandContext(
-		ctx,
-		"rg",
+	cmdArgs := []string{
 		"--max-count", "100",
 		"--heading",
 		"--line-number",
@@ -138,8 +140,11 @@ func (g *Grep) Execute(ctx context.Context, args string) (string, error) {
 		"--glob", "!.git/**",
 		"--",
 		input.Pattern,
-		searchPath,
-	)
+	}
+	if searchArg != "" {
+		cmdArgs = append(cmdArgs, searchArg)
+	}
+	cmd := exec.CommandContext(ctx, "rg", cmdArgs...)
 	cmd.Dir = g.cwd
 	output, err := cmd.CombinedOutput()
 	if err == nil {
