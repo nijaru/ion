@@ -83,6 +83,7 @@ func openRuntime(
 	cfg *config.Config,
 	acpCommandOverride string,
 	sessionID string,
+	persistResumedSessionModel bool,
 ) (backend.Backend, storage.Session, error) {
 	runtimeCfg := *cfg
 	if err := resolveStartupConfig(&runtimeCfg); err != nil {
@@ -130,7 +131,11 @@ func openRuntime(
 			_ = sess.Close()
 			return nil, nil, fmt.Errorf("backend resume error: %w", err)
 		}
-		if err := syncSessionMetadata(ctx, store, sessionID, sessionModelName(runtimeCfg.Provider, runtimeCfg.Model), branch); err != nil {
+		modelName := ""
+		if persistResumedSessionModel {
+			modelName = sessionModelName(runtimeCfg.Provider, runtimeCfg.Model)
+		}
+		if err := syncSessionMetadata(ctx, store, sessionID, modelName, branch); err != nil {
 			_ = sess.Close()
 			return nil, nil, fmt.Errorf("failed to update resumed session metadata: %w", err)
 		}
