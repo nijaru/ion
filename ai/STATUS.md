@@ -4,7 +4,7 @@ Fast, lightweight terminal coding agent.
 
 **Phase:** C5 review and simplification
 **Focus:** whole-product UI/UX and codebase organization review before new features
-**Active task:** `tk-omw4` — split oversized app test file by behavior
+**Active task:** `tk-rkmn` — backend/tool/storage responsibility boundary review
 **Updated:** 2026-05-04
 
 ## Current Truth
@@ -61,7 +61,8 @@ Fast, lightweight terminal coding agent.
   their maintenance cost.
 - Current maintenance sequence is review/refactor first, not feature growth:
   `tk-ywbt` whole-product review, `tk-245w` app event/shell-state refactor,
-  `tk-omw4` app test split, then `tk-rkmn` backend/tool/storage boundary review.
+  `tk-omw4` app test split, and now `tk-rkmn` backend/tool/storage boundary
+  review.
 - Sandbox/trust direction: trust is workspace eligibility, mode is approval
   posture, sandbox is executor enforcement, and provider credentials are not
   subprocess credentials by default.
@@ -463,9 +464,10 @@ Fast, lightweight terminal coding agent.
 
 ## Next Action
 
-1. Start `tk-omw4` to split oversized app tests by behavior without changing
-   behavior.
-2. Implement `tk-hdwz` if we want the small session-end resume hint before the
-   larger test split.
+1. Continue `tk-rkmn` with a focused backend/tool/storage responsibility
+   review. Fix only concrete local issues; create follow-up tasks for larger
+   refactors.
+2. Implement `tk-hdwz` only after the boundary review, because the resume hint
+   is useful UX but not structural cleanup.
 3. Retry deferred `tk-jkcl` Fedora C2 live smoke only when local-api is
    reachable.

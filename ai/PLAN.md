@@ -83,9 +83,9 @@ Sequence:
 2. `tk-245w` - app event reducer and shell-state refactor. Simplify ownership
    around inline scrollback commits, Plane B rendering, progress state, queued
    input, and resize behavior.
-3. `tk-omw4` - split oversized `internal/app/model_test.go` by behavior. This
-   is a prerequisite for faster future review; preserve behavior.
-4. `tk-rkmn` - backend/tool/storage responsibility boundary review. Check that
+3. Done - `tk-omw4` - split oversized app tests by behavior. The old mixed
+   app model test is now behavior-focused test files plus shared fixtures.
+4. Active - `tk-rkmn` - backend/tool/storage responsibility boundary review. Check that
    UI display policy stays in Ion renderers, model-visible history stays exact,
    CantoBackend remains an adapter rather than a second framework, and tools
    stay small and idiomatic.
@@ -486,11 +486,13 @@ Order:
      reachable
 2. Deferred until Fedora is reachable - `tk-jkcl` - final Fedora local-api
    repeat of the live gate.
-3. Next - `tk-omw4` - split oversized app tests by behavior without
+3. Done - `tk-omw4` - split oversized app tests by behavior without
    changing behavior.
-4. After app-test split - `tk-0gni` - run a local edit-tool eval before deciding
+4. Active - `tk-rkmn` - review backend/tool/storage responsibility boundaries
+   before adding new UX or tool features.
+5. After boundary review - `tk-0gni` - run a local edit-tool eval before deciding
    whether a Pi-style merged edit tool should replace the current split.
-5. Later - `tk-tpxu` - retire resolved core-loop topic docs after the
+6. Later - `tk-tpxu` - retire resolved core-loop topic docs after the
    regression suite becomes the live evidence source.
 
 Acceptance:
