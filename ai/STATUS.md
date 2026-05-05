@@ -169,7 +169,11 @@ Fast, lightweight terminal coding agent.
 - Eighth finding from `tk-oqex`: fixed incomplete storage list metadata by
   preserving `CWD` in `ListSessions`, and normalized `OpenSession` to use one
   UTC timestamp for the ID, index row, and returned metadata. Focused storage
-  tests are in progress.
+  tests, full `go test ./...`, and the native race subset passed.
+- Ninth cleanup from `tk-oqex`: removed the unused Canto `FileTagProcessor`.
+  It was not registered in the native path, and reviving it as-is would create
+  an unbounded prompt-injection path rather than a clean tool/context primitive.
+  Focused backend tests are in progress.
 - `tk-xhfg` policy is corrected. Fedora remains the primary live-smoke target,
   but Fedora unavailability should trigger an OpenRouter fallback run rather
   than deferring the gate.
