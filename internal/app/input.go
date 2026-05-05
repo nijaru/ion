@@ -128,14 +128,25 @@ func (m Model) headerLineFor(branch string) string {
 	sep := m.st.dim.Render(" • ")
 
 	home, _ := os.UserHomeDir()
-	dir := m.App.Workdir
-	if home != "" && strings.HasPrefix(dir, home) {
-		dir = "~" + dir[len(home):]
-	}
+	dir := shortenHomePath(m.App.Workdir, home)
 
 	pathParts := []string{m.st.dim.Render(dir)}
 	if branch != "" {
 		pathParts = append(pathParts, m.st.dim.Render(branch))
 	}
 	return strings.Join(pathParts, sep)
+}
+
+func shortenHomePath(path, home string) string {
+	if home == "" || path == "" {
+		return path
+	}
+	if path == home {
+		return "~"
+	}
+	prefix := strings.TrimRight(home, string(os.PathSeparator)) + string(os.PathSeparator)
+	if strings.HasPrefix(path, prefix) {
+		return "~" + string(os.PathSeparator) + strings.TrimPrefix(path, prefix)
+	}
+	return path
 }

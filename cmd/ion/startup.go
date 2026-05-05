@@ -100,15 +100,26 @@ func printStartup(
 
 func workspaceHeader(cwd, branch string) string {
 	home, _ := os.UserHomeDir()
-	dir := cwd
-	if home != "" && strings.HasPrefix(dir, home) {
-		dir = "~" + dir[len(home):]
-	}
+	dir := shortenHomePath(cwd, home)
 	parts := []string{dir}
 	if strings.TrimSpace(branch) != "" {
 		parts = append(parts, branch)
 	}
 	return strings.Join(parts, " • ")
+}
+
+func shortenHomePath(path, home string) string {
+	if home == "" || path == "" {
+		return path
+	}
+	if path == home {
+		return "~"
+	}
+	prefix := strings.TrimRight(home, string(os.PathSeparator)) + string(os.PathSeparator)
+	if strings.HasPrefix(path, prefix) {
+		return "~" + string(os.PathSeparator) + strings.TrimPrefix(path, prefix)
+	}
+	return path
 }
 
 func styleStartupLine(line string) string {

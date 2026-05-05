@@ -569,6 +569,17 @@ func TestPrintStartupLeavesBlankRowBeforeFreshShell(t *testing.T) {
 	}
 }
 
+func TestShortenHomePathRequiresPathBoundary(t *testing.T) {
+	home := filepath.Join(string(filepath.Separator), "Users", "nick")
+	if got := shortenHomePath(filepath.Join(home, "repo"), home); got != filepath.Join("~", "repo") {
+		t.Fatalf("shortened home path = %q, want ~/repo", got)
+	}
+	sibling := filepath.Join(string(filepath.Separator), "Users", "nick2", "repo")
+	if got := shortenHomePath(sibling, home); got != sibling {
+		t.Fatalf("sibling path = %q, want unshortened %q", got, sibling)
+	}
+}
+
 func TestOpenRuntimeReturnsUnconfiguredBackendWhenSettingsMissing(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
