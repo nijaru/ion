@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SESSION="${ION_TMUX_SESSION:-ion-minimal-harness-smoke}"
-WIDTH="${ION_TMUX_WIDTH:-100}"
+WIDTH="${ION_TMUX_WIDTH:-180}"
 HEIGHT="${ION_TMUX_HEIGHT:-30}"
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ion-tmux-smoke.XXXXXX")"
 CAPTURE="${ION_TMUX_CAPTURE:-$(mktemp "${TMPDIR:-/tmp}/ion-tmux-capture.XXXXXX")}"
@@ -23,6 +23,10 @@ trap cleanup EXIT
 
 capture() {
   tmux capture-pane -t "$SESSION" -p -S -2000 >"$CAPTURE"
+}
+
+capture_visible() {
+  tmux capture-pane -t "$SESSION" -p >"$CAPTURE"
 }
 
 assert_contains() {
@@ -68,6 +72,33 @@ assert_separator_line_count_at_most() {
   count="$(grep -Ec '^─+$' "$CAPTURE" || true)"
   if ((count > max)); then
     echo "too many separator-only lines: got $count, want <= $max" >&2
+    echo "--- capture ---" >&2
+    cat "$CAPTURE" >&2
+    exit 1
+  fi
+}
+
+assert_visible_line_count_at_most() {
+  local needle="$1"
+  local max="$2"
+  local count
+  capture_visible
+  count="$(grep -Fxc -- "$needle" "$CAPTURE" || true)"
+  if ((count > max)); then
+    echo "too many visible lines matching $needle: got $count, want <= $max" >&2
+    echo "--- capture ---" >&2
+    cat "$CAPTURE" >&2
+    exit 1
+  fi
+}
+
+assert_visible_separator_line_count_at_most() {
+  local max="$1"
+  local count
+  capture_visible
+  count="$(grep -Ec '^─+$' "$CAPTURE" || true)"
+  if ((count > max)); then
+    echo "too many visible separator-only lines: got $count, want <= $max" >&2
     echo "--- capture ---" >&2
     cat "$CAPTURE" >&2
     exit 1
@@ -137,8 +168,8 @@ sleep 0.5
 tmux resize-window -t "$SESSION" -x 60 -y 24
 sleep 0.5
 assert_contains "Type a message"
-assert_line_count_at_most "• Ready" 1
-assert_separator_line_count_at_most 2
+assert_visible_line_count_at_most "• Ready" 1
+assert_visible_separator_line_count_at_most 2
 
 if [[ "$LIVE" == "1" ]]; then
   send_line 'Use the bash tool exactly once to run `echo ion-tmux-smoke`, then reply with the single word done.'

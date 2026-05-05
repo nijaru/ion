@@ -91,13 +91,6 @@ func (m Model) shellSeparator() string {
 	return strings.Repeat("─", width)
 }
 
-func resizeBlankLines(oldWidth, newWidth int) int {
-	if oldWidth <= 0 || newWidth <= 0 || newWidth >= oldWidth {
-		return 0
-	}
-	return clamp(oldWidth/newWidth+1, 1, 4)
-}
-
 func (m Model) shellPaddedLine(style lipgloss.Style, text string) string {
 	width := m.shellWidth()
 	if width <= 0 {

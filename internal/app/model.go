@@ -711,8 +711,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.App.Width = msg.Width
 		m.App.Height = msg.Height
 		m.layout()
-		if lines := resizeBlankLines(oldWidth, msg.Width); lines > 0 {
-			return m, printBlankLinesCmd(lines)
+		if oldWidth > 0 && msg.Width > 0 && msg.Width < oldWidth {
+			return m, clearVisibleScreenCmd()
 		}
 		return m, nil
 

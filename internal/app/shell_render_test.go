@@ -140,27 +140,30 @@ func TestViewShellSeparatorsUseWideShellWidth(t *testing.T) {
 	}
 }
 
-func TestWidthShrinkRequestsBlankScrollbackRows(t *testing.T) {
+func TestWidthShrinkDoesNotCommitScrollbackRows(t *testing.T) {
 	model := readyModel(t)
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 24})
 	model = updated.(Model)
 	updated, cmd := model.Update(tea.WindowSizeMsg{Width: 60, Height: 24})
 	model = updated.(Model)
 	if cmd == nil {
-		t.Fatal("expected blank-line command after width shrink")
+		t.Fatal("expected clear-screen command after width shrink")
 	}
-	if msg := cmd(); fmt.Sprintf("%T", msg) != "tea.sequenceMsg" {
-		t.Fatalf("resize command = %T, want tea.sequenceMsg", msg)
+	if msg := cmd(); fmt.Sprintf("%T", msg) != "tea.RawMsg" {
+		t.Fatalf("width shrink command = %T, want tea.RawMsg", msg)
 	}
 
 	updated, cmd = model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	if cmd != nil {
-		t.Fatal("expected no clear-screen command after width growth")
+		t.Fatalf("width growth returned command %T, want nil", cmd)
 	}
 	model = updated.(Model)
 	view := ansi.Strip(model.View().Content)
 	if strings.HasPrefix(view, "\n") {
 		t.Fatalf("view = %q, want no leading clear rows", view)
+	}
+	if count := strings.Count(view, "• Ready"); count != 1 {
+		t.Fatalf("ready row count = %d, want 1:\n%s", count, view)
 	}
 }
 
