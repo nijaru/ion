@@ -230,6 +230,11 @@ Fast, lightweight terminal coding agent.
   boundaries. `ListModelsForConfig(nil)` now returns a clear error instead of
   panicking, and custom auth lookup is nil-safe. Focused registry tests, full
   `go test ./...`, and the native race subset passed.
+- Twenty-third finding from `tk-oqex`: normalized durable provider
+  `extra_headers` on load/save, matching existing telemetry-header behavior and
+  preventing blank/whitespace header entries from surviving config boundaries.
+  Focused config tests, full `go test ./...`, and the native race subset
+  passed.
 - `tk-xhfg` policy is corrected. Fedora remains the primary live-smoke target,
   but Fedora unavailability should trigger an OpenRouter fallback run rather
   than deferring the gate.

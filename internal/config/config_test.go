@@ -18,7 +18,7 @@ func TestLoadReadsConfigFile(t *testing.T) {
 
 	path := filepath.Join(configDir, "config.toml")
 	if err := os.WriteFile(path, []byte(
-		"provider = \"openai\"\nmodel = \"gpt-4o\"\nreasoning_effort = \"med\"\nfast_model = \"gpt-4.1-mini\"\nfast_reasoning_effort = \"low\"\nsummary_model = \"gpt-4o-mini\"\nsummary_reasoning_effort = \"low\"\nendpoint = \"https://example.com/v1\"\nauth_env_var = \"OPENAI_PROXY_KEY\"\ncontext_limit = 128000\nmax_session_cost = 1.25\nmax_turn_cost = 0.10\nretry_until_cancelled = false\nworkspace_trust = \"off\"\ntelemetry_otlp_endpoint = \" localhost:4317 \"\ntelemetry_otlp_insecure = true\npolicy_path = \" /tmp/ion-policy.yaml \"\nsubagents_path = \" /tmp/ion-agents \"\nsession_retention_days = 14\ntool_env = \"inherit_without_provider_keys\"\nskill_tools = \"readonly\"\nsubagent_tools = \"enabled\"\n[extra_headers]\n\"X-Test\" = \"value\"\n[telemetry_otlp_headers]\n\"x-api-key\" = \" secret \"\n",
+		"provider = \"openai\"\nmodel = \"gpt-4o\"\nreasoning_effort = \"med\"\nfast_model = \"gpt-4.1-mini\"\nfast_reasoning_effort = \"low\"\nsummary_model = \"gpt-4o-mini\"\nsummary_reasoning_effort = \"low\"\nendpoint = \"https://example.com/v1\"\nauth_env_var = \"OPENAI_PROXY_KEY\"\ncontext_limit = 128000\nmax_session_cost = 1.25\nmax_turn_cost = 0.10\nretry_until_cancelled = false\nworkspace_trust = \"off\"\ntelemetry_otlp_endpoint = \" localhost:4317 \"\ntelemetry_otlp_insecure = true\npolicy_path = \" /tmp/ion-policy.yaml \"\nsubagents_path = \" /tmp/ion-agents \"\nsession_retention_days = 14\ntool_env = \"inherit_without_provider_keys\"\nskill_tools = \"readonly\"\nsubagent_tools = \"enabled\"\n[extra_headers]\n\" X-Test \" = \" value \"\n\"Drop\" = \" \"\n[telemetry_otlp_headers]\n\"x-api-key\" = \" secret \"\n",
 	), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -57,6 +57,9 @@ func TestLoadReadsConfigFile(t *testing.T) {
 	}
 	if got := cfg.ExtraHeaders["X-Test"]; got != "value" {
 		t.Fatalf("extra_headers[X-Test] = %q, want %q", got, "value")
+	}
+	if _, ok := cfg.ExtraHeaders["Drop"]; ok {
+		t.Fatalf("extra_headers kept blank value: %#v", cfg.ExtraHeaders)
 	}
 	if cfg.ContextLimit != 128000 {
 		t.Fatalf("context_limit = %d, want %d", cfg.ContextLimit, 128000)
@@ -333,7 +336,7 @@ func TestSaveWritesStatePath(t *testing.T) {
 		SummaryReasoningEffort: "low",
 		Endpoint:               "https://example.com/v1",
 		AuthEnvVar:             "OPENAI_PROXY_KEY",
-		ExtraHeaders:           map[string]string{"X-Test": "value"},
+		ExtraHeaders:           map[string]string{" X-Test ": " value ", "Drop": " "},
 		ContextLimit:           128000,
 		MaxSessionCost:         1.25,
 		MaxTurnCost:            0.10,
@@ -391,6 +394,9 @@ func TestSaveWritesStatePath(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("saved config missing %q:\n%s", want, got)
 		}
+	}
+	if strings.Contains(got, "Drop") {
+		t.Fatalf("saved config kept blank extra header:\n%s", got)
 	}
 }
 
