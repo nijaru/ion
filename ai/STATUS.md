@@ -4,7 +4,7 @@ Fast, lightweight terminal coding agent.
 
 **Phase:** C5 review and simplification
 **Focus:** C5 closeout: dogfood minimal harness and rerun live smoke when available
-**Active task:** none; next ready work is `tk-xhfg`
+**Active task:** none; only ready work is low-priority `tk-er04`
 **Updated:** 2026-05-05
 
 ## Current Truth
@@ -131,6 +131,10 @@ Fast, lightweight terminal coding agent.
   `go test ./... -count=1 -timeout 300s`, the native race subset, and
   `scripts/smoke/tmux-minimal-harness.sh`. No concrete regression was found in
   this closeout gate.
+- `tk-xhfg` is deferred. Fedora local-api probe timed out on 2026-05-05:
+  `curl --max-time 5 http://fedora:8080/v1/models`. The Fedora live gate did
+  not run; keep existing OpenRouter live-smoke evidence until Fedora is
+  reachable/free.
 - C5 roadmap/task rebaseline closed after the review/refactor sequence closed.
   Added `tk-wm30` for dogfood/minimal-harness soak and `tk-xhfg` for the
   Fedora local-api live gate. `tk-er04` remains low-priority and should not be
@@ -514,6 +518,7 @@ Fast, lightweight terminal coding agent.
 
 ## Next Action
 
-1. Run `tk-xhfg` Fedora local-api live gate when Fedora is free/reachable.
+1. Run deferred `tk-xhfg` Fedora local-api live gate when Fedora is
+   free/reachable.
 2. Keep `tk-er04` bash-mode evaluation deferred unless dogfooding proves it is
    worth the extra surface.
