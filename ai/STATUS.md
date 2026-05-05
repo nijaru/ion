@@ -218,6 +218,10 @@ Fast, lightweight terminal coding agent.
   from the fake test backend so test output reflects the current minimal
   harness shape. Focused app tests, full `go test ./...`, and the native race
   subset passed.
+- Twentieth refactor from `tk-oqex`: split ACP agent event/tool translation
+  helpers out of `cmd/ion/acp_agent.go` into `cmd/ion/acp_agent_events.go`, so
+  the main ACP agent file owns lifecycle/session orchestration. Focused ACP
+  agent tests, full `go test ./...`, and the native race subset passed.
 - `tk-xhfg` policy is corrected. Fedora remains the primary live-smoke target,
   but Fedora unavailability should trigger an OpenRouter fallback run rather
   than deferring the gate.
