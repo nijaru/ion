@@ -483,27 +483,31 @@ func (s *Session) RequestPermission(
 	}
 }
 
-// validatePath ensures the given path is within the workspace CWD.
-func (s *Session) validatePath(path string) error {
+// resolveWorkspacePath resolves a request path inside the session workspace.
+func (s *Session) resolveWorkspacePath(path string) (string, error) {
 	m := s.Meta()
 	if m == nil || m["cwd"] == "" {
-		return fmt.Errorf("session CWD not available for validation")
+		return "", fmt.Errorf("session CWD not available for validation")
 	}
 	cwd := m["cwd"]
 
-	absPath, err := filepath.Abs(path)
-	if err != nil {
-		return err
-	}
 	absCwd, err := filepath.Abs(cwd)
 	if err != nil {
-		return err
+		return "", err
+	}
+	target := path
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(absCwd, target)
+	}
+	absPath, err := filepath.Abs(target)
+	if err != nil {
+		return "", err
 	}
 
 	if !strings.HasPrefix(absPath, absCwd+string(filepath.Separator)) && absPath != absCwd {
-		return fmt.Errorf("path escapes workspace: %s", path)
+		return "", fmt.Errorf("path escapes workspace: %s", path)
 	}
-	return nil
+	return absPath, nil
 }
 
 // ReadTextFile implements acp.Client.
@@ -511,14 +515,27 @@ func (s *Session) ReadTextFile(
 	_ context.Context,
 	p acp.ReadTextFileRequest,
 ) (acp.ReadTextFileResponse, error) {
-	if err := s.validatePath(p.Path); err != nil {
+	path, err := s.resolveWorkspacePath(p.Path)
+	if err != nil {
 		return acp.ReadTextFileResponse{}, err
 	}
-	data, err := os.ReadFile(p.Path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return acp.ReadTextFileResponse{}, fmt.Errorf("read %s: %w", p.Path, err)
 	}
-	return acp.ReadTextFileResponse{Content: string(data)}, nil
+	return acp.ReadTextFileResponse{Content: acpReadTextRange(string(data), p.Line, p.Limit)}, nil
+}
+
+func acpReadTextRange(content string, line, limit *int) string {
+	lines := strings.SplitAfter(content, "\n")
+	if line != nil && *line > 1 {
+		start := min(*line-1, len(lines))
+		lines = lines[start:]
+	}
+	if limit != nil && *limit >= 0 && *limit < len(lines) {
+		lines = lines[:*limit]
+	}
+	return strings.Join(lines, "")
 }
 
 // WriteTextFile implements acp.Client. Permission was already granted via RequestPermission.
@@ -526,10 +543,11 @@ func (s *Session) WriteTextFile(
 	_ context.Context,
 	p acp.WriteTextFileRequest,
 ) (acp.WriteTextFileResponse, error) {
-	if err := s.validatePath(p.Path); err != nil {
+	path, err := s.resolveWorkspacePath(p.Path)
+	if err != nil {
 		return acp.WriteTextFileResponse{}, err
 	}
-	if err := os.WriteFile(p.Path, []byte(p.Content), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(p.Content), 0o644); err != nil {
 		return acp.WriteTextFileResponse{}, fmt.Errorf("write %s: %w", p.Path, err)
 	}
 	return acp.WriteTextFileResponse{}, nil
@@ -542,7 +560,11 @@ func (s *Session) CreateTerminal(
 ) (acp.CreateTerminalResponse, error) {
 	cmd := exec.CommandContext(s.ctx, p.Command, p.Args...)
 	if p.Cwd != nil {
-		cmd.Dir = *p.Cwd
+		cwd, err := s.resolveWorkspacePath(*p.Cwd)
+		if err != nil {
+			return acp.CreateTerminalResponse{}, err
+		}
+		cmd.Dir = cwd
 	}
 	for _, e := range p.Env {
 		cmd.Env = append(cmd.Env, e.Name+"="+e.Value)

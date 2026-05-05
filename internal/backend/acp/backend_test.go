@@ -414,6 +414,69 @@ func TestACPSessionRequestNormalizesRelativeCWD(t *testing.T) {
 	}
 }
 
+func TestACPFileBridgeResolvesRelativePathsAgainstSessionCWD(t *testing.T) {
+	processCWD := t.TempDir()
+	t.Chdir(processCWD)
+
+	cwd := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cwd, "input.txt"), []byte("one\ntwo\nthree\n"), 0o644); err != nil {
+		t.Fatalf("write input: %v", err)
+	}
+
+	client := newSession()
+	client.storage = storage.NewLazySession(nil, cwd, "model-a", "main")
+
+	line := 2
+	limit := 1
+	resp, err := client.ReadTextFile(t.Context(), acp.ReadTextFileRequest{
+		Path:  "input.txt",
+		Line:  &line,
+		Limit: &limit,
+	})
+	if err != nil {
+		t.Fatalf("ReadTextFile: %v", err)
+	}
+	if resp.Content != "two\n" {
+		t.Fatalf("content = %q, want second line", resp.Content)
+	}
+
+	if _, err := client.WriteTextFile(t.Context(), acp.WriteTextFileRequest{
+		Path:    "output.txt",
+		Content: "written",
+	}); err != nil {
+		t.Fatalf("WriteTextFile: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(cwd, "output.txt"))
+	if err != nil {
+		t.Fatalf("read workspace output: %v", err)
+	}
+	if string(data) != "written" {
+		t.Fatalf("workspace output = %q, want written", data)
+	}
+	if _, err := os.Stat(filepath.Join(processCWD, "output.txt")); !os.IsNotExist(err) {
+		t.Fatalf("relative write escaped to process cwd, stat err = %v", err)
+	}
+}
+
+func TestACPFileBridgeRejectsEscapingPaths(t *testing.T) {
+	cwd := t.TempDir()
+	client := newSession()
+	client.storage = storage.NewLazySession(nil, cwd, "model-a", "main")
+	client.ctx = t.Context()
+
+	if _, err := client.ReadTextFile(t.Context(), acp.ReadTextFileRequest{Path: "../outside.txt"}); err == nil {
+		t.Fatal("ReadTextFile accepted path outside workspace")
+	}
+
+	outside := ".."
+	if _, err := client.CreateTerminal(t.Context(), acp.CreateTerminalRequest{
+		Command: "true",
+		Cwd:     &outside,
+	}); err == nil {
+		t.Fatal("CreateTerminal accepted cwd outside workspace")
+	}
+}
+
 func TestACPCommandEnvIncludesResumeSessionID(t *testing.T) {
 	env := acpCommandEnv("session-123")
 
