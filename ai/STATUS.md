@@ -142,6 +142,10 @@ Fast, lightweight terminal coding agent.
   tightened the workspace-trust mode gate to the actual trusted/untrusted
   decision. Focused `./cmd/ion`, `./internal/storage`, and
   `./internal/backend/canto` tests passed.
+- Second cleanup from `tk-oqex`: split startup shell/resume output helpers into
+  `cmd/ion/startup.go` and workspace-trust gating into `cmd/ion/trust.go`,
+  reducing `cmd/ion/main.go` back toward process orchestration. Focused
+  `./cmd/ion` tests passed.
 - `tk-xhfg` policy is corrected. Fedora remains the primary live-smoke target,
   but Fedora unavailability should trigger an OpenRouter fallback run rather
   than deferring the gate.
