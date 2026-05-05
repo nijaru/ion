@@ -127,6 +127,11 @@ Fast, lightweight terminal coding agent.
 
 ## Latest Evidence
 
+- App test split continued: trust/mode and approval/escalation tests moved
+  from `internal/app/model_test.go` into `internal/app/trust_mode_test.go` and
+  `internal/app/approval_test.go`. Focused safety/approval tests,
+  `go test ./internal/app -count=1 -timeout 180s`,
+  `go test ./... -count=1 -timeout 300s`, and the native race subset passed.
 - App test split continued: slash autocomplete, file/session picker, provider
   picker, model picker, and picker filtering tests moved from
   `internal/app/model_test.go` into `internal/app/picker_test.go`. Focused
