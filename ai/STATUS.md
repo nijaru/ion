@@ -156,7 +156,8 @@ Fast, lightweight terminal coding agent.
 - Fifth cleanup from `tk-oqex`: extracted tool display/output policy from
   `internal/app/viewport.go` into `internal/app/tool_render.go`, reducing the
   viewport file to transcript, in-flight, progress, and generic line helpers.
-  Focused `./internal/app` tests passed.
+  Focused `./internal/app` tests, full `go test ./...`, the native race subset,
+  and `scripts/smoke/tmux-minimal-harness.sh` passed.
 - `tk-xhfg` policy is corrected. Fedora remains the primary live-smoke target,
   but Fedora unavailability should trigger an OpenRouter fallback run rather
   than deferring the gate.
