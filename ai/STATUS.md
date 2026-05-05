@@ -4,7 +4,7 @@ Fast, lightweight terminal coding agent.
 
 **Phase:** C5 review and simplification
 **Focus:** whole-product UI/UX and codebase organization review before new features
-**Active task:** none; next ready work is `tk-0gni` or `tk-er04`
+**Active task:** none; next ready work is `tk-er04`
 **Updated:** 2026-05-04
 
 ## Current Truth
@@ -128,6 +128,13 @@ Fast, lightweight terminal coding agent.
 
 ## Latest Evidence
 
+- `tk-0gni` is closed. A deterministic local edit-surface eval now lives at
+  `internal/backend/canto/tools/file_edit_eval_test.go`, covering whole-file
+  write, targeted edit, CRLF/BOM preservation, multi-file edits, no partial
+  writes after validation failure, duplicate/count diagnostics with line
+  numbers, and canceled contexts. Current evidence supports keeping
+  `write`/`edit`/`multi_edit` split for now. Focused tools tests,
+  `go test ./... -count=1 -timeout 300s`, and the native race subset passed.
 - `tk-txtx` is closed. The former 2,533-line
   `internal/backend/canto/backend_test.go` was split into behavior-focused
   test files for config, processors, tool surface, turns, event translation,

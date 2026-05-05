@@ -61,6 +61,11 @@ Current recommendation after the post-I2 evaluation:
   is already hardened around exact replacement, CRLF/BOM-safe matching,
   line-numbered ambiguity/count errors, explicit replacement counts, and
   atomic validation before writes.
+- The local edit-surface eval now exists as
+  `internal/backend/canto/tools/file_edit_eval_test.go`. It covers whole-file
+  write, targeted edit, CRLF/BOM preservation, multi-file edits, no partial
+  writes after validation failure, duplicate/count diagnostics, and canceled
+  contexts. The eval supports keeping the split surface for now.
 - Do not make Python, `sed`, heredocs, or shell patching the normal edit path.
   They are harder for agents to quote correctly, bypass Ion's edit-specific
   validation/diff display, weaken permission/audit boundaries, and are easier
