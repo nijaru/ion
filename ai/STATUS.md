@@ -211,6 +211,9 @@ Fast, lightweight terminal coding agent.
   bits instead of rewriting helper scripts/private resources to generic
   `0644`/`0755` modes. Focused skills tests, full `go test ./...`, and the
   native race subset passed.
+- Eighteenth finding from `tk-oqex`: fixed subagent persona frontmatter
+  parsing for CRLF-authored Markdown files. Focused subagent tests, full
+  `go test ./...`, and the native race subset passed.
 - `tk-xhfg` policy is corrected. Fedora remains the primary live-smoke target,
   but Fedora unavailability should trigger an OpenRouter fallback run rather
   than deferring the gate.

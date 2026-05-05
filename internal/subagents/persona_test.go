@@ -38,6 +38,16 @@ func TestParseMarkdownPersonaRequiresFrontmatter(t *testing.T) {
 	}
 }
 
+func TestParseMarkdownPersonaAcceptsCRLFFrontmatter(t *testing.T) {
+	persona, err := ParseMarkdown("---\r\nname: scout\r\ndescription: Quick scouting.\r\nmodel: fast\r\ntools: [read]\r\n---\r\nFind files.\r\n")
+	if err != nil {
+		t.Fatalf("ParseMarkdown returned error: %v", err)
+	}
+	if persona.Name != "scout" || persona.Prompt != "Find files." {
+		t.Fatalf("persona = %#v, want parsed CRLF markdown", persona)
+	}
+}
+
 func TestLoadDirSortsMarkdownPersonas(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "b.md"), []byte(`---
