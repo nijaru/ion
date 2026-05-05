@@ -239,6 +239,10 @@ Fast, lightweight terminal coding agent.
   so sibling paths such as `/Users/nick2/...` no longer render as `~2/...`.
   Focused cmd/app tests, full `go test ./...`, and the native race subset
   passed.
+- Twenty-fifth finding from `tk-oqex`: hardened app session-error reduction
+  against malformed `session.Error{Err:nil}` events so the TUI records a
+  fallback error instead of panicking. Focused app tests, full `go test ./...`,
+  and the native race subset passed.
 - `tk-xhfg` policy is corrected. Fedora remains the primary live-smoke target,
   but Fedora unavailability should trigger an OpenRouter fallback run rather
   than deferring the gate.
