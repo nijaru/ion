@@ -162,6 +162,10 @@ Fast, lightweight terminal coding agent.
   `internal/app/viewport.go` into `internal/app/progress_render.go` and moved
   generic line/key helpers to `internal/app/util.go`. Focused `./internal/app`
   tests passed.
+- Seventh finding from `tk-oqex`: fixed a reducer-routing bug where
+  `session.ChildBlocked` had a handler but was missing from `Model.Update`, so
+  backend-emitted child-blocked events could fall through to composer handling.
+  Focused child-blocked and full `./internal/app` tests passed.
 - `tk-xhfg` policy is corrected. Fedora remains the primary live-smoke target,
   but Fedora unavailability should trigger an OpenRouter fallback run rather
   than deferring the gate.
