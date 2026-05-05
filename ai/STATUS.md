@@ -4,7 +4,7 @@ Fast, lightweight terminal coding agent.
 
 **Phase:** C5 review and simplification
 **Focus:** whole-product UI/UX and codebase organization review before new features
-**Active task:** `tk-245w` — app event reducer and shell-state refactor
+**Active task:** `tk-omw4` — split oversized app test file by behavior
 **Updated:** 2026-05-04
 
 ## Current Truth
@@ -127,6 +127,11 @@ Fast, lightweight terminal coding agent.
 
 ## Latest Evidence
 
+- App test split started: shell layout, progress, picker width, and status-line
+  rendering tests moved from `internal/app/model_test.go` into
+  `internal/app/shell_render_test.go`. Focused shell-render tests,
+  `go test ./internal/app -count=1 -timeout 180s`,
+  `go test ./... -count=1 -timeout 300s`, and the native race subset passed.
 - Review hotfix slice closed three code-review findings and one copy issue:
   model-picker metric headers are clamped to shell width, Ion-only storage
   events preserve supplied timestamps, `multi_edit` no longer writes
