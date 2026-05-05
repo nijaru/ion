@@ -267,6 +267,9 @@ func TestFileTools(t *testing.T) {
 		f2 := "file2.txt"
 		os.WriteFile(filepath.Join(tmpDir, f1), []byte("hello\nworld"), 0o644)
 		os.WriteFile(filepath.Join(tmpDir, f2), []byte("foo\nbar"), 0o644)
+		if err := os.Chmod(filepath.Join(tmpDir, f2), 0o755); err != nil {
+			t.Fatal(err)
+		}
 		if err := os.WriteFile(filepath.Join(tmpDir, f1+".tmp"), []byte("user temp"), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -313,6 +316,13 @@ func TestFileTools(t *testing.T) {
 		}
 		if strings.Index(res, "--- a/file1.txt") > strings.Index(res, "--- a/file2.txt") {
 			t.Fatalf("multi_edit diff output is not sorted: %q", res)
+		}
+		f2Info, err := os.Stat(filepath.Join(tmpDir, f2))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := f2Info.Mode().Perm(); got != 0o755 {
+			t.Fatalf("multi_edit changed file mode to %v, want 0755", got)
 		}
 		tempContent, err := os.ReadFile(filepath.Join(tmpDir, f1+".tmp"))
 		if err != nil {

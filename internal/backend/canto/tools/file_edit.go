@@ -202,6 +202,7 @@ func (m *MultiEdit) Execute(ctx context.Context, args string) (string, error) {
 
 	contents := make(map[string]string)
 	originals := make(map[string]string)
+	modes := make(map[string]os.FileMode)
 	for _, edit := range input.Edits {
 		if err := validateEditStrings(edit.OldString, edit.NewString); err != nil {
 			return "", fmt.Errorf("%s: %w", edit.FilePath, err)
@@ -216,8 +217,13 @@ func (m *MultiEdit) Execute(ctx context.Context, args string) (string, error) {
 			if err != nil {
 				return "", fmt.Errorf("failed to read %s: %w", edit.FilePath, err)
 			}
+			info, err := root.Stat(relPath)
+			if err != nil {
+				return "", fmt.Errorf("failed to stat %s: %w", edit.FilePath, err)
+			}
 			contents[relPath] = string(content)
 			originals[relPath] = string(content)
+			modes[relPath] = info.Mode().Perm()
 		}
 
 		strContent := contents[relPath]
@@ -255,7 +261,7 @@ func (m *MultiEdit) Execute(ctx context.Context, args string) (string, error) {
 	var diffs strings.Builder
 	for _, relPath := range paths {
 		content := contents[relPath]
-		tmpPath, err := writeEditTempFile(root, relPath, []byte(content))
+		tmpPath, err := writeEditTempFile(root, relPath, []byte(content), modes[relPath])
 		if err != nil {
 			writeErrs = append(
 				writeErrs,
@@ -307,7 +313,12 @@ func sortedMapKeys(values map[string]string) []string {
 	return keys
 }
 
-func writeEditTempFile(root *os.Root, relPath string, data []byte) (string, error) {
+func writeEditTempFile(
+	root *os.Root,
+	relPath string,
+	data []byte,
+	mode os.FileMode,
+) (string, error) {
 	dir := filepath.Dir(relPath)
 	base := filepath.Base(relPath)
 	for attempt := 0; attempt < 16; attempt++ {
@@ -319,7 +330,7 @@ func writeEditTempFile(root *os.Root, relPath string, data []byte) (string, erro
 		if dir != "." {
 			name = filepath.Join(dir, name)
 		}
-		file, err := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		file, err := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
 		if errors.Is(err, os.ErrExist) {
 			continue
 		}
