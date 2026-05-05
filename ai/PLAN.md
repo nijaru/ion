@@ -100,7 +100,7 @@ Completed sequence:
 Closeout order:
 
 1. Done - `tk-ulgm` - roadmap/task rebaseline after C5.
-2. Next - `tk-wm30` - dogfood minimal harness and collect concrete regressions.
+2. Done - `tk-wm30` - dogfood minimal harness and collect concrete regressions.
 3. Next - `tk-xhfg` - rerun the C5 Fedora local-api live gate when Fedora is free.
 4. `tk-er04` - bash-mode evaluation remains P4 and should not start unless
    dogfooding proves it is worth the complexity.
@@ -512,7 +512,7 @@ Order:
 Closeout:
 
 1. Done - `tk-ulgm` - rebaseline roadmap/status/tasks.
-2. Next - `tk-wm30` - dogfood minimal harness and collect regressions.
+2. Done - `tk-wm30` - dogfood minimal harness and collect regressions.
 3. Next - `tk-xhfg` - rerun Fedora local-api live gate when reachable.
 4. Deferred - `tk-er04` - bash-mode evaluation.
 
