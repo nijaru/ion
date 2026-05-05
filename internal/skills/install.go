@@ -198,8 +198,16 @@ func copySkillBundle(sourceDir, targetDir string) error {
 			if entry.Name() == ".git" {
 				return filepath.SkipDir
 			}
-			if err := os.MkdirAll(filepath.Join(targetDir, rel), 0o755); err != nil {
+			info, err := entry.Info()
+			if err != nil {
+				return err
+			}
+			targetPath := filepath.Join(targetDir, rel)
+			if err := os.MkdirAll(targetPath, info.Mode().Perm()); err != nil {
 				return fmt.Errorf("copy skill dir %s: %w", rel, err)
+			}
+			if err := os.Chmod(targetPath, info.Mode().Perm()); err != nil {
+				return fmt.Errorf("set skill dir mode %s: %w", rel, err)
 			}
 			return nil
 		}
@@ -218,7 +226,7 @@ func copySkillBundle(sourceDir, targetDir string) error {
 		if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
 			return fmt.Errorf("create skill dir %s: %w", filepath.Dir(rel), err)
 		}
-		if err := os.WriteFile(targetPath, data, 0o644); err != nil {
+		if err := os.WriteFile(targetPath, data, info.Mode().Perm()); err != nil {
 			return fmt.Errorf("write skill file %s: %w", rel, err)
 		}
 		return nil

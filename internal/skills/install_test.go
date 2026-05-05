@@ -35,6 +35,17 @@ func TestPreviewInstallValidatesSkillWithoutInstalling(t *testing.T) {
 
 func TestInstallCopiesValidatedSkillBundle(t *testing.T) {
 	source := writeInstallSkill(t, t.TempDir(), "review", "Review things.")
+	scriptPath := filepath.Join(source, "resources", "run.sh")
+	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("write executable resource: %v", err)
+	}
+	privateDir := filepath.Join(source, "private")
+	if err := os.MkdirAll(privateDir, 0o700); err != nil {
+		t.Fatalf("mkdir private dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(privateDir, "note.txt"), []byte("private"), 0o600); err != nil {
+		t.Fatalf("write private resource: %v", err)
+	}
 	targetRoot := t.TempDir()
 
 	preview, err := Install(source, targetRoot)
@@ -51,6 +62,9 @@ func TestInstallCopiesValidatedSkillBundle(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(targetRoot, ".staging")); err != nil {
 		t.Fatalf("staging dir stat: %v", err)
 	}
+	assertMode(t, filepath.Join(targetRoot, "review", "resources", "run.sh"), 0o755)
+	assertMode(t, filepath.Join(targetRoot, "review", "private"), 0o700)
+	assertMode(t, filepath.Join(targetRoot, "review", "private", "note.txt"), 0o600)
 }
 
 func TestInstallRejectsExistingSkill(t *testing.T) {
@@ -97,4 +111,15 @@ Use carefully.
 		t.Fatalf("write resource: %v", err)
 	}
 	return dir
+}
+
+func assertMode(t *testing.T, path string, want os.FileMode) {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %s: %v", path, err)
+	}
+	if got := info.Mode().Perm(); got != want {
+		t.Fatalf("mode %s = %v, want %v", path, got, want)
+	}
 }
