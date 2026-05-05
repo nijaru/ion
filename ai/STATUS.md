@@ -185,8 +185,12 @@ Fast, lightweight terminal coding agent.
   tool tests, full `go test ./...`, and the native race subset passed.
 - Twelfth finding from `tk-oqex`: fixed process-local resume overrides. Runtime
   startup can now resume with an explicit provider/model override without
-  rewriting the session's stored model metadata for later `--continue`. Focused
-  CLI tests are in progress.
+  rewriting the session's stored model metadata for later `--continue`.
+  Focused CLI tests, full `go test ./...`, and the native race subset passed.
+- Thirteenth finding from `tk-oqex`: fixed local-api probe failure caching.
+  Failed configured endpoint probes now cache for the same short TTL as
+  successes, preventing repeated provider/status timeouts while Fedora/local-api
+  is unavailable. Focused provider tests are in progress.
 - `tk-xhfg` policy is corrected. Fedora remains the primary live-smoke target,
   but Fedora unavailability should trigger an OpenRouter fallback run rather
   than deferring the gate.
