@@ -149,6 +149,10 @@ Fast, lightweight terminal coding agent.
 - Tool event cleanup continued: tool-call start, tool-output delta, and
   tool-result settlement now use dedicated handlers. Focused app tests,
   `go test ./...`, and the native race subset passed.
+- Subagent child lifecycle cleanup continued: child requested/started/delta,
+  completed, blocked, and failed events now use dedicated handlers instead of
+  inline switch bodies. Focused app tests, `go test ./...`, and the native race
+  subset passed.
 - TUI separator hotfix restored full-width composer bars while keeping the
   terminal-width-minus-one resize guard. Focused separator/progress tests,
   `go test ./internal/app -count=1 -timeout 180s`,

@@ -140,118 +140,22 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		return m, m.awaitSessionEvent()
 
 	case session.ChildRequested:
-		p := &SubagentProgress{
-			ID:     msg.AgentName,
-			Name:   msg.AgentName,
-			Intent: msg.Query,
-			Status: "Requested",
-		}
-		if m.InFlight.Subagents == nil {
-			m.InFlight.Subagents = make(map[string]*SubagentProgress)
-		}
-		m.InFlight.Subagents[msg.AgentName] = p
-		m.Progress.Mode = stateWorking
-
-		// Persist start breadcrumb
-		if err := m.persistEntry("persist subagent start", storage.Subagent{
-			Type:    "subagent",
-			Name:    msg.AgentName,
-			Content: "Started: " + msg.Query,
-			IsError: false,
-			TS:      now(),
-		}); err != nil {
-			return m, tea.Sequence(m.printEntries(session.Entry{
-				Role:    session.Subagent,
-				Title:   p.Name,
-				Content: "Started: " + p.Intent,
-			}), persistErrorCmd("persist subagent start", err))
-		}
-		// We print the started entry immediately to scrollback
-		return m, tea.Sequence(m.printEntries(session.Entry{
-			Role:      session.Subagent,
-			Timestamp: msg.Timestamp,
-			Title:     p.Name,
-			Content:   "Started: " + p.Intent,
-		}), m.awaitSessionEvent())
+		return m.handleChildRequested(msg)
 
 	case session.ChildStarted:
-		if p, ok := m.InFlight.Subagents[msg.AgentName]; ok {
-			p.Status = "Started"
-			m.Progress.Mode = stateWorking
-		}
-		return m, m.awaitSessionEvent()
+		return m.handleChildStarted(msg)
 
 	case session.ChildDelta:
-		if p, ok := m.InFlight.Subagents[msg.AgentName]; ok {
-			p.Output += msg.Delta
-		}
-		return m, m.awaitSessionEvent()
+		return m.handleChildDelta(msg)
 
 	case session.ChildCompleted:
-		if p, ok := m.InFlight.Subagents[msg.AgentName]; ok {
-			p.Status = "Completed"
-			p.Output = msg.Result
-			committed := session.Entry{
-				Role:      session.Subagent,
-				Timestamp: msg.Timestamp,
-				Title:     p.Name,
-				Content:   "Completed: " + p.Output,
-			}
-			delete(m.InFlight.Subagents, msg.AgentName)
-			m.Progress.Mode = stateComplete
-
-			if err := m.persistEntry("persist subagent completion", storage.Subagent{
-				Type:    "subagent",
-				Name:    msg.AgentName,
-				Content: committed.Content,
-				IsError: false,
-				TS:      now(),
-			}); err != nil {
-				return m, tea.Sequence(m.printEntries(committed), persistErrorCmd("persist subagent completion", err))
-			}
-			return m, tea.Sequence(m.printEntries(committed), m.awaitSessionEvent())
-		}
-		return m, m.awaitSessionEvent()
+		return m.handleChildCompleted(msg)
 
 	case session.ChildBlocked:
-		if p, ok := m.InFlight.Subagents[msg.AgentName]; ok {
-			p.Status = "Blocked"
-			p.Output = "BLOCKED: " + msg.Reason
-			// Note: We don't remove from Subagents on block, as it's still active just waiting
-			m.Progress.Mode = stateBlocked
-			m.InFlight.Thinking = false
-			// We keep it in Plane B only, no durable transcript entry yet.
-			return m, m.awaitSessionEvent()
-		}
-		return m, m.awaitSessionEvent()
+		return m.handleChildBlocked(msg)
 
 	case session.ChildFailed:
-		if p, ok := m.InFlight.Subagents[msg.AgentName]; ok {
-			p.Status = "Failed"
-			p.Output = "ERROR: " + msg.Error
-			committed := session.Entry{
-				Role:      session.Subagent,
-				Timestamp: msg.Timestamp,
-				Title:     p.Name,
-				Content:   "Failed: " + msg.Error,
-				IsError:   true,
-			}
-			delete(m.InFlight.Subagents, msg.AgentName)
-			m.Progress.Mode = stateError
-			m.Progress.LastError = "Subagent failed: " + msg.Error
-
-			if err := m.persistEntry("persist subagent failure", storage.Subagent{
-				Type:    "subagent",
-				Name:    msg.AgentName,
-				Content: committed.Content,
-				IsError: true,
-				TS:      now(),
-			}); err != nil {
-				return m, tea.Sequence(m.printEntries(committed), persistErrorCmd("persist subagent failure", err))
-			}
-			return m, tea.Sequence(m.printEntries(committed), m.awaitSessionEvent())
-		}
-		return m, m.awaitSessionEvent()
+		return m.handleChildFailed(msg)
 
 	case session.Error:
 		return m.handleSessionError(msg.Err, true)
@@ -529,6 +433,129 @@ func (m Model) handleToolResult(msg session.ToolResult) (Model, tea.Cmd) {
 		return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
 	}
 	return m, m.awaitSessionEvent()
+}
+
+func (m Model) handleChildRequested(msg session.ChildRequested) (Model, tea.Cmd) {
+	p := &SubagentProgress{
+		ID:     msg.AgentName,
+		Name:   msg.AgentName,
+		Intent: msg.Query,
+		Status: "Requested",
+	}
+	if m.InFlight.Subagents == nil {
+		m.InFlight.Subagents = make(map[string]*SubagentProgress)
+	}
+	m.InFlight.Subagents[msg.AgentName] = p
+	m.Progress.Mode = stateWorking
+
+	if err := m.persistEntry("persist subagent start", storage.Subagent{
+		Type:    "subagent",
+		Name:    msg.AgentName,
+		Content: "Started: " + msg.Query,
+		IsError: false,
+		TS:      now(),
+	}); err != nil {
+		return m, tea.Sequence(m.printEntries(session.Entry{
+			Role:    session.Subagent,
+			Title:   p.Name,
+			Content: "Started: " + p.Intent,
+		}), persistErrorCmd("persist subagent start", err))
+	}
+	return m, tea.Sequence(m.printEntries(session.Entry{
+		Role:      session.Subagent,
+		Timestamp: msg.Timestamp,
+		Title:     p.Name,
+		Content:   "Started: " + p.Intent,
+	}), m.awaitSessionEvent())
+}
+
+func (m Model) handleChildStarted(msg session.ChildStarted) (Model, tea.Cmd) {
+	if p, ok := m.InFlight.Subagents[msg.AgentName]; ok {
+		p.Status = "Started"
+		m.Progress.Mode = stateWorking
+	}
+	return m, m.awaitSessionEvent()
+}
+
+func (m Model) handleChildDelta(msg session.ChildDelta) (Model, tea.Cmd) {
+	if p, ok := m.InFlight.Subagents[msg.AgentName]; ok {
+		p.Output += msg.Delta
+	}
+	return m, m.awaitSessionEvent()
+}
+
+func (m Model) handleChildCompleted(msg session.ChildCompleted) (Model, tea.Cmd) {
+	p, ok := m.InFlight.Subagents[msg.AgentName]
+	if !ok {
+		return m, m.awaitSessionEvent()
+	}
+	p.Status = "Completed"
+	p.Output = msg.Result
+	committed := session.Entry{
+		Role:      session.Subagent,
+		Timestamp: msg.Timestamp,
+		Title:     p.Name,
+		Content:   "Completed: " + p.Output,
+	}
+	delete(m.InFlight.Subagents, msg.AgentName)
+	m.Progress.Mode = stateComplete
+
+	if err := m.persistEntry("persist subagent completion", storage.Subagent{
+		Type:    "subagent",
+		Name:    msg.AgentName,
+		Content: committed.Content,
+		IsError: false,
+		TS:      now(),
+	}); err != nil {
+		return m, tea.Sequence(
+			m.printEntries(committed),
+			persistErrorCmd("persist subagent completion", err),
+		)
+	}
+	return m, tea.Sequence(m.printEntries(committed), m.awaitSessionEvent())
+}
+
+func (m Model) handleChildBlocked(msg session.ChildBlocked) (Model, tea.Cmd) {
+	if p, ok := m.InFlight.Subagents[msg.AgentName]; ok {
+		p.Status = "Blocked"
+		p.Output = "BLOCKED: " + msg.Reason
+		m.Progress.Mode = stateBlocked
+		m.InFlight.Thinking = false
+	}
+	return m, m.awaitSessionEvent()
+}
+
+func (m Model) handleChildFailed(msg session.ChildFailed) (Model, tea.Cmd) {
+	p, ok := m.InFlight.Subagents[msg.AgentName]
+	if !ok {
+		return m, m.awaitSessionEvent()
+	}
+	p.Status = "Failed"
+	p.Output = "ERROR: " + msg.Error
+	committed := session.Entry{
+		Role:      session.Subagent,
+		Timestamp: msg.Timestamp,
+		Title:     p.Name,
+		Content:   "Failed: " + msg.Error,
+		IsError:   true,
+	}
+	delete(m.InFlight.Subagents, msg.AgentName)
+	m.Progress.Mode = stateError
+	m.Progress.LastError = "Subagent failed: " + msg.Error
+
+	if err := m.persistEntry("persist subagent failure", storage.Subagent{
+		Type:    "subagent",
+		Name:    msg.AgentName,
+		Content: committed.Content,
+		IsError: true,
+		TS:      now(),
+	}); err != nil {
+		return m, tea.Sequence(
+			m.printEntries(committed),
+			persistErrorCmd("persist subagent failure", err),
+		)
+	}
+	return m, tea.Sequence(m.printEntries(committed), m.awaitSessionEvent())
 }
 
 func persistErrorCmd(action string, err error) tea.Cmd {
