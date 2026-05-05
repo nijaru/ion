@@ -318,7 +318,7 @@ func TestSubmitTurnToolFailurePersistsForFollowUp(t *testing.T) {
 	call := llm.Call{ID: "tool-call-fail", Type: "function"}
 	call.Function.Name = "bash"
 	call.Function.Arguments = `{"command":"exit 7"}`
-	provider := ctesting.NewMockProvider("local-api",
+	provider := ctesting.NewFauxProvider("local-api",
 		ctesting.Step{Calls: []llm.Call{call}},
 		ctesting.Step{Content: "handled tool failure"},
 		ctesting.Step{Content: "continued"},
@@ -405,7 +405,7 @@ func TestSubmitTurnProviderErrorLeavesBackendReusable(t *testing.T) {
 	}
 
 	providerErr := errors.New("provider unavailable")
-	provider := ctesting.NewMockProvider(
+	provider := ctesting.NewFauxProvider(
 		"openai",
 		ctesting.Step{Err: providerErr},
 		ctesting.Step{Content: "recovered reply"},

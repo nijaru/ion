@@ -23,10 +23,10 @@ func TestCrossProviderHandoffPreservesPromptTruth(t *testing.T) {
 		t.Fatalf("new canto store: %v", err)
 	}
 
-	firstProvider := ctesting.NewMockProvider("openai", ctesting.Step{
+	firstProvider := ctesting.NewFauxProvider("openai", ctesting.Step{
 		Chunks: []llm.Chunk{{Content: "first reply"}},
 	})
-	secondProvider := ctesting.NewMockProvider("openrouter", ctesting.Step{
+	secondProvider := ctesting.NewFauxProvider("openrouter", ctesting.Step{
 		Chunks: []llm.Chunk{{Content: "second reply"}},
 	})
 
@@ -141,7 +141,7 @@ func TestResumedToolSessionSendsValidFollowUpHistory(t *testing.T) {
 	call := llm.Call{ID: "tool-call-1", Type: "function"}
 	call.Function.Name = "bash"
 	call.Function.Arguments = `{"command":"echo ion-smoke"}`
-	provider := ctesting.NewMockProvider("local-api",
+	provider := ctesting.NewFauxProvider("local-api",
 		ctesting.Step{Calls: []llm.Call{call}},
 		ctesting.Step{Content: "done"},
 		ctesting.Step{Content: "continued"},
@@ -300,7 +300,7 @@ func TestProviderHistoryExcludesIonDisplayOnlyEvents(t *testing.T) {
 		llm.Message{Role: llm.RoleAssistant, Content: "prior assistant"},
 	)
 
-	provider := ctesting.NewMockProvider("local-api", ctesting.Step{Content: "next"})
+	provider := ctesting.NewFauxProvider("local-api", ctesting.Step{Content: "next"})
 	oldFactory := providerFactory
 	providerFactory = func(ctx context.Context, cfg *config.Config) (llm.Provider, error) {
 		if cfg.Provider == "local-api" {

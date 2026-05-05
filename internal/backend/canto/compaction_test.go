@@ -137,7 +137,7 @@ func TestOpenRecoversFromContextOverflowByCompacting(t *testing.T) {
 	)
 
 	provider := &overflowRecoveryProvider{
-		FauxProvider: ctesting.NewMockProvider(
+		FauxProvider: ctesting.NewFauxProvider(
 			"openai",
 			ctesting.Step{Err: overflowErr},
 			ctesting.Step{Content: "compacted summary"},
@@ -248,7 +248,7 @@ func TestSubmitTurnProactivelyCompactsBeforeOverflow(t *testing.T) {
 	)
 
 	provider := &overflowRecoveryProvider{
-		FauxProvider: ctesting.NewMockProvider(
+		FauxProvider: ctesting.NewFauxProvider(
 			"openai",
 			ctesting.Step{Content: "compacted summary"},
 			ctesting.Step{Content: "recovered reply"},
@@ -336,7 +336,7 @@ func TestSubmitTurnStopsWhenProactiveCompactionFails(t *testing.T) {
 	)
 
 	provider := &overflowRecoveryProvider{
-		FauxProvider: ctesting.NewMockProvider(
+		FauxProvider: ctesting.NewFauxProvider(
 			"openai",
 			ctesting.Step{Err: errors.New("compaction provider failed")},
 			ctesting.Step{Content: "turn should not run"},

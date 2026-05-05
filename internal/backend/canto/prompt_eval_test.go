@@ -21,7 +21,10 @@ type promptEvalSuite struct {
 }
 
 func TestPromptQualityEvals(t *testing.T) {
-	combined := buildInstructions("/tmp/project", time.Date(2026, time.March, 27, 0, 0, 0, 0, time.UTC))
+	combined := buildInstructions(
+		"/tmp/project",
+		time.Date(2026, time.March, 27, 0, 0, 0, 0, time.UTC),
+	)
 	cases := loadPromptEvalCases(t)
 
 	for _, tc := range cases {

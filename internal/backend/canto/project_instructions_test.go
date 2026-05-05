@@ -44,7 +44,7 @@ func TestOpenLoadsLayeredProjectInstructions(t *testing.T) {
 		t.Fatalf("open session: %v", err)
 	}
 
-	mockProvider := ctesting.NewMockProvider("openai", ctesting.Step{Content: "ok"})
+	mockProvider := ctesting.NewFauxProvider("openai", ctesting.Step{Content: "ok"})
 	oldFactory := providerFactory
 	providerFactory = func(ctx context.Context, cfg *config.Config) (llm.Provider, error) {
 		if cfg.Provider == "openai" {
