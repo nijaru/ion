@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"time"
 
@@ -573,12 +572,6 @@ func (m Model) handleChildFailed(msg session.ChildFailed) (Model, tea.Cmd) {
 	return m, tea.Sequence(m.printEntries(committed), m.awaitSessionEvent())
 }
 
-func persistErrorCmd(action string, err error) tea.Cmd {
-	return func() tea.Msg {
-		return localErrorMsg{err: fmt.Errorf("%s: %w", action, err)}
-	}
-}
-
 func (m Model) pendingToolEntry(toolUseID string) *session.Entry {
 	if toolUseID != "" {
 		return m.InFlight.PendingTools[toolUseID]
@@ -603,92 +596,4 @@ func (m *Model) clearPendingTool(toolUseID string, entry *session.Entry) {
 			break
 		}
 	}
-}
-
-func (m Model) cancelRunningTurn(reason string) (Model, tea.Cmd) {
-	if err := m.Model.Session.CancelTurn(context.Background()); err != nil {
-		return m, persistErrorCmd("cancel turn", err)
-	}
-	m.InFlight.Thinking = false
-	m.Progress.Mode = stateCancelled
-	m.InFlight.Pending = nil
-	m.InFlight.PendingTools = nil
-	m.InFlight.QueuedTurns = nil
-	m.InFlight.StreamBuf = ""
-	m.InFlight.ReasonBuf = ""
-	m.InFlight.AgentCommitted = false
-	entry := session.Entry{Role: session.System, Content: reason}
-	if err := m.persistEntry("persist cancellation", storage.System{
-		Type:    "system",
-		Content: entry.Content,
-		TS:      now(),
-	}); err != nil {
-		return m, persistErrorCmd("persist cancellation", err)
-	}
-	return m, m.printEntries(entry)
-}
-
-func (m Model) persistEntry(action string, entry any) error {
-	if m.Model.Storage == nil {
-		return nil
-	}
-	if err := m.Model.Storage.Append(context.Background(), entry); err != nil {
-		return fmt.Errorf("%s: %w", action, err)
-	}
-	return nil
-}
-
-func entryUnix(timestamp time.Time) int64 {
-	if timestamp.IsZero() {
-		return now()
-	}
-	return timestamp.UTC().Unix()
-}
-
-func setEntryTimestamp(entry *session.Entry, timestamp time.Time) {
-	if entry != nil && !timestamp.IsZero() {
-		entry.Timestamp = timestamp.UTC()
-	}
-}
-
-func (m Model) submitText(text string) (Model, tea.Cmd) {
-	// Expand any paste marker placeholders to their original content.
-	text = m.expandMarkers(text)
-	m.PasteMarkers = make(map[string]pasteMarker)
-
-	if !strings.HasPrefix(text, "/") {
-		if reason := m.configuredSessionBudgetStopReason(); reason != "" {
-			return m, cmdError(reason)
-		}
-	}
-
-	m.Input.History = append(m.Input.History, text)
-	m.Input.HistoryIdx = -1
-	m.Input.HistoryDraft = ""
-
-	userEntry := session.Entry{
-		Role:      session.User,
-		Timestamp: time.Now().UTC(),
-		Content:   text,
-	}
-	m.Input.Composer.Reset()
-	m.relayoutComposer()
-
-	if strings.HasPrefix(text, "/") {
-		m, cmd := m.handleCommand(text)
-		return m, tea.Sequence(m.printEntries(userEntry), cmd)
-	}
-
-	m.Progress.Mode = stateIonizing
-	m.Progress.Status = ""
-	m.Progress.LastError = ""
-	m.InFlight.Thinking = true
-	if err := m.Model.Session.SubmitTurn(context.Background(), text); err != nil {
-		m, errCmd := m.handleSessionError(err, false)
-		return m, tea.Sequence(m.printEntries(userEntry), errCmd)
-	}
-	if err := m.persistEntry("persist routing decision", m.routingDecision("use_model", "active_preset", "")); err != nil {
-		return m, persistErrorCmd("persist routing decision", err)
-	}
-	return m, m.printEntries(userEntry)
 }
