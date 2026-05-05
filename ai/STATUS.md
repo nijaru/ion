@@ -127,6 +127,11 @@ Fast, lightweight terminal coding agent.
 
 ## Latest Evidence
 
+- App test split continued: composer, Enter/Ctrl/Esc, external editor, history
+  recall, and preset input tests moved from `internal/app/model_test.go` into
+  `internal/app/input_test.go`. Focused input tests,
+  `go test ./internal/app -count=1 -timeout 180s`,
+  `go test ./... -count=1 -timeout 300s`, and the native race subset passed.
 - App test split continued: transcript/tool/thinking/Markdown/tool-title
   rendering tests moved from `internal/app/model_test.go` into
   `internal/app/transcript_render_test.go`. Focused render tests,
