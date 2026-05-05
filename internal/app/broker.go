@@ -35,75 +35,13 @@ func (m Model) awaitSessionEvent() tea.Cmd {
 func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 	switch msg := ev.(type) {
 	case session.StatusChanged:
-		if msg.AgentID == "" {
-			m.Progress.Status = msg.Status
-			m.Progress.Compacting = isCompactingStatus(msg.Status)
-		} else {
-			if p, ok := m.InFlight.Subagents[msg.AgentID]; ok {
-				p.Status = msg.Status
-			}
-		}
-		if err := m.persistEntry("persist status", storage.Status{
-			Type:   "status",
-			Status: msg.Status,
-			TS:     entryUnix(msg.Timestamp),
-		}); err != nil {
-			return m, persistErrorCmd("persist status", err)
-		}
-		return m, m.awaitSessionEvent()
+		return m.handleStatusChanged(msg)
 
 	case session.TokenUsage:
-		m.Progress.TokensSent += msg.Input
-		m.Progress.TokensReceived += msg.Output
-		m.Progress.TotalCost += msg.Cost
-		m.Progress.CurrentTurnInput += msg.Input
-		m.Progress.CurrentTurnOutput += msg.Output
-		m.Progress.CurrentTurnCost += msg.Cost
-		if err := m.persistEntry("persist token usage", storage.TokenUsage{
-			Type:   "token_usage",
-			Input:  msg.Input,
-			Output: msg.Output,
-			Cost:   msg.Cost,
-			TS:     entryUnix(msg.Timestamp),
-		}); err != nil {
-			return m, persistErrorCmd("persist token usage", err)
-		}
-		if reason := m.configuredBudgetStopReason(); reason != "" && reason != m.Progress.BudgetStopReason {
-			m.Progress.BudgetStopReason = reason
-			if err := m.persistEntry("persist routing stop", m.routingDecision("stop", "budget_limit", reason)); err != nil {
-				return m, persistErrorCmd("persist routing stop", err)
-			}
-			if m.InFlight.Thinking {
-				if err := m.Model.Session.CancelTurn(context.Background()); err != nil {
-					return m, persistErrorCmd("cancel over-budget turn", err)
-				}
-				m.InFlight.Thinking = false
-				m.Progress.Mode = stateCancelled
-				entry := session.Entry{
-					Role:      session.System,
-					Timestamp: msg.Timestamp,
-					Content:   "Canceled: " + reason,
-				}
-				return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
-			}
-		}
-		return m, m.awaitSessionEvent()
+		return m.handleTokenUsage(msg)
 
 	case session.TurnStarted:
-		m.InFlight.Thinking = true
-		m.Progress.Compacting = false
-		m.Progress.Mode = stateIonizing
-		m.Progress.Status = ""
-		m.Progress.LastError = ""
-		m.Progress.TurnStartedAt = time.Now()
-		m.Progress.CurrentTurnInput = 0
-		m.Progress.CurrentTurnOutput = 0
-		m.Progress.CurrentTurnCost = 0
-		m.Progress.BudgetStopReason = ""
-		m.InFlight.Pending = &session.Entry{Role: session.Agent, Timestamp: msg.Timestamp}
-		m.InFlight.PendingTools = nil
-		m.InFlight.AgentCommitted = false
-		return m, m.awaitSessionEvent()
+		return m.handleTurnStarted(msg)
 
 	case session.TurnFinished:
 		return m.handleTurnFinished()
@@ -130,14 +68,7 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 		return m, m.awaitSessionEvent()
 
 	case session.ApprovalRequest:
-		msg = redactApprovalRequest(msg)
-		m.Approval.Pending = &msg
-		m.Progress.Mode = stateApproval
-		m.InFlight.Thinking = false
-		if notify := m.approvalNotificationCmd(msg); notify != nil {
-			return m, tea.Batch(notify, m.awaitSessionEvent())
-		}
-		return m, m.awaitSessionEvent()
+		return m.handleApprovalRequest(msg)
 
 	case session.ChildRequested:
 		return m.handleChildRequested(msg)
@@ -226,6 +157,90 @@ func redactApprovalRequest(req session.ApprovalRequest) session.ApprovalRequest 
 	req.Description = privacy.Redact(req.Description)
 	req.Args = privacy.Redact(req.Args)
 	return req
+}
+
+func (m Model) handleStatusChanged(msg session.StatusChanged) (Model, tea.Cmd) {
+	if msg.AgentID == "" {
+		m.Progress.Status = msg.Status
+		m.Progress.Compacting = isCompactingStatus(msg.Status)
+	} else if p, ok := m.InFlight.Subagents[msg.AgentID]; ok {
+		p.Status = msg.Status
+	}
+	if err := m.persistEntry("persist status", storage.Status{
+		Type:   "status",
+		Status: msg.Status,
+		TS:     entryUnix(msg.Timestamp),
+	}); err != nil {
+		return m, persistErrorCmd("persist status", err)
+	}
+	return m, m.awaitSessionEvent()
+}
+
+func (m Model) handleTokenUsage(msg session.TokenUsage) (Model, tea.Cmd) {
+	m.Progress.TokensSent += msg.Input
+	m.Progress.TokensReceived += msg.Output
+	m.Progress.TotalCost += msg.Cost
+	m.Progress.CurrentTurnInput += msg.Input
+	m.Progress.CurrentTurnOutput += msg.Output
+	m.Progress.CurrentTurnCost += msg.Cost
+	if err := m.persistEntry("persist token usage", storage.TokenUsage{
+		Type:   "token_usage",
+		Input:  msg.Input,
+		Output: msg.Output,
+		Cost:   msg.Cost,
+		TS:     entryUnix(msg.Timestamp),
+	}); err != nil {
+		return m, persistErrorCmd("persist token usage", err)
+	}
+	if reason := m.configuredBudgetStopReason(); reason != "" &&
+		reason != m.Progress.BudgetStopReason {
+		m.Progress.BudgetStopReason = reason
+		if err := m.persistEntry("persist routing stop", m.routingDecision("stop", "budget_limit", reason)); err != nil {
+			return m, persistErrorCmd("persist routing stop", err)
+		}
+		if m.InFlight.Thinking {
+			if err := m.Model.Session.CancelTurn(context.Background()); err != nil {
+				return m, persistErrorCmd("cancel over-budget turn", err)
+			}
+			m.InFlight.Thinking = false
+			m.Progress.Mode = stateCancelled
+			entry := session.Entry{
+				Role:      session.System,
+				Timestamp: msg.Timestamp,
+				Content:   "Canceled: " + reason,
+			}
+			return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
+		}
+	}
+	return m, m.awaitSessionEvent()
+}
+
+func (m Model) handleTurnStarted(msg session.TurnStarted) (Model, tea.Cmd) {
+	m.InFlight.Thinking = true
+	m.Progress.Compacting = false
+	m.Progress.Mode = stateIonizing
+	m.Progress.Status = ""
+	m.Progress.LastError = ""
+	m.Progress.TurnStartedAt = time.Now()
+	m.Progress.CurrentTurnInput = 0
+	m.Progress.CurrentTurnOutput = 0
+	m.Progress.CurrentTurnCost = 0
+	m.Progress.BudgetStopReason = ""
+	m.InFlight.Pending = &session.Entry{Role: session.Agent, Timestamp: msg.Timestamp}
+	m.InFlight.PendingTools = nil
+	m.InFlight.AgentCommitted = false
+	return m, m.awaitSessionEvent()
+}
+
+func (m Model) handleApprovalRequest(msg session.ApprovalRequest) (Model, tea.Cmd) {
+	msg = redactApprovalRequest(msg)
+	m.Approval.Pending = &msg
+	m.Progress.Mode = stateApproval
+	m.InFlight.Thinking = false
+	if notify := m.approvalNotificationCmd(msg); notify != nil {
+		return m, tea.Batch(notify, m.awaitSessionEvent())
+	}
+	return m, m.awaitSessionEvent()
 }
 
 func (m Model) handleTurnFinished() (Model, tea.Cmd) {

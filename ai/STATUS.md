@@ -4,7 +4,7 @@ Fast, lightweight terminal coding agent.
 
 **Phase:** C5 review and simplification
 **Focus:** whole-product UI/UX and codebase organization review before new features
-**Active task:** `tk-ywbt` — whole UI/UX and codebase simplification pass
+**Active task:** `tk-245w` — app event reducer and shell-state refactor
 **Updated:** 2026-05-04
 
 ## Current Truth
@@ -153,6 +153,11 @@ Fast, lightweight terminal coding agent.
   completed, blocked, and failed events now use dedicated handlers instead of
   inline switch bodies. Focused app tests, `go test ./...`, and the native race
   subset passed.
+- Reducer dispatcher cleanup continued: status, token-usage, turn-start, and
+  approval-request handling now use dedicated handlers. Focused app tests,
+  `go test ./...`, and the native race subset passed.
+- `tk-q5qe` tracks the lower-priority Ghostty monitor-resize stale-row bug and
+  is blocked behind the current app shell-state refactor.
 - TUI separator hotfix restored full-width composer bars while keeping the
   terminal-width-minus-one resize guard. Focused separator/progress tests,
   `go test ./internal/app -count=1 -timeout 180s`,
