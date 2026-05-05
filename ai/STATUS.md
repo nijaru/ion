@@ -127,6 +127,11 @@ Fast, lightweight terminal coding agent.
 
 ## Latest Evidence
 
+- App test split continued: slash autocomplete, file/session picker, provider
+  picker, model picker, and picker filtering tests moved from
+  `internal/app/model_test.go` into `internal/app/picker_test.go`. Focused
+  picker tests, `go test ./internal/app -count=1 -timeout 180s`,
+  `go test ./... -count=1 -timeout 300s`, and the native race subset passed.
 - App test split continued: local command tests for compact, clear, cost,
   session, help, fork/tree, settings, and tools moved from
   `internal/app/model_test.go` into `internal/app/commands_test.go`. Focused
