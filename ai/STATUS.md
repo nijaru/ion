@@ -235,6 +235,10 @@ Fast, lightweight terminal coding agent.
   preventing blank/whitespace header entries from surviving config boundaries.
   Focused config tests, full `go test ./...`, and the native race subset
   passed.
+- Twenty-fourth finding from `tk-oqex`: fixed startup/TUI home-path shortening
+  so sibling paths such as `/Users/nick2/...` no longer render as `~2/...`.
+  Focused cmd/app tests, full `go test ./...`, and the native race subset
+  passed.
 - `tk-xhfg` policy is corrected. Fedora remains the primary live-smoke target,
   but Fedora unavailability should trigger an OpenRouter fallback run rather
   than deferring the gate.

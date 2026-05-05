@@ -35,6 +35,17 @@ func TestComposerLayoutResetsAfterClear(t *testing.T) {
 	}
 }
 
+func TestHeaderShortenHomePathRequiresPathBoundary(t *testing.T) {
+	home := filepath.Join(string(filepath.Separator), "Users", "nick")
+	if got := shortenHomePath(filepath.Join(home, "repo"), home); got != filepath.Join("~", "repo") {
+		t.Fatalf("shortened home path = %q, want ~/repo", got)
+	}
+	sibling := filepath.Join(string(filepath.Separator), "Users", "nick2", "repo")
+	if got := shortenHomePath(sibling, home); got != sibling {
+		t.Fatalf("sibling path = %q, want unshortened %q", got, sibling)
+	}
+}
+
 func TestComposerAcceptsTypedText(t *testing.T) {
 	model := readyModel(t)
 
