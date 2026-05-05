@@ -140,6 +140,30 @@ func TestViewShellSeparatorsUseWideShellWidth(t *testing.T) {
 	}
 }
 
+func TestWidthShrinkRequestsBlankScrollbackRows(t *testing.T) {
+	model := readyModel(t)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 24})
+	model = updated.(Model)
+	updated, cmd := model.Update(tea.WindowSizeMsg{Width: 60, Height: 24})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("expected blank-line command after width shrink")
+	}
+	if msg := cmd(); fmt.Sprintf("%T", msg) != "tea.sequenceMsg" {
+		t.Fatalf("resize command = %T, want tea.sequenceMsg", msg)
+	}
+
+	updated, cmd = model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	if cmd != nil {
+		t.Fatal("expected no clear-screen command after width growth")
+	}
+	model = updated.(Model)
+	view := ansi.Strip(model.View().Content)
+	if strings.HasPrefix(view, "\n") {
+		t.Fatalf("view = %q, want no leading clear rows", view)
+	}
+}
+
 func TestPickerRowsFitShellWidthAfterResize(t *testing.T) {
 	model := readyModel(t)
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 40, Height: 24})

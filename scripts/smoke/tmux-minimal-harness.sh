@@ -61,6 +61,19 @@ assert_line_count_at_most() {
   fi
 }
 
+assert_separator_line_count_at_most() {
+  local max="$1"
+  local count
+  capture
+  count="$(grep -Ec '^─+$' "$CAPTURE" || true)"
+  if ((count > max)); then
+    echo "too many separator-only lines: got $count, want <= $max" >&2
+    echo "--- capture ---" >&2
+    cat "$CAPTURE" >&2
+    exit 1
+  fi
+}
+
 wait_contains() {
   local needle="$1"
   local timeout="${2:-20}"
@@ -125,6 +138,7 @@ tmux resize-window -t "$SESSION" -x 60 -y 24
 sleep 0.5
 assert_contains "Type a message"
 assert_line_count_at_most "• Ready" 1
+assert_separator_line_count_at_most 2
 
 if [[ "$LIVE" == "1" ]]; then
   send_line 'Use the bash tool exactly once to run `echo ion-tmux-smoke`, then reply with the single word done.'

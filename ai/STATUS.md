@@ -4,7 +4,7 @@ Fast, lightweight terminal coding agent.
 
 **Phase:** C5 review and simplification
 **Focus:** whole-product UI/UX and codebase organization review before new features
-**Active task:** none; next ready work is `tk-q5qe`, `tk-txtx`, or `tk-0gni`
+**Active task:** none; next ready work is `tk-txtx`, `tk-0gni`, or `tk-er04`
 **Updated:** 2026-05-04
 
 ## Current Truth
@@ -128,6 +128,13 @@ Fast, lightweight terminal coding agent.
 
 ## Latest Evidence
 
+- `tk-q5qe` is closed. Width-shrink resizes now insert a small number of blank
+  scrollback rows to push terminal-reflowed full-width shell fragments out of
+  the visible pane while keeping active composer separators wrap-safe and
+  full-width. The tmux smoke now fails on extra separator-only rows. Focused
+  app resize tests, `go test ./internal/app -count=1 -timeout 180s`,
+  `go test ./... -count=1 -timeout 300s`, the native race subset, and
+  `scripts/smoke/tmux-minimal-harness.sh` passed.
 - TUI resume-hint slice added a normal-exit footer that prints
   `ion --resume <session-id>` for the final active materialized session and
   skips lazy sessions that never created durable history. Focused app/cmd tests,

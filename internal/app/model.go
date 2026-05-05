@@ -706,10 +706,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case tea.WindowSizeMsg:
+		oldWidth := m.App.Width
 		m.App.Ready = true
 		m.App.Width = msg.Width
 		m.App.Height = msg.Height
 		m.layout()
+		if lines := resizeBlankLines(oldWidth, msg.Width); lines > 0 {
+			return m, printBlankLinesCmd(lines)
+		}
 		return m, nil
 
 	case streamClosedMsg:
