@@ -86,6 +86,33 @@ func TestCredentialStateContextReportsLocalAPINotRunning(t *testing.T) {
 	}
 }
 
+func TestProbeLocalAPICachesFailedConfiguredEndpoint(t *testing.T) {
+	localProbeMu.Lock()
+	localProbeCache = map[string]localProbeResult{}
+	localProbeMu.Unlock()
+
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		http.Error(w, "not ready", http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	cfg := &config.Config{
+		Provider: "local-api",
+		Endpoint: srv.URL + "/v1",
+	}
+	if _, ok := ProbeLocalAPI(context.Background(), cfg); ok {
+		t.Fatal("expected local api probe to fail")
+	}
+	if _, ok := ProbeLocalAPI(context.Background(), cfg); ok {
+		t.Fatal("expected cached local api probe to fail")
+	}
+	if requests != 1 {
+		t.Fatalf("configured endpoint requests = %d, want 1", requests)
+	}
+}
+
 func TestResolvedEndpointDoesNotLeakCustomEndpointToDefaultProviders(t *testing.T) {
 	cfg := &config.Config{
 		Provider: "openrouter",

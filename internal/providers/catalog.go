@@ -445,9 +445,6 @@ func localProbeCached(endpoint string) (localProbeResult, bool) {
 }
 
 func storeLocalProbe(endpoint string, ready bool) {
-	if !ready {
-		return
-	}
 	localProbeMu.Lock()
 	defer localProbeMu.Unlock()
 	localProbeCache[endpoint] = localProbeResult{
