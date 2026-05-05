@@ -87,13 +87,13 @@ func (b *Backend) ContextLimit() int {
 func (b *Backend) Bootstrap() backend.Bootstrap {
 	return backend.Bootstrap{
 		Entries: []session.Entry{
-			{Role: session.System, Content: "ion-go rewrite branch"},
+			{Role: session.System, Content: "ion test backend"},
 			{
 				Role:    session.Agent,
-				Content: "This host is now shaped around streamed backend events, tool output, and a stable transcript/composer loop so we can judge Bubble Tea by real behavior instead of setup speed.",
+				Content: "This backend emits deterministic stream, tool, progress, and completion events for TUI tests.",
 			},
 		},
-		Status: "[rewrite] Bubble Tea v2 host stream scaffold",
+		Status: "[test] ready",
 	}
 }
 
@@ -138,7 +138,7 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 		time.Sleep(100 * time.Millisecond)
 		b.events <- session.ToolResult{
 			ToolName: "bash",
-			Result:   "✓ fake tool result: working tree checked for rewrite branch cleanliness",
+			Result:   "test tool result: working tree checked",
 		}
 
 		time.Sleep(160 * time.Millisecond)
