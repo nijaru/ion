@@ -113,7 +113,8 @@ func (s *cantoStore) init() error {
 }
 
 func (s *cantoStore) OpenSession(ctx context.Context, cwd, model, branch string) (Session, error) {
-	id := fmt.Sprintf("%d-%s", time.Now().Unix(), ionsession.ShortID())
+	now := time.Now().UTC()
+	id := fmt.Sprintf("%d-%s", now.Unix(), ionsession.ShortID())
 
 	_, err := s.db.ExecContext(
 		ctx,
@@ -123,8 +124,8 @@ func (s *cantoStore) OpenSession(ctx context.Context, cwd, model, branch string)
 		model,
 		branch,
 		"",
-		time.Now().Unix(),
-		time.Now().Unix(),
+		now.Unix(),
+		now.Unix(),
 	)
 	if err != nil {
 		return nil, err
@@ -138,7 +139,7 @@ func (s *cantoStore) OpenSession(ctx context.Context, cwd, model, branch string)
 			CWD:       cwd,
 			Model:     model,
 			Branch:    branch,
-			CreatedAt: time.Now().Unix(),
+			CreatedAt: now.Unix(),
 		},
 	}, nil
 }
@@ -298,7 +299,7 @@ func (s *cantoStore) ListSessions(ctx context.Context, cwd string) ([]SessionInf
 
 	var sessions []SessionInfo
 	for rows.Next() {
-		var si SessionInfo
+		si := SessionInfo{CWD: cwd}
 		var ca, ua int64
 		var title sql.NullString
 		var preview sql.NullString

@@ -519,6 +519,32 @@ func TestCantoStoreListSessionsToleratesNullName(t *testing.T) {
 	}
 }
 
+func TestCantoStoreListSessionsIncludesWorkspace(t *testing.T) {
+	root := t.TempDir()
+	storeAny, err := NewCantoStore(root)
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	store := storeAny.(*cantoStore)
+
+	ctx := context.Background()
+	cwd := "/tmp/ion-storage-test"
+	if _, err := store.OpenSession(ctx, cwd, "model-a", "main"); err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	sessions, err := store.ListSessions(ctx, cwd)
+	if err != nil {
+		t.Fatalf("list sessions: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("sessions = %d, want 1", len(sessions))
+	}
+	if sessions[0].CWD != cwd {
+		t.Fatalf("cwd = %q, want %q", sessions[0].CWD, cwd)
+	}
+}
+
 func TestLazySessionDoesNotAppearUntilEnsure(t *testing.T) {
 	root := t.TempDir()
 	store, err := NewCantoStore(root)

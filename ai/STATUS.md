@@ -166,6 +166,10 @@ Fast, lightweight terminal coding agent.
   `session.ChildBlocked` had a handler but was missing from `Model.Update`, so
   backend-emitted child-blocked events could fall through to composer handling.
   Focused child-blocked and full `./internal/app` tests passed.
+- Eighth finding from `tk-oqex`: fixed incomplete storage list metadata by
+  preserving `CWD` in `ListSessions`, and normalized `OpenSession` to use one
+  UTC timestamp for the ID, index row, and returned metadata. Focused storage
+  tests are in progress.
 - `tk-xhfg` policy is corrected. Fedora remains the primary live-smoke target,
   but Fedora unavailability should trigger an OpenRouter fallback run rather
   than deferring the gate.
