@@ -10,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nijaru/canto/memory"
 	"github.com/nijaru/canto/session"
 	ionsession "github.com/nijaru/ion/internal/session"
 	_ "modernc.org/sqlite"
@@ -19,7 +18,6 @@ import (
 type cantoStore struct {
 	dbPath string
 	canto  *session.SQLiteStore
-	memory *memory.CoreStore
 	db     *sql.DB // Direct access for inputs and index
 
 	mu sync.Mutex
@@ -44,23 +42,21 @@ func NewCantoStore(root string) (Store, error) {
 		return nil, err
 	}
 
-	mStore, err := memory.NewCoreStore(dsn)
-	if err != nil {
-		return nil, err
-	}
-
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
+		if closeErr := cStore.Close(); closeErr != nil {
+			return nil, fmt.Errorf("open ion storage db: %w; close canto store: %v", err, closeErr)
+		}
 		return nil, err
 	}
 
 	s := &cantoStore{
 		dbPath: dbPath,
 		canto:  cStore,
-		memory: mStore,
 		db:     db,
 	}
 	if err := s.init(); err != nil {
+		_ = s.Close()
 		return nil, err
 	}
 
@@ -73,9 +69,6 @@ func (s *cantoStore) Close() error {
 
 	var errs []error
 	if err := s.canto.Close(); err != nil {
-		errs = append(errs, err)
-	}
-	if err := s.memory.Close(); err != nil {
 		errs = append(errs, err)
 	}
 	if err := s.db.Close(); err != nil {
@@ -373,10 +366,6 @@ func (s *cantoStore) GetInputs(ctx context.Context, cwd string, limit int) ([]st
 
 func (s *cantoStore) Canto() *session.SQLiteStore {
 	return s.canto
-}
-
-func (s *cantoStore) CoreStore() *memory.CoreStore {
-	return s.memory
 }
 
 func (s *cantoStore) UpdateSession(ctx context.Context, si SessionInfo) error {

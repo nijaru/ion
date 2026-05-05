@@ -116,7 +116,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(2)
 	}
-	mode = applyWorkspaceTrustModeGate(mode, trusted, printRequested, cli.explicitModeRequested())
+	mode = applyWorkspaceTrustModeGate(mode, trusted)
 	if err := validatePrintSelection(printRequested, openResumePicker); err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(2)
@@ -349,12 +349,7 @@ func loadWorkspaceTrust(
 	return store, false, "Workspace: not trusted. READ mode active. Run /trust to enable edits.", nil
 }
 
-func applyWorkspaceTrustModeGate(
-	mode session.Mode,
-	trusted bool,
-	printRequested bool,
-	explicitModeRequested bool,
-) session.Mode {
+func applyWorkspaceTrustModeGate(mode session.Mode, trusted bool) session.Mode {
 	if !trusted && mode != session.ModeRead {
 		return session.ModeRead
 	}
@@ -379,25 +374,6 @@ func startupToolLine(b backend.Backend) string {
 		parts = append(parts, "Sandbox "+sandbox)
 	}
 	return strings.Join(parts, " • ")
-}
-
-func loadPolicyConfig(cfg *config.Config) (*backend.PolicyConfig, error) {
-	if cfg == nil {
-		return nil, nil
-	}
-	path := cfg.PolicyPath
-	if path == "" {
-		defaultPath, err := config.DefaultPolicyPath()
-		if err != nil {
-			return nil, err
-		}
-		path = defaultPath
-	}
-	policyConfig, err := backend.LoadPolicyConfig(path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load policy config: %w", err)
-	}
-	return policyConfig, nil
 }
 
 func currentBranch() string {
@@ -450,17 +426,6 @@ func workspaceHeader(cwd, branch string) string {
 		parts = append(parts, branch)
 	}
 	return strings.Join(parts, " • ")
-}
-
-func isConfigurationStatus(status string) bool {
-	trimmed := strings.TrimSpace(status)
-	if trimmed == "" {
-		return false
-	}
-	lower := strings.ToLower(trimmed)
-	return strings.HasPrefix(lower, "no provider configured") ||
-		strings.HasPrefix(lower, "no model configured") ||
-		strings.HasPrefix(lower, "provider and model are required")
 }
 
 func styleStartupLine(line string) string {

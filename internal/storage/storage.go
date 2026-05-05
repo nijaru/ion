@@ -145,7 +145,7 @@ func IsConversationSessionInfo(info SessionInfo) bool {
 	return preview != "" && !strings.HasPrefix(preview, "/")
 }
 
-// JSONL entry types as defined in ai/design/session-storage.md
+// Event projection types persisted into Canto for Ion-owned display/session state.
 type (
 	Meta struct {
 		Type      string `json:"type"` // "meta"
