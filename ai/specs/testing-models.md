@@ -142,10 +142,13 @@ Why:
 
 For automated smoke coverage:
 
-1. Start with `deepseek/deepseek-v3.2`
-2. If the test fails in a way that looks like model quality, rerun manually with `openai/gpt-5.4-nano`
-3. If we want to experiment with an even cheaper path, try `stepfun/step-3.5-flash:free` manually
-4. Do not expand live coverage into every provider/model pair; cover representative transitions instead
+1. Probe Fedora local-api first when it is reachable and not in active use.
+2. If Fedora is unavailable or times out, run the OpenRouter fallback instead
+   of deferring the gate.
+3. Use `deepseek/deepseek-v3.2` as the default OpenRouter fallback.
+4. If the fallback fails in a way that looks like model quality, rerun manually with `openai/gpt-5.4-nano`.
+5. If we want to experiment with an even cheaper path, try `stepfun/step-3.5-flash:free` manually.
+6. Do not expand live coverage into every provider/model pair; cover representative transitions instead.
 
 For CI:
 
@@ -169,6 +172,9 @@ For local validation:
   - `ION_SMOKE_PROMPT`
 - Manual retry model when the cheap tier is ambiguous:
   - `openai/gpt-5.4-nano`
+- Local primary when Fedora is reachable/free:
+  - provider `local-api`
+  - model `qwen3.6:27b`
 - This harness proves the native/backend loop only; the TUI is covered separately in `internal/app` tests.
 - Provider/model swap behavior should be verified by targeted tests and one representative smoke path, not a full matrix.
 - The harness auto-approves tool requests so the prompt can exercise the real tool path without manual input.

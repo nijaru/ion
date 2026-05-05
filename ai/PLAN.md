@@ -9,9 +9,10 @@ command/workflow shell are accepted. Ion is on the right track for a minimal,
 well-engineered terminal coding agent: one native harness path, eight default
 tools, compact TUI, scriptable CLI, durable sessions, and small command surface.
 
-The C5 review/refactor sequence is closed. The next work is closeout, not new
-surface area: dogfood the minimal harness, rerun the Fedora live gate when
-local-api is free, and open only concrete regression tasks found by use.
+The C5 review/refactor sequence is still the active path. The next work is not
+new surface area: review package organization and the core/TUI source
+boundaries, simplify concrete hotspots, and keep live-provider proof available
+with Fedora primary and OpenRouter fallback.
 
 The next priority is not adding commands. Treat background job commands, bash
 mode, `/goal`, `/side`, richer fork UI, and `/clone` as deferred references
@@ -38,7 +39,7 @@ core is solid.
 | C2 | Refactor local execution around the executor boundary | Done |
 | C3 | Harden context survival and session workflows | Done; Fedora smoke deferred |
 | C4 | Tighten command/workflow shell without expanding the surface | Done |
-| C5 | Codify acceptance gates and simplify maintainability hotspots | Closeout |
+| C5 | Codify acceptance gates and simplify maintainability hotspots | Active review/refactor |
 | I5 | Add eval-driven optimization and SOTA experiments | Deferred |
 
 ## I0: Dirty Baseline And Context Hygiene
@@ -73,7 +74,7 @@ refactor.
 
 ## C5: Review And Simplification
 
-Status: closed; closeout soak active.
+Status: active review/refactor.
 
 Completed sequence:
 
@@ -97,13 +98,20 @@ Completed sequence:
 9. Done - `tk-tpxu` - retire resolved core-loop topic docs after the regression
    suite became the live evidence source.
 
-Closeout order:
+Active order:
 
 1. Done - `tk-ulgm` - roadmap/task rebaseline after C5.
 2. Done - `tk-wm30` - dogfood minimal harness and collect concrete regressions.
-3. Deferred - `tk-xhfg` - rerun the C5 Fedora local-api live gate when Fedora is free.
-4. `tk-er04` - bash-mode evaluation remains P4 and should not start unless
-   dogfooding proves it is worth the complexity.
+3. Active - `tk-oqex` - review core and TUI package architecture. Inspect
+   package organization, app/TUI boundaries, CLI/runtime split,
+   `CantoBackend` adapter shape, tools, storage, and session ownership. Fix
+   small concrete defects and create scoped follow-up tasks for larger
+   structural issues.
+4. Deferred/live-gate - `tk-xhfg` - Fedora remains the primary live-smoke
+   target, but if Fedora is unavailable or times out, run the OpenRouter
+   fallback instead of deferring the gate.
+5. Deferred/P4 - `tk-er04` - bash-mode evaluation remains low priority and
+   should not start unless dogfooding proves it is worth the complexity.
 
 Acceptance:
 
@@ -480,7 +488,7 @@ Acceptance:
 
 ## C5: Acceptance Gates And Maintainability
 
-Status: closeout.
+Status: active review/refactor.
 
 Goal: keep the accepted minimal harness boring. Convert manual acceptance into
 repeatable regression checks before adding new product surface.
@@ -497,8 +505,8 @@ Order:
    - live-smoke command remains short and optional, with OpenRouter
      `deepseek/deepseek-v3.2` as the default fallback and Fedora local-api when
      reachable
-2. Deferred until Fedora is reachable - `tk-jkcl` - final Fedora local-api
-   repeat of the live gate.
+2. Deferred/live-gate - `tk-jkcl` - final C2 live gate policy is Fedora
+   primary with OpenRouter fallback when Fedora is unavailable.
 3. Done - `tk-omw4` - split oversized app tests by behavior without
    changing behavior.
 4. Done - `tk-rkmn` - review backend/tool/storage responsibility boundaries
@@ -513,8 +521,10 @@ Closeout:
 
 1. Done - `tk-ulgm` - rebaseline roadmap/status/tasks.
 2. Done - `tk-wm30` - dogfood minimal harness and collect regressions.
-3. Deferred - `tk-xhfg` - rerun Fedora local-api live gate when reachable.
-4. Deferred - `tk-er04` - bash-mode evaluation.
+3. Active - `tk-oqex` - review core and TUI package architecture.
+4. Deferred/live-gate - `tk-xhfg` - run Fedora primary or OpenRouter fallback
+   when live-provider proof is needed.
+5. Deferred/P4 - `tk-er04` - bash-mode evaluation.
 
 Acceptance:
 

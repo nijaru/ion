@@ -3,8 +3,8 @@
 Fast, lightweight terminal coding agent.
 
 **Phase:** C5 review and simplification
-**Focus:** C5 closeout: dogfood minimal harness and rerun live smoke when available
-**Active task:** none; only ready work is low-priority `tk-er04`
+**Focus:** C5 codebase architecture review: core loop, TUI, and package organization
+**Active task:** `tk-oqex` - Review core and TUI package architecture
 **Updated:** 2026-05-05
 
 ## Current Truth
@@ -31,10 +31,11 @@ Fast, lightweight terminal coding agent.
 - `tk-jwfs` is closed. Ion now preserves Canto event timestamps through
   host-facing transcript/replay projections while keeping default TUI rendering
   and provider-visible history timestamp-free.
-- Fedora is unreachable from this Mac right now:
-  `http://fedora:8080/v1/models` times out. `tk-jkcl` is deferred until the
-  host responds. OpenRouter `deepseek/deepseek-v3.2` is the current live-smoke
-  harness default; older DeepSeek Flash smokes remain historical evidence.
+- Fedora local-api is the preferred live-smoke target when it is reachable and
+  free. When Fedora is unavailable because the user is working on it or the
+  probe times out, the live gate should fall back to OpenRouter instead of
+  stopping. OpenRouter `deepseek/deepseek-v3.2` is the current cheap fallback;
+  older DeepSeek Flash smokes remain historical evidence.
 - `tk-d2m6` is closed. Fork/session workflow tests now prove copied fork
   entries, portable bundle import/export, and subagent `context_mode=fork`
   preserve Canto ancestry plus usable event timestamps.
@@ -59,9 +60,10 @@ Fast, lightweight terminal coding agent.
   now; `/clone`, `/goal`, `/side`, background-job commands, and bash mode are
   deferred until daily use or reference-agent evidence proves they are worth
   their maintenance cost.
-- Current maintenance sequence is C5 closeout, not feature growth:
-  `tk-wm30` dogfood/minimal-harness soak, then `tk-xhfg` Fedora local-api
-  live gate when the host is free. `tk-er04` bash-mode evaluation remains P4.
+- Current maintenance sequence is C5 review/refactor, not feature growth:
+  `tk-oqex` reviews package organization and source boundaries across the core
+  agent loop and TUI. `tk-xhfg` remains the live-smoke task with Fedora primary
+  and OpenRouter fallback. `tk-er04` bash-mode evaluation is deferred P4 work.
 - Sandbox/trust direction: trust is workspace eligibility, mode is approval
   posture, sandbox is executor enforcement, and provider credentials are not
   subprocess credentials by default.
@@ -131,10 +133,18 @@ Fast, lightweight terminal coding agent.
   `go test ./... -count=1 -timeout 300s`, the native race subset, and
   `scripts/smoke/tmux-minimal-harness.sh`. No concrete regression was found in
   this closeout gate.
-- `tk-xhfg` is deferred. Fedora local-api probe timed out on 2026-05-05:
-  `curl --max-time 5 http://fedora:8080/v1/models`. The Fedora live gate did
-  not run; keep existing OpenRouter live-smoke evidence until Fedora is
-  reachable/free.
+- `tk-oqex` is active. The first pass corrected the task graph so bash mode is
+  no longer the only ready task, then started package/core/TUI architecture
+  review from a green focused baseline:
+  `go test ./internal/app ./cmd/ion ./internal/backend/canto ./internal/backend/canto/tools ./internal/storage -count=1 -timeout 180s`.
+- First cleanup from `tk-oqex`: removed the unused Canto memory store from
+  Ion's default storage initialization, removed dead CLI startup helpers, and
+  tightened the workspace-trust mode gate to the actual trusted/untrusted
+  decision. Focused `./cmd/ion`, `./internal/storage`, and
+  `./internal/backend/canto` tests passed.
+- `tk-xhfg` policy is corrected. Fedora remains the primary live-smoke target,
+  but Fedora unavailability should trigger an OpenRouter fallback run rather
+  than deferring the gate.
 - C5 roadmap/task rebaseline closed after the review/refactor sequence closed.
   Added `tk-wm30` for dogfood/minimal-harness soak and `tk-xhfg` for the
   Fedora local-api live gate. `tk-er04` remains low-priority and should not be
@@ -518,7 +528,11 @@ Fast, lightweight terminal coding agent.
 
 ## Next Action
 
-1. Run deferred `tk-xhfg` Fedora local-api live gate when Fedora is
-   free/reachable.
-2. Keep `tk-er04` bash-mode evaluation deferred unless dogfooding proves it is
+1. Continue `tk-oqex`: review package organization and source boundaries across
+   `cmd/ion`, `internal/app`, `internal/backend/canto`, tools, storage, and
+   session code. Fix only small concrete defects; create scoped refactor tasks
+   for larger structural issues.
+2. Run `tk-xhfg` live smoke when a code slice needs live-provider proof: probe
+   Fedora first, then use OpenRouter fallback if Fedora is unavailable.
+3. Keep `tk-er04` bash-mode evaluation deferred unless daily use proves it is
    worth the extra surface.
