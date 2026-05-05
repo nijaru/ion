@@ -477,6 +477,39 @@ func TestACPFileBridgeRejectsEscapingPaths(t *testing.T) {
 	}
 }
 
+func TestACPTerminalOutputHonorsByteLimit(t *testing.T) {
+	client := newSession()
+	term := &terminal{
+		done:           make(chan struct{}),
+		outputLimit:    5,
+		hasOutputLimit: true,
+	}
+	close(term.done)
+	if _, err := term.Write([]byte("abcdeé")); err != nil {
+		t.Fatalf("terminal write: %v", err)
+	}
+	client.terminals["term-1"] = term
+
+	resp, err := client.TerminalOutput(t.Context(), acp.TerminalOutputRequest{TerminalId: "term-1"})
+	if err != nil {
+		t.Fatalf("TerminalOutput: %v", err)
+	}
+	if resp.Output != "cdeé" {
+		t.Fatalf("output = %q, want suffix within byte limit", resp.Output)
+	}
+	if !resp.Truncated {
+		t.Fatal("TerminalOutput did not report truncation")
+	}
+
+	resp, err = client.TerminalOutput(t.Context(), acp.TerminalOutputRequest{TerminalId: "term-1"})
+	if err != nil {
+		t.Fatalf("TerminalOutput second read: %v", err)
+	}
+	if resp.Output != "" || resp.Truncated {
+		t.Fatalf("second output = (%q, truncated=%v), want empty non-truncated", resp.Output, resp.Truncated)
+	}
+}
+
 func TestACPCommandEnvIncludesResumeSessionID(t *testing.T) {
 	env := acpCommandEnv("session-123")
 
