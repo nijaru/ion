@@ -178,6 +178,10 @@ Fast, lightweight terminal coding agent.
 - Tenth finding from `tk-oqex`: fixed `grep` model-visible paths. The tool
   still validates against the workspace, but now invokes `rg` with relative
   path arguments so results do not expose long absolute workspace paths. Focused
+  tool tests, full `go test ./...`, and the native race subset passed.
+- Eleventh finding from `tk-oqex`: fixed `multi_edit` permission preservation.
+  Temp files now use each original file's permission bits before rename, so
+  editing executable files no longer silently rewrites them as `0644`. Focused
   tool tests are in progress.
 - `tk-xhfg` policy is corrected. Fedora remains the primary live-smoke target,
   but Fedora unavailability should trigger an OpenRouter fallback run rather
