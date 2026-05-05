@@ -512,17 +512,17 @@ func TestChildLifecycleUpdatesPlaneB(t *testing.T) {
 func TestChildBlockedUpdatesPlaneB(t *testing.T) {
 	model := readyModel(t)
 
-	updated, _ := model.handleSessionEvent(session.ChildRequested{
+	next, _ := model.Update(session.ChildRequested{
 		AgentName: "worker-3",
 		Query:     "wait for approval",
 	})
-	model = updated
+	model = next.(Model)
 
-	updated, _ = model.handleSessionEvent(session.ChildBlocked{
+	next, _ = model.Update(session.ChildBlocked{
 		AgentName: "worker-3",
 		Reason:    "needs approval",
 	})
-	model = updated
+	model = next.(Model)
 
 	if model.InFlight.Subagents["worker-3"] == nil ||
 		model.InFlight.Subagents["worker-3"].Name != "worker-3" {
