@@ -41,13 +41,20 @@ func TestSearchTools(t *testing.T) {
 		if !strings.Contains(res, "match2.txt") {
 			t.Errorf("expected match2.txt in results, got %q", res)
 		}
+		if strings.Contains(res, tmpDir) {
+			t.Errorf("expected relative grep paths, got %q", res)
+		}
 		if strings.Contains(res, ".git") {
 			t.Error("expected .git directory to be ignored")
 		}
 
 		absArgs := `{"pattern":"search","path":"` + filepath.ToSlash(tmpDir) + `"}`
-		if _, err := g.Execute(context.Background(), absArgs); err != nil {
+		res, err = g.Execute(context.Background(), absArgs)
+		if err != nil {
 			t.Fatalf("grep with absolute workspace path failed: %v", err)
+		}
+		if strings.Contains(res, tmpDir) {
+			t.Errorf("expected absolute workspace grep path to render relative results, got %q", res)
 		}
 
 		if _, err := g.Execute(context.Background(), `{"pattern":"search","path":".."}`); err == nil {
