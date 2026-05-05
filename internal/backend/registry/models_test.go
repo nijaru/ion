@@ -67,6 +67,13 @@ func TestListModelsCachesProviderModels(t *testing.T) {
 	}
 }
 
+func TestListModelsForConfigRejectsNilConfig(t *testing.T) {
+	_, err := ListModelsForConfig(t.Context(), nil)
+	if err == nil || err.Error() != "model provider config is required" {
+		t.Fatalf("ListModelsForConfig(nil) error = %v", err)
+	}
+}
+
 func TestFetchModelsUsesDirectFetcherForNativeProviders(t *testing.T) {
 	tests := []struct {
 		provider string

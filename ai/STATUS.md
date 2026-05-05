@@ -226,6 +226,10 @@ Fast, lightweight terminal coding agent.
   handling. Exported provider helpers now consistently return defaults/false
   instead of panicking when called without config. Focused provider tests, full
   `go test ./...`, and the native race subset passed.
+- Twenty-second finding from `tk-oqex`: tightened model registry config
+  boundaries. `ListModelsForConfig(nil)` now returns a clear error instead of
+  panicking, and custom auth lookup is nil-safe. Focused registry tests, full
+  `go test ./...`, and the native race subset passed.
 - `tk-xhfg` policy is corrected. Fedora remains the primary live-smoke target,
   but Fedora unavailability should trigger an OpenRouter fallback run rather
   than deferring the gate.
