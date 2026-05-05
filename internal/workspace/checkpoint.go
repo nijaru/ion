@@ -250,6 +250,9 @@ func (s *CheckpointStore) Restore(ctx context.Context, cp Checkpoint, opts Resto
 			if err := root.MkdirAll(path, entry.Mode.Perm()); err != nil {
 				return report, fmt.Errorf("restore dir %s: %w", path, err)
 			}
+			if err := root.Chmod(path, entry.Mode.Perm()); err != nil {
+				return report, fmt.Errorf("restore dir mode %s: %w", path, err)
+			}
 			report.Restored = append(report.Restored, path)
 		case PathFile:
 			data, err := os.ReadFile(filepath.Join(s.path, cp.ID, "blobs", entry.Blob))
@@ -266,6 +269,9 @@ func (s *CheckpointStore) Restore(ctx context.Context, cp Checkpoint, opts Resto
 			}
 			if err := root.WriteFile(path, data, entry.Mode.Perm()); err != nil {
 				return report, fmt.Errorf("restore file %s: %w", path, err)
+			}
+			if err := root.Chmod(path, entry.Mode.Perm()); err != nil {
+				return report, fmt.Errorf("restore file mode %s: %w", path, err)
 			}
 			report.Restored = append(report.Restored, path)
 		default:
