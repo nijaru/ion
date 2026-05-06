@@ -139,9 +139,17 @@ Fast, lightweight terminal coding agent.
   paste handling uses `PasteMsg`. The concrete fix was bounding all live Plane B
   rows to the wrap-safe shell width so long thinking/tool/subagent/approval
   content cannot trigger managed-frame wrap artifacts after resize.
+- `tk-7zsa` is closed. Follow-up edge testing found and fixed one more shell
+  width bug: very narrow terminals still forced the composer to 20 columns,
+  wider than the wrap-safe live shell. Composer layout now uses `shellWidth()`
+  consistently with the rest of Plane B.
 
 ## Latest Evidence
 
+- `tk-7zsa` reproduced the narrow-composer overflow with a 12-column
+  `WindowSizeMsg` and long composer/queued/progress text. Gates passed:
+  focused narrow/resize tests, `go test ./internal/app`, `scripts/smoke/tmux-minimal-harness.sh`,
+  `go test ./... -count=1 -timeout 300s`, and the native race subset.
 - `tk-s9zi` checked Bubble Tea v2 module source for `View`, `WindowSizeMsg`,
   `KeyPressMsg`, `PasteMsg`, `Printf`, `ClearScreen`, and `Raw` semantics. Gates
   passed: focused Plane B/resize tests, `go test ./internal/app`, `scripts/smoke/tmux-minimal-harness.sh`,
