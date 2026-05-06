@@ -126,6 +126,54 @@ func TestRenderPendingRoutineToolEntryCompactsByDefault(t *testing.T) {
 	}
 }
 
+func TestRenderPlaneBFitsShellWidth(t *testing.T) {
+	model := readyModel(t)
+	model.App.Width = 40
+	model.Model.Config = &config.Config{
+		ToolVerbosity:     "full",
+		ThinkingVerbosity: "full",
+	}
+	model.InFlight.ReasonBuf = strings.Repeat("reasoning ", 12)
+	model.InFlight.PendingTools = map[string]*session.Entry{
+		"tool-1": {
+			Role:    session.Tool,
+			Title:   "bash " + strings.Repeat("very-long-command ", 8),
+			Content: strings.Repeat("tool-output ", 12),
+		},
+	}
+	model.InFlight.Subagents = map[string]*SubagentProgress{
+		"worker": {
+			Name:   "worker-with-long-name",
+			Intent: strings.Repeat("explore unicode paths ", 4),
+			Status: "Running",
+			Output: strings.Repeat("subagent-output ", 8),
+		},
+	}
+	model.Approval.Pending = &session.ApprovalRequest{
+		ToolName:    "bash",
+		Args:        `{"command":"` + strings.Repeat("danger ", 12) + `"}`,
+		Description: strings.Repeat("approval-description ", 8),
+		Environment: "inherit_without_provider_keys",
+	}
+
+	got := ansi.Strip(model.renderPlaneB())
+	for i, line := range strings.Split(got, "\n") {
+		if line == "" {
+			continue
+		}
+		if width := ansi.StringWidth(line); width > model.shellWidth() {
+			t.Fatalf(
+				"plane B line %d width = %d, want <= %d: %q\n%s",
+				i,
+				width,
+				model.shellWidth(),
+				line,
+				got,
+			)
+		}
+	}
+}
+
 func TestRenderRoutineToolUsesSemanticSummaryMetrics(t *testing.T) {
 	model := readyModel(t)
 	tests := []struct {

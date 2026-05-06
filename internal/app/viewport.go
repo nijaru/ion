@@ -5,6 +5,7 @@ import (
 	"strings"
 	"unicode"
 
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/session"
@@ -26,18 +27,18 @@ func (m Model) renderPlaneB() string {
 
 	// Thinking/reasoning (dimmed, shown while generating)
 	if m.InFlight.ReasonBuf != "" {
-		b.WriteString(m.st.dim.Render("• Thinking..."))
+		b.WriteString(m.planeBLine(m.st.dim, 0, "• Thinking..."))
 		b.WriteString("\n")
 		thinkingVerbosity := m.verbosity("thinking")
 		switch thinkingVerbosity {
 		case "full":
 			for _, line := range strings.Split(m.InFlight.ReasonBuf, "\n") {
-				b.WriteString(m.st.dim.PaddingLeft(4).Render(line))
+				b.WriteString(m.planeBLine(m.st.dim, 4, line))
 				b.WriteString("\n")
 			}
 		default:
 			if thinkingVerbosity != "hidden" {
-				b.WriteString(m.st.dim.PaddingLeft(4).Render("..."))
+				b.WriteString(m.planeBLine(m.st.dim, 4, "..."))
 				b.WriteString("\n")
 			}
 		}
@@ -76,9 +77,7 @@ func (m Model) renderPlaneB() string {
 			shown++
 		}
 		if n > maxVisible {
-			b.WriteString(
-				m.st.dim.PaddingLeft(2).Render(fmt.Sprintf("+%d more workers", n-maxVisible)),
-			)
+			b.WriteString(m.planeBLine(m.st.dim, 2, fmt.Sprintf("+%d more workers", n-maxVisible)))
 			b.WriteString("\n")
 		}
 	}
@@ -92,17 +91,16 @@ func (m Model) renderPlaneB() string {
 				m.formatToolTitle(m.Approval.Pending.ToolName, m.Approval.Pending.Args),
 				m.Approval.Pending.Description)
 		}
-		b.WriteString(m.st.warn.PaddingLeft(2).Render("Approve " + desc + "? (y/n/a)"))
+		b.WriteString(m.planeBLine(m.st.warn, 2, "Approve "+desc+"? (y/n/a)"))
 		b.WriteString("\n")
 		if environment := strings.TrimSpace(m.Approval.Pending.Environment); environment != "" {
 			b.WriteString(
-				m.st.dim.PaddingLeft(2).
-					Render("Bash env: " + backend.ToolEnvironmentLabel(environment)),
+				m.planeBLine(m.st.dim, 2, "Bash env: "+backend.ToolEnvironmentLabel(environment)),
 			)
 			b.WriteString("\n")
 		}
 		if summary := escalationSummary(m.Model.Escalation); summary != "" {
-			b.WriteString(m.st.dim.PaddingLeft(2).Render("Escalate: " + summary))
+			b.WriteString(m.planeBLine(m.st.dim, 2, "Escalate: "+summary))
 			b.WriteString("\n")
 		}
 	}
@@ -117,7 +115,7 @@ func (m Model) renderPendingEntry(e session.Entry) string {
 	switch e.Role {
 	case session.Agent:
 		if e.Content == "" {
-			return m.st.dim.PaddingLeft(2).Render("• ...")
+			return m.planeBLine(m.st.dim, 2, "• ...")
 		}
 		return m.renderLiveAgentContent(e.Content)
 	case session.Tool:
@@ -137,11 +135,11 @@ func (m Model) renderPendingEntry(e session.Entry) string {
 			if summary := toolOutputSummary(e); summary != "" {
 				b.WriteString(m.st.dim.Render(" · " + summary))
 			}
-			return b.String()
+			return m.planeBFitLine(b.String())
 		}
 		b.WriteString("\n")
 		if toolVerbosity == "collapsed" {
-			b.WriteString(m.st.dim.PaddingLeft(4).Render("..."))
+			b.WriteString(m.planeBLine(m.st.dim, 4, "..."))
 			b.WriteString("\n")
 		} else {
 			lines := strings.Split(strings.TrimRight(e.Content, "\n"), "\n")
@@ -149,12 +147,11 @@ func (m Model) renderPendingEntry(e session.Entry) string {
 			shown := lines
 			if len(lines) > maxLines {
 				shown = lines[len(lines)-maxLines:]
-				b.WriteString(m.st.dim.PaddingLeft(4).Render(
-					fmt.Sprintf("... (%d lines total)", len(lines))))
+				b.WriteString(m.planeBLine(m.st.dim, 4, fmt.Sprintf("... (%d lines total)", len(lines))))
 				b.WriteString("\n")
 			}
 			for _, l := range shown {
-				b.WriteString(m.st.dim.PaddingLeft(4).Render(l))
+				b.WriteString(m.planeBLine(m.st.dim, 4, l))
 				b.WriteString("\n")
 			}
 		}
@@ -168,12 +165,33 @@ func (m Model) renderPendingEntry(e session.Entry) string {
 		b.WriteString(m.st.subagent.Render("↳ " + label))
 		if e.Content != "" {
 			b.WriteString("\n")
-			b.WriteString(m.st.dim.PaddingLeft(4).Render(e.Content))
+			b.WriteString(m.planeBLine(m.st.dim, 4, e.Content))
 		}
 		return b.String()
 	default:
-		return e.Content
+		return m.planeBFitLine(e.Content)
 	}
+}
+
+func (m Model) planeBFitLine(line string) string {
+	width := m.shellWidth()
+	if width <= 0 {
+		return line
+	}
+	return fitLine(line, width)
+}
+
+func (m Model) planeBLine(style lipgloss.Style, indent int, text string) string {
+	width := m.shellWidth()
+	prefix := strings.Repeat(" ", max(0, indent))
+	if width <= 0 {
+		return style.Render(prefix + text)
+	}
+	contentWidth := width - ansi.StringWidth(prefix)
+	if contentWidth <= 0 {
+		return fitLine(style.Render(prefix+text), width)
+	}
+	return style.Render(prefix + fitLine(text, contentWidth))
 }
 
 func (m Model) renderLiveAgentContent(content string) string {
@@ -308,7 +326,8 @@ func (m Model) renderEntry(e session.Entry) string {
 			}
 			if len(lines) > 10 {
 				b.WriteString(m.st.dim.Render(
-					fmt.Sprintf("  ... (%d more lines)", len(lines)-10)))
+					fmt.Sprintf("  ... (%d more lines)", len(lines)-10),
+				))
 			}
 		}
 		return strings.TrimRightFunc(b.String(), unicode.IsSpace)
@@ -340,8 +359,8 @@ func (m Model) renderEntry(e session.Entry) string {
 // renderSubagentRow formats a single background worker's status for Plane B.
 func (m Model) renderSubagentRow(p *SubagentProgress) string {
 	intent := p.Intent
-	if len(intent) > 24 {
-		intent = intent[:21] + "..."
+	if ansi.StringWidth(intent) > 24 {
+		intent = ansi.Truncate(intent, 24, "...")
 	}
 
 	detail := p.Status
@@ -350,15 +369,15 @@ func (m Model) renderSubagentRow(p *SubagentProgress) string {
 		if len(lines) > 0 {
 			last := strings.TrimSpace(lines[len(lines)-1])
 			if last != "" {
-				if len(last) > 32 {
-					last = last[:29] + "..."
+				if ansi.StringWidth(last) > 32 {
+					last = ansi.Truncate(last, 32, "...")
 				}
 				detail = fmt.Sprintf("%s: %s", detail, last)
 			}
 		}
 	}
 
-	return m.st.subagent.Render(fmt.Sprintf("↳ %-10s", p.Name)) + " " +
+	return m.planeBFitLine(m.st.subagent.Render(fmt.Sprintf("↳ %-10s", p.Name)) + " " +
 		m.st.dim.Render(fmt.Sprintf("%-24s", intent)) + " " +
-		m.st.dim.Render(detail)
+		m.st.dim.Render(detail))
 }
