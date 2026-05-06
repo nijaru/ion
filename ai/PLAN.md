@@ -1,6 +1,6 @@
 # Ion Roadmap
 
-Updated: 2026-05-05
+Updated: 2026-05-06
 
 ## Current Focus
 
@@ -9,13 +9,12 @@ command/workflow shell are accepted. Ion is on the right track for a minimal,
 well-engineered terminal coding agent: one native harness path, eight default
 tools, compact TUI, scriptable CLI, durable sessions, and small command surface.
 
-The C5 review/refactor sequence is closed. Ion now imports the finalized Canto
-Phase 5 audit revision (`0c4dd06`) and the downstream deterministic, race,
-tmux, and OpenRouter live gates are green. The current tree has no standing
-feature task that should start automatically; the next work should be selected
-deliberately rather than defaulting to new surface area. Live-provider proof
-remains available with Fedora primary and OpenRouter fallback when a slice
-needs it.
+C5 review/refactor is closed. C6 is the active follow-up: keep the accepted
+core boring with live-provider refresh and targeted hardening around terminal
+states, replay, retry, and context survival. Do not use this phase to add
+commands or model-visible tools. Live-provider proof uses Fedora local-api first
+when it is free, then OpenRouter `deepseek/deepseek-v3.2` fallback when Fedora
+is unavailable.
 
 The next priority is not adding commands. Treat background job commands, bash
 mode, `/goal`, `/side`, richer fork UI, and `/clone` as deferred references
@@ -43,6 +42,7 @@ core is solid.
 | C3 | Harden context survival and session workflows | Done; Fedora smoke deferred |
 | C4 | Tighten command/workflow shell without expanding the surface | Done |
 | C5 | Codify acceptance gates and simplify maintainability hotspots | Done |
+| C6 | Post-C5 core-agent smoke refresh and hardening | Active |
 | I5 | Add eval-driven optimization and SOTA experiments | Deferred |
 
 ## I0: Dirty Baseline And Context Hygiene
@@ -127,6 +127,41 @@ Acceptance:
 - Any new UI change is judged with tmux text capture, not just unit tests.
 - No new commands, tools, subagents, sandbox modes, memory surfaces, or routing
   features are added during this phase.
+
+## C6: Core Agent Hardening
+
+Status: active.
+
+Goal: refresh live core-loop proof after C5 and tighten the highest-value
+terminal-state/context-survival contracts without expanding the product surface.
+
+Order:
+
+1. Ready - `tk-yqml` - live core-loop smoke refresh:
+   - probe Fedora local-api first when free/reachable
+   - otherwise run OpenRouter `deepseek/deepseek-v3.2`
+   - require real `bash` tool call, persisted resume, provider-history capture,
+     and resumed follow-up containing prior tool history
+2. Blocked by `tk-yqml` - `tk-3wiq` - cancel/error/retry hardening:
+   - cancel during stream/tool
+   - provider error and retry recovery
+   - tool failure followed by a normal turn
+   - resume after each terminal state
+3. Blocked by `tk-3wiq` - `tk-89ww` - compaction context-survival hardening:
+   - `/compact`, automatic context-survival behavior, persist, resume,
+     provider-history projection, and follow-up
+   - keep Canto closed unless evidence points to a framework-owned defect
+4. Blocked by `tk-89ww` - `tk-vzdf` - prompt and prelude budget gate:
+   - measure static system/developer/tool prelude size after C5 cleanup
+   - compare against the prior prompt-budget note
+   - add a lightweight regression threshold only if it is useful
+
+Acceptance:
+
+- one ready task at a time unless parallel work is clearly independent
+- deterministic and live evidence both update `ai/STATUS.md`
+- no bash mode, `/goal`, background jobs, subagents, memory, routing, sandbox
+  expansion, or tool-surface changes during this phase
 
 ## I2: Minimal Shell Polish
 
@@ -491,55 +526,6 @@ Acceptance:
 - no deferred command leaks into help/completion
 - branch/session commands have distinct user-facing semantics
 - no `/goal` prompt-only placeholder
-
-## C5: Acceptance Gates And Maintainability
-
-Status: active review/refactor.
-
-Goal: keep the accepted minimal harness boring. Convert manual acceptance into
-repeatable regression checks before adding new product surface.
-
-Order:
-
-1. Done - `tk-xh5w` - codify the minimal harness acceptance suite:
-   - deterministic/fake-backend loop cases for submit, stream, tool,
-     cancel/error, persist, resume, queued follow-up, and final rendering
-   - scriptable CLI cases for `-p`, JSON, `--continue`, and `--resume <id>`
-   - tmux smoke script or documented command set for fresh launch, `/help`,
-     `/tools`, `/settings`, tool turn, resize, `--continue`, and resumed
-     follow-up
-   - live-smoke command remains short and optional, with OpenRouter
-     `deepseek/deepseek-v3.2` as the default fallback and Fedora local-api when
-     reachable
-2. Deferred/live-gate - `tk-jkcl` - final C2 live gate policy is Fedora
-   primary with OpenRouter fallback when Fedora is unavailable.
-3. Done - `tk-omw4` - split oversized app tests by behavior without
-   changing behavior.
-4. Done - `tk-rkmn` - review backend/tool/storage responsibility boundaries
-   before adding new UX or tool features.
-5. Done - `tk-hdwz` - print a resume command on normal TUI exit.
-6. Done - `tk-q5qe` - fix monitor-resize stale shell rows.
-7. Done - `tk-txtx` - split backend/canto tests by behavior.
-8. Done - `tk-0gni` - add local edit-tool eval; keep split edit/write tools.
-9. Done - `tk-tpxu` - retire resolved core-loop topic docs.
-
-Closeout:
-
-1. Done - `tk-ulgm` - rebaseline roadmap/status/tasks.
-2. Done - `tk-wm30` - dogfood minimal harness and collect regressions.
-3. Done - `tk-oqex` - review core and TUI package architecture.
-4. Deferred/live-gate - `tk-xhfg` - run Fedora primary or OpenRouter fallback
-   when live-provider proof is needed.
-5. Deferred/P4 - `tk-er04` - bash-mode evaluation.
-
-Acceptance:
-
-- `tk ready` points at real engineering work, not low-priority feature ideas.
-- Manual smoke steps that matter are represented by tests or a reproducible
-  script.
-- No new model-visible tools, commands, or safety modes are added during C5.
-- Test/refactor cleanup reduces maintenance cost without changing the accepted
-  product surface.
 
 ## I5+ Deferred Work
 

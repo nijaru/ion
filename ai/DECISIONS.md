@@ -25,6 +25,14 @@ Distilled architectural principles plus recent decision log.
 
 ## Recent Log
 
+### 2026-05-06 - C6 stays on core hardening
+
+After C5, the next work is still core-agent evidence, not feature expansion.
+Run a live core-loop smoke refresh first, then harden cancel/error/retry and
+compaction/context-survival contracts. Bash mode, `/goal`, background jobs,
+subagents, memory, routing, sandbox expansion, and tool-surface changes stay
+deferred unless they are needed to fix a concrete core defect.
+
 ### 2026-05-04 - Regression gates before more product surface
 
 The minimal native harness is accepted enough to stop broad redesign churn:

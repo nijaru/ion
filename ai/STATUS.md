@@ -2,10 +2,10 @@
 
 Fast, lightweight terminal coding agent.
 
-**Phase:** C5 review closeout
-**Focus:** TUI/Bubble Tea audit closed; audited Canto revision imported and validated
-**Active task:** none
-**Updated:** 2026-05-05
+**Phase:** C6 core-agent hardening
+**Focus:** live core-loop smoke refresh, then cancel/error/retry hardening
+**Active task:** `tk-yqml` ready
+**Updated:** 2026-05-06
 
 ## Current Truth
 
@@ -143,9 +143,17 @@ Fast, lightweight terminal coding agent.
   width bug: very narrow terminals still forced the composer to 20 columns,
   wider than the wrap-safe live shell. Composer layout now uses `shellWidth()`
   consistently with the rest of Plane B.
+- C6 is the current roadmap. `tk ready` intentionally points at one core-agent
+  task: `tk-yqml` live core-loop smoke refresh. Follow-up tasks are blocked in
+  order: `tk-3wiq` cancel/error/retry hardening, `tk-89ww` compaction
+  context-survival hardening, and `tk-vzdf` prompt/prelude budget gate.
 
 ## Latest Evidence
 
+- Roadmap/task rebaseline on 2026-05-06 found no open tasks after C5 despite
+  `ai/PLAN.md` still referencing deferred live/core work. Added the C6 sequence
+  above and updated `ai/PLAN.md` so `tk ready` now points at real core-agent
+  work instead of stale feature ideas.
 - `tk-7zsa` reproduced the narrow-composer overflow with a 12-column
   `WindowSizeMsg` and long composer/queued/progress text. Gates passed:
   focused narrow/resize tests, `go test ./internal/app`, `scripts/smoke/tmux-minimal-harness.sh`,
@@ -288,7 +296,7 @@ Fast, lightweight terminal coding agent.
   `internal` packages, the last exported panic-only provider helper was
   removed, and focused provider tests, `go test ./... -count=1 -timeout 300s`,
   the native race subset, and `scripts/smoke/tmux-minimal-harness.sh` passed.
-  `tk ready` now reports no ready tasks.
+  `tk ready` reported no ready tasks at C5 closeout.
 - `tk-xhfg` policy is corrected. Fedora remains the primary live-smoke target,
   but Fedora unavailability should trigger an OpenRouter fallback run rather
   than deferring the gate.
@@ -675,9 +683,8 @@ Fast, lightweight terminal coding agent.
 
 ## Next Action
 
-1. Pick the next product or maintenance wedge explicitly; `tk ready` currently
-   reports no ready tasks after C5 closeout.
-2. Run `tk-xhfg` live smoke when a code slice needs live-provider proof: probe
-   Fedora first, then use OpenRouter fallback if Fedora is unavailable.
+1. Start `tk-yqml` live core-loop smoke refresh: Fedora local-api first if free,
+   OpenRouter `deepseek/deepseek-v3.2` fallback otherwise.
+2. Then run `tk-3wiq` cancel/error/retry hardening.
 3. Keep `tk-er04` bash-mode evaluation deferred unless daily use proves it is
    worth the extra surface.
