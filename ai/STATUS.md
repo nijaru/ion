@@ -3,7 +3,7 @@
 Fast, lightweight terminal coding agent.
 
 **Phase:** C5 review closeout
-**Focus:** Codebase audit closed; audited Canto revision imported and validated
+**Focus:** TUI/Bubble Tea audit closed; audited Canto revision imported and validated
 **Active task:** none
 **Updated:** 2026-05-05
 
@@ -133,9 +133,19 @@ Fast, lightweight terminal coding agent.
 - `tk-zubu` is closed. Wide-to-narrow terminal resize now clears and redraws
   the visible inline shell instead of printing blank unmanaged scrollback rows.
   The main shell separators remain wrap-safe full-width (`terminal_width - 1`).
+- `tk-s9zi` is closed. The Bubble Tea TUI audit found the implementation is
+  aligned with v2 inline-mode APIs overall: `View()` owns only live Plane B,
+  committed transcript uses `tea.Printf`, key handling uses `KeyPressMsg`, and
+  paste handling uses `PasteMsg`. The concrete fix was bounding all live Plane B
+  rows to the wrap-safe shell width so long thinking/tool/subagent/approval
+  content cannot trigger managed-frame wrap artifacts after resize.
 
 ## Latest Evidence
 
+- `tk-s9zi` checked Bubble Tea v2 module source for `View`, `WindowSizeMsg`,
+  `KeyPressMsg`, `PasteMsg`, `Printf`, `ClearScreen`, and `Raw` semantics. Gates
+  passed: focused Plane B/resize tests, `go test ./internal/app`, `scripts/smoke/tmux-minimal-harness.sh`,
+  `go test ./... -count=1 -timeout 300s`, and the native race subset.
 - `tk-zubu` reproduced the Ghostty/monitor-switch bug in tmux by launching at
   280 columns and shrinking to 140/100; the pre-fix visible pane had duplicate
   `Ready` rows and stale separator fragments. The fix removed resize-time

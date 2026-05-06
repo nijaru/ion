@@ -39,6 +39,11 @@ code fences and half-written lists should stay readable while the turn is still
 active. When the assistant message commits to Plane A, render it once through
 the Goldmark/GFM Markdown renderer.
 
+All Plane B rows must fit within the wrap-safe shell width. Live thinking,
+active tools, approval prompts, subagent status, picker rows, progress, composer
+chrome, and footer text should wrap or truncate before they reach the terminal;
+committed Plane A transcript rows may reflow naturally in scrollback.
+
 ### Resize behavior
 
 Inline mode cannot fully own historical scrollback. Full-width shell rows that
