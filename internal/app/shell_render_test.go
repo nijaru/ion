@@ -119,6 +119,34 @@ func TestViewShellRowsReserveWrapCellAfterResize(t *testing.T) {
 	}
 }
 
+func TestViewShellRowsFitVeryNarrowTerminal(t *testing.T) {
+	model := readyModel(t)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 12, Height: 24})
+	model = updated.(Model)
+	model.Progress.Mode = stateStreaming
+	model.Progress.Status = "Running a very long status message"
+	model.InFlight.QueuedTurns = []string{strings.Repeat("queued ", 8)}
+	model.Input.Composer.SetValue(strings.Repeat("composer ", 8))
+	model.layout()
+
+	view := ansi.Strip(model.View().Content)
+	for i, line := range strings.Split(view, "\n") {
+		if line == "" {
+			continue
+		}
+		if got := ansi.StringWidth(line); got > model.shellWidth() {
+			t.Fatalf(
+				"line %d width = %d, want <= %d: %q\nview:\n%s",
+				i,
+				got,
+				model.shellWidth(),
+				line,
+				view,
+			)
+		}
+	}
+}
+
 func TestViewShellSeparatorsUseWideShellWidth(t *testing.T) {
 	model := readyModel(t)
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 24})

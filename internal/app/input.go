@@ -114,7 +114,11 @@ func (m Model) renderTokenUsage(total, limit int) string {
 }
 
 func (m *Model) layout() {
-	m.Input.Composer.SetWidth(max(20, m.App.Width-4))
+	width := m.shellWidth()
+	if width <= 0 {
+		width = 1
+	}
+	m.Input.Composer.SetWidth(width)
 	m.Input.Composer.SetHeight(
 		clamp(m.Input.Composer.LineCount(), minComposerHeight, maxComposerHeight),
 	)
