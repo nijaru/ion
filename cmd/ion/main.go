@@ -173,7 +173,7 @@ func main() {
 	}
 	if cli.exportSessionPath() != "" {
 		if sessionID == "" {
-			fmt.Fprintln(os.Stderr, "--export-session requires --resume <id> or --continue")
+			fmt.Fprintln(os.Stderr, "--export-session requires --session <id>, --resume <id>, or --continue")
 			os.Exit(2)
 		}
 		exported, err := exportSessionBundleFile(ctx, store, sessionID, cli.exportSessionPath())
