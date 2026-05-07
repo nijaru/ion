@@ -171,6 +171,10 @@ Fast, lightweight terminal coding agent.
   of a word that can appear in the submitted prompt. OpenRouter
   `deepseek/deepseek-v4-flash` passed the hardened live path: bash tool turn,
   `--continue` replay, and resumed follow-up.
+- The live tmux smoke now also queues a follow-up during
+  `Bash(sleep 3; echo ion-tmux-smoke)`, asserts the queued notice, verifies the
+  queued turn is submitted, then resumes and proves the prior tool turn remains
+  visible to the provider.
 - `tk-1nx1` is closed. Default shell chrome now hides low-value mode/sandbox
   posture: startup omits `Sandbox off`, the footer omits default `[EDIT]` and
   sandbox text, `/mode` remains dispatchable but hidden from help/picker, and
