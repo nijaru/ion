@@ -177,8 +177,8 @@ func TestWidthShrinkDoesNotCommitScrollbackRows(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected clear-screen command after width shrink")
 	}
-	if msg := cmd(); fmt.Sprintf("%T", msg) != "tea.RawMsg" {
-		t.Fatalf("width shrink command = %T, want tea.RawMsg", msg)
+	if msg := cmd(); fmt.Sprintf("%T", msg) != "tea.sequenceMsg" {
+		t.Fatalf("width shrink command = %T, want tea.sequenceMsg", msg)
 	}
 
 	updated, cmd = model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
