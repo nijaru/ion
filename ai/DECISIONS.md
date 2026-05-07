@@ -30,6 +30,16 @@ Distilled architectural principles plus recent decision log.
 
 ## Recent Log
 
+### 2026-05-06 - C8 adds explicit session policy flags
+
+Ion now treats scriptable session policy as part of Pi-level parity. Use
+`--session <id>` when a script wants to target a known durable session, and
+`--no-session` when a run should use an ephemeral in-memory store with no
+resume hint. `--no-session` is intentionally incompatible with resume,
+continue, session picker, and portable session import/export because those
+features require durable identity. This keeps the native path singular while
+making session behavior explicit for automation.
+
 ### 2026-05-06 - C8 keeps eight default tools
 
 The C8 tool-surface audit keeps Ion's default model-visible surface at

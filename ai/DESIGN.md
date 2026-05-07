@@ -251,6 +251,9 @@ Scriptable CLI is first-class:
 - text and JSON output
 - `--continue`
 - `--resume <id>`
+- `--session <id>` for explicit scriptable session targeting
+- `--no-session` for ephemeral runs that should not create durable session
+  state or print a resume hint
 - `--agent` for ACP stdio hosts
 - provider/model/thinking overrides that are process-local unless the user makes
   an explicit persistent change

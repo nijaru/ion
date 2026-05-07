@@ -64,6 +64,36 @@ func withCantoTimestamp(event csession.Event, timestamp time.Time) csession.Even
 	return event
 }
 
+func TestNewEphemeralCantoStorePersistsWithinProcessOnly(t *testing.T) {
+	storeAny, err := NewEphemeralCantoStore()
+	if err != nil {
+		t.Fatalf("new ephemeral canto store: %v", err)
+	}
+	defer storeAny.Close()
+
+	store := storeAny.(*cantoStore)
+	if store.dbPath != "" {
+		t.Fatalf("ephemeral dbPath = %q, want empty durable path", store.dbPath)
+	}
+
+	ctx := context.Background()
+	sess, err := store.OpenSession(ctx, "/tmp/ion-ephemeral", "model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	if err := sess.Append(ctx, Status{Status: "Ready"}); err != nil {
+		t.Fatalf("append status: %v", err)
+	}
+
+	sessions, err := store.ListSessions(ctx, "/tmp/ion-ephemeral")
+	if err != nil {
+		t.Fatalf("list sessions: %v", err)
+	}
+	if len(sessions) != 1 || sessions[0].ID != sess.ID() {
+		t.Fatalf("sessions = %#v, want ephemeral session %s", sessions, sess.ID())
+	}
+}
+
 func TestCantoStoreAppendUpdatesRecentSession(t *testing.T) {
 	root := t.TempDir()
 	storeAny, err := NewCantoStore(root)

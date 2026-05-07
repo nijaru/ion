@@ -57,14 +57,7 @@ func main() {
 	branch := currentBranch()
 	acpCommandOverride := strings.TrimSpace(os.Getenv("ION_ACP_COMMAND"))
 
-	dataDir, err := config.DefaultDataDir()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to resolve data dir: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Initialize storage from the internal data dir.
-	store, err := storage.NewCantoStore(dataDir)
+	store, err := openStartupStore(cli.noSessionRequested())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to initialize storage: %v\n", err)
 		os.Exit(1)
@@ -122,6 +115,19 @@ func main() {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(2)
 	}
+	if err := validateSessionSelection(
+		cli.noSessionRequested(),
+		cli.sessionID(),
+		cli.resumeID(),
+		cli.resumeShortID(),
+		cli.continueRequested(),
+		openResumePicker,
+		cli.exportSessionPath(),
+		cli.importSessionPath(),
+	); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(2)
+	}
 	if printRequested {
 		if isStdinPipe() {
 			data, err := io.ReadAll(os.Stdin)
@@ -156,6 +162,7 @@ func main() {
 		ctx,
 		store,
 		cwd,
+		cli.sessionID(),
 		cli.resumeID(),
 		cli.resumeShortID(),
 		cli.continueRequested(),
@@ -307,7 +314,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "failed to close runtime: %v\n", closeErr)
 		os.Exit(1)
 	}
-	if sessionID := resumeHintSessionID(finalModel); sessionID != "" {
+	if sessionID := resumeHintSessionID(finalModel); sessionID != "" && !cli.noSessionRequested() {
 		printResumeHint(os.Stdout, sessionID)
 	}
 }

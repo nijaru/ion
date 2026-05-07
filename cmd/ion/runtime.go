@@ -49,14 +49,29 @@ func recentSessionForContinue(
 	return nil, nil
 }
 
+func openStartupStore(noSession bool) (storage.Store, error) {
+	if noSession {
+		return storage.NewEphemeralCantoStore()
+	}
+	dataDir, err := config.DefaultDataDir()
+	if err != nil {
+		return nil, fmt.Errorf("resolve data dir: %w", err)
+	}
+	return storage.NewCantoStore(dataDir)
+}
+
 func startupSessionID(
 	ctx context.Context,
 	store storage.Store,
 	cwd string,
+	sessionID string,
 	resumeID string,
 	resumeShortID string,
 	continueRequested bool,
 ) (string, error) {
+	if sessionID != "" {
+		return sessionID, nil
+	}
 	if resumeID != "" {
 		return resumeID, nil
 	}

@@ -4,7 +4,7 @@ Fast, lightweight terminal coding agent.
 
 **Phase:** C8 streamlined core feature parity
 **Focus:** CLI and session parity closeout after the tool-surface audit
-**Active task:** `tk-j8sc` ready
+**Active task:** `tk-j8sc` active
 **Updated:** 2026-05-06
 
 ## Current Truth
@@ -153,8 +153,13 @@ Fast, lightweight terminal coding agent.
   promotion.
 - C8 priority sequence:
   1. Done - `tk-c94e` - tool surface parity audit and eval.
-  2. Ready - `tk-j8sc` - CLI and session parity closeout.
+  2. Active - `tk-j8sc` - CLI and session parity closeout.
   3. `tk-kx4r` - TUI daily-driver parity dogfood.
+- First `tk-j8sc` slice adds explicit scriptable session policy:
+  `--session <id>` targets a known durable session, and `--no-session` runs
+  against an in-memory ephemeral store with no resume hint on exit. It cannot
+  be combined with resume/continue/session-picker or session bundle
+  import/export.
 - `tk-1nx1` is closed. Default shell chrome now hides low-value mode/sandbox
   posture: startup omits `Sandbox off`, the footer omits default `[EDIT]` and
   sandbox text, `/mode` remains dispatchable but hidden from help/picker, and

@@ -259,6 +259,48 @@ func TestValidatePrintSelectionRejectsBareResumeInPrintMode(t *testing.T) {
 	}
 }
 
+func TestValidateSessionSelectionRejectsConflicts(t *testing.T) {
+	if err := validateSessionSelection(true, "", "", "", false, false, "", ""); err != nil {
+		t.Fatalf("no-session alone should be valid: %v", err)
+	}
+	if err := validateSessionSelection(
+		true,
+		"session-1",
+		"",
+		"",
+		false,
+		false,
+		"",
+		"",
+	); err == nil || !strings.Contains(err.Error(), "--no-session cannot be combined") {
+		t.Fatalf("no-session/session error = %v", err)
+	}
+	if err := validateSessionSelection(
+		true,
+		"",
+		"",
+		"",
+		false,
+		false,
+		"bundle.json",
+		"",
+	); err == nil || !strings.Contains(err.Error(), "--no-session cannot be combined") {
+		t.Fatalf("no-session/export error = %v", err)
+	}
+	if err := validateSessionSelection(
+		false,
+		"session-1",
+		"resume-1",
+		"",
+		false,
+		false,
+		"",
+		"",
+	); err == nil || !strings.Contains(err.Error(), "--session cannot be combined") {
+		t.Fatalf("session/resume error = %v", err)
+	}
+}
+
 func TestPrintModeRejectsApprovalWhenNotAutoApproved(t *testing.T) {
 	sess := &printSession{events: make(chan session.Event, 1)}
 	sess.events <- session.ApprovalRequest{RequestID: "req-1", ToolName: "bash"}
