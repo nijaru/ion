@@ -54,8 +54,7 @@ func (w *Write) Execute(ctx context.Context, args string) (string, error) {
 	}
 	defer root.Close()
 
-	checkpointID, err := w.checkpointPaths(ctx, input.FilePath)
-	if err != nil {
+	if _, err := w.checkpointPaths(ctx, input.FilePath); err != nil {
 		return "", err
 	}
 
@@ -66,10 +65,5 @@ func (w *Write) Execute(ctx context.Context, args string) (string, error) {
 	if err := root.WriteFile(relPath, []byte(input.Content), 0o644); err != nil {
 		return "", err
 	}
-	return limitToolOutput(
-		appendCheckpointID(
-			fmt.Sprintf("Successfully wrote %d bytes to %s", len(input.Content), input.FilePath),
-			checkpointID,
-		),
-	), nil
+	return limitToolOutput(fmt.Sprintf("Wrote %s.", input.FilePath)), nil
 }

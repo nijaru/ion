@@ -91,10 +91,3 @@ func (t *FileTool) checkpointPaths(ctx context.Context, paths ...string) (string
 	}
 	return cp.ID, nil
 }
-
-func appendCheckpointID(message, id string) string {
-	if id == "" {
-		return message
-	}
-	return message + "\nCheckpoint: " + id
-}

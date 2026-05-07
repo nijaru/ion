@@ -4,7 +4,7 @@ Fast, lightweight terminal coding agent.
 
 **Phase:** C8 streamlined core feature parity
 **Focus:** simplify the default daily-driver core before adding power features
-**Active task:** `tk-1nx1` ready
+**Active task:** `tk-c94e` active
 **Updated:** 2026-05-06
 
 ## Current Truth
@@ -159,6 +159,10 @@ Fast, lightweight terminal coding agent.
   posture: startup omits `Sandbox off`, the footer omits default `[EDIT]` and
   sandbox text, `/mode` remains dispatchable but hidden from help/picker, and
   explicit `/status` reports runtime, workspace, tools, and safety posture.
+- `tk-c94e` is active. First concrete tool-surface cleanup: write/edit tools
+  still create internal checkpoints, but model-visible results no longer expose
+  byte counts or checkpoint IDs. This keeps transcript/provider history concise
+  while preserving rollback substrate.
 - Core parity means workflows: reliable submit/stream/tools/cancel/error,
   durable sessions/resume/continue, context survival/compaction, compact TUI,
   scriptable CLI, and a small useful tool surface. It does not mean copying
