@@ -30,6 +30,16 @@ Distilled architectural principles plus recent decision log.
 
 ## Recent Log
 
+### 2026-05-06 - C8 accepted as Pi-level baseline
+
+C8 is accepted as the current Pi-level daily-driver baseline: one native Canto
+path, eight default tools, compact TUI, explicit scriptable session policy,
+durable resume/continue, queued follow-up, resize hardening, and tmux/live
+smoke coverage. The next phase is not implementation of experimental features;
+it is C9 boundary design for what graduates into Pi+ versus what remains
+experimental/x. Extension systems, missions/goals, swarms, memory, routing, and
+similar power features stay gated until that boundary is clear.
+
 ### 2026-05-06 - C8 defers JSONL until a concrete harness needs it
 
 Ion's Pi-level scriptable surface keeps text and final JSON output. JSONL event

@@ -48,8 +48,8 @@ classify model-quality uncertainty.
 | C5 | Codify acceptance gates and simplify maintainability hotspots | Done |
 | C6 | Post-C5 core-agent smoke refresh and hardening | Done |
 | C7 | Post-C6 roadmap rebaseline and next-phase selection | Done |
-| C8 | Streamlined core feature parity and daily-driver closeout | Active |
-| C9 | Pi+ extension and missions design boundary | Deferred |
+| C8 | Streamlined core feature parity and daily-driver closeout | Accepted |
+| C9 | Pi+ boundary rebaseline before extension/missions work | Ready |
 | I5 | Add eval-driven optimization and SOTA experiments | Deferred |
 
 ## I0: Dirty Baseline And Context Hygiene
@@ -226,7 +226,7 @@ Order:
 4. Done - `tk-kx4r` - TUI daily-driver parity dogfood:
    - tmux/dogfood fresh launch, tool turn, queued input, command picker,
      live settings update, resume, resize, transcript readability, compact tools
-5. Ready - `tk-i1ab` - final Pi-parity acceptance audit:
+5. Done - `tk-i1ab` - final Pi-parity acceptance audit:
    - review C8 against the Pi -> Pi+ roadmap and current evidence
    - open only concrete cleanup tasks needed before Pi+ or experimental/x work
    - keep `tk-3o1r` missions/goals and `tk-b121` extension boundary blocked
@@ -242,13 +242,18 @@ Acceptance:
 
 ## C9: Pi+ And Experimental Boundary
 
-Status: deferred.
+Status: ready.
 
 Goal: design how Ion grows past Pi without turning the default core into a
 large feature host. Treat this as stdlib vs x: a tiny core, a small set of
 well-supported built-ins, and an explicit lane for experiments/extensions.
 
 Deferred tasks:
+
+0. Blocked/P3 - `tk-4r2t` - Pi+ boundary rebaseline:
+   - define what can graduate from Pi-level core into Pi+
+   - keep extension and mission work as design lanes until ownership, tests,
+     prompt budget, and maintenance cost are clear
 
 1. Blocked/P4 - `tk-b121` - extension stdlib boundary design:
    - decide what belongs in core versus optional built-in extensions

@@ -2,9 +2,9 @@
 
 Fast, lightweight terminal coding agent.
 
-**Phase:** C8 streamlined core feature parity
-**Focus:** final Pi-parity acceptance audit before Pi+ or experimental work
-**Active task:** `tk-i1ab` ready
+**Phase:** C9 Pi+ boundary rebaseline
+**Focus:** decide Pi+ versus experimental/x before adding features
+**Active task:** `tk-4r2t` ready
 **Updated:** 2026-05-06
 
 ## Current Truth
@@ -155,7 +155,7 @@ Fast, lightweight terminal coding agent.
   1. Done - `tk-c94e` - tool surface parity audit and eval.
   2. Done - `tk-j8sc` - CLI and session parity closeout.
   3. Done - `tk-kx4r` - TUI daily-driver parity dogfood.
-  4. Ready - `tk-i1ab` - final Pi-parity acceptance audit.
+  4. Done - `tk-i1ab` - final Pi-parity acceptance audit.
 - `tk-j8sc` is closed. Scriptable session policy is explicit:
   `--session <id>` targets a known durable session; `--no-session` runs
   against an in-memory ephemeral store with no resume hint on exit; session
@@ -177,8 +177,12 @@ Fast, lightweight terminal coding agent.
   queued turn is submitted, then resumes and proves the prior tool turn remains
   visible to the provider.
 - `tk-3o1r` missions/goals and `tk-b121` extension stdlib/x design are blocked
-  behind `tk-i1ab`; they should not become the next default work until C8 is
-  accepted.
+  behind `tk-i1ab` and the new `tk-4r2t` C9 Pi+ boundary rebaseline. They
+  should not become implementation work until C8 is accepted and the Pi+/x
+  boundary is explicit.
+- C8 is accepted as the current Pi-level baseline. Next is `tk-4r2t`, a C9
+  design boundary pass that decides what belongs in Pi+ versus experimental/x
+  before any extension, mission, goal, swarm, memory, or routing work starts.
 - `tk-1nx1` is closed. Default shell chrome now hides low-value mode/sandbox
   posture: startup omits `Sandbox off`, the footer omits default `[EDIT]` and
   sandbox text, `/mode` remains dispatchable but hidden from help/picker, and
