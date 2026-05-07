@@ -43,7 +43,8 @@ core is solid.
 | C3 | Harden context survival and session workflows | Done; Fedora smoke deferred |
 | C4 | Tighten command/workflow shell without expanding the surface | Done |
 | C5 | Codify acceptance gates and simplify maintainability hotspots | Done |
-| C6 | Post-C5 core-agent smoke refresh and hardening | Active |
+| C6 | Post-C5 core-agent smoke refresh and hardening | Done |
+| C7 | Post-C6 roadmap rebaseline and next-phase selection | Active |
 | I5 | Add eval-driven optimization and SOTA experiments | Deferred |
 
 ## I0: Dirty Baseline And Context Hygiene
@@ -131,7 +132,7 @@ Acceptance:
 
 ## C6: Core Agent Hardening
 
-Status: active.
+Status: complete.
 
 Goal: refresh live core-loop proof after C5 and tighten the highest-value
 terminal-state/context-survival contracts without expanding the product surface.
@@ -153,7 +154,7 @@ Order:
    - `/compact`, automatic context-survival behavior, persist, resume,
      provider-history projection, and follow-up
    - keep Canto closed unless evidence points to a framework-owned defect
-4. Ready - `tk-vzdf` - prompt and prelude budget gate:
+4. Done - `tk-vzdf` - prompt and prelude budget gate:
    - measure static system/developer/tool prelude size after C5 cleanup
    - compare against the prior prompt-budget note
    - add a lightweight regression threshold only if it is useful
@@ -164,6 +165,23 @@ Acceptance:
 - deterministic and live evidence both update `ai/STATUS.md`
 - no bash mode, `/goal`, background jobs, subagents, memory, routing, sandbox
   expansion, or tool-surface changes during this phase
+
+## C7: Post-Hardening Rebaseline
+
+Status: active.
+
+Goal: choose the next real phase after the C6 core loop, terminal-state,
+context-survival, and prompt-budget gates are green.
+
+Ready task:
+
+1. Ready - `tk-szvc` - post-C6 roadmap rebaseline:
+   - review `ai/STATUS.md`, `ai/PLAN.md`, `ai/DESIGN.md`, `ai/DECISIONS.md`,
+     and recent commits
+   - decide whether the next phase is targeted architecture/code review,
+     dogfood-driven TUI polish, or a deferred product table-stakes slice
+   - do not start new feature work until this rebaseline picks the next
+     concrete sequence
 
 ## I2: Minimal Shell Polish
 

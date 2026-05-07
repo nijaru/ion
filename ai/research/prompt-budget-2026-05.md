@@ -6,7 +6,7 @@ status: active
 
 # Prompt Budget Baseline
 
-**Status:** reference, 2026-05-02
+**Status:** reference, refreshed 2026-05-06
 **Scope:** static Ion/Canto prelude size, reference-agent comparison, and prompt-cache priority.
 
 ## Result
@@ -21,8 +21,8 @@ Measured with `TestPromptPreludeBudgetReport` in `internal/backend/canto`:
 | Runtime prompt | 135 chars, about 34 tokens |
 | Core + runtime | 1,985 chars, about 497 tokens |
 | Project instruction layers | 8,437 chars, about 2,110 tokens |
-| P1 tool specs | 3,841 chars, about 961 tokens |
-| Current static total | 14,263 chars, about 3,566 tokens |
+| P1 tool specs | 3,845 chars, about 962 tokens |
+| Current static total | 14,267 chars, about 3,567 tokens |
 
 Token counts are rough `chars / 4` estimates. They are useful for budget tracking, not provider billing.
 
@@ -68,4 +68,4 @@ Keep the P1 work simple:
 
 ## Follow-up
 
-Keep `TestPromptPreludeBudgetReport` as a cheap regression report. If future work adds tools, memory, subagents, MCP, policy, or long formatting manuals to the default prompt, run the report and update this note before accepting the growth.
+Keep `TestPromptPreludeBudgetReport` as a cheap regression report. It now also enforces lightweight ceilings: core plus runtime prompt <= 2,500 chars, P1 tool specs <= 5,000 chars, and total static prelude including current project instructions <= 20,000 chars. If future work adds tools, memory, subagents, MCP, policy, or long formatting manuals to the default prompt, run the report and update this note before accepting the growth.

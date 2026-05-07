@@ -92,7 +92,7 @@ Do not mix these layers:
 
 The base prompt should stay Pi-small. The current native baseline is recorded in
 `ai/research/prompt-budget-2026-05.md`: core plus runtime instructions are about
-497 estimated tokens, P1 tool specs are about 961 estimated tokens, and project
+497 estimated tokens, P1 tool specs are about 962 estimated tokens, and project
 instructions are the largest measured static component.
 
 Rules:

@@ -2,9 +2,9 @@
 
 Fast, lightweight terminal coding agent.
 
-**Phase:** C6 core-agent hardening
-**Focus:** prompt and prelude budget gate after context-survival hardening
-**Active task:** `tk-vzdf` ready
+**Phase:** C7 roadmap rebaseline
+**Focus:** choose the next real phase after C6 core hardening
+**Active task:** `tk-szvc` ready
 **Updated:** 2026-05-06
 
 ## Current Truth
@@ -144,12 +144,20 @@ Fast, lightweight terminal coding agent.
   width bug: very narrow terminals still forced the composer to 20 columns,
   wider than the wrap-safe live shell. Composer layout now uses `shellWidth()`
   consistently with the rest of Plane B.
-- C6 is the current roadmap. `tk-yqml`, `tk-3wiq`, and `tk-89ww` are closed.
-  `tk ready` intentionally points at one core-agent task: `tk-vzdf` prompt and
-  prelude budget gate.
+- C6 core hardening is complete: `tk-yqml`, `tk-3wiq`, `tk-89ww`, and
+  `tk-vzdf` are closed. `tk ready` now points at `tk-szvc`, a post-C6 roadmap
+  rebaseline task to choose the next real phase instead of letting an empty
+  task graph drift.
 
 ## Latest Evidence
 
+- `tk-vzdf` prompt and prelude budget gate is closed. Current measurement:
+  core=1,848 chars/~462 tokens, runtime=135 chars/~34 tokens, core+runtime=1,985
+  chars/~497 tokens, project layers=8,437 chars/~2,110 tokens, P1 tool
+  specs=3,845 chars/~962 tokens, total static=14,267 chars/~3,567 tokens.
+  Added lightweight ceilings: core+runtime <=2,500 chars, P1 tool specs <=5,000
+  chars, total static prelude <=20,000 chars. Focused tests, full
+  `go test ./...`, and the native race subset passed.
 - `tk-89ww` compaction context-survival hardening is closed. Added
   deterministic coverage for manual compact -> persisted resume -> resumed
   follow-up provider-history projection: the follow-up request must include
@@ -711,7 +719,7 @@ Fast, lightweight terminal coding agent.
 
 ## Next Action
 
-1. Start `tk-vzdf` prompt and prelude budget gate.
+1. Start `tk-szvc` post-C6 roadmap rebaseline.
 2. Keep Fedora local-api as the preferred live target when free; otherwise use
    OpenRouter `deepseek/deepseek-v4-flash`, escalating to
    `deepseek/deepseek-v4-pro` only for model-quality uncertainty.
