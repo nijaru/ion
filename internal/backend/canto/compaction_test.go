@@ -32,7 +32,8 @@ func TestCompactUsesManualCompactionHelper(t *testing.T) {
 		t.Fatalf("open session: %v", err)
 	}
 
-	appendCantoHistory(t, ctx, store, storageSession.ID(),
+	appendCantoHistory(
+		t, ctx, store, storageSession.ID(),
 		llm.Message{Role: llm.RoleAssistant, Content: strings.Repeat("alpha ", 60)},
 		llm.Message{Role: llm.RoleAssistant, Content: strings.Repeat("beta ", 60)},
 		llm.Message{Role: llm.RoleAssistant, Content: strings.Repeat("gamma ", 60)},
@@ -111,6 +112,111 @@ func TestCompactUsesManualCompactionHelper(t *testing.T) {
 	}
 }
 
+func TestResumedCompactedSessionSendsSummaryFollowUpHistory(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	root := t.TempDir()
+	store, err := storage.NewCantoStore(root)
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+
+	storageSession, err := store.OpenSession(
+		ctx,
+		"/tmp/ion-compact-resume",
+		"openai/model-a",
+		"main",
+	)
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	appendCantoHistory(
+		t, ctx, store, storageSession.ID(),
+		llm.Message{Role: llm.RoleUser, Content: strings.Repeat("alpha old context ", 40)},
+		llm.Message{Role: llm.RoleAssistant, Content: strings.Repeat("beta old answer ", 40)},
+		llm.Message{Role: llm.RoleUser, Content: "recent question"},
+		llm.Message{Role: llm.RoleAssistant, Content: "recent answer"},
+	)
+
+	compactProvider := &compactProvider{id: "openai"}
+	followUpProvider := ctesting.NewFauxProvider(
+		"openai",
+		ctesting.Step{Content: "continued after compacted resume"},
+	)
+	var currentProvider llm.Provider = compactProvider
+
+	oldFactory := providerFactory
+	providerFactory = func(ctx context.Context, cfg *config.Config) (llm.Provider, error) {
+		if cfg.Provider == "openai" {
+			return currentProvider, nil
+		}
+		return oldFactory(ctx, cfg)
+	}
+	defer func() { providerFactory = oldFactory }()
+
+	first := New()
+	first.SetStore(store)
+	first.SetSession(storageSession)
+	first.SetConfig(&config.Config{Provider: "openai", Model: "model-a", ContextLimit: 100})
+	if err := first.Open(ctx); err != nil {
+		t.Fatalf("open first backend: %v", err)
+	}
+	if compacted, err := first.Compact(ctx); err != nil {
+		t.Fatalf("compact: %v", err)
+	} else if !compacted {
+		t.Fatal("expected compacted=true")
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("close first backend: %v", err)
+	}
+
+	resumedSession, err := store.ResumeSession(ctx, storageSession.ID())
+	if err != nil {
+		t.Fatalf("resume storage session: %v", err)
+	}
+	entries, err := resumedSession.Entries(ctx)
+	if err != nil {
+		t.Fatalf("entries: %v", err)
+	}
+	if !entryExists(entries, ionsession.System, "<conversation_summary>") {
+		t.Fatalf("resumed entries missing compaction summary: %#v", entries)
+	}
+
+	currentProvider = followUpProvider
+	second := New()
+	second.SetStore(store)
+	second.SetSession(resumedSession)
+	second.SetConfig(&config.Config{Provider: "openai", Model: "model-a", ContextLimit: 100_000})
+	if err := second.Resume(ctx, storageSession.ID()); err != nil {
+		t.Fatalf("resume backend: %v", err)
+	}
+	defer func() { _ = second.Close() }()
+
+	if err := second.SubmitTurn(ctx, "continue from compacted context"); err != nil {
+		t.Fatalf("submit follow-up turn: %v", err)
+	}
+	waitForTurnFinished(t, second.Events())
+
+	calls := followUpProvider.Calls()
+	if len(calls) != 1 {
+		t.Fatalf("follow-up provider calls = %d, want 1", len(calls))
+	}
+	followUp := calls[0]
+	if !requestContains(followUp, "<conversation_summary>") {
+		t.Fatalf("follow-up request missing compaction summary: %#v", followUp.Messages)
+	}
+	if requestContains(followUp, "alpha old context") {
+		t.Fatalf("follow-up request still contains compacted old context: %#v", followUp.Messages)
+	}
+	if !requestHasMessage(followUp.Messages, llm.RoleUser, "continue from compacted context") {
+		t.Fatalf("follow-up request missing new user turn: %#v", followUp.Messages)
+	}
+}
+
 func TestOpenRecoversFromContextOverflowByCompacting(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
@@ -128,7 +234,8 @@ func TestOpenRecoversFromContextOverflowByCompacting(t *testing.T) {
 		t.Fatalf("open session: %v", err)
 	}
 
-	appendCantoHistory(t, ctx, store, storageSession.ID(),
+	appendCantoHistory(
+		t, ctx, store, storageSession.ID(),
 		llm.Message{Role: llm.RoleAssistant, Content: strings.Repeat("alpha ", 60)},
 		llm.Message{Role: llm.RoleAssistant, Content: strings.Repeat("beta ", 60)},
 		llm.Message{Role: llm.RoleAssistant, Content: strings.Repeat("gamma ", 60)},
@@ -239,7 +346,8 @@ func TestSubmitTurnProactivelyCompactsBeforeOverflow(t *testing.T) {
 		t.Fatalf("open session: %v", err)
 	}
 
-	appendCantoHistory(t, ctx, store, storageSession.ID(),
+	appendCantoHistory(
+		t, ctx, store, storageSession.ID(),
 		llm.Message{Role: llm.RoleAssistant, Content: strings.Repeat("alpha ", 60)},
 		llm.Message{Role: llm.RoleAssistant, Content: strings.Repeat("beta ", 60)},
 		llm.Message{Role: llm.RoleAssistant, Content: strings.Repeat("gamma ", 60)},
@@ -331,7 +439,8 @@ func TestSubmitTurnStopsWhenProactiveCompactionFails(t *testing.T) {
 		t.Fatalf("open session: %v", err)
 	}
 
-	appendCantoHistory(t, ctx, store, storageSession.ID(),
+	appendCantoHistory(
+		t, ctx, store, storageSession.ID(),
 		llm.Message{Role: llm.RoleAssistant, Content: strings.Repeat("alpha ", 60)},
 	)
 
