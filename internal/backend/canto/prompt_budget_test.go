@@ -13,6 +13,12 @@ import (
 	"github.com/nijaru/ion/internal/backend/canto/tools"
 )
 
+const (
+	maxCoreRuntimePromptChars = 2_500
+	maxP1ToolSpecChars        = 5_000
+	maxStaticPreludeChars     = 20_000
+)
+
 func TestPromptPreludeBudgetReport(t *testing.T) {
 	root := repoRoot(t)
 	now := time.Date(2026, time.May, 2, 0, 0, 0, 0, time.UTC)
@@ -33,6 +39,27 @@ func TestPromptPreludeBudgetReport(t *testing.T) {
 
 	if len(specs) != 8 {
 		t.Fatalf("P1 tool spec count = %d, want 8", len(specs))
+	}
+	if len(coreRuntime) > maxCoreRuntimePromptChars {
+		t.Fatalf(
+			"core runtime prompt = %s, want <= %s",
+			sizeWithEstimate(len(coreRuntime)),
+			sizeWithEstimate(maxCoreRuntimePromptChars),
+		)
+	}
+	if len(specsJSON) > maxP1ToolSpecChars {
+		t.Fatalf(
+			"P1 tool specs = %s, want <= %s",
+			sizeWithEstimate(len(specsJSON)),
+			sizeWithEstimate(maxP1ToolSpecChars),
+		)
+	}
+	if len(withProject)+len(specsJSON) > maxStaticPreludeChars {
+		t.Fatalf(
+			"static prelude = %s, want <= %s",
+			sizeWithEstimate(len(withProject)+len(specsJSON)),
+			sizeWithEstimate(maxStaticPreludeChars),
+		)
 	}
 
 	t.Logf(
