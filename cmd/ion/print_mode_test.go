@@ -299,6 +299,18 @@ func TestValidateSessionSelectionRejectsConflicts(t *testing.T) {
 	); err == nil || !strings.Contains(err.Error(), "--session cannot be combined") {
 		t.Fatalf("session/resume error = %v", err)
 	}
+	if err := validateSessionSelection(
+		false,
+		"session-1",
+		"",
+		"",
+		true,
+		false,
+		"",
+		"",
+	); err == nil || !strings.Contains(err.Error(), "--session cannot be combined") {
+		t.Fatalf("session/continue error = %v", err)
+	}
 }
 
 func TestPrintModeRejectsApprovalWhenNotAutoApproved(t *testing.T) {

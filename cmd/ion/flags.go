@@ -203,8 +203,9 @@ func validateSessionSelection(
 			return fmt.Errorf("--no-session cannot be combined with session import/export")
 		}
 	}
-	if sessionID != "" && (resumeID != "" || resumeShortID != "" || openResumePicker) {
-		return fmt.Errorf("--session cannot be combined with --resume")
+	if sessionID != "" &&
+		(resumeID != "" || resumeShortID != "" || continueRequested || openResumePicker) {
+		return fmt.Errorf("--session cannot be combined with other session selection flags")
 	}
 	return nil
 }
