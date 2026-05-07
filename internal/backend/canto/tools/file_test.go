@@ -195,6 +195,32 @@ func TestFileTools(t *testing.T) {
 			t.Errorf("unexpected content: %q", string(newContent))
 		}
 
+		executable := "script.sh"
+		executablePath := filepath.Join(tmpDir, executable)
+		os.WriteFile(executablePath, []byte("#!/bin/sh\necho before\n"), 0o755)
+		modeArgs, _ := json.Marshal(map[string]any{
+			"file_path":  executable,
+			"old_string": "before",
+			"new_string": "after",
+		})
+		if _, err := e.Execute(context.Background(), string(modeArgs)); err != nil {
+			t.Fatalf("edit executable failed: %v", err)
+		}
+		info, err := os.Stat(executablePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got != 0o755 {
+			t.Fatalf("edit changed file mode to %v, want 0755", got)
+		}
+		matches, err := filepath.Glob(filepath.Join(tmpDir, ".script.sh.*.tmp"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(matches) != 0 {
+			t.Fatalf("edit left temporary files: %#v", matches)
+		}
+
 		// Fail on non-unique without replace_all
 		os.WriteFile(filepath.Join(tmpDir, filePath), []byte("aa\naa"), 0o644)
 		failArgs, _ := json.Marshal(map[string]any{
