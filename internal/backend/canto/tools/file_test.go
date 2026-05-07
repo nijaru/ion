@@ -57,7 +57,7 @@ func TestFileTools(t *testing.T) {
 		// Read with limit/offset
 		limitArgs, _ := json.Marshal(map[string]any{
 			"file_path": filePath,
-			"offset":    1,
+			"offset":    2,
 			"limit":     1,
 		})
 		res, err = r.Execute(context.Background(), string(limitArgs))
@@ -66,6 +66,19 @@ func TestFileTools(t *testing.T) {
 		}
 		if res != "     2\tline 2" {
 			t.Errorf("expected numbered line 2, got %q", res)
+		}
+
+		zeroOffsetArgs, _ := json.Marshal(map[string]any{
+			"file_path": filePath,
+			"offset":    0,
+			"limit":     1,
+		})
+		res, err = r.Execute(context.Background(), string(zeroOffsetArgs))
+		if err != nil {
+			t.Fatalf("read with zero offset failed: %v", err)
+		}
+		if res != "     1\tline 1" {
+			t.Errorf("expected zero offset to start at line 1, got %q", res)
 		}
 
 		negativeOffsetArgs, _ := json.Marshal(map[string]any{
