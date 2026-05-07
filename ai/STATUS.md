@@ -3,8 +3,8 @@
 Fast, lightweight terminal coding agent.
 
 **Phase:** C6 core-agent hardening
-**Focus:** compaction context-survival hardening after terminal-state refresh
-**Active task:** `tk-89ww` ready
+**Focus:** prompt and prelude budget gate after context-survival hardening
+**Active task:** `tk-vzdf` ready
 **Updated:** 2026-05-06
 
 ## Current Truth
@@ -144,13 +144,20 @@ Fast, lightweight terminal coding agent.
   width bug: very narrow terminals still forced the composer to 20 columns,
   wider than the wrap-safe live shell. Composer layout now uses `shellWidth()`
   consistently with the rest of Plane B.
-- C6 is the current roadmap. `tk-yqml` and `tk-3wiq` are closed. `tk ready`
-  intentionally points at one core-agent task: `tk-89ww` compaction
-  context-survival hardening. Follow-up task `tk-vzdf` prompt/prelude budget
-  gate remains blocked behind it.
+- C6 is the current roadmap. `tk-yqml`, `tk-3wiq`, and `tk-89ww` are closed.
+  `tk ready` intentionally points at one core-agent task: `tk-vzdf` prompt and
+  prelude budget gate.
 
 ## Latest Evidence
 
+- `tk-89ww` compaction context-survival hardening is closed. Added
+  deterministic coverage for manual compact -> persisted resume -> resumed
+  follow-up provider-history projection: the follow-up request must include
+  the compaction summary, exclude compacted old context, and include the new
+  user turn. The race gate also exposed and fixed a test-helper race in
+  `compactProvider` caused by concurrent Canto summarizer `Generate` calls.
+  Focused backend/app/storage tests, full `go test ./...`, and the native race
+  subset passed.
 - `tk-3wiq` cancel/error/retry hardening is closed. Existing coverage already
   covered stream cancellation, provider-error reuse, tool-failure follow-up,
   retry status persistence, print-mode timeout/error behavior, and app
@@ -704,7 +711,7 @@ Fast, lightweight terminal coding agent.
 
 ## Next Action
 
-1. Start `tk-89ww` compaction context-survival hardening.
+1. Start `tk-vzdf` prompt and prelude budget gate.
 2. Keep Fedora local-api as the preferred live target when free; otherwise use
    OpenRouter `deepseek/deepseek-v4-flash`, escalating to
    `deepseek/deepseek-v4-pro` only for model-quality uncertainty.

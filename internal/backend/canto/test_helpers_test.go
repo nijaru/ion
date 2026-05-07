@@ -3,6 +3,7 @@ package canto
 import (
 	"context"
 	"errors"
+	"sync"
 
 	"github.com/nijaru/canto/llm"
 	ctesting "github.com/nijaru/canto/x/testing"
@@ -11,6 +12,7 @@ import (
 )
 
 type compactProvider struct {
+	mu          sync.Mutex
 	id          string
 	lastRequest *llm.Request
 }
@@ -18,7 +20,9 @@ type compactProvider struct {
 func (p *compactProvider) ID() string { return p.id }
 
 func (p *compactProvider) Generate(ctx context.Context, req *llm.Request) (*llm.Response, error) {
+	p.mu.Lock()
 	p.lastRequest = req
+	p.mu.Unlock()
 	return &llm.Response{Content: "condensed summary"}, nil
 }
 

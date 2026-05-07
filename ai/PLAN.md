@@ -149,11 +149,11 @@ Order:
    - provider error and retry recovery
    - tool failure followed by a normal turn
    - resume after each terminal state
-3. Ready - `tk-89ww` - compaction context-survival hardening:
+3. Done - `tk-89ww` - compaction context-survival hardening:
    - `/compact`, automatic context-survival behavior, persist, resume,
      provider-history projection, and follow-up
    - keep Canto closed unless evidence points to a framework-owned defect
-4. Blocked by `tk-89ww` - `tk-vzdf` - prompt and prelude budget gate:
+4. Ready - `tk-vzdf` - prompt and prelude budget gate:
    - measure static system/developer/tool prelude size after C5 cleanup
    - compare against the prior prompt-budget note
    - add a lightweight regression threshold only if it is useful
