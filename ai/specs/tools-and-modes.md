@@ -18,7 +18,7 @@ change clearly improves daily coding reliability. Pi's four-tool default is a
 strong simplicity reference, but Ion is not required to copy it if typed
 search/list tools improve policy, display, and agent success.
 
-Durable tool-surface decisions:
+Durable tool-surface decisions after the C8 Pi -> Pi+ audit:
 
 - `write` stays separate from targeted edits. Create/overwrite has a different
   risk and display shape than exact replacement.
@@ -28,12 +28,15 @@ Durable tool-surface decisions:
 - Structured edits are the normal edit path. Do not steer models toward Python,
   `sed`, heredocs, or shell patching for routine edits.
 - Keep `grep`, `glob`, and `list` as typed read-only tools instead of collapsing
-  ordinary discovery into `bash`.
+  ordinary discovery into `bash`. The typed tools keep path containment,
+  read-only policy, compact display, ignored-file behavior, and output limits
+  straightforward while `bash` remains available for advanced discovery.
 - `bash` remains the escape hatch for repo-specific commands, verification, and
   advanced tools such as `rg`, `fd`, or `ast-grep` when the typed tools are not
   enough.
-- C8 must re-audit this decision against current Pi, Claude Code, Codex CLI,
-  Amp, and Droid references before changing the model-visible surface.
+- C8 confirmed that the current eight-tool set is the right default baseline.
+  Do not add tools, remove typed read tools, merge edit tools, or switch from
+  ripgrep to ripgo without a focused eval and a prompt-budget check.
 
 ### Canto coding primitive adoption
 

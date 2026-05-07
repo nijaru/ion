@@ -3,8 +3,8 @@
 Fast, lightweight terminal coding agent.
 
 **Phase:** C8 streamlined core feature parity
-**Focus:** simplify the default daily-driver core before adding power features
-**Active task:** `tk-c94e` active
+**Focus:** CLI and session parity closeout after the tool-surface audit
+**Active task:** `tk-j8sc` ready
 **Updated:** 2026-05-06
 
 ## Current Truth
@@ -152,14 +152,14 @@ Fast, lightweight terminal coding agent.
   missions/goals, swarms, memory, routing, and similar ideas live before
   promotion.
 - C8 priority sequence:
-  1. `tk-c94e` - tool surface parity audit and eval.
-  2. `tk-j8sc` - CLI and session parity closeout.
+  1. Done - `tk-c94e` - tool surface parity audit and eval.
+  2. Ready - `tk-j8sc` - CLI and session parity closeout.
   3. `tk-kx4r` - TUI daily-driver parity dogfood.
 - `tk-1nx1` is closed. Default shell chrome now hides low-value mode/sandbox
   posture: startup omits `Sandbox off`, the footer omits default `[EDIT]` and
   sandbox text, `/mode` remains dispatchable but hidden from help/picker, and
   explicit `/status` reports runtime, workspace, tools, and safety posture.
-- `tk-c94e` is active. First concrete tool-surface cleanup: write/edit tools
+- `tk-c94e` is closed. First concrete tool-surface cleanup: write/edit tools
   still create internal checkpoints, but model-visible results no longer expose
   byte counts or checkpoint IDs. This keeps transcript/provider history concise
   while preserving rollback substrate.
@@ -169,6 +169,11 @@ Fast, lightweight terminal coding agent.
 - Third tool-surface cleanup: `read.offset` is now described and interpreted as
   1-indexed to match the line numbers shown in tool output. `offset: 0` still
   starts at the beginning as an external-boundary convenience.
+- C8 tool-surface audit outcome: keep the eight default tools. Typed
+  `grep`/`glob`/`list` remain justified for path containment, read-only policy,
+  compact display, ignored-file behavior, and output limits; `bash` remains the
+  escape hatch for advanced discovery and verification. Future merged edit or
+  ripgo work needs a focused eval plus prompt-budget check.
 - Core parity means workflows: reliable submit/stream/tools/cancel/error,
   durable sessions/resume/continue, context survival/compaction, compact TUI,
   scriptable CLI, and a small useful tool surface. It does not mean copying

@@ -30,6 +30,20 @@ Distilled architectural principles plus recent decision log.
 
 ## Recent Log
 
+### 2026-05-06 - C8 keeps eight default tools
+
+The C8 tool-surface audit keeps Ion's default model-visible surface at
+`bash`, `read`, `write`, `edit`, `multi_edit`, `list`, `grep`, and `glob`.
+Pi's four-tool shape remains the simplicity reference, but Ion's typed
+read-only discovery tools earn their place because they preserve path
+containment, read-only policy, compact display, ignored-file behavior, and
+bounded output without relying on shell quoting. `bash` stays the escape hatch
+for advanced commands and verification. The audit fixed concrete DX issues
+instead of changing the set: write/edit results no longer expose checkpoint IDs
+or byte counts, single-file `edit` now commits atomically through temp+rename,
+and `read.offset` is 1-indexed to match visible line numbers. Future merged
+edit or ripgo work needs a focused eval plus prompt-budget check.
+
 ### 2026-05-06 - C8 targets streamlined core feature parity
 
 C7 rebaseline selected C8 as the next phase. The roadmap shape is Pi -> Pi+:

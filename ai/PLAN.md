@@ -208,15 +208,15 @@ Reference posture:
 
 Order:
 
-1. Ready - `tk-1nx1` - streamline default mode and safety surface:
+1. Done - `tk-1nx1` - streamline default mode and safety surface:
    - remove or hide low-value mode/trust/approval jargon from startup/footer/help
    - keep executor safeguards at the owning boundary
    - prefer `/status`, `/tools`, or explicit settings for detailed posture
-2. Blocked - `tk-c94e` - tool surface parity audit and eval:
+2. Done - `tk-c94e` - tool surface parity audit and eval:
    - review the current eight tools against Pi/Claude/Codex/Amp/Droid evidence
    - decide whether search/list/edit should stay as-is or be reshaped
    - do not add tools without eval and prompt-budget evidence
-3. Blocked - `tk-j8sc` - CLI and session parity closeout:
+3. Ready - `tk-j8sc` - CLI and session parity closeout:
    - audit `-p`, stdin, JSON/JSONL decision, `--continue`, `--resume <id>`,
      `--session`, `--no-session`, resume hints, and session picker clarity
 4. Blocked - `tk-kx4r` - TUI daily-driver parity dogfood:
