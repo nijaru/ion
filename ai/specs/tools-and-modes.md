@@ -201,10 +201,10 @@ Supporting infrastructure:
 
 ## Background Job/Status Substrate
 
-Background job/status support is the first Pi+ substrate candidate after C9.
-The product need is dev servers, file watchers, long-running tests, and build
-loops that should keep running while the user and model continue working. This
-is not bash mode and not a goal/mission system.
+Background job/status support is the first Pi+ substrate after C9. The product
+need is dev servers, file watchers, long-running tests, and build loops that
+should keep running while the user and model continue working. This is not bash
+mode and not a goal/mission system.
 
 The design target is useful Claude-like behavior without growing the default
 model-visible tool count.
@@ -227,9 +227,8 @@ Direction:
 - Background process execution uses the same workspace, policy category, and
   sandbox posture as foreground `bash`.
 - `Session.Close()` must kill any remaining background process groups.
-- Host visibility starts with `/jobs` and `/stop <job-id>` if implementation
-  proceeds. Do not add bash mode, `/goal`, missions, or agent jobs as part of
-  the first substrate.
+- Host visibility starts with `/jobs` and `/stop <job-id>`. Do not add bash
+  mode, `/goal`, missions, or agent jobs as part of the first substrate.
 - TUI display stays compact by default:
   - `Bash(npm run dev) · background job bash-1`
   - `Bash(output bash-1) · 42 lines`
@@ -477,7 +476,8 @@ Rules:
 Current implementation note:
 
 - Ion's local `bash` tool now delegates process planning/execution to a local
-  executor object. The model-facing `bash` schema remains unchanged.
+  executor object. Background run/output/kill actions extend that same
+  model-facing tool rather than adding separate default tools.
 - The executor preserves the current subprocess environment behavior for now:
   local bash inherits Ion's process environment. Do not change this implicitly
   during cleanup, because common developer commands depend on inherited

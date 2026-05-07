@@ -2,9 +2,9 @@
 
 Fast, lightweight terminal coding agent.
 
-**Phase:** C11 background job/status substrate implementation
-**Focus:** implement the first Pi+ substrate without adding bash mode or goals
-**Active task:** `tk-0x8r` ready
+**Phase:** Post-C11 Pi+ closeout
+**Focus:** choose the next design lane after background job/status support
+**Active task:** `tk-b121` ready
 **Updated:** 2026-05-07
 
 ## Current Truth
@@ -188,9 +188,17 @@ Fast, lightweight terminal coding agent.
   Pi+ substrate: long-running dev commands need live job handles, compact
   status, and stop/output control, but not bash mode, `/goal`, missions,
   swarms, or durable agent jobs.
-- `tk-0x8r` is the ready implementation follow-up for that substrate. It should
-  keep one model-visible `bash` tool and must not add extra default
+- `tk-0x8r` is closed. Background job/status support is implemented through the
+  existing `bash` tool with explicit run/output/kill actions, Ion-owned live
+  session job handles, `/jobs`, and `/stop <job-id>`. It does not add bash
+  mode, `/goal`, missions, swarms, durable agent jobs, or extra default
   model-visible tools.
+- Latest C11 gates passed: focused tools/backend/app/tooldisplay tests,
+  `go test ./... -count=1 -timeout 300s`, native race subset,
+  `scripts/smoke/tmux-minimal-harness.sh`, and OpenRouter
+  `deepseek/deepseek-v4-flash` live smoke. Fedora probe timed out; fallback was
+  used correctly. Live provider-history capture remained valid despite the
+  model answering the semantic follow-up with `fresh`.
 - `tk-1nx1` is closed. Default shell chrome now hides low-value mode/sandbox
   posture: startup omits `Sandbox off`, the footer omits default `[EDIT]` and
   sandbox text, `/mode` remains dispatchable but hidden from help/picker, and

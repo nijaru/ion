@@ -1154,6 +1154,51 @@ func TestStatusCommandReportsRuntimePosture(t *testing.T) {
 	}
 }
 
+func TestJobsCommandReportsBackgroundJobs(t *testing.T) {
+	jobs := []session.JobInfo{{
+		ID:          "bash-1",
+		Command:     "npm run dev",
+		Status:      "running",
+		OutputBytes: 42,
+	}}
+	got := backgroundJobsNotice(jobs)
+	for _, want := range []string{
+		"Background jobs",
+		"bash-1",
+		"running",
+		"npm run dev",
+		"42 bytes",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("jobs notice = %q, want %q", got, want)
+		}
+	}
+}
+
+func TestStopCommandStopsBackgroundJob(t *testing.T) {
+	sess := &jobStubSession{stubSession: stubSession{events: make(chan session.Event)}}
+	b := stubBackend{sess: &sess.stubSession}
+	model := New(b, nil, nil, "/tmp/test", "main", "dev", nil)
+	model.Model.Session = sess
+
+	_, cmd := model.handleCommand("/stop bash-1")
+	if cmd == nil {
+		t.Fatal("stop command returned nil cmd")
+	}
+	msg := cmd()
+	printed, ok := msg.(localEntriesMsg)
+	if !ok {
+		t.Fatalf("message = %T, want localEntriesMsg", msg)
+	}
+	if len(sess.stopped) != 1 || sess.stopped[0] != "bash-1" {
+		t.Fatalf("stopped = %#v, want bash-1", sess.stopped)
+	}
+	if len(printed.entries) != 1 ||
+		!strings.Contains(printed.entries[0].Content, "stopped bash-1") {
+		t.Fatalf("printed = %#v, want stop notice", printed.entries)
+	}
+}
+
 func TestToolSurfaceSummaryIncludesEnvironment(t *testing.T) {
 	got := toolSurfaceSummary(backend.ToolSurface{
 		Count:       2,

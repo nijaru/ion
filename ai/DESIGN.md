@@ -37,7 +37,7 @@ Promotion rules:
   behavior is touched.
 - Experimental/x work should not add commands, default tools, prompt text, or
   always-on runtime hooks to core.
-- Background job/status is the likely first Pi+ substrate because it supports
+- Background job/status is the first Pi+ substrate because it supports
   long-running dev commands and is a prerequisite for missions/goals. Bash mode
   is only a later UI affordance over that substrate, not a priority by itself.
 - `/goal`, missions, swarms, custom agents, and extension mutation remain

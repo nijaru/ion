@@ -30,6 +30,15 @@ Distilled architectural principles plus recent decision log.
 
 ## Recent Log
 
+### 2026-05-07 - C11 implements background jobs as one bash tool
+
+Ion now supports background run/output/kill through the existing `bash` tool
+instead of adding separate default tools. Job handles are Ion-owned live session
+runtime state; transcript rows can record job ids and output reads, but Ion does
+not promise process survival across app exit or restart. `/jobs` and
+`/stop <job-id>` are the minimal host visibility surface. Bash mode, `/goal`,
+missions, swarms, and durable agent jobs remain out of scope.
+
 ### 2026-05-07 - C9 defines the Pi+ promotion boundary
 
 C9 keeps the accepted Pi-level core frozen except for regressions,

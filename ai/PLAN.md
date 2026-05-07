@@ -5,9 +5,9 @@ Updated: 2026-05-07
 ## Current Focus
 
 C8 accepted Ion's Pi-level baseline, C9 closed the Pi+/experimental boundary,
-and C10 selected background job/status support as the first Pi+ substrate. C11
-is now the ready implementation lane: add that substrate without adding bash
-mode, `/goal`, missions, swarms, or agent jobs. The roadmap remains
+C10 selected background job/status support as the first Pi+ substrate, and C11
+implemented it. The next ready lane is low-priority design work: extension
+stdlib/x first, missions/goals only after that. The roadmap remains
 **Pi -> Pi+**:
 
 - **Pi parity:** reliable core terminal coding-agent workflows, not exact
@@ -18,10 +18,10 @@ mode, `/goal`, missions, swarms, or agent jobs. The roadmap remains
   other power features that should not live in the default core until they earn
   it.
 
-C11 should implement only the accepted background job/status substrate. It
-should not add bash mode, `/goal`, `/side`, richer fork UI, subagents, memory,
+Do not add bash mode, `/goal`, `/side`, richer fork UI, subagents, memory,
 skills, MCP, routing, prompt caching, remote sandboxes, or new default
-model-visible tools.
+model-visible tools unless a ready task and acceptance gate explicitly justify
+it.
 
 Live-provider proof uses Fedora local-api first when it is free, then
 OpenRouter `deepseek/deepseek-v4-flash` fallback when Fedora is unavailable.
@@ -48,7 +48,7 @@ classify model-quality uncertainty.
 | C8 | Streamlined core feature parity and daily-driver closeout | Accepted |
 | C9 | Pi+ boundary rebaseline before extension/missions work | Done |
 | C10 | Background job/status substrate design | Done |
-| C11 | Background job/status substrate implementation | Ready |
+| C11 | Background job/status substrate implementation | Done |
 | I5 | Add eval-driven optimization and SOTA experiments | Deferred |
 
 ## I0: Dirty Baseline And Context Hygiene
@@ -296,33 +296,32 @@ Completed task:
 
 ## C11: Background Job/Status Implementation
 
-Status: ready.
+Status: done.
 
-Ready task:
+Completed task:
 
-1. Ready/P3 - `tk-0x8r` - C11 background job/status substrate implementation:
+1. Done/P3 - `tk-0x8r` - C11 background job/status substrate implementation:
    - keep one `bash` tool with explicit background actions
    - store job handles in Ion live session runtime; do not promise process
      survival across restart
-   - expose `/jobs` and `/stop <job-id>` only if they remain the minimal host
-     visibility surface
+   - expose `/jobs` and `/stop <job-id>` as the minimal host visibility surface
    - do not add bash mode, `/goal`, missions, swarms, or extra default
      model-visible tools
 
-Deferred design lanes:
+## Next Design Lanes
 
-1. Blocked/P4 - `tk-b121` - extension stdlib boundary design:
-   - decide what belongs in core versus optional built-in extensions
-   - define extension command/tool gating, prompt-budget impact, trust/install
-     behavior, and test requirements
-2. Blocked/P4 - `tk-3o1r` - missions and durable goals design:
-   - compare Droid missions, Codex `/goal`, Jules-style long-running agents,
-     and swarm workflows
-   - require durable objective state, pause/resume, progress, budget, recovery,
-     and TUI/CLI semantics before adding a command
+Status: ready.
 
-C9 closed after C8 acceptance. Background job/status substrate is now the
-accepted prerequisite for missions/goals.
+Ready tasks:
+
+1. Ready/P4 - `tk-b121` - extension stdlib boundary design:
+   - decide what belongs in core, built-in stdlib, or external/x extension
+   - keep prompt-budget, install trust, mutation, and tests explicit before any
+     implementation work
+2. Ready/P4 - `tk-3o1r` - missions and durable goals design:
+   - design only; implementation remains later
+   - now that background job/status exists, focus on durable objective metadata,
+     pause/resume, progress, budget, recovery, and TUI/CLI semantics
 
 ## I2: Minimal Shell Polish
 
@@ -666,11 +665,11 @@ Order:
    - verify default tools/commands/settings are small and proven
    - remove or defer speculative scaffolding only when the simplification is
      concrete and covered by tests
-4. Deferred - background job visibility:
-   - possible command surface: `/tasks` or `/ps`, plus `/stop`
-   - possible model surface: keep one `bash` tool with explicit background
-     actions if implementation proceeds
-   - do not start until there is clear daily-use need
+4. Done - background job visibility:
+   - command surface: `/jobs` plus `/stop <job-id>`
+   - model surface: one `bash` tool with explicit background run/output/kill
+     actions
+   - implemented in C11 without adding bash mode or extra default tools
 5. Deferred - bash mode:
    - low-priority TUI idea for direct shell entry
    - evaluate against proven agents first; do not implement as a command-surface
