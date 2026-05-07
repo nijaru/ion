@@ -3,8 +3,8 @@
 Fast, lightweight terminal coding agent.
 
 **Phase:** C8 streamlined core feature parity
-**Focus:** TUI daily-driver parity dogfood after CLI/session closeout
-**Active task:** `tk-kx4r` ready
+**Focus:** final Pi-parity acceptance audit before Pi+ or experimental work
+**Active task:** `tk-i1ab` ready
 **Updated:** 2026-05-06
 
 ## Current Truth
@@ -154,7 +154,8 @@ Fast, lightweight terminal coding agent.
 - C8 priority sequence:
   1. Done - `tk-c94e` - tool surface parity audit and eval.
   2. Done - `tk-j8sc` - CLI and session parity closeout.
-  3. Ready - `tk-kx4r` - TUI daily-driver parity dogfood.
+  3. Done - `tk-kx4r` - TUI daily-driver parity dogfood.
+  4. Ready - `tk-i1ab` - final Pi-parity acceptance audit.
 - `tk-j8sc` is closed. Scriptable session policy is explicit:
   `--session <id>` targets a known durable session; `--no-session` runs
   against an in-memory ephemeral store with no resume hint on exit; session
@@ -175,6 +176,9 @@ Fast, lightweight terminal coding agent.
   `Bash(sleep 3; echo ion-tmux-smoke)`, asserts the queued notice, verifies the
   queued turn is submitted, then resumes and proves the prior tool turn remains
   visible to the provider.
+- `tk-3o1r` missions/goals and `tk-b121` extension stdlib/x design are blocked
+  behind `tk-i1ab`; they should not become the next default work until C8 is
+  accepted.
 - `tk-1nx1` is closed. Default shell chrome now hides low-value mode/sandbox
   posture: startup omits `Sandbox off`, the footer omits default `[EDIT]` and
   sandbox text, `/mode` remains dispatchable but hidden from help/picker, and

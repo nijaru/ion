@@ -223,9 +223,14 @@ Order:
      policy without changing the native loop
    - final JSON stays in the Pi-level scriptable core; JSONL event streaming is
      deferred until a concrete harness/integration needs it
-4. Ready - `tk-kx4r` - TUI daily-driver parity dogfood:
+4. Done - `tk-kx4r` - TUI daily-driver parity dogfood:
    - tmux/dogfood fresh launch, tool turn, queued input, command picker,
      live settings update, resume, resize, transcript readability, compact tools
+5. Ready - `tk-i1ab` - final Pi-parity acceptance audit:
+   - review C8 against the Pi -> Pi+ roadmap and current evidence
+   - open only concrete cleanup tasks needed before Pi+ or experimental/x work
+   - keep `tk-3o1r` missions/goals and `tk-b121` extension boundary blocked
+     until this audit accepts the core surface
 
 Acceptance:
 
