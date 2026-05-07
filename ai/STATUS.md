@@ -37,8 +37,9 @@ Fast, lightweight terminal coding agent.
 - Fedora local-api is the preferred live-smoke target when it is reachable and
   free. When Fedora is unavailable because the user is working on it or the
   probe times out, the live gate should fall back to OpenRouter instead of
-  stopping. OpenRouter `deepseek/deepseek-v3.2` is the current cheap fallback;
-  older DeepSeek Flash smokes remain historical evidence.
+  stopping. OpenRouter `deepseek/deepseek-v4-flash` is the current affordable
+  fallback; use `deepseek/deepseek-v4-pro` only when a stronger discounted
+  model is useful to classify model-quality uncertainty.
 - `tk-d2m6` is closed. Fork/session workflow tests now prove copied fork
   entries, portable bundle import/export, and subagent `context_mode=fork`
   preserve Canto ancestry plus usable event timestamps.
@@ -150,6 +151,11 @@ Fast, lightweight terminal coding agent.
 
 ## Latest Evidence
 
+- Live-smoke model policy was corrected on 2026-05-06: current/future
+  OpenRouter fallback is `deepseek/deepseek-v4-flash`, with
+  `deepseek/deepseek-v4-pro` reserved for model-quality uncertainty. The
+  live-smoke harness default and C6 task descriptions now match this policy.
+  Focused `./cmd/ion` + `./internal/app` tests and full `go test ./...` passed.
 - Roadmap/task rebaseline on 2026-05-06 found no open tasks after C5 despite
   `ai/PLAN.md` still referencing deferred live/core work. Added the C6 sequence
   above and updated `ai/PLAN.md` so `tk ready` now points at real core-agent
@@ -684,7 +690,8 @@ Fast, lightweight terminal coding agent.
 ## Next Action
 
 1. Start `tk-yqml` live core-loop smoke refresh: Fedora local-api first if free,
-   OpenRouter `deepseek/deepseek-v3.2` fallback otherwise.
+   OpenRouter `deepseek/deepseek-v4-flash` fallback otherwise; use
+   `deepseek/deepseek-v4-pro` only to classify model-quality uncertainty.
 2. Then run `tk-3wiq` cancel/error/retry hardening.
 3. Keep `tk-er04` bash-mode evaluation deferred unless daily use proves it is
    worth the extra surface.

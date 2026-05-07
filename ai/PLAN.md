@@ -13,8 +13,9 @@ C5 review/refactor is closed. C6 is the active follow-up: keep the accepted
 core boring with live-provider refresh and targeted hardening around terminal
 states, replay, retry, and context survival. Do not use this phase to add
 commands or model-visible tools. Live-provider proof uses Fedora local-api first
-when it is free, then OpenRouter `deepseek/deepseek-v3.2` fallback when Fedora
-is unavailable.
+when it is free, then OpenRouter `deepseek/deepseek-v4-flash` fallback when
+Fedora is unavailable. Escalate to `deepseek/deepseek-v4-pro` only when a
+stronger model is useful to classify model-quality uncertainty.
 
 The next priority is not adding commands. Treat background job commands, bash
 mode, `/goal`, `/side`, richer fork UI, and `/clone` as deferred references
@@ -139,7 +140,8 @@ Order:
 
 1. Ready - `tk-yqml` - live core-loop smoke refresh:
    - probe Fedora local-api first when free/reachable
-   - otherwise run OpenRouter `deepseek/deepseek-v3.2`
+   - otherwise run OpenRouter `deepseek/deepseek-v4-flash`
+   - rerun with `deepseek/deepseek-v4-pro` only for model-quality uncertainty
    - require real `bash` tool call, persisted resume, provider-history capture,
      and resumed follow-up containing prior tool history
 2. Blocked by `tk-yqml` - `tk-3wiq` - cancel/error/retry hardening:
@@ -549,6 +551,7 @@ For each code slice:
   `go test -race ./cmd/ion ./internal/app ./internal/backend/canto ./internal/backend/canto/tools ./internal/storage -count=1 -timeout 300s`
 - tmux text capture for TUI-affecting changes
 - Fedora `local-api/qwen3.6:27b-uncensored` live smoke when reachable;
-  OpenRouter `deepseek/deepseek-v3.2` is the cheap fallback
+  OpenRouter `deepseek/deepseek-v4-flash` is the cheap fallback and
+  `deepseek/deepseek-v4-pro` is the stronger escalation model
 
 Commit each coherent green slice. Do not push unless requested.

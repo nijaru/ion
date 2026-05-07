@@ -324,7 +324,7 @@ func TestClearCommandFallsBackToActiveRuntimeConfig(t *testing.T) {
 	oldBackend := stubBackend{
 		sess:     oldSession,
 		provider: "openrouter",
-		model:    "deepseek/deepseek-v3.2",
+		model:    "deepseek/deepseek-v4-flash",
 	}
 
 	model := New(
@@ -338,8 +338,8 @@ func TestClearCommandFallsBackToActiveRuntimeConfig(t *testing.T) {
 			if cfg.Provider != "openrouter" {
 				t.Fatalf("provider = %q, want openrouter", cfg.Provider)
 			}
-			if cfg.Model != "deepseek/deepseek-v3.2" {
-				t.Fatalf("model = %q, want deepseek/deepseek-v3.2", cfg.Model)
+			if cfg.Model != "deepseek/deepseek-v4-flash" {
+				t.Fatalf("model = %q, want deepseek/deepseek-v4-flash", cfg.Model)
 			}
 			newStorage := &stubStorageSession{id: "fresh-session"}
 			newBackend := testutil.New()
@@ -621,7 +621,8 @@ func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 		"/trust [status]",
 		"/quit, /exit",
 	}
-	wantCommands = append(wantCommands,
+	wantCommands = append(
+		wantCommands,
 		"Ctrl+P",
 		"Ctrl+X",
 		"Tab",

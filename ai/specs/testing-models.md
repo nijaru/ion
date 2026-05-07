@@ -100,7 +100,7 @@ Use this for most CI and local development.
 
 Default choice:
 
-- `deepseek/deepseek-v3.2`
+- `deepseek/deepseek-v4-flash`
 
 Why:
 
@@ -112,12 +112,12 @@ Why:
 
 Use as the manual alternate if a smoke failure looks model-quality related:
 
-- `openai/gpt-5.4-nano`
+- `deepseek/deepseek-v4-pro`
 
 Why:
 
-- similar cost to `minimax/minimax-m2.7`
-- slightly stronger on coding benchmarks
+- stronger than the Flash tier for agent tasks
+- currently discounted enough to use for ambiguous smoke failures
 - good manual retry model when the cheap tier gives an ambiguous failure
 
 ### Tier 3: Free experiment model
@@ -145,8 +145,8 @@ For automated smoke coverage:
 1. Probe Fedora local-api first when it is reachable and not in active use.
 2. If Fedora is unavailable or times out, run the OpenRouter fallback instead
    of deferring the gate.
-3. Use `deepseek/deepseek-v3.2` as the default OpenRouter fallback.
-4. If the fallback fails in a way that looks like model quality, rerun manually with `openai/gpt-5.4-nano`.
+3. Use `deepseek/deepseek-v4-flash` as the default OpenRouter fallback.
+4. If the fallback fails in a way that looks like model quality, rerun manually with `deepseek/deepseek-v4-pro`.
 5. If we want to experiment with an even cheaper path, try `stepfun/step-3.5-flash:free` manually.
 6. Do not expand live coverage into every provider/model pair; cover representative transitions instead.
 
@@ -165,13 +165,13 @@ For local validation:
 - Location: `cmd/ion/live_smoke_test.go`
 - Gate: `ION_LIVE_SMOKE=1`
 - Default provider: `openrouter`
-- Default model: `deepseek/deepseek-v3.2`
+- Default model: `deepseek/deepseek-v4-flash`
 - Optional overrides:
   - `ION_SMOKE_PROVIDER`
   - `ION_SMOKE_MODEL`
   - `ION_SMOKE_PROMPT`
 - Manual retry model when the cheap tier is ambiguous:
-  - `openai/gpt-5.4-nano`
+  - `deepseek/deepseek-v4-pro`
 - Local primary when Fedora is reachable/free:
   - provider `local-api`
   - model `qwen3.6:27b`

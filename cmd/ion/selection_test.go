@@ -571,7 +571,10 @@ func TestPrintStartupLeavesBlankRowBeforeFreshShell(t *testing.T) {
 
 func TestShortenHomePathRequiresPathBoundary(t *testing.T) {
 	home := filepath.Join(string(filepath.Separator), "Users", "nick")
-	if got := shortenHomePath(filepath.Join(home, "repo"), home); got != filepath.Join("~", "repo") {
+	if got := shortenHomePath(filepath.Join(home, "repo"), home); got != filepath.Join(
+		"~",
+		"repo",
+	) {
 		t.Fatalf("shortened home path = %q, want ~/repo", got)
 	}
 	sibling := filepath.Join(string(filepath.Separator), "Users", "nick2", "repo")
@@ -972,15 +975,15 @@ func TestSplitSessionModelName(t *testing.T) {
 func TestSyncSessionMetadata(t *testing.T) {
 	store := &metadataStore{}
 
-	if err := syncSessionMetadata(context.Background(), store, "sess-123", "openrouter/deepseek/deepseek-v3.2", "feature/handoff"); err != nil {
+	if err := syncSessionMetadata(context.Background(), store, "sess-123", "openrouter/deepseek/deepseek-v4-flash", "feature/handoff"); err != nil {
 		t.Fatalf("syncSessionMetadata returned error: %v", err)
 	}
 
 	if got := store.updated.ID; got != "sess-123" {
 		t.Fatalf("updated session ID = %q, want %q", got, "sess-123")
 	}
-	if got := store.updated.Model; got != "openrouter/deepseek/deepseek-v3.2" {
-		t.Fatalf("updated model = %q, want %q", got, "openrouter/deepseek/deepseek-v3.2")
+	if got := store.updated.Model; got != "openrouter/deepseek/deepseek-v4-flash" {
+		t.Fatalf("updated model = %q, want %q", got, "openrouter/deepseek/deepseek-v4-flash")
 	}
 	if got := store.updated.Branch; got != "feature/handoff" {
 		t.Fatalf("updated branch = %q, want %q", got, "feature/handoff")
