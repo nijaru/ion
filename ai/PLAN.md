@@ -4,11 +4,16 @@ Updated: 2026-05-06
 
 ## Current Focus
 
-The C6 core-loop hardening gates are green. C7 rebaseline changes the next
-target from "minimal like Pi" to **rough core feature parity with proven
-terminal agents**: Pi-level reliability and simplicity where it helps, plus the
-table-stakes workflows users expect from Claude Code, Codex CLI, Amp, and
-Droid when those workflows earn their complexity.
+The C6 core-loop hardening gates are green. C7 rebaseline sets the product
+roadmap as **Pi -> Pi+**:
+
+- **Pi parity:** reliable core terminal coding-agent workflows, not exact
+  command/API parity.
+- **Pi+:** a slightly more capable core where the extra capability is proven,
+  maintainable, and still keeps the default UX streamlined.
+- **Experimental/x:** extension, missions/goals, swarms, memory, routing, and
+  other power features that should not live in the default core until they earn
+  it.
 
 C8 is the active phase. The goal is a streamlined daily-driver core, not new
 power features. First remove or hide low-value mode/trust/approval surface from
@@ -17,8 +22,9 @@ parity, then dogfood the TUI against ordinary coding flows.
 
 Do not use C8 to add bash mode, `/goal`, `/side`, richer fork UI, background
 jobs, subagents, memory, skills, MCP, routing, prompt caching, remote sandboxes,
-or new model-visible tools. Those stay references until the core surface is
-stable and their maintenance cost is justified by usage or eval evidence.
+or new model-visible tools. Those belong in Pi+ follow-up slices or the later
+experimental/x lane only after the core surface is stable and their maintenance
+cost is justified by usage or eval evidence.
 
 Live-provider proof uses Fedora local-api first when it is free, then
 OpenRouter `deepseek/deepseek-v4-flash` fallback when Fedora is unavailable.
@@ -43,6 +49,7 @@ classify model-quality uncertainty.
 | C6 | Post-C5 core-agent smoke refresh and hardening | Done |
 | C7 | Post-C6 roadmap rebaseline and next-phase selection | Done |
 | C8 | Streamlined core feature parity and daily-driver closeout | Active |
+| C9 | Pi+ extension and missions design boundary | Deferred |
 | I5 | Add eval-driven optimization and SOTA experiments | Deferred |
 
 ## I0: Dirty Baseline And Context Hygiene
@@ -223,6 +230,29 @@ Acceptance:
 - live smoke via Fedora local-api or OpenRouter DeepSeek fallback when provider
   proof is in scope
 - no new power features during this phase
+
+## C9: Pi+ And Experimental Boundary
+
+Status: deferred.
+
+Goal: design how Ion grows past Pi without turning the default core into a
+large feature host. Treat this as stdlib vs x: a tiny core, a small set of
+well-supported built-ins, and an explicit lane for experiments/extensions.
+
+Deferred tasks:
+
+1. Blocked/P4 - `tk-b121` - extension stdlib boundary design:
+   - decide what belongs in core versus optional built-in extensions
+   - define extension command/tool gating, prompt-budget impact, trust/install
+     behavior, and test requirements
+2. Blocked/P4 - `tk-3o1r` - missions and durable goals design:
+   - compare Droid missions, Codex `/goal`, Jules-style long-running agents,
+     and swarm workflows
+   - require durable objective state, pause/resume, progress, budget, recovery,
+     and TUI/CLI semantics before adding a command
+
+C9 starts only after C8 is accepted. Background job/status substrate is the
+likely prerequisite for missions/goals.
 
 ## I2: Minimal Shell Polish
 

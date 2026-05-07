@@ -62,7 +62,9 @@ Findings:
 Ion implications:
 
 - "Pi parity" should mean feature/workflow parity with a reliable terminal
-  coding agent, not exact API or tool-schema parity.
+  coding agent, not exact API or tool-schema parity. The roadmap is Pi -> Pi+:
+  get the Pi-like core boring first, then add a small set of earned built-ins
+  or extension-backed features.
 - Ion can keep more than Pi's four default tools if they demonstrably improve
   policy, prompt clarity, display, and agent success. The eight-tool surface
   remains accepted until the C8 tool audit/eval proves a better shape.
@@ -70,8 +72,8 @@ Ion implications:
   into explicit status/settings/tool surfaces. Users need clear posture when
   they ask, not constant implementation labels.
 - Do not add bash mode, `/goal`, `/side`, background task commands, skills,
-  memory, routing, subagents, or sandbox expansion during C8. They are useful
-  references after core parity is boring.
+  memory, routing, subagents, missions, swarms, or sandbox expansion during C8.
+  They are useful Pi+/experimental references after core parity is boring.
 
 ### Command and fork delta, 2026-05-03
 

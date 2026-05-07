@@ -6,9 +6,18 @@ Updated: 2026-05-06
 
 Ion is a standalone terminal coding agent in the same category as Pi, Claude
 Code, Codex CLI, Amp, and Droid. The core product is a fast, reliable solo
-agent with a compact TUI and scriptable CLI. Ion does not need to be as minimal
-as Pi, but the default core should stay streamlined enough that every visible
-feature earns its maintenance cost.
+agent with a compact TUI and scriptable CLI.
+
+The roadmap is Pi -> Pi+:
+
+- **Pi parity:** reliable core workflows with a small surface.
+- **Pi+:** a slightly more capable core where the extra capability is proven,
+  maintainable, and worth the complexity.
+- **Experimental/x:** optional extension or research features that should not
+  burden the default core.
+
+Ion does not need to be as minimal as Pi, but the default core should stay
+streamlined enough that every visible feature earns its maintenance cost.
 
 Reference posture:
 
@@ -17,8 +26,8 @@ Reference posture:
   references.
 - Amp is a reference for queueing, pragmatic tool execution, and rule-based
   permission posture.
-- Droid is a reference for later custom/subagent workflows, not for the default
-  core closeout.
+- Droid is a reference for later missions/custom-agent workflows, not for the
+  default core closeout.
 - Canto is the framework layer; Ion is the product layer.
 
 ## Layering
@@ -98,6 +107,8 @@ What does not follow:
 - Do not expose more default tools because another framework supports them.
 - Do not reshape Ion around a generic hosted-agent platform; Ion is first a
   local terminal coding agent.
+- Do not turn every promising Pi extension, Droid mission, or Codex experiment
+  into an Ion core feature. Use an explicit Pi+ or experimental/x lane.
 
 ## Core Runtime Contract
 
@@ -292,10 +303,24 @@ Deferred product layers:
 - routing and workflow orchestration
 - cross-host sync, branching, rewind, and richer rollback
 - prompt optimization, eval loops, and provider/runtime caching
+- missions/goals, swarms, and long-running autonomous jobs
 
 These remain long-term goals. They should be reintroduced by clear boundaries
 after the baseline stays boring under deterministic, race, tmux, and live smoke
 gates.
+
+Long-term growth should prefer a stdlib/x split:
+
+- Core stays small: session runtime, TUI/CLI shell, default tools, compaction,
+  resume/continue, status, and safety boundaries.
+- Stdlib built-ins are supported, documented, and tested but may be opt-in:
+  skills, background jobs, richer fork views, and portable workflows.
+- Experimental/x features can explore missions/goals, swarms, memory mutation,
+  custom agents/droids, and extension marketplaces before promotion.
+
+Missions/goals are not prompt macros. A future `/goal` or mission surface needs
+durable objective state, pause/resume, progress, budget, recovery, and
+scriptable status before it belongs in the command catalog.
 
 Sandbox/trust direction:
 

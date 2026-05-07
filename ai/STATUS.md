@@ -146,9 +146,11 @@ Fast, lightweight terminal coding agent.
   consistently with the rest of Plane B.
 - C6 core hardening is complete: `tk-yqml`, `tk-3wiq`, `tk-89ww`, and
   `tk-vzdf` are closed.
-- `tk-szvc` is closed. C7 selected C8 as the next real phase: rough core
-  feature parity with proven terminal agents, not exact Pi cloning and not
-  broad feature expansion.
+- `tk-szvc` is closed. C7 selected C8 as the next real phase. Roadmap shape is
+  Pi -> Pi+: Pi is the core reliability/simplicity baseline, Pi+ is a small set
+  of earned table-stakes enhancements, and experimental/x is where extensions,
+  missions/goals, swarms, memory, routing, and similar ideas live before
+  promotion.
 - C8 priority sequence:
   1. `tk-1nx1` - streamline default mode and safety surface.
   2. `tk-c94e` - tool surface parity audit and eval.
@@ -161,7 +163,8 @@ Fast, lightweight terminal coding agent.
 - Current SOTA reference synthesis: Pi is the simplicity/reliability baseline;
   Codex and Claude show mature CLI/session/status/safety patterns; Amp supports
   queueing and rule-based tool permission pragmatism; Droid/custom-agent
-  workflows are useful later but not part of the default core closeout.
+  workflows and mission-like long-running agents are useful later but not part
+  of the default core closeout.
 
 ## Latest Evidence
 
