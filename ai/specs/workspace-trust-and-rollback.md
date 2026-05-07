@@ -62,7 +62,9 @@ Current checkpoint substrate:
 - created/untracked files: represented as `absent` before-state entries, so restore removes them
 - binary files: stored and restored as bytes with SHA-256 validation
 - directories: recorded as directory entries
-- first producer: native `write`, `edit`, and `multi_edit` tools create pre-change checkpoints and surface checkpoint IDs in tool results
+- first producer: native `write`, `edit`, and `multi_edit` tools create
+  pre-change checkpoints internally; routine tool results stay concise and do
+  not expose checkpoint IDs until rollback is a user-facing feature
 - no active `/rewind` command; the earlier preview/apply implementation was
   removed from the default TUI path while rollback remains deferred
 

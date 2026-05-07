@@ -109,7 +109,16 @@ func (e *Edit) Execute(ctx context.Context, args string) (string, error) {
 		return "", err
 	}
 
-	if err := root.WriteFile(relPath, []byte(newContent), 0o644); err != nil {
+	info, err := root.Stat(relPath)
+	if err != nil {
+		return "", err
+	}
+	tmpPath, err := writeEditTempFile(root, relPath, []byte(newContent), info.Mode().Perm())
+	if err != nil {
+		return "", err
+	}
+	if err := root.Rename(tmpPath, relPath); err != nil {
+		_ = root.Remove(tmpPath)
 		return "", err
 	}
 

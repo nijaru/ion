@@ -163,6 +163,9 @@ Fast, lightweight terminal coding agent.
   still create internal checkpoints, but model-visible results no longer expose
   byte counts or checkpoint IDs. This keeps transcript/provider history concise
   while preserving rollback substrate.
+- Second tool-surface cleanup: single-file `edit` now commits through the same
+  temp-file rename path as `multi_edit`, so targeted edits validate, checkpoint,
+  and then replace atomically while preserving executable file modes.
 - Core parity means workflows: reliable submit/stream/tools/cancel/error,
   durable sessions/resume/continue, context survival/compaction, compact TUI,
   scriptable CLI, and a small useful tool surface. It does not mean copying
