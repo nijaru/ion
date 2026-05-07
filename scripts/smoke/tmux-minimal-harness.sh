@@ -172,9 +172,11 @@ assert_visible_line_count_at_most "• Ready" 1
 assert_visible_separator_line_count_at_most 2
 
 if [[ "$LIVE" == "1" ]]; then
-  send_line 'Use the bash tool exactly once to run `echo ion-tmux-smoke`, then reply with the single word done.'
-  wait_contains "Bash(echo ion-tmux-smoke)" 90
-  wait_contains "ion-tmux-smoke" 90
+  send_line 'Use the bash tool exactly once to run `sleep 3; echo ion-tmux-smoke`, then reply with the single word done.'
+  wait_contains "Bash(sleep 3; echo ion-tmux-smoke)" 90
+  send_line "what happened?"
+  wait_contains "Queued follow-up" 30
+  wait_contains "› what happened?" 90
   wait_contains "Complete" 90
 
   start_ion "--continue"
