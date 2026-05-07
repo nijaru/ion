@@ -29,7 +29,7 @@ func TestLiveSmokeTurnAndToolCall(t *testing.T) {
 	t.Setenv("HOME", home)
 
 	provider := smokeEnv("ION_SMOKE_PROVIDER", "openrouter")
-	modelName := smokeEnv("ION_SMOKE_MODEL", "deepseek/deepseek-v3.2")
+	modelName := smokeEnv("ION_SMOKE_MODEL", "deepseek/deepseek-v4-flash")
 	prompt := smokeEnv(
 		"ION_SMOKE_PROMPT",
 		"Use the bash tool exactly once to run `echo ion-smoke`, then reply with the single word `done`.",
