@@ -4,9 +4,11 @@ Updated: 2026-05-07
 
 ## Current Focus
 
-C8 accepted Ion's Pi-level baseline. C9 is now the active planning lane:
-decide what belongs in Pi+ versus experimental/x before adding features. The
-roadmap remains **Pi -> Pi+**:
+C8 accepted Ion's Pi-level baseline, C9 closed the Pi+/experimental boundary,
+and C10 selected background job/status support as the first Pi+ substrate. C11
+is now the ready implementation lane: add that substrate without adding bash
+mode, `/goal`, missions, swarms, or agent jobs. The roadmap remains
+**Pi -> Pi+**:
 
 - **Pi parity:** reliable core terminal coding-agent workflows, not exact
   command/API parity.
@@ -16,11 +18,10 @@ roadmap remains **Pi -> Pi+**:
   other power features that should not live in the default core until they earn
   it.
 
-C9 should not implement bash mode, `/goal`, `/side`, richer fork UI,
-background jobs, subagents, memory, skills, MCP, routing, prompt caching,
-remote sandboxes, or new model-visible tools. It should classify these into
-core, Pi+, or experimental/x, and only then create implementation tasks with
-clear acceptance gates.
+C11 should implement only the accepted background job/status substrate. It
+should not add bash mode, `/goal`, `/side`, richer fork UI, subagents, memory,
+skills, MCP, routing, prompt caching, remote sandboxes, or new default
+model-visible tools.
 
 Live-provider proof uses Fedora local-api first when it is free, then
 OpenRouter `deepseek/deepseek-v4-flash` fallback when Fedora is unavailable.
@@ -45,7 +46,9 @@ classify model-quality uncertainty.
 | C6 | Post-C5 core-agent smoke refresh and hardening | Done |
 | C7 | Post-C6 roadmap rebaseline and next-phase selection | Done |
 | C8 | Streamlined core feature parity and daily-driver closeout | Accepted |
-| C9 | Pi+ boundary rebaseline before extension/missions work | Ready |
+| C9 | Pi+ boundary rebaseline before extension/missions work | Done |
+| C10 | Background job/status substrate design | Done |
+| C11 | Background job/status substrate implementation | Ready |
 | I5 | Add eval-driven optimization and SOTA experiments | Deferred |
 
 ## I0: Dirty Baseline And Context Hygiene
@@ -184,7 +187,7 @@ Ready task:
 
 ## C8: Streamlined Core Feature Parity
 
-Status: active.
+Status: accepted.
 
 Goal: make Ion's daily-driver core competitive with the proven terminal-agent
 baseline while keeping the codebase simpler than the current feature inventory.
@@ -238,18 +241,75 @@ Acceptance:
 
 ## C9: Pi+ And Experimental Boundary
 
-Status: ready.
+Status: done.
 
 Goal: design how Ion grows past Pi without turning the default core into a
 large feature host. Treat this as stdlib vs x: a tiny core, a small set of
 well-supported built-ins, and an explicit lane for experiments/extensions.
 
-Deferred tasks:
+Completed task:
 
-0. Blocked/P3 - `tk-4r2t` - Pi+ boundary rebaseline:
+0. Done/P3 - `tk-4r2t` - Pi+ boundary rebaseline:
    - define what can graduate from Pi-level core into Pi+
    - keep extension and mission work as design lanes until ownership, tests,
      prompt budget, and maintenance cost are clear
+
+Boundary for the next phase:
+
+| Lane | Belongs here | Current examples | Gate |
+| --- | --- | --- | --- |
+| Core | Daily-driver behavior Ion should always ship and keep boring | one native Canto path, eight default tools, compact TUI, scriptable CLI, durable sessions/resume/continue, compaction, `/fork`, `/tree`, status/settings | only regression fixes, simplification, or acceptance-gate hardening |
+| Pi+ | Small built-ins that improve common coding-agent work without bloating the prompt or shell | background job/status substrate, clearer fork/session workflow if dogfood proves it, opt-in skill/resource reads, executor environment hardening | focused design, prompt-budget impact, deterministic tests, tmux smoke, and live smoke if provider behavior is touched |
+| Experimental/x | Useful but higher-maintenance systems that need a host boundary before promotion | extension marketplace/mutation, missions/goals, swarms, memory mutation, routing/model orchestration, remote sandboxes/worktree forks, JSONL event stream | remain blocked until a Pi+ substrate exists and a concrete eval/use case proves value |
+
+Not-now list: bash mode, `/side`, `/clone` unless it becomes distinct from
+current-point `/fork`, merged edit tool, ripgo replacement, new default
+model-visible tools, prompt/KV cache, and feature work that only exists because
+another agent exposes it.
+
+Likely next Pi+ candidate after C9 is a background job/status substrate, not a
+bash mode. The useful product need is tracking long-running commands such as
+dev servers, tests, and build watchers; the TUI mode is optional and later.
+Missions/goals, swarms, and durable agent jobs should stay blocked until this
+substrate is designed and accepted.
+
+## C10: Background Job/Status Substrate
+
+Status: done.
+
+Goal: design the minimal substrate for long-running bash/dev commands before
+adding any bash mode, `/goal`, missions, swarms, or durable agent jobs.
+
+Completed task:
+
+1. Done/P3 - `tk-4wjb` - C10 background job/status substrate design:
+   - define ownership: whether jobs are tool execution state, session runtime
+     state, or a separate Ion job registry
+   - define TUI/CLI visibility: status rows, stop/cancel affordance, resumed
+     session behavior, and whether any slash command is needed
+   - define persistence expectations: which facts survive restart and which
+     process handles cannot
+   - define prompt-budget impact and keep the default tool surface unchanged
+     unless implementation evidence proves otherwise
+   - define deterministic, tmux, and live-smoke acceptance before any code
+     implementation starts
+
+## C11: Background Job/Status Implementation
+
+Status: ready.
+
+Ready task:
+
+1. Ready/P3 - `tk-0x8r` - C11 background job/status substrate implementation:
+   - keep one `bash` tool with explicit background actions
+   - store job handles in Ion live session runtime; do not promise process
+     survival across restart
+   - expose `/jobs` and `/stop <job-id>` only if they remain the minimal host
+     visibility surface
+   - do not add bash mode, `/goal`, missions, swarms, or extra default
+     model-visible tools
+
+Deferred design lanes:
 
 1. Blocked/P4 - `tk-b121` - extension stdlib boundary design:
    - decide what belongs in core versus optional built-in extensions
@@ -261,8 +321,8 @@ Deferred tasks:
    - require durable objective state, pause/resume, progress, budget, recovery,
      and TUI/CLI semantics before adding a command
 
-C9 starts only after C8 is accepted. Background job/status substrate is the
-likely prerequisite for missions/goals.
+C9 closed after C8 acceptance. Background job/status substrate is now the
+accepted prerequisite for missions/goals.
 
 ## I2: Minimal Shell Polish
 

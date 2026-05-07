@@ -1,6 +1,6 @@
 # ion Design
 
-Updated: 2026-05-06
+Updated: 2026-05-07
 
 ## Product Shape
 
@@ -18,6 +18,30 @@ The roadmap is Pi -> Pi+:
 
 Ion does not need to be as minimal as Pi, but the default core should stay
 streamlined enough that every visible feature earns its maintenance cost.
+
+## Pi+ Boundary
+
+C8 accepted the Pi-level core. C9 defines how Ion grows without turning that
+core into a large feature host.
+
+| Lane | Rule | Examples |
+| --- | --- | --- |
+| Core | Always-on workflows required for a reliable terminal coding agent | native Canto loop, eight default tools, compact TUI, scriptable CLI, durable sessions, resume/continue, compaction, current-point `/fork`, `/tree`, status/settings |
+| Pi+ | Small built-ins that improve common coding work and can be tested without prompt or shell bloat | background job/status substrate, clearer fork/session UX if dogfood requires it, opt-in resource/skill reads, executor environment hardening |
+| Experimental/x | Power features that need a host boundary, eval, or extension shape before promotion | missions/goals, swarms, memory mutation, routing/model orchestration, marketplace installs, remote sandboxes, worktree forks, JSONL event stream |
+
+Promotion rules:
+
+- A Pi+ candidate needs a focused design, explicit ownership, prompt-budget
+  impact, deterministic tests, tmux smoke, and live-provider proof when provider
+  behavior is touched.
+- Experimental/x work should not add commands, default tools, prompt text, or
+  always-on runtime hooks to core.
+- Background job/status is the likely first Pi+ substrate because it supports
+  long-running dev commands and is a prerequisite for missions/goals. Bash mode
+  is only a later UI affordance over that substrate, not a priority by itself.
+- `/goal`, missions, swarms, custom agents, and extension mutation remain
+  design-only until the supporting job/session/progress primitives are boring.
 
 Reference posture:
 

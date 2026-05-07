@@ -30,6 +30,19 @@ Distilled architectural principles plus recent decision log.
 
 ## Recent Log
 
+### 2026-05-07 - C9 defines the Pi+ promotion boundary
+
+C9 keeps the accepted Pi-level core frozen except for regressions,
+simplification, and acceptance-gate hardening. Pi+ is a small built-in lane for
+features that improve common coding-agent work without bloating the default
+prompt or shell; candidates need design, ownership, prompt-budget review,
+deterministic tests, tmux smoke, and live-provider proof when provider behavior
+is touched. Experimental/x remains the lane for missions/goals, swarms,
+extension mutation, memory mutation, routing, remote sandboxes, worktree forks,
+and JSONL event streaming until a concrete substrate and eval justify
+promotion. Background job/status is the likely first Pi+ substrate; bash mode is
+only a later UI affordance over that substrate.
+
 ### 2026-05-06 - C8 accepted as Pi-level baseline
 
 C8 is accepted as the current Pi-level daily-driver baseline: one native Canto

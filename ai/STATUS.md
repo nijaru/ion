@@ -2,9 +2,9 @@
 
 Fast, lightweight terminal coding agent.
 
-**Phase:** C9 Pi+ boundary rebaseline
-**Focus:** decide Pi+ versus experimental/x before adding features
-**Active task:** `tk-4r2t` ready
+**Phase:** C11 background job/status substrate implementation
+**Focus:** implement the first Pi+ substrate without adding bash mode or goals
+**Active task:** `tk-0x8r` ready
 **Updated:** 2026-05-07
 
 ## Current Truth
@@ -176,13 +176,21 @@ Fast, lightweight terminal coding agent.
   `Bash(sleep 3; echo ion-tmux-smoke)`, asserts the queued notice, verifies the
   queued turn is submitted, then resumes and proves the prior tool turn remains
   visible to the provider.
-- `tk-3o1r` missions/goals and `tk-b121` extension stdlib/x design are blocked
-  behind `tk-i1ab` and the new `tk-4r2t` C9 Pi+ boundary rebaseline. They
-  should not become implementation work until C8 is accepted and the Pi+/x
-  boundary is explicit.
-- C8 is accepted as the current Pi-level baseline. Next is `tk-4r2t`, a C9
-  design boundary pass that decides what belongs in Pi+ versus experimental/x
-  before any extension, mission, goal, swarm, memory, or routing work starts.
+- `tk-b121` extension stdlib/x design is unblocked but low priority.
+  `tk-3o1r` missions/goals remains blocked behind the C11 job/status substrate
+  because durable goals need a job/session/progress primitive first.
+- C8 is accepted as the current Pi-level baseline, and C9 is closed. The
+  boundary is now core/Pi+/experimental-x: core only gets regressions,
+  simplification, and acceptance-gate hardening; Pi+ gets small evidence-backed
+  built-ins; experimental/x holds missions, swarms, extension mutation, memory
+  mutation, routing, remote sandboxes, worktree forks, and JSONL streaming.
+- `tk-4wjb` is closed. C10 accepted background-job/status support as the first
+  Pi+ substrate: long-running dev commands need live job handles, compact
+  status, and stop/output control, but not bash mode, `/goal`, missions,
+  swarms, or durable agent jobs.
+- `tk-0x8r` is the ready implementation follow-up for that substrate. It should
+  keep one model-visible `bash` tool and must not add extra default
+  model-visible tools.
 - `tk-1nx1` is closed. Default shell chrome now hides low-value mode/sandbox
   posture: startup omits `Sandbox off`, the footer omits default `[EDIT]` and
   sandbox text, `/mode` remains dispatchable but hidden from help/picker, and

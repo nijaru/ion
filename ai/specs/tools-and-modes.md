@@ -199,11 +199,15 @@ Supporting infrastructure:
 
 ## Permission Modes And Trust
 
-## Background Bash Monitor
+## Background Job/Status Substrate
 
-Background bash is an I4 table-stakes workflow for dev servers, file watchers,
-and long-running test loops. The design target is useful Claude-like behavior
-without growing the default model-visible tool count.
+Background job/status support is the first Pi+ substrate candidate after C9.
+The product need is dev servers, file watchers, long-running tests, and build
+loops that should keep running while the user and model continue working. This
+is not bash mode and not a goal/mission system.
+
+The design target is useful Claude-like behavior without growing the default
+model-visible tool count.
 
 Direction:
 
@@ -217,20 +221,25 @@ Direction:
   - `kill` terminates a job id and its process group.
 - Keep ordinary foreground `bash` simple and compatible with the current command
   field. Background mode should be opt-in and obvious in the tool description.
-- Job state is live session state. Transcript rows record job ids and retrieved
-  output, but Ion does not promise that background processes survive app exit or
-  restart in the first implementation.
+- Job state is Ion-owned live session runtime state. Transcript rows record job
+  ids and retrieved output, but Ion does not promise that background processes
+  survive app exit or restart in the first implementation.
 - Background process execution uses the same workspace, policy category, and
   sandbox posture as foreground `bash`.
 - `Session.Close()` must kill any remaining background process groups.
+- Host visibility starts with `/jobs` and `/stop <job-id>` if implementation
+  proceeds. Do not add bash mode, `/goal`, missions, or agent jobs as part of
+  the first substrate.
 - TUI display stays compact by default:
   - `Bash(npm run dev) · background job bash-1`
   - `Bash(output bash-1) · 42 lines`
   - `Bash(kill bash-1)`
 
-Implementation should stay Ion-owned first. Canto only needs a new framework
-primitive if multiple tools need durable async task handles or if tool progress
-needs to outlive the hosting process.
+Implementation should stay Ion-owned first: the executor owns process groups,
+the session runtime owns job handles, and the renderer owns display. Canto only
+needs a new framework primitive if multiple tools need durable async task
+handles, if host-independent progress events are required, or if tool progress
+must outlive the hosting process.
 
 Acceptance criteria before implementation is considered done:
 
@@ -238,8 +247,12 @@ Acceptance criteria before implementation is considered done:
 - cancellation of a foreground turn does not orphan background jobs
 - closing the session kills remaining jobs
 - sandbox failures fail closed before job registration
+- `/jobs` and `/stop <job-id>` work without materializing a new durable session
+  before a real model turn
 - TUI/replay rows use the shared tool display formatter and do not dump routine
   output by default
+- no extra default model-visible tools are added and prompt-budget impact is
+  measured before merge
 
 ### Relationship to `/goal`
 
