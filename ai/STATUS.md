@@ -167,6 +167,10 @@ Fast, lightweight terminal coding agent.
   reflow artifacts are cleared while the renderer's internal frame is also
   reset. Focused app tests, tmux minimal harness, full deterministic tests, and
   the native race subset passed.
+- Live tmux smoke now waits for an assistant-only `ok-continued` marker instead
+  of a word that can appear in the submitted prompt. OpenRouter
+  `deepseek/deepseek-v4-flash` passed the hardened live path: bash tool turn,
+  `--continue` replay, and resumed follow-up.
 - `tk-1nx1` is closed. Default shell chrome now hides low-value mode/sandbox
   posture: startup omits `Sandbox off`, the footer omits default `[EDIT]` and
   sandbox text, `/mode` remains dispatchable but hidden from help/picker, and

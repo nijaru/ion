@@ -180,8 +180,9 @@ if [[ "$LIVE" == "1" ]]; then
   start_ion "--continue"
   assert_contains "--- resumed ---"
   assert_contains "ion-tmux-smoke"
-  send_line "reply continued if this resumed session contains ion-tmux-smoke, otherwise fresh"
-  wait_contains "continued" 90
+  send_line "Reply with exactly ok-continued if this resumed session contains ion-tmux-smoke, otherwise reply exactly ok-fresh."
+  wait_contains "• ok-continued" 90
+  wait_contains "Complete" 90
 fi
 
 capture
