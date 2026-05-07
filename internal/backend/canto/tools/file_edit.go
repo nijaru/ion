@@ -105,8 +105,7 @@ func (e *Edit) Execute(ctx context.Context, args string) (string, error) {
 		newContent = strings.Replace(strContent, oldString, newString, 1)
 	}
 
-	checkpointID, err := e.checkpointPaths(ctx, input.FilePath)
-	if err != nil {
+	if _, err := e.checkpointPaths(ctx, input.FilePath); err != nil {
 		return "", err
 	}
 
@@ -115,17 +114,12 @@ func (e *Edit) Execute(ctx context.Context, args string) (string, error) {
 	}
 
 	diff := udiff.Unified("a/"+input.FilePath, "b/"+input.FilePath, strContent, newContent)
-	return limitToolOutput(
-		appendCheckpointID(
-			fmt.Sprintf(
-				"Successfully replaced %d occurrence(s) in %s\n\n%s",
-				count,
-				input.FilePath,
-				diff,
-			),
-			checkpointID,
-		),
-	), nil
+	return limitToolOutput(fmt.Sprintf(
+		"Replaced %d occurrence(s) in %s.\n\n%s",
+		count,
+		input.FilePath,
+		diff,
+	)), nil
 }
 
 // MultiEdit tool
@@ -247,8 +241,7 @@ func (m *MultiEdit) Execute(ctx context.Context, args string) (string, error) {
 	}
 
 	paths := sortedMapKeys(contents)
-	checkpointID, err := m.checkpointPaths(ctx, paths...)
-	if err != nil {
+	if _, err := m.checkpointPaths(ctx, paths...); err != nil {
 		return "", err
 	}
 
@@ -291,17 +284,12 @@ func (m *MultiEdit) Execute(ctx context.Context, args string) (string, error) {
 		}
 	}
 
-	return limitToolOutput(
-		appendCheckpointID(
-			fmt.Sprintf(
-				"Successfully applied %d edit(s) across %d file(s)\n\n%s",
-				len(input.Edits),
-				len(contents),
-				diffs.String(),
-			),
-			checkpointID,
-		),
-	), nil
+	return limitToolOutput(fmt.Sprintf(
+		"Applied %d edit(s) across %d file(s).\n\n%s",
+		len(input.Edits),
+		len(contents),
+		diffs.String(),
+	)), nil
 }
 
 func sortedMapKeys(values map[string]string) []string {

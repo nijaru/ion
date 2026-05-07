@@ -287,7 +287,7 @@ func TestRenderWriteToolSummarizesByDefault(t *testing.T) {
 	entry := session.Entry{
 		Role:    session.Tool,
 		Title:   "write hello.md",
-		Content: "Successfully wrote 5 bytes to hello.md\nCheckpoint: 1777656162183207000-c25e58778d2941d5",
+		Content: "Wrote hello.md.",
 	}
 
 	got := ansi.Strip(model.renderEntry(entry))

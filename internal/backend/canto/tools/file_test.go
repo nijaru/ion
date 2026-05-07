@@ -39,8 +39,8 @@ func TestFileTools(t *testing.T) {
 		if err != nil {
 			t.Fatalf("write failed: %v", err)
 		}
-		if !strings.Contains(writeResult, "Checkpoint: ") {
-			t.Fatalf("write result missing checkpoint id: %q", writeResult)
+		if writeResult != "Wrote test.txt." {
+			t.Fatalf("write result = %q, want concise success", writeResult)
 		}
 
 		// Read full
@@ -293,8 +293,11 @@ func TestFileTools(t *testing.T) {
 		if err != nil {
 			t.Fatalf("multi_edit failed: %v", err)
 		}
-		if !strings.Contains(res, "Checkpoint: ") {
-			t.Fatalf("multi_edit result missing checkpoint id: %q", res)
+		if strings.Contains(res, "Checkpoint: ") {
+			t.Fatalf("multi_edit result leaked checkpoint id: %q", res)
+		}
+		if !strings.Contains(res, "Applied 2 edit(s) across 2 file(s).") {
+			t.Fatalf("multi_edit result = %q, want concise success", res)
 		}
 
 		// Verify content
