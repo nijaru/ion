@@ -80,13 +80,15 @@ func printLinesCmd(lines ...string) tea.Cmd {
 	return tea.Sequence(cmds...)
 }
 
-// clearVisibleScreenCmd clears only the visible inline frame after terminal
-// width shrink. Bubble Tea's ClearScreen clears its renderer buffer, but wide
-// lines already reflowed by the terminal/tmux can remain visible above the new
-// frame; this raw visible-screen clear removes those stale physical rows before
-// the next managed render.
+// clearVisibleScreenCmd clears the visible inline frame after terminal width
+// shrink, then asks Bubble Tea's renderer to discard its old frame. The raw
+// clear handles rows already reflowed by the terminal; ClearScreen keeps the
+// renderer state aligned for the next managed draw.
 func clearVisibleScreenCmd() tea.Cmd {
-	return tea.Raw(ansi.CursorHomePosition + ansi.EraseEntireScreen)
+	return tea.Sequence(
+		tea.Raw(ansi.CursorHomePosition+ansi.EraseEntireScreen),
+		tea.ClearScreen,
+	)
 }
 
 func (m Model) RenderEntries(entries ...session.Entry) []string {

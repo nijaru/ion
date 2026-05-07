@@ -162,6 +162,11 @@ Fast, lightweight terminal coding agent.
   `--session <id>`, `--resume <id>`, or `--continue`. Ion keeps final JSON
   output in the Pi-level core and defers JSONL event streaming until a
   concrete harness/integration needs it.
+- `tk-kx4r` dogfood found one more resize hardening issue. Width shrink now
+  sequences a raw visible clear with Bubble Tea `ClearScreen`, so terminal
+  reflow artifacts are cleared while the renderer's internal frame is also
+  reset. Focused app tests, tmux minimal harness, full deterministic tests, and
+  the native race subset passed.
 - `tk-1nx1` is closed. Default shell chrome now hides low-value mode/sandbox
   posture: startup omits `Sandbox off`, the footer omits default `[EDIT]` and
   sandbox text, `/mode` remains dispatchable but hidden from help/picker, and
