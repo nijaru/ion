@@ -44,6 +44,18 @@ type AgentSession interface {
 	Meta() map[string]string
 }
 
+type JobInfo struct {
+	ID          string
+	Command     string
+	Status      string
+	OutputBytes int
+}
+
+type JobSession interface {
+	Jobs() []JobInfo
+	StopJob(ctx context.Context, id string) (string, error)
+}
+
 type SteeringOutcome string
 
 const (

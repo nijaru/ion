@@ -159,6 +159,9 @@ assert_contains "bash, edit, glob, grep, list, multi_edit, read, write"
 assert_not_contains "eager"
 assert_not_contains "verify"
 
+send_line "/jobs"
+assert_contains "Background jobs: none"
+
 send_line "/settings"
 assert_contains "thinking"
 assert_contains "tool"

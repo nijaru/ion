@@ -119,6 +119,12 @@ type steeringStubSession struct {
 	err    error
 }
 
+type jobStubSession struct {
+	stubSession
+	jobs    []session.JobInfo
+	stopped []string
+}
+
 type stubApproval struct {
 	id string
 	ok bool
@@ -183,6 +189,15 @@ func (s *steeringStubSession) SteerTurn(
 		return session.SteeringResult{Outcome: session.SteeringAccepted}, nil
 	}
 	return s.result, nil
+}
+
+func (s *jobStubSession) Jobs() []session.JobInfo {
+	return s.jobs
+}
+
+func (s *jobStubSession) StopJob(ctx context.Context, id string) (string, error) {
+	s.stopped = append(s.stopped, id)
+	return "stopped " + id, nil
 }
 
 type stubStorageSession struct {

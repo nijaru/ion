@@ -82,7 +82,8 @@ func (m Model) sessionInfoNotice() (string, error) {
 	if branch := strings.TrimSpace(m.App.Branch); branch != "" {
 		lines = append(lines, "branch: "+branch)
 	}
-	lines = append(lines,
+	lines = append(
+		lines,
 		fmt.Sprintf("messages: user %d, assistant %d, tools %d, total %d",
 			counts.user, counts.agent, counts.tool, counts.total),
 		fmt.Sprintf("tokens: input %d, output %d, total %d",
@@ -158,4 +159,25 @@ func sessionTreeLine(info storage.SessionInfo, currentID string) string {
 		parts = append(parts, age)
 	}
 	return strings.Join(parts, " - ")
+}
+
+func backgroundJobsNotice(jobs []session.JobInfo) string {
+	if len(jobs) == 0 {
+		return "Background jobs: none"
+	}
+	lines := []string{"Background jobs"}
+	for _, job := range jobs {
+		command := strings.TrimSpace(job.Command)
+		if command == "" {
+			command = "(unknown command)"
+		}
+		lines = append(lines, fmt.Sprintf(
+			"- %s [%s] %s (%d bytes)",
+			job.ID,
+			job.Status,
+			command,
+			job.OutputBytes,
+		))
+	}
+	return strings.Join(lines, "\n")
 }

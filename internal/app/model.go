@@ -72,6 +72,10 @@ type sessionCostMsg struct {
 	notice string
 }
 
+type localEntriesMsg struct {
+	entries []session.Entry
+}
+
 type gitDiffStatsMsg struct {
 	workdir string
 	stats   string
@@ -829,6 +833,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case localErrorMsg:
 		return m.handleLocalError(msg.err)
+
+	case localEntriesMsg:
+		return m, m.printEntries(msg.entries...)
 
 	case queuedTurnMsg:
 		next, cmd := m.submitText(msg.text)

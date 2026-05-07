@@ -231,6 +231,38 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 			session.Entry{Role: session.System, Content: runtimeStatusSummary(m)},
 		)
 
+	case "/jobs":
+		if len(fields) != 1 {
+			return m, cmdError("usage: /jobs")
+		}
+		jobs, ok := m.Model.Session.(session.JobSession)
+		if !ok {
+			return m, cmdError("background jobs are unavailable for this backend")
+		}
+		return m, m.printEntries(
+			session.Entry{Role: session.System, Content: backgroundJobsNotice(jobs.Jobs())},
+		)
+
+	case "/stop":
+		if len(fields) != 2 {
+			return m, cmdError("usage: /stop <job-id>")
+		}
+		jobs, ok := m.Model.Session.(session.JobSession)
+		if !ok {
+			return m, cmdError("background jobs are unavailable for this backend")
+		}
+		id := fields[1]
+		return m, func() tea.Msg {
+			notice, err := jobs.StopJob(context.Background(), id)
+			if err != nil {
+				return localErrorMsg{err: err}
+			}
+			return localEntriesMsg{entries: []session.Entry{{
+				Role:    session.System,
+				Content: notice,
+			}}}
+		}
+
 	case "/fork":
 		if m.Model.Storage == nil || !storage.IsMaterialized(m.Model.Storage) {
 			return m, cmdError("No active session to fork yet")

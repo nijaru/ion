@@ -27,6 +27,7 @@ type Backend struct {
 	ionStore   storage.Store
 	sess       storage.Session
 	tools      *tool.Registry
+	bash       *tools.Bash
 	compactLLM llm.Provider
 	steering   *steeringMutator
 

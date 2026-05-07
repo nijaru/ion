@@ -11,7 +11,8 @@ func helpText() string {
 		"",
 	}
 	lines = append(lines, slashCommandHelpLines()...)
-	lines = append(lines,
+	lines = append(
+		lines,
 		"",
 		"keys",
 		"",
@@ -184,6 +185,19 @@ func slashCommandDefinitions() []slashCommandInfo {
 			detail:     "runtime status",
 			helpLabel:  "/status",
 			helpDetail: "show runtime, tools, and safety posture",
+		},
+		{
+			name:       "/jobs",
+			detail:     "background jobs",
+			helpLabel:  "/jobs",
+			helpDetail: "show background jobs",
+		},
+		{
+			name:       "/stop",
+			detail:     "stop background job",
+			helpLabel:  "/stop <job-id>",
+			helpDetail: "stop a background job",
+			idle:       slashCommandIdleWithArgs,
 		},
 		{
 			name:   "/mode",

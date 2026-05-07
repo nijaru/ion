@@ -87,6 +87,111 @@ func TestBash_Execute(t *testing.T) {
 	})
 }
 
+func TestBashBackgroundJobLifecycle(t *testing.T) {
+	b := NewBash(t.TempDir())
+	t.Cleanup(b.Close)
+
+	start, err := b.Execute(
+		t.Context(),
+		`{"command":"printf start; sleep 10","background":true}`,
+	)
+	if err != nil {
+		t.Fatalf("start background: %v", err)
+	}
+	if !strings.Contains(start, "background job bash-1 started") {
+		t.Fatalf("start result = %q", start)
+	}
+
+	jobs := b.Jobs()
+	if len(jobs) != 1 {
+		t.Fatalf("jobs = %d, want 1", len(jobs))
+	}
+	if jobs[0].ID != "bash-1" || jobs[0].Status != "running" {
+		t.Fatalf("job = %+v, want running bash-1", jobs[0])
+	}
+
+	var output string
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		output, err = b.Execute(t.Context(), `{"action":"output","job_id":"bash-1"}`)
+		if err != nil {
+			t.Fatalf("output background: %v", err)
+		}
+		if strings.Contains(output, "start") {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !strings.Contains(output, "background job bash-1 running") ||
+		!strings.Contains(output, "start") {
+		t.Fatalf("output = %q, want status and command output", output)
+	}
+
+	stop, err := b.Execute(t.Context(), `{"action":"kill","job_id":"bash-1"}`)
+	if err != nil {
+		t.Fatalf("kill background: %v", err)
+	}
+	if stop != "background job bash-1 stopped" {
+		t.Fatalf("stop = %q", stop)
+	}
+	if jobs := b.Jobs(); len(jobs) != 1 || jobs[0].Status != "stopped" {
+		t.Fatalf("jobs after stop = %+v, want stopped job", jobs)
+	}
+}
+
+func TestBashBackgroundOutputTail(t *testing.T) {
+	b := NewBash(t.TempDir())
+	t.Cleanup(b.Close)
+
+	if _, err := b.Execute(
+		t.Context(),
+		`{"command":"printf 'one\ntwo\nthree\n'","background":true}`,
+	); err != nil {
+		t.Fatalf("start background: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		jobs := b.Jobs()
+		if len(jobs) == 1 && jobs[0].Status == "done" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	output, err := b.Execute(
+		t.Context(),
+		`{"action":"output","job_id":"bash-1","tail_lines":2}`,
+	)
+	if err != nil {
+		t.Fatalf("output background: %v", err)
+	}
+	if !strings.HasSuffix(output, "two\nthree\n") {
+		t.Fatalf("tail output = %q, want last two lines", output)
+	}
+}
+
+func TestBashCloseStopsBackgroundJobs(t *testing.T) {
+	b := NewBash(t.TempDir())
+	if _, err := b.Execute(
+		t.Context(),
+		`{"command":"sleep 10","background":true}`,
+	); err != nil {
+		t.Fatalf("start background: %v", err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		b.Close()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close did not stop background job promptly")
+	}
+}
+
 func TestBashStripsProviderCredentialsWhenConfigured(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "secret")
 	t.Setenv("ION_TEST_VISIBLE", "visible")
@@ -121,7 +226,7 @@ func TestFilterEnvironmentPreservesNonCredentials(t *testing.T) {
 func TestBash_WorkingDirectory(t *testing.T) {
 	tmpDir := t.TempDir()
 	subdir := "testdir"
-	os.Mkdir(tmpDir+"/"+subdir, 0755)
+	os.Mkdir(tmpDir+"/"+subdir, 0o755)
 
 	b := NewBash(tmpDir)
 	args := `{"command": "ls -d testdir"}`

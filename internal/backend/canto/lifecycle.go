@@ -66,7 +66,9 @@ func (b *Backend) Open(ctx context.Context) error {
 	registry := tool.NewRegistry()
 	b.tools = registry
 
-	registry.Register(tools.NewBashWithEnvironment(cwd, b.executorEnvironmentPolicy()))
+	bashTool := tools.NewBashWithEnvironment(cwd, b.executorEnvironmentPolicy())
+	b.bash = bashTool
+	registry.Register(bashTool)
 	registry.Register(&tools.Read{FileTool: *tools.NewFileTool(cwd)})
 	registry.Register(&tools.Write{FileTool: *tools.NewFileTool(cwd)})
 	registry.Register(&tools.Edit{FileTool: *tools.NewFileTool(cwd)})
@@ -154,6 +156,9 @@ func (b *Backend) Close() error {
 		}
 		if harness != nil {
 			harness.Close()
+		}
+		if b.bash != nil {
+			b.bash.Close()
 		}
 		b.wg.Wait()
 		close(b.events)

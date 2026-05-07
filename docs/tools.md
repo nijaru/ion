@@ -38,11 +38,12 @@ Explicit `seatbelt` and `bubblewrap` modes fail closed when their backend is
 unavailable. `auto` uses the platform backend when present and reports when it
 falls back to `off`.
 
-Background bash is planned as a same-tool extension rather than new default
-tools: `bash` will eventually support foreground runs, background job starts,
-job output reads, and job kills with the same policy and sandbox posture. Until
-that lands, long-running commands should still be run carefully with explicit
-timeouts or in a user-managed terminal.
+Background jobs are a same-tool extension rather than new default tools:
+`bash` supports normal foreground runs, background job starts, job output
+reads, and job kills with the same policy and sandbox posture. Ion keeps live
+job handles in the active session runtime; it does not promise that background
+processes survive app exit or restart. Use `/jobs` to list live jobs and
+`/stop <job-id>` to stop one from the TUI.
 
 Approval tiers remain deliberately small:
 
