@@ -1,11 +1,12 @@
 # Ion Roadmap
 
-Updated: 2026-05-06
+Updated: 2026-05-07
 
 ## Current Focus
 
-The C6 core-loop hardening gates are green. C7 rebaseline sets the product
-roadmap as **Pi -> Pi+**:
+C8 accepted Ion's Pi-level baseline. C9 is now the active planning lane:
+decide what belongs in Pi+ versus experimental/x before adding features. The
+roadmap remains **Pi -> Pi+**:
 
 - **Pi parity:** reliable core terminal coding-agent workflows, not exact
   command/API parity.
@@ -15,16 +16,11 @@ roadmap as **Pi -> Pi+**:
   other power features that should not live in the default core until they earn
   it.
 
-C8 is the active phase. The goal is a streamlined daily-driver core, not new
-power features. First remove or hide low-value mode/trust/approval surface from
-the default UX, then audit the model-visible tool set, then close CLI/session
-parity, then dogfood the TUI against ordinary coding flows.
-
-Do not use C8 to add bash mode, `/goal`, `/side`, richer fork UI, background
-jobs, subagents, memory, skills, MCP, routing, prompt caching, remote sandboxes,
-or new model-visible tools. Those belong in Pi+ follow-up slices or the later
-experimental/x lane only after the core surface is stable and their maintenance
-cost is justified by usage or eval evidence.
+C9 should not implement bash mode, `/goal`, `/side`, richer fork UI,
+background jobs, subagents, memory, skills, MCP, routing, prompt caching,
+remote sandboxes, or new model-visible tools. It should classify these into
+core, Pi+, or experimental/x, and only then create implementation tasks with
+clear acceptance gates.
 
 Live-provider proof uses Fedora local-api first when it is free, then
 OpenRouter `deepseek/deepseek-v4-flash` fallback when Fedora is unavailable.

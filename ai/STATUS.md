@@ -5,7 +5,7 @@ Fast, lightweight terminal coding agent.
 **Phase:** C9 Pi+ boundary rebaseline
 **Focus:** decide Pi+ versus experimental/x before adding features
 **Active task:** `tk-4r2t` ready
-**Updated:** 2026-05-06
+**Updated:** 2026-05-07
 
 ## Current Truth
 
