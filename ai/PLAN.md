@@ -216,12 +216,14 @@ Order:
    - review the current eight tools against Pi/Claude/Codex/Amp/Droid evidence
    - decide whether search/list/edit should stay as-is or be reshaped
    - do not add tools without eval and prompt-budget evidence
-3. Active - `tk-j8sc` - CLI and session parity closeout:
+3. Done - `tk-j8sc` - CLI and session parity closeout:
    - audit `-p`, stdin, JSON/JSONL decision, `--continue`, `--resume <id>`,
      `--session`, `--no-session`, resume hints, and session picker clarity
    - first slice: explicit `--session <id>` plus ephemeral `--no-session`
      policy without changing the native loop
-4. Blocked - `tk-kx4r` - TUI daily-driver parity dogfood:
+   - final JSON stays in the Pi-level scriptable core; JSONL event streaming is
+     deferred until a concrete harness/integration needs it
+4. Ready - `tk-kx4r` - TUI daily-driver parity dogfood:
    - tmux/dogfood fresh launch, tool turn, queued input, command picker,
      live settings update, resume, resize, transcript readability, compact tools
 

@@ -3,8 +3,8 @@
 Fast, lightweight terminal coding agent.
 
 **Phase:** C8 streamlined core feature parity
-**Focus:** CLI and session parity closeout after the tool-surface audit
-**Active task:** `tk-j8sc` active
+**Focus:** TUI daily-driver parity dogfood after CLI/session closeout
+**Active task:** `tk-kx4r` ready
 **Updated:** 2026-05-06
 
 ## Current Truth
@@ -153,13 +153,15 @@ Fast, lightweight terminal coding agent.
   promotion.
 - C8 priority sequence:
   1. Done - `tk-c94e` - tool surface parity audit and eval.
-  2. Active - `tk-j8sc` - CLI and session parity closeout.
-  3. `tk-kx4r` - TUI daily-driver parity dogfood.
-- First `tk-j8sc` slice adds explicit scriptable session policy:
-  `--session <id>` targets a known durable session, and `--no-session` runs
-  against an in-memory ephemeral store with no resume hint on exit. It cannot
-  be combined with resume/continue/session-picker or session bundle
-  import/export.
+  2. Done - `tk-j8sc` - CLI and session parity closeout.
+  3. Ready - `tk-kx4r` - TUI daily-driver parity dogfood.
+- `tk-j8sc` is closed. Scriptable session policy is explicit:
+  `--session <id>` targets a known durable session; `--no-session` runs
+  against an in-memory ephemeral store with no resume hint on exit; session
+  selectors are mutually exclusive; and portable session export accepts
+  `--session <id>`, `--resume <id>`, or `--continue`. Ion keeps final JSON
+  output in the Pi-level core and defers JSONL event streaming until a
+  concrete harness/integration needs it.
 - `tk-1nx1` is closed. Default shell chrome now hides low-value mode/sandbox
   posture: startup omits `Sandbox off`, the footer omits default `[EDIT]` and
   sandbox text, `/mode` remains dispatchable but hidden from help/picker, and

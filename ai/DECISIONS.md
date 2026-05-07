@@ -30,6 +30,16 @@ Distilled architectural principles plus recent decision log.
 
 ## Recent Log
 
+### 2026-05-06 - C8 defers JSONL until a concrete harness needs it
+
+Ion's Pi-level scriptable surface keeps text and final JSON output. JSONL event
+streaming is useful for richer automation and eval harnesses, but it would need
+stable event naming, partial-delta semantics, tool lifecycle records, error
+settlement, and compatibility across TUI, print mode, ACP, and future headless
+hosts. Do not add that maintenance surface during C8. Reopen when a concrete
+harness integration or eval runner needs event streaming rather than final
+turn results.
+
 ### 2026-05-06 - C8 adds explicit session policy flags
 
 Ion now treats scriptable session policy as part of Pi-level parity. Use
