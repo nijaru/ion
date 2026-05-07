@@ -27,7 +27,7 @@ func (r *Read) Spec() llm.Spec {
 				},
 				"offset": map[string]any{
 					"type":        "integer",
-					"description": "Line number to start reading from (0-indexed).",
+					"description": "Line number to start reading from (1-indexed).",
 				},
 				"limit": map[string]any{
 					"type":        "integer",
@@ -70,7 +70,11 @@ func (r *Read) Execute(ctx context.Context, args string) (string, error) {
 		return "", err
 	}
 
-	return limitToolOutput(numberedLines(string(content), input.Offset, input.Limit)), nil
+	start := 0
+	if input.Offset > 0 {
+		start = input.Offset - 1
+	}
+	return limitToolOutput(numberedLines(string(content), start, input.Limit)), nil
 }
 
 func numberedLines(content string, offset, limit int) string {

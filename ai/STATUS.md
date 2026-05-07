@@ -166,6 +166,9 @@ Fast, lightweight terminal coding agent.
 - Second tool-surface cleanup: single-file `edit` now commits through the same
   temp-file rename path as `multi_edit`, so targeted edits validate, checkpoint,
   and then replace atomically while preserving executable file modes.
+- Third tool-surface cleanup: `read.offset` is now described and interpreted as
+  1-indexed to match the line numbers shown in tool output. `offset: 0` still
+  starts at the beginning as an external-boundary convenience.
 - Core parity means workflows: reliable submit/stream/tools/cancel/error,
   durable sessions/resume/continue, context survival/compaction, compact TUI,
   scriptable CLI, and a small useful tool surface. It does not mean copying

@@ -43,7 +43,7 @@ contracts for agent loop, tool lifecycle, approvals, and provider history.
 
 | Area | Canto primitive | Ion decision |
 |---|---|---|
-| `read` | `coding.ReadFileTool` | Keep Ion wrapper: tool name is shorter, output has stable line numbers, offset/limit, BOM/CRLF display cleanup, and Ion display compaction. |
+| `read` | `coding.ReadFileTool` | Keep Ion wrapper: tool name is shorter, output has stable 1-indexed line numbers, 1-indexed offset/limit, BOM/CRLF display cleanup, and Ion display compaction. |
 | `write` | `coding.WriteFileTool` | Keep Ion wrapper: Ion needs checkpoints, TUI diff/display policy, and product-specific success output. |
 | `edit` / `multi_edit` | `coding.EditTool`, `coding.MultiEditTool` | Keep Ion wrapper: Ion has `old_string`/`new_string`, CRLF/BOM matching, `replace_all`, `expected_replacements`, line-numbered ambiguity/count errors, checkpoints, and unified diff output. |
 | `list` | `coding.ListDirTool` | Keep Ion wrapper: model-facing name/output are already tuned and mode-filtered with the rest of the read tool set. |
