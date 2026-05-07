@@ -1,6 +1,6 @@
 ---
 date: 2026-04-27
-summary: Focused Pi/Codex/Claude reference delta for Ion CLI, command, fork, and goal behavior.
+summary: Focused Pi/Codex/Claude/Amp/Droid reference delta for Ion CLI, tools, command, fork, and core parity behavior.
 status: active
 ---
 
@@ -20,6 +20,58 @@ Recent Ion changes already close the most obvious CLI gaps against Pi and Codex:
 - Fedora/local-api can run a live bash-tool smoke without duplicating endpoint config.
 
 ## Reference Findings
+
+### Core parity rebaseline, 2026-05-06
+
+Sources:
+- `/Users/nick/github/badlogic/pi-mono/packages/coding-agent/src/core/system-prompt.ts:87`
+- `/Users/nick/github/badlogic/pi-mono/packages/coding-agent/src/cli/args.ts:202`
+- <https://code.claude.com/docs/en/commands>
+- <https://code.claude.com/docs/en/tools-reference>
+- <https://developers.openai.com/codex/cli/slash-commands>
+- <https://developers.openai.com/codex/noninteractive>
+- <https://ampcode.com/manual>
+- <https://ampcode.com/notes/permissions>
+- <https://docs.factory.ai/cli/getting-started/overview>
+- <https://factory.mintlify.app/cli/configuration/custom-droids>
+
+Findings:
+
+- Pi's default prompt surface starts from `read`, `bash`, `edit`, and `write`,
+  while optional `grep`, `find`, and `ls` are preferred over bash when enabled.
+  Its CLI also exposes `--tools`, `--no-tools`, `--no-builtin-tools`,
+  `--continue`, `--resume`, `--session`, `--fork`, `--no-session`, and JSON/RPC
+  modes.
+- Claude Code's current command catalog is very broad. The useful core signal
+  for Ion is not the full list; it is mature handling of `/clear`/`/new`,
+  `/compact`, `/branch`/`/fork`, `/resume`, `/model`, `/status`,
+  `/permissions`, compact tool display, skills as optional commands, and
+  background tasks as a later layer.
+- Codex CLI likewise has a broad catalog, but the core signals are strong:
+  slash commands can queue while a turn is running, `/status` summarizes model,
+  approval, writable roots, and context capacity, `codex exec` is the scriptable
+  path, JSONL event output exists for automation, and `exec resume` can target a
+  prior session ID.
+- Amp reinforces a pragmatic default: queued messages are normal, tools and
+  shell commands are central, default approval prompts are low-noise, and
+  permission rules are inspectable when users need them.
+- Droid/Factory reinforces that custom droids/subagents are useful power
+  workflows, especially with restricted tool lists and model choice, but that
+  layer is not required for Ion's default core closeout.
+
+Ion implications:
+
+- "Pi parity" should mean feature/workflow parity with a reliable terminal
+  coding agent, not exact API or tool-schema parity.
+- Ion can keep more than Pi's four default tools if they demonstrably improve
+  policy, prompt clarity, display, and agent success. The eight-tool surface
+  remains accepted until the C8 tool audit/eval proves a better shape.
+- Mode/trust/approval details should move out of startup/default chrome and
+  into explicit status/settings/tool surfaces. Users need clear posture when
+  they ask, not constant implementation labels.
+- Do not add bash mode, `/goal`, `/side`, background task commands, skills,
+  memory, routing, subagents, or sandbox expansion during C8. They are useful
+  references after core parity is boring.
 
 ### Command and fork delta, 2026-05-03
 

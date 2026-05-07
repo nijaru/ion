@@ -1,18 +1,24 @@
 # ion Design
 
-Updated: 2026-05-03
+Updated: 2026-05-06
 
 ## Product Shape
 
 Ion is a standalone terminal coding agent in the same category as Pi, Claude
-Code, and Codex. The core product is a fast, reliable solo agent with a minimal
-TUI and scriptable CLI. Advanced capabilities are built around that core, not
-inside it.
+Code, Codex CLI, Amp, and Droid. The core product is a fast, reliable solo
+agent with a compact TUI and scriptable CLI. Ion does not need to be as minimal
+as Pi, but the default core should stay streamlined enough that every visible
+feature earns its maintenance cost.
 
 Reference posture:
 
-- Pi is the reliability and simplicity floor.
-- Claude Code and Codex are UX, CLI, session, and tool-quality references.
+- Pi is the reliability and simplicity floor, not an API to clone.
+- Claude Code and Codex are UX, CLI, session, safety-boundary, and tool-quality
+  references.
+- Amp is a reference for queueing, pragmatic tool execution, and rule-based
+  permission posture.
+- Droid is a reference for later custom/subagent workflows, not for the default
+  core closeout.
 - Canto is the framework layer; Ion is the product layer.
 
 ## Layering
@@ -122,7 +128,8 @@ Ion must not create a second provider-visible transcript writer. Storage and
 rendering may add display rows, but Canto-derived durable history is the source
 for model requests.
 
-The current refactor target is a minimal core, not a broader harness platform:
+The current refactor target is a streamlined core, not a broader harness
+platform:
 
 ```text
 input -> runtime session -> stream/tool events -> durable log -> replay/follow-up
@@ -131,9 +138,17 @@ input -> runtime session -> stream/tool events -> durable log -> replay/follow-u
 Everything outside that line is opt-in or deferred until the line is boring
 under deterministic, race, tmux, and live-provider gates.
 
+Core feature parity means Ion should cover the proven daily-driver workflows:
+prompting, streaming, tool execution, structured edits, verification through
+shell, queued follow-up, cancel/error recovery, compaction, durable sessions,
+resume/continue, branch/fork basics, status inspection, compact transcript, and
+scriptable CLI. It does not mean copying another agent's command catalog,
+extension ecosystem, permission taxonomy, or hosted workflow layer.
+
 ## Tool Surface
 
-The P1 native tool surface is intentionally small:
+The P1 native tool surface is intentionally small enough to reason about, but
+not constrained to Pi's four default tools:
 
 ```text
 bash, read, write, edit, multi_edit, list, grep, glob
@@ -156,15 +171,19 @@ Rules:
 - Open-ended user questions remain normal assistant messages for now. A future
   `ask_user` tool should wait for a Canto-level elicitation primitive so it can
   pause/resume safely across TUI, CLI, ACP, and noninteractive hosts.
+- C8 will audit this surface against Pi, Claude Code, Codex CLI, Amp, and Droid
+  before reshaping it. Any reduction or merge should be eval-backed; any
+  addition should be treated as a high bar because model-visible tools bloat the
+  prompt and maintenance surface.
 
 Canonical behavior lives in `ai/specs/tools-and-modes.md` and
 `ai/specs/system-prompt.md`.
 
 ## TUI And CLI Shell
 
-The TUI should feel closer to Pi, Claude Code, and Codex than to a dashboard:
-flat transcript, compact tool rows, clear progress, minimal settings, and
-predictable slash commands.
+The TUI should feel closer to Pi, Claude Code, Codex, and Amp than to a
+dashboard: flat transcript, compact tool rows, clear progress, minimal default
+chrome, and predictable slash commands.
 
 Important boundaries:
 
@@ -211,7 +230,9 @@ second transcript writer or a hidden subagent system.
 
 One command catalog remains the source for dispatch, help, picker rows,
 autocomplete, active-turn availability, and feature visibility. Deferred
-commands should not leak into help or completion.
+commands should not leak into help or completion. C8 should bias toward fewer
+visible commands and clearer status surfaces rather than exposing every
+implemented subsystem.
 
 Scriptable CLI is first-class:
 

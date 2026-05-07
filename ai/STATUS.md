@@ -2,9 +2,9 @@
 
 Fast, lightweight terminal coding agent.
 
-**Phase:** C7 roadmap rebaseline
-**Focus:** choose the next real phase after C6 core hardening
-**Active task:** `tk-szvc` ready
+**Phase:** C8 streamlined core feature parity
+**Focus:** simplify the default daily-driver core before adding power features
+**Active task:** `tk-1nx1` ready
 **Updated:** 2026-05-06
 
 ## Current Truth
@@ -145,9 +145,23 @@ Fast, lightweight terminal coding agent.
   wider than the wrap-safe live shell. Composer layout now uses `shellWidth()`
   consistently with the rest of Plane B.
 - C6 core hardening is complete: `tk-yqml`, `tk-3wiq`, `tk-89ww`, and
-  `tk-vzdf` are closed. `tk ready` now points at `tk-szvc`, a post-C6 roadmap
-  rebaseline task to choose the next real phase instead of letting an empty
-  task graph drift.
+  `tk-vzdf` are closed.
+- `tk-szvc` is closed. C7 selected C8 as the next real phase: rough core
+  feature parity with proven terminal agents, not exact Pi cloning and not
+  broad feature expansion.
+- C8 priority sequence:
+  1. `tk-1nx1` - streamline default mode and safety surface.
+  2. `tk-c94e` - tool surface parity audit and eval.
+  3. `tk-j8sc` - CLI and session parity closeout.
+  4. `tk-kx4r` - TUI daily-driver parity dogfood.
+- Core parity means workflows: reliable submit/stream/tools/cancel/error,
+  durable sessions/resume/continue, context survival/compaction, compact TUI,
+  scriptable CLI, and a small useful tool surface. It does not mean copying
+  Pi's exact command names, tool schema, or no-permissions posture.
+- Current SOTA reference synthesis: Pi is the simplicity/reliability baseline;
+  Codex and Claude show mature CLI/session/status/safety patterns; Amp supports
+  queueing and rule-based tool permission pragmatism; Droid/custom-agent
+  workflows are useful later but not part of the default core closeout.
 
 ## Latest Evidence
 
@@ -210,8 +224,8 @@ Fast, lightweight terminal coding agent.
   `x/testing.FauxProvider` and removed the obsolete boolean reasoning
   capability test field. Gates passed: focused Canto-boundary Ion tests,
   `go vet ./...`, `go test ./... -count=1 -timeout 300s`, `go build ./...`,
-  native race subset, `scripts/smoke/tmux-minimal-harness.sh`, and OpenRouter
-  `deepseek/deepseek-v3.2` live smoke. The live smoke proved real `bash` tool
+  native race subset, `scripts/smoke/tmux-minimal-harness.sh`, and the
+  then-configured OpenRouter live smoke. The live smoke proved real `bash` tool
   call, persisted resume, follow-up `continued`, and provider-history ordering
   `first_user=1 tool_call=2 tool_result=3 assistant=4 resume_user=5`.
 - `tk-wm30` is closed. C5 dogfood gate passed:
@@ -476,7 +490,7 @@ Fast, lightweight terminal coding agent.
   `scripts/smoke/tmux-minimal-harness.sh` covers fresh launch, `/help`,
   `/tools`, `/settings`, resize, and optional live tool/resume flow. Focused
   tests, `go test ./... -count=1 -timeout 300s`, the native race subset, the
-  non-live tmux smoke, and OpenRouter `deepseek/deepseek-v3.2` live smoke all
+  non-live tmux smoke, and the then-configured OpenRouter live smoke all
   passed. Fedora local-api still timed out from this Mac.
 - Roadmap/task alignment pass found the product is on the right track for a
   minimal but well-engineered core: one native harness path, eight default

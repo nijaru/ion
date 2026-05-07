@@ -14,7 +14,9 @@
 | `bash` | Execute | Run shell command (streaming) |
 
 This is the native-loop baseline. Keep it small unless an eval-backed tool
-change clearly improves daily coding reliability.
+change clearly improves daily coding reliability. Pi's four-tool default is a
+strong simplicity reference, but Ion is not required to copy it if typed
+search/list tools improve policy, display, and agent success.
 
 Durable tool-surface decisions:
 
@@ -30,6 +32,8 @@ Durable tool-surface decisions:
 - `bash` remains the escape hatch for repo-specific commands, verification, and
   advanced tools such as `rg`, `fd`, or `ast-grep` when the typed tools are not
   enough.
+- C8 must re-audit this decision against current Pi, Claude Code, Codex CLI,
+  Amp, and Droid references before changing the model-visible surface.
 
 ### Canto coding primitive adoption
 

@@ -4,29 +4,26 @@ Updated: 2026-05-06
 
 ## Current Focus
 
-The native core, executor boundary, context-survival work, and minimal
-command/workflow shell are accepted. Ion is on the right track for a minimal,
-well-engineered terminal coding agent: one native harness path, eight default
-tools, compact TUI, scriptable CLI, durable sessions, and small command surface.
+The C6 core-loop hardening gates are green. C7 rebaseline changes the next
+target from "minimal like Pi" to **rough core feature parity with proven
+terminal agents**: Pi-level reliability and simplicity where it helps, plus the
+table-stakes workflows users expect from Claude Code, Codex CLI, Amp, and
+Droid when those workflows earn their complexity.
 
-C5 review/refactor is closed. C6 is the active follow-up: keep the accepted
-core boring with live-provider refresh and targeted hardening around terminal
-states, replay, retry, and context survival. Do not use this phase to add
-commands or model-visible tools. Live-provider proof uses Fedora local-api first
-when it is free, then OpenRouter `deepseek/deepseek-v4-flash` fallback when
-Fedora is unavailable. Escalate to `deepseek/deepseek-v4-pro` only when a
-stronger model is useful to classify model-quality uncertainty.
+C8 is the active phase. The goal is a streamlined daily-driver core, not new
+power features. First remove or hide low-value mode/trust/approval surface from
+the default UX, then audit the model-visible tool set, then close CLI/session
+parity, then dogfood the TUI against ordinary coding flows.
 
-The next priority is not adding commands. Treat background job commands, bash
-mode, `/goal`, `/side`, richer fork UI, and `/clone` as deferred references
-until daily use or reference-agent evidence proves they are worth the
-maintenance cost.
+Do not use C8 to add bash mode, `/goal`, `/side`, richer fork UI, background
+jobs, subagents, memory, skills, MCP, routing, prompt caching, remote sandboxes,
+or new model-visible tools. Those stay references until the core surface is
+stable and their maintenance cost is justified by usage or eval evidence.
 
-Flue, Pi, OpenAI Agents SDK, and Mendral stay in the plan as architecture
-constraints, not implementation scope. They are useful because they clarify
-where the harness boundary belongs; they do not justify adding new tools,
-remote sandboxes, memory namespaces, or multi-agent features before the default
-core is solid.
+Live-provider proof uses Fedora local-api first when it is free, then
+OpenRouter `deepseek/deepseek-v4-flash` fallback when Fedora is unavailable.
+Escalate to `deepseek/deepseek-v4-pro` only when a stronger model is useful to
+classify model-quality uncertainty.
 
 ## Phases
 
@@ -44,7 +41,8 @@ core is solid.
 | C4 | Tighten command/workflow shell without expanding the surface | Done |
 | C5 | Codify acceptance gates and simplify maintainability hotspots | Done |
 | C6 | Post-C5 core-agent smoke refresh and hardening | Done |
-| C7 | Post-C6 roadmap rebaseline and next-phase selection | Active |
+| C7 | Post-C6 roadmap rebaseline and next-phase selection | Done |
+| C8 | Streamlined core feature parity and daily-driver closeout | Active |
 | I5 | Add eval-driven optimization and SOTA experiments | Deferred |
 
 ## I0: Dirty Baseline And Context Hygiene
@@ -168,20 +166,63 @@ Acceptance:
 
 ## C7: Post-Hardening Rebaseline
 
-Status: active.
+Status: complete.
 
 Goal: choose the next real phase after the C6 core loop, terminal-state,
 context-survival, and prompt-budget gates are green.
 
 Ready task:
 
-1. Ready - `tk-szvc` - post-C6 roadmap rebaseline:
+1. Done - `tk-szvc` - post-C6 roadmap rebaseline:
    - review `ai/STATUS.md`, `ai/PLAN.md`, `ai/DESIGN.md`, `ai/DECISIONS.md`,
      and recent commits
-   - decide whether the next phase is targeted architecture/code review,
-     dogfood-driven TUI polish, or a deferred product table-stakes slice
-   - do not start new feature work until this rebaseline picks the next
-     concrete sequence
+   - choose C8 as the next phase: streamlined rough core feature parity, not
+     exact Pi cloning and not broad feature expansion
+
+## C8: Streamlined Core Feature Parity
+
+Status: active.
+
+Goal: make Ion's daily-driver core competitive with the proven terminal-agent
+baseline while keeping the codebase simpler than the current feature inventory.
+Parity means workflows, not matching another agent's API or command names.
+
+Reference posture:
+
+- Pi: reliability, small prompt/tool surface, scriptable sessions, simple TUI.
+- Codex CLI: scriptable `exec`/JSONL posture, explicit sandbox/approval
+  boundaries, fork/side references, and status inspection.
+- Claude Code: mature session/fork/resume UX, compact tool display, skills as
+  optional power surface, and permissions/status on demand.
+- Amp: pragmatic tool execution, queued input, and permissions as rules rather
+  than noisy default chrome.
+- Droid: custom/subagent workflows are useful later, but not part of the
+  default core closeout.
+
+Order:
+
+1. Ready - `tk-1nx1` - streamline default mode and safety surface:
+   - remove or hide low-value mode/trust/approval jargon from startup/footer/help
+   - keep executor safeguards at the owning boundary
+   - prefer `/status`, `/tools`, or explicit settings for detailed posture
+2. Blocked - `tk-c94e` - tool surface parity audit and eval:
+   - review the current eight tools against Pi/Claude/Codex/Amp/Droid evidence
+   - decide whether search/list/edit should stay as-is or be reshaped
+   - do not add tools without eval and prompt-budget evidence
+3. Blocked - `tk-j8sc` - CLI and session parity closeout:
+   - audit `-p`, stdin, JSON/JSONL decision, `--continue`, `--resume <id>`,
+     `--session`, `--no-session`, resume hints, and session picker clarity
+4. Blocked - `tk-kx4r` - TUI daily-driver parity dogfood:
+   - tmux/dogfood fresh launch, tool turn, queued input, command picker,
+     live settings update, resume, resize, transcript readability, compact tools
+
+Acceptance:
+
+- focused tests for touched packages, full `go test ./...`, native race subset
+- tmux text capture for TUI behavior changes
+- live smoke via Fedora local-api or OpenRouter DeepSeek fallback when provider
+  proof is in scope
+- no new power features during this phase
 
 ## I2: Minimal Shell Polish
 

@@ -22,8 +22,23 @@ Distilled architectural principles plus recent decision log.
   facade; Ion should supply product policy and presentation.
 - Session branching and background job visibility come before durable goal
   commands.
+- Core parity means proven daily-driver workflows, not exact feature/API
+  cloning. Pi, Claude Code, Codex CLI, Amp, and Droid are references for
+  tradeoffs; Ion adopts only what simplifies or strengthens its core.
 
 ## Recent Log
+
+### 2026-05-06 - C8 targets streamlined core feature parity
+
+C7 rebaseline selected C8 as the next phase. Ion should not be constrained to
+Pi's exact minimalism, but Pi's growth is evidence that a small reliable
+surface matters. The target is rough core feature parity with proven terminal
+agents: reliable loop, compact TUI, scriptable sessions, good tool UX,
+compaction, resume/fork basics, and clear status. Mode/trust/approval jargon
+should be removed or hidden from the default daily-driver path unless it is
+actively helping the user. Background jobs, `/goal`, bash mode, subagents,
+memory, routing, skills, and sandbox expansion remain deferred until the core
+surface is stable and their maintenance cost is justified.
 
 ### 2026-05-06 - C6 stays on core hardening
 
