@@ -213,6 +213,26 @@ func TestNormalizeFlagArgsKeepsModelAndThinkingValues(t *testing.T) {
 	}
 }
 
+func TestNormalizeFlagArgsKeepsSessionPolicyFlags(t *testing.T) {
+	got, picker := normalizeFlagArgs([]string{"--session", "session-1", "-p", "hello"})
+	want := []string{"--session", "session-1", "-p", "--", "hello"}
+	if picker {
+		t.Fatal("normalizeFlagArgs opened picker")
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("normalizeFlagArgs session = %#v, want %#v", got, want)
+	}
+
+	got, picker = normalizeFlagArgs([]string{"--no-session", "-p", "hello"})
+	want = []string{"--no-session", "-p", "--", "hello"}
+	if picker {
+		t.Fatal("normalizeFlagArgs opened picker for no-session")
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("normalizeFlagArgs no-session = %#v, want %#v", got, want)
+	}
+}
+
 func TestApplyCLIConfigOverrides(t *testing.T) {
 	cfg := &config.Config{}
 	applyCLIConfigOverrides(cfg, "", "openai/gpt-4.1", "high")
@@ -376,7 +396,7 @@ func TestStartupSessionIDContinuesConversationSession(t *testing.T) {
 		{ID: "real", LastPreview: "hello"},
 	}}
 
-	id, err := startupSessionID(context.Background(), store, "/tmp/test", "", "", true)
+	id, err := startupSessionID(context.Background(), store, "/tmp/test", "", "", "", true)
 	if err != nil {
 		t.Fatalf("startupSessionID returned error: %v", err)
 	}
@@ -388,7 +408,7 @@ func TestStartupSessionIDContinuesConversationSession(t *testing.T) {
 func TestStartupSessionIDRejectsMissingContinueSession(t *testing.T) {
 	store := &metadataStore{}
 
-	id, err := startupSessionID(context.Background(), store, "/tmp/test", "", "", true)
+	id, err := startupSessionID(context.Background(), store, "/tmp/test", "", "", "", true)
 	if err == nil || !strings.Contains(err.Error(), "no conversation session to continue") {
 		t.Fatalf("startupSessionID id=%q error=%v, want missing continue error", id, err)
 	}
@@ -397,7 +417,7 @@ func TestStartupSessionIDRejectsMissingContinueSession(t *testing.T) {
 func TestStartupSessionIDPropagatesContinueLookupError(t *testing.T) {
 	store := &metadataStore{listErr: os.ErrPermission}
 
-	id, err := startupSessionID(context.Background(), store, "/tmp/test", "", "", true)
+	id, err := startupSessionID(context.Background(), store, "/tmp/test", "", "", "", true)
 	if err == nil || !strings.Contains(err.Error(), "failed to find recent session") {
 		t.Fatalf("startupSessionID id=%q error=%v, want lookup error", id, err)
 	}
@@ -406,7 +426,15 @@ func TestStartupSessionIDPropagatesContinueLookupError(t *testing.T) {
 func TestStartupSessionIDPrefersExplicitResume(t *testing.T) {
 	store := &metadataStore{sessions: []storage.SessionInfo{{ID: "recent", LastPreview: "hello"}}}
 
-	id, err := startupSessionID(context.Background(), store, "/tmp/test", "explicit", "", true)
+	id, err := startupSessionID(context.Background(), store, "/tmp/test", "session", "explicit", "", true)
+	if err != nil {
+		t.Fatalf("startupSessionID session returned error: %v", err)
+	}
+	if id != "session" {
+		t.Fatalf("session ID = %q, want session", id)
+	}
+
+	id, err = startupSessionID(context.Background(), store, "/tmp/test", "", "explicit", "", true)
 	if err != nil {
 		t.Fatalf("startupSessionID returned error: %v", err)
 	}
@@ -414,7 +442,7 @@ func TestStartupSessionIDPrefersExplicitResume(t *testing.T) {
 		t.Fatalf("session ID = %q, want explicit", id)
 	}
 
-	id, err = startupSessionID(context.Background(), store, "/tmp/test", "", "short", true)
+	id, err = startupSessionID(context.Background(), store, "/tmp/test", "", "", "short", true)
 	if err != nil {
 		t.Fatalf("startupSessionID short returned error: %v", err)
 	}

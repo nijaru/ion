@@ -10,6 +10,8 @@ import (
 type cliFlags struct {
 	continueFlag      *bool
 	continueShortFlag *bool
+	sessionFlag       *string
+	noSessionFlag     *bool
 	resumeFlag        *string
 	resumeShortFlag   *string
 	providerFlag      *string
@@ -40,6 +42,16 @@ func registerCLIFlags() cliFlags {
 			"c",
 			false,
 			"Continue the most recent session in this directory",
+		),
+		sessionFlag: flag.String(
+			"session",
+			"",
+			"Use a specific session by ID",
+		),
+		noSessionFlag: flag.Bool(
+			"no-session",
+			false,
+			"Run with an ephemeral in-memory session",
 		),
 		resumeFlag:      flag.String("resume", "", "Resume a specific session by ID"),
 		resumeShortFlag: flag.String("r", "", "Resume a specific session by ID"),
@@ -79,6 +91,14 @@ func registerCLIFlags() cliFlags {
 
 func (f cliFlags) continueRequested() bool {
 	return *f.continueFlag || *f.continueShortFlag
+}
+
+func (f cliFlags) sessionID() string {
+	return strings.TrimSpace(*f.sessionFlag)
+}
+
+func (f cliFlags) noSessionRequested() bool {
+	return *f.noSessionFlag
 }
 
 func (f cliFlags) resumeID() string {
@@ -167,6 +187,28 @@ func validateSessionBundleSelection(exportPath, importPath string) error {
 	return nil
 }
 
+func validateSessionSelection(
+	noSession bool,
+	sessionID, resumeID, resumeShortID string,
+	continueRequested bool,
+	openResumePicker bool,
+	exportPath, importPath string,
+) error {
+	if noSession {
+		switch {
+		case sessionID != "" || resumeID != "" || resumeShortID != "" ||
+			continueRequested || openResumePicker:
+			return fmt.Errorf("--no-session cannot be combined with session selection")
+		case exportPath != "" || importPath != "":
+			return fmt.Errorf("--no-session cannot be combined with session import/export")
+		}
+	}
+	if sessionID != "" && (resumeID != "" || resumeShortID != "" || openResumePicker) {
+		return fmt.Errorf("--session cannot be combined with --resume")
+	}
+	return nil
+}
+
 func normalizeFlagArgs(args []string) ([]string, bool) {
 	if len(args) > 1 && args[0] == "--" && strings.HasPrefix(args[1], "-") {
 		args = args[1:]
@@ -240,6 +282,8 @@ func ionKnownFlag(name string) bool {
 	switch name {
 	case "continue",
 		"c",
+		"session",
+		"no-session",
 		"resume",
 		"r",
 		"provider",
@@ -267,6 +311,7 @@ func ionFlagNeedsValue(name string) bool {
 	switch name {
 	case "resume",
 		"r",
+		"session",
 		"provider",
 		"model",
 		"m",

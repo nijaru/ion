@@ -36,7 +36,18 @@ func NewCantoStore(root string) (Store, error) {
 
 	// Ensure all connections use WAL and busy_timeout
 	dsn := dbPath + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)"
+	return newCantoStore(dbPath, dsn)
+}
 
+func NewEphemeralCantoStore() (Store, error) {
+	dsn := fmt.Sprintf(
+		"file:ion-%s?mode=memory&cache=shared&_pragma=busy_timeout(5000)",
+		ionsession.ShortID(),
+	)
+	return newCantoStore("", dsn)
+}
+
+func newCantoStore(dbPath, dsn string) (Store, error) {
 	cStore, err := session.NewSQLiteStore(dsn)
 	if err != nil {
 		return nil, err
