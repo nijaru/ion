@@ -37,7 +37,7 @@ func startupToolLine(b backend.Backend) string {
 		parts = append(parts, "Search tools enabled")
 	}
 	sandbox := strings.TrimSpace(surface.Sandbox)
-	if sandbox != "" {
+	if sandbox != "" && sandbox != "off" {
 		parts = append(parts, "Sandbox "+sandbox)
 	}
 	return strings.Join(parts, " • ")

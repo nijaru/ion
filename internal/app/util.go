@@ -292,6 +292,30 @@ func toolSurfaceSummary(surface backend.ToolSurface) string {
 	return fmt.Sprintf("Tools: %d%s\n%s", surface.Count, suffix, names)
 }
 
+func runtimeStatusSummary(m Model) string {
+	lines := []string{
+		"Mode: " + modeDisplayName(m.Mode),
+	}
+	if m.App.WorkspaceTrust != "" {
+		trust := "not trusted"
+		if m.App.TrustedWorkspace {
+			trust = "trusted"
+		}
+		lines = append(lines, "Workspace: "+trust)
+	}
+	if provider := strings.TrimSpace(m.Model.Backend.Provider()); provider != "" {
+		lines = append(lines, "Provider: "+provider)
+	}
+	if model := strings.TrimSpace(m.Model.Backend.Model()); model != "" {
+		lines = append(lines, "Model: "+model)
+	}
+	if summarizer, ok := m.Model.Backend.(backend.ToolSummarizer); ok {
+		surface := summarizer.ToolSurface()
+		lines = append(lines, toolSurfaceSummary(surface))
+	}
+	return strings.Join(lines, "\n")
+}
+
 func compactCount(n int) string {
 	if n >= 1000 {
 		return fmt.Sprintf("%.1fk", float64(n)/1000.0)

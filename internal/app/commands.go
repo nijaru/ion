@@ -223,6 +223,14 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 			session.Entry{Role: session.System, Content: toolSurfaceSummary(surface)},
 		)
 
+	case "/status":
+		if len(fields) != 1 {
+			return m, cmdError("usage: /status")
+		}
+		return m, m.printEntries(
+			session.Entry{Role: session.System, Content: runtimeStatusSummary(m)},
+		)
+
 	case "/fork":
 		if m.Model.Storage == nil || !storage.IsMaterialized(m.Model.Storage) {
 			return m, cmdError("No active session to fork yet")

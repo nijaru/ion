@@ -403,7 +403,7 @@ func TestStatusLineIncludesThinkingLevel(t *testing.T) {
 	}
 }
 
-func TestStatusLineIncludesSandboxPosture(t *testing.T) {
+func TestStatusLineOmitsSandboxPosture(t *testing.T) {
 	model := New(
 		stubBackend{
 			sess: &stubSession{events: make(chan session.Event)},
@@ -424,7 +424,7 @@ func TestStatusLineIncludesSandboxPosture(t *testing.T) {
 	model = updated.(Model)
 
 	line := ansi.Strip(model.statusLine())
-	if !strings.Contains(line, "sandbox auto: seatbelt") {
-		t.Fatalf("status line missing sandbox posture: %q", line)
+	if strings.Contains(line, "sandbox") {
+		t.Fatalf("status line should leave sandbox posture to /status or /tools: %q", line)
 	}
 }

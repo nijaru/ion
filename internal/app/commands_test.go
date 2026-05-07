@@ -617,7 +617,7 @@ func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 		"/tools",
 		"/skills [query]",
 		"/cost",
-		"/mode [mode]",
+		"/status",
 		"/trust [status]",
 		"/quit, /exit",
 	}
@@ -626,7 +626,6 @@ func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 		"Ctrl+P",
 		"Ctrl+X",
 		"Tab",
-		"Shift+Tab",
 		"Esc",
 		"Up / Down",
 		"Enter",
@@ -1128,6 +1127,30 @@ func TestToolsCommandReportsToolSurface(t *testing.T) {
 	_, cmd := model.handleCommand("/tools")
 	if cmd == nil {
 		t.Fatal("tools command returned nil cmd")
+	}
+}
+
+func TestStatusCommandReportsRuntimePosture(t *testing.T) {
+	model := readyModel(t)
+	model.App.Sandbox = "auto: seatbelt"
+	model.App.WorkspaceTrust = "prompt"
+	model.App.TrustedWorkspace = true
+
+	_, cmd := model.handleCommand("/status")
+	if cmd == nil {
+		t.Fatal("status command returned nil cmd")
+	}
+	got := runtimeStatusSummary(model)
+	for _, want := range []string{
+		"Mode: EDIT",
+		"Workspace: trusted",
+		"Provider: stub",
+		"Model: stub-model",
+		"Tools: 2",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("status = %q, want %q", got, want)
+		}
 	}
 }
 
