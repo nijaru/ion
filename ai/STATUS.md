@@ -3,8 +3,8 @@
 Fast, lightweight terminal coding agent.
 
 **Phase:** C6 core-agent hardening
-**Focus:** live core-loop smoke refresh, then cancel/error/retry hardening
-**Active task:** `tk-yqml` ready
+**Focus:** cancel/error/retry hardening after live-smoke refresh
+**Active task:** `tk-3wiq` ready
 **Updated:** 2026-05-06
 
 ## Current Truth
@@ -144,13 +144,20 @@ Fast, lightweight terminal coding agent.
   width bug: very narrow terminals still forced the composer to 20 columns,
   wider than the wrap-safe live shell. Composer layout now uses `shellWidth()`
   consistently with the rest of Plane B.
-- C6 is the current roadmap. `tk ready` intentionally points at one core-agent
-  task: `tk-yqml` live core-loop smoke refresh. Follow-up tasks are blocked in
-  order: `tk-3wiq` cancel/error/retry hardening, `tk-89ww` compaction
-  context-survival hardening, and `tk-vzdf` prompt/prelude budget gate.
+- C6 is the current roadmap. `tk-yqml` is closed after a live OpenRouter
+  `deepseek/deepseek-v4-flash` smoke. `tk ready` intentionally points at one
+  core-agent task: `tk-3wiq` cancel/error/retry hardening. Follow-up tasks are
+  blocked in order: `tk-89ww` compaction context-survival hardening and
+  `tk-vzdf` prompt/prelude budget gate.
 
 ## Latest Evidence
 
+- `tk-yqml` live core-loop smoke refresh is closed. Fedora
+  `http://fedora:8080/v1/models` timed out after 5s, so the gate used
+  OpenRouter `deepseek/deepseek-v4-flash`. The smoke passed: real `bash` tool
+  call, persisted resume, resumed follow-up returned `continued`, and
+  provider-history ordering was verified as
+  `first_user=1 tool_call=2 tool_result=3 assistant=4 resume_user=5`.
 - Live-smoke model policy was corrected on 2026-05-06: current/future
   OpenRouter fallback is `deepseek/deepseek-v4-flash`, with
   `deepseek/deepseek-v4-pro` reserved for model-quality uncertainty. The
@@ -689,9 +696,9 @@ Fast, lightweight terminal coding agent.
 
 ## Next Action
 
-1. Start `tk-yqml` live core-loop smoke refresh: Fedora local-api first if free,
-   OpenRouter `deepseek/deepseek-v4-flash` fallback otherwise; use
-   `deepseek/deepseek-v4-pro` only to classify model-quality uncertainty.
-2. Then run `tk-3wiq` cancel/error/retry hardening.
+1. Start `tk-3wiq` cancel/error/retry hardening.
+2. Keep Fedora local-api as the preferred live target when free; otherwise use
+   OpenRouter `deepseek/deepseek-v4-flash`, escalating to
+   `deepseek/deepseek-v4-pro` only for model-quality uncertainty.
 3. Keep `tk-er04` bash-mode evaluation deferred unless daily use proves it is
    worth the extra surface.

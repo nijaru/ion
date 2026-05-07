@@ -138,13 +138,13 @@ terminal-state/context-survival contracts without expanding the product surface.
 
 Order:
 
-1. Ready - `tk-yqml` - live core-loop smoke refresh:
+1. Done - `tk-yqml` - live core-loop smoke refresh:
    - probe Fedora local-api first when free/reachable
    - otherwise run OpenRouter `deepseek/deepseek-v4-flash`
    - rerun with `deepseek/deepseek-v4-pro` only for model-quality uncertainty
    - require real `bash` tool call, persisted resume, provider-history capture,
      and resumed follow-up containing prior tool history
-2. Blocked by `tk-yqml` - `tk-3wiq` - cancel/error/retry hardening:
+2. Ready - `tk-3wiq` - cancel/error/retry hardening:
    - cancel during stream/tool
    - provider error and retry recovery
    - tool failure followed by a normal turn
