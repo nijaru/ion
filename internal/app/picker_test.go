@@ -173,15 +173,15 @@ func TestTabIgnoresHiddenSlashCommandAliases(t *testing.T) {
 
 func TestCommandPickerInsertsSelectedCommand(t *testing.T) {
 	model := readyModel(t)
-	model = model.openCommandPicker("mode")
+	model = model.openCommandPicker("stat")
 
 	updated, cmd := model.handlePickerKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = updated
 	if cmd != nil {
 		t.Fatalf("unexpected command picker cmd %T", cmd)
 	}
-	if got := model.Input.Composer.Value(); got != "/mode " {
-		t.Fatalf("composer = %q, want /mode insertion", got)
+	if got := model.Input.Composer.Value(); got != "/status " {
+		t.Fatalf("composer = %q, want /status insertion", got)
 	}
 	if model.Picker.Overlay != nil {
 		t.Fatal("expected command picker to close")

@@ -152,10 +152,13 @@ Fast, lightweight terminal coding agent.
   missions/goals, swarms, memory, routing, and similar ideas live before
   promotion.
 - C8 priority sequence:
-  1. `tk-1nx1` - streamline default mode and safety surface.
-  2. `tk-c94e` - tool surface parity audit and eval.
-  3. `tk-j8sc` - CLI and session parity closeout.
-  4. `tk-kx4r` - TUI daily-driver parity dogfood.
+  1. `tk-c94e` - tool surface parity audit and eval.
+  2. `tk-j8sc` - CLI and session parity closeout.
+  3. `tk-kx4r` - TUI daily-driver parity dogfood.
+- `tk-1nx1` is closed. Default shell chrome now hides low-value mode/sandbox
+  posture: startup omits `Sandbox off`, the footer omits default `[EDIT]` and
+  sandbox text, `/mode` remains dispatchable but hidden from help/picker, and
+  explicit `/status` reports runtime, workspace, tools, and safety posture.
 - Core parity means workflows: reliable submit/stream/tools/cancel/error,
   durable sessions/resume/continue, context survival/compaction, compact TUI,
   scriptable CLI, and a small useful tool surface. It does not mean copying

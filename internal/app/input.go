@@ -22,8 +22,6 @@ func (m Model) statusLine() string {
 	switch m.Mode {
 	case session.ModeRead:
 		modeLabel = m.st.modeRead.Render("[READ]")
-	case session.ModeEdit:
-		modeLabel = m.st.modeEdit.Render("[EDIT]")
 	case session.ModeYolo:
 		modeLabel = m.st.modeYolo.Render("[AUTO]")
 	}
@@ -41,10 +39,6 @@ func (m Model) statusLine() string {
 		model = m.st.dim.Render(value)
 	}
 	thinking := m.st.dim.Render(normalizeThinkingValue(m.Progress.ReasoningEffort))
-	sandbox := ""
-	if value := strings.TrimSpace(m.App.Sandbox); value != "" {
-		sandbox = m.st.dim.Render("sandbox " + value)
-	}
 	dir := m.st.dim.Render("./" + filepath.Base(m.App.Workdir))
 	branch := ""
 	if m.App.Branch != "" {
@@ -71,16 +65,15 @@ func (m Model) statusLine() string {
 			provider,
 			model,
 			thinking,
-			sandbox,
 			usage,
 			cost,
 			dir,
 			branch,
 			gitDiff,
 		},
-		{modeLabel, presetLabel, provider, model, thinking, sandbox, usage, cost, branch, gitDiff},
-		{modeLabel, presetLabel, provider, model, thinking, sandbox, usage, cost},
-		{modeLabel, presetLabel, model, thinking, sandbox, usage, cost},
+		{modeLabel, presetLabel, provider, model, thinking, usage, cost, branch, gitDiff},
+		{modeLabel, presetLabel, provider, model, thinking, usage, cost},
+		{modeLabel, presetLabel, model, thinking, usage, cost},
 		{modeLabel, presetLabel, thinking, usage, cost},
 	}
 	for _, segments := range candidates {
