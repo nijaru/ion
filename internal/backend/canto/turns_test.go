@@ -211,6 +211,126 @@ func TestSubmitTurnCancelSuppressesLateAssistant(t *testing.T) {
 	}
 }
 
+func TestSubmitTurnCancelDuringToolSuppressesLateToolEvents(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	root := t.TempDir()
+	store, err := storage.NewCantoStore(root)
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	storageSession, err := store.OpenSession(
+		ctx,
+		t.TempDir(),
+		"local-api/model-a",
+		"main",
+	)
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	call := llm.Call{ID: "tool-call-cancel", Type: "function"}
+	call.Function.Name = "bash"
+	call.Function.Arguments = `{"command":"sleep 10; echo late-tool-output"}`
+	provider := ctesting.NewFauxProvider(
+		"local-api",
+		ctesting.Step{Calls: []llm.Call{call}},
+		ctesting.Step{Content: "late assistant after canceled tool"},
+		ctesting.Step{Content: "recovered after canceled tool"},
+	)
+
+	oldFactory := providerFactory
+	providerFactory = func(ctx context.Context, cfg *config.Config) (llm.Provider, error) {
+		if cfg.Provider == "local-api" {
+			return provider, nil
+		}
+		return oldFactory(ctx, cfg)
+	}
+	defer func() { providerFactory = oldFactory }()
+
+	b := New()
+	b.SetStore(store)
+	b.SetSession(storageSession)
+	b.SetConfig(
+		&config.Config{
+			Provider: "local-api",
+			Model:    "model-a",
+			Endpoint: "http://localhost:8080/v1",
+		},
+	)
+	b.SetMode(ionsession.ModeYolo)
+	if err := b.Open(ctx); err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer func() { _ = b.Close() }()
+
+	if err := b.SubmitTurn(ctx, "run a long command"); err != nil {
+		t.Fatalf("submit turn: %v", err)
+	}
+
+	events := b.Events()
+	seenTool := false
+	for !seenTool {
+		select {
+		case ev := <-events:
+			switch ev.(type) {
+			case ionsession.ToolCallStarted:
+				seenTool = true
+			case ionsession.Error:
+				t.Fatalf("unexpected error before cancel: %#v", ev)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for tool call")
+		}
+	}
+
+	if err := b.CancelTurn(ctx); err != nil {
+		t.Fatalf("cancel turn: %v", err)
+	}
+	waitForTurnFinishedAfterError(t, events)
+
+	quiet := time.NewTimer(300 * time.Millisecond)
+	defer quiet.Stop()
+	for {
+		select {
+		case ev := <-events:
+			switch msg := ev.(type) {
+			case ionsession.ToolResult:
+				t.Fatalf("late tool result reached Ion after cancel: %#v", msg)
+			case ionsession.AgentMessage:
+				t.Fatalf("late assistant reached Ion after cancel: %#v", msg)
+			case ionsession.Error:
+				t.Fatalf("late error reached Ion after cancel: %v", msg.Err)
+			case ionsession.TurnFinished:
+				t.Fatalf("duplicate turn finished after cancel: %#v", msg)
+			}
+		case <-quiet.C:
+			if calls := provider.Calls(); len(calls) != 1 {
+				t.Fatalf(
+					"provider calls after canceled tool = %d, want initial request only",
+					len(calls),
+				)
+			}
+			entries, err := storageSession.Entries(ctx)
+			if err != nil {
+				t.Fatalf("entries: %v", err)
+			}
+			for _, entry := range entries {
+				if entry.Role == ionsession.Tool &&
+					strings.Contains(entry.Content, "late-tool-output") {
+					t.Fatalf("late tool output persisted after cancel: %#v", entry)
+				}
+				if entry.Role == ionsession.Agent &&
+					strings.Contains(entry.Content, "late assistant after canceled tool") {
+					t.Fatalf("late assistant persisted after cancel: %#v", entry)
+				}
+			}
+			return
+		}
+	}
+}
+
 func TestSubmitTurnRejectsConcurrentTurn(t *testing.T) {
 	ctx := t.Context()
 	store, err := storage.NewCantoStore(t.TempDir())
@@ -318,7 +438,8 @@ func TestSubmitTurnToolFailurePersistsForFollowUp(t *testing.T) {
 	call := llm.Call{ID: "tool-call-fail", Type: "function"}
 	call.Function.Name = "bash"
 	call.Function.Arguments = `{"command":"exit 7"}`
-	provider := ctesting.NewFauxProvider("local-api",
+	provider := ctesting.NewFauxProvider(
+		"local-api",
 		ctesting.Step{Calls: []llm.Call{call}},
 		ctesting.Step{Content: "handled tool failure"},
 		ctesting.Step{Content: "continued"},

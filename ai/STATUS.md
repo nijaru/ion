@@ -3,8 +3,8 @@
 Fast, lightweight terminal coding agent.
 
 **Phase:** C6 core-agent hardening
-**Focus:** cancel/error/retry hardening after live-smoke refresh
-**Active task:** `tk-3wiq` ready
+**Focus:** compaction context-survival hardening after terminal-state refresh
+**Active task:** `tk-89ww` ready
 **Updated:** 2026-05-06
 
 ## Current Truth
@@ -144,14 +144,22 @@ Fast, lightweight terminal coding agent.
   width bug: very narrow terminals still forced the composer to 20 columns,
   wider than the wrap-safe live shell. Composer layout now uses `shellWidth()`
   consistently with the rest of Plane B.
-- C6 is the current roadmap. `tk-yqml` is closed after a live OpenRouter
-  `deepseek/deepseek-v4-flash` smoke. `tk ready` intentionally points at one
-  core-agent task: `tk-3wiq` cancel/error/retry hardening. Follow-up tasks are
-  blocked in order: `tk-89ww` compaction context-survival hardening and
-  `tk-vzdf` prompt/prelude budget gate.
+- C6 is the current roadmap. `tk-yqml` and `tk-3wiq` are closed. `tk ready`
+  intentionally points at one core-agent task: `tk-89ww` compaction
+  context-survival hardening. Follow-up task `tk-vzdf` prompt/prelude budget
+  gate remains blocked behind it.
 
 ## Latest Evidence
 
+- `tk-3wiq` cancel/error/retry hardening is closed. Existing coverage already
+  covered stream cancellation, provider-error reuse, tool-failure follow-up,
+  retry status persistence, print-mode timeout/error behavior, and app
+  terminal-state handling. Added the missing deterministic backend guard for
+  cancellation while a tool is actively running: canceled tool turns must not
+  emit late tool results, late assistant messages, duplicate `TurnFinished`,
+  persisted late tool output, or a post-tool provider request. Focused
+  backend/app/cmd/storage tests, full `go test ./...`, and the native race
+  subset passed.
 - `tk-yqml` live core-loop smoke refresh is closed. Fedora
   `http://fedora:8080/v1/models` timed out after 5s, so the gate used
   OpenRouter `deepseek/deepseek-v4-flash`. The smoke passed: real `bash` tool
@@ -696,7 +704,7 @@ Fast, lightweight terminal coding agent.
 
 ## Next Action
 
-1. Start `tk-3wiq` cancel/error/retry hardening.
+1. Start `tk-89ww` compaction context-survival hardening.
 2. Keep Fedora local-api as the preferred live target when free; otherwise use
    OpenRouter `deepseek/deepseek-v4-flash`, escalating to
    `deepseek/deepseek-v4-pro` only for model-quality uncertainty.

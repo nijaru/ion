@@ -144,12 +144,12 @@ Order:
    - rerun with `deepseek/deepseek-v4-pro` only for model-quality uncertainty
    - require real `bash` tool call, persisted resume, provider-history capture,
      and resumed follow-up containing prior tool history
-2. Ready - `tk-3wiq` - cancel/error/retry hardening:
+2. Done - `tk-3wiq` - cancel/error/retry hardening:
    - cancel during stream/tool
    - provider error and retry recovery
    - tool failure followed by a normal turn
    - resume after each terminal state
-3. Blocked by `tk-3wiq` - `tk-89ww` - compaction context-survival hardening:
+3. Ready - `tk-89ww` - compaction context-survival hardening:
    - `/compact`, automatic context-survival behavior, persist, resume,
      provider-history projection, and follow-up
    - keep Canto closed unless evidence points to a framework-owned defect
