@@ -499,3 +499,40 @@ func TestCtrlMTogglesPrimaryAndFastPreset(t *testing.T) {
 		t.Fatalf("switched models = %#v, want fast then primary", observedModels)
 	}
 }
+
+func TestCtrlMBlockedDuringBusyTurn(t *testing.T) {
+	oldSession := &stubSession{events: make(chan session.Event)}
+	model := New(
+		stubBackend{sess: oldSession, provider: "openai", model: "gpt-4.1"},
+		nil,
+		nil,
+		"/tmp/test",
+		"main",
+		"dev",
+		func(ctx context.Context, cfg *config.Config, sessionID string) (backend.Backend, session.AgentSession, storage.Session, error) {
+			t.Fatal("busy preset toggle should not switch runtimes")
+			return nil, nil, nil, nil
+		},
+	).WithConfig(&config.Config{
+		Provider:  "openai",
+		Model:     "gpt-4.1",
+		FastModel: "gpt-4.1-mini",
+	})
+	model.InFlight.Thinking = true
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'm', Mod: tea.ModCtrl})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("expected ctrl+m to return a busy-turn error")
+	}
+	err := localErrorFromMsg(t, cmd())
+	if !strings.Contains(err.Error(), "Finish or cancel the current turn") {
+		t.Fatalf("error = %v, want busy-turn guard", err)
+	}
+	if oldSession.cancels != 0 {
+		t.Fatalf("cancels = %d, want 0", oldSession.cancels)
+	}
+	if model.App.ActivePreset != presetPrimary {
+		t.Fatalf("active preset = %q, want primary", model.App.ActivePreset)
+	}
+}

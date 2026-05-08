@@ -2,8 +2,8 @@
 
 Fast, lightweight terminal coding agent.
 
-**Phase:** Post-C11 Pi+/x design
-**Focus:** next Pi+ candidate selection after closing extension and goal boundaries
+**Phase:** C13 core agent audit green
+**Focus:** hold feature work; next work should come from concrete dogfood defects
 **Active task:** none ready
 **Updated:** 2026-05-08
 
@@ -25,6 +25,16 @@ Fast, lightweight terminal coding agent.
   boundary, not a second native loop.
 - Current default tool surface is `bash`, `read`, `write`, `edit`,
   `multi_edit`, `list`, `grep`, and `glob`; the old `verify` tool is removed.
+- Current priority reset: core agent completion and reliability comes before
+  more Pi+/experimental work. Bash mode, async jobs beyond the minimal C11
+  substrate, subagents, memory, routing, `/goal`, `/side`, `/clone`, and other
+  extra surfaces stay parked unless a concrete dogfood issue or ready task
+  proves value after the core gates stay boring.
+- `tk-5cq4` C13 audit found and fixed two core ownership bugs:
+  `Ctrl+M` bypassed the busy-turn guard for preset switching, and TUI shutdown
+  closed startup runtime handles instead of the final runtime after a switch.
+  Mac-local gates are green after the fixes. Fedora live smoke is pending only
+  because Fedora is offline.
 - C2 executor-boundary, C3 context-survival, and C4 command/workflow shell work
   are closed unless a smoke exposes a concrete defect.
 - Fork primitives already exist at the session/history level: `/fork [label]`,
@@ -238,6 +248,21 @@ Fast, lightweight terminal coding agent.
 
 ## Latest Evidence
 
+- `tk-5cq4` C13 core agent audit passed on Mac-local gates after two fixes:
+  busy `Ctrl+M` preset switching is blocked instead of canceling an active turn,
+  and TUI shutdown closes the final app runtime after runtime switches.
+  Verification passed with focused regression tests, full deterministic tests,
+  `go vet ./...`, the native race subset, and
+  `scripts/smoke/tmux-minimal-harness.sh`. Fedora live smoke was skipped
+  because Fedora was offline.
+- `tk-a5ng` C12 core reliability gate passed after the feature-growth pause:
+  `go test ./... -count=1 -timeout 300s`, native race subset for `cmd/ion`,
+  `internal/app`, `internal/backend/canto`, `internal/backend/canto/tools`, and
+  `internal/storage`, `scripts/smoke/tmux-minimal-harness.sh`, and Fedora
+  local-api live smoke against `qwen3.6:27b` all passed. Live smoke proved a
+  real `bash` tool call, persisted resume, resumed follow-up `continued`, and
+  provider-history ordering
+  `first_user=1 tool_call=2 tool_result=3 assistant=4 resume_user=5`.
 - `tk-vzdf` prompt and prelude budget gate is closed. Current measurement:
   core=1,848 chars/~462 tokens, runtime=135 chars/~34 tokens, core+runtime=1,985
   chars/~497 tokens, project layers=8,437 chars/~2,110 tokens, P1 tool

@@ -30,6 +30,27 @@ Distilled architectural principles plus recent decision log.
 
 ## Recent Log
 
+### 2026-05-08 - C13 accepts the core after audit fixes
+
+C13 reviewed the core agent after the C12 reliability gate instead of opening
+more Pi+ or experimental work. The audit fixed two ownership defects: preset
+hotkey switching now respects the busy-turn guard, and TUI process shutdown
+now closes the final app runtime after model/runtime switches instead of the
+startup handles. The remaining direction is hardening only: new features need
+a concrete ready task and acceptance gate, while Fedora live smoke should be
+rerun when Fedora is online again.
+
+### 2026-05-08 - C12 pauses feature growth for core reliability
+
+After C11, Ion should not keep walking into Pi+ or experimental features just
+because reference agents expose them. The active priority is core completion
+and hardening: submit, stream, tool calls, approval, cancel, error recovery,
+persist/replay, resume/continue, compaction survival, compact TUI, scriptable
+CLI, and the default eight-tool surface. Bash mode remains a small future
+convenience, while async jobs beyond the C11 substrate, subagents, missions,
+memory, routing, `/goal`, `/side`, and `/clone` stay parked until the core gate
+is boring.
+
 ### 2026-05-07 - Goals are durable metadata, not prompt macros
 
 Ion should not add `/goal` as model-visible prompt text. Goals are durable

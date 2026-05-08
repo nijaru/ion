@@ -6,9 +6,11 @@ Updated: 2026-05-08
 
 C8 accepted Ion's Pi-level baseline, C9 closed the Pi+/experimental boundary,
 C10 selected background job/status support as the first Pi+ substrate, C11
-implemented it, and the two follow-up design lanes are closed: `tk-b121`
-extension stdlib boundary and `tk-3o1r` missions/goals boundary. There is no
-ready implementation task after this pass. The roadmap remains
+implemented it, the two follow-up design lanes are closed: `tk-b121`
+extension stdlib boundary and `tk-3o1r` missions/goals boundary, C12
+re-verified the core gate after pausing feature growth, and C13 completed a
+thorough core-agent audit with two ownership fixes. There is no ready feature
+task now. The roadmap remains
 **Pi -> Pi+**:
 
 - **Pi parity:** reliable core terminal coding-agent workflows, not exact
@@ -20,9 +22,9 @@ ready implementation task after this pass. The roadmap remains
   it.
 
 Do not add bash mode, `/goal`, `/side`, richer fork UI, subagents, memory,
-skills, MCP, routing, prompt caching, remote sandboxes, or new default
-model-visible tools unless a ready task and acceptance gate explicitly justify
-it.
+skills, MCP, routing, prompt caching, remote sandboxes, async agent jobs, or
+new default model-visible tools unless a later ready task plus acceptance gate
+explicitly justifies the feature after the C13 core audit.
 
 Live-provider proof uses Fedora local-api first when it is free, then
 OpenRouter `deepseek/deepseek-v4-flash` fallback when Fedora is unavailable.
@@ -50,6 +52,8 @@ classify model-quality uncertainty.
 | C9 | Pi+ boundary rebaseline before extension/missions work | Done |
 | C10 | Background job/status substrate design | Done |
 | C11 | Background job/status substrate implementation | Done |
+| C12 | Core reliability closeout after Pi+ pause | Done |
+| C13 | Thorough core-agent audit and ownership fixes | Done |
 | I5 | Add eval-driven optimization and SOTA experiments | Deferred |
 
 ## I0: Dirty Baseline And Context Hygiene
@@ -308,6 +312,60 @@ Completed task:
    - expose `/jobs` and `/stop <job-id>` as the minimal host visibility surface
    - do not add bash mode, `/goal`, missions, swarms, or extra default
      model-visible tools
+
+## C12: Core Reliability Closeout
+
+Status: done.
+
+Goal: re-center on the core agent before considering any more feature work.
+Core means submit, stream, tool calls, approval, cancel, error recovery,
+persist/replay, resume/continue, compaction survival, compact TUI, scriptable
+CLI, and the default eight-tool surface.
+
+Completed task:
+
+1. Done/P2 - `tk-a5ng` - C12 core reliability closeout after Pi+ pause:
+   - run focused deterministic gates, full `go test ./...`, and native race
+     subset
+   - run `scripts/smoke/tmux-minimal-harness.sh`
+   - use Fedora local-api for the live smoke while it is available
+   - log any failures as core reliability defects before opening feature work
+
+Acceptance:
+
+- no new commands, tools, subagents, memory, routing, missions/goals, bash mode,
+  or async-agent surfaces during C12
+- any failure becomes a narrow core reliability task with source/test evidence
+- only after this gate is boring should Ion consider small convenience features
+  such as Pi-style bash mode
+
+## C13: Core Agent Audit
+
+Status: done.
+
+Goal: review the green C12 core agent before declaring the core accepted.
+Scope covered submit, stream, tool calls, approval, cancel, error recovery,
+persist/replay, resume/continue, compaction entry points, runtime switch
+ownership, shutdown ownership, and default tool durability.
+
+Completed task:
+
+1. Done/P2 - `tk-5cq4` - thorough core agent code audit:
+   - fixed `Ctrl+M` preset switching so it shares the busy-turn guard with
+     `/primary` and `/fast`
+   - fixed TUI shutdown after runtime switches so the final app runtime handles
+     are closed instead of the startup handles
+   - recorded the audit summary in `ai/STATUS.md`, `ai/PLAN.md`, and
+     `ai/DECISIONS.md`
+
+Acceptance:
+
+- `go test ./... -count=1 -timeout 300s`
+- `go vet ./...`
+- native race subset for `cmd/ion`, `internal/app`, `internal/backend/canto`,
+  `internal/backend/canto/tools`, and `internal/storage`
+- `scripts/smoke/tmux-minimal-harness.sh`
+- Fedora live smoke skipped only because Fedora was offline
 
 ## Next Design Lanes
 
