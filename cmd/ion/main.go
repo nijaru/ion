@@ -302,7 +302,8 @@ func main() {
 	model = model.WithPrintedTranscript(len(startupEntries) > 0)
 	p := tea.NewProgram(model)
 	finalModel, runErr := p.Run()
-	closeErr := closeRuntimeHandles(b.Session(), sess, store)
+	agentToClose, sessionToClose := runtimeHandlesForClose(finalModel, b.Session(), sess)
+	closeErr := closeRuntimeHandles(agentToClose, sessionToClose, store)
 	if runErr != nil {
 		if closeErr != nil {
 			fmt.Fprintf(os.Stderr, "failed to close runtime: %v\n", closeErr)
@@ -317,4 +318,15 @@ func main() {
 	if sessionID := resumeHintSessionID(finalModel); sessionID != "" && !cli.noSessionRequested() {
 		printResumeHint(os.Stdout, sessionID)
 	}
+}
+
+func runtimeHandlesForClose(
+	finalModel tea.Model,
+	fallbackAgent session.AgentSession,
+	fallbackSession storage.Session,
+) (session.AgentSession, storage.Session) {
+	if model, ok := finalModel.(app.Model); ok {
+		return model.Model.Session, model.Model.Storage
+	}
+	return fallbackAgent, fallbackSession
 }
