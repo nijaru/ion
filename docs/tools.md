@@ -7,12 +7,13 @@ bash, read, write, edit, multi_edit, list, grep, glob
 ```
 
 Memory, MCP, subagent, model-visible compaction, and rewind/checkpoint control
-surfaces are deferred or hidden from the default tool surface.
-`/compact` remains a host command because context survival is reliability work.
-Skill tools are also deferred: future `read_skill` and `manage_skill` support
-must be enabled through an explicit skills surface rather than the default
-coding toolset. The host-side `/skills [query]` command can list installed
-local skill metadata without injecting those skills into the model prompt.
+surfaces are deferred or hidden from the default tool surface. `/compact`
+remains a host command because context survival is reliability work. Skill
+tools are opt-in stdlib surfaces rather than default coding tools:
+`read_skill` is available behind `skill_tools = "read"`, while `manage_skill`
+remains deferred behind a separate write/trust gate. The host-side
+`/skills [query]` command can list installed local skill metadata without
+injecting those skills into the model prompt.
 
 Ion uses Canto's lazy tool loading. When the registered tool surface is larger
 than the lazy threshold, the model initially sees `search_tools` plus any eager

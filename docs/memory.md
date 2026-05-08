@@ -3,22 +3,19 @@
 Memory is deferred during native-loop stabilization. It is not part of the default
 P1 model-visible native tool surface.
 
-Ion uses Canto memory for workspace-scoped recall.
+Ion does not initialize a memory manager on the default native hot path today.
+There is no active `/memory` command and no default `recall_memory` or
+`remember_memory` tool.
 
-Commands:
+Current boundary:
 
-| Command | Behavior |
+| Surface | Status |
 |---|---|
-| `/memory` | Show the workspace memory index tree |
-| `/memory <query>` | Search workspace memory |
+| `/memory` | Deferred |
+| `recall_memory` | Deferred |
+| `remember_memory` | Deferred |
+| `memory://` namespace | Design direction only |
 
-Agent tools:
-
-| Tool | Behavior |
-|---|---|
-| `recall_memory` | Search workspace memory from the agent loop |
-| `remember_memory` | Store a semantic workspace memory |
-
-This is the first visible memory UX. Wiki compilation and richer collection
-management stay separate from the core loop until the read/search/store path is
-boring and reliable.
+Future memory should come back through explicit resource namespaces and opt-in
+narrow tools, not through default prompt/tool sprawl. Mutation needs approval,
+audit, and undo semantics before it becomes model-visible.

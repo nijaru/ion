@@ -36,7 +36,7 @@ Categories:
 
 | Category | Tools |
 |---|---|
-| `read` | `read`, `grep`, `glob`, `list`, `recall_memory`, `remember_memory`, `compact` |
+| `read` | `read`, `grep`, `glob`, `list`; `read_skill` when enabled |
 | `write` | `write`, `edit`, `multi_edit` |
 | `execute` | `bash` |
 | `network` | Reserved for network-capable tools |
@@ -51,7 +51,7 @@ Policy rules refine EDIT mode. They do not weaken READ mode.
 
 | Mode | Policy effect |
 |---|---|
-| READ | Read tools are allowed; write and execute tools are denied; sensitive tools ask |
+| READ | Read tools are allowed; write and execute tools are denied; sensitive non-read tools are hidden or blocked |
 | EDIT | Read tools are allowed; exact tool and category rules decide the rest |
 | AUTO | All tools are allowed |
 

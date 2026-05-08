@@ -2,24 +2,24 @@
 
 Subagents are an advanced integration surface. They are not part of Ion's
 default native tool surface today, and the model should not assume a `subagent`
-tool is available unless a future mode explicitly exposes it.
+tool is available unless `subagent_tools = "on"` is explicitly configured.
 
 Ion has implementation pieces for focused delegation through Canto child
-sessions, but default registration is intentionally blocked until the context
-contract is explicit. A child agent must know whether it receives a summary, a
-full forked history snapshot, or no parent context.
+sessions, explicit context transfer, and compact inline display. Default
+registration remains off so the normal model-visible surface stays at the eight
+core coding tools.
 
 The target default personas are:
 
 | Name | Model slot | Tools | Use |
 |---|---|---|---|
-| `explorer` | `fast` | read/search/memory recall | Codebase scouting and context gathering |
+| `explorer` | `fast` | read/search/list | Codebase scouting and context gathering |
 | `reviewer` | `primary` | read/search/shell | Correctness and regression review |
 | `worker` | `primary` | edit/shell plus read/search | Scoped implementation work |
 
 The `fast` slot resolves from `fast_model` / `fast_reasoning_effort` in
-`~/.ion/config.toml`. If `fast_model` is unset, Ion picks a cheap fast model
-from the active provider catalog. `primary` uses the active provider/model.
+`~/.ion/config.toml`. If `fast_model` is unset, fast-slot personas fall back to
+the active primary model. `primary` uses the active provider/model.
 
 ## Custom Personas
 
@@ -48,7 +48,7 @@ short and give them only the tools they need.
 
 ## Context Modes
 
-Future `subagent` exposure should make context transfer explicit:
+The gated `subagent` tool makes context transfer explicit:
 
 | Mode | Use |
 | --- | --- |
@@ -65,8 +65,9 @@ concise final result unless the user expands child details.
 Pi-style subagent-to-subagent communication and Claude Code-style forked
 subagents are useful references, but Ion should add them in stages:
 
-1. explicit context modes for one synchronous child
-2. compact inline child lifecycle display
+1. explicit context modes for one synchronous child - implemented behind
+   `subagent_tools = "on"`
+2. compact inline child lifecycle display - implemented
 3. async/background children
 4. coordination or swarm views
 
