@@ -1,13 +1,14 @@
 # Ion Roadmap
 
-Updated: 2026-05-07
+Updated: 2026-05-08
 
 ## Current Focus
 
 C8 accepted Ion's Pi-level baseline, C9 closed the Pi+/experimental boundary,
-C10 selected background job/status support as the first Pi+ substrate, and C11
-implemented it. The next ready lane is low-priority design work: extension
-stdlib/x first, missions/goals only after that. The roadmap remains
+C10 selected background job/status support as the first Pi+ substrate, C11
+implemented it, and the two follow-up design lanes are closed: `tk-b121`
+extension stdlib boundary and `tk-3o1r` missions/goals boundary. There is no
+ready implementation task after this pass. The roadmap remains
 **Pi -> Pi+**:
 
 - **Pi parity:** reliable core terminal coding-agent workflows, not exact
@@ -310,18 +311,27 @@ Completed task:
 
 ## Next Design Lanes
 
-Status: ready.
+Status: done.
 
 Ready tasks:
 
-1. Ready/P4 - `tk-b121` - extension stdlib boundary design:
+1. Done/P4 - `tk-b121` - extension stdlib boundary design:
    - decide what belongs in core, built-in stdlib, or external/x extension
    - keep prompt-budget, install trust, mutation, and tests explicit before any
      implementation work
-2. Ready/P4 - `tk-3o1r` - missions and durable goals design:
+   - outcome: canonical boundary captured in
+     `ai/specs/tools-and-modes.md`; core stays always-on, stdlib is
+     Ion-shipped and supported but usually opt-in, and experimental/x holds
+     marketplace install, mutation, missions/goals, routing, memory mutation,
+     and remote sandboxes until a focused eval and trust model justify
+     promotion
+2. Done/P4 - `tk-3o1r` - missions and durable goals design:
    - design only; implementation remains later
    - now that background job/status exists, focus on durable objective metadata,
      pause/resume, progress, budget, recovery, and TUI/CLI semantics
+   - outcome: captured in `ai/specs/workflows-and-recovery.md`; goals are
+     durable session/workflow metadata, missions remain experimental/x, and the
+     first future slice should be metadata/status rather than autonomy
 
 ## I2: Minimal Shell Polish
 
@@ -610,7 +620,7 @@ Acceptance:
 
 ## C3: Context Survival And Session Workflows
 
-Status: done, except deferred Fedora local-api repeat.
+Status: done; Fedora-only repeat is superseded by the current live-smoke policy.
 
 Goal: preserve enough internal transcript metadata for reliable resume,
 subagent lifecycle, fork audits, and future context summaries without adding
@@ -625,12 +635,11 @@ Order:
    - populate Ion transcript/replay projections from Canto durable event
      timestamps
    - keep TUI rendering and provider-visible history timestamp-free by default
-3. Deferred - `tk-jkcl` - final Fedora C2 live smoke:
-   - run local-api `qwen3.6:27b-uncensored` when reachable
-   - require real tool call, persisted resume, provider-history capture, and
-     resumed follow-up
-   - current state: Fedora times out from this Mac; OpenRouter DeepSeek Flash
-     fallback passed with provider-history capture
+3. Done/superseded - `tk-jkcl` - final Fedora C2 live smoke:
+   - old Fedora-only repeat is superseded by `tk-xhfg`
+   - current policy: probe Fedora first when free/reachable, then run the
+     OpenRouter `deepseek/deepseek-v4-flash` fallback instead of deferring the
+     gate on a timeout
 4. Done - `tk-d2m6` - fork/timestamp audit:
    - verify `/fork`, `/tree`, export/import bundles, and subagent
      `context_mode=fork` preserve ancestry plus usable timing metadata

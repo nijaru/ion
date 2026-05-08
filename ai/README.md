@@ -16,16 +16,16 @@
 - [Provider Support Expansion](specs/provider-support-expansion.md) — provider roadmap.
 - [Security Policy](specs/security-policy.md) — approval, executor, environment, and secret policy.
 - [Status And Config](specs/status-and-config.md) — config/state/status-line source of truth.
-- [Subagent Personas](specs/subagent-personas-and-routing.md) — deferred subagent persona model.
+- [Subagent Personas](specs/subagent-personas-and-routing.md) — opt-in subagent personas and context modes.
 - [Subscription Providers](specs/subscription-providers.md) — secondary subscription-provider path.
 - [Swarm Mode](specs/swarm-mode-and-inline-subagents.md) — deferred operator-view model.
 - [System Prompt](specs/system-prompt.md) — prompt-budget and model-facing guidance.
 - [Testing Models](specs/testing-models.md) — deterministic, tmux, and live test policy.
 - [Tool Loading And Approval Tiers](specs/tool-loading-and-approval-tiers.md) — future lazy-tool policy.
-- [Tools And Modes](specs/tools-and-modes.md) — canonical native tool surface and mode behavior.
+- [Tools And Modes](specs/tools-and-modes.md) — tool surface, modes, stdlib/x boundary, and resource namespaces.
 - [TUI Architecture](specs/tui-architecture.md) — shell layout, slash commands, and rendering.
 - [TUI Hotkeys](specs/tui-hotkeys.md) — keybinding source of truth.
-- [Workflows And Recovery](specs/workflows-and-recovery.md) — recovery and workflow behavior.
+- [Workflows And Recovery](specs/workflows-and-recovery.md) — workflow, recovery, and durable-goal boundaries.
 - [Workspace Trust And Rollback](specs/workspace-trust-and-rollback.md) — trust and checkpoint policy.
 
 ## Active Topic Docs

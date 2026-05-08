@@ -96,8 +96,8 @@ Near-term inline behavior should be conservative:
 - no background subagent wakeups in the normal chat surface
 - no subagent-to-subagent communication in the default inline mode
 - no automatic worktree or branch creation
-- no registration until tests prove child sessions preserve provider-history
-  validity and parent/child ownership boundaries
+- no default registration; the tested gated surface remains behind
+  `subagent_tools = "on"`
 
 Future references to keep in mind:
 
@@ -106,7 +106,7 @@ Future references to keep in mind:
 - Claude Code-style forked subagents are the better first high-fidelity context
   feature because the boundary is a snapshot, not ongoing shared state.
 
-## Acceptance Gates Before Registration
+## Acceptance Gates For Gated Registration
 
 - parent transcript and provider-visible history remain unchanged by child
   events except for the final returned result

@@ -134,6 +134,48 @@ Deferred or hidden surfaces:
 | `ask_user` | Deferred until Canto owns a general elicitation/pause-resume primitive |
 | `verify` | Removed; normal verification goes through `bash` |
 
+## Extension Stdlib Boundary
+
+Ion grows through core, stdlib, and experimental/x lanes.
+
+| Lane | Meaning | Default prompt impact | Examples |
+|---|---|---|---|
+| Core | Always-on behavior needed for a reliable terminal coding agent | Included by default | native Canto loop, eight coding tools, compact TUI, scriptable CLI, durable sessions, resume/continue, compaction, `/fork`, `/tree`, status/settings |
+| Stdlib | Ion/Canto-shipped capabilities that are useful enough to support but not always core | Zero by default unless explicitly enabled; any default schema delta must be measured | background job/status support, `/skills`, `ion skill list/install`, opt-in `read_skill`, opt-in `subagent`, richer fork/session views if dogfood proves value |
+| Experimental/x | Power features, external extensions, or mutation paths that need stronger proof and trust boundaries before promotion | None by default | `manage_skill`, marketplace install, skill/self-extension nudges, missions/goals, swarms, memory mutation, routing, remote sandboxes, worktree forks, JSONL event streaming |
+
+Rules:
+
+- Stdlib means code shipped, documented, versioned, and tested with Ion or
+  Canto. It is not a hot-reload plugin runtime.
+- Stdlib may be host-only, config-gated, or mode-gated. It should not add
+  separate prompt text, command chrome, or model-visible tools by default.
+- A stdlib candidate may extend an existing core surface only with measured
+  prompt impact and a focused acceptance gate.
+- Experimental/x work cannot add default prompt text, default model-visible
+  tools, or always-on runtime hooks.
+- Project-local files such as `AGENTS.md` are instructions, not extensions.
+  Project-local skill directories are not auto-installed, auto-loaded, or
+  auto-activated.
+- Any feature that can change future agent behavior is a write surface even if
+  it only edits Markdown. Before `manage_skill`, marketplace install,
+  self-extension nudges, or extension mutation can ship as stdlib, Ion needs
+  explicit opt-in, write-capable mode visibility, approval copy, durable audit,
+  undo behavior, redaction, and deterministic failure tests.
+- Default sessions pay no recurring token cost for optional stdlib or
+  extension inventory. No installed skill list, extension catalog, or
+  marketplace inventory is added to the base prompt.
+
+Before a candidate leaves experimental/x:
+
+- written design names the target lane, owner, prompt impact, and trust model
+- deterministic tests cover success, failure, policy/mode visibility, and
+  persistence or cleanup behavior
+- tmux smoke covers TUI-visible command or display changes
+- live-provider smoke runs when provider-visible tool behavior changes
+- `ai/STATUS.md`, `ai/PLAN.md`, `ai/DESIGN.md`, and this spec are updated
+- a `tk` task records the eval/gate and is closed only after verification
+
 ## Virtual Resource Namespaces
 
 Virtual namespaces are a future capability boundary, not a default tool-surface

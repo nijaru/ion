@@ -2,10 +2,10 @@
 
 Fast, lightweight terminal coding agent.
 
-**Phase:** Post-C11 Pi+ closeout
-**Focus:** choose the next design lane after background job/status support
-**Active task:** `tk-b121` ready
-**Updated:** 2026-05-07
+**Phase:** Post-C11 Pi+/x design
+**Focus:** next Pi+ candidate selection after closing extension and goal boundaries
+**Active task:** none ready
+**Updated:** 2026-05-08
 
 ## Current Truth
 
@@ -176,9 +176,11 @@ Fast, lightweight terminal coding agent.
   `Bash(sleep 3; echo ion-tmux-smoke)`, asserts the queued notice, verifies the
   queued turn is submitted, then resumes and proves the prior tool turn remains
   visible to the provider.
-- `tk-b121` extension stdlib/x design is unblocked but low priority.
-  `tk-3o1r` missions/goals remains blocked behind the C11 job/status substrate
-  because durable goals need a job/session/progress primitive first.
+- `tk-3o1r` is closed. Missions/goals remain experimental/x. A future `/goal`
+  must start as durable objective metadata and status over sessions/workflows,
+  not as a prompt macro or hidden autonomous runner. No mission/schedule/swarm
+  surface should ship until workflow checkpoints, budgets, human gates, and
+  scriptable status are stable.
 - C8 is accepted as the current Pi-level baseline, and C9 is closed. The
   boundary is now core/Pi+/experimental-x: core only gets regressions,
   simplification, and acceptance-gate hardening; Pi+ gets small evidence-backed
@@ -193,6 +195,12 @@ Fast, lightweight terminal coding agent.
   session job handles, `/jobs`, and `/stop <job-id>`. It does not add bash
   mode, `/goal`, missions, swarms, durable agent jobs, or extra default
   model-visible tools.
+- `tk-b121` is closed. Extension/stdlib growth now has a canonical boundary:
+  core is the always-on daily-driver path; stdlib is Ion-shipped, supported,
+  tested, and usually opt-in; experimental/x holds marketplace install,
+  mutation, missions/goals, routing, memory mutation, remote sandboxes, and
+  similar power surfaces until a focused eval and trust model justify
+  promotion.
 - Latest C11 gates passed: focused tools/backend/app/tooldisplay tests,
   `go test ./... -count=1 -timeout 300s`, native race subset,
   `scripts/smoke/tmux-minimal-harness.sh`, and OpenRouter
@@ -798,7 +806,7 @@ Fast, lightweight terminal coding agent.
 
 ## Next Action
 
-1. Start `tk-szvc` post-C6 roadmap rebaseline.
+1. No ready `tk` tasks remain after the deferred-surface cleanup.
 2. Keep Fedora local-api as the preferred live target when free; otherwise use
    OpenRouter `deepseek/deepseek-v4-flash`, escalating to
    `deepseek/deepseek-v4-pro` only for model-quality uncertainty.

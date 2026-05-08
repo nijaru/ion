@@ -9,6 +9,11 @@ runtime graph.
 Default interaction stays the simple inline agent loop. Workflows are opt-in when
 the task needs explicit gates, repeatable recovery, or parallel review.
 
+Goals and missions are durable objective metadata layered over sessions and
+workflows. They are not prompt prefixes. Do not add `/goal` until Ion can store,
+pause, resume, budget, and report objective state without relying on the model
+to remember it.
+
 ## Ownership
 
 | Layer | Owns |
@@ -89,6 +94,118 @@ Parking means:
 - write a durable session event through Canto if available
 - optionally update an external checklist projection later
 
+## Durable Goals And Missions
+
+### Boundary
+
+Ion should use these terms precisely:
+
+| Surface | Meaning | Durability |
+|---|---|---|
+| background job | live process started by `bash background=true` | job handle is live session runtime state; transcript records only starts/output/kill results |
+| workflow | host-authored procedure with typed nodes, gates, and checkpoints | durable graph/checkpoint state once Canto exposes the needed primitive |
+| goal | durable objective metadata attached to a session or workflow | survives resume/import/export and can be paused, resumed, completed, or failed |
+| mission | goal plus one or more workflow runs or child-agent/job activities | experimental/x until workflow checkpoints, budgets, and supervision are boring |
+| swarm | operator view over many agents/jobs/missions | alternate-screen future work, not a default chat mode |
+
+The first accepted goal slice should be metadata and status, not autonomy. A
+goal can tell the user and agent what the current objective is, what budget or
+gate applies, and what recovery state exists. It should not schedule hidden
+turns, spawn children, or keep working after the user leaves until those
+behaviors have a separate automation design.
+
+### Goal Record
+
+Candidate product record:
+
+| Field | Purpose |
+|---|---|
+| `id` | stable goal id within the session lineage |
+| `session_id` | owning Ion session |
+| `title` | short user-visible label |
+| `objective` | durable user-approved goal text |
+| `state` | `draft`, `active`, `paused`, `blocked`, `done`, `failed`, or `cancelled` |
+| `created_at` / `updated_at` | UTC timestamps for audit and resume display |
+| `owner` | `user`, `assistant`, or `workflow` |
+| `budget` | optional max turns, tokens, wall time, or cost |
+| `progress` | concise status summary and current step |
+| `checklist` | explicit user-visible work items when useful |
+| `last_event_id` | latest durable event considered by the progress summary |
+| `jobs` | related background job ids and last known transcript references |
+| `blockers` | user-visible blockers or gates |
+| `recovery_hint` | where resume should restart or what the user must decide |
+
+Store goal state outside provider-visible history. A resumed provider request
+may include a compact active-goal summary only when a goal is active and the
+prompt-budget impact is measured.
+
+### Pause And Resume
+
+Pause is a host/workflow state, not a normal assistant message.
+
+Rules:
+
+- pausing a goal prevents further autonomous goal/workflow steps
+- pausing does not silently kill background jobs; `/jobs` and `/stop <job-id>`
+  remain the process-control surface
+- resuming rehydrates goal metadata, latest progress, blockers, budgets, and
+  recovery hint before the next provider request
+- if an active model turn must be interrupted to pause, use the existing cancel
+  path and settle the terminal state before recording the pause
+- completed or failed goals remain visible through explicit status/history
+  surfaces, not default footer chrome
+
+### Budget And Progress
+
+Budgets are hard gates for autonomous work and soft context for ordinary chat.
+
+Budget dimensions:
+
+- turn count
+- provider tokens or cost when available
+- wall-clock elapsed time
+- background job runtime
+- child-agent count or runtime when subagents are involved
+
+Progress should be derived from durable events, workflow checkpoints, explicit
+checklists, and verified command results. Model-written status text is allowed
+as a summary, but it is not the source of truth for whether a command passed,
+a gate was approved, or a background job is still live.
+
+### TUI And CLI Surface
+
+Do not add visible command chrome until goal metadata exists.
+
+Future command shape, in order:
+
+1. `/status` shows an active goal summary when one exists.
+2. `/goal` shows or edits the current session goal; no hidden autonomy.
+3. `/goal pause|resume|clear` manipulates durable goal state.
+4. `ion goal status --session <id>` or equivalent scriptable output exposes
+   goal state for automation.
+5. Mission/schedule commands remain experimental/x until they can supervise
+   workflow checkpoints, child agents, background jobs, budgets, and gates.
+
+Default footer should stay quiet. If a goal is active, one compact status token
+is enough; detailed progress belongs in `/status` or the future goal command.
+
+### Acceptance Before `/goal`
+
+Before `/goal` becomes a visible command:
+
+- deterministic tests persist, pause, resume, complete, fail, and export/import
+  a goal record
+- resumed provider history includes the active goal summary only when intended
+  and excludes completed/cleared goals by default
+- budget exhaustion parks the goal with a visible blocker instead of continuing
+  silently
+- `/status` displays active goal state without adding default footer clutter
+- tmux smoke covers status, pause/resume display, and resume after restart
+- live-provider smoke runs only if goal state is included in provider-visible
+  context
+- no background process survival is implied; live jobs stay governed by
+  `/jobs` and `/stop`
+
 ## Recovery Policy
 
 | Failure | Behavior |
@@ -111,6 +228,9 @@ inputs per node. Do not add a broad workspace snapshot system under this task.
 - cross-host workflow queue
 - automatic PR creation
 - Slack/email workflow approvals
+- hidden autonomous missions
+- scheduled/remote mission runners
+- alternate-screen swarm supervision
 
 Those are separate products. The first implementation should make review and bug-fix
 workflows recoverable and visible without making the default Ion loop heavier.

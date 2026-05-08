@@ -30,6 +30,29 @@ Distilled architectural principles plus recent decision log.
 
 ## Recent Log
 
+### 2026-05-07 - Goals are durable metadata, not prompt macros
+
+Ion should not add `/goal` as model-visible prompt text. Goals are durable
+objective records attached to a session or workflow, with state, budget,
+progress, blockers, and recovery hints that survive resume/import/export.
+Missions are goals plus workflow or child-agent/job activity and remain
+experimental/x until workflow checkpoints, budgets, human gates, and supervision
+surfaces are stable. The first future slice should expose goal metadata/status;
+hidden scheduled turns, mission runners, and swarm supervision remain deferred.
+
+### 2026-05-07 - Extension growth uses core, stdlib, and x lanes
+
+Ion extension growth is now classified by default exposure and ownership. Core
+is the always-on daily-driver path. Stdlib is Ion/Canto-shipped, documented,
+tested, and usually host-only or opt-in: background jobs, `/skills`, safe local
+skill install, `read_skill`, opt-in subagents, and possible richer
+fork/session views. Experimental/x holds `manage_skill`, marketplace install,
+self-extension nudges, missions/goals, swarms, memory mutation, routing,
+remote sandboxes, worktree forks, user-defined aliases, and JSONL streaming.
+Default sessions pay no prompt cost for optional stdlib or extension inventory,
+and mutation of future agent behavior requires explicit opt-in, approval,
+audit, and undo before promotion.
+
 ### 2026-05-07 - C11 implements background jobs as one bash tool
 
 Ion now supports background run/output/kill through the existing `bash` tool

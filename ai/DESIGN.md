@@ -340,14 +340,26 @@ Long-term growth should prefer a stdlib/x split:
 
 - Core stays small: session runtime, TUI/CLI shell, default tools, compaction,
   resume/continue, status, and safety boundaries.
-- Stdlib built-ins are supported, documented, and tested but may be opt-in:
-  skills, background jobs, richer fork views, and portable workflows.
+- Stdlib built-ins are shipped with Ion or Canto, supported, documented, and
+  tested, but may be host-only or opt-in: background jobs, `/skills`, safe
+  local skill install, `read_skill`, opt-in subagents, richer fork views, and
+  portable workflows.
 - Experimental/x features can explore missions/goals, swarms, memory mutation,
-  custom agents/droids, and extension marketplaces before promotion.
+  custom agents/droids, `manage_skill`, user-defined command aliases, remote
+  sandboxes, and extension marketplaces before promotion.
+
+Canonical extension boundary: `ai/specs/tools-and-modes.md`.
+Default sessions pay no prompt cost for optional stdlib or extension
+inventories. Project-local files are instructions, not extensions, and no
+extension may mutate future agent behavior without explicit opt-in, approval,
+audit, and undo.
 
 Missions/goals are not prompt macros. A future `/goal` or mission surface needs
 durable objective state, pause/resume, progress, budget, recovery, and
-scriptable status before it belongs in the command catalog.
+scriptable status before it belongs in the command catalog. The first accepted
+slice should be goal metadata/status, not autonomy: no hidden scheduled turns,
+child agents, or mission runners until workflow checkpoints, budgets, and human
+gates are stable.
 
 Sandbox/trust direction:
 
