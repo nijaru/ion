@@ -97,7 +97,6 @@ tk done <id>
 - Do not do another broad `ai/` sweep unless a specific subsystem points to stale or conflicting context. Use `ai/STATUS.md`, `ai/PLAN.md`, and the active core-loop reset/audit docs, then move to source review.
 - Ion is `v0.0.0` unstable. There are no backwards guarantees.
 - Do not add fallback, migration, or compatibility paths unless the user explicitly asks for them.
-- Commit immediately after each coherent green change set unless the user explicitly says not to commit.
 - Keep global Ion files under `~/.ion/`.
 - Stable user-editable settings belong in `~/.ion/config.toml`: defaults, custom endpoints, policy/subagent paths, cost limits, verbosity.
 - Mutable runtime choices belong in `~/.ion/state.toml`: selected provider/model/preset/thinking and recent picker state.
