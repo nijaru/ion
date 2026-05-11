@@ -39,7 +39,9 @@ Current audit outcome: keep SQLite for Ion's working store for now, but tighten
 data ownership around Canto's canonical effective-history rebuild. Pi's JSONL
 branch log and Codex's JSONL rollout remain useful references for later export
 or replay UX; they do not justify replacing Ion's storage before the core loop
-is stable.
+is stable. The latest `tk-03hz` source pass tightened TUI/runtime ownership by
+dropping stale awaited events after runtime switches and blocking normal submits
+while provider/model configuration is incomplete.
 
 Live-provider proof uses Fedora local-api first when it is free, then
 OpenRouter `deepseek/deepseek-v4-flash` fallback when Fedora is unavailable.

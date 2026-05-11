@@ -147,6 +147,36 @@ func TestSlashCommandBeforeTurnDoesNotMaterializeLazySession(t *testing.T) {
 	}
 }
 
+func TestSubmitComposerRejectsIncompleteRuntimeConfiguration(t *testing.T) {
+	sess := &stubSession{events: make(chan session.Event)}
+	model := readyModel(t)
+	model.Model.Session = sess
+	model.Model.Backend = stubBackend{
+		sess:        sess,
+		provider:    "openrouter",
+		providerSet: true,
+		model:       "",
+		modelSet:    true,
+	}
+	model.Input.Composer.SetValue("hello")
+
+	updated, cmd := model.submitComposer()
+	model = updated
+
+	if len(sess.submits) != 0 {
+		t.Fatalf("submits = %v, want none for incomplete runtime", sess.submits)
+	}
+	if cmd == nil {
+		t.Fatal("expected configuration error")
+	}
+	if err := localErrorFromMsg(t, cmd()); !strings.Contains(err.Error(), "No model configured") {
+		t.Fatalf("error = %v, want no model configured", err)
+	}
+	if got := model.Input.Composer.Value(); got != "hello" {
+		t.Fatalf("composer = %q, want original prompt preserved", got)
+	}
+}
+
 func TestDisplayOnlyEventBeforeTurnDoesNotMaterializeLazySession(t *testing.T) {
 	store, err := storage.NewCantoStore(t.TempDir())
 	if err != nil {

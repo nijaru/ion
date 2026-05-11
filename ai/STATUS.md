@@ -59,7 +59,7 @@ Fast, lightweight terminal coding agent.
   wiring, turn lifecycle, tool/event persistence, config/state, TUI
   integration, and maintainability. This is a deeper architecture/code audit,
   not a `/review` or `ion review` feature-design pass.
-- `tk-03hz` has found and fixed seven core defects so far:
+- `tk-03hz` has found and fixed nine core defects so far:
   display-only replay now respects the latest Canto compaction/projection
   cutoff; custom auth env vars no longer leak into default providers; the main
   native Canto agent now registers Ion's `PreToolUse` policy hook; and TUI
@@ -67,8 +67,11 @@ Fast, lightweight terminal coding agent.
   Normal input during approval now queues instead of disrupting the blocked
   turn, Esc during approval cancels the pending turn, and Canto
   cancellation/deadline during tool preflight now aborts instead of persisting
-  synthetic tool output. The framework-owned cancellation fix is in upstream
-  Canto and applies to any Canto host, not just Ion.
+  synthetic tool output. Runtime switches now ignore stale awaited events from
+  the prior session, and normal submits are rejected while provider/model
+  configuration is incomplete so stale runtimes cannot receive new turns. The
+  framework-owned cancellation fix is in upstream Canto and applies to any
+  Canto host, not just Ion.
 - Data-architecture read: Pi uses one append-only JSONL branch log and derives
   context from the active leaf; Codex uses JSONL rollout as the replay artifact
   with SQLite/state DB for indexing/metadata. Ion can keep SQLite for now, but
