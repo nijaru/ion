@@ -23,7 +23,7 @@ func (s *cantoSession) Meta() Metadata {
 		CWD:       s.meta.CWD,
 		Model:     s.meta.Model,
 		Branch:    s.meta.Branch,
-		CreatedAt: time.Unix(s.meta.CreatedAt, 0),
+		CreatedAt: metadataTime(s.meta.CreatedAt),
 	}
 }
 

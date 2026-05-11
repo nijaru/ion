@@ -199,8 +199,8 @@ func (s *cantoStore) insertBundleSessionMeta(ctx context.Context, info SessionIn
 		info.Model,
 		info.Branch,
 		info.Title,
-		createdAt.Unix(),
-		updatedAt.Unix(),
+		metadataTimestamp(createdAt),
+		metadataTimestamp(updatedAt),
 		info.LastPreview,
 	)
 	return err

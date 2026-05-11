@@ -601,6 +601,146 @@ func TestCantoStoreListSessionsIncludesWorkspace(t *testing.T) {
 	}
 }
 
+func TestCantoStoreListSessionsUsesSubsecondMetadataTimestamps(t *testing.T) {
+	root := t.TempDir()
+	storeAny, err := NewCantoStore(root)
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	store := storeAny.(*cantoStore)
+
+	ctx := context.Background()
+	cwd := "/tmp/ion-storage-test"
+	first, err := store.OpenSession(ctx, cwd, "model-a", "main")
+	if err != nil {
+		t.Fatalf("open first session: %v", err)
+	}
+	second, err := store.OpenSession(ctx, cwd, "model-b", "main")
+	if err != nil {
+		t.Fatalf("open second session: %v", err)
+	}
+
+	base := time.Date(2026, 5, 11, 12, 0, 0, 123_000_000, time.UTC)
+	if _, err := store.db.ExecContext(
+		ctx,
+		"UPDATE session_meta SET updated_at = ? WHERE id = ?",
+		metadataTimestamp(base),
+		first.ID(),
+	); err != nil {
+		t.Fatalf("update first timestamp: %v", err)
+	}
+	if _, err := store.db.ExecContext(
+		ctx,
+		"UPDATE session_meta SET updated_at = ? WHERE id = ?",
+		metadataTimestamp(base.Add(time.Millisecond)),
+		second.ID(),
+	); err != nil {
+		t.Fatalf("update second timestamp: %v", err)
+	}
+
+	sessions, err := store.ListSessions(ctx, cwd)
+	if err != nil {
+		t.Fatalf("list sessions: %v", err)
+	}
+	if len(sessions) != 2 {
+		t.Fatalf("sessions = %d, want 2", len(sessions))
+	}
+	if sessions[0].ID != second.ID() || sessions[1].ID != first.ID() {
+		t.Fatalf("session order = %#v, want newest subsecond timestamp first", sessions)
+	}
+	if !sessions[0].UpdatedAt.Equal(base.Add(time.Millisecond)) {
+		t.Fatalf("updated_at = %s, want %s", sessions[0].UpdatedAt, base.Add(time.Millisecond))
+	}
+}
+
+func TestCantoStoreDecodesLegacySecondMetadataTimestamps(t *testing.T) {
+	root := t.TempDir()
+	storeAny, err := NewCantoStore(root)
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	store := storeAny.(*cantoStore)
+
+	ctx := context.Background()
+	cwd := "/tmp/ion-storage-test"
+	sess, err := store.OpenSession(ctx, cwd, "model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	legacy := time.Date(2024, 2, 3, 4, 5, 6, 0, time.UTC)
+	if _, err := store.db.ExecContext(
+		ctx,
+		"UPDATE session_meta SET created_at = ?, updated_at = ? WHERE id = ?",
+		legacy.Unix(),
+		legacy.Unix(),
+		sess.ID(),
+	); err != nil {
+		t.Fatalf("write legacy timestamps: %v", err)
+	}
+
+	listed, err := store.ListSessions(ctx, cwd)
+	if err != nil {
+		t.Fatalf("list sessions: %v", err)
+	}
+	if len(listed) != 1 {
+		t.Fatalf("sessions = %d, want 1", len(listed))
+	}
+	if !listed[0].CreatedAt.Equal(legacy) || !listed[0].UpdatedAt.Equal(legacy) {
+		t.Fatalf(
+			"listed timestamps = %s/%s, want %s",
+			listed[0].CreatedAt,
+			listed[0].UpdatedAt,
+			legacy,
+		)
+	}
+
+	resumed, err := store.ResumeSession(ctx, sess.ID())
+	if err != nil {
+		t.Fatalf("resume session: %v", err)
+	}
+	defer resumed.Close()
+	if !resumed.Meta().CreatedAt.Equal(legacy) {
+		t.Fatalf("resumed created_at = %s, want %s", resumed.Meta().CreatedAt, legacy)
+	}
+}
+
+func TestCantoStoreListSessionsBreaksLegacyTimestampTiesByInsertOrder(t *testing.T) {
+	root := t.TempDir()
+	storeAny, err := NewCantoStore(root)
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	store := storeAny.(*cantoStore)
+
+	ctx := context.Background()
+	cwd := "/tmp/ion-storage-test"
+	first, err := store.OpenSession(ctx, cwd, "model-a", "main")
+	if err != nil {
+		t.Fatalf("open first session: %v", err)
+	}
+	second, err := store.OpenSession(ctx, cwd, "model-b", "main")
+	if err != nil {
+		t.Fatalf("open second session: %v", err)
+	}
+
+	legacy := time.Date(2024, 2, 3, 4, 5, 6, 0, time.UTC).Unix()
+	if _, err := store.db.ExecContext(ctx, "UPDATE session_meta SET updated_at = ?", legacy); err != nil {
+		t.Fatalf("write legacy timestamps: %v", err)
+	}
+
+	sessions, err := store.ListSessions(ctx, cwd)
+	if err != nil {
+		t.Fatalf("list sessions: %v", err)
+	}
+	if len(sessions) != 2 {
+		t.Fatalf("sessions = %d, want 2", len(sessions))
+	}
+	if sessions[0].ID != second.ID() || sessions[1].ID != first.ID() {
+		t.Fatalf("session order = %#v, want later inserted row first", sessions)
+	}
+}
+
 func TestLazySessionDoesNotAppearUntilEnsure(t *testing.T) {
 	root := t.TempDir()
 	store, err := NewCantoStore(root)
