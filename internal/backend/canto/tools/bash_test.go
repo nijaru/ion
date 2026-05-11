@@ -170,6 +170,39 @@ func TestBashBackgroundOutputTail(t *testing.T) {
 	}
 }
 
+func TestBackgroundJobOutputIsBounded(t *testing.T) {
+	done := make(chan struct{})
+	close(done)
+	job := &backgroundJob{id: "bash-1", done: done}
+
+	job.append([]byte(strings.Repeat("a", maxOutputSize-1)))
+	job.append([]byte("bcdef"))
+	job.append([]byte("ignored"))
+
+	wantBytes := maxOutputSize + len(backgroundOutputTruncatedMarker)
+	if info := job.info(); info.OutputBytes != wantBytes {
+		t.Fatalf("output bytes = %d, want %d", info.OutputBytes, wantBytes)
+	}
+
+	output := job.output(0)
+	payload, ok := strings.CutPrefix(output, "background job bash-1 done\n")
+	if !ok {
+		t.Fatalf("output prefix = %q", output[:min(len(output), 64)])
+	}
+	if len(payload) != wantBytes {
+		t.Fatalf("payload bytes = %d, want %d", len(payload), wantBytes)
+	}
+	if payload[maxOutputSize-1] != 'b' {
+		t.Fatalf("last retained byte = %q, want b", payload[maxOutputSize-1])
+	}
+	if !strings.HasSuffix(payload, backgroundOutputTruncatedMarker) {
+		t.Fatal("payload missing truncation marker")
+	}
+	if strings.Contains(payload, "cdef") || strings.Contains(payload, "ignored") {
+		t.Fatal("payload kept bytes after truncation boundary")
+	}
+}
+
 func TestBashCloseStopsBackgroundJobs(t *testing.T) {
 	b := NewBash(t.TempDir())
 	if _, err := b.Execute(
