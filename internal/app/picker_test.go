@@ -284,6 +284,33 @@ func TestSessionPickerLineOmitsMissingAge(t *testing.T) {
 	}
 }
 
+func TestRankedSessionPickerItemsSearchesCaseInsensitively(t *testing.T) {
+	items := []sessionPickerItem{
+		{info: storage.SessionInfo{
+			ID:          "sess-1",
+			Title:       "Fix Resume Flow",
+			Summary:     "Workspace history",
+			LastPreview: "Recovered stalled session",
+		}},
+		{info: storage.SessionInfo{
+			ID:          "sess-2",
+			Title:       "Tool output cleanup",
+			Summary:     "Background jobs",
+			LastPreview: "Bounded output",
+		}},
+	}
+
+	filtered := rankedSessionPickerItems(items, "resume", "/tmp/ion")
+	if len(filtered) != 1 || filtered[0].info.ID != "sess-1" {
+		t.Fatalf("filtered = %#v, want only sess-1", filtered)
+	}
+
+	filtered = rankedSessionPickerItems(items, "RECOVERED", "/tmp/ion")
+	if len(filtered) != 1 || filtered[0].info.ID != "sess-1" {
+		t.Fatalf("filtered by preview = %#v, want only sess-1", filtered)
+	}
+}
+
 func TestSessionPickerRowsFitTerminalWidth(t *testing.T) {
 	model := readyModel(t)
 	model.App.Width = 80

@@ -476,6 +476,53 @@ func TestRenderAgentMarkdownPreservesTableInlineNodes(t *testing.T) {
 	}
 }
 
+func TestRenderAgentMarkdownThematicBreakFitsShellWidth(t *testing.T) {
+	model := readyModel(t)
+	model.App.Width = 20
+
+	got := ansi.Strip(model.renderEntry(session.Entry{Role: session.Agent, Content: "---"}))
+	for i, line := range strings.Split(got, "\n") {
+		if width := ansi.StringWidth(line); width > model.shellWidth() {
+			t.Fatalf(
+				"line %d width = %d, want <= %d: %q",
+				i,
+				width,
+				model.shellWidth(),
+				line,
+			)
+		}
+	}
+}
+
+func TestRenderAgentMarkdownFallsBackFromWideTable(t *testing.T) {
+	model := readyModel(t)
+	model.App.Width = 24
+	entry := session.Entry{
+		Role: session.Agent,
+		Content: strings.Join([]string{
+			"| ColumnOne | ColumnTwo |",
+			"| --- | --- |",
+			"| a | b |",
+		}, "\n"),
+	}
+
+	got := ansi.Strip(model.renderEntry(entry))
+	for i, line := range strings.Split(got, "\n") {
+		if width := ansi.StringWidth(line); width > model.shellWidth() {
+			t.Fatalf(
+				"line %d width = %d, want <= %d: %q",
+				i,
+				width,
+				model.shellWidth(),
+				line,
+			)
+		}
+	}
+	if strings.Contains(got, "┌") {
+		t.Fatalf("rendered table = %q, want plain fallback at narrow width", got)
+	}
+}
+
 func TestFormatToolTitleUsesReadableLabels(t *testing.T) {
 	if got := FormatToolTitle("read", `{"file_path":"AGENTS.md"}`); got != "Read(AGENTS.md)" {
 		t.Fatalf("read title = %q, want readable title", got)

@@ -196,12 +196,12 @@ func rankedSessionPickerItems(items []sessionPickerItem, query, cwd string) []se
 	for i, item := range items {
 		score, ok := pickerSearchScore(
 			query,
-			pickerSearchField{value: item.info.ID, weight: 0},
-			pickerSearchField{value: item.info.Title, weight: 3},
-			pickerSearchField{value: item.info.Summary, weight: 4},
-			pickerSearchField{value: item.info.LastPreview, weight: 5},
-			pickerSearchField{value: filepath.Base(cwd), weight: 10},
-			pickerSearchField{value: cwd, weight: 12},
+			pickerSearchField{value: normalizeSearchQuery(item.info.ID), weight: 0},
+			pickerSearchField{value: normalizeSearchQuery(item.info.Title), weight: 3},
+			pickerSearchField{value: normalizeSearchQuery(item.info.Summary), weight: 4},
+			pickerSearchField{value: normalizeSearchQuery(item.info.LastPreview), weight: 5},
+			pickerSearchField{value: normalizeSearchQuery(filepath.Base(cwd)), weight: 10},
+			pickerSearchField{value: normalizeSearchQuery(cwd), weight: 12},
 		)
 		if !ok {
 			continue

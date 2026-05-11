@@ -89,7 +89,15 @@ func (m Model) renderMarkdownNode(node ast.Node, source []byte, depth int) []str
 			lines = append(lines, m.renderMarkdownTable(n, source, depth)...)
 			lines = append(lines, "")
 		case *ast.ThematicBreak:
-			lines = append(lines, strings.Repeat("─", max(8, m.App.Width-2)))
+			width := m.shellWidth()
+			if width <= 0 {
+				if m.App.Width > 0 {
+					width = 1
+				} else {
+					width = 8
+				}
+			}
+			lines = append(lines, strings.Repeat("─", max(1, width-2)))
 			lines = append(lines, "")
 		default:
 			if child.HasChildren() {
@@ -258,7 +266,15 @@ func (m Model) renderMarkdownTable(table *extensionast.Table, source []byte, dep
 	for _, w := range widths {
 		total += w + 3
 	}
-	if m.App.Width > 0 && total > max(24, m.App.Width-4) {
+	tableWidth := m.shellWidth() - 2
+	if tableWidth <= 0 {
+		if m.App.Width > 0 {
+			tableWidth = 1
+		} else {
+			tableWidth = 24
+		}
+	}
+	if m.App.Width > 0 && total > tableWidth {
 		return renderMarkdownTablePlain(indent, headers, rows)
 	}
 
@@ -267,10 +283,16 @@ func (m Model) renderMarkdownTable(table *extensionast.Table, source []byte, dep
 	borderBottom := indent + "└" + joinWidths(widths, "┴", "─") + "┘"
 
 	lines := []string{m.st.dim.Render(borderTop)}
-	lines = append(lines, m.st.dim.Render(indent+"│"+renderTableRow(headers, widths, alignments, true)+"│"))
+	lines = append(
+		lines,
+		m.st.dim.Render(indent+"│"+renderTableRow(headers, widths, alignments, true)+"│"),
+	)
 	lines = append(lines, m.st.dim.Render(borderMid))
 	for _, r := range rows {
-		lines = append(lines, m.st.dim.Render(indent+"│"+renderTableRow(r.cells, widths, alignments, false)+"│"))
+		lines = append(
+			lines,
+			m.st.dim.Render(indent+"│"+renderTableRow(r.cells, widths, alignments, false)+"│"),
+		)
 	}
 	lines = append(lines, m.st.dim.Render(borderBottom))
 	return lines
@@ -342,7 +364,12 @@ func renderMarkdownTablePlain(indent string, headers []string, rows []markdownTa
 	return normalizeMarkdownLines(lines)
 }
 
-func renderTableRow(cells []string, widths []int, aligns []extensionast.Alignment, header bool) string {
+func renderTableRow(
+	cells []string,
+	widths []int,
+	aligns []extensionast.Alignment,
+	header bool,
+) string {
 	parts := make([]string, len(widths))
 	for i := range widths {
 		value := ""

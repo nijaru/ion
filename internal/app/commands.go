@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -13,6 +14,8 @@ import (
 	ionskills "github.com/nijaru/ion/internal/skills"
 	"github.com/nijaru/ion/internal/storage"
 )
+
+const stopJobTimeout = 5 * time.Second
 
 // handleCommand dispatches a slash command entered by the user.
 func (m Model) handleCommand(input string) (Model, tea.Cmd) {
@@ -253,7 +256,9 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		}
 		id := fields[1]
 		return m, func() tea.Msg {
-			notice, err := jobs.StopJob(context.Background(), id)
+			ctx, cancel := context.WithTimeout(context.Background(), stopJobTimeout)
+			defer cancel()
+			notice, err := jobs.StopJob(ctx, id)
 			if err != nil {
 				return localErrorMsg{err: err}
 			}
