@@ -33,6 +33,31 @@ const (
 	ionSubagentEvent session.EventType = "ion_subagent"
 )
 
+const (
+	unixMilliTimestampThreshold = int64(1_000_000_000_000)
+	unixNanoTimestampThreshold  = int64(1_000_000_000_000_000)
+)
+
+func metadataTimestamp(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.UTC().UnixNano()
+}
+
+func metadataTime(value int64) time.Time {
+	switch {
+	case value <= 0:
+		return time.Time{}
+	case value >= unixNanoTimestampThreshold:
+		return time.Unix(0, value).UTC()
+	case value >= unixMilliTimestampThreshold:
+		return time.UnixMilli(value).UTC()
+	default:
+		return time.Unix(value, 0).UTC()
+	}
+}
+
 func NewCantoStore(root string) (Store, error) {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return nil, err
@@ -141,6 +166,7 @@ func (s *cantoStore) init() error {
 
 func (s *cantoStore) OpenSession(ctx context.Context, cwd, model, branch string) (Session, error) {
 	now := time.Now().UTC()
+	storedNow := metadataTimestamp(now)
 	id := fmt.Sprintf("%d-%s", now.Unix(), ionsession.ShortID())
 
 	_, err := s.db.ExecContext(
@@ -151,8 +177,8 @@ func (s *cantoStore) OpenSession(ctx context.Context, cwd, model, branch string)
 		model,
 		branch,
 		"",
-		now.Unix(),
-		now.Unix(),
+		storedNow,
+		storedNow,
 	)
 	if err != nil {
 		return nil, err
@@ -166,7 +192,7 @@ func (s *cantoStore) OpenSession(ctx context.Context, cwd, model, branch string)
 			CWD:       cwd,
 			Model:     model,
 			Branch:    branch,
-			CreatedAt: now.Unix(),
+			CreatedAt: storedNow,
 		},
 	}, nil
 }
@@ -198,6 +224,7 @@ func (s *cantoStore) ForkSession(
 		return nil, err
 	}
 	now := time.Now()
+	storedNow := metadataTimestamp(now)
 	childID := fmt.Sprintf("%d-%s", now.Unix(), ionsession.ShortID())
 	_, err = s.canto.ForkWithOptions(ctx, parentID, childID, session.ForkOptions{
 		BranchLabel: strings.TrimSpace(opts.Label),
@@ -221,8 +248,8 @@ func (s *cantoStore) ForkSession(
 		parent.Model,
 		parent.Branch,
 		title,
-		now.Unix(),
-		now.Unix(),
+		storedNow,
+		storedNow,
 		parent.LastPreview,
 	); err != nil {
 		return nil, err
@@ -236,7 +263,7 @@ func (s *cantoStore) ForkSession(
 			CWD:       parent.CWD,
 			Model:     parent.Model,
 			Branch:    parent.Branch,
-			CreatedAt: now.Unix(),
+			CreatedAt: storedNow,
 		},
 	}, nil
 }
@@ -264,8 +291,8 @@ func (s *cantoStore) sessionInfo(ctx context.Context, id string) (SessionInfo, e
 	if err != nil {
 		return SessionInfo{}, err
 	}
-	si.CreatedAt = time.Unix(ca, 0)
-	si.UpdatedAt = time.Unix(ua, 0)
+	si.CreatedAt = metadataTime(ca)
+	si.UpdatedAt = metadataTime(ua)
 	si.Title = title.String
 	si.Summary = preview.String
 	si.LastPreview = preview.String
@@ -316,7 +343,8 @@ func (s *cantoStore) sessionInfoFromAncestry(
 func (s *cantoStore) ListSessions(ctx context.Context, cwd string) ([]SessionInfo, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
-		"SELECT id, model, branch, created_at, updated_at, name, last_preview FROM session_meta WHERE cwd = ? ORDER BY updated_at DESC",
+		`SELECT id, model, branch, created_at, updated_at, name, last_preview
+		 FROM session_meta WHERE cwd = ? ORDER BY updated_at DESC, rowid DESC`,
 		cwd,
 	)
 	if err != nil {
@@ -334,8 +362,8 @@ func (s *cantoStore) ListSessions(ctx context.Context, cwd string) ([]SessionInf
 			return nil, err
 		}
 		si.Title = title.String
-		si.CreatedAt = time.Unix(ca, 0)
-		si.UpdatedAt = time.Unix(ua, 0)
+		si.CreatedAt = metadataTime(ca)
+		si.UpdatedAt = metadataTime(ua)
 		si.Summary = preview.String
 		si.LastPreview = preview.String
 		// Note: MessageCount not easily available without querying events table
@@ -406,7 +434,7 @@ func (s *cantoStore) UpdateSession(ctx context.Context, si SessionInfo) error {
 		     name = CASE WHEN (name IS NULL OR name = '') AND ? != '' THEN ? ELSE name END,
 		     last_preview = CASE WHEN ? != '' THEN ? ELSE last_preview END
 		 WHERE id = ?`,
-		time.Now().Unix(),
+		metadataTimestamp(time.Now()),
 		si.Model,
 		si.Model,
 		si.Branch,
