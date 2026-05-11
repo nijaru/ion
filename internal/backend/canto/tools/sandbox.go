@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
 )
 
@@ -158,7 +159,7 @@ func planSeatbeltSandbox(cwd, command string) (sandboxPlan, error) {
 }
 
 func seatbeltProfile(cwd string) string {
-	escaped := strings.ReplaceAll(cwd, "\"", "\\\"")
+	quoted := strconv.Quote(cwd)
 	return fmt.Sprintf(`(version 1)
 (deny default)
 (allow process*)
@@ -173,12 +174,12 @@ func seatbeltProfile(cwd string) string {
   (subpath "/private/etc")
   (subpath "/tmp")
   (subpath "/private/tmp")
-  (subpath "%s"))
+  (subpath %s))
 (allow file-write*
   (subpath "/tmp")
   (subpath "/private/tmp")
-  (subpath "%s"))
-`, escaped, escaped)
+  (subpath %s))
+`, quoted, quoted)
 }
 
 func planBubblewrapSandbox(cwd, command string) (sandboxPlan, error) {
@@ -204,7 +205,8 @@ func planBubblewrapSandbox(cwd, command string) (sandboxPlan, error) {
 		args = append(args, "--bind", "/private/tmp", "/private/tmp")
 	}
 	if sandboxGOOS == "darwin" {
-		args = append(args,
+		args = append(
+			args,
 			"--ro-bind", "/System", "/System",
 			"--ro-bind", "/Library", "/Library",
 		)

@@ -3,6 +3,7 @@ package tools
 import (
 	"errors"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -66,6 +67,18 @@ func TestPlanSeatbeltSandboxBuildsProfile(t *testing.T) {
 		if !strings.Contains(profile, want) {
 			t.Fatalf("seatbelt profile missing %q: %s", want, profile)
 		}
+	}
+}
+
+func TestSeatbeltProfileQuotesWorkspacePath(t *testing.T) {
+	cwd := "/tmp/work\"space\\with\nnewline"
+	profile := seatbeltProfile(cwd)
+	quoted := strconv.Quote(cwd)
+	if !strings.Contains(profile, "(subpath "+quoted+")") {
+		t.Fatalf("seatbelt profile missing quoted path %s: %s", quoted, profile)
+	}
+	if strings.Contains(profile, "(subpath \"/tmp/work\"space") {
+		t.Fatalf("seatbelt profile contains unescaped workspace path: %s", profile)
 	}
 }
 
