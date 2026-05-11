@@ -120,6 +120,56 @@ func TestTranslateEventsSuppressesCanceledTerminalError(t *testing.T) {
 	}
 }
 
+func TestTranslateEventsSuppressesDeadlineTerminalError(t *testing.T) {
+	b := New()
+	events := make(chan csession.Event, 1)
+	events <- csession.NewTurnCompletedEvent("session-id", csession.TurnCompletedData{
+		Error: context.DeadlineExceeded.Error(),
+	})
+	close(events)
+
+	b.translateEvents(t.Context(), events, 0)
+
+	ev1 := receiveEvent(t, b.Events())
+	if _, ok := ev1.(ionsession.TurnFinished); !ok {
+		t.Fatalf("first event = %T, want TurnFinished", ev1)
+	}
+
+	ev2 := receiveEvent(t, b.Events())
+	status, ok := ev2.(ionsession.StatusChanged)
+	if !ok {
+		t.Fatalf("second event = %T, want StatusChanged", ev2)
+	}
+	if status.Status != "Ready" {
+		t.Fatalf("status = %q, want Ready", status.Status)
+	}
+}
+
+func TestFinishTurnWithErrorSuppressesDeadlineExceeded(t *testing.T) {
+	b := New()
+	b.turnSeq = 7
+	b.turnActive = true
+	b.cancel = func() {}
+
+	b.finishTurnWithError(7, context.DeadlineExceeded)
+
+	if b.turnActive {
+		t.Fatal("turnActive remained true after deadline terminal")
+	}
+	if b.cancel != nil {
+		t.Fatal("cancel func remained set after deadline terminal")
+	}
+	ev := receiveEvent(t, b.Events())
+	if _, ok := ev.(ionsession.TurnFinished); !ok {
+		t.Fatalf("event = %T, want TurnFinished", ev)
+	}
+	select {
+	case ev := <-b.Events():
+		t.Fatalf("deadline terminal emitted extra event: %#v", ev)
+	default:
+	}
+}
+
 func TestTranslateEventsSuppressesInactiveTurnEvents(t *testing.T) {
 	b := New()
 	b.turnSeq = 7
