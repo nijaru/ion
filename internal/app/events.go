@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/nijaru/ion/internal/session"
+	"github.com/nijaru/ion/internal/storage"
 )
 
 // handleKey is the source of truth for core TUI hotkey semantics.
@@ -25,6 +26,9 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	// Approval gate: y/n/a consumed before any other handling
 	if m.Approval.Pending != nil {
 		switch msg.String() {
+		case "esc":
+			m.clearPendingAction()
+			return m.cancelRunningTurn("Canceled by user")
 		case "y", "n":
 			approved := msg.String() == "y"
 			reqID := m.Approval.Pending.RequestID
@@ -36,6 +40,9 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			notice := session.Entry{Role: session.System, Content: label + ": " + desc}
 			if err := m.Model.Session.Approve(context.Background(), reqID, approved); err != nil {
 				return m, persistErrorCmd("send approval", err)
+			}
+			if err := m.persistApprovalNotice(notice); err != nil {
+				return m, tea.Sequence(m.printEntries(notice), persistErrorCmd("persist approval decision", err))
 			}
 			return m, m.printEntries(notice)
 		case "a":
@@ -49,6 +56,9 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			notice := session.Entry{Role: session.System, Content: "Always: " + desc}
 			if err := m.Model.Session.Approve(context.Background(), reqID, true); err != nil {
 				return m, persistErrorCmd("send approval", err)
+			}
+			if err := m.persistApprovalNotice(notice); err != nil {
+				return m, tea.Sequence(m.printEntries(notice), persistErrorCmd("persist approval decision", err))
 			}
 			return m, m.printEntries(notice)
 		}
@@ -222,11 +232,22 @@ func (m Model) submitComposer() (Model, tea.Cmd) {
 	if strings.HasPrefix(text, "/") {
 		return m.submitText(text)
 	}
-	if m.InFlight.Thinking || m.Progress.Compacting {
+	if m.localCommandBusy() {
 		return m.submitBusyInput(text)
 	}
 
 	return m.submitText(text)
+}
+
+func (m Model) persistApprovalNotice(notice session.Entry) error {
+	if m.Model.Storage == nil {
+		return nil
+	}
+	return m.Model.Storage.Append(context.Background(), storage.System{
+		Type:    "system",
+		Content: notice.Content,
+		TS:      entryUnix(notice.Timestamp),
+	})
 }
 
 func (m Model) submitBusyInput(text string) (Model, tea.Cmd) {

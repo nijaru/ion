@@ -91,14 +91,7 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 }
 
 func (m Model) handleSessionError(err error, awaitTerminal bool) (Model, tea.Cmd) {
-	m.InFlight.Pending = nil
-	m.InFlight.PendingTools = nil
-	m.Approval.Pending = nil
-	m.InFlight.QueuedTurns = nil
-	m.InFlight.StreamBuf = ""
-	m.InFlight.ReasonBuf = ""
-	m.InFlight.Thinking = false
-	m.InFlight.AgentCommitted = false
+	m.clearActiveTurnState(true)
 	m.Progress.Compacting = false
 	m.Progress.Mode = stateError
 	displayErr := "session error"
@@ -200,7 +193,7 @@ func (m Model) handleTokenUsage(msg session.TokenUsage) (Model, tea.Cmd) {
 			if err := m.Model.Session.CancelTurn(context.Background()); err != nil {
 				return m, persistErrorCmd("cancel over-budget turn", err)
 			}
-			m.InFlight.Thinking = false
+			m.clearActiveTurnState(true)
 			m.Progress.Mode = stateCancelled
 			entry := session.Entry{
 				Role:      session.System,

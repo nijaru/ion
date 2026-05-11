@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/nijaru/canto/workspace"
 	"github.com/nijaru/ion/internal/session"
+	"github.com/nijaru/ion/internal/storage"
 )
 
 func TestApprovalFailureSurfacesLocalError(t *testing.T) {
@@ -41,6 +42,77 @@ func TestApprovalFailureSurfacesLocalError(t *testing.T) {
 	err := localErrorFromMsg(t, cmd())
 	if !strings.Contains(err.Error(), "send approval") {
 		t.Fatalf("approval error = %v, want send approval context", err)
+	}
+}
+
+func TestApprovalDecisionPersistsRedactedNotice(t *testing.T) {
+	stored := &stubStorageSession{}
+	sess := &stubSession{events: make(chan session.Event)}
+	model := readyModel(t)
+	model.Model.Session = sess
+	model.Model.Storage = stored
+	model.Approval.Pending = &session.ApprovalRequest{
+		RequestID:   "req-1",
+		Description: "Tool: bash\nArgs: {\"command\":\"echo [REDACTED]\"}",
+		ToolName:    "bash",
+	}
+	model.Progress.Mode = stateApproval
+
+	updated, _ := model.Update(tea.KeyPressMsg{Code: 'n', Text: "n"})
+	model = updated.(Model)
+
+	if len(sess.approvals) != 1 || sess.approvals[0] != (stubApproval{id: "req-1", ok: false}) {
+		t.Fatalf("approvals = %#v, want req-1 denial", sess.approvals)
+	}
+	if len(stored.appends) != 1 {
+		t.Fatalf("appends = %#v, want one persisted approval notice", stored.appends)
+	}
+	notice, ok := stored.appends[0].(storage.System)
+	if !ok {
+		t.Fatalf("append = %T, want storage.System", stored.appends[0])
+	}
+	if !strings.Contains(notice.Content, "Denied: Tool: bash") {
+		t.Fatalf("notice content = %q, want denied approval notice", notice.Content)
+	}
+}
+
+func TestEscCancelsPendingApprovalTurn(t *testing.T) {
+	stored := &stubStorageSession{}
+	sess := &stubSession{events: make(chan session.Event)}
+	model := readyModel(t)
+	model.Model.Session = sess
+	model.Model.Storage = stored
+	model.Approval.Pending = &session.ApprovalRequest{
+		RequestID:   "req-1",
+		Description: "Tool: bash",
+		ToolName:    "bash",
+	}
+	model.Progress.Mode = stateApproval
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	model = updated.(Model)
+
+	if cmd == nil {
+		t.Fatal("expected cancellation print command")
+	}
+	if sess.cancels != 1 {
+		t.Fatalf("cancels = %d, want 1", sess.cancels)
+	}
+	if len(sess.approvals) != 0 {
+		t.Fatalf("approvals = %#v, want none on cancel", sess.approvals)
+	}
+	if model.Approval.Pending != nil {
+		t.Fatalf("approval pending = %#v, want cleared", model.Approval.Pending)
+	}
+	if model.Progress.Mode != stateCancelled {
+		t.Fatalf("progress mode = %v, want cancelled", model.Progress.Mode)
+	}
+	if len(stored.appends) != 1 {
+		t.Fatalf("appends = %#v, want cancellation entry", stored.appends)
+	}
+	system, ok := stored.appends[0].(storage.System)
+	if !ok || system.Content != "Canceled by user" {
+		t.Fatalf("append = %#v, want cancellation system entry", stored.appends[0])
 	}
 }
 

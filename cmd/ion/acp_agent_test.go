@@ -67,11 +67,11 @@ func (c *acpTestClient) CreateTerminal(
 	return acp.CreateTerminalResponse{}, nil
 }
 
-func (c *acpTestClient) KillTerminalCommand(
+func (c *acpTestClient) KillTerminal(
 	context.Context,
-	acp.KillTerminalCommandRequest,
-) (acp.KillTerminalCommandResponse, error) {
-	return acp.KillTerminalCommandResponse{}, nil
+	acp.KillTerminalRequest,
+) (acp.KillTerminalResponse, error) {
+	return acp.KillTerminalResponse{}, nil
 }
 
 func (c *acpTestClient) ReleaseTerminal(

@@ -15,14 +15,9 @@ func (m Model) cancelRunningTurn(reason string) (Model, tea.Cmd) {
 	if err := m.Model.Session.CancelTurn(context.Background()); err != nil {
 		return m, persistErrorCmd("cancel turn", err)
 	}
-	m.InFlight.Thinking = false
+	m.clearActiveTurnState(true)
+	m.Progress.Compacting = false
 	m.Progress.Mode = stateCancelled
-	m.InFlight.Pending = nil
-	m.InFlight.PendingTools = nil
-	m.InFlight.QueuedTurns = nil
-	m.InFlight.StreamBuf = ""
-	m.InFlight.ReasonBuf = ""
-	m.InFlight.AgentCommitted = false
 	entry := session.Entry{Role: session.System, Content: reason}
 	if err := m.persistEntry("persist cancellation", storage.System{
 		Type:    "system",
@@ -32,6 +27,21 @@ func (m Model) cancelRunningTurn(reason string) (Model, tea.Cmd) {
 		return m, persistErrorCmd("persist cancellation", err)
 	}
 	return m, m.printEntries(entry)
+}
+
+func (m *Model) clearActiveTurnState(clearQueued bool) {
+	m.InFlight.Thinking = false
+	m.InFlight.Pending = nil
+	m.InFlight.PendingTools = nil
+	m.InFlight.Subagents = make(map[string]*SubagentProgress)
+	m.Approval.Pending = nil
+	if clearQueued {
+		m.InFlight.QueuedTurns = nil
+	}
+	m.InFlight.StreamBuf = ""
+	m.InFlight.ReasonBuf = ""
+	m.InFlight.AgentCommitted = false
+	m.Progress.LastToolUseID = ""
 }
 
 func (m Model) submitText(text string) (Model, tea.Cmd) {

@@ -331,6 +331,237 @@ func TestSubmitTurnCancelDuringToolSuppressesLateToolEvents(t *testing.T) {
 	}
 }
 
+func TestSubmitTurnApprovalDenialContinuesAsToolResult(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	root := t.TempDir()
+	store, err := storage.NewCantoStore(root)
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	storageSession, err := store.OpenSession(
+		ctx,
+		t.TempDir(),
+		"local-api/model-a",
+		"main",
+	)
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	call := llm.Call{ID: "tool-call-denied", Type: "function"}
+	call.Function.Name = "bash"
+	call.Function.Arguments = `{"command":"echo should-not-run"}`
+	provider := ctesting.NewFauxProvider(
+		"local-api",
+		ctesting.Step{Calls: []llm.Call{call}},
+		ctesting.Step{Content: "I will not run it."},
+	)
+
+	oldFactory := providerFactory
+	providerFactory = func(ctx context.Context, cfg *config.Config) (llm.Provider, error) {
+		if cfg.Provider == "local-api" {
+			return provider, nil
+		}
+		return oldFactory(ctx, cfg)
+	}
+	defer func() { providerFactory = oldFactory }()
+
+	b := New()
+	b.SetStore(store)
+	b.SetSession(storageSession)
+	b.SetConfig(
+		&config.Config{
+			Provider: "local-api",
+			Model:    "model-a",
+			Endpoint: "http://localhost:8080/v1",
+		},
+	)
+	b.SetMode(ionsession.ModeEdit)
+	if err := b.Open(ctx); err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer func() { _ = b.Close() }()
+
+	if err := b.SubmitTurn(ctx, "run the denied command"); err != nil {
+		t.Fatalf("submit turn: %v", err)
+	}
+
+	events := b.Events()
+	var approvalID string
+	for approvalID == "" {
+		select {
+		case ev := <-events:
+			switch msg := ev.(type) {
+			case ionsession.ApprovalRequest:
+				approvalID = msg.RequestID
+			case ionsession.ToolCallStarted:
+				t.Fatalf("tool started before approval denial: %#v", msg)
+			case ionsession.Error:
+				t.Fatalf("unexpected error before approval: %v", msg.Err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for approval")
+		}
+	}
+	if err := b.Approve(ctx, approvalID, false); err != nil {
+		t.Fatalf("deny approval: %v", err)
+	}
+
+	var assistant string
+	for {
+		select {
+		case ev := <-events:
+			switch msg := ev.(type) {
+			case ionsession.Error:
+				t.Fatalf("approval denial surfaced as session error: %v", msg.Err)
+			case ionsession.ToolCallStarted:
+				t.Fatalf("denied tool started: %#v", msg)
+			case ionsession.ToolResult:
+				t.Fatalf("denied preflight emitted executable tool result event: %#v", msg)
+			case ionsession.AgentMessage:
+				assistant = msg.Message
+			case ionsession.TurnFinished:
+				if !strings.Contains(assistant, "I will not run it.") {
+					t.Fatalf("assistant = %q, want denial follow-up", assistant)
+				}
+				calls := provider.Calls()
+				if len(calls) != 2 {
+					t.Fatalf("provider calls = %d, want initial and post-denial requests", len(calls))
+				}
+				if !requestHasMessage(calls[1].Messages, llm.RoleTool, "user denied tool execution") {
+					t.Fatalf("post-denial request missing tool-result denial: %#v", calls[1].Messages)
+				}
+				entries, err := storageSession.Entries(ctx)
+				if err != nil {
+					t.Fatalf("entries: %v", err)
+				}
+				if !entryExists(entries, ionsession.Tool, "user denied tool execution") {
+					t.Fatalf("entries missing denied tool result: %#v", entries)
+				}
+				return
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for denied approval turn")
+		}
+	}
+}
+
+func TestSubmitTurnCancelDuringApprovalDoesNotPersistToolResult(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	root := t.TempDir()
+	store, err := storage.NewCantoStore(root)
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	storageSession, err := store.OpenSession(
+		ctx,
+		t.TempDir(),
+		"local-api/model-a",
+		"main",
+	)
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	call := llm.Call{ID: "approval-cancel-call", Type: "function"}
+	call.Function.Name = "bash"
+	call.Function.Arguments = `{"command":"echo should-not-run"}`
+	provider := ctesting.NewFauxProvider(
+		"local-api",
+		ctesting.Step{Calls: []llm.Call{call}},
+		ctesting.Step{Content: "should not continue after cancel"},
+	)
+
+	oldFactory := providerFactory
+	providerFactory = func(ctx context.Context, cfg *config.Config) (llm.Provider, error) {
+		if cfg.Provider == "local-api" {
+			return provider, nil
+		}
+		return oldFactory(ctx, cfg)
+	}
+	defer func() { providerFactory = oldFactory }()
+
+	b := New()
+	b.SetStore(store)
+	b.SetSession(storageSession)
+	b.SetConfig(
+		&config.Config{
+			Provider: "local-api",
+			Model:    "model-a",
+			Endpoint: "http://localhost:8080/v1",
+		},
+	)
+	b.SetMode(ionsession.ModeEdit)
+	if err := b.Open(ctx); err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer func() { _ = b.Close() }()
+
+	if err := b.SubmitTurn(ctx, "run the command"); err != nil {
+		t.Fatalf("submit turn: %v", err)
+	}
+
+	events := b.Events()
+	for {
+		select {
+		case ev := <-events:
+			switch msg := ev.(type) {
+			case ionsession.ApprovalRequest:
+				if err := b.CancelTurn(ctx); err != nil {
+					t.Fatalf("cancel turn: %v", err)
+				}
+				waitForTurnFinished(t, events)
+
+				quiet := time.NewTimer(300 * time.Millisecond)
+				defer quiet.Stop()
+				for {
+					select {
+					case ev := <-events:
+						switch msg := ev.(type) {
+						case ionsession.ToolCallStarted:
+							t.Fatalf("canceled approval started tool: %#v", msg)
+						case ionsession.ToolResult:
+							t.Fatalf("canceled approval emitted tool result: %#v", msg)
+						case ionsession.AgentMessage:
+							t.Fatalf("canceled approval continued agent turn: %#v", msg)
+						case ionsession.Error:
+							t.Fatalf("canceled approval emitted error: %v", msg.Err)
+						case ionsession.TurnFinished:
+							t.Fatalf("duplicate turn finished after canceled approval: %#v", msg)
+						}
+					case <-quiet.C:
+						if calls := provider.Calls(); len(calls) != 1 {
+							t.Fatalf("provider calls = %d, want initial request only", len(calls))
+						}
+						entries, err := storageSession.Entries(ctx)
+						if err != nil {
+							t.Fatalf("entries: %v", err)
+						}
+						if entryExists(entries, ionsession.Tool, context.Canceled.Error()) ||
+							entryExists(entries, ionsession.Tool, "should-not-run") {
+							t.Fatalf("canceled approval persisted tool result: %#v", entries)
+						}
+						if entryExists(entries, ionsession.Agent, "should not continue after cancel") {
+							t.Fatalf("canceled approval persisted continuation: %#v", entries)
+						}
+						return
+					}
+				}
+			case ionsession.ToolCallStarted:
+				t.Fatalf("tool started before approval: %#v", msg)
+			case ionsession.Error:
+				t.Fatalf("unexpected error before approval: %v", msg.Err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for approval")
+		}
+	}
+}
+
 func TestSubmitTurnRejectsConcurrentTurn(t *testing.T) {
 	ctx := t.Context()
 	store, err := storage.NewCantoStore(t.TempDir())

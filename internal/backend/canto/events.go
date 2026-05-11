@@ -19,6 +19,10 @@ func (b *Backend) translateEvents(ctx context.Context, evCh <-chan session.Event
 }
 
 func (b *Backend) translateEvent(ctx context.Context, ev session.Event, turnID uint64) bool {
+	if !b.acceptsTurnEvent(turnID) {
+		return true
+	}
+
 	base := ionEventBase(ev)
 	switch ev.Type {
 	case session.MessageAdded:

@@ -2,8 +2,10 @@ package canto
 
 import (
 	"context"
+	"math"
 	"testing"
 
+	cantofw "github.com/nijaru/canto"
 	"github.com/nijaru/canto/llm"
 	csession "github.com/nijaru/canto/session"
 	ionsession "github.com/nijaru/ion/internal/session"
@@ -115,6 +117,137 @@ func TestTranslateEventsSuppressesCanceledTerminalError(t *testing.T) {
 	}
 	if status.Status != "Ready" {
 		t.Fatalf("status = %q, want Ready", status.Status)
+	}
+}
+
+func TestTranslateEventsSuppressesInactiveTurnEvents(t *testing.T) {
+	b := New()
+	b.turnSeq = 7
+	b.turnActive = false
+
+	events := make(chan csession.Event, 4)
+	events <- csession.NewEvent("session-id", csession.MessageAdded, llm.Message{
+		Role:    llm.RoleAssistant,
+		Content: "late assistant",
+	})
+	events <- csession.NewToolStartedEvent("session-id", csession.ToolStartedData{
+		ID:        "tool-call-1",
+		Tool:      "bash",
+		Arguments: "echo late",
+	})
+	events <- csession.NewToolCompletedEvent("session-id", csession.ToolCompletedData{
+		ID:     "tool-call-1",
+		Tool:   "bash",
+		Output: "late output",
+	})
+	events <- csession.NewTurnCompletedEvent("session-id", csession.TurnCompletedData{
+		Error: context.Canceled.Error(),
+	})
+	close(events)
+
+	b.translateEvents(t.Context(), events, 7)
+
+	select {
+	case ev := <-b.Events():
+		t.Fatalf("inactive turn emitted event: %#v", ev)
+	default:
+	}
+}
+
+func TestTranslateRunEventSuppressesInactiveTurnChunk(t *testing.T) {
+	b := New()
+	b.turnSeq = 7
+	b.turnActive = false
+
+	b.translateRunEvent(t.Context(), cantofw.RunEvent{
+		Type:  cantofw.RunEventChunk,
+		Chunk: llm.Chunk{Content: "late chunk"},
+	}, 7, &turnUsageTracker{})
+
+	select {
+	case ev := <-b.Events():
+		t.Fatalf("inactive turn emitted chunk event: %#v", ev)
+	default:
+	}
+}
+
+func TestTranslateRunEventEmitsTokenUsageDeltas(t *testing.T) {
+	b := New()
+	b.turnSeq = 7
+	b.turnActive = true
+	usage := &turnUsageTracker{}
+
+	b.translateRunEvent(t.Context(), cantofw.RunEvent{
+		Type: cantofw.RunEventChunk,
+		Chunk: llm.Chunk{Usage: &llm.Usage{
+			InputTokens:  10,
+			OutputTokens: 0,
+			Cost:         0.01,
+		}},
+	}, 7, usage)
+	first, ok := receiveEvent(t, b.Events()).(ionsession.TokenUsage)
+	if !ok {
+		t.Fatal("first event is not TokenUsage")
+	}
+	if first.Input != 10 || first.Output != 0 || first.Cost != 0.01 {
+		t.Fatalf("first usage = %#v, want 10/0/0.01", first)
+	}
+
+	b.translateRunEvent(t.Context(), cantofw.RunEvent{
+		Type: cantofw.RunEventChunk,
+		Chunk: llm.Chunk{Usage: &llm.Usage{
+			InputTokens:  10,
+			OutputTokens: 5,
+			Cost:         0.015,
+		}},
+	}, 7, usage)
+	second, ok := receiveEvent(t, b.Events()).(ionsession.TokenUsage)
+	if !ok {
+		t.Fatal("second event is not TokenUsage")
+	}
+	if second.Input != 0 || second.Output != 5 || math.Abs(second.Cost-0.005) > 1e-9 {
+		t.Fatalf("second usage = %#v, want 0/5/0.005", second)
+	}
+}
+
+func TestTranslateRunEventResetsTokenUsageAfterToolCompleted(t *testing.T) {
+	b := New()
+	b.turnSeq = 7
+	b.turnActive = true
+	usage := &turnUsageTracker{}
+
+	b.translateRunEvent(t.Context(), cantofw.RunEvent{
+		Type: cantofw.RunEventChunk,
+		Chunk: llm.Chunk{Usage: &llm.Usage{
+			InputTokens:  10,
+			OutputTokens: 2,
+		}},
+	}, 7, usage)
+	_ = receiveEvent(t, b.Events())
+
+	b.translateRunEvent(t.Context(), cantofw.RunEvent{
+		Type: cantofw.RunEventSession,
+		Event: csession.NewToolCompletedEvent("session-id", csession.ToolCompletedData{
+			ID:     "tool-call-1",
+			Tool:   "bash",
+			Output: "ok",
+		}),
+	}, 7, usage)
+	_ = receiveEvent(t, b.Events())
+
+	b.translateRunEvent(t.Context(), cantofw.RunEvent{
+		Type: cantofw.RunEventChunk,
+		Chunk: llm.Chunk{Usage: &llm.Usage{
+			InputTokens:  12,
+			OutputTokens: 3,
+		}},
+	}, 7, usage)
+	next, ok := receiveEvent(t, b.Events()).(ionsession.TokenUsage)
+	if !ok {
+		t.Fatal("next event is not TokenUsage")
+	}
+	if next.Input != 12 || next.Output != 3 {
+		t.Fatalf("next usage = %#v, want new request total 12/3", next)
 	}
 }
 

@@ -91,7 +91,7 @@ func (m Model) renderPlaneB() string {
 				m.formatToolTitle(m.Approval.Pending.ToolName, m.Approval.Pending.Args),
 				m.Approval.Pending.Description)
 		}
-		b.WriteString(m.planeBLine(m.st.warn, 2, "Approve "+desc+"? (y/n/a)"))
+		b.WriteString(m.planeBLine(m.st.warn, 2, "Approve "+desc+"? (y/n/a, Esc cancel)"))
 		b.WriteString("\n")
 		if environment := strings.TrimSpace(m.Approval.Pending.Environment); environment != "" {
 			b.WriteString(

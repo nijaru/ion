@@ -149,15 +149,7 @@ func resolvedAPIKey(cfg *config.Config, def providers.Definition) string {
 	if def.AuthKind == providers.AuthLocal {
 		return ""
 	}
-	names := []string{}
-	if override := strings.TrimSpace(cfg.AuthEnvVar); override != "" {
-		names = append(names, override)
-	}
-	if def.DefaultEnvVar != "" {
-		names = append(names, def.DefaultEnvVar)
-	}
-	names = append(names, def.AlternateEnvVars...)
-	for _, name := range names {
+	for _, name := range apiKeyEnvVars(cfg, def) {
 		if value := strings.TrimSpace(os.Getenv(name)); value != "" {
 			return value
 		}
@@ -166,11 +158,30 @@ func resolvedAPIKey(cfg *config.Config, def providers.Definition) string {
 }
 
 func missingAuthDetail(cfg *config.Config, def providers.Definition) string {
-	if override := strings.TrimSpace(cfg.AuthEnvVar); override != "" {
-		return override
+	if def.SupportsCustomEndpoint {
+		if override := strings.TrimSpace(cfg.AuthEnvVar); override != "" {
+			return override
+		}
+	}
+	if envVar := providers.ResolvedAuthEnvVar(cfg); envVar != "" {
+		return envVar
 	}
 	if def.DefaultEnvVar != "" {
 		return def.DefaultEnvVar
 	}
 	return "provider credentials"
+}
+
+func apiKeyEnvVars(cfg *config.Config, def providers.Definition) []string {
+	names := []string{}
+	if def.SupportsCustomEndpoint {
+		if override := strings.TrimSpace(cfg.AuthEnvVar); override != "" {
+			names = append(names, override)
+		}
+	}
+	if def.DefaultEnvVar != "" {
+		names = append(names, def.DefaultEnvVar)
+	}
+	names = append(names, def.AlternateEnvVars...)
+	return names
 }

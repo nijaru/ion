@@ -764,16 +764,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			meta := msg.storage.Meta()
 			m.App.Branch = meta.Branch
 		}
-		m.InFlight.Pending = nil
-		m.InFlight.PendingTools = nil
-		m.InFlight.Subagents = make(map[string]*SubagentProgress)
-		m.Approval.Pending = nil
-		m.InFlight.QueuedTurns = nil
-		m.InFlight.ReasonBuf = ""
-		m.InFlight.StreamBuf = ""
+		m.clearActiveTurnState(true)
 		m.Progress.Mode = stateReady
 		m.Progress.LastTurnSummary = turnSummary{}
-		m.InFlight.Thinking = false
 		m.Input.CtrlCPending = false
 		m.Progress.TokensSent = 0
 		m.Progress.TokensReceived = 0
@@ -785,7 +778,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.Progress.TotalCost = cost
 			}
 		}
-		m.Progress.LastToolUseID = ""
 		m.Input.HistoryIdx = -1
 		m.Input.HistoryDraft = ""
 		cmds := make([]tea.Cmd, 0, 5)
