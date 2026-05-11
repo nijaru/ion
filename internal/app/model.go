@@ -23,7 +23,14 @@ const (
 	maxComposerHeight = 10
 )
 
-type streamClosedMsg struct{}
+type sessionEventMsg struct {
+	generation uint64
+	event      session.Event
+}
+
+type streamClosedMsg struct {
+	generation uint64
+}
 
 type clearPendingMsg struct {
 	action pendingAction
@@ -180,15 +187,16 @@ type AppState struct {
 
 // ModelState holds the core backend, session, and storage handles.
 type ModelState struct {
-	Backend     backend.Backend
-	Session     session.AgentSession
-	Storage     storage.Session
-	Store       storage.Store
-	Switcher    runtimeSwitcher
-	Config      *config.Config
-	Escalation  *workspace.EscalationConfig
-	TrustStore  *ionworkspace.TrustStore
-	Checkpoints *ionworkspace.CheckpointStore
+	Backend         backend.Backend
+	Session         session.AgentSession
+	Storage         storage.Session
+	Store           storage.Store
+	Switcher        runtimeSwitcher
+	Config          *config.Config
+	Escalation      *workspace.EscalationConfig
+	TrustStore      *ionworkspace.TrustStore
+	Checkpoints     *ionworkspace.CheckpointStore
+	EventGeneration uint64
 }
 
 // SubagentProgress tracks the ephemeral state of a background worker.
@@ -720,7 +728,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case sessionEventMsg:
+		if msg.generation != m.Model.EventGeneration {
+			return m, nil
+		}
+		return m.handleSessionEvent(msg.event)
+
 	case streamClosedMsg:
+		if msg.generation != m.Model.EventGeneration {
+			return m, nil
+		}
 		return m, nil
 
 	case clearPendingMsg:
@@ -750,6 +767,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.Model.Session = msg.session
 		m.Model.Storage = msg.storage
 		m.Model.Config = msg.cfg
+		m.Model.EventGeneration++
 		m.App.Sandbox = backendSandboxSummary(msg.backend)
 		m.Picker.Overlay = nil
 		m.Picker.Session = nil

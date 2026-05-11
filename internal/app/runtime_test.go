@@ -434,6 +434,51 @@ func TestRuntimeSwitchClearsQueuedTurns(t *testing.T) {
 	}
 }
 
+func TestRuntimeSwitchIgnoresStaleAwaitedSessionEvents(t *testing.T) {
+	oldSession := &stubSession{events: make(chan session.Event, 1)}
+	newSession := &stubSession{events: make(chan session.Event, 1)}
+	model := readyModel(t)
+	model.Model.Session = oldSession
+	waitOld := model.awaitSessionEvent()
+
+	next, _ := model.Update(runtimeSwitchedMsg{
+		backend: stubBackend{sess: newSession},
+		session: newSession,
+		storage: &stubStorageSession{id: "session-1", branch: "main"},
+		status:  "ready",
+	})
+	model = next.(Model)
+
+	oldSession.events <- session.AgentDelta{Delta: "stale output"}
+	next, cmd := model.Update(waitOld())
+	model = next.(Model)
+
+	if cmd != nil {
+		t.Fatalf("stale session event scheduled command %T", cmd)
+	}
+	if model.InFlight.Pending != nil || model.InFlight.StreamBuf != "" {
+		t.Fatalf(
+			"stale event affected stream state: pending=%#v stream=%q",
+			model.InFlight.Pending,
+			model.InFlight.StreamBuf,
+		)
+	}
+	if model.Progress.Mode != stateReady {
+		t.Fatalf("mode = %v, want ready after stale event", model.Progress.Mode)
+	}
+
+	newSession.events <- session.TurnStarted{}
+	next, _ = model.Update(model.awaitSessionEvent()())
+	model = next.(Model)
+
+	if !model.InFlight.Thinking {
+		t.Fatal("current session event was not accepted")
+	}
+	if model.Progress.Mode != stateIonizing {
+		t.Fatalf("mode = %v, want ionizing after current event", model.Progress.Mode)
+	}
+}
+
 func TestRuntimeSwitchClosesNewRuntimeWhenStateSaveFails(t *testing.T) {
 	t.Setenv("HOME", "/dev/null")
 	oldSession := &stubSession{events: make(chan session.Event)}

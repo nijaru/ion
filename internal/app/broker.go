@@ -17,12 +17,14 @@ type localErrorMsg struct {
 }
 
 func (m Model) awaitSessionEvent() tea.Cmd {
+	generation := m.Model.EventGeneration
+	events := m.Model.Session.Events()
 	return func() tea.Msg {
-		ev, ok := <-m.Model.Session.Events()
+		ev, ok := <-events
 		if !ok {
-			return streamClosedMsg{}
+			return streamClosedMsg{generation: generation}
 		}
-		return ev
+		return sessionEventMsg{generation: generation, event: ev}
 	}
 }
 

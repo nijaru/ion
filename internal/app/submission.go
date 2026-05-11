@@ -50,6 +50,9 @@ func (m Model) submitText(text string) (Model, tea.Cmd) {
 	m.PasteMarkers = make(map[string]pasteMarker)
 
 	if !strings.HasPrefix(text, "/") {
+		if status := m.configurationStatus(); status != "" {
+			return m, cmdError(status)
+		}
 		if reason := m.configuredSessionBudgetStopReason(); reason != "" {
 			return m, cmdError(reason)
 		}
