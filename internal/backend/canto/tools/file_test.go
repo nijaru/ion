@@ -149,6 +149,48 @@ func TestFileTools(t *testing.T) {
 		}
 	})
 
+	t.Run("Write rejects symlink escapes", func(t *testing.T) {
+		w := &Write{FileTool: *newTestFileTool(t, tmpDir)}
+		outsideDir := t.TempDir()
+		outsideFile := filepath.Join(outsideDir, "outside.txt")
+		if err := os.WriteFile(outsideFile, []byte("outside"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(outsideFile, filepath.Join(tmpDir, "outside-write-link.txt")); err != nil {
+			t.Skipf("symlink unavailable: %v", err)
+		}
+
+		linkArgs, _ := json.Marshal(map[string]any{
+			"file_path": "outside-write-link.txt",
+			"content":   "changed",
+		})
+		if _, err := w.Execute(context.Background(), string(linkArgs)); err == nil {
+			t.Fatal("expected write through symlink escape to fail")
+		}
+
+		data, err := os.ReadFile(outsideFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(data) != "outside" {
+			t.Fatalf("outside file changed to %q", data)
+		}
+
+		if err := os.Symlink(outsideDir, filepath.Join(tmpDir, "outside-write-dir")); err != nil {
+			t.Skipf("symlink directory unavailable: %v", err)
+		}
+		dirArgs, _ := json.Marshal(map[string]any{
+			"file_path": "outside-write-dir/new.txt",
+			"content":   "changed",
+		})
+		if _, err := w.Execute(context.Background(), string(dirArgs)); err == nil {
+			t.Fatal("expected write through symlink directory escape to fail")
+		}
+		if _, err := os.Stat(filepath.Join(outsideDir, "new.txt")); err == nil {
+			t.Fatal("write created file outside workspace")
+		}
+	})
+
 	t.Run("Read and Edit handle CRLF and BOM", func(t *testing.T) {
 		r := &Read{FileTool: *newTestFileTool(t, tmpDir)}
 		e := &Edit{FileTool: *newTestFileTool(t, tmpDir)}
@@ -299,6 +341,34 @@ func TestFileTools(t *testing.T) {
 		}
 	})
 
+	t.Run("Edit rejects symlink escapes", func(t *testing.T) {
+		e := &Edit{FileTool: *newTestFileTool(t, tmpDir)}
+		outside := filepath.Join(t.TempDir(), "outside-edit.txt")
+		if err := os.WriteFile(outside, []byte("outside\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(outside, filepath.Join(tmpDir, "outside-edit-link.txt")); err != nil {
+			t.Skipf("symlink unavailable: %v", err)
+		}
+
+		args, _ := json.Marshal(map[string]any{
+			"file_path":  "outside-edit-link.txt",
+			"old_string": "outside",
+			"new_string": "changed",
+		})
+		if _, err := e.Execute(context.Background(), string(args)); err == nil {
+			t.Fatal("expected edit through symlink escape to fail")
+		}
+
+		data, err := os.ReadFile(outside)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(data) != "outside\n" {
+			t.Fatalf("outside file changed to %q", data)
+		}
+	})
+
 	t.Run("MultiEdit", func(t *testing.T) {
 		m := &MultiEdit{FileTool: *newTestFileTool(t, tmpDir)}
 
@@ -404,6 +474,54 @@ func TestFileTools(t *testing.T) {
 		if _, err := m.Execute(context.Background(), string(ambiguousArgs)); err == nil ||
 			!strings.Contains(err.Error(), "line(s)") {
 			t.Fatalf("expected ambiguous multi_edit error with line numbers, got %v", err)
+		}
+	})
+
+	t.Run("MultiEdit rejects symlink escapes", func(t *testing.T) {
+		m := &MultiEdit{FileTool: *newTestFileTool(t, tmpDir)}
+		safeFile := "safe-multi-edit.txt"
+		if err := os.WriteFile(filepath.Join(tmpDir, safeFile), []byte("safe\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		outside := filepath.Join(t.TempDir(), "outside-multi-edit.txt")
+		if err := os.WriteFile(outside, []byte("outside\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(outside, filepath.Join(tmpDir, "outside-multi-edit-link.txt")); err != nil {
+			t.Skipf("symlink unavailable: %v", err)
+		}
+
+		args, _ := json.Marshal(map[string]any{
+			"edits": []map[string]any{
+				{
+					"file_path":  safeFile,
+					"old_string": "safe",
+					"new_string": "changed",
+				},
+				{
+					"file_path":  "outside-multi-edit-link.txt",
+					"old_string": "outside",
+					"new_string": "changed",
+				},
+			},
+		})
+		if _, err := m.Execute(context.Background(), string(args)); err == nil {
+			t.Fatal("expected multi_edit through symlink escape to fail")
+		}
+
+		safeData, err := os.ReadFile(filepath.Join(tmpDir, safeFile))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(safeData) != "safe\n" {
+			t.Fatalf("safe file changed before failed multi_edit completed: %q", safeData)
+		}
+		outsideData, err := os.ReadFile(outside)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(outsideData) != "outside\n" {
+			t.Fatalf("outside file changed to %q", outsideData)
 		}
 	})
 
