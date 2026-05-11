@@ -2,6 +2,7 @@ package acp
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -376,6 +377,158 @@ func TestACPFullTurn(t *testing.T) {
 		case <-deadline:
 			t.Fatal("timed out waiting for TurnFinished")
 		}
+	}
+}
+
+func TestACPCancelSuppressesPromptCancellationError(t *testing.T) {
+	client, _, agent := newTestPairWithAgent(t)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	defer close(release)
+	agent.prompt = func(ctx context.Context, _ acp.PromptRequest) (acp.PromptResponse, error) {
+		close(started)
+		select {
+		case <-ctx.Done():
+			return acp.PromptResponse{}, ctx.Err()
+		case <-release:
+			return acp.PromptResponse{StopReason: acp.StopReasonEndTurn}, nil
+		}
+	}
+
+	if err := client.SubmitTurn(t.Context(), "hello"); err != nil {
+		t.Fatalf("SubmitTurn: %v", err)
+	}
+	if _, ok := drainOne(t, client.events, 500*time.Millisecond).(session.TurnStarted); !ok {
+		t.Fatal("expected TurnStarted")
+	}
+	select {
+	case <-started:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for ACP prompt")
+	}
+	if err := client.CancelTurn(t.Context()); err != nil {
+		t.Fatalf("CancelTurn: %v", err)
+	}
+
+	deadline := time.After(500 * time.Millisecond)
+	for {
+		select {
+		case ev := <-client.events:
+			switch msg := ev.(type) {
+			case session.Error:
+				t.Fatalf("cancel emitted prompt error: %v", msg.Err)
+			case session.TurnFinished:
+				return
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for TurnFinished after cancel")
+		}
+	}
+}
+
+func TestACPCloseDuringPromptClosesEventsWithoutLateSend(t *testing.T) {
+	client, _, agent := newTestPairWithAgent(t)
+	started := make(chan struct{})
+	agent.prompt = func(ctx context.Context, _ acp.PromptRequest) (acp.PromptResponse, error) {
+		close(started)
+		<-ctx.Done()
+		return acp.PromptResponse{}, ctx.Err()
+	}
+
+	if err := client.SubmitTurn(context.Background(), "hello"); err != nil {
+		t.Fatalf("SubmitTurn: %v", err)
+	}
+	if _, ok := drainOne(t, client.events, 500*time.Millisecond).(session.TurnStarted); !ok {
+		t.Fatal("expected TurnStarted")
+	}
+	select {
+	case <-started:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for ACP prompt")
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- client.Close() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Close blocked while prompt was active")
+	}
+
+	if _, ok := <-client.events; ok {
+		t.Fatal("events channel remained open after Close")
+	}
+}
+
+func TestACPRejectsConcurrentSubmit(t *testing.T) {
+	client, _, agent := newTestPairWithAgent(t)
+	release := make(chan struct{})
+	defer close(release)
+	agent.prompt = func(ctx context.Context, _ acp.PromptRequest) (acp.PromptResponse, error) {
+		select {
+		case <-ctx.Done():
+			return acp.PromptResponse{}, ctx.Err()
+		case <-release:
+			return acp.PromptResponse{StopReason: acp.StopReasonEndTurn}, nil
+		}
+	}
+
+	if err := client.SubmitTurn(t.Context(), "first"); err != nil {
+		t.Fatalf("SubmitTurn first: %v", err)
+	}
+	if _, ok := drainOne(t, client.events, 500*time.Millisecond).(session.TurnStarted); !ok {
+		t.Fatal("expected TurnStarted")
+	}
+	if err := client.SubmitTurn(t.Context(), "second"); err == nil ||
+		!strings.Contains(err.Error(), "turn already in progress") {
+		t.Fatalf("SubmitTurn second error = %v, want in-progress error", err)
+	}
+}
+
+func TestACPRequestPermissionCancelRemovesPendingApproval(t *testing.T) {
+	client := newSession()
+	ctx, cancel := context.WithCancel(t.Context())
+	result := make(chan error, 1)
+	go func() {
+		_, err := client.RequestPermission(ctx, acp.RequestPermissionRequest{
+			SessionId: "test-session",
+			ToolCall:  acp.ToolCallUpdate{ToolCallId: "call-1"},
+			Options: []acp.PermissionOption{
+				{Kind: acp.PermissionOptionKindAllowOnce, OptionId: "allow", Name: "Allow"},
+				{Kind: acp.PermissionOptionKindRejectOnce, OptionId: "reject", Name: "Reject"},
+			},
+		})
+		result <- err
+	}()
+
+	ev := drainOne(t, client.events, 500*time.Millisecond)
+	if _, ok := ev.(session.ApprovalRequest); !ok {
+		t.Fatalf("expected ApprovalRequest, got %T", ev)
+	}
+	client.mu.Lock()
+	pending := len(client.pendingApprovals)
+	client.mu.Unlock()
+	if pending != 1 {
+		t.Fatalf("pending approvals = %d, want 1", pending)
+	}
+
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("RequestPermission error = %v, want context canceled", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for canceled permission request")
+	}
+	client.mu.Lock()
+	pending = len(client.pendingApprovals)
+	client.mu.Unlock()
+	if pending != 0 {
+		t.Fatalf("pending approvals = %d, want cleaned up", pending)
 	}
 }
 

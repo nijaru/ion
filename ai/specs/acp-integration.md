@@ -19,7 +19,7 @@ Ion is the ACP **client**. External CLI agents (claude, gemini, gh) are ACP **ag
 
 ## Implementation status
 
-`internal/backend/acp/session.go` — real ACP JSON-RPC 2.0 via `github.com/coder/acp-go-sdk`. Protocol layer complete.
+`internal/backend/acp/session.go` — real ACP JSON-RPC 2.0 via `github.com/coder/acp-go-sdk`.
 
 **Working:**
 
@@ -31,12 +31,17 @@ Ion is the ACP **client**. External CLI agents (claude, gemini, gh) are ACP **ag
 - `RequestPermission` → synchronous approval bridge (blocks on `chan bool`)
 - `ReadTextFile` / `WriteTextFile` filesystem bridge
 - Terminal bridge (Create/Output/Wait/Kill/Release)
+- ACP prompt lifecycle now mirrors native `AgentSession` basics: one active
+  turn at a time, cancellation suppresses cancellation errors, Close is safe
+  during a prompt, and canceled approval waits are cleaned up
 - Tests using in-process Go mock agent
 
-**Not yet wired:**
+**Not yet product-enabled:**
 
-- Provider-based backend selection is now implemented in `cmd/ion/main.go`
-- Remaining ACP gap is session continuity
+- Provider-based runtime selection still rejects ACP providers in
+  `cmd/ion/selection.go`; this is intentional while native core-loop stability
+  remains the priority
+- Remaining ACP gap is session continuity with external agents
 
 ---
 
@@ -76,7 +81,7 @@ type Client interface {
     CreateTerminal(ctx, CreateTerminalRequest) (CreateTerminalResponse, error)
     TerminalOutput(ctx, TerminalOutputRequest) (TerminalOutputResponse, error)
     WaitForTerminalExit(ctx, WaitForTerminalExitRequest) (WaitForTerminalExitResponse, error)
-    KillTerminalCommand(ctx, KillTerminalCommandRequest) (KillTerminalCommandResponse, error)
+    KillTerminal(ctx, KillTerminalRequest) (KillTerminalResponse, error)
     ReleaseTerminal(ctx, ReleaseTerminalRequest) (ReleaseTerminalResponse, error)
 }
 ```

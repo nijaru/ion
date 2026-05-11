@@ -87,6 +87,15 @@ Fast, lightweight terminal coding agent.
   into synthetic tool results. Canto now treats those as aborts while preserving
   explicit policy denials as model-visible tool results. Ion imports that fix
   and adds regressions for both the backend and TUI Esc-cancel path.
+- ACP/native lifecycle review found the ACP client adapter had weaker session
+  semantics than the native backend: concurrent submits were not rejected,
+  prompt cancellation could surface as a session error, closing during an active
+  prompt could race event emission, and canceled permission requests left stale
+  pending approvals. The ACP adapter now tracks active turns, cancels local
+  prompt contexts, emits through a close-safe helper, and cleans canceled
+  approval waits without enabling ACP providers in the product surface. The
+  `ion --agent` ACP wrapper also drains stale terminal events before starting a
+  new prompt so a canceled prompt cannot immediately finish the next one.
 - `tk-0uos` is closed. Fresh Bubble Tea TUI review found no API misuse in
   `cmd/ion` or `internal/app`; the concrete maintenance fix was updating the
   Charm stack to Bubble Tea `v2.0.6`, Bubbles `v2.1.0`, and Lip Gloss `v2.0.3`.

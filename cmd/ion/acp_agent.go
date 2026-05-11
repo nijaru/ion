@@ -303,6 +303,7 @@ func (a *ionACPAgent) Prompt(
 	if err != nil {
 		return acp.PromptResponse{}, err
 	}
+	drainStaleSessionEvents(sess.agent.Events())
 	if err := sess.agent.SubmitTurn(ctx, prompt); err != nil {
 		return acp.PromptResponse{}, err
 	}
@@ -326,6 +327,19 @@ func (a *ionACPAgent) Prompt(
 		case <-ctx.Done():
 			_ = sess.agent.CancelTurn(context.Background())
 			return acp.PromptResponse{StopReason: acp.StopReasonCancelled}, nil
+		}
+	}
+}
+
+func drainStaleSessionEvents(events <-chan ionsession.Event) {
+	for {
+		select {
+		case _, ok := <-events:
+			if !ok {
+				return
+			}
+		default:
+			return
 		}
 	}
 }
