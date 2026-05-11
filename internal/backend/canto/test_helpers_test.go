@@ -91,6 +91,12 @@ type proactiveUsageSession struct {
 	usageOut int
 }
 
+type blockingUsageSession struct {
+	storage.Session
+	entered chan struct{}
+	once    sync.Once
+}
+
 func (p *retryProvider) IsTransient(err error) bool {
 	return errors.Is(err, transientStreamErr)
 }
@@ -191,3 +197,11 @@ func (s *proactiveUsageSession) Usage(ctx context.Context) (int, int, float64, e
 	return s.usageIn, s.usageOut, 0, nil
 }
 func (s *proactiveUsageSession) Close() error { return nil }
+
+func (s *blockingUsageSession) Usage(ctx context.Context) (int, int, float64, error) {
+	s.once.Do(func() {
+		close(s.entered)
+	})
+	<-ctx.Done()
+	return 0, 0, 0, ctx.Err()
+}
