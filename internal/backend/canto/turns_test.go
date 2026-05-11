@@ -624,6 +624,65 @@ func TestSubmitTurnRejectsConcurrentTurn(t *testing.T) {
 	waitForTurnFinished(t, b.Events())
 }
 
+func TestSubmitTurnCancelDuringProactiveCompactionSuppressesError(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	store, err := storage.NewCantoStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	storageSession, err := store.OpenSession(
+		ctx,
+		"/tmp/ion-cancel-before-compact",
+		"local-api/model-a",
+		"main",
+	)
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	blockingSession := &blockingUsageSession{
+		Session: storageSession,
+		entered: make(chan struct{}),
+	}
+
+	provider := &compactProvider{id: "local-api"}
+	oldFactory := providerFactory
+	providerFactory = func(ctx context.Context, cfg *config.Config) (llm.Provider, error) {
+		return provider, nil
+	}
+	defer func() { providerFactory = oldFactory }()
+
+	b := New()
+	b.SetStore(store)
+	b.SetSession(blockingSession)
+	b.SetConfig(
+		&config.Config{
+			Provider:     "local-api",
+			Model:        "model-a",
+			Endpoint:     "http://localhost:8080/v1",
+			ContextLimit: 100,
+		},
+	)
+	if err := b.Open(ctx); err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer func() { _ = b.Close() }()
+
+	if err := b.SubmitTurn(ctx, "cancel before compaction finishes"); err != nil {
+		t.Fatalf("submit turn: %v", err)
+	}
+	select {
+	case <-blockingSession.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for proactive compaction usage check")
+	}
+	if err := b.CancelTurn(ctx); err != nil {
+		t.Fatalf("cancel turn: %v", err)
+	}
+	waitForTurnFinished(t, b.Events())
+}
+
 func TestResumeDoesNotDeadlockWhenBackendNeedsOpen(t *testing.T) {
 	b := New()
 

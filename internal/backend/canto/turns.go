@@ -91,9 +91,20 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 }
 
 func (b *Backend) finishTurnWithError(turnID uint64, err error) {
+	if err == nil {
+		return
+	}
 	base := ionsession.BaseNow()
+	if isCancellationTerminal(err.Error()) {
+		if b.finishTurnIfActive(turnID) {
+			b.events <- ionsession.TurnFinished{Base: base}
+		}
+		return
+	}
+	if !b.finishTurnIfActive(turnID) {
+		return
+	}
 	b.events <- ionsession.Error{Base: base, Err: err}
-	b.finishTurn(turnID)
 	b.events <- ionsession.TurnFinished{Base: base}
 }
 
@@ -192,13 +203,19 @@ func (b *Backend) translateRunEvent(
 }
 
 func (b *Backend) finishTurn(turnID uint64) {
+	_ = b.finishTurnIfActive(turnID)
+}
+
+func (b *Backend) finishTurnIfActive(turnID uint64) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.turnSeq == turnID {
-		b.turnActive = false
-		b.cancel = nil
-		b.clearActiveToolsLocked()
+	if b.turnSeq != turnID || !b.turnActive {
+		return false
 	}
+	b.turnActive = false
+	b.cancel = nil
+	b.clearActiveToolsLocked()
+	return true
 }
 
 func (b *Backend) finishActiveTurn(turnID uint64) {
