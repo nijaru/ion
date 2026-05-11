@@ -396,7 +396,7 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 		}
 		m.Picker.Overlay = nil
 		notice := session.Entry{Role: session.System, Content: "Model set to " + selected.Value}
-		return m, m.switchRuntimeCommand(
+		return m.switchRuntimeCommand(
 			runtimeCfg,
 			updated,
 			m.activePreset(),

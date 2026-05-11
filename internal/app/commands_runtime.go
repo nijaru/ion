@@ -12,14 +12,14 @@ import (
 	"github.com/nijaru/ion/internal/storage"
 )
 
-func (m Model) resumeStoredSessionByID(sessionID string) tea.Cmd {
+func (m Model) resumeStoredSessionByID(sessionID string) (Model, tea.Cmd) {
 	if m.Model.Store == nil {
-		return cmdError("session store not available")
+		return m, cmdError("session store not available")
 	}
 
 	resumed, err := m.Model.Store.ResumeSession(context.Background(), sessionID)
 	if err != nil {
-		return cmdError(fmt.Sprintf("failed to resume session %s: %v", sessionID, err))
+		return m, cmdError(fmt.Sprintf("failed to resume session %s: %v", sessionID, err))
 	}
 	defer func() {
 		_ = resumed.Close()
@@ -28,7 +28,7 @@ func (m Model) resumeStoredSessionByID(sessionID string) tea.Cmd {
 	meta := resumed.Meta()
 	provider, model := splitStoredSessionModel(meta.Model)
 	if provider == "" || model == "" {
-		return cmdError(fmt.Sprintf("session %s is missing provider/model metadata", sessionID))
+		return m, cmdError(fmt.Sprintf("session %s is missing provider/model metadata", sessionID))
 	}
 
 	cfg := &config.Config{Provider: provider, Model: model}
@@ -49,7 +49,7 @@ func (m Model) switchPresetCommand(preset modelPreset) (Model, tea.Cmd) {
 		return m, cmdError(fmt.Sprintf("failed to resolve %s preset: %v", preset, err))
 	}
 	notice := session.Entry{Role: session.System, Content: "Switched to " + preset.String()}
-	return m, m.switchRuntimeCommand(
+	return m.switchRuntimeCommand(
 		runtimeCfg,
 		cfg,
 		preset,
@@ -83,21 +83,21 @@ func (m Model) switchRuntimeCommand(
 	notice session.Entry,
 	sessionID string,
 	preserveSession bool,
-) tea.Cmd {
+) (Model, tea.Cmd) {
 	if m.Model.Switcher == nil {
 		if err := config.SaveActivePreset(preset.String()); err != nil {
-			return persistErrorCmd("save active preset", err)
+			return m, persistErrorCmd("save active preset", err)
 		}
 		m.Model.Backend.SetConfig(cfg)
 		m.App.ActivePreset = preset
 		m.Progress.ReasoningEffort = normalizeThinkingValue(cfg.ReasoningEffort)
-		return m.printEntries(notice)
+		return m, m.printEntries(notice)
 	}
 
 	oldSession := m.Model.Session
-	switchID := sessionID
-	if preserveSession && switchID == "" && oldSession != nil {
-		switchID = oldSession.ID()
+	targetSessionID := sessionID
+	if preserveSession && targetSessionID == "" && oldSession != nil {
+		targetSessionID = oldSession.ID()
 	}
 	switcher := m.Model.Switcher
 	cfgCopy := *cfg
@@ -105,29 +105,33 @@ func (m Model) switchRuntimeCommand(
 	if appCfg != nil {
 		appCfgCopy = *appCfg
 	}
+	m.Model.RuntimeSwitchRequest++
+	requestID := m.Model.RuntimeSwitchRequest
 
-	return func() tea.Msg {
+	return m, func() tea.Msg {
 		if oldSession != nil {
 			_ = oldSession.CancelTurn(context.Background())
 		}
-		backend, sess, storageSess, err := switcher(context.Background(), &cfgCopy, switchID)
+		backend, sess, storageSess, err := switcher(context.Background(), &cfgCopy, targetSessionID)
 		if err != nil {
-			return localErrorMsg{err: err}
+			return runtimeSwitchErrorMsg{switchID: requestID, err: err}
 		}
 		if err := config.SaveActivePreset(preset.String()); err != nil {
 			closeSwitchedRuntime(sess, storageSess)
-			return localErrorMsg{err: fmt.Errorf("save active preset: %w", err)}
-		}
-		if oldSession != nil {
-			_ = oldSession.Close()
+			return runtimeSwitchErrorMsg{
+				switchID: requestID,
+				err:      fmt.Errorf("save active preset: %w", err),
+			}
 		}
 		return runtimeSwitchedMsg{
+			switchID:   requestID,
 			cfg:        &appCfgCopy,
 			reasoning:  cfgCopy.ReasoningEffort,
 			preset:     preset,
 			backend:    backend,
 			session:    sess,
 			storage:    storageSess,
+			oldSession: oldSession,
 			status:     backend.Bootstrap().Status,
 			notice:     notice.Content,
 			showStatus: preserveSession,
@@ -139,23 +143,25 @@ func (m Model) resumeRuntimeCommand(
 	cfg *config.Config,
 	notice session.Entry,
 	sessionID string,
-) tea.Cmd {
+) (Model, tea.Cmd) {
 	if m.Model.Switcher == nil {
 		m.Model.Backend.SetConfig(cfg)
 		m.App.ActivePreset = presetPrimary
 		m.Progress.ReasoningEffort = normalizeThinkingValue(cfg.ReasoningEffort)
-		return m.printEntries(notice)
+		return m, m.printEntries(notice)
 	}
 	switcher := m.Model.Switcher
 	cfgCopy := *cfg
-	return func() tea.Msg {
+	m.Model.RuntimeSwitchRequest++
+	switchID := m.Model.RuntimeSwitchRequest
+	return m, func() tea.Msg {
 		oldSession := m.Model.Session
 		if oldSession != nil {
 			_ = oldSession.CancelTurn(context.Background())
 		}
 		backend, sess, storageSess, err := switcher(context.Background(), &cfgCopy, sessionID)
 		if err != nil {
-			return localErrorMsg{err: err}
+			return runtimeSwitchErrorMsg{switchID: switchID, err: err}
 		}
 		var entries []session.Entry
 		resumeBranch := currentBranchName(m.App.Branch, storageSess)
@@ -163,11 +169,11 @@ func (m Model) resumeRuntimeCommand(
 			entries, err = storageSess.Entries(context.Background())
 			if err != nil {
 				closeSwitchedRuntime(sess, storageSess)
-				return localErrorMsg{err: fmt.Errorf("load session transcript: %w", err)}
+				return runtimeSwitchErrorMsg{
+					switchID: switchID,
+					err:      fmt.Errorf("load session transcript: %w", err),
+				}
 			}
-		}
-		if oldSession != nil {
-			_ = oldSession.Close()
 		}
 		printLines := []string{m.runtimeHeaderLine(backend)}
 		if header := m.headerLineFor(resumeBranch); header != "" {
@@ -175,11 +181,13 @@ func (m Model) resumeRuntimeCommand(
 		}
 		printLines = append(printLines, "", "--- resumed ---", "")
 		return runtimeSwitchedMsg{
+			switchID:      switchID,
 			cfg:           &cfgCopy,
 			preset:        presetPrimary,
 			backend:       backend,
 			session:       sess,
 			storage:       storageSess,
+			oldSession:    oldSession,
 			printLines:    printLines,
 			replayEntries: entries,
 			status:        backend.Bootstrap().Status,
