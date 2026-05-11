@@ -24,6 +24,11 @@ type cantoStore struct {
 }
 
 const (
+	metadataSQLiteMaxOpenConns = 4
+	metadataSQLiteMaxIdleConns = 2
+)
+
+const (
 	ionSystemEvent   session.EventType = "ion_system"
 	ionSubagentEvent session.EventType = "ion_subagent"
 )
@@ -60,6 +65,7 @@ func newCantoStore(dbPath, dsn string) (Store, error) {
 		}
 		return nil, err
 	}
+	configureMetadataSQLitePool(db, dsn)
 
 	s := &cantoStore{
 		dbPath: dbPath,
@@ -72,6 +78,16 @@ func newCantoStore(dbPath, dsn string) (Store, error) {
 	}
 
 	return s, nil
+}
+
+func configureMetadataSQLitePool(db *sql.DB, dsn string) {
+	if strings.Contains(dsn, ":memory:") || strings.Contains(dsn, "mode=memory") {
+		db.SetMaxOpenConns(1)
+		db.SetMaxIdleConns(1)
+		return
+	}
+	db.SetMaxOpenConns(metadataSQLiteMaxOpenConns)
+	db.SetMaxIdleConns(metadataSQLiteMaxIdleConns)
 }
 
 func (s *cantoStore) Close() error {
