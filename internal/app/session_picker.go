@@ -80,7 +80,7 @@ func (m Model) handleSessionPickerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		}
 		selected := m.Picker.Session.filtered[m.Picker.Session.index]
 		m.Picker.Session = nil
-		return m, m.resumeStoredSessionByID(selected.info.ID)
+		return m.resumeStoredSessionByID(selected.info.ID)
 	default:
 		if msg.Text != "" {
 			m.Picker.Session.query += msg.Text
@@ -194,7 +194,8 @@ func rankedSessionPickerItems(items []sessionPickerItem, query, cwd string) []se
 
 	ranked := make([]rankedItem, 0, len(items))
 	for i, item := range items {
-		score, ok := pickerSearchScore(query,
+		score, ok := pickerSearchScore(
+			query,
 			pickerSearchField{value: item.info.ID, weight: 0},
 			pickerSearchField{value: item.info.Title, weight: 3},
 			pickerSearchField{value: item.info.Summary, weight: 4},

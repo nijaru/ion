@@ -132,11 +132,15 @@ type stubApproval struct {
 
 func localErrorFromMsg(t *testing.T, msg tea.Msg) error {
 	t.Helper()
-	errMsg, ok := msg.(localErrorMsg)
-	if !ok {
+	switch msg := msg.(type) {
+	case localErrorMsg:
+		return msg.err
+	case runtimeSwitchErrorMsg:
+		return msg.err
+	default:
 		t.Fatalf("message = %T, want localErrorMsg", msg)
+		return nil
 	}
-	return errMsg.err
 }
 
 func (s *stubSession) Open(ctx context.Context) error              { return nil }

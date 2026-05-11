@@ -52,7 +52,7 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		if len(fields) < 2 {
 			return m.openSessionPicker()
 		}
-		return m, m.resumeStoredSessionByID(fields[1])
+		return m.resumeStoredSessionByID(fields[1])
 	case "/model":
 		if len(fields) < 2 {
 			return m.openModelPicker()
@@ -85,7 +85,7 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 				session.Entry{Role: session.System, Content: "Model set to " + name},
 			)
 		}
-		return m, m.switchRuntimeCommand(
+		return m.switchRuntimeCommand(
 			runtimeCfg,
 			updated,
 			m.activePreset(),
@@ -295,7 +295,7 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		}
 		cfg := &config.Config{Provider: provider, Model: model}
 		notice := session.Entry{Role: session.System, Content: "Forked session " + forked.ID()}
-		return m, m.resumeRuntimeCommand(cfg, notice, forked.ID())
+		return m.resumeRuntimeCommand(cfg, notice, forked.ID())
 
 	case "/tree":
 		if len(fields) != 1 {
@@ -355,7 +355,7 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		if command == "/clear" {
 			notice = "Started fresh session"
 		}
-		return m, m.switchRuntimeCommand(
+		return m.switchRuntimeCommand(
 			runtimeCfg,
 			cfg,
 			m.activePreset(),

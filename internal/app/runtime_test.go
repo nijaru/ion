@@ -479,6 +479,96 @@ func TestRuntimeSwitchIgnoresStaleAwaitedSessionEvents(t *testing.T) {
 	}
 }
 
+func TestRuntimeSwitchIgnoresStaleCompletion(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	initialSession := &stubSession{events: make(chan session.Event)}
+	type openedRuntime struct {
+		session *stubSession
+		storage *stubStorageSession
+	}
+	opened := make(map[string]openedRuntime)
+
+	model := New(
+		stubBackend{sess: initialSession, provider: "openai", model: "gpt-4.1"},
+		nil,
+		nil,
+		"/tmp/test",
+		"main",
+		"dev",
+		func(ctx context.Context, cfg *config.Config, sessionID string) (backend.Backend, session.AgentSession, storage.Session, error) {
+			sess := &stubSession{events: make(chan session.Event)}
+			storageSess := &stubStorageSession{id: cfg.Model, model: cfg.Provider + "/" + cfg.Model}
+			opened[cfg.Model] = openedRuntime{session: sess, storage: storageSess}
+			return stubBackend{
+				sess:     sess,
+				provider: cfg.Provider,
+				model:    cfg.Model,
+			}, sess, storageSess, nil
+		},
+	)
+
+	var firstCmd tea.Cmd
+	model, firstCmd = model.switchRuntimeCommand(
+		&config.Config{Provider: "openai", Model: "gpt-4.1-first"},
+		&config.Config{Provider: "openai", Model: "gpt-4.1-first"},
+		presetPrimary,
+		session.Entry{Role: session.System, Content: "First"},
+		"",
+		false,
+	)
+	var secondCmd tea.Cmd
+	model, secondCmd = model.switchRuntimeCommand(
+		&config.Config{Provider: "openai", Model: "gpt-4.1-second"},
+		&config.Config{Provider: "openai", Model: "gpt-4.1-second"},
+		presetPrimary,
+		session.Entry{Role: session.System, Content: "Second"},
+		"",
+		false,
+	)
+
+	next, cmd := model.Update(firstCmd())
+	model = next.(Model)
+	if cmd != nil {
+		t.Fatalf("stale runtime switch returned command %T", cmd)
+	}
+	if got := model.Model.Backend.Model(); got != "gpt-4.1" {
+		t.Fatalf("backend model after stale completion = %q, want original", got)
+	}
+	if initialSession.closed {
+		t.Fatal("stale runtime switch closed the active old session")
+	}
+	stale := opened["gpt-4.1-first"]
+	if stale.session == nil || !stale.session.closed {
+		t.Fatal("stale switched session was not closed")
+	}
+	if stale.storage == nil || !stale.storage.closed {
+		t.Fatal("stale switched storage was not closed")
+	}
+
+	next, cmd = model.Update(secondCmd())
+	model = next.(Model)
+	if cmd == nil {
+		t.Fatal("current runtime switch should schedule replay/await commands")
+	}
+	if got := model.Model.Backend.Model(); got != "gpt-4.1-second" {
+		t.Fatalf("backend model = %q, want second switch", got)
+	}
+	if !initialSession.closed {
+		t.Fatal("accepted runtime switch did not close the old session")
+	}
+	current := opened["gpt-4.1-second"]
+	if current.session == nil || current.session.closed {
+		t.Fatal("current switched session was closed or missing")
+	}
+	if current.storage == nil || current.storage.closed {
+		t.Fatal("current switched storage was closed or missing")
+	}
+	if model.Model.RuntimeSwitchRequest != 0 {
+		t.Fatalf("runtime switch request = %d, want cleared", model.Model.RuntimeSwitchRequest)
+	}
+}
+
 func TestRuntimeSwitchClosesNewRuntimeWhenStateSaveFails(t *testing.T) {
 	t.Setenv("HOME", "/dev/null")
 	oldSession := &stubSession{events: make(chan session.Event)}
@@ -496,7 +586,7 @@ func TestRuntimeSwitchClosesNewRuntimeWhenStateSaveFails(t *testing.T) {
 		},
 	)
 
-	cmd := model.switchRuntimeCommand(
+	model, cmd := model.switchRuntimeCommand(
 		&config.Config{Provider: "openai", Model: "gpt-4.1"},
 		&config.Config{Provider: "openai", Model: "gpt-4.1"},
 		presetFast,
@@ -671,7 +761,7 @@ func TestResumeStoredSessionClosesInspectionSession(t *testing.T) {
 		},
 	)
 
-	cmd := model.resumeStoredSessionByID("session-1")
+	model, cmd := model.resumeStoredSessionByID("session-1")
 	msg := cmd()
 
 	if _, ok := msg.(runtimeSwitchedMsg); !ok {
@@ -702,7 +792,7 @@ func TestResumeRuntimeCommandPrintsMarkerAfterHeader(t *testing.T) {
 		},
 	)
 
-	cmd := model.resumeRuntimeCommand(
+	model, cmd := model.resumeRuntimeCommand(
 		&config.Config{Provider: "openai", Model: "gpt-4.1"},
 		session.Entry{Role: session.System, Content: "Resumed"},
 		"session-1",
@@ -747,7 +837,7 @@ func TestResumeRuntimeCommandClosesNewRuntimeWhenReplayFails(t *testing.T) {
 		},
 	)
 
-	cmd := model.resumeRuntimeCommand(
+	model, cmd := model.resumeRuntimeCommand(
 		&config.Config{Provider: "openai", Model: "gpt-4.1"},
 		session.Entry{Role: session.System, Content: "Resumed"},
 		"session-1",

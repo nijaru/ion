@@ -58,17 +58,24 @@ const (
 type runtimeSwitcher func(context.Context, *config.Config, string) (backend.Backend, session.AgentSession, storage.Session, error)
 
 type runtimeSwitchedMsg struct {
+	switchID      uint64
 	cfg           *config.Config
 	reasoning     string
 	backend       backend.Backend
 	session       session.AgentSession
 	storage       storage.Session
+	oldSession    session.AgentSession
 	preset        modelPreset
 	printLines    []string
 	replayEntries []session.Entry
 	status        string
 	notice        string
 	showStatus    bool
+}
+
+type runtimeSwitchErrorMsg struct {
+	switchID uint64
+	err      error
 }
 
 type sessionCompactedMsg struct {
@@ -187,16 +194,17 @@ type AppState struct {
 
 // ModelState holds the core backend, session, and storage handles.
 type ModelState struct {
-	Backend         backend.Backend
-	Session         session.AgentSession
-	Storage         storage.Session
-	Store           storage.Store
-	Switcher        runtimeSwitcher
-	Config          *config.Config
-	Escalation      *workspace.EscalationConfig
-	TrustStore      *ionworkspace.TrustStore
-	Checkpoints     *ionworkspace.CheckpointStore
-	EventGeneration uint64
+	Backend              backend.Backend
+	Session              session.AgentSession
+	Storage              storage.Session
+	Store                storage.Store
+	Switcher             runtimeSwitcher
+	Config               *config.Config
+	Escalation           *workspace.EscalationConfig
+	TrustStore           *ionworkspace.TrustStore
+	Checkpoints          *ionworkspace.CheckpointStore
+	EventGeneration      uint64
+	RuntimeSwitchRequest uint64
 }
 
 // SubagentProgress tracks the ephemeral state of a background worker.
@@ -758,6 +766,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.submitComposer()
 
 	case runtimeSwitchedMsg:
+		if msg.switchID != 0 && msg.switchID != m.Model.RuntimeSwitchRequest {
+			closeSwitchedRuntime(msg.session, msg.storage)
+			return m, nil
+		}
+		m.Model.RuntimeSwitchRequest = 0
 		if msg.preset == "" {
 			m.App.ActivePreset = presetPrimary
 		} else {
@@ -767,6 +780,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.Model.Session = msg.session
 		m.Model.Storage = msg.storage
 		m.Model.Config = msg.cfg
+		if msg.oldSession != nil {
+			_ = msg.oldSession.Close()
+		}
 		m.Model.EventGeneration++
 		m.App.Sandbox = backendSandboxSummary(msg.backend)
 		m.Picker.Overlay = nil
@@ -813,6 +829,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		cmds = append(cmds, m.awaitSessionEvent())
 		return m, tea.Sequence(cmds...)
+
+	case runtimeSwitchErrorMsg:
+		if msg.switchID != 0 && msg.switchID != m.Model.RuntimeSwitchRequest {
+			return m, nil
+		}
+		m.Model.RuntimeSwitchRequest = 0
+		return m.handleLocalError(msg.err)
 
 	case sessionCompactedMsg:
 		m.Progress.Compacting = false
