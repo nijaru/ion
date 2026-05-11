@@ -18,6 +18,8 @@ type BackgroundJobInfo struct {
 	OutputBytes int
 }
 
+const backgroundOutputTruncatedMarker = "\n... [Output truncated: exceeded 1MB limit] ...\n"
+
 type backgroundJobs struct {
 	mu     sync.Mutex
 	next   int
@@ -198,14 +200,25 @@ func (j *backgroundJob) read(r io.Reader) {
 func (j *backgroundJob) append(chunk []byte) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	if j.buffer.Len() >= maxOutputSize {
-		if !j.truncate {
-			j.truncate = true
-			j.buffer.WriteString("\n... [Output truncated: exceeded 1MB limit] ...\n")
-		}
+	remaining := maxOutputSize - j.buffer.Len()
+	if remaining <= 0 {
+		j.markTruncatedLocked()
+		return
+	}
+	if len(chunk) > remaining {
+		j.buffer.Write(chunk[:remaining])
+		j.markTruncatedLocked()
 		return
 	}
 	j.buffer.Write(chunk)
+}
+
+func (j *backgroundJob) markTruncatedLocked() {
+	if j.truncate {
+		return
+	}
+	j.truncate = true
+	j.buffer.WriteString(backgroundOutputTruncatedMarker)
 }
 
 func (j *backgroundJob) stop(ctx context.Context) error {
