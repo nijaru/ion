@@ -12,7 +12,7 @@ require (
 	github.com/coder/acp-go-sdk v0.12.2
 	github.com/go-json-experiment/json v0.0.0-20260505212615-e40f80bf6836
 	github.com/nijaru/agentskills v0.0.0-20260327104504-1968077cb46d
-	github.com/nijaru/canto v0.0.0-20260511035820-d51d4d7d2a9c
+	github.com/nijaru/canto v0.0.0-20260511092239-cb21f9e0bcc3
 	github.com/pelletier/go-toml/v2 v2.3.1
 	github.com/yuin/goldmark v1.8.2
 	go.opentelemetry.io/otel v1.43.0
