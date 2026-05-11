@@ -94,6 +94,32 @@ func TestNewEphemeralCantoStorePersistsWithinProcessOnly(t *testing.T) {
 	}
 }
 
+func TestCantoStoreConfiguresMetadataSQLitePool(t *testing.T) {
+	storeAny, err := NewCantoStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	defer storeAny.Close()
+
+	store := storeAny.(*cantoStore)
+	if got := store.db.Stats().MaxOpenConnections; got != metadataSQLiteMaxOpenConns {
+		t.Fatalf("metadata db max open connections = %d, want %d", got, metadataSQLiteMaxOpenConns)
+	}
+}
+
+func TestEphemeralCantoStoreUsesSingleMetadataSQLiteConnection(t *testing.T) {
+	storeAny, err := NewEphemeralCantoStore()
+	if err != nil {
+		t.Fatalf("new ephemeral canto store: %v", err)
+	}
+	defer storeAny.Close()
+
+	store := storeAny.(*cantoStore)
+	if got := store.db.Stats().MaxOpenConnections; got != 1 {
+		t.Fatalf("ephemeral metadata db max open connections = %d, want 1", got)
+	}
+}
+
 func TestCantoStoreAppendUpdatesRecentSession(t *testing.T) {
 	root := t.TempDir()
 	storeAny, err := NewCantoStore(root)
@@ -1518,7 +1544,8 @@ func TestCantoStoreEntriesDropDisplayOnlyEventsBeforeCompactionCutoff(t *testing
 		t.Fatalf("entries: %v", err)
 	}
 	for _, entry := range entries {
-		if entry.Role == ionsession.System && strings.Contains(entry.Content, "old display marker") {
+		if entry.Role == ionsession.System &&
+			strings.Contains(entry.Content, "old display marker") {
 			t.Fatalf("compacted entries retained display-only event before cutoff: %#v", entries)
 		}
 	}
