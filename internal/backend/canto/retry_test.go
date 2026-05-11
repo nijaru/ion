@@ -68,6 +68,85 @@ func TestOpenRetriesTransientProviderErrors(t *testing.T) {
 	}
 }
 
+func TestRetryRecoveryWaitsThroughToolLoop(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+
+	root := t.TempDir()
+	store, err := storage.NewCantoStore(root)
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+
+	cwd := t.TempDir()
+	storageSession, err := store.OpenSession(ctx, cwd, "openai/model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	call := llm.Call{ID: "retry-tool-call", Type: "function"}
+	call.Function.Name = "bash"
+	call.Function.Arguments = `{"command":"printf retry-tool-output"}`
+	provider := &retryProvider{
+		FauxProvider: ctesting.NewFauxProvider(
+			"openai",
+			ctesting.Step{Err: transientStreamErr},
+			ctesting.Step{Calls: []llm.Call{call}},
+			ctesting.Step{Content: "final after retry tool"},
+		),
+	}
+
+	oldFactory := providerFactory
+	providerFactory = func(ctx context.Context, cfg *config.Config) (llm.Provider, error) {
+		if cfg.Provider == "openai" {
+			return provider, nil
+		}
+		return oldFactory(ctx, cfg)
+	}
+	defer func() { providerFactory = oldFactory }()
+
+	b := New()
+	b.SetStore(store)
+	b.SetSession(storageSession)
+	b.SetConfig(&config.Config{Provider: "openai", Model: "model-a", ContextLimit: 100})
+	b.SetMode(ionsession.ModeYolo)
+	if err := b.Open(ctx); err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer func() { _ = b.Close() }()
+
+	if retry, ok := b.llm.(*llm.RetryProvider); ok {
+		retry.Config.MinInterval = time.Millisecond
+		retry.Config.MaxInterval = time.Millisecond
+	}
+
+	if err := b.SubmitTurn(ctx, "retry with tool"); err != nil {
+		t.Fatalf("submit turn: %v", err)
+	}
+	waitForTurnFinished(t, b.Events())
+
+	calls := provider.Calls()
+	if len(calls) != 3 {
+		t.Fatalf(
+			"provider calls = %d, want transient retry, tool request, final request",
+			len(calls),
+		)
+	}
+	if !requestHasMessage(calls[2].Messages, llm.RoleTool, "retry-tool-output") {
+		t.Fatalf("final request missing retry tool result: %#v", calls[2].Messages)
+	}
+
+	entries, err := storageSession.Entries(ctx)
+	if err != nil {
+		t.Fatalf("entries: %v", err)
+	}
+	if !entryExists(entries, ionsession.Agent, "final after retry tool") {
+		t.Fatalf("final assistant response was not persisted: %#v", entries)
+	}
+}
+
 func TestConfigureRetryProviderUsesUntilCancelledSetting(t *testing.T) {
 	events := make(chan ionsession.Event, 1)
 	retryUntilCancelled := true
