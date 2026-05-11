@@ -355,6 +355,72 @@ func TestIonACPAgentSetSessionMode(t *testing.T) {
 	}
 }
 
+func TestIonACPAgentPromptDrainsStaleCancelEvents(t *testing.T) {
+	fakeSession := newFakeACPAgentSession("session-1")
+	agent := newIonACPAgent(
+		&fakeACPRuntimeFactory{session: fakeSession},
+		"test-version",
+		ionsession.ModeEdit,
+	)
+	agent.sessions["session-1"] = &ionACPHeadlessSession{
+		agent: fakeSession,
+		cwd:   t.TempDir(),
+		mode:  ionsession.ModeEdit,
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	resp, err := agent.Prompt(ctx, acp.PromptRequest{
+		SessionId: "session-1",
+		Prompt:    []acp.ContentBlock{acp.TextBlock("first")},
+	})
+	if err != nil {
+		t.Fatalf("canceled prompt: %v", err)
+	}
+	if resp.StopReason != acp.StopReasonCancelled {
+		t.Fatalf("stop reason = %q, want cancelled", resp.StopReason)
+	}
+	select {
+	case submitted := <-fakeSession.submitted:
+		if submitted != "first" {
+			t.Fatalf("submitted prompt = %q, want first", submitted)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for first prompt submission")
+	}
+
+	fakeSession.events <- ionsession.TurnFinished{}
+	done := make(chan error, 1)
+	go func() {
+		_, err := agent.Prompt(t.Context(), acp.PromptRequest{
+			SessionId: "session-1",
+			Prompt:    []acp.ContentBlock{acp.TextBlock("second")},
+		})
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("second prompt returned on stale TurnFinished: %v", err)
+	case submitted := <-fakeSession.submitted:
+		if submitted != "second" {
+			t.Fatalf("submitted prompt = %q, want second", submitted)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for second prompt submission")
+	}
+
+	fakeSession.events <- ionsession.TurnFinished{}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("second prompt: %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("second prompt did not finish after fresh TurnFinished")
+	}
+}
+
 func TestACPToolUpdatesRedactSensitivePayloads(t *testing.T) {
 	start := acpToolCallStart(t.TempDir(), ionsession.ToolCallStarted{
 		ToolUseID: "tool-1",

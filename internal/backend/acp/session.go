@@ -3,6 +3,7 @@ package acp
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -75,6 +76,12 @@ type Session struct {
 	cancel          context.CancelFunc
 	closeOnce       sync.Once
 	mu              sync.Mutex
+	wg              sync.WaitGroup
+	done            chan struct{}
+	eventMu         sync.RWMutex
+	eventClosed     bool
+	turnCancel      context.CancelFunc
+	turnActive      bool
 	resumeSessionID string
 	stderrCleanup   func() error
 
@@ -88,6 +95,7 @@ func newSession() *Session {
 	return &Session{
 		events:           make(chan session.Event, 100),
 		policy:           backend.NewPolicyEngine(),
+		done:             make(chan struct{}),
 		pendingApprovals: make(map[string]chan bool),
 		terminals:        make(map[string]*terminal),
 	}
@@ -232,25 +240,40 @@ func (s *Session) AllowCategory(toolName string) {
 
 func (s *Session) Close() error {
 	s.closeOnce.Do(func() {
-		if s.cancel != nil {
-			s.cancel()
-		}
-		if s.stderrCleanup != nil {
-			_ = s.stderrCleanup()
-			s.stderrCleanup = nil
-		}
+		close(s.done)
 
-		// Cleanup terminals
 		s.mu.Lock()
+		cancel := s.cancel
+		turnCancel := s.turnCancel
+		stderrCleanup := s.stderrCleanup
+		s.stderrCleanup = nil
+		terminals := make([]*terminal, 0, len(s.terminals))
 		for id, t := range s.terminals {
-			if t.cmd != nil && t.cmd.Process != nil {
-				_ = t.cmd.Process.Kill()
-			}
+			terminals = append(terminals, t)
 			delete(s.terminals, id)
 		}
 		s.mu.Unlock()
 
+		if turnCancel != nil {
+			turnCancel()
+		}
+		if cancel != nil {
+			cancel()
+		}
+		if stderrCleanup != nil {
+			_ = stderrCleanup()
+		}
+		for _, t := range terminals {
+			if t.cmd != nil && t.cmd.Process != nil {
+				_ = t.cmd.Process.Kill()
+			}
+		}
+
+		s.wg.Wait()
+		s.eventMu.Lock()
+		s.eventClosed = true
 		close(s.events)
+		s.eventMu.Unlock()
 	})
 	return nil
 }
@@ -282,25 +305,41 @@ func (s *Session) SubmitTurn(ctx context.Context, input string) error {
 	s.mu.Lock()
 	conn := s.conn
 	sessionID := s.sessionID
+	if s.turnActive {
+		s.mu.Unlock()
+		return fmt.Errorf("turn already in progress")
+	}
+	turnCtx, turnCancel := context.WithCancel(ctx)
+	s.turnActive = true
+	s.turnCancel = turnCancel
 	s.mu.Unlock()
 
 	if conn == nil {
+		s.finishTurn()
+		turnCancel()
 		return fmt.Errorf("not connected")
 	}
 
-	s.events <- session.TurnStarted{Base: session.BaseNow()}
+	if !s.emit(session.TurnStarted{Base: session.BaseNow()}) {
+		s.finishTurn()
+		turnCancel()
+		return fmt.Errorf("session closed")
+	}
 
-	go func() {
-		_, err := conn.Prompt(ctx, acp.PromptRequest{
+	s.wg.Go(func() {
+		defer s.finishTurn()
+		defer turnCancel()
+
+		_, err := conn.Prompt(turnCtx, acp.PromptRequest{
 			SessionId: acp.SessionId(sessionID),
 			Prompt:    []acp.ContentBlock{acp.TextBlock(input)},
 		})
-		if err != nil {
+		if err != nil && !isPromptCancellation(err) {
 			base := session.BaseNow()
-			s.events <- session.Error{Base: base, Err: fmt.Errorf("prompt: %w", err)}
+			s.emit(session.Error{Base: base, Err: fmt.Errorf("prompt: %w", err)})
 		}
-		s.events <- session.TurnFinished{Base: session.BaseNow()}
-	}()
+		s.emit(session.TurnFinished{Base: session.BaseNow()})
+	})
 
 	return nil
 }
@@ -309,10 +348,14 @@ func (s *Session) CancelTurn(ctx context.Context) error {
 	s.mu.Lock()
 	conn := s.conn
 	sessionID := s.sessionID
+	turnCancel := s.turnCancel
 	s.mu.Unlock()
 
 	if conn == nil {
 		return nil
+	}
+	if turnCancel != nil {
+		turnCancel()
 	}
 
 	return conn.Cancel(ctx, acp.CancelNotification{
@@ -333,6 +376,46 @@ func (s *Session) Approve(ctx context.Context, requestID string, approved bool) 
 		ch <- approved
 	}
 	return nil
+}
+
+func (s *Session) emit(ev session.Event) bool {
+	s.eventMu.RLock()
+	defer s.eventMu.RUnlock()
+	if s.eventClosed {
+		return false
+	}
+	select {
+	case <-s.done:
+		return false
+	default:
+	}
+	select {
+	case s.events <- ev:
+		return true
+	case <-s.done:
+		return false
+	}
+}
+
+func (s *Session) finishTurn() {
+	s.mu.Lock()
+	s.turnActive = false
+	s.turnCancel = nil
+	s.mu.Unlock()
+}
+
+func isPromptCancellation(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "context canceled") ||
+		strings.Contains(msg, "context deadline exceeded") ||
+		strings.Contains(msg, "canceled") ||
+		strings.Contains(msg, "cancelled")
 }
 
 func acpCommandEnv(sessionID string) []string {
@@ -374,18 +457,18 @@ func (s *Session) SessionUpdate(ctx context.Context, n acp.SessionNotification) 
 	switch {
 	case update.AgentMessageChunk != nil:
 		if update.AgentMessageChunk.Content.Text != nil {
-			s.events <- session.AgentDelta{
+			s.emit(session.AgentDelta{
 				Base:  session.BaseNow(),
 				Delta: update.AgentMessageChunk.Content.Text.Text,
-			}
+			})
 		}
 
 	case update.AgentThoughtChunk != nil:
 		if update.AgentThoughtChunk.Content.Text != nil {
-			s.events <- session.ThinkingDelta{
+			s.emit(session.ThinkingDelta{
 				Base:  session.BaseNow(),
 				Delta: update.AgentThoughtChunk.Content.Text.Text,
-			}
+			})
 		}
 
 	case update.ToolCall != nil:
@@ -398,12 +481,12 @@ func (s *Session) SessionUpdate(ctx context.Context, n acp.SessionNotification) 
 		if tc.RawInput != nil {
 			args = fmt.Sprintf("%v", tc.RawInput)
 		}
-		s.events <- session.ToolCallStarted{
+		s.emit(session.ToolCallStarted{
 			Base:      session.BaseNow(),
 			ToolUseID: string(tc.ToolCallId),
 			ToolName:  toolName,
 			Args:      args,
-		}
+		})
 
 	case update.ToolCallUpdate != nil:
 		tcu := update.ToolCallUpdate
@@ -413,43 +496,43 @@ func (s *Session) SessionUpdate(ctx context.Context, n acp.SessionNotification) 
 			if output == "" && tcu.RawOutput != nil {
 				output = fmt.Sprintf("%v", tcu.RawOutput)
 			}
-			s.events <- session.ToolResult{
+			s.emit(session.ToolResult{
 				Base:      session.BaseNow(),
 				ToolUseID: string(tcu.ToolCallId),
 				Result:    output,
-			}
+			})
 
 		case tcu.Status != nil && *tcu.Status == acp.ToolCallStatusFailed:
 			output := toolContentText(tcu.Content)
-			s.events <- session.ToolResult{
+			s.emit(session.ToolResult{
 				Base:      session.BaseNow(),
 				ToolUseID: string(tcu.ToolCallId),
 				Result:    output,
 				Error:     fmt.Errorf("tool call failed"),
-			}
+			})
 
 		default:
 			if delta := toolContentText(tcu.Content); delta != "" {
-				s.events <- session.ToolOutputDelta{
+				s.emit(session.ToolOutputDelta{
 					Base:      session.BaseNow(),
 					ToolUseID: string(tcu.ToolCallId),
 					Delta:     delta,
-				}
+				})
 			}
 		}
 
 	case update.Plan != nil:
 		if len(update.Plan.Entries) > 0 {
-			s.events <- session.StatusChanged{
+			s.emit(session.StatusChanged{
 				Base:   session.BaseNow(),
 				Status: update.Plan.Entries[0].Content,
-			}
+			})
 		}
 	}
 
 	if hasUsage {
 		usage.Base = session.BaseNow()
-		s.events <- usage
+		s.emit(usage)
 	}
 
 	return nil
@@ -486,11 +569,14 @@ func (s *Session) RequestPermission(
 	s.pendingApprovals[requestID] = ch
 	s.mu.Unlock()
 
-	s.events <- session.ApprovalRequest{
+	if !s.emit(session.ApprovalRequest{
 		Base:        session.BaseNow(),
 		RequestID:   requestID,
 		ToolName:    toolName,
 		Description: toolName,
+	}) {
+		s.removePendingApproval(requestID, ch)
+		return acp.RequestPermissionResponse{}, context.Canceled
 	}
 
 	select {
@@ -500,7 +586,16 @@ func (s *Session) RequestPermission(
 		}
 		return denyResponse(p), nil
 	case <-ctx.Done():
+		s.removePendingApproval(requestID, ch)
 		return acp.RequestPermissionResponse{}, ctx.Err()
+	}
+}
+
+func (s *Session) removePendingApproval(requestID string, ch chan bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if current := s.pendingApprovals[requestID]; current == ch {
+		delete(s.pendingApprovals, requestID)
 	}
 }
 
