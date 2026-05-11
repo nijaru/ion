@@ -1193,6 +1193,12 @@ func TestStopCommandStopsBackgroundJob(t *testing.T) {
 	if len(sess.stopped) != 1 || sess.stopped[0] != "bash-1" {
 		t.Fatalf("stopped = %#v, want bash-1", sess.stopped)
 	}
+	if !sess.stopDeadlineSet {
+		t.Fatal("stop command used context without deadline")
+	}
+	if remaining := time.Until(sess.stopDeadline); remaining <= 0 || remaining > stopJobTimeout {
+		t.Fatalf("stop deadline remaining = %s, want within %s", remaining, stopJobTimeout)
+	}
 	if len(printed.entries) != 1 ||
 		!strings.Contains(printed.entries[0].Content, "stopped bash-1") {
 		t.Fatalf("printed = %#v, want stop notice", printed.entries)

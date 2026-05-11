@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -121,8 +122,10 @@ type steeringStubSession struct {
 
 type jobStubSession struct {
 	stubSession
-	jobs    []session.JobInfo
-	stopped []string
+	jobs            []session.JobInfo
+	stopped         []string
+	stopDeadlineSet bool
+	stopDeadline    time.Time
 }
 
 type stubApproval struct {
@@ -201,6 +204,7 @@ func (s *jobStubSession) Jobs() []session.JobInfo {
 
 func (s *jobStubSession) StopJob(ctx context.Context, id string) (string, error) {
 	s.stopped = append(s.stopped, id)
+	s.stopDeadline, s.stopDeadlineSet = ctx.Deadline()
 	return "stopped " + id, nil
 }
 
