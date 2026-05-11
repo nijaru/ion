@@ -87,7 +87,7 @@ func (a *ionACPAgent) requestPermission(
 	status := acp.ToolCallStatusPending
 	resp, err := a.conn.RequestPermission(ctx, acp.RequestPermissionRequest{
 		SessionId: acp.SessionId(sessionID),
-		ToolCall: acp.RequestPermissionToolCall{
+		ToolCall: acp.ToolCallUpdate{
 			ToolCallId: acp.ToolCallId(req.RequestID),
 			Title:      &title,
 			Kind:       &kind,

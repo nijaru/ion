@@ -38,6 +38,20 @@ func (a *mockAgent) Initialize(
 
 func (a *mockAgent) Cancel(_ context.Context, _ acp.CancelNotification) error { return nil }
 
+func (a *mockAgent) CloseSession(
+	context.Context,
+	acp.CloseSessionRequest,
+) (acp.CloseSessionResponse, error) {
+	return acp.CloseSessionResponse{}, nil
+}
+
+func (a *mockAgent) ListSessions(
+	context.Context,
+	acp.ListSessionsRequest,
+) (acp.ListSessionsResponse, error) {
+	return acp.ListSessionsResponse{}, acp.NewMethodNotFound(acp.AgentMethodSessionList)
+}
+
 func (a *mockAgent) NewSession(
 	_ context.Context,
 	_ acp.NewSessionRequest,
@@ -50,6 +64,20 @@ func (a *mockAgent) Prompt(ctx context.Context, req acp.PromptRequest) (acp.Prom
 		return a.prompt(ctx, req)
 	}
 	return acp.PromptResponse{StopReason: acp.StopReasonEndTurn}, nil
+}
+
+func (a *mockAgent) ResumeSession(
+	context.Context,
+	acp.ResumeSessionRequest,
+) (acp.ResumeSessionResponse, error) {
+	return acp.ResumeSessionResponse{}, acp.NewMethodNotFound(acp.AgentMethodSessionResume)
+}
+
+func (a *mockAgent) SetSessionConfigOption(
+	context.Context,
+	acp.SetSessionConfigOptionRequest,
+) (acp.SetSessionConfigOptionResponse, error) {
+	return acp.SetSessionConfigOptionResponse{}, acp.NewMethodNotFound(acp.AgentMethodSessionSetConfigOption)
 }
 
 func (a *mockAgent) SetSessionMode(
@@ -275,7 +303,7 @@ func TestACPApprovalBridge(t *testing.T) {
 			context.Background(),
 			acp.RequestPermissionRequest{
 				SessionId: "test-session",
-				ToolCall: acp.RequestPermissionToolCall{
+				ToolCall: acp.ToolCallUpdate{
 					ToolCallId: "call-1",
 				},
 				Options: []acp.PermissionOption{
@@ -373,28 +401,28 @@ func TestACPSessionRequestIncludesInitialContext(t *testing.T) {
 	if req.McpServers == nil {
 		t.Fatal("mcpServers must be an explicit empty list")
 	}
-	meta, ok := req.Meta.(ionSessionMeta)
+	meta, ok := req.Meta["ion"].(ionSessionContext)
 	if !ok {
-		t.Fatalf("meta = %T, want ionSessionMeta", req.Meta)
+		t.Fatalf("meta ion = %T, want ionSessionContext", req.Meta["ion"])
 	}
-	if meta.Ion.SessionID != stor.ID() {
-		t.Fatalf("session id = %q, want %q", meta.Ion.SessionID, stor.ID())
+	if meta.SessionID != stor.ID() {
+		t.Fatalf("session id = %q, want %q", meta.SessionID, stor.ID())
 	}
-	if meta.Ion.CWD != cwd {
-		t.Fatalf("meta cwd = %q, want %q", meta.Ion.CWD, cwd)
+	if meta.CWD != cwd {
+		t.Fatalf("meta cwd = %q, want %q", meta.CWD, cwd)
 	}
-	if meta.Ion.Branch != "feature/acp" {
-		t.Fatalf("branch = %q, want feature/acp", meta.Ion.Branch)
+	if meta.Branch != "feature/acp" {
+		t.Fatalf("branch = %q, want feature/acp", meta.Branch)
 	}
-	if meta.Ion.Model != "openrouter/model-a" {
-		t.Fatalf("model = %q, want openrouter/model-a", meta.Ion.Model)
+	if meta.Model != "openrouter/model-a" {
+		t.Fatalf("model = %q, want openrouter/model-a", meta.Model)
 	}
-	if meta.Ion.ResumeSession != "external-session-123" {
-		t.Fatalf("resume session = %q, want external-session-123", meta.Ion.ResumeSession)
+	if meta.ResumeSession != "external-session-123" {
+		t.Fatalf("resume session = %q, want external-session-123", meta.ResumeSession)
 	}
-	if !strings.Contains(meta.Ion.SystemPrompt, "## Project Instructions") ||
-		!strings.Contains(meta.Ion.SystemPrompt, "project instruction") {
-		t.Fatalf("system prompt missing project instructions: %q", meta.Ion.SystemPrompt)
+	if !strings.Contains(meta.SystemPrompt, "## Project Instructions") ||
+		!strings.Contains(meta.SystemPrompt, "project instruction") {
+		t.Fatalf("system prompt missing project instructions: %q", meta.SystemPrompt)
 	}
 }
 
@@ -409,8 +437,8 @@ func TestACPSessionRequestNormalizesRelativeCWD(t *testing.T) {
 	if !filepath.IsAbs(req.Cwd) {
 		t.Fatalf("cwd = %q, want absolute path", req.Cwd)
 	}
-	if meta := req.Meta.(ionSessionMeta); meta.Ion.CWD != req.Cwd {
-		t.Fatalf("meta cwd = %q, want request cwd %q", meta.Ion.CWD, req.Cwd)
+	if meta := req.Meta["ion"].(ionSessionContext); meta.CWD != req.Cwd {
+		t.Fatalf("meta cwd = %q, want request cwd %q", meta.CWD, req.Cwd)
 	}
 }
 

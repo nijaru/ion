@@ -30,6 +30,14 @@ Distilled architectural principles plus recent decision log.
 
 ## Recent Log
 
+### 2026-05-09 - Pi+ candidates stay parked behind core audit
+
+Reference-agent evidence still leaves review/inspection, JSONL event output,
+and session-branch UX as plausible later Pi+ candidates. They are not current
+implementation work. The active work is source-level core audit against Pi and
+Codex behavior, with defects fixed in Ion or Canto only when the fix improves
+the native agent loop or a general Canto framework contract.
+
 ### 2026-05-08 - C13 accepts the core after audit fixes
 
 C13 reviewed the core agent after the C12 reliability gate instead of opening

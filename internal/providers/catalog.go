@@ -353,7 +353,7 @@ func SupportsModelListing(cfg *config.Config) bool {
 }
 
 func authEnvVars(cfg *config.Config, def Definition) []string {
-	if cfg != nil {
+	if cfg != nil && def.SupportsCustomEndpoint {
 		if override := strings.TrimSpace(cfg.AuthEnvVar); override != "" {
 			return []string{override}
 		}

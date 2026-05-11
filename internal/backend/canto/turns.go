@@ -5,6 +5,8 @@ import (
 	"fmt"
 
 	cantofw "github.com/nijaru/canto"
+	"github.com/nijaru/canto/llm"
+	csession "github.com/nijaru/canto/session"
 	ionsession "github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
 )
@@ -61,19 +63,13 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 
 		shouldCompact, err := b.shouldProactivelyCompact(turnCtx)
 		if err != nil {
-			base := ionsession.BaseNow()
-			b.events <- ionsession.Error{Base: base, Err: err}
-			b.finishTurn(turnID)
-			b.events <- ionsession.TurnFinished{Base: base}
+			b.finishTurnWithError(turnID, err)
 			return
 		}
 		if shouldCompact {
 			b.events <- ionsession.StatusChanged{Base: ionsession.BaseNow(), Status: "Compacting context..."}
 			if compacted, cerr := b.Compact(turnCtx); cerr != nil {
-				base := ionsession.BaseNow()
-				b.events <- ionsession.Error{Base: base, Err: cerr}
-				b.finishTurn(turnID)
-				b.events <- ionsession.TurnFinished{Base: base}
+				b.finishTurnWithError(turnID, cerr)
 				return
 			} else if compacted {
 				b.events <- ionsession.StatusChanged{Base: ionsession.BaseNow(), Status: "Ready"}
@@ -82,21 +78,82 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 
 		runEvents, err := harnessSession.PromptStream(turnCtx, input)
 		if err != nil {
-			base := ionsession.BaseNow()
-			b.events <- ionsession.Error{Base: base, Err: err}
-			b.finishTurn(turnID)
-			b.events <- ionsession.TurnFinished{Base: base}
+			b.finishTurnWithError(turnID, err)
 			return
 		}
+		usage := &turnUsageTracker{}
 		for event := range runEvents {
-			b.translateRunEvent(turnCtx, event, turnID)
+			b.translateRunEvent(turnCtx, event, turnID, usage)
 		}
 	})
 
 	return nil
 }
 
-func (b *Backend) translateRunEvent(ctx context.Context, event cantofw.RunEvent, turnID uint64) {
+func (b *Backend) finishTurnWithError(turnID uint64, err error) {
+	base := ionsession.BaseNow()
+	b.events <- ionsession.Error{Base: base, Err: err}
+	b.finishTurn(turnID)
+	b.events <- ionsession.TurnFinished{Base: base}
+}
+
+type turnUsageTracker struct {
+	seen   bool
+	input  int
+	output int
+	cost   float64
+}
+
+func (t *turnUsageTracker) reset() {
+	*t = turnUsageTracker{}
+}
+
+func (t *turnUsageTracker) delta(usage *llm.Usage) (ionsession.TokenUsage, bool) {
+	if usage == nil {
+		return ionsession.TokenUsage{}, false
+	}
+	input := usage.InputTokens
+	output := usage.OutputTokens
+	cost := usage.Cost
+	if t.seen && (input < t.input || output < t.output || cost < t.cost) {
+		t.reset()
+	}
+
+	deltaInput := input
+	deltaOutput := output
+	deltaCost := cost
+	if t.seen {
+		deltaInput -= t.input
+		deltaOutput -= t.output
+		deltaCost -= t.cost
+	}
+
+	t.seen = true
+	t.input = input
+	t.output = output
+	t.cost = cost
+
+	if deltaInput == 0 && deltaOutput == 0 && deltaCost == 0 {
+		return ionsession.TokenUsage{}, false
+	}
+	return ionsession.TokenUsage{
+		Input:  deltaInput,
+		Output: deltaOutput,
+		Total:  deltaInput + deltaOutput,
+		Cost:   deltaCost,
+	}, true
+}
+
+func (b *Backend) translateRunEvent(
+	ctx context.Context,
+	event cantofw.RunEvent,
+	turnID uint64,
+	usage *turnUsageTracker,
+) {
+	if !b.acceptsTurnEvent(turnID) {
+		return
+	}
+
 	switch event.Type {
 	case cantofw.RunEventChunk:
 		chunk := event.Chunk
@@ -107,16 +164,19 @@ func (b *Backend) translateRunEvent(ctx context.Context, event cantofw.RunEvent,
 		if chunk.Content != "" {
 			b.events <- ionsession.AgentDelta{Base: base, Delta: chunk.Content}
 		}
-		if chunk.Usage != nil {
-			b.events <- ionsession.TokenUsage{
-				Base:   base,
-				Input:  chunk.Usage.InputTokens,
-				Output: chunk.Usage.OutputTokens,
-				Cost:   chunk.Usage.Cost,
+		if usage != nil {
+			msg, ok := usage.delta(chunk.Usage)
+			if !ok {
+				return
 			}
+			msg.Base = base
+			b.events <- msg
 		}
 	case cantofw.RunEventSession:
 		b.translateEvent(ctx, event.Event, turnID)
+		if usage != nil && event.Event.Type == csession.ToolCompleted {
+			usage.reset()
+		}
 	case cantofw.RunEventError:
 		if event.Err == nil || isCancellationTerminal(event.Err.Error()) {
 			return
@@ -159,6 +219,13 @@ func (b *Backend) turnActiveFor(turnID uint64) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.turnSeq == turnID && b.turnActive
+}
+
+func (b *Backend) acceptsTurnEvent(turnID uint64) bool {
+	if turnID == 0 {
+		return true
+	}
+	return b.turnActiveFor(turnID)
 }
 
 func (b *Backend) SteerTurn(

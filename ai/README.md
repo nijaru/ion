@@ -36,3 +36,4 @@
 - [Prompt Budget Baseline](research/prompt-budget-2026-05.md) — measured static prompt size and no-cache decision.
 - [Skills Progressive Disclosure](research/skills-progressive-disclosure-sota-2026-04.md) — evidence behind skill loading policy.
 - [Tool Surface Research](research/tool-surface-sota-2026-05.md) — search/edit/tool-shape reference evidence.
+- [Pi+ Feature Triage](research/pi-plus-feature-triage-2026-05.md) — post-C13 ranking of agent-reference features for Ion.

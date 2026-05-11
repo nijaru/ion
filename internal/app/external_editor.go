@@ -17,7 +17,7 @@ type externalEditorFinishedMsg struct {
 }
 
 func (m Model) openExternalEditor() (Model, tea.Cmd) {
-	if m.InFlight.Thinking || m.Progress.Compacting || m.Approval.Pending != nil {
+	if m.localCommandBusy() {
 		return m, m.printEntries(session.Entry{
 			Role:    session.System,
 			Content: "External editor is unavailable while a turn is active",

@@ -2,10 +2,10 @@
 
 Fast, lightweight terminal coding agent.
 
-**Phase:** C13 core agent audit green
-**Focus:** hold feature work; next work should come from concrete dogfood defects
-**Active task:** none ready
-**Updated:** 2026-05-08
+**Phase:** Deep core architecture audit vs Pi/Codex references
+**Focus:** Native loop, persistence, provider wiring, and TUI ownership review
+**Active task:** `tk-03hz` - Compare Ion core architecture against Pi and Codex
+**Updated:** 2026-05-11
 
 ## Current Truth
 
@@ -15,9 +15,9 @@ Fast, lightweight terminal coding agent.
   the default core.
 - Canto owns durable events, provider-visible history, agent/tool lifecycle,
   reasoning capability translation, and compaction primitives.
-- Ion now imports Canto `0c4dd06` /
-  `v0.0.0-20260505185449-0c4dd06120c5`, the finalized Phase 5 Canto audit
-  revision.
+- Ion now imports Canto `d51d4d7` /
+  `v0.0.0-20260511035820-d51d4d7d2a9c`, which keeps cancellation/deadline
+  during tool preflight as turn aborts instead of model-visible tool results.
 - Ion owns TUI/CLI UX, commands, settings/state, product tools, provider
   selection, display projection, safety/trust policy, and session bundle UX.
 - Ion can also run as an ACP agent over stdio with `--agent`; this is a
@@ -30,11 +30,74 @@ Fast, lightweight terminal coding agent.
   substrate, subagents, memory, routing, `/goal`, `/side`, `/clone`, and other
   extra surfaces stay parked unless a concrete dogfood issue or ready task
   proves value after the core gates stay boring.
+- `tk-d47k` is closed. The native core-loop review fixed two backend boundary
+  bugs: stale Canto events after a canceled/inactive turn are now suppressed,
+  and cumulative stream usage chunks are normalized into delta `TokenUsage`
+  events before Ion's summing consumers see them. Deterministic tests, full
+  `go test ./...`, `go vet ./...`, and focused race tests passed.
+- `tk-mk09` is closed. TUI active-turn cleanup is now shared across cancel,
+  session error, runtime switch, and budget-cancel paths so stale approvals,
+  tools, subagents, buffers, queued turns, and last-tool state are cleared
+  consistently.
+- `tk-4y1w` is closed. Deterministic tests, `go vet`, race subsets, tmux
+  minimal smoke, and Fedora local-api live smoke all passed after the native
+  core-loop and TUI integration fixes.
 - `tk-5cq4` C13 audit found and fixed two core ownership bugs:
   `Ctrl+M` bypassed the busy-turn guard for preset switching, and TUI shutdown
   closed startup runtime handles instead of the final runtime after a switch.
-  Mac-local gates are green after the fixes. Fedora live smoke is pending only
-  because Fedora is offline.
+  Mac-local gates are green after the fixes.
+- `tk-n5s6` reopened and closed the broader Pi+ question after the C13 code
+  review. Fresh synthesis across Pi, Pi extensions, Claude Code, Codex CLI,
+  Factory Droid, Amp, OpenCode, Crush, Slate, Jules, Mem0, Letta, Cursor, and
+  Zed says the likely next candidate is an on-demand review/inspection
+  workflow. JSONL event output and session-branch UX are next-best candidates.
+  Bash mode stays a low convenience. Subagents, memory, missions, swarms,
+  remote sandboxes, and extension mutation remain deferred unless a narrow eval
+  justifies promotion.
+- `tk-03hz` is the active task. It compares Ion's actual implementation
+  against local Pi and Codex source for session history/replay, provider/API
+  wiring, turn lifecycle, tool/event persistence, config/state, TUI
+  integration, and maintainability. This is a deeper architecture/code audit,
+  not a `/review` or `ion review` feature-design pass.
+- `tk-03hz` has found and fixed seven core defects so far:
+  display-only replay now respects the latest Canto compaction/projection
+  cutoff; custom auth env vars no longer leak into default providers; the main
+  native Canto agent now registers Ion's `PreToolUse` policy hook; and TUI
+  approval decisions persist a redacted display notice for resume/replay.
+  Normal input during approval now queues instead of disrupting the blocked
+  turn, Esc during approval cancels the pending turn, and Canto
+  cancellation/deadline during tool preflight now aborts instead of persisting
+  synthetic tool output. The framework-owned cancellation fix is in upstream
+  Canto and applies to any Canto host, not just Ion.
+- Data-architecture read: Pi uses one append-only JSONL branch log and derives
+  context from the active leaf; Codex uses JSONL rollout as the replay artifact
+  with SQLite/state DB for indexing/metadata. Ion can keep SQLite for now, but
+  its reliability rule is one canonical Canto rebuild boundary and no competing
+  UI/backend projection owners.
+- `tk-71wf` is parked and blocked behind `tk-03hz`. On-demand review workflow
+  design remains a possible Pi+ feature candidate, but it should not drive the
+  current audit.
+- The first Pi/Codex comparison pass found one core TUI bug before review
+  workflow design: normal composer input during an approval prompt could try to
+  submit a second turn and clear the approval UI through the error path. Ion now
+  treats pending approvals as busy input, queues the follow-up, preserves the
+  approval, and uses the same busy predicate for the external editor guard.
+- The next tool/approval audit pass found a framework contract bug: canceled or
+  deadline-expired Canto `PreToolUse`/approval preflight errors were converted
+  into synthetic tool results. Canto now treats those as aborts while preserving
+  explicit policy denials as model-visible tool results. Ion imports that fix
+  and adds regressions for both the backend and TUI Esc-cancel path.
+- `tk-0uos` is closed. Fresh Bubble Tea TUI review found no API misuse in
+  `cmd/ion` or `internal/app`; the concrete maintenance fix was updating the
+  Charm stack to Bubble Tea `v2.0.6`, Bubbles `v2.1.0`, and Lip Gloss `v2.0.3`.
+  Full deterministic tests, `go vet`, focused TUI race tests, and the tmux
+  minimal harness passed after the update.
+- `tk-z54d` is closed. The controlled direct dependency refresh updated ACP SDK
+  `v0.12.2`, JSON experiment `20260505212615-e40f80bf6836`, go-toml `v2.3.1`,
+  Goldmark `v1.8.2`, and modernc SQLite `v1.50.0`, while keeping Canto pinned.
+  ACP adapter breakage from the SDK update was fixed at the protocol boundary.
+  `go test ./...`, `go vet ./...`, the native race subset, `go mod verify`, and
+  the tmux minimal harness passed.
 - C2 executor-boundary, C3 context-survival, and C4 command/workflow shell work
   are closed unless a smoke exposes a concrete defect.
 - Fork primitives already exist at the session/history level: `/fork [label]`,
@@ -50,6 +113,10 @@ Fast, lightweight terminal coding agent.
   stopping. OpenRouter `deepseek/deepseek-v4-flash` is the current affordable
   fallback; use `deepseek/deepseek-v4-pro` only when a stronger discounted
   model is useful to classify model-quality uncertainty.
+- `tk-xhfg` is closed. Fedora local-api live smoke passed on 2026-05-10 against
+  `qwen3.6:27b`: real `bash` tool call, streamed answer, persisted resume,
+  resumed follow-up returned `continued`, and provider-history ordering was
+  verified as `first_user=1 tool_call=2 tool_result=3 assistant=4 resume_user=5`.
 - `tk-d2m6` is closed. Fork/session workflow tests now prove copied fork
   entries, portable bundle import/export, and subagent `context_mode=fork`
   preserve Canto ancestry plus usable event timestamps.

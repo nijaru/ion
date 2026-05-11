@@ -144,7 +144,7 @@ func (s *Session) Open(ctx context.Context) error {
 			Version: "v0.0.0",
 		},
 		ClientCapabilities: acp.ClientCapabilities{
-			Fs: acp.FileSystemCapability{
+			Fs: acp.FileSystemCapabilities{
 				ReadTextFile:  true,
 				WriteTextFile: true,
 			},
@@ -174,10 +174,6 @@ func (s *Session) Open(ctx context.Context) error {
 	go func() { _ = cmd.Wait() }()
 
 	return nil
-}
-
-type ionSessionMeta struct {
-	Ion ionSessionContext `json:"ion"`
 }
 
 type ionSessionContext struct {
@@ -211,7 +207,7 @@ func (s *Session) newSessionRequest() (acp.NewSessionRequest, error) {
 	return acp.NewSessionRequest{
 		Cwd:        cwd,
 		McpServers: []acp.McpServer{},
-		Meta:       ionSessionMeta{Ion: ctx},
+		Meta:       map[string]any{"ion": ctx},
 	}, nil
 }
 
@@ -683,16 +679,16 @@ func (s *Session) WaitForTerminalExit(
 	}
 }
 
-// KillTerminalCommand implements acp.Client — sends SIGINT to the terminal process.
-func (s *Session) KillTerminalCommand(
+// KillTerminal implements acp.Client — sends SIGINT to the terminal process.
+func (s *Session) KillTerminal(
 	_ context.Context,
-	p acp.KillTerminalCommandRequest,
-) (acp.KillTerminalCommandResponse, error) {
+	p acp.KillTerminalRequest,
+) (acp.KillTerminalResponse, error) {
 	s.mu.Lock()
 	t, ok := s.terminals[p.TerminalId]
 	s.mu.Unlock()
 	if !ok {
-		return acp.KillTerminalCommandResponse{}, nil
+		return acp.KillTerminalResponse{}, nil
 	}
 	if t.cmd != nil && t.cmd.Process != nil {
 		_ = t.cmd.Process.Signal(os.Interrupt)
@@ -710,7 +706,7 @@ func (s *Session) KillTerminalCommand(
 			}
 		}()
 	}
-	return acp.KillTerminalCommandResponse{}, nil
+	return acp.KillTerminalResponse{}, nil
 }
 
 // ReleaseTerminal implements acp.Client — kills the process and removes it from the map.

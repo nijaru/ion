@@ -159,6 +159,28 @@ func TestCustomAuthAndHeadersDoNotLeakToDefaultProviders(t *testing.T) {
 	}
 }
 
+func TestCredentialStateDoesNotUseCustomAuthForDefaultProviders(t *testing.T) {
+	t.Setenv("LOCAL_API_KEY", "local-key")
+	t.Setenv("OPENROUTER_API_KEY", "")
+	cfg := &config.Config{
+		Provider:   "openrouter",
+		AuthEnvVar: "LOCAL_API_KEY",
+	}
+	def := mustLookup(t, "openrouter")
+	detail, ready := CredentialState(cfg, def)
+	if ready || detail != "Set OPENROUTER_API_KEY" {
+		t.Fatalf("credential state = (%q, %v), want Set OPENROUTER_API_KEY false", detail, ready)
+	}
+
+	cfg.Provider = "openai-compatible"
+	cfg.Endpoint = "http://localhost:8080/v1"
+	def = mustLookup(t, "openai-compatible")
+	detail, ready = CredentialState(cfg, def)
+	if !ready || detail != "Ready" {
+		t.Fatalf("custom credential state = (%q, %v), want Ready true", detail, ready)
+	}
+}
+
 func TestCredentialEnvVarsIncludesCatalogAndCustomAuth(t *testing.T) {
 	got := CredentialEnvVars(&config.Config{AuthEnvVar: "LOCAL_API_KEY"})
 	for _, want := range []string{

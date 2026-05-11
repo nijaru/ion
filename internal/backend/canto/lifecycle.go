@@ -101,6 +101,7 @@ func (b *Backend) Open(ctx context.Context) error {
 	b.steering = newSteeringMutator()
 
 	agentOptions := []agent.Option{
+		agent.WithHooks(policyHook(b)),
 		agent.WithRequestProcessors(requestProcessors...),
 		agent.WithMutators(b.steering),
 	}

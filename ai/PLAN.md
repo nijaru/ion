@@ -1,6 +1,6 @@
 # Ion Roadmap
 
-Updated: 2026-05-08
+Updated: 2026-05-11
 
 ## Current Focus
 
@@ -9,8 +9,11 @@ C10 selected background job/status support as the first Pi+ substrate, C11
 implemented it, the two follow-up design lanes are closed: `tk-b121`
 extension stdlib boundary and `tk-3o1r` missions/goals boundary, C12
 re-verified the core gate after pausing feature growth, and C13 completed a
-thorough core-agent audit with two ownership fixes. There is no ready feature
-task now. The roadmap remains
+thorough core-agent audit with two ownership fixes. Before more Pi+ work, the
+renewed core hardening pass (`tk-d47k`, `tk-mk09`, `tk-4y1w`) is green. The
+current work is a deeper source-level audit (`tk-03hz`) comparing Ion's native
+loop, persistence, provider wiring, and TUI integration against local Pi and
+Codex references before any further Pi+ feature work. The roadmap remains
 **Pi -> Pi+**:
 
 - **Pi parity:** reliable core terminal coding-agent workflows, not exact
@@ -26,10 +29,24 @@ skills, MCP, routing, prompt caching, remote sandboxes, async agent jobs, or
 new default model-visible tools unless a later ready task plus acceptance gate
 explicitly justifies the feature after the C13 core audit.
 
+Current C14 posture: Pi+ feature design is paused behind the deeper core audit.
+On-demand review/inspection, JSONL event output, and session-branch UX remain
+possible later candidates. Bash mode is still only a convenience layer. Memory,
+subagents, missions, swarms, remote agents, and extension mutation stay
+experimental/x.
+
+Current audit outcome: keep SQLite for Ion's working store for now, but tighten
+data ownership around Canto's canonical effective-history rebuild. Pi's JSONL
+branch log and Codex's JSONL rollout remain useful references for later export
+or replay UX; they do not justify replacing Ion's storage before the core loop
+is stable.
+
 Live-provider proof uses Fedora local-api first when it is free, then
 OpenRouter `deepseek/deepseek-v4-flash` fallback when Fedora is unavailable.
 Escalate to `deepseek/deepseek-v4-pro` only when a stronger model is useful to
 classify model-quality uncertainty.
+The latest Fedora live smoke passed on 2026-05-10 against
+`local-api/qwen3.6:27b`.
 
 ## Phases
 
@@ -54,6 +71,7 @@ classify model-quality uncertainty.
 | C11 | Background job/status substrate implementation | Done |
 | C12 | Core reliability closeout after Pi+ pause | Done |
 | C13 | Thorough core-agent audit and ownership fixes | Done |
+| C14 | Pi+ feature triage | Paused by core audit |
 | I5 | Add eval-driven optimization and SOTA experiments | Deferred |
 
 ## I0: Dirty Baseline And Context Hygiene
@@ -366,6 +384,53 @@ Acceptance:
   `internal/backend/canto/tools`, and `internal/storage`
 - `scripts/smoke/tmux-minimal-harness.sh`
 - Fedora live smoke skipped only because Fedora was offline
+
+## C14: Pi+ Feature Triage
+
+Status: paused behind core audit.
+
+Goal: decide and design the next small post-core feature from current
+reference-agent evidence without widening the default surface.
+
+Completed task:
+
+1. Done/P3 - `tk-n5s6` - Compare Pi+ feature candidates across agent
+   references:
+   - references: Pi, Pi extensions, Claude Code, Codex CLI, Factory Droid, Amp,
+     OpenCode, Charm Crush, Slate swarms, Droid missions, Jules, Mem0, Letta,
+     Cursor, Zed
+   - output: `ai/research/pi-plus-feature-triage-2026-05.md`
+   - current recommendation: review/inspection workflow first; JSONL event
+     output and session-branch UX next; bash mode later; memory/subagents/
+     missions/swarms/remote agents/extension mutation deferred
+
+Parked task:
+
+1. Parked/P3 - `tk-71wf` - Design on-demand review workflow:
+   - keep as a later Pi+ candidate only
+   - do not let review workflow design drive the current implementation audit
+
+Active core audit:
+
+1. Active/P2 - `tk-03hz` - Compare Ion core architecture against Pi and Codex:
+   - current scope is source-level review of session history/replay,
+     provider/API wiring, turn lifecycle, tool/event persistence,
+     config/state, TUI integration, and maintainability
+   - current data decision: keep SQLite for Ion's working store, but enforce
+     Canto effective history as the canonical rebuild boundary
+   - current tool/approval decision: explicit policy denials stay model-visible
+     tool results, while cancellation/deadline during preflight aborts the turn
+     without persisting synthetic tool output
+   - upstream Canto fix `d51d4d7` implements that cancellation contract for any
+     Canto host, and Ion imports it with focused backend/TUI regressions
+
+Acceptance before new Pi+ implementation:
+
+- one chosen candidate with owner, prompt impact, and acceptance gates
+- no new default model-visible tools unless the prompt budget is measured
+- deterministic tests before any TUI or live-provider smoke
+- tmux smoke for any visible TUI command
+- live smoke only when provider-visible behavior changes
 
 ## Next Design Lanes
 

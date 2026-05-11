@@ -167,6 +167,9 @@ func (a *ionACPAgent) Initialize(
 			PromptCapabilities: acp.PromptCapabilities{
 				EmbeddedContext: false,
 			},
+			SessionCapabilities: acp.SessionCapabilities{
+				Close: &acp.SessionCloseCapabilities{},
+			},
 		},
 		AuthMethods: []acp.AuthMethod{},
 	}, nil
@@ -202,6 +205,48 @@ func (a *ionACPAgent) LoadSession(
 		return acp.LoadSessionResponse{}, err
 	}
 	return acp.LoadSessionResponse{Modes: acpModeState(sess.mode)}, nil
+}
+
+func (a *ionACPAgent) CloseSession(
+	ctx context.Context,
+	params acp.CloseSessionRequest,
+) (acp.CloseSessionResponse, error) {
+	a.mu.Lock()
+	sess := a.sessions[string(params.SessionId)]
+	delete(a.sessions, string(params.SessionId))
+	a.mu.Unlock()
+
+	if sess == nil {
+		return acp.CloseSessionResponse{}, nil
+	}
+	if sess.agent != nil {
+		_ = sess.agent.CancelTurn(ctx)
+	}
+	if sess.close != nil {
+		return acp.CloseSessionResponse{}, sess.close()
+	}
+	return acp.CloseSessionResponse{}, nil
+}
+
+func (a *ionACPAgent) ListSessions(
+	context.Context,
+	acp.ListSessionsRequest,
+) (acp.ListSessionsResponse, error) {
+	return acp.ListSessionsResponse{}, acp.NewMethodNotFound(acp.AgentMethodSessionList)
+}
+
+func (a *ionACPAgent) ResumeSession(
+	context.Context,
+	acp.ResumeSessionRequest,
+) (acp.ResumeSessionResponse, error) {
+	return acp.ResumeSessionResponse{}, acp.NewMethodNotFound(acp.AgentMethodSessionResume)
+}
+
+func (a *ionACPAgent) SetSessionConfigOption(
+	context.Context,
+	acp.SetSessionConfigOptionRequest,
+) (acp.SetSessionConfigOptionResponse, error) {
+	return acp.SetSessionConfigOptionResponse{}, acp.NewMethodNotFound(acp.AgentMethodSessionSetConfigOption)
 }
 
 func (a *ionACPAgent) openSession(
