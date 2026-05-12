@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
 )
@@ -30,6 +32,23 @@ func (m Model) costBudgetNotice(inputTokens, outputTokens int, totalCost float64
 		lines = append(lines, fmt.Sprintf("turn limit: $%.6f", m.Model.Config.MaxTurnCost))
 	}
 	return strings.Join(lines, "\n")
+}
+
+func (m Model) handleSessionCompacted(msg sessionCompactedMsg) (Model, tea.Cmd) {
+	m.Progress.Compacting = false
+	m.Progress.Status = "Ready"
+	m.clearProgressError()
+	cmds := []tea.Cmd{m.printEntries(session.Entry{Role: session.System, Content: msg.notice})}
+	if len(m.InFlight.QueuedTurns) > 0 {
+		queued := m.InFlight.QueuedTurns[0]
+		m.InFlight.QueuedTurns = m.InFlight.QueuedTurns[1:]
+		cmds = append(cmds, func() tea.Msg { return queuedTurnMsg{text: queued} })
+	}
+	return m, tea.Sequence(cmds...)
+}
+
+func (m Model) handleSessionCost(msg sessionCostMsg) (Model, tea.Cmd) {
+	return m, m.printEntries(session.Entry{Role: session.System, Content: msg.notice})
 }
 
 func (m Model) sessionInfoNotice() (string, error) {
