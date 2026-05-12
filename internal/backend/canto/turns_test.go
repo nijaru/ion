@@ -3,6 +3,8 @@ package canto
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -74,6 +76,124 @@ func TestSubmitTurnMaterializesLazySession(t *testing.T) {
 	}
 	if after[0].LastPreview != "hi" {
 		t.Fatalf("last preview = %q, want hi", after[0].LastPreview)
+	}
+}
+
+func TestSubmitTurnExecutesWriteToolAndPersistsFile(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	root := t.TempDir()
+	store, err := storage.NewCantoStore(root)
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	cwd := t.TempDir()
+	storageSession, err := store.OpenSession(ctx, cwd, "local-api/model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	call := llm.Call{ID: "write-call-1", Type: "function"}
+	call.Function.Name = "write"
+	call.Function.Arguments = `{"file_path":"handoff.md","content":"ion smoke ok\n"}`
+	provider := ctesting.NewFauxProvider(
+		"local-api",
+		ctesting.Step{Calls: []llm.Call{call}},
+		ctesting.Step{Content: "done"},
+	)
+
+	oldFactory := providerFactory
+	providerFactory = func(ctx context.Context, cfg *config.Config) (llm.Provider, error) {
+		if cfg.Provider == "local-api" {
+			return provider, nil
+		}
+		return oldFactory(ctx, cfg)
+	}
+	defer func() { providerFactory = oldFactory }()
+
+	b := New()
+	b.SetStore(store)
+	b.SetSession(storageSession)
+	b.SetConfig(
+		&config.Config{
+			Provider: "local-api",
+			Model:    "model-a",
+			Endpoint: "http://localhost:8080/v1",
+		},
+	)
+	b.SetMode(ionsession.ModeYolo)
+	if err := b.Open(ctx); err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer func() { _ = b.Close() }()
+
+	if err := b.SubmitTurn(ctx, "write the smoke file"); err != nil {
+		t.Fatalf("submit turn: %v", err)
+	}
+
+	events := b.Events()
+	var (
+		seenWriteStart  bool
+		seenWriteResult bool
+		assistant       string
+	)
+	timeout := time.After(backendEventWaitTimeout)
+	for {
+		select {
+		case ev, ok := <-events:
+			if !ok {
+				t.Fatal("event stream closed before write turn finished")
+			}
+			switch msg := ev.(type) {
+			case ionsession.ToolCallStarted:
+				if msg.ToolName == "write" && strings.Contains(msg.Args, "handoff.md") {
+					seenWriteStart = true
+				}
+			case ionsession.ToolResult:
+				if msg.ToolName == "write" && strings.Contains(msg.Result, "Wrote handoff.md.") {
+					seenWriteResult = true
+				}
+			case ionsession.AgentMessage:
+				assistant = msg.Message
+			case ionsession.Error:
+				t.Fatalf("unexpected session error: %v", msg.Err)
+			case ionsession.TurnFinished:
+				if !seenWriteStart {
+					t.Fatal("missing write tool start event")
+				}
+				if !seenWriteResult {
+					t.Fatal("missing write tool result event")
+				}
+				if !strings.Contains(assistant, "done") {
+					t.Fatalf("assistant = %q, want final done response", assistant)
+				}
+				got, err := os.ReadFile(filepath.Join(cwd, "handoff.md"))
+				if err != nil {
+					t.Fatalf("read written file: %v", err)
+				}
+				if string(got) != "ion smoke ok\n" {
+					t.Fatalf("written file = %q, want smoke content", got)
+				}
+				calls := provider.Calls()
+				if len(calls) != 2 {
+					t.Fatalf("provider calls = %d, want initial and post-tool requests", len(calls))
+				}
+				if !requestHasMessage(calls[1].Messages, llm.RoleTool, "Wrote handoff.md.") {
+					t.Fatal("post-tool request missing write result")
+				}
+				entries, err := storageSession.Entries(ctx)
+				if err != nil {
+					t.Fatalf("entries: %v", err)
+				}
+				if !entryExists(entries, ionsession.Tool, "Wrote handoff.md.") {
+					t.Fatal("persisted entries missing write tool result")
+				}
+				return
+			}
+		case <-timeout:
+			t.Fatal("timed out waiting for write turn")
+		}
 	}
 }
 
