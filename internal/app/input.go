@@ -18,13 +18,7 @@ func (m Model) statusLine() string {
 
 	sep := m.st.sep.Render(" • ")
 
-	var modeLabel string
-	switch m.Mode {
-	case session.ModeRead:
-		modeLabel = m.st.modeRead.Render("[READ]")
-	case session.ModeYolo:
-		modeLabel = m.st.modeYolo.Render("[AUTO]")
-	}
+	modeLabel := m.statusModeLabel()
 	presetLabel := ""
 	if m.activePreset() == presetFast {
 		presetLabel = m.st.dim.Render("[FAST]")
@@ -39,7 +33,7 @@ func (m Model) statusLine() string {
 		model = m.st.dim.Render(value)
 	}
 	thinking := m.st.dim.Render(normalizeThinkingValue(m.Progress.ReasoningEffort))
-	dir := m.st.dim.Render("./" + filepath.Base(m.App.Workdir))
+	dir := m.st.dim.Render(statusWorkdirLabel(m.App.Workdir))
 	branch := ""
 	if m.App.Branch != "" {
 		branch = m.st.dim.Render(m.App.Branch)
@@ -106,6 +100,26 @@ func (m Model) renderTokenUsage(total, limit int) string {
 	}
 }
 
+func (m Model) statusModeLabel() string {
+	switch m.Mode {
+	case session.ModeRead:
+		return m.st.modeRead.Render("[READ]")
+	case session.ModeEdit:
+		return m.st.modeEdit.Render("[EDIT]")
+	case session.ModeYolo:
+		return m.st.modeYolo.Render("[AUTO]")
+	default:
+		return ""
+	}
+}
+
+func statusWorkdirLabel(workdir string) string {
+	if strings.TrimSpace(workdir) == "" {
+		return ""
+	}
+	return filepath.Base(filepath.Clean(workdir))
+}
+
 func (m *Model) layout() {
 	width := m.shellWidth()
 	if width <= 0 {
@@ -113,8 +127,35 @@ func (m *Model) layout() {
 	}
 	m.Input.Composer.SetWidth(width)
 	m.Input.Composer.SetHeight(
-		clamp(m.Input.Composer.LineCount(), minComposerHeight, maxComposerHeight),
+		clamp(
+			composerVisualLineCount(m.Input.Composer.Value(), m.Input.Composer.Width()),
+			minComposerHeight,
+			maxComposerHeight,
+		),
 	)
+}
+
+func (m *Model) prepareComposerUpdate() {
+	m.Input.Composer.SetHeight(maxComposerHeight)
+}
+
+func composerVisualLineCount(value string, width int) int {
+	if width <= 0 {
+		width = 1
+	}
+	total := 0
+	for _, line := range strings.Split(value, "\n") {
+		lineWidth := ansi.StringWidth(line)
+		if lineWidth == 0 {
+			total++
+			continue
+		}
+		total += lineWidth/width + 1
+	}
+	if total == 0 {
+		return 1
+	}
+	return total
 }
 
 func (m Model) headerLine() string {

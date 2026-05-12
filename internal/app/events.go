@@ -42,7 +42,10 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 				return m, persistErrorCmd("send approval", err)
 			}
 			if err := m.persistApprovalNotice(notice); err != nil {
-				return m, tea.Sequence(m.printEntries(notice), persistErrorCmd("persist approval decision", err))
+				return m, tea.Sequence(
+					m.printEntries(notice),
+					persistErrorCmd("persist approval decision", err),
+				)
 			}
 			return m, m.printEntries(notice)
 		case "a":
@@ -58,7 +61,10 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 				return m, persistErrorCmd("send approval", err)
 			}
 			if err := m.persistApprovalNotice(notice); err != nil {
-				return m, tea.Sequence(m.printEntries(notice), persistErrorCmd("persist approval decision", err))
+				return m, tea.Sequence(
+					m.printEntries(notice),
+					persistErrorCmd("persist approval decision", err),
+				)
 			}
 			return m, m.printEntries(notice)
 		}
@@ -166,6 +172,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	case "shift+enter", "alt+enter":
 		m.clearPendingAction()
 		var cmd tea.Cmd
+		m.prepareComposerUpdate()
 		m.Input.Composer, cmd = m.Input.Composer.Update(msg)
 		m.layout()
 		return m, cmd
@@ -187,6 +194,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			}
 		}
 		var cmd tea.Cmd
+		m.prepareComposerUpdate()
 		m.Input.Composer, cmd = m.Input.Composer.Update(msg)
 		return m, cmd
 
@@ -207,6 +215,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			}
 		}
 		var cmd tea.Cmd
+		m.prepareComposerUpdate()
 		m.Input.Composer, cmd = m.Input.Composer.Update(msg)
 		return m, cmd
 
@@ -216,6 +225,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 	// Pass all other keys to textarea (Ctrl+A/E/W/U/K, Alt+B/F, etc.)
 	var cmd tea.Cmd
+	m.prepareComposerUpdate()
 	m.Input.Composer, cmd = m.Input.Composer.Update(msg)
 	if m.App.Ready {
 		m.layout()

@@ -41,6 +41,39 @@ func TestLayoutClampsComposerHeight(t *testing.T) {
 	}
 }
 
+func TestLayoutExpandsComposerForSoftWrappedInput(t *testing.T) {
+	model := readyModel(t)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 24, Height: 30})
+	model = updated.(Model)
+	model.Input.Composer.SetValue("write a sentence that wraps")
+
+	model.layout()
+
+	if got := model.Input.Composer.Height(); got < 2 {
+		t.Fatalf("composer height = %d, want soft-wrapped text to expand", got)
+	}
+}
+
+func TestComposerKeepsSoftWrappedPrefixVisibleWhileTyping(t *testing.T) {
+	model := readyModel(t)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 60, Height: 30})
+	model = updated.(Model)
+
+	input := "write a sentence that should wrap across multiple terminal rows before submit"
+	for _, r := range input {
+		updated, _ = model.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+		model = updated.(Model)
+	}
+
+	view := ansi.Strip(model.View().Content)
+	if !strings.Contains(view, "write a sentence") {
+		t.Fatalf("composer lost soft-wrapped prefix:\n%s", view)
+	}
+	if !strings.Contains(view, "before submit") {
+		t.Fatalf("composer lost soft-wrapped suffix:\n%s", view)
+	}
+}
+
 func TestProgressLineFitsWidthAfterResize(t *testing.T) {
 	model := readyModel(t)
 	model.App.Width = 28
@@ -323,6 +356,23 @@ func TestStatusLineFitsWidthAfterResize(t *testing.T) {
 			got,
 			model.statusLine(),
 		)
+	}
+}
+
+func TestStatusLineShowsModeAndWorkspaceName(t *testing.T) {
+	model := readyModel(t)
+	model.App.Workdir = "/tmp/sy"
+	model.Mode = session.ModeEdit
+
+	line := ansi.Strip(model.statusLine())
+	if !strings.Contains(line, "[EDIT]") {
+		t.Fatalf("status line missing edit mode: %q", line)
+	}
+	if !strings.Contains(line, "sy") {
+		t.Fatalf("status line missing workspace name: %q", line)
+	}
+	if strings.Contains(line, "./sy") {
+		t.Fatalf("status line should not invent relative workspace path: %q", line)
 	}
 }
 
