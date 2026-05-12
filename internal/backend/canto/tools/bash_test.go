@@ -19,6 +19,47 @@ func TestBash_Spec(t *testing.T) {
 	}
 }
 
+func TestBashSpecHidesBackgroundJobsByDefault(t *testing.T) {
+	properties := bashSpecProperties(t, NewBash("."))
+	for _, key := range []string{"action", "background", "job_id", "tail_lines"} {
+		if _, ok := properties[key]; ok {
+			t.Fatalf("default bash spec exposes %q: %#v", key, properties)
+		}
+	}
+	if _, ok := properties["command"]; !ok {
+		t.Fatalf("default bash spec missing command: %#v", properties)
+	}
+}
+
+func TestBashSpecExposesBackgroundJobsWhenEnabled(t *testing.T) {
+	properties := bashSpecProperties(t, newBackgroundBash(t))
+	for _, key := range []string{"command", "action", "background", "job_id", "tail_lines"} {
+		if _, ok := properties[key]; !ok {
+			t.Fatalf("background bash spec missing %q: %#v", key, properties)
+		}
+	}
+}
+
+func TestBashRejectsBackgroundJobsByDefault(t *testing.T) {
+	b := NewBash(t.TempDir())
+	if got := b.Jobs(); len(got) != 0 {
+		t.Fatalf("default jobs = %#v, want none", got)
+	}
+
+	_, err := b.Execute(t.Context(), `{"command":"sleep 10","background":true}`)
+	if err == nil || !strings.Contains(err.Error(), "background jobs are disabled") {
+		t.Fatalf("background run error = %v, want disabled", err)
+	}
+	_, err = b.Execute(t.Context(), `{"action":"output","job_id":"bash-1"}`)
+	if err == nil || !strings.Contains(err.Error(), "background jobs are disabled") {
+		t.Fatalf("background output error = %v, want disabled", err)
+	}
+	_, err = b.StopJob(t.Context(), "bash-1")
+	if err == nil || !strings.Contains(err.Error(), "background jobs are disabled") {
+		t.Fatalf("stop job error = %v, want disabled", err)
+	}
+}
+
 func TestBashCancellationKillsProcessGroup(t *testing.T) {
 	tmpDir := t.TempDir()
 	b := NewBash(tmpDir)
@@ -88,8 +129,7 @@ func TestBash_Execute(t *testing.T) {
 }
 
 func TestBashBackgroundJobLifecycle(t *testing.T) {
-	b := NewBash(t.TempDir())
-	t.Cleanup(b.Close)
+	b := newBackgroundBash(t)
 
 	start, err := b.Execute(
 		t.Context(),
@@ -140,8 +180,7 @@ func TestBashBackgroundJobLifecycle(t *testing.T) {
 }
 
 func TestBashBackgroundOutputTail(t *testing.T) {
-	b := NewBash(t.TempDir())
-	t.Cleanup(b.Close)
+	b := newBackgroundBash(t)
 
 	if _, err := b.Execute(
 		t.Context(),
@@ -204,7 +243,7 @@ func TestBackgroundJobOutputIsBounded(t *testing.T) {
 }
 
 func TestBashCloseStopsBackgroundJobs(t *testing.T) {
-	b := NewBash(t.TempDir())
+	b := newBackgroundBash(t)
 	if _, err := b.Execute(
 		t.Context(),
 		`{"command":"sleep 10","background":true}`,
@@ -270,4 +309,28 @@ func TestBash_WorkingDirectory(t *testing.T) {
 	if strings.TrimSpace(res) != subdir {
 		t.Errorf("expected %s, got %q", subdir, res)
 	}
+}
+
+func newBackgroundBash(t *testing.T) *Bash {
+	t.Helper()
+	b := NewBashWithEnvironment(
+		t.TempDir(),
+		NewEnvironmentPolicy(executorEnvironmentInherit, nil),
+		WithBackgroundJobs(),
+	)
+	t.Cleanup(b.Close)
+	return b
+}
+
+func bashSpecProperties(t *testing.T, b *Bash) map[string]any {
+	t.Helper()
+	params, ok := b.Spec().Parameters.(map[string]any)
+	if !ok {
+		t.Fatalf("bash spec parameters = %T, want map[string]any", b.Spec().Parameters)
+	}
+	properties, ok := params["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("bash spec properties = %T, want map[string]any", params["properties"])
+	}
+	return properties
 }

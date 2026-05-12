@@ -105,12 +105,14 @@ func slashCommandDefinitions() []slashCommandInfo {
 			helpLabel:  "/fork [label]",
 			helpDetail: "branch the current session",
 			idle:       slashCommandIdleAlways,
+			hidden:     true,
 		},
 		{
 			name:       "/tree",
 			detail:     "session tree",
 			helpLabel:  "/tree",
 			helpDetail: "show session lineage and children",
+			hidden:     true,
 		},
 		{
 			name:       "/compact",
@@ -192,6 +194,7 @@ func slashCommandDefinitions() []slashCommandInfo {
 			detail:     "background jobs",
 			helpLabel:  "/jobs",
 			helpDetail: "show background jobs",
+			hidden:     true,
 		},
 		{
 			name:       "/stop",
@@ -199,6 +202,7 @@ func slashCommandDefinitions() []slashCommandInfo {
 			helpLabel:  "/stop <job-id>",
 			helpDetail: "stop a background job",
 			idle:       slashCommandIdleWithArgs,
+			hidden:     true,
 		},
 		{
 			name:   "/mode",

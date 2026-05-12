@@ -17,6 +17,18 @@ type Bash struct {
 	jobs     *backgroundJobs
 }
 
+type BashOption func(*bashOptions)
+
+type bashOptions struct {
+	backgroundJobs bool
+}
+
+func WithBackgroundJobs() BashOption {
+	return func(opts *bashOptions) {
+		opts.backgroundJobs = true
+	}
+}
+
 func NewBash(cwd string) *Bash {
 	return NewBashWithEnvironment(
 		cwd,
@@ -24,43 +36,59 @@ func NewBash(cwd string) *Bash {
 	)
 }
 
-func NewBashWithEnvironment(cwd string, environment EnvironmentPolicy) *Bash {
-	return &Bash{
+func NewBashWithEnvironment(
+	cwd string,
+	environment EnvironmentPolicy,
+	opts ...BashOption,
+) *Bash {
+	options := bashOptions{}
+	for _, opt := range opts {
+		opt(&options)
+	}
+
+	b := &Bash{
 		cwd:      cwd,
 		executor: newLocalExecutorWithEnvironment(resolveSandboxMode(), environment),
-		jobs:     newBackgroundJobs(),
 	}
+	if options.backgroundJobs {
+		b.jobs = newBackgroundJobs()
+	}
+	return b
 }
 
 func (b *Bash) Spec() llm.Spec {
+	properties := map[string]any{
+		"command": map[string]any{
+			"type":        "string",
+			"description": "The command to execute (e.g. 'ls -la', 'go test ./...', 'git status')",
+		},
+	}
+	if b.jobs != nil {
+		properties["action"] = map[string]any{
+			"type":        "string",
+			"enum":        []string{"run", "output", "kill"},
+			"description": "Action to perform. Defaults to run.",
+		}
+		properties["background"] = map[string]any{
+			"type":        "boolean",
+			"description": "For action=run, start the command in the background and return a job id.",
+		}
+		properties["job_id"] = map[string]any{
+			"type":        "string",
+			"description": "Background job id for action=output or action=kill.",
+		}
+		properties["tail_lines"] = map[string]any{
+			"type":        "integer",
+			"description": "For action=output, return only the last N output lines.",
+		}
+	}
+
 	return llm.Spec{
 		Name:        "bash",
 		Description: "Run a shell command in the current working directory. Always prefer non-interactive commands (e.g. use --yes flags) to prevent hanging the TUI.",
 		Parameters: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"command": map[string]any{
-					"type":        "string",
-					"description": "The command to execute (e.g. 'ls -la', 'go test ./...', 'git status')",
-				},
-				"action": map[string]any{
-					"type":        "string",
-					"enum":        []string{"run", "output", "kill"},
-					"description": "Action to perform. Defaults to run.",
-				},
-				"background": map[string]any{
-					"type":        "boolean",
-					"description": "For action=run, start the command in the background and return a job id.",
-				},
-				"job_id": map[string]any{
-					"type":        "string",
-					"description": "Background job id for action=output or action=kill.",
-				},
-				"tail_lines": map[string]any{
-					"type":        "integer",
-					"description": "For action=output, return only the last N output lines.",
-				},
-			},
+			"type":       "object",
+			"properties": properties,
 		},
 	}
 }
@@ -91,6 +119,9 @@ func (b *Bash) ExecuteStreaming(
 			return "", fmt.Errorf("command is required")
 		}
 		if input.Background {
+			if b.jobs == nil {
+				return "", fmt.Errorf("background jobs are disabled")
+			}
 			return b.jobs.start(ctx, b.executor, localCommand{
 				CWD:     b.cwd,
 				Command: input.Command,
@@ -102,8 +133,14 @@ func (b *Bash) ExecuteStreaming(
 			Emit:    emit,
 		})
 	case "output":
+		if b.jobs == nil {
+			return "", fmt.Errorf("background jobs are disabled")
+		}
 		return b.jobs.output(input.JobID, input.TailLines)
 	case "kill":
+		if b.jobs == nil {
+			return "", fmt.Errorf("background jobs are disabled")
+		}
 		return b.jobs.kill(ctx, input.JobID)
 	default:
 		return "", fmt.Errorf("unsupported bash action %q", input.Action)
@@ -111,13 +148,22 @@ func (b *Bash) ExecuteStreaming(
 }
 
 func (b *Bash) Jobs() []BackgroundJobInfo {
+	if b.jobs == nil {
+		return nil
+	}
 	return b.jobs.list()
 }
 
 func (b *Bash) StopJob(ctx context.Context, id string) (string, error) {
+	if b.jobs == nil {
+		return "", fmt.Errorf("background jobs are disabled")
+	}
 	return b.jobs.kill(ctx, id)
 }
 
 func (b *Bash) Close() {
+	if b.jobs == nil {
+		return
+	}
 	b.jobs.close()
 }
