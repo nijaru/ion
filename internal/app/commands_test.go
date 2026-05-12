@@ -605,8 +605,6 @@ func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 		"/clear",
 		"/resume [id]",
 		"/session",
-		"/fork [label]",
-		"/tree",
 		"/compact",
 		"/provider [name]",
 		"/model [name]",
@@ -648,7 +646,16 @@ func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 			)
 		}
 	}
-	for _, hidden := range []string{"/read", "/edit", "/auto, /yolo", "/trust [status]"} {
+	for _, hidden := range []string{
+		"/read",
+		"/edit",
+		"/auto, /yolo",
+		"/trust [status]",
+		"/fork [label]",
+		"/tree",
+		"/jobs",
+		"/stop <job-id>",
+	} {
 		if strings.Contains(notice, hidden) {
 			t.Fatalf(
 				"help notice should not advertise hidden command %q: %q",
