@@ -119,8 +119,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 	case "shift+enter", "alt+enter", "ctrl+j":
 		m.clearPendingAction()
-		m.Input.Composer.InsertString("\n")
-		m.layout()
+		m.insertComposerText("\n")
 		return m, nil
 
 	case "up", "ctrl+p":
@@ -137,9 +136,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 				return m, nil
 			}
 		}
-		var cmd tea.Cmd
-		m.Input.Composer, cmd = m.Input.Composer.Update(msg)
-		return m, cmd
+		return m, m.updateComposer(msg)
 
 	case "down", "ctrl+n":
 		m.clearPendingAction()
@@ -155,21 +152,14 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 				return m, nil
 			}
 		}
-		var cmd tea.Cmd
-		m.Input.Composer, cmd = m.Input.Composer.Update(msg)
-		return m, cmd
+		return m, m.updateComposer(msg)
 
 	default:
 		m.clearPendingAction()
 	}
 
 	// Pass all other keys to textarea (Ctrl+A/E/W/U/K, Alt+B/F, etc.)
-	var cmd tea.Cmd
-	m.Input.Composer, cmd = m.Input.Composer.Update(msg)
-	if m.App.Ready {
-		m.layout()
-	}
-	return m, cmd
+	return m, m.updateComposer(msg)
 }
 
 func (m Model) handleApprovalKey(msg tea.KeyPressMsg) (Model, tea.Cmd, bool) {
@@ -296,15 +286,13 @@ func (m Model) completeSlashCommand() (Model, tea.Cmd, bool) {
 	case 0:
 		return m, nil, true
 	case 1:
-		m.Input.Composer.SetValue(matches[0] + " ")
-		m.relayoutComposer()
+		m.setComposerDraft(matches[0] + " ")
 		return m, nil, true
 	}
 
 	prefix := commonPrefix(matches)
 	if prefix != "" && prefix != text {
-		m.Input.Composer.SetValue(prefix)
-		m.relayoutComposer()
+		m.setComposerDraft(prefix)
 		return m, nil, true
 	}
 
@@ -368,13 +356,11 @@ func (m Model) completeLastSlashToken(text string, values []string) (Model, tea.
 	case 0:
 		return m, nil, true
 	case 1:
-		m.Input.Composer.SetValue(text[:start] + matches[0] + " ")
-		m.relayoutComposer()
+		m.setComposerDraft(text[:start] + matches[0] + " ")
 		return m, nil, true
 	default:
 		if common := commonPrefix(matches); common != "" && common != prefix {
-			m.Input.Composer.SetValue(text[:start] + common)
-			m.relayoutComposer()
+			m.setComposerDraft(text[:start] + common)
 		}
 		return m, nil, true
 	}
@@ -397,8 +383,7 @@ func (m Model) completeFileReference() (Model, tea.Cmd, bool) {
 		if !matches[0].isDir {
 			completion += " "
 		}
-		m.Input.Composer.SetValue(text[:start] + completion)
-		m.relayoutComposer()
+		m.setComposerDraft(text[:start] + completion)
 		return m, nil, true
 	}
 
@@ -407,8 +392,7 @@ func (m Model) completeFileReference() (Model, tea.Cmd, bool) {
 		values = append(values, match.reference)
 	}
 	if prefix := commonPrefix(values); prefix != "" && prefix != token {
-		m.Input.Composer.SetValue(text[:start] + prefix)
-		m.relayoutComposer()
+		m.setComposerDraft(text[:start] + prefix)
 	}
 	return m, nil, true
 }

@@ -910,10 +910,5 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	// Pass remaining messages to composer
-	var cmd tea.Cmd
-	m.Input.Composer, cmd = m.Input.Composer.Update(msg)
-	if m.App.Ready {
-		m.layout()
-	}
-	return m, cmd
+	return m, m.updateComposer(msg)
 }
