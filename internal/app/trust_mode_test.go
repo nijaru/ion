@@ -2,6 +2,7 @@ package app
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -172,6 +173,9 @@ func TestTrustCommandTrustsWorkspaceAndEnablesEditMode(t *testing.T) {
 	}
 	if sess.mode != session.ModeEdit {
 		t.Fatalf("session mode after /trust = %v, want edit", sess.mode)
+	}
+	if line := model.statusLine(); !strings.Contains(line, "[EDIT]") {
+		t.Fatalf("status line after /trust = %q, want edit mode visible", line)
 	}
 	trusted, err := store.IsTrusted(model.App.Workdir)
 	if err != nil {
