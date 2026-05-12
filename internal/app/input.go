@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -116,6 +117,18 @@ func (m *Model) layout() {
 		width = 1
 	}
 	m.Input.Composer.SetWidth(width)
+}
+
+func (m Model) handleWindowSize(msg tea.WindowSizeMsg) (Model, tea.Cmd) {
+	oldWidth := m.App.Width
+	m.App.Ready = true
+	m.App.Width = msg.Width
+	m.App.Height = msg.Height
+	m.layout()
+	if oldWidth > 0 && msg.Width > 0 && msg.Width < oldWidth {
+		return m, clearVisibleScreenCmd()
+	}
+	return m, nil
 }
 
 func (m Model) headerLine() string {

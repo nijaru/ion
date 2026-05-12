@@ -120,6 +120,10 @@ func (m *Model) printHelp(content string) tea.Cmd {
 	return printLinesCmd(lines...)
 }
 
+func (m Model) handleLocalEntries(msg localEntriesMsg) (Model, tea.Cmd) {
+	return m, m.printEntries(msg.entries...)
+}
+
 func physicalLineCount(lines []string) int {
 	count := 0
 	for _, line := range lines {

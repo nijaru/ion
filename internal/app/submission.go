@@ -86,3 +86,26 @@ func (m Model) submitText(text string) (Model, tea.Cmd) {
 	}
 	return m, m.printEntries(userEntry)
 }
+
+func (m Model) handleDeferredEnter() (Model, tea.Cmd) {
+	if !m.Input.DeferredEnter {
+		return m, nil
+	}
+	if m.printHoldActive() {
+		return m, m.scheduleDeferredEnter()
+	}
+	m.Input.DeferredEnter = false
+	m.Input.PrintHoldDelay = 0
+	return m.submitComposer()
+}
+
+func (m Model) handleQueuedTurn(msg queuedTurnMsg) (Model, tea.Cmd) {
+	next, cmd := m.submitText(msg.text)
+	if next.InFlight.Thinking {
+		if cmd == nil {
+			return next, next.awaitSessionEvent()
+		}
+		return next, tea.Sequence(cmd, next.awaitSessionEvent())
+	}
+	return next, cmd
+}

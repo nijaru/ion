@@ -728,15 +728,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case tea.WindowSizeMsg:
-		oldWidth := m.App.Width
-		m.App.Ready = true
-		m.App.Width = msg.Width
-		m.App.Height = msg.Height
-		m.layout()
-		if oldWidth > 0 && msg.Width > 0 && msg.Width < oldWidth {
-			return m, clearVisibleScreenCmd()
-		}
-		return m, nil
+		return m.handleWindowSize(msg)
 
 	case sessionEventMsg:
 		if msg.generation != m.Model.EventGeneration {
@@ -757,15 +749,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case deferredEnterMsg:
-		if !m.Input.DeferredEnter {
-			return m, nil
-		}
-		if m.printHoldActive() {
-			return m, m.scheduleDeferredEnter()
-		}
-		m.Input.DeferredEnter = false
-		m.Input.PrintHoldDelay = 0
-		return m.submitComposer()
+		return m.handleDeferredEnter()
 
 	case runtimeSwitchedMsg:
 		return m.handleRuntimeSwitched(msg)
@@ -774,25 +758,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleRuntimeSwitchError(msg)
 
 	case sessionCompactedMsg:
-		m.Progress.Compacting = false
-		m.Progress.Status = "Ready"
-		m.clearProgressError()
-		cmds := []tea.Cmd{m.printEntries(session.Entry{Role: session.System, Content: msg.notice})}
-		if len(m.InFlight.QueuedTurns) > 0 {
-			queued := m.InFlight.QueuedTurns[0]
-			m.InFlight.QueuedTurns = m.InFlight.QueuedTurns[1:]
-			cmds = append(cmds, func() tea.Msg { return queuedTurnMsg{text: queued} })
-		}
-		return m, tea.Sequence(cmds...)
+		return m.handleSessionCompacted(msg)
 
 	case sessionCostMsg:
-		return m, m.printEntries(session.Entry{Role: session.System, Content: msg.notice})
+		return m.handleSessionCost(msg)
 
 	case gitDiffStatsMsg:
-		if msg.workdir == m.App.Workdir {
-			m.App.GitDiff = msg.stats
-		}
-		return m, nil
+		return m.handleGitDiffStats(msg)
 
 	case externalEditorFinishedMsg:
 		return m.handleExternalEditorFinished(msg)
@@ -804,17 +776,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleLocalError(msg.err)
 
 	case localEntriesMsg:
-		return m, m.printEntries(msg.entries...)
+		return m.handleLocalEntries(msg)
 
 	case queuedTurnMsg:
-		next, cmd := m.submitText(msg.text)
-		if next.InFlight.Thinking {
-			if cmd == nil {
-				return next, next.awaitSessionEvent()
-			}
-			return next, tea.Sequence(cmd, next.awaitSessionEvent())
-		}
-		return next, cmd
+		return m.handleQueuedTurn(msg)
 
 	case tea.PasteMsg:
 		return m.handlePaste(msg)

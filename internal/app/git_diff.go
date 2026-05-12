@@ -31,6 +31,13 @@ func loadGitDiffStats(workdir string) tea.Cmd {
 	}
 }
 
+func (m Model) handleGitDiffStats(msg gitDiffStatsMsg) (Model, tea.Cmd) {
+	if msg.workdir == m.App.Workdir {
+		m.App.GitDiff = msg.stats
+	}
+	return m, nil
+}
+
 func currentGitDiffStats(workdir string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), gitDiffStatsTimeout)
 	defer cancel()
