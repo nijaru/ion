@@ -54,9 +54,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	case "ctrl+c":
 		if m.Input.Composer.Value() != "" {
 			m.clearPendingAction()
-			m.Input.Composer.Reset()
-			m.PasteMarkers = make(map[string]pasteMarker)
-			m.relayoutComposer()
+			m.resetComposerDraft()
 			return m, nil
 		}
 		if m.InFlight.Thinking {
@@ -131,13 +129,11 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			if m.Input.HistoryIdx == -1 {
 				m.Input.HistoryDraft = m.Input.Composer.Value()
 				m.Input.HistoryIdx = len(m.Input.History) - 1
-				m.Input.Composer.SetValue(m.Input.History[m.Input.HistoryIdx])
-				m.relayoutComposer()
+				m.setComposerDraft(m.Input.History[m.Input.HistoryIdx])
 				return m, nil
 			} else if m.Input.HistoryIdx > 0 {
 				m.Input.HistoryIdx--
-				m.Input.Composer.SetValue(m.Input.History[m.Input.HistoryIdx])
-				m.relayoutComposer()
+				m.setComposerDraft(m.Input.History[m.Input.HistoryIdx])
 				return m, nil
 			}
 		}
@@ -150,14 +146,12 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		if m.Input.Composer.Line() == m.Input.Composer.LineCount()-1 && m.Input.HistoryIdx != -1 {
 			if m.Input.HistoryIdx < len(m.Input.History)-1 {
 				m.Input.HistoryIdx++
-				m.Input.Composer.SetValue(m.Input.History[m.Input.HistoryIdx])
-				m.relayoutComposer()
+				m.setComposerDraft(m.Input.History[m.Input.HistoryIdx])
 				return m, nil
 			} else {
-				m.Input.HistoryIdx = -1
-				m.Input.Composer.SetValue(m.Input.HistoryDraft)
-				m.Input.HistoryDraft = ""
-				m.relayoutComposer()
+				draft := m.Input.HistoryDraft
+				m.resetHistoryCursor()
+				m.setComposerDraft(draft)
 				return m, nil
 			}
 		}
@@ -257,9 +251,7 @@ func (m Model) submitBusyInput(text string) (Model, tea.Cmd) {
 		if steering, ok := m.Model.Session.(session.SteeringSession); ok {
 			result, err := steering.SteerTurn(context.Background(), text)
 			if err == nil && result.Outcome == session.SteeringAccepted {
-				m.Input.Composer.Reset()
-				m.PasteMarkers = make(map[string]pasteMarker)
-				m.relayoutComposer()
+				m.resetComposerDraft()
 				return m, m.printEntries(session.Entry{
 					Role:    session.System,
 					Content: "Steering current turn",
@@ -269,9 +261,7 @@ func (m Model) submitBusyInput(text string) (Model, tea.Cmd) {
 	}
 
 	m.InFlight.QueuedTurns = append(m.InFlight.QueuedTurns, text)
-	m.Input.Composer.Reset()
-	m.PasteMarkers = make(map[string]pasteMarker)
-	m.relayoutComposer()
+	m.resetComposerDraft()
 	return m, m.printEntries(
 		session.Entry{Role: session.System, Content: "Queued follow-up"},
 	)
@@ -288,8 +278,7 @@ func (m Model) recallQueuedTurns() (Model, tea.Cmd) {
 	if current != "" {
 		queued = current + "\n" + queued
 	}
-	m.Input.Composer.SetValue(queued)
-	m.relayoutComposer()
+	m.setComposerDraft(queued)
 	return m, nil
 }
 

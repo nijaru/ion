@@ -47,7 +47,7 @@ func (m *Model) clearActiveTurnState(clearQueued bool) {
 func (m Model) submitText(text string) (Model, tea.Cmd) {
 	// Expand any paste marker placeholders to their original content.
 	text = m.expandMarkers(text)
-	m.PasteMarkers = make(map[string]pasteMarker)
+	m.clearPasteMarkers()
 
 	if !strings.HasPrefix(text, "/") {
 		if status := m.configurationStatus(); status != "" {
@@ -59,16 +59,14 @@ func (m Model) submitText(text string) (Model, tea.Cmd) {
 	}
 
 	m.Input.History = append(m.Input.History, text)
-	m.Input.HistoryIdx = -1
-	m.Input.HistoryDraft = ""
+	m.resetHistoryCursor()
 
 	userEntry := session.Entry{
 		Role:      session.User,
 		Timestamp: time.Now().UTC(),
 		Content:   text,
 	}
-	m.Input.Composer.Reset()
-	m.relayoutComposer()
+	m.resetComposerDraft()
 
 	if strings.HasPrefix(text, "/") {
 		m, cmd := m.handleCommand(text)

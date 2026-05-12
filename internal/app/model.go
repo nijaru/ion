@@ -814,8 +814,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.Progress.TotalCost = cost
 			}
 		}
-		m.Input.HistoryIdx = -1
-		m.Input.HistoryDraft = ""
+		m.resetHistoryCursor()
 		cmds := make([]tea.Cmd, 0, 5)
 		if len(msg.printLines) > 0 {
 			cmds = append(cmds, printLinesCmd(msg.printLines...))
