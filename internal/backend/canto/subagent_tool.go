@@ -239,8 +239,8 @@ func (b *Backend) newChildAgent(
 		reasoningEffortProcessor(runtimeCfg),
 		reflexionProcessor(),
 	}
-	return agent.New(persona.Name, instructions, runtimeCfg.Model, b.llm, scopedTools,
-		agent.WithHooks(policyHook(b)),
+	return agent.New(
+		persona.Name, instructions, runtimeCfg.Model, b.llm, scopedTools,
 		agent.WithRequestProcessors(requestProcessors...),
 	), nil
 }

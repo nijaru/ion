@@ -46,11 +46,6 @@ func main() {
 		strings.TrimSpace(os.Getenv("ION_PROVIDER")) != "" ||
 		strings.TrimSpace(os.Getenv("ION_MODEL")) != ""
 	applyCLIConfigOverrides(cfg, providerOverride, modelOverride, cli.thinkingOverride())
-	mode, err := startupMode(cfg, cli.modeOverride(), cli.yolo())
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
-		os.Exit(2)
-	}
 
 	ctx := context.Background()
 	cwd, _ := os.Getwd()
@@ -70,7 +65,7 @@ func main() {
 			store,
 			cfg,
 			branch,
-			mode,
+			session.ModeYolo,
 			acpCommandOverride,
 		)
 		closeErr := store.Close()
@@ -88,12 +83,6 @@ func main() {
 		return
 	}
 
-	trustStore, trusted, trustNotice, err := loadWorkspaceTrust(cwd, cfg)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to load workspace trust: %v\n", err)
-		os.Exit(1)
-	}
-
 	printRequested, prompt, output, err := resolvePrintFlags(
 		cli.printRequested(),
 		cli.printShortRequested(),
@@ -106,7 +95,6 @@ func main() {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(2)
 	}
-	mode = applyWorkspaceTrustModeGate(mode, trusted)
 	if err := validatePrintSelection(printRequested, openResumePicker); err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(2)
@@ -173,7 +161,10 @@ func main() {
 	}
 	if cli.exportSessionPath() != "" {
 		if sessionID == "" {
-			fmt.Fprintln(os.Stderr, "--export-session requires --session <id>, --resume <id>, or --continue")
+			fmt.Fprintln(
+				os.Stderr,
+				"--export-session requires --session <id>, --resume <id>, or --continue",
+			)
 			os.Exit(2)
 		}
 		exported, err := exportSessionBundleFile(ctx, store, sessionID, cli.exportSessionPath())
@@ -221,8 +212,6 @@ func main() {
 		fmt.Fprintf(os.Stderr, "failed to initialize runtime: %v\n", err)
 		os.Exit(1)
 	}
-	configureSessionMode(b.Session(), mode)
-
 	// Print mode: run a single turn and exit
 	if printRequested {
 		agent := b.Session()
@@ -236,7 +225,7 @@ func main() {
 			agent,
 			prompt,
 			cli.timeout(),
-			mode == session.ModeYolo,
+			true,
 			output,
 		)
 		closeErr := closeRuntimeHandles(agent, sess, store)
@@ -252,9 +241,6 @@ func main() {
 	}
 
 	startupLines := startupBannerLines(version, b.Provider(), b.Model(), sessionID != "")
-	if trustNotice != "" {
-		startupLines = append(startupLines, trustNotice)
-	}
 	if toolLine := startupToolLine(b); toolLine != "" {
 		startupLines = append(startupLines, toolLine)
 	}
@@ -286,9 +272,7 @@ func main() {
 
 	model := app.New(b, sess, store, cwd, branch, version, switcher).
 		WithConfigForRuntime(cfg, runtimeCfg).
-		WithActivePreset(activePreset).
-		WithMode(mode).
-		WithTrust(trustStore, trusted, "off")
+		WithActivePreset(activePreset)
 	if openResumePicker {
 		model = model.WithSessionPicker()
 	}

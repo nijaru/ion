@@ -30,10 +30,6 @@ type Compactor interface {
 	Compact(context.Context) (bool, error)
 }
 
-type PolicyConfigurer interface {
-	SetPolicyConfig(*PolicyConfig)
-}
-
 type ToolSurface struct {
 	Count         int
 	LazyThreshold int

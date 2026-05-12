@@ -1,36 +1,11 @@
 package main
 
 import (
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/nijaru/ion/internal/backend"
-	"github.com/nijaru/ion/internal/config"
 )
-
-func TestLoadWorkspaceTrustIsDisabledDuringCoreStabilization(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	workspace := filepath.Join(home, "repo")
-
-	store, trusted, notice, err := loadWorkspaceTrust(
-		workspace,
-		&config.Config{WorkspaceTrust: "prompt"},
-	)
-	if err != nil {
-		t.Fatalf("loadWorkspaceTrust returned error: %v", err)
-	}
-	if store != nil {
-		t.Fatal("workspace trust should not create a trust store")
-	}
-	if !trusted {
-		t.Fatal("workspaces should be trusted by default")
-	}
-	if notice != "" {
-		t.Fatalf("notice = %q, want empty", notice)
-	}
-}
 
 type toolSummaryBackend struct {
 	backend.Backend

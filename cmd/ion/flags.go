@@ -18,8 +18,6 @@ type cliFlags struct {
 	modelFlag         *string
 	modelShortFlag    *string
 	thinkingFlag      *string
-	modeFlag          *string
-	yoloFlag          *bool
 	printFlag         *bool
 	promptFlag        *string
 	printShortFlag    *bool
@@ -63,8 +61,6 @@ func registerCLIFlags() cliFlags {
 			"",
 			"Thinking effort: auto, off, minimal, low, medium, high, xhigh",
 		),
-		modeFlag: flag.String("mode", "", "Permission mode: read, edit, or auto"),
-		yoloFlag: flag.Bool("yolo", false, "Start in AUTO mode (alias for --mode auto)"),
 		printFlag: flag.Bool(
 			"print",
 			false,
@@ -119,18 +115,6 @@ func (f cliFlags) modelOverride() string {
 
 func (f cliFlags) thinkingOverride() string {
 	return *f.thinkingFlag
-}
-
-func (f cliFlags) modeOverride() string {
-	return *f.modeFlag
-}
-
-func (f cliFlags) explicitModeRequested() bool {
-	return strings.TrimSpace(*f.modeFlag) != "" || *f.yoloFlag
-}
-
-func (f cliFlags) yolo() bool {
-	return *f.yoloFlag
 }
 
 func (f cliFlags) printRequested() bool {

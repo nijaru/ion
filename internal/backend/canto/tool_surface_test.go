@@ -11,11 +11,10 @@ import (
 	csession "github.com/nijaru/canto/session"
 	ctesting "github.com/nijaru/canto/x/testing"
 	"github.com/nijaru/ion/internal/config"
-	ionsession "github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
 )
 
-func TestToolSurfaceFiltersReadModeTools(t *testing.T) {
+func TestToolSurfaceReportsNativeTrustedTools(t *testing.T) {
 	ctx := context.Background()
 	store, err := storage.NewCantoStore(t.TempDir())
 	if err != nil {
@@ -48,30 +47,16 @@ func TestToolSurfaceFiltersReadModeTools(t *testing.T) {
 	}
 	defer func() { _ = b.Close() }()
 
-	b.SetMode(ionsession.ModeRead)
 	surface := b.ToolSurface()
-	want := []string{"glob", "grep", "list", "read"}
+	want := []string{"bash", "edit", "glob", "grep", "list", "multi_edit", "read", "write"}
 	if surface.Count != len(want) {
-		t.Fatalf("READ tool count = %d, want %d", surface.Count, len(want))
-	}
-	if surface.Environment != "" {
-		t.Fatalf("READ tool environment = %q, want empty without bash", surface.Environment)
+		t.Fatalf("tool count = %d, want %d", surface.Count, len(want))
 	}
 	if strings.Join(surface.Names, ",") != strings.Join(want, ",") {
-		t.Fatalf("READ tool surface = %#v, want %#v", surface.Names, want)
-	}
-
-	b.SetMode(ionsession.ModeEdit)
-	surface = b.ToolSurface()
-	want = []string{"bash", "edit", "glob", "grep", "list", "multi_edit", "read", "write"}
-	if surface.Count != len(want) {
-		t.Fatalf("EDIT tool count = %d, want %d", surface.Count, len(want))
+		t.Fatalf("tool surface = %#v, want %#v", surface.Names, want)
 	}
 	if surface.Environment != "inherit" {
-		t.Fatalf("EDIT tool environment = %q, want inherit", surface.Environment)
-	}
-	if strings.Join(surface.Names, ",") != strings.Join(want, ",") {
-		t.Fatalf("EDIT tool surface = %#v, want %#v", surface.Names, want)
+		t.Fatalf("tool environment = %q, want inherit", surface.Environment)
 	}
 
 	b.cfg.ToolEnv = "inherit_without_provider_keys"
@@ -121,13 +106,7 @@ func TestSkillToolSurfaceIsOptIn(t *testing.T) {
 		t.Fatalf("tool surface = %#v, want read_skill", surface.Names)
 	}
 	if surface.Count != 9 {
-		t.Fatalf("EDIT tool count = %d, want 9", surface.Count)
-	}
-
-	b.SetMode(ionsession.ModeRead)
-	surface = b.ToolSurface()
-	if !slices.Contains(surface.Names, "read_skill") {
-		t.Fatalf("READ tool surface = %#v, want read_skill", surface.Names)
+		t.Fatalf("tool count = %d, want 9", surface.Count)
 	}
 }
 
@@ -194,11 +173,6 @@ func TestSubagentToolSurfaceIsOptIn(t *testing.T) {
 	if !slices.Contains(surface.Names, "subagent") {
 		t.Fatalf("tool surface = %#v, want subagent", surface.Names)
 	}
-	withSubagent.SetMode(ionsession.ModeRead)
-	readSurface := withSubagent.ToolSurface()
-	if slices.Contains(readSurface.Names, "subagent") {
-		t.Fatalf("READ tool surface = %#v, want subagent hidden", readSurface.Names)
-	}
 }
 
 func TestSubagentToolExecutesWhenOptedIn(t *testing.T) {
@@ -214,7 +188,8 @@ func TestSubagentToolExecutesWhenOptedIn(t *testing.T) {
 	call := llm.Call{ID: "subagent-call-1", Type: "function"}
 	call.Function.Name = "subagent"
 	call.Function.Arguments = `{"agent":"explorer","task":"inspect README","context_mode":"none"}`
-	provider := ctesting.NewFauxProvider("local-api",
+	provider := ctesting.NewFauxProvider(
+		"local-api",
 		ctesting.Step{Calls: []llm.Call{call}},
 		ctesting.Step{Content: "child summary"},
 		ctesting.Step{Content: "done"},
@@ -241,7 +216,6 @@ func TestSubagentToolExecutesWhenOptedIn(t *testing.T) {
 		Endpoint:      "http://localhost:8080/v1",
 		SubagentTools: "on",
 	})
-	b.SetMode(ionsession.ModeYolo)
 	if err := b.Open(ctx); err != nil {
 		t.Fatalf("open backend: %v", err)
 	}

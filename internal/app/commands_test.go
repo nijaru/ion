@@ -404,8 +404,6 @@ func TestSessionInfoNoticeReportsCurrentSession(t *testing.T) {
 		"dev",
 		nil,
 	)
-	model.Mode = session.ModeRead
-
 	notice, err := model.sessionInfoNotice()
 	if err != nil {
 		t.Fatalf("sessionInfoNotice returned error: %v", err)
@@ -415,7 +413,6 @@ func TestSessionInfoNoticeReportsCurrentSession(t *testing.T) {
 		"id: sess-1",
 		"provider: openrouter",
 		"model: minimax/minimax-m2.5:free",
-		"mode: READ",
 		"branch: main",
 		"messages: user 1, assistant 1, tools 1, total 3",
 		"tokens: input 1200, output 300, total 1500",
@@ -541,7 +538,7 @@ func TestBusyTurnAllowsReadOnlyLocalCommands(t *testing.T) {
 	model := readyModel(t)
 	model.InFlight.Thinking = true
 
-	for _, command := range []string{"/help", "/session", "/cost", "/tools", "/mode"} {
+	for _, command := range []string{"/help", "/session", "/cost", "/tools"} {
 		t.Run(command, func(t *testing.T) {
 			_, cmd := model.handleCommand(command)
 			if cmd == nil {
@@ -1139,8 +1136,6 @@ func TestToolsCommandReportsToolSurface(t *testing.T) {
 func TestStatusCommandReportsRuntimePosture(t *testing.T) {
 	model := readyModel(t)
 	model.App.Sandbox = "auto: seatbelt"
-	model.App.WorkspaceTrust = "prompt"
-	model.App.TrustedWorkspace = true
 
 	_, cmd := model.handleCommand("/status")
 	if cmd == nil {

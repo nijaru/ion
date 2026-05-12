@@ -96,7 +96,6 @@ func (m Model) sessionInfoNotice() (string, error) {
 		"id: " + sessionID,
 		"provider: " + provider,
 		"model: " + model,
-		"mode: " + modeDisplayName(m.Mode),
 	}
 	if branch := strings.TrimSpace(m.App.Branch); branch != "" {
 		lines = append(lines, "branch: "+branch)

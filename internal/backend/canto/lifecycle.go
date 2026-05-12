@@ -8,7 +8,6 @@ import (
 
 	cantofw "github.com/nijaru/canto"
 	"github.com/nijaru/canto/agent"
-	"github.com/nijaru/canto/prompt"
 	"github.com/nijaru/canto/runtime"
 	"github.com/nijaru/canto/session"
 	"github.com/nijaru/canto/tool"
@@ -94,15 +93,10 @@ func (b *Backend) Open(ctx context.Context) error {
 		registry.Register(NewSubagentTool(b, personas))
 	}
 
-	requestProcessors := []prompt.RequestProcessor{
-		reasoningEffortProcessor(b.cfg),
-		toolVisibilityProcessor(b.policy),
-	}
 	b.steering = newSteeringMutator()
 
 	agentOptions := []agent.Option{
-		agent.WithHooks(policyHook(b)),
-		agent.WithRequestProcessors(requestProcessors...),
+		agent.WithRequestProcessors(reasoningEffortProcessor(b.cfg)),
 		agent.WithMutators(b.steering),
 	}
 	harness, err := cantofw.NewHarness("ion").

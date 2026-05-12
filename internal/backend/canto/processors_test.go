@@ -7,9 +7,7 @@ import (
 
 	"github.com/nijaru/canto/llm"
 	csession "github.com/nijaru/canto/session"
-	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/config"
-	ionsession "github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
 )
 
@@ -73,33 +71,6 @@ func TestReasoningEffortProcessorDoesNotSendMaxYet(t *testing.T) {
 			"reasoning effort = %q, want empty until provider-specific max mapping exists",
 			req.ReasoningEffort,
 		)
-	}
-}
-
-func TestToolVisibilityProcessorFiltersReadModeTools(t *testing.T) {
-	policy := backend.NewPolicyEngine()
-	policy.SetMode(ionsession.ModeRead)
-	req := &llm.Request{
-		Tools: []*llm.Spec{
-			{Name: "bash"},
-			{Name: "edit"},
-			{Name: "glob"},
-			{Name: "grep"},
-			{Name: "list"},
-			{Name: "read"},
-			{Name: "write"},
-		},
-	}
-
-	processor := toolVisibilityProcessor(policy)
-	if err := processor.ApplyRequest(context.Background(), nil, "model", nil, req); err != nil {
-		t.Fatalf("process: %v", err)
-	}
-
-	got := specNames(req.Tools)
-	want := []string{"glob", "grep", "list", "read"}
-	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Fatalf("READ request tools = %#v, want %#v", got, want)
 	}
 }
 
@@ -200,55 +171,5 @@ func TestLocalAPIRequestsKeepSystemMessagesLeading(t *testing.T) {
 		if role == llm.RoleSystem {
 			t.Fatalf("local-api request has non-leading system messages: %#v", roles)
 		}
-	}
-}
-
-func TestReadModeProviderRequestHidesUnavailableTools(t *testing.T) {
-	ctx := context.Background()
-	store, err := storage.NewCantoStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("new canto store: %v", err)
-	}
-	storageSession, err := store.OpenSession(ctx, t.TempDir(), "local-api/model-a", "main")
-	if err != nil {
-		t.Fatalf("open session: %v", err)
-	}
-
-	provider := llm.NewFauxProvider("local-api", llm.FauxStep{Content: "ok"})
-	oldFactory := providerFactory
-	providerFactory = func(ctx context.Context, cfg *config.Config) (llm.Provider, error) {
-		return provider, nil
-	}
-	defer func() { providerFactory = oldFactory }()
-
-	b := New()
-	b.SetStore(store)
-	b.SetSession(storageSession)
-	b.SetConfig(
-		&config.Config{
-			Provider: "local-api",
-			Model:    "model-a",
-			Endpoint: "http://localhost:8080/v1",
-		},
-	)
-	if err := b.Open(ctx); err != nil {
-		t.Fatalf("open backend: %v", err)
-	}
-	defer func() { _ = b.Close() }()
-	b.SetMode(ionsession.ModeRead)
-
-	if err := b.SubmitTurn(ctx, "read only please"); err != nil {
-		t.Fatalf("submit turn: %v", err)
-	}
-	waitForTurnFinished(t, b.Events())
-
-	calls := provider.Calls()
-	if len(calls) != 1 {
-		t.Fatalf("provider calls = %d, want 1", len(calls))
-	}
-	got := specNames(calls[0].Tools)
-	want := []string{"glob", "grep", "list", "read"}
-	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Fatalf("READ provider tools = %#v, want %#v", got, want)
 	}
 }

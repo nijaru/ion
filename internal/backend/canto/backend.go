@@ -7,7 +7,6 @@ import (
 	"github.com/nijaru/canto/llm"
 	"github.com/nijaru/canto/session"
 	"github.com/nijaru/canto/tool"
-	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/backend/canto/tools"
 	"github.com/nijaru/ion/internal/config"
 	ionsession "github.com/nijaru/ion/internal/session"
@@ -34,19 +33,11 @@ type Backend struct {
 	turn      turnState
 	closeOnce sync.Once
 	wg        sync.WaitGroup
-
-	policy   *backend.PolicyEngine
-	approver *tools.ApprovalManager
 }
 
 func New() *Backend {
-	policy := backend.NewPolicyEngine()
-	policy.SetMode(ionsession.ModeYolo)
-	policy.SetAutoApprove(true)
 	return &Backend{
-		events:   make(chan ionsession.Event, 100),
-		policy:   policy,
-		approver: tools.NewApprovalManager(),
-		turn:     newTurnState(),
+		events: make(chan ionsession.Event, 100),
+		turn:   newTurnState(),
 	}
 }

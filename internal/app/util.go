@@ -29,18 +29,6 @@ const (
 	printSubmitHoldMax       = 1 * time.Second
 )
 
-func initialMode(_ backend.Bootstrap) session.Mode {
-	return session.ModeYolo
-}
-
-func configureModelSessionMode(agent session.AgentSession, mode session.Mode) {
-	if agent == nil {
-		return
-	}
-	agent.SetMode(mode)
-	agent.SetAutoApprove(mode == session.ModeYolo)
-}
-
 func backendSandboxSummary(b backend.Backend) string {
 	summarizer, ok := b.(backend.ToolSummarizer)
 	if !ok {

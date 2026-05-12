@@ -204,24 +204,9 @@ func slashCommandDefinitions() []slashCommandInfo {
 			idle:       slashCommandIdleWithArgs,
 			hidden:     true,
 		},
-		{
-			name:   "/mode",
-			detail: "set read/edit/auto",
-			hidden: true,
-		},
-		{name: "/read", detail: "READ mode", hidden: true},
-		{name: "/edit", detail: "EDIT mode", hidden: true},
-		{name: "/auto", detail: "AUTO mode", hidden: true},
-		{name: "/yolo", detail: "AUTO mode alias", hidden: true},
-
 		{name: "/quit", detail: "quit", helpLabel: "/quit, /exit", helpDetail: "leave ion"},
 		{name: "/exit", detail: "quit", hidden: true},
 
-		{
-			name:   "/trust",
-			detail: "workspace trust",
-			hidden: true,
-		},
 		{
 			name:       "/rewind",
 			detail:     "restore checkpoint",
