@@ -71,6 +71,7 @@ func (b *Backend) Approve(ctx context.Context, requestID string, approved bool) 
 
 func (b *Backend) SetMode(mode ionsession.Mode) {
 	b.policy.SetMode(mode)
+	b.policy.SetAutoApprove(mode == ionsession.ModeYolo)
 }
 
 func (b *Backend) SetAutoApprove(enabled bool) {

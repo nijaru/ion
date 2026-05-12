@@ -79,7 +79,7 @@ func TestSubmitTurnMaterializesLazySession(t *testing.T) {
 	}
 }
 
-func TestSubmitTurnExecutesWriteToolAndPersistsFile(t *testing.T) {
+func TestSubmitTurnDefaultsToTrustedWriteToolAndPersistsFile(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -122,7 +122,6 @@ func TestSubmitTurnExecutesWriteToolAndPersistsFile(t *testing.T) {
 			Endpoint: "http://localhost:8080/v1",
 		},
 	)
-	b.SetMode(ionsession.ModeYolo)
 	if err := b.Open(ctx); err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
