@@ -44,9 +44,12 @@ type Backend struct {
 }
 
 func New() *Backend {
+	policy := backend.NewPolicyEngine()
+	policy.SetMode(ionsession.ModeYolo)
+	policy.SetAutoApprove(true)
 	return &Backend{
 		events:        make(chan ionsession.Event, 100),
-		policy:        backend.NewPolicyEngine(),
+		policy:        policy,
 		approver:      tools.NewApprovalManager(),
 		activeToolIDs: make(map[string]struct{}),
 	}

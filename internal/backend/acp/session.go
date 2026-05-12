@@ -228,6 +228,7 @@ func (s *Session) Resume(ctx context.Context, sessionID string) error {
 
 func (s *Session) SetMode(mode session.Mode) {
 	s.policy.SetMode(mode)
+	s.policy.SetAutoApprove(mode == session.ModeYolo)
 }
 
 func (s *Session) SetAutoApprove(enabled bool) {
