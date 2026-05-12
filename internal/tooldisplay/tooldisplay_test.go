@@ -92,6 +92,13 @@ func TestNormalizeTitleUsesSamePathRules(t *testing.T) {
 	}
 }
 
+func TestNormalizeTitleShortensDisplayCaseToolPath(t *testing.T) {
+	got := NormalizeTitle("Read(internal/app/model_test.go)", Options{Width: 26})
+	if got != "Read(…/app/model_test.go)" {
+		t.Fatalf("normalized title = %q, want shortened path inside display-case title", got)
+	}
+}
+
 func quote(value string) string {
 	escaped := strings.ReplaceAll(value, `\`, `\\`)
 	escaped = strings.ReplaceAll(escaped, `"`, `\"`)

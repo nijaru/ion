@@ -424,7 +424,6 @@ func (m Model) handleSubagentMessage(msg session.AgentMessage) (Model, tea.Cmd) 
 }
 
 func (m Model) handleToolCallStarted(msg session.ToolCallStarted) (Model, tea.Cmd) {
-	redactedArgs := privacy.Redact(msg.Args)
 	m.Progress.Mode = stateWorking
 	m.Progress.LastToolUseID = msg.ToolUseID
 	if m.Progress.LastToolUseID == "" {
@@ -433,7 +432,7 @@ func (m Model) handleToolCallStarted(msg session.ToolCallStarted) (Model, tea.Cm
 	entry := &session.Entry{
 		Role:      session.Tool,
 		Timestamp: msg.Timestamp,
-		Title:     m.formatToolTitle(msg.ToolName, redactedArgs),
+		Title:     privacy.Redact(m.formatToolTitle(msg.ToolName, msg.Args)),
 	}
 	if m.InFlight.PendingTools == nil {
 		m.InFlight.PendingTools = make(map[string]*session.Entry)

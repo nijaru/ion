@@ -253,9 +253,10 @@ func (m *Model) applyRuntimeSwitched(msg runtimeSwitchedMsg) {
 	m.resetHistoryCursor()
 }
 
-func (m Model) runtimeSwitchedCommands(msg runtimeSwitchedMsg) []tea.Cmd {
+func (m *Model) runtimeSwitchedCommands(msg runtimeSwitchedMsg) []tea.Cmd {
 	cmds := make([]tea.Cmd, 0, 5)
 	if len(msg.printLines) > 0 {
+		m.App.PrintedTranscript = true
 		cmds = append(cmds, printLinesCmd(msg.printLines...))
 	}
 	if len(msg.replayEntries) > 0 {
