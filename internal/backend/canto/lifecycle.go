@@ -148,7 +148,7 @@ func (b *Backend) Resume(ctx context.Context, sessionID string) error {
 func (b *Backend) Close() error {
 	b.closeOnce.Do(func() {
 		b.mu.Lock()
-		cancel := b.cancel
+		cancel := b.turn.cancel
 		harness := b.harness
 		b.mu.Unlock()
 

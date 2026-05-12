@@ -98,8 +98,8 @@ func TestBackendSteerTurnQueuesWithoutActiveTurn(t *testing.T) {
 
 func TestBackendSteerTurnQueuesWithoutActiveTool(t *testing.T) {
 	backend := &Backend{
-		steering:   newSteeringMutator(),
-		turnActive: true,
+		steering: newSteeringMutator(),
+		turn:     turnState{active: true},
 	}
 	result, err := backend.SteerTurn(t.Context(), "later")
 	if err != nil {
@@ -112,9 +112,11 @@ func TestBackendSteerTurnQueuesWithoutActiveTool(t *testing.T) {
 
 func TestBackendSteerTurnAcceptsDuringActiveTurn(t *testing.T) {
 	backend := &Backend{
-		steering:      newSteeringMutator(),
-		turnActive:    true,
-		activeToolIDs: map[string]struct{}{"tool-call-1": {}},
+		steering: newSteeringMutator(),
+		turn: turnState{
+			active:        true,
+			activeToolIDs: map[string]struct{}{"tool-call-1": {}},
+		},
 	}
 	result, err := backend.SteerTurn(t.Context(), "use the test output")
 	if err != nil {

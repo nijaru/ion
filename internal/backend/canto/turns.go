@@ -17,7 +17,7 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 		b.mu.Unlock()
 		return fmt.Errorf("backend not initialized")
 	}
-	if b.turnActive {
+	if b.turn.active {
 		b.mu.Unlock()
 		return fmt.Errorf("turn already in progress")
 	}
@@ -49,11 +49,7 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 	}
 
 	turnCtx, cancel := context.WithCancel(ctx)
-	b.turnSeq++
-	turnID := b.turnSeq
-	b.turnActive = true
-	b.cancel = cancel
-	b.clearActiveToolsLocked()
+	turnID := b.turn.start(cancel)
 	harnessSession := b.harness.Session(sessionID)
 	b.mu.Unlock()
 
@@ -96,16 +92,10 @@ func (b *Backend) finishTurnWithError(turnID uint64, err error) {
 	}
 	base := ionsession.BaseNow()
 	if isCancellationTerminal(err.Error()) {
-		if b.finishTurnIfActive(turnID) {
-			b.events <- ionsession.TurnFinished{Base: base}
-		}
+		b.emitTurnFinished(turnID, base)
 		return
 	}
-	if !b.finishTurnIfActive(turnID) {
-		return
-	}
-	b.events <- ionsession.Error{Base: base, Err: err}
-	b.events <- ionsession.TurnFinished{Base: base}
+	b.emitTurnError(turnID, base, err)
 }
 
 type turnUsageTracker struct {
@@ -192,57 +182,56 @@ func (b *Backend) translateRunEvent(
 		if event.Err == nil || isCancellationTerminal(event.Err.Error()) {
 			return
 		}
-		if b.turnActiveFor(turnID) {
-			base := ionsession.BaseNow()
-			b.events <- ionsession.Error{Base: base, Err: event.Err}
-			b.finishTurn(turnID)
-			b.events <- ionsession.TurnFinished{Base: base}
-		}
+		b.emitTurnError(turnID, ionsession.BaseNow(), event.Err)
 	case cantofw.RunEventResult:
 	}
 }
 
-func (b *Backend) finishTurn(turnID uint64) {
-	_ = b.finishTurnIfActive(turnID)
+func (b *Backend) emitTurnError(turnID uint64, base ionsession.Base, err error) bool {
+	if !b.claimTerminalTurn(turnID) {
+		return false
+	}
+	b.events <- ionsession.Error{Base: base, Err: err}
+	b.events <- ionsession.TurnFinished{Base: base}
+	return true
+}
+
+func (b *Backend) emitTurnFinished(turnID uint64, base ionsession.Base) bool {
+	if !b.claimTerminalTurn(turnID) {
+		return false
+	}
+	b.events <- ionsession.TurnFinished{Base: base}
+	return true
+}
+
+func (b *Backend) claimTerminalTurn(turnID uint64) bool {
+	if turnID == 0 {
+		return true
+	}
+	return b.finishTurnIfActive(turnID)
 }
 
 func (b *Backend) finishTurnIfActive(turnID uint64) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.turnSeq != turnID || !b.turnActive {
-		return false
-	}
-	b.turnActive = false
-	b.cancel = nil
-	b.clearActiveToolsLocked()
-	return true
+	return b.turn.finish(turnID)
 }
 
 func (b *Backend) finishActiveTurn(turnID uint64) {
 	b.mu.Lock()
-	if b.turnSeq != turnID || !b.turnActive {
+	if !b.turn.finish(turnID) {
 		b.mu.Unlock()
 		return
 	}
-	b.turnActive = false
-	b.cancel = nil
-	b.clearActiveToolsLocked()
 	b.mu.Unlock()
 
 	b.events <- ionsession.TurnFinished{}
 }
 
-func (b *Backend) turnActiveFor(turnID uint64) bool {
+func (b *Backend) acceptsTurnEvent(turnID uint64) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.turnSeq == turnID && b.turnActive
-}
-
-func (b *Backend) acceptsTurnEvent(turnID uint64) bool {
-	if turnID == 0 {
-		return true
-	}
-	return b.turnActiveFor(turnID)
+	return b.turn.accepts(turnID)
 }
 
 func (b *Backend) SteerTurn(
@@ -250,8 +239,8 @@ func (b *Backend) SteerTurn(
 	text string,
 ) (ionsession.SteeringResult, error) {
 	b.mu.Lock()
-	active := b.turnActive
-	activeTool := len(b.activeToolIDs) > 0
+	active := b.turn.active
+	activeTool := b.turn.hasActiveTool()
 	sessionID := b.ID()
 	steering := b.steering
 	b.mu.Unlock()
@@ -270,11 +259,7 @@ func (b *Backend) SteerTurn(
 
 func (b *Backend) CancelTurn(ctx context.Context) error {
 	b.mu.Lock()
-	cancel := b.cancel
-	active := b.turnActive
-	b.cancel = nil
-	b.turnActive = false
-	b.clearActiveToolsLocked()
+	cancel, active := b.turn.cancelActive()
 	b.mu.Unlock()
 
 	if cancel != nil {
@@ -292,13 +277,7 @@ func (b *Backend) markToolActive(turnID uint64, id string) {
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.turnSeq != turnID || !b.turnActive {
-		return
-	}
-	if b.activeToolIDs == nil {
-		b.activeToolIDs = make(map[string]struct{})
-	}
-	b.activeToolIDs[id] = struct{}{}
+	b.turn.markToolActive(turnID, id)
 }
 
 func (b *Backend) markToolComplete(turnID uint64, id string) {
@@ -307,14 +286,5 @@ func (b *Backend) markToolComplete(turnID uint64, id string) {
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.turnSeq != turnID {
-		return
-	}
-	delete(b.activeToolIDs, id)
-}
-
-func (b *Backend) clearActiveToolsLocked() {
-	for id := range b.activeToolIDs {
-		delete(b.activeToolIDs, id)
-	}
+	b.turn.markToolComplete(turnID, id)
 }
