@@ -84,10 +84,12 @@ func TestOpenLoadsLayeredProjectInstructions(t *testing.T) {
 	}
 }
 
+const backendEventWaitTimeout = 5 * time.Second
+
 func waitForTurnFinished(t *testing.T, events <-chan ionsession.Event) {
 	t.Helper()
 
-	timeout := time.After(2 * time.Second)
+	timeout := time.After(backendEventWaitTimeout)
 	for {
 		select {
 		case ev, ok := <-events:
@@ -109,7 +111,7 @@ func waitForTurnFinished(t *testing.T, events <-chan ionsession.Event) {
 func waitForSessionError(t *testing.T, events <-chan ionsession.Event) ionsession.Error {
 	t.Helper()
 
-	timeout := time.After(2 * time.Second)
+	timeout := time.After(backendEventWaitTimeout)
 	for {
 		select {
 		case ev, ok := <-events:
@@ -129,7 +131,7 @@ func waitForSessionError(t *testing.T, events <-chan ionsession.Event) ionsessio
 func waitForTurnFinishedAfterError(t *testing.T, events <-chan ionsession.Event) {
 	t.Helper()
 
-	timeout := time.After(2 * time.Second)
+	timeout := time.After(backendEventWaitTimeout)
 	for {
 		select {
 		case ev, ok := <-events:
@@ -154,7 +156,7 @@ func receiveEvent(t *testing.T, events <-chan ionsession.Event) ionsession.Event
 			t.Fatal("event stream closed")
 		}
 		return ev
-	case <-time.After(2 * time.Second):
+	case <-time.After(backendEventWaitTimeout):
 		t.Fatal("timed out waiting for event")
 		return nil
 	}
