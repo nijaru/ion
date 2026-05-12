@@ -164,53 +164,18 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 		return m.setModeCommand(session.ModeYolo)
 
 	case "/mode":
-		if len(fields) < 2 {
-			modeName := modeDisplayName(m.Mode)
-			return m, m.printEntries(
-				session.Entry{Role: session.System, Content: "Current mode: " + modeName},
-			)
-		}
-		switch strings.ToLower(fields[1]) {
-		case "read", "r":
-			return m.setModeCommand(session.ModeRead)
-		case "edit", "e", "write", "w":
-			return m.setModeCommand(session.ModeEdit)
-		case "auto", "a", "yolo", "y":
-			return m.setModeCommand(session.ModeYolo)
-		default:
-			return m, cmdError("usage: /mode [read|edit|auto]")
-		}
+		return m.setModeCommand(session.ModeYolo)
 
 	case "/trust":
 		if len(fields) > 1 && fields[1] != "status" {
 			return m, cmdError("usage: /trust [status]")
 		}
-		if len(fields) > 1 && fields[1] == "status" {
-			status := "not trusted"
-			if m.App.TrustedWorkspace {
-				status = "trusted"
-			}
-			return m, m.printEntries(
-				session.Entry{Role: session.System, Content: "Workspace trust: " + status},
-			)
-		}
-		if m.Model.TrustStore == nil {
-			return m, cmdError("workspace trust store is unavailable")
-		}
-		if m.App.WorkspaceTrust == "strict" {
-			return m, cmdError(
-				"workspace trust is strict; trust must be managed outside this session",
-			)
-		}
-		if err := m.Model.TrustStore.Trust(m.App.Workdir); err != nil {
-			return m, cmdError(fmt.Sprintf("failed to trust workspace: %v", err))
-		}
 		m.App.TrustedWorkspace = true
-		m.Mode = session.ModeEdit
-		m.Model.Session.SetMode(m.Mode)
-		m.Model.Session.SetAutoApprove(false)
 		return m, m.printEntries(
-			session.Entry{Role: session.System, Content: "Workspace trusted. Mode: EDIT"},
+			session.Entry{
+				Role:    session.System,
+				Content: "Workspace trust is disabled; workspaces are trusted by default.",
+			},
 		)
 
 	case "/tools":
@@ -452,25 +417,14 @@ func (m Model) commandRequiresIdle(command slashCommandInfo, fields []string) bo
 }
 
 func (m Model) setModeCommand(mode session.Mode) (Model, tea.Cmd) {
-	if m.trustGateActive() && !m.App.TrustedWorkspace && mode != session.ModeRead {
-		return m, cmdError("Trust this workspace first with /trust.")
-	}
-	m.Mode = mode
+	_ = mode
+	m.Mode = session.ModeYolo
 	m.Model.Session.SetMode(m.Mode)
-	m.Model.Session.SetAutoApprove(m.Mode == session.ModeYolo)
-	notice := "Mode: " + modeDisplayName(m.Mode)
-	if m.Mode == session.ModeYolo {
-		if summarizer, ok := m.Model.Backend.(backend.ToolSummarizer); ok {
-			if sandbox := strings.TrimSpace(summarizer.ToolSurface().Sandbox); sandbox != "" {
-				notice += "\nSandbox: " + sandbox
-			}
-		}
-	}
-	return m, m.printEntries(session.Entry{Role: session.System, Content: notice})
-}
-
-func (m Model) trustGateActive() bool {
-	return m.Model.TrustStore != nil && config.ResolveWorkspaceTrust(m.App.WorkspaceTrust) != "off"
+	m.Model.Session.SetAutoApprove(true)
+	return m, m.printEntries(session.Entry{
+		Role:    session.System,
+		Content: "Modes are disabled during core stabilization; tools are trusted by default.",
+	})
 }
 
 // cmdError returns a Cmd that emits a local UI error with the given message.

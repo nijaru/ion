@@ -22,14 +22,9 @@ func modeFromName(value string) (session.Mode, error) {
 }
 
 func startupMode(cfg *config.Config, modeFlag string, yoloFlag bool) (session.Mode, error) {
-	configMode := ""
-	if cfg != nil {
-		configMode = config.ResolveDefaultMode(cfg.DefaultMode)
-	}
-	mode, err := modeFromName(configMode)
-	if err != nil {
-		return session.ModeEdit, err
-	}
+	_ = cfg
+	mode := session.ModeYolo
+	var err error
 
 	if strings.TrimSpace(modeFlag) != "" {
 		mode, err = modeFromName(modeFlag)
@@ -39,7 +34,10 @@ func startupMode(cfg *config.Config, modeFlag string, yoloFlag bool) (session.Mo
 	}
 	if yoloFlag {
 		if strings.TrimSpace(modeFlag) != "" && mode != session.ModeYolo {
-			return session.ModeEdit, fmt.Errorf("--yolo conflicts with --mode %s", strings.TrimSpace(modeFlag))
+			return session.ModeEdit, fmt.Errorf(
+				"--yolo conflicts with --mode %s",
+				strings.TrimSpace(modeFlag),
+			)
 		}
 		mode = session.ModeYolo
 	}

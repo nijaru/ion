@@ -588,8 +588,8 @@ func TestModeSlashCommandRunsDuringTurn(t *testing.T) {
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = updated.(Model)
-	if model.Mode != session.ModeRead {
-		t.Fatalf("mode = %v, want read", model.Mode)
+	if model.Mode != session.ModeYolo {
+		t.Fatalf("mode = %v, want trusted auto", model.Mode)
 	}
 	if len(model.InFlight.QueuedTurns) != 0 {
 		t.Fatalf("queued turns = %v, want none for host command", model.InFlight.QueuedTurns)

@@ -10,7 +10,6 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/nijaru/ion/internal/backend"
-	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/session"
 )
 
@@ -31,15 +30,7 @@ const (
 )
 
 func initialMode(_ backend.Bootstrap) session.Mode {
-	if cfg, err := config.Load(); err == nil {
-		switch config.ResolveDefaultMode(cfg.DefaultMode) {
-		case "read":
-			return session.ModeRead
-		case "auto":
-			return session.ModeYolo
-		}
-	}
-	return session.ModeEdit
+	return session.ModeYolo
 }
 
 func configureModelSessionMode(agent session.AgentSession, mode session.Mode) {
@@ -295,16 +286,7 @@ func toolSurfaceSummary(surface backend.ToolSurface) string {
 }
 
 func runtimeStatusSummary(m Model) string {
-	lines := []string{
-		"Mode: " + modeDisplayName(m.Mode),
-	}
-	if m.App.WorkspaceTrust != "" {
-		trust := "not trusted"
-		if m.App.TrustedWorkspace {
-			trust = "trusted"
-		}
-		lines = append(lines, "Workspace: "+trust)
-	}
+	lines := []string{"Permissions: trusted by default"}
 	if provider := strings.TrimSpace(m.Model.Backend.Provider()); provider != "" {
 		lines = append(lines, "Provider: "+provider)
 	}

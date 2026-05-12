@@ -134,17 +134,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 	case "shift+tab":
 		m.clearPendingAction()
-		switch m.Mode {
-		case session.ModeRead:
-			next, cmd := m.setModeCommand(session.ModeEdit)
-			return next, cmd
-		case session.ModeEdit:
-			next, cmd := m.setModeCommand(session.ModeRead)
-			return next, cmd
-		default:
-			next, cmd := m.setModeCommand(session.ModeEdit)
-			return next, cmd
-		}
+		return m, nil
 
 	case "tab":
 		if next, cmd, ok := m.completeSlashCommand(); ok {
@@ -169,13 +159,12 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		}
 		return m.submitComposer()
 
-	case "shift+enter", "alt+enter":
+	case "shift+enter", "alt+enter", "ctrl+j":
 		m.clearPendingAction()
-		var cmd tea.Cmd
 		m.prepareComposerUpdate()
-		m.Input.Composer, cmd = m.Input.Composer.Update(msg)
+		m.Input.Composer.InsertString("\n")
 		m.layout()
-		return m, cmd
+		return m, nil
 
 	case "up", "ctrl+p":
 		m.clearPendingAction()
