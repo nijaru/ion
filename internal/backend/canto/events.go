@@ -10,14 +10,6 @@ import (
 	ionsession "github.com/nijaru/ion/internal/session"
 )
 
-func (b *Backend) translateEvents(ctx context.Context, evCh <-chan session.Event, turnID uint64) {
-	for ev := range evCh {
-		if b.translateEvent(ctx, ev, turnID) {
-			return
-		}
-	}
-}
-
 func (b *Backend) translateEvent(ctx context.Context, ev session.Event, turnID uint64) bool {
 	if !b.acceptsTurnEvent(turnID) {
 		return true
