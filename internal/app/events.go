@@ -161,7 +161,6 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 	case "shift+enter", "alt+enter", "ctrl+j":
 		m.clearPendingAction()
-		m.prepareComposerUpdate()
 		m.Input.Composer.InsertString("\n")
 		m.layout()
 		return m, nil
@@ -183,7 +182,6 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			}
 		}
 		var cmd tea.Cmd
-		m.prepareComposerUpdate()
 		m.Input.Composer, cmd = m.Input.Composer.Update(msg)
 		return m, cmd
 
@@ -204,7 +202,6 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			}
 		}
 		var cmd tea.Cmd
-		m.prepareComposerUpdate()
 		m.Input.Composer, cmd = m.Input.Composer.Update(msg)
 		return m, cmd
 
@@ -214,7 +211,6 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 	// Pass all other keys to textarea (Ctrl+A/E/W/U/K, Alt+B/F, etc.)
 	var cmd tea.Cmd
-	m.prepareComposerUpdate()
 	m.Input.Composer, cmd = m.Input.Composer.Update(msg)
 	if m.App.Ready {
 		m.layout()
