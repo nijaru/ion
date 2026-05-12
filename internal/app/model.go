@@ -311,9 +311,11 @@ func New(
 	ta.Placeholder = "Type a message..."
 	ta.Prompt = "› "
 	ta.ShowLineNumbers = false
+	ta.DynamicHeight = true
+	ta.MinHeight = minComposerHeight
+	ta.MaxHeight = maxComposerHeight
 	ta.SetHeight(minComposerHeight)
 	ta.SetWidth(80)
-	ta.MaxHeight = maxComposerHeight
 	ta.Focus()
 	taStyles := ta.Styles()
 	taStyles.Focused.CursorLine = taStyles.Focused.CursorLine.UnsetBackground()
@@ -910,7 +912,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// Pass remaining messages to composer
 	var cmd tea.Cmd
-	m.prepareComposerUpdate()
 	m.Input.Composer, cmd = m.Input.Composer.Update(msg)
 	if m.App.Ready {
 		m.layout()

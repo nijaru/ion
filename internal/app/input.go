@@ -116,36 +116,6 @@ func (m *Model) layout() {
 		width = 1
 	}
 	m.Input.Composer.SetWidth(width)
-	m.Input.Composer.SetHeight(
-		clamp(
-			composerVisualLineCount(m.Input.Composer.Value(), m.Input.Composer.Width()),
-			minComposerHeight,
-			maxComposerHeight,
-		),
-	)
-}
-
-func (m *Model) prepareComposerUpdate() {
-	m.Input.Composer.SetHeight(maxComposerHeight)
-}
-
-func composerVisualLineCount(value string, width int) int {
-	if width <= 0 {
-		width = 1
-	}
-	total := 0
-	for _, line := range strings.Split(value, "\n") {
-		lineWidth := ansi.StringWidth(line)
-		if lineWidth == 0 {
-			total++
-			continue
-		}
-		total += lineWidth/width + 1
-	}
-	if total == 0 {
-		return 1
-	}
-	return total
 }
 
 func (m Model) headerLine() string {
