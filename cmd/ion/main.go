@@ -288,7 +288,7 @@ func main() {
 		WithConfigForRuntime(cfg, runtimeCfg).
 		WithActivePreset(activePreset).
 		WithMode(mode).
-		WithTrust(trustStore, trusted, cfg.WorkspaceTrust)
+		WithTrust(trustStore, trusted, "off")
 	if openResumePicker {
 		model = model.WithSessionPicker()
 	}

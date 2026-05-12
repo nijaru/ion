@@ -618,7 +618,6 @@ func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 		"/skills [query]",
 		"/cost",
 		"/status",
-		"/trust [status]",
 		"/quit, /exit",
 	}
 	wantCommands = append(
@@ -649,10 +648,10 @@ func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 			)
 		}
 	}
-	for _, hidden := range []string{"/read", "/edit", "/auto, /yolo"} {
+	for _, hidden := range []string{"/read", "/edit", "/auto, /yolo", "/trust [status]"} {
 		if strings.Contains(notice, hidden) {
 			t.Fatalf(
-				"help notice should not advertise hidden mode alias %q: %q",
+				"help notice should not advertise hidden command %q: %q",
 				hidden,
 				notice,
 			)
@@ -1142,8 +1141,7 @@ func TestStatusCommandReportsRuntimePosture(t *testing.T) {
 	}
 	got := runtimeStatusSummary(model)
 	for _, want := range []string{
-		"Mode: EDIT",
-		"Workspace: trusted",
+		"Permissions: trusted by default",
 		"Provider: stub",
 		"Model: stub-model",
 		"Tools: 2",

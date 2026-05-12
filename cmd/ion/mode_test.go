@@ -17,14 +17,14 @@ func TestStartupMode(t *testing.T) {
 		wantErr  bool
 	}{
 		{
-			name: "defaults to edit",
+			name: "defaults to trusted auto during stabilization",
 			cfg:  &config.Config{},
-			want: session.ModeEdit,
+			want: session.ModeYolo,
 		},
 		{
-			name: "uses config default",
+			name: "ignores config default during stabilization",
 			cfg:  &config.Config{DefaultMode: "read"},
-			want: session.ModeRead,
+			want: session.ModeYolo,
 		},
 		{
 			name:     "mode flag overrides config",
@@ -89,19 +89,19 @@ func TestApplyWorkspaceTrustModeGate(t *testing.T) {
 			want: session.ModeYolo,
 		},
 		{
-			name: "untrusted interactive auto falls back to read",
+			name: "untrusted interactive auto remains auto",
 			mode: session.ModeYolo,
-			want: session.ModeRead,
+			want: session.ModeYolo,
 		},
 		{
-			name: "untrusted edit falls back to read",
+			name: "untrusted edit remains edit",
 			mode: session.ModeEdit,
-			want: session.ModeRead,
+			want: session.ModeEdit,
 		},
 		{
-			name: "untrusted auto falls back to read",
+			name: "untrusted auto remains auto",
 			mode: session.ModeYolo,
-			want: session.ModeRead,
+			want: session.ModeYolo,
 		},
 	}
 

@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/x/ansi"
-	"github.com/nijaru/ion/internal/session"
 )
 
 func (m Model) statusLine() string {
@@ -18,7 +17,7 @@ func (m Model) statusLine() string {
 
 	sep := m.st.sep.Render(" • ")
 
-	modeLabel := m.statusModeLabel()
+	modeLabel := ""
 	presetLabel := ""
 	if m.activePreset() == presetFast {
 		presetLabel = m.st.dim.Render("[FAST]")
@@ -100,24 +99,15 @@ func (m Model) renderTokenUsage(total, limit int) string {
 	}
 }
 
-func (m Model) statusModeLabel() string {
-	switch m.Mode {
-	case session.ModeRead:
-		return m.st.modeRead.Render("[READ]")
-	case session.ModeEdit:
-		return m.st.modeEdit.Render("[EDIT]")
-	case session.ModeYolo:
-		return m.st.modeYolo.Render("[AUTO]")
-	default:
-		return ""
-	}
-}
-
 func statusWorkdirLabel(workdir string) string {
 	if strings.TrimSpace(workdir) == "" {
 		return ""
 	}
-	return filepath.Base(filepath.Clean(workdir))
+	label := filepath.Base(filepath.Clean(workdir))
+	if label == string(os.PathSeparator) {
+		return label
+	}
+	return label + string(os.PathSeparator)
 }
 
 func (m *Model) layout() {

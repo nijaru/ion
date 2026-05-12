@@ -74,6 +74,52 @@ func TestComposerKeepsSoftWrappedPrefixVisibleWhileTyping(t *testing.T) {
 	}
 }
 
+func TestComposerSupportsHardMultilineInput(t *testing.T) {
+	model := readyModel(t)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 60, Height: 30})
+	model = updated.(Model)
+
+	for _, r := range "first line" {
+		updated, _ = model.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+		model = updated.(Model)
+	}
+	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift})
+	model = updated.(Model)
+	for _, r := range "second line" {
+		updated, _ = model.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+		model = updated.(Model)
+	}
+
+	if got := model.Input.Composer.Value(); got != "first line\nsecond line" {
+		t.Fatalf("composer = %q, want hard multiline input", got)
+	}
+	view := ansi.Strip(model.View().Content)
+	if !strings.Contains(view, "first line") || !strings.Contains(view, "second line") {
+		t.Fatalf("composer did not render both hard lines:\n%s", view)
+	}
+}
+
+func TestComposerSupportsCtrlJMultilineInput(t *testing.T) {
+	model := readyModel(t)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 60, Height: 30})
+	model = updated.(Model)
+
+	for _, r := range "first line" {
+		updated, _ = model.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+		model = updated.(Model)
+	}
+	updated, _ = model.Update(tea.KeyPressMsg{Code: 'j', Mod: tea.ModCtrl})
+	model = updated.(Model)
+	for _, r := range "second line" {
+		updated, _ = model.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+		model = updated.(Model)
+	}
+
+	if got := model.Input.Composer.Value(); got != "first line\nsecond line" {
+		t.Fatalf("composer = %q, want ctrl+j multiline input", got)
+	}
+}
+
 func TestProgressLineFitsWidthAfterResize(t *testing.T) {
 	model := readyModel(t)
 	model.App.Width = 28
@@ -359,16 +405,16 @@ func TestStatusLineFitsWidthAfterResize(t *testing.T) {
 	}
 }
 
-func TestStatusLineShowsModeAndWorkspaceName(t *testing.T) {
+func TestStatusLineShowsWorkspacePathWithoutMode(t *testing.T) {
 	model := readyModel(t)
 	model.App.Workdir = "/tmp/sy"
 	model.Mode = session.ModeEdit
 
 	line := ansi.Strip(model.statusLine())
-	if !strings.Contains(line, "[EDIT]") {
-		t.Fatalf("status line missing edit mode: %q", line)
+	if strings.Contains(line, "[EDIT]") {
+		t.Fatalf("status line should hide stabilization-only mode: %q", line)
 	}
-	if !strings.Contains(line, "sy") {
+	if !strings.Contains(line, "sy/") {
 		t.Fatalf("status line missing workspace name: %q", line)
 	}
 	if strings.Contains(line, "./sy") {

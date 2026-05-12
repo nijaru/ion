@@ -27,6 +27,7 @@ func helpText() string {
 		"  Enter            send message",
 		"  Shift+Enter      insert newline",
 		"  Alt+Enter        insert newline",
+		"  Ctrl+J           insert newline",
 		"  Ctrl+C           clear composer, or quit on double-tap when empty",
 		"  Ctrl+D           quit on double-tap when empty",
 	)
@@ -213,10 +214,9 @@ func slashCommandDefinitions() []slashCommandInfo {
 		{name: "/exit", detail: "quit", hidden: true},
 
 		{
-			name:       "/trust",
-			detail:     "workspace trust",
-			helpLabel:  "/trust [status]",
-			helpDetail: "trust this workspace or show trust status",
+			name:   "/trust",
+			detail: "workspace trust",
+			hidden: true,
 		},
 		{
 			name:       "/rewind",
