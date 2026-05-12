@@ -11,6 +11,19 @@ import (
 	ionsession "github.com/nijaru/ion/internal/session"
 )
 
+func translateSessionEvents(
+	ctx context.Context,
+	b *Backend,
+	events <-chan csession.Event,
+	turnID uint64,
+) {
+	for ev := range events {
+		if b.translateEvent(ctx, ev, turnID) {
+			return
+		}
+	}
+}
+
 func TestTranslateEventsCommitsAssistantFromMessageAdded(t *testing.T) {
 	b := New()
 	events := make(chan csession.Event, 2)
@@ -22,7 +35,7 @@ func TestTranslateEventsCommitsAssistantFromMessageAdded(t *testing.T) {
 	events <- csession.NewTurnCompletedEvent("session-id", csession.TurnCompletedData{})
 	close(events)
 
-	b.translateEvents(t.Context(), events, 0)
+	translateSessionEvents(t.Context(), b, events, 0)
 
 	ev1 := receiveEvent(t, b.Events())
 	committed, ok := ev1.(ionsession.AgentMessage)
@@ -54,7 +67,7 @@ func TestTranslateEventsTurnCompletedDoesNotEmitEmptyAssistant(t *testing.T) {
 	events <- csession.NewTurnCompletedEvent("session-id", csession.TurnCompletedData{})
 	close(events)
 
-	b.translateEvents(t.Context(), events, 0)
+	translateSessionEvents(t.Context(), b, events, 0)
 
 	ev1 := receiveEvent(t, b.Events())
 	if _, ok := ev1.(ionsession.TurnFinished); !ok {
@@ -81,7 +94,7 @@ func TestTranslateEventsClearsActiveTurnBeforeFinishedEvent(t *testing.T) {
 	events <- csession.NewTurnCompletedEvent("session-id", csession.TurnCompletedData{})
 	close(events)
 
-	b.translateEvents(t.Context(), events, 7)
+	translateSessionEvents(t.Context(), b, events, 7)
 
 	if b.turnActive {
 		t.Fatal("turnActive remained true after terminal event translation")
@@ -103,7 +116,7 @@ func TestTranslateEventsSuppressesCanceledTerminalError(t *testing.T) {
 	})
 	close(events)
 
-	b.translateEvents(t.Context(), events, 0)
+	translateSessionEvents(t.Context(), b, events, 0)
 
 	ev1 := receiveEvent(t, b.Events())
 	if _, ok := ev1.(ionsession.TurnFinished); !ok {
@@ -128,7 +141,7 @@ func TestTranslateEventsSuppressesDeadlineTerminalError(t *testing.T) {
 	})
 	close(events)
 
-	b.translateEvents(t.Context(), events, 0)
+	translateSessionEvents(t.Context(), b, events, 0)
 
 	ev1 := receiveEvent(t, b.Events())
 	if _, ok := ev1.(ionsession.TurnFinished); !ok {
@@ -195,7 +208,7 @@ func TestTranslateEventsSuppressesInactiveTurnEvents(t *testing.T) {
 	})
 	close(events)
 
-	b.translateEvents(t.Context(), events, 7)
+	translateSessionEvents(t.Context(), b, events, 7)
 
 	select {
 	case ev := <-b.Events():
@@ -316,7 +329,7 @@ func TestTranslateEventsPreservesToolUseID(t *testing.T) {
 	})
 	close(events)
 
-	b.translateEvents(t.Context(), events, 0)
+	translateSessionEvents(t.Context(), b, events, 0)
 
 	ev1 := receiveEvent(t, b.Events())
 	started, ok := ev1.(ionsession.ToolCallStarted)
@@ -348,7 +361,7 @@ func TestTranslateEventsPreservesToolOutputDeltaID(t *testing.T) {
 	})
 	close(events)
 
-	b.translateEvents(t.Context(), events, 0)
+	translateSessionEvents(t.Context(), b, events, 0)
 
 	ev := receiveEvent(t, b.Events())
 	delta, ok := ev.(ionsession.ToolOutputDelta)
@@ -374,7 +387,7 @@ func TestTranslateEventsPreservesToolCompletedError(t *testing.T) {
 	})
 	close(events)
 
-	b.translateEvents(t.Context(), events, 0)
+	translateSessionEvents(t.Context(), b, events, 0)
 
 	ev := receiveEvent(t, b.Events())
 	result, ok := ev.(ionsession.ToolResult)
@@ -406,7 +419,7 @@ func TestTranslateEventsUsesChildIDForSubagentRows(t *testing.T) {
 	})
 	close(events)
 
-	b.translateEvents(t.Context(), events, 0)
+	translateSessionEvents(t.Context(), b, events, 0)
 
 	requested, ok := receiveEvent(t, b.Events()).(ionsession.ChildRequested)
 	if !ok {
