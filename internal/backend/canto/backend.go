@@ -1,7 +1,6 @@
 package canto
 
 import (
-	"context"
 	"sync"
 
 	cantofw "github.com/nijaru/canto"
@@ -31,13 +30,10 @@ type Backend struct {
 	compactLLM llm.Provider
 	steering   *steeringMutator
 
-	mu            sync.Mutex
-	cancel        context.CancelFunc
-	turnSeq       uint64
-	turnActive    bool
-	activeToolIDs map[string]struct{}
-	closeOnce     sync.Once
-	wg            sync.WaitGroup
+	mu        sync.Mutex
+	turn      turnState
+	closeOnce sync.Once
+	wg        sync.WaitGroup
 
 	policy   *backend.PolicyEngine
 	approver *tools.ApprovalManager
@@ -48,9 +44,9 @@ func New() *Backend {
 	policy.SetMode(ionsession.ModeYolo)
 	policy.SetAutoApprove(true)
 	return &Backend{
-		events:        make(chan ionsession.Event, 100),
-		policy:        policy,
-		approver:      tools.NewApprovalManager(),
-		activeToolIDs: make(map[string]struct{}),
+		events:   make(chan ionsession.Event, 100),
+		policy:   policy,
+		approver: tools.NewApprovalManager(),
+		turn:     newTurnState(),
 	}
 }

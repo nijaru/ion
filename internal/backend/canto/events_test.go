@@ -2,6 +2,7 @@ package canto
 
 import (
 	"context"
+	"errors"
 	"math"
 	"testing"
 
@@ -86,9 +87,9 @@ func TestTranslateEventsTurnCompletedDoesNotEmitEmptyAssistant(t *testing.T) {
 
 func TestTranslateEventsClearsActiveTurnBeforeFinishedEvent(t *testing.T) {
 	b := New()
-	b.turnSeq = 7
-	b.turnActive = true
-	b.cancel = func() {}
+	b.turn.seq = 7
+	b.turn.active = true
+	b.turn.cancel = func() {}
 
 	events := make(chan csession.Event, 1)
 	events <- csession.NewTurnCompletedEvent("session-id", csession.TurnCompletedData{})
@@ -96,10 +97,10 @@ func TestTranslateEventsClearsActiveTurnBeforeFinishedEvent(t *testing.T) {
 
 	translateSessionEvents(t.Context(), b, events, 7)
 
-	if b.turnActive {
-		t.Fatal("turnActive remained true after terminal event translation")
+	if b.turn.active {
+		t.Fatal("turn remained active after terminal event translation")
 	}
-	if b.cancel != nil {
+	if b.turn.cancel != nil {
 		t.Fatal("cancel func remained set after terminal event translation")
 	}
 	ev := receiveEvent(t, b.Events())
@@ -160,16 +161,16 @@ func TestTranslateEventsSuppressesDeadlineTerminalError(t *testing.T) {
 
 func TestFinishTurnWithErrorSuppressesDeadlineExceeded(t *testing.T) {
 	b := New()
-	b.turnSeq = 7
-	b.turnActive = true
-	b.cancel = func() {}
+	b.turn.seq = 7
+	b.turn.active = true
+	b.turn.cancel = func() {}
 
 	b.finishTurnWithError(7, context.DeadlineExceeded)
 
-	if b.turnActive {
-		t.Fatal("turnActive remained true after deadline terminal")
+	if b.turn.active {
+		t.Fatal("turn remained active after deadline terminal")
 	}
-	if b.cancel != nil {
+	if b.turn.cancel != nil {
 		t.Fatal("cancel func remained set after deadline terminal")
 	}
 	ev := receiveEvent(t, b.Events())
@@ -183,10 +184,33 @@ func TestFinishTurnWithErrorSuppressesDeadlineExceeded(t *testing.T) {
 	}
 }
 
+func TestTerminalErrorAfterCancelDoesNotEmit(t *testing.T) {
+	b := New()
+	b.turn.seq = 7
+	b.turn.active = true
+	b.turn.cancel = func() {}
+
+	if err := b.CancelTurn(t.Context()); err != nil {
+		t.Fatalf("cancel turn: %v", err)
+	}
+	if _, ok := receiveEvent(t, b.Events()).(ionsession.TurnFinished); !ok {
+		t.Fatal("cancel did not emit TurnFinished")
+	}
+
+	if b.emitTurnError(7, ionsession.BaseNow(), errors.New("late provider error")) {
+		t.Fatal("late terminal error claimed canceled turn")
+	}
+	select {
+	case ev := <-b.Events():
+		t.Fatalf("late terminal error emitted event after cancel: %#v", ev)
+	default:
+	}
+}
+
 func TestTranslateEventsSuppressesInactiveTurnEvents(t *testing.T) {
 	b := New()
-	b.turnSeq = 7
-	b.turnActive = false
+	b.turn.seq = 7
+	b.turn.active = false
 
 	events := make(chan csession.Event, 4)
 	events <- csession.NewEvent("session-id", csession.MessageAdded, llm.Message{
@@ -219,8 +243,8 @@ func TestTranslateEventsSuppressesInactiveTurnEvents(t *testing.T) {
 
 func TestTranslateRunEventSuppressesInactiveTurnChunk(t *testing.T) {
 	b := New()
-	b.turnSeq = 7
-	b.turnActive = false
+	b.turn.seq = 7
+	b.turn.active = false
 
 	b.translateRunEvent(t.Context(), cantofw.RunEvent{
 		Type:  cantofw.RunEventChunk,
@@ -236,8 +260,8 @@ func TestTranslateRunEventSuppressesInactiveTurnChunk(t *testing.T) {
 
 func TestTranslateRunEventEmitsTokenUsageDeltas(t *testing.T) {
 	b := New()
-	b.turnSeq = 7
-	b.turnActive = true
+	b.turn.seq = 7
+	b.turn.active = true
 	usage := &turnUsageTracker{}
 
 	b.translateRunEvent(t.Context(), cantofw.RunEvent{
@@ -275,8 +299,8 @@ func TestTranslateRunEventEmitsTokenUsageDeltas(t *testing.T) {
 
 func TestTranslateRunEventResetsTokenUsageAfterToolCompleted(t *testing.T) {
 	b := New()
-	b.turnSeq = 7
-	b.turnActive = true
+	b.turn.seq = 7
+	b.turn.active = true
 	usage := &turnUsageTracker{}
 
 	b.translateRunEvent(t.Context(), cantofw.RunEvent{

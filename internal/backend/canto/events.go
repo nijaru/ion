@@ -39,14 +39,12 @@ func (b *Backend) translateEvent(ctx context.Context, ev session.Event, turnID u
 			if isContextOverflowTerminal(data.Error) {
 				return false
 			}
-			b.events <- ionsession.Error{Base: base, Err: fmt.Errorf("%s", data.Error)}
-			b.finishTurn(turnID)
-			b.events <- ionsession.TurnFinished{Base: base}
+			b.emitTurnError(turnID, base, fmt.Errorf("%s", data.Error))
 			return true
 		}
-		b.finishTurn(turnID)
-		b.events <- ionsession.TurnFinished{Base: base}
-		b.events <- ionsession.StatusChanged{Base: base, Status: "Ready"}
+		if b.emitTurnFinished(turnID, base) {
+			b.events <- ionsession.StatusChanged{Base: base, Status: "Ready"}
+		}
 		return true
 	case session.ToolStarted:
 		if data, ok, err := ev.ToolStartedData(); err == nil && ok {
