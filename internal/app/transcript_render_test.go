@@ -553,6 +553,50 @@ func TestToolCallStartedShortensWorkspacePath(t *testing.T) {
 	}
 }
 
+func TestToolCallStartedFormatsWorkspacePathBeforeRedaction(t *testing.T) {
+	workdir := filepath.Join(t.TempDir(), "415-555-1212", "repo")
+	model := readyModel(t)
+	model.App.Workdir = workdir
+	path := filepath.Join(workdir, "internal", "app", "model_test.go")
+
+	updated, _ := model.Update(session.ToolCallStarted{
+		ToolUseID: "tool-read",
+		ToolName:  "read",
+		Args:      `{"file_path":` + strconv.Quote(path) + `}`,
+	})
+	model = updated.(Model)
+
+	got := model.InFlight.PendingTools["tool-read"].Title
+	if got != "Read(internal/app/model_test.go)" {
+		t.Fatalf("tool title = %q, want workspace-relative title without redacted workdir prefix", got)
+	}
+}
+
+func TestToolCallStartedKeepsCanonicalTitleForResponsiveRender(t *testing.T) {
+	workdir := filepath.Join(t.TempDir(), "repo")
+	model := readyModel(t)
+	model.App.Workdir = workdir
+	model.App.Width = 28
+	path := filepath.Join(workdir, "internal", "app", "model_test.go")
+
+	updated, _ := model.Update(session.ToolCallStarted{
+		ToolUseID: "tool-read",
+		ToolName:  "read",
+		Args:      `{"file_path":` + strconv.Quote(path) + `}`,
+	})
+	model = updated.(Model)
+
+	entry := model.InFlight.PendingTools["tool-read"]
+	if got := entry.Title; got != "Read(internal/app/model_test.go)" {
+		t.Fatalf("tool title = %q, want canonical workspace-relative title", got)
+	}
+
+	rendered := ansi.Strip(model.renderPendingEntry(*entry))
+	if !strings.Contains(rendered, "…/app/model_test.go") {
+		t.Fatalf("tool render = %q, want render-time shortened path", rendered)
+	}
+}
+
 func TestRenderToolLabelColorsOnlyStatusMarker(t *testing.T) {
 	model := readyModel(t)
 

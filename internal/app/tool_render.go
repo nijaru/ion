@@ -215,7 +215,7 @@ func FormatToolTitle(name, args string) string {
 }
 
 func (m Model) formatToolTitle(name, args string) string {
-	return tooldisplay.Title(name, args, m.toolTitleOptions())
+	return tooldisplay.Title(name, args, tooldisplay.Options{Workdir: m.App.Workdir})
 }
 
 func (m Model) toolTitleOptions() tooldisplay.Options {

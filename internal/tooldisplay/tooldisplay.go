@@ -43,8 +43,8 @@ func NormalizeTitle(title string, opts Options) string {
 		return ""
 	}
 	verb := titleVerb(title)
-	displayName := Name(verb)
-	if displayName == "Tool" || displayName == verb || verb == "" {
+	displayName, known := knownName(verb)
+	if !known || verb == "" {
 		return fitArg(title, opts.Width)
 	}
 	rest := strings.TrimSpace(title[len(verb):])
@@ -60,28 +60,35 @@ func NormalizeTitle(title string, opts Options) string {
 }
 
 func Name(name string) string {
+	if displayName, ok := knownName(name); ok {
+		return displayName
+	}
+	if strings.TrimSpace(name) == "" {
+		return "Tool"
+	}
+	return name
+}
+
+func knownName(name string) (string, bool) {
 	switch strings.TrimSpace(strings.ToLower(name)) {
 	case "read":
-		return "Read"
+		return "Read", true
 	case "write":
-		return "Write"
+		return "Write", true
 	case "edit":
-		return "Edit"
+		return "Edit", true
 	case "multi_edit":
-		return "Edit"
+		return "Edit", true
 	case "list":
-		return "List"
+		return "List", true
 	case "grep":
-		return "Search"
+		return "Search", true
 	case "glob":
-		return "Find"
+		return "Find", true
 	case "bash":
-		return "Bash"
+		return "Bash", true
 	default:
-		if strings.TrimSpace(name) == "" {
-			return "Tool"
-		}
-		return name
+		return "", false
 	}
 }
 

@@ -723,6 +723,73 @@ func TestRuntimeSwitchShowsStatusOnResume(t *testing.T) {
 	}
 }
 
+func TestRuntimeSwitchMarksPrintedTranscriptForReplay(t *testing.T) {
+	model := readyModel(t)
+	model.App.PrintedTranscript = false
+	model.Model.Session = &stubSession{events: make(chan session.Event)}
+
+	updated, _ := model.Update(runtimeSwitchedMsg{
+		backend:       stubBackend{sess: &stubSession{events: make(chan session.Event)}},
+		session:       &stubSession{events: make(chan session.Event)},
+		storage:       &stubStorageSession{id: "session-1", branch: "main"},
+		printLines:    []string{"ion v0.0.0", "--- resumed ---"},
+		replayEntries: []session.Entry{{Role: session.Agent, Content: "restored answer"}},
+		status:        "ready",
+	})
+	model = updated.(Model)
+
+	if !model.App.PrintedTranscript {
+		t.Fatal("runtime replay did not mark transcript as printed")
+	}
+	if progress := ansi.Strip(model.progressLine()); strings.Contains(progress, "Ready") {
+		t.Fatalf("progress line = %q, want idle ready suppressed after replay", progress)
+	}
+}
+
+func TestRuntimeSwitchMarksPrintedTranscriptForHeaderOnlyReplay(t *testing.T) {
+	model := readyModel(t)
+	model.App.PrintedTranscript = false
+	model.Model.Session = &stubSession{events: make(chan session.Event)}
+
+	updated, _ := model.Update(runtimeSwitchedMsg{
+		backend:    stubBackend{sess: &stubSession{events: make(chan session.Event)}},
+		session:    &stubSession{events: make(chan session.Event)},
+		storage:    &stubStorageSession{id: "session-1", branch: "main"},
+		printLines: []string{"ion v0.0.0", "--- resumed ---"},
+		status:     "ready",
+	})
+	model = updated.(Model)
+
+	if !model.App.PrintedTranscript {
+		t.Fatal("runtime replay header did not mark transcript as printed")
+	}
+	if progress := ansi.Strip(model.progressLine()); strings.Contains(progress, "Ready") {
+		t.Fatalf("progress line = %q, want idle ready suppressed after replay header", progress)
+	}
+}
+
+func TestRuntimeSwitchMarksPrintedTranscriptForNotice(t *testing.T) {
+	model := readyModel(t)
+	model.App.PrintedTranscript = false
+	model.Model.Session = &stubSession{events: make(chan session.Event)}
+
+	updated, _ := model.Update(runtimeSwitchedMsg{
+		backend: stubBackend{sess: &stubSession{events: make(chan session.Event)}},
+		session: &stubSession{events: make(chan session.Event)},
+		storage: &stubStorageSession{id: "session-1", branch: "main"},
+		status:  "ready",
+		notice:  "Switched to fast",
+	})
+	model = updated.(Model)
+
+	if !model.App.PrintedTranscript {
+		t.Fatal("runtime switch notice did not mark transcript as printed")
+	}
+	if progress := ansi.Strip(model.progressLine()); strings.Contains(progress, "Ready") {
+		t.Fatalf("progress line = %q, want idle ready suppressed after notice", progress)
+	}
+}
+
 func TestResumeStoredSessionClosesInspectionSession(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
