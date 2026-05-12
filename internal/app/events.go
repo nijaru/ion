@@ -25,48 +25,8 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 	// Approval gate: y/n/a consumed before any other handling
 	if m.Approval.Pending != nil {
-		switch msg.String() {
-		case "esc":
-			m.clearPendingAction()
-			return m.cancelRunningTurn("Canceled by user")
-		case "y", "n":
-			approved := msg.String() == "y"
-			reqID := m.Approval.Pending.RequestID
-			desc := m.Approval.Pending.Description
-			m.Approval.Pending = nil
-			m.Progress.Mode = stateReady
-
-			label := ifthen(approved, "Approved", "Denied")
-			notice := session.Entry{Role: session.System, Content: label + ": " + desc}
-			if err := m.Model.Session.Approve(context.Background(), reqID, approved); err != nil {
-				return m, persistErrorCmd("send approval", err)
-			}
-			if err := m.persistApprovalNotice(notice); err != nil {
-				return m, tea.Sequence(
-					m.printEntries(notice),
-					persistErrorCmd("persist approval decision", err),
-				)
-			}
-			return m, m.printEntries(notice)
-		case "a":
-			reqID := m.Approval.Pending.RequestID
-			toolName := m.Approval.Pending.ToolName
-			desc := m.Approval.Pending.Description
-			m.Approval.Pending = nil
-			m.Progress.Mode = stateReady
-
-			m.Model.Session.AllowCategory(toolName)
-			notice := session.Entry{Role: session.System, Content: "Always: " + desc}
-			if err := m.Model.Session.Approve(context.Background(), reqID, true); err != nil {
-				return m, persistErrorCmd("send approval", err)
-			}
-			if err := m.persistApprovalNotice(notice); err != nil {
-				return m, tea.Sequence(
-					m.printEntries(notice),
-					persistErrorCmd("persist approval decision", err),
-				)
-			}
-			return m, m.printEntries(notice)
+		if next, cmd, ok := m.handleApprovalKey(msg); ok {
+			return next, cmd
 		}
 	}
 
@@ -216,6 +176,49 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.layout()
 	}
 	return m, cmd
+}
+
+func (m Model) handleApprovalKey(msg tea.KeyPressMsg) (Model, tea.Cmd, bool) {
+	switch msg.String() {
+	case "esc":
+		m.clearPendingAction()
+		next, cmd := m.cancelRunningTurn("Canceled by user")
+		return next, cmd, true
+	case "y", "n":
+		approved := msg.String() == "y"
+		next, cmd := m.resolvePendingApproval(approved, ifthen(approved, "Approved", "Denied"), false)
+		return next, cmd, true
+	case "a":
+		next, cmd := m.resolvePendingApproval(true, "Always", true)
+		return next, cmd, true
+	default:
+		return m, nil, false
+	}
+}
+
+func (m Model) resolvePendingApproval(
+	approved bool,
+	label string,
+	allowCategory bool,
+) (Model, tea.Cmd) {
+	req := *m.Approval.Pending
+	m.Approval.Pending = nil
+	m.Progress.Mode = stateReady
+
+	if allowCategory {
+		m.Model.Session.AllowCategory(req.ToolName)
+	}
+	notice := session.Entry{Role: session.System, Content: label + ": " + req.Description}
+	if err := m.Model.Session.Approve(context.Background(), req.RequestID, approved); err != nil {
+		return m, persistErrorCmd("send approval", err)
+	}
+	if err := m.persistApprovalNotice(notice); err != nil {
+		return m, tea.Sequence(
+			m.printEntries(notice),
+			persistErrorCmd("persist approval decision", err),
+		)
+	}
+	return m, m.printEntries(notice)
 }
 
 func (m Model) submitComposer() (Model, tea.Cmd) {
