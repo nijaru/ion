@@ -1,5 +1,19 @@
 package app
 
+import tea "charm.land/bubbletea/v2"
+
+func (m *Model) updateComposer(msg tea.Msg) tea.Cmd {
+	var cmd tea.Cmd
+	m.Input.Composer, cmd = m.Input.Composer.Update(msg)
+	m.relayoutComposer()
+	return cmd
+}
+
+func (m *Model) insertComposerText(value string) {
+	m.Input.Composer.InsertString(value)
+	m.relayoutComposer()
+}
+
 func (m *Model) clearPasteMarkers() {
 	m.PasteMarkers = make(map[string]pasteMarker)
 }

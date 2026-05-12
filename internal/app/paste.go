@@ -22,10 +22,7 @@ func (m Model) handlePaste(msg tea.PasteMsg) (Model, tea.Cmd) {
 
 	if lineCount < pasteMarkerMinLines && len(content) < pasteMarkerMinChars {
 		// Small paste — pass through to textarea directly.
-		var cmd tea.Cmd
-		m.Input.Composer, cmd = m.Input.Composer.Update(msg)
-		m.relayoutComposer()
-		return m, cmd
+		return m, m.updateComposer(msg)
 	}
 
 	// Large paste — create a marker.
@@ -41,8 +38,7 @@ func (m Model) handlePaste(msg tea.PasteMsg) (Model, tea.Cmd) {
 	if current != "" {
 		current += " "
 	}
-	m.Input.Composer.SetValue(current + placeholder)
-	m.relayoutComposer()
+	m.setComposerDraft(current + placeholder)
 	return m, nil
 }
 

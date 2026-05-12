@@ -433,8 +433,7 @@ func (m Model) commitPickerSelection() (Model, tea.Cmd) {
 			},
 		)
 	case pickerPurposeCommand:
-		m.Input.Composer.SetValue(selected.Value + " ")
-		m.relayoutComposer()
+		m.setComposerDraft(selected.Value + " ")
 		m.Picker.Overlay = nil
 		return m, nil
 	default:
