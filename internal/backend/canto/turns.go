@@ -54,35 +54,58 @@ func (b *Backend) SubmitTurn(ctx context.Context, input string) error {
 	b.mu.Unlock()
 
 	b.wg.Go(func() {
-		defer b.finishActiveTurn(turnID)
-		defer cancel()
-
-		shouldCompact, err := b.shouldProactivelyCompact(turnCtx)
-		if err != nil {
-			b.finishTurnWithError(turnID, err)
-			return
-		}
-		if shouldCompact {
-			b.events <- ionsession.StatusChanged{Base: ionsession.BaseNow(), Status: "Compacting context..."}
-			if compacted, cerr := b.Compact(turnCtx); cerr != nil {
-				b.finishTurnWithError(turnID, cerr)
-				return
-			} else if compacted {
-				b.events <- ionsession.StatusChanged{Base: ionsession.BaseNow(), Status: "Ready"}
-			}
-		}
-
-		runEvents, err := harnessSession.PromptStream(turnCtx, input)
-		if err != nil {
-			b.finishTurnWithError(turnID, err)
-			return
-		}
-		usage := &turnUsageTracker{}
-		for event := range runEvents {
-			b.translateRunEvent(turnCtx, event, turnID, usage)
-		}
+		b.runTurn(turnCtx, turnID, input, cancel, harnessSession)
 	})
 
+	return nil
+}
+
+type promptStreamer interface {
+	PromptStream(context.Context, string) (<-chan cantofw.RunEvent, error)
+}
+
+func (b *Backend) runTurn(
+	ctx context.Context,
+	turnID uint64,
+	input string,
+	cancel context.CancelFunc,
+	streamer promptStreamer,
+) {
+	defer b.finishActiveTurn(turnID)
+	defer cancel()
+
+	if err := b.compactBeforeTurn(ctx, turnID); err != nil {
+		b.finishTurnWithError(turnID, err)
+		return
+	}
+
+	runEvents, err := streamer.PromptStream(ctx, input)
+	if err != nil {
+		b.finishTurnWithError(turnID, err)
+		return
+	}
+	usage := &turnUsageTracker{}
+	for event := range runEvents {
+		b.translateRunEvent(ctx, event, turnID, usage)
+	}
+}
+
+func (b *Backend) compactBeforeTurn(ctx context.Context, turnID uint64) error {
+	shouldCompact, err := b.shouldProactivelyCompact(ctx)
+	if err != nil {
+		return err
+	}
+	if !shouldCompact || !b.acceptsTurnEvent(turnID) {
+		return nil
+	}
+	b.events <- ionsession.StatusChanged{Base: ionsession.BaseNow(), Status: "Compacting context..."}
+	compacted, err := b.Compact(ctx)
+	if err != nil {
+		return err
+	}
+	if compacted && b.acceptsTurnEvent(turnID) {
+		b.events <- ionsession.StatusChanged{Base: ionsession.BaseNow(), Status: "Ready"}
+	}
 	return nil
 }
 
