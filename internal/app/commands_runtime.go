@@ -197,6 +197,87 @@ func (m Model) resumeRuntimeCommand(
 	}
 }
 
+func (m Model) handleRuntimeSwitched(msg runtimeSwitchedMsg) (Model, tea.Cmd) {
+	if msg.switchID != 0 && msg.switchID != m.Model.RuntimeSwitchRequest {
+		closeSwitchedRuntime(msg.session, msg.storage)
+		return m, nil
+	}
+
+	m.applyRuntimeSwitched(msg)
+	return m, tea.Sequence(m.runtimeSwitchedCommands(msg)...)
+}
+
+func (m *Model) applyRuntimeSwitched(msg runtimeSwitchedMsg) {
+	m.Model.RuntimeSwitchRequest = 0
+	if msg.preset == "" {
+		m.App.ActivePreset = presetPrimary
+	} else {
+		m.App.ActivePreset = msg.preset
+	}
+	m.Model.Backend = msg.backend
+	m.Model.Session = msg.session
+	m.Model.Storage = msg.storage
+	m.Model.Config = msg.cfg
+	if msg.oldSession != nil {
+		_ = msg.oldSession.Close()
+	}
+	m.Model.EventGeneration++
+	m.App.Sandbox = backendSandboxSummary(msg.backend)
+	m.Picker.Overlay = nil
+	m.Picker.Session = nil
+	m.Progress.Status = msg.status
+	m.clearProgressError()
+	if msg.reasoning != "" {
+		m.Progress.ReasoningEffort = normalizeThinkingValue(msg.reasoning)
+	} else if msg.cfg != nil {
+		m.Progress.ReasoningEffort = normalizeThinkingValue(msg.cfg.ReasoningEffort)
+	}
+	if msg.storage != nil {
+		meta := msg.storage.Meta()
+		m.App.Branch = meta.Branch
+	}
+	m.clearActiveTurnState(true)
+	m.Progress.Mode = stateReady
+	m.Progress.LastTurnSummary = turnSummary{}
+	m.Input.CtrlCPending = false
+	m.Progress.TokensSent = 0
+	m.Progress.TokensReceived = 0
+	m.Progress.TotalCost = 0
+	if msg.storage != nil {
+		if input, output, cost, err := msg.storage.Usage(context.Background()); err == nil {
+			m.Progress.TokensSent = input
+			m.Progress.TokensReceived = output
+			m.Progress.TotalCost = cost
+		}
+	}
+	m.resetHistoryCursor()
+}
+
+func (m Model) runtimeSwitchedCommands(msg runtimeSwitchedMsg) []tea.Cmd {
+	cmds := make([]tea.Cmd, 0, 5)
+	if len(msg.printLines) > 0 {
+		cmds = append(cmds, printLinesCmd(msg.printLines...))
+	}
+	if len(msg.replayEntries) > 0 {
+		cmds = append(cmds, m.printEntries(msg.replayEntries...))
+	}
+	if strings.TrimSpace(msg.notice) != "" {
+		cmds = append(cmds, m.printEntries(session.Entry{Role: session.System, Content: msg.notice}))
+	}
+	if msg.showStatus && strings.TrimSpace(msg.status) != "" && !isConfigurationStatus(msg.status) {
+		cmds = append(cmds, m.printEntries(session.Entry{Role: session.System, Content: msg.status}))
+	}
+	return append(cmds, m.awaitSessionEvent())
+}
+
+func (m Model) handleRuntimeSwitchError(msg runtimeSwitchErrorMsg) (Model, tea.Cmd) {
+	if msg.switchID != 0 && msg.switchID != m.Model.RuntimeSwitchRequest {
+		return m, nil
+	}
+	m.Model.RuntimeSwitchRequest = 0
+	return m.handleLocalError(msg.err)
+}
+
 func closeSwitchedRuntime(sess session.AgentSession, storageSess storage.Session) {
 	if sess != nil {
 		_ = sess.Close()
