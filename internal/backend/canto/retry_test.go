@@ -111,7 +111,6 @@ func TestRetryRecoveryWaitsThroughToolLoop(t *testing.T) {
 	b.SetStore(store)
 	b.SetSession(storageSession)
 	b.SetConfig(&config.Config{Provider: "openai", Model: "model-a", ContextLimit: 100})
-	b.SetMode(ionsession.ModeYolo)
 	if err := b.Open(ctx); err != nil {
 		t.Fatalf("open backend: %v", err)
 	}

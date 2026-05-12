@@ -170,10 +170,10 @@ func (m Model) handleApprovalKey(msg tea.KeyPressMsg) (Model, tea.Cmd, bool) {
 		return next, cmd, true
 	case "y", "n":
 		approved := msg.String() == "y"
-		next, cmd := m.resolvePendingApproval(approved, ifthen(approved, "Approved", "Denied"), false)
+		next, cmd := m.resolvePendingApproval(approved, ifthen(approved, "Approved", "Denied"))
 		return next, cmd, true
 	case "a":
-		next, cmd := m.resolvePendingApproval(true, "Always", true)
+		next, cmd := m.resolvePendingApproval(true, "Approved")
 		return next, cmd, true
 	default:
 		return m, nil, false
@@ -183,15 +183,11 @@ func (m Model) handleApprovalKey(msg tea.KeyPressMsg) (Model, tea.Cmd, bool) {
 func (m Model) resolvePendingApproval(
 	approved bool,
 	label string,
-	allowCategory bool,
 ) (Model, tea.Cmd) {
 	req := *m.Approval.Pending
 	m.Approval.Pending = nil
 	m.Progress.Mode = stateReady
 
-	if allowCategory {
-		m.Model.Session.AllowCategory(req.ToolName)
-	}
 	notice := session.Entry{Role: session.System, Content: label + ": " + req.Description}
 	if err := m.Model.Session.Approve(context.Background(), req.RequestID, approved); err != nil {
 		return m, persistErrorCmd("send approval", err)

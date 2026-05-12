@@ -180,7 +180,6 @@ func TestBackendSteeringAppearsInNextProviderRequestAfterTool(t *testing.T) {
 		Model:    "model-a",
 		Endpoint: "http://localhost:8080/v1",
 	})
-	b.SetMode(ionsession.ModeYolo)
 	if err := b.Open(ctx); err != nil {
 		t.Fatalf("open backend: %v", err)
 	}

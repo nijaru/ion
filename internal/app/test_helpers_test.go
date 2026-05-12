@@ -101,16 +101,13 @@ func (b *compactBackend) Compact(ctx context.Context) (bool, error) {
 }
 
 type stubSession struct {
-	events      chan session.Event
-	submits     []string
-	cancels     int
-	submitErr   error
-	approveErr  error
-	approvals   []stubApproval
-	allowed     []string
-	mode        session.Mode
-	autoApprove bool
-	closed      bool
+	events     chan session.Event
+	submits    []string
+	cancels    int
+	submitErr  error
+	approveErr error
+	approvals  []stubApproval
+	closed     bool
 }
 
 type steeringStubSession struct {
@@ -175,12 +172,6 @@ func (s *stubSession) Approve(ctx context.Context, id string, ok bool) error {
 	return s.approveErr
 }
 
-func (s *stubSession) SetMode(mode session.Mode) { s.mode = mode }
-
-func (s *stubSession) SetAutoApprove(enabled bool) { s.autoApprove = enabled }
-func (s *stubSession) AllowCategory(category string) {
-	s.allowed = append(s.allowed, category)
-}
 func (s *stubSession) ID() string              { return "stub" }
 func (s *stubSession) Meta() map[string]string { return nil }
 

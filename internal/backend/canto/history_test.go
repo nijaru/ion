@@ -141,7 +141,8 @@ func TestResumedToolSessionSendsValidFollowUpHistory(t *testing.T) {
 	call := llm.Call{ID: "tool-call-1", Type: "function"}
 	call.Function.Name = "bash"
 	call.Function.Arguments = `{"command":"echo ion-smoke"}`
-	provider := ctesting.NewFauxProvider("local-api",
+	provider := ctesting.NewFauxProvider(
+		"local-api",
 		ctesting.Step{Calls: []llm.Call{call}},
 		ctesting.Step{Content: "done"},
 		ctesting.Step{Content: "continued"},
@@ -172,7 +173,6 @@ func TestResumedToolSessionSendsValidFollowUpHistory(t *testing.T) {
 			Endpoint: "http://localhost:8080/v1",
 		},
 	)
-	first.SetMode(ionsession.ModeYolo)
 	if err := first.Open(ctx); err != nil {
 		t.Fatalf("open first backend: %v", err)
 	}
@@ -201,7 +201,6 @@ func TestResumedToolSessionSendsValidFollowUpHistory(t *testing.T) {
 			Endpoint: "http://localhost:8080/v1",
 		},
 	)
-	second.SetMode(ionsession.ModeYolo)
 	if err := second.Resume(ctx, storageSession.ID()); err != nil {
 		t.Fatalf("resume backend: %v", err)
 	}
@@ -295,7 +294,8 @@ func TestProviderHistoryExcludesIonDisplayOnlyEvents(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("append display status: %v", err)
 	}
-	appendCantoHistory(t, ctx, store, storageSession.ID(),
+	appendCantoHistory(
+		t, ctx, store, storageSession.ID(),
 		llm.Message{Role: llm.RoleUser, Content: "prior user"},
 		llm.Message{Role: llm.RoleAssistant, Content: "prior assistant"},
 	)

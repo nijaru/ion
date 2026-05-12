@@ -22,15 +22,6 @@ type AgentSession interface {
 	// Approve sends an approval decision back to the agent for a pending request.
 	Approve(ctx context.Context, requestID string, approved bool) error
 
-	// SetMode updates the session mode (READ/EDIT/AUTO).
-	SetMode(mode Mode)
-
-	// SetAutoApprove toggles auto-approval for all tool categories.
-	SetAutoApprove(enabled bool)
-
-	// AllowCategory sets the policy for the category of the given tool to PolicyAllow.
-	AllowCategory(toolName string)
-
 	// Close terminates the session and cleans up resources.
 	Close() error
 	// Events returns a read-only channel of typed events emitted by the session.

@@ -18,7 +18,7 @@ func TestLoadReadsConfigFile(t *testing.T) {
 
 	path := filepath.Join(configDir, "config.toml")
 	if err := os.WriteFile(path, []byte(
-		"provider = \"openai\"\nmodel = \"gpt-4o\"\nreasoning_effort = \"med\"\nfast_model = \"gpt-4.1-mini\"\nfast_reasoning_effort = \"low\"\nsummary_model = \"gpt-4o-mini\"\nsummary_reasoning_effort = \"low\"\nendpoint = \"https://example.com/v1\"\nauth_env_var = \"OPENAI_PROXY_KEY\"\ncontext_limit = 128000\nmax_session_cost = 1.25\nmax_turn_cost = 0.10\nretry_until_cancelled = false\nworkspace_trust = \"off\"\ntelemetry_otlp_endpoint = \" localhost:4317 \"\ntelemetry_otlp_insecure = true\npolicy_path = \" /tmp/ion-policy.yaml \"\nsubagents_path = \" /tmp/ion-agents \"\nsession_retention_days = 14\ntool_env = \"inherit_without_provider_keys\"\nskill_tools = \"readonly\"\nsubagent_tools = \"enabled\"\n[extra_headers]\n\" X-Test \" = \" value \"\n\"Drop\" = \" \"\n[telemetry_otlp_headers]\n\"x-api-key\" = \" secret \"\n",
+		"provider = \"openai\"\nmodel = \"gpt-4o\"\nreasoning_effort = \"med\"\nfast_model = \"gpt-4.1-mini\"\nfast_reasoning_effort = \"low\"\nsummary_model = \"gpt-4o-mini\"\nsummary_reasoning_effort = \"low\"\nendpoint = \"https://example.com/v1\"\nauth_env_var = \"OPENAI_PROXY_KEY\"\ncontext_limit = 128000\nmax_session_cost = 1.25\nmax_turn_cost = 0.10\nretry_until_cancelled = false\ntelemetry_otlp_endpoint = \" localhost:4317 \"\ntelemetry_otlp_insecure = true\nsubagents_path = \" /tmp/ion-agents \"\nsession_retention_days = 14\ntool_env = \"inherit_without_provider_keys\"\nskill_tools = \"readonly\"\nsubagent_tools = \"enabled\"\n[extra_headers]\n\" X-Test \" = \" value \"\n\"Drop\" = \" \"\n[telemetry_otlp_headers]\n\"x-api-key\" = \" secret \"\n",
 	), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -73,9 +73,6 @@ func TestLoadReadsConfigFile(t *testing.T) {
 	if cfg.RetryUntilCancelled == nil || *cfg.RetryUntilCancelled {
 		t.Fatal("retry_until_cancelled = true or nil, want false")
 	}
-	if cfg.WorkspaceTrust != "off" {
-		t.Fatalf("workspace_trust = %q, want off", cfg.WorkspaceTrust)
-	}
 	if cfg.SessionRetentionDays != 14 {
 		t.Fatalf("session_retention_days = %d, want %d", cfg.SessionRetentionDays, 14)
 	}
@@ -87,9 +84,6 @@ func TestLoadReadsConfigFile(t *testing.T) {
 	}
 	if got := cfg.TelemetryOTLPHeaders["x-api-key"]; got != "secret" {
 		t.Fatalf("telemetry header = %q, want secret", got)
-	}
-	if cfg.PolicyPath != "/tmp/ion-policy.yaml" {
-		t.Fatalf("policy_path = %q, want /tmp/ion-policy.yaml", cfg.PolicyPath)
 	}
 	if cfg.SubagentsPath != "/tmp/ion-agents" {
 		t.Fatalf("subagents_path = %q, want /tmp/ion-agents", cfg.SubagentsPath)
@@ -135,9 +129,6 @@ func TestLoadUsesDefaultsWhenConfigMissing(t *testing.T) {
 	}
 	if !cfg.RetryUntilCancelledEnabled() {
 		t.Fatal("retry_until_cancelled = false, want true")
-	}
-	if cfg.WorkspaceTrust != "prompt" {
-		t.Fatalf("workspace_trust = %q, want prompt", cfg.WorkspaceTrust)
 	}
 	if cfg.ToolEnvMode() != "inherit" {
 		t.Fatalf("tool_env = %q, want inherit", cfg.ToolEnvMode())
@@ -303,7 +294,7 @@ func TestLoadExpandsUserPaths(t *testing.T) {
 		t.Fatalf("mkdir config dir: %v", err)
 	}
 	path := filepath.Join(configDir, "config.toml")
-	if err := os.WriteFile(path, []byte("policy_path = \"~/.ion/work-policy.yaml\"\nsubagents_path = \"~/.ion/agents\""), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("subagents_path = \"~/.ion/agents\""), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
@@ -311,13 +302,9 @@ func TestLoadExpandsUserPaths(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
-	want := filepath.Join(home, ".ion", "work-policy.yaml")
-	if cfg.PolicyPath != want {
-		t.Fatalf("policy_path = %q, want %q", cfg.PolicyPath, want)
-	}
-	wantAgents := filepath.Join(home, ".ion", "agents")
-	if cfg.SubagentsPath != wantAgents {
-		t.Fatalf("subagents_path = %q, want %q", cfg.SubagentsPath, wantAgents)
+	want := filepath.Join(home, ".ion", "agents")
+	if cfg.SubagentsPath != want {
+		t.Fatalf("subagents_path = %q, want %q", cfg.SubagentsPath, want)
 	}
 }
 
@@ -341,11 +328,9 @@ func TestSaveWritesStatePath(t *testing.T) {
 		MaxSessionCost:         1.25,
 		MaxTurnCost:            0.10,
 		RetryUntilCancelled:    &retryUntilCancelled,
-		WorkspaceTrust:         "strict",
 		TelemetryOTLPEndpoint:  "localhost:4317",
 		TelemetryOTLPInsecure:  true,
 		TelemetryOTLPHeaders:   map[string]string{"x-api-key": "secret"},
-		PolicyPath:             "/tmp/ion-policy.yaml",
 		SubagentsPath:          "/tmp/ion-agents",
 		SessionRetentionDays:   14,
 		ToolEnv:                "inherit_without_provider_keys",
@@ -380,10 +365,8 @@ func TestSaveWritesStatePath(t *testing.T) {
 		`max_session_cost = 1.25`,
 		`max_turn_cost = 0.1`,
 		`retry_until_cancelled = false`,
-		`workspace_trust = 'strict'`,
 		`telemetry_otlp_endpoint = 'localhost:4317'`,
 		`telemetry_otlp_insecure = true`,
-		`policy_path = '/tmp/ion-policy.yaml'`,
 		`subagents_path = '/tmp/ion-agents'`,
 		`subagent_tools = 'on'`,
 		`[telemetry_otlp_headers]`,
@@ -409,8 +392,6 @@ func TestSaveStateWritesOnlyMutableFields(t *testing.T) {
 		Model:                "qwen3.6:27b",
 		ReasoningEffort:      "auto",
 		Endpoint:             "http://fedora:8080/v1",
-		PolicyPath:           "/tmp/policy.yaml",
-		WorkspaceTrust:       "strict",
 		ToolVerbosity:        "collapsed",
 		MaxSessionCost:       1.25,
 		SessionRetentionDays: 14,
@@ -433,8 +414,6 @@ func TestSaveStateWritesOnlyMutableFields(t *testing.T) {
 	}
 	for _, notWant := range []string{
 		`endpoint`,
-		`policy_path`,
-		`workspace_trust`,
 		`tool_verbosity`,
 		`max_session_cost`,
 		`session_retention_days`,

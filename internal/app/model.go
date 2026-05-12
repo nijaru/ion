@@ -188,8 +188,6 @@ type AppState struct {
 	PrintedTranscript bool
 	StartupLines      []string
 	StartupEntries    []session.Entry
-	TrustedWorkspace  bool
-	WorkspaceTrust    string
 }
 
 // ModelState holds the core backend, session, and storage handles.
@@ -201,7 +199,6 @@ type ModelState struct {
 	Switcher             runtimeSwitcher
 	Config               *config.Config
 	Escalation           *workspace.EscalationConfig
-	TrustStore           *ionworkspace.TrustStore
 	Checkpoints          *ionworkspace.CheckpointStore
 	EventGeneration      uint64
 	RuntimeSwitchRequest uint64
@@ -289,7 +286,6 @@ type Model struct {
 	Picker   PickerState
 	Progress ProgressState
 	Input    InputState
-	Mode     session.Mode
 
 	// PasteMarkers stores original content for collapsed large pastes.
 	// Key is the placeholder text (e.g. "[paste #1 +123 lines]").
@@ -360,7 +356,6 @@ func New(
 			Spinner:    spt,
 			HistoryIdx: -1,
 		},
-		Mode:         initialMode(boot),
 		PasteMarkers: make(map[string]pasteMarker),
 		st:           st,
 	}
@@ -434,23 +429,8 @@ func (m Model) WithSessionPicker() Model {
 	return m
 }
 
-func (m Model) WithMode(mode session.Mode) Model {
-	m.Mode = mode
-	configureModelSessionMode(m.Model.Session, mode)
-	return m
-}
-
 func (m Model) WithEscalation(cfg *workspace.EscalationConfig) Model {
 	m.Model.Escalation = cfg
-	return m
-}
-
-func (m Model) WithTrust(store *ionworkspace.TrustStore, trusted bool, policy ...string) Model {
-	m.Model.TrustStore = store
-	m.App.TrustedWorkspace = trusted
-	if len(policy) > 0 {
-		m.App.WorkspaceTrust = config.ResolveWorkspaceTrust(policy[0])
-	}
 	return m
 }
 
@@ -711,7 +691,6 @@ func (m Model) runtimeHeaderLine(_ backend.Backend) string {
 }
 
 func (m Model) Init() tea.Cmd {
-	configureModelSessionMode(m.Model.Session, m.Mode)
 	return tea.Batch(
 		textarea.Blink,
 		m.Input.Spinner.Tick,

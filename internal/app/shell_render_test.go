@@ -408,7 +408,6 @@ func TestStatusLineFitsWidthAfterResize(t *testing.T) {
 func TestStatusLineShowsWorkspacePathWithoutMode(t *testing.T) {
 	model := readyModel(t)
 	model.App.Workdir = "/tmp/sy"
-	model.Mode = session.ModeEdit
 
 	line := ansi.Strip(model.statusLine())
 	if strings.Contains(line, "[EDIT]") {

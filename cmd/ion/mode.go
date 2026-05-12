@@ -1,54 +1,19 @@
 package main
 
 import (
-	"fmt"
-	"strings"
-
-	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/session"
 )
 
-func modeFromName(value string) (session.Mode, error) {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "read", "r":
-		return session.ModeRead, nil
-	case "", "edit", "e", "write", "w":
-		return session.ModeEdit, nil
-	case "auto", "a", "yolo", "y":
-		return session.ModeYolo, nil
-	default:
-		return session.ModeEdit, fmt.Errorf("invalid mode %q (want read, edit, or auto)", value)
-	}
-}
-
-func startupMode(cfg *config.Config, modeFlag string, yoloFlag bool) (session.Mode, error) {
-	_ = cfg
-	mode := session.ModeYolo
-	var err error
-
-	if strings.TrimSpace(modeFlag) != "" {
-		mode, err = modeFromName(modeFlag)
-		if err != nil {
-			return session.ModeEdit, err
-		}
-	}
-	if yoloFlag {
-		if strings.TrimSpace(modeFlag) != "" && mode != session.ModeYolo {
-			return session.ModeEdit, fmt.Errorf(
-				"--yolo conflicts with --mode %s",
-				strings.TrimSpace(modeFlag),
-			)
-		}
-		mode = session.ModeYolo
-	}
-
-	return mode, nil
+type modeConfigurableSession interface {
+	SetMode(session.Mode)
+	SetAutoApprove(bool)
 }
 
 func configureSessionMode(agent session.AgentSession, mode session.Mode) {
-	if agent == nil {
+	configurable, ok := agent.(modeConfigurableSession)
+	if !ok {
 		return
 	}
-	agent.SetMode(mode)
-	agent.SetAutoApprove(mode == session.ModeYolo)
+	configurable.SetMode(mode)
+	configurable.SetAutoApprove(mode == session.ModeYolo)
 }

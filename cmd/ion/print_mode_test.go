@@ -13,13 +13,11 @@ import (
 )
 
 type printSession struct {
-	events      chan session.Event
-	mode        session.Mode
-	autoApprove bool
-	approved    bool
-	cancelled   int
-	closed      int
-	submitErr   error
+	events    chan session.Event
+	approved  bool
+	cancelled int
+	closed    int
+	submitErr error
 }
 
 func (s *printSession) Open(ctx context.Context) error              { return nil }
@@ -40,9 +38,7 @@ func (s *printSession) Approve(ctx context.Context, requestID string, approved b
 	s.approved = approved
 	return nil
 }
-func (s *printSession) SetMode(mode session.Mode)     { s.mode = mode }
-func (s *printSession) SetAutoApprove(enabled bool)   { s.autoApprove = enabled }
-func (s *printSession) AllowCategory(toolName string) {}
+
 func (s *printSession) Close() error {
 	s.closed++
 	return nil
@@ -50,26 +46,6 @@ func (s *printSession) Close() error {
 func (s *printSession) Events() <-chan session.Event { return s.events }
 func (s *printSession) ID() string                   { return "print-test" }
 func (s *printSession) Meta() map[string]string      { return nil }
-
-func TestConfigureSessionMode(t *testing.T) {
-	sess := &printSession{}
-
-	configureSessionMode(sess, session.ModeRead)
-	if sess.mode != session.ModeRead {
-		t.Fatalf("mode = %v, want read", sess.mode)
-	}
-	if sess.autoApprove {
-		t.Fatal("read mode enabled auto approval")
-	}
-
-	configureSessionMode(sess, session.ModeYolo)
-	if sess.mode != session.ModeYolo {
-		t.Fatalf("mode = %v, want auto", sess.mode)
-	}
-	if !sess.autoApprove {
-		t.Fatal("auto mode did not enable auto approval")
-	}
-}
 
 func TestResolvePrintFlagsSupportsShortPrintWithPositionalPrompt(t *testing.T) {
 	requested, prompt, output, err := resolvePrintFlags(

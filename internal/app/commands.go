@@ -154,30 +154,6 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 	case "/settings":
 		return m.handleSettingsCommand(fields)
 
-	case "/read":
-		return m.setModeCommand(session.ModeRead)
-
-	case "/edit":
-		return m.setModeCommand(session.ModeEdit)
-
-	case "/auto", "/yolo":
-		return m.setModeCommand(session.ModeYolo)
-
-	case "/mode":
-		return m.setModeCommand(session.ModeYolo)
-
-	case "/trust":
-		if len(fields) > 1 && fields[1] != "status" {
-			return m, cmdError("usage: /trust [status]")
-		}
-		m.App.TrustedWorkspace = true
-		return m, m.printEntries(
-			session.Entry{
-				Role:    session.System,
-				Content: "Workspace trust is disabled; workspaces are trusted by default.",
-			},
-		)
-
 	case "/tools":
 		if len(fields) != 1 {
 			return m, cmdError("usage: /tools")
@@ -416,33 +392,9 @@ func (m Model) commandRequiresIdle(command slashCommandInfo, fields []string) bo
 	}
 }
 
-func (m Model) setModeCommand(mode session.Mode) (Model, tea.Cmd) {
-	_ = mode
-	m.Mode = session.ModeYolo
-	m.Model.Session.SetMode(m.Mode)
-	m.Model.Session.SetAutoApprove(true)
-	return m, m.printEntries(session.Entry{
-		Role:    session.System,
-		Content: "Modes are disabled during core stabilization; tools are trusted by default.",
-	})
-}
-
 // cmdError returns a Cmd that emits a local UI error with the given message.
 func cmdError(msg string) tea.Cmd {
 	return func() tea.Msg {
 		return localErrorMsg{err: fmt.Errorf("%s", msg)}
-	}
-}
-
-func modeDisplayName(mode session.Mode) string {
-	switch mode {
-	case session.ModeRead:
-		return "READ"
-	case session.ModeEdit:
-		return "EDIT"
-	case session.ModeYolo:
-		return "AUTO"
-	default:
-		return "EDIT"
 	}
 }

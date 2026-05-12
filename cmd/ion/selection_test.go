@@ -426,7 +426,15 @@ func TestStartupSessionIDPropagatesContinueLookupError(t *testing.T) {
 func TestStartupSessionIDPrefersExplicitResume(t *testing.T) {
 	store := &metadataStore{sessions: []storage.SessionInfo{{ID: "recent", LastPreview: "hello"}}}
 
-	id, err := startupSessionID(context.Background(), store, "/tmp/test", "session", "explicit", "", true)
+	id, err := startupSessionID(
+		context.Background(),
+		store,
+		"/tmp/test",
+		"session",
+		"explicit",
+		"",
+		true,
+	)
 	if err != nil {
 		t.Fatalf("startupSessionID session returned error: %v", err)
 	}
@@ -716,41 +724,6 @@ func TestOpenRuntimeDefersACPProviders(t *testing.T) {
 	}
 	if sess != nil {
 		t.Fatalf("storage session = %#v, want nil", sess)
-	}
-}
-
-func TestOpenRuntimeIgnoresExternalPolicyConfigInNativeBaseline(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-
-	policyPath := t.TempDir() + "/policy.yaml"
-	if err := os.WriteFile(policyPath, []byte("rules:\n  - {}\n"), 0o600); err != nil {
-		t.Fatalf("write policy: %v", err)
-	}
-
-	dataDir, err := config.DefaultDataDir()
-	if err != nil {
-		t.Fatalf("default data dir: %v", err)
-	}
-
-	store, err := storage.NewCantoStore(dataDir)
-	if err != nil {
-		t.Fatalf("new store: %v", err)
-	}
-	defer store.Close()
-
-	cfg := &config.Config{
-		Provider:   "local-api",
-		Model:      "test-model",
-		Endpoint:   "https://example.com/v1",
-		PolicyPath: policyPath,
-	}
-	b, sess, err := openRuntime(context.Background(), store, "/tmp/test", "main", cfg, "", "", true)
-	if err != nil {
-		t.Fatalf("openRuntime returned error: %v", err)
-	}
-	defer closeRuntimeHandles(b.Session(), sess, nil)
-	if b == nil || sess == nil {
-		t.Fatalf("runtime = (%#v, %#v), want configured backend and lazy session", b, sess)
 	}
 }
 

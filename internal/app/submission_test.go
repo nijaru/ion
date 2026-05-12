@@ -581,21 +581,18 @@ func TestCtrlGRecallsQueuedTurnsIntoComposer(t *testing.T) {
 	}
 }
 
-func TestModeSlashCommandRunsDuringTurn(t *testing.T) {
-	model := readyModel(t).WithTrust(nil, true, "prompt")
+func TestRetiredModeSlashCommandErrorsDuringTurn(t *testing.T) {
+	model := readyModel(t)
 	model.InFlight.Thinking = true
 	model.Input.Composer.SetValue("/mode read")
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = updated.(Model)
-	if model.Mode != session.ModeYolo {
-		t.Fatalf("mode = %v, want trusted auto", model.Mode)
-	}
 	if len(model.InFlight.QueuedTurns) != 0 {
 		t.Fatalf("queued turns = %v, want none for host command", model.InFlight.QueuedTurns)
 	}
 	if cmd == nil {
-		t.Fatal("expected mode command notice")
+		t.Fatal("expected retired mode command error")
 	}
 }
 

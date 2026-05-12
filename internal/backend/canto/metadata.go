@@ -28,10 +28,6 @@ func (b *Backend) SetConfig(cfg *config.Config) {
 	}
 }
 
-func (b *Backend) SetPolicyConfig(cfg *backend.PolicyConfig) {
-	b.policy.ApplyConfig(cfg)
-}
-
 func (b *Backend) Provider() string {
 	if b.cfg != nil && b.cfg.Provider != "" {
 		return b.cfg.Provider
@@ -66,7 +62,7 @@ func (b *Backend) ToolSurface() backend.ToolSurface {
 	if b.tools == nil {
 		return backend.ToolSurface{}
 	}
-	names := b.policy.VisibleToolNames(b.tools.Names())
+	names := b.tools.Names()
 	threshold := prompt.DefaultLazyThreshold
 	environment := ""
 	if slices.Contains(names, "bash") {

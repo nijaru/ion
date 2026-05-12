@@ -23,7 +23,6 @@ type Config struct {
 	FastReasoningEffort    string            `toml:"fast_reasoning_effort,omitempty"`
 	SummaryModel           string            `toml:"summary_model,omitempty"`
 	SummaryReasoningEffort string            `toml:"summary_reasoning_effort,omitempty"`
-	DefaultMode            string            `toml:"default_mode,omitempty"`
 	Endpoint               string            `toml:"endpoint,omitempty"`
 	AuthEnvVar             string            `toml:"auth_env_var,omitempty"`
 	ExtraHeaders           map[string]string `toml:"extra_headers,omitempty"`
@@ -31,11 +30,9 @@ type Config struct {
 	MaxSessionCost         float64           `toml:"max_session_cost,omitempty"`
 	MaxTurnCost            float64           `toml:"max_turn_cost,omitempty"`
 	RetryUntilCancelled    *bool             `toml:"retry_until_cancelled,omitempty"`
-	WorkspaceTrust         string            `toml:"workspace_trust,omitempty"`
 	TelemetryOTLPEndpoint  string            `toml:"telemetry_otlp_endpoint,omitempty"`
 	TelemetryOTLPInsecure  bool              `toml:"telemetry_otlp_insecure,omitempty"`
 	TelemetryOTLPHeaders   map[string]string `toml:"telemetry_otlp_headers,omitempty"`
-	PolicyPath             string            `toml:"policy_path,omitempty"`
 	SubagentsPath          string            `toml:"subagents_path,omitempty"`
 	SessionRetentionDays   int               `toml:"session_retention_days,omitempty"`
 	ToolVerbosity          string            `toml:"tool_verbosity,omitempty"`
@@ -150,9 +147,7 @@ func normalizeConfig(cfg *Config) {
 	cfg.ExtraHeaders = normalizeStringMap(cfg.ExtraHeaders)
 	cfg.TelemetryOTLPEndpoint = strings.TrimSpace(cfg.TelemetryOTLPEndpoint)
 	cfg.TelemetryOTLPHeaders = normalizeStringMap(cfg.TelemetryOTLPHeaders)
-	cfg.PolicyPath = expandUserPath(strings.TrimSpace(cfg.PolicyPath))
 	cfg.SubagentsPath = expandUserPath(strings.TrimSpace(cfg.SubagentsPath))
-	cfg.WorkspaceTrust = ResolveWorkspaceTrust(cfg.WorkspaceTrust)
 	cfg.ToolVerbosity = normalizeVerbosity(cfg.ToolVerbosity)
 	cfg.ReadOutput = normalizeReadOutput(cfg.ReadOutput)
 	cfg.WriteOutput = normalizeWriteOutput(cfg.WriteOutput)
@@ -275,12 +270,7 @@ func Save(cfg *Config) error {
 	out.ExtraHeaders = normalizeStringMap(out.ExtraHeaders)
 	out.TelemetryOTLPEndpoint = strings.TrimSpace(out.TelemetryOTLPEndpoint)
 	out.TelemetryOTLPHeaders = normalizeStringMap(out.TelemetryOTLPHeaders)
-	out.PolicyPath = expandUserPath(strings.TrimSpace(out.PolicyPath))
 	out.SubagentsPath = expandUserPath(strings.TrimSpace(out.SubagentsPath))
-	out.WorkspaceTrust = ResolveWorkspaceTrust(out.WorkspaceTrust)
-	if out.WorkspaceTrust == "prompt" {
-		out.WorkspaceTrust = ""
-	}
 	if out.ContextLimit < 0 {
 		out.ContextLimit = 0
 	}
@@ -444,14 +434,6 @@ func DefaultDataDir() (string, error) {
 
 func DefaultModelCacheTTLSeconds() int {
 	return defaultModelCacheTTLSeconds
-}
-
-func DefaultPolicyPath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".ion", "policy.yaml"), nil
 }
 
 func DefaultSubagentsDir() (string, error) {
@@ -697,28 +679,4 @@ func normalizeStringMap(values map[string]string) map[string]string {
 		return nil
 	}
 	return normalized
-}
-
-func ResolveDefaultMode(value string) string {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "read", "r":
-		return "read"
-	case "edit", "e", "write", "w":
-		return "edit"
-	case "auto", "a", "yolo", "y":
-		return "auto"
-	default:
-		return "edit"
-	}
-}
-
-func ResolveWorkspaceTrust(value string) string {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "off", "false", "disabled":
-		return "off"
-	case "strict":
-		return "strict"
-	default:
-		return "prompt"
-	}
 }
