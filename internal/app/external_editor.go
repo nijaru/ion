@@ -56,11 +56,9 @@ func (m Model) handleExternalEditorFinished(msg externalEditorFinishedMsg) (Mode
 			Content: "Editor failed: " + msg.err.Error(),
 		})
 	}
-	m.Input.Composer.SetValue(msg.content)
-	m.Input.HistoryIdx = -1
-	m.Input.HistoryDraft = ""
-	m.PasteMarkers = make(map[string]pasteMarker)
-	m.relayoutComposer()
+	m.setComposerDraft(msg.content)
+	m.resetHistoryCursor()
+	m.clearPasteMarkers()
 	return m, nil
 }
 
