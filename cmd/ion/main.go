@@ -239,9 +239,12 @@ func main() {
 		return
 	}
 
-	startupLines := startupBannerLines(version, b.Provider(), b.Model(), sessionID != "")
+	startupLines := startupBannerLines(version)
 	if toolLine := startupToolLine(b); toolLine != "" {
 		startupLines = append(startupLines, toolLine)
+	}
+	if keyboardLine := startupKeyboardLine(); keyboardLine != "" {
+		startupLines = append(startupLines, keyboardLine)
 	}
 	var startupEntries []session.Entry
 	if sess != nil {

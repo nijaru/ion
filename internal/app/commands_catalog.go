@@ -25,9 +25,9 @@ func helpText() string {
 		"  Up / Down        command history",
 		"  Ctrl+P / Ctrl+N  command history",
 		"  Enter            send message",
+		"  Ctrl+J           insert newline",
 		"  Shift+Enter      insert newline",
 		"  Alt+Enter        insert newline",
-		"  Ctrl+J           insert newline",
 		"  Ctrl+C           clear composer, or quit on double-tap when empty",
 		"  Ctrl+D           quit on double-tap when empty",
 	)

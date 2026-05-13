@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -14,7 +16,7 @@ import (
 	"github.com/nijaru/ion/internal/backend"
 )
 
-func startupBannerLines(version, provider, model string, resumed bool) []string {
+func startupBannerLines(version string) []string {
 	version = strings.TrimSpace(version)
 
 	if version == "" {
@@ -41,6 +43,44 @@ func startupToolLine(b backend.Backend) string {
 		parts = append(parts, "Sandbox "+sandbox)
 	}
 	return strings.Join(parts, " • ")
+}
+
+func startupKeyboardLine() string {
+	if strings.TrimSpace(os.Getenv("TMUX")) == "" {
+		return ""
+	}
+	return tmuxKeyboardLine(showTmuxOption)
+}
+
+func tmuxKeyboardLine(show func(string) (string, error)) string {
+	extendedKeys, err := show("extended-keys")
+	if err != nil {
+		return ""
+	}
+	switch strings.TrimSpace(extendedKeys) {
+	case "on", "always":
+	default:
+		return "tmux extended-keys is off; Shift+Enter may submit. Use Ctrl+J for newline or enable tmux extended-keys."
+	}
+
+	extendedKeysFormat, err := show("extended-keys-format")
+	if err != nil {
+		return ""
+	}
+	if strings.TrimSpace(extendedKeysFormat) == "xterm" {
+		return "tmux extended-keys-format is xterm; Shift+Enter may be unreliable. Use Ctrl+J for newline or set extended-keys-format csi-u."
+	}
+	return ""
+}
+
+func showTmuxOption(option string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "tmux", "show", "-gv", option).Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 func currentBranch() string {
@@ -127,11 +167,8 @@ func styleStartupLine(line string) string {
 	if trimmed == "--- resumed ---" {
 		return startupMetaStyle().Render(line)
 	}
-	if strings.HasPrefix(trimmed, "Workspace: not trusted.") {
+	if strings.HasPrefix(trimmed, "tmux ") {
 		return startupWarnStyle().Render(line)
-	}
-	if strings.HasPrefix(trimmed, "Workspace: trusted.") {
-		return startupOKStyle().Render(line)
 	}
 	parts := strings.Split(line, " • ")
 	if len(parts) == 0 {
@@ -166,8 +203,4 @@ func startupWorkspaceStyle() lipgloss.Style {
 
 func startupWarnStyle() lipgloss.Style {
 	return lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
-}
-
-func startupOKStyle() lipgloss.Style {
-	return lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
 }
