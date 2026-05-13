@@ -244,6 +244,24 @@ func TestCtrlDDoubleTapQuitsOnlyWhenIdleAndEmpty(t *testing.T) {
 	}
 }
 
+func TestCtrlDWithDraftEditsComposer(t *testing.T) {
+	model := readyModel(t)
+	model.Input.Composer.SetValue("abc")
+	model.Input.Composer.CursorStart()
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl})
+	model = updated.(Model)
+	if cmd != nil {
+		t.Fatalf("ctrl+d with draft returned cmd %T, want composer edit only", cmd)
+	}
+	if got := model.Input.Composer.Value(); got != "bc" {
+		t.Fatalf("composer = %q, want delete-forward result", got)
+	}
+	if model.Input.CtrlCPending {
+		t.Fatal("ctrl+d with draft should not arm quit")
+	}
+}
+
 func TestCtrlDIgnoredWhileRunning(t *testing.T) {
 	sess := &stubSession{events: make(chan session.Event)}
 	model := readyModel(t)

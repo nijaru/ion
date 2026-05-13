@@ -624,6 +624,7 @@ func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 		"Up / Down",
 		"Enter",
 		"Ctrl+C           clear composer, cancel running turn",
+		"Ctrl+D           delete forward",
 	)
 	for _, want := range wantCommands {
 		if !strings.Contains(notice, want) {
