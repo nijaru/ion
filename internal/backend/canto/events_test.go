@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"strings"
 	"testing"
 
 	cantofw "github.com/nijaru/canto"
@@ -134,7 +135,7 @@ func TestTranslateEventsSuppressesCanceledTerminalError(t *testing.T) {
 	}
 }
 
-func TestTranslateEventsSuppressesDeadlineTerminalError(t *testing.T) {
+func TestTranslateEventsReportsDeadlineTerminalError(t *testing.T) {
 	b := New()
 	events := make(chan csession.Event, 1)
 	events <- csession.NewTurnCompletedEvent("session-id", csession.TurnCompletedData{
@@ -145,21 +146,21 @@ func TestTranslateEventsSuppressesDeadlineTerminalError(t *testing.T) {
 	translateSessionEvents(t.Context(), b, events, 0)
 
 	ev1 := receiveEvent(t, b.Events())
-	if _, ok := ev1.(ionsession.TurnFinished); !ok {
-		t.Fatalf("first event = %T, want TurnFinished", ev1)
+	errEvent, ok := ev1.(ionsession.Error)
+	if !ok {
+		t.Fatalf("first event = %T, want Error", ev1)
+	}
+	if !strings.Contains(errEvent.Err.Error(), context.DeadlineExceeded.Error()) {
+		t.Fatalf("error = %v, want deadline exceeded", errEvent.Err)
 	}
 
 	ev2 := receiveEvent(t, b.Events())
-	status, ok := ev2.(ionsession.StatusChanged)
-	if !ok {
-		t.Fatalf("second event = %T, want StatusChanged", ev2)
-	}
-	if status.Status != "Ready" {
-		t.Fatalf("status = %q, want Ready", status.Status)
+	if _, ok := ev2.(ionsession.TurnFinished); !ok {
+		t.Fatalf("second event = %T, want TurnFinished", ev2)
 	}
 }
 
-func TestFinishTurnWithErrorSuppressesDeadlineExceeded(t *testing.T) {
+func TestFinishTurnWithErrorReportsDeadlineExceeded(t *testing.T) {
 	b := New()
 	b.turn.seq = 7
 	b.turn.active = true
@@ -173,9 +174,17 @@ func TestFinishTurnWithErrorSuppressesDeadlineExceeded(t *testing.T) {
 	if b.turn.cancel != nil {
 		t.Fatal("cancel func remained set after deadline terminal")
 	}
-	ev := receiveEvent(t, b.Events())
-	if _, ok := ev.(ionsession.TurnFinished); !ok {
-		t.Fatalf("event = %T, want TurnFinished", ev)
+	ev1 := receiveEvent(t, b.Events())
+	errEvent, ok := ev1.(ionsession.Error)
+	if !ok {
+		t.Fatalf("first event = %T, want Error", ev1)
+	}
+	if !strings.Contains(errEvent.Err.Error(), context.DeadlineExceeded.Error()) {
+		t.Fatalf("error = %v, want deadline exceeded", errEvent.Err)
+	}
+	ev2 := receiveEvent(t, b.Events())
+	if _, ok := ev2.(ionsession.TurnFinished); !ok {
+		t.Fatalf("second event = %T, want TurnFinished", ev2)
 	}
 	select {
 	case ev := <-b.Events():

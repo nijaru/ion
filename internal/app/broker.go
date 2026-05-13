@@ -204,6 +204,13 @@ func (m Model) handleTokenUsage(msg session.TokenUsage) (Model, tea.Cmd) {
 				Timestamp: msg.Timestamp,
 				Content:   "Canceled: " + reason,
 			}
+			if err := m.persistEntry("persist budget cancellation", storage.System{
+				Type:    "system",
+				Content: entry.Content,
+				TS:      entryUnix(msg.Timestamp),
+			}); err != nil {
+				return m, persistErrorCmd("persist budget cancellation", err)
+			}
 			return m, tea.Sequence(m.printEntries(entry), m.awaitSessionEvent())
 		}
 	}

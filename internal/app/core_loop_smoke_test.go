@@ -12,6 +12,7 @@ import (
 
 	"github.com/nijaru/canto/llm"
 	csession "github.com/nijaru/canto/session"
+	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/session"
 	"github.com/nijaru/ion/internal/storage"
 )
@@ -250,6 +251,38 @@ func TestCoreLoopSmokeProviderLimitErrorPersistsForResume(t *testing.T) {
 		t.Fatalf("entries: %v", err)
 	}
 	requireEntry(t, entries, session.System, "Error: API rate limit")
+
+	input, output, cost, err := resumed.Usage(context.Background())
+	if err != nil {
+		t.Fatalf("usage: %v", err)
+	}
+	if input != 20 || output != 3 || cost != 0.02 {
+		t.Fatalf("usage = %d/%d/%f, want 20/3/0.02", input, output, cost)
+	}
+}
+
+func TestCoreLoopSmokeBudgetCancellationPersistsForResume(t *testing.T) {
+	model, _, store, stored := newCoreLoopSmokeModel(t)
+	model.Model.Config = &config.Config{MaxTurnCost: 0.01}
+
+	updated, _ := model.Update(session.TurnStarted{})
+	model = updated.(Model)
+	updated, _ = model.Update(session.TokenUsage{Input: 20, Output: 3, Cost: 0.02})
+	model = updated.(Model)
+
+	if model.Progress.Mode != stateCancelled {
+		t.Fatalf("progress mode = %v, want cancelled", model.Progress.Mode)
+	}
+
+	resumed, err := store.ResumeSession(context.Background(), stored.ID())
+	if err != nil {
+		t.Fatalf("resume session: %v", err)
+	}
+	entries, err := resumed.Entries(context.Background())
+	if err != nil {
+		t.Fatalf("entries: %v", err)
+	}
+	requireEntry(t, entries, session.System, "Canceled: turn cost limit reached")
 
 	input, output, cost, err := resumed.Usage(context.Background())
 	if err != nil {

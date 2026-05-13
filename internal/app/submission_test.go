@@ -284,10 +284,13 @@ func TestTokenUsageCancelsTurnWhenCostBudgetExceeded(t *testing.T) {
 		t.Fatalf("in-flight state not cleared after budget cancel: %#v", model.InFlight)
 	}
 	var decision storage.RoutingDecision
+	var system storage.System
 	for _, event := range storageSess.appends {
-		if e, ok := event.(storage.RoutingDecision); ok {
+		switch e := event.(type) {
+		case storage.RoutingDecision:
 			decision = e
-			break
+		case storage.System:
+			system = e
 		}
 	}
 	if decision.Decision != "stop" {
@@ -298,6 +301,9 @@ func TestTokenUsageCancelsTurnWhenCostBudgetExceeded(t *testing.T) {
 	}
 	if decision.TurnCost != 0.011 {
 		t.Fatalf("turn cost = %f, want 0.011", decision.TurnCost)
+	}
+	if !strings.Contains(system.Content, "Canceled: turn cost limit reached") {
+		t.Fatalf("system cancellation = %q, want budget cancellation", system.Content)
 	}
 }
 
