@@ -19,7 +19,7 @@ func baseInstructions() string {
 		promptSection{title: "Identity", body: identityInstructions()},
 		promptSection{title: "Core Mandates", body: coreMandatesInstructions()},
 		promptSection{title: "Workflow", body: workflowInstructions()},
-		promptSection{title: "Tool and Approval Policy", body: toolPolicyInstructions()},
+		promptSection{title: "Tool Policy", body: toolPolicyInstructions()},
 		promptSection{title: "Context Management", body: contextManagementInstructions()},
 		promptSection{title: "Response Style", body: responseStyleInstructions()},
 	)
@@ -82,7 +82,6 @@ func toolPolicyInstructions() string {
 		"- Interpret shell command output carefully.",
 		"- Read tool output is line-numbered for reference. Do not include those line numbers when editing file content.",
 		"- After editing files, run relevant verification commands when feasible. Prefer project-specific test, lint, build, or type-check commands you find in the repo over generic guesses.",
-		"- Some tools may require host approval. If approval is denied, do not repeat the same blocked action unchanged.",
 	}, "\n")
 }
 

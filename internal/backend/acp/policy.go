@@ -1,4 +1,4 @@
-package backend
+package acp
 
 import (
 	"context"
@@ -30,7 +30,7 @@ const (
 	CategorySensitive ToolCategory = "sensitive"
 )
 
-// PolicyEngine manages the approval logic for tool calls.
+// PolicyEngine manages ACP permission policy decisions.
 type PolicyEngine struct {
 	// Categories maps tool names to their categories.
 	Categories map[string]ToolCategory
@@ -45,7 +45,7 @@ type PolicyEngine struct {
 	auditSink         PolicyAuditSink
 }
 
-// NewPolicyEngine creates a default policy engine.
+// NewPolicyEngine creates a default ACP permission policy engine.
 func NewPolicyEngine() *PolicyEngine {
 	return &PolicyEngine{
 		Categories: map[string]ToolCategory{

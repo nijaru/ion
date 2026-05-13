@@ -75,8 +75,12 @@ func (a *ionACPAgent) requestPermission(
 	sess *ionACPHeadlessSession,
 	req ionsession.ApprovalRequest,
 ) error {
+	approvalSession, ok := sess.agent.(ionsession.ApprovalSession)
+	if !ok {
+		return fmt.Errorf("session does not support approval requests")
+	}
 	if a.conn == nil {
-		return sess.agent.Approve(ctx, req.RequestID, false)
+		return approvalSession.Approve(ctx, req.RequestID, false)
 	}
 	title := privacy.Redact(tooldisplay.Title(req.ToolName, req.Args, tooldisplay.Options{
 		Workdir: sess.cwd,
@@ -113,7 +117,7 @@ func (a *ionACPAgent) requestPermission(
 	}
 	approved := resp.Outcome.Selected != nil &&
 		string(resp.Outcome.Selected.OptionId) == "allow"
-	return sess.agent.Approve(ctx, req.RequestID, approved)
+	return approvalSession.Approve(ctx, req.RequestID, approved)
 }
 
 func acpPromptText(blocks []acp.ContentBlock) (string, error) {

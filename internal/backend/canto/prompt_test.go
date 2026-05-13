@@ -15,7 +15,7 @@ func TestBaseInstructionsUseExplicitSections(t *testing.T) {
 		"## Identity",
 		"## Core Mandates",
 		"## Workflow",
-		"## Tool and Approval Policy",
+		"## Tool Policy",
 		"## Response Style",
 		"You are ion, a terminal coding agent.",
 		"Treat project instruction files as authoritative within their scope.",
@@ -42,6 +42,7 @@ func TestBaseInstructionsAvoidStaleBrandingAndRuntimeSpecifics(t *testing.T) {
 		"## Runtime Context",
 		"Platform:",
 		"Working directory:",
+		"host approval",
 	}
 	for _, bad := range forbidden {
 		if strings.Contains(prompt, bad) {

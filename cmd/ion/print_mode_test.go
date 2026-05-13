@@ -33,10 +33,6 @@ func (s *printSession) CancelTurn(ctx context.Context) error {
 	return nil
 }
 
-func (s *printSession) Approve(ctx context.Context, requestID string, approved bool) error {
-	return nil
-}
-
 func (s *printSession) Close() error {
 	s.closed++
 	return nil

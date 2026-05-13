@@ -119,7 +119,8 @@ type VerificationResult struct {
 
 func (e VerificationResult) isEvent() {}
 
-// ApprovalRequest fires when the agent needs explicit host approval to continue.
+// ApprovalRequest is emitted by optional compatibility backends that support
+// host-mediated permission prompts. The native Ion path does not emit it.
 type ApprovalRequest struct {
 	Base
 	RequestID   string `json:"request_id"`
@@ -190,7 +191,7 @@ type ChildCompleted struct {
 
 func (e ChildCompleted) isEvent() {}
 
-// ChildBlocked fires when the child execution cannot continue without input or approval.
+// ChildBlocked fires when the child execution cannot continue without input.
 type ChildBlocked struct {
 	Base
 	AgentName string `json:"agent_name"`

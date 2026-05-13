@@ -67,7 +67,7 @@ type Session struct {
 	events  chan session.Event
 	store   storage.Store
 	storage storage.Session
-	policy  *backend.PolicyEngine
+	policy  *PolicyEngine
 
 	conn            *acp.ClientSideConnection
 	sessionID       string
@@ -94,7 +94,7 @@ type Session struct {
 func newSession() *Session {
 	return &Session{
 		events:           make(chan session.Event, 100),
-		policy:           backend.NewPolicyEngine(),
+		policy:           NewPolicyEngine(),
 		done:             make(chan struct{}),
 		pendingApprovals: make(map[string]chan bool),
 		terminals:        make(map[string]*terminal),
@@ -558,9 +558,9 @@ func (s *Session) RequestPermission(
 	// Policy engine may auto-approve or auto-deny
 	policy, _ := s.policy.Authorize(ctx, toolName, "")
 	switch policy {
-	case backend.PolicyAllow:
+	case PolicyAllow:
 		return allowResponse(p), nil
-	case backend.PolicyDeny:
+	case PolicyDeny:
 		return denyResponse(p), nil
 	}
 
