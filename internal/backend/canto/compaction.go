@@ -16,7 +16,7 @@ const ionCompactionGuidance = `Summarize this Ion coding session for reliable co
 Preserve:
 - current user goal and immediate next step
 - files, packages, task IDs, commands, and commits that matter
-- decisions, constraints, approvals, denials, and unresolved blockers
+- decisions, constraints, and unresolved blockers
 - tool failures, root causes, and verification status
 
 Discard:

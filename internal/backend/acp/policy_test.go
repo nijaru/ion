@@ -1,4 +1,4 @@
-package backend
+package acp
 
 import (
 	"context"
@@ -288,32 +288,5 @@ func TestPolicyClassifierCannotWeakenHardBoundaries(t *testing.T) {
 	policy, reason = pe.Authorize(context.Background(), "read", `{"file_path":"file.txt"}`)
 	if policy != PolicyAllow {
 		t.Fatalf("read policy = %v (%q), want allow", policy, reason)
-	}
-}
-
-func TestIsSafeBashCommand(t *testing.T) {
-	tests := []struct {
-		command string
-		safe    bool
-	}{
-		{"ls -la", true},
-		{"git status", true},
-		{"git log --oneline", true},
-		{"cat file.txt | grep foo", true},
-		{"ls && pwd", true},
-		{"rm -rf /", false},
-		{"git commit -m 'test'", false},
-		{"ls > out.txt", false},
-		{"echo $(rm -rf /)", false},
-		{"sudo ls", false},
-		{"", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.command, func(t *testing.T) {
-			if got := IsSafeBashCommand(tt.command); got != tt.safe {
-				t.Errorf("IsSafeBashCommand(%q) = %v; want %v", tt.command, got, tt.safe)
-			}
-		})
 	}
 }

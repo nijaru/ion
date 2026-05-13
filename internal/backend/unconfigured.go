@@ -119,10 +119,6 @@ func (s *unconfiguredSession) CancelTurn(context.Context) error {
 	return nil
 }
 
-func (s *unconfiguredSession) Approve(context.Context, string, bool) error {
-	return nil
-}
-
 func (s *unconfiguredSession) Close() error {
 	return nil
 }

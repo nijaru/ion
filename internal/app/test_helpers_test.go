@@ -160,9 +160,6 @@ func (s *stubSession) Close() error {
 	return nil
 }
 func (s *stubSession) Events() <-chan session.Event { return s.events }
-func (s *stubSession) Approve(ctx context.Context, id string, ok bool) error {
-	return nil
-}
 
 func (s *stubSession) ID() string              { return "stub" }
 func (s *stubSession) Meta() map[string]string { return nil }
