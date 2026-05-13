@@ -55,7 +55,8 @@ func TestCoreLoopSmokeSubmitStreamToolPersistReplay(t *testing.T) {
 	toolCall := llm.Call{ID: "tool-1", Type: "function"}
 	toolCall.Function.Name = "bash"
 	toolCall.Function.Arguments = `{"args":"echo smoke"}`
-	appendCantoHistory(t, context.Background(), store, stored.ID(),
+	appendCantoHistory(
+		t, context.Background(), store, stored.ID(),
 		llm.Message{Role: llm.RoleUser, Content: "run smoke"},
 		llm.Message{Role: llm.RoleAssistant, Calls: []llm.Call{toolCall}},
 		llm.Message{Role: llm.RoleTool, ToolID: "tool-1", Name: "bash", Content: "smoke\n"},
@@ -136,7 +137,8 @@ func TestMinimalHarnessAcceptanceFinalStateAndReplay(t *testing.T) {
 	toolCall := llm.Call{ID: "tool-1", Type: "function"}
 	toolCall.Function.Name = "read"
 	toolCall.Function.Arguments = `{"path":"README.md"}`
-	appendCantoHistory(t, context.Background(), store, stored.ID(),
+	appendCantoHistory(
+		t, context.Background(), store, stored.ID(),
 		llm.Message{Role: llm.RoleUser, Content: "inspect workspace"},
 		llm.Message{Role: llm.RoleAssistant, Calls: []llm.Call{toolCall}},
 		llm.Message{Role: llm.RoleTool, ToolID: "tool-1", Name: "read", Content: "# ion\n"},
@@ -156,48 +158,6 @@ func TestMinimalHarnessAcceptanceFinalStateAndReplay(t *testing.T) {
 		{role: session.Tool, content: "# ion"},
 		{role: session.Agent, content: "Done with `README.md`."},
 	})
-}
-
-func TestCoreLoopSmokeApprovalAndCancel(t *testing.T) {
-	model, sess, _, _ := newCoreLoopSmokeModel(t)
-
-	updated, _ := model.Update(session.TurnStarted{})
-	model = updated.(Model)
-	updated, _ = model.Update(session.ApprovalRequest{
-		RequestID:   "approval-1",
-		ToolName:    "bash",
-		Description: "Tool: bash",
-	})
-	model = updated.(Model)
-
-	if model.Progress.Mode != stateApproval {
-		t.Fatalf("progress mode = %v, want approval", model.Progress.Mode)
-	}
-
-	updated, _ = model.Update(tea.KeyPressMsg{Code: 'y', Text: "y"})
-	model = updated.(Model)
-
-	if model.Approval.Pending != nil {
-		t.Fatal("approval should be cleared")
-	}
-	if len(sess.approvals) != 1 || sess.approvals[0] != (stubApproval{id: "approval-1", ok: true}) {
-		t.Fatalf("approvals = %#v, want approval-1 true", sess.approvals)
-	}
-	if model.Progress.Mode != stateReady {
-		t.Fatalf("progress mode = %v, want ready after approval", model.Progress.Mode)
-	}
-
-	updated, _ = model.Update(session.TurnStarted{})
-	model = updated.(Model)
-	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
-	model = updated.(Model)
-
-	if sess.cancels != 1 {
-		t.Fatalf("cancels = %d, want 1", sess.cancels)
-	}
-	if model.Progress.Mode != stateCancelled {
-		t.Fatalf("progress mode = %v, want cancelled", model.Progress.Mode)
-	}
 }
 
 func TestCoreLoopSmokeCancelPersistsTerminalEntry(t *testing.T) {

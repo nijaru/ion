@@ -114,10 +114,7 @@ loop:
 			t.Logf("event: %T %#v", ev, ev)
 			switch msg := ev.(type) {
 			case session.ApprovalRequest:
-				t.Logf("auto-approving request %s: %s", msg.RequestID, msg.Description)
-				if err := agent.Approve(ctx, msg.RequestID, true); err != nil {
-					t.Fatalf("approve %s: %v", msg.RequestID, err)
-				}
+				t.Fatalf("unexpected approval request %s: %s", msg.RequestID, msg.Description)
 			case session.TurnStarted:
 				seenTurnStarted = true
 			case session.ToolCallStarted:
@@ -425,10 +422,7 @@ func runSmokeTurn(
 			t.Logf("event: %T %#v", ev, ev)
 			switch msg := ev.(type) {
 			case session.ApprovalRequest:
-				t.Logf("auto-approving request %s: %s", msg.RequestID, msg.Description)
-				if err := agent.Approve(ctx, msg.RequestID, true); err != nil {
-					t.Fatalf("approve %s: %v", msg.RequestID, err)
-				}
+				t.Fatalf("unexpected approval request %s: %s", msg.RequestID, msg.Description)
 			case session.TurnStarted:
 				seenTurnStarted = true
 			case session.ToolCallStarted:

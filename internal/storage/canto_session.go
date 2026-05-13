@@ -82,15 +82,6 @@ func (s *cantoSession) Append(ctx context.Context, event any) error {
 			"stop_reason":      e.StopReason,
 		}, e.TS)
 		err = s.store.canto.Save(ctx, ev)
-	case EscalationNotification:
-		ev := newStoredEvent(s.id, session.EventType("escalation_notification"), map[string]any{
-			"request_id": e.RequestID,
-			"channel":    e.Channel,
-			"target":     e.Target,
-			"status":     e.Status,
-			"detail":     e.Detail,
-		}, e.TS)
-		err = s.store.canto.Save(ctx, ev)
 	default:
 		return nil
 	}
@@ -174,8 +165,7 @@ func clearsDurableResumeStatus(eventType session.EventType) bool {
 		ionSystemEvent,
 		ionSubagentEvent,
 		session.EventType("token_usage"),
-		session.EventType("routing_decision"),
-		session.EventType("escalation_notification"):
+		session.EventType("routing_decision"):
 		return true
 	default:
 		return false

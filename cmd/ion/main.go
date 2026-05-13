@@ -225,7 +225,6 @@ func main() {
 			agent,
 			prompt,
 			cli.timeout(),
-			true,
 			output,
 		)
 		closeErr := closeRuntimeHandles(agent, sess, store)

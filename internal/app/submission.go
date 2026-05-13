@@ -34,7 +34,6 @@ func (m *Model) clearActiveTurnState(clearQueued bool) {
 	m.InFlight.Pending = nil
 	m.InFlight.PendingTools = nil
 	m.InFlight.Subagents = make(map[string]*SubagentProgress)
-	m.Approval.Pending = nil
 	if clearQueued {
 		m.InFlight.QueuedTurns = nil
 	}

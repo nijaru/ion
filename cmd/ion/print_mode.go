@@ -48,7 +48,10 @@ func resolvePrintFlags(
 		prompt = strings.Join(args, " ")
 	}
 	if printRequested && prompt != "" && len(args) > 0 && promptLong != "" {
-		return false, "", "", fmt.Errorf("unexpected arguments after --prompt: %s", strings.Join(args, " "))
+		return false, "", "", fmt.Errorf(
+			"unexpected arguments after --prompt: %s",
+			strings.Join(args, " "),
+		)
 	}
 	if !printRequested && len(args) > 0 {
 		return false, "", "", fmt.Errorf("unexpected arguments: %s", strings.Join(args, " "))
@@ -58,8 +61,8 @@ func resolvePrintFlags(
 }
 
 // runPrintMode submits a single turn and prints the response to stdout.
-func runPrintMode(ctx context.Context, agent session.AgentSession, prompt string, approveRequests bool) error {
-	return runPrintModeWithWriter(ctx, os.Stdout, agent, prompt, approveRequests, "text")
+func runPrintMode(ctx context.Context, agent session.AgentSession, prompt string) error {
+	return runPrintModeWithWriter(ctx, os.Stdout, agent, prompt, "text")
 }
 
 func runPrintModeWithWriter(
@@ -67,10 +70,9 @@ func runPrintModeWithWriter(
 	w io.Writer,
 	agent session.AgentSession,
 	prompt string,
-	approveRequests bool,
 	output string,
 ) error {
-	result, err := runPromptTurn(ctx, agent, prompt, approveRequests)
+	result, err := runPromptTurn(ctx, agent, prompt)
 	if err != nil {
 		return err
 	}
@@ -81,7 +83,6 @@ func runPromptTurn(
 	ctx context.Context,
 	agent session.AgentSession,
 	prompt string,
-	approveRequests bool,
 ) (printResult, error) {
 	if err := agent.SubmitTurn(ctx, prompt); err != nil {
 		return printResult{}, fmt.Errorf("submit turn: %w", err)
@@ -99,14 +100,8 @@ func runPromptTurn(
 			}
 			switch msg := ev.(type) {
 			case session.ApprovalRequest:
-				if !approveRequests {
-					cancelPrintTurn(agent)
-					return printResult{}, fmt.Errorf("approval required for %s", msg.ToolName)
-				}
-				if err := agent.Approve(ctx, msg.RequestID, true); err != nil {
-					cancelPrintTurn(agent)
-					return printResult{}, fmt.Errorf("approve %s: %w", msg.ToolName, err)
-				}
+				cancelPrintTurn(agent)
+				return printResult{}, fmt.Errorf("unexpected approval request for %s", msg.ToolName)
 			case session.ToolCallStarted:
 				result.ToolCalls = append(result.ToolCalls, msg.ToolName)
 			case session.AgentDelta:
@@ -183,13 +178,12 @@ func runPrintModeWithTimeout(
 	agent session.AgentSession,
 	prompt string,
 	timeout time.Duration,
-	approveRequests bool,
 	output string,
 ) error {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	return runPrintModeWithWriter(ctx, w, agent, prompt, approveRequests, output)
+	return runPrintModeWithWriter(ctx, w, agent, prompt, output)
 }
 
 // isStdinPipe returns true if stdin is a pipe (not a terminal).

@@ -7,7 +7,6 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/session"
 )
 
@@ -16,7 +15,7 @@ import (
 func (m Model) renderPlaneB() string {
 	hasPendingTool := m.InFlight.Pending != nil && m.InFlight.Pending.Role == session.Tool
 	hasPendingAgent := m.InFlight.Pending != nil && m.InFlight.Pending.Role == session.Agent
-	if !hasPendingTool && len(m.InFlight.PendingTools) == 0 && m.Approval.Pending == nil &&
+	if !hasPendingTool && len(m.InFlight.PendingTools) == 0 &&
 		!hasPendingAgent &&
 		m.InFlight.ReasonBuf == "" &&
 		len(m.InFlight.Subagents) == 0 {
@@ -78,29 +77,6 @@ func (m Model) renderPlaneB() string {
 		}
 		if n > maxVisible {
 			b.WriteString(m.planeBLine(m.st.dim, 2, fmt.Sprintf("+%d more workers", n-maxVisible)))
-			b.WriteString("\n")
-		}
-	}
-
-	// Approval prompt
-	if m.Approval.Pending != nil {
-		b.WriteString("\n")
-		desc := m.Approval.Pending.Description
-		if m.Approval.Pending.ToolName != "" {
-			desc = fmt.Sprintf("%s: %s",
-				m.formatToolTitle(m.Approval.Pending.ToolName, m.Approval.Pending.Args),
-				m.Approval.Pending.Description)
-		}
-		b.WriteString(m.planeBLine(m.st.warn, 2, "Approve "+desc+"? (y/n/a, Esc cancel)"))
-		b.WriteString("\n")
-		if environment := strings.TrimSpace(m.Approval.Pending.Environment); environment != "" {
-			b.WriteString(
-				m.planeBLine(m.st.dim, 2, "Bash env: "+backend.ToolEnvironmentLabel(environment)),
-			)
-			b.WriteString("\n")
-		}
-		if summary := escalationSummary(m.Model.Escalation); summary != "" {
-			b.WriteString(m.planeBLine(m.st.dim, 2, "Escalate: "+summary))
 			b.WriteString("\n")
 		}
 	}

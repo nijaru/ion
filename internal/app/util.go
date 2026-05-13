@@ -187,7 +187,7 @@ func splitHelpDetail(line string) (string, string, string, bool) {
 
 func isHelpSectionLine(line string) bool {
 	switch strings.TrimSpace(line) {
-	case "commands", "keys", "approval":
+	case "commands", "keys":
 		return true
 	default:
 		return false

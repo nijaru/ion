@@ -378,7 +378,7 @@ func (m Model) handleCommand(input string) (Model, tea.Cmd) {
 }
 
 func (m Model) localCommandBusy() bool {
-	return m.InFlight.Thinking || m.Progress.Compacting || m.Approval.Pending != nil
+	return m.InFlight.Thinking || m.Progress.Compacting
 }
 
 func (m Model) commandRequiresIdle(command slashCommandInfo, fields []string) bool {

@@ -149,12 +149,6 @@ func TestRenderPlaneBFitsShellWidth(t *testing.T) {
 			Output: strings.Repeat("subagent-output ", 8),
 		},
 	}
-	model.Approval.Pending = &session.ApprovalRequest{
-		ToolName:    "bash",
-		Args:        `{"command":"` + strings.Repeat("danger ", 12) + `"}`,
-		Description: strings.Repeat("approval-description ", 8),
-		Environment: "inherit_without_provider_keys",
-	}
 
 	got := ansi.Strip(model.renderPlaneB())
 	for i, line := range strings.Split(got, "\n") {
@@ -568,7 +562,10 @@ func TestToolCallStartedFormatsWorkspacePathBeforeRedaction(t *testing.T) {
 
 	got := model.InFlight.PendingTools["tool-read"].Title
 	if got != "Read(internal/app/model_test.go)" {
-		t.Fatalf("tool title = %q, want workspace-relative title without redacted workdir prefix", got)
+		t.Fatalf(
+			"tool title = %q, want workspace-relative title without redacted workdir prefix",
+			got,
+		)
 	}
 }
 
