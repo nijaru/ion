@@ -193,6 +193,29 @@ func TestCtrlCCancelsRunningTurn(t *testing.T) {
 	}
 }
 
+func TestCtrlCClearsComposerBeforeCancelingRunningTurn(t *testing.T) {
+	sess := &stubSession{events: make(chan session.Event)}
+	model := readyModel(t)
+	model.Model.Session = sess
+	model.InFlight.Thinking = true
+	model.Input.Composer.SetValue("draft follow-up")
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	model = updated.(Model)
+	if cmd != nil {
+		t.Fatal("ctrl+c with a draft should clear composer, not cancel")
+	}
+	if got := model.Input.Composer.Value(); got != "" {
+		t.Fatalf("composer = %q, want cleared", got)
+	}
+	if !model.InFlight.Thinking {
+		t.Fatal("turn should keep running after clearing draft")
+	}
+	if sess.cancels != 0 {
+		t.Fatalf("cancel count = %d, want 0", sess.cancels)
+	}
+}
+
 func TestCtrlDDoubleTapQuitsOnlyWhenIdleAndEmpty(t *testing.T) {
 	model := readyModel(t)
 
@@ -218,6 +241,28 @@ func TestCtrlDDoubleTapQuitsOnlyWhenIdleAndEmpty(t *testing.T) {
 	}
 	if _, ok := cmd().(tea.QuitMsg); !ok {
 		t.Fatalf("second ctrl+d cmd = %T, want tea.QuitMsg", cmd())
+	}
+}
+
+func TestCtrlDIgnoredWhileRunning(t *testing.T) {
+	sess := &stubSession{events: make(chan session.Event)}
+	model := readyModel(t)
+	model.Model.Session = sess
+	model.InFlight.Thinking = true
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl})
+	model = updated.(Model)
+	if cmd != nil {
+		t.Fatal("ctrl+d while running should not quit or print")
+	}
+	if model.Input.CtrlCPending {
+		t.Fatal("ctrl+d while running should not arm quit")
+	}
+	if !model.InFlight.Thinking {
+		t.Fatal("ctrl+d should not cancel running turn")
+	}
+	if sess.cancels != 0 {
+		t.Fatalf("cancel count = %d, want 0", sess.cancels)
 	}
 }
 

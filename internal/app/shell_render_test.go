@@ -373,7 +373,13 @@ func TestRunningProgressLinePutsElapsedAfterTokenCounters(t *testing.T) {
 	model.Progress.CurrentTurnOutput = 84
 
 	line := ansi.Strip(model.progressLine())
-	for _, want := range []string{"Streaming...", "↑ 3.0k", "↓ 84", "2s", "Esc to cancel"} {
+	for _, want := range []string{
+		"Streaming...",
+		"↑ 3.0k",
+		"↓ 84",
+		"2s",
+		"Esc/Ctrl+C to cancel",
+	} {
 		if !strings.Contains(line, want) {
 			t.Fatalf("progress line = %q, missing %q", line, want)
 		}

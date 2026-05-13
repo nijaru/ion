@@ -416,6 +416,9 @@ func TestPrintModeReturnsSessionError(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "session error: rate limited") {
 		t.Fatalf("runPromptTurn error = %v, want session error", err)
 	}
+	if sess.cancelled != 1 {
+		t.Fatalf("cancelled = %d, want 1", sess.cancelled)
+	}
 }
 
 func TestPrintModeErrorsWhenEventStreamClosesBeforeTurnFinished(t *testing.T) {
