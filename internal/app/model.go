@@ -494,7 +494,7 @@ func (m Model) runningProgressParts() []string {
 			fmt.Sprintf("$%.4f/$%.4f", m.Progress.CurrentTurnCost, m.Model.Config.MaxTurnCost),
 		)
 	}
-	parts = append(parts, "Esc to cancel")
+	parts = append(parts, "Esc/Ctrl+C to cancel")
 	return parts
 }
 
