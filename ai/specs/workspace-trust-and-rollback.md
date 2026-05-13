@@ -1,41 +1,47 @@
 # Workspace Trust And Rollback
 
-## Current Slice
+## Deferred Trust Design
 
-Ion now has persistent user-global workspace trust state:
+Native Pi-parity Ion currently has no user-facing trust gate, permission mode,
+or `/trust` command. Local coding tools are trusted by default while the core
+agent loop and TUI stabilize.
+
+When permissions are intentionally reintroduced, the likely design is
+persistent user-global workspace trust state:
 
 - storage: `~/.ion/trusted_workspaces.json`
 - key: absolute workspace path
 - command: `/trust`
 - status command: `/trust status`
 
-Startup behavior:
+Future startup behavior:
 
 - trusted workspace: use the requested/configured startup mode
 - untrusted workspace: force READ mode and print a startup notice
 
-This makes trust state a user decision, not a project-controlled config. Project
-files cannot mark themselves trusted.
+That should make trust state a user decision, not a project-controlled config.
+Project files must not be able to mark themselves trusted.
 
 ## Trust vs Mode
 
-Trust and mode must stay separate:
+When this feature returns, trust and mode must stay separate:
 
 - trust: persistent user-global decision about whether this checkout can leave
   read-only safety
 - mode: per-session approval posture once the workspace is eligible
 
-Mode matrix:
+Future mode matrix:
 
 | Workspace trust | `read` | `edit` | `auto` |
 |---|---|---|---|
 | untrusted | allowed | blocked until `/trust` | blocked until `/trust` |
 | trusted | allowed | writes/commands prompt | writes/commands auto-approve |
 
-`/trust` means "allow normal edit/auto behavior in this workspace." It does not
-mean auto-approve tools, disable sandboxing, or trust project instructions.
+Future `/trust` should mean "allow normal edit/auto behavior in this workspace."
+It must not mean auto-approve tools, disable sandboxing, or trust project
+instructions.
 
-Config should support three postures:
+Config may support three postures:
 
 ```toml
 workspace_trust = "prompt" # prompt | off | strict
@@ -46,8 +52,8 @@ workspace_trust = "prompt" # prompt | off | strict
 - `strict`: enterprise posture; unknown workspaces stay `read`, with trust
   optionally admin-managed
 
-Shift+Tab should only toggle `read <-> edit`; entering `auto` requires an
-explicit slash command or CLI flag.
+Native Pi-parity Ion reserves `Shift+Tab`; it should not toggle modes until the
+full trust/permission UX is intentionally restored.
 
 ## Deferred Rollback Work
 
@@ -85,6 +91,8 @@ Sandbox enforcement is separate from workspace trust and permission mode:
 - trust decides the starting permission posture for a checkout
 - READ/EDIT/AUTO decides approval behavior
 - sandboxing constrains what tool subprocesses can actually touch
+- while native Pi-parity Ion has no trust/mode UX, sandboxing remains an
+  executor concern surfaced through `/tools` and `/status`, not a mode gate
 
 Boundary direction:
 

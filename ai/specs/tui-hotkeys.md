@@ -12,9 +12,11 @@ Source of truth for inline TUI key semantics.
 
 ## Safety
 - `Esc`: cancel a running turn. Otherwise it does nothing.
-- `Ctrl+C`: if input is non-empty, clear it. If idle and input is empty, double-tap to quit.
-- `Ctrl+D`: if idle and input is empty, double-tap to quit. Never clear input.
-- `Ctrl+C` and `Ctrl+D` do not cancel running turns.
+- `Ctrl+C`: if input is non-empty, clear it. If a turn is running and input is
+  empty, cancel that turn. If idle and input is empty, double-tap to quit.
+- `Ctrl+D`: if input is non-empty, use normal editor delete-forward behavior.
+  If a turn is running and input is empty, do nothing. If idle and input is
+  empty, double-tap to quit.
 
 ## Pickers
 - `Ctrl+M`: toggle the primary/fast model preset; when the model picker is open, it switches which preset slot will be updated
@@ -49,7 +51,8 @@ Source of truth for inline TUI key semantics.
   - fuzzy slash commands own the full model/provider selection surface
 
 ## Mode
-- `Shift+Tab`: toggle READ/EDIT mode. AUTO requires an explicit slash command or startup flag.
+- Native Pi-parity Ion has no user-facing mode toggle. `Shift+Tab` is reserved
+  and currently does nothing.
 
 ## Transcript / Plane B
 - Startup header prints once to native scrollback.
