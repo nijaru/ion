@@ -623,7 +623,7 @@ func TestHelpCommandReportsCurrentCommandsAndKeys(t *testing.T) {
 		"Esc",
 		"Up / Down",
 		"Enter",
-		"Ctrl+C",
+		"Ctrl+C           clear composer, cancel running turn",
 	)
 	for _, want := range wantCommands {
 		if !strings.Contains(notice, want) {
