@@ -79,6 +79,9 @@ func (e *Edit) Execute(ctx context.Context, args string) (string, error) {
 		return "", err
 	}
 	defer root.Close()
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 
 	content, err := root.ReadFile(relPath)
 	if err != nil {
@@ -106,6 +109,9 @@ func (e *Edit) Execute(ctx context.Context, args string) (string, error) {
 	}
 
 	if _, err := e.checkpointPaths(ctx, input.FilePath); err != nil {
+		return "", err
+	}
+	if err := ctx.Err(); err != nil {
 		return "", err
 	}
 
@@ -202,6 +208,9 @@ func (m *MultiEdit) Execute(ctx context.Context, args string) (string, error) {
 		return "", err
 	}
 	defer root.Close()
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 
 	contents := make(map[string]string)
 	originals := make(map[string]string)
@@ -251,6 +260,9 @@ func (m *MultiEdit) Execute(ctx context.Context, args string) (string, error) {
 
 	paths := sortedMapKeys(contents)
 	if _, err := m.checkpointPaths(ctx, paths...); err != nil {
+		return "", err
+	}
+	if err := ctx.Err(); err != nil {
 		return "", err
 	}
 

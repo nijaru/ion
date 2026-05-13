@@ -53,8 +53,14 @@ func (w *Write) Execute(ctx context.Context, args string) (string, error) {
 		return "", err
 	}
 	defer root.Close()
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 
 	if _, err := w.checkpointPaths(ctx, input.FilePath); err != nil {
+		return "", err
+	}
+	if err := ctx.Err(); err != nil {
 		return "", err
 	}
 

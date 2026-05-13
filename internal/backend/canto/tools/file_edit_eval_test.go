@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -145,6 +146,51 @@ func TestEditSurfaceEvalSplitTools(t *testing.T) {
 
 		assertFileContent(t, tmpDir, path, "before\n")
 	})
+
+	t.Run("canceled mutating tools do not write without checkpoint", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		w := &Write{FileTool: FileTool{cwd: tmpDir}}
+		_, err := executeToolJSON(t, w, ctx, map[string]any{
+			"file_path": "nested/new.txt",
+			"content":   "after\n",
+		})
+		assertCanceled(t, err)
+		assertFileMissing(t, tmpDir, "nested/new.txt")
+
+		writeFile(t, tmpDir, "existing.txt", "before\n")
+		_, err = executeToolJSON(t, w, ctx, map[string]any{
+			"file_path": "existing.txt",
+			"content":   "after\n",
+		})
+		assertCanceled(t, err)
+		assertFileContent(t, tmpDir, "existing.txt", "before\n")
+
+		e := &Edit{FileTool: FileTool{cwd: tmpDir}}
+		_, err = executeToolJSON(t, e, ctx, map[string]any{
+			"file_path":  "existing.txt",
+			"old_string": "before",
+			"new_string": "after",
+		})
+		assertCanceled(t, err)
+		assertFileContent(t, tmpDir, "existing.txt", "before\n")
+
+		writeFile(t, tmpDir, "multi.txt", "before\n")
+		m := &MultiEdit{FileTool: FileTool{cwd: tmpDir}}
+		_, err = executeToolJSON(t, m, ctx, map[string]any{
+			"edits": []map[string]any{
+				{
+					"file_path":  "multi.txt",
+					"old_string": "before",
+					"new_string": "after",
+				},
+			},
+		})
+		assertCanceled(t, err)
+		assertFileContent(t, tmpDir, "multi.txt", "before\n")
+	})
 }
 
 type jsonTool interface {
@@ -180,5 +226,23 @@ func assertFileContent(t *testing.T, root, name, want string) {
 	}
 	if string(data) != want {
 		t.Fatalf("%s = %q, want %q", name, data, want)
+	}
+}
+
+func assertFileMissing(t *testing.T, root, name string) {
+	t.Helper()
+	_, err := os.Stat(filepath.Join(root, name))
+	if err == nil {
+		t.Fatalf("%s exists, want missing", name)
+	}
+	if !os.IsNotExist(err) {
+		t.Fatalf("stat %s: %v", name, err)
+	}
+}
+
+func assertCanceled(t *testing.T, err error) {
+	t.Helper()
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
 	}
 }
