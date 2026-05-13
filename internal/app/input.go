@@ -18,19 +18,22 @@ func (m Model) statusLine() string {
 
 	sep := m.st.sep.Render(" • ")
 
-	modeLabel := ""
 	presetLabel := ""
 	if m.activePreset() == presetFast {
 		presetLabel = m.st.dim.Render("[FAST]")
 	}
 
 	provider := ""
-	if value := m.Model.Backend.Provider(); value != "" {
-		provider = m.st.dim.Render(value)
-	}
 	model := ""
-	if value := m.Model.Backend.Model(); value != "" {
-		model = m.st.dim.Render(value)
+	limit := 0
+	if m.Model.Backend != nil {
+		if value := m.Model.Backend.Provider(); value != "" {
+			provider = m.st.dim.Render(value)
+		}
+		if value := m.Model.Backend.Model(); value != "" {
+			model = m.st.dim.Render(value)
+		}
+		limit = m.Model.Backend.ContextLimit()
 	}
 	thinking := m.st.dim.Render(normalizeThinkingValue(m.Progress.ReasoningEffort))
 	dir := m.st.dim.Render(statusWorkdirLabel(m.App.Workdir))
@@ -44,7 +47,6 @@ func (m Model) statusLine() string {
 	}
 
 	total := m.Progress.TokensSent + m.Progress.TokensReceived
-	limit := m.Model.Backend.ContextLimit()
 	usage := m.renderTokenUsage(total, limit)
 
 	cost := ""
@@ -54,7 +56,6 @@ func (m Model) statusLine() string {
 
 	candidates := [][]string{
 		{
-			modeLabel,
 			presetLabel,
 			provider,
 			model,
@@ -65,10 +66,10 @@ func (m Model) statusLine() string {
 			branch,
 			gitDiff,
 		},
-		{modeLabel, presetLabel, provider, model, thinking, usage, cost, branch, gitDiff},
-		{modeLabel, presetLabel, provider, model, thinking, usage, cost},
-		{modeLabel, presetLabel, model, thinking, usage, cost},
-		{modeLabel, presetLabel, thinking, usage, cost},
+		{presetLabel, provider, model, thinking, usage, cost, branch, gitDiff},
+		{presetLabel, provider, model, thinking, usage, cost},
+		{presetLabel, model, thinking, usage, cost},
+		{presetLabel, thinking, usage, cost},
 	}
 	for _, segments := range candidates {
 		line := joinLineSegments(sep, segments...)
@@ -77,7 +78,7 @@ func (m Model) statusLine() string {
 		}
 	}
 
-	return fitLine(joinLineSegments(sep, modeLabel, thinking, usage, cost), width)
+	return fitLine(joinLineSegments(sep, thinking, usage, cost), width)
 }
 
 func (m Model) renderTokenUsage(total, limit int) string {

@@ -142,11 +142,27 @@ send_line() {
   sleep "${ION_TMUX_STEP_DELAY:-1}"
 }
 
+send_multiline_composer_smoke() {
+  tmux send-keys -t "$SESSION" "first line"
+  sleep 0.2
+  tmux send-keys -t "$SESSION" C-j
+  sleep 0.2
+  tmux send-keys -t "$SESSION" "second line"
+  sleep "${ION_TMUX_STEP_DELAY:-1}"
+  assert_contains "› first line"
+  assert_contains "› second line"
+  assert_not_contains "first linesecond line"
+  tmux send-keys -t "$SESSION" C-c
+  sleep 0.5
+}
+
 start_ion
 assert_contains "ion v0.0.0"
 assert_not_contains "Bash env inherited"
 assert_not_contains "Env inherit"
 assert_contains "Type a message"
+
+send_multiline_composer_smoke
 
 send_line "/help"
 assert_contains "/tools"

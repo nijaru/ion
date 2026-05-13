@@ -94,8 +94,16 @@ func TestComposerSupportsHardMultilineInput(t *testing.T) {
 		t.Fatalf("composer = %q, want hard multiline input", got)
 	}
 	view := ansi.Strip(model.View().Content)
-	if !strings.Contains(view, "first line") || !strings.Contains(view, "second line") {
+	first := strings.Index(view, "› first line")
+	second := strings.Index(view, "› second line")
+	if first < 0 || second < 0 {
 		t.Fatalf("composer did not render both hard lines:\n%s", view)
+	}
+	if first > second {
+		t.Fatalf("composer rendered hard lines out of order:\n%s", view)
+	}
+	if strings.Contains(view, "first linesecond line") {
+		t.Fatalf("composer collapsed hard newline into one row:\n%s", view)
 	}
 }
 
@@ -117,6 +125,13 @@ func TestComposerSupportsCtrlJMultilineInput(t *testing.T) {
 
 	if got := model.Input.Composer.Value(); got != "first line\nsecond line" {
 		t.Fatalf("composer = %q, want ctrl+j multiline input", got)
+	}
+	view := ansi.Strip(model.View().Content)
+	if !strings.Contains(view, "› first line") || !strings.Contains(view, "› second line") {
+		t.Fatalf("composer did not render ctrl+j multiline input:\n%s", view)
+	}
+	if strings.Contains(view, "first linesecond line") {
+		t.Fatalf("composer collapsed ctrl+j newline into one row:\n%s", view)
 	}
 }
 

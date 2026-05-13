@@ -508,55 +508,63 @@ func TestResolveStartupConfig(t *testing.T) {
 }
 
 func TestStartupBannerLines(t *testing.T) {
-	t.Run("fresh native", func(t *testing.T) {
-		got := startupBannerLines("v0.0.0", "openai", "gpt-4.1", false)
-		want := []string{"ion v0.0.0"}
-		if len(got) != len(want) {
-			t.Fatalf("len(startupBannerLines) = %d, want %d", len(got), len(want))
-		}
-		for i := range want {
-			if got[i] != want[i] {
-				t.Fatalf("startupBannerLines[%d] = %q, want %q", i, got[i], want[i])
+	got := startupBannerLines("v0.0.0")
+	want := []string{"ion v0.0.0"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("startupBannerLines = %#v, want %#v", got, want)
+	}
+
+	got = startupBannerLines("")
+	want = []string{"ion v0.0.0"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("startupBannerLines empty version = %#v, want %#v", got, want)
+	}
+}
+
+func TestTmuxKeyboardLineWarnsWhenModifiedEnterIsUnreliable(t *testing.T) {
+	t.Run("extended keys off", func(t *testing.T) {
+		got := tmuxKeyboardLine(func(option string) (string, error) {
+			if option == "extended-keys" {
+				return "off", nil
 			}
+			return "", nil
+		})
+		if !strings.Contains(got, "Shift+Enter may submit") ||
+			!strings.Contains(got, "Ctrl+J") {
+			t.Fatalf("tmux keyboard warning = %q", got)
 		}
 	})
 
-	t.Run("resumed acp", func(t *testing.T) {
-		got := startupBannerLines("v0.0.0", "chatgpt", "gpt-5.4", true)
-		want := []string{"ion v0.0.0"}
-		if len(got) != len(want) {
-			t.Fatalf("len(startupBannerLines) = %d, want %d", len(got), len(want))
-		}
-		for i := range want {
-			if got[i] != want[i] {
-				t.Fatalf("startupBannerLines[%d] = %q, want %q", i, got[i], want[i])
+	t.Run("xterm format", func(t *testing.T) {
+		got := tmuxKeyboardLine(func(option string) (string, error) {
+			switch option {
+			case "extended-keys":
+				return "on", nil
+			case "extended-keys-format":
+				return "xterm", nil
+			default:
+				return "", nil
 			}
+		})
+		if !strings.Contains(got, "extended-keys-format is xterm") ||
+			!strings.Contains(got, "Ctrl+J") {
+			t.Fatalf("tmux keyboard warning = %q", got)
 		}
 	})
 
-	t.Run("missing model", func(t *testing.T) {
-		got := startupBannerLines("v0.0.0", "anthropic", "", false)
-		want := []string{"ion v0.0.0"}
-		if len(got) != len(want) {
-			t.Fatalf("len(startupBannerLines) = %d, want %d", len(got), len(want))
-		}
-		for i := range want {
-			if got[i] != want[i] {
-				t.Fatalf("startupBannerLines[%d] = %q, want %q", i, got[i], want[i])
+	t.Run("csi-u is quiet", func(t *testing.T) {
+		got := tmuxKeyboardLine(func(option string) (string, error) {
+			switch option {
+			case "extended-keys":
+				return "on", nil
+			case "extended-keys-format":
+				return "csi-u", nil
+			default:
+				return "", nil
 			}
-		}
-	})
-
-	t.Run("missing provider and model", func(t *testing.T) {
-		got := startupBannerLines("v0.0.0", "", "", false)
-		want := []string{"ion v0.0.0"}
-		if len(got) != len(want) {
-			t.Fatalf("len(startupBannerLines) = %d, want %d", len(got), len(want))
-		}
-		for i := range want {
-			if got[i] != want[i] {
-				t.Fatalf("startupBannerLines[%d] = %q, want %q", i, got[i], want[i])
-			}
+		})
+		if got != "" {
+			t.Fatalf("tmux keyboard warning = %q, want none", got)
 		}
 	})
 }
