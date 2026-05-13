@@ -814,10 +814,13 @@ func TestDeferredAdvancedCommandsAreDisabled(t *testing.T) {
 }
 
 func TestHelpSectionDetectionIncludesCommands(t *testing.T) {
-	for _, line := range []string{"commands", "keys", "approval"} {
+	for _, line := range []string{"commands", "keys"} {
 		if !isHelpSectionLine(line) {
 			t.Fatalf("isHelpSectionLine(%q) = false, want true", line)
 		}
+	}
+	if isHelpSectionLine("approval") {
+		t.Fatal("isHelpSectionLine(\"approval\") = true, want false")
 	}
 }
 

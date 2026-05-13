@@ -11,7 +11,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/nijaru/ion/internal/session"
-	"github.com/nijaru/ion/internal/storage"
 )
 
 // handleKey is the source of truth for core TUI hotkey semantics.
@@ -21,13 +20,6 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	}
 	if m.Picker.Overlay != nil {
 		return m.handlePickerKey(msg)
-	}
-
-	// Approval gate: y/n/a consumed before any other handling
-	if m.Approval.Pending != nil {
-		if next, cmd, ok := m.handleApprovalKey(msg); ok {
-			return next, cmd
-		}
 	}
 
 	if msg.Keystroke() == "ctrl+x" || msg.String() == "\x18" {
@@ -162,45 +154,6 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	return m, m.updateComposer(msg)
 }
 
-func (m Model) handleApprovalKey(msg tea.KeyPressMsg) (Model, tea.Cmd, bool) {
-	switch msg.String() {
-	case "esc":
-		m.clearPendingAction()
-		next, cmd := m.cancelRunningTurn("Canceled by user")
-		return next, cmd, true
-	case "y", "n":
-		approved := msg.String() == "y"
-		next, cmd := m.resolvePendingApproval(approved, ifthen(approved, "Approved", "Denied"))
-		return next, cmd, true
-	case "a":
-		next, cmd := m.resolvePendingApproval(true, "Approved")
-		return next, cmd, true
-	default:
-		return m, nil, false
-	}
-}
-
-func (m Model) resolvePendingApproval(
-	approved bool,
-	label string,
-) (Model, tea.Cmd) {
-	req := *m.Approval.Pending
-	m.Approval.Pending = nil
-	m.Progress.Mode = stateReady
-
-	notice := session.Entry{Role: session.System, Content: label + ": " + req.Description}
-	if err := m.Model.Session.Approve(context.Background(), req.RequestID, approved); err != nil {
-		return m, persistErrorCmd("send approval", err)
-	}
-	if err := m.persistApprovalNotice(notice); err != nil {
-		return m, tea.Sequence(
-			m.printEntries(notice),
-			persistErrorCmd("persist approval decision", err),
-		)
-	}
-	return m, m.printEntries(notice)
-}
-
 func (m Model) submitComposer() (Model, tea.Cmd) {
 	m.clearPendingAction()
 	text := strings.TrimSpace(m.Input.Composer.Value())
@@ -215,17 +168,6 @@ func (m Model) submitComposer() (Model, tea.Cmd) {
 	}
 
 	return m.submitText(text)
-}
-
-func (m Model) persistApprovalNotice(notice session.Entry) error {
-	if m.Model.Storage == nil {
-		return nil
-	}
-	return m.Model.Storage.Append(context.Background(), storage.System{
-		Type:    "system",
-		Content: notice.Content,
-		TS:      entryUnix(notice.Timestamp),
-	})
 }
 
 func (m Model) submitBusyInput(text string) (Model, tea.Cmd) {

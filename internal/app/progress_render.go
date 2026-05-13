@@ -61,8 +61,6 @@ func (m Model) progressLine() string {
 		if stats := m.completedProgressParts(); len(stats) > 0 {
 			line += m.renderProgressStats(stats)
 		}
-	case stateApproval:
-		line = m.st.warn.Render("⚠ Approval required")
 	case stateCancelled:
 		line = m.st.warn.Render("⚠ Canceled")
 		if reason := strings.TrimSpace(m.Progress.BudgetStopReason); reason != "" {

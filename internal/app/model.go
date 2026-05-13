@@ -10,7 +10,6 @@ import (
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/nijaru/canto/workspace"
 	"github.com/nijaru/ion/internal/backend"
 	"github.com/nijaru/ion/internal/config"
 	"github.com/nijaru/ion/internal/session"
@@ -161,7 +160,6 @@ const (
 	stateStreaming
 	stateWorking
 	stateComplete
-	stateApproval
 	stateCancelled
 	stateBlocked
 	stateError
@@ -198,7 +196,6 @@ type ModelState struct {
 	Store                storage.Store
 	Switcher             runtimeSwitcher
 	Config               *config.Config
-	Escalation           *workspace.EscalationConfig
 	Checkpoints          *ionworkspace.CheckpointStore
 	EventGeneration      uint64
 	RuntimeSwitchRequest uint64
@@ -224,11 +221,6 @@ type InFlightState struct {
 	QueuedTurns    []string                     // follow-up turns queued during agent work
 	Thinking       bool
 	AgentCommitted bool // true once AgentMessage owns the turn transcript
-}
-
-// ApprovalState holds pending approval requests.
-type ApprovalState struct {
-	Pending *session.ApprovalRequest
 }
 
 // PickerState holds state for the various overlay pickers.
@@ -282,7 +274,6 @@ type Model struct {
 	App      AppState
 	Model    ModelState
 	InFlight InFlightState
-	Approval ApprovalState
 	Picker   PickerState
 	Progress ProgressState
 	Input    InputState
@@ -426,11 +417,6 @@ func (m Model) WithActivePreset(value string) Model {
 
 func (m Model) WithSessionPicker() Model {
 	m, _ = m.openSessionPicker()
-	return m
-}
-
-func (m Model) WithEscalation(cfg *workspace.EscalationConfig) Model {
-	m.Model.Escalation = cfg
 	return m
 }
 
@@ -748,9 +734,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case externalEditorFinishedMsg:
 		return m.handleExternalEditorFinished(msg)
 
-	case approvalNotificationMsg:
-		return m.handleApprovalNotification(msg)
-
 	case localErrorMsg:
 		return m.handleLocalError(msg.err)
 
@@ -777,7 +760,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		session.ToolOutputDelta,
 		session.ToolResult,
 		session.VerificationResult,
-		session.ApprovalRequest,
 		session.ChildRequested,
 		session.ChildStarted,
 		session.ChildDelta,

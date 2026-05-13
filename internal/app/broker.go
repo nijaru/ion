@@ -64,9 +64,6 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 	case session.VerificationResult:
 		return m, m.awaitSessionEvent()
 
-	case session.ApprovalRequest:
-		return m.handleApprovalRequest(msg)
-
 	case session.ChildRequested:
 		return m.handleChildRequested(msg)
 
@@ -135,7 +132,7 @@ func (m Model) handleSessionError(err error, awaitTerminal bool) (Model, tea.Cmd
 }
 
 func (m Model) handleLocalError(err error) (Model, tea.Cmd) {
-	if !m.InFlight.Thinking && m.Approval.Pending == nil {
+	if !m.InFlight.Thinking {
 		m.Progress.Compacting = false
 		if m.Progress.Mode == stateError {
 			m.Progress.Mode = stateReady
@@ -144,12 +141,6 @@ func (m Model) handleLocalError(err error) (Model, tea.Cmd) {
 	}
 	entry := session.Entry{Role: session.System, Content: "Error: " + err.Error()}
 	return m, m.printEntries(entry)
-}
-
-func redactApprovalRequest(req session.ApprovalRequest) session.ApprovalRequest {
-	req.Description = privacy.Redact(req.Description)
-	req.Args = privacy.Redact(req.Args)
-	return req
 }
 
 func (m Model) handleStatusChanged(msg session.StatusChanged) (Model, tea.Cmd) {
@@ -222,17 +213,6 @@ func (m Model) handleTurnStarted(msg session.TurnStarted) (Model, tea.Cmd) {
 	m.InFlight.Pending = &session.Entry{Role: session.Agent, Timestamp: msg.Timestamp}
 	m.InFlight.PendingTools = nil
 	m.InFlight.AgentCommitted = false
-	return m, m.awaitSessionEvent()
-}
-
-func (m Model) handleApprovalRequest(msg session.ApprovalRequest) (Model, tea.Cmd) {
-	msg = redactApprovalRequest(msg)
-	m.Approval.Pending = &msg
-	m.Progress.Mode = stateApproval
-	m.InFlight.Thinking = false
-	if notify := m.approvalNotificationCmd(msg); notify != nil {
-		return m, tea.Batch(notify, m.awaitSessionEvent())
-	}
 	return m, m.awaitSessionEvent()
 }
 

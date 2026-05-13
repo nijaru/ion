@@ -25,7 +25,7 @@ func TestMultilineHistoryNavigation(t *testing.T) {
 	if got := model.Input.Composer.Value(); got != "multiline\nhistory\nitem" {
 		t.Fatalf("expected multiline item, got %q", got)
 	}
-	
+
 	// Cursor usually lands at the end after SetValue
 	if got := model.Input.Composer.Line(); got != 2 {
 		t.Fatalf("expected cursor at line 2, got %d", got)

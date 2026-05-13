@@ -101,13 +101,11 @@ func (b *compactBackend) Compact(ctx context.Context) (bool, error) {
 }
 
 type stubSession struct {
-	events     chan session.Event
-	submits    []string
-	cancels    int
-	submitErr  error
-	approveErr error
-	approvals  []stubApproval
-	closed     bool
+	events    chan session.Event
+	submits   []string
+	cancels   int
+	submitErr error
+	closed    bool
 }
 
 type steeringStubSession struct {
@@ -123,11 +121,6 @@ type jobStubSession struct {
 	stopped         []string
 	stopDeadlineSet bool
 	stopDeadline    time.Time
-}
-
-type stubApproval struct {
-	id string
-	ok bool
 }
 
 func localErrorFromMsg(t *testing.T, msg tea.Msg) error {
@@ -168,8 +161,7 @@ func (s *stubSession) Close() error {
 }
 func (s *stubSession) Events() <-chan session.Event { return s.events }
 func (s *stubSession) Approve(ctx context.Context, id string, ok bool) error {
-	s.approvals = append(s.approvals, stubApproval{id: id, ok: ok})
-	return s.approveErr
+	return nil
 }
 
 func (s *stubSession) ID() string              { return "stub" }

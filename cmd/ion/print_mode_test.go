@@ -14,7 +14,6 @@ import (
 
 type printSession struct {
 	events    chan session.Event
-	approved  bool
 	cancelled int
 	closed    int
 	submitErr error
@@ -35,7 +34,6 @@ func (s *printSession) CancelTurn(ctx context.Context) error {
 }
 
 func (s *printSession) Approve(ctx context.Context, requestID string, approved bool) error {
-	s.approved = approved
 	return nil
 }
 
@@ -289,36 +287,19 @@ func TestValidateSessionSelectionRejectsConflicts(t *testing.T) {
 	}
 }
 
-func TestPrintModeRejectsApprovalWhenNotAutoApproved(t *testing.T) {
+func TestPrintModeRejectsUnexpectedApprovalRequest(t *testing.T) {
 	sess := &printSession{events: make(chan session.Event, 1)}
 	sess.events <- session.ApprovalRequest{RequestID: "req-1", ToolName: "bash"}
 
-	err := runPrintMode(context.Background(), sess, "hello", false)
+	err := runPrintMode(context.Background(), sess, "hello")
 	if err == nil {
 		t.Fatal("runPrintMode returned nil error")
 	}
-	if err.Error() != "approval required for bash" {
+	if err.Error() != "unexpected approval request for bash" {
 		t.Fatalf("runPrintMode error = %v", err)
-	}
-	if sess.approved {
-		t.Fatal("approval was sent despite approveRequests=false")
 	}
 	if sess.cancelled != 1 {
 		t.Fatalf("cancelled = %d, want 1", sess.cancelled)
-	}
-}
-
-func TestPrintModeApprovesWhenAutoApproved(t *testing.T) {
-	sess := &printSession{events: make(chan session.Event, 3)}
-	sess.events <- session.ApprovalRequest{RequestID: "req-1", ToolName: "bash"}
-	sess.events <- session.AgentMessage{Message: "done"}
-	sess.events <- session.TurnFinished{}
-
-	if err := runPrintMode(context.Background(), sess, "hello", true); err != nil {
-		t.Fatalf("runPrintMode returned error: %v", err)
-	}
-	if !sess.approved {
-		t.Fatal("approval was not sent")
 	}
 }
 
@@ -329,7 +310,7 @@ func TestPrintModeWritesTextOutput(t *testing.T) {
 	sess.events <- session.TurnFinished{}
 
 	var out bytes.Buffer
-	if err := runPrintModeWithWriter(context.Background(), &out, sess, "hello", false, "text"); err != nil {
+	if err := runPrintModeWithWriter(context.Background(), &out, sess, "hello", "text"); err != nil {
 		t.Fatalf("runPrintMode returned error: %v", err)
 	}
 	if got := out.String(); got != "hello world\n" {
@@ -345,7 +326,7 @@ func TestPrintModeWritesJSONOutput(t *testing.T) {
 	sess.events <- session.TurnFinished{}
 
 	var out bytes.Buffer
-	if err := runPrintModeWithWriter(context.Background(), &out, sess, "hello", false, "json"); err != nil {
+	if err := runPrintModeWithWriter(context.Background(), &out, sess, "hello", "json"); err != nil {
 		t.Fatalf("runPrintMode returned error: %v", err)
 	}
 
@@ -370,7 +351,7 @@ func TestPrintModeJSONAcceptanceCapturesStreamingToolAndUsage(t *testing.T) {
 	sess.events <- session.TurnFinished{}
 
 	var out bytes.Buffer
-	if err := runPrintModeWithWriter(context.Background(), &out, sess, "run smoke", true, "json"); err != nil {
+	if err := runPrintModeWithWriter(context.Background(), &out, sess, "run smoke", "json"); err != nil {
 		t.Fatalf("runPrintMode returned error: %v", err)
 	}
 
@@ -393,7 +374,7 @@ func TestPrintModeCancelsTurnOnTimeout(t *testing.T) {
 	cancel()
 	sess := &printSession{events: make(chan session.Event)}
 
-	_, err := runPromptTurn(ctx, sess, "hello", false)
+	_, err := runPromptTurn(ctx, sess, "hello")
 	if err == nil || !strings.Contains(err.Error(), "context canceled") {
 		t.Fatalf("runPromptTurn error = %v, want context canceled", err)
 	}
@@ -405,7 +386,7 @@ func TestPrintModeCancelsTurnOnTimeout(t *testing.T) {
 func TestPrintModeReturnsSubmitError(t *testing.T) {
 	sess := &printSession{submitErr: errors.New("provider unavailable")}
 
-	_, err := runPromptTurn(context.Background(), sess, "hello", false)
+	_, err := runPromptTurn(context.Background(), sess, "hello")
 	if err == nil || !strings.Contains(err.Error(), "submit turn: provider unavailable") {
 		t.Fatalf("runPromptTurn error = %v, want submit error", err)
 	}
@@ -415,7 +396,7 @@ func TestPrintModeReturnsSessionError(t *testing.T) {
 	sess := &printSession{events: make(chan session.Event, 1)}
 	sess.events <- session.Error{Err: errors.New("rate limited")}
 
-	_, err := runPromptTurn(context.Background(), sess, "hello", false)
+	_, err := runPromptTurn(context.Background(), sess, "hello")
 	if err == nil || !strings.Contains(err.Error(), "session error: rate limited") {
 		t.Fatalf("runPromptTurn error = %v, want session error", err)
 	}
@@ -426,7 +407,7 @@ func TestPrintModeErrorsWhenEventStreamClosesBeforeTurnFinished(t *testing.T) {
 	sess.events <- session.AgentDelta{Delta: "partial"}
 	close(sess.events)
 
-	_, err := runPromptTurn(context.Background(), sess, "hello", false)
+	_, err := runPromptTurn(context.Background(), sess, "hello")
 	if err == nil || !strings.Contains(err.Error(), "event stream closed before turn finished") {
 		t.Fatalf("runPromptTurn error = %v, want early stream close error", err)
 	}
@@ -436,7 +417,7 @@ func TestPrintModeErrorsWhenTurnFinishesWithoutAssistantResponse(t *testing.T) {
 	sess := &printSession{events: make(chan session.Event, 1)}
 	sess.events <- session.TurnFinished{}
 
-	_, err := runPromptTurn(context.Background(), sess, "hello", false)
+	_, err := runPromptTurn(context.Background(), sess, "hello")
 	if err == nil || !strings.Contains(err.Error(), "turn finished without assistant response") {
 		t.Fatalf("runPromptTurn error = %v, want empty response error", err)
 	}

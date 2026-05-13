@@ -256,7 +256,6 @@ func TestTokenUsageCancelsTurnWhenCostBudgetExceeded(t *testing.T) {
 	model.InFlight.StreamBuf = "partial"
 	model.InFlight.ReasonBuf = "reasoning"
 	model.InFlight.AgentCommitted = true
-	model.Approval.Pending = &session.ApprovalRequest{RequestID: "approval-1"}
 
 	updated, _ := model.handleSessionEvent(session.TokenUsage{
 		Input:  1000,
@@ -281,7 +280,6 @@ func TestTokenUsageCancelsTurnWhenCostBudgetExceeded(t *testing.T) {
 		model.InFlight.StreamBuf != "" ||
 		model.InFlight.ReasonBuf != "" ||
 		model.InFlight.AgentCommitted ||
-		model.Approval.Pending != nil ||
 		model.Progress.LastToolUseID != "" {
 		t.Fatalf("in-flight state not cleared after budget cancel: %#v", model.InFlight)
 	}
@@ -456,39 +454,6 @@ func TestQueuedFollowUpSubmitsAfterTurnFinished(t *testing.T) {
 			"queued follow-up command = %s, want sequence that re-arms session event wait",
 			got,
 		)
-	}
-}
-
-func TestApprovalPendingInputQueuesInsteadOfSubmitting(t *testing.T) {
-	sess := &stubSession{events: make(chan session.Event)}
-	model := readyModel(t)
-	model.Model.Session = sess
-	model.Input.Composer.SetValue("run this after approval")
-	model.Approval.Pending = &session.ApprovalRequest{
-		RequestID:   "req-1",
-		Description: "run tool",
-		ToolName:    "bash",
-	}
-	model.Progress.Mode = stateApproval
-
-	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	model = updated.(Model)
-
-	if len(sess.submits) != 0 {
-		t.Fatalf("submits = %#v, want no new turn while approval is pending", sess.submits)
-	}
-	if model.Approval.Pending == nil || model.Approval.Pending.RequestID != "req-1" {
-		t.Fatalf("approval pending = %#v, want preserved req-1", model.Approval.Pending)
-	}
-	if len(model.InFlight.QueuedTurns) != 1 ||
-		model.InFlight.QueuedTurns[0] != "run this after approval" {
-		t.Fatalf("queued turns = %#v, want queued approval follow-up", model.InFlight.QueuedTurns)
-	}
-	if got := model.Input.Composer.Value(); got != "" {
-		t.Fatalf("composer = %q, want cleared after queueing", got)
-	}
-	if cmd == nil {
-		t.Fatal("expected queue notice cmd")
 	}
 }
 

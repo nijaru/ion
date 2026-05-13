@@ -5,63 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/nijaru/ion/internal/session"
 )
-
-func TestApprovalFlow(t *testing.T) {
-	sess := &stubSession{events: make(chan session.Event, 10)}
-	b := &stubBackend{sess: sess}
-	m := New(b, nil, nil, "/tmp", "main", "dev", nil)
-
-	// 1. Receive ApprovalRequest
-	req := session.ApprovalRequest{
-		RequestID:   "req-1",
-		Description: "Run rm -rf /",
-		ToolName:    "bash",
-	}
-	updated, _ := m.Update(req)
-	m = updated.(Model)
-
-	if m.Approval.Pending == nil || m.Approval.Pending.RequestID != "req-1" {
-		t.Fatal("expected pending approval req-1")
-	}
-	if m.Progress.Mode != stateApproval {
-		t.Fatalf("expected stateApproval, got %v", m.Progress.Mode)
-	}
-
-	// 2. Approve with 'y'
-	updated, _ = m.Update(tea.KeyPressMsg{Code: 'y', Text: "y"})
-	m = updated.(Model)
-
-	if m.Approval.Pending != nil {
-		t.Fatal("expected approval to be cleared after 'y'")
-	}
-	if m.Progress.Mode != stateReady {
-		t.Fatalf("expected stateReady after approval, got %v", m.Progress.Mode)
-	}
-
-	// 3. Deny with 'n'
-	m.Approval.Pending = &req
-	m.Progress.Mode = stateApproval
-	updated, _ = m.Update(tea.KeyPressMsg{Code: 'n', Text: "n"})
-	m = updated.(Model)
-
-	if m.Approval.Pending != nil {
-		t.Fatal("expected approval to be cleared after 'n'")
-	}
-
-	// 4. Always allow with 'a'
-	m.Approval.Pending = &req
-	m.Progress.Mode = stateApproval
-	updated, _ = m.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
-	m = updated.(Model)
-
-	if m.Approval.Pending != nil {
-		t.Fatal("expected approval to be cleared after 'a'")
-	}
-}
 
 func TestToolStreaming(t *testing.T) {
 	sess := &stubSession{events: make(chan session.Event, 10)}
@@ -218,7 +164,8 @@ func TestSubagentCollapseRule(t *testing.T) {
 	planeB := ansi.Strip(m.renderPlaneB())
 
 	// We expect 3 workers and a "+2 more workers" line
-	if !strings.Contains(planeB, "worker-1") || !strings.Contains(planeB, "worker-2") || !strings.Contains(planeB, "worker-3") {
+	if !strings.Contains(planeB, "worker-1") || !strings.Contains(planeB, "worker-2") ||
+		!strings.Contains(planeB, "worker-3") {
 		t.Error("expected first 3 workers to be visible")
 	}
 	if strings.Contains(planeB, "worker-4") || strings.Contains(planeB, "worker-5") {
