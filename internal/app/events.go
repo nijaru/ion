@@ -59,7 +59,11 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m, m.armPendingAction(pendingActionQuitCtrlC)
 
 	case "ctrl+d":
-		if m.Input.Composer.Value() != "" || m.InFlight.Thinking {
+		if m.Input.Composer.Value() != "" {
+			m.clearPendingAction()
+			return m, m.updateComposer(msg)
+		}
+		if m.InFlight.Thinking {
 			m.clearPendingAction()
 			return m, nil
 		}

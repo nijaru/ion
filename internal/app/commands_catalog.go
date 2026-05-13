@@ -29,7 +29,7 @@ func helpText() string {
 		"  Shift+Enter      insert newline",
 		"  Alt+Enter        insert newline",
 		"  Ctrl+C           clear composer, cancel running turn, or quit on double-tap when empty",
-		"  Ctrl+D           quit on double-tap when empty",
+		"  Ctrl+D           delete forward, or quit on double-tap when empty",
 	)
 	return strings.Join(lines, "\n")
 }
