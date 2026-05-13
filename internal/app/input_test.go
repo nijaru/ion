@@ -164,22 +164,32 @@ func TestCtrlCClearsComposerWithoutArmingQuit(t *testing.T) {
 	}
 }
 
-func TestCtrlCIgnoredWhileRunning(t *testing.T) {
+func TestCtrlCCancelsRunningTurn(t *testing.T) {
 	sess := &stubSession{events: make(chan session.Event)}
 	model := readyModel(t)
 	model.Model.Session = sess
 	model.InFlight.Thinking = true
+	model.InFlight.QueuedTurns = []string{"follow up"}
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	model = updated.(Model)
-	if cmd != nil {
-		t.Fatal("ctrl+c while running should not quit")
+	if cmd == nil {
+		t.Fatal("ctrl+c while running should print durable cancellation")
 	}
 	if model.Input.CtrlCPending {
 		t.Fatal("ctrlCPending should remain false while running")
 	}
-	if sess.cancels != 0 {
-		t.Fatalf("cancel count = %d, want 0", sess.cancels)
+	if sess.cancels != 1 {
+		t.Fatalf("cancel count = %d, want 1", sess.cancels)
+	}
+	if model.InFlight.Thinking {
+		t.Fatal("thinking should be false after ctrl+c cancel")
+	}
+	if model.Progress.Mode != stateCancelled {
+		t.Fatalf("progress mode = %v, want stateCancelled", model.Progress.Mode)
+	}
+	if len(model.InFlight.QueuedTurns) != 0 {
+		t.Fatalf("queued turns = %#v, want cleared", model.InFlight.QueuedTurns)
 	}
 }
 

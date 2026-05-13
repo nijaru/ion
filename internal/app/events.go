@@ -51,7 +51,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		}
 		if m.InFlight.Thinking {
 			m.clearPendingAction()
-			return m, nil
+			return m.cancelRunningTurn("Canceled by user")
 		}
 		if m.Input.CtrlCPending {
 			return m, tea.Quit
