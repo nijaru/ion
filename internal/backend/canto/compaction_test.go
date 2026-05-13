@@ -273,7 +273,30 @@ func TestOpenRecoversFromContextOverflowByCompacting(t *testing.T) {
 	if err := b.SubmitTurn(ctx, "overflow recovery please"); err != nil {
 		t.Fatalf("submit turn: %v", err)
 	}
-	waitForTurnFinished(t, b.Events())
+	events := b.Events()
+	seenCompactingStatus := false
+	finished := false
+	for !finished {
+		select {
+		case ev := <-events:
+			switch msg := ev.(type) {
+			case ionsession.StatusChanged:
+				if msg.Status == "Compacting context..." {
+					seenCompactingStatus = true
+					if msg.Timestamp.IsZero() {
+						t.Fatal("overflow compaction status has zero timestamp")
+					}
+				}
+			case ionsession.TurnFinished:
+				if !seenCompactingStatus {
+					t.Fatal("missing overflow compaction status")
+				}
+				finished = true
+			}
+		case <-time.After(backendEventWaitTimeout):
+			t.Fatal("timed out waiting for overflow recovery turn")
+		}
+	}
 
 	calls := provider.Calls()
 	if len(calls) != 3 {
