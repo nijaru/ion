@@ -30,6 +30,13 @@ func (m Model) awaitSessionEvent() tea.Cmd {
 
 // handleSessionEvent processes events from the agent session channel.
 func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
+	if m.InFlight.DrainUntilTurnStarted {
+		if _, ok := ev.(session.TurnStarted); !ok {
+			return m, m.awaitSessionEvent()
+		}
+		m.InFlight.DrainUntilTurnStarted = false
+	}
+
 	switch msg := ev.(type) {
 	case session.StatusChanged:
 		return m.handleStatusChanged(msg)
@@ -91,8 +98,10 @@ func (m Model) handleSessionEvent(ev session.Event) (Model, tea.Cmd) {
 
 func (m Model) handleSessionError(err error, awaitTerminal bool) (Model, tea.Cmd) {
 	m.clearActiveTurnState(true)
+	m.InFlight.DrainUntilTurnStarted = true
 	m.Progress.Compacting = false
 	m.Progress.Mode = stateError
+	m.Progress.Status = ""
 	displayErr := "session error"
 	if err != nil {
 		displayErr = err.Error()
@@ -187,7 +196,9 @@ func (m Model) handleTokenUsage(msg session.TokenUsage) (Model, tea.Cmd) {
 				return m, persistErrorCmd("cancel over-budget turn", err)
 			}
 			m.clearActiveTurnState(true)
+			m.InFlight.DrainUntilTurnStarted = true
 			m.Progress.Mode = stateCancelled
+			m.Progress.Status = ""
 			entry := session.Entry{
 				Role:      session.System,
 				Timestamp: msg.Timestamp,
@@ -201,6 +212,7 @@ func (m Model) handleTokenUsage(msg session.TokenUsage) (Model, tea.Cmd) {
 
 func (m Model) handleTurnStarted(msg session.TurnStarted) (Model, tea.Cmd) {
 	m.InFlight.Thinking = true
+	m.InFlight.DrainUntilTurnStarted = false
 	m.Progress.Compacting = false
 	m.Progress.Mode = stateIonizing
 	m.Progress.Status = ""
@@ -264,9 +276,11 @@ func (m *Model) finishTurnMode(assistantCompleted bool, cmds []tea.Cmd) []tea.Cm
 	switch {
 	case m.Progress.Mode == stateError:
 		m.InFlight.QueuedTurns = nil
+		m.Progress.Status = ""
 	case m.Progress.Mode == stateCancelled || m.Progress.BudgetStopReason != "":
 		m.Progress.Mode = stateCancelled
 		m.InFlight.QueuedTurns = nil
+		m.Progress.Status = ""
 	case !assistantCompleted:
 		m.Progress.Mode = stateError
 		m.Progress.LastError = "turn finished without assistant response"

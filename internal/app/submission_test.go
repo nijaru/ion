@@ -334,6 +334,68 @@ func TestTurnFinishedPreservesUserCancellation(t *testing.T) {
 	}
 }
 
+func TestCancelledTurnDrainsLateEventsUntilNextTurnStarts(t *testing.T) {
+	sess := &stubSession{events: make(chan session.Event)}
+	model := readyModel(t)
+	model.Model.Session = sess
+	model.InFlight.Thinking = true
+	model.InFlight.Pending = &session.Entry{Role: session.Agent, Content: "partial"}
+	model.InFlight.StreamBuf = "partial"
+	model.Progress.Status = "Running bash..."
+
+	next, cmd := model.cancelRunningTurn("Canceled by user")
+	model = next
+	if cmd == nil {
+		t.Fatal("expected cancellation print command")
+	}
+	if !model.InFlight.DrainUntilTurnStarted {
+		t.Fatal("expected cancel to drain late turn events")
+	}
+
+	model.App.PrintedTranscript = false
+	for _, ev := range []session.Event{
+		session.AgentDelta{Delta: "stale"},
+		session.ThinkingDelta{Delta: "stale reasoning"},
+		session.AgentMessage{Message: "stale final"},
+		session.ToolCallStarted{ToolUseID: "tool-1", ToolName: "bash", Args: "echo stale"},
+		session.ToolResult{ToolUseID: "tool-1", ToolName: "bash", Result: "stale"},
+		session.StatusChanged{Status: "Ready"},
+		session.TurnFinished{},
+	} {
+		updated, _ := model.Update(ev)
+		model = updated.(Model)
+	}
+
+	if model.Progress.Mode != stateCancelled {
+		t.Fatalf("progress mode = %v, want stateCancelled", model.Progress.Mode)
+	}
+	if model.App.PrintedTranscript {
+		t.Fatal("late cancelled-turn events printed transcript output")
+	}
+	if model.InFlight.Pending != nil ||
+		model.InFlight.StreamBuf != "" ||
+		model.InFlight.ReasonBuf != "" ||
+		len(model.InFlight.PendingTools) != 0 ||
+		model.Progress.Status != "" {
+		t.Fatalf("late cancelled-turn events changed visible state: %#v", model.InFlight)
+	}
+
+	updated, _ := model.Update(session.TurnStarted{})
+	model = updated.(Model)
+	if model.InFlight.DrainUntilTurnStarted {
+		t.Fatal("fresh turn did not clear drain fence")
+	}
+	if !model.InFlight.Thinking || model.Progress.Mode != stateIonizing {
+		t.Fatalf("fresh turn state = thinking %v mode %v", model.InFlight.Thinking, model.Progress.Mode)
+	}
+
+	updated, _ = model.Update(session.AgentDelta{Delta: "fresh"})
+	model = updated.(Model)
+	if model.InFlight.Pending == nil || model.InFlight.Pending.Content != "fresh" {
+		t.Fatalf("fresh turn delta not accepted: %#v", model.InFlight.Pending)
+	}
+}
+
 func TestTurnFinishedPreservesSessionError(t *testing.T) {
 	model := readyModel(t)
 	model.Progress.Mode = stateError
