@@ -109,10 +109,16 @@ func (b *Backend) Open(ctx context.Context) error {
 		RuntimeOptions(runtime.WithOverflowRecovery(
 			p.IsContextOverflow,
 			func(ctx context.Context, sess *session.Session) error {
-				b.events <- ionsession.StatusChanged{Status: "Compacting context..."}
+				b.events <- ionsession.StatusChanged{
+					Base:   ionsession.BaseNow(),
+					Status: "Compacting context...",
+				}
 				_, err := b.compactSession(ctx, sess)
 				if err == nil {
-					b.events <- ionsession.StatusChanged{Status: "Thinking..."}
+					b.events <- ionsession.StatusChanged{
+						Base:   ionsession.BaseNow(),
+						Status: "Thinking...",
+					}
 				}
 				return err
 			},

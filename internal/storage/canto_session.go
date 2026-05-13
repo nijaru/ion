@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nijaru/canto/llm"
 	"github.com/nijaru/canto/session"
 )
 
@@ -178,28 +179,64 @@ func (s *cantoSession) Usage(ctx context.Context) (int, int, float64, error) {
 		return 0, 0, 0, err
 	}
 
-	var input, output int
-	var cost float64
+	var total usageAccumulator
+	var pending usageAccumulator
 
 	for _, ev := range sess.Events() {
-		// Use literal string for TokenUsage event type
-		if ev.Type == "token_usage" {
+		switch ev.Type {
+		case session.TurnStarted:
+			total.add(pending)
+			pending = usageAccumulator{}
+		case session.EventType("token_usage"):
 			var data struct {
 				Input  int     `json:"input"`
 				Output int     `json:"output"`
 				Cost   float64 `json:"cost"`
 			}
 			if err := ev.UnmarshalData(&data); err == nil {
-				input += data.Input
-				output += data.Output
-				cost += data.Cost
+				pending.addValues(data.Input, data.Output, data.Cost)
 			}
+		case session.TurnCompleted:
+			data, ok, err := ev.TurnCompletedData()
+			if err == nil && ok && usageHasValue(data.Usage) {
+				total.addUsage(data.Usage)
+			} else {
+				total.add(pending)
+			}
+			pending = usageAccumulator{}
 		}
 	}
+	total.add(pending)
 
-	return input, output, cost, nil
+	return total.input, total.output, total.cost, nil
 }
 
 func (s *cantoSession) Close() error {
 	return nil
+}
+
+type usageAccumulator struct {
+	input  int
+	output int
+	cost   float64
+}
+
+func (a *usageAccumulator) add(other usageAccumulator) {
+	a.input += other.input
+	a.output += other.output
+	a.cost += other.cost
+}
+
+func (a *usageAccumulator) addValues(input, output int, cost float64) {
+	a.input += input
+	a.output += output
+	a.cost += cost
+}
+
+func (a *usageAccumulator) addUsage(usage llm.Usage) {
+	a.addValues(usage.InputTokens, usage.OutputTokens, usage.Cost)
+}
+
+func usageHasValue(usage llm.Usage) bool {
+	return usage.InputTokens != 0 || usage.OutputTokens != 0 || usage.Cost != 0
 }

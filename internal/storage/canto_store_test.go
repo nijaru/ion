@@ -120,6 +120,94 @@ func TestEphemeralCantoStoreUsesSingleMetadataSQLiteConnection(t *testing.T) {
 	}
 }
 
+func TestCantoSessionUsagePrefersTurnCompletedUsage(t *testing.T) {
+	storeAny, err := NewCantoStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	defer storeAny.Close()
+
+	store := storeAny.(*cantoStore)
+	ctx := context.Background()
+	sess, err := store.OpenSession(ctx, "/tmp/ion-usage", "local-api/model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	if err := store.canto.Save(ctx, csession.NewTurnStartedEvent(
+		sess.ID(),
+		csession.TurnStartedData{AgentID: "ion"},
+	)); err != nil {
+		t.Fatalf("save turn started: %v", err)
+	}
+	if err := sess.Append(ctx, TokenUsage{Input: 10, Output: 2, Cost: 0.01}); err != nil {
+		t.Fatalf("append token usage: %v", err)
+	}
+	if err := store.canto.Save(ctx, csession.NewTurnCompletedEvent(
+		sess.ID(),
+		csession.TurnCompletedData{
+			AgentID: "ion",
+			Usage: llm.Usage{
+				InputTokens:  10,
+				OutputTokens: 2,
+				Cost:         0.01,
+			},
+		},
+	)); err != nil {
+		t.Fatalf("save turn completed: %v", err)
+	}
+
+	input, output, cost, err := sess.Usage(ctx)
+	if err != nil {
+		t.Fatalf("usage: %v", err)
+	}
+	if input != 10 || output != 2 || cost != 0.01 {
+		t.Fatalf("usage = %d/%d/%f, want 10/2/0.01", input, output, cost)
+	}
+}
+
+func TestCantoSessionUsageFallsBackToTokenUsageWhenTerminalUsageMissing(t *testing.T) {
+	storeAny, err := NewCantoStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new canto store: %v", err)
+	}
+	defer storeAny.Close()
+
+	store := storeAny.(*cantoStore)
+	ctx := context.Background()
+	sess, err := store.OpenSession(ctx, "/tmp/ion-usage-fallback", "local-api/model-a", "main")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	if err := store.canto.Save(ctx, csession.NewTurnStartedEvent(
+		sess.ID(),
+		csession.TurnStartedData{AgentID: "ion"},
+	)); err != nil {
+		t.Fatalf("save turn started: %v", err)
+	}
+	if err := sess.Append(ctx, TokenUsage{Input: 5, Output: 1, Cost: 0.02}); err != nil {
+		t.Fatalf("append token usage: %v", err)
+	}
+	if err := store.canto.Save(ctx, csession.NewTurnCompletedEvent(
+		sess.ID(),
+		csession.TurnCompletedData{
+			AgentID: "ion",
+			Error:   "stream failed before final usage",
+		},
+	)); err != nil {
+		t.Fatalf("save turn completed: %v", err)
+	}
+
+	input, output, cost, err := sess.Usage(ctx)
+	if err != nil {
+		t.Fatalf("usage: %v", err)
+	}
+	if input != 5 || output != 1 || cost != 0.02 {
+		t.Fatalf("usage = %d/%d/%f, want 5/1/0.02", input, output, cost)
+	}
+}
+
 func TestCantoStoreAppendUpdatesRecentSession(t *testing.T) {
 	root := t.TempDir()
 	storeAny, err := NewCantoStore(root)
