@@ -163,8 +163,7 @@ func ionEventBase(ev session.Event) ionsession.Base {
 }
 
 func isCancellationTerminal(errText string) bool {
-	return strings.Contains(errText, context.Canceled.Error()) ||
-		strings.Contains(errText, context.DeadlineExceeded.Error())
+	return strings.Contains(errText, context.Canceled.Error())
 }
 
 func isContextOverflowTerminal(errText string) bool {
