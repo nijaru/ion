@@ -182,6 +182,26 @@ func TestNormalizeFlagArgsAllowsDashPromptAfterPrint(t *testing.T) {
 	}
 }
 
+func TestNormalizeFlagArgsTreatsRemovedModeFlagsAsPromptText(t *testing.T) {
+	got, openResumePicker := normalizeFlagArgs([]string{"-p", "--mode", "read"})
+	want := []string{"-p", "--", "--mode", "read"}
+	if openResumePicker {
+		t.Fatal("normalizeFlagArgs opened resume picker")
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("normalizeFlagArgs = %#v, want %#v", got, want)
+	}
+
+	got, openResumePicker = normalizeFlagArgs([]string{"-p", "--yolo"})
+	want = []string{"-p", "--", "--yolo"}
+	if openResumePicker {
+		t.Fatal("normalizeFlagArgs opened resume picker")
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("normalizeFlagArgs = %#v, want %#v", got, want)
+	}
+}
+
 func TestNormalizeFlagArgsKeepsUnknownFlagAfterPromptForParser(t *testing.T) {
 	got, openResumePicker := normalizeFlagArgs([]string{"--prompt", "hello", "--bad"})
 	want := []string{"--prompt", "hello", "--bad"}
