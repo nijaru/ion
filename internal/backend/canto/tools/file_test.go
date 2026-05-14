@@ -191,6 +191,30 @@ func TestFileTools(t *testing.T) {
 		}
 	})
 
+	t.Run("Write preserves existing file mode", func(t *testing.T) {
+		w := &Write{FileTool: *newTestFileTool(t, tmpDir)}
+		filePath := "script.sh"
+		absPath := filepath.Join(tmpDir, filePath)
+		if err := os.WriteFile(absPath, []byte("#!/bin/sh\necho before\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		args, _ := json.Marshal(map[string]any{
+			"file_path": filePath,
+			"content":   "#!/bin/sh\necho after\n",
+		})
+		if _, err := w.Execute(context.Background(), string(args)); err != nil {
+			t.Fatalf("write executable: %v", err)
+		}
+		info, err := os.Stat(absPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got != 0o755 {
+			t.Fatalf("mode = %#o, want 0755", got)
+		}
+	})
+
 	t.Run("Read and Edit handle CRLF and BOM", func(t *testing.T) {
 		r := &Read{FileTool: *newTestFileTool(t, tmpDir)}
 		e := &Edit{FileTool: *newTestFileTool(t, tmpDir)}
