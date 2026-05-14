@@ -37,7 +37,10 @@ func TestComposerLayoutResetsAfterClear(t *testing.T) {
 
 func TestHeaderShortenHomePathRequiresPathBoundary(t *testing.T) {
 	home := filepath.Join(string(filepath.Separator), "Users", "nick")
-	if got := shortenHomePath(filepath.Join(home, "repo"), home); got != filepath.Join("~", "repo") {
+	if got := shortenHomePath(filepath.Join(home, "repo"), home); got != filepath.Join(
+		"~",
+		"repo",
+	) {
 		t.Fatalf("shortened home path = %q, want ~/repo", got)
 	}
 	sibling := filepath.Join(string(filepath.Separator), "Users", "nick2", "repo")
@@ -62,6 +65,79 @@ func TestComposerAcceptsTypedText(t *testing.T) {
 
 	if got := model.Input.Composer.Value(); got != "/help" {
 		t.Fatalf("composer = %q, want %q", got, "/help")
+	}
+}
+
+func TestNewLoadsPersistedInputHistoryForRecall(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	ctx := context.Background()
+	store, err := storage.NewCantoStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	defer store.Close()
+	cwd := t.TempDir()
+	for _, input := range []string{"first prompt", "second prompt"} {
+		if err := store.AddInput(ctx, cwd, input); err != nil {
+			t.Fatalf("add input: %v", err)
+		}
+	}
+
+	model := New(
+		stubBackend{
+			sess:     &stubSession{events: make(chan session.Event)},
+			provider: "fake",
+			model:    "model",
+		},
+		nil,
+		store,
+		cwd,
+		"main",
+		"dev",
+		nil,
+	)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: 30})
+	model = updated.(Model)
+
+	updated, _ = model.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	model = updated.(Model)
+	if got := model.Input.Composer.Value(); got != "second prompt" {
+		t.Fatalf("composer = %q, want latest persisted input", got)
+	}
+}
+
+func TestSubmitTextPersistsInputHistory(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	ctx := context.Background()
+	store, err := storage.NewCantoStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	defer store.Close()
+	cwd := t.TempDir()
+	model := New(
+		stubBackend{
+			sess:     &stubSession{events: make(chan session.Event)},
+			provider: "fake",
+			model:    "model",
+		},
+		nil,
+		store,
+		cwd,
+		"main",
+		"dev",
+		nil,
+	)
+
+	updated, _ := model.submitText("/help")
+	model = updated
+
+	inputs, err := store.GetInputs(ctx, cwd, 1)
+	if err != nil {
+		t.Fatalf("get inputs: %v", err)
+	}
+	if len(inputs) != 1 || inputs[0] != "/help" {
+		t.Fatalf("inputs = %#v, want persisted slash command", inputs)
 	}
 }
 
