@@ -42,9 +42,7 @@ func (b *Backend) translateEvent(ctx context.Context, ev session.Event, turnID u
 			b.emitTurnError(turnID, base, fmt.Errorf("%s", data.Error))
 			return true
 		}
-		if b.emitTurnFinished(turnID, base) {
-			b.events <- ionsession.StatusChanged{Base: base, Status: "Ready"}
-		}
+		b.emitTurnFinished(turnID, base)
 		return true
 	case session.ToolStarted:
 		if data, ok, err := ev.ToolStartedData(); err == nil && ok {
