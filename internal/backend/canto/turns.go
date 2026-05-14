@@ -85,8 +85,22 @@ func (b *Backend) runTurn(
 		return
 	}
 	usage := &turnUsageTracker{}
+	terminal := false
 	for event := range runEvents {
-		b.translateRunEvent(ctx, event, turnID, usage)
+		if b.translateRunEvent(ctx, event, turnID, usage) {
+			terminal = true
+		}
+	}
+	if !terminal && b.acceptsTurnEvent(turnID) {
+		if err := ctx.Err(); err != nil {
+			b.finishTurnWithError(turnID, err)
+			return
+		}
+		b.emitTurnError(
+			turnID,
+			ionsession.BaseNow(),
+			fmt.Errorf("turn stream ended without terminal session event"),
+		)
 	}
 }
 
@@ -173,9 +187,9 @@ func (b *Backend) translateRunEvent(
 	event cantofw.RunEvent,
 	turnID uint64,
 	usage *turnUsageTracker,
-) {
+) bool {
 	if !b.acceptsTurnEvent(turnID) {
-		return
+		return false
 	}
 
 	switch event.Type {
@@ -191,23 +205,28 @@ func (b *Backend) translateRunEvent(
 		if usage != nil {
 			msg, ok := usage.delta(chunk.Usage)
 			if !ok {
-				return
+				return false
 			}
 			msg.Base = base
 			b.events <- msg
 		}
 	case cantofw.RunEventSession:
-		b.translateEvent(ctx, event.Event, turnID)
+		terminal := b.translateEvent(ctx, event.Event, turnID)
 		if usage != nil && event.Event.Type == csession.ToolCompleted {
 			usage.reset()
 		}
+		return terminal
 	case cantofw.RunEventError:
-		if event.Err == nil || isCancellationTerminal(event.Err.Error()) {
-			return
+		if event.Err == nil {
+			return false
 		}
-		b.emitTurnError(turnID, ionsession.BaseNow(), event.Err)
+		if isCancellationTerminal(event.Err.Error()) {
+			return b.emitTurnFinished(turnID, ionsession.BaseNow())
+		}
+		return b.emitTurnError(turnID, ionsession.BaseNow(), event.Err)
 	case cantofw.RunEventResult:
 	}
+	return false
 }
 
 func (b *Backend) emitTurnError(turnID uint64, base ionsession.Base, err error) bool {
