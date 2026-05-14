@@ -91,6 +91,46 @@ func TestHandleCommandUpdatesStateDirectly(t *testing.T) {
 	}
 }
 
+func TestProviderCommandRejectsInvalidProvidersBeforePersistingState(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		command string
+		wantErr string
+	}{
+		{
+			name:    "unknown",
+			command: "/provider definitely-not-real",
+			wantErr: `unsupported provider "definitely-not-real"`,
+		},
+		{
+			name:    "acp",
+			command: "/provider claude-pro",
+			wantErr: "ACP providers are deferred",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+
+			model := readyModel(t)
+			model, cmd := model.handleCommand(tc.command)
+			if cmd == nil {
+				t.Fatal("expected provider command error")
+			}
+			if err := localErrorFromMsg(t, cmd()); !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("error = %v, want %q", err, tc.wantErr)
+			}
+			if model.Picker.Overlay != nil {
+				t.Fatal("invalid provider should not open a picker")
+			}
+			statePath := filepath.Join(home, ".ion", "state.toml")
+			if _, err := os.Stat(statePath); !os.IsNotExist(err) {
+				t.Fatalf("state file error = %v, want no persisted provider state", err)
+			}
+		})
+	}
+}
+
 func TestCompactCommandUsesBackendCompactor(t *testing.T) {
 	backend := &compactBackend{
 		stubBackend: stubBackend{sess: &stubSession{events: make(chan session.Event)}},

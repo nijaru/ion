@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/nijaru/ion/internal/backend/registry"
@@ -84,16 +85,27 @@ func mergeRuntimeSelection(dst, runtime *config.Config) {
 	}
 }
 
-func (m Model) updateProviderForActivePreset(cfg *config.Config, provider string) *config.Config {
+func (m Model) updateProviderForActivePreset(
+	cfg *config.Config,
+	provider string,
+) (*config.Config, error) {
 	if cfg == nil {
 		cfg = &config.Config{}
 	}
+	resolved := providers.ResolveID(provider)
+	def, ok := providers.Lookup(resolved)
+	if !ok {
+		return nil, fmt.Errorf("unsupported provider %q", strings.TrimSpace(provider))
+	}
+	if def.Runtime != providers.RuntimeNative {
+		return nil, fmt.Errorf("ACP providers are deferred until the advanced integration phase")
+	}
 	updated := *cfg
-	updated.Provider = providers.ResolveID(provider)
+	updated.Provider = def.ID
 	updated.Model = ""
 	updated.FastModel = ""
 	updated.SummaryModel = ""
-	return &updated
+	return &updated, nil
 }
 
 func (m Model) updateModelForActivePreset(cfg *config.Config, model string) *config.Config {
